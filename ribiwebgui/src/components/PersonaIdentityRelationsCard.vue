@@ -1,8 +1,9 @@
 <script setup lang="ts">
+import { translateText } from "../i18n";
 import { userFacingError } from "../userFacingError";
 import { computed, ref, watch } from "vue";
 import {
-  personaIdentityRelationClient,
+  createPersonaIdentityRelationClient,
   type IdentityEndpointAccount,
   type IdentityEvidenceRef,
   type IdentityParticipant,
@@ -14,6 +15,8 @@ import {
   type ConversationSituationSnapshot
 } from "../persona/personaIdentityRelationClient";
 import type { PersonaVoiceIdentity } from "../persona/personaVoiceIdentityClient";
+import { usePersonaService } from "../persona/personaServiceClient";
+const personaIdentityRelationClient = createPersonaIdentityRelationClient(usePersonaService().fetch);
 
 const props = withDefaults(defineProps<{
   roleId: string;
@@ -539,7 +542,7 @@ function relationScopeSummary(item: IdentityRelationCard): string {
 }
 
 function unlinkVoiceFromWorkspace(identity: PersonaVoiceIdentity): void {
-  if (!window.confirm(`解除声纹 ${compactIdentifier(identity.voiceprintId)} 与当前身份的关联吗？`)) return;
+  if (!window.confirm(translateText(`解除声纹 ${compactIdentifier(identity.voiceprintId)} 与当前身份的关联吗？`))) return;
   emit("unlinkVoice", identity);
 }
 
@@ -666,7 +669,7 @@ function openParticipantReference(participantId: string): void {
 function requestCloseIdentityWorkspace(): void {
   const hasUncommittedEditor = workspaceAccountEditorOpen.value || workspaceRelationEditorOpen.value;
   if ((identityParticipantDirty.value || hasUncommittedEditor)
-    && !window.confirm("当前身份还有未保存的修改，仍然关闭吗？")) return;
+    && !window.confirm(translateText("当前身份还有未保存的修改，仍然关闭吗？"))) return;
   identityWorkspaceDialog.value = false;
   activeIdentityParticipantId.value = "";
   identityParticipantBaseline.value = "";

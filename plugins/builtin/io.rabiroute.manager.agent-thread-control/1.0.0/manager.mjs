@@ -27,13 +27,12 @@ export const activate = definePlugin({
                 }
             });
             try {
-        const routes = runtime.createAgentThreadControlRoutes({
-            readJsonBody: runtime.readJsonBody,
-            jsonResponse: runtime.jsonResponse,
+        const owner = runtime.createAgentThreadControlOwner({
             agentRequests: runtime.agentRequests,
             messageProcessingBoard: runtime.messageProcessingBoard,
             applyManagedAgentThreadDefaults: runtime.applyManagedAgentThreadDefaults,
             agentThreadRequestOptions: runtime.agentThreadRequestOptions,
+            readEndpointDeliveryOptions: runtime.readEndpointDeliveryOptions,
             getTrustedRemoteSource: runtime.getTrustedLanAgentSource,
             getTrustedDeviceSource: runtime.getTrustedDeviceSource,
             handleAgentThreadRequest: runtime.handleAgentThreadRequest,
@@ -44,14 +43,9 @@ export const activate = definePlugin({
             operationalLog: runtime.managerOperationalLog,
             operationalError: error => runtime.managerOperationalError(error, runtime.rootDir)
         });
-        ctx.effect(() => {
-            const unregister = runtime.registerManagerPluginHandlerRoutes(runtime.managerPluginRoutes, "manager:agent-thread-control", "manager.agent-thread-control.api", [routes.handler], [
-                { routeId: "threads", kind: "exact", path: "/api/agent/threads", methods: ["GET", "POST"] }
-            ]);
-            return async () => {
-                unregister();
-                await routes.stopAcceptingAndDrain();
-            };
+        ctx.effect(async () => {
+            const registration = await runtime.managerPluginRoutes.registerOperationsAsync(context.identity.instanceId, runtime.createAgentThreadControlOperations(owner), context.lifecycle.signal);
+            return () => registration.dispose();
         }, "activate Manager Agent thread control plugin");
 
                 await Promise.all(pendingEffects);

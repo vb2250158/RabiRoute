@@ -1,6 +1,8 @@
+import { getTimeoutMs } from "../shared/timeoutSettings.js";
 import rawFs from "node:fs/promises";
 import type { IncomingMessage } from "node:http";
 import { assertTrustedLanAgentPrincipal } from "./lanAgentRequestAccess.js";
+import { hasAuthenticatedConnectionRequest } from "./connectionRequestAccess.js";
 import path from "node:path";
 import net from "node:net";
 import { spawn, execFile } from "node:child_process";
@@ -17,7 +19,7 @@ export function createVideoRequestAccess(request: IncomingMessage): VideoRequest
   const access = {
     get denied() { return denied; }, get mutationStarted() { return mutationStarted; },
     assert() {
-      if (!denied) { try { assertTrustedLanAgentPrincipal(request); } catch { denied = true; } }
+      if (!denied) { try { assertTrustedLanAgentPrincipal(request); hasAuthenticatedConnectionRequest(request); } catch { denied = true; } }
       if (denied) throw Object.assign(new Error("Video request forbidden"), { status: 403, code: "VIDEO_REQUEST_FORBIDDEN" });
     },
     beforeMutation() { access.assert(); mutationStarted = true; }
@@ -44,7 +46,7 @@ async function validateLocalModelRoot(value: unknown, access?: VideoRequestAcces
   const root = validateModelRoot(value, [], () => true);
   if (!root) return null;
   access?.beforeMutation();
-  const { stdout } = await promisify(execFile)("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", "$d=Get-CimInstance Win32_LogicalDisk -Filter ('DeviceID=' + [char]39 + $env:RABIROUTE_VIDEO_MODEL_DRIVE + [char]39); if($d.DriveType -eq 3){'fixed'}"], { encoding: "utf8", timeout: 5000, maxBuffer: 4096, windowsHide: true, env: { ...process.env, RABIROUTE_VIDEO_MODEL_DRIVE: root.slice(0, 2) } });
+  const { stdout } = await promisify(execFile)("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", "$d=Get-CimInstance Win32_LogicalDisk -Filter ('DeviceID=' + [char]39 + $env:RABIROUTE_VIDEO_MODEL_DRIVE + [char]39); if($d.DriveType -eq 3){'fixed'}"], { encoding: "utf8", timeout: getTimeoutMs("backend.manager.videoRuntime.validateLocalModelRoot.promisify_execFile_.timeout", 5000), maxBuffer: 4096, windowsHide: true, env: { ...process.env, RABIROUTE_VIDEO_MODEL_DRIVE: root.slice(0, 2) } });
   access?.assert();
   if (stdout.trim() !== "fixed") throw new Error("Video models require a local fixed disk");
   return root;
@@ -128,6 +130,7 @@ export function createVideoRuntime(rootDir: string, identity: PluginIdentity, le
     return starting;
   }
   return Object.freeze({
+    getTimeoutMs,
     stateRoot: path.join(rootDir, "data", "video"),
     readOnly,
     componentRoot,
@@ -154,7 +157,7 @@ export function createVideoRuntime(rootDir: string, identity: PluginIdentity, le
       mediaProbe = leases.launch(identity,"video-media-probe",()=>spawn(python,["-I",script,file,kind],{windowsHide:true,stdio:["ignore","pipe","ignore"]}),{maxChildProcesses:2,exclusiveAcrossOwners:true});
       const owned = mediaProbe;
       owned.child.stdout?.on("data", chunk => { if(output.length<8192) output += String(chunk); });
-      const timer = setTimeout(()=> { void leases.terminate(owned); },20000);
+      const timer = setTimeout(()=> { void leases.terminate(owned); },getTimeoutMs("deadline.manager.videoRuntime.inspectAsset", 20000));
       try { await owned.settled; access?.assert(); if(owned.child.exitCode!==0 || output.length>8192) throw new Error("素材格式、尺寸或时长不符合要求。"); return JSON.parse(output); }
       finally { clearTimeout(timer); mediaProbe=undefined; }
     },

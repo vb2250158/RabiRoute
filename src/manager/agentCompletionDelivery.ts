@@ -1,3 +1,4 @@
+import { getTimeoutMs } from "../shared/timeoutSettings.js";
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
@@ -21,6 +22,13 @@ export function planCompletionDeliveryRules(roleId: string, plans: readonly Pick
     } })));
 }
 export type CompletionTaskContext = { taskName?: string; plans: Array<{ id: string; title: string }> };
+
+/** Only a complete control envelope is interpreted; quoted examples and other XML remain content. */
+function completionNotification(text: string): { text: string; heartbeat: boolean } {
+  const heartbeat = /^\s*<heartbeat>\s*<automation_id>[^<>]+<\/automation_id>\s*<decision>\s*(DONT_NOTIFY|NOTIFY)\s*<\/decision>\s*<message>([\s\S]*?)<\/message>\s*<\/heartbeat>\s*$/.exec(text);
+  if (!heartbeat || /<\/?(?:heartbeat|automation_id|decision|message)>/.test(heartbeat[2])) return { text, heartbeat: false };
+  return { text: heartbeat[1] === "DONT_NOTIFY" ? "" : heartbeat[2].trim(), heartbeat: true };
+}
 
 /** Preserve every character and Unicode code point across transport-sized messages. */
 export function splitCompletionMessage(text: string, maxChars = 3000): string[] {
@@ -88,7 +96,7 @@ export async function completionProjectIdentity(directory: string): Promise<stri
   const real = await fs.promises.realpath(directory);
   try {
     const { stdout } = await execute("git", ["-C", real, "rev-parse", "--path-format=absolute", "--git-common-dir", "--show-toplevel"],
-      { windowsHide: true, timeout: 5000, maxBuffer: 64 * 1024 });
+      { windowsHide: true, timeout: getTimeoutMs("backend.manager.agentCompletionDelivery.completionProjectIdentity.execute.timeout", 5000), maxBuffer: 64 * 1024 });
     const [commonDirectory, topLevel] = stdout.trim().split(/\r?\n/);
     const relativeProject = path.relative(canonicalPath(await fs.promises.realpath(topLevel)), canonicalPath(real));
     return `git:${canonicalPath(await fs.promises.realpath(commonDirectory))}:${relativeProject}`;
@@ -110,15 +118,18 @@ export class AgentCompletionDeliveryService {
     if (!AGENT_HOOK_EVENTS.some(event => event.hookEvent === request.eventName) || !supportsHooks(request.agentType)
       || !request.sessionId?.trim() || !request.turnId?.trim()
       || !request.lastAssistantMessage?.trim()) return Promise.resolve([]);
+    const notification = completionNotification(request.lastAssistantMessage);
+    if (!notification.text.trim()) return Promise.resolve([]);
+    request = { ...request, lastAssistantMessage: notification.text };
     const key = JSON.stringify([request.sessionId, request.turnId]);
     const pending = this.pending.get(key);
     if (pending) return pending;
-    const operation = this.deliverMatches(request, roleIds).finally(() => this.pending.delete(key));
+    const operation = this.deliverMatches(request, roleIds, notification.heartbeat).finally(() => this.pending.delete(key));
     this.pending.set(key, operation);
     return operation;
   }
 
-  private async deliverMatches(request: CodexHookContextRequest, roleIds?: readonly string[]): Promise<CompletionDeliveryResult[]> {
+  private async deliverMatches(request: CodexHookContextRequest, roleIds?: readonly string[], heartbeat = false): Promise<CompletionDeliveryResult[]> {
     const owners = this.options.rules(request, roleIds).filter(({ rule }) => rule.enabled);
     if (!owners.length) return [];
     const identify = this.options.projectIdentity ?? completionProjectIdentity;
@@ -131,6 +142,7 @@ export class AgentCompletionDeliveryService {
         const errors = agentHookRuleErrors(rule);
         if (errors.length) throw new Error(errors.join(" "));
         if (AGENT_HOOK_EVENTS.find(event => event.value === rule.event)?.hookEvent !== request.eventName) continue;
+        if (heartbeat && rule.conditions.some(condition => condition.type === "exclude_heartbeat")) continue;
         if (rule.conditions.some(condition =>
           (condition.type === "include_sessions" && !condition.sessions?.some(session => session.id === request.sessionId))
           || (condition.type === "exclude_sessions" && condition.sessions?.some(session => session.id === request.sessionId)))) continue;

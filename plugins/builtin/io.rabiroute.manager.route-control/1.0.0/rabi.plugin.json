@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "entries": {
     "manager": {
-      "execution": "in_process",
+      "execution": "isolated",
       "module": "./manager.mjs"
     },
     "web": {
@@ -16,7 +16,7 @@
     "manager.route-control@1"
   ],
   "requires": [
-    "host.manager.route-control@1",
+    "host.manager.route-control-registration@1",
     "manager.core@1",
     "manager.gateway-runtime@1"
   ],

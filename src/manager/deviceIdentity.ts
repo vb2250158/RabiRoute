@@ -1,3 +1,4 @@
+import { getTimeoutMs } from "../shared/timeoutSettings.js";
 import { createHash, generateKeyPairSync, randomUUID } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
@@ -67,7 +68,7 @@ export function readOsMachineIdentity(): string {
       for (let attempt = 0; attempt < 2; attempt += 1) {
         try {
           output = execFileSync(registryTool, ["query", "HKLM\\SOFTWARE\\Microsoft\\Cryptography", "/v", "MachineGuid", "/reg:64"],
-            { encoding: "utf8", windowsHide: true, timeout: 5000, maxBuffer: 16_384, stdio: ["ignore", "pipe", "pipe"] });
+            { encoding: "utf8", windowsHide: true, timeout: getTimeoutMs("backend.manager.deviceIdentity.readOsMachineIdentity.execFileSync.timeout", 5000), maxBuffer: 16_384, stdio: ["ignore", "pipe", "pipe"] });
           break;
         } catch (error) {
           // Retry only a cold-start timeout. Access denial and invalid identity
@@ -82,7 +83,7 @@ export function readOsMachineIdentity(): string {
       if (/^[a-f0-9]{32}$/i.test(id)) return `linux:${id.toLowerCase()}`;
     } else if (process.platform === "darwin") {
       const output = execFileSync("/usr/sbin/ioreg", ["-rd1", "-c", "IOPlatformExpertDevice"],
-        { encoding: "utf8", timeout: 5000, maxBuffer: 65_536, stdio: ["ignore", "pipe", "pipe"] });
+        { encoding: "utf8", timeout: getTimeoutMs("backend.manager.deviceIdentity.readOsMachineIdentity.execFileSync.timeout", 5000), maxBuffer: 65_536, stdio: ["ignore", "pipe", "pipe"] });
       const match = /"IOPlatformUUID"\s*=\s*"([a-f0-9-]{36})"/i.exec(output);
       if (match) return `darwin:${match[1].toLowerCase()}`;
     }

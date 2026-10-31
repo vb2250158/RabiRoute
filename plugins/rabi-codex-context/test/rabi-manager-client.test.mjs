@@ -238,7 +238,9 @@ test("explicit control receives a fail-open diagnostic when Manager is unavailab
 });
 
 test("the plugin hook command imports from PLUGIN_ROOT and reaches Manager", async (t) => {
-  const mock = await server((_request, response) => json(response, 200, { code: 0, data: { additionalContext: "process integration" } }));
+  const mock = await server((request, response) => json(response, 200, request.url === '/meta'
+    ? { applicationGenerationId: 'fixture-generation', managerInstanceId: 'fixture-manager', health: { live: true, requiredReady: true, state: 'healthy' } }
+    : { code: 0, data: { additionalContext: "process integration" } }));
   t.after(() => mock.close());
   const pluginRoot = path.resolve(new URL("..", import.meta.url).pathname.replace(/^\/(?:([A-Za-z]:))/, "$1"));
   const hooks = JSON.parse(await fs.readFile(path.join(pluginRoot, "hooks", "hooks.json"), "utf8"));

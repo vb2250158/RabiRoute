@@ -1,12 +1,17 @@
 <script setup lang="ts">
+import { translateText } from "./i18n";
 import { userFacingError } from "./userFacingError";
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useTheme } from "vuetify";
 import { useRoute, useRouter } from "vue-router";
 import { useRoleStore } from "./stores/roleStore";
-import { isRolePage, roleConfigPath } from "./roleScopedNavigation";
+import { isRolePage, roleConfigPath, roleMessageHistoryPath } from "./roleScopedNavigation";
+import { personaMessagesLocation } from "./persona/personaMessageRoutes";
 import LocaleSwitcher from "./components/LocaleSwitcher.vue";
+import PluginPageHost from "./components/PluginPageHost.vue";
 import QuickSetupDialog from "./components/QuickSetupDialog.vue";
+import RoleSourcePicker from "./components/RoleSourcePicker.vue";
+import RoleManagementActions from "./components/RoleManagementActions.vue";
 import { useI18n } from "./i18n";
 import { routeScopedPathForCurrentPage, routeKeyFromWebguiHash, showsRouteSwitcher } from "./routeScopedNavigation";
 import { pluginCatalogStore } from "./pluginCatalogStore";
@@ -28,6 +33,7 @@ import {
 import { isWebPageRouteActive, webPageDataRequirements } from "./pluginPages";
 import { PLUGIN_RECOVERY_ROUTE_NAME } from "./router";
 import { managerEventSource } from "./managerApi";
+import { API_REFERENCE_CHANGED } from "./docs/apiReferenceClient";
 import { disposeWebPluginModules } from "./pluginModules";
 import { refreshWebPluginModulesSafely } from "./pluginModuleBootstrap";
 import {
@@ -42,6 +48,7 @@ const store = useGatewayStore();
 const route = useRoute();
 const router = useRouter();
 const roles = useRoleStore();
+const roleCreation = ref<InstanceType<typeof RoleManagementActions> | null>(null);
 const showRoleSwitcher = computed(() => isRolePage(route.path));
 const roleSourceQuery = computed(() => roles.sourceDeviceId ? { source: roles.sourceDeviceId } : {});
 const embeddedPlanView = computed(() => Boolean(route.params.planId) && window.self !== window.top);
@@ -173,6 +180,7 @@ async function savePage(): Promise<void> {
 
 function commandContext(): WebCommandContext {
   return {
+    createRole: () => { if (canLeaveDirtyState()) roleCreation.value?.openCreate(); },
     openQuickSetup: () => store.openQuickSetup(),
     addRoute: () => store.addGatewayAndOpenQuickSetup(),
     openManagerConfig: () => store.openConfigFile("manager"),
@@ -198,8 +206,8 @@ async function executeCommand(command: WebCommandContribution): Promise<void> {
 async function loadGatewayEditorInBackground(): Promise<void> {
   await store.load();
   if (store.gateways.length === 0 && route.path.startsWith("/routes")) {
-    const quickSetup = webCommandForHandler(pluginCatalogStore.commands.value, "web.quick-setup");
-    if (quickSetup) await executeCommand(quickSetup);
+    const createRole = webCommandForHandler(pluginCatalogStore.commands.value, "web.create-role");
+    if (createRole) await executeCommand(createRole);
   } else if (!showRoleSwitcher.value && selectedRouteKey.value && !routeKeyFromWebguiHash(`#${route.fullPath}`)) {
     const scopedPath = routeScopedPathForCurrentPage(selectedRouteKey.value, route.path);
     if (scopedPath && scopedPath !== route.path) await router.replace({ path: scopedPath, query: route.query, hash: route.hash });
@@ -211,6 +219,17 @@ async function loadGatewayEditorInBackground(): Promise<void> {
 let roleNavigationVersion = 0;
 async function syncRolePage(): Promise<void> {
   const version = ++roleNavigationVersion;
+  if (route.path === "/routes" || /^\/routes\/[^/]+(?:\/adapters)?$/.test(route.path)) {
+    await store.load();
+    if (version !== roleNavigationVersion) return;
+    const key = String(route.params.id || "");
+    const original = key ? store.gateways.find(item => item.id === key || configNameFor(item) === key) : store.selectedGateway;
+    if (original?.agentRoleId) {
+      const destination = personaMessagesLocation(original);
+      await router.replace({ ...destination, query: { ...route.query, ...destination.query } });
+    }
+    return;
+  }
   const legacy = route.path.match(/^\/routes\/([^/]+)\/(persona(?:\/document)?|knowledge|plan\/(.+))$/)
     || route.path.match(/^\/persona\/([^/]+)$/);
   if (legacy) {
@@ -234,7 +253,7 @@ async function syncRolePage(): Promise<void> {
     await roles.loadCatalog();
     if (version !== roleNavigationVersion) return;
     const first = roles.catalog.find(role => !role.error);
-    if (first) await router.replace({ path: route.path.endsWith("/knowledge") ? `/roles/${encodeURIComponent(first.roleId)}/knowledge` : roleConfigPath(first.roleId), query: source ? { source } : {} });
+    if (first) await router.replace({ path: route.path.endsWith("/message-history") ? roleMessageHistoryPath(first.roleId) : route.path.endsWith("/knowledge") ? `/roles/${encodeURIComponent(first.roleId)}/knowledge` : roleConfigPath(first.roleId), query: source ? { source } : {} });
     else await roles.select("", source);
     return;
   }
@@ -243,15 +262,15 @@ async function syncRolePage(): Promise<void> {
   await roles.loadCatalog();
 }
 watch(() => route.fullPath, () => { void syncRolePage().catch(error => { roles.error = userFacingError(error); }); }, { immediate: true });
-function selectRole(id: string): void {
-  if (!id || id === roles.selectedRoleId || !canLeaveDirtyState()) return;
-  const suffix = route.path.includes("/knowledge") || route.path.includes("/plan/") ? "knowledge" : "config";
-  void router.push({ path: `/roles/${encodeURIComponent(id)}/${suffix}`, query: roleSourceQuery.value });
+function selectRole(id: string, source = roles.sourceDeviceId): void {
+  if (!id || (id === roles.selectedRoleId && source === roles.sourceDeviceId) || !canLeaveDirtyState()) return;
+  const suffix = route.path.endsWith("/message-history") ? "message-history" : route.path.includes("/knowledge") || route.path.includes("/plan/") ? "knowledge" : "config";
+  void router.push({ path: `/roles/${encodeURIComponent(id)}/${suffix}`, query: { ...(source ? { source } : {}), ...(route.query.tab === "messages" ? { tab: "messages" } : {}) } });
 }
 const releaseRoleGuard = router.beforeEach((to, from) => {
   if (!roles.dirty || !isRolePage(from.path)) return true;
   if (String(to.params.roleId || "") === roles.selectedRoleId && String(to.query.source || "") === roles.sourceDeviceId) return true;
-  return window.confirm("当前角色有未保存修改，确定离开？");
+  return window.confirm(translateText("当前角色有未保存修改，确定离开？"));
 });
 
 onMounted(() => {
@@ -261,6 +280,8 @@ onMounted(() => {
   window.addEventListener(INTERFACE_THEME_CHANGED, onInterfaceThemeChanged);
   systemThemeQuery.addEventListener("change", onSystemThemeChanged);
   managerEvents = managerEventSource("/api/events");
+  managerEvents.addEventListener("api.catalog.changed", () => { window.dispatchEvent(new Event(API_REFERENCE_CHANGED)); });
+  managerEvents.addEventListener("open", () => { window.dispatchEvent(new Event(API_REFERENCE_CHANGED)); });
   managerEvents.addEventListener("plugin_catalog_changed", () => { void handlePluginCatalogChanged(); });
   managerEvents.addEventListener("role_catalog_changed", () => { void roles.loadCatalog(); if (!roles.dirty && showRoleSwitcher.value) void roles.load(); });
   managerEvents.addEventListener("desktop_settings_changed", () => { void loadInterfaceTheme(); });
@@ -305,7 +326,7 @@ onBeforeUnmount(() => {
 
 async function refresh(): Promise<void> {
   await Promise.all([store.load(), roles.loadCatalog(), pluginCatalogStore.refresh()]);
-  if (showRoleSwitcher.value && (!roles.dirty || window.confirm("放弃当前角色未保存修改并刷新？"))) await roles.load();
+  if (showRoleSwitcher.value && (!roles.dirty || window.confirm(translateText("放弃当前角色未保存修改并刷新？")))) await roles.load();
   await refreshWebPluginModulesSafely();
   const routeId = typeof route.meta.pluginRouteId === "string" ? route.meta.pluginRouteId : "";
   if (routeId && !isWebPageRouteActive(pluginCatalogStore.pages.value, routeId)) {
@@ -432,14 +453,7 @@ function selectGateway(id: string): void {
           <div class="font-weight-bold">{{ pageTitle }}</div>
         </v-toolbar-title>
         <div id="page-topbar-controls" class="topbar-page-controls" />
-        <v-autocomplete
-          v-if="showRoleSwitcher"
-          class="topbar-route-picker"
-          :model-value="roles.selectedRoleId"
-          :items="roles.catalog.map(role => ({ title: `${role.title}${role.title !== role.roleId ? ` · ${role.roleId}` : ''}${role.error ? ' · 状态异常' : ''}`, value: role.roleId, props: { disabled: !!role.error } }))"
-          aria-label="选择角色" density="compact" hide-details
-          @update:model-value="value => selectRole(String(value || ''))"
-        />
+        <RoleSourcePicker v-if="showRoleSwitcher" @select="selectRole" />
         <v-select
           v-if="showRouteSwitcher && !showRoleSwitcher"
           class="topbar-route-picker"
@@ -503,17 +517,19 @@ function selectGateway(id: string): void {
       </v-alert>
       <router-view v-if="!store.routeSelectionMissing || showRoleSwitcher" v-slot="{ Component, route: activeRoute }">
         <KeepAlive>
-          <component
-            :is="Component"
+          <PluginPageHost
+            :component="Component"
+            :route-id="String(activeRoute.meta.pluginRouteId || '')"
             v-if="activeRoute.meta.keepAlive"
-            :key="`${String(activeRoute.meta.pluginRouteId || activeRoute.name || activeRoute.path)}:${String(activeRoute.params.roleId || activeRoute.params.id || '')}`"
+            :key="`${String(activeRoute.meta.pluginRouteId || activeRoute.name || activeRoute.path)}:${String(activeRoute.params.roleId || activeRoute.params.id || '')}:${String(activeRoute.query.source || '')}`"
           />
         </KeepAlive>
-        <component :is="Component" v-if="!activeRoute.meta.keepAlive" />
+        <PluginPageHost :component="Component" :route-id="String(activeRoute.meta.pluginRouteId || '')" v-if="!activeRoute.meta.keepAlive" :key="`${String(activeRoute.meta.pluginRouteId || activeRoute.name || activeRoute.path)}:${String(activeRoute.params.roleId || activeRoute.params.id || '')}:${String(activeRoute.query.source || '')}`" />
       </router-view>
     </v-main>
 
     <QuickSetupDialog v-model="store.quickSetupDialogOpen" />
+    <RoleManagementActions ref="roleCreation" create-only />
     <v-snackbar :model-value="!!snackbar" timeout="1800" @update:model-value="value => { if (!value) snackbar = '' }">
       {{ snackbar }}
     </v-snackbar>

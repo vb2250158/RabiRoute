@@ -1,4 +1,4 @@
-import type { AsyncComponentLoader } from "vue";
+import { nextTick, type AsyncComponentLoader } from "vue";
 import { createRouter, createWebHashHistory, type RouteRecordRaw } from "vue-router";
 import RouteLoadErrorPage from "./components/RouteLoadErrorPage.vue";
 import RouteLoadingPage from "./components/RouteLoadingPage.vue";
@@ -8,9 +8,8 @@ import { createLazyRouteRecovery } from "./lazyRouteRecovery";
 import { pluginCatalogStore } from "./pluginCatalogStore";
 import {
   isWebPageRouteActive,
-  isTrustedWebPageReplacementInProgress,
   onTrustedWebPageRegistrationChange,
-  onTrustedWebPageReplacement,
+  setActiveTrustedWebPage,
   registeredWebPages,
   type TrustedWebPageRegistration,
   type WebPageRouteId
@@ -18,16 +17,6 @@ import {
 
 export const lazyRouteRecovery = createLazyRouteRecovery();
 export const PLUGIN_RECOVERY_ROUTE_NAME = "plugin-recovery";
-
-async function reloadActiveTrustedWebPageAfterReplacement(): Promise<void> {
-  const current = router.currentRoute.value;
-  const routeId = typeof current.meta.pluginRouteId === "string" ? current.meta.pluginRouteId : "";
-  if (!routeId || !isWebPageRouteActive(pluginCatalogStore.pages.value, routeId)) return;
-  const resolved = router.resolve(current.fullPath);
-  if (typeof resolved.meta.pluginRouteId !== "string" || resolved.meta.pluginRouteId !== routeId) return;
-  await router.replace({ name: PLUGIN_RECOVERY_ROUTE_NAME, query: { from: current.fullPath } });
-  await router.replace(current.fullPath);
-}
 
 function immediatePage(loader: AsyncComponentLoader) {
   return createImmediateRouteComponent(loader, RouteLoadingPage, {
@@ -109,7 +98,7 @@ onTrustedWebPageRegistrationChange(change => {
   }
   const activeRouteId = router.currentRoute.value.meta.pluginRouteId;
   unmountTrustedWebPageRoutes(change.registration.routeId);
-  if (activeRouteId === change.registration.routeId && !isTrustedWebPageReplacementInProgress()) {
+  if (activeRouteId === change.registration.routeId) {
     void router.replace({
       name: PLUGIN_RECOVERY_ROUTE_NAME,
       query: { from: router.currentRoute.value.fullPath }
@@ -117,7 +106,13 @@ onTrustedWebPageRegistrationChange(change => {
   }
 });
 
-onTrustedWebPageReplacement(() => { void reloadActiveTrustedWebPageAfterReplacement(); });
+router.afterEach(async (_to, _from, failure) => {
+  if (failure) return;
+  // Let Vue unmount the previous page before its bundle can release resources.
+  await nextTick();
+  const current = router.currentRoute.value;
+  setActiveTrustedWebPage(typeof current.meta.pluginRouteId === 'string' ? current.meta.pluginRouteId : '');
+});
 
 router.beforeEach((to) => {
   const routeId = typeof to.meta.pluginRouteId === "string" ? to.meta.pluginRouteId : "";

@@ -108,7 +108,8 @@ public static class RabiTerminalHost {
             }
         } finally {
             if(job!=IntPtr.Zero){TerminateJobObject(job,1);CloseHandle(job);}
-            if(process.process!=IntPtr.Zero)WaitForSingleObject(process.process,5000);
+            uint stopMs; if(!UInt32.TryParse(Environment.GetEnvironmentVariable("RABI_TERMINAL_NATIVE_STOP_MS"),out stopMs)||stopMs<1||stopMs>2147483647)stopMs=5000;
+            if(process.process!=IntPtr.Zero)WaitForSingleObject(process.process,stopMs);
             if(pc!=IntPtr.Zero)ClosePseudoConsole(pc);
             if(writer!=null)writer.Dispose();
             foreach(var handle in new[]{inputRead,inputWrite,outputRead,outputWrite,process.process,process.thread})if(handle!=IntPtr.Zero)CloseHandle(handle);

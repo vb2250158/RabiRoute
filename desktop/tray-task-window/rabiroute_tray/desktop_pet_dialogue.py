@@ -10,7 +10,8 @@ _NEUTRAL_LINES = {
         "work": "有需要可以叫我。",
     },
     "fallbacks": {
-        "companionInterrupted": "陪伴连接暂时中断，正在自动恢复",
+        "companionContextFailed": "陪伴资料读取失败",
+        "companionProcessingFailed": "陪伴处理暂未完成",
         "managerInterrupted": "Rabi Manager 连接暂时中断",
         "actionUnavailable": "这个动作暂时不可用",
         "companionFailed": "陪伴操作未完成，请稍后重试",

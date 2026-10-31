@@ -9,7 +9,7 @@ This is a maintainer checklist, not evidence that the current host release has p
 - Inspect CLI help and official programmatic interfaces before choosing CDP, reverse engineering, or UI simulation. Reading help does not authorize its create, send, or mutation commands.
 - Verify Hook events, JSON input (session ID, cwd, tool name), output structure, matcher applicability, and loading time. Do not attach tool-only matchers to lifecycle events.
 - Resolve the real Home, plugin root, and environment variable names from current processes or managed configuration. Do not derive them from the host name or copy another computer's layout.
-- Install temporary probes only with authorization for that experiment. Back up configuration, record only necessary non-sensitive fields, and restore afterward. Do not record credentials or complete private prompts.
+- Use isolated temporary probes within the already authorized development or diagnostic scope without requesting approval again. Back up configuration, record only necessary non-sensitive fields, and restore afterward. Do not record credentials or complete private prompts.
 - Record host version and verification evidence. A missing installation entry does not prove missing Hook support; writing configuration does not prove execution.
 
 ## 2. Session and delivery identity
@@ -18,7 +18,7 @@ This is a maintainer checklist, not evidence that the current host release has p
 - Real messages use one managed transport that explicitly addresses an existing session ID. An explicit parameter does not eliminate misdelivery risk: still verify the owner, workspace, and receipt.
 - Different entry points may mark input as `SYSTEM`, `USER_EXPLICIT`, or other sources. Report what the actual transcript establishes; never call system injection human input.
 - Where a live owner is required, verify process, heartbeat, published endpoint, and session kind together under the existing contract. A prewarmed process or missing endpoint is not a deliverable session.
-- When Desktop owns real messages, fail closed if it is unloaded or unavailable. Do not switch to a fallback Runtime, the current UI conversation, or automatically enable CDP to bypass failure.
+- When Desktop owns real messages, restore its connection and task loading, then reconcile the original delivery ID. Do not substitute another Runtime or the current UI conversation. Continue independent work.
 - Obtain endpoints and credentials only through the managed discovery contract. Do not scan ports to guess a service or forward credentials to a new address without established trust.
 - Keep credentials in protected, untracked local state, not source or logs. Read authoritative state before handling an uncertain receipt; do not replay automatically.
 
@@ -40,8 +40,8 @@ This is a maintainer checklist, not evidence that the current host release has p
 - Distinguish not executed, executed without context, and Manager unavailable through managed diagnostics. Record event, outcome, elapsed time, and bounded identity hints, not secrets or complete messages.
 - Installers and fixtures share an explicit self-check output contract. A nonempty string may be a fail-open error; do not use `Boolean(output)` as connectivity proof. Use the current structured verdict or exact success marker.
 - Distinguish plugin installation from user-configuration installation. Hosts such as WorkBuddy may load configuration at session startup; identify the exact sessions that need reopening under the current implementation, rather than restarting the entire Desktop by default.
-- Discover Manager using Host `managerBaseUrl`, `applicationGenerationId`, and `managerInstanceId`, or source READY, then verify `/meta`. Ordinary calls accept `healthy` or `degraded`, require `health.live=true` and `health.requiredReady=true`, and leave dependency checks to the endpoint. Rediscover on identity mismatch; do not infer readiness from a fixed port.
-- Verify real delivery only when explicitly authorized: expected-source input and a reply appear in the target session, without creating an extra task. Prefer authoritative terminal receipts when available. Do not treat no new task as failure.
+- Discover Manager using Host `managerBaseUrl`, `applicationGenerationId`, and `managerInstanceId`, or source READY, then verify `/meta`. Ordinary calls accept `healthy` or `degraded` and require `health.live=true`; record the declared capability status in `health.requiredReady` and leave dependency checks to the target endpoint. Rediscover on identity mismatch; do not infer readiness from a fixed port.
+- Reuse the existing authorization to send or validate the designated test target: expected-source input and a reply appear in the target session, without creating an extra task. Prefer authoritative terminal receipts when available. Do not treat no new task as failure.
 - Report configuration paths, events, scripts, self-check results, sessions requiring reopening, and unverified items. Installation, configuration loading, and real interactive acceptance are separate results.
 
 ## 5. Isolated tests

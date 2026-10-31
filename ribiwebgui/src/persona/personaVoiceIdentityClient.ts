@@ -77,6 +77,8 @@ type ApiEnvelope<T> = {
   data?: T;
 };
 
+export function createPersonaVoiceIdentityClient(fetchImpl: typeof fetch = (...args) => fetch(...args)) {
+const fetch = fetchImpl;
 function roleEndpoint(roleId: string, suffix: string): string {
   return `/api/roles/${encodeURIComponent(roleId)}/${suffix}`;
 }
@@ -90,7 +92,7 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
   return body.data;
 }
 
-export const personaVoiceIdentityClient = {
+const personaVoiceIdentityClient = {
   summary(roleId: string, from: string, to: string): Promise<PersonaVoiceSummaryResult> {
     const query = new URLSearchParams({
       from,
@@ -113,3 +115,7 @@ export const personaVoiceIdentityClient = {
     });
   }
 };
+
+return personaVoiceIdentityClient;
+}
+export const personaVoiceIdentityClient = createPersonaVoiceIdentityClient();

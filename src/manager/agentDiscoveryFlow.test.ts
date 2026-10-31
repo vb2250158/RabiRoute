@@ -8,33 +8,11 @@ import test from "node:test";
 import { LanAgentAuthority } from "./lanAgentAuthority.js";
 import { LanAgentRegistry } from "./lanAgentRegistry.js";
 import { evaluateLanAgentRequest } from "./lanAgentRequestAccess.js";
-import { handleLanAgentApi, summarizeAgentCapabilityCoverage } from "./lanAgentRoutes.js";
+import { handleLanAgentApiFixture as handleLanAgentApi } from "./lanAgentRouteTestSupport.js";
 import { AgentResourceCatalog } from "./agentResourceCatalog.js";
 import type { LanAgentReleaseStore } from "./lanAgentReleaseStore.js";
 
 const hookModuleUrl = new URL("../../apps/rabi-agent/lib/instance-hook.mjs", import.meta.url).href;
-
-test("capability coverage summary distinguishes baseline and verified contracts", () => {
-  const operation = { help: { contractLevel: "verified", coverage: { exactRequestSchema: true, exactResponseSchema: true, missing: [] } } } as any;
-  const baseline = { help: { contractLevel: "baseline", coverage: { missing: ["request-body-schema"] } } } as any;
-  assert.deepEqual(summarizeAgentCapabilityCoverage([operation, baseline]), {
-    operationCount: 2, baselineCount: 1, verifiedCount: 1, unverifiedCount: 0, missing: ["request-body-schema"]
-  });
-});
-
-test("unknown levels and inconsistent verified labels never inflate verified coverage", () => {
-  const entries = [
-    { help: { contractLevel: "future-level", coverage: { exactRequestSchema: true, exactResponseSchema: true, missing: [] } } },
-    { help: { contractLevel: "verified", coverage: { exactRequestSchema: false, exactResponseSchema: true, missing: [] } } },
-    { help: { contractLevel: "verified", coverage: { exactRequestSchema: true, exactResponseSchema: true, missing: ["response-schema"] } } }
-  ] as any;
-  const summary = summarizeAgentCapabilityCoverage(entries);
-  assert.equal(summary.verifiedCount, 0);
-  assert.equal(summary.unverifiedCount, 3);
-  assert.equal(summary.operationCount, summary.baselineCount + summary.verifiedCount + summary.unverifiedCount);
-  assert.ok(Object.isFrozen(summary));
-  assert.ok(Object.isFrozen(summary.missing));
-});
 
 test("real Hook discovery GET guidance reaches authorized API and public Skill contracts", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabi-discovery-flow-"));
@@ -44,7 +22,6 @@ test("real Hook discovery GET guidance reaches authorized API and public Skill c
   const nodeId = "discovery-fixture-node";
   const agent = { agentId: "worker", provider: "dsh", sessionId: "session-discovery-fixture", enabled: true };
   const credential = authority.enroll(authority.issueBootstrapTicket().ticket, nodeId);
-  authority.approveAndEnableAgent(nodeId, agent, authority.getSnapshot().revision);
   const resources = new AgentResourceCatalog({ rootDir: repoRoot });
   const dispatched: string[] = [];
   const json = (response: http.ServerResponse, status: number, body: unknown) => {
@@ -58,7 +35,7 @@ test("real Hook discovery GET guidance reaches authorized API and public Skill c
     if (request.method === "GET" && url.pathname === "/meta") {
       json(response, 200, { health: { state: "healthy", requiredReady: true, live: true }, applicationGenerationId: "fixture-generation", managerInstanceId: "fixture-manager" }); return;
     }
-    if (request.method === "POST" && url.pathname === `/api/lan-agent/instances/${nodeId}/agents/${agent.agentId}/context`) {
+    if (request.method === "POST" && url.pathname === "/api/codex-hook/context") {
       let body = "";
       request.on("data", chunk => { body += String(chunk); });
       request.on("end", () => {
@@ -84,7 +61,7 @@ test("real Hook discovery GET guidance reaches authorized API and public Skill c
   const headers = { authorization: `Bearer ${credential.token}`, "x-rabiroute-agent-id": agent.agentId };
   try {
     const { requestInstanceHook } = await import(hookModuleUrl) as { requestInstanceHook: (input: unknown, configPath: string) => Promise<{ additionalContext: string }> };
-    const decision = await requestInstanceHook({ session_id: agent.sessionId }, configPath);
+    const decision = await requestInstanceHook({ agentType: "dsh", session_id: agent.sessionId }, configPath);
     const targets = [...decision.additionalContext.matchAll(/--api GET\s+(\/[^\s`]+)/g)].map(match => match[1]);
     assert.ok(targets.includes("/api/lan-agent/capabilities"));
     assert.ok(targets.includes("/api/lan-agent/resources"));
@@ -97,19 +74,17 @@ test("real Hook discovery GET guidance reaches authorized API and public Skill c
       results.set(target, await response.json());
     }
     const capabilityBody = results.get("/api/lan-agent/capabilities")!;
-    assert.equal(capabilityBody.schemaVersion, "1");
-    assert.equal(capabilityBody.contractRevision, "agent-api-help-1");
-    assert.match(String(capabilityBody.generatedAt), /T/);
+    assert.equal(capabilityBody.schemaVersion, "2");
+    assert.equal(capabilityBody.coverage.scope, "registered-routes");
+    assert.equal(capabilityBody.coverage.globalCoverage, "not-proven");
     assert.equal(capabilityBody.coverage.operationCount, capabilityBody.operations.length);
-    assert.equal(capabilityBody.coverage.baselineCount, capabilityBody.operations.length);
-    assert.equal(capabilityBody.coverage.verifiedCount, 0);
-    const declaredMissing = capabilityBody.operations.flatMap((item: { help: { coverage: { missing: string[] } } }) => item.help.coverage.missing);
-    assert.deepEqual(capabilityBody.coverage.missing, [...new Set(declaredMissing)]);
-    assert.ok(capabilityBody.coverage.missing.includes("request-body-schema"));
-    assert.ok(capabilityBody.coverage.missing.includes("response-schema"));
-    assert.ok(capabilityBody.coverage.missing.includes("error-response-schemas"));
-    assert.ok(capabilityBody.operations.every((item: { help?: { operationId?: string; request?: unknown; response?: unknown; errors?: unknown; nextStep?: string } }) => item.help?.operationId && item.help.request && item.help.response && item.help.errors && item.help.nextStep));
-    assert.ok(capabilityBody.operations.some((item: { pathTemplate: string }) => item.pathTemplate === "/api/agent/uploads/:uploadId"));
+    assert.equal(capabilityBody.coverage.complete, true);
+    assert.deepEqual(capabilityBody.coverage.gaps, []);
+    assert.ok(capabilityBody.operations.every((item: any) => item.contract && item.help.auditLevel === "runtime-schema"));
+    for (const id of ["manager.lan-agent.enroll.exchange", "manager.lan-agent.nodes.tasks", "manager.lan-agent.agents.threads", "manager.lan-agent.resources.read"]) {
+      assert.ok(capabilityBody.operations.some((item: any) => item.id === id), id);
+    }
+    assert.equal(capabilityBody.operations.some((item: any) => item.pathTemplate === "/api/agent/uploads/:uploadId"), false, "This low-level fixture does not install the uploads owner.");
     const entries = results.get("/api/lan-agent/resources")!.data as Array<{ id: string }>;
     for (const id of ["docs/rabi-agent-interfaces.md", "skills/plan-task-orchestration/SKILL.md"]) {
       assert.ok(entries.some(entry => entry.id === id), id);
@@ -124,8 +99,8 @@ test("real Hook discovery GET guidance reaches authorized API and public Skill c
     assert.ok(dispatched.includes("/api/lan-agent/resources/read"));
     for (const old of ["/api/agent/resources", "/api/agent/capabilities"]) {
       assert.ok([403, 404].includes((await fetch(base + old, { headers })).status), old);
+    authority.setNodeEnabled(nodeId, false);
     }
-    authority.setAgentEnabled(nodeId, agent.agentId, false);
     assert.equal((await fetch(`${base}/api/lan-agent/resources`, { headers })).status, 403);
   } finally {
     registry.close(); server.closeAllConnections();

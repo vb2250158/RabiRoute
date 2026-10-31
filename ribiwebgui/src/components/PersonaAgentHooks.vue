@@ -11,6 +11,8 @@ import AgentCompletionDeliveryRules from "./AgentCompletionDeliveryRules.vue";
 const props = defineProps<{ modelValue?: CodexHookSettings; gateways: GatewayDefinition[]; gateway: GatewayDefinition }>();
 const emit = defineEmits<{ "update:modelValue": [value: CodexHookSettings] }>();
 const selected = ref<AgentAdapterType>();
+const contextDialog = ref(false);
+watch(selected, () => { contextDialog.value = false; });
 const panelId = useId();
 const { smAndDown } = useDisplay();
 const options = computed(() => personaHookAgentOptions(props.gateways, props.gateway.agentRoleId || ""));
@@ -82,13 +84,18 @@ function update(patch: Partial<Omit<CodexHookSettings, "byAgent">>) {
         <div :id="`${panelId}-settings`" :key="selected" class="hook-agent-settings" role="tabpanel"
           :aria-labelledby="`${panelId}-${selected}`" tabindex="0">
           <div class="hook-agent-heading">
-            <h3>{{ selectedTitle }}</h3>
-            <span class="section-note">首次使用需在对应 Agent 端安装 Hook。</span>
-          </div>
-          <section class="hook-settings-card">
-            <div class="hook-settings-header">
-              <h3>触发与上下文</h3>
+            <div class="hook-agent-heading-copy">
+              <h3>{{ selectedTitle }}</h3>
+              <span class="section-note">首次使用需在对应 Agent 端安装 Hook。</span>
             </div>
+            <v-dialog v-model="contextDialog" max-width="760" scrollable :aria-labelledby="`${panelId}-context-title`">
+              <template #activator="{ props: activatorProps }">
+                <v-btn v-bind="activatorProps" variant="tonal" prepend-icon="mdi-tune-variant">触发与上下文</v-btn>
+              </template>
+              <v-card>
+                <v-card-title :id="`${panelId}-context-title`">触发与上下文</v-card-title>
+                <v-card-subtitle class="pb-3">{{ selectedTitle }}</v-card-subtitle>
+                <v-card-text class="pa-0">
             <div v-for="field in fields" :key="field.key" class="hook-setting-row">
               <div>
                 <label :for="`${panelId}-${selected}-${field.key}`" class="hook-setting-title">{{ field.title }}</label>
@@ -98,7 +105,15 @@ function update(patch: Partial<Omit<CodexHookSettings, "byAgent">>) {
               <v-switch :id="`${panelId}-${selected}-${field.key}`" :model-value="settings[field.key]" :aria-label="field.title"
                 color="primary" density="compact" hide-details inset @update:model-value="value => update({ [field.key]: value === true })" />
             </div>
-          </section>
+                </v-card-text>
+                <v-card-actions class="pa-4 flex-wrap ga-3">
+                  <span class="section-note">修改后点击保存生效。</span>
+                  <v-spacer />
+                  <v-btn variant="tonal" @click="contextDialog = false">关闭</v-btn>
+                </v-card-actions>
+              </v-card>
+            </v-dialog>
+          </div>
           <details class="hook-config-group">
             <summary>
               <span class="hook-group-description"><strong>自动追问</strong><span class="section-note">任务结束后，按计划状态继续追问。</span></span>
@@ -143,9 +158,8 @@ function update(patch: Partial<Omit<CodexHookSettings, "byAgent">>) {
 .hook-agent-meta { font-size: .75rem; color: rgba(var(--v-theme-on-surface), .7); }
 .hook-agent-current { display: flex; align-items: center; justify-content: space-between; color: rgb(var(--v-theme-primary)); font-size: .75rem; min-height: 18px; }
 .hook-agent-settings { min-width: 0; display: grid; gap: 16px; }
-.hook-agent-heading { display: grid; gap: 6px; }
-.hook-settings-card { border: 1px solid rgba(var(--v-theme-on-surface), .12); border-radius: 12px; overflow: hidden; }
-.hook-settings-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding: 18px 20px; }
+.hook-agent-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+.hook-agent-heading-copy { display: grid; gap: 6px; min-width: 0; }
 h3 { font-size: 1rem; margin: 0; }
 .hook-setting-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 20px; padding: 16px 20px; border-top: 1px solid rgba(var(--v-theme-on-surface), .08); }
 .hook-setting-title { font-weight: 600; cursor: pointer; }
@@ -169,7 +183,7 @@ h3 { font-size: 1rem; margin: 0; }
   .hook-agent-tab { flex: 1 0 160px; }
 }
 @media (max-width: 600px) {
-  .hook-settings-header, .hook-setting-row, .hook-config-group > summary, .hook-group-content { padding: 14px; }
+  .hook-setting-row, .hook-config-group > summary, .hook-group-content { padding: 14px; }
   .hook-setting-row { gap: 10px; }
 }
 </style>

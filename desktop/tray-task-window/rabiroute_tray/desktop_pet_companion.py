@@ -4,6 +4,8 @@ Manager owns activity state. No player/game input, screenshots on disk, or brows
 """
 from __future__ import annotations
 
+from .timeout_settings import get_timeout_seconds
+
 import base64
 import ctypes
 import io
@@ -104,7 +106,7 @@ class DesktopPetCompanion(QObject):
         request = Request(self._base + (f"/{action}" if action else ""),
                           data=json.dumps(body, ensure_ascii=False).encode("utf-8") if body is not None else None,
                           headers={"content-type": "application/json", "accept": "application/json"})
-        with urlopen(request, timeout=12) as response:
+        with urlopen(request, timeout=get_timeout_seconds("desktop.pet.companion", 12)) as response:
             payload = json.loads(response.read().decode("utf-8"))
         if payload.get("code") != 0:
             raise RuntimeError(payload.get("message") or "陪伴请求失败")

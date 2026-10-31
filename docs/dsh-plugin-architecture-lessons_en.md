@@ -2,7 +2,7 @@ English | <a href="./dsh-plugin-architecture-lessons.md">简体中文</a>
 
 # Plugin Architecture Lessons for RabiRoute from DSH
 
-> Status: architecture research, migration of all 28 built-in Manager plugins, and unified validation are complete, with configuration reconciliation, controlled presentation contributions, and a separate-process extension contract implemented.
+> Status: this document preserves the early architecture study and 28-package migration history. The [plugin platform architecture](manager-plugin-implementation-hot-swap_en.md) records the current kernel, distribution profile, and per-module business migration. A package entry alone does not prove independent business delivery.
 >
 > Primary audience: RabiRoute maintainers and developers of message-side and Agent-side integrations.
 

@@ -1,6 +1,10 @@
 # 连接后使用知识服务
 
-[English](knowledge-bridge-settings_en.md) | 简体中文
+<!-- docs-language-switch -->
+<div align="center">
+<a href="./knowledge-bridge-settings_en.md">English</a> | 简体中文 | <a href="./knowledge-bridge-settings_ja.md">日本語</a>
+</div>
+<!-- /docs-language-switch -->
 
 在 RabiLink 配置页连接应用，再选择已上线的目标电脑，即可使用它提供的知识工具。已鉴权且属于同一应用的设备默认允许读取和写入，无需填写 MCP 地址、知识密钥、角色与工具白名单或设备授权 JSON。
 

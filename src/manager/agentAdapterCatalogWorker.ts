@@ -1,3 +1,4 @@
+import { configureTimeouts } from "../shared/timeoutSettings.js";
 import {
   scanAgentAdapters,
   scanDshAgentAdapter,
@@ -27,6 +28,7 @@ export type AgentAdapterCatalogWorkerTask =
     };
 
 export type AgentAdapterCatalogWorkerRequest = {
+  timeoutOverrides?: Record<string, number>;
   requestId: string;
   task: AgentAdapterCatalogWorkerTask;
 };
@@ -58,6 +60,7 @@ function send(message: AgentAdapterCatalogWorkerResponse): void {
 
 async function respond(request: AgentAdapterCatalogWorkerRequest): Promise<void> {
   try {
+    configureTimeouts(request.timeoutOverrides ?? {});
     send({
       requestId: request.requestId,
       ok: true,

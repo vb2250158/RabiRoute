@@ -1,3 +1,4 @@
+import { getTimeoutMs } from "./timeoutSettingsClient";
 export function parseRetryAfter(value: string | null, now = Date.now()): number | undefined {
   if (!value) return undefined;
   const text = value.trim();
@@ -25,7 +26,7 @@ export async function retryPlanCatalogInitialization<T>(
   const abort = () => controller.abort(options.signal?.reason);
   if (options.signal?.aborted) abort();
   else options.signal?.addEventListener("abort", abort, { once: true });
-  const budget = options.budgetMs ?? 300_000;
+  const budget = options.budgetMs ?? getTimeoutMs("webgui.plan.initialization", 300000);
   const deadline = performance.now() + budget;
   const timeout = setTimeout(() => controller.abort(new DOMException("Plan initialization timed out", "TimeoutError")), budget);
   const check = () => controller.signal.throwIfAborted();

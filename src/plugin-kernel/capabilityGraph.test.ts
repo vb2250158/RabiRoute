@@ -39,3 +39,11 @@ test("planCapabilityGraph rejects ambiguous providers and cycles", () => {
     candidate("left", ["left@1"], ["right@1"]), candidate("right", ["right@1"], ["left@1"])
   ], new Set()), /dependency cycle/);
 });
+
+test("multiple required capabilities from one provider count as one activation dependency", () => {
+  const plan = planCapabilityGraph([
+    candidate("consumer", [], ["route.query@1", "route.write@1"]),
+    candidate("provider", ["route.query@1", "route.write@1"], [])
+  ], new Set());
+  assert.deepEqual(plan.activationOrder, ["provider", "consumer"]);
+});

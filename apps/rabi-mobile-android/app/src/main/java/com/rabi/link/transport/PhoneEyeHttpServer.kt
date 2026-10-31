@@ -16,7 +16,8 @@ import java.util.concurrent.TimeUnit
 /** Paired edge transport. Authentication and Manager path selection belong to the caller. */
 internal class PhoneEyeHttpServer(
     private val http: (Request, ResponseSink) -> Unit,
-    private val upgrade: ((Request, ResponseSink) -> Unit)? = null
+    private val upgrade: ((Request, ResponseSink) -> Unit)? = null,
+    private val requestTimeout: () -> Long = { 15000 }
 ) : AutoCloseable {
     data class Request(val method: String, val path: String, val headers: Map<String, String>, val body: InputStream, val contentLength: Long?)
 
@@ -105,7 +106,7 @@ internal class PhoneEyeHttpServer(
         var sink: ResponseSink? = null
         try {
             check(!closed)
-            client.soTimeout = 15000
+            client.soTimeout = requestTimeout().toInt()
             val input = client.getInputStream(); val first = line(input).split(' ')
             check(first.size == 3 && first[0].matches(Regex("[A-Z]{1,20}")) && first[1].startsWith('/') && !first[1].startsWith("//") && first[2] == "HTTP/1.1")
             check(!first[1].any { it.code < 33 || it.code > 126 })

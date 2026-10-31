@@ -1,3 +1,4 @@
+import { getTimeoutMs } from "../shared/timeoutSettings.js";
 import type http from "node:http";
 import { DshConnectionStore, DshConnectionError, dshLocalOrigin } from "../dshConnectionStore.js";
 import { connectDshOwner, migrateDshOwner } from "../dshHttpAuth.js";
@@ -8,6 +9,11 @@ export function dshConnectionRequestAllowed(request: http.IncomingMessage): bool
   return localModelSettingsRequestAllowed(request);
 }
 
+export const DSH_CONNECTION_BODY_MAX_BYTES = 16384;
+function connectionBody(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new DshConnectionError("DSH connection request must be JSON.");
+  return value as Record<string, unknown>;
+}
 async function readBody(request: http.IncomingMessage, signal: AbortSignal): Promise<Record<string, unknown>> {
   signal.throwIfAborted();
   const abort = () => request.destroy(new Error("DSH connection request cancelled."));
@@ -18,13 +24,11 @@ async function readBody(request: http.IncomingMessage, signal: AbortSignal): Pro
   for await (const chunk of request) {
     const bytes = Buffer.from(chunk);
     size += bytes.length;
-    if (size > 16384) throw new DshConnectionError("DSH connection request is too large.", 413);
+    if (size > DSH_CONNECTION_BODY_MAX_BYTES) throw new DshConnectionError("DSH connection request is too large.", 413);
     chunks.push(bytes);
   }
   try {
-    const body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-    if (!body || typeof body !== "object" || Array.isArray(body)) throw new Error("invalid");
-    return body;
+    return connectionBody(JSON.parse(Buffer.concat(chunks).toString("utf8")));
   } catch { throw new DshConnectionError("DSH connection request must be JSON."); }
   } finally { signal.removeEventListener("abort", abort); }
 }
@@ -32,8 +36,10 @@ async function readBody(request: http.IncomingMessage, signal: AbortSignal): Pro
 /** Must exceed the 60-second DSH credential verification budget so slow DSH hosts can finish. */
 export const DSH_CONNECTION_REQUEST_TIMEOUT_MS = 90_000;
 
-export async function handleDshConnectionRequest(request: http.IncomingMessage, url: URL, store = new DshConnectionStore(), serviceSignal?: AbortSignal) {
-  const signal = serviceSignal ? AbortSignal.any([serviceSignal, AbortSignal.timeout(DSH_CONNECTION_REQUEST_TIMEOUT_MS)]) : AbortSignal.timeout(DSH_CONNECTION_REQUEST_TIMEOUT_MS);
+export async function handleDshConnectionRequest(request: http.IncomingMessage, url: URL, store = new DshConnectionStore(), serviceSignal?: AbortSignal,
+  parsedBody?: Readonly<{ value: unknown; signal?: AbortSignal }>) {
+  const signals = [serviceSignal, parsedBody?.signal, AbortSignal.timeout(getTimeoutMs("agent.dsh.connection", DSH_CONNECTION_REQUEST_TIMEOUT_MS))].filter((signal): signal is AbortSignal => Boolean(signal));
+  const signal = AbortSignal.any(signals);
   signal.throwIfAborted();
   const mutation = request.method !== "GET";
   if (url.pathname.endsWith("/connections") && mutation) throw new DshConnectionError("Unsupported DSH connection operation.", 405);
@@ -51,7 +57,7 @@ export async function handleDshConnectionRequest(request: http.IncomingMessage, 
     return { ok: true, revision: metadata.revision, connection: metadata.connections.find(row => row.baseUrl === origin)
       || { baseUrl: origin, state: "not_connected" } };
   }
-  const body = await readBody(request, signal);
+  const body = parsedBody ? connectionBody(parsedBody.value) : await readBody(request, signal);
   assertAuthorized();
   if (request.method === "POST") {
     if (Object.keys(body).some(key => !["launchUrl", "baseUrl", "expectedRevision"].includes(key))

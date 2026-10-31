@@ -8,169 +8,132 @@ import type { AddressInfo } from "node:net";
 import type { PerformanceSample } from "../shared/performanceContract.js";
 import { RabiGlobalConfigStore } from "./globalConfig.js";
 import { PerformanceMonitoringService } from "./performanceMonitoring.js";
-import { PerformanceApi } from "./performanceRoutes.js";
-import { ManagerReadWorkerPool } from "./managerReadWorkerPool.js";
+import { PerformanceApi, PERFORMANCE_EVENT_LIMITS } from "./performanceRoutes.js";
+import { createPerformanceOperations } from "./performanceOperations.js";
+import { ManagerPluginRouteRegistry } from "./managerPluginRouteRegistry.js";
+import { LanAgentAuthority } from "./lanAgentAuthority.js";
+import { evaluateLanAgentRequest, assertTrustedLanAgentPrincipal } from "./lanAgentRequestAccess.js";
+import { markAuthenticatedConnectionRequest } from "./connectionRequestAccess.js";
+import { registerLanAgentBodyGuard, assertLanAgentBodyAuthority } from "./lanAgentBodyAuthority.js";
 
-function webguiSample(): PerformanceSample {
-  return {
-    schemaVersion: 1,
-    kind: "performance_sample",
-    sampleId: "webgui-route-test",
-    time: new Date().toISOString(),
-    intervalMs: 5_000,
-    source: { kind: "webgui", id: "webgui", runtimeId: "browser-test" },
-    frontend: { page: "/performance", longTaskCount: 1, longTaskMaxMs: 64 }
-  };
+function webguiSample(sampleId = "webgui-route-test"): PerformanceSample {
+  return { schemaVersion: 1, kind: "performance_sample", sampleId, time: new Date().toISOString(), intervalMs: 5_000,
+    source: { kind: "webgui", id: "webgui", runtimeId: "browser-test" }, frontend: { page: "/performance", longTaskCount: 1, longTaskMaxMs: 64 } };
 }
 
-test("performance API enables recording, ingests WebGUI JSON, and rejects forged manager samples", async () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-performance-api-"));
+async function fixture(t: test.TestContext, enabled = false) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-performance-operation-"));
   const globalConfig = new RabiGlobalConfigStore(root);
+  if (enabled) globalConfig.patch({ performance: { ...globalConfig.read().performance, enabled: true } });
   const service = new PerformanceMonitoringService(root, globalConfig.read().performance);
-  const readWorkerPool = new ManagerReadWorkerPool({ maxConcurrency: 1, maxQueue: 1, timeoutMs: 30_000 });
-  const api = new PerformanceApi({
-    service,
-    globalConfig,
-    gatewayExists: () => false,
-    readWorkerPool
-  });
+  const api = new PerformanceApi({ service, globalConfig, gatewayExists: id => id === "existing-gateway" });
+  const registry = new ManagerPluginRouteRegistry();
+  const registration = registry.registerOperations("performance", createPerformanceOperations(api));
+  const authority = new LanAgentAuthority({ statePath: path.join(root, "authority.json") });
+  const credential = authority.enroll(authority.issueBootstrapTicket().ticket, "performance-node");
   const server = http.createServer((request, response) => {
-    const requestUrl = new URL(request.url ?? "/", "http://127.0.0.1");
-    if (!api.handle(request, requestUrl, response)) {
-      response.writeHead(404).end();
-    }
+    if (evaluateLanAgentRequest(request, authority, true).kind !== "agent") { response.writeHead(401).end(); return; }
+    markAuthenticatedConnectionRequest(request, () => { assertTrustedLanAgentPrincipal(request); });
+    registerLanAgentBodyGuard(request, body => assertLanAgentBodyAuthority(new URL(request.url!, "http://fixture").pathname, body, undefined));
+    if (!registry.handle(request, new URL(request.url!, "http://fixture"), response)) response.writeHead(404).end();
   });
+  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  t.after(async () => {
+    const retired = registration.dispose(); api.close(); await retired;
+    server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); await service.stop();
+    assert.equal(path.dirname(path.resolve(root)), path.resolve(os.tmpdir())); fs.rmSync(root, { recursive: true, force: true });
+  });
+  const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  const headers = { authorization: `Bearer ${credential.token}`, "content-type": "text/plain" };
+  const request = (url: string, method = "GET", body?: unknown) => new Promise<{ status: number; body: any }>((resolve, reject) => {
+    const outgoing = http.request(base + url, { method, headers }, response => {
+      const chunks: Buffer[] = []; response.on("data", chunk => chunks.push(Buffer.from(chunk))); response.on("error", reject);
+      response.on("end", () => { const text = Buffer.concat(chunks).toString(); resolve({ status: response.statusCode!, body: text ? JSON.parse(text) : null }); });
+    }); outgoing.on("error", reject); outgoing.setTimeout(10000, () => outgoing.destroy(new Error("Owned performance fixture timed out.")));
+    outgoing.end(body === undefined ? undefined : typeof body === "string" ? body : JSON.stringify(body));
+  });
+  return { root, api, service, globalConfig, registry, registration, authority, credential, base, headers, request };
+}
 
-  try {
-    await service.start();
-    await new Promise<void>((resolve, reject) => {
-      server.once("error", reject);
-      server.listen(0, "127.0.0.1", resolve);
-    });
-    const port = (server.address() as AddressInfo).port;
-    const baseUrl = `http://127.0.0.1:${port}`;
-
-    const enabledResponse = await fetch(`${baseUrl}/api/performance/config`, {
-      method: "PATCH",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ enabled: true, sampleIntervalMs: 1_000 })
-    });
-    assert.equal(enabledResponse.status, 200);
-    assert.equal((await enabledResponse.json() as { data: { enabled: boolean } }).data.enabled, true);
-
-    const sample = webguiSample();
-    const acceptedResponse = await fetch(`${baseUrl}/api/performance/batches`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(sample)
-    });
-    assert.equal(acceptedResponse.status, 202);
-
-    const forgedResponse = await fetch(`${baseUrl}/api/performance/batches`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ ...sample, sampleId: "forged-manager", source: { ...sample.source, kind: "manager" } })
-    });
-    assert.equal(forgedResponse.status, 400);
-
-    const logsResponse = await fetch(`${baseUrl}/api/performance/logs?limit=10`);
-    assert.equal(logsResponse.status, 200);
-    const logs = await logsResponse.json() as { data: PerformanceSample[] };
-    assert.equal(logs.data.filter(item => item.sampleId === sample.sampleId).length, 1);
-    assert.equal(logs.data.some(item => item.sampleId === "forged-manager"), false);
-    assert.equal(logs.data.find(item => item.sampleId === sample.sampleId)?.source.kind, "webgui");
-  } finally {
-    api.close();
-    await new Promise<void>(resolve => server.close(() => resolve()));
-    await readWorkerPool.stop();
-    await service.stop();
-    fs.rmSync(root, { recursive: true, force: true });
-  }
+test("an enrolled empty node saves native config, ingests samples, reads all snapshots and rejects forged manager data", async t => {
+  const f = await fixture(t);
+  const saved = await f.request("/api/performance/config?unknown=value", "PATCH", { enabled: true, sampleIntervalMs: "1001.8", ignored: true });
+  assert.equal(saved.status, 200); assert.equal(saved.body.data.sampleIntervalMs, 1002);
+  assert.deepEqual((await f.request("/api/performance/config")).body.data, f.globalConfig.read().performance);
+  assert.equal(new RabiGlobalConfigStore(f.root).read().performance.enabled, true);
+  const sample = webguiSample();
+  assert.deepEqual((await f.request("/api/performance/batches", "POST", sample)).body, { code: 0, accepted: 1, rejected: 0 });
+  const forged = await f.request("/api/performance/batches", "POST", { ...sample, sampleId: "forged-manager", source: { ...sample.source, kind: "manager" } });
+  assert.equal(forged.status, 400); assert.equal(forged.body.rejected, 1);
+  const logs = await f.request("/api/performance/logs?limit=10"); assert.equal(logs.status, 200);
+  assert.equal(logs.body.data.filter((row: PerformanceSample) => row.sampleId === sample.sampleId).length, 1);
+  assert.equal(logs.body.data.some((row: PerformanceSample) => row.sampleId === "forged-manager"), false);
+  assert.equal((await f.request("/api/performance/status")).body.config.enabled, true);
+  assert.equal((await f.request("/api/performance/summary?rangeMs=60000")).status, 200);
+  assert.equal(f.registry.snapshot()[0]!.routeCount, 7);
 });
 
-test("performance summary and logs expose pending samples without flush or read workers", async () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-performance-memory-api-"));
-  const globalConfig = new RabiGlobalConfigStore(root);
-  globalConfig.patch({ performance: { ...globalConfig.read().performance, enabled: true } });
-  const service = new PerformanceMonitoringService(root, globalConfig.read().performance);
-  const readWorkerPool = new ManagerReadWorkerPool({ maxConcurrency: 1, maxQueue: 1, timeoutMs: 30_000 });
-  let flushCalls = 0;
-  let readWorkerCalls = 0;
-  const originalFlush = service.store.flush.bind(service.store);
-  service.store.flush = async () => {
-    flushCalls += 1;
-    throw new Error("performance route must not flush");
-  };
-  readWorkerPool.queryPerformanceSummaryJson = async () => {
-    readWorkerCalls += 1;
-    throw new Error("performance route must not use summary read worker");
-  };
-  readWorkerPool.queryPerformanceLogsJson = async () => {
-    readWorkerCalls += 1;
-    throw new Error("performance route must not use logs read worker");
-  };
-  const api = new PerformanceApi({
-    service,
-    globalConfig,
-    gatewayExists: () => false,
-    readWorkerPool
+test("performance summary and logs expose pending samples without flushing or read workers", async t => {
+  const f = await fixture(t, true);
+  const original = f.service.store.flush.bind(f.service.store); let flushes = 0;
+  f.service.store.flush = async () => { flushes++; throw new Error("Read must not flush"); };
+  t.after(() => { f.service.store.flush = original; });
+  const sample = webguiSample("pending"); assert.equal(f.service.ingest(sample), true);
+  const summary = await f.request("/api/performance/summary?rangeMs=60000"); assert.equal(summary.status, 200);
+  assert.equal(summary.body.data.sources.some((item: any) => item.source.runtimeId === sample.source.runtimeId), true);
+  assert.equal(summary.body.data.status.pendingRecords, 1);
+  const logs = await f.request("/api/performance/logs?limit=invalid"); assert.equal(logs.status, 200);
+  assert.equal(logs.body.data[0].sampleId, sample.sampleId); assert.equal(flushes, 0);
+  f.service.store.flush = original;
+});
+
+test("native batch admission preserves source provenance, deduplication, invalid-item counts and byte limits", async t => {
+  const f = await fixture(t, true), sample = webguiSample("batch");
+  const mixed = await f.request("/api/performance/batches", "POST", { samples: [sample, null, {}, sample] });
+  assert.equal(mixed.status, 202); assert.deepEqual(mixed.body, { code: 0, accepted: 1, rejected: 3 });
+  const gateway = { ...sample, sampleId: "gateway", source: { kind: "gateway", id: "existing-gateway", runtimeId: "gateway-runtime" } };
+  assert.equal(f.api.ingest(gateway, { socket: { remoteAddress: "203.0.113.1" } } as http.IncomingMessage).accepted, 0);
+  assert.equal((await f.request("/api/performance/batches", "POST", gateway)).status, 202);
+  assert.equal((await f.request("/api/performance/batches", "POST", { ...gateway, sampleId: "unknown", source: { ...gateway.source, id: "missing" } })).status, 400);
+  assert.equal((await f.request("/api/performance/config", "PATCH", "{")).status, 400);
+  assert.equal((await f.request("/api/performance/config", "PATCH", JSON.stringify({ padding: "x".repeat(16 * 1024) }))).status, 413);
+  assert.equal((await f.request("/api/performance/batches", "POST", "null")).status, 400);
+});
+
+test("native SSE emits ready and sample frames, and owner retirement joins the original subscription", { timeout: 10000 }, async t => {
+  const f = await fixture(t, true);
+  let connected!: () => void, sampled!: () => void;
+  const ready = new Promise<void>(resolve => { connected = resolve; });
+  const sampleSeen = new Promise<void>(resolve => { sampled = resolve; });
+  let text = "", retirementStarted = false;
+  const done = new Promise<void>((resolve, reject) => {
+    const outgoing = http.get(f.base + "/api/performance/events", { headers: f.headers }, response => {
+      assert.equal(response.headers["content-type"], "text/event-stream");
+      response.on("data", chunk => { text += chunk.toString(); if (text.includes("event: ready")) connected(); if (text.includes('"runtimeId":"browser-test"')) sampled(); });
+      response.on("end", resolve); response.on("error", error => retirementStarted && (error as NodeJS.ErrnoException).code === "ECONNRESET" ? resolve() : reject(error));
+    }); outgoing.on("error", reject); t.after(() => outgoing.destroy());
   });
+  await ready; assert.equal(f.service.ingest(webguiSample("sse")), true); await sampleSeen;
+  retirementStarted = true; const retiring = f.registration.dispose(); f.api.close(); await retiring; await done;
+  assert.ok(text.includes("retry: 3000")); assert.ok(text.includes("event: sample"));
+  assert.equal((await f.request("/api/performance/status")).status, 404);
+});
 
-  const get = (pathname: string): { statusCode: number; body: unknown } => {
-    let statusCode = 0;
-    let responseBody = "";
-    const request = { method: "GET" } as http.IncomingMessage;
-    const response = {
-      writeHead(code: number) {
-        statusCode = code;
-        return response;
-      },
-      end(body?: string) {
-        responseBody = body ?? "";
-        return response;
-      }
-    } as unknown as http.ServerResponse;
-    assert.equal(api.handle(request, new URL(pathname, "http://127.0.0.1"), response), true);
-    return { statusCode, body: JSON.parse(responseBody) as unknown };
-  };
+test("a never-started performance stream and a pending next both reach EOF on close or cancellation", async t => {
+  const f = await fixture(t, true), unstarted = f.api.events(); unstarted.cancel("not written");
+  assert.equal((await unstarted.frames[Symbol.asyncIterator]().next()).done, true);
+  const source = f.api.events(), iterator = source.frames[Symbol.asyncIterator]();
+  assert.equal((await iterator.next()).done, false); const pending = iterator.next();
+  source.cancel("disconnect"); assert.equal((await pending).done, true);
+  const final = f.api.events(), finalIterator = final.frames[Symbol.asyncIterator](); await finalIterator.next();
+  const waiting = finalIterator.next(); f.api.close(); assert.equal((await waiting).done, true);
+  assert.throws(() => f.api.saveConfig({ enabled: false }), /retired/);
+});
 
-  try {
-    const sample = { ...webguiSample(), sampleId: "pending-webgui-route-test" };
-    assert.equal(service.ingest(sample), true);
-    assert.equal(service.store.status().pendingRecords, 1);
-
-    const summaryResponse = get("/api/performance/summary?rangeMs=60000");
-    assert.equal(summaryResponse.statusCode, 200);
-    const summary = summaryResponse.body as {
-      code: number;
-      data: { sources: Array<{ source: PerformanceSample["source"] }>; status: { pendingRecords: number } };
-    };
-    assert.equal(summary.code, 0);
-    assert.equal(summary.data.sources.some(item => item.source.runtimeId === sample.source.runtimeId), true);
-    assert.equal(summary.data.status.pendingRecords, 1);
-
-    const invalidLimitResponse = get("/api/performance/logs?limit=invalid");
-    assert.equal(invalidLimitResponse.statusCode, 200);
-    const invalidLimitLogs = invalidLimitResponse.body as { data: PerformanceSample[] };
-    assert.equal(invalidLimitLogs.data.length, 1);
-
-    const logsResponse = get("/api/performance/logs?limit=10");
-    assert.equal(logsResponse.statusCode, 200);
-    const logs = logsResponse.body as {
-      code: number;
-      data: PerformanceSample[];
-      status: { pendingRecords: number };
-    };
-    assert.equal(logs.code, 0);
-    assert.equal(logs.data.some(item => item.sampleId === sample.sampleId), true);
-    assert.equal(logs.status.pendingRecords, 1);
-    assert.equal(flushCalls, 0);
-    assert.equal(readWorkerCalls, 0);
-  } finally {
-    service.store.flush = originalFlush;
-    api.close();
-    await readWorkerPool.stop();
-    await service.stop();
-    fs.rmSync(root, { recursive: true, force: true });
-  }
+test("slow notification consumers are bounded and must refresh state after overflow", async t => {
+  const f = await fixture(t, true), stream = f.api.events();
+  for (let index = 0; index <= PERFORMANCE_EVENT_LIMITS.queuedFrames; index++) f.service.ingest(webguiSample(`overflow-${index}`));
+  assert.equal(stream.signal!.aborted, true);
+  assert.equal((await stream.frames[Symbol.asyncIterator]().next()).done, true);
+  assert.ok(f.api.logs("1").data.length > 0);
 });

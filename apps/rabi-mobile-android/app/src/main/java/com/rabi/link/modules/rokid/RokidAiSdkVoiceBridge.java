@@ -466,7 +466,7 @@ final class RokidAiSdkVoiceBridge {
         releaseAudioRecord();
         if (recordThread != null) {
             try {
-                recordThread.join(500);
+                recordThread.join(com.rabi.link.transport.ScopedManagerTimeouts.active(appContext).get("android.voice.stop",500));
             } catch (InterruptedException ignored) {
                 Thread.currentThread().interrupt();
             }

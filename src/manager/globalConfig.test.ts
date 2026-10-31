@@ -21,9 +21,11 @@ test("Agent upload limit persists, migrates and rejects invalid writes", () => {
     assert.equal(new RabiGlobalConfigStore(root).read().agentUploads.maxFileMiB, 1024);
     const snapshot = store.read(); snapshot.agentUploads.maxFileMiB = 1;
     assert.equal(store.read().agentUploads.maxFileMiB, 1024);
-    for (const maxFileMiB of [0, -1, 2049, 1.5, NaN, Infinity]) {
+    for (const maxFileMiB of [0, -1, Math.floor(Number.MAX_SAFE_INTEGER / 1024 ** 2) + 1, 1.5, NaN, Infinity]) {
       assert.throws(() => store.patch({ agentUploads: { maxFileMiB } }), /integer/);
     }
+    store.patch({ agentUploads: { maxFileMiB: 32768 } });
+    assert.equal(new RabiGlobalConfigStore(root).read().agentUploads.maxFileMiB, 32768);
     const raw = JSON.parse(fs.readFileSync(store.configPath, "utf8"));
     delete raw.agentUploads;
     fs.writeFileSync(store.configPath, JSON.stringify(raw));

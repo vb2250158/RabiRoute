@@ -2,14 +2,17 @@
 
 # RabiRoute Plugin Platform Target Architecture
 
-> Status: implemented. This document describes the current production architecture and continuing gates.
+> Status: the plugin kernel is implemented; independently deliverable business implementations are being migrated by module. Source, isolated validation, and installed state are verified separately.
 >
 > Primary readers: RabiRoute maintainers, plugin authors, and integration developers.
 
+
+The diagnostics package owns the `/api/gateways` contract and handler in `operations.mjs`, registered through the generic operations service. The Host exposes a batch read over the existing Gateway state owner. Packages still consuming Host-specific implementation injection are not implicitly migrated. See [development updates](development-hot-reload_en.md) for targeted builds and verification evidence; candidate and runtime readback establish which release contains this slice.
+
 ## Current implementation
 
-- The production distribution Profile is `plugins/profiles/desktop.json` and selects 29 independent Manager plugin packages.
-- Seven plugins provide independent Web Bundles: `core`, `desktop`, `diagnostics`, `message-adapter-control`, `performance`, `persona`, and `speech`.
+- The production distribution Profile is `plugins/profiles/desktop.json`. It declares 31 independent Manager plugin packages and enables 30 by default; the explicitly disabled `yeyu-gamer` remains disabled.
+- Ten plugins provide independent Web Bundles: `core`, `desktop`, `diagnostics`, `message-adapter-control`, `performance`, `persona`, `speech`, `video`, `route-control`, and `xiaomi-home`.
 - Built-in and out-of-tree plugins share schema/profile v2, `@rabiroute/plugin-sdk`, strict manifests, the capability graph, permission checks, revision isolation, generation switching, and effect scopes.
 - Manager, Catalog, Web modules, and Profile read only the new plugin platform. Retired Bundles, Profile/Patch, multi-entry loaders, unrestricted process hosts, and migration entries are deleted. Current `isolated` execution uses only the bounded Plugin Runtime Host and Process Lease Registry.
 - The WebGUI host contains no product page IDs. Pages, navigation, commands, and status cards come from plugin contributions.
@@ -358,11 +361,29 @@ Constraints:
 - a candidate generation receives no external request before publication;
 - service, route, and contribution registries switch immutable snapshots once;
 - the old generation admits no new work and completes accepted work only;
-- preparation failure leaves the old generation unchanged;
-- unmet Profile `readyRequires` prevents candidate publication and Manager READY to Host;
-- invariant failure restores the old snapshot before business traffic reaches the candidate;
+- preparation or publication failure withdraws only the failed component, shared Web implementation group and actual dependents; unrelated candidates can still publish. A previous revision keeps serving only when ownership and rollback are confirmed;
+- the generic Kernel strictly enforces `readyRequires` by default; Manager selects report mode, publishes the healthy subset and reports missing capabilities without blocking unrelated functionality;
+- failed global publication conditions roll back attempted publications before business traffic reaches the candidate; unconfirmed rollback withdraws affected previous entries and retains cleanup fences rather than reporting the previous revision as available;
 - failure after real traffic uses normal recovery and does not pretend to undo external side effects;
 - delivery and outbound operations use durable idempotent records for retry and recovery.
+
+### Local load failures and readiness scope
+
+The default desktop Profile declares `manager.core@1` and `manager.diagnostics@1` in its required-capability diagnostics; Manager uses report mode rather than an application-wide readiness gate. A business plugin failure, including Agent communication, degrades health and withdraws that plugin and its actual dependents without rejecting every operation from other authenticated clients. Explicit requirements in a custom Profile still determine `requiredReady`; user configuration is not rewritten.
+
+Package reads, Manifest checks and execution trust checks report a per-instance `package_load_failed` diagnostic while valid candidates continue into capability planning. Missing required capabilities remain visible in readiness; Manager report mode permits healthy independent components to publish. When a failed update has a previously verified package, the loader retains its immutable package, configuration, resource policy and grants, with `retainedRevision` in the diagnostic. Disabled or removed instances still retire as configured and cannot be re-enabled by fallback.
+
+Package-load diagnostics appear in `/meta` health, plugin reconciliation status and operational logs. They never claim that an absent capability is available. HTTP admission keeps existing authentication, plan/route storage conditions and the target plugin lifecycle; it no longer rejects every write because an unrelated capability is unavailable.
+
+### Bulk API registration
+
+Manager extensions use `await api.registerOperationsAsync(definitions, context.lifecycle.signal)`. The direct host Registry signature is `registerOperationsAsync(instanceId, definitions, signal)`. Contracts and handler callbacks are captured before the first await. Preparation yields between operations, and the complete batch is installed only after success and a cancellation check; failure leaves no partial routes. HTTP proxy and WebSocket upgrade registration retain their existing contracts.
+
+Resources created before an await must immediately register an idempotent disposer rather than relying only on a preparation function's local cleanup array. The original scope continues tracking cancellation, late resources and failed stops; ownership is released only after actual cleanup.
+
+Normal retirement still returns within each effect's budget; a timeout does not mean the operation stopped. During application shutdown, event-driven joins continue within the Manager owner's remaining budget, and success requires every resource to be confirmed closed. The original timeout diagnostic remains, with `lateConfirmed: true` identifying subsequent confirmation. Actual cleanup failure, unknown rollback and unfinished resources still fail shutdown. This wait applies only to application shutdown and does not extend ordinary generation switching or source publication queues.
+
+Synchronous `registerOperations` remains for existing synchronous SDK consumers. Built-in bulk registrations use the asynchronous entry and never fall back to synchronous compilation after preparation fails. The synchronous entry can be removed only after existing consumers migrate; validation and route-matching semantics remain unchanged during migration.
 
 ## State schema
 
@@ -434,9 +455,9 @@ Each plugin must:
 
 ## Final gates on 2026-08-27
 
-- TypeScript noEmit, Vue type checking, and the 26-package architecture gate passed.
+- TypeScript noEmit, Vue type checking, and the built-in package architecture gate passed; see the opening section for the current release inventory.
 - `npm test`: 1,401 passed, 1 skipped, and 0 failed.
-- That 2026-08-27 `npm run build` produced the then-current 28 Manager packages and 7 Web Bundles; the current build produces 29 Manager packages.
+- That 2026-08-27 `npm run build` produced the then-current 28 Manager packages and 7 Web Bundles; see the opening section for the current build inventory.
 - `npm run check:built-manager`: passed and produced a local read-only acceptance record.
 - Removed-runtime identifiers are zero in runtime source and configuration, zero in `dist/`, and zero in current-fact documents. The architecture checker keeps only five deleted path names as negative assertions that prevent those files from returning.
 - `git diff --check` passed.

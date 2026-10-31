@@ -5,6 +5,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createDeviceAgentOwner } from '../agentAdapters/deviceAgentOwner.js';
+import { createDeviceAgentOperations } from '../agentAdapters/deviceAgentOperations.js';
+import { ManagerPluginRouteRegistry } from './managerPluginRouteRegistry.js';
 import { createDeviceAgentEndpointBridge } from './deviceAgentEndpointBridge.js';
 import { createAgentEndpointDelivery } from './agentEndpointDelivery.js';
 import { AgentRequestStore } from '../agentRequests/store.js';
@@ -13,7 +15,8 @@ import { LanAgentRegistry } from './lanAgentRegistry.js';
 import { LanAgentAuthority } from './lanAgentAuthority.js';
 import { RabiGlobalConfigStore } from './globalConfig.js';
 import type { RabiLinkAgentPrincipal } from './rabiLinkAgentDevices.js';
-import { handleAgentDeliveryAuthority } from './agentDeliveryAuthorityRoutes.js';
+import { createCorePublicOperations, type CorePublicOperationsContext } from './corePublicOperations.js';
+import { markAuthenticatedConnectionRequest } from './connectionRequestAccess.js';
 import { createDeviceAgentPeerAuthority } from './deviceAgentPeerAuthority.js';
 
 async function pair(run:(a:any,b:any)=>Promise<void>,peerEnabled=true) {
@@ -48,22 +51,26 @@ async function pair(run:(a:any,b:any)=>Promise<void>,peerEnabled=true) {
     const store=new AgentRequestStore(path.join(nodeDir,'requests.json'));
     const pipeline=createAgentEndpointDelivery({store,registry,authority:new LanAgentAuthority({statePath:path.join(nodeDir,'authority.json')}),config:new RabiGlobalConfigStore(nodeDir),
       receiptDirectory:path.join(nodeDir,'transport'),device:bridge,readLocal:async()=>{throw new Error('No alternate PC runtime');},localOptions:()=>({allowedWorkspaces:[]})});
+    const routes=new ManagerPluginRouteRegistry(),registration=routes.registerOperations('fixture-device-peer',createDeviceAgentOperations(()=>owner));
+    const proofRegistration=routes.registerOperations('fixture-peer-proof',createCorePublicOperations({
+      identity:()=>({applicationGenerationId:state.scope,managerInstanceId:registry.localInstanceId}),
+      deliveryAuthority:{store,managerInstanceId:registry.localInstanceId,authorize:pipeline.authorize,refreshEndpoints:pipeline.refreshEndpoints}
+    } as unknown as CorePublicOperationsContext).filter(value=>value.contract.pathTemplate==='/api/agent/delivery-authority'));
     const server=http.createServer(async(request,response)=>{try {
+      const url=new URL(request.url!,'http://fixture.invalid');
+      if(url.pathname==='/api/agent/delivery-authority' && state.authorityFailure){response.writeHead(503,{'content-type':'application/json'});response.end(JSON.stringify({error:'Original ledger unavailable'}));return;}
+      const admitted=principal(request);if(admitted)markAuthenticatedConnectionRequest(request,()=>{assert.deepEqual(principal(request),admitted);});
+      if(!(state.proofCode && url.pathname===`/api/device-agents/${eyeId}/session` && request.method==='GET') && routes.handle(request,url,response))return;
       const chunks:Buffer[]=[];for await(const chunk of request)chunks.push(Buffer.from(chunk));
-      const body=chunks.length?JSON.parse(Buffer.concat(chunks).toString()):undefined,url=new URL(request.url!,'http://fixture.invalid');
+      const body=chunks.length?JSON.parse(Buffer.concat(chunks).toString()):undefined;
       if(state.proofCode && url.pathname===`/api/device-agents/${eyeId}/session` && request.method==='GET') {
         response.writeHead(200,{'content-type':'application/json'});response.end(JSON.stringify({code:state.proofCode,data:{ownerInstanceId:'guid-'+name,session:{sessionId:'session-'+eyeId,loaded:true}}}));
-      } else if(url.pathname==='/api/agent/delivery-authority') {
-        if(state.authorityFailure){response.writeHead(503,{'content-type':'application/json'});response.end(JSON.stringify({error:'Original ledger unavailable'}));return;}
-        const original=principal(request);if(!original)throw new Error('Unsigned peer');
-        await handleAgentDeliveryAuthority(request,url,response,{store,managerInstanceId:registry.localInstanceId,authorize:pipeline.authorize,refreshEndpoints:pipeline.refreshEndpoints,
-          assertRequestAuthority:()=>{assert.deepEqual(principal(request),original);},jsonResponse:(res,status,value)=>{res.writeHead(status,{'content-type':'application/json'});res.end(JSON.stringify(value));}});
       } else if(url.pathname==='/api/agent/threads') {
         const actor=principal(request);if(!actor)throw new Error('Unsigned connection');
         const fence=()=>{assert.deepEqual(principal(request),actor);};
         const result=await executeEndpointAgentDelivery(body,pipeline.options(undefined,fence,actor));
         response.writeHead(result.statusCode,{'content-type':'application/json'});response.end(JSON.stringify(result.data));
-      } else await owner.handle(request,response,url,body);
+      } else response.writeHead(404).end();
     } catch(error){response.writeHead(409,{'content-type':'application/json'});response.end(JSON.stringify({error:String(error)}));}});
     await new Promise<void>(resolve=>server.listen(0,'127.0.0.1',resolve));
     const base='http://127.0.0.1:'+(server.address() as {port:number}).port;
@@ -75,10 +82,10 @@ async function pair(run:(a:any,b:any)=>Promise<void>,peerEnabled=true) {
     };
     const queued=()=>new Promise<void>((resolve,reject)=>{const timer=setTimeout(()=>{release();reject(new Error('Original queue event missing'));},15000);
       const release=owner.onChange(()=>{if(owner.readSession('same-application',eyeId,'session-'+eyeId)?.deliveries.some(row=>row.status==='queued')){clearTimeout(timer);release();resolve();}});});
-    nodes.push({deviceId,eyeId,owner,bridge,store,pipeline,registry,server,call,state,queued,pendingCalls,requestPath:path.join(nodeDir,'requests.json')});
+    nodes.push({deviceId,eyeId,owner,registration,proofRegistration,bridge,store,pipeline,registry,server,call,state,queued,pendingCalls,requestPath:path.join(nodeDir,'requests.json')});
     assert.equal((await call(eyeId,'PUT','/api/device-agents/'+eyeId+'/session',{sessionId:'session-'+eyeId,name:eyeId,loaded:true,capabilities:['language-model']})).statusCode,200);
   }
-  try{await run(nodes[0],nodes[1]);}finally{await Promise.allSettled(nodes.flatMap(node=>[...node.pendingCalls]));for(const node of nodes){node.registry.close();node.server.closeAllConnections();await new Promise<void>(resolve=>node.server.close(()=>resolve()));}fs.rmSync(directory,{recursive:true,force:true});}
+  try{await run(nodes[0],nodes[1]);}finally{await Promise.allSettled(nodes.flatMap(node=>[...node.pendingCalls]));for(const node of nodes){node.registry.close();await node.store.close();await Promise.all([node.registration.dispose(),node.proofRegistration.dispose()]);node.server.closeAllConnections();await new Promise<void>(resolve=>node.server.close(()=>resolve()));}fs.rmSync(directory,{recursive:true,force:true});}
 }
 const crossRequest={action:'send',agentAdapter:'deviceAgent',sourceThreadId:'session-eye-a',sourceAgentType:'agent',threadId:'session-eye-b',instanceBinding:{instanceId:'guid-b',agentId:'eye-b'},
   messageSource:{type:'agent',agentAdapter:'deviceAgent',sessionId:'session-eye-a',sessionName:'eye-a'},prompt:'Cross Manager original request',responsePolicy:'required',responseInstruction:'Return to original ledger'};
@@ -151,7 +158,7 @@ test('only an exact cancelled reservation retires the unclaimed transport row an
   const session=a.owner.sessions('same-application')[0];await a.call('eye-a','PUT','/api/device-agents/eye-a/session',{...session,loaded:false,capabilities:['language-model']});
   const incoming=a.queued(),replyPending=b.call('eye-b','POST','/api/agent/threads',{...crossRequest,sourceThreadId:'session-eye-b',threadId:'session-eye-a',instanceBinding:{instanceId:'guid-a',agentId:'eye-a'},
     messageSource:{type:'agent',agentAdapter:'deviceAgent',sessionId:'session-eye-b',sessionName:'eye-b'},inReplyToRequestId:record.id,prompt:'Reply',result:'Evidence',nextAction:'Continue',responsePolicy:'none'});await incoming;
-  b.store.cancel(record.id,'original request cancelled');
+  await b.store.cancel(record.id,'original request cancelled');
   await a.call('eye-a','PUT','/api/device-agents/eye-a/session',{...session,loaded:true,capabilities:['language-model']});
   b.state.authorityFailure=true;
   const rejected=await a.call('eye-a','POST','/api/device-agents/eye-a/deliveries/claim',{sessionId:session.sessionId,ownerEpoch:session.ownerEpoch});
@@ -176,7 +183,7 @@ test('a remote source unload in the target proof await is rejected before any bu
 test('a signed peer cannot change the source or target of another reservation in a prepared body',async()=>pair(async(a,b)=>{
   const notice=b.queued(),pending=b.call('eye-a','POST','/api/agent/threads',crossRequest);await notice;
   const original=await claim(b);await pending;
-  const delivery=b.store.getEndpointDelivery(original.deliveryId);
+  const delivery=await b.store.readEndpointDelivery(original.deliveryId);assert.ok(delivery);
   const source=delivery.source;
   const tampered={...delivery,target:{...source},preparation:{...delivery.preparation,target:delivery.preparation.source}};
   const rejected=await a.call('pc-b','POST','/api/device-agents/eye-a/prepared-deliveries',{ledgerOwnerDeviceId:'pc-b',delivery:tampered});

@@ -32,7 +32,7 @@ export type CompanionSession = {
   observationStartedAt?: number; audioThrough?: number;
   autoReview: boolean; voice: boolean; saveSummary: boolean; notes: CompanionNote[];
   participation?: { lastCommentAt: number | null; quietReplies: number };
-  review: { id: string; status: "dispatching" | "delivered" | "replied" | "failed" | "expired"; error?: string;
+  review: { id: string; status: "dispatching" | "delivered" | "replied" | "failed" | "expired"; error?: string; errorCode?: string;
     outcome?: "commented" | "quiet" | "comment_expired"; deliveredAt?: number; reactionExpiresAt?: number;
     observation?: { startedAt: number; endedAt: number; frameCount: number; sampleCount: number; audioStatus: string;
       transcriptCharacters: number; missingAudioMs: number; excludedPetVoiceMs: number } } | null;

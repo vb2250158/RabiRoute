@@ -225,6 +225,8 @@ export class XiaomiHomeEventMonitor {
   private stopped = true;
   private subscriptionId = 1;
   private connectionState: "disabled" | "authorization_required" | "stopped" | "connecting" | "authorizing" | "subscribing" | "subscribed" | "authorization_failed" | "reconnecting" = "stopped";
+  private readonly pending = new Set<Promise<unknown>>();
+  private readonly socketClosures = new Set<Promise<void>>();
 
   constructor(config: XiaomiHomeEventMonitorConfig, private readonly dependencies: XiaomiHomeEventMonitorDependencies) {
     this.resolved = resolveXiaomiHomeManagerConfig(config);
@@ -259,7 +261,7 @@ export class XiaomiHomeEventMonitor {
     return true;
   }
 
-  stop(): void {
+  async stop(): Promise<void> {
     this.stopped = true;
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     this.reconnectTimer = undefined;
@@ -267,6 +269,12 @@ export class XiaomiHomeEventMonitor {
     this.socket?.close();
     this.socket = undefined;
     this.connectionState = !this.enabled ? "disabled" : !this.token ? "authorization_required" : "stopped";
+    await Promise.all([...this.pending, ...this.socketClosures]);
+  }
+
+  private observe(operation: Promise<unknown>): void {
+    const work = operation.catch(() => undefined).finally(() => this.pending.delete(work));
+    this.pending.add(work);
   }
 
   status(): Record<string, unknown> {
@@ -293,11 +301,15 @@ export class XiaomiHomeEventMonitor {
       socket = this.createSocket(websocketUrl(this.resolved.baseUrl));
     } catch {
       this.connectionState = "reconnecting";
-      void this.dependencies.recoverConnection?.().catch(() => undefined);
+      const recovery = this.dependencies.recoverConnection?.();
+      if (recovery) this.observe(recovery);
       this.reconnectTimer = setTimeout(() => this.connect(), this.reconnectDelayMs);
       return;
     }
     this.socket = socket;
+    let closed!: () => void;
+    const closure = new Promise<void>(resolve => { closed = resolve; });
+    this.socketClosures.add(closure);
     this.heartbeatDeadline = setTimeout(() => {
       if (this.stopped || this.socket !== socket || this.connectionState === "subscribed") return;
       this.lastTransportError = "subscription_timeout";
@@ -313,13 +325,15 @@ export class XiaomiHomeEventMonitor {
       socket.close();
     });
     socket.on("close", () => {
+      this.socketClosures.delete(closure); closed();
       if (this.socket !== socket) return;
       this.socket = undefined;
       this.clearHeartbeat();
       if (!this.stopped) {
         this.connectionState = this.connectionState === "authorization_failed" ? "authorization_failed" : "reconnecting";
         if (this.connectionState !== "authorization_failed") {
-          void this.dependencies.recoverConnection?.().catch(() => undefined);
+          const recovery = this.dependencies.recoverConnection?.();
+          if (recovery) this.observe(recovery);
           this.reconnectTimer = setTimeout(() => this.connect(), this.reconnectDelayMs);
         }
       }
@@ -418,9 +432,9 @@ export class XiaomiHomeEventMonitor {
       cameraMotionEntityIds: this.cameraMotionEntityIds,
       monitoredEntityIds: this.monitoredEntityIds
     });
-    if (event) void this.deliver(event);
+    if (event) this.observe(this.deliver(event));
     if (motionClip && this.dependencies.captureMotionClip) {
-      void this.dependencies.captureMotionClip(motionClip).then(artifact => this.deliver({
+      this.observe(this.dependencies.captureMotionClip(motionClip).then(artifact => { if (this.stopped) return; return this.deliver({
         id: `${motionClip.sourceEventId}:ready`,
         kind: "camera_clip_ready",
         resourceId: motionClip.resourceId,
@@ -430,7 +444,7 @@ export class XiaomiHomeEventMonitor {
         artifactId: artifact.artifactId,
         sourceEventId: motionClip.sourceEventId,
         cameraId: motionClip.cameraId
-      }), () => this.deliver({
+      }); }, () => { if (this.stopped) return; return this.deliver({
         id: `${motionClip.sourceEventId}:capture-failed`,
         kind: "action_failed",
         resourceId: motionClip.resourceId,
@@ -439,7 +453,7 @@ export class XiaomiHomeEventMonitor {
         summary: `${motionClip.resourceName} 的移动事件录像抓取失败`,
         sourceEventId: motionClip.sourceEventId,
         cameraId: motionClip.cameraId
-      }));
+      }); }));
     }
   }
 }

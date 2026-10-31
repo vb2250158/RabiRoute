@@ -2,7 +2,13 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
+import ts from "typescript";
+import { configureTimeouts, getTimeoutMs, readTimeoutOverrides } from "../shared/timeoutSettings.js";
+import { DEFAULT_MANAGER_RUNTIME_TEARDOWN_TIMEOUT_MS } from "./managerRuntimeOwner.js";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { mountAgentAdapterCatalogPlugin } from "./agentAdapterCatalog.js";
+import type { ApiOperationDefinition } from "./apiOperationContract.js";
+import { createNapcatControlOperations } from "./napcatControlRoutes.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 
@@ -48,6 +54,34 @@ const migratedCentralRouteFragments = [
   "/api/message/napcat-"
 ] as const;
 
+test("migrated Agent resource and release reads have no second production dispatcher", () => {
+  const legacy = source("src/manager/lanAgentRoutes.ts");
+  assert.doesNotMatch(legacy, /function writeAsset\s*\(|releaseAssetMatch/);
+  assert.doesNotMatch(legacy, /requestUrl\.pathname\s*===\s*"\/api\/lan-agent\/releases\/manifest"/);
+  assert.doesNotMatch(legacy, /\["\/api\/lan-agent\/resources",\s*"\/api\/lan-agent\/resources\/read"\]/);
+  assert.match(source("plugins/builtin/io.rabiroute.manager.core/1.0.0/manager.mjs"), /createLanAgentReadOperations\(lanAgentContext\)/);
+});
+
+test("LAN upgrades are core-owned executable bindings without a second central listener", () => {
+  const central = source("src/manager/controlPlaneRoutes.ts"), core = source("plugins/builtin/io.rabiroute.manager.core/1.0.0/manager.mjs");
+  assert.doesNotMatch(central, /lanAgentRegistry\.attach\(activeServer/);
+  assert.match(central, /managerPluginRoutes\.handleUpgrade\(request, url, socket, head\)/);
+  assert.match(core, /registerUpgrades\(context\.identity\.instanceId/);
+  assert.match(core, /upgrades\.stopAccepting\(\)/);
+  // Actual drain order and cleanup failures are verified by corePluginCleanup.test.ts.
+  assert.match(core, /registration\.dispose\(\)/);
+  assert.match(core, /upgrades\.dispose\(\)/);
+});
+
+test("terminal and computer operations have no old boolean HTTP adapters", () => {
+  for (const file of ["src/manager/lanAgentRoutes.ts", "src/manager/lanAgentTerminalRoutes.ts", "src/manager/lanAgentComputerRoutes.ts"]) {
+    assert.doesNotMatch(source(file), /\bhandleLanAgent(?:Terminal|Computer)Api\b/);
+  }
+  const core = source("plugins/builtin/io.rabiroute.manager.core/1.0.0/manager.mjs");
+  assert.match(core, /createLanAgentTerminalOperations\(lanAgentContext\)/);
+  assert.match(core, /createLanAgentComputerOperations\(lanAgentContext\)/);
+});
+
 test("plugin-owned Manager APIs have no legacy central dispatch branches", () => {
   const central = source("src/manager/controlPlaneRoutes.ts");
   const handlerStart = central.indexOf("const handleManagerRequest =");
@@ -67,15 +101,11 @@ test("plugin-owned Manager APIs have no legacy central dispatch branches", () =>
 });
 
 test("plugin route modules retain every migrated endpoint family", () => {
-  assertSourceRetainsRoutes("src/manager/fenneNoteOutputService.ts", [
-    "/api/fennenote/playback",
-    "/api/fennenote/reply"
-  ]);
-  assertSourceRetainsRoutes("src/manager/messageProcessingRoutes.ts", [
+  assertSourceRetainsRoutes("src/manager/messageProcessingOperations.ts", [
     "/api/message-processing/board",
     "/api/message-processing/requirements"
   ]);
-  assertSourceRetainsRoutes("src/manager/gatewayControlRoutes.ts", [
+  assertSourceRetainsRoutes("src/manager/gatewayControlOperations.ts", [
     "/gateways",
     "/network-options",
     "/reload",
@@ -87,13 +117,13 @@ test("plugin route modules retain every migrated endpoint family", () => {
   assertSourceRetainsRoutes("src/manager/messageAdapterControl.ts", [
     "/api/scan/message-adapters"
   ]);
-  assertSourceRetainsRoutes("src/manager/agentAdapterCatalog.ts", [
+  assertSourceRetainsRoutes("src/manager/agentAdapterCatalogContract.ts", [
     "/api/scan/agents",
     "/api/scan/agents/dsh",
     "/api/scan/agents/grokBot",
     "/api/agent-adapters/catalog"
   ]);
-  assertSourceRetainsRoutes("src/manager/agentThreadControlRoutes.ts", [
+  assertSourceRetainsRoutes("src/manager/agentThreadControlOperations.ts", [
     "/api/agent/threads"
   ]);
   assertSourceRetainsRoutes("src/manager/agentCommunicationRoutes.ts", [
@@ -106,10 +136,10 @@ test("plugin route modules retain every migrated endpoint family", () => {
     "/api/agent/copilot-install",
     "/api/agent/copilot-login",
     "/api/agent/copilot-status",
-    "/api/agent/astrbot-login-test",
-    "/api/agent/marvis-open"
+    "/api/agent/astrbot-login-test"
   ]);
-  assertSourceRetainsRoutes("src/manager/remoteAgentRoutes.ts", [
+  assertSourceRetainsRoutes("src/manager/marvisControlOperations.ts", ["/api/agent/marvis-open"]);
+  assertSourceRetainsRoutes("src/manager/remoteAgentContract.ts", [
     "/api/remote-agent/devices",
     "/api/remote-agent/scan",
     "/api/remote-agent/connect",
@@ -117,15 +147,19 @@ test("plugin route modules retain every migrated endpoint family", () => {
     "/api/remote-agent/tasks",
     "/api/remote-agent/task-events"
   ]);
-  assertSourceRetainsRoutes("src/manager/diagnosticsRoutes.ts", [
-    "/meta",
-    "/api/gateways"
-  ]);
+  assertSourceRetainsRoutes("src/manager/corePublicOperations.ts", ["/meta"]);
+  assertSourceRetainsRoutes("plugins/builtin/io.rabiroute.manager.diagnostics/1.0.0/operations.mjs", ["/api/gateways"]);
   assertSourceRetainsRoutes("src/manager/desktopControlRoutes.ts", [
     "/open-config-file"
   ]);
   assert.equal(fs.existsSync(path.join(root, "src/manager/desktopLifecycleRoutes.ts")), false);
-  assertSourceRetainsRoutes("src/manager/napcatControlRoutes.ts", [
+  const unexpectedNativeAction = (): never => { throw new Error("Discovery must not execute a native NapCat action."); };
+  const napcatPaths = createNapcatControlOperations({
+    repairAll: unexpectedNativeAction, ensureReady: unexpectedNativeAction, health: unexpectedNativeAction,
+    loginPanel: unexpectedNativeAction, loginAction: unexpectedNativeAction, configureOneBot: unexpectedNativeAction,
+    add: unexpectedNativeAction, launch: unexpectedNativeAction, restart: unexpectedNativeAction, remove: unexpectedNativeAction
+  }).map(operation => operation.contract.pathTemplate);
+  for (const route of [
     "/api/message/napcat-repair-all",
     "/api/message/napcat-ensure-ready",
     "/api/message/napcat-health",
@@ -134,49 +168,56 @@ test("plugin route modules retain every migrated endpoint family", () => {
     "/api/message/napcat-launch",
     "/api/message/napcat-restart",
     "/api/message/napcat-remove"
-  ]);
+  ]) assert.ok(napcatPaths.includes(route), `Native NapCat definitions must retain ${route}`);
 });
 
 test("catalog plugin activation owns every dedicated scan route", async () => {
-  const { EffectScope } = await import(pathToFileURL(path.join(root, "plugins/contracts/plugin-sdk/index.mjs")).href);
+  const { EffectScope, PublicationScope } = await import(pathToFileURL(path.join(root, "plugins/contracts/plugin-sdk/index.mjs")).href);
   const { activate } = await import(pathToFileURL(path.join(root, "plugins/builtin/io.rabiroute.manager.agent-adapter-catalog/1.0.0/manager.mjs")).href);
   const effects = new EffectScope();
-  let claims: Array<{ kind: string; path: string; methods: string[] }> = [];
+  const publication = new PublicationScope(effects);
+  let claims: readonly ApiOperationDefinition[] = [];
   let stopped = false;
+  let retired = false;
   const runtime = {
-    rootDir: root, runtimes: new Map(), managerPluginRoutes: {}, jsonResponse() {},
-    registerManagerPluginHandlerRoutes(_registry: unknown, _instance: string, _prefix: string, _handlers: unknown, routes: typeof claims) {
-      claims = routes;
-      return () => {};
+    rootDir: root, runtimes: new Map(), managerPluginRoutes: {
+      async registerOperationsAsync(_instance: string, definitions: readonly ApiOperationDefinition[]) {
+        claims = definitions;
+        return { async dispose() { retired = true; }, activeOperationCount: () => 0 };
+      }
     },
-    mountAgentAdapterCatalogPlugin(options: { registerRoutes: (instance: string, prefix: string, handlers: unknown[]) => unknown }) {
-      options.registerRoutes("manager:agent-adapter-catalog", "manager.agent-adapter-catalog.api", []);
-      return { service: {}, async stop() { stopped = true; } };
+    async mountAgentAdapterCatalogPlugin(options: Parameters<typeof mountAgentAdapterCatalogPlugin>[0]) {
+      const mount = await mountAgentAdapterCatalogPlugin({ ...options, listManifests: async () => [] });
+      return { ...mount, async stop(reason?: string) { await mount.stop(reason); stopped = true; } };
     },
     agentAdapterCatalogService: undefined as unknown
   };
-  await activate({ identity: { instanceId: "manager:agent-adapter-catalog" }, effects,
+  await activate({ identity: { instanceId: "manager:agent-adapter-catalog" }, effects, publication, lifecycle: { signal: effects.signal() },
     services: { require() { return runtime; }, provide() {} }, contributions: { register() {} } });
   await effects.commit();
+  publication.publish();
+  publication.seal()();
+  await publication.afterPublish(Promise.resolve());
   for (const url of ["/api/scan/agents", "/api/scan/agents/dsh", "/api/scan/agents/grokBot"]) {
-    const exact = claims.filter(claim => claim.kind === "exact" && claim.path === url);
+    const exact = claims.filter(claim => claim.contract.pathTemplate === url);
     assert.equal(exact.length, 1, `${url} must have one plugin owner`);
-    assert.deepEqual(exact[0].methods, ["GET"]);
+    assert.equal(exact[0].contract.method, "GET");
   }
   await effects.dispose();
   assert.equal(stopped, true);
+  assert.equal(retired, true);
 });
 
 test("Agent state reporting is registered by the Agent state plugin package", () => {
   const plugin = source("plugins/builtin/io.rabiroute.manager.agent-state-control/1.0.0/manager.mjs");
-  assert.match(plugin, /registerManagerPluginHandlerRoutes\(runtime\.managerPluginRoutes, "manager:agent-state-control"/);
-  assert.match(plugin, /handleAgentStateReport\(request, requestUrl\.pathname, response\)/);
-  assert.match(source("src/manager/controlPlaneRoutes.ts"), /function handleAgentStateReport[\s\S]*pathname !== "\/api\/agent-state"/);
+  assert.match(plugin, /await runtime\.managerPluginRoutes\.registerOperationsAsync\(context\.identity\.instanceId, runtime\.createAgentStateReportOperations\(\), context\.lifecycle\.signal\)/);
+  assertSourceRetainsRoutes("src/manager/agentStateReportOperations.ts", ["/api/agent-state"]);
+  assert.doesNotMatch(source("src/manager/controlPlaneRoutes.ts"), /function handleAgentStateReport\s*\(/);
 });
 
-test("Outbox imports the shared FenneNote output implementation", () => {
+test("Outbox no longer calls the retired FenneNote output implementation", () => {
   const outbox = source("src/outbox.ts");
-  assert.match(outbox, /from "\.\/fenneNoteOutput\.js"/);
+  assert.doesNotMatch(outbox, /fenneNoteOutput/);
   assert.doesNotMatch(outbox, /async function postFenneNoteOutput\s*\(/);
 });
 
@@ -185,7 +226,7 @@ test("NapCat plugin shutdown uses only launch-owned child processes and recorded
   const plugin = source("plugins/builtin/io.rabiroute.manager.napcat-control/1.0.0/manager.mjs");
   assert.match(plugin, /const activeOperations = new Set/);
   assert.match(plugin, /napcatManagerCtx\(assertAccepting\)/);
-  assert.match(plugin, /accepting = false;[\s\S]*requestTracker\.stop\(\)[\s\S]*drainOperations\(\)/);
+  assert.match(plugin, /const retired = registration\?\.dispose\(\);[\s\S]*accepting = false;[\s\S]*while \(activeOperations\.size > 0\) await Promise\.allSettled\(\[\.\.\.activeOperations\]\); await retired;/);
   assert.match(plugin, /runtime\.removeManagedNapcatInstance\(body\)/);
   // Persisted NapcatLifecycleOwner owns process identity across Manager handovers.
   assert.doesNotMatch(plugin, /rememberLaunchPids|ownedInstances|releaseOwnership|runWindowsTaskkill|process\.kill|stopNapcatInstanceEndpoint\(controlContext/);
@@ -193,34 +234,55 @@ test("NapCat plugin shutdown uses only launch-owned child processes and recorded
 
 test("Remote Agent rejects WebSocket work before HTTP request drain", () => {
   const plugin = source("plugins/builtin/io.rabiroute.manager.remote-agent/1.0.0/manager.mjs");
-  assert.match(plugin, /unregisterRoutes\(\);[\s\S]*hub\.stopAccepting\(\);[\s\S]*await requestTracker\.stop\(\);[\s\S]*await hub\.shutdown\(\)/);
+  assert.match(plugin, /hub\?\.stopAccepting\(\);[\s\S]*await registration\?\.dispose\(\);[\s\S]*await hub\?\.shutdown\(\)/);
 });
 
-test("Manager forced shutdown is bounded after the owner teardown flight starts", () => {
+test("Manager forced shutdown consumes defaults and configured teardown budgets after owner teardown starts", t => {
   const central = source("src/manager/controlPlaneRoutes.ts");
   const teardownStart = central.indexOf("managerRuntimeOwner.teardown(`signal:${reason}`)");
   const forcedExitStart = central.indexOf("const forcedExit = setTimeout(", teardownStart);
   assert.ok(teardownStart >= 0 && forcedExitStart > teardownStart);
   const forcedExitContract = central.slice(forcedExitStart, forcedExitStart + 500);
   assert.match(forcedExitContract, /\(\) => process\.exit\(1\)/);
-  assert.match(
-    forcedExitContract,
-    /DEFAULT_MANAGER_RUNTIME_TEARDOWN_TIMEOUT_MS \+ 1_000/
-  );
+  const ast = ts.createSourceFile("controlPlaneRoutes.ts", central, ts.ScriptTarget.Latest, true);
+  let delay: string | undefined;
+  const visit = (node: ts.Node): void => {
+    if (ts.isVariableDeclaration(node) && node.name.getText(ast) === "forcedExit"
+      && node.initializer && ts.isCallExpression(node.initializer)) delay = node.initializer.arguments[1]?.getText(ast);
+    ts.forEachChild(node, visit);
+  };
+  visit(ast); assert.ok(delay);
+  const evaluate = new Function("getTimeoutMs", "DEFAULT_MANAGER_RUNTIME_TEARDOWN_TIMEOUT_MS", `return (${delay});`);
+  const previous = readTimeoutOverrides(); t.after(() => configureTimeouts(previous));
+  const key = "backend.manager.managerRuntimeOwner.DEFAULT_MANAGER_RUNTIME_TEARDOWN_TIMEOUT_MS";
+  for (const value of [undefined, 45000, 2147483647]) {
+    configureTimeouts(value === undefined ? {} : { [key]: value });
+    assert.equal(evaluate(getTimeoutMs, DEFAULT_MANAGER_RUNTIME_TEARDOWN_TIMEOUT_MS),
+      Math.min(2147483647, (value ?? DEFAULT_MANAGER_RUNTIME_TEARDOWN_TIMEOUT_MS) + 1000));
+  }
 });
 
 test("Manager RuntimeOwner gives the Cordis root sole ownership of shared Fiber disposal", () => {
   const central = source("src/manager/controlPlaneRoutes.ts");
   const rootOwner = central.indexOf('managerRuntimeOwner.register("cordis_root"');
-  const pluginOwner = central.indexOf('managerRuntimeOwner.register("manager_plugin_kernel"');
+  const pluginOwner = central.indexOf('managerRuntimeOwner.registerWithBudget("manager_plugin_kernel"');
   assert.ok(rootOwner >= 0 && pluginOwner > rootOwner);
+  assert.match(central, /managerRuntimeOwner\.register\("cordis_root",\s*\(\) => managerCordisRoot\.dispose\(\)\)/);
+  const pluginRegistration = central.slice(pluginOwner, pluginOwner + 300);
+  assert.match(pluginRegistration, /budget => managerPluginKernel\?\.shutdown\(\{\s*timeoutMs: Math\.max\(1, Math\.floor\(budget\.deadlineAt - performance\.now\(\)\)\)\s*\}\)/);
+  assert.doesNotMatch(pluginRegistration, /managerPluginKernel\?\.dispose\(/);
   assert.doesNotMatch(central, /managerSharedResourcesRuntime\.unmount\(\)|disposeManagerCordisRuntime/);
 });
 
 test("removed compatibility APIs stay absent from their former owners", () => {
+  assert.doesNotMatch(source("src/manager/controlPlaneRoutes.ts"), /handleResourceCacheApi|handleLegacyResourceCacheApi|handleRecordingArchiveAdminApi/);
+  assert.doesNotMatch(source("plugins/builtin/io.rabiroute.manager.core/1.0.0/manager.mjs"), /routeId: ["']resource-cache["']|runtime\.handleResourceCacheApi/);
+  assert.doesNotMatch(source("src/manager/resourceCache.ts"), /export function resourceCacheHandler/);
+  assert.doesNotMatch(source("src/manager/recordingArchiveRoutes.ts"), /recordingArchiveHandler|recordingArchiveObjectHandler|recognizeRecordingArchiveObject/);
+  assert.equal(fs.existsSync(path.join(root, "src/manager/recordingArchiveAdminRoutes.ts")), false);
   assert.doesNotMatch(source("src/manager/pluginCatalogRoutes.ts"), /\/api\/plugins\/reconcile(?:["/])/);
   assert.doesNotMatch(source("src/manager/agentAdapterCatalog.ts"), /\/api\/agent-adapters\/(?:dsh\/)?availability/);
-  assert.doesNotMatch(source("src/manager/fenneNoteOutputService.ts"), /\/api\/playback\/request/);
+  assert.equal(fs.existsSync(path.join(root, "src/manager/fenneNoteOutputService.ts")), false);
   assert.doesNotMatch(source("src/manager/agentProviderControlRoutes.ts"), /\/api\/deploy-astrbot-adapter/);
   assert.doesNotMatch(source("src/agentAdapters/astrbotAdapter.ts"), /rabiroute_agent|\/api\/plug\//);
 });

@@ -106,6 +106,21 @@ test("async read failure does not stamp context and queued checkpoints retain de
   assert.equal(checkpoint.additionalContext, "");
 });
 
+test("Hook diagnostics separate Stop checks and context reads without retaining request content", async t => {
+  const { root, service } = fixture({ deliverAgentCompletion: async () => [] });
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const result = await service.handleHook({ sessionId: "timing-session", eventName: "Stop", turnId: "one", lastAssistantMessage: "private reply" });
+  assert.deepEqual(result.timings?.map(row => row.name), ["plan-followup", "chat-history", "agent-request-stop", "file-change-reminder", "plan-completion", "completion-delivery"]);
+  for (const [index, row] of (result.timings ?? []).entries()) {
+    assert.ok(row.startMs >= 0 && row.durationMs >= 0);
+    const previous = result.timings?.[index - 1];
+    if (previous) assert.ok(row.startMs >= previous.startMs + previous.durationMs);
+  }
+  assert.doesNotMatch(JSON.stringify(result.timings), /private reply|timing-session/);
+  const context = await service.handleHook({ sessionId: "timing-session", eventName: "SessionStart" });
+  assert.deepEqual(context.timings?.map(row => row.name), ["context-build"]);
+});
+
 function fixture(options: {
   readContext?: CodexHookContextServiceOptions["readContext"];
   deliverPlanTaskCompletion?: (delivery: PlanTaskCompletionDelivery) => Promise<void>;
@@ -303,7 +318,7 @@ test("a recovered bound persona can finish without reading an unrelated persona'
   assert.deepEqual(completionScopes, [["YeYu"]]);
   assert.deepEqual(fs.readdirSync(unrelated), ["persona.md"]);
   service.handleContext({ sessionId: "session-plan-worker", eventName: "PostToolUse", turnId: "changed-turn",
-    cwd: root, toolName: "apply_patch", toolInput: "*** Begin Patch\n*** Update File: src/example.ts\n*** End Patch", toolResponse: "Done!" });
+    managerBaseUrl: "http://127.0.0.1:8790", cwd: root, toolName: "apply_patch", toolInput: "*** Begin Patch\n*** Update File: src/example.ts\n*** End Patch", toolResponse: "Done!" });
   const changed = await service.handleHook({ sessionId: "session-plan-worker", eventName: "Stop",
     turnId: "changed-turn", cwd: root });
   assert.equal(changed.projectFileChangeReminder?.status, "delivered");
@@ -319,6 +334,26 @@ test("an unrecovered bound persona cannot record a reply or complete its plan", 
     turnId: "unrecovered-turn", lastAssistantMessage: "Done" }), /Plan storage recovery is not ready/);
   assert.equal(fs.readFileSync(storePath, "utf8"), before);
   assert.deepEqual((await readPersonaChatHistory(roleDir)).entries, []);
+});
+
+test("an unrelated Stop leaves invalid persona workflows untouched while matching completion uses its owner", async t => {
+  let deliveries = 0;
+  const { root, roleDir, service } = fixture({ deliverPlanTaskCompletion: async () => { deliveries++; } });
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const configPath = path.join(roleDir, "personaConfig.json");
+  const originalConfig = fs.readFileSync(configPath, "utf8");
+  const unrelatedConfig = JSON.stringify({ ...JSON.parse(originalConfig), planWorkflow: { schemaVersion: -1 } });
+  fs.writeFileSync(configPath, unrelatedConfig);
+  const unrelated = await service.handleHook({ sessionId: "ordinary-unbound", eventName: "Stop", turnId: "unrelated-turn" });
+  assert.equal(unrelated.planTaskCompletion?.reason, "no_enabled_plan_task_binding");
+  assert.equal(fs.readFileSync(configPath, "utf8"), unrelatedConfig);
+  assert.equal(deliveries, 0);
+  fs.writeFileSync(configPath, originalConfig);
+  const matched = await service.handleHook({ sessionId: "session-plan-worker", eventName: "Stop", turnId: "owned-turn",
+    cwd: root, lastAssistantMessage: "Done" });
+  assert.equal(matched.planTaskCompletion?.status, "delivered");
+  assert.equal(fs.existsSync(configPath), true);
+  assert.equal(deliveries, 1);
 });
 
 test("an unbound Stop still requires global recovery before searching plan task bindings", async t => {
@@ -854,6 +889,30 @@ test("paused plans do not deliver bound task completion reminders", async (t) =>
   assert.equal(result.planTaskCompletion?.status, "ignored");
   assert.equal(result.planTaskCompletion?.reason, "no_enabled_plan_task_binding");
   assert.equal(deliveryCount, 0);
+});
+
+test("only PreToolUse queries managed-task policy while every Hook retains owner and Stop recovery checks", async t => {
+  const { root, rolesRoot, storePath } = fixture();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  let managedChecks = 0, recoveryChecks = 0;
+  const ownerChecks = new Set<string>();
+  const service = new CodexHookContextService({ rolesRoot: () => rolesRoot, storePath,
+    isManagedAgentSession: () => { managedChecks++; return true; },
+    assertSessionPersonaOwner: sessionId => { ownerChecks.add(sessionId); },
+    planStorageReady: () => { recoveryChecks++; return true; } });
+  for (const eventName of ["SessionStart", "UserPromptSubmit", "PostToolUse", "Stop"] as const) {
+    await service.handleHook({ sessionId: `ordinary-${eventName}`, eventName, turnId: "ordinary-turn",
+      managerBaseUrl: "http://127.0.0.1:8790" });
+  }
+  assert.equal(managedChecks, 0);
+  assert.deepEqual([...ownerChecks], ["ordinary-SessionStart", "ordinary-UserPromptSubmit", "ordinary-PostToolUse", "ordinary-Stop"]);
+  assert.equal(recoveryChecks, 1);
+  const blocked = await service.handleHook({ sessionId: "ordinary-unbound", eventName: "PreToolUse",
+    toolName: "send_message_to_thread", toolInput: { threadId: "other-task", message: "Result" } });
+  assert.equal(blocked.toolDecision?.permissionDecision, "deny");
+  assert.equal(managedChecks, 1);
+  assert.equal(ownerChecks.has("ordinary-unbound"), true);
+  assert.equal(recoveryChecks, 1);
 });
 
 test("managed Codex tasks cannot bypass the Rabi Agent bridge for persistent task delivery", async (t) => {

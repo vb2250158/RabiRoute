@@ -3,6 +3,60 @@ import test from "node:test";
 import { runIsolatedDeadlineProbe } from "../testFiniteDeadline.js";
 import { ManagerRuntimeOwner } from "./managerRuntimeOwner.js";
 
+for (const mode of ["legacy", "budgeted"] as const) {
+  test(`${mode} resource rejection with undefined still fails teardown`, async () => {
+    const owner = new ManagerRuntimeOwner({ fenceIngress() {}, publish() {}, unpublish() {} });
+    if (mode === "legacy") owner.register("undefined-rejection", () => { throw undefined; });
+    else owner.registerWithBudget("undefined-rejection", () => Promise.reject(undefined));
+    await assert.rejects(owner.teardown("undefined-rejection"), error => {
+      assert.ok(error instanceof AggregateError);
+      assert.deepEqual(error.errors, [undefined]);
+      return true;
+    });
+  });
+}
+
+test("budget-aware teardown receives the effective parent deadline without changing legacy stop arguments", async () => {
+  let legacyArguments = -1;
+  let effectiveBudget = 0;
+  const owner = new ManagerRuntimeOwner({
+    fenceIngress() {}, publish() {}, unpublish() {},
+    resourceStopTimeoutMs: 1000, teardownTimeoutMs: 200
+  });
+  owner.register("legacy", function () { legacyArguments = arguments.length; });
+  owner.registerWithBudget("budget-aware", budget => {
+    effectiveBudget = budget.timeoutMs;
+    assert.ok(budget.timeoutMs > 0 && budget.timeoutMs <= 100,
+      "the child must receive the existing fair-share budget, not a larger timeout");
+    assert.ok(budget.deadlineAt - performance.now() <= budget.timeoutMs);
+    assert.ok(Object.isFrozen(budget));
+  });
+  await owner.teardown("budget-contract");
+  assert.equal(legacyArguments, 0);
+  assert.ok(effectiveBudget > 0);
+  assert.throws(() => owner.registerWithBudget("late", () => {}), /cannot acquire/);
+});
+
+test("budget-aware teardown still fails on the existing parent deadline and observes late rejection", async () => {
+  let rejectStop = (_error: unknown): void => {};
+  const stopping = new Promise<void>((_resolve, reject) => { rejectStop = reject; });
+  const owner = new ManagerRuntimeOwner({
+    fenceIngress() {}, publish() {}, unpublish() {},
+    resourceStopTimeoutMs: 20, teardownTimeoutMs: 100
+  });
+  owner.registerWithBudget("pending", budget => {
+    assert.equal(budget.timeoutMs, 20);
+    return stopping;
+  });
+  await assert.rejects(owner.teardown("budget-expiry"), error => {
+    assert.ok(error instanceof AggregateError);
+    assert.match(error.errors[0].message, /resource stop timed out/);
+    return true;
+  });
+  rejectStop(new Error("late owner rejection"));
+  await new Promise(resolve => setImmediate(resolve));
+});
+
 for (const outcome of ["resolved", "timeout"] as const) {
   test(`isolated teardown ${outcome} settles without a ref keeper and exits`, () => {
     runIsolatedDeadlineProbe(`

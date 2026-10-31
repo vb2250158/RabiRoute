@@ -1,11 +1,11 @@
-import { validateAgentProfile } from './profile.mjs';
+import { validateAgentProfile, PROFILE_LIMITS } from './profile.mjs';
 const fail = code => { throw Object.assign(new Error(code), { code }); };
 const roleKey = value => { if (typeof value !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(value)) fail('PERSONA_ID_INVALID'); return value; };
 // Manager readers may return the public JSON envelope or its data exactly once.
 const unwrap = value => value?.data && typeof value.data === 'object' && !Array.isArray(value.data) ? value.data : value;
 export async function readAiuiPersonaTemplate({ read, roleId, sourceDeviceId, skillIds = [] }) {
   roleKey(roleId);
-  if (!Array.isArray(skillIds) || skillIds.length > 16 || new Set(skillIds).size !== skillIds.length) fail('PERSONA_SKILL_SELECTION_INVALID');
+  if (!Array.isArray(skillIds) || skillIds.length > PROFILE_LIMITS.skills || new Set(skillIds).size !== skillIds.length) fail('PERSONA_SKILL_SELECTION_INVALID');
   skillIds.forEach(roleKey);
   const before = unwrap(await read('/meta'));
   if (!before.applicationGenerationId || !before.managerInstanceId || !before.health?.live || !before.health?.requiredReady) fail('PERSONA_SOURCE_NOT_READY');

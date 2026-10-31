@@ -1,3 +1,6 @@
+import { ApiContractError, type ApiOperationDefinition, type ApiOperationInput, type ApiSchema } from "./apiOperationContract.js";
+import { hasAuthenticatedConnectionRequest } from "./connectionRequestAccess.js";
+import { rolePanelMessageSchema } from "./rolePanelMessageContract.js";
 import { errorResponsePresentation } from "../shared/errorPresentation.js";
 import http from "node:http";
 import { validateLanAgentRequestBody } from "./lanAgentBodyAuthority.js";
@@ -12,6 +15,7 @@ import type {
 import type { PersonaMessageReplyContext } from "../shared/rolePanelMessage.js";
 import {
   executeDurableDelivery,
+  DURABLE_DELIVERY_RECEIPT_STATES,
   normalizeDurableDeliveryId,
   readDurableDeliveryReceipt
 } from "./durableDeliveryIdempotency.js";
@@ -72,60 +76,19 @@ type PreparedPersonaMessage = {
   sourcePersona: PersonaSummary;
   targetPersonaId: string;
   target: PersonaMessagingRuntime;
+  targetRouteId: string;
   conversationId: string;
   inReplyToMessageId?: string;
   hopCount: number;
   text: string;
 };
 
-const MAX_PERSONA_MESSAGE_HOPS = 8;
+export const PERSONA_MESSAGE_LIMITS = Object.freeze({ requestBytes: 65_536, textChars: 32_768, referenceChars: 200, maxHops: 8 });
 
 class PersonaMessagingError extends Error {
-  constructor(readonly statusCode: number, message: string) {
+  constructor(readonly statusCode: number, message: string, readonly delivery?: { uncertain: true; messageId: string; replyContext: Record<string, unknown> }) {
     super(message);
   }
-}
-
-function jsonResponse(response: http.ServerResponse, statusCode: number, body: unknown): void {
-  body = errorResponsePresentation(body, statusCode);
-  response.writeHead(statusCode, { "content-type": "application/json; charset=utf-8" });
-  response.end(JSON.stringify(body, null, 2));
-}
-
-function statusCodeForError(error: unknown): number {
-  if (error instanceof PersonaMessagingError) return error.statusCode;
-  if (error instanceof SyntaxError) return 400;
-  return 500;
-}
-
-function readJsonBody<T>(request: http.IncomingMessage, maxBytes: number): Promise<T> {
-  return new Promise((resolve, reject) => {
-    const chunks: Buffer[] = [];
-    let total = 0;
-    let tooLarge = false;
-    request.on("data", (chunk) => {
-      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-      total += buffer.byteLength;
-      if (total > maxBytes) {
-        tooLarge = true;
-        chunks.length = 0;
-        return;
-      }
-      if (!tooLarge) chunks.push(buffer);
-    });
-    request.on("end", () => {
-      try {
-        if (tooLarge) throw new PersonaMessagingError(413, `Request body exceeds ${maxBytes} bytes.`);
-        const text = Buffer.concat(chunks).toString("utf8");
-        const body = text ? JSON.parse(text) : {};
-        validateLanAgentRequestBody(request, body);
-        resolve(body as T);
-      } catch (error) {
-        reject(error);
-      }
-    });
-    request.on("error", reject);
-  });
 }
 
 function personaIdForDefinition(definition: GatewayDefinition): string {
@@ -227,25 +190,26 @@ function preparePersonaMessage(
 
   const text = String(body.text || "").trim();
   if (!text) throw new PersonaMessagingError(400, "Missing message text.");
-  if (text.length > 32_768) throw new PersonaMessagingError(413, "Message text exceeds 32768 characters.");
+  if (text.length > PERSONA_MESSAGE_LIMITS.textChars) throw new PersonaMessagingError(413, `Message text exceeds ${PERSONA_MESSAGE_LIMITS.textChars} characters.`);
   const target = targetRuntime(targetPersona, String(body.targetRouteId || "").trim(), context);
   const conversationId = String(body.conversationId || "").trim() || `persona:${normalizeDurableDeliveryId(body.deliveryId)}`;
-  if (conversationId.length > 200) throw new PersonaMessagingError(400, "conversationId exceeds 200 characters.");
+  if (conversationId.length > PERSONA_MESSAGE_LIMITS.referenceChars) throw new PersonaMessagingError(400, `conversationId exceeds ${PERSONA_MESSAGE_LIMITS.referenceChars} characters.`);
   const inReplyToMessageId = String(body.inReplyToMessageId || "").trim() || undefined;
-  if (inReplyToMessageId && inReplyToMessageId.length > 200) {
-    throw new PersonaMessagingError(400, "inReplyToMessageId exceeds 200 characters.");
+  if (inReplyToMessageId && inReplyToMessageId.length > PERSONA_MESSAGE_LIMITS.referenceChars) {
+    throw new PersonaMessagingError(400, `inReplyToMessageId exceeds ${PERSONA_MESSAGE_LIMITS.referenceChars} characters.`);
   }
   const hopCount = body.hopCount == null ? 0 : Number(body.hopCount);
   if (!Number.isInteger(hopCount) || hopCount < 0) throw new PersonaMessagingError(400, "hopCount must be a non-negative integer.");
-  if (hopCount > MAX_PERSONA_MESSAGE_HOPS) {
-    throw new PersonaMessagingError(409, `Cross-persona message hopCount exceeds ${MAX_PERSONA_MESSAGE_HOPS}.`);
+  if (hopCount > PERSONA_MESSAGE_LIMITS.maxHops) {
+    throw new PersonaMessagingError(409, `Cross-persona message hopCount exceeds ${PERSONA_MESSAGE_LIMITS.maxHops}.`);
   }
   return {
     sourceRouteId,
     sourcePersonaId,
     sourcePersona,
     targetPersonaId,
-    target,
+    target: { ...target, definition: structuredClone(target.definition) },
+    targetRouteId: target.definition.id,
     conversationId,
     inReplyToMessageId,
     hopCount,
@@ -263,6 +227,7 @@ async function deliverPersonaMessage(
     sourcePersona,
     targetPersonaId,
     target,
+    targetRouteId,
     conversationId,
     inReplyToMessageId,
     hopCount,
@@ -274,11 +239,11 @@ async function deliverPersonaMessage(
     sourcePersonaName: sourcePersona.name,
     sourceRouteId,
     targetPersonaId,
-    targetRouteId: target.definition.id,
+    targetRouteId,
     personaConversationId: conversationId,
     inReplyToPersonaMessageId: inReplyToMessageId,
     personaMessageHopCount: hopCount,
-    personaMessageMaxHops: MAX_PERSONA_MESSAGE_HOPS
+    personaMessageMaxHops: PERSONA_MESSAGE_LIMITS.maxHops
   };
   try {
     const delivery = await deliverRolePanelMessage({
@@ -297,135 +262,120 @@ async function deliverPersonaMessage(
       sourcePersonaId,
       sourceRouteId,
       targetPersonaId,
-      targetRouteId: target.definition.id,
+      targetRouteId,
       conversationId,
       hopCount,
       timelineRecorded: delivery.timelineRecorded,
       message: delivery.message
     };
   } catch (error) {
-    if (error instanceof RolePanelDeliveryError) throw new PersonaMessagingError(error.statusCode, error.message);
+    if (error instanceof RolePanelDeliveryError) throw new PersonaMessagingError(error.statusCode, error.message, { uncertain: true, messageId: error.messageId, replyContext: error.replyContext });
     throw error;
   }
 }
 
-export function handlePersonaMessagingApi(
-  request: http.IncomingMessage,
-  requestUrl: URL,
-  response: http.ServerResponse,
-  context: PersonaMessagingRouteContext
-): boolean {
-  if (request.method === "GET" && requestUrl.pathname === "/api/personas") {
-    try {
-      const addressableOnly = requestUrl.searchParams.get("addressable") === "true";
-      const personas = listPersonas(context).filter(persona => !addressableOnly || persona.addressable);
-      jsonResponse(response, 200, { code: 0, personas });
-    } catch (error) {
-      jsonResponse(response, statusCodeForError(error), {
-        code: -1,
-        message: error instanceof Error ? error.message : String(error)
-      });
+const personaRouteSummarySchema = { type: "object", required: ["routeId", "name", "enabled", "running"], additionalProperties: false,
+  properties: { routeId: { type: "string" }, name: { type: "string" }, enabled: { type: "boolean" }, running: { type: "boolean" } } } as const;
+const personaSummarySchema = { type: "object", required: ["personaId", "name", "title", "addressable", "routes"], additionalProperties: false,
+  properties: { personaId: { type: "string" }, name: { type: "string" }, title: { type: "string" }, addressable: { type: "boolean" }, defaultRouteId: { type: "string" }, routes: { type: "array", items: personaRouteSummarySchema } } } as const;
+
+export function createPersonaDirectoryOperation(context: () => Pick<PersonaMessagingRouteContext, "rolesRoot" | "runtimes" | "personaPresentations">): ApiOperationDefinition {
+  return { contract: { operationId: "manager.personas.list", aliases: ["agent:GET:/api/personas"], contractVersion: "1.0.0", method: "GET", pathTemplate: "/api/personas", exposure: "public", transport: "http",
+    description: "Read the original persona presentation directory and enabled local Route reachability without a persona permission grant.",
+    request: { path: { type: "object", additionalProperties: false }, query: { type: "object", additionalProperties: true, properties: { addressable: { anyOf: [{ type: "string" }, { type: "array", items: { type: "string" } }] } } }, headers: { type: "object" }, body: { kind: "none" } },
+    responses: { "200": { mediaType: "application/json", schema: { type: "object", required: ["code", "personas"], additionalProperties: false, properties: { code: { const: 0 }, personas: { type: "array", items: personaSummarySchema } } } },
+      "500": { mediaType: "application/json", schema: { type: "object", required: ["code", "message"], additionalProperties: true, properties: { code: { const: -1 }, message: { type: "string" } } } } },
+    effects: { mode: "read", description: "Reads the current presentation catalog and runtime state; it neither starts Routes nor delivers prompts." },
+    recovery: { strategy: "repeatable-read", description: "Repeat the same query after the original catalog owner recovers." },
+    validators: [{ id: "persona-directory-native-projection", description: "Keep only persona presentations in the original normalized roles root. Exclude remote-owned routes from local reachability; preserve names, sorting and the unique-enabled-route default. Only the first addressable query value equal to the exact string true filters results. Unknown query fields retain native ignored behavior." }]
+  }, handler: input => {
+    try { const addressableOnly = input.url.searchParams.get("addressable") === "true";
+      return { status: 200, body: { code: 0, personas: listPersonas(context()).filter(persona => !addressableOnly || persona.addressable) } };
+    } catch (error) { return { status: 500, body: errorResponsePresentation({ code: -1, message: error instanceof Error ? error.message : String(error) }, 500) }; }
+  } };
+}
+
+const personaMessageRequestFields: Readonly<Record<string, ApiSchema>> = {
+  deliveryId: { description: "Required stable delivery ID, validated by the native durable-delivery normalizer; retain it for original-receipt recovery." },
+  sourceRouteId: { description: "Required enabled local source Route; native String(value || '').trim() normalization." },
+  sourceCapability: { description: "Required original source-Route/persona proof from replyContext, rechecked before dispatch; connection authentication is independent." },
+  targetRouteId: { description: "Optional only when the target persona has exactly one enabled local Route; retain native String normalization." },
+  conversationId: { description: `Native String normalization; defaults to persona:<deliveryId>; at most ${PERSONA_MESSAGE_LIMITS.referenceChars} UTF-16 code units.` },
+  inReplyToMessageId: { description: `Optional native String normalization; at most ${PERSONA_MESSAGE_LIMITS.referenceChars} UTF-16 code units.` },
+  hopCount: { description: `Null/absent defaults to 0; otherwise native Number conversion, requiring an integer from 0 through ${PERSONA_MESSAGE_LIMITS.maxHops}.` },
+  text: { description: `Native String(value || '').trim(); nonempty and at most ${PERSONA_MESSAGE_LIMITS.textChars} UTF-16 code units after trimming.` }
+};
+
+const idempotencySchema = { type: "object", required: ["deliveryId", "state", "duplicate"], additionalProperties: false,
+  properties: { deliveryId: { type: "string" }, state: { enum: ["completed", "in_progress", "uncertain", "conflict"] }, duplicate: { type: "boolean" } } } as const;
+
+const personaErrorSchema: ApiSchema = { type: "object", required: ["code", "message"], additionalProperties: true, properties: { code: { const: -1 }, message: { type: "string" }, status: { const: "failed" }, uncertain: { type: "boolean" }, messageId: { type: "string" }, replyContext: { type: "object" }, statusCode: { type: "integer" }, idempotency: idempotencySchema } };
+const personaPath = { type: "object", required: ["personaId"], additionalProperties: false, properties: { personaId: { type: "string" } } } as const;
+const queryAndHeaders = { type: "object" } as const;
+/** Register public operations directly against the original persona and durable-delivery owners. */
+export function createPersonaMessagingOperations(context: () => PersonaMessagingRouteContext): readonly ApiOperationDefinition[] {
+  const errors = Object.fromEntries([400, 403, 404, 409, 413, 500, 502, 503].map(status => [String(status), { mediaType: "application/json", schema: personaErrorSchema }]));
+  const selectedId = (input: ApiOperationInput) => { const id = sanitizeRoleId(input.path.personaId); if (!id) throw new PersonaMessagingError(400, "Invalid persona id."); return id; };
+  const errorResult = (error: unknown, failed = false) => { if (error instanceof ApiContractError) throw error;
+    const status = error instanceof PersonaMessagingError ? error.statusCode : error instanceof SyntaxError ? 400 : 500;
+    return { status, body: errorResponsePresentation({ code: -1, ...(failed ? { status: "failed" } : {}), ...(failed && status === 500 ? { uncertain: true } : {}), message: error instanceof Error ? error.message : String(error) }, status) }; };
+  const send = async (input: ApiOperationInput, owner: PersonaMessagingRouteContext) => {
+    try { const personaId = selectedId(input);
+      const assertAuthority = () => { try { hasAuthenticatedConnectionRequest(input.request); } catch { throw new ApiContractError(403, "API_REQUEST_AUTHORITY_REVOKED", "authorization", "manager.personas.messages.send", true); } };
+      return await executePersonaMessageRequest(personaId, input.body as PersonaMessageRequest, owner, input.signal, assertAuthority);
+    } catch (error) { return errorResult(error, true); }
+  };
+  return [{ contract: { operationId: "manager.personas.read", aliases: ["agent:GET:/api/personas/:personaId"], contractVersion: "1.0.0", method: "GET", pathTemplate: "/api/personas/:personaId", exposure: "public", transport: "http",
+    description: "Read a persona through the original presentation and local Route directory.",
+    request: { path: personaPath, query: queryAndHeaders, headers: queryAndHeaders, body: { kind: "none" } },
+    responses: { ...errors, "200": { mediaType: "application/json", schema: { type: "object", required: ["code", "persona"], additionalProperties: false, properties: { code: { const: 0 }, persona: personaSummarySchema } } } },
+    effects: { mode: "read", description: "Read the current persona directory without delivering messages." }, recovery: { strategy: "repeatable-read", description: "Repeat the same persona read after native catalog recovery." },
+    validators: [{ id: "persona-read-native-identity", description: "Retain the original persona ID sanitizer, active storage root, local-route projection and not-found result." }]
+  }, handler: input => { try { return { status: 200, body: { code: 0, persona: resolvePersona(selectedId(input), listPersonas(context())) } }; } catch (error) { return errorResult(error); } } },
+  { contract: { operationId: "manager.personas.messages.receipt", aliases: ["agent:GET:/api/personas/messages/receipts/:deliveryId"], contractVersion: "1.0.0", method: "GET", pathTemplate: "/api/personas/messages/receipts/:deliveryId", exposure: "public", transport: "http",
+    description: "Read the original persistent persona-message receipt without redispatch or repair writes.",
+    request: { path: { type: "object", required: ["deliveryId"], additionalProperties: false, properties: { deliveryId: { type: "string" } } }, query: queryAndHeaders, headers: queryAndHeaders, body: { kind: "none" } },
+    responses: { ...errors, "200": { mediaType: "application/json", schema: { type: "object", required: ["code", "receipt"], additionalProperties: false, properties: { code: { const: 0 }, receipt: { type: "object", required: ["version", "deliveryId", "requestDigest", "state", "createdAt", "updatedAt"], additionalProperties: true, properties: { version: { const: 1 }, deliveryId: { type: "string" }, requestDigest: { type: "string" }, state: { enum: DURABLE_DELIVERY_RECEIPT_STATES }, createdAt: { type: "string" }, updatedAt: { type: "string" }, result: { type: "object", additionalProperties: true }, error: { type: "string" } } } } } } },
+    effects: { mode: "read", description: "Read only the original persona-message-idempotency namespace." }, recovery: { strategy: "repeatable-read", description: "Retain deliveryId; completed is the ledger state, while result.status reports delivery success or failure. Missing, sending or uncertain records never authorize a new ID or an automatic resend." },
+    validators: [{ id: "persona-receipt-native-identity", description: "The native delivery ID normalizer and receipt reader own validation and persistence. Unknown query fields remain ignored." }]
+  }, handler: input => { try { const deliveryId = normalizeDurableDeliveryId(input.path.deliveryId), receipt = readDurableDeliveryReceipt<Record<string, unknown>>(context().rootDir, "persona-message-idempotency", deliveryId);
+    return receipt ? { status: 200, body: { code: 0, receipt } } : { status: 404, body: errorResponsePresentation({ code: -1, message: "Persona message receipt was not found." }, 404) };
+    } catch (error) { return { status: 400, body: errorResponsePresentation({ code: -1, message: error instanceof Error ? error.message : String(error) }, 400) }; } } },
+  { contract: { operationId: "manager.personas.messages.send", aliases: ["agent:POST:/api/personas/:personaId/messages"], contractVersion: "1.0.0", method: "POST", pathTemplate: "/api/personas/:personaId/messages", exposure: "public", transport: "http",
+    description: "Deliver through the original persona source-proof and persistent delivery owner, preserving the stable deliveryId.",
+    request: { path: personaPath, query: queryAndHeaders, headers: queryAndHeaders, body: { kind: "json", maxBytes: PERSONA_MESSAGE_LIMITS.requestBytes, allowAnyContentType: true, emptyValue: {}, schema: { type: "object", additionalProperties: true, properties: personaMessageRequestFields } } },
+    responses: { ...errors, "202": { mediaType: "application/json", schema: { type: "object", required: ["code", "status", "sourcePersonaId", "sourceRouteId", "targetPersonaId", "targetRouteId", "conversationId", "hopCount", "timelineRecorded", "idempotency"], additionalProperties: false,
+      properties: { code: { const: 0 }, status: { const: "delivered" }, sourcePersonaId: { type: "string" }, sourceRouteId: { type: "string" }, targetPersonaId: { type: "string" }, targetRouteId: { type: "string" }, conversationId: { type: "string" }, hopCount: { type: "integer", minimum: 0, maximum: PERSONA_MESSAGE_LIMITS.maxHops }, timelineRecorded: { type: "boolean" }, message: rolePanelMessageSchema, idempotency: idempotencySchema } } } },
+    effects: { mode: "agent-delivery", description: "Reserve and settle the existing persistent receipt, deliver once through the original Desktop owner, and audit the captured target timeline." },
+    recovery: { strategy: "stable-idempotency-receipt", receiptPath: "/api/personas/messages/receipts/:deliveryId", description: "Retain deliveryId and the normalized original payload. Matching completed requests reuse the original result; changed payloads conflict. Sending or uncertain outcomes require reading the original receipt, without replacement IDs or automatic retries. Audit failure never redispatches." },
+    validators: [{ id: "persona-message-source-and-target", description: "The original source Route proof is request provenance, not a remote feature grant. Retain enabled local source, distinct target persona, enabled target selection, unique-route default and original text/reference/hop coercion and limits. Capture target identity and audit ownership before durable awaits. Recheck the existing enabled/local source and target object conditions immediately before actual dispatch." }]
+  }, prepare: () => {
+    // Capture the original storage/application owner before consuming a queued body.
+    try { const owner = context(); return input => send(input, owner); } catch (error) { return errorResult(error); }
+  }, handler: input => send(input, context()) }];
+}
+
+async function executePersonaMessageRequest(personaId: string, body: PersonaMessageRequest, context: PersonaMessagingRouteContext, signal: AbortSignal | undefined, assertAuthority: () => void) {
+  let deliveryId: string;
+  try { deliveryId = normalizeDurableDeliveryId(body.deliveryId); } catch (error) { throw new PersonaMessagingError(400, error instanceof Error ? error.message : String(error)); }
+  const prepared = preparePersonaMessage(personaId, body, context);
+  const outcome = await executeDurableDelivery({ rootDir: context.rootDir, namespace: "persona-message-idempotency", deliveryId, requestAuthority: assertAuthority,
+    payload: { sourceRouteId: prepared.sourceRouteId, targetPersonaId: prepared.targetPersonaId, targetRouteId: prepared.targetRouteId, conversationId: prepared.conversationId, inReplyToMessageId: prepared.inReplyToMessageId, hopCount: prepared.hopCount, text: prepared.text },
+    deliver: async () => {
+      signal?.throwIfAborted(); assertAuthority();
+      try {
+        if (!context.authorizeSource(prepared.sourceRouteId, prepared.sourcePersonaId, String(body.sourceCapability || "").trim())) throw new PersonaMessagingError(403, "The source Route capability is missing or invalid.");
+        const source = enabledRuntime(prepared.sourceRouteId, context);
+        const target = enabledRuntime(prepared.targetRouteId, context);
+        if (source.definition.agentRoleDeviceId || personaIdForDefinition(source.definition) !== prepared.sourcePersonaId) throw new PersonaMessagingError(409, "The original source Route no longer belongs to this local persona.");
+        if (target.definition.agentRoleDeviceId || personaIdForDefinition(target.definition) !== prepared.targetPersonaId) throw new PersonaMessagingError(409, "The original target Route no longer belongs to this local persona.");
+        return await deliverPersonaMessage(prepared, context);
+      }
+      catch (error) { if (error instanceof PersonaMessagingError) return { status: "failed", statusCode: error.statusCode, message: error.message, ...error.delivery }; throw error; }
     }
-    return true;
-  }
-
-  const receiptMatch = requestUrl.pathname.match(/^\/api\/personas\/messages\/receipts\/([^/]+)$/);
-  if (request.method === "GET" && receiptMatch) {
-    try {
-      const deliveryId = normalizeDurableDeliveryId(decodeURIComponent(receiptMatch[1]));
-      const receipt = readDurableDeliveryReceipt<Record<string, unknown>>(
-        context.rootDir,
-        "persona-message-idempotency",
-        deliveryId
-      );
-      if (!receipt) jsonResponse(response, 404, { code: -1, message: "Persona message receipt was not found." });
-      else jsonResponse(response, 200, { code: 0, receipt });
-    } catch (error) {
-      jsonResponse(response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) });
-    }
-    return true;
-  }
-
-  const match = requestUrl.pathname.match(/^\/api\/personas\/([^/]+)(\/messages)?$/);
-  if (!match) return false;
-  let personaId = "";
-  try { personaId = sanitizeRoleId(decodeURIComponent(match[1])); } catch { /* invalid encoding */ }
-  if (!personaId) {
-    jsonResponse(response, 400, { code: -1, message: "Invalid persona id." });
-    return true;
-  }
-
-  if (request.method === "GET" && !match[2]) {
-    try {
-      jsonResponse(response, 200, { code: 0, persona: resolvePersona(personaId, listPersonas(context)) });
-    } catch (error) {
-      jsonResponse(response, statusCodeForError(error), { code: -1, message: error instanceof Error ? error.message : String(error) });
-    }
-    return true;
-  }
-
-  if (request.method === "POST" && match[2]) {
-    void readJsonBody<PersonaMessageRequest>(request, 65_536)
-      .then(async (body) => {
-        let deliveryId = "";
-        try {
-          deliveryId = normalizeDurableDeliveryId(body.deliveryId);
-        } catch (error) {
-          throw new PersonaMessagingError(400, error instanceof Error ? error.message : String(error));
-        }
-        const prepared = preparePersonaMessage(personaId, body, context);
-        const outcome = await executeDurableDelivery({
-          rootDir: context.rootDir,
-          namespace: "persona-message-idempotency",
-          deliveryId,
-          payload: {
-            sourceRouteId: prepared.sourceRouteId,
-            targetPersonaId: prepared.targetPersonaId,
-            targetRouteId: prepared.target.definition.id,
-            conversationId: prepared.conversationId,
-            inReplyToMessageId: prepared.inReplyToMessageId,
-            hopCount: prepared.hopCount,
-            text: prepared.text
-          },
-          deliver: async () => {
-            try {
-              return await deliverPersonaMessage(prepared, context);
-            } catch (error) {
-              if (error instanceof PersonaMessagingError) {
-                return { status: "failed", statusCode: error.statusCode, message: error.message };
-              }
-              throw error;
-            }
-          }
-        });
-        if (outcome.state === "completed") {
-          const deliveryFailed = outcome.result.status === "failed";
-          return {
-            statusCode: deliveryFailed ? Number(outcome.result.statusCode || 502) : 202,
-            body: {
-              code: deliveryFailed ? -1 : 0,
-              ...outcome.result,
-              idempotency: { deliveryId, state: "completed", duplicate: outcome.duplicate }
-            }
-          };
-        }
-        return {
-          statusCode: outcome.state === "uncertain" ? 503 : 409,
-          body: {
-            code: -1,
-            status: "failed",
-            message: outcome.reason,
-            idempotency: { deliveryId, state: outcome.state, duplicate: true }
-          }
-        };
-      })
-      .then(result => jsonResponse(response, result.statusCode, result.body))
-      .catch((error) => {
-        jsonResponse(response, statusCodeForError(error), { code: -1, status: "failed", message: error instanceof Error ? error.message : String(error) });
-      });
-    return true;
-  }
-
-  jsonResponse(response, 405, { code: -1, message: "Method not allowed." });
-  return true;
+  });
+  if (outcome.state === "completed") { const failed = outcome.result.status === "failed"; const status = failed ? Number(outcome.result.statusCode || 502) : 202;
+    return { status, body: errorResponsePresentation({ code: failed ? -1 : 0, ...outcome.result, idempotency: { deliveryId, state: "completed", duplicate: outcome.duplicate } }, status) }; }
+  const status = outcome.state === "uncertain" ? 503 : 409;
+  return { status, body: errorResponsePresentation({ code: -1, status: "failed", message: outcome.reason, idempotency: { deliveryId, state: outcome.state, duplicate: true } }, status) };
 }

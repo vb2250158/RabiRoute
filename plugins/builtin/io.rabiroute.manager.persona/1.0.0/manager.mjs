@@ -4,6 +4,40 @@ export const activate = definePlugin({
         const runtime = context.services.require("host.manager.persona@1");
         context.services.provide("manager.persona@1", Object.freeze({ instanceId: context.identity.instanceId }));
         for (const contribution of [
+{
+    "kind": "page",
+    "id": "message-history-page",
+    "value": {
+        "surface": "web.pages",
+        "label": {
+            "fallback": "消息记录"
+        },
+        "routeId": "role.message-history",
+        "slot": "route",
+        "hosts": [
+            "web"
+        ],
+        "order": 35,
+        "rendererId": "builtin.web-page.message-history.v1"
+    }
+},
+{
+    "kind": "navigation",
+    "id": "message-history",
+    "value": {
+        "surface": "web.navigation",
+        "label": {
+            "fallback": "消息记录"
+        },
+        "routeId": "role.message-history",
+        "slot": "route-primary",
+        "hosts": [
+            "web"
+        ],
+        "order": 35,
+        "icon": "mdi-message-text-outline"
+    }
+},
             {
                 "kind": "page",
                 "id": "persona-page",
@@ -170,25 +204,80 @@ export const activate = definePlugin({
                 }
             });
             try {
-        const requestTracker = new runtime.ManagerPluginRequestTracker();
-        ctx.effect(() => {
-            const unregister = runtime.registerManagerPluginHandlerRoutes(runtime.managerPluginRoutes, "manager:persona", "manager.persona.api", [
-                requestTracker.wrap((request, requestUrl, response) => (runtime.handlePersonaPluginApi(request, requestUrl, response)
-                    || runtime.handleLanguageStyleApi(request, requestUrl, response, runtime.languageStyleValidator)))
-            ], [
-                { routeId: "personas", kind: "exact", path: "/api/personas", methods: ["GET"] },
-                { routeId: "roles", kind: "exact", path: "/api/roles", methods: ["GET", "POST"] },
-                { routeId: "personas-resource", kind: "prefix", pathPrefix: "/api/personas/" },
-                { routeId: "roles-api", kind: "prefix", pathPrefix: "/api/roles/" },
-                { routeId: "roles-static", kind: "prefix", pathPrefix: "/roles/" },
-                { routeId: "language-style-validate", kind: "exact", path: "/api/language-style/validate", methods: ["POST"] },
-                { routeId: "role-panel-messages", kind: "exact", path: "/api/role-panel/messages", methods: ["POST"] }
-            ]);
+        ctx.effect(async () => {
+            const registration = await runtime.managerPluginRoutes.registerOperationsAsync(context.identity.instanceId, runtime.roleConfigurationOperations, context.lifecycle.signal);
+            return () => registration.dispose();
+        }, "activate Manager role configuration operations");
+
+        ctx.effect(async () => {
+            const registration = await runtime.managerPluginRoutes.registerOperationsAsync(context.identity.instanceId, runtime.personaResourceOperations, context.lifecycle.signal);
+            return () => registration.dispose();
+        }, "activate Manager persona resource operations");
+        ctx.effect(async () => {
+            const registration = await runtime.managerPluginRoutes.registerOperationsAsync(context.identity.instanceId, runtime.personaPlanOperations, context.lifecycle.signal);
+            return () => registration.dispose();
+        }, "activate Manager persona plan operations");
+        ctx.effect(async () => {
+            const registration = await runtime.managerPluginRoutes.registerOperationsAsync(context.identity.instanceId, runtime.personaHistoryOperations, context.lifecycle.signal);
+            return () => registration.dispose();
+        }, "activate Manager persona history operations");
+        ctx.effect(async () => {
+            const registration = await runtime.managerPluginRoutes.registerOperationsAsync(context.identity.instanceId, runtime.personaSkillOperations, context.lifecycle.signal);
+            return () => registration.dispose();
+        }, "activate Manager persona Skill operations");
+        ctx.effect(async () => {
+            const registration = await runtime.managerPluginRoutes.registerOperationsAsync(context.identity.instanceId, runtime.personaKnowledgeOperations, context.lifecycle.signal);
+            return () => registration.dispose();
+        }, "activate Manager persona knowledge operations");
+        ctx.effect(async () => {
+            const owner = new runtime.PersonaStorageOwner(runtime.personaStorageContext);
+            let registration;
+            try { registration = await runtime.managerPluginRoutes.registerOperationsAsync(context.identity.instanceId, runtime.createPersonaStorageOperations(owner), context.lifecycle.signal); }
+            catch (error) {
+                try { await owner.stop(); }
+                catch (cleanupError) { throw new AggregateError([error, cleanupError], "Manager persona storage preparation failed."); }
+                throw error;
+            }
             return async () => {
-                unregister();
-                await requestTracker.stop();
+                const failures = [];
+                try { await registration.dispose(); } catch (error) { failures.push(error); }
+                try { await owner.stop(); } catch (error) { failures.push(error); }
+                if (failures.length === 1) throw failures[0];
+                if (failures.length > 1) throw new AggregateError(failures, "Manager persona storage cleanup failed.");
             };
-        }, "activate Manager persona plugin");
+        }, "activate Manager persona storage operations");
+        ctx.effect(async () => {
+            const registration = await runtime.managerPluginRoutes.registerOperationsAsync(context.identity.instanceId, runtime.personaIdentityOperations, context.lifecycle.signal);
+            return () => registration.dispose();
+        }, "activate Manager persona identity operations");
+        ctx.effect(async () => {
+            const registration = await runtime.managerPluginRoutes.registerOperationsAsync(context.identity.instanceId, runtime.personaHealthOperations, context.lifecycle.signal);
+            return () => registration.dispose();
+        }, "activate Manager persona health operations");
+        ctx.effect(async () => {
+            const registration = await runtime.managerPluginRoutes.registerOperationsAsync(context.identity.instanceId, runtime.personaCompanionOperations, context.lifecycle.signal);
+            return () => registration.dispose();
+        }, "activate Manager persona companion operations");
+        ctx.effect(async () => {
+            const registration = await runtime.managerPluginRoutes.registerOperationsAsync(context.identity.instanceId, runtime.personaRecordingOperations, context.lifecycle.signal);
+            return () => registration.dispose();
+        }, "activate Manager persona recording operations");
+        ctx.effect(async () => {
+            const registration = await runtime.managerPluginRoutes.registerOperationsAsync(context.identity.instanceId, runtime.languageStyleOperations, context.lifecycle.signal);
+            return () => registration.dispose();
+        }, "activate Manager language style operations");
+        ctx.effect(async () => {
+            const registration = await runtime.managerPluginRoutes.registerOperationsAsync(context.identity.instanceId, runtime.rolePanelOperations, context.lifecycle.signal);
+            return () => registration.dispose();
+        }, "activate Manager role-panel operations");
+        ctx.effect(async () => {
+            const registration = await runtime.managerPluginRoutes.registerOperationsAsync(context.identity.instanceId, [runtime.personaDirectoryOperation], context.lifecycle.signal);
+            return () => registration.dispose();
+        }, "activate Manager persona directory operation");
+        ctx.effect(async () => {
+            const registration = await runtime.managerPluginRoutes.registerOperationsAsync(context.identity.instanceId, runtime.personaMessagingOperations, context.lifecycle.signal);
+            return () => registration.dispose();
+        }, "activate Manager persona messaging operations");
 
                 await Promise.all(pendingEffects);
                 return disposeStartedEffects;

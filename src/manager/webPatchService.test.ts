@@ -1,23 +1,151 @@
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
+import nativeFs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import http from "node:http";
 import { once } from "node:events";
 import { test } from "node:test";
-import { buildWebPatch, verifyWebPatch, webPatchHash, webPatchPath, writeWebPatchJson } from "./webPatchCatalog.js";
+import { buildWebPatch, verifyWebPatch, webPatchBackend, webPatchHash, webPatchPath, writeWebPatchJson } from "./webPatchCatalog.js";
 import { WebPatchService, type WebPatchIdentity } from "./webPatchService.js";
 import { WebPatchWatcher } from "./webPatchWatcher.js";
+import { NativeWebguiStaticOwner } from "./nativeWebguiStaticOwner.js";
+import { createWebguiStaticOperations } from "./webguiStaticOperations.js";
+import { createCorePublicOperations, type CorePublicOperationsContext } from "./corePublicOperations.js";
+import { ManagerPluginRouteRegistry } from "./managerPluginRouteRegistry.js";
 import { handleWebPatchApi } from "./webPatchRoutes.js";
 
 const identity: WebPatchIdentity = { applicationGenerationId: "application", managerInstanceId: "manager", pluginGenerationId: "plugins" };
 
+function gate() {
+  let resolve!: () => void;
+  const promise = new Promise<void>(done => { resolve = done; });
+  return { promise, resolve };
+}
+
+test("stopping initial Web preparation joins the current file operation and removes its staging directory", async context => {
+  const sample = await fixture(context), entered = gate(), release = gate();
+  const stoppedState = path.join(sample.root, "stop-during-initialization");
+  const originalCopy = fs.copyFile.bind(fs);
+  const copy = context.mock.method(fs, "copyFile", async (source: Parameters<typeof fs.copyFile>[0], destination: Parameters<typeof fs.copyFile>[1]) => {
+    await originalCopy(source, destination);
+    if (String(destination).startsWith(stoppedState)) { entered.resolve(); await release.promise; }
+  });
+  const service = new WebPatchService({ packageRoot: sample.packageRoot, stateRoot: stoppedState, identity: () => identity,
+    serialize: async (_generation, action) => action() });
+  let stopping: Promise<void> | undefined;
+  try {
+    await Promise.race([entered.promise, service.ready.then(() => assert.fail("Initial preparation settled before the controlled file operation."))]);
+    let complete = false; stopping = service.stop().then(() => { complete = true; });
+    await new Promise(resolve => setTimeout(resolve, 20)); assert.equal(complete, false);
+    release.resolve(); await stopping;
+    assert.equal(service.status().error, undefined);
+    assert.deepEqual(await fs.readdir(service.candidates), []);
+    await assert.rejects(fs.stat(path.join(stoppedState, "states")), { code: "ENOENT" });
+  } finally {
+    release.resolve(); await Promise.allSettled([stopping, service.stop()]); copy.mock.restore();
+  }
+});
+
+test("cancelling backend hashing closes the real file stream before its owner settles", async context => {
+  const sample = await fixture(context), abort = new AbortController();
+  await sample.write("dist/slow-backend.js", "x".repeat(1024 * 1024));
+  const originalStream = nativeFs.createReadStream; let opened: nativeFs.ReadStream | undefined; let closed = false;
+  const mock = context.mock.method(nativeFs, "createReadStream", ((filename: nativeFs.PathLike, options?: Parameters<typeof nativeFs.createReadStream>[1]) => {
+    const stream = originalStream(filename, options);
+    if (String(filename).endsWith("slow-backend.js")) {
+      opened = stream; stream.once("close", () => { closed = true; });
+      stream.once("data", () => abort.abort(new Error("Fixture owner stopped")));
+    }
+    return stream;
+  }) as typeof nativeFs.createReadStream);
+  syncBuiltinESMExports();
+  try { await assert.rejects(webPatchBackend(sample.packageRoot, abort.signal), /abort|Fixture owner stopped/i); }
+  finally { mock.mock.restore(); syncBuiltinESMExports(); }
+  assert.ok(opened); assert.equal(closed, true); assert.equal(opened.destroyed, true); assert.equal(Reflect.get(opened, "fd"), null);
+  assert.equal((await fs.stat(path.join(sample.packageRoot, "dist/slow-backend.js"))).size, 1024 * 1024);
+});
+
+test("stop joins an accepted candidate import without cancelling its verified bytes", async context => {
+  const sample = await fixture(context), next = await sample.candidate(), entered = gate(), release = gate();
+  const originalCopy = fs.copyFile.bind(fs);
+  const mock = context.mock.method(fs, "copyFile", async (source: Parameters<typeof fs.copyFile>[0], destination: Parameters<typeof fs.copyFile>[1]) => {
+    await originalCopy(source, destination);
+    if (String(destination).includes(path.sep + ".import-")) { entered.resolve(); await release.promise; }
+  });
+  const importing = sample.service.importCandidate(next.source, next.revision);
+  let stopping: Promise<void> | undefined;
+  try {
+    await Promise.race([entered.promise, importing.then(() => assert.fail("Candidate import settled before the controlled file operation."))]);
+    let complete = false; stopping = sample.service.stop().then(() => { complete = true; });
+    await new Promise(resolve => setTimeout(resolve, 20)); assert.equal(complete, false);
+    release.resolve(); await importing; await stopping;
+    await verifyWebPatch(path.join(sample.service.candidates, next.revision), next.revision);
+    assert.equal((await fs.readdir(sample.service.candidates)).some(name => name.startsWith(".import-")), false);
+  } finally {
+    release.resolve(); await Promise.allSettled([importing, stopping, sample.service.stop()]); mock.mock.restore();
+  }
+});
+
+test("stop joins an accepted publication through its durable commit and preserves its receipt", async context => {
+  const sample = await fixture(context), next = await sample.candidate(), entered = gate(), release = gate();
+  await sample.service.importCandidate(next.source, next.revision);
+  const originalRename = fs.rename.bind(fs);
+  const mock = context.mock.method(fs, "rename", async (source: Parameters<typeof fs.rename>[0], destination: Parameters<typeof fs.rename>[1]) => {
+    if (String(destination).endsWith(`${sample.service.status().backend}.json`)) { entered.resolve(); await release.promise; }
+    await originalRename(source, destination);
+  });
+  const publishing = sample.service.publish({ ...identity, operationId: "shutdown-commit", candidate: next.revision, expectedRevision: 0 });
+  let stopping: Promise<void> | undefined;
+  try {
+    await Promise.race([entered.promise, publishing.then(() => assert.fail("Publication settled before the controlled durable commit."))]);
+    let complete = false; stopping = sample.service.stop().then(() => { complete = true; });
+    await new Promise(resolve => setTimeout(resolve, 20)); assert.equal(complete, false);
+    release.resolve(); assert.equal((await publishing).state, "committed"); await stopping;
+    const restarted = sample.start(); await restarted.ready;
+    assert.equal(restarted.operation("shutdown-commit")?.active, next.revision);
+  } finally {
+    release.resolve(); await Promise.allSettled([publishing, stopping, sample.service.stop()]); mock.mock.restore();
+  }
+});
+
+test("watcher stop cancels its uncommitted observation and joins asynchronous cleanup", async context => {
+  const sample = await fixture(context), entered = gate(), release = gate(); let abortObserved = false;
+  const errors: unknown[] = [];
+  const automatic = context.mock.method(sample.service, "automatic", async (_root: string, signal?: AbortSignal) => {
+    entered.resolve(); await new Promise<void>(resolve => signal!.addEventListener("abort", () => { abortObserved = true; resolve(); }, { once: true }));
+    await release.promise;
+  });
+  const watcher = new WebPatchWatcher(sample.packageRoot, sample.service, error => errors.push(error));
+  let stopping: Promise<void> | undefined;
+  try {
+    await entered.promise; let complete = false; stopping = watcher.stop().then(() => { complete = true; });
+    await new Promise(resolve => setTimeout(resolve, 20)); assert.equal(abortObserved, true); assert.equal(complete, false);
+    release.resolve(); await stopping; assert.deepEqual(errors, []);
+  } finally {
+    release.resolve(); await Promise.allSettled([stopping, watcher.stop()]); automatic.mock.restore();
+  }
+});
+
+test("native static manifest access checks compatibility and cannot mutate cached authority", async context => {
+  const sample = await fixture(context), revision = sample.service.status().active!;
+  const manifest = await sample.service.staticManifest(revision);
+  assert.equal(manifest.backend, sample.service.status().backend);
+  const original = manifest.files[0]!.sha256; manifest.files[0]!.sha256 = "changed-local-copy";
+  assert.equal((await sample.service.staticManifest(revision)).files[0]!.sha256, original);
+  await assert.rejects(sample.service.staticManifest("invalid-revision"));
+  await sample.service.stop(); await assert.rejects(sample.service.staticManifest(revision), /unavailable/);
+});
+
 async function fixture(context: { after(action: () => Promise<void>): void }) {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "web-patch-test-"));
+  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "web-patch-test-")));
   const packageRoot = path.join(root, "package");
   const stateRoot = path.join(root, "state");
   const services: WebPatchService[] = [];
+  const httpCleanups: Array<() => Promise<void>> = [];
   context.after(async () => {
+    await Promise.all(httpCleanups.map(close => close()));
     await Promise.all(services.map(service => service.stop()));
     await fs.rm(root, { recursive: true, force: true });
   });
@@ -52,23 +180,54 @@ async function fixture(context: { after(action: () => Promise<void>): void }) {
     const revision = await buildWebPatch(packageRoot, output);
     return { output, revision, source: path.join(output, revision) };
   }
-  return { root, packageRoot, stateRoot, service, start, write, candidate };
+  let serving: Promise<{ base: string }> | undefined;
+  function serve(owningService = service) {
+    return serving ??= (async () => {
+      const owner = new NativeWebguiStaticOwner({ packageRoot, webuiDistPath: path.join(packageRoot, "ribiwebgui/dist"), patches: owningService,
+        isControlPath: value => value.startsWith("/api/") || value === "/health" || value.startsWith("/_rabiroute/host/") });
+      const registry = new ManagerPluginRouteRegistry(), definitions = createWebguiStaticOperations(owner);
+      const staticRegistration = registry.registerHttpProxies("web-publication-static-fixture", [...definitions.resources, definitions.fallback]);
+      const publicRegistration = registry.registerOperations("web-publication-core-fixture", createCorePublicOperations({ identity: () => identity, webPatches: owningService } as unknown as CorePublicOperationsContext)
+        .filter(value => value.contract.pathTemplate.startsWith("/api/web-patches")));
+      const server = http.createServer((request, response) => {
+        const url = new URL(request.url!, "http://fixture");
+        if (url.pathname === "/health") { response.end("healthy"); return; }
+        if (handleWebPatchApi(request, url, response, { service: owningService, identity: null, readJson: async () => ({}), json: (target, status, body) => { target.writeHead(status, { "content-type": "application/json" }); target.end(JSON.stringify(body)); } })) return;
+        if (!registry.handle(request, url, response)) response.writeHead(404).end();
+      });
+      server.listen(0, "127.0.0.1"); await once(server, "listening");
+      httpCleanups.push(async () => { server.closeAllConnections(); await Promise.all([staticRegistration.dispose(), publicRegistration.dispose()]); await new Promise<void>(resolve => server.close(() => resolve())); assert.equal(owner.activeFileCount(), 0); });
+      return { base: `http://127.0.0.1:${(server.address() as import("node:net").AddressInfo).port}` };
+    })();
+  }
+  async function readShell() {
+    const { base } = await serve(), response = await fetch(base + "/"), body = await response.text();
+    assert.equal(response.status, 200, body);
+    const revision = body.match(/data-rabi-web-release="([a-f0-9]{64})"/)?.[1]; assert.ok(revision);
+    return { revision, body };
+  }
+  async function readAsset(revision: string, filename: string) {
+    const { base } = await serve(), response = await fetch(`${base}/_rabiroute/web/${revision}/${filename}`);
+    const body = await response.text(); assert.equal(response.status, 200, body); return { body };
+  }
+  return { root, packageRoot, stateRoot, service, start, write, candidate, serve, readShell, readAsset };
+
 }
 
 test("atomic release keeps old HTML, lazy assets, documentation and module entry pinned; rollback and restart preserve receipts", async context => {
   const sample = await fixture(context);
-  const original = (await sample.service.document())!;
+  const original = (await sample.readShell())!;
   const next = await sample.candidate();
   await sample.service.importCandidate(next.source, next.revision);
   const request = { ...identity, operationId: "publish", candidate: next.revision, expectedRevision: 0 };
   const receipt = await sample.service.publish(request);
   assert.equal(receipt.revision, 1);
   assert.deepEqual(await sample.service.publish(request), receipt);
-  assert.match((await sample.service.document())!.body, new RegExp(`/_rabiroute/web/${next.revision}/web/assets/main.js`));
+  assert.match((await sample.readShell())!.body, new RegExp(`/_rabiroute/web/${next.revision}/web/assets/main.js`));
   assert.match(original.body, new RegExp(`data-rabi-web-release="${original.revision}"`));
-  assert.match((await sample.service.read(original.revision, "web/assets/lazy.js")).body.toString(), /old/);
-  assert.equal((await sample.service.read(original.revision, "docs/guide.md")).body.toString(), "old guide");
-  assert.equal((await sample.service.read(next.revision, "docs/guide.md")).body.toString(), "new guide");
+  assert.match((await sample.readAsset(original.revision, "web/assets/lazy.js")).body.toString(), /old/);
+  assert.equal((await sample.readAsset(original.revision, "docs/guide.md")).body.toString(), "old guide");
+  assert.equal((await sample.readAsset(next.revision, "docs/guide.md")).body.toString(), "new guide");
   const modules = [{ id: "web-example", pluginId: "example", version: "1", rev: "legacy", entryPath: "web/client.mjs", instances: [] }];
   assert.equal((await sample.service.modules(modules, original.revision))[0]!.rev, original.revision);
   assert.match((await sample.service.module(modules, "web-example", original.revision, "web/client.mjs"))!.source.toString(), new RegExp(original.revision));
@@ -76,7 +235,7 @@ test("atomic release keeps old HTML, lazy assets, documentation and module entry
   await assert.rejects(sample.service.publish({ ...request, operationId: "stale" }), /baseline/);
   await assert.rejects(sample.service.publish({ ...request, operationId: "identity", managerInstanceId: "old" }), /identity/);
   await sample.service.publish({ ...identity, operationId: "rollback", candidate: original.revision, expectedRevision: 1 });
-  assert.equal((await sample.service.document())!.revision, original.revision);
+  assert.equal((await sample.readShell())!.revision, original.revision);
   await sample.service.stop();
   const restored = sample.start();
   await restored.ready;
@@ -283,16 +442,7 @@ test("missing versioned module never falls back to a different release", async c
 test("continuous HTTP reads remain available during publication; old assets and HEAD stay valid", async context => {
   const sample = await fixture(context);
   const baseline = sample.service.status().active!;
-  const server = http.createServer((request, response) => {
-    const url = new URL(request.url!, "http://localhost");
-    if (handleWebPatchApi(request, url, response, { service: sample.service, identity: null,
-      readJson: async () => ({}), json: (target, status, body) => { target.writeHead(status, { "content-type": "application/json" }); target.end(JSON.stringify(body)); } })) return;
-    response.end("healthy");
-  });
-  server.listen(0, "127.0.0.1");
-  await once(server, "listening");
-  context.after(async () => { server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); });
-  const base = `http://127.0.0.1:${(server.address() as import("node:net").AddressInfo).port}`;
+  const { base } = await sample.serve();
   const next = await sample.candidate();
   await sample.service.importCandidate(next.source, next.revision);
   const publication = sample.service.publish({ ...identity, operationId: "concurrent", candidate: next.revision, expectedRevision: 0 });
@@ -309,4 +459,147 @@ test("continuous HTTP reads remain available during publication; old assets and 
   assert.match(head.headers.get("cache-control")!, /immutable/);
   assert.equal((await fetch(`${base}/_rabiroute/host/web-patches`, { method: "POST" })).status, 403);
   assert.equal((await fetch(`${base}/api/web-patches/operations/concurrent`)).status, 200);
+});
+
+type CapacityFixture = Awaited<ReturnType<typeof fixture>>;
+
+async function retainCandidateHistory(sample: CapacityFixture, count: number, prefix: string) {
+  const retained: Array<{ revision: string; source: string; manifest: string }> = [];
+  for (let index = 0; index < count; index++) {
+    const next = await sample.candidate(`${prefix}-${index}`);
+    const destination = path.join(sample.service.candidates, next.revision);
+    await fs.cp(next.source, destination, { recursive: true, errorOnExist: true, force: false });
+    retained.push({ revision: next.revision, source: next.source, manifest: await fs.readFile(path.join(destination, "manifest.json"), "utf8") });
+  }
+  return retained;
+}
+
+test("capacity: foreign backend history does not consume current slots or read foreign payloads", async context => {
+  const sample = await fixture(context), originalBackendSource = await fs.readFile(path.join(sample.packageRoot, "dist/manager.js"));
+  await sample.write("dist/manager.js", "export const version = 2;");
+  const retained = await retainCandidateHistory(sample, 65, "foreign");
+  const foreignBackend = JSON.parse(retained[0]!.manifest).backend;
+  await fs.writeFile(path.join(sample.packageRoot, "dist/manager.js"), originalBackendSource);
+  const evidencePath = path.join(sample.stateRoot, "states", foreignBackend + ".json");
+  await fs.mkdir(path.dirname(evidencePath), { recursive: true });
+  const evidence = '{"unknownOldReceipt":"preserve exactly"}'; await fs.writeFile(evidencePath, evidence);
+  const next = await sample.candidate("current-after-history"), roots = retained.map(item => path.join(sample.service.candidates, item.revision) + path.sep);
+  let payloadReads = 0;
+  const originalRead = fs.readFile.bind(fs), originalStream = nativeFs.createReadStream;
+  const read = context.mock.method(fs, "readFile", (async (...args: Parameters<typeof fs.readFile>) => {
+    if (roots.some(root => String(args[0]).startsWith(root)) && !String(args[0]).endsWith("manifest.json")) payloadReads++;
+    return originalRead(...args);
+  }) as typeof fs.readFile);
+  const stream = context.mock.method(nativeFs, "createReadStream", ((filename: nativeFs.PathLike, options?: Parameters<typeof nativeFs.createReadStream>[1]) => {
+    if (roots.some(root => String(filename).startsWith(root))) payloadReads++;
+    return originalStream(filename, options);
+  }) as typeof nativeFs.createReadStream); syncBuiltinESMExports();
+  try { await sample.service.importCandidate(next.source, next.revision); }
+  finally { read.mock.restore(); stream.mock.restore(); syncBuiltinESMExports(); }
+  assert.equal(payloadReads, 0);
+  for (const old of retained) assert.equal(await fs.readFile(path.join(sample.service.candidates, old.revision, "manifest.json"), "utf8"), old.manifest);
+  assert.equal(await fs.readFile(evidencePath, "utf8"), evidence);
+  assert.equal((await sample.service.staticManifest(next.revision)).backend, sample.service.status().backend);
+});
+
+test("capacity: a full current backend rejects new imports but preserves existing reads and idempotency", async context => {
+  const sample = await fixture(context), active = sample.service.status().active!;
+  const retained = await retainCandidateHistory(sample, 63, "current-full"), next = await sample.candidate("too-many");
+  await assert.rejects(sample.service.importCandidate(next.source, next.revision), /retention limit/);
+  await sample.service.importCandidate(retained[0]!.source, retained[0]!.revision);
+  assert.equal((await sample.service.staticManifest(active)).backend, sample.service.status().backend);
+  assert.equal((await sample.readAsset(active, "docs/guide.md")).body, "old guide");
+  assert.equal(sample.service.status().active, active);
+  assert.equal((await fs.readdir(sample.service.candidates)).filter(name => /^[a-f0-9]{64}$/.test(name)).length, 64);
+});
+
+test("capacity: an existing baseline still initializes when historical current-backend count already exceeds 64", async context => {
+  const sample = await fixture(context), active = sample.service.status().active!;
+  const retained = await retainCandidateHistory(sample, 65, "overfull");
+  await sample.write("ribiwebgui/dist/assets/lazy.js", 'export const value = "old";'); await sample.write("docs/guide.md", "old guide");
+  const restarted = sample.start(); await restarted.ready;
+  assert.equal(restarted.status().state, "ready", restarted.status().error); assert.equal(restarted.status().active, active);
+  await restarted.importCandidate(retained[0]!.source, retained[0]!.revision);
+  assert.equal((await restarted.staticManifest(active)).backend, restarted.status().backend);
+  const next = await sample.candidate("new-overfull");
+  await assert.rejects(restarted.importCandidate(next.source, next.revision), /retention limit/);
+  assert.equal(sample.service.status().active, active);
+});
+
+test("capacity: a real cold owner serves its new installed baseline despite full history and rejects optional imports", async context => {
+  const sample = await fixture(context); await retainCandidateHistory(sample, 63, "cold-full");
+  const next = await sample.candidate("new-installed-baseline");
+  await sample.service.stop(); assert.equal(sample.service.status().active !== next.revision, true);
+  const restarted = sample.start(); await restarted.ready;
+  assert.equal(restarted.status().state, "ready", restarted.status().error); assert.equal(restarted.status().active, next.revision);
+  const { base } = await sample.serve(restarted);
+  const shell = await fetch(base + "/"); assert.equal(shell.status, 200); assert.match(await shell.text(), new RegExp(`data-rabi-web-release="${next.revision}"`));
+  const asset = await fetch(`${base}/_rabiroute/web/${next.revision}/web/assets/lazy.js`); assert.equal(asset.status, 200); assert.match(await asset.text(), /new-installed-baseline/);
+  const state = await fetch(base + "/api/web-patches"); assert.equal(state.status, 200); assert.equal((await state.json()).data.active, next.revision);
+  const optional = await sample.candidate("optional-after-cold-full");
+  await assert.rejects(restarted.importCandidate(optional.source, optional.revision), /retention limit/);
+  const after = await fetch(base + "/"); assert.equal(after.status, 200); assert.match(await after.text(), new RegExp(next.revision));
+  assert.equal(restarted.status().active, next.revision);
+});
+
+
+test("capacity: optional imports wait for installed baseline readiness before checking their final slot", async context => {
+  const sample = await fixture(context); await retainCandidateHistory(sample, 62, "baseline-order");
+  const baseline = await sample.candidate("baseline-last-slot"), next = await sample.candidate("early-import");
+  await sample.write("ribiwebgui/dist/assets/lazy.js", 'export const value = "baseline-last-slot";'); await sample.write("docs/guide.md", "baseline-last-slot guide");
+  const entered = gate(), release = gate(), originalCopy = fs.copyFile.bind(fs); let held = false, importingCopies = 0;
+  const copy = context.mock.method(fs, "copyFile", async (source: Parameters<typeof fs.copyFile>[0], destination: Parameters<typeof fs.copyFile>[1]) => {
+    await originalCopy(source, destination);
+    if (String(destination).includes(path.sep + ".import-")) importingCopies++;
+    if (!held && String(destination).startsWith(sample.service.candidates) && String(destination).includes(path.sep + ".staging-")) { held = true; entered.resolve(); await release.promise; }
+  });
+  const restarted = sample.start(), importing = restarted.importCandidate(next.source, next.revision);
+  const outcome = importing.then(() => ({ ok: true, error: undefined }), error => ({ ok: false, error }));
+  try { await entered.promise; await new Promise<void>(resolve => setImmediate(resolve)); assert.equal(importingCopies, 0); }
+  finally { release.resolve(); }
+  await restarted.ready; const result = await outcome; copy.mock.restore();
+  assert.equal(restarted.status().state, "ready", restarted.status().error); assert.equal(restarted.status().baseline, baseline.revision);
+  assert.equal(result.ok, false); assert.match(String(result.error), /retention limit/);
+  assert.equal((await fs.readdir(sample.service.candidates)).filter(name => /^[a-f0-9]{64}$/.test(name)).length, 64);
+});
+
+test("capacity: two concurrent imports serialize the final current-backend slot", async context => {
+  const sample = await fixture(context); await retainCandidateHistory(sample, 62, "import-order");
+  const first = await sample.candidate("first-last-slot"), second = await sample.candidate("second-last-slot");
+  const results = await Promise.allSettled([sample.service.importCandidate(first.source, first.revision), sample.service.importCandidate(second.source, second.revision)]);
+  assert.equal(results.filter(result => result.status === "fulfilled").length, 1);
+  const failed = results.find(result => result.status === "rejected"); assert.ok(failed && failed.status === "rejected"); assert.match(String(failed.reason), /retention limit/);
+  assert.equal((await fs.readdir(sample.service.candidates)).filter(name => /^[a-f0-9]{64}$/.test(name)).length, 64);
+});
+
+test("capacity: invalid manifest history is retained but cannot consume records or admit invalid new input", async context => {
+  const sample = await fixture(context); await retainCandidateHistory(sample, 62, "usable");
+  const corrupt = await sample.candidate("corrupt-cache"), corruptRoot = path.join(sample.service.candidates, corrupt.revision);
+  await fs.cp(corrupt.source, corruptRoot, { recursive: true, errorOnExist: true, force: false });
+  await fs.writeFile(path.join(corruptRoot, "manifest.json"), "existing-corrupt-manifest");
+  const unknown = path.join(sample.service.candidates, "f".repeat(64)); await fs.mkdir(unknown); await fs.writeFile(path.join(unknown, "manifest.json"), "unknown-evidence");
+  const next = await sample.candidate("valid-after-corruption"); await sample.service.importCandidate(next.source, next.revision);
+  assert.equal(await fs.readFile(path.join(corruptRoot, "manifest.json"), "utf8"), "existing-corrupt-manifest");
+  assert.equal(await fs.readFile(path.join(unknown, "manifest.json"), "utf8"), "unknown-evidence");
+  const invalid = await sample.candidate("invalid-new"); await fs.writeFile(path.join(invalid.source, "docs/guide.md"), "invalid-input");
+  await assert.rejects(sample.service.importCandidate(invalid.source, invalid.revision), /verification/);
+  await assert.rejects(fs.stat(path.join(sample.service.candidates, invalid.revision)), { code: "ENOENT" });
+});
+
+test("capacity: current-backend quota counts manifest records even when existing payload access is refused", async context => {
+  const sample = await fixture(context); await retainCandidateHistory(sample, 63, "manifest-records");
+  const next = await sample.candidate("beyond-manifest-records"), originalStat = fs.stat.bind(fs);
+  let payloadAttempts = 0;
+  const stats = context.mock.method(fs, "stat", (async (...args: Parameters<typeof fs.stat>) => {
+    const parts = path.relative(sample.service.candidates, String(args[0])).split(path.sep);
+    if (parts.length > 1 && /^[a-f0-9]{64}$/.test(parts[0]!) && parts[1] !== "manifest.json") { payloadAttempts++; throw new Error("Existing payload access refused"); }
+    return originalStat(...args);
+  }) as typeof fs.stat);
+  try {
+    await assert.rejects(sample.service.importCandidate(next.source, next.revision), /retention limit/);
+    assert.equal(payloadAttempts, 0);
+    await assert.rejects(verifyWebPatch(path.join(sample.service.candidates, sample.service.status().active!), sample.service.status().active!), /Existing payload access refused/);
+    assert.ok(payloadAttempts > 0);
+  } finally { stats.mock.restore(); }
+  assert.equal(sample.service.status().state, "ready");
 });

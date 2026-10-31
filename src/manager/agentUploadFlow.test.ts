@@ -1,3 +1,4 @@
+import { assertTrustedLanAgentPrincipal } from "./lanAgentRequestAccess.js";
 import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
 import { once } from "node:events";
@@ -50,18 +51,18 @@ async function fixture(t: test.TestContext, captionFails = false, hashSink = fal
   const nodeId = "fixture-node";
   const credential = authority.enroll(authority.issueBootstrapTicket().ticket, nodeId);
   for (const agentId of ["fixture-a", "fixture-b"]) {
-    authority.approveAndEnableAgent(nodeId, { agentId, provider: "dsh", sessionId: `${agentId}-session` }, authority.getSnapshot().revision);
   }
   const storeRoot = path.join(rootDir, "uploads");
   let now = Date.now();
   const store = new AgentUploadStore({ rootDir: storeRoot, ttlMs: 60_000, now: () => now });
   const assertAuthorized = (source: TrustedLanAgentSource) => {
-    const binding = authority.getApprovedAgentBinding(source.nodeId, source.agentId);
-    if (!authority.isAgentEnabled(source.nodeId, source.agentId) || binding?.sessionId !== source.sessionId || binding.provider !== source.provider) {
-      throw new Error("Fixture Agent authority revoked or rebound.");
-    }
+    if (!authority.getNodeAuthorization(source.nodeId)) throw new Error("revoked computer");
   };
-  uploads = createAgentUploadRoutes({ store, assertAuthorized });
+  uploads = createAgentUploadRoutes({ store, assertAuthorized, assertConnectionAuthorized(request) {
+    const source = getTrustedLanAgentSource(request);
+    if (!source) throw new Error("Authenticated connection required");
+    assertAuthorized(source);
+  } });
   const sources = new Map<string, TrustedLanAgentSource>();
   const uploadRequests: string[] = [];
   const json = (response: http.ServerResponse, status: number, body: unknown) => {
@@ -74,10 +75,10 @@ async function fixture(t: test.TestContext, captionFails = false, hashSink = fal
       json(response, access.kind === "denied" ? access.status : 401, { code: "forbidden" });
       return;
     }
-    const binding = authority.getApprovedAgentBinding(access.nodeId, access.agentId);
+    const binding = assertTrustedLanAgentPrincipal(request)?.source;
     if (!binding?.sessionId || binding.provider !== "dsh") { json(response, 403, { code: "forbidden" }); return; }
     setTrustedLanAgentSource(request, { ...access, provider: binding.provider, sessionId: binding.sessionId, sessionName: "Fixture" });
-    sources.set(access.agentId, getTrustedLanAgentSource(request)!);
+    sources.set(binding.sessionId.replace(/-session$/, ""), getTrustedLanAgentSource(request)!);
     if (request.url === "/meta") {
       json(response, 200, { health: { state: "healthy", requiredReady: true, live: true }, applicationGenerationId: "fixture-generation", managerInstanceId: "fixture-manager" });
       return;
@@ -88,7 +89,7 @@ async function fixture(t: test.TestContext, captionFails = false, hashSink = fal
   servers.push(manager);
   const managerUrl = await listen(manager);
   const { createManagerClient } = await import(clientModuleUrl);
-  const client = (agentId = "fixture-a"): ManagerClient => createManagerClient({ managerUrl, credential: credential.token, agentId });
+  const client = (agentId = "fixture-a"): ManagerClient => createManagerClient({ managerUrl, credential: credential.token, agentType:"dsh",sessionId:`${agentId}-session` });
   const calls: Array<{ action: string; body: Record<string, unknown>; bytes?: Buffer; size?: number; sha256?: string; largestChunk?: number }> = [];
   const napcat = http.createServer((request, response) => {
     const chunks: Buffer[] = [];
@@ -133,7 +134,7 @@ async function fixture(t: test.TestContext, captionFails = false, hashSink = fal
     }],
     withManagedGroupFile: (fileId, expectedSha256, send) => {
       assertAuthorized(source);
-      return store.withFile({ nodeId: source.nodeId, agentId: source.agentId }, fileId, file => {
+      return store.withSharedFile(fileId, file => {
         assertAuthorized(source);
         if (file.sha256 !== expectedSha256) throw new Error("Managed upload content no longer matches its receipt.");
         leases++;
@@ -186,7 +187,7 @@ test("real client upload and GET feed store-owned bytes and DTO filename to the 
   assert.equal(sent.body.sentFileName, dto.fileName);
   assert.equal(sent.body.sentFileId, "fixture-platform-file");
   assert.deepEqual(f.calls.map(call => call.action), ["/upload_group_file", "/send_group_msg"]);
-  assert.equal(f.calls[0].body.file, f.store.resolve({ nodeId: f.nodeId, agentId: "fixture-a" }, dto.id).path);
+  assert.equal(f.calls[0].body.file, f.store.resolve({ nodeId: f.nodeId, agentId: "dsh" }, dto.id).path);
   assert.equal(f.calls[0].body.name, dto.fileName);
   assert.notEqual(path.basename(String(f.calls[0].body.file)), dto.fileName);
   assert.deepEqual(f.calls[0].bytes, f.bytes);
@@ -213,18 +214,18 @@ test("caption failure stays sent and stable delivery replay never uploads the fi
   assert.equal(f.uploadRequests.filter(value => value.startsWith("PUT ")).length, 1);
 });
 
-test("a different approved Agent cannot GET or send another Agent's fileId", async t => {
+test("another authenticated Agent can query and send the existing uploaded resource", async t => {
   const f = await fixture(t);
   const put = await f.client().upload(f.localFile, randomUUID());
   assert.equal(put.ok, true);
   const dto: AgentUploadDto = JSON.parse(put.body).data;
-  const deniedGet = await f.client("fixture-b").invoke("GET", `/api/agent/uploads/${dto.id}`);
-  assert.equal(deniedGet.statusCode, 404);
-  const deniedSend = await f.send(f.request(dto, "fixture-b"), "fixture-b");
-  assert.equal(deniedSend.body.status, "failed");
-  assert.equal(deniedSend.body.reason, "Managed group file delivery failed.");
-  assert.equal(f.leases(), 0);
-  assert.equal(f.calls.length, 0);
+  const get = await f.client("fixture-b").invoke("GET", `/api/agent/uploads/${dto.id}`);
+  assert.equal(get.statusCode, 200);
+  assert.deepEqual(JSON.parse(get.body).data, dto);
+  const sent = await f.send(f.request(dto, "fixture-b"), "fixture-b");
+  assert.equal(sent.body.status, "sent");
+  assert.equal(f.leases(), 1);
+  assert.deepEqual(f.calls[0].bytes, f.bytes);
 });
 
 test("expired UUID reuse cannot send replacement bytes through an old content receipt", async t => {
@@ -318,15 +319,14 @@ test("disabled Agent and revoked node reject upload and deny a previously approv
   const f = await fixture(t);
   const uploaded = await f.client().upload(f.localFile, randomUUID());
   assert.equal(uploaded.ok, true);
+  f.authority.setNodeEnabled(f.nodeId, false);
   const dto: AgentUploadDto = JSON.parse(uploaded.body).data;
-  f.authority.setAgentEnabled(f.nodeId, "fixture-a", false);
   const disabledId = randomUUID();
   const disabled = await f.client().upload(f.localFile, disabledId);
   assert.equal(disabled.statusCode, 403);
   assert.equal(disabled.ok, false);
   assert.throws(() => f.store.get({ nodeId: f.nodeId, agentId: "fixture-a" }, disabledId), /not_found/);
   await assert.rejects(() => f.send(f.request(dto)), /revoked/);
-  f.authority.setAgentEnabled(f.nodeId, "fixture-a", true);
   f.authority.revokeNode(f.nodeId);
   const revokedId = randomUUID();
   const revoked = await f.client().upload(f.localFile, revokedId);

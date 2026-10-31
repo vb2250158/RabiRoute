@@ -37,7 +37,7 @@ class MainActivity : Activity() {
     private val requestNotifications = 9033
     private val managerTransport = lazy { com.rabi.link.transport.RabiManagerHttpTransport(applicationContext) }
     private val sdk by lazy { RabiRouteSdk(managerTransport = managerTransport.value) }
-    private val discoverySdk = RabiRouteSdk(timeoutMs = 160)
+    private val discoverySdk = RabiRouteSdk(timeoutMs = 160, discoveryTimeout = { key, fallback -> com.rabi.link.transport.ScopedManagerTimeouts.active(this).get(key,fallback) })
     private val pcs = mutableListOf<RabiLinkPc>()
     private val discoveredManagers = mutableListOf<RabiInstance>()
     private lateinit var relayUrl: EditText
@@ -883,6 +883,7 @@ class MainActivity : Activity() {
         val entries = listOf(
             RabiMobileUi.actionRow(this, R.drawable.ic_ui_palette, "皮肤与外观", grouped = true) { RabiAppearanceActivity.open(this) },
             RabiMobileUi.actionRow(this, R.drawable.ic_ui_devices, "记录与设备", grouped = true) { openAllDayRecording() },
+            RabiMobileUi.actionRow(this, R.drawable.ic_ui_devices, "位置记录", grouped = true) { startActivity(Intent(this, com.rabi.link.location.LocationSettingsActivity::class.java)) },
             RabiMobileUi.settingsGroup(this, R.drawable.ic_ui_account, "连接与账号", serverCard(), screen == Screen.SETUP, grouped = true),
             RabiMobileUi.settingsGroup(this, R.drawable.ic_ui_volume, "语音与消息", conversationCard(), grouped = true),
             RabiMobileUi.settingsGroup(this, R.drawable.ic_ui_tune, "连接诊断", conversationRuntimeCard(), grouped = true),

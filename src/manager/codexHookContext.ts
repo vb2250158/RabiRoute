@@ -131,6 +131,8 @@ export type CodexHookContextRequest = {
 };
 
 export type CodexHookContextResult = {
+  /** Monotonic milliseconds relative to Hook entry; labels contain no request content. */
+  timings?: { name: string; startMs: number; durationMs: number }[];
   followup?: { decision: "block"; reason: string };
   completionDeliveries?: import("./agentCompletionDelivery.js").CompletionDeliveryResult[];
   action: "none" | "bind" | "status" | "refresh" | "off";
@@ -157,6 +159,10 @@ export class CodexHookPlanStorageUnavailableError extends Error {
 }
 
 export type CodexHookContextServiceOptions = {
+  /** Reports Stop progress before awaiting each stage, including failed stages. Observers cannot change Hook results. */
+  onHookStage?: (request: CodexHookContextRequest, stage: {
+    name: string; phase: "started" | "completed" | "failed"; startMs: number; durationMs?: number;
+  }) => void;
   readContext?: (input: CodexHookContextReadRequest) => Promise<CodexHookContextReadReply>;
   deliverAgentCompletion?: (request: CodexHookContextRequest, roleIds?: readonly string[]) => Promise<import("./agentCompletionDelivery.js").CompletionDeliveryResult[]>;
   rolesRoot: () => string;
@@ -388,6 +394,7 @@ export function parseCodexHookControl(prompt: string): CodexHookControl | null {
 }
 
 export class CodexHookContextService {
+  private readonly onHookStage?: CodexHookContextServiceOptions["onHookStage"];
   private readonly readContext?: CodexHookContextServiceOptions["readContext"];
   private readonly contextQueues = new Map<string, { tail: Promise<void>; pending: number }>();
   private readonly rolesRoot: () => string;
@@ -405,6 +412,7 @@ export class CodexHookContextService {
   private readonly deliverAgentCompletion?: CodexHookContextServiceOptions["deliverAgentCompletion"];
 
   constructor(options: CodexHookContextServiceOptions) {
+    this.onHookStage = options.onHookStage;
     this.readContext = options.readContext;
     this.deliverAgentCompletion = options.deliverAgentCompletion;
     this.rolesRoot = options.rolesRoot;
@@ -506,6 +514,33 @@ export class CodexHookContextService {
   }
 
   async handleHook(request: CodexHookContextRequest): Promise<CodexHookContextResult> {
+    const started = performance.now();
+    const timings: NonNullable<CodexHookContextResult["timings"]> = [];
+    const measure = async <T>(name: string, task: () => T | Promise<T>): Promise<T> => {
+      const start = performance.now();
+      const report = (phase: "started" | "completed" | "failed", durationMs?: number): void => {
+        if (request.eventName !== "Stop" || !this.onHookStage) return;
+        try { this.onHookStage(request, { name, phase, startMs: start - started, ...(durationMs === undefined ? {} : { durationMs }) }); }
+        catch (error) { console.warn("[rabi] Stop stage diagnostic observer failed; Hook execution continues."); }
+      };
+      let phase: "completed" | "failed" = "completed";
+      report("started");
+      try { return await task(); }
+      catch (error) { phase = "failed"; throw error; }
+      finally {
+        const durationMs = performance.now() - start;
+        timings.push({ name, startMs: start - started, durationMs });
+        report(phase, durationMs);
+      }
+    };
+    const result = await this.handleMeasuredHook(request, measure);
+    return { ...result, timings };
+  }
+
+  private async handleMeasuredHook(
+    request: CodexHookContextRequest,
+    measure: <T>(name: string, task: () => T | Promise<T>) => Promise<T>
+  ): Promise<CodexHookContextResult> {
     this.assertSessionPersonaOwner?.(request.sessionId, request.cwd);
     const planRoleIds = request.eventName === "Stop" ? this.sessionPlanRoleIds(request.sessionId) : undefined;
     // A bound Stop owns only that persona's plans. Unbound sessions still need
@@ -513,10 +548,9 @@ export class CodexHookContextService {
     if (request.eventName === "Stop" && this.planStorageReady?.(planRoleIds) === false) {
       throw new CodexHookPlanStorageUnavailableError();
     }
-    const toolDecision = agentCommunicationToolDenial(
-      request,
-      this.isManagedAgentSession?.(request) === true
-    );
+    const toolDecision = request.eventName === "PreToolUse"
+      ? agentCommunicationToolDenial(request, this.isManagedAgentSession?.(request) === true)
+      : undefined;
     if (toolDecision) {
       return {
         action: "none",
@@ -527,13 +561,13 @@ export class CodexHookContextService {
     }
     const enabled = !this.hookEnabled || this.hookEnabled(request);
     if (request.eventName === "Stop") {
-      const followup = this.planFollowup(request, planRoleIds);
+      const followup = await measure("plan-followup", () => this.planFollowup(request, planRoleIds));
       if (followup) return { action: "none", binding: this.getBinding(request.sessionId), additionalContext: "", followup };
-      const result = await this.handleStop(request, enabled, planRoleIds);
+      const result = await this.handleStop(request, enabled, planRoleIds, measure);
       if (!result.additionalContext.trim() && result.planTaskCompletion?.status !== "failed"
         && result.agentRequestStop?.status !== "failed" && result.projectFileChangeReminder?.status !== "failed"
         && this.deliverAgentCompletion) {
-        result.completionDeliveries = await this.deliverAgentCompletion(request, planRoleIds);
+        result.completionDeliveries = await measure("completion-delivery", () => this.deliverAgentCompletion!(request, planRoleIds));
       }
       return result;
     }
@@ -545,7 +579,7 @@ export class CodexHookContextService {
         additionalContext: ""
       };
     }
-    return this.readContext ? this.queueContext(request) : this.handleContext(request);
+    return measure("context-build", () => this.readContext ? this.queueContext(request) : this.handleContext(request));
   }
 
   handleContext(request: CodexHookContextRequest): CodexHookContextResult {
@@ -821,10 +855,11 @@ export class CodexHookContextService {
     };
   }
 
-  private async handleStop(request: CodexHookContextRequest, planCompletionEnabled: boolean, planRoleIds?: readonly string[]): Promise<CodexHookContextResult> {
-    await this.recordChatReply(request);
-    const agentRequestStop = await this.recordAgentRequestStopResult(request);
-    const projectFileChangeReminder = await this.handleProjectFileChangeStop(request, planRoleIds);
+  private async handleStop(request: CodexHookContextRequest, planCompletionEnabled: boolean, planRoleIds: readonly string[] | undefined,
+    measure: <T>(name: string, task: () => T | Promise<T>) => Promise<T>): Promise<CodexHookContextResult> {
+    await measure("chat-history", () => this.recordChatReply(request));
+    const agentRequestStop = await measure("agent-request-stop", () => this.recordAgentRequestStopResult(request));
+    const projectFileChangeReminder = await measure("file-change-reminder", () => this.handleProjectFileChangeStop(request, planRoleIds));
     if (projectFileChangeReminder.result.status === "delivered") {
       if (planCompletionEnabled) void this.handlePlanStop(request, planRoleIds).catch(() => undefined);
       return {
@@ -841,7 +876,7 @@ export class CodexHookContextService {
       };
     }
     const planResult = planCompletionEnabled
-      ? await this.handlePlanStop(request, planRoleIds)
+      ? await measure("plan-completion", () => this.handlePlanStop(request, planRoleIds))
       : {
           action: "none" as const,
           binding: this.getBinding(request.sessionId),
@@ -991,15 +1026,15 @@ export class CodexHookContextService {
     const binding = this.getBinding(sessionId);
     const matches = (planRoleIds ?? this.listRoles()).flatMap((roleId) => {
       const role = this.requireRole(roleId);
-      const plans = this.listPlansOrCold(role.roleDir);
+      const plans = this.listPlansOrCold(role.roleDir).filter(plan => (
+        plan.taskBinding?.sessionId === sessionId && plan.taskBinding.completionHook?.enabled === true
+      ));
       if (plans.length === 0) return [];
       const workflow = ensurePersonaPlanWorkflow(role.roleDir).workflow;
       return plans
         .filter((plan) => (
           planCanAutoAdvance(plan, workflow)
           && (planStatusDefinition(workflow, plan.status)?.views.includes("current") === true)
-          && plan.taskBinding?.sessionId === sessionId
-          && plan.taskBinding.completionHook?.enabled === true
         ))
         .map((plan) => ({ ...role, plan }));
     });

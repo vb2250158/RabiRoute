@@ -1,4 +1,5 @@
 import { sameCodexWorkspace } from "../codexTaskIdentity.js";
+import { createHash } from "node:crypto";
 import type { AgentRequestParty } from "./store.js";
 
 /** Full opaque owner identity; names and workspaces are not owner substitutes. */
@@ -38,7 +39,26 @@ export function normalizeAgentRequestEndpoint(value: AgentRequestEndpoint): Agen
 
 export function sameAgentEndpoint(left?: AgentRequestEndpoint, right?: AgentRequestEndpoint): boolean {
   return !!left && !!right && ["kind", "managerInstanceId", "instanceId", "nodeId", "agentId", "provider", "sessionId", "authorizationIncarnation"]
-    .every(key => left[key as keyof AgentRequestEndpoint] === right[key as keyof AgentRequestEndpoint]);
+    .every(key => key === "agentId" && left.kind === "instance" && right.kind === "instance" || left[key as keyof AgentRequestEndpoint] === right[key as keyof AgentRequestEndpoint]);
+}
+
+/** Instance catalog aliases locate a backend; they do not create a different session owner. */
+export function stableAgentEndpointIdentity(value: AgentRequestEndpoint) {
+  const normalized = normalizeAgentRequestEndpoint(value);
+  if (normalized.kind !== "instance") return normalized;
+  const { agentId: _alias, ...identity } = normalized;
+  return identity;
+}
+
+/** Rebound authority must still locate its original reservation before authorization rejects it. */
+export function agentDeliverySourceIdentity(value: AgentRequestEndpoint): string {
+  const { authorizationIncarnation: _incarnation, ...identity } = stableAgentEndpointIdentity(value);
+  return JSON.stringify(identity);
+}
+
+export function sourceScopedAgentDeliveryId(source: AgentRequestEndpoint, callerDeliveryId: string, legacyAlias = false): string {
+  return `agent-${createHash("sha256").update(JSON.stringify([source.managerInstanceId, source.kind, source.instanceId,
+    source.nodeId, source.kind === "instance" && !legacyAlias ? undefined : source.agentId, source.provider, source.sessionId, callerDeliveryId])).digest("hex")}`;
 }
 
 export function sameAgentParty(left: AgentRequestParty, right: AgentRequestParty): boolean {

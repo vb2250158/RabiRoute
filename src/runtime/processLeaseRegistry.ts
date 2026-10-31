@@ -1,3 +1,4 @@
+import { getTimeoutMs } from "../shared/timeoutSettings.js";
 import type { ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { stopChildProcessTree } from "./windowsProcessTree.js";
@@ -50,7 +51,7 @@ export class ProcessLeaseRegistry {
     private readonly stopProcess: (child: ChildProcess) => Promise<void> = child => stopChildProcessTree(child),
     options: Readonly<{ terminationTimeoutMs?: number }> = {}
   ) {
-    this.#terminationTimeoutMs = Math.max(1, Math.floor(options.terminationTimeoutMs ?? 5_000));
+    this.#terminationTimeoutMs = Math.max(1, Math.floor(options.terminationTimeoutMs ?? getTimeoutMs("backend.runtime.processLeaseRegistry.owner.Math.floor.terminationTimeoutMs", 5_000)));
   }
 
   launch(

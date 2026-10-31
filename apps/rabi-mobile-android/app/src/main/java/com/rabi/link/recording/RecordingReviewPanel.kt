@@ -19,6 +19,10 @@ import androidx.media3.exoplayer.rtsp.RtspMediaSource
 import androidx.media3.ui.PlayerView
 import com.rabi.link.RabiConversationService
 import com.rabi.link.RabiMobileUi
+import com.rabi.link.location.LocationRepository
+import com.rabi.link.location.LocationSettings
+import com.rabi.link.location.LocationSettingsActivity
+import com.rabi.link.location.SavedLocation
 import org.json.JSONObject
 import java.io.File
 import java.text.SimpleDateFormat
@@ -37,7 +41,7 @@ class RecordingReviewPanel(private val context: Context, private val share: (Rec
     private var archivePending = emptyList<Item>()
     private val archiveNext = RabiMobileUi.compactAction(context, "下一页（早→晚）") { loadArchive(true) }.apply { visibility = View.GONE }
 
-    private data class Item(val entry: RecordingStore.Entry, val captureId: String, val spans: List<ReviewTimeline.Span>, val audio: Boolean, val parentCaptureId: String = "", val associatedIds: Set<String> = setOf(captureId), val eventTranscript: org.json.JSONObject? = null, val asrState: String = "", val archiveRow: RecordingArchiveRepository.Row? = null)
+    private data class Item(val entry: RecordingStore.Entry, val captureId: String, val spans: List<ReviewTimeline.Span>, val audio: Boolean, val parentCaptureId: String = "", val associatedIds: Set<String> = setOf(captureId), val eventTranscript: org.json.JSONObject? = null, val asrState: String = "", val archiveRow: RecordingArchiveRepository.Row? = null, val location: SavedLocation? = null)
     val view = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
     private val main = Handler(Looper.getMainLooper())
     private val worker = Executors.newSingleThreadExecutor()
@@ -76,6 +80,11 @@ class RecordingReviewPanel(private val context: Context, private val share: (Rec
     private val position = label("--:--:--",16f).apply {
         typeface = android.graphics.Typeface.DEFAULT_BOLD; minimumHeight = dp(32)
         setTextColor(RabiMobileUi.text); setPadding(0,dp(4),0,dp(4))
+    }
+    private val locationStatus = label("",12f).apply {
+        setPadding(dp(18),dp(4),dp(18),dp(4)); visibility = View.GONE
+        contentDescription = "全天位置记录状态，点击设置"
+        setOnClickListener { context.startActivity(android.content.Intent(context,LocationSettingsActivity::class.java)) }
     }
     private val dayButton = RabiMobileUi.compactAction(context, "选择日期") {}
     private val ruler = RecordingTimeRuler(context)
@@ -151,6 +160,7 @@ class RecordingReviewPanel(private val context: Context, private val share: (Rec
         position.maxLines = 2
         position.setTextColor(RabiMobileUi.text)
         captureCard.addView(previewStage,LinearLayout.LayoutParams(-1,-2))
+        captureCard.addView(locationStatus,LinearLayout.LayoutParams(-1,-2))
         captureCard.addView(position,LinearLayout.LayoutParams(-1,-2))
         val timeline = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
@@ -213,7 +223,7 @@ class RecordingReviewPanel(private val context: Context, private val share: (Rec
             }
         }
         val types = Spinner(context).apply {
-            adapter = filterAdapter(listOf("全部类型","录音事件","录像"))
+            adapter = filterAdapter(listOf("全部类型","录音事件","录像","位置"))
             contentDescription = "筛选事件类型"
             onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
                 override fun onNothingSelected(parent: AdapterView<*>?) = Unit
@@ -343,12 +353,15 @@ class RecordingReviewPanel(private val context: Context, private val share: (Rec
     /** Called only while visible, from the owner's runtime events; history playback is not reset. */
     fun refreshLive() {
         if(closed || dragging) return
+        val runtime = context.getSharedPreferences("rabi_conversation_runtime",Context.MODE_PRIVATE)
+        val recording = AllDayRecordingSettings.load(context)
+        locationStatus.visibility = if(LocationSettings(context).enabled || recording.mode == "location") View.VISIBLE else View.GONE
+        locationStatus.text = "位置 · " + runtime.getString("locationStatus","等待开始") + "\n" + runtime.getString("locationSamplingStatus","")
         if(!live) {
             refreshChangedData()
             return
         }
         cursor = System.currentTimeMillis(); ruler.setPosition(cursor,true); updateRange()
-        val runtime = context.getSharedPreferences("rabi_conversation_runtime",Context.MODE_PRIVATE)
         val last = runtime.getLong("captureLastReceivedAt",0)
         val recent = AllDayRecordingSettings.load(context).running && System.currentTimeMillis() - last < 5000
         position.text = "--:--:--"
@@ -359,6 +372,15 @@ class RecordingReviewPanel(private val context: Context, private val share: (Rec
             position.text = String.format(Locale.ROOT,"%02d:%02d:%02d",seconds/3600,seconds/60%60,seconds%60)
         }
         val url = if(video?.receiving == true) video.previewUrl else ""
+        if(recording.mode == "location") {
+            val message = runtime.getString("locationStatus","等待定位").orEmpty()
+            if(livePlayer != null || liveWaveform != null || idleMessage != message) {
+                releasePlayback(); setVideoPreview(false); showEmpty(message); idleMessage = message
+            }
+            val lastLocation = runtime.getLong("locationLastReceivedAt",0)
+            position.text = if(lastLocation > 0) "最近位置 · ${clock(lastLocation)}" else "等待第一个位置"
+            refreshChangedData(); return
+        }
         if(url.isBlank()) {
             if(livePlayer != null) releasePlayback()
             setVideoPreview(false)
@@ -401,13 +423,14 @@ class RecordingReviewPanel(private val context: Context, private val share: (Rec
         if(!listDriving && signal != lastDataSignal && System.currentTimeMillis() - lastLoad >= 1000) { lastDataSignal = signal; load() }
     }
     private fun dataSignal() = if(archiveView) context.getSharedPreferences("recording_archive_session",Context.MODE_PRIVATE).getLong("catalogUpdatedAt",0).toString()
-        else "${RabiAudioRecordRepository.revision(context)}:${RecordingStore.revision()}"
+        else "${RabiAudioRecordRepository.revision(context)}:${RecordingStore.revision()}:${LocationRepository.revision()}"
     private fun adjacent(older: Boolean) {
         if(loading || navigating || closed) return
         ruler.cancelGesture(); listDriving = false; dragging = false; live = false
         load(older,true)
     }
-    private fun matchesFilter(item: Item) = (sourceFilter == 0 || (sourceFilter == 2) == (item.entry.source == "glasses")) && (typeFilter == 0 || (typeFilter == 1) == item.audio)
+    private fun matchesFilter(item: Item) = (sourceFilter == 0 || (sourceFilter == 2) == (item.entry.source == "glasses")) &&
+        when(typeFilter) { 1 -> item.audio; 2 -> item.entry.kind == "video"; 3 -> item.location != null; else -> true }
     private fun load(older: Boolean? = null, adjacent: Boolean = false) {
         // Recover the capture writer before competing with it for tens of thousands of historical files.
         if(!archiveView && RabiConversationService.recoveringRecording()) { loadAfterRecovery = true; listStatus.text = "正在恢复记录…"; return }
@@ -416,9 +439,9 @@ class RecordingReviewPanel(private val context: Context, private val share: (Rec
                 listStatus.text = "尚未配置电脑归档 · 全部本机记录仍可切换查看"
                 archiveNext.visibility = View.GONE; return
             }
-            if(typeFilter == 2) {
+            if(typeFilter == 2 || typeFilter == 3) {
                 items = emptyList(); renderRows(); archiveNext.visibility = View.GONE
-                listStatus.text = "此处为电脑归档录音 · 录像请切换全部本机记录"; return
+                listStatus.text = "此处为电脑归档录音 · 录像和位置请切换本机记录"; return
             }
             if(older == null) loadArchive(false)
             return
@@ -443,7 +466,7 @@ class RecordingReviewPanel(private val context: Context, private val share: (Rec
         worker.execute {
             val result = runCatching {
                 val store = RecordingStore(context)
-                val video = (if(requestedType == 1) emptyList() else if(older == null) store.list(requestedRange.first, requestedRange.last) else store.page(boundaryTime,boundaryId,older,requestedFilter,true)).filter { it.kind == "video" && it.state != "recording" && it.files.isNotEmpty() }.flatMap { entry ->
+                val video = (if(requestedType == 1 || requestedType == 3) emptyList() else if(older == null) store.list(requestedRange.first, requestedRange.last) else store.page(boundaryTime,boundaryId,older,requestedFilter,true)).filter { it.kind == "video" && it.state != "recording" && it.files.isNotEmpty() }.flatMap { entry ->
                     if(entry.state == "legacy") entry.files.map { file -> entry.copy(id=file.name,files=listOf(file),started=file.lastModified(),state="legacy-part") } else listOf(entry)
                 }.map { entry ->
                     val duration = entry.files.sumOf { file ->
@@ -452,7 +475,7 @@ class RecordingReviewPanel(private val context: Context, private val share: (Rec
                     }
                     Item(entry, runCatching { store.captureId(entry.id) }.getOrDefault(entry.id), listOf(ReviewTimeline.Span(entry.started,duration)),false)
                 }
-                val audio = if(requestedType == 2) org.json.JSONArray() else if(older == null) RabiAudioRecordRepository.listCaptureRecords(context,requestedRange.first,requestedRange.last) else RabiAudioRecordRepository.page(context,boundaryTime,boundaryId,older,requestedFilter)
+                val audio = if(requestedType == 2 || requestedType == 3) org.json.JSONArray() else if(older == null) RabiAudioRecordRepository.listCaptureRecords(context,requestedRange.first,requestedRange.last) else RabiAudioRecordRepository.page(context,boundaryTime,boundaryId,older,requestedFilter)
                 val sound = (0 until audio.length()).map { index ->
                     val row = audio.getJSONObject(index); val id = row.getString("captureId")
                     val spans = row.getJSONArray("playbackSpans")
@@ -461,7 +484,11 @@ class RecordingReviewPanel(private val context: Context, private val share: (Rec
                 }
                 val combined = video.map { item -> item.copy(associatedIds = setOf(item.captureId) + sound.filter { it.parentCaptureId == item.captureId }.map { it.captureId }) }
                 val savedMarkers = store.listMarkers()
-                Pair(savedMarkers, (combined + sound).sortedByDescending { it.entry.started })
+                val locations = if(requestedFilter == 2 || requestedType in 1..2) emptyList() else
+                    LocationRecordingReader(context).read(requestedRange.first,requestedRange.last+1,boundaryTime,boundaryId,older).map {
+                        Item(it.entry,it.entry.id,listOf(ReviewTimeline.Span(it.entry.started,1)),false,location=it.sample)
+                    }
+                Pair(savedMarkers, (combined + sound + locations).sortedWith(compareByDescending<Item> { it.entry.started }.thenByDescending { it.entry.id }))
             }
             main.post {
                 loading = false; navigating = false
@@ -569,17 +596,17 @@ class RecordingReviewPanel(private val context: Context, private val share: (Rec
             val heading = LinearLayout(context).apply { gravity = Gravity.CENTER_VERTICAL }
             heading.addView(FrameLayout(context).apply {
                 background = RabiMobileUi.panel(context,RabiMobileUi.accentSurface,Color.TRANSPARENT,24)
-                addView(RabiMobileUi.icon(context,if(entry.kind == "video") com.rabi.link.R.drawable.ic_ui_video else com.rabi.link.R.drawable.ic_ui_mic,RabiMobileUi.secondary),FrameLayout.LayoutParams(dp(28),dp(28),Gravity.CENTER))
+                addView(RabiMobileUi.icon(context,when(entry.kind) { "video" -> com.rabi.link.R.drawable.ic_ui_video; "location" -> com.rabi.link.R.drawable.ic_ui_pin; else -> com.rabi.link.R.drawable.ic_ui_mic },RabiMobileUi.secondary),FrameLayout.LayoutParams(dp(28),dp(28),Gravity.CENTER))
             },LinearLayout.LayoutParams(dp(52),dp(52)).apply { marginEnd = dp(14) })
             val seconds = item.spans.sumOf { it.duration } / 1000
             val duration = if(seconds >= 60) "${seconds/60}分${seconds%60}秒" else "${seconds}秒"
             heading.addView(LinearLayout(context).apply {
                 orientation = LinearLayout.VERTICAL
                 addView(label(SimpleDateFormat("HH:mm",Locale.CHINA).format(Date(entry.started)),16f).apply { typeface = android.graphics.Typeface.DEFAULT_BOLD; setPadding(0,0,0,dp(4)) })
-                addView(label(if(entry.kind == "video") "录像" else "语音记录",15f).apply { setTextColor(RabiMobileUi.text); setPadding(0,0,0,dp(3)) })
-                addView(label("$duration · ${if(entry.source == "glasses") "眼镜" else "手机"}",13f).apply { setTextColor(RabiMobileUi.muted); setPadding(0,0,0,0) })
+                addView(label(when(entry.kind) { "video" -> "录像"; "location" -> "位置记录"; else -> "语音记录" },15f).apply { setTextColor(RabiMobileUi.text); setPadding(0,0,0,dp(3)) })
+                addView(label(item.location?.let { "精度约 ${it.point.accuracy.toInt()} 米 · 手机" } ?: "$duration · ${if(entry.source == "glasses") "眼镜" else "手机"}",13f).apply { setTextColor(RabiMobileUi.muted); setPadding(0,0,0,0) })
             },LinearLayout.LayoutParams(0,-2,1f))
-            heading.addView(RabiMobileUi.iconAction(context,com.rabi.link.R.drawable.ic_ui_play,"回看 ${clock(entry.started)} 的记录") {
+            heading.addView(RabiMobileUi.iconAction(context,if(item.location != null) com.rabi.link.R.drawable.ic_ui_chevron else com.rabi.link.R.drawable.ic_ui_play,"回看 ${clock(entry.started)} 的记录") {
                 ruler.cancelGesture(); listDriving = false; dragging = false; open(item,entry.started); renderRows()
             }.apply {
                 imageTintList = android.content.res.ColorStateList.valueOf(RabiMobileUi.secondary)
@@ -590,6 +617,7 @@ class RecordingReviewPanel(private val context: Context, private val share: (Rec
             card.addView(heading)
             val expanded = selected?.entry?.id == entry.id
             if(expanded) {
+                item.location?.let { card.addView(label(locationDescription(it),13f)) }
                 if(entry.kind == "video" && entry.files.isNotEmpty()) {
                     val image = ImageView(context).apply { scaleType = ImageView.ScaleType.CENTER_CROP; contentDescription = "录像缩略图" }
                     card.addView(image,LinearLayout.LayoutParams(dp(112),dp(64)).apply { topMargin = dp(8); marginStart = dp(56) })
@@ -663,8 +691,13 @@ class RecordingReviewPanel(private val context: Context, private val share: (Rec
         cursor = time; ruler.setPosition(time,false); updateRange(); ensureRange()
         position.text = "回看 · ${clock(time)}"
         if(selected?.entry?.id == item.entry.id && player != null) { player?.seekTo(offset); return }
-        if(selected?.entry?.id == item.entry.id && player == null) return
+        if(selected?.entry?.id == item.entry.id && player == null && item.location == null) return
         selected = item; val ticket = ++selection; releasePlayback(); showEmpty("正在缓冲…"); highlight(item.entry.id)
+        item.location?.let {
+            showEmpty(locationDescription(it)); liveTap.visibility = View.GONE
+            position.text = "位置 · ${clock(it.point.time)}"
+            return
+        }
         if(item.archiveRow?.archived == true) { openArchive(item,ticket,offset); return }
         mediaWorker.execute {
             val result = runCatching { if(item.audio) RabiConversationService.pinLocalEvents(listOf(item.entry.id)).use { item.entry.copy(files=listOf(RabiAudioRecordRepository.exportCaptureWave(context,item.entry.id))) } else item.entry.copy(files=item.entry.files.map { RecordingResourceCache.materialize(context,it) }) }
@@ -689,6 +722,10 @@ class RecordingReviewPanel(private val context: Context, private val share: (Rec
             }
         }
     }
+    private fun locationDescription(sample: SavedLocation): String =
+        sample.address.ifBlank { "地点名称未查询" } + "\n" +
+            String.format(Locale.ROOT,"%.6f, %.6f",sample.point.latitude,sample.point.longitude) +
+            "\n精度约 ${sample.point.accuracy.toInt()} 米 · ${sample.point.provider}\n已保存在手机"
     private fun openArchive(item: Item, ticket: Int, offset: Long) {
         val access = archiveAccess ?: return
         val row = requireNotNull(item.archiveRow)

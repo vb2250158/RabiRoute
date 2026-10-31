@@ -1,5 +1,6 @@
+import { getTimeoutMs } from "../shared/timeoutSettings.js";
 import http from "node:http";
-import type { Socket } from "node:net";
+import type { AddressInfo, Socket } from "node:net";
 import type { Duplex } from "node:stream";
 import os from "node:os";
 import { PEER_RPC_PATH } from "../rabiPeerProtocol.js";
@@ -43,6 +44,7 @@ export class PeerLanServer {
   private stopFlight: Promise<void> | null = null;
   private readonly connections = new Set<Socket>();
   private readonly connectionDrainWaiters = new Set<() => void>();
+  private readonly statusObservers = new Set<(status: PeerLanStatus) => void>();
   private runtimeStatus: PeerLanStatus = { state: "disabled", urls: [] };
   private readonly host: string;
   private readonly port: number;
@@ -60,6 +62,20 @@ export class PeerLanServer {
   }
 
   peerUrls(): string[] { return this.status().urls; }
+
+  /** The actual socket address, independent of advertised discovery candidates. */
+  boundAddress(): Readonly<Pick<AddressInfo, "address" | "family" | "port">> | undefined {
+    if (!this.server?.listening || this.runtimeStatus.state !== "listening") return undefined;
+    const address = this.server.address();
+    if (!address || typeof address === "string") return undefined;
+    return Object.freeze({ address: address.address, family: address.family, port: address.port });
+  }
+
+  /** Observers do not own the listener; callers read boundAddress separately when subscribing. */
+  subscribeStatus(observer: (status: PeerLanStatus) => void): () => void {
+    this.statusObservers.add(observer);
+    return () => { this.statusObservers.delete(observer); };
+  }
 
   start(): Promise<void> {
     if (this.stopFlight) return this.stopFlight.then(() => this.start());
@@ -91,9 +107,9 @@ export class PeerLanServer {
           response.end(JSON.stringify({ code: -1, message: "Peer request rejected." }));
         }
       });
-      server.requestTimeout = 30_000;
-      server.headersTimeout = 10_000;
-      server.keepAliveTimeout = 5_000;
+      server.requestTimeout = getTimeoutMs("peer.httpRequest", 30000);
+      server.headersTimeout = getTimeoutMs("peer.httpHeaders", 10000);
+      server.keepAliveTimeout = getTimeoutMs("peer.httpKeepAlive", 5000);
       server.maxRequestsPerSocket = 100;
       server.on("connection", socket => {
         this.connections.add(socket);
@@ -187,5 +203,6 @@ export class PeerLanServer {
   private updateStatus(status: PeerLanStatus): void {
     this.runtimeStatus = status;
     this.options.onStatus?.(this.status());
+    for (const observer of [...this.statusObservers]) observer(this.status());
   }
 }

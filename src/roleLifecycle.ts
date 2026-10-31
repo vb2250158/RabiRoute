@@ -92,11 +92,15 @@ export async function roleWorkCount(roleDirectory: string): Promise<number> {
     .then(files => files.length, error => { if (error.code === "ENOENT") return 0; throw error; });
 }
 
-export async function atomicRoleJson(file: string, value: unknown): Promise<void> {
+/** A request owner can fence preparation awaits before dispatching the atomic replacement. */
+export async function atomicRoleJson(file: string, value: unknown, assertCurrent?: () => void): Promise<void> {
+  assertCurrent?.();
   await fs.mkdir(path.dirname(file), { recursive: true });
+  assertCurrent?.();
   const temporary = `${file}.${randomUUID()}.tmp`;
   try {
     await fs.writeFile(temporary, `${JSON.stringify(value, null, 2)}\n`, { flag: "wx" });
+    assertCurrent?.();
     await fs.rename(temporary, file);
     recordDataMutationAudit({ group: "persona", event: "role_file_committed", owner: "role-lifecycle",
       action: "write", target: { type: "role-file", id: path.basename(file) },

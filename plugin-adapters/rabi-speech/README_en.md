@@ -27,6 +27,8 @@ cd plugin-adapters\rabi-speech
 
 After preparing the dependencies, start only the installed `RabiRouteHost.exe`. Host creates Manager, and the Manager speech plugin starts and owns RabiSpeech. Disabling the plugin, rebuilding the application generation, or exiting the application must stop the same-generation RabiSpeech process. Windows sign-in autostart must also target only `RabiRouteHost.exe`. The historical `install-service.ps1` entry is retired and fails explicitly instead of creating an independent `RabiSpeech` scheduled task.
 
+Exiting RabiRoute does not require installing optional speech dependencies first. Shutdown still checks actual process ownership: an absent runtime is already offline, and a verified owned process can be stopped even when installation files are missing. Unrelated processes are never terminated. Starting speech still requires a complete runtime installation.
+
 The default address is `http://127.0.0.1:8781`. On first start, `config.example.json` is copied to the machine-local `config.json`, which is not committed to Git.
 
 On Windows, the installer places NVIDIA's official CUDA 12 cuBLAS and cuDNN 9 Python wheels in the plugin-private `.deps` directory. Startup adds only those wheel `bin` directories to the RabiSpeech process PATH and does not change the system CUDA PATH. If a DLL or GPU runtime is unavailable, ASR records the capability state and falls back to CPU.

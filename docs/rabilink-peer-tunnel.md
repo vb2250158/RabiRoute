@@ -34,7 +34,7 @@ WebGUI 的“语音服务”顶部提供“语音服务器”。每项展示设�
 
 `tunnel.json` 保存选定设备、固定公钥和应用作用域，不再以每项 `services` 列表管理设备权限。已有公钥保留，成功的当前应用握手将旧条目迁移到统一连接记录；旧文件本身不能证明当前应用已鉴权。每个新请求复核当前启用状态、token 作用域和固定公钥；HTTP 上传、下载、SSE 和 WebSocket 在发送正文与结束流前继续复核。停用、换应用凭据或删除连接记录后停止后续字节；旧作用域的复用连接关闭，公钥变化不自动覆盖。
 
-`persona` 仍是角色引用使用的受限 API 别名，包含语言风格选择，其路径限制不是额外的设备授权。完整管理通过 `manager` 服务，知识请求使用 Manager 既有接口。服务登记和 URL 由目标 PC 拥有，远端不能指定任意本机地址。
+`persona` 是保留给角色引用的 Manager 兼容别名，与 `manager` 共享全部实际提供的公开接口和连接鉴权，不另设业务路径白名单。服务地址与身份头仍由目标 PC 的运行实例提供。
 
 PC 和手机统一使用 `bootstrap-application`；旧 `bootstrap-speech`、`bootstrap-resources`、`bootstrap-persona` wire kind 已删除并拒绝。角色页面当前仍调用 `POST /api/rabilink/peer/persona/bootstrap`，该 HTTP 入口仅调用统一应用握手，不恢复旧 wire kind。
 
@@ -67,7 +67,7 @@ GET  /api/rabilink/peer/events?ids=[...]  SSE；ids 需 URL 编码
 任意受支持方法 /api/rabilink/peer/http/<设备>/<服务>/<原路径>
 ~~~
 
-同一 http 入口对允许升级的服务支持 WebSocket Upgrade；受限 `persona` 服务拒绝升级。服务登记 baseUrl 和可选 pathPrefix，应用还可设置请求白名单；角色白名单由应用固定，不能通过 `tunnel.json` 覆盖。通用接口不注册逐项远程业务操作。Manager 地址每代重新提供，speech 地址来自现有语音配置。额外服务只可由本机管理员在 services 中登记，不接受远端任意 URL。内置 `manager` 的地址和身份请求头始终由应用提供，`tunnel.json` 不能改写。公开 peer 目录、选择及第三台 PC 转发接口可通过 `manager` 访问；仅拒绝将私有握手入口 `receive`、`tunnel/socket` 当作业务接口。
+同一 http 入口对允许升级的服务支持 WebSocket Upgrade，包括 `persona` 别名。服务登记 baseUrl 和可选 pathPrefix；不为角色别名设置隐藏请求白名单。通用接口不注册逐项远程业务操作。Manager 地址每代重新提供，speech 地址来自现有语音配置。额外服务只可由本机管理员在 services 中登记，不接受远端任意 URL。内置 `manager` 的地址和身份请求头始终由应用提供，`tunnel.json` 不能改写。公开 peer 目录、选择及第三台 PC 转发接口可通过 `manager` 访问；仅拒绝将私有握手入口 `receive`、`tunnel/socket` 当作业务接口。
 
 第三台 PC 使用现有公开接口。例如 A 已连接 B，可请求 B 的 `/api/rabilink/peer/http/pc-c/manager/api/example`，由 B 经同一连接拥有者访问 C。显式嵌套最多四跳，拒绝返回当前目标、重复目标及超限路径；不按整个 `/api/rabilink/peer/` 前缀禁用业务。没有健康目标连接时返回失败，不偷偷改为本机执行。
 
@@ -75,7 +75,21 @@ GET  /api/rabilink/peer/events?ids=[...]  SSE；ids 需 URL 编码
 
 HTTP、二进制、上传下载、SSE 和 WebSocket 共用分帧、多路复用和每流窗口控制。每连接最多十六个流，单帧约三十二 KiB，发送数据块十二 KiB。隧道不把整个文件装进 JSON。普通语音控制 API 保留现有有界缓冲合同，流式使用通用接口。
 
-允许重定向的服务在同源重定向时保留设备与服务前缀，跨源重定向拒绝；`persona` 拒绝所有重定向。正文中的 URL 是业务数据，不做猜测改写；扩展接口应返回服务相对路径。浏览器凭据不自动复制到对端。需要服务凭据的独立服务，由管理员在目标服务配置中提供 headers。
+允许重定向的服务在同源重定向时保留设备与服务前缀，跨源重定向拒绝；`persona` 使用同一规则。正文中的 URL 是业务数据，不做猜测改写；扩展接口应返回服务相对路径。浏览器凭据不自动复制到对端。需要服务凭据的独立服务，由管理员在目标服务配置中提供 headers。
+
+### 连接控制入口的自动发现
+
+设备目录、选择读取/保存、公开身份、探测和事件流六个操作已注册为 `manager.rabilink.peer.*`，原控制 HTTP 包装器已删除。JSON 正文与 SSE 事件仍归原连接拥有者；选择保存前复验原连接，事件流在取消后解除监听并等待 RTT 回调结束。方法、字段和恢复方式见 [Peer 连接控制合同](rabi-agent-interfaces.md#peer-连接控制合同源码已接入安装版待验收)。
+
+### HTTP 入口的自动发现
+
+七种 HTTP 方法通过 `manager.rabilink.peer.http.<method>` 注册，路径、代理合同与实际分发来自同一活动快照，旧 HTTP 正则分发已删除。正文、二进制与 SSE 由原生隧道逐块处理，保留目标版本条件、重复公共响应头和原回执；目标端重建 framing，包含 DELETE 正文。取消和卸载等待已接受写入及流清理。方法、字段与示例见 [Peer HTTP 透明代理合同](rabi-agent-interfaces.md#peer-http-透明代理合同源码已接入安装版待验收)。
+
+### 升级入口的自动发现
+
+源码已将透明升级注册为 `manager.rabilink.peer.websocket.proxy`；普通 HTTP 仍使用同一路径的原处理器。合同目录、实际升级分发与 OpenAPI 来自同一活动快照；共用 URL 的 HTTP/升级分别投影，参数 `path` 使用原始 URI 后缀，允许服务根空值。客户端 `openOperation()` 可保留文本、二进制与子协议；透明消息的本机预算可显式设置，不会改成服务端的业务限制。
+
+代理自身摘要与目标版本条件分别传递，目标头 JSON 对象沿现有公共头规则处理，不成为新权限或新管理密钥。实际发送前再次核对原连接；卸载等待已接收写入完成，撤销不会破坏其他请求的加密序号。完整字段见[Peer 透明升级合同](rabi-agent-interfaces.md#peer-透明升级合同源码已接入安装版待验收)。本批源码联测包含真实加密会话与 Socket，目标发现/池选择使用隔离夹具；独立完整构建及编译版验收通过，实际验证共用路径的 HTTP、文本和二进制升级调用；扩展配置仍有 13 条已登记旧声明。真实网络双机与安装运行版本仍待验收。
 
 ## 认证、中转与生命周期
 

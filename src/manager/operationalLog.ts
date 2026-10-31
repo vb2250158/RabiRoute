@@ -30,6 +30,7 @@ export type ManagerOperationalEvent = {
   pathname?: string;
   statusCode?: number;
   durationMs?: number;
+  hookProgress?: { sessionId: string; turnId?: string; stage: string; phase: "started" | "completed" | "failed"; startMs: number };
   routeId?: string;
   childPid?: number;
   action?: string;
@@ -53,7 +54,24 @@ export type ManagerOperationalEvent = {
   };
 };
 
+export type ManagerOperationalDetail = Omit<ManagerOperationalEvent,
+  "schemaVersion" | "eventId" | "time" | "level" | "event" | "pid" | "group"> & { group?: string };
+
+export type ManagerOperationalLogFilter = {
+  enabledGroups?: ReadonlySet<string>;
+  minimumLevel?: ManagerOperationalLevel;
+};
+
+export type BoundManagerOperationalLog = {
+  readonly enabled: boolean;
+  record<State>(event: string, state: State, detail: (state: State) => ManagerOperationalDetail): ManagerOperationalEvent | null;
+};
+
 export type ManagerOperationalLog = {
+  /** Bind once at the consumer lifetime boundary, not once per event. */
+  bind(group: string, level: ManagerOperationalLevel): BoundManagerOperationalLog;
+  configureFilter(filter: ManagerOperationalLogFilter): void;
+  isEnabled(group: string, level: ManagerOperationalLevel): boolean;
   logDirectory: string;
   record(
     level: ManagerOperationalLevel,
@@ -131,6 +149,7 @@ export function createManagerOperationalLog(options: {
   now?: () => Date;
   pid?: number;
   enabledGroups?: ReadonlySet<string>;
+  minimumLevel?: ManagerOperationalLevel;
   diagnosticGroups?: ReadonlySet<string>;
   retryBaseMs?: number;
   retentionDays?: number;
@@ -148,7 +167,13 @@ export function createManagerOperationalLog(options: {
   let lastErrorAt: string | undefined;
   let lastError: string | undefined;
   let lastRetentionDate = "";
-  const configuredGroups = options.enabledGroups ?? commaSeparatedSet(process.env.RABIROUTE_OPERATION_LOG_GROUPS);
+  const initialGroups = options.enabledGroups ?? commaSeparatedSet(process.env.RABIROUTE_OPERATION_LOG_GROUPS);
+  let configuredGroups = initialGroups ? new Set(initialGroups) : undefined;
+  let minimumLevel = options.minimumLevel ?? "debug";
+  const levels = { debug: 0, info: 1, warn: 2, error: 3 };
+  const bindings = new Map<string, Map<ManagerOperationalLevel, { enabled: boolean; logger: BoundManagerOperationalLog }>>();
+  const isEnabled = (group: string, level: ManagerOperationalLevel): boolean =>
+    (!configuredGroups || configuredGroups.has(group)) && levels[level] >= levels[minimumLevel];
   const diagnosticGroups = options.diagnosticGroups ?? commaSeparatedSet(process.env.RABIROUTE_DIAGNOSTIC_LOG_GROUPS) ?? new Set<string>();
   const retentionDays = Math.max(1, Math.floor(options.retentionDays ?? (Number(process.env.RABIROUTE_OPERATION_LOG_RETENTION_DAYS) || 30)));
   const maxTotalBytes = Math.max(1_048_576, Math.floor(options.maxTotalBytes ?? (Number(process.env.RABIROUTE_OPERATION_LOG_MAX_BYTES) || 512 * 1024 * 1024)));
@@ -214,11 +239,38 @@ export function createManagerOperationalLog(options: {
     }
   };
 
-  return {
+  const log: ManagerOperationalLog = {
     logDirectory,
+    isEnabled,
+    configureFilter(filter) {
+      configuredGroups = filter.enabledGroups ? new Set(filter.enabledGroups) : undefined;
+      minimumLevel = filter.minimumLevel ?? "debug";
+      for (const [group, groupBindings] of bindings) {
+        for (const [level, binding] of groupBindings) binding.enabled = isEnabled(group, level);
+      }
+    },
+    bind(group, level) {
+      const key = group.trim() || "manager";
+      let groupBindings = bindings.get(key);
+      if (!groupBindings) bindings.set(key, groupBindings = new Map());
+      const existing = groupBindings.get(level);
+      if (existing) return existing.logger;
+      const binding: { enabled: boolean; logger: BoundManagerOperationalLog } = {
+        enabled: isEnabled(key, level),
+        logger: {
+          get enabled() { return binding.enabled; },
+          record<State>(event: string, state: State, detail: (state: State) => ManagerOperationalDetail) {
+            if (!binding.enabled) return null;
+            return log.record(level, event, { ...detail(state), group: key });
+          }
+        }
+      };
+      groupBindings.set(level, binding);
+      return binding.logger;
+    },
     record(level, event, detail = {}) {
       const group = String(detail.group || "manager").trim() || "manager";
-      if (configuredGroups && !configuredGroups.has(group)) return null;
+      if (!isEnabled(group, level)) return null;
       const recordedAt = now();
       const record: ManagerOperationalEvent = {
         schemaVersion: 2,
@@ -254,6 +306,7 @@ export function createManagerOperationalLog(options: {
       };
     }
   };
+  return log;
 }
 
 export function installOperationalMutationAuditSink(
@@ -261,8 +314,10 @@ export function installOperationalMutationAuditSink(
   projectRoot: string
 ): () => void {
   return installDataMutationAuditSink(record => {
+    const level = record.level ?? (record.outcome === "failed" ? "error" : record.outcome === "rejected" ? "warn" : "info");
+    if (!operationalLog.isEnabled(record.group, level)) return;
     operationalLog.record(
-      record.level ?? (record.outcome === "failed" ? "error" : record.outcome === "rejected" ? "warn" : "info"),
+      level,
       record.event,
       {
         group: record.group,

@@ -1,33 +1,35 @@
 <!-- docs-language-switch -->
 <div align="center">
-<a href="./README_en.md">English</a> | 简体中文
+<a href="./README_en.md">English</a> | 简体中文 | <a href="./README_ja.md">日本語</a>
 </div>
 <!-- /docs-language-switch -->
 
 # RabiRoute 文档
 
-[主控与远端电脑客户端](remote-computer-client.md)：从主机操作多台电脑，使用终端、互传文件、查询窗口和查看画面。
-
-[连接与接口使用](connection-access.md)：完成一次鉴权后使用接口，说明已移除的重复限制。
-
-这里同时包含现行使用说明、实验集成、设计方案、调研和历史交接。文件存在不代表功能已经完成；阅读前先看状态。
+第一次使用从使用手册开始；接入开发者查看接口参考；架构、构建和迁移资料位于维护开发分组。实验功能与历史资料保留各自状态。
 
 ## 先看这里
 
-- [桌宠陪伴模式](companion-mode.md) — **实验功能**。桌宠右键开启，可选自适应、观看、游戏、工作或安静陪伴。
+- [RibiWebGUI 使用手册](user-guide/README.md)：按任务找到配置、操作和排障步骤。
+- [快速上手](getting-started.md)：完成安装，启动应用并打开控制台。
+- [跑通第一条 Route](user-guide/first-route.md)：完成一次真实投递，并确认目标任务收到消息。
+- [界面与状态](user-guide/interface-and-status.md)：看懂连接、运行状态和未保存修改。
+- [运行、日志与排障](user-guide/operations-and-troubleshooting.md)：消息没有送达时，逐项找到断点。
+- [安全、回传与数据](user-guide/safety-and-data.md)：确认外部回复和诊断资料的权限与隐私边界。
+- [当前能力与成熟度](current-capabilities.md)：核对已验证、实验和待验收范围。
 
-- [查看设备并测试动作](user-guide/home-devices.md) — 查看设备卡片、能力和状态，并测试已接通的设备动作。
-- [工作区计划查询](workspace-plan-query.md) — 按宿主会话与工作区过滤的分页搜索接口。
+## 按场景使用
 
-- [角色全天记录](persona-all-day-recording.md) — **新增实现**。按日期查看电脑与已选择手机的时间轴和事件，明确采集来源、暂停状态和记录缺口。
-
-- [RibiWebGUI 使用手册](user-guide/README.md) — **现行指南**。第一次使用时从这里开始，完成一条真实投递，并学会看状态、改规则和处理常见失败。
-- [快速上手](getting-started.md) — **现行指南**。完成安装，启动 Manager，并确认浏览器能打开控制台。
-- [界面与状态](user-guide/interface-and-status.md) — **现行指南**。看懂当前 Route、Manager 连接、未保存修改、运行状态，以及设置页的截图、滑词菜单和登录启动。
-- [界面主题](user-guide/interface-theme.md) — **现行指南**。统一 WebGUI 与 Windows 托盘的浅色、深色、跟随系统和受限自定义主题。
-- [运行、日志与排障](user-guide/operations-and-troubleshooting.md) — **现行指南**。消息没有送达时，从诊断摘要开始逐项找到断点。
-- [安全、回传与数据](user-guide/safety-and-data.md) — **现行指南**。在启用外部回复或共享诊断材料前，确认权限和隐私边界。
-- [当前能力与成熟度](current-capabilities.md) — **当前事实**。核对哪些能力已经验证，哪些仍需要真实账号、网络或设备验收。
+| 你想完成的事 | 从这里开始 |
+| --- | --- |
+| 接入 QQ、微信、企业微信或飞书 | [通讯与消息入口](user-guide/routes-and-adapters.md) |
+| 查看家庭设备、状态并测试动作 | [智能设备](user-guide/home-devices.md) |
+| 从手机发起 Agent 语音通话 | [手机通话](mobile-voice-call.md) |
+| 在手机保存位置轨迹并导出 | [手机位置记录](mobile-location-recording.md) |
+| 按日期查看电脑与手机记录 | [角色全天记录](persona-all-day-recording.md)（新增实现，查看采集来源与记录缺口） |
+| 开启桌宠观看、游戏或工作陪伴 | [桌宠陪伴模式](companion-mode.md)（实验功能） |
+| 操作其他电脑的终端、文件与画面 | [主控与远端电脑客户端](remote-computer-client.md) |
+| 调整浅色、深色和桌面主题 | [界面主题](user-guide/interface-theme.md) |
 
 ## 本机安装、配置与恢复
 
@@ -45,6 +47,10 @@
 
 ## 接入开发：路由、角色与 Agent 接口
 
+- [接口参考与自动发现](api-reference.md)：在文档页浏览当前运行接口，搜索合同、查看参数与响应、复制请求模板并下载 OpenAPI。
+- [连接与接口使用](connection-access.md)：复用一次连接鉴权，了解明确禁用项与接口条件。
+- [工作区计划查询](workspace-plan-query.md)：按宿主会话与工作区过滤的分页搜索接口。
+
 - [家庭设备与音箱 Agent 接口](home-device-agent-api.md) — 查询全部已接入实体、发现并调用其按钮／设置／设备动作、绑定文字播报并查询幂等回执。
 - [扫地机云地图连接](vacuum-cloud-map.md) — 米家扫码、原始文件及 version-2 解码合同；实时定位和导航仍待验收。
 
@@ -57,6 +63,7 @@
 - [Agent 上下文注入](agent-context-injection.md) — **现行指南**。角色级统一双向账本、分消息端/会话的最近消息额度、归档边界，以及 `AgentPacket` 中的角色目录、跨角色投递凭据、路径和回复上下文。
 - [桌宠移动接口](desktop-pet-agent-motion.md) — 移动桌宠并查询实际抵达、打断与不确定回执。
 - [桌宠气泡与语音](desktop-pet-bubbles.md) — 显示角色说话文字，自定义猫爪气泡、字体、配色与停留时间。
+- [可靠 Agent 投递](reliable-agent-delivery.md)：接入开发者核对持久受理、断线恢复、原回执与投递记录查询。
 - [Rabi Agent 接口](rabi-agent-interfaces.md) — **当前合同**。处理端如何回复、查询可联系角色、进行带幂等回执的单向跨角色投递，以及使用 thread bridge、计划、记忆、Remote Agent 和多实例 API。
 - [计划和记忆机制](plan-and-memory-model.md) — **现行指南**。Role Knowledge 的文件真源、召回和整理副作用。
 - [动态整理记录统一规范](dynamic-record-lifecycle.md) — **现行指南**。统一归档、记忆沉淀、物理分卷、保留策略和 24/72 小时动态窗口的边界与验收。
@@ -75,6 +82,30 @@
 
 - [摄像头事件与 HA 恢复](home-camera-events.md)：显式人格绑定、录像落盘、管理员启动、有界恢复及迁移验收。
 
+- [开发候选匹配验证](developer-candidate-admission.md)：冻结输入、候选证明复用及原发布入口的统一准入。
+
+- [开发验证路径与计时](development-validation.md)：候选路径、隔离试点结果和安装验收边界。
+
+- [角色消息配置升级](persona-message-config-upgrade.md) — 将旧规则迁入角色配置，先预览、离线备份迁移，并按快照还原。
+
+- [RabiLink 手机状态合同](rabilink-mobile-owner-api.md) — 维护者核对 ASR 优先顺序、电量上报、proof 与原生幂等回放。
+- [Route 控制合同](route-control-api-contract.md) — 接入开发者核对身份、配置、绑定、消息处理与原生 CAS 回执。
+- [设备 Agent 执行合同](device-agent-api-contracts.md) — 接入开发者核对设备会话、唤醒、claim、原投递与持久回执。
+- [网关控制合同](gateway-control-api-contract.md) — 维护者核对配置持久化、运行时激活与原 CAS 事务。
+- [Agent 会话合同](agent-thread-api-contracts.md) — 接入开发者核对原宿主会话动作、来源与幂等账本。
+- [消息处理合同](message-processing-api-contract.md) — 维护者核对原消息看板、发送上下文审阅、事实围栏与回执。
+
+- [Bilibili 浏览器历史桥](bilibili-history-bridge.md) — 维护者查看固定扩展接入、人格私有日期分卷和可执行接口合同。
+
+- [API 合同自动发现与远端调用目标架构](api-contract-discovery-target-architecture.md) — **实施中，未完成运行验收**。统一注册与目录刷新基础已实现，查看全部公共入口迁移、旧定义清理和双机验收标准。
+- [API 合同迁移实施记录](api-contract-discovery-implementation-progress.md) — 维护者核对源码接线、编译版配置与剩余生命周期验收。
+- 人格 API 合同：[资源](persona-resource-api-contracts.md)、[历史](persona-history-api-contracts.md)、[计划控制](persona-plan-api-contracts.md)、[Skill](persona-skill-api-contracts.md)、[知识](persona-knowledge-api-contracts.md)、[身份](persona-identity-api-contracts.md)、[健康](persona-health-api-contracts.md)。
+- [角色配置与生命周期](role-configuration-api-contracts.md)、[核心公共服务](core-public-api-operations.md)及[插件目录合同](plugin-catalog-api-contract.md) — 核对原 revision、回执、就绪状态与发布边界。
+- [插件 publication 生命周期](plugin-publication-lifecycle.md) — 核对候选指针、回滚、旧 owner 退役及执行模式限制。
+- [WebGUI 静态资源合同](webgui-static-api-contracts.md) — 核对原生文件、不可变 revision、最终 fallback 与句柄清理；共享接线状态见正文。
+- [独立监听合同](external-listener-contracts.md)及[平台原生监听](platform-native-listeners.md) — 核对原地址、鉴权、可信生命周期发布与单独验证的远端可达范围。
+- [Peer LAN 监听发现](peer-lan-listener-discovery.md) — 核对实际绑定地址、原加密协议、元数据换代与停止撤回。
+- [Webhook HTTP 合同](webhook-http-contract.md) — 核对 Webhook 和 RabiLink 原生监听的方法、路径、输入与停止行为。
 - [长期维护与自修复](rabi-maintenance.md) — **维护工作流**。固定故障受理任务、原计划归属、恢复验证与定期代码质量维护。
 - [安装 Rabi 记忆与计划搜索](../skills/rabi-knowledge-search/README.md) — 项目维护者将技能安装到项目，在线时先查计划和记忆，离线时直接普通搜索。
 - [安装身份关系管理技能](../skills/manage-rabiroute-identity-relations/README.md) — 处理端按账号查“这是谁”、确认或纠正归属、处理并发冲突与共用账号，并在现场只提交候选观察。
@@ -86,6 +117,7 @@
 - [源码热补丁](source-hot-patches.md) — **开发中**。源码模式自动监听代码与声明资源，编译、校验、保留状态并不停服切换；安装版验收边界见文档状态。
 - [插件 Bundle 与热替换](plugin-bundles.md) — **当前实现说明**。单一 Profile、独立插件包、统一 SDK、generation 热替换和浏览器 revision 回滚。
 - [代码架构](code-architecture.md) — **当前事实**。后端、Manager、消息端、Role Knowledge、WebGUI 和桌面模块地图。
+- [消息检索索引与时延预算](message-history-search.md) — 开发维护：索引更新、冻结快照、默认三秒客户端截止、恢复机制与容量验收范围。
 - [项目功能手册](project-function-map.md) — **当前事实**。按功能、成熟度、副作用、API 和代码入口定位；成熟度仍与当前能力页交叉核对。
 - [路径与目录规范](path-and-directory-conventions.md) — **当前维护规范**。区分软件目录、公开示例、本机运行数据和日志，并规定 API 中相对路径与业务 ID 的写法。
 - [项目技能的分发与漂移检测](project-skill-distribution.md) — **现行维护规范**。RabiRoute 拥有的技能安装到项目 `.agents/skills/` 后的本地化副本与基线记录，以及 Agent 用来报告上游漂移、移植、再记基线的只读命令。

@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from ..timeout_settings import get_timeout_seconds
+
+
 import json
 import os
 import wave
@@ -54,7 +57,7 @@ class ApiAsrProvider:
         if request.word_timestamps:
             data["timestamp_granularities[]"] = ["word", "segment"]
 
-        timeout = httpx.Timeout(self.settings.timeout_seconds, connect=15.0)
+        timeout = httpx.Timeout(get_timeout_seconds("speech.apiAsr.request", self.settings.timeout_seconds), connect=get_timeout_seconds("speech.apiAsr.connect", 15))
         with request.audio_path.open("rb") as source:
             files = {"file": (request.audio_path.name, source, "application/octet-stream")}
             async with httpx.AsyncClient(timeout=timeout, transport=self.transport) as client:

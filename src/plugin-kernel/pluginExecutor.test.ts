@@ -52,6 +52,7 @@ test("DeclarativePluginExecutor loads contributions without executing a module",
     contributions: { register(value) { values.push(value); } },
     permissions: { has() { return false; }, require() { throw new Error("unused"); }, list() { return []; } },
     lifecycle: { signal: new AbortController().signal, fail() {} },
+    publication: { add() { throw new Error("Declarative plugins cannot register executable publication callbacks."); } },
     effects: { add() {}, adopt() {} }
   } satisfies PluginContext);
   assert.deepEqual(values, [{ kind: "tray-menu", id: "open", value: { label: "Open" } }]);

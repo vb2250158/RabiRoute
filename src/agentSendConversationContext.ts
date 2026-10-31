@@ -25,13 +25,15 @@ import { readConversationWindow, type ConversationWindowReader } from "./convers
 
 const TOKEN_LIFETIME_MS = 10 * 60 * 1000;
 
-function conversationIdentity(request: AgentSendRequest, options: AgentReplyOptions) {
+function conversationIdentity(request: AgentSendRequest, options: AgentReplyOptions, requireReview = false) {
   const send = prepareAgentSendRequest(request);
   if (send.channel === "plan_feedback" || (send.channel === "fennenote" && send.target.mode === "playback")) return undefined;
   const route = resolveAgentSendRoute(options.runtimes, send.routeId);
   if (!route) throw new Error("Conversation review requires an available, unambiguous send Route.");
-  const dataDir = conversationDataDirForRoute(options, route);
   const adapter = send.channel === "role_panel" ? "rolePanel" : send.channel;
+  const policy = normalizeMessageAdapterPolicy(route.runtime.messageAdapterPolicies?.[adapter as MessageEndpointType], adapter as MessageEndpointType).conversationReview;
+  if (requireReview && policy.enabled !== true) return undefined;
+  const dataDir = conversationDataDirForRoute(options, route);
   const target = send.target;
   let instanceId = String(target.instanceId || "");
   if (send.channel === "napcat" && !instanceId) {
@@ -43,7 +45,7 @@ function conversationIdentity(request: AgentSendRequest, options: AgentReplyOpti
     : send.channel === "rabilink" ? { deviceIds: [...(target.targetDeviceIds as string[])].sort(), deviceKinds: [...(target.targetDeviceKinds as string[])].sort() }
     : { chatId: target.chatId, sessionId: target.sessionId, roleId: target.roleId };
   const { key, scope } = conversationScope(dataDir, route.runtime.id, adapter, identity);
-  return { send, route, dataDir, adapter, target, instanceId, key, scope };
+  return { send, route, dataDir, adapter, target, instanceId, key, scope, policy };
 }
 
 
@@ -56,7 +58,7 @@ export class AgentSendConversationContextGuard {
   constructor(private readonly readWindow: ConversationWindowReader = async (dataDir, filter, query) => readConversationWindow(dataDir, filter, query)) {}
 
   serializationKey(request: AgentSendRequest, options: AgentReplyOptions): string | undefined {
-    return conversationIdentity(request, options)?.key;
+    return conversationIdentity(request, options, true)?.key;
   }
 
   async searchHistory(request: AgentSendRequest, options: AgentReplyOptions, query: { afterSequence?: number; beforeSequence?: number; query?: string; limit: number }) {
@@ -80,11 +82,11 @@ export class AgentSendConversationContextGuard {
   async evaluate(request: AgentSendRequest, options: AgentReplyOptions, now = Date.now(), snapshotOnly = false): Promise<{
     blocked: boolean; context?: AgentSendConversationContext;
   }> {
-    const conversation = conversationIdentity(request, options);
+    // Resolve the optional policy before review-only account identity or history work.
+    const conversation = conversationIdentity(request, options, true);
     if (!conversation) return { blocked: false };
-    const { send, route, dataDir, adapter, target, instanceId, scope } = conversation;
+    const { send, route, dataDir, adapter, target, instanceId, scope, policy } = conversation;
     const filter = { gatewayId: route.runtime.id, channel: send.channel, adapter, target, instanceId };
-    const policy = normalizeMessageAdapterPolicy(route.runtime.messageAdapterPolicies?.[adapter as MessageEndpointType], adapter as MessageEndpointType).conversationReview;
     const pendingKey = JSON.stringify({ deliveryId: send.deliveryId, sender: send.sender, scope });
     const cacheKey = JSON.stringify({ sender: send.sender, scope });
     for (const [key, item] of this.pending) if (item.expires <= now) this.pending.delete(key);
@@ -141,7 +143,7 @@ export class AgentSendConversationContextGuard {
       this.pending.set(pendingKey, { expires: expiry, index: latestMessageIndex });
       context.confirmationToken = `${expiry}.${sign(expiry).toString("hex")}`;
       context.expiresAt = new Date(expiry).toISOString();
-      context.instruction = `尚未发送。先读返回消息，重新判断当前正文是否合适；${window.omittedCount ? `聊天信息过多，中间省略 ${window.omittedCount} 条，请按会话、索引范围和关键词搜索相关消息；` : ""}需要改正文时重新审核。确认后保留 deliveryId，在 conversationContext 同时传 latestMessageIndex 作为 lastReadMessageIndex 和 confirmationToken 再次调用；再次出现新消息仍需重新确认。`;
+      context.instruction = `配置 messageAdapterPolicies.${adapter}.conversationReview.enabled=true 要求发送前核对；可在 Route 消息端设置的“发送前聊天核对”关闭。尚未发送。先读返回消息，重新判断当前正文是否合适；${window.omittedCount ? `聊天信息过多，中间省略 ${window.omittedCount} 条，请按会话、索引范围和关键词搜索相关消息；` : ""}需要改正文时重新审核。确认后保留 deliveryId，在 conversationContext 同时传 latestMessageIndex 作为 lastReadMessageIndex 和 confirmationToken 再次调用；再次出现新消息仍需重新确认。`;
     }
     return { blocked, context };
   }

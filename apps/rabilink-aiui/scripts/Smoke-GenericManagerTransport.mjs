@@ -1,3 +1,4 @@
+import { adoptTimeoutSettings, requestTimeout, configureTimeoutStorage } from "../utils/timeout-settings.js";
 import fs from 'node:fs/promises';
 import vm from 'node:vm';
 import test from 'node:test';
@@ -17,7 +18,7 @@ function fixture() {
     else input.success({ statusCode: 200, data: { code: 0, data: { structuredContent: { ok: !uncertain, uncertain, statusCode: uncertain ? 504 : 200, headers: { etag: 'fixture-etag' }, data: outcome } } } });
   } };
   const names = [...source.matchAll(/export (?:async )?function (\w+)/g)].map(match => match[1]);
-  const context=vm.createContext({wx,URL,URLSearchParams,Date,Math,fingerprintApiRequest});
+  const context=vm.createContext({adoptTimeoutSettings,requestTimeout,configureTimeoutStorage,wx,URL,URLSearchParams,Date,Math,fingerprintApiRequest});
   context.tokenStorageKey=vm.runInContext('(()=>{'+storeSource.replace(/^import .*;\r?\n/gm,'').replaceAll('export ','')+';return tokenStorageKey})()',context);
   const phone=vm.runInContext('(()=>{'+phoneSource.replace(/^import .*;\r?\n/gm,'').replaceAll('export ','')+';return {phoneEyeHttpRequest,pairPhoneEyeTransport,phoneEyeTransportStatus}})()',context);
   context.phoneEyeHttpRequest=phone.phoneEyeHttpRequest;
@@ -34,6 +35,24 @@ test('future APIs and profile operations share one transport without Relay perso
   assert.equal(request.data.targetDeviceId,'pc-other'); assert.equal(request.data.request.path,'/api/new-after-client-release?option=1');
   assert.ok(!Object.hasOwn(request.data,'profileRevision'));
   assert.deepEqual(JSON.parse(JSON.stringify(f.api.AIUI_HTTP_TRANSPORT_CAPABILITIES)),{transport:'relay',bufferedHttp:true,lan:false,p2p:false,streaming:false,websocket:false});
+});
+
+test('authenticated profile timeout applies to the same PC and restores defaults', async () => {
+  const f = fixture();
+  f.result({ code: 0, data: { profile: null, timeoutOverrides: { 'aiui.http.request': 91000 } } });
+  await f.api.getDeviceAgentProfile(f.config);
+  f.result({ code: 0, data: {} });
+  await f.api.getMobileWebgui(f.config, '/api/test', 'pc-owner');
+  assert.equal(f.requests.at(-1).timeout, 91000);
+  assert.equal(f.requests.at(-1).header['X-Rabi-Timeout-Ms'], '91000');
+  await f.api.getMobileWebgui({...f.config,token:'other-account'}, '/api/test', 'pc-owner');
+  assert.equal(f.requests.at(-1).timeout, 30000);
+  await f.api.getMobileWebgui(f.config, '/api/test', 'pc-other');
+  assert.equal(f.requests.at(-1).timeout, 30000);
+  f.result({ code: 0, data: { profile: null, timeoutOverrides: {} } });
+  await f.api.getDeviceAgentProfile(f.config);
+  await f.api.getMobileWebgui(f.config, '/api/test', 'pc-owner');
+  assert.equal(f.requests.at(-1).timeout, 30000);
 });
 
 test('transport success preserves business failure for the client to interpret',async()=>{

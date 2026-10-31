@@ -2,10 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { inspectLocalSpeechService, normalizeLocalSpeechServiceUrl } from "./speechServiceStatus.js";
 
-test("speech status only accepts loopback service URLs", () => {
+test("speech status accepts configured local and remote service URLs", () => {
   assert.equal(normalizeLocalSpeechServiceUrl("http://127.0.0.1:8781/"), "http://127.0.0.1:8781");
   assert.equal(normalizeLocalSpeechServiceUrl("http://localhost:8781"), "http://localhost:8781");
-  assert.throws(() => normalizeLocalSpeechServiceUrl("https://speech.example.test"), /回环地址/);
+  assert.equal(normalizeLocalSpeechServiceUrl("https://speech.example.test"), "https://speech.example.test");
   assert.throws(() => normalizeLocalSpeechServiceUrl("file:///tmp/speech"), /HTTP/);
 });
 
@@ -41,7 +41,7 @@ test("speech status exposes only normalized runtime capabilities", async () => {
     }), { status: 200 });
   }) as typeof fetch;
 
-  const result = await inspectLocalSpeechService("http://127.0.0.1:8781", { fetchImpl });
+  const result = await inspectLocalSpeechService("https://speech.example.test", { fetchImpl });
   assert.equal(result.state, "online");
   assert.equal(result.providers.tts[0]?.id, "oumuq");
   assert.equal(result.providers.asr[0]?.model, "small");

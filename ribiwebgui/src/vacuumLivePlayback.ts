@@ -1,3 +1,4 @@
+import { getTimeoutMs } from "./timeoutSettingsClient";
 const startupBufferSeconds = 0.3;
 
 /** One pacing state per player. Buffer lag excludes camera and network delay. */
@@ -35,7 +36,7 @@ function waitFor(target: EventTarget, event: string, signal: AbortSignal, operat
     const done = () => {cleanup(); resolve();};
     const failed = () => {cleanup(); reject(new Error("视频解码失败。"));};
     const aborted = () => {cleanup(); reject(signal.reason);};
-    const timeout = setTimeout(() => {cleanup(); reject(new Error("视频数据处理超时，请退出后重新连接。"));}, 10000);
+    const timeout = setTimeout(() => {cleanup(); reject(new Error("视频数据处理超时，请退出后重新连接。"));}, getTimeoutMs("webgui.video.decode", 10000));
     target.addEventListener(event, done, {once: true}); target.addEventListener("error", failed, {once: true}); signal.addEventListener("abort", aborted, {once: true});
     if (signal.aborted) {aborted(); return;}
     try {operation?.();} catch (error) {cleanup(); reject(error);}

@@ -6,7 +6,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 const meta = { health: { live: true, state: "healthy", requiredReady: true }, applicationGenerationId: "generation-fixture", managerInstanceId: "manager-fixture" };
-const settings = { managerUrl: "http://manager.invalid:1234", credential: "fixture-only", agentId: "agent-fixture" };
+const settings = { managerUrl: "http://manager.invalid:1234", credential: "fixture-only", agentType: "dsh", sessionId: "fixture-session" };
 
 test("concurrent operations keep postflight on their own verified origin", async () => {
   let sequence = 0;
@@ -47,7 +47,7 @@ test("client verifies metadata, preserves mutation headers and returns receipts 
   assert.equal(calls.length, 3);
   assert.equal(calls[0].url, `${settings.managerUrl}/meta`);
   assert.equal(calls[1].options.redirect, "error");
-  assert.equal(calls[1].options.headers["x-rabiroute-agent-id"], settings.agentId);
+  assert.equal(calls[1].options.headers["x-rabiroute-agent-type"], settings.agentType);
   assert.equal(calls[1].options.headers["if-match"], '"revision-1"');
   assert.equal(calls[1].options.headers["x-rabiroute-expected-application-generation-id"], meta.applicationGenerationId);
   assert.equal(calls[1].options.headers["x-rabiroute-expected-manager-instance-id"], meta.managerInstanceId);
@@ -64,6 +64,26 @@ test("client rejects cross-origin targets and caller credential overrides", asyn
   }
   await assert.rejects(client.invoke("GET", "/api/example", { headers: { authorization: "override" } }), /transport-owned/);
   assert.equal(calls, 0); // Reject invalid targets and transport header overrides before metadata.
+});
+
+test("resource owner remains business metadata while credentials and hop proofs stay transport-owned", async () => {
+  const calls = [];
+  const client = createManagerClient({ ...settings, fetchImpl: async (url, options) => {
+    calls.push({ path: new URL(url).pathname, headers: options.headers });
+    return Response.json(new URL(url).pathname === "/meta" ? meta : { ok: true });
+  } });
+  const response = await client.request("GET", "/plugin/resource", { headers: { "x-rabilink-resource-owner": "fixture-target" } });
+  assert.equal(response.statusCode, 200);
+  const business = calls.find(call => call.path === "/plugin/resource");
+  assert.equal(business.headers["x-rabilink-resource-owner"], "fixture-target");
+  assert.equal(business.headers.authorization, `Bearer ${settings.credential}`);
+  assert.equal(business.headers["x-rabiroute-expected-manager-instance-id"], meta.managerInstanceId);
+  assert.ok(calls.filter(call => call.path === "/meta").every(call => call.headers["x-rabilink-resource-owner"] === undefined));
+  const previousCalls = calls.length;
+  for (const name of ["x-rabilink-resource-key", "x-rabilink-token", "x-rabilink-tunnel-local", "x-rabiroute-peer-proxy"]) {
+    await assert.rejects(client.request("GET", "/plugin/resource", { headers: { [name]: "forged" } }), /transport-owned/);
+  }
+  assert.equal(calls.length, previousCalls);
 });
 
 test("uncertain mutation returns once and does not expose transport secrets", async () => {
@@ -208,7 +228,7 @@ test("new plugin paths accept business headers, exact raw/bytes/stream bodies an
     assert.equal(item.headers["x-plugin-operation"], "fixture");
     assert.equal(item.headers["x-rabiroute-expected-revision"], "r1");
     assert.equal(item.headers.authorization, `Bearer ${settings.credential}`);
-    assert.equal(item.headers["x-rabiroute-agent-id"], settings.agentId);
+    assert.equal(item.headers["x-rabiroute-agent-type"], settings.agentType);
     assert.equal(item.headers["x-rabiroute-expected-manager-instance-id"], meta.managerInstanceId);
   }
   assert.equal((await client.request("GET", "/plugin/new/text")).body, large);
@@ -220,7 +240,7 @@ test("new plugin paths accept business headers, exact raw/bytes/stream bodies an
 test("deny transport headers without introducing a business allowlist", async () => {
   let calls = 0;
   const client = createManagerClient({ ...settings, fetchImpl: async () => { calls++; return Response.json(meta); } });
-  for (const name of ["Authorization", "Host", "Cookie", "Content-Length", "Connection", "Proxy-Authorization", "X-Forwarded-For", "X-RabiRoute-Agent-Id", "X-RabiRoute-Node-Id", "X-RabiRoute-Host-Token", "X-RabiRoute-WebGUI-Token", "X-RabiRoute-Expected-Application-Generation-Id", "X-RabiRoute-Expected-Manager-Instance-Id", "X-RabiLink-Internal-Hop", "X-RabiLink-Tunnel-Device-Id", "X-RabiLink-Resource-Owner", "X-RabiLink-Token", "bad header"]) {
+  for (const name of ["Authorization", "Host", "Cookie", "Content-Length", "Connection", "Proxy-Authorization", "X-Forwarded-For", "X-RabiRoute-Agent-Id", "X-RabiRoute-Node-Id", "X-RabiRoute-Host-Token", "X-RabiRoute-WebGUI-Token", "X-RabiRoute-Expected-Application-Generation-Id", "X-RabiRoute-Expected-Manager-Instance-Id", "X-RabiLink-Internal-Hop", "X-RabiLink-Tunnel-Device-Id", "X-RabiLink-Resource-Key", "X-RabiLink-Token", "bad header"]) {
     await assert.rejects(client.request("GET", "/plugin/new", { headers: { [name]: "forged" } }), /transport-owned/);
   }
   await assert.rejects(client.request("POST", "/plugin/new", { bodyText: "x", bodyBytes: Buffer.from("x") }), /one Manager/);

@@ -1,6 +1,6 @@
 {
   "name": "rabiroute",
-  "version": "0.3.72",
+  "version": "0.4.0",
   "license": "MIT",
   "private": true,
   "type": "module",
@@ -19,8 +19,8 @@
     "build:windows-host": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-windows-host.ps1",
     "test:windows-host": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-windows-host.ps1",
     "build": "npm run build:backend && npm run build:plugins && npm run webgui:build",
-    "build:backend": "node scripts/clean-backend-dist.mjs && tsc -p tsconfig.json && node scripts/copy-markdown-renderer.mjs && node scripts/copy-agent-adapter-resources.mjs && node scripts/instrument-automatic-code.mjs && node scripts/build-source-patches.mjs && npm run check:codex-contract && npm run check:event-driven && npm run check:plugin-architecture",
-    "test": "node --test-concurrency=2 --import ./scripts/test-manager-runtime-env.mjs --import tsx --test \"src/**/*.test.ts\" && node --import ./scripts/test-manager-runtime-env.mjs --test scripts/data-mutation-audit-coverage.test.mjs scripts/build-plugin-packages.test.mjs scripts/work-cycle-send-contract.test.mjs scripts/work-cycle-agent-send-recovery.test.mjs scripts/start-hot-reload.test.mjs scripts/rabilink-event-hub.test.mjs scripts/rabilink-relay-mobile-workers.test.mjs scripts/rabilink-relay-peers.test.mjs scripts/rabilink-relay-speech-messages.test.mjs scripts/test-rabispeech-tts-loop.test.mjs scripts/test-built-manager-readonly.test.mjs scripts/check-active-intelligence-physical-acceptance.test.mjs scripts/record-active-intelligence-physical-observation.test.mjs scripts/export-speech-transcript.test.mjs scripts/windows-release-optional-speech.test.mjs scripts/windows-desktop-contract.test.mjs scripts/developer-channel.test.mjs scripts/manager-storage-parent-boundary.test.mjs scripts/create-windows-release-manifest.test.mjs scripts/windows-release-transaction.test.mjs scripts/installed-data-compatibility.test.mjs scripts/legacy-wearable-task-migration.test.mjs scripts/dynamic-manager-active-truth.test.mjs scripts/android-sdk-dynamic-manager-contract.test.mjs apps/rabi-mobile-android/scripts/wearable-companion-lifecycle.test.mjs && npm run check:skills",
+    "build:backend": "node scripts/clean-backend-dist.mjs && tsc -p tsconfig.json && node scripts/copy-plugin-runtime-host-assets.mjs && node scripts/copy-markdown-renderer.mjs && node scripts/copy-agent-adapter-resources.mjs && node scripts/instrument-automatic-code.mjs && node scripts/build-source-patches.mjs && npm run check:codex-contract && npm run check:event-driven && npm run check:plugin-architecture",
+    "test": "node --test-concurrency=2 --import ./scripts/test-manager-runtime-env.mjs --import tsx --test \"src/**/*.test.ts\" && node --import ./scripts/test-manager-runtime-env.mjs --test scripts/data-mutation-audit-coverage.test.mjs scripts/build-plugin-packages.test.mjs scripts/work-cycle-send-contract.test.mjs scripts/work-cycle-agent-send-recovery.test.mjs scripts/start-hot-reload.test.mjs scripts/rabilink-event-hub.test.mjs scripts/rabilink-relay-mobile-workers.test.mjs scripts/rabilink-relay-peers.test.mjs scripts/rabilink-relay-speech-messages.test.mjs scripts/test-rabispeech-tts-loop.test.mjs scripts/test-built-manager-readonly.test.mjs scripts/check-active-intelligence-physical-acceptance.test.mjs scripts/record-active-intelligence-physical-observation.test.mjs scripts/export-speech-transcript.test.mjs scripts/windows-release-optional-speech.test.mjs scripts/windows-desktop-contract.test.mjs scripts/developer-channel.test.mjs scripts/manager-storage-parent-boundary.test.mjs scripts/create-windows-release-manifest.test.mjs scripts/windows-release-transaction.test.mjs scripts/legacy-wearable-task-migration.test.mjs scripts/dynamic-manager-active-truth.test.mjs scripts/android-sdk-dynamic-manager-contract.test.mjs apps/rabi-mobile-android/scripts/wearable-companion-lifecycle.test.mjs && npm run check:skills",
     "check:codex-contract": "node scripts/check-codex-adapter-contract.mjs",
     "check:event-driven": "node scripts/check-event-driven-architecture.mjs",
     "check:active-intelligence:physical": "node scripts/check-active-intelligence-physical-acceptance.mjs",
@@ -65,6 +65,8 @@
     "@openai/codex": "0.144.1",
     "@rabiroute/plugin-sdk": "file:plugins/contracts/plugin-sdk",
     "@wecom/aibot-node-sdk": "^1.0.7",
+    "ajv": "^8.20.0",
+    "ajv-formats": "^3.0.1",
     "bonjour-service": "1.4.4",
     "cordis": "4.0.0-rc.8",
     "dotenv": "^16.4.7",
@@ -93,5 +95,8 @@
     "vue-tsc": "^2.2.12",
     "vuetify": "^3.12.8",
     "yauzl": "3.4.0"
+  },
+  "engines": {
+    "node": ">=22.13.0"
   }
 }

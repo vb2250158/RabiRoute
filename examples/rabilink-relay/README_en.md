@@ -32,3 +32,9 @@ npm run relay:rabilink:openapi:check
 ```
 
 Rizon/Lingzhu submits to `POST /rokid/rabilink/input`. HTTP 202 with `eventId` and a cursor confirms enqueueing; downstream messages establish the Agent response. Native AIUI uses the generic API transport described in the [AIUI client](../../apps/rabilink-aiui/README_en.md). `--examples-only` validates public templates without converting private imports.
+
+## Timeout settings
+
+A standalone Relay reads a WebGUI-exported JSON override snapshot from `RABIROUTE_TIMEOUT_OVERRIDES` at startup. `relay.*` takes precedence over existing `RABILINK_RELAY_*_MS` variables; missing overrides retain previous defaults. Values are integer milliseconds from 1 to 2147483647. Saving a PC configuration does not update a remote Relay: apply the snapshot to that deployment and restart its process.
+
+Authenticated requests may supply `X-Rabi-Timeout-Ms` for their own reply, WebGUI/speech proxy, or long-poll budget. SDK, phone, and glasses clients send their effective budget. Requests retain independent expiration times. A paired tunnel uses the shorter endpoint idle budget. Budgets do not replace authentication, original operation IDs, or uncertain-outcome reconciliation.

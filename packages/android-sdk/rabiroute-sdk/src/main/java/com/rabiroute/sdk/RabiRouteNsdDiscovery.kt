@@ -12,7 +12,8 @@ import java.util.concurrent.atomic.AtomicReference
 
 internal class RabiRouteNsdDiscovery(
     context: Context,
-    private val configuredTimeoutMs: Int
+    private val configuredTimeoutMs: Int,
+    private val timeout: (String,Long)->Long = { _, fallback -> fallback }
 ) {
     private val nsdManager = context.applicationContext
         .getSystemService(Context.NSD_SERVICE) as? NsdManager
@@ -25,13 +26,13 @@ internal class RabiRouteNsdDiscovery(
         val endpoints = LinkedHashSet<RabiRouteDiscoveredManagerEndpoint>()
         val resolutionErrors = ArrayList<String>()
         val resolutionDeadlineNanos = System.nanoTime() +
-            TimeUnit.MILLISECONDS.toNanos(RabiRouteDiscoveryContract.MAX_TOTAL_RESOLUTION_MS)
+            TimeUnit.MILLISECONDS.toNanos(timeout("android.discovery.resolveTotal",RabiRouteDiscoveryContract.MAX_TOTAL_RESOLUTION_MS))
         for (serviceInfo in services.take(RabiRouteDiscoveryContract.MAX_RESOLVED_SERVICES)) {
             val remainingMs = TimeUnit.NANOSECONDS.toMillis(resolutionDeadlineNanos - System.nanoTime())
             if (remainingMs <= 0L) {
                 throw IllegalStateException("DNS-SD Manager resolution exceeded its total time budget.")
             }
-            val resolveTimeoutMs = remainingMs.coerceAtMost(RabiRouteDiscoveryContract.RESOLVE_TIMEOUT_MS)
+            val resolveTimeoutMs = remainingMs.coerceAtMost(timeout("android.discovery.resolve",RabiRouteDiscoveryContract.RESOLVE_TIMEOUT_MS))
             when (val result = resolveService(serviceInfo, resolveTimeoutMs)) {
                 is ResolveResult.Success -> endpoints.add(result.endpoint)
                 is ResolveResult.Failure -> resolutionErrors.add(result.message)
@@ -103,7 +104,7 @@ internal class RabiRouteNsdDiscovery(
             throw IllegalStateException("Android DNS-SD discovery could not be started.", error)
         }
 
-        if (!awaitWithoutThrowing(startCompleted, START_CALLBACK_TIMEOUT_MS)) {
+        if (!awaitWithoutThrowing(startCompleted, timeout("android.discovery.start",START_CALLBACK_TIMEOUT_MS))) {
             runCatching { nsdManager.stopServiceDiscovery(listener) }
             throw IllegalStateException("Android DNS-SD discovery did not report startup.")
         }
@@ -111,14 +112,14 @@ internal class RabiRouteNsdDiscovery(
         check(started.get()) { "Android DNS-SD discovery did not enter the started state." }
 
         try {
-            awaitDiscoveryWindow(RabiRouteDiscoveryContract.discoveryWindowMs(configuredTimeoutMs))
+            awaitDiscoveryWindow(timeout("android.discovery.window",RabiRouteDiscoveryContract.discoveryWindowMs(configuredTimeoutMs)))
         } finally {
             try {
                 nsdManager.stopServiceDiscovery(listener)
             } catch (error: RuntimeException) {
                 throw IllegalStateException("Android DNS-SD discovery could not be stopped.", error)
             }
-            if (!awaitWithoutThrowing(stopCompleted, STOP_CALLBACK_TIMEOUT_MS)) {
+            if (!awaitWithoutThrowing(stopCompleted, timeout("android.discovery.stop",STOP_CALLBACK_TIMEOUT_MS))) {
                 throw IllegalStateException("Android DNS-SD discovery did not report shutdown.")
             }
             stopError.get()?.let { throw it }

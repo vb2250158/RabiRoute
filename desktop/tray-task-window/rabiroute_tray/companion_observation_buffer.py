@@ -4,6 +4,8 @@ No video/audio files: JPEG samples and mono PCM expire with the activity.
 """
 from __future__ import annotations
 
+from .timeout_settings import get_timeout_seconds
+
 import base64
 import io
 import threading
@@ -180,7 +182,7 @@ class CompanionRecorder:
         # Release the native streams before a subsequent configure can start a new owner.
         for worker in (self.worker, self.audio_worker):
             if worker and worker is not threading.current_thread():
-                worker.join(timeout=0.1)
+                worker.join(timeout=get_timeout_seconds("desktop.observation.stop", 0.1))
         with self.lock:
             self.scope = None; self.latest = None; self.window = None
             self.frames.clear(); self.audio.clear(); self.frame_bytes = 0

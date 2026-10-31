@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
 import { primaryAgentInstanceBindings } from "../shared/routeAgentTargets.js";
-import { configuredInstanceBinding, readBoundInstanceAgent, requestInstanceThread, instanceWorkerStateDirectory } from "./instanceClient.js";
+import { configuredInstanceBinding, requestInstanceThread, instanceWorkerStateDirectory } from "./instanceClient.js";
 
 test("new child environment isolates primary target from all same-provider saved targets", () => {
   const keys = ["PRIMARY_AGENT_TARGET", "REMOTE_AGENT_TARGETS", "AGENT_INSTANCE_BINDINGS"];
@@ -44,10 +44,8 @@ test("instance requests select the bound owner and never fall back to local task
   process.env.AGENT_INSTANCE_BINDINGS = JSON.stringify({ codex: binding });
   try {
     assert.deepEqual(configuredInstanceBinding("codex"), binding);
-    assert.equal((await readBoundInstanceAgent(binding)).workspace, "/remote/project");
-    assert.equal((await requestInstanceThread(binding, { action: "read" })).thread.id, "task-a");
+    assert.equal((await requestInstanceThread(binding, { action: "read", agentAdapter:"dsh",threadId:"task-a" })).thread.id, "task-a");
     online = false;
-    await assert.rejects(readBoundInstanceAgent(binding), /offline/);
     failed = true;
     await assert.rejects(requestInstanceThread(binding, { action: "open" }), /owner unavailable/);
     const before = calls;

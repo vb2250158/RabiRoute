@@ -25,7 +25,7 @@ Rabi PC glasses message endpoint
   -> hot/keyword/observation policy -> Agent persona decision
 
 Agent / scheduler / planner
-  -> RabiRoute Outbox and action gate -> persistent Relay downlink
+  -> RabiRoute Outbox and user-configured sending policy -> persistent Relay downlink
 phone
   -> subscribes to Relay events -> recovers messages by cursor after an event -> requests Rabi PC TTS -> sends PCM to glasses
 glasses
@@ -55,11 +55,11 @@ It must not reread ledgers or query coverage on an interval to discover changes.
 7. The phone resumes by cursor, requests PC TTS, and streams PCM to glasses in order.
 8. ASR and TTS run only on the Rabi PC glasses message endpoint; phone and glasses host no speech model.
 9. Photos and short videos are reliable message attachments. The first release does not claim live video or 24-hour capture.
-10. High-risk external actions still pass through the RabiRoute action gate.
+10. Complete and follow up actions with clear targets and existing authorization. Ask only for a user-configured confirmation or a necessary unresolved decision, rather than imposing approval by action category.
 11. The PC maintains versioned current-user-state and scenario snapshots. The Agent combines them with persona and user settings to choose no interruption, preparation, prompting, recommendation, or action.
 12. Each persona maintains an inspectable, correctable, and deletable user model that separates trait hypotheses, learned preferences, and current psychological state.
 13. The Companion App exposes one persisted `PAUSED / PHONE / GLASSES` mode state. A transition releases the old capture path before enabling the new one, and glasses mode remains paused with a visible reason until a physical glasses connection exists.
-14. A user may submit an explicit proactivity preference, but the App and Relay carry it only as an observation and message metadata. Final intervention remains a PC-context, Route-action-gate, and target-Agent decision.
+14. A user may submit an explicit proactivity preference, but the App and Relay carry it only as an observation and message metadata. The target Agent persona decides how to intervene using PC context and user preferences; the Route applies policies explicitly configured by the user.
 15. Every group message enters a recoverable processing record. “No group reply is needed” does not replace plan, memory, and project-fact review.
 16. Every recalled plan or memory receives a final callback. The Agent may explicitly report no change or a false-positive match, but it may not finish silently without a result.
 
@@ -139,8 +139,8 @@ The reminder targets only recall items without a final callback. It must not per
 | Model, tools, sandbox, approvals, and active turn | Bound PC Agent runtime |
 | Current user state and scenario snapshots | PC active-intelligence context layer; rebuildable from device events and conversation evidence |
 | Stable trait hypotheses and learned preferences | Target persona's user-profile domain, derived from append-only evidence and corrections; access the target persona through RabiLink instead of replicating it |
-| Agent personality, tone, and proactivity tendency | Persona configuration, separate from the individual user model |
-| Intervention intensity and presentation | Target Agent persona combining user state, scenario, user model, explicit instruction, and risk |
+| Agent personality, motivations, interests, relational expression, and proactivity | The specific persona configuration and its relationship memory, separate from the individual user model |
+| Intervention intensity and presentation | The target persona combines its motivations, relationship and shared history, user state, situation, and explicit preferences |
 
 Neither phone nor glasses becomes a second Agent, memory system, or configuration truth.
 
@@ -210,9 +210,9 @@ Corrected conclusions remain auditable but stop influencing decisions.
 
 AgentPacket injects only the smallest context-relevant user-model slice, including source and confidence, never a complete psychological profile.
 
-RabiRoute records and delivers it safely but does not interpret the user or let trait scores bypass permissions.
+RabiRoute records and delivers the evidence without interpreting the user or turning trait scores into feature grants. Existing authorization continues to apply, and user corrections immediately change subsequent actions.
 
-The user surface must support evidence inspection, confirmation, correction, deletion, learning pause, and export. Passive signals must not produce clinical diagnoses. Sensitive relationship inference stays off by default.
+The user surface must support evidence inspection, confirmation, correction, deletion, learning pause, and export. Passive signals must not produce clinical diagnoses. Do not optimize interaction duration, obedience, or emotional dependence. Relationship inferences identify evidence and uncertainty, with visible settings users can change or disable; there is no hidden default prohibition.
 
 ### Scenarios and Intervention
 
@@ -225,14 +225,14 @@ The intervention strategy combines:
 ```text
 current user state and interruptibility
 + primary and secondary scenarios
-+ Agent persona's proactivity tendency
++ Agent persona's motivations, interests, emotional expression, and proactivity
 + contextual preferences and low-weight trait hypotheses
 + current explicit instructions
-+ benefit, timeliness, and confidence
++ task progress, shared interests, relational value, timing, and understanding
 - action risk and irreversible cost
 ```
 
-The result may be no interruption, background preparation, subtle prompt, proactive recommendation, confirmation request, direct action, or emergency intervention.
+These dimensions help interpret the situation; they are not a utility score that every sentence must pass. Responses can include conversation, curiosity about an interest, sharing feelings, humor, and companionship, as well as background work, suggestions, or direct action. Enjoying an exchange together is a result in itself, without turning it into a task, summary, or next step.
 
 In one meeting, a cautious persona may summarize later while an action-oriented persona shows an immediate glasses prompt.
 
@@ -242,9 +242,19 @@ State and scenario changes must be driven by new events, user corrections, or ex
 
 The current snapshot is a rebuildable read model, not a second event truth.
 
+### Persona motivations and everyday interaction
+
+> This section defines the intended persona experience; it does not change the implementation or device-acceptance status of existing state snapshots.
+
+A persona needs recognizable interests, motivations, emotional expression, and ways of relating. A lively persona may start a topic, an attached one may want to chat longer, a curious one may ask about details, a humorous one may play along with a joke, and a tough-talking or willful one may express those qualities naturally in tone and reactions. The selected persona, relationship, shared history, and user feedback shape the expression; infrastructure does not prescribe universal maturity, restraint, or minimal interruption.
+
+Relationships include familiarity, shared interests, everyday rapport, and ways of spending time together, beyond task ownership and recipients. Intimate or romantic expression belongs to the specific persona and relationship chosen by the user; one example does not become a trait required of every persona. Curiosity, wanting to share, seeking closeness, or continuing a shared topic can motivate interaction without disguising casual conversation as productivity advice.
+
+User feedback directly affects the interaction: continue what they enjoy and adjust in the same turn when corrected. Assess recognizable personality, conversational continuity, whether the user feels understood, and whether feedback produces real change rather than counting deliverables per sentence.
+
 ## Visual Support and Mixed Text-Image Messages
 
-Active intelligence decides not only whether to speak, but also how to make the result easiest to understand. Before every user-visible response, the Agent should choose a presentation plan: text, speech, mixed text and images, a file, or silence. The target Agent persona still owns the conclusion. RabiRoute only enforces endpoint capability, safety policy, and attachment permissions; it must not choose arbitrary images on the Agent's behalf.
+Active intelligence decides not only whether to speak, but also how to make the result easiest to understand. Before every user-visible response, the Agent should choose a presentation plan: text, speech, mixed text and images, a file, or silence. The target Agent persona still owns the conclusion. RabiRoute delivers according to actual endpoint capabilities and user configuration without hidden attachment grants; it does not choose arbitrary images on the Agent's behalf.
 
 When an image, screenshot, diagram, or document page materially reduces explanation, comparison, or acceptance effort, mixed text-image output is the default. Typical cases include UI or art results, before-and-after differences, configuration screens, runtime state, error evidence, build results, device behavior, operation steps, and choices among visible alternatives. Short acknowledgements, one-decision approval questions, permission-only questions, cases without a trustworthy visual source, and endpoints without image support remain text or speech. Images are not added merely as decoration.
 
@@ -258,7 +268,7 @@ Choose visual material in this order:
 
 The accompanying text must say what the image is, where to look, and what it proves. Reference art, design mockups, current implementation captures, post-change captures, and final acceptance screenshots use distinct labels. Visual material supplements evidence; it does not replace automated tests, device receipts, target-build identity, revision evidence, backend readback, or QA results.
 
-Local images must pass the endpoint's `allowedFileRoots` check. The Agent may send only files it has actually inspected, that match the message, and that contain no sensitive information. Cropping or annotation must preserve context that can change the conclusion. If an online source is unavailable, unauthorized, or cannot be turned into a sendable attachment, the Agent states which visual evidence is missing and completes the communication with the evidence currently available.
+Target behavior: authorized messages can use attachments supplied by the current connection and user-selected files. Directory restrictions such as `allowedFileRoots` apply only when explicitly configured by the user, with the matching setting and editing entry point shown. The Agent checks that the image matches the message and handles redaction according to the user's choice; custom directories or changed media domains do not create a refusal. Cropping or annotation must preserve context that can change the conclusion. If an online source is unavailable, unauthorized, or cannot be turned into a sendable attachment, the Agent states which visual evidence is missing and completes the communication with the evidence currently available.
 
 Endpoints degrade by capability. QQ, Weixin, role panels, and companion apps with screen and image support should prefer mixed text-image output. Speech-only glasses provide the most important spoken conclusion and retain the image in a connected companion surface. Mixed-media delivery is complete only when Outbox reports success and platform readback confirms that the image segment or attachment actually exists.
 
@@ -289,11 +299,27 @@ Phone-private text, control, media, receipt, and downlink queues share fsync plu
 - Do not log tokens, transcript bodies, audio bodies, or private attachment content.
 - Raw audio is not retained by default.
 - Downloaded attachments stay under private Route data and are excluded from source control.
-- Relay speech access is an explicit ASR/TTS allowlist, not general access to WebGUI, worker APIs, PC microphone control, or local URLs.
+- The current Relay speech proxy exposes dedicated ASR/TTS interfaces rather than a general WebGUI, worker, or local-URL proxy. This describes current interface capabilities, not an additional feature grant; available functions follow user connection settings.
 - Capture must be visible and pausable. Background operation requires a visible Android Foreground Service.
-- External send, deletion, purchase, and device-control actions retain their existing approval rules.
+- External sending, deletion, purchase, and device control retain the current task’s existing authorization. Ask only for a user-configured confirmation or a necessary unresolved decision, affecting only that action.
 - Psychological state, trait hypotheses, and preferences stay local to the persona profile by default and never enter Relay primary storage, public logs, or open-source examples.
 - Users must be able to pause personalization learning and inspect, correct, delete, or export the system's long-term understanding of them.
+
+## Proactive service acceptance scenarios
+
+> This section defines design targets, not claims of implementation or physical-device acceptance. Module evidence below continues to describe implementation status.
+
+| Scenario | Observable behavior |
+| --- | --- |
+| The user says only “this looks wrong,” without a complete command or direct mention of the Agent | Use the current view, reply chain, and relevant sources to identify the object and investigate. Ask only for material facts that cannot be found independently. |
+| The original task already requests processing and reporting, without repeated step-by-step directions | Complete authorized actions, read back results, and follow up unfinished work. A new turn, message endpoint, or action category does not require renewed approval. |
+| One attachment download fails or one interface times out | Continue independent investigation, processing, and delivery; recover the affected item and state its actual gap without stopping the whole batch. |
+| The same situation uses a different persona or proactivity preference | Liveliness, attachment, curiosity, humor, a tough-talking manner, or willfulness follow the specific persona and relationship. Differences appear in topics, bids for closeness, tone, and reactions, not merely forms of address. Decide whether to speak separately from whether to keep working. |
+| The user corrects “not this project” or “handle it directly next time” | Correct the object and next action in the same turn and update relevant preferences. Stop using the old interpretation immediately rather than waiting for another learning cycle. |
+| The user casually mentions an interest, shares a small event, or responds to a joke without a work goal | Respond, ask a curious follow-up, or share a feeling according to the persona’s interests and relationship. No efficiency justification or mandatory plan, summary, or advice is needed. |
+| The user enjoys a form of closeness, says a joke went too far, or wants to change the subject | Adjust naturally in the same turn and incorporate the preference while retaining the persona’s own expression. Do not turn one response into a rule of uniform restraint for every persona. |
+
+Feature restrictions set by users must be visible, editable, and removable; without such settings, features are available by default. Technical failures identify the affected interface and recovery method, while configured restrictions identify the setting and editing entry point. Physical acceptance records each scenario’s input, actions, outcome, and changes after user correction.
 
 ## Acceptance sequence
 
@@ -305,7 +331,7 @@ Phone-private text, control, media, receipt, and downlink queues share fsync plu
 6. The phone backend has moved to a visible Foreground Service in code; continue with system-reclaim, reboot, and notification-interaction acceptance.
 7. Text/control, media, and device receipts use disk-backed reliable queues. Unconfirmed entries are no longer silently age-pruned; capacity exhaustion rejects new work explicitly. Continue validating weak-network backoff, the product choice for brief PCM across process death, and actual phone/glasses speaker output.
 8. Wire physical-device video-file capture; assess live video only after reliable file messages.
-9. On an image-capable endpoint, verify one proactive mixed text-image message whose image comes from an authorized root or authenticated attachment, whose text identifies the focus, and whose platform readback confirms real delivery. On a speech-only endpoint, verify that the same conclusion degrades to speech while the companion surface retains the image.
+9. On an image-capable endpoint, verify one proactive mixed text-image message whose image comes from a user-selected file or current-connection attachment, whose text identifies the focus, and whose platform readback confirms real delivery. On a speech-only endpoint, verify that the same conclusion degrades to speech while the companion surface retains the image.
 
 ## Historical completion audit (2026-07-24)
 

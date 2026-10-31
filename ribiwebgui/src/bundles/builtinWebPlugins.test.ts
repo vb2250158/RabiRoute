@@ -59,7 +59,7 @@ test("independent Web plugin entries register only their own contributions", () 
   activateDesktop(moduleApi("manager:desktop", registrations));
   activateXiaomiHome(moduleApi("manager:xiaomi-home", registrations));
   assert.deepEqual(registrations.filter(item => item.instanceId === "manager:core" && item.kind === "page").map(item => item.routeId), ["route.overview", "global.lan-agents", "global.settings", "global.docs"]);
-  assert.deepEqual(registrations.filter(item => item.instanceId === "manager:persona" && item.kind === "page").map(item => item.routeId), ["route.persona", "route.persona-document", "route.knowledge"]);
+  assert.deepEqual(registrations.filter(item => item.instanceId === "manager:persona" && item.kind === "page").map(item => item.routeId), ["route.persona", "role.message-history", "route.persona-document", "route.knowledge"]);
   assert.deepEqual(registrations.filter(item => item.instanceId === "manager:desktop").map(item => item.rendererId), ["builtin.desktop-settings.v1"]);
   assert.deepEqual(registrations.filter(item => item.instanceId === "manager:desktop").map(item => item.placementId), ["global.settings.sections"]);
   assert.deepEqual(registrations.filter(item => item.instanceId === "manager:xiaomi-home").map(item => item.rendererId), ["builtin.xiaomi-home-message-endpoint.v1", "builtin.xiaomi-home-auth.v1", "builtin.xiaomi-home-devices.v1"]);
@@ -70,7 +70,7 @@ test("route-control Web entry registers and releases its own route commands", ()
   const registrations: Registration[] = [];
   const dispose = activateRouteControl(moduleApi("manager:route-control", registrations));
   assert.deepEqual(registrations.map(item => [item.kind, item.instanceId, item.handlerId]), [
-    ["command", "manager:route-control", "web.quick-setup"],
+    ["command", "manager:route-control", "web.create-role"],
     ["command", "manager:route-control", "web.add-route"],
     ["command", "manager:route-control", "web.open-manager-config"]
   ]);

@@ -30,3 +30,54 @@ test("plugin SDK exposes versioned capabilities and scoped utilities", () => {
   bus.emit("changed", 2);
   assert.equal(current, 2);
 });
+
+test("SDK harness exposes full lifecycle and publication with scoped retirement", async () => {
+  const harness = createPluginTestHarness();
+  const calls: string[] = [];
+  await harness.activate(definePlugin({ activate(context) {
+    assert.equal(typeof context.identity.activationId, "string");
+    context.effects.adopt(() => { calls.push("private"); });
+    context.publication.add({
+      publish() { calls.push("publish"); },
+      rollback() { calls.push("rollback"); },
+      async afterPublish({ signal, previousRetirement }) {
+        await previousRetirement;
+        assert.equal(signal, context.lifecycle.signal);
+        assert.equal(signal.aborted, false);
+        calls.push("start");
+      },
+      retire() {
+        assert.equal(context.lifecycle.signal.aborted, true);
+        calls.push("retire");
+      }
+    });
+  } }));
+  assert.deepEqual(calls, ["publish", "start"]);
+  await harness.dispose();
+  assert.deepEqual(calls, ["publish", "start", "retire", "private"]);
+});
+
+test("SDK harness rolls back partial publication without retiring an unpublished candidate", async () => {
+  const harness = createPluginTestHarness();
+  const calls: string[] = [];
+  await assert.rejects(harness.activate(definePlugin({ activate(context) {
+    context.effects.adopt(() => { calls.push("private"); });
+    context.publication.add({
+      publish() { calls.push("publish"); throw new Error("publication rejected"); },
+      rollback() { calls.push("rollback"); },
+      retire() { calls.push("retire"); }
+    });
+  } })), /publication rejected/);
+  assert.deepEqual(calls, ["publish", "rollback", "private"]);
+  await harness.dispose();
+});
+
+test("SDK rejects async publication callbacks rather than claiming synchronous atomic commit", async () => {
+  const harness = createPluginTestHarness();
+  let rolledBack = false;
+  await assert.rejects(harness.activate(definePlugin({ activate(context) {
+    context.publication.add({ publish: async () => {}, rollback() { rolledBack = true; } });
+  } })), /must be synchronous/);
+  assert.equal(rolledBack, true);
+  await harness.dispose();
+});

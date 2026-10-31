@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .timeout_settings import get_timeout_seconds, configure_timeouts
+
 import json
 import re
 from dataclasses import dataclass
@@ -144,6 +146,7 @@ class ManagerClient:
                 "Manager instance mismatch: "
                 f"expected {self.manager_instance_id}, received {actual_manager or '<missing>'}."
             )
+        configure_timeouts(meta.get("timeoutOverrides", {}))
         return ""
 
     def snapshot(self) -> ManagerSnapshot:
@@ -207,7 +210,7 @@ class ManagerClient:
                     "routeKind": route_kind,
                     "ruleId": rule_id or trigger_id,
                 },
-                timeout_seconds=45,
+                timeout_seconds=get_timeout_seconds("desktop.manager.mutation", 45),
             )
             return ManualTriggerResult(ok=True)
         except HTTPError as error:
@@ -254,7 +257,7 @@ class ManagerClient:
                     "text": text,
                     "attachments": attachments or [],
                 },
-                timeout_seconds=45,
+                timeout_seconds=get_timeout_seconds("desktop.manager.mutation", 45),
             )
             return RolePanelSendResult(ok=True)
         except HTTPError as error:
@@ -376,7 +379,7 @@ class ManagerClient:
                     "sessionId": None,
                     "routeId": None,
                 },
-                timeout_seconds=120,
+                timeout_seconds=get_timeout_seconds("desktop.manager.operation", 120),
             )
             return SpeechActionResult(ok=True)
         except HTTPError as error:
@@ -424,7 +427,7 @@ class ManagerClient:
                     "author": "user",
                     "notifyAgent": True,
                 },
-                timeout_seconds=5,
+                timeout_seconds=get_timeout_seconds("desktop.plan.feedback", 5),
                 headers={
                     "Idempotency-Key": idempotency_key,
                     "If-Match": revision,
@@ -494,16 +497,16 @@ class ManagerClient:
             return PlanFeedbackSubmitResult(ok=False, message=str(error), uncertain=mutation_started)
 
     def _get_json(self, path: str) -> dict[str, Any]:
-        with urlopen(f"{self.manager_url}{path}", timeout=self.timeout_seconds) as response:
+        with urlopen(f"{self.manager_url}{path}", timeout=get_timeout_seconds("desktop.manager.request", self.timeout_seconds)) as response:
             return json.loads(response.read().decode("utf-8"))
 
     def _get_json_resource(self, path: str) -> tuple[dict[str, Any], str]:
-        with urlopen(f"{self.manager_url}{path}", timeout=self.timeout_seconds) as response:
+        with urlopen(f"{self.manager_url}{path}", timeout=get_timeout_seconds("desktop.manager.request", self.timeout_seconds)) as response:
             payload = json.loads(response.read().decode("utf-8"))
             return payload, str(response.headers.get("ETag") or "").strip()
 
     def _get_bytes(self, path: str) -> bytes:
-        with urlopen(f"{self.manager_url}{path}", timeout=self.timeout_seconds) as response:
+        with urlopen(f"{self.manager_url}{path}", timeout=get_timeout_seconds("desktop.manager.request", self.timeout_seconds)) as response:
             return response.read()
 
     def _post_json(
@@ -527,7 +530,7 @@ class ManagerClient:
         request.add_header("content-type", "application/json; charset=utf-8")
         for name, value in (headers or {}).items():
             request.add_header(name, value)
-        with urlopen(request, timeout=timeout_seconds or self.timeout_seconds) as response:
+        with urlopen(request, timeout=timeout_seconds if timeout_seconds is not None else get_timeout_seconds("desktop.manager.request", self.timeout_seconds)) as response:
             return (
                 json.loads(response.read().decode("utf-8")),
                 {str(name): str(value) for name, value in response.headers.items()},
@@ -537,7 +540,7 @@ class ManagerClient:
         data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         request = Request(f"{self.manager_url}{path}", data=data, method="POST")
         request.add_header("content-type", "application/json; charset=utf-8")
-        with urlopen(request, timeout=timeout_seconds or self.timeout_seconds):
+        with urlopen(request, timeout=timeout_seconds if timeout_seconds is not None else get_timeout_seconds("desktop.manager.request", self.timeout_seconds)):
             return
 
     def _error_message(self, error: HTTPError) -> str:

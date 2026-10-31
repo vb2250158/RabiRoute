@@ -109,7 +109,9 @@ test("HTTP bounded chunked body accepts exact limit, rejects extra byte and decl
   assert.equal((await f.send(randomUUID(), Buffer.alloc(8))).status, 200);
   const over = f.request(randomUUID(), Buffer.alloc(9)); over.req.write(Buffer.alloc(8)); over.req.end(Buffer.alloc(1));
   assert.equal((await over.result).status, 413);
-  assert.equal((await f.send(randomUUID(), Buffer.alloc(9), { "content-length": 9 })).status, 413);
+  const denied = await f.send(randomUUID(), Buffer.alloc(9), { "content-length": 9 });
+  assert.equal(denied.status, 413);
+  assert.match(denied.body.repair, /agentUploads.maxFileMiB=.*WebGUI.*Config.json/);
   assert.equal(f.commits(), 1);
 });
 

@@ -4,8 +4,8 @@ import { appendDesktopPetTranscript } from "../desktopPetTranscript.js";
 import fs from "node:fs";
 import { randomUUID } from "node:crypto";
 import { managerReadWorkerPool } from "./managerReadWorkerPool.js";
-import http from "node:http";
-import { handleDesktopPetMotion } from "./desktopPetMotion.js";
+import type { ApiOperationResult } from "./apiOperationContract.js";
+
 import path from "node:path";
 import { copyDesktopPetPackDirectoryAsync, importDesktopPetPack } from "./desktopPetPackImport.js";
 import {
@@ -20,7 +20,8 @@ import { normalizeDesktopPetModeAnimationSets, type DesktopPetModeAnimationSet }
 
 const PACK_ID_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,79}$/;
 const IMAGE_EXTENSIONS = new Set([".gif", ".png"]);
-const MAX_ASSET_BYTES = 64 * 1024 * 1024;
+export const DESKTOP_PET_LIMITS = Object.freeze({ assetBytes: 64 * 1024 * 1024, jsonBytes: 64 * 1024, importBytes: 128 * 1024 * 1024, motionBytes: 8192 });
+const MAX_ASSET_BYTES = DESKTOP_PET_LIMITS.assetBytes;
 const DEFAULT_DESKTOP_PET_CACHE_ROOT = path.join(process.cwd(), "data", "cache", "desktop-pet-roles");
 
 type JsonObject = Record<string, unknown>;
@@ -310,38 +311,6 @@ export function listDesktopPetPacks(
   return { personaId: roleId, packs, diagnostics };
 }
 
-function jsonResponse(response: http.ServerResponse, statusCode: number, body: unknown): void {
-  if (response.destroyed || response.writableEnded) return;
-  body = errorResponsePresentation(body, statusCode);
-  response.writeHead(statusCode, { "content-type": "application/json; charset=utf-8" });
-  response.end(JSON.stringify(body, null, 2));
-}
-
-async function readJsonBody(request: http.IncomingMessage): Promise<unknown> {
-  const chunks: Buffer[] = [];
-  let bytes = 0;
-  for await (const chunk of request) {
-    const buffer = Buffer.from(chunk);
-    bytes += buffer.length;
-    if (bytes > 64 * 1024) throw new Error("Desktop pet settings payload is too large.");
-    chunks.push(buffer);
-  }
-  return chunks.length ? JSON.parse(Buffer.concat(chunks).toString("utf8")) : {};
-}
-
-async function readBinaryBody(request: http.IncomingMessage): Promise<Buffer> {
-  const chunks: Buffer[] = [];
-  let bytes = 0;
-  for await (const chunk of request) {
-    const buffer = Buffer.from(chunk);
-    bytes += buffer.length;
-    if (bytes > 128 * 1024 * 1024) throw new Error("Desktop pet import is too large.");
-    chunks.push(buffer);
-  }
-  if (!chunks.length) throw new Error("Desktop pet import is empty.");
-  return Buffer.concat(chunks);
-}
-
 function readBinding(settings: DesktopPetSettingsAccess, roleId: string): DesktopPetBinding {
   return settings.read().pets[roleId] ?? { ...DEFAULT_DESKTOP_PET_BINDING };
 }
@@ -351,7 +320,8 @@ async function updateBinding(
   roleId: string,
   body: unknown,
   roleDir: string,
-  cacheRoot: string
+  cacheRoot: string,
+  queryCatalog: DesktopPetCatalogReader
 ): Promise<DesktopPetBinding> {
   const row = objectValue(body);
   if (typeof row.personaId === "string" && row.personaId !== roleId) {
@@ -360,7 +330,7 @@ async function updateBinding(
   const current = settings.read();
   const binding = normalizeDesktopPetBinding({ ...(current.pets[roleId] ?? DEFAULT_DESKTOP_PET_BINDING), ...row });
   if (binding.packId && binding.packId !== current.pets[roleId]?.packId) {
-    const catalog = await managerReadWorkerPool.queryDesktopPetCatalog(roleId, roleDir, cacheRoot, { packId: binding.packId }, { timeoutMs: 120_000 });
+    const catalog = await queryCatalog(roleId, roleDir, cacheRoot, { packId: binding.packId }, 120_000);
     if (!catalog.packs.some(pack => pack.id === binding.packId)) {
       throw new Error("Desktop pet pack does not belong to this persona or is not runnable.");
     }
@@ -370,14 +340,13 @@ async function updateBinding(
   return settings.write({ ...latest, pets: { ...latest.pets, [roleId]: updated } }).pets[roleId]!;
 }
 
-async function serveAsset(
-  response: http.ServerResponse,
+async function readAsset(
   roleDir: string,
   roleId: string,
   packId: string,
   relativePath: string,
   cacheRoot: string
-): Promise<void> {
+): Promise<ApiOperationResult> {
   if (!PACK_ID_PATTERN.test(packId)) throw new Error("Invalid desktop pet pack id.");
   const cachedPackRoot = path.resolve(cacheRoot, roleId, "desktop-pet", "packs", packId);
   const sourcePackRoot = path.resolve(roleDir, "desktop-pet", "packs", packId);
@@ -396,14 +365,10 @@ async function serveAsset(
   if (!stat.isFile() || stat.size > MAX_ASSET_BYTES) throw new Error("Desktop pet asset is unavailable or too large.");
   const payload = await fs.promises.readFile(realCandidate);
   if (payload.length > MAX_ASSET_BYTES) throw new Error("Desktop pet asset is too large.");
-  if (response.destroyed || response.writableEnded) return;
-  response.writeHead(200, {
+  return { status: 200, body: payload, headers: {
     "content-type": path.extname(realCandidate).toLowerCase() === ".gif" ? "image/gif" : "image/png",
-    "content-length": String(payload.length),
-    "cache-control": "private, max-age=3600",
-    "x-content-type-options": "nosniff"
-  });
-  response.end(payload);
+    "content-length": String(payload.length), "cache-control": "private, max-age=3600", "x-content-type-options": "nosniff"
+  } };
 }
 
 function assetReadErrorCode(error: unknown): string | undefined {
@@ -416,106 +381,84 @@ function isTransientAssetReadError(error: unknown): boolean {
   return ["EMFILE", "ENFILE", "EBUSY"].includes(assetReadErrorCode(error) ?? "");
 }
 
-export function handleDesktopPetApi(
-  request: http.IncomingMessage,
-  requestUrl: URL,
-  response: http.ServerResponse,
-  resolveRoleDir: (roleId: string) => string,
-  settings?: DesktopPetSettingsAccess,
-  cacheRoot = DEFAULT_DESKTOP_PET_CACHE_ROOT,
-  publishEvent?: DesktopPetEventPublisher
-): boolean {
-  if (handleDesktopPetMotion(request, requestUrl, response, settings, publishEvent)) return true;
-  const dialogueMatch = requestUrl.pathname.match(/^\/api\/desktop-pet\/roles\/([^/]+)\/dialogue$/);
-  const transcriptMatch = requestUrl.pathname.match(/^\/api\/desktop-pet\/roles\/([^/]+)\/transcripts$/);
-  if (dialogueMatch || transcriptMatch) {
-    const roleId = sanitizeRoleId(decodeURIComponent((dialogueMatch ?? transcriptMatch)![1]));
-    if (!roleId) {
-      jsonResponse(response, 400, { code: -1, message: "Invalid role id." });
-      return true;
-    }
-    if (request.method !== (dialogueMatch ? "GET" : "POST")) {
-      jsonResponse(response, 405, { code: -1, message: "Method not allowed." });
-      return true;
-    }
-    void Promise.resolve().then(async () => {
-      const roleDir = resolveRoleDir(roleId);
-      if (dialogueMatch) {
-        const dialogue = await readDesktopPetDialogue(roleId, roleDir);
-        jsonResponse(response, 200, { code: 0, data: { personaId: roleId, dialogue } });
-      } else {
-        const body = objectValue(await readJsonBody(request));
-        if (body.personaId !== roleId || body.voice !== roleId || body.kind !== "tts") {
-          throw new Error("Desktop pet speech must belong to the requested persona.");
-        }
-        const appended = appendDesktopPetTranscript(roleId, roleDir, {
-          kind: "tts", id: body.id, text: body.text, time: body.time, source: "host-playback"
-        });
-        jsonResponse(response, 200, { code: 0, data: { personaId: roleId, appended } });
-      }
-    }).catch(error => jsonResponse(response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) }));
-    return true;
+
+export type DesktopPetCatalogReader = (roleId: string, roleDir: string, cacheRoot: string, options: DesktopPetPackCatalogOptions, timeoutMs: number) => Promise<DesktopPetPackCatalog>;
+export type DesktopPetOwnerScope = Readonly<{ roleId: string; roleDir: string }>;
+export type DesktopPetOwnerContext = {
+  resolveRoleDir: (roleId: string) => string;
+  settings?: DesktopPetSettingsAccess;
+  cacheRoot?: string;
+  publishEvent?: DesktopPetEventPublisher;
+  /** Controlled owner seam; completion callback must acknowledge the actual worker/task release, even after timeout. */
+  catalogQuery?: (roleId: string, roleDir: string, cacheRoot: string, options: DesktopPetPackCatalogOptions, timeoutMs: number, onReleased: () => void) => Promise<DesktopPetPackCatalog>;
+};
+
+/** Owns real background worker leases; HTTP completion alone cannot retire an active catalog task. */
+export class DesktopPetOwner {
+  private accepting = true;
+  private readonly workerReleases = new Set<Promise<void>>();
+  readonly cacheRoot: string;
+  constructor(readonly context: DesktopPetOwnerContext) { this.cacheRoot = context.cacheRoot ?? DEFAULT_DESKTOP_PET_CACHE_ROOT; }
+  capture(rawRoleId: string): DesktopPetOwnerScope {
+    if (!this.accepting) throw new Error("Desktop pet owner is stopping.");
+    const roleId = sanitizeRoleId(rawRoleId); if (!roleId) throw new Error("Invalid role id.");
+    return Object.freeze({ roleId, roleDir: this.context.resolveRoleDir(roleId) });
   }
-  const bindingMatch = requestUrl.pathname.match(/^\/api\/desktop-pet\/roles\/([^/]+)$/);
-  const importMatch = requestUrl.pathname.match(/^\/api\/desktop-pet\/roles\/([^/]+)\/packs\/import$/);
-  const cacheMatch = requestUrl.pathname.match(/^\/api\/desktop-pet\/roles\/([^/]+)\/packs\/([^/]+)\/cache$/);
-  const catalogMatch = requestUrl.pathname.match(/^\/api\/desktop-pet\/roles\/([^/]+)\/packs$/);
-  const assetMatch = requestUrl.pathname.match(/^\/api\/desktop-pet\/roles\/([^/]+)\/packs\/([^/]+)\/assets\/(.+)$/);
-  if (!bindingMatch && !importMatch && !cacheMatch && !catalogMatch && !assetMatch) return false;
-  if (bindingMatch) {
-    const roleId = sanitizeRoleId(decodeURIComponent(bindingMatch[1]));
-    if (!roleId || !settings) {
-      jsonResponse(response, 503, { code: -1, message: "Desktop pet settings are unavailable." });
-      return true;
-    }
-    if (request.method === "GET") {
-      jsonResponse(response, 200, { code: 0, data: { personaId: roleId, binding: readBinding(settings, roleId) } });
-      return true;
-    }
-    if (request.method === "PATCH" || request.method === "PUT") {
-      void readJsonBody(request)
-        .then(body => updateBinding(settings, roleId, body, resolveRoleDir(roleId), cacheRoot))
-        .then(binding => {
-          publishEvent?.("desktop_settings_changed", { scope: "desktop-pet", personaId: roleId });
-          jsonResponse(response, 200, { code: 0, data: { personaId: roleId, binding } });
-        })
-        .catch(error => jsonResponse(response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) }));
-      return true;
-    }
-    jsonResponse(response, 405, { code: -1, message: "Method not allowed." });
-    return true;
+  async stop(): Promise<void> { this.accepting = false; while (this.workerReleases.size) await Promise.all([...this.workerReleases]); }
+  activeWorkerCount(): number { return this.workerReleases.size; }
+  readonly queryCatalog: DesktopPetCatalogReader = (roleId, roleDir, cacheRoot, options, timeoutMs) => {
+    let release!: () => void; const released = new Promise<void>(resolve => { release = resolve; });
+    this.workerReleases.add(released); void released.then(() => this.workerReleases.delete(released));
+    try {
+      return this.context.catalogQuery ? this.context.catalogQuery(roleId, roleDir, cacheRoot, options, timeoutMs, release)
+        : managerReadWorkerPool.run<DesktopPetPackCatalog>({ type: "desktop_pet_catalog", roleId, roleDir, cacheRoot, options }, { timeoutMs, onWorkerReleased: release });
+    } catch (error) { release(); throw error; }
+  };
+  bindingRead(roleId: string): ApiOperationResult {
+    if (!this.context.settings) return { status: 503, body: { code: -1, message: "Desktop pet settings are unavailable." } };
+    return { status: 200, body: { code: 0, data: { personaId: roleId, binding: readBinding(this.context.settings, roleId) } } };
   }
-  if (importMatch) {
-    if (request.method !== "POST") {
-      jsonResponse(response, 405, { code: -1, message: "Method not allowed." });
-      return true;
-    }
-    const roleId = sanitizeRoleId(decodeURIComponent(importMatch[1]));
-    if (!roleId) {
-      jsonResponse(response, 400, { code: -1, message: "Invalid role id." });
-      return true;
-    }
-    const roleDir = resolveRoleDir(roleId);
-    void readBinaryBody(request)
-      .then(async payload => {
-        const packId = importDesktopPetPack(
-          roleId,
-          roleDir,
-          requestUrl.searchParams.get("fileName") || String(request.headers["x-rabi-file-name"] || "upload"),
-          String(request.headers["content-type"] || "application/octet-stream"),
-          payload,
-          {
-            packId: requestUrl.searchParams.get("packId") || undefined,
-            state: requestUrl.searchParams.get("state") || undefined,
-            name: requestUrl.searchParams.get("name") || undefined
-          }
-        );
-        await syncImportedPackToRuntimeCache(roleId, roleDir, packId, cacheRoot);
-        const catalog = listDesktopPetPacks(roleId, roleDir, cacheRoot, { includeSharedSource: false, packId });
-        const pack = catalog.packs.find(item => item.id === packId);
+  async bindingWrite(scope: DesktopPetOwnerScope, body: unknown): Promise<ApiOperationResult> {
+    if (!this.context.settings) return this.bindingRead(scope.roleId);
+    const binding = await updateBinding(this.context.settings, scope.roleId, body, scope.roleDir, this.cacheRoot, this.queryCatalog);
+    this.context.publishEvent?.("desktop_settings_changed", { scope: "desktop-pet", personaId: scope.roleId });
+    return { status: 200, body: { code: 0, data: { personaId: scope.roleId, binding } } };
+  }
+  async dialogue(scope: DesktopPetOwnerScope): Promise<ApiOperationResult> {
+    return { status: 200, body: { code: 0, data: { personaId: scope.roleId, dialogue: await readDesktopPetDialogue(scope.roleId, scope.roleDir) } } };
+  }
+  transcript(scope: DesktopPetOwnerScope, value: unknown): ApiOperationResult {
+    const body = objectValue(value);
+    if (body.personaId !== scope.roleId || body.voice !== scope.roleId || body.kind !== "tts") throw new Error("Desktop pet speech must belong to the requested persona.");
+    const appended = appendDesktopPetTranscript(scope.roleId, scope.roleDir, { kind: "tts", id: body.id, text: body.text, time: body.time, source: "host-playback" });
+    return { status: 200, body: { code: 0, data: { personaId: scope.roleId, appended } } };
+  }
+  async catalog(scope: DesktopPetOwnerScope, includeSharedSource: boolean): Promise<ApiOperationResult> {
+    const catalog = await this.queryCatalog(scope.roleId, scope.roleDir, this.cacheRoot, { includeSharedSource }, includeSharedSource ? 120_000 : 30_000);
+    return { status: 200, body: { code: 0, data: catalog } };
+  }
+  async asset(scope: DesktopPetOwnerScope, packId: string, relativePath: string): Promise<ApiOperationResult> {
+    return readAsset(scope.roleDir, scope.roleId, packId, relativePath, this.cacheRoot);
+  }
+  async cache(scope: DesktopPetOwnerScope, packId: string): Promise<ApiOperationResult> {
+    packId = safePackId(packId); if (!packId) throw new Error("Invalid role or pack id.");
+    const source = await this.queryCatalog(scope.roleId, scope.roleDir, this.cacheRoot, { packId }, 120_000);
+    if (!source.packs.some(pack => pack.id === packId)) throw new Error("Desktop pet pack is not available from the shared role source.");
+    await syncImportedPackToRuntimeCache(scope.roleId, scope.roleDir, packId, this.cacheRoot);
+    const catalog = listDesktopPetPacks(scope.roleId, scope.roleDir, this.cacheRoot, { includeSharedSource: false, packId });
+    const pack = catalog.packs.find(item => item.id === packId); if (!pack) throw new Error("Desktop pet pack was not readable from the runtime cache.");
+    this.context.publishEvent?.("desktop_pet_catalog_changed", { personaId: scope.roleId, packId });
+    return { status: 201, body: { code: 0, data: { personaId: scope.roleId, pack } } };
+  }
+  async import(scope: DesktopPetOwnerScope, payload: Buffer, fileName: string, contentType: string, options: { packId?: string; state?: string; name?: string }): Promise<ApiOperationResult> {
+    if (!payload.length) throw new Error("Desktop pet import is empty.");
+    const packId = importDesktopPetPack(scope.roleId, scope.roleDir, fileName, contentType, payload, options);
+    await syncImportedPackToRuntimeCache(scope.roleId, scope.roleDir, packId, this.cacheRoot);
+    const catalog = listDesktopPetPacks(scope.roleId, scope.roleDir, this.cacheRoot, { includeSharedSource: false, packId });
+    const pack = catalog.packs.find(item => item.id === packId);
         if (!pack) {
-          const target = path.join(roleDir, "desktop-pet", "packs", packId);
-          if (inside(path.join(roleDir, "desktop-pet", "packs"), target)) {
+          const target = path.join(scope.roleDir, "desktop-pet", "packs", packId);
+          if (inside(path.join(scope.roleDir, "desktop-pet", "packs"), target)) {
             try {
               fs.rmSync(target, { recursive: true, force: true });
               recordDataMutationAudit({
@@ -524,7 +467,7 @@ export function handleDesktopPetApi(
                 owner: "desktop-pet-pack-import",
                 action: "rollback-invalid-pack",
                 target: { type: "desktop-pet-pack", id: packId },
-                dataSource: { kind: "file", id: `roles/${roleId}/desktop-pet/packs/${packId}` },
+                dataSource: { kind: "file", id: `roles/${scope.roleId}/desktop-pet/packs/${packId}` },
                 outcome: "committed"
               });
             } catch (error) {
@@ -535,7 +478,7 @@ export function handleDesktopPetApi(
                 owner: "desktop-pet-pack-import",
                 action: "rollback-invalid-pack",
                 target: { type: "desktop-pet-pack", id: packId },
-                dataSource: { kind: "file", id: `roles/${roleId}/desktop-pet/packs/${packId}` },
+                dataSource: { kind: "file", id: `roles/${scope.roleId}/desktop-pet/packs/${packId}` },
                 outcome: "failed",
                 error
               });
@@ -544,73 +487,13 @@ export function handleDesktopPetApi(
           }
           throw new Error(catalog.diagnostics.find(item => item.packId === packId)?.message || "Imported desktop pet pack is not runnable.");
         }
-        return pack;
-      })
-      .then(pack => {
-        publishEvent?.("desktop_pet_catalog_changed", { personaId: roleId, packId: pack.id });
-        jsonResponse(response, 201, { code: 0, data: { personaId: roleId, pack } });
-      })
-      .catch(error => jsonResponse(response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) }));
-    return true;
+
+    this.context.publishEvent?.("desktop_pet_catalog_changed", { personaId: scope.roleId, packId: pack.id });
+    return { status: 201, body: { code: 0, data: { personaId: scope.roleId, pack } } };
   }
-  if (cacheMatch) {
-    if (request.method !== "POST") {
-      jsonResponse(response, 405, { code: -1, message: "Method not allowed." });
-      return true;
-    }
-    void (async () => {
-      const roleId = sanitizeRoleId(decodeURIComponent(cacheMatch[1]));
-      const packId = safePackId(decodeURIComponent(cacheMatch[2]));
-      if (!roleId || !packId) throw new Error("Invalid role or pack id.");
-      const roleDir = resolveRoleDir(roleId);
-      const sharedCatalog = await managerReadWorkerPool.queryDesktopPetCatalog(roleId, roleDir, cacheRoot, { packId }, { timeoutMs: 120_000 });
-      if (!sharedCatalog.packs.some(pack => pack.id === packId)) {
-        throw new Error("Desktop pet pack is not available from the shared role source.");
-      }
-      await syncImportedPackToRuntimeCache(roleId, roleDir, packId, cacheRoot);
-      const runtimeCatalog = listDesktopPetPacks(roleId, roleDir, cacheRoot, { includeSharedSource: false, packId });
-      const pack = runtimeCatalog.packs.find(item => item.id === packId);
-      if (!pack) throw new Error("Desktop pet pack was not readable from the runtime cache.");
-      publishEvent?.("desktop_pet_catalog_changed", { personaId: roleId, packId });
-      jsonResponse(response, 201, { code: 0, data: { personaId: roleId, pack } });
-    })().catch(error => jsonResponse(response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) }));
-    return true;
+  failure(error: unknown, status = 400, asset = false): ApiOperationResult {
+    const transient = asset && isTransientAssetReadError(error);
+    const resultStatus = transient ? 503 : status;
+    return { status: resultStatus, ...(transient ? { headers: { "retry-after": "1" } } : {}), body: errorResponsePresentation({ code: -1, message: transient ? "Desktop pet asset is temporarily unavailable." : error instanceof Error ? error.message : String(error) }, resultStatus) };
   }
-  if (request.method !== "GET") {
-    jsonResponse(response, 405, { code: -1, message: "Method not allowed." });
-    return true;
-  }
-  const assetError = (error: unknown) => {
-    if (response.destroyed || response.writableEnded) return;
-    if (assetMatch && isTransientAssetReadError(error)) {
-      response.setHeader("retry-after", "1");
-      jsonResponse(response, 503, { code: -1, message: "Desktop pet asset is temporarily unavailable." });
-    } else jsonResponse(response, 404, { code: -1, message: error instanceof Error ? error.message : String(error) });
-  };
-  try {
-    const match = assetMatch ?? catalogMatch;
-    const roleId = sanitizeRoleId(decodeURIComponent(match![1]));
-    if (!roleId) throw new Error("Invalid role id.");
-    const roleDir = resolveRoleDir(roleId);
-    if (assetMatch) {
-      void serveAsset(
-        response,
-        roleDir,
-        roleId,
-        decodeURIComponent(assetMatch[2]),
-        decodeURIComponent(assetMatch[3]),
-        cacheRoot
-      ).catch(assetError);
-    } else {
-      const options: DesktopPetPackCatalogOptions = {
-        includeSharedSource: requestUrl.searchParams.get("scope") !== "runtime"
-      };
-      void managerReadWorkerPool.queryDesktopPetCatalog(roleId, roleDir, cacheRoot, options, { timeoutMs: options.includeSharedSource ? 120_000 : 30_000 })
-        .then(catalog => jsonResponse(response, 200, { code: 0, data: catalog }))
-        .catch(error => jsonResponse(response, 503, { code: -1, message: error instanceof Error ? error.message : String(error) }));
-    }
-  } catch (error) {
-    assetError(error);
-  }
-  return true;
 }

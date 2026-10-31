@@ -10,28 +10,11 @@ export const activate = definePlugin({
                 "value": {
                     "surface": "web.pages",
                     "label": {
-                        "fallback": "路由配置"
+                        "fallback": "消息"
                     },
                     "routeId": "route.adapters",
                     "rendererId": "builtin.web-page.adapters.v1",
                     "slot": "route",
-                    "hosts": [
-                        "web"
-                    ],
-                    "order": 40
-                }
-            },
-            {
-                "kind": "navigation",
-                "id": "message-adapters",
-                "value": {
-                    "surface": "web.navigation",
-                    "label": {
-                        "fallback": "路由配置"
-                    },
-                    "routeId": "route.adapters",
-                    "icon": "mdi-puzzle-outline",
-                    "slot": "route-primary",
                     "hosts": [
                         "web"
                     ],
@@ -62,7 +45,7 @@ export const activate = definePlugin({
                 }
             });
             try {
-        ctx.effect(() => {
+        ctx.effect(async () => {
             const providers = new runtime.MessageAdapterScanProviderRegistry();
             const service = new runtime.MessageAdapterControlService(providers);
             const unregisterProviders = runtime.registerBuiltinMessageAdapterScanProviders(providers, {
@@ -71,7 +54,6 @@ export const activate = definePlugin({
                 routeCallbackEndpoint: runtime.routeCallbackEndpoint,
                 routeHasRecentMessages: runtime.routeHasRecentMessages,
                 checkHttpEndpoint: runtime.checkHttpEndpoint,
-                fenneNotePlaybackUrl: runtime.fenneNotePlaybackUrl,
                 scanNapcatEndpoint: () => runtime.scanNapcatEndpoint(runtime.napcatManagerCtx()),
                 remoteAgentScanResult: runtime.remoteAgentMessageAdapterScanResult,
                 speechStatus: () => runtime.speechControl.status(),
@@ -79,26 +61,25 @@ export const activate = definePlugin({
                 readGatewayStatus: runtime.readGatewayStatus,
                 weixinDefaultBaseUrl: () => process.env.WEIXIN_BASE_URL || "https://ilinkai.weixin.qq.com"
             });
-            const requestTracker = new runtime.ManagerPluginRequestTracker();
-            const unregisterRoutes = runtime.registerManagerPluginHandlerRoutes(runtime.managerPluginRoutes, "manager:message-adapter-control", "manager.message-adapter-control.api", [
-                requestTracker.wrap((request, requestUrl, response) => runtime.handleMessageAdapterControlApi(request, requestUrl, response, {
-                    service,
-                    scanNapcatHealth: runtime.napcatScanHealthPayload,
-                    gatewayPayload: () => runtime.standaloneGatewayPayload(),
-                    jsonResponse: runtime.jsonResponse,
-                    trackOperation: operation => requestTracker.trackOperation(operation)
-                }))
-            ], [
-                { routeId: "scan", kind: "exact", path: "/api/scan/message-adapters", methods: ["GET"] }
-            ]);
-            return async () => {
-                unregisterRoutes();
-                await Promise.all([
-                    requestTracker.stop(),
-                    service.stop()
-                ]);
+            let registration;
+            const retire = async () => {
+                const retired = registration?.dispose();
+                const results = await Promise.allSettled([retired, service.stop()]);
                 unregisterProviders();
+                const failure = results.find(result => result.status === "rejected");
+                if (failure) throw failure.reason;
             };
+            try {
+                registration = await runtime.managerPluginRoutes.registerOperationsAsync(context.identity.instanceId, runtime.createMessageAdapterControlOperations({
+                    service,
+                    scanNapcatHealth: () => runtime.napcatScanHealthPayload(probe => service.trackProbe(probe)),
+                    gatewayPayload: () => runtime.standaloneGatewayPayload()
+                }), context.lifecycle.signal);
+                return retire;
+            } catch (error) {
+                await retire().catch(() => {});
+                throw error;
+            }
         }, "activate Manager message adapter control plugin");
 
                 await Promise.all(pendingEffects);

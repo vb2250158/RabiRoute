@@ -90,6 +90,11 @@ async function prepare(request: IsolatedPluginRequest): Promise<IsolatedPluginRe
         setImmediate(() => { void disposeResources().finally(() => process.exit(1)); });
       }
     }),
+    publication: Object.freeze({
+      add(): never {
+        throw new Error("Plugin publication is unsupported in isolated execution: the RPC protocol cannot atomically publish synchronous Manager ownership changes. Use in_process execution for publication hooks.");
+      }
+    }),
     effects: Object.freeze({
       add(starter: PluginEffectStarter, label = "isolated plugin effect"): void { pendingEffects.push({ starter, label }); },
       adopt(disposer: PluginEffectDisposer): void { disposers.push(disposer); }

@@ -162,3 +162,21 @@ test("Failed fork faults cleanly without an unhandled child error or invalid PID
   const f = await fixture(t, { packageRoot: path.join(os.tmpdir(), `rabi-absent-${process.pid}-${Date.now()}`) });
   assert.equal(f.host.state, "faulted"); assert.equal(f.host.child, null);
 });
+
+
+test("live required capability loss stays degraded without weakening identity or metadata", () => {
+  const ready = { applicationGenerationId: "generation", managerInstanceId: "instance" };
+  const meta = { applicationGenerationId: "generation", managerInstanceId: "instance", health: { live: true, requiredReady: false, state: "degraded" } };
+  for (const state of ["healthy", "degraded"]) {
+    for (let index = 0; index < 4; index++) assert.equal(validateMeta({ ...meta, health: { ...meta.health, state } }, ready), "degraded");
+  }
+  for (const health of [
+    { ...meta.health, live: false }, { ...meta.health, live: undefined },
+    { ...meta.health, requiredReady: undefined }, { ...meta.health, requiredReady: null },
+    { ...meta.health, requiredReady: "false" }, { ...meta.health, requiredReady: 0 },
+    { ...meta.health, state: "invalid" }
+  ]) assert.throws(() => validateMeta({ ...meta, health }, ready));
+  assert.throws(() => validateMeta({ ...meta, applicationGenerationId: "other" }, ready));
+  assert.throws(() => validateMeta({ ...meta, managerInstanceId: "other" }, ready));
+  assert.equal(validateMeta({ ...meta, health: { ...meta.health, requiredReady: true, state: "healthy" } }, ready), "healthy");
+});

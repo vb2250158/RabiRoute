@@ -1,3 +1,4 @@
+import { relayTimeout, clientTimeout } from "./relay-timeouts.mjs";
 import { WebSocketServer, WebSocket } from "ws";
 
 /** Opaque, application-isolated pairing. Endpoint authentication remains end to end. */
@@ -16,13 +17,14 @@ export function attachTunnelBroker(server, authenticate) {
     if (!room && rooms.size >= 128 || room && room.sockets.length >= 2) { socket.destroy(); return; }
     wss.handleUpgrade(req, socket, head, ws => {
       connections.set(ws, { req, url, app });
-      if (!room) { room = { sockets: [], pending: [], pendingBytes: 0, bytes: 0, window: Date.now(), timer: undefined }; rooms.set(key, room); }
+      if (!room) { room = { sockets: [], pending: [], pendingBytes: 0, bytes: 0, window: Date.now(), timer: undefined, idleMs: clientTimeout(req,relayTimeout("tunnel.idle",65000)) }; rooms.set(key, room); }
       room.sockets.push(ws);
+      room.idleMs = Math.min(room.idleMs,clientTimeout(req,room.idleMs));
       const close = () => { clearTimeout(room.timer); rooms.delete(key); for (const peer of room.sockets) peer.terminate(); };
-      clearTimeout(room.timer); room.timer = setTimeout(close, room.sockets.length === 2 ? 65_000 : 10_000); room.timer.unref();
+      clearTimeout(room.timer); room.timer = setTimeout(close, room.sockets.length === 2 ? room.idleMs : relayTimeout("tunnel.pair",10000)); room.timer.unref();
       ws.on("error", close); ws.on("close", () => { connections.delete(ws); close(); });
       ws.on("message", data => {
-        clearTimeout(room.timer); room.timer = setTimeout(close, 65_000); room.timer.unref();
+        clearTimeout(room.timer); room.timer = setTimeout(close, room.idleMs); room.timer.unref();
         if (Date.now() - room.window > 1_000) { room.window = Date.now(); room.bytes = 0; }
         room.bytes += data.length;
         if (room.bytes > 8 * 1024 * 1024) { close(); return; }

@@ -1,3 +1,5 @@
+import { getTimeoutMs } from "../shared/timeoutSettings.js";
+import { beginNativeStorageWork } from "./nativeStorageWork.js";
 import { fork } from "node:child_process";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import path from "node:path";
@@ -94,6 +96,7 @@ export type ManagerStorageMutationOptions = Readonly<{
 }>;
 
 type PendingMutation<T = unknown> = {
+  releaseNativeWork(): void;
   authorize?: () => void;
   actor?: import("../shared/planHistoryActor.js").PlanHistoryActor;
   roleId: string;
@@ -252,9 +255,9 @@ export class ManagerStorageMutationPool {
       "storageGenerationLease"
     );
     this.identity = Object.freeze({ rolesRoot, applicationGenerationId, managerInstanceId, storageGenerationLease });
-    this.timeoutMs = positiveInteger(options.timeoutMs, 30_000);
-    this.terminationTimeoutMs = positiveInteger(options.terminationTimeoutMs, 1_000);
-    this.forceTerminationTimeoutMs = positiveInteger(options.forceTerminationTimeoutMs, 5_000);
+    this.timeoutMs = positiveInteger(options.timeoutMs, getTimeoutMs("storage.mutation", 30_000));
+    this.terminationTimeoutMs = positiveInteger(options.terminationTimeoutMs, getTimeoutMs("storage.mutationTerminate", 1_000));
+    this.forceTerminationTimeoutMs = positiveInteger(options.forceTerminationTimeoutMs, getTimeoutMs("storage.mutationForceTerminate", 5_000));
     this.maxQueue = Math.max(0, Math.floor(options.maxQueue ?? 32));
     this.childFactory = options.childFactory ?? spawnStorageMutationChild;
   }
@@ -315,15 +318,17 @@ export class ManagerStorageMutationPool {
     if ((this.activeMutation || this.queue.length > 0) && this.queue.length >= this.maxQueue) {
       return Promise.reject(new ManagerStorageMutationError("Storage mutation queue is full.", "busy"));
     }
+    const nativeWork = beginNativeStorageWork();
     return new Promise<T>((resolve, reject) => {
       const pending: PendingMutation<T> = {
+        releaseNativeWork: nativeWork.release,
         roleId,
         planId,
         idempotencyKey: options.idempotencyKey,
         expectedRevision: options.expectedRevision,
         task: cloneSerializable(task),
         actor: options.actor ? cloneSerializable(options.actor) : undefined,
-        timeoutMs: positiveInteger(options.timeoutMs, this.timeoutMs),
+        timeoutMs: positiveInteger(options.timeoutMs, getTimeoutMs("storage.mutation", this.timeoutMs)),
         authorize: options.authorize,
         signal: options.signal,
         resolve,
@@ -334,6 +339,7 @@ export class ManagerStorageMutationPool {
           const index = this.queue.indexOf(pending as PendingMutation);
           if (index < 0) return;
           this.queue.splice(index, 1);
+          pending.releaseNativeWork();
           pending.reject(new ManagerStorageMutationError("Storage mutation request was aborted.", "aborted"));
         };
         pending.signal.addEventListener("abort", pending.abortListener, { once: true });
@@ -583,12 +589,14 @@ export class ManagerStorageMutationPool {
     }
     if (pending.abortListener) pending.signal?.removeEventListener("abort", pending.abortListener);
     if (pending.signal?.aborted) {
+      pending.releaseNativeWork();
       pending.reject(new ManagerStorageMutationError("Storage mutation request was aborted.", "aborted"));
       queueMicrotask(() => this.drain());
       return;
     }
     try { assertManagerStorageMutationAuthorized(pending); }
     catch (error) {
+      pending.releaseNativeWork();
       pending.reject(error as ManagerStorageMutationError);
       queueMicrotask(() => this.drain());
       return;
@@ -598,6 +606,7 @@ export class ManagerStorageMutationPool {
       try {
         slot = this.createChildSlot();
       } catch {
+        pending.releaseNativeWork();
         pending.reject(new ManagerStorageMutationError(
           "Storage mutation child failed to start.",
           "worker_failed"
@@ -824,9 +833,9 @@ export class ManagerStorageMutationPool {
     if (slot.terminationFlight) return slot.terminationFlight;
     slot.terminationFlight = (async () => {
       try { slot.child.kill("SIGTERM"); } catch { /* close observation is authoritative */ }
-      if (await closesWithin(slot, this.terminationTimeoutMs)) return true;
+      if (await closesWithin(slot, getTimeoutMs("storage.mutationTerminate", this.terminationTimeoutMs))) return true;
       try { slot.child.kill("SIGKILL"); } catch { /* reported below if close remains absent */ }
-      const confirmed = await closesWithin(slot, this.forceTerminationTimeoutMs);
+      const confirmed = await closesWithin(slot, getTimeoutMs("storage.mutationForceTerminate", this.forceTerminationTimeoutMs));
       if (confirmed) return true;
       try { if (slot.child.connected) slot.child.disconnect(); } catch { /* best effort only */ }
       slot.child.stdout?.destroy();
@@ -853,6 +862,8 @@ export class ManagerStorageMutationPool {
     if (this.activeMutation !== active) return;
     this.clearActiveDeadline(active);
     this.activeMutation = undefined;
+    if (active.terminating && !active.slot.closed) void active.slot.closePromise.then(active.pending.releaseNativeWork);
+    else active.pending.releaseNativeWork();
     if (error) {
       this.lastErrorCode = error instanceof ManagerStorageMutationError ? error.code : "worker_failed";
       active.pending.reject(error);
@@ -868,6 +879,7 @@ export class ManagerStorageMutationPool {
 
   private rejectQueue(error: Error): void {
     for (const pending of this.queue.splice(0)) {
+      pending.releaseNativeWork();
       if (pending.abortListener) pending.signal?.removeEventListener("abort", pending.abortListener);
       pending.reject(error);
     }

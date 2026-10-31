@@ -1,3 +1,4 @@
+import { getTimeoutMs } from "../shared/timeoutSettings.js";
 import { Worker } from "node:worker_threads";
 import { fileURLToPath } from "node:url";
 
@@ -53,7 +54,7 @@ export class SourcePatchCompiler {
           else resolve(result!);
         }, reject);
       };
-      const timeout = setTimeout(() => finish(new Error("Source patch compilation timed out after 30 seconds.")), 30_000);
+      const timeout = setTimeout(() => finish(new Error("Source patch compilation timed out after 30 seconds.")), getTimeoutMs("patch.compile", 30000));
       worker.once("message", message => {
         if (message?.ok) finish(undefined, message.result);
         else {

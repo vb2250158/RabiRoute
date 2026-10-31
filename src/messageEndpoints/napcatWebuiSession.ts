@@ -1,3 +1,4 @@
+import { getTimeoutMs } from "../shared/timeoutSettings.js";
 import { createHash } from "node:crypto";
 
 export type NapcatWebuiSession = {
@@ -24,7 +25,7 @@ export class NapcatWebuiSessions {
       const flight = (async () => {
         const response = await fetch(`${baseUrl}/api/auth/login`, {
           method: "POST", headers: { "content-type": "application/json; charset=utf-8" },
-          body: JSON.stringify({ hash }), signal: AbortSignal.timeout(5000)
+          body: JSON.stringify({ hash }), signal: AbortSignal.timeout(getTimeoutMs("backend.messageEndpoints.napcatWebuiSession.authorize.AbortSignal.timeout.request", 5000))
         });
         const result = await response.json().catch(() => ({})) as { code?: number; data?: { Credential?: string } };
         const value = String(result.data?.Credential || "").trim();
@@ -52,7 +53,7 @@ export class NapcatWebuiSessions {
           try {
             response = await fetch(`${baseUrl}${pathname}`, {
               method: "POST", headers: { "content-type": "application/json; charset=utf-8", authorization: `Bearer ${credential.value}` },
-              body: JSON.stringify(body), signal: AbortSignal.timeout(5000)
+              body: JSON.stringify(body), signal: AbortSignal.timeout(getTimeoutMs("backend.messageEndpoints.napcatWebuiSession.request.AbortSignal.timeout.request", 5000))
             });
           } catch (error) { invalidate(credential); throw error; }
           const result = await response.clone().json().catch(() => ({})) as { code?: number; message?: string };

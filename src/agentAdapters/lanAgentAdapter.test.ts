@@ -29,11 +29,11 @@ test("LAN adapter sends the selected node and stable delivery identity; offline 
     process.env.LAN_AGENT_ACCESS_TOKEN = "fixture-only";
     process.env.GATEWAY_MANAGER_URL = `http://127.0.0.1:${address.port}`;
     delete process.env.GATEWAY_ID;
-    await notifyInstanceAgent("codex", { instanceId: "node-fixture", agentId: "agent-fixture" }, envelope);
+    await notifyInstanceAgent("codex", { instanceId: "node-fixture", agentId: "agent-fixture" }, envelope, {threadId:"explicit-thread",workspace:"C:/workspace"});
     assert.equal(requests[0]?.url, "/api/lan-agent/instances/node-fixture/agents/agent-fixture/tasks");
     assert.equal(requests[0]?.body.idempotencyKey, "delivery-fixture");
     assert.equal(requests[0]?.body.provider, "codex-desktop");
-    assert.equal(requests[0]?.body.threadId, "configured-thread");
+    assert.equal(requests[0]?.body.threadId, "explicit-thread");
     await assert.rejects(notifyInstanceAgent("codex", { instanceId: "node-fixture", agentId: "agent-fixture" }, envelope, { imagePaths: ["local.png"] }), /图片/);
     await new Promise<void>(resolve => server.close(() => resolve()));
     await assert.rejects(notifyInstanceAgent("codex", { instanceId: "node-fixture", agentId: "agent-fixture" }, envelope));

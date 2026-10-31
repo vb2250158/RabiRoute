@@ -1,5 +1,9 @@
+import { createHash } from "node:crypto";
+import { timeoutCatalog } from "../shared/timeoutCatalog.js";
+import { getTimeoutMs, validateTimeoutOverrides, readRegisteredTimeoutCatalog } from "../shared/timeoutSettings.js";
 import { localAgentTargetKey, normalizeRouteAgentTargets, type RemoteAgentTarget } from "../shared/routeAgentTargets.js";
-import { errorResponsePresentation } from "../shared/errorPresentation.js";
+import type { ApiOperationResult } from "./apiOperationContract.js";
+import type { ManagerConfig } from "./configRepository.js";
 import { normalizeAgentInstanceBindings, type AgentInstanceBinding } from "../shared/agentInstance.js";
 import http from "node:http";
 import { readRabiLinkHome, RabiLinkHomeError } from "./rabiLinkHome.js";
@@ -79,7 +83,7 @@ export function publicRabiLinkRelayConfig(config: RabiLinkRelayGlobalConfig): Re
   };
 }
 
-type AgentBindingPatch = {
+export type AgentBindingPatch = {
   agentAdapter?: string;
   codexCwd?: string;
   codexThreadId?: string;
@@ -106,28 +110,6 @@ type AgentBindingPatch = {
   dshCwd?: string;
   dshBaseUrl?: string;
 };
-
-function jsonResponse(response: http.ServerResponse, statusCode: number, body: unknown): void {
-  body = errorResponsePresentation(body, statusCode);
-  response.writeHead(statusCode, { "content-type": "application/json; charset=utf-8" });
-  response.end(JSON.stringify(body, null, 2));
-}
-
-function readJsonBody<T>(request: http.IncomingMessage): Promise<T> {
-  return new Promise((resolve, reject) => {
-    const chunks: Buffer[] = [];
-    request.on("data", (chunk) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
-    request.on("end", () => {
-      try {
-        const text = Buffer.concat(chunks).toString("utf8");
-        resolve((text ? JSON.parse(text) : {}) as T);
-      } catch (error) {
-        reject(error);
-      }
-    });
-    request.on("error", reject);
-  });
-}
 
 function localIpv4Addresses(): string[] {
   const result: string[] = [];
@@ -529,7 +511,7 @@ function apiErrorStatus(error: unknown, fallback = 500): number {
   return Number.isInteger(statusCode) && statusCode >= 400 && statusCode <= 599 ? statusCode : fallback;
 }
 
-type RouteMutationContract = Readonly<{
+export type RouteMutationContract = Readonly<{
   operationId: string;
   expectedContentHash: string;
 }>;
@@ -539,7 +521,7 @@ function requestHeader(request: http.IncomingMessage, name: string): string {
   return String(Array.isArray(value) ? value[0] ?? "" : value ?? "").trim();
 }
 
-function requireRouteMutationContract(request: http.IncomingMessage): RouteMutationContract {
+export function requireRouteMutationContract(request: http.IncomingMessage): RouteMutationContract {
   const operationId = requestHeader(request, "idempotency-key");
   const rawIfMatch = requestHeader(request, "if-match");
   const quotedHash = /^"([a-f0-9]{64})"$/i.exec(rawIfMatch)?.[1];
@@ -580,7 +562,7 @@ function nestedErrorCodes(error: unknown): string[] {
   return codes;
 }
 
-function publicRouteMutationFailure(error: unknown): Readonly<{
+export function publicRouteMutationFailure(error: unknown): Readonly<{
   statusCode: number;
   errorCode: string;
   message: string;
@@ -706,7 +688,9 @@ async function discoverInstances(ctx: RabiApiContext, request: http.IncomingMess
   if (requestUrl.searchParams.has("ports")) {
     throw Object.assign(new Error("The ports discovery query is retired; Manager discovery uses DNS-SD and generation fencing."), { statusCode: 400 });
   }
-  const timeoutMs = Math.max(120, Math.min(3000, Number(requestUrl.searchParams.get("timeoutMs") || 450)));
+  const timeoutMs = requestUrl.searchParams.has("timeoutMs")
+    ? Math.max(1, Math.min(getTimeoutMs("manager.instances.discoveryMaximum", 3000), Number(requestUrl.searchParams.get("timeoutMs"))))
+    : getTimeoutMs("manager.instances.discovery", 450);
   const found = new Map<string, RabiInstance>();
   const self = identityPayload(ctx, request).data;
   found.set(self.guid, self);
@@ -726,17 +710,21 @@ async function findInstance(ctx: RabiApiContext, request: http.IncomingMessage, 
   return (await discoverInstances(ctx, request, requestUrl)).find((item) => item.guid === guid) ?? null;
 }
 
-async function proxyJson(instance: RabiInstance, path: string, init: RequestInit, timeoutMs = 3000): Promise<{ status: number; body: unknown }> {
+async function proxyJson(instance: RabiInstance, path: string, init: RequestInit, timeoutMs = getTimeoutMs("manager.instances.proxy", 3000), assertCurrent: () => void = () => {}): Promise<{ status: number; body: unknown }> {
+  const deadlineAt = performance.now() + timeoutMs;
   if (!instance.self) {
     await verifyManagerDiscoveryEndpoint(instance as DiscoveredManagerEndpoint, { timeoutMs });
   }
+  assertCurrent();
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const remainingMs = deadlineAt - performance.now();
+  if (remainingMs <= 0) controller.abort();
+  const timer = setTimeout(() => controller.abort(), Math.max(1, remainingMs));
   try {
     const headers = new Headers(init.headers);
     headers.set("x-rabiroute-expected-application-generation-id", instance.applicationGenerationId);
     headers.set("x-rabiroute-expected-manager-instance-id", instance.managerInstanceId);
-    const response = await fetch(`${instance.baseUrl}${path}`, { ...init, headers, redirect: "error", signal: controller.signal });
+    const response = await fetch(`${instance.baseUrl}${path}`, { ...init, headers, redirect: "error", signal: init.signal ? AbortSignal.any([controller.signal, init.signal]) : controller.signal });
     const declaredLength = Number(response.headers.get("content-length") || 0);
     const maxResponseBytes = 4 * 1024 * 1024;
     if (declaredLength > maxResponseBytes) throw Object.assign(new Error("Remote Manager response exceeds the bounded proxy size."), { statusCode: 502 });
@@ -829,10 +817,11 @@ function managedMessageWorker(worker: Record<string, unknown>, route: GatewayDef
     && title.includes("协助处理消息");
 }
 
-async function listDshMessageWorkers(route: GatewayDefinition): Promise<Record<string, unknown>[]> {
+async function listDshMessageWorkers(route: GatewayDefinition, signal?: AbortSignal): Promise<Record<string, unknown>[]> {
   const baseUrl = (route.dshBaseUrl || "http://127.0.0.1:3080").replace(/\/+$/, "");
   const response = await fetch(`${baseUrl}/api/session.list`, {
     method: "POST",
+    signal,
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
       type: "client-request",
@@ -857,9 +846,10 @@ async function listDshMessageWorkers(route: GatewayDefinition): Promise<Record<s
   });
 }
 
-async function deleteDshSession(baseUrl: string, sessionId: string): Promise<Record<string, unknown>> {
+async function deleteDshSession(baseUrl: string, sessionId: string, signal?: AbortSignal): Promise<Record<string, unknown>> {
   const response = await fetch(`${baseUrl.replace(/\/+$/, "")}/api/session.delete`, {
     method: "POST",
+    signal,
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ type: "client-request", rpcId: `rabi-cleanup-${sessionId}`, method: "session.delete", payload: { sessionId } })
   });
@@ -873,7 +863,9 @@ async function deleteDshSession(baseUrl: string, sessionId: string): Promise<Rec
 async function localMessageProcessingCleanup(
   ctx: RabiApiContext,
   route: GatewayDefinition,
-  body: { adapter?: string; keepSessionIds?: string[] }
+  body: { adapter?: string; keepSessionIds?: string[] },
+  assertCurrent: () => void = () => {},
+  signal?: AbortSignal
 ): Promise<Record<string, unknown>> {
   const paths = messageProcessingStatePaths(ctx, route);
   const state = readJsonFile<{ schemaVersion?: number; updatedAt?: string; workers?: Record<string, unknown>[] }>(paths.agents, {});
@@ -885,23 +877,26 @@ async function localMessageProcessingCleanup(
     if (managedMessageWorker(worker, route, body.adapter)) candidates.set(String(worker.threadId || ""), worker);
   }
   if (!body.adapter || body.adapter === "dsh") {
-    for (const worker of await listDshMessageWorkers(route)) candidates.set(String(worker.threadId || ""), worker);
+    for (const worker of await listDshMessageWorkers(route, signal)) candidates.set(String(worker.threadId || ""), worker);
   }
+  assertCurrent();
   const selected = [...candidates.values()].filter(worker => !keep.has(String(worker.threadId || "")));
   const deleted: string[] = [];
   const failed: Array<Record<string, string>> = [];
   for (const worker of selected) {
+    assertCurrent();
     const threadId = String(worker.threadId || "");
     const adapter = String(worker.agentAdapter || (threadId.startsWith("session-") ? "dsh" : "codex"));
     try {
       if (adapter === "dsh" && threadId) {
-        await deleteDshSession(route.dshBaseUrl || "http://127.0.0.1:3080", threadId);
+        await deleteDshSession(route.dshBaseUrl || "http://127.0.0.1:3080", threadId, signal);
       }
       deleted.push(threadId);
     } catch (error) {
       failed.push({ threadId, message: error instanceof Error ? error.message : String(error) });
     }
   }
+  assertCurrent();
   const deletedSet = new Set(deleted);
   writeJsonFile(paths.agents, {
     schemaVersion: state.schemaVersion ?? 2,
@@ -917,280 +912,145 @@ async function localMessageProcessingCleanup(
   return { code: failed.length ? -1 : 0, data: { selected: selected.map(worker => String(worker.threadId || "")), deleted, failed, kept: [...keep] } };
 }
 
-export function handleRabiApi(request: http.IncomingMessage, requestUrl: URL, response: http.ServerResponse, ctx: RabiApiContext): boolean {
-  const pathname = requestUrl.pathname;
-  const expectedGeneration = String(request.headers["x-rabiroute-expected-application-generation-id"] || "").trim();
-  const expectedManager = String(request.headers["x-rabiroute-expected-manager-instance-id"] || "").trim();
-  if (Boolean(expectedGeneration) !== Boolean(expectedManager)) {
-    jsonResponse(response, 400, { code: -1, message: "Manager lifecycle fencing requires both generation and instance headers." });
-    return true;
-  }
-  if ((expectedGeneration && expectedGeneration !== ctx.applicationGenerationId)
-    || (expectedManager && expectedManager !== ctx.managerInstanceId)) {
-    jsonResponse(response, 409, { code: -1, message: "The requested Manager generation is no longer active." });
-    return true;
-  }
-
-  if (request.method === "GET" && pathname === "/api/rabi/link-home") {
-    response.setHeader("cache-control", "no-store");
-    if (requestUrl.search || request.headers["transfer-encoding"] || Number(request.headers["content-length"] || 0) > 0) {
-      jsonResponse(response, 400, { code: -1, errorCode: "RABILINK_HOME_INVALID_REQUEST", message: "此接口不接受查询参数或请求正文。" });
-      return true;
-    }
-    const savedConfig = ctx.globalConfig.read();
-    const saved = { ...savedConfig.rabiLinkRelay };
-    const local = { deviceGuid: savedConfig.rabiGuid, rabiPcVersion: ctx.version() };
-    void readRabiLinkHome(saved, local)
-      .then((data) => {
-        const currentConfig = ctx.globalConfig.read();
-        const current = currentConfig.rabiLinkRelay;
-        if (current.enabled !== saved.enabled || current.url !== saved.url || current.token !== saved.token || current.deviceId !== saved.deviceId
-          || currentConfig.rabiGuid !== local.deviceGuid) {
-          throw new RabiLinkHomeError(409, "RABILINK_HOME_CONFIG_CHANGED", "RabiLink 配置已变更，请重新刷新。");
-        }
-        jsonResponse(response, 200, { code: 0, data });
-      })
-      .catch((error: unknown) => {
-        const safe = error instanceof RabiLinkHomeError ? error
-          : new RabiLinkHomeError(502, "RABILINK_HOME_UPSTREAM_FAILED", "无法读取 RabiLink 设备，请稍后重试。");
-        jsonResponse(response, safe.statusCode, { code: -1, errorCode: safe.errorCode, message: safe.message });
-      });
-    return true;
-  }
-
-  if (request.method === "GET" && pathname === "/api/rabi/identity") {
-    jsonResponse(response, 200, identityPayload(ctx, request));
-    return true;
-  }
-  if (request.method === "PATCH" && pathname === "/api/rabi/identity") {
-    void readJsonBody<Partial<{ rabiName: string; rabiLinkRelay: unknown; agentUploads: { maxFileMiB: number } }>>(request)
-      .then(async (body) => {
+/** Owns native Rabi discovery and Route mutations; routing and JSON decoding belong to the registry. */
+export function createRabiApiOwner(ctx: RabiApiContext) {
+  const success = (body: unknown): ApiOperationResult => ({ status: 200, body });
+  const failed = (error: unknown, fallback = 500): ApiOperationResult => ({ status: apiErrorStatus(error, fallback), body: { code: -1, message: error instanceof Error ? error.message : String(error) } });
+  const mutationFailed = (error: unknown): ApiOperationResult => {
+    const failure = publicRouteMutationFailure(error);
+    return { status: failure.statusCode, body: { code: -1, errorCode: failure.errorCode, message: failure.message } };
+  };
+  const missingInstance = (guid: string): ApiOperationResult => ({ status: 404, body: { code: -1, message: `RabiRoute instance not found: ${guid}` } });
+  const missingRoute = (routeId: string): ApiOperationResult => ({ status: 404, body: { code: -1, message: `Route not found: ${routeId}` } });
+  const routePath = (guid: string, routeId: string, suffix: string) => `/api/rabi/instances/${encodeURIComponent(guid)}/routes/${encodeURIComponent(routeId)}/${suffix}`;
+  const remote = async (request: http.IncomingMessage, url: URL, guid: string, target: string, init: RequestInit, assertCurrent: () => void = () => {}): Promise<ApiOperationResult> => {
+    try {
+      const instance = await findInstance(ctx, request, url, guid);
+      assertCurrent();
+      return instance ? await proxyJson(instance, target, init, getTimeoutMs("manager.instances.proxy", 3000), assertCurrent) : missingInstance(guid);
+    } catch (error) { return failed(error, 502); }
+  };
+  return Object.freeze({
+    assertLifecycle(request: http.IncomingMessage): ApiOperationResult | undefined {
+      const expectedGeneration = String(request.headers["x-rabiroute-expected-application-generation-id"] || "").trim();
+      const expectedManager = String(request.headers["x-rabiroute-expected-manager-instance-id"] || "").trim();
+      if (Boolean(expectedGeneration) !== Boolean(expectedManager)) return { status: 400, body: { code: -1, message: "Manager lifecycle fencing requires both generation and instance headers." } };
+      if ((expectedGeneration && expectedGeneration !== ctx.applicationGenerationId) || (expectedManager && expectedManager !== ctx.managerInstanceId)) return { status: 409, body: { code: -1, message: "The requested Manager generation is no longer active." } };
+    },
+    identity: (request: http.IncomingMessage) => success(identityPayload(ctx, request)),
+    timeouts: () => {
+      const overrides = ctx.globalConfig.read().timeoutOverrides;
+      return { ...success({ code: 0, data: { overrides, catalog: currentTimeoutCatalog() } }), headers: { etag: timeoutSettingsEtag(overrides, ctx.applicationGenerationId, ctx.managerInstanceId), "cache-control": "no-store" } };
+    },
+    updateTimeouts(body: { overrides?: unknown }, assertCurrent: () => void, expectedEtag: string): ApiOperationResult {
+      try {
+        const overrides = validateTimeoutOverrides(body?.overrides);
+        assertCurrent();
+        if (expectedEtag !== timeoutSettingsEtag(ctx.globalConfig.read().timeoutOverrides, ctx.applicationGenerationId, ctx.managerInstanceId)) return { status: expectedEtag ? 412 : 428, body: { code: -1, message: "Timeout settings changed. Reload before saving.", errorCode: "TIMEOUT_SETTINGS_CONFLICT" } };
+        const saved = ctx.globalConfig.patch({ timeoutOverrides: overrides });
+        return { ...success({ code: 0, data: { overrides: saved.timeoutOverrides, catalog: currentTimeoutCatalog() } }), headers: { etag: timeoutSettingsEtag(saved.timeoutOverrides, ctx.applicationGenerationId, ctx.managerInstanceId), "cache-control": "no-store" } };
+      } catch (error) { return failed(error, 400); }
+    },
+    async updateIdentity(body: Partial<{ rabiName: string; rabiLinkRelay: unknown; agentUploads: { maxFileMiB: number } }>, assertCurrent: () => void): Promise<ApiOperationResult> {
+      try {
+        assertCurrent();
         const current = ctx.globalConfig.read();
-        const relayPatch = body.rabiLinkRelay && typeof body.rabiLinkRelay === "object" && !Array.isArray(body.rabiLinkRelay)
-          ? body.rabiLinkRelay as Record<string, unknown>
-          : undefined;
+        const relayPatch = body.rabiLinkRelay && typeof body.rabiLinkRelay === "object" && !Array.isArray(body.rabiLinkRelay) ? body.rabiLinkRelay as Record<string, unknown> : undefined;
         const nextRelay = relayPatch ? { ...current.rabiLinkRelay, ...relayPatch } : current.rabiLinkRelay;
-        if (nextRelay.enabled === true && (!String(nextRelay.url || "").trim() || !String(nextRelay.token || "").trim())) {
-          throw new Error("开启 RabiLink Relay 前，请先填写服务器地址和应用 token。");
-        }
+        if (nextRelay.enabled === true && (!String(nextRelay.url || "").trim() || !String(nextRelay.token || "").trim())) throw new Error("开启 RabiLink Relay 前，请先填写服务器地址和应用 token。");
         const beforeRelay = JSON.stringify(current.rabiLinkRelay);
         const config = ctx.globalConfig.patch({ rabiName: body.rabiName, rabiLinkRelay: body.rabiLinkRelay as any, agentUploads: body.agentUploads });
-        const relayChanged = beforeRelay !== JSON.stringify(config.rabiLinkRelay);
         await ctx.syncRabiLinkRelay();
-        if (relayChanged) {
-          for (const runtime of ctx.runtimes()) {
-            if (gatewayAdapterTypes(runtime.definition).includes("rabilink")) {
-              runtime.needsRestart = true;
-            }
-          }
+        if (beforeRelay !== JSON.stringify(config.rabiLinkRelay)) {
+          for (const runtime of ctx.runtimes()) if (gatewayAdapterTypes(runtime.definition).includes("rabilink")) runtime.needsRestart = true;
           ctx.syncRunningGateways();
         }
-        return config;
-      })
-      .then((config) => jsonResponse(response, 200, {
-        code: 0,
-        data: {
-          ...config,
-          rabiLinkRelay: publicRabiLinkRelayConfig(config.rabiLinkRelay)
-        }
-      }))
-      .catch((error) => jsonResponse(
-        response,
-        apiErrorStatus(error, 400),
-        { code: -1, message: error instanceof Error ? error.message : String(error) }
-      ));
-    return true;
-  }
-  if (request.method === "GET" && pathname === "/api/rabi/instances") {
-    void discoverInstances(ctx, request, requestUrl)
-      .then((items) => jsonResponse(response, 200, { code: 0, data: { instances: items } }))
-      .catch((error) => jsonResponse(response, apiErrorStatus(error), { code: -1, message: error instanceof Error ? error.message : String(error) }));
-    return true;
-  }
-
-  const routeMatch = pathname.match(/^\/api\/rabi\/instances\/([^/]+)\/routes(?:\/([^/]+)(?:\/(agent-options|agent-binding|rabilink-replies|message-processing|message-processing-cleanup))?)?$/);
-  if (!routeMatch) return false;
-
-  const guid = decodeURIComponent(routeMatch[1]);
-  const routeId = routeMatch[2] ? decodeURIComponent(routeMatch[2]) : "";
-  const action = routeMatch[3] || "";
-
-  if ((request.method === "GET" || request.method === "PATCH") && routeId && action === "message-processing") {
-    let mutation: RouteMutationContract | undefined;
-    if (request.method === "PATCH") {
+        return success({ code: 0, data: { ...config, rabiLinkRelay: publicRabiLinkRelayConfig(config.rabiLinkRelay) } });
+      } catch (error) { return failed(error, 400); }
+    },
+    async home(): Promise<ApiOperationResult> {
+      const headers = { "cache-control": "no-store" };
       try {
-        mutation = requireRouteMutationContract(request);
+        const savedConfig = ctx.globalConfig.read(), saved = { ...savedConfig.rabiLinkRelay };
+        const local = { deviceGuid: savedConfig.rabiGuid, rabiPcVersion: ctx.version() };
+        const data = await readRabiLinkHome(saved, local);
+        const currentConfig = ctx.globalConfig.read(), current = currentConfig.rabiLinkRelay;
+        if (current.enabled !== saved.enabled || current.url !== saved.url || current.token !== saved.token || current.deviceId !== saved.deviceId || currentConfig.rabiGuid !== local.deviceGuid) throw new RabiLinkHomeError(409, "RABILINK_HOME_CONFIG_CHANGED", "RabiLink 配置已变更，请重新刷新。");
+        return { ...success({ code: 0, data }), headers };
       } catch (error) {
-        const failure = publicRouteMutationFailure(error);
-        jsonResponse(response, failure.statusCode, { code: -1, errorCode: failure.errorCode, message: failure.message });
-        return true;
+        const safe = error instanceof RabiLinkHomeError ? error : new RabiLinkHomeError(502, "RABILINK_HOME_UPSTREAM_FAILED", "无法读取 RabiLink 设备，请稍后重试。");
+        return { status: safe.statusCode, body: { code: -1, errorCode: safe.errorCode, message: safe.message }, headers };
       }
-    }
-    if (!isSelfGuid(ctx, guid)) {
-      void (async () => {
-        const body = request.method === "PATCH"
-          ? await readJsonBody<Record<string, unknown>>(request)
-          : undefined;
-        const instance = await findInstance(ctx, request, requestUrl, guid);
-        return instance
-          ? proxyJson(instance, `/api/rabi/instances/${encodeURIComponent(guid)}/routes/${encodeURIComponent(routeId)}/message-processing`, {
-            method: request.method,
-            ...(body === undefined ? {} : { headers: routeMutationProxyHeaders(mutation!), body: JSON.stringify(body) })
-          })
-          : { status: 404, body: { code: -1, message: `RabiRoute instance not found: ${guid}` } };
-      })()
-        .then(result => jsonResponse(response, result.status, result.body))
-        .catch(error => jsonResponse(response, 502, { code: -1, message: error instanceof Error ? error.message : String(error) }));
-      return true;
-    }
-    const run = async (): Promise<Record<string, unknown>> => {
-      const config = ctx.readConfig();
-      const route = findGateway(config, routeId);
-      if (!route) return { code: -1, message: `Route not found: ${routeId}` };
-      if (request.method === "GET") return messageProcessingPayload(ctx, route);
-      const body = await readJsonBody<{ adapter?: string; maxAgents?: number }>(request);
-      const maxAgents = Math.max(1, Math.min(32, Math.floor(Number(body.maxAgents)) || 1));
-      const adapters = body.adapter ? [body.adapter] : ["codex", "dsh"];
-      route.messageProcessingAgents = { ...(route.messageProcessingAgents ?? {}) };
-      for (const adapter of adapters) {
-        if (!isAgentAdapterType(adapter)) continue;
-        route.messageProcessingAgents[adapter] = {
-          ...(route.messageProcessingAgents[adapter] ?? { enabled: false, model: "gpt-5.6-luna", reasoningEffort: "medium" }),
-          maxAgents
-        };
-      }
-      const normalized = await ctx.writeConfig(config, mutation!.expectedContentHash, mutation!.operationId);
-      ctx.syncRunningGateways();
-      const updated = findGateway(normalized, routeId) ?? route;
-      const routeCatalog = ctx.routeCatalogVersion();
-      return {
-        ...messageProcessingPayload(ctx, updated),
-        receipt: {
-          state: "committed",
-          operationId: mutation!.operationId,
-          routeConfigHash: routeCatalog.routeConfigHash
-        },
-        routeCatalog
-      };
-    };
-    void run()
-      .then(result => jsonResponse(response, result.code === 0 ? 200 : 404, result))
-      .catch(error => {
-        const failure = publicRouteMutationFailure(error);
-        jsonResponse(response, failure.statusCode, { code: -1, errorCode: failure.errorCode, message: failure.message });
-      });
-    return true;
-  }
-
-  if (request.method === "POST" && routeId && action === "message-processing-cleanup") {
-    if (!isSelfGuid(ctx, guid)) {
-      void (async () => {
-        const body = await readJsonBody<Record<string, unknown>>(request);
-        const instance = await findInstance(ctx, request, requestUrl, guid);
-        return instance
-          ? proxyJson(instance, `/api/rabi/instances/${encodeURIComponent(guid)}/routes/${encodeURIComponent(routeId)}/message-processing-cleanup`, {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify(body)
-          })
-          : { status: 404, body: { code: -1, message: `RabiRoute instance not found: ${guid}` } };
-      })()
-        .then(result => jsonResponse(response, result.status, result.body))
-        .catch(error => jsonResponse(response, 502, { code: -1, message: error instanceof Error ? error.message : String(error) }));
-      return true;
-    }
-    void readJsonBody<{ adapter?: string; keepSessionIds?: string[] }>(request)
-      .then(async body => {
-        const route = findGateway(ctx.readConfig(), routeId);
-        if (!route) return { status: 404, body: { code: -1, message: `Route not found: ${routeId}` } };
-        return { status: 200, body: await localMessageProcessingCleanup(ctx, route, body) };
-      })
-      .then(result => jsonResponse(response, result.status, result.body))
-      .catch(error => jsonResponse(response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) }));
-    return true;
-  }
-
-  if (request.method === "GET" && !routeId && !action) {
-    if (isSelfGuid(ctx, guid)) {
-      jsonResponse(response, 200, localRoutes(
-        ctx,
-        requestUrl.searchParams.get("includeProfiles") === "true",
-        requestUrl.searchParams.get("presentation") === "mobile"
-      ));
-      return true;
-    }
-    void findInstance(ctx, request, requestUrl, guid)
-      .then((instance) => {
-        if (!instance) return jsonResponse(response, 404, { code: -1, message: `RabiRoute instance not found: ${guid}` });
-        return proxyJson(instance, `/api/rabi/instances/${encodeURIComponent(guid)}/routes${requestUrl.search}`, { method: "GET" })
-          .then((result) => jsonResponse(response, result.status, result.body));
-      })
-      .catch((error) => jsonResponse(response, 502, { code: -1, message: error instanceof Error ? error.message : String(error) }));
-    return true;
-  }
-
-  if (request.method === "GET" && routeId && action === "agent-options") {
-    if (isSelfGuid(ctx, guid)) {
-      void localAgentOptions(ctx, routeId)
-        .then((result) => jsonResponse(response, result.code === 0 ? 200 : 404, result))
-        .catch((error) => jsonResponse(response, apiErrorStatus(error), { code: -1, message: error instanceof Error ? error.message : String(error) }));
-      return true;
-    }
-    void findInstance(ctx, request, requestUrl, guid)
-      .then((instance) => {
-        if (!instance) return jsonResponse(response, 404, { code: -1, message: `RabiRoute instance not found: ${guid}` });
-        return proxyJson(instance, `/api/rabi/instances/${encodeURIComponent(guid)}/routes/${encodeURIComponent(routeId)}/agent-options`, { method: "GET" })
-          .then((result) => jsonResponse(response, result.status, result.body));
-      })
-      .catch((error) => jsonResponse(response, 502, { code: -1, message: error instanceof Error ? error.message : String(error) }));
-    return true;
-  }
-
-  if (request.method === "GET" && routeId && action === "rabilink-replies") {
-    if (isSelfGuid(ctx, guid)) {
-      jsonResponse(response, 200, localRabiLinkReplies(ctx, routeId, requestUrl));
-      return true;
-    }
-    void findInstance(ctx, request, requestUrl, guid)
-      .then((instance) => {
-        if (!instance) return jsonResponse(response, 404, { code: -1, message: `RabiRoute instance not found: ${guid}` });
-        return proxyJson(instance, `/api/rabi/instances/${encodeURIComponent(guid)}/routes/${encodeURIComponent(routeId)}/rabilink-replies${requestUrl.search}`, { method: "GET" })
-          .then((result) => jsonResponse(response, result.status, result.body));
-      })
-      .catch((error) => jsonResponse(response, 502, { code: -1, message: error instanceof Error ? error.message : String(error) }));
-    return true;
-  }
-
-  if ((request.method === "PATCH" || request.method === "POST") && routeId && action === "agent-binding") {
-    let mutation: RouteMutationContract;
-    try {
-      mutation = requireRouteMutationContract(request);
-    } catch (error) {
-      const failure = publicRouteMutationFailure(error);
-      jsonResponse(response, failure.statusCode, { code: -1, errorCode: failure.errorCode, message: failure.message });
-      return true;
-    }
-    void readJsonBody<AgentBindingPatch>(request)
-      .then(async (body) => {
-        if (isSelfGuid(ctx, guid)) {
-          return { status: 200, body: await setLocalAgentBinding(ctx, routeId, body, mutation) };
+    },
+    async instances(request: http.IncomingMessage, url: URL): Promise<ApiOperationResult> {
+      try { return success({ code: 0, data: { instances: await discoverInstances(ctx, request, url) } }); } catch (error) { return failed(error); }
+    },
+    routes(request: http.IncomingMessage, url: URL, guid: string): ApiOperationResult | Promise<ApiOperationResult> {
+      return isSelfGuid(ctx, guid) ? success(localRoutes(ctx, url.searchParams.get("includeProfiles") === "true", url.searchParams.get("presentation") === "mobile"))
+        : remote(request, url, guid, `/api/rabi/instances/${encodeURIComponent(guid)}/routes${url.search}`, { method: "GET" });
+    },
+    async agentOptions(request: http.IncomingMessage, url: URL, guid: string, routeId: string): Promise<ApiOperationResult> {
+      if (!isSelfGuid(ctx, guid)) return remote(request, url, guid, routePath(guid, routeId, "agent-options"), { method: "GET" });
+      try { const body = await localAgentOptions(ctx, routeId); return { status: body.code === 0 ? 200 : 404, body }; } catch (error) { return failed(error); }
+    },
+    replies(request: http.IncomingMessage, url: URL, guid: string, routeId: string): ApiOperationResult | Promise<ApiOperationResult> {
+      return isSelfGuid(ctx, guid) ? success(localRabiLinkReplies(ctx, routeId, url)) : remote(request, url, guid, routePath(guid, routeId, "rabilink-replies") + url.search, { method: "GET" });
+    },
+    async agentBinding(request: http.IncomingMessage, url: URL, guid: string, routeId: string, body: AgentBindingPatch, mutation: RouteMutationContract, assertCurrent: () => void): Promise<ApiOperationResult> {
+      if (!isSelfGuid(ctx, guid)) return remote(request, url, guid, routePath(guid, routeId, "agent-binding"), { method: "PATCH", headers: routeMutationProxyHeaders(mutation), body: JSON.stringify(body) }, assertCurrent);
+      try { assertCurrent(); return success(await setLocalAgentBinding(ctx, routeId, body, mutation)); } catch (error) { return mutationFailed(error); }
+    },
+    async messageProcessing(request: http.IncomingMessage, url: URL, guid: string, routeId: string, body: { adapter?: string; maxAgents?: number } | undefined, mutation: RouteMutationContract | undefined, assertCurrent: () => void): Promise<ApiOperationResult> {
+      if (!isSelfGuid(ctx, guid)) return remote(request, url, guid, routePath(guid, routeId, "message-processing"), { method: body === undefined ? "GET" : "PATCH", ...(body === undefined ? {} : { headers: routeMutationProxyHeaders(mutation!), body: JSON.stringify(body) }) }, assertCurrent);
+      try {
+        assertCurrent();
+        const config = ctx.readConfig(), route = findGateway(config, routeId);
+        if (!route) return missingRoute(routeId);
+        if (body === undefined) return success(messageProcessingPayload(ctx, route));
+        const maxAgents = Math.max(1, Math.min(32, Math.floor(Number(body.maxAgents)) || 1));
+        route.messageProcessingAgents = { ...(route.messageProcessingAgents ?? {}) };
+        for (const adapter of body.adapter ? [body.adapter] : ["codex", "dsh"]) {
+          if (!isAgentAdapterType(adapter)) continue;
+          route.messageProcessingAgents[adapter] = { ...(route.messageProcessingAgents[adapter] ?? { enabled: false, model: "gpt-5.6-luna", reasoningEffort: "medium" }), maxAgents };
         }
-        const instance = await findInstance(ctx, request, requestUrl, guid);
-        if (!instance) return { status: 404, body: { code: -1, message: `RabiRoute instance not found: ${guid}` } };
-        return proxyJson(instance, `/api/rabi/instances/${encodeURIComponent(guid)}/routes/${encodeURIComponent(routeId)}/agent-binding`, {
-          method: "PATCH",
-          headers: routeMutationProxyHeaders(mutation),
-          body: JSON.stringify(body)
-        });
-      })
-      .then((result) => jsonResponse(response, result.status, result.body))
-      .catch((error) => {
-        const failure = publicRouteMutationFailure(error);
-        jsonResponse(response, failure.statusCode, { code: -1, errorCode: failure.errorCode, message: failure.message });
-      });
-    return true;
-  }
+        const normalized = await ctx.writeConfig(config, mutation!.expectedContentHash, mutation!.operationId);
+        ctx.syncRunningGateways();
+        const routeCatalog = ctx.routeCatalogVersion();
+        return success({ ...messageProcessingPayload(ctx, findGateway(normalized, routeId) ?? route), receipt: { state: "committed", operationId: mutation!.operationId, routeConfigHash: routeCatalog.routeConfigHash }, routeCatalog });
+      } catch (error) { return mutationFailed(error); }
+    },
+    async cleanup(request: http.IncomingMessage, url: URL, guid: string, routeId: string, body: { adapter?: string; keepSessionIds?: string[] }, assertCurrent: () => void, signal?: AbortSignal): Promise<ApiOperationResult> {
+      if (!isSelfGuid(ctx, guid)) return remote(request, url, guid, routePath(guid, routeId, "message-processing-cleanup"), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body), signal }, assertCurrent);
+      try { assertCurrent(); const route = findGateway(ctx.readConfig(), routeId); return route ? success(await localMessageProcessingCleanup(ctx, route, body, assertCurrent, signal)) : missingRoute(routeId); } catch (error) { return failed(error, 400); }
+    }
+  });
+}
 
-  jsonResponse(response, 405, { code: -1, message: "Method not allowed" });
-  return true;
+export type ManagerConfigurationContext = Readonly<{
+  rootDir: string; readonly routeRoot: string; readonly rolesRoot: string;
+  readManagerConfig(): ManagerConfig;
+  writeManagerConfig(config: ManagerConfig): void;
+  ensureDataDirs(): Promise<void>;
+}>;
+
+/** The existing Manager configuration store remains the only path-setting owner. */
+export function createManagerConfigurationOwner(ctx: ManagerConfigurationContext) {
+  const read = () => ({ code: 0, routeDir: path.relative(ctx.rootDir, ctx.routeRoot).replace(/\\/g, "/"), rolesDir: path.relative(ctx.rootDir, ctx.rolesRoot).replace(/\\/g, "/") });
+  return Object.freeze({ read, async update(body: Record<string, unknown>, assertCurrent: () => void) {
+    assertCurrent();
+    const config = ctx.readManagerConfig();
+    if (body.routeDir !== undefined) config.routeDir = (body.routeDir || undefined) as string | undefined;
+    if (body.rolesDir !== undefined) config.rolesDir = (body.rolesDir || undefined) as string | undefined;
+    ctx.writeManagerConfig(config);
+    await ctx.ensureDataDirs();
+    return read();
+  } });
+}
+
+function timeoutSettingsEtag(overrides: Record<string, number>, generationId: string, instanceId: string): string {
+  return '"' + createHash("sha256").update(JSON.stringify([generationId, instanceId, Object.entries(overrides).sort(([a], [b]) => a.localeCompare(b))])).digest("hex") + '"';
+}
+
+function currentTimeoutCatalog() {
+  return [...new Map([...timeoutCatalog, ...readRegisteredTimeoutCatalog()].map(entry => [entry.key, entry])).values()];
 }

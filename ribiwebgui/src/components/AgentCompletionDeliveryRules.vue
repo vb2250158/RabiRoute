@@ -6,6 +6,9 @@ import type { GatewayDefinition } from "@shared/gatewayConfigModel";
 import { AGENT_HOOK_EVENTS, AGENT_HOOK_CONDITIONS, AGENT_HOOK_DESTINATIONS, agentHookRuleErrors,
   type AgentCompletionDeliveryRule, type AgentHookCondition, type AgentHookDestination, type AgentHookSession } from "@shared/agentHookAutomation";
 import { createAgentCompletionRule, createTtsCompletionRule } from "../persona/agentCompletionRules";
+import AgentHookConditionDialog from "./AgentHookConditionDialog.vue";
+import { usePersonaService } from "../persona/personaServiceClient";
+const fetch = usePersonaService().fetch;
 
 const props = defineProps<{ modelValue: AgentCompletionDeliveryRule[]; gateways: GatewayDefinition[]; gatewayId: string; agentType?: AgentAdapterType }>();
 const emit = defineEmits<{ "update:modelValue": [value: AgentCompletionDeliveryRule[]] }>();
@@ -27,14 +30,34 @@ const error = ref("");
 const sessions = ref<AgentHookSession[]>([]);
 const sessionLoading = ref(false);
 const nextSessionOffset = ref<number | null>(null);
-function sessionOptions(item: AgentHookCondition) {
-  return [...new Map([...(item.sessions ?? []), ...sessions.value].map(session => [session.id, session])).values()]
-    .map(session => ({ title: session.name || "未命名任务", value: session.id }));
+const conditionDialog = ref(false);
+const conditionTarget = ref<{ ruleId: string; index: number }>();
+const editedRule = computed(() => props.modelValue.find(rule => rule.id === conditionTarget.value?.ruleId));
+const editedCondition = computed(() => editedRule.value?.conditions[conditionTarget.value?.index ?? -1]);
+const usedConditionTypes = computed(() => editedRule.value?.conditions.filter((_, index) => index !== conditionTarget.value?.index).map(item => item.type) ?? []);
+function openCondition(rule: AgentCompletionDeliveryRule, index = -1) {
+  error.value = "";
+  conditionTarget.value = { ruleId: rule.id, index };
+  conditionDialog.value = true;
 }
-function selectSessions(rule: AgentCompletionDeliveryRule, index: number, ids: string[]) {
-  const options = sessionOptions(rule.conditions[index]);
-  condition(rule, index, { sessions: ids.map(id => ({ id, name: options.find(option => option.value === id)?.title || "未命名任务" })) });
+function saveCondition(value: AgentHookCondition) {
+  const rule = editedRule.value;
+  const target = conditionTarget.value;
+  if (!rule || !target || usedConditionTypes.value.includes(value.type)) return;
+  const conditions = [...rule.conditions];
+  if (target.index < 0) conditions.push(value); else conditions[target.index] = value;
+  update(rule, { conditions });
+  conditionDialog.value = false;
 }
+function conditionSummary(item: AgentHookCondition) {
+  if (item.type === "project") return item.path || "尚未配置项目目录";
+  if (item.type === "include_sessions" || item.type === "exclude_sessions") return item.sessions?.map(session => session.name || session.id).join("、") || "尚未选择聊天会话";
+  if (item.type === "bound_plan") return "仅投递绑定当前角色计划的任务。";
+  if (item.type === "exclude_heartbeat") return "跳过本轮完整心跳结果（含 NOTIFY）。";
+  return AGENT_HOOK_CONDITIONS.find(option => option.value === item.type)?.description || item.type;
+}
+watch(() => props.agentType, () => { conditionDialog.value = false; projects.value = []; sessions.value = []; nextSessionOffset.value = null; });
+watch(editedRule, rule => { if (!rule) conditionDialog.value = false; });
 async function scanSessions(more = false) {
   if (sessionLoading.value) return;
   sessionLoading.value = true; error.value = "";
@@ -42,6 +65,7 @@ async function scanSessions(more = false) {
     const type = props.agentType ?? "codex";
     const query = new URLSearchParams({ [`${type}Offset`]: String(more ? nextSessionOffset.value ?? 0 : 0), [`${type}Limit`]: "100" });
     const response = await fetch(`/api/scan/agents${type === "dsh" ? "/dsh" : ""}?${query}`); const data = await response.json();
+    if (type !== (props.agentType ?? "codex")) return;
     if (!response.ok) throw new Error(data.message || "读取聊天会话失败");
     const agent = data.agents?.[type];
     if (!agent) throw new Error("所选 Agent 端未返回会话，请检查 Agent 端连接。");
@@ -69,18 +93,14 @@ function destination(rule: AgentCompletionDeliveryRule, patch: Partial<AgentHook
 function params(rule: AgentCompletionDeliveryRule, patch: Record<string, string>) {
   destination(rule, { params: { ...rule.destination.params, ...patch } });
 }
-function condition(rule: AgentCompletionDeliveryRule, index: number, patch: Partial<AgentHookCondition>) {
-  update(rule, { conditions: rule.conditions.map((item, position) => position === index ? { ...item, ...patch } : item) });
-}
-function addCondition(rule: AgentCompletionDeliveryRule, type: string) {
-  update(rule, { conditions: [...rule.conditions, type === "project" ? { type, path: "" } : { type }] });
-}
 async function scanProjects() {
   loading.value = true; error.value = "";
   try {
-    const response = await fetch(props.agentType === "dsh" ? "/api/scan/agents/dsh" : "/api/scan/agents"); const data = await response.json();
+    const type = props.agentType ?? "codex";
+    const response = await fetch(type === "dsh" ? "/api/scan/agents/dsh" : "/api/scan/agents"); const data = await response.json();
+    if (type !== (props.agentType ?? "codex")) return;
     if (!response.ok) throw new Error(data.message || "读取项目目录失败");
-    const agent = data.agents?.[props.agentType ?? "codex"];
+    const agent = data.agents?.[type];
     if (!agent) throw new Error("所选 Agent 端未返回项目，请检查 Agent 端连接。");
     const scanned: string[] = (agent.projects ?? []).map((item: { path?: string }) => String(item.path || "")).filter(Boolean);
     projects.value = [...new Set(scanned)];
@@ -117,35 +137,19 @@ async function scanProjects() {
       <div class="hook-rule-section">
         <div class="d-flex align-center justify-space-between mb-2">
           <div class="hook-rule-label mb-0">条件</div>
-          <v-menu>
-            <template #activator="{ props: menuProps }"><v-btn v-bind="menuProps" variant="text" size="small" prepend-icon="mdi-plus">添加条件</v-btn></template>
-            <v-list density="compact">
-              <v-list-item v-for="item in AGENT_HOOK_CONDITIONS" :key="item.value" :title="item.title"
-                :disabled="rule.conditions.some(condition => condition.type === item.value)" @click="addCondition(rule, item.value)" />
-            </v-list>
-          </v-menu>
+          <v-btn variant="text" size="small" prepend-icon="mdi-plus" @click="openCondition(rule)">添加条件</v-btn>
         </div>
         <p v-if="!rule.conditions.length" class="section-note">匹配所选 Agent 端的全部托管任务；添加多个条件时需全部满足。</p>
         <div v-for="(item, conditionIndex) in rule.conditions" :key="item.type" class="hook-condition">
           <div class="d-flex align-center justify-space-between">
             <span>{{ AGENT_HOOK_CONDITIONS.find(option => option.value === item.type)?.title || item.type }}</span>
+            <div class="d-flex align-center ga-1">
+            <v-btn variant="text" size="small" @click="openCondition(rule, conditionIndex)">编辑条件</v-btn>
             <v-btn icon="mdi-close" variant="text" size="x-small" aria-label="删除条件"
               @click="update(rule, { conditions: rule.conditions.filter((_, position) => position !== conditionIndex) })" />
+            </div>
           </div>
-          <template v-if="item.type === 'project'">
-            <v-combobox :model-value="item.path" :items="projects" label="项目目录" hide-details class="mt-2"
-              @update:model-value="value => condition(rule, conditionIndex, { path: String(value || '') })" />
-            <v-btn variant="text" size="small" :loading="loading" @click="scanProjects">读取项目目录</v-btn>
-          </template>
-          <p v-else-if="item.type === 'bound_plan'" class="section-note">仅投递绑定当前角色计划的任务，消息中包含计划名。</p>
-          <template v-else-if="item.type === 'include_sessions' || item.type === 'exclude_sessions'">
-            <v-autocomplete :model-value="(item.sessions ?? []).map(session => session.id)" :items="sessionOptions(item)"
-              :label="item.type === 'include_sessions' ? '限定的聊天会话' : '排除的聊天会话'" multiple chips closable-chips hide-details class="mt-2"
-              @update:model-value="value => selectSessions(rule, conditionIndex, value)" />
-            <v-btn variant="text" size="small" :loading="sessionLoading" @click="scanSessions()">读取聊天会话</v-btn>
-            <v-btn v-if="nextSessionOffset !== null" variant="text" size="small" :loading="sessionLoading" @click="scanSessions(true)">加载更多会话</v-btn>
-            <p class="section-note">按会话名称多选；限定列表内任意一个即可匹配，排除列表内的会话不会投递。会话改名不影响匹配。</p>
-          </template>
+          <p class="section-note mt-2 condition-summary">{{ conditionSummary(item) }}</p>
         </div>
       </div>
       <div class="hook-rule-section">
@@ -174,6 +178,10 @@ async function scanProjects() {
       <v-btn variant="tonal" prepend-icon="mdi-account-voice" @click="emit('update:modelValue', [...modelValue, createTtsCompletionRule(gatewayId)])">添加 TTS 播报</v-btn>
     </div>
     <p class="section-note mt-2">规则随角色配置保存，发送结果可在消息路线的发送日志中查看。</p>
+    <AgentHookConditionDialog v-model="conditionDialog" :condition="editedCondition" :used-types="usedConditionTypes"
+      :projects="projects" :sessions="sessions" :loading="loading" :session-loading="sessionLoading"
+      :has-more-sessions="nextSessionOffset !== null" :error="error" @save="saveCondition"
+      @scan-projects="scanProjects" @scan-sessions="scanSessions" />
   </section>
 </template>
 
@@ -188,6 +196,7 @@ async function scanProjects() {
 .hook-rule-section { border-top: 1px solid rgba(var(--v-theme-on-surface), 0.1); padding-top: 16px; margin-top: 16px; }
 .hook-rule-label { font-weight: 600; margin-bottom: 12px; }
 .hook-condition { padding: 12px; margin-bottom: 8px; background: rgba(var(--v-theme-on-surface), 0.035); border-radius: 8px; }
+.condition-summary { overflow-wrap: anywhere; }
 .hook-destination-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 @media (max-width: 600px) { .hook-destination-grid { grid-template-columns: 1fr; } }
 </style>

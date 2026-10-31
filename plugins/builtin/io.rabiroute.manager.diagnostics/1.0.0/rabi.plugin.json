@@ -16,7 +16,8 @@
     "manager.diagnostics@1"
   ],
   "requires": [
-    "host.manager.diagnostics@1",
+    "host.manager.operations@1",
+    "host.manager.gateway-status@1",
     "manager.core@1"
   ],
   "optional": [

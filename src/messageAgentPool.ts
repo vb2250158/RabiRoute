@@ -1,3 +1,4 @@
+import { getTimeoutMs } from "./shared/timeoutSettings.js";
 import fs from "node:fs";
 import http from "node:http";
 import https from "node:https";
@@ -103,7 +104,7 @@ const REFERENCED_AGENT_SESSION_WEIGHT = 6_000;
 export function requestMessageAgentManager(
   managerBaseUrl: string,
   payload: Record<string, unknown>,
-  timeoutMs = 30_000
+  timeoutMs = getTimeoutMs("backend.messageAgentPool.requestMessageAgentManager.timeoutMs", 30_000)
 ): Promise<Record<string, any>> {
   const target = new URL("/api/agent/threads", `${managerBaseUrl.replace(/\/+$/, "")}/`);
   if (target.protocol !== "http:" && target.protocol !== "https:") {

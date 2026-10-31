@@ -1,4 +1,5 @@
 import type http from "node:http";
+import type { ApiOperationResult } from "./apiOperationContract.js";
 import type { AgentDeliveryTestResult } from "../agentDeliveryTest.js";
 import type { AgentAdapterType } from "../agentAdapters/types.js";
 import type { DeliveryReplayRequest } from "../deliveryReplay.js";
@@ -30,9 +31,6 @@ export type GatewayWeixinLoginTarget = {
 };
 
 export type GatewayControlRoutesContext = {
-  readJsonBody: <T>(request: http.IncomingMessage) => Promise<T>;
-  jsonResponse: (response: http.ServerResponse, statusCode: number, body: unknown) => void;
-  redirectResponse: (response: http.ServerResponse, statusCode: number, location: string) => void;
   gatewayPayload: (options?: GatewayPayloadOptions) => Record<string, unknown>;
   writeConfig: (
     config: GatewayConfigFile,
@@ -65,7 +63,6 @@ export type GatewayControlRoutesContext = {
   testAgentDelivery: (id: string, request: GatewayAgentDeliveryTestRequest) => Promise<AgentDeliveryTestResult>;
   listDeliveryReplayAttempts: (id: string, limit: number, status: string | null) => Record<string, unknown>;
   replayDelivery: (id: string, request: DeliveryReplayRequest) => Promise<void>;
-  trackOperation?: <T>(operation: Promise<T>) => Promise<T>;
 };
 
 function errorMessage(error: unknown): string {
@@ -85,7 +82,7 @@ function errorCode(error: unknown): string {
     : "request_failed";
 }
 
-function publicRouteMutationError(error: unknown): Readonly<{
+export function publicRouteMutationError(error: unknown): Readonly<{
   statusCode: number;
   errorCode: string;
   message: string;
@@ -198,304 +195,82 @@ function withRouteMutationReceipt(
     routeCatalog
   };
 }
-function runTrackedOperation<T>(
-  context: Pick<GatewayControlRoutesContext, "trackOperation">,
-  operation: Promise<T>
-): void {
-  void (context.trackOperation?.(operation) ?? operation);
+export type GatewayMutation = Readonly<{ operationId: string; contentHash: string }>;
+
+/** Parse the original native CAS and operation identity before consuming a write body. */
+export function prepareGatewayMutation(request: http.IncomingMessage, context: GatewayControlRoutesContext): GatewayMutation {
+  const operationId = routeMutationOperationId(request);
+  return Object.freeze({ operationId, contentHash: expectedContentHash(request, context) });
 }
 
-function decodedGatewayId(encodedId: string): string {
-  return decodeURIComponent(encodedId);
-}
-
-function handleGatewayAction(
-  request: http.IncomingMessage,
-  pathname: string,
-  response: http.ServerResponse,
-  context: GatewayControlRoutesContext
-): boolean {
-  const match = pathname.match(/^\/gateways\/([^/]+)\/(start|stop|restart|delete)$/);
-  if (!match) return false;
-
-  const id = decodedGatewayId(match[1]);
-  const action = match[2];
-  try {
-    if (action === "start") {
-      context.startGateway(id);
-    } else if (action === "stop") {
-      context.stopGateway(id);
-    } else if (action === "restart") {
-      context.restartGateway(id);
-    } else {
-      const operationId = routeMutationOperationId(request);
-      runTrackedOperation(context, context.removeGatewayConfig(
-        id,
-        expectedContentHash(request, context),
-        operationId
-      )
-        .then(() => {
-          context.syncRunningGateways();
-          context.jsonResponse(response, 200, withRouteMutationReceipt(context, operationId, context.gatewayPayload()));
-        })
-        .catch(error => {
-          const failure = publicRouteMutationError(error);
-          context.jsonResponse(response, failure.statusCode, {
-            code: -1,
-            errorCode: failure.errorCode,
-            message: failure.message
-          });
-        }));
-      return true;
-    }
-  } catch (error) {
-    if (action !== "delete") {
-      context.jsonResponse(response, 400, { code: -1, message: errorMessage(error) });
-      return true;
-    }
+/** Native owner orchestration; HTTP dispatch, body parsing and leases belong to the registry. */
+export function createGatewayControlOwner(context: GatewayControlRoutesContext) {
+  const success = (body: unknown, status = 200): ApiOperationResult => ({ status, body });
+  const failed = (error: unknown, fallback = 400): ApiOperationResult => ({ status: errorStatus(error, fallback), body: { code: -1, message: errorMessage(error) } });
+  const mutationFailed = (error: unknown, includeStatus = false): ApiOperationResult => {
     const failure = publicRouteMutationError(error);
-    context.jsonResponse(response, failure.statusCode, {
-      code: -1,
-      errorCode: failure.errorCode,
-      message: failure.message
-    });
-    return true;
-  }
-
-  context.jsonResponse(response, 200, {
-    code: 0,
-    message: `requested ${action}`,
-    data: context.runtimeStatuses()
-  });
-  return true;
-}
-
-function handleWeixinLogin(
-  pathname: string,
-  response: http.ServerResponse,
-  context: GatewayControlRoutesContext
-): boolean {
-  const match = pathname.match(/^\/gateways\/([^/]+)\/weixin-login$/);
-  if (!match) return false;
-
-  const id = decodedGatewayId(match[1]);
-  const target = context.weixinLoginTarget(id);
-  if (!target) {
-    context.jsonResponse(response, 404, { code: -1, message: `Gateway not found: ${id}` });
-    return true;
-  }
-  if (!target.enabled) {
-    context.jsonResponse(response, 400, { code: -1, message: "该 Route 未启用个人微信消息端。" });
-    return true;
-  }
-
-  try {
-    context.requestWeixinLogin(target.dataDir);
-    context.jsonResponse(response, 202, {
-      code: 0,
-      message: "已明确请求生成个人微信登录二维码；不会发送消息或修改账号配置。"
-    });
-  } catch (error) {
-    context.jsonResponse(response, 500, { code: -1, message: errorMessage(error) });
-  }
-  return true;
-}
-
-function handleManualTrigger(
-  request: http.IncomingMessage,
-  pathname: string,
-  response: http.ServerResponse,
-  context: GatewayControlRoutesContext
-): boolean {
-  const match = pathname.match(/^\/gateways\/([^/]+)\/manual-trigger$/);
-  if (!match) return false;
-
-  const id = decodedGatewayId(match[1]);
-  runTrackedOperation(context, context.readJsonBody<GatewayManualTriggerRequest>(request)
-    .then((body) => {
-      const result = context.triggerManualRule(id, body);
-      context.jsonResponse(response, 202, {
-        code: 0,
-        message: result.alreadyRunning ? "manual trigger already running" : "manual trigger accepted",
-        data: result
-      });
-    })
-    .catch((error) => {
-      context.jsonResponse(response, 500, { code: -1, message: errorMessage(error) });
-    }));
-  return true;
-}
-
-function handleAgentDeliveryTest(
-  request: http.IncomingMessage,
-  pathname: string,
-  response: http.ServerResponse,
-  context: GatewayControlRoutesContext
-): boolean {
-  const match = pathname.match(/^\/gateways\/([^/]+)\/agent-delivery-test$/);
-  if (!match) return false;
-
-  const id = decodedGatewayId(match[1]);
-  runTrackedOperation(context, context.readJsonBody<GatewayAgentDeliveryTestRequest>(request)
-    .then((body) => context.testAgentDelivery(id, body))
-    .then((result) => {
-      context.jsonResponse(response, 200, {
-        code: 0,
-        message: "agent delivery test completed",
-        data: result
-      });
-    })
-    .catch((error) => {
-      context.jsonResponse(response, 502, { code: -1, message: errorMessage(error) });
-    }));
-  return true;
-}
-
-function handleDeliveryReplay(
-  request: http.IncomingMessage,
-  requestUrl: URL,
-  response: http.ServerResponse,
-  context: GatewayControlRoutesContext
-): boolean {
-  const match = requestUrl.pathname.match(/^\/gateways\/([^/]+)\/delivery-replay$/);
-  if (!match) return false;
-
-  const id = decodedGatewayId(match[1]);
-  if (request.method === "GET") {
-    try {
-      const limit = Number(requestUrl.searchParams.get("limit") ?? "50") || 50;
-      const status = requestUrl.searchParams.get("status");
-      context.jsonResponse(response, 200, {
-        code: 0,
-        ...context.listDeliveryReplayAttempts(id, limit, status)
-      });
-    } catch (error) {
-      context.jsonResponse(response, 400, { code: -1, message: errorMessage(error) });
+    return { status: failure.statusCode, body: { code: -1, ...(includeStatus ? { statusCode: failure.statusCode } : {}), errorCode: failure.errorCode, message: failure.message } };
+  };
+  return Object.freeze({
+    list(summary: string | null, includeConfig: string | null): ApiOperationResult {
+      return success(withRouteCatalogVersion(context, context.gatewayPayload({ includeDiagnostics: summary !== "1", includeConfigDefinitions: summary !== "1" || includeConfig === "1" })));
+    },
+    async replace(body: GatewayConfigFile, mutation: GatewayMutation): Promise<ApiOperationResult> {
+      try { await context.writeConfig(body, mutation.contentHash, mutation.operationId); context.syncRunningGateways(); return success(withRouteMutationReceipt(context, mutation.operationId, context.gatewayPayload())); }
+      catch (error) { return mutationFailed(error); }
+    },
+    async save(id: string, definition: GatewayDefinition, mutation: GatewayMutation): Promise<ApiOperationResult> {
+      try {
+        await context.writeGatewayConfig(id, definition, mutation.contentHash, mutation.operationId);
+        // A committed save remains committed even if runtime activation fails.
+        let activationError: string | undefined;
+        try { context.syncRunningGateways(); } catch (error) { activationError = errorMessage(error); }
+        return success({ ...withRouteMutationReceipt(context, mutation.operationId, context.gatewayPayload({ includeDiagnostics: false, includeConfigDefinitions: true })), activation: activationError ? { state: "failed", message: activationError } : { state: "requested" } });
+      } catch (error) { return mutationFailed(error, true); }
+    },
+    async resolve(operationId: string): Promise<ApiOperationResult> {
+      try { const result = await context.resolveRouteMutation(operationId); return success({ ...withRouteCatalogVersion(context, context.gatewayPayload({ includeDiagnostics: false, includeConfigDefinitions: true })), receipt: { ...result, operationId, routeConfigHash: context.routeCatalogVersion().routeConfigHash } }); }
+      catch (error) { return mutationFailed(error, true); }
+    },
+    action(id: string, action: "start" | "stop" | "restart"): ApiOperationResult {
+      try {
+        if (action === "start") context.startGateway(id);
+        else if (action === "stop") context.stopGateway(id);
+        else context.restartGateway(id);
+        return success({ code: 0, message: `requested ${action}`, data: context.runtimeStatuses() });
+      } catch (error) { return { status: 400, body: { code: -1, message: errorMessage(error) } }; }
+    },
+    async remove(id: string, mutation: GatewayMutation): Promise<ApiOperationResult> {
+      try { await context.removeGatewayConfig(id, mutation.contentHash, mutation.operationId); context.syncRunningGateways(); return success(withRouteMutationReceipt(context, mutation.operationId, context.gatewayPayload())); }
+      catch (error) { return mutationFailed(error); }
+    },
+    weixinLogin(id: string): ApiOperationResult {
+      const target = context.weixinLoginTarget(id);
+      if (!target) return { status: 404, body: { code: -1, message: `Gateway not found: ${id}` } };
+      if (!target.enabled) return { status: 400, body: { code: -1, message: "该 Route 未启用个人微信消息端。" } };
+      try { context.requestWeixinLogin(target.dataDir); return success({ code: 0, message: "已明确请求生成个人微信登录二维码；不会发送消息或修改账号配置。" }, 202); }
+      catch (error) { return { status: 500, body: { code: -1, message: errorMessage(error) } }; }
+    },
+    manual(id: string, body: GatewayManualTriggerRequest): ApiOperationResult {
+      try { const result = context.triggerManualRule(id, body); return success({ code: 0, message: result.alreadyRunning ? "manual trigger already running" : "manual trigger accepted", data: result }, 202); }
+      catch (error) { return { status: 500, body: { code: -1, message: errorMessage(error) } }; }
+    },
+    async testDelivery(id: string, body: GatewayAgentDeliveryTestRequest): Promise<ApiOperationResult> {
+      try { return success({ code: 0, message: "agent delivery test completed", data: await context.testAgentDelivery(id, body) }); }
+      catch (error) { return { status: 502, body: { code: -1, message: errorMessage(error) } }; }
+    },
+    replays(id: string, limit: string | null, status: string | null): ApiOperationResult {
+      try { return success({ code: 0, ...context.listDeliveryReplayAttempts(id, Number(limit ?? "50") || 50, status) }); }
+      catch (error) { return { status: 400, body: { code: -1, message: errorMessage(error) } }; }
+    },
+    async replay(id: string, body: DeliveryReplayRequest): Promise<ApiOperationResult> {
+      try { await context.replayDelivery(id, body); return success({ code: 0, message: "delivery replay requested", data: context.runtimeStatuses() }, 202); }
+      catch (error) { return { status: 500, body: { code: -1, message: errorMessage(error) } }; }
+    },
+    network: () => success(context.networkOptionsPayload()),
+    async reload(accept: string | undefined): Promise<ApiOperationResult> {
+      try { await context.loadRuntimes(); context.syncRunningGateways(); return accept?.includes("application/json") ? success({ ok: true, gateways: context.runtimeStatuses(), routeCatalog: context.routeCatalogVersion() }) : { status: 303, headers: { location: "/" } }; }
+      catch (error) { return failed(error, 503); }
     }
-    return true;
-  }
-
-  if (request.method === "POST") {
-    runTrackedOperation(context, context.readJsonBody<DeliveryReplayRequest>(request)
-      .then((body) => context.replayDelivery(id, body))
-      .then(() => {
-        context.jsonResponse(response, 202, {
-          code: 0,
-          message: "delivery replay requested",
-          data: context.runtimeStatuses()
-        });
-      })
-      .catch((error) => {
-        context.jsonResponse(response, 500, { code: -1, message: errorMessage(error) });
-      }));
-    return true;
-  }
-
-  context.jsonResponse(response, 405, { code: -1, message: "Method not allowed" });
-  return true;
-}
-
-export function handleGatewayControlApi(
-  request: http.IncomingMessage,
-  requestUrl: URL,
-  response: http.ServerResponse,
-  context: GatewayControlRoutesContext
-): boolean {
-  const mutationMatch = requestUrl.pathname.match(/^\/gateways\/mutations\/([A-Za-z0-9%:._-]+)$/);
-  if (request.method === "GET" && mutationMatch) {
-    const operationId = decodeURIComponent(mutationMatch[1]);
-    runTrackedOperation(context, context.resolveRouteMutation(operationId).then(result => {
-      context.jsonResponse(response, 200, {
-        ...withRouteCatalogVersion(context, context.gatewayPayload({ includeDiagnostics: false, includeConfigDefinitions: true })),
-        receipt: { ...result, operationId, routeConfigHash: context.routeCatalogVersion().routeConfigHash }
-      });
-    }).catch(error => {
-      const failure = publicRouteMutationError(error);
-      context.jsonResponse(response, failure.statusCode, { code: -1, ...failure });
-    }));
-    return true;
-  }
-  const configMatch = requestUrl.pathname.match(/^\/gateways\/([^/]+)\/config$/);
-  if (request.method === "PUT" && configMatch) {
-    runTrackedOperation(context, context.readJsonBody<GatewayDefinition>(request).then(async definition => {
-      const operationId = routeMutationOperationId(request);
-      await context.writeGatewayConfig(decodeURIComponent(configMatch[1]), definition, expectedContentHash(request, context), operationId);
-      // Persistence has its own result; runtime activation cannot turn a committed write into a failed save.
-      let activationError: string | undefined;
-      try { context.syncRunningGateways(); } catch (error) { activationError = errorMessage(error); }
-      context.jsonResponse(response, 200, {
-        ...withRouteMutationReceipt(context, operationId, context.gatewayPayload({ includeDiagnostics: false, includeConfigDefinitions: true })),
-        activation: activationError ? { state: "failed", message: activationError } : { state: "requested" }
-      });
-    }).catch(error => {
-      const failure = publicRouteMutationError(error);
-      context.jsonResponse(response, failure.statusCode, { code: -1, ...failure });
-    }));
-    return true;
-  }
-  if (request.method === "GET" && requestUrl.pathname === "/gateways") {
-    context.jsonResponse(response, 200, withRouteCatalogVersion(context, context.gatewayPayload({
-      includeDiagnostics: requestUrl.searchParams.get("summary") !== "1",
-      includeConfigDefinitions: requestUrl.searchParams.get("summary") !== "1"
-        || requestUrl.searchParams.get("includeConfig") === "1"
-    })));
-    return true;
-  }
-
-  if (request.method === "POST" && requestUrl.pathname === "/gateways") {
-    let operationId = "";
-    runTrackedOperation(context, context.readJsonBody<GatewayConfigFile>(request)
-      .then(async (body) => {
-        operationId = routeMutationOperationId(request);
-        await context.writeConfig(
-          body,
-          expectedContentHash(request, context),
-          operationId
-        );
-        context.syncRunningGateways();
-        context.jsonResponse(response, 200, withRouteMutationReceipt(context, operationId, context.gatewayPayload()));
-      })
-      .catch((error) => {
-        const failure = publicRouteMutationError(error);
-        context.jsonResponse(response, failure.statusCode, {
-          code: -1,
-          errorCode: failure.errorCode,
-          message: failure.message
-        });
-      }));
-    return true;
-  }
-
-  if (request.method === "GET" && requestUrl.pathname === "/network-options") {
-    context.jsonResponse(response, 200, context.networkOptionsPayload());
-    return true;
-  }
-
-  if (request.method === "POST" && handleGatewayAction(request, requestUrl.pathname, response, context)) return true;
-  if (request.method === "POST" && handleWeixinLogin(requestUrl.pathname, response, context)) return true;
-  if (request.method === "POST" && handleManualTrigger(request, requestUrl.pathname, response, context)) return true;
-  if (request.method === "POST" && handleAgentDeliveryTest(request, requestUrl.pathname, response, context)) return true;
-  if (handleDeliveryReplay(request, requestUrl, response, context)) return true;
-
-  if (request.method === "POST" && requestUrl.pathname === "/reload") {
-    runTrackedOperation(context, context.loadRuntimes()
-      .then(() => {
-        context.syncRunningGateways();
-        if (request.headers.accept?.includes("application/json")) {
-          context.jsonResponse(response, 200, {
-            ok: true,
-            gateways: context.runtimeStatuses(),
-            routeCatalog: context.routeCatalogVersion()
-          });
-        } else {
-          context.redirectResponse(response, 303, "/");
-        }
-      })
-      .catch(error => {
-        context.jsonResponse(response, errorStatus(error, 503), { code: -1, message: errorMessage(error) });
-      }));
-    return true;
-  }
-
-  return false;
+  });
 }

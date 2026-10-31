@@ -16,6 +16,14 @@ PC 首次确认连接归属后持久缓存元数据，已确认设备可在公�
 
 身份来自经过验证的本地隧道或 Relay worker。Manager 仅在真正 loopback、本代 `x-rabilink-tunnel-local` 和受管传输成立时信任注入的设备 ID；正文和客户端自报头不能建立身份。应用管理凭据可保存指定设备配置，不能冒充眼镜确认应用；设备自身回执须来自原设备绑定。
 
+## 可执行合同与自动发现
+
+六个操作由同一组定义同时安装 HTTP 路由和发现目录：`manager.rabilink.agent-devices.list`、`manager.rabilink.agent-devices.profile.read`、`manager.rabilink.agent-devices.profile.save`、`manager.rabilink.agent-devices.profile.receipt.record`、`manager.rabilink.agent-devices.profile.operation.read` 和 `manager.rabilink.persona-template.read`。模板入口不再依赖其它路由的 prefix 声明。
+
+请求与响应 DTO 复用 `packages/rabilink-agent-contract/profile.mjs` 的 `PROFILE_SCHEMAS`，原生校验器继续负责 UTF-16 长度、唯一 ID、正文总量、版本及幂等语义。读取正文前捕获原连接与 PC 拥有者；等待人格来源后再查设备归属，写入和返回前复核原上下文。连接业务上下文尚未配置返回 `503 PROFILE_CONTEXT_UNAVAILABLE`，不解释为额外功能许可。伪造来源及已撤销连接仍被拒绝。
+
+设备保存结果与实际应用回执分开。管理连接不能代签设备的应用确认。保存已发生而后续确认失败时，响应标记 `uncertain=true`；先用原 `deviceId` 与正文 `idempotencyKey` 查 `/profile/operations/{key}`。未找到返回 HTTP 200 和 `receipt:null`，不能据此断定请求从未执行。这里没有启动 Agent、发送 prompt、下载模型或执行 MCP。
+
 ## 公共 PC 接口
 
 | 方法与路径 | 结果 |
@@ -39,7 +47,13 @@ profile revision 从 1 递增，首次 `expectedRevision` 为 0。CAS 冲突返�
 
 结果不确定时回读原操作回执和资源。`receipt:null` 不能证明原写入失败；更高版本覆盖当前配置后仍可按原键核对旧回执。设备应用回执的 `status` 为 `applied` 或 `failed`，失败须带受限 `errorCode`；不得确认未保存版本或倒退已应用版本。已保存、设备已应用、实际 Skill/工具执行和硬件唤醒是不同证据。
 
-PC 按应用连接作用域保存配置和回执。异步来源读取后、写入前再次核对 scope 与来源身份。文件写入使用同目录临时文件、fsync、旧文件快照和完整回读，失败恢复快照；损坏存储失败关闭。没有宣称多进程共享文件写入或跨平台断电事务保证。
+PC 按应用连接作用域保存配置和回执。异步来源读取后、写入前再次核对 scope 与来源身份。文件写入使用同目录临时文件、fsync、旧文件快照和完整回读，失败恢复快照。这是单次写入的恢复机制，不是长期备份。没有宣称多进程共享文件写入或跨平台断电事务保证。
+
+## 损坏配置的隔离
+
+配置按设备隔离。列表返回健康设备，并在 `coverage.invalidDeviceIds` 中列出无法读取的设备 ID；访问这些设备的配置或操作回执返回 `503 PROFILE_RECORD_INVALID`。其他设备仍可正常读取、保存与核对原回执。保存只更新目标设备，其他设备的原始记录（包括坏记录）继续保留，不用空配置覆盖，也不自动删除。
+
+若损坏涉及整个文件或连接作用域的结构，无法确认其中设备归属，则拒绝该存储范围的操作。此限制不扩大到其他独立模块。
 
 ## 验证状态
 

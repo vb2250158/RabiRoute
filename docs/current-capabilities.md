@@ -1,6 +1,6 @@
 <!-- docs-language-switch -->
 <div align="center">
-<a href="./current-capabilities_en.md">English</a> | 简体中文
+<a href="./current-capabilities_en.md">English</a> | 简体中文 | <a href="./current-capabilities_ja.md">日本語</a>
 </div>
 <!-- /docs-language-switch -->
 
@@ -64,9 +64,9 @@ RabiRoute 负责消息进入、规则匹配、上下文包装、处理端投递�
 | Manual trigger | 已验证 | Manager API 和日志诊断页可真实触发 `manual_trigger` 或 heartbeat 规则；它不是消息适配器。 |
 | Remote Agent | 实验支持 | Manager 作为 v3 出站控制端扫描并连接远端 bridge，使用密码挑战握手，支持任务、事件和双向文件；Gateway 子进程只显示占位状态，不另开 listener。 |
 | RabiSpeech 语音消息端 | 实验支持 | RabiSpeech 只维护一份 ASR/VAD、声纹处理和 FIFO。Android 手机/眼镜与独立语音客户端一样只持续传 PCM，不切句、不跑模型；PC 对手机流完成处理后只投 `rabilink` Route，本机/普通远程声卡只投 `speech` Route。每段转写先写一次主机级语音消息库，各绑定角色再分别写自己的原始记录和会话上下文。主机只保存不透明声纹/聚类证据，不判断声纹是谁或谁是“用户”；手机回复默认回原设备。正式自动声纹只接受显式确认的真人私有数据集及完整哈希门禁报告，合成 TTS/旧报告始终只作预检。标准安装不含语音环境或模型；模型管理页可列出允许清单并逐个下载权重，但“已下载”不代表独立运行环境或真实推理已经验收。 |
-| FenneNote | 已退役兼容 | 不再出现在新增消息端或新规则 UI；只读取旧 Route，并保留历史 webhook/Outbox 兼容以便迁移。 |
+| FenneNote | 已退役，配置迁移到语音服务 | 新增入口和独立运行入口已移除；旧语音配置读取时转换为 `speech` / `tts`。历史来源标识与转写记录保留。 |
 | 小米音箱 / 小爱 | 已退役 | 新增菜单、快速配置、规则分类、运行注册和检测入口已移除。旧配置字段和消息来源标识仅用于兼容读取；旧 Route 应移除该适配器，按需使用米家。 |
-| 米家 / Xiaomi Home | 实验支持；自动化合同已验证，真实 Home Assistant 待验收 | 它是独立的 `xiaomiHome` 消息端。当前 Route 的米家消息适配器页分为 Setup 和设置两个标签：Setup 管理部署、登录与连接，设置管理事件、设备控制和录像；切换标签保留未保存的输入；令牌只进入一次带 lifecycle fence 和 `Idempotency-Key` 的请求，随后由 DPAPI/AES-256-GCM 保护，Route、设置、日志和 API 不保存或回显它。候选地址和令牌一起验证，非回环默认 HTTPS，全局 Agent 接入开启且节点凭据与 Agent 身份通过认证时，远端 Agent 可访问与本机相同的公共配置、部署、设备和录像 API；未认证访问不获得该权限，局域网 WebGUI 的例外仍只覆盖配置。异步操作持续检查请求原租约；录像另需独立读取令牌，远端 Agent 放在 `x-rabiroute-artifact-token` 中。当前实现仅支持一组本机 Home Assistant 账号。 |
+| 米家 / Xiaomi Home | 实验支持；自动化合同已验证，真实 Home Assistant 待验收 | 它是独立的 `xiaomiHome` 消息端。当前 Route 的米家消息适配器页分为 Setup 和设置两个标签：Setup 管理部署、登录与连接，设置管理事件、设备控制和录像；切换标签保留未保存的输入；令牌只进入一次带 lifecycle fence 和 `Idempotency-Key` 的请求，随后由 DPAPI/AES-256-GCM 保护，Route、设置、日志和 API 不保存或回显它。候选地址和令牌一起验证，支持 HTTP 和 HTTPS；`allowInsecurePrivateHttp=false` 时禁止非回环 HTTP，`allowPublicBaseUrl=false` 时仅允许回环或私网 IP，全局 Agent 接入开启且节点凭据与 Agent 身份通过认证时，远端 Agent 可访问与本机相同的公共配置、部署、设备和录像 API；未认证访问不获得该权限，局域网 WebGUI 的例外仍只覆盖配置。异步操作持续检查请求原租约；录像读取复用已认证的 Manager 连接，不默认要求额外读取令牌。当前实现仅支持一组本机 Home Assistant 账号。 |
 | RabiLink | 实验支持 | 同时存在本地兼容入口、全局 Relay Runtime 和 Route worker；Android 手机/眼镜通过 Relay SSE 收到队列事件后按 cursor 单次补漏，音频只传 PCM，PC 完成 ASR 后进入主机通用语音库和选定 RabiLink Route；主动消息与回复走独立 Relay 下行队列。明确目标下行在 `delivered` 前不按 TTL 删除，手机持久补传 `delivered/played/playback_failed`，而 `played` 只能由手机/眼镜各自 AudioTrack marker 产生。Rokid AIUI AIX 的宿主只提供整包 HTTP、没有 SSE/WS/分块回调，为保证前台主动消息功能保留 25 秒长等待这一受控例外。代码回执闭环已完成，手机/眼镜实际扬声器和穿戴设备仍需真机验收。 |
 | 智能手表 / 手环健康消息端 | 实验支持 | `wearable.health` 结构化观测进入按角色分日的健康时间线；Manager 可查询当前状态、历史和摘要，阈值/冷却命中后以 `wearable_health_alert` 投递 Agent。Android 可选 Health Connect 或 PC ADB Companion；Companion 由唯一 Host 下的 Manager Plugin Kernel 与 generation-scoped process lease 持有，动态 READY URL 经 `/meta` 和双身份 header 围栏，不再拥有登录计划任务或固定 Manager 端口。小米真机已闭环心率、睡眠会话、阶段、睡/醒状态、去重和查询；无需 ADB 的 MiWear SPP 直连仍未作为默认采集器。 |
 | 通用 Webhook | 实验支持 | 接收没有专用适配器的外部 POST；已有命名平台应使用自己的适配器，以保留日志和回传语义。 |
@@ -104,9 +104,9 @@ RabiRoute 负责消息进入、规则匹配、上下文包装、处理端投递�
 | WorkBuddy（腾讯 AI 办公工作台） | 实验支持 | **已可投递**，凭据需手工一步。投递走绑定任务会话进程的本地网关（`POST /api/v1/runs`），把 `source.conversation.id` 固定为完整会话 ID：消息以正式用户回合进入该任务对话区，由该任务以其自带的模型、工具与审批执行；同 ID 复投不新建任务（已实测）。任务发现与解析读取会话进程描述文件（进程存活 + 心跳 + 是否发布本地网关）与 `workbuddy.db` 任务库，按完整会话 ID 或“保存名称 + 规范化工作目录”解析唯一最新任务，cwd 冲突、归档 ID、owner 缺席全部失败关闭。网关密码由桌面注入会话进程，RabiRoute 作为独立进程读不到，需在 `data/workbuddy-auth.json` 一次性录入；未配置时投递失败关闭且不发未鉴权请求。仍为实验性：桌面配对入口尚未提供，冷启动未验证。详见 [WorkBuddy 接入方案](workbuddy-agent-adapter-plan.md)。 |
 | Marvis | 人工接力 | 写 prompt、复制剪贴板并打开/聚焦 Marvis；不能可靠列出、创建或重复注入同一会话。 |
 
-处理端创建已接入 Cordis 运行时：六个内置 Agent Adapter 由独立 Fiber 注册到同一清单（WorkBuddy 声明消息处理与 Hook 能力；计划秘书与记忆整理尚未适配，回执恢复亦不声明），类型解析、Gateway 配置枚举、Manager 扫描元数据和快速配置输入读取同一 manifest；兼容入口和原投递路径保持不变。单个 Fiber 与根 Context 的撤销已通过自动化测试。Manager 已通过 `/api/plugins/catalog` 发布统一插件目录；WebGUI 从目录生成受控导航并响应目录变化，Desktop 读取同一目录生成宿主预先注册的菜单、状态、设置、快捷键和主题入口。第三方 Vue 组件、脚本、样式和命令处理器仍未开放。
+处理端与 Manager 扩展使用共享 SDK 和 Plugin Kernel 的正式注册、发布与撤销入口。Manager 通过 `/api/plugins/catalog` 发布目录，WebGUI 与 Desktop 展示对应入口。发布、替换与失败时保留原实例的合同见[插件生命周期](plugin-publication-lifecycle.md)。
 
-Manager 的 31 个内置插件与树外插件统一使用 schema/profile v2。入口明确选择 `in_process`、`isolated` 或 `declarative`；Profile 的 `readyRequires` 决定 Manager 是否可对 Host 报 ready；Plugin Kernel 在替换时先释放消费者、再释放 provider，长期插件子进程由 Process Lease Registry 按 generation/activation/instance/revision 回收。任何非 v2 插件 Schema 都不进入运行链。
+Manager 插件使用 schema/profile v2，明确选择 `in_process`、`isolated` 或 `declarative`。`in_process` 是受信任的同进程执行边界，不使用 VM 时间上限中断同步业务事务；不受信任任务的终止与隔离由进程 executor 负责。`health.live=true` 的 healthy/degraded Manager 可继续提供独立功能；`readyRequires` 对应的 `requiredReady` 表示声明能力是否齐备，缺项是否阻断由目标功能判断。Kernel 先释放 consumer、再释放 provider，Process Lease Registry 按 generation、activation、instance 与 revision 回收所属子进程。
 
 目标 Desktop 任务的命令、文件、网络、权限和工具审批与 RabiRoute 的外部消息 Outbox policy 是两层不同边界。
 
@@ -118,9 +118,9 @@ Manager 的 31 个内置插件与树外插件统一使用 schema/profile v2。�
 | --- | --- |
 | QQ / NapCat | 必须明确群/私聊目标；支持 text/image/voice/file，以及把 Markdown 文本在本机浏览器渲染成 PNG 后作为图片发送。图片消息可用有序 `segments` 把文字、图片和 Markdown 图排成一条消息；本地图片逐张校验 `allowedFileRoots`。群文件使用 `upload_group_file`。群聊必须提交 `params.replyToMessageId`，真实 ID 生成引用回复段，空字符串表示明确不引用，省略字段则返回可行动错误。引用消息含图片时还必须按原图顺序提交 `replyImageDescriptions`；发送成功后，每张来源图片旁保存同名 `.md` 说明和 Agent 会话映射。 |
 | WeCom | 必须提供明确 `params.chatId`；使用 SDK 发送，受 adapter policy 限制。 |
-| 个人微信 | 仅支持回复已收到消息并保存了 context token 的来源会话；可发送文本，或发送消息端策略允许且位于 `allowedFileRoots` 内的本地文件。不能主动向任意联系人发消息；图片、语音和视频的专用发送类型未实现。 |
+| 个人微信 | 仅支持回复已收到消息并保存了 context token 的来源会话；可发送文本，或发送消息端策略允许的本地文件；仅配置非空 `messageAdapterPolicies.weixin.allowedFileRoots` 时按该目录列表限制。不能主动向任意联系人发消息；图片、语音和视频的专用发送类型未实现。 |
 | 飞书 | 仅支持文本，回复到原始 `chat_id`；要求应用凭据、事件订阅确认和 adapter 出站 policy。不会回退到通用 Webhook。 |
-| FenneNote | 已退役；只为旧 Route 保留 reply/playback 兼容，不作为新输出方案。 |
+| 旧 FenneNote 输出配置 | 读取时迁移到统一 TTS；旧发送通道仅作为转到语音服务的迁移别名，不调用独立 FenneNote 播放服务。 |
 | RabiLink | 受 Route policy 控制；必须明确设备 ID 或设备类型，非主动发送还需 `sourceMessageId`。主动下行不需要伪造来源任务。 |
 | 角色面板 | 直接追加角色 timeline，可带附件描述。 |
 
@@ -147,8 +147,8 @@ Manager 的 31 个内置插件与树外插件统一使用 schema/profile v2。�
 - 消息适配器页包含每 Route 单 NapCat 绑定、Remote Agent 扫描连接、外部适配器诊断、Agent 扫描、主控 Agent 选择和 pipeline/工作目录配置。
 - 角色页管理 persona、route variables、规则、route kind、regex、定时计划和模板；没有实现设计稿中的 dry-run 预览。
 - 日志页展示连接状态、Codex 投递通道和最近日志，并能执行手动触发。Delivery replay 已有 Manager API 和 ledger，但当前页面没有回放按钮。
-- 顶栏支持简体中文 / English 运行时切换。语言状态统一保存在浏览器 `localStorage` 的 `rabiroute:webgui:locale`，并同步 `<html lang>`；它只是 UI 偏好，不写入 route、role 或 Manager 配置。
-- 英文界面只翻译登记过的界面文案和动态状态；route/persona ID、规则名、模板、正则、任务名、路径、token、日志和运行数据保留原文。使用手册直接读取 `docs/user-guide/` 中人工维护的中英文 Markdown，不维护第三份页面内容。
+- 顶栏支持简体中文 / English / 日本語运行时切换。未保存偏好时，日语浏览器自动选择日语；语言状态统一保存在浏览器 `localStorage` 的 `rabiroute:webgui:locale`，并同步 `<html lang>`；它只是 UI 偏好，不写入 route、role 或 Manager 配置。
+- 英文和日语界面只翻译登记过的界面文案和动态状态；route/persona ID、规则名、模板、正则、任务名、路径、token、日志和运行数据保留原文。使用手册直接读取 `docs/user-guide/` 中的中文、`_en.md` 英文和 `_ja.md` 日语 Markdown，不维护另一套页面正文。README、文档索引、入门与当前能力页也提供日语版；未翻译的开发专题保留其链接原语言。
 - Manager 还提供 Agent thread bridge、Role Knowledge、Remote Agent、多 Rabi 实例、NapCat 管理和 RabiLink 远程 WebGUI HTTP/SSE 代理 API。
 
 ## 角色知识与运行数据
@@ -200,3 +200,7 @@ Manager 的 31 个内置插件与树外插件统一使用 schema/profile v2。�
 米家 Setup 可打开扫码连接页，Manager 提供账号内扫地机目录和有大小限制的原始文件读取，凭据不返回 Agent。自动合同测试通过；具体设备的扫码、下载、解码和物理导航各自验收。真实 pv11cn version-2 文件已完成下载、解密和绘制；支持的文件返回 decoded=true 和地图栅格、房间与位置快照，poseFreshness=unverified、coordinateNavigation=false，不提供机器人音频，见[云地图说明](vacuum-cloud-map.md)。
 
 米家“设备列表”支持登记设备卡片、当前状态／能力查询、参数预演和真实动作测试，复用原接口和回执。扫地机详情可显示自动刷新的云地图；导航与机器人音频未接通。实体目录不等于物理设备目录，详见[使用说明](user-guide/home-devices.md)。
+
+## 通用可靠 Agent 投递（源码接入，运行验收中）
+
+原客户端 SQLite 持久受理、同 ID 恢复、动态地址发现、结果 ACK 去重与 WebGUI 投递记录已接入源码。隔离测试不等于安装/双机验收；Desktop 原生持久幂等和不可变附件扩展仍有明确缺口。[合同与验收范围](reliable-agent-delivery.md)。

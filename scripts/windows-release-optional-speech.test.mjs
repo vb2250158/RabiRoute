@@ -62,7 +62,9 @@ test("Windows release explicitly includes required discovery and Agent transport
       "packages/rabi-companion/observation.json",
       "scripts/Resolve-RabiRouteManagerUrl.ps1",
       "scripts/resolve-manager.mjs",
+      "scripts/upgrade-persona-message-config.mjs",
       "scripts/lib/discover-manager-url.mjs",
+      "scripts/lib/windows-host-discovery.mjs",
       "apps/rabi-agent/lib/manager-client.mjs",
       "apps/rabi-agent/lib/manager-cli.mjs",
       "packages/rabi-knowledge-contract/schema.mjs",
@@ -90,7 +92,7 @@ test("Windows release explicitly includes required discovery and Agent transport
   );
   assert.match(
     releaseScript,
-    /Copy-RequiredPortableRuntimeFiles\s*\r?\n\s*foreach \(\$relative in @\("apps\\rabi-agent\\runtime", "apps\\rabi-agent\\dist\\agent-hooks", "apps\\rabi-agent\\dist\\native"\)\)[\s\S]*?if \(\$IncludeSpeech\)/
+    /Copy-RequiredPortableRuntimeFiles\s*\r?\n\s*foreach \(\$relative in @\("apps\\rabi-agent\\runtime", "apps\\rabi-agent\\dist\\agent-hooks"\)\)[\s\S]*?if \(\$IncludeSpeech\)/
   );
 });
 

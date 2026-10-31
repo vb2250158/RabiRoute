@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { getTimeoutMs } from "./timeout-settings.mjs";
 import path from "node:path";
 import readline from "node:readline";
 import { spawn } from "node:child_process";
@@ -127,7 +128,7 @@ export class CodexAppServerClient {
     }
     const id = this.nextId++;
     const timeoutMs = this.requestTimeoutMs || (
-      method === "thread/start" || method === "turn/start" || method === "turn/steer" ? 180_000 : 60_000
+      method === "thread/start" || method === "turn/start" || method === "turn/steer" ? getTimeoutMs("legacyAgent.rpc.mutation", 180000) : getTimeoutMs("legacyAgent.rpc.read", 60000)
     );
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {

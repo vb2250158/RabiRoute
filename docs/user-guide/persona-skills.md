@@ -1,8 +1,12 @@
 # 查看角色技能
 
-[English](persona-skills_en.md) | 简体中文
+<!-- docs-language-switch -->
+<div align="center">
+<a href="./persona-skills_en.md">English</a> | 简体中文 | <a href="./persona-skills_ja.md">日本語</a>
+</div>
+<!-- /docs-language-switch -->
 
-在已绑定角色的路线中打开“知识”页，点击“角色技能”。目录显示该角色保存的 Skill 标题和摘要，选择一项可阅读正文。正文作为纯文本展示，不执行 HTML。
+打开“计划与记忆”并选择角色，无需先关联路由，点击“角色技能”。目录显示该角色保存的 Skill 标题和摘要，选择一项可阅读正文。正文作为纯文本展示，不执行 HTML。
 
 这是只读资源目录，**不代表当前 Agent 已加载这些技能**，也不是安装、启停或编辑入口。资料中的 `active`、`draft`、`archived` 是资料状态，不是执行端加载状态。
 

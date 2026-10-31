@@ -116,7 +116,6 @@ function connectionFixture(t: TestContext) {
   });
   const authority = new LanAgentAuthority({ statePath: path.join(root, "authority.json") });
   const credential = authority.enroll(authority.issueBootstrapTicket().ticket, "fixture-node");
-  authority.registerAgentCatalog(credential.token, [{ agentId: "fixture-agent", provider: "custom-provider" }]);
   const url = new URL("http://manager.example/api/agent-adapters/dsh/connection");
   const body = { baseUrl: "http://127.0.0.1:39277", expectedRevision: 0 };
   let policy = { enabled: true, incarnation: "initial" };
@@ -165,10 +164,7 @@ test("DSH body wait cannot write after Agent or connection authority is revoked 
     const input = fixture.make(variant === "connection" ? "connection" : "agent", () => {
       if (variant === "connection") fixture.revokeConnection();
       else if (variant === "global-aba") fixture.replacePolicy();
-      else {
-        fixture.authority.setAgentEnabled("fixture-node", "fixture-agent", false);
-        if (variant === "agent-aba") fixture.authority.setAgentEnabled("fixture-node", "fixture-agent", true);
-      }
+      else { fixture.authority.revokeNode("fixture-node"); }
     });
     await assert.rejects(handleDshConnectionRequest(input, fixture.url, fixture.store), { status: 403 });
     assert.equal(fixture.store.readMetadata().revision, 0);

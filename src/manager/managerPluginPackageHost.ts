@@ -5,6 +5,7 @@ import type {
   ManagerPluginRouteRegistry
 } from "./managerPluginRouteRegistry.js";
 import { ManagerPluginRequestTracker } from "./managerPluginRequestTracker.js";
+import type { ApiOperationDefinition, ApiUpgradeDefinition, ApiUpgradeRegistration, ApiOperationRegistration } from "./apiOperationContract.js";
 
 export type RabiManagerPluginEvent = Readonly<{
   instanceId: string;
@@ -15,6 +16,8 @@ export type RabiManagerPluginEvent = Readonly<{
 export type RabiManagerPluginHostApi = Readonly<{
   instanceId: string;
   registerRoutes(routes: readonly ManagerPluginRouteDeclaration[]): () => void;
+  registerOperations(operations: readonly ApiOperationDefinition[]): () => Promise<void>;
+  registerUpgrades(operations: readonly ApiUpgradeDefinition[]): () => Promise<void>;
   track<T>(operation: Promise<T>): Promise<T>;
   publish(name: string, data: unknown): void;
   json(response: ServerResponse, statusCode: number, body: unknown): void;
@@ -78,13 +81,28 @@ export function createRabiManagerPluginHostApi(
   const instanceId = required(options.instanceId, "Manager plugin instanceId");
   const tracker = new ManagerPluginRequestTracker(options.drainTimeoutMs);
   const unregister = new Set<() => void>();
+  const operationRegistrations = new Map<ApiOperationRegistration | ApiUpgradeRegistration, () => Promise<void>>();
   let stopped = false;
+  let stopping: Promise<void> | undefined;
 
-  const release = (): void => {
+  const release = (): unknown[] => {
+    const failures: unknown[] = [];
     for (const dispose of [...unregister]) {
       unregister.delete(dispose);
-      dispose();
+      try { dispose(); } catch (error) { failures.push(error); }
     }
+    return failures;
+  };
+  const ownRegistration = (registration: ApiOperationRegistration | ApiUpgradeRegistration): (() => Promise<void>) => {
+    let disposal: Promise<void> | undefined;
+    const dispose = () => disposal ??= Promise.resolve().then(() => registration.dispose());
+    operationRegistrations.set(registration, dispose);
+    return () => {
+      const completion = dispose();
+      // A failed or still-running explicit release remains owned by host.stop().
+      void completion.then(() => operationRegistrations.delete(registration), () => undefined);
+      return completion;
+    };
   };
 
   return Object.freeze({
@@ -101,6 +119,16 @@ export function createRabiManagerPluginHostApi(
         dispose();
       };
     },
+    registerOperations(operations) {
+      if (stopped) throw new Error(`Manager plugin host is stopping: ${instanceId}`);
+      const registration = options.routes.registerOperations(instanceId, operations);
+      return ownRegistration(registration);
+    },
+    registerUpgrades(operations) {
+      if (stopped) throw new Error(`Manager plugin host is stopping: ${instanceId}`);
+      const registration = options.routes.registerUpgrades(instanceId, operations);
+      return ownRegistration(registration);
+    },
     track<T>(operation: Promise<T>): Promise<T> {
       if (stopped) return Promise.reject(new Error(`Manager plugin host is stopping: ${instanceId}`));
       return tracker.trackOperation(operation);
@@ -115,11 +143,26 @@ export function createRabiManagerPluginHostApi(
     },
     json,
     readJson,
-    async stop(): Promise<void> {
-      if (stopped) return;
+    stop(): Promise<void> {
+      if (stopping) return stopping;
       stopped = true;
-      release();
-      await tracker.stop();
+      return stopping = Promise.resolve().then(async () => {
+        const failures = release();
+        for (const registration of operationRegistrations.keys()) if ("stopAccepting" in registration) {
+          try { registration.stopAccepting(); } catch (error) { failures.push(error); }
+        }
+        // Accepted legacy commands may require the existing upgrade connection
+        // to deliver their result. Join them before retiring that transport.
+        try { await tracker.stop(); } catch (error) { failures.push(error); }
+        // A rejected registration must not skip any other owned close.
+        const results = await Promise.allSettled([
+          ...[...operationRegistrations.values()].map(dispose => dispose())
+        ]);
+        failures.push(...results.flatMap(result => result.status === "rejected" ? [result.reason] : []));
+        if (failures.length === 1) throw failures[0];
+        if (failures.length) throw new AggregateError(failures, "Manager plugin host cleanup failed.");
+        operationRegistrations.clear();
+      });
     }
   });
 }

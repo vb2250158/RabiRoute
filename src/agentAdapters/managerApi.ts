@@ -1,3 +1,4 @@
+import { getTimeoutMs } from "../shared/timeoutSettings.js";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -262,7 +263,9 @@ export async function scanDshAgentAdapter(
   const dshEndpoints = await Promise.all(dshUrls.map(async (url) => ({
     label: url.includes("127.0.0.1") || url.includes("localhost") ? "本机 DSH apiproxy" : "DSH apiproxy",
     url,
-    healthy: await checkEndpoint(url)
+    // DSH can be busy loading its catalog; a 1.2-second generic probe must not
+    // prevent the authenticated session lookup from even attempting recovery.
+    healthy: await checkEndpoint(url, getTimeoutMs("agent.dsh.probe", 10000))
   })));
   const configuredBaseUrl = configuredDshUrls[0];
   const healthyConfigured = dshEndpoints.find((endpoint) => endpoint.url === configuredBaseUrl && endpoint.healthy);
@@ -394,7 +397,7 @@ export async function scanAgentAdapters(
   const codexLimit = Math.max(1, Math.min(500, Math.floor(options.codexLimit ?? 200)));
   const codexOffset = Math.max(0, Math.floor(options.codexOffset ?? 0));
   const codexQuery = String(options.codexQuery || "").trim() || undefined;
-  const codexCatalogTimeoutMs = Math.max(100, Math.min(30_000, Math.floor(options.codexCatalogTimeoutMs ?? 8_000)));
+  const codexCatalogTimeoutMs = options.codexCatalogTimeoutMs ?? getTimeoutMs("agent.codex.catalog", 8000);
   const performanceOperations: AgentScanPerformanceOperation[] = [];
   const runtimes = getRuntimeList(ctx);
   const checkEndpoint = ctx.checkHttpEndpoint ?? checkHttpEndpoint;
@@ -402,7 +405,7 @@ export async function scanAgentAdapters(
   const copilotSessionNames = [...new Set(copilotSessions.map((s) => s.name))];
   const cwdOptions = ctx.cwdOptions ?? collectCwdOptions(ctx.rootDir, runtimes, copilotSessions);
   let codexDesktopReady = false;
-  const desktopBridge = new CodexDesktopBridge({ requestTimeoutMs: 1_200 });
+  const desktopBridge = new CodexDesktopBridge({ requestTimeoutMs: getTimeoutMs("agent.codex.catalogIpc", 1200) });
   const desktopReadyStartedAt = performance.now();
   let desktopReadyFailed = false;
   try {
@@ -714,7 +717,7 @@ export async function testAstrbotLogin(
   }
 
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 5000);
+  const timer = setTimeout(() => controller.abort(), getTimeoutMs("deadline.agentAdapters.managerApi.testAstrbotLogin", 5000));
   try {
     const response = await fetch(`${baseUrl}/api/auth/login`, {
       method: "POST",
@@ -769,7 +772,7 @@ export async function getCopilotStatus(ctx: AgentManagerApiContext): Promise<Rec
   } else {
     const whereCmd = process.platform === "win32" ? "where.exe" : "which";
     try {
-      const { stdout } = await execFileAsync(whereCmd, ["copilot"], { timeout: 2000, windowsHide: true });
+      const { stdout } = await execFileAsync(whereCmd, ["copilot"], { timeout: getTimeoutMs("backend.agentAdapters.managerApi.getCopilotStatus.execFileAsync.timeout", 2000), windowsHide: true });
       const first = stdout.split(/\r?\n/).map((l) => l.trim()).filter(Boolean)
         .find((p) => !p.endsWith(".ps1"));
       if (first) {
@@ -868,7 +871,7 @@ async function detectCopilotBins(resolveWingetCopilot?: () => string | null): Pr
   const whereCmd = process.platform === "win32" ? "where.exe" : "which";
   const copilotBins: string[] = [];
   try {
-    const { stdout } = await execFileAsync(whereCmd, ["copilot"], { timeout: 2000, windowsHide: true });
+    const { stdout } = await execFileAsync(whereCmd, ["copilot"], { timeout: getTimeoutMs("backend.agentAdapters.managerApi.detectCopilotBins.execFileAsync.timeout", 2000), windowsHide: true });
     copilotBins.push(...stdout.split(/\r?\n/).map((l) => l.trim()).filter(Boolean));
   } catch {
     // not found
@@ -992,7 +995,7 @@ function projectOptionsFromPaths(paths: string[]): AgentScanProject[] {
   return [...byNormalized.values()];
 }
 
-async function checkHttpEndpoint(url: string, timeoutMs = 1200): Promise<boolean> {
+async function checkHttpEndpoint(url: string, timeoutMs = getTimeoutMs("agent.endpointProbe", 1200)): Promise<boolean> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
@@ -1013,7 +1016,7 @@ async function loginAstrbotDashboard(baseUrl: string, username: string, password
     return { message: "缺少 AstrBot 密码。" };
   }
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 4200);
+  const timer = setTimeout(() => controller.abort(), getTimeoutMs("deadline.agentAdapters.managerApi.loginAstrbotDashboard", 4200));
   try {
     const response = await fetch(`${baseUrl}/api/auth/login`, {
       method: "POST",
@@ -1133,7 +1136,7 @@ con.close()
         ? ["-3", "-c", script, dbPath]
         : ["-c", script, dbPath];
       const { stdout } = await execFileAsync(py, args, {
-        timeout: 3000,
+        timeout: getTimeoutMs("backend.agentAdapters.managerApi.scanAstrbotLocalDb.execFileAsync.timeout", 3000),
         windowsHide: true,
         encoding: "utf8",
         env: { ...process.env, PYTHONIOENCODING: "utf-8" }

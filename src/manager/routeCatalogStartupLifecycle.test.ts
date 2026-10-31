@@ -421,6 +421,8 @@ test("Manager publishes fenced READY before route catalog recovery and gates HTT
     "../../plugins/builtin/io.rabiroute.manager.route-control/1.0.0/manager.mjs",
     import.meta.url
   )), "utf8");
+  const routeControlOperationsSource = fs.readFileSync(fileURLToPath(new URL("./rabiApiOperations.ts", import.meta.url)), "utf8");
+  const managerConfigurationSource = fs.readFileSync(fileURLToPath(new URL("./rabiApi.ts", import.meta.url)), "utf8");
   const roleInfoSource = fs.readFileSync(fileURLToPath(new URL("./roleInfoPayload.ts", import.meta.url)), "utf8");
   const personaMessagingSource = fs.readFileSync(fileURLToPath(new URL("./personaMessagingRoutes.ts", import.meta.url)), "utf8");
   const speechSource = fs.readFileSync(fileURLToPath(new URL("./speechControl.ts", import.meta.url)), "utf8");
@@ -470,7 +472,14 @@ test("Manager publishes fenced READY before route catalog recovery and gates HTT
   assert.match(desktopSource, /await context\.ensurePersonaConfigFile\(safeRoleId\)/);
   assert.match(desktopSource, /await context\.writeAdapterConfigFile\(route\)/);
   assert.match(desktopPluginSource, /ensureRoleFile: runtime\.ensureRoleFile/);
-  assert.match(routeControlPluginSource, /await runtime\.ensureDataDirs\(\)/);
+  assert.match(routeControlPluginSource, /await runtime\.prepareRegistration\(\)/);
+  const registrationSource = fs.readFileSync(new URL("../plugin-runtime-host/routeControlAsyncRegistration.ts", import.meta.url), "utf8");
+  assert.match(registrationSource, /registerOperationsAsync\(context\.identity\.instanceId,\s*original\.createRabiControlOperations\(\), context\.lifecycle\.signal\)/);
+  assert.match(source, /createRabiControlOperations:\s*\(\) => createRabiControlOperations\([\s\S]*?readManagerConfig, writeManagerConfig, ensureDataDirs/);
+  assert.match(routeControlOperationsSource, /createManagerConfigurationOwner\(managerConfig\)/);
+  assert.match(routeControlOperationsSource, /await configuration\.update\(input\.body as any, guard\)/);
+  const managerConfigurationOwnerSource = managerConfigurationSource.slice(managerConfigurationSource.indexOf("export function createManagerConfigurationOwner"));
+  assert.match(managerConfigurationOwnerSource, /ctx\.writeManagerConfig\(config\);[\s\S]*?await ctx\.ensureDataDirs\(\)/);
   assert.doesNotMatch(roleInfoSource, /node:fs|PersonaCatalog|readFileSync|readdirSync|statSync|existsSync/);
   assert.doesNotMatch(personaMessagingSource, /PersonaCatalog|catalog\.list|readdirSync|readFileSync|statSync|existsSync/);
   const speechPersonaSource = speechSource.slice(

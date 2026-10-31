@@ -10,5 +10,5 @@ export function speechAudioCacheReferenceKind(value: string | null | undefined):
 
 export function formatSpeechEpochSeconds(value: number, locale: AppLocale): string {
   if (!Number.isFinite(value) || value <= 0) return "-";
-  return new Date(value * 1000).toLocaleString(locale === "en" ? "en-US" : "zh-CN", { hour12: false });
+  return new Date(value * 1000).toLocaleString(locale === "en" ? "en-US" : locale, { hour12: false });
 }

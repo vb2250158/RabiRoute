@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from .timeout_settings import get_timeout_seconds
+
+
 import asyncio
 import base64
 import binascii
@@ -186,7 +189,7 @@ def create_app(
 ) -> FastAPI:
     current = settings or load_settings()
     persona_roles_root = (roles_root or current.config_path.parents[2] / "data" / "roles").expanduser().resolve()
-    rabilink_audio_stale_timeout = float(rabilink_audio_stale_timeout_seconds)
+    rabilink_audio_stale_timeout = get_timeout_seconds("speech.remoteAudio.stale", rabilink_audio_stale_timeout_seconds)
     if rabilink_audio_stale_timeout <= 0:
         raise ValueError("RabiLink audio stale timeout must be greater than zero.")
     persona_cache_dirs = _persona_tts_cache_dirs(persona_roles_root)
@@ -270,7 +273,7 @@ def create_app(
         input_source: SpeechInputSource,
     ) -> dict[str, object]:
         base = _manager_loopback_url()
-        async with httpx.AsyncClient(timeout=45.0) as client:
+        async with httpx.AsyncClient(timeout=get_timeout_seconds("speech.manager.request", 45)) as client:
             response = await client.post(
                 f"{base}/api/speech/messages",
                 json={

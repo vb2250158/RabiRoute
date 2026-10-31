@@ -328,6 +328,7 @@ function mergeIntoPersona(rolesRoot: string, roleId: string, fragment: PersonaCo
       existing === undefined ? ensureDefaultPersonaAutomations(undefined) : []
     ),
     codexHooks: current.codexHooks ?? fragment.codexHooks,
+    languageStyle: current.languageStyle ?? fragment.languageStyle,
     recentMessageLimits: hasCurrentLimits ? current.recentMessageLimits : fragment.recentMessageLimits,
     recentMessageLimit: hasCurrentLimits ? undefined : fragment.recentMessageLimit,
     speechTriggerKeywords: hasCurrentKeywords ? current.speechTriggerKeywords : fragment.speechTriggerKeywords
@@ -387,6 +388,7 @@ function migrateAdapterConfig(options: ConfigMigrationOptions, configName: strin
   const fallbackRoleId = sanitizeRoleId(typeof parsed.agentRoleId === "string" ? parsed.agentRoleId : undefined);
   if (fallbackRoleId) {
     mergeIntoPersona(options.rolesRoot, fallbackRoleId, {
+      languageStyle: parsed.languageStyle != null ? normalizeLanguageStyleBinding(parsed.languageStyle) : undefined,
       codexHooks: parsed.codexHooks != null ? normalizeCodexHookSettings(parsed.codexHooks) : undefined,
       automationRules: Array.isArray(parsed.automationRules)
         ? normalizePersonaAutomationRules(parsed.automationRules)
@@ -413,6 +415,7 @@ function migrateAdapterConfig(options: ConfigMigrationOptions, configName: strin
   }
 
   const hasLegacyRuleFields = (fallbackRoleId && parsed.codexHooks != null)
+    || (fallbackRoleId && parsed.languageStyle != null)
     || Array.isArray(parsed.automationRules)
     || Array.isArray(parsed.notificationRules)
     || parsed.roleNotificationRules != null
@@ -435,6 +438,7 @@ function migrateAdapterConfig(options: ConfigMigrationOptions, configName: strin
     ...adapterOnly
   } = parsed;
   if (fallbackRoleId) delete adapterOnly.codexHooks;
+  if (fallbackRoleId) delete adapterOnly.languageStyle;
   const legacySpeechPushMode = Array.isArray(parsed.routeProfiles)
     ? parsed.routeProfiles
         .filter(isJsonObject)

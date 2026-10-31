@@ -4,7 +4,7 @@ import { spawn } from "node:child_process";
 
 // Serialized into the stable owner. The presentation never reads private config,
 // contacts Manager, launches a worker, or acquires an independent ownership lease.
-export function createDesktopPresentation({ currentEntry, snapshot, command, onFailure, enabled = process.platform === "win32" }) {
+export function createDesktopPresentation({ currentEntry, snapshot, command, onFailure, timeout = (_key, fallback) => fallback, enabled = process.platform === "win32" }) {
   let child; let closing = false; let failures = 0; let retry;
   const publish = () => {
     if (child?.stdin.writable) child.stdin.write(`${JSON.stringify({ type: "snapshot", ...snapshot() })}\n`);
@@ -20,7 +20,7 @@ export function createDesktopPresentation({ currentEntry, snapshot, command, onF
       env: Object.fromEntries(Object.entries(process.env).filter(([key]) => /^(systemroot|windir|temp|tmp|userprofile|appdata|localappdata|path|psmodulepath)$/i.test(key)))
     });
     const owned = child;
-    const readyDeadline = setTimeout(() => owned.kill(), 15000);
+    const readyDeadline = setTimeout(() => owned.kill(), timeout("agent.tray.start", 15000));
     let buffer = ""; let pending = false;
     owned.stdin.on("error", () => undefined);
     owned.stderr.on("data", () => undefined); // Never forward private host diagnostics.
@@ -61,7 +61,7 @@ export function createDesktopPresentation({ currentEntry, snapshot, command, onF
       const owned = child;
       if (!owned || owned.exitCode !== null) return;
       await new Promise(resolve => {
-        const deadline = setTimeout(() => owned.kill(), 3000);
+        const deadline = setTimeout(() => owned.kill(), timeout("agent.tray.stop", 3000));
         owned.once("close", () => { clearTimeout(deadline); resolve(); });
         owned.stdin.end(); // EOF is also the parent-death contract.
       });

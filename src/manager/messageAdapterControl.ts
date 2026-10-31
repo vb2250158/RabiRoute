@@ -1,4 +1,5 @@
-import type http from "node:http";
+import { getTimeoutMs } from "../shared/timeoutSettings.js";
+import type { ApiOperationDefinition } from "./apiOperationContract.js";
 import type { MessageEndpointType } from "../shared/messageEndpointTypes.js";
 import type { GatewayDefinition } from "../shared/gatewayConfigModel.js";
 import type { SpeechRuntimeStatus } from "../shared/speechControlContract.js";
@@ -17,7 +18,6 @@ import {
 import type { NapcatHealthScanPayload } from "../messageEndpoints/napcatHealthScan.js";
 import {
   recentMessageEvidence,
-  scanFenneNoteEndpoint,
   scanRabiLinkEndpoint,
   scanWearableEndpoint,
   scanWebhookEndpoint
@@ -90,7 +90,6 @@ export type MessageAdapterControlScanContext = {
   routeCallbackEndpoint(runtime: GatewayRuntime, type: MessageEndpointType): MessageAdapterEndpoint | null;
   routeHasRecentMessages(runtime: GatewayRuntime, type: MessageEndpointType): boolean | undefined;
   checkHttpEndpoint(url: string, timeoutMs?: number): Promise<boolean>;
-  fenneNotePlaybackUrl: string;
   scanNapcatEndpoint(): MessageAdapterScanResult | Promise<MessageAdapterScanResult>;
   remoteAgentScanResult(): MessageAdapterScanResult;
   speechStatus(): Promise<SpeechRuntimeStatus>;
@@ -103,15 +102,13 @@ export type MessageAdapterControlApiContext = {
   service: MessageAdapterControlService;
   scanNapcatHealth(): Promise<NapcatHealthScanBundle>;
   gatewayPayload(): unknown;
-  jsonResponse(response: http.ServerResponse, statusCode: number, body: unknown): void;
-  trackOperation<T>(operation: Promise<T>): Promise<T>;
 };
 
 export const MESSAGE_ADAPTER_CONFIG_PAGE_CONTRIBUTION = {
   kind: "page",
   surface: "web.pages",
   id: "message-adapters-page",
-  label: { fallback: "消息适配器" },
+  label: { fallback: "消息" },
   routeId: "route.adapters",
   rendererId: "builtin.web-page.adapters.v1",
   slot: "route",
@@ -119,25 +116,12 @@ export const MESSAGE_ADAPTER_CONFIG_PAGE_CONTRIBUTION = {
   order: 20
 } as const satisfies RabiUiContribution;
 
-export const MESSAGE_ADAPTER_NAVIGATION_CONTRIBUTION = {
-  kind: "navigation",
-  surface: "web.navigation",
-  id: "message-adapters",
-  label: { fallback: "消息适配器" },
-  routeId: "route.adapters",
-  icon: "mdi-puzzle-outline",
-  slot: "route-primary",
-  hosts: ["web"],
-  order: 20
-} as const satisfies RabiUiContribution;
-
 /**
- * The page and navigation stay declarative. The WebGUI host owns the Vue
- * renderer; this plugin instance only owns whether the route is contributed.
+ * Keep the page for existing links and unbound Routes. Persona configuration
+ * owns the Message tab; there is no independent sidebar navigation.
  */
 export const MESSAGE_ADAPTER_CONTROL_CONTRIBUTIONS = [
-  MESSAGE_ADAPTER_CONFIG_PAGE_CONTRIBUTION,
-  MESSAGE_ADAPTER_NAVIGATION_CONTRIBUTION
+  MESSAGE_ADAPTER_CONFIG_PAGE_CONTRIBUTION
 ] as const satisfies readonly RabiUiContribution[];
 
 function fallbackScanResult(provider: MessageAdapterScanProvider, diagnostic: ScanDiagnostic): MessageAdapterScanResult {
@@ -150,7 +134,7 @@ function fallbackScanResult(provider: MessageAdapterScanProvider, diagnostic: Sc
     scan: diagnostic,
     warnings: [
       diagnostic.state === "timeout"
-        ? `${provider.label} 检查超过本轮 ${MESSAGE_ADAPTER_SCAN_DEADLINE_MS} ms 截止时间；没有把超时推断为离线。`
+        ? `${provider.label} 检查超过本轮 ${getTimeoutMs("backend.manager.messageAdapterControl.MESSAGE_ADAPTER_SCAN_DEADLINE_MS", MESSAGE_ADAPTER_SCAN_DEADLINE_MS)} ms 截止时间；没有把超时推断为离线。`
         : `${provider.label} 检查失败：${diagnostic.message || "未知错误"}`
     ]
   };
@@ -200,7 +184,7 @@ export class MessageAdapterControlService {
 
   constructor(
     readonly providers: MessageAdapterScanProviderRegistry,
-    private readonly deadlineMs = MESSAGE_ADAPTER_SCAN_DEADLINE_MS
+    private readonly deadlineMs = getTimeoutMs("backend.manager.messageAdapterControl.MESSAGE_ADAPTER_SCAN_DEADLINE_MS", MESSAGE_ADAPTER_SCAN_DEADLINE_MS)
   ) {}
 
   async scanAdapters(): Promise<MessageAdapterScanBundle> {
@@ -250,7 +234,8 @@ export class MessageAdapterControlService {
     return this.activeProbes.size;
   }
 
-  private trackProbe<T>(probe: T | Promise<T>): Promise<T> {
+  /** Trusted scan owners enroll the actual native probe, including work that outlives a response deadline. */
+  trackProbe<T>(probe: T | Promise<T>): Promise<T> {
     const tracked = Promise.resolve(probe);
     this.activeProbes.add(tracked);
     void tracked.then(
@@ -352,7 +337,6 @@ export function createBuiltinMessageAdapterScanProviders(
     routeCallbackEndpoint: context.routeCallbackEndpoint,
     routeHasRecentMessages: context.routeHasRecentMessages,
     checkHttpEndpoint: context.checkHttpEndpoint,
-    fenneNotePlaybackUrl: context.fenneNotePlaybackUrl
   };
 
   return [
@@ -400,7 +384,6 @@ export function createBuiltinMessageAdapterScanProviders(
         warnings: speechStatus.state === "online" ? [] : ["先启动 RabiSpeech，再做麦克风实机 ASR 和 TTS 排队播放测试。"]
       };
     }),
-    provider("fennenote", "FenneNote / 芬妮笔记", "experimental", () => scanFenneNoteEndpoint(webhookLikeContext)),
     provider("xiaomiHome", "米家 / Xiaomi Home", "experimental", async () => scanXiaomiHomeEndpoint(await context.xiaomiHomeHealth())),
     provider("rabilink", "RabiLink / Relay 直连", "experimental", () => scanRabiLinkEndpoint(webhookLikeContext)),
     provider("wearable", "智能手表/手环", "experimental", () => scanWearableEndpoint(webhookLikeContext)),
@@ -508,21 +491,49 @@ export async function messageAdapterControlPayload(
   };
 }
 
-export function handleMessageAdapterControlApi(
-  request: http.IncomingMessage,
-  requestUrl: URL,
-  response: http.ServerResponse,
-  context: MessageAdapterControlApiContext
-): boolean {
-  if (request.method !== "GET" || requestUrl.pathname !== "/api/scan/message-adapters") return false;
-  const gatewayId = requestUrl.searchParams.get("gatewayId") || undefined;
-  void context.trackOperation(messageAdapterControlPayload(gatewayId, context)
-    .then(payload => context.jsonResponse(response, 200, payload))
-    .catch(error => {
-      context.jsonResponse(response, 500, {
-        code: -1,
-        message: error instanceof Error ? error.message : String(error)
-      });
-    }));
-  return true;
+
+const scanDiagnosticSchema = { type: "object", required: ["state", "durationMs"], additionalProperties: false, properties: {
+  state: { type: "string" }, durationMs: { type: "number", minimum: 0 }, message: { type: "string" }
+} } as const;
+const healthSchema = { type: "object", required: ["state", "message"], additionalProperties: true, properties: {
+  state: { type: "string" }, message: { type: "string" }, available: { type: "number" }, total: { type: "number" }
+} } as const;
+const adapterSchema = { type: "object", required: ["type", "label", "maturity", "installed"], additionalProperties: true, properties: {
+  type: { type: "string" }, label: { type: "string" }, maturity: { type: "string" }, installed: { type: "boolean" },
+  warnings: { type: "array", items: { type: "string" } }, scan: scanDiagnosticSchema, health: healthSchema,
+  endpoints: { type: "array", items: { type: "object", required: ["label", "url"], additionalProperties: false, properties: { label: { type: "string" }, url: { type: "string" }, healthy: { type: "boolean" } } } },
+  requirements: { type: "array", items: { type: "object", required: ["id", "label"], additionalProperties: true, properties: { id: { type: "string" }, label: { type: "string" } } } },
+  installCandidates: { type: "array", items: { type: "object", required: ["label"], additionalProperties: true, properties: { label: { type: "string" } } } }
+} } as const;
+
+/** The original scan owners provide observations; this contract never installs, logs in or repairs adapters. */
+export function createMessageAdapterControlOperations(context: MessageAdapterControlApiContext): readonly ApiOperationDefinition[] {
+  return [{ contract: {
+    operationId: "manager.message-adapters.scan", contractVersion: "1.0.0", method: "GET", pathTemplate: "/api/scan/message-adapters", exposure: "public", transport: "http",
+    description: "Observe all registered message adapters, independent health and NapCat scan diagnostics. gatewayId is returned as requestedGatewayId metadata; it does not filter probes or grant access.",
+    request: { path: { type: "object", additionalProperties: false }, query: { type: "object", additionalProperties: true, properties: { gatewayId: { anyOf: [{ type: "string" }, { type: "array", items: { type: "string" } }], description: "Use the first query value; empty means absent, matching native URLSearchParams.get." } } }, headers: { type: "object" }, body: { kind: "none", allowIgnoredBody: true } },
+    responses: { "200": { mediaType: "application/json", schema: { type: "object", required: ["adapters", "health", "scan", "repair", "napcatHealth", "gatewayPayload"], additionalProperties: false, properties: {
+      adapters: { type: "object", additionalProperties: adapterSchema },
+      health: { type: "object", required: ["adapters", "overall"], additionalProperties: false, properties: { adapters: { type: "object", additionalProperties: healthSchema }, overall: healthSchema } },
+      scan: { type: "object", required: ["partial", "durationMs", "deadlineMs", "adapters", "napcatInstances"], additionalProperties: false, properties: {
+        requestedGatewayId: { type: "string" }, partial: { type: "boolean" }, durationMs: { type: "number", minimum: 0 }, deadlineMs: { type: "number", minimum: 0 },
+        adapters: { type: "object", additionalProperties: scanDiagnosticSchema }, napcatInstances: { type: "object", additionalProperties: scanDiagnosticSchema }
+      } },
+      repair: { type: "object", required: ["changed", "messages"], additionalProperties: false, properties: { changed: { const: false }, messages: { type: "array", items: { type: "string" } } } },
+      napcatHealth: { type: "object", additionalProperties: { type: "object", required: ["instances"], additionalProperties: false, properties: { instances: { type: "object", additionalProperties: { type: "object", required: ["ok", "enabled", "scanState"], additionalProperties: true, properties: { ok: { type: "boolean" }, enabled: { type: "boolean" }, scanState: { type: "string" } } } } } } },
+      gatewayPayload: { description: "The original Manager gateway summary; the gateway owner retains its extensible payload contract." }
+    } } }, "500": { mediaType: "application/json", schema: { type: "object", required: ["code", "message"], additionalProperties: false, properties: { code: { const: -1 }, message: { type: "string" } } } } },
+    effects: { mode: "native-readonly-scan", description: "Run registered native adapter and NapCat health probes concurrently, preserving independent timeout/error/unknown states. Probes may read local files, inspect configured processes and contact configured endpoints. No installation, configuration write, process launch, login or repair action is exposed." },
+    recovery: { strategy: "repeatable-native-observation", description: "A later read starts a fresh scan. The native shared deadline bounds each response, not underlying probe lifetime; plugin retirement stops admission and joins real probes before unregistering providers. A timeout is not evidence of offline, logged-out or failed delivery." },
+    validators: [{ id: "native-message-adapter-scan", description: "The original provider registry, bounded-scan controller and independent-health summarizer own readiness and maturity. Unknown query fields and request bytes remain ignored. Authenticated remote callers require no extra per-adapter permission." }]
+  }, handler: async input => {
+    try {
+      input.signal?.throwIfAborted();
+      const gateway = input.query.gatewayId;
+      const gatewayId = (Array.isArray(gateway) ? gateway[0] : gateway) || undefined;
+      return { status: 200, body: await messageAdapterControlPayload(gatewayId, context) };
+    } catch (error) {
+      return { status: 500, body: { code: -1, message: error instanceof Error ? error.message : String(error) } };
+    }
+  } }];
 }

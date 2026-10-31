@@ -2,10 +2,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import fs from "node:fs";
 import { createPluginTestHarness } from "@rabiroute/plugin-sdk";
-import {
-  ManagerPluginRouteRegistry,
-  type ManagerPluginRouteHandler
-} from "../../manager/managerPluginRouteRegistry.js";
+import { ManagerPluginRouteRegistry } from "../../manager/managerPluginRouteRegistry.js";
+import { createXiaomiHomeManagerOperations } from "./managerOperations.js";
+import type { XiaomiHomeManagerRoutesContext } from "./managerRoutes.js";
 
 // The built-in plugin package is plain ESM by design; this test exercises its
 // real activation contract instead of copying its route declarations.
@@ -18,58 +17,29 @@ test("shipped Xiaomi profile does not bind a private persona by default", () => 
   assert.equal(plugin.config.agentRoleId, undefined);
 });
 
-test("Xiaomi Home plugin registers exact and prefix routes with the Manager contract", async () => {
+test("Xiaomi Home plugin registers all 53 executable contracts and retires both registrations", async t => {
   const registry = new ManagerPluginRouteRegistry();
-  const handler: ManagerPluginRouteHandler = () => false;
   let routeContext: Record<string, any> | undefined;
-  class Tracker {
-    wrap(value: ManagerPluginRouteHandler): ManagerPluginRouteHandler { return value; }
-    trackOperation<T>(operation: Promise<T>): Promise<T> { return operation; }
-    async stop(): Promise<void> {}
-  }
   class RuntimeController {
     constructor(..._args: unknown[]) {}
     start(): void {}
-    stop(): void {}
+    async activate(): Promise<void> {}
+    assertAvailable(): void {}
+    async stop(): Promise<void> {}
     settings(): Record<string, unknown> { return { source: "profile" }; }
   }
   const runtime = {
-    ManagerPluginRequestTracker: Tracker,
     XiaomiHomeArtifactStore: class { runtimeDir = "unused-in-contract-test"; },
     XiaomiHomeSettingsStore: class {},
     XiaomiHomeRuntimeController: RuntimeController,
     lifecycleFence: { applicationGenerationId: "generation-current", managerInstanceId: "manager-current" },
-    createXiaomiHomeManagerRouteHandler: (context: Record<string, any>) => {
+    createXiaomiHomeManagerOperations: (context: Record<string, any>) => {
       routeContext = context;
-      return handler;
+      return createXiaomiHomeManagerOperations(context as XiaomiHomeManagerRoutesContext);
     },
     deliverXiaomiHomeEvent: async () => undefined,
     webguiLanRequestAllowed: () => true,
-    readJsonBody: async () => ({}),
-    jsonResponse: () => undefined,
-    managerPluginRoutes: registry,
-    registerManagerPluginHandlerRoutes(
-      target: ManagerPluginRouteRegistry,
-      instanceId: string,
-      routeIdPrefix: string,
-      handlers: readonly ManagerPluginRouteHandler[],
-      routes: ReadonlyArray<{
-        routeId: string;
-        kind: "exact" | "prefix";
-        path?: string;
-        pathPrefix?: string;
-        methods?: readonly string[];
-        handlerIndex?: number;
-      }>
-    ) {
-      return target.register(instanceId, routes.map(route => ({
-        routeId: `${routeIdPrefix}.${route.routeId}`,
-        match: route.kind === "exact"
-          ? { kind: "exact" as const, path: route.path!, methods: route.methods }
-          : { kind: "prefix" as const, pathPrefix: route.pathPrefix!, methods: route.methods },
-        handler: handlers[route.handlerIndex ?? 0]!
-      })));
-    }
+    managerPluginRoutes: registry
   };
   const harness = createPluginTestHarness({
     config: { runtimeDir: "unused-in-contract-test" },
@@ -82,11 +52,12 @@ test("Xiaomi Home plugin registers exact and prefix routes with the Manager cont
     },
     services: [["host.manager.xiaomi-home@1", runtime]]
   });
+  t.after(() => harness.dispose());
 
   await harness.activate({ activate });
   const snapshot = registry.snapshot();
 
-  assert.equal(snapshot.length, 1);
+  assert.equal(registry.catalogSnapshot().operations.length, 53);
   assert.ok(routeContext?.runtime instanceof RuntimeController);
   assert.deepEqual(routeContext?.lifecycleFence, runtime.lifecycleFence);
   assert.equal(routeContext?.controlPlaneAccessAllowed, runtime.webguiLanRequestAllowed);
@@ -112,16 +83,11 @@ test("Xiaomi Home plugin registers exact and prefix routes with the Manager cont
     kind: "message-endpoint-settings", id: "xiaomi-home-devices", surface: "route.adapters",
     slot: "xiaomiHome", rendererId: "builtin.xiaomi-home-devices.v1"
   }]);
-  assert.equal(snapshot[0]?.routeCount, 20);
-  assert.ok(snapshot[0]?.routes.some(route => route.match.kind === "exact" && route.match.path === "/api/agent/xiaomi-home/entity-actions"));
-  assert.ok(snapshot[0]?.routes.some(route => route.match.kind === "exact" && route.match.path === "/api/agent/xiaomi-home/deployment/install"));
-  assert.ok(snapshot[0]?.routes.some(route => route.match.kind === "exact" && route.match.path === "/api/agent/xiaomi-home/deployment/events"));
-  assert.deepEqual(
-    snapshot[0]?.routes
-      .filter(route => route.match.kind === "prefix")
-      .map(route => route.match.pathPrefix),
-    ["/api/agent/xiaomi-home/vacuum-cloud/", "/api/agent/xiaomi-home/vacuum-remote/", "/api/agent/xiaomi-home/devices/", "/api/agent/xiaomi-home/resources/", "/api/agent/xiaomi-home/artifacts/"]
-  );
+  assert.equal(snapshot.reduce((count, item) => count + item.routeCount, 0), 53);
+  assert.ok(snapshot.flatMap(item => item.routes).every(route => route.match.kind !== "prefix"));
+  const entries = registry.catalogSnapshot().operations;
+  for (const suffix of ["entity-actions", "deployment/install", "deployment/events"]) assert.ok(entries.some(entry => entry.contract.pathTemplate === "/api/agent/xiaomi-home/" + suffix));
 
   await harness.dispose();
+  assert.equal(registry.catalogSnapshot().operations.length, 0);
 });

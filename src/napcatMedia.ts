@@ -1,3 +1,4 @@
+import { getTimeoutMs } from "./shared/timeoutSettings.js";
 import fs from "node:fs";
 import path from "node:path";
 import type { MessageAttachmentRecord } from "./history.js";
@@ -84,7 +85,7 @@ async function download(candidate: MediaCandidate, fetchImpl: typeof fetch): Pro
     throw new Error("图片消息没有可下载的 HTTP 地址");
   }
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), NAPCAT_MEDIA_TIMEOUT_MS);
+  const timeout = setTimeout(() => controller.abort(), getTimeoutMs("backend.napcatMedia.NAPCAT_MEDIA_TIMEOUT_MS", NAPCAT_MEDIA_TIMEOUT_MS));
   try {
     const response = await fetchImpl(candidate.url, { signal: controller.signal });
     if (!response.ok) throw new Error(`图片下载失败：HTTP ${response.status}`);

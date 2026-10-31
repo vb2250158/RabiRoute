@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from ..timeout_settings import get_timeout_seconds
+
+
 import asyncio
 import base64
 import math
@@ -59,7 +62,7 @@ class LocalHttpAsrProvider:
             "prompt": request.prompt,
             "word_timestamps": request.word_timestamps,
         }
-        timeout = httpx.Timeout(self.settings.timeout_seconds, connect=10.0)
+        timeout = httpx.Timeout(get_timeout_seconds("speech.httpAsr.request", self.settings.timeout_seconds), connect=get_timeout_seconds("speech.httpAsr.connect", 10))
         async with self._lock:
             await worker_supervisor.ensure(f"asr:{self.provider_id}:{model.id}", model.base_url, model.launch)
         async with httpx.AsyncClient(timeout=timeout) as client:

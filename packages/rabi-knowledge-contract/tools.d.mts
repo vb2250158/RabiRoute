@@ -8,7 +8,8 @@ export type KnowledgeInvokeOptions = { replaySafe?: boolean; headers?: Record<st
 export type KnowledgeTool = { name: string; description: string; inputSchema: KnowledgeSchema; readOnly: boolean };
 export type KnowledgeReceipt = { ok: boolean; statusCode: number; uncertain: boolean; [key: string]: unknown };
 export function knowledgeToolIsMutation(name: string, args?: Record<string, unknown>): boolean;
+export class KnowledgePolicyError extends Error {}
 export function createKnowledgeTools(options: {
   client: { invoke(method: string, target: string, options?: KnowledgeInvokeOptions): Promise<KnowledgeManagerReceipt> };
-  allowedRoles: readonly string[]; allowWrites?: boolean;
+  allowedRoles?: readonly string[]; allowWrites?: boolean;
 }): { list(): KnowledgeTool[]; call(name: string, args: Record<string, unknown>): Promise<KnowledgeReceipt> };

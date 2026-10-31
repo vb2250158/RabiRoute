@@ -22,6 +22,12 @@ const protocolKeepaliveMarkers = [
   "event-driven-allow: transport heartbeat keepalive",
   "event-driven-allow: known-offline connectivity callback safety check"
 ];
+const sourceIntegrityException = {
+  file: "src/manager/messageHistorySearchService.ts",
+  marker: "event-driven-allow: bounded message-source integrity reconciliation",
+  pattern: /event-driven-allow: bounded message-source integrity reconciliation[\s\S]*setInterval/,
+  reason: "The message-search contract reconciles only previously queried source roots every sixty seconds in a bounded background worker. Shared/NAS files can change outside this process and notifications can be lost; this audits durable source versions and never polls Agent/business progress or extends a request deadline."
+};
 const checks = [
   {
     files: ["ribiwebgui/src"],
@@ -97,7 +103,11 @@ for (const file of runtimeRoots.flatMap(filesUnder).filter(isRuntimeSource)) {
   const source = fs.readFileSync(file, "utf8");
   for (const match of source.matchAll(/\bsetInterval\s*\(/g)) {
     const prefix = source.slice(Math.max(0, (match.index || 0) - 180), match.index || 0);
-    if (!protocolKeepaliveMarkers.some(marker => prefix.includes(marker))) {
+    const relative = path.relative(root, file).replace(/\\/g, "/");
+    const intervalArgument = /,\s*(\d[\d_]*)\s*\)/.exec(source.slice(match.index, (match.index || 0) + 800));
+    const sourceIntegrityAudit = relative === sourceIntegrityException.file && prefix.includes(sourceIntegrityException.marker)
+      && intervalArgument && Number(intervalArgument[1].replaceAll("_", "")) >= 60_000;
+    if (!sourceIntegrityAudit && !protocolKeepaliveMarkers.some(marker => prefix.includes(marker))) {
       failures.push(`${path.relative(root, file)}: Periodic timers require a documented protocol-keepalive exception; business work must use events or one-shot deadlines.`);
     }
   }
@@ -110,6 +120,7 @@ for (const file of runtimeRoots.flatMap(filesUnder).filter(isRuntimeSource)) {
 }
 
 const controlledPollingExceptions = [
+  sourceIntegrityException,
   {
     file: "apps/rabi-mobile-android/app/src/main/java/com/rabi/link/RabiConversationService.java",
     pattern: /NETWORK_EVENT_FALLBACK_CHECK_MS = 5L \* 60L \* 1000L[\s\S]*postDelayed\(networkEventFallbackCheck, NETWORK_EVENT_FALLBACK_CHECK_MS\)/,

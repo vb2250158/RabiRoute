@@ -165,7 +165,8 @@ if (process.argv.includes(WORKER_ARGUMENT)) {
         RABIROUTE_HOST_CONTROL_TOKEN: controlToken,
         RABIROUTE_HOSTED: "1",
         RABIROUTE_MANAGER_AUTOSTART: "0",
-        RABIROUTE_MANAGER_READ_ONLY: "0",
+        // This read-only HTTP scan must not reconcile machine-wide process ownership.
+        RABIROUTE_MANAGER_READ_ONLY: "1",
         RABIROUTE_PACKAGE_ROOT: fixturePackageRoot,
         RABIROUTE_HOT_PATCH_WATCH: "0",
         RABIROUTE_HOT_PATCH_SOURCE_ROOT: "",

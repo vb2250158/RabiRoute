@@ -1,3 +1,4 @@
+import { getTimeoutMs } from "../../shared/timeoutSettings.js";
 import dgram, { type RemoteInfo } from "node:dgram";
 import { isIP } from "node:net";
 
@@ -126,9 +127,9 @@ export class VacuumCs2Relay {
     for (;;) { const value = await this.next(until); if (!value) return; if (value.type === type && sameEndpoint(value.from, from)) return value; }
   }
   /** The cloud-owned LAN peer must return the exact UID before its media endpoint is bridged. */
-  async connectLocal(address: string, signal: AbortSignal, timeoutMs = 3000): Promise<string> {
+  async connectLocal(address: string, signal: AbortSignal, timeoutMs = getTimeoutMs("backend.integrations.xiaomiHome.vacuumCs2Relay.connectLocal.timeoutMs", 3000)): Promise<string> {
     if(isIP(address)!==4 || !/^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(address))throw new Cs2RelayError("camera_relay_parameters_invalid");
-    this.deadline=Date.now()+Math.min(3000,Math.max(1,timeoutMs));
+    this.deadline=Date.now()+Math.max(1,timeoutMs);
     const abort=()=>this.close();signal.addEventListener("abort",abort,{once:true});this.removeAbort=()=>signal.removeEventListener("abort",abort);
     try{
       if(signal.aborted)throw new Cs2RelayError("camera_relay_cancelled");
@@ -151,8 +152,8 @@ export class VacuumCs2Relay {
       this.relay=ready.from;this.localPeer=true;this.inbox=[];return `127.0.0.1:${this.local.address().port}`;
     }catch(error){this.close();throw error instanceof Cs2RelayError?error:new Cs2RelayError("camera_relay_connection_failed");}
   }
-  async connect(signal: AbortSignal, timeoutMs = 30000): Promise<string> {
-    this.deadline = Date.now() + Math.min(30000, Math.max(1, timeoutMs));
+  async connect(signal: AbortSignal, timeoutMs = getTimeoutMs("backend.integrations.xiaomiHome.vacuumCs2Relay.connect.timeoutMs", 30000)): Promise<string> {
+    this.deadline = Date.now() + Math.max(1, timeoutMs);
     const abort = () => this.close(); signal.addEventListener("abort", abort, { once: true });
     this.removeAbort = () => signal.removeEventListener("abort", abort);
     try {

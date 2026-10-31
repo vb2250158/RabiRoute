@@ -41,7 +41,7 @@ public final class RabiGlassTextOutput implements RokidCxrController.Listener {
         catch (Exception invalid) { onLog("invalid delivery payload"); return false; }
         completion = new CountDownLatch(1);
         main.post(this::begin);
-        try { completion.await(25, TimeUnit.SECONDS); }
+        try { completion.await(com.rabi.link.transport.ScopedManagerTimeouts.active(context).get("android.glass.text",25000), TimeUnit.MILLISECONDS); }
         catch (InterruptedException interrupted) { Thread.currentThread().interrupt(); }
         boolean result = displayed;
         // Always create a fresh connection per retry, so late callbacks cannot acknowledge a new attempt.

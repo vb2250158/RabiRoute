@@ -1,3 +1,6 @@
+import type { PluginPublicationRegistrar } from "@rabiroute/plugin-sdk/publication";
+export type { PluginPublication, PluginPublicationContext, PluginPublicationRegistrar } from "@rabiroute/plugin-sdk/publication";
+
 export const PLUGIN_HOSTS = ["manager", "gateway", "web", "desktop"] as const;
 
 export type PluginHost = typeof PLUGIN_HOSTS[number];
@@ -62,6 +65,7 @@ export type PluginContext = Readonly<{
     list(): readonly string[];
   }>;
   lifecycle: PluginLifecycle;
+  publication: PluginPublicationRegistrar;
   effects: Readonly<{
     add(starter: PluginEffectStarter, label?: string): void;
     adopt(disposer: PluginEffectDisposer, label?: string): void;

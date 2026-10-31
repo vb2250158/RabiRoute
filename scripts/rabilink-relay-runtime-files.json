@@ -1,6 +1,8 @@
 [
   "packages/rabi-api-contract/request.mjs",
   "scripts/lib/rabilink-tunnel-broker.mjs",
+  "scripts/lib/relay-timeouts.mjs",
+  "scripts/lib/timeout-settings.mjs",
   "scripts/rabilink-device-api.mjs",
   "scripts/rabilink-device-log-store.mjs",
   "scripts/rabilink-event-hub.mjs",

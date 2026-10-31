@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .timeout_settings import get_timeout_seconds
+
 import json
 import threading
 from collections.abc import Iterator
@@ -37,6 +39,7 @@ class DesktopPetEventStream(QObject):
     """Reconnectable Manager SSE adapter; it never owns work-event policy."""
 
     work_ended = Signal(object)
+    role_panel_message = Signal(object)
     settings_changed = Signal(object)
     catalog_changed = Signal(object)
     motion_requested = Signal(object)
@@ -72,7 +75,7 @@ class DesktopPetEventStream(QObject):
                 pass
         thread = self._thread
         if thread is not None and thread.is_alive():
-            thread.join(timeout=2.0)
+            thread.join(timeout=get_timeout_seconds("desktop.pet.eventsStop", 2))
         if thread is None or not thread.is_alive():
             self._thread = None
 
@@ -81,7 +84,7 @@ class DesktopPetEventStream(QObject):
             response: object | None = None
             try:
                 request = Request(self._url, method="GET", headers={"accept": "text/event-stream"})
-                with urlopen(request, timeout=65.0) as opened_response:
+                with urlopen(request, timeout=get_timeout_seconds("desktop.pet.eventsIdle", 65)) as opened_response:
                     response = opened_response
                     with self._response_lock:
                         self._response = response
@@ -95,6 +98,8 @@ class DesktopPetEventStream(QObject):
                             return
                         if event_name == "work_ended" and isinstance(payload, dict):
                             self.work_ended.emit(payload)
+                        elif event_name == "role_panel_message" and isinstance(payload, dict):
+                            self.role_panel_message.emit(payload)
                         elif event_name == "desktop_pet_motion_requested" and isinstance(payload, dict):
                             self.motion_requested.emit(payload)
                         elif event_name == "desktop_settings_changed" and isinstance(payload, dict):

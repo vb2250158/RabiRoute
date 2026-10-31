@@ -45,3 +45,9 @@ npm run relay:rabilink:openapi:check
 ```
 
 Rizon/灵珠使用 `POST /rokid/rabilink/input`。HTTP 202、`eventId` 和 cursor 只确认入队，Agent 响应以原输入的下行消息为准。新版 AIUI 采用[客户端通用 API 传输](../../apps/rabilink-aiui/README.md)。校验命令加 `--examples-only` 可只检查公开模板，不转换私有旧导入文件。
+
+## 超时设置
+
+独立 Relay 启动时可从环境变量 `RABIROUTE_TIMEOUT_OVERRIDES` 读取 WebGUI 超时页导出的 JSON 覆盖快照，`relay.*` 优先于原 `RABILINK_RELAY_*_MS` 环境变量；缺少覆盖保留原默认值。值为 1–2147483647 毫秒的整数。保存某台 PC 的设置不会即时修改独立 Relay：需将快照应用到该 Relay 部署环境并重启其进程。
+
+已鉴权请求可通过 `X-Rabi-Timeout-Ms` 设置本次答复、WebGUI/语音代理或长轮询等待预算；SDK、手机和眼镜会传递实际预算。每个请求拥有自己的到期时间，其他客户端不受影响。隧道两端的空闲预算取较短值。请求预算不替代授权、业务原请求编号或未知结果核对。

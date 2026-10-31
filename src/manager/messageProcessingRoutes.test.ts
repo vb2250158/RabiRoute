@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
 import http from "node:http";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
 import type {
   KnowledgeRecallMatch,
@@ -7,9 +10,16 @@ import type {
   RegisterMessageGroupRequirementInput
 } from "../messageProcessing/board.js";
 import {
-  handleMessageProcessingApi,
   type MessageProcessingApiContext
 } from "./messageProcessingRoutes.js";
+
+import { createMessageProcessingOperations } from "./messageProcessingOperations.js";
+import { ManagerPluginRouteRegistry } from "./managerPluginRouteRegistry.js";
+import { markAuthenticatedConnectionRequest } from "./connectionRequestAccess.js";
+import { MessageProcessingBoardStore } from "../messageProcessing/board.js";
+import { LanAgentAuthority } from "./lanAgentAuthority.js";
+import { evaluateLanAgentRequest, assertTrustedLanAgentPrincipal } from "./lanAgentRequestAccess.js";
+import { registerLanAgentBodyGuard, assertLanAgentBodyAuthority } from "./lanAgentBodyAuthority.js";
 
 type RecordedCall = { name: string; args: unknown[] };
 
@@ -40,7 +50,6 @@ function requirement(
 
 function createFixture() {
   const calls: RecordedCall[] = [];
-  const trackedOperations: Promise<unknown>[] = [];
   const requirements = new Map<string, MessageProcessingRequirement>([
     ["req/1", requirement("req/1")],
     ["req-outcome", requirement("req-outcome", "processing")],
@@ -104,13 +113,12 @@ function createFixture() {
       snapshot: async (id, sourceMessageId) => {
         remember("snapshot", id, sourceMessageId);
         if (id === "bad") throw new Error("snapshot failed");
-        return { requirementId: id, sourceMessageId };
+        return { requirementId: id, sourceMessageId, requirementStatus: "processing", contextVersion: "fixture-context", contextItems: [], requiredReviewIds: [], alreadyReplied: false, priorReplies: [] };
       },
       approve: async (id, input) => {
         remember("approve", id, input);
         return {
-          token: "review-token",
-          requirementId: id,
+          sendContextReviewToken: "review-token",
           expiresAt: "2026-08-21T02:00:00.000Z"
         };
       }
@@ -136,19 +144,19 @@ function createFixture() {
     setPlanBaseline: (item, roleId, planId) => remember("baseline", item, roleId, planId),
     scheduleKnowledgeCallbackReminder: (item) => remember("schedule", item),
     publishEvent: (eventType, data) => remember("event", eventType, data),
-    trackOperation(operation) {
-      trackedOperations.push(operation);
-      return operation;
-    }
+
   };
-  return { calls, context, trackedOperations };
+  return { calls, context };
 }
 
 async function startServer(context: MessageProcessingApiContext) {
+  const registry = new ManagerPluginRouteRegistry();
+  const registration = registry.registerOperations("message-processing-test", createMessageProcessingOperations(context));
   const server = http.createServer((request, response) => {
+    markAuthenticatedConnectionRequest(request);
     const url = new URL(request.url ?? "/", "http://127.0.0.1");
     if (url.pathname === "/health") { response.end("ready"); return; }
-    if (handleMessageProcessingApi(request, url, response, context)) return;
+    if (registry.handle(request, url, response)) return;
     response.writeHead(404, { "content-type": "application/json" });
     response.end(JSON.stringify({ fallback: true }));
   });
@@ -157,7 +165,8 @@ async function startServer(context: MessageProcessingApiContext) {
   if (!address || typeof address === "string") throw new Error("server did not bind");
   return {
     baseUrl: `http://127.0.0.1:${address.port}`,
-    close: () => new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()))
+    registry, registration,
+    close: async () => { await registration.dispose(); server.closeAllConnections(); await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())); }
   };
 }
 
@@ -210,7 +219,7 @@ test("serves and approves send-context reviews", async () => {
       { reviewedByThreadId: "thread-1", sendRequest: { text: "reply" } }
     );
     assert.equal(approved.status, 200);
-    assert.equal((await json(approved)).data.token, "review-token");
+    assert.equal((await json(approved)).data.sendContextReviewToken, "review-token");
     assert.equal(fixture.calls.some((call) => call.name === "log"), true);
 
     const failed = await fetch(`${app.baseUrl}/api/message-processing/requirements/bad/send-context`);
@@ -386,8 +395,8 @@ test("returns 400 for invalid JSON and false for unrelated routes", async () => 
     const invalid = await post(app.baseUrl, "/api/message-processing/requirements", "{");
     assert.equal(invalid.status, 400);
     const oversized = await post(app.baseUrl, "/api/message-processing/requirements", { padding: "x".repeat(1024 * 1024) });
-    assert.equal(oversized.status, 400);
-    assert.match(JSON.stringify(await json(oversized)), /exceeds 1048576/);
+    assert.equal(oversized.status, 413);
+    assert.equal((await json(oversized)).errorCode, "API_REQUEST_TOO_LARGE");
 
     const unrelated = await fetch(`${app.baseUrl}/api/unrelated`);
     assert.equal(unrelated.status, 404);
@@ -398,7 +407,7 @@ test("returns 400 for invalid JSON and false for unrelated routes", async () => 
 });
 
 
-test("registers complete asynchronous message-processing request chains", async () => {
+test("registers and retires the same seven executable message-processing operations", async () => {
   const fixture = createFixture();
   const app = await startServer(fixture.context);
   const source = requirement("source").source;
@@ -433,11 +442,9 @@ test("registers complete asynchronous message-processing request chains", async 
       callback
     );
 
-    assert.equal(fixture.trackedOperations.length, 5);
-    assert.deepEqual(
-      (await Promise.allSettled(fixture.trackedOperations)).map((result) => result.status),
-      ["fulfilled", "fulfilled", "fulfilled", "fulfilled", "fulfilled"]
-    );
+    assert.equal(app.registry.catalogSnapshot().operations.length, 7);
+    await app.registration.dispose();
+    assert.equal(app.registry.catalogSnapshot().operations.length, 0);
   } finally {
     await app.close();
   }
@@ -495,4 +502,88 @@ test("outcome verification rejects a requirement changed while storage was pendi
     assert.equal((await bounded(pending)).status, 400);
     assert.equal(fixture.calls.some(call => call.name === "submitOutcome"), false);
   } finally { wait.release(); await pending.catch(() => {}); await app.close(); }
+});
+
+async function nativeBoardFixture(t: test.TestContext) {
+  const fixture = createFixture(), root = fs.mkdtempSync(path.join(os.tmpdir(), "message-processing-operation-"));
+  let time = Date.parse("2026-10-21T00:00:00.000Z"); const now = () => new Date(time);
+  const boardPath = path.join(root, "board.json"), board = new MessageProcessingBoardStore(boardPath, now);
+  fixture.context.board = board;
+  fixture.context.recallKnowledge = () => [];
+  fixture.context.boardPayload = async () => ({ requirement: board.getRequirement("native-requirement") ?? null });
+  const authority = new LanAgentAuthority({ statePath: path.join(root, "authority.json") });
+  const credential = authority.enroll(authority.issueBootstrapTicket().ticket, "empty-processing-node");
+  const registry = new ManagerPluginRouteRegistry(), unblock: Array<() => void> = [], outcomeClosed = verificationGate();
+  let registration: ReturnType<typeof registry.registerOperations>, server: http.Server | undefined;
+  t.after(async () => {
+    for (const release of unblock) release(); await registration?.dispose();
+    server?.closeAllConnections(); if (server) await new Promise<void>(resolve => server!.close(() => resolve()));
+    assert.equal(path.dirname(path.resolve(root)), path.resolve(os.tmpdir())); assert.ok(path.basename(root).startsWith("message-processing-operation-")); fs.rmSync(root, { recursive: true, force: true });
+  });
+  registration = registry.registerOperations("native-processing-fixture", createMessageProcessingOperations(fixture.context));
+  let sourceValid = true;
+  server = http.createServer((request, response) => {
+    if (request.url?.endsWith("/outcome")) response.once("close", outcomeClosed.release);
+    if (evaluateLanAgentRequest(request, authority, true).kind !== "agent") { response.writeHead(401).end(); return; }
+    markAuthenticatedConnectionRequest(request, () => { assertTrustedLanAgentPrincipal(request); });
+    registerLanAgentBodyGuard(request, body => {
+      if (!sourceValid) throw new Error("Original request source changed.");
+      // This fixture supplies the server-owned original source context explicitly;
+      // enrollment alone never invents an Agent or its source session attribution.
+      assertLanAgentBodyAuthority(new URL(request.url!, "http://fixture").pathname, body, { provider: "codex", sessionId: "explicit-source-session" });
+    });
+    if (!registry.handle(request, new URL(request.url!, "http://fixture"), response)) response.writeHead(404).end();
+  });
+  await new Promise<void>(resolve => server!.listen(0, "127.0.0.1", resolve));
+  const base = "http://127.0.0.1:" + (server.address() as import("node:net").AddressInfo).port;
+  const request = (url: string, body?: unknown, signal?: AbortSignal) => new Promise<Response>((resolve, reject) => {
+    const outgoing = http.request(base + url, { method: body === undefined ? "GET" : "POST", signal, headers: { authorization: "Bearer " + credential.token, "content-type": "text/plain" } }, incoming => {
+      const chunks: Buffer[] = []; incoming.on("data", chunk => chunks.push(Buffer.from(chunk))); incoming.on("error", reject);
+      incoming.on("end", () => resolve(new Response(Buffer.concat(chunks), { status: incoming.statusCode! })));
+    }); outgoing.on("error", reject); outgoing.setTimeout(15000, () => outgoing.destroy(new Error("Owned message-processing fixture timeout."))); outgoing.end(body === undefined ? undefined : typeof body === "string" ? body : JSON.stringify(body));
+  });
+  const register = (id = "native-requirement", messageId = "message-1") => request("/api/message-processing/requirements", { action: "register_group", requirementId: id, messageGroupId: "native-group-" + id, source: { ...requirement("source").source, messageIds: [messageId] } });
+  const outcome = { decision: "reply", decidedByThreadId: "explicit-source-session", projectFactAssessment: { status: "none", reviewedMessageIds: ["message-1"], replyChainChecked: true, evidence: "Fixture source and reply chain were checked.", assessedAt: now().toISOString(), assessedByThreadId: "explicit-source-session" } };
+  const holdVerification = () => { const entered = verificationGate(), wait = verificationGate(); unblock.push(wait.release); fixture.context.verifyCriticalFactRecord = async () => { entered.release(); await wait.promise; }; return { started: entered.promise, release: wait.release }; };
+  return { ...fixture, root, board, boardPath, now, request, register, outcome, authority, credential, registry, registration, holdVerification, outcomeClosed: outcomeClosed.promise, advance: () => { time += 1000; }, revokeSource: () => { sourceValid = false; } };
+}
+
+test("an enrolled Node records and reads the original durable Board without a separate feature grant or duplicate requirement", async t => {
+  const f = await nativeBoardFixture(t);
+  assert.equal(f.registry.catalogSnapshot().operations.length, 7);
+  assert.ok(f.registry.catalogSnapshot().operations.every(operation => operation.contract.exposure === "public"));
+  const first = await f.register(); assert.equal(first.status, 200); assert.equal((await first.json()).data.outcome, "created");
+  const duplicate = await f.register("another-id"); assert.equal(duplicate.status, 200); const repeated = await duplicate.json(); assert.equal(repeated.data.outcome, "existing"); assert.equal(repeated.data.requirement.id, "native-requirement");
+  const restored = new MessageProcessingBoardStore(f.boardPath, f.now); assert.equal(restored.getRequirement("native-requirement")?.status, "pending_dispatch"); assert.equal(restored.getRequirement("another-id"), undefined);
+  assert.equal((await f.request("/api/message-processing/board")).status, 200);
+  const read = await f.request("/api/message-processing/requirements/native-requirement"); assert.equal(read.status, 200); assert.equal((await read.json()).data.id, "native-requirement");
+});
+
+test("an explicitly attributed outcome persists through the native Board after evidence validation", async t => {
+  const f = await nativeBoardFixture(t); await f.register(); f.advance();
+  const response = await f.request("/api/message-processing/requirements/native-requirement/outcome", f.outcome);
+  assert.equal(response.status, 200); assert.equal((await response.json()).data.status, "awaiting_send");
+  assert.equal(new MessageProcessingBoardStore(f.boardPath, f.now).getRequirement("native-requirement")?.decision?.decidedByThreadId, "explicit-source-session");
+  const forged = await f.request("/api/message-processing/requirements/native-requirement/outcome", { ...f.outcome, decidedByThreadId: "other-session" }); assert.equal(forged.status, 400);
+});
+
+test("source changes during original asynchronous evidence verification prevent a durable outcome commit", async t => {
+  const f = await nativeBoardFixture(t); await f.register(); const hold = f.holdVerification();
+  const pending = f.request("/api/message-processing/requirements/native-requirement/outcome", f.outcome); await hold.started; f.revokeSource(); hold.release();
+  const response = await pending; assert.equal(response.status, 400); assert.equal(new MessageProcessingBoardStore(f.boardPath, f.now).getRequirement("native-requirement")?.status, "pending_dispatch");
+});
+
+test("Node revocation during verification hides the result and prevents a native Board mutation", async t => {
+  const f = await nativeBoardFixture(t); await f.register(); const hold = f.holdVerification();
+  const pending = f.request("/api/message-processing/requirements/native-requirement/outcome", f.outcome); await hold.started;
+  f.authority.setNodeEnabled(f.credential.nodeId, false, true); f.authority.setNodeEnabled(f.credential.nodeId, true, false); hold.release();
+  const response = await pending; assert.equal(response.status, 403); assert.equal((await response.json()).data, undefined);
+  assert.equal(new MessageProcessingBoardStore(f.boardPath, f.now).getRequirement("native-requirement")?.status, "pending_dispatch");
+});
+
+test("retirement after HTTP disconnect joins pending original evidence verification and leaves the native Board unchanged", async t => {
+  const f = await nativeBoardFixture(t); await f.register(); const hold = f.holdVerification(), controller = new AbortController();
+  const pending = f.request("/api/message-processing/requirements/native-requirement/outcome", f.outcome, controller.signal).catch(() => undefined); await hold.started; controller.abort(); await pending; await f.outcomeClosed;
+  let retired = false; const retirement = f.registration.dispose().then(() => { retired = true; }); await new Promise<void>(resolve => setImmediate(resolve)); assert.equal(retired, false);
+  hold.release(); await retirement; assert.equal(f.registry.catalogSnapshot().operations.length, 0); assert.equal(new MessageProcessingBoardStore(f.boardPath, f.now).getRequirement("native-requirement")?.status, "pending_dispatch");
 });

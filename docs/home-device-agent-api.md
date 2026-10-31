@@ -80,7 +80,7 @@ Manager 另提供[实验性米家云地图文件连接](vacuum-cloud-map.md)，�
 | `home.media.select_source@1` / `select_sound_mode@1` | `source` / `soundMode` | 当前资源公布的选项；状态读回 |
 | `home.media.play_media@1` | `url`、`mediaType` | 对应 PLAY_MEDIA feature；服务受理 |
 
-媒体 URL 最长 2048 字符，只接受 HTTP(S)，禁止用户凭据、query 与 fragment；媒体类型只接受 `music`、`url` 或 `audio/*`。URL 交给 HA/设备，Rabi 不下载或中转媒体，也不把本机文件路径伪装成设备可播放 URL。地址必须能被目标播放器访问。设备没有 PLAY_MEDIA 时，不提供 URL 播放；支持文字播报不表示支持播放任意音频文件。
+媒体标识最长 2048 字符；签名 URL、query/fragment、`media-source://` 标识与视频类型均交由 Home Assistant 按提供者能力验证。URL 交给 HA/设备，Rabi 不下载或中转媒体，也不把本机文件路径伪装成设备可播放 URL。地址必须能被目标播放器访问。设备没有 PLAY_MEDIA 时，不提供 URL 播放；支持文字播报不表示支持播放任意音频文件。
 
 ## 播报绑定
 
@@ -131,3 +131,7 @@ Manager 的 VacuumRemoteController 是遥控会话唯一拥有者，一次只保
 ```
 
 此绑定指定设备的独立 HA 松键计时器，不是额外权限。计时器必须配置为7秒、restore=true；HA 的 timer.finished 和启动自动化需调用已核对的该型号松键码2/4/6及 EXIT_REMOTE。每次初始化和方向前重设7秒计时器，松键确认后取消；松键失败保留计时器。未核对型号、实体、动作目录或没有独立计时器时明确报告不可用。旧逐步移动脚本不再作为新的遥控入口；保留 HA 独立停止脚本仅供计时器和启动补偿，迁移后的调用者应使用 start/pulse/stop/exit。
+
+## 用户配置的连接限制
+
+Home Assistant 域名、公网地址和 HTTP 端点默认可用。显式配置 `allowPublicBaseUrl=false` 才限制到回环/私网 IP；`allowInsecurePrivateHttp=false` 才要求非回环地址使用 HTTPS。两项设置同样作用于重定向，可在米家设置页修改；已有用户显式配置继续生效。回执目录可使用绝对网络共享路径。录像抓取支持 HTTP(S)，`cameraClipAllowedHosts` 留空不限域名，填写后同时约束跳转、切片和密钥。这些限制均来自用户设置，不是隐藏功能许可。

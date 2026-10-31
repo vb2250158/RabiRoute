@@ -9,7 +9,12 @@
       "types": "./index.d.ts",
       "import": "./index.mjs",
       "default": "./index.mjs"
+    },
+    "./publication": {
+      "types": "./publication.d.ts",
+      "import": "./publication.mjs",
+      "default": "./publication.mjs"
     }
   },
-  "files": ["index.mjs", "index.d.ts", "README.md", "README_en.md"]
+  "files": ["index.mjs", "index.d.ts", "api-operation-contract.d.ts", "publication.mjs", "publication.d.ts", "README.md", "README_en.md"]
 }

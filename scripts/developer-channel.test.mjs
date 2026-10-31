@@ -28,7 +28,7 @@ const knowledgeRuntimeFiles = [
   "apps/rabi-mcp/lib/knowledge-receipt.mjs"
 ];
 function writeKnowledgeRuntime(build) {
-  for (const name of ['Invoke-RabiRouteDeveloperApply.ps1', 'Publish-RabiRouteDeveloperCandidate.ps1', 'Install-HomeAssistantOs.ps1', 'check-installed-data-compatibility.mjs', 'Install-RabiRouteReleaseTransaction.ps1']) {
+  for (const name of ['Invoke-RabiRouteDeveloperApply.ps1', 'Publish-RabiRouteDeveloperCandidate.ps1', 'Install-HomeAssistantOs.ps1']) {
     write(build, `scripts/${name}`, fs.readFileSync(new URL(`./${name}`, import.meta.url), 'utf8'));
   }
   write(build, "packages/rabi-companion/presets.json", '{"version":1,"presets":[]}');
@@ -85,8 +85,6 @@ test("developer candidate overlays only built runtime layers and leaves the immu
     write(base, 'scripts/Invoke-RabiRouteDeveloperApply.ps1', 'obsolete activation budget\n');
     write(base, 'scripts/Publish-RabiRouteDeveloperCandidate.ps1', 'obsolete publisher budget\n');
     write(base, 'scripts/Install-HomeAssistantOs.ps1', 'obsolete visible recovery launcher\n');
-    write(base, 'scripts/check-installed-data-compatibility.mjs', 'obsolete compatibility check\n');
-    write(base, 'scripts/Install-RabiRouteReleaseTransaction.ps1', 'obsolete install transaction\n');
     fs.cpSync(new URL('../node_modules/ws', import.meta.url), path.join(base, 'node_modules/ws'), { recursive: true });
     writeKnowledgeRuntime(build);
     write(build, "dist/manager.js", "new manager\n");
@@ -146,7 +144,7 @@ test("developer candidate overlays only built runtime layers and leaves the immu
       assert.equal(fs.existsSync(path.join(base, 'scripts', name)), true);
     }
     assert.equal(fs.readFileSync(path.join(result.packageRoot, 'scripts/local-maintenance.ps1'), 'utf8'), 'keep local maintenance\n');
-    for (const name of ['Invoke-RabiRouteDeveloperApply.ps1', 'Publish-RabiRouteDeveloperCandidate.ps1', 'Install-HomeAssistantOs.ps1', 'check-installed-data-compatibility.mjs', 'Install-RabiRouteReleaseTransaction.ps1']) {
+    for (const name of ['Invoke-RabiRouteDeveloperApply.ps1', 'Publish-RabiRouteDeveloperCandidate.ps1', 'Install-HomeAssistantOs.ps1']) {
       const relative = `scripts/${name}`;
       assert.equal(fs.readFileSync(path.join(result.packageRoot, relative), 'utf8'), fs.readFileSync(path.join(build, relative), 'utf8'));
       assert.ok(result.manifest.files.some(entry => entry.path === relative));
@@ -312,13 +310,16 @@ test("developer activation serializes install mutation, CASes the pointer, and f
 
 test("developer activation defaults cover the complete Host startup budget", () => {
   const host = fs.readFileSync(new URL('../desktop/windows-host/HostRuntime.cs', import.meta.url), 'utf8');
-  const minutes = name => {
-    const match = host.match(new RegExp(`${name} = TimeSpan\\.FromMinutes\\((\\d+)\\)`));
-    assert.ok(match, `Missing Host readiness budget: ${name}`);
+  const minutes = (name, key) => {
+    // This checks the shipped defaults, not a user's configured timeout override.
+    const declaration = host.split(/\r?\n/).find(line => line.includes(`${name} =>`));
+    assert.ok(declaration?.includes(`HostTimeouts.Get("${key}",`), `Missing Host readiness owner: ${name}`);
+    const match = declaration.match(/TimeSpan\.FromMinutes\((\d+)\)/);
+    assert.ok(match, `Missing Host readiness default: ${name}`);
     return Number(match[1]) * 60;
   };
   // Both readiness phases, two 30-second health admissions, and 60 seconds for bootstrap.
-  const minimum = minutes('ManagerReadyTimeout') + minutes('TrayReadyTimeout') + 2 * 30 + 60;
+  const minimum = minutes('ManagerReadyTimeout', 'host.manager.ready') + minutes('TrayReadyTimeout', 'host.tray.ready') + 2 * 30 + 60;
   const budgets = ['Invoke-RabiRouteDeveloperApply.ps1', 'Publish-RabiRouteDeveloperCandidate.ps1'].map(name => {
     const source = fs.readFileSync(new URL(`./${name}`, import.meta.url), 'utf8');
     const match = source.match(/\[int\]\$ReadyTimeoutSeconds\s*=\s*(\d+)/);

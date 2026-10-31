@@ -1,39 +1,45 @@
 <!-- docs-language-switch -->
 <div align="center">
-English | <a href="./README_zh.md">简体中文</a>
+English | <a href="./README_zh.md">简体中文</a> | <a href="./README_ja.md">日本語</a>
 </div>
 <!-- /docs-language-switch -->
 
 # RabiRoute
 
-![RabiRoute mascot showing message ingress, rule-based routing, Agent handling, and controlled replies](assets/rabiroute-hero-oss.webp)
+![RabiRoute mascot connecting communication, smart devices, and desktop automation to Agents](assets/rabiroute-hero-connections.webp)
 
 <h2 align="center">Let Agents connect everything around us.</h2>
 
-<p align="center">Send chat, voice, scheduled, and device messages to the right Agent with shared context and clear delivery results.</p>
+<p align="center">Connect communication platforms, smart devices, and desktop workflows to the right Agent.</p>
 
 <p align="center">
   <a href="https://github.com/vb2250158/RabiRoute/commits/main"><img alt="Last commit" src="https://img.shields.io/github/last-commit/vb2250158/RabiRoute?color=19bfc1"></a>
   <a href="https://github.com/vb2250158/RabiRoute/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/vb2250158/RabiRoute?style=flat&color=ff7eae"></a>
   <a href="./LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-f2c744"></a>
-  <img alt="Node.js 20 or newer" src="https://img.shields.io/badge/Node.js-20%2B-3c873a">
-  <img alt="Current version: 0.3.72" src="https://img.shields.io/badge/version-0.3.72-3178c6">
+  <img alt="Node.js 22.13 or newer" src="https://img.shields.io/badge/Node.js-22.13%2B-3c873a">
+  <img alt="Current version: 0.4.0" src="https://img.shields.io/badge/version-0.4.0-3178c6">
   <img alt="Status: active development" src="https://img.shields.io/badge/status-active%20development-19bfc1">
 </p>
 
-RabiRoute is an **agent-neutral message gateway and delivery-policy router**. It receives QQ, webhook, scheduled, voice, desktop, and device messages, then uses a message Route to deliver each message to a selected Agent or program.
+RabiRoute is an **agent-neutral message gateway and policy router**. It connects communication platforms and smart devices, supports desktop actions and scheduled triggers, and uses a message Route to deliver each input to a selected Agent or program.
 
 The Agent answers, writes code, calls tools, and performs the task. RabiRoute decides where the message came from, who receives it, which recent messages travel with it, whether an external reply is allowed, and where results and receipts are stored.
 
-[Quick start](#quick-start) · [Current capabilities](#current-capabilities) · [Recent changes](#recent-changes) · [How it works](#how-it-works) · [Documentation](#documentation)
+[Connections](#connections) · [Quick start](#quick-start) · [Current capabilities](#current-capabilities) · [How it works](#how-it-works) · [Documentation](#documentation)
+
+## Connections
+
+| Category | What connects | What you can do |
+| --- | --- | --- |
+| **Communication** | QQ, personal Weixin, WeCom, Feishu | Send group and direct messages to a selected Agent and return replies to the source conversation. |
+| **Smart devices** | RabiLink phones and glasses, smartwatches / bands, Xiaomi Home / Home Assistant | Send voice, health, and device events to an Agent; receive speech or perform supported device actions. |
+| **Desktop & automation** | Selected text, screenshots, role panel, schedules, webhooks | Start tasks from a computer or external program, with message-based or scheduled triggers. |
+
+Maturity varies by integration: the QQ core path is verified; personal Weixin is a prototype; WeCom, Feishu, and smart devices require acceptance with their accounts, hardware, and networks. See [current capabilities](#current-capabilities).
 
 ## What you can build
 
-- **Query and control imported home devices.** Discover all Home Assistant entities and their current actions, including buttons, settings and structured Xiaomi device commands. Agents reuse connection authentication and receive durable action receipts. See the [device API](docs/home-device-agent-api_en.md).
-
-Experimental vacuum cloud map files can be connected through Mi Home QR login in Xiaomi Setup. See the [map connection guide](docs/vacuum-cloud-map_en.md); version-2 map decoding is available, while live localization and coordinate navigation require separate acceptance.
-
-- **Route chat to an Agent.** QQ groups, direct messages, the role panel, and other inputs can enter a fixed project and Desktop task through a Route.
+- **Use Agents across communication and devices.** Routes select the Agent, project, and task for each input while keeping its source and reply destination.
 - **Run scheduled Agent work.** Role rules can trigger an Agent by interval, time window, daily time, or one-time schedule, or run a configured local script.
 - **Operate remote computers.** One controller owns memory, skills and workflows; online clients expose terminals, files, windows and screenshots even when their Agent backend is stopped. See [remote computer clients](docs/remote-computer-client_en.md) for experimental scope.
 - **Carry continuous context.** Each role owns its message history and references to plans, memories, and skills; every Route can limit the recent messages included in a delivery.
@@ -54,7 +60,7 @@ Use Setup for installation and upgrades; extract the portable ZIP only into a ne
 
 For a full Windows source build, double-click `Start-RabiRoute-FromSource.bat`. It builds and starts Host, Manager, WebGUI, and the tray while retaining installed data. Requires an existing RabiRoute installation, Node.js/npm, and the .NET 9 SDK; see [source startup](docs/getting-started_en.md).
 
-For Linux, use the new minimal Host with Node.js 20+, npm, and util-linux `flock`:
+For Linux, use the new minimal Host with Node.js 22.13+, npm, and util-linux `flock`:
 
 ```bash
 git clone https://github.com/vb2250158/RabiRoute.git
@@ -69,23 +75,46 @@ For backend-only development on other supported environments, see [source startu
 
 ### Complete the first Route
 
-1. Open **Quick setup** and choose **Scheduled trigger**.
+1. Create or select a persona, open **Message adapters**, choose **Add message Route**, then add **Scheduled trigger** in the message endpoint card.
 2. Choose **Codex Agent**, then bind a project directory and an existing Codex/ChatGPT Desktop task.
-3. Save the Route and run one manual trigger from **Log diagnostics**.
-4. Confirm that the trigger succeeds and the same Desktop task receives a RabiRoute message.
+3. Save the Route and use **Channel check → Delivery test** on the same page.
+4. Confirm that the delivery succeeds and the same Desktop task receives a RabiRoute message.
 
-The manual trigger performs a real delivery. See [Complete the first Route](docs/user-guide/first-route_en.md) for the full procedure and failure checks.
+The delivery test sends a real message. Configure a scheduling rule separately before testing timed or manual rule execution. See [Complete the first Route](docs/user-guide/first-route_en.md) for the full procedure and failure checks.
 
 ## Current capabilities
 
-The repository version is `0.3.72`. The table lists behavior backed by current code, configuration surfaces, and tests. Features that require accounts, external services, or physical devices still need acceptance in their target environment.
+The repository version is `0.4.0`. The table lists behavior backed by current code, configuration surfaces, and tests. Features that require accounts, external services, or physical devices still need acceptance in their target environment.
 
-Role configuration and plans/memory select roles independently of Routes, including unbound roles. Route configuration owns message endpoints, Agent bindings and explicit role references. Archived roles can be restored or permanently deleted from Settings after reference and running-work checks. See [role-centric configuration](docs/role-centric-architecture_en.md). This source collection does not install or activate a runtime.
+### Communication
+
+| Platform | Status | What it provides |
+| --- | --- | --- |
+| QQ (NapCat / OneBot) | Verified | Bind one NapCat per Route; quick, password, or QR login and security confirmation inside the card; group and direct messages, saved media evidence, and OneBot HTTP replies. |
+| Personal Weixin | Experimental prototype | Receive text through iLink and reply to the source conversation with text or controlled local files. Incoming media is recorded only. Long-running sessions and real-account stability remain unverified. |
+| WeCom | Experimental | Receive group messages and send replies through a persistent bot connection; requires integration with real bot credentials. |
+| Feishu | Local implementation accepted; real credentials pending | Receive app event callbacks, isolate context by chat, and reply with text; requires app credentials and event subscriptions. |
+
+### Smart devices
+
+| Devices and services | Status | What it provides |
+| --- | --- | --- |
+| Phones and glasses (RabiLink) | Experimental | Voice input and replies; Relay connectivity, speaker playback, and networks require separate acceptance. |
+| Smartwatches / bands | Experimental; selected Xiaomi device paths verified | Collect heart rate, sleep, and other observations, query timelines, and trigger Agents using thresholds and cooldowns. Available metrics depend on the capture source. |
+| Home devices (Xiaomi Home / Home Assistant) | Experimental | Discover imported entities and their current buttons, settings, and device actions; verify action receipts. Browse and test them in the [device list](docs/user-guide/home-devices_en.md). |
+| Speech services (RabiSpeech) | Experimental | Provide transcription (ASR) and speech synthesis (TTS) for voice interactions; validate each model and device environment separately. |
+
+Home Assistant lets Agents query all imported entities and invoke their current buttons, settings, and structured Xiaomi device commands. Actions reuse connection authentication and retain receipts; see the [device API](docs/home-device-agent-api_en.md).
+
+Xiaomi Setup also offers experimental cloud map files through Mi Home QR login. See the [map connection guide](docs/vacuum-cloud-map_en.md); version-2 decoding is available, while live localization and coordinate navigation require separate acceptance.
+
+### Agents, desktop, and task management
+
+Role configuration and plans/memory select roles independently of Routes, including unbound roles. Route configuration owns message endpoints, Agent bindings and explicit role references. Archived roles can be restored or permanently deleted from Settings after reference and running-work checks. See [role-centric configuration](docs/role-centric-architecture_en.md).
 
 | Area | Status | What it provides |
 | --- | --- | --- |
 | Routing core | Verified | Receive messages, persist events, match rules, build Agent context, deliver to a handler, and record replies. |
-| NapCat / OneBot | Verified | Bind one NapCat to each Route, manage quick/password/QR login and security confirmation inside the Route card, receive QQ group/direct messages, preserve media evidence, and send replies through OneBot HTTP. |
 | Schedules and role automation | Verified | Trigger an Agent from messages or time rules; run configured persona-local scripts. |
 | Codex Desktop | Verified | A full task ID selects the existing task, and each delivery supplies its workspace; report success only after the target rollout records the `deliveryId`. Deleted or archived bindings can be replaced under controlled rules. |
 | RibiWebGUI | Verified | Manage Routes, roles, message inputs, Agents, plans, memories, logs, diagnostics, themes, and desktop settings. |
@@ -96,9 +125,8 @@ Role configuration and plans/memory select roles independently of Routes, includ
 | DSH | Experimental | Bind an explicit API address, workspace, and session as the primary or an auxiliary handler. |
 | Grok Bot | Experimental | Use native HTTP to deliver to an existing cloud-owned session. Select a real session in Route settings; source identity, stable delivery IDs and QQ/Codex replies follow the [Grok Bot adapter contract](docs/grok-bot-agent-adapter_en.md). Real round-trip acceptance remains separate. |
 | WorkBuddy | Experimental | Deliver a message into a WorkBuddy task the user already owns, using that task's own model, tools and approvals. Delivery needs a one-time local gateway credential; without it, delivery fails closed. Discovery, binding, and lifecycle hooks are implemented; the desktop exposes no pairing handoff yet and cold start is unverified. |
-| RabiSpeech / RabiLink / mobile and wearables | Experimental | Connect speech, phones, glasses, Relay, and health-data paths, with separate acceptance for each device and network environment. |
 | Media workspace | Experimental | Save media canvas projects, combine image/video/audio/text cards, and optionally use local H3; model setup and GPU inference require separate acceptance. |
-| LAN Rabi Agent | Experimental | Connect existing Codex/DSH tasks on another computer through an onboarding prompt; authenticated nodes can use the provided APIs and skills. Real two-machine and legacy-node migration acceptance remains pending. |
+| LAN Rabi Agent | Experimental | Connect existing Codex/DSH tasks on another computer through an onboarding prompt; authenticated nodes can use public APIs and skills, subject to user-configured disabled features. Real two-machine and legacy-node migration acceptance remains pending. |
 
 See [Current capabilities and maturity](docs/current-capabilities_en.md) for complete status, limits, and sources of truth.
 
@@ -142,13 +170,12 @@ For earlier releases and migration notes, see the [version changelog](版本更�
 
 ```mermaid
 flowchart LR
-    A[Chat · schedules · voice · devices] --> B[Message input]
-    B --> C[Event record]
-    C --> D[Route rules]
-    D --> E[Context and attachments]
-    E --> F[Agent or program]
-    F --> G[Delivery and result tracking]
-    G --> H[Reply · receipt · audit]
+    A[Communication: QQ · Weixin · WeCom · Feishu] --> R[RabiRoute: Routes and context]
+    B[Smart devices: phones · glasses · wearables · home] --> R
+    C[Desktop and automation: text · screenshots · schedules · webhooks] --> R
+    R --> D[Selected Agent or program]
+    D --> E[Reply or act under sending rules]
+    E --> F[Source conversation or device · delivery receipt]
 ```
 
 Each Route stores its message input, role, handler, workspace, and sending rules separately. Message adapters do not build Agent instructions, and Agents do not receive channel credentials or direct ownership of routing state.
@@ -184,8 +211,6 @@ Buildable clients live under [`apps/`](apps/), shared SDKs under [`packages/`](p
 
 ## Documentation
 
-For experimental home device control and speaker announcements, see the [Agent API](docs/home-device-agent-api_en.md), including device discovery, explicit speech binding and receipt verification.
-
 ### First use
 
 - [Complete the first Route](docs/user-guide/first-route_en.md): complete a real Codex Desktop delivery.
@@ -196,17 +221,26 @@ For experimental home device control and speaker announcements, see the [Agent A
 ### Installation and integrations
 
 - [Configuration](docs/configuration_en.md): review local files, directories, and main settings.
-- [LAN Rabi Agent](docs/lan-rabi-agent-bootstrap_en.md): connect Codex/DSH tasks on another computer and configure node permissions.
+- [LAN Rabi Agent](docs/lan-rabi-agent-bootstrap_en.md): connect Codex/DSH tasks on another computer and check connection status and available capabilities.
 - [Remote role references](docs/remote-persona-reference_en.md): 0.3.19 experimental implementation for using another PC's role in a local Route.
 - [RabiSpeech](docs/rabispeech-plugin_en.md): configure local or remote TTS and ASR.
 - [Client applications](apps/README_en.md): build Android, Rokid AIUI, browser bridge, and Rabi Agent clients.
 
+### Communication and smart devices
+
+- [Communication platform status](docs/current-capabilities_en.md#message-inputs): compare the available scope of QQ, Weixin, WeCom, and Feishu.
+- [Browse devices and test actions](docs/user-guide/home-devices_en.md): check home devices, their state, and available actions.
+- [Mobile voice calls](docs/mobile-voice-call_en.md): start an Agent call from a phone and check capture, transcription, and playback.
+- [Mi Home cloud maps](docs/vacuum-cloud-map_en.md): connect experimental map files and check localization and navigation limits.
+
 ### Development and maintenance
 
+- [API reference and discovery](docs/api-reference_en.md): search running operations in the documentation page, inspect requests and responses, and download OpenAPI.
 - [Current capabilities and maturity](docs/current-capabilities_en.md): check whether a feature is verified.
 - [Documentation index](docs/README_en.md): browse current, experimental, design, and historical material.
 - [Architecture](docs/architecture_en.md): understand product boundaries and data flow.
 - [Project function map](docs/project-function-map_en.md): locate feature ownership, APIs, and code entry points.
+- [Home device Agent API](docs/home-device-agent-api_en.md): implement device discovery, speaker bindings, and action receipt queries.
 - [Version changelog](版本更新日志_en.md): review changes and migration requirements.
 
 ## Development

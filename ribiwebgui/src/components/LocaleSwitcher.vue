@@ -1,12 +1,9 @@
 <script setup lang="ts">
-import { useI18n, type AppLocale } from "../i18n";
+import { useI18n, localeOptions } from "../i18n";
 
 const { locale, setLocale } = useI18n();
 
-const options: Array<{ locale: AppLocale; label: string; detail: string }> = [
-  { locale: "zh-CN", label: "简体中文", detail: "Chinese" },
-  { locale: "en", label: "English", detail: "English" }
-];
+const options = localeOptions;
 </script>
 
 <template>
@@ -18,13 +15,14 @@ const options: Array<{ locale: AppLocale; label: string; detail: string }> = [
         variant="tonal"
         color="secondary"
         prepend-icon="mdi-translate"
-        :aria-label="locale === 'en' ? 'Language: English' : '语言：简体中文'"
+        :aria-label="options.find(option => option.locale === locale)?.ariaLabel"
+        data-no-i18n
       >
-        {{ locale === "en" ? "EN" : "中" }}
+        {{ options.find(option => option.locale === locale)?.short }}
       </v-btn>
     </template>
 
-    <v-list class="locale-menu" density="compact" min-width="190">
+    <v-list class="locale-menu" density="compact" min-width="190" data-no-i18n>
       <v-list-item
         v-for="option in options"
         :key="option.locale"

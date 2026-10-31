@@ -107,6 +107,7 @@ export const useGatewayStore = defineStore("gateway", () => {
   const saveState = ref<"idle" | "saving" | "confirming" | "saved" | "conflict" | "error">("idle");
   const saveMessage = ref("");
   let saveFlight: Promise<void> | undefined;
+  let saveFlightDraft: { routeId: string | undefined; draft: GatewayDefinition | undefined } | undefined;
   const pendingSaveDrafts = new Map<string, { id: string; submitted: GatewayDefinition }>();
   const error = ref("");
   const quickSetupDialogOpen = ref(false);
@@ -429,10 +430,17 @@ export const useGatewayStore = defineStore("gateway", () => {
   }
 
   function save(routeId = selectedGateway.value?.id): Promise<void> {
-    if (saveFlight) return saveFlight;
+    const target = gateways.value.find(row => row.id === routeId);
+    const draft = target ? cloneGatewayValue(target) : undefined;
+    if (draft) normalizeGateways([draft]);
+    if (saveFlight) {
+      if (saveFlightDraft?.routeId === routeId && sameGatewayValue(saveFlightDraft.draft, draft)) return saveFlight;
+      return Promise.reject(new Error("上次保存仍在进行，新修改已保留；请等待完成后再次保存。"));
+    }
     if (saving.value) return Promise.reject(new Error("另一项配置操作正在执行，请稍后重试。"));
-    const flight = saveSelectedGateway(routeId).finally(() => {
-      if (saveFlight === flight) saveFlight = undefined;
+    saveFlightDraft = { routeId, draft };
+    const flight = saveSelectedGateway(routeId, draft).finally(() => {
+      if (saveFlight === flight) { saveFlight = undefined; saveFlightDraft = undefined; }
     });
     saveFlight = flight;
     return flight;
@@ -464,7 +472,7 @@ export const useGatewayStore = defineStore("gateway", () => {
     saveMessage.value = "";
   }
 
-  async function saveSelectedGateway(routeId: string | undefined): Promise<void> {
+  async function saveSelectedGateway(routeId: string | undefined, capturedDraft: GatewayDefinition | undefined): Promise<void> {
     if (!routeId) return;
     saving.value = true;
     error.value = "";
@@ -479,8 +487,7 @@ export const useGatewayStore = defineStore("gateway", () => {
       for (const previous of routeCatalogMutationLedger.unresolved()) await recoverPendingMutation(previous);
       const target = gateways.value.find(row => row.id === routeId);
       if (!target) throw new Error("当前路线已变化，请重新选择后保存。");
-      normalizeGateways([target]);
-      const draft = cloneGatewayValue(target);
+      const draft = capturedDraft!;
       id = draft.id;
       const base = savedGateways.value.find(item => item.id === id);
       const lifecycleKey = await loadMeta(true);
@@ -806,36 +813,6 @@ export const useGatewayStore = defineStore("gateway", () => {
 
   const { updateRule, addAutomation, updateAutomation, removeAutomation } = createRoleEditorActions(() => selectedGateway.value, touch, saveActiveRoleRules);
 
-  function addRouteVariable(): void {
-    const gateway = selectedGateway.value;
-    if (!gateway) return;
-    if (!gateway.routeVariables) gateway.routeVariables = {};
-    let next = 1;
-    while (gateway.routeVariables[`Variable${next}`] != null) next += 1;
-    gateway.routeVariables[`Variable${next}`] = "";
-    touch();
-  }
-
-  function updateRouteVariable(oldKey: string, key: string, value: string): void {
-    const gateway = selectedGateway.value;
-    if (!gateway) return;
-    if (!gateway.routeVariables) gateway.routeVariables = {};
-    if (key !== oldKey && /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(key)) {
-      gateway.routeVariables[key] = value;
-      delete gateway.routeVariables[oldKey];
-    } else {
-      gateway.routeVariables[oldKey] = value;
-    }
-    touch();
-  }
-
-  function removeRouteVariable(key: string): void {
-    const gateway = selectedGateway.value;
-    if (!gateway?.routeVariables) return;
-    delete gateway.routeVariables[key];
-    touch();
-  }
-
   function applyQuickSetup(values: {
     agentRoleId: string;
     agentModel?: string;
@@ -1044,9 +1021,6 @@ export const useGatewayStore = defineStore("gateway", () => {
     addAutomation,
     updateAutomation,
     removeAutomation,
-    addRouteVariable,
-    updateRouteVariable,
-    removeRouteVariable,
     applyQuickSetup,
     gatewayAdapterTypes,
     configNameFor

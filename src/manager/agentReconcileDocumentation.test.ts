@@ -4,7 +4,9 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import http from "node:http";
-import { createAgentThreadControlRoutes, type AgentThreadControlRoutesContext } from "./agentThreadControlRoutes.js";
+import { createAgentThreadControlOwner, type AgentThreadControlRoutesContext } from "./agentThreadControlRoutes.js";
+import { createAgentThreadControlOperations } from "./agentThreadControlOperations.js";
+import { ManagerPluginRouteRegistry } from "./managerPluginRouteRegistry.js";
 import { handleAgentThreadRequest, type AgentThreadRequest } from "../agentThreads.js";
 import { AgentRequestStore } from "../agentRequests/store.js";
 import type { EndpointDeliveryReceipt } from "../agentRequests/endpointDelivery.js";
@@ -36,7 +38,7 @@ for (const filename of ["rabi-agent-interfaces.md", "rabi-agent-interfaces_en.md
     assert.equal(documented.threadId, undefined);
     assert.equal(documented.agentAdapter, undefined);
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), "reconcile-doc-"));
-    t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+    t.after(() => { assert.equal(path.dirname(path.resolve(directory)), path.resolve(os.tmpdir())); assert.ok(path.basename(directory).startsWith("reconcile-doc-")); fs.rmSync(directory, { recursive: true, force: true }); });
     let persisted: unknown;
     const store = new AgentRequestStore({ read: () => persisted, write: value => { persisted = structuredClone(value); } });
     const reads: string[] = [];
@@ -84,13 +86,7 @@ for (const filename of ["rabi-agent-interfaces.md", "rabi-agent-interfaces_en.md
     const before = dispatches;
     const oldExample: AgentThreadRequest = { action: "reconcile_delivery", threadId: sourceId, deliveryId };
     await assert.rejects(handleAgentThreadRequest(oldExample, { allowedWorkspaces: [directory], endpointDelivery: options }), /Complete opaque session ID/);
-    const routes = createAgentThreadControlRoutes({
-      readJsonBody: async <T>(incoming: http.IncomingMessage): Promise<T> => {
-        let bytes = "";
-        for await (const chunk of incoming) bytes += String(chunk);
-        return JSON.parse(bytes) as T;
-      },
-      jsonResponse: (response, status, body) => { response.writeHead(status, { "content-type": "application/json" }); response.end(JSON.stringify(body)); },
+    const owner = createAgentThreadControlOwner({
       agentRequests: store,
       messageProcessingBoard: {
         submitOutcome: () => { throw new Error("Unexpected fixture handoff"); },
@@ -104,9 +100,10 @@ for (const filename of ["rabi-agent-interfaces.md", "rabi-agent-interfaces_en.md
       refreshAgentRequestReminderTimers: () => {}, publishManagerEvent: () => {},
       operationalLog: { record: () => null }, operationalError: () => undefined
     } as AgentThreadControlRoutesContext);
-    const server = http.createServer((incoming, response) => { routes.handler(incoming, new URL(incoming.url!, "http://localhost"), response); });
+    const routes = new ManagerPluginRouteRegistry(), registration = routes.registerOperations("fixture-reconcile-doc", createAgentThreadControlOperations(owner));
+    const server = http.createServer((incoming, response) => { if (!routes.handle(incoming, new URL(incoming.url!, "http://localhost"), response)) response.writeHead(404).end(); });
     await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
-    t.after(async () => { server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); await routes.stopAcceptingAndDrain(); });
+    t.after(async () => { server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); await registration.dispose(); });
     const address = server.address();
     if (!address || typeof address === "string") throw new Error("Fixture listener is unavailable");
     const post = () => fetch(`http://127.0.0.1:${address.port}/api/agent/threads`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(request) });

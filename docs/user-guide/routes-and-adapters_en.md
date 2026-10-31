@@ -1,12 +1,14 @@
 <!-- docs-language-switch -->
 <div align="center">
-English | <a href="./routes-and-adapters.md">简体中文</a>
+English | <a href="./routes-and-adapters.md">简体中文</a> | <a href="./routes-and-adapters_ja.md">日本語</a>
 </div>
 <!-- /docs-language-switch -->
 
 # Routes and message adapters
 
 A Route is an independently controlled message-flow configuration. It combines message sources, a handler, workspace, persona binding, and output intent.
+
+Manage Routes under Role configuration → Message adapters, the second tab after Profile. Select a persona first, then select or add one of its message Routes. New Routes reference the current persona and source PC automatically. There is no separate Route configuration sidebar item. Persona rules live only in persona configuration; endpoint connections and handling Agents remain in Route configuration, linked by persona ID and source PC without copying persona directories. Preview older configurations with the [upgrade script](../persona-message-config-upgrade_en.md) before applying changes.
 
 ```text
 Message adapter -> Route rules -> persona and context -> Agent handler -> Outbox / reply
@@ -26,29 +28,32 @@ Several Routes can reuse one persona. Do not duplicate a persona only because th
 
 Cross-persona delivery does not require another Route kind or message adapter. It selects a target from Manager's persona directory and reuses the target's existing built-in persona-message path. Both source and target Routes must be enabled.
 
-## Adapter maturity
+## Choose inputs by category
 
-| Message adapter | Status | Good for | Additional dependency |
+Communication and smart devices are peer categories. Schedules, the role panel, and webhooks support desktop and automation tasks.
+
+| Category | Message input | Status | Purpose and dependencies |
 | --- | --- | --- | --- |
-| Scheduled trigger | Verified | Periodic checks and first-run validation | No external account |
-| Role panel | Verified | Tray, local persona messages, and authenticated cross-persona delivery | Manager/tray entry; not a network listener |
-| NapCat / OneBot | Verified | QQ groups and private messages | NapCat, QQNT, OneBot setup |
-| WeCom | Experimental | WeCom groups | Bot ID, Secret, environment acceptance |
-| Remote Agent | Experimental | Independent bridge devices | Remote bridge and password challenge |
-| FenneNote / XiaoAI | Experimental | Speech transcripts | Matching bridge or device |
-| Xiaomi Home | Experimental | Home Assistant device state, motion events, and camera event clips | Home Assistant, access token in the runtime environment, and real-device acceptance |
-| RabiLink | Experimental | Relay, glasses, and proactive output | Relay setup and real-device acceptance |
-| Generic Webhook | Experimental | POST from an unnamed system | External callback system |
+| Communication | QQ (NapCat / OneBot) | Verified | Group and direct messages; requires NapCat, QQNT, and OneBot setup. |
+| Communication | Personal Weixin | Experimental prototype | iLink text input and replies; incoming media is recorded only. Long-running sessions and real-account stability remain unverified. |
+| Communication | WeCom | Experimental | Bot group messages and replies; requires real Bot ID / Secret credentials. |
+| Communication | Feishu | Local implementation accepted; real credentials pending | App event callbacks and text replies; requires app credentials, public HTTPS, and event subscriptions. |
+| Smart devices | Xiaomi Home | Experimental | Home Assistant state, actions, and camera event clips; configure the connection in the endpoint's Setup panel. |
+| Smart devices | RabiLink phones / glasses | Experimental | Speech, replies, and proactive delivery; requires Relay configuration and physical-device acceptance. |
+| Smart devices | Smartwatches / bands | Experimental; selected Xiaomi device paths verified | Heart rate, sleep, and health events; metrics depend on the capture source. |
+| Desktop & automation | Scheduled trigger | Verified | First delivery, scheduled work, and periodic checks without an external account. |
+| Desktop & automation | Role panel | Verified | Tray, local persona messages, and authenticated cross-persona delivery without a network listener. |
+| Desktop & automation | Generic webhook | Experimental | Receive POST requests from systems without a dedicated adapter; requires a reachable callback. |
 
-Verified means the repository path, configuration, and contracts are complete. Accounts, networks, devices, and platform risk controls can still affect operation.
+Accept accounts, networks, and hardware in their own environments; see [current capabilities](../current-capabilities_en.md). FenneNote and the former XiaoAI message inputs are retired: remove their old entries and use Xiaomi Home for home devices where appropriate. Configure remote Agents as execution endpoints through [remote computer setup](../lan-rabi-agent-bootstrap_en.md), rather than adding them as message inputs.
 
 ## Add a message adapter
 
-Open **Message Adapters** and add an entry under **Message sources**. The catalog groups local desktop, real-time chat, remote devices, internal triggers, speech, and external interfaces.
+Open **Message Adapters** and add an entry under **Message sources**. Choose an input for communication, smart devices, or desktop automation, then open its configuration panel.
 
 Each adapter shows maturity, connection state, dependency checks, and its own settings. Stabilize one source before adding another.
 
-Configure the Home Assistant address, event monitor, device-control gate, and camera options inside the **Xiaomi Home** message endpoint. They do not appear again on the host-wide **Settings** page. An authorized LAN WebGUI can maintain this configuration. Once global Agent admission is enabled and node plus Agent authentication succeeds, remote Agents can also use the same public deployment, device, and recording APIs as local callers. The device-control switch, version preconditions, and separate recording read token still apply; unauthenticated access is not admitted.
+Configure the Home Assistant address, event monitor, device-control gate, and camera options inside the **Xiaomi Home** message endpoint. They do not appear again on the host-wide **Settings** page. An authorized LAN WebGUI can maintain this configuration. Enabled remote Agents with authenticated connections can use the same public deployment, device, and recording APIs as local callers. The device-control switch, version preconditions, and separate recording read token still apply; unauthenticated access is not admitted.
 
 To inspect the complete delivery path for the current Route, select **Channel check** at the top of the page. The dialog uses three columns: **Message inputs → Manager → Agent handlers**. The left side lists added message inputs, the center shows the Manager state for the current Route, and the right side lists configured Agents with their primary or secondary role. Select a message node or **View settings** to return to its settings; **Check again** refreshes both message-input and Agent status.
 

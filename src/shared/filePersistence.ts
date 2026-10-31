@@ -1,3 +1,4 @@
+import { getTimeoutMs } from "./timeoutSettings.js";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -87,7 +88,7 @@ export function acquireFileLockSync(
   lockPath: string,
   options: FileLockOptions = {}
 ): () => void {
-  const timeoutMs = Math.max(100, Math.floor(options.timeoutMs ?? 5_000));
+  const timeoutMs = Math.max(1, Math.floor(options.timeoutMs ?? getTimeoutMs("backend.shared.filePersistence.acquireFileLockSync.Math.floor.timeoutMs", 5_000)));
   const staleMs = Math.max(timeoutMs, Math.floor(options.staleMs ?? 30_000));
   fs.mkdirSync(path.dirname(lockPath), { recursive: true });
   const deadline = Date.now() + timeoutMs;

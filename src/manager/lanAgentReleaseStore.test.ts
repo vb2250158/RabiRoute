@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { LanAgentReleaseStore, LanAgentReleaseSelectionConflictError, verifyLanAgentReleaseManifest } from "./lanAgentReleaseStore.js";
+import { LanAgentReleaseStore, LanAgentReleaseSelectionConflictError, lanAgentReleaseManifestDigest, verifyLanAgentReleaseManifest } from "./lanAgentReleaseStore.js";
 
 function temporaryDirectory(prefix: string): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -20,6 +20,132 @@ function writeAgent(root: string): void {
   fs.copyFileSync(new URL("../../apps/rabi-agent/desktop/rabi-agent.ico", import.meta.url), path.join(root, "desktop", "rabi-agent.ico"));
   fs.writeFileSync(path.join(root, "desktop", "unpublished.ico"), "not a release asset");
 }
+
+test("an explicit common publication preserves original signed URLs and survives a different Manager package", () => {
+  const root = temporaryDirectory("rabi-common-publication-");
+  try {
+    const oldRoot = path.join(root, "old-package"), nextRoot = path.join(root, "next-package");
+    writeAgent(oldRoot); writeAgent(nextRoot);
+    fs.writeFileSync(path.join(nextRoot, "lib/worker.mjs"), "export const nextRelease = true;\n");
+    const oldStore = new LanAgentReleaseStore({ rootDir: root, agentRoot: oldRoot });
+    oldStore.publication(); // Create the fixture signing identity before capturing its published manifest.
+    const original = oldStore.manifest(), digest = lanAgentReleaseManifestDigest(original);
+    const nextStore = new LanAgentReleaseStore({ rootDir: root, agentRoot: nextRoot });
+    const next = nextStore.manifest();
+    assert.notEqual(lanAgentReleaseManifestDigest(next), digest);
+    assert.deepEqual(oldStore.publishCommonRelease(digest), { version: original.version, releaseDigest: digest });
+    const record = JSON.parse(fs.readFileSync(path.join(root, "data/lan-agent-releases/common.json"), "utf8"));
+    assert.equal(record.agentRoot, fs.realpathSync(oldRoot));
+    assert.deepEqual(record.manifest, original);
+    assert.deepEqual(nextStore.manifest(), original);
+    assert.deepEqual(nextStore.manifest("unassigned-node"), original);
+    for (const file of original.files) {
+      assert.equal(new URL(file.downloadUrl, "http://localhost").search, "");
+      assert.deepEqual(nextStore.readAsset(original.version, "node", file.path), fs.readFileSync(path.join(oldRoot, file.path)));
+    }
+    const selected = nextStore.importRelease(nextRoot);
+    assert.notEqual(selected.releaseDigest, digest);
+    nextStore.assignRelease("selected-node", selected.releaseDigest, digest);
+    assert.equal(nextStore.publication("selected-node").releaseDigest, selected.releaseDigest);
+    assert.equal(nextStore.readAsset(original.version, "node", "lib/worker.mjs", "selected-node").toString(), "export const nextRelease = true;\n");
+    assert.deepEqual(nextStore.manifest(), original);
+    const advanced = nextStore.publishCommonRelease(digest);
+    assert.equal(advanced.releaseDigest, lanAgentReleaseManifestDigest(next));
+    assert.deepEqual(new LanAgentReleaseStore({ rootDir: root, agentRoot: oldRoot }).manifest(), next);
+    assert.equal(nextStore.publication("selected-node").releaseDigest, selected.releaseDigest);
+    assert.equal(nextStore.readAsset(next.version, "node", "lib/worker.mjs").toString(), "export const nextRelease = true;\n");
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("common publication CAS and candidate failures never replace the selected original", () => {
+  const root = temporaryDirectory("rabi-common-publication-cas-");
+  try {
+    const oldRoot = path.join(root, "old-package"), nextRoot = path.join(root, "next-package"); writeAgent(oldRoot); writeAgent(nextRoot);
+    const store = new LanAgentReleaseStore({ rootDir: root, agentRoot: oldRoot });
+    const digest = store.publication().releaseDigest; store.publishCommonRelease(digest);
+    const file = path.join(root, "data/lan-agent-releases/common.json"), before = fs.readFileSync(file);
+    const nextStore = new LanAgentReleaseStore({ rootDir: root, agentRoot: nextRoot });
+    assert.throws(() => nextStore.publishCommonRelease("f".repeat(64)), LanAgentReleaseSelectionConflictError);
+    assert.deepEqual(fs.readFileSync(file), before);
+    fs.unlinkSync(path.join(nextRoot, "rabi-agent.mjs"));
+    assert.throws(() => nextStore.publishCommonRelease(digest), /missing/);
+    assert.deepEqual(fs.readFileSync(file), before);
+    assert.equal(store.publication().releaseDigest, digest);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("damaged common metadata fails closed without affecting a valid node archive", () => {
+  const root = temporaryDirectory("rabi-common-publication-corrupt-");
+  try {
+    const agentRoot = path.join(root, "package"); writeAgent(agentRoot);
+    const store = new LanAgentReleaseStore({ rootDir: root, agentRoot });
+    const digest = store.publication().releaseDigest, selected = store.importRelease(agentRoot);
+    store.assignRelease("selected-node", selected.releaseDigest, digest); store.publishCommonRelease(digest);
+    const file = path.join(root, "data/lan-agent-releases/common.json"), original = fs.readFileSync(file, "utf8"), record = JSON.parse(original);
+    for (const bad of ["{truncated", "null", JSON.stringify({ ...record, schemaVersion: 2 }),
+      JSON.stringify({ ...record, releaseDigest: "f".repeat(64) }), JSON.stringify({ ...record, agentRoot: "relative/package" }),
+      JSON.stringify({ ...record, manifest: { ...record.manifest, signature: "invalid" } })]) {
+      fs.writeFileSync(file, bad);
+      assert.throws(() => store.manifest()); assert.throws(() => store.publishCommonRelease(digest));
+      assert.throws(() => store.readAsset("0.9.1", "node", "rabi-agent.mjs"));
+      assert.equal(fs.readFileSync(file, "utf8"), bad);
+      assert.equal(store.publication("selected-node").releaseDigest, selected.releaseDigest);
+      assert.ok(store.readAsset("0.9.1", "node", "rabi-agent.mjs", "selected-node").length);
+    }
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("missing or modified common assets cannot silently advance to a new package", () => {
+  const root = temporaryDirectory("rabi-common-publication-assets-");
+  try {
+    const oldRoot = path.join(root, "old-package"), nextRoot = path.join(root, "next-package"); writeAgent(oldRoot); writeAgent(nextRoot);
+    const store = new LanAgentReleaseStore({ rootDir: root, agentRoot: oldRoot });
+    const digest = store.publication().releaseDigest; store.publishCommonRelease(digest);
+    const file = path.join(root, "data/lan-agent-releases/common.json"), before = fs.readFileSync(file);
+    const nextStore = new LanAgentReleaseStore({ rootDir: root, agentRoot: nextRoot });
+    fs.writeFileSync(path.join(oldRoot, "lib/worker.mjs"), "changed after publication");
+    assert.throws(() => nextStore.readAsset("0.9.1", "node", "lib/worker.mjs"), /integrity/);
+    assert.throws(() => nextStore.publishCommonRelease(digest), /integrity/);
+    assert.deepEqual(fs.readFileSync(file), before);
+    fs.unlinkSync(path.join(oldRoot, "lib/worker.mjs"));
+    assert.throws(() => nextStore.publishCommonRelease(digest));
+    assert.deepEqual(fs.readFileSync(file), before);
+    assert.equal(nextStore.publication().releaseDigest, digest);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("an atomic common selection failure preserves the prior complete record", t => {
+  const root = temporaryDirectory("rabi-common-publication-atomic-");
+  try {
+    const oldRoot = path.join(root, "old-package"), nextRoot = path.join(root, "next-package"); writeAgent(oldRoot); writeAgent(nextRoot);
+    fs.writeFileSync(path.join(nextRoot, "lib/worker.mjs"), "next-package");
+    const store = new LanAgentReleaseStore({ rootDir: root, agentRoot: oldRoot });
+    const digest = store.publication().releaseDigest; store.publishCommonRelease(digest);
+    const file = path.join(root, "data/lan-agent-releases/common.json"), before = fs.readFileSync(file);
+    const rename = fs.renameSync;
+    const mocked = t.mock.method(fs, "renameSync", (source: fs.PathLike, destination: fs.PathLike) => {
+      if (String(destination) === file) throw Object.assign(new Error("Injected common publication failure"), { code: "EIO" });
+      return rename(source, destination);
+    });
+    try { assert.throws(() => new LanAgentReleaseStore({ rootDir: root, agentRoot: nextRoot }).publishCommonRelease(digest), /Injected/); }
+    finally { mocked.mock.restore(); }
+    assert.deepEqual(fs.readFileSync(file), before);
+    assert.equal(store.publication().releaseDigest, digest);
+    assert.deepEqual(fs.readdirSync(path.dirname(file)).filter(name => name.endsWith(".tmp")), []);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("a frozen common selection never creates another signing identity after key loss", () => {
+  const root = temporaryDirectory("rabi-common-publication-key-");
+  try {
+    const agentRoot = path.join(root, "package"); writeAgent(agentRoot);
+    const signingKeyPath = path.join(root, "data/key.json");
+    const store = new LanAgentReleaseStore({ rootDir: root, agentRoot, signingKeyPath });
+    const digest = store.publication().releaseDigest; store.publishCommonRelease(digest); fs.unlinkSync(signingKeyPath);
+    assert.throws(() => store.manifest()); assert.throws(() => store.publishCommonRelease(digest));
+    assert.equal(fs.existsSync(signingKeyPath), false);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
 
 test("LAN Agent release manifest signs the published Node resources", () => {
   const root = temporaryDirectory("rabiroute-lan-agent-release-");

@@ -145,6 +145,15 @@ public final class RabiConversationService extends Service {
     }
     private RabiLiveRecordingController videoController;
     private WearableHealthController healthController;
+    private com.rabi.link.location.LocationController locationController;
+    private boolean locationForegroundActive;
+    private static final String ACTION_LOCATION = "com.rabi.link.location.REFRESH";
+
+    /** Invoked by the visible settings screen, without interrupting audio/video. */
+    public static void refreshLocation(Context context) {
+        if (AllDayRecordingSettings.load(context).running)
+            context.startForegroundService(new Intent(context, RabiConversationService.class).setAction(ACTION_LOCATION));
+    }
     private com.rabi.link.modules.rokid.VideoAudioDerivation videoAudio;
     private AllDayRecordingSettings videoBinding;
     private String videoCaptureId = "";
@@ -213,7 +222,8 @@ public final class RabiConversationService extends Service {
         if (android.os.SystemClock.elapsedRealtime() < recordingStartPendingUntil
                 || (current != null && !current.shutdownComplete && (current.captureTransition
                     || current.voiceServiceActive || (current.videoController != null && current.videoController.getActive())
-                    || ("health".equals(settings.mode) && settings.running)))) return;
+                    || ("health".equals(settings.mode) && settings.running)
+                    || (current.locationController != null && current.locationController.isActive())))) return;
         if ("audio".equals(settings.mode) && androidx.core.content.ContextCompat.checkSelfPermission(context,
                 android.Manifest.permission.RECORD_AUDIO) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
             context.getSharedPreferences("rabi_conversation_runtime", Context.MODE_PRIVATE).edit()
@@ -696,6 +706,18 @@ public final class RabiConversationService extends Service {
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         String action = intent == null ? ACTION_RESTORE : intent.getAction();
+        // Acquire while-in-use location eligibility before asynchronous queue recovery.
+        if ((ACTION_RECORD.equals(action) || ACTION_LOCATION.equals(action))
+                && AllDayRecordingSettings.load(this).running
+                && com.rabi.link.location.LocationController.requested(this)
+                && com.rabi.link.location.LocationController.permitted(this)) {
+            locationForegroundActive = true;
+            try { promote("正在准备位置记录", voiceServiceActive); }
+            catch (SecurityException denied) {
+                locationForegroundActive = false;
+                updateRuntime("locationStatus", "请在手机前台重新开启位置记录");
+            }
+        }
         if (intent == null && !initialized) {
             // Android process restoration is not foreground microphone consent.
             AllDayRecordingSettings.load(RabiConversationService.this).withRunning(false, System.currentTimeMillis()).save(RabiConversationService.this);
@@ -706,7 +728,8 @@ public final class RabiConversationService extends Service {
             startForeground(REVIEW_NOTIFICATION_ID, new NotificationCompat.Builder(this, LISTENING_CHANNEL)
                     .setSmallIcon(com.rabi.link.R.drawable.rabiroute_icon).setContentTitle("正在恢复消息记录")
                     .setContentText("后台读取历史队列，等待恢复结果").setOngoing(true).build(),
-                    android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC);
+                    android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+                        | (locationForegroundActive ? android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION : 0));
             Intent deferred = intent == null ? null : new Intent(intent);
             pendingStarts.add(() -> onStartCommand(deferred, flags, startId));
             if (!initializing) {
@@ -785,6 +808,11 @@ public final class RabiConversationService extends Service {
             applyRecording();
             return START_STICKY;
         }
+        if (ACTION_LOCATION.equals(action)) {
+            applyLocation();
+            promote(captureStatus, voiceServiceActive);
+            return START_STICKY;
+        }
         if (ACTION_PAUSE_RECORD.equals(action)) {
             AllDayRecordingSettings.load(RabiConversationService.this).withEnabled(false, System.currentTimeMillis()).save(RabiConversationService.this);
             pauseRecordingInternal(null);
@@ -816,7 +844,7 @@ public final class RabiConversationService extends Service {
                     || (healthController != null && AllDayRecordingSettings.load(this).running)) {
                 // A delayed boot/transport restore must never downgrade an already running
                 // user-started microphone session.
-                promote(personaDisplayName() + " 移动端持续服务", true);
+                promote(personaDisplayName() + " 移动端持续服务", voiceServiceActive);
                 showReviewShortcut();
                 if (configureBackend()) backend.start();
                 return START_STICKY;
@@ -949,6 +977,20 @@ public final class RabiConversationService extends Service {
         if (manager != null && !shutdownComplete) manager.notify(REVIEW_NOTIFICATION_ID, notification(value));
     }
 
+    private void applyLocation() {
+        if (!recordingSettings().running || !com.rabi.link.location.LocationController.requested(this)) {
+            if (locationController != null) locationController.stop();
+            locationForegroundActive = false;
+            return;
+        }
+        if (!locationForegroundActive) {
+            updateRuntime("locationStatus", "位置记录未启动，请在前台授予定位权限后重试");
+            return;
+        }
+        if (locationController == null) locationController = new com.rabi.link.location.LocationController(this);
+        locationController.start();
+    }
+
     private void applyRecording() {
         if (captureTransition) { afterCaptureStopped = this::applyRecording; setCaptureStatus("正在保存上一段，完成后应用新模式"); return; }
         AllDayRecordingSettings s = recordingSettings();
@@ -965,6 +1007,15 @@ public final class RabiConversationService extends Service {
         configureBackend();
         backend.setProcessingEnabled(s.uploadEnabled);
         backend.start();
+        applyLocation();
+        if ("location".equals(s.mode)) {
+            if (!locationForegroundActive) {
+                s.withRunning(false, System.currentTimeMillis()).save(this);
+                setCaptureStatus("位置记录未启动，请检查权限后重试");
+            } else setCaptureStatus("仅位置记录 · 详情见位置记录页");
+            promote(captureStatus, false);
+            return;
+        }
         ensureHealthController();
         if (s.healthEnabled || "health".equals(s.mode)) {
             if (!s.healthEnabled && "health".equals(s.mode)) {
@@ -1115,6 +1166,9 @@ public final class RabiConversationService extends Service {
 
     private Runnable afterCaptureStopped;
     private void pauseRecordingInternal(Runnable after) {
+        if (locationController != null) locationController.stop();
+        // Keep acquired foreground eligibility across a user-requested mode transition.
+        if (after == null) locationForegroundActive = false;
         if (captureTransition) {
             afterCaptureStopped = after;
             notificationHandler.removeCallbacks(audioSourceWatchdog);
@@ -1157,7 +1211,7 @@ public final class RabiConversationService extends Service {
         Runnable after = afterCaptureStopped;
         afterCaptureStopped = null;
         if (!shutdownComplete) {
-            promote(captureStatus, after != null && recordingSettings().running);
+            promote(captureStatus, after != null && recordingSettings().running && "audio".equals(recordingSettings().mode));
             if (com.rabi.link.recording.CaptureCompletionPolicy.mayRestart(after != null,
                     recordingSettings().running, captureSaveFailed, shutdownComplete)) after.run();
             else {
@@ -1174,6 +1228,8 @@ public final class RabiConversationService extends Service {
     }
 
     private void pauseAllCaptureModes() {
+        if (locationController != null) locationController.stop();
+        locationForegroundActive = false;
         if (phoneAudioCapture != null) phoneAudioCapture.pause();
         stopGlassesBackend();
         if (backend != null) backend.pauseCaptureTransport();
@@ -1195,6 +1251,7 @@ public final class RabiConversationService extends Service {
     private void promote(String text, boolean conversation) {
         AllDayRecordingSettings settings = AllDayRecordingSettings.load(this);
         int type = android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC;
+        if (locationForegroundActive) type |= android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION;
         // Transport commands must not remove the type of a microphone already in use.
         if (voiceServiceActive || conversation) {
             // Retain microphone eligibility during automatic glasses capture so fallback can
@@ -1433,7 +1490,7 @@ public final class RabiConversationService extends Service {
                     callPlaybackTrack = track; callPlaybackCompleted = completed;
                     track.play();
                 }
-                long timeoutMs = Math.max(5000, (pcm.length * 1000L) / 32000L + 5000L);
+                long timeoutMs = com.rabi.link.transport.ScopedManagerTimeouts.active(this).get("android.voice.localPlayback", Math.max(5000, (pcm.length * 1000L) / 32000L + 5000L));
                 if (!completed.await(timeoutMs, TimeUnit.MILLISECONDS)) return false;
                 return markerReached.get();
             } catch (InterruptedException interrupted) {
@@ -1700,6 +1757,7 @@ public final class RabiConversationService extends Service {
         pendingStarts.clear();
         ++captureGeneration;
         if (healthController != null) healthController.close();
+        if (locationController != null) locationController.close();
         if (videoController != null) videoController.close();
         if (videoAudio != null) videoAudio.close();
         if (glassStatusPublisher != null) glassStatusPublisher.close();

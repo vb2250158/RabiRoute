@@ -1,177 +1,124 @@
 import assert from "node:assert/strict";
-import type http from "node:http";
+import http from "node:http";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
-import { markAuthenticatedConnectionRequest } from "../../manager/connectionRequestAccess.js";
-import {
-  YeYuGamerManagerApiClient,
-  type YeYuGamerCommandReceipt,
-  type YeYuGamerManagerConfigInput,
-  type YeYuGamerWorkItemCreate
-} from "./managerApi.js";
-/*
- * Keep the import surface explicit: the facade may construct only the bounded
- * typed client, never a generic HTTP or execution adapter.
- */
-import {
-  handleYeYuGamerManagerApi,
-  type YeYuGamerManagerRouteClient,
-  type YeYuGamerWorkItemDispatchRequest
-} from "./managerRoutes.js";
+import { once } from "node:events";
+import { createYeYuGamerManagerOperations } from "./managerRoutes.js";
+import { YeYuGamerManagerApiClient, YEYU_GAMER_MANAGER_BASE_URL, type YeYuGamerManagerConfigInput } from "./managerApi.js";
+import { ManagerPluginRouteRegistry } from "../../manager/managerPluginRouteRegistry.js";
+import { LanAgentAuthority } from "../../manager/lanAgentAuthority.js";
+import { evaluateLanAgentRequest } from "../../manager/lanAgentRequestAccess.js";
+import { registerLanAgentBodyGuard, assertLanAgentBodyAuthority } from "../../manager/lanAgentBodyAuthority.js";
 
-function request(method: string, remoteAddress = "127.0.0.1"): http.IncomingMessage {
-  return { method, headers: { host: "127.0.0.1:8790" }, socket: { remoteAddress } } as unknown as http.IncomingMessage;
-}
-
-function receipt(): YeYuGamerCommandReceipt {
-  return {
-    commandId: "work-1",
-    idempotencyKey: "dispatch-1",
-    requestId: null,
-    statusUrl: "/api/v1/agent/work-items/work-1",
-    acceptedStateVersion: 4,
-    state: "accepted",
-    message: "recorded",
-    result: {},
-    submittedAt: "2026-08-27T00:00:00.000Z",
-    completedAt: null,
-    replayed: false
-  };
-}
-
-test("Manager facade exposes only four reads and one work-item dispatch on loopback", async () => {
-  const calls: string[] = [];
-  let posted: { workItem: YeYuGamerWorkItemCreate; options: Record<string, unknown> } | undefined;
-  const client: YeYuGamerManagerRouteClient = {
-    getHealth: async () => { calls.push("health"); return {} as never; },
-    getMeta: async () => { calls.push("meta"); return {} as never; },
-    getSnapshot: async () => { calls.push("snapshot"); return {} as never; },
-    getCapabilities: async () => { calls.push("capabilities"); return {} as never; },
-    createWorkItem: async (workItem, options) => {
-      calls.push("work-items");
-      posted = { workItem, options };
-      return receipt();
-    }
-  };
-
-  const responseFor = async (
-    method: string,
-    pathname: string,
-    body?: YeYuGamerWorkItemDispatchRequest
-  ): Promise<{ status: number; body: unknown; handled: boolean }> => {
-    let resolve!: (value: { status: number; body: unknown; handled: boolean }) => void;
-    const done = new Promise<{ status: number; body: unknown; handled: boolean }>(accept => { resolve = accept; });
-    const handled = handleYeYuGamerManagerApi(
-      request(method),
-      new URL(`http://127.0.0.1:8790${pathname}`),
-      {} as http.ServerResponse,
-      {
-        getConfig: () => ({}),
-        readJsonBody: async () => body as never,
-        jsonResponse: (_response, status, payload) => resolve({ status, body: payload, handled }),
-        createClient: () => client
-      }
-    );
-    if (!handled) return { status: 0, body: null, handled };
-    return done;
-  };
-
-  for (const resource of ["health", "meta", "snapshot", "capabilities"]) {
-    const response = await responseFor("GET", `/api/agent/yeyu-gamer/${resource}`);
-    assert.equal(response.handled, true);
-    assert.equal(response.status, 200);
-  }
-  const workItem = { kind: "observation", note: "read-only observation request" } as const;
-  const dispatch = await responseFor("POST", "/api/agent/yeyu-gamer/work-items", {
-    workItem,
-    idempotencyKey: "dispatch-1",
-    expectedStateVersion: 3
-  });
-  assert.equal(dispatch.status, 202);
-  assert.deepEqual(posted, {
-    workItem,
-    options: { idempotencyKey: "dispatch-1", expectedStateVersion: 3 }
-  });
-  assert.deepEqual(calls, ["health", "meta", "snapshot", "capabilities", "work-items"]);
-
-  for (const forbiddenPath of [
-    "/api/agent/yeyu-gamer/claims",
-    "/api/agent/yeyu-gamer/decisions",
-    "/api/agent/yeyu-gamer/capability-invocations",
-    "/api/agent/yeyu-gamer/path",
-    "/api/agent/yeyu-gamer/shell"
-  ]) {
-    const response = await responseFor("POST", forbiddenPath);
-    assert.equal(response.handled, false);
-  }
-});
-
-test("Manager facade refuses unauthenticated remote callers before config or credentials are read", () => {
-  let configReads = 0;
-  let responsePayload: unknown;
-  const handled = handleYeYuGamerManagerApi(
-    request("GET", "192.0.2.10"),
-    new URL("http://127.0.0.1:8790/api/agent/yeyu-gamer/health"),
-    {} as http.ServerResponse,
-    {
-      getConfig: () => { configReads += 1; return {}; },
-      readJsonBody: async () => ({} as never),
-      jsonResponse: (_response, status, body) => { responsePayload = { status, body }; }
-    }
-  );
-  assert.equal(handled, true);
-  assert.equal(configReads, 0);
-  assert.equal((responsePayload as { status: number }).status, 403);
-});
-
-test("authenticated remote callers reuse connection access for reads and plan dispatch", async () => {
-  for (const method of ["GET", "POST"]) {
-    const req = request(method, "192.0.2.10");
-    markAuthenticatedConnectionRequest(req);
-    let result!: number;
-    let dispatches = 0;
-    const client: YeYuGamerManagerRouteClient = {
-      getHealth: async () => ({} as never), getMeta: async () => ({} as never),
-      getSnapshot: async () => ({} as never), getCapabilities: async () => ({} as never),
-      createWorkItem: async () => { dispatches++; return receipt(); }
-    };
-    const path = method === "GET" ? "health" : "work-items";
-    handleYeYuGamerManagerApi(req, new URL(`http://localhost/api/agent/yeyu-gamer/${path}`), {} as http.ServerResponse, {
-      getConfig: () => ({}), createClient: () => client,
-      readJsonBody: async () => ({ workItem: { kind: "observation", note: "contract test" }, idempotencyKey: "dispatch-1", expectedStateVersion: 3 }) as never,
-      jsonResponse: (_response, status) => { result = status; }
+const health = { status: "ok", manager: "ok", storage: "ok", eventStream: "ok", checkedAt: "fixture", checks: {} };
+const meta = { name: "fixture", version: "1", apiVersion: "v1", managerId: "fixture-manager", startedAt: "fixture", hostPolicy: "loopback-only", webGuiAvailable: false, legacyExecutionEnabled: false };
+const snapshot = { stateVersion: 7, generatedAt: "fixture", eventCursor: "fixture-cursor", manager: {}, health: {}, gameDay: "fixture", recentBatches: [{ extension: true }], games: [{ extension: true }], counters: {}, extension: true };
+const capabilities = { total: 0, items: [] };
+const receipt = { commandId: "fixture-plan", idempotencyKey: "original-key", acceptedStateVersion: 8, state: "accepted", message: "recorded", result: {}, submittedAt: "fixture", replayed: false, extension: true };
+const dispatch = { workItem: { kind: "observation", note: "fixture" }, idempotencyKey: "original-key", expectedStateVersion: 7 };
+function deferred() { let resolve!: () => void; const promise = new Promise<void>(done => { resolve = done; }); return { promise, resolve }; }
+function requestOwned(url: string, options: { method?: string; body?: string; headers?: http.OutgoingHttpHeaders; signal?: AbortSignal } = {}): Promise<Response> {
+  return new Promise((resolve, reject) => {
+    const request = http.request(url, { method: options.method, headers: options.headers, signal: options.signal }, response => {
+      const chunks: Buffer[] = []; response.on("data", chunk => chunks.push(Buffer.from(chunk))); response.on("error", reject);
+      response.on("end", () => resolve(new Response(Buffer.concat(chunks), { status: response.statusCode!, headers: { "content-type": "application/json" } })));
     });
-    await new Promise(resolve => setImmediate(resolve));
-    assert.equal(result, method === "GET" ? 200 : 202);
-    assert.equal(dispatches, method === "GET" ? 0 : 1);
+    request.on("error", reject); request.setTimeout(10000, () => request.destroy(new Error("Owned YeYu HTTP fixture timed out."))); request.end(options.body);
+  });
+}
+async function fixture(t: test.TestContext) {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "yeyu-contract-"));
+  t.after(async () => { assert.equal(path.dirname(path.resolve(root)), path.resolve(os.tmpdir())); await fs.rm(root, { recursive: true, force: true }); });
+  const actorDir = path.join(root, "secrets", "actors"); await fs.mkdir(actorDir, { recursive: true }); await fs.writeFile(path.join(actorDir, "rabiroute.token"), "T".repeat(48), "ascii");
+  const authority = new LanAgentAuthority({ statePath: path.join(root, "authority.json") });
+  const credential = authority.enroll(authority.issueBootstrapTicket().ticket, "yeyu-node");
+  const seen: { path: string; method: string; body: unknown; actor?: string; key?: string; version?: string }[] = [];
+  let respond = (pathname: string): { status: number; body: unknown } => ({ status: pathname === "/agent/work-items" ? 202 : 200, body: ({ "/health": health, "/meta": meta, "/snapshot": snapshot, "/capabilities": capabilities, "/agent/work-items": receipt } as Record<string, unknown>)[pathname] });
+  let held: { entered: ReturnType<typeof deferred>; release: ReturnType<typeof deferred>; closed: ReturnType<typeof deferred> } | undefined;
+  const upstream = http.createServer(async (request, response) => {
+    response.on("error", () => {});
+    const chunks: Buffer[] = []; for await (const chunk of request) chunks.push(Buffer.from(chunk));
+    seen.push({ path: request.url!, method: request.method!, body: chunks.length ? JSON.parse(Buffer.concat(chunks).toString()) : undefined,
+      actor: request.headers["x-yeyu-gamer-actor"] as string | undefined, key: request.headers["idempotency-key"] as string | undefined, version: request.headers["x-expected-state-version"] as string | undefined });
+    const gate = held;
+    if (gate) { response.once("close", gate.closed.resolve); gate.entered.resolve(); await gate.release.promise; }
+    if (response.destroyed) return;
+    const result = respond(request.url!); response.writeHead(result.status, { "content-type": "application/json" }).end(JSON.stringify(result.body));
+  });
+  t.after(() => { held?.release.resolve(); upstream.closeAllConnections(); return new Promise<void>(resolve => upstream.close(() => resolve())); });
+  upstream.listen(0, "127.0.0.1"); await once(upstream, "listening");
+  const upstreamBase = "http://127.0.0.1:" + (upstream.address() as import("node:net").AddressInfo).port;
+  let config: YeYuGamerManagerConfigInput = { runtimeDir: root }, credentialReads = 0, configReads = 0;
+  let configRead: (() => void) | undefined;
+  const owner = createYeYuGamerManagerOperations({ getConfig: () => { configReads++; configRead?.(); return config; }, createClient: original => new YeYuGamerManagerApiClient(original, {
+    readFile: async (file, encoding) => { credentialReads++; assert.equal(file, path.join(actorDir, "rabiroute.token")); return fs.readFile(file, encoding); },
+    fetch: async (input, init) => { assert.ok(String(input).startsWith(YEYU_GAMER_MANAGER_BASE_URL + "/")); return requestOwned(upstreamBase + String(input).slice(YEYU_GAMER_MANAGER_BASE_URL.length), { method: init?.method, body: init?.body as string | undefined, headers: Object.fromEntries(new Headers(init?.headers)), signal: init?.signal ?? undefined }); }
+  }) });
+  const registry = new ManagerPluginRouteRegistry(); const registration = registry.registerOperations("yeyu-contract", owner.operations);
+  const server = http.createServer((request, response) => {
+    if (evaluateLanAgentRequest(request, authority, true).kind !== "agent") { response.writeHead(401).end(); return; }
+    registerLanAgentBodyGuard(request, body => assertLanAgentBodyAuthority(new URL(request.url!, "http://fixture").pathname, body, undefined));
+    if (!registry.handle(request, new URL(request.url!, "http://fixture"), response)) response.writeHead(404).end();
+  });
+  t.after(async () => { held?.release.resolve(); const retired = registration.dispose(); await owner.stop(); await retired; server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); });
+  server.listen(0, "127.0.0.1"); await once(server, "listening");
+  const base = "http://127.0.0.1:" + (server.address() as import("node:net").AddressInfo).port;
+  const headers = { authorization: "Bearer " + credential.token };
+  return { base, headers, owner, registration, seen, request: (resource: string, body?: unknown, signal?: AbortSignal) => requestOwned(base + "/api/agent/yeyu-gamer/" + resource, { headers, method: body === undefined ? "GET" : "POST", body: body === undefined ? undefined : JSON.stringify(body), signal }),
+    counts: () => ({ configReads, credentialReads }), setConfig: (value: YeYuGamerManagerConfigInput) => { config = value; }, onConfig: (callback: () => void) => { configRead = callback; },
+    respond: (handler: typeof respond) => { respond = handler; }, hold: () => { held = { entered: deferred(), release: deferred(), closed: deferred() }; return held; } };
+}
+
+test("five executable YeYu operations use the original native client and plan-only receipt", async t => {
+  const f = await fixture(t);
+  for (const [resource, expected] of [["health", health], ["meta", meta], ["snapshot", snapshot], ["capabilities", capabilities]] as const) {
+    const response = await f.request(resource + "?ignored=yes"); assert.equal(response.status, 200); assert.deepEqual((await response.json()).data, expected);
   }
+  assert.equal(f.counts().credentialReads, 2);
+  const posted = await f.request("work-items", { ...dispatch, workItem: { ...dispatch.workItem, mode: "execute", requestedBy: "ignored" } });
+  assert.equal(posted.status, 202); assert.deepEqual((await posted.json()).data, receipt);
+  assert.deepEqual(f.seen.at(-1), { path: "/agent/work-items", method: "POST", body: { kind: "observation", mode: "plan", requestedBy: "rabiroute", note: "fixture", artifactRefs: [], allowedCapabilityRefs: [] }, actor: "rabiroute", key: "original-key", version: "7" });
+  assert.equal(f.counts().credentialReads, 3);
+  for (const requestId of ["", null, false, 0]) assert.equal((await f.request("work-items", { ...dispatch, requestId })).status, 202);
+  for (const resource of ["claims", "decisions", "capability-invocations", "path", "shell"]) assert.equal((await f.request(resource, {})).status, 404);
 });
 
-test("invalid integration config fails closed without making a live external request", async () => {
-  let responsePayload: unknown;
-  let requests = 0;
-  let resolveResponse!: () => void;
-  const responded = new Promise<void>(resolve => { resolveResponse = resolve; });
-  const handled = handleYeYuGamerManagerApi(
-    request("GET"),
-    new URL("http://127.0.0.1:8790/api/agent/yeyu-gamer/health"),
-    {} as http.ServerResponse,
-    {
-      getConfig: () => ({ baseUrl: "http://localhost:8877/api/v1" }),
-      readJsonBody: async () => ({} as never),
-      jsonResponse: (_response, status, body) => {
-        responsePayload = { status, body };
-        resolveResponse();
-      },
-      createClient: (config: YeYuGamerManagerConfigInput | undefined) => new YeYuGamerManagerApiClient(config, {
-        fetch: async () => {
-          requests += 1;
-          return new Response("{}", { status: 200 });
-        }
-      })
-    }
-  );
-  assert.equal(handled, true);
-  await responded;
-  assert.equal((responsePayload as { status: number }).status, 400);
-  assert.equal(requests, 0);
+test("YeYu request schema rejects invalid plans before reading credentials or dispatching", async t => {
+  const f = await fixture(t);
+  for (const body of [{}, { ...dispatch, expectedStateVersion: -1 }, { ...dispatch, idempotencyKey: "white space" }, { ...dispatch, workItem: { kind: "run_game" } }, { ...dispatch, workItem: { kind: "cancel_run" } }, { ...dispatch, workItem: { kind: "observation", note: "x".repeat(501) } }, { ...dispatch, workItem: { kind: "run_game", gameId: "../path" } }, { ...dispatch, workItem: { kind: "observation", artifactRefs: ["../path"] } }]) assert.equal((await f.request("work-items", body)).status, 400);
+  assert.equal(f.counts().credentialReads, 0); assert.equal(f.seen.length, 0);
+});
+
+test("YeYu captures its original configuration before body consumption", async t => {
+  const f = await fixture(t), configured = deferred(); f.onConfig(configured.resolve);
+  let upload!: http.ClientRequest;
+  const pending = new Promise<number>((resolve, reject) => { upload = http.request(f.base + "/api/agent/yeyu-gamer/work-items", { method: "POST", headers: f.headers }, response => { response.resume(); response.on("end", () => resolve(response.statusCode!)); }); upload.on("error", reject); upload.write('{"workItem":'); });
+  await configured.promise; f.setConfig({ baseUrl: "http://unaccepted.invalid" });
+  upload.end(JSON.stringify(dispatch.workItem) + ',"idempotencyKey":"original-key","expectedStateVersion":7}');
+  assert.equal(await pending, 202); assert.equal(f.seen.length, 1);
+  assert.equal((await f.request("health")).status, 400); assert.equal(f.seen.length, 1);
+});
+
+test("native YeYu errors remain bounded and malformed response schemas are rejected", async t => {
+  const f = await fixture(t);
+  f.respond(() => ({ status: 412, body: { error: { code: "state_version_conflict", message: "credential-or-private-path" } } }));
+  const conflict = await f.request("work-items", dispatch); assert.equal(conflict.status, 412);
+  const result = await conflict.json(); assert.equal(result.error.code, "state_version_conflict"); assert.doesNotMatch(JSON.stringify(result), /credential-or-private-path/);
+  f.respond(() => ({ status: 200, body: { status: "invented-state" } }));
+  const invalid = await f.request("health"); assert.equal(invalid.status, 502); assert.equal((await invalid.json()).error.code, "yeyu_gamer_contract_mismatch");
+});
+
+test("YeYu retirement cancels and joins an already dispatched original plan request", { timeout: 10000 }, async t => {
+  const f = await fixture(t), gate = f.hold();
+  const pending = f.request("work-items", dispatch); await gate.entered.promise;
+  const retired = f.registration.dispose(); await f.owner.stop(); await retired;
+  assert.equal((await pending).status, 503); await gate.closed.promise; gate.release.resolve(); assert.equal(f.seen.length, 1);
+});
+
+test("YeYu HTTP disconnect cancels the original native transport without replay", { timeout: 10000 }, async t => {
+  const f = await fixture(t), gate = f.hold(), controller = new AbortController();
+  const pending = f.request("work-items", dispatch, controller.signal).catch(() => undefined); await gate.entered.promise;
+  controller.abort(); await pending; await gate.closed.promise; gate.release.resolve(); assert.equal(f.seen.length, 1);
 });

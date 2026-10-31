@@ -1,3 +1,4 @@
+import { getTimeoutMs } from "./timeoutSettingsClient";
 import { browserUuid } from "./browserUuid";
 
 export const INSTANCE_IDENTITY_RESET_WAIT_MS = 45_000;
@@ -87,8 +88,9 @@ export class InstanceIdentityResetClient {
       return;
     }
     this.controller = new AbortController();
-    const signal = AbortSignal.any([this.controller.signal, AbortSignal.timeout(INSTANCE_IDENTITY_RESET_WAIT_MS)]);
-    const deadline = this.now() + INSTANCE_IDENTITY_RESET_WAIT_MS;
+    const budgetMs = getTimeoutMs("webgui.identity.reset", 45000);
+    const signal = AbortSignal.any([this.controller.signal, AbortSignal.timeout(budgetMs)]);
+    const deadline = this.now() + budgetMs;
     let readRetryAvailable = true;
     const readOperation = async () => {
       const read = async () => {

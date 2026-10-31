@@ -95,7 +95,7 @@ for (const scenario of ["stable", "managed_stable", "managed_upload_failed", "ac
       }
       assert.equal(url, "http://mock.invalid/upload_group_file");
       uploadCalls++;
-      if (uploadFailed) return new Response(JSON.stringify({ status: "failed", retcode: 1 }));
+      if (uploadFailed) return new Response(JSON.stringify({ status: "failed", retcode: 1, message: `private upstream ${rootDir} fake-fixture-secret` }));
       if (scenario === "token_rotated") instance.accessToken = "fake-rotated-secret";
       if (scenario === "endpoint_changed") instance.httpUrl = "http://replacement.invalid";
       if (scenario === "instance_changed") instance.id = "replacement";
@@ -108,6 +108,12 @@ for (const scenario of ["stable", "managed_stable", "managed_upload_failed", "ac
     const result = await handleAgentReply(request, options);
     assert.equal(uploadCalls, 1);
     assert.equal(result.status, uploadFailed ? "failed" : "sent");
+    if (managed && uploadFailed) {
+      assert.deepEqual(result.deliveryError, { action: "upload_group_file", kind: "rejected", httpStatus: 200, retcode: 1 });
+      assert.match(result.reason!, /upload_group_file: rejected HTTP 200 retcode=1/);
+      assert.ok(!JSON.stringify(result).includes(rootDir));
+      assert.ok(!JSON.stringify(result).includes("fake-fixture-secret"));
+    }
     assert.equal("selfId" in result, false);
     assert.equal("bindingRevision" in result, false);
     const logText = fs.readFileSync(logPath, "utf8");

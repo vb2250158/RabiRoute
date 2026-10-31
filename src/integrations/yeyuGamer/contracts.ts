@@ -1,3 +1,5 @@
+import type { YEYU_WORK_ITEM_KINDS } from "./managerSchemas.js";
+
 export type YeYuGamerJsonObject = Record<string, unknown>;
 
 export type YeYuGamerMeta = {
@@ -84,15 +86,7 @@ export type YeYuGamerPage<T> = {
   total: number;
 };
 
-export type YeYuGamerWorkItemKind =
-  | "run_game"
-  | "run_batch"
-  | "diagnose_game"
-  | "cancel_run"
-  | "observation"
-  | "incident_review"
-  | "evidence_review"
-  | "repair_validation";
+export type YeYuGamerWorkItemKind = (typeof YEYU_WORK_ITEM_KINDS)[number];
 
 /**
  * A RabiRoute dispatch creates a plan record only. The Manager owns all later

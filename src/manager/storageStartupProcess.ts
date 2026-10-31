@@ -1,3 +1,4 @@
+import { getTimeoutMs } from "../shared/timeoutSettings.js";
 import { fork } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import type { StorageAttempt } from "./boundedStorageStartup.js";
@@ -12,7 +13,7 @@ export type StorageStartupTask =
 
 export function createStorageStartupProcess<Value>(
   task: StorageStartupTask,
-  terminateTimeoutMs = 5_000,
+  terminateTimeoutMs = getTimeoutMs("backend.manager.storageStartupProcess.createStorageStartupProcess.terminateTimeoutMs", 5_000),
   spawnChild: typeof fork = fork
 ): StorageAttempt<Value> {
   const child = spawnChild(fileURLToPath(new URL(

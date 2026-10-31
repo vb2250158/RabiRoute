@@ -1,3 +1,4 @@
+import { getTimeoutMs } from "../shared/timeoutSettings.js";
 import type http from "node:http";
 import type { ManagerPluginRouteHandler } from "./managerPluginRouteRegistry.js";
 import { automaticCodeRuntime } from "../plugin-kernel/automaticCodeRuntime.js";
@@ -7,7 +8,7 @@ export class ManagerPluginRequestTracker {
   private readonly activeResponses = new Map<Promise<void>, http.ServerResponse>();
   private readonly activeOperations = new Set<Promise<unknown>>();
 
-  constructor(private readonly drainTimeoutMs = 30_000) {}
+  constructor(private readonly drainTimeoutMs = getTimeoutMs("backend.manager.managerPluginRequestTracker.owner.drainTimeoutMs", 30_000)) {}
 
   wrap(handler: ManagerPluginRouteHandler): ManagerPluginRouteHandler {
     return (request, url, response) => {
@@ -56,27 +57,29 @@ export class ManagerPluginRequestTracker {
 
   async stop(): Promise<void> {
     this.accepting = false;
-    const responses = [...this.activeResponses.keys()];
-    if (responses.length > 0) {
-      let timeout: NodeJS.Timeout | undefined;
-      const drained = Promise.allSettled(responses);
-      const timedOut = await Promise.race([
-        drained.then(() => false),
-        new Promise<boolean>(resolve => {
-          timeout = setTimeout(() => resolve(true), this.drainTimeoutMs);
-          timeout.unref?.();
-        })
-      ]);
-      if (timeout) clearTimeout(timeout);
-      if (timedOut) {
-        for (const response of this.activeResponses.values()) {
-          if (!response.writableEnded && !response.destroyed) response.destroy();
-        }
-        await Promise.allSettled([...this.activeResponses.keys()]);
+    const deadlineAt = performance.now() + getTimeoutMs("plugin.drain", this.drainTimeoutMs);
+    const timedOut = (): never => {
+      for (const response of this.activeResponses.values()) {
+        if (!response.writableEnded && !response.destroyed) response.destroy();
       }
-    }
-    while (this.activeOperations.size > 0) {
-      await Promise.allSettled([...this.activeOperations]);
+      // Keep the unfinished operations observable; a rejected drain is not retirement.
+      throw new Error(`Manager plugin request drain timed out: responses=${this.activeResponses.size}; operations=${this.activeOperations.size}.`);
+    };
+    while (this.activeResponses.size > 0 || this.activeOperations.size > 0) {
+      // Completed children can keep the microtask queue busy ahead of timers.
+      if (performance.now() >= deadlineAt) timedOut();
+      let timeout: NodeJS.Timeout | undefined;
+      let drained: boolean;
+      try {
+        drained = await Promise.race([
+          Promise.allSettled([...this.activeResponses.keys(), ...this.activeOperations]).then(() => true),
+          new Promise<false>(resolve => {
+            timeout = setTimeout(() => resolve(false), Math.max(1, deadlineAt - performance.now()));
+          })
+        ]);
+      } finally { if (timeout) clearTimeout(timeout); }
+      if (drained) continue;
+      timedOut();
     }
   }
 

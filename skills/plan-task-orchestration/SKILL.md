@@ -1,11 +1,13 @@
 ---
 name: plan-task-orchestration
-description: Use before any repository task governed by RabiRoute plan admission, including bug fixes, features, UI, assets, config, data, docs, prompts, skills, builds, deployments, and external writes; also use to create, deduplicate, bind, resume, audit, migrate, or complete a formal plan. Drive the unique bound task through 分析中 → 待补充信息/待审批 → 执行中 → 等待打包/等待 QA → 完成 with evidence, owner-feedback rollback, parallel work, and no duplicate dispatches. Do not use for strictly read-only investigation that will not produce or execute a change.
+description: Use before any repository task tracked with RabiRoute plans, including bug fixes, features, UI, assets, config, data, docs, prompts, skills, builds, deployments, and external writes; also use to create, deduplicate, bind, resume, audit, migrate, or complete a formal plan. Drive the unique bound task through analysis, authorized execution, and acceptance; use questions or approval only when a user decision is actually missing with evidence, owner-feedback rollback, parallel work, and no duplicate dispatches. Do not use for strictly read-only investigation that will not produce or execute a change.
 ---
 
 # Plan Task Orchestration
 
 Use one RabiRoute plan as the lifecycle truth and one Codex task as that plan's execution context. Keep the mapping stable from investigation through acceptance.
+
+用户要求完成的工作包含必要调查、实施和验证；授权随原任务延续。计划、技能和状态字段不增加许可。只有用户明确配置的审批或尚未作出的业务选择才请求决定；控制面故障不阻断无依赖工作。
 
 ## Read the current contracts
 
@@ -25,7 +27,7 @@ On an enrolled remote Agent computer, use the installed `rabi-agent-launcher.mjs
 
 1. Resolve the current generation endpoint before the first Manager call. A previous URL refusing connections means that URL is stale; rediscover it before classifying Manager availability.
 2. Treat `401 + WEBGUI_TOKEN_REQUIRED` as an authentication case and follow the project credential rule. After current-generation discovery, treat connection refusal, timeout, DNS failure, HTTP `5xx`, an unhealthy `/meta`, or an identity mismatch as an availability failure.
-3. The installed application's sole lifecycle owner is `RabiRouteHost.exe`. Do not scan ports, read retired endpoint lock files, launch Manager directly, terminate Host/Manager/tray processes, or start a second Runtime. Host owns same-generation recovery. Source mode without an injected or freshly printed READY URL also fails closed instead of guessing an endpoint.
+3. The installed application's sole lifecycle owner is `RabiRouteHost.exe`. Do not scan ports, read retired endpoint lock files, launch Manager directly, terminate Host/Manager/tray processes, or start a second Runtime. Host owns same-generation recovery. If source-mode discovery has no current READY URL, report the missing endpoint and continue independent work while resolving the configured instance.
 4. Search only bounded source candidates for read-only recovery evidence: an injected or configured RabiRoute root, the documented sibling project path, and an explicit project path. Never scan arbitrary drives for a checkout.
 5. If Manager remains unavailable, use direct role files only for read-only semantic deduplication and recovery. Do not write role files, create placeholder plans, or dispatch tasks through files.
 6. When discovery or recovery evidence remains insufficient, use the governing project's versioned offline plan-adjustment queue before continuing authorized project work. When the project defines `RabiPlanCache` as its offline queue, create or update one validated JSON record under `RabiPlanCache/pending/`; record the full task session, intended plan change, acceptance criteria, changed SVN-relative files, validations, revisions, and remaining work. Commit the cache with the related project change. Never store credentials, player privacy, private messages, or full logs.
@@ -35,7 +37,7 @@ On an enrolled remote Agent computer, use the installed `rabi-agent-launcher.mjs
 ## Preserve the invariants
 
 - Create a formal plan only for work that needs cross-turn execution, waiting, follow-up, or acceptance. Do not create one for chat or a one-turn answer.
-- When a project-level policy says that any potentially mutating task requires a plan, perform plan admission before business investigation, design, implementation, or file writes while Manager is available. During a verified availability failure, follow the fallback above and continue the authorized project work. A strictly read-only task remains exempt only while it cannot produce or execute a project change.
+- Use the existing plan to record scope, progress and results. Registration is coordination, not permission; continue authorized investigation and implementation if synchronization is unavailable.
 - Give each plan one single-line `focus`, one coherent outcome, explicit acceptance criteria, and ordered `steps`.
 - Bind exactly one independent business execution task to one plan. Do not bind a coordinator, reminder, or persona chat task.
 - Keep `taskBinding.sessionId` as the stable task identity and `taskBinding.workspace` as the execution directory for each delivery. Treat `sessionTitle` and the task's saved default cwd as mutable metadata.
@@ -62,7 +64,7 @@ On an enrolled remote Agent computer, use the installed `rabi-agent-launcher.mjs
 3. Read every plausible candidate in full with `GET /api/roles/:roleId/plans/:planId`.
 4. Reuse the existing `planId` when the intended outcome, scope, and acceptance criteria match. Do not merge plans merely because their titles or keywords overlap.
 5. Create a new plan only when no candidate represents the same commitment. Split independent outcomes into child or sibling plans, each with its own task binding.
-6. If the matching plan is bound to another valid business task, stop business work in the current task and deliver only the new user requirements, evidence, attachments, and acceptance changes to that exact binding. Do not run a second investigation or implementation in parallel.
+6. If the matching plan is bound to another valid business task, continue that task with the new requirements, evidence, attachments, and acceptance changes. Avoid duplicate implementation and dispatch; the current task may still recover context, research facts, answer the user, and perform explicitly coordinated independent analysis or verification. Share those results with the original execution task.
 
 Before creating or repairing a plan, GET `/api/roles/:roleId/plan-statuses`. Write only an enabled status `key` from that persona's `planWorkflow.statuses` to `plan.status`. Use `planWorkflow.roles` to resolve analysis, information-needed, approval, execution, package, QA, discussion, pause, completion, and closure semantics. Labels, descriptions, colors, order, views, and lifecycle behavior come from the same persona configuration and must never be copied into code as a status enum.
 
@@ -81,7 +83,7 @@ Before binding or dispatching work, classify the plan's actual phase from the la
 3. Give every step one observable outcome. Its title and `detail` should make the following recoverable: entry evidence, concrete action, expected artifact or state change, pass/fail check, and failure route. Put a real external dependency in `waitingFor`; put a real decision gate in `approvalRequest`. Do not use titles such as `继续处理`, `推进任务`, `等待环境`, or `验证一下` without the object and success condition.
 4. Keep steps coarse enough to represent business state, not Agent activity. Combine all actions that must succeed for one state transition into the same step. Split different features, bugs, pages, or independently accepted outcomes into separate plans rather than adding unrelated steps to one plan.
 5. When a step passes its check, write `completedAt`. When work advances, set `currentStepId` to the next step; a later step has no separate “未开始” value. Reopen a completed step only when later evidence invalidates its check, QA fails, or the user changes the accepted contract; clear its `completedAt`, record the reason, and update affected later steps.
-6. Before dispatching a newly selected step, PATCH the same plan with that `currentStepId`, update `currentStep`, `nextAction`, and `waitingFor`, then reread the Manager result. If the write or readback fails, do not dispatch. This is the claim boundary that prevents two tasks or turns from starting the same work.
+6. Before dispatching a newly selected step, PATCH the same plan with that `currentStepId`, update `currentStep`, `nextAction`, and `waitingFor`, then reread the Manager result. If the write or readback fails, retain the pending update and reconcile the original task/delivery ID. Continue authorized work in the existing task; recover only the delivery whose result is unknown through its owner.
 7. If the current step is no longer executable, revise it into a concrete clarification, approval, dependency, recovery, or evidence step; update later steps to match the new facts. If the new outcome is independently acceptable, split it into another plan.
 8. When guidance, approval feedback, QA failure, or new source evidence arrives, consume every unhandled item that affects the plan, update the remaining step path first, and only then continue the bound task. Preserve feedback and prior evidence as audit history instead of overwriting why the path changed.
 
@@ -91,11 +93,13 @@ Borrow execution mechanics from specialized workflows without copying their exte
 
 Use this state machine for a bug, requested modification, document change, UI change, configuration change, or other single item that needs investigation, owner approval, implementation, and acceptance:
 
-分析完成后的两个正常出口是 `roles.analysis → roles.informationNeeded` 和 `roles.analysis → roles.approval`：关键事实不足、不能确定是否需要改或怎么改，就进入待补充信息；证据充分、具体方案成立且需要负责人决定，才进入待审批。仍有可自主完成的相关调查时继续分析；已修复或无效事项按证据走原有验收或关闭流程。派发不得把“全部推进至待审批”当作固定终点，也不强制每项给两个方案。
+分析后按实际需要进入执行、补充信息或用户设置的审批：已有授权且方案明确时直接 `roles.analysis → roles.execution`；关键事实不足、不能确定是否需要改或怎么改，就进入待补充信息；证据充分、具体方案成立且需要负责人决定，才进入待审批。仍有可自主完成的相关调查时继续分析；已修复或无效事项按证据走原有验收或关闭流程。派发不得把“全部推进至待审批”当作固定终点，也不强制每项给两个方案。
 
-`roles.analysis → roles.informationNeeded → roles.analysis`
+`roles.analysis → roles.informationNeeded → roles.analysis`（仅缺少无法自行取得且影响下一步的事实时）
 
-`roles.analysis → roles.approval → roles.execution → roles.waitingPackage → roles.waitingQa → roles.completed`
+`roles.analysis → roles.execution → roles.waitingPackage → roles.waitingQa → roles.completed`
+
+`roles.analysis → roles.approval → roles.execution` 仅用于用户设置的审批或尚未决定的业务取舍。
 
 `roles.approval --负责人要求修改--> roles.analysis`
 
@@ -130,7 +134,7 @@ Reserve `qa-*` and `verify-*` step IDs for actual target-package QA or acceptanc
 - 当前包无法复现或可能已有相关修复时，先核对修复覆盖和现有证据；查证后仍缺影响问题是否存在或改法的关键事实，就进入 `roles.informationNeeded`，不能用候选原因和将来验证冒充完整方案。已明确完成开发、仅缺包或 QA 时走 `roles.waitingPackage`／`roles.waitingQa`；确认无需修改且无需验收时按证据关闭。
 - Set the current step ID to `information-needed-*`. In `detail`, list what is already known, why it is insufficient, and which conclusion cannot yet be made. In `waitingFor`, name the responsible person or source and the exact questions, screenshots, reproduction steps, configuration IDs, logs, decisions, or other evidence required.
 - Clear any stale `approvalRequest`. Information collection is not approval.
-- Continue every authorized independent investigation while waiting. 收到补充后完成信息步骤，先把状态回写为 `roles.analysis`，新建或重开 `investigate-*` 并重新分析；仍缺关键事实则再次进入 `roles.informationNeeded`，形成明确方案才进入 `roles.approval`。
+- Continue every authorized independent investigation while waiting. 收到补充后完成信息步骤，先把状态回写为 `roles.analysis`，新建或重开 `investigate-*` 并重新分析；仍缺关键事实则再次进入 `roles.informationNeeded`，形成明确方案后直接按已有授权执行；只有用户配置了审批或存在未决定的业务取舍时进入 `roles.approval`。
 
 #### 方案与问题的写法
 
@@ -145,7 +149,7 @@ Reserve `qa-*` and `verify-*` step IDs for actual target-package QA or acceptanc
 
 - 实施明细使用 `questions[].implementation`：一题对应一个明确方案时放在题目上；确有多个候选或独立可选改动时，各自放在 `options[].implementation`，不把所有文件混成一份公共明细。明细包含 `changes[]`，每项写 `kind`（`code/prefab/art/configuration/other`）、`path`、可选 `target`（方法／对象／字段）和 `change`（具体怎么改），另可写 `validation`、`rollback`。正文只留结论和短摘要，明细默认折叠。`approvalRequest` 保留授权范围与来源，不能把所有候选的改动当作已获批范围；`alternatives` 可省略，不再强制备选。
 
-- 待审批表示方案已形成、准备实施但尚未实施，通常审批一个明确方案是否执行；待补充信息表示暂时无法形成方案，需要用户补充影响判断的事实或决定。收到补充后先回到分析中，重新核对，再判断继续补充信息还是形成方案待审批，不能直接跳到审批或执行。普通修复不默认生成 A／B；玩法设计、美术候选等任务本身需要比较设计时，才按实际需要提供成熟候选，不用候选掩盖调查不足。信息充分且定位准确的小 Bug 直接形成方案，不为走流程要求用户补资料。Agent 判断下一步需要改动项目代码、预制体、美术资源或配置时，先进入待审批，不能以“小改动”或“验证猜测”为由先改项目。用户已明确批准同一具体修改时按授权范围执行，不重复审批；隔离草稿或设计候选不算已经修改项目。
+- 待审批表示方案已形成、准备实施但尚未实施，通常审批一个明确方案是否执行；待补充信息表示暂时无法形成方案，需要用户补充影响判断的事实或决定。收到补充后先回到分析中，重新核对，复核后按已有授权直接执行；仍缺事实则补证，尚缺用户决定才询问。普通修复不默认生成 A／B；玩法设计、美术候选等任务本身需要比较设计时，才按实际需要提供成熟候选，不用候选掩盖调查不足。信息充分且定位准确的小 Bug 直接形成方案，不为走流程要求用户补资料。项目代码、预制体、美术资源或配置的必要改动属于用户所要求工作的实施范围，直接执行；仅用户明确设置的审批项或未决定的业务取舍需要询问。用户已明确批准同一具体修改时按授权范围执行，不重复审批；隔离草稿或设计候选不算已经修改项目。
 
 - 审批通常询问明确方案是否执行；一个计划有多个独立决定时按需分题。确实存在设计候选时，分别写入 `questions[].options`，不要只把 A／B 塞进 `approvalRequest.request`、`alternatives` 或长段正文。`label` 写清动作和对象，`description` 说明改变的逻辑及影响，具体文件／组件／字段放在对应方案详情。每步最多 5 道题、每题最多 6 个选项。Agent 按决策关系设置 `selectionMode`：互斥方案用 `single`，可同时实施的选项用 `multiple`；省略时兼容为单选。同一计划包含不同事项或模块时，按需拆成多道题，可以混用单选、多选和文字题，不为凑数量拆题。同一项修改必须联动的模块放在一题里，写清依赖和涉及文件；不能把不可独立实施的改动伪装成可任意多选。各题独立决定，批准一题不表示批准其它题；一题待补证不能迫使其它题默认获批。多选中的“都不做，保持现状”设置 `exclusive: true`，不得与实施项同选。
 - 可选变更提供“都不做，保持现状”和提出修改建议的入口；明确拒绝不是未答题，也不是批准其它选项。反馈必须对应原问题及所选选项，只有明确获批的范围才可实施，拒绝项和未决定项不得随其它修改执行。用户明确取消需求时记录决定并关闭相应需求；混合计划保留其它独立事项，不自动重提被否决方案。
@@ -176,17 +180,18 @@ Every Agent end bound to a plan moves it to its next stage on real evidence; a p
 
 | Current status | Destination | Condition |
 | --- | --- | --- |
-| Analysis | Approval | Evidence is sufficient and the proposal is executable: cause, exact change, file scope, validation, rollback, exclusions |
+| Analysis | Approval | The proposal is executable and a user-configured approval or unresolved user decision is actually required; present that specific decision |
 | Analysis | Information needed | The key fact can only come from outside (reporter, product decision, real device, player data), and the minimal gap is listed |
-| Analysis | Execution, then complete | Compile or build failures: no approval is needed, fix it and mark it complete yourself |
-| Approval (pending or granted) | Stay in approval | The contract still holds and no user reply is unconsumed |
-| Approval (pending or granted) | Back to analysis | A user approval suggestion exists, or the proposal, its basis, or its file scope has changed |
-| Execution | Waiting for package | Acceptance needs a target package, and the game bug has a Tencent sheet record |
-| Execution | Waiting for QA | Editor extensions, tools, or governance work that needs no package |
-| Execution | Complete | Compile or build failures already fixed |
+| Analysis | Execution | Existing authorization covers the concrete action and the evidence is sufficient; carry out implementation and matching acceptance, including routine compile or build repairs |
+| Approval pending | Stay in approval | A required user decision is still missing after checking existing feedback; continue independent authorized work |
+| Approval granted | Execution | Consume the existing approval and proceed in its scope without requesting it again |
+| Approval | Back to analysis | A correction or new evidence changes the proposed action; retain existing authorization for unaffected work and ask only about a genuinely new decision |
+| Execution | Waiting for package | Acceptance actually requires a target package that is not yet available, and no independent authorized implementation or validation remains |
+| Execution | Waiting for QA | A required external QA result is outstanding and no independent authorized acceptance work remains; task category alone does not create this wait |
+| Execution | Complete | The user goal and its applicable acceptance criteria are satisfied with actual evidence |
 
 - The UI label "待验收" maps to the `等待 QA` key; do not introduce a new status key.
-- Most analyzing plans should land in Approval or Information needed. Never package an unready proposal as an approval just to advance it, and never pass off a control-plane read failure as information-needed.
+- Move from analysis directly to execution when evidence and existing authorization suffice. Request only missing user decisions or facts that cannot be obtained through available research; a control-plane failure is a synchronization issue, not a reason to stop independent work.
 - Execution means the direction is clear and no extra permission is required: carry the work to its exit route instead of stopping there.
 - Read the actual keys from the live stage configuration for the role; the names above describe the stages, not hardcoded strings.
 
@@ -321,7 +326,8 @@ Every Agent end — codex, dsh, or another adapter — owns the flush of its own
 | The same plan is mentioned again | Reuse its `planId` and bound task after rereading both. |
 | A completion reminder repeats | Consume the `sessionId + turnId` result once; do not create work from the duplicate. |
 | The plan is paused or has a pending ready approval | Do not dispatch implementation. |
-| The bound task is archived, absent, or in another workspace | Fail closed and perform controlled recovery. |
+| The bound task is archived or absent | Recover the original binding through its owner; preserve the original ID and reconcile prior deliveries before replacement. |
+| A valid task has a different saved default workspace | Keep its complete ID and provide the current execution directory. If the directory is unavailable or the host cannot use it, report that actual error and restore the requested execution path without changing task identity. |
 
 Only steer an active task when genuinely new user input must alter the running turn and the owner interface explicitly supports steering. Never use steering as a heartbeat.
 

@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { getTimeoutMs } from "./timeout-settings.mjs";
 import http from "node:http";
 import dgram from "node:dgram";
 import os from "node:os";
@@ -35,8 +36,8 @@ const singleFileLimitBytes = Number(process.env.REMOTE_AGENT_FILE_SINGLE_LIMIT_B
 const totalFileLimitBytes = Number(process.env.REMOTE_AGENT_FILE_TOTAL_LIMIT_BYTES || 25 * 1024 * 1024);
 const allowNetwork = process.env.REMOTE_AGENT_ALLOW_NETWORK === "1";
 const allowedCwdRoots = parseAllowedCwdRoots(process.env.REMOTE_AGENT_ALLOWED_CWDS, defaultCwd);
-const taskTerminalTimeoutMs = positiveDuration("REMOTE_AGENT_TASK_TIMEOUT_MS", 30 * 60 * 1000);
-const resumedTurnWaitMs = positiveDuration("REMOTE_AGENT_RESUMED_TURN_WAIT_MS", 30 * 1000);
+const taskTerminalTimeoutMs = getTimeoutMs("legacyAgent.task.terminal", positiveDuration("REMOTE_AGENT_TASK_TIMEOUT_MS", 30 * 60 * 1000));
+const resumedTurnWaitMs = getTimeoutMs("legacyAgent.task.resume", positiveDuration("REMOTE_AGENT_RESUMED_TURN_WAIT_MS", 30 * 1000));
 
 let actualControlPort = 0;
 let discoveryPort = 0;
@@ -368,7 +369,7 @@ function verifyLoopbackControlPort(port) {
       hostname: "127.0.0.1",
       port,
       path: "/health",
-      timeout: 1000
+      timeout: getTimeoutMs("legacyAgent.health", 1000)
     }, (response) => {
       const chunks = [];
       response.on("data", (chunk) => chunks.push(chunk));
@@ -655,7 +656,7 @@ function createControlServer() {
           if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "error", error: "Password handshake timed out." }));
           ws.close();
         }
-      }, 5000);
+      }, getTimeoutMs("legacyAgent.authentication", 5000));
       ws.send(JSON.stringify({
         type: "challenge",
         protocolVersion: PROTOCOL_VERSION,

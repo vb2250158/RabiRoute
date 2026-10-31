@@ -24,7 +24,9 @@ ASR 列表包含所有已连接并声明 `asr` 能力的电脑，包括当前连
 
 认证 owner 来自手机安装实例的稳定设备身份，经隧道握手与公钥校验确认，不使用 Token 派生 scope。更换凭据需要重新授权，不等于修改录音归属；卸载重装产生的新身份不能自动继承旧身份。目标 worker 使用稳定电脑设备 ID，不使用临时 Manager 代际 ID。
 
-受限电脑管理配置（可信本机管理请求，或统一入口认证且仍启用的 Agent）可以建立 `owner → role → archiveRoot` 绑定；手机 resources 隧道不获得管理权限。角色目录通过现有配置解析，领域相对目录为 `all-day-recording/media-archive`；部署路径和角色值不写入协议默认值。上传正文不能自选 owner、role 或任意路径。命名空间使用持久 UUID；NAS 缺失、绑定禁用或 marker 不匹配时失败关闭，不回退成本机缓存归档。
+电脑管理配置复用统一公开接口入口：可信本机管理请求、已鉴权 RabiLink 或已启用远端 Agent 均可建立 `owner → role → archiveRoot` 绑定，无需第二层功能授权。设备 resources 隧道的内部转发头本身不是公开管理凭据。角色目录通过现有配置解析，领域相对目录为 `all-day-recording/media-archive`；部署路径和角色值不写入协议默认值。上传正文不能自选 owner、role 或任意路径。命名空间使用持久 UUID；NAS 缺失、绑定禁用或 marker 不匹配时失败关闭，不回退成本机缓存归档。
+
+同一可执行注册表已在源码发布 13 个资源操作，目录、Schema 与实际分发共用原存储拥有者。公开管理连接的 `x-rabilink-resource-owner` 只选择数据目标；原设备握手的归属身份继续生效。调用与回执区别见[资源接口合同](rabi-agent-interfaces.md#资源缓存与录音归档的可执行合同源码已接入安装版待验收)。安装版与实际手机/NAS 验收仍按本页状态判断。
 
 协议保存 `pcm_s16le`、16 kHz、单声道原始 PCM。播放需要的 WAV 头临时生成，不把 WAV 与 PCM 作为两套长期媒体副本。上限分别为：
 

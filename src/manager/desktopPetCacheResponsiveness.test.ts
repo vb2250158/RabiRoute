@@ -4,7 +4,9 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { handleDesktopPetApi, listDesktopPetPacks } from "./desktopPetRoutes.js";
+import { DesktopPetOwner, listDesktopPetPacks } from "./desktopPetRoutes.js";
+import { createDesktopPetOperations } from "./desktopPetOperations.js";
+import { ManagerPluginRouteRegistry } from "./managerPluginRouteRegistry.js";
 import { copyDesktopPetPackDirectoryAsync } from "./desktopPetPackImport.js";
 import { managerReadWorkerPool } from "./managerReadWorkerPool.js";
 
@@ -29,16 +31,24 @@ test("slow shared pet catalogs leave the Manager health endpoint responsive", as
   let release!: () => void, started!: () => void;
   const delayed = new Promise<void>(resolve => { release = resolve; });
   const reading = new Promise<void>(resolve => { started = resolve; });
-  t.mock.method(managerReadWorkerPool, "queryDesktopPetCatalog", async () => {
-    started(); await delayed;
-    return listDesktopPetPacks("YeYu", data.role, data.cache);
-  });
+  const owner = new DesktopPetOwner({ resolveRoleDir: () => data.role, cacheRoot: data.cache,
+    catalogQuery: async (_roleId, _roleDir, _cacheRoot, _options, _timeoutMs, onReleased) => {
+      try { started(); await delayed; return await listDesktopPetPacks("YeYu", data.role, data.cache); }
+      finally { onReleased(); }
+    } });
+  const registry = new ManagerPluginRouteRegistry();
+  const registration = registry.registerOperations("cache-read-fixture", createDesktopPetOperations(owner));
   const server = http.createServer((request, response) => {
     if (request.url === "/health") { response.end("ready"); return; }
-    handleDesktopPetApi(request, new URL(request.url!, "http://localhost"), response, () => data.role, undefined, data.cache);
+    if (!registry.handle(request, new URL(request.url!, "http://localhost"), response)) response.writeHead(404).end();
   });
   await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
-  t.after(() => { release(); server.close(); fs.rmSync(data.root, { recursive: true, force: true }); });
+  t.after(async () => {
+    release(); try { await registration.dispose(); } finally { await owner.stop(); }
+    server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve()));
+    assert.equal(path.dirname(path.resolve(data.root)), path.resolve(os.tmpdir()));
+    fs.rmSync(data.root, { recursive: true, force: true });
+  });
   const address = server.address(); assert.ok(address && typeof address === "object");
   const base = `http://127.0.0.1:${address.port}`;
   const catalog = fetch(`${base}/api/desktop-pet/roles/YeYu/packs`);

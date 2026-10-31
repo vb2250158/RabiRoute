@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from ..timeout_settings import get_timeout_seconds
+
+
 import base64
 import asyncio
 import json
@@ -98,7 +101,7 @@ class DashScopeTtsProvider:
             input_payload["optimize_instructions"] = True
         payload = {"model": model, "input": input_payload}
 
-        timeout = httpx.Timeout(self.settings.timeout_seconds, connect=15.0)
+        timeout = httpx.Timeout(get_timeout_seconds("speech.dashscope.request", self.settings.timeout_seconds), connect=get_timeout_seconds("speech.dashscope.connect", 15))
         async with httpx.AsyncClient(timeout=timeout, transport=self.transport) as client:
             response = await client.post(
                 _generation_url(self.settings.base_url),
@@ -238,7 +241,7 @@ class DashScopeAsrProvider:
         if request.language:
             payload["parameters"]["asr_options"]["language"] = request.language  # type: ignore[index]
 
-        timeout = httpx.Timeout(self.settings.timeout_seconds, connect=15.0)
+        timeout = httpx.Timeout(get_timeout_seconds("speech.dashscope.request", self.settings.timeout_seconds), connect=get_timeout_seconds("speech.dashscope.connect", 15))
         async with httpx.AsyncClient(timeout=timeout, transport=self.transport) as client:
             response = await client.post(
                 _generation_url(self.settings.base_url),
@@ -275,7 +278,7 @@ class DashScopeAsrProvider:
         if request.speaker_count and request.speaker_count > 0:
             parameters["speaker_count"] = request.speaker_count
         payload = {"model": model, "input": {"file_urls": [audio_url]}, "parameters": parameters}
-        timeout = httpx.Timeout(self.settings.timeout_seconds, connect=15.0)
+        timeout = httpx.Timeout(get_timeout_seconds("speech.dashscope.request", self.settings.timeout_seconds), connect=get_timeout_seconds("speech.dashscope.connect", 15))
         async with httpx.AsyncClient(timeout=timeout, transport=self.transport) as client:
             response = await client.post(
                 self.settings.base_url.rstrip("/") + _TRANSCRIPTION_PATH,
@@ -293,7 +296,7 @@ class DashScopeAsrProvider:
                     client,
                     self.settings.base_url,
                     task_id,
-                    self.settings.timeout_seconds,
+                    get_timeout_seconds("speech.dashscope.request", self.settings.timeout_seconds),
                     self._headers(),
                 )
             except _DashScopeMeetingTaskError as exc:

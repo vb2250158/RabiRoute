@@ -107,3 +107,6 @@ assets/reference-cache/
 /RabiRouteHost.exe.restore.*.tmp.replaced
 /RabiRouteHost.exe~RF*.TMP
 /ribiwebgui/.web-patch-build.lock
+
+# Local recovery snapshots may contain private plans, attachments and runtime data.
+/_sideline/

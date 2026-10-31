@@ -1,3 +1,4 @@
+import { getTimeoutMs } from "../shared/timeoutSettings.js";
 import type { RabiLinkRelayGlobalConfig } from "./globalConfig.js";
 import { peerDeviceKind } from "../rabiPeerDiscovery.js";
 import { isRabiPcVersionAdvertisement, normalizeRabiPcVersion, rabiPcVersionFromCapabilities } from "../shared/rabiPcVersionContract.js";
@@ -76,7 +77,7 @@ export async function readRabiLinkHome(config: Readonly<RabiLinkRelayGlobalConfi
   } catch {
     throw new RabiLinkHomeError(503, "RABILINK_HOME_NOT_CONFIGURED", "RabiLink 服务器地址配置无效。");
   }
-  const signal = AbortSignal.timeout(DEADLINE_MS);
+  const signal = AbortSignal.timeout(getTimeoutMs("backend.manager.rabiLinkHome.DEADLINE_MS", DEADLINE_MS));
   try {
     const response = await fetch(endpoint, {
       method: "GET", headers: { "x-rabilink-token": config.token, accept: "application/json" },

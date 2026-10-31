@@ -1,3 +1,4 @@
+import { ManagerPluginRouteRegistry } from "./managerPluginRouteRegistry.js";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import http from "node:http";
@@ -9,10 +10,30 @@ import type { GatewayDefinition } from "../shared/gatewayConfigModel.js";
 import type { GatewayRuntime } from "./runtimeRegistry.js";
 import type { RouteCatalogPersonaPresentation } from "./routeCatalogTransaction.js";
 import {
-  handlePersonaMessagingApi,
+  createPersonaDirectoryOperation,
+  createPersonaMessagingOperations,
   listPersonas,
   type PersonaMessagingRouteContext
 } from "./personaMessagingRoutes.js";
+
+// These are owned ephemeral Node listeners; use native HTTP so browser port exclusions cannot randomly reject a fixture.
+function fetchFixture(url: string, init: { method?: string; headers?: Record<string, string>; body?: string } = {}): Promise<Response> {
+  const target = new URL(url); assert.equal(target.hostname, "127.0.0.1"); assert.equal(target.protocol, "http:");
+  return new Promise((resolve, reject) => {
+    const request = http.request(target, { method: init.method, headers: init.headers }, response => {
+      const chunks: Buffer[] = []; response.on("data", chunk => chunks.push(Buffer.from(chunk)));
+      response.on("end", () => resolve(new Response(Buffer.concat(chunks), { status: response.statusCode! }))); response.on("error", reject);
+    });
+    request.on("error", reject); request.setTimeout(5000, () => request.destroy(new Error("Owned HTTP fixture request timed out."))); request.end(init.body);
+  });
+}
+
+function createPersonaMessagingServer(t: test.TestContext, context: PersonaMessagingRouteContext): http.Server {
+  const registry = new ManagerPluginRouteRegistry();
+  const registration = registry.registerOperations("persona", [createPersonaDirectoryOperation(() => context), ...createPersonaMessagingOperations(() => context)]);
+  t.after(() => registration.dispose());
+  return http.createServer((request, response) => { if (!registry.handle(request, new URL(request.url || "/", "http://fixture"), response)) response.writeHead(404).end(); });
+}
 
 function runtime(id: string, personaId: string, enabled = true): GatewayRuntime {
   const definition: GatewayDefinition = {
@@ -138,13 +159,10 @@ test("remote persona senders cannot write a same-name local persona timeline", a
     deliver: async () => { deliveries += 1; },
     appendTimeline: async () => { timelineWrites += 1; throw new Error("Timeline must not be reached."); }
   };
-  const server = http.createServer((request, response) => {
-    const url = new URL(request.url || "/", `http://${request.headers.host || "127.0.0.1"}`);
-    if (!handlePersonaMessagingApi(request, url, response, context)) response.writeHead(404).end();
-  });
+  const server = createPersonaMessagingServer(t, context);
   const port = await listen(server);
   t.after(() => close(server));
-  const response = await fetch(`http://127.0.0.1:${port}/api/personas/Target/messages`, {
+  const response = await fetchFixture(`http://127.0.0.1:${port}/api/personas/Target/messages`, {
     method: "POST", headers: { "content-type": "application/json" },
     body: JSON.stringify({ deliveryId: "remote-local-owner-test", sourceRouteId: "remote-route", sourceCapability: "test-capability", text: "hello" })
   });
@@ -172,19 +190,16 @@ test("persona message API authenticates the Route-bound sender and delivers to t
     },
     appendTimeline: appendTimelineTo(rolesRoot)
   };
-  const server = http.createServer((request, response) => {
-    const requestUrl = new URL(request.url || "/", `http://${request.headers.host || "127.0.0.1"}`);
-    if (!handlePersonaMessagingApi(request, requestUrl, response, context)) response.writeHead(404).end();
-  });
+  const server = createPersonaMessagingServer(t, context);
   const port = await listen(server);
   t.after(() => close(server));
 
-  const listResponse = await fetch(`http://127.0.0.1:${port}/api/personas?addressable=true`);
+  const listResponse = await fetchFixture(`http://127.0.0.1:${port}/api/personas?addressable=true`);
   assert.equal(listResponse.status, 200);
   const listPayload = await listResponse.json() as { personas: Array<{ personaId: string }> };
   assert.deepEqual(listPayload.personas.map(item => item.personaId).sort(), ["Builder", "Rabi"]);
 
-  const response = await fetch(`http://127.0.0.1:${port}/api/personas/Builder/messages`, {
+  const response = await fetchFixture(`http://127.0.0.1:${port}/api/personas/Builder/messages`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
@@ -234,13 +249,10 @@ test("persona message deliveryId is durable and rejects changed retry payloads",
     deliver: async () => { deliveryCount += 1; },
     appendTimeline: appendTimelineTo(rolesRoot)
   };
-  const server = http.createServer((request, response) => {
-    const requestUrl = new URL(request.url || "/", `http://${request.headers.host || "127.0.0.1"}`);
-    if (!handlePersonaMessagingApi(request, requestUrl, response, context)) response.writeHead(404).end();
-  });
+  const server = createPersonaMessagingServer(t, context);
   const port = await listen(server);
   t.after(() => close(server));
-  const post = (text: string) => fetch(`http://127.0.0.1:${port}/api/personas/Builder/messages`, {
+  const post = (text: string) => fetchFixture(`http://127.0.0.1:${port}/api/personas/Builder/messages`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
@@ -258,7 +270,7 @@ test("persona message deliveryId is durable and rejects changed retry payloads",
   const duplicateBody = await duplicate.json() as { idempotency?: { duplicate?: boolean } };
   assert.equal(duplicateBody.idempotency?.duplicate, true);
   assert.equal(deliveryCount, 1);
-  const receipt = await fetch(`http://127.0.0.1:${port}/api/personas/messages/receipts/stable-persona-delivery`);
+  const receipt = await fetchFixture(`http://127.0.0.1:${port}/api/personas/messages/receipts/stable-persona-delivery`);
   assert.equal(receipt.status, 200);
   const receiptBody = await receipt.json() as { receipt?: { state?: string } };
   assert.equal(receiptBody.receipt?.state, "completed");
@@ -287,14 +299,11 @@ test("persona message API refuses disabled sources, self delivery, and ambiguous
     deliver: async () => undefined,
     appendTimeline: appendTimelineTo(rolesRoot)
   };
-  const server = http.createServer((request, response) => {
-    const requestUrl = new URL(request.url || "/", `http://${request.headers.host || "127.0.0.1"}`);
-    if (!handlePersonaMessagingApi(request, requestUrl, response, context)) response.writeHead(404).end();
-  });
+  const server = createPersonaMessagingServer(t, context);
   const port = await listen(server);
   t.after(() => close(server));
 
-  const post = (target: string, body: Record<string, unknown>) => fetch(`http://127.0.0.1:${port}/api/personas/${target}/messages`, {
+  const post = (target: string, body: Record<string, unknown>) => fetchFixture(`http://127.0.0.1:${port}/api/personas/${target}/messages`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body)
@@ -321,14 +330,11 @@ test("persona message API reports target handler failure without claiming delive
     deliver: async () => { throw new Error("Desktop owner unavailable"); },
     appendTimeline: appendTimelineTo(rolesRoot)
   };
-  const server = http.createServer((request, response) => {
-    const requestUrl = new URL(request.url || "/", `http://${request.headers.host || "127.0.0.1"}`);
-    if (!handlePersonaMessagingApi(request, requestUrl, response, context)) response.writeHead(404).end();
-  });
+  const server = createPersonaMessagingServer(t, context);
   const port = await listen(server);
   t.after(() => close(server));
 
-  const response = await fetch(`http://127.0.0.1:${port}/api/personas/Builder/messages`, {
+  const response = await fetchFixture(`http://127.0.0.1:${port}/api/personas/Builder/messages`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({

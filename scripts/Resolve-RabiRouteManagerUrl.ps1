@@ -27,10 +27,27 @@ function Resolve-RabiRouteManagerUrl {
     [CmdletBinding()]
     param(
         [string]$ExplicitUrl = "",
-        [ValidateRange(1, 120000)][int]$TimeoutMilliseconds = 10000,
+        [ValidateRange(1, 2147483647)][int]$TimeoutMilliseconds = 10000,
         [ValidateRange(1, 10000)][int]$PollIntervalMilliseconds = 250
     )
 
+    if (-not $PSBoundParameters.ContainsKey('TimeoutMilliseconds') -and $env:RABIROUTE_TIMEOUT_OVERRIDES) {
+        try {
+            $settings = $env:RABIROUTE_TIMEOUT_OVERRIDES | ConvertFrom-Json -ErrorAction Stop
+            if ($null -eq $settings -or $settings.GetType().FullName -ne 'System.Management.Automation.PSCustomObject') { throw 'Expected a timeout object.' }
+            $property = $settings.PSObject.Properties['scripts.manager.ready']
+            if ($null -ne $property) {
+                $configured = $property.Value
+                $numeric = $configured -is [int] -or $configured -is [long] -or $configured -is [double] -or $configured -is [decimal]
+                if (-not $numeric -or $configured -lt 1 -or $configured -gt 2147483647 -or [Math]::Truncate([double]$configured) -ne $configured) {
+                    throw 'Invalid timeout setting: scripts.manager.ready.'
+                }
+                $TimeoutMilliseconds = [int]$configured
+            }
+        } catch {
+            Write-Warning 'Ignoring invalid environment timeout configuration for scripts.manager.ready; using the default.' -WarningAction Continue
+        }
+    }
     $candidate = $ExplicitUrl.Trim()
     if (-not $candidate) { $candidate = ([string]$env:RABIROUTE_MANAGER_URL).Trim() }
     if (-not $candidate) { $candidate = ([string]$env:GATEWAY_MANAGER_URL).Trim() }

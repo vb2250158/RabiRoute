@@ -2,11 +2,14 @@ import type http from "node:http";
 import { RecordingArchiveBindings } from "./recordingArchiveBindings.js";
 import { RecordingArchiveStore } from "./recordingArchiveStore.js";
 import { RecordingArchiveCatalog, RecordingArchiveCatalogError, type RecordingArchiveCatalogQuery } from "./recordingArchiveCatalog.js";
-import { recordingArchiveHandler, recognizeRecordingArchiveObject } from "./recordingArchiveRoutes.js";
+import { runRecordingArchiveOperation } from "./recordingArchiveRoutes.js";
 import { recordingManifestHash, type RecordingManifest, type ArchiveReceipt } from "./recordingArchiveContract.js";
+import type { ApiOperationResult } from "./apiOperationContract.js";
+import { archiveCatalogQuerySchema, RECORDING_ARCHIVE_PROCESSING_STATES } from "./recordingArchiveSchemas.js";
+import { resourceRequestGuard, type ResourceApiInput } from "./resourceApiRequest.js";
 
 export interface RecordingArchiveProcessing {
-  state: "not_requested" | "queued" | "running" | "completed" | "failed" | "blocked" | "ambiguous" | "unavailable";
+  state: typeof RECORDING_ARCHIVE_PROCESSING_STATES[number];
   text?: string;
   jobKey?: string;
   processingVersion?: string;
@@ -16,7 +19,7 @@ export interface RecordingArchiveRuntimeOptions {
   stateDir: string;
   roleDirectory(roleId: string): string;
   workerId(): string;
-  /** Verify tunnel key and authenticated source, not an untrusted owner header. */
+  /** Resolve an existing target owner through public connection admission or the authenticated device resources transport. */
   authorizeResources(request: http.IncomingMessage): string | null | Promise<string | null>;
   localAdmin(request: http.IncomingMessage): boolean;
   readOnly(): boolean;
@@ -75,7 +78,7 @@ export class RecordingArchiveRuntime {
   private async processing(owner: string, recordId: string, manifestHash: string): Promise<RecordingArchiveProcessing> {
     try {
       const value = await this.options.readProcessing?.(owner, recordId, manifestHash);
-      if (!value || !["not_requested", "queued", "running", "completed", "failed", "blocked", "ambiguous", "unavailable"].includes(value.state)) return { state: "unavailable" };
+      if (!value || !RECORDING_ARCHIVE_PROCESSING_STATES.includes(value.state)) return { state: "unavailable" };
       const result: RecordingArchiveProcessing = { state: value.state };
       // Only successful, matching durable results may add text; failed reads never replace cached text.
       if (value.state === "completed" && typeof value.text === "string") result.text = value.text;
@@ -85,24 +88,27 @@ export class RecordingArchiveRuntime {
     } catch { return { state: "unavailable" }; }
   }
   /** Await BEFORE the legacy resource-cache handler. false is returned only for unrelated routes or unbound legacy object owners. */
-  async handle(request: http.IncomingMessage, url: URL, response: http.ServerResponse): Promise<boolean> {
-    const prefix = "/api/resource-cache/data";
-    const object = recognizeRecordingArchiveObject(url);
-    const archive = url.pathname === `${prefix}/archive-capabilities` || url.pathname === `${prefix}/recordings` || url.pathname.startsWith(`${prefix}/recordings/`);
-    if (!object && !archive) return false;
-    const json = (status: number, value: unknown) => { request.resume(); response.writeHead(status, { "content-type": "application/json" }); response.end(JSON.stringify(value)); };
+  async operation(input: ResourceApiInput): Promise<ApiOperationResult | undefined> {
+    const { request, url } = input;
+    const object = input.route.family === "object";
+    if (!object && input.route.family !== "archive") return;
+    let guard = () => {};
+    const json = (status: number, body: unknown): ApiOperationResult => ({ status, body });
     try {
-      if (this.closed) { json(503, { code: "archive_runtime_closed" }); return true; }
+      guard = resourceRequestGuard(request);
+      if (this.closed) return json(503, { code: "archive_runtime_closed" });
       const owner = await this.options.authorizeResources(request);
-      if (!owner) { json(403, { code: "archive_access_denied" }); return true; }
+      guard();
+      if (!owner) return json(403, { code: "archive_access_denied" });
       const binding = await this.bindings.lookupOwner(owner);
+      guard();
       if (!binding) {
-        if (object) return false;
-        json(403, { code: "archive_owner_unbound" }); return true;
+        if (object) return;
+        return json(403, { code: "archive_owner_unbound" });
       }
-      if (!binding.enabled) { json(403, { code: "archive_owner_disabled" }); return true; }
-      if (url.pathname === `${prefix}/archive-capabilities`) {
-        if (request.method !== "GET") { json(405, { code: "method_not_allowed" }); return true; }
+      if (!binding.enabled) return json(403, { code: "archive_owner_disabled" });
+      if (input.route.key === "archive.capabilities") {
+        if (request.method !== "GET") return json(405, { code: "method_not_allowed" });
         const target = await this.bindings.describeOwner(owner);
         const capabilities = await this.store.capabilities(owner);
         const current = await this.bindings.describeOwner(owner);
@@ -110,14 +116,14 @@ export class RecordingArchiveRuntime {
             || current.root !== target.root || current.storageNamespaceId !== target.storageNamespaceId
             || capabilities.storageNamespaceId !== target.storageNamespaceId
             || !Number.isSafeInteger(current.bindingRevision) || current.bindingRevision < 1) {
-          json(503, { code: "archive_binding_changed" }); return true;
+          return json(503, { code: "archive_binding_changed" });
         }
-        json(200, { ...capabilities, bindingRevision: current.bindingRevision, uploadAllowed: true }); return true;
+        guard(); return json(200, { ...capabilities, bindingRevision: current.bindingRevision, uploadAllowed: true });
       }
-      if (url.pathname === `${prefix}/recordings`) {
-        if (request.method !== "GET") { json(405, { code: "method_not_allowed" }); return true; }
+      if (input.route.key === "archive.recordings.list") {
+        if (request.method !== "GET") return json(405, { code: "method_not_allowed" });
         const query: RecordingArchiveCatalogQuery = {};
-        for (const key of url.searchParams.keys()) if (!["cursor", "limit", "from", "to", "source"].includes(key) || url.searchParams.getAll(key).length !== 1) throw new RecordingArchiveCatalogError("invalid_query", 400);
+        for (const key of url.searchParams.keys()) if (!Object.hasOwn(archiveCatalogQuerySchema.properties, key) || url.searchParams.getAll(key).length !== 1) throw new RecordingArchiveCatalogError("invalid_query", 400);
         for (const key of ["limit", "from", "to"] as const) {
           const value = url.searchParams.get(key);
           if (value !== null) { if (!/^\d+$/.test(value)) throw new RecordingArchiveCatalogError("invalid_query", 400); query[key] = Number(value); }
@@ -135,27 +141,25 @@ export class RecordingArchiveRuntime {
             items[index] = Object.assign(row, { asrState: processing.state }, processing.text !== undefined ? { text: processing.text } : {}, processing.jobKey !== undefined ? { jobKey: processing.jobKey } : {}, processing.processingVersion !== undefined ? { processingVersion: processing.processingVersion } : {});
           }
         }));
-        json(200, { ...page, items }); return true;
+        guard(); return json(200, { ...page, items });
       }
-      const processingRoute = /^\/api\/resource-cache\/data\/recordings\/([A-Za-z0-9_-]{1,128})\/processing$/.exec(url.pathname);
-      if (processingRoute) {
-        if (request.method !== "GET") { json(405, { code: "method_not_allowed" }); return true; }
-        if (url.searchParams.size) { json(400, { code: "invalid_query" }); return true; }
-        const recordId = processingRoute[1];
+      if (input.route.key === "archive.processing.read") {
+        if (request.method !== "GET") return json(405, { code: "method_not_allowed" });
+        if (url.searchParams.size) return json(400, { code: "invalid_query" });
+        const recordId = input.path.recordId!;
         let manifest: RecordingManifest;
         try { manifest = await this.store.getManifest(owner, recordId); }
-        catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") { json(404, { code: "archive_not_found" }); return true; } throw error; }
+        catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return json(404, { code: "archive_not_found" }); throw error; }
         const manifestHash = recordingManifestHash(manifest);
-        json(200, { recordId, manifestHash, ...await this.processing(owner, recordId, manifestHash) }); return true;
+        const processing = await this.processing(owner, recordId, manifestHash); guard(); return json(200, { recordId, manifestHash, ...processing });
       }
       // Preserve the exact authenticated identity; never reselect a worker or trust body owner fields.
-      const handler = recordingArchiveHandler({ store: this.store, authorize: () => owner, readOnly: this.options.readOnly }, !!object);
-      if (!handler(request, url, response)) json(404, { code: "archive_route_not_found" });
-      return true;
+      const result = await runRecordingArchiveOperation({ store: this.store, authorize: () => owner, readOnly: this.options.readOnly }, input);
+      guard(); return result;
     } catch (error) {
-      if (!response.headersSent) json(error instanceof RecordingArchiveCatalogError ? error.statusCode : 503, { code: error instanceof RecordingArchiveCatalogError ? error.code : "archive_unavailable" });
-      else response.destroy();
-      return true;
+      try { guard(); } catch (revoked) { error = revoked; }
+      if ((error as { status?: number })?.status === 403) return json(403, { code: "archive_access_denied" });
+      return json(error instanceof RecordingArchiveCatalogError ? error.statusCode : 503, { code: error instanceof RecordingArchiveCatalogError ? error.code : "archive_unavailable" });
     }
   }
   /** Stops new work and joins already-started filesystem recovery; no abandoned background writes. */

@@ -60,8 +60,6 @@ const form = reactive({
   heartbeatSkipWhenAgentBusy: false,
   webhookPort: 8790,
   webhookPath: "/webhook",
-  fenneNoteWebhookPort: 8790,
-  fenneNoteWebhookPath: "/fennenote",
   xiaoaiWebhookPort: 8790,
   xiaoaiWebhookPath: "/xiaoai",
   rabiLinkWebhookPort: 8790,
@@ -89,7 +87,6 @@ const adapterChoices: Array<{ type: MessageAdapterType; title: string; note: str
   { type: "napcat", title: "NapCat / OneBot", note: "QQ 群聊、私聊实时入口", icon: "mdi-message-badge-outline" },
   { type: "wecom", title: "企业微信 / WeCom", note: "企业微信群聊双向入口", icon: "mdi-domain" },
   { type: "heartbeat", title: "定时触发", note: "按固定间隔投递内部提醒", icon: "mdi-timer-outline" },
-  { type: "fennenote", title: "FenneNote / 芬妮笔记", note: "桌面语音笔记转写入口", icon: "mdi-note-edit-outline" },
   { type: "webhook", title: "通用 Webhook", note: "没有专用消息端时的通用 POST 兜底入口", icon: "mdi-webhook" }
 ];
 
@@ -484,14 +481,12 @@ function selectedWebhookAdapters(): MessageAdapterType[] {
 }
 
 function webhookPortFor(type: MessageAdapterType): number {
-  if (type === "fennenote") return Number(form.fenneNoteWebhookPort || form.webhookPort || form.gatewayPort || 8790);
   if (type === "xiaoai") return Number(form.xiaoaiWebhookPort || form.webhookPort || form.gatewayPort || 8790);
   if (type === "rabilink") return Number(form.rabiLinkWebhookPort || form.webhookPort || form.gatewayPort || 8790);
   return Number(form.webhookPort || form.gatewayPort || 8790);
 }
 
 function webhookPathFor(type: MessageAdapterType): string {
-  if (type === "fennenote") return form.fenneNoteWebhookPath || adapterDefaultWebhookPath(type);
   if (type === "xiaoai") return form.xiaoaiWebhookPath || adapterDefaultWebhookPath(type);
   if (type === "rabilink") return form.rabiLinkWebhookPath || adapterDefaultWebhookPath(type);
   return form.webhookPath || adapterDefaultWebhookPath(type);
@@ -522,16 +517,14 @@ function callbackHostFor(type: MessageAdapterType): string {
 
 function setWebhookPort(type: MessageAdapterType, value: unknown): void {
   const port = Number(value || 0);
-  if (type === "fennenote") form.fenneNoteWebhookPort = port;
-  else if (type === "xiaoai") form.xiaoaiWebhookPort = port;
+  if (type === "xiaoai") form.xiaoaiWebhookPort = port;
   else if (type === "rabilink") form.rabiLinkWebhookPort = port;
   else form.webhookPort = port;
 }
 
 function setWebhookPath(type: MessageAdapterType, value: unknown): void {
   const path = String(value || "");
-  if (type === "fennenote") form.fenneNoteWebhookPath = path;
-  else if (type === "xiaoai") form.xiaoaiWebhookPath = path;
+  if (type === "xiaoai") form.xiaoaiWebhookPath = path;
   else if (type === "rabilink") form.rabiLinkWebhookPath = path;
   else form.webhookPath = path;
 }
@@ -550,7 +543,6 @@ function callbackUrl(type: MessageAdapterType = selectedWebhookAdapter()): strin
 }
 
 function webhookTestEventType(type: MessageAdapterType): string {
-  if (type === "fennenote") return "fennenote.transcript";
   if (type === "xiaoai") return "xiaoai.transcript";
   if (type === "rabilink") return "rabilink.message";
   return "webhook.text";
@@ -562,9 +554,6 @@ function webhookCurl(type: MessageAdapterType = selectedWebhookAdapter()): strin
   return `curl -X POST "${callbackUrl(type)}" -H "content-type: application/json" -d "{\"source\":\"${source}\",\"type\":\"${eventType}\",\"message\":\"hello from RabiRoute\"}"`;
 }
 function webhookSetupHint(type: MessageAdapterType): string {
-  if (type === "fennenote") {
-    return "需要先安装并运行 FenneNote/芬妮笔记，再把语音转写 webhook 指到这个地址；需要播报回复时再接 OumuQ/TTS worker。";
-  }
   if (type === "xiaoai") {
     return "需要小爱桥接层：PC 侧 xiaoai-rabiroute 服务 + 音箱侧 open-xiaoai/xiaogpt/自定义桥，把语音文本转发到这个地址。";
   }
@@ -577,7 +566,6 @@ function webhookSetupHint(type: MessageAdapterType): string {
 function webhookSetupDocUrl(type: MessageAdapterType): string {
   if (type === "xiaoai") return "https://github.com/vb2250158/RabiRoute/blob/main/docs/xiaoai-integration/xiaoai-rabiroute-intercept-route.md";
   if (type === "rabilink") return "https://github.com/vb2250158/RabiRoute/blob/main/docs/rabilink-relay-server.md";
-  if (type === "fennenote") return "https://github.com/vb2250158/RabiRoute/blob/main/docs/voice-interaction-workstation.md";
   return "https://github.com/vb2250158/RabiRoute/blob/main/docs/configuration.md";
 }
 
@@ -811,8 +799,6 @@ function syncFromGateway() {
   form.heartbeatSkipWhenAgentBusy = gateway?.heartbeatSkipWhenAgentBusy === true;
   form.webhookPort = Number(gateway?.webhookPort || gateway?.gatewayPort || 8790);
   form.webhookPath = gateway?.webhookPath || "/webhook";
-  form.fenneNoteWebhookPort = Number(gateway?.fenneNoteWebhookPort || gateway?.webhookPort || gateway?.gatewayPort || 8790);
-  form.fenneNoteWebhookPath = gateway?.fenneNoteWebhookPath || "/fennenote";
   form.xiaoaiWebhookPort = Number(gateway?.xiaoaiWebhookPort || gateway?.webhookPort || gateway?.gatewayPort || 8790);
   form.xiaoaiWebhookPath = gateway?.xiaoaiWebhookPath || "/xiaoai";
   form.rabiLinkWebhookPort = Number(gateway?.rabiLinkWebhookPort || gateway?.webhookPort || gateway?.gatewayPort || 8790);

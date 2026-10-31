@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { userFacingError } from "../userFacingError";
 import { computed, onMounted, ref } from "vue";
-import type { AgentInstance } from "@shared/agentInstance";
+import { agentInstanceDisplayName, type AgentInstance } from "@shared/agentInstance";
 import InstanceAgentSettings from "../components/InstanceAgentSettings.vue";
 import RemoteTerminalDialog from "../components/RemoteTerminalDialog.vue";
 import { routeScopedAdaptersPath } from "../routeScopedNavigation";
@@ -54,7 +54,6 @@ const enrollmentOpen = ref(false);
 const issuingTicket = ref(false);
 const ticketExpiresAt = ref("");
 const targetPlatform = ref<LanAgentBootstrapPlatform>();
-const authorization = ref<{ nodes: Array<{ nodeId: string; enabledAgentIds: string[] }> }>();
 const managerUrl = ref(window.location.origin);
 const connectionToken = ref("");
 const connectionAvailable = ref(false);
@@ -92,6 +91,17 @@ async function saveName(): Promise<void> {
   } finally {
     savingName.value = false;
   }
+}
+
+const enablingInstanceId = ref("");
+async function setInstanceEnabled(instance: AgentInstance, enabled: unknown): Promise<void> {
+  if (typeof enabled !== "boolean" || enablingInstanceId.value) return;
+  enablingInstanceId.value = instance.instanceId; error.value = "";
+  try {
+    await readJson(await fetch(`/api/lan-agent/instances/${encodeURIComponent(instance.instanceId)}/enabled`, { method: "PUT", headers: { "content-type": "application/json", "x-rabiroute-webgui-token": connectionToken.value }, body: JSON.stringify({ enabled, expectedEnabled: instance.enabled !== false }) }));
+    await refresh();
+    if (instances.value.find(item => item.instanceId === instance.instanceId)?.enabled !== enabled) throw new Error("实例开关保存结果未确认，请刷新核对。");
+  } catch (reason) { error.value = userFacingError(reason); } finally { enablingInstanceId.value = ""; }
 }
 
 async function copyInstallPrompt(): Promise<void> {
@@ -145,7 +155,6 @@ async function refresh(): Promise<void> {
     connectionAvailable.value = data.enabled === true && data.listeningOnLan === true;
     const instanceCatalog = await readJson(await fetch("/api/lan-agent/instances", { cache: "no-store", headers: { "x-rabiroute-webgui-token": connectionToken.value } }));
     instances.value = instanceCatalog.instances as AgentInstance[];
-    authorization.value = instanceCatalog.authorization as typeof authorization.value;
     if (!data.enabled) { nodes.value = []; tasks.value = []; return; }
     if (["localhost", "127.0.0.1", "[::1]"].includes(window.location.hostname) && data.urls?.[0]) managerUrl.value = new URL(data.urls[0].url).origin;
     const body = await readJson(await fetch("/api/lan-agent/nodes", { cache: "no-store", headers: { "x-rabiroute-webgui-token": connectionToken.value } }));
@@ -194,12 +203,12 @@ onMounted(() => { void refresh(); });
     </div>
 
     <v-alert v-if="error" type="error" variant="tonal" class="mb-4">{{ error }}</v-alert>
-    <RemoteTerminalDialog v-if="terminalInstance" :key="terminalInstance.instanceId" :instance-id="terminalInstance.instanceId" :name="terminalInstance.name || terminalInstance.address || '远端电脑'" :token="connectionToken" @close="terminalInstance = undefined" />
+    <RemoteTerminalDialog v-if="terminalInstance" :key="terminalInstance.instanceId" :instance-id="terminalInstance.instanceId" :name="agentInstanceDisplayName(terminalInstance)" :token="connectionToken" @close="terminalInstance = undefined" />
     <v-dialog :model-value="!!namingInstance" :persistent="savingName" max-width="480" @update:model-value="value => { if (!value && !savingName) namingInstance = undefined; }">
       <v-card title="修改名称">
         <v-card-text>
           <p class="text-caption mb-3">{{ namingInstance?.address || namingInstance?.instanceId }}</p>
-          <v-text-field v-model="nodeName" label="远端智能体名称" hint="留空恢复默认名称；离线也可修改。" persistent-hint maxlength="80" counter="80" autofocus :disabled="savingName" @keydown.enter.prevent="saveName" />
+          <v-text-field v-model="nodeName" label="电脑名称" :placeholder="namingInstance?.hostname || namingInstance?.instanceId" hint="留空使用电脑名；离线也可修改。" persistent-hint maxlength="80" counter="80" autofocus :disabled="savingName" @keydown.enter.prevent="saveName" />
           <v-alert v-if="nameError" type="error" variant="tonal" class="mt-3">{{ nameError }}</v-alert>
         </v-card-text>
         <v-card-actions><v-spacer /><v-btn :disabled="savingName" @click="namingInstance = undefined">取消</v-btn><v-btn color="primary" :loading="savingName" @click="saveName">保存名称</v-btn></v-card-actions>
@@ -211,12 +220,12 @@ onMounted(() => { void refresh(); });
       <v-card-text>
         <ol class="pl-5 mb-3">
           <li>选择目标电脑系统，复制对应的接入提示词。</li>
-          <li>粘贴给目标电脑上的智能体，让它下载并配置环境。</li>
-          <li>电脑上线后可直接使用电脑接口；需要消息执行时再添加关联智能体。</li>
+          <li>粘贴给目标电脑上的智能体，先检查已有安装，再接入、恢复或升级。</li>
+          <li>电脑上线后可直接使用电脑接口；每次调用明确指定 Agent 类型和完整会话 ID。</li>
         </ol>
         <v-text-field v-model="managerUrl" label="目标电脑可访问的 RabiRoute 地址" hint="使用本机 RabiRoute 的局域网地址" density="compact" persistent-hint class="mb-2" />
         <v-select v-model="targetPlatform" :items="lanAgentBootstrapPlatforms" label="目标电脑系统" placeholder="请选择 Windows、Mac 或 Linux" item-title="title" item-value="value" :disabled="issuingTicket" density="compact" @update:model-value="copied = false" />
-        <p class="text-caption mb-3">只安装电脑客户端，无需关联安装时使用的智能体。后续每次投递明确指定类型和完整会话 Id。</p>
+        <p class="text-caption mb-3">已有安装保留节点、凭据、任务和工作目录；验证新版运行后清理旧程序与重复启动项。首次接入只安装电脑客户端，无需登记或绑定智能体。</p>
         <v-btn prepend-icon="mdi-content-copy" color="primary" :loading="issuingTicket" :disabled="loading || issuingTicket || !targetPlatform || !connectionAvailable || !connectionToken || !releasePublicKeySha256" @click="copyInstallPrompt">复制接入提示词</v-btn>
         <p v-if="!connectionAvailable" class="text-caption mt-2">接入其他电脑前，请在设置中开启局域网访问，然后重启 RabiRoute。</p>
         <p class="text-caption mt-2">提示词含一次性票据，30 分钟内有效，成功兑换后立即失效。只粘贴到目标电脑的私密智能体任务中，无需手填管理密钥。</p>
@@ -240,7 +249,7 @@ onMounted(() => { void refresh(); });
     <v-expansion-panels multiple>
       <v-expansion-panel v-for="instance in instances" :key="instance.instanceId">
         <v-expansion-panel-title>
-          <span class="instance-title">{{ instance.local ? "实例：本机" : `${instance.name || '远端智能体'}（${instance.address || "离线"}）` }}</span>
+          <span class="instance-title">{{ instance.local ? "实例：本机" : `${agentInstanceDisplayName(instance)}（${instance.address || "离线"}）` }}</span>
           <v-chip class="ml-3" size="small" :color="instance.connected ? 'success' : 'default'">{{ instance.connected ? "在线" : "离线" }}</v-chip>
           <v-btn v-if="!instance.local" class="ml-2" icon="mdi-pencil" size="small" variant="text" title="修改名称" aria-label="修改名称" @click.stop="editName(instance)" />
         </v-expansion-panel-title>
@@ -249,15 +258,16 @@ onMounted(() => { void refresh(); });
             <v-expansion-panel v-for="agent in instance.agents" :key="agent.agentId">
               <v-expansion-panel-title>{{ agent.name }}</v-expansion-panel-title>
               <v-expansion-panel-text>
-                <InstanceAgentSettings v-if="!instance.local || ['codex-desktop', 'dsh'].includes(agent.provider)" :instance="instance" :agent="agent" :authorization="authorization" @saved="refresh" />
+                <InstanceAgentSettings v-if="!instance.local || ['codex-desktop', 'dsh'].includes(agent.provider)" :instance="instance" :agent="agent" @saved="refresh" />
                 <v-btn v-for="route in agentRoutes(instance, agent.agentId, agent.routeId)" :key="route.id" class="mt-3 mr-2" :to="routeScopedAdaptersPath(route.id)">{{ route.routeName || route.id }}：路由与智能体设置</v-btn>
               </v-expansion-panel-text>
             </v-expansion-panel>
           </v-expansion-panels>
-          <p v-if="!instance.agents.length" class="text-body-2 my-3">{{ instance.local ? '此实例还没有智能体。' : '未关联智能体；电脑客户端在线时仍可使用电脑接口，可稍后添加智能体。' }}</p>
+          <p v-if="!instance.agents.length" class="text-body-2 my-3">{{ instance.local ? '此实例还没有智能体。' : '按每次请求的 Agent 类型和完整会话 ID 使用执行程序；可按需配置连接参数。' }}</p>
           <template v-if="!instance.local">
+            <v-switch :model-value="instance.enabled !== false" label="是否启用Agent" hint="控制整个远端实例，默认启用；启用后可直接使用全部公开接口。" persistent-hint :loading="enablingInstanceId === instance.instanceId" :disabled="!!enablingInstanceId" @update:model-value="setInstanceEnabled(instance, $event)" />
             <v-btn class="mt-3 mr-2" :disabled="!instance.connected" prepend-icon="mdi-console" @click="terminalInstance = instance">远端终端</v-btn>
-            <v-btn class="mt-3 mr-2" :disabled="!instance.connected" @click="addingInstanceId = addingInstanceId === instance.instanceId ? '' : instance.instanceId">添加智能体</v-btn>
+            <v-btn class="mt-3 mr-2" :disabled="!instance.connected" @click="addingInstanceId = addingInstanceId === instance.instanceId ? '' : instance.instanceId">配置执行程序</v-btn>
             <InstanceAgentSettings v-if="addingInstanceId === instance.instanceId" class="mt-4" :instance="instance" :agent="{ agentId: '', name: 'Agent', provider: instance.agents[0]?.provider || 'codex-desktop', enabled: true }" @saved="addingInstanceId = ''; refresh()" />
             <v-btn v-for="node in nodes.filter(node => node.nodeId === instance.instanceId)" :key="node.nodeId" class="mt-3" :disabled="!node.connected" :loading="updatingNodeId === node.nodeId" @click="requestUpdate(node)">更新连接程序至 {{ releaseVersion }}</v-btn>
           </template>
@@ -271,7 +281,7 @@ onMounted(() => { void refresh(); });
         <thead><tr><th>节点</th><th>状态</th><th>更新时间</th><th>结果</th></tr></thead>
         <tbody>
           <tr v-for="task in tasks" :key="task.taskId">
-            <td :title="task.nodeId">{{ instances.find(instance => instance.instanceId === task.nodeId)?.name || task.nodeId }}</td><td>{{ task.status }}</td><td>{{ formatTime(task.updatedAt) }}</td><td>{{ task.error || task.result || "—" }}</td>
+            <td :title="task.nodeId">{{ agentInstanceDisplayName(instances.find(instance => instance.instanceId === task.nodeId) || { instanceId: task.nodeId }) }}</td><td>{{ task.status }}</td><td>{{ formatTime(task.updatedAt) }}</td><td>{{ task.error || task.result || "—" }}</td>
           </tr>
           <tr v-if="!tasks.length"><td colspan="4" class="lan-muted">暂无任务记录。</td></tr>
         </tbody>

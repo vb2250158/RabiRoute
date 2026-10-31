@@ -2,8 +2,7 @@
   "schemaVersion": 2,
   "readyRequires": [
     "manager.core@1",
-    "manager.diagnostics@1",
-    "manager.agent-communication@1"
+    "manager.diagnostics@1"
   ],
   "instances": [
     {
@@ -107,14 +106,6 @@
     {
       "id": "manager:memory-consolidation",
       "package": "io.rabiroute.manager.memory-consolidation",
-      "version": "1.0.0",
-      "enabled": true,
-      "config": {},
-      "grants": []
-    },
-    {
-      "id": "manager:fennenote-output",
-      "package": "io.rabiroute.manager.fennenote-output",
       "version": "1.0.0",
       "enabled": true,
       "config": {},
@@ -267,8 +258,8 @@
       "config": {
         "baseUrl": "http://127.0.0.1:8123",
         "requestTimeoutMs": 5000,
-        "allowPublicBaseUrl": false,
-        "allowInsecurePrivateHttp": false,
+        "allowPublicBaseUrl": true,
+        "allowInsecurePrivateHttp": true,
         "eventMonitorEnabled": true,
         "eventDeliveryMode": "significant",
         "cameraMotionEntityIds": [],

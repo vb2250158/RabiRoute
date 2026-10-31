@@ -1,25 +1,14 @@
 import type http from "node:http";
 import { LanAgentNodeNameConflictError, type LanAgentRegistry } from "./lanAgentRegistry.js";
-import { LanAgentReleaseSelectionConflictError, type LanAgentReleaseStore } from "./lanAgentReleaseStore.js";
+import type { LanAgentReleaseStore } from "./lanAgentReleaseStore.js";
 import type { InstanceAgent } from "../shared/agentInstance.js";
 import type { LanAgentAuthority } from "./lanAgentAuthority.js";
 import type { AgentResourceCatalog } from "./agentResourceCatalog.js";
-import { evaluateLanAgentRequest, assertTrustedLanAgentPrincipal } from "./lanAgentRequestAccess.js";
-import { listAgentApiOperations } from "./agentApiPolicy.js";
+import type { ApiOperationDefinition, ApiOperationInput, ApiOperationResult } from "./apiOperationContract.js";
+import { assertTrustedLanAgentPrincipal } from "./lanAgentRequestAccess.js";
 import { hasAuthenticatedConnectionRequest } from "./connectionRequestAccess.js";
-import { handleLanAgentTerminalApi } from "./lanAgentTerminalRoutes.js";
-import { handleLanAgentComputerApi } from "./lanAgentComputerRoutes.js";
-
-export function summarizeAgentCapabilityCoverage(operations = listAgentApiOperations()) {
-  const baseline = operations.filter(item => item.help.contractLevel === "baseline").length;
-  const verified = operations.filter(item => item.help.contractLevel === "verified"
-    && item.help.coverage.exactRequestSchema === true
-    && item.help.coverage.exactResponseSchema === true
-    && item.help.coverage.missing.length === 0).length;
-  const unverified = operations.length - baseline - verified;
-  const missing = [...new Set(operations.flatMap(item => item.help.coverage.missing))];
-  return Object.freeze({ operationCount: operations.length, baselineCount: baseline, verifiedCount: verified, unverifiedCount: unverified, missing: Object.freeze(missing) });
-}
+import { LanAgentReleaseSelectionConflictError } from "./lanAgentReleaseStore.js";
+import { LAN_AGENT_MANAGEMENT_ROUTES, lanAgentManagementContract, type ManagementRoute } from "./lanAgentManagementContract.js";
 
 export type LanAgentRoutesContext = {
   readJsonBody: <T>(request: http.IncomingMessage) => Promise<T>;
@@ -33,299 +22,134 @@ export type LanAgentRoutesContext = {
   managerIdentity?: () => { guid?: string; applicationGenerationId: string; managerInstanceId: string; health: unknown };
   releases: LanAgentReleaseStore;
   localAgents?: () => InstanceAgent[];
-  handleInstanceHook?: (instanceId: string, agentId: string, body: Record<string, unknown>, request: http.IncomingMessage) => Promise<unknown>;
-  manageLocalAgent?: (agentId: string, operation: string, body: Record<string, unknown>) => Promise<unknown>;
+  manageLocalAgent?: (agentId: string, operation: string, body: Record<string, unknown>, assertAuthorized?: () => void) => Promise<unknown>;
 };
 
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+
+export function createLanAgentManagementOperations(context: LanAgentRoutesContext): readonly ApiOperationDefinition[] {
+  return LAN_AGENT_MANAGEMENT_ROUTES.map(route => ({ contract: lanAgentManagementContract(route), handler: input => run(context, route, input) }));
 }
 
-function agentUnauthorized(
-  response: http.ServerResponse,
-  context: LanAgentRoutesContext,
-  error: "LAN_AGENT_TOKEN_REQUIRED" | "LAN_AGENT_MANAGEMENT_AUTH_REQUIRED" = "LAN_AGENT_TOKEN_REQUIRED"
-): void {
-  response.setHeader("cache-control", "no-store");
-  response.setHeader("www-authenticate", "Bearer realm=\"RabiRoute LAN Agent\"");
-  context.jsonResponse(response, 401, {
-    code: -1,
-    error,
-    message: error === "LAN_AGENT_MANAGEMENT_AUTH_REQUIRED"
-      ? "Rabi Agent management requires a verified connection identity."
-      : "Rabi Agent resource access requires the LAN connection Token."
-  });
-}
-
-function writeAsset(response: http.ServerResponse, content: Buffer, assetPath: string): void {
-  response.statusCode = 200;
-  response.setHeader("cache-control", "no-store");
-  response.setHeader("content-type", assetPath.endsWith(".mjs") ? "text/javascript; charset=utf-8"
-    : assetPath.endsWith(".dll") ? "application/octet-stream"
-    : assetPath.endsWith(".ps1") ? "text/plain; charset=utf-8" : "application/json; charset=utf-8");
-  response.setHeader("content-length", content.byteLength);
-  response.end(content);
-}
-
-export function handleLanAgentApi(
-  request: http.IncomingMessage,
-  requestUrl: URL,
-  response: http.ServerResponse,
-  context: LanAgentRoutesContext
-): boolean {
-  const nodeAccess = context.authority
-    ? evaluateLanAgentRequest(request, context.authority, context.enabled?.() === true)
-    : { kind: "unrelated" as const };
-  if (nodeAccess.kind === "denied") {
-    context.jsonResponse(response, nodeAccess.status, { code: -1, error: nodeAccess.error });
-    return true;
-  }
-  if (handleLanAgentTerminalApi(request, requestUrl, response, {
-    registry: context.registry, readBody: context.readJsonBody, json: context.jsonResponse,
-    authorized: () => hasAuthenticatedConnectionRequest(request) || context.isManagementRequestAuthorized(request, requestUrl)
-  })) return true;
-  if (handleLanAgentComputerApi(request, requestUrl, response, {
-    registry: context.registry, readBody: context.readJsonBody, json: context.jsonResponse,
-    authorized: () => hasAuthenticatedConnectionRequest(request) || context.isManagementRequestAuthorized(request, requestUrl)
-  })) return true;
-  if (request.method === "GET" && requestUrl.pathname === "/api/lan-agent/self" && context.authority) {
-    const token = typeof request.headers.authorization === "string" ? request.headers.authorization.match(/^Bearer\s+(.+)$/i)?.[1] ?? "" : "";
-    const identity = context.enabled?.() === true ? context.authority.authenticate(token) : null;
-    if (!identity) { agentUnauthorized(response, context); return true; }
-    const instance = context.registry.listInstances().find(item => item.instanceId === identity.nodeId);
-    context.jsonResponse(response, 200, { code: 0, data: { ...context.managerIdentity?.(), nodeId: identity.nodeId, connected: instance?.connected ?? false, agents: instance?.agents ?? [] } });
-    return true;
-  }
-  if (request.method === "GET" && requestUrl.pathname === "/api/lan-agent/capabilities") {
-    if (nodeAccess.kind !== "agent" && !(hasAuthenticatedConnectionRequest(request) || context.isManagementRequestAuthorized(request, requestUrl))) { agentUnauthorized(response, context); return true; }
-    context.jsonResponse(response, 200, {
-      code: 0,
-      schemaVersion: "1",
-      contractRevision: "agent-api-help-1",
-      generatedAt: new Date().toISOString(),
-      operations: listAgentApiOperations(),
-      coverage: summarizeAgentCapabilityCoverage(),
-      help: {
-        summary: "每个 operation 都包含 help；按 operationId 或 method+pathTemplate 选择调用合同。",
-        refreshRule: "每次 Manager generation 变化或接口失败后重新读取；不要缓存渠道或参数目录。",
-        errorRule: "按 errorCode/help/repair 修正；超时、5xx 或写入不确定时先读取回执/资源，不自动重放。"
-      },
-      resources: "/api/lan-agent/resources"
-    });
-    return true;
-  }
-  if (request.method === "GET" && ["/api/lan-agent/resources", "/api/lan-agent/resources/read"].includes(requestUrl.pathname)) {
-    if (nodeAccess.kind !== "agent" && !(hasAuthenticatedConnectionRequest(request) || context.isManagementRequestAuthorized(request, requestUrl))) { agentUnauthorized(response, context); return true; }
-    if (!context.resources) { context.jsonResponse(response, 503, { code: -1, message: "Agent resources unavailable." }); return true; }
-    const work = requestUrl.pathname.endsWith("/read") ? context.resources.read(requestUrl.searchParams.get("id") ?? "") : context.resources.list();
-    void work.then(data => context.jsonResponse(response, 200, { code: 0, data }))
-      .catch(() => context.jsonResponse(response, 400, { code: -1, message: "Agent resource is unavailable or disallowed." }));
-    return true;
-  }
-  if (requestUrl.pathname === "/api/lan-agent/enrollments" && request.method === "POST" && context.authority) {
-    if (!(hasAuthenticatedConnectionRequest(request) || context.isManagementRequestAuthorized(request, requestUrl))) { agentUnauthorized(response, context); return true; }
-    response.setHeader("cache-control", "no-store");
-    context.jsonResponse(response, 201, { code: 0, data: context.authority.issueBootstrapTicket() });
-    return true;
-  }
-  if (requestUrl.pathname === "/api/lan-agent/enroll" && request.method === "POST" && context.authority) {
-    if (context.enabled?.() !== true) { agentUnauthorized(response, context); return true; }
-    response.setHeader("cache-control", "no-store");
-    void context.readJsonBody<Record<string, unknown>>(request).then(body => {
-      if (body.enrollmentSecret !== undefined && typeof body.enrollmentSecret !== "string") throw new Error("Invalid enrollment recovery secret.");
-      const credential = context.authority!.enroll(String(body.ticket ?? ""), String(body.nodeId ?? ""), body.enrollmentSecret as string | undefined);
-      context.jsonResponse(response, 201, { code: 0, data: credential });
-    }).catch(() => context.jsonResponse(response, 400, { code: -1, message: "Enrollment could not be completed. Keep the local recovery record; if the ticket expired, copy a fresh connection prompt. No separate Agent approval is required." }));
-    return true;
-  }
-  if (requestUrl.pathname === "/api/lan-agent/instances" && request.method === "GET") {
-    if (!(hasAuthenticatedConnectionRequest(request) || context.isManagementRequestAuthorized(request, requestUrl))) { agentUnauthorized(response, context, "LAN_AGENT_MANAGEMENT_AUTH_REQUIRED"); return true; }
-    const authorization = context.authority?.getSnapshot();
-    if (authorization) response.setHeader("etag", `"${authorization.revision}"`);
-    context.jsonResponse(response, 200, { code: 0, instances: context.registry.listInstances(context.localAgents?.()), authorization });
-    return true;
-  }
-  const nameMatch = requestUrl.pathname.match(/^\/api\/lan-agent\/instances\/([^/]+)\/name$/);
-  if (request.method === "PUT" && nameMatch) {
-    if (!context.isManagementRequestAuthorized(request, requestUrl)) {
-      agentUnauthorized(response, context, "LAN_AGENT_MANAGEMENT_AUTH_REQUIRED");
-      return true;
-    }
-    void context.readJsonBody<Record<string, unknown>>(request).then(body => {
-      if (typeof body?.expectedName !== "string") throw new Error("请先读取节点当前名称，再提交 expectedName。");
-      const result = context.registry.setNodeName(decodeURIComponent(nameMatch[1]!), body.name, body.expectedName);
-      context.jsonResponse(response, 200, { code: 0, result });
-    }).catch(error => context.jsonResponse(response, error instanceof LanAgentNodeNameConflictError ? 409 : 400, { code: -1, message: errorMessage(error) }));
-    return true;
-  }
-  const grantMatch = requestUrl.pathname.match(/^\/api\/lan-agent\/instances\/([^/]+)\/agents\/([^/]+)\/authorization$/);
-  if (grantMatch && request.method === "PUT" && context.authority) {
-    if (!(hasAuthenticatedConnectionRequest(request) || context.isManagementRequestAuthorized(request, requestUrl))) { agentUnauthorized(response, context); return true; }
-    const etag = request.headers["if-match"];
-    if (typeof etag !== "string" || !/^"[a-f0-9]{64}"$/.test(etag)) {
-      context.jsonResponse(response, 428, { code: -1, message: "Read the instance catalog and supply its strong If-Match revision." }); return true;
-    }
-    const idempotencyKey = request.headers["idempotency-key"];
-    if (typeof idempotencyKey !== "string" || !/^[A-Za-z0-9._:-]{8,128}$/.test(idempotencyKey)) {
-      context.jsonResponse(response, 428, { code: -1, message: "Supply a stable Idempotency-Key (8-128 safe characters)." }); return true;
-    }
-    void context.readJsonBody<Record<string, unknown>>(request).then(body => {
-      const nodeId = decodeURIComponent(grantMatch[1]!);
-      const agentId = decodeURIComponent(grantMatch[2]!);
-      if (typeof body.enabled !== "boolean") throw new Error("Invalid grant.");
-      const validateBinding = (): void => {
-        if (!context.registry.getInstanceAgent(nodeId, agentId)) throw new Error("Unknown instance Agent.");
-        if (body.enabled) {
-          const current = context.registry.getInstanceAgent(nodeId, agentId)!;
-          const binding = body.binding as Partial<InstanceAgent> | undefined;
-          if (!binding || binding.provider !== current.provider || binding.sessionId !== current.sessionId
-            || JSON.stringify(binding.managedSessionIds ?? []) !== JSON.stringify(current.managedSessionIds ?? [])) {
-            throw new Error("Agent binding changed; refresh and explicitly approve its current session before enabling.");
-          }
+async function run(context: LanAgentRoutesContext, route: ManagementRoute, input: ApiOperationInput): Promise<ApiOperationResult> {
+  const headers = { "cache-control": "no-store" };
+  const output = (status: number, body: unknown): ApiOperationResult => ({ status, headers, body });
+  const unauthorized = (management = false): ApiOperationResult => ({ ...output(401, { code: -1,
+    error: management ? "LAN_AGENT_MANAGEMENT_AUTH_REQUIRED" : "LAN_AGENT_TOKEN_REQUIRED",
+    message: "A verified connection identity is required." }), headers: { ...headers, "www-authenticate": 'Bearer realm="RabiRoute LAN Agent"' } });
+  const principal = assertTrustedLanAgentPrincipal(input.request);
+  const exchange = route.key === "enroll.exchange";
+  const allowed = () => exchange ? context.enabled?.() === true
+    : hasAuthenticatedConnectionRequest(input.request) || context.isManagementRequestAuthorized(input.request, input.url);
+  if (!allowed()) return unauthorized(!exchange && route.key !== "self.read");
+  const guard = () => {
+    if (assertTrustedLanAgentPrincipal(input.request) !== principal || !allowed()) throw new Error("Connection identity changed; node request stopped.");
+  };
+  let mutated = false, releaseSelectionCommitted = false, taskId: string | undefined;
+  const body = (input.body ?? {}) as Record<string, unknown>;
+  try {
+    guard();
+    switch (route.key) {
+      case "self.read": {
+        const token = typeof input.request.headers.authorization === "string" ? input.request.headers.authorization.match(/^Bearer\s+(.+)$/i)?.[1] ?? "" : "";
+        const identity = context.enabled?.() === true ? context.authority?.authenticate(token) : null;
+        if (!identity) return unauthorized();
+        const instance = context.registry.listInstances().find(row => row.instanceId === identity.nodeId);
+        guard(); return output(200, { code: 0, data: { ...context.managerIdentity?.(), nodeId: identity.nodeId, connected: instance?.connected ?? false, agents: instance?.agents ?? [] } });
+      }
+      case "enrollments.create": {
+        if (!context.authority) return output(404, { code: -1, message: "Node enrollment owner is unavailable." });
+        // The original issuance endpoint ignores its body, including non-JSON input.
+        input.request.resume(); guard(); mutated = true;
+        const data = context.authority.issueBootstrapTicket();
+        guard(); return output(201, { code: 0, data });
+      }
+      case "enroll.exchange": {
+        if (!context.authority) return output(404, { code: -1, message: "Node enrollment owner is unavailable." });
+        guard(); mutated = true;
+        const data = context.authority.enroll(String(body.ticket ?? ""), String(body.nodeId ?? ""), body.enrollmentSecret as string | undefined);
+        guard(); return output(201, { code: 0, data });
+      }
+      case "instances.list": {
+        const instances = context.registry.listInstances(context.localAgents?.()).map(instance => ({ ...instance, enabled: instance.local || (context.authority?.isNodeEnabled(instance.instanceId) ?? true) }));
+        guard(); return output(200, { code: 0, instances, credentialDiagnostics: context.authority?.getSnapshot().diagnostics ?? [] });
+      }
+      case "instances.enabled": {
+        if (!context.authority) return output(404, { code: -1, message: "Node enrollment owner is unavailable." });
+        const nodeId = input.path.instanceId!;
+        guard(); mutated = true; context.authority.setNodeEnabled(nodeId, body.enabled as boolean, body.expectedEnabled as boolean);
+        // Disabling the caller's own node is an accepted mutation; its revoked lease prevents disclosure.
+        guard(); return output(200, { code: 0, data: { nodeId, enabled: context.authority.isNodeEnabled(nodeId) } });
+      }
+      case "instances.name": {
+        guard(); mutated = true;
+        const result = context.registry.setNodeName(input.path.instanceId!, body.name, body.expectedName as string);
+        guard(); return output(200, { code: 0, result });
+      }
+      case "nodes.list": {
+        const release = context.releases.manifest();
+        const currentNodes = context.registry.listNodes();
+        const digests = context.releases.nodeReleaseDigests(currentNodes.map(node => node.nodeId), release);
+        const nodes = currentNodes.map(node => ({ ...node, releaseDigest: digests.get(node.nodeId)! }));
+        const result = { code: 0, nodes, tasks: context.registry.listTasks(100), releaseVersion: release.version, releasePublicKeySha256: release.publicKeySha256,
+          credentialDiagnostics: context.authority?.getSnapshot().diagnostics ?? [] };
+        guard(); return output(200, result);
+      }
+      case "nodes.update": {
+        const nodeId = input.path.nodeId!;
+        let version = typeof body.version === "string" && body.version.trim() ? body.version.trim() : undefined;
+        if (Object.hasOwn(body, "releaseDigest")) {
+          if (!context.registry.listNodes().some(node => node.nodeId === nodeId && node.connected)) throw new Error("Rabi Agent node is not connected.");
+          const selection = body.releaseDigest;
+          if (selection !== null && typeof selection !== "string" || typeof body.expectedReleaseDigest !== "string") throw new Error("releaseDigest and expectedReleaseDigest are required for node release selection.");
+          // Validate an explicit version before committing a new selection.
+          if (version) throw new Error("Use releaseDigest without version when selecting a node release.");
+          guard();
+          const publication = context.releases.assignRelease(nodeId, selection, body.expectedReleaseDigest);
+          releaseSelectionCommitted = true;
+          version = publication.version;
         }
-      };
-      const receipt = context.authority!.mutateAgentAuthorization({ nodeId, agentId, enabled: body.enabled,
-        ...(body.binding !== undefined ? { binding: { ...(body.binding as InstanceAgent), agentId } } : {}),
-        expectedRevision: etag.slice(1, -1), idempotencyKey, validateBinding });
-      response.setHeader("idempotency-key", idempotencyKey);
-      const snapshot = context.authority!.getSnapshot();
-      response.setHeader("etag", `"${snapshot.revision}"`);
-      context.jsonResponse(response, 200, { code: 0, authorization: snapshot, receipt });
-    }).catch(error => context.jsonResponse(response, errorMessage(error).includes("revision conflict") ? 412 : errorMessage(error).includes("idempotency conflict") ? 409 : 400, { code: -1, message: errorMessage(error) }));
-    return true;
-  }
-  const instanceAction = requestUrl.pathname.match(/^\/api\/lan-agent\/instances\/([^/]+)\/agents(?:\/([^/]+)\/(tasks|configure|scan|threads|hooks|context))?$/);
-  if (instanceAction && request.method === "POST") {
-    const ownHook = nodeAccess.kind === "agent" && instanceAction[3] === "context"
-      && decodeURIComponent(instanceAction[1]!) === nodeAccess.nodeId && decodeURIComponent(instanceAction[2] ?? "") === nodeAccess.agentId;
-    if (!ownHook && !(hasAuthenticatedConnectionRequest(request) || context.isManagementRequestAuthorized(request, requestUrl))) { agentUnauthorized(response, context, "LAN_AGENT_MANAGEMENT_AUTH_REQUIRED"); return true; }
-    void context.readJsonBody<Record<string, unknown>>(request).then(async body => {
-      const instanceId = decodeURIComponent(instanceAction[1]!);
-      const agentId = instanceAction[2] ? decodeURIComponent(instanceAction[2]) : undefined;
-      if (instanceAction[3] === "threads" && (typeof body.agentAdapter !== "string" || !body.agentAdapter.trim())) {
-        throw new Error("Explicit agentAdapter is required for thread operations, including list queries.");
+        version ??= context.releases.manifest(nodeId).version;
+        guard(); mutated = true;
+        const result = context.registry.requestUpdate(nodeId, version, guard);
+        guard(); return output(202, { code: 0, result });
       }
-      if (instanceId === context.registry.localInstanceId) {
-        if (!agentId || !context.manageLocalAgent) throw new Error("Local Agent management is unavailable.");
-        return context.manageLocalAgent(agentId, instanceAction[3] || "configure", body);
+      case "nodes.tasks": {
+        guard(); mutated = true;
+        const task = context.registry.assignTask({ nodeId: input.path.nodeId!, targetAgent: typeof body.targetAgent === "string" ? body.targetAgent : "",
+          agentId: typeof body.agentId === "string" ? body.agentId : undefined, threadId: typeof body.threadId === "string" ? body.threadId : "",
+          message: String(body.message ?? ""), cwd: typeof body.cwd === "string" ? body.cwd : undefined,
+          taskId: typeof body.taskId === "string" ? body.taskId : undefined, idempotencyKey: typeof body.idempotencyKey === "string" ? body.idempotencyKey : undefined }, guard);
+        taskId = task.taskId;
+        const result = await context.registry.waitForTaskAcceptance(taskId); guard(); return output(202, { code: 0, result });
       }
-      if (instanceAction[3] === "context") {
-        if (!agentId || !context.handleInstanceHook) throw new Error("Instance Hook handler is unavailable.");
-        return context.handleInstanceHook(instanceId, agentId, body, request);
-      }
-      if (instanceAction[3] === "tasks") {
-        const agent = context.registry.listInstances().find(instance => instance.instanceId === instanceId)?.agents.find(agent => agent.agentId === agentId);
-        if (!agent) throw new Error("Instance Agent was not found. Refresh the instance catalog.");
-        if (!body.provider || body.provider !== agent.provider) throw new Error("Explicit provider must match the selected instance Agent; query /api/lan-agent/instances.");
-        const task = context.registry.assignTask({ nodeId: instanceId, agentId, targetAgent: agent.provider,
-          threadId: typeof body.threadId === "string" ? body.threadId : "", cwd: typeof body.cwd === "string" ? body.cwd : undefined,
-          message: String(body.message || ""), idempotencyKey: typeof body.idempotencyKey === "string" ? body.idempotencyKey : undefined });
-        return context.registry.waitForTaskAcceptance(task.taskId);
-      }
-      return context.registry.manageAgent(instanceId, instanceAction[3] || "configure", { ...body, agentId }, instanceAction[3] === "hooks" ? 90_000 : 30_000);
-    }).then(result => context.jsonResponse(response, 200, { code: 0, result, ...(instanceAction[3] === "context" ? { data: result } : {}) }))
-      .catch(error => context.jsonResponse(response, 400, { code: -1, message: errorMessage(error) }));
-    return true;
-  }
-  if (request.method === "GET" && requestUrl.pathname === "/api/lan-agent/releases/manifest") {
-    if (!(hasAuthenticatedConnectionRequest(request) || context.isReleaseRequestAuthorized(request))) {
-      agentUnauthorized(response, context);
-      return true;
-    }
-    try {
-      context.jsonResponse(response, 200, { code: 0, release: context.releases.manifest(nodeAccess.kind === "unrelated" ? nodeAccess.releaseNodeId : assertTrustedLanAgentPrincipal(request)?.nodeId) });
-    } catch (error) {
-      context.jsonResponse(response, 503, { code: -1, message: errorMessage(error) });
-    }
-    return true;
-  }
-
-  const releaseAssetMatch = request.method === "GET"
-    ? requestUrl.pathname.match(/^\/api\/lan-agent\/releases\/([^/]+)\/([^/]+)\/(.+)$/)
-    : null;
-  if (releaseAssetMatch) {
-    if (!(hasAuthenticatedConnectionRequest(request) || context.isReleaseRequestAuthorized(request))) {
-      agentUnauthorized(response, context);
-      return true;
-    }
-    try {
-      const version = decodeURIComponent(releaseAssetMatch[1] ?? "");
-      const platform = decodeURIComponent(releaseAssetMatch[2] ?? "");
-      const assetPath = (releaseAssetMatch[3] ?? "").split("/").map(decodeURIComponent).join("/");
-      writeAsset(response, context.releases.readAsset(version, platform, assetPath, nodeAccess.kind === "unrelated" ? nodeAccess.releaseNodeId : assertTrustedLanAgentPrincipal(request)?.nodeId, requestUrl.searchParams.get("release") ?? undefined), assetPath);
-    } catch (error) {
-      context.jsonResponse(response, 404, { code: -1, message: errorMessage(error) });
-    }
-    return true;
-  }
-
-  if (request.method === "GET" && requestUrl.pathname === "/api/lan-agent/nodes") {
-    if (!(hasAuthenticatedConnectionRequest(request) || context.isManagementRequestAuthorized(request, requestUrl))) {
-      agentUnauthorized(response, context, "LAN_AGENT_MANAGEMENT_AUTH_REQUIRED");
-      return true;
-    }
-    const release = context.releases.manifest();
-    const currentNodes = context.registry.listNodes();
-    const releaseDigests = context.releases.nodeReleaseDigests(currentNodes.map(node => node.nodeId), release);
-    context.jsonResponse(response, 200, {
-      code: 0,
-      nodes: currentNodes.map(node => ({ ...node, releaseDigest: releaseDigests.get(node.nodeId) })),
-      tasks: context.registry.listTasks(100),
-      releaseVersion: release.version,
-      releasePublicKeySha256: release.publicKeySha256
-    });
-    return true;
-  }
-
-  const nodeMatch = requestUrl.pathname.match(/^\/api\/lan-agent\/nodes\/([^/]+)\/(update|tasks)$/);
-  if (request.method === "POST" && nodeMatch) {
-    if (!(hasAuthenticatedConnectionRequest(request) || context.isManagementRequestAuthorized(request, requestUrl))) {
-      agentUnauthorized(response, context, "LAN_AGENT_MANAGEMENT_AUTH_REQUIRED");
-      return true;
-    }
-    const nodeId = decodeURIComponent(nodeMatch[1] ?? "");
-    const action = nodeMatch[2] ?? "";
-    const principal = assertTrustedLanAgentPrincipal(request);
-    let releaseSelectionCommitted = false;
-    const guardReleaseSelection = () => {
-      if (assertTrustedLanAgentPrincipal(request) !== principal || !(hasAuthenticatedConnectionRequest(request) || context.isManagementRequestAuthorized(request, requestUrl))) {
-        throw new Error("Connection identity changed; node release selection stopped.");
-      }
-    };
-    void context.readJsonBody<Record<string, unknown>>(request)
-      .then(async body => {
-        if (action === "update") {
-          if (Object.hasOwn(body, "releaseDigest")) {
-            if (!context.registry.listNodes().some(node => node.nodeId === nodeId && node.connected)) throw new Error("Rabi Agent node is not connected.");
-            if ((body.releaseDigest !== null && typeof body.releaseDigest !== "string") || typeof body.expectedReleaseDigest !== "string") throw new Error("releaseDigest and expectedReleaseDigest are required for node release selection.");
-            if (typeof body.version === "string" && body.version.trim()) throw new Error("Use releaseDigest without version when selecting a node release.");
-            guardReleaseSelection();
-            const publication = context.releases.assignRelease(nodeId, body.releaseDigest, body.expectedReleaseDigest);
-            releaseSelectionCommitted = true;
-            guardReleaseSelection();
-            return context.registry.requestUpdate(nodeId, publication.version);
-          }
-          const version = typeof body.version === "string" && body.version.trim()
-            ? body.version.trim()
-            : context.releases.manifest(nodeId).version;
-          return context.registry.requestUpdate(nodeId, version);
+      default: {
+        const instanceId = input.path.instanceId!, agentId = route.key === "agents.create" ? undefined : input.path.agentId;
+        const operation = route.key === "agents.create" ? "configure" : route.key.slice("agents.".length);
+        guard(); let result: unknown;
+        if (instanceId === context.registry.localInstanceId) {
+          if (!agentId || !context.manageLocalAgent) throw new Error("Local Agent management is unavailable.");
+          mutated = true; result = await context.manageLocalAgent(agentId, operation, body, guard);
+        } else if (operation === "tasks") {
+          const provider = typeof body.provider === "string" ? body.provider : "";
+          if (!provider) throw new Error("Explicit provider is required.");
+          mutated = true;
+          const task = context.registry.assignTask({ nodeId: instanceId, targetAgent: provider, threadId: typeof body.threadId === "string" ? body.threadId : "",
+            cwd: typeof body.cwd === "string" ? body.cwd : undefined, message: String(body.message || ""),
+            idempotencyKey: typeof body.idempotencyKey === "string" ? body.idempotencyKey : undefined }, guard);
+          taskId = task.taskId; result = await context.registry.waitForTaskAcceptance(taskId);
+        } else {
+          mutated = operation !== "scan";
+          result = await context.registry.manageAgent(instanceId, operation, { ...body, agentId }, operation === "hooks" ? 90_000 : 30_000, guard);
         }
-        const task = context.registry.assignTask({
-          nodeId,
-          targetAgent: typeof body.targetAgent === "string" ? body.targetAgent : "",
-          agentId: typeof body.agentId === "string" ? body.agentId : undefined,
-          threadId: typeof body.threadId === "string" ? body.threadId : "",
-          message: String(body.message ?? ""),
-          cwd: typeof body.cwd === "string" ? body.cwd : undefined,
-          taskId: typeof body.taskId === "string" ? body.taskId : undefined,
-          idempotencyKey: typeof body.idempotencyKey === "string" ? body.idempotencyKey : undefined
-        });
-        return context.registry.waitForTaskAcceptance(task.taskId);
-      })
-      .then(result => context.jsonResponse(response, 202, { code: 0, result }))
-      .catch(error => context.jsonResponse(response, error instanceof LanAgentReleaseSelectionConflictError ? 409 : 400, { code: -1, message: errorMessage(error), ...(releaseSelectionCommitted ? { uncertain: true, releaseSelectionCommitted: true } : {}) }));
-    return true;
+        guard(); return output(200, { code: 0, result });
+      }
+    }
+  } catch (error) {
+    try { guard(); }
+    catch { return output(403, { code: -1, message: "Connection identity changed; node request stopped.", ...(mutated || releaseSelectionCommitted ? { uncertain: true } : {}), ...(taskId ? { taskId } : {}) }); }
+    if (exchange) return output(400, { code: -1, message: "Enrollment could not be completed. Keep the local recovery record; if the ticket expired, copy a fresh connection prompt. No separate Agent approval is required." });
+    const message = error instanceof Error ? error.message : String(error);
+    return output(error instanceof LanAgentNodeNameConflictError || error instanceof LanAgentReleaseSelectionConflictError || route.key === "instances.enabled" && /conflict/.test(message) ? 409 : 400,
+      { code: -1, message, ...(releaseSelectionCommitted ? { uncertain: true } : {}), ...(taskId ? { uncertain: true, taskId } : {}) });
   }
-
-  return false;
 }

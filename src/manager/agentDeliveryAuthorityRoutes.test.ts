@@ -1,6 +1,6 @@
 import { endpointExecutionOptionsHash } from "../agentRequests/executionOptions.js";
 import assert from "node:assert/strict";
-import type { IncomingMessage, ServerResponse } from "node:http";
+import type { IncomingMessage } from "node:http";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -8,9 +8,13 @@ import test from "node:test";
 import { AgentRequestStore, agentDeliveryPromptHash, type AgentRequestPersistence } from "../agentRequests/store.js";
 import { normalizeAgentRequestEndpoint, type AgentRequestEndpoint } from "../agentRequests/endpoint.js";
 import { executeEndpointAgentDelivery, type EndpointDeliveryOptions, type PreparedEndpointDelivery } from "../agentRequests/endpointDelivery.js";
-import { handleAgentDeliveryAuthority } from "./agentDeliveryAuthorityRoutes.js";
+import { readAgentDeliveryAuthority } from "./agentDeliveryAuthorityRoutes.js";
 import { LanAgentAuthority } from "./lanAgentAuthority.js";
 import { evaluateLanAgentRequest } from "./lanAgentRequestAccess.js";
+import { createCorePublicOperations, type CorePublicOperationsContext } from "./corePublicOperations.js";
+import { ManagerPluginRouteRegistry } from "./managerPluginRouteRegistry.js";
+import { markAuthenticatedConnectionRequest } from "./connectionRequestAccess.js";
+import { assertTrustedLanAgentPrincipal } from "./lanAgentRequestAccess.js";
 import { RabiGlobalConfigStore } from "./globalConfig.js";
 import { createServer } from "node:http";
 import type { AgentDeliveryAuthorityContext } from "./agentDeliveryAuthorityRoutes.js";
@@ -29,16 +33,18 @@ async function query(store: AgentRequestStore, delivery: PreparedEndpointDeliver
   params?: string; request?: IncomingMessage; authorize?: (value: AgentRequestEndpoint) => void;
   context?: Partial<AgentDeliveryAuthorityContext>;
 } = {}) {
-  const headers = new Map<string, unknown>();
-  let status = 0; let body: unknown;
-  const response = { setHeader: (name: string, value: unknown) => headers.set(name, value) } as unknown as ServerResponse;
   const request = options.request ?? { method: "GET", headers: {} } as IncomingMessage;
   const url = new URL(`/api/agent/delivery-authority?${options.params ?? new URLSearchParams({ deliveryId: delivery.deliveryId, generation: delivery.generation })}`, "http://localhost");
-  assert.equal(await handleAgentDeliveryAuthority(request, url, response, { ...options.context, store, authorize: options.authorize ?? (() => {}),
-    jsonResponse: (_response, code, value) => { status = code; body = value; } }), true);
-  assert.equal(headers.get("cache-control"), "no-store");
-  assert.equal(JSON.stringify(body).includes(delivery.prompt), false);
-  return { status, body };
+  let captured = false, original: ReturnType<typeof assertTrustedLanAgentPrincipal>;
+  const result = await readAgentDeliveryAuthority({ deliveryId: url.searchParams.getAll("deliveryId").length === 1 ? url.searchParams.get("deliveryId") : undefined, generation: url.searchParams.getAll("generation").length === 1 ? url.searchParams.get("generation") : undefined }, { ...options.context, store, authorize: options.authorize ?? (() => {}) }, () => {
+    options.context?.assertRequestAuthority?.();
+    const current = assertTrustedLanAgentPrincipal(request);
+    if (captured && current !== original) throw new Error("Request principal changed.");
+    original = current; captured = true;
+  });
+  assert.equal(result.headers?.["cache-control"], "no-store");
+  assert.equal(JSON.stringify(result.body).includes(delivery.prompt), false);
+  return { status: result.status, body: result.body };
 }
 async function success(store: AgentRequestStore, delivery: PreparedEndpointDelivery, options: Parameters<typeof query>[2] = {}) {
   const authorized: AgentRequestEndpoint[] = [];
@@ -57,7 +63,7 @@ async function fixture(onDispatch?: (store: AgentRequestStore, delivery: Prepare
   await executeEndpointAgentDelivery({ action: "send", sourceThreadId: "session-a", sourceAgentType: "agent", threadId: target.sessionId,
     agentAdapter: "dsh", responsePolicy: "required", responseInstruction: "Return evidence", prompt: "Private fixture prompt",
     messageSource: { type: "agent", agentAdapter: "dsh", sessionName: "source", sessionId: "session-a" } }, options);
-  return { store, persistence, delivery: store.listEndpointDeliveries()[0] };
+  return { store, persistence, delivery: (await store.listEndpointDeliveries())[0] };
 }
 
 test("dispatching and committed exact reservations authorize without prompt disclosure across restart", async () => {
@@ -85,16 +91,19 @@ test("real HTTP sessionless authenticated Agent reads another owner reservation 
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const authority = new LanAgentAuthority({ statePath: path.join(root, "auth.json") });
   const credential = authority.enroll(authority.issueBootstrapTicket().ticket, "reader-node");
-  authority.registerAgentCatalog(credential.token, [{ agentId: "sessionless-reader", provider: "dsh" }]);
   const f = await fixture();
   let originalOwnerAvailable = true;
+  const registry = new ManagerPluginRouteRegistry();
+  const definitions = createCorePublicOperations({ identity: () => ({ applicationGenerationId: "fixture", managerInstanceId: "manager" }), deliveryAuthority: {
+    store: f.store, managerInstanceId: "manager", authorize: () => { if (!originalOwnerAvailable) throw new Error("old owner epoch replaced"); }
+  } } as unknown as CorePublicOperationsContext).filter(value => value.contract.pathTemplate === "/api/agent/delivery-authority");
+  const registration = registry.registerOperations("authority-fixture", definitions);
+  t.after(() => registration.dispose());
   const server = createServer((request, response) => {
     const access = evaluateLanAgentRequest(request, authority, true);
     if (access.kind !== "agent") { response.writeHead(403); response.end(JSON.stringify(denied)); return; }
-    void handleAgentDeliveryAuthority(request, new URL(request.url!, "http://fixture.invalid"), response, {
-      store: f.store, managerInstanceId: "manager", authorize: () => { if (!originalOwnerAvailable) throw new Error('old owner epoch replaced'); },
-      jsonResponse: (res, status, body) => { res.writeHead(status, { "content-type": "application/json" }); res.end(JSON.stringify(body)); }
-    });
+    markAuthenticatedConnectionRequest(request, () => { assertTrustedLanAgentPrincipal(request); });
+    if (!registry.handle(request, new URL(request.url!, "http://fixture.invalid"), response)) response.writeHead(404).end();
   });
   await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
   t.after(() => new Promise<void>(resolve => server.close(() => resolve())));
@@ -107,14 +116,14 @@ test("real HTTP sessionless authenticated Agent reads another owner reservation 
   assert.deepEqual(data.source, f.delivery.source);
   assert.deepEqual(data.preparation, JSON.parse(JSON.stringify(f.delivery.preparation)));
   assert.equal(JSON.stringify(data).includes(f.delivery.prompt), false);
-  f.store.cancel(f.delivery.preparation.requestId!);
+  await f.store.cancel(f.delivery.preparation.requestId!);
   originalOwnerAvailable = false;
   const terminalResponse = await fetch(url, { headers }); assert.equal(terminalResponse.status, 200);
   const terminal = (await terminalResponse.json()).data;
   assert.equal(terminal.authorized, false); assert.equal(terminal.state, 'cancelled');
   assert.deepEqual(terminal.source, f.delivery.source); assert.equal(terminal.promptHash, f.delivery.promptHash);
+  authority.setNodeEnabled("reader-node", false);
   assert.equal(f.store.getEndpointDelivery(f.delivery.deliveryId)?.state, 'cancelled');
-  authority.setAgentEnabled("reader-node", "sessionless-reader", false);
   assert.equal((await fetch(url, { headers })).status, 403);
 });
 
@@ -131,14 +140,14 @@ test("missing, duplicate, oversized or mismatched identity fails closed", async 
 
 test("prepared reservations and cancellation during authorization deny; original cancellation yields terminal evidence only", async () => {
   const f = await fixture();
-  const preparation = f.store.prepare({ source: party("a"), target: party("b"), responsePolicy: "required", responseInstruction: "Return" });
+  const preparation = await f.store.prepare({ source: party("a"), target: party("b"), responsePolicy: "required", responseInstruction: "Return" });
   const prepared: PreparedEndpointDelivery = { deliveryId: preparation.deliveryId, generation: "prepared-generation",
     source: endpoint("a"), target: endpoint("b"), prompt: "fixture prepared", preparation, state: "prepared",
     promptHash: agentDeliveryPromptHash("fixture prepared"), executionOptions: { cwd: "workspace" },
     executionOptionsHash: endpointExecutionOptionsHash({ cwd: "workspace" }) };
-  f.store.bindEndpointDelivery(prepared);
+  await f.store.bindEndpointDelivery(prepared);
   assert.deepEqual(await query(f.store, prepared), { status: 403, body: denied });
-  assert.deepEqual(await query(f.store, f.delivery, { authorize: () => { f.store.cancel(f.delivery.preparation.requestId!); } }), { status: 403, body: denied });
+  assert.deepEqual(await query(f.store, f.delivery, { context: { refreshEndpoints: async () => { await f.store.cancel(f.delivery.preparation.requestId!); } } }), { status: 403, body: denied });
   const cancellation = await query(f.store, f.delivery, { authorize: () => { throw new Error('old source epoch is no longer live'); },
     context: { refreshEndpoints: async () => { throw new Error('old execution identity must not be refreshed'); } } });
   assert.equal(cancellation.status, 200);
@@ -155,7 +164,7 @@ test("source or target revocation fails closed without grant disclosure", async 
   }
 });
 
-for (const change of ["disabled", "agent-ABA", "re-enrolled", "global-ABA"] as const) {
+for (const change of ["disabled", "node-ABA", "re-enrolled", "global-ABA"] as const) {
   for (const duringAuthorize of [false, true]) {
     test(`original LAN principal denies ${change}${duringAuthorize ? " during authorization" : " before query"}`, async t => {
       const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabi-authority-query-"));
@@ -163,14 +172,19 @@ for (const change of ["disabled", "agent-ABA", "re-enrolled", "global-ABA"] as c
       const authority = new LanAgentAuthority({ statePath: path.join(root, "auth.json") });
       const config = new RabiGlobalConfigStore(root); config.patch({ webguiLan: { enabled: true } });
       const credential = authority.enroll(authority.issueBootstrapTicket().ticket, "node-b");
-      authority.registerAgentCatalog(credential.token, [{ agentId: "worker", provider: "dsh" }]);
       const request = { method: "GET", url: "/api/agent/delivery-authority", headers: { authorization: `Bearer ${credential.token}`, "x-rabiroute-agent-id": "worker" } } as unknown as IncomingMessage;
       assert.equal(evaluateLanAgentRequest(request, authority, true, () => config.getLanAgentAdmissionPolicy()).kind, "agent");
       const f = await fixture(); await success(f.store, f.delivery, { request });
       const revoke = () => {
         if (change === "global-ABA") { config.patch({ webguiLan: { enabled: false } }); config.patch({ webguiLan: { enabled: true } }); }
-        else if (change === "re-enrolled") { authority.revokeNode("node-b"); authority.enroll(authority.issueBootstrapTicket().ticket, "node-b"); authority.setAgentEnabled("node-b", "worker", true); }
-        else { authority.setAgentEnabled("node-b", "worker", false); if (change === "agent-ABA") authority.setAgentEnabled("node-b", "worker", true); }
+        else if (change === "re-enrolled") { authority.revokeNode("node-b"); authority.enroll(authority.issueBootstrapTicket().ticket, "node-b"); }
+        else {
+      authority.setNodeEnabled("node-b", false);
+      if (change === "node-ABA") {
+        authority.setNodeEnabled("node-b", true);
+        assert.ok(authority.authenticate(credential.token), "Restored node accepts fresh authentication while the original request lease remains revoked.");
+      }
+    }
       };
       if (!duringAuthorize) revoke();
       let invoked = false;
@@ -184,7 +198,6 @@ test("authenticated sessionless Agent may read public reservation evidence for a
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabi-owner-query-")); t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const authority = new LanAgentAuthority({ statePath: path.join(root, "auth.json") });
   const credential = authority.enroll(authority.issueBootstrapTicket().ticket, "node-b");
-  authority.registerAgentCatalog(credential.token, [{ agentId: "worker", provider: "dsh" }]);
   for (const target of [{ ...endpoint("b"), nodeId: "other" }, { ...endpoint("b"), agentId: "other" },
     { ...endpoint("b"), kind: "local" as const }]) {
     const request = { method: "GET", url: "/api/agent/delivery-authority", headers: { authorization: `Bearer ${credential.token}`, "x-rabiroute-agent-id": "worker" } } as unknown as IncomingMessage;

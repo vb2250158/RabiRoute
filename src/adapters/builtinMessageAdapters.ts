@@ -2,7 +2,7 @@ import { createFeishuAdapter } from "./feishuAdapter.js";
 import { createHeartbeatAdapter } from "./heartbeatAdapter.js";
 import { createNapCatAdapter } from "./napcatAdapter.js";
 import { createRabiLinkAdapter } from "./rabilinkAdapter.js";
-import { createFenneNoteAdapter, createWebhookAdapter } from "./webhookAdapter.js";
+import { createWebhookAdapter } from "./webhookAdapter.js";
 import { createWeComAdapter } from "./wecomAdapter.js";
 import { createWeixinAdapter } from "./weixinAdapter.js";
 import type { MessageAdapterDefinition } from "./messageAdapter.js";
@@ -16,17 +16,6 @@ export const webhookMessageAdapterDefinition: MessageAdapterDefinition = {
     lifecycle: "fiber"
   },
   create: () => createWebhookAdapter()
-};
-
-export const fenneNoteMessageAdapterDefinition: MessageAdapterDefinition = {
-  manifest: {
-    type: "fennenote",
-    label: "FenneNote / 芬妮笔记",
-    host: "gateway",
-    transport: "http",
-    lifecycle: "fiber"
-  },
-  create: () => createFenneNoteAdapter()
 };
 
 export const rabiLinkMessageAdapterDefinition: MessageAdapterDefinition = {
@@ -98,7 +87,6 @@ export const feishuMessageAdapterDefinition: MessageAdapterDefinition = {
 export function builtinMessageAdapterDefinitions(): MessageAdapterDefinition[] {
   return [
     webhookMessageAdapterDefinition,
-    fenneNoteMessageAdapterDefinition,
     rabiLinkMessageAdapterDefinition,
     heartbeatMessageAdapterDefinition,
     napcatMessageAdapterDefinition,

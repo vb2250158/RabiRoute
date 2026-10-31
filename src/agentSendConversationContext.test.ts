@@ -17,7 +17,8 @@ function fixture(t: TestContext) {
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const role = path.join(root, "roles", "role");
   const options: AgentReplyOptions = { rootDir: root, rolesRoot: "roles", routeRoot: path.join(root, "routes"),
-    runtimes: [{ id: "gateway", agentRoleId: "role", routeProfiles: [{ id: "route" }] }] };
+    runtimes: [{ id: "gateway", agentRoleId: "role", routeProfiles: [{ id: "route" }],
+      messageAdapterPolicies: { napcat: { conversationReview: { enabled: true } } } }] };
   const request: AgentSendRequest = { deliveryId: "send-1", sender: { agentType: "codex", sessionId: "agent-A" },
     routeId: "route", channel: "napcat", params: { target: "group", groupId: "group-1", replyToMessageId: "" }, payload: { type: "text", text: "收到" } };
   const append = (text: string, patch: Partial<MessageContextRecord> = {}) => appendMessageContextToDir(role, {
@@ -29,6 +30,37 @@ function fixture(t: TestContext) {
 function confirmation(request: AgentSendRequest, result: Awaited<ReturnType<AgentSendConversationContextGuard["evaluate"]>>) {
   return { ...request, conversationContext: { lastReadMessageIndex: result.context!.latestMessageIndex, confirmationToken: result.context!.confirmationToken } };
 }
+
+test("ordinary sends do not read history unless the user enables conversation review", async t => {
+  const f = fixture(t);
+  let reads = 0;
+  const guard = new AgentSendConversationContextGuard(async () => { reads++; throw new Error("history unavailable"); });
+  for (const policy of [undefined, { conversationReview: {} }, { conversationReview: { enabled: false } }]) {
+    f.options.runtimes[0].messageAdapterPolicies = { napcat: policy };
+    assert.deepEqual(await guard.evaluate(f.request, f.options), { blocked: false });
+    assert.deepEqual(await guard.evaluate(f.request, f.options, Date.now(), true), { blocked: false });
+  }
+  assert.equal(reads, 0);
+  f.options.runtimes[0].messageAdapterPolicies = { napcat: { conversationReview: { enabled: true } } };
+  await assert.rejects(guard.evaluate(f.request, f.options), /history unavailable/);
+  assert.equal(reads, 1);
+  f.options.runtimes[0].messageAdapterPolicies.napcat!.conversationReview!.enabled = false;
+  assert.deepEqual(await guard.evaluate(f.request, f.options), { blocked: false });
+  assert.equal(reads, 1);
+});
+
+test("disabled review does not impose its account selection on ordinary sends", async t => {
+  const f = fixture(t);
+  f.options.runtimes[0].napcatInstances = ["one", "two"].map(id => ({ id, enabled: true, httpUrl: "http://localhost", accessToken: "" }));
+  for (const policy of [undefined, { conversationReview: { enabled: false } }]) {
+    f.options.runtimes[0].messageAdapterPolicies = { napcat: policy };
+    assert.equal(f.guard.serializationKey(f.request, f.options), undefined);
+    assert.deepEqual(await f.guard.evaluate(f.request, f.options), { blocked: false });
+  }
+  f.options.runtimes[0].messageAdapterPolicies = { napcat: { conversationReview: { enabled: true } } };
+  await assert.rejects(f.guard.evaluate(f.request, f.options), /explicit NapCat instanceId/);
+  await assert.rejects(f.guard.searchHistory(f.request, f.options, { limit: 10 }), /explicit NapCat instanceId/);
+});
 
 test("missing index returns latest 50; a fresh scoped AgentPacket cursor sends directly", async t => {
   const f = fixture(t);
@@ -98,17 +130,20 @@ test("different conversations/accounts cannot share cursors or leak messages", a
   assert.equal(other.context!.reason, "invalid_index"); assert.deepEqual(other.context!.messages.map(x => x.text), ["private"]);
 });
 
-test("same mechanism covers all chat channels; plan feedback/playback remain structured actions", async t => {
+test("same mechanism covers chat channels and retired voice aliases; plan feedback remains structured", async t => {
   const f = fixture(t);
   for (const [channel, params, patch] of [
     ["wecom", { chatId: "chat" }, { adapter: "wecom", target: "chat", kind: "wecom" }],
     ["feishu", { chatId: "chat" }, { adapter: "feishu", target: "chat", kind: "feishu" }],
     ["weixin", { sessionId: "session" }, { adapter: "weixin", sessionId: "session", kind: "private" }],
     ["speech", { sessionId: "session" }, { adapter: "speech", sessionId: "session", kind: "voice" }],
-    ["fennenote", { sessionId: "session", mode: "message" }, { adapter: "fennenote", sessionId: "session", kind: "voice" }],
+    ["fennenote", { sessionId: "session", mode: "message" }, { adapter: "speech", sessionId: "session", kind: "voice" }],
     ["role_panel", { roleId: "role" }, { adapter: "rolePanel", target: "role", kind: "role_panel" }],
     ["rabilink", { proactive: true, targetDeviceIds: ["device"] }, { adapter: "wearable", transport: "rabilink", sourceDeviceId: "device", kind: "voice" }]
   ] as const) {
+    const adapter = channel === "role_panel" ? "rolePanel" : channel === "fennenote" ? "speech" : channel;
+    f.options.runtimes[0].messageAdapterPolicies = { ...f.options.runtimes[0].messageAdapterPolicies,
+      [adapter]: { conversationReview: { enabled: true } } };
     f.append(channel, patch);
     const request = { ...f.request, deliveryId: channel, channel, params };
     const result = (await f.guard.evaluate(request, f.options));
@@ -116,7 +151,7 @@ test("same mechanism covers all chat channels; plan feedback/playback remain str
     assert.equal((await f.guard.evaluate(confirmation(request, result), f.options)).blocked, false, channel);
   }
   assert.equal((await f.guard.evaluate({ ...f.request, channel: "plan_feedback", params: { roleId: "role", planId: "plan", kind: "guidance" } }, f.options)).context, undefined);
-  assert.equal((await f.guard.evaluate({ ...f.request, channel: "fennenote", params: { sessionId: "session", mode: "playback" } }, f.options)).context, undefined);
+  assert.ok((await f.guard.evaluate({ ...f.request, channel: "fennenote", params: { sessionId: "session", mode: "playback" } }, f.options)).context);
 });
 
 test("archive boundary keeps exact delta, corrupt authoritative records fail closed", async t => {
@@ -188,9 +223,9 @@ test("missing archive shards fail history queries and incremental send checks", 
 
 test("config defaults/odd limits, invalid contract fields and transient idempotency fields", async t => {
   const f = fixture(t);
-  assert.deepEqual(normalizeMessageAdapterPolicy({}, "wecom").conversationReview, { initialMessageCount: 50, maxIncrementalMessages: 100 });
+  assert.deepEqual(normalizeMessageAdapterPolicy({}, "wecom").conversationReview, { enabled: false, initialMessageCount: 50, maxIncrementalMessages: 100 });
   assert.throws(() => normalizeMessageAdapterPolicy({ conversationReview: { initialMessageCount: 0 } }, "napcat"));
-  f.options.runtimes[0].messageAdapterPolicies = { napcat: { conversationReview: { initialMessageCount: 3, maxIncrementalMessages: 5 } } };
+  f.options.runtimes[0].messageAdapterPolicies = { napcat: { conversationReview: { enabled: true, initialMessageCount: 3, maxIncrementalMessages: 5 } } };
   f.append("start"); const first = (await f.guard.evaluate(f.request, f.options));
   for (let i = 0; i < 9; i++) f.append(String(i));
   const delta = (await f.guard.evaluate({ ...f.request, conversationContext: { lastReadMessageIndex: first.context!.latestMessageIndex } }, f.options)).context!;

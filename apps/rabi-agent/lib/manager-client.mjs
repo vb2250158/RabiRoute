@@ -1,8 +1,13 @@
-import { constants } from "node:fs";
+import { createTimeoutSettings } from "./timeout-settings.mjs";
+import { constants, readFileSync } from "node:fs";
 import fsPromises, { lstat, open } from "node:fs/promises";
 import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { businessReady, createEndpointSession, sameIdentity } from "./endpoint-session.mjs";
+import { createApiCatalogClient } from "./api-catalog-client.mjs";
+import { validApiHttpMethod } from "./api-path-template.mjs";
+import { openApiWebSocket } from "./api-websocket-client.mjs";
+import { submitDeliveryToOwner, rememberDeliveryDescriptor, readDeliveryDescriptor } from "./delivery-control.mjs";
 
 // Keep aligned with the server skill ZIP archive ceiling (68 MiB).
 export const MAX_SKILL_DOWNLOAD_BYTES = 68 * 1024 * 1024;
@@ -54,13 +59,12 @@ function metadataIdentity(raw) {
 // Only the dedicated skill-download metadata reader is bounded here; public
 // responses use the caller's optional maxResponseBytes or streaming consumer.
 const MAX_METADATA_BYTES = 4 * 1024 * 1024;
-export const MAX_UPLOAD_BYTES = 2 * 1024 * 1024 * 1024;
 const UPLOAD_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 async function readUpload(filePath, signal) {
   const initial = await lstat(filePath);
   if (initial.isSymbolicLink() || !initial.isFile()) throw new Error("Upload requires a regular file, not a symlink.");
-  if (initial.size > MAX_UPLOAD_BYTES) throw new Error("Upload exceeds the 2 GiB client limit.");
+  if (!Number.isSafeInteger(initial.size) || initial.size < 0) throw new Error("Upload size cannot be represented as an exact byte count.");
   const handle = await open(filePath, constants.O_RDONLY | (constants.O_NOFOLLOW || 0));
   try {
     const current = await handle.stat();
@@ -121,11 +125,14 @@ function relativeTarget(origin, value) {
 
 // Deny transport-owned headers, not business capabilities. New public headers
 // pass without a client release; authentication, hop proofs and framing do not.
+// x-rabilink-resource-owner selects stored data on an already authenticated public
+// connection; the resources key and tunnel proofs remain transport-owned.
 const TRANSPORT_HEADERS = new Set([
   "authorization", "proxy-authorization", "proxy-authenticate", "www-authenticate", "cookie", "set-cookie",
   "host", "connection", "keep-alive", "te", "trailer", "transfer-encoding", "upgrade", "content-length", "expect",
-  "forwarded", "via", "x-real-ip", "x-rabiroute-agent-id", "x-rabiroute-node-id", "x-rabiroute-host-token", "x-rabiroute-webgui-token", "x-rabiroute-peer-proxy", "x-rabiroute-relay-proxy",
-  "x-rabilink-token", "x-rabilink-resource-key", "x-rabilink-resource-owner", "x-rabiroute-expected-generation", "x-rabiroute-expected-application-generation-id", "x-rabiroute-expected-manager-instance-id"
+  "forwarded", "via", "x-real-ip", "x-rabiroute-agent-id", "x-rabiroute-agent-type", "x-rabiroute-session-id", "x-rabiroute-node-id", "x-rabiroute-host-token", "x-rabiroute-webgui-token", "x-rabiroute-peer-proxy", "x-rabiroute-relay-proxy",
+  "x-rabiroute-listener-lease",
+  "x-rabilink-token", "x-rabilink-resource-key", "x-rabiroute-expected-generation", "x-rabiroute-expected-application-generation-id", "x-rabiroute-expected-manager-instance-id"
 ]);
 function transportHeader(name) {
   return TRANSPORT_HEADERS.has(name) || /^(?:proxy-|sec-|x-forwarded-|x-rabilink-(?:internal-|tunnel-)|x-rabiroute-internal-)/.test(name);
@@ -138,6 +145,20 @@ function callerHeaders(headers) {
     if (!/^[!#$%&'*+.^_`|~0-9a-z-]+$/.test(name) || transportHeader(name)) throw new Error("Caller cannot override a transport-owned or invalid header.");
     if (typeof value !== "string" || /[^\t\x20-\x7e\x80-\xff]/.test(value)) throw new Error("Manager header values must be valid HTTP strings.");
     if (Object.hasOwn(result, name)) throw new Error("Duplicate Manager header.");
+    result[name] = value;
+  }
+  return result;
+}
+function explicitNativeHeaders(headers = {}, nodeCredential) {
+  if (!headers || typeof headers !== "object" || Array.isArray(headers)) throw new Error("Native credential headers must be an explicit object.");
+  const result = Object.create(null);
+  for (const [key, value] of Object.entries(headers)) {
+    const name = key.toLowerCase();
+    if (["authorization", "cookie"].includes(name)) {
+      if (typeof value !== "string" || /[^\t\x20-\x7e\x80-\xff]/.test(value)) throw new Error("Invalid native credential header.");
+    } else callerHeaders({ [key]: value });
+    if (Object.hasOwn(result, name)) throw new Error("Duplicate native credential header.");
+    if (nodeCredential && value.includes(nodeCredential)) throw new Error("A Manager node credential cannot be reused as a native target credential.");
     result[name] = value;
   }
   return result;
@@ -193,29 +214,34 @@ async function boundedResponse(response) {
 }
 
 /** Transport only: Manager owns authorization, business state and mutation receipts. */
-export function createManagerClient({ managerUrl, credential, agentId, config, configPath, endpointSession, discover, localHost = false, fetchImpl = fetch, timeoutMs = 30_000, uploadTimeoutMs = 30 * 60_000, downloadTimeoutMs = 120_000 }) {
+function buildManagerClient({ managerUrl, credential, agentType, sessionId, config, configPath, endpointSession, discover, localHost = false, fetchImpl = fetch, timeoutMs = 30_000, uploadTimeoutMs = 30 * 60_000, downloadTimeoutMs = 120_000 }, networkTransport = false) {
+  if (!config && configPath) config = JSON.parse(readFileSync(configPath, "utf8"));
+  const timeouts = createTimeoutSettings(config?.timeoutOverridesCache ?? config?.timeoutOverrides);
   let origin = managerOrigin(config?.managerUrl || managerUrl);
   credential ||= config?.nodeCredential;
   // Explicit legacy origins retain their existing contract; enrolled configs
   // with a stable GUID (or injected discovery) use dynamic endpoint recovery.
   const session = endpointSession || ((configPath && config?.managerGuid) || discover
-    ? createEndpointSession({ config: config || { managerUrl, nodeCredential: credential }, configPath, fetchImpl, discover, timeoutMs: Math.min(timeoutMs, 5000) })
+    ? createEndpointSession({ config: config || { managerUrl, nodeCredential: credential }, configPath, fetchImpl, discover, timeoutMs: Math.min(timeoutMs, 5000), timeoutSettings: timeouts })
     : null);
   if (localHost) {
-    if (!endpointSession || credential || agentId || config || discover) throw new Error("Local Host transport requires an explicit Host endpoint session without remote credentials.");
-  } else if (!credential || !agentId) throw new Error("A node credential and Agent identity are required.");
-  async function request(method, target, options = {}, upload, requestOrigin = origin, verifiedIdentity) {
+    if (!endpointSession || credential || agentType || sessionId || config || discover) throw new Error("Local Host transport requires an explicit Host endpoint session without remote credentials.");
+  } else if (!credential) throw new Error("An enrolled computer credential is required.");
+  if ((agentType || sessionId) && (!agentType || !sessionId || typeof agentType !== "string" || typeof sessionId !== "string" || /[\x00-\x1f\x7f]/.test(agentType + sessionId))) throw new Error("Provide an explicit Agent type and full session ID together.");
+  async function request(method, target, options = {}, upload, requestOrigin = origin, verifiedIdentity, nativeBinding, nativeCredentials) {
     const { body, bodyText, bodyBytes, bodyStream, headers = {}, responseMode = "text", onChunk, onResponse } = options;
     method = String(method).toUpperCase();
-    if (!["GET", "HEAD", "OPTIONS", "POST", "PUT", "PATCH", "DELETE"].includes(method)) throw new Error("Unsupported Manager method.");
+    if (!validApiHttpMethod(method)) throw new Error("Invalid Manager HTTP method.");
     const url = relativeTarget(requestOrigin, target);
-    if (localHost && (url.protocol !== "http:" || !["127.0.0.1", "localhost", "[::1]"].includes(url.hostname))) throw new Error("Local Host transport requires HTTP loopback.");
-    const outgoing = localHost ? { accept: "application/json" } : {
+    if (!nativeBinding && localHost && (url.protocol !== "http:" || !["127.0.0.1", "localhost", "[::1]"].includes(url.hostname))) throw new Error("Local Host transport requires HTTP loopback.");
+    const outgoing = localHost || nativeBinding ? { accept: "application/json" } : {
       authorization: `Bearer ${credential}`,
-      "x-rabiroute-agent-id": agentId,
+      ...(agentType ? { "x-rabiroute-agent-type": agentType, "x-rabiroute-session-id": sessionId } : {}),
       accept: "application/json"
     };
     Object.assign(outgoing, callerHeaders(headers));
+    if (nativeBinding && nativeCredentials) Object.assign(outgoing, nativeCredentials);
+    if (nativeBinding) outgoing["x-rabiroute-listener-lease"] = nativeBinding.leaseId;
     if (verifiedIdentity) {
       outgoing["x-rabiroute-expected-application-generation-id"] = verifiedIdentity.applicationGenerationId;
       outgoing["x-rabiroute-expected-manager-instance-id"] = verifiedIdentity.managerInstanceId;
@@ -236,7 +262,12 @@ export function createManagerClient({ managerUrl, credential, agentId, config, c
     let reader;
     let bytesReceived = 0;
     const chunks = [];
-    const deadline = upload?.signal ?? AbortSignal.timeout(options.timeoutMs ?? timeoutMs);
+    // A send may still be hashing/uploading a large managed file after the
+    // ordinary request deadline. Keep its original connection and deliveryId;
+    // a timeout is never permission to replay the mutation.
+    const requestTimeoutMs = method === "POST" && url.pathname === "/api/agent/send"
+      ? timeouts.get("agent.client.send", uploadTimeoutMs) : timeouts.get("agent.client.request", timeoutMs);
+    const deadline = upload?.signal ?? AbortSignal.timeout(options.timeoutMs ?? requestTimeoutMs);
     const signal = AbortSignal.any([deadline, ...(upload?.signal ? [upload.signal] : []), ...(options.signal ? [options.signal] : [])]);
     const responseHeaders = () => Object.fromEntries([...response.headers].filter(([name]) => !transportHeader(name) || ["content-length", "transfer-encoding", "connection", "keep-alive", "trailer"].includes(name)));
     try {
@@ -281,7 +312,7 @@ export function createManagerClient({ managerUrl, credential, agentId, config, c
   }
   async function verifiedRequest(method, target, options = {}, upload) {
     method = String(method).toUpperCase();
-    if (!["GET", "HEAD", "OPTIONS", "POST", "PUT", "PATCH", "DELETE"].includes(method)) throw new Error("Unsupported Manager method.");
+    if (!validApiHttpMethod(method)) throw new Error("Invalid Manager HTTP method.");
     options = requestOptions(method, options);
     const diagnostic = target === "/meta" && method === "GET";
     // Some GET operations touch persisted state (for example recent-memory views).
@@ -302,6 +333,11 @@ export function createManagerClient({ managerUrl, credential, agentId, config, c
     for (let attempt = 0; ; attempt++) {
       const requestOrigin = managerOrigin(endpoint.managerUrl);
       const identity = endpoint.meta || {};
+      timeouts.adopt(identity);
+      const configuredUploadMiB = identity.agentUploads?.maxFileMiB;
+      if (upload && Number.isSafeInteger(configuredUploadMiB) && configuredUploadMiB > 0 && Number.isSafeInteger(configuredUploadMiB * 1024 ** 2) && upload.size > configuredUploadMiB * 1024 ** 2) {
+        throw new Error(`Upload exceeds the current Manager agentUploads.maxFileMiB=${configuredUploadMiB}. Adjust WebGUI RabiLink configuration or data/Config.json and restart Manager to apply it.`);
+      }
       // Authenticated exact /meta remains an Agent authorization check; public preflight is credential-free.
       const result = await request(method, target, options, upload, requestOrigin, identity);
       let current;
@@ -318,9 +354,25 @@ export function createManagerClient({ managerUrl, credential, agentId, config, c
    * never reconnected. A caller's signal/deadline owns their lifetime. Buffered
    * reads may replay once unless replaySafe:false; mutations never replay.
    * outputPath saves bytes atomically without overwrite or printing binary. */
-  async function publicRequest(method, target, options = {}) {
+  async function publicRequest(method, target, options = {}, transport = verifiedRequest) {
+    const verb = String(method).toUpperCase();
+    if (!networkTransport && verb === "POST" && relativeTarget(origin, target).pathname === "/api/agent/threads") {
+      const normalized = await readAgentJsonBody(options);
+      options = normalized.options;
+      if (normalized.request?.action === "send") {
+        requestOptions(verb, options); // Preserve transport-header/body validation before local acceptance.
+        if (!configPath || !agentType || !sessionId) throw new Error("Reliable Agent delivery requires the installed owner config and explicit source identity.");
+        if (options.outputPath || options.responseMode && options.responseMode !== "text" || options.onChunk || options.onResponse) throw new Error("Reliable Agent delivery returns a JSON local-acceptance receipt; streaming output is unsupported before submission.");
+        const receipt = await submitDeliveryToOwner(configPath, { intentId: normalized.request.deliveryId, agentType, sessionId, request: normalized.request });
+        const accepted = receipt.accepted === true;
+        const status = accepted ? "queued" : receipt.accepted === false ? "local_rejected" : "local_acceptance_unknown";
+        return { ...receipt, statusCode: accepted ? 202 : receipt.accepted === false ? 409 : 0, headers: {}, noReplay: true,
+          uncertain: receipt.accepted == null, body: JSON.stringify({ code: accepted ? 0 : -1, ok: receipt.ok, status,
+            acceptance: receipt.acceptance, intentId: receipt.intentId, delivery: { deliveryId: receipt.deliveryId, status }, error: receipt.error }) };
+      }
+    }
     if (isSkillDownloadTarget(target)) throw new Error("Skill download requires the explicit download operation and local output path.");
-    if (options.outputPath === undefined) return verifiedRequest(method, target, options);
+    if (options.outputPath === undefined) return transport(method, target, options);
     if (typeof options.outputPath !== "string" || !options.outputPath.trim() || options.outputPath.includes("\0")) throw new Error("Output requires an explicit local path.");
     if (options.onChunk !== undefined) throw new Error("Output and onChunk consumers are mutually exclusive.");
     // Validate before opening any file or making a network call.
@@ -336,7 +388,7 @@ export function createManagerClient({ managerUrl, credential, agentId, config, c
       handle = await open(temporaryPath, "wx", 0o600);
       created = true;
       const hash = createHash("sha256");
-      result = await verifiedRequest(method, target, { ...options, responseMode: "stream", replaySafe: false, onChunk: async bytes => {
+      result = await transport(method, target, { ...options, responseMode: "stream", replaySafe: false, onChunk: async bytes => {
         let offset = 0;
         while (offset < bytes.length) {
           const { bytesWritten } = await handle.write(bytes, offset, bytes.length - offset);
@@ -366,7 +418,7 @@ export function createManagerClient({ managerUrl, credential, agentId, config, c
   async function upload(filePath, uploadId) {
     if (typeof uploadId !== "string" || !UPLOAD_ID.test(uploadId)) throw new Error("Upload requires an explicit stable --upload-id UUID; never generate a new ID after a timeout.");
     if (typeof filePath !== "string" || !filePath) throw new Error("Upload requires a file path.");
-    const signal = AbortSignal.timeout(uploadTimeoutMs);
+    const signal = AbortSignal.timeout(timeouts.get("agent.client.upload", uploadTimeoutMs));
     const source = await readUpload(filePath, signal);
     const fileName = path.basename(filePath);
     const { sha256, size } = source;
@@ -387,7 +439,7 @@ export function createManagerClient({ managerUrl, credential, agentId, config, c
     const uncertain = result.uncertain || (result.ok && !validReceipt);
     // Return only the public DTO, never an unexpected server filesystem path.
     const publicBody = validReceipt ? JSON.stringify({ code: 0, data: { id: dto.id, fileName: dto.fileName, size: dto.size, sha256: dto.sha256, expiresAt: dto.expiresAt } }) : "Upload was not confirmed; inspect the HTTP status and query the stable upload ID.";
-    if (!result.ok || uncertain) return { ...result, body: publicBody, ok: false, uncertain, query, guidance: `${result.statusCode === 413 ? "The configured Manager upload limit was exceeded; the 2 GiB client ceiling does not override a lower Manager limit. " : ""}Query GET ${target} with the same Agent identity before any retry. Do not change the upload ID, automatically upload again, or send a message.` };
+    if (!result.ok || uncertain) return { ...result, body: publicBody, ok: false, uncertain, query, guidance: `${result.statusCode === 413 ? "The configured Manager upload limit was exceeded; adjust agentUploads.maxFileMiB in WebGUI RabiLink configuration or data/Config.json and restart Manager to apply it. " : ""}Query GET ${target} with the same Agent identity before any retry. Do not change the upload ID, automatically upload again, or send a message.` };
     return { ...result, body: publicBody, query, guidance: "Uploaded only; nothing was sent. To send explicitly, use /api/agent/send with payload: {type:'file',fileId:...,fileSha256:...} and an authorized target; fileSha256 is required to bind the exact uploaded bytes.", payload: { type: "file", fileId: dto.id, fileSha256: dto.sha256 } };
   }
   async function download(target, outputPath, { signal: callerSignal } = {}) {
@@ -395,8 +447,8 @@ export function createManagerClient({ managerUrl, credential, agentId, config, c
     if (typeof outputPath !== "string" || !outputPath.trim() || outputPath.includes("\0")) throw new Error("Download requires an explicit local output path.");
     const finalPath = path.resolve(outputPath);
     const temporaryPath = path.join(path.dirname(finalPath), `.rabi-download-${randomUUID()}.partial`);
-    const signal = callerSignal ? AbortSignal.any([callerSignal, AbortSignal.timeout(downloadTimeoutMs)]) : AbortSignal.timeout(downloadTimeoutMs);
-    const headers = { authorization: `Bearer ${credential}`, "x-rabiroute-agent-id": agentId };
+    const signal = callerSignal ? AbortSignal.any([callerSignal, AbortSignal.timeout(timeouts.get("agent.client.download", downloadTimeoutMs))]) : AbortSignal.timeout(timeouts.get("agent.client.download", downloadTimeoutMs));
+    const headers = { authorization: `Bearer ${credential}`, ...(agentType ? { "x-rabiroute-agent-type": agentType, "x-rabiroute-session-id": sessionId } : {}) };
     let downloadOrigin = origin;
     let verifiedEndpoint;
     let handle;
@@ -433,7 +485,7 @@ export function createManagerClient({ managerUrl, credential, agentId, config, c
       }
       const value = metadataIdentity(JSON.parse(await bounded(() => boundedResponse(response))));
       if (typeof value.applicationGenerationId !== "string" || !value.applicationGenerationId.trim() || typeof value.managerInstanceId !== "string" || !value.managerInstanceId.trim()) throw new Error("Metadata identity missing.");
-      if (requireReady && (value.health?.live !== true || value.health?.requiredReady !== true || !["healthy", "degraded"].includes(value.health?.state))) throw failure("MANAGER_NOT_READY");
+      if (requireReady && (value.health?.live !== true || !["healthy", "degraded"].includes(value.health?.state))) throw failure("MANAGER_NOT_READY");
       return { applicationGenerationId: value.applicationGenerationId, managerInstanceId: value.managerInstanceId };
     }
     try {
@@ -516,5 +568,121 @@ export function createManagerClient({ managerUrl, credential, agentId, config, c
       if (cleanupFailed) throw failure("CLEANUP_FAILED");
     }
   }
-  return { request: publicRequest, invoke, upload, download };
+  async function openWebSocket(target, options, contract, expected) {
+    const headers = callerHeaders(options.headers ?? {});
+    let endpoint;
+    if (session) endpoint = await session.ensure();
+    else {
+      const response = await request("GET", "/meta", { signal: options.signal });
+      let meta; try { meta = metadataIdentity(JSON.parse(response.body)); } catch { }
+      if (!response.ok || !meta?.applicationGenerationId || !meta.managerInstanceId || !businessReady(meta)) throw new Error("Manager generation is not ready for a WebSocket connection.");
+      endpoint = { managerUrl: origin, meta };
+    }
+    const identity = endpoint.meta;
+    if (!sameIdentity(identity, expected)) { const error = new Error("Manager identity changed after API discovery; refresh before opening a connection."); error.code = "IDENTITY_CHANGED"; throw error; }
+    const requestOrigin = managerOrigin(endpoint.managerUrl), url = relativeTarget(requestOrigin, target);
+    if (localHost && (url.protocol !== "http:" || !["127.0.0.1", "localhost", "[::1]"].includes(url.hostname))) throw new Error("Local Host transport requires HTTP loopback.");
+    if (!localHost) headers.authorization = `Bearer ${credential}`;
+    if (agentType) { headers["x-rabiroute-agent-type"] = agentType; headers["x-rabiroute-session-id"] = sessionId; }
+    headers["x-rabiroute-expected-application-generation-id"] = identity.applicationGenerationId;
+    headers["x-rabiroute-expected-manager-instance-id"] = identity.managerInstanceId;
+    url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+    return openApiWebSocket({ url, headers, contract, onMessage: options.onMessage, onOpen: options.onOpen, onClose: options.onClose,
+      signal: options.signal, protocols: options.protocols, maxMessageBytes: options.maxMessageBytes, maxBufferedBytes: options.maxBufferedBytes,
+      drainOnRemoteClose: options.drainOnRemoteClose,
+      timeoutMs: options.timeoutMs ?? timeouts.get("agent.client.request", timeoutMs), verifyIdentity: async signal => {
+        const result = await request("GET", "/meta", { signal }, undefined, requestOrigin);
+        let current; try { current = metadataIdentity(JSON.parse(result.body)); } catch { }
+        if (!result.ok || !current || !sameIdentity(current, identity)) throw new Error("WebSocket Manager identity changed.");
+      } });
+  }
+  async function externalEndpoint(entry, expected, signal) {
+    // Only authenticated, identity-confirmed discovery selects native addresses.
+    // Its node credential is used exclusively on the Manager connection.
+    const binding = entry.binding;
+    if (binding?.kind !== "external-listener" || binding.invocation !== "native") throw new Error("External listener requires its native protocol connector.");
+    const endpoint = session ? await session.ensure() : { managerUrl: origin };
+    const receipt = await publicRequest("GET", `/api/agent/help?operationId=${encodeURIComponent(entry.id)}`, { signal, replaySafe: false });
+    let data; try { data = JSON.parse(receipt.body)?.data; } catch { }
+    const current = data?.operations?.find(value => value.id === entry.id);
+    if (!receipt.ok || receipt.uncertain || receipt.identityChanged || !sameIdentity(data, expected)
+      || current?.contractDigest !== entry.contractDigest || JSON.stringify(current?.binding) !== JSON.stringify(binding)
+      || JSON.stringify(current?.access) !== JSON.stringify(entry.access)) {
+      const error = new Error("External listener identity or binding changed; refresh discovery before another call."); error.code = "API_LISTENER_BINDING_CHANGED"; throw error;
+    }
+    if (entry.access) return { binding, access: entry.access };
+    const manager = new URL(endpoint.managerUrl), address = binding.address;
+    const hostname = address.hostname ?? manager.hostname;
+    const loopback = name => ["127.0.0.1", "localhost", "[::1]"].includes(name);
+    if (loopback(hostname) && !loopback(manager.hostname)) throw new Error("This listener is bound to the Manager computer's loopback; the current connection cannot reach its native address.");
+    // No URL path, credentials, query or arbitrary scheme can enter this resolver.
+    const listenerOrigin = managerOrigin(`${address.protocol}://${hostname}:${address.port}`);
+    return { listenerOrigin, binding };
+  }
+  async function requestExternal(method, target, options, entry, expected) {
+    const { nativeHeaders, ...businessOptions } = options;
+    const nativeCredentials = nativeHeaders === undefined ? undefined : explicitNativeHeaders(nativeHeaders, credential);
+    const { listenerOrigin, binding, access } = await externalEndpoint(entry, expected, options.signal);
+    if (access && nativeCredentials) throw new Error("Explicit native credentials currently require the direct native connector; this Manager owner mapping does not forward credentials.");
+    const resolvedTarget = access ? access.pathPrefix + target : target;
+    const resolvedOptions = access ? { ...businessOptions, headers: { ...options.headers, [access.contractHeader]: access.contractDigest } } : businessOptions;
+    return publicRequest(method, resolvedTarget, resolvedOptions, async (verb, path, nativeOptions) => {
+      const result = access ? await verifiedRequest(verb, path, { ...nativeOptions, replaySafe: false })
+        : await request(verb, path, requestOptions(verb, nativeOptions), undefined, listenerOrigin, undefined, binding, nativeCredentials);
+      let bindingChanged = false;
+      try { await externalEndpoint(entry, expected, options.signal); } catch { bindingChanged = true; }
+      return { ...result, bindingChanged, identity: { applicationGenerationId: expected.applicationGenerationId, managerInstanceId: expected.managerInstanceId },
+        uncertain: Boolean(result.uncertain || bindingChanged), noReplay: true };
+    });
+  }
+  async function openExternalWebSocket(target, options, contract, expected, entry) {
+    const { listenerOrigin, binding } = await externalEndpoint(entry, expected, options.signal);
+    const url = relativeTarget(listenerOrigin, target);
+    url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+    return openApiWebSocket({ url, headers: { ...callerHeaders(options.headers ?? {}), ...explicitNativeHeaders(options.nativeHeaders, credential), "x-rabiroute-listener-lease": binding.leaseId }, contract,
+      onMessage: options.onMessage, onOpen: options.onOpen, onClose: options.onClose, signal: options.signal, protocols: options.protocols,
+      maxMessageBytes: options.maxMessageBytes, maxBufferedBytes: options.maxBufferedBytes, drainOnRemoteClose: options.drainOnRemoteClose,
+      timeoutMs: options.timeoutMs ?? timeouts.get("agent.client.request", timeoutMs), verifyIdentity: signal => externalEndpoint(entry, expected, signal) });
+  }
+  async function readAgentJsonBody(options) {
+    requestOptions("POST", options);
+    let bytes;
+    if (options.body !== undefined) bytes = Buffer.from(typeof options.body === "string" ? options.body : JSON.stringify(options.body));
+    else if (options.bodyText !== undefined) bytes = Buffer.from(options.bodyText);
+    else if (options.bodyBytes !== undefined) bytes = Buffer.from(options.bodyBytes);
+    else if (options.bodyStream !== undefined) {
+      const chunks = []; let size = 0;
+      const signal = AbortSignal.any([AbortSignal.timeout(options.timeoutMs ?? timeouts.get("agent.client.request", timeoutMs)), ...(options.signal ? [options.signal] : [])]);
+      const iterator = options.bodyStream[Symbol.asyncIterator]?.();
+      if (!iterator) throw new Error("Agent delivery JSON requires a finite async byte iterable.");
+      try {
+        while (true) {
+          const part = await withSignal(() => iterator.next(), signal); if (part.done) break;
+          const chunk = Buffer.from(part.value); size += chunk.byteLength;
+          if (size > 2 * 1024 * 1024) throw new Error("Agent delivery JSON exceeds the durable 2 MiB envelope limit.");
+          chunks.push(chunk);
+        }
+      } finally { const released = iterator.return?.(); released?.catch?.(() => {}); }
+      bytes = Buffer.concat(chunks);
+    } else throw new Error("Agent action POST requires a JSON request body before local acceptance.");
+    if (bytes.byteLength > 2 * 1024 * 1024) throw new Error("Agent delivery JSON exceeds the durable 2 MiB envelope limit.");
+    let request;
+    try { request = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)); }
+    catch { throw new Error("Agent action POST requires valid UTF-8 JSON; no direct network fallback was attempted."); }
+    const { body, bodyText, bodyBytes, bodyStream, ...rest } = options;
+    return { request, options: { ...rest, bodyBytes: bytes } };
+  }
+  const catalog = createApiCatalogClient({ request: publicRequest, openWebSocket, requestExternal, openExternalWebSocket,
+    onVerifiedCatalog: (snapshot, identity) => rememberDeliveryDescriptor(configPath, snapshot, identity, session?.config?.managerGuid || config?.managerGuid),
+    cachedDelivery: networkTransport ? undefined : async (operationId, options) => {
+      const snapshot = readDeliveryDescriptor(configPath, operationId);
+      if (!snapshot) return undefined;
+      const normalized = await readAgentJsonBody(options);
+      return normalized.request?.action === "send" ? { catalog: snapshot, options: normalized.options } : undefined;
+    } });
+  return { request: publicRequest, invoke, upload, download, catalog, invokeOperation: catalog.invokeOperation, openOperation: catalog.openOperation };
 }
+
+export function createManagerClient(options) { return buildManagerClient(options); }
+/** @internal The committed delivery owner alone uses this non-queuing transport. */
+export function createManagerTransport(options) { return buildManagerClient(options, true); }

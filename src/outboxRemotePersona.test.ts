@@ -44,24 +44,27 @@ test("remote persona ordinary voice reply uses Route source and audit without re
     request.on("data", chunk => chunks.push(chunk));
     request.on("end", () => {
       forwarded = JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>;
-      response.writeHead(200, { "content-type": "application/json" });
-      response.end(JSON.stringify({ ok: true, id: "fixture-voice-reply" }));
+      assert.equal(request.url, "/v1/audio/speech");
+      response.writeHead(200, { "content-type": "audio/wav", "x-rabispeech-playback-job": "fixture-voice-reply" });
+      response.end(Buffer.from("RIFFtest"));
     });
   });
   await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
   t.after(() => new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())));
   const address = server.address();
   assert.ok(address && typeof address === "object");
-  options.fenneNotePlaybackUrl = `http://127.0.0.1:${address.port}/playback`;
+  options.speechServiceUrl = `http://127.0.0.1:${address.port}`;
   const result = await handleAgentReply({
     deliveryId: "remote-voice-delivery",
     text: "Remote persona reply through the original local voice adapter.",
     replyContext: { runtimeRouteId: "main", routeProfileId: routeId, messageId: "voice-1", targetType: "voice_transcript", adapterType: "fennenote", outputAdapter: "fennenote", outputPipeline: "fennenote", agentRoleDeviceId: "forged-device" }
   }, options);
   assert.equal(result.status, "sent");
-  assert.equal(result.userId, "route-user");
-  assert.equal(forwarded?.agentRoleName, "Remote route");
-  assert.equal(forwarded?.agentRoleId, "shared-persona");
+  assert.equal(result.sentMessageId, "fixture-voice-reply");
+  assert.equal(result.messageId, "voice-1");
+  assert.equal(forwarded?.voice, "shared-persona");
+  assert.equal(forwarded?.route_id, routeId);
+  assert.equal(forwarded?.input, "Remote persona reply through the original local voice adapter.");
   assert.deepEqual(agentReplyDataDirsForRoute(options, { runtime }), [routeDataDir, path.join(options.routeRoot, "main")]);
   const context = recentMessageContextItems([routeDataDir], { limit: 10, maxChars: 10000 });
   assert.equal(context.length, 1);

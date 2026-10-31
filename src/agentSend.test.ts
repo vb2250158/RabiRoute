@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { AGENT_SEND_CHANNEL_HELP, AGENT_SEND_REQUEST_CONTRACT, agentSendChannelHelp, handleAgentSend, inspectAgentSendDelivery, prepareAgentSendRequest, type AgentSendRequest } from "./agentSend.js";
+import { AGENT_SEND_FIELD_NAMES } from "./agentSendContracts.js";
 import type { AgentReplyOptions } from "./outbox.js";
 
 test("channel discovery is deeply immutable and matches accepted channel examples", () => {
@@ -31,7 +32,7 @@ test("channel discovery is deeply immutable and matches accepted channel example
   assert.equal(Reflect.set(AGENT_SEND_CHANNEL_HELP[0], "channel", "qq"), false);
 });
 
-test("partial request field contract is frozen and shares the parser allowlists", () => {
+test("executable request schema is frozen and supplies the parser field lists", () => {
   const contract = AGENT_SEND_REQUEST_CONTRACT;
   const assertFrozen = (value: unknown): void => {
     if (!value || typeof value !== "object") return;
@@ -39,19 +40,16 @@ test("partial request field contract is frozen and shares the parser allowlists"
     for (const child of Object.values(value)) assertFrozen(child);
   };
   assertFrozen(contract);
-  assert.equal(contract.kind, "partial-field-allowlist");
-  assert.ok(contract.missing.length > 0);
-  assert.equal("schema" in contract, false);
-  assert.deepEqual(contract.channelValues, AGENT_SEND_CHANNEL_HELP.map(item => item.channel));
-  for (const help of AGENT_SEND_CHANNEL_HELP) {
-    assert.deepEqual(contract.paramsAllowedFields[help.channel], Object.keys(help.params));
-  }
+  assert.equal(contract.kind, "runtime-json-schema");
+  assert.equal(contract.version, 2);
+  assert.ok(contract.validators.some(value => value.id === "agent.send.media"));
+  assert.deepEqual(AGENT_SEND_FIELD_NAMES.request, Object.keys(contract.schema.properties));
   const base = {
     deliveryId: "contract-delivery", sender: { agentType: "dsh", sessionId: "contract-session" },
     routeId: "contract-route", channel: "speech", params: {}, payload: { type: "text", text: "hello" }
   };
   for (const section of ["request", "sender", "payload"] as const) {
-    const allowed: readonly string[] = contract.allowedFields[section];
+    const allowed: readonly string[] = AGENT_SEND_FIELD_NAMES[section];
     assert.equal(allowed.includes("unsupportedField"), false);
     const extra = section === "request" ? { ...base, unsupportedField: true }
       : { ...base, [section]: { ...base[section], unsupportedField: true } };
@@ -184,8 +182,8 @@ test("NapCat ordered image payload validates its segments and preserves all capt
   assert.equal(prepared.internal.text, "第一段\n第二段");
   assert.deepEqual((prepared.internal.payload as Record<string, unknown>).segments, (base.payload as Record<string, unknown>).segments);
   const invalid = (payload: unknown) => () => prepareAgentSendRequest({ ...base, payload });
-  assert.throws(invalid({ type: "image", segments: [] }), /1 to 32/);
-  assert.throws(invalid({ type: "image", segments: [{ type: "text", text: "only text" }] }), /1 to 16 images/);
+  assert.throws(invalid({ type: "image", segments: [] }), /at least one ordered/);
+  assert.throws(invalid({ type: "image", segments: [{ type: "text", text: "only text" }] }), /at least one image/);
   assert.throws(invalid({ type: "image", text: "ambiguous", segments: [{ type: "image", path: "one.png" }] }), /cannot be combined/);
   assert.throws(invalid({ type: "image", segments: [{ type: "image", path: "one.png", url: "https:\/\/example.invalid\/one.png" }] }), /exactly one/);
   assert.throws(invalid({ type: "image", segments: [{ type: "image", path: "one.png", extra: true }] }), /unsupported fields: extra/);

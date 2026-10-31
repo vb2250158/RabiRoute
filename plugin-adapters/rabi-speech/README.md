@@ -27,6 +27,8 @@ cd plugin-adapters\rabi-speech
 
 依赖准备完成后，只启动已安装的 `RabiRouteHost.exe`。Host 创建 Manager，Manager 的语音插件再启动并持有 RabiSpeech；插件停用、应用代重建或用户退出时，同一代 RabiSpeech 必须随之停止。Windows 登录自启动也只能指向 `RabiRouteHost.exe`。历史 `install-service.ps1` 已退役，会明确报错，不能再创建独立的 `RabiSpeech` 计划任务。
 
+未安装可选语音依赖时，退出 RabiRoute 不要求先安装依赖。停止操作仍核对实际进程归属；没有对应进程即确认已离线，已确认归属的残留进程即使安装文件缺失也会停止，其他进程不会被结束。启动操作继续要求完整运行依赖。
+
 默认地址：`http://127.0.0.1:8781`。首次启动会从 `config.example.json` 复制本机 `config.json`；后者不提交 Git。
 
 Windows 安装脚本会把 NVIDIA 官方 CUDA 12 cuBLAS / cuDNN 9 Python wheels 放进插件私有 `.deps`，启动时只把对应 `bin` 目录加入 RabiSpeech 进程 PATH，不改系统级 CUDA PATH。若 DLL 或 GPU 运行时不可用，ASR 会记录能力状态并自动降级 CPU。

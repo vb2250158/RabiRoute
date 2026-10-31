@@ -16,7 +16,7 @@ export class RemoteVideoCompute {
     access?.assert();
     if (this.runtime.readOnly && init.method && !["GET","HEAD"].includes(init.method)) throw new VideoError("只读模式下不能操作远端算力。",423);
     if (init.method && !["GET", "HEAD"].includes(init.method)) access?.beforeMutation();
-    const timeout = route.endsWith("/events") ? 2 * 60 * 60 * 1000 : 120000;
+    const timeout = route.endsWith("/events") ? (this.runtime.getTimeoutMs?.("video.peer.events", 7200000) ?? 7200000) : (this.runtime.getTimeoutMs?.("video.peer.request", 120000) ?? 120000);
     let response;
     try {
       response = await this.runtime.peerFetch(deviceId, `/api/video${route}`, {

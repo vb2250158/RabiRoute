@@ -1,10 +1,37 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { createServer } from "node:http";
 import { buildCodexAgentScan, scanAgentAdapters, scanDshAgentAdapter } from "./managerApi.js";
 import {
   agentAdapterManifest,
   agentAdapterTypes
 } from "../shared/agentAdapterCapabilities.js";
+
+test("a busy DSH owner reaches session discovery after a response slower than the generic probe budget", async () => {
+  const server = createServer((_request, response) => {
+    setTimeout(() => { response.writeHead(401); response.end(); }, 1500);
+  });
+  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  assert.ok(address && typeof address !== "string");
+  const baseUrl = `http://127.0.0.1:${address.port}`;
+  let lookups = 0;
+  try {
+    const result = await scanDshAgentAdapter({
+      rootDir: process.cwd(),
+      runtimes: [{ definition: { dshBaseUrl: baseUrl } }],
+      discoverLocalDsh: () => ({ installed: true, homeDir: process.cwd(), installCandidates: [], discoveredBaseUrls: [baseUrl], warnings: [] }),
+      listDshSessions: async () => {
+        lookups++;
+        return [{ id: "session-00000000-0000-4000-8000-000000000001", name: "Existing task" }];
+      }
+    });
+    assert.equal(lookups, 1);
+    assert.equal(result.agents.dsh.endpoints?.[0]?.healthy, true);
+    assert.equal(result.agents.dsh.sessions?.length, 1);
+    assert.doesNotMatch(result.agents.dsh.warnings?.join(" ") ?? "", /apiproxy 不可用/);
+  } finally { await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())); }
+});
 
 test("Codex scan requires the Desktop owner for delivery", () => {
   const scan = buildCodexAgentScan({

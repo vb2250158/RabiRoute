@@ -1,3 +1,4 @@
+import { getTimeoutMs } from "./shared/timeoutSettings.js";
 import fs from "node:fs";
 import path from "node:path";
 import readline from "node:readline";
@@ -48,8 +49,8 @@ class CodexAppServerRpcError extends Error {
 function timeoutForMethod(method: string, configured: number | undefined): number {
   if (configured) return configured;
   return method === "thread/start" || method === "turn/start" || method === "turn/steer"
-    ? mutationRequestTimeoutMs
-    : defaultRequestTimeoutMs;
+    ? getTimeoutMs("agent.codex.metadataMutation", mutationRequestTimeoutMs)
+    : getTimeoutMs("agent.codex.metadataRead", defaultRequestTimeoutMs);
 }
 
 export function codexAppServerRequestEnvelopeForTest(

@@ -1,3 +1,4 @@
+import { getTimeoutMs } from "../shared/timeoutSettings.js";
 import { BoundedStorageStartup, type StorageAttempt, type StorageStartupLimits } from "./boundedStorageStartup.js";
 import { createStorageStartupProcess, type StorageStartupTask } from "./storageStartupProcess.js";
 import type { PlanStorageStartupGateSummary } from "./planStorageStartupGate.js";
@@ -16,7 +17,7 @@ export class ProgressivePlanStorageStartup {
   }>) {}
 
   attempt(onProgress: (summary: PlanStorageStartupGateSummary) => void): StorageAttempt<PlanStorageStartupGateSummary> {
-    const scope = new BoundedStorageStartup({ itemTimeoutMs: 60_000, batchTimeoutMs: 150_000, ...this.options.limits });
+    const scope = new BoundedStorageStartup({ itemTimeoutMs: getTimeoutMs("backend.manager.progressivePlanStorageStartup.attempt.itemTimeoutMs", 60_000), batchTimeoutMs: getTimeoutMs("backend.manager.progressivePlanStorageStartup.attempt.batchTimeoutMs", 150_000), ...this.options.limits });
     const create: StartupProcessFactory = this.options.processFactory
       ?? (task => createStorageStartupProcess(task, this.options.terminateTimeoutMs));
     const summary: PlanStorageStartupGateSummary = {
@@ -27,6 +28,9 @@ export class ProgressivePlanStorageStartup {
       summary.readyRoleIds = [...this.recovered.keys()];
       summary.migrated = [...this.recovered.values()].reduce((total, item) => total + item.migrated, 0);
       summary.reconciled = [...this.recovered.values()].reduce((total, item) => total + item.reconciled, 0);
+      const packageConflicts = [...this.recovered.values()].flatMap(item => item.packageConflicts ?? []);
+      if (packageConflicts.length) summary.packageConflicts = packageConflicts;
+      else delete summary.packageConflicts;
       onProgress(structuredClone(summary));
     };
     const result = (async () => {

@@ -1,4 +1,3 @@
-import { errorResponsePresentation } from "../shared/errorPresentation.js";
 import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
@@ -6,12 +5,7 @@ import { resolvePlanAttachmentFile } from "../planAttachments.js";
 import { getPlan } from "../roleKnowledge.js";
 import type { PlanAttachment } from "../shared/planAttachmentContract.js";
 import { sanitizeRoleId } from "../shared/routeIdentity.js";
-
-function jsonResponse(response: http.ServerResponse, statusCode: number, body: unknown): void {
-  body = errorResponsePresentation(body, statusCode);
-  response.writeHead(statusCode, { "content-type": "application/json; charset=utf-8" });
-  response.end(JSON.stringify(body, null, 2));
-}
+import { preparePersonaResourceAdmission, type PersonaResourceIdentity } from "./personaResourceAdmission.js";
 
 function contentDisposition(attachment: PlanAttachment): string {
   const mode = attachment.kind === "image" || attachment.kind === "video" ? "inline" : "attachment";
@@ -38,74 +32,40 @@ function parseByteRange(value: string | undefined, size: number): { start: numbe
   return { start, end: Math.min(requestedEnd, size - 1) };
 }
 
-export function handlePlanAttachmentApi(
-  request: http.IncomingMessage,
-  pathname: string,
-  response: http.ServerResponse,
-  resolveRoleDir: (roleId: string) => string
-): boolean {
-  const match = pathname.match(/^\/api\/roles\/([^/]+)\/plans\/([^/]+)\/attachments\/([^/]+)$/);
-  if (!match) return false;
-  if (request.method !== "GET" && request.method !== "HEAD") {
-    jsonResponse(response, 405, { code: -1, message: "Method not allowed." });
-    return true;
-  }
-
-  let roleId: string;
-  let planId: string;
-  let attachmentId: string;
-  try {
-    roleId = sanitizeRoleId(decodeURIComponent(match[1]));
-    planId = decodeURIComponent(match[2]);
-    attachmentId = decodeURIComponent(match[3]);
-  } catch {
-    jsonResponse(response, 400, { code: -1, message: "Invalid plan attachment path." });
-    return true;
-  }
-  if (!roleId || !planId || !attachmentId) {
-    jsonResponse(response, 400, { code: -1, message: "Invalid plan attachment path." });
-    return true;
-  }
-
-  try {
-    const roleDir = resolveRoleDir(roleId);
-    const plan = getPlan(roleDir, planId);
-    const attachment = plan?.attachments.find((item) => item.id === attachmentId);
-    if (!plan || !attachment) {
-      jsonResponse(response, 404, { code: -1, message: "Plan attachment not found." });
-      return true;
+/** Resolve metadata and bytes through the native managed attachment owner. */
+export function createPlanAttachmentOwner(options: { roleDir(roleId: string): string; identity?(): PersonaResourceIdentity }) {
+  return {
+    prepare(request: http.IncomingMessage, rawRoleId: string, planId: string, attachmentId: string, signal?: AbortSignal) {
+      const admission = preparePersonaResourceAdmission(request, signal, options.identity);
+      const roleId = sanitizeRoleId(rawRoleId);
+      if (!roleId || !planId || !attachmentId) throw Object.assign(new Error("Invalid plan attachment path."), { statusCode: 400 });
+      const roleDir = options.roleDir(roleId);
+      const assertCurrent = () => {
+        admission();
+        if (path.resolve(options.roleDir(roleId)) !== path.resolve(roleDir)) throw Object.assign(new Error("Persona directory changed while using the original plan owner."), { statusCode: 409 });
+      };
+      return {
+        read(rangeHeader?: string) {
+          assertCurrent();
+          const plan = getPlan(roleDir, planId);
+          const attachment = plan?.attachments.find(item => item.id === attachmentId);
+          if (!plan || !attachment) throw Object.assign(new Error("Plan attachment not found."), { statusCode: 404 });
+          const filePath = resolvePlanAttachmentFile(roleDir, plan.id, attachment);
+          const body = fs.readFileSync(filePath);
+          let range: { start: number; end: number } | undefined;
+          try { range = parseByteRange(rangeHeader, body.byteLength); }
+          catch { return { status: 416, headers: { "content-range": `bytes */${body.byteLength}`, "accept-ranges": "bytes", "x-content-type-options": "nosniff" } }; }
+          const bytes = range ? body.subarray(range.start, range.end + 1) : body;
+          assertCurrent();
+          return { status: range ? 206 : 200, bytes, headers: {
+            "content-type": attachment.mimeType || "application/octet-stream",
+            "content-length": String(bytes.byteLength), "content-disposition": contentDisposition(attachment),
+            "cache-control": "private, max-age=3600", "accept-ranges": "bytes",
+            ...(range ? { "content-range": `bytes ${range.start}-${range.end}/${body.byteLength}` } : {}),
+            "x-content-type-options": "nosniff"
+          } };
+        }
+      };
     }
-    const filePath = resolvePlanAttachmentFile(roleDir, plan.id, attachment);
-    const body = fs.readFileSync(filePath);
-    let range: { start: number; end: number } | undefined;
-    try {
-      range = parseByteRange(typeof request.headers?.range === "string" ? request.headers.range : undefined, body.byteLength);
-    } catch {
-      response.writeHead(416, {
-        "content-range": `bytes */${body.byteLength}`,
-        "accept-ranges": "bytes",
-        "x-content-type-options": "nosniff"
-      });
-      response.end();
-      return true;
-    }
-    const responseBody = range ? body.subarray(range.start, range.end + 1) : body;
-    response.writeHead(range ? 206 : 200, {
-      "content-type": attachment.mimeType || "application/octet-stream",
-      "content-length": String(responseBody.byteLength),
-      "content-disposition": contentDisposition(attachment),
-      "cache-control": "private, max-age=3600",
-      "accept-ranges": "bytes",
-      ...(range ? { "content-range": `bytes ${range.start}-${range.end}/${body.byteLength}` } : {}),
-      "x-content-type-options": "nosniff"
-    });
-    response.end(request.method === "HEAD" ? undefined : responseBody);
-  } catch (error) {
-    const causeCode = (error as NodeJS.ErrnoException).code;
-    const message = error instanceof Error ? error.message : String(error);
-    const status = causeCode === "ENOENT" || /not found|unavailable|managed directories/i.test(message) ? 404 : causeCode === "EACCES" || causeCode === "EPERM" ? 403 : 500;
-    jsonResponse(response, status, { code: -1, reason: causeCode || "attachment_read_failed",
-      message });
-  }
-  return true;
+  };
 }

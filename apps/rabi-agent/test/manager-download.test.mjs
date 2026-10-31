@@ -10,7 +10,7 @@ import { runManagerCommand } from "../lib/manager-cli.mjs";
 
 const target = "/api/roles/example/skills/sample/download";
 const meta = { health: { live: true, requiredReady: true, state: "healthy" }, applicationGenerationId: "fixture-generation", managerInstanceId: "fixture-instance" };
-const settings = { managerUrl: "http://manager.invalid", credential: "fixture-download-only", agentId: "worker" };
+const settings = { managerUrl: "http://manager.invalid", credential: "fixture-download-only", agentType: "dsh", sessionId: "fixture-session" };
 // Synthetic bytes only: includes invalid UTF-8 and NUL so text roundtripping cannot pass.
 const bytes = Buffer.concat([Buffer.from([0x50, 0x4b, 3, 4]), Buffer.from(Array.from({ length: 4096 }, (_, i) => i % 256))]);
 const digest = createHash("sha256").update(bytes).digest("hex");
@@ -134,14 +134,14 @@ test("CLI downloads exact binary bytes, authenticates all requests and emits onl
   const transport = mock(() => new Response(new ReadableStream({ start(controller) {
     controller.enqueue(bytes.subarray(0, 2)); controller.enqueue(bytes.subarray(2, 9)); controller.enqueue(bytes.subarray(9)); controller.close();
   } }), { headers: { ...headers, "content-disposition": 'attachment; filename="../../never-use.zip"' } }));
-  const result = await runManagerCommand(["--api", "GET", target, "--agent", "worker", "--output", f.output], f.config, { fetchImpl: transport.fetchImpl });
+  const result = await runManagerCommand(["--api", "GET", target, "--agent-type", "dsh", "--id", "fixture-session", "--output", f.output], f.config, { fetchImpl: transport.fetchImpl });
   assert.deepEqual(await fs.readFile(f.output), bytes);
   assert.deepEqual(result, { ok: true, statusCode: 200, path: f.output, sizeBytes: bytes.length, sha256: digest, identity: { applicationGenerationId: meta.applicationGenerationId, managerInstanceId: meta.managerInstanceId } });
   assert.equal(transport.calls.length, 3);
   for (const call of transport.calls) {
     assert.equal(call.options.redirect, "error");
     assert.equal(call.options.headers.authorization, `Bearer ${settings.credential}`);
-    assert.equal(call.options.headers["x-rabiroute-agent-id"], "worker");
+    assert.equal(call.options.headers["x-rabiroute-agent-type"], "dsh");
   }
   await noPartial(f, ["config.json", "chosen.zip"]);
 });
@@ -206,16 +206,16 @@ test("invalid metadata and unavailable post-metadata remove partial", async t =>
   }
 });
 
-test("preflight admits unrelated degraded health but requires live and ready", async t => {
+test("preflight requires live while unrelated required-readiness gaps allow download", async t => {
   const f = await fixture(t);
-  for (const health of [{ live: false, requiredReady: true, state: "healthy" }, { live: true, requiredReady: false, state: "healthy" }]) {
+  for (const health of [{ live: false, requiredReady: true, state: "healthy" }]) {
     let calls = 0;
     await assert.rejects(createManagerClient({ ...settings, fetchImpl: async () => { calls++; return Response.json({ ...meta, health }); } }).download(target, f.output));
     assert.equal(calls, 1);
     await noPartial(f);
   }
   const transport = mock();
-  const fetchImpl = (url, init) => String(url).endsWith("/meta") ? Response.json({ ...meta, health: { ...meta.health, state: "degraded", businessReady: false } }) : transport.fetchImpl(url, init);
+  const fetchImpl = (url, init) => String(url).endsWith("/meta") ? Response.json({ ...meta, health: { ...meta.health, state: "degraded", requiredReady: false, businessReady: false } }) : transport.fetchImpl(url, init);
   assert.equal((await createManagerClient({ ...settings, fetchImpl }).download(target, f.output)).ok, true);
 });
 
@@ -244,7 +244,7 @@ test("CLI SIGINT and SIGTERM cancel downloads and release signal listeners", asy
   for (const event of ["SIGINT", "SIGTERM"]) {
     const before = process.listenerCount(event);
     const transport = mock(() => new Response(new ReadableStream({ start(c) { c.enqueue(bytes.subarray(0, 4)); setTimeout(() => process.emit(event), 30); } }), { headers }));
-    await assert.rejects(runManagerCommand(["--api", "GET", target, "--agent", "worker", "--output", f.output], f.config, { fetchImpl: transport.fetchImpl }));
+    await assert.rejects(runManagerCommand(["--api", "GET", target, "--agent-type", "dsh", "--id", "fixture-session", "--output", f.output], f.config, { fetchImpl: transport.fetchImpl }));
     assert.equal(process.listenerCount(event), before);
     await noPartial(f);
   }
@@ -282,7 +282,7 @@ test("parse guards reject unsafe combinations before credentials, stdin or netwo
     ...["--body-stdin", "--if-match", "--idempotency-key", "--upload-id"].map(flag => ["--api", "GET", target, "--output", f.output, flag, "value"]),
     ["--api", "GET", target, "--output"],
     ["--api", "GET", target, "--output", f.output, "--output", f.output]
-  ]) await assert.rejects(runManagerCommand([...args, "--agent", "worker"], f.config, options));
+  ]) await assert.rejects(runManagerCommand([...args, "--agent-type", "dsh", "--id", "fixture-session"], f.config, options));
   for (const segment of ["..", "%2e%2e", "%2f", "%5c", "%00", "%3a", "NUL", "sample."]) assert.equal(isSkillDownloadTarget(`/roles/example/skills/${segment}/download`), false, segment);
   assert.equal(isSkillDownloadTarget("/roles/example/skills/%E6%B5%8B%E8%AF%95/download"), true);
   await assert.rejects(createManagerClient({ ...settings, fetchImpl: options.fetchImpl }).invoke("GET", target), /explicit download/);

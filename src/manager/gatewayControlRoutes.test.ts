@@ -1,40 +1,32 @@
 import assert from "node:assert/strict";
 import http from "node:http";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
 import type { AddressInfo } from "node:net";
 import {
-  handleGatewayControlApi,
   type GatewayControlRoutesContext,
   type GatewayPayloadOptions,
   type GatewayWeixinLoginTarget
 } from "./gatewayControlRoutes.js";
+
+import { createGatewayControlOperations } from "./gatewayControlOperations.js";
+import { ManagerPluginRouteRegistry } from "./managerPluginRouteRegistry.js";
+import { markAuthenticatedConnectionRequest } from "./connectionRequestAccess.js";
+import { LanAgentAuthority } from "./lanAgentAuthority.js";
+import { evaluateLanAgentRequest, assertTrustedLanAgentPrincipal } from "./lanAgentRequestAccess.js";
+import { registerLanAgentBodyGuard, assertLanAgentBodyAuthority } from "./lanAgentBodyAuthority.js";
 
 type RecordedCall = {
   name: string;
   args: unknown[];
 };
 
-function readJsonBody<T>(request: http.IncomingMessage): Promise<T> {
-  return new Promise((resolve, reject) => {
-    const chunks: Buffer[] = [];
-    request.on("data", (chunk) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
-    request.on("end", () => {
-      try {
-        const text = Buffer.concat(chunks).toString("utf8");
-        resolve((text ? JSON.parse(text) : {}) as T);
-      } catch (error) {
-        reject(error);
-      }
-    });
-    request.on("error", reject);
-  });
-}
-
 function createFixture() {
   const calls: RecordedCall[] = [];
   const failures = new Map<string, Error>();
   const weixinTargets = new Map<string, GatewayWeixinLoginTarget>();
-  const trackedOperations: Promise<unknown>[] = [];
   let manualAlreadyRunning = false;
 
   function record(name: string, ...args: unknown[]): void {
@@ -45,15 +37,6 @@ function createFixture() {
 
   const runtimeStatuses = [{ id: "route-a", status: "running" }];
   const context: GatewayControlRoutesContext = {
-    readJsonBody,
-    jsonResponse(response, statusCode, body) {
-      response.writeHead(statusCode, { "content-type": "application/json; charset=utf-8" });
-      response.end(JSON.stringify(body));
-    },
-    redirectResponse(response, statusCode, location) {
-      response.writeHead(statusCode, { location });
-      response.end();
-    },
     gatewayPayload(options?: GatewayPayloadOptions) {
       record("gatewayPayload", options);
       return { code: 0, data: { options: options ?? null, marker: "gateways" } };
@@ -126,16 +109,12 @@ function createFixture() {
     async replayDelivery(id, body) {
       record("replayDelivery", id, body);
     },
-    trackOperation<T>(operation: Promise<T>): Promise<T> {
-      trackedOperations.push(operation);
-      return operation;
-    }
+
   };
 
   return {
     calls,
     context,
-    trackedOperations,
     failures,
     weixinTargets,
     setManualAlreadyRunning(value: boolean) {
@@ -145,9 +124,12 @@ function createFixture() {
 }
 
 async function startServer(context: GatewayControlRoutesContext) {
+  const registry = new ManagerPluginRouteRegistry();
+  const registration = registry.registerOperations("gateway-runtime-test", createGatewayControlOperations(context));
   const server = http.createServer((request, response) => {
+    markAuthenticatedConnectionRequest(request);
     const requestUrl = new URL(request.url ?? "/", "http://127.0.0.1");
-    if (!handleGatewayControlApi(request, requestUrl, response, context)) {
+    if (!registry.handle(request, requestUrl, response)) {
       response.writeHead(404, { "content-type": "application/json; charset=utf-8" });
       response.end(JSON.stringify({ fallback: true }));
     }
@@ -166,12 +148,18 @@ async function startServer(context: GatewayControlRoutesContext) {
   } while (true);
   return {
     baseUrl: `http://127.0.0.1:${address.port}`,
-    close: () => new Promise<void>((resolve) => server.close(() => resolve()))
+    registry, registration,
+    close: async () => { await registration.dispose(); server.closeAllConnections(); await new Promise<void>((resolve) => server.close(() => resolve())); }
   };
 }
 
 async function json(response: Response): Promise<Record<string, any>> {
-  return await response.json() as Record<string, any>;
+  const body = await response.json() as Record<string, any>;
+  if (body.errorMessages !== undefined) {
+    assert.equal(typeof body.reason, "string"); assert.equal(typeof body.errorMessages.en, "string"); assert.equal(typeof body.errorMessages["zh-CN"], "string");
+    delete body.reason; delete body.errorMessages;
+  }
+  return body;
 }
 
 test("scoped save reports persistence separately from activation and supports recovery lookup", async () => {
@@ -499,7 +487,7 @@ test("Manual trigger keeps accepted, already-running, and parse failure response
     assert.equal((await json(running)).message, "manual trigger already running");
 
     const invalid = await post(app.baseUrl, "/gateways/route-a/manual-trigger", "{");
-    assert.equal(invalid.status, 500);
+    assert.equal(invalid.status, 400);
     assert.equal((await json(invalid)).code, -1);
   } finally {
     await app.close();
@@ -589,31 +577,105 @@ test("Unrelated paths and unsupported top-level methods fall through", async () 
     assert.deepEqual(await json(unrelated), { fallback: true });
 
     const getReload = await fetch(`${app.baseUrl}/reload`);
-    assert.equal(getReload.status, 404);
+    assert.equal(getReload.status, 405);
 
     const putGateways = await fetch(`${app.baseUrl}/gateways`, { method: "PUT" });
-    assert.equal(putGateways.status, 404);
+    assert.equal(putGateways.status, 405);
   } finally {
     await app.close();
   }
 });
 
 
-test("registers complete asynchronous gateway request chains", async () => {
+test("one executable catalog registers the native gateway owners and retires all operations", async () => {
   const fixture = createFixture();
   const app = await startServer(fixture.context);
   try {
+    assert.equal(app.registry.catalogSnapshot().operations.length, 15);
     await post(app.baseUrl, "/gateways", { gateways: [] });
     await post(app.baseUrl, "/gateways/route-a/manual-trigger", { triggerId: "manual" });
     await post(app.baseUrl, "/gateways/route-a/agent-delivery-test", { agentAdapterType: "codex" });
     await post(app.baseUrl, "/gateways/route-a/delivery-replay", { attemptId: "attempt-1" });
+    await app.registration.dispose();
+    assert.equal(app.registry.catalogSnapshot().operations.length, 0);
+  } finally { await app.close(); }
+});
 
-    assert.equal(fixture.trackedOperations.length, 4);
-    assert.deepEqual(
-      (await Promise.allSettled(fixture.trackedOperations)).map((result) => result.status),
-      ["fulfilled", "fulfilled", "fulfilled", "fulfilled"]
-    );
-  } finally {
-    await app.close();
+async function enrolledFixture(t: test.TestContext, readOnly = false) {
+  const fixture = createFixture(), root = fs.mkdtempSync(path.join(os.tmpdir(), "gateway-control-operation-"));
+  const authority = new LanAgentAuthority({ statePath: path.join(root, "authority.json") });
+  const credential = authority.enroll(authority.issueBootstrapTicket().ticket, "empty-gateway-node");
+  const registry = new ManagerPluginRouteRegistry(), unblock: Array<() => void> = [];
+  let registration: ReturnType<typeof registry.registerOperations>, server: http.Server | undefined;
+  t.after(async () => {
+    for (const release of unblock) release(); await registration?.dispose();
+    server?.closeAllConnections(); if (server) await new Promise<void>(resolve => server!.close(() => resolve()));
+    assert.equal(path.dirname(path.resolve(root)), path.resolve(os.tmpdir())); assert.ok(path.basename(root).startsWith("gateway-control-operation-")); fs.rmSync(root, { recursive: true, force: true });
+  });
+  registration = registry.registerOperations("enrolled-gateway-fixture", createGatewayControlOperations(fixture.context, readOnly));
+  server = http.createServer((request, response) => {
+    if (evaluateLanAgentRequest(request, authority, true).kind !== "agent") { response.writeHead(401).end(); return; }
+    markAuthenticatedConnectionRequest(request, () => { assertTrustedLanAgentPrincipal(request); });
+    registerLanAgentBodyGuard(request, body => assertLanAgentBodyAuthority(new URL(request.url!, "http://fixture").pathname, body, undefined));
+    if (!registry.handle(request, new URL(request.url!, "http://fixture"), response)) response.writeHead(404).end();
+  });
+  await new Promise<void>(resolve => server!.listen(0, "127.0.0.1", resolve));
+  const base = "http://127.0.0.1:" + (server.address() as AddressInfo).port;
+  const request = (url: string, method = "GET", body?: unknown, headers?: Record<string, string>, signal?: AbortSignal) => new Promise<Response>((resolve, reject) => {
+    const outgoing = http.request(base + url, { method, signal, headers: { authorization: "Bearer " + credential.token, "content-type": "text/plain", ...headers } }, incoming => {
+      const chunks: Buffer[] = []; incoming.on("data", chunk => chunks.push(Buffer.from(chunk))); incoming.on("error", reject);
+      incoming.on("end", () => resolve(new Response(Buffer.concat(chunks), { status: incoming.statusCode!, headers: incoming.headers as Record<string, string> })));
+    }); outgoing.on("error", reject); outgoing.setTimeout(15000, () => outgoing.destroy(new Error("Owned gateway fixture timeout."))); outgoing.end(body === undefined ? undefined : typeof body === "string" ? body : JSON.stringify(body));
+  });
+  const hold = (key: "writeConfig" | "testAgentDelivery") => {
+    const original = fixture.context[key].bind(fixture.context) as (...args: any[]) => Promise<unknown>;
+    let entered!: () => void, release!: () => void;
+    const started = new Promise<void>(resolve => { entered = resolve; }), gate = new Promise<void>(resolve => { release = resolve; }); unblock.push(release);
+    (fixture.context as any)[key] = async (...args: any[]) => { entered(); await gate; const result = await original(...args); if (key === "writeConfig") fs.writeFileSync(path.join(root, "committed.json"), JSON.stringify({ operationId: args[2], config: result })); return result; };
+    return { started, release };
+  };
+  return { ...fixture, root, request, authority, credential, registry, registration, hold };
+}
+
+test("an enrolled empty Node calls native public gateway reads, lifecycle and scoped writes without another feature grant", async t => {
+  const f = await enrolledFixture(t);
+  assert.equal(f.registry.catalogSnapshot().operations.length, 15);
+  assert.ok(f.registry.catalogSnapshot().operations.every(operation => operation.contract.exposure === "public"));
+  assert.equal((await f.request("/gateways?summary=1&includeConfig=1")).status, 200);
+  assert.equal((await f.request("/network-options")).status, 200);
+  for (const action of ["start", "stop", "restart"]) assert.equal((await f.request("/gateways/route-a/" + action, "POST", "ignored native body")).status, 200);
+  const response = await f.request("/gateways/route-a/config", "PUT", { id: "route-a", enabled: false }, { "idempotency-key": "native-scoped-key", "if-match": "a".repeat(64) });
+  assert.equal(response.status, 200); assert.equal((await response.json()).receipt.operationId, "native-scoped-key");
+  assert.deepEqual(f.calls.find(call => call.name === "writeGatewayConfig")?.args.slice(2), ["a".repeat(64), "native-scoped-key"]);
+});
+
+test("read-only mode and native Route preconditions reject before malformed write JSON or ignored native bodies", async t => {
+  const readOnly = await enrolledFixture(t, true);
+  for (const endpoint of ["/gateways", "/gateways/route-a/config", "/gateways/route-a/manual-trigger", "/gateways/route-a/delete", "/reload"]) {
+    assert.equal((await readOnly.request(endpoint, endpoint.endsWith("config") ? "PUT" : "POST", "not-json")).status, 403);
   }
+  assert.equal(readOnly.calls.length, 0); assert.equal((await readOnly.request("/gateways")).status, 200);
+  const f = await enrolledFixture(t);
+  for (const [endpoint, method] of [["/gateways", "POST"], ["/gateways/route-a/config", "PUT"], ["/gateways/route-a/delete", "POST"]]) {
+    const response = await f.request(endpoint, method, "not-json", { "idempotency-key": "same-native-key", "if-match": 'W/"' + "a".repeat(64) + '"' });
+    assert.equal(response.status, 400); assert.equal((await response.json()).errorCode, "route_catalog_revision_invalid");
+  }
+  assert.equal(f.calls.length, 0);
+});
+
+test("revocation after an accepted native write hides its result and preserves the original committed key", async t => {
+  const f = await enrolledFixture(t), hold = f.hold("writeConfig");
+  const pending = f.request("/gateways", "POST", { gateways: [] }, { "idempotency-key": "original-commit-key", "if-match": "a".repeat(64) });
+  await hold.started; f.authority.setNodeEnabled(f.credential.nodeId, false, true); f.authority.setNodeEnabled(f.credential.nodeId, true, false); hold.release();
+  const response = await pending; assert.equal(response.status, 403); const result = await response.json(); assert.equal(result.uncertain, true); assert.equal(result.receipt, undefined); assert.equal(result.data, undefined);
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(f.root, "committed.json"), "utf8")), { operationId: "original-commit-key", config: { gateways: [] } });
+  assert.equal(f.calls.filter(call => call.name === "writeConfig").length, 1);
+});
+
+test("retirement after HTTP disconnect joins a controlled native delivery test before releasing its operation lease", async t => {
+  const f = await enrolledFixture(t), hold = f.hold("testAgentDelivery"), controller = new AbortController();
+  const pending = f.request("/gateways/route-a/agent-delivery-test", "POST", { agentAdapterType: "codex" }, undefined, controller.signal).catch(() => undefined);
+  await hold.started; controller.abort(); await pending;
+  let retired = false; const retirement = f.registration.dispose().then(() => { retired = true; }); await new Promise<void>(resolve => setImmediate(resolve)); assert.equal(retired, false);
+  hold.release(); await retirement; assert.equal(f.registry.catalogSnapshot().operations.length, 0); assert.equal(f.calls.filter(call => call.name === "testAgentDelivery").length, 1);
 });

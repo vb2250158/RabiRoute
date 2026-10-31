@@ -25,9 +25,9 @@ description: 新增、改造或排障 RabiRoute Agent 端适配器时使用。�
 5. 完整任务 ID 是任务身份；workspace 是每次投递的执行目录，名称用于显示和无 ID 查找。Agent/Desktop 改名、默认 cwd 不同或首投后 `title` 自动变化时继续同一 ID；用户在 Rabi 端明确输入新名称时，UI 先清空旧 ID，再按新名称和 workspace 查找/创建并保存新 ID。
 6. 项目和会话扫描只允许在进入设置界面时自动执行一次，或由用户点击扫描/刷新按钮显式触发；禁止定时轮询、展开面板、输入、`blur`、保存或普通状态刷新持续扫描。
 
-Codex 目前的产品基线是 Desktop owner：RabiRoute 从 Codex Desktop 左侧栏共用的 `session_index.jsonl.thread_name` 读取用户可见 `Name`，再按完整 ID 合并本地状态提供的 cwd、归档、时间和 owner/rollout 状态，以“完整 ID + 工作目录”稳定绑定，并通过 Desktop IPC 把真实消息交给 Codex/ChatGPT Desktop 当前任务。SQLite `threads.title` 可能是首条 prompt，不得用于下拉名称或同名查找。Desktop 必须在线；任务无法加载就失败，禁止启动备用执行 Runtime。
+Codex 目前的产品基线是 Desktop owner：RabiRoute 从 Codex Desktop 左侧栏共用的 `session_index.jsonl.thread_name` 读取用户可见 `Name`，再按完整 ID 合并本地状态提供的 cwd、归档、时间和 owner/rollout 状态，以“完整 ID + 工作目录”稳定绑定，并通过 Desktop IPC 把真实消息交给 Codex/ChatGPT Desktop 当前任务。SQLite `threads.title` 可能是首条 prompt，不得用于下拉名称或同名查找。Desktop 必须在线；任务暂时无法加载时，恢复原 owner 的加载与连接后续投原任务，不把真实消息交给第二 Runtime；其它独立工作继续。
 
-AstrBot 这类服务型 Agent 必须显示服务健康、认证状态和可选会话。当前 AstrBot 合同只允许绑定明确的 ChatUI 会话并调用 `/api/chat/send`；没有 `ASTRBOT_SESSION_ID` 时失败，不再部署或回退到 `rabiroute_agent` 插件。
+AstrBot 这类服务型 Agent 必须显示服务健康、认证状态和可选会话。当前 AstrBot 合同只允许绑定明确的 ChatUI 会话并调用 `/api/chat/send`；没有 `ASTRBOT_SESSION_ID` 时先通过现有会话发现流程取得明确目标，再继续投递；不改投 `rabiroute_agent` 插件的其它会话。
 
 先读 `../../docs/agent-adapter-standard-requirements.md` 和 `../../docs/agent-adapter-integration-lessons.md`。前者定义标准 Agent 端应达到的能力与验收合同；后者记录 Desktop IPC 未唤醒 owner、隔离 app-server 不实时/缺桌面工具，以及共享 4510 导致 Desktop `ECONNREFUSED` 的历史。涉及 Codex/Desktop、会话绑定或工具注册时，还必须读 `../../docs/codex-desktop-agent-acceptance.md`，不能跳过。
 
@@ -44,9 +44,9 @@ AstrBot 这类服务型 Agent 必须显示服务健康、认证状态和可选�
 - 新建、续投、重名、失效 ID、active turn 分别是什么行为。
 - 哪些行为明确禁止，例如第二执行 Runtime、模糊换会话、持久化修改宿主启动配置。
 
-把它写成“要求 / 真源 / 验收证据 / 禁止替代”表。用户未确认前，不得为了让错误消失而改变可观察合同。协议无法满足时保持 `experimental` 并报告缺口，不得私自增加 fallback。
+把它写成“要求 / 真源 / 验收证据 / 禁止替代”表。以用户现有要求确定可观察合同，不为已授权目标重复申请确认；实现失败时保持目标，修复对应链路。协议无法满足时保持 `experimental` 并报告缺口，不得私自增加 fallback。
 
-历史反复修改暴露了六类设计异味，看到任一项就停止实现并回到设计门：
+历史反复修改暴露了六类设计问题，发现时调整受影响的实现并复核，继续不依赖该问题的工作：
 
 1. 用连接成功、记录可读或构建通过代替用户界面中的真实结果。
 2. 把同一个 session ID 误当成同一个 live owner、实时事件流和工具集合。
@@ -85,8 +85,8 @@ Agent 适配器不得把 API、渠道或参数写死为长期真源。每次启�
 
 1. 从 Host status 或结构化 READY 取得当前 Manager 地址，并用 `/meta` 核对 generation、instance 和健康边界。
 2. 调用 `GET /api/agent/help`，按 `operationId` 或 `method + pathTemplate` 选择当前接口合同；发送渠道另调用 `GET /api/agent/send/capabilities`。
-3. 只使用 help 返回的 path、query、body、response、errors、nextStep 和 capability；先检查 `contractLevel` 与 `coverage.missing`：`baseline` 不得当作精确 schema，缺失项必须回到 contractResource 或专用 capabilities；未知接口、渠道或字段 fail closed，不猜测、不自动换渠道。
-4. 成功与失败都保存 HTTP 状态、JSON `code`、`errorCode`、`help`、`repair` 和 receipt/resource 标识。写请求超时、5xx、412 或 generation 变化时，保留原 body 和 delivery/idempotency key，先读回，不自动重放。
+3. 只使用 help 返回的 path、query、body、response、errors、nextStep 和 capability；先检查 `contractLevel` 与 `coverage.missing`：`baseline` 不得当作精确 schema，缺失项必须回到 contractResource 或专用 capabilities；合同缺项时读取对应实现或专用合同，修正参数后继续；仅暂停无法确定语义的那项请求，不把目录缺项当作用户未许可。
+4. 成功与失败都保存 HTTP 状态、JSON `code`、`errorCode`、`help`、`repair` 和 receipt/resource 标识。写请求超时、5xx、412 或 generation 变化时，保留原 body 和 delivery/idempotency key，由原投递拥有者查询原 ID 和执行阶段，再按已有幂等合同恢复；同一 ID 的可靠恢复不是新投递，不因结果未知停止其它独立工作。
 5. 新增接口或渠道时，先更新统一能力目录、help、真实路由声明、契约 fixture 和中英文导航；不得只改长文或 Agent skill。
 
 `/api/lan-agent/capabilities` 应返回同一 operation help 摘要。Help 只描述当前 Manager 版本，不能缓存成永久合同；适配器应记录读取时的 generation 和 contract/schema 版本（若返回）。
@@ -131,7 +131,7 @@ type AgentAdapterCapability = {
 | Codex Desktop | `verified` | 只读发现 Desktop 任务；完整任务 ID 是任务身份，每次投递单独指定执行目录；通过 Desktop IPC 唤醒并向任务 owner start/steer，无 fallback。 |
 | Copilot CLI | `experimental` | 需要验证安装检测、登录、`-C` 项目目录、`--resume` 会话和 Windows 长 prompt 路径。 |
 | Marvis | `stub`/`experimental` | 目前更像打开 App/复制 prompt，不应宣称有可靠会话绑定或回传。 |
-| AstrBot | `experimental` | 只使用 ChatUI `/api/chat/send`；必须配置明确的 `ASTRBOT_SESSION_ID`，缺失时失败关闭。 |
+| AstrBot | `experimental` | 只使用 ChatUI `/api/chat/send`；必须配置明确的 `ASTRBOT_SESSION_ID`，缺失时通过现有会话发现流程取得明确目标，再继续投递。 |
 
 新增或改造时，不要靠口头记忆这些等级；让 Manager scan/status API 返回 `maturity` 和 `warnings`，让 WebGUI 显示出来。
 
@@ -351,12 +351,12 @@ WebGUI 读取 `agents[type]` 优先；旧字段只作为迁移兼容。
 - Codex 的 `name` 必须来自 Desktop 左侧栏共用的 `session_index.jsonl.thread_name`；SQLite 只按完整 ID 补充 cwd、归档、时间和 owner/rollout 定位。禁止使用 app-server `thread.name` 或 SQLite `threads.title` 覆盖侧栏 `Name`。
 - 会话绑定同时持久化可见名称、完整 ID 和 workspace；完整 ID 决定任务身份，workspace 决定下一轮执行目录。名称、时间和任务保存的默认 cwd 是展示或运行元数据，不能让有效 ID 失效。
 - 投递前必须通过实际 owner 的合同验证精确 ID，并校验规范化 cwd。Codex 还必须验证 Desktop IPC 及目标任务 owner。
-- 统一 resolver 先读取有效 ID；ID 存在、cwd 匹配且未归档就精确绑定，不比较 owner 的可变标题。ID 已归档时，真实投递或保存提交点按旧 ID 隔离的幂等键创建新任务并更新绑定，不复用其它同名任务。ID 为空、非法或确实失效时走名称查找，零匹配才按用户输入的新名称创建；最新时间并列才要求选择。
+- 统一 resolver 先读取有效 ID；ID 存在且未归档就精确绑定，本轮 cwd 单独传入，不比较 owner 的可变标题。ID 已归档时，真实投递或保存提交点按旧 ID 隔离的幂等键创建新任务并更新绑定，不复用其它同名任务。ID 为空、非法或确实失效时走名称查找，零匹配才按用户输入的新名称创建；最新时间并列才要求选择。
 - 扫描、刷新、输入和 `blur` 只能 lookup，禁止创建；保存/应用、第一条真实投递或用户显式点击“自动初始化会话”才是 create 提交点。
 - 保存提交必须调用和真实投递相同的 resolver，成功前写回完整 ID、名称和 workspace；连续保存不得再次创建。
 - create 必须按 `agentProfile + normalizedWorkspace + requestedName` single-flight；create 已返回但索引尚未刷新时，立即重试仍返回同一个 ID。
-- 精确 ID 存在但 cwd 冲突时必须停止，禁止悄悄切到同名或最新会话。
-- 用户不填写、不查看、不手改 UUID；ID 只能由扫描、创建或受控迁移产生。
+- 精确 ID 决定目标任务；任务默认 cwd 与本轮目录不同不影响身份，按本轮指定目录执行。目录确实不存在或宿主不支持切换时报告具体错误并修复目录/调用，不切换任务。
+- 默认通过扫描或创建取得完整 ID；用户明确提供的完整 ID 可直接按 owner 合同解析，不要求额外许可。
 - 列表超过默认页大小时必须提供分页/搜索或完整加载，不能固定截断后宣称“所有会话”。
 - 名称和 workspace 匹配多个会话时必须按可解析的 `updatedAt` 降序选择唯一最新者，禁止依赖数据库返回顺序；只有最大时间并列或都无有效时间时才让用户选择。
 
@@ -432,7 +432,7 @@ WebGUI 诊断区至少显示：连接/绑定状态、目标来源、最后成功
 - 扫描按钮总是可见；列表为空时显示“扫描”而不是空下拉。
 - 带角色和会话的 Agent 可提供“自动初始化会话”按钮：先保存名称 + ID 绑定；按 Manager 配置名称查找，零匹配只创建一次；再走正式 AgentPacket/角色消息链投递角色资料。初始化首投失败时复用已创建 ID，只重试投递，不再次创建。
 - 关键动作按钮使用图标：刷新、下载/安装、登录、打开、部署、复制。
-- 保存前校验必要字段：路径存在、URL 可达、插件安装、会话与项目匹配。
+- 保存时校验字段格式并展示路径、连接与依赖状态；暂时离线不阻止保存配置。投递使用有效任务 ID 和本轮目录，不把默认项目目录匹配作为额外准入条件。
 - 不要把多个 Agent 的会话混在一个未标注的列表里。
 - 添加 Agent 后可以自动展开参数面板，但复用页面进入时的扫描结果；需要刷新时由用户点击扫描。
 
@@ -444,7 +444,7 @@ AstrBot 当前只支持 ChatUI 会话合同：
 
 - 扫描默认 dashboard：`http://127.0.0.1:6185`，并允许发现最近配置的 URL。
 - 检查 dashboard 是否在线、登录是否可用，并发现可绑定的 ChatUI 会话。
-- 配置必须保存明确的 `ASTRBOT_SESSION_ID`；没有会话 ID 时禁止保存为可投递状态，并显示缺失字段。
+- 配置必须保存明确的 `ASTRBOT_SESSION_ID`；没有会话 ID 时保存现有配置并显示待解析目标，继续会话发现；解析出明确目标后更新 ID 和投递状态。
 - 投递只调用 `/api/chat/send`。不得调用 `/api/plug/rabiroute_agent/chat`，不得部署 `rabiroute_agent`，不得在会话缺失时切换到默认管线。
 - 如果 AstrBot API 能列 bot、平台账号、群/私聊 channel，可继续提供辅助筛选，但最终投递身份仍是已保存的 ChatUI 会话 ID。
 - 密码/token 缺失时显示缺失字段和重启/保存要求，不要等投递时才失败。
@@ -484,7 +484,7 @@ npm run build
 - 用户环境残留旧 endpoint 时不产生隐藏依赖。
 - 重名会话按名称 + cwd 限定候选；精确 Codex ID 不因任务保存的默认 cwd 与本轮 workspace 不同而失效。非法/失效 ID 按名称 + cwd 自动解析，一个或多个匹配选择唯一最新者，零匹配创建，最新时间并列要求选择；已归档 ID 必须创建新任务、更新绑定且不复用同名任务。
 - Desktop/Agent 端改名或 SQLite 标题在首投后变化时，连续两次真实投递仍使用同一 ID；Rabi 端明确输入新名称时先清空旧 ID，再按新名称查找/创建并保存新 ID。
-- Codex 下拉和无 ID lookup 能按左侧栏 `Name` 找到 UI 可见任务，即使同一 ID 的 app-server `thread.name` 与 SQLite `threads.title` 都不同；该场景不得创建新任务。侧栏索引缺少 `Name` 时，名称查找失败关闭，不得退回其它标题源。
+- Codex 下拉和无 ID lookup 能按左侧栏 `Name` 找到 UI 可见任务，即使同一 ID 的 app-server `thread.name` 与 SQLite `threads.title` 都不同；该场景不得创建新任务。侧栏索引缺少 `Name` 时修复或刷新索引，也可使用已知完整 ID 继续；不把自动标题猜成用户名称。
 - 自动初始化按钮先持久化名称 + ID，再投递包含角色文件、记忆/计划索引和必读项的初始化消息；Desktop 中真实可见，初始化失败不产生第二会话。
 - 超过 100 个会话时仍能访问全部结果；UNC、映射盘和 extended path 规范化后属于同一 cwd。
 - 记录进入设置页、展开面板、输入、`blur`、保存和空闲等待期间的扫描请求次数：只有页面进入一次和每次显式点击扫描各增加一次，禁止后台持续增长。
@@ -492,7 +492,7 @@ npm run build
 - active turn 使用 steer 或明确排队，不并发 start。
 - Codex 实际消息能在 Desktop 目标任务立即显示，并由同一个任务 owner 执行。
 - Desktop 任务工具可用；若缺失，确认不是另一个 Runtime 执行后再报告能力缺失。
-- 登录过期、服务离线、权限请求都有可行动错误；审批默认拒绝。
+- 登录过期、服务离线和用户配置的限制分别返回可行动错误；沿用用户已有授权和宿主实际审批设置，不在适配器添加默认拒绝或二次许可。
 - 多个 gateway/bridge 不会重复消费同一事件。
 
 测试不能只证明“服务已经运行时能连接”。必须验证冷启动、依赖缺席、残留配置和独立退出，并用 `git diff` 确认没有修改用户级环境、注册表或外部应用启动配置。

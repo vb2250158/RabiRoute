@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .timeout_settings import get_timeout_seconds
+
 import json
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -171,7 +173,7 @@ class DesktopPetRosterClient:
     def _get_json(self, path: str) -> object:
         url = urljoin(f"{self.manager_url}/", path.lstrip("/"))
         request = Request(url, method="GET", headers={"accept": "application/json"})
-        with urlopen(request, timeout=self.timeout_seconds) as response:
+        with urlopen(request, timeout=get_timeout_seconds("desktop.pet.request", self.timeout_seconds)) as response:
             return json.loads(response.read().decode("utf-8"))
 
 
@@ -298,7 +300,7 @@ class DesktopPetClient:
     def dialogue(self) -> DesktopPetDialogue:
         role_id = quote(self.persona_id, safe="")
         request = Request(f"{self.manager_url}/api/desktop-pet/roles/{role_id}/dialogue")
-        with urlopen(request, timeout=5) as response:
+        with urlopen(request, timeout=get_timeout_seconds("desktop.pet.dialogue", 5)) as response:
             payload = json.loads(response.read().decode("utf-8"))
         return parse_desktop_pet_dialogue(payload, self.persona_id)
 
@@ -310,7 +312,7 @@ class DesktopPetClient:
         role_id = quote(self.persona_id, safe="")
         request = Request(f"{self.manager_url}/api/desktop-pet/roles/{role_id}/transcripts", method="POST",
                           data=json.dumps(body).encode("utf-8"), headers={"content-type": "application/json"})
-        with urlopen(request, timeout=5) as response:
+        with urlopen(request, timeout=get_timeout_seconds("desktop.pet.dialogue", 5)) as response:
             payload = json.loads(response.read().decode("utf-8"))
         if payload.get("code") != 0 or payload.get("data", {}).get("personaId") != self.persona_id:
             raise ValueError("Manager did not confirm the desktop pet transcript.")
@@ -335,7 +337,7 @@ class DesktopPetClient:
         url = urljoin(f"{self.manager_url}/", f"api/desktop-pet/roles/{role_id}")
         body = json.dumps({"personaId": self.persona_id, **patch}, ensure_ascii=False).encode("utf-8")
         request = Request(url, data=body, method="PATCH", headers={"content-type": "application/json; charset=utf-8"})
-        with urlopen(request, timeout=self.timeout_seconds) as response:
+        with urlopen(request, timeout=get_timeout_seconds("desktop.pet.request", self.timeout_seconds)) as response:
             payload = json.loads(response.read().decode("utf-8"))
         data = payload.get("data") if isinstance(payload, dict) and isinstance(payload.get("data"), dict) else {}
         return parse_desktop_pet_binding(data.get("binding"))
@@ -370,7 +372,7 @@ class DesktopPetClient:
         request = Request(url, method="GET", headers={"accept": "application/json, image/gif, image/png"})
         for attempt in range(6):
             try:
-                with urlopen(request, timeout=self.timeout_seconds) as response:
+                with urlopen(request, timeout=get_timeout_seconds("desktop.pet.request", self.timeout_seconds)) as response:
                     return response.read()
             except HTTPError as error:
                 if error.code not in {429, 503} or attempt >= 5:

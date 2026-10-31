@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { buildIsolatedWebUpdate, removeIsolatedWebWorkspace, captureAutomaticWebInputs } from "./lib/automatic-web-build.mjs";
 
 async function fixture(context) {
@@ -86,4 +87,48 @@ test("Web dependency discovery follows imports without rebuilding for unrelated 
   assert.equal((await captureAutomaticWebInputs(options.sourceRoot)).webDigest, baseline.webDigest);
   await fs.writeFile(path.join(options.sourceRoot, "src/dependency.ts"), 'export const value=2;');
   assert.notEqual((await captureAutomaticWebInputs(options.sourceRoot)).webDigest, baseline.webDigest);
+});
+
+test("isolated Web builds snapshot the full Manager discovery dependency", async context => {
+  const options = await fixture(context);
+  await fs.mkdir(path.join(options.sourceRoot, "scripts/lib"), { recursive: true });
+  const relative = "scripts/lib/windows-host-discovery.mjs";
+  await fs.writeFile(path.join(options.sourceRoot, relative), "export const revision=1;");
+  const baseline = await captureAutomaticWebInputs(options.sourceRoot);
+  assert.equal(baseline.files.get(relative).toString(), "export const revision=1;");
+  await fs.writeFile(path.join(options.sourceRoot, relative), "export const revision=2;");
+  assert.notEqual((await captureAutomaticWebInputs(options.sourceRoot)).webDigest, baseline.webDigest);
+  const run = options.run;
+  options.run = async (...args) => {
+    assert.equal(await fs.readFile(path.join(args[0], relative), "utf8"), "export const revision=2;");
+    await run(...args);
+  };
+  const result = await buildIsolatedWebUpdate(options);
+  assert.equal(result.state, "prepared");
+  await removeIsolatedWebWorkspace(options.workRoot, result.workspace);
+});
+
+
+test("isolated Web discovery imports its actual frozen timeout dependency", async context => {
+  const options = await fixture(context);
+  await fs.mkdir(path.join(options.sourceRoot, "scripts/lib"), { recursive: true });
+  for (const name of ["discover-manager-url.mjs", "windows-host-discovery.mjs", "timeout-settings.mjs"]) {
+    await fs.copyFile(new URL("./lib/" + name, import.meta.url), path.join(options.sourceRoot, "scripts/lib", name));
+  }
+  const baseline = await captureAutomaticWebInputs(options.sourceRoot);
+  const relative = "scripts/lib/timeout-settings.mjs";
+  await fs.appendFile(path.join(options.sourceRoot, relative), "\n// changed timeout implementation\n");
+  const changed = await captureAutomaticWebInputs(options.sourceRoot);
+  assert.notEqual(changed.webDigest, baseline.webDigest);
+  const run = options.run;
+  options.run = async (...args) => {
+    const root = args[0];
+    assert.equal(await fs.readFile(path.join(root, relative), "utf8"), changed.files.get(relative).toString());
+    const actual = await import(pathToFileURL(path.join(root, "scripts/lib/discover-manager-url.mjs")).href);
+    assert.equal(typeof actual.discoverManagerIdentity, "function");
+    await run(...args);
+  };
+  const result = await buildIsolatedWebUpdate(options);
+  assert.equal(result.state, "prepared");
+  await removeIsolatedWebWorkspace(options.workRoot, result.workspace);
 });

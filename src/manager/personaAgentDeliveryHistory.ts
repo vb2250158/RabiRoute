@@ -1,5 +1,6 @@
 import type { AgentThreadRequest, AgentThreadRequestResult } from "../agentThreads.js";
 import { appendPersonaChatReply } from "../personaChatHistory.js";
+import { chatTaskOwner, type PersonaChatTaskMetadataContext } from "./personaChatTaskMetadata.js";
 
 export async function recordPersonaAgentDelivery(
   request: AgentThreadRequest,
@@ -8,6 +9,7 @@ export async function recordPersonaAgentDelivery(
     roleForTask: (sessionId: string, workspace?: string) => string | undefined;
     roleDir: (roleId: string) => string;
     changed: (roleId: string) => void;
+    readDeliveryParties?: PersonaChatTaskMetadataContext["readDeliveryParties"];
   }
 ): Promise<void> {
   if (request.messageSource?.type !== "agent") return;
@@ -18,6 +20,10 @@ export async function recordPersonaAgentDelivery(
   const text = request.prompt?.trim() || [request.result, request.nextAction].filter(Boolean).join("\n");
   if (!delivery?.deliveryId || !sessionId || !targetSessionId || !text) return;
   if (!["delivered", "unconfirmed"].includes(delivery.status || "")) return;
+  let parties;
+  try { parties = dependencies.readDeliveryParties?.([delivery.deliveryId]).get(delivery.deliveryId); }
+  catch { /* Delivery already happened; metadata failure must not invite a resend. */ }
+  const target = result.data.thread as { id?: string; title?: string } | undefined;
   const roleIds = new Set([
     dependencies.roleForTask(sessionId, source?.workspace || request.messageSource.workspace),
     dependencies.roleForTask(targetSessionId, request.cwd)
@@ -26,6 +32,11 @@ export async function recordPersonaAgentDelivery(
     const added = await appendPersonaChatReply(dependencies.roleDir(roleId), {
       kind: "agent_delivery", sessionId, targetSessionId, text,
       sessionTitle: source?.threadName || request.messageSource.sessionName,
+      targetSessionTitle: target?.id === targetSessionId ? target.title : parties?.target.threadId === targetSessionId ? parties.target.threadName : undefined,
+      sourceTaskOwner: parties?.source.threadId === sessionId ? chatTaskOwner(parties.source) : undefined,
+      targetTaskOwner: parties?.target.threadId === targetSessionId ? chatTaskOwner(parties.target) : request.instanceBinding ? {
+        kind: "instance", provider: request.agentAdapter || "codex", agentId: request.instanceBinding.agentId, nodeId: request.instanceBinding.instanceId
+      } : undefined,
       deliveryId: delivery.deliveryId,
       deliveryStatus: delivery.status === "delivered" ? "delivered" : "unconfirmed"
     });

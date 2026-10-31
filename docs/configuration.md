@@ -6,6 +6,19 @@
 
 # 配置与接入
 
+## 超时设置
+
+在 WebGUI“设置 → 超时设置”中搜索操作，填写整数毫秒并保存。留空恢复该操作原有默认值。页面会重新读取保存结果；并发修改同一设置时保留草稿并提示重新加载。
+
+每项设置标明生效阶段：新请求、下次连接或相关服务下次启动。已开始的操作使用开始时的预算。显式传入的单次操作期限、调用方取消信号和上游已剩余的总预算仍然有效；调大一个子操作不会延长已开始的上游操作。请求超时后的写入结果继续由原操作回执核对，不自动重发。
+
+设置保存在原全局配置 `data/Config.json` 的 `timeoutOverrides` 中。缺少覆盖值时沿用各组件原来的配置、环境变量和默认值。设置目录包含已接入的调用点及插件注册的接口期限；轮询间隔、退避、防抖和数据保留时间不属于超时设置。
+
+开发者可通过 `GET /api/rabi/timeouts` 获取 `{code,data:{overrides,catalog}}` 和强 ETag。以该 ETag 作为 `If-Match`，调用 `PATCH /api/rabi/timeouts`，正文为 `{ "overrides": { "agent.codex.catalog": 60000 } }`。这是完整覆盖表；删除键恢复默认，保留不打算修改的键。缺少版本条件返回 428，版本冲突返回 412，非法值返回 400。允许范围为 1–2147483647 毫秒。成功后再次 GET 核对；不确定结果先回读，不能盲目重放旧表覆盖新设置。更改前的完整配置快照保存在本机 `data/.runtime/timeout-settings-backups/`，其中可能含私有配置，不应公开。
+
+远端 Agent 从已验证的 Manager 元数据同步并缓存超时快照；首次离线发现沿用缓存或默认。独立子进程通过 `RABIROUTE_TIMEOUT_OVERRIDES` 接收 JSON 快照，按目录所示在下次启动生效。高级区域的“导出独立服务设置”只复制已保存的纯数字覆盖表。独立运行的服务需要其启动配置提供同一快照，不会因另一台 PC 保存设置而自动改变。
+
+
 远端 Agent 归 Agent 执行端，不再作为消息端添加；通过[远端接入](lan-rabi-agent-bootstrap.md)选择实例与 Agent。
 
 设备接入边界已调整：手表、手环和眼镜在移动端记录系统设置，由记录系统统一投递事件。PC 独立设备入口已移除；下文旧设备协议仅作兼容维护，实施与退出条件见[移动端记录与事件边界](mobile-recording-event-boundary.md)。
@@ -13,6 +26,8 @@
 > 状态：现行指南。字段和成熟度以当前配置模型、Manager API 和扫描结果为准；验收状态见[当前能力与成熟度](current-capabilities.md)。
 
 ## 插件平台
+
+用户配置的包目录默认可以使用插件声明的 `in_process`、`isolated` 或 `declarative` 执行方式，不再按内置/树外来源增加许可。如果需要限制进程内执行，在 Manager 启动环境设置 `RABIROUTE_PLUGIN_IN_PROCESS_ROOTS`，值为包根目录路径的 JSON 数组；目录必须已在包目录中配置。`[]` 禁用全部进程内入口，显式列表只允许其中目录；清空或移除变量恢复所有已配置目录可用，下次启动时生效。拦截信息会列出实际目录、设置值与修改入口。嵌入式调用使用同一含义的 `PluginPackageCatalog` 选项 `trustedInProcessRoots`。
 
 默认 Profile 位于 `dist/plugins/profiles/desktop.json`，默认包根目录是 `dist/plugins/packages/`。源码构建通过 `plugins/profiles/desktop.json` 和 `plugins/builtin/` 生成这两个目录。
 
@@ -474,3 +489,9 @@ NapCat.*/resources/app/napcat/plugins/napcat-plugin-rabiroute
 写入 `messageAdapterPolicies.<消息端>`。首次消息数范围 1–500，增量上限范围 2–500；超过增量上限时返回最早和最新各半，并提示省略范围。索引缺失时可复用同一 Agent/会话的已核对缓存；不同 Agent 不共享。确认凭证与长消息、文风检查分别处理。
 
 完整调用、并发和搜索合同见 [Agent 接口](rabi-agent-interfaces.md#聊天发送前索引核对)。
+
+## Relay 语音服务地址
+
+`rabiLinkRelay.speechServiceUrl` 使用用户配置的本机或远端 HTTP(S) 语音服务地址。语音服务不可用时，不阻断无关 Manager/WebGUI 转发。在 RabiLink 设置中修改该地址。
+
+语音 HTTP 控制、状态查询和录音请求同样可使用配置的远端地址。本机进程启动/停止只管理本机拥有的服务；远端进程应由来源电脑的 Manager 操作，本机接口会说明这一实际能力边界，不会启动或结束同端口的本机替代进程。

@@ -49,7 +49,7 @@ RabiRoute 的 Codex 接入曾依次经历：Desktop IPC 启发式修补、默认
 | Turn |  |  |  |  |  |
 | Tools/approval |  |  |  |  |  |
 
-若 RabiRoute 停止会让外部 Agent 无法冷启动，默认判定为所有权倒置。除非这个 Agent 本来就是 RabiRoute 内建 Runtime，否则不得继续。
+若 RabiRoute 停止会让外部 Agent 无法冷启动，默认判定为所有权倒置。除非这个 Agent 本来就是 RabiRoute 内建 Runtime，否则修复生命周期依赖后继续该链路，其它独立工作继续。
 
 ### C. 产品形态
 
@@ -69,9 +69,9 @@ RabiRoute event -> adapter -> transport -> exact session/task owner -> turn -> o
 
 - 用 owner 返回的完整 opaque ID、可见名称和 workspace 持久化绑定；完整 ID 决定任务身份，workspace 决定每次投递的执行目录，owner 保存的默认 cwd 和标题都是可变元数据。
 - 最后时间和名称只供人识别/无 ID 查找，cwd/project 用于安全边界和消歧；标题变化不能否定有效 ID。
-- ID 必须由扫描、创建或受控迁移自动产生，不能让用户或 AI 手填。resolver 固定顺序：读取有效 ID → ID 存在、cwd 匹配且未归档就精确绑定 → ID 为空/非法/失效才按保存名称 + 规范化 cwd 查询 → 一个或多个同名候选按 `updatedAt` 选择唯一最新者 → 零匹配幂等创建 → 最新时间并列等待选择。Rabi 端显式输入新名称必须先清空旧 ID。
+- 默认自动发现完整 ID，用户明确提供的完整 ID 可按 owner 合同直接解析。resolver 固定顺序：读取有效 ID → ID 存在且未归档就精确绑定，本轮 cwd 单独传入 → ID 为空/非法/失效才按保存名称 + 规范化 cwd 查询 → 一个或多个同名候选按 `updatedAt` 选择唯一最新者 → 零匹配幂等创建 → 最新时间并列等待选择。Rabi 端显式输入新名称必须先清空旧 ID。
 - 从执行该 turn 的 Runtime 探测工具和权限，不从 session 文本或另一客户端推断。
-- 精确 ID 存在但 cwd 冲突、名称重名未消歧或 owner 未加载时失败关闭；配置恢复不能变成实际消息的 fallback。
+- 精确 ID 不因默认 cwd 与本轮目录不同而失效。名称仍有歧义时只澄清目标；owner 暂未加载时恢复原 owner 后按原 ID 续投。只暂停受影响的请求，其它独立工作继续，不以第二执行者冒充原任务。
 
 ### F. 最小纵向探测
 
@@ -84,7 +84,7 @@ RabiRoute event -> adapter -> transport -> exact session/task owner -> turn -> o
 5. 向同一 ID 投递第二条消息，证明没有新建任务。
 6. 验证该轮实际拥有预期工具/权限。
 7. 关闭 RabiRoute 冷启动 Agent；关闭 Agent 启动 Manager。
-8. 让 owner 缺席、精确 ID cwd 冲突，确认没有第二执行路径。
+8. 验证 owner 缺席时可恢复原任务，默认 cwd 不同仍按有效 ID 和本轮目录投递，且不创建第二执行路径。
 9. 在 owner 端改名并让首投改变 SQLite 标题，确认第二条仍进入同一 ID；在 Rabi 设置端输入新名称时确认旧 ID 先被清空，再按新名称重绑或只创建一次。
 10. 记录会话扫描请求：只允许进入设置界面自动一次和用户点击扫描时增加；展开、输入、`blur`、保存与空闲等待不得持续扫描。
 11. 若提供“自动初始化会话”，验证顺序固定为保存/解析名称 + ID → 唯一 owner 投递角色 AgentPacket；零匹配只创建一次，首投失败只重试同一 ID。
@@ -110,7 +110,7 @@ RabiRoute event -> adapter -> transport -> exact session/task owner -> turn -> o
 
 ## 停止条件
 
-出现以下任一情况时停止编码并重新审查设计：
+出现以下情况时调整受影响的设计并验证恢复路径；不暂停无依赖的工作：
 
 - 需要第二个 Runtime 才能隐藏首选路径的错误。
 - 需要写用户级环境变量、注册表或外部应用启动配置。
@@ -119,4 +119,4 @@ RabiRoute event -> adapter -> transport -> exact session/task owner -> turn -> o
 - 无法指出真实 prompt 的唯一执行位置。
 - 只有完整 UI 或安装包启动后才能验证第一条消息。
 
-设计门未通过时，将 maturity 保持为 `experimental` 或 `stub`，只提交探测、诊断和明确的能力缺口。
+尚未验证的能力如实标为 `experimental` 或 `stub`；继续完成可执行的实现、探测和验证，指出剩余具体缺口，不把状态标签当作停止工作的理由。

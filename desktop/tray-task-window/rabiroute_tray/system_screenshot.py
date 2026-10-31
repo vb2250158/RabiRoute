@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .timeout_settings import get_timeout_seconds
+
 import ctypes
 import json
 import math
@@ -749,7 +751,7 @@ class WindowsGlobalHotkey(QObject):
         self._stop_requested.set()
         if self._thread_id:
             ctypes.windll.user32.PostThreadMessageW(self._thread_id, 0x0012, 0, 0)
-        thread.join(timeout=1.5)
+        thread.join(timeout=get_timeout_seconds("desktop.screenshot.stop", 1.5))
         # Never discard a live owner or clear its cancellation for a replacement.
         if not thread.is_alive():
             self._thread = None

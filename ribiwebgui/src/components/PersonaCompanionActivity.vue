@@ -1,12 +1,20 @@
 <script setup lang="ts">
+import { getTimeoutMs } from "../timeoutSettingsClient";
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
 import type { CompanionSession, CompanionSnapshot } from "@shared/companionActivity";
-import { companionRequest, setCompanionMode } from "../companionActivityClient";
-import { managerEventSource } from "../managerApi";
-import { speechControlClient } from "../speech/speechControlClient";
+import { companionRequest as requestCompanion, setCompanionMode as changeCompanionMode } from "../companionActivityClient";
+import { usePersonaService } from "../persona/personaServiceClient";
+import { createSpeechControlClient } from "../speech/speechControlClient";
 import { userFacingError } from "../userFacingError";
+import { browserUuid } from "../browserUuid";
 
 const props = defineProps<{ roleId: string; gatewayId: string }>();
+const personaService = usePersonaService();
+const fetch = personaService.fetch;
+const managerEventSource = personaService.events;
+const speechControlClient = createSpeechControlClient(fetch);
+const companionRequest = (...args: Parameters<typeof requestCompanion>) => requestCompanion(args[0], args[1], args[2], args[3], fetch);
+const setCompanionMode = (...args: Parameters<typeof changeCompanionMode>) => changeCompanionMode(args[0], args[1], args[2], args[3], fetch);
 const snapshot = ref<CompanionSnapshot>({ presets: [], session: null });
 const session = computed(() => snapshot.value.session);
 const active = computed(() => !!session.value && session.value.status !== "ended");
@@ -72,7 +80,7 @@ function releaseSource() {
   videoUrl.value = ""; subtitleUrl.value = "";
 }
 async function begin() {
-  const next = await companionRequest(props.roleId, "start", { requestId: crypto.randomUUID(), gatewayId: props.gatewayId,
+  const next = await companionRequest(props.roleId, "start", { requestId: browserUuid(), gatewayId: props.gatewayId,
     presetId: mode.value, title: title.value, autoReview: autoReview.value, voice: voice.value, saveSummary: saveSummary.value });
   accept(next); sequence = 0;
 }
@@ -83,7 +91,7 @@ async function shareWindow() {
     if (active.value && session.value?.observationOwner === "desktop") { await action("resume"); return; }
     if (active.value) await action("stop");
     releaseSource();
-    accept(await companionRequest(props.roleId, "start", { requestId: crypto.randomUUID(), gatewayId: props.gatewayId,
+    accept(await companionRequest(props.roleId, "start", { requestId: browserUuid(), gatewayId: props.gatewayId,
       presetId: mode.value, title: title.value, autoReview: autoReview.value, voice: voice.value, saveSummary: saveSummary.value, observationOwner: "desktop" }));
   } catch (cause) { error.value = userFacingError(cause); }
   finally { busy.value = false; }
@@ -202,13 +210,13 @@ async function toggleMicrophone() {
       })().catch(cause => { if (alive) error.value = userFacingError(cause); });
     };
     recorder.start(1000); microphoneRecording.value = true;
-    micDeadline = setTimeout(() => { if (recording.state === "recording") recording.stop(); }, 30_000);
+    micDeadline = setTimeout(() => { if (recording.state === "recording") recording.stop(); }, getTimeoutMs("webgui.companion.recordingMax", 30000));
   } catch (cause) { micStream?.getTracks().forEach(track => track.stop()); error.value = userFacingError(cause); }
 }
 onMounted(async () => {
   try {
     accept(await companionRequest(props.roleId));
-    const response = await fetch(`/api/roles/${encodeURIComponent(props.roleId)}/companion/last`, { signal: AbortSignal.timeout(12_000) });
+    const response = await fetch(`/api/roles/${encodeURIComponent(props.roleId)}/companion/last`, { signal: AbortSignal.timeout(getTimeoutMs("webgui.companion.last", 12000)) });
     if (response.ok) lastSummary.value = (await response.json()).data;
     events = managerEventSource("/api/events");
     events.addEventListener("companion_changed", event => {

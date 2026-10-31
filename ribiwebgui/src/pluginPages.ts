@@ -55,6 +55,43 @@ const webPageRoutePaths = new Map<string, WebPageRouteId>();
 const registrationListeners = new Set<RegistrationListener>();
 const replacementListeners = new Set<() => void>();
 let replacementDepth = 0;
+let activeRouteId = '';
+const activeRouteListeners = new Set<() => void>();
+
+/** The router owns which page is displayed; no draft data is retained here. */
+export function setActiveTrustedWebPage(routeId: string): void {
+  if (activeRouteId === routeId) return;
+  activeRouteId = routeId;
+  for (const listener of activeRouteListeners) listener();
+}
+export function activeTrustedWebPage(): TrustedWebPageRegistration | undefined {
+  return webPageRendererRegistry.get(activeRouteId);
+}
+const mountedPageLeases = new Map<TrustedWebPageRegistration, number>();
+/** Cached pages keep their original owner until they actually unmount, not just deactivate. */
+export function retainMountedTrustedWebPage(routeId: string): () => void {
+  const registration = webPageRendererRegistry.get(routeId);
+  if (!registration) return () => {};
+  mountedPageLeases.set(registration, (mountedPageLeases.get(registration) ?? 0) + 1);
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    const count = mountedPageLeases.get(registration) ?? 0;
+    if (count > 1) mountedPageLeases.set(registration, count - 1);
+    else mountedPageLeases.delete(registration);
+    for (const listener of activeRouteListeners) listener();
+  };
+}
+export function mountedTrustedWebPages(): readonly TrustedWebPageRegistration[] {
+  return [...mountedPageLeases.keys()];
+}
+
+export function onActiveTrustedWebPageChanged(listener: () => void): () => void {
+  activeRouteListeners.add(listener);
+  return () => activeRouteListeners.delete(listener);
+}
+
 const webPageRegistrationRevision = ref(0);
 const reservedRoutePaths = new Set(["/", "/plugin-recovery", "/models", "/lan-agents", "/:pathMatch(.*)*"]);
 const controlledPageRequirements = new Set<WebPageDataRequirement>(["gateway.diagnostics"]);

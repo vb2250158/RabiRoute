@@ -1,3 +1,4 @@
+import { getTimeoutMs } from "../shared/timeoutSettings.js";
 import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -100,7 +101,7 @@ export class WearableCompanionWorkerService {
       try { return fs.statSync(candidate).isFile(); } catch { return false; }
     });
     this.#startupReady = dependencies.startupReady;
-    this.#handoffTimeoutMs = Math.max(1, Math.floor(dependencies.handoffTimeoutMs ?? DEFAULT_HANDOFF_TIMEOUT_MS));
+    this.#handoffTimeoutMs = Math.max(1, Math.floor(dependencies.handoffTimeoutMs ?? getTimeoutMs("backend.manager.wearableCompanionWorkerService.DEFAULT_HANDOFF_TIMEOUT_MS", DEFAULT_HANDOFF_TIMEOUT_MS)));
     this.#now = dependencies.now ?? Date.now;
     this.#setTimer = dependencies.setTimer ?? ((callback, delayMs) => setTimeout(callback, delayMs));
     this.#clearTimer = dependencies.clearTimer ?? (timer => clearTimeout(timer));
@@ -159,6 +160,7 @@ export class WearableCompanionWorkerService {
     let retryTimer: ReturnType<typeof setTimeout> | undefined;
     let handoffTimer: ReturnType<typeof setTimeout> | undefined;
     let disposePromise: Promise<void> | undefined;
+    const nativeClosures = new Set<Promise<void>>();
     const retryAttempts: number[] = [];
     let resolveFailure = (_error: Error | undefined): void => {};
     const failure = new Promise<Error | undefined>(resolve => { resolveFailure = resolve; });
@@ -213,6 +215,11 @@ export class WearableCompanionWorkerService {
         return;
       }
       currentLease = lease;
+      // A process lease can settle at exit while stdio/native close is still
+      // pending. Handoff must join this activation's actual child close too.
+      const nativeClosed = new Promise<void>(resolve => lease.child.once("close", () => resolve()));
+      nativeClosures.add(nativeClosed);
+      void nativeClosed.then(() => nativeClosures.delete(nativeClosed));
       let handled = false;
       let processError: Error | undefined;
       const failed = (error: Error): void => {
@@ -291,6 +298,7 @@ export class WearableCompanionWorkerService {
             await this.leases.terminate(lease);
             if (currentLease?.id === lease.id) currentLease = undefined;
           }
+          await Promise.all([...nativeClosures]);
           finish();
         })();
         disposePromise = attempt;

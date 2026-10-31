@@ -27,6 +27,12 @@ type SigningKeyRecord = {
 };
 
 type ReleaseManifestPayload = Pick<LanAgentReleaseManifest, "version" | "platform" | "minNodeVersion" | "files">;
+type CommonReleaseSelection = {
+  schemaVersion: 1;
+  releaseDigest: string;
+  agentRoot: string;
+  manifest: LanAgentReleaseManifest;
+};
 export class LanAgentReleaseSelectionConflictError extends Error {
   constructor() { super("Node release selection conflict; read the current publication before retrying."); }
 }
@@ -165,6 +171,10 @@ export class LanAgentReleaseStore {
   manifest(nodeId?: string): LanAgentReleaseManifest {
     const selected = nodeId ? this.selectedReleaseDigest(nodeId) : undefined;
     if (selected) return this.archivedRelease(selected).manifest;
+    return this.commonRelease()?.manifest ?? this.packagedManifest();
+  }
+
+  private packagedManifest(): LanAgentReleaseManifest {
     const packageJsonPath = path.join(this.agentRoot, "package.json");
     if (!fs.existsSync(packageJsonPath)) {
       throw new Error(`Rabi Agent package metadata is missing: ${packageJsonPath}`);
@@ -219,7 +229,8 @@ export class LanAgentReleaseStore {
     // A signed snapshot URL remains stable across a later node assignment change.
     const selected = nodeId ? this.selectedReleaseDigest(nodeId) : undefined;
     const archived = snapshot ? this.archivedSnapshot(snapshot) : selected ? this.archivedRelease(selected) : undefined;
-    const manifest = archived?.manifest ?? this.manifest();
+    const common = archived ? undefined : this.commonRelease();
+    const manifest = archived?.manifest ?? common?.manifest ?? this.packagedManifest();
     if (version !== manifest.version) throw new Error(`Rabi Agent release version is not available: ${version}`);
     if (platform !== manifest.platform) throw new Error(`Rabi Agent release platform is not available: ${platform}`);
     const normalizedPath = normalizeAssetPath(assetPath);
@@ -228,9 +239,33 @@ export class LanAgentReleaseStore {
       throw new Error(`Rabi Agent release asset is not available: ${normalizedPath}`);
     }
     const archiveRoot = archived?.root;
-    const bytes = fs.readFileSync(archiveRoot ? path.join(archiveRoot, "assets", ...normalizedPath.split("/")) : this.resolveAssetPath(normalizedPath));
+    const bytes = fs.readFileSync(archiveRoot ? path.join(archiveRoot, "assets", ...normalizedPath.split("/")) : this.resolveAssetPath(normalizedPath, common?.agentRoot));
     if (bytes.length !== entry.size || sha256(bytes) !== entry.sha256) throw new Error("LAN Agent release asset integrity mismatch.");
     return bytes;
+  }
+
+  /** Local trusted publication owner only; preserves original URLs and signed digest. */
+  publishCommonRelease(expectedReleaseDigest: string): Readonly<{ version: string; releaseDigest: string }> {
+    if (!releaseHash(expectedReleaseDigest)) throw new Error("A valid expected common release digest is required.");
+    return withFileLockSync(path.join(this.archiveRoot(), "selection.lock"), () => {
+      const previous = this.commonRelease();
+      const current = previous?.manifest ?? this.packagedManifest();
+      const currentDigest = lanAgentReleaseManifestDigest(current);
+      if (currentDigest !== expectedReleaseDigest) throw new LanAgentReleaseSelectionConflictError();
+      // Never replace a damaged selection to silently adopt another package.
+      if (previous) this.verifyCommonAssets(previous);
+      const manifest = this.packagedManifest();
+      const keys = readSigningKeys(this.signingKeyPath);
+      if (!verifyLanAgentReleaseManifest(manifest, lanAgentReleasePublicKeySha256(keys.publicKey))) throw new Error("LAN Agent common release signature mismatch.");
+      const record: CommonReleaseSelection = { schemaVersion: 1, releaseDigest: lanAgentReleaseManifestDigest(manifest),
+        agentRoot: fs.realpathSync(this.agentRoot), manifest };
+      this.verifyCommonAssets(record);
+      atomicWriteFileSync(path.join(this.archiveRoot(), "common.json"), JSON.stringify(record), { mode: 0o600 });
+      recordDataMutationAudit({ group: "lan-agent", event: "lan_agent_common_release_published", owner: "lan-agent-release", action: "publish-common-release",
+        target: { type: "lan-agent-release", id: "common" }, dataSource: { kind: "file", id: "common.json" }, outcome: "committed",
+        before: { digest: currentDigest }, after: { digest: record.releaseDigest } });
+      return Object.freeze({ version: manifest.version, releaseDigest: record.releaseDigest });
+    });
   }
 
   /** Local trusted publication owner only. HTTP never accepts a source directory. */
@@ -245,7 +280,7 @@ export class LanAgentReleaseStore {
         fs.copyFileSync(path.join(source, ...asset.split("/")), destination);
       }
       const frozen = new LanAgentReleaseStore({ rootDir: this.rootDir, agentRoot: path.join(staging, "assets"), signingKeyPath: this.signingKeyPath });
-      const original = frozen.manifest();
+      const original = frozen.packagedManifest();
       const snapshot = sha256(Buffer.from(manifestPayload(original)));
       const unsigned: ReleaseManifestPayload = { ...original, files: original.files.map(file => ({ ...file, downloadUrl: `${file.downloadUrl}?release=${snapshot}` })) };
       const keys = readSigningKeys(this.signingKeyPath);
@@ -291,6 +326,33 @@ export class LanAgentReleaseStore {
   }
 
   private archiveRoot(): string { return path.join(this.rootDir, "data", "lan-agent-releases"); }
+  private commonRelease(): CommonReleaseSelection | undefined {
+    let raw: Record<string, unknown>;
+    try { raw = readJson(path.join(this.archiveRoot(), "common.json")); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined; throw error; }
+    if (raw.schemaVersion !== 1 || !releaseHash(raw.releaseDigest) || typeof raw.agentRoot !== "string"
+      || !path.isAbsolute(raw.agentRoot) || raw.agentRoot !== path.resolve(raw.agentRoot)) throw new Error("Invalid LAN Agent common release selection.");
+    const manifest = raw.manifest as LanAgentReleaseManifest;
+    // An existing selection must never create a replacement signing identity.
+    const publicKey = requiredString(readJson(this.signingKeyPath).publicKey, "LAN Agent release publicKey");
+    if (!verifyLanAgentReleaseManifest(manifest, lanAgentReleasePublicKeySha256(publicKey))) throw new Error("LAN Agent common release signature mismatch.");
+    if (lanAgentReleaseManifestDigest(manifest) !== raw.releaseDigest || manifest.platform !== "node"
+      || !manifest.files.some(file => file.path === "rabi-agent.mjs")
+      || new Set(manifest.files.map(file => file.path)).size !== manifest.files.length
+      || manifest.files.some(file => normalizeAssetPath(file.path) !== file.path || !releaseHash(file.sha256) || !Number.isSafeInteger(file.size) || file.size < 0
+        || file.downloadUrl !== `/api/lan-agent/releases/${encodeURIComponent(manifest.version)}/node/${file.path.split("/").map(encodeURIComponent).join("/")}`)) {
+      throw new Error("LAN Agent common release digest or asset metadata mismatch.");
+    }
+    return { schemaVersion: 1, releaseDigest: raw.releaseDigest, agentRoot: raw.agentRoot, manifest };
+  }
+
+  private verifyCommonAssets(selection: CommonReleaseSelection): void {
+    for (const file of selection.manifest.files) {
+      const bytes = fs.readFileSync(this.resolveAssetPath(file.path, selection.agentRoot));
+      if (bytes.length !== file.size || sha256(bytes) !== file.sha256) throw new Error("LAN Agent common release asset integrity mismatch.");
+    }
+  }
+
   private selections(): Record<string, string> {
     const file = path.join(this.archiveRoot(), "selections.json");
     if (!fs.existsSync(file)) return Object.create(null) as Record<string, string>;
@@ -315,10 +377,10 @@ export class LanAgentReleaseStore {
     return { manifest, root };
   }
 
-  private resolveAssetPath(assetPath: string): string {
+  private resolveAssetPath(assetPath: string, agentRoot = this.agentRoot): string {
     const normalizedPath = normalizeAssetPath(assetPath);
-    const resolved = path.resolve(this.agentRoot, ...normalizedPath.split("/"));
-    const relative = path.relative(this.agentRoot, resolved);
+    const resolved = path.resolve(agentRoot, ...normalizedPath.split("/"));
+    const relative = path.relative(agentRoot, resolved);
     if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
       throw new Error(`Rabi Agent release asset escapes its package root: ${assetPath}`);
     }

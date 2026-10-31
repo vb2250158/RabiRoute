@@ -2,6 +2,8 @@
 
 # 计划附件与步骤文件记录
 
+保留附件时，服务以当前计划包中的文件名定位原文件，重新核对 SHA-256；旧安装根目录或旧附件布局中的绝对路径不影响保存。文件缺失或校验不符时拒绝整个更新，保留原计划包。
+
 计划附件仍使用 `PATCH /api/roles/:roleId/plans/:planId` 的 `attachments` 字段。追加时先读取最新计划和强 ETag，保留旧附件 ID，再加入新内容。单次最多上传 8 个新文件，每文件 10 MiB，新内容合计 25 MiB；仅保留的旧附件不占本次上传额度。请求使用 `If-Match` 与稳定 `Idempotency-Key`，提交后通过同一计划详情回读附件 ID 和 SHA-256。省略整个 `attachments` 字段保持不变；明确传空数组仍表示清除附件。
 
 步骤通过 `steps[].resourceRecords` 保存改动记录，独立于有长度限制的步骤说明。每条记录包含唯一 `id`、来源 `sessionId`、ISO 时间 `time` 及 `resources`。资源包含 `path`、`change`（`added`、`modified`、`deleted`）、`summary`、可选 `sha256` 和 `attribution`（`tool-observed` 或 `agent-reported`）。已有同 ID 记录不可改写；更新步骤而省略记录时保留原记录。Rabi Web 在步骤内显示“文件变动”。这些记录说明改动来源，不代替代码评审或验收。

@@ -1,4 +1,4 @@
-import type { AgentRequestRecord } from "../agentRequests/store.js";
+import { AGENT_REQUEST_REMINDER_MS, type AgentRequestRecord } from "../agentRequests/store.js";
 
 export const MESSAGE_PROCESSING_AUTOMATION_MAX_DELAY_MS = 2_147_000_000;
 
@@ -23,6 +23,7 @@ export class MessageProcessingAutomationService {
   private readonly timers = new Map<string, ScheduledReminder>();
   private readonly inFlight = new Map<string, number>();
   private readonly flights = new Set<Promise<void>>();
+  private readonly failedReports = new Map<string, { until: number; updatedAt: string; nextReminderAt?: string; reminderCount: number }>();
   private readonly now: () => number;
   private readonly scheduleTimer: (callback: () => void, delayMs: number) => AutomationTimer;
   private readonly clearTimer: (timer: AutomationTimer) => void;
@@ -56,6 +57,7 @@ export class MessageProcessingAutomationService {
       this.clearTimer(scheduled.timer);
     }
     this.timers.clear();
+    this.failedReports.clear();
     const flights = [...this.flights];
     if (flights.length) await Promise.allSettled(flights);
     this.inFlight.clear();
@@ -73,16 +75,17 @@ export class MessageProcessingAutomationService {
     for (const requestId of [...this.timers.keys()]) {
       if (!current.has(requestId)) this.cancelTimer(requestId);
     }
+    for (const requestId of this.failedReports.keys()) if (!current.has(requestId)) this.failedReports.delete(requestId);
     for (const request of current.values()) this.arm(request, generation);
   }
 
   private arm(request: AgentRequestRecord, generation: number): void {
     if (!this.isCurrent(generation)) return;
     this.cancelTimer(request.id);
-    if (!this.schedulable(request)) return;
+    if (!this.schedulable(request)) { this.failedReports.delete(request.id); return; }
     if (this.inFlight.get(request.id) === generation) return;
 
-    const triggerAt = Date.parse(request.nextReminderAt!);
+    const triggerAt = this.reminderDeadline(request);
     const delayMs = Math.min(
       Math.max(0, triggerAt - this.now()),
       MESSAGE_PROCESSING_AUTOMATION_MAX_DELAY_MS
@@ -108,12 +111,12 @@ export class MessageProcessingAutomationService {
     try {
       request = this.options.getRequest(scheduledRequest.id);
     } catch (error) {
-      await this.reportError(scheduledRequest, error, generation);
+      await this.reportReadFailure(scheduledRequest, error, generation);
       return;
     }
     if (!request || !this.schedulable(request)) return;
 
-    const triggerAt = Date.parse(request.nextReminderAt!);
+    const triggerAt = this.reminderDeadline(request);
     if (triggerAt > this.now()) {
       this.arm(request, generation);
       return;
@@ -122,6 +125,7 @@ export class MessageProcessingAutomationService {
     this.inFlight.set(request.id, generation);
     try {
       await this.options.deliverReminder(request);
+      if (this.isCurrent(generation)) this.failedReports.delete(request.id);
     } catch (error) {
       await this.reportError(request, error, generation);
     } finally {
@@ -133,8 +137,16 @@ export class MessageProcessingAutomationService {
       const latest = this.options.getRequest(request.id);
       if (latest) this.arm(latest, generation);
     } catch (error) {
-      await this.reportError(request, error, generation);
+      await this.reportReadFailure(request, error, generation);
     }
+  }
+
+  private async reportReadFailure(request: AgentRequestRecord, error: unknown, generation: number): Promise<void> {
+    this.inFlight.set(request.id, generation);
+    try { await this.reportError(request, error, generation); }
+    finally { if (this.inFlight.get(request.id) === generation) this.inFlight.delete(request.id); }
+    this.deferRetry(request, generation);
+    this.arm(request, generation);
   }
 
   private async reportError(
@@ -142,12 +154,29 @@ export class MessageProcessingAutomationService {
     error: unknown,
     generation: number
   ): Promise<void> {
-    if (!this.isCurrent(generation) || !this.options.onError) return;
+    if (!this.isCurrent(generation)) return;
+    if (!this.options.onError) { this.deferRetry(request, generation); return; }
     try {
       await this.options.onError(request, error);
+      if (this.isCurrent(generation)) this.failedReports.delete(request.id);
     } catch {
-      // Error reporting must not create an unhandled timer callback rejection.
+      // A failed durable report leaves the old due time unchanged. Keep this
+      // request bounded locally without claiming that its retry was persisted.
+      this.deferRetry(request, generation);
     }
+  }
+
+  private deferRetry(request: AgentRequestRecord, generation: number): void {
+    if (!this.isCurrent(generation)) return;
+    this.failedReports.set(request.id, { until: this.now() + AGENT_REQUEST_REMINDER_MS,
+      updatedAt: request.updatedAt, nextReminderAt: request.nextReminderAt, reminderCount: request.reminderCount });
+  }
+
+  private reminderDeadline(request: AgentRequestRecord): number {
+    const failure = this.failedReports.get(request.id);
+    if (failure && (failure.updatedAt !== request.updatedAt || failure.nextReminderAt !== request.nextReminderAt
+      || failure.reminderCount !== request.reminderCount)) this.failedReports.delete(request.id);
+    return Math.max(Date.parse(request.nextReminderAt!), this.failedReports.get(request.id)?.until ?? -Infinity);
   }
 
   private schedulable(request: AgentRequestRecord): boolean {

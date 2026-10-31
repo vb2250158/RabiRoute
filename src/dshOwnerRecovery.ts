@@ -1,3 +1,4 @@
+import { getTimeoutMs } from "./shared/timeoutSettings.js";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { spawn } from "node:child_process";
@@ -54,7 +55,7 @@ function localDshRecoveryPorts(): DshOwnerRecoveryPorts {
     discover: () => discoverLocalDsh(),
     reachable: async baseUrl => {
       try {
-        const response = await fetch(baseUrl + "/", { redirect: "manual", signal: AbortSignal.timeout(2000) });
+        const response = await fetch(baseUrl + "/", { redirect: "manual", signal: AbortSignal.timeout(getTimeoutMs("agent.dsh.recoveryProbe", 2000)) });
         await response.body?.cancel();
         return [200, 303, 401].includes(response.status);
       } catch { return false; }
@@ -75,10 +76,10 @@ function localDshRecoveryPorts(): DshOwnerRecoveryPorts {
         try { if (new URL(match[1]).origin === baseUrl) launchUrl = match[1]; } catch { /* unrelated banner */ }
       }
       if (!launchUrl) throw new Error("DSH 当前启动凭据不可用，将自动重试");
-      await connectDshOwner(launchUrl, store.readMetadata().revision, store, AbortSignal.timeout(12000));
+      await connectDshOwner(launchUrl, store.readMetadata().revision, store, AbortSignal.timeout(getTimeoutMs("agent.dsh.recoveryConnect", 12000)));
     },
     verify: async (baseUrl, binding) => {
-      const rows = await listDshSessions({ baseUrl, signal: AbortSignal.timeout(5000), limit: Number.MAX_SAFE_INTEGER });
+      const rows = await listDshSessions({ baseUrl, signal: AbortSignal.timeout(getTimeoutMs("agent.dsh.recoverySessions", 5000)), limit: Number.MAX_SAFE_INTEGER });
       const session = rows.find(row => row.id === binding.sessionId);
       if (!session || !session.cwd || workspaceKey(session.cwd) !== workspaceKey(binding.cwd)) {
         throw new Error("DSH 原会话或工作区不匹配，未创建替代会话");
@@ -90,7 +91,7 @@ function localDshRecoveryPorts(): DshOwnerRecoveryPorts {
       await new Promise<void>((resolve, reject) => {
         const child = spawn("powershell.exe", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", launcher],
           { cwd: homeDir, windowsHide: true, stdio: "ignore" });
-        const deadline = setTimeout(() => { child.kill(); reject(new Error("DSH 启动超时，将自动重试")); }, 90_000);
+        const deadline = setTimeout(() => { child.kill(); reject(new Error("DSH 启动超时，将自动重试")); }, getTimeoutMs("deadline.dshOwnerRecovery.localDshRecoveryPorts", 90_000));
         child.once("error", error => { clearTimeout(deadline); reject(error); });
         child.once("exit", code => { clearTimeout(deadline); code === 0 ? resolve() : reject(new Error("DSH 启动入口失败，将自动重试")); });
       });

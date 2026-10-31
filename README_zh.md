@@ -1,35 +1,45 @@
 <!-- docs-language-switch -->
 <div align="center">
-<a href="./README.md">English</a> | 简体中文
+<a href="./README.md">English</a> | 简体中文 | <a href="./README_ja.md">日本語</a>
 </div>
 <!-- /docs-language-switch -->
 
 # RabiRoute
 
-![RabiRoute 看板娘展示消息进入、规则分流、Agent 处理和受控回传](assets/rabiroute-hero-oss.webp)
+![RabiRoute 看板娘展示通讯、智能设备与桌面自动化连接到 Agent](assets/rabiroute-hero-connections.webp)
 
 <h2 align="center">让 Agent 连接我们的一切。</h2>
 
-<p align="center">把聊天、语音、定时任务和设备消息交给合适的 Agent，并保留清楚的上下文、权限边界和投递记录。</p>
+<p align="center">连接通讯平台、智能设备与桌面工作流，把消息和任务交给合适的 Agent。</p>
 
 <p align="center">
   <a href="https://github.com/vb2250158/RabiRoute/commits/main"><img alt="最近提交" src="https://img.shields.io/github/last-commit/vb2250158/RabiRoute?color=19bfc1"></a>
   <a href="https://github.com/vb2250158/RabiRoute/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/vb2250158/RabiRoute?style=flat&color=ff7eae"></a>
   <a href="./LICENSE"><img alt="许可证：MIT" src="https://img.shields.io/badge/license-MIT-f2c744"></a>
-  <img alt="Node.js 20 或更高版本" src="https://img.shields.io/badge/Node.js-20%2B-3c873a">
-  <img alt="当前版本：0.3.72" src="https://img.shields.io/badge/version-0.3.72-3178c6">
+  <img alt="Node.js 22.13 或更高版本" src="https://img.shields.io/badge/Node.js-22.13%2B-3c873a">
+  <img alt="当前版本：0.4.0" src="https://img.shields.io/badge/version-0.4.0-3178c6">
   <img alt="状态：积极开发中" src="https://img.shields.io/badge/status-active%20development-19bfc1">
 </p>
 
-RabiRoute 是一个与具体 Agent 解耦的**消息网关、发送规则管理器和动作安全门**。它接收 QQ、Webhook、定时任务、语音、桌面操作和设备消息，再按消息路线（Route）把内容交给指定的 Agent 或程序。
+RabiRoute 是一个与具体 Agent 解耦的**消息网关与策略路由器**。它连接通讯平台和智能设备，也支持桌面操作与定时触发，再按消息路线（Route）把内容交给指定的 Agent 或程序。
 
 Agent 负责回答、写代码、调用工具和执行任务。RabiRoute 负责消息从哪里来、交给谁、附带哪些最近消息、能否向外回复，以及结果和回执保存在哪里。
 
-[快速上手](#快速上手) · [当前能力](#当前能力) · [近期变化](#近期变化) · [工作方式](#工作方式) · [文档](#文档入口)
+[连接入口](#连接入口) · [快速上手](#快速上手) · [当前能力](#当前能力) · [工作方式](#工作方式) · [文档](#文档入口)
+
+## 连接入口
+
+| 类别 | 可以接入什么 | 可以用来做什么 |
+| --- | --- | --- |
+| **通讯** | QQ、个人微信、企业微信、飞书 | 把群聊、私聊交给指定 Agent，并将回复发回来源会话。 |
+| **智能设备** | RabiLink 手机与眼镜、智能手表 / 手环、米家 / Home Assistant | 让语音、健康与设备事件进入 Agent，按设备能力播报或执行动作。 |
+| **桌面与自动化** | 选词、截图、角色面板、定时任务、Webhook | 从电脑或外部程序发起任务，按消息或时间自动触发。 |
+
+各入口成熟度不同：QQ 主链已验证，个人微信为实验原型；企业微信、飞书和智能设备按账号、设备与网络分别验收。详见[当前能力](#当前能力)。
 
 ## 适合做什么
 
-- **把聊天交给 Agent。** QQ 群聊、私聊、角色面板和其他消息入口可以按 Route 进入固定项目和固定任务。
+- **让通讯和设备共用 Agent。** 不同入口可以按 Route 交给指定 Agent、项目和任务，分别保留来源与回复目标。
 - **让 Agent 定时工作。** 角色规则可以按间隔、时间窗口、每天指定时间或单次时间触发 Agent，也可以运行明确授权的本机脚本。
 - **操作远端电脑。** 一个主控管理记忆、Skill 和流程，在线客户端提供终端、文件互传、窗口查询和截图，关联 Agent 后端未启动时仍可使用。实验范围见[远端电脑客户端](docs/remote-computer-client.md)。
 - **保留连续上下文。** 每个角色拥有自己的消息记录、计划、记忆和技能引用；每条 Route 可以限制自动附带的最近消息。
@@ -39,10 +49,6 @@ Agent 负责回答、写代码、调用工具和执行任务。RabiRoute 负责�
 - **连接语音和移动设备。** RabiSpeech、RabiLink 手机/眼镜、穿戴设备与远程 Relay 已有实现，但仍按实验集成验收。
 
 ## 快速上手
-
-已连接 Home Assistant 时，Agent 可以查询全部已接入设备实体，并调用其当前提供的按钮、设置和小米设备动作；复用一次连接鉴权，动作保留回执。接入开发者参阅[家庭设备接口](docs/home-device-agent-api.md)。
-
-米家 Setup 另提供实验性云地图文件扫码连接，见[地图连接说明](docs/vacuum-cloud-map.md)。支持 version-2 地图解码；实时定位与坐标导航须分别验收。
 
 ### Windows 安装包
 
@@ -54,7 +60,7 @@ Agent 负责回答、写代码、调用工具和执行任务。RabiRoute 负责�
 
 Windows 完整源码构建启动：双击根目录 `Start-RabiRoute-FromSource.bat`，构建并启动 Host、Manager、WebGUI 和托盘，沿用现有安装版的数据。需要已安装 RabiRoute、Node.js/npm 和 .NET 9 SDK；详见[源码启动说明](docs/getting-started.md)。
 
-Linux 使用新增的最小 Host，需要 Node.js 20+、npm 与 util-linux `flock`：
+Linux 使用新增的最小 Host，需要 Node.js 22.13+、npm 与 util-linux `flock`：
 
 ```bash
 git clone https://github.com/vb2250158/RabiRoute.git
@@ -69,23 +75,46 @@ npm run status:linux -- --json
 
 ### 跑通第一条 Route
 
-1. 打开**快速配置**，选择“定时触发”。
+1. 新建或选择角色，打开“消息适配器”标签，点击“新增消息路由”，在“消息端”卡片添加“定时触发”。
 2. 选择 **Codex Agent**，绑定项目目录和一个已经存在的 Codex/ChatGPT Desktop 任务。
-3. 保存 Route，在**日志诊断**中执行一次手动触发。
-4. 确认触发成功，并且同一个 Desktop 任务出现了 RabiRoute 消息。
+3. 保存 Route，在同页的“通道检查 → 投递测试”发送一次测试消息。
+4. 确认投递成功，并且同一个 Desktop 任务出现了 RabiRoute 消息。
 
-这次手动触发会执行真实投递。完整步骤和失败检查见[跑通第一条 Route](docs/user-guide/first-route.md)。
+投递测试会发送真实消息；定时执行或手动触发规则需要另行配置定时规则。完整步骤和失败检查见[跑通第一条 Route](docs/user-guide/first-route.md)。
 
 ## 当前能力
 
-仓库当前版本为 `0.3.72`。下面只列代码、配置入口和测试能够支持的范围；需要账号、外部服务或真机的功能仍要在对应环境验收。
+仓库当前版本为 `0.4.0`。下面只列代码、配置入口和测试能够支持的范围；需要账号、外部服务或真机的功能仍要在对应环境验收。
 
-角色配置、计划与记忆独立选择角色，未绑定路由的角色也能使用；路由配置负责消息端、Agent 和显式角色引用。归档角色在设置中恢复，彻底删除前检查引用与运行中任务。见[以角色为主的配置架构](docs/role-centric-architecture.md)。本次只收集源码，不安装或激活运行版本。
+### 通讯
+
+| 平台 | 当前状态 | 用户可以完成什么 |
+| --- | --- | --- |
+| QQ（NapCat / OneBot） | 已验证 | 每条 Route 绑定一个 NapCat；在卡片内完成快速、密码、扫码登录与安全确认，接收群聊和私聊、保存媒体证据，并通过 OneBot HTTP 回复。 |
+| 个人微信（Weixin） | 实验原型 | 通过 iLink 接收文字，向来源会话回复文字或受控本地文件；收到的媒体只记录。长期在线与真实账号稳定性仍待验收。 |
+| 企业微信（WeCom） | 实验支持 | 通过智能机器人长连接接收群消息并回发；需要真实机器人凭据联调。 |
+| 飞书（Feishu） | 本地实现已验收，待真实凭证联调 | 通过应用事件回调接收消息、按聊天隔离上下文并回复文字；需要配置应用凭据和事件订阅。 |
+
+### 智能设备
+
+| 设备与服务 | 当前状态 | 用户可以完成什么 |
+| --- | --- | --- |
+| 手机与眼镜（RabiLink） | 实验支持 | 接入语音并接收回复；Relay 连接、实际扬声器播放与网络环境分别验收。 |
+| 智能手表 / 手环 | 实验支持；小米真机部分链路已验证 | 汇集心率、睡眠等健康观测，查询时间线，按阈值与冷却规则触发 Agent。具体指标取决于采集来源。 |
+| 家庭设备（米家 / Home Assistant） | 实验支持 | 查询已接入实体及其当前按钮、设置与设备动作，调用后核对回执。可从[设备列表](docs/user-guide/home-devices.md)查看并测试。 |
+| 语音服务（RabiSpeech） | 实验支持 | 为语音交互提供转写（ASR）与语音合成（TTS），按模型和设备环境分别验收。 |
+
+已连接 Home Assistant 时，Agent 可以查询全部已接入设备实体，并调用其当前提供的按钮、设置和小米设备动作；复用一次连接鉴权，动作保留回执。接入开发者参阅[家庭设备接口](docs/home-device-agent-api.md)。
+
+米家 Setup 另提供实验性云地图文件扫码连接，见[地图连接说明](docs/vacuum-cloud-map.md)。支持 version-2 地图解码；实时定位与坐标导航须分别验收。
+
+### Agent、桌面与任务管理
+
+角色配置、计划与记忆独立选择角色，未绑定路由的角色也能使用；路由配置负责消息端、Agent 和显式角色引用。归档角色在设置中恢复，彻底删除前检查引用与运行中任务。见[以角色为主的配置架构](docs/role-centric-architecture.md)。
 
 | 范围 | 当前状态 | 用户可以完成什么 |
 | --- | --- | --- |
 | 路由主链 | 已验证 | 接收消息、保存事件、匹配规则、生成 Agent 上下文、投递处理端并记录回传。 |
-| NapCat / OneBot | 已验证 | 每个 Route 绑定一个 NapCat；在 Route 卡片内完成快速、密码、扫码登录与安全确认，接收 QQ 群聊和私聊、保存媒体证据，并通过 OneBot HTTP 发送回复。 |
 | 定时任务与角色自动化 | 已验证 | 按消息或时间触发 Agent；在单独授权后运行角色目录中的本机脚本。 |
 | Codex Desktop | 已验证 | 完整任务 ID 选择既有任务，每次投递单独指定项目目录；只有目标任务写入 `deliveryId` 回执后才报告成功。任务删除或归档后可受控换新。 |
 | RibiWebGUI | 已验证 | 管理 Route、角色、消息端、Agent、计划、记忆、日志、诊断、主题和桌面设置。 |
@@ -96,9 +125,8 @@ npm run status:linux -- --json
 | DSH | 实验支持 | 作为主角色或辅助处理端使用明确的 API、项目目录和会话绑定。 |
 | Grok Bot | 实验支持 | 通过原生 HTTP 投递到已有云端会话，在 Route 设置中选择真实会话；来源、稳定投递 ID 与 QQ/Codex 回传遵循 [Grok Bot 接入合同](docs/grok-bot-agent-adapter.md)，真实往返单独验收。 |
 | WorkBuddy | 实验支持 | 把消息投进用户已有的 WorkBuddy 任务，由该任务用它自带的模型、工具和审批执行。投递需要一次性录入本地网关凭据，缺失时失败关闭。任务发现、绑定和生命周期 Hook 已实现；桌面配对入口尚未提供，冷启动未验证。 |
-| RabiSpeech / RabiLink / 移动与穿戴设备 | 实验支持 | 接入语音、手机、眼镜、Relay 和健康数据链路；每条链路按设备与网络环境单独验收。 |
 | 媒体工作台 | 实验支持 | 保存媒体画布项目，组合图片、视频、音频和文本，按需接入本机 H3；模型安装与 GPU 推理需单独验收。 |
-| 局域网 Rabi Agent | 实验支持 | 通过接入提示词连接其他电脑的 Codex/DSH 既有任务；Manager 单独授权节点使用 API 与技能。真实双机与旧节点迁移仍需验收。 |
+| 局域网 Rabi Agent | 实验支持 | 通过接入提示词连接其他电脑的 Codex/DSH 既有任务；连接鉴权后使用公开 API 与技能，具体禁用项以用户配置为准。真实双机与旧节点迁移仍需验收。 |
 
 完整状态、限制和事实源见[当前能力与成熟度](docs/current-capabilities.md)。
 
@@ -142,13 +170,12 @@ RabiLink 配置新增 **重置实例 ID**，用于修复两台电脑复制配置
 
 ```mermaid
 flowchart LR
-    A[聊天 · 定时任务 · 语音 · 设备] --> B[消息入口]
-    B --> C[事件记录]
-    C --> D[Route 规则]
-    D --> E[上下文与附件]
-    E --> F[Agent 或程序]
-    F --> G[发送规则与动作安全门]
-    G --> H[回复 · 回执 · 审计]
+    A[通讯：QQ · 微信 · 飞书] --> R[RabiRoute：消息路线与上下文]
+    B[智能设备：手机 · 眼镜 · 穿戴 · 家居] --> R
+    C[桌面与自动化：选词 · 截图 · 定时 · Webhook] --> R
+    R --> D[指定的 Agent 或程序]
+    D --> E[按发送规则回复或执行动作]
+    E --> F[来源会话或设备 · 投递回执]
 ```
 
 每条 Route 分开保存消息入口、角色、处理端、项目目录和发送规则。消息端不负责拼接 Agent 指令，Agent 也不能绕过 RabiRoute 直接取得渠道凭据或修改路由状态。
@@ -184,8 +211,6 @@ data/roles/<RoleId>/personaConfig.json
 
 ## 文档入口
 
-实验性家庭设备控制和音箱播报见[ Agent 接口](docs/home-device-agent-api.md)，包括设备发现、显式播报绑定与回执核对。
-
 ### 第一次使用
 
 - [跑通第一条 Route](docs/user-guide/first-route.md)：完成一次真实 Codex Desktop 投递。
@@ -196,17 +221,26 @@ data/roles/<RoleId>/personaConfig.json
 ### 安装和接入
 
 - [配置说明](docs/configuration.md)：查看本机配置、目录和主要参数。
-- [局域网 Rabi Agent](docs/lan-rabi-agent-bootstrap.md)：连接其他电脑上的 Codex/DSH 任务，并配置节点权限。
+- [局域网 Rabi Agent](docs/lan-rabi-agent-bootstrap.md)：连接其他电脑上的 Codex/DSH 任务，核对连接状态和可用能力。
 - [远端角色引用](docs/remote-persona-reference.md)：0.3.19 实验实现，在本机 Route 使用另一台 PC 的角色。
 - [RabiSpeech](docs/rabispeech-plugin.md)：配置本机或远端 TTS / ASR。
 - [客户端应用](apps/README.md)：构建 Android、Rokid AIUI、浏览器桥和 Rabi Agent。
 
+### 通讯与智能设备
+
+- [通讯平台状态](docs/current-capabilities.md#消息入口)：比较 QQ、微信、企业微信和飞书的可用范围。
+- [查看设备并测试动作](docs/user-guide/home-devices.md)：查看家庭设备、状态和当前可用动作。
+- [手机语音通话](docs/mobile-voice-call.md)：从手机发起 Agent 通话，确认录音、转写与播放状态。
+- [米家云地图](docs/vacuum-cloud-map.md)：连接实验性地图文件，核对定位与导航边界。
+
 ### 开发和维护
 
+- [接口参考与自动发现](docs/api-reference.md)：在文档页搜索当前运行接口，查看请求与响应并下载 OpenAPI。
 - [当前能力与成熟度](docs/current-capabilities.md)：核对功能是否已验证。
 - [文档索引](docs/README.md)：浏览现行、实验、设计和历史资料。
 - [架构说明](docs/architecture.md)：理解产品边界和数据流。
 - [项目功能手册](docs/project-function-map.md)：查找功能拥有者、API 和代码入口。
+- [家庭设备 Agent 接口](docs/home-device-agent-api.md)：实现设备发现、音箱播报绑定与动作回执查询。
 - [版本更新日志](版本更新日志.md)：查看版本变化和迁移要求。
 
 ## 开发

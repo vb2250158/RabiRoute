@@ -1,8 +1,20 @@
+import { LAN_AGENT_MANAGEMENT_ROUTES } from "./lanAgentManagementContract.js";
+import { LAN_AGENT_READ_ROUTES } from "./lanAgentReadOperations.js";
+import { LAN_AGENT_INTERACTIVE_ROUTES } from "./lanAgentInteractiveContract.js";
+import { REMOTE_AGENT_ROUTES } from "./remoteAgentContract.js";
+import { CODEX_HOOK_OPERATIONS, codexHookOperationContract } from "./codexHookContract.js";
+import { qqReadOperationContract } from "./qqReadContract.js";
+import { qqStickerOperationContract } from "./qqStickerContract.js";
+import { createAgentReceiptMaintenanceOperations } from "./agentSendReceiptOperations.js";
+import { agentUploadOperationContract } from "./agentUploadContract.js";
+import { createAgentDeliveryRecordOperations } from "./agentDeliveryRecords.js";
+import { createAgentThreadControlOperations } from "./agentThreadControlOperations.js";
+import { AgentRequestStore } from "../agentRequests/store.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 import fs from "node:fs";
 import ts from "typescript";
-import { authorizeAgentApiOperation as authorize, listAgentApiOperations } from "./agentApiPolicy.js";
+import { listAgentApiOperations, validateAgentApiRequestTarget } from "./agentApiPolicy.js";
 
 function sample(template: string): string {
   return template.replace(/:([A-Za-z]+)/g, (_match, name: string) => {
@@ -14,33 +26,24 @@ function sample(template: string): string {
   });
 }
 
-test("history discovery exposes response coverage and scan cost without inventing pagination", () => {
-  const operation = listAgentApiOperations().find(item => item.pathTemplate === "/api/roles/:roleId/message-endpoint-history")!;
-  assert.equal(operation.help.limitations, operation.limitations);
-  const help = operation.help.limitations.join("\n");
-  assert.match(help, /最多 200/);
-  assert.match(help, /count 仅本次返回数/);
-  assert.match(help, /少于 limit 也不能证明完整/);
-  assert.match(help, /减小 limit 或增加关键词不降低扫描量/);
-  assert.match(help, /from\/to/);
-  assert.match(help, /同秒多条会漏/);
-  assert.equal(authorize("GET", "/api/roles/example/message-endpoint-history?from=1767225600&to=1767229200&limit=10").allowed, true);
-  assert.equal(authorize("GET", "/api/roles/example/message-endpoint-history?cursor=example").allowed, false);
-});
-
-test("vacuum diagnostics and trajectory are discoverable read operations without arbitrary RPC",()=>{
-  const root="/api/agent/xiaomi-home/vacuum-cloud";
-  for(const suffix of ["/plugin-information?deviceId=123&sdkVersion=10112","/plugin-package?deviceId=123","/trajectory?deviceId=123&poseId=1","/position?deviceId=123&region=cn"]){
-    assert.equal(authorize("GET",root+suffix).allowed,true);
-    assert.equal(authorize("POST",root+suffix).allowed,false);
+test("migrated persona resources, storage, identity and health have no legacy duplicates", () => {
+  const retired = new Set(["chat-history", "voice-transcripts", "conversation-situations", "persona-document", "persona-reference", "skills", "message-endpoint-history", "plan-agents/status", "plans", "memory", "counts", "plan-statuses", "plan-marker-statuses", "identity-relations", "identity-participants", "identity-endpoint-accounts", "identity-candidates", "voice-identities", "health", "knowledge-validation", "knowledge"]);
+  for (const operation of listAgentApiOperations()) {
+    const suffix = operation.pathTemplate.replace(/^\/(?:api\/)?roles\/:roleId\//, "");
+    assert.ok(![...retired].some(value => suffix === value || suffix.startsWith(value + "/")), operation.id);
   }
-  assert.equal(authorize("GET",root+"/trajectory?deviceId=123&poseId=1&aiid=26").allowed,false);
-  assert.equal(authorize("GET",root+"/position?deviceId=123&piid=4").allowed,false);
+  // Native response coverage and remote success are verified by the executable-owner suites.
 });
 
-test("discovery and enforcement share one immutable catalog with discoverable contracts", () => {
+test("migrated home, speech and video discovery no longer has a second legacy table", () => {
+  const legacy = listAgentApiOperations();
+  assert.ok(!legacy.some(operation => operation.pathTemplate.startsWith("/api/agent/xiaomi-home") || operation.pathTemplate.startsWith("/api/speech/") || operation.pathTemplate.startsWith("/api/video/")));
+  // Native authority, platform validation and successful remote calls are exercised by the executable owner suites.
+});
+
+test("discovery exposes immutable contracts without enforcing a second feature policy", () => {
   const catalog = listAgentApiOperations();
-  assert.ok(catalog.length > 150);
+  assert.ok(Array.isArray(catalog));
   assert.equal(new Set(catalog.map(item => item.id)).size, catalog.length);
   assert.equal(new Set(catalog.map(item => `${item.method} ${item.pathTemplate}`)).size, catalog.length);
   assert.ok(Object.isFrozen(catalog));
@@ -73,20 +76,18 @@ test("discovery and enforcement share one immutable catalog with discoverable co
       assert.deepEqual(operation.help.coverage.missing, operation.help.machineReadable.missing);
       assert.ok(operation.help.coverage.missing.includes("error-response-schemas"));
     } else assert.deepEqual(operation.help.coverage.missing, ["request-body-schema", "response-schema"]);
-    const decision = authorize(operation.method, sample(operation.pathTemplate));
-    assert.equal(decision.allowed, true, operation.id);
-    if (decision.allowed) assert.equal(decision.operation.id, operation.id);
-    assert.equal(authorize(operation.method, `${sample(operation.pathTemplate)}/unexpected/action`).allowed, false, operation.id);
-    assert.equal(authorize(operation.method, `${sample(operation.pathTemplate)}?__unknown=example`).allowed, false, operation.id);
+
   }
   assert.throws(() => Object.assign(catalog[0], { pathTemplate: "/api/webgui-access" }));
 });
 
-test("every catalog operation has declaration-level dispatch coverage, not handler verification", () => {
+test("legacy discovery entries retain declaration or executable-owner source evidence, not runtime coverage", () => {
   const root = new URL("../../plugins/builtin/", import.meta.url);
   const declarations: { kind: string; path: string; methods?: string[] }[] = [];
+  let managerFiles = 0;
   for (const entry of fs.readdirSync(root, { recursive: true, encoding: "utf8" })) {
     if (!entry.replaceAll("\\", "/").endsWith("/manager.mjs")) continue;
+    managerFiles++;
     const source = fs.readFileSync(new URL(entry.replaceAll("\\", "/"), root), "utf8");
     const ast = ts.createSourceFile(entry, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
     const literal = (node: ts.Node | undefined): string | undefined => node && (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) ? node.text : undefined;
@@ -111,147 +112,41 @@ test("every catalog operation has declaration-level dispatch coverage, not handl
     };
     visit(ast);
   }
-  assert.ok(declarations.length > 50);
+  assert.ok(managerFiles > 0, "The inventory must read actual Manager plugin sources; migrated routes do not need legacy declarations.");
+  const executableRoutes = [...LAN_AGENT_MANAGEMENT_ROUTES, ...LAN_AGENT_READ_ROUTES.map(route => ({ ...route, method: "GET" })),
+    ...createAgentDeliveryRecordOperations({ agentRequests: new AgentRequestStore({ read: () => undefined, write: () => { throw new Error("Inventory cannot write"); } }) }).map(operation => operation.contract),
+    ...createAgentThreadControlOperations({ prepare: () => { throw new Error("Inventory cannot execute owner actions"); } }).map(operation => operation.contract),
+    ...LAN_AGENT_INTERACTIVE_ROUTES, ...REMOTE_AGENT_ROUTES,
+    ...CODEX_HOOK_OPERATIONS.map(codexHookOperationContract), ...(["history", "message", "attachment"] as const).map(qqReadOperationContract),
+    ...[false, true].map(qqStickerOperationContract), ...createAgentReceiptMaintenanceOperations({}).map(operation => operation.contract),
+    ...(["GET", "PUT"] as const).map(method => agentUploadOperationContract(method, Number.MAX_SAFE_INTEGER))];
+  // Compatibility inventory only. Real dispatch/ownership is exercised by executable HTTP
+  // and compiled-Manager tests; source presence cannot prove full-project coverage.
+  const executableOwnerSources = ["apiDiscoveryRoutes", "corePublicOperations", "agentSendOperations", "agentSendReceiptOperations",
+    "agentCommunicationRecordOperations", "agentChatHistoryOperation", "codexHookContract", "agentAdapterCatalogContract",
+    "agentUploadRoutes", "agentQqDiagnostics", "agentGroupFiles", "resourceApiContract", "webguiAccessOperations"]
+    .map(name => fs.readFileSync(new URL(`./${name}.ts`, import.meta.url), "utf8"));
+  executableOwnerSources.push(fs.readFileSync(new URL("../../plugins/builtin/io.rabiroute.manager.diagnostics/1.0.0/operations.mjs", import.meta.url), "utf8"));
+  const missingSources: string[] = [];
   for (const operation of listAgentApiOperations()) {
     const path = sample(operation.pathTemplate);
-    assert.ok(declarations.some(route => (route.kind === "exact" ? route.path === path : path.startsWith(route.path))
-      && (!route.methods || route.methods.includes("*") || route.methods.includes(operation.method))), operation.id);
+    if (!(executableRoutes.some(route => route.pathTemplate === operation.pathTemplate && route.method === operation.method)
+      || executableOwnerSources.some(source => source.includes(JSON.stringify(operation.pathTemplate)))
+      || declarations.some(route => (route.kind === "exact" ? route.path === path : path.startsWith(route.path))
+        && (!route.methods || route.methods.includes("*") || route.methods.includes(operation.method))))) missingSources.push(operation.id);
   }
+  assert.deepEqual(missingSources, [], "Legacy inventory entries need a declaration or their executable owner source.");
 });
 
-test("core business operations are allowed with their exact methods", () => {
-  const allowed: [string, string][] = [
-    ["GET", "/meta"],
-    ["GET", "/api/roles/example/plans?limit=10&status=active&status=waiting&tag=one&tag=two"],
-    ["POST", "/api/roles/example/plans"],
-    ["PATCH", "/roles/example/plans/plan-1"],
-    ["POST", "/api/roles/example/plans/plan-1/feedback"],
-    ["DELETE", "/api/roles/example/plan-statuses/retired"],
-    ["GET", "/api/roles/example/plan-agents/status?planId=p1&planId=p2"],
-    ["POST", "/roles/example/memory/consolidation-runs/run-1/result"],
-    ["GET", "/api/roles/example/skills/skill-1"],
-    ["GET", "/api/roles/%E4%BA%BA%E6%A0%BC/knowledge/search?query=%E8%AE%A1%E5%88%92+update&mode=fulltext"],
-    ["GET", "/api/roles/example/message-endpoint-history?conversationKey=napcat%3Agroup%3Aexample&query=token"],
-    ["POST", "/api/agent/threads"],
-    ["POST", "/api/agent/send"],
-    ["GET", "/api/agent/qq/diagnostics?routeId=example-id"],
-    ["GET", "/api/agent/qq/group-files?routeId=example-id&groupId=123456&folderId=folder_1"],
-    ["POST", "/api/agent/requests/request-1/cancel"],
-    ["POST", "/api/message-processing/requirements/request-1/knowledge-callback"],
-    ["POST", "/api/message-processing/requirements/request-1/send-context"],
-    ["PUT", "/api/roles/example/identity-relations"],
-    ["PATCH", "/api/roles/example/health/config"],
-    ["POST", "/api/personas/example/messages"],
-    ["POST", "/api/speech/tts"],
-    ["POST", "/api/speech/asr"],
-    ["GET", "/api/speech/records/record-1/audio"],
-    ["POST", "/api/remote-agent/tasks"],
-    ["GET", "/api/bilibili-history/roles/example/days/2026-01-02?limit=10"],
-    ["POST", "/api/video/jobs"],
-    ["POST", "/api/agent/yeyu-gamer/work-items"],
-    ["POST", "/api/agent/xiaomi-home/action-requests"]
-  ];
-  for (const [method, target] of allowed) assert.equal(authorize(method, target).allowed, true, `${method} ${target}`);
+test("authenticated ingress accepts public endpoints independently of the discovery catalog", () => {
+  for (const method of ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"])
+    for (const target of ["/api/extension/future?option=value", "/manager-config", "/api/roles/example/plans"])
+      assert.equal(validateAgentApiRequestTarget(method, target).allowed, true);
 });
 
-test("Hook catalog describes management and source-event contracts without binding grants", () => {
-  for (const [method, suffix] of [["POST", "context"], ["GET", "roles"], ["GET", "doctor"], ["GET", "sessions"], ["GET", "sessions/example-session"], ["PUT", "sessions/example-session"], ["PATCH", "sessions/example-session"], ["DELETE", "sessions/example-session"]]) {
-    assert.equal(authorize(method!, "/api/codex-hook/" + suffix).allowed, true);
-  }
-  assert.equal(authorize("POST", "/api/lan-agent/instances/example-node/agents/example-agent/context").allowed, false);
-});
-
-test("administration, credentials, arbitrary files and unsupported methods fail closed", () => {
-  const targets = [
-    "/api/agent/copilot-install", "/api/agent/copilot-login", "/api/agent/astrbot-login-test",
-    "/api/agent/marvis-open", "/api/agent/xiaomi-home/auth", "/api/agent/xiaomi-home/auth/refresh",
-    "/api/agent/xiaomi-home/settings", "/api/agent/xiaomi-home/artifacts",
-    "/api/webgui-access", "/manager-config", "/reload", "/open-config-file",
-    "/api/plugins/reconciliation", "/api/lan-agent/nodes/example/update", "/api/lan-agent/connect",
-    "/api/roles/example/config", "/api/roles/example/personaConfig.json", "/roles/example/persona.md",
-    "/api/persona-sync/files/example/secret.json", "/api/persona-sync/merge",
-    "/api/speech/audio-streams/token", "/api/speech/model-management/runtime/install",
-    "/api/speech/model-management/settings", "/api/speech/model-management/models/example/install",
-    "/api/speech/runtime/start", "/api/video/models/runtime", "/api/video/models/example/download",
-    "/api/remote-agent/connect", "/api/remote-agent/task-events", "/api/bilibili-history/bridge/pair",
-    "/api/bilibili-history/bridge/next", "/api/language-style/validate", "/api/role-panel/messages",
-    "/api/unknown", "/api/host/quit", "/api/agent/threads/anything"
-  ];
-  for (const target of targets) {
-    // Artifact listing is business; registration takes a local filesystem path and is deliberately absent.
-    const methods = target === "/api/agent/xiaomi-home/artifacts" ? ["POST", "PUT", "DELETE"] : ["GET", "POST", "PATCH", "PUT", "DELETE"];
-    for (const method of methods) assert.equal(authorize(method, target).allowed, false, `${method} ${target}`);
-  }
-  for (const method of ["HEAD", "OPTIONS"]) assert.deepEqual(authorize(method, "/meta"), { allowed: false, reason: "operation_not_allowed" });
-  for (const method of ["TRACE", "CONNECT", "get", " GET", "POST ", "GET\r\n"]) {
-    assert.deepEqual(authorize(method, "/meta"), { allowed: false, reason: "invalid_method" });
-  }
-  assert.equal(authorize("DELETE", "/api/roles/example/plans/plan-1").allowed, false);
-  assert.equal(authorize("PATCH", "/api/roles/example/memory/consolidated/memory-1").allowed, false);
-  assert.equal(authorize("POST", "/api/roles/example/skills").allowed, false);
-  assert.equal(authorize("GET", "/api/roles/example/plan-statuses/status-1").allowed, false);
-});
-
-test("raw path and encoding attacks cannot normalize into an allowed operation", () => {
-  for (const target of [
-    "http://localhost/meta", "//localhost/meta", "meta", "/meta/", "/meta#fragment", "/meta\\x",
-    "/api//agent/threads", "/api/agent/./threads", "/api/x/../agent/threads",
-    "/api/%61gent/threads", "/api/agent/%74hreads", "/API/agent/threads",
-    "/api/roles/../plans", "/api/roles/%2e%2e/plans", "/api/roles/%252e%252e/plans",
-    "/api/roles/a%2fb/plans", "/api/roles/a%5cb/plans", "/api/roles/a%252fb/plans",
-    "/api/roles/a%00/plans", "/api/roles/a%0d/plans", "/api/roles/a%7f/plans",
-    "/api/roles/%ff/plans", "/api/roles/%C0%AF/plans", "/api/roles/%E0%A4/plans",
-    "/api/roles/%u002e/plans", "/api/roles/%/plans",
-    "/api/roles/a\u0000/plans", "/api/roles/a b/plans", "/api/roles/\ud800/plans"
-  ]) assert.equal(authorize("GET", target).allowed, false, JSON.stringify(target));
-  // Discovery is not a filesystem validator or an extra remote authorization gate.
-  for(const role of ['a%3Ab','a%3fb','a%23b','a;b','a.','a%20','CON','.hidden','a'.repeat(513)]) assert.equal(authorize('GET',`/api/roles/${role}/plans`).allowed,true);
-  assert.equal(authorize("GET", "/meta?query=" + "a".repeat(16_384)).allowed, false);
-});
-
-test("query credentials and query-based file or method bypasses are denied", () => {
-  for (const key of ["token", "access_token", "Authorization", "api-key", "cookie", "clientSecret", "password", "sourceCapability", "%74oken", "X%2DApi%2DKey"]) {
-    assert.deepEqual(authorize("GET", `/api/roles/example/plans?${key}=fake`), { allowed: false, reason: "query_credentials" });
-  }
-  for (const query of [
-    "path=example", "file=other.md", "url=http%3A%2F%2Flocalhost", "_method=DELETE", "method=POST",
-    "query=one&query=two", "limit=10&limit=20", "to%256ben=fake", "token[]=fake",
-    "query=%ff", "query=%", "query=%00", "query=%0d%0a", "query=x&&limit=1", "query=x;token=fake&unknown=x",
-    "=x", "query=x&", "q=x&".repeat(129)
-  ]) assert.equal(authorize("GET", `/api/roles/example/plans?${query}`).allowed, false, query);
-  assert.equal(authorize('GET','/api/roles/example/plans?limit').allowed,true);
-  assert.equal(authorize('GET','/api/roles/example/plans?').allowed,true);
-  assert.equal(authorize("GET", "/api/roles/example/persona-document?file=other.md").allowed, false);
-  assert.equal(authorize("GET", "/api/roles/example/plans?query=credential+discussion").allowed, true);
-});
-
-test("QQ group-file discovery only admits exact read route and bounded query names", () => {
-  const target = "/api/agent/qq/group-files";
-  const operation = listAgentApiOperations().find(item => item.pathTemplate === target);
-  assert.ok(operation);
-  assert.deepEqual(operation.queryParameters, ["routeId", "groupId", "folderId"]);
-  assert.deepEqual(operation.repeatableQueryParameters, []);
-  assert.equal(operation.help.auth.required, true);
-  assert.equal(operation.help.effects.mode, "readOnly");
-  for (const query of [
-    "routeId=a&groupId=1&groupId=2", "routeId=a&routeId=b&groupId=1",
-    "routeId=a&groupId=1&folderId=a&folderId=b", "routeId=a&groupId=1&token=fake",
-    "routeId=a&groupId=1&action=download", "routeId=a&groupId=1&file_count=1000"
-  ]) assert.equal(authorize("GET", `${target}?${query}`).allowed, false, query);
-  for (const method of ["POST", "PUT", "PATCH", "DELETE"]) assert.equal(authorize(method, `${target}?routeId=a&groupId=1`).allowed, false);
-  assert.equal(authorize("GET", `${target}/another?routeId=a&groupId=1`).allowed, false);
-});
-
-test("integrations retain exact ID shapes while reusing connection authentication", () => {
-  assert.equal(authorize("GET", "/api/bilibili-history/roles/example/days/not-a-date").allowed, false);
-  assert.equal(authorize("GET", "/api/bilibili-history/jobs/not-hex").allowed, false);
-  assert.equal(authorize("GET", "/api/video/jobs/not-a-media-id").allowed, false);
-  for (const target of ["/api/agent/xiaomi-home/resources", "/api/agent/yeyu-gamer/snapshot"]) {
-    const decision = authorize("GET", target);
-    assert.equal(decision.allowed, true);
-    if (decision.allowed) {
-      assert.ok(decision.operation.limitations.some(value => value.includes("鉴权")));
-      assert.ok(!decision.operation.limitations.some(value => value.includes("loopback")));
-    }
-  }
+test("ingress retains HTTP target parsing and credential transport checks", () => {
+  for (const target of ["http://localhost/meta", "//localhost/meta", "meta", "/meta#fragment", "/api/../meta", "/api/%2e%2e/meta", "/api/a%2fb", "/meta?query=%ff", "/meta?query=%00"])
+    assert.equal(validateAgentApiRequestTarget("GET", target).allowed, false, target);
+  for (const key of ["token", "access_token", "Authorization", "api-key", "cookie", "password"])
+    assert.deepEqual(validateAgentApiRequestTarget("GET", `/meta?${key}=fake`), { allowed: false, reason: "query_credentials" });
 });

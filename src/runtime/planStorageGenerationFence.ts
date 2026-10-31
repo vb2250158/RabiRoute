@@ -1,3 +1,4 @@
+import { getTimeoutMs } from "../shared/timeoutSettings.js";
 export type PlanStorageGenerationLease = Readonly<{
   applicationGenerationId: string;
   managerInstanceId: string;
@@ -75,7 +76,7 @@ export async function verifyPlanStorageGenerationLease(
   const fetchImpl = options.fetch ?? fetch;
   const timeoutMs = Number.isSafeInteger(options.timeoutMs) && Number(options.timeoutMs) > 0
     ? Number(options.timeoutMs)
-    : 5_000;
+    : getTimeoutMs("storage.generationProbe", 5000);
   const controller = new AbortController();
   const deadline = setTimeout(() => controller.abort(), timeoutMs);
   deadline.unref?.();

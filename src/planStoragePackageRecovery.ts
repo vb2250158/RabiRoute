@@ -22,6 +22,7 @@ export function recoverStoredPlanPackages(roleDir: string) {
     results: recovered.results,
     errors: recovered.failures.map(failure => ({
       receiptPath: failure.transactionPath,
+      ...(failure.planId ? { planId: failure.planId } : {}),
       message: failure.error
     }))
   };

@@ -1,3 +1,4 @@
+import { getTimeoutMs } from "../../shared/timeoutSettings.js";
 import type { XiaomiHomeRequestAuthority } from "./requestAuthority.js";
 import { execFile } from "node:child_process";
 import fs from "node:fs";
@@ -65,7 +66,7 @@ export class WindowsHomeAssistantOs implements HomeAssistantOsDriver {
     authority?.dispatch();
     await execute(powershell, ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", this.script,
       "-Operation", operation, "-Root", this.root, "-AutoStart", autoStart ? "yes" : "no"],
-    { windowsHide: true, timeout: 30 * 60 * 1000, maxBuffer: 1024 * 1024, signal });
+    { windowsHide: true, timeout: getTimeoutMs("backend.integrations.xiaomiHome.homeAssistantOs.run.execute.timeout", 30 * 60 * 1000), maxBuffer: 1024 * 1024, signal });
     authority?.assert();
     return this.inspect(authority);
   }

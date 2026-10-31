@@ -4,6 +4,7 @@ import { PassThrough } from "node:stream";
 import vm from "node:vm";
 import ts from "typescript";
 import test from "node:test";
+import { preparedApiJson } from "./apiPreparedJson.js";
 
 // Exercise the actual reader without importing the Manager startup/lifecycle module.
 const source = fs.readFileSync(new URL("./controlPlaneRoutes.ts", import.meta.url), "utf8");
@@ -52,6 +53,7 @@ test("the actual JSON response boundary revalidates authority and suppresses sen
     errorResponsePresentation: (body: unknown) => body,
     managerOperationalLog: { record: () => undefined },
     managerOperationalError: () => ({}), rootDir: ".", Buffer,
+    preparedApiJson,
     PERFORMANCE_OPERATIONS: { managerHttpJsonSerialize: "fixture" },
     measureSyncPerformanceOperation: (_name: string, work: () => string) => work()
   }) as (response: unknown, status: number, body: unknown) => void;

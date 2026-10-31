@@ -1,7 +1,11 @@
+import { getTimeoutMs } from "./shared/timeoutSettings.js";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { normalizeLanguageStyleBinding } from "./shared/languageStyle.js";
+
+export const LANGUAGE_STYLE_VALIDATION_STATUSES = Object.freeze(["passed", "failed", "unavailable"] as const);
+export const LANGUAGE_STYLE_VIOLATION_LEVELS = Object.freeze(["error", "warning"] as const);
 
 export type LanguageStyleValidationRequest = {
   text: unknown;
@@ -12,7 +16,7 @@ export type LanguageStyleValidationRequest = {
 
 export type LanguageStyleViolation = {
   ruleId: string;
-  level: "error" | "warning";
+  level: typeof LANGUAGE_STYLE_VIOLATION_LEVELS[number];
   paragraph: number;
   message: string;
   evidence: string;
@@ -20,7 +24,7 @@ export type LanguageStyleViolation = {
 
 export type LanguageStyleValidationResult = {
   passed: boolean;
-  status: "passed" | "failed" | "unavailable";
+  status: typeof LANGUAGE_STYLE_VALIDATION_STATUSES[number];
   styleSkillUrl: string;
   styleDataUrl?: string;
   targetLanguage?: string;
@@ -52,10 +56,12 @@ type StyleData = {
   };
 };
 
-const MAX_STYLE_BYTES = 1024 * 1024;
-const MAX_TEXT_CHARS = 200_000;
-const FETCH_TIMEOUT_MS = 5_000;
-const DEFAULT_SCOPE = "outbound_message";
+export const LANGUAGE_STYLE_VALIDATION_LIMITS = Object.freeze({ requestBytes: 512 * 1024, styleBytes: 1024 * 1024,
+  textChars: 200_000, get fetchTimeoutMs() { return getTimeoutMs("style.fetch", 5000); }, scopeChars: 80, defaultScope: "outbound_message" });
+const MAX_STYLE_BYTES = LANGUAGE_STYLE_VALIDATION_LIMITS.styleBytes;
+const MAX_TEXT_CHARS = LANGUAGE_STYLE_VALIDATION_LIMITS.textChars;
+
+const DEFAULT_SCOPE = LANGUAGE_STYLE_VALIDATION_LIMITS.defaultScope;
 const SUPPORTED_CHECK_KINDS = new Set([
   "forbidden_phrases",
   "unasked_negative_exclusion",
@@ -73,7 +79,7 @@ function requiredText(value: unknown, field: string, maximum: number): string {
 }
 
 function normalizedScope(value: unknown): string {
-  const scope = value == null ? DEFAULT_SCOPE : requiredText(value, "scope", 80);
+  const scope = value == null ? DEFAULT_SCOPE : requiredText(value, "scope", LANGUAGE_STYLE_VALIDATION_LIMITS.scopeChars);
   if (!/^[a-z][a-z0-9_-]*$/i.test(scope)) throw new Error("scope must be a stable identifier.");
   return scope;
 }
@@ -136,7 +142,7 @@ async function readStyleData(url: URL): Promise<StyleData> {
     text = await fs.readFile(localPath, "utf8");
   } else {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+    const timer = setTimeout(() => controller.abort(), LANGUAGE_STYLE_VALIDATION_LIMITS.fetchTimeoutMs);
     try {
       const response = await fetch(url, { signal: controller.signal, redirect: "error" });
       if (!response.ok) throw new Error(`Style data request failed with HTTP ${response.status}.`);
@@ -147,7 +153,7 @@ async function readStyleData(url: URL): Promise<StyleData> {
       text = bytes.toString("utf8");
     } catch (error) {
       if (error instanceof Error && error.name === "AbortError") {
-        throw new Error(`Style data request timed out after ${FETCH_TIMEOUT_MS} ms.`);
+        throw new Error(`Style data request timed out after ${LANGUAGE_STYLE_VALIDATION_LIMITS.fetchTimeoutMs} ms.`);
       }
       throw error;
     } finally {

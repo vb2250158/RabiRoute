@@ -1,6 +1,6 @@
 <!-- docs-language-switch -->
 <div align="center">
-English | <a href="./agents-and-sessions.md">简体中文</a>
+English | <a href="./agents-and-sessions.md">简体中文</a> | <a href="./agents-and-sessions_ja.md">日本語</a>
 </div>
 <!-- /docs-language-switch -->
 

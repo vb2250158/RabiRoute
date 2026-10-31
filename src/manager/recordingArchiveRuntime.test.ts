@@ -1,3 +1,4 @@
+import { nativeHttpTestFetch as fetch } from "./nativeHttpTestClient.js";
 import test from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
@@ -6,6 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import { RecordingArchiveRuntime, type RecordingArchiveRuntimeOptions } from "./recordingArchiveRuntime.js";
+import { handleArchiveRuntimeFixture } from "./resourceApiTestSupport.js";
 import { recordingManifestHash } from "./recordingArchiveContract.js";
 const namespace = "12345678-1234-4234-8234-123456789abc";
 async function fixture(t: import("node:test").TestContext, readProcessing?: RecordingArchiveRuntimeOptions["readProcessing"]) {
@@ -18,7 +20,7 @@ async function fixture(t: import("node:test").TestContext, readProcessing?: Reco
   await runtime.bindings.provisionNamespace("role", namespace);
   await runtime.bindings.configure("phone", "role", namespace, 0);
   await runtime.restore();
-  const server = http.createServer((req, res) => { void runtime.handle(req, new URL(req.url!, "http://test"), res).then(handled => { if (!handled) { res.writeHead(418); res.end("legacy"); } }); });
+  const server = http.createServer((req, res) => { void handleArchiveRuntimeFixture(runtime, req, new URL(req.url!, "http://test"), res).then(handled => { if (!handled) { res.writeHead(418); res.end("legacy"); } }); });
   await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
   t.after(async () => { await runtime.dispose(); await new Promise<void>(resolve => server.close(() => resolve())); await fs.rm(root, { recursive: true, force: true }); });
   const base = `http://127.0.0.1:${(server.address() as import("node:net").AddressInfo).port}/api/resource-cache/data`;

@@ -1,6 +1,6 @@
+import { getTimeoutMs } from "../timeoutSettingsClient";
 import type { GatewayDefinition } from "../types";
 import type { PeerConnectionStatus } from "../../../src/shared/peerTunnelContract";
-import { responseTextByByteLimit } from "../markdownPreview";
 
 export type PersonaSourceDevice = {
   deviceId: string;
@@ -31,12 +31,12 @@ export function remotePersonaServicePath(deviceId: string, path: string): string
   if (!deviceId || (path !== "/meta" && !path.startsWith("/api/")) || path.startsWith("/api/rabilink/peer/")) {
     throw new Error("远端角色读取地址无效。");
   }
-  return `/api/rabilink/peer/http/${encodeURIComponent(deviceId)}/persona${path}`;
+  return `/api/rabilink/peer/http/${encodeURIComponent(deviceId)}/manager${path}`;
 }
 
-async function readJson(path: string, signal = AbortSignal.timeout(25_000), init: RequestInit = {}): Promise<Record<string, unknown>> {
+async function readJson(path: string, signal = AbortSignal.timeout(getTimeoutMs("webgui.persona.remote", 25000)), init: RequestInit = {}): Promise<Record<string, unknown>> {
   const response = await fetch(path, { ...init, signal, redirect: "error" });
-  const text = await responseTextByByteLimit(response, 4 * 1024 * 1024, false, "远端角色响应过大。");
+  const text = await response.text();
   if ([401, 403].includes(response.status)) {
     throw new RemotePersonaReadError("unauthorized", "RabiLink 鉴权失败，无法读取远端角色。请检查 RabiLink 的连接和登录状态。");
   }
@@ -80,7 +80,7 @@ export function sameRemotePersonaManager(left: RemoteManagerIdentity, right: Rem
   return left.applicationGenerationId === right.applicationGenerationId && left.managerInstanceId === right.managerInstanceId;
 }
 
-export async function bootstrapRemotePersonaService(deviceId: string, signal = AbortSignal.timeout(25_000)): Promise<void> {
+export async function bootstrapRemotePersonaService(deviceId: string, signal = AbortSignal.timeout(getTimeoutMs("webgui.persona.remote", 25000))): Promise<void> {
   if (!deviceId) throw new Error("远端角色来源 PC 无效。");
   const before = await readPersonaManagerIdentity("/meta", true, signal);
   const body = await readJson("/api/rabilink/peer/persona/bootstrap", signal, {
@@ -95,7 +95,7 @@ export async function bootstrapRemotePersonaService(deviceId: string, signal = A
 
 export const remotePersonaClient = {
   async devices(): Promise<PersonaSourceDevice[]> {
-    const signal = AbortSignal.timeout(25_000);
+    const signal = AbortSignal.timeout(getTimeoutMs("webgui.persona.remote", 25000));
     const [discovery, servers] = await Promise.all([
       readJson("/api/rabilink/peer/list?deviceKind=pc", signal),
       readJson("/api/rabilink/peer/servers", signal)
@@ -115,7 +115,7 @@ export const remotePersonaClient = {
     });
   },
   async personas(deviceId: string): Promise<RemotePersonaOption[]> {
-    const signal = AbortSignal.timeout(25_000);
+    const signal = AbortSignal.timeout(getTimeoutMs("webgui.persona.remote", 25000));
     await bootstrapRemotePersonaService(deviceId, signal);
     const before = await readRemotePersonaMeta(deviceId, true, signal);
     const body = await readJson(remotePersonaServicePath(deviceId, "/api/personas"), signal);
@@ -131,7 +131,7 @@ export const remotePersonaClient = {
     return personas;
   },
   async reference(deviceId: string, roleId: string, file: string): Promise<RemotePersonaReference> {
-    const signal = AbortSignal.timeout(25_000);
+    const signal = AbortSignal.timeout(getTimeoutMs("webgui.persona.remote", 25000));
     await bootstrapRemotePersonaService(deviceId, signal);
     const before = await readRemotePersonaMeta(deviceId, true, signal);
     const query = new URLSearchParams({ file });
@@ -140,7 +140,6 @@ export const remotePersonaClient = {
     if (!data || data.schemaVersion !== 1 || data.roleId !== roleId || data.file !== file
       || typeof data.document !== "string" || !data.personaConfig || typeof data.personaConfig !== "object" || Array.isArray(data.personaConfig)
       || !data.applicationGenerationId || !data.managerInstanceId || !/^[a-f0-9]{64}$/.test(data.revision || "")) throw new Error("远端角色身份或配置响应无效。");
-    if (new TextEncoder().encode(data.document).byteLength > 2 * 1024 * 1024) throw new Error("远端角色正文超过 2 MiB。");
     const after = await readRemotePersonaMeta(deviceId, false, signal);
     if (!sameRemotePersonaManager(before, data) || !sameRemotePersonaManager(before, after)) {
       throw new Error("远端 Manager 身份已变化，请重新读取角色。");

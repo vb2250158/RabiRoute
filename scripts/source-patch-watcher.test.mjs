@@ -96,16 +96,17 @@ test("source watcher compiles and publishes a changed declared module", async ()
     publish: async request => { published.push(request); return { state: "committed" }; },
   };
   const runtime = { current: () => ({ applicationGenerationId: "app", managerInstanceId: "manager", id: "plugin" }) };
+  let watcher;
   try {
     await fs.mkdir(sourceDirectory, { recursive: true });
     await fs.writeFile(path.join(sourceDirectory, "modules.json"), JSON.stringify({ schemaVersion: 1, modules: [{ id: "watched", source: "source-patches/module.ts", resources: ["source-patches/resource.json"], contract: { schemaVersion: 1 } }] }));
     await fs.writeFile(sourcePath, "export function read() { return 'old'; }\n");
     await fs.writeFile(path.join(sourceDirectory, "resource.json"), "{\"version\":1}\n");
     const firstResourceHash = createHash("sha256").update("{\"version\":1}\n").digest("hex");
-    const watcher = await SourcePatchWatcher.start({ root, service, runtime, outputDirectory, onError: error => errors.push(error) });
+    watcher = await SourcePatchWatcher.start({ root, service, runtime, outputDirectory, onError: error => errors.push(error) });
     assert.ok(watcher);
     await fs.writeFile(sourcePath, "export function read() { return 'new'; }\n");
-    for (let attempt = 0; attempt < 50 && published.length === 0; attempt++) await new Promise(resolve => setTimeout(resolve, 100));
+    await until(() => published.length > 0, () => `Changed declared source was not published: ${errors.join("; ")}`);
     assert.equal(published.length, 1);
     assert.deepEqual(errors, []);
     assert.equal(published[0].moduleId, "watched");
@@ -115,12 +116,12 @@ test("source watcher compiles and publishes a changed declared module", async ()
     assert.equal((await fs.readdir(outputDirectory)).length, 1);
     published.length = 0;
     await fs.writeFile(path.join(sourceDirectory, "resource.json"), "{\"version\":2}\n");
-    for (let attempt = 0; attempt < 50 && published.length === 0; attempt++) await new Promise(resolve => setTimeout(resolve, 100));
+    await until(() => published.length > 0, () => `Changed declared resource was not published: ${errors.join("; ")}`);
     watcher.stop();
     assert.equal(published.length, 1);
     assert.equal(typeof published[0].candidateSha256, "string");
     assert.notEqual(published[0].contract.resources["source-patches/resource.json"], firstResourceHash);
-  } finally { await fs.rm(root, { recursive: true, force: true }); }
+  } finally { watcher?.stop(); await fs.rm(root, { recursive: true, force: true }); }
 });
 
 test("source watcher coalesces rapid saves and applies the latest candidate serially", async () => {
@@ -131,11 +132,12 @@ test("source watcher coalesces rapid saves and applies the latest candidate seri
   const published = [];
   const service = { status: () => ({ modules: [{ id: "watched", state: "ready", uncertainOperation: undefined, activeCandidateSha256: "active", active: { snapshot: { revision: published.length } } }] }), publish: async request => { published.push(request); await new Promise(resolve => setTimeout(resolve, 250)); return { state: "committed" }; } };
   const runtime = { current: () => ({ applicationGenerationId: "app", managerInstanceId: "manager", id: "plugin" }) };
+  let watcher;
   try {
     await fs.mkdir(sourceDirectory, { recursive: true });
     await fs.writeFile(path.join(sourceDirectory, "modules.json"), JSON.stringify({ schemaVersion: 1, modules: [{ id: "watched", source: "source-patches/module.ts" }] }));
     await fs.writeFile(sourcePath, "export function read() { return 'old'; }\n");
-    const watcher = await SourcePatchWatcher.start({ root, service, runtime, outputDirectory });
+    watcher = await SourcePatchWatcher.start({ root, service, runtime, outputDirectory });
     await fs.writeFile(sourcePath, "export function read() { return 'one'; }\n");
     await until(() => published.length === 1, () => "First candidate was not published.");
     await fs.writeFile(sourcePath, "export function read() { return 'two'; }\n");
@@ -143,7 +145,7 @@ test("source watcher coalesces rapid saves and applies the latest candidate seri
     watcher.stop();
     assert.equal(published.length, 2);
     assert.notEqual(published[0].candidateSha256, published[1].candidateSha256);
-  } finally { await fs.rm(root, { recursive: true, force: true }); }
+  } finally { watcher?.stop(); await fs.rm(root, { recursive: true, force: true }); }
 });
 
 test("source watcher preserves a code change when a resource save arrives during compilation", { timeout: 30000 }, async () => {
@@ -173,6 +175,48 @@ test("source watcher preserves a code change when a resource save arrives during
     assert.notEqual(published[0].candidateSha256, "active");
     assert.notEqual(published[1].candidateSha256, "active");
   } finally { watcher?.stop(); release?.(); await fs.rm(root, { recursive: true, force: true }); }
+});
+
+test("source watcher skips stale discovery groups before compiling and retries independent modules", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "rabi-watcher-stale-discovery-"));
+  const definitions = ["bad", "good"].map(id => ({ id, source: `${id}.ts` }));
+  const compiled = [];
+  const registered = [];
+  const errors = [];
+  const service = {
+    status: () => ({ modules: [] }),
+    ensureModule: async id => { registered.push(id); },
+  };
+  const compiler = { close: async () => undefined };
+  const build = async ({ sourcePath }) => {
+    const id = path.basename(sourcePath, ".ts");
+    compiled.push(id);
+    if (id === "bad") throw new Error("Invalid independent source.");
+    return { changed: true, sha256: "good-candidate" };
+  };
+  const watcher = new SourcePatchWatcher(root, definitions, service, {}, path.join(root, "candidates"), build, error => errors.push(error.message), compiler, new Map());
+  let inspectCalls = 0;
+  watcher.refreshWatches = async () => {
+    // Deliver a save during dependency inspection, without relying on OS event timing.
+    if (++inspectCalls === 1) watcher.editSequence++;
+  };
+  try {
+    for (const definition of definitions) {
+      await fs.writeFile(path.join(root, definition.source), "export function read() { return 1; }");
+      watcher.pending.add(definition.id);
+    }
+    await watcher.apply();
+    assert.deepEqual(compiled, []);
+    assert.deepEqual([...watcher.pending], ["bad", "good"]);
+    assert.deepEqual(registered, []);
+    clearTimeout(watcher.timer);
+    watcher.timer = undefined;
+    await watcher.apply();
+    assert.deepEqual(compiled, ["bad", "good"]);
+    assert.deepEqual(registered, ["good"]);
+    assert.deepEqual(errors, ["Invalid independent source."]);
+    assert.equal(watcher.pending.size, 0);
+  } finally { watcher.stop(); await fs.rm(root, { recursive: true, force: true }); }
 });
 
 test("compiler preserves captured source and keeps the parent responsive during compilation", async () => {

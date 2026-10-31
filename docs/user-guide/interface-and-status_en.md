@@ -1,6 +1,6 @@
 <!-- docs-language-switch -->
 <div align="center">
-English | <a href="./interface-and-status.md">简体中文</a>
+English | <a href="./interface-and-status.md">简体中文</a> | <a href="./interface-and-status_ja.md">日本語</a>
 </div>
 <!-- /docs-language-switch -->
 
@@ -20,7 +20,9 @@ An HTTP LAN page may not receive secure browser clipboard permission. Copy-link,
 http://<Rabi-PC-LAN-IP>:<current-manager-port>/#/routes/<Route-config-name>/overview?webgui_token=<access-key>
 ```
 
-The first navigation items are Role configuration, Plans and memory, and Route configuration. Role and knowledge pages use an independent selector containing all non-archived roles, including unbound roles. Route configuration uses its own selector for message endpoints, Agent settings and explicit role references. Canonical role links are `#/roles/<RoleId>/config`, `#/roles/<RoleId>/document` and `#/roles/<RoleId>/knowledge`; Route editing remains at `#/routes/<Route-config-name>/adapters`. Performance, RabiLink and Settings remain host-wide.
+The main sidebar entries are Role configuration and Plans and memory. Their independent persona selector includes every non-archived persona, including those without Routes. Open Role configuration → Message Adapters, the second tab after Profile, to manage that persona's message Routes, endpoints and handling Agent. Switch between multiple Routes or explicitly assign an unbound Route. Create persona in the lower sidebar opens the persona creation dialog.
+
+Canonical links are `#/roles/<RoleId>/config`, `#/roles/<RoleId>/config?tab=messages`, `#/roles/<RoleId>/document` and `#/roles/<RoleId>/knowledge`. Existing `#/routes/<Route-config-name>/adapters` links open the associated persona's Message Adapters tab with the same Route selected. Unbound Routes retain the old editor for assigning a persona, then use the persona entry. Performance, RabiLink and Settings remain host-wide. See [configuration upgrades](../persona-message-config-upgrade_en.md) for older data.
 
 Clicking any sidebar page label updates the selected state, top title, and URL first, then immediately shows **Page switched. Loading content…**. Console, Message Adapters, Role Configuration, Plans & Memory, Speech Service, Performance, Runtime Diagnostics, and Settings load their page code and data asynchronously instead of delaying the tab switch until the complete page is ready. If a page chunk fails to load, WebGUI refreshes once and restores the intended page.
 
@@ -68,7 +70,7 @@ If unconfigured, open Configuration. For connection, authentication, or read fai
 | --- | --- | --- |
 | Console | View and operate each Route | Add, enable, restart, or delete a Route |
 | Message Adapters | Message sources and Agent handlers | Scan, add, connect, and bind tasks |
-| Role Configuration | Role, Route variables, and message rules | Add rules, regexes, and schedules |
+| Role Configuration | Roles and message rules | Add rules, regexes, and schedules |
 | Plans & Memory | Plans, recent memory, consolidated memory, plan guidance, and approval records for the current role | Search, guide running plans, expand steps, review execution contracts, submit approval feedback, and refresh Manager data |
 | Speech Service | Host TTS, ASR, microphone, and playback | Inspect status, adjust parameters, and test speech |
 | Performance | Manager, Route, and speech-service runtime metrics | Inspect live state and history |
@@ -117,9 +119,9 @@ The approval section offers **Submit** and **Submit and deliver**. Both save you
 
 **Submit** saves without notifying the Agent. **Submit and deliver** continues sending after saving and shows **Analyzing** only after delivery is confirmed. Pending or failed delivery keeps the Approved marker and displays delivery status separately instead of claiming analysis has started. Marker names and colors come from the current role configuration; the plan's active, completed, or archived state is unchanged. Guidance changes no status when saved or delivered. During background delivery, drafts remain editable but another submission is temporarily disabled; the input area explains why and when submission becomes available. Each plan detail also has a collapsed **Work history** section. Open it to review plan guidance, step approval feedback, Agent replies, and plan revisions; the entry remains available for approved, completed, and archived plans.
 
-## Top bar: select the current Route
+## Top bar: select the current persona
 
-The top-bar selector changes the current Route on Message Adapters, Role Configuration (including document and sync subpages), and Plans & Memory. Other pages hide the selector and retain the current selection. If changes are unsaved, the interface asks before switching.
+Role configuration, documents, and Plans and memory use an independent persona selector, including personas without Routes. Select a message Route inside Role configuration → Message Adapters. The interface asks before switching away from unsaved changes.
 
 The selected value and menu items show the role name. The top-bar title shows only the current page name.
 
@@ -156,7 +158,7 @@ Selection alone does not read or send. Password controls and still-unreadable se
 
 The footer contains four supporting actions:
 
-- **Quick setup**: configure common paths in three steps.
+- **Create persona**: create a persona, then add its message Route under Message Adapters.
 - **GitHub**: open the repository.
 - **User Guide**: open this task-based documentation center.
 - **Open config directory**: open the local Manager configuration location.
@@ -167,9 +169,9 @@ The footer contains four supporting actions:
 
 | Control | Actual effect |
 | --- | --- |
-| 中 / EN | Changes this browser's interface language only |
+| 中 / EN / 日 | Switches between Simplified Chinese, English and Japanese in this browser without changing Route data |
 | Refresh status | Reloads Manager, configuration, and runtime state; does not save edits |
-| Add Route | Creates a Route and opens Quick setup |
+| Add message Route | Adds a Route in the persona’s Message Adapters tab |
 | Save configuration | Saves the current Route on Route pages; on **RabiLink → Configuration**, saves instance identity, Relay, speech proxy, and upload limits; on **Settings**, saves desktop features, selected-text menu, directories, and LAN WebGUI access together; on **Performance monitor**, saves the performance-recording settings |
 
 When the unsaved-changes notice appears, save before switching Routes or leaving. Refresh is not Save, and Restart does not save form edits.
@@ -198,9 +200,9 @@ Manager owns Route/plugin children created through process leases. Windows Host 
 
 ## Locale boundaries
 
-Locale is stored in this browser. Route/persona IDs, rule names, templates, regexes, task names, paths, tokens, logs, and runtime values stay unchanged.
+The top-bar language menu offers Simplified Chinese, English and Japanese. Japanese browsers start in Japanese when no preference is saved. Manual selection is stored in this browser and survives refresh. Route/persona IDs, rule names, templates, regexes, task names, paths, tokens, logs, and runtime values stay unchanged.
 
-The User Guide selects the matching language file. Developer documents, code paths, and external pages open through links; RabiRoute does not maintain a third machine-translated source.
+The User Guide selects the matching Chinese, English or Japanese Markdown file, including its sections, search and outline. Developer documents, code paths and external pages open through links; untranslated topics retain the linked language.
 
 ## Continue
 

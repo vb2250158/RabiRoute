@@ -7,12 +7,14 @@ import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { randomBytes, randomUUID, sign } from "node:crypto";
-import { createDevicePeerBootstrapRoutes, DEVICE_PEER_BOOTSTRAP_PATH } from "./devicePeerBootstrapRoutes.js";
+import { createDevicePeerBootstrapOperation, DEVICE_PEER_BOOTSTRAP_PATH } from "./devicePeerBootstrapRoutes.js";
+import { ManagerPluginRouteRegistry } from "./managerPluginRouteRegistry.js";
 import { RabiLinkRelayRuntime, type RabiLinkRelayRuntimeConfig } from "./rabiLinkRelayRuntime.js";
 import { rabiLinkAgentDevicePrincipal, rabiLinkConnectionScope } from "./rabiLinkAgentDeviceConnection.js";
 import { markAuthenticatedConnectionRequest } from "./connectionRequestAccess.js";
 import { validateInternalManagerHop, type InternalManagerHopClaims } from "../shared/internalManagerHop.js";
-import { createDeviceAgentOwner, deviceAgentOwnerPath } from "../agentAdapters/deviceAgentOwner.js";
+import { createDeviceAgentOwner } from "../agentAdapters/deviceAgentOwner.js";
+import { createDeviceAgentOperations } from "../agentAdapters/deviceAgentOperations.js";
 import { PeerTunnelRuntime, DEVICE_DELEGATION_DOMAIN, APPLICATION_BOOTSTRAP_DOMAIN } from "../peerTunnel/runtime.js";
 import { loadTunnelIdentity, type TunnelIdentity } from "../peerTunnel/security.js";
 import { connectWebsocket } from "../peerTunnel/channel.js";
@@ -45,14 +47,16 @@ async function fixture(t: test.TestContext) {
   const child = spawn(process.execPath, [path.resolve("scripts/rabilink-relay-server.mjs")], { windowsHide: true, stdio: "ignore",
     env: { ...process.env, HOST: "127.0.0.1", PORT: new URL(relayBase).port, RABILINK_RELAY_DATA_DIR: path.join(dir, "relay"), RABILINK_RELAY_WEBGUI_REQUEST_WAIT_MS: "10000" } });
   const sessions: TunnelSession[] = [];
-  let server: http.Server | undefined, route: ReturnType<typeof createDevicePeerBootstrapRoutes> | undefined;
+  let server: http.Server | undefined, route: ReturnType<typeof createDevicePeerBootstrapOperation> | undefined;
+  const registry = new ManagerPluginRouteRegistry();
+  let registration: ReturnType<ManagerPluginRouteRegistry["registerOperations"]> | undefined, deviceRegistration: ReturnType<ManagerPluginRouteRegistry["registerOperations"]> | undefined;
   let peer: PeerTunnelRuntime | undefined, worker: RabiLinkRelayRuntime | undefined;
   t.after(async () => {
     route?.stop(); sessions.forEach(session => session.close()); peer?.stop(); await worker?.stop();
     server?.closeAllConnections(); if (server?.listening) await new Promise<void>(resolve => server!.close(() => resolve()));
-    await route?.drain();
+    await registration?.dispose(); await deviceRegistration?.dispose();
     if (child.exitCode === null) { const ended = once(child, "exit"); child.kill(); await ended; }
-    rmSync(dir, { recursive: true, force: true });
+    assert.equal(path.dirname(path.resolve(dir)), path.resolve(os.tmpdir())); rmSync(dir, { recursive: true, force: true });
   });
   async function relayRequest(suffix: string, method = "GET", input?: unknown, credentials: Record<string, string> = {}) {
     const response = await fetch(relayBase + suffix, { method, headers: { "content-type": "application/json", ...credentials },
@@ -78,10 +82,10 @@ async function fixture(t: test.TestContext) {
     authorizeDelivery: async request => rabiLinkAgentDevicePrincipal(request, config, generation),
     assertDeviceAssignment: async (candidateScope, deviceId) => { if (candidateScope !== scope || deviceId !== nativeDeviceId) throw new Error("Wrong immutable owner assignment."); }
   });
-  route = createDevicePeerBootstrapRoutes({ current: () => ({ scope, generation, deviceId: target }), readJsonBody: readBody,
-    bootstrap: (input, authority) => peer!.grantDeviceConnection(input, authority),
-    jsonResponse: (response, status, body) => { response.writeHead(status, { "content-type": "application/json" }); response.end(JSON.stringify(body)); }
-  });
+  route = createDevicePeerBootstrapOperation({ current: () => ({ scope, generation, deviceId: target }),
+    bootstrap: (input, authority) => peer!.grantDeviceConnection(input, authority) });
+  registration = registry.registerOperations("peer", [route.operation]);
+  deviceRegistration = registry.registerOperations("native-device", createDeviceAgentOperations(() => owner));
   server = http.createServer((request, response) => {
     const url = new URL(request.url!, "http://fixture.invalid");
     const claims = validateInternalManagerHop(request, { scope, generation });
@@ -89,7 +93,8 @@ async function fixture(t: test.TestContext) {
       if (!validateInternalManagerHop(request, { scope, generation })) throw new Error("Original transport expired.");
     });
     if (url.pathname === DEVICE_PEER_BOOTSTRAP_PATH && claims) admissions.push(claims);
-    if (route!.handle(request, url, response)) return;
+    if (claims && url.pathname.startsWith("/api/device-agents/")) nativeAdmissions.push(claims);
+    if (registry.handle(request, url, response)) return;
     if (url.pathname === "/api/events" || url.pathname === "/api/speech/events") {
       response.writeHead(200, { "content-type": "text/event-stream" }); response.write(": fixture connection\n\n"); return;
     }
@@ -98,10 +103,6 @@ async function fixture(t: test.TestContext) {
         try { assert.ok(claims); const data = await peer!.offer(await readBody(request)); response.writeHead(200, { "content-type": "application/json" }); response.end(JSON.stringify({ code: 0, data })); }
         catch { response.writeHead(403, { "content-type": "application/json" }); response.end('{"code":"APPLICATION_BOOTSTRAP_DENIED"}'); }
       })(); return;
-    }
-    if (deviceAgentOwnerPath(url.pathname)) {
-      if (claims) nativeAdmissions.push(claims);
-      void readBody(request).then(body => owner.handle(request, response, url, body)).catch(() => { response.writeHead(500); response.end("{}"); }); return;
     }
     if (url.pathname === "/api/fixture/future") {
       response.writeHead(claims ? 200 : 403, { "content-type": "application/json" }); response.end(JSON.stringify({ source: claims?.deviceId })); return;

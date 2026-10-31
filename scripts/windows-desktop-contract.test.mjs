@@ -61,7 +61,7 @@ test("Windows production package exposes only the lifecycle-owning Host entry", 
   assert.doesNotMatch(installer, /127\.0\.0\.1:8790/);
 });
 
-test("Host rejects an in-place portable overlay before composing a generation", () => {
+test("Host reports retired portable entries before composing a generation without blocking startup", () => {
   const retiredEntries = [
     "RabiRoute-Desktop.exe",
     "RabiRoute-Tray.exe",
@@ -80,11 +80,11 @@ test("Host rejects an in-place portable overlay before composing a generation", 
     assert.ok(hostProgram.includes(`"${leaf}"`), `Host guard must recognize ${entry}`);
     assert.ok(releaseTransaction.includes(leaf), `release transaction must quarantine ${entry}`);
   }
-  assert.match(hostProgram, /legacy_overlay_blocked/);
-  assert.match(hostProgram, /new empty folder/);
-  assert.match(hostProgram, /Windows Setup/);
+  assert.match(hostProgram, /retired lifecycle entries were ignored; Host startup continues/);
+  assert.match(hostProgram, /retired lifecycle entry inspection failed/);
+  assert.doesNotMatch(hostProgram, /legacy_overlay_blocked/);
   const retiredGuardIndex = hostProgram.indexOf(
-    "PortableOverlayGuard.FindRetiredLifecycleEntriesForStartup(packageRoot, stateRoot)",
+    "PortableOverlayGuard.WarnForStartup(packageRoot, stateRoot, log.Write)",
   );
   const hostCompositionIndex = hostProgram.indexOf("new HostRuntime(");
   assert.notEqual(retiredGuardIndex, -1, "startup must invoke the two-root retired lifecycle guard");
@@ -220,8 +220,11 @@ test("Hosted Tray is a thin surface and never acquires lifecycle ownership", () 
 });
 
 test("Host control and diagnostics cannot wedge the lifecycle owner", () => {
-  assert.match(hostProtocol, /PipeOptions\.Asynchronous \| PipeOptions\.CurrentUserOnly/);
-  assert.match(hostRuntime, /readCancellation\.CancelAfter\(TimeSpan\.FromSeconds\(5\)\)/);
+  assert.match(hostProtocol, /NamedPipeServerStreamAcl\.Create\(/);
+  assert.match(hostProtocol, /security\.SetAccessRuleProtection\(isProtected: true, preserveInheritance: false\)/);
+  assert.match(hostProtocol, /security\.SetOwner\(user\)/);
+  assert.match(hostProtocol, /new PipeAccessRule\(user, PipeAccessRights\.FullControl, AccessControlType\.Allow\)/);
+  assert.match(hostRuntime, /readCancellation\.CancelAfter\(HostTimeouts\.Get\("host\.control\.read", TimeSpan\.FromSeconds\(5\)\)\)/);
   assert.doesNotMatch(hostRuntime, /completion\.Task\.WaitAsync\(TimeSpan/);
   assert.match(hostProtocol, /ControlFenceGenerationId/);
   assert.match(hostRuntime, /IsPublishedGenerationState\(_state\) \? _generation : null/);
@@ -794,7 +797,8 @@ test("Windows release build rejects a network source repository", () => {
 
 test("Windows release payload materializes local packages and rejects reparse points", () => {
   assert.match(windowsReleaseBuild, /"plugins\\contracts\\plugin-sdk"/);
-  assert.match(windowsReleaseBuild, /Copy-Item -LiteralPath \$pluginSdkSource -Destination \$pluginSdkInstall -Recurse -Force/);
+  assert.match(windowsReleaseBuild, /node\.exe \(Join-Path \$scriptDir 'lib\/materialize-local-dependencies\.mjs'\) \$repo \$payload/);
+  assert.match(windowsReleaseBuild, /Local dependency materialization or exported-entry validation failed/);
   assert.match(windowsReleaseBuild, /FileAttributes\]::ReparsePoint/);
   assert.match(windowsReleaseBuild, /Release payload contains non-portable reparse points/);
   assert.match(windowsReleaseBuild, /Release payload contains retired lifecycle entries/);

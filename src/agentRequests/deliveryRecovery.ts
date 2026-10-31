@@ -7,12 +7,13 @@ import { currentEnvelopeDeliveryId, withoutLegacyTransportSuffix, deliveryUserMe
 import { agentAdapterSupportsReceiptRecovery } from "../shared/agentAdapterCapabilities.js";
 export { deliveryUserMessagesFromRollout } from "../shared/deliveryIdentity.js";
 
-export function recoverAgentResponseDelivery(
+export async function recoverAgentResponseDelivery(
   store: AgentRequestStore,
   threadId: string,
   deliveryId: string,
   readMessages: (threadId: string) => string[]
-): { status: string; inReplyToRequestId?: string; requestId?: string; deliveryId: string } {
+): Promise<{ status: string; inReplyToRequestId?: string; requestId?: string; deliveryId: string }> {
+  await store.ready();
   const records = store.list();
   const original = records.find(record => record.source.threadId === threadId
     && (record.pendingResponseDeliveryId === deliveryId || record.response?.deliveryId === deliveryId));
@@ -60,7 +61,7 @@ export function recoverAgentResponseDelivery(
         || !sameCodexWorkspace(preparation.source.workspace || "", original.target.workspace || "")
         || !sameCodexWorkspace(preparation.target.workspace || "", original.source.workspace || "")) continue;
       if (preparation.source.endpoint || preparation.target.endpoint) continue;
-      store.commit(preparation, { action: "receipt_recovered", transport: "desktop-ipc" });
+      await store.commit(preparation, { action: "receipt_recovered", transport: "desktop-ipc" });
       return { ...communication, status: "receipt_recovered" };
     }
     if (!text.startsWith("[消息源]\n")) continue;
@@ -86,7 +87,7 @@ export function recoverAgentResponseDelivery(
       const content = text.split("\n\n[消息内容]\n")[1]?.split("\n\n[Agent 回复合同]\n")[0];
       const response = content && readAgentResponseContent(content);
       if (!response) continue;
-      store.commit({ ...communication, source: followup?.source ?? original.target, target: original.source,
+      await store.commit({ ...communication, source: followup?.source ?? original.target, target: original.source,
         responsePolicy: followup ? "required" : "none", responseInstruction: followup?.responseInstruction,
         ...response }, { action: "receipt_recovered", transport: "desktop-ipc" });
       return { ...communication, status: "receipt_recovered" };
@@ -106,7 +107,7 @@ export function recoverAgentResponseDelivery(
       responsePolicy: followup ? "required" : "none", responseInstruction: followup?.responseInstruction,
       result: response[0], nextAction: response[1]
     };
-    store.commit(preparation, { action: "receipt_recovered", transport: "desktop-ipc" });
+    await store.commit(preparation, { action: "receipt_recovered", transport: "desktop-ipc" });
     return { ...communication, status: "receipt_recovered" };
   }
   return { ...communication, status: "delivery_unconfirmed" };
@@ -117,8 +118,8 @@ export async function recoverAgentResponseDeliveryFromRollout(
   store: AgentRequestStore,
   threadId: string,
   deliveryId: string
-): Promise<ReturnType<typeof recoverAgentResponseDelivery>> {
-  const initial = recoverAgentResponseDelivery(store, threadId, deliveryId, () => []);
+): Promise<Awaited<ReturnType<typeof recoverAgentResponseDelivery>>> {
+  const initial = await recoverAgentResponseDelivery(store, threadId, deliveryId, () => []);
   if (initial.status !== "delivery_unconfirmed") return initial;
   const thread = readCodexDesktopThread(threadId);
   if (!thread?.rolloutPath) return { ...initial, status: "receipt_source_missing" };
@@ -127,7 +128,7 @@ export async function recoverAgentResponseDeliveryFromRollout(
   try {
     for await (const prompt of readRolloutUserMessages(thread.rolloutPath)) {
       if (!prompt.includes(deliveryId) && agentDeliveryPromptHash(prompt) !== evidenceHash) continue;
-      const result = recoverAgentResponseDelivery(store, threadId, deliveryId, () => [prompt]);
+      const result = await recoverAgentResponseDelivery(store, threadId, deliveryId, () => [prompt]);
       if (result.status !== "delivery_unconfirmed") return result;
     }
   } catch (error) {

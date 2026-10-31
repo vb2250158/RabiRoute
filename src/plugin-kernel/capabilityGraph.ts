@@ -52,9 +52,12 @@ export function planCapabilityGraph(candidates: readonly PluginCandidate[], host
   for (const candidate of byId.values()) if (!waiting.has(candidate.instanceId)) indegree.set(candidate.instanceId, 0);
   for (const candidate of byId.values()) {
     if (waiting.has(candidate.instanceId)) continue;
+    const dependencyProviders = new Set<string>();
     for (const capability of [...candidate.manifest.requires, ...candidate.manifest.optional]) {
       const provider = providers.get(capability);
       if (!provider || provider === candidate.instanceId || waiting.has(provider)) continue;
+      if (dependencyProviders.has(provider)) continue;
+      dependencyProviders.add(provider);
       indegree.set(candidate.instanceId, (indegree.get(candidate.instanceId) ?? 0) + 1);
       const values = dependents.get(provider) ?? [];
       if (!values.includes(candidate.instanceId)) values.push(candidate.instanceId);

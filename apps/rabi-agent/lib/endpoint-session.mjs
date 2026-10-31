@@ -1,10 +1,11 @@
+import { createTimeoutSettings } from "./timeout-settings.mjs";
 import fs from "node:fs";
 import net from "node:net";
 import { createHash, randomUUID } from "node:crypto";
 import { discoverManager, createDiscoveryCooldown, verifyPublicEndpoint } from "./manager-discovery.mjs";
 
 const endpointKeys = ["managerUrl", "managerGuid", "applicationGenerationId", "managerInstanceId"];
-export function businessReady(meta) { return meta?.health?.requiredReady === true && ["healthy", "degraded"].includes(meta.health.state) && meta.health.live === true; }
+export function businessReady(meta) { return meta?.health?.live === true && ["healthy", "degraded"].includes(meta.health.state); }
 export function sameIdentity(a, b) { return (!a?.rabiGuid || !b?.rabiGuid || a.rabiGuid === b.rabiGuid) && a?.applicationGenerationId === b?.applicationGenerationId && a?.managerInstanceId === b?.managerInstanceId; }
 
 class EndpointConfigurationError extends Error {}
@@ -47,16 +48,17 @@ async function persistEndpoint(configPath, original, next) {
     const current = JSON.parse(fs.readFileSync(owner.canonical, "utf8"));
     if (current.nodeId !== original.nodeId || current.nodeCredential !== original.nodeCredential || endpointKeys.some(key => current[key] !== original[key])) throw new EndpointConfigurationError("Endpoint configuration changed concurrently; reload it before continuing.");
     const merged = { ...current }; for (const key of endpointKeys) merged[key] = next[key];
+    if (next.timeoutOverridesCache !== undefined) merged.timeoutOverridesCache = next.timeoutOverridesCache;
     fs.writeFileSync(temporary, `${JSON.stringify(merged, null, 2)}\n`, { mode: 0o600 }); fs.renameSync(temporary, owner.canonical);
   } finally { try { fs.rmSync(temporary, { force: true }); } finally { await owner.release(); } }
 }
 
 /** Existing trusted-LAN contract: public GUID avoids mistakes, not malicious peer impersonation. */
-export function createEndpointSession({ config, configPath, fetchImpl = fetch, discover = discoverManager, timeoutMs = 5000, cooldownMs = 10_000 } = {}) {
+export function createEndpointSession({ config, configPath, fetchImpl = fetch, discover = discoverManager, timeoutMs = 5000, cooldownMs = 10_000, timeoutSettings = createTimeoutSettings(config?.timeoutOverridesCache ?? config?.timeoutOverrides) } = {}) {
   let current = { ...config }; let inFlight;
   const rediscover = createDiscoveryCooldown(cooldownMs);
   async function verify(origin, expected = {}) {
-    const signal = AbortSignal.timeout(timeoutMs);
+    const signal = AbortSignal.timeout(timeoutSettings.get("agent.client.discovery", timeoutMs));
     let candidate;
     try { candidate = await verifyPublicEndpoint(origin, { fetchImpl, guid: current.managerGuid, ...expected, signal }); }
     catch (error) {
@@ -86,8 +88,9 @@ export function createEndpointSession({ config, configPath, fetchImpl = fetch, d
       || meta.applicationGenerationId !== candidate.generation || meta.managerInstanceId !== candidate.instance) throw new Error("Manager metadata identity mismatch.");
     // Recheck credentialed identity after metadata; never persist an intervening generation.
     const after = await verifyPublicEndpoint(candidate.managerUrl, { fetchImpl, guid: candidate.guid, generation: candidate.generation, instance: candidate.instance, signal });
-    const next = { ...current, managerUrl: candidate.managerUrl, managerGuid: candidate.guid, applicationGenerationId: candidate.generation, managerInstanceId: candidate.instance };
-    if (endpointKeys.some(key => next[key] !== current[key])) await persistEndpoint(configPath, current, next);
+    timeoutSettings.adopt(meta);
+    const next = { ...current, managerUrl: candidate.managerUrl, managerGuid: candidate.guid, applicationGenerationId: candidate.generation, managerInstanceId: candidate.instance, ...(meta.timeoutOverrides !== undefined || current.timeoutOverridesCache !== undefined ? { timeoutOverridesCache: timeoutSettings.snapshot() } : {}) };
+    if (endpointKeys.some(key => next[key] !== current[key]) || JSON.stringify(next.timeoutOverridesCache) !== JSON.stringify(current.timeoutOverridesCache)) await persistEndpoint(configPath, current, next);
     current = next;
     return { ...after, meta, config: { ...current } };
   }
@@ -109,7 +112,7 @@ export function createEndpointSession({ config, configPath, fetchImpl = fetch, d
         endpoint = await verify(current.managerUrl);
       } else {
         if (new URL(current.managerUrl).protocol === "https:") throw new Error("Manager endpoint unavailable; stable identity or secure discovery is unavailable. Reconnect using an explicit trusted address.");
-        const candidate = await rediscover(() => discover({ expected: { guid: current.managerGuid }, fetchImpl, timeoutMs }));
+        const candidate = await rediscover(() => discover({ expected: { guid: current.managerGuid }, fetchImpl, timeoutMs: timeoutSettings.get("agent.client.discovery", timeoutMs) }));
         if (!candidate) throw new Error("Manager endpoint discovery failed or is cooling down.");
         if (new URL(candidate.managerUrl).protocol !== new URL(current.managerUrl).protocol) throw new Error("Manager discovery protocol downgrade rejected.");
         endpoint = await verify(candidate.managerUrl, { generation: candidate.generation, instance: candidate.instance });
@@ -126,8 +129,8 @@ export function createEndpointSession({ config, configPath, fetchImpl = fetch, d
       return result;
     },
     async identity(origin) {
-      const publicIdentity = await verifyPublicEndpoint(origin, { fetchImpl, guid: current.managerGuid, signal: AbortSignal.timeout(timeoutMs) });
-      const response = await fetchImpl(`${publicIdentity.managerUrl}/meta`, { headers: { authorization: `Bearer ${current.nodeCredential}`, accept: "application/json" }, redirect: "error", signal: AbortSignal.timeout(timeoutMs) });
+      const publicIdentity = await verifyPublicEndpoint(origin, { fetchImpl, guid: current.managerGuid, signal: AbortSignal.timeout(timeoutSettings.get("agent.client.discovery", timeoutMs)) });
+      const response = await fetchImpl(`${publicIdentity.managerUrl}/meta`, { headers: { authorization: `Bearer ${current.nodeCredential}`, accept: "application/json" }, redirect: "error", signal: AbortSignal.timeout(timeoutSettings.get("agent.client.discovery", timeoutMs)) });
       if (!response.ok) throw new Error("Manager metadata verification failed.");
       const rawMeta = await response.json();
       const meta = rawMeta?.data && typeof rawMeta.data === "object" ? rawMeta.data : rawMeta;

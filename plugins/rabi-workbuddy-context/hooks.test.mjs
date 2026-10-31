@@ -9,7 +9,9 @@ import test from "node:test";
 import { AGENT_TYPE, handleHookInput } from "./scripts/lib/rabi-manager-client.mjs";
 
 async function server(handler) {
-  const instance = http.createServer(handler);
+  const instance = http.createServer((request, response) => request.url === '/meta'
+    ? json(response, 200, { applicationGenerationId: 'fixture-generation', managerInstanceId: 'fixture-manager', health: { live: true, requiredReady: true, state: 'healthy' } })
+    : handler(request, response));
   await new Promise((resolve) => instance.listen(0, "127.0.0.1", resolve));
   const address = instance.address();
   return {
@@ -40,9 +42,11 @@ async function fixture(t, clientSource) {
   const root = path.join(home, "plugin");
   await fs.mkdir(path.join(root, "scripts", "lib"), { recursive: true });
   await fs.copyFile(path.join(pluginRoot(), "scripts", "rabi-workbuddy-hook.mjs"), path.join(root, "scripts", "rabi-workbuddy-hook.mjs"));
+  await fs.copyFile(path.join(pluginRoot(), "scripts", "lib", "timeout-settings.mjs"), path.join(root, "scripts", "lib", "timeout-settings.mjs"));
   const client = path.join(root, "scripts", "lib", "rabi-manager-client.mjs");
   if (clientSource === undefined) {
     await fs.copyFile(path.join(pluginRoot(), "scripts", "lib", "rabi-manager-client.mjs"), client);
+    await fs.copyFile(path.join(pluginRoot(), "scripts", "lib", "windows-host-discovery.mjs"), path.join(root, "scripts", "lib", "windows-host-discovery.mjs"));
   } else {
     await fs.writeFile(client, clientSource);
   }

@@ -1,3 +1,4 @@
+import { configureTimeouts, readTimeoutOverrides } from "../shared/timeoutSettings.js";
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import dgram from "node:dgram";
@@ -52,7 +53,7 @@ test("Manager LAN discovery document is public only on the exact enabled well-kn
   assert.equal(headers.get("cache-control"), "no-store");
   assert.equal(
     JSON.stringify(calls),
-    JSON.stringify([{ statusCode: 200, body: { code: 0, data: document } }])
+    JSON.stringify([{ statusCode: 200, body: { code: 0, data: { ...document, timeoutOverrides: readTimeoutOverrides() } } }])
   );
 
   calls.length = 0;
@@ -106,6 +107,32 @@ test("Manager DNS-SD publisher advertises the actual listener port and destroys 
   await publisher.stop();
   assert.equal(stopped, true);
   assert.equal(destroyed, true);
+});
+
+test("well-known discovery publishes only the current numeric timeout snapshot", () => {
+  const previous = readTimeoutOverrides();
+  const previousSecret = process.env.RABIROUTE_DISCOVERY_TEST_SECRET;
+  process.env.RABIROUTE_DISCOVERY_TEST_SECRET = "discovery-test-secret";
+  try {
+    configureTimeouts({ "android.http.connect": 1234, "android.http.read": 5678 });
+    let body: unknown;
+    handleManagerLanDiscoveryRequest({ method: "GET" } as http.IncomingMessage,
+      new URL(`http://192.0.2.1${MANAGER_DISCOVERY_PATH}`),
+      { setHeader() {} } as unknown as http.ServerResponse,
+      { enabled: true, document: () => ({ protocolVersion: 1, applicationGenerationId: "generation-a",
+        managerInstanceId: "manager-a", guid: "guid-a", name: "Rabi", computerName: "pc-a",
+        deviceType: "RabiRoute Manager", version: "1.0.0" }),
+        jsonResponse: (_response, _status, value) => { body = value; } });
+    const data = (body as { data: Record<string, unknown> }).data;
+    assert.deepEqual(data.timeoutOverrides, { "android.http.connect": 1234, "android.http.read": 5678 });
+    assert.deepEqual(Object.keys(data).sort(), ["protocolVersion", "applicationGenerationId", "managerInstanceId",
+      "guid", "name", "computerName", "deviceType", "version", "timeoutOverrides"].sort());
+    assert.equal(JSON.stringify(body).includes("discovery-test-secret"), false);
+  } finally {
+    configureTimeouts(previous);
+    if (previousSecret === undefined) delete process.env.RABIROUTE_DISCOVERY_TEST_SECRET;
+    else process.env.RABIROUTE_DISCOVERY_TEST_SECRET = previousSecret;
+  }
 });
 
 const publisherIdentity = {

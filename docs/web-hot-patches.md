@@ -2,7 +2,7 @@
 
 # 安装版 Web 热补丁
 
-状态：实验能力。覆盖 WebGUI、静态资源、随页面编译的用户手册和独立 Web Bundle。首次安装本能力、修改后端、依赖锁或插件契约仍需受控完整发布；之后兼容 Web 修改可以保持 Manager 的 PID、application generation 和实例身份不变。
+状态：实验能力。覆盖 WebGUI、静态资源、随页面编译的用户手册和独立 Web Bundle。兼容 Web 修改保持 Manager 的 PID、application generation 和实例身份不变。后端指纹、依赖锁或插件契约改变时，不能仅用 Web-only 发布，应按[源码热补丁](source-hot-patches.md)及状态迁移的实际支持矩阵选择路径；仅有具体不可迁移边界或首次安装缺失的运行能力时，才由 Host 受控切换。
 
 ## 页面与版本
 
@@ -14,7 +14,7 @@
 
 ## 自动构建与激活
 
-1. 由唯一发布 owner 完整构建并安装支持本能力的版本。操作前通过 `RabiRouteHost.exe --command status --json` 动态发现 `managerBaseUrl`，核对 `/meta` 的 `applicationGenerationId`、`managerInstanceId`、`health.state=healthy`、`health.requiredReady=true`。
+1. 首次安装由唯一发布 owner 构建并安装支持本能力的版本，后续按实际兼容性选择发布路径。操作前通过 `RabiRouteHost.exe --command status --json` 动态发现 `managerBaseUrl`，核对 `/meta` 的 `applicationGenerationId`、`managerInstanceId`、`health.live=true` 及 `health.state=healthy|degraded`；`health.requiredReady` 用于诊断声明能力，实际依赖由目标接口判断，不以无关能力缺失阻断操作。
 2. 为 Host 配置受信任源码根 `RABIROUTE_HOT_PATCH_SOURCE_ROOT`；`RABIROUTE_HOT_PATCH_WATCH=0` 会关闭自动激活。不要指向其他任务正在清理的构建目录。
 3. 只构建一次运行 `npm run webgui:build`；持续开发运行 `npm run webgui:watch`。后者监听 Web 源码、共享契约、资源及文档，串行运行类型检查和正式 Vite **生产构建**，不启动开发服务器。停止监听不关闭 Manager。
 4. 构建器独占 `ribiwebgui/.web-patch-build.lock`。并发构建拒绝执行；进程异常终止留下锁时，核对记录 PID 已退出且无构建 owner 后再移除该锁，不能删除正在使用的锁。
@@ -53,9 +53,9 @@
 
 ## 容量与维护
 
-当前每份候选最多 8192 文件、128 MiB，总体最多保留 64 个候选；每个后端基线最多 2048 个发布回执。内存仅缓存 8 份 manifest，文件响应在读取时核对 hash，整个响应使用同一 Buffer。
+当前每份候选最多 8192 文件、128 MiB；可选导入只在当前后端指纹的有效 manifest 记录少于 64 时受理，每个后端基线最多 2048 个发布回执。安装基线是必要启动资源，不因历史配额满而拒绝构造，因此磁盘候选数可以超过 64；可选导入保留原等待基线就绪及串行提交次序。不同后端、未知或 manifest 无法验证的历史目录原样保留，不参与当前后端计数。计数只校验 manifest 的 hash 与 Schema，不重读既有 payload；导入源、复用目标及实际静态读取仍按原合同完整校验。内存仅缓存 8 份 manifest。
 
-本版**不自动删除磁盘旧候选或历史回执**。达到容量后停止新发布，旧服务继续；这仍需运维容量治理，不能宣称无限连续热更新。离线归档前须冻结发布、保留全部状态/回执备份、确认旧页面退出及旧后端不再恢复；不能只按文件时间删除候选。没有完成这些条件就保持容量告警，不清数据。
+本版**不自动删除磁盘旧候选或历史回执**。当前后端达到容量后拒绝新增可选导入，既有版本的幂等导入和读取不受影响；历史候选不会自动归档，全局磁盘占用仍需单独治理。旧服务继续；这仍需运维容量治理，不能宣称无限连续热更新。离线归档前须冻结发布、保留全部状态/回执备份、确认旧页面退出及旧后端不再恢复；不能只按文件时间删除候选。没有完成这些条件就保持容量告警，不清数据。
 
 ## 验收
 

@@ -22,4 +22,5 @@
     <instrumentation android:name="com.rabi.link.recording.ArchivePcmDataSourceTest" android:targetPackage="com.rabi.link" />
     <instrumentation android:name="com.rabi.link.test.MobileCallInstrumentation" android:targetPackage="com.rabi.link" />
     <instrumentation android:name="com.rabi.link.test.ManagerConnectionInstrumentation" android:targetPackage="com.rabi.link" />
+    <instrumentation android:name="com.rabi.link.test.LocationInstrumentation" android:targetPackage="com.rabi.link" />
 </manifest>

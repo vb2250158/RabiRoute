@@ -1,6 +1,6 @@
 <!-- docs-language-switch -->
 <div align="center">
-English | <a href="./personas-and-rules.md">简体中文</a>
+English | <a href="./personas-and-rules.md">简体中文</a> | <a href="./personas-and-rules_ja.md">日本語</a>
 </div>
 <!-- /docs-language-switch -->
 
@@ -8,9 +8,23 @@ English | <a href="./personas-and-rules.md">简体中文</a>
 
 A Route decides how messages enter and which handler receives them. A role supplies identity, background, and decision guidance. They are stored separately and can be reused independently.
 
+The Message adapters tab under Role configuration configures message Routes. Message history has its own sidebar entry immediately below Plans & memory, and follows the computer and role selected in the top bar. It is no longer a tab inside Role configuration.
+
+Custom Route variables are maintained through internal configuration and code. WebGUI no longer exposes a variable editor; existing values and template references remain effective.
+
+## Switch computers and roles
+
+Open the role menu in the top bar, choose Local PC or another computer, then select a role in the second level. The top bar shows “computer → role”. Browsing computers leaves the current role unchanged. Refresh remote PCs from the same menu; the separate source PC panel has been removed.
+
+The role configuration page opens directly with section tabs. The current-role, message-rule count, scheduled-task count, and role-directory overview cards have been removed. View role details under Profile and rules and scheduled tasks under Automation.
+
 ## Add message rules and scheduled tasks
 
+The Automation area starts with the Message rules / Agent Hook tabs, without a duplicate heading, description, or total rule count.
+
 In Role → Automation → Message rules, choose a message type on the left to view its rules and count. Add message rule opens the editor directly with that type selected; the editor also lets you switch types on the left. Choose Scheduled tasks for an interval, daily time, or one-off time, then select Notify Agent or Run script. Finish editing and save the role to apply changes. On narrow screens, the type bar moves to the top and scrolls horizontally.
+
+The list only shows types with existing rules, including disabled rules. Deleting the last rule of a type hides that type and selects a remaining type. When no rules exist, Add message rule remains available; the editor offers every type.
 
 ## Select the receiving Agent
 
@@ -20,9 +34,23 @@ In an automation rule, choose **Delivery target** under **Notify Agent**. Select
 
 In Role → Automation → Agent Hook, select an Agent card on the left to view and edit its settings; on narrow screens, the cards appear above the settings. Each card shows that Agent's enabled-item count. Choices come from the ends added to enabled local Routes bound to this role, filtered by lifecycle-hook capability. Add a missing end in Agent settings; installing or discovering software alone does not add a choice.
 
-Each Agent is configured independently, and settings for multiple Agents can take effect at the same time. Switching cards only changes which settings you view. Session context, tool context refresh, completion notifications, and sending Agent messages through Rabi remain visible as switches on the right. Plan task follow-up and Event delivery are collapsed by default; expand them to edit their parameters. Click Save to apply changes.
+Each Agent is configured independently, and settings for multiple Agents can take effect at the same time. Switching cards only changes which settings you view. Click Triggers and context to the right of the selected Agent heading to edit session context, tool context refresh, completion notifications, and Agent message delivery through Rabi in a dialog. Closing it retains the current edits; use Save in the page header to apply them. Plan task follow-up and Event delivery are collapsed by default; expand them to edit their parameters. Click Save to apply changes.
 
 Existing role settings remain the default for ends without an override. Project and session conditions read only the selected end. Failed plan-status reads offer an explicit retry without replaying a save or delivery.
+
+## Configure event delivery conditions
+
+Under **Role → Automation → Agent Hook → Event delivery**, expand a rule and click **Add condition**. The dialog starts with **Condition type**, followed by its explanation and parameters. Use **Edit condition** to change an existing condition. Confirming updates the current draft; cancelling leaves the original unchanged. Click **Save** at the top of the page to apply the configuration.
+
+| Condition | Meaning and parameters |
+| --- | --- |
+| Restrict project | Enter an absolute project directory or load candidates from the selected Agent. Worktrees of the same Git project can match; different subdirectories are not automatically identical. |
+| Require a bound plan | The current task must be bound to a plan belonging to this role, matched by task ID. No extra parameters. |
+| Include chat sessions | Select allowed sessions. Any selected ID matches; renaming a session does not change the match. |
+| Exclude chat sessions | Select sessions whose results must not be delivered. Exclusion wins if an ID also appears in the include list. |
+| Exclude heartbeat tasks | No extra parameters. Skip results consisting of a complete `<heartbeat>` control message, including `DONT_NOTIFY` and `NOTIFY`, for this rule's group delivery or speech output. Ordinary replies and quoted heartbeat examples are unaffected. |
+
+All conditions in a rule must match; other rules are evaluated independently. Complete `DONT_NOTIFY` heartbeats always remain silent. The new exclusion also skips complete `NOTIFY` heartbeats. Classification applies to the current reply, never guesses from task names, and does not permanently exclude the session. Incomplete, invalid or quoted heartbeat text remains ordinary content.
 
 ## Configure follow-ups when a task ends
 
@@ -47,21 +75,24 @@ One role can serve several Routes. Editing its text or rules affects every bound
 
 ## Configure a role
 
-Open **Role Configuration** and select an existing role under **Role binding**. The summary at the top always shows the current role plus message-rule and scheduled-task counts. The tabs below divide the formerly continuous page into focused sections:
+Open **Role Configuration**, select a computer and role in the top bar, then use the section tabs:
 
 - **Profile**: role binding, avatar, and the `persona.md` summary.
+- **Message adapters**: choose a message Route and configure its endpoint and handling Agent.
 - **Expression & voice**: language-style validation, role TTS settings, and speech wake-up keywords.
 - **Virtual avatar**: desktop-pet animation assets for the current role and whether this PC displays the pet.
 - **Identity relations**: recognized identities, unrecognized accounts, and voiceprint classification.
-- **Message context**: recent-message limits per endpoint and Route variables.
+- **Message context**: recent-message limits per endpoint.
 - **Automation**: message triggers, scheduled tasks, and available template variables.
-- **Chat log**: final replies captured by Hooks from this role's tasks and Agent-to-Agent messages sent through the managed thread interface, newest received first. Load earlier replies, see source task names and click to locate them in Codex, or refresh manually; new replies are inserted at the top while retaining loaded records, expanded details, and the reading position.
+- **Message history (sidebar)**: final replies captured by Hooks from this role's tasks and Agent-to-Agent messages sent through the managed thread interface, newest received first. Load earlier replies, see source task names and click to locate them in Codex, or refresh manually; new replies are inserted at the top while retaining loaded records, expanded details, and the reading position.
 
-When no role is selected, **Expression & voice**, **Virtual avatar**, **Identity relations**, and **Chat log** are unavailable. Profile settings, Route variables, and default message rules remain accessible.
+When no role is selected, **Expression & voice**, **Virtual avatar**, **Identity relations**, and **Message history (sidebar)** are unavailable. Profile settings and default message rules remain accessible.
 
 History starts with Hook replies received after this feature becomes available; it does not import earlier conversations. Install Agent Hooks and bind the task to a role or its Route/plan. Tasks without an unambiguous role owner are not recorded under any persona. The complete body supplied by the Hook is retained and displayed as a Markdown preview, including headings, emphasis, lists, code blocks, and tables. Web links can be opened; local-path links remain text, and embedded HTML is not executed. Replayed callbacks appear once, while different later replies in the same turn are retained. The plan-task completion notification switch only controls notifications; it does not disable recording received final replies.
 
-When you select **Submit and deliver** in plan feedback, user content sent to the bound task or plan secretary also appears in the chat log. The left side shows **From user** and the plan title; the right side links to the destination task. The body contains the submitted answers and attachment names. Save-only submissions are excluded. Unconfirmed deliveries show their status at recording time, and retries of the same feedback do not add duplicate entries.
+Message history shows both source and destination task names. Remote tasks also show **Remote node** and the computer name (or node ID when its name is unavailable), without a misleading local Codex link. Older rows use their original delivery ID to recover task names and node identity. Offline nodes retain recorded names; unknown names show the task ID and **Task name unavailable**. Expand ID to check the full task and node identities.
+
+When you select **Submit and deliver** in plan feedback, user content sent to the bound task or plan secretary also appears in message history. The left side shows **From user** and the plan title; the right side shows the destination task, with a link for local Codex tasks. The body contains the submitted answers and attachment names. Save-only submissions are excluded. Unconfirmed deliveries show their status at recording time, and retries of the same feedback do not add duplicate entries.
 
 After selecting a role, use the same configuration card to set or replace its avatar. PNG, JPEG, WebP, and GIF images up to 5 MB are supported. The avatar follows the role into selectors, the Route overview, speech role selection, and the local role panel; the first character of the role ID is used as the fallback. Because the image belongs to the role directory, it does not need to be uploaded again for each Route.
 

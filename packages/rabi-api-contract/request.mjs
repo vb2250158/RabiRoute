@@ -39,3 +39,34 @@ export function validateApiRequest(value) {
   if (mutation && !headers['idempotency-key']) headers['idempotency-key'] = value.operationId;
   return { method, path, headers, ...(value.body === undefined ? {} : { body: value.body }), ...(value.bodyBase64 === undefined ? {} : { bodyBase64: value.bodyBase64 }), ...(value.operationId === undefined ? {} : { operationId: value.operationId }), mutation };
 }
+
+/** Resource timing only; connection authorization and API availability are unchanged. */
+export function apiRequestTimingPolicy(request, { defaultBudgetMs = 3000 } = {}) {
+  if (String(request?.method || 'GET').toUpperCase() !== 'GET' || typeof request?.path !== 'string') return undefined;
+  const separator = request.path.indexOf('?');
+  const pathname = separator < 0 ? request.path : request.path.slice(0, separator);
+  if (!/^\/api\/roles\/[^/]+\/message-endpoint-history$/.test(pathname)) return undefined;
+  let budgetMs = Number.isInteger(defaultBudgetMs) && defaultBudgetMs >= 1 && defaultBudgetMs <= 2147483647 ? defaultBudgetMs : 3000, budgetParameterValid = true;
+  if (separator >= 0) {
+    for (const parameter of request.path.slice(separator + 1).split('&')) {
+      const equals = parameter.indexOf('=');
+      let name, value;
+      try {
+        name = decodeURIComponent((equals < 0 ? parameter : parameter.slice(0, equals)).replace(/\+/g, ' '));
+      } catch { continue; }
+      if (name !== 'budgetMs') continue;
+      try { value = decodeURIComponent((equals < 0 ? '' : parameter.slice(equals + 1)).replace(/\+/g, ' ')); }
+      catch { budgetParameterValid = false; break; }
+      // Invalid values remain the Manager's 400 response; they never extend transport time.
+      if (/^[1-9][0-9]*$/.test(value) && Number(value) <= 2147483647) budgetMs = Number(value);
+      else budgetParameterValid = false;
+      break;
+    }
+  }
+  return { budgetMs, budgetParameterValid, maxAttempts: 1, pathTemplate: '/api/roles/:roleId/message-endpoint-history' };
+}
+
+/** Diagnostics may identify the operation without copying role IDs or query parameters. */
+export function apiRequestDiagnosticPath(request) {
+  return apiRequestTimingPolicy(request)?.pathTemplate ?? (typeof request?.path === 'string' ? request.path : '');
+}

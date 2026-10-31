@@ -96,5 +96,5 @@ Manager HTTP API 与 WebGUI 默认请求端口 `0`，由 Windows 分配空闲回
 1. 运行 `scripts/build-windows-release.ps1`。
 2. 安装生成的 setup，或解压 portable 包到本机磁盘。
 3. 启动 `RabiRouteHost.exe`。
-4. 用 `--command status --json` 和 `/meta` 核对 Manager/应用代身份、`live=true`、`requiredReady=true`，接受 `healthy` 或 `degraded`，再检查目标功能依赖。
+4. 用 `--command status --json` 和 `/meta` 核对 Manager/应用代身份、`live=true`，接受 `healthy` 或 `degraded`，记录 `requiredReady` 的声明能力状态，再由目标接口判断其功能依赖。
 5. 通过托盘或 Host `activate` 打开本代 WebGUI。

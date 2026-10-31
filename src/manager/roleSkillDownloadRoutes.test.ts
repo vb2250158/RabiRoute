@@ -6,10 +6,13 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
 import test, { type TestContext } from "node:test";
-import { authorizeAgentApiOperation } from "./agentApiPolicy.js";
 import { parseRoleSkillDownloadRoute } from "./roleKnowledgeRoute.js";
 import { authorizeLanAgentRoleSkillRequest } from "./lanAgentRoleSkillAccess.js";
-import { handleRoleSkillDownloadApi, RoleSkillDownloadAdmission, type RoleSkillArchiveReply } from "./roleSkillDownloadRoutes.js";
+import { RoleSkillDownloadAdmission, type RoleSkillArchiveReply, type RoleSkillDownloadContext } from "./roleSkillDownloadRoutes.js";
+import { dispatchSkillDownloadFixture } from "./personaSkillOperationTestFixtures.js";
+import { createPersonaSkillOperations } from "./personaSkillOperations.js";
+import { ManagerPluginRouteRegistry } from "./managerPluginRouteRegistry.js";
+import { markAuthenticatedConnectionRequest } from "./connectionRequestAccess.js";
 import { ManagerReadWorkerPool, ManagerReadWorkerError } from "./managerReadWorkerPool.js";
 import { LanAgentAuthority } from "./lanAgentAuthority.js";
 import { evaluateLanAgentRequest } from "./lanAgentRequestAccess.js";
@@ -46,15 +49,31 @@ async function cleaned(directory: string) {
   assert.deepEqual(await fs.readdir(directory), [], "private request artifact was not cleaned");
 }
 
+function registeredDownloads(t: TestContext, context: RoleSkillDownloadContext) {
+  const registry = new ManagerPluginRouteRegistry();
+  const registration = registry.registerOperations("skill-download-test", createPersonaSkillOperations({
+    ...context, querySkills: async () => { throw new Error("Skill catalog is outside this download fixture."); }
+  }));
+  t.after(() => registration.dispose());
+  return registry;
+}
+
 test("authenticated worker HTTP ZIP needs no persona binding, preserves aliases and 404", { timeout: 15000 }, async t => {
   const f = await fixture(t);
   const pool = new ManagerReadWorkerPool({ maxConcurrency: 1, maxQueue: 1, timeoutMs: 5000 });
   t.after(() => pool.stop());
   const authority = new LanAgentAuthority({ statePath: path.join(path.dirname(f.roleDir), "authority.json") });
   const credential = authority.enroll(authority.issueBootstrapTicket().ticket, principal.nodeId);
-  authority.registerAgentCatalog(credential.token, [{ agentId: principal.agentId, provider: "codex" }]);
   let reads = 0;
   let cleanupErrors = 0;
+  const registry = registeredDownloads(t, {
+    ...f, roleDirectory: () => f.roleDir, reportCleanupError: () => { cleanupErrors++; },
+    identity: () => ({ applicationGenerationId: "fixture-generation", managerInstanceId: "fixture-instance" }),
+    archive: (roleDir, skillId, outputPath, options) => {
+      reads++;
+      return pool.run<RoleSkillArchiveReply>({ type: "role_skill_archive", roleDir, skillId, outputPath }, options);
+    }
+  });
   const base = await serve(t, (request, response) => {
     const url = new URL(request.url!, "http://fixture.invalid");
     if (url.pathname === "/meta") {
@@ -62,24 +81,14 @@ test("authenticated worker HTTP ZIP needs no persona binding, preserves aliases 
         health: { live: true, requiredReady: true, state: "healthy" } });
       return;
     }
-    if (request.headers["x-rabiroute-agent-id"] !== undefined) {
-      const access = evaluateLanAgentRequest(request, authority, true);
-      if (access.kind !== "agent") { json(response, 403, { code: -1 }); return; }
-    }
-    const policy = authorizeAgentApiOperation(request.method!, request.url!);
-    if (!policy.allowed) { json(response, 403, { code: -1 }); return; }
-    const guard = authorizeLanAgentRoleSkillRequest(principal, request.method, url.pathname);
-    if (!guard.allowed) { json(response, guard.status, { code: -1, error: guard.error }); return; }
-    if (!handleRoleSkillDownloadApi(request, url.pathname, response, {
-      ...f, roleDirectory: () => f.roleDir, json, reportCleanupError: () => { cleanupErrors++; },
-      archive: (roleDir, skillId, outputPath, options) => {
-        reads++;
-        return pool.run<RoleSkillArchiveReply>({ type: "role_skill_archive", roleDir, skillId, outputPath }, options);
-      }
-    })) json(response, 404, {});
+    const access = evaluateLanAgentRequest(request, authority, true);
+    if (access.kind !== "agent") { json(response, 403, { code: -1 }); return; }
+    markAuthenticatedConnectionRequest(request);
+    if (!registry.handle(request, url, response)) json(response, 404, {});
   });
+  const headers = { authorization: `Bearer ${credential.token}` };
   for (const prefix of ["/api/roles", "/roles"]) {
-    const unbound = await fetch(`${base}${prefix}/other/skills/selected/download`);
+    const unbound = await fetch(`${base}${prefix}/other/skills/selected/download`, { headers });
     const bytes = Buffer.from(await unbound.arrayBuffer());
     assert.equal(unbound.status, 200, bytes.toString("utf8"));
     assert.equal(bytes.readUInt32LE(), 0x04034b50);
@@ -88,7 +97,7 @@ test("authenticated worker HTTP ZIP needs no persona binding, preserves aliases 
   await cleaned(f.temporaryRoot);
   assert.deepEqual(await fs.readdir(f.temporaryRoot), []);
   for (const prefix of ["/api/roles", "/roles"]) {
-    const response = await fetch(`${base}${prefix}/example/skills/selected/download`);
+    const response = await fetch(`${base}${prefix}/example/skills/selected/download`, { headers });
     assert.equal(response.status, 200);
     assert.equal(response.headers.get("content-type"), "application/zip");
     const bytes = Buffer.from(await response.arrayBuffer());
@@ -97,17 +106,20 @@ test("authenticated worker HTTP ZIP needs no persona binding, preserves aliases 
     assert.equal(createHash("sha256").update(bytes).digest("hex"), response.headers.get("x-rabiroute-content-sha256"));
     assert.match(response.headers.get("content-disposition")!, /attachment;.*selected.zip/);
     assert.equal(response.headers.get("cache-control"), "private, no-store");
-    const missing = await fetch(`${base}${prefix}/example/skills/missing/download`);
+    const missing = await fetch(`${base}${prefix}/example/skills/missing/download`, { headers });
     assert.equal(missing.status, 404); await missing.arrayBuffer();
   }
-  const injected = await fetch(`${base}/api/roles/example/skills/selected/download?path=other`);
-  assert.equal(injected.status, 403); await injected.arrayBuffer();
+  const beforeInjected = reads;
+  const injected = await fetch(`${base}/api/roles/example/skills/selected/download?path=other`, { headers });
+  assert.equal(injected.status, 400);
+  assert.equal((await injected.json()).error, "SKILL_DOWNLOAD_QUERY_NOT_SUPPORTED");
+  assert.equal(reads, beforeInjected);
   // Exercise the real registered connector's --api/--output path against this real reader HTTP route.
   const configPath = path.join(path.dirname(f.roleDir), "connector.json");
   const outputPath = path.join(path.dirname(f.roleDir), "selected.zip");
   const receiptPath = path.join(path.dirname(f.roleDir), "receipt.json");
-  await fs.writeFile(configPath, JSON.stringify({ managerUrl: base, nodeCredential: credential.token, agents: [{ agentId: principal.agentId }] }));
-  const cliArgs = ["--api", "GET", "/api/roles/example/skills/selected/download", "--agent", principal.agentId, "--output", outputPath];
+  await fs.writeFile(configPath, JSON.stringify({ managerUrl: base, nodeCredential: credential.token }));
+  const cliArgs = ["--api", "GET", "/api/roles/example/skills/selected/download", "--agent-type", "dsh", "--id", "complete-original-session-id", "--output", outputPath];
   const command = "const {runManagerCommand}=await import(process.argv[1]);const receipt=await runManagerCommand(JSON.parse(process.argv[2]),process.argv[3]);const fs=await import('node:fs/promises');await fs.writeFile(process.argv[4],JSON.stringify(receipt));";
   const child = spawn(process.execPath, ["--input-type=module", "--eval", command,
     new URL("../../apps/rabi-agent/lib/manager-cli.mjs", import.meta.url).href, JSON.stringify(cliArgs), configPath, receiptPath], { stdio: "inherit" });
@@ -136,7 +148,7 @@ test("invalid download paths fail before role resolution or temporary creation i
       const access = authorizeLanAgentRoleSkillRequest(principal, request.method, pathname);
       if (!access.allowed) { json(response, access.status, { error: access.error }); return; }
     }
-    handleRoleSkillDownloadApi(request, pathname, response, {
+    dispatchSkillDownloadFixture(request, pathname, response, {
       ...f, json, reportCleanupError: () => assert.fail("cleanup failed"),
       roleDirectory: () => { resolved++; return f.roleDir; },
       archive: async () => { archived++; return { ok: false, code: "not_found" }; }
@@ -152,7 +164,7 @@ test("invalid download paths fail before role resolution or temporary creation i
         const request = http.get(new URL(base), { path: raw }, response => { response.resume(); response.once("end", () => resolve(response.statusCode!)); });
         request.once("error", reject);
       });
-      assert.equal(status, 403, raw);
+      assert.equal(status, !mode ? 403 : raw.includes('%ZZ') ? 400 : raw === '/roles/../skills/selected/download' ? 404 : 403, raw);
     }
   }
   assert.equal(resolved, 0); assert.equal(archived, 0);
@@ -162,23 +174,57 @@ test("invalid download paths fail before role resolution or temporary creation i
   });
 });
 
-test("download policy denies encoded paths, queries and other methods without Route grants", () => {
-  for (const prefix of ["/api/roles", "/roles"]) {
-    assert.equal(authorizeAgentApiOperation("GET", `${prefix}/example/skills/selected/download`).allowed, true);
-    for (const id of ["..%2fother", "C%3a%5cother", "%2fetc%2fpasswd", "%252e%252e", "bad%00id"]) {
-      assert.equal(authorizeAgentApiOperation("GET", `${prefix}/example/skills/${id}/download`).allowed, false, id);
+test("download policy denies encoded paths, queries and other methods without Route grants", { timeout: 15000 }, async t => {
+  const f = await fixture(t), pool = new ManagerReadWorkerPool({ maxConcurrency: 1, maxQueue: 1, timeoutMs: 5000 });
+  t.after(() => pool.stop());
+  const authority = new LanAgentAuthority({ statePath: path.join(path.dirname(f.roleDir), "authority.json") });
+  const credential = authority.enroll(authority.issueBootstrapTicket().ticket, principal.nodeId);
+  const other = authority.enroll(authority.issueBootstrapTicket().ticket, "other-node");
+  let reads = 0;
+  const registry = registeredDownloads(t, { ...f, roleDirectory: () => f.roleDir,
+    reportCleanupError: () => assert.fail("cleanup failed"),
+    archive: (roleDir, skillId, outputPath, options) => {
+      reads++; return pool.run<RoleSkillArchiveReply>({ type: "role_skill_archive", roleDir, skillId, outputPath }, options);
     }
-    assert.equal(authorizeAgentApiOperation("POST", `${prefix}/example/skills/selected/download`).allowed, false);
-    assert.equal(authorizeAgentApiOperation("GET", `${prefix}/example/skills/selected/download?file=x`).allowed, false);
-    assert.equal(authorizeLanAgentRoleSkillRequest({ ...principal, nodeId: "other-node" }, "GET", `${prefix}/example/skills/selected/download`).allowed, true);
+  });
+  const base = await serve(t, (request, response) => {
+    const access = evaluateLanAgentRequest(request, authority, true);
+    if (access.kind !== "agent") { json(response, 403, { code: -1, error: access.kind === "denied" ? access.error : "CONNECTION_REQUIRED" }); return; }
+    markAuthenticatedConnectionRequest(request);
+    if (!registry.handle(request, new URL(request.url!, "http://fixture.invalid"), response)) json(response, 404, {});
+  });
+  const headers = { authorization: `Bearer ${credential.token}` };
+  for (const prefix of ["/api/roles", "/roles"]) {
+    const resource = `${prefix}/example/skills/selected/download`;
+    const allowed = await fetch(base + resource, { headers });
+    assert.equal(allowed.status, 200);
+    assert.equal(Buffer.from(await allowed.arrayBuffer()).readUInt32LE(), 0x04034b50);
+    const beforeDenied = reads;
+    for (const id of ["..%2fother", "C%3a%5cother", "%2fetc%2fpasswd", "%252e%252e", "bad%00id"]) {
+      const response = await fetch(`${base}${prefix}/example/skills/${id}/download`, { headers });
+      assert.equal(response.status, 403, id);
+      assert.equal((await response.json()).error, "LAN_AGENT_INVALID_REQUEST_TARGET");
+    }
+    for (const method of ["POST", "PUT", "PATCH", "DELETE"]) {
+      const response = await fetch(base + resource, { method, headers });
+      assert.equal(response.status, 405, method); await response.arrayBuffer();
+    }
+    const query = await fetch(base + resource + "?file=x", { headers });
+    assert.equal(query.status, 400);
+    assert.equal((await query.json()).error, "SKILL_DOWNLOAD_QUERY_NOT_SUPPORTED");
+    assert.equal(reads, beforeDenied, "rejected paths, query and methods must not reach the archive worker");
+    const otherNode = await fetch(base + resource, { headers: { authorization: `Bearer ${other.token}` } });
+    assert.equal(otherNode.status, 200);
+    assert.equal(Buffer.from(await otherNode.arrayBuffer()).readUInt32LE(), 0x04034b50);
   }
+  await cleaned(f.temporaryRoot);
 });
 
 test("known worker results map to 403/404/409/413 and busy/timeout to 503 without partial ZIP", { timeout: 10000 }, async t => {
   const f = await fixture(t);
   const base = await serve(t, (req, res) => {
     const code = new URL(req.url!, "http://fixture.invalid").pathname.split("/")[5];
-    handleRoleSkillDownloadApi(req, new URL(req.url!, "http://fixture.invalid").pathname, res, {
+    dispatchSkillDownloadFixture(req, new URL(req.url!, "http://fixture.invalid").pathname, res, {
       ...f, roleDirectory: () => f.roleDir, json, reportCleanupError: () => assert.fail("cleanup failed"),
       archive: async () => {
         if (code === "busy" || code === "timeout") throw new ManagerReadWorkerError("Unavailable", code);
@@ -200,7 +246,7 @@ test("unconfirmed termination quarantines artifact until actual worker-release c
   const admission = new RoleSkillDownloadAdmission(1);
   let released!: () => void;
   const base = await serve(t, (req, res) => {
-    handleRoleSkillDownloadApi(req, new URL(req.url!, "http://fixture.invalid").pathname, res, {
+    dispatchSkillDownloadFixture(req, new URL(req.url!, "http://fixture.invalid").pathname, res, {
       ...f, admission, roleDirectory: () => f.roleDir, json, reportCleanupError: () => assert.fail("cleanup failed"),
       archive: async (_role, _skill, output, options) => {
         await fs.writeFile(output, "private partial fixture");
@@ -229,7 +275,7 @@ test("client abort cancels archive generation, does not write JSON, and cleans t
   let aborted = false;
   let writes = 0;
   const base = await serve(t, (req, res) => {
-    handleRoleSkillDownloadApi(req, new URL(req.url!, "http://fixture.invalid").pathname, res, {
+    dispatchSkillDownloadFixture(req, new URL(req.url!, "http://fixture.invalid").pathname, res, {
       ...f, roleDirectory: () => f.roleDir, json: () => { writes++; }, reportCleanupError: () => assert.fail("cleanup failed"),
       archive: (_role, _skill, _output, { signal, onWorkerReleased }) => new Promise((_resolve, reject) => {
         signal.addEventListener("abort", () => {
@@ -250,7 +296,7 @@ test("disconnect during ZIP streaming cleans the completed private artifact", { 
   const f = await fixture(t);
   let errors = 0;
   const base = await serve(t, (req, res) => {
-    handleRoleSkillDownloadApi(req, new URL(req.url!, "http://fixture.invalid").pathname, res, {
+    dispatchSkillDownloadFixture(req, new URL(req.url!, "http://fixture.invalid").pathname, res, {
       ...f, roleDirectory: () => f.roleDir, json, reportCleanupError: () => { errors++; },
       archive: async (_role, _skill, output, options) => {
         const bytes = Buffer.alloc(8 * 1024 * 1024);
@@ -270,11 +316,18 @@ test("disconnect during ZIP streaming cleans the completed private artifact", { 
 
 test("slow clients retain bounded admission; transfer deadline cleans and releases without creating excess leases", { timeout: 15000 }, async t => {
   const f = await fixture(t);
-  const admission = new RoleSkillDownloadAdmission(1);
+  let released!: () => void;
+  const leaseReleased = new Promise<void>(resolve => { released = resolve; });
+  const admission = new class extends RoleSkillDownloadAdmission {
+    override acquire() {
+      const release = super.acquire();
+      return release && (() => { release(); released(); });
+    }
+  }(1);
   let generated = 0;
   let cleanupErrors = 0;
   const base = await serve(t, (req, res) => {
-    handleRoleSkillDownloadApi(req, new URL(req.url!, "http://fixture.invalid").pathname, res, {
+    dispatchSkillDownloadFixture(req, new URL(req.url!, "http://fixture.invalid").pathname, res, {
       ...f, admission, transferTimeoutMs: 300, roleDirectory: () => f.roleDir, json,
       reportCleanupError: () => { cleanupErrors++; },
       archive: async (_role, _skill, output, options) => {
@@ -301,6 +354,8 @@ test("slow clients retain bounded admission; transfer deadline cleans and releas
   assert.equal(generated, 1);
   assert.equal((await fs.readdir(f.temporaryRoot)).length, 1);
   await cleaned(f.temporaryRoot);
+  // Directory removal can become visible before fs.rm resolves and the owner releases its lease.
+  await leaseReleased;
   assert.equal(admission.active, 0);
   assert.equal(cleanupErrors, 0);
 });

@@ -6,6 +6,14 @@
 
 # RabiRoute 代码架构
 
+开发候选验证复用现有发布 owner，匹配测试与候选内容绑定，不持有第二套发布状态；网关诊断的业务 handler 位于独立插件，宿主仅暴露稳定运行事实。消息记录与派生索引的唯一真源、稳定写入顺序及故障边界见[消息检索](message-history-search.md)，开发准入与证据复用见[开发候选验证](developer-candidate-admission.md)。源码实现不等于安装版生效。
+
+Windows Bootstrap 仅按 `current.json` 定位本地版本并加载 Host Core；启动链不读取发布清单，也不执行整包枚举或逐文件哈希。旧生命周期文件检查为日志告警，检查或日志异常不阻断 Host；不再保留因清单差异或旧文件存在而终止整个应用的启动入口。构建和安装工具的产物清单仍用于离线交付。具体边界见 [Windows 启动与打包](windows-launcher-and-packaging.md#启动按需加载)。
+
+通用投递复用原客户端持久队列、Manager 记录和真实任务 owner；CLI 退出与断线不清除已受理责任。实现边界、状态及当前验收范围见[可靠 Agent 投递](reliable-agent-delivery.md)。
+
+远端电脑凭据与整台实例的启用开关由 `lanAgentAuthority.ts` 唯一持有（schema 2）；一次迁移先保存私有恢复快照，再清除旧逐 Agent 授权及会话声明。每次请求显式传类型和完整 Id，目录不授权也不选择默认会话。实例默认启用，启用后使用全部公开接口，无需浏览器登录。详见[连接使用](connection-access.md)。
+
 ## 远端 Agent 主程序与托盘
 
 `apps/rabi-agent/rabi-agent.mjs` 中的稳定启动器是远端唯一主程序，持有单实例租约、连接器/更新候选子程序、Windows 托盘子程序及启动设置写入权。首次接入直接在本进程进入该 owner，不保留另一层常驻 bootstrap。`lib/desktop-presentation.mjs` 的表现桥序列化进稳定启动器，启动 `desktop/tray.ps1` 子程序；窗口在该托盘子程序内创建。托盘只经 stdin/stdout 消费脱敏快照和提交受支持命令，不读配置或联系 Manager。连接器通过 IPC 发布真实状态；不以轮询或扫描宿主获取变化。停止主程序等待全部所属子程序退出后释放租约；主程序意外结束时连接器的 IPC disconnect 和托盘的管道 EOF 结束子程序。单次 CLI 客户端经既有身份核验通道请求同一 owner，不拥有运行状态。签名发布清单纳入托盘脚本及其图标；旧节点下次正常启动采用新 owner，不重建节点或任务身份。Windows 实现和本机隔离验证见 [Rabi Agent](../apps/rabi-agent/README.md)。
@@ -44,7 +52,9 @@ Manager 内部 HTTP 转发由 `src/shared/internalManagerHop.ts` 证明来源；
 
 ## 事件驱动红线
 
-业务状态变化默认必须由拥有者发出事件，再由 Route、角色、客户端或控制面响应；有可靠事件能力的链路禁止用固定间隔 HTTP 请求、全目录扫描或 JSONL 重读来发现“有没有变化”。cursor 只用于事件流断线后的补漏与幂等恢复，不是轮询节拍；settle、重试、超时和 Heartbeat 可以使用一次性定时事件，但定时器触发后必须处理明确工作，不能空转扫描。低层音频 stall watchdog 和 SSE/WS transport keepalive 不读取业务状态，属于连接安全机制。只有宿主或上游明确没有事件、SSE、WS 或变更通知，而且移除轮询会损坏现有功能时，才允许登记受控例外；例外必须限制生命周期和读取范围、使用长等待或分钟级低频、支持停止与退避，并在文档中写明原因。当前受控例外只有五类：Android 前台服务仅在系统已知离线时每五分钟检查一次 OS 当前网络，以覆盖少数厂商漏发默认网络回调，恢复后立即停止且不查询 Relay/消息/cursor；DashScope 远端异步会议 ASR 在请求 deadline 内查询任务终态；用户显式启用、上游没有推送接口的小米健康 ADB Companion；Rokid AIUI QuickJS 的 25 秒前台事件背书下行等待；以及 AIUI 页面可见时最低 60 秒一次、宿主没有变更事件的眼镜电量刷新。
+业务状态变化默认必须由拥有者发出事件，再由 Route、角色、客户端或控制面响应；有可靠事件能力的链路禁止用固定间隔 HTTP 请求、全目录扫描或 JSONL 重读来发现“有没有变化”。cursor 只用于事件流断线后的补漏与幂等恢复，不是轮询节拍；settle、重试、超时和 Heartbeat 可以使用一次性定时事件，但定时器触发后必须处理明确工作，不能空转扫描。低层音频 stall watchdog 和 SSE/WS transport keepalive 不读取业务状态，属于连接安全机制。只有宿主或上游明确没有事件、SSE、WS 或变更通知，而且移除轮询会损坏现有功能时，才允许登记受控例外；例外必须限制生命周期和读取范围、使用长等待或分钟级低频、支持停止与退避，并在文档中写明原因。现有受控例外包括：Android 前台服务仅在系统已知离线时每五分钟检查一次 OS 当前网络，以覆盖少数厂商漏发默认网络回调，恢复后立即停止且不查询 Relay/消息/cursor；DashScope 远端异步会议 ASR 在请求 deadline 内查询任务终态；用户显式启用、上游没有推送接口的小米健康 ADB Companion；Rokid AIUI QuickJS 的 25 秒前台事件背书下行等待；以及 AIUI 页面可见时最低 60 秒一次、宿主没有变更事件的眼镜电量刷新。
+
+消息检索另有来源完整性核对例外：正式来源可能由共享工作区的其他进程或主机修改，不能只依赖本进程提交通知。仅对已查询过的角色，每60秒在有界独立索引进程中核对来源版本；未变化时不重读JSONL，繁忙时让位并退避，停止服务时取消。正常提交仍立即按事件刷新，查询遇到延迟仍按150ms目标屏障处理，不等待下一次周期核对。该例外不允许轮询Agent进度或在Manager主线程扫描正文，详见[消息历史检索](message-history-search.md)。
 
 ## 总览
 
@@ -143,12 +153,12 @@ skills/
 - `wecomAdapter.ts`：接企业微信智能机器人 WebSocket 长连接，处理企业微信群聊消息、写企业微信消息日志，并把回传目标交给 outbox。当前成熟度仍是 experimental，企业微信群聊字段尽量对齐 NapCat，专用字段只作为补充。
 - `weixinAdapter.ts` + `weixinOpenClaw.ts`：个人微信实验原型，负责显式请求后的 iLink 二维码登录、长轮询、安全会话恢复、文本投递，以及来源会话的文本或受控本地文件回复。Windows 使用当前用户 DPAPI 保护 token、同步游标、账号标识和 context token；非 Windows 使用权限受限的本机随机密钥与 AES-256-GCM。网络超时或 5xx 只进入“暂时不可达、凭据保留”，仅服务端 `-14` 或 HTTP 401/403 明确拒绝才标记失效。历史消息不参与当前登录判断；入站媒体仍只记录，尚未完成真实账号长期验收。
 - `feishuAdapter.ts` + `feishu.ts`：飞书企业自建应用消息端，负责 URL challenge、原始请求体签名与 Verification Token 校验、Encrypt Key 解密、`event_id` 持久去重、`chat_id` 上下文隔离和来源 chat 文本回传。凭据或事件订阅确认缺失时监听与出站都失败关闭，不回退到通用 Webhook。
-- `webhookAdapter.ts`：接通用 Webhook、小爱及旧 FenneNote 兼容回调，并转成语音转写事件；显式命中 record-first 白名单时交给 `rabilinkObservationRecorder.ts` 写统一观察账本，不逐句投递 Agent。新本机语音入口使用 RabiSpeech。
+- `webhookAdapter.ts`：接通用 Webhook、小爱回调，并转成语音转写事件；显式命中 record-first 白名单时交给 `rabilinkObservationRecorder.ts` 写统一观察账本，不逐句投递 Agent。新本机语音入口使用 RabiSpeech。
 - `rabilinkAdapter.ts` / `rabilinkRelayWorker.ts`：本地兼容入口与 Relay worker；observation 可先写统一会话账本，主动下行走独立消息流。
 - `heartbeatAdapter.ts`：定时触发心跳消息。
 - `messageAdapter.ts`：消息端 Adapter 的最小 Interface。
 
-Xiaomi Home 是 Manager 持有的插件消息端，不在 Gateway 内复制常驻 listener。`src/integrations/xiaomiHome/` 统一拥有 Home Assistant REST/WebSocket 客户端、受保护单账号凭据、设置 revision、事件监听、动作 receipt 和录像 artifact；Route 卡片通过 `/api/agent/xiaomi-home/auth` 同时提交候选地址、候选令牌和设置 revision。Manager 必须先用候选令牌验证候选 origin，再原子替换设置与地址绑定凭据；运行时不得把旧地址的凭据装入新地址。认证 mutation 还接受当前 lifecycle fence 与 `Idempotency-Key`，非回环地址默认要求 HTTPS。所有公共 Xiaomi API 先验证 ingress 捕获的 Agent principal，再考虑本机或 WebGUI 配置例外；已认证远端 Agent 与本机同权。显式请求守卫跨 body、队列、provider、凭据提交、部署进程和流式分块复核原租约，global/node ABA 不会重新授权旧请求。派发前失效返回 `not_started`，派发后隐藏回执并返回 `unknown`，不抹除已提交事实；后台 monitor/start 不捕获请求生命周期。录像保留独立 token ACL，远端 Agent 的 node bearer 占用 `Authorization`，录像 token 使用 `x-rabiroute-artifact-token`。
+Xiaomi Home 是 Manager 持有的插件消息端，不在 Gateway 内复制常驻 listener。`src/integrations/xiaomiHome/` 统一拥有 Home Assistant REST/WebSocket 客户端、受保护单账号凭据、设置 revision、事件监听、动作 receipt 和录像 artifact；Route 卡片通过 `/api/agent/xiaomi-home/auth` 同时提交候选地址、候选令牌和设置 revision。Manager 必须先用候选令牌验证候选 origin，再原子替换设置与地址绑定凭据；运行时不得把旧地址的凭据装入新地址。认证 mutation 还接受当前 lifecycle fence 与 `Idempotency-Key`，非回环地址默认要求 HTTPS。所有公共 Xiaomi API 先验证 ingress 捕获的 Agent principal，再考虑本机或 WebGUI 配置例外；已认证远端 Agent 与本机同权。显式请求守卫跨 body、队列、provider、凭据提交、部署进程和流式分块复核原租约，global/node ABA 不会重新授权旧请求。派发前失效返回 `not_started`，派发后隐藏回执并返回 `unknown`，不抹除已提交事实；后台 monitor/start 不捕获请求生命周期。录像读取复用已有 Manager 连接凭据，不再要求第二个录像密钥。
 
 `rolePanel` 和 `remoteAgent` 出现在 MessageAdapter 类型中，但它们的真实入口由 Manager 提供：角色面板走 Manager/托盘 timeline，Remote Agent v3 由 RabiGUI 主动扫描连接远端 bridge。Gateway 子进程只上报对应状态，不另开网络 listener。
 
@@ -364,6 +374,8 @@ Desktop 任务审批与 `src/outbox.ts` 的 Action Gate 是两道不同边界：
 
 Agent 任务间的回复责任由 `src/agentRequests/` 单独保存到 `data/.runtime/agent-requests.json`。`/api/agent/threads` 只在 Desktop owner 接受投递后把请求改为等待回复；回复必须带原 `requestId`、结果和下一步。Codex `Stop` 只记录目标轮次已经结束并安排五分钟后的提醒，不阻止最终回答；`PreToolUse` 在 Route 开启强制开关时拒绝绕过 Rabi 的持久任务投递工具。消息处理转交收到正式回复后，原发布任务重新进入 `processing`，继续决定外发、审批或下一次转交。
 
+请求记录的主进程入口是 `src/agentRequests/store.ts`，已提交读模型与完整投递正文、大列表的异步读取分开。`state.ts` 保留业务状态规则，`persistenceWorker.ts` 在单一持久化进程中执行完整 JSON 的原子提交，`persistenceTransport.ts` 提供有界分帧与确认。内部记录变更必须等待 durable 提交后才发布缓存、事件和成功结果；进程失联后保留不确定围栏，不自动重放。初始化或坏记录只影响依赖接口，退出必须确认该拥有者实际关闭。该进程不拥有 Agent 执行权，原任务、投递身份和旧版 JSON 读取合同保持不变。
+
 计划关联只来自 `/api/agent/threads` 的结构化 `messageProcessing.planId`，不从标题或文本猜测。`roleKnowledge.updatePlan()` 成功写入后发布进程内更新事件；Manager 对已关联来源比较计划快照，并为状态、当前步骤、下一步、等待事项和步骤进度变化生成通知需求。看板通过 Manager SSE 事件读取同一状态，不轮询聊天日志或计划目录，也不建立第二个统计真源。
 
 ## Outbox / Action Gate
@@ -380,7 +392,7 @@ Agent 任务间的回复责任由 `src/agentRequests/` 单独保存到 `data/.ru
 - 允许时调用对应消息端发送封装，例如 NapCat HTTP 或企业微信智能机器人 SDK。
 - 不允许时返回 `blocked` 并附带 draft 数据；发送失败时返回 `failed` 并保留 draft 数据；未选择外部输出时可以返回 `draft` 或把结果保留在 Agent 会话。
 
-当前 Outbox 已是 QQ、WeCom、个人微信来源会话文本/受控文件、RabiLink 和角色面板的真实回传层，并为旧 FenneNote Route 保留兼容，但还没有通用持久化审批中心。长期方向是把它深化为通用 Action Gate：
+当前 Outbox 已是 QQ、WeCom、个人微信来源会话文本/受控文件、RabiLink 和角色面板的真实回传层，旧 FenneNote 配置读取时迁移到 speech / tts，但还没有通用持久化审批中心。长期方向是把它深化为通用 Action Gate：
 
 `src/agentSend.ts` 在 Manager HTTP 边界先校验明确发送合同：稳定 `deliveryId`、调用方声明的 `sender.agentType + sender.sessionId`、精确 `routeId`、`channel`、渠道专用 `params` 和 `payload` 都是必填结构，来源 `replyContext` 不参与目标选择。消息处理回复还必须带与最新上下文核对绑定的 `tracking.requirementId + tracking.sendContextReviewToken`。`src/manager/agentSendIdempotency.ts` 随后在运行期 `data/agent-send-idempotency/` 持久化 reservation，再允许唯一请求进入 Outbox；同 ID 同请求的并发只保留一个结果，不同发送者或其它字段冲突。回执不存在时返回 `missing`；Manager 重启后，只有同 Route Outbox 明确没有同 ID 请求和终态记录时，`reserved/sending` 才能用原 payload 重试一次。Outbox 已记录请求但没有终态、payload 摘要不一致或重试仍无终态时转为 `uncertain` 并禁止再发。`GET /api/agent/send/receipts/:deliveryId` 返回持久回执，`GET /api/agent/send/traces?channel=...&sentMessageId=...` 可以从平台回执反查发送者会话；QQ 等通道仍需使用 `sentMessageId` 做真实平台回读。
 
@@ -444,7 +456,7 @@ unregister routes
 → await resource exit
 ```
 
-`ManagerPluginRequestTracker` 拒绝新工作，并同时等待 HTTP response 与 `trackOperation()` 登记的实际业务 Promise。拥有外部资源的插件先移除路由批次，再等待已接收的发送、任务、配置写入、扫描和回调，最后在同一个 disposer 中停止资源。Remote Agent 回调使用插件级 `AbortSignal` 并等待真正结束；NapCat 由 `napcatLifecycleOwner.ts` 按路由绑定维护持久进程记录，停止前核对 PID、创建时间和程序路径；删除、停用及启动恢复都使用同一入口，普通 QQ 不作为发现目标；FenneNote 等待转发任务退出。RabiLink 保存活动运行 Promise，停止时 abort 并等待运行结束；停止期间排队的配置会在 stop 完成后重启，但第二次 `stop()` 会先清除目标 signature，从而取消该排队重启。通用 `PeerLanServer` 关闭 listener 和活动 Socket；本地 WebGUI、Speech、SSE 与 Relay 回写都绑定停止信号。配置 watcher 的 `afterReload` 和 Rabi 身份配置 PATCH 都等待异步 Relay 同步。`GenerationRuntime` 按依赖组件生成候选并发布不可变快照，发布成功后逆序释放旧 effect scope；候选失败时释放候选资源并继续使用旧 revision。
+`ManagerPluginRequestTracker` 拒绝新工作，并同时等待 HTTP response 与 `trackOperation()` 登记的实际业务 Promise。拥有外部资源的插件先移除路由批次，再等待已接收的发送、任务、配置写入、扫描和回调，最后在同一个 disposer 中停止资源。Remote Agent 回调使用插件级 `AbortSignal` 并等待真正结束；NapCat 由 `napcatLifecycleOwner.ts` 按路由绑定维护持久进程记录，停止前核对 PID、创建时间和程序路径；删除、停用及启动恢复都使用同一入口，普通 QQ 不作为发现目标。RabiLink 保存活动运行 Promise，停止时 abort 并等待运行结束；停止期间排队的配置会在 stop 完成后重启，但第二次 `stop()` 会先清除目标 signature，从而取消该排队重启。通用 `PeerLanServer` 关闭 listener 和活动 Socket；本地 WebGUI、Speech、SSE 与 Relay 回写都绑定停止信号。配置 watcher 的 `afterReload` 和 Rabi 身份配置 PATCH 都等待异步 Relay 同步。`GenerationRuntime` 按依赖组件生成候选并发布不可变快照，发布成功后逆序释放旧 effect scope；候选失败时释放候选资源并继续使用旧 revision。
 
 Manager 端点、身份、完整必需插件集与 handler READY 不等待计划存储的 NAS 恢复；READY 后父进程主线程不得触碰远端文件系统。`managerWatchBroker.ts` 只对本地根目录使用原生 watcher；UNC 配置与插件根由可终止子进程执行有界 `readdir/stat`，超时后必须确认旧 child 退出再重建。`gatewayDiagnosticsSnapshot.ts` 把角色、状态和日志诊断交给 `managerReadWorker`，`/gateways` 与 `/api/gateways` 只读取带单调 revision 的深冻结内存快照；刷新失败保留上一份快照并显式标为 stale/degraded。远端角色与计划读取复用通用 `manager` 隧道和目标 PC 的既有接口、读 worker 与有界预算，不再使用独立 RPC 清单读取模块或旧同步索引。后台 watcher 或快照降级进入 `/health` 诊断，但不能阻塞回环控制面。
 
@@ -458,7 +470,7 @@ Manager 端点、身份、完整必需插件集与 handler READY 不等待计划
 
 它还负责创建共享服务、组装插件 hook、启动 HTTP server、维护配置 watcher 和执行进程级关闭。新增业务 HTTP 分支应进入对应插件的专用 route/service 模块，不再直接追加到中央请求链。
 
-可能遍历大量历史文件的读操作不能直接占用 Manager 的 HTTP 主线程。`manager/managerReadWorkerPool.ts` 用有界常驻低优先级子进程执行语音历史、记忆目录、Agent 扫描、性能 JSONL 解析、性能汇总和响应 JSON 序列化，并分别限制同时执行数、等待队列和执行时限；所有池合计最多执行 6 项重任务，避免一次 Agent 扫描让其他只读请求长期排队。一个池的子进程退出无法确认时，只拒绝该池的新任务并保留其并发额度；其他读池仍可使用剩余的全局额度，不能被跨池封锁。请求断开或超时时终止对应子进程，后续请求再创建替代进程。子进程在请求之间复用模块缓存，避免记忆目录读取反复支付进程启动和模块加载成本。范围相同且只要统计的并发语音请求、相同参数的并发 Agent 扫描及相同性能查询共享一个任务。性能池同时执行 1 项、等待 1 项、超时 60 秒；队列满时返回 503，不在主线程回退。Codex 任务扫描按 200 条分页，Desktop 任务目录阶段最多等待 8 秒，并记录 `manager.agent_scan.desktop_ready` 与 `manager.agent_scan.codex_catalog`；WebGUI 只在用户要求时继续加载后续页。消息处理看板列表只构建界面摘要，附件、原始回复上下文和完整证据由单项详情接口读取。计划目录冷读使用异步并发文件 I/O，同一角色的并发请求共享一个缓存填充任务；热读直接复用内存目录，文件监听只刷新变化项。Manager 开始监听后在后台预热各角色计划目录，不延迟 HTTP 就绪。单计划创建、修改和绑定更新提交后只读取该计划的投影，并增量更新父进程中的完整目录缓存；只有会改变整套状态定义或其它角色级元数据的命令才重新读取完整目录。`messageContextStore.ts` 先用归档索引的起止时间过滤文件，再读取可能命中的正文。性能存储启动时按流逐条读取已有 JSONL，不整文件读取和拆分。`manager/operationalLog.ts` 接收 Manager 和 Gateway 的统一数据变动事件，按时间片异步追加到同一份日分片；记录包含 owner、action、target、dataSource、outcome 和请求追踪字段，不包含业务正文。失败批次保留在内存中退避重试，并通过 `/meta.operationalLog` 和 Manager 健康状态报告降级。默认按 30 天和 512 MiB 历史分片上限清理。正常退出会等待消息处理快照和操作日志完成写入，再结束进程。控制面诊断通过 `manager/jsonlTail.ts` 从文件尾部读取有限记录，同一次响应使用请求级缓存，避免不同卡片重复读取同一份日志。`/meta.readWorkers`、`/meta.catalogWorkers`、`/meta.agentScanWorkers`、`/meta.performanceWorkers`、`/meta.messageProcessingPersistence`、`/meta.operationalLog` 和 `/meta.httpLimits` 提供不含业务正文的运行诊断；各子进程状态中的 `executionMode`、`workerPids`、`globalActive`、`globalMaxConcurrency`、`terminationBlocked`、`workers` 与 `spawnedWorkers` 用于检查隔离方式、总预算和异常重启。
+可能遍历大量历史文件的读操作不能直接占用 Manager 的 HTTP 主线程。用户请求的完整计划列表、计划历史和记忆整理记录复用 `managerKnowledgePageWorkerPool` 的有界交互队列；后台诊断继续使用 `managerCatalogWorkerPool`，该队列阻塞或无法确认退出只影响其所属任务。分页计划仍使用原常驻目录 owner。`manager/managerReadWorkerPool.ts` 用有界常驻低优先级子进程执行语音历史、记忆目录、Agent 扫描、性能 JSONL 解析、性能汇总和响应 JSON 序列化，并分别限制同时执行数、等待队列和执行时限；所有池合计最多执行 6 项重任务，避免一次 Agent 扫描让其他只读请求长期排队。一个池的子进程退出无法确认时，只拒绝该池的新任务并保留其并发额度；其他读池仍可使用剩余的全局额度，不能被跨池封锁。请求断开或超时时终止对应子进程，后续请求再创建替代进程。子进程在请求之间复用模块缓存，避免记忆目录读取反复支付进程启动和模块加载成本。范围相同且只要统计的并发语音请求、相同参数的并发 Agent 扫描及相同性能查询共享一个任务。性能池同时执行 1 项、等待 1 项、超时 60 秒；队列满时返回 503，不在主线程回退。Codex 任务扫描按 200 条分页，Desktop 任务目录阶段最多等待 8 秒，并记录 `manager.agent_scan.desktop_ready` 与 `manager.agent_scan.codex_catalog`；WebGUI 只在用户要求时继续加载后续页。消息处理看板列表只构建界面摘要，附件、原始回复上下文和完整证据由单项详情接口读取。计划目录冷读使用异步并发文件 I/O，同一角色的并发请求共享一个缓存填充任务；热读直接复用内存目录，文件监听只刷新变化项。Manager 开始监听后在后台预热各角色计划目录，不延迟 HTTP 就绪。单计划创建、修改和绑定更新提交后只读取该计划的投影，并增量更新父进程中的完整目录缓存；只有会改变整套状态定义或其它角色级元数据的命令才重新读取完整目录。`messageContextStore.ts` 先用归档索引的起止时间过滤文件，再读取可能命中的正文。性能存储启动时按流逐条读取已有 JSONL，不整文件读取和拆分。`manager/operationalLog.ts` 接收 Manager 和 Gateway 的统一数据变动事件，按时间片异步追加到同一份日分片；记录包含 owner、action、target、dataSource、outcome 和请求追踪字段，不包含业务正文。失败批次保留在内存中退避重试，并通过 `/meta.operationalLog` 和 Manager 健康状态报告降级。默认按 30 天和 512 MiB 历史分片上限清理。正常退出会等待消息处理快照和操作日志完成写入，再结束进程。控制面诊断通过 `manager/jsonlTail.ts` 从文件尾部读取有限记录，同一次响应使用请求级缓存，避免不同卡片重复读取同一份日志。`/meta.readWorkers`、`/meta.catalogWorkers`、`/meta.agentScanWorkers`、`/meta.performanceWorkers`、`/meta.messageProcessingPersistence`、`/meta.operationalLog` 和 `/meta.httpLimits` 提供不含业务正文的运行诊断；各子进程状态中的 `executionMode`、`workerPids`、`globalActive`、`globalMaxConcurrency`、`terminationBlocked`、`workers` 与 `spawnedWorkers` 用于检查隔离方式、总预算和异常重启。
 
 它已经接入：
 
@@ -546,7 +558,7 @@ Gateway 配置的事实源 Module。
 - `napcatHealthScan.ts`：按 runtime/instance 并行执行纯只读 NapCat 健康观察，在共享截止时间内返回部分结果。
 - `manager/scanController.ts`：为独立消息端探针提供并发起跑、共享截止时间、超时/错误诊断和 fallback 结果。
 - `manager/messageAdapterHealth.ts`：把 QQ、个人微信、RabiLink、语音等入口汇总为彼此独立的 operational health；不把单入口故障提升成全局离线。
-- `webhookLikeScans.ts`：Webhook / XiaoAi 与旧 FenneNote 兼容 HTTP callback 端点扫描。
+- `webhookLikeScans.ts`：Webhook / XiaoAi HTTP callback 端点扫描；旧 FenneNote 探测已移除。
 - `wecomManager.ts`：企业微信主动 WebSocket 长连接的扫描 read model，检查 SDK、bot id/secret、连接认证状态和最近消息。
 - `remoteAgentManager.ts`：远端 Agent 设备发现、密码挑战、连接、任务、事件和文件回传。
 
@@ -641,7 +653,7 @@ SpeechServicePage / SpeechHostMonitor
 
 模型管理是独立的主机控制面，不属于某条 Route。`GET /api/speech/model-management` 返回环境、目录和任务状态；两个 POST 入口分别安装核心环境和单个允许清单模型，不接受任意下载仓库、地址或路径；设置入口复用连接鉴权并校验模型总目录覆盖值，目录路径只返回给已鉴权连接。Manager 同一时间只允许一个任务，并继续受只读模式的全局写操作门禁约束。`src/manager/speechModelFiles.ts` 核对管理目录及已配置模型路径中的代表文件，下载状态不再只取决于安装清单；文件存在不等于校验和或推理就绪。弹窗使用紧凑环境栏、筛选搜索和表格，仅在存在当前或最近任务时显示任务行，说明默认折叠。模型清单中的 `runtime=core|isolated` 只说明运行环境要求，不代表已检测到环境缺失；“模型已下载”不能被展示为推理、波形或真实设备已经验收。
 
-`src/manager/speechEventProxy.ts` 单独拥有 Manager SSE 客户端与 RabiSpeech 上游流的一对一生命周期。浏览器或验收客户端断开时只中止对应的上游 fetch；由此产生的 `AbortError` 是正常终态，必须在代理层消费，不能变成未处理 Node stream error 或拖垮 Manager。上游不是 `text/event-stream` 时在写入 SSE 响应头之前失败关闭，不把旧 Manager/WebGUI HTML 冒充事件流。
+`src/manager/speechEventOperation.ts` 的 `SpeechEventStreamOwner` 单独拥有 Manager SSE 客户端与 RabiSpeech 上游流的一对一生命周期。浏览器或验收客户端断开时只中止对应的上游 fetch；由此产生的 `AbortError` 是正常终态，必须在代理层消费，不能变成未处理 Node stream error 或拖垮 Manager。上游不是 `text/event-stream` 时在写入 SSE 响应头之前失败关闭，不把旧 Manager/WebGUI HTML 冒充事件流。
 
 Route 的 `speechPushMode` 是语音投递策略真源：`hot` 在每段 ASR 完成后立即进入普通 `start/steer` 链；`keyword` 仍写入 ASR 账本，仅命中角色 `speechTriggerKeywords` 时唤醒。空关键词不会回退热投递。
 
@@ -655,7 +667,7 @@ locale 只允许作为浏览器侧 UI 偏好缓存，键为 `rabiroute:webgui:lo
 
 Manager 默认绑定 `127.0.0.1:0`，由操作系统分配空闲端口。Manager READY 后把 `applicationGenerationId`、`managerInstanceId`、PID 与完整 `managerBaseUrl` 发布给 Host；Host 核验 `/meta` 后才把本代端点交给 Tray。端口不是身份，Tray 不缓存旧 URL、不扫描 `8790..8799`、不启动或停止 Manager，也不能脱离 Host 独立运行。用户退出只经 Host 的带代际 fencing 控制管道停止整棵树，不使用 Manager shutdown API。
 
-代码生效分为三层：WebGUI 开发态可使用 Vite HMR；正式插件只从已构建 package/profile 产生候选 plugin generation，并在成功后原子发布；Host、Manager、Tray 与后端核心改动必须本机构建、打包并切换完整 application generation。正式安装不从 NAS 源码热跑，避免同一运行代混入新旧模块。
+代码生效由对应拥有者管理：WebGUI 开发态可使用 Vite HMR；正式插件从已构建 package/profile 产生候选 plugin generation，并在验证后原子发布。支持矩阵内的源码和 Web 补丁经原候选验证及发布事务生效；Host、Tray、依赖 ABI 或无法迁移的状态变化仍需完整构建、打包并由 Host 切换 application generation。正式安装只加载核对过的本地产物，不从 NAS 源码热跑。支持范围见[源码热补丁](source-hot-patches.md)。
 
 声明 Web 入口的插件缺失入口文件时，Web 发布构建必须失败，不得静默省略该模块。开发候选封装前还检查已复制到 staging 的插件入口及其引用资源。发布验收除了根 HTML 与资源哈希，还需核对带当前 `webRelease` 的 `/api/plugins/modules` 成功、页面插件入口可读取并引用新页面；单个页面资源返回 200 不代表实际加载链完整。
 
@@ -852,7 +864,7 @@ src/messageEndpoints/
 - 不把 WebGUI 做成配置事实源。
 - 不把所有 manager HTTP 逻辑重新堆回 `manager.ts`。
 - 不让外部写入绕过 Outbox / Action Gate。
-- 不把 NapCat、FenneNote、小爱等外部工具自身能力纳入 RabiRoute 控制面；RabiRoute 只管自己是否接收消息，以及自己是否允许 Agent 通过 RabiRoute 回传/代发。
+- 不把 NapCat、小爱等外部工具自身能力纳入 RabiRoute 控制面；RabiRoute 只管自己是否接收消息，以及自己是否允许 Agent 通过 RabiRoute 回传/代发。
 - 不把运行期 `data/`、日志、token、真实账号写进仓库。
 - 不混淆 OpenAI provider、Codex agent、Desktop IPC transport、Desktop task owner 和具体 model。
 - 不为 Codex 实际消息增加独立 app-server、共享 4510 或其他备用投递路径。
@@ -860,7 +872,7 @@ src/messageEndpoints/
 
 ### 角色 Hook 配置与 Agent 埋点
 
-`shared/agentHookAutomation.ts` 拥有事件、条件和消息端的定义与校验。规则结构为 `event`、AND 语义的 `conditions[]` 和 `destination.channel/gatewayId/params`；未知条件、事件和消息端失败关闭。当前事件为 `task_completed`，条件为 `project`、`bound_plan`、`include_sessions`、`exclude_sessions`（`sessions[]` 保存完整 ID 与显示名，按 ID 匹配，排除优先），消息端为 NapCat 群／私聊和语音。后续能力需在此合同与执行入口同时注册。
+`shared/agentHookAutomation.ts` 拥有事件、条件和消息端的定义与校验。规则结构为 `event`、AND 语义的 `conditions[]` 和 `destination.channel/gatewayId/params`；未知条件、事件和消息端失败关闭。当前事件为 `task_completed`，条件为 `project`、`bound_plan`、`include_sessions`、`exclude_sessions`（`sessions[]` 保存完整 ID 与显示名，按 ID 匹配，排除优先）和无参数的 `exclude_heartbeat`（在解包本轮完整心跳控制消息前保留类型，按规则跳过该轮结果；不按名称或引用示例猜测）。消息端为 NapCat 群／私聊和语音。条件弹窗与运行时复用条件校验，确认草稿后仍由角色配置保存入口持久化。后续能力需在此合同与执行入口同时注册。
 
 完成通知按任务 ID 读取 Codex 当前任务标题，读取不到时显示“未命名任务”，不回退到计划 `taskBinding.sessionTitle`，不输出项目路径或 sessionId。`bound_plan` 条件按当前角色已发布的计划目录核对 Codex `taskBinding.sessionId`。原 `projectPath/requireBoundPlan/groupId` 等平铺字段仅在配置边界迁移，保存后删除，不保留旧执行分支；保留集合字段 `codexHooks.completionDeliveries` 作为现有配置的稳定入口。NapCat 群迁移保持原 deliveryId，语音成功和失败也写入 Outbox 的投递身份，避免重放。
 

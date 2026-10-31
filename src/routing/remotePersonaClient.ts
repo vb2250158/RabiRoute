@@ -1,3 +1,4 @@
+import { getTimeoutMs } from "../shared/timeoutSettings.js";
 import type { NotificationRule, RouteProfile } from "../config.js";
 import { personaConfigFragmentFromValue } from "../manager/configMigration.js";
 import {
@@ -50,7 +51,7 @@ export async function fetchRemotePersonaSnapshot(input: RemotePersonaRequest): P
   const url = new URL("/api/internal/remote-persona/resolve", origin);
   url.search = new URLSearchParams({ routeId: input.routeId, file: input.file }).toString();
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(new Error("Remote persona request timed out.")), input.timeoutMs ?? 25_000);
+  const timeout = setTimeout(() => controller.abort(new Error("Remote persona request timed out.")), input.timeoutMs ?? getTimeoutMs("backend.routing.remotePersonaClient.fetchRemotePersonaSnapshot.setTimeout.timeoutMs", 25_000));
   timeout.unref?.();
   const abort = () => controller.abort(input.signal?.reason);
   if (input.signal?.aborted) abort();

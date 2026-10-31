@@ -3,7 +3,10 @@ import { ref } from "vue";
 import { useRouter } from "vue-router";
 import { useRoleStore, mutateRole, roleRequest, type RoleDetail } from "../stores/roleStore";
 import { roleConfigPath } from "../roleScopedNavigation";
+import { browserUuid } from "../browserUuid";
+import { remotePersonaServicePath } from "../persona/remotePersonaReference";
 const roles = useRoleStore();
+defineProps<{ createOnly?: boolean; hideCreate?: boolean }>();
 const router = useRouter();
 const creating = ref(false);
 const archiving = ref(false);
@@ -11,15 +14,17 @@ const title = ref("");
 const roleId = ref("");
 const busy = ref(false);
 const error = ref("");
-function openCreate() { title.value = ""; roleId.value = `role-${crypto.randomUUID().slice(0, 8)}`; error.value = ""; creating.value = true; }
+function openCreate() { title.value = ""; roleId.value = `role-${browserUuid().slice(0, 8)}`; error.value = ""; creating.value = true; }
+defineExpose({ openCreate });
 async function create() {
   busy.value = true; error.value = "";
+  const source = roles.sourceDeviceId;
   try {
-    const data = await roleRequest<RoleDetail>("/api/roles", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ roleId: roleId.value, title: title.value }) });
+    const data = await roleRequest<RoleDetail>(source ? remotePersonaServicePath(source, "/api/roles") : "/api/roles", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ roleId: roleId.value, title: title.value }) });
     creating.value = false;
-    roles.sourceDeviceId = "";
+    roles.sourceDeviceId = source;
     await roles.loadCatalog();
-    await router.push(roleConfigPath(data.roleId));
+    await router.push({ path: roleConfigPath(data.roleId), query: source ? { source } : {} });
   } catch (failure) { error.value = failure instanceof Error ? failure.message : String(failure); }
   finally { busy.value = false; }
 }
@@ -36,10 +41,10 @@ async function archive() {
 }
 </script>
 <template>
-  <v-btn prepend-icon="mdi-account-plus-outline" variant="tonal" @click="openCreate">新建角色</v-btn>
-  <v-btn v-if="roles.detail && !roles.archived" prepend-icon="mdi-archive-outline" variant="tonal" :disabled="roles.dirty" @click="archiving = true; error = ''">归档角色</v-btn>
-  <v-btn v-if="roles.archived" :to="{ path: '/settings/archived-roles', query: roles.sourceDeviceId ? { source: roles.sourceDeviceId } : {} }" variant="tonal">已归档角色</v-btn>
-  <v-dialog v-model="creating" max-width="520" :persistent="busy">
+  <v-btn v-if="!createOnly && !hideCreate" prepend-icon="mdi-account-plus-outline" variant="tonal" @click="openCreate">新建角色</v-btn>
+  <v-btn v-if="!createOnly && roles.detail && !roles.archived" prepend-icon="mdi-archive-outline" variant="tonal" :disabled="roles.dirty" @click="archiving = true; error = ''">归档角色</v-btn>
+  <v-btn v-if="!createOnly && roles.archived" :to="{ path: '/settings/archived-roles', query: roles.sourceDeviceId ? { source: roles.sourceDeviceId } : {} }" variant="tonal">已归档角色</v-btn>
+  <v-dialog v-if="!hideCreate" v-model="creating" max-width="520" :persistent="busy">
     <v-card title="新建角色">
       <v-card-text>
         <v-text-field v-model="title" label="角色名称" autofocus />

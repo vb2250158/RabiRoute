@@ -1,8 +1,8 @@
+import { getTimeoutMs } from "./shared/timeoutSettings.js";
 import { config, type NapCatInstanceConfig } from "./config.js";
 
-const GROUP_FILE_RESPONSE_BYTES = 256 * 1024;
-const GROUP_FILE_PAGE_ENTRIES = 50;
-const GROUP_FILE_FIELD_CHARS = 256;
+export const NAPCAT_GROUP_FILES_LIMITS = Object.freeze({ responseBytes: 256 * 1024, pageEntries: 50, fieldChars: 256 });
+const { responseBytes: GROUP_FILE_RESPONSE_BYTES, pageEntries: GROUP_FILE_PAGE_ENTRIES, fieldChars: GROUP_FILE_FIELD_CHARS } = NAPCAT_GROUP_FILES_LIMITS;
 
 export type GroupFileMetadata = { fileId: string; fileName: string; fileSize?: number; uploadTime?: number; uploader?: string; busid?: number };
 export type GroupFolderMetadata = { folderId: string; folderName: string; totalFileCount?: number };
@@ -18,7 +18,7 @@ function object(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
 }
 
-function bounded(value: unknown, max = GROUP_FILE_FIELD_CHARS): string | undefined {
+function bounded(value: unknown, max: number = GROUP_FILE_FIELD_CHARS): string | undefined {
   return typeof value === "string" && value.length > 0 && value.length <= max && !/[\x00-\x1f\x7f]/.test(value) ? value : undefined;
 }
 
@@ -58,7 +58,7 @@ export function parseNapCatGroupFiles(value: unknown): GroupFilesPage {
 export async function readNapCatGroupFiles(endpoint: NapCatEndpoint, groupId: string, folderId?: string, transport: typeof fetch = fetch): Promise<GroupFilesPage> {
   const action = folderId === undefined ? "get_group_root_files" : "get_group_files_by_folder";
   const response = await transport(`${endpoint.httpUrl}/${action}`, {
-    method: "POST", redirect: "error", cache: "no-store", signal: AbortSignal.timeout(3000),
+    method: "POST", redirect: "error", cache: "no-store", signal: AbortSignal.timeout(getTimeoutMs("backend.napcat.readNapCatGroupFiles.AbortSignal.timeout.request", 3000)),
     headers: { "content-type": "application/json; charset=utf-8", ...(endpoint.accessToken ? { authorization: `Bearer ${endpoint.accessToken}` } : {}) },
     body: JSON.stringify({ group_id: groupId, ...(folderId === undefined ? {} : { folder_id: folderId }), file_count: GROUP_FILE_PAGE_ENTRIES })
   });
@@ -121,6 +121,14 @@ export type UploadGroupFileResult = {
 };
 
 export type NapCatEndpoint = Pick<NapCatInstanceConfig, "httpUrl" | "accessToken">;
+
+/** Safe protocol fields for receipts; raw upstream text can contain private paths. */
+export class NapCatRequestError extends Error {
+  constructor(message: string, readonly diagnostic: {
+    action: string; kind: "http" | "rejected" | "transport" | "invalid_response";
+    httpStatus?: number; retcode?: number; transportCode?: string;
+  }) { super(message); this.name = "NapCatRequestError"; }
+}
 
 export type LoginInfo = {
   userId?: number | string;
@@ -201,20 +209,30 @@ export async function callNapCat<T>(action: string, payload: unknown, endpoint?:
     // The same deadline covers headers AND body; some transports ignore abort while reading.
     const text = await response.text();
     if (!response.ok) {
-      throw new Error(`NapCat ${action} failed: HTTP ${response.status} ${text}`);
+      throw new NapCatRequestError(`NapCat ${action} failed: HTTP ${response.status} ${text}`, { action, kind: "http", httpStatus: response.status });
     }
     const parsed = text ? (JSON.parse(text) as OneBotResponse<T> | T) : ({} as T);
     if (parsed && typeof parsed === "object" && ("retcode" in parsed || "status" in parsed)) {
       const result = parsed as OneBotResponse<T>;
       if ((result.retcode != null && result.retcode !== 0) || result.status === "failed") {
         const detail = result.wording || result.message || text;
-        throw new Error(`NapCat ${action} failed: retcode=${result.retcode ?? "unknown"} status=${result.status ?? "unknown"} ${detail}`);
+        throw new NapCatRequestError(`NapCat ${action} failed: retcode=${result.retcode ?? "unknown"} status=${result.status ?? "unknown"} ${detail}`, {
+          action, kind: "rejected", httpStatus: response.status,
+          ...(typeof result.retcode === "number" && Number.isSafeInteger(result.retcode) ? { retcode: result.retcode } : {})
+        });
       }
     }
     return parsed as T;
   };
   try {
     return await (deadline ? Promise.race([readResponse(), deadline]) : readResponse());
+  } catch (error) {
+    if (error instanceof NapCatRequestError) throw error;
+    const cause = error instanceof Error ? (error as Error & { cause?: { code?: unknown } }).cause : undefined;
+    const code = typeof cause?.code === "string" && /^(UND_ERR_[A-Z_]+|E[A-Z0-9_]+)$/.test(cause.code) ? cause.code : undefined;
+    throw new NapCatRequestError(error instanceof Error ? error.message : String(error), {
+      action, kind: error instanceof SyntaxError ? "invalid_response" : "transport", ...(code ? { transportCode: code } : {})
+    });
   } finally {
     if (timeout) clearTimeout(timeout);
   }
@@ -284,7 +302,7 @@ export async function getMessage(messageId: number | string, endpoint?: NapCatEn
 
   const response = await callNapCat<OneBotResponse<GetMessageData> | GetMessageData>("get_msg", {
     message_id: messageId
-  }, endpoint, { timeoutMs: 3_000 });
+  }, endpoint, { timeoutMs: getTimeoutMs("backend.napcat.getMessage.callNapCat.timeoutMs", 3_000) });
   const data = "data" in response && response.data ? response.data : response as GetMessageData;
   const message = data.message ?? data.raw_message ?? "";
   return {

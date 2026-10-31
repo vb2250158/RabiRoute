@@ -1,0 +1,13 @@
+/// <reference types="node" />
+import test, {type TestContext} from 'node:test';import assert from 'node:assert/strict';
+import {webReleaseQuery} from "./webRelease";
+const a='a'.repeat(64),b='b'.repeat(64),c='c'.repeat(64),pathB=`/_rabiroute/web/${b}/web/index.html`;
+function environment(t: TestContext,marker: string | null,pathname: string | undefined,search='',documentPresent=true){for(const [key,value] of Object.entries({document:documentPresent?{documentElement:{getAttribute:(name: string)=>{assert.equal(name,'data-rabi-web-release');return marker;}}}:undefined,location:pathname===undefined?undefined:{pathname,search}})){const original=Object.getOwnPropertyDescriptor(globalThis,key);Object.defineProperty(globalThis,key,{configurable:true,writable:true,value});t.after(()=>{if(original)Object.defineProperty(globalThis,key,original);else Reflect.deleteProperty(globalThis,key);});}}
+test('HTML release marker wins over a different explicit path and query',t=>{environment(t,a,pathB,`?webRelease=${c}`);assert.equal(webReleaseQuery(),`?webRelease=${a}`);});
+test('valid HTML marker retains the ordinary root behavior',t=>{environment(t,a,'/');assert.equal(webReleaseQuery(),`?webRelease=${a}`);});
+test('missing marker pins the exact existing versioned document path',t=>{environment(t,null,pathB);assert.equal(webReleaseQuery(),`?webRelease=${b}`);});
+test('missing marker uses path revision even when query names a different revision',t=>{environment(t,null,pathB,`?webRelease=${c}`);assert.equal(webReleaseQuery(),`?webRelease=${b}`);});
+test('present empty or malformed marker keeps old behavior instead of falling through',t=>{let marker='';environment(t,marker,pathB);assert.equal(webReleaseQuery(),'');Object.defineProperty(globalThis,'document',{configurable:true,value:{documentElement:{getAttribute:()=> 'not-a-release'}}});assert.equal(webReleaseQuery(),'');});
+test('ordinary paths do not consume a caller-supplied revision query',t=>{environment(t,null,'/',`?webRelease=${b}`);assert.equal(webReleaseQuery(),'');});
+test('malformed version paths keep the previous empty query behavior',t=>{environment(t,null,'/');for(const pathname of [`/prefix/_rabiroute/web/${b}/web/index.html`,`/_rabiroute/web/${b.slice(1)}/web/index.html`,`/_rabiroute/web/${b}b/web/index.html`,`/_rabiroute/web/${'B'.repeat(64)}/web/index.html`,`/_rabiroute/web/${b}`,`/_rabiroute/web/${b}/`,`/_rabiroute/web/${'%62'.repeat(64)}/web/index.html`]){Object.defineProperty(globalThis,'location',{configurable:true,value:{pathname,search:''}});assert.equal(webReleaseQuery(),'',pathname);}});
+test('non-browser imports retain an empty query without browser globals',t=>{environment(t,null,undefined,'',false);assert.equal(webReleaseQuery(),'');});

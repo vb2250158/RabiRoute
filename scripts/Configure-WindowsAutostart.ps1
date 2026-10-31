@@ -299,16 +299,26 @@ try {
         throw "Legacy desktop startup shortcut remained after reconciliation."
     }
 } catch {
-    if ($elevatedTask) {
-        $previousEnabled = if ($elevatedTask.Triggers[0].Enabled) { 'true' } else { 'false' }
-        Invoke-ElevatedHostAutostart $previousEnabled
+    $originalFailure = $_.Exception
+    $rollbackFailures = [Collections.Generic.List[Exception]]::new()
+    # Restore all owned projections even when the task command itself fails.
+    $restoreActions = @(
+        { if ($elevatedTask) {
+            $previousEnabled = if ($elevatedTask.Triggers[0].Enabled) { 'true' } else { 'false' }
+            Invoke-ElevatedHostAutostart $previousEnabled
+        } },
+        { if ($settingsExisted) { [IO.File]::WriteAllBytes($settingsPath, $settingsBytes) } elseif (Test-Path -LiteralPath $settingsPath) { Remove-Item -LiteralPath $settingsPath -Force -ErrorAction Stop } },
+        { if ($startupExisted) { [IO.File]::WriteAllBytes($startupPath, $startupBytes) } elseif (Test-Path -LiteralPath $startupPath) { Remove-Item -LiteralPath $startupPath -Force -ErrorAction Stop } },
+        { if ($legacyExisted) { [IO.File]::WriteAllBytes($legacyStartupPath, $legacyBytes) } elseif (Test-Path -LiteralPath $legacyStartupPath) { Remove-Item -LiteralPath $legacyStartupPath -Force -ErrorAction Stop } }
+    )
+    foreach ($restoreAction in $restoreActions) {
+        try { & $restoreAction } catch { $rollbackFailures.Add($_.Exception) }
     }
-    Remove-Item -LiteralPath $settingsTemporary -Force -ErrorAction SilentlyContinue
-    Remove-Item -LiteralPath $shortcutTemporary -Force -ErrorAction SilentlyContinue
-    if ($settingsExisted) { [IO.File]::WriteAllBytes($settingsPath, $settingsBytes) } else { Remove-Item -LiteralPath $settingsPath -Force -ErrorAction SilentlyContinue }
-    if ($startupExisted) { [IO.File]::WriteAllBytes($startupPath, $startupBytes) } else { Remove-Item -LiteralPath $startupPath -Force -ErrorAction SilentlyContinue }
-    if ($legacyExisted) { [IO.File]::WriteAllBytes($legacyStartupPath, $legacyBytes) } else { Remove-Item -LiteralPath $legacyStartupPath -Force -ErrorAction SilentlyContinue }
-    throw
+    if ($rollbackFailures.Count) {
+        $rollbackFailures.Insert(0, $originalFailure)
+        throw [AggregateException]::new('Autostart update failed; one or more restoration actions also failed.', $rollbackFailures.ToArray())
+    }
+    throw $originalFailure
 } finally {
     Remove-Item -LiteralPath $settingsTemporary -Force -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $shortcutTemporary -Force -ErrorAction SilentlyContinue

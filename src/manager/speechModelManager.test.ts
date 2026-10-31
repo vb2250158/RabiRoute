@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import test from "node:test";
-import type { spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import { SpeechModelManager, SpeechModelManagerError } from "./speechModelManager.js";
 import { speechRequirementsDigest } from "./speechDependencies.js";
 
@@ -52,7 +52,7 @@ function makeFixture(): {
     root,
     pluginRoot,
     modelRoot,
-    cleanup: () => fs.rmSync(root, { recursive: true, force: true })
+    cleanup: () => { assert.equal(path.dirname(path.resolve(root)), path.resolve(os.tmpdir())); fs.rmSync(root, { recursive: true, force: true }); }
   };
 }
 
@@ -420,4 +420,26 @@ test("speech model manager redacts private paths from installer failures", async
   } finally {
     fixture.cleanup();
   }
+});
+
+test("model stop waits for the original installer close even after error cleared the active job", async () => {
+  const fixture = makeFixture();
+  try {
+    const fake = fakeInstaller([]), manager = new SpeechModelManager({ rootDir: fixture.root, modelRoot: fixture.modelRoot, platform: "win32", spawnInstaller: fake.spawnInstaller });
+    manager.installRuntime(); const child = fake.children[0]!;
+    child.emit("error", new Error("Controlled launch error."));
+    let stopped = false; const stopping = manager.stop().then(() => { stopped = true; });
+    await new Promise<void>(resolve => setImmediate(resolve)); assert.equal(stopped, false);
+    child.stdout.end(); child.stderr.end(); child.emit("close", 1); await stopping; assert.equal(stopped, true);
+  } finally { fixture.cleanup(); }
+});
+
+test("model stop joins a real controlled Node child and its stdio instead of treating kill as completion", async () => {
+  const fixture = makeFixture(); let child: ReturnType<typeof spawn> | undefined;
+  try {
+    const spawnInstaller = (() => { child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: ["ignore", "pipe", "pipe"], windowsHide: true }); return child; }) as typeof spawn;
+    const manager = new SpeechModelManager({ rootDir: fixture.root, modelRoot: fixture.modelRoot, platform: "win32", spawnInstaller });
+    manager.installRuntime(); let closed = false; child!.once("close", () => { closed = true; });
+    await manager.stop(); assert.equal(closed, true); assert.equal(child!.stdout!.destroyed, true); assert.equal(child!.stderr!.destroyed, true);
+  } finally { child?.kill(); fixture.cleanup(); }
 });

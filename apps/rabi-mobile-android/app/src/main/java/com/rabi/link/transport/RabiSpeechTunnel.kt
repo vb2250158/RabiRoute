@@ -15,6 +15,7 @@ import java.util.UUID
 
 /** A single authenticated, reusable speech connection. Connect retries never replay a business request. */
 class RabiSpeechTunnel @JvmOverloads constructor(private val context: Context, private val relay: RabiLinkRelayConfig, private val worker: RabiLinkPc, private val service: String = "speech",private val delegation: RabiTunnelDeviceDelegation? = null) : AutoCloseable {
+    private val timeouts = ScopedManagerTimeouts(context, relay, worker.id)
     private val device = delegation?.sourceDeviceId ?: RabiMobileDeviceIdentity.load(context)
     private val prefs = context.getSharedPreferences("rabi_speech_tunnel",Context.MODE_PRIVATE)
     private val seed = delegation?.seed ?: synchronized(RabiSpeechTunnel::class.java) {
@@ -39,7 +40,7 @@ class RabiSpeechTunnel @JvmOverloads constructor(private val context: Context, p
         val payload = JSONObject().put("targetDeviceId",worker.id).put("packet",TunnelCrypto.peerPacket(request,relay.token))
         val connection = URL(relay.baseUrl.trimEnd('/')+"/api/rabilink/peer/proxy").openConnection() as HttpURLConnection
         val packet = try {
-            connection.requestMethod="POST"; connection.connectTimeout=5000; connection.readTimeout=15000; connection.instanceFollowRedirects=false
+            connection.requestMethod="POST"; connection.connectTimeout=timeouts.get("android.tunnel.connect",5000).toInt(); connection.readTimeout=timeouts.get("android.tunnel.signal",15000).toInt(); connection.setRequestProperty("X-Rabi-Timeout-Ms",connection.readTimeout.toString()); connection.instanceFollowRedirects=false
             connection.setRequestProperty("X-RabiLink-Token",relay.token); connection.setRequestProperty("Content-Type","application/json")
             val bytes=payload.toString().toByteArray(); connection.doOutput=true; connection.setFixedLengthStreamingMode(bytes.size); connection.outputStream.use { it.write(bytes) }
             check(connection.responseCode==200) { "RabiLink handshake unavailable" }
@@ -80,14 +81,14 @@ class RabiSpeechTunnel @JvmOverloads constructor(private val context: Context, p
         }
         fun tryLan(): Boolean {
         val urls=worker.rawJson.optJSONArray("peerUrls")
-        val deadline=System.nanoTime()+2_000_000_000L
+        val deadline=System.nanoTime()+timeouts.get("android.tunnel.lanDiscovery",2000)*1_000_000
         for(index in 0 until minOf(4,urls?.length() ?: 0)) {
             val remaining=(deadline-System.nanoTime())/1_000_000; if(remaining<=0) break
             try {
                 val url=URI(urls!!.getString(index)); val parts=url.host.split('.').map { it.toInt() }
                 require(url.scheme=="http" && url.userInfo==null && parts.size==4 && parts.all { it in 0..255 })
                 require(parts[0]==10 || parts[0]==172 && parts[1] in 16..31 || parts[0]==192 && parts[1]==168 || parts[0]==169 && parts[1]==254)
-                establish(TunnelChannel.websocket("ws://${url.rawAuthority}/api/rabilink/peer/tunnel/socket?source=$device",emptyMap(),minOf(remaining,700)),"lan",minOf(remaining,700)); return true
+                establish(TunnelChannel.websocket("ws://${url.rawAuthority}/api/rabilink/peer/tunnel/socket?source=$device",emptyMap(),minOf(remaining,timeouts.get("android.tunnel.lanConnect",700))),"lan",minOf(remaining,timeouts.get("android.tunnel.lanConnect",700))); return true
             } catch (_: Exception) { }
         }
         return false
@@ -102,20 +103,20 @@ class RabiSpeechTunnel @JvmOverloads constructor(private val context: Context, p
         check(prefs.edit().putBoolean("grant:$scope:$service",true).commit())
         if(tryLan()) return
         try {
-            establish(TunnelChannel.rtc(context) { offer -> signal("transport","tunnel",JSONObject().put("kind","p2p").put("source",device).put("sdp",offer)).getString("sdp") },"p2p",5000); return
+            establish(TunnelChannel.rtc(context, timeouts::get) { offer -> signal("transport","tunnel",JSONObject().put("kind","p2p").put("source",device).put("sdp",offer)).getString("sdp") },"p2p",timeouts.get("android.tunnel.handshake",5000)); return
         } catch (_: Exception) { }
         val room=UUID.randomUUID().toString()
         signal("transport","tunnel",JSONObject().put("kind","relay").put("source",device).put("room",room))
         val base=URI(relay.baseUrl)
-        establish(TunnelChannel.websocket("${if(base.scheme=="https") "wss" else "ws"}://${base.rawAuthority}/api/rabilink/tunnel/socket?room=$room",mapOf("X-RabiLink-Token" to relay.token),5000),"relay",5000)
+        establish(TunnelChannel.websocket("${if(base.scheme=="https") "wss" else "ws"}://${base.rawAuthority}/api/rabilink/tunnel/socket?room=$room",mapOf("X-RabiLink-Token" to relay.token,"X-Rabi-Timeout-Ms" to timeouts.get("android.tunnel.idle",65000).toString()),timeouts.get("android.tunnel.connect",5000)),"relay",timeouts.get("android.tunnel.handshake",5000))
     }
 
     data class Response(val status: Int,val body: ByteArray,val headers: JSONObject = JSONObject())
     @Synchronized fun request(method: String,path: String,contentType: String,body: ByteArray,timeoutMs: Long=190_000): Response =
-        requestHttp(method,path,JSONObject().put("content-type",contentType),body,timeoutMs)
+        requestHttp(method,path,JSONObject().put("content-type",contentType),body,timeouts.get("android.tunnel.request",timeoutMs))
 
     /** Generic service HTTP; connect fallback never retries a dispatched request. */
-    @Synchronized fun requestHttp(method: String,path: String,headers: JSONObject,body: ByteArray,timeoutMs: Long=190_000): Response {
+    @Synchronized fun requestHttp(method: String,path: String,headers: JSONObject,body: ByteArray,timeoutMs: Long=timeouts.get("android.tunnel.request",190_000)): Response {
         require(method.matches(Regex("[A-Z]{1,20}")) && method != "CONNECT" && method != "TRACE")
         require(path.startsWith("/") && !path.startsWith("//") && !path.contains('\\') && !path.contains('\r') && !path.contains('\n'))
         connect()
@@ -161,8 +162,8 @@ class RabiSpeechTunnel @JvmOverloads constructor(private val context: Context, p
         require(path.startsWith("/") && !path.startsWith("//") && !path.contains('\\') && !path.contains('\r') && !path.contains('\n'))
         connect();val link=channel ?: error("No tunnel");val encryption=cipher ?: error("No cipher")
         val guard={check(!disposed);delegation?.grant();delegation?.assertLease(delegatedEpoch);Unit}
-        try{TunnelHttpExchange({guard();link.send(encryption.encode(it))},{timeout->link.poll(timeout)?.let(encryption::decode)},guard)
-            .run(service,method,path,headers,input,upgrade,onHead,onData,timeoutMs)}catch(error:Throwable){close();throw error}
+        try{TunnelHttpExchange({guard();link.send(encryption.encode(it))},{timeout->link.poll(timeout)?.let(encryption::decode)},guard,timeouts.get("android.tunnel.close",1000))
+            .run(service,method,path,headers,input,upgrade,onHead,onData,timeouts.get("android.tunnel.stream",timeoutMs))}catch(error:Throwable){close();throw error}
     }
     override fun close() { disposed=true; disconnect();delegation?.close() }
 }

@@ -1,3 +1,4 @@
+import { getTimeoutMs } from "../shared/timeoutSettings.js";
 import { createHash } from "node:crypto";
 import { requestLocalSpeech, requestLocalSpeechJson, normalizeLocalSpeechServiceUrl } from "../speech/localSpeechClient.js";
 import type { RecordingArchiveRuntime } from "./recordingArchiveRuntime.js";
@@ -49,7 +50,7 @@ export class RecordingArchiveAsrRuntime {
       const store = new RecordingAsrJobStore({ owner, resolveOwner: o => this.options.archive.bindings.resolveOwner(o), workerId: this.options.workerId, instanceId: this.options.instanceId, clock: this.clock, leaseMs: 600_000 });
       const jobs = new RecordingAsrJobs({ store, clock: this.clock, changed: key => this.options.changed?.(owner, key),
         resolveSelection: () => resolveEffectiveAsrSelection({ readJson: async path => {
-          const response = await requestLocalSpeechJson(this.options.localSpeechUrl(), path, {}, { timeoutMs: 15_000, fetchImpl: this.options.fetchImpl });
+          const response = await requestLocalSpeechJson(this.options.localSpeechUrl(), path, {}, { timeoutMs: getTimeoutMs("backend.manager.recordingArchiveAsrRuntime.readJson.requestLocalSpeechJson.timeoutMs", 15_000), fetchImpl: this.options.fetchImpl });
           if (response.status !== 200) throw new Error("local_model_status_failed"); return response.data;
         } }), transcribeLocal: (ref, selected, key, signal) => this.compute(ref, selected, key, signal) });
       entry = { store, jobs }; this.owners.set(owner, entry);
@@ -134,7 +135,7 @@ export class RecordingArchiveAsrRuntime {
     if (signal.aborted || Date.now() - started > 300_000) throw new RecordingAsrSafeFailure("stopped_before_dispatch");
     const transport = this.options.fetchImpl ?? fetch;
     const response = await requestLocalSpeech(url, "/v1/archive/transcriptions", { method: "POST", body: form }, {
-      timeoutMs: 190_000, fetchImpl: ((input, init) => transport(input, { ...init, signal: AbortSignal.any([signal, init!.signal!]) })) as typeof fetch
+      timeoutMs: getTimeoutMs("backend.manager.recordingArchiveAsrRuntime.compute.requestLocalSpeech.timeoutMs", 190_000), fetchImpl: ((input, init) => transport(input, { ...init, signal: AbortSignal.any([signal, init!.signal!]) })) as typeof fetch
     });
     if (response.status !== 200) throw new Error("archive_computation_outcome_unknown");
     const result = JSON.parse(response.body.toString("utf8"));
@@ -146,7 +147,7 @@ export class RecordingArchiveAsrRuntime {
     for (const timer of this.recoveryTimers.values()) clearTimeout(timer);
     this.recoveryTimers.clear();
     let timer: ReturnType<typeof setTimeout> | undefined;
-    try { await Promise.race([Promise.all([...this.owners.values()].map(e => e.jobs.shutdown())), new Promise<void>(resolve => { timer = setTimeout(resolve, 5000); })]); }
+    try { await Promise.race([Promise.all([...this.owners.values()].map(e => e.jobs.shutdown())), new Promise<void>(resolve => { timer = setTimeout(resolve, getTimeoutMs("deadline.manager.recordingArchiveAsrRuntime.dispose", 5000)); })]); }
     finally { if (timer) clearTimeout(timer); }
   }
 }

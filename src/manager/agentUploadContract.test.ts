@@ -11,6 +11,7 @@ import { listAgentApiOperations } from "./agentApiPolicy.js";
 import { AgentUploadStore } from "./agentUploadStore.js";
 import { createAgentUploadRoutes } from "./agentUploadRoutes.js";
 import { setTrustedLanAgentSource } from "./lanAgentBodyAuthority.js";
+import { ManagerPluginRouteRegistry } from "./managerPluginRouteRegistry.js";
 
 function assertFrozen(value: unknown): void {
   if (!value || typeof value !== "object") return;
@@ -66,12 +67,15 @@ test("real HTTP route and isolated store return exactly the documented success D
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "upload-contract-"));
   const store = new AgentUploadStore({ rootDir: root, maxFileBytes: 128 });
   const routes = createAgentUploadRoutes({ store, assertAuthorized() {} });
+  const registry = new ManagerPluginRouteRegistry();
+  const registration = registry.registerOperations("upload", routes.operations);
   const server = http.createServer((req, res) => {
     setTrustedLanAgentSource(req, { nodeId: "fixture-node", agentId: "fixture-agent", provider: "dsh", sessionId: "fixture-session", sessionName: "Fixture" });
-    routes.handler(req, new URL(req.url!, "http://localhost"), res);
+    if (!registry.handle(req, new URL(req.url!, "http://localhost"), res)) { res.statusCode = 404; res.end(); }
   });
   t.after(async () => {
     server.closeAllConnections();
+    await registration.dispose();
     await routes.stopAcceptingAndDrain();
     await new Promise<void>(resolve => server.close(() => resolve()));
     fs.rmSync(root, { recursive: true, force: true });
@@ -87,6 +91,7 @@ test("real HTTP route and isolated store return exactly the documented success D
     "x-rabiroute-content-sha256": sha256.toUpperCase(), "x-rabiroute-file-name": encodeURIComponent("示例.bin")
   }, body: bytes });
   assert.equal(put.status, 200);
+  assert.match(put.headers.get("x-rabiroute-api-contract")!, /^sha256:/);
   const putBody = await put.json();
   const get = await fetch(url); assert.equal(get.status, 200);
   const getBody = await get.json(); assert.deepEqual(getBody, putBody);

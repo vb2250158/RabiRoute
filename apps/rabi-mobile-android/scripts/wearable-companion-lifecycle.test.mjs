@@ -4,6 +4,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import { EffectScope } from "@rabiroute/plugin-sdk";
+import { PublicationScope } from "@rabiroute/plugin-sdk/publication";
 import { activate } from "../../../plugins/builtin/io.rabiroute.manager.wearable-companion/1.0.0/manager.mjs";
 
 const here = new URL("./", import.meta.url);
@@ -88,8 +90,10 @@ test("legacy apps entry points cannot create a second lifecycle", async () => {
 });
 
 function pluginContext(workerService) {
-  let effect;
   let failed;
+  const effects = new EffectScope();
+  const publication = new PublicationScope(effects);
+  const provided = new Map();
   const context = {
     identity: Object.freeze({
       applicationGenerationId: "app-generation-7",
@@ -116,31 +120,78 @@ function pluginContext(workerService) {
         if (capability === "host.manager.wearable-companion@1") return workerService;
         throw new Error(`unexpected capability ${capability}`);
       },
-      provide() {}
+      provide(capability, service) { provided.set(capability, service); }
     },
-    lifecycle: { fail(error) { failed = error; } },
-    effects: { add(starter) { effect = starter; } }
+    lifecycle: { signal: effects.signal(), fail(error) { failed = error; } },
+    effects,
+    publication
   };
-  return { context, effect: () => effect, failed: () => failed };
+  return { context, effects, publication, provided, failed: () => failed };
 }
 
 test("plugin effect adopts disposer and forwards worker failure", async () => {
   let disposed = false;
+  let launches = 0;
+  let disposeCalls = 0;
   let failWorker;
+  let releasePrevious;
+  let finishDisposal;
+  const previousRetirement = new Promise(resolve => { releasePrevious = resolve; });
+  const closed = new Promise(resolve => { finishDisposal = resolve; });
   const failure = new Promise(resolve => { failWorker = resolve; });
   const observed = pluginContext({
-    launch(identity, resourceRoot) {
+    launch(identity, resourceRoot, config) {
+      launches++;
+      assert.equal(identity, observed.context.identity);
       assert.equal(identity.activationId, "activation-3");
       assert.match(resourceRoot, /resources\/?$/);
-      return { state: "managed", failure, async dispose() { disposed = true; } };
+      assert.deepEqual(config, { enabled: true, roleId: "YeYu", serial: "" });
+      return { state: "managed", failure, async dispose() {
+        disposeCalls++;
+        assert.equal(observed.context.lifecycle.signal.aborted, true);
+        await closed;
+        disposed = true;
+      } };
     }
   });
-  await activate(observed.context);
-  const dispose = await observed.effect()();
-  const error = new Error("worker tree failed");
-  failWorker(error);
-  await new Promise(resolve => setImmediate(resolve));
-  assert.equal(observed.failed(), error);
-  await dispose();
-  assert.equal(disposed, true);
+  let starting;
+  try {
+    await activate(observed.context);
+    await observed.effects.commit();
+    assert.equal(launches, 0, "candidate preparation must not start a worker");
+    assert.deepEqual(observed.provided.get("manager.wearable-companion@1"), {
+      instanceId: "manager:wearable-companion", state: "managed",
+      applicationGenerationId: "app-generation-7", managerInstanceId: "manager-instance-4"
+    });
+    observed.publication.publish();
+    observed.publication.seal()();
+    assert.equal(launches, 0, "synchronous publication must not start worker I/O");
+    starting = observed.publication.afterPublish(previousRetirement);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(launches, 0, "the published owner must still wait for its predecessor");
+    releasePrevious();
+    await starting;
+    assert.equal(launches, 1);
+    const error = new Error("worker tree failed");
+    failWorker(error);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(observed.failed(), error);
+    let retired = false;
+    const retirement = observed.effects.dispose();
+    assert.equal(observed.effects.dispose(), retirement);
+    const joined = retirement.then(() => { retired = true; });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(disposeCalls, 1);
+    assert.equal(retired, false, "retirement must join actual worker closure");
+    assert.equal(disposed, false);
+    finishDisposal();
+    await joined;
+    assert.equal(disposed, true);
+    assert.equal(disposeCalls, 1);
+  } finally {
+    const cleanup = observed.effects.dispose();
+    releasePrevious(); finishDisposal(); failWorker(undefined);
+    await starting?.catch(() => {});
+    await cleanup;
+  }
 });

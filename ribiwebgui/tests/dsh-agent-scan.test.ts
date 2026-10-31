@@ -26,14 +26,12 @@ test("dedicated DSH scan only merges DSH state", () => {
 });
 
 test("Agent adapter catalog owns the dedicated DSH scan route", () => {
-  assert.match(catalogSource, /AGENT_ADAPTER_CATALOG_PLUGIN_INSTANCE_ID = "manager:agent-adapter-catalog"/);
-  const start = catalogSource.indexOf('const allScan = requestUrl.pathname === "/api/scan/agents"');
-  const end = catalogSource.indexOf("export function mountAgentAdapterCatalogPlugin", start);
-  const block = catalogSource.slice(start, end);
-  assert.ok(start >= 0 && end > start);
-  assert.match(block, /requestUrl\.pathname === "\/api\/scan\/agents\/dsh"/);
-  assert.match(block, /dshScan[\s\S]*context\.service\.scanDsh\(dshScanOptions\(requestUrl\), requestLifetime\.signal\)/);
-  assert.doesNotMatch(block, /scanDshAgentAdapter/);
+  const operations = fs.readFileSync(new URL("../../src/manager/agentAdapterCatalogOperations.ts", import.meta.url), "utf8");
+  const contract = fs.readFileSync(new URL("../../src/manager/agentAdapterCatalogContract.ts", import.meta.url), "utf8");
+  assert.match(contract, /key: "dsh", method: "GET", path: "\/api\/scan\/agents\/dsh"/);
+  assert.match(operations, /key === "dsh" \? await service\.scanDsh\(options, lifetime\.signal\)/);
+  assert.match(operations, /AGENT_CATALOG_OPERATIONS\.map/);
+  assert.doesNotMatch(operations, /scanDshAgentAdapter/);
 });
 
 test("Agent adapter catalog dispatches DSH scans through its owned worker pool", () => {

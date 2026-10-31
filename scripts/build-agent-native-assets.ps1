@@ -17,7 +17,7 @@ foreach ($module in $modules) {
     $hash = [BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash([Text.Encoding]::UTF8.GetBytes($code))).Replace('-', '').ToLowerInvariant()
     $assembly = Join-Path $outputDirectory "$($module.id)-$hash.dll"
     if (-not (Test-Path -LiteralPath $assembly)) {
-        $temporary = Join-Path $outputDirectory "$($module.id)-$hash-$([guid]::NewGuid().ToString('N')).tmp.dll"
+        $temporary = Join-Path $outputDirectory ".native-$([guid]::NewGuid().ToString('N')).tmp.dll"
         try {
             Add-Type -ReferencedAssemblies $module.references -TypeDefinition $code -OutputAssembly $temporary
             [IO.File]::Move($temporary, $assembly)

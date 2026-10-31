@@ -4,6 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
+import { withoutSessionBindings } from "../lib/instance-agents.mjs";
 import { __test } from "../rabi-agent.mjs";
 
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -61,7 +62,7 @@ test("bootstrap release initialization preserves a valid newer pointer and priva
     __test.initializeCurrentRelease(f.config, old);
     assert.deepEqual(fs.readFileSync(pointer), bytes);
     const after = JSON.parse(fs.readFileSync(f.config));
-    for (const key of ["nodeId", "nodeCredential", "agents", "autoUpdate"]) assert.deepEqual(after[key], original[key]);
+    for (const key of ["nodeId", "nodeCredential", "agents", "autoUpdate"]) assert.deepEqual(after[key], withoutSessionBindings(original)[key]);
     assert.equal(requests.some(url => url.includes("enroll")), false);
   } finally { fs.rmSync(f.root, { recursive: true, force: true }); }
 });

@@ -1,3 +1,5 @@
+import { getTimeoutMs, readTimeoutOverrides } from "../shared/timeoutSettings.js";
+import { attachNativeStorageWork, beginNativeStorageWork, nativeStorageWorkClosed, observeNativeStorageWork, withoutNativeStorageWork } from "./nativeStorageWork.js";
 import { fork } from "node:child_process";
 import os from "node:os";
 import { PlanPageCatalogLifecycle } from "./planPageCatalogLifecycle.js";
@@ -11,6 +13,7 @@ import type {
 } from "../personaVoiceTranscriptView.js";
 import {
   publishRoleKnowledgeCatalogSnapshotAsync,
+  publishRolePlanPackageRecoverySnapshot,
   publishRolePlanCatalogAsync,
   type PlanItem,
   type RoleKnowledgeCatalogSnapshot,
@@ -36,6 +39,7 @@ export type ManagerReadWorkerPoolOptions = {
   maxConcurrency?: number;
   maxQueue?: number;
   timeoutMs?: number;
+  timeoutKey?: string;
   terminationTimeoutMs?: number;
   forceTerminationTimeoutMs?: number;
   workerFactory?: () => ManagerReadWorkerChild;
@@ -74,6 +78,7 @@ export type ManagerReadWorkerPoolStatus = {
 
 export type RolePlanCatalogRead = {
   plans: PlanItem[];
+  planRecovery?: import("../planStoragePackageFence.js").PlanPackageRecoverySnapshot;
   approvalByPlanId: Record<string, { count: number; latest?: unknown }>;
 };
 
@@ -98,8 +103,10 @@ type PendingRead = {
   resolve(value: unknown): void;
   reject(error: Error): void;
   abortListener?: () => void;
+  queueTimer?: NodeJS.Timeout;
   /** Trusted non-throwing observer; called only when this task can no longer write files. */
   onWorkerReleased?: () => void;
+  onStarted?: (queueMs: number) => void;
 };
 
 type SharedRead<T> = {
@@ -107,6 +114,7 @@ type SharedRead<T> = {
   promise: Promise<T>;
   subscribers: number;
   completed: boolean;
+  nativeClosed?: Promise<void>;
 };
 
 type ActiveRead = {
@@ -198,6 +206,7 @@ export class ManagerReadWorkerPool {
   private readonly maxConcurrency: number;
   private readonly maxQueue: number;
   private readonly timeoutMs: number;
+  private readonly timeoutKey: string;
   private readonly terminationTimeoutMs: number;
   private readonly forceTerminationTimeoutMs: number;
   private readonly workerFactory: () => ManagerReadWorkerChild;
@@ -223,7 +232,8 @@ export class ManagerReadWorkerPool {
     this.knowledgeSearchPool = options.knowledgeSearchPool;
     this.maxConcurrency = Math.max(1, Math.floor(options.maxConcurrency ?? 2));
     this.maxQueue = Math.max(0, Math.floor(options.maxQueue ?? 8));
-    this.timeoutMs = Math.max(100, Math.floor(options.timeoutMs ?? 30_000));
+    this.timeoutKey = options.timeoutKey ?? "worker.read";
+    this.timeoutMs = Math.max(1, Math.floor(options.timeoutMs ?? getTimeoutMs("backend.manager.managerReadWorkerPool.owner.Math.floor.timeoutMs", 30_000)));
     this.terminationTimeoutMs = positiveInteger(options.terminationTimeoutMs, 1_000);
     this.forceTerminationTimeoutMs = positiveInteger(options.forceTerminationTimeoutMs, 5_000);
     this.workerFactory = options.workerFactory ?? spawnManagerReadWorker;
@@ -291,13 +301,13 @@ export class ManagerReadWorkerPool {
     this.stopped = true;
   }
 
-  run<T>(task: ManagerReadWorkerTask, options: { signal?: AbortSignal; timeoutMs?: number; onWorkerReleased?: () => void } = {}): Promise<T> {
+  run<T>(task: ManagerReadWorkerTask, options: { signal?: AbortSignal; timeoutMs?: number; queueTimeoutMs?: number; onWorkerReleased?: () => void; onStarted?: (queueMs: number) => void } = {}): Promise<T> {
     if (!this.accepting) {
       return Promise.reject(new ManagerReadWorkerError("Manager read worker pool is stopped.", "aborted"));
     }
     if (task.type === "knowledge_search_delta" && this.knowledgeSearchPool) {
       const pool = this.knowledgeSearchPool;
-      return pool.run<T>(task, { ...options, timeoutMs: Math.min(options.timeoutMs ?? pool.timeoutMs, pool.timeoutMs) });
+      return pool.run<T>(task, { ...options, timeoutMs: Math.min(options.timeoutMs ?? getTimeoutMs(pool.timeoutKey, pool.timeoutMs), getTimeoutMs(pool.timeoutKey, pool.timeoutMs)) });
     }
     if (this.terminationBlockedWorkers.size > 0) {
       options.onWorkerReleased?.(); // This request never acquired a worker.
@@ -317,13 +327,15 @@ export class ManagerReadWorkerPool {
     if (!canStartImmediately && this.queue.length >= this.maxQueue) {
       return Promise.reject(new ManagerReadWorkerError("Manager read workers are busy; retry shortly.", "busy"));
     }
-    return new Promise<T>((resolve, reject) => {
+    const nativeWork = beginNativeStorageWork();
+    const result = new Promise<T>((resolve, reject) => {
       const pending: PendingRead = {
         task,
         queuedAt: performance.now(),
-        timeoutMs: Math.max(100, Math.floor(options.timeoutMs ?? this.timeoutMs)),
+        timeoutMs: Math.max(1, Math.floor(options.timeoutMs ?? getTimeoutMs(this.timeoutKey, this.timeoutMs))),
         signal: options.signal,
-        onWorkerReleased: options.onWorkerReleased,
+        onWorkerReleased: () => { nativeWork.release(); options.onWorkerReleased?.(); },
+          onStarted: options.onStarted,
         resolve: value => resolve(value as T),
         reject
       };
@@ -332,13 +344,24 @@ export class ManagerReadWorkerPool {
           const index = this.queue.indexOf(pending);
           if (index < 0) return;
           this.queue.splice(index, 1);
+          clearTimeout(pending.queueTimer);
+          pending.onWorkerReleased?.();
           pending.reject(new ManagerReadWorkerError("Manager read request was aborted.", "aborted"));
         };
         pending.signal.addEventListener("abort", pending.abortListener, { once: true });
       }
       this.queue.push(pending);
+      if (options.queueTimeoutMs !== undefined) pending.queueTimer = setTimeout(() => {
+        const index = this.queue.indexOf(pending);
+        if (index < 0) return;
+        this.queue.splice(index, 1);
+        if (pending.abortListener) pending.signal?.removeEventListener("abort", pending.abortListener);
+        pending.onWorkerReleased?.();
+        pending.reject(new ManagerReadWorkerError("SEARCH_BUSY: queue deadline exceeded", "busy"));
+      }, options.queueTimeoutMs);
       this.drain();
     });
+    return attachNativeStorageWork(result, nativeWork.closed);
   }
 
   queryRoleKnowledgeCatalogSnapshot(
@@ -371,7 +394,10 @@ export class ManagerReadWorkerPool {
           const current = planReadFence(roleDir);
           if (current.epoch !== fence.epoch || current.revision !== fence.revision) throw new Error("PLAN_CATALOG_DIRTY");
         };
-        return { ...result, plans: [...await publishRolePlanCatalogAsync(roleDir, result.plans, assertCurrent)] };
+        const plans = [...await publishRolePlanCatalogAsync(roleDir, result.plans, assertCurrent)];
+        assertCurrent();
+        if (result.planRecovery) publishRolePlanPackageRecoverySnapshot(roleDir, result.planRecovery);
+        return { ...result, plans };
       });
   }
 
@@ -580,7 +606,7 @@ export class ManagerReadWorkerPool {
         .filter((pid): pid is number => typeof pid === "number"),
       maxConcurrency: this.maxConcurrency,
       maxQueue: this.maxQueue,
-      timeoutMs: this.timeoutMs
+      timeoutMs: getTimeoutMs(this.timeoutKey, this.timeoutMs)
     };
   }
 
@@ -633,15 +659,18 @@ export class ManagerReadWorkerPool {
         completed: false
       };
       const current = shared;
-      current.promise = this.run<T>(task, {
+      const operation = this.run<T>(task, {
         signal: controller.signal,
         timeoutMs: options.timeoutMs
-      }).finally(() => {
+      });
+      current.nativeClosed = nativeStorageWorkClosed(operation);
+      current.promise = operation.finally(() => {
         current.completed = true;
         if (inFlight.get(key) === current) inFlight.delete(key);
       });
       inFlight.set(key, current);
     }
+    if (shared.nativeClosed) observeNativeStorageWork(shared.nativeClosed);
     return this.subscribe(shared, options.signal);
   }
 
@@ -655,14 +684,17 @@ export class ManagerReadWorkerPool {
       && this.queue.length > 0
     ) {
       const pending = this.queue.shift()!;
+      clearTimeout(pending.queueTimer);
       if (pending.abortListener) pending.signal?.removeEventListener("abort", pending.abortListener);
       if (pending.signal?.aborted) {
+        pending.onWorkerReleased?.();
         pending.reject(new ManagerReadWorkerError("Manager read request was aborted.", "aborted"));
         continue;
       }
       const slot = [...this.workers].find(candidate => !candidate.closed && !candidate.terminating && !candidate.active)
         ?? this.createWorker();
       if (!slot) {
+        pending.onWorkerReleased?.();
         pending.reject(new ManagerReadWorkerError("Manager read worker could not start.", "worker_failed"));
         continue;
       }
@@ -735,16 +767,18 @@ export class ManagerReadWorkerPool {
   private startPending(slot: WorkerSlot, pending: PendingRead): void {
     this.active += 1;
     ManagerReadWorkerPool.globalActive += 1;
+    const queueMs = performance.now() - pending.queuedAt;
+    try { pending.onStarted?.(queueMs); } catch { /* Observability cannot change admission. */ }
     recordPerformanceOperation(
       managerReadWorkerOperation("queue_wait", pending.task.type),
-      performance.now() - pending.queuedAt
+      queueMs
     );
     const startedAt = performance.now();
     const requestId = String(this.nextRequestId++);
     const timer = setTimeout(() => {
       void this.discardWorker(
         slot,
-        new ManagerReadWorkerError(`Manager read exceeded ${pending.timeoutMs} ms.`, "timeout")
+        new ManagerReadWorkerError(`Manager read ${pending.task.type} exceeded ${pending.timeoutMs} ms.`, "timeout")
       );
     }, pending.timeoutMs);
     // Keep only the bounded active operation alive; settlement clears this
@@ -766,7 +800,7 @@ export class ManagerReadWorkerPool {
     const { pending, requestId } = current;
     try {
       slot.worker.send(
-        { requestId, task: pending.task } satisfies ManagerReadWorkerRequest,
+        { requestId, task: pending.task, timeoutOverrides: readTimeoutOverrides() } satisfies ManagerReadWorkerRequest,
         error => {
           if (!error || slot.active?.requestId !== requestId) return;
           void this.discardWorker(slot, new ManagerReadWorkerError(error.message, "worker_failed"));
@@ -829,9 +863,9 @@ export class ManagerReadWorkerPool {
     if (slot.terminationFlight) return slot.terminationFlight;
     slot.terminationFlight = (async () => {
       try { slot.worker.kill("SIGTERM"); } catch { /* close observation is authoritative */ }
-      if (await closesWithin(slot, this.terminationTimeoutMs)) return true;
+      if (await closesWithin(slot, getTimeoutMs("worker.terminate", this.terminationTimeoutMs))) return true;
       try { slot.worker.kill("SIGKILL"); } catch { /* reported below if close remains absent */ }
-      const confirmed = await closesWithin(slot, this.forceTerminationTimeoutMs);
+      const confirmed = await closesWithin(slot, getTimeoutMs("worker.forceTerminate", this.forceTerminationTimeoutMs));
       if (confirmed) return true;
       unrefWorker(slot.worker);
       return false;
@@ -892,6 +926,7 @@ export class ManagerReadWorkerPool {
 
   private rejectQueue(error: Error): void {
     for (const pending of this.queue.splice(0)) {
+      clearTimeout(pending.queueTimer);
       if (pending.abortListener) pending.signal?.removeEventListener("abort", pending.abortListener);
       pending.onWorkerReleased?.();
       pending.reject(error);
@@ -923,16 +958,16 @@ export function createPlanPageCatalogService() {
   return new PlanPageCatalogLifecycle<RolePlanPageReadInput, unknown>({
     maxRoles: 4,
     maxQueriesPerRole: 32,
-    buildTimeoutMs: 5 * 60_000,
+    buildTimeoutMs: getTimeoutMs("backend.manager.managerReadWorkerPool.createPlanPageCatalogService.buildTimeoutMs", 5 * 60_000),
     create: roleDir => {
       const pool = new ManagerReadWorkerPool({ maxConcurrency: 1, maxQueue: 32 });
       return {
         prepare: async () => {
-          await pool.run({
+          await withoutNativeStorageWork(() => pool.run({
             type: "role_plan_page", roleDir, fence: planReadFence(roleDir),
             cursor: "", limit: 1, query: "", sort: "updated", statuses: [], tags: [],
             includeFacets: false, summary: true
-          }, { timeoutMs: 5 * 60_000 });
+          }, { timeoutMs: getTimeoutMs("backend.manager.managerReadWorkerPool.prepare.pool.run.timeoutMs", 5 * 60_000) }));
         },
         query: async input => {
           const fence = planReadFence(roleDir);
@@ -950,35 +985,38 @@ export function createPlanPageCatalogService() {
 }
 
 export const managerReadWorkerPool = new ManagerReadWorkerPool();
+/** Search and index building cannot block each other's per-pool queue. */
+export const managerMessageSearchWorkerPool = new ManagerReadWorkerPool({ timeoutKey: "worker.messageSearch", maxConcurrency: 2, maxQueue: 16, timeoutMs: 2_300 });
+export const managerMessageIndexWorkerPool = new ManagerReadWorkerPool({ timeoutKey: "worker.messageIndex", maxConcurrency: 1, maxQueue: 16, timeoutMs: 5 * 60_000 });
 /**
  * User-driven knowledge pages must not wait behind startup reconciliation or
  * background catalog refreshes. Requests still share the global bounded budget.
  */
-export const managerKnowledgePageWorkerPool = new ManagerReadWorkerPool({
+export const managerKnowledgePageWorkerPool = new ManagerReadWorkerPool({ timeoutKey: "worker.knowledgePage",
   maxConcurrency: 4,
   maxQueue: 32,
   timeoutMs: 30_000
 });
 /** One resident reader keeps validated memory bodies across page and context requests. */
-export const managerMemoryCatalogWorkerPool = new ManagerReadWorkerPool({
+export const managerMemoryCatalogWorkerPool = new ManagerReadWorkerPool({ timeoutKey: "worker.memoryCatalog",
   maxConcurrency: 1,
   maxQueue: 32,
   timeoutMs: Number(process.env.RABIROUTE_MEMORY_CATALOG_READ_TIMEOUT_MS) || 35_000
 });
 /** Search initialization is user-visible; it cannot inherit idle-priority catalog stalls. */
-export const managerKnowledgeIndexWorkerPool = new ManagerReadWorkerPool({
+export const managerKnowledgeIndexWorkerPool = new ManagerReadWorkerPool({ timeoutKey: "worker.knowledgeIndex",
   maxConcurrency: 1,
   maxQueue: 16,
   timeoutMs: 30_000
 });
-export const managerCatalogWorkerPool = new ManagerReadWorkerPool({
+export const managerCatalogWorkerPool = new ManagerReadWorkerPool({ timeoutKey: "worker.catalog",
   knowledgeSearchPool: managerKnowledgeIndexWorkerPool,
   maxConcurrency: 1,
   maxQueue: 16,
   timeoutMs: 5 * 60_000,
   setWorkerPriority: (pid) => os.setPriority(pid, os.constants.priority.PRIORITY_LOW)
 });
-export const managerPerformanceWorkerPool = new ManagerReadWorkerPool({
+export const managerPerformanceWorkerPool = new ManagerReadWorkerPool({ timeoutKey: "worker.performance",
   maxConcurrency: 1,
   maxQueue: 1,
   timeoutMs: 60_000
@@ -986,6 +1024,8 @@ export const managerPerformanceWorkerPool = new ManagerReadWorkerPool({
 
 const builtinManagerReadWorkerPools = [
   managerReadWorkerPool,
+  managerMessageSearchWorkerPool,
+  managerMessageIndexWorkerPool,
   managerKnowledgePageWorkerPool,
   managerMemoryCatalogWorkerPool,
   managerKnowledgeIndexWorkerPool,
@@ -1005,6 +1045,8 @@ export function startBuiltinManagerReadWorkerPools(): void {
 }
 
 export async function stopBuiltinManagerReadWorkerPools(): Promise<void> {
+  const { stopMessageHistorySearch } = await import("./messageHistorySearchService.js");
+  stopMessageHistorySearch();
   await Promise.all([
     residentPlanPageCatalogs.stop(),
     ...builtinManagerReadWorkerPools.map(pool => pool.stop())

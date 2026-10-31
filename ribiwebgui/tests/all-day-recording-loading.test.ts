@@ -30,6 +30,8 @@ function fixture(t: import("node:test").TestContext, fail = false, blockStatus =
     require: (name: string) => name === "vue" ? { ...vue, onBeforeUnmount: (fn: () => void) => unmount.push(fn) } :
       name.endsWith("i18n") ? { useI18n: () => ({ isEnglish: vue.ref(false) }) } :
       name.endsWith("managerApi") ? { managerEventSource: () => ({ close() {}, addEventListener: (key: string, fn: (event: unknown) => void) => handlers.set(key, fn) }) } :
+      name.endsWith("personaServiceClient") ? { usePersonaService: () => ({ fetch: globalThis.fetch, cacheKey: (roleId: string) => roleId,
+        events: () => ({ close() {}, addEventListener: (key: string, fn: (event: unknown) => void) => handlers.set(key, fn) }) }) } :
       name.endsWith("allDayRecordingClient") ? {
         recordingPreview: (role: string) => JSON.parse(storage.get(`all-day-preview:${role}`) || "null")?.events ?? [],
         restoreRecordingPreview: async () => [],

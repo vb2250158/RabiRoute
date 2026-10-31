@@ -1,3 +1,4 @@
+import { createTimeoutSettings } from "./timeout-settings.mjs";
 import path from "node:path";
 import fs from "node:fs";
 import { spawn } from "node:child_process";
@@ -10,11 +11,11 @@ export function dependencyEnvironment(env = process.env, execPath = process.exec
   return { ...env, [key]: paths.dirname(execPath) + paths.delimiter + (env[key] || "") };
 }
 
-export async function verifyNativeTerminal(entrypoint, requireModule = createRequire(entrypoint)) {
+export async function verifyNativeTerminal(entrypoint, requireModule = createRequire(entrypoint), timeoutMs = 5000) {
   const pty = requireModule("node-pty");
   await new Promise((resolve, reject) => {
     const terminal = pty.spawn("/bin/sh", ["-c", "exit 0"], { cwd: path.dirname(entrypoint), cols: 80, rows: 24, env: {} });
-    const timer = setTimeout(() => { terminal.kill(); reject(new Error("Native terminal readiness timed out.")); }, 5000);
+    const timer = setTimeout(() => { terminal.kill(); reject(new Error("Native terminal readiness timed out.")); }, timeoutMs);
     terminal.onData(() => undefined);
     terminal.onExit(event => { clearTimeout(timer); event.exitCode === 0 ? resolve() : reject(new Error("Native terminal readiness failed.")); });
   });
@@ -32,7 +33,9 @@ export function restoreNativeTerminalExecutable(entrypoint, { platform = process
 }
 
 /** npm may exit successfully after skipping a failed optional native dependency. */
-export async function installReleaseDependencies(entrypoint, { timeoutMs = 120_000, platform = process.platform, env = process.env, execPath = process.execPath, npmCli = resolveNpmCli({ execPath, env, platform }), spawnChild = spawn, requireModule = createRequire(entrypoint) } = {}) {
+export async function installReleaseDependencies(entrypoint, { timeoutOverrides, timeoutMs, platform = process.platform, env = process.env, execPath = process.execPath, npmCli = resolveNpmCli({ execPath, env, platform }), spawnChild = spawn, requireModule = createRequire(entrypoint) } = {}) {
+  const timeouts = createTimeoutSettings(timeoutOverrides);
+  timeoutMs ??= timeouts.get("agent.dependencies.install",120000);
   await new Promise((resolve, reject) => {
     const installer = spawnChild(execPath, [npmCli, "install", "--omit=dev", "--include=optional", "--no-audit", "--no-fund"], {
       cwd: path.dirname(entrypoint), windowsHide: true, stdio: "ignore", env: dependencyEnvironment(env, execPath, platform)
@@ -44,7 +47,7 @@ export async function installReleaseDependencies(entrypoint, { timeoutMs = 120_0
   if (platform !== "win32") {
     try {
       restoreNativeTerminalExecutable(entrypoint, { platform, requireModule });
-      await verifyNativeTerminal(entrypoint, requireModule);
+      await verifyNativeTerminal(entrypoint, requireModule, timeouts.get("agent.dependencies.verify",5000));
     }
     catch { throw new Error("POSIX terminal dependency node-pty did not load; the candidate cannot replace the current connector. Check Node and Xcode/build tools."); }
   }
@@ -55,8 +58,8 @@ export async function ensureNativeTerminalDependencies(entrypoint, options = {})
   if ((options.platform || process.platform) === "win32") return;
   try {
     restoreNativeTerminalExecutable(entrypoint, options);
-    await verifyNativeTerminal(entrypoint, options.requireModule); return;
+    await verifyNativeTerminal(entrypoint, options.requireModule, createTimeoutSettings(options.timeoutOverrides).get("agent.dependencies.verify",5000)); return;
   }
   catch { /* A prior updater may have silently omitted this optional dependency. */ }
-  await installReleaseDependencies(entrypoint, { ...options, timeoutMs: options.timeoutMs ?? 20_000 });
+  await installReleaseDependencies(entrypoint, { ...options, timeoutMs: options.timeoutMs ?? createTimeoutSettings(options.timeoutOverrides).get("agent.dependencies.repair",20000) });
 }

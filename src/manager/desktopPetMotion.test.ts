@@ -1,8 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
-import { handleDesktopPetMotion, parseDesktopPetMotion } from "./desktopPetMotion.js";
-import { authorizeAgentApiOperation as authorizeAgentApiRequest } from "./agentApiPolicy.js";
+import { parseDesktopPetMotion } from "./desktopPetMotion.js";
+import { createDesktopPetOperations } from "./desktopPetOperations.js";
+import { DesktopPetOwner } from "./desktopPetRoutes.js";
+import { ManagerPluginRouteRegistry } from "./managerPluginRouteRegistry.js";
 import { normalizeDesktopSettings } from "../shared/desktopSettingsContract.js";
 
 test("motion validates coordinates, target fields and reviewed Agent boundary", () => {
@@ -13,20 +15,21 @@ test("motion validates coordinates, target fields and reviewed Agent boundary", 
   assert.equal(parseDesktopPetMotion({ requestId: "sample-motion-1", target: { kind: "position", x: -1920, y: 100 } }).mode, "auto");
   assert.equal(parseDesktopPetMotion({ requestId: "sample-motion-run", mode: "run", target: { kind: "position", x: 100, y: 100 } }).mode, "run");
   assert.throws(() => parseDesktopPetMotion({ requestId: "sample-motion-sprint", mode: "sprint", target: { kind: "position", x: 100, y: 100 } }));
-  const admission = authorizeAgentApiRequest("POST", "/api/desktop-pet/roles/sample/motion");
-  assert.ok(admission.allowed);
-  assert.match(admission.operation.help.request.body, /auto\/walk\/run\/teleport/);
-  assert.equal(authorizeAgentApiRequest("POST", "/api/desktop-pet/roles/sample/motion/runtime").allowed, false);
-  assert.equal(authorizeAgentApiRequest("GET", "/api/desktop-pet/roles/sample/motion/runtime").allowed, false);
+  const definitions = createDesktopPetOperations(new DesktopPetOwner({ resolveRoleDir: () => "" }));
+  assert.equal(definitions.find(value => value.contract.operationId === "manager.desktop-pet.motion.submit")!.contract.exposure, "public");
+  assert.equal(definitions.find(value => value.contract.operationId === "manager.desktop-pet.motion.runtime")!.contract.exposure, "public");
 });
 
 test("motion runs once, verifies renderer claim and arrival, retains interruptions", async t => {
   let settingsValue = normalizeDesktopSettings({ pets: { sample: { enabled: true, packId: "sample-pack" } } });
   const settings = { read: () => settingsValue, write: (value: unknown) => normalizeDesktopSettings(value) };
   const events: string[] = [];
+  const owner = new DesktopPetOwner({ resolveRoleDir: () => "", settings, publishEvent: event => events.push(event) });
+  const registry = new ManagerPluginRouteRegistry(); const registration = registry.registerOperations("motion-fixture", createDesktopPetOperations(owner));
   const server = http.createServer((req, res) => {
-    if (!handleDesktopPetMotion(req, new URL(req.url!, "http://localhost"), res, settings, event => events.push(event))) { res.writeHead(404); res.end(); }
+    if (!registry.handle(req, new URL(req.url!, "http://localhost"), res)) { res.writeHead(404); res.end(); }
   });
+  t.after(async () => { const retired = registration.dispose(); await Promise.all([retired, owner.stop()]); });
   await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
   t.after(() => new Promise<void>(resolve => { server.close(() => resolve()); server.closeAllConnections(); }));
   const base = `http://127.0.0.1:${(server.address() as { port: number }).port}/api/desktop-pet/roles/sample/motion`;

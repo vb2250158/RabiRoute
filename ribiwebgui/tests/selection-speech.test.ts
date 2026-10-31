@@ -52,7 +52,7 @@ test("WebGUI stores trusted system selection settings through Manager and does n
   const renderer = fs.readFileSync(new URL("../src/components/renderers/DesktopSettingsRenderer.vue", import.meta.url), "utf8");
   const app = fs.readFileSync(new URL("../src/App.vue", import.meta.url), "utf8");
   const client = fs.readFileSync(new URL("../src/speech/speechControlClient.ts", import.meta.url), "utf8");
-  const routes = fs.readFileSync(new URL("../../src/manager/controlPlaneRoutes.ts", import.meta.url), "utf8");
+  const routes = fs.readFileSync(new URL("../../src/manager/speechApiOperations.ts", import.meta.url), "utf8");
   assert.match(page, /TrustedWebRendererHost/);
   assert.doesNotMatch(page, /selectionSpeechEnabled|selectionSpeechAdvanced|selectionSpeechModel/);
   assert.match(renderer, /开启滑词菜单/);
@@ -65,6 +65,6 @@ test("WebGUI stores trusted system selection settings through Manager and does n
   assert.match(renderer, /updateSelectionReaderSettings/);
   assert.doesNotMatch(app, /selectionchange|window\.getSelection|readSelectedText|deliverSelectedText/);
   assert.match(client, /\/api\/speech\/selection-reader\/settings/);
-  assert.match(routes, /GET" && requestUrl\.pathname === "\/api\/speech\/selection-reader\/settings/);
-  assert.match(routes, /PUT" && requestUrl\.pathname === "\/api\/speech\/selection-reader\/settings/);
+  assert.match(routes, /id: "selection-reader\.read", method: "GET", path: "\/selection-reader\/settings"/);
+  assert.match(routes, /id: "selection-reader\.write", method: "PUT", path: "\/selection-reader\/settings"/);
 });

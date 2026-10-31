@@ -1,3 +1,4 @@
+import { getTimeoutMs } from "../shared/timeoutSettings.js";
 import type { PlanFeedbackRecord, PlanQaFeedbackHandling } from "../planFeedback.js";
 import { planStepIsCompleted, type PlanItem, type PlanStep } from "../roleKnowledge.js";
 import { roleStorageOperationKey } from "./roleStorageApplication.js";
@@ -333,7 +334,7 @@ function mutationContext(
     ),
     expectedRevision,
     signal,
-    timeoutMs: 30_000
+    timeoutMs: getTimeoutMs("backend.manager.planQaFeedback.mutationContext.timeoutMs", 30_000)
   };
 }
 
@@ -391,7 +392,7 @@ export async function consumePlanQaFeedback(
 ): Promise<PlanQaFeedbackResult> {
   let projection = await options.storage.query(options.roleId, options.feedback.planId, {
     signal: options.signal,
-    timeoutMs: 30_000
+    timeoutMs: getTimeoutMs("backend.manager.planQaFeedback.consumePlanQaFeedback.options.storage.query.timeoutMs", 30_000)
   });
   if (!projection) throw new Error("Plan not found: " + options.feedback.planId);
   const latest = requiredFeedback(projection, options.feedback.id).record;

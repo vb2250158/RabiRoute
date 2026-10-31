@@ -1,4 +1,3 @@
-import path from "node:path";
 import type { GatewayMessageAdapterType, MessageEndpointType } from "../adapters/messageAdapter.js";
 
 type AgentMaturity = "verified" | "experimental" | "stub";
@@ -37,7 +36,6 @@ export type WebhookLikeScanContext<Runtime> = {
   routeCallbackEndpoint: (runtime: Runtime, type: MessageEndpointType) => AdapterEndpoint | null;
   routeHasRecentMessages: (runtime: Runtime, type: MessageEndpointType) => boolean | undefined;
   checkHttpEndpoint: (url: string, timeoutMs?: number) => Promise<boolean>;
-  fenneNotePlaybackUrl: string;
 };
 
 export function recentMessageEvidence<Runtime>(
@@ -48,7 +46,7 @@ export function recentMessageEvidence<Runtime>(
   return results.includes(true) ? true : results.includes(undefined) ? undefined : false;
 }
 
-function scanCallbacks<Runtime>(ctx: WebhookLikeScanContext<Runtime>, type: Extract<GatewayMessageAdapterType, "fennenote" | "rabilink" | "webhook">): {
+function scanCallbacks<Runtime>(ctx: WebhookLikeScanContext<Runtime>, type: Extract<GatewayMessageAdapterType, "rabilink" | "webhook">): {
   runtimes: Runtime[];
   callbacks: AdapterEndpoint[];
   callbackReady: boolean;
@@ -57,42 +55,6 @@ function scanCallbacks<Runtime>(ctx: WebhookLikeScanContext<Runtime>, type: Extr
   const callbacks = runtimes.map((runtime) => ctx.routeCallbackEndpoint(runtime, type)).filter(Boolean) as AdapterEndpoint[];
   const callbackReady = callbacks.some((endpoint) => endpoint.healthy);
   return { runtimes, callbacks, callbackReady };
-}
-
-export async function scanFenneNoteEndpoint<Runtime>(ctx: WebhookLikeScanContext<Runtime>): Promise<MessageAdapterScanResult> {
-  const { runtimes: fenneRuntimes, callbacks: fenneCallbacks, callbackReady: fenneCallbackReady } = scanCallbacks(ctx, "fennenote");
-  const fennePlaybackUrl = ctx.fenneNotePlaybackUrl.trim();
-  const fennePlaybackHealthy = fennePlaybackUrl
-    ? await ctx.checkHttpEndpoint(fennePlaybackUrl, 1200)
-    : false;
-  const fenneRecent = recentMessageEvidence(fenneRuntimes, (runtime) => ctx.routeHasRecentMessages(runtime, "fennenote"));
-
-  return {
-    type: "fennenote",
-    label: "FenneNote / 芬妮笔记",
-    maturity: "experimental",
-    installed: fenneCallbackReady || fennePlaybackHealthy,
-    installCandidates: [
-      { label: "语音交互工作站接线说明", url: "https://github.com/vb2250158/RabiRoute/blob/main/docs/voice-interaction-workstation.md" },
-      { label: "本地说明：docs/voice-interaction-workstation.md", path: path.join(ctx.rootDir, "docs", "voice-interaction-workstation.md") }
-    ],
-    endpoints: [
-      ...fenneCallbacks,
-      ...(fennePlaybackUrl
-        ? [{ label: "FenneNote 播放/回复端", url: fennePlaybackUrl, healthy: fennePlaybackHealthy }]
-        : [])
-    ],
-    requirements: [
-      { id: "callback", label: "RabiRoute FenneNote 回调入口", required: true, ok: fenneCallbackReady, detail: fenneCallbacks[0]?.url || "添加 FenneNote 消息端并重启 route 后生成。" },
-      { id: "app", label: "FenneNote 桌面端/语音转写端", required: true, ok: fennePlaybackHealthy, detail: fennePlaybackHealthy ? "检测到 FenneNote 本地播放/回复端可达。" : fennePlaybackUrl ? "已配置 FenneNote 播放/回复端，但当前不可达。" : "未配置 FENNOTE_PLAYBACK_URL；RabiRoute 不会猜测或占用固定端口。" },
-      { id: "webhook-config", label: "FenneNote 已配置转写 webhook", required: true, ok: fenneRecent, detail: fenneRecent === undefined ? "历史消息尚未确认，请稍后刷新。" : fenneRecent ? "已收到过 FenneNote 语音转写事件。" : "尚未收到 FenneNote 请求；请把回调地址填到 FenneNote 的转写/事件配置里。" },
-      { id: "tts", label: "OumuQ / TTS worker", required: false, ok: undefined, detail: "只做语音输入时可先不配；需要播报回复时再配置。" }
-    ],
-    warnings: [
-      "RabiRoute 只能检测自己的回调入口和可选播放端；FenneNote 是否真正录音/转写，需要 FenneNote 端或最近请求日志确认。",
-      "不要把 FenneNote 叫成 Webhook；日志和消息文件会按 FenneNote 独立分组。"
-    ]
-  };
 }
 
 export async function scanRabiLinkEndpoint<Runtime>(ctx: WebhookLikeScanContext<Runtime>): Promise<MessageAdapterScanResult> {
@@ -148,6 +110,6 @@ export async function scanWebhookEndpoint<Runtime>(ctx: WebhookLikeScanContext<R
       { id: "callback", label: "RabiRoute 通用回调入口", required: true, ok: webhookCallbackReady, detail: webhookCallbacks[0]?.url || "添加通用 Webhook 消息端并重启 route 后生成。" },
       { id: "sender", label: "外部系统已配置 POST", required: true, ok: recentMessageEvidence(webhookRuntimes, (runtime) => ctx.routeHasRecentMessages(runtime, "webhook")), detail: "RabiRoute 无法自动知道外部系统是否已配置；以最近请求日志为准。" }
     ],
-    warnings: ["只有真正不知道来源的外部 POST 才用通用 Webhook；FenneNote、小爱、Home Assistant 等应拆成具体消息端。"]
+    warnings: ["只有真正不知道来源的外部 POST 才用通用 Webhook；小爱、Home Assistant 等应拆成具体消息端。"]
   };
 }

@@ -1,18 +1,20 @@
 import { createHash } from "node:crypto";
-
-export const RECORDING_ARCHIVE_MAX_BYTES = 128 * 1024 * 1024;
-export const RECORDING_ARCHIVE_MAX_ITEMS = 4096;
+import { RESOURCE_HASH_PATTERN, RESOURCE_ID_PATTERN, RESOURCE_NAMESPACE_PATTERN, RESOURCE_ZERO_NAMESPACE, RESOURCE_OBJECT_MAX_BYTES } from "./resourceCacheProtocol.js";
+import { RECORDING_ARCHIVE_MAX_BYTES, RECORDING_ARCHIVE_MAX_ITEMS, RECORDING_ARCHIVE_MAX_TIME,
+  RECORDING_ARCHIVE_SOURCES, RECORDING_ARCHIVE_TIME_BASES, RECORDING_ARCHIVE_POLICIES,
+  recordingManifestSchema, recordingFormatSchema, recordingSegmentSchema, recordingObjectSchema, recordingGapSchema, recordingReceiptSchema } from "./recordingArchiveSchemas.js";
+export { RECORDING_ARCHIVE_MAX_BYTES, RECORDING_ARCHIVE_MAX_ITEMS } from "./recordingArchiveSchemas.js";
 export interface RecordingManifest {
   schemaVersion: 1;
   recordId: string; captureId: string; eventId: string; deviceId: string;
-  source: "phone" | "glasses" | "video";
+  source: typeof RECORDING_ARCHIVE_SOURCES[number];
   startedAt: number; endedAt: number;
-  timeBasis: "received" | "media" | "imported";
-  format: { codec: "pcm_s16le"; sampleRate: 16000; channels: 1 };
+  timeBasis: typeof RECORDING_ARCHIVE_TIME_BASES[number];
+  format: { codec: typeof recordingFormatSchema.properties.codec.const; sampleRate: typeof recordingFormatSchema.properties.sampleRate.const; channels: typeof recordingFormatSchema.properties.channels.const };
   segments: { sequence: number; bytes: number; sha256: string; startedAt: number }[];
   objects: { sha256: string; bytes: number; offset: number }[];
   gaps: { startedAt: number; endedAt: number; reason: string }[];
-  processingPolicy: "transcribe" | "agent" | "local_only";
+  processingPolicy: typeof RECORDING_ARCHIVE_POLICIES[number];
   totalBytes: number; sealed: true;
 }
 export interface ArchiveReceipt {
@@ -23,6 +25,9 @@ export interface ArchiveReceipt {
 export interface ArchiveReceiptExpectation {
   workerId: string; storageNamespaceId: string; manifest: RecordingManifest;
 }
+const identityPattern = new RegExp(RESOURCE_ID_PATTERN);
+const hashPattern = new RegExp(RESOURCE_HASH_PATTERN);
+const namespacePattern = new RegExp(RESOURCE_NAMESPACE_PATTERN);
 function fail(name: string): never { throw new TypeError(`Invalid recording archive ${name}`); }
 function record(value: unknown, keys: string[], name: string): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) return fail(name);
@@ -41,15 +46,15 @@ function integer(value: unknown, min: number, max: number, name: string): number
   return value;
 }
 function id(value: unknown): string {
-  if (typeof value !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(value)) return fail("identity");
+  if (typeof value !== "string" || !identityPattern.test(value)) return fail("identity");
   return value;
 }
 function hash(value: unknown): string {
-  if (typeof value !== "string" || !/^[a-f0-9]{64}$/.test(value)) return fail("hash");
+  if (typeof value !== "string" || !hashPattern.test(value)) return fail("hash");
   return value;
 }
 function uuid(value: unknown): string {
-  if (typeof value !== "string" || !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(value) || /^0{8}-0{4}-0{4}-0{4}-0{12}$/.test(value)) return fail("namespace");
+  if (typeof value !== "string" || !namespacePattern.test(value) || value === RESOURCE_ZERO_NAMESPACE) return fail("namespace");
   return value;
 }
 function choice<T extends string>(value: unknown, values: readonly T[]): T {
@@ -71,18 +76,18 @@ function bytes(value: unknown, max = RECORDING_ARCHIVE_MAX_BYTES): number {
   if (n % 2) return fail("PCM alignment");
   return n;
 }
-const time = (value: unknown) => integer(value, 0, 8_640_000_000_000_000, "time");
+const time = (value: unknown) => integer(value, 0, RECORDING_ARCHIVE_MAX_TIME, "time");
 /** Pure validation: returns a detached normalized object. Sequence gaps require caller evidence. */
 export function validateRecordingManifest(value: unknown): RecordingManifest {
-  const v = record(value, ["schemaVersion", "recordId", "captureId", "eventId", "deviceId", "source", "startedAt", "endedAt", "timeBasis", "format", "segments", "objects", "gaps", "processingPolicy", "totalBytes", "sealed"], "manifest");
+  const v = record(value, recordingManifestSchema.required, "manifest");
   if (v.schemaVersion !== 1 || v.sealed !== true) return fail("version/seal");
   const startedAt = time(v.startedAt), endedAt = time(v.endedAt), totalBytes = bytes(v.totalBytes);
   if (endedAt <= startedAt || totalBytes / 32 > endedAt - startedAt + 1) return fail("time range");
-  const f = record(v.format, ["codec", "sampleRate", "channels"], "format");
-  if (f.codec !== "pcm_s16le" || f.sampleRate !== 16000 || f.channels !== 1) return fail("format");
+  const f = record(v.format, recordingFormatSchema.required, "format");
+  if (f.codec !== recordingFormatSchema.properties.codec.const || f.sampleRate !== recordingFormatSchema.properties.sampleRate.const || f.channels !== recordingFormatSchema.properties.channels.const) return fail("format");
   let sequence = -1, segmentBytes = 0, previousStart = startedAt;
   const segments = list(v.segments, 1, "segments").map(raw => {
-    const s = record(raw, ["sequence", "bytes", "sha256", "startedAt"], "segment");
+    const s = record(raw, recordingSegmentSchema.required, "segment");
     const seq = integer(s.sequence, 0, Number.MAX_SAFE_INTEGER, "sequence"), size = bytes(s.bytes), start = time(s.startedAt);
     if (seq <= sequence || start < previousStart || start < startedAt || start >= endedAt || size / 32 > endedAt - start + 1) return fail("segment order/time");
     sequence = seq; previousStart = start; segmentBytes += size;
@@ -91,8 +96,8 @@ export function validateRecordingManifest(value: unknown): RecordingManifest {
   });
   let objectBytes = 0;
   const objects = list(v.objects, 1, "objects").map(raw => {
-    const o = record(raw, ["sha256", "bytes", "offset"], "object");
-    const size = bytes(o.bytes, 1024 * 1024), offset = integer(o.offset, 0, RECORDING_ARCHIVE_MAX_BYTES, "offset");
+    const o = record(raw, recordingObjectSchema.required, "object");
+    const size = bytes(o.bytes, RESOURCE_OBJECT_MAX_BYTES), offset = integer(o.offset, 0, RECORDING_ARCHIVE_MAX_BYTES, "offset");
     if (offset !== objectBytes) return fail("object offset");
     objectBytes += size;
     if (objectBytes > totalBytes) return fail("object total");
@@ -101,16 +106,16 @@ export function validateRecordingManifest(value: unknown): RecordingManifest {
   if (segmentBytes !== totalBytes || objectBytes !== totalBytes) return fail("total bytes");
   let gapEnd = startedAt;
   const gaps = list(v.gaps, 0, "gaps").map(raw => {
-    const g = record(raw, ["startedAt", "endedAt", "reason"], "gap");
+    const g = record(raw, recordingGapSchema.required, "gap");
     const start = time(g.startedAt), end = time(g.endedAt);
     if (start < gapEnd || end <= start || end > endedAt) return fail("gap time");
     gapEnd = end;
     return { startedAt: start, endedAt: end, reason: id(g.reason) };
   });
   return { schemaVersion: 1, recordId: id(v.recordId), captureId: id(v.captureId), eventId: id(v.eventId), deviceId: id(v.deviceId),
-    source: choice(v.source, ["phone", "glasses", "video"]), startedAt, endedAt, timeBasis: choice(v.timeBasis, ["received", "media", "imported"]),
-    format: { codec: "pcm_s16le", sampleRate: 16000, channels: 1 }, segments, objects, gaps,
-    processingPolicy: choice(v.processingPolicy, ["transcribe", "agent", "local_only"]), totalBytes, sealed: true };
+    source: choice(v.source, RECORDING_ARCHIVE_SOURCES), startedAt, endedAt, timeBasis: choice(v.timeBasis, RECORDING_ARCHIVE_TIME_BASES),
+    format: { codec: recordingFormatSchema.properties.codec.const, sampleRate: recordingFormatSchema.properties.sampleRate.const, channels: recordingFormatSchema.properties.channels.const }, segments, objects, gaps,
+    processingPolicy: choice(v.processingPolicy, RECORDING_ARCHIVE_POLICIES), totalBytes, sealed: true };
 }
 function canonical(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
@@ -128,7 +133,7 @@ export function recordingManifestHash(value: unknown): string {
 export function validateArchiveReceipt(value: unknown, expected: ArchiveReceiptExpectation): ArchiveReceipt {
   const m = validateRecordingManifest(expected.manifest);
   const workerId = id(expected.workerId), namespace = uuid(expected.storageNamespaceId);
-  const v = record(value, ["schemaVersion", "workerId", "storageNamespaceId", "recordId", "manifestHash", "totalBytes", "segmentCount", "committedAt", "durability", "retention"], "receipt");
+  const v = record(value, recordingReceiptSchema.required, "receipt");
   if (v.schemaVersion !== 1 || v.durability !== "archived" || v.retention !== "indefinite") return fail("receipt guarantees");
   const result: ArchiveReceipt = { schemaVersion: 1, workerId: id(v.workerId), storageNamespaceId: uuid(v.storageNamespaceId), recordId: id(v.recordId),
     manifestHash: hash(v.manifestHash), totalBytes: bytes(v.totalBytes), segmentCount: integer(v.segmentCount, 1, RECORDING_ARCHIVE_MAX_ITEMS, "segment count"),

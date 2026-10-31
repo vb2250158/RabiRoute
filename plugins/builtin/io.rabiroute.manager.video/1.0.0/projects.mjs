@@ -1,21 +1,32 @@
-import {checkedFs,checkedReadBody} from './requestAccess.mjs';
+import { projectFields, projectRules } from "./contracts.mjs";
+import {checkedFs} from './requestAccess.mjs';
 import path from 'node:path';
 import {randomUUID} from 'node:crypto';
 import {VideoError} from './service.mjs';
 
 export class VideoProjects {
-  constructor(runtime) { this.runtime=runtime; this.root=path.join(runtime.stateRoot,'projects'); this.serial=Promise.resolve(); }
-  file(id) { if(!/^[a-f0-9-]{36}$/.test(id)) throw new VideoError('项目不存在。',404); return path.join(this.root,`${id}.json`); }
+  constructor(runtime) { this.runtime=runtime; this.root=path.join(runtime.stateRoot,'projects'); this.serial=Promise.resolve(); this.recordIssues=[]; }
+  file(id) { if(!new RegExp(projectFields.id.pattern).test(id)) throw new VideoError('项目不存在。',404); return path.join(this.root,`${id}.json`); }
   async read(id,access) {
     const fs=checkedFs(access);
-    try { return JSON.parse(await fs.readFile(this.file(id),'utf8')); }
+    try {
+      const value=JSON.parse(await fs.readFile(this.file(id),'utf8'));
+      if (!value || String(value.id) !== String(id) || typeof value.title !== 'string' || typeof value.updatedAt !== 'string'
+        || !Number.isSafeInteger(value.revision) || value.revision < 0) throw new VideoError('原项目记录损坏，请恢复原文件后再编辑。',409);
+      return value;
+    }
     catch(error) { if(error.code==='ENOENT') throw new VideoError('项目不存在。',404); throw error; }
   }
   async list(access) {
     const fs=checkedFs(access);
     const names=await fs.readdir(this.root).catch(error=>{if(error.code==='ENOENT') return [];throw error;});
-    const projects=await Promise.all(names.filter(name=>/^[a-f0-9-]{36}\.json$/.test(name)).map(name=>this.read(name.slice(0,-5),access)));
-    return projects.map(({id,title,updatedAt,revision,value})=>({id,title,updatedAt,revision,cardCount:value?.items?.length || 0})).sort((a,b)=>b.updatedAt.localeCompare(a.updatedAt));
+    const projects=[], issues=[];
+    for (const name of names.filter(name=>/^[a-f0-9-]{36}\.json$/.test(name))) {
+      try { projects.push(await this.read(name.slice(0,-5),access)); }
+      catch { access?.assert(); issues.push({id:name.slice(0,-5),scope:'projects',code:'unreadable_record'}); }
+    }
+    access?.assert(); this.recordIssues=issues;
+    return projects.map(({id,title,updatedAt,revision,value})=>({id,title,updatedAt,revision,cardCount:Array.isArray(value?.items)?value.items.length:0})).sort((a,b)=>b.updatedAt.localeCompare(a.updatedAt));
   }
   mutate(operation,access) {
     access?.assert();
@@ -39,25 +50,9 @@ export class VideoProjects {
     const previous=await this.read(id,access);
     if(!Number.isSafeInteger(body?.revision)||body.revision!==previous.revision) throw new VideoError('项目已被另一页面更新，请保留当前编辑后重新打开项目。',409);
     const value=body.value;
-    if(value?.version!==1 || !Array.isArray(value.items) || value.items.length>1000 || !Array.isArray(value.drafts) || !value.items.some(item=>item.id===value.active && item.kind==='video')) throw new VideoError('项目内容无效。');
-    if(value.items.some(item=>!item || typeof item.id!=='string' || !['video','image','audio','text'].includes(item.kind)) || new Set(value.items.map(item=>item.id)).size!==value.items.length) throw new VideoError('项目卡片无效。');
-    const title=typeof body.title==='string'?body.title.trim().slice(0,100):previous.title;
+    if(value?.version!==projectRules.version || !Array.isArray(value.items) || value.items.length>projectRules.maxItems || !Array.isArray(value.drafts) || !value.items.some(item=>item.id===value.active && item.kind==='video')) throw new VideoError('项目内容无效。');
+    if(value.items.some(item=>!item || typeof item.id!=='string' || !projectRules.kinds.includes(item.kind)) || new Set(value.items.map(item=>item.id)).size!==value.items.length) throw new VideoError('项目卡片无效。');
+    const title=typeof body.title==='string'?body.title.trim().slice(0,projectFields.title.normalizedMaxLength):previous.title;
     return this.publish({id,title:title||'未命名项目',revision:previous.revision+1,updatedAt:new Date().toISOString(),value},access);
   },access); }
-}
-
-export async function handleProjects(store,request,url,response,http,access) {
-  access?.assert();
-  const route=url.pathname.slice('/api/video'.length);
-  const match=/^\/projects\/([a-f0-9-]{36})$/.exec(route);
-  if(route!=='/projects'&&!match) return false;
-  response.setHeader('cache-control','no-store');
-  let value;
-  if(route==='/projects'&&request.method==='GET') value={projects:await store.list(access)};
-  else if(route==='/projects'&&request.method==='POST') value=await store.create(await checkedReadBody(http,request,4096,access),access);
-  else if(match&&request.method==='GET') value=await store.read(match[1],access);
-  else if(match&&request.method==='PUT') { const saved=await store.save(match[1],await checkedReadBody(http,request,64*1024*1024,access),access);value={revision:saved.revision}; }
-  else throw new VideoError('不支持此项目操作。',405);
-  access?.assert();
-  http.jsonResponse(response,200,value);return true;
 }

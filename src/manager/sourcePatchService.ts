@@ -1,3 +1,5 @@
+import { DeveloperCandidateProvenance } from "./developerCandidateProvenance.js";
+import type { DeveloperCandidateAdmission } from "./developerCandidateAdmission.js";
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -84,6 +86,9 @@ export class ManagerSourcePatchService {
   private readonly dynamicBaselines = new Set<string>();
   private readonly bundleFences = new Map<string, string>();
   private readonly candidates: HotPatchCandidateStore;
+  private readonly developerOrigins: DeveloperCandidateProvenance;
+  private readonly admissionAbort = new AbortController();
+  private readonly publications = new Set<Promise<unknown>>();
   private readonly baselines: HotPatchCandidateStore;
   private readonly ready: Promise<void>;
   private loadError = false;
@@ -94,12 +99,16 @@ export class ManagerSourcePatchService {
 
   constructor(private readonly options: Readonly<{
     baselineRoot: string;
+    developerSourceRoot?: string;
+    developerAdmission?: DeveloperCandidateAdmission;
+    developerDiagnostic?: (message: string) => void;
     stateRoot: string;
     runtime: GenerationRuntime;
     workerTimeoutMs?: number;
     audit?: (event: string, fields: Readonly<{ operationId: string; moduleId: string; state: string }>) => void;
     bundleJournalRoot?: string;
   }>) {
+    this.developerOrigins = new DeveloperCandidateProvenance({ stateRoot: options.stateRoot, sourceRoot: options.developerSourceRoot });
     this.baselines = new HotPatchCandidateStore(options.baselineRoot);
     this.candidates = new HotPatchCandidateStore(path.join(options.stateRoot, "candidates"));
     this.bundleJournal = options.bundleJournalRoot ? new HotPatchBundleJournal(options.bundleJournalRoot) : undefined;
@@ -108,6 +117,25 @@ export class ManagerSourcePatchService {
       throw error;
     });
     void this.ready.catch(() => {});
+  }
+
+  async recordLocalCandidate(sha256: string, actualSourceRoot: string): Promise<void> {
+    await this.candidates.read(sha256);
+    await this.developerOrigins.record("source-patch", sha256, actualSourceRoot);
+  }
+
+  private async prepareDeveloperCandidate(moduleId: string, sha256: string) {
+    if (!this.options.developerAdmission) return { assertCurrent() {} };
+    const proof = await this.options.developerAdmission.prepareManagedCandidate({ kind: "source-patch", moduleId, sha256,
+      candidateRoot: path.join(this.options.stateRoot, "candidates"), originSourceRoot: await this.developerOrigins.source("source-patch", sha256) }, this.admissionAbort.signal);
+    if (proof.diagnostic) this.options.developerDiagnostic?.(proof.diagnostic);
+    return proof;
+  }
+
+  private trackPublication<T>(pending: Promise<T>): Promise<T> {
+    this.publications.add(pending);
+    void pending.finally(() => this.publications.delete(pending)).catch(() => {});
+    return pending;
   }
 
   status() {
@@ -141,9 +169,18 @@ export class ManagerSourcePatchService {
     sourcePatchDependencyHash(capturedDependencies);
     if (!captured || typeof captured !== "object" || Array.isArray(captured) || Buffer.byteLength(JSON.stringify(captured)) > 64 * 1024) throw new SourcePatchError("Invalid source patch module contract.", 400);
     const generationId = this.options.runtime.current().id;
-    const pending = this.options.runtime.publishSourcePatch(generationId, () => this.registerDynamicModule(moduleId, candidateSha256, captured, capturedDependencies));
+    let registrationStarted = false;
+    const pending = this.prepareDeveloperCandidate(moduleId, candidateSha256).then(admission =>
+      this.options.runtime.publishSourcePatch(generationId, () => {
+        admission.assertCurrent();
+        registrationStarted = true;
+        return this.registerDynamicModule(moduleId, candidateSha256, captured, capturedDependencies);
+      }));
     this.moduleReady.set(moduleId, pending);
-    void pending.catch(() => { this.moduleErrors.add(moduleId); });
+    void pending.catch(() => {
+      if (!registrationStarted && this.moduleReady.get(moduleId) === pending) this.moduleReady.delete(moduleId);
+      else this.moduleErrors.add(moduleId);
+    });
     await pending;
   }
 
@@ -164,7 +201,12 @@ export class ManagerSourcePatchService {
     const request = structuredClone(input);
     const fingerprint = createHash("sha256").update(JSON.stringify(request)).digest("hex");
     this.queued++;
-    return this.options.runtime.publishSourcePatch(request.pluginGenerationId, async () => {
+    return this.trackPublication((async () => {
+      await this.ready;
+      const admission = request.action === "rollback" || await this.operation(request.operationId) ? undefined
+        : await this.prepareDeveloperCandidate(request.moduleId, request.candidateSha256!);
+      this.admissionAbort.signal.throwIfAborted();
+      return this.options.runtime.publishSourcePatch(request.pluginGenerationId, async () => {
       await this.ready;
       this.validate(request);
       const existing = await this.operation(request.operationId);
@@ -180,6 +222,7 @@ export class ManagerSourcePatchService {
         ? state.pointer.previous ?? (() => { throw new SourcePatchError("No previous source patch is retained.", 409); })()
         : { sha256: request.candidateSha256!, contract: request.contract ?? {} };
       const compiled = await this.readCandidate(active.sha256, state.pointer.baselineSha256);
+      admission?.assertCurrent();
       const pending: SourcePatchOperation = {
         operationId: request.operationId, fingerprint, moduleId: request.moduleId,
         state: "pending", commitState: "unknown", createdAt: new Date().toISOString(),
@@ -222,7 +265,8 @@ export class ManagerSourcePatchService {
       }
       this.audit(operation);
       return operation;
-    }).finally(() => { this.queued--; });
+      });
+    })().finally(() => { this.queued--; }));
   }
 
   publishBundle(input: SourcePatchBundleRequest): Promise<SourcePatchOperation> {
@@ -232,7 +276,18 @@ export class ManagerSourcePatchService {
     const request = structuredClone(input);
     const fingerprint = createHash("sha256").update(JSON.stringify(request)).digest("hex");
     this.queued++;
-    return this.options.runtime.publishSourcePatch(request.pluginGenerationId, async () => {
+    return this.trackPublication((async () => {
+      await this.ready;
+      const admissions = new Map<string, { assertCurrent(): void }>();
+      if (!await this.operation(request.operationId)) {
+        const prepared = await Promise.allSettled(request.entries.map(async entry => {
+          admissions.set(entry.moduleId, await this.prepareDeveloperCandidate(entry.moduleId, entry.candidateSha256));
+        }));
+        const failed = prepared.find(result => result.status === "rejected");
+        if (failed?.status === "rejected") throw failed.reason;
+      }
+      this.admissionAbort.signal.throwIfAborted();
+      return this.options.runtime.publishSourcePatch(request.pluginGenerationId, async () => {
       await this.ready;
       this.validateBundle(request);
       const existing = await this.operation(request.operationId);
@@ -246,7 +301,8 @@ export class ManagerSourcePatchService {
         const before = await state.worker.snapshot();
         if (before.snapshot.revision !== entry.expectedRevision) throw new SourcePatchError("Source patch bundle base revision is no longer active.", 409);
         const compiled = await this.readCandidate(entry.candidateSha256, state.pointer.baselineSha256);
-        return { entry, state, before, compiled };
+        const admission = admissions.get(entry.moduleId)!;
+        return { entry, state, before, compiled, admission };
       }));
       const pending: SourcePatchOperation = {
         operationId: request.operationId, fingerprint, moduleId: "__bundle__", state: "pending", commitState: "unknown", createdAt: new Date().toISOString(),
@@ -256,6 +312,7 @@ export class ManagerSourcePatchService {
           bundleModuleIds: states.map(item => item.entry.moduleId),
           bundleEntries: states.map(item => ({ moduleId: item.entry.moduleId, before: item.before, targetSourceHash: item.compiled.sourceHash, target: { sha256: item.entry.candidateSha256, contract: item.entry.contract ?? {} } })) }
       };
+      for (const item of states) item.admission.assertCurrent();
       await this.bundleJournal?.begin(request.operationId, pending, true);
       for (const item of states) item.state.uncertainOperation = request.operationId;
       await this.writeJson(this.operationPath(request.operationId), pending);
@@ -285,7 +342,8 @@ export class ManagerSourcePatchService {
         this.audit(operation);
         throw error;
       }
-    }).finally(() => { this.queued--; });
+      });
+    })().finally(() => { this.queued--; }));
   }
   reconcileBundle(input: SourcePatchBundleReconcileRequest): Promise<SourcePatchOperation> {
     this.operationId(input.operationId);
@@ -328,6 +386,8 @@ export class ManagerSourcePatchService {
 
   async stop(): Promise<void> {
     this.closed = true;
+    this.admissionAbort.abort();
+    await Promise.allSettled(this.publications);
     await this.options.runtime.publishSourcePatch(this.options.runtime.current().id, async () => {}).catch(() => {});
     await this.ready.catch(() => {});
     await Promise.allSettled(this.moduleReady.values());

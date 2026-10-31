@@ -3,34 +3,10 @@ export const activate = definePlugin({
     async activate(context) {
         const runtime = context.services.require("host.manager.plan-feedback-delivery@1");
         context.services.provide("manager.plan-feedback-delivery@1", Object.freeze({ instanceId: context.identity.instanceId }));
-        for (const contribution of [])
-            context.contributions.register(contribution);
-        context.effects.add(async () => {
-            const pendingEffects = [];
-            const disposers = [];
-            const disposeStartedEffects = async () => {
-                let firstError;
-                for (const dispose of [...disposers].reverse()) {
-                    try { await dispose(); } catch (error) { firstError ??= error; }
-                }
-                if (firstError) throw firstError;
-            };
-            const ctx = Object.freeze({
-                effect(starter, label) {
-                    const pending = Promise.resolve().then(starter).then(dispose => {
-                        if (typeof dispose !== "function") throw new Error(`Plugin effect did not return a disposer: ${label ?? "effect"}.`);
-                        disposers.push(dispose);
-                        return dispose;
-                    });
-                    pendingEffects.push(pending);
-                    return pending;
-                }
-            });
-            try {
         if (runtime.managerReadOnly)
-            return () => { };
-        runtime.planFeedbackDeliveryActive = true;
-        const recovery = new runtime.PlanFeedbackRecoveryService({
+            return;
+        // Restore persisted circuits only after the previous owner has finished writing them.
+        const createRecovery = () => new runtime.PlanFeedbackRecoveryService({
             persistencePath: runtime.planFeedbackFailureStatePath,
             onPersistenceError: error => {
                 runtime.managerOperationalLog.record("warn", "background_failure_state_persist_failed", {
@@ -47,6 +23,7 @@ export const activate = definePlugin({
                         await controls.scheduleOnce(() => runtime.scheduleAndWaitForPlanFeedbackDelivery(current.roleDir, current.roleId, String(current.feedback.gatewayId || "").trim(), current.plan, current.feedback));
                     }
                 });
+                controls.signal.throwIfAborted();
                 if (outcome.state === "delivered") {
                     runtime.publishManagerEvent("plan_feedback_changed", {
                         roleId: candidate.roleId,
@@ -79,25 +56,71 @@ export const activate = definePlugin({
                 });
             }
         });
-        runtime.planFeedbackRecoveryService = recovery;
-        const start = () => { void recovery.start("plan and route readiness"); };
-        runtime.startActivePlanFeedbackRecovery = start;
-        ctx.effect(() => async () => {
-            runtime.planFeedbackDeliveryActive = false;
-            if (runtime.startActivePlanFeedbackRecovery === start)
-                runtime.startActivePlanFeedbackRecovery = () => { };
-            await recovery.stop();
-            await Promise.allSettled([...runtime.activePlanFeedbackDeliveryFlights.values()]);
-            if (runtime.planFeedbackRecoveryService === recovery)
+        let recovery;
+        let previous;
+        let ready = false;
+        let startRequested = false;
+        let retirement;
+        const owns = () => runtime.startActivePlanFeedbackRecovery === start;
+        const start = () => {
+            startRequested = true;
+            if (!ready || !owns() || context.lifecycle.signal.aborted)
+                return;
+            void recovery.start("plan and route readiness").catch(error => {
+                if (!context.lifecycle.signal.aborted)
+                    context.lifecycle.fail(error);
+            });
+        };
+        context.publication.add({
+            publish() {
+                previous = {
+                    active: runtime.planFeedbackDeliveryActive,
+                    recovery: runtime.planFeedbackRecoveryService,
+                    start: runtime.startActivePlanFeedbackRecovery,
+                    started: runtime.planFeedbackRecoveryService?.isActive() ?? false
+                };
+                runtime.startActivePlanFeedbackRecovery = start;
+                runtime.planFeedbackDeliveryActive = false;
                 runtime.planFeedbackRecoveryService = undefined;
-        }, "stop Manager plan feedback delivery plugin");
-                await Promise.all(pendingEffects);
-                return disposeStartedEffects;
-            } catch (error) {
-                await Promise.allSettled(pendingEffects);
-                await disposeStartedEffects().catch(() => {});
-                throw error;
+            },
+            rollback() {
+                if (!owns())
+                    return;
+                runtime.planFeedbackDeliveryActive = previous.active;
+                runtime.planFeedbackRecoveryService = previous.recovery;
+                runtime.startActivePlanFeedbackRecovery = previous.start;
+            },
+            async afterPublish({ signal, previousRetirement }) {
+                await previousRetirement;
+                signal.throwIfAborted();
+                recovery = createRecovery();
+                runtime.planFeedbackRecoveryService = recovery;
+                runtime.planFeedbackDeliveryActive = true;
+                ready = true;
+                if (startRequested || previous.started)
+                    start();
+            },
+            retire() {
+                return retirement ??= (async () => {
+                    ready = false;
+                    if (owns()) {
+                        runtime.planFeedbackDeliveryActive = false;
+                        runtime.startActivePlanFeedbackRecovery = () => { };
+                        if (runtime.planFeedbackRecoveryService === recovery)
+                            runtime.planFeedbackRecoveryService = undefined;
+                    }
+                    if (recovery) {
+                        const acceptedFlights = new Set(runtime.activePlanFeedbackDeliveryFlights.values());
+                        try {
+                            await recovery.stopAndJoin();
+                        } finally {
+                            for (const flight of runtime.activePlanFeedbackDeliveryFlights.values())
+                                acceptedFlights.add(flight);
+                            await Promise.allSettled([...acceptedFlights]);
+                        }
+                    }
+                })();
             }
-        }, "activate io.rabiroute.manager.plan-feedback-delivery");
+        }, "publish Manager plan feedback delivery owner");
     }
 }).activate;

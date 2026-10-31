@@ -1,3 +1,4 @@
+import { getTimeoutMs } from "../../shared/timeoutSettings.js";
 import { execFile } from "node:child_process";
 import { rethrowXiaomiHomeAuthorityError, type XiaomiHomeRequestAuthority } from "./requestAuthority.js";
 import { createHash } from "node:crypto";
@@ -29,13 +30,13 @@ const driver: HomeAssistantDeploymentDriver = {
   async run(args) {
     // Never follow a user's remote Docker context or DOCKER_HOST for a local startup action.
     const endpoint = process.platform === "win32" ? "npipe:////./pipe/dockerDesktopLinuxEngine" : "unix:///var/run/docker.sock";
-    const result = await runFile("docker", ["--host", endpoint, ...args], { windowsHide: true, timeout: 30000, maxBuffer: 1024 * 1024 });
+    const result = await runFile("docker", ["--host", endpoint, ...args], { windowsHide: true, timeout: getTimeoutMs("backend.integrations.xiaomiHome.homeAssistantDeployment.run.runFile.timeout", 30000), maxBuffer: 1024 * 1024 });
     return result.stdout;
   },
   async ready(baseUrl, authority) {
     try {
       authority?.assert();
-      const response = await fetch(`${baseUrl}/api/`, { redirect: "error", signal: AbortSignal.timeout(3000) });
+      const response = await fetch(`${baseUrl}/api/`, { redirect: "error", signal: AbortSignal.timeout(getTimeoutMs("backend.integrations.xiaomiHome.homeAssistantDeployment.ready.AbortSignal.timeout.request", 3000)) });
       authority?.assert();
       if (response.ok) {
         const text = await response.text();
@@ -44,7 +45,7 @@ const driver: HomeAssistantDeploymentDriver = {
       }
       if (response.status !== 401) return false;
       authority?.assert();
-      const manifest = await fetch(`${baseUrl}/manifest.json`, { redirect: "error", signal: AbortSignal.timeout(3000) });
+      const manifest = await fetch(`${baseUrl}/manifest.json`, { redirect: "error", signal: AbortSignal.timeout(getTimeoutMs("backend.integrations.xiaomiHome.homeAssistantDeployment.ready.AbortSignal.timeout.request", 3000)) });
       authority?.assert();
       if (!manifest.ok) return false;
       const body = await manifest.json();
@@ -237,7 +238,7 @@ export class HomeAssistantDeployment {
       try {
         // Start the verified immutable ID; a renamed/replaced container is never started by name.
         if (before.state === "stopped") await this.run(["container", "start", before.containerId], authority);
-        const deadline = Date.now() + 60000;
+        const deadline = Date.now() + getTimeoutMs("home.deploymentReady", 60000);
         while (!this.stopped && Date.now() < deadline) {
           if (await this.ready(before.baseUrl, authority)) {
             this.audit("start", "committed");
@@ -267,26 +268,28 @@ export class HomeAssistantDeployment {
     });
   }
 
-  subscribe(listener: (snapshot: HomeAssistantDeploymentSnapshot) => void): () => void {
-    let closed = false;
-    let reading = false;
-    let pending = false;
-    const changed = async () => {
+  subscribe(listener: (snapshot: HomeAssistantDeploymentSnapshot) => void, onError?: (error: unknown) => void): () => Promise<void> {
+    let closed = false, pending = false;
+    let inFlight: Promise<void> | undefined;
+    const changed = (): Promise<void> => {
       pending = true;
-      if (reading || closed) return;
-      reading = true;
-      try {
-        do {
-          pending = false;
-          const snapshot = await this.inspect();
-          if (!closed) listener(snapshot);
-        } while (pending && !closed);
-      } finally { reading = false; }
+      if (inFlight || closed) return inFlight ?? Promise.resolve();
+      inFlight = (async () => {
+        try {
+          do {
+            pending = false;
+            const snapshot = await this.inspect();
+            if (!closed) listener(snapshot);
+          } while (pending && !closed);
+        } finally { inFlight = undefined; }
+      })();
+      return inFlight;
     };
-    const unsubscribe = this.os.subscribe?.(() => { void changed(); });
-    this.changes.on("changed", changed);
-    void changed();
-    return () => { closed = true; this.changes.off("changed", changed); unsubscribe?.(); };
+    const observed = () => { void changed().catch(error => onError?.(error)); };
+    const unsubscribe = this.os.subscribe?.(observed);
+    this.changes.on("changed", observed);
+    observed();
+    return async () => { closed = true; this.changes.off("changed", observed); unsubscribe?.(); await inFlight; };
   }
 
   private async runOs(operation: "Install" | "Start" | "Recover", authority?: XiaomiHomeRequestAuthority, signal?: AbortSignal): Promise<HomeAssistantDeploymentSnapshot> {

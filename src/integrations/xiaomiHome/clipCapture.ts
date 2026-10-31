@@ -1,3 +1,4 @@
+import { getTimeoutMs } from "../../shared/timeoutSettings.js";
 import { createDecipheriv, createHash } from "node:crypto";
 import { spawn } from "node:child_process";
 import fs from "node:fs";
@@ -44,16 +45,15 @@ function normalizedAllowedHosts(input: readonly string[] | undefined): string[] 
 
 function hostAllowed(hostname: string, allowedHosts: readonly string[]): boolean {
   const host = hostname.toLowerCase();
-  return allowedHosts.some(pattern => pattern.startsWith("*.")
+  return allowedHosts.length === 0 || allowedHosts.some(pattern => pattern.startsWith("*.")
     ? host.endsWith(pattern.slice(1)) && host !== pattern.slice(2)
     : host === pattern);
 }
 
 function validateMediaUrl(value: string | URL, allowedHosts: readonly string[]): URL {
   const url = value instanceof URL ? value : new URL(value);
-  if (url.protocol !== "https:" || url.username || url.password || !hostAllowed(url.hostname, allowedHosts)) {
-    throw new Error(`Camera media host is not allowed: ${url.hostname || "invalid"}.`);
-  }
+  if (!["http:", "https:"].includes(url.protocol) || url.username || url.password) throw new Error("Camera media fetch requires an HTTP(S) URL without embedded credentials.");
+  if (!hostAllowed(url.hostname, allowedHosts)) throw new Error(`Camera media host ${url.hostname} is not allowed by cameraClipAllowedHosts=${JSON.stringify(allowedHosts)}. Change or clear this list in Xiaomi Home settings.`);
   return url;
 }
 
@@ -126,6 +126,7 @@ export class XiaomiHomeClipCaptureWorker {
   private readonly maxSegments: number;
   private readonly maxSegmentBytes: number;
   private readonly inFlight = new Map<string, Promise<XiaomiHomeArtifactPublicRecord>>();
+  private stopped = false;
 
   constructor(
     config: XiaomiHomeClipCaptureConfig,
@@ -138,13 +139,13 @@ export class XiaomiHomeClipCaptureWorker {
     this.allowedHosts = normalizedAllowedHosts(config.cameraClipAllowedHosts);
     this.ffmpegPath = safeToolPath(config.ffmpegPath, "ffmpeg");
     this.ffprobePath = safeToolPath(config.ffprobePath, "ffprobe");
-    this.requestTimeoutMs = Math.min(30000, Math.max(1000, Number(config.cameraClipRequestTimeoutMs ?? 10000)));
+    this.requestTimeoutMs = getTimeoutMs("backend.integrations.xiaomiHome.clipCapture.owner.Number.cameraClipRequestTimeoutMs", Math.min(30000, Math.max(1000, Number(config.cameraClipRequestTimeoutMs ?? 10000))));
     this.maxSegments = Math.min(500, Math.max(1, Number(config.cameraClipMaxSegments ?? 120)));
     this.maxSegmentBytes = Math.min(128 * 1024 * 1024, Math.max(1024, Number(config.cameraClipMaxSegmentBytes ?? 32 * 1024 * 1024)));
   }
 
   isEnabled(): boolean {
-    return this.enabled && this.allowedHosts.length > 0;
+    return this.enabled;
   }
 
   status(): Record<string, unknown> {
@@ -157,7 +158,8 @@ export class XiaomiHomeClipCaptureWorker {
   }
 
   capture(candidate: XiaomiMiotMotionClipCandidate): Promise<XiaomiHomeArtifactPublicRecord> {
-    if (!this.isEnabled()) return Promise.reject(new Error("Camera clip capture is not enabled or has no allowed media hosts."));
+    if (this.stopped) return Promise.reject(new Error('Camera clip owner has stopped.'));
+    if (!this.isEnabled()) return Promise.reject(new Error("cameraClipCaptureEnabled=false. Enable camera clip capture in Xiaomi Home settings."));
     const captured = this.artifacts.getBySourceEventId(candidate.sourceEventId, this.ownerRoleId);
     if (captured) return Promise.resolve(captured);
     const existing = this.inFlight.get(candidate.sourceEventId);
@@ -167,35 +169,47 @@ export class XiaomiHomeClipCaptureWorker {
     return operation;
   }
 
-  private async fetchBytes(url: URL, maxBytes: number, redirects = 0): Promise<Buffer> {
+  /** No new capture is admitted; accepted native fetches/tools are joined, never detached. */
+  async close(): Promise<void> {
+    this.stopped = true;
+    await Promise.allSettled(this.inFlight.values());
+  }
+
+  private async fetchMedia(url: URL, maxBytes: number, redirects = 0): Promise<{ bytes: Buffer; url: URL }> {
     validateMediaUrl(url, this.allowedHosts);
     const response = await this.fetchImpl(url, { redirect: "manual", signal: AbortSignal.timeout(this.requestTimeoutMs) });
     if ([301, 302, 303, 307, 308].includes(response.status)) {
       if (redirects >= 4) throw new Error("Camera media returned too many redirects.");
       const location = response.headers.get("location");
       if (!location) throw new Error("Camera media redirect has no target.");
-      return this.fetchBytes(validateMediaUrl(new URL(location, url), this.allowedHosts), maxBytes, redirects + 1);
+      await response.body?.cancel();
+      return this.fetchMedia(validateMediaUrl(new URL(location, url), this.allowedHosts), maxBytes, redirects + 1);
     }
     if (!response.ok) throw new Error(`Camera media request failed with HTTP ${response.status}.`);
     const declared = Number(response.headers.get("content-length") || 0);
     if (declared > maxBytes) throw new Error("Camera media response exceeds the configured size limit.");
     const bytes = Buffer.from(await response.arrayBuffer());
     if (bytes.length > maxBytes) throw new Error("Camera media response exceeds the configured size limit.");
-    return bytes;
+    return { bytes, url };
+  }
+
+  private async fetchBytes(url: URL, maxBytes: number): Promise<Buffer> {
+    return (await this.fetchMedia(url, maxBytes)).bytes;
   }
 
   private async mediaPlaylist(initial: URL): Promise<{ url: URL; segments: HlsSegment[] }> {
-    const firstText = (await this.fetchBytes(initial, 1024 * 1024)).toString("utf8");
+    const first = await this.fetchMedia(initial, 1024 * 1024);
+    const firstText = first.bytes.toString("utf8");
     const lines = firstText.replace(/\r/g, "").split("\n").map(line => line.trim()).filter(Boolean);
     const masterIndex = lines.findIndex(line => line.startsWith("#EXT-X-STREAM-INF:"));
     if (masterIndex >= 0) {
       const variant = lines.slice(masterIndex + 1).find(line => !line.startsWith("#"));
       if (!variant) throw new Error("Camera clip master playlist has no media variant.");
-      const variantUrl = validateMediaUrl(new URL(variant, initial), this.allowedHosts);
-      const variantText = (await this.fetchBytes(variantUrl, 1024 * 1024)).toString("utf8");
-      return { url: variantUrl, segments: parseHlsMediaPlaylist(variantText, variantUrl, this.allowedHosts) };
+      const variantUrl = validateMediaUrl(new URL(variant, first.url), this.allowedHosts);
+      const media = await this.fetchMedia(variantUrl, 1024 * 1024);
+      return { url: media.url, segments: parseHlsMediaPlaylist(media.bytes.toString("utf8"), media.url, this.allowedHosts) };
     }
-    return { url: initial, segments: parseHlsMediaPlaylist(firstText, initial, this.allowedHosts) };
+    return { url: first.url, segments: parseHlsMediaPlaylist(firstText, first.url, this.allowedHosts) };
   }
 
   private runTool(executable: string, args: string[], workingDirectory: string, timeoutMs: number): Promise<void> {
@@ -222,7 +236,7 @@ export class XiaomiHomeClipCaptureWorker {
       });
       let output = "";
       child.stdout.on("data", chunk => { if (output.length < 128) output += String(chunk); });
-      const timer = setTimeout(() => child.kill(), 10000);
+      const timer = setTimeout(() => child.kill(), getTimeoutMs("deadline.integrations.xiaomiHome.clipCapture.probeDuration", 10000));
       child.once("error", () => { clearTimeout(timer); resolve(undefined); });
       child.once("exit", code => {
         clearTimeout(timer);

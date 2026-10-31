@@ -3,6 +3,43 @@ import test from "node:test";
 import { NapcatSupervisorService } from "./napcatSupervisorService.js";
 import { napcatGuardianDepsFor } from "../messageEndpoints/napcatGuardian.js";
 
+async function activateSupervisorPlugin(plugin: { activate(context: unknown): Promise<void> }, runtime: unknown, instanceId: string, previousRetirement = Promise.resolve()) {
+  const hooks: Array<{ publish(): void; rollback(): void; afterPublish?(event: { previousRetirement: Promise<void> }): Promise<void>; retire?(): Promise<void> }> = [];
+  const starters: Array<() => (() => Promise<void>) | Promise<() => Promise<void>>> = [];
+  await plugin.activate({ identity: { instanceId }, services: { require: () => runtime, provide: () => {} },
+    lifecycle: { fail: (error: unknown) => { throw error; } },
+    publication: { add: (hook: typeof hooks[number]) => hooks.push(hook) }, effects: { add: (start: typeof starters[number]) => starters.push(start) } });
+  const disposers = await Promise.all(starters.map(start => start()));
+  for (const hook of hooks) hook.publish();
+  const dispose = async () => { for (const hook of [...hooks].reverse()) await hook.retire?.(); for (const disposer of [...disposers].reverse()) await disposer(); };
+  try { for (const hook of hooks) await hook.afterPublish?.({ previousRetirement }); }
+  catch (error) { await dispose(); throw error; }
+  return dispose;
+}
+
+test("supervisor start requests cannot bypass a pending or failed previous retirement", async () => {
+  const plugin = await import(new URL("../../plugins/builtin/io.rabiroute.manager.napcat-supervisor/1.0.0/manager.mjs", import.meta.url).href);
+  const retiring = deferred<void>();
+  let logins = 0;
+  const runtime = {
+    NapcatSupervisorService, napcatGuardianDepsFor, managerReadOnly: false, managerShouldAutostart: true,
+    managerListenerReady: true, routeCatalogReady: true, activeNapcatControlContext: {},
+    startActiveNapcatSupervisor: () => {}, stopActiveNapcatSupervisor: async () => {},
+    autoLoginNapcatInstancesOnRabiStart: async () => { logins++; }
+  };
+  const activating = activateSupervisorPlugin(plugin, runtime, "failed-retirement", retiring.promise);
+  const rejected = assert.rejects(activating, /controlled old retirement failure/);
+  await new Promise(resolve => setImmediate(resolve));
+  runtime.startActiveNapcatSupervisor();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(logins, 0);
+  retiring.reject(new Error("controlled old retirement failure"));
+  await rejected;
+  runtime.startActiveNapcatSupervisor();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(logins, 0);
+});
+
 test("supervisor repeats completed health checks and stop cancels the shared wait", async () => {
   let checks = 0;
   let waiting: (() => void) | undefined;
@@ -35,12 +72,7 @@ test("startup plugin waits for bound Route readiness before consuming its one au
       await new Promise<void>(resolve => signal.addEventListener("abort", () => resolve(), { once: true }));
     }
   };
-  const starters: Array<() => Promise<() => Promise<void>>> = [];
-  await plugin.activate({ identity: { instanceId: "supervisor-test" },
-    services: { require: () => runtime, provide: () => {} },
-    contributions: { register: () => {} }, effects: { add: (start: typeof starters[number]) => { starters.push(start); } }
-  });
-  const dispose = await starters[0]!();
+  const dispose = await activateSupervisorPlugin(plugin, runtime, "supervisor-test");
   try {
     runtime.startActiveNapcatSupervisor();
     await new Promise(resolve => setImmediate(resolve));
@@ -71,10 +103,7 @@ test("startup plugin enters guardian even when startup login throws and never re
       await new Promise<void>(resolve => signal.addEventListener("abort", () => resolve(), { once: true }));
     }
   };
-  const starters: Array<() => Promise<() => Promise<void>>> = [];
-  await plugin.activate({ identity: { instanceId: "fixture" }, services: { require: () => runtime, provide: () => {} },
-    contributions: { register: () => {} }, effects: { add: (start: typeof starters[number]) => starters.push(start) } });
-  const dispose = await starters[0]!();
+  const dispose = await activateSupervisorPlugin(plugin, runtime, "fixture");
   try {
     await new Promise(resolve => setImmediate(resolve));
     assert.equal(configuredDelay, 30_000); assert.equal(logins, 1); assert.equal(guardians, 2);
@@ -112,12 +141,7 @@ test("startup plugin keeps supervising after the one-shot login pass", async () 
       return 1;
     }
   };
-  const starters: Array<() => Promise<() => Promise<void>>> = [];
-  await plugin.activate({ identity: { instanceId: "supervisor-guardian-test" },
-    services: { require: () => runtime, provide: () => {} },
-    contributions: { register: () => {} }, effects: { add: (start: typeof starters[number]) => { starters.push(start); } }
-  });
-  const dispose = await starters[0]!();
+  const dispose = await activateSupervisorPlugin(plugin, runtime, "supervisor-guardian-test");
   try {
     runtime.startActiveNapcatSupervisor();
     await new Promise(resolve => setImmediate(resolve));

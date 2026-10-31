@@ -1,3 +1,4 @@
+import { getTimeoutMs } from "../../shared/timeoutSettings.js";
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -207,7 +208,7 @@ function heartbeatFailure(lockPath: string, failure: number, phase: string): Err
   });
 }
 
-function waitForHeartbeatTransition(control: Int32Array, expected: number, timeoutMs = SYNC_HEARTBEAT_WAIT_TIMEOUT_MS): number {
+function waitForHeartbeatTransition(control: Int32Array, expected: number, timeoutMs = getTimeoutMs("backend.plan-storage.internal.lease.SYNC_HEARTBEAT_WAIT_TIMEOUT_MS", SYNC_HEARTBEAT_WAIT_TIMEOUT_MS)): number {
   const deadline = Date.now() + timeoutMs;
   let status = Atomics.load(control, SYNC_HEARTBEAT_STATUS_INDEX);
   while (status === expected) {
@@ -742,7 +743,7 @@ export function withPlanStorageLease<T>(
   reclaimOrphanCandidatesSync(lockPath);
   const candidatePath = path.join(path.dirname(lockPath), `.${path.basename(lockPath)}.${randomUUID()}.candidate`);
   writeRecordSync(candidatePath, recordFor("plan_storage_lease", owner, PLAN_LOCK_EXPIRY_MS));
-  const deadline = Date.now() + PLAN_LOCK_TIMEOUT_MS;
+  const deadline = Date.now() + getTimeoutMs("backend.plan-storage.internal.lease.PLAN_LOCK_TIMEOUT_MS", PLAN_LOCK_TIMEOUT_MS);
   let acquired = false;
   try {
     while (true) {
@@ -831,7 +832,7 @@ export async function withPlanStorageLeaseAsync<T>(
   await reclaimOrphanCandidates(lockPath);
   const candidatePath = path.join(path.dirname(lockPath), `.${path.basename(lockPath)}.${randomUUID()}.candidate`);
   await writeRecord(candidatePath, recordFor("plan_storage_lease", owner, PLAN_LOCK_EXPIRY_MS));
-  const deadline = Date.now() + PLAN_LOCK_TIMEOUT_MS;
+  const deadline = Date.now() + getTimeoutMs("backend.plan-storage.internal.lease.PLAN_LOCK_TIMEOUT_MS", PLAN_LOCK_TIMEOUT_MS);
   let acquired = false;
   try {
     while (true) {

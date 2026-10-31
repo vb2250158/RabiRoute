@@ -180,6 +180,12 @@ export class SourcePatchWatcher {
   }
 
   private async applyGroup(definitions: readonly SourcePatchDefinition[], sequence: number): Promise<void> {
+      // Discovery can deliver another save while dependency inspection is running.
+      // Requeue before starting expensive compiler workers for an obsolete pass.
+      if (sequence !== this.editSequence) {
+        for (const entry of definitions) this.pending.add(entry.id);
+        return;
+      }
       const snapshots = await Promise.all(definitions.map(async definition => {
         const sourcePath = path.resolve(this.root, definition.source);
         return { definition, sourcePath, sourceContent: await fsp.readFile(sourcePath, "utf8") };
@@ -191,6 +197,7 @@ export class SourcePatchWatcher {
         const resourceStore = new HotPatchResourceStore(Object.fromEntries((definition.resources ?? []).map(name => [name, resources.data[name]!])));
         const candidate = await this.buildCandidate({ sourcePath, sourceContent, outputDirectory: this.outputDirectory, resourceData: resourceStore.data });
         if (this.closed) return;
+        await this.service.recordLocalCandidate(candidate.sha256, this.root);
         const module = this.service.status().modules.find(entry => entry.id === definition.id);
         const contract = { ...(definition.contract ?? {}), resources: resourceStore.hashes };
         if (!module) {

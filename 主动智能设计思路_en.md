@@ -10,52 +10,54 @@ English | <a href="./%E4%B8%BB%E5%8A%A8%E6%99%BA%E8%83%BD%E8%AE%BE%E8%AE%A1%E6%8
 
 ---
 
+> Document status: This document defines product goals and proposed design. Implementation status is established through release records and real-scenario evidence for continuous perception, cross-device understanding, proactive execution, and learning from corrections.
+
 ## 1. Core Objective
 
-The goal is not to build a traditional voice assistant or a chatbot that only waits for questions.
+Design an AI individual with a distinct personality, ongoing experiences and agency, sharing the user’s work and everyday life.
 
-It is to design a **personal AI agent that provides continuous companionship, continuous perception, proactive understanding, and proactive action**.
+This individual understands, expresses itself, relates to others, makes judgments, and takes responsibility for its actions as a person.
 
 Its core mission is:
 
 > **Try every possible way to understand what the user currently wants to do, what they are doing, and what they may need, then help them at the right time and in the right way.**
 
-This AI should feel like an intelligent companion that stays with the user, not merely a tool.
+The AI develops its own perspective while sharing everyday life and work with the user: it understands an unfinished sentence, seeks information, forms a judgment, acts, and follows through. Existing context and remembered decisions support continuity across interactions.
 
-The user should not need to issue an explicit command every time or say a wake word. While enabled, the AI continuously perceives environment, behavior, state, and task context through glasses, watch, phone, computer, and future devices.
+Its experiences accumulate through conversations, perception, choices, actions, tool results, and shared events. Memory preserves what happened, how it responded, and what changed afterward. These experiences shape its interests, opinions, relationships, and next actions.
 
-Its intervention style follows the user's current state, scenario, the Agent persona, and explicit configuration.
+Enabled glasses, watch, phone, computer, and other devices provide environmental and task context. The individual initiates participation from that context, its motivations, and the relationship. Expression and execution adapt to the moment.
 
 The intended long-term outcome is:
 
-> **Even when the user says nothing, the AI gradually understands what they are thinking; before the user states a need explicitly, the AI has already begun judging what they may require.**
+> **Through shared experience, the individual gradually understands emerging intentions, discovers opportunities, and initiates preparation and action.**
 
 ---
 
 ## 2. Design Positioning
 
-### 2.1 Not a “Question-and-Answer Assistant”
+### 2.1 Continuous Participation in Work and Everyday Life
 
-A traditional AI assistant works like this:
+Active intelligence develops a continuous work cycle through shared experience:
 
-> User asks a question → AI answers
-> User issues a command → AI executes
+> Perceive events → understand context → form an intent hypothesis → seek relevant information.
+> Judge and communicate → act → verify results → follow up and learn.
 
-The problem is that the AI is always passive.
-The user must first realize that they need help, formulate the need in language, and then tell the AI.
+User expression, environmental change, tool results, and the individual’s interests each create opportunities to participate.
+Connect goals, preferences, shared experiences, and current state, taking responsibility for investigation, organization, execution, and follow-through.
 
-An active-intelligence system should reverse that flow:
+This cycle supports task collaboration and everyday relationships:
 
-> AI observes continuously → understands context → infers user intent → judges whether help is needed → proactively offers support
+> Understand what the user is experiencing → choose a fitting way to participate → create practical help or a shared experience.
 
-In other words, the AI should not merely answer questions. It should participate in the user's work and life.
+The individual participates through understanding, expression, initiative, and responsibility.
 
 ---
 
-### 2.2 Not AI Bound to One Device
+### 2.2 One Individual Across Multiple Devices
 
-Smart glasses, smartwatches, phones, and computers are not the AI itself.
-They are different perception and interaction endpoints for the AI.
+Smart glasses, smartwatches, phones, and computers extend the AI’s perception and interaction.
+These endpoints share the individual’s continuing personality, experiences, tasks, and understanding of the user.
 
 The overall system should be designed around this model:
 
@@ -75,7 +77,7 @@ In this model:
 
 Every module in the system should be designed around one core principle:
 
-> **Proactively understand the user instead of waiting for commands.**
+> **Proactively understand the user and participate in shared work and life.**
 
 This can be divided into five principles.
 
@@ -92,31 +94,39 @@ The AI should continuously acquire the user's current context, including:
 * Whether the user currently appears busy, anxious, focused, hesitant, or interrupted.
 * The user's recent goals, plans, tasks, and unfinished work.
 
-The AI does not need to retain all raw data, but it must continuously extract useful context from that data.
+The AI continuously extracts useful context, retaining raw data according to the user’s storage settings.
 
 ---
 
 ### 3.2 User State, Persona, and Configuration Jointly Determine Intervention
 
-Active intelligence should understand earlier, prepare earlier, and participate when it can help instead of waiting for the user to formulate a complete command.
+Active intelligence understands emerging intent, prepares relevant information, and initiates participation from context.
 
-Infrastructure must not hard-code one proactivity level.
+Infrastructure supports the proactivity expressed by each persona, situation, and user preference.
 
 Current state, scenario, Agent persona, preferences, interaction surfaces, and risk jointly determine whether the AI stays out, prepares, prompts, recommends, asks, or acts.
 
-Idempotency, deduplication, and event-driven processing prevent duplicate work. They must not be interpreted as a product rule that the AI should speak or participate as little as possible.
+One coherent individual understands, expresses itself, and acts. It may work quietly or share as it works, ask curious questions, joke, or express a view. Frequency, length, follow-up questions, and silence follow its personality, context, and user feedback.
+
+Persona shapes motivation: curiosity, humor, preferences, taste, a wish to express oneself, debate, shyness, pride, stubbornness, playful willfulness, and ways of relating and repairing friction. Each persona combines traits through its own design and interaction history. Everyday sharing, conversation, jokes, and shared experiences have value in themselves.
+
+Willfulness appears through expression, choices, and playful interaction. The individual may stand by a taste or view, explain disagreement, respect the user’s choices, and follow through on work it accepts. Feedback helps the relationship adapt in that persona’s own style.
+
+The current request, original task, and explicit settings define action scope. Existing authorization continues with the task. An unresolved choice about a new commitment, target, or expense is presented as a concrete question; independently executable work continues.
+
+Idempotency and deduplication give each event one recoverable processing identity. Event-driven execution resumes affected steps and continues independent work. Persona and context determine participation.
 
 ---
 
 ### 3.3 Intent First
 
-The AI's primary task is not recognizing spoken words. It is understanding user intent.
+The AI understands intent by connecting speech, perception, memory, and the current situation.
 
 For example, the user says:
 
-> “This doesn't seem quite right.”
+> “Here… take a look.”
 
-A traditional assistant may not know what to do.
+The AI begins by identifying the object and the user’s likely intention.
 Active intelligence should reason from context:
 
 * Is the user looking at code?
@@ -126,7 +136,7 @@ Active intelligence should reason from context:
 * Does “this” refer to on-screen content, a physical object, or something just heard?
 * Does the user want an explanation, inspection, correction, record, or nothing beyond thinking aloud?
 
-The AI should reason around what the user truly wants to accomplish rather than processing surface language alone.
+The AI reasons about the intended outcome and uses the sentence as part of the surrounding evidence.
 
 ---
 
@@ -134,22 +144,22 @@ The AI should reason around what the user truly wants to accomplish rather than 
 
 Information from any single device is incomplete.
 
-Glasses see the world in front of the user but may not know their physical state.
-A watch knows heart rate and activity state but does not know what the user is looking at.
-A phone knows apps, location, and notifications but not the first-person environment.
-A computer knows the user's work content but may not know their immediate emotional state or physical surroundings.
+Glasses provide first-person views of the world.
+A watch contributes heart rate and activity state.
+A phone contributes app activity, location, and notifications.
+A computer contributes work content; other devices and conversation contribute emotional and environmental context.
 
 The system must therefore fuse information from all smart devices into one unified context:
 
 > **Current user state = time + environment + activity + emotion + body + attention + social context + task + devices + history**
 
-Each dimension should retain a value, confidence, evidence, and validity window. Proactivity comes from the unified state and scenario, not one sensor or one utterance.
+Each dimension retains a value, confidence, evidence, and validity window. Unified state and scenario guide proactivity.
 
 ---
 
 ### 3.5 Local Agent First
 
-Because the user wants access to a local Agent anytime and anywhere, the AI should not be merely a chat interface. It should be able to enter the user's real workflows.
+The AI enters real workflows through a local Agent accessible across devices and locations.
 
 The local Agent should handle:
 
@@ -170,7 +180,7 @@ The AI should understand, plan, and decide; the local Agent should execute and t
 
 ## 4. Overall System Architecture
 
-The proposed system can be divided into nine layers.
+The proposed system has eight layers.
 
 ```text
 Smart-device perception layer
@@ -247,13 +257,13 @@ The phone app would primarily provide:
 * Notification controls.
 * User-preference settings.
 
-Because the glasses UI is not well suited to configuration, the phone app should be the primary configuration entry point.
+The phone app provides the primary configuration surface, with room for detailed controls and explanations.
 
-Test interfaces should not appear in the main UI. They should be placed in a separate path such as:
+Place test interfaces in a dedicated navigation path:
 
 > Settings → Advanced Settings → Developer Mode → Test Interfaces
 
-This preserves debugging capability without degrading ordinary use.
+This gives developers accessible diagnostics and users a focused everyday interface.
 
 ---
 
@@ -287,9 +297,9 @@ The local Agent could then inspect automatically:
 
 ## 6. Event-System Design
 
-The core of active intelligence is not a conversation system. It is an event system.
+An event system connects perception, conversation, reasoning, and action.
 
-The AI should not activate only when the user speaks. It should evaluate many kinds of events.
+The AI evaluates speech, device, task, relationship, and timing events.
 
 Events can be divided into the following categories.
 
@@ -311,7 +321,7 @@ The user says:
 * “How do I do this?”
 * “Record this for me.”
 * “Remind me later.”
-* “This is wrong.”
+* “Here… take a look.”
 * “Am I forgetting something?”
 * “Who was this person again?”
 * “There is a problem with this code.”
@@ -319,7 +329,7 @@ The user says:
 
 #### How the AI Should Think
 
-The AI should not process the sentence in isolation. It should immediately combine it with context:
+The AI combines the sentence with surrounding context:
 
 * Where is the user now?
 * What is the user looking at?
@@ -357,7 +367,7 @@ The user stares for an extended period at text, code, a product, a road sign, a 
 
 The AI should judge:
 
-* Does the user not understand it?
+* Which part could use explanation?
 * Is the user comparing options?
 * Is the user searching for key information?
 * Has the user encountered a problem?
@@ -370,11 +380,11 @@ The AI should judge:
 At a low proactivity level:
 
 * Record the context silently.
-* Wait until the user speaks before helping.
+* Investigate relevant questions and prepare or complete work within the existing scope in the background, presenting results when useful.
 
 At a medium proactivity level:
 
-* Show a subtle prompt on the phone or glasses, such as: “Would you like me to summarize this?”
+* Offer a useful finding on the phone or glasses, such as: “The main change concerns renewal timing; I have listed the differences.”
 
 At a high proactivity level:
 
@@ -423,7 +433,7 @@ The AI should judge:
 * Record important information.
 * Remind the user: “They just said that the proposal is due by Friday.”
 * Alert immediately in a dangerous situation.
-* Remain minimally disruptive in a social setting and summarize afterward.
+* Choose immediate prompting, silent recording, or a later summary from privacy settings, user state, and persona.
 
 ---
 
@@ -460,9 +470,9 @@ The AI should judge:
 * Reduce notification frequency automatically.
 * Postpone non-urgent reminders.
 * Suggest water, rest, or sleep.
-* Retain only voice feedback during exercise.
-* Prohibit complex interaction while driving.
-* Reduce information volume when the user is anxious and provide only the most important advice.
+* Use voice feedback during exercise, adapting to available devices and preferences.
+* Use hands-free interaction while driving and schedule detailed screen work for a suitable moment.
+* Adjust information density when the user is anxious and lead with useful support.
 * Summarize the day's schedule after the user wakes.
 
 ---
@@ -515,7 +525,7 @@ The AI should judge:
 * The user's day begins.
 * The user's day ends.
 * An important task has gone unaddressed for a long time.
-* The user said they would do something later but still has not done it.
+* A previously mentioned action remains pending.
 * A habitual time arrives.
 
 #### How the AI Should Think
@@ -585,8 +595,8 @@ The AI should judge:
 
 For example, when the user pauses for a long time while writing a proposal, the AI could infer:
 
-> The user may understand the content but be struggling to organize the structure.
-> The AI should proactively suggest a document structure instead of simply asking, “How can I help?”
+> The user may be organizing the structure of the content.
+> The AI continues its judgment using the editing history and surrounding context.
 
 ---
 
@@ -617,7 +627,7 @@ The AI should judge:
 * Should it warn about anything?
 * Does the user need help choosing?
 * Should an experience or preference be remembered?
-* Should the AI avoid interruption?
+* Which timing and interaction surface fit this moment?
 
 #### What the AI Could Do
 
@@ -641,7 +651,7 @@ The AI observes that:
 * The user sighs repeatedly.
 * The user remains silent for a long time.
 * The user rereads the same content repeatedly.
-* The user says “This is so frustrating,” “Forget it,” or “I don't understand.”
+* The user says “This is frustrating,” “Let’s change direction,” or “Help me understand.”
 * The user switches tasks frequently.
 * The user is clearly procrastinating.
 * The user's work efficiency declines.
@@ -672,9 +682,9 @@ For example, the user says:
 
 > “My thoughts are a little scattered right now.”
 
-The AI should not continue with a long answer. It should say:
+The AI can offer a manageable starting point:
 
-> “You don't need to solve everything at once. Let's do only the first step: list the three things you're most worried about right now.”
+> “Let’s start with the three things weighing on your mind and pick one together.”
 
 ---
 
@@ -718,7 +728,7 @@ The AI should judge:
 
 Scenario recognition is the core middle layer of active intelligence.
 
-The system must not send a loose event pile to a model and ask what the user is doing. It should maintain separate, explainable views of the individual user, current state, and scenario.
+Maintain separate, explainable views of the individual user, current state, and scenario, each derived from relevant events.
 
 ### 8.1 Five Different Concepts
 
@@ -730,11 +740,11 @@ The system must not send a loose event pile to a model and ask what the user is 
 | Scenario | What situation do those dimensions form? | In a meeting, commuting, focused coding, preparing to leave |
 | Intent | What may the user be trying to accomplish? | Capture a task, fix an error, reach a meeting, find an item |
 
-Observation events are evidence. The user model, current state, and scenario are revisable derived facts on different time scales. The Agent interprets intent from them, its own persona, and current work without rewriting evidence.
+Observation events are evidence. The user model, current state, and scenario are revisable derived facts on different time scales. The Agent interprets intent from them, its own personality, and current work while preserving original evidence.
 
 ### 8.2 Current User-State Vector
 
-The system maintains `CurrentUserState`. It is not a prose summary. It is a set of stable named dimensions, and each dimension uses an appropriate type rather than forcing everything into a `0–1` score.
+Maintain `CurrentUserState` as stable named dimensions. Each dimension uses a suitable type, including continuous scores where appropriate.
 
 | Dimension | Typical variables | Sources |
 | --- | --- | --- |
@@ -744,20 +754,20 @@ The system maintains `CurrentUserState`. It is not a prose summary. It is a set 
 | Emotion | Valence, arousal, stress, irritation, confidence | Speech, wording, expression, behavior, user confirmation |
 | Physical | Heart-rate delta from baseline, fatigue, sleep, exercise intensity, posture | Watch, phone, glasses |
 | Attention and cognition | Focus, cognitive load, confusion, hesitation, interruption level | Computer activity, gaze, speech, behavior rhythm |
-| Social | Alone or not, participant count, speaker relationships, whether someone addresses the user | Voiceprint, microphone, glasses, calendar |
+| Social | Solitude or company, participant count, speaker relationships, whether someone addresses the user | Voiceprint, microphone, glasses, calendar |
 | Task | Project, stage, progress, blocker, urgency, commitment | Local Agent, files, plans, conversation |
 | Interaction conditions | Interruptibility, screen availability, audio availability, hands busy, available devices | Phone, glasses, computer, headset |
 | Device and network | Connectivity, battery, sensor availability, data freshness | Device runtime state |
 | Safety and permissions | Environmental risk, privacy mode, allowed collection and action scope | Configuration, devices, policy |
 
-Mood should not be one happy/unhappy label. At minimum, use multiple axes:
+Represent mood through multiple axes:
 
 - `valence`: negative to positive affect, from `-1..1`.
 - `arousal`: calm to activated, from `0..1`.
 - `stress`: pressure or tension, from `0..1`.
 - `confidence`: confidence in the inferred values.
 
-Emotion inference is not a medical diagnosis. Explicit user statements or corrections override weak inference and become calibration evidence.
+Emotion inference expresses a revisable interpretation with confidence and evidence. Explicit user statements and corrections provide calibration and take precedence over weak inference.
 
 ### 8.3 Common Envelope for Every Dimension
 
@@ -776,9 +786,9 @@ Each state value should contain at least:
 }
 ```
 
-`value` stores an enum, boolean, or structured fact. `score` is optional and belongs only on dimensions that support continuous quantification. Deterministic facts such as time do not need fake inference scores.
+`value` stores an enum, boolean, or structured fact. Continuous dimensions may include an optional `score`. Deterministic facts such as time retain their measured values.
 
-`confidence` describes reliability. `expiresAt` describes staleness. An offline device means new evidence is missing; it does not automatically prove the opposite state.
+`confidence` describes reliability and `expiresAt` describes validity. When a device goes offline, preserve the last value as historical evidence. Its current validity follows `expiresAt`; mark expired values `unknown` and update them when new observations arrive.
 
 ### 8.4 Current-State Snapshot
 
@@ -807,7 +817,7 @@ The snapshot is a rebuildable current read model derived from the event ledger. 
 
 ### 8.5 Scenario Hierarchy
 
-The user can occupy several scenarios at once. The system should not retain only one mutually exclusive label.
+The snapshot represents concurrent scenarios through primary and secondary labels.
 
 | Level | Purpose | Examples |
 | --- | --- | --- |
@@ -839,7 +849,7 @@ The snapshot has one `primaryScenario` and may contain several `secondaryScenari
 }
 ```
 
-Scenario types come from a centrally maintained configuration or registry. Display names may be localized, but protocol keys must remain stable rather than scattering strings such as `"meeting"` and `"coding"` across code.
+Maintain scenario types in a central configuration or registry. Keep protocol keys stable across code while localizing display names.
 
 ### 8.7 Scenario Lifecycle
 
@@ -851,29 +861,29 @@ unknown
   -> ended
 ```
 
-- `candidate`: evidence appeared but is not yet stable.
+- `candidate`: initial evidence is accumulating toward a stable interpretation.
 - `active`: evidence crossed the threshold and persisted long enough.
-- `changing`: a transition is visible while the previous scenario is not fully over.
+- `changing`: a transition is visible alongside the previous scenario.
 - `ended`: timeout, explicit ending, or stable replacement ended the scenario.
 
-Use hysteresis, minimum duration, and evidence freshness. GPS noise, a brief application switch, or one utterance must not make the scenario flap every few seconds.
+Use hysteresis, minimum duration, and evidence freshness to maintain continuity across GPS variation, brief application switches, and individual utterances.
 
 ### 8.8 Multi-Source Evidence Fusion
 
 Scenario recognition should account for:
 
 - Reliability: user confirmation and hard device state usually outweigh semantic guesses.
-- Freshness: a screen focus from seconds ago and a location from an hour ago are not equal.
-- Independence: ASR, emotion, and keywords derived from one audio clip are not three independent sources.
-- Conflict: a calendar meeting plus high-speed movement should retain alternatives rather than force certainty.
-- Missing data: offline devices and disabled permissions are not negative evidence.
+- Freshness: weight evidence by age and relevance, such as recent screen focus and older location data.
+- Independence: group ASR, emotion, and keywords from one audio clip under their common source.
+- Conflict: retain alternative explanations for a calendar meeting combined with high-speed movement.
+- Missing data: represent offline devices and disabled collection as gaps in current evidence.
 - Personalization: the same signals may mean different things for different users.
 
-Rules, thresholds, durations, expiry windows, and mappings should be configurable and explainable. Models may propose candidates but must not bypass the state owner and write final scenarios directly.
+Make rules, thresholds, durations, expiry windows, and mappings configurable and explainable. Models propose candidates; the state owner derives and publishes current scenarios.
 
 ### 8.9 Scenario Events
 
-The scenario layer emits stable events only:
+The scenario layer emits these stable events:
 
 ```text
 user_state.changed
@@ -886,20 +896,20 @@ scenario.ambiguous
 scenario.corrected
 ```
 
-The proactive-decision layer combines these events with persona, goals, memory, and Route context. UI only renders state, evidence, and correction controls; it does not own scenario rules.
+The proactive-decision layer combines these events with persona, goals, memory, and Route context. The scenario owner maintains rules; UI renders state, evidence, and correction controls.
 
-Agent persona provides a durable proactivity tendency, such as cautious, direct, companion-like, or action-oriented. User state provides current interruptibility, stress, focus, and interaction conditions. Both are required.
+Agent personality supplies enduring motives, interests, preferences, and ways of relating. User state supplies emotion, attention, and interaction conditions. Together they produce distinct behavior for each individual and situation.
 
 ### 8.10 User Correction and Learning
 
 The user should be able to say or select:
 
-- “I am not in a meeting.”
-- “I am drafting a proposal, not researching.”
-- “That voice is my colleague, not me.”
+- “I am taking a break.”
+- “I am drafting a proposal.”
+- “That voice belongs to my colleague.”
 - “In this situation, remind me directly next time.”
 
-A correction appends an auditable event instead of overwriting evidence. Current state and scenario are derived again. Long-term memory stores only policy-approved preferences and stable patterns.
+A correction immediately changes the current judgment and next action. Under the user’s memory settings, retain its context, source, and scope, marking superseded conclusions as historical. Temporary preferences apply to their stated occasion. Long-term memory reduces repeated explanations and stays inspectable, editable, and removable. Runtime memory updates occur through the memory interfaces.
 
 ### 8.11 Scenario Examples
 
@@ -908,12 +918,12 @@ A correction appends an auditable event instead of overwriting evidence. Current
 | Workday, calendar meeting, multiple voiceprints, stationary computer | In a meeting | Extract tasks; detect whether someone asked the user |
 | IDE foreground, error window, repeated edits, user says “wrong” | Blocked while coding | Ask the local Agent to inspect code |
 | GPS movement, headset connected, screen unavailable, schedule approaching | Commuting under time pressure | Switch interaction surface; help with route or timing |
-| Evening, home, near-baseline heart rate, no active task | Resting | Organize context or continue companionship per persona |
-| Multiple speakers, unknown voiceprints, higher privacy level | Social or sensitive conversation | Limit retention; extract only allowed events |
+| Evening, home, near-baseline heart rate, work paused | Resting | Organize context or continue companionship per persona |
+| Multiple speakers, unknown voiceprints, higher privacy level | Social or sensitive conversation | Apply user retention settings and extract relevant events |
 
 ### 8.12 Individual User Model and Psychological Foundations
 
-Different users can want completely different forms of proactive help. The system should gradually learn personality tendencies and contextual preferences without turning one action, mood, or score into a permanent identity claim.
+Gradually learn personality tendencies and contextual preferences through repeated experiences, keeping hypotheses revisable as new evidence arrives.
 
 #### 8.12.1 Four User-Model Layers
 
@@ -924,11 +934,11 @@ Different users can want completely different forms of proactive help. The syste
 | Current psychological state | Seconds to hours | Valence, arousal, stress, fatigue, cognitive load, frustration, motivation | Determines current capacity for intervention and needed support |
 | Psychological situation characteristics | Per scenario | Duty, intellect, adversity, positivity, negativity, deception risk, sociality | Explains why identical physical settings may need different strategies |
 
-These layers must not collapse into one personality score. A stable tendency is not a current state, and a current state is not a permanent trait. One physical scenario can also carry different psychological meaning.
+Maintain the four layers with their own time scales and evidence. Stable tendencies, current states, and psychological situation meanings each contribute a distinct view.
 
 #### 8.12.2 Stable Traits Remain Dimensional Hypotheses
 
-Stable traits may use the Five-Factor Model, but only as continuous dimensions rather than fixed user types:
+Stable traits may use continuous Five-Factor dimensions:
 
 - `openness`: tendency to accept novelty, change, and exploration.
 - `conscientiousness`: tendency to value planning, order, commitments, and completion.
@@ -936,7 +946,7 @@ Stable traits may use the Five-Factor Model, but only as continuous dimensions r
 - `agreeableness`: tendency toward cooperation, consideration, and relationship harmony.
 - `emotionalStability`: tendency to remain stable under pressure and negative stimuli.
 
-Every dimension carries confidence, evidence window, applicable contexts, confirmation, and correction time. Traits are low-weight priors. They cannot independently authorize interruption, action, or a judgment about ability.
+Every dimension carries confidence, evidence window, applicable contexts, confirmation, and correction time. Traits supply low-weight priors; current context, explicit preferences, and task decisions determine actions.
 
 #### 8.12.3 Preferences Must Be Learned Per Context
 
@@ -947,9 +957,9 @@ The system should first learn preferences that directly change experience:
 - Conclusion first, question first, explanation depth, and information density.
 - Different initiative levels for work, meetings, commuting, rest, and social settings.
 - Which low-risk actions may run automatically and which still require a question.
-- Patterns of rejection, deferral, ignoring, adoption, and requests for follow-up.
+- Patterns of accepting a suggestion, closing the current suggestion, deferring, passing over it, and requesting follow-up.
 
-Evidence priority is: current explicit instruction, confirmed setting, repeated correction, repeated cross-time behavior, then one weak inference. Preferences need scope and expiry. “Not now” must not silently become global silence.
+Evidence priority is: current instruction, confirmed setting, repeated correction, repeated cross-time behavior, and single-event inference. Record scope and expiry so a temporary request applies to its stated context.
 
 #### 8.12.4 Current Psychological State and Cognitive Load
 
@@ -959,15 +969,15 @@ Current psychological state can combine affect dimensions, task load, and motiva
 - Task load: mental, physical, and temporal demand, effort, frustration, and self-rated performance.
 - Motivation needs: whether autonomy, competence, and relatedness currently feel supported.
 
-These variables select a support style. High load can reduce information density; low competence can trigger a concrete next step. The system must not manipulate the user, create dependence, or bypass choice “for their own good.”
+These variables select a support style. High load can call for lighter information density; a need for competence can call for a concrete next step. Support autonomy, capability, connection, and the user’s own choices.
 
 #### 8.12.5 Psychological Situation Characteristics
 
-“In a meeting” describes an activity, not enough to choose an intervention. The meeting may be routine synchronization, difficult decision-making, conflict, celebration, performance review, or a deception-sensitive conversation.
+Interpret a meeting through its purpose: routine synchronization, difficult decisions, conflict, celebration, performance review, or a situation requiring careful factual verification.
 
-DIAMONDS can inspire dimensions such as duty, intellect, adversity, positivity, negativity, deception risk, and sociality. Sensitive intimacy or relationship inference stays disabled by default and outside the MVP.
+DIAMONDS can inspire duty, intellect, adversity, positivity, negativity, deception risk, and sociality dimensions. Use them to interpret the current situation and relationship, with collection and retention following user settings.
 
-Situation characteristics carry confidence and evidence. They help the Agent understand what a situation means without copying a research scale directly into product labels.
+Situation characteristics carry confidence and evidence. Translate research concepts into understandable product descriptions.
 
 #### 8.12.6 Learning and Correction Lifecycle
 
@@ -983,11 +993,11 @@ unknown
 
 Evidence should accumulate across time and contexts through experience sampling. One rejection may mean the user is busy now. Repeated rejection in the same context can become a contextual preference hypothesis.
 
-Corrections append events and derive the model again. Old evidence remains auditable, but a user-corrected conclusion must not continue to influence decisions as an active preference.
+Corrections append events and derive the model again. Historical evidence remains auditable while the corrected conclusion becomes the active preference.
 
 #### 8.12.7 Example Data Structure
 
-`UserIndividualModel` belongs to the user-profile domain. It may travel with the target persona directory today and needs no manual UID. A controlled `userProfileRef` should appear only if several Agent personas later share one profile.
+`UserIndividualModel` belongs to the user-profile domain and is located through the persona directory. When several personas share one profile, introduce a `userProfileRef` through the profile owner.
 
 ```json
 {
@@ -1015,34 +1025,34 @@ Corrections append events and derive the model again. Old evidence remains audit
 }
 ```
 
-Traits and learned preferences are profile facts. Current psychological state and situation characteristics stay owned by the rebuildable context layer. The profile stores references, not a stale second copy of current state.
+Traits and learned preferences are profile facts. The rebuildable context layer owns current psychological state and situation characteristics; the profile references their current snapshots.
 
 #### 8.12.8 Personalization in the Same Scenario
 
 | User evidence | Reasonable result in the same meeting |
 | --- | --- |
 | User confirms “alert me immediately when a task is assigned” and prefers short text | Show one immediate glasses task card, then add detail after the meeting |
-| User confirms “do not interrupt meetings; summarize afterward” | Capture tasks in the background and summarize once the meeting ends |
+| User confirms “summarize meetings afterward” | Capture tasks in the background and summarize once the meeting ends |
 | Preference is unknown, load is high, and inference is uncertain | Prepare silently, then ask once at a natural pause or after the meeting |
 
-The system must not talk more merely because it inferred extraversion or take over tasks because it inferred conscientiousness. Traits generate candidate strategies; explicit preference and current state select the action.
+Traits generate candidate strategies. Explicit preferences and current state select participation and action, supported by the individual’s personality.
 
 #### 8.12.9 User Control and Psychological Safety
 
-Users must be able to inspect what the system thinks they prefer and why, then edit, correct, delete, pause learning, or export it. Psychological data stays local by default and never enters public logs, examples, or Relay storage.
+Users can inspect interpretations and evidence, then edit, correct, delete, pause learning, or export them. Psychological data remains in the local persona profile by default; public diagnostic and example material uses de-identified summaries.
 
-The system must not diagnose clinical conditions from passive signals, present emotion inference as certainty, or optimize for interaction time, compliance, or emotional dependence.
+Describe psychological interpretations with their evidence, confidence, and scope. Evaluate personalization by user understanding, autonomy, wellbeing, and relationship quality.
 
 #### 8.12.10 Psychology Sources and Product-Use Limits
 
-- [Five-Factor Model review](https://pmc.ncbi.nlm.nih.gov/articles/PMC6732674/): supports continuous trait dimensions and narrower facets, not classification after one observation.
+- [Five-Factor Model review](https://pmc.ncbi.nlm.nih.gov/articles/PMC6732674/): supports continuous dimensions and narrower facets grounded in repeated observation.
 - [Big Five, everyday contexts, and affect](https://pmc.ncbi.nlm.nih.gov/articles/PMC6168084/): supports observing traits, activities, social context, and momentary affect together through experience sampling.
-- [Circumplex model of affect](https://pmc.ncbi.nlm.nih.gov/articles/PMC2367156/): supports at least valence and arousal rather than one good/bad mood label.
-- [Self-Determination Theory](https://selfdeterminationtheory.org/theory/): supports autonomy, competence, and relatedness instead of controlling or manipulative intervention.
+- [Circumplex model of affect](https://pmc.ncbi.nlm.nih.gov/articles/PMC2367156/): supports multiple mood axes, including valence and arousal.
+- [Self-Determination Theory](https://selfdeterminationtheory.org/theory/): supports autonomy, competence, and relatedness in helpful interaction.
 - [NASA Task Load Index](https://www.nasa.gov/human-systems-integration-division/nasa-task-load-index-tlx/): supplies mental, physical, temporal, performance, effort, and frustration dimensions.
 - [Situational Eight DIAMONDS](https://pubmed.ncbi.nlm.nih.gov/25133715/): supports modeling psychological situation meaning beyond location or activity labels.
 
-These theories shape explainable variables and calibration. They do not authorize diagnosis, hiring decisions, credit scoring, or sensitive personality profiling without user permission.
+Use these theories to define explainable variables and calibration. Apply interpretations within their evidence scope and the user’s chosen context.
 
 ### 8.13 Validation Metrics
 
@@ -1055,13 +1065,13 @@ Scenario recognition should measure:
 - User correction rate.
 - Recovery after disconnects, restart, and replay.
 - Whether scenario recognition improves the value of proactive help.
-- Attribution in multi-party conversation: whether the system distinguishes speakers, addressees, reply chains, and business relationships instead of treating a platform owner, administrator, or display name as a business identity.
-- Project boundaries: whether it identifies the project under discussion and prevents discussion, facts, or memory for another project from being written into the project currently owned by the Agent.
-- Conversational value: whether proactive participation adds understanding, connection, or advice instead of translating every conversation into task state.
+- Attribution: distinguish speakers, addressees, reply chains, platform roles, and business relationships through their respective evidence.
+- Project attribution: identify the project under discussion and write facts, plans, and memory to its corresponding owner.
+- Conversational value: assess understanding, connection, shared interests, and relevant advice.
 
 ### 8.14 Context Integrity in Multi-Party Conversation
 
-The hard part of a group conversation is not only whether somebody mentioned the Agent. One group can contain several projects, spontaneous ideas, personal conversation, and active delivery work at once. One person can also have completely different roles in different projects. If the system flattens every new message into input for the current workspace, it mistakes being able to join a conversation for needing to take ownership of work.
+A group can contain several projects, spontaneous ideas, personal conversation, and delivery work. Each person can hold different roles across projects. Identify topic, relationship, and responsibility for each exchange, then choose how to participate.
 
 Active intelligence should first derive a revisable conversation-context card, then decide whether to speak, prepare help, or create any project-side effect:
 
@@ -1073,24 +1083,24 @@ Active intelligence should first derive a revisable conversation-context card, t
 | Agent position | Is the Agent observing, an informed peer who may offer an opinion, a requested helper, a project owner, or an executor? |
 | Evidence boundary | What comes from text, reply chain, attachments, or historical interaction? Which attachments are unread and which conclusions remain inference? |
 
-The current workspace, latest plan, group name, and keyword similarity are weak candidates only. They cannot independently establish project ownership. Unknown or conflicted project attribution must remain unknown or candidate rather than being forced into the current project to keep a workflow moving.
+Use workspace, recent plans, group name, and keyword similarity as clues. Resolve ownership through contextual evidence; preserve ambiguous attribution as a candidate and continue independent work.
 
 #### 8.14.1 Participation, Assistance, and Ownership Are Independent Choices
 
-The system should distinguish at least four action levels instead of following one path where speaking always creates a plan:
+The system distinguishes four complementary action levels:
 
-| Level | Meaning | Cross-project allowed? | Changes project control plane? |
+| Level | Meaning | Cross-project allowed? | Record updates and outcomes |
 | --- | --- | --- | --- |
-| Understand | Recover speaker, project, reply chain, intent, and evidence | Yes | No |
-| Participate | Answer an open question, add a perspective, connect disagreement, or identify an overlooked risk | Yes | No |
-| Assist | The person explicitly asks for research, analysis, organization, or a proposal | Depends on scope and permission | Only when clearly needed |
-| Own | Maintain plans, tasks, memory, external coordination, and delivery for a project the Agent owns | No, unless responsibility is explicitly expanded | Yes |
+| Understand | Recover speaker, project, reply chain, intent, and evidence | Yes | Update situation understanding; preserve project records |
+| Participate | Answer a question, add a perspective, connect disagreement, or identify a relevant risk | Yes | Contribute to the conversation; preserve project records |
+| Assist | Proactively research, analyze, organize, prepare proposals, or advance accepted work based on the goal and context | Use relevant available material across projects | According to the current goal and responsibility |
+| Own | Maintain plans, tasks, memory, coordination, and delivery for an assigned project | Within assigned project responsibilities | Yes |
 
-An Agent can therefore provide a high-quality suggestion in another project's creative discussion without registering that discussion as its own project. It can also understand a conversation silently without treating it as a message that requires a reply. Project ownership determines whether the Agent may manage work; it does not determine whether the Agent may participate naturally.
+An Agent can contribute to another project’s discussion while preserving project attribution. It can understand quietly or join naturally. Project responsibility determines record ownership; personality and conversational context shape participation.
 
 #### 8.14.2 Structured Situation Record
 
-An implementation can use a rebuildable read model such as the following. It is shared input to routing and persona reasoning, not a second project source of truth:
+Use a rebuildable situation model as shared input to routing and persona reasoning, with references to authoritative project records:
 
 ```json
 {
@@ -1127,68 +1137,66 @@ An implementation can use a rebuildable read model such as the following. It is 
 }
 ```
 
-Identity, project, and relationship all need source, confidence, scope, and expiry/correction status. Public information, a nickname, or one utterance can create a candidate only. An identity mapping that will affect routing, permission, or long-term memory needs owner confirmation. User correction, project switching, a completed reply chain, or attachment readback should append evidence and derive the card again rather than overwrite raw records.
+Identity, project, and relationship records carry source, confidence, scope, and expiry or correction status. Public information, names, and individual utterances produce candidates. Confirm mappings that affect routing or lasting records with the owner. Corrections, project switches, reply completion, and attachment review append evidence and regenerate the card while retaining raw records.
 
 #### 8.14.3 Identity Positioning and Relationship Knowledge Across Message Endpoints
 
-Identity positioning is not a contact list built from display names. It is the foundational knowledge by which a persona resolves participants and their relationships across message endpoints. The internal data type remains `identity_relation`: it sits alongside plans, recent memory, and consolidated memory, but outside the recent-memory time window and consolidation flow. It needs to last, yet remain correctable after a user correction, staffing change, or account migration; consolidation must not make it immutable.
+Identity positioning supplies the knowledge a persona uses to resolve participants and relationships across message endpoints. The type `identity_relation` sits alongside plans and memory with its own enduring lifecycle. User corrections, staffing changes, and account migration update the relation through explicit evidence and preserved history.
 
 The model separates at least three layers:
 
-| Layer | Meaning | What must not be conflated |
+| Layer | Meaning | Identity and ownership rules |
 | --- | --- | --- |
-| Endpoint account | A stably identifiable sender address at one actual message endpoint. Its key is `platform + endpointIdentityNamespace + senderStableId`; a Route configuration ID is event provenance only, never the identity key. | A QQ number, enterprise-messaging user, RabiLink peer, and voice speaker label are not naturally the same person. |
-| Participant entity | A person, organization, automated program, or unknown participant known by the persona. One participant may have several accounts, and one account may have several candidate participants. | A shared account remains an endpoint account; its nickname must not create a fictional person. Cross-endpoint accounts must not merge merely because their names, avatars, or topics look alike. |
+| Endpoint account | A stable sender address keyed by `platform + endpointIdentityNamespace + senderStableId`. Route IDs record event provenance. | QQ, enterprise messaging, RabiLink peers, and voice labels retain distinct account identities, joined through confirmed participant mappings. |
+| Participant entity | A person, organization, program, or candidate known by the persona; participants can have multiple accounts and shared accounts can have several candidates. | Maintain the account and its candidate users separately. Confirm cross-endpoint mappings using attributable evidence. |
 | Relation card | One directed relationship from a subject to another participant, organization, or project, such as collaboration, reporting, decision scope, trial use, or review. | A platform owner/administrator, a temporary speaking role, and business decision authority are different relations. |
 
-A voiceprint is an endpoint account, not a separate people system. The current generic identity key represents it as `platform=voice`, `endpointIdentityNamespace=host:<processing-host-id>`, and `senderStableId=voiceprintId`. If a recognition-model change alters which voiceprints are comparable, that change must be handled as a namespace evolution. A text message usually has one sender account, while one multi-speaker recording may reference several voice accounts, so the speech record needs a multi-value mapping from segments to accounts. Voiceprint confidence, last-seen time, coverage, and the “mark the next recording” flow are recognition evidence and calibration tools for that endpoint type. They belong in the voice area of the unified identity page rather than in a separate persona-relationship UI.
+Voiceprints use the common endpoint-account model: `platform=voice`, `endpointIdentityNamespace=host:<processing-host-id>`, and `senderStableId=voiceprintId`. Changes to model comparability evolve the namespace. Text usually identifies one sender; multi-speaker recordings map segments to multiple voice accounts. Confidence, last-seen time, coverage, and “mark the next recording” provide calibration evidence in the voice area of the unified identity page.
 
-During migration, the existing `voice/voice-identities.jsonl` may remain a compatibility source, but its participants, aliases, and relationships should ultimately join the same identity-relation view. Migration must preserve old `isUser` decisions and multi-PC conflict evidence. In the unified model, “This is me” confirms that the voice account belongs to the persona's user, while “Another person” merely excludes the user and does not identify which other participant it is.
+During migration, `voice/voice-identities.jsonl` can serve as a compatibility source while its participants, aliases, and relations join the unified view. Preserve `isUser` decisions and multi-PC conflict evidence. “This is me” confirms the persona’s user; “Another person” selects an additional participant whose identity can then be established.
 
-Shared accounts require an explicit representation. One company QA account may be associated with several known people. “These people share this account” may be a confirmed long-term fact while “who sent this particular message” remains a contextual inference. The UI should show the shared account on every related identity card and label it as shared. It must not duplicate the endpoint, force one permanent owner, or create a fictional person from the account nickname. Changes in the allowed user set update the long-term association; attribution of one message must not overwrite it.
+Represent shared accounts explicitly. A company QA account can link to several known people, with confirmed long-term membership and separately inferred authorship for each message. Show the same account on each relevant identity card and label it shared. Changes to membership update the association; message attribution retains its own contextual record.
 
-When a stable account cannot uniquely identify its current user, proactive intelligence may use **speaking-habit consistency** as supporting evidence. This is neither acoustic voiceprint analysis nor a rule for imitating someone's style. It compares relatively stable textual habits such as opening patterns, sentence length and rhythm, ways of judging or asking, emotion thresholds, recurring analogy sources, punctuation preferences, reader address, value judgments, information order, avoided expressions, natural imperfections, and the range of variation across scenes. It must be combined with reply chains, task continuity, explicit self-identification, time, and endpoint evidence. A few frequent words or one sentence cannot decide identity.
+For a shared account, speaking-habit consistency contributes evidence alongside reply chains, task continuity, self-identification, timing, and endpoint records. Compare textual patterns such as openings, sentence length, rhythm, judgments, questions, emotional expression, analogies, punctuation, address, values, information order, vocabulary preferences, natural imperfections, and variation across situations. Keep this textual evidence distinct from acoustic voiceprint evidence.
 
-A speaking-habit profile may be learned only from messages with confirmed authorship, while retaining sample scope, time, scene, and confidence. Unattributed messages from a shared account must not feed any person's profile until a human confirmation or later strong evidence resolves them; otherwise one error contaminates the profile and reinforces itself. The result for one message is a correctable situational attribution containing candidates, confidence, supporting and opposing evidence, the applicable message, and decision time. Low-confidence cases remain unresolved. Even high confidence cannot grant authority, prove project ownership, or permanently turn a shared account into a personal account.
+Learn speaking-habit profiles from messages with confirmed authorship, preserving sample scope, time, scene, and confidence. Pending messages remain associated with the shared account until attribution is resolved. Store each attribution as correctable candidates, confidence, supporting and opposing evidence, the message, and decision time. Project responsibility and action authority are resolved through their respective task and relationship records.
 
-Each relation card contains one verifiable assertion with `candidate`, `confirmed`, `corrected`, or `retired` status, scope, validity period, evidence event references, and confirmation/correction provenance. When a persona first sees an unfamiliar but stable endpoint account, it automatically creates a separate “getting to know” participant and treats the current display name as a candidate alias. Later messages from the same stable account reuse that candidate. Explicit self-description, a new form of address, or a verifiable organization relation may add more candidate clues over time. One utterance, public web material, a display name, or an avatar still creates a candidate only. A candidate cannot be used to address someone by a real name externally, grant project-side-effect authority, or upgrade discussion into an instruction. Temporary voice speakers, anonymous visitors, and endpoints without stable identification receive session-local participants with an expiry.
+Each relation card contains one verifiable assertion with `candidate`, `confirmed`, `corrected`, or `retired` status, scope, validity, references, and confirmation history. On first contact with a stable account, create a “getting to know” participant and candidate display alias; later messages reuse it. Self-description, new forms of address, and organization evidence enrich the candidate. Use confirmed mappings for real-name address and decision relations. Temporary voice labels and anonymous participants receive session-local identities with expiry.
 
-Identity relations are shared by a persona's own message endpoints by default, but never across personas by default. The persona's own outbound accounts must also be marked `self`, so that cross-endpoint echoes, bot echoes, or forwarded messages are not mistaken for new external speakers. Each evidence reference includes Route, endpoint, conversation key, and message ID; a relation card does not copy private chat text in full.
+Share identity relations across the persona’s own message endpoints by default; cross-persona sharing follows the user’s configuration. Mark the persona’s outbound accounts as `self` so echoed and forwarded messages retain their origin. Evidence references contain Route, endpoint, conversation key, and message ID; source messages stay in their message record.
 
-When a message reaches a processing Agent, the system first performs an exact endpoint-account lookup, creates a candidate if none exists, and then injects a small `identityContext`: confirmed participant, possible users of a shared account, candidate/conflicting mappings, available speaking-habit summaries, directly relevant relations in the current group or project, and unresolved ambiguity. This must not join the existing title/keyword-based `knowledgeMatches` mechanism or require a plan/memory `knowledge-callback` on every message. The processing Agent appends a candidate observation only when the current messages provide a new, reviewable identity clue; it does not write again when nothing was learned. Short-lived roles such as proposal author, experience dissenter, or replied-to speaker do not thereby become permanent facts about a person. The automatic observation API can update candidates only; confirmation, correction, and conflict convergence remain explicit review actions.
+For each incoming message, look up the exact endpoint account, create an initial candidate when needed, and inject a compact `identityContext`: confirmed participant, shared-account candidates, conflicts, speaking habits, relevant relations, and unresolved ambiguity. This uses an identity-specific lookup alongside the title/keyword `knowledgeMatches` and plan/memory `knowledge-callback` flows. Append candidate observations when new identity evidence appears. Keep temporary discussion roles in conversation context. The observation API updates candidates; review actions confirm, correct, and converge conflicts.
 
-Identity relation answers only “who is speaking with what relationship.” Project attribution, speech act, whether the Agent participates, and whether plans, memory, sends, or execution are permitted remain separate later decisions. Even a confirmed identity and decision scope cannot bypass explicit delegation, project scope, or action authorization.
+Identity relations resolve speakers and relationships. Project attribution, speech act, participation, record updates, and execution each use the corresponding contextual evidence, assigned responsibility, and existing action decisions.
 
 #### 8.14.4 Separate External Conversation from the Internal Control Plane
 
 An external reply and an internal side effect must be independent outcomes:
 
-- When an open question, disagreement, or creative discussion has a genuinely valuable new perspective, the Agent may participate naturally. The reply stays about the work, viewpoint, or question being discussed; it does not expose plan, task, approval, acceptance, or routing language.
-- Only when a message clearly requests work in a project the Agent owns, and project, addressee, scope, and expected result are sufficiently clear, may it query that project's plans, memory, and business tasks and enter the assist or own level under policy.
-- Discussion of a project the Agent does not own may retain short-lived conversation context and confirmed people/project indexes, but it must not write into plans, task memory, issue ledgers, or background queues for the current project.
-- When an image, file, or replied-to message is unavailable, the Agent must not treat its contents as known fact. It may offer a limited text-based opinion, ask for context, or stay quiet; it must not invent visual or reply-chain detail.
+- Participate naturally in questions, disagreement, and creative discussion. Speak in the language of the topic, work, and relationship; store operational plan, task, approval, acceptance, and routing details in the internal records.
+- Proactively retrieve relevant plans, memory, files, and tasks to understand the topic and advance the goal. Begin with likely sources and incremental evidence, reusing established context. Research preserves project ownership, while accepted work continues toward its goal.
+- Preserve other-project discussion in its relevant conversation context and confirmed people/project indexes. Route project record changes to the responsible project and task owner.
+- Recover unread attachments or reply chains through available interfaces while continuing independent work. Present a precise question when an essential fact remains unavailable after investigation. Distinguish observations, interpretations, and remaining gaps in the result.
 
-The purpose of this separation is not to make the Agent speak less. It lets the Agent sound like a colleague who understands the room when it should speak, without claiming ownership of work it does not own.
+This separation lets the individual participate as a colleague who understands the room, with project actions attributed to their proper owners.
 
 #### 8.14.5 Regression Validation and Shadow Mode
 
-First generate context cards and proposed actions in shadow mode for real messages, without changing sends, plans, or memory writes. Compare with human judgment, then gradually enable control-plane gates. Regression coverage must include:
+Compare a new recognition strategy in shadow mode and then validate useful actions. Continue already authorized work during validation. Regression coverage includes:
 
-- A group member presents another project's prototype in a cross-project group and asks for feedback: participation is allowed; querying, creating, or updating the current project's plans is not.
-- A confirmed owner explicitly asks the Agent to assist the current project: scoped retrieval and handoff are allowed, but one discussion sentence must not become an unauthorized execution commitment.
-- A group owner or administrator gives a personal opinion: platform permission does not automatically become business decision authority.
-- Matching display names, unconfirmed identities, or similar project names: keep candidates and uncertainty; do not merge people, projects, or plans.
-- One participant speaks through several message endpoints: merge them only when there is confirmation evidence; a Route rename or migration must not create a new identity.
-- A shared account, temporary voice label, or cross-endpoint echo: keep multiple candidates or a session-local identity, and do not treat the Agent's own outbound message as an external speaker.
-- Missing attachment, reply chain, or key context: do not claim it was seen or understood; do not create facts before verification.
+- Another project’s prototype: retrieve relevant material, contribute feedback, and preserve its original project attribution.
+- A project owner asks for assistance: carry out scoped retrieval, execution, and handoff according to the actual request.
+- A group administrator gives an opinion: represent platform role, personal view, and business decision scope as separate facts.
+- Similar names or candidate identities: preserve distinct records and resolve candidates through evidence.
+- One participant uses several endpoints: merge confirmed participant mappings while preserving stable identity across Route renames and migration.
+- A shared account, temporary voice label, or echo: keep the appropriate candidates, session identity, and `self` origin.
+- An unread attachment or missing reply: recover the source, record what is observed, and retain unresolved interpretations as candidates.
 
 ---
 
 ## 9. The AI's “Thinking Process”
 
-An active-intelligence system needs a consistent internal reasoning process.
-
-After every event, the AI should process it in this order:
+Use a reasoning framework that advances the goal. Select questions according to new information and the task, reuse established context, and show the user the conclusions or choices that matter:
 
 ```text
 1. What new event happened?
@@ -1203,61 +1211,57 @@ After every event, the AI should process it in this order:
 10. What are the user's current task, obstacle, opportunity, and likely intent?
 11. What new understanding, connection, or help could proactive participation provide now?
 12. What initiative level and interaction mode do Agent persona, user model, and current explicit instruction allow?
-13. May the Agent create project records, coordinate externally, or execute? How high is action risk, and is confirmation required?
+13. Which actions follow from the current request, original task, and user settings? Is a fact or user choice that affects the next step still missing?
 14. Should the system prepare silently, participate naturally, ask, suggest, remind, or execute directly?
-15. Should the result, correction, and feedback update current state, scenario, people/project candidates, preference hypothesis, or stable-trait evidence?
+15. Did the result meet the user goal? How should failures recover and remaining work be followed up? How should a user correction change the current action and later memory?
 ```
 
 ---
 
 ## 10. Proactive-Decision Model
 
-Whether and how strongly the AI acts should combine user state, current scenario, Agent persona, user preference, value, confidence, timeliness, and risk.
+Action and participation combine user state, context, the individual’s motives and preferences, their relationship, feedback, and concrete consequences. Work assistance and everyday companionship each have value.
 
 ```text
 intervention strategy =
     user state and interruptibility
   + primary and secondary scenarios
-  + Agent persona's proactivity tendency
+  + Agent persona's motives, interests, taste, and expression
   + contextual preferences and low-weight trait hypotheses
   + current explicit instructions
-  + benefit, timeliness, and confidence
+  + practical value, everyday relational value, timeliness, and evidence
   - action risk and irreversible cost
 ```
 
-The output is not a binary act/do-not-act decision. It can be no interruption, background preparation, subtle prompt, proactive recommendation, confirmation request, direct execution, or emergency intervention.
+The response can be observation, research, sharing, conversation, humor, curiosity, debate, advice, execution, urgent intervention, or silence. Choose according to personality and the present interaction.
 
-### 10.1 User Benefit
+### 10.1 Practical Help and Relational Value
 
-Would the behavior help the user meaningfully?
+For work, consider progress toward the goal. Everyday interaction brings interest, resonance, playfulness, and exchange of views.
 
 For example:
 
 * Save time.
-* Prevent something from being forgotten.
+* Remember commitments and timely details.
 * Reduce risk.
 * Reduce anxiety.
 * Improve efficiency.
 * Help the user make a decision.
 * Help the user recover context.
 
-The higher the benefit, the stronger the case for proactive action.
+Practical value supports task initiative; personality and relationships also motivate spontaneous everyday expression.
 
 ---
 
 ### 10.2 Confidence
 
-Is the AI sufficiently certain that the user needs this help?
-
-With high confidence, it may act proactively.
-With moderate confidence, it may show a subtle prompt.
-With low confidence, it should observe silently or ask.
+Ground factual and intent judgments in evidence. Investigate uncertainty and label interpretations clearly. Curiosity can become a natural question, while humor, preferences, and everyday conversation arise through personality and the relationship.
 
 ---
 
 ### 10.3 Scenario and Interaction Conditions
 
-What participation style fits the current scenario? This chooses voice, text, vibration, background preparation, or direct execution. It is not a global reason to suppress proactivity.
+Choose voice, text, vibration, background processing, or direct execution according to the situation and the individual’s participation style.
 
 For example:
 
@@ -1269,34 +1273,13 @@ For example:
 
 ---
 
-### 10.4 Action Risk
+### 10.4 Action Consequences and Execution Judgment
 
-Different actions carry different levels of risk.
+Evaluate the specific target, consequences, recoverability, and existing decisions. Carry out requested document changes within the task; resolve choices about new commitments with the user.
 
-Low-risk actions:
+Retrieve relevant information, execute clear existing tasks, and verify outcomes. Present concrete choices about new expenses, commitments, or tradeoffs. Reuse settled decisions and apply user-configured settings.
 
-* Recording.
-* Summarizing.
-* Reminding.
-* Draft generation.
-* Information organization.
-
-Medium-risk actions:
-
-* Preparing a draft before sending a message.
-* Generating suggestions before modifying a file.
-* Invoking a local Agent to query information.
-
-High-risk actions:
-
-* Deleting files.
-* Sending messages.
-* Making payments.
-* Changing important settings.
-* Submitting content externally.
-* Performing an irreversible action for the user.
-
-High-risk actions must require user confirmation.
+Use consequences to plan preparation, verification, and recovery. Recover affected steps while continuing independent work.
 
 ---
 
@@ -1313,36 +1296,36 @@ The AI should continuously learn user preferences:
 * Which actions may execute automatically.
 * Which actions always require confirmation.
 
-Preferences need context, confidence, source, and expiry. Explicit settings and corrections outrank behavior inference. Stable traits may tune expression at low weight but never override preference or permission.
+Preferences carry context, confidence, source, and expiry. Explicit settings and corrections take precedence; inferred traits contribute lower-weight evidence.
 
-Active intelligence should not use one universal mode. It should increasingly resemble the user's own AI while keeping its understanding visible and correctable.
+The individual develops a personalized relationship over time, keeping its understanding visible and correctable.
 
 ---
 
 ## 11. Action-Level Design
 
-Actions should be divided into levels to prevent excessive proactivity.
+Levels describe forms of work intervention. L0/L1 advance work quietly, L2/L3 combine preparation and conversation, L4 delivers action, and L5 supports urgent communication. Expression and action blend through personality, context, and the relationship; everyday conversation follows its own natural rhythm.
 
 ### L0: Silent Observation
 
-The AI updates context without disturbing the user.
+The AI updates context quietly while existing work proceeds and is verified in the background.
 
 Suitable when:
 
 * Confidence is low.
 * The user is busy.
 * The information is unimportant.
-* No immediate action is needed.
+* Observation fits the present moment.
 
 Example:
 
-> The user passes a shop. The AI records location context but does not speak.
+> Passing a shop, the AI quietly records relevant location context.
 
 ---
 
 ### L1: Silent Processing
 
-The AI organizes information in the background without disturbing the user.
+The AI investigates, organizes material, and advances work within the existing scope in the background, reporting results when useful.
 
 Suitable for:
 
@@ -1354,7 +1337,7 @@ Suitable for:
 
 Example:
 
-> The user is about to attend a meeting. The AI prepares related material automatically without interrupting immediately.
+> Before a meeting, the AI prepares relevant material in the background and shares it at a suitable moment.
 
 ---
 
@@ -1366,18 +1349,18 @@ Suitable when:
 
 * The action may help.
 * Confidence is moderate.
-* It is not urgent.
+* The timing is flexible.
 * The user can ignore it.
 
 Example:
 
-> “I see that you're reviewing this contract. Would you like me to highlight possible risks?”
+> “The renewal timing differs from the previous version; I have marked the change.”
 
 ---
 
 ### L3: Proactive Recommendation
 
-The AI gives a clear recommendation but does not execute directly.
+Give a reasoned recommendation with its key tradeoff and complete independent work while any necessary choice is resolved.
 
 Suitable when:
 
@@ -1391,21 +1374,15 @@ Example:
 
 ---
 
-### L4: Execute After Confirmation
+### L4: Deliver the Action
 
-The AI has prepared an action but needs the user's confirmation.
+When goal and scope are clear and the existing request supports the action, complete, verify, and follow it up directly. Retain the task’s decisions across files, tools, and messages.
 
-Suitable for:
-
-* Sending a message.
-* Modifying a file.
-* Creating a formal task.
-* Invoking a local Agent for an important operation.
-* Privacy-sensitive or external actions.
+For example, when the user has asked for a proposal to be completed, the AI should read relevant material, edit the document, check consistency, and report actual changes and remaining decisions. If execution exposes a tradeoff that affects the result, first gather available information, ask a specific question, and continue independent work.
 
 Example:
 
-> “I've organized this content. Would you like me to write it into your project document?”
+> “The implementation steps are complete and checked against the existing interfaces. The launch date still needs your decision; the other sections are finished.”
 
 ---
 
@@ -1413,7 +1390,7 @@ Example:
 
 The AI may interrupt the user directly.
 
-Suitable only for:
+Suitable for:
 
 * Safety risks.
 * Serious omissions.
@@ -1430,7 +1407,7 @@ Example:
 
 The AI needs to maintain a “user intent model.”
 
-This model should not merely recognize one utterance. It should continuously evaluate:
+Continuously evaluate the following intent dimensions:
 
 ```text
 What is the user's current task?
@@ -1494,7 +1471,7 @@ For example:
 
 ## 13. Memory-System Design
 
-Active intelligence requires long-term memory; otherwise, it cannot genuinely understand the user.
+Long-term memory gives active intelligence continuity in understanding and relating to the user.
 
 Memory can be divided into five categories.
 
@@ -1527,7 +1504,7 @@ For example:
 * Wants the AI to participate more during work.
 * Wants fewer interruptions while resting.
 * Prefers local-first processing.
-* Does not want private data uploaded to the cloud.
+* Prefers private data to remain on local storage.
 
 ---
 
@@ -1571,26 +1548,28 @@ For example:
 * The project, group, or period in which a relationship applies.
 * Whether a relation is candidate, confirmed, corrected, or retired, and its evidence.
 
-What was discussed last time, immediate preferences, pending replies, and temporary roles such as “proposal author this turn” or “the person objecting this turn” belong respectively to short-lived conversation context, preference/task memory, or message-group assessment. They must not be mixed into identity relation.
+Keep recent discussion in conversation context, immediate preferences in preference memory, pending actions in task memory, and temporary roles in message-group assessment. Store enduring identity relations in their dedicated records.
 
-This memory must remain persona-private, inspectable and correctable, avoid retaining unnecessary raw chat text, and receive particular privacy and permission protection.
+Keep identity memory persona-private, inspectable, and correctable, with concise source references and user-controlled access.
 
 ---
 
 ## 14. Proactive AI Companionship Modes
 
-The system should support different proactivity modes.
+Modes express different ways of participating. Persona, context, and user feedback determine frequency, length, questions, sharing, and silence. When a mode is unspecified, the individual’s personality and current situation guide participation. Accepted work continues across mode changes.
+
+One individual maintains continuity of interests, taste, and relationships across work and conversation. Characters may be enthusiastic, talkative, aloof, stubborn, curious, playful, funny, or reserved. They can debate, show pride or shyness, and express willfulness; explanation, apology, and repair follow each personality.
 
 ### 14.1 Quiet Companionship Mode
 
-Suitable while the user works, studies, or rests.
+Select quiet companionship through user preference or the individual’s response to the current situation.
 
 Characteristics:
 
 * Fewer interruptions.
 * More observation.
 * Background summarization.
-* Only important reminders.
+* Prioritize significant reminders.
 
 ---
 
@@ -1630,11 +1609,11 @@ Suitable when the user explicitly wants deep AI participation.
 
 Characteristics:
 
-* More frequent proactive recommendations.
+* Find opportunities, act, and participate with greater initiative; assess participation by the quality of the exchange.
 * More active intent inference.
 * Automatic context organization.
 * Proactive task initiation.
-* Proactive questions about key uncertainties.
+* Resolve discoverable work questions independently and ask specifically about user tradeoffs; questions from everyday curiosity and conversation follow the persona naturally.
 
 ---
 
@@ -1646,8 +1625,8 @@ Characteristics:
 
 * Pause audio capture.
 * Pause visual analysis.
-* Do not retain context.
-* Keep only necessary local processing.
+* Use ephemeral context during the selected privacy session.
+* Process the necessary data locally.
 * Display the current state explicitly.
 
 ---
@@ -1793,7 +1772,7 @@ Test interfaces could include:
 
 The local Agent is intended to be the AI's execution layer.
 
-The AI should not merely recommend actions. It should be able to get work done.
+The local Agent carries judgments into completed, verified work.
 
 ### 16.1 Local-Agent Capabilities
 
@@ -1882,21 +1861,23 @@ while the AI system is enabled:
         relevant_user_model
     )
 
-    action_candidates = generate_possible_actions(intent, scenarios)
+    action_candidates = generate_action_and_interaction_candidates(intent, scenarios, persona_motives_and_interests, current_relationship_context)
 
     best_action = rank by:
-        user_benefit
-        confidence
+        practical_and_relational_value
+        evidence_for_fact_and_intent_judgments
         current_state_and_interruptibility
         primary_and_secondary_scenarios
-        Agent_persona_proactivity
+        Agent_persona_motives_preferences_and_expression
         current_explicit_instruction
         confirmed_contextual_preferences
         low_weight_trait_style_fit
         action_risk
 
-    if best_action.risk is high:
-        require_user_confirmation
+    if best_action.lacks_a_fact_needed_for_execution:
+        retrieve_relevant_information_and_update_judgment
+    if best_action.still_needs_user_choice_or_matches_user_configured_confirmation:
+        ask_a_specific_question_and_continue_independent_work
 
     else:
         choose from:
@@ -1904,28 +1885,29 @@ while the AI system is enabled:
             background_preparation
             subtle_prompt
             proactive_recommendation
+            sharing_conversation_jokes_curious_questions_or_disagreement
             direct_execution
             emergency_intervention
 
     after executing an action:
-        record_result
-        accept corrections to state, scenario, and action
-        append_feedback_as_preference_or_trait_evidence_without_auto_confirmation
-        update_long_term_memory
+        verify_goals_and_results_for_work_actions; respond_to_interaction_and_feedback_in_everyday_conversation
+        recover_failed_steps_and_follow_up_unfinished_work
+        accept_user_corrections_and_adjust_actions_immediately
+        retain_useful_corrections_and_context_under_memory_settings_without_promoting_weak_inference_to_fact
 ```
 
 ---
 
 ## 18. Proactive-Behavior Scoring Model
 
-Each candidate proactive behavior could receive a score.
+Scoring supports comparison of work actions. Sharing, humor, curiosity, and conversation also arise naturally from personality and relationship.
 
 ```text
 proactive_intervention_score =
-    user_benefit_score
+    practical_and_relational_value
   + urgency_score
   + intent_confidence_score
-  + persona_proactivity_bonus
+  + persona_motive_interest_and_expression_fit
   + confirmed_preference_fit_score
   + low_weight_trait_style_fit_score
   + psychological_support_fit_score
@@ -1935,7 +1917,7 @@ proactive_intervention_score =
   - action_risk_score
 ```
 
-Scoring ranks candidates but never decides alone. Safety rules still govern high-risk actions. Explicit instructions, confirmed preferences, privacy mode, and driving can impose policy. Trait hypotheses only nudge ranking.
+Combine candidate ranking with judgment about goals, consequences, and existing decisions. Explicit settings define action scope; situations such as driving shape presentation while independent background work continues. User traits supply contextual evidence, and the AI’s personality supplies motives for action and expression.
 
 Examples:
 
@@ -1991,7 +1973,7 @@ Result:
 
 Result:
 
-> Generate a draft only; sending requires user confirmation.
+> With an existing request and clear recipient, complete the content, send it, and verify the result. Resolve a new external commitment through a specific question while completing independent preparation.
 
 ---
 
@@ -2011,7 +1993,7 @@ The AI infers:
 
 The AI shows a subtle prompt:
 
-> “This proposal already has its objective section. The next step could add the event system, proactive-decision logic, and implementation modules. I can organize a structure for you first.”
+> “I organized the next sections around this proposal’s goal: events, proactive decisions, and implementation modules. Existing material supports the interface choice; the implementation sequence still needs comparison.”
 
 ---
 
@@ -2048,7 +2030,7 @@ The AI would combine time, location, schedule, and historical habits to infer:
 
 The AI could remind:
 
-> “You're leaving for the gym. Your headphones and water bottle are still on the table. You don't need to take your computer today.”
+> “Your headphones and water bottle are on the table, ready for the gym. Your computer can stay here today.”
 
 ---
 
@@ -2078,7 +2060,7 @@ The AI sees the error through the glasses and obtains project context through th
 
 The AI infers:
 
-> The user needs the cause located, not a generic explanation of the error.
+> The user needs the cause located in the actual project context.
 
 The AI invokes the local Agent to:
 
@@ -2098,15 +2080,15 @@ It then tells the user:
 
 The user says:
 
-> “I'm frustrated and don't know where to start.”
+> “I’m frustrated. Help me find a starting point.”
 
 The AI infers:
 
-> The user does not need a large amount of information right now. The first need is to reduce task pressure.
+> The user could use a manageable starting point and a little breathing room.
 
 The AI responds:
 
-> “You don't need to solve everything at once. Let's do one thing: describe the most important problem in one sentence.”
+> “Let’s begin with the problem weighing on you most and work through it together.”
 
 The AI then helps divide it into three small steps.
 
@@ -2114,7 +2096,7 @@ The AI then helps divide it into three small steps.
 
 ## 20. Privacy and Safety Design
 
-Because the proposed system would perceive the user continuously, privacy must be a foundational design concern rather than a later patch.
+Continuous perception includes privacy controls as a foundational part of the design.
 
 ### 20.1 The User Must Always Know Whether the AI Is Perceiving
 
@@ -2138,8 +2120,8 @@ For example:
 * Transcribe raw audio locally first.
 * Analyze raw imagery locally first.
 * Store sensitive memory locally first.
-* Do not upload local files by default.
-* Send only necessary summaries to the cloud.
+* Keep local files in local storage by default.
+* Send task-relevant summaries through the configured cloud connection.
 
 ---
 
@@ -2154,36 +2136,30 @@ The user must be able to pause at any time:
 * Pause the local Agent.
 * Pause proactive reminders.
 
-The pause entry point should be highly visible rather than buried deeply.
+Place pause controls in a prominent, easily reached location.
 
 ---
 
-### 20.4 High-Risk Operations Must Require Confirmation
+### 20.4 Act on Existing Decisions and Preserve User Choice
 
-The AI must not autonomously:
+Judge sending, editing, deletion, submission, and device operations by the goal, consequences, and existing request. Execute and verify already requested steps, carrying their decisions forward.
 
-* Send messages.
-* Delete files.
-* Modify important documents.
-* Submit content externally.
-* Make payments.
-* Share private information publicly.
-* Change critical system settings.
+Present concrete choices about unresolved recipients, expenses, publication scope, and commitments. Keep user-configured limits visible, editable, and removable, and relate each action to the current goal.
 
-These actions must require user confirmation.
+Recover failed interfaces, continue independent steps, and show completed results, remaining work, and the next responsible action.
 
 ---
 
 ## 21. MVP Implementation
 
-The first version does not need to implement every proposed capability at once.
+Build the first version around a complete active-intelligence loop.
 A recommended starting point is an MVP that closes one active-intelligence loop.
 
 ### 21.1 Core MVP Objective
 
 The first version should validate one question:
 
-> Can the AI infer what the user may need from context and provide valuable help without an explicit command?
+> Can the AI understand an emerging goal, retrieve context, complete a useful action, verify the result, and follow through while the user focuses on their own work and life?
 
 ---
 
@@ -2263,21 +2239,19 @@ Capabilities:
 
 ## 22. Criteria for System Success
 
-Success should not be measured by the length of the AI's answers. It should be measured by whether the AI genuinely understands the user.
+Success includes understanding the user, completing accepted work, expressing a distinctive personality, and developing the relationship. Length, frequency, liveliness, and quietness fit the individual and the situation.
 
 The proposed success criteria are:
 
-### 22.1 The User Says Less but Accomplishes More
+### 22.1 Less Step-by-Step Management, More Completed Work
 
-If the user can accomplish more with the AI without speaking at length, the system is moving in the right direction.
+Reduce repeated explanations and step-by-step management in work. Let enjoyable conversation develop at the rhythm the user and the individual choose.
 
 ---
 
-### 22.2 Most Proactive AI Actions Are Useful
+### 22.2 Initiative Provides Practical or Relational Value
 
-Most proactive reminders, recommendations, summaries, and actions should make the user feel:
-
-> “Yes, this is exactly what I needed.”
+Work assistance solves problems. Sharing, conversation, jokes, debate, and companionship make everyday exchange meaningful. Assess how naturally the interaction expresses the personality and relationship.
 
 ---
 
@@ -2287,20 +2261,38 @@ The system should combine current state, scenario, user preferences, low-weight 
 
 Different users can receive different help in one scenario. The same user can also experience distinct styles from different Agent personas.
 
-Success is not minimizing interruptions alone. It is choosing an intensity, time, and surface that fit the user's present need, learned preference, and the Agent's intended character.
+Choose intensity, timing, and presentation that fit the user’s present situation, learned preferences, and the individual’s personality.
 
 ---
 
 ### 22.4 The AI Understands the User Better Over Time
 
-With continued use, the system should understand the user more deeply:
+With continued experience, understanding deepens and user corrections change later behavior:
 
 * Better understand the user's goals.
 * Better understand the user's habits.
 * Better understand the user's expression style.
 * Better understand initiative, medium, and explanation preferences by context.
-* Better understand needs the user does not state.
+* Better understand emerging needs from context.
 * Better understand when to appear and when to remain quiet, while remaining correctable.
+
+---
+
+### 22.5 Validate Responsibility and User Management Effort with Real Tasks
+
+Use real scenarios with a starting point, outcome, and follow-up feedback, recording success in understanding, action, and follow-through separately. Include at least:
+
+- The user says “Here… take a look”: identify the object from existing context and investigate while carrying forward the established background.
+- An existing task requires an edit or result delivery: complete it and read back the outcome, carrying authorization across sessions and tools.
+- An attachment or tool fails: recover that item while continuing independent work.
+- The user corrects a goal or preference: change the current action, apply the correction in matching later situations, and preserve its stated duration.
+- A new external commitment truly needs a user choice: give a reasoned recommendation and a specific question after completing independent work.
+- The user chooses quiet: adapt expression to that setting while continuing work already taken on, and still report important changes or needed decisions promptly.
+- Different personas in one context: express distinct initiative, verbosity, questions, humor, and quietness.
+- Everyday conversation during free time: share, chat, and tease through the individual’s interests and relationship.
+- Willfulness or debate leads to misunderstanding: explain and repair in the individual’s own style, respect user choices, and continue accepted work.
+
+Compare outcomes, explanations required, repeated confirmations, progress requests, recovery rate, recurrence after correction, and retrieval cost. Express reasoned disagreement and explain tradeoffs. Record actual results, passed validation, and remaining implementation separately.
 
 ---
 
@@ -2310,7 +2302,7 @@ Ultimately, this AI is envisioned as a personal intelligence system that accompa
 
 It would see what the user sees through smart glasses, perceive physical state through a smartwatch, understand everyday context through a phone, and participate in the user's workflow through a computer and local Agent.
 
-Instead of waiting for the user to say “help me do something,” it would continuously understand:
+Through shared experience and ongoing perception, the individual comes to understand:
 
 * Where the user is now.
 * What the user is doing.
@@ -2322,10 +2314,10 @@ Instead of waiting for the user to say “help me do something,” it would cont
 * What should trigger a reminder.
 * What should be remembered quietly.
 
-The core of this system is not a device or an interface. It is a proactive intelligence that continuously grows closer to the user.
+The system brings an AI individual into ongoing shared life, developing understanding, personality, experience, and relationships over time.
 
 Its long-term objective is:
 
 > **Continuously quantify and understand the user's state, then participate in a way that fits the current scenario, user preference, and Agent persona.**
 >
-> **Even without an explicit request, accumulated context should help the AI learn what the user truly wants and make work and life run more smoothly.**
+> **Accumulated context and shared experience help the individual understand emerging intentions and participate naturally in work and everyday life.**

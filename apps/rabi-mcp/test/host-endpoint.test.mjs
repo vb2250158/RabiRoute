@@ -100,5 +100,15 @@ test("metadata failures are bounded and sanitized", async () => {
 });
 
 test("invalid timeout is rejected before any process operation", () => {
-  for (const timeoutMs of [0, -1, 12001, NaN, 1.5, "1000"]) assert.throws(() => createHostEndpointSession({ ...options, timeoutMs }), /timeout/);
+  for (const timeoutMs of [0, -1, 2147483648, NaN, 1.5, "1000"]) assert.throws(() => createHostEndpointSession({ ...options, timeoutMs }), /timeout/);
+});
+
+test('verified Host timeout snapshots update subsequent discovery and clearing restores default', async () => {
+  const waits = []; let read = 0;
+  const session = createHostEndpointSession({ ...options,
+    spawnSync: (_file,_args,opts) => { waits.push(opts.timeout); return {status:0,stdout:JSON.stringify(descriptor)}; },
+    fetchImpl: async () => Response.json({...meta,timeoutOverrides: ++read === 1 ? {'mcp.host.discovery':91000} : {}})
+  });
+  await session.ensure(); await session.ensure(); await session.ensure();
+  assert.deepEqual(waits,[5000,91000,5000]);
 });

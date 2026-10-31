@@ -7,11 +7,11 @@ import test from "node:test";
 import { pathToFileURL } from "node:url";
 import { LanAgentAuthority } from "./lanAgentAuthority.js";
 import { LanAgentRegistry } from "./lanAgentRegistry.js";
-import { handleLanAgentApi } from "./lanAgentRoutes.js";
+import { handleLanAgentApiFixture as handleLanAgentApi } from "./lanAgentRouteTestSupport.js";
 import type { LanAgentReleaseStore } from "./lanAgentReleaseStore.js";
 import { AgentResourceCatalog } from "./agentResourceCatalog.js";
 
-test("HTTP enrollment, explicit admin grant, resources and offline revocation share authority", async () => {
+test("HTTP enrollment and credential recovery expose public resources without any Agent registration", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabi-access-http-"));
   fs.mkdirSync(path.join(root, "skills", "example"), { recursive: true });
   fs.writeFileSync(path.join(root, "skills", "example", "SKILL.md"), "---\nname: example\ndescription: Example fixture\n---\nRead the API contract.");
@@ -31,7 +31,8 @@ test("HTTP enrollment, explicit admin grant, resources and offline revocation sh
     const handled = handleLanAgentApi(request, new URL(request.url!, "http://fixture.invalid"), response, {
       authority, registry, resources: new AgentResourceCatalog({ rootDir: root, publicDocs: [] }), enabled: () => true,
       managerIdentity: () => ({ guid: "fixture-stable-guid", applicationGenerationId: "fixture-generation", managerInstanceId: "fixture-instance", health: { live: true, requiredReady: true, state: "healthy" } }),
-      releases: {} as LanAgentReleaseStore,
+      releases: { manifest: () => ({version:"fixture",publicKeySha256:"a".repeat(64)}),
+        nodeReleaseDigests: (ids: readonly string[]) => new Map(ids.map(id => [id, "b".repeat(64)])) } as unknown as LanAgentReleaseStore,
       isManagementRequestAuthorized: req => req.headers["x-rabiroute-webgui-token"] === "fixture-admin",
       isReleaseRequestAuthorized: () => false,
       jsonResponse: (res, status, data) => { res.statusCode = status; res.setHeader("content-type", "application/json"); res.end(JSON.stringify(data)); },
@@ -52,59 +53,18 @@ test("HTTP enrollment, explicit admin grant, resources and offline revocation sh
     assert.equal(enrolled.status, 201);
     const token = (await enrolled.json()).data.token;
     assert.equal((await enroll()).status, 400);
-    const headers = { authorization: `Bearer ${token}`, "x-rabiroute-agent-id": "worker" };
-    assert.equal((await fetch(`${base}/api/lan-agent/resources`, { headers })).status, 403);
-    const adminHeaders = { "x-rabiroute-webgui-token": "fixture-admin" };
-    const catalog = await fetch(`${base}/api/lan-agent/instances`, { headers: adminHeaders });
-    const revision = catalog.headers.get("etag")!;
-    const enabled = await fetch(`${base}/api/lan-agent/instances/node-fixture/agents/worker/authorization`, {
-      method: "PUT", headers: { ...adminHeaders, "content-type": "application/json", "if-match": revision, "idempotency-key": "fixture-enable-1" },
-      body: JSON.stringify({ enabled: true, binding: { provider: "dsh", sessionId: "session-fixture" } })
-    });
-    assert.equal(enabled.status, 200);
-    assert.equal(enabled.headers.get("idempotency-key"), "fixture-enable-1");
-    const replay = await fetch(`${base}/api/lan-agent/instances/node-fixture/agents/worker/authorization`, {
-      method: "PUT", headers: { ...adminHeaders, "content-type": "application/json", "if-match": revision, "idempotency-key": "fixture-enable-1" },
-      body: JSON.stringify({ enabled: true, binding: { provider: "dsh", sessionId: "session-fixture" } })
-    });
-    assert.equal(replay.status, 200);
-    assert.equal((await replay.json()).receipt.replayed, true);
-    assert.equal(authority.getApprovedAgentBinding("node-fixture", "worker")?.sessionId, "session-fixture");
-    const stale = await fetch(`${base}/api/lan-agent/instances/node-fixture/agents/worker/authorization`, {
-      method: "PUT", headers: { ...adminHeaders, "content-type": "application/json", "if-match": revision, "idempotency-key": "fixture-disable-1" }, body: JSON.stringify({ enabled: false })
-    });
-    assert.equal(stale.status, 412);
-    const listed = await fetch(`${base}/api/lan-agent/resources`, { headers });
-    assert.equal(listed.status, 200);
-    assert.equal((await listed.json()).data[0].id, "skills/example/SKILL.md");
-    // No remote-only operation denial: the handler still requires management authentication.
-    assert.equal((await fetch(`${base}/api/lan-agent/nodes`, { headers })).status, 401);
-    assert.equal((await fetch(`${base}/api/lan-agent/resources/read?id=..%2Fauthority.json`, { headers })).status, 400);
-    authority.setAgentEnabled("node-fixture", "worker", false);
-    assert.equal((await fetch(`${base}/api/lan-agent/resources`, { headers })).status, 403);
-    const selfResponse = await fetch(`${base}/api/lan-agent/self`, { headers: { authorization: `Bearer ${token}` } });
-    assert.equal(selfResponse.status, 200);
-    const self = (await selfResponse.json()).data;
-    assert.equal(self.guid, "fixture-stable-guid");
-    assert.equal(self.applicationGenerationId, "fixture-generation");
-    assert.equal(self.managerInstanceId, "fixture-instance");
-    assert.equal(self.nodeId, "node-fixture");
-    assert.equal(self.connected, false);
-    // Copying a fresh prompt authorizes repair of this node, without a second
-    // grant call. The old catalog and explicit disable remain authoritative.
-    const repairTicket = authority.issueBootstrapTicket().ticket;
-    const repairBody = { ticket: repairTicket, nodeId: "node-fixture", enrollmentSecret: "r".repeat(43) };
-    const repair = () => fetch(`${base}/api/lan-agent/enroll`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(repairBody) });
-    const repairedResponse = await repair();
-    assert.equal(repairedResponse.status, 201);
-    const repaired = (await repairedResponse.json()).data;
-    assert.equal((await fetch(`${base}/api/lan-agent/self`, { headers: { authorization: `Bearer ${token}` } })).status, 401);
-    assert.equal((await fetch(`${base}/api/lan-agent/self`, { headers: { authorization: `Bearer ${repaired.token}` } })).status, 200);
-    assert.equal((await fetch(`${base}/api/lan-agent/resources`, { headers: { authorization: `Bearer ${repaired.token}`, "x-rabiroute-agent-id": "worker" } })).status, 403);
-    const recoveredResponse = await repair();
-    assert.equal(recoveredResponse.status, 201);
-    assert.deepEqual((await recoveredResponse.json()).data, repaired);
-    assert.equal(authority.getApprovedAgentBinding("node-fixture", "worker")?.sessionId, "session-fixture");
+    const headers = { authorization: `Bearer ${token}`, "x-rabiroute-agent-type":"dsh", "x-rabiroute-session-id":"never-registered" };
+    const listed=await fetch(`${base}/api/lan-agent/resources`,{headers});assert.equal(listed.status,200);assert.equal((await listed.json()).data[0].id,"skills/example/SKILL.md");
+    assert.equal((await fetch(`${base}/api/lan-agent/nodes`,{headers})).status,200);
+    assert.equal((await fetch(`${base}/api/lan-agent/resources/read?id=..%2Fauthority.json`,{headers})).status,400);
+    assert.equal((await fetch(`${base}/api/lan-agent/instances/node-fixture/agents/worker/authorization`,{method:"PUT",headers:{"x-rabiroute-webgui-token":"fixture-admin"}})).status,404);
+    const renamed=await fetch(`${base}/api/lan-agent/instances/node-fixture/name`,{method:"PUT",headers:{...headers,"content-type":"application/json"},body:JSON.stringify({name:"Test computer",expectedName:""})});assert.equal(renamed.status,200,"enrollment credential renames a computer without browser login");
+    const instanceView=await (await fetch(`${base}/api/lan-agent/instances`,{headers})).json();assert.equal(instanceView.instances.find((n:any)=>n.instanceId==="node-fixture").enabled,true);
+    const off=await fetch(`${base}/api/lan-agent/instances/node-fixture/enabled`,{method:"PUT",headers:{...headers,"content-type":"application/json"},body:JSON.stringify({enabled:false,expectedEnabled:true})});assert.equal(off.status,403,"Production response authority suppresses results after self-revocation.");assert.equal((await off.json()).uncertain,true);assert.equal(authority.isNodeEnabled("node-fixture"),false,"The original mutation committed; do not resend it.");assert.equal((await fetch(`${base}/api/lan-agent/resources`,{headers})).status,403);
+    const on=await fetch(`${base}/api/lan-agent/instances/node-fixture/enabled`,{method:"PUT",headers:{"x-rabiroute-webgui-token":"fixture-admin","content-type":"application/json"},body:JSON.stringify({enabled:true,expectedEnabled:false})});assert.equal(on.status,200);assert.equal((await fetch(`${base}/api/lan-agent/resources`,{headers})).status,200);
+    const repairTicket=authority.issueBootstrapTicket().ticket;
+    const repair=await fetch(`${base}/api/lan-agent/enroll`,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({ticket:repairTicket,nodeId:"node-fixture",enrollmentSecret:"r".repeat(43)})});assert.equal(repair.status,201);
+    assert.equal((await fetch(`${base}/api/lan-agent/self`,{headers:{authorization:`Bearer ${token}`}})).status,403);
     const clientModuleUrl = pathToFileURL(path.resolve("apps/rabi-agent/rabi-agent.mjs")).href;
     const { __test: client } = await import(clientModuleUrl);
     const configPath = path.join(root, "client-config.json");
@@ -122,9 +82,9 @@ test("HTTP enrollment, explicit admin grant, resources and offline revocation sh
         if (String(url).endsWith("/enroll")) { exchanges++; assert.equal(result.status, 201); await result.arrayBuffer(); throw new Error("Fixture lost exchange response"); }
         return result;
       });
-      assert.equal(connected.nodeId, saved.nodeId); assert.deepEqual(connected.agents, saved.agents);
+      assert.equal(connected.nodeId, saved.nodeId); assert.equal(connected.agents[0].sessionId, undefined);
       assert.deepEqual(authority.authenticate(connected.nodeCredential), { nodeId: saved.nodeId });
-      assert.equal(authority.authorize(connected.nodeCredential, "worker"), null);
+      assert.ok(authority.acquireConnectionLease(connected.nodeCredential));
       assert.equal(exchanges, 1); assert.equal(fs.existsSync(`${configPath}.enrollment.json`), false);
       assert.equal(authority.getSnapshot().nodes.length, 1);
     } finally {

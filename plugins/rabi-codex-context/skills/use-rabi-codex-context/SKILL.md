@@ -29,7 +29,7 @@ Configure the roles directory through Rabi PC / Manager configuration. Do not re
 
 ## Bind or switch the current session
 
-Ask the user to submit one strict marker:
+When the user requests a role, bind it using the exact current session ID and the CLI below; no second confirmation is needed. The user may also submit this marker:
 
 ```text
 [rabi:use <RoleId>]
@@ -74,12 +74,12 @@ These commands call Rabi Manager session APIs. They do not write plugin-local bi
 
 Rabi Manager routes Codex hooks and normal RabiRoute Agent packets through the same `RabiContextManager`, which is the sole caller of `roleKnowledgeSnapshot()`. It may inject a `[处理前上下文确认]` section containing plan, recent-memory, consolidated-memory, or role-skill GET paths.
 
-Before replying, updating knowledge, publishing a task, or performing an external action:
+Read the injected items relevant to the current task; this context lookup is not an additional permission gate:
 
 1. Prefix each relative GET path with the injected Rabi Manager API base URL.
-2. Read every required item through the Manager API.
+2. Read relevant items through the Manager API and reuse unchanged items already read in this turn.
 3. Use the existing plan and memory APIs for changes; preserve their focus, keyword, edit-window, archival, and consolidation validation.
-4. State uncertainty if a required read fails. Never read JSON files directly and pretend the Manager lifecycle succeeded.
+4. If a read fails, report the specific missing context only where it affects the answer and continue independent authorized work. Local recovery evidence must be identified as local evidence, not a successful Manager lifecycle operation.
 
 ## Hook behavior
 

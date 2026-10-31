@@ -95,6 +95,38 @@ test("remote WebGUI proxies authenticated media ranges and isolated hot SSE chan
     assert.equal((await fetch(`${baseUrl}/worker/webgui-requests?${workerQuery}`, { headers: workerHeaders })).status, 200);
 
     const remotePrefix = `${baseUrl}/manage/proxy-test/guid-proxy`;
+    const searchPath = '/api/roles/synthetic-role/message-endpoint-history?query=synthetic-secret-query&budgetMs=700';
+    const searchPromise = fetch(remotePrefix + searchPath, { headers: { cookie } });
+    const searchClaim = (await (await fetch(`${baseUrl}/worker/webgui-requests?${workerQuery}&limit=1`, { headers: workerHeaders })).json()).requests[0];
+    assert.equal(searchClaim.path, searchPath, 'wire parameters remain intact');
+    assert.equal(searchClaim.singleAttempt, true);
+    assert.ok(searchClaim.remainingBudgetMs > 0 && searchClaim.remainingBudgetMs <= 700);
+    const finishSearch = body => fetch(`${baseUrl}/worker/webgui-requests/${encodeURIComponent(searchClaim.id)}/response`, {
+      method: 'POST', headers: { ...workerHeaders, 'content-type': 'application/json' },
+      body: JSON.stringify({ ...body, deviceId: 'pc-proxy', deviceGuid: 'guid-proxy' })
+    });
+    assert.equal((await finishSearch({ ok: true, statusCode: 200, headers: { 'content-type': 'application/json' }, bodyBase64: Buffer.from('{"entries":[]}').toString('base64') })).status, 200);
+    assert.deepEqual(await (await searchPromise).json(), { entries: [] });
+    const expiredStart = performance.now();
+    const expired = await fetch(remotePrefix + searchPath.replace('700', '200'), { headers: { cookie } });
+    assert.equal(expired.status, 503);
+    const expiredBody = await expired.json();
+    assert.equal(expiredBody.errorCode, 'SEARCH_DEADLINE_EXCEEDED');
+    assert.ok(performance.now() - expiredStart < 1500, 'Relay queue consumes the original short budget');
+    const noReplay = (await (await fetch(`${baseUrl}/worker/webgui-requests?${workerQuery}`, { headers: workerHeaders })).json()).requests;
+    assert.equal(noReplay.some(request => request.id === expiredBody.requestId), false);
+    const late = await fetch(`${baseUrl}/worker/webgui-requests/${encodeURIComponent(expiredBody.requestId)}/response`, {
+      method: 'POST', headers: { ...workerHeaders, 'content-type': 'application/json' },
+      body: JSON.stringify({ ok: true, statusCode: 200, bodyBase64: Buffer.from('{}').toString('base64'), deviceId: 'pc-proxy', deviceGuid: 'guid-proxy' })
+    });
+    assert.equal(late.status, 200);
+    assert.equal((await late.json()).request.status, 'failed', 'late responses cannot resurrect an expired search');
+    await new Promise(resolve => setTimeout(resolve, 100));
+    for (const logFile of [path.join(dataDirectory, 'events.jsonl'), ...fs.readdirSync(path.join(dataDirectory, 'account-logs')).map(name => path.join(dataDirectory, 'account-logs', name))]) {
+      const raw = fs.readFileSync(logFile, 'utf8');
+      assert.equal(raw.includes('synthetic-secret-query'), false);
+      assert.equal(raw.includes('synthetic-role'), false);
+    }
     const mediaPromise = fetch(`${remotePrefix}/api/roles/Rabi/plans/plan-a/attachments/video-a`, {
       headers: { cookie, range: "bytes=0-3" }
     });

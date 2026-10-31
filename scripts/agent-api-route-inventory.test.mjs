@@ -18,8 +18,15 @@ test("repository inventory statistics remain consistent as plugins grow", () => 
   assert.equal(inventory.counts.dispatchScopes, inventory.dispatchScopeCount);
   assert.equal(inventory.counts.unresolved, inventory.unresolvedCount);
   assert.equal(inventory.unresolved.length, inventory.unresolvedCount);
-  assert.equal(inventory.limitations.length, 3);
-  assert.ok(inventory.exact.some(item => item.path === "/api/agent/help" && item.method === "GET"));
+  assert.equal(inventory.counts.executableRegistrations, inventory.executableRegistrationCount);
+  assert.equal(inventory.executableRegistrations.length, inventory.executableRegistrationCount);
+  assert.equal(inventory.limitations.length, 4);
+  assert.ok(inventory.executableRegistrations.some(item => item.registrationMethod === "registerOperationsAsync" && item.file.includes("manager.core")));
+  assert.equal(inventory.exact.some(item => item.file.includes("manager.agent-communication")), false, "Communication dispatch has no legacy declaration after migration.");
+  assert.equal(inventory.exact.some(item => item.file.includes("manager.agent-adapter-catalog")), false, "Adapter catalog dispatch has no legacy declaration after migration.");
+  assert.ok(inventory.executableRegistrations.some(item => item.file.includes("manager.agent-communication")));
+  assert.ok(inventory.executableRegistrations.some(item => item.registrationMethod === "registerUpgrades" && item.file.includes("manager.core")));
+  assert.equal(inventory.exact.some(item => item.path === "/api/agent/help"), false, "Migrated discovery must not retain a second legacy declaration.");
   assert.ok(inventory.exact.every(item => item.method !== "*"));
 });
 test("AST handles reordered and quoted properties, ignores comments, and reports dynamic declarations", t => {
@@ -35,9 +42,18 @@ test("AST handles reordered and quoted properties, ignores comments, and reports
       { routeId: 'methods', kind: 'exact', path: '/methods', methods: methodList },
       { routeId: 'spread', kind: 'exact', path: '/spread', methods: ['GET'], ...extra }
     ];
+    // registry.registerOperations('fake', fakeDefinitions);
+    registry.registerOperations('owner', importedDefinitions());
+    registry.registerUpgrades('owner', importedUpgradeDefinitions());
+    registry.registerHttpProxies('owner', importedProxyDefinitions());
+    await registry.registerOperationsAsync('owner', importedDefinitions(), signal);
+    await registry.registerUpgradesAsync('owner', importedUpgradeDefinitions(), signal);
+    await registry.registerHttpProxiesAsync('owner', importedProxyDefinitions(), signal);
   `);
   const inventory = inventoryAt(directory);
-  assert.deepEqual(inventory.counts, { routeDeclarations: 6, exactMethodPaths: 2, dispatchScopes: 1, unresolved: 4 });
+  assert.deepEqual(inventory.counts, { routeDeclarations: 6, exactMethodPaths: 2, dispatchScopes: 1, unresolved: 4, executableRegistrations: 6 });
+  assert.equal(inventory.executableRegistrations[0].resolution, "read-active-runtime-catalog");
+  assert.deepEqual(inventory.executableRegistrations.map(item => item.registrationMethod), ["registerOperations", "registerUpgrades", "registerHttpProxies", "registerOperationsAsync", "registerUpgradesAsync", "registerHttpProxiesAsync"]);
   assert.deepEqual(inventory.exact.map(item => item.method), ["GET", "POST"]);
   assert.ok(inventory.exact.every(item => item.path === "/literal"));
   assert.equal(inventory.dispatchScopes[0].pathPrefix, "/scope");

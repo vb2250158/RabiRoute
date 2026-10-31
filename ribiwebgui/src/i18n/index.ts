@@ -1,16 +1,32 @@
 import { computed, readonly, ref } from "vue";
 import { englishCatalog, englishPatterns } from "./catalog";
+import { japaneseCatalog, japanesePatterns } from "./japanese";
 
-export type AppLocale = "zh-CN" | "en";
+export type AppLocale = "zh-CN" | "en" | "ja";
+
+export const localeOptions = [
+  { locale: "zh-CN", label: "简体中文", detail: "Chinese", short: "中", ariaLabel: "语言：简体中文" },
+  { locale: "en", label: "English", detail: "English", short: "EN", ariaLabel: "Language: English" },
+  { locale: "ja", label: "日本語", detail: "Japanese", short: "日", ariaLabel: "言語：日本語" }
+] as const;
+
+export function resolveLocale(stored: string | null, language: string): AppLocale {
+  if (localeOptions.some(option => option.locale === stored)) return stored as AppLocale;
+  const normalized = language.toLowerCase();
+  if (normalized.startsWith("ja")) return "ja";
+  return normalized.startsWith("zh") ? "zh-CN" : "en";
+}
 
 export const LOCALE_STORAGE_KEY = "rabiroute:webgui:locale";
 export const LOCALE_CHANGED_EVENT = "rabiroute:locale-changed";
 
 function browserLocale(): AppLocale {
   if (typeof window === "undefined") return "zh-CN";
-  const stored = window.localStorage.getItem(LOCALE_STORAGE_KEY);
-  if (stored === "en" || stored === "zh-CN") return stored;
-  return window.navigator.language.toLowerCase().startsWith("zh") ? "zh-CN" : "en";
+  let stored: string | null = null;
+  try { stored = window.localStorage.getItem(LOCALE_STORAGE_KEY); } catch {
+    // Browser language remains usable when storage is disabled.
+  }
+  return resolveLocale(stored, window.navigator.language);
 }
 
 const activeLocale = ref<AppLocale>(browserLocale());
@@ -32,10 +48,6 @@ function announceLocale(locale: AppLocale): void {
 }
 
 export function setLocale(locale: AppLocale): void {
-  if (activeLocale.value === locale) {
-    announceLocale(locale);
-    return;
-  }
   activeLocale.value = locale;
   persistLocale(locale);
   announceLocale(locale);
@@ -46,9 +58,11 @@ export function translateText(source: string, locale: AppLocale = activeLocale.v
   const leading = source.match(/^\s*/)?.[0] || "";
   const trailing = source.match(/\s*$/)?.[0] || "";
   const text = source.slice(leading.length, source.length - trailing.length || undefined);
-  const exact = englishCatalog[text];
+  const catalog = locale === "ja" ? japaneseCatalog : englishCatalog;
+  const patterns = locale === "ja" ? japanesePatterns : englishPatterns;
+  const exact = catalog[text];
   if (exact) return `${leading}${exact}${trailing}`;
-  for (const [pattern, replacer] of englishPatterns) {
+  for (const [pattern, replacer] of patterns) {
     const match = text.match(pattern);
     if (match) return `${leading}${replacer(...match)}${trailing}`;
   }

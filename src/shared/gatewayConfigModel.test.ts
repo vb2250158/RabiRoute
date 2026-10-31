@@ -630,7 +630,7 @@ test("persona-free gateways get default message adapter rules", () => {
 
   assert.equal(normalized.id, "plain");
   assert.equal(normalized.agentRoleId, "");
-  assert.deepEqual(normalized.notificationRules?.map(rule => rule.id), ["default-napcat", "default-fennenote"]);
+  assert.deepEqual(normalized.notificationRules?.map(rule => rule.id), ["default-napcat", "default-speech"]);
   assert.deepEqual(normalized.notificationRules?.[0]?.routeKinds, ["private", "direct_at", "direct_reply", "indirect_reply"]);
   assert.deepEqual(normalized.notificationRules?.[1]?.routeKinds, ["voice_transcript"]);
   assert.deepEqual(normalized.roleNotificationRules, {});
@@ -1122,4 +1122,17 @@ test("automation projection sends only message-to-Agent rules through RouteDecis
   }]);
 
   assert.deepEqual(notificationRulesFromPersonaAutomations(automations).map(rule => rule.id), ["message-agent"]);
+});
+
+ test("retired FenneNote configuration migrates to speech without enabling disabled input", () => {
+  const result = normalizeGatewayDefinition(gateway({ messageAdapters: ["fennenote", "speech"], messageAdaptersDisabled: ["fennenote"], fenneNoteWebhookPort: 0, fenneNoteWebhookPath: "/retired", messageAdapterPolicies: { fennenote: { inputEnabled: false, outputEnabled: false } }, pipeline: { inputAdapter: "fennenote", outputAdapter: "fennenote" } }));
+  assert.deepEqual(result.messageAdapters, ["speech"]);
+  assert.deepEqual(result.messageAdaptersDisabled, ["speech"]);
+  assert.equal(result.messageAdapterPolicies?.speech?.inputEnabled, false);
+  assert.equal(result.messageAdapterPolicies?.speech?.outputEnabled, false);
+  assert.equal(result.fenneNoteWebhookPort, undefined);
+  assert.equal(result.fenneNoteWebhookPath, undefined);
+  assert.equal(result.pipeline?.inputAdapter, "speech");
+  assert.equal(result.pipeline?.outputAdapter, "tts");
+  assert.deepEqual(gatewayAdapterTypes(result), []);
 });

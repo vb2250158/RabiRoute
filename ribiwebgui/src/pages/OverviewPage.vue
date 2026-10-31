@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { translateText } from "../i18n";
 import { userFacingError } from "../userFacingError";
 import { computed, onBeforeUnmount, ref } from "vue";
 import { useRouter } from "vue-router";
@@ -61,7 +62,7 @@ async function runGatewayAction(id: string, action: "start" | "stop" | "restart"
 async function deleteGatewayFromConsole(gateway: any): Promise<void> {
   if (!gateway?.id || deletingGatewayId.value) return;
   const name = store.configNameFor(gateway);
-  const confirmed = window.confirm(`删除路由配置「${name}」？\n\n只会删除 adapterConfig.json 并停止该路由，历史消息和日志会保留在路由目录里。`);
+  const confirmed = window.confirm(translateText(`删除路由配置「${name}」？\n\n只会删除 adapterConfig.json 并停止该路由，历史消息和日志会保留在路由目录里。`));
   if (!confirmed) return;
   deletingGatewayId.value = gateway.id;
   gatewayActionError.value = "";

@@ -1,3 +1,4 @@
+import { getTimeoutMs } from "./timeoutSettingsClient";
 export type RouteCatalogMutationKind = "save" | "delete";
 
 export type PendingRouteCatalogMutation = Readonly<{
@@ -38,18 +39,16 @@ export async function boundedRouteCatalogMutationFetch(
     fetchImpl?: typeof fetch;
   } = {}
 ): Promise<Response> {
-  const controller = new AbortController();
-  const timeoutMs = options.timeoutMs ?? GATEWAY_MUTATION_TIMEOUT_MS;
-  const timeout = globalThis.setTimeout(() => controller.abort(), timeoutMs);
+  const timeoutMs = options.timeoutMs ?? getTimeoutMs("webgui.gateway.mutation", GATEWAY_MUTATION_TIMEOUT_MS);
+  const deadline = AbortSignal.timeout(timeoutMs);
+  const signal = init.signal ? AbortSignal.any([init.signal, deadline]) : deadline;
   try {
-    return await (options.fetchImpl ?? globalThis.fetch)(path, { ...init, signal: controller.signal });
+    return await (options.fetchImpl ?? globalThis.fetch)(path, { ...init, signal });
   } catch (error) {
-    if (controller.signal.aborted) {
+    if (deadline.aborted && !init.signal?.aborted) {
       throw new Error(`Manager mutation timed out after ${timeoutMs}ms; retry will reuse the same Idempotency-Key.`);
     }
     throw error;
-  } finally {
-    globalThis.clearTimeout(timeout);
   }
 }
 

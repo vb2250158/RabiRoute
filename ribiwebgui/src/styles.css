@@ -2182,12 +2182,6 @@ button.channel-topology-node:focus-visible {
   padding: 0 !important;
 }
 
-.automation-workspace-head {
-  margin: 0;
-  padding: 20px 22px 14px;
-  border-bottom: 1px solid var(--rr-border-faint);
-}
-
 .automation-tabs {
   border-bottom: 1px solid var(--rr-border-faint);
   background: var(--rr-subtle);
@@ -7825,12 +7819,6 @@ button.knowledge-plan-attachment.file {
   border: 1px solid rgba(var(--v-theme-secondary), 0.18);
   border-radius: 16px;
   background: linear-gradient(135deg, rgba(var(--v-theme-secondary), 0.08), rgba(var(--v-theme-surface), 0.74));
-}
-
-.persona-summary-tile {
-  display: flex;
-  align-items: center;
-  gap: 12px;
 }
 
 .persona-identity-copy {

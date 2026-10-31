@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from "vue";
 import type { DesktopPetAnimation } from "../desktopPetClient";
+import { usePersonaService } from "../persona/personaServiceClient";
+const personaService = usePersonaService();
 
 const props = defineProps<{ animation: DesktopPetAnimation; name: string }>();
 const playing = ref(false);
@@ -8,7 +10,7 @@ const frame = ref(0);
 const revision = ref(0);
 const error = ref(false);
 let timer: ReturnType<typeof setTimeout> | undefined;
-const source = computed(() => props.animation.assets[frame.value]);
+const source = computed(() => personaService.resource(props.animation.assets[frame.value] || ""));
 function stop() {
   clearTimeout(timer);
   playing.value = false;

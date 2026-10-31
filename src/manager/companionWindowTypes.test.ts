@@ -40,3 +40,58 @@ test("an Agent learns an unknown game from a silent reply; switching and restart
   await restored.learn("one", game, "other");
   assert.equal(restored.classify("one", game), "other");
 });
+
+
+test("failed learning persistence leaves the prior classification retryable", async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "companion-window-write-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const store = new CompanionWindowTypes(id => path.join(root, id));
+  const window = { id: "sample", processName: "Example.exe", title: "Example" };
+  await store.load("one");
+  await fs.mkdir(path.join(root, "one"));
+  const blocker = path.join(root, "one", "companion");
+  await fs.writeFile(blocker, "file prevents directory creation");
+  await assert.rejects(store.learn("one", window, "play"));
+  assert.equal(store.classify("one", window), "uncertain");
+  assert.equal(await fs.readFile(blocker, "utf8"), "file prevents directory creation");
+  await fs.unlink(blocker);
+  await store.learn("one", window, "play");
+  assert.equal(store.classify("one", window), "play");
+  const restored = new CompanionWindowTypes(id => path.join(root, id));
+  await restored.load("one");
+  assert.equal(restored.classify("one", window), "play");
+});
+
+
+test("bad window rows and duplicate keys preserve raw evidence while healthy learning survives restart", async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "companion-window-isolation-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const file = path.join(root, "one", "companion", "window-types.json");
+  await fs.mkdir(path.dirname(file), { recursive: true });
+  const bad = { processName: "Broken.exe", title: "Broken", kind: 4, evidence: "retain" };
+  const duplicate = [
+    { processName: "Duplicate.exe", title: "Title", kind: "play" },
+    { processName: "duplicate.exe", title: " title ", kind: "watch" },
+  ];
+  const healthy = { processName: "Healthy.exe", title: "Healthy", kind: "watch" };
+  const raw = [null, bad, ...duplicate, healthy, { unexpected: true }];
+  await fs.writeFile(file, JSON.stringify({ schemaVersion: 1, entries: raw }));
+  const store = new CompanionWindowTypes(id => path.join(root, id));
+  await store.load("one");
+  const window = (processName: string, title: string) => ({ id: "sample", processName, title });
+  assert.equal(store.classify("one", window("Healthy.exe", "Healthy")), "watch");
+  for (const [processName, title] of [["Broken.exe", "Broken"], ["Duplicate.exe", "Title"]]) {
+    assert.equal(store.classify("one", window(processName, title)), "uncertain");
+    await assert.rejects(store.learn("one", window(processName, title), "play"), /stored evidence/);
+  }
+  await store.learn("one", window("Healthy.exe", "Healthy"), "other");
+  await store.learn("one", window("New.exe", "New"), "play");
+  const persisted = JSON.parse(await fs.readFile(file, "utf8"));
+  assert.deepEqual(persisted.entries.slice(0, 4), raw.slice(0, 4));
+  assert.deepEqual(persisted.entries[5], raw[5]);
+  const restored = new CompanionWindowTypes(id => path.join(root, id));
+  await restored.load("one");
+  assert.equal(restored.classify("one", window("Healthy.exe", "Healthy")), "other");
+  assert.equal(restored.classify("one", window("New.exe", "New")), "play");
+  assert.equal(restored.classify("one", window("Duplicate.exe", "Title")), "uncertain");
+});

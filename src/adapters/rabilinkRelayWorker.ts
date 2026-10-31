@@ -1,3 +1,4 @@
+import { getTimeoutMs } from "../shared/timeoutSettings.js";
 import { hostname } from "node:os";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
@@ -211,7 +212,7 @@ async function fetchRelayJsonReliably(
   for (let attempt = 1; attempt <= RELAY_WRITE_ATTEMPTS; attempt += 1) {
     throwIfAborted(requestSignal ?? new AbortController().signal);
     try {
-      return await fetchRelayJson(pathname, { ...init, signal: requestSignal }, undefined, relayBaseUrl, RELAY_WRITE_TIMEOUT_MS);
+      return await fetchRelayJson(pathname, { ...init, signal: requestSignal }, undefined, relayBaseUrl, getTimeoutMs("backend.adapters.rabilinkRelayWorker.RELAY_WRITE_TIMEOUT_MS", RELAY_WRITE_TIMEOUT_MS));
     } catch (error) {
       lastError = error;
       if (requestSignal?.aborted) throw abortError(requestSignal);

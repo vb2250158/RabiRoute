@@ -4,6 +4,8 @@
 
 # 主机与远端电脑客户端
 
+远端实例只保留一个默认开启的“是否启用Agent”开关。启用后，主机全部公开接口复用电脑接入凭据，不再要求浏览器登录、Agent／会话登记或逐功能授权。每次 Agent 调用显式传入实际类型与完整会话 Id。
+
 主机电脑上的 Rabi 服务统一保存角色、计划、记忆、Skill、消息记录和调度流程，承担常驻管理职责，不需要另设主控 Agent。每台远端电脑运行 Rabi Agent 客户端，提供该平台支持的电脑操作能力。普通已鉴权 Agent 均可查询计划、记忆和 Skill，也可按接口合同调用电脑能力；是否为主角色不构成额外许可。
 
 ```mermaid
@@ -16,13 +18,13 @@ flowchart LR
   D --> G[可选关联 Codex / DSH]
 ```
 
-客户端不运行另一套 Manager，也不建立角色、记忆或 Skill 数据副本。客户端自身保留连接配置、执行绑定、任务回执和有界传输状态；远端文件仍属于远端电脑的文件系统。关联 Agent 的任务执行沿用原任务 owner，不启动备用 Agent Runtime。客户端、主控和网络连接必须在线。
+客户端不运行另一套 Manager，也不建立角色、记忆或 Skill 数据副本。客户端自身保留连接配置、执行程序设置、任务回执和有界传输状态；远端文件仍属于远端电脑的文件系统。关联 Agent 的任务执行沿用原任务 owner，不启动备用 Agent Runtime。客户端、主控和网络连接必须在线。
 
 ## 接入与使用
 
 按[远端客户端接入步骤](lan-rabi-agent-bootstrap.md)安装，每台电脑保持一个主程序。连接器、托盘、终端宿主和截图辅助程序均为其子程序。关联 Agent 可以稍后启动；私有配置 `agents: []` 也能建立电脑连接。
 
-接入页面先选择 Windows、Mac（macOS）或 Linux，仅安装电脑客户端；安装关联智能体的勾选已移除。首次不提供 `RABI_AGENT_TYPE` 或会话变量时，`--bootstrap` 保存空 Agent 列表。以后登记 Agent 不替换电脑身份；每次投递明确指定类型和完整会话 ID。
+接入页面先选择 Windows、Mac（macOS）或 Linux，仅安装电脑客户端；安装关联智能体的勾选已移除。首次不提供 `RABI_AGENT_TYPE` 或会话变量时，`--bootstrap` 保存空 Agent 列表。以后调用无需登记 Agent；每次投递明确指定类型和完整会话 ID。
 
 Mac 使用当前用户 LaunchAgent，支持文件互传与连接器 0.2.4 的 Zsh/Bash/sh 终端。终端依赖 node-pty；Mac 原生编译可能需要 Xcode Command Line Tools。窗口查询和截图仍仅支持 Windows。Mac 原生终端与 Desktop IPC 仍待在线真机验收。
 
@@ -58,7 +60,16 @@ Windows 构建通过 `scripts/build-agent-native-assets.mjs` 将托盘、终端�
 4. `upload.commit(uploadId)` 校验完整内容并原子提交；不覆盖已存在的目标文件。
 5. 放弃时调用 `upload.abort(uploadId)`，释放临时文件。
 
-单次上传最多 2 GiB，最多 4 个活动上传；当前客户端保留最多 64 条上传记录，最近 256 块支持回执核验。正常停止清理未提交文件；进程意外终止可能留下 `.rabi-upload-<UUID>.tmp`，新客户端不会自动续传旧记录。结果不确定时先查原 ID，不自动换 ID 或覆盖目标。
+单次上传默认不另设大小上限，字节数必须为 JavaScript 可精确表示的非负整数。这与主控 `agentUploads.maxFileMiB` 是不同的文件服务。以下设置由用户在**远端 Rabi Agent 启动环境**配置，重启该 Agent 后生效；超限错误给出当前值和调整入口。
+
+| 环境变量 | 默认值 | 含义 |
+| --- | --- | --- |
+| `RABI_AGENT_COMPUTER_MAX_UPLOAD_BYTES` | 不另设额度 | 单文件字节数；`0` 仅允许空文件 |
+| `RABI_AGENT_COMPUTER_MAX_CONCURRENT_IO` | `4` | 同时处理的电脑 I/O 操作数；`0` 取消额度 |
+| `RABI_AGENT_COMPUTER_MAX_ACTIVE_UPLOADS` | `4` | 活动上传数；`0` 取消额度 |
+| `RABI_AGENT_COMPUTER_MAX_UPLOAD_RECORDS` | `64` | 当前进程保留的上传记录数；`0` 取消额度 |
+
+所有值须为可精确表示的非负整数。最近 256 块支持回执核验。正常停止清理未提交文件；进程意外终止可能留下 `.rabi-upload-<UUID>.tmp`，新客户端不会自动续传旧记录。结果不确定时先查原 ID，不自动换 ID 或覆盖目标。
 
 ## 查询窗口与获取画面
 

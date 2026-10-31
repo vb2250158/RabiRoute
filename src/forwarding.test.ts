@@ -694,7 +694,7 @@ test("replayed platform messages reuse the canonical requirement without a secon
       dataDir: path.join(root, "data"), memoryDataDir: path.join(root, "memory"), routeProfiles: [route]
     }, async () => {
       const result = await forwardMessageAndWait("group_message", record, {}, { recordInbound: false, messageGroup });
-      assert.equal(result.status, "delivered");
+      assert.equal(result.status, "delivered", JSON.stringify({ result, managerUrl: process.env.GATEWAY_MANAGER_URL }));
     });
     assert.deepEqual(requests.map(item => item.action), ["register_group"]);
   } finally {

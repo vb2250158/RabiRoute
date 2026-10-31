@@ -3,45 +3,33 @@ import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { Writable } from "node:stream";
-import { once } from "node:events";
 import test from "node:test";
 import { createPlan } from "../roleKnowledge.js";
 import { planJsonFile } from "../planStorageLayout.js";
-import { handlePlanAttachmentApi } from "./planAttachmentRoutes.js";
+import { createPlanAttachmentOwner } from "./planAttachmentRoutes.js";
 
-class MockResponse extends Writable {
-  statusCode = 0;
-  headers: http.OutgoingHttpHeaders = {};
-  readonly chunks: Buffer[] = [];
-
-  writeHead(statusCode: number, headers: http.OutgoingHttpHeaders): this {
-    this.statusCode = statusCode;
-    this.headers = headers;
-    return this;
-  }
-
-  _write(chunk: Buffer | string, _encoding: BufferEncoding, callback: (error?: Error | null) => void): void {
-    this.chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-    callback();
-  }
-
-  body(): Buffer {
-    return Buffer.concat(this.chunks);
-  }
-}
-
-async function getAttachment(pathname: string, roleDir: string, range?: string): Promise<MockResponse> {
+async function getAttachment(pathname: string, roleDir: string, range?: string) {
   const request = { method: "GET", headers: range ? { range } : {} } as http.IncomingMessage;
-  const response = new MockResponse();
-  const finished = once(response, "finish");
-  assert.equal(handlePlanAttachmentApi(request, pathname, response as unknown as http.ServerResponse, () => roleDir), true);
-  await finished;
-  return response;
+  const parts = pathname.split('/').map(decodeURIComponent);
+  try {
+    const result = createPlanAttachmentOwner({ roleDir: () => roleDir }).prepare(request, parts[3], parts[5], parts[7]).read(range);
+    return { statusCode: result.status, headers: result.headers as http.OutgoingHttpHeaders, body: () => result.bytes ?? Buffer.alloc(0) };
+  } catch (error) {
+    const cause = error as { statusCode?: number; code?: string };
+    const status = cause.statusCode ?? (/not found|unavailable|managed directories/i.test(String(error)) ? 404 : 500);
+    return { statusCode: status, headers: {} as http.OutgoingHttpHeaders, body: () => Buffer.from(String(error)) };
+  }
 }
 
-test("plan attachment route serves a managed image inline", async () => {
+function clean(directory: string) {
+  assert.equal(path.dirname(path.resolve(directory)), path.resolve(os.tmpdir()));
+  assert.ok(path.basename(directory).startsWith('rabiroute-plan-'));
+  fs.rmSync(directory, { recursive: true, force: true });
+}
+
+test("plan attachment route serves a managed image inline", async t => {
   const roleDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-plan-attachment-route-"));
+  t.after(() => clean(roleDir));
   const content = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Z5ZsAAAAASUVORK5CYII=", "base64");
   const plan = createPlan(roleDir, {
     id: "plan-preview",
@@ -69,8 +57,9 @@ test("plan attachment route serves a managed image inline", async () => {
   assert.deepEqual(response.body(), content);
 });
 
-test("plan attachment route serves managed video inline with byte ranges", async () => {
+test("plan attachment route serves managed video inline with byte ranges", async t => {
   const roleDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-plan-video-route-"));
+  t.after(() => clean(roleDir));
   const content = Buffer.from([0x00, 0x00, 0x00, 0x18, 0x66, 0x74, 0x79, 0x70, 0x69, 0x73, 0x6f, 0x6d]);
   const plan = createPlan(roleDir, {
     id: "plan-video-preview",
@@ -100,8 +89,8 @@ test("plan attachment route serves managed video inline with byte ranges", async
 test("plan attachment route resolves copied plan data after the runtime root moves", async (t) => {
   const sourceRoot = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-plan-attachment-source-"));
   const targetRoot = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-plan-attachment-target-"));
-  t.after(() => fs.rmSync(sourceRoot, { recursive: true, force: true }));
-  t.after(() => fs.rmSync(targetRoot, { recursive: true, force: true }));
+  t.after(() => clean(sourceRoot));
+  t.after(() => clean(targetRoot));
   const sourceRoleDir = path.join(sourceRoot, "roles", "Rabi");
   const targetRoleDir = path.join(targetRoot, "roles", "Rabi");
   fs.mkdirSync(sourceRoleDir, { recursive: true });
@@ -118,7 +107,7 @@ test("plan attachment route resolves copied plan data after the runtime root mov
   const attachment = plan.attachments[0]!;
   fs.mkdirSync(path.dirname(targetRoleDir), { recursive: true });
   fs.cpSync(sourceRoleDir, targetRoleDir, { recursive: true });
-  fs.rmSync(sourceRoot, { recursive: true, force: true });
+  clean(sourceRoot);
 
   const pathname = `/api/roles/Rabi/plans/${encodeURIComponent(plan.id)}/attachments/${encodeURIComponent(attachment.id)}`;
   const response = await getAttachment(pathname, targetRoleDir);
@@ -137,8 +126,9 @@ test("plan attachment route resolves copied plan data after the runtime root mov
   assert.equal(rejected.statusCode, 404);
 });
 
-test("plan attachment route returns 404 for missing or unmanaged paths", async () => {
+test("plan attachment route returns 404 for missing or unmanaged paths", async t => {
   const roleDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-plan-attachment-guard-"));
+  t.after(() => clean(roleDir));
   const sourceFile = path.join(roleDir, "source.txt");
   fs.writeFileSync(sourceFile, "inside", "utf8");
   const plan = createPlan(roleDir, {

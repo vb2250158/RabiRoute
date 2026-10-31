@@ -1,3 +1,4 @@
+import { getTimeoutMs } from "../shared/timeoutSettings.js";
 import { randomUUID } from "node:crypto";
 import { fork } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -354,7 +355,7 @@ export function createRouteCatalogStartupAttempt(
     cancel(): Promise<void> {
       if (cancelFlight) return cancelFlight;
       cancelFlight = (async () => {
-        const timeoutMs = positiveInteger(input.terminateTimeoutMs, 5_000);
+        const timeoutMs = positiveInteger(input.terminateTimeoutMs, getTimeoutMs("startup.routeTerminate", 5000));
         if (await waitForClose(1)) return;
         child.kill("SIGTERM");
         if (await waitForClose(timeoutMs)) return;
@@ -396,12 +397,12 @@ export class RouteCatalogStartupLifecycle {
   private runtimeSnapshot: RouteCatalogStartupLifecycleSnapshot;
 
   constructor(private readonly options: RouteCatalogStartupLifecycleOptions) {
-    this.attemptTimeoutMs = positiveInteger(options.attemptTimeoutMs, process.platform === "win32" ? 120_000 : 30_000);
+    this.attemptTimeoutMs = positiveInteger(options.attemptTimeoutMs, getTimeoutMs("startup.routeCatalog", process.platform === "win32" ? 120_000 : 30_000));
     this.retryBaseMs = positiveInteger(options.retryBaseMs, 5_000);
     this.retryMaxMs = Math.max(this.retryBaseMs, positiveInteger(options.retryMaxMs, 60_000));
     this.maxAttempts = positiveInteger(options.maxAttempts, 5);
     this.maxPending = positiveInteger(options.maxPending, 32);
-    this.terminateTimeoutMs = positiveInteger(options.terminateTimeoutMs, 5_000);
+    this.terminateTimeoutMs = positiveInteger(options.terminateTimeoutMs, getTimeoutMs("startup.routeTerminate", 5_000));
     const loader = new ProgressiveRouteCatalogStartup({ limits: options.limits, terminateTimeoutMs: this.terminateTimeoutMs });
     this.attemptFactory = options.attemptFactory ?? ((operation, identity, onProgress) => {
       if (!options.input) throw new Error("Route catalog lifecycle input is missing.");

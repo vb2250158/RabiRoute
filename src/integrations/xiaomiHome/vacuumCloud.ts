@@ -1,3 +1,4 @@
+import { getTimeoutMs } from "../../shared/timeoutSettings.js";
 import { createHash, generateKeyPairSync, randomBytes, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -300,7 +301,7 @@ export class XiaomiVacuumCloud {
     }
   }
 
-  private async accountRequest(input: string, timeoutMs = 12_000): Promise<Response> {
+  private async accountRequest(input: string, timeoutMs = getTimeoutMs("backend.integrations.xiaomiHome.vacuumCloud.accountRequest.timeoutMs", 12_000)): Promise<Response> {
     let url = validatedCloudUrl(input);
     for (let redirects = 0; redirects < 5; redirects++) {
       const cookie = this.cookies.filter(c => (c.hostOnly ? c.domain === url.hostname : url.hostname === c.domain || url.hostname.endsWith(`.${c.domain}`)) && url.pathname.startsWith(c.path))
@@ -399,7 +400,7 @@ export class XiaomiVacuumCloud {
     params.signature = cloudSignature(url, signedNonce, params); params.ssecurity = session.ssecurity; params._nonce = nonce;
     url.search = new URLSearchParams(params).toString();
     let response: Response;
-    try { response = await this.fetchImpl(url, { method: "POST", redirect: "error", signal: AbortSignal.timeout(12_000), headers: { "User-Agent": this.agent, "Content-Type": "application/x-www-form-urlencoded", "x-xiaomi-protocal-flag-cli": "PROTOCAL-HTTP2", "MIOT-ENCRYPT-ALGORITHM": "ENCRYPT-RC4", Cookie: `userId=${session.userId}; serviceToken=${session.serviceToken}; yetAnotherServiceToken=${session.serviceToken}; locale=zh_CN; channel=MI_APP_STORE` } }); }
+    try { response = await this.fetchImpl(url, { method: "POST", redirect: "error", signal: AbortSignal.timeout(getTimeoutMs("backend.integrations.xiaomiHome.vacuumCloud.call.AbortSignal.timeout.request", 12_000)), headers: { "User-Agent": this.agent, "Content-Type": "application/x-www-form-urlencoded", "x-xiaomi-protocal-flag-cli": "PROTOCAL-HTTP2", "MIOT-ENCRYPT-ALGORITHM": "ENCRYPT-RC4", Cookie: `userId=${session.userId}; serviceToken=${session.serviceToken}; yetAnotherServiceToken=${session.serviceToken}; locale=zh_CN; channel=MI_APP_STORE` } }); }
     catch { return failure("unreachable", "The Mi Home cloud service is unreachable.", 504); }
     if ([401, 403].includes(response.status)) failure("login_required", "The Mi Home cloud session expired; reconnect with QR login.", 409);
     if (!response.ok) failure("request_failed", "Mi Home cloud rejected the request.");
@@ -449,7 +450,7 @@ export class XiaomiVacuumCloud {
     const maximum = 64 * 1024 * 1024;
     for (let redirects = 0; redirects < 5; redirects++) {
       let response: Response;
-      try { response = await this.fetchImpl(url, { redirect: "manual", signal: AbortSignal.timeout(30_000) }); }
+      try { response = await this.fetchImpl(url, { redirect: "manual", signal: AbortSignal.timeout(getTimeoutMs("backend.integrations.xiaomiHome.vacuumCloud.pluginPackage.AbortSignal.timeout.request", 30_000)) }); }
       catch { return failure("unreachable", "The official plugin package download failed.", 504); }
       if ([301, 302, 303, 307, 308].includes(response.status)) {
         const location = response.headers.get("location"); await response.body?.cancel();
@@ -590,7 +591,7 @@ export class XiaomiVacuumCloud {
     let url = validatedCloudUrl(downloadUrl!, true);
     for (let redirects = 0; redirects < 5; redirects++) {
       let response: Response;
-      try { response = await this.fetchImpl(url, { redirect: "manual", signal: AbortSignal.timeout(15_000) }); }
+      try { response = await this.fetchImpl(url, { redirect: "manual", signal: AbortSignal.timeout(getTimeoutMs("backend.integrations.xiaomiHome.vacuumCloud.readMap.AbortSignal.timeout.request", 15_000)) }); }
       catch { return failure("unreachable", "The map file download failed.", 504); }
       if ([301, 302, 303, 307, 308].includes(response.status)) {
         const location = response.headers.get("location"); await response.body?.cancel();

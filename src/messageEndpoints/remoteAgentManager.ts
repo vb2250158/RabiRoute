@@ -1,3 +1,4 @@
+import { getTimeoutMs } from "../shared/timeoutSettings.js";
 import dgram from "node:dgram";
 import fs from "node:fs";
 import os from "node:os";
@@ -7,12 +8,8 @@ import { WebSocket } from "ws";
 import type { MessageContextAttachment, MessageContextRecord } from "../messageContextStore.js";
 import { recordDataMutationAudit } from "../observability/dataMutationAudit.js";
 
-export const REMOTE_AGENT_CONTROL_PORT_START = 8797;
-export const REMOTE_AGENT_DISCOVERY_PORT_START = 8798;
-export const REMOTE_AGENT_DISCOVERY_PORT_END = 8818;
-export const REMOTE_AGENT_PROTOCOL_VERSION = 3;
-export const REMOTE_AGENT_FILE_SINGLE_LIMIT_BYTES = Number(process.env.REMOTE_AGENT_FILE_SINGLE_LIMIT_BYTES || 10 * 1024 * 1024);
-export const REMOTE_AGENT_FILE_TOTAL_LIMIT_BYTES = Number(process.env.REMOTE_AGENT_FILE_TOTAL_LIMIT_BYTES || 25 * 1024 * 1024);
+import { REMOTE_AGENT_DISCOVERY_PORT_START, REMOTE_AGENT_DISCOVERY_PORT_END, REMOTE_AGENT_PROTOCOL_VERSION, REMOTE_AGENT_FILE_SINGLE_LIMIT_BYTES, REMOTE_AGENT_FILE_TOTAL_LIMIT_BYTES } from "./remoteAgentProtocol.js";
+export * from "./remoteAgentProtocol.js";
 
 function closeWebSocketSafely(socket: WebSocket): void {
   if (socket.readyState === WebSocket.CLOSED || socket.readyState === WebSocket.CLOSING) return;
@@ -44,8 +41,9 @@ async function closeWebSocketAndWait(socket: WebSocket): Promise<void> {
     };
     const timer = setTimeout(() => {
       try { socket.terminate(); } catch {}
-      finish();
-    }, 2_000);
+      // Termination requests closure; only actual closure confirms owner drain.
+      if (socket.readyState === WebSocket.CLOSED) finish();
+    }, getTimeoutMs("deadline.messageEndpoints.remoteAgentManager.closeWebSocketAndWait", 2_000));
     timer.unref?.();
     socket.once("close", finish);
     closeWebSocketSafely(socket);
@@ -416,6 +414,7 @@ export class RemoteAgentHub {
   private readonly callbackAbortController = new AbortController();
   private accepting = true;
   private lastScanError = "";
+  private shutdownFlight?: Promise<void>;
 
   constructor(options: RemoteAgentHubOptions) {
     this.options = options;
@@ -431,7 +430,11 @@ export class RemoteAgentHub {
     }
   }
 
-  async shutdown(reason = "Remote Agent plugin stopped."): Promise<void> {
+  shutdown(reason = "Remote Agent plugin stopped."): Promise<void> {
+    return this.shutdownFlight ??= this.shutdownNow(reason);
+  }
+
+  private async shutdownNow(reason: string): Promise<void> {
     this.stopAccepting(reason);
     const sockets = [...this.devices.values()].map(record => record.socket);
     this.devices.clear();
@@ -490,17 +493,21 @@ export class RemoteAgentHub {
     };
   }
 
-  async scanLan(timeoutMs = 1400): Promise<RemoteAgentDeviceStatus[]> {
+  async scanLan(timeoutMs = getTimeoutMs("backend.messageEndpoints.remoteAgentManager.scanLan.timeoutMs", 1400), assertAuthorized?: () => void): Promise<RemoteAgentDeviceStatus[]> {
     this.assertAccepting();
+    assertAuthorized?.();
     const found = await this.discoverRemoteAgents(timeoutMs);
+    this.assertAccepting();
+    assertAuthorized?.();
     for (const item of found) {
       this.discovered.set(item.deviceId, item);
     }
     return this.listDevices();
   }
 
-  async connectDevice(request: RemoteAgentConnectRequest): Promise<RemoteAgentDeviceStatus> {
+  async connectDevice(request: RemoteAgentConnectRequest, assertAuthorized?: () => void): Promise<RemoteAgentDeviceStatus> {
     this.assertAccepting();
+    assertAuthorized?.();
     const deviceId = String(request.deviceId || "").trim();
     if (!deviceId) throw new Error("Missing remote Agent device id.");
     const discovered = this.discovered.get(deviceId);
@@ -530,7 +537,7 @@ export class RemoteAgentHub {
     };
     this.devices.set(deviceId, record);
 
-    await new Promise<void>((resolve, reject) => {
+    try { await new Promise<void>((resolve, reject) => {
       let settled = false;
       let challengeAnswered = false;
       let authNonce = "";
@@ -538,6 +545,8 @@ export class RemoteAgentHub {
         clearTimeout(timer);
         socket.off("message", onMessage);
         socket.off("error", onError);
+        socket.off("close", onClosed);
+        this.callbackAbortController.signal.removeEventListener("abort", onStopped);
       };
       const fail = (error: Error): void => {
         if (settled) return;
@@ -554,9 +563,13 @@ export class RemoteAgentHub {
         resolve();
       };
       const onError = (error: Error): void => fail(error instanceof Error ? error : new Error(String(error)));
+      const onClosed = (): void => fail(new Error("Remote Agent connection closed before authentication."));
+      const onStopped = (): void => fail(new Error("Remote Agent plugin is stopping or inactive."));
       const onMessage = (data: WebSocket.RawData): void => {
         if (settled) return;
         try {
+          this.assertAccepting();
+          assertAuthorized?.();
           const message = safeJsonParse(data) as RemoteAgentSocketMessage;
           if (message.type === "challenge") {
             const nonce = String(message.nonce || "");
@@ -572,6 +585,7 @@ export class RemoteAgentHub {
             challengeAnswered = true;
             authNonce = nonce;
             const proof = remoteAgentAuthProof(password, "manager", nonce);
+            assertAuthorized?.();
             socket.send(JSON.stringify({
               type: "hello",
               proof,
@@ -598,7 +612,9 @@ export class RemoteAgentHub {
             }
             record.info = info;
             record.lastSeenAt = nowIso();
+            assertAuthorized?.();
             this.savePassword(deviceId, password);
+            assertAuthorized?.();
             succeed();
             return;
           }
@@ -611,11 +627,20 @@ export class RemoteAgentHub {
       };
       const timer = setTimeout(
         () => fail(new Error("Remote Agent connection timed out.")),
-        this.options.connectionTimeoutMs ?? 6000
+        this.options.connectionTimeoutMs ?? getTimeoutMs("backend.messageEndpoints.remoteAgentManager.connectDevice.setTimeout.connectionTimeoutMs", 6000)
       );
       socket.once("error", onError);
+      socket.once("close", onClosed);
       socket.on("message", onMessage);
+      this.callbackAbortController.signal.addEventListener("abort", onStopped, { once: true });
+      if (this.callbackAbortController.signal.aborted) onStopped();
     });
+      this.assertAccepting();
+      assertAuthorized?.();
+    } catch (error) {
+      await closeWebSocketAndWait(socket);
+      throw error;
+    }
 
     socket.on("message", (data) => {
       if (!this.accepting) return;
@@ -644,11 +669,13 @@ export class RemoteAgentHub {
     return this.deviceStatus(deviceId, record);
   }
 
-  disconnectDevice(deviceId: string): RemoteAgentDeviceStatus {
+  disconnectDevice(deviceId: string, assertAuthorized?: () => void): RemoteAgentDeviceStatus {
+    assertAuthorized?.();
     const id = String(deviceId || "").trim();
     const record = this.devices.get(id);
     if (record) {
       closeWebSocketSafely(record.socket);
+      this.trackCallback(closeWebSocketAndWait(record.socket));
       this.devices.delete(id);
     }
     return this.listDevices().find((device) => device.deviceId === id) ?? {
@@ -682,8 +709,9 @@ export class RemoteAgentHub {
       .slice(0, limit);
   }
 
-  async createTask(request: RemoteAgentTaskRequest): Promise<RemoteAgentTask> {
+  async createTask(request: RemoteAgentTaskRequest, assertAuthorized?: () => void): Promise<RemoteAgentTask> {
     this.assertAccepting();
+    assertAuthorized?.();
     const devices = this.listDevices().filter((device) => device.connected);
     const targetDevice = request.deviceId
       ? devices.find((device) => device.deviceId === request.deviceId)
@@ -704,6 +732,7 @@ export class RemoteAgentHub {
       throw new Error("Missing remote Agent task message.");
     }
     const files = this.prepareTaskFiles(request);
+    assertAuthorized?.();
     const task: RemoteAgentTask = {
       taskId: randomUUID(),
       deviceId: targetDevice.deviceId,
@@ -721,6 +750,7 @@ export class RemoteAgentHub {
     };
     this.tasks.set(task.taskId, task);
     record.lastTaskAt = task.updatedAt;
+    assertAuthorized?.();
     record.socket.send(JSON.stringify({
       type: "task",
       task: { ...task, files },
@@ -735,8 +765,9 @@ export class RemoteAgentHub {
     return deliveredTask;
   }
 
-  receiveTaskEvent(event: RemoteAgentTaskEvent, sourceDeviceId = event.device?.deviceId): RemoteAgentTask {
+  receiveTaskEvent(event: RemoteAgentTaskEvent, sourceDeviceId = event.device?.deviceId, assertAuthorized?: () => void): RemoteAgentTask {
     this.assertAccepting();
+    assertAuthorized?.();
     if (!event.taskId) {
       throw new Error("Remote Agent task event is missing taskId.");
     }
@@ -755,8 +786,9 @@ export class RemoteAgentHub {
       return existing;
     }
     const storedEvent = event.files?.length
-      ? { ...event, files: event.files.map(stripTransferContent), savedFiles: this.saveReturnedFiles(existing, event.files) }
+      ? { ...event, files: event.files.map(stripTransferContent), savedFiles: this.saveReturnedFiles(existing, event.files, assertAuthorized) }
       : event;
+    assertAuthorized?.();
     const task = this.patchTask(event.taskId, storedEvent);
     const contextRecord = remoteAgentTaskEventContextRecord(task, storedEvent);
     if (contextRecord) this.emitConversationRecord(contextRecord);
@@ -964,17 +996,18 @@ export class RemoteAgentHub {
           const buffer = decodeTransferContent(item as RemoteAgentFileTransfer);
           total += buffer.byteLength;
           this.assertFileTransferSize(buffer.byteLength, total, item.name || "inline file");
+          const digest = sha256(buffer);
+          if (item.sha256 && item.sha256 !== digest) {
+            throw new Error(`Remote Agent inline file checksum mismatch: ${item.name || "inline file"}`);
+          }
           files.push({
             name: safeFileName(item.name || "remote-agent-file", `file-${files.length + 1}`),
             relativePath: item.relativePath,
             mimeType: item.mimeType,
             size: buffer.byteLength,
-            sha256: item.sha256 || sha256(buffer),
+            sha256: digest,
             contentBase64: buffer.toString("base64")
           });
-          if (item.sha256 && item.sha256 !== files.at(-1)?.sha256) {
-            throw new Error(`Remote Agent inline file checksum mismatch: ${item.name || "inline file"}`);
-          }
         }
         continue;
       }
@@ -1005,7 +1038,8 @@ export class RemoteAgentHub {
     }
   }
 
-  private saveReturnedFiles(task: RemoteAgentTask, files: RemoteAgentFileTransfer[]): RemoteAgentFileTransfer[] {
+  private saveReturnedFiles(task: RemoteAgentTask, files: RemoteAgentFileTransfer[], assertAuthorized?: () => void): RemoteAgentFileTransfer[] {
+    assertAuthorized?.();
     const dir = path.join(this.fileStoreDir(), task.taskId);
     fs.mkdirSync(dir, { recursive: true });
     let total = 0;
@@ -1016,6 +1050,7 @@ export class RemoteAgentHub {
       const name = safeFileName(file.name || file.path || `returned-${index + 1}`, `returned-${index + 1}`);
       const outPath = path.join(dir, name);
       const digest = sha256(buffer);
+      assertAuthorized?.();
       try {
         fs.writeFileSync(outPath, buffer);
       } catch (error) {

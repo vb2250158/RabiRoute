@@ -147,10 +147,10 @@ test('main page stays busy across the application loop and applies persona chang
   const source=fs.readFileSync(new URL('../pages/home/index.ink',import.meta.url),'utf8'); const start=source.indexOf('  async executeChatTool('), end=source.indexOf('  cleanupChatModel()',start);
   const profileSource=fs.readFileSync(new URL('../utils/agent-profile-page.js',import.meta.url),'utf8');
   const readiness=profileSource.slice(profileSource.indexOf('  isAiuiVoiceContextReady() {'),profileSource.indexOf('  invalidateAiuiVoiceContext() {')).trim().replace(/,$/,'');
-  const methods=vm.runInNewContext('({'+readiness+','+source.slice(start,end).trim().replace(/,$/,'')+'})',{createAgentTurnRuntime,console,navigator:{onLine:true},wx:{}});
+  const methods=vm.runInNewContext('({'+readiness+','+source.slice(start,end).trim().replace(/,$/,'')+'})',{createAgentTurnRuntime,requestTimeout:(_config,_target,_key,fallback)=>fallback,console,navigator:{onLine:true},wx:{}});
   const pending=deferred();let requests=0,applied=0;
   const host={prompt:async input=> ++requests===1?action(input,'rabi_api_call',{method:'GET',path:'/api/future'}):'已查询。'};
-  const page={...methods,currentAgentProfileScope:()=>'',pageVisible:true,data:{},chatModelAgentTools:['rabi_api_call'],setData(patch){Object.assign(this.data,patch);},speakText(){},applyPendingDeviceAgentProfile(){applied++;},applyPendingApiTools(){},ensureChatModel:async()=>host,chatModelApiRuntime:{ handleToolCall:async()=>{await pending.promise;return ok({});} }};
+  const page={...methods,config:()=>({}),currentAgentProfileScope:()=>'',pageVisible:true,data:{},chatModelAgentTools:['rabi_api_call'],setData(patch){Object.assign(this.data,patch);},speakText(){},applyPendingDeviceAgentProfile(){applied++;},applyPendingApiTools(){},ensureChatModel:async()=>host,chatModelApiRuntime:{ handleToolCall:async()=>{await pending.promise;return ok({});} }};
   const run=page.executeLingzhuAgentPrompt('查询');await tick();assert.equal(page.deviceAgentTurnActive,true);assert.equal(page.data.assistantModelBusy,true);assert.equal(applied,1);assert.equal(requests,1);
   pending.resolve();await run;assert.equal(requests,2);assert.equal(page.deviceAgentTurnActive,false);assert.equal(applied,2);
 });

@@ -140,6 +140,25 @@ for (const platform of new Set([process.platform, "linux"])) {
   });
 }
 
+test("launcher control returns long Unicode status without losing the existing owner", async t => {
+  const f = fixture(t);
+  const summary = "Windows \"状态\" " + "电脑😀".repeat(480);
+  const worker = path.join(f.root, "worker.mjs");
+  const bytes = fs.readFileSync(worker, "utf8");
+  fs.writeFileSync(worker, bytes + "\nfor(let i=0;i<120;i++)process.send({type:'desktopSnapshot',summary:" + JSON.stringify(summary) + ",version:'fixture-version'});\n");
+  const launcher = f.run(); await f.ready();
+  const client = f.run(["--command", "status"]);
+  assert.equal(await client.closed, 0, fs.readFileSync(client.output, "utf8"));
+  const receipt = JSON.parse(fs.readFileSync(client.output, "utf8"));
+  assert.equal(receipt.ok, true);
+  assert.equal(receipt.summary, summary.slice(0,2048));
+  assert.equal(receipt.workerPid, f.started()[0].pid);
+  assert.ok(receipt.details.length > 512);
+  assert.ok(receipt.details.includes(summary.slice(0,2048)));
+  assert.equal(launcher.done, false);
+  await f.stopped(); assert.equal(await launcher.closed, 0);
+});
+
 test("launcher preserves abnormal-exit backoff and finite restart budget", async t => {
   const f = fixture(t, process.platform, "crash"); const launcher = f.run();
   await waitFor(() => launcher.done, "restart budget exhausted"); assert.equal(await launcher.closed, 1);

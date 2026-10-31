@@ -119,6 +119,8 @@ export type ConversationSituationSnapshot = {
 
 type ApiEnvelope<T> = { code?: number; message?: string; data?: T };
 
+export function createPersonaIdentityRelationClient(fetchImpl: typeof fetch = (...args) => fetch(...args)) {
+const fetch = fetchImpl;
 function endpoint(roleId: string): string {
   return `/api/roles/${encodeURIComponent(roleId)}/identity-relations`;
 }
@@ -136,7 +138,7 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
   return body.data;
 }
 
-export const personaIdentityRelationClient = {
+const personaIdentityRelationClient = {
   list(roleId: string): Promise<IdentityRelationListResult> {
     return request<IdentityRelationListResult>(endpoint(roleId));
   },
@@ -153,3 +155,7 @@ export const personaIdentityRelationClient = {
     return request<ConversationSituationSnapshot[]>(`${situationsEndpoint(roleId)}?limit=${Math.max(1, Math.min(100, Math.floor(limit)))}`);
   }
 };
+
+return personaIdentityRelationClient;
+}
+export const personaIdentityRelationClient = createPersonaIdentityRelationClient();

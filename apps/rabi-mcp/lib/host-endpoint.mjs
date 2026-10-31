@@ -1,7 +1,9 @@
+import { getTimeoutMs, configureTimeouts } from "../../../scripts/lib/timeout-settings.mjs";
 import path from "node:path";
 import { spawnSync as defaultSpawnSync } from "node:child_process";
 import { readPublicJson } from "./manager-discovery.mjs";
 import { businessReady } from "./endpoint-session.mjs";
+import { discoverWindowsHostIdentity } from '../../../scripts/lib/windows-host-discovery.mjs';
 
 const MAX_DESCRIPTOR_BYTES = 65536;
 function nonempty(value) { return typeof value === "string" && value.trim().length > 0; }
@@ -16,20 +18,28 @@ function origin(value) {
 }
 
 /** Resolve only the installed Host's current endpoint; never launch a runtime or a business operation. */
-export function createHostEndpointSession({ hostExecutable, env = process.env, spawnSync = defaultSpawnSync, fetchImpl = fetch, timeoutMs = 5000 } = {}) {
-  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 12000) throw new Error("Host endpoint timeout must be between 1 and 12000 milliseconds.");
+export function createHostEndpointSession({ hostExecutable, env = process.env, spawnSync = defaultSpawnSync, fetchImpl = fetch, timeoutMs = 5000, discoveryOptions = {} } = {}) {
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 2147483647) throw new Error("Host endpoint timeout must be between 1 and 2147483647 milliseconds.");
+  const fallbackTimeoutMs = timeoutMs;
   const configured = hostExecutable ?? env.RABIROUTE_HOST_EXE;
   const executable = nonempty(configured) ? configured.trim()
     : nonempty(env.LOCALAPPDATA) ? path.join(env.LOCALAPPDATA, "Programs", "RabiRoute", "RabiRouteHost.exe") : "";
   if (!executable || /[\r\n\0]/.test(executable)) throw new Error("Configure a valid RabiRoute Host executable.");
   return {
     async ensure({ diagnostic = false } = {}) {
+      timeoutMs = getTimeoutMs("mcp.host.discovery",fallbackTimeoutMs,env);
       let descriptor;
       try {
         const result = spawnSync(executable, ["--command", "status", "--json"], {
           encoding: "utf8", windowsHide: true, shell: false, timeout: timeoutMs,
           maxBuffer: MAX_DESCRIPTOR_BYTES, env
         });
+        if (result?.error?.code === 'ENOENT') {
+          const current = await discoverWindowsHostIdentity({ ...discoveryOptions, env: { ...env, ...(configured ? { RABIROUTE_HOST_EXE: configured } : {}) },
+            fetch: fetchImpl, timeoutMs, diagnostic, includeMeta: true });
+          configureTimeouts(current.meta.timeoutOverrides);
+          return { managerUrl: current.managerBaseUrl, meta: current.meta };
+        }
         if (!result || result.error || result.status !== 0 || result.signal) throw new Error();
         const output = result.stdout;
         if (typeof output !== "string" || Buffer.byteLength(output, "utf8") > MAX_DESCRIPTOR_BYTES) throw new Error();
@@ -53,6 +63,7 @@ export function createHostEndpointSession({ hostExecutable, env = process.env, s
         throw new Error("Manager metadata is unavailable or does not match the current Host identity.");
       }
       if (!diagnostic && !businessReady(meta)) throw new Error("Manager is not ready for business requests; inspect diagnostic metadata.");
+      configureTimeouts(meta.timeoutOverrides);
       return { managerUrl, meta };
     }
   };

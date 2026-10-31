@@ -1,3 +1,4 @@
+import { getTimeoutMs } from "../../shared/timeoutSettings.js";
 import { createHash, randomUUID } from "node:crypto";
 import { XiaomiHomeRequestAuthorityError, rethrowXiaomiHomeAuthorityError, type XiaomiHomeRequestAuthority } from "./requestAuthority.js";
 import { isIP } from "node:net";
@@ -133,14 +134,12 @@ function resolveActionReceiptRoot(runtimeDir: unknown): string {
   const candidate = String(runtimeDir || defaultRuntimeDir()).trim();
   try {
     const resolved = path.resolve(candidate);
-    if (!candidate || (runtimeDir !== undefined && !path.isAbsolute(candidate))
-      || candidate.startsWith("\\\\") || candidate.startsWith("//")
-      || resolved.startsWith("\\\\") || resolved.startsWith("//")) {
-      throw new Error("network path");
+    if (!candidate || (runtimeDir !== undefined && !path.isAbsolute(candidate))) {
+      throw new Error("relative path");
     }
     return resolved;
   } catch {
-    throw new XiaomiHomeManagerApiError(500, "xiaomi_home_config_invalid", "Xiaomi Home runtimeDir must be an absolute local path.");
+    throw new XiaomiHomeManagerApiError(500, "xiaomi_home_config_invalid", "Xiaomi Home runtimeDir must be an absolute path.");
   }
 }
 
@@ -162,15 +161,15 @@ export function resolveXiaomiHomeManagerConfig(input: XiaomiHomeManagerConfigInp
   if (hostname === "localhost") {
     // Pin localhost to a literal so a modified resolver cannot redirect the Bearer token.
     parsed.hostname = "127.0.0.1";
-  } else if (input.allowPublicBaseUrl !== true && !isPrivateIpLiteral(hostname)) {
-    throw new XiaomiHomeManagerApiError(500, "xiaomi_home_public_url_rejected", "Home Assistant baseUrl must use a literal loopback or private IP unless external hostnames are explicitly allowed.");
+  } else if (input.allowPublicBaseUrl === false && !isPrivateIpLiteral(hostname)) {
+    throw new XiaomiHomeManagerApiError(500, "xiaomi_home_public_url_rejected", "allowPublicBaseUrl=false limits baseUrl to loopback/private IPs. Change it in Xiaomi Home settings to use this hostname or public address.");
   }
   const normalizedHostname = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, "");
-  const loopback = normalizedHostname === "::1" || normalizedHostname.startsWith("127.");
-  if (parsed.protocol === "http:" && !loopback && (!isPrivateIpLiteral(normalizedHostname) || input.allowInsecurePrivateHttp !== true)) {
-    throw new XiaomiHomeManagerApiError(500, "xiaomi_home_insecure_http_rejected", "Non-loopback Home Assistant addresses must use HTTPS; insecure HTTP can be enabled only for literal private addresses.");
+  const loopback = normalizedHostname === "::1" || (isIP(normalizedHostname) === 4 && normalizedHostname.startsWith("127."));
+  if (parsed.protocol === "http:" && !loopback && input.allowInsecurePrivateHttp === false) {
+    throw new XiaomiHomeManagerApiError(500, "xiaomi_home_insecure_http_rejected", "allowInsecurePrivateHttp=false disables HTTP away from loopback. Change it in Xiaomi Home settings or configure an HTTPS baseUrl.");
   }
-  const requestTimeoutMs = Number(input.requestTimeoutMs ?? 5000);
+  const requestTimeoutMs = Number(input.requestTimeoutMs ?? getTimeoutMs("backend.integrations.xiaomiHome.managerApi.resolveXiaomiHomeManagerConfig.Number.requestTimeoutMs", 5000));
   if (!Number.isInteger(requestTimeoutMs) || requestTimeoutMs < 250 || requestTimeoutMs > 30000) {
     throw new XiaomiHomeManagerApiError(500, "xiaomi_home_config_invalid", "requestTimeoutMs must be between 250 and 30000.");
   }
@@ -321,12 +320,7 @@ export function mapXiaomiHomeAction(request: XiaomiHomeActionRequest, speechBind
       return { domain: "notify", service: "send_message", data: { entity_id: binding.notifyEntityId, message: binding.encoding === "json-array" ? JSON.stringify([validated.text]) : validated.text } };
     }
     const names: Record<string, string> = { volume: "volume_level", muted: "is_volume_muted", positionSeconds: "seek_position", soundMode: "sound_mode", url: "media_content_id", mediaType: "media_content_type" };
-    if (media.name === "play_media") {
-      let url: URL;
-      try { url = new URL(String(validated.url)); } catch { throw new XiaomiHomeManagerApiError(400, "xiaomi_home_action_invalid", "Media URL must be an HTTP(S) origin URL without credentials or query."); }
-      if (!["http:", "https:"].includes(url.protocol) || url.username || url.password || url.search || url.hash
-        || !/^(audio\/[a-z0-9.+-]+|music|url)$/.test(String(validated.mediaType))) throw new XiaomiHomeManagerApiError(400, "xiaomi_home_action_invalid", "Media requires an HTTP(S) URL without credentials, query or fragment and an audio media type.");
-    }
+    // Home Assistant owns media identifiers and content types (including signed URLs and media-source://).
     for (const [key, value] of Object.entries(validated)) data[names[key] ?? key] = value;
     return { domain: "media_player", service: media.service, data };
   }
@@ -352,6 +346,7 @@ export class XiaomiHomeManagerApiClient {
   private readonly config: ResolvedXiaomiHomeManagerConfig;
   private readonly actionReceiptRoot: string;
   private readonly speechBindings: readonly HomeSpeechBinding[];
+  private readonly urlPolicy: Pick<XiaomiHomeManagerConfigInput, "allowPublicBaseUrl" | "allowInsecurePrivateHttp">;
 
   constructor(
     input: XiaomiHomeManagerConfigInput = {},
@@ -359,6 +354,7 @@ export class XiaomiHomeManagerApiClient {
     private readonly credentialToken = ""
   ) {
     this.config = resolveXiaomiHomeManagerConfig(input);
+    this.urlPolicy = { allowPublicBaseUrl: input.allowPublicBaseUrl, allowInsecurePrivateHttp: input.allowInsecurePrivateHttp };
     this.actionReceiptRoot = resolveActionReceiptRoot(input.runtimeDir);
     try { this.speechBindings = normalizeHomeSpeechBindings(input.speechBindings); }
     catch { throw new XiaomiHomeManagerApiError(500, "xiaomi_home_config_invalid", "Invalid speech bindings."); }
@@ -378,20 +374,33 @@ export class XiaomiHomeManagerApiClient {
     try {
       authority?.assert();
       if (init.method === "POST") authority?.dispatch();
-      const response = await this.fetchImpl(`${this.config.baseUrl}${pathname}`, {
-        ...init,
-        redirect: "manual",
-        signal: controller.signal,
-        headers: {
-          authorization: `Bearer ${this.token()}`,
-          "content-type": "application/json",
-          ...(init.headers ?? {})
+      let url = new URL(`${this.config.baseUrl}${pathname}`);
+      let method = init.method ?? "GET";
+      let body = init.body;
+      const headers = new Headers(init.headers);
+      if (!headers.has("authorization")) headers.set("authorization", `Bearer ${this.token()}`);
+      if (!headers.has("content-type")) headers.set("content-type", "application/json");
+      let response: Response;
+      for (let redirects = 0; ; redirects++) {
+        authority?.assert();
+        response = await this.fetchImpl(url, { ...init, method, body, headers, redirect: "manual", signal: controller.signal });
+        authority?.assert();
+        const location = response.headers.get("location");
+        if (![301, 302, 303, 307, 308].includes(response.status) || !location) break;
+        await response.body?.cancel();
+        if (redirects >= 20) throw new XiaomiHomeManagerApiError(502, "xiaomi_home_redirect_limit", "Home Assistant returned too many redirects.");
+        const next = new URL(location, url);
+        // Apply the user's configured URL policy to every hop, including scheme changes.
+        resolveXiaomiHomeManagerConfig({ ...this.urlPolicy, baseUrl: next.origin, requestTimeoutMs: this.config.requestTimeoutMs });
+        if (next.username || next.password) throw new XiaomiHomeManagerApiError(502, "xiaomi_home_config_invalid", "HTTP redirect credentials must use the configured authentication channel.");
+        // Match Fetch semantics: credentials do not travel to a different origin.
+        if (next.origin !== url.origin) { headers.delete("authorization"); headers.delete("cookie"); headers.delete("proxy-authorization"); }
+        if (((response.status === 301 || response.status === 302) && method === "POST") || (response.status === 303 && method !== "GET" && method !== "HEAD")) {
+          method = "GET"; body = undefined; headers.delete("content-type"); headers.delete("content-length");
         }
-      });
-      authority?.assert();
-      if (response.status >= 300 && response.status < 400) {
-        throw new XiaomiHomeManagerApiError(502, "xiaomi_home_redirect_rejected", "Home Assistant redirects are not allowed.");
+        url = next;
       }
+      authority?.assert();
       const text = await response.text();
       authority?.assert();
       if (!response.ok) {

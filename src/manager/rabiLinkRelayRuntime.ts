@@ -1,10 +1,13 @@
-import { apiRequestHeaderAllowed } from '../../packages/rabi-api-contract/request.mjs';
+import { getTimeoutMs } from "../shared/timeoutSettings.js";
+import { apiRequestHeaderAllowed, apiRequestTimingPolicy } from '../../packages/rabi-api-contract/request.mjs';
 import { createHash } from 'node:crypto';
 import { issueInternalManagerHopHeaders } from '../shared/internalManagerHop.js';
 import { APPLICATION_ACCESS_CAPABILITY } from '../peerTunnel/runtime.js';
 import { PERSONA_REFERENCE_CAPABILITY } from "../shared/personaPeerService.js";
 import { normalizeRabiPcVersion, rabiPcVersionAdvertisement } from "../shared/rabiPcVersionContract.js";
 type RelayProxyRequest = {
+  remainingBudgetMs?: number;
+  singleAttempt?: boolean;
   nonReplayable?: boolean;
   publicApiTransport?: boolean;
   connectionIdentity?: { appId?: string; deviceId?: string; authenticatedAt?: number };
@@ -393,7 +396,7 @@ async function probeSpeechAdvertisement(config: RabiLinkRelayRuntimeConfig, sign
   let speechAvailable = false;
   try {
     const response = await fetch(`${config.localSpeechUrl}/v1/capabilities`, {
-      signal: AbortSignal.any([signal, AbortSignal.timeout(3000)]), redirect: "error"
+      signal: AbortSignal.any([signal, AbortSignal.timeout(getTimeoutMs("backend.manager.rabiLinkRelayRuntime.probeSpeechAdvertisement.AbortSignal.timeout.request", 3000))]), redirect: "error"
     });
     if (response.ok) {
       const body = await response.json() as { providers?: { asr?: Record<string, { enabled?: boolean }> } };
@@ -500,6 +503,19 @@ async function proxyWebguiRequest(
 ): Promise<void> {
   const requestId = stringValue(request.id);
   if (!requestId || signal.aborted) return;
+  const timing = apiRequestTimingPolicy({ method: request.method, path: request.path }, { defaultBudgetMs: getTimeoutMs("history.transport", 3000) });
+  const budgetMs = timing ? Math.max(0, Math.min(timing.budgetMs,
+    typeof request.remainingBudgetMs === "number" && Number.isFinite(request.remainingBudgetMs) ? request.remainingBudgetMs : timing.budgetMs)) : 0;
+  if (timing && budgetMs <= 0) return;
+  const overall = timing ? new AbortController() : undefined;
+  const reading = timing ? new AbortController() : undefined;
+  const queryDeadlineAt = performance.now() + Math.max(1, budgetMs - 100);
+  const deadlineError = () => new Error("SEARCH_DEADLINE_EXCEEDED");
+  const overallTimer = overall ? setTimeout(() => overall.abort(deadlineError()), budgetMs) : undefined;
+  const queryTimer = reading ? setTimeout(() => reading.abort(deadlineError()), Math.max(1, budgetMs - 100)) : undefined;
+  const completionSignal = overall ? AbortSignal.any([signal, overall.signal]) : signal;
+  const readingSignal = reading ? AbortSignal.any([completionSignal, reading.signal]) : signal;
+  const completionOptions = timing ? { relayWriteAttempts: 1, relayWriteTimeoutMs: 0 } : options;
   try {
     const method = stringValue(request.method).toUpperCase() || "GET";
     const localPath = stringValue(request.path) || "/";
@@ -523,10 +539,14 @@ async function proxyWebguiRequest(
     }
     const requestBody = request.bodyBase64 ? Buffer.from(request.bodyBase64, "base64") : undefined;
     if (localPath.split('?')[0].startsWith('/__rabilink/')) throw new Error('RESERVED_TRANSPORT_PATH');
-    const localUrl = safeLocalUrl(config, localPath);
+    let localUrl = safeLocalUrl(config, localPath);
     const forwardUrl = new URL(localUrl);
+    if (timing?.budgetParameterValid) {
+      forwardUrl.searchParams.set("budgetMs", String(Math.max(1, Math.floor(queryDeadlineAt - performance.now()))));
+      localUrl = forwardUrl.toString();
+    }
     const forwardTarget = forwardUrl.pathname + forwardUrl.search;
-    const requestAttempts = method === "GET" || method === "HEAD" ? options.localRequestAttempts : 1;
+    const requestAttempts = timing ? 1 : method === "GET" || method === "HEAD" ? options.localRequestAttempts : 1;
     let response: Response | null = null;
     let lastError: unknown;
     for (let attempt = 1; attempt <= requestAttempts; attempt += 1) {
@@ -538,12 +558,14 @@ async function proxyWebguiRequest(
           kind: 'relay', generation: config.applicationGenerationId, scope, deviceId: sourceDeviceId, method, target: forwardTarget,
           ...(Number.isSafeInteger(identity?.authenticatedAt) ? { authenticatedAt: identity!.authenticatedAt! } : {})
         }, () => { assertCurrent(); return !signal.aborted; }) } : { ...headers, 'x-rabiroute-relay-proxy': '1' };
-        response = await localFetchWithTimeout(localUrl, {
+        const init = {
           method,
           headers: attemptHeaders,
           body: method === "GET" || method === "HEAD" ? undefined : requestBody,
-          signal
-        }, options.localRequestTimeoutMs, "Rabi WebGUI");
+          signal: readingSignal
+        };
+        // The scoped signal remains attached while reading the response body.
+        response = timing ? await fetch(localUrl, init) : await localFetchWithTimeout(localUrl, init, options.localRequestTimeoutMs, "Rabi WebGUI");
         break;
       } catch (error) {
         lastError = error;
@@ -576,9 +598,20 @@ async function proxyWebguiRequest(
       statusCode: response.status,
       headers: responseHeaders,
       bodyBase64: responseBody.toString("base64")
-    }, options, signal);
+    }, completionOptions, completionSignal);
   } catch (error) {
     if (signal.aborted) return;
+    if (timing) {
+      if (completionSignal.aborted) return;
+      const errorCode = readingSignal.aborted ? "SEARCH_DEADLINE_EXCEEDED" : "SEARCH_TRANSPORT_ERROR";
+      try {
+        await finishWebguiRequest(config, requestId, {
+          ok: true, statusCode: 503, headers: { "content-type": "application/json" },
+          bodyBase64: Buffer.from(JSON.stringify({ code: -1, errorCode, requestId }), "utf8").toString("base64")
+        }, completionOptions, completionSignal);
+      } catch (reportError) { if (!completionSignal.aborted) throw reportError; }
+      return;
+    }
     await finishWebguiRequest(config, requestId, {
       ok: false,
       statusCode: 502,
@@ -586,6 +619,8 @@ async function proxyWebguiRequest(
       bodyBase64: Buffer.from(error instanceof Error ? error.message : String(error), "utf8").toString("base64"),
       error: error instanceof Error ? error.message : String(error)
     }, options, signal);
+  } finally {
+    clearTimeout(overallTimer); clearTimeout(queryTimer);
   }
 }
 
@@ -749,10 +784,10 @@ export class RabiLinkRelayRuntime {
     this.onStatus = options.onStatus;
     this.onEvent = options.onEvent;
     this.options = {
-      localRequestTimeoutMs: Math.max(100, Number(options.localRequestTimeoutMs) || DEFAULT_LOCAL_REQUEST_TIMEOUT_MS),
+      localRequestTimeoutMs: Math.max(1, Number(options.localRequestTimeoutMs) || getTimeoutMs("backend.manager.rabiLinkRelayRuntime.DEFAULT_LOCAL_REQUEST_TIMEOUT_MS", DEFAULT_LOCAL_REQUEST_TIMEOUT_MS)),
       localRequestAttempts: Math.max(1, Math.min(5, Number(options.localRequestAttempts) || DEFAULT_LOCAL_REQUEST_ATTEMPTS)),
-      localSpeechRequestTimeoutMs: Math.max(1000, Number(options.localSpeechRequestTimeoutMs) || DEFAULT_LOCAL_SPEECH_REQUEST_TIMEOUT_MS),
-      relayWriteTimeoutMs: Math.max(100, Number(options.relayWriteTimeoutMs) || DEFAULT_RELAY_WRITE_TIMEOUT_MS),
+      localSpeechRequestTimeoutMs: Math.max(1, Number(options.localSpeechRequestTimeoutMs) || getTimeoutMs("backend.manager.rabiLinkRelayRuntime.DEFAULT_LOCAL_SPEECH_REQUEST_TIMEOUT_MS", DEFAULT_LOCAL_SPEECH_REQUEST_TIMEOUT_MS)),
+      relayWriteTimeoutMs: Math.max(1, Number(options.relayWriteTimeoutMs) || getTimeoutMs("backend.manager.rabiLinkRelayRuntime.DEFAULT_RELAY_WRITE_TIMEOUT_MS", DEFAULT_RELAY_WRITE_TIMEOUT_MS)),
       relayWriteAttempts: Math.max(1, Math.min(5, Number(options.relayWriteAttempts) || DEFAULT_RELAY_WRITE_ATTEMPTS)),
       channelRetryDelayMs: Math.max(10, Math.min(
         MAX_CHANNEL_RETRY_DELAY_MS,
@@ -818,10 +853,7 @@ export class RabiLinkRelayRuntime {
       this.setStatus({ state: "incomplete", message: "本机 Rabi WebGUI 地址必须使用 127.0.0.1、localhost 或 ::1。" });
       return previousDone;
     }
-    if (Boolean(config.localSpeechUrl) && !isLoopbackUrl(config.localSpeechUrl)) {
-      this.setStatus({ state: "incomplete", message: "本机语音服务地址必须使用 127.0.0.1、localhost 或 ::1。" });
-      return previousDone;
-    }
+
 
     this.currentConfig = config;
     const generation = this.generation;

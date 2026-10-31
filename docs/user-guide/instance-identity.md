@@ -1,6 +1,10 @@
 # 区分两台电脑与重置实例 ID
 
-[English](instance-identity_en.md) | 简体中文
+<!-- docs-language-switch -->
+<div align="center">
+<a href="./instance-identity_en.md">English</a> | 简体中文 | <a href="./instance-identity_ja.md">日本語</a>
+</div>
+<!-- /docs-language-switch -->
 
 状态：0.3.21 新增实现。安装版 Windows Host 提供重置；源码 Manager 没有此按钮的执行能力。
 

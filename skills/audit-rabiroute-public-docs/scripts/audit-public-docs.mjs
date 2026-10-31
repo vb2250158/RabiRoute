@@ -58,8 +58,10 @@ const guideDir = path.join(root, "docs", "user-guide");
 if (fs.existsSync(guideDir)) {
   const names = new Set(fs.readdirSync(guideDir).filter((name) => name.endsWith(".md")));
   for (const name of names) {
-    const peer = name.endsWith("_en.md") ? name.replace(/_en\.md$/, ".md") : name.replace(/\.md$/, "_en.md");
-    if (!names.has(peer)) errors.push({ file: `docs/user-guide/${name}`, line: 1, message: `Missing bilingual peer: ${peer}`, value: name });
+    const base = name.replace(/_(?:en|ja)\.md$/, ".md");
+    for (const peer of [base, base.replace(/\.md$/, "_en.md")]) {
+      if (!names.has(peer)) errors.push({ file: `docs/user-guide/${name}`, line: 1, message: `Missing bilingual peer: ${peer}`, value: name });
+    }
   }
 }
 

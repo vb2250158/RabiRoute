@@ -31,9 +31,9 @@ test('official SDK initializes, lists annotations and calls structured tools', a
   assert.deepEqual(JSON.parse(result.content[0].text), receipt);
 });
 
-test('default knowledge policy lists reads only and rejects hidden writes', async t => {
+test('explicit read-only knowledge policy lists reads only and rejects writes', async t => {
   let invoked = 0;
-  const tools = createKnowledgeTools({ allowedRoles: ['example'], client: { invoke: async () => { invoked++; throw new Error('must not execute'); } } });
+  const tools = createKnowledgeTools({ allowedRoles: ['example'], allowWrites: false, client: { invoke: async () => { invoked++; throw new Error('must not execute'); } } });
   const client = await connect(t, tools);
   const listed = await client.listTools();
   assert.ok(listed.tools.length > 0);

@@ -6,7 +6,8 @@ import path from "node:path";
 import test from "node:test";
 import { GenerationRuntime, loadPluginProfile, PluginPackageCatalog } from "../plugin-kernel/index.js";
 import { listenManagerEndpoint } from "../managerEndpointPolicy.js";
-import { handlePluginCatalogApi } from "./pluginCatalogRoutes.js";
+import { createPluginCatalogOperations } from "./pluginCatalogOperations.js";
+import { ManagerPluginRouteRegistry } from "./managerPluginRouteRegistry.js";
 import { WebPluginModuleRegistry } from "./webPluginModules.js";
 import { renderPluginCatalog } from "./pluginCatalogPresentation.js";
 
@@ -83,14 +84,16 @@ async function startCatalogServer() {
     return result.generation;
   };
 
-  const server = http.createServer((request, response) => {
-    const url = new URL(request.url ?? "/", "http://127.0.0.1");
-    if (!handlePluginCatalogApi(request, url, response, {
+  const registry = new ManagerPluginRouteRegistry();
+  const registration = registry.registerOperations("fixture:plugin-catalog", createPluginCatalogOperations({
       runtime,
       renderCatalog: async (input, host) => ({ revision: 0, contract: {}, value: renderPluginCatalog(input, host) }),
       reconciliation: { diagnostics: () => [], reconcile },
       webModules: { list: () => modules.list(), read: (id, rev, relativePath) => modules.read(id, rev, relativePath) }
-    })) response.writeHead(404).end();
+    }));
+  const server = http.createServer((request, response) => {
+    const url = new URL(request.url ?? "/", "http://127.0.0.1");
+    if (!registry.handle(request, url, response)) response.writeHead(404).end();
   });
   const endpoint = await listenManagerEndpoint({
     server,
@@ -104,6 +107,7 @@ async function startCatalogServer() {
     reconcileCount: () => reconcileCount,
     baseUrl: endpoint.baseUrl,
     async close() {
+      await registration.dispose();
       await runtime.dispose();
       await new Promise<void>(resolve => server.close(() => resolve()));
       await fs.rm(fixture.root, { recursive: true, force: true });

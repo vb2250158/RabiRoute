@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { atomicWriteFileSync } from "./shared/filePersistence.js";
+import { PlanStoragePackageRecoveryPendingError } from "./planStoragePackageFence.js";
 import {
   legacyPlanAttachmentDirectory,
   legacyPlanFeedbackAttachmentDirectory,
@@ -36,7 +37,7 @@ export type PlanLayoutMigrationResult = {
   reconciled: number;
   alreadyReconciled: number;
   receipts: string[];
-  failures: Array<{ planId: string; error: string }>;
+  failures: Array<{ planId: string; error: string; packageRecoveryBlocked?: boolean }>;
 };
 
 export type PlanStorageMigrationDependencies = {
@@ -217,7 +218,8 @@ function backfillCanonicalPlanHistories(
           migrated += 1;
         });
       } catch (error) {
-        failures.push({ planId: plan.id, error: error instanceof Error ? error.message : String(error) });
+        failures.push({ planId: plan.id, error: error instanceof Error ? error.message : String(error),
+          ...(error instanceof PlanStoragePackageRecoveryPendingError ? { packageRecoveryBlocked: true } : {}) });
       }
     }
   }
@@ -245,7 +247,8 @@ export function migrateRolePlanLayout(
   result.migrated += legacyRecovery.results.length;
   result.receipts.push(...legacyRecovery.results.map(item => item.receiptPath));
   result.failures.push(...legacyRecovery.failures.map(item => ({
-    planId: "*:legacy-resolution",
+    planId: item.planId ?? "*:legacy-resolution",
+    ...(item.planId ? { packageRecoveryBlocked: true } : {}),
     error: `${item.transactionPath}: ${item.error}`
   })));
   const canonicalization = canonicalizeRolePlanStorageDirectories(roleDir);
@@ -379,7 +382,8 @@ export function migrateRolePlanLayout(
       });
       result.migrated += 1;
     } catch (error) {
-      result.failures.push({ planId: plan.id, error: error instanceof Error ? error.message : String(error) });
+      result.failures.push({ planId: plan.id, error: error instanceof Error ? error.message : String(error),
+        ...(error instanceof PlanStoragePackageRecoveryPendingError ? { packageRecoveryBlocked: true } : {}) });
     }
   }
 

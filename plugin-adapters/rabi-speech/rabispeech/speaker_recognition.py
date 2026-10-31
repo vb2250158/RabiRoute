@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from .timeout_settings import get_timeout_seconds
+
+
 import hashlib
 import json
 import importlib.util
@@ -701,7 +704,7 @@ def _probe_speaker_model(settings: SpeakerRecognitionSettings) -> str | None:
             check=False,
             capture_output=True,
             text=True,
-            timeout=SPEAKER_MODEL_PROBE_TIMEOUT_SECONDS,
+            timeout=get_timeout_seconds("speech.speaker.probe", SPEAKER_MODEL_PROBE_TIMEOUT_SECONDS),
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
     except (OSError, subprocess.SubprocessError) as exc:

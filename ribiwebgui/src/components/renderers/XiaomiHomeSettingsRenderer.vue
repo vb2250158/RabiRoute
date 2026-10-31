@@ -168,8 +168,8 @@ onBeforeUnmount(() => unregisterSaveAction?.());
       <div class="media-hosts-card mt-3 pa-4">
         <div class="d-flex align-center justify-space-between mb-1">
           <div>
-            <div class="text-subtitle-2 font-weight-bold">录像媒体域名白名单</div>
-            <div class="text-caption text-medium-emphasis">用于防止 SSRF；仅允许从白名单中的 HTTPS 主机下载切片视频。</div>
+            <div class="text-subtitle-2 font-weight-bold">录像媒体域名限制（可选）</div>
+            <div class="text-caption text-medium-emphasis">留空不限域名；填写后只从指定主机下载，规则同时作用于跳转、切片和密钥。支持 HTTP(S)。</div>
           </div>
           <v-btn
             size="small"
@@ -190,7 +190,6 @@ onBeforeUnmount(() => unregisterSaveAction?.());
           variant="outlined"
           class="mt-2"
           hint="每行一个 HTTPS 主机；只放行真实事件录像切片使用的域名。"
-          :error-messages="draft.cameraClipCaptureEnabled && !cameraAllowedHosts.trim() ? '录像抓取已开启，但媒体域名白名单为空，因此仍不会下载录像。' : ''"
           persistent-hint
         />
       </div>
@@ -209,8 +208,8 @@ onBeforeUnmount(() => unregisterSaveAction?.());
               <v-text-field v-model.number="draft.cameraClipMaxSegments" type="number" min="1" max="500" label="单段录像最大分片数" />
               <v-text-field v-model.number="draft.cameraClipMaxSegmentBytes" type="number" min="1024" max="134217728" label="单分片最大字节数" />
             </div>
-            <v-switch v-model="draft.allowPublicBaseUrl" label="允许 Home Assistant 域名或公网地址（仍禁止重定向）" color="warning" inset hide-details />
-            <v-switch v-model="draft.allowInsecurePrivateHttp" label="允许非回环私网使用不安全 HTTP（令牌可能被局域网截获）" color="error" inset hide-details />
+            <v-switch v-model="draft.allowPublicBaseUrl" label="允许配置的 Home Assistant 域名或公网地址" color="warning" inset hide-details />
+            <v-switch v-model="draft.allowInsecurePrivateHttp" label="允许非回环地址使用 HTTP（关闭则要求 HTTPS）" color="error" inset hide-details />
           </v-expansion-panel-text>
         </v-expansion-panel>
       </v-expansion-panels>

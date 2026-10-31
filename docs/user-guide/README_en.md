@@ -1,6 +1,6 @@
 <!-- docs-language-switch -->
 <div align="center">
-English | <a href="./README.md">简体中文</a>
+English | <a href="./README.md">简体中文</a> | <a href="./README_ja.md">日本語</a>
 </div>
 <!-- /docs-language-switch -->
 
@@ -8,7 +8,7 @@ English | <a href="./README.md">简体中文</a>
 
 This guide is for people who configure and operate RabiRoute through RibiWebGUI. It starts with the first screen and does not expect you to understand the code, schemas, or Agent internals.
 
-> Applies to RabiRoute 0.1.x. The project is under active development. “Experimental” means an integration exists, but its external platform or real-device path still needs validation in your environment.
+> Applies to RabiRoute 0.4.x. The project is under active development. “Experimental” means an integration exists, but its external platform or real-device path still needs validation in your environment.
 
 ## Understand one thing first
 
@@ -29,11 +29,11 @@ Message adapter -> matching rules -> persona and context -> Agent handler -> rep
 
 To prove that the software works, start with Heartbeat and Codex. This path does not require a QQ login and is the shortest way to validate delivery.
 
-1. Open Quick setup from the bottom of the sidebar.
-2. Select Scheduled trigger as the message source.
-3. Select Codex and bind a project directory and Desktop task.
-4. Leave the persona empty for now, then save.
-5. Open Log diagnostics, trigger one message, and confirm that the task receives it.
+1. Select Create persona in the lower sidebar and save the persona.
+2. Open Role configuration → Message Adapters and add a message Route.
+3. Select Heartbeat and Codex, then bind the project directory and Desktop task.
+4. Save the configuration and enable the Route.
+5. Trigger once and use Log diagnostics to confirm the delivery receipt and target task reception.
 
 See [Run your first Route](first-route_en.md) for the full procedure. When you are ready for QQ, continue with [Routes and message adapters](routes-and-adapters_en.md).
 
@@ -46,7 +46,9 @@ In normal use, confirm **Manager connected**, then save and start your own Route
 | Configure and verify the first delivery | [Run your first Route](first-route_en.md) |
 | Understand navigation, states, and save notices | [Interface and status](interface-and-status_en.md) |
 | Distinguish PCs and repair a copied instance identity | [Reset instance ID](instance-identity_en.md) |
-| Connect QQ, schedules, webhooks, or RabiLink | [Routes and message adapters](routes-and-adapters_en.md) |
+| Connect QQ, Weixin, WeCom, or Feishu | [Communication and message inputs](routes-and-adapters_en.md) |
+| Inspect home devices and test actions | [Smart devices](home-devices_en.md) |
+| Trigger work with schedules or webhooks | [Routes and message inputs](routes-and-adapters_en.md) |
 | Call TTS / ASR on the target PC from another device | [Call TTS and ASR remotely](speech-api_en.md) |
 | Bind Codex or another handler | [Agents, projects, and tasks](agents-and-sessions_en.md) |
 | Read a persona's saved skill catalog and bodies | [View persona skills](persona-skills_en.md) |
@@ -60,6 +62,8 @@ In normal use, confirm **Manager connected**, then save and start your own Route
 This guide explains how to use the product and verify outcomes. It mentions files or technical boundaries only when they materially help with troubleshooting.
 
 For adapter development, routing internals, or APIs, use the [project documentation index](../README_en.md). The [current capabilities and maturity](../current-capabilities_en.md) page is the source of truth for feature status.
+
+In the documentation page, select **API reference (developers)** to search operations from the running service, inspect requests and responses, and download OpenAPI. See the [API reference guide](../api-reference_en.md).
 
 ## Reading conventions
 

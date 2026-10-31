@@ -7,10 +7,30 @@ import http from "node:http";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { WebSocketServer } from "ws";
+import { withoutSessionBindings } from "../lib/instance-agents.mjs";
 import { __test } from "../rabi-agent.mjs";
 
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 const entrypoint = fileURLToPath(new URL("../rabi-agent.mjs", import.meta.url));
+const connectionPath = "/fixture/discovered-agent-channel";
+function connectionCatalog(identity) {
+  const frame = { type: "object", required: ["type"], properties: { type: { type: "string" } }, additionalProperties: true };
+  const contract = { operationId: "manager.lan-agent.connect", method: "GET", contractVersion: "1.0.0", transport: "websocket", pathTemplate: connectionPath,
+    websocket: { protocol: "native-fixture", framing: "json", maxMessageBytes: 104857600, maxBufferedBytes: 209715200,
+      incomingSchema: frame, outgoingSchema: frame, closeGraceMs: 100 } };
+  return { code: 0, data: { schemaVersion: "2", ...identity, pluginGenerationId: "fixture-plugins", catalogRevision: 1, catalogDigest: "sha256:" + "c".repeat(64), nextCursor: "",
+    operations: [{ id: contract.operationId, contractDigest: "sha256:" + "d".repeat(64), contract }] } };
+}
+function attachNativeChannel(ws, events) {
+  ws.on("connection", (socket, request) => {
+    assert.equal(request.url, connectionPath); assert.equal(request.headers["x-rabiroute-api-contract"], "sha256:" + "d".repeat(64));
+    socket.on("message", bytes => {
+      const event = JSON.parse(bytes); events.push(event);
+      if (event.type === "authenticate") socket.send(JSON.stringify({ type: "authenticated" }));
+      if (event.type === "hello") socket.send(JSON.stringify({ type: "connected" }));
+    });
+  });
+}
 function fixture() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabi-lifecycle-"));
   const configPath = path.join(root, "config.json");
@@ -193,7 +213,7 @@ test("real CLI stdin above 1 MiB reaches only ephemeral HTTP fixture unchanged",
   const stdin = fs.openSync(input, "r"); const stdout = fs.openSync(output, "w");
   try {
     fs.writeFileSync(f.configPath, JSON.stringify({ ...f.config, managerUrl: `http://127.0.0.1:${server.address().port}`, agents: [{ agentId: "worker", enabled: true }] }));
-    const child = spawn(process.execPath, [entrypoint, "--config", f.configPath, "--api", "POST", "/api/fixture", "--agent", "worker", "--body-stdin"], { stdio: [stdin, stdout, "inherit"] });
+    const child = spawn(process.execPath, [entrypoint, "--config", f.configPath, "--api", "POST", "/api/fixture", "--agent-type", "dsh", "--id", "fixture-session", "--body-stdin"], { stdio: [stdin, stdout, "inherit"] });
     const code = await new Promise((resolve, reject) => { child.once("error", reject); child.once("exit", resolve); });
     assert.equal(code, 0); assert.equal(received, body);
     assert.equal(JSON.parse(fs.readFileSync(output)).ok, true);
@@ -208,6 +228,7 @@ test("production candidate over ephemeral WebSocket sends updated only after poi
   fs.copyFileSync(entrypoint, path.join(releaseRoot, "rabi-agent.mjs"));
   fs.copyFileSync(path.join(path.dirname(entrypoint), "package.json"), path.join(releaseRoot, "package.json"));
   fs.cpSync(path.join(path.dirname(entrypoint), "lib"), path.join(releaseRoot, "lib"), { recursive: true });
+  fs.symlinkSync(fileURLToPath(new URL("../../../node_modules", import.meta.url)), path.join(releaseRoot, "node_modules"), "junction");
   const digest = "b".repeat(64);
   fs.writeFileSync(path.join(releaseRoot, "release-identity.json"), JSON.stringify({ digest }));
   const releaseEntry = path.join(releaseRoot, "rabi-agent.mjs");
@@ -217,20 +238,20 @@ test("production candidate over ephemeral WebSocket sends updated only after poi
   const server = http.createServer((req, res) => {
     res.setHeader("content-type", "application/json");
     if (req.url === "/.well-known/rabiroute-manager") res.end(JSON.stringify({ code: 0, data: { ...identity, protocolVersion: 1 } }));
+    else if (req.url === "/api/agent/help") res.end(JSON.stringify(connectionCatalog(identity)));
     else if (req.url === "/api/lan-agent/self") res.end(JSON.stringify({ code: 0, data: { ...identity, nodeId: "fixture-node" } }));
     else if (req.url === "/meta") res.end(JSON.stringify(meta));
     else { res.statusCode = 404; res.end('{}'); }
   });
   const ws = new WebSocketServer({ server });
-  ws.on("connection", socket => socket.on("message", bytes => {
-    const event = JSON.parse(bytes); events.push(event);
-    if (event.type === "authenticate") socket.send(JSON.stringify({ type: "authenticated" }));
-    if (event.type === "hello") socket.send(JSON.stringify({ type: "connected" }));
-  }));
+  attachNativeChannel(ws, events);
   await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
   const config = { ...f.config, schemaVersion: 1, managerUrl: `http://127.0.0.1:${server.address().port}`, releasePublicKeySha256: "a".repeat(64), defaultWorkspace: f.root, allowedWorkspaces: [f.root], agentType: "codex-desktop", codexDesktop: { threadId: "fixture-thread" } };
   fs.writeFileSync(f.configPath, JSON.stringify(config));
   const before = fs.readFileSync(f.configPath);
+  const launcher = __test.writeLauncher(f.configPath);
+  const expectedLauncher = fs.readFileSync(launcher, 'utf8');
+  fs.writeFileSync(launcher, 'old launcher fixture');
   const child = spawn(process.execPath, [releaseEntry, "--run", "--config", f.configPath], { env: { ...process.env, RABI_AGENT_UPDATE_CANDIDATE: "1" }, stdio: ["ignore", "ignore", "inherit", "ipc"] });
   const messages = [];
   child.on("message", message => messages.push(message));
@@ -243,14 +264,17 @@ test("production candidate over ephemeral WebSocket sends updated only after poi
     child.send({ type: "activateCandidate" });
     await waitFor(() => messages.some(item => item.type === "candidateConnected"));
     assert.equal(events.some(item => item.status === "updated"), false);
-    assert.equal(events.find(item => item.type === "hello").node.agents[0].sessionId, "latest-task");
+    assert.equal(events.find(item => item.type === "hello").node.agents[0].sessionId, undefined);
+    assert.equal(events.find(item => item.type === "hello").node.hostname, os.hostname());
     __test.writeCurrentRelease(f.configPath, releaseEntry, digest);
     child.send({ type: "commitCandidate" });
     await waitFor(() => messages.some(item => item.type === "candidateCommitted"));
     assert.equal(events.some(item => item.status === "updated"), false);
+    assert.equal(fs.readFileSync(launcher, 'utf8'), 'old launcher fixture');
     child.disconnect();
     await waitFor(() => events.some(item => item.status === "updated"));
-    assert.deepEqual(JSON.parse(fs.readFileSync(f.configPath)).agents, latest.agents);
+    assert.equal(fs.readFileSync(launcher, 'utf8'), expectedLauncher);
+    assert.deepEqual(JSON.parse(fs.readFileSync(f.configPath)).agents, withoutSessionBindings(latest).agents);
     assert.equal(JSON.parse(before).nodeCredential, JSON.parse(fs.readFileSync(f.configPath)).nodeCredential);
   } finally {
     const exited = new Promise(resolve => child.once("exit", resolve)); child.kill("SIGKILL"); await exited;
@@ -267,6 +291,7 @@ async function productionCandidateFixture() {
   fs.copyFileSync(entrypoint, path.join(releaseRoot, "rabi-agent.mjs"));
   fs.copyFileSync(path.join(path.dirname(entrypoint), "package.json"), path.join(releaseRoot, "package.json"));
   fs.cpSync(path.join(path.dirname(entrypoint), "lib"), path.join(releaseRoot, "lib"), { recursive: true });
+  fs.symlinkSync(fileURLToPath(new URL("../../../node_modules", import.meta.url)), path.join(releaseRoot, "node_modules"), "junction");
   const digest = "b".repeat(64);
   fs.writeFileSync(path.join(releaseRoot, "release-identity.json"), JSON.stringify({ digest }));
   const releaseEntry = path.join(releaseRoot, "rabi-agent.mjs");
@@ -275,16 +300,13 @@ async function productionCandidateFixture() {
   const server = http.createServer((req, res) => {
     requests.push(req.url); res.setHeader("content-type", "application/json");
     if (req.url === "/.well-known/rabiroute-manager") res.end(JSON.stringify({ code: 0, data: { ...identity, protocolVersion: 1 } }));
+    else if (req.url === "/api/agent/help") res.end(JSON.stringify(connectionCatalog(identity)));
     else if (req.url === "/api/lan-agent/self") res.end(JSON.stringify({ code: 0, data: { ...identity, nodeId: f.config.nodeId } }));
     else if (req.url === "/meta") res.end(JSON.stringify({ ...identity, rabiGuid: identity.guid, health: { live: true, requiredReady: true, state: "healthy" } }));
     else { res.statusCode = 404; res.end('{}'); }
   });
   const ws = new WebSocketServer({ server });
-  ws.on("connection", socket => socket.on("message", bytes => {
-    const event = JSON.parse(bytes); events.push(event);
-    if (event.type === "authenticate") socket.send(JSON.stringify({ type: "authenticated" }));
-    if (event.type === "hello") socket.send(JSON.stringify({ type: "connected" }));
-  }));
+  attachNativeChannel(ws, events);
   await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
   const config = { ...f.config, schemaVersion: 1, autoUpdate: false, managerUrl: `http://127.0.0.1:${server.address().port}`, releasePublicKeySha256: "a".repeat(64), defaultWorkspace: f.root, allowedWorkspaces: [f.root], agentType: "codex-desktop", codexDesktop: { threadId: "fixture-thread" } };
   fs.writeFileSync(f.configPath, JSON.stringify(config));
@@ -295,7 +317,7 @@ async function productionCandidateFixture() {
   } };
 }
 
-for (const failure of ["socket", "pointer", "digest"]) {
+for (const failure of ["socket", "pointer", "digest", "launcher"]) {
   test(`production candidate exits nonzero and releases IPC when ${failure} fails after commit ACK`, async () => {
     const f = await productionCandidateFixture();
     const child = spawn(process.execPath, [f.releaseEntry, "--run", "--config", f.configPath], { env: { ...process.env, RABI_AGENT_UPDATE_CANDIDATE: "1", RABI_AGENT_SUPERVISED: "1" }, stdio: ["ignore", "ignore", "inherit", "ipc"] });
@@ -312,7 +334,8 @@ for (const failure of ["socket", "pointer", "digest"]) {
       if (failure === "socket") {
         await Promise.all([...f.ws.clients].map(socket => new Promise(resolve => { socket.once("close", resolve); socket.close(); })));
         await delay(50); // Let the production close handler observe the broken connection before opening the fence.
-      } else __test.writeCurrentRelease(f.configPath, failure === "pointer" ? entrypoint : f.releaseEntry, failure === "digest" ? "c".repeat(64) : f.digest);
+      } else if (failure === "launcher") fs.mkdirSync(path.join(f.root, "rabi-agent-launcher.mjs"));
+      else __test.writeCurrentRelease(f.configPath, failure === "pointer" ? entrypoint : f.releaseEntry, failure === "digest" ? "c".repeat(64) : f.digest);
       child.send({ type: "launcherCommitted" });
       await waitFor(() => exit !== undefined);
       assert.equal(exit.signal, null); assert.equal(exit.code, 1);

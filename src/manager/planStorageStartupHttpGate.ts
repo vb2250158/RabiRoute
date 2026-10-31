@@ -5,7 +5,7 @@ const READ_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 /** Whether all requested personas have recovered; an omitted scope requires the full catalog. */
 export function planStorageReadyForRoles(snapshot: PlanStorageStartupLifecycleSnapshot | undefined, roleIds?: readonly string[]): boolean {
   if (snapshot?.state === "ready") return true;
-  return Boolean(snapshot && ["running", "degraded"].includes(snapshot.state)
+  return Boolean(snapshot && ["running", "degraded", "partial"].includes(snapshot.state)
     && roleIds?.length && roleIds.every(roleId => snapshot.summary?.readyRoleIds?.includes(roleId)));
 }
 
@@ -25,6 +25,7 @@ export function publicPlanStorageStartupSnapshot(snapshot: PlanStorageStartupLif
       migrated: snapshot.summary.migrated,
       reconciled: snapshot.summary.reconciled,
       failureCount: snapshot.summary.failures.length,
+      ...(snapshot.summary.packageConflicts?.length ? { packageConflictCount: snapshot.summary.packageConflicts.length } : {}),
       skipped: snapshot.summary.skipped,
       readyRoles: snapshot.summary.readyRoleIds?.length ?? 0
     }) : undefined

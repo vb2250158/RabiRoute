@@ -10,11 +10,11 @@ import {
   type BilibiliHistoryApiItem
 } from "./bilibiliHistoryRecordStore.js";
 
-const API_ENDPOINT = "https://api.bilibili.com/x/web-interface/history/cursor";
-const MAX_PAGE_ITEMS = 30;
-const MAX_BODY_BYTES = 1024 * 1024;
+export const API_ENDPOINT = "https://api.bilibili.com/x/web-interface/history/cursor";
+export const MAX_PAGE_ITEMS = 30;
+export const BILIBILI_HISTORY_BODY_BYTES = 1024 * 1024;
 const DEFAULT_PAGE_DELAY_MS = 650;
-const MAX_JOB_PAGES = 20_000;
+export const MAX_JOB_PAGES = 20_000;
 
 type Cursor = {
   max: number | string;
@@ -69,7 +69,9 @@ type PersistedState = {
   jobs: BilibiliHistoryJob[];
 };
 
-type PageSubmission = {
+export type BilibiliHistoryResult = { status: number; body: Record<string, unknown> };
+
+export type PageSubmission = {
   jobId?: string;
   pageKey?: string;
   code?: number;
@@ -89,41 +91,6 @@ function emptySummary(): BilibiliHistorySummary {
     authorCounts: {},
     themeCounts: {}
   };
-}
-
-function json(response: http.ServerResponse, status: number, body: unknown): void {
-  response.writeHead(status, {
-    "access-control-allow-headers": "authorization, content-type",
-    "access-control-allow-methods": "GET, POST, OPTIONS",
-    "cache-control": "no-store",
-    "content-type": "application/json; charset=utf-8"
-  });
-  response.end(JSON.stringify(body));
-}
-
-function readJson<T>(request: http.IncomingMessage): Promise<T> {
-  return new Promise((resolve, reject) => {
-    const chunks: Buffer[] = [];
-    let size = 0;
-    request.on("data", chunk => {
-      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-      size += buffer.length;
-      if (size > MAX_BODY_BYTES) {
-        reject(new Error("request body too large"));
-        request.destroy();
-        return;
-      }
-      chunks.push(buffer);
-    });
-    request.on("end", () => {
-      try {
-        resolve(JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}") as T);
-      } catch (error) {
-        reject(error);
-      }
-    });
-    request.on("error", reject);
-  });
 }
 
 function epoch(value: unknown): number {
@@ -199,16 +166,34 @@ function isLoopback(request: http.IncomingMessage): boolean {
 export class BilibiliHistoryBridge {
   private state: PersistedState;
   private readonly recordStore: BilibiliHistoryRecordStore;
+  private readonly readOnly: boolean;
+  private published = false;
 
   constructor(
     private readonly statePath: string,
-    rolesRoot: string | (() => string),
+    private readonly rolesRoot: string | (() => string),
     options: { readOnly?: boolean } = {}
   ) {
     this.recordStore = new BilibiliHistoryRecordStore(rolesRoot);
+    this.readOnly = options.readOnly === true;
     this.state = this.load();
-    const migrated = this.pauseLegacyActiveJobs();
-    if (migrated && !options.readOnly) this.save();
+  }
+
+  /** Called only after kernel publication and the previous owner's operations have joined. */
+  publish(): void {
+    if (this.closed) throw new Error("The original Bilibili history owner has retired.");
+    if (this.published) return;
+    // Candidate preparation may overlap writes by the original owner. Resume its
+    // current queue, cursor and pairing rather than the construction-time snapshot.
+    this.state = this.load();
+    try {
+      const migrated = this.pauseLegacyActiveJobs();
+      if (migrated && !this.readOnly) this.save();
+      this.published = true;
+    } catch (error) {
+      this.close();
+      throw error;
+    }
   }
 
   private pauseLegacyActiveJobs(): boolean {
@@ -285,61 +270,35 @@ export class BilibiliHistoryBridge {
       ?? this.state.jobs.find(job => job.status === "queued");
   }
 
-  handle(request: http.IncomingMessage, requestUrl: URL, response: http.ServerResponse): boolean {
-    if (!requestUrl.pathname.startsWith("/api/bilibili-history/")) return false;
-    if (!isLoopback(request) && !hasAuthenticatedConnectionRequest(request)) {
-      json(response, 403, { code: -1, error: "CONNECTION_AUTH_REQUIRED" });
-      return true;
+  pair(body: {
+    extensionId?: string;
+  }, origin: string): BilibiliHistoryResult {
+    this.assertActive();
+    const extensionId = String(body.extensionId ?? "").trim();
+    if (!/^[a-p]{32}$/.test(extensionId)) {
+      return { status: 400, body: { code: -1, error: "INVALID_EXTENSION_ID" } };
     }
-    if (request.method === "OPTIONS") {
-      json(response, 204, {});
-      return true;
+    if (origin && origin !== `chrome-extension://${extensionId}`) {
+      return { status: 403, body: { code: -1, error: "EXTENSION_ORIGIN_MISMATCH" } };
     }
-    void this.handleAsync(request, requestUrl, response).catch(error => {
-      if (!response.headersSent) {
-        json(response, 400, { code: -1, error: error instanceof Error ? error.message : String(error) });
-      } else {
-        response.end();
-      }
-    });
-    return true;
+    if (this.state.bridge && this.state.bridge.extensionId !== extensionId) {
+      return { status: 409, body: { code: -1, error: "BRIDGE_ALREADY_PAIRED" } };
+    }
+    if (!this.state.bridge) {
+      const now = new Date().toISOString();
+      this.state.bridge = {
+        extensionId,
+        token: randomBytes(32).toString("base64url"),
+        pairedAt: now,
+        lastSeenAt: now
+      };
+      this.save();
+    }
+    return { status: 200, body: { code: 0, token: this.state.bridge.token } };
   }
-
-  private async handleAsync(request: http.IncomingMessage, requestUrl: URL, response: http.ServerResponse): Promise<void> {
-    const pathname = requestUrl.pathname;
-
-    if (request.method === "POST" && pathname === "/api/bilibili-history/bridge/pair") {
-      const body = await readJson<{ extensionId?: string }>(request);
-      const extensionId = String(body.extensionId ?? "").trim();
-      if (!/^[a-p]{32}$/.test(extensionId)) {
-        json(response, 400, { code: -1, error: "INVALID_EXTENSION_ID" });
-        return;
-      }
-      const origin = String(request.headers.origin ?? "").trim();
-      if (origin && origin !== `chrome-extension://${extensionId}`) {
-        json(response, 403, { code: -1, error: "EXTENSION_ORIGIN_MISMATCH" });
-        return;
-      }
-      if (this.state.bridge && this.state.bridge.extensionId !== extensionId) {
-        json(response, 409, { code: -1, error: "BRIDGE_ALREADY_PAIRED" });
-        return;
-      }
-      if (!this.state.bridge) {
-        const now = new Date().toISOString();
-        this.state.bridge = {
-          extensionId,
-          token: randomBytes(32).toString("base64url"),
-          pairedAt: now,
-          lastSeenAt: now
-        };
-        this.save();
-      }
-      json(response, 200, { code: 0, token: this.state.bridge.token });
-      return;
-    }
-
-    if (request.method === "GET" && pathname === "/api/bilibili-history/status") {
-      json(response, 200, {
+  status(): BilibiliHistoryResult {
+    this.assertActive();
+    return { status: 200, body: {
         code: 0,
         paired: Boolean(this.state.bridge),
         bridge: this.state.bridge ? {
@@ -348,125 +307,110 @@ export class BilibiliHistoryBridge {
           lastSeenAt: this.state.bridge.lastSeenAt
         } : null,
         jobs: this.state.jobs.slice(-20).map(publicJob)
-      });
-      return;
+      } };
+  }
+  days(roleIdInput: string): BilibiliHistoryResult {
+    this.assertActive();
+    const roleId = sanitizeRoleId(roleIdInput);
+    if (!roleId) {
+      return { status: 400, body: { code: -1, error: "INVALID_ROLE_ID" } };
     }
-
-    const roleDaysMatch = pathname.match(/^\/api\/bilibili-history\/roles\/([^/]+)\/days$/i);
-    if (request.method === "GET" && roleDaysMatch) {
-      const roleId = sanitizeRoleId(decodeURIComponent(roleDaysMatch[1]));
-      if (!roleId) {
-        json(response, 400, { code: -1, error: "INVALID_ROLE_ID" });
-        return;
-      }
-      const index = this.recordStore.readIndex(roleId);
-      json(response, 200, { code: 0, roleId, index });
-      return;
+    const index = this.recordStore.readIndex(roleId);
+    return { status: 200, body: { code: 0, roleId, index } };
+  }
+  day(roleIdInput: string, date: string, query: URLSearchParams): BilibiliHistoryResult {
+    this.assertActive();
+    const roleId = sanitizeRoleId(roleIdInput);
+    if (!roleId) {
+      return { status: 400, body: { code: -1, error: "INVALID_ROLE_ID" } };
     }
-
-    const roleDayMatch = pathname.match(/^\/api\/bilibili-history\/roles\/([^/]+)\/days\/(\d{4}-\d{2}-\d{2})$/i);
-    if (request.method === "GET" && roleDayMatch) {
-      const roleId = sanitizeRoleId(decodeURIComponent(roleDayMatch[1]));
-      if (!roleId) {
-        json(response, 400, { code: -1, error: "INVALID_ROLE_ID" });
-        return;
-      }
-      const records = this.recordStore.readDay(roleId, roleDayMatch[2]);
-      const offset = Math.max(0, Math.trunc(Number(requestUrl.searchParams.get("offset")) || 0));
-      const limit = Math.min(500, Math.max(1, Math.trunc(Number(requestUrl.searchParams.get("limit")) || 100)));
-      json(response, 200, {
+    const records = this.recordStore.readDay(roleId, date);
+    const offset = Math.max(0, Math.trunc(Number(query.get("offset")) || 0));
+    const limit = Math.min(500, Math.max(1, Math.trunc(Number(query.get("limit")) || 100)));
+    return { status: 200, body: {
         code: 0,
         roleId,
-        date: roleDayMatch[2],
+        date: date,
         total: records.length,
         offset,
         limit,
         records: records.slice(offset, offset + limit)
-      });
-      return;
+      } };
+  }
+  createJob(body: {
+    roleId?: unknown;
+    since?: unknown;
+    until?: unknown;
+    pageDelayMs?: unknown;
+    timezoneOffsetMinutes?: unknown;
+  }): BilibiliHistoryResult {
+    this.assertActive();
+    const sinceEpoch = epoch(body.since);
+    const untilEpoch = epoch(body.until) || Math.floor(Date.now() / 1000) + 1;
+    if (!sinceEpoch || untilEpoch <= sinceEpoch) {
+      return { status: 400, body: { code: -1, error: "INVALID_TIME_RANGE" } };
     }
-
-    if (request.method === "POST" && pathname === "/api/bilibili-history/jobs") {
-      const body = await readJson<{
-        roleId?: unknown;
-        since?: unknown;
-        until?: unknown;
-        pageDelayMs?: unknown;
-        timezoneOffsetMinutes?: unknown;
-      }>(request);
-      const sinceEpoch = epoch(body.since);
-      const untilEpoch = epoch(body.until) || Math.floor(Date.now() / 1000) + 1;
-      if (!sinceEpoch || untilEpoch <= sinceEpoch) {
-        json(response, 400, { code: -1, error: "INVALID_TIME_RANGE" });
-        return;
+    const roleId = sanitizeRoleId(body.roleId);
+    if (!roleId) {
+      return { status: 400, body: { code: -1, error: "INVALID_ROLE_ID" } };
+    }
+    try {
+      this.recordStore.indexPath(roleId);
+    }
+    catch (error) {
+      return { status: 404, body: { code: -1, error: error instanceof Error ? error.message : String(error) } };
+    }
+    const now = new Date().toISOString();
+    const job: BilibiliHistoryJob = {
+      id: randomUUID(),
+      roleId,
+      createdAt: now,
+      updatedAt: now,
+      sinceEpoch,
+      untilEpoch,
+      timezoneOffsetMinutes: Number.isFinite(Number(body.timezoneOffsetMinutes))
+        ? Math.min(840, Math.max(-840, Math.trunc(Number(body.timezoneOffsetMinutes))))
+        : new Date().getTimezoneOffset(),
+      status: "queued",
+      cursor: { max: 0, view_at: 0, business: "" },
+      pagesProcessed: 0,
+      pageDelayMs: Math.min(5000, Math.max(250, Number(body.pageDelayMs) || DEFAULT_PAGE_DELAY_MS)),
+      lastPageKey: "",
+      lastError: "",
+      summary: emptySummary(),
+      persistence: {
+        recordCount: 0,
+        activeDays: {},
+        lastPersistedAt: "",
+        recordDates: {}
       }
-      const roleId = sanitizeRoleId(body.roleId);
-      if (!roleId) {
-        json(response, 400, { code: -1, error: "INVALID_ROLE_ID" });
-        return;
-      }
-      try {
-        this.recordStore.indexPath(roleId);
-      } catch (error) {
-        json(response, 404, { code: -1, error: error instanceof Error ? error.message : String(error) });
-        return;
-      }
-      const now = new Date().toISOString();
-      const job: BilibiliHistoryJob = {
-        id: randomUUID(),
-        roleId,
-        createdAt: now,
-        updatedAt: now,
-        sinceEpoch,
-        untilEpoch,
-        timezoneOffsetMinutes: Number.isFinite(Number(body.timezoneOffsetMinutes))
-          ? Math.min(840, Math.max(-840, Math.trunc(Number(body.timezoneOffsetMinutes))))
-          : new Date().getTimezoneOffset(),
-        status: "queued",
-        cursor: { max: 0, view_at: 0, business: "" },
-        pagesProcessed: 0,
-        pageDelayMs: Math.min(5000, Math.max(250, Number(body.pageDelayMs) || DEFAULT_PAGE_DELAY_MS)),
-        lastPageKey: "",
-        lastError: "",
-        summary: emptySummary(),
-        persistence: {
-          recordCount: 0,
-          activeDays: {},
-          lastPersistedAt: "",
-          recordDates: {}
-        }
-      };
-      this.state.jobs.push(job);
-      this.state.jobs = this.state.jobs.slice(-100);
+    };
+    this.state.jobs.push(job);
+    this.state.jobs = this.state.jobs.slice(-100);
+    this.save();
+    return { status: 202, body: { code: 0, job: publicJob(job) } };
+  }
+  job(jobId: string): BilibiliHistoryResult {
+    this.assertActive();
+    const job = this.state.jobs.find(candidate => candidate.id === jobId);
+    return { status: job ? 200 : 404, body: job ? { code: 0, job: publicJob(job) } : { code: -1, error: "JOB_NOT_FOUND" } };
+  }
+  next(request: http.IncomingMessage): BilibiliHistoryResult {
+    this.assertActive();
+    if (!this.tokenMatches(request)) {
+      return { status: 401, body: { code: -1, error: "INVALID_BRIDGE_TOKEN" } };
+    }
+    this.touchBridge();
+    const job = this.queuedJob();
+    if (!job) {
+      return { status: 200, body: { code: 0, job: null } };
+    }
+    if (job.status === "queued") {
+      job.status = "running";
+      job.updatedAt = new Date().toISOString();
       this.save();
-      json(response, 202, { code: 0, job: publicJob(job) });
-      return;
     }
-
-    const jobMatch = pathname.match(/^\/api\/bilibili-history\/jobs\/([0-9a-f-]+)$/i);
-    if (request.method === "GET" && jobMatch) {
-      const job = this.state.jobs.find(candidate => candidate.id === jobMatch[1]);
-      json(response, job ? 200 : 404, job ? { code: 0, job: publicJob(job) } : { code: -1, error: "JOB_NOT_FOUND" });
-      return;
-    }
-
-    if (request.method === "GET" && pathname === "/api/bilibili-history/bridge/next") {
-      if (!this.tokenMatches(request)) {
-        json(response, 401, { code: -1, error: "INVALID_BRIDGE_TOKEN" });
-        return;
-      }
-      this.touchBridge();
-      const job = this.queuedJob();
-      if (!job) {
-        json(response, 200, { code: 0, job: null });
-        return;
-      }
-      if (job.status === "queued") {
-        job.status = "running";
-        job.updatedAt = new Date().toISOString();
-        this.save();
-      }
-      json(response, 200, {
+    return { status: 200, body: {
         code: 0,
         job: {
           id: job.id,
@@ -477,84 +421,102 @@ export class BilibiliHistoryBridge {
           pageSize: MAX_PAGE_ITEMS,
           pageDelayMs: job.pageDelayMs
         }
-      });
-      return;
+      } };
+  }
+  submitPage(body: PageSubmission, request: http.IncomingMessage): BilibiliHistoryResult {
+    this.assertActive();
+    if (!this.tokenMatches(request)) {
+      return { status: 401, body: { code: -1, error: "INVALID_BRIDGE_TOKEN" } };
     }
-
-    if (request.method === "POST" && pathname === "/api/bilibili-history/bridge/page") {
-      if (!this.tokenMatches(request)) {
-        json(response, 401, { code: -1, error: "INVALID_BRIDGE_TOKEN" });
-        return;
-      }
-      const body = await readJson<PageSubmission>(request);
-      const job = this.state.jobs.find(candidate => candidate.id === body.jobId);
-      if (!job || job.status !== "running") {
-        json(response, 409, { code: -1, error: "JOB_NOT_RUNNING" });
-        return;
-      }
-      const code = Number(body.code);
-      if (code !== 0) {
-        job.status = code === -412 || code === -101 ? "paused" : "failed";
-        job.lastError = `Bilibili API ${code}: ${String(body.message ?? "").slice(0, 160)}`;
-        job.updatedAt = new Date().toISOString();
-        this.save();
-        json(response, 200, { code: 0, done: true, status: job.status });
-        return;
-      }
-      const items = Array.isArray(body.items) ? body.items.slice(0, MAX_PAGE_ITEMS) : [];
-      const pageKey = String(body.pageKey ?? "").slice(0, 256);
-      if (!pageKey || pageKey !== job.lastPageKey) {
-        const inRangeItems = items.filter(item => {
-          const viewedAt = Number(item.view_at);
-          return Number.isSafeInteger(viewedAt) && viewedAt >= job.sinceEpoch && viewedAt < job.untilEpoch;
-        });
-        if (!job.roleId) throw new Error("BILIBILI_HISTORY_JOB_HAS_NO_ROLE");
-        const recordDates = job.persistence?.recordDates
-          ?? this.recordStore.recordDatesForJob(job.roleId, job.id);
-        const summarizedRecordIds = new Set(Object.keys(recordDates));
-        const persistedAt = new Date().toISOString();
-        const persisted = this.recordStore.persist(job.roleId, inRangeItems, {
-          jobId: job.id,
-          capturedAt: persistedAt,
-          timezoneOffsetMinutes: job.timezoneOffsetMinutes
-        });
-        for (let index = 0; index < persisted.acceptedRecords.length; index += 1) {
-          const record = persisted.acceptedRecords[index];
-          if (!summarizedRecordIds.has(record.recordId)) {
-            accumulate(job.summary, inRangeItems[index], job.timezoneOffsetMinutes);
-            summarizedRecordIds.add(record.recordId);
-          }
-          recordDates[record.recordId] = record.localDate;
-        }
-        const activeDays: Record<string, number> = {};
-        for (const date of Object.values(recordDates)) increment(activeDays, date);
-        job.persistence = {
-          recordCount: Object.keys(recordDates).length,
-          activeDays,
-          lastPersistedAt: persistedAt,
-          recordDates
-        };
-        job.pagesProcessed += 1;
-        job.lastPageKey = pageKey;
-      }
-      const crossedBoundary = items.some(item => Number(item.view_at) < job.sinceEpoch);
-      const nextCursor = safeCursor(body.nextCursor);
-      const cursorUnchanged = JSON.stringify(nextCursor) === JSON.stringify(job.cursor);
-      const done = items.length === 0 || crossedBoundary || cursorUnchanged || job.pagesProcessed >= MAX_JOB_PAGES;
-      job.cursor = nextCursor;
+    const job = this.state.jobs.find(candidate => candidate.id === body.jobId);
+    if (!job || job.status !== "running") {
+      return { status: 409, body: { code: -1, error: "JOB_NOT_RUNNING" } };
+    }
+    const code = Number(body.code);
+    if (code !== 0) {
+      job.status = code === -412 || code === -101 ? "paused" : "failed";
+      job.lastError = `Bilibili API ${code}: ${String(body.message ?? "").slice(0, 160)}`;
       job.updatedAt = new Date().toISOString();
-      if (done) job.status = "completed";
       this.save();
-      json(response, 200, {
+      return { status: 200, body: { code: 0, done: true, status: job.status } };
+    }
+    const items = Array.isArray(body.items) ? body.items.slice(0, MAX_PAGE_ITEMS) : [];
+    const pageKey = String(body.pageKey ?? "").slice(0, 256);
+    if (!pageKey || pageKey !== job.lastPageKey) {
+      const inRangeItems = items.filter(item => {
+        const viewedAt = Number(item.view_at);
+        return Number.isSafeInteger(viewedAt) && viewedAt >= job.sinceEpoch && viewedAt < job.untilEpoch;
+      });
+      if (!job.roleId)
+        throw new Error("BILIBILI_HISTORY_JOB_HAS_NO_ROLE");
+      const recordDates = job.persistence?.recordDates
+        ?? this.recordStore.recordDatesForJob(job.roleId, job.id);
+      const summarizedRecordIds = new Set(Object.keys(recordDates));
+      const persistedAt = new Date().toISOString();
+      const persisted = this.recordStore.persist(job.roleId, inRangeItems, {
+        jobId: job.id,
+        capturedAt: persistedAt,
+        timezoneOffsetMinutes: job.timezoneOffsetMinutes
+      });
+      for (let index = 0; index < persisted.acceptedRecords.length; index += 1) {
+        const record = persisted.acceptedRecords[index];
+        if (!summarizedRecordIds.has(record.recordId)) {
+          accumulate(job.summary, inRangeItems[index], job.timezoneOffsetMinutes);
+          summarizedRecordIds.add(record.recordId);
+        }
+        recordDates[record.recordId] = record.localDate;
+      }
+      const activeDays: Record<string, number> = {};
+      for (const date of Object.values(recordDates))
+        increment(activeDays, date);
+      job.persistence = {
+        recordCount: Object.keys(recordDates).length,
+        activeDays,
+        lastPersistedAt: persistedAt,
+        recordDates
+      };
+      job.pagesProcessed += 1;
+      job.lastPageKey = pageKey;
+    }
+    const crossedBoundary = items.some(item => Number(item.view_at) < job.sinceEpoch);
+    const nextCursor = safeCursor(body.nextCursor);
+    const cursorUnchanged = JSON.stringify(nextCursor) === JSON.stringify(job.cursor);
+    const done = items.length === 0 || crossedBoundary || cursorUnchanged || job.pagesProcessed >= MAX_JOB_PAGES;
+    job.cursor = nextCursor;
+    job.updatedAt = new Date().toISOString();
+    if (done)
+      job.status = "completed";
+    this.save();
+    return { status: 200, body: {
         code: 0,
         done,
         status: job.status,
         nextCursor: job.cursor,
         waitMs: job.pageDelayMs
-      });
-      return;
-    }
-
-    json(response, 404, { code: -1, error: "NOT_FOUND" });
+      } };
+  }
+  private closed = false;
+  assertActive(): void {
+    if (this.closed) throw new Error("The original Bilibili history owner has retired.");
+    if (!this.published) throw new Error("The Bilibili history owner is not published.");
+  }
+  close(): void { this.closed = true; }
+  captureAdmission(): () => void {
+    this.assertActive();
+    const originalRoot = path.resolve(typeof this.rolesRoot === "function" ? this.rolesRoot() : this.rolesRoot);
+    return () => {
+      this.assertActive();
+      const currentRoot = path.resolve(typeof this.rolesRoot === "function" ? this.rolesRoot() : this.rolesRoot);
+      if (currentRoot !== originalRoot)
+        throw new Error("The original Bilibili history persona root changed before execution.");
+    };
+  }
+  admit(request: http.IncomingMessage, producer = false): BilibiliHistoryResult | null {
+    this.assertActive();
+    if (!isLoopback(request) && !hasAuthenticatedConnectionRequest(request))
+      return { status: 403, body: { code: -1, error: "CONNECTION_AUTH_REQUIRED" } };
+    if (producer && !this.tokenMatches(request))
+      return { status: 401, body: { code: -1, error: "INVALID_BRIDGE_TOKEN" } };
+    return null;
   }
 }

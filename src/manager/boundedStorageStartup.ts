@@ -1,3 +1,4 @@
+import { getTimeoutMs } from "../shared/timeoutSettings.js";
 export type StorageAttempt<Value> = Readonly<{
   result: Promise<Value>;
   cancel(): Promise<void>;
@@ -38,7 +39,7 @@ export class BoundedStorageStartup {
     const batchSize = Math.min(positive(this.limits.batchSize, 4), 16);
     for (let offset = 0; offset < items.length && !this.stopped; offset += batchSize) {
       const batch = items.slice(offset, offset + batchSize);
-      const deadline = Date.now() + positive(this.limits.batchTimeoutMs, 30_000);
+      const deadline = Date.now() + positive(this.limits.batchTimeoutMs, getTimeoutMs("startup.storageBatch", 30_000));
       let cursor = 0;
       let fatal: unknown;
       await Promise.all(Array.from({ length: Math.min(concurrency, batch.length) }, async () => {
@@ -52,7 +53,7 @@ export class BoundedStorageStartup {
             let value: Value;
             try {
               value = await this.read(create(item), Math.min(
-                positive(this.limits.itemTimeoutMs, 10_000),
+                positive(this.limits.itemTimeoutMs, getTimeoutMs("startup.storageItem", 10_000)),
                 Math.max(1, deadline - Date.now())
               ));
             } catch (error) {

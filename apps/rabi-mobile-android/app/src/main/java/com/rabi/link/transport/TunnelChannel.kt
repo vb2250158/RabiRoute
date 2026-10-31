@@ -43,7 +43,7 @@ internal abstract class TunnelChannel : AutoCloseable {
             catch(error: Throwable) { channel.close(); throw error }
         }
 
-        fun rtc(context: Context, signal: (String) -> String): TunnelChannel {
+        fun rtc(context: Context, timeout: (String, Long) -> Long = { _, fallback -> fallback }, signal: (String) -> String): TunnelChannel {
             PeerConnectionFactory.initialize(PeerConnectionFactory.InitializationOptions.builder(context.applicationContext).createInitializationOptions())
             val factory = PeerConnectionFactory.builder().createPeerConnectionFactory()
             var peer: PeerConnection? = null; var data: DataChannel? = null
@@ -80,24 +80,24 @@ internal abstract class TunnelChannel : AutoCloseable {
                     override fun onStateChange() { if(data?.state()==DataChannel.State.OPEN) opened.countDown(); if(data?.state()==DataChannel.State.CLOSED) channel.close() }
                     override fun onMessage(buffer: DataChannel.Buffer) { channel.receive(ByteArray(buffer.data.remaining()).also { buffer.data.get(it) }) }
                 })
-                val offer = SdpResult(); peer!!.createOffer(offer,MediaConstraints()); val description = offer.description()
-                val local = SdpResult(); peer!!.setLocalDescription(local,description); local.await()
-                check(gathered.await(5,TimeUnit.SECONDS) && !channel.closed) { "P2P discovery timeout" }
+                val offer = SdpResult(timeout("android.tunnel.sdp",3000)); peer!!.createOffer(offer,MediaConstraints()); val description = offer.description()
+                val local = SdpResult(timeout("android.tunnel.sdp",3000)); peer!!.setLocalDescription(local,description); local.await()
+                check(gathered.await(timeout("android.tunnel.ice",5000),TimeUnit.MILLISECONDS) && !channel.closed) { "P2P discovery timeout" }
                 val answer = signal(peer!!.localDescription.description)
                 require(answer.startsWith("v=0") && answer.contains("m=application ") && !answer.contains(" typ relay"))
-                val remote = SdpResult(); peer!!.setRemoteDescription(remote,SessionDescription(SessionDescription.Type.ANSWER,answer)); remote.await()
-                check(opened.await(5,TimeUnit.SECONDS) && !channel.closed) { "P2P connect timeout" }
+                val remote = SdpResult(timeout("android.tunnel.sdp",3000)); peer!!.setRemoteDescription(remote,SessionDescription(SessionDescription.Type.ANSWER,answer)); remote.await()
+                check(opened.await(timeout("android.tunnel.connect",5000),TimeUnit.MILLISECONDS) && !channel.closed) { "P2P connect timeout" }
                 return channel
             } catch(error: Throwable) { channel.close(); throw error }
         }
     }
-    private class SdpResult : SdpObserver {
+    private class SdpResult(private val timeoutMs: Long) : SdpObserver {
         private val latch = CountDownLatch(1); private var value: SessionDescription? = null; private var failure: String? = null
         override fun onCreateSuccess(description: SessionDescription) { value=description; latch.countDown() }
         override fun onSetSuccess() { latch.countDown() }
         override fun onCreateFailure(error: String) { failure=error; latch.countDown() }
         override fun onSetFailure(error: String) { failure=error; latch.countDown() }
-        fun await() { check(latch.await(3,TimeUnit.SECONDS) && failure==null) { "P2P description failed" } }
+        fun await() { check(latch.await(timeoutMs,TimeUnit.MILLISECONDS) && failure==null) { "P2P description failed" } }
         fun description(): SessionDescription { await(); return value ?: error("No P2P offer") }
     }
 }

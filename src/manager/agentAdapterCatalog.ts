@@ -1,6 +1,8 @@
 import type http from "node:http";
 import { handleDshConnectionRequest } from "./dshConnectionRoutes.js";
-import { DshConnectionError } from "../dshConnectionStore.js";
+import { createAgentAdapterCatalogOperations, runAgentAdapterCatalogOperation } from "./agentAdapterCatalogOperations.js";
+import { AGENT_CATALOG_OPERATIONS } from "./agentAdapterCatalogContract.js";
+import type { ApiOperationDefinition, ApiOperationRegistration } from "./apiOperationContract.js";
 import { fileURLToPath } from "node:url";
 import { updateAgentHooks } from "../agentAdapters/hookInstallation.js";
 import { listRegisteredAgentAdapterManifests } from "../agentAdapters/agentAdapter.js";
@@ -11,15 +13,11 @@ import type {
 } from "../agentAdapters/managerApi.js";
 import { recordPerformanceOperation } from "../performance/performanceInstrumentation.js";
 import type { AgentAdapterManifest } from "../shared/agentAdapterCapabilities.js";
-import type { ManagerPluginRouteHandler } from "./managerPluginRouteRegistry.js";
-import { ManagerPluginRequestTracker } from "./managerPluginRequestTracker.js";
 import {
   AgentAdapterCatalogWorkerError,
   AgentAdapterCatalogWorkerPool,
   type AgentAdapterCatalogWorkerPoolStatus
 } from "./agentAdapterCatalogWorkerPool.js";
-
-export const AGENT_ADAPTER_CATALOG_PLUGIN_INSTANCE_ID = "manager:agent-adapter-catalog";
 
 export type AgentAdapterCatalogServiceOptions = {
   rootDir: string;
@@ -47,29 +45,16 @@ export type AgentAdapterCatalogRoutesContext = {
 };
 
 export type AgentAdapterCatalogPluginMountOptions = AgentAdapterCatalogServiceOptions & {
-  jsonResponse(response: http.ServerResponse, statusCode: number, body: unknown): void;
-  registerRoutes(
-    instanceId: string,
-    routeIdPrefix: string,
-    handlers: readonly ManagerPluginRouteHandler[]
-  ): () => void;
+  registerOperations(definitions: readonly ApiOperationDefinition[]): Promise<ApiOperationRegistration>;
+  adopt(disposer: () => Promise<void>): void;
 };
 
 export type AgentAdapterCatalogPluginMount = {
   service: AgentAdapterCatalogService;
-  handler: ManagerPluginRouteHandler;
   cancel(reason?: string): Promise<void>;
   drain(): Promise<void>;
   stop(reason?: string): Promise<void>;
 };
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
-function queryNumber(value: string | null, fallback: number): number {
-  return Number(value || String(fallback));
-}
 
 function cloneManifest(manifest: AgentAdapterManifest): AgentAdapterCatalogSnapshot["adapters"][number] {
   return {
@@ -82,60 +67,6 @@ function cloneManifest(manifest: AgentAdapterManifest): AgentAdapterCatalogSnaps
       ...(manifest.capabilities.managedTasks
         ? { managedTasks: { ...manifest.capabilities.managedTasks } }
         : {})
-    }
-  };
-}
-
-function fullScanOptions(requestUrl: URL): AgentScanOptions {
-  return {
-    ...grokBotScanOptions(requestUrl),
-    codexLimit: queryNumber(requestUrl.searchParams.get("codexLimit"), 200),
-    codexOffset: queryNumber(requestUrl.searchParams.get("codexOffset"), 0),
-    codexQuery: requestUrl.searchParams.get("codexQuery") || undefined,
-    dshLimit: queryNumber(requestUrl.searchParams.get("dshLimit"), 200),
-    dshOffset: queryNumber(requestUrl.searchParams.get("dshOffset"), 0),
-    dshQuery: requestUrl.searchParams.get("dshQuery") || undefined,
-    dshBaseUrl: requestUrl.searchParams.get("dshBaseUrl") || undefined
-  };
-}
-
-function grokBotScanOptions(requestUrl: URL): AgentScanOptions {
-  return {
-    grokBotLimit: queryNumber(requestUrl.searchParams.get("grokBotLimit"), 100),
-    grokBotOffset: queryNumber(requestUrl.searchParams.get("grokBotOffset"), 0),
-    grokBotQuery: requestUrl.searchParams.get("grokBotQuery") || undefined,
-    grokBotAgentId: requestUrl.searchParams.get("grokBotAgentId") || undefined,
-    grokBotProfilePath: requestUrl.searchParams.get("grokBotProfilePath") || undefined,
-    grokBotBackendUrl: requestUrl.searchParams.get("grokBotBackendUrl") || undefined
-  };
-}
-
-function dshScanOptions(
-  requestUrl: URL
-): Pick<AgentScanOptions, "dshLimit" | "dshOffset" | "dshQuery" | "dshBaseUrl"> {
-  return {
-    dshLimit: queryNumber(requestUrl.searchParams.get("dshLimit"), 200),
-    dshOffset: queryNumber(requestUrl.searchParams.get("dshOffset"), 0),
-    dshQuery: requestUrl.searchParams.get("dshQuery") || undefined,
-    dshBaseUrl: requestUrl.searchParams.get("dshBaseUrl") || undefined
-  };
-}
-
-function responseAbortSignal(
-  request: http.IncomingMessage,
-  response: http.ServerResponse
-): { signal: AbortSignal; dispose(): void } {
-  const controller = new AbortController();
-  const abort = (): void => {
-    if (!response.writableEnded && !response.destroyed) controller.abort();
-  };
-  request.once("aborted", abort);
-  response.once("close", abort);
-  return {
-    signal: controller.signal,
-    dispose() {
-      request.off("aborted", abort);
-      response.off("close", abort);
     }
   };
 }
@@ -158,9 +89,9 @@ export class AgentAdapterCatalogService {
     this.recordOperation = options.recordOperation ?? recordPerformanceOperation;
   }
 
-  async connectionOperation(request: http.IncomingMessage, url: URL): Promise<unknown> {
+  async connectionOperation(request: http.IncomingMessage, url: URL, parsedBody?: Readonly<{ value: unknown; signal?: AbortSignal }>): Promise<unknown> {
     this.assertAccepting();
-    return this.track(this.runControlled(controller => handleDshConnectionRequest(request, url, undefined, controller.signal)));
+    return this.track(this.runControlled(controller => handleDshConnectionRequest(request, url, undefined, controller.signal, parsedBody)));
   }
 
   async updateHooks(adapter: string): Promise<{ message: string }> {
@@ -307,102 +238,44 @@ export class AgentAdapterCatalogService {
   }
 }
 
-function routeErrorStatus(error: unknown): number {
-  return error instanceof AgentAdapterCatalogWorkerError && error.code === "busy" ? 503 : 500;
-}
-
-export function handleAgentAdapterCatalogApi(
-  request: http.IncomingMessage,
-  requestUrl: URL,
-  response: http.ServerResponse,
-  context: AgentAdapterCatalogRoutesContext
-): boolean {
-  if (["/api/agent-adapters/dsh/connection", "/api/agent-adapters/dsh/connections"].includes(requestUrl.pathname)) {
-    void context.service.connectionOperation(request, requestUrl)
-      .then(data => context.jsonResponse(response, 200, data))
-      .catch(error => context.jsonResponse(response, error instanceof DshConnectionError ? error.status : 500, {
-        ok: false, message: error instanceof DshConnectionError ? error.message : "DSH connection operation failed; refresh before retrying."
-      }));
-    return true;
-  }
-  if (request.method === "POST" && requestUrl.pathname === "/api/agent-adapters/hooks/update") {
-    void context.service.updateHooks(requestUrl.searchParams.get("adapter") || "")
-      .then(data => context.jsonResponse(response, 200, { ok: true, ...data }))
-      .catch(error => context.jsonResponse(response, 500, { ok: false, message: errorMessage(error) }));
-    return true;
-  }
-  if (request.method === "GET" && requestUrl.pathname === "/api/agent-adapters/catalog") {
-    void context.service.catalog()
-      .then(data => context.jsonResponse(response, 200, { code: 0, data }))
-      .catch(error => context.jsonResponse(response, routeErrorStatus(error), {
-        code: -1,
-        message: errorMessage(error)
-      }));
-    return true;
-  }
-
-  const allScan = requestUrl.pathname === "/api/scan/agents";
-  const dshScan = requestUrl.pathname === "/api/scan/agents/dsh";
-  const grokBotScan = requestUrl.pathname === "/api/scan/agents/grokBot";
-  if (request.method !== "GET" || (!allScan && !dshScan && !grokBotScan)) return false;
-
-  const requestLifetime = responseAbortSignal(request, response);
-  const operation = dshScan
-    ? context.service.scanDsh(dshScanOptions(requestUrl), requestLifetime.signal)
-    : grokBotScan
-      ? context.service.scanGrokBot(grokBotScanOptions(requestUrl), requestLifetime.signal)
-      : context.service.scanAll(fullScanOptions(requestUrl), requestLifetime.signal);
-  void operation
-    .then(data => {
-      if (!response.writableEnded && !response.destroyed) context.jsonResponse(response, 200, data);
-    })
-    .catch(error => {
-      if (!response.writableEnded && !response.destroyed) {
-        context.jsonResponse(response, routeErrorStatus(error), {
-          code: -1,
-          message: errorMessage(error)
-        });
-      }
-    })
-    .finally(() => requestLifetime.dispose());
+/** Transitional raw fixtures share the same owner as executable registration. */
+export function handleAgentAdapterCatalogApi(request: http.IncomingMessage, requestUrl: URL,
+  response: http.ServerResponse, context: AgentAdapterCatalogRoutesContext): boolean {
+  const connection = ["/api/agent-adapters/dsh/connection", "/api/agent-adapters/dsh/connections"].includes(requestUrl.pathname);
+  const definition = AGENT_CATALOG_OPERATIONS.find(item => item.path === requestUrl.pathname && item.method === request.method);
+  if (!definition && !connection) return false;
+  void runAgentAdapterCatalogOperation(definition?.key ?? (requestUrl.pathname.endsWith("/connections") ? "connections" : "connection"),
+    request, requestUrl, response, context.service).then(result => {
+      if (!response.writableEnded && !response.destroyed) context.jsonResponse(response, result.status, result.body);
+    });
   return true;
 }
 
-export function mountAgentAdapterCatalogPlugin(
-  options: AgentAdapterCatalogPluginMountOptions
-): AgentAdapterCatalogPluginMount {
+export async function mountAgentAdapterCatalogPlugin(options: AgentAdapterCatalogPluginMountOptions): Promise<AgentAdapterCatalogPluginMount> {
   const service = new AgentAdapterCatalogService(options);
-  const requestTracker = new ManagerPluginRequestTracker();
-  const handler: ManagerPluginRouteHandler = requestTracker.wrap((request, requestUrl, response) => (
-    handleAgentAdapterCatalogApi(request, requestUrl, response, {
-      service,
-      jsonResponse: options.jsonResponse
-    })
-  ));
-  const unregister = options.registerRoutes(
-    AGENT_ADAPTER_CATALOG_PLUGIN_INSTANCE_ID,
-    "manager.agent-adapter-catalog.api",
-    [handler]
-  );
-  let registered = true;
-  const unregisterOnce = (): void => {
-    if (!registered) return;
-    registered = false;
-    unregister();
-  };
+  let registration: ApiOperationRegistration | undefined;
+  let retirement: Promise<void> | undefined;
+  const retire = () => retirement ??= registration?.dispose() ?? Promise.resolve();
+  let stopping: Promise<void> | undefined;
+  const stop = (reason?: string) => stopping ??= (async () => {
+    const outcomes = await Promise.allSettled([
+      Promise.resolve().then(retire),
+      Promise.resolve().then(() => service.stop(reason))
+    ]);
+    const failures = outcomes.flatMap(outcome => outcome.status === "rejected" ? [outcome.reason] : []);
+    if (failures.length) throw new AggregateError(failures, "Agent adapter catalog owner cleanup failed.");
+  })();
+  options.adopt(stop);
+  try { registration = await options.registerOperations(createAgentAdapterCatalogOperations(service)); }
+  catch (error) {
+    try { await stop(); }
+    catch (cleanup) { throw new AggregateError([error, cleanup], "Agent adapter catalog preparation and cleanup failed."); }
+    throw error;
+  }
   return {
     service,
-    handler,
     cancel: reason => service.cancel(reason),
-    async drain() {
-      unregisterOnce();
-      await requestTracker.stop();
-      await service.drain();
-    },
-    async stop(reason?: string) {
-      unregisterOnce();
-      await requestTracker.stop();
-      await service.stop(reason);
-    }
+    async drain() { await retire(); await service.drain(); },
+    stop
   };
 }

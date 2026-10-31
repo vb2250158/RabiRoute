@@ -1,7 +1,7 @@
 import { ALL_DAY_SOURCES, isReviewEvent, matchesReviewType, type AllDayCatalog, type AllDayEvent, type AllDaySettings } from "../shared/allDayRecording.js";
 import type { AllDayReadJob } from "./allDayRecordingReadStorage.js";
 
-type Entry = { role: string; day?: string; kind: "catalog" | "recent"; mobiles: string[]; body: AllDayCatalog; loading: boolean; at: number; error?: string; bytes: number; journal: Map<string, AllDayEvent>; dirty: Set<string>; abort: AbortController };
+type Entry = { role: string; directory: string; day?: string; kind: "catalog" | "recent"; mobiles: string[]; body: AllDayCatalog; loading: boolean; at: number; error?: string; bytes: number; journal: Map<string, AllDayEvent>; dirty: Set<string>; abort: AbortController };
 export type AllDayReadReady = { readDay?: string; catalogReady?: boolean; readFailed?: boolean };
 const dayOf = (time: number) => new Date(time).toISOString().slice(0,10);
 const order = (a: AllDayEvent, b: AllDayEvent) => a.startedAt - b.startedAt || a.id.localeCompare(b.id);
@@ -20,7 +20,7 @@ export class AllDayRecordingReadModel {
     run(job: AllDayReadJob, signal?: AbortSignal): Promise<unknown>;
     ready(role: string, event: AllDayReadReady): void;
   }) {}
-  private key(role: string, kind: string, day = "") { return JSON.stringify([role,kind,day]); }
+  private key(role: string, kind: string, day = "") { return JSON.stringify([role,this.options.directory(role),kind,day]); }
   private trim() {
     let bytes = [...this.entries.values()].reduce((sum, entry)=>sum+entry.bytes,0);
     for (const [key, entry] of this.entries) {
@@ -32,27 +32,28 @@ export class AllDayRecordingReadModel {
   private async snapshot(role: string, kind: "catalog" | "recent", day?: string): Promise<AllDayCatalog> {
     if(this.disposed) throw new Error("Recording read owner has stopped");
     if (day !== undefined && (!/^\d{4}-\d{2}-\d{2}$/.test(day) || !Number.isFinite(Date.parse(day)))) throw new Error("Invalid recording day");
-    const key = this.key(role,kind,day);
+    const originalDirectory=this.options.directory(role), key = this.key(role,kind,day);
     let entry = this.entries.get(key);
     if (!entry && this.entries.size >= 32) this.trim();
     if (!entry && this.entries.size >= 48) throw new Error("Recording read queue is full; retry later");
     if (!entry || !entry.loading && Date.now()-entry.at > 300_000) {
       const settings = await this.options.settings(role);
+      if(this.options.directory(role)!==originalDirectory) throw new Error("Recording role directory changed during projection preparation");
       // Recheck after the settings await: concurrent cold queries share one job.
       entry = this.entries.get(key);
       if (!entry || !entry.loading && Date.now()-entry.at > 300_000) {
-        entry = { role,kind,day,mobiles:settings.mobileDeviceIds,body:entry?.body ?? {events:[],days:day?[day]:[],incompleteDays:day?[day]:[]},loading:true,at:Date.now(),bytes:entry?.bytes??0,journal:new Map(),dirty:new Set(),abort:new AbortController() };
+        entry = { role,directory:originalDirectory,kind,day,mobiles:settings.mobileDeviceIds,body:entry?.body ?? {events:[],days:day?[day]:[],incompleteDays:day?[day]:[]},loading:true,at:Date.now(),bytes:entry?.bytes??0,journal:new Map(),dirty:new Set(),abort:new AbortController() };
         this.entries.set(key,entry);
         const current = entry;
-        void this.options.run({kind,directory:this.options.directory(role),mobileRoot:this.options.mobileRoot,mobileDeviceIds:settings.mobileDeviceIds,day},current.abort.signal).then(value=>{
-          if(this.disposed || this.entries.get(key)!==current) return;
+        void this.options.run({kind,directory:originalDirectory,mobileRoot:this.options.mobileRoot,mobileDeviceIds:settings.mobileDeviceIds,day},current.abort.signal).then(value=>{
+          if(this.disposed || this.entries.get(key)!==current || this.options.directory(role)!==current.directory) return;
           const body=value as AllDayCatalog;
           current.body={...body,events:merge(body.events,[...current.journal.values()]),days:[...new Set([...body.days,...[...current.journal.values()].map(row=>dayOf(row.startedAt))])].sort(),incompleteDays:[...new Set([...body.incompleteDays,...current.dirty])].sort()};
           if(kind==="recent") current.body.events=current.body.events.slice(-256);
           current.bytes=Buffer.byteLength(JSON.stringify(current.body)); current.error=undefined;
         },error=>{current.error=error instanceof Error?error.message:String(error);}).finally(()=>{
           current.loading=false;current.at=Date.now();current.journal.clear(); this.trim();
-          if(!this.disposed && this.entries.get(key)===current) this.options.ready(role,{...(day?{readDay:day}:kind==="catalog"?{catalogReady:true}:{}),readFailed:!!current.error});
+          if(!this.disposed && this.entries.get(key)===current && this.options.directory(role)===current.directory) this.options.ready(role,{...(day?{readDay:day}:kind==="catalog"?{catalogReady:true}:{}),readFailed:!!current.error});
         });
       }
     }
@@ -66,15 +67,15 @@ export class AllDayRecordingReadModel {
   committed(role: string | null, event: AllDayEvent, bytes?: Buffer, indexComplete = false) {
     if(this.disposed) return;
     if (role && event.kind === "audio") {
-      const rows = this.liveAudio.get(role) ?? new Map<string, AllDayEvent>();
-      rows.set(event.id, event); this.liveAudio.set(role, rows);
+      const rows = this.liveAudio.get(this.key(role,"liveAudio")) ?? new Map<string, AllDayEvent>();
+      rows.set(event.id, event); this.liveAudio.set(this.key(role,"liveAudio"), rows);
       for (const [id, row] of rows) if (row.endedAt < Date.now() - 600_000) rows.delete(id);
       while (rows.size > 512) rows.delete(rows.keys().next().value!);
       while (this.liveAudio.size > 16) this.liveAudio.delete(this.liveAudio.keys().next().value!);
     }
     const day = dayOf(event.startedAt);
     for(const entry of this.entries.values()) {
-      if(role===null ? !entry.mobiles.includes(event.deviceId) : entry.role!==role) continue;
+      if(role===null ? !entry.mobiles.includes(event.deviceId) : entry.role!==role || entry.directory!==this.options.directory(role)) continue;
       if(entry.day && entry.day!==day) continue;
       if(entry.loading) {entry.journal.set(event.id,event);if(!indexComplete) entry.dirty.add(day);}
       entry.body.events=merge(entry.body.events,[event]);
@@ -91,7 +92,7 @@ export class AllDayRecordingReadModel {
   }
   async transcripts(role: string, since: number, until: number) {
     const timeline = await this.timeline(role, since, until);
-    const events = merge(timeline.events, [...(this.liveAudio.get(role)?.values() ?? [])])
+    const events = merge(timeline.events, [...(this.liveAudio.get(this.key(role,"liveAudio"))?.values() ?? [])])
       .filter(row => row.kind === "audio" && ["microphone", "systemAudio"].includes(row.source) && row.startedAt < until && row.endedAt > since);
     return { ...timeline, events };
   }

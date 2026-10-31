@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "plugins": [
+    {
+      "packageId": "io.example.query",
+      "candidateRoot": "../query-candidate",
+      "verificationConfig": "test-fixtures/query/verification.json"
+    }
+  ],
+  "sourcePatches": [
+    {
+      "moduleId": "example-query",
+      "verificationConfig": "test-fixtures/source-query/verification.json"
+    }
+  ],
+  "web": {
+    "verificationConfig": "test-fixtures/web/verification.json"
+  }
+}

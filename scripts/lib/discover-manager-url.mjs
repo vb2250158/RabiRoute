@@ -1,8 +1,10 @@
+import { getTimeoutMs } from "./timeout-settings.mjs";
 import fs from "node:fs";
 import path from "node:path";
 import { spawnSync, execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
+import { discoverWindowsHostIdentity } from './windows-host-discovery.mjs';
 
 function loopbackManagerUrl(value) {
   const url = new URL(String(value || "").trim());
@@ -17,8 +19,8 @@ function loopbackManagerUrl(value) {
 export async function discoverManagerIdentity(options = {}) {
   const env = options.env || process.env;
   const platform = options.platform || process.platform;
-  const timeoutMs = options.timeoutMs ?? 5000;
-  if (!Number.isFinite(timeoutMs) || timeoutMs < 1 || timeoutMs > 120000) throw new Error("Manager discovery requires bounded timeoutMs.");
+  const timeoutMs = options.timeoutMs ?? getTimeoutMs("scripts.manager.discovery", 5000, env);
+  if (!Number.isFinite(timeoutMs) || timeoutMs < 1 || timeoutMs > 2_147_483_647) throw new Error("Manager discovery requires bounded timeoutMs.");
   const signal = AbortSignal.timeout(timeoutMs);
   const fetchImpl = options.fetch || fetch;
   async function verify(candidate, requireIdentity) {
@@ -30,7 +32,7 @@ export async function discoverManagerIdentity(options = {}) {
     if (!meta.applicationGenerationId || !meta.managerInstanceId
       || (requireIdentity && (meta.applicationGenerationId !== candidate.applicationGenerationId || meta.managerInstanceId !== candidate.managerInstanceId))
       || loopbackManagerUrl(meta.managerBaseUrl) !== managerBaseUrl) throw new Error("Manager identity mismatch; rediscovery required.");
-    if (meta.health?.live !== true || meta.health?.requiredReady !== true || !["healthy", "degraded"].includes(meta.health?.state)) throw new Error("Manager is not ready for business requests.");
+    if (meta.health?.live !== true || !["healthy", "degraded"].includes(meta.health?.state)) throw new Error("Manager is not ready for business requests.");
     return { managerBaseUrl, applicationGenerationId: meta.applicationGenerationId, managerInstanceId: meta.managerInstanceId };
   }
   const explicit = options.explicit || env.RABIROUTE_MANAGER_URL || env.GATEWAY_MANAGER_URL;
@@ -54,18 +56,27 @@ export async function discoverManagerIdentity(options = {}) {
     executable = process.execPath;
     args = [fileURLToPath(new URL("../linux-host.mjs", import.meta.url)), "--command", "status", "--json"];
   } else throw new Error("No local Host discovery is available on this platform.");
-  if (!executable) throw new Error("RabiRoute Host is not installed.");
+  if (!executable) {
+    if (platform === 'win32') return discoverWindowsHostIdentity({ ...options, env, signal });
+    throw new Error("RabiRoute Host is not installed.");
+  }
   // execFile waits and captures redirected stdout even for a Windows GUI executable.
-  const result = await (options.execFile || promisify(execFile))(executable, args, {
-    windowsHide: true, encoding: "utf8", timeout: timeoutMs, signal, maxBuffer: 65536, env
-  });
+  let result;
+  try {
+    result = await (options.execFile || promisify(execFile))(executable, args, {
+      windowsHide: true, encoding: "utf8", timeout: timeoutMs, signal, maxBuffer: 65536, env
+    });
+  } catch (error) {
+    if (platform === 'win32' && error?.code === 'ENOENT') return discoverWindowsHostIdentity({ ...options, env, signal });
+    throw error;
+  }
   const status = JSON.parse(String(result.stdout || "").replace(/^\uFEFF/, ""));
   if (status.ok !== true) throw new Error("RabiRoute Host status is unavailable.");
   return verify(status, true);
 }
 
 function installedHostExecutable(env) {
-  const explicit = String(env.RABIROUTE_HOST_EXE || "").trim();
+  const explicit = String(env.RABIROUTE_HOST_EXE || env.RABIROUTE_HOST_EXECUTABLE || "").trim();
   if (explicit) return explicit;
   const localAppData = String(env.LOCALAPPDATA || "").trim();
   return localAppData ? path.join(localAppData, "Programs", "RabiRoute", "RabiRouteHost.exe") : "";
@@ -92,9 +103,9 @@ export function discoverManagerBaseUrl(options = {}) {
     throw new Error("RabiRoute Host is not installed; set RABIROUTE_MANAGER_URL explicitly.");
   }
   const args = platform === "linux" ? [linuxHost, "--command", "status", "--json"] : ["--command", "status", "--json"];
-  const timeoutMs = options.timeoutMs ?? 10000;
+  const timeoutMs = options.timeoutMs ?? getTimeoutMs("scripts.manager.ready", 10000, env);
   const pollIntervalMs = options.pollIntervalMs ?? 250;
-  if (!Number.isFinite(timeoutMs) || timeoutMs < 1 || timeoutMs > 120000
+  if (!Number.isFinite(timeoutMs) || timeoutMs < 1 || timeoutMs > 2_147_483_647
     || !Number.isFinite(pollIntervalMs) || pollIntervalMs < 1 || pollIntervalMs > 10000) {
     throw new Error("Manager discovery requires bounded timeoutMs and pollIntervalMs.");
   }

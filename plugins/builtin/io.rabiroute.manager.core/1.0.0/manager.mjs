@@ -241,11 +241,7 @@ export const activate = definePlugin({
                 }
             });
             try {
-        const requestTracker = new runtime.ManagerPluginRequestTracker();
-        ctx.effect(() => {
-            const unregister = runtime.registerManagerPluginHandlerRoutes(runtime.managerPluginRoutes, "manager:core", "manager.core.api", [
-                requestTracker.wrap((request, requestUrl, response) => (runtime.handleResourceCacheApi(request, requestUrl, response) || runtime.handleWebguiLanAccessApi(request, requestUrl, response)
-                    || runtime.handleLanAgentApi(request, requestUrl, response, {
+        const lanAgentContext = {
                         readJsonBody: runtime.readJsonBody,
                         jsonResponse: runtime.jsonResponse,
                         registry: runtime.lanAgentRegistry,
@@ -276,17 +272,29 @@ export const activate = definePlugin({
                             const token = match?.[1]?.trim() ?? "";
                              return config.enabled && (runtime.lanAgentAuthority.validateBootstrapTicket(token) || Boolean(runtime.lanAgentAuthority.authenticate(token)));
                         }
-                    })))
-            ], [
-                { routeId: "resource-cache", kind: "prefix", pathPrefix: "/api/resource-cache/", methods: ["*"] },
-                { routeId: "webgui-access", kind: "exact", path: "/api/webgui-access", methods: ["*"] },
-                { routeId: "lan-agent", kind: "prefix", pathPrefix: "/api/lan-agent/", methods: ["*"] }
-            ]);
+                    };
+        ctx.effect(async () => {
+            const upgrades = runtime.managerPluginRoutes.registerUpgrades(context.identity.instanceId, [runtime.createLanAgentConnectionOperation()]);
+            try {
+            const registration = await runtime.managerPluginRoutes.registerOperationsAsync(context.identity.instanceId, [...runtime.createCorePublicOperations(), ...runtime.createPluginCatalogOperations(), runtime.createManagerEventOperationDefinition(), ...runtime.createWebguiAccessOperations(), ...runtime.createResourceCacheOperations(), ...runtime.createLanAgentReadOperations(lanAgentContext), ...runtime.createLanAgentTerminalOperations(lanAgentContext), ...runtime.createLanAgentComputerOperations(lanAgentContext), ...runtime.createLanAgentManagementOperations(lanAgentContext)], context.lifecycle.signal);
             return async () => {
-                unregister();
-                await requestTracker.stop();
+                const errors = [];
+                try { upgrades.stopAccepting(); } catch (error) { errors.push(error); }
+                // Accepted LAN commands still use their existing upgrade connection.
+                // Drain those operations before retiring their transport, even if a drain fails.
+                try { await registration.dispose(); } catch (error) { errors.push(error); }
+                try { await upgrades.dispose(); } catch (error) { errors.push(error); }
+                if (errors.length === 1) throw errors[0];
+                if (errors.length) throw new AggregateError(errors, "Manager core operation and upgrade cleanup failed.");
             };
-        }, "activate Manager core recovery routes");
+            } catch (error) { await upgrades.dispose(); throw error; }
+        }, "activate executable Manager events, access, resources and Agent operations");
+        ctx.effect(() => {
+            const definitions = runtime.createWebguiStaticOperations();
+            const registration = runtime.managerPluginRoutes.registerHttpProxies(context.identity.instanceId, [...definitions.resources, definitions.fallback]);
+            return () => registration.dispose();
+        }, "activate native Manager WebGUI resources and final static fallback");
+
 
                 await Promise.all(pendingEffects);
                 return disposeStartedEffects;

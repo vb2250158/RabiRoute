@@ -222,7 +222,7 @@ test("common service ledger persists group identity options and recovers without
   assert.equal(f.sends.length, 1);
   assert.equal(f.sends[0].agentId, "room-a");
   assert.equal(f.sends[0].text, request.prompt);
-  const saved = new AgentRequestStore({ read: () => persisted, write: () => {} }).listEndpointDeliveries()[0];
+  const saved = (await new AgentRequestStore({ read: () => persisted, write: () => {} }).listEndpointDeliveries())[0];
   assert.equal(saved.state, "committed");
   assert.equal(saved.target.sessionId, f.id);
   assert.deepEqual(saved.executionOptions, { grokBotDelivery: f.request.grokBotDelivery });
@@ -351,8 +351,8 @@ test("native bridge participates in the common durable ledger and stable caller 
   assert.equal(recovered.statusCode, 200);
   assert.equal((uncertain.data.delivery as { deliveryId: string }).deliveryId, (recovered.data.delivery as { deliveryId: string }).deliveryId);
   assert.equal(f.sends.length, 1);
-  assert.equal(new AgentRequestStore({ read: () => persisted, write: () => {} }).listEndpointDeliveries()[0].state, "committed");
-  assert.equal(store.listEndpointDeliveries()[0].target.kind, "service");
+  assert.equal((await new AgentRequestStore({ read: () => persisted, write: () => {} }).listEndpointDeliveries())[0].state, "committed");
+  assert.equal((await store.listEndpointDeliveries())[0].target.kind, "service");
 });
 
 test("trusted configuration selection receives the exact canonical owner and rejects conflicting profile mappings", async () => {

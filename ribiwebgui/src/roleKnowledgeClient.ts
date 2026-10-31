@@ -1,3 +1,4 @@
+import { getTimeoutMs } from "./timeoutSettingsClient";
 import type { RoleMemory, RoleMemoryPayload, RolePlan, RolePlanFeedback, RolePlanHistoryRecord } from "./types";
 import type { PlanFeedbackAttachmentUpload } from "@shared/planFeedbackContract";
 import { FALLBACK_PLAN_PRESENTATION_PALETTE, normalizePlanPresentationPalette } from "./planPresentationStyles";
@@ -225,22 +226,16 @@ function strongEtag(response: Response): string {
 }
 
 async function boundedManagerFetch(path: string, init: RequestInit = {}): Promise<Response> {
-  const controller = new AbortController();
-  const inheritedSignal = init.signal;
-  const abortInheritedRequest = () => controller.abort(inheritedSignal?.reason);
-  if (inheritedSignal?.aborted) abortInheritedRequest();
-  else inheritedSignal?.addEventListener("abort", abortInheritedRequest, { once: true });
-  const timeout = globalThis.setTimeout(() => controller.abort(), ROLE_KNOWLEDGE_REQUEST_TIMEOUT_MS);
+  const budgetMs = getTimeoutMs("webgui.knowledge.request", ROLE_KNOWLEDGE_REQUEST_TIMEOUT_MS);
+  const deadline = AbortSignal.timeout(budgetMs);
+  const signal = init.signal ? AbortSignal.any([init.signal, deadline]) : deadline;
   try {
-    return await fetch(sourceDeviceId ? remotePersonaServicePath(sourceDeviceId, path) : path, { ...init, signal: controller.signal });
+    return await fetch(sourceDeviceId ? remotePersonaServicePath(sourceDeviceId, path) : path, { ...init, signal });
   } catch (error) {
-    if (controller.signal.aborted && !inheritedSignal?.aborted) {
-      throw new ManagerRequestError(`Manager request timed out after ${ROLE_KNOWLEDGE_REQUEST_TIMEOUT_MS}ms.`, 0);
+    if (deadline.aborted && !init.signal?.aborted) {
+      throw new ManagerRequestError(`Manager request timed out after ${budgetMs}ms.`, 0);
     }
     throw error;
-  } finally {
-    globalThis.clearTimeout(timeout);
-    inheritedSignal?.removeEventListener("abort", abortInheritedRequest);
   }
 }
 
@@ -553,7 +548,7 @@ function planAgentStatusChunks(planIds: string[]): string[][] {
 async function loadPlanAgentStatuses(
   roleId: string,
   planIds: string[],
-  timeoutMs = 3_000
+  timeoutMs = getTimeoutMs("webgui.plan.agentStatus", 3000)
 ): Promise<PlanAgentStatusBatch> {
   const chunks = planAgentStatusChunks(planIds);
   if (!chunks.length) return { items: [], missingPlanIds: [], failedPlanIds: [] };

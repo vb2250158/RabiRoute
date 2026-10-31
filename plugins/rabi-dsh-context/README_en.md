@@ -13,3 +13,5 @@ This event plugin can coexist with DSH messaging tools. Restrictions imposed by 
 Plugin list names and descriptions follow the DSH Chinese or English language setting.
 
 Injected messages use the producer source `source.kind=rabi-dsh-context` for DSH V4 sessions. Subsequent user-prompt submissions exclude context from that same source to avoid sending the plugin's own content back to Manager.
+
+The plugin reads the `startup`, `resume`, `clear`, or `compact` source from DSH `agent/created` and sends `SessionStart` once on that Agent’s first entered model step; a rejected step does not consume it. Ordinary forks and subagents keep the source DSH publishes, without classification by parent fields. Agent disposal clears local state, so resuming the same identity starts a new lifecycle.

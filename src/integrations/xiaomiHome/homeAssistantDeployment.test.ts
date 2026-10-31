@@ -319,3 +319,22 @@ test("HA OS operation completion notifies other pages after clearing its active 
   assert.equal(snapshots.at(-1)?.state, "starting", "all subscribers must leave installing even without another file change");
   assert.equal(snapshots.at(-1)?.canInstall, true);
 });
+
+
+test("deployment unsubscribe joins its original pending observation and emits no late snapshot", async t => {
+  const f = fixture(t); let release!: () => void, entered!: () => void;
+  const started = new Promise<void>(resolve => { entered = resolve; }), gate = new Promise<void>(resolve => { release = resolve; });
+  let released = false;
+  const owner = new HomeAssistantDeployment(f.root, () => "http://127.0.0.1:8123", f.io, {
+    inspect: async () => { entered(); await gate; return { state: "not_installed", message: "fixture" }; },
+    run: async () => { throw new Error("No real installation is permitted."); },
+    subscribe: () => () => { released = true; }
+  });
+  const snapshots: unknown[] = [];
+  const unsubscribe = owner.subscribe(value => snapshots.push(value));
+  try {
+    await started; let completed = false; const closing = unsubscribe().then(() => { completed = true; });
+    await new Promise(resolve => setImmediate(resolve)); assert.equal(released, true); assert.equal(completed, false);
+    release(); await closing; assert.deepEqual(snapshots, []);
+  } finally { release(); await unsubscribe(); await owner.stop(); }
+});

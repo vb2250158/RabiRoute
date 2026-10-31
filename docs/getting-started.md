@@ -1,6 +1,6 @@
 <!-- docs-language-switch -->
 <div align="center">
-<a href="./getting-started_en.md">English</a> | 简体中文
+<a href="./getting-started_en.md">English</a> | 简体中文 | <a href="./getting-started_ja.md">日本語</a>
 </div>
 <!-- /docs-language-switch -->
 
@@ -12,7 +12,7 @@
 
 需要：
 
-- Node.js 20+ 或更新版本。
+- Node.js 22.13+ 或更新版本。
 - 一个可用的 NapCat / OneBot 环境。如果只想先体验 RibiWebGUI 和定时触发，可以暂时不接 QQ。
 - 可选：Codex，用作默认处理端。
 
@@ -24,7 +24,7 @@ Windows 完整源码构建启动：双击仓库根目录的 `Start-RabiRoute-Fro
 
 ### Linux Host
 
-Linux 需要 Node.js 20+、npm 和 util-linux `flock`；要用 Host `open` 打开浏览器时另需 `xdg-utils`。按以下步骤启动已有 WebGUI：
+Linux 需要 Node.js 22.13+、npm 和 util-linux `flock`；要用 Host `open` 打开浏览器时另需 `xdg-utils`。按以下步骤启动已有 WebGUI：
 
 1. 进入源码目录，运行首次构建启动脚本：
 

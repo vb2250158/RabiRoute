@@ -1,6 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { loadPluginPackage, type LoadedPluginPackage } from "./packageLoader.js";
+import type { PluginExecutionConfigurationDiagnostic } from "./pluginExecutionSettings.js";
+import type { LoadedPluginPackage } from "./packageLoader.js";
+import { PluginPackageLoader, type PluginPackageLoadingOptions } from "./pluginPackageLoader.js";
 import { isPluginCapabilityReference } from "./capabilityReference.js";
 import type {
   PluginCandidate,
@@ -10,6 +12,14 @@ import type {
   PluginRestartPolicy,
   PluginResourcePolicy
 } from "./types.js";
+
+// PackageCatalog's already verified immutable owner proof follows the exact
+// candidate object. Keeping it out of JSON prevents a caller from substituting
+// an arbitrary dirname/revision as a transport package proof.
+const candidatePackages = new WeakMap<PluginCandidate, LoadedPluginPackage>();
+export function pluginPackageForCandidate(candidate: PluginCandidate): LoadedPluginPackage | undefined {
+  return candidatePackages.get(candidate);
+}
 
 export type PluginProfileEntry = Readonly<{
   id: string;
@@ -104,6 +114,10 @@ function isInsidePackageRoot(root: string, candidate: string): boolean {
   const relative = path.relative(root, candidate);
   return relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative);
 }
+function packageRootKey(root: string): string {
+  const resolved = path.resolve(root);
+  return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+}
 
 export function parsePluginProfile(value: unknown): PluginProfile {
   const raw = record(value, "Plugin profile");
@@ -139,22 +153,53 @@ export async function readPluginProfile(profilePath: string): Promise<PluginProf
 
 export class PluginPackageCatalog {
   readonly #roots: readonly Readonly<{ path: string; inProcessTrusted: boolean }>[];
+  readonly #restrictInProcess: boolean;
+  readonly #loader: PluginPackageLoader;
+  readonly #configurationDiagnostics: readonly PluginExecutionConfigurationDiagnostic[];
   constructor(
     roots: readonly string[],
-    options: Readonly<{ trustedInProcessRoots?: readonly string[] }> = {}
+    options: Readonly<{ trustedInProcessRoots?: readonly string[]; configurationDiagnostics?: readonly PluginExecutionConfigurationDiagnostic[]; loading?: PluginPackageLoadingOptions }> = {}
   ) {
     if (!roots.length) throw new Error("At least one plugin package root is required.");
-    const trustedRoots = new Set((options.trustedInProcessRoots ?? []).map(root => path.resolve(root)));
+    const trustedRoots = new Set((options.trustedInProcessRoots ?? roots).map(packageRootKey));
     const normalizedRoots = roots.map(root => path.resolve(root));
-    for (const trustedRoot of trustedRoots) {
-      if (!normalizedRoots.includes(trustedRoot)) {
-        throw new Error(`Trusted in-process plugin root is not present in the package catalog: ${trustedRoot}.`);
-      }
+    const rootKeys = new Set(normalizedRoots.map(packageRootKey));
+    const hasMatchingRoot = [...trustedRoots].some(root => rootKeys.has(root));
+    this.#restrictInProcess = options.trustedInProcessRoots !== undefined && (trustedRoots.size === 0 || hasMatchingRoot);
+    const diagnostics: PluginExecutionConfigurationDiagnostic[] = [...(options.configurationDiagnostics ?? [])];
+    if ([...trustedRoots].some(root => !rootKeys.has(root))) {
+      diagnostics.push(Object.freeze({ field: "RABIROUTE_PLUGIN_IN_PROCESS_ROOTS", message: "A configured in-process plugin root is not present in the package catalog. Change or clear RABIROUTE_PLUGIN_IN_PROCESS_ROOTS in the Manager startup environment (or trustedInProcessRoots in an embedded catalog). " + (hasMatchingRoot ? "Matching configured roots remain enabled." : "This invalid optional restriction was skipped; configured packages keep their declared execution modes.") }));
     }
+    this.#configurationDiagnostics = Object.freeze(diagnostics);
     this.#roots = Object.freeze(normalizedRoots.map(root => Object.freeze({
       path: root,
-      inProcessTrusted: trustedRoots.has(root)
+      inProcessTrusted: !this.#restrictInProcess || trustedRoots.has(packageRootKey(root))
     })));
+    this.#loader = new PluginPackageLoader(options.loading);
+  }
+  loadPackage(packageId: string, packageVersion: string, runtimeRoot: string, host: PluginHost): Promise<LoadedPluginPackage> {
+    return this.#loader.load({ kind: "package", packageId, version: packageVersion, runtimeRoot: path.resolve(runtimeRoot), host, roots: this.#roots }) as Promise<LoadedPluginPackage>;
+  }
+  loadProfile(profilePath: string): Promise<PluginProfile> {
+    return this.#loader.load({ kind: "profile", profilePath: path.resolve(profilePath) }) as Promise<PluginProfile>;
+  }
+  snapshot() { return Object.freeze({ ...this.#loader.snapshot(), configurationDiagnostics: this.#configurationDiagnostics }); }
+  dispose(): Promise<void> { return this.#loader.dispose(); }
+  async assertPackageExecutionAllowed(plugin: Pick<LoadedPluginPackage, "sourceRoot" | "execution">): Promise<void> {
+    if (plugin.execution !== "in_process" || !this.#restrictInProcess) return;
+    for (const root of this.#roots) {
+      if (!root.inProcessTrusted) continue;
+      let canonicalRoot: string;
+      try { canonicalRoot = await fs.realpath(root.path); }
+      catch (error) {
+        // A removed ordinary root can still own a previously copied immutable
+        // package. Existing junctions must use their current canonical target.
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        canonicalRoot = root.path;
+      }
+      if (isInsidePackageRoot(packageRootKey(canonicalRoot), packageRootKey(plugin.sourceRoot))) return;
+    }
+    throw new Error(`Plugin in_process execution is disabled by the configured trustedInProcessRoots: ${JSON.stringify(this.#roots.filter(root => root.inProcessTrusted).map(root => root.path))}; sourceRoot=${plugin.sourceRoot}. Change or clear RABIROUTE_PLUGIN_IN_PROCESS_ROOTS in the Manager startup environment (or trustedInProcessRoots in an embedded catalog).`);
   }
   async resolve(packageId: string, packageVersion: string): Promise<Readonly<{ sourceRoot: string; inProcessTrusted: boolean }>> {
     for (const root of this.#roots) {
@@ -179,7 +224,16 @@ export type LoadedPluginProfile = Readonly<{
   profile: PluginProfile;
   candidates: readonly PluginCandidate[];
   packages: readonly Readonly<{ instance: PluginProfileEntry; package: LoadedPluginPackage }>[];
+  loadFailures: readonly PluginProfileLoadFailure[];
   grants(identity: PluginIdentity): readonly string[];
+}>;
+
+export type PluginProfileLoadFailure = Readonly<{
+  instanceId: string;
+  packageId: string;
+  version: string;
+  retainedRevision?: string;
+  error: Readonly<{ code: "package_load_failed"; message: string }>;
 }>;
 
 export async function loadPluginProfile(input: Readonly<{
@@ -187,39 +241,67 @@ export async function loadPluginProfile(input: Readonly<{
   packageCatalog: PluginPackageCatalog;
   runtimeRoot: string;
   host: PluginHost;
+  /** Only successfully loaded immutable packages from the preceding reconciliation. */
+  previous?: LoadedPluginProfile;
 }>): Promise<LoadedPluginProfile> {
-  const profile = await readPluginProfile(input.profilePath);
+  const profile = await input.packageCatalog.loadProfile(input.profilePath);
   const enabled = profile.instances.filter(instance => instance.enabled);
-  const loaded = await Promise.all(enabled.map(async instance => {
-    const resolvedPackage = await input.packageCatalog.resolve(instance.package, instance.version);
-    const plugin = await loadPluginPackage(resolvedPackage.sourceRoot, input.runtimeRoot, input.host);
-    if (plugin.manifest.id !== instance.package || plugin.manifest.version !== instance.version) {
-      throw new Error(`Plugin profile identity does not match package manifest: ${instance.id}.`);
+  const packages = [...new Map(enabled.map(instance => [JSON.stringify([instance.package, instance.version]), instance])).entries()];
+  const packageResults = new Map<string, PromiseSettledResult<LoadedPluginPackage>>();
+  let next = 0;
+  // Backpressure belongs to this batch producer. A large valid Profile must not
+  // flood the catalog queue or give duplicate failing packages both producer lanes.
+  await Promise.all(Array.from({ length: Math.min(packages.length, input.packageCatalog.snapshot().maxConcurrency) }, async () => {
+    while (next < packages.length) {
+      const [key, instance] = packages[next++]!;
+      try {
+        packageResults.set(key, { status: "fulfilled", value: await input.packageCatalog.loadPackage(instance.package, instance.version, input.runtimeRoot, input.host) });
+      } catch (reason) { packageResults.set(key, { status: "rejected", reason }); }
     }
-    if (plugin.execution === "in_process" && !resolvedPackage.inProcessTrusted) {
-      throw new Error(
-        `Plugin package root is not trusted for in_process execution: ${instance.package}@${instance.version}. `
-        + "External packages must use isolated or declarative execution."
-      );
-    }
-    return Object.freeze({
-      instance,
-      package: plugin,
-      candidate: Object.freeze({
-        instanceId: instance.id,
-        revision: plugin.revision,
-        manifest: plugin.manifest,
-        config: instance.config,
-        entry: Object.freeze({ execution: plugin.execution, path: plugin.entryPath }),
-        policy: instance.policy
-      }) satisfies PluginCandidate
-    });
   }));
-  const grantsById = new Map(enabled.map(instance => [instance.id, instance.grants]));
+  const loaded: Array<Readonly<{ instance: PluginProfileEntry; package: LoadedPluginPackage; candidate: PluginCandidate }>> = [];
+  const loadFailures: PluginProfileLoadFailure[] = [];
+  for (const instance of enabled) {
+    const result = packageResults.get(JSON.stringify([instance.package, instance.version]))!;
+    if (result.status === "fulfilled") {
+      const plugin = result.value;
+      const candidate: PluginCandidate = Object.freeze({
+        instanceId: instance.id, revision: plugin.revision, manifest: plugin.manifest, config: instance.config,
+        entry: Object.freeze({ execution: plugin.execution, path: plugin.entryPath }), policy: instance.policy
+      });
+      candidatePackages.set(candidate, plugin);
+      loaded.push(Object.freeze({ instance, package: plugin, candidate }));
+      continue;
+    }
+    const previousCandidate = input.previous?.candidates.find(candidate => candidate.instanceId === instance.id);
+    const previousPackage = input.previous?.packages.find(item => item.instance.id === instance.id);
+    // A failed update must not retire a previously verified package or apply the
+    // failed revision's config, policy or grants to that old implementation.
+    let retained = false;
+    let failure = result.reason instanceof Error ? result.reason.message : String(result.reason);
+    if (previousCandidate && previousPackage) {
+      try {
+        await input.packageCatalog.assertPackageExecutionAllowed(previousPackage.package);
+        loaded.push(Object.freeze({ ...previousPackage, candidate: previousCandidate }));
+        retained = true;
+      } catch (error) {
+        failure += ` Previous revision was not retained: ${error instanceof Error ? error.message : String(error)}`;
+      }
+    }
+    loadFailures.push(Object.freeze({
+      instanceId: instance.id,
+      packageId: instance.package,
+      version: instance.version,
+      ...(retained ? { retainedRevision: previousCandidate!.revision } : {}),
+      error: Object.freeze({ code: "package_load_failed", message: failure })
+    }));
+  }
+  const grantsById = new Map(loaded.map(item => [item.instance.id, item.instance.grants]));
   return Object.freeze({
     profile,
     candidates: Object.freeze(loaded.map(item => item.candidate)),
     packages: Object.freeze(loaded.map(({ instance, package: pluginPackage }) => Object.freeze({ instance, package: pluginPackage }))),
+    loadFailures: Object.freeze(loadFailures),
     grants(identity: Pick<PluginIdentity, "instanceId">): readonly string[] { return grantsById.get(identity.instanceId) ?? Object.freeze([]); }
   });
 }

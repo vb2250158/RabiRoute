@@ -149,6 +149,7 @@ export type MessageAdapterPolicy = {
   inputEnabled?: boolean;
   outputEnabled?: boolean;
   supportedOutputs?: MessagePayloadKind[];
+  /** Empty or omitted imposes no directory restriction; a nonempty list limits local sends to these roots. */
   allowedFileRoots?: string[];
   /** Omitted permits all groups; an explicit list restricts metadata reads, and [] disables them. */
   readableGroupFileIds?: string[];
@@ -156,7 +157,7 @@ export type MessageAdapterPolicy = {
   /** Visible text characters requiring a second Agent send call; 0 disables the check. */
   textConfirmationThreshold?: number;
   /** Conversation freshness response budgets; applies to every chat endpoint. */
-  conversationReview?: { initialMessageCount?: number; maxIncrementalMessages?: number };
+  conversationReview?: { enabled?: boolean; initialMessageCount?: number; maxIncrementalMessages?: number };
 };
 
 export type MessageAdapterPolicies = Partial<Record<MessageEndpointType, MessageAdapterPolicy>>;
@@ -994,14 +995,14 @@ export function ensureMessageAdapterAutomationRules(
 
 export function normalizeMessageAdapters(items: unknown[]): MessageEndpointType[] {
   return [...new Set(items
-    .map((item) => item == null ? "" : String(item))
+    .map((item) => item === "fennenote" ? "speech" : item == null ? "" : String(item))
     .filter(isMessageEndpointType))];
 }
 
 function normalizeOptionalMessageAdapters(items: unknown): MessageEndpointType[] {
   if (!Array.isArray(items)) return [];
   return [...new Set(items
-    .map((item) => item == null ? "" : String(item))
+    .map((item) => item === "fennenote" ? "speech" : item == null ? "" : String(item))
     .filter(isMessageEndpointType))];
 }
 
@@ -1033,6 +1034,7 @@ export function normalizeMessageAdapterPolicy(
 ): NormalizedMessageAdapterPolicy {
   const raw = value && typeof value === "object" ? value as MessageAdapterPolicy : {};
   const review = raw.conversationReview ?? {};
+  if (review.enabled !== undefined && typeof review.enabled !== "boolean") throw new Error("conversationReview.enabled must be a boolean.");
   const initialMessageCount = review.initialMessageCount ?? 50;
   const maxIncrementalMessages = review.maxIncrementalMessages ?? 100;
   if (!Number.isInteger(initialMessageCount) || initialMessageCount < 1 || initialMessageCount > 500
@@ -1052,7 +1054,7 @@ export function normalizeMessageAdapterPolicy(
       ? { readableGroupFileIds: normalizeReadableGroupFileIds(raw.readableGroupFileIds) } : {}),
     messageGrouping: normalizeMessageGroupingPolicy(raw.messageGrouping, adapterType),
     textConfirmationThreshold,
-    conversationReview: { initialMessageCount, maxIncrementalMessages }
+    conversationReview: { enabled: review.enabled === true, initialMessageCount, maxIncrementalMessages }
   };
 }
 
@@ -1065,7 +1067,7 @@ export function normalizeMessageAdapterPolicies(
   const disabled = new Set(disabledAdapters);
   const result: MessageAdapterPolicies = {};
   for (const adapter of adapters) {
-    result[adapter] = normalizeMessageAdapterPolicy(raw[adapter], adapter, { legacyInputDisabled: disabled.has(adapter) });
+    result[adapter] = normalizeMessageAdapterPolicy(raw[adapter] ?? (adapter === "speech" ? raw.fennenote : undefined), adapter, { legacyInputDisabled: disabled.has(adapter) });
   }
   return result;
 }
@@ -1074,8 +1076,8 @@ export function messageAdapterPolicyFor(gateway: GatewayDefinition, type: Messag
   if (type === "disabled") {
     return normalizeMessageAdapterPolicy(undefined, "napcat", { legacyInputDisabled: true });
   }
-  return normalizeMessageAdapterPolicy(gateway.messageAdapterPolicies?.[type], type, {
-    legacyInputDisabled: gateway.messageAdaptersDisabled?.includes(type) === true
+  return normalizeMessageAdapterPolicy(gateway.messageAdapterPolicies?.[type] ?? (type === "speech" ? gateway.messageAdapterPolicies?.fennenote : undefined), type, {
+    legacyInputDisabled: gateway.messageAdaptersDisabled?.includes(type) === true || (type === "speech" && gateway.messageAdaptersDisabled?.includes("fennenote") === true)
   });
 }
 
@@ -1092,8 +1094,8 @@ export function gatewayAdapterTypes(gateway: GatewayDefinition): MessageEndpoint
   const configured = Array.isArray(gateway.messageAdapters) && gateway.messageAdapters.length > 0
     ? gateway.messageAdapters
     : [gateway.messageAdapterType || "napcat"];
-  const adapters = configured.filter(isMessageEndpointType);
-  const disabled = new Set((gateway.messageAdaptersDisabled ?? []).filter(isMessageEndpointType));
+  const adapters = normalizeMessageAdapters(configured);
+  const disabled = new Set(normalizeOptionalMessageAdapters(gateway.messageAdaptersDisabled));
   return [...new Set(adapters)]
     .filter((type) => !disabled.has(type) && messageAdapterPolicyFor(gateway, type).inputEnabled);
 }
@@ -1346,8 +1348,9 @@ function normalizePipelineFallback(pipeline: PipelineDefinition | undefined): Pi
   if (!pipeline) return undefined;
   return {
     ...pipeline,
-    outputAdapter: pipeline.outputAdapter === "codex" ? "agent" : pipeline.outputAdapter,
-    outputPipeline: pipeline.outputPipeline === "codex" ? "agent" : pipeline.outputPipeline
+    inputAdapter: pipeline.inputAdapter === "fennenote" ? "speech" : pipeline.inputAdapter,
+    outputAdapter: pipeline.outputAdapter === "fennenote" ? "tts" : pipeline.outputAdapter === "codex" ? "agent" : pipeline.outputAdapter,
+    outputPipeline: pipeline.outputPipeline === "fennenote" ? "tts" : pipeline.outputPipeline === "codex" ? "agent" : pipeline.outputPipeline
   };
 }
 
@@ -1403,7 +1406,6 @@ export function normalizeGatewayDefinition(definition: GatewayDefinition, option
   }
   assertValidPort(definition.gatewayPort, `gateway port for ${definition.id}`);
   if (definition.webhookPort != null) assertValidPort(definition.webhookPort, `webhook port for ${definition.id}`);
-  if (definition.fenneNoteWebhookPort != null) assertValidPort(definition.fenneNoteWebhookPort, `FenneNote webhook port for ${definition.id}`);
   if (definition.xiaoaiWebhookPort != null) assertValidPort(definition.xiaoaiWebhookPort, `XiaoAI webhook port for ${definition.id}`);
   if (definition.rabiLinkWebhookPort != null) assertValidPort(definition.rabiLinkWebhookPort, `RabiLink webhook port for ${definition.id}`);
   if (definition.feishuWebhookPort != null) assertValidPort(definition.feishuWebhookPort, `Feishu webhook port for ${definition.id}`);
@@ -1422,6 +1424,8 @@ export function normalizeGatewayDefinition(definition: GatewayDefinition, option
     grokBotBackendUrl: _retiredGrokBotBackendUrl,
     botNickname: _legacyBotNickname,
     codexOnlyPrimaryPersonaCanSendMessages: _legacyCodexOnlyPrimaryPersonaCanSendMessages,
+    fenneNoteWebhookPort: _retiredFenneNotePort,
+    fenneNoteWebhookPath: _retiredFenneNotePath,
     ...cleanDefinition
   } = definition as GatewayDefinition & {
     botNickname?: string;
@@ -1675,7 +1679,6 @@ export function collectGatewayPortClaims(
       claim(gateway.gatewayPort, `${gateway.id} gateway WS`, "gateway-ws", gateway.id);
     }
     if (activeAdapters.has("webhook")) claim(gateway.webhookPort ?? gateway.gatewayPort, `${gateway.id} webhook`, "webhook", gateway.id);
-    if (activeAdapters.has("fennenote")) claim(gateway.fenneNoteWebhookPort ?? gateway.webhookPort ?? gateway.gatewayPort, `${gateway.id} FenneNote webhook`, "fennenote-webhook", gateway.id);
     if (activeAdapters.has("xiaoai")) claim(gateway.xiaoaiWebhookPort ?? gateway.webhookPort ?? gateway.gatewayPort, `${gateway.id} XiaoAI webhook`, "xiaoai-webhook", gateway.id);
     if (activeAdapters.has("rabilink")) claim(gateway.rabiLinkWebhookPort ?? gateway.webhookPort ?? gateway.gatewayPort, `${gateway.id} RabiLink webhook`, "rabilink-webhook", gateway.id);
     if (activeAdapters.has("feishu")) claim(gateway.feishuWebhookPort ?? gateway.gatewayPort, `${gateway.id} Feishu webhook`, "feishu-webhook", gateway.id);
@@ -1762,9 +1765,6 @@ export function autoAssignGatewayPorts(gateways: GatewayDefinition[], managerPor
 
     if (activeAdapters.has("webhook")) {
       gateway.webhookPort = assignIngress(gateway.webhookPort, Number(gateway.gatewayPort || 8790) + 1);
-    }
-    if (activeAdapters.has("fennenote")) {
-      gateway.fenneNoteWebhookPort = assignIngress(gateway.fenneNoteWebhookPort, Number(gateway.webhookPort || gateway.gatewayPort || 8790) + 1);
     }
     if (activeAdapters.has("xiaoai")) {
       gateway.xiaoaiWebhookPort = assignIngress(gateway.xiaoaiWebhookPort, Number(gateway.webhookPort || gateway.gatewayPort || 8790) + 1);

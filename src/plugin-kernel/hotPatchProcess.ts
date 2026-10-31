@@ -1,3 +1,4 @@
+import { getTimeoutMs } from "./runtimeTimeouts.js";
 import { fork, type ChildProcess } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import type { CompiledHotPatchModule, HotPatchModule } from "./hotPatchModule.js";
@@ -40,7 +41,7 @@ export class HotPatchProcess {
     contract?: Readonly<Record<string, unknown>>;
     dependencies?: Readonly<Record<string, unknown>>;
   }> = {}) {
-    for (const value of [options.timeoutMs ?? 15_000, options.startupTimeoutMs ?? 15_000, options.maximumPending ?? 64]) {
+    for (const value of [options.timeoutMs ?? getTimeoutMs("backend.plugin-kernel.hotPatchProcess.owner.timeoutMs", 15_000), options.startupTimeoutMs ?? getTimeoutMs("backend.plugin-kernel.hotPatchProcess.owner.startupTimeoutMs", 15_000), options.maximumPending ?? 64]) {
       if (!Number.isSafeInteger(value) || value < 1) throw new RangeError("Hot patch process limits must be positive safe integers.");
     }
     const dependencies = structuredClone(options.dependencies ?? {});
@@ -176,7 +177,7 @@ export class HotPatchProcess {
       const timer = setTimeout(() => {
         this.fail(new HotPatchProcessError("Hot patch worker timed out; accepted calls are not replayed.", "timeout"));
         this.child.kill();
-      }, request.operation === "initialize" ? this.options.startupTimeoutMs ?? 15_000 : this.options.timeoutMs ?? 15_000);
+      }, request.operation === "initialize" ? this.options.startupTimeoutMs ?? getTimeoutMs("backend.plugin-kernel.hotPatchProcess.request.setTimeout.startupTimeoutMs", 15_000) : this.options.timeoutMs ?? getTimeoutMs("backend.plugin-kernel.hotPatchProcess.request.setTimeout.timeoutMs", 15_000));
       this.pending.set(id, { resolve, reject, timer });
       try {
         this.child.send({ ...request, id }, error => {

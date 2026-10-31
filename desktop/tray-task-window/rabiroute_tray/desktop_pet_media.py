@@ -1,6 +1,8 @@
 """Bounded, read-only playback evidence at the existing companion capture point."""
 from __future__ import annotations
 
+from .timeout_settings import get_timeout_seconds
+
 import asyncio
 import sys
 
@@ -29,7 +31,7 @@ def foreground_media_evidence(title: str) -> dict | None:
     if sys.platform != "win32" or not title:
         return None
     try:
-        rows = asyncio.run(asyncio.wait_for(_sessions(), timeout=1.5))
+        rows = asyncio.run(asyncio.wait_for(_sessions(), timeout=get_timeout_seconds("desktop.media.inspect", 1.5)))
     except Exception:
         # Unsupported players, denied metadata and timeouts retain visual classification.
         return None

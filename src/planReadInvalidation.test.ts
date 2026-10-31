@@ -74,7 +74,7 @@ test("fresh module restores a verified checkpoint without reading unchanged sour
   assert.deepEqual(await deletedModule.readPlanPageCatalogInWorker(root, { ...planReadFence(root), epoch: "restart-deleted" }), []);
 });
 
-test("resident catalog hot reads avoid file enumeration; explicit reconciliation sees metadata-preserving writes",async t=>{
+test("resident catalog hot reads only scan recovery eligibility; explicit reconciliation sees metadata-preserving writes",async t=>{
   const {root,file,plan}=fixture(); t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
   const first=await readPlanPageCatalogInWorker(root,planReadFence(root));
   const stat=t.mock.method(fs,"statSync"); const read=t.mock.method(fs,"readFileSync"); const scan=t.mock.method(fs,"readdirSync");
@@ -82,7 +82,13 @@ test("resident catalog hot reads avoid file enumeration; explicit reconciliation
   const asyncStat=t.mock.method(fs.promises,"stat");
   const now=Date.now(); t.mock.method(Date,"now",()=>now+60_000);
   const next=await readPlanPageCatalogInWorker(root,planReadFence(root));
-  assert.equal(asyncScan.mock.callCount(),0); assert.equal(asyncStat.mock.callCount(),0);
+  // Package recovery eligibility is refreshed independently of the resident
+  // plan projection. Only its transaction directory may be enumerated here;
+  // active/archive catalogs and unchanged source bodies remain untouched.
+  assert.deepEqual(asyncScan.mock.calls.map(call => String(call.arguments[0])), [
+    path.join(root, "plans", "quarantine", "plan-storage-package-transactions")
+  ]);
+  assert.equal(asyncStat.mock.callCount(),0);
   assert.strictEqual(next,first); assert.equal(stat.mock.callCount(),0); assert.equal(read.mock.callCount(),0); assert.equal(scan.mock.callCount(),0);
   const before=fs.statSync(file); fs.writeFileSync(file,JSON.stringify({...plan,focus:"new"})); fs.utimesSync(file,before.atime,before.mtime);
   const fresh=await readPlanPageCatalogInWorker(root,planReadFence(root),true);

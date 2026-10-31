@@ -1,12 +1,21 @@
 <script setup lang="ts">
+import { getTimeoutMs } from "../timeoutSettingsClient";
 import { computed, nextTick, onBeforeUnmount, ref, shallowRef, toRaw, watch } from "vue";
 import { useI18n } from "../i18n";
-import { managerEventSource } from "../managerApi";
-import { readAllDayResource, recordingPreview, restoreRecordingPreview, rememberRecordingPreview } from "../allDayRecordingClient";
+import { usePersonaService } from "../persona/personaServiceClient";
+import { readAllDayResource as readRecordingResource, recordingPreview as cachedRecordingPreview, restoreRecordingPreview as restoreCachedRecording, rememberRecordingPreview as rememberCachedRecording } from "../allDayRecordingClient";
 import { reviewIndex, reviewWindow, latestReviewEvent, adjacentLoadedEvent, mergeReviewEvents } from "../allDayReviewModel";
 import { ALL_DAY_SOURCES, DEFAULT_ALL_DAY_SETTINGS, allDayRecordingHealth, matchesReviewType, type AllDayEvent, type AllDaySettings, type AllDaySnapshot, type AllDayCatalog } from "@shared/allDayRecording";
 
 const props = defineProps<{ roleId: string }>();
+const personaService = usePersonaService();
+const managerEventSource = personaService.events;
+const recordingPreview = (roleId: string) => cachedRecordingPreview(personaService.cacheKey(roleId));
+const restoreRecordingPreview = (roleId: string) => restoreCachedRecording(personaService.cacheKey(roleId));
+const rememberRecordingPreview = (roleId: string, events: AllDayEvent[]) => rememberCachedRecording(personaService.cacheKey(roleId), events);
+function readAllDayResource<T>(url: string, read: (response: Response) => Promise<T>, init: RequestInit = {}, signal?: AbortSignal, timeoutMs = getTimeoutMs("webgui.recording.read", 12000)): Promise<T> {
+  return readRecordingResource(url, read, init, signal, timeoutMs, personaService.fetch);
+}
 const { isEnglish } = useI18n();
 const label = (zh: string, en: string) => isEnglish.value ? en : zh;
 const failureMessage = (failure: unknown) => failure instanceof Error && failure.name === "TimeoutError"
@@ -222,7 +231,7 @@ async function data<T>(suffix: string, init: RequestInit = {}, signal?: AbortSig
     const result = await response.json();
     if (!response.ok || result.code !== 0) throw new Error(result.message || `HTTP ${response.status}`);
     return result.data;
-  }, init, signal, init.method ? 45000 : /^\/(catalog|events)(?:\?|$)/.test(suffix) ? 60000 : 12000);
+  }, init, signal, init.method ? getTimeoutMs("webgui.recording.mutation", 45000) : /^\/(catalog|events)(?:\?|$)/.test(suffix) ? getTimeoutMs("webgui.recording.history", 60000) : getTimeoutMs("webgui.recording.read", 12000));
 }
 async function loadRange() {
   pageController?.abort(); pageController = undefined; loadingMore.value = false;
@@ -515,7 +524,7 @@ async function adjacentEvent(direction: "older" | "newer") {
   if (cached) { select(cached); navigatingEvent.value = false; return; }
   controller?.abort(); recentController?.abort(); pageController?.abort(); clearTimeout(rangeTimer);
   const pending = new AbortController(); navigationController = pending;
-  const timeout = setTimeout(() => pending.abort(),15000);
+  const timeout = setTimeout(() => pending.abort(),getTimeoutMs("webgui.recording.preview", 15000));
   const query = new URLSearchParams({ direction, time: String(anchor.time), id: anchor.id, source, type });
   try {
     // Query the adjacent page so sparse loaded windows cannot skip unseen events.

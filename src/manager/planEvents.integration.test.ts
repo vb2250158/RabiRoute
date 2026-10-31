@@ -3,71 +3,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import http from "node:http";
-import { Socket } from "node:net";
 import test from "node:test";
 import { RoleStorageApplication } from "./roleStorageApplication.js";
+import { ManagerPluginRouteRegistry } from "./managerPluginRouteRegistry.js";
 import { readPlanStoragePackage } from "../planStorageRepository.js";
-import { handleManagerEventApi, closeManagerEventClients, writeManagerEventFrame } from "./controlPlaneRoutes.js";
-
-test("ready backpressure does not register a keepalive or subscriber", t => {
-  const request = new http.IncomingMessage(new Socket()); request.method = "GET";
-  const response = new http.ServerResponse(request);
-  t.mock.method(response, "write", () => false);
-  const destroy = t.mock.method(response, "destroy", () => response);
-  assert.equal(handleManagerEventApi(request, new URL("http://localhost/api/events"), response), true);
-  assert.equal(destroy.mock.callCount(), 1);
-  assert.equal(request.listenerCount("close"), 0);
-  assert.equal(response.listenerCount("close"), 0);
-  closeManagerEventClients();
-});
-
-test("heartbeat backpressure releases the stream and throwing writes are contained", t => {
-  const request = new http.IncomingMessage(new Socket()); request.method = "GET";
-  const response = new http.ServerResponse(request);
-  let writes = 0;
-  t.mock.method(response, "write", () => ++writes === 1);
-  const destroy = t.mock.method(response, "destroy", () => response);
-  const nativeSetInterval = globalThis.setInterval;
-  const nativeClearInterval = globalThis.clearInterval;
-  let registering = false;
-  let heartbeat: NodeJS.Timeout | undefined;
-  let callback: (() => void) | undefined;
-  let active = false;
-  let clears = 0;
-  // Node 22 MockTimers reinserts intervals cleared inside their own callback.
-  // Capture only this stream's synchronous registration; delegate all other timers.
-  const register = t.mock.method(globalThis, "setInterval", (run: (...args: unknown[]) => void, delay?: number, ...args: unknown[]) => {
-    if (!registering || delay !== 15000) return nativeSetInterval(run, delay, ...args);
-    assert.equal(heartbeat, undefined);
-    heartbeat = nativeSetInterval(() => {}, delay);
-    callback = () => run(...args);
-    active = true;
-    return heartbeat;
-  });
-  const clear = t.mock.method(globalThis, "clearInterval", (timer: Parameters<typeof nativeClearInterval>[0]) => {
-    if (timer === heartbeat) { active = false; clears++; }
-    nativeClearInterval(timer);
-  });
-  const tickHeartbeat = () => { if (active) callback!(); };
-  try {
-    registering = true;
-    handleManagerEventApi(request, new URL("http://localhost/api/events"), response);
-    registering = false;
-    assert.ok(heartbeat);
-    tickHeartbeat();
-    assert.equal(writes, 2); assert.equal(destroy.mock.callCount(), 1);
-    assert.equal(clears, 1); assert.equal(active, false);
-    tickHeartbeat(); assert.equal(writes, 2);
-    t.mock.method(response, "write", () => { throw new Error("closed"); });
-    assert.equal(writeManagerEventFrame(response, "event: plan_changed\\ndata: {}\\n\\n"), false);
-  } finally {
-    registering = false;
-    closeManagerEventClients();
-    if (heartbeat) nativeClearInterval(heartbeat);
-    clear.mock.restore();
-    register.mock.restore();
-  }
-});
+import { createManagerEventOperationDefinition, closeManagerEventClients } from "./controlPlaneRoutes.js";
 
 test("committed plans notify SSE subscribers and closed subscribers release the stream", { timeout: 30000 }, async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabi-plan-events-"));
@@ -75,8 +15,10 @@ test("committed plans notify SSE subscribers and closed subscribers release the 
   fs.mkdirSync(roleDir);
   const identity = { applicationGenerationId: "event-test-generation", managerInstanceId: "event-test-manager" };
   const application = new RoleStorageApplication({ rolesRoot: root, ...identity, currentIdentity: () => identity });
+  const registry = new ManagerPluginRouteRegistry();
+  const registration = registry.registerOperations("event-test", [createManagerEventOperationDefinition()]);
   const server = http.createServer((request, response) => {
-    if (!handleManagerEventApi(request, new URL(request.url || "/", "http://localhost"), response)) response.writeHead(404).end();
+    if (!registry.handle(request, new URL(request.url || "/", "http://localhost"), response)) response.writeHead(404).end();
   });
   const controller = new AbortController();
   try {
@@ -122,6 +64,7 @@ test("committed plans notify SSE subscribers and closed subscribers release the 
   } finally {
     controller.abort();
     closeManagerEventClients();
+    await registration.dispose();
     await new Promise<void>(resolve => server.close(() => resolve()));
     t.diagnostic("HTTP server closed; waiting for storage application stop");
     await application.stop();

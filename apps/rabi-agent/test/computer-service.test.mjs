@@ -6,11 +6,78 @@ import path from "node:path";
 import { randomUUID, createHash } from "node:crypto";
 import { spawn } from "node:child_process";
 import { ComputerService } from "../lib/computer-service.mjs";
+import { computerRequestSchema } from "../lib/interactive-protocol.mjs";
 const sha = value => createHash("sha256").update(value).digest("hex");
+function removePrivateFixture(root) {
+  const absolute = path.resolve(root);
+  assert.ok(absolute.startsWith(path.resolve(os.tmpdir()) + path.sep));
+  fs.rmSync(absolute, { recursive: true, force: true });
+}
+
+test("computer uploads allow larger files by default and retain explicit user limits", async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabi-computer-size-"));
+  const service = new ComputerService({ maxUploadBytes: Number.MAX_SAFE_INTEGER, uploadHistoryRoot: path.join(root, "history") });
+  const limited = new ComputerService({ maxUploadBytes: 3, uploadHistoryRoot: path.join(root, "limited-history") });
+  const resumed = new ComputerService({ maxUploadBytes: 3, uploadHistoryRoot: path.join(root, "history") });
+  t.after(async () => { await Promise.all([service.stop(), limited.stop(), resumed.stop()]); removePrivateFixture(root); });
+  const request = { action: "upload.begin", uploadId: randomUUID(), path: path.join(root, "large.bin"), size: 2 * 1024 ** 3 + 1, sha256: sha("") };
+  const schema = computerRequestSchema.anyOf.find(item => item.properties.action.const === "upload.begin");
+  assert.ok(schema.properties.size.maximum >= request.size);
+  assert.equal((await service.execute(request)).size, request.size);
+  await service.execute({ action: "upload.abort", uploadId: request.uploadId });
+  assert.equal((await resumed.execute({ action: "upload.status", uploadId: request.uploadId })).size, request.size);
+  await assert.rejects(limited.execute({ ...request, size: 4 }), /RABI_AGENT_COMPUTER_MAX_UPLOAD_BYTES=3.*launcher/);
+  assert.equal((await limited.execute({ ...request, size: 3 })).size, 3);
+  await limited.execute({ action: "upload.abort", uploadId: request.uploadId });
+  for (const maxUploadBytes of [-1, 1.5, Infinity, Number.MAX_SAFE_INTEGER + 1]) assert.throws(() => new ComputerService({ maxUploadBytes }), /exact byte count/);
+});
+
+test("computer upload limit reads the user's launcher environment", t => {
+  const previous = process.env.RABI_AGENT_COMPUTER_MAX_UPLOAD_BYTES;
+  t.after(() => { if (previous === undefined) delete process.env.RABI_AGENT_COMPUTER_MAX_UPLOAD_BYTES; else process.env.RABI_AGENT_COMPUTER_MAX_UPLOAD_BYTES = previous; });
+  delete process.env.RABI_AGENT_COMPUTER_MAX_UPLOAD_BYTES;
+  assert.equal(new ComputerService().maxUploadBytes, Number.MAX_SAFE_INTEGER);
+  process.env.RABI_AGENT_COMPUTER_MAX_UPLOAD_BYTES = "0";
+  assert.equal(new ComputerService().maxUploadBytes, 0);
+  process.env.RABI_AGENT_COMPUTER_MAX_UPLOAD_BYTES = "invalid";
+  assert.throws(() => new ComputerService(), /RABI_AGENT_COMPUTER_MAX_UPLOAD_BYTES/);
+});
+
+test("computer resource budgets preserve configured values and report their source", async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabi-computer-capacity-"));
+  const service = new ComputerService({ maxConcurrentIo: 1, maxActiveUploads: 1, maxUploadRecords: 2, uploadHistoryRoot: path.join(root, "history") });
+  const owned = [service];
+  t.after(async () => { await Promise.all(owned.map(owner => owner.stop())); removePrivateFixture(root); });
+  const begin = () => ({ action: "upload.begin", uploadId: randomUUID(), path: path.join(root, `${randomUUID()}.bin`), size: 0, sha256: sha("") });
+  const first = begin(), second = begin();
+  await service.execute(first);
+  await assert.rejects(service.execute(second), /RABI_AGENT_COMPUTER_MAX_ACTIVE_UPLOADS=1.*launcher/);
+  await service.execute({ action: "upload.abort", uploadId: first.uploadId });
+  await service.execute(second);
+  await service.execute({ action: "upload.abort", uploadId: second.uploadId });
+  const third = begin();
+  assert.equal((await service.execute(third)).state, "uploading");
+  assert.ok(service.uploads.size <= 2);
+  assert.equal((await service.execute({ action: "upload.status", uploadId: first.uploadId })).state, "aborted");
+  await service.execute({ action: "upload.abort", uploadId: third.uploadId });
+  let finish;
+  service.readFile = () => new Promise(resolve => { finish = resolve; });
+  const read = service.execute({ action: "file.stat" });
+  await assert.rejects(service.execute({ action: "file.stat" }), /RABI_AGENT_COMPUTER_MAX_CONCURRENT_IO=1.*launcher/);
+  finish({}); await read;
+  assert.equal(service.pending, 0);
+  const unlimited = new ComputerService({ maxConcurrentIo: 0, maxActiveUploads: 0, maxUploadRecords: 0, uploadHistoryRoot: path.join(root, "unlimited-history") });
+  owned.push(unlimited);
+  const requests = Array.from({ length: 5 }, begin);
+  await Promise.all(requests.map(request => unlimited.execute(request)));
+  assert.equal(unlimited.activeCount, 5);
+  await unlimited.stop();
+});
 
 test("binary files transfer in checked chunks, commit once and preserve existing files", async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabi-computer-"));
-  const service = new ComputerService(); t.after(() => { service.stop(); fs.rmSync(root, { recursive: true, force: true }); });
+  const service = new ComputerService({ uploadHistoryRoot: path.join(root, "history") });
+  t.after(async () => { await service.stop(); removePrivateFixture(root); });
   const bytes = Buffer.alloc(200013); for (let i=0;i<bytes.length;i++)bytes[i]=i%251;
   const uploadId = randomUUID(), target = path.join(root, "binary.dat");
   const begin = { action: "upload.begin", uploadId, path: target, size: bytes.length, sha256: sha(bytes) };

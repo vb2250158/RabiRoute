@@ -158,7 +158,7 @@ class RecordingArchiveSession(context: Context, private val backend: RabiGlassPc
         executor.shutdownNow()
         // onDestroy can run on main. Joining belongs to the service shutdown worker.
     }
-    fun awaitStopped(): Boolean = try { executor.awaitTermination(5, TimeUnit.SECONDS) }
+    fun awaitStopped(): Boolean = try { executor.awaitTermination(com.rabi.link.transport.ScopedManagerTimeouts.active(app).get("android.recording.archiveStop",5000), TimeUnit.MILLISECONDS) }
         catch (_: InterruptedException) { Thread.currentThread().interrupt(); false }
 }
 

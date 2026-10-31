@@ -1,8 +1,12 @@
 # View persona skills
 
-English | [简体中文](persona-skills.md)
+<!-- docs-language-switch -->
+<div align="center">
+English | <a href="./persona-skills.md">简体中文</a> | <a href="./persona-skills_ja.md">日本語</a>
+</div>
+<!-- /docs-language-switch -->
 
-Open the Knowledge page for a route with a bound persona and select **Persona Skills**. The catalog shows saved Skill titles and summaries. Select an item to read its body as plain text; HTML is never executed.
+Open Plans and memory and select a persona, then select **Persona Skills**. No Route binding is required. The catalog shows saved Skill titles and summaries. Select an item to read its body as plain text; HTML is never executed.
 
 This is a read-only resource catalog, **not proof that the current Agent has loaded these skills**. It does not install, enable, disable or edit skills. `active`, `draft` and `archived` describe resource metadata, not execution-host loading status.
 

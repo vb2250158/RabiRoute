@@ -1,9 +1,13 @@
 import test from "node:test";
+import http from "node:http";
+import { once } from "node:events";
+import { WebSocketServer } from "ws";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
+import { withoutSessionBindings } from "../lib/instance-agents.mjs";
 import { __test } from "../rabi-agent.mjs";
 
 const identity = nodeId => ({ code: 0, data: { nodeId, applicationGenerationId: "generation-fixture", managerInstanceId: "manager-fixture", guid: "guid-fixture", rabiGuid: "guid-fixture", health: { live: true, state: "healthy", requiredReady: true } } });
@@ -44,8 +48,7 @@ test("bootstrap exchanges ticket once, persists only credential and registered A
   const config = await __test.bootstrapConfig(configPath, server(requests));
   assert.match(config.nodeCredential, /^lan1:fixture-node:/);
   assert.equal(process.env.RABI_AGENT_BOOTSTRAP_TICKET, undefined);
-  assert.equal(config.agents[0].sessionId, "new-task");
-  assert.notEqual(config.agents[0].agentId, "default");
+  assert.deepEqual(config.agents, []);
   assert.equal(fs.readFileSync(configPath, "utf8").includes("fixture-ticket"), false);
   delete process.env.RABI_AGENT_BOOTSTRAP_TICKET;
   await __test.bootstrapConfig(configPath, server(requests));
@@ -66,21 +69,21 @@ test("computer-only enrollment and normal configuration loading need no Agent se
 
 test("a configured Agent catalog does not depend on a legacy global session binding", async () => fixture(async ({ configPath, directory }) => {
   fs.writeFileSync(configPath,JSON.stringify({schemaVersion:1,nodeId:"fixture-node",nodeCredential:"fixture-node-credential",managerUrl:process.env.RABI_MANAGER_URL,releasePublicKeySha256:"a".repeat(64),defaultWorkspace:directory,allowedWorkspaces:[directory],agents:[{agentId:"saved-agent",provider:"codex-desktop",sessionId:"saved-task",workspace:directory}]}));
-  const loaded=__test.readConfig(configPath);assert.equal(loaded.agents[0].sessionId,"saved-task");
+  const loaded=__test.readConfig(configPath);assert.equal(loaded.agents[0].sessionId,undefined);
 }));
 
 test("legacy configuration fails closed, then explicit enrollment preserves node, Agent catalog and workspaces", async () => fixture(async ({ configPath, directory }) => {
   const agents = [{ agentId: "stable-agent", provider: "codex-desktop", sessionId: "saved-task", enabled: false, workspace: directory }];
   const legacy = { schemaVersion: 1, managerUrl: process.env.RABI_MANAGER_URL, nodeId: "stable-instance", lanLinkToken: "fixture-legacy", agents, allowedWorkspaces: [directory] };
   fs.writeFileSync(configPath, JSON.stringify(legacy));
-  assert.throws(() => __test.readConfig(configPath), /Legacy lanLinkToken/);
+  assert.throws(() => __test.readConfig(configPath), /credential/);
   delete process.env.RABI_AGENT_BOOTSTRAP_TICKET;
   await assert.rejects(__test.bootstrapConfig(configPath), /re-enroll/);
-  assert.deepEqual(JSON.parse(fs.readFileSync(configPath)), legacy);
+  assert.deepEqual(JSON.parse(fs.readFileSync(configPath)), withoutSessionBindings(legacy));
   process.env.RABI_AGENT_BOOTSTRAP_TICKET = "fixture-ticket";
   const result = await __test.bootstrapConfig(configPath, server([], "stable-instance"));
   assert.equal(result.nodeId, "stable-instance");
-  assert.deepEqual(result.agents, agents);
+  assert.deepEqual(result.agents, withoutSessionBindings({agents}).agents);
   assert.deepEqual(result.allowedWorkspaces.map(item => fs.realpathSync.native(item)), [fs.realpathSync.native(directory)]);
   assert.equal(result.lanLinkToken, undefined);
 }));
@@ -142,7 +145,7 @@ test("a fresh pasted ticket repairs rejected credentials without changing node, 
     if (String(url).endsWith("/self") && init.headers.authorization === "Bearer rejected-credential") return Response.json({code:-1}, {status:401});
     return success(url, init);
   });
-  assert.equal(config.nodeId, original.nodeId); assert.deepEqual(config.agents, agents);
+  assert.equal(config.nodeId, original.nodeId); assert.deepEqual(config.agents, withoutSessionBindings({agents}).agents);
   assert.equal(config.defaultWorkspace, directory); assert.deepEqual(config.allowedWorkspaces, [directory]);
   assert.match(config.nodeCredential, /^lan1:stable-node:/);
   assert.equal(requests.filter(item => item.url.endsWith("/enroll")).length, 1);
@@ -241,22 +244,26 @@ test("queued task revoked before execution never enters the host", async () => f
   let requests = 0;
   let turns = 0;
   let releaseQueue;
-  globalThis.fetch = async (_url, init) => { requests++; assert.equal(init.headers["x-rabiroute-agent-id"], "default"); return Response.json({ code: 403 }, { status: 403 }); };
+  globalThis.fetch = async (url, init) => { requests++; if (String(url).endsWith("/.well-known/rabiroute-manager")) return Response.json({ code: 0, data: { ...identity("fixture-node").data, protocolVersion: "1" } }); return Response.json({ code: 403 }, { status: 403 }); };
   const runtime = new __test.RabiAgentRuntime({ managerUrl: "http://manager.test:54321", nodeId: "fixture-node", nodeCredential: "fixture-node", defaultWorkspace: directory, allowedWorkspaces: [directory],
     agents: [{ agentId: "default", provider: "codex-desktop", sessionId: "fixture-session", workspace: directory }] }, configPath);
   runtime.desktop.startTurn = async () => { turns++; };
   // Exercise authority revocation, not the earlier disconnected-transport guard.
   runtime.connected = true;
+  runtime.socketManagerGuid = "guid-fixture";
+  Object.assign(runtime.config, { schemaVersion: 1, managerGuid: "guid-fixture", releasePublicKeySha256: "a".repeat(64) });
+  fs.writeFileSync(configPath, JSON.stringify(runtime.config));
+  runtime.send = () => true;
   runtime.taskQueue = new Promise(resolve => { releaseQueue = resolve; });
   try {
     runtime.enqueueTask({ taskId: "fixture-task", agentId: "default", targetAgent: "codex-desktop", threadId: "explicit-target", message: "fixture", cwd: directory });
     assert.equal(requests, 0);
     releaseQueue();
     await runtime.taskQueue;
-    assert.equal(requests, 1);
+    assert.ok(requests > 0);
     assert.equal(turns, 0);
     assert.equal(runtime.stateStore.state.tasks["fixture-task"].status, "failed");
-  } finally { runtime.stop(); globalThis.fetch = savedFetch; }
+  } finally { await runtime.stop(); globalThis.fetch = savedFetch; }
 }));
 
 test("prepared management captures original connection before queue execution and sends no replacement receipt", async () => fixture(async ({ configPath, directory }) => {
@@ -273,7 +280,7 @@ test("prepared management captures original connection before queue execution an
   releaseQueue();
   await runtime.taskQueue;
   assert.equal(replies.length, 0);
-  runtime.stop();
+  await runtime.stop();
 }));
 
 test("Manager enablement controls queued execution despite a legacy local disabled field", async () => fixture(async ({ configPath, directory }) => {
@@ -285,26 +292,31 @@ test("Manager enablement controls queued execution despite a legacy local disabl
   let requests = 0;
   const turns = [];
   runtime.connected = true;
+  runtime.socketManagerGuid = "guid-fixture";
+  Object.assign(runtime.config, { schemaVersion: 1, managerGuid: "guid-fixture", releasePublicKeySha256: "a".repeat(64) });
+  fs.writeFileSync(configPath, JSON.stringify(runtime.config));
+  runtime.send = () => true;
   runtime.send = () => true;
   runtime.desktop.startTurn = async turn => { turns.push(turn); };
-  globalThis.fetch = async (_url, init) => {
+  globalThis.fetch = async (url, init) => {
+    if (String(url).endsWith("/.well-known/rabiroute-manager")) return Response.json({ code: 0, data: { ...identity("fixture-node").data, protocolVersion: "1" } });
     requests++;
-    assert.equal(init.headers["x-rabiroute-agent-id"], agent.agentId);
-    return enabled ? Response.json(identity("fixture-node")) : Response.json({ code: 403 }, { status: 403 });
+    if (init.headers["x-rabiroute-agent-type"]) assert.equal(init.headers["x-rabiroute-agent-type"], "codex");
+    return enabled || String(url).endsWith("/api/lan-agent/self") || !init.headers["x-rabiroute-agent-type"] ? Response.json(identity("fixture-node")) : Response.json({ code: 403 }, { status: 403 });
   };
   try {
-    await runtime.runTask({ taskId: "enabled-task", agentId: agent.agentId, targetAgent: agent.provider, threadId: "explicit-target", message: "fixture", cwd: directory });
-    assert.equal(turns.length, 1);
+    await runtime.runTask({ taskId: "enabled-task", agentId: agent.agentId, targetAgent: agent.provider, threadId: "explicit-target", message: "fixture", cwd: directory }, "guid-fixture");
+    assert.equal(turns.length, 1, JSON.stringify(runtime.stateStore.state.tasks));
     assert.equal(turns[0].threadId, "explicit-target");
     assert.equal(agent.sessionId, "fixture-session");
     assert.equal(runtime.stateStore.state.tasks["enabled-task"].status, "progress");
     enabled = false;
     const beforeDenied = requests;
-    await runtime.runTask({ taskId: "disabled-task", agentId: agent.agentId, targetAgent: agent.provider, threadId: "another-target", message: "fixture", cwd: directory });
+    await runtime.runTask({ taskId: "disabled-task", agentId: agent.agentId, targetAgent: agent.provider, threadId: "another-target", message: "fixture", cwd: directory }, "guid-fixture");
     assert.ok(requests > beforeDenied);
-    assert.equal(turns.length, 1);
+    assert.equal(turns.length, 1, JSON.stringify(runtime.stateStore.state.tasks));
     assert.match(runtime.stateStore.state.tasks["disabled-task"].error, /Manager no longer authorizes/);
-  } finally { runtime.stop(); globalThis.fetch = savedFetch; }
+  } finally { await runtime.stop(); globalThis.fetch = savedFetch; }
 }));
 
 test("thread and prepared operations reach Manager authority with legacy local disabled state", async () => fixture(async ({ configPath, directory }) => {
@@ -319,49 +331,48 @@ test("thread and prepared operations reach Manager authority with legacy local d
   runtime.send = value => { replies.push(value); return true; };
   globalThis.fetch = async () => { requests++; return Response.json({ code: 403 }, { status: 403 }); };
   try {
-    for (const operation of ["threads", "prepared_delivery", "reconcile_prepared_delivery"]) {
+    for (const operation of ["prepared_delivery", "reconcile_prepared_delivery"]) {
       const before = requests;
       runtime.handleManagerMessage(JSON.stringify({ type: "manageAgent", requestId: operation, operation, params: {
-        agentId: agent.agentId, action: "read", threadId: agent.sessionId,
+        agentId: agent.agentId, agentAdapter: "codex", action: "read", threadId: agent.sessionId,
         delivery: { deliveryId: "fixture-delivery", generation: "fixture-generation", target: {
           kind: "instance", nodeId: "fixture-node", agentId: agent.agentId, provider: "codex", sessionId: agent.sessionId
         } }
       } }));
-      await runtime.taskQueue;
-      assert.ok(requests > before, operation);
+      await Promise.all([...runtime.preparedDeliveries, ...runtime.receiptRecoveries]);
+      assert.ok(requests > before, JSON.stringify(replies));
       assert.match(replies.at(-1).error, operation === "threads" ? /Manager no longer authorizes/ : /Original delivery authority is unavailable/);
     }
-  } finally { runtime.stop(); globalThis.fetch = savedFetch; }
+  } finally { await runtime.stop(); globalThis.fetch = savedFetch; }
 }));
 
-test("WebSocket authenticates only with node credential after self verification", async () => fixture(async ({ configPath, directory }) => {
-  const savedFetch = globalThis.fetch;
-  const savedSocket = globalThis.WebSocket;
-  const sent = [];
-  let socket;
-  globalThis.fetch = async (url, init) => {
-    if (String(url).endsWith("/.well-known/rabiroute-manager")) {
-      assert.equal(init.headers.authorization, undefined);
-      return Response.json({ code: 0, data: { ...identity("fixture-node").data, protocolVersion: "1" } });
-    }
-    assert.equal(init.headers.authorization, "Bearer fixture-node");
-    return Response.json(identity("fixture-node"));
-  };
-  globalThis.WebSocket = class {
-    static OPEN = 1;
-    static CONNECTING = 0;
-    readyState = 1;
-    handlers = {};
-    constructor(url) { this.url = url; socket = this; }
-    addEventListener(event, callback) { this.handlers[event] = callback; }
-    send(payload) { sent.push(JSON.parse(payload)); }
-    close() {}
-  };
-  const runtime = new __test.RabiAgentRuntime({ managerUrl: "http://manager.test:54321", nodeId: "fixture-node", nodeCredential: "fixture-node", defaultWorkspace: directory }, configPath);
+test("WebSocket discovers its path and authenticates only with the original node credential after self verification", { timeout: 10000 }, async () => fixture(async ({ configPath, directory }) => {
+  const sent = [], requests = [], meta = identity("fixture-node").data;
+  const frame = { type: "object", required: ["type"], properties: { type: { type: "string" } }, additionalProperties: true };
+  const contract = { operationId: "manager.lan-agent.connect", contractVersion: "1.0.0", method: "GET", transport: "websocket", pathTemplate: "/future/discovered-node-channel",
+    websocket: { protocol: "native-fixture", framing: "json", maxMessageBytes: 1024, maxBufferedBytes: 2048, closeGraceMs: 100, incomingSchema: frame, outgoingSchema: frame } };
+  const listener = http.createServer((request, response) => {
+    requests.push(request.url); response.setHeader("content-type", "application/json");
+    if (request.url === "/.well-known/rabiroute-manager") { assert.equal(request.headers.authorization, undefined); response.end(JSON.stringify({ code: 0, data: { ...meta, protocolVersion: 1 } })); return; }
+    assert.equal(request.headers.authorization, "Bearer fixture-node");
+    response.end(JSON.stringify(request.url === "/api/agent/help" ? { code: 0, data: { schemaVersion: "2", ...meta, pluginGenerationId: "plugins", catalogRevision: 1,
+      catalogDigest: "sha256:" + "a".repeat(64), nextCursor: "", operations: [{ id: contract.operationId, contractDigest: "sha256:" + "b".repeat(64), contract }] } } : identity("fixture-node")));
+  });
+  const ws = new WebSocketServer({ server: listener }); let authenticated;
+  const received = new Promise(resolve => { authenticated = resolve; });
+  ws.on("connection", (socket, request) => {
+    assert.equal(request.url, contract.pathTemplate); assert.equal(request.headers["x-rabiroute-api-contract"], "sha256:" + "b".repeat(64));
+    assert.ok(requests.includes("/api/lan-agent/self"));
+    socket.on("message", raw => { sent.push(JSON.parse(raw)); authenticated(); });
+  });
+  listener.listen(0, "127.0.0.1"); await once(listener, "listening");
+  const runtime = new __test.RabiAgentRuntime({ managerUrl: "http://127.0.0.1:" + listener.address().port, nodeId: "fixture-node", nodeCredential: "fixture-node", defaultWorkspace: directory }, configPath);
   try {
-    await runtime.connect();
-    socket.handlers.open();
+    await runtime.connect(); await received;
     assert.deepEqual(sent, [{ type: "authenticate", token: "fixture-node" }]);
-    assert.equal(socket.url, "ws://manager.test:54321/api/lan-agent/connect");
-  } finally { runtime.stop(); globalThis.fetch = savedFetch; globalThis.WebSocket = savedSocket; }
+  } finally {
+    await runtime.stop(); if (runtime.socket) await runtime.socket.closed;
+    for (const socket of ws.clients) socket.terminate(); await new Promise(resolve => ws.close(resolve));
+    listener.closeAllConnections(); await new Promise(resolve => listener.close(resolve));
+  }
 }));

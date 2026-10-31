@@ -6,7 +6,7 @@ import java.util.UUID
 import java.util.concurrent.atomic.AtomicReference
 
 /** One generic HTTP/upgrade stream over the existing encrypted frame protocol. */
-internal class TunnelHttpExchange(private val send:(JSONObject)->Unit,private val read:(Long)->JSONObject?,private val assertCurrent:()->Unit) {
+internal class TunnelHttpExchange(private val send:(JSONObject)->Unit,private val read:(Long)->JSONObject?,private val assertCurrent:()->Unit,private val closeTimeoutMs:Long=1000) {
     fun run(service:String,method:String,path:String,headers:JSONObject,input:InputStream,upgrade:Boolean,
             onHead:(Int,JSONObject)->Unit,onData:(ByteArray)->Unit,timeoutMs:Long) {
         val id=UUID.randomUUID().toString();val lock=Object();var credit=65536;val done=java.util.concurrent.atomic.AtomicBoolean(false)
@@ -38,6 +38,6 @@ internal class TunnelHttpExchange(private val send:(JSONObject)->Unit,private va
                 }
             }
             assertCurrent()
-        }finally{done.set(true);synchronized(lock){lock.notifyAll()};runCatching{input.close()};writer.interrupt();writer.join(1000)}
+        }finally{done.set(true);synchronized(lock){lock.notifyAll()};runCatching{input.close()};writer.interrupt();writer.join(closeTimeoutMs)}
     }
 }

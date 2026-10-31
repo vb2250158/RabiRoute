@@ -42,3 +42,21 @@ test("rejects media segments outside the explicit host allowlist", () => {
     "https://unexpected.example/segment.ts"
   ].join("\n"), new URL("https://media.example/event/index.m3u8"), ["media.example"]), /not allowed/);
 });
+
+
+test("camera clips have no implicit host restriction when the list is empty", () => {
+  const worker = new XiaomiHomeClipCaptureWorker({ cameraClipCaptureEnabled: true }, {} as XiaomiHomeArtifactStore);
+  assert.equal(worker.isEnabled(), true);
+  const playlist = '#EXTM3U\n#EXTINF:5.0,\nhttp://new-cdn.example/segment.ts';
+  assert.equal(parseHlsMediaPlaylist(playlist, new URL("https://media.example/index.m3u8"), []).length, 1);
+});
+
+
+test("explicit camera hosts also constrain redirect targets before fetching them", async () => {
+  let calls = 0;
+  const worker = new XiaomiHomeClipCaptureWorker({ cameraClipCaptureEnabled: true, cameraClipAllowedHosts: ["media.example"] },
+    { getBySourceEventId: () => undefined } as unknown as XiaomiHomeArtifactStore,
+    async () => { calls++; return new Response(null, { status: 302, headers: { location: "http://other.example/clip.m3u8" } }); });
+  await assert.rejects(worker.capture({ sourceEventId: "redirect-policy", resourceId: "home:ha:camera.example", resourceName: "Fixture", occurredAt: "2026-01-01T00:00:00Z", eventType: "PeopleMotion", playlistUrl: "http://media.example/clip.m3u8" }), /cameraClipAllowedHosts/);
+  assert.equal(calls, 1);
+});

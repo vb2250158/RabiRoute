@@ -4,12 +4,12 @@ import http from 'node:http';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { handlePersonaChatHistoryApi } from './personaChatHistoryRoutes.js';
+import { dispatchChatHistoryFixture } from './personaHistoryOperationTestFixtures.js';
 test('AIUI transcript ingestion uses persona history, supports user-first sync, replay and conflicting-turn rejection', async t => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'aiui-persona-history-'));
   let desktopReads = 0;
   const server = http.createServer((req, res) => {
-    if (handlePersonaChatHistoryApi(req, new URL(req.url!, 'http://localhost'), res, id => {
+    if (dispatchChatHistoryFixture(req, new URL(req.url!, 'http://localhost'), res, id => {
       if (!['One', 'Two'].includes(id)) throw new Error('UNKNOWN_ROLE');
       return path.join(root, id);
     }, ids => { desktopReads += ids.length; return []; })) return;

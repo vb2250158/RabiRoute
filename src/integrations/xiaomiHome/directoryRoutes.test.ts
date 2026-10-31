@@ -1,13 +1,13 @@
 import assert from "node:assert/strict";
 import type http from "node:http";
 import test from "node:test";
-import { handleXiaomiHomeManagerApi, type XiaomiHomeManagerRoutesContext } from "./managerRoutes.js";
+import { invokeFixtureXiaomiOperation, type XiaomiHomeOperationFixtureContext } from "./managerOperations.fixture.js";
 import type { XiaomiHomeRuntimeController } from "./settingsRuntime.js";
 
 test("directory HTTP reads validate before discovery and forward filters, pages and exact device IDs", async () => {
   const calls: unknown[] = [];
   const statuses: number[] = [];
-  const context: XiaomiHomeManagerRoutesContext = {
+  const context: XiaomiHomeOperationFixtureContext = {
     runtime: { client: {
       queryDevices: async (q: unknown) => { calls.push(q); return { items: [] }; },
       queryResources: async (q: unknown) => { calls.push(q); return { items: [] }; },
@@ -20,7 +20,7 @@ test("directory HTTP reads validate before discovery and forward filters, pages 
   };
   const request = { method: "GET", socket: { remoteAddress: "127.0.0.1" }, headers: {} } as http.IncomingMessage;
   for (const suffix of ["/devices?q=书房&limit=5", "/resources?kind=climate&available=1&offset=5&limit=5", "/devices/ac", "/devices?limit=51", "/resources?q=x&q=y", "/devices/%ZZ", "/devices/ac?view=detail"]) {
-    handleXiaomiHomeManagerApi(request, new URL("http://localhost/api/agent/xiaomi-home" + suffix), {} as http.ServerResponse, context);
+    invokeFixtureXiaomiOperation(request, new URL("http://localhost/api/agent/xiaomi-home" + suffix), {} as http.ServerResponse, context);
     await new Promise(resolve => setImmediate(resolve));
   }
   assert.deepEqual(statuses, [200, 200, 200, 400, 400, 400, 400]);

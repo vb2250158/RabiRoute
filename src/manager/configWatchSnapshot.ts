@@ -1,3 +1,4 @@
+import { getTimeoutMs } from "../shared/timeoutSettings.js";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -56,7 +57,7 @@ async function bounded<T>(operation: Promise<T>, timeoutMs: number, label: strin
 export async function collectWatchedConfigFiles(
   options: CollectWatchedConfigFilesOptions
 ): Promise<WatchedConfigFilesResult> {
-  const timeoutMs = Math.max(10, options.timeoutMs ?? 1500);
+  const timeoutMs = Math.max(1, options.timeoutMs ?? getTimeoutMs("backend.manager.configWatchSnapshot.collectWatchedConfigFiles.Math.max.timeoutMs", 1500));
   const readDirectory = options.readDirectory ?? (async directory =>
     fs.promises.readdir(directory, { withFileTypes: true }) as unknown as ConfigWatchDirectoryEntry[]);
   const fileExists = options.fileExists ?? (async filePath => {
@@ -114,7 +115,7 @@ export async function collectWatchedConfigFiles(
 
 export async function configFilesSnapshot(
   files: string[],
-  timeoutMs = 1500
+  timeoutMs = getTimeoutMs("backend.manager.configWatchSnapshot.configFilesSnapshot.timeoutMs", 1500)
 ): Promise<{ snapshot: string; partial: boolean; errors: string[] }> {
   const errors: string[] = [];
   const rows = await Promise.all(files.map(async file => {

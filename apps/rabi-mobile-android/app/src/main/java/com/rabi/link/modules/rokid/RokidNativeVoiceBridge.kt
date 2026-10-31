@@ -46,6 +46,11 @@ final class RokidNativeVoiceBridge(
     initialSecretKey: String
 ) : RabiGlassBridge {
 
+    private val PHONE_DEVICE_AUDIO_HANDSHAKE_TIMEOUT_MS get() = com.rabi.link.transport.ScopedManagerTimeouts.active(appContext).get("android.voice.audioHandshake",5000L)
+    private val PHONE_DEVICE_VIDEO_TIMEOUT_MS get() = com.rabi.link.transport.ScopedManagerTimeouts.active(appContext).get("android.voice.videoHandshake",10000L)
+    private val PHONE_DEVICE_AUDIO_AFTER_VIDEO_TIMEOUT_MS get() = com.rabi.link.transport.ScopedManagerTimeouts.active(appContext).get("android.voice.audioAfterVideo",7000L)
+    private val PHONE_P2P_PROBE_TIMEOUT_MS get() = com.rabi.link.transport.ScopedManagerTimeouts.active(appContext).get("android.voice.p2pProbe",15000L)
+    private val PHONE_OFFICIAL_SYSTEM_INFO_TIMEOUT_MS get() = com.rabi.link.transport.ScopedManagerTimeouts.active(appContext).get("android.voice.systemInfo",5000L)
     private val appContext = context.applicationContext
     private var listenerRegistered = false
     private var sdkInitRequested = false
@@ -469,7 +474,7 @@ final class RokidNativeVoiceBridge(
                     .toString(),
                 "glasses playback end"
             )
-            val timeoutMs = maxOf(15_000L, pcm.size * 1000L / 32_000L + 15_000L)
+            val timeoutMs = com.rabi.link.transport.ScopedManagerTimeouts.active(appContext).get("android.voice.playback",maxOf(15_000L, pcm.size * 1000L / 32_000L + 15_000L))
             val completed = completion.await(timeoutMs, TimeUnit.MILLISECONDS)
             val state = synchronized(glassPlaybackLock) { pendingGlassPlaybackState }
             completed && state == "played"
@@ -1663,19 +1668,14 @@ final class RokidNativeVoiceBridge(
         const val PHONE_DEVICE_AUDIO_HANDSHAKE_TAG = "RabiPhoneDeviceInfoProbe"
         const val PHONE_DEVICE_VIDEO_AUDIO_VIDEO_TAG = "RabiPhoneDeviceVideoProbe"
         const val PHONE_DEVICE_VIDEO_AUDIO_AUDIO_TAG = "RabiPhoneDeviceAudioAfterVideoProbe"
-        const val PHONE_DEVICE_AUDIO_HANDSHAKE_TIMEOUT_MS = 5000L
-        const val PHONE_DEVICE_VIDEO_TIMEOUT_MS = 10000L
-        const val PHONE_DEVICE_AUDIO_AFTER_VIDEO_TIMEOUT_MS = 7000L
         const val PHONE_DEVICE_VIDEO_HANDSHAKE_FPS = 15
         const val PHONE_DEVICE_VIDEO_HANDSHAKE_BITRATE = 2_000_000
         const val PHONE_BT_SCAN_DURATION_MS = 8000L
         const val PHONE_DEVICE_LINK_SCAN_DURATION_MS = 12000L
         const val PHONE_BT_SCAN_TIMEOUT_MARGIN_MS = 1000L
         const val PHONE_BT_CONNECT_PROBE_DELAY_MS = 1000L
-        const val PHONE_P2P_PROBE_TIMEOUT_MS = 15000L
         const val PHONE_P2P_CONNECT_PROBE_DELAY_MS = 2000L
         const val PHONE_P2P_CONNECT_MATCH_DELAY_MS = 5000L
-        const val PHONE_OFFICIAL_SYSTEM_INFO_TIMEOUT_MS = 5000L
         const val PHONE_SDK_AUTH_IMPL_CLASS = "com.rokid.security.phone.sdk.server.auth.AuthServiceImpl"
         const val PHONE_VOICE_LOG_STEP_BYTES = 65536
         const val PHONE_VOICE_TOKEN_DEVICE_TYPE = "Glass"

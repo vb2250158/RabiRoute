@@ -12,6 +12,8 @@ Saving one Route validates only the delivery rules being written, so unrelated u
 
 > Status: an Agent maintenance workflow. Configure and read back the plan, task binding, and scheduled triggers in the current installation. This document is not evidence that all bugs are fixed or a daemon independent of Desktop.
 
+Plugin cleanup timeouts retain the actual owner's fence. Ordinary generation switching does not wait for application shutdown grace. During application shutdown, joins continue within the Manager resource owner's existing remaining budget. Only confirmed closure of every resource permits marking a previous timeout `lateConfirmed: true` and reporting successful exit. The original diagnostic remains; actual failure or unconfirmed resources still fail shutdown. A timeout proves neither that a process stopped nor that a subsequently confirmed closure remains unknown.
+
 ## P0: available APIs, matching documentation, and safe hot patches
 
 This is the highest long-term maintenance priority, ahead of new business features: support frequent changes while keeping existing APIs available.
@@ -22,9 +24,45 @@ This is the highest long-term maintenance priority, ahead of new business featur
 - **Keep the old service on failure**: candidate preparation, documentation checks, or startup failure must not withdraw the working version. Activation failures must support rollback. Reject hot patches that require incompatible storage changes, cannot drain safely, or change core lifecycle; use a coordinated controlled transition instead of calling a forced restart a hot update.
 - **Verify under continuous requests**: exercise independent reads and controlled fixture writes before, during, and after updates, checking disconnects, timeouts, lost requests, duplicate commits, documentation/code versions, and old-resource disposal. A build, one health check, or a page refresh alone does not establish hot-patch readiness.
 
-Current limits: backend source follows the [source hot-patch matrix](source-hot-patches_en.md); installed pages use [Web hot patches](web-hot-patches_en.md) with production builds, automatic markers and managed rollback. Compatible updates do not restart Manager; initial installation, backend or dependency changes require a full release.
+Current limits: backend source follows the [source hot-patch matrix](source-hot-patches_en.md); installed pages use [Web hot patches](web-hot-patches_en.md) with production builds, automatic markers and managed rollback. Compatible updates do not restart Manager; initial patch support, Host or dependency ABI changes, and state without a supported migration require a full release.
+
+## Isolating feature failures
+
+Plugin packages retain per-instance loading results and diagnostics. Missing or damaged optional packages do not block available required capabilities; a failed update retains that instance's previously validated candidate and configuration. Missing required capabilities remain visible. Only the failed plugin and its actual dependents become unavailable. Independent consumers of a shared provider are not withdrawn together when one consumer fails activation; replacing an existing provider still rebuilds its affected consumers within the consistency boundary.
+
+Instances sharing Web resources for the same `pluginId + version` prepare and roll back code revision upgrades together, keeping backend and page code consistent. Failed upgrades retain the confirmed revision; conflicting target revisions are explicitly rejected. Configuration-only changes with the same code hash, and instances without shared Web resources, remain independent.
+
+If publication rollback fails, an old code revision does not prove that public state recovered. Admission to interfaces and services is immediately withdrawn for the affected atomic group and its actual dependents. Unconfirmed owners remain quarantined with degraded status while independent features stay available.
+
+Profile and package metadata are read in separate child processes, with at most 2 active and 32 queued jobs by default. Bulk loading produces unique packages with backpressure and shares in-flight reads, so a large Profile does not reject valid plugins by filling its own queue. Each default 30-second budget starts at enqueue and includes startup, reading and closure. Children inherit only necessary OS settings, not production API credentials or Desktop IPC, and never import plugin entrypoints. Metadata is accepted only after process closure. Timeout or stop terminates and joins the original process before a managed cleanup child, bounded to 5 seconds, handles that job's unique staging directory. Unconfirmed closure retains the slot; cleanup failures remain explicit and do not publish the candidate.
+
+Published metadata is retained by the actual generation's complete plugin identity and activationId. Subsequent fallback and Web resources use this confirmed snapshot. A version that loaded but failed activation cannot become a later fallback or replace resources belonging to an older active version.
+
+Preparation, activation, each effect startup and post-publication startup have separate asynchronous wait budgets of 30 seconds by default; this is not a single 30-second deadline for the whole generation switch. Expiration closes the affected scope to new work while retaining ownership of unfinished work and late resource cleanup. Unconfirmed retirement prevents only the same owner from restarting, without holding unrelated plugin publication or failure handling. A timed-out wait is not proof that the operation stopped.
+
+Public API deadlines finish the client's wait promptly while retaining uncertainty for writes that started execution. The original operation and late stream cleanup keep their actual leases. A drain timeout rejects with unfinished counts intact rather than claiming success or replaying a write. Availability is checked at the owning plugin and its dependencies, so one missing capability does not reject every unrelated mutation. Existing connection authentication and transaction checks remain in force.
+
+When source discovery receives another edit, stale groups are requeued before compilation so repeated obsolete builds do not delay independent modules. Post-compilation source-version and publication-identity checks remain in place.
+
+API registration reuses validated path metadata and independently reusable schema validators. Caches have entry and capacity limits while retaining reference scope and existing matching semantics. Lifecycle phases yield to the event loop so health checks, cancellation and unrelated requests can run. Cancelled phases that have not entered do not execute; work that has entered retains its actual ownership.
+
+Bulk HTTP API registration uses `await registerOperationsAsync(..., context.lifecycle.signal)`: contracts and callbacks are captured first, preparation yields between operations, and the complete batch is installed only after success and a cancellation check. Failed preparation publishes no partial routes. Resources created before an await must immediately register idempotent cleanup; failed stops and late resources retain their unconfirmed-retirement fences.
+
+Speech shutdown is handled and confirmed by the verified process owner, without racing additional microphone or playback HTTP stop requests. Stopping does not require launch dependencies to remain installed. Only an explicitly offline state can be reported as already stopped. Unknown ownership, an unowned process, failed termination or a still-online service remains an unconfirmed stop.
+
+Trusted in-process business callbacks execute through their existing owners without short node:vm deadlines interrupting transactions. An asynchronous deadline ends waiting, not the underlying work; active resources and cleanup retain ownership. Native blocking calls, module evaluation and non-cooperative synchronous code require the existing Worker/process isolation and confirmed exit. Validation covers normal cold starts, injected failures, independent API responsiveness and actual retirement.
+
+### Large request stores and API catalogs
+
+A dedicated persistence process handles request records. The Manager retains a committed read model and reads complete delivery payloads and large record lists asynchronously when needed. One owner serializes mutations; caches, events, and successful results become visible only after the complete JSON has been atomically written, synchronized, and replaced. Failed drafts remain unpublished. A lost commit acknowledgement keeps an uncertainty fence and never triggers an automatic replay. This process only stores records and does not create or execute Agent sessions. Older runtime packages can still read the same complete JSON format.
+
+While initialization is pending or records are unavailable, only dependent APIs report local unavailability. They must not return an empty catalog as if records were absent or block unrelated health checks and APIs. Background automation waits for its dependency, and both that wait and shutdown retain real ownership. Application exit confirms that the persistence process has actually closed. Troubleshooting must not delete history or overwrite the user store.
+
+Help, capability, and OpenAPI catalogs are projected and encoded in batches from the same immutable snapshot. Each item retains its original contract validation. Prepared bytes are bound to their immutable response object, and the complete response schema is still validated before sending. Mutable external owner data is copied without being frozen. Fields, pagination, aliases, authentication, and ETag contracts remain unchanged. Large catalogs must not bypass validation through longer timeouts or opaque responses.
 
 ## Stable entry point
+
+When an ID lookup for a plan or chat returns 404, search by its known name or page through recently active chats. Verify the full ID, persona or instance, workspace and binding before using a match. A matching name cannot replace the original object, and one 404 does not justify recreating or rebinding it. Response guidance should identify name search or recent-list operations supported by the current version. If an existing object incorrectly returns 404, repair the read, index or storage defect; search guidance does not replace that repair. Management timeouts, 5xx failures and unknown delivery receipts retain their original meaning and must not trigger message replay.
 
 The maintenance plan owns intake, recovery, regression verification, and code quality for Rabi itself. Discover the current Manager and read the plan's unique `taskBinding.sessionId + workspace`. Do not guess by task title or create a task for every check. Keep the long-term plan executing between maintenance cycles; close it only when the user cancels or explicitly replaces it.
 

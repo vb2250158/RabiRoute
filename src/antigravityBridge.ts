@@ -1,3 +1,4 @@
+import { getTimeoutMs } from "./shared/timeoutSettings.js";
 import { execFile } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -148,7 +149,7 @@ export async function discoverAntigravityLsAddress(
     const result = await exec(
       "tasklist",
       ["/FI", `IMAGENAME eq ${LANGUAGE_SERVER_IMAGE}`, "/FO", "CSV", "/NH"],
-      { timeout: DEFAULT_CONFIG_TIMEOUT_MS, windowsHide: true }
+      { timeout: getTimeoutMs("backend.antigravityBridge.DEFAULT_CONFIG_TIMEOUT_MS", DEFAULT_CONFIG_TIMEOUT_MS), windowsHide: true }
     );
     taskOutput = String(result.stdout ?? "");
   } catch (error) {
@@ -166,7 +167,7 @@ export async function discoverAntigravityLsAddress(
 
   let netOutput: string;
   try {
-    const result = await exec("netstat", ["-ano"], { timeout: DEFAULT_CONFIG_TIMEOUT_MS, windowsHide: true });
+    const result = await exec("netstat", ["-ano"], { timeout: getTimeoutMs("backend.antigravityBridge.DEFAULT_CONFIG_TIMEOUT_MS", DEFAULT_CONFIG_TIMEOUT_MS), windowsHide: true });
     netOutput = String(result.stdout ?? "");
   } catch (error) {
     throw new Error(`Could not inspect listening sockets: ${describeError(error)}`);
@@ -239,7 +240,7 @@ async function runAgentApi(
   let stdout = "";
   try {
     const result = await exec(cliPath, ["agentapi", ...args], {
-      timeout: DEFAULT_DELIVERY_TIMEOUT_MS,
+      timeout: getTimeoutMs("backend.antigravityBridge.DEFAULT_DELIVERY_TIMEOUT_MS", DEFAULT_DELIVERY_TIMEOUT_MS),
       env,
       windowsHide: true
     });

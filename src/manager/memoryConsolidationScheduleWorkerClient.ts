@@ -1,3 +1,4 @@
+import { getTimeoutMs } from "../shared/timeoutSettings.js";
 import { fork } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import type { MemoryConsolidationScheduleEvaluation } from "./memoryConsolidationScheduler.js";
@@ -156,8 +157,8 @@ export function evaluateMemoryConsolidationSchedule(
   }
 
   return new Promise((resolve, reject) => {
-    const timeoutMs = positiveInteger(options.timeoutMs, 30_000);
-    const terminationTimeoutMs = positiveInteger(options.terminationTimeoutMs, 5_000);
+    const timeoutMs = positiveInteger(options.timeoutMs, getTimeoutMs("memory.scheduleRead", 30_000));
+    const terminationTimeoutMs = positiveInteger(options.terminationTimeoutMs, getTimeoutMs("memory.scheduleTerminate", 5_000));
     let diagnosticBytes = 0;
     let terminalCause: "abort" | "error" | "message" | "timeout" | undefined;
     let result: ChildResult | undefined;

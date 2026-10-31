@@ -2,6 +2,31 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { MemoryConsolidationScheduler } from "./memoryConsolidationScheduler.js";
 
+test("deferred activation preserves startup intent while blocking readiness and direct run calls", async () => {
+  let scans = 0;
+  const scheduler = new MemoryConsolidationScheduler({ listTargets: () => { scans++; return []; }, requestDueRun: () => null, deliver: () => {} });
+  scheduler.deferActivation(); scheduler.start(); scheduler.reschedule(); await scheduler.runOnce();
+  assert.equal(scans, 0); assert.equal(scheduler.isStarted(), true);
+  scheduler.activate(); await scheduler.runOnce(); assert.equal(scans, 1);
+  await scheduler.stop(); assert.equal(scheduler.isStarted(), false);
+});
+
+for (const phase of ["evaluation", "request"] as const) test(`stop joins pending ${phase} without dispatching a later run`, async () => {
+  let release!: () => void, entered!: () => void, created = 0, delivered = 0;
+  const gate = new Promise<void>(resolve => { release = resolve; }), started = new Promise<void>(resolve => { entered = resolve; });
+  const scheduler = new MemoryConsolidationScheduler({
+    listTargets: () => [{ gatewayId: "route", roleId: "role", roleKey: "role", roleDir: "/fixture" }],
+    evaluate: async () => { if (phase === "evaluation") { entered(); await gate; } return { pending: null, dueOperationIdentity: "due-fixture" }; },
+    requestDueRun: async () => { created++; if (phase === "request") { entered(); await gate; } return { runId: "run", revision: "one" }; },
+    deliver: () => { delivered++; }
+  });
+  const running = scheduler.runOnce(); await started;
+  let stopped = false; const stopping = scheduler.stop().then(() => { stopped = true; });
+  await new Promise<void>(resolve => setImmediate(resolve)); assert.equal(stopped, false);
+  release(); await Promise.all([running, stopping]);
+  assert.equal(created, phase === "evaluation" ? 0 : 1); assert.equal(delivered, 0);
+});
+
 test("removed schedule targets no longer poison the failure summary", async () => {
   let enabled = true;
   const scheduler = new MemoryConsolidationScheduler({

@@ -1,6 +1,8 @@
-import { errorResponsePresentation } from "../shared/errorPresentation.js";
 import fs from "node:fs";
-import http from "node:http";
+import path from "node:path";
+import type http from "node:http";
+import { finished } from "node:stream/promises";
+import { preparePersonaResourceAdmission, type PersonaResourceIdentity } from "./personaResourceAdmission.js";
 import {
   readPersonaAvatar,
   removePersonaAvatar,
@@ -14,55 +16,10 @@ import {
 import { sanitizeRoleId } from "../shared/routeIdentity.js";
 import { roleFolderPath } from "../shared/routePaths.js";
 
-class PersonaAvatarRouteError extends Error {
-  constructor(readonly statusCode: number, message: string) {
-    super(message);
-  }
-}
-
-function jsonResponse(response: http.ServerResponse, statusCode: number, body: unknown): void {
-  body = errorResponsePresentation(body, statusCode);
-  response.writeHead(statusCode, { "content-type": "application/json; charset=utf-8" });
-  response.end(JSON.stringify(body, null, 2));
-}
-
 function avatarUrl(roleId: string, version: string | undefined): string | undefined {
   return version
     ? `/api/roles/${encodeURIComponent(roleId)}/avatar?v=${encodeURIComponent(version)}`
     : undefined;
-}
-
-function readLimitedBody(request: http.IncomingMessage): Promise<Buffer> {
-  return new Promise((resolve, reject) => {
-    const chunks: Buffer[] = [];
-    let total = 0;
-    let settled = false;
-
-    const rejectOnce = (error: Error): void => {
-      if (settled) return;
-      settled = true;
-      reject(error);
-    };
-
-    request.on("data", (chunk) => {
-      if (settled) return;
-      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-      total += buffer.byteLength;
-      if (total > PERSONA_AVATAR_MAX_BYTES) {
-        rejectOnce(new PersonaAvatarRouteError(413, "Avatar image exceeds the 5 MB limit."));
-        request.resume();
-        return;
-      }
-      chunks.push(buffer);
-    });
-    request.on("end", () => {
-      if (!settled) {
-        settled = true;
-        resolve(Buffer.concat(chunks));
-      }
-    });
-    request.on("error", rejectOnce);
-  });
 }
 
 function mutationResult(roleId: string, version: string | undefined): PersonaAvatarMutationResult {
@@ -82,69 +39,59 @@ export function personaAvatarPresentation(roleId: string, roleDir: string): Pers
 
 export type PersonaAvatarChanged = { roleId: string; avatarUrl?: string; avatarVersion?: string };
 
-export function handlePersonaAvatarApi(
-  request: http.IncomingMessage,
-  pathname: string,
-  response: http.ServerResponse,
-  rolesRoot: string,
-  onChanged?: (change: PersonaAvatarChanged) => void
-): boolean {
-  const match = pathname.match(/^\/api\/roles\/([^/]+)\/avatar$/);
-  if (!match) return false;
-  const roleId = sanitizeRoleId(decodeURIComponent(match[1]));
-  if (!roleId) {
-    jsonResponse(response, 400, { code: -1, message: "Invalid role id." });
-    return true;
-  }
-  const roleDir = roleFolderPath(rolesRoot, roleId);
-
-  if (request.method === "GET") {
-    const avatar = readPersonaAvatar(roleDir);
-    if (!avatar.filePath || !avatar.contentType) {
-      jsonResponse(response, 404, { code: -1, message: "Persona avatar is not configured." });
-      return true;
+export const PERSONA_AVATAR_FRAME_BYTES = 64 * 1024;
+export function createPersonaAvatarOwner(options: { rolesRoot: string; identity?(): PersonaResourceIdentity; onChanged?(change: PersonaAvatarChanged): void }) {
+  return {
+    prepare(request: http.IncomingMessage, rawRoleId: string, signal?: AbortSignal) {
+      const admission = preparePersonaResourceAdmission(request, signal, options.identity);
+      const roleId = sanitizeRoleId(rawRoleId);
+      if (!roleId) throw Object.assign(new Error("Invalid role id."), { statusCode: 400 });
+      const roleDir = roleFolderPath(options.rolesRoot, roleId);
+      const assertCurrent = () => {
+        admission();
+        if (path.resolve(roleFolderPath(options.rolesRoot, roleId)) !== path.resolve(roleDir)) {
+          throw Object.assign(new Error("Persona directory changed while using the original resource."), { statusCode: 409 });
+        }
+      };
+      return {
+        read() {
+          assertCurrent();
+          const avatar = readPersonaAvatar(roleDir);
+          if (!avatar.filePath || !avatar.contentType) throw Object.assign(new Error("Persona avatar is not configured."), { statusCode: 404 });
+          const descriptor = fs.openSync(avatar.filePath, "r");
+          let stream: fs.ReadStream;
+          try {
+            const stat = fs.fstatSync(descriptor); if (!stat.isFile()) throw new Error("Persona avatar is not a file.");
+            stream = fs.createReadStream(avatar.filePath, { fd: descriptor, autoClose: true, highWaterMark: PERSONA_AVATAR_FRAME_BYTES, signal });
+            const closed = finished(stream).catch(() => {});
+            const frames = (async function* () { try { for await (const chunk of stream) { assertCurrent(); yield Buffer.from(chunk); } } finally { stream.destroy(); await closed; } })();
+            return { contentType: avatar.contentType, sizeBytes: stat.size, frames, async cancel() { stream.destroy(); await closed; } };
+          } catch (error) { fs.closeSync(descriptor); throw Object.assign(error instanceof Error ? error : new Error(String(error)), { statusCode: 404 }); }
+        },
+        async save(contentType: string, body: http.IncomingMessage) {
+          const bytes = await new Promise<Buffer>((resolve, reject) => {
+            const chunks: Buffer[] = []; let size = 0;
+            const cleanup = () => { body.removeListener('data', data); body.removeListener('end', ended); body.removeListener('error', failed); body.removeListener('aborted', aborted); signal?.removeEventListener('abort', aborted); };
+            const failed = (error: unknown) => { cleanup(); body.once('error', () => {}); body.resume(); reject(error); };
+            const aborted = () => failed(signal?.reason ?? new Error('Avatar upload aborted.'));
+            const data = (chunk: Buffer) => { try { assertCurrent(); size += chunk.length; if (size > PERSONA_AVATAR_MAX_BYTES) throw Object.assign(new Error('Avatar image exceeds the 5 MB limit.'), { statusCode: 413 }); chunks.push(Buffer.from(chunk)); } catch (error) { failed(error); } };
+            const ended = () => { cleanup(); resolve(Buffer.concat(chunks)); };
+            body.on('data', data); body.once('end', ended); body.once('error', failed); body.once('aborted', aborted); signal?.addEventListener('abort', aborted, { once: true });
+            if (signal?.aborted || body.aborted) aborted();
+          });
+          assertCurrent(); const avatar = savePersonaAvatar(roleDir, contentType, bytes);
+          const url = avatarUrl(roleId, avatar.version);
+          try { options.onChanged?.({ roleId, ...(url ? { avatarUrl: url } : {}), ...(avatar.version ? { avatarVersion: avatar.version } : {}) }); assertCurrent(); }
+          catch (error) { if (error && typeof error === 'object') Object.assign(error, { uncertain: true }); throw error; }
+          return mutationResult(roleId, avatar.version);
+        },
+        remove() {
+          assertCurrent(); removePersonaAvatar(roleDir);
+          try { options.onChanged?.({ roleId }); assertCurrent(); }
+          catch (error) { if (error && typeof error === 'object') Object.assign(error, { uncertain: true }); throw error; }
+          return mutationResult(roleId, undefined);
+        }
+      };
     }
-    try {
-      response.writeHead(200, {
-        "content-type": avatar.contentType,
-        "content-length": String(fs.statSync(avatar.filePath).size),
-        "cache-control": "private, max-age=3600",
-        "x-content-type-options": "nosniff"
-      });
-      fs.createReadStream(avatar.filePath).pipe(response);
-    } catch (error) {
-      jsonResponse(response, 404, { code: -1, message: error instanceof Error ? error.message : String(error) });
-    }
-    return true;
-  }
-
-  if (request.method === "PUT") {
-    const contentType = String(request.headers["content-type"] || "");
-    void readLimitedBody(request)
-      .then(body => savePersonaAvatar(roleDir, contentType, body))
-      .then(avatar => {
-        const url = avatarUrl(roleId, avatar.version);
-        onChanged?.({ roleId, ...(url ? { avatarUrl: url } : {}), ...(avatar.version ? { avatarVersion: avatar.version } : {}) });
-        jsonResponse(response, 200, { code: 0, data: mutationResult(roleId, avatar.version) });
-      })
-      .catch(error => jsonResponse(response, error instanceof PersonaAvatarRouteError ? error.statusCode : 400, {
-        code: -1,
-        message: error instanceof Error ? error.message : String(error)
-      }));
-    return true;
-  }
-
-  if (request.method === "DELETE") {
-    try {
-      removePersonaAvatar(roleDir);
-      onChanged?.({ roleId });
-      jsonResponse(response, 200, { code: 0, data: mutationResult(roleId, undefined) });
-    } catch (error) {
-      jsonResponse(response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) });
-    }
-    return true;
-  }
-
-  jsonResponse(response, 405, { code: -1, message: "Method not allowed." });
-  return true;
+  };
 }

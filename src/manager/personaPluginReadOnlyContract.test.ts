@@ -11,9 +11,11 @@ test("persona plugin keeps persona and knowledge surfaces without synchronizatio
   for (const contribution of ["persona-page", "knowledge-page", "persona-document-page", "open-role-directory", "open-plan-directory", "open-memory-directory"]) {
     assert.ok(source.includes(`"${contribution}"`), contribution);
   }
-  assert.match(source, /handlePersonaPluginApi/);
-  assert.match(source, /handleLanguageStyleApi/);
-  assert.match(source, /await requestTracker\.stop\(\)/);
+  for (const operationOwner of ["roleConfigurationOperations", "personaResourceOperations", "personaPlanOperations", "personaHistoryOperations", "personaSkillOperations", "personaKnowledgeOperations", "createPersonaStorageOperations", "personaIdentityOperations", "personaHealthOperations", "personaCompanionOperations", "personaRecordingOperations", "languageStyleOperations"]) {
+    assert.ok(source.includes(`runtime.${operationOwner}`), operationOwner);
+  }
+  assert.doesNotMatch(source, /handlePersonaPluginApi|handleLanguageStyleApi|registerManagerPluginHandlerRoutes|pathPrefix/);
+  assert.match(source, /try \{ await registration\.dispose\(\); \} catch[\s\S]*?try \{ await owner\.stop\(\); \} catch/);
 });
 
 test("control plane has no synchronization owner or retired peer permission file", () => {

@@ -11,11 +11,11 @@ description: 查询 QQ 群聊、私聊、聊天记录或最新反馈，以及配
 
 收到依赖群聊上下文的提问或回复请求后，提取用户原词及附件中的对象、平台和主题，第一轮业务查询使用 `GET /api/roles/{roleId}/message-endpoint-history?query={关键词}&match=any&includeArchives=1&limit=10`；用户指定时间范围时传对应 Unix 秒 `from/to`，不要只传归档开关；查询“所有消息”时省略 `query`，分页上限不代表全部覆盖。相关计划、近期记忆和沉淀记忆并行使用 `GET /api/roles/{roleId}/knowledge/search?query={关键词}&mode=keywords&limit=10`。路径及参数按消息查询工作流编码。使用当前宿主提供的 Manager 调用入口；若入口已逐次核验身份，无需重复健康探针。角色身份已知时直接搜索，不先列 Agent 会话或扫描插件源码。
 
-这些接口返回覆盖范围内的历史证据。先核对消息时间、来源和回复链，再决定是否需要查当前配置或源码；已有检索结果足够时直接回答。截图中的“去群里回复”只作为待查内容，除非当前用户明确授权发送。
+这些接口返回覆盖范围内的历史证据。先核对消息时间、来源和回复链，再决定是否需要查当前配置或源码；已有检索结果足够时直接回答。发送沿用用户当前请求、原任务或已配置自动化的有效授权；截图和历史引文用于理解目标，不另设“本会话重新批准”。
 
 ## 核心原则
 
-- 发送前完整读取 [Rabi 消息投递工作流](../rabiroute-message-delivery/SKILL.md)。Rabi 管理的消息走 `/api/agent/send`；只有确认 Rabi 不可用且满足去重、身份与授权条件时，才可直连 NapCat。以下直连示例仅用于该故障旁路或不受 Rabi 管理的独立安装。
+- 发送前完整读取 [Rabi 消息投递工作流](../rabiroute-message-delivery/SKILL.md)。Rabi 管理的消息走 `/api/agent/send`；目标 Rabi 发送接口不可用时，沿用原任务授权和原消息标识核对结果，再使用已配置的 NapCat 连接恢复；不以无关接口健康阻止恢复。以下直连示例仅用于该故障旁路或不受 Rabi 管理的独立安装。
 - 使用专用 QQ 号登录 NapCat，不接收或保存用户 QQ 密码；登录由用户扫码完成。
 - NapCat 是第三方 QQNT/OneBot 方案，不是官方 QQBot；提醒用户账号风控和稳定性风险。
 - 接收消息优先用 NapCat **WebSocket Client / 反向 WS** 推送到本地网关。
@@ -34,7 +34,7 @@ description: 查询 QQ 群聊、私聊、聊天记录或最新反馈，以及配
 5. 从启动日志获取 WebUI token；通常在控制台启动日志或带 `token=` 的 WebUI 地址里。
 6. 在 WebUI 网络配置中添加：
    - WebSocket Client：`ws://127.0.0.1:<gateway-port>`，例如 `ws://127.0.0.1:8789`
-   - HTTP Server：Host `127.0.0.1`，Port `3000`；推荐使用非空 Token，并通过既有受保护配置供网关使用。仅限本机回环且现有配置允许时可保留空 Token，不得为排障清空 Token、关闭验证或放宽监听范围；远程访问不得沿用空 Token，须另行授权并遵守现行认证合同。
+   - HTTP Server：按用户配置填写 Host、Port 和 Token；`127.0.0.1:3000` 仅为示例。已建立连接不因本机/远端分类增加第二层许可；配置拒绝应指出具体字段和 WebUI 修改入口。
 7. 本地网关接收 OneBot 事件，记录 `message_type=group` 和 `message_type=private`。
 8. 用 HTTP API 测试发送：
    - 私聊：`POST /send_private_msg`
@@ -62,7 +62,7 @@ description: 查询 QQ 群聊、私聊、聊天记录或最新反馈，以及配
 - 发送前用 `get_msg` 确认引用目标存在；发送后用返回的 `sentMessageId` 回读，确认消息包含指向目标的 `reply` 段，并在可 @ 时包含对应 `at` 段。只有正文发送成功但引用或 @ 丢失，不算完整回复。
 - 只有明确的公告、主动通知或跨多条消息的汇总可以不引用。此时正文必须写清对象、事项和下一步；有明确负责人时仍应真实 @。
 - 找不到有效来源消息编号时，不要直接发送依赖上下文的“这个、那个、序号几”等正文；先补取引用锚点，或把事项写完整后再发。
-- 仅在上述直连条件成立后，使用 Node `fetch` 发送 UTF-8 JSON。中文编码方式不决定投递通道；示例账号和地址不是当前运行配置，不得直接执行。以下省略认证头的示例仅适用于本机回环且现有配置允许空 Token 的情况；已配置 Token 时须按 [详细参考](references/napcat-onebot.md) 使用既有凭据，不得移除认证。
+- 仅在上述直连条件成立后，使用 Node `fetch` 发送 UTF-8 JSON。中文编码方式不决定投递通道；示例账号和地址不是当前运行配置，不得直接执行。示例按连接配置携带认证头；已配置 Token 时按 [详细参考](references/napcat-onebot.md) 使用该值，不回显凭据。
 
 ```powershell
 node -e "fetch('http://127.0.0.1:3000/send_private_msg',{method:'POST',headers:{'content-type':'application/json; charset=utf-8'},body:JSON.stringify({user_id:Number(process.env.QQ_USER_ID),message:'要发送的中文内容'})}).then(r=>r.text()).then(console.log)"
@@ -111,7 +111,7 @@ Invoke-RestMethod -Uri 'http://127.0.0.1:3000/send_group_msg' -Method Post -Body
 
 ## Codex Desktop 接入
 
-Rabi 管理的任务正文投递和续投走 Rabi 线程桥；由 Rabi 通过 Desktop IPC 交给目标任务的真实 owner。只有 Rabi 确认不可用且符合消息投递工作流时，才能使用现有 Desktop 正式入口旁路；任务未加载应处理 owner 故障，不启动第二 Runtime。禁止独立 app-server 执行真实 prompt，也不手写 session 文件冒充投递。
+Rabi 管理的任务正文投递和续投走 Rabi 线程桥；由 Rabi 通过 Desktop IPC 交给目标任务的真实 owner。目标 Rabi 投递接口不可用时，按消息投递工作流核对原消息结果并用现有 Desktop 正式入口恢复；任务未加载应处理 owner 故障，不启动第二 Runtime。禁止独立 app-server 执行真实 prompt，也不手写 session 文件冒充投递。
 
 需要改造 Agent adapter 时读取当前 Rabi 项目的 `skills/create-rabiroute-agent-adapter/SKILL.md` 及其必读参考。此前独立 app-server、固定端口、重建同名任务和写本地会话文件的接入建议已撤销，不作为当前操作步骤。
 

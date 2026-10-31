@@ -45,6 +45,8 @@ test("direct peers deliver ordered binary camera data, reject duplicate sessions
   } finally {
     await sender.close();
     await receiver.stop();
+    assert.equal(path.dirname(path.resolve(directory)), path.resolve(os.tmpdir()));
+    assert.ok(path.basename(directory).startsWith("rabi-direct-video-"));
     await rm(directory, { recursive: true, force: true });
   }
 });

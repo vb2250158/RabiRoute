@@ -3,6 +3,8 @@ import readline from "node:readline";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 
+const configuredTimeout = (name,fallback) => { const value=Number(process.env[name]); return Number.isInteger(value)&&value>=1&&value<=2147483647 ? value : fallback; };
+
 /** The helper owns its PTY and closes it when the connector's input pipe closes. */
 export function createPosixTerminalHost({ spawnTerminal, publish, descendants = processDescendants, kill = process.kill.bind(process), onClosed = () => undefined }) {
   let terminal; let closing = false; let exited = false; let finished = false; let forceClose;
@@ -21,7 +23,7 @@ export function createPosixTerminalHost({ spawnTerminal, publish, descendants = 
           for (const pid of owned) { try { kill(pid, "SIGKILL"); } catch { /* Already exited. */ } }
           try { kill(-terminal.pid, "SIGKILL"); } catch { /* Already exited. */ }
           try { terminal.kill("SIGKILL"); } catch { /* Already exited. */ }
-        }, 500);
+        }, configuredTimeout("RABI_TERMINAL_FORCE_CLOSE_MS",500));
         forceClose.unref();
       }
     }
@@ -51,7 +53,7 @@ export function createPosixTerminalHost({ spawnTerminal, publish, descendants = 
 }
 
 function processDescendants(parent) {
-  const result = spawnSync("/bin/ps", ["-axo", "pid=,ppid="], { encoding: "utf8", timeout: 2000, maxBuffer: 4 * 1024 * 1024 });
+  const result = spawnSync("/bin/ps", ["-axo", "pid=,ppid="], { encoding: "utf8", timeout: configuredTimeout("RABI_TERMINAL_PROCESS_SCAN_MS",2000), maxBuffer: 4 * 1024 * 1024 });
   if (result.status !== 0) return [];
   const children = new Map();
   for (const line of result.stdout.split("\n")) {

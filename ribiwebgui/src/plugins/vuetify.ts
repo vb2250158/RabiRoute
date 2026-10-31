@@ -1,4 +1,7 @@
 import { createVuetify } from "vuetify";
+import { watch } from "vue";
+import { en, ja, zhHans } from "vuetify/locale";
+import { useI18n } from "../i18n";
 import * as components from "vuetify/components";
 import * as directives from "vuetify/directives";
 import { aliases, mdi } from "vuetify/iconsets/mdi";
@@ -6,6 +9,7 @@ import { RABI_DARK_THEME } from "../themes/dark/vuetify";
 import { RABI_LIGHT_THEME } from "../themes/light/vuetify";
 
 export const vuetify = createVuetify({
+  locale: { locale: "zhHans", fallback: "en", messages: { en, ja, zhHans } },
   components,
   directives,
   icons: {
@@ -48,3 +52,7 @@ export const vuetify = createVuetify({
     }
   }
 });
+
+watch(useI18n().locale, locale => {
+  vuetify.locale.current.value = locale === "zh-CN" ? "zhHans" : locale;
+}, { immediate: true });

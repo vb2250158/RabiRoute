@@ -62,7 +62,8 @@ object RabiPersonaAvatarCache {
             try {
                 val currentConnection = URL(url).openConnection() as HttpURLConnection
                 connection = currentConnection
-                currentConnection.connectTimeout = 10_000; currentConnection.readTimeout = 20_000
+                val settings = com.rabi.link.transport.ScopedManagerTimeouts.active(context)
+                currentConnection.connectTimeout = settings.get("android.avatar.connect",10000).toInt(); currentConnection.readTimeout = settings.get("android.avatar.read",20000).toInt()
                 currentConnection.useCaches = false
                 currentConnection.setRequestProperty("Cache-Control", "no-cache")
                 currentConnection.setRequestProperty("X-RabiLink-Token", token)

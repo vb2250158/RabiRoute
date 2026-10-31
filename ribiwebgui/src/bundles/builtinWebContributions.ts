@@ -1,5 +1,5 @@
 import type { Component } from "vue";
-import { roleConfigPath, roleKnowledgePath } from "../roleScopedNavigation";
+import { roleConfigPath, roleKnowledgePath, roleMessageHistoryPath } from "../roleScopedNavigation";
 import type { TrustedWebPageRegistration } from "../pluginPages";
 import type {
   TrustedWebSettingsRendererRegistration,
@@ -8,7 +8,6 @@ import type {
 import type { TrustedWebThemeResourceRegistration } from "../pluginThemes";
 import type { TrustedWebCommandRegistration } from "../pluginCommands";
 import {
-  routeScopedAdaptersPath,
   routeScopedKnowledgePath,
   routeScopedOverviewPath,
   routeScopedPersonaPath,
@@ -38,8 +37,8 @@ type WebCommandBundleApi = Readonly<{
 
 export function activateRouteControl(api: WebCommandBundleApi): readonly Dispose[] {
   return [
-    api.registerCommand({ handlerId: "web.quick-setup", allowedSlots: ["sidebar-footer-primary"],
-      allowedIcons: ["mdi-lightning-bolt-outline"], appearance: "primary", execute: context => context.openQuickSetup() }),
+    api.registerCommand({ handlerId: "web.create-role", allowedSlots: ["sidebar-footer-primary"],
+      allowedIcons: ["mdi-account-plus-outline"], appearance: "primary", execute: context => context.createRole() }),
     api.registerCommand({ handlerId: "web.add-route", allowedSlots: ["topbar-primary"],
       allowedIcons: ["mdi-plus"], execute: context => context.addRoute() }),
     api.registerCommand({ handlerId: "web.open-manager-config", allowedSlots: ["sidebar-footer"],
@@ -94,9 +93,9 @@ export function activateMessageAdapterControl(api: BaseWebBundleApi): readonly D
   return pages(api, [{
     routeId: "route.adapters", rendererId: "builtin.web-page.adapters.v1",
     loader: () => import("../pages/RouteConfigPage.vue"),
-    paths: [{ path: "/routes/:id/adapters", title: "路由配置" }, { path: "/routes/:id?", title: "路由配置" }],
+    // Compatibility entry for existing Route links and routes without a persona.
+    paths: [{ path: "/routes/:id/adapters", title: "消息" }, { path: "/routes/:id?", title: "消息" }],
     requirements: ["gateway.diagnostics"],
-    navigation: { resolvePath: routeScopedAdaptersPath, allowedSlots: ["route-primary"], allowedIcons: ["mdi-puzzle-outline"] }
   }]);
 }
 
@@ -107,6 +106,12 @@ export function activatePersona(api: BaseWebBundleApi): readonly Dispose[] {
       loader: () => import("../pages/PersonaTemplatePage.vue"),
       paths: [{ path: "/roles", title: "角色配置" }, { path: "/roles/:roleId/config", title: "角色配置" }, { path: "/routes/:id/persona", title: "角色配置" }, { path: "/persona/:id?", title: "角色配置" }],
       navigation: { scope: "role", resolvePath: roleConfigPath, allowedSlots: ["route-primary"], allowedIcons: ["mdi-account-heart-outline"] }
+    },
+    {
+      routeId: "role.message-history", rendererId: "builtin.web-page.message-history.v1",
+      loader: () => import("../pages/RoleMessageHistoryPage.vue"),
+      paths: [{ path: "/roles/message-history", title: "消息记录" }, { path: "/roles/:roleId/message-history", title: "消息记录" }],
+      navigation: { scope: "role", resolvePath: roleMessageHistoryPath, allowedSlots: ["route-primary"], allowedIcons: ["mdi-message-text-outline"] }
     },
     { routeId: "route.persona-document", rendererId: "builtin.web-page.persona-document.v1", loader: () => import("../pages/PersonaDocumentPage.vue"), paths: [{ path: "/roles/:roleId/document", title: "角色正文" }, { path: "/routes/:id/persona/document", title: "角色正文" }] },
     {
@@ -158,6 +163,11 @@ export function activateDiagnostics(api: BaseWebBundleApi): readonly Dispose[] {
     paths: [{ path: "/routes/:id/runtime", title: "日志诊断" }, { path: "/runtime", title: "日志诊断" }],
     requirements: ["gateway.diagnostics"],
     navigation: { resolvePath: routeScopedRuntimePath, allowedSlots: ["utility"], allowedIcons: ["mdi-console-line"] }
+  }, {
+    routeId: "global.deliveries", rendererId: "builtin.web-page.deliveries.v1",
+    loader: () => import("../pages/DeliveryRecordsPage.vue"),
+    paths: [{ path: "/deliveries", title: "投递记录" }],
+    navigation: { resolvePath: () => "/deliveries", allowedSlots: ["utility"], allowedIcons: ["mdi-send-check-outline"] }
   }]);
 }
 

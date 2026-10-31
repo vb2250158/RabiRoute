@@ -4,12 +4,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
-import { createManagerClient, MAX_UPLOAD_BYTES } from "../lib/manager-client.mjs";
+import { createManagerClient } from "../lib/manager-client.mjs";
 import { runManagerCommand } from "../lib/manager-cli.mjs";
 
 const id = "12345678-1234-4234-8234-123456789abc";
 const meta = { health: { live: true, state: "healthy", requiredReady: true }, applicationGenerationId: "g-fixture", managerInstanceId: "m-fixture" };
-const settings = { managerUrl: "http://manager.invalid", credential: "fixture-upload-secret", agentId: "worker" };
+const settings = { managerUrl: "http://manager.invalid", credential: "fixture-upload-secret", agentType: "dsh", sessionId: "fixture-session" };
 function fixture(t) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "rabi-upload-"));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
@@ -36,7 +36,7 @@ function transport(dto, mutate = response => response) {
 test("upload CLI preserves binary/hash/name/identity and only uploads", async t => {
   const f = fixture(t);
   const mock = transport(f.dto);
-  const receipt = await runManagerCommand(["--upload", f.file, "--agent", "worker", "--upload-id", id], f.config, { fetchImpl: mock.fetchImpl, readInput: () => { throw new Error("stdin must not be read"); } });
+  const receipt = await runManagerCommand(["--upload", f.file, "--agent-type", "dsh", "--id", "fixture-session", "--upload-id", id], f.config, { fetchImpl: mock.fetchImpl, readInput: () => { throw new Error("stdin must not be read"); } });
   assert.equal(receipt.ok, true);
   assert.equal(receipt.uncertain, false);
   assert.deepEqual(receipt.payload, { type: "file", fileId: id, fileSha256: f.dto.sha256 });
@@ -56,21 +56,16 @@ test("upload CLI preserves binary/hash/name/identity and only uploads", async t 
   assert.equal(options.headers["x-rabiroute-content-sha256"], f.dto.sha256);
   assert.match(options.headers["x-rabiroute-content-sha256"], /^[a-f0-9]{64}$/);
   assert.equal(options.headers["idempotency-key"], id);
-  assert.equal(options.headers["x-rabiroute-agent-id"], "worker");
+  assert.equal(options.headers["x-rabiroute-agent-type"], "dsh");
   assert.equal(options.headers.authorization, `Bearer ${settings.credential}`);
   assert.ok(!JSON.stringify(receipt).includes(settings.credential));
   assert.ok(!JSON.stringify(receipt).includes(f.file));
 });
 
-test("upload rejects size, directory, symlink and unstable ID before networking", async t => {
+test("upload rejects directory, symlink and unstable ID before networking", async t => {
   const f = fixture(t);
   let calls = 0;
   const client = createManagerClient({ ...settings, fetchImpl: async () => { calls++; throw new Error("network forbidden"); } });
-  const large = path.join(f.dir, "large.bin");
-  const fd = fs.openSync(large, "w");
-  fs.ftruncateSync(fd, MAX_UPLOAD_BYTES + 1);
-  fs.closeSync(fd);
-  await assert.rejects(client.upload(large, id), /2 GiB/);
   await assert.rejects(client.upload(f.dir, id), /regular file/);
   for (const invalid of [undefined, "", "not-a-uuid", `${id}/extra`]) await assert.rejects(client.upload(f.file, invalid), /stable.*UUID/);
   const link = path.join(f.dir, "link");
@@ -78,6 +73,30 @@ test("upload rejects size, directory, symlink and unstable ID before networking"
   fs.symlinkSync(f.dir, link, process.platform === "win32" ? "junction" : "dir");
   await assert.rejects(client.upload(link, id), /symlink/);
   assert.equal(calls, 0);
+});
+
+test("upload above 2 GiB reaches the cancellable reader without a second client ceiling", async t => {
+  const f = fixture(t);
+  const large = path.join(f.dir, "large.bin");
+  const fd = fs.openSync(large, "w");
+  try { fs.ftruncateSync(fd, 2 * 1024 ** 3 + 1); } finally { fs.closeSync(fd); }
+  const client = createManagerClient({ ...settings, uploadTimeoutMs: 0,
+    fetchImpl: async () => { throw new Error("cancelled file must not reach transport"); } });
+  await assert.rejects(client.upload(large, id), error => error.name === "TimeoutError");
+  fs.unlinkSync(large);
+});
+
+test("upload uses the verified Manager limit when metadata publishes it", async t => {
+  const f = fixture(t);
+  fs.writeFileSync(f.file, Buffer.alloc(1024 ** 2 + 1));
+  let writes = 0;
+  const client = createManagerClient({ ...settings, fetchImpl: async (url, options) => {
+    if (String(url).endsWith("/meta")) return Response.json({ ...meta, agentUploads: { maxFileMiB: 1 } });
+    writes++; throw new Error("configured limit must prevent PUT");
+  } });
+  await assert.rejects(client.upload(f.file, id), /agentUploads.maxFileMiB=1.*WebGUI/);
+  assert.equal(writes, 0);
+  fs.unlinkSync(f.file);
 });
 
 test("upload transport uncertainty never retries, sends, or leaks transport credentials", async t => {
@@ -133,10 +152,10 @@ test("upload CLI rejects mixed mutation options and unknown agents without netwo
   const f = fixture(t);
   let calls = 0;
   const options = { fetchImpl: () => { calls++; throw new Error("network forbidden"); } };
-  const args = ["--upload", f.file, "--agent", "worker", "--upload-id", id];
+  const args = ["--upload", f.file, "--agent-type", "dsh", "--id", "fixture-session", "--upload-id", id];
   for (const extra of [["--api", "POST", "/api/agent/send"], ["--body-stdin"], ["--if-match", "etag"], ["--idempotency-key", "other"]]) await assert.rejects(runManagerCommand([...args, ...extra], f.config, options));
-  await assert.rejects(runManagerCommand(["--upload", f.file, "--agent", "worker"], f.config, options), /stable/);
-  await assert.rejects(runManagerCommand(["--upload", f.file, "--agent", "unknown", "--upload-id", id], f.config, options), /registered Agent/);
+  await assert.rejects(runManagerCommand(["--upload", f.file, "--agent-type", "dsh", "--id", "fixture-session"], f.config, options), /stable/);
+  await assert.rejects(runManagerCommand(["--upload", f.file, "--agent", "unknown", "--upload-id", id], f.config, options), /registration was removed/);
   assert.equal(calls, 0);
 });
 

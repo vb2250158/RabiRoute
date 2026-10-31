@@ -19,6 +19,22 @@ def load_local_config():
 
 LOCAL_CONFIG = load_local_config()
 
+
+def read_timeout_overrides():
+    try:
+        value = json.loads(os.environ.get("RABIROUTE_TIMEOUT_OVERRIDES", "{}"))
+        return value if isinstance(value, dict) else {}
+    except (TypeError, ValueError):
+        return {}
+
+
+TIMEOUT_OVERRIDES = read_timeout_overrides()
+
+
+def timeout_seconds(key, fallback):
+    value = TIMEOUT_OVERRIDES.get(key)
+    return value / 1000 if type(value) is int and 1 <= value <= 2147483647 else fallback
+
 SPEAKER_HOST = os.environ.get("XIAOAI_SSH_HOST") or LOCAL_CONFIG.get("speakerHost")
 SPEAKER_USER = os.environ.get("XIAOAI_SSH_USER") or LOCAL_CONFIG.get("speakerUser", "root")
 SPEAKER_PASSWORD = os.environ.get("XIAOAI_SSH_PASSWORD") or LOCAL_CONFIG.get("speakerPassword")
@@ -87,9 +103,9 @@ def main():
         SPEAKER_HOST,
         username=SPEAKER_USER,
         password=SPEAKER_PASSWORD,
-        timeout=10,
-        banner_timeout=10,
-        auth_timeout=10,
+        timeout=timeout_seconds("xiaoai.ssh.connect", 10),
+        banner_timeout=timeout_seconds("xiaoai.ssh.banner", 10),
+        auth_timeout=timeout_seconds("xiaoai.ssh.auth", 10),
     )
 
     transport = client.get_transport()

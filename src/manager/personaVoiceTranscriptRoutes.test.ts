@@ -6,7 +6,7 @@ import path from "node:path";
 import test from "node:test";
 import { appendMessageContextToDir } from "../messageContextStore.js";
 import { updatePersonaVoiceIdentity } from "../personaVoiceIdentities.js";
-import { handlePersonaVoiceTranscriptApi } from "./personaVoiceTranscriptRoutes.js";
+import { dispatchVoiceTranscriptFixture } from "./personaHistoryOperationTestFixtures.js";
 
 function listen(server: http.Server): Promise<number> {
   return new Promise((resolve, reject) => {
@@ -59,7 +59,7 @@ test("persona voice transcript API filters the persona's explicit user evidence"
   }, { archiveCheck: false });
   const server = http.createServer((request, response) => {
     const requestUrl = new URL(request.url || "/", `http://${request.headers.host || "127.0.0.1"}`);
-    if (!handlePersonaVoiceTranscriptApi(request, requestUrl, response, {
+    if (!dispatchVoiceTranscriptFixture(request, requestUrl, response, {
       roleDir: roleId => path.join(root, roleId)
     })) response.writeHead(404).end();
   });

@@ -1,3 +1,4 @@
+import { getTimeoutMs } from "./shared/timeoutSettings.js";
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -8,6 +9,8 @@ import { normalizeSpeechTranscriptSegment } from "./shared/speechTranscript.js";
 import { recordDataMutationAudit } from "./observability/dataMutationAudit.js";
 import type { MessageContextArchiveReadCache } from "./messageContextArchiveReadCache.js";
 import { acquireFileLockSync } from "./shared/filePersistence.js";
+import { publishMessageHistoryChange } from "./messageHistoryChanges.js";
+import { messageHistoryFileVersion, messageHistoryLayoutVersion } from "./messageHistorySourceVersion.js";
 
 export const MESSAGE_CONTEXT_FILE = "message-context.jsonl";
 export const MESSAGE_CONTEXT_DIR = "conversation";
@@ -16,6 +19,7 @@ export const MESSAGE_CONTEXT_ARCHIVE_DIR = "archive";
 export const MESSAGE_CONTEXT_ARCHIVE_INDEX_FILE = "index.json";
 /** Message count is the default automatic-injection budget; callers may opt into an additional character cap. */
 export const DEFAULT_MESSAGE_CONTEXT_MAX_CHARS = Number.MAX_SAFE_INTEGER;
+export const MESSAGE_CONTEXT_RECORD_OVERHEAD_CHARS = 160;
 export const DEFAULT_MESSAGE_CONTEXT_ARCHIVE_TRIGGER_OLDER_THAN_HOURS = 72;
 export const DEFAULT_MESSAGE_CONTEXT_ARCHIVE_INCLUDE_OLDER_THAN_HOURS = 24;
 
@@ -113,7 +117,8 @@ export type MessageContextArchiveItem = {
   firstSequence: number;
   lastSequence: number;
   /** Rebuildable negative duplicate hint; positive matches still verify ledger records. */
-  duplicateFilter?: { schemaVersion: 1; bits: string; sha256: string; byteLength: number; mtimeMs: number };
+  duplicateFilter?: { schemaVersion: 1; bits: string; sha256: string; byteLength: number; mtimeMs: number;
+    sourceVersion?: string; queryBounds?: { minTime: number; maxTime: number; minSequence: number; maxSequence: number } };
 };
 
 export type MessageContextArchiveIndex = {
@@ -304,7 +309,7 @@ function legacyContextPath(dataDir: string): string {
 }
 
 function acquireLock(dataDir: string): () => void {
-  return acquireFileLockSync(messageContextLockPath(dataDir), { timeoutMs: LOCK_TIMEOUT_MS, staleMs: LOCK_STALE_MS });
+  return acquireFileLockSync(messageContextLockPath(dataDir), { timeoutMs: getTimeoutMs("backend.messageContextStore.LOCK_TIMEOUT_MS", LOCK_TIMEOUT_MS), staleMs: LOCK_STALE_MS });
 }
 
 function inferredChannel(adapter: string, kind: string | undefined, item: Record<string, unknown>): string {
@@ -599,14 +604,6 @@ function sortArchives(items: MessageContextArchiveItem[]): MessageContextArchive
   ));
 }
 
-function compareRecords(left: MessageContextRecord, right: MessageContextRecord): number {
-  const leftSequence = positiveInteger(left.sequence);
-  const rightSequence = positiveInteger(right.sequence);
-  if (leftSequence && rightSequence && leftSequence !== rightSequence) return leftSequence - rightSequence;
-  if (left.time !== right.time) return left.time - right.time;
-  return String(left.id || "").localeCompare(String(right.id || ""));
-}
-
 export function readMessageContextArchiveIndex(dataDir: string): MessageContextArchiveIndex {
   return readArchiveIndex(dataDir);
 }
@@ -659,16 +656,15 @@ function dedupeKey(item: MessageContextRecord): string {
 
 function addDedupeRecord(byId: Map<string, MessageContextRecord>, record: MessageContextRecord): void {
   const key = dedupeKey(record);
-  const existing = byId.get(key);
-  // Keep the same earliest compareRecords winner as the previous sort-first
-  // implementation, including records with mixed sequence/time fields.
-  if (!existing || compareRecords(record, existing) < 0) byId.set(key, record);
+  // The first physical write owns the identity. Platform time and optional
+  // historical sequence values never replace that record or reorder the ledger.
+  if (!byId.has(key)) byId.set(key, record);
 }
 
 function dedupeRecords(records: MessageContextRecord[]): MessageContextRecord[] {
   const byId = new Map<string, MessageContextRecord>();
   for (const record of records) addDedupeRecord(byId, record);
-  return [...byId.values()].sort(compareRecords);
+  return [...byId.values()];
 }
 
 function migrateLegacyIfNeeded(dataDir: string, index: MessageContextArchiveIndex, current = recordsFromFile(messageContextCurrentPath(dataDir))): MessageContextRecord[] {
@@ -687,21 +683,32 @@ function duplicateFilterPositions(key: string, byteLength: number): number[] {
   return [0, 4, 8, 12].map(offset => hash.readUInt32LE(offset) % (byteLength * 8));
 }
 
-function buildDuplicateFilter(records: readonly MessageContextRecord[], filename: string): NonNullable<MessageContextArchiveItem["duplicateFilter"]> {
+function buildDuplicateFilter(records: readonly MessageContextRecord[], filename: string, sourceVersion = messageHistoryFileVersion(filename)): NonNullable<MessageContextArchiveItem["duplicateFilter"]> {
   const bits = Buffer.alloc(Math.min(1024 * 1024, Math.max(128, Math.ceil(records.length * 2))));
   for (const record of records) for (const position of duplicateFilterPositions(dedupeKey(record), bits.length)) bits[position >> 3]! |= 1 << (position & 7);
   const stat = fs.statSync(filename);
-  return { schemaVersion: 1, bits: bits.toString("base64"), sha256: createHash("sha256").update(bits).digest("hex"), byteLength: stat.size, mtimeMs: stat.mtimeMs };
+  const queryBounds = { minTime: Infinity, maxTime: -Infinity, minSequence: Infinity, maxSequence: -Infinity };
+  for (const record of records) {
+    queryBounds.minTime = Math.min(queryBounds.minTime, record.time); queryBounds.maxTime = Math.max(queryBounds.maxTime, record.time);
+    queryBounds.minSequence = Math.min(queryBounds.minSequence, record.sequence ?? 0); queryBounds.maxSequence = Math.max(queryBounds.maxSequence, record.sequence ?? 0);
+  }
+  return { schemaVersion: 1, bits: bits.toString("base64"), sha256: createHash("sha256").update(bits).digest("hex"), byteLength: stat.size, mtimeMs: stat.mtimeMs,
+    sourceVersion, ...(records.length ? { queryBounds } : {}) };
+}
+
+function archiveIdentityProbe(archive: MessageContextArchiveItem, filename: string): (key: string) => boolean {
+  const filter = archive.duplicateFilter;
+  if (!filter || filter.schemaVersion !== 1 || typeof filter.bits !== "string") return () => true;
+  const stat = fs.statSync(filename);
+  if (stat.size !== filter.byteLength || stat.mtimeMs !== filter.mtimeMs) return () => true;
+  if (filter.sourceVersion !== messageHistoryFileVersion(filename)) return () => true;
+  const bits = Buffer.from(filter.bits, "base64");
+  if (!bits.length || createHash("sha256").update(bits).digest("hex") !== filter.sha256) return () => true;
+  return key => duplicateFilterPositions(key, bits.length).every(position => (bits[position >> 3]! & (1 << (position & 7))) !== 0);
 }
 
 function archiveMayContain(archive: MessageContextArchiveItem, filename: string, key: string): boolean {
-  const filter = archive.duplicateFilter;
-  if (!filter || filter.schemaVersion !== 1 || typeof filter.bits !== "string") return true;
-  const stat = fs.statSync(filename);
-  if (stat.size !== filter.byteLength || stat.mtimeMs !== filter.mtimeMs) return true;
-  const bits = Buffer.from(filter.bits, "base64");
-  if (!bits.length || createHash("sha256").update(bits).digest("hex") !== filter.sha256) return true;
-  return duplicateFilterPositions(key, bits.length).every(position => (bits[position >> 3]! & (1 << (position & 7))) !== 0);
+  return archiveIdentityProbe(archive, filename)(key);
 }
 
 /** Archive ledgers remain authoritative. Build missing hints before acquiring the
@@ -710,13 +717,14 @@ function prepareArchiveDuplicateFilters(dataDir: string, index: MessageContextAr
   for (const archive of index.archives) {
     const filename = path.join(messageContextArchiveDir(dataDir), path.basename(archive.file));
     const filter = archive.duplicateFilter;
+    const beforeVersion = messageHistoryFileVersion(filename);
     const before = fs.statSync(filename);
     if (filter && filter.schemaVersion === 1 && filter.byteLength === before.size && filter.mtimeMs === before.mtimeMs
+      && filter.sourceVersion === beforeVersion
       && typeof filter.bits === "string" && createHash("sha256").update(Buffer.from(filter.bits, "base64")).digest("hex") === filter.sha256) continue;
     const records = recordsFromFile(filename);
-    const after = fs.statSync(filename);
-    if (before.size !== after.size || before.mtimeMs !== after.mtimeMs) throw new Error("Conversation archive changed while preparing duplicate hints.");
-    archive.duplicateFilter = buildDuplicateFilter(records, filename);
+    if (beforeVersion !== messageHistoryFileVersion(filename)) throw new Error("Conversation archive changed while preparing duplicate hints.");
+    archive.duplicateFilter = buildDuplicateFilter(records, filename, beforeVersion);
   }
 }
 
@@ -727,15 +735,13 @@ function findExistingRecord(
   candidate: MessageContextRecord
 ): MessageContextRecord | undefined {
   const key = dedupeKey(candidate);
-  const currentMatch = current.find((item) => dedupeKey(item) === key);
-  if (currentMatch) return currentMatch;
-  for (const archive of [...index.archives].reverse()) {
+  for (const archive of index.archives) {
     const filename = path.join(messageContextArchiveDir(dataDir), path.basename(archive.file));
     if (!archiveMayContain(archive, filename, key)) continue;
     const archived = recordsFromFile(filename).find((item) => dedupeKey(item) === key);
     if (archived) return archived;
   }
-  return undefined;
+  return current.find((item) => dedupeKey(item) === key);
 }
 
 function archiveEligiblePrefix(
@@ -793,6 +799,7 @@ export function appendMessageContextToDir(
   prepareArchiveDuplicateFilters(dataDir, prepared);
   const release = acquireLock(dataDir);
   try {
+    const capturedVersion = messageHistoryFileVersion(messageContextCurrentPath(dataDir));
     const capturedCurrent = recordsFromFile(messageContextCurrentPath(dataDir));
     const index = readArchiveIndex(dataDir, capturedCurrent);
     for (const archive of index.archives) {
@@ -807,6 +814,8 @@ export function appendMessageContextToDir(
     if (!candidate) return undefined;
     const existing = findExistingRecord(dataDir, index, current, candidate);
     if (existing) {
+      const beforeCatalogStamp = messageHistoryFileVersion(messageContextArchiveIndexPath(dataDir));
+      const startedAt = Date.now();
       writeIndex(dataDir, index);
       recordDataMutationAudit({
         group: "conversation",
@@ -819,8 +828,17 @@ export function appendMessageContextToDir(
         after: existing.sequence ? { revision: String(existing.sequence) } : undefined,
         result: archived.archivedPath ? "archive_rotated" : undefined
       });
+      const currentVersion = messageHistoryFileVersion(messageContextCurrentPath(dataDir));
+      publishMessageHistoryChange(dataDir, currentVersion === capturedVersion && !archived.archivedPath ? {
+        before: currentVersion, after: currentVersion, previousRecords: current.length, records: current.length,
+        layoutVersion: messageHistoryLayoutVersion(index.archives), beforeCatalogStamp,
+        catalogStamp: messageHistoryFileVersion(messageContextArchiveIndexPath(dataDir)), startedAt, committedAt: Date.now()
+      } : undefined);
       return { record: existing, appended: false, archivedPath: archived.archivedPath };
     }
+    const appendBaseVersion = messageHistoryFileVersion(messageContextCurrentPath(dataDir));
+    const beforeCatalogStamp = messageHistoryFileVersion(messageContextArchiveIndexPath(dataDir));
+    const appendStartedAt = Date.now();
     try {
       fs.mkdirSync(path.dirname(messageContextCurrentPath(dataDir)), { recursive: true });
       fs.appendFileSync(messageContextCurrentPath(dataDir), `${JSON.stringify(candidate)}\n`, "utf8");
@@ -854,6 +872,11 @@ export function appendMessageContextToDir(
       result: archived.archivedPath ? "archive_rotated" : undefined,
       changes: [{ field: "attachmentCount", to: candidate.attachments?.length ?? 0 }]
     });
+    publishMessageHistoryChange(dataDir, appendBaseVersion === capturedVersion && !archived.archivedPath ? {
+      before: appendBaseVersion, after: messageHistoryFileVersion(messageContextCurrentPath(dataDir)),
+      previousRecords: current.length, records: current.length + 1, layoutVersion: messageHistoryLayoutVersion(index.archives),
+      startedAt: appendStartedAt, committedAt: Date.now(), beforeCatalogStamp, catalogStamp: messageHistoryFileVersion(messageContextArchiveIndexPath(dataDir))
+    } : undefined);
     return { record: candidate, appended: true, archivedPath: archived.archivedPath };
   } finally {
     release();
@@ -1050,23 +1073,30 @@ function legacyItems(dataDir: string): MessageContextRecord[] {
   ];
 }
 
-function archiveOverlapsQuery(item: MessageContextArchiveItem, query: RecentMessageContextQuery): boolean {
-  const startedAt = Date.parse(item.startedAt) / 1_000;
-  const endedAt = Date.parse(item.endedAt) / 1_000;
-  if (Number.isFinite(query.from) && Number.isFinite(endedAt) && endedAt < Number(query.from)) return false;
-  if (Number.isFinite(query.to) && Number.isFinite(startedAt) && startedAt > Number(query.to)) return false;
-  return true;
-}
-
-function archiveRecords(dataDir: string, query: RecentMessageContextQuery, current: readonly MessageContextRecord[], cache?: MessageContextArchiveReadCache): MessageContextRecord[] {
-  return readArchiveIndex(dataDir, current).archives
-    .filter(item => archiveOverlapsQuery(item, query)
-      && (query.afterSequence === undefined || item.lastSequence > query.afterSequence)
-      && (query.beforeSequence === undefined || item.firstSequence <= query.beforeSequence))
-    .flatMap((item) => {
-      const file = path.join(messageContextArchiveDir(dataDir), path.basename(item.file));
-      return cache ? cache.read(file, recordsFromFile) : recordsFromFile(file);
-    });
+function archiveRecords(dataDir: string, query: RecentMessageContextQuery, current: readonly MessageContextRecord[], cache?: MessageContextArchiveReadCache, preserveAllIdentities = false): MessageContextRecord[] {
+  const archives = readArchiveIndex(dataDir, current).archives.map(item => {
+    const filename = path.join(messageContextArchiveDir(dataDir), path.basename(item.file));
+    const bounds = item.duplicateFilter?.queryBounds;
+    const verified = bounds && Object.values(bounds).every(Number.isFinite)
+      && item.duplicateFilter?.sourceVersion === messageHistoryFileVersion(filename);
+    const outside = Boolean(!preserveAllIdentities && verified && ((Number.isFinite(query.from) && bounds.maxTime < Number(query.from))
+      || (Number.isFinite(query.to) && bounds.minTime > Number(query.to))
+      || (query.afterSequence !== undefined && bounds.maxSequence <= query.afterSequence)
+      || (query.beforeSequence !== undefined && bounds.minSequence > query.beforeSequence)));
+    return { item, filename, outside };
+  });
+  const read = (filename: string) => cache ? cache.read(filename, recordsFromFile) : recordsFromFile(filename);
+  const loaded = new Map(archives.filter(entry => !entry.outside).map(entry => [entry.filename, read(entry.filename)]));
+  const candidateKeys = new Set(current.map(dedupeKey));
+  for (const records of loaded.values()) for (const record of records) candidateKeys.add(dedupeKey(record));
+  return archives.flatMap(({ item, filename, outside }) => {
+    if (!outside) return loaded.get(filename)!;
+    // A nonmatching earlier write still owns its identity. Skip its body only
+    // when the verified negative hint excludes every later candidate identity.
+    const mayContain = archiveIdentityProbe(item, filename);
+    for (const key of candidateKeys) if (mayContain(key)) return read(filename);
+    return [];
+  });
 }
 
 function normalizeQuery(limitOrQuery: number | RecentMessageContextQuery, options: RecentMessageContextOptions): RecentMessageContextQuery {
@@ -1097,8 +1127,20 @@ function matchesMessageQuery(item: MessageContextRecord, query: RecentMessageCon
 }
 
 function charCost(item: MessageContextRecord): number {
-  return item.text.length + (item.segments?.reduce((total, segment) => total + segment.text.length + 40, 0) ?? 0) + 160;
+  return item.text.length + (item.segments?.reduce((total, segment) => total + segment.text.length + 40, 0) ?? 0) + MESSAGE_CONTEXT_RECORD_OVERHEAD_CHARS;
 }
+
+/** Shared storage semantics for the derived search index; never a second writer. */
+export const messageHistoryStorage = {
+  readRecords: recordsFromFile,
+  normalizeStored: storedRecord,
+  readLegacy: legacyItems,
+  readArchives: (directory: string) => readArchiveIndex(directory, []).archives,
+  recordKey: dedupeKey,
+  terms: queryTerms,
+  matches: matchesMessageQuery,
+  charCost
+};
 
 export function recentMessageContextItems(dataDirs: string[], limitOrQuery: number | RecentMessageContextQuery, options: RecentMessageContextOptions = {}, archiveReadCache?: MessageContextArchiveReadCache): MessageContextRecord[] {
   const query = normalizeQuery(limitOrQuery, options);
@@ -1107,23 +1149,22 @@ export function recentMessageContextItems(dataDirs: string[], limitOrQuery: numb
   const maxChars = Math.max(1, Math.floor(query.maxChars ?? DEFAULT_MESSAGE_CONTEXT_MAX_CHARS));
   const dirs = [...new Set(dataDirs.filter(Boolean).map((item) => path.resolve(item)))];
   // Dedupe must happen before query filtering: a conflicting duplicate may be
-  // the earliest compareRecords winner and therefore must not be replaced by
-  // a later matching copy. Keep one map across all files/directories, then
-  // sort only the surviving records once.
+  // the first physical write and therefore must not be replaced by a later
+  // matching copy. Catalog order plus record position is the derived write order;
+  // authoritative files and their original sequence/time fields remain unchanged.
   const byId = new Map<string, MessageContextRecord>();
   for (const dataDir of dirs) {
     const indexExists = fs.existsSync(messageContextArchiveIndexPath(dataDir));
     const current = recordsFromFile(messageContextCurrentPath(dataDir));
     const compatibleCurrent = indexExists || current.length ? current : legacyItems(dataDir);
     const records = query.includeArchives
-      ? [...archiveRecords(dataDir, query, current, archiveReadCache), ...compatibleCurrent]
+      ? [...archiveRecords(dataDir, query, current, archiveReadCache, dirs.length > 1), ...compatibleCurrent]
       : compatibleCurrent;
     for (const record of records) addDedupeRecord(byId, record);
   }
   const terms = queryTerms(query);
   const filtered = [...byId.values()]
-    .filter(item => matchesMessageQuery(item, query, terms))
-    .sort(compareRecords);
+    .filter(item => matchesMessageQuery(item, query, terms));
   const selected: MessageContextRecord[] = [];
   let chars = 0;
   for (let index = filtered.length - 1; index >= 0 && selected.length < limit; index -= 1) {

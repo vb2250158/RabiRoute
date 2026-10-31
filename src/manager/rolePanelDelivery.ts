@@ -58,15 +58,15 @@ function timelineMessage(
   options: RolePanelDeliveryOptions,
   messageId: string,
   replyContext: Record<string, unknown>,
-  status: "sent" | "failed"
+  status: "sent" | "failed",
+  route: Readonly<{ gatewayId: string; routeProfileId: string }>
 ): RolePanelTimelineMessage {
-  const routeProfileId = options.runtime.definition.routeProfiles?.[0]?.id ?? options.runtime.definition.id;
   return {
     id: messageId,
     time: Math.floor(Date.now() / 1000),
     roleId: options.roleId,
-    gatewayId: options.runtime.definition.id,
-    routeProfileId,
+    gatewayId: route.gatewayId,
+    routeProfileId: route.routeProfileId,
     direction: "user",
     sender: options.sender,
     text: options.text,
@@ -79,10 +79,11 @@ function timelineMessage(
 export async function deliverRolePanelMessage(options: RolePanelDeliveryOptions): Promise<RolePanelDeliveryResult> {
   const messageId = createRolePanelMessageId(options.messageIdPrefix);
   const routeProfileId = options.runtime.definition.routeProfiles?.[0]?.id ?? options.runtime.definition.id;
+  const route = Object.freeze({ gatewayId: options.runtime.definition.id, routeProfileId });
   const replyContext: Record<string, unknown> = {
     ...options.replyContext,
-    runtimeRouteId: options.runtime.definition.id,
-    gatewayId: options.runtime.definition.id,
+    runtimeRouteId: route.gatewayId,
+    gatewayId: route.gatewayId,
     routeProfileId,
     routeKind: ROLE_PANEL_ROUTE_KIND,
     targetType: ROLE_PANEL_TARGET_TYPE,
@@ -95,7 +96,7 @@ export async function deliverRolePanelMessage(options: RolePanelDeliveryOptions)
     await options.deliver(options.runtime, messageId, options.text, options.attachments, replyContext);
   } catch (error) {
     try {
-      await options.appendTimeline(options.roleId, timelineMessage(options, messageId, replyContext, "failed"));
+      await options.appendTimeline(options.roleId, timelineMessage(options, messageId, replyContext, "failed", route));
     } catch {
       // The handler failure remains authoritative when the audit timeline is unavailable.
     }
@@ -111,7 +112,7 @@ export async function deliverRolePanelMessage(options: RolePanelDeliveryOptions)
   try {
     message = (await options.appendTimeline(
       options.roleId,
-      timelineMessage(options, messageId, replyContext, "sent")
+      timelineMessage(options, messageId, replyContext, "sent", route)
     )).message;
   } catch {
     // The handler already accepted the turn. A timeline failure must not invite a duplicate retry.

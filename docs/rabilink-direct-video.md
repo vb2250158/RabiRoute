@@ -14,6 +14,14 @@ Relay 的 `POST /api/rabilink/video/offer` 只接受 `deviceId` 与 SDP，总请
 
 直连数据在电脑保存为运行数据目录下 `data/rabilink/video/<sessionId>.h264`，旁边的 JSON 保存接收字节数、结束原因和 ICE 候选类型。它是 H.264 原始码流，不是可直接作为 MP4 分享的文件，也不会自动送给 Agent。视频不上传 Relay。当前接收器最多同时接收两路，每路最多 256 MiB；达到限制、落盘背压、连接断开或 15 秒没有数据时结束，保留已经收到的数据。
 
+## Manager 公共合同（源码已接入，安装版待验收）
+
+电脑端状态与协商分别使用 `manager.rabilink.video.status`（GET `/api/rabilink/video/status`）和 `manager.rabilink.video.offer`（POST `/api/rabilink/video/offer`）。已鉴权远端无需 Agent 会话预登记或逐功能许可。两项从原接收器注册可执行合同，旧 prefix 与 HTTP 包装器已删除；Android 与 Relay 的既有路径、SDP 和媒体协议保持兼容。
+
+JSON 信令上限 64 KiB，SDP 本身上限 60 KiB UTF-8 字节；只读模式继续拒绝创建会话。协商返回答案前核验原连接及原会话仍有效。HTTP 断线不重放 offer，已接受的 WebRTC 会话仍由原超时、关闭条件和插件生命周期拥有；插件停止时先停止接收并关闭原接收器，再等待已接受协商完成。状态中没有会话不能证明之前的 offer 未执行，需保留原 deviceId/sessionId 核对。
+
+本轮本机软件测试覆盖原生 WebRTC、合成二进制文件完整性、节点撤销、停止后的答案拒绝和断线收尾。它没有采集眼镜画面或验证公网打洞。
+
 ## Android 入口
 
 本地原签名可放在 `apps/rabi-mobile-android/secrets/rokid/signing/debug.keystore`。该目录由 `/secrets/` 忽略规则保护，不能提交；构建优先使用此文件的 Android 默认调试别名和密码，其次才使用既有 Vela 签名配置或本机默认调试签名。覆盖更新前必须比对 APK 证书指纹。设备 `.lc` 和私有 SDK 资料也只保存在 `secrets/rokid/`，不会自动打包进应用。

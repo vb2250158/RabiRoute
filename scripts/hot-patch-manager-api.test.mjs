@@ -11,9 +11,10 @@ import { compileHotPatchModule } from "./lib/hot-patch-compiler.mjs";
 
 const built = process.env.RABIROUTE_HOT_PATCH_TEST_BUILT === "1";
 const implementation = module => new URL(`../${built ? "dist" : "src"}/${module}.${built ? "js" : "ts"}`, import.meta.url);
-const [{ GenerationRuntime }, { ManagerSourcePatchService }, { handleSourcePatchApi }, { handlePluginCatalogApi }] = await Promise.all([
+const [{ GenerationRuntime }, { ManagerSourcePatchService }, { handleSourcePatchApi }, { createPluginCatalogOperations }, { ManagerPluginRouteRegistry }, { createCorePublicOperations }] = await Promise.all([
   import(implementation("plugin-kernel/generationRuntime")), import(implementation("manager/sourcePatchService")),
-  import(implementation("manager/sourcePatchRoutes")), import(implementation("manager/pluginCatalogRoutes"))
+  import(implementation("manager/sourcePatchRoutes")), import(implementation("manager/pluginCatalogOperations")),
+  import(implementation("manager/managerPluginRouteRegistry")), import(implementation("manager/corePublicOperations"))
 ]);
 
 async function fixture(options = {}) {
@@ -32,7 +33,7 @@ async function fixture(options = {}) {
   const baseline = compileHotPatchModule(source, sourcePath);
   const baselineHash = await store(baselineRoot, baseline);
   await store(path.join(stateRoot, "candidates"), baseline);
-  const candidateHash = await store(path.join(stateRoot, "candidates"), compileHotPatchModule(source.replace('host || "all"', 'host || "patched"'), sourcePath));
+  const candidateHash = await store(path.join(stateRoot, "candidates"), compileHotPatchModule(source.replace('host || "all"', 'host || "web"'), sourcePath));
   const broken = options.brokenModule === "initialization" ? { ...baseline, initializationSource: "for (;;) {}" }
     : { ...baseline, schemaVersion: 99 };
   const brokenHash = options.brokenModule ? await store(baselineRoot, broken) : undefined;
@@ -45,6 +46,14 @@ async function fixture(options = {}) {
   let service = makeService();
   const identity = { applicationGenerationId: runtime.current().applicationGenerationId, controlToken: randomUUID() };
   const json = (response, status, body) => { response.writeHead(status, { "content-type": "application/json" }); response.end(JSON.stringify(body)); };
+  const routes = new ManagerPluginRouteRegistry();
+  const catalogRegistration = routes.registerOperations("fixture:plugin-catalog", createPluginCatalogOperations({ runtime,
+    renderCatalog: (input, host) => service.invoke("manager.plugin-catalog", "renderPluginCatalog", [input, host]) }));
+  const sourceReadOwner = { status: () => service.status(), operation: id => service.operation(id) };
+  const sourceReadRegistration = routes.registerOperations("fixture:source-patch-reads", createCorePublicOperations({
+    identity: () => ({ applicationGenerationId: runtime.current().applicationGenerationId, managerInstanceId: runtime.current().managerInstanceId }),
+    sourcePatches: sourceReadOwner
+  }).filter(operation => operation.contract.pathTemplate.startsWith("/api/source-patches")));
   const server = http.createServer((request, response) => {
     const url = new URL(request.url, "http://127.0.0.1");
     if (url.pathname === "/health") { json(response, 200, { healthy: true }); return; }
@@ -54,8 +63,7 @@ async function fixture(options = {}) {
       for await (const chunk of request) { size += chunk.length; if (size > maximumBytes) throw new Error("Body too large"); chunks.push(chunk); }
       return JSON.parse(Buffer.concat(chunks).toString("utf8"));
     } })) return;
-    if (handlePluginCatalogApi(request, url, response, { runtime,
-      renderCatalog: (input, host) => service.invoke("manager.plugin-catalog", "renderPluginCatalog", [input, host]) })) return;
+    if (routes.handle(request, url, response)) return;
     response.writeHead(404).end();
   });
   server.listen(0, "127.0.0.1");
@@ -74,6 +82,7 @@ async function fixture(options = {}) {
     async close() {
       server.closeAllConnections();
       await new Promise(resolve => server.close(resolve));
+      await catalogRegistration.dispose(); await sourceReadRegistration.dispose();
       await service.stop(); await runtime.dispose();
       assert.equal(path.dirname(path.resolve(root)), path.resolve(os.tmpdir()));
       assert.ok(path.basename(root).startsWith("rabi-source-patch-api-"));
@@ -168,7 +177,7 @@ test("formal catalog route applies a hashed source candidate through Host author
     assert.equal(applied.status, 200);
     assert.equal((await applied.json()).data.commitState, "committed");
     const results = await Promise.all(Array.from({ length: 12 }, get));
-    assert.ok(results.every(result => result.body.data.host === "patched" && result.revision === "1"));
+    assert.ok(results.every(result => result.body.data.host === "web" && result.revision === "1"));
     assert.equal(app.service().status().modules[0].active.pid, pid);
     assert.equal(app.service().status().modules[0].active.snapshot.contract.label, "updated");
     assert.equal((await app.publish(request)).status, 200);
@@ -177,7 +186,7 @@ test("formal catalog route applies a hashed source candidate through Host author
     const record = await fetch(`${app.baseUrl}/api/source-patches/operations/${request.operationId}`).then(response => response.json());
     assert.equal(record.data.state, "committed");
     await app.restart();
-    assert.equal((await get()).body.data.host, "patched");
+    assert.equal((await get()).body.data.host, "web");
     const rollback = { ...app.request(), action: "rollback" };
     delete rollback.candidateSha256;
     assert.equal((await app.publish(rollback)).status, 200);
@@ -279,7 +288,7 @@ for (const failure of ["active", "operations", "pending"]) {
       const response = await fetch(`${app.baseUrl}/api/plugins/catalog`);
       assert.equal(response.status, 200);
       assert.equal(response.headers.get("x-rabiroute-source-revision"), failure === "active" ? "1" : "0");
-      assert.equal((await response.json()).data.host, failure === "pending" ? "all" : "patched");
+      assert.equal((await response.json()).data.host, failure === "pending" ? "all" : "web");
       assert.equal(app.service().status().modules[0].uncertainOperation, undefined);
       assert.equal((await app.reconcile(request)).status, recovered.status);
     } finally { fs.rename = rename; await app.close(); }

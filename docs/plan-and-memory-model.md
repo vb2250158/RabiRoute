@@ -180,6 +180,10 @@ data/roles/<RoleId>/plans/
 
 Manager 只通过计划存储 Repository 新建、更新和归档此目录。旧布局迁移、未完成事务恢复和规范目录核对共同决定计划存储的读取/变更资格，每次尝试都在可终止的 one-shot child 中执行。Manager 端点与身份、完整必需插件集和 handler READY 不等待 NAS 恢复，Host 与 Tray 因此保持当前 application generation。资格状态为 `running` 或 `degraded` 时，现有只读端点仍可响应，计划变更请求失败关闭，`/health` 明确报告降级；资格就绪后，运行模块只使用已恢复的规范布局，不再扫描或读取旧布局。迁移不会读取附件正文；旧数据与规范目录内容相同时，以带清单和回执的事务退役重复副本，内容分歧时保存证据并失败关闭，禁止带着半迁移状态继续变更计划。计划从 `active/` 进入 `archive/` 同样是 Repository 持有 lease 的完整生命周期事务，不是裸 `rename`，也不是后台迁移。
 
+启动恢复先核对已提交存储包回执与原事务的身份及内容摘要。有效的已提交回执记录历史成功，后续正常修改、归档或已消费的暂存载荷不要求当前计划继续等于历史包，也不会重放旧数据。未提交事务仍校验载荷；回执不匹配与真实冲突仍保留证据并报告恢复失败。
+
+生命周期恢复沿用 `receipt.json` 存在即不再重放的终态边界，在收集 manifest 前跳过这些事务。过时的终态 manifest 即使已不是普通文件，也不会阻塞其它计划恢复；目录、回执及历史内容仍完整保留。不带回执的 manifest、目录层链接、身份和 lease 校验保持严格，旧布局处理、存储包与反馈事务的恢复规则不变。这减少终态 manifest 的文件检查及待排序列表，不免除事务目录扫描。
+
 激活状态为 `已完成` 的计划，在 `updatedAt` 超过角色 `planWorkflow.archiveAfterHours`（默认 72 小时）后自动改为 `已归档`，并将整个目录从 `plans/active/<planId>/` 移至 `plans/archive/<planId>/`。标记状态保持不变；旧关闭计划在启动迁移时直接归档。
 
 计划归档不需要经过 Agent 处理。它是 RabiRoute 的机械生命周期维护，不触发 Agent 总结，不要求 Agent 判断，只更新 `archiveStatus`、`archivedAt` 和存放位置。

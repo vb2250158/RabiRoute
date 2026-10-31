@@ -142,3 +142,19 @@ test("public startup snapshots expose stable counts without leaking paths or raw
   });
   assert.equal(publicSnapshot.lastErrorCode, "PLAN_STORAGE_STARTUP_ATTEMPT_FAILED");
 });
+
+
+test("partial package recovery exposes counts and releases recovered role scopes only", () => {
+  const current = snapshot("partial", { summary: { roles: 2, migrated: 0, reconciled: 0,
+    failures: [], skipped: false, readyRoleIds: ["ReadyRole"], packageConflicts: [
+      {roleId: "ReadyRole", planId: "blocked", transactionPath: "private/manifest.json", message: "private failure"}
+    ] } });
+  assert.equal(planStorageReadyForRoles(current, ["ReadyRole"]), true);
+  assert.equal(planStorageReadyForRoles(current, ["OtherRole"]), false);
+  assert.equal(planStorageReadyForRoles(current), false);
+  assert.equal(planStorageStartupUnavailable("PATCH", "/api/roles/ReadyRole/plans/good", current), null);
+  assert.ok(planStorageStartupUnavailable("PATCH", "/api/roles/OtherRole/plans/good", current));
+  const publicValue = publicPlanStorageStartupSnapshot(current);
+  assert.equal((publicValue.summary as Record<string, unknown>).packageConflictCount, 1);
+  assert.equal(JSON.stringify(publicValue).includes("private"), false);
+});

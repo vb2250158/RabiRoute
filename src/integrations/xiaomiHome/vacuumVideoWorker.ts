@@ -1,3 +1,4 @@
+import { getTimeoutMs } from "../../shared/timeoutSettings.js";
 import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import { Cs2RelayError, VacuumCs2Relay } from "./vacuumCs2Relay.js";
@@ -14,7 +15,7 @@ function close() {
   controller.abort(); relay?.close(); child?.kill();
   delete process.env.RABI_VIDEO_SOURCE; delete process.env.RABI_VIDEO_PASSWORD;
   if (configPath && fs.existsSync(configPath)) fs.unlinkSync(configPath);
-  setTimeout(() => process.exit(0), 1000).unref();
+  setTimeout(() => process.exit(0), getTimeoutMs("deadline.integrations.xiaomiHome.vacuumVideoWorker.close", 1000)).unref();
 }
 process.once("disconnect", close); process.once("SIGTERM", close);
 process.on("message", message => { if (message === "stop") close(); });

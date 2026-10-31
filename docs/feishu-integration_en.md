@@ -1,4 +1,8 @@
+English | [简体中文](feishu-integration.md)
+
 # Feishu as an independent message endpoint
+
+Maintainers: see [native listener protocols](platform-native-listeners_en.md) for independent addresses, executable owners and callback shutdown.
 
 Feishu uses its own `feishu` adapter, `feishu_message` route kind, per-`chat_id` conversation context, and Feishu application API for outbound replies. It never reads or reuses the generic Webhook endpoint or a group-bot webhook.
 

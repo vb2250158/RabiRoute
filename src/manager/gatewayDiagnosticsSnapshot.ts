@@ -1,3 +1,4 @@
+import { getTimeoutMs } from "../shared/timeoutSettings.js";
 import path from "node:path";
 import type { GatewayEndpoint } from "../gatewayLifecycle.js";
 import {
@@ -189,7 +190,7 @@ export class GatewayDiagnosticsSnapshotService {
     this.capture = options.capture;
     this.load = options.load;
     this.minRefreshIntervalMs = Math.max(0, Math.floor(options.minRefreshIntervalMs ?? 5_000));
-    this.timeoutMs = Math.max(100, Math.floor(options.timeoutMs ?? 30_000));
+    this.timeoutMs = Math.max(1, Math.floor(options.timeoutMs ?? getTimeoutMs("backend.manager.gatewayDiagnosticsSnapshot.owner.Math.floor.timeoutMs", 30_000)));
     this.now = options.now ?? Date.now;
     this.snapshot = options.initialSnapshot ? publishResult(options.initialSnapshot) : undefined;
     if (this.snapshot) this.revision = 1;

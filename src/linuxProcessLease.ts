@@ -1,3 +1,4 @@
+import { getTimeoutMs } from "./shared/timeoutSettings.js";
 import fs from "node:fs";
 import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
@@ -79,7 +80,7 @@ export async function acquireLinuxProcessLease(options: LinuxProcessLeaseOptions
     const executable = ["/usr/bin/flock", "/bin/flock"].find(candidate => fs.existsSync(candidate));
     if (!executable) throw new Error("Linux RabiRoute requires util-linux flock. Install the util-linux package first.");
     const result = spawnSync(executable, ["--exclusive", "--nonblock", "--conflict-exit-code", "17", "3"], {
-      stdio: ["ignore", "pipe", "pipe", fd], timeout: 5_000, maxBuffer: 4_096
+      stdio: ["ignore", "pipe", "pipe", fd], timeout: getTimeoutMs("backend.linuxProcessLease.acquireLinuxProcessLease.spawnSync.timeout", 5_000), maxBuffer: 4_096
     });
     if (result.error || result.signal) throw new Error("Linux process lease acquisition could not be confirmed.", { cause: result.error });
     if (result.status === 17) throw new LinuxProcessLeaseAlreadyHeldError(leasePath, readOwner(ownerPath, uid));

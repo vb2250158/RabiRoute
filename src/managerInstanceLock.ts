@@ -1,3 +1,4 @@
+import { getTimeoutMs } from "./shared/timeoutSettings.js";
 import fs from "node:fs";
 import net from "node:net";
 import os from "node:os";
@@ -169,7 +170,7 @@ async function readOsLeaseOwner(address: string): Promise<ManagerInstanceOwner |
       socket.destroy();
       resolve(owner);
     };
-    const timeout = setTimeout(() => finish(null), 1_000);
+    const timeout = setTimeout(() => finish(null), getTimeoutMs("deadline.managerInstanceLock.readOsLeaseOwner", 1_000));
     timeout.unref();
     socket.on("data", chunk => chunks.push(Buffer.from(chunk)));
     socket.once("end", () => {

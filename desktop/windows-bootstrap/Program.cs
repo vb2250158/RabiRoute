@@ -9,6 +9,7 @@ internal static class Program
         {
             if (ReadOnlyHostStatusProbe.IsStatusInvocation(args))
             {
+                RabiRoute.WindowsHost.HostTimeouts.Load(Path.GetFullPath(AppContext.BaseDirectory));
                 var response = await ReadOnlyHostStatusProbe.QueryAsync();
                 if (args.Contains("--json", StringComparer.OrdinalIgnoreCase))
                 {

@@ -14,8 +14,8 @@ internal sealed record ManagerProbeResult(ManagerProbeState State, string Messag
 
 internal sealed class ManagerLifecycleClient : IDisposable
 {
-    private static readonly TimeSpan ProbeTimeout = TimeSpan.FromSeconds(30);
-    private static readonly TimeSpan ShutdownRequestTimeout = TimeSpan.FromSeconds(3);
+    private static TimeSpan ProbeTimeout => HostTimeouts.Get("host.manager.probe", TimeSpan.FromSeconds(30));
+    private static TimeSpan ShutdownRequestTimeout => HostTimeouts.Get("host.manager.shutdownRequest", TimeSpan.FromSeconds(3));
     private readonly HttpClient _client;
 
     internal ManagerLifecycleClient()
@@ -122,11 +122,15 @@ internal sealed class ManagerLifecycleClient : IDisposable
         {
             return new ManagerProbeResult(ManagerProbeState.Failed, "Manager /health did not confirm event-loop liveness.");
         }
+        var healthState = ReadString(meta, "health", "state");
         if (requiredReady != true)
         {
-            return new ManagerProbeResult(ManagerProbeState.Failed, "Manager /health reported required capabilities unavailable.");
+            if (requiredReady == false && (healthState == "healthy" || healthState == "degraded"))
+            {
+                return new ManagerProbeResult(ManagerProbeState.Degraded, "Manager event loop is live, but required plugin capabilities are unavailable; retain this generation in a degraded state.");
+            }
+            return new ManagerProbeResult(ManagerProbeState.Failed, "Manager /health did not report valid required-readiness metadata.");
         }
-        var healthState = ReadString(meta, "health", "state");
         return healthState switch
         {
             "healthy" => new ManagerProbeResult(ManagerProbeState.Healthy, "Manager is healthy."),

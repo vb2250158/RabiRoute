@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { translateText } from "../../i18n";
 import { browserUuid } from "../../browserUuid";
 import { userFacingError } from "../../userFacingError";
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
@@ -244,7 +245,7 @@ function validateCustomThemeColors(): boolean {
 function closeCustomThemeEditor(): void {
   if (customThemeSaving.value) return;
   const changed = JSON.stringify(customThemeDraft.value) !== customThemeBaseline.value;
-  if (changed && !window.confirm("当前主题有未保存修改，确定放弃吗？")) return;
+  if (changed && !window.confirm(translateText("当前主题有未保存修改，确定放弃吗？"))) return;
   customThemeDialog.value = false;
 }
 

@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from .timeout_settings import get_timeout_seconds
+
+
 import asyncio
 import hashlib
 import hmac
@@ -115,8 +118,8 @@ class _DurableChunkLedger:
                 database.execute("INSERT OR IGNORE INTO stream_contracts VALUES (?, ?)", (stream_id, contract))
 
     def _connect(self) -> sqlite3.Connection:
-        database = sqlite3.connect(self.path, timeout=10)
-        database.execute("PRAGMA busy_timeout=10000")
+        database = sqlite3.connect(self.path, timeout=get_timeout_seconds("speech.remoteAudio.database", 10))
+        database.execute(f"PRAGMA busy_timeout={int(get_timeout_seconds('speech.remoteAudio.database', 10) * 1000)}")
         database.execute("PRAGMA journal_mode=WAL")
         database.execute("PRAGMA synchronous=FULL")
         return database
@@ -785,7 +788,7 @@ class RemoteAudioHub:
             self.config.port,
             max_size=2 * 1024 * 1024,
             ping_interval=20,
-            ping_timeout=20,
+            ping_timeout=get_timeout_seconds("speech.remoteAudio.ping", 20),
         )
         loop = asyncio.get_running_loop()
         transport, _protocol = await loop.create_datagram_endpoint(
@@ -1283,7 +1286,7 @@ class RemoteAudioHub:
             return
         client: _Client | None = None
         try:
-            raw_hello = await asyncio.wait_for(websocket.recv(), timeout=10)
+            raw_hello = await asyncio.wait_for(websocket.recv(), timeout=get_timeout_seconds("speech.remoteAudio.handshake", 10))
             if not isinstance(raw_hello, str):
                 raise ValueError("The first frame must be a JSON hello message.")
             hello = json.loads(raw_hello)
@@ -1442,7 +1445,7 @@ class RemoteAudioHub:
         self._emit_changed()
         while not cancel.is_set():
             try:
-                await asyncio.wait_for(asyncio.shield(client.playback_waiter), timeout=0.2)
+                await asyncio.wait_for(asyncio.shield(client.playback_waiter), timeout=get_timeout_seconds("speech.remoteAudio.playback", 0.2))
                 return
             except asyncio.TimeoutError:
                 continue

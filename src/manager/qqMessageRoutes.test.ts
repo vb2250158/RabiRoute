@@ -5,10 +5,11 @@ import test from "node:test";
 import os from "node:os";
 import path from "node:path";
 import { promises as fs } from "node:fs";
-import { handleQqMessageRoutes } from "./qqMessageRoutes.js";
+import { createQqMessageOperations, handleQqMessageRoutes, type QqMessageRoutesContext } from "./qqMessageRoutes.js";
+import { ManagerPluginRouteRegistry } from "./managerPluginRouteRegistry.js";
+import { apiCatalogOpenApi } from "./apiOperationCatalog.js";
 import { qqMessageMedia, readQqMedia, QQ_MEDIA_MAX_BYTES, qqRead } from "./qqMessageMedia.js";
 import type { GatewayDefinition } from "../shared/gatewayConfigModel.js";
-import { authorizeAgentApiOperation } from "./agentApiPolicy.js";
 import { LanAgentAuthority } from "./lanAgentAuthority.js";
 import { evaluateLanAgentRequest } from "./lanAgentRequestAccess.js";
 import { markAuthenticatedConnectionRequest } from "./connectionRequestAccess.js";
@@ -19,20 +20,21 @@ const row = { message_id: 123, message_type: "group", group_id: "456", time: 100
   message: [{ type: "text", data: { text: "hello" } }, { type: "video", data: { file: "abc.mp4", url: "https://media.qq.com/private-key", thumb: "cover.png" } }] };
 const envelope = (data: unknown) => Response.json({ status: "ok", retcode: 0, data });
 async function serve(transport: typeof fetch, options: { local?: boolean; route?: () => GatewayDefinition | undefined; authority?: LanAgentAuthority;
-  connection?: (request: http.IncomingMessage) => (() => void) | undefined } = {}) {
+  connection?: (request: http.IncomingMessage) => (() => void) | undefined; typed?: boolean } = {}) {
+  const context: QqMessageRoutesContext = { local: () => options.local !== false, route: options.route ?? (() => definition), transport,
+    json: (reply, status, body) => { reply.writeHead(status, { "content-type": "application/json" }); reply.end(JSON.stringify(body)); } };
+  const registry = options.typed ? new ManagerPluginRouteRegistry() : undefined;
+  const registration = registry?.registerOperations("qq-read-test", createQqMessageOperations(context));
   const server = http.createServer((request, response) => {
     const url = new URL(request.url!, "http://127.0.0.1");
     if (options.authority) evaluateLanAgentRequest(request, options.authority, true);
     const connectionAuthority = options.connection?.(request);
     if (connectionAuthority) markAuthenticatedConnectionRequest(request, connectionAuthority);
-    if (!handleQqMessageRoutes(request, url, response, { local: () => options.local !== false,
-      route: options.route ?? (() => definition), transport,
-      json: (reply, status, body) => { reply.writeHead(status, { "content-type": "application/json" }); reply.end(JSON.stringify(body)); }
-    }, operation => operation)) response.writeHead(404).end();
+    if (!(registry ? registry.handle(request, url, response) : handleQqMessageRoutes(request, url, response, context, operation => operation))) response.writeHead(404).end();
   });
   await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
-  return { base: `http://127.0.0.1:${(server.address() as { port: number }).port}`,
-    close: () => new Promise<void>(resolve => { server.closeAllConnections(); server.close(() => resolve()); }) };
+  return { base: `http://127.0.0.1:${(server.address() as { port: number }).port}`, registry,
+    close: async () => { server.closeAllConnections(); await registration?.dispose(); await new Promise<void>(resolve => server.close(() => resolve())); } };
 }
 const query = "?routeId=test-route&kind=group&target=456";
 
@@ -51,6 +53,32 @@ test("history carries cursor, masks upstream URLs and returns usable attachment 
     assert.equal(data.nextCursor, "123"); assert.equal(data.completenessUnknown, true);
     assert.equal(data.entries[0].attachments[0].contentUrl, "/api/agent/qq/messages/123/attachments/0" + query);
     assert.equal(data.entries[0].text, "hello");
+  } finally { await app.close(); }
+});
+
+test("executable QQ history/message/download share projection schemas and returned attachment indices remain callable past 99", async () => {
+  const bytes = Buffer.from("image-content");
+  const many = { ...row, message: Array.from({ length: 101 }, (_value, index) => ({ type: "image", data: { file: `item-${index}` } })) };
+  const app = await serve(async (url, init) => {
+    if (String(url).endsWith("get_group_msg_history")) return envelope({ messages: [many] });
+    if (String(url).endsWith("get_msg")) return envelope(many);
+    if (String(url).endsWith("get_file")) { assert.equal(JSON.parse(String(init?.body)).file_id, "item-100");
+      return envelope({ url: "https://media.qq.com/fixture-image.png", file_size: bytes.length }); }
+    return new Response(bytes);
+  }, { typed: true });
+  try {
+    const history = await fetch(app.base + "/api/agent/qq/history" + query); assert.equal(history.status, 200);
+    const historyData = (await history.json()).data; assert.equal(historyData.entries[0].attachments.length, 101);
+    const message = await fetch(app.base + "/api/agent/qq/messages/123" + query); assert.equal(message.status, 200);
+    const data = (await message.json()).data;
+    const link = data.attachments[100].contentUrl; assert.match(link, /\/attachments\/100\?/);
+    const media = await fetch(app.base + link); assert.equal(media.status, 200);
+    assert.deepEqual(Buffer.from(await media.arrayBuffer()), bytes);
+    assert.equal(media.headers.get("x-rabiroute-content-sha256"), createHash("sha256").update(bytes).digest("hex"));
+    const spec = (await apiCatalogOpenApi(app.registry!.catalogSnapshot())) as { paths: Record<string, any> };
+    assert.deepEqual(spec.paths["/api/agent/qq/messages/{messageId}/attachments/{attachmentIndex}"].get.responses["200"]["x-rabiroute-binary"], { minBytes: 1, maxBytes: QQ_MEDIA_MAX_BYTES });
+    assert.equal(JSON.stringify(app.registry!.catalogSnapshot()).includes("test-secret"), false);
+    assert.equal((await fetch(app.base + "/api/agent/qq/history" + query + "&kind=private")).status, 400);
   } finally { await app.close(); }
 });
 
@@ -118,13 +146,12 @@ test("enabled authenticated Agent reads public QQ without a Route owner grant an
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   const authority = new LanAgentAuthority({ statePath: path.join(root, "authority.json") });
   const credential = authority.enroll(authority.issueBootstrapTicket().ticket, "fixture-node");
-  authority.registerAgentCatalog(credential.token, [{ agentId: "fixture-agent", provider: "codex" }]);
   const headers = { authorization: `Bearer ${credential.token}`, "x-rabiroute-agent-id": "fixture-agent" };
   let revoke = false;
   let calls = 0;
   const app = await serve(async () => {
     calls++;
-    if (revoke) authority.setAgentEnabled("fixture-node", "fixture-agent", false);
+    if (revoke) authority.revokeNode("fixture-node");
     return envelope(row);
   }, { local: false, authority });
   try {
@@ -179,13 +206,8 @@ test("empty file path, oversize and arbitrary references yield explicit failures
   await assert.rejects(readQqMedia(endpoint, { kind: "video", name: "test", file: "abc" }, signal,
     async () => envelope({ file_size: QQ_MEDIA_MAX_BYTES + 1 })), /QQ_MEDIA_TOO_LARGE/);
   await assert.rejects(readQqMedia(endpoint, { kind: "video", name: "test", file: "C:\\private" }, signal), /QQ_MEDIA_REFERENCE_UNAVAILABLE/);
-  await assert.rejects(qqRead({ httpUrl: "http://other.invalid", accessToken: "" }, "get_msg", {}, signal), /QQ_ENDPOINT_UNSAFE/);
+  await assert.rejects(qqRead({ httpUrl: "file:///unsupported", accessToken: "" }, "get_msg", {}, signal), /QQ_ENDPOINT_UNSAFE/);
   assert.equal(qqMessageMedia("[CQ:video,file=abc.mp4,url=https://media.qq.com/a&#44;b]")[0].url, "https://media.qq.com/a,b");
-});
-
-test("catalog recognizes all public query and download contracts", () => {
-  for (const url of ["/api/agent/qq/history" + query + "&cursor=1&limit=50", "/api/agent/qq/messages/123" + query,
-    "/api/agent/qq/messages/123/attachments/0" + query]) assert.equal(authorizeAgentApiOperation("GET", url).allowed, true);
 });
 
 test("a fresh QQ URL can recover an empty local path without forwarding OneBot credentials", async () => {
@@ -197,14 +219,14 @@ test("a fresh QQ URL can recover an empty local path without forwarding OneBot c
       calls++;
       if (calls === 1) return envelope({ file: "", url: "" });
       assert.equal(String(url), "https://media.qq.com/video");
-      assert.equal(init?.headers, undefined); assert.equal(init?.redirect, "error");
+      assert.equal(init?.headers, undefined); assert.equal(init?.redirect, "follow");
       return new Response(bytes);
     });
   assert.deepEqual(result, bytes); assert.equal(calls, 2);
 });
 
-test("declared oversize and hostile media hosts fail before download", async () => {
-  for (const data of [{ file: "", url: "http://127.0.0.1/private" }, { file: "", url: "https://media.qq.com@attacker.invalid/video" }]) {
+test("unsupported URL forms and oversized upstream bodies fail before download", async () => {
+  for (const data of [{ file: "", url: "file:///unsupported" }, { file: "", url: "https://user:password@media.example/video" }]) {
     let calls = 0;
     await assert.rejects(readQqMedia({ httpUrl: "http://127.0.0.1:12345", accessToken: "test-secret" },
       { kind: "video", name: "video.mp4", file: "abc.mp4" }, AbortSignal.timeout(1000),
@@ -212,7 +234,45 @@ test("declared oversize and hostile media hosts fail before download", async () 
     assert.equal(calls, 1);
   }
   await assert.rejects(qqRead({ httpUrl: "http://127.0.0.1:12345", accessToken: "test-secret" }, "get_msg", {}, AbortSignal.timeout(1000),
-    async () => new Response("small", { headers: { "content-length": String(2 * 1024 * 1024) } })), /QQ_RESPONSE_TOO_LARGE/);
+    async () => new Response("small", { headers: { "content-length": String(Number.MAX_SAFE_INTEGER + 1) } })), /QQ_RESPONSE_TOO_LARGE/);
+});
+
+test("attachment download follows a real HTTP resource redirect without OneBot credentials", async t => {
+  const bytes = Buffer.from("redirected-video");
+  const mediaServer = http.createServer((request, response) => {
+    assert.equal(request.headers.authorization, undefined);
+    if (request.url === "/redirect") { response.writeHead(302, { location: "/video" }); response.end(); }
+    else { response.writeHead(200); response.end(bytes); }
+  });
+  await new Promise<void>(resolve => mediaServer.listen(0, "127.0.0.1", resolve));
+  const mediaUrl = `http://127.0.0.1:${(mediaServer.address() as { port: number }).port}/redirect`;
+  const napcat = http.createServer((request, response) => {
+    assert.equal(request.url, "/get_file"); assert.equal(request.headers.authorization, "Bearer fixture");
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end(JSON.stringify({ status: "ok", retcode: 0, data: { url: mediaUrl } }));
+  });
+  await new Promise<void>(resolve => napcat.listen(0, "127.0.0.1", resolve));
+  t.after(async () => {
+    for (const server of [napcat, mediaServer]) { server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); }
+  });
+  const result = await readQqMedia({ httpUrl: `http://127.0.0.1:${(napcat.address() as { port: number }).port}`, accessToken: "fixture" },
+    { kind: "video", name: "video.mp4", file: "video-id" }, AbortSignal.timeout(3000));
+  assert.deepEqual(result, bytes);
+});
+
+test("configured remote NapCat and returned CDN domains or ports need no additional grant", async () => {
+  for (const mediaUrl of ["https://multimedia.nt.qq.com.cn/video", "https://cdn.example:8443/video", "http://127.0.0.1:43210/video"]) {
+    let calls = 0;
+    const bytes = Buffer.from("video bytes");
+    const result = await readQqMedia({ httpUrl: "https://napcat.example:8443", accessToken: "fixture" },
+      { kind: "video", name: "video.mp4", file: "video-id" }, AbortSignal.timeout(1000), async (url, options) => {
+        if (++calls === 1) { assert.equal(String(url), "https://napcat.example:8443/get_file"); return envelope({ url: mediaUrl }); }
+        assert.equal(String(url), mediaUrl); assert.equal(options?.redirect, "follow");
+        assert.equal(new Headers(options?.headers).get("authorization"), null);
+        return new Response(bytes);
+      });
+    assert.deepEqual(result, bytes); assert.equal(calls, 2);
+  }
 });
 
 test("private conversation reads use its exact peer without silently selecting a group", async () => {

@@ -89,7 +89,7 @@ const probeActivityPath = path.join(
 test("Android SDK discovers only explicit full Manager URLs", () => {
   const source = fs.readFileSync(sdkPath, "utf8");
   assert.match(source, /private val managerBaseUrls: List<String> = emptyList\(\)/);
-  assert.match(source, /RabiRouteNsdDiscovery\(context, timeoutMs\)\.discoverManagerEndpoints\(\)/);
+  assert.match(source, /RabiRouteNsdDiscovery\(context, timeoutMs, discoveryTimeout\)\.discoverManagerEndpoints\(\)/);
   assert.match(source, /val configuredBaseUrls = managerBaseUrls\s+\.map\(::normalizeManagerBaseUrl\)/);
   assert.match(source, /fun scanManagerBaseUrls\(baseUrls: List<String>\)/);
   assert.match(source, /baseUrls\.map\(::normalizeManagerBaseUrl\)\.distinct\(\)/);

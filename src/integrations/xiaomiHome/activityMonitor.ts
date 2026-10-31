@@ -33,6 +33,7 @@ export class HomeAssistantActivityMonitor {
   private names = new Map<string, string>();
   private state = "stopped";
   private pending: Promise<void> = Promise.resolve();
+  private readonly socketClosures = new Set<Promise<void>>();
   constructor(private readonly baseUrl: string, private readonly dependencies: Dependencies) {}
   start(): void {
     if (this.unsubscribe) return;
@@ -44,7 +45,7 @@ export class HomeAssistantActivityMonitor {
   }
   async stop(): Promise<void> {
     this.unsubscribe?.(); this.unsubscribe = undefined;
-    this.request = null; this.close(); await this.pending;
+    this.request = null; this.close(); await Promise.all([this.pending, ...this.socketClosures]);
   }
   status() { return { state: this.state, recording: !!this.request }; }
   private close(): void {
@@ -76,6 +77,10 @@ export class HomeAssistantActivityMonitor {
     try { socket = (this.dependencies.createSocket ?? (address => new WebSocket(address)))(url.toString()); }
     catch { this.report("Home Assistant 活动连接失败"); this.retry = setTimeout(() => this.connect(), this.dependencies.reconnectDelayMs ?? 5000); this.retry.unref(); return; }
     this.socket = socket;
+    let closed!: () => void;
+    const closure = new Promise<void>(resolve => { closed = resolve; });
+    this.socketClosures.add(closure);
+    socket.on('close', () => { this.socketClosures.delete(closure); closed(); });
     socket.on("error", () => socket.close());
     socket.on("close", () => this.reconnect(socket));
     socket.on("message", raw => {

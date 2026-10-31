@@ -37,9 +37,13 @@ test("Xiaomi Home settings switch atomically from Profile defaults to one runtim
     const profile = store.read();
     assert.equal(profile.source, "profile");
     assert.equal(profile.settings.writeEnabled, true);
+    assert.equal(profile.settings.allowPublicBaseUrl, true);
+    assert.equal(profile.settings.allowInsecurePrivateHttp, true);
     assert.equal(fs.existsSync(store.settingsPath), false);
 
-    const saved = store.write({ ...profile.settings, eventMonitorEnabled: false }, profile.revision);
+    const saved = store.write({ ...profile.settings, eventMonitorEnabled: false, allowPublicBaseUrl: false, allowInsecurePrivateHttp: false }, profile.revision);
+    assert.equal(saved.settings.allowPublicBaseUrl, false);
+    assert.equal(saved.settings.allowInsecurePrivateHttp, false);
     assert.equal(saved.source, "runtime");
     assert.equal(saved.settings.eventMonitorEnabled, false);
     assert.deepEqual(store.read(), saved);
@@ -231,4 +235,20 @@ test("Xiaomi Home address replacement never presents the old credential to the c
   } finally {
     fs.rmSync(runtimeDir, { recursive: true, force: true });
   }
+});
+
+test("runtime replacement joins the original capture even after another owner rejects cleanup", async () => {
+  const root=temporaryDirectory(); let release!:()=>void;
+  const gate=new Promise<void>(resolve=>{release=resolve;});
+  const owner=new XiaomiHomeRuntimeController(new XiaomiHomeSettingsStore(root,{eventMonitorEnabled:false}),new XiaomiHomeArtifactStore(root),{env:{},deliverEvent:async()=>undefined},new XiaomiHomeCredentialStore(root,testProtector));
+  const previous=Reflect.get(owner,"monitorValue"), capture=Reflect.get(owner,"captureValue");
+  previous.stop=async()=>{throw undefined;}; capture.close=async()=>{await gate;};
+  const next=Reflect.get(owner,"createRuntime").call(owner,owner.settings().settings);
+  const replacing=Reflect.get(owner,"replaceRuntime").call(owner,next) as Promise<void>;
+  let settled=false; const replaced=replacing.then(()=>assert.fail("must report failure"),error=>{settled=true;assert.equal(error,undefined);});
+  const stopping=owner.stop(); const stopped=stopping.then(()=>assert.fail("must report failure"),error=>{assert.ok(error instanceof AggregateError);assert.deepEqual(error.errors,[undefined]);});
+  try {
+    await new Promise<void>(resolve=>setImmediate(resolve)); assert.equal(settled,false);
+    release(); await replaced; await stopped;
+  } finally {release(); await Promise.allSettled([replacing,stopping]); fs.rmSync(root,{recursive:true,force:true});}
 });

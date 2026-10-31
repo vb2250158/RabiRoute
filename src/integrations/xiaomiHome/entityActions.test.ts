@@ -5,7 +5,6 @@ import path from "node:path";
 import test from "node:test";
 import { discoverHomeEntityActions, HOME_ENTITY_ACTION_CAPABILITY, validateHomeActionValue, type HomeServiceDomain } from "./entityActions.js";
 import { XiaomiHomeManagerApiClient } from "./managerApi.js";
-import { authorizeAgentApiOperation } from "../../manager/agentApiPolicy.js";
 
 const services: HomeServiceDomain[] = [
   {domain:"button", services:{press:{target:{entity:[{domain:["button"]}]},fields:{}}}},
@@ -124,8 +123,69 @@ test("lost parameterized notify response stays uncertain and is never resent",as
   }finally{fs.rmSync(runtimeDir,{recursive:true,force:true});}
 });
 
-test("Agent catalog exposes all-device discovery and single-resource actions without another permission",()=>{
-  assert.equal(authorizeAgentApiOperation("GET","/api/agent/xiaomi-home/resources?includeActions=1").allowed,true);
-  assert.equal(authorizeAgentApiOperation("GET","/api/agent/xiaomi-home/entity-actions?resourceId=home%3Aha%3Anotify.robot").allowed,true);
-  assert.equal(authorizeAgentApiOperation("GET","/api/agent/xiaomi-home/entity-actions?token=secret").allowed,false);
+test("Agent catalog exposes all-device discovery and single-resource actions without another permission", { timeout: 15000 }, async t => {
+  const { createServer } = await import("node:http");
+  const { createXiaomiHomeManagerOperations } = await import("./managerOperations.js");
+  const { XiaomiHomeRuntimeController, XiaomiHomeSettingsStore } = await import("./settingsRuntime.js");
+  const { XiaomiHomeArtifactStore } = await import("./artifactStore.js");
+  const { XiaomiHomeCredentialStore } = await import("./credentials.js");
+  const { ManagerPluginRouteRegistry } = await import("../../manager/managerPluginRouteRegistry.js");
+  const { LanAgentAuthority } = await import("../../manager/lanAgentAuthority.js");
+  const { evaluateLanAgentRequest, assertTrustedLanAgentPrincipal } = await import("../../manager/lanAgentRequestAccess.js");
+  const { markAuthenticatedConnectionRequest } = await import("../../manager/connectionRequestAccess.js");
+  const { registerLanAgentBodyGuard, assertLanAgentBodyAuthority } = await import("../../manager/lanAgentBodyAuthority.js");
+  const runtimeDir = fs.mkdtempSync(path.join(os.tmpdir(), "xiaomi-catalog-"));
+  const cleanup: Array<() => Promise<unknown>> = [];
+  t.after(async () => {
+    const results = await Promise.allSettled(cleanup.map(dispose => dispose()));
+    assert.equal(path.dirname(path.resolve(runtimeDir)), path.resolve(os.tmpdir()));
+    fs.rmSync(runtimeDir, { recursive: true, force: true });
+    assert.ok(results.every(result => result.status === "fulfilled"));
+  });
+  const baseUrl = "http://127.0.0.1", calls: string[] = [];
+  const credentials = new XiaomiHomeCredentialStore(runtimeDir, {
+    scheme: "test-protector-v1", protect: value => Buffer.from(value).toString("base64"),
+    unprotect: value => Buffer.from(value, "base64").toString()
+  });
+  credentials.write("owned-test-home-token", baseUrl, {});
+  const resources = [state("button.robot_locate"), state("number.level", { min: 20, max: 40 })];
+  const fetchImpl: typeof fetch = async (input, init) => {
+    const url = new URL(String(input)); assert.equal(url.origin, baseUrl); calls.push((init?.method || "GET") + " " + url.pathname);
+    assert.notEqual(init?.method, "POST", "Discovery cannot dispatch a device action.");
+    if (url.pathname === "/api/states") return new Response(JSON.stringify(resources));
+    if (url.pathname === "/api/services") return new Response(JSON.stringify(services));
+    const resource = resources.find(row => url.pathname === "/api/states/" + row.entity_id); assert.ok(resource);
+    return new Response(JSON.stringify(resource));
+  };
+  const runtime = new XiaomiHomeRuntimeController(new XiaomiHomeSettingsStore(runtimeDir, { baseUrl, eventMonitorEnabled: false }), new XiaomiHomeArtifactStore(runtimeDir), { env: {}, fetchImpl, deliverEvent: async () => { throw new Error("No external delivery is permitted."); } }, credentials);
+  cleanup.push(() => runtime.stop());
+  const fence = { applicationGenerationId: "owned-catalog-generation", managerInstanceId: "owned-catalog-manager" };
+  const registry = new ManagerPluginRouteRegistry();
+  const bundle = createXiaomiHomeManagerOperations({ runtime, lifecycleFence: fence, deliverEvent: async () => { throw new Error("No external delivery is permitted."); } });
+  const operations = registry.registerOperations("xiaomi-catalog-fixture", bundle.operations), proxies = registry.registerHttpProxies("xiaomi-catalog-fixture", bundle.proxies);
+  cleanup.push(() => operations.dispose(), () => proxies.dispose());
+  const authority = new LanAgentAuthority({ statePath: path.join(runtimeDir, "authority.json") });
+  const credential = authority.enroll(authority.issueBootstrapTicket().ticket, "empty-catalog-node");
+  const server = createServer((request, response) => {
+    if (evaluateLanAgentRequest(request, authority, true).kind !== "agent") { response.writeHead(401).end(); return; }
+    markAuthenticatedConnectionRequest(request, () => { assertTrustedLanAgentPrincipal(request); });
+    registerLanAgentBodyGuard(request, body => assertLanAgentBodyAuthority(new URL(request.url!, "http://fixture").pathname, body, undefined));
+    if (!registry.handle(request, new URL(request.url!, "http://fixture"), response)) response.writeHead(404).end();
+  });
+  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  cleanup.push(async () => { server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); });
+  const address = server.address(); assert.ok(address && typeof address !== "string");
+  const request = (suffix: string, init: RequestInit = {}) => fetch("http://127.0.0.1:" + address.port + "/api/agent/xiaomi-home" + suffix, { ...init, headers: { authorization: "Bearer " + credential.token, "content-type": "application/json", ...init.headers } });
+  const catalog = registry.catalogSnapshot().operations;
+  assert.equal(catalog.length, 53); assert.ok(catalog.every(row => row.contract.exposure === "public"));
+  for (const name of ["resources.list", "entity-actions.read"]) assert.ok(catalog.some(row => row.contract.operationId === "manager.xiaomi-home." + name));
+  const all = await request("/resources?includeActions=1"); assert.equal(all.status, 200);
+  const page = (await all.json()).data; assert.equal(page.items.length, resources.length);
+  for (const resource of page.items) { assert.ok(resource.capabilities.includes(HOME_ENTITY_ACTION_CAPABILITY)); assert.equal(resource.actions.length, 1); }
+  const detail = await request("/entity-actions?resourceId=" + encodeURIComponent("home:ha:number.level")); assert.equal(detail.status, 200);
+  const resource = (await detail.json()).data; assert.equal(resource.resourceId, "home:ha:number.level");
+  assert.doesNotThrow(() => validateHomeActionValue(args(resource.actions[0], { value: 30 }), resource.actions[0].argumentsSchema));
+  assert.throws(() => validateHomeActionValue(args(resource.actions[0], { value: 50 }), resource.actions[0].argumentsSchema));
+  const before = calls.length;
+  const invalid = await request("/entity-actions?token=fixture-only"); assert.equal(invalid.status, 401); assert.equal(calls.length, before);
 });

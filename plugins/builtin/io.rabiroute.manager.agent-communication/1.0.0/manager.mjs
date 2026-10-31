@@ -27,13 +27,22 @@ export const activate = definePlugin({
                 }
             });
             try {
-        const codexHookRequestTracker = new runtime.ManagerPluginRequestTracker();
+        ctx.effect(async () => {
+            const registration = await runtime.managerPluginRoutes.registerOperationsAsync(context.identity.instanceId,
+                runtime.createApiDiscoveryOperations(runtime.managerPluginRoutes), context.lifecycle.signal);
+            return () => registration.dispose();
+        }, "activate API contract discovery");
         const uploads = runtime.createAgentUploadRoutes({ store: runtime.agentUploadStore, assertAuthorized: runtime.assertUploadAuthorized, jsonResponse: runtime.jsonResponse });
+        ctx.effect(async () => {
+            const registration = await runtime.managerPluginRoutes.registerOperationsAsync(context.identity.instanceId, uploads.operations, context.lifecycle.signal);
+            return () => registration.dispose();
+        }, "activate executable upload contracts");
         const routes = runtime.createAgentCommunicationRoutes({
             readJsonBody: runtime.readJsonBody,
             jsonResponse: runtime.jsonResponse,
             receiptResponse: deliveryId => runtime.agentSendReceiptResponse(runtime.rootDir, deliveryId),
             findSendTraces: query => runtime.findAgentSendTraces(runtime.rootDir, query),
+            readNodeDeliveryRecords: runtime.readNodeDeliveryRecords,
             send: runtime.performAgentSend,
             readChatHistory: runtime.readAgentChatHistory,
             maintenance: runtime.maintenance,
@@ -44,44 +53,16 @@ export const activate = definePlugin({
             refreshAgentRequestReminderTimers: runtime.refreshAgentRequestReminderTimers,
             publishManagerEvent: runtime.publishManagerEvent
         });
-        ctx.effect(() => {
-            const unregister = runtime.registerManagerPluginHandlerRoutes(runtime.managerPluginRoutes, "manager:agent-communication", "manager.agent-communication.api", [
-                routes.handler,
-                codexHookRequestTracker.wrap((request, requestUrl, response) => (runtime.handleCodexHookApi(request, requestUrl, response, runtime.codexHookContextService))),
-                uploads.handler
-            ], [
-                { routeId: "requests", kind: "exact", path: "/api/agent/requests", methods: ["GET"] },
-                { routeId: "request-resource", kind: "prefix", pathPrefix: "/api/agent/requests/" },
-                { routeId: "agent-help", kind: "exact", path: "/api/agent/help", methods: ["GET"] },
-                { routeId: "qq-diagnostics", kind: "exact", path: "/api/agent/qq/diagnostics", methods: ["GET"] },
-                { routeId: "qq-group-files", kind: "exact", path: "/api/agent/qq/group-files", methods: ["GET"] },
-                { routeId: "qq-stickers", kind: "exact", path: "/api/agent/qq/stickers", methods: ["GET"] },
-                { routeId: "qq-sticker-preview", kind: "prefix", pathPrefix: "/api/agent/qq/stickers/", methods: ["GET"] },
-                { routeId: "qq-history", kind: "exact", path: "/api/agent/qq/history", methods: ["GET"] },
-                { routeId: "qq-messages", kind: "prefix", pathPrefix: "/api/agent/qq/messages/", methods: ["GET"] },
-                { routeId: "chat-history", kind: "exact", path: "/api/agent/chat-history", methods: ["GET"] },
-                { routeId: "send-capabilities", kind: "exact", path: "/api/agent/send/capabilities", methods: ["GET"] },
-                { routeId: "send", kind: "exact", path: "/api/agent/send", methods: ["POST"] },
-                { routeId: "uploads", kind: "prefix", pathPrefix: "/api/agent/uploads/", methods: ["GET", "PUT"], handlerIndex: 2 },
-                { routeId: "send-traces", kind: "exact", path: "/api/agent/send/traces", methods: ["GET"] },
-                { routeId: "send-receipts", kind: "prefix", pathPrefix: "/api/agent/send/receipts/", methods: ["GET"] },
-                // Shared POST prefix dispatches only the exact /verify and /settle suffix contracts.
-                { routeId: "send-receipt-maintenance", kind: "prefix", pathPrefix: "/api/agent/send/receipts/", methods: ["POST"] },
-                { routeId: "codex-context", kind: "exact", path: "/api/codex-hook/context", methods: ["POST"], handlerIndex: 1 },
-                { routeId: "codex-roles", kind: "exact", path: "/api/codex-hook/roles", methods: ["GET"], handlerIndex: 1 },
-                { routeId: "codex-doctor", kind: "exact", path: "/api/codex-hook/doctor", methods: ["GET"], handlerIndex: 1 },
-                { routeId: "codex-sessions", kind: "exact", path: "/api/codex-hook/sessions", methods: ["GET"], handlerIndex: 1 },
-                { routeId: "codex-session-resource", kind: "prefix", pathPrefix: "/api/codex-hook/sessions/", handlerIndex: 1 }
-            ]);
-            return async () => {
-                unregister();
-                await Promise.all([
-                    routes.stopAcceptingAndDrain(),
-                    uploads.stopAcceptingAndDrain(),
-                    codexHookRequestTracker.stop()
-                ]);
-            };
-        }, "activate Manager Agent communication plugin");
+        ctx.effect(async () => {
+            const registration = await runtime.managerPluginRoutes.registerOperationsAsync(context.identity.instanceId, routes.operations, context.lifecycle.signal);
+            return () => registration.dispose();
+        }, "activate executable Agent communication contracts");
+        ctx.effect(async () => {
+            const registration = await runtime.managerPluginRoutes.registerOperationsAsync(context.identity.instanceId,
+                runtime.createCodexHookOperations(runtime.codexHookContextService), context.lifecycle.signal);
+            return () => registration.dispose();
+        }, "activate executable Hook contracts");
+
 
                 await Promise.all(pendingEffects);
                 return disposeStartedEffects;

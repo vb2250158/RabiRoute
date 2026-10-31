@@ -1,6 +1,15 @@
 """One bounded camera process per recording lease; frames stay in memory."""
 from __future__ import annotations
 
+if __package__:
+    from .timeout_settings import get_timeout_seconds
+else:
+    # Camera and snapshot workers also run directly without importing the service.
+    from pathlib import Path
+    import runpy
+    get_timeout_seconds = runpy.run_path(str(Path(__file__).with_name("timeout_settings.py")))["get_timeout_seconds"]
+
+
 import base64
 import io
 import json
@@ -25,7 +34,7 @@ class CameraOwner:
         self._session = ""
         self._index = None
         self._replies = None
-        self._snapshot_timeout = snapshot_timeout
+        self._snapshot_timeout = get_timeout_seconds("speech.camera.snapshot", snapshot_timeout)
 
     def _send(self, command):
         self._process.stdin.write(json.dumps(command) + "\n")
@@ -44,10 +53,10 @@ class CameraOwner:
                 try:
                     process.stdin.write('{"command":"stop"}\n')
                     process.stdin.flush()
-                    process.wait(timeout=2)
+                    process.wait(timeout=get_timeout_seconds("speech.camera.stop", 2))
                 except (OSError, subprocess.TimeoutExpired):
                     process.kill()
-                    process.wait(timeout=2)
+                    process.wait(timeout=get_timeout_seconds("speech.camera.stop", 2))
         finally:
             process.stdin.close()
             # The sole reader closes stdout after EOF; don't close a blocked
@@ -126,7 +135,7 @@ class CameraOwner:
 def camera_worker(index, *, warmup_seconds=CAMERA_WARMUP_SECONDS, warmup_frames=CAMERA_WARMUP_FRAMES):
     commands = queue.Queue(maxsize=8)
     stopped = threading.Event()
-    deadline = [time.monotonic() + CAMERA_LEASE_SECONDS]
+    deadline = [time.monotonic() + get_timeout_seconds("speech.camera.lease", CAMERA_LEASE_SECONDS)]
 
     def receive():
         try:

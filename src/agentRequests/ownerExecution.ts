@@ -3,7 +3,8 @@ import { agentDeliveryPromptHash } from "./store.js";
 import { deliveryIdFromPrompt } from "../shared/deliveryIdentity.js";
 import type { PreparedEndpointDelivery, EndpointDeliveryReceipt } from "./endpointDelivery.js";
 import { sendCodexThreadMessage } from "../codexRuntime.js";
-import { codexDesktopLateStartAccepted, readCodexDesktopThread } from "../codexDesktopBridge.js";
+import { CodexDesktopPromptNotSentError, codexDesktopLateStartAccepted, readCodexDesktopThread } from "../codexDesktopBridge.js";
+import { EndpointDeliveryNotSentError } from "./deliveryFailure.js";
 import { readDshSession, sendDshSessionMessage } from "../dshSessionBridge.js";
 import { readWorkbuddyThread, sendWorkbuddyThreadMessage } from "../workbuddyThreads.js";
 import { sameCodexWorkspace } from "../codexTaskIdentity.js";
@@ -48,7 +49,7 @@ export async function recoverEndpointOwnerReceipt(delivery: PreparedEndpointDeli
 
 /** Executes the already-rendered Manager envelope on the exact existing owner; never resolves/replaces it. */
 export async function executeEndpointOnOwner(delivery: PreparedEndpointDelivery, options: Pick<AgentThreadRequestOptions, "dshBaseUrl"> & { allowedWorkspaces?: string[] },
-  assertAuthorized: () => void | Promise<void>): Promise<{ threadId: string; action: string; transport: string }> {
+  assertAuthorized: () => void | Promise<void>, transport: { sendCodex: typeof sendCodexThreadMessage } = { sendCodex: sendCodexThreadMessage }): Promise<{ threadId: string; action: string; transport: string }> {
   const endpoint = delivery.target;
   const { cwd, model, reasoningEffort, sandbox, dshDeliveryMode } = delivery.executionOptions;
   await assertAuthorized();
@@ -56,8 +57,13 @@ export async function executeEndpointOnOwner(delivery: PreparedEndpointDelivery,
   if (endpoint.provider === "codex") {
     const thread = readCodexDesktopThread(endpoint.sessionId);
     if (!thread || thread.archived || !thread.cwd || !sameCodexWorkspace(thread.cwd, cwd)) throw new Error("Exact Codex owner is unavailable.");
-    return sendCodexThreadMessage({ threadId: endpoint.sessionId, prompt: delivery.prompt, cwd,
-      sandbox: sandbox ?? "workspace-write", model, reasoningEffort, assertAuthorized });
+    try {
+      return await transport.sendCodex({ threadId: endpoint.sessionId, prompt: delivery.prompt, cwd,
+        sandbox: sandbox ?? "workspace-write", model, reasoningEffort, assertAuthorized });
+    } catch (error) {
+      if (error instanceof CodexDesktopPromptNotSentError) throw new EndpointDeliveryNotSentError(error);
+      throw error;
+    }
   }
   if (endpoint.provider === "dsh") {
     if (model !== undefined || reasoningEffort !== undefined || sandbox !== undefined) throw new Error("DSH owner protocol cannot apply model, reasoningEffort or sandbox.");

@@ -97,3 +97,13 @@ test("plan storage recovery preserves healthy liveness while reporting business 
   assert.equal(health.state, "healthy");
   assert.match(health.message, /plan storage recovery continues in the background/i);
 });
+
+
+test("partial plan recovery reports isolated conflicts without promising background repair", () => {
+  const health = buildManagerHealthSnapshot({ ...base, planStorageReady: false, planStoragePartial: true, backgroundIncidentCount: 2 });
+  assert.equal(health.live, true);
+  assert.equal(health.businessReady, false);
+  assert.equal(health.backgroundState, "degraded");
+  assert.match(health.message, /conflicts are isolated/);
+  assert.doesNotMatch(health.message, /continues in the background/);
+});

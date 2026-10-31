@@ -1,6 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
+import { createHash } from "node:crypto";
+import { performance } from "node:perf_hooks";
+import ts from "typescript";
+import { generatePluginApiTypes } from "./generate-plugin-api-types.mjs";
 import { fileURLToPath } from "node:url";
 
 async function pathExists(target) {
@@ -16,7 +20,7 @@ async function bundlePluginSdk(packageRoot, manifest, sdkSource) {
   let sdkRequired = false;
   const sdkTarget = path.join(packageRoot, ".rabi-deps", "plugin-sdk");
   for (const entry of Object.values(manifest.entries ?? {})) {
-    if (entry?.execution !== "in_process") continue;
+    if (entry?.execution !== "in_process" && entry?.execution !== "isolated") continue;
     if (typeof entry.module !== "string") throw new Error(`In-process plugin entry is invalid: ${manifest.id}.`);
     const entryPath = path.resolve(packageRoot, entry.module);
     if (!inside(packageRoot, entryPath)) throw new Error(`Plugin entry escapes its package: ${manifest.id}.`);
@@ -37,34 +41,134 @@ async function bundlePluginSdk(packageRoot, manifest, sdkSource) {
   if (sdkRequired) await fs.cp(sdkSource, sdkTarget, { recursive: true, force: true });
 }
 
+async function physicalPath(target) {
+  try { return await fs.realpath(target); }
+  catch (error) {
+    if (error.code !== "ENOENT") throw error;
+    const parent = path.dirname(target);
+    if (parent === target) throw error;
+    return path.join(await physicalPath(parent), path.basename(target));
+  }
+}
+
+async function validateOutputLocation(root, outputRoot, targets) {
+  const physicalRoot = await physicalPath(root);
+  const physicalOutput = await physicalPath(outputRoot);
+  const protectedRoots = await Promise.all(["plugins", "src", "scripts", "node_modules"].map(name => physicalPath(path.join(root, name))));
+  if (physicalOutput === physicalRoot || inside(physicalOutput, physicalRoot)
+    || protectedRoots.some(source => physicalOutput === source || inside(source, physicalOutput) || inside(physicalOutput, source))) {
+    throw new Error("Plugin output must be separate from source inputs, including linked directories.");
+  }
+  const fullOutput = await physicalPath(path.join(root, "dist/plugins"));
+  if (targets && (physicalOutput === fullOutput || inside(fullOutput, physicalOutput) || inside(physicalOutput, fullOutput))) {
+    throw new Error("Targeted builds require a separate output directory, outside dist/plugins.");
+  }
+  // Existing package directories must not redirect publication outside this output owner.
+  async function checkLinks(directory) {
+    if (!await pathExists(directory)) return;
+    for (const entry of await fs.readdir(directory, { withFileTypes: true })) {
+      const file = path.join(directory, entry.name);
+      if (entry.isSymbolicLink()) {
+        const resolved = await fs.realpath(file);
+        if (!inside(physicalOutput, resolved)) throw new Error(`Plugin output link escapes its owned directory: ${file}`);
+      } else if (entry.isDirectory()) await checkLinks(file);
+    }
+  }
+  await checkLinks(outputRoot);
+}
+
+async function hashInputs(root, inputs) {
+  const files = [];
+  async function walk(file) {
+    const stat = await fs.lstat(file);
+    if (stat.isSymbolicLink()) throw new Error(`Build input must be materialized before packaging: ${file}`);
+    if (stat.isDirectory()) {
+      for (const name of (await fs.readdir(file)).sort()) await walk(path.join(file, name));
+    } else if (stat.isFile()) {
+      const bytes = await fs.readFile(file);
+      files.push({ path: path.relative(root, file).replaceAll("\\", "/"), sha256: createHash("sha256").update(bytes).digest("hex") });
+    }
+  }
+  for (const input of inputs) if (await pathExists(input)) await walk(input);
+  files.sort((a, b) => a.path.localeCompare(b.path));
+  return { files, sha256: createHash("sha256").update(JSON.stringify(files)).digest("hex") };
+}
+
 export async function buildPluginPackages(root = process.cwd(), options = {}) {
+  const started = performance.now();
+  root = path.resolve(root);
+  const targets = options.packages === undefined ? null : new Set(options.packages);
+  if (targets && (!targets.size || [...targets].some(id => typeof id !== "string" || !id))) throw new Error("Select at least one package ID.");
   const sourceRoot = path.join(root, "plugins");
-  const outputRoot = path.join(root, "dist", "plugins");
+  const defaultOutput = path.join(root, "dist", "plugins");
+  const outputRoot = path.resolve(root, options.outputDirectory ?? defaultOutput);
+  if (outputRoot === root || inside(outputRoot, root) || ["plugins", "src", "scripts", "node_modules"].some(name => {
+    const source = path.join(root, name);
+    return outputRoot === source || inside(source, outputRoot);
+  })) throw new Error("Plugin output must be separate from source inputs.");
+  if (targets && (!options.outputDirectory || outputRoot === defaultOutput || inside(outputRoot, defaultOutput) || inside(defaultOutput, outputRoot))) {
+    throw new Error("Targeted builds require a separate output directory, outside dist/plugins.");
+  }
+  await validateOutputLocation(root, outputRoot, targets);
+  if (targets && await pathExists(path.join(outputRoot, "profiles/desktop.json"))) {
+    throw new Error("Targeted output already contains a full profile; use a separate candidate directory.");
+  }
   const packagesRoot = path.join(outputRoot, "packages");
   const profilesRoot = path.join(outputRoot, "profiles");
   const profilePath = path.join(sourceRoot, "profiles", "desktop.json");
-  const profile = JSON.parse(await fs.readFile(profilePath, "utf8"));
+  const profileBytes = await fs.readFile(profilePath);
+  const profile = JSON.parse(profileBytes.toString("utf8"));
   if (profile?.schemaVersion !== 2 || !Array.isArray(profile.readyRequires) || !Array.isArray(profile.instances)) {
     throw new Error("Plugin profile is invalid.");
   }
 
-  const stageRoot = path.join(root, "dist", `.plugin-build-${process.pid}-${Date.now()}`);
+  const selected = profile.instances.filter(instance => !targets || targets.has(instance.package));
+  if (targets) for (const id of targets) {
+    if (!selected.some(instance => instance.package === id)) throw new Error(`Package is not in the build profile: ${id}`);
+  }
+  const unique = [...new Map(selected.map(instance => [`${instance.package}@${instance.version}`, instance])).values()];
+  const contractSource = path.join(root, "src/manager/apiOperationContract.ts");
+  const inputPaths = [profilePath, path.join(sourceRoot, "contracts/plugin-sdk"), contractSource,
+    path.join(root, "scripts/build-plugin-packages.mjs"), path.join(root, "scripts/generate-plugin-api-types.mjs"),
+    path.join(root, "package-lock.json"), ...unique.map(instance => path.join(sourceRoot, "builtin", encodeURIComponent(instance.package), instance.version))];
+  await fs.mkdir(path.dirname(outputRoot), { recursive: true });
+  const stageRoot = await fs.mkdtemp(path.join(path.dirname(outputRoot), ".plugin-build-"));
   const stagedPackagesRoot = path.join(stageRoot, "packages");
   const stagedProfilesRoot = path.join(stageRoot, "profiles");
   const rollbackRoot = path.join(stageRoot, "rollback-output");
-  const sdkSource = path.join(sourceRoot, "contracts", "plugin-sdk");
+  const rawRoot = path.join(stageRoot, "inputs");
+  const sdkSource = path.join(stageRoot, "plugins/contracts/plugin-sdk");
   const copied = [];
   const desired = new Map();
 
-  await fs.rm(stageRoot, { recursive: true, force: true });
   try {
+    // Consume only materialized inputs. Evidence describes the copied bytes, not
+    // an earlier observation of the editable source tree.
+    for (const input of inputPaths) {
+      if (!await pathExists(input)) continue;
+      const destination = path.join(rawRoot, path.relative(root, input));
+      await fs.mkdir(path.dirname(destination), { recursive: true });
+      if (input === profilePath) await fs.writeFile(destination, profileBytes);
+      else await fs.cp(input, destination, { recursive: true, verbatimSymlinks: true });
+    }
+    const rawPaths = inputPaths.map(input => path.join(rawRoot, path.relative(root, input)));
+    const inputs = await hashInputs(rawRoot, rawPaths);
+    if ((await hashInputs(root, inputPaths)).sha256 !== inputs.sha256) throw new Error("Plugin build inputs changed while freezing; prepare a new candidate.");
+    await options.afterInputSnapshot?.();
     await fs.mkdir(stagedProfilesRoot, { recursive: true });
-    await fs.copyFile(profilePath, path.join(stagedProfilesRoot, "desktop.json"));
+    if (!targets) await fs.copyFile(path.join(rawRoot, "plugins/profiles/desktop.json"), path.join(stagedProfilesRoot, "desktop.json"));
+    await fs.cp(path.join(rawRoot, "plugins/contracts/plugin-sdk"), sdkSource, { recursive: true });
+    const rawContract = path.join(rawRoot, "src/manager/apiOperationContract.ts");
+    if (await pathExists(rawContract)) {
+      await fs.mkdir(path.join(stageRoot, "src/manager"), { recursive: true });
+      await fs.copyFile(rawContract, path.join(stageRoot, "src/manager/apiOperationContract.ts"));
+      generatePluginApiTypes(stageRoot);
+    }
 
-    for (const instance of profile.instances) {
+    for (const instance of unique) {
       if (!instance || typeof instance.package !== "string" || typeof instance.version !== "string") throw new Error("Plugin profile entry is invalid.");
       const encodedPackage = encodeURIComponent(instance.package);
-      const source = path.join(sourceRoot, "builtin", encodedPackage, instance.version);
+      const source = path.join(rawRoot, "plugins/builtin", encodedPackage, instance.version);
       const stagedTarget = path.join(stagedPackagesRoot, encodedPackage, instance.version);
       const manifest = JSON.parse(await fs.readFile(path.join(source, "rabi.plugin.json"), "utf8"));
       if (manifest.id !== instance.package || manifest.version !== instance.version || manifest.schemaVersion !== 2) {
@@ -84,6 +188,7 @@ export async function buildPluginPackages(root = process.cwd(), options = {}) {
 
     await fs.cp(sdkSource, path.join(stageRoot, "contracts", "plugin-sdk"), { recursive: true, force: true });
 
+    const preparedMs = performance.now() - started;
     const outputExisted = await pathExists(outputRoot);
     if (outputExisted) await fs.cp(outputRoot, rollbackRoot, { recursive: true, force: true });
     let publishStep = 0;
@@ -107,7 +212,7 @@ export async function buildPluginPackages(root = process.cwd(), options = {}) {
       }
     }
 
-    for (const packageEntry of await fs.readdir(packagesRoot, { withFileTypes: true })) {
+    if (!targets) for (const packageEntry of await fs.readdir(packagesRoot, { withFileTypes: true })) {
       if (!packageEntry.isDirectory()) continue;
       const versions = desired.get(packageEntry.name);
       const packageOutput = path.join(packagesRoot, packageEntry.name);
@@ -124,15 +229,26 @@ export async function buildPluginPackages(root = process.cwd(), options = {}) {
       }
     }
 
+    if (!targets) {
     const outputProfilePath = path.join(profilesRoot, "desktop.json");
     await beforePublishStep("profile:desktop.json");
     await fs.rm(outputProfilePath, { force: true });
     await fs.rename(path.join(stagedProfilesRoot, "desktop.json"), outputProfilePath);
 
+    }
+
     const contractsTarget = path.join(outputRoot, "contracts");
     await beforePublishStep("contracts:plugin-sdk");
     await fs.rm(contractsTarget, { recursive: true, force: true });
     await fs.rename(path.join(stageRoot, "contracts"), contractsTarget);
+    const artifacts = await hashInputs(outputRoot, [...unique.map(instance => path.join(packagesRoot, encodeURIComponent(instance.package), instance.version)), contractsTarget, ...(!targets ? [profilesRoot] : [])]);
+    const evidence = {
+      schemaVersion: 1, kind: "plugin-build", scope: targets ? "selected-packages" : "profile",
+      copied, inputs, artifacts, toolchain: { node: process.version, platform: process.platform, arch: process.arch, typescript: ts.version, builderSha256: createHash("sha256").update(await fs.readFile(fileURLToPath(import.meta.url))).digest("hex"), generatorSha256: createHash("sha256").update(await fs.readFile(new URL("./generate-plugin-api-types.mjs", import.meta.url))).digest("hex") },
+      timing: { preparedMs, totalMs: performance.now() - started },
+      verification: "build-only; no test-cache or runtime acceptance claim"
+    };
+    await fs.writeFile(path.join(outputRoot, "build-evidence.json"), JSON.stringify(evidence, null, 2) + "\n");
     } catch (error) {
       await fs.rm(outputRoot, { recursive: true, force: true });
       if (outputExisted) await fs.rename(rollbackRoot, outputRoot);
@@ -147,6 +263,14 @@ export async function buildPluginPackages(root = process.cwd(), options = {}) {
 
 const entryPath = process.argv[1] ? path.resolve(process.argv[1]) : "";
 if (entryPath === fileURLToPath(import.meta.url)) {
-  const result = await buildPluginPackages();
+  const options = {};
+  for (let index = 2; index < process.argv.length; index += 1) {
+    const flag = process.argv[index];
+    if (!["--package", "--output-directory"].includes(flag) || !process.argv[index + 1]) throw new Error(`Invalid build option: ${flag}`);
+    const value = process.argv[++index];
+    if (flag === "--package") (options.packages ??= []).push(value);
+    else options.outputDirectory = value;
+  }
+  const result = await buildPluginPackages(process.cwd(), options);
   console.log(`Built ${result.copied.length} plugin packages in ${path.relative(process.cwd(), result.outputRoot)}.`);
 }

@@ -18,6 +18,28 @@ function temporaryDir(name: string): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), `rabiroute-${name}-`));
 }
 
+for (const legacyFilter of [false, true]) test(`archive negative hints cannot prove absence after same-size same-mtime replacement (legacy=${legacyFilter})`, t => {
+  const dir = temporaryDir("archive-negative-version");
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const now = Date.parse("2026-10-31T12:00:00Z"), original = { id: "old-a", time: 1, text: "original", adapter: "synthetic", direction: "inbound" as const };
+  appendMessageContextToDir(dir, original, { archiveCheck: false });
+  appendMessageContextToDir(dir, { id: "new-a", time: now / 1000, text: "new", adapter: "synthetic", direction: "inbound" }, { now });
+  const archive = path.join(dir, "conversation/archive", readMessageContextArchiveIndex(dir).archives[0]!.file);
+  const fixed = new Date("2020-01-01T00:00:00Z"); fs.utimesSync(archive, fixed, fixed);
+  appendMessageContextToDir(dir, { id: "new-b", time: now / 1000, text: "new", adapter: "synthetic", direction: "inbound" }, { archiveCheck: false });
+  if (legacyFilter) {
+    const index = readMessageContextArchiveIndex(dir); delete index.archives[0]!.duplicateFilter!.sourceVersion;
+    fs.writeFileSync(messageContextArchiveIndexPath(dir), JSON.stringify(index));
+  }
+  const before = fs.statSync(archive);
+  fs.writeFileSync(archive, fs.readFileSync(archive, "utf8").replace("old-a", "old-b")); fs.utimesSync(archive, fixed, fixed);
+  const after = fs.statSync(archive); assert.equal(after.size, before.size); assert.equal(after.mtimeMs, before.mtimeMs);
+  const current = fs.readFileSync(messageContextCurrentPath(dir)), preservedArchive = fs.readFileSync(archive);
+  const result = appendMessageContextToDir(dir, { ...original, id: "old-b" }, { archiveCheck: false })!;
+  assert.equal(result.appended, false); assert.equal(result.record.id, "old-b"); assert.equal(result.record.sequence, 1);
+  assert.deepEqual(fs.readFileSync(messageContextCurrentPath(dir)), current); assert.deepEqual(fs.readFileSync(archive), preservedArchive);
+});
+
 test("archive range compaction agrees with containment oracle including crossing and equal ranges", t => {
   const dir = temporaryDir("archive-range-oracle");
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
@@ -292,7 +314,7 @@ test("legacy raw logs migrate once while failed Outbox sends stay out of context
   }).map((item) => item.text), ["旧入站", "旧出站", "新入站"]);
 });
 
-test("history deduplicates before filtering and keeps the earliest compareRecords winner", () => {
+test("history deduplicates before filtering and keeps the first physical write", () => {
   const dir = temporaryDir("message-context-filter-order");
   const archiveDir = path.join(dir, "conversation", "archive");
   fs.mkdirSync(archiveDir, { recursive: true });

@@ -75,7 +75,7 @@ try {
       })
     }));
   } else if (command === "doctor") {
-    printJson({ managerUrl: resolveManagerUrl(), ...(await requestManager("/api/codex-hook/doctor")) });
+    printJson({ managerUrl: await resolveManagerUrl(), ...(await requestManager("/api/codex-hook/doctor")) });
   } else {
     process.stdout.write(`${usage()}\n`);
     process.exitCode = command ? 2 : 0;

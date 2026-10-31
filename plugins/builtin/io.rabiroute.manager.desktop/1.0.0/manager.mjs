@@ -198,8 +198,10 @@ export const activate = definePlugin({
                 }
             });
             try {
-        const routes = runtime.createDesktopControlRoutes({
-            jsonResponse: runtime.jsonResponse,
+        const operations = runtime.createDesktopControlOperations({
+            settings: runtime.desktopSettings,
+            readOnly: runtime.managerReadOnly,
+            settingsChanged: settings => runtime.publishManagerEvent("desktop_settings_changed", { webTheme: settings.webTheme }),
             openConfigFilePayload: (type, gatewayId, roleId) => runtime.desktopConfigFilePayload(type, gatewayId, roleId, {
                 routeRoot: runtime.routeRoot,
                 rolesRoot: runtime.rolesRoot,
@@ -210,18 +212,11 @@ export const activate = definePlugin({
                 ensureRoleFolder: runtime.ensureRoleFolder,
                 adapterConfigPath: runtime.adapterConfigPath,
                 writeAdapterConfigFile: route => runtime.writeAdapterConfigFile(route)
-            }),
-            settingsHandler: (request, requestUrl, response) => runtime.handleDesktopSettingsApi(request, requestUrl, response)
+            })
         });
-        ctx.effect(() => {
-            const unregister = runtime.registerManagerPluginHandlerRoutes(runtime.managerPluginRoutes, "manager:desktop", "manager.desktop.api", [routes.handler], [
-                { routeId: "settings", kind: "exact", path: "/api/desktop/settings", methods: ["GET", "PATCH", "PUT"] },
-                { routeId: "open-config-file", kind: "exact", path: "/open-config-file", methods: ["POST"] }
-            ]);
-            return async () => {
-                unregister();
-                await routes.stopAcceptingAndDrain();
-            };
+        ctx.effect(async () => {
+            const registration = await runtime.managerPluginRoutes.registerOperationsAsync(context.identity.instanceId, operations, context.lifecycle.signal);
+            return () => registration.dispose();
         }, "activate Manager desktop plugin");
 
                 await Promise.all(pendingEffects);

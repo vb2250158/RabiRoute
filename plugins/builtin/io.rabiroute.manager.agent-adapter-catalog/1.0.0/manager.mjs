@@ -1,60 +1,40 @@
 import { definePlugin } from "@rabiroute/plugin-sdk";
+
 export const activate = definePlugin({
-    async activate(context) {
+    activate(context) {
         const runtime = context.services.require("host.manager.agent-adapter-catalog@1");
         context.services.provide("manager.agent-adapter-catalog@1", Object.freeze({ instanceId: context.identity.instanceId }));
-        for (const contribution of [])
-            context.contributions.register(contribution);
-        context.effects.add(async () => {
-            const pendingEffects = [];
-            const disposers = [];
-            const disposeStartedEffects = async () => {
-                let firstError;
-                for (const dispose of [...disposers].reverse()) {
-                    try { await dispose(); } catch (error) { firstError ??= error; }
-                }
-                if (firstError) throw firstError;
-            };
-            const ctx = Object.freeze({
-                effect(starter, label) {
-                    const pending = Promise.resolve().then(starter).then(dispose => {
-                        if (typeof dispose !== "function") throw new Error(`Plugin effect did not return a disposer: ${label ?? "effect"}.`);
-                        disposers.push(dispose);
-                        return dispose;
-                    });
-                    pendingEffects.push(pending);
-                    return pending;
-                }
-            });
-            try {
-        const mount = runtime.mountAgentAdapterCatalogPlugin({
-            rootDir: runtime.rootDir,
-            getRuntimes: () => runtime.runtimes.values(),
-            jsonResponse: runtime.jsonResponse,
-            registerRoutes: (instanceId, routeIdPrefix, handlers) => runtime.registerManagerPluginHandlerRoutes(runtime.managerPluginRoutes, instanceId, routeIdPrefix, handlers, [
-                { routeId: "catalog", kind: "exact", path: "/api/agent-adapters/catalog", methods: ["GET"] },
-                { routeId: "scan-agents", kind: "exact", path: "/api/scan/agents", methods: ["GET"] },
-                { routeId: "scan-dsh", kind: "exact", path: "/api/scan/agents/dsh", methods: ["GET"] },
-                { routeId: "scan-grok-bot", kind: "exact", path: "/api/scan/agents/grokBot", methods: ["GET"] },
-                { routeId: "dsh-connection", kind: "exact", path: "/api/agent-adapters/dsh/connection", methods: ["GET", "POST", "DELETE"] },
-                { routeId: "dsh-connections", kind: "exact", path: "/api/agent-adapters/dsh/connections", methods: ["GET"] },
-                { routeId: "hooks-update", kind: "exact", path: "/api/agent-adapters/hooks/update", methods: ["POST"] }
-            ])
-        });
-        runtime.agentAdapterCatalogService = mount.service;
-        ctx.effect(() => async () => {
-            if (runtime.agentAdapterCatalogService === mount.service)
-                runtime.agentAdapterCatalogService = undefined;
-            await mount.stop("Manager Agent adapter catalog plugin stopped.");
-        }, "stop Manager Agent adapter catalog plugin");
+        let mount;
+        let previousService;
+        let disposal;
+        const stopOwner = () => disposal ??= Promise.resolve().then(() =>
+            mount?.stop("Manager Agent adapter catalog plugin stopped."));
 
-                await Promise.all(pendingEffects);
-                return disposeStartedEffects;
-            } catch (error) {
-                await Promise.allSettled(pendingEffects);
-                await disposeStartedEffects().catch(() => {});
-                throw error;
+        context.effects.add(async () => {
+            mount = await runtime.mountAgentAdapterCatalogPlugin({
+                rootDir: runtime.rootDir,
+                getRuntimes: () => runtime.runtimes.values(),
+                adopt: disposer => context.effects.adopt(disposer, "prepared Agent adapter catalog owner"),
+                registerOperations: async definitions => await runtime.managerPluginRoutes.registerOperationsAsync(context.identity.instanceId, definitions, context.lifecycle.signal)
+            });
+            return stopOwner;
+        }, "prepare Manager Agent adapter catalog");
+
+        context.publication.add({
+            publish() {
+                if (!mount) throw new Error("Manager Agent adapter catalog was not prepared.");
+                previousService = runtime.agentAdapterCatalogService;
+                runtime.agentAdapterCatalogService = mount.service;
+            },
+            rollback() {
+                if (runtime.agentAdapterCatalogService === mount?.service)
+                    runtime.agentAdapterCatalogService = previousService;
+            },
+            async retire() {
+                if (runtime.agentAdapterCatalogService === mount.service)
+                    runtime.agentAdapterCatalogService = undefined;
+                await stopOwner();
             }
-        }, "activate io.rabiroute.manager.agent-adapter-catalog");
+        }, "Manager Agent adapter catalog owner");
     }
 }).activate;

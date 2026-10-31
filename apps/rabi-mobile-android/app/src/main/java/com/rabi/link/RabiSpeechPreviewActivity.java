@@ -83,7 +83,7 @@ public final class RabiSpeechPreviewActivity extends Activity {
         executor.execute(() -> {
             try {
                 String deviceId = RabiMobileDeviceIdentity.load(getApplicationContext());
-                RabiSpeechPreviewSnapshot snapshot = new RabiSpeechPreviewClient().load(config, deviceId);
+                RabiSpeechPreviewSnapshot snapshot = new RabiSpeechPreviewClient(this).load(config, deviceId);
                 runOnUiThread(() -> render(snapshot));
             } catch (Throwable error) {
                 runOnUiThread(() -> {

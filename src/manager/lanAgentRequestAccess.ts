@@ -1,33 +1,35 @@
 import type { IncomingMessage } from "node:http";
-import { isLanAgentCredentialToken, type LanAgentAuthority, type LanAgentAuthorizationLease } from "./lanAgentAuthority.js";
+import { isLanAgentCredentialToken, type LanAgentAuthority, type LanAgentConnectionLease } from "./lanAgentAuthority.js";
 import { validateAgentApiRequestTarget } from "./agentApiPolicy.js";
-import { isAgentAdapterType } from "../shared/agentAdapterCapabilities.js";
 
+import { isAgentAdapterType, type AgentAdapterType } from "../shared/agentAdapterCapabilities.js";
+
+type Source = Readonly<{ agentId: string; provider: AgentAdapterType; sessionId: string }>;
+type AdmittedConnection = LanAgentConnectionLease & { agentId: string; source?: Source };
 type AdmissionPolicy = Readonly<{ enabled: boolean; incarnation: string }>;
-type RequestPrincipal = { authority: LanAgentAuthority; token: string; lease: LanAgentAuthorizationLease;
+type RequestPrincipal = { authority: LanAgentAuthority; token: string; lease: AdmittedConnection;
   admission: AdmissionPolicy; readAdmission: () => AdmissionPolicy };
 // Only successful credential-first ingress can issue a request principal.
 const principals = new WeakMap<IncomingMessage, RequestPrincipal>();
 const admittedRequests = new WeakSet<IncomingMessage>();
 
 export function hasTrustedLanAgentPrincipal(request: IncomingMessage): boolean { return principals.has(request); }
-export function assertTrustedLanAgentPrincipal(request: IncomingMessage): LanAgentAuthorizationLease | undefined {
+export function assertTrustedLanAgentPrincipal(request: IncomingMessage): AdmittedConnection | undefined {
   const principal = principals.get(request);
   if (!principal) {
-    if (admittedRequests.has(request) || request.headers?.["x-rabiroute-agent-id"] !== undefined
-      || request.headers?.["x-rabiroute-agent-type"] !== undefined || request.headers?.["x-rabiroute-session-id"] !== undefined) throw new Error("Remote Agent request principal is unavailable.");
+    if (admittedRequests.has(request) || request.headers?.["x-rabiroute-agent-id"] !== undefined || request.headers?.["x-rabiroute-agent-type"] !== undefined || request.headers?.["x-rabiroute-session-id"] !== undefined) throw new Error("Remote Agent request principal is unavailable.");
     return undefined;
   }
   const policy = principal.readAdmission();
   if (!policy.enabled || policy.incarnation !== principal.admission.incarnation) {
     throw new Error("Remote Agent admission was disabled or replaced.");
   }
-  principal.authority.assertAuthorizationLease(principal.token, principal.lease);
+  principal.authority.assertConnectionLease(principal.token, principal.lease);
   return principal.lease;
 }
 
 export type LanAgentRequestAccess =
-  | { kind: "unrelated"; releaseNodeId?: string }
+  | { kind: "unrelated" }
   | { kind: "denied"; status: 400 | 401 | 403; error: string }
   | { kind: "agent"; nodeId: string; agentId: string };
 
@@ -53,11 +55,7 @@ export function evaluateLanAgentRequest(request: IncomingMessage, authority: Lan
     // Nested route evaluation must never replace the original request's admission fence.
     const currentBearer = typeof request.headers.authorization === "string"
       ? request.headers.authorization.match(/^Bearer\s+(.+)$/i)?.[1] ?? "" : "";
-    const sourceChanged = captured.lease.connectionManaged
-      ? request.headers["x-rabiroute-agent-type"] !== captured.lease.binding?.provider
-        || request.headers["x-rabiroute-session-id"] !== captured.lease.binding?.sessionId
-      : request.headers["x-rabiroute-agent-id"] !== captured.lease.agentId;
-    if (currentBearer !== captured.token || sourceChanged) {
+    if (currentBearer !== captured.token || request.headers["x-rabiroute-agent-type"] !== captured.lease.source?.provider || request.headers["x-rabiroute-session-id"] !== captured.lease.source?.sessionId) {
       principals.delete(request);
       return { kind: "denied", status: 401, error: "LAN_AGENT_CREDENTIAL_REQUIRED" };
     }
@@ -76,47 +74,21 @@ export function evaluateLanAgentRequest(request: IncomingMessage, authority: Lan
     || (typeof legacyHeader === "string" && isLanAgentCredentialToken(legacyHeader))
     || [...url.searchParams.values()].some(isLanAgentCredentialToken);
   if (!candidate) return { kind: "unrelated" };
-  if (authority.usesConnectionCredentials?.()) {
-    if (!enabled || !isLanAgentCredentialToken(bearer) || legacyHeader !== undefined
-      || url.searchParams.has("webgui_token") || url.searchParams.has("token")) {
-      return { kind: "denied", status: 401, error: "LAN_AGENT_CREDENTIAL_REQUIRED" };
-    }
-    if ((provider !== undefined || sessionId !== undefined)
-      && (!isAgentAdapterType(provider) || typeof sessionId !== "string" || !sessionId || sessionId !== sessionId.trim()
-        || sessionId.length > 4096 || /[\x00-\x1f\x7f]/.test(sessionId))) {
-      return { kind: "denied", status: 400, error: "LAN_AGENT_EXPLICIT_SOURCE_REQUIRED" };
-    }
-    const node = captured?.lease ?? authority.acquireConnectionLease(bearer);
-    if (!node) return { kind: "denied", status: 403, error: "LAN_AGENT_DISABLED_OR_REVOKED" };
-    if (!validateAgentApiRequestTarget(request.method ?? "GET", target).allowed) {
-      return { kind: "denied", status: 403, error: "LAN_AGENT_INVALID_REQUEST_TARGET" };
-    }
-    // v2 authenticates the computer. Explicit source headers identify this invocation,
-    // not a saved Agent grant; requests without them carry no Agent/session source.
-    const binding = isAgentAdapterType(provider) && typeof sessionId === "string"
-      ? Object.freeze({ agentId: provider, provider, sessionId }) : undefined;
-    const identity = captured?.lease ?? Object.freeze({ ...node, agentId: binding?.agentId ?? node.nodeId,
-      connectionManaged: true as const, ...(binding ? { binding } : {}) });
-    admittedRequests.add(request);
-    principals.set(request, captured ?? { authority, token: bearer, lease: identity, admission, readAdmission });
-    return { kind: "agent", nodeId: identity.nodeId, agentId: identity.agentId };
-  }
-  const releaseQuery = !url.search || (url.pathname !== "/api/lan-agent/releases/manifest"
-    && url.searchParams.size === 1 && /^[a-f0-9]{64}$/.test(url.searchParams.get("release") ?? ""));
-  if (enabled && request.method === "GET" && target.startsWith("/api/lan-agent/releases/") && !/[\\\\%]/.test(target) && !target.split("/").includes("..")
-    && agentHeader === undefined && legacyHeader === undefined && releaseQuery) {
-    const identity = authority.authenticate(bearer);
-    // Release bootstrap authenticates the node without requiring a business Agent profile.
-    if (identity) return { kind: "unrelated", releaseNodeId: identity.nodeId };
-  }
-  if (enabled && request.method === "GET" && ["/api/lan-agent/self", "/meta"].includes(target)
-    && agentHeader === undefined && legacyHeader === undefined && authority.authenticate(bearer)) return { kind: "unrelated" };
-  if (!enabled || typeof agentHeader !== "string" || !agentHeader || !isLanAgentCredentialToken(bearer)
-    || legacyHeader !== undefined || url.searchParams.has("webgui_token") || url.searchParams.has("token")) {
+  if (!enabled || !isLanAgentCredentialToken(bearer) || legacyHeader !== undefined
+    || url.searchParams.has("webgui_token") || url.searchParams.has("token")) {
     return { kind: "denied", status: 401, error: "LAN_AGENT_CREDENTIAL_REQUIRED" };
   }
-  const identity = captured?.lease ?? authority.acquireAuthorizationLease(bearer, agentHeader);
-  if (!identity) return { kind: "denied", status: 403, error: "LAN_AGENT_DISABLED_OR_REVOKED" };
+  if ((provider !== undefined || sessionId !== undefined)
+    && (!isAgentAdapterType(provider) || typeof sessionId !== "string" || !sessionId || sessionId !== sessionId.trim()
+      || sessionId.length > 4096 || /[\x00-\x1f\x7f]/.test(sessionId))) {
+    return { kind: "denied", status: 400, error: "LAN_AGENT_EXPLICIT_SOURCE_REQUIRED" };
+  }
+  const node = captured?.lease ?? authority.acquireConnectionLease(bearer);
+  if (!node) return { kind: "denied", status: 403, error: "LAN_AGENT_DISABLED_OR_REVOKED" };
+  const source: Source | undefined = isAgentAdapterType(provider) && typeof sessionId === "string"
+    ? Object.freeze({ agentId: provider, provider, sessionId }) : undefined;
+  const identity: AdmittedConnection = captured?.lease ?? Object.freeze({ ...node, agentId: source?.agentId ?? node.nodeId,
+    ...(source ? { source } : {}) });
   if (!validateAgentApiRequestTarget(request.method ?? "GET", target).allowed) {
     return { kind: "denied", status: 403, error: "LAN_AGENT_INVALID_REQUEST_TARGET" };
   }
@@ -124,5 +96,5 @@ export function evaluateLanAgentRequest(request: IncomingMessage, authority: Lan
   // The catalog describes contracts, not a second remote-only permission grant.
   admittedRequests.add(request);
   principals.set(request, captured ?? { authority, token: bearer, lease: identity, admission, readAdmission });
-  return { kind: "agent", nodeId: identity.nodeId, agentId: agentHeader };
+  return { kind: "agent", nodeId: identity.nodeId, agentId: identity.agentId };
 }

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { translateText } from "../i18n";
 import { userFacingError } from "../userFacingError";
 import { playbackOutputLabel, playbackOutputError } from "../speech/playbackPresentation";
 import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
@@ -636,7 +637,7 @@ function changeBargeInMode(value: "off" | "echo_protected" | null): void {
   const next = value === "echo_protected" ? "echo_protected" : "off";
   if (
     next === "echo_protected"
-    && !window.confirm("只有当前麦克风链路已验证 AEC 或物理回声隔离时才能启用。否则夜雨自己的 TTS 可能触发误打断。确认继续吗？")
+    && !window.confirm(translateText("只有当前麦克风链路已验证 AEC 或物理回声隔离时才能启用。否则夜雨自己的 TTS 可能触发误打断。确认继续吗？"))
   ) return;
   bargeInMode.value = next;
   scheduleMicrophoneSettingsSave();

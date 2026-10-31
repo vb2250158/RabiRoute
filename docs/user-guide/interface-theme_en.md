@@ -1,6 +1,6 @@
 <!-- docs-language-switch -->
 <div align="center">
-  <a href="./interface-theme.md">Simplified Chinese</a> | English
+English | <a href="./interface-theme.md">简体中文</a> | <a href="./interface-theme_ja.md">日本語</a>
 </div>
 <!-- /docs-language-switch -->
 

@@ -6,7 +6,15 @@
 
 # Rabi Agent
 
-连接器 0.2.5 中，复制接入提示词即包含本次接入和凭据修复授权，无需额外审批或主控 Agent 确认。已有有效凭据直接复用；凭据缺失或被拒绝时，用新票据修复原节点，保留 Agent 绑定、工作目录及用户明确设置的禁用项。客户端在兑换前保存当前用户私有的 `config.json.enrollment.json` 恢复记录，只含节点身份与随机恢复凭据，不保存票据。响应丢失时自动用同一凭据查询自身状态；中断后重新运行同一个 `--bootstrap`，即使 Manager 已重启也可核对已完成的同次兑换。已删除节点或已被替换的旧凭据不能用失效票据恢复。恢复文件保持私有，成功后自动删除；只有票据失效或缺失时才需要重新复制提示词。
+连接器从经身份核验的 `/meta.timeoutOverrides` 获取超时设置，并由现有端点配置拥有者保存 `timeoutOverridesCache`。WebGUI 的超时设置可调整普通请求、发送、上传、下载、发现和本机投递控制等待；普通请求在核验后采用新值，上传/下载从操作开始固定预算，首次无缓存时使用默认值，下一次操作采用已验证缓存。显式调用 `timeoutMs` 和调用方取消信号仍控制该次操作。缓存只用于离线启动，不是独立配置真源；恢复默认会清除缓存中的覆盖值。
+
+连接器 0.2.11 在升级提交后，由新版本生成并替换稳定启动器，再报告更新成功。准备／连接阶段不改旧启动器；提交后写入失败会异常退出并由原 owner 恢复，保留身份、凭据和任务，不会把旧控制代码留到下次手动重启。
+
+连接器 0.2.10 修复启动器状态／恢复命令误用 512 字符握手上限的问题。已鉴权的状态回执可读取完整状态历史，并保留 Unicode 分块文本；握手验证、实例开关与配置均不变。
+
+连接器 0.2.9 起默认以操作系统电脑名显示远端实例，已有未命名节点升级重连后自动补齐。手动别名优先，清空别名恢复电脑名；未上报电脑名的旧节点暂显示实例 ID。
+
+连接器 0.2.6 中，复制接入提示词即包含本次接入和凭据修复授权，无需额外审批或主控 Agent 确认。已有有效凭据直接复用；凭据缺失或被拒绝时，用新票据修复原节点，保留 执行程序设置、工作目录及用户明确设置的禁用项。客户端在兑换前保存当前用户私有的 `config.json.enrollment.json` 恢复记录，只含节点身份与随机恢复凭据，不保存票据。响应丢失时自动用同一凭据查询自身状态；中断后重新运行同一个 `--bootstrap`，即使 Manager 已重启也可核对已完成的同次兑换。已删除节点或已被替换的旧凭据不能用失效票据恢复。恢复文件保持私有，成功后自动删除；只有票据失效或缺失时才需要重新复制提示词。
 
 Rabi Agent 是远端电脑客户端。Windows 提供托盘和状态窗口，macOS/Linux 保持后台运行。它主动连接主控 Rabi Manager，提供电脑接口；可选关联远端 Agent 执行任务，Codex Desktop 使用 IPC，DSH 使用本机 `session.prompt`。
 
@@ -22,7 +30,7 @@ Codex Desktop IPC 自动按显式 `CODEX_DESKTOP_IPC_PATH`、`$CODEX_HOME/ipc/ip
 
 POSIX 升级准备会修复 node-pty 预构建 `spawn-helper` 缺失的当前用户执行位，再实际启动一次空终端验证。不会改变辅助程序内容；验证失败继续保留原连接器。
 
-macOS arm64 已验证默认 Desktop IPC 握手、原生空终端和签名快照定向更新；每台电脑的实际业务投递仍须单独验收。`401 LAN_AGENT_CREDENTIAL_REQUIRED` 是节点凭据错误，应保留原 nodeId 和配置，不以创建主控 Agent、新节点或反复重装代替修复。
+Mac 原生终端与 Desktop IPC 仍需在线真机验收。`401 LAN_AGENT_CREDENTIAL_REQUIRED` 是节点凭据错误，应保留原 nodeId 和配置，不以创建主控 Agent、新节点或反复重装代替修复。
 
 ## 查询 Agent 与明确投递目标
 
@@ -39,7 +47,7 @@ macOS arm64 已验证默认 Desktop IPC 握手、原生空终端和签名快照�
 
 终端运行在连接器的 Windows 用户身份下；使用现有已鉴权连接，不增加第二套管理密码或逐功能授权。一个主程序拥有连接器，连接器拥有原生终端宿主，宿主在 Windows Job Object 中管理 CMD/PowerShell 及其子程序。ConPTY 提供真实终端，网页使用 xterm.js。Windows 10 1809 或更新版本提供所需系统接口。
 
-每节点最多 8 个活动终端，当前连接器保留最多 64 条会话记录；输出仅在内存中保留最近 256 KiB，网页滚动缓存最多 2000 行，不写命令或输出日志。断线/超时后查询已有会话和输入序号，不自动重建或重放。活动终端须退出后再重启或更新连接器。
+每节点最多 8 个活动终端、64 条热会话记录。容量满时，已确认退出的记录无损归档到连接器配置旁的 `terminal-history/`，原 ID 仍可查询；再次打开返回原终态，不启动 shell。活动、关闭中和结果未知的会话继续保留。归档失败只影响新终端准入，已有查询和关闭继续可用。归档不自动删除，因此热记录限额不代表磁盘用量有固定上限。Manager 输出回放属于临时缓存：没有查看者的结束流可被淘汰，再打开已退出终端时会报告输出缺口，不冒充完整空历史。输出仅在内存中保留最近 256 KiB，网页滚动缓存最多 2000 行，不写命令或输出日志。断线/超时后查询已有会话和输入序号，不自动重建或重放。活动终端须退出后再重启或更新连接器。
 
 本机原生终端、HTTP/WebSocket/SSE 链路和输入回执已验证；安装版与真实双机验收另行记录。
 
@@ -68,10 +76,10 @@ macOS arm64 已验证默认 Desktop IPC 握手、原生空终端和签名快照�
 在 MCP 宿主的环境设置中配置：
 
 - `RABIROUTE_HOST_EXE`：可选，本机 Host 可执行文件；未设置时使用当前用户默认安装位置。
-- `RABI_MCP_ALLOWED_ROLES`：必填，JSON 字符串数组，例如 `["example"]`。只允许这些角色，工具参数不能扩权。
-- `RABI_MCP_ALLOW_WRITES`：默认 `false`；明确设置为 `true` 才开放创建、更新及会更新阅读时间的近期记忆详情。
+- `RABI_MCP_ALLOWED_ROLES`：可选 JSON 字符串数组，例如 `["example"]`；未设置不限制角色，显式 `[]` 禁用全部角色，设置名单时只允许其中的角色。
+- `RABI_MCP_ALLOW_WRITES`：默认 `true`；仅显式 `false` 关闭创建、更新及会更新阅读时间的近期记忆详情。
 
-工具覆盖知识搜索、计划列表/详情/状态目录、记忆列表与沉淀详情；开启写入后增加计划及近期记忆创建/更新。更新必须传原样强 ETag，写操作必须提供已保存的稳定幂等键。近期详情也按当前 Manager 的 touch 写入回执合同核对；只读 Manager 缺少该回执时不确认成功。工具不提供删除、沉淀执行、归档写入、附件、任务绑定或任意 HTTP 请求。
+默认工具覆盖知识搜索、计划列表/详情/状态目录、记忆列表/详情，以及计划和近期记忆创建/更新；显式关闭写入后隐藏写操作与会更新阅读时间的近期详情。更新必须传原样强 ETag，写操作必须提供已保存的稳定幂等键。近期详情也按当前 Manager 的 touch 写入回执合同核对；只读 Manager 缺少该回执时不确认成功。工具不提供删除、沉淀执行、归档写入、附件、任务绑定或任意 HTTP 请求。
 
 目前通过 35 项隔离模块、官方 SDK 内存及真实 stdio 子进程测试（正常退出，无日志混入协议），并已实测本机 Host 动态身份发现；测试未读写真实计划或记忆。尚未完成安装发布、外部 Agent 工具注册或手机/眼镜真机验收。手机的 Relay 管理页不是 MCP 宿主；此入口存在不代表眼镜所绑定的 Agent 已加载工具。
 
@@ -81,7 +89,7 @@ macOS arm64 已验证默认 Desktop IPC 握手、原生空终端和签名快照�
 2. 提示词使用默认 30 分钟有效的一次性票据下载已签名程序，并由 `--bootstrap` 兑换独立 `nodeCredential`。凭据存入当前用户私有配置；Manager 只保存密钥 hash 与授权，登录启动项不含凭据。票据不是共享 WebGUI Token，成功兑换后不可重用。
 3. 连接器自动核对原节点身份；`/api/lan-agent/self` 仅供诊断，`connected=false` 不等于凭据失效，不要求 Agent 手动核验或重绑。新接入的 **是否启用Agent** 默认勾选，启用后按本机 Agent 的方式使用，无需另开 API 或 skills 授权。需要消息投递时，在路由的消息适配器选择 **远端Agent(<IP地址>)** 中的准确 Agent 并保存。
 
-首次只安装客户端时，不设置 `RABI_AGENT_TYPE`、Codex 任务或 DSH 会话变量；`--bootstrap` 保存 `agents: []`，正常启动、登录自启和重连均不要求 Agent 任务。已有配置保留原 Agent 与节点身份。后续通过正式入口登记 Agent；普通已鉴权 Agent 可通过相同接口读取计划、记忆与 Skill，不以主控身份为条件。
+首次只安装客户端时，不设置 `RABI_AGENT_TYPE`、Codex 任务或 DSH 会话变量；`--bootstrap` 保存 `agents: []`，正常启动、登录自启和重连均不要求 Agent 任务。已有配置保留原 Agent 与节点身份。后续调用无需登记 Agent；普通已鉴权 Agent 可通过相同接口读取计划、记忆与 Skill，不以主控身份为条件。
 
 远端启用状态只由 Manager 持有；开关修改后立即 PUT 生效，离线也可停用，不必保存执行参数。已接入节点的 CLI、Hook 与执行入口不再使用旧本地 `enabled` 形成第二道门禁。首次接入时，尚无 Manager 决定的旧显式停用状态迁入 Manager；已有启用或停用决定始终优先，重连不会覆盖。保存任务、工作目录和模型不修改启用状态，并移除远端配置中的旧字段。读取失败显示错误，不假定已启用。连接器更新与真实双机调用须分别验收。
 
@@ -97,27 +105,43 @@ node rabi-agent.mjs --bootstrap
 
 ## 从现有任务使用 Manager
 
+**源码新增，安装版未验收：** `--operation <operationId>` 从当前 `GET /api/agent/help` 的 schema v2 目录取得 method/path；`--path-params` 和 `--query` 接受 JSON 对象，其余正文、文件输出与幂等选项复用 `--api`。例如 `--operation manager.api.help --agent-type <type> --id <fullSessionId>` 查询新目录。每次 operation 调用前按需条件核验缓存；目录变更、事件重连与身份变化使缓存失效，业务调用不自动重放。旧部署尚无该目录时使用已知合同的原 `--api`，目录缺项不表示远端被禁用。完整覆盖与迁移状态见[目标架构](../../docs/api-contract-discovery-target-architecture.md)。
+
+operation 接受合同中的旧 ID 别名，仍调用唯一 canonical 处理器。SSE 必须明确提供输出文件或模块 `onChunk` 消费者；模块回调会自动选择流模式。连接器在调用前拒绝当前不支持的 transport，只影响该操作，不将其解释为权限不足。已鉴权隔离 HTTP 已验证新插件自行声明的 JSON 与 SSE 接口无需新增客户端路径映射。
+
 远端优先使用 Hook 提供的已安装连接器 `--api` 命令。本机 Host 发现规则只适用于 Manager 电脑，远端缺少 Host 不代表 Manager 离线。能力与资源入口是 `/api/lan-agent/capabilities`、`/api/lan-agent/resources`。目录只广告实际可读文件和 references；四份公共合同及其英文版均可按返回 ID 读取，不能把任意 Markdown 链接当作资源授权。
 
 ```bash
-node rabi-agent.mjs --api GET /api/lan-agent/capabilities --agent <agentId>
-node rabi-agent.mjs --api GET /api/lan-agent/resources --agent <agentId>
-node rabi-agent.mjs --api GET "/api/lan-agent/resources/read?id=docs%2Frabi-agent-interfaces.md" --agent <agentId>
+node rabi-agent.mjs --api GET /api/lan-agent/capabilities --agent-type <type> --id <fullSessionId>
+node rabi-agent.mjs --api GET /api/lan-agent/resources --agent-type <type> --id <fullSessionId>
+node rabi-agent.mjs --api GET "/api/lan-agent/resources/read?id=docs%2Frabi-agent-interfaces.md" --agent-type <type> --id <fullSessionId>
 ```
 
-通用语法：`--api METHOD /path --agent ID [--body-stdin] [--if-match ETAG] [--idempotency-key KEY]`。选择私有配置中的准确 Agent；CLI 自动读取 `nodeCredential`，不接受旧共享凭据。写入先读现行合同，JSON 通过标准输入传入，按要求提供强 ETag 与稳定幂等键。CLI 前后核对 Manager `/meta`；超时、503、`uncertain` 或写后切代先权威读回，不自动重放，412 重新读取并确认原意。
+可靠 Agent 发送通过原客户端持久受理并后台恢复；本地已受理与目标已送达分开显示。稳定启动器支持 `--delivery-submit`、`--delivery-query`、`--delivery-list`，原 `--api POST /api/agent/threads` 的 send 自动进入同一路径。其他 HTTP 写入仍不自动重放。见[可靠投递与记录](../../docs/reliable-agent-delivery.md)。
 
-通用 HTTP 调用支持 `--raw-stdin`（原文）、`--body-file FILE`（二进制流）、重复 `--header 'Name: value'`（合法业务头）、`--output FILE`（二进制／文本下载）、`--stream --output FILE`（有期限流消费）、`--timeout-ms MS` 和 `--no-replay`。正文格式互斥；连接凭据、内部来源证明、Host 和代际头由传输拥有，不能由调用方覆盖。输出采用同目录临时文件与不覆盖提交，切代或失败不提交。流消费不自动重放；无限直播 stdout 和 WebSocket 并非该 HTTP CLI 的传输能力，不能将不支持解释为未授权。模块可显式使用回调消费流。下载技能继续使用原严格 ZIP 校验入口。
+通用语法：`--api METHOD /path --agent-type TYPE --id FULL_SESSION_ID [--body-stdin] [--if-match ETAG] [--idempotency-key KEY]`。每次调用指定实际 Agent 类型和完整会话 ID，无需预注册或绑定；CLI 自动读取 `nodeCredential`，不接受旧共享凭据。写入先读现行合同，JSON 通过标准输入传入，按要求提供强 ETag 与稳定幂等键。CLI 前后核对 Manager `/meta`；超时、503、`uncertain` 或写后切代先权威读回，不自动重放，412 重新读取并确认原意。
+
+连接器 0.2.12 的 `POST /api/agent/send` 默认沿用文件上传的 30 分钟等待预算，覆盖文件校验和平台上传；显式 `--timeout-ms` 仍优先。取消或超时不证明发送失败，必须按原 deliveryId 查询回执，不能自动重放。NapCat 失败回执保留动作、HTTP 状态、retcode 或安全传输错误码；不返回原始上游文字、凭据或主机路径。历史通用 502 无法补造缺失的底层诊断。
+
+通用 HTTP 调用支持 `--raw-stdin`（原文）、`--body-file FILE`（二进制流）、重复 `--header 'Name: value'`（合法业务头）、`--output FILE`（二进制／文本下载）、`--stream --output FILE`（有期限流消费）、`--timeout-ms MS` 和 `--no-replay`。正文格式互斥；连接凭据、内部来源证明、Host 和代际头由传输拥有，不能由调用方覆盖。输出采用同目录临时文件与不覆盖提交，切代或失败不提交。流消费不自动重放；无限直播 stdout 不在此输出方式内；WebSocket 使用下述显式帧模式，不能将不支持解释为未授权。模块可显式使用回调消费流。下载技能继续使用原严格 ZIP 校验入口。
+
+源码资源接口支持通过 `--header` 传入 `x-rabilink-resource-owner` 选择现有数据目标；它不是连接凭据。generation/instance 头由连接器自动填写，resources key 和内部转发证明仍受传输保护。模块二进制调用使用 `bodyBytes`、`responseMode: "bytes"` 与响应 `bodyBytes`；CLI 使用 `--body-file` / `--output`。见[资源接口合同](../../docs/rabi-agent-interfaces.md#资源缓存与录音归档的可执行合同源码已接入安装版待验收)。安装与真实双机验收待完成。
 
 传输层将近期记忆详情 GET 视为会更新阅读时间的操作：失败或代际变化时不自动重试，并报告 `uncertain`。模块调用方也可通过 `replaySafe: false` 禁止其他有副作用查询的重试；该选项不能让 POST/PATCH 自动重放。`/meta` 的直接对象与 `data` 包装响应均按同一身份核对。本次变更为源码与隔离测试验证，尚未部署。
 
 鉴权成功且未被用户显式禁用的远端 Agent 默认可使用全部公开 RabiPC 接口。操作目录用于发现，不是功能许可白名单；公共管理设置不因远端来源被额外拒绝。连接器自动处理凭据、当前代身份和代际请求头，Agent 无需手动核对身份或重新绑定。共同的参数、对象、Action Gate、文件根、版本和幂等合同仍适用；Host 私有控制协议不是公开 Manager 接口。资源只允许公开文档、技能及其同包直接引用的受控文本，不开放任意文件系统。按需读取 Manager 当前发布的最新技能与合同，不复制计划、记忆或消息处理状态为第二份业务真源。
 
-管理端启停沿用兼容的 `authorization` 接口和 `enabledAgentIds` 状态投影，不是另一个 API 权限开关。并发版本、幂等与异常回读合同见 [接入文档的 API](../../docs/lan-rabi-agent-bootstrap.md#api)。
+远端连接器 0.2.6：电脑凭据认证整台实例，“是否启用Agent”控制整个实例，默认启用。启用后可直接使用主机全部公开接口，包括改名、计划、记忆、Skill、文件与任务；不要求浏览器登录、主控 Agent、会话登记、绑定或逐功能授权。每次 Agent 调用明确传入实际类型与完整会话 Id；目录和会话列表用于查询，不授予权限。
 
-跨 Agent 投递时，远端主会话来源按实例命名空间记录。目前只支持 `responsePolicy: "none"` 的单向投递；因缺少可信回传路由，`responsePolicy: "required"`、`inReplyToRequestId` 正式回复及远端到远端投递均明确拒绝，不能视为完整支持正式回复。远端上下文只走自身专用 `context` 入口，不开放通用 `codex-hook` 接口。
+实例开关使用 `PUT /api/lan-agent/instances/:instanceId/enabled`，正文为布尔值 `{enabled, expectedEnabled}`；先读当前值，保存后读回。逐 Agent 的 `/authorization` 旧接口已删除。实例停用后再启用不会恢复旧在途请求。
 
-远端渠道外发仍遵守 Route 发送权限：`onlyPrimary` 要求可信 `provider`、Route 的 `instanceId`/`nodeId` 与 `agentId`、已批准的会话及 `primary_persona` 身份全部匹配；仅裸会话 ID 同名不会继承本机权限。
+- 跨 Agent 投递显式提供源和目标的类型、完整 Id 与电脑位置，沿同一原始投递和回执核对；不从历史 Agent 绑定猜会话。Hook 统一使用 `/api/codex-hook/context` 并携带本次实际类型与完整 Id。
+
+渠道发送复用已鉴权实例连接，发送者明确提供本次实际类型和完整会话 Id；Route 主控及历史会话绑定不另作许可。保留原 deliveryId、准确目标、渠道参数及 Manager／渠道回执。
+
+源码通用连接器支持目录合同中 `request.pathTails` 声明的多级参数：传入 `path.assetPath` 时保留多级目录并逐段编码，例如 `lib/manager-client.mjs`。资料与签名发布的四个读取 operation 见[Agent 资料与发布合同](../../docs/rabi-agent-interfaces.md#远端-agent-资料与发布文件合同源码已接入安装版待验收)。原签名下载校验与安装回执要求继续有效。
+
+源码中的终端和电脑操作已进入统一接口发现，调用时继续选择原电脑与终端/上传 ID，无需绑定 Agent 后端。输出流断开后查询原状态，输入或文件提交结果不明时保留原序号与 ID。路径、动作和输出恢复见[终端与电脑接口合同](../../docs/rabi-agent-interfaces.md#远端终端与电脑操作合同源码已接入安装版待验收)。安装版与真实双机验收待完成。
 
 ## 上传远端文件，再发送到 QQ 群
 
@@ -126,9 +150,9 @@ node rabi-agent.mjs --api GET "/api/lan-agent/resources/read?id=docs%2Frabi-agen
 前提是独立节点凭据、总控批准的 primary Agent，以及允许发送 `file` 的准确 NapCat Route。上传和发送是两步，上传成功不会自动发群文件。在已校验的发布目录运行：
 
 ```bash
-node rabi-agent.mjs --upload <file> --agent <agentId> --upload-id <UUID>
-node rabi-agent.mjs --api GET /api/agent/uploads/<UUID> --agent <agentId>
-node rabi-agent.mjs --api POST /api/agent/send --agent <agentId> --body-stdin
+node rabi-agent.mjs --upload <file> --agent-type <type> --id <fullSessionId> --upload-id <UUID>
+node rabi-agent.mjs --api GET /api/agent/uploads/<UUID> --agent-type <type> --id <fullSessionId>
+node rabi-agent.mjs --api POST /api/agent/send --agent-type <type> --id <fullSessionId> --body-stdin
 ```
 
 `--upload-id` 必须是预先保存的稳定 UUID，不自动生成。第三条命令从标准输入接收如下 JSON；将身份与目标换成当前模板的准确值，`fileId` 换成上传回执 `data.id`，并为发送保存独立、稳定的 `deliveryId`：
@@ -136,7 +160,7 @@ node rabi-agent.mjs --api POST /api/agent/send --agent <agentId> --body-stdin
 ```json
 {
   "deliveryId": "send-upload-example-001",
-  "sender": { "agentType": "primary_persona", "sessionId": "<approved-complete-session-id>" },
+  "sender": { "agentType": "primary_persona", "sessionId": "<complete-session-id>" },
   "routeId": "<exact-route-id>",
   "channel": "napcat",
   "params": { "target": "group", "groupId": "<group-id>", "instanceId": "<napcat-instance-id>", "replyToMessageId": "" },
@@ -144,17 +168,40 @@ node rabi-agent.mjs --api POST /api/agent/send --agent <agentId> --body-stdin
 }
 ```
 
-上传使用 `PUT /api/agent/uploads/<UUID>` 和原始二进制正文；`Idempotency-Key` 同 UUID，文件名为 URI 编码的 basename，内容附 SHA-256。`GET` 同路径返回 `{code:0,data:{id,fileName,size,sha256,expiresAt}}`，`expiresAt` 为 ISO 时间，不暴露 Manager `path`。默认单文件 2 GiB（2048 MiB，硬上限）、总量 4 GiB、最多 100 个、TTL 24 小时；HTTP 上传跨 owner 总并发上限为 4。超时、503、切代或结果不确定时先核对当前 Manager，再 GET 原 ID；保留原键和文件，不自动重试或换 ID。
+上传使用 `PUT /api/agent/uploads/<UUID>` 和原始二进制正文；`Idempotency-Key` 同 UUID，文件名为 URI 编码的 basename，内容附 SHA-256。`GET` 同路径返回 `{code:0,data:{id,fileName,size,sha256,expiresAt}}`，`expiresAt` 为 ISO 时间，不暴露 Manager `path`。默认单文件 2 GiB（2048 MiB）、总量至少 16 GiB 且能容纳一个配置上限文件、最多 100 个、TTL 24 小时；容量、记录数、TTL 和 HTTP 并发可通过 [Manager 环境设置](../../docs/connection-access.md) 修改。超时、503、切代或结果不确定时先核对当前 Manager，再 GET 原 ID；保留原键和文件，不自动重试或换 ID。
 
-大文件上传使用有背压的流式传输和增量 SHA-256，期限 30 分钟。Manager 的「RabiLink → 配置」可保存 `agentUploads.maxFileMiB`（整数 `1..2048`，默认 `2048`），写入 `data/Config.json`，重启 Manager 后生效；`PATCH /api/rabi/identity` 复用已鉴权连接，远端 Agent 同样可按强 ETag、幂等及参数合同修改；未设置额外功能白名单。客户端硬上限为 2 GiB，服务器配置更小时会拒绝超限文件。
+大文件上传使用有背压的流式传输和增量 SHA-256，期限 30 分钟。Manager 的「RabiLink → 配置」可保存 `agentUploads.maxFileMiB`（整数 `1..8589934591`，默认 `2048`；上界用于精确字节计数），写入 `data/Config.json`，重启 Manager 后生效；`PATCH /api/rabi/identity` 复用已鉴权连接，远端 Agent 同样可按强 ETag、幂等及参数合同修改；未设置额外功能白名单。客户端没有额外 2 GiB 上限；当前已核验 `/meta` 公布 `agentUploads.maxFileMiB` 时遵循该值，旧服务未公布时由服务端判断。
 
 734 MiB（769654784 字节）文件已通过真实客户端 → loopback Manager → 文件存储 → 模拟 NapCat 的 size/SHA-256 集成测试，使用小块生成与读取并禁止大于 8 MiB 的 Buffer 分配/拼接。用 `RABI_TEST_LARGE_UPLOAD=1` 显式运行大文件用例；默认跳过且测试结束清理临时文件。真实 QQ 平台的大小/群权限限制尚未验收。已有旧连接器必须先按上文新版 bootstrap 迁移，缓存旧 Hook 的宿主重载后再试；服务端改限额不等于远端代码已升级。
 
 使用 `fileId` 必须同时填写 `fileSha256=上传 data.sha256`（64 位小写十六进制），避免 24 小时到期后 UUID 复用使旧引用换成其它内容；发送 callback 在 lease 内核对实际 hash，不匹配拒发。
 
-文件归属 `nodeId + agentId`，同 Agent 多 session 可共享，但仍须可信、已批准的 source。`fileId` 仅限 NapCat 群文件，与 `path`/`url`/`fileName` 互斥；不能用于图片、语音或其它渠道。显示名取上传元数据；`payload.text` 可选，`replyToMessageId` 须为空字符串或具体来源消息 ID。Manager 每请求通过内部可信 resolver 校验授权、归属、完整性和 TTL，并以 inflight lease 保护在途文件；不扩大 `allowedFileRoots`，原本地 path 流程照旧。`onlyPrimary` 仍核精确 Route 的远端绑定与获批会话。
+上传者身份用于审计和资源计量，不限制其他已鉴权实例读取或使用同一主机文件。以原 uploadId、fileId 和 SHA-256 查询和引用，继续核对实际字节、TTL、并发与容量。文件发送参数及回执见 [Agent 接口](../../docs/rabi-agent-interfaces.md)。
 
-必须取得 Manager 和渠道发送回执；群文件上传与 caption／整次终态分别确认。caption 缺失不能把整次请求标成成功，不能自动补文字、重发文件或换 deliveryId；先用原请求只读核验，再按用户具体授权处理。异机 NapCat 仍需要能够读取 Manager 文件路径的共享目录，不代表支持任意跨机 NapCat。完整请求头、安全与回读合同见 [Agent 接口](../../docs/rabi-agent-interfaces.md#远端-agent-上传后发送群文件实验合同)。上文正式回复 `none` 限制不变。
+必须取得 Manager 和渠道发送回执；群文件上传与 caption／整次终态分别确认。caption 缺失不能把整次请求标成成功，不能自动补文字、重发文件或换 deliveryId；先用原请求只读核验，再按用户具体授权处理。异机 NapCat 仍需要能够读取 Manager 文件路径的共享目录，不代表支持任意跨机 NapCat。完整请求头、安全与回读合同见 [Agent 接口](../../docs/rabi-agent-interfaces.md#远端-agent-上传后发送群文件实验合同)。正式回复遵循当前 Agent 投递合同及原请求回执。
+
+### WebSocket 命令行（源码已接入，安装版待验收）
+
+使用 `--operation <operationId> --websocket --output frames.jsonl` 按活动目录建立连接；可继续使用 `--path-params`、`--query`、业务 `--header` 和实际调用来源。加入 `--frames-stdin` 后，标准输入逐行发送 JSONL 帧，不作为 HTTP 正文读取：
+
+```bash
+node rabi-agent.mjs --operation <operationId> --websocket --frames-stdin --output frames.jsonl --agent-type <type> --id <fullSessionId> --timeout-ms 30000
+```
+
+| 输入行 | 行为 |
+| --- | --- |
+| `{"type":"json","data":{"type":"example"}}` | 按目标 JSON 合同发送；字段由原协议决定 |
+| `{"type":"text","data":"hello"}` | 发送文本；JSON 模式仍校验文本中的序列化 JSON |
+| `{"type":"binary","data":"AAE="}` | 严格 Base64 解码后发送原字节 |
+| `{"type":"close","code":1000,"reason":"done"}` | 显式请求关闭，不要求 stdin EOF |
+
+目标合同决定支持的帧类型、Schema 和协议首帧。CLI 不生成登录、hello、任务或业务回执，不重新登记 Agent。stdin EOF 只停止发送，继续接收至远端关闭、显式 close 或超时；省略 `--frames-stdin` 为只接收。不能混用 HTTP 正文、`--upload` 或 `--stream`。
+
+输出逐帧使用相同的 json/text/binary JSONL 包装；JSON 是解码值，二进制的 data 为 Base64。stdin 按原生写回调施加背压，输出按磁盘写入施加背压。正常远端 EOF 排空已接收帧，受控取消和异常关闭停止后续消费，并等待已接受写入收尾。JSON/文本中的本连接凭据会脱敏；二进制反射该凭据时失败，不提交文件。
+
+`--timeout-ms` 为包含发现、握手和连接生命期的总期限，默认 30 秒。`--ws-max-output-bytes` 调整本机 JSONL 文件预算，默认 256 MiB；透明代理的本机消息/缓冲预算可用 `--ws-max-message-bytes`、`--ws-max-buffered-bytes` 调整。`--ws-protocols '["protocol.v1"]'` 显式选择子协议。这些预算不增加服务端业务限制或功能许可。
+
+文件在正常 1000 关闭、写入完成及原 Manager generation/instance 复核通过后不覆盖提交；失败清理本次临时文件。stdout 只输出回执和文件摘要。`ok`、`framesSent` 与 `framesReceived` 说明本次传输/捕获；`businessOutcome: "not-evaluated"` 明示业务结果仍由原协议确认，`inputComplete` 说明输入是否消费完毕。任何失败均不重连或重放。
 
 ## 旧安装与运行边界
 
@@ -164,3 +211,17 @@ node rabi-agent.mjs --api POST /api/agent/send --agent <agentId> --body-stdin
 - 不包含 Manager、Gateway、WebGUI、配对码或设备密码；使用标准 DNS-SD 动态定位原 Manager，不扫描端口。不启动备用 Runtime；Codex owner 或 DSH 绑定不可用时失败，不互相回退。
 - 电脑作为实例，每个实例可增加多个 Agent；不再从旧单任务配置自动生成 `default` Agent。已有目录身份保留，投递必须明确指定类型和完整会话 ID；执行配置保存在该电脑，Manager 统一管理。
 - 节点在线、任务已入队或本机夹具通过都不等于真实回复完成。跨机连续投递、登录启动、断网与升级恢复，以及高级计划/记忆工作流仍需实机验收。
+
+## 电脑上传的终态历史
+
+源码能力：上传已确认提交或中止、原文件句柄已真正关闭且临时数据已清理后，客户端先保存原 ID 的不可变终态回执，再确认该操作。默认最多64条上传记录保留在热表；显式 `RABI_AGENT_COMPUTER_MAX_UPLOAD_RECORDS` 配置仍控制热表预算（0 表示不限制）；新上传需要容量时，只移出已有冷回执的已关闭终态。正在上传、清理未确认或归档未确认的记录不会被当作历史清掉；原有4个上传资源配额不增加。
+
+历史位于客户端原本机数据目录的「runtime/computer-upload-history/<config-file-hash>/v1/」，按上传 ID 的 SHA-256 分片直接查找，不在启动时加载全部历史。同目录的不同配置文件使用不同命名空间，沿用既有投递队列按配置文件路径派生的稳定身份，不依赖凭据或 Manager 代际。显式配置文件位于源码树时，历史仍留在客户端数据目录；数据根显式落在源码树时，「computer-upload-history」目录必须保持 Git 忽略且未跟踪。
+
+同一 ID、同一参数的 begin/status/commit/abort 继续返回原事实；已中止上传不能重新提交，同 ID 不同参数拒绝。热整理不会重新写入上传内容、再次提交目标文件或换 ID。归档 I/O 失败只使该操作报错，原热记录和用户文件保留；若文件已经提交，先查询原 ID。已知真正关闭的失败临时元数据可以从同一终态事实重建到重试槽；原不完整槽在最终回执发布前保留该 ID。跨进程残缺或冲突证据报错并保留，不当作新上传。
+
+这是容量触发的事实归档与缓存整理，覆盖通用24/72小时窗口：同一小时的连续完成也不能永久填满64条容量。活动时间取实际关闭完成时间，查询不续活历史。冷回执不自动过期或删除；磁盘故障和句柄关闭未知必须如实报告。历史功能不改变连接鉴权、用户禁用项或电脑接口权限，也不自动恢复旧版本无法证明的上传结果。安装版客户端升级、在用状态迁移与真实双机验收仍须分别验证。
+
+## 管理请求的故障隔离
+
+会话列表、会话读取及原投递回执核对使用独立且有界的读取通道；同一原投递回执仍串行处理。创建和修改使用独立且有界的管理写入队列，保留原先彼此的顺序；已准备正文派发使用独立且有界的处理通道，同一原回执继续互斥。它们不再等待旧任务的宿主接受回执，真实正文仍由原宿主和原投递回执确认，不重放未知结果。此改动不证明所有宿主管理超时已修复；超时或结果未知仍须核对原 ID，不自动重发。

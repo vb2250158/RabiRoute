@@ -1,3 +1,4 @@
+import { getTimeoutMs } from "./timeoutSettings.js";
 import fs from "node:fs";
 import path from "node:path";
 import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
@@ -25,7 +26,7 @@ function powerShellDpapi(script: string, input: string): string {
     input,
     encoding: "utf8",
     windowsHide: true,
-    timeout: 15_000,
+    timeout: getTimeoutMs("backend.shared.localSecretProtection.powerShellDpapi.spawnSync.timeout", 15_000),
     maxBuffer: 4 * 1024 * 1024
   });
   if (result.status !== 0 || result.error || !String(result.stdout || "").trim()) {

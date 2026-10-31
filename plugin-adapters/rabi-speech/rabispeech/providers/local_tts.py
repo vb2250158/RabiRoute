@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from ..timeout_settings import get_timeout_seconds
+
+
 import asyncio
 import json
 from pathlib import Path
@@ -74,7 +77,7 @@ class LocalTtsProvider:
         if request.instructions:
             payload["instructions"] = request.instructions
 
-        timeout = httpx.Timeout(self.settings.timeout_seconds, connect=10.0)
+        timeout = httpx.Timeout(get_timeout_seconds("speech.localTts.request", self.settings.timeout_seconds), connect=get_timeout_seconds("speech.localTts.connect", 10))
         async with httpx.AsyncClient(timeout=timeout) as client:
             response = await client.post(f"{worker_url}/speak", json=payload)
             response.raise_for_status()
@@ -82,7 +85,7 @@ class LocalTtsProvider:
             job_id = str(status.get("id") or "").strip() if isinstance(status, dict) else ""
             if not job_id:
                 raise RuntimeError("Local TTS worker returned no job id.")
-            deadline = asyncio.get_running_loop().time() + self.settings.timeout_seconds
+            deadline = asyncio.get_running_loop().time() + get_timeout_seconds("speech.localTts.request", self.settings.timeout_seconds)
             while str(status.get("status") or "").lower() not in {"done", "error", "failed", "missing"}:
                 if asyncio.get_running_loop().time() >= deadline:
                     raise TimeoutError(f"Timed out waiting for local TTS worker job {job_id}.")

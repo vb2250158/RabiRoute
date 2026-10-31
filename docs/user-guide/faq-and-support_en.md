@@ -1,6 +1,6 @@
 <!-- docs-language-switch -->
 <div align="center">
-English | <a href="./faq-and-support.md">简体中文</a>
+English | <a href="./faq-and-support.md">简体中文</a> | <a href="./faq-and-support_ja.md">日本語</a>
 </div>
 <!-- /docs-language-switch -->
 

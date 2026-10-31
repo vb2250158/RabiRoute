@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .timeout_settings import get_timeout_seconds
+
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -20,7 +22,7 @@ def _run_host_command(arguments: Sequence[str]) -> bool:
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
-            timeout=35,
+            timeout=get_timeout_seconds("desktop.host.command", 35),
             creationflags=creationflags,
             check=False,
         )

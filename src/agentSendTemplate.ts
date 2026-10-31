@@ -18,7 +18,7 @@ export function agentSendRequestTemplateForSource(context: Record<string, unknow
               : adapterType === "speech"
                 ? "speech"
                 : adapterType === "fennenote"
-                  ? (outputAdapter === "tts" ? "speech" : "fennenote")
+                  ? "speech"
                   : targetType === "group" || targetType === "private"
                     ? "napcat"
                     : undefined;
@@ -46,9 +46,7 @@ export function agentSendRequestTemplateForSource(context: Record<string, unknow
               }
             : channel === "speech"
               ? { sessionId: context.sessionId }
-              : channel === "fennenote"
-                ? { sessionId: context.sessionId, mode: "playback" }
-                : channel === "role_panel"
+              : channel === "role_panel"
                   ? { roleId: context.roleId, messageId: context.messageId }
                   : {
                       roleId: context.roleId,

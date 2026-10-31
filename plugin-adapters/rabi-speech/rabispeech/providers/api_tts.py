@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from ..timeout_settings import get_timeout_seconds
+
+
 import os
 import tempfile
 from pathlib import Path
@@ -63,7 +66,7 @@ class ApiTtsProvider:
         if request.instructions:
             payload["instructions"] = request.instructions
 
-        timeout = httpx.Timeout(self.settings.timeout_seconds, connect=15.0)
+        timeout = httpx.Timeout(get_timeout_seconds("speech.apiTts.request", self.settings.timeout_seconds), connect=get_timeout_seconds("speech.apiTts.connect", 15))
         async with httpx.AsyncClient(timeout=timeout, transport=self.transport) as client:
             response = await client.post(f"{self.settings.base_url}/audio/speech", headers=headers, json=payload)
             response.raise_for_status()

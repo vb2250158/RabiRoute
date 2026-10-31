@@ -1,8 +1,9 @@
+import { getTimeoutMs } from "../shared/timeoutSettings.js";
 import { ProgressivePlanStorageStartup } from "./progressivePlanStorageStartup.js";
 import { StorageTerminationError, type StorageStartupLimits } from "./boundedStorageStartup.js";
 import type { PlanStorageStartupGateSummary } from "./planStorageStartupGate.js";
 
-export type PlanStorageStartupLifecycleState = "idle" | "running" | "ready" | "degraded" | "stopping" | "stopped";
+export type PlanStorageStartupLifecycleState = "idle" | "running" | "ready" | "partial" | "degraded" | "stopping" | "stopped";
 
 export type PlanStorageStartupLifecycleSnapshot = Readonly<{
   state: PlanStorageStartupLifecycleState;
@@ -62,7 +63,7 @@ export class PlanStorageStartupLifecycle {
   private runtimeSnapshot: PlanStorageStartupLifecycleSnapshot;
 
   constructor(private readonly options: PlanStorageStartupLifecycleOptions) {
-    this.attemptTimeoutMs = positiveInteger(options.attemptTimeoutMs, 180_000);
+    this.attemptTimeoutMs = positiveInteger(options.attemptTimeoutMs, getTimeoutMs("startup.planStorage", 180_000));
     this.retryBaseMs = positiveInteger(options.retryBaseMs, 5_000);
     this.retryMaxMs = Math.max(this.retryBaseMs, positiveInteger(options.retryMaxMs, 60_000));
     const loader = new ProgressivePlanStorageStartup({
@@ -89,7 +90,7 @@ export class PlanStorageStartupLifecycle {
 
   onReady(listener: (summary: PlanStorageStartupGateSummary) => void): () => void {
     this.readyListeners.add(listener);
-    if (this.runtimeSnapshot.state === "ready" && this.runtimeSnapshot.summary) {
+    if ((this.runtimeSnapshot.state === "ready" || this.runtimeSnapshot.state === "partial") && this.runtimeSnapshot.summary) {
       queueMicrotask(() => {
         if (this.readyListeners.has(listener) && this.runtimeSnapshot.summary) listener(this.runtimeSnapshot.summary);
       });
@@ -98,7 +99,7 @@ export class PlanStorageStartupLifecycle {
   }
 
   start(): void {
-    if (this.active || this.terminationUnconfirmed || this.runtimeSnapshot.state === "ready" || this.runtimeSnapshot.state === "stopped") return;
+    if (this.active || this.terminationUnconfirmed || this.runtimeSnapshot.state === "ready" || this.runtimeSnapshot.state === "partial" || this.runtimeSnapshot.state === "stopped") return;
     this.active = true;
     this.startAttempt();
   }
@@ -224,8 +225,8 @@ export class PlanStorageStartupLifecycle {
       }
       this.active = false;
       this.transition({
-        state: "ready",
-        incidents: 0,
+        state: summary.packageConflicts?.length ? "partial" : "ready",
+        incidents: summary.packageConflicts?.length ?? 0,
         completedAt: new Date().toISOString(),
         deadlineAt: undefined,
         childPid: undefined,

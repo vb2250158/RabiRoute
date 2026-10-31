@@ -8,6 +8,15 @@ import { config } from "../config.js";
 import { createMessageAdapterRuntime } from "../runtime/messageAdapterRuntime.js";
 import { rabiLinkMessageAdapterDefinition } from "./builtinMessageAdapters.js";
 import { rabiLinkRelayWorkerSnapshotForTests } from "./rabilinkRelayWorker.js";
+import { createRabiLinkAdapter } from "./rabilinkAdapter.js";
+import { ManagerPluginRouteRegistry } from "../manager/managerPluginRouteRegistry.js";
+
+function controlledRabiLinkDefinition() {
+  const registry = new ManagerPluginRouteRegistry();
+  return { ...rabiLinkMessageAdapterDefinition, create: () => createRabiLinkAdapter({
+    apiOperations: { registerExternalListener: definition => registry.registerExternalListener("rabilink-fixture", definition) }
+  }) };
+}
 
 async function listen(server: http.Server, port = 0): Promise<number> {
   await new Promise<void>((resolve, reject) => {
@@ -51,7 +60,7 @@ async function get(port: number, requestPath: string): Promise<{ statusCode: num
   });
 }
 
-function configureRabiLink(t: test.TestContext, port: number, relayEnabled: boolean): string {
+function configureRabiLink(t: test.TestContext, port: number, relayEnabled: boolean, dispose: () => Promise<void>): string {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-rabilink-adapter-"));
   const previous = {
     dataDir: config.dataDir,
@@ -71,18 +80,18 @@ function configureRabiLink(t: test.TestContext, port: number, relayEnabled: bool
     rabiLinkRelayUrl: relayEnabled ? "https://relay.test" : "",
     rabiLinkRelayDeviceId: "adapter-test"
   });
-  t.after(() => {
-    Object.assign(config, previous);
-    fs.rmSync(dataDir, { recursive: true, force: true });
+  t.after(async () => {
+    try { await dispose(); }
+    finally { Object.assign(config, previous); fs.rmSync(dataDir, { recursive: true, force: true }); }
   });
   return dataDir;
 }
 
 test("RabiLink Fiber owns the HTTP listener and a disabled Relay lease", async (t) => {
   const port = await freePort();
-  const dataDir = configureRabiLink(t, port, false);
-  const runtime = await createMessageAdapterRuntime([rabiLinkMessageAdapterDefinition]);
-  t.after(() => runtime.dispose());
+  let runtime: Awaited<ReturnType<typeof createMessageAdapterRuntime>> | undefined;
+  const dataDir = configureRabiLink(t, port, false, async () => { await runtime?.dispose(); });
+  runtime = await createMessageAdapterRuntime([controlledRabiLinkDefinition()]);
 
   const mounted = await runtime.mount("rabilink");
   const response = await get(port, "/rabilink-test");
@@ -102,12 +111,12 @@ test("RabiLink Fiber owns the HTTP listener and a disabled Relay lease", async (
 
 test("RabiLink port conflicts reject mounting before a Relay worker starts", async (t) => {
   const port = await freePort();
-  configureRabiLink(t, port, true);
+  let runtime: Awaited<ReturnType<typeof createMessageAdapterRuntime>> | undefined;
+  configureRabiLink(t, port, true, async () => { await runtime?.dispose(); });
   const blocker = http.createServer();
   await listen(blocker, port);
   t.after(() => close(blocker));
-  const runtime = await createMessageAdapterRuntime([rabiLinkMessageAdapterDefinition]);
-  t.after(() => runtime.dispose());
+  runtime = await createMessageAdapterRuntime([controlledRabiLinkDefinition()]);
 
   await assert.rejects(runtime.mount("rabilink"), (error: NodeJS.ErrnoException) => {
     assert.equal(error.code, "EADDRINUSE");

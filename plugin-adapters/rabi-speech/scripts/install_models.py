@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import math
 import json
 import os
 import platform
@@ -10,6 +11,8 @@ import time
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+import runpy
+get_timeout_seconds = runpy.run_path(str(Path(__file__).resolve().parents[1] / "rabispeech" / "timeout_settings.py"))["get_timeout_seconds"]
 
 
 CATALOG_PATH = Path(__file__).resolve().parents[1] / "model-catalog.json"
@@ -63,8 +66,8 @@ def parse_args() -> argparse.Namespace:
         help="Model alias to install. Repeat the option or use all.",
     )
     parser.add_argument("--max-workers", type=int, default=4)
-    parser.add_argument("--download-timeout", type=int, default=180)
-    parser.add_argument("--etag-timeout", type=int, default=60)
+    parser.add_argument("--download-timeout", type=float, default=get_timeout_seconds("speech.install.download", float(os.environ.get("HF_HUB_DOWNLOAD_TIMEOUT", 180))))
+    parser.add_argument("--etag-timeout", type=float, default=get_timeout_seconds("speech.install.metadata", float(os.environ.get("HF_HUB_ETAG_TIMEOUT", 60))))
     parser.add_argument("--list", action="store_true", help="List aliases and repositories without downloading.")
     return parser.parse_args()
 
@@ -85,8 +88,8 @@ def main() -> int:
     # Hugging Face reads these values when its constants module is imported.
     # Speech checkpoints are multi-gigabyte files, so the default ten-second
     # timeout is too aggressive on a residential connection.
-    os.environ.setdefault("HF_HUB_DOWNLOAD_TIMEOUT", str(max(10, args.download_timeout)))
-    os.environ.setdefault("HF_HUB_ETAG_TIMEOUT", str(max(10, args.etag_timeout)))
+    os.environ["HF_HUB_DOWNLOAD_TIMEOUT"] = str(max(1, math.ceil(args.download_timeout)))
+    os.environ["HF_HUB_ETAG_TIMEOUT"] = str(max(1, math.ceil(args.etag_timeout)))
 
     snapshot_download = None
     if any(str(MODEL_BY_ALIAS[alias].get("kind")) == "huggingface" for alias in aliases):
@@ -107,7 +110,7 @@ def main() -> int:
             started = time.perf_counter()
             print(f"INSTALLING {alias} from {url} -> {target}", flush=True)
             try:
-                download_file(url, target, checksum)
+                download_file(url, target, checksum, timeout_seconds=args.download_timeout)
                 result = InstallResult(
                     alias=alias,
                     repository=url,
@@ -193,7 +196,7 @@ def write_manifest(root: Path, results: list[InstallResult]) -> None:
     )
 
 
-def download_file(url: str, target: Path, expected_sha256: str) -> None:
+def download_file(url: str, target: Path, expected_sha256: str, timeout_seconds: float | None = None) -> None:
     from urllib.request import Request, urlopen
 
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -201,7 +204,7 @@ def download_file(url: str, target: Path, expected_sha256: str) -> None:
     digest = hashlib.sha256()
     request = Request(url, headers={"User-Agent": "RabiSpeech-model-installer"})
     try:
-        with urlopen(request, timeout=180) as response, temporary.open("wb") as output:
+        with urlopen(request, timeout=timeout_seconds if timeout_seconds is not None else get_timeout_seconds("speech.install.download", 180)) as response, temporary.open("wb") as output:
             while chunk := response.read(1024 * 1024):
                 output.write(chunk)
                 digest.update(chunk)

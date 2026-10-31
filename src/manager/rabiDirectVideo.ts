@@ -1,3 +1,4 @@
+import { getTimeoutMs } from "../shared/timeoutSettings.js";
 import { randomUUID } from "node:crypto";
 import { createWriteStream, mkdirSync, type WriteStream } from "node:fs";
 import { writeFile } from "node:fs/promises";
@@ -5,15 +6,20 @@ import path from "node:path";
 import { RTCPeerConnection } from "werift";
 
 export const DIRECT_VIDEO_CHANNEL = "rabi.h264.v1";
-export const DIRECT_VIDEO_SIGNAL_MAX_BYTES = 64 * 1024;
+export const DIRECT_VIDEO_LIMITS = Object.freeze({ signalBytes: 64 * 1024, sdpBytes: 60 * 1024, sessions: 2,
+  sessionBytes: 256 * 1024 * 1024, frameBytes: 16 * 1024, get connectionMs() { return getTimeoutMs("video.directConnect", 45000); }, get idleMs() { return getTimeoutMs("video.directIdle", 15000); }, outputBufferBytes: 1024 * 1024 });
+export const DIRECT_VIDEO_OFFER_FIELDS = Object.freeze(["sdp", "deviceId"] as const);
+export const DIRECT_VIDEO_DEVICE_ID_PATTERN = "^[a-zA-Z0-9_-]{1,128}$";
+const deviceIdPattern = new RegExp(DIRECT_VIDEO_DEVICE_ID_PATTERN);
+export const DIRECT_VIDEO_SIGNAL_MAX_BYTES = DIRECT_VIDEO_LIMITS.signalBytes;
 
 /** Signalling accepts SDP only. Camera bytes are accepted exclusively over DTLS/SCTP. */
 export function validateDirectVideoOffer(value: unknown): { sdp: string; deviceId: string } {
   if (!value || typeof value !== "object") throw new Error("Video offer is required.");
   const input = value as Record<string, unknown>;
-  if (Object.keys(input).some(key => !["sdp", "deviceId"].includes(key))) throw new Error("Only SDP and deviceId are accepted.");
-  if (typeof input.deviceId !== "string" || !/^[a-zA-Z0-9_-]{1,128}$/.test(input.deviceId)) throw new Error("Invalid video device identity.");
-  if (typeof input.sdp !== "string" || Buffer.byteLength(input.sdp) > 60 * 1024
+  if (Object.keys(input).some(key => !(DIRECT_VIDEO_OFFER_FIELDS as readonly string[]).includes(key))) throw new Error("Only SDP and deviceId are accepted.");
+  if (typeof input.deviceId !== "string" || !deviceIdPattern.test(input.deviceId)) throw new Error("Invalid video device identity.");
+  if (typeof input.sdp !== "string" || Buffer.byteLength(input.sdp) > DIRECT_VIDEO_LIMITS.sdpBytes
       || !input.sdp.startsWith("v=0") || !input.sdp.includes("m=application ")
       || / typ relay(?: |\r|\n|$)/.test(input.sdp)
       || /^m=(audio|video) /m.test(input.sdp)) throw new Error("A direct-only data-channel SDP offer is required.");
@@ -33,7 +39,7 @@ export class RabiDirectVideo {
 
   constructor(private readonly directory: string,
     private readonly stunUrls: string[] = ["stun:stun.l.google.com:19302"],
-    private readonly maxBytes = 256 * 1024 * 1024) {
+    readonly maxBytes = DIRECT_VIDEO_LIMITS.sessionBytes) {
     if (stunUrls.some(url => !/^stun:[a-zA-Z0-9.\-]+:\d+$/.test(url))) throw new Error("Only STUN URLs are allowed; TURN is disabled.");
   }
 
@@ -41,16 +47,18 @@ export class RabiDirectVideo {
     return [...this.sessions.values()].map(({ id, deviceId, bytes, state }) => ({ id, deviceId, bytes, state, relay: false }));
   }
 
+  isSessionActive(id: string): boolean { return !this.stopped && this.sessions.get(id)?.closed === false; }
+
   async offer(value: unknown) {
     const input = validateDirectVideoOffer(value);
     if (this.stopped) throw new Error("Video receiver is stopped.");
-    if (this.sessions.size >= 2 || [...this.sessions.values()].some(s => s.deviceId === input.deviceId)) {
+    if (this.sessions.size >= DIRECT_VIDEO_LIMITS.sessions || [...this.sessions.values()].some(s => s.deviceId === input.deviceId)) {
       throw new Error("A video session is already active or receiver capacity is reached.");
     }
     const id = randomUUID();
     const peer = new RTCPeerConnection({ iceServers: this.stunUrls.map(urls => ({ urls })), iceUseIpv4: true, iceUseIpv6: true });
     const session: Session = { id, deviceId: input.deviceId, peer, bytes: 0, state: "connecting",
-      timer: setTimeout(() => this.close(id, "connection_timeout"), 45_000),
+      timer: setTimeout(() => this.close(id, "connection_timeout"), DIRECT_VIDEO_LIMITS.connectionMs),
       file: path.join(this.directory, `${id}.h264`), closed: false };
     this.sessions.set(id, session);
     peer.connectionStateChange.subscribe(state => {
@@ -70,13 +78,13 @@ export class RabiDirectVideo {
           else this.close(id, "invalid_message");
           return;
         }
-        if (!data.length || data.length > 16 * 1024 || session.bytes + data.length > this.maxBytes) {
+        if (!data.length || data.length > DIRECT_VIDEO_LIMITS.frameBytes || session.bytes + data.length > this.maxBytes) {
           this.close(id, "size_limit"); return;
         }
         try {
           if (!session.output) {
             mkdirSync(this.directory, { recursive: true });
-            session.output = createWriteStream(session.file, { flags: "wx", highWaterMark: 1024 * 1024 });
+            session.output = createWriteStream(session.file, { flags: "wx", highWaterMark: DIRECT_VIDEO_LIMITS.outputBufferBytes });
             session.output.on("error", () => this.close(id, "storage_error"));
           }
           // Never silently drop H.264 bytes: terminate on storage backpressure.
@@ -85,7 +93,7 @@ export class RabiDirectVideo {
           if (!canContinue) { this.close(id, "storage_backpressure"); return; }
           session.state = "receiving";
           clearTimeout(session.timer);
-          session.timer = setTimeout(() => this.close(id, "video_timeout"), 15_000);
+          session.timer = setTimeout(() => this.close(id, "video_timeout"), DIRECT_VIDEO_LIMITS.idleMs);
         } catch { this.close(id, "storage_error"); }
       });
     });

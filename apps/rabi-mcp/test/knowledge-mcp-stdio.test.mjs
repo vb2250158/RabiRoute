@@ -37,7 +37,7 @@ test('official stdio SDK initializes, lists, calls and exits cleanly with protoc
   assert.equal(client.getServerVersion().name, 'rabi-knowledge');
   const catalog = await client.listTools();
   assert.ok(catalog.tools.some(tool => tool.name === 'knowledge_search'));
-  assert.ok(!catalog.tools.some(tool => tool.name === 'plan_create'));
+  assert.ok(catalog.tools.some(tool => tool.name === 'plan_create'));
   const result = await client.callTool({ name: 'knowledge_search', arguments: { roleId: 'fixture-role', query: 'fixture' } });
   assert.equal(result.isError, false);
   assert.equal(result.structuredContent.ok, true);

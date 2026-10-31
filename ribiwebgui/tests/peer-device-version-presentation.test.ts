@@ -66,9 +66,9 @@ test("source labels translate UI text without translating names or fabricating m
 
 test("both pages consume the version presentation without turning the local PC into a remote owner", () => {
   const home = fs.readFileSync(new URL("../src/pages/RabiLinkPage.vue", import.meta.url), "utf8");
-  const persona = fs.readFileSync(new URL("../src/pages/PersonaTemplatePage.vue", import.meta.url), "utf8");
+  const persona = fs.readFileSync(new URL("../src/components/RoleSourcePicker.vue", import.meta.url), "utf8");
   assert.match(home, /v-if="device\.isLocal"/);
   assert.match(home, /rabiLinkDeviceVersionLabel\(device, t\)/);
   assert.match(persona, /buildPersonaSourceOptions\(store\.meta, remotePersona\.devices/);
-  assert.match(persona, /label="角色来源 PC"/);
+  assert.match(persona, /t\('角色来源 PC'\)/);
 });

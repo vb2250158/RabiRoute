@@ -5,6 +5,8 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { PeerTunnelRuntime } from "./runtime.js";
+import { createPeerProxyHttpOperations } from "./apiProxyHttpOperations.js";
+import { createPeerControlOperations } from "./apiControlOperations.js";
 import { isTunnelPublicKey, loadTunnelIdentity } from "./security.js";
 
 function fixture(t: test.TestContext) {
@@ -33,8 +35,17 @@ function request(runtime: PeerTunnelRuntime, action: string, method = "GET") {
       writeHead(value: number) { status = value; headersSent = true; },
       end(value: string) { resolve({ status, body: JSON.parse(value) }); }
     } as http.ServerResponse;
-    assert.equal(runtime.handler(incoming, new URL("http://localhost/api/rabilink/peer/" + action), response,
-      async () => { throw new Error("Read-only runtime must not read a mutation body."); }), true);
+    const url = new URL("http://localhost/api/rabilink/peer/" + action);
+    if (action.startsWith("http/")) {
+      void createPeerProxyHttpOperations(runtime).find(value => value.contract.method === method)!.handler({ request: incoming, response, url,
+        path: { deviceId: "peer", service: "manager", path: "meta" }, query: {}, signal: new AbortController().signal, assertCurrent() {}, prepareResponse() {} });
+      return;
+    }
+    const operation = createPeerControlOperations(runtime).find(value => value.contract.method === method && value.contract.pathTemplate === url.pathname);
+    assert.ok(operation);
+    void Promise.resolve(operation.handler({ request: incoming, response, url, path: {}, query: {},
+      get body() { throw new Error("Read-only runtime must not read a mutation body."); }
+    })).then(result => resolve({ status: result.status, body: result.body }));
   });
 }
 
@@ -125,4 +136,25 @@ test("identity loader still fails closed when creation is explicitly disabled", 
   assert.throws(() => loadTunnelIdentity(file, "pc", "test", { create: false }), { code: "ENOENT" });
   assert.throws(() => loadTunnelIdentity(file, "pc", "test", { create: false, persist: false }), { code: "ENOENT" });
   assert.equal(existsSync(dataDir), false);
+});
+
+test("Peer native stop joins a pending connection even when discovery cleanup fails", async t => {
+  const runtime = new PeerTunnelRuntime(options(fixture(t)));
+  let enter!: () => void, release!: () => void;
+  const entered = new Promise<void>(resolve => { enter = resolve; });
+  const cleanup = new Promise<void>(resolve => { release = resolve; });
+  const calls: string[] = [];
+  Reflect.set(runtime.connections, "connect", async (_peer: unknown, _transport: unknown, signal: AbortSignal) => {
+    enter(); await new Promise<void>(resolve => signal.addEventListener("abort", () => resolve(), {once:true}));
+    await cleanup; throw new Error("cancelled connection");
+  });
+  Reflect.set(runtime, "lanBrowser", {stop() {calls.push("browser"); throw undefined;}});
+  Reflect.set(runtime, "lanPublication", {stop() {calls.push("publication");}});
+  Reflect.set(runtime, "bonjour", {destroy() {calls.push("bonjour");}});
+  const connection = runtime.connections.get({id:"test",name:"test",online:true,trusted:true,supported:true,peerUrls:[]}).catch(() => {});
+  await entered; const stopped = runtime.stop(); assert.equal(stopped, runtime.stop());
+  let settled = false; void stopped.then(() => {settled = true;}, () => {settled = true;});
+  await new Promise<void>(resolve => setImmediate(resolve));
+  assert.deepEqual(calls,["browser","publication","bonjour"]); assert.equal(settled,false);
+  release(); await connection; await assert.rejects(stopped, error => error === undefined);
 });

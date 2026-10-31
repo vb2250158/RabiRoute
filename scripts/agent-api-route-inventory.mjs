@@ -14,12 +14,18 @@ function walk(directory) {
   }
 }
 walk(root);
-const exact = [], dispatchScopes = [], unresolved = [], declarations = [];
+const exact = [], dispatchScopes = [], unresolved = [], declarations = [], executableRegistrations = [];
 const literal = node => node && (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) ? node.text : undefined;
 for (const file of managerFiles) {
   const source = ts.createSourceFile(file, fs.readFileSync(file, "utf8"), ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
   const relativeFile = path.relative(root, file).replaceAll(path.sep, "/");
   function visit(node) {
+    if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression) && ["registerOperations", "registerOperationsAsync", "registerUpgrades", "registerUpgradesAsync", "registerHttpProxies", "registerHttpProxiesAsync"].includes(node.expression.name.text)) {
+      // Imported factories are deliberately not executed or guessed. Record their
+      // registration sites so migration does not make these owners disappear.
+      executableRegistrations.push({ file: relativeFile, line: source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1,
+        kind: "executable-registration", registrationMethod: node.expression.name.text, resolution: "read-active-runtime-catalog" });
+    }
     if (ts.isObjectLiteralExpression(node)) {
       const fields = new Map();
       for (const prop of node.properties) {
@@ -68,8 +74,10 @@ const result = {
   exactMethodPathCount: uniqueExact.length,
   dispatchScopeCount: uniqueScopes.length,
   unresolvedCount: unique(unresolved).length,
-  counts: { routeDeclarations: uniqueDeclarations.length, exactMethodPaths: uniqueExact.length, dispatchScopes: uniqueScopes.length, unresolved: unique(unresolved).length },
-  limitations: ["AST 仅收集 manager.mjs 中显式含 routeId 属性的对象，不执行代码；完全由导入或工厂生成的路由不在清单内。", "dispatchScopes 不是 endpoint；处理器内动态 pathname、regex、switch、别名和独立监听器不在 exact 计数内；exact 计数按文件和 routeId 区分。", "unresolved 只表示声明层无法展开，不代表所有源码未解析分支的完整数量。"],
-  exact: unique(exact), dispatchScopes: unique(dispatchScopes), unresolved: unique(unresolved)
+  executableRegistrationCount: unique(executableRegistrations).length,
+  counts: { routeDeclarations: uniqueDeclarations.length, exactMethodPaths: uniqueExact.length, dispatchScopes: uniqueScopes.length, unresolved: unique(unresolved).length,
+    executableRegistrations: unique(executableRegistrations).length },
+  limitations: ["AST 仅展开 manager.mjs 中显式含 routeId 属性的对象，不执行代码；完全由导入或工厂生成的旧路由不在 exact 清单内。", "dispatchScopes 不是 endpoint；处理器内动态 pathname、regex、switch、别名和独立监听器不在 exact 计数内；exact 计数按文件和 routeId 区分。", "unresolved 只表示声明层无法展开，不代表所有源码未解析分支的完整数量。", "executableRegistrations 记录 operation/upgrade/proxy 同步及异步登记调用位置，不把调用次数当作 operation 数量；实际合同与 URL 从当前活动运行目录读取。"],
+  exact: unique(exact), dispatchScopes: unique(dispatchScopes), unresolved: unique(unresolved), executableRegistrations: unique(executableRegistrations)
 };
 process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);

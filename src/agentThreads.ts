@@ -199,7 +199,7 @@ export type AgentThreadRequestOptions = {
    * original authorization lease, so a cross-instance reply is routed through the same
    * approval and revocation fence instead of one invented here.
    */
-  remoteEndpoint?: (nodeId: string, agentId: string, sessionId: string) => AgentRequestEndpoint;
+  remoteEndpoint?: (nodeId: string, agentId: string, sessionId: string, provider?: string) => AgentRequestEndpoint;
   onChatHistoryDelivery?: (request: AgentThreadRequest, result: AgentThreadRequestResult) => Promise<void>;
   allowedWorkspaces: string[];
   defaultWorkspace?: string;
@@ -238,10 +238,23 @@ class AgentThreadDeliveryError extends Error {
   }
 }
 
+function missingThreadNextAction(agentAdapter: string): string {
+  return '在原目标实例/Agent绑定内，POST /api/agent/threads，按名称搜索正文 ' + JSON.stringify({ action: 'list', agentAdapter, query: '<会话名称>', limit: 20, offset: 0 })
+    + '；或 query 留空列出可发现会话，按返回 updatedAt 核对最近活动并沿 nextOffset 分页。核对完整 threadId、名称和工作目录后读取原会话；保留原 deliveryId/actual，不自动创建替代会话或重发未确认消息。';
+}
+
 export function agentThreadRequestFailureData(
   error: unknown,
   request: Pick<AgentThreadRequest, "action" | "sourceAgentType"> = {}
 ): Record<string, unknown> {
+  if (["AGENT_REQUEST_STORE_UNAVAILABLE", "AGENT_REQUEST_COMMIT_UNKNOWN"].includes(String((error as { code?: unknown })?.code))) {
+    const failure = error as { code: string; commitState?: string };
+    const unknown = failure.commitState === "unknown";
+    const message = error instanceof Error ? error.message : String(error);
+    return { action: request.action ?? null, status: "failed", message, ...(unknown ? { uncertain: true } : {}),
+      error: { stage: "request_store", code: failure.code, message, commitState: unknown ? "unknown" : "not_started", retryable: false,
+        nextAction: "Read the original request or delivery by its existing ID after the owner is restored; do not create a replacement intent." } };
+  }
   if (error instanceof AgentThreadContractError) {
     return { action: request.action ?? null, status: "failed", message: error.message,
       error: { stage: error.stage, field: error.field, code: error.code, message: error.message, repair: error.repair, retryable: false } };
@@ -369,23 +382,17 @@ function standaloneWorkspacePolicyPrompt(
     deliveryId,
     contextBlocks,
     controlBlocks,
-    escapeMessageContentHeaders: messageSource.type === "agent"
+    escapeMessageContentHeaders: (messageSource.type === "agent" || messageSource.type === "agent_hook")
   });
 }
 
-function imagePathsForDelivery(value: unknown, cwd: string): string[] {
+function imagePathsForDelivery(value: unknown): string[] {
   if (value == null) return [];
   if (!Array.isArray(value)) throw new Error("imagePaths must be an array.");
-  if (value.length > 8) throw new Error("imagePaths supports at most 8 images per delivery.");
-  const workspace = path.resolve(cwd);
   return [...new Set(value.map((item) => {
     const raw = String(item ?? "").trim();
     if (!raw || !path.isAbsolute(raw)) throw new Error("Every imagePaths item must be an absolute path.");
     const imagePath = path.resolve(raw);
-    const relative = path.relative(workspace, imagePath);
-    if (relative === "" || relative.startsWith("..") || path.isAbsolute(relative)) {
-      throw new Error("Every imagePaths item must stay inside the target workspace.");
-    }
     if (!/\.(?:png|jpe?g|gif|webp|bmp)$/i.test(imagePath)) {
       throw new Error(`Unsupported image attachment type: ${path.extname(imagePath) || "no extension"}`);
     }
@@ -393,24 +400,6 @@ function imagePathsForDelivery(value: unknown, cwd: string): string[] {
     if (!stat?.isFile()) throw new Error(`Image attachment does not exist: ${imagePath}`);
     return imagePath;
   }))];
-}
-
-const forbiddenAgentHandoffRoleMarkers = [
-  "[消息源]",
-  "[消息内容]",
-  "[投递源]",
-  "[协作要求]",
-  "[消息处理 Agent 初始化]",
-  "你是专职消息处理 Agent",
-  "[计划协助会话恢复初始化]",
-  "[计划秘书初始化]"
-];
-
-export function validateAgentThreadHandoffPromptForTest(prompt: string): void {
-  if (/^\s*\[rabi:bind\b/im.test(prompt)
-    || forbiddenAgentHandoffRoleMarkers.some((marker) => prompt.includes(marker))) {
-    throw new Error("Agent-to-Agent handoff must contain only the newly composed handoff content, not another task's role initialization or complete injected prompt.");
-  }
 }
 
 function requiredText(value: unknown, name: string, maxLength: number): string {
@@ -704,7 +693,7 @@ async function resolveGrokBotThreadSource(
   }
   const sourceIdentity = agentIdentityForMessageSource(messageSource);
   if (!sourceIdentity) {
-    throw new Error("Agent-to-Agent delivery requires messageSource.type=agent or a plan sourceAgent.");
+    throw new Error("Agent-to-Agent delivery requires messageSource.type=agent/agent_hook or a plan sourceAgent.");
   }
   if (sourceIdentity.sessionId !== rawSourceThreadId) {
     throw new Error("messageSource.sessionId must match sourceThreadId for Agent-to-Agent delivery.");
@@ -727,11 +716,11 @@ async function resolveGrokBotThreadSource(
     sessionId: rawSourceThreadId,
     sessionName: proof.sessionName
   };
-  const resolvedMessageSource: RabiMessageSource = messageSource.type === "agent"
-    ? { type: "agent", ...resolvedAgent }
+  const resolvedMessageSource: RabiMessageSource = (messageSource.type === "agent" || messageSource.type === "agent_hook")
+    ? { type: messageSource.type === "agent_hook" ? "agent_hook" : "agent", ...resolvedAgent }
     : messageSource.type === "plan"
       ? { ...messageSource, sourceAgent: resolvedAgent }
-      : (() => { throw new Error("Agent-to-Agent delivery requires messageSource.type=agent or a plan sourceAgent."); })();
+      : (() => { throw new Error("Agent-to-Agent delivery requires messageSource.type=agent/agent_hook or a plan sourceAgent."); })();
   return { messageSource: resolvedMessageSource, source };
 }
 
@@ -771,7 +760,7 @@ async function resolveAgentThreadSendSource(
     // A formal reply needs a durable endpoint that still carries the original authorization
     // lease. Without one, or once it is revoked, the reply stays refused instead of unpointed.
     const needsReplyRoute = request.responsePolicy !== "none" || Boolean(request.inReplyToRequestId);
-    const endpoint = needsReplyRoute ? options.remoteEndpoint?.(nodeId, agentId, sessionId) : undefined;
+    const endpoint = needsReplyRoute ? options.remoteEndpoint?.(nodeId, agentId, sessionId, remote.provider) : undefined;
     if (needsReplyRoute && !endpoint) {
       throw new Error("Trusted remote source reply requires an approved, unrevoked remote endpoint.");
     }
@@ -787,7 +776,7 @@ async function resolveAgentThreadSendSource(
     return {
       messageSource: messageSource.type === "plan"
         ? { ...messageSource, sourceAgent: resolvedAgent }
-        : { type: "agent", ...resolvedAgent },
+        : { type: messageSource.type === "agent_hook" ? "agent_hook" : "agent", ...resolvedAgent },
       source: {
         agentAdapter: remote.provider,
         agentType,
@@ -806,7 +795,7 @@ async function resolveAgentThreadSendSource(
     if (request.sourceAgentType != null) {
       throw new Error("sourceAgentType requires sourceThreadId.");
     }
-    if (messageSource.type === "agent") {
+    if ((messageSource.type === "agent" || messageSource.type === "agent_hook")) {
       throw new Error("Agent message source requires sourceThreadId verification.");
     }
     return null;
@@ -820,7 +809,7 @@ async function resolveAgentThreadSendSource(
   const sourceThreadId = normalizeThreadId(rawSourceThreadId);
   const sourceIdentity = agentIdentityForMessageSource(messageSource);
   if (!sourceIdentity) {
-    throw new Error("Agent-to-Agent delivery requires messageSource.type=agent or a plan sourceAgent.");
+    throw new Error("Agent-to-Agent delivery requires messageSource.type=agent/agent_hook or a plan sourceAgent.");
   }
   if (sourceIdentity.sessionId !== sourceThreadId) {
     throw new Error("messageSource.sessionId must match sourceThreadId for Agent-to-Agent delivery.");
@@ -856,12 +845,12 @@ async function resolveAgentThreadSendSource(
     ...(sourceThread.cwd ? { workspace: sourceThread.cwd } : {})
   };
   let resolvedMessageSource: RabiMessageSource;
-  if (messageSource.type === "agent") {
-    resolvedMessageSource = { type: "agent", ...resolvedAgent };
+  if ((messageSource.type === "agent" || messageSource.type === "agent_hook")) {
+    resolvedMessageSource = { type: messageSource.type === "agent_hook" ? "agent_hook" : "agent", ...resolvedAgent };
   } else if (messageSource.type === "plan") {
     resolvedMessageSource = { ...messageSource, sourceAgent: resolvedAgent };
   } else {
-    throw new Error("Agent-to-Agent delivery requires messageSource.type=agent or a plan sourceAgent.");
+    throw new Error("Agent-to-Agent delivery requires messageSource.type=agent/agent_hook or a plan sourceAgent.");
   }
   return { messageSource: resolvedMessageSource, source };
 }
@@ -973,15 +962,15 @@ async function createReplacementForMissingCodexDeliveryTarget(
 }
 
 
-function reconcileOpenAgentRequestPartiesForReplacement(
+async function reconcileOpenAgentRequestPartiesForReplacement(
   agentRequests: AgentThreadRequestOptions["agentRequests"] | undefined,
   previousThreadId: string,
   previousWorkspace: string,
   replacement: AgentThreadSummary
-): void {
+): Promise<void> {
   if (!agentRequests || replacement.id === previousThreadId) return;
   const previousCanonicalWorkspace = canonicalWorkspace(previousWorkspace);
-  agentRequests.reconcileOpenParties((party) => (
+  await agentRequests.reconcileOpenParties((party) => (
     party.threadId === previousThreadId
       && (!party.workspace || canonicalWorkspace(party.workspace) === previousCanonicalWorkspace)
       ? {
@@ -1035,7 +1024,7 @@ export async function handleAgentThreadRequest(
   driver: AgentThreadDriver = defaultDriver
 ): Promise<AgentThreadRequestResult> {
   const result = await executeAgentThreadRequest(request, options, driver);
-  if (request.action === "send" && request.messageSource?.type === "agent"
+  if (request.action === "send" && (request.messageSource?.type === "agent" || request.messageSource?.type === "agent_hook")
     && (!options.remoteSource || Boolean(result.data.source && result.data.messageSource))
     && ["delivered", "delivered_tracking_failed", "delivery_unconfirmed"].includes(String(result.data.status))) {
     const historyRequest = options.remoteSource && result.data.messageSource
@@ -1203,7 +1192,7 @@ async function executeAgentThreadRequest(
       if (resolution.kind === "missing") {
         return {
           statusCode: 404,
-          data: { action, agentAdapter, resolution: resolution.kind, message: `没有找到 DSH 会话：${title}` }
+          data: { action, agentAdapter, resolution: resolution.kind, message: `没有找到 DSH 会话：${title}`, nextAction: missingThreadNextAction(agentAdapter) }
         };
       }
       return {
@@ -1284,7 +1273,7 @@ async function executeAgentThreadRequest(
     if (resolution.kind === "missing") {
       return {
         statusCode: 404,
-        data: { action, resolution: "missing", message: `没有找到 Codex Desktop 任务：${title}` }
+        data: { action, resolution: "missing", message: `没有找到 Codex Desktop 任务：${title}`, nextAction: missingThreadNextAction("codex") }
       };
     }
     return {
@@ -1340,7 +1329,7 @@ async function executeAgentThreadRequest(
             action,
             agentAdapter,
             resolution: resolution.kind,
-            message: `没有找到或创建 DSH 会话：${title}`,
+            message: `没有找到或创建 DSH 会话：${title}`, nextAction: missingThreadNextAction(agentAdapter),
             sandbox,
             ...(messageSource ? { messageSource } : {})
           }
@@ -1360,7 +1349,7 @@ async function executeAgentThreadRequest(
             ),
             cwd,
             baseUrl: dshBaseUrlFor(options),
-            imagePaths: imagePathsForDelivery(request.imagePaths, cwd)
+            imagePaths: imagePathsForDelivery(request.imagePaths)
           });
           initialTurnStatus = "started";
         } catch (error) {
@@ -1454,7 +1443,7 @@ async function executeAgentThreadRequest(
         data: {
           action,
           resolution: "missing",
-          message: `没有找到或创建 Codex Desktop 任务：${title}`,
+          message: `没有找到或创建 Codex Desktop 任务：${title}`, nextAction: missingThreadNextAction("codex"),
           sandbox,
           ...(messageSource ? { messageSource } : {})
         }
@@ -1495,6 +1484,7 @@ async function executeAgentThreadRequest(
   }
 
   if (action === "send") {
+    await options.agentRequests?.ready();
     let targetAgentAdapter = threadAgentAdapter(request);
     let threadId = normalizeThreadId(request.threadId);
     const rawPrompt = request.inReplyToRequestId && options.agentRequests
@@ -1523,7 +1513,7 @@ async function executeAgentThreadRequest(
           throw new AgentReplyStateError(pending, "original_delivery_receipt_unreadable");
         }
         if (!confirmed) throw new AgentReplyStateError(pending, "original_delivery_receipt_not_found");
-        options.agentRequests.commit({
+        await options.agentRequests.commit({
           ...pending,
           requestId: pending.id,
           responsePolicy: "required"
@@ -1624,7 +1614,7 @@ async function executeAgentThreadRequest(
       }
     }
     if (targetResolution?.kind === "created") {
-      reconcileOpenAgentRequestPartiesForReplacement(
+      await reconcileOpenAgentRequestPartiesForReplacement(
         options.agentRequests,
         previousThreadId,
         previousThreadWorkspace,
@@ -1655,7 +1645,6 @@ async function executeAgentThreadRequest(
       if (sendSource.source.threadId === threadId) {
         throw new Error("Agent-to-Agent handoff source and target task must be different.");
       }
-      validateAgentThreadHandoffPromptForTest(rawPrompt);
     }
     const sandbox = normalizeSandbox(request.sandbox);
     const requestedModel = optionalText(request.model, "model", 120) || undefined;
@@ -1663,7 +1652,7 @@ async function executeAgentThreadRequest(
     const model = requestedModel || optionalText(defaults?.model, "codexDefaults.model", 120) || undefined;
     const reasoningEffort = normalizeReasoningEffort(request.reasoningEffort)
       ?? (requestedModel ? undefined : normalizeReasoningEffort(defaults?.reasoningEffort));
-    const imagePaths = imagePathsForDelivery(request.imagePaths, cwd);
+    const imagePaths = imagePathsForDelivery(request.imagePaths);
     const messageProcessing = request.messageProcessing;
     const responsePolicy = sendSource ? normalizeAgentResponsePolicy(request.responsePolicy) : undefined;
     if (messageProcessing && responsePolicy !== "required") {
@@ -1682,10 +1671,10 @@ async function executeAgentThreadRequest(
       throw new Error("Agent request tracking is unavailable for this Agent-to-Agent delivery.");
     }
 
-    const prepareAgentCommunication = (): AgentCommunicationPreparation | undefined => {
+    const prepareAgentCommunication = async (): Promise<AgentCommunicationPreparation | undefined> => {
       if (!sendSource || !responsePolicy) return undefined;
       return options.agentRequests
-        ? options.agentRequests.prepare({
+        ? await options.agentRequests.prepare({
             source: {
               agentAdapter: sendSource.source.agentAdapter,
               threadId: sendSource.source.threadId,
@@ -1804,7 +1793,7 @@ async function executeAgentThreadRequest(
         : driver.send(delivery);
     };
 
-    let agentCommunication = prepareAgentCommunication();
+    let agentCommunication = await prepareAgentCommunication();
     let prompt = renderPrompt(agentCommunication);
     const unconfirmedResult = (error: unknown): AgentThreadRequestResult | undefined => {
       if (!(error instanceof Error) || error.name !== "CodexDesktopDeliveryUnconfirmedError") return undefined;
@@ -1830,11 +1819,12 @@ async function executeAgentThreadRequest(
     let acceptedDelivery: Awaited<ReturnType<AgentThreadDriver["send"]>>;
     let replacementWarning: string | undefined;
     try {
-      if (agentCommunication) options.agentRequests?.bindResponseEvidence(agentCommunication, prompt);
+      if (agentCommunication) await options.agentRequests?.bindResponseEvidence(agentCommunication, prompt);
       acceptedDelivery = await sendToTarget(prompt);
     } catch (error) {
       const unconfirmed = unconfirmedResult(error);
       if (unconfirmed) return unconfirmed;
+      if (["AGENT_REQUEST_STORE_UNAVAILABLE", "AGENT_REQUEST_COMMIT_UNKNOWN"].includes(String((error as { code?: unknown })?.code))) throw error;
       const staleThreadId = threadId;
       const staleWorkspace = cwd;
       const replacement = targetAgentAdapter === "codex" && requestedTitle
@@ -1847,12 +1837,12 @@ async function executeAgentThreadRequest(
           )
         : null;
       if (!replacement) {
-        if (agentCommunication && options.agentRequests) options.agentRequests.abort(agentCommunication);
+        if (agentCommunication && options.agentRequests) await options.agentRequests.abort(agentCommunication);
         throw new AgentThreadDeliveryError(error instanceof Error ? error.message : String(error));
       }
 
-      if (agentCommunication && options.agentRequests) options.agentRequests.abort(agentCommunication);
-      reconcileOpenAgentRequestPartiesForReplacement(
+      if (agentCommunication && options.agentRequests) await options.agentRequests.abort(agentCommunication);
+      await reconcileOpenAgentRequestPartiesForReplacement(
         options.agentRequests,
         staleThreadId,
         staleWorkspace,
@@ -1862,15 +1852,16 @@ async function executeAgentThreadRequest(
       threadId = replacement.id;
       cwd = resolveAgentThreadWorkspaceForTest(replacement.cwd || cwd, options);
       if (messageProcessingEvent) messageProcessingEvent.targetThreadId = threadId;
-      agentCommunication = prepareAgentCommunication();
+      agentCommunication = await prepareAgentCommunication();
       prompt = renderPrompt(agentCommunication);
       try {
-        if (agentCommunication) options.agentRequests?.bindResponseEvidence(agentCommunication, prompt);
+        if (agentCommunication) await options.agentRequests?.bindResponseEvidence(agentCommunication, prompt);
       acceptedDelivery = await sendToTarget(prompt);
       } catch (replacementError) {
         const unconfirmed = unconfirmedResult(replacementError);
         if (unconfirmed) return unconfirmed;
-        if (agentCommunication && options.agentRequests) options.agentRequests.abort(agentCommunication);
+        if (["AGENT_REQUEST_STORE_UNAVAILABLE", "AGENT_REQUEST_COMMIT_UNKNOWN"].includes(String((replacementError as { code?: unknown })?.code))) throw replacementError;
+        if (agentCommunication && options.agentRequests) await options.agentRequests.abort(agentCommunication);
         throw new AgentThreadDeliveryError(replacementError instanceof Error ? replacementError.message : String(replacementError));
       }
       replacementWarning = `原 Codex Desktop 任务 ${previousThreadId} 已不存在；已创建替代任务 ${threadId} 并投递本次消息。`;
@@ -1881,10 +1872,10 @@ async function executeAgentThreadRequest(
     const receiptAttribution = deliveryReceiptAttribution(targetAgentAdapter);
     let messageProcessingWarning: string | undefined;
     let agentRequestWarning: string | undefined;
-    let committedAgentRequest: ReturnType<AgentRequestStore["commit"]> | undefined;
+    let committedAgentRequest: Awaited<ReturnType<AgentRequestStore["commit"]>> | undefined;
     if (agentCommunication && options.agentRequests) {
       try {
-        committedAgentRequest = options.agentRequests.commit(agentCommunication, {
+        committedAgentRequest = await options.agentRequests.commit(agentCommunication, {
           action: acceptedReceipt?.action,
           transport: acceptedReceipt?.transport
         });

@@ -1,3 +1,10 @@
+import { markdownImageSettings, checkMarkdownQuota } from "./markdownImage.js";
+import { AGENT_SEND_CHANNEL_HELP, AGENT_SEND_FIELD_NAMES, AGENT_SEND_LIMITS, AGENT_SEND_PAYLOAD_TYPES, agentSendQuotaSettings } from "./agentSendContracts.js";
+import type { AgentSendChannel, AgentSendChannelHelp } from "./agentSendContracts.js";
+import type { AGENT_SEND_WIRE_SCHEMA } from "./agentSendContracts.js";
+export { AGENT_SEND_CHANNEL_HELP, AGENT_SEND_REQUEST_CONTRACT } from "./agentSendContracts.js";
+export type { AgentSendChannel, AgentSendChannelHelp } from "./agentSendContracts.js";
+
 import {
   handleAgentReply,
   inspectAgentReplyDelivery,
@@ -16,34 +23,12 @@ import {
 import { normalizeStyleValidationMode, type StyleValidationMode } from "./shared/languageStyle.js";
 import type { LanguageStyleValidationResult } from "./languageStyleValidation.js";
 
-export type AgentSendChannel =
-  | "napcat"
-  | "wecom"
-  | "weixin"
-  | "feishu"
-  | "rabilink"
-  | "speech"
-  | "fennenote"
-  | "role_panel"
-  | "plan_feedback";
-
 export type AgentSendSender = {
   agentType: string;
   sessionId: string;
 };
 
-export type AgentSendRequest = {
-  deliveryId?: unknown;
-  sender?: unknown;
-  routeId?: unknown;
-  channel?: unknown;
-  params?: unknown;
-  payload?: unknown;
-  tracking?: unknown;
-  styleValidation?: unknown;
-  messageLengthConfirmation?: unknown;
-  conversationContext?: unknown;
-};
+export type AgentSendRequest = { -readonly [Field in keyof typeof AGENT_SEND_WIRE_SCHEMA.properties]?: unknown };
 
 export type AgentSendResult = AgentReplyResult & {
   conversationContext?: import("./agentSendConversationContext.js").AgentSendConversationContext;
@@ -93,55 +78,6 @@ type NormalizedAgentSend = {
   internal: AgentReplyRequest;
 };
 
-// Only trusted built-in descriptors enter this registry; help never grants Route authority.
-function freezeChannelHelp<T>(value: T): T {
-  if (value && typeof value === "object") {
-    for (const child of Object.values(value)) freezeChannelHelp(child);
-    Object.freeze(value);
-  }
-  return value;
-}
-
-export type AgentSendChannelHelp = Readonly<{
-  channel: AgentSendChannel;
-  description: string;
-  params: Readonly<Record<string, unknown>>;
-  example: Readonly<Record<string, unknown>>;
-}>;
-
-export const AGENT_SEND_CHANNEL_HELP: readonly AgentSendChannelHelp[] = freezeChannelHelp([
-  { channel: "napcat", description: "QQ 群聊或私聊；支持 Markdown 渲染成图片；QQ 不使用 channel=qq。", params: { target: "group|private", groupId: "群号（group 时必填）", userId: "QQ 号（private 时必填）", instanceId: "NapCat 实例 ID（可选）", replyToMessageId: "来源 QQ 消息 ID；群聊必填，可传空字符串表示不引用", replyImageDescriptions: "引用图片的描述字符串数组（可选；图片引用仍受下游要求约束）", allowAdditionalReply: "是否允许追加回复（可选布尔值，默认 false）" }, example: { channel: "napcat", params: { target: "group", groupId: "example-group-id", replyToMessageId: "example-message-id" }, payload: { type: "text", text: "消息正文" } } },
-  { channel: "wecom", description: "企业微信会话。", params: { chatId: "会话 ID", userId: "用户 ID（可选）", reqId: "请求 ID（可选）" }, example: { channel: "wecom", params: { chatId: "chat-id" }, payload: { type: "text", text: "消息正文" } } },
-  { channel: "weixin", description: "微信会话。", params: { sessionId: "会话 ID", userId: "用户 ID（可选）" }, example: { channel: "weixin", params: { sessionId: "session-id" }, payload: { type: "text", text: "消息正文" } } },
-  { channel: "feishu", description: "飞书会话。", params: { chatId: "会话 ID", userId: "用户 ID（可选）" }, example: { channel: "feishu", params: { chatId: "chat-id" }, payload: { type: "text", text: "消息正文" } } },
-  { channel: "rabilink", description: "RabiLink 设备消息。", params: { proactive: "是否主动发送", sourceMessageId: "非主动发送时的来源消息 ID", targetDeviceIds: "设备 ID 数组", targetDeviceKinds: "设备类型数组", source: "来源标识（可选）", presentation: "呈现方式字符串数组（可选）", priority: "优先级（可选）" }, example: { channel: "rabilink", params: { proactive: true, targetDeviceIds: ["device-id"] }, payload: { type: "text", text: "消息正文" } } },
-  { channel: "speech", description: "语音消息。", params: { sessionId: "语音会话 ID（可选）" }, example: { channel: "speech", params: { sessionId: "session-id" }, payload: { type: "text", text: "消息正文" } } },
-  { channel: "fennenote", description: "FenneNote 语音消息或播放。", params: { sessionId: "会话 ID", mode: "message|playback" }, example: { channel: "fennenote", params: { sessionId: "session-id", mode: "message" }, payload: { type: "text", text: "消息正文" } } },
-  { channel: "role_panel", description: "角色面板消息。", params: { roleId: "角色 ID", messageId: "消息 ID（可选）" }, example: { channel: "role_panel", params: { roleId: "role-id" }, payload: { type: "text", text: "消息正文" } } },
-  { channel: "plan_feedback", description: "计划 guidance 或 approval 反馈。", params: { roleId: "角色 ID", planId: "计划 ID", kind: "guidance|approval", stepId: "步骤 ID（可选）", feedbackId: "反馈 ID（可选）" }, example: { channel: "plan_feedback", params: { roleId: "role-id", planId: "plan-id", kind: "guidance" }, payload: { type: "text", text: "反馈正文" } } }
-]);
-
-// A partial field allowlist, not a JSON Schema: value and conditional validation stays below.
-export const AGENT_SEND_REQUEST_CONTRACT = freezeChannelHelp({
-  version: 1,
-  kind: "partial-field-allowlist",
-  allowedFields: {
-    request: ["deliveryId", "sender", "routeId", "channel", "params", "payload", "tracking", "styleValidation", "messageLengthConfirmation", "conversationContext"],
-    sender: ["agentType", "sessionId"],
-    payload: ["type", "text", "path", "url", "fileName", "fileId", "fileSha256", "planAttachment", "segments", "stickerId"]
-  },
-  channelValues: AGENT_SEND_CHANNEL_HELP.map(item => item.channel),
-  paramsAllowedFields: Object.fromEntries(AGENT_SEND_CHANNEL_HELP.map(item => [item.channel, Object.keys(item.params)])),
-  missing: [
-    "field-types-and-value-constraints",
-    "required-and-conditional-fields",
-    "cross-field-validation",
-    "nested-tracking-planAttachment-and-segments-contracts",
-    "runtime-authorization-and-delivery-policy",
-    "response-and-error-contracts"
-  ]
-} as const);
-
 export function agentSendChannelHelp(channel?: string): AgentSendChannelHelp | undefined {
   return AGENT_SEND_CHANNEL_HELP.find(item => item.channel === channel);
 }
@@ -167,13 +103,13 @@ function textValue(value: unknown, field: string, required = true): string | und
 
 function senderValue(value: unknown): AgentSendSender {
   const sender = objectValue(value, "sender");
-  assertOnlyFields(sender, AGENT_SEND_REQUEST_CONTRACT.allowedFields.sender, "sender");
+  assertOnlyFields(sender, AGENT_SEND_FIELD_NAMES.sender, "sender");
   const agentType = textValue(sender.agentType, "sender.agentType") as string;
   const sessionId = textValue(sender.sessionId, "sender.sessionId") as string;
-  if (agentType.length > 80 || !/^[A-Za-z][A-Za-z0-9._-]*$/.test(agentType)) {
+  if (agentType.length > AGENT_SEND_LIMITS.agentType || !/^[A-Za-z][A-Za-z0-9._-]*$/.test(agentType)) {
     throw new Error("sender.agentType must be a stable Agent type identifier.");
   }
-  if (sessionId.length > 500 || /[\u0000-\u001f\u007f]/.test(sessionId)) {
+  if (sessionId.length > AGENT_SEND_LIMITS.sessionId || /[\u0000-\u001f\u007f]/.test(sessionId)) {
     throw new Error("sender.sessionId must be a stable session identifier without control characters.");
   }
   return { agentType, sessionId };
@@ -206,7 +142,7 @@ function planAttachmentReference(
   if (value == null) return undefined;
   if (typeof value !== "object" || Array.isArray(value)) throw new Error("payload.planAttachment must be an object.");
   const reference = value as Record<string, unknown>;
-  assertOnlyFields(reference, ["roleId", "planId", "attachmentId"], "payload.planAttachment");
+  assertOnlyFields(reference, AGENT_SEND_FIELD_NAMES.planAttachment, "payload.planAttachment");
   if (type !== "image" && type !== "file") {
     throw new Error("payload.planAttachment is only supported for image or file payloads.");
   }
@@ -215,10 +151,10 @@ function planAttachmentReference(
   }
   const planId = textValue(reference.planId, "payload.planAttachment.planId") as string;
   const attachmentId = textValue(reference.attachmentId, "payload.planAttachment.attachmentId") as string;
-  if (planId.length > 200 || /[\u0000-\u001f\u007f]/.test(planId)) {
+  if (planId.length > AGENT_SEND_LIMITS.planId || /[\u0000-\u001f\u007f]/.test(planId)) {
     throw new Error("payload.planAttachment.planId must be a stable plan id.");
   }
-  if (attachmentId.length > 200 || /[\u0000-\u001f\u007f]/.test(attachmentId)) {
+  if (attachmentId.length > AGENT_SEND_LIMITS.attachmentId || /[\u0000-\u001f\u007f]/.test(attachmentId)) {
     throw new Error("payload.planAttachment.attachmentId must be a stable attachment id.");
   }
   const roleId = textValue(reference.roleId, "payload.planAttachment.roleId", false);
@@ -226,13 +162,13 @@ function planAttachmentReference(
 }
 
 function payloadFields(payload: Record<string, unknown>, channel: AgentSendChannel): Pick<AgentReplyRequest, "payload" | "payloadType" | "text"> {
-  assertOnlyFields(payload, AGENT_SEND_REQUEST_CONTRACT.allowedFields.payload, "payload");
-  const type = textValue(payload.type, "payload.type") as "text" | "image" | "voice" | "file" | "markdown" | "sticker";
-  if (!(["text", "image", "voice", "file", "markdown", "sticker"] as string[]).includes(type)) {
+  assertOnlyFields(payload, AGENT_SEND_FIELD_NAMES.payload, "payload");
+  const type = textValue(payload.type, "payload.type") as typeof AGENT_SEND_PAYLOAD_TYPES[number];
+  if (!(AGENT_SEND_PAYLOAD_TYPES as readonly string[]).includes(type)) {
     throw new Error("payload.type must be text, image, voice, file, markdown, or sticker.");
   }
   if (type === "sticker") {
-    assertOnlyFields(payload, ["type", "text", "stickerId"], "payload");
+    assertOnlyFields(payload, AGENT_SEND_FIELD_NAMES.sticker, "payload");
     if (channel !== "napcat" || typeof payload.stickerId !== "string" || !/^[a-f0-9]{32}$/.test(payload.stickerId)) {
       throw new Error("payload.type=sticker requires channel=napcat and a stickerId from the selected account's sticker list.");
     }
@@ -246,7 +182,7 @@ function payloadFields(payload: Record<string, unknown>, channel: AgentSendChann
     }
     const validatedText = textValue(payload.text, "payload.text") as string;
     const text = typeof payload.text === "string" ? payload.text : validatedText;
-    if (Buffer.byteLength(text, "utf8") > 32 * 1024) throw new Error("payload.text exceeds the 32 KiB Markdown limit.");
+    checkMarkdownQuota("RABIROUTE_MARKDOWN_MAX_SOURCE_BYTES", markdownImageSettings.sourceBytes, Buffer.byteLength(text, "utf8"));
     return { payloadType: "image", text, payload: { type: "markdown", text } };
   }
   if (Object.prototype.hasOwnProperty.call(payload, "segments")) {
@@ -256,29 +192,30 @@ function payloadFields(payload: Record<string, unknown>, channel: AgentSendChann
     if (["text", "path", "url", "fileName", "fileId", "fileSha256", "planAttachment"].some(key => Object.prototype.hasOwnProperty.call(payload, key))) {
       throw new Error("payload.segments cannot be combined with top-level media or text fields.");
     }
-    if (!Array.isArray(payload.segments) || payload.segments.length === 0 || payload.segments.length > 32) {
-      throw new Error("payload.segments must contain 1 to 32 ordered text/image segments.");
+    if (!Array.isArray(payload.segments) || payload.segments.length === 0) {
+      throw new Error("payload.segments must contain at least one ordered text/image/markdown segment.");
     }
+    checkMarkdownQuota("RABIROUTE_AGENT_SEND_MAX_SEGMENTS", agentSendQuotaSettings.segments, payload.segments.length);
     let imageCount = 0;
     const segments = payload.segments.map((raw, index) => {
       const label = `payload.segments[${index}]`;
       const segment = objectValue(raw, label);
       const segmentType = textValue(segment.type, `${label}.type`);
       if (segmentType === "text") {
-        assertOnlyFields(segment, ["type", "text"], label);
+        assertOnlyFields(segment, AGENT_SEND_FIELD_NAMES.textSegment, label);
         const segmentText = textValue(segment.text, `${label}.text`) as string;
         return { type: "text" as const, text: typeof segment.text === "string" ? segment.text : segmentText };
       }
       if (segmentType === "markdown") {
-        assertOnlyFields(segment, ["type", "text"], label);
+        assertOnlyFields(segment, AGENT_SEND_FIELD_NAMES.textSegment, label);
         const segmentText = textValue(segment.text, `${label}.text`) as string;
         const text = typeof segment.text === "string" ? segment.text : segmentText;
-        if (Buffer.byteLength(text, "utf8") > 32 * 1024) throw new Error(`${label}.text exceeds the 32 KiB Markdown limit.`);
+        checkMarkdownQuota("RABIROUTE_MARKDOWN_MAX_SOURCE_BYTES", markdownImageSettings.sourceBytes, Buffer.byteLength(text, "utf8"));
         imageCount++;
         return { type: "markdown" as const, text };
       }
       if (segmentType === "image") {
-        assertOnlyFields(segment, ["type", "path", "url"], label);
+        assertOnlyFields(segment, AGENT_SEND_FIELD_NAMES.imageSegment, label);
         const hasPath = Object.prototype.hasOwnProperty.call(segment, "path");
         const hasUrl = Object.prototype.hasOwnProperty.call(segment, "url");
         if (hasPath === hasUrl) throw new Error(`${label} requires exactly one of path or url.`);
@@ -288,7 +225,8 @@ function payloadFields(payload: Record<string, unknown>, channel: AgentSendChann
       }
       throw new Error(`${label}.type must be text, image, or markdown.`);
     });
-    if (imageCount === 0 || imageCount > 16) throw new Error("payload.segments requires 1 to 16 images.");
+    if (imageCount === 0) throw new Error("payload.segments requires at least one image or Markdown segment.");
+    checkMarkdownQuota("RABIROUTE_AGENT_SEND_MAX_IMAGES", agentSendQuotaSettings.images, imageCount);
     const text = segments.filter((segment): segment is Extract<typeof segment, { type: "text" | "markdown" }> => segment.type === "text" || segment.type === "markdown")
       .map(segment => segment.text).join("\n");
     return { payloadType: "image", text, payload: { type: "image", text, segments } };
@@ -339,11 +277,13 @@ function payloadFields(payload: Record<string, unknown>, channel: AgentSendChann
 }
 
 function normalizeAgentSend(request: AgentSendRequest): NormalizedAgentSend {
-  assertOnlyFields(request as Record<string, unknown>, AGENT_SEND_REQUEST_CONTRACT.allowedFields.request, "request");
+  assertOnlyFields(request as Record<string, unknown>, AGENT_SEND_FIELD_NAMES.request, "request");
   const deliveryId = textValue(request.deliveryId, "deliveryId") as string;
   const sender = senderValue(request.sender);
   const routeId = textValue(request.routeId, "routeId") as string;
-  const channel = textValue(request.channel, "channel") as AgentSendChannel;
+  const requestedChannel = textValue(request.channel, "channel") as AgentSendChannel;
+  // @deprecated Read old serialized sends through speech; remove at the legacy configuration migration milestone.
+  const channel = requestedChannel === "fennenote" ? "speech" : requestedChannel;
   const channelHelp = agentSendChannelHelp(channel);
   if (!channelHelp) {
     const supportedChannels = AGENT_SEND_CHANNEL_HELP.map(item => item.channel);
@@ -351,7 +291,7 @@ function normalizeAgentSend(request: AgentSendRequest): NormalizedAgentSend {
     Object.assign(error, { code: "UNSUPPORTED_SEND_CHANNEL", supportedChannels, help: AGENT_SEND_CHANNEL_HELP, repair: "Use channel=napcat for QQ/NapCat and copy the matching params example. Do not retry with a different deliveryId unless the receipt is confirmed absent." });
     throw error;
   }
-  const params = objectValue(request.params, "params");
+  const params = { ...objectValue(request.params, "params") };
   const rawPayload = objectValue(request.payload, "payload");
   const payload = payloadFields(rawPayload, channel);
   if (Object.prototype.hasOwnProperty.call(rawPayload, "fileId") && (channel !== "napcat" || params.target !== "group")) {
@@ -365,14 +305,14 @@ function normalizeAgentSend(request: AgentSendRequest): NormalizedAgentSend {
   }
   const context = request.conversationContext == null ? undefined : objectValue(request.conversationContext, "conversationContext");
   if (context) {
-    assertOnlyFields(context, ["lastReadMessageIndex", "confirmationToken"], "conversationContext");
-    for (const field of ["lastReadMessageIndex", "confirmationToken"]) {
-      if (context[field] != null && (typeof context[field] !== "string" || !context[field] || String(context[field]).length > 512)) {
+    assertOnlyFields(context, AGENT_SEND_FIELD_NAMES.conversationContext, "conversationContext");
+    for (const field of AGENT_SEND_FIELD_NAMES.conversationContext) {
+      if (context[field] != null && (typeof context[field] !== "string" || !context[field] || String(context[field]).length > AGENT_SEND_LIMITS.conversationToken)) {
         throw new Error(`conversationContext.${field} must be a non-empty index/token returned by Rabi.`);
       }
     }
   }
-  assertOnlyFields(tracking, ["requirementId", "sendContextReviewToken"], "tracking");
+  assertOnlyFields(tracking, AGENT_SEND_FIELD_NAMES.tracking, "tracking");
   const requirementId = textValue(tracking.requirementId, "tracking.requirementId", false);
   const replyContext: Record<string, unknown> = requirementId
     ? { messageProcessingRequirementId: requirementId }
@@ -391,6 +331,10 @@ function normalizeAgentSend(request: AgentSendRequest): NormalizedAgentSend {
   let replyImageDescriptions: string[] = [];
   let target: Record<string, unknown>;
 
+  if (requestedChannel === "fennenote") {
+    if (params.mode !== "message" && params.mode !== "playback") throw new Error("params.mode must be message or playback for the retired fennenote alias.");
+    delete params.mode;
+  }
   assertOnlyFields(params, Object.keys(channelHelp.params), "params");
   if (channel === "napcat") {
     const targetType = textValue(params.target, "params.target") as "group" | "private";
@@ -462,14 +406,6 @@ function normalizeAgentSend(request: AgentSendRequest): NormalizedAgentSend {
     target = { sessionId };
     Object.assign(internal, { adapterType: "speech", targetType: "voice_transcript", sessionId });
     Object.assign(replyContext, { adapterType: "speech", sessionId, characterTtsDialogue: true });
-  } else if (channel === "fennenote") {
-    const sessionId = textValue(params.sessionId, "params.sessionId") as string;
-    const mode = textValue(params.mode, "params.mode") as "message" | "playback";
-    if (mode !== "message" && mode !== "playback") throw new Error("params.mode must be message or playback for fennenote.");
-    target = { sessionId, mode };
-    Object.assign(internal, { adapterType: "fennenote", targetType: "voice_transcript", sessionId });
-    Object.assign(replyContext, { adapterType: "fennenote", sessionId, routeKind: "voice_transcript" });
-    if (mode === "playback") (internal.payload as Record<string, unknown>).play = true;
   } else if (channel === "role_panel") {
     const roleId = textValue(params.roleId, "params.roleId") as string;
     target = { roleId, messageId: textValue(params.messageId, "params.messageId", false) };

@@ -4,8 +4,9 @@ import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { validateRecordingManifest, recordingManifestHash, validateArchiveReceipt,
   type RecordingManifest, type ArchiveReceipt } from "./recordingArchiveContract.js";
-
-export const RECORDING_ARCHIVE_MAX_MANIFEST_BYTES = 1024 * 1024;
+import { RECORDING_ARCHIVE_MAX_MANIFEST_BYTES } from "./recordingArchiveSchemas.js";
+import { RESOURCE_HASH_PATTERN, RESOURCE_ID_PATTERN, RESOURCE_NAMESPACE_PATTERN, RESOURCE_ZERO_NAMESPACE, RESOURCE_OBJECT_MAX_BYTES } from "./resourceCacheProtocol.js";
+export { RECORDING_ARCHIVE_MAX_MANIFEST_BYTES } from "./recordingArchiveSchemas.js";
 // Disk envelope includes receipt and ownership metadata; distinct from the wire manifest limit.
 const MAX_RECORD_ENVELOPE_BYTES = 4 * 1024 * 1024;
 
@@ -16,10 +17,11 @@ export interface RecordingArchiveStoreOptions {
   committed?(owner: string, manifest: RecordingManifest, receipt: ArchiveReceipt): Promise<void> | void;
 }
 const sha = (body: Buffer | string) => createHash("sha256").update(body).digest("hex");
-const identity = (value: string) => { if (!/^[A-Za-z0-9_-]{1,128}$/.test(value)) throw new Error("Invalid archive identity"); return value; };
-const hash = (value: string) => { if (!/^[a-f0-9]{64}$/.test(value)) throw new Error("Invalid archive hash"); return value; };
+const identityPattern = new RegExp(RESOURCE_ID_PATTERN), hashPattern = new RegExp(RESOURCE_HASH_PATTERN), namespacePattern = new RegExp(RESOURCE_NAMESPACE_PATTERN);
+const identity = (value: string) => { if (!identityPattern.test(value)) throw new Error("Invalid archive identity"); return value; };
+const hash = (value: string) => { if (!hashPattern.test(value)) throw new Error("Invalid archive hash"); return value; };
 const namespace = (value: string) => {
-  if (!/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(value) || value === "00000000-0000-0000-0000-000000000000") throw new Error("Invalid archive namespace");
+  if (!namespacePattern.test(value) || value === RESOURCE_ZERO_NAMESPACE) throw new Error("Invalid archive namespace");
   return value;
 };
 /** No TTL and no legacy-cache fallback. The atomic record envelope is the manifest AND receipt truth.
@@ -61,12 +63,12 @@ export class RecordingArchiveStore {
     const target = await this.options.resolveOwner(owner);
     await this.checkMarker(target); return target;
   }
-  private async directory(target: RecordingArchiveNamespace, components: string[], create: boolean) {
+  private async directory(target: RecordingArchiveNamespace, components: string[], create: boolean, authorize: () => void = () => {}) {
     await this.checkMarker(target);
     let current = target.root;
     for (const component of components) {
       current = path.join(current, component);
-      if (create) { try { await fs.mkdir(current); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; } }
+      if (create) { authorize(); try { await fs.mkdir(current); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; } }
       const stat = await fs.lstat(current);
       if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error("Unsafe archive directory");
     }
@@ -78,12 +80,13 @@ export class RecordingArchiveStore {
     return fs.readFile(file);
   }
   /** Atomic no-replace publication, including between independent Store processes. */
-  private async publish(file: string, body: Buffer): Promise<boolean> {
+  private async publish(file: string, body: Buffer, authorize: () => void = () => {}): Promise<boolean> {
     return auditRecordingArchiveMutation("recording-archive-store", file, async () => {
       const temporary = file + "." + randomUUID() + ".partial";
       try {
-        const handle = await fs.open(temporary, "wx");
-        try { await handle.writeFile(body); await handle.sync(); } finally { await handle.close(); }
+        authorize(); const handle = await fs.open(temporary, "wx");
+        try { authorize(); await handle.writeFile(body); authorize(); await handle.sync(); } finally { await handle.close(); }
+        authorize();
         try { await fs.link(temporary, file); return true; }
         catch (error) { if ((error as NodeJS.ErrnoException).code === "EEXIST") return false; throw error; }
       } finally { await fs.rm(temporary, { force: true }); }
@@ -92,23 +95,25 @@ export class RecordingArchiveStore {
   async capabilities(owner: string) {
     const target = await this.resolve(owner);
     return { protocol: "record-archive-v1", storageNamespaceId: target.storageNamespaceId,
-      workerId: identity(this.options.workerId()), maxObjectBytes: 1024 * 1024, maxManifestBytes: RECORDING_ARCHIVE_MAX_MANIFEST_BYTES };
+      workerId: identity(this.options.workerId()), maxObjectBytes: RESOURCE_OBJECT_MAX_BYTES, maxManifestBytes: RECORDING_ARCHIVE_MAX_MANIFEST_BYTES };
   }
-  async putObject(owner: string, objectHash: string, body: Buffer) {
+  async putObject(owner: string, objectHash: string, body: Buffer, authorize: () => void = () => {}) {
+    authorize();
     hash(objectHash);
-    if (!body.length || body.length > 1024 * 1024 || sha(body) !== objectHash) throw new Error("Archive object checksum/size mismatch");
+    if (!body.length || body.length > RESOURCE_OBJECT_MAX_BYTES || sha(body) !== objectHash) throw new Error("Archive object checksum/size mismatch");
     const target = await this.resolve(owner);
-    const directory = await this.directory(target, ["objects", sha(owner), objectHash.slice(0, 2)], true);
+    const directory = await this.directory(target, ["objects", sha(owner), objectHash.slice(0, 2)], true, authorize);
     const file = path.join(directory, objectHash);
-    await this.publish(file, body);
+    await this.publish(file, body, authorize);
     const retained = await this.readObject(owner, objectHash);
+    authorize();
     if (!retained.equals(body)) throw new Error("Archive object conflict");
     return { sha256: objectHash, bytes: body.length, storageNamespaceId: target.storageNamespaceId };
   }
   async readObject(owner: string, objectHash: string): Promise<Buffer> {
     hash(objectHash); const target = await this.resolve(owner);
     const directory = await this.directory(target, ["objects", sha(owner), objectHash.slice(0, 2)], false);
-    const bytes = await this.regular(path.join(directory, objectHash), 1024 * 1024);
+    const bytes = await this.regular(path.join(directory, objectHash), RESOURCE_OBJECT_MAX_BYTES);
     if (!bytes.length || sha(bytes) !== objectHash) throw new Error("Archive object integrity failure");
     return bytes;
   }
@@ -123,7 +128,7 @@ export class RecordingArchiveStore {
     for (const object of manifest.objects) {
       await this.assertTarget(owner, target);
       const directory = await this.directory(target, ["objects", sha(owner), object.sha256.slice(0, 2)], false);
-      const bytes = await this.regular(path.join(directory, object.sha256), 1024 * 1024);
+      const bytes = await this.regular(path.join(directory, object.sha256), RESOURCE_OBJECT_MAX_BYTES);
       if (sha(bytes) !== object.sha256) throw new Error("Archive object integrity failure");
       if (bytes.length !== object.bytes) throw new Error("Archive object length mismatch");
       let offset = 0;
@@ -151,22 +156,25 @@ export class RecordingArchiveStore {
     const receipt = validateArchiveReceipt(raw.receipt, { workerId: this.options.workerId(), storageNamespaceId: target.storageNamespaceId, manifest });
     return { manifest, receipt };
   }
-  async commitManifest(owner: string, recordId: string, manifestHash: string, input: unknown): Promise<ArchiveReceipt> {
+  async commitManifest(owner: string, recordId: string, manifestHash: string, input: unknown, authorize: () => void = () => {}): Promise<ArchiveReceipt> {
+    authorize();
     identity(owner); identity(recordId); hash(manifestHash);
     const manifest = validateRecordingManifest(input);
     if (manifest.recordId !== recordId || manifest.deviceId !== owner || recordingManifestHash(manifest) !== manifestHash) throw new Error("Archive manifest identity mismatch");
     return this.serial(owner, async () => {
+      authorize();
       const target = await this.resolve(owner);
       await this.verifyMedia(owner, manifest, target);
       await this.assertTarget(owner, target);
-      const directory = await this.directory(target, ["manifests", sha(owner)], true);
+      const directory = await this.directory(target, ["manifests", sha(owner)], true, authorize);
       const receipt = validateArchiveReceipt({ schemaVersion: 1, workerId: this.options.workerId(), storageNamespaceId: target.storageNamespaceId,
         recordId, manifestHash, totalBytes: manifest.totalBytes, segmentCount: manifest.segments.length,
         committedAt: Date.now(), durability: "archived", retention: "indefinite" },
       { workerId: this.options.workerId(), storageNamespaceId: target.storageNamespaceId, manifest });
-      await this.publish(path.join(directory, sha(recordId) + ".json"), Buffer.from(JSON.stringify({ schemaVersion: 1, ownerHash: sha(owner), manifest, receipt })));
+      await this.publish(path.join(directory, sha(recordId) + ".json"), Buffer.from(JSON.stringify({ schemaVersion: 1, ownerHash: sha(owner), manifest, receipt })), authorize);
       await this.assertTarget(owner, target);
       const actual = await this.envelope(owner, recordId);
+      authorize();
       if (actual.receipt.manifestHash !== manifestHash) throw new Error("Archive record conflict");
       // Notification is a hint: durable truth can be rediscovered after a callback failure/restart.
       try { await this.options.committed?.(owner, actual.manifest, actual.receipt); } catch { /* Cannot revoke a committed archive receipt. */ }

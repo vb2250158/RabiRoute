@@ -42,6 +42,10 @@ npm.cmd start
 
 桥接层默认监听 `127.0.0.1:8798`。只有在确认网络边界后，才通过 `XIAOAI_BRIDGE_HOST` 和 `XIAOAI_BRIDGE_PORT` 修改监听地址。
 
+## 反向隧道超时
+
+`reverse-tunnel.py` 的 SSH 连接、协议握手和认证默认各等待 10 秒。在 WebGUI「设置 → 超时设置」修改 `xiaoai.ssh.connect`、`xiaoai.ssh.banner`、`xiaoai.ssh.auth`（毫秒），保存后从高级区域导出独立服务设置。将导出的 JSON 设置为隧道进程的 `RABIROUTE_TIMEOUT_OVERRIDES` 环境变量，再重新启动隧道。未设置的项保留默认值；本机保存不会直接更新独立隧道进程。导出内容只包含超时数字，不包含 SSH 凭据。
+
 ## Smoke test
 
 ```powershell

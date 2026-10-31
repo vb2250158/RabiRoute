@@ -4,7 +4,7 @@ import type http from "node:http";
 import test from "node:test";
 import { createAgentCommunicationRoutes, type AgentCommunicationRoutesContext } from "./agentCommunicationRoutes.js";
 import { registerLanAgentBodyGuard, setTrustedLanAgentSource, type TrustedLanAgentSource } from "./lanAgentBodyAuthority.js";
-import { authorizeAgentApiOperation } from "./agentApiPolicy.js";
+import { listAgentApiOperations } from "./agentApiPolicy.js";
 
 const originalRequest = { deliveryId: "maintenance-test", sender: { agentType: "agent", sessionId: "test-session" }, routeId: "test-route", channel: "napcat", params: {}, payload: { type: "text", text: "test" } };
 function fixture(body: unknown = { originalRequest }, maintenance?: AgentCommunicationRoutesContext["maintenance"]) {
@@ -97,16 +97,11 @@ test("body parser exceptions are redacted", async () => {
   assert.equal(JSON.stringify(results).includes("fake-sensitive-parser-text"), false);
   assert.equal(results.length, 1);
 });
-test("maintenance policy permits only explicit paths without query and distinguishes effects", () => {
+test("maintenance discovery distinguishes verify and settle effects without a permission gate", () => {
   for (const action of ["verify", "settle"]) {
-    const path = `/api/agent/send/receipts/maintenance-test/${action}`;
-    const policy = authorizeAgentApiOperation("POST", path);
-    assert.equal(policy.allowed, true);
-    if (policy.allowed) {
-      assert.equal(policy.operation.help.effects.mode, action === "verify" ? "readOnly" : "mutating");
-      assert.match(policy.operation.help.auth.source, /计划绑定非必须/);
-    }
-    assert.equal(authorizeAgentApiOperation("POST", `${path}?result=sent`).allowed, false);
+    const operation = listAgentApiOperations().find(item => item.method === "POST" && item.pathTemplate === `/api/agent/send/receipts/:deliveryId/${action}`);
+    assert.ok(operation);
+    assert.equal(operation.help.effects.mode, action === "verify" ? "readOnly" : "mutating");
+    assert.match(operation.help.auth.source, /计划绑定非必须/);
   }
-  assert.equal(authorizeAgentApiOperation("POST", "/api/agent/send/receipts/maintenance-test/retry").allowed, false);
 });

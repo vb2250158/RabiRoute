@@ -27,42 +27,92 @@ export const activate = definePlugin({
                 }
             });
             try {
-        const sync = async () => runtime.syncRabiLinkRelayRuntime(() => runtime.syncActiveRabiLinkRelay === sync ? sync() : undefined);
-        runtime.syncActiveRabiLinkRelay = sync;
-        const video = runtime.createDirectVideoReceiver();
-        const peer = runtime.createPeerRuntime();
-        const videoRequests = new runtime.ManagerPluginRequestTracker();
-        const unregisterOwners = runtime.registerManagerPluginHandlerRoutes(runtime.managerPluginRoutes,
-            "manager:rabilink-relay", "manager.rabilink.owners", [videoRequests.wrap(runtime.handleRabiLinkOwnerApi)], [
-                { routeId: "device-agent-directory", kind: "exact", path: "/api/device-agents", methods: ["GET"] },
-                { routeId: "device-agent-owner", kind: "prefix", pathPrefix: "/api/device-agents/", methods: ["GET", "POST", "PUT"] },
-                { routeId: "agent-device-directory", kind: "exact", path: "/api/rabilink/agent-devices", methods: ["GET"] },
-                { routeId: "agent-device-profile", kind: "prefix", pathPrefix: "/api/rabilink/agent-devices/", methods: ["GET", "POST", "PUT"] },
-                { routeId: "mobile-state-owner", kind: "prefix", pathPrefix: "/api/rabilink/mobile/", methods: ["GET", "POST", "PUT", "PATCH"] }
+        let stopped = false, published = false, previousSync;
+        const synchronizations = new Set();
+        const sync = () => {
+            if (stopped || runtime.syncActiveRabiLinkRelay !== sync) return Promise.resolve();
+            const work = Promise.resolve().then(() => {
+                if (!stopped && runtime.syncActiveRabiLinkRelay === sync)
+                    return runtime.syncRabiLinkRelayRuntime(sync);
+            });
+            synchronizations.add(work);
+            void work.then(() => synchronizations.delete(work), () => synchronizations.delete(work));
+            return work;
+        };
+        let video, peer;
+        let peerUpgrades, peerHttp, peerControls, videoOperations, profileOperations, mobileOperations, deviceAgentOperations;
+        const preparations = new Set();
+        const assertPreparing = () => {
+            context.lifecycle.signal.throwIfAborted();
+            if (stopped) throw new Error("RabiLink Relay preparation is retiring.");
+        };
+        const prepare = operation => {
+            assertPreparing();
+            const completion = Promise.resolve().then(() => { assertPreparing(); return operation(); });
+            preparations.add(completion);
+            void completion.then(() => preparations.delete(completion), () => preparations.delete(completion));
+            return completion;
+        };
+        let stopping;
+        const stopOwner = () => stopping ??= (async () => {
+            stopped = true;
+            // Factories and registration can finish after cancellation. Their
+            // callbacks assign ownership before settling this join barrier.
+            await Promise.allSettled([...preparations]);
+            const ownsSharedRuntime = runtime.syncActiveRabiLinkRelay === sync;
+            if (ownsSharedRuntime) runtime.syncActiveRabiLinkRelay = async () => {};
+            peerUpgrades?.stopAccepting();
+            peer?.stopAccepting();
+            const results = await Promise.allSettled([
+                ...[deviceAgentOperations, profileOperations, mobileOperations, videoOperations, peerControls, peerHttp, peerUpgrades]
+                    .filter(Boolean).map(registration => Promise.resolve().then(() => registration.dispose())),
+                Promise.resolve().then(() => video?.stop()),
+                ...synchronizations,
+                ...(ownsSharedRuntime ? [
+                    Promise.resolve().then(() => runtime.peerLanServer.stop()),
+                    Promise.resolve().then(() => runtime.rabiLinkRelayRuntime.stop())
+                ] : [])
             ]);
-        const unregisterVideo = runtime.registerManagerPluginHandlerRoutes(runtime.managerPluginRoutes,
-            "manager:rabilink-relay", "manager.rabilink.video", [videoRequests.wrap(runtime.createDirectVideoRoutes(video))],
-            [{ routeId: "rabilink-video", kind: "prefix", pathPrefix: "/api/rabilink/video/" }]);
-        const unregisterPeer = runtime.registerManagerPluginHandlerRoutes(runtime.managerPluginRoutes,
-            "manager:rabilink-relay", "manager.rabilink.peer", [videoRequests.wrap(peer.handler)],
-            [{ routeId: "rabilink-peer", kind: "prefix", pathPrefix: "/api/rabilink/peer/" }]);
-        ctx.effect(() => async () => {
-            unregisterOwners();
-            unregisterVideo();
-            unregisterPeer();
-            await peer.stop();
-            await video.stop();
-            await videoRequests.stop();
-            if (runtime.syncActiveRabiLinkRelay === sync) {
-                runtime.syncActiveRabiLinkRelay = async () => { };
+            const native = await Promise.allSettled([Promise.resolve().then(() => peer?.stop())]);
+            const failure = [...results, ...native].find(result => result.status === "rejected");
+            if (failure) throw failure.reason;
+        })();
+        context.effects.adopt(stopOwner, "prepared Manager RabiLink Relay owner");
+        await ctx.effect(() => stopOwner, "stop Manager RabiLink Relay plugin");
+        assertPreparing();
+        video = runtime.createDirectVideoReceiver();
+        await prepare(async () => { peer = await runtime.createPeerRuntime(); });
+        await prepare(async () => { videoOperations = await runtime.managerPluginRoutes.registerOperationsAsync(context.identity.instanceId, runtime.createDirectVideoOperations(video), context.lifecycle.signal); });
+        await prepare(async () => { profileOperations = await runtime.managerPluginRoutes.registerOperationsAsync(context.identity.instanceId, runtime.createRabiLinkAgentDeviceOperations(), context.lifecycle.signal); });
+        await prepare(async () => { mobileOperations = await runtime.managerPluginRoutes.registerOperationsAsync(context.identity.instanceId, runtime.createRabiLinkMobileOperations(), context.lifecycle.signal); });
+        await prepare(async () => { deviceAgentOperations = await runtime.managerPluginRoutes.registerOperationsAsync(context.identity.instanceId, runtime.createDeviceAgentOperations(), context.lifecycle.signal); });
+        assertPreparing();
+        peerUpgrades = runtime.managerPluginRoutes.registerUpgrades(context.identity.instanceId, [peer.upgradeOperation]);
+        peerHttp = runtime.managerPluginRoutes.registerHttpProxies(context.identity.instanceId, peer.httpOperations);
+        await prepare(async () => { peerControls = await runtime.managerPluginRoutes.registerOperationsAsync(context.identity.instanceId, peer.operations, context.lifecycle.signal); });
+        assertPreparing();
+        context.publication.add({
+            publish() {
+                previousSync = runtime.syncActiveRabiLinkRelay;
+                // Mark the attempt before calling the pointer owner so rollback
+                // can undo a publish callback that throws after its first write.
+                published = true;
+                peer.publish();
+                runtime.syncActiveRabiLinkRelay = sync;
+            },
+            rollback() {
+                if (!published) return;
+                if (runtime.syncActiveRabiLinkRelay === sync) runtime.syncActiveRabiLinkRelay = previousSync;
+                peer.rollback();
+                published = false;
+            },
+            async afterPublish({ signal, previousRetirement }) {
+                await previousRetirement;
+                signal.throwIfAborted();
+                peer.start();
+                if (runtime.managerListenerReady) await sync();
             }
-            await Promise.all([
-                runtime.peerLanServer.stop(),
-                runtime.rabiLinkRelayRuntime.stop()
-            ]);
-        }, "stop Manager RabiLink Relay plugin");
-        if (runtime.managerListenerReady)
-            await sync();
+        }, "publish Manager RabiLink Relay owner");
 
                 await Promise.all(pendingEffects);
                 return disposeStartedEffects;

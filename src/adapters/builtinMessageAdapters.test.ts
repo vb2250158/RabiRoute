@@ -4,13 +4,7 @@ import { builtinMessageAdapterDefinitions } from "./builtinMessageAdapters.js";
 
 test("built-in Message Adapter manifests include only Gateway-owned adapters", () => {
   const manifests = builtinMessageAdapterDefinitions().map((definition) => definition.manifest);
-  assert.deepEqual(manifests.find((manifest) => manifest.type === "fennenote"), {
-    type: "fennenote",
-    label: "FenneNote / 芬妮笔记",
-    host: "gateway",
-    transport: "http",
-    lifecycle: "fiber"
-  });
+  assert.equal(manifests.some((manifest) => manifest.type === "fennenote"), false);
   assert.equal(manifests.some((manifest) => manifest.type === "xiaoai"), false);
   assert.deepEqual(manifests.find((manifest) => manifest.type === "rabilink"), {
     type: "rabilink",

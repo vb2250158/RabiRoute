@@ -3,7 +3,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { createManagerOperationalLog, managerOperationalError } from "./operationalLog.js";
+import { recordDataMutationAudit } from "../observability/dataMutationAudit.js";
+import { createManagerOperationalLog, managerOperationalError, installOperationalMutationAuditSink } from "./operationalLog.js";
 
 test("Manager operational log writes daily structured records without project-root disclosure", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-manager-operations-"));
@@ -111,4 +112,70 @@ test("Manager operational log removes expired daily shards before appending the 
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
+});
+
+
+test("bound logging stays lazy across group and level reconfiguration", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-lazy-log-"));
+  try {
+    let calls = 0;
+    let clockCalls = 0;
+    const log = createManagerOperationalLog({ rootDir: root, enabledGroups: new Set(), now: () => {
+      clockCalls += 1; return new Date("2026-08-05T03:04:05.000Z");
+    }, diagnosticGroups: new Set(["test"]) });
+    const bound = log.bind("test", "info");
+    const detail = (state: string) => { calls += 1; return { requestId: state }; };
+    for (let i = 0; i < 100; i += 1) assert.equal(bound.record("saved", "r1", detail), null);
+    assert.equal(calls, 0); assert.equal(clockCalls, 0);
+    log.configureFilter({ enabledGroups: new Set(["test"]), minimumLevel: "warn" });
+    assert.equal(bound.enabled, false);
+    assert.equal(log.record("info", "filtered", { group: "test" }), null);
+    log.configureFilter({ enabledGroups: new Set(["test"]), minimumLevel: "info" });
+    assert.equal(bound.enabled, true);
+    const record = bound.record("saved", "r1", detail);
+    assert.equal(record?.requestId, "r1");
+    assert.match(record?.diagnostic?.stack ?? "", /Diagnostic callsite for saved/);
+    assert.equal(calls, 1);
+    log.configureFilter({ enabledGroups: new Set() });
+    assert.equal(bound.record("saved", "r2", detail), null);
+    await log.flush();
+    const persisted = fs.readFileSync(path.join(log.logDirectory, "manager-operations-2026-08-05.jsonl"), "utf8");
+    assert.equal(persisted.trim().split("\n").length, 1);
+    assert.equal(log.bind("test", "info"), bound);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("disabled mutation bridge does not format diagnostic errors", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-lazy-audit-"));
+  const log = createManagerOperationalLog({ rootDir: root, enabledGroups: new Set() });
+  const uninstall = installOperationalMutationAuditSink(log, root);
+  let formatted = 0;
+  const error = { toString() { formatted += 1; return "diagnostic failure"; } };
+  try {
+    const record = { group: "test", event: "write", owner: "test", action: "save", target: { type: "item", id: "1" },
+      dataSource: { kind: "file" as const, id: "fixture" }, outcome: "failed" as const, error };
+    recordDataMutationAudit(record);
+    assert.equal(formatted, 0);
+    log.configureFilter({ enabledGroups: new Set(["test"]) });
+    recordDataMutationAudit(record);
+    assert.equal(formatted, 1);
+    await log.flush();
+  } finally { uninstall(); fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+
+test("filter updates own a stable snapshot rather than mutable caller set aliases", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-log-filter-"));
+  try {
+    const groups = new Set(["test"]);
+    const log = createManagerOperationalLog({ rootDir: root, enabledGroups: groups });
+    const bound = log.bind("test", "info");
+    groups.clear();
+    assert.equal(bound.enabled, true);
+    assert.equal(log.isEnabled("test", "info"), true);
+    log.configureFilter({ enabledGroups: groups });
+    groups.add("test");
+    assert.equal(bound.enabled, false);
+    assert.equal(log.isEnabled("test", "info"), false);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });

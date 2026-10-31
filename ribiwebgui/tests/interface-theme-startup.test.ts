@@ -12,7 +12,7 @@ import {
 import { cloneBuiltinInterfaceTheme } from "../../src/shared/interfaceThemeContract";
 
 const appSource = fs.readFileSync(new URL("../src/App.vue", import.meta.url), "utf8");
-const managerSource = fs.readFileSync(new URL("../../src/manager/controlPlaneRoutes.ts", import.meta.url), "utf8");
+const managerSource = fs.readFileSync(new URL("../../plugins/builtin/io.rabiroute.manager.desktop/1.0.0/manager.mjs", import.meta.url), "utf8");
 
 test("startup uses Manager webTheme and registers custom themes before resolution", () => {
   assert.match(appSource, /settings\.webTheme/);

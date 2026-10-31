@@ -1,3 +1,4 @@
+import { getTimeoutMs } from "../shared/timeoutSettings.js";
 import net from "node:net";
 import {
   MANAGER_DISCOVERY_PATH,
@@ -265,7 +266,7 @@ export async function discoverManagerLanEndpoints(options: Readonly<{
   fetchImpl?: typeof fetch;
   browse?: (timeoutMs: number) => Promise<ManagerDiscoveryServiceRecord[]>;
 }>): Promise<ManagerDiscoveryResult> {
-  const timeoutMs = Math.max(120, Math.min(3_000, Math.floor(options.timeoutMs)));
+  const timeoutMs = Math.max(1, Math.floor(options.timeoutMs));
   const records = await (options.browse ?? browseManagerServices)(timeoutMs);
   const result = await validateManagerDiscoveryRecords(
     records,
@@ -285,7 +286,7 @@ export async function verifyManagerDiscoveryEndpoint(
 ): Promise<void> {
   const body = await fetchWellKnownJson(
     `${endpoint.baseUrl}${MANAGER_DISCOVERY_PATH}`,
-    options.timeoutMs ?? 3_000,
+    options.timeoutMs ?? getTimeoutMs("backend.manager.managerLanDiscoveryConsumer.verifyManagerDiscoveryEndpoint.fetchWellKnownJson.timeoutMs", 3_000),
     options.fetchImpl ?? globalThis.fetch
   );
   const document = parseDocument(body);

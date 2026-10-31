@@ -1,3 +1,4 @@
+import { getTimeoutMs } from "./shared/timeoutSettings.js";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 import { currentEnvelopeDeliveryId, withoutLegacyTransportSuffix } from "./shared/deliveryIdentity.js";
@@ -269,7 +270,7 @@ export function normalizeCodexModelListForTest(value: unknown): {
   return { models, ...(nextCursor ? { nextCursor } : {}) };
 }
 
-export async function listCodexModels(cwd: string, timeoutMs = 8_000): Promise<CodexModelCatalogEntry[]> {
+export async function listCodexModels(cwd: string, timeoutMs = getTimeoutMs("agent.codex.models", 8000)): Promise<CodexModelCatalogEntry[]> {
   const client = createCodexMetadataClient(cwd);
   const timer = setTimeout(() => client.close(), Math.max(100, timeoutMs));
   try {

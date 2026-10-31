@@ -1,3 +1,4 @@
+import { getTimeoutMs } from "../timeoutSettingsClient";
 import {
   normalizePerformanceMonitoringConfig,
   normalizePerformanceOperation,
@@ -186,7 +187,7 @@ async function submitSample(): Promise<void> {
   };
   navigationMs = undefined;
   const controller = new AbortController();
-  const timeout = window.setTimeout(() => controller.abort(), PERFORMANCE_SUBMISSION_TIMEOUT_MS);
+  const timeout = window.setTimeout(() => controller.abort(), getTimeoutMs("webgui.performance.submit", PERFORMANCE_SUBMISSION_TIMEOUT_MS));
   try {
     const response = await fetch("/api/performance/batches", {
       method: "POST",

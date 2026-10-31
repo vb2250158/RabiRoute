@@ -1,4 +1,4 @@
-import { useI18n } from "./i18n";
+import { translateText, useI18n } from "./i18n";
 import { errorResponsePresentation } from "../../src/shared/errorPresentation";
 import { appendWebguiTokenQuery, captureWebguiTokenFromHref } from "./webguiAccessToken";
 
@@ -110,7 +110,8 @@ export function installManagerFetchPrefix(): void {
       const payload = errorResponsePresentation(await readJson(), response.status) as Record<string, unknown>;
       if (!payload || typeof payload !== "object" || !payload.errorMessages) return payload;
       const messages = payload.errorMessages as Record<string, string>;
-      const message = messages[useI18n().locale.value];
+      const locale = useI18n().locale.value;
+      const message = messages[locale] || (messages["zh-CN"] || messages.en || "").split("\n").map(line => translateText(line, locale)).join("\n");
       const nested = payload.error && typeof payload.error === "object" ? payload.error as Record<string, unknown> : undefined;
       return { ...payload, message, ...(nested ? { error: { ...nested, message } } : {}) };
     };

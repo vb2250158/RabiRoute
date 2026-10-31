@@ -1,11 +1,9 @@
+import { getTimeoutMs } from "../../shared/timeoutSettings.js";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import net from "node:net";
-import type http from "node:http";
-import { pipeline } from "node:stream/promises";
-import { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { atomicWriteFileSync } from "../../shared/filePersistence.js";
 import { recordDataMutationAudit } from "../../observability/dataMutationAudit.js";
@@ -156,16 +154,16 @@ export class VacuumVideoTransport {
     child.once("error", () => { active.snapshot.state = "failed"; active.snapshot.error = "worker_start_failed"; void this.close(active); });
     child.once("exit", () => { if (!active.controller.signal.aborted) { active.snapshot.state = "failed"; active.snapshot.error ||= "worker_exited"; void this.close(active); } });
     let ready = false;
-    const readyDeadline = Date.now() + (active.snapshot.connectionMode === "relay" ? 45000 : 10000);
+    const readyDeadline = Date.now() + (active.snapshot.connectionMode === "relay" ? getTimeoutMs("home.videoRelayReady", 45000) : getTimeoutMs("home.videoLocalReady", 10000));
     while (Date.now() < readyDeadline && !active.controller.signal.aborted) {
-      try { const response = await fetch(`${active.baseUrl}/api`, { headers: { Authorization: active.auth }, signal: AbortSignal.any([active.controller.signal, AbortSignal.timeout(1000)]) }); if (response.ok) { await response.body?.cancel(); ready = true; break; } } catch { /* Only this owned address is retried. */ }
+      try { const response = await fetch(`${active.baseUrl}/api`, { headers: { Authorization: active.auth }, signal: AbortSignal.any([active.controller.signal, AbortSignal.timeout(getTimeoutMs("backend.integrations.xiaomiHome.vacuumVideo.connect.AbortSignal.timeout.request", 1000))]) }); if (response.ok) { await response.body?.cancel(); ready = true; break; } } catch { /* Only this owned address is retried. */ }
       await new Promise(resolve => setTimeout(resolve, 100));
     }
     if (!ready || active.controller.signal.aborted) throw videoError("startup_failed", "Video transport did not become ready.");
     // Keep one video-only consumer alive: a keyframe consumer closes the MISS producer
     // before the browser can subscribe, invalidating the established relay endpoint.
     const initial = new AbortController();
-    const frameDeadline = setTimeout(() => initial.abort(), 25000);
+    const frameDeadline = setTimeout(() => initial.abort(), getTimeoutMs("deadline.integrations.xiaomiHome.vacuumVideo.connect", 25000));
     let held: Awaited<ReturnType<typeof holdVideoStream>>;
     try {
       const frame = await fetch(`${active.baseUrl}/api/stream.mp4?src=vacuum&video=h264,h265`, { headers: { Authorization: active.auth }, signal: AbortSignal.any([active.controller.signal, initial.signal]) });
@@ -181,20 +179,28 @@ export class VacuumVideoTransport {
       if (!active.controller.signal.aborted) { active.snapshot.state = "failed"; active.snapshot.error = "camera_stream_interrupted"; await this.close(active); }
     });
   }
-  async stream(sessionId: string, response: http.ServerResponse, frame = false): Promise<void> {
+  async openStream(sessionId: string, frame = false, requestSignal?: AbortSignal) {
     if (this.active?.snapshot.sessionId !== sessionId || this.active.snapshot.state !== "streaming") throw videoError("not_ready", "Video frames are not available yet.");
     const active = this.active, controller = new AbortController();
-    const close = () => controller.abort(); response.once("close", close);
-    try {
-      const upstream = await fetch(`${active.baseUrl}/api/${frame ? "frame" : "stream"}.mp4?src=vacuum&video=h264,h265`, {
-        headers: { Authorization: active.auth! }, signal: AbortSignal.any(frame
-          ? [controller.signal, active.controller.signal, AbortSignal.timeout(25000)]
-          : [controller.signal, active.controller.signal]) });
-      if (!upstream.ok || !upstream.body) { await upstream.body?.cancel(); throw videoError("stream_failed", "Video stream interrupted.", 502); }
-      response.writeHead(200, { "Content-Type": upstream.headers.get("content-type") || "video/mp4", "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" });
-      await pipeline(Readable.fromWeb(upstream.body as never), response);
-    } finally { response.off("close", close); }
+    const upstream = await fetch(`${active.baseUrl}/api/${frame ? "frame" : "stream"}.mp4?src=vacuum&video=h264,h265`, {
+      headers: { Authorization: active.auth! }, signal: AbortSignal.any([
+        controller.signal, active.controller.signal,
+        ...(requestSignal ? [requestSignal] : []), ...(frame ? [AbortSignal.timeout(getTimeoutMs("backend.integrations.xiaomiHome.vacuumVideo.openStream.AbortSignal.timeout.request", 25000))] : [])
+      ]) });
+    if (!upstream.ok || !upstream.body) { await upstream.body?.cancel(); throw videoError("stream_failed", "Video stream interrupted.", 502); }
+    const reader = upstream.body.getReader();
+    let stopped = false, released = false;
+    const release = () => { if (!released) { released = true; reader.releaseLock(); } };
+    const cancel = async () => { stopped = true; controller.abort(); await reader.cancel().catch(() => undefined); release(); };
+    const frames = (async function* () {
+      try {
+        while (!stopped) { const next = await reader.read(); if (next.done) break; yield next.value; }
+      } catch (error) { if (!stopped) throw error; }
+      finally { await cancel(); }
+    })();
+    return { status: 200, headers: { "content-type": upstream.headers.get("content-type") || "video/mp4", "cache-control": "no-store", "x-content-type-options": "nosniff" }, frames, cancel };
   }
+
 }
 
 async function boundedErrorText(response: Response): Promise<string> {

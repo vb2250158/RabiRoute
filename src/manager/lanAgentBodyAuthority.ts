@@ -1,4 +1,3 @@
-import type { InstanceAgent } from "../shared/agentInstance.js";
 import type { IncomingMessage } from "node:http";
 import type { AgentAdapterType } from "../shared/agentAdapterCapabilities.js";
 import { assertTrustedLanAgentPrincipal } from "./lanAgentRequestAccess.js";
@@ -20,9 +19,9 @@ export function validateLanAgentRequestBody(request: IncomingMessage, body: unkn
   guard?.(body);
 }
 
-/** Source claims are bound to the authenticated computer and selected registered Agent. */
+/** Connection authentication is separate from explicit per-request session attribution. */
 export function assertLanAgentBodyAuthority(target: string, body: unknown,
-  agent: Partial<InstanceAgent> | undefined): void {
+  agent: { provider?: string; sessionId?: string } | undefined): void {
   const send = target === "/api/agent/send";
   const threads = target === "/api/agent/threads";
   const outcome = /^\/api\/message-processing\/requirements\/[^/]+\/outcome$/.test(target);
@@ -35,9 +34,17 @@ export function assertLanAgentBodyAuthority(target: string, body: unknown,
   const value = body as Record<string, unknown>;
   const threadDelivery = threads && (value.action === "send" || (value.action === "create" && Boolean(value.prompt)));
   if (threads && !threadDelivery) return;
+  if (!agent?.provider || !agent.sessionId) throw new Error("Explicit Agent type and full source session ID are required for this invocation.");
   const provider = agent?.provider === "codex-desktop" ? "codex" : agent?.provider;
-  const sessions = new Set([agent?.sessionId, ...(agent?.managedSessionIds ?? [])].filter(Boolean));
-  const session = (id: unknown) => { if (typeof id !== "string" || !sessions.has(id)) throw new Error("Remote Agent source session is not owned by this Agent."); };
+  const explicitSession = (id: unknown) => {
+    if (typeof id !== "string" || !id || id !== id.trim() || id.length > 4096 || /[\x00-\x1f\x7f]/.test(id)) {
+      throw new Error("Explicit full source session ID is required.");
+    }
+  };
+  const session = (id: unknown) => {
+    explicitSession(id);
+    if (agent?.sessionId && id !== agent.sessionId) throw new Error("Source session does not match this request's explicit ID.");
+  };
   if (threadDelivery && value.sourceThreadId !== undefined) session(value.sourceThreadId);
   if (outcome && value.decidedByThreadId !== undefined) session(value.decidedByThreadId);
   if (send && value.sender !== undefined) {

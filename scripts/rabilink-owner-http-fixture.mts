@@ -1,7 +1,10 @@
 // Synthetic integration fixture: the real PC owner services consume the existing Relay HTTP queue.
 import http from 'node:http';
 import { createRabiLinkMobileOwner } from '../src/manager/rabiLinkMobileOwner.js';
+import { createRabiLinkMobileOperations } from '../src/manager/rabiLinkMobileOperations.js';
 import { createRabiLinkAgentDevices } from '../src/manager/rabiLinkAgentDevices.js';
+import { createRabiLinkAgentDeviceOperations } from '../src/manager/rabiLinkAgentDeviceOperations.js';
+import { ManagerPluginRouteRegistry } from '../src/manager/managerPluginRouteRegistry.js';
 import { normalizeRabiLinkTaskInput } from '../src/adapters/rabilinkTaskInput.js';
 const base = String(process.env.OWNER_FIXTURE_RELAY), token = String(process.env.OWNER_FIXTURE_TOKEN), appId = String(process.env.OWNER_FIXTURE_APP);
 const deviceId = String(process.env.OWNER_FIXTURE_PC || 'pc-test');
@@ -11,16 +14,20 @@ const traced: { path: string; method: string; headers: Record<string, string> }[
 const authorize = (req: http.IncomingMessage) => req.headers['x-fixture-source-device'] ? { scope: 'synthetic-owner-scope', sourceDeviceId: String(req.headers['x-fixture-source-device']), deviceOwner: req.headers['x-fixture-source-device'] !== '$application' } : null;
 const profiles = createRabiLinkAgentDevices({ dataDir: String(process.env.OWNER_FIXTURE_DIR), sourceDeviceId: deviceId, authorize,
   deviceOwnerTarget: async () => deviceId, readLocal: async () => ({ personas: [{ personaId: 'Fixture' }] }) });
+const profileRoutes = new ManagerPluginRouteRegistry();
+const profileRegistration = profileRoutes.registerOperations('fixture-profiles', createRabiLinkAgentDeviceOperations(() => profiles));
 const module = createRabiLinkMobileOwner({ dataDir: String(process.env.OWNER_FIXTURE_DIR), sourceDeviceId: deviceId,
   authorize,
   applicationOwnerTarget: async () => deviceId,
   peers: async () => [{ id: deviceId, name: 'PC Rabi Smoke', online: true, capabilities: ['webgui'] }]
 });
+const mobileRegistration = profileRoutes.registerOperations('fixture-mobile', createRabiLinkMobileOperations(() => module));
 const server = http.createServer(async (req, res) => {
   try {
+    const url = new URL(req.url || '/', 'http://fixture.invalid');
+    if (profileRoutes.handle(req, url, res)) return;
     const chunks: Buffer[] = []; for await (const chunk of req) chunks.push(chunk);
-    const url = new URL(req.url || '/', 'http://fixture.invalid'), body = chunks.length ? JSON.parse(Buffer.concat(chunks).toString()) : undefined;
-    if (await profiles.handle(req, res, url, body) || await module.handle(req, res, url, body)) return;
+    if (chunks.length) JSON.parse(Buffer.concat(chunks).toString());
     traced.push({ path: req.url || '/', method: req.method || 'GET', headers: Object.fromEntries(Object.entries(req.headers).map(([key, value]) => [key, String(value)])) });
     let reply: Response;
     if (url.pathname === '/manager-config') reply = Response.json({ code: 0, ok: true, source: 'pc-rabi-smoke', config: { manager: { autoStart: true } } });
@@ -43,7 +50,7 @@ process.on('message', (packet: { id: number; command: string; data?: Record<stri
 });
 await request('/worker/webgui-requests?deviceId=' + encodeURIComponent(deviceId) + '&deviceGuid=guid-test&deviceKind=pc&capabilities=webgui&waitMs=1');
 process.send?.({ ready: true });
-process.on('disconnect', () => { stopped = true; server.close(); process.exit(0); });
+process.on('disconnect', () => { stopped = true; void Promise.all([profileRegistration.dispose(), mobileRegistration.dispose()]).finally(() => { server.close(); process.exit(0); }); });
 async function request(path: string, method = 'GET', body?: unknown) {
   const response = await fetch(base + path, { method, headers, ...(body === undefined ? {} : { body: JSON.stringify(body) }), signal: AbortSignal.timeout(3000) });
   return response.json();

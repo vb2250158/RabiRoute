@@ -5,7 +5,8 @@ import os from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import http from "node:http";
-import { ResourceCache, resourceCacheHandler } from "./resourceCache.js";
+import { ResourceCache } from "./resourceCache.js";
+import { resourceCacheFixtureHandler as resourceCacheHandler } from "./resourceApiTestSupport.js";
 import { Readable } from "node:stream";
 import { LanAgentAuthority } from "./lanAgentAuthority.js";
 import { evaluateLanAgentRequest } from "./lanAgentRequestAccess.js";
@@ -62,7 +63,7 @@ function resourceResponse(handler: ReturnType<typeof resourceCacheHandler>, requ
   return new Promise<{ status: number; body: any }>(resolve => {
     let status = 0;
     const response = { headersSent: false, writeHead(value: number) { status = value; },
-      end(body: string) { resolve({ status, body: JSON.parse(body) }); } } as unknown as http.ServerResponse;
+      end(body: string) { resolve({ status, body: Buffer.isBuffer(body) ? body : JSON.parse(body) }); } } as unknown as http.ServerResponse;
     assert.equal(handler(request, new URL(request.url!, "http://fixture"), response), true);
   });
 }
@@ -74,7 +75,6 @@ async function resourceAuthorityFixture(t: import("node:test").TestContext) {
   const config = new RabiGlobalConfigStore(root);
   config.patch({ webguiLan: { enabled: true } });
   const credential = authority.enroll(authority.issueBootstrapTicket().ticket, "fixture-node");
-  authority.registerAgentCatalog(credential.token, [{ agentId: "worker", provider: "fixture" }]);
   const make = (method = "GET", url = "/api/resource-cache/settings", body = "", admitted = true) => {
     const request = Object.assign(Readable.from(body ? [Buffer.from(body)] : []), { method, url,
       socket: { remoteAddress: "192.0.2.1" }, headers: { host: "fixture.invalid", authorization: `Bearer ${credential.token}`, "x-rabiroute-agent-id": "worker" } }) as unknown as http.IncomingMessage;
@@ -83,7 +83,7 @@ async function resourceAuthorityFixture(t: import("node:test").TestContext) {
   };
   const store = new ResourceCache(path.join(root, "state"));
   const handler = resourceCacheHandler(store, { local: () => true, tunnelKey: () => "fixture-key", readOnly: () => false });
-  const revoke = () => { authority.setAgentEnabled("fixture-node", "worker", false); authority.setAgentEnabled("fixture-node", "worker", true); };
+  const revoke = () => { authority.setNodeEnabled("fixture-node", false); authority.setNodeEnabled("fixture-node", true); };
   return { root, store, handler, make, revoke, config };
 }
 
@@ -103,7 +103,7 @@ test("resource settings share real ingress authority, not headers or resource tr
   for (const method of ["GET", "PUT"]) {
     const request = make(method, `/api/resource-cache/data/objects/${id}`, bytes.toString());
     request.headers["x-rabilink-resource-owner"] = "owner";
-    assert.equal((await resourceResponse(handler, request)).status, 403);
+    assert.equal((await resourceResponse(handler, request)).status, 200);
   }
   const local = make("GET", undefined, "", false);
   delete local.headers.authorization; delete local.headers["x-rabiroute-agent-id"];

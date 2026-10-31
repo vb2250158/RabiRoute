@@ -3,6 +3,7 @@ import { EventEmitter } from "node:events";
 import { createHash } from "node:crypto";
 import type http from "node:http";
 import test from "node:test";
+import { apiDigest } from "./apiOperationContract.js";
 import type { AgentRequestRecord, AgentRequestStore } from "../agentRequests/store.js";
 import { AGENT_SEND_REQUEST_CONTRACT, prepareAgentSendRequest, type AgentSendSender } from "../agentSend.js";
 import { registerLanAgentBodyGuard, setTrustedLanAgentSource, type TrustedLanAgentSource } from "./lanAgentBodyAuthority.js";
@@ -48,7 +49,7 @@ function agentRequestRecord(id: string, status: AgentRequestRecord["status"]): A
 function context(overrides: Partial<AgentCommunicationRoutesContext> = {}): AgentCommunicationRoutesContext {
   const record = agentRequestRecord("request-1", "cancelled");
   const agentRequests = {
-    list: () => [],
+    readRequests: async () => [],
     get: () => undefined,
     cancel: () => record
   } as unknown as AgentRequestStore;
@@ -61,12 +62,29 @@ function context(overrides: Partial<AgentCommunicationRoutesContext> = {}): Agen
     agentRequests,
     refreshAgentRequestReminderTimers: () => undefined,
     publishManagerEvent: () => undefined,
-    qqDiagnostics: { route: () => undefined, approvedBinding: () => null, isAgentEnabled: () => false,
+    qqDiagnostics: { route: () => undefined,
       readStatus: () => ({}), routeRunning: () => false, routeStartedAt: () => undefined, jsonResponse: () => undefined },
-    groupFiles: { route: () => undefined, approvedBinding: () => null, isAgentEnabled: () => false, jsonResponse: () => undefined },
+    groupFiles: { route: () => undefined, jsonResponse: () => undefined },
     ...overrides
   };
 }
+
+test("legacy request-list draining joins the asynchronous owner read and preserves its full response", async () => {
+  const records = deferred<AgentRequestRecord[]>(), replies: unknown[] = [];
+  const record = { ...agentRequestRecord("full-history", "responded"), response: { deliveryId: "reply", by: { threadId: "target", agentType: "agent" },
+    result: "Unabridged stored result", nextAction: "continue", respondedAt: "2026-08-21T00:00:00.000Z" } };
+  const routes = createAgentCommunicationRoutes(context({ agentRequests: { readRequests: () => records.promise } as unknown as AgentRequestStore,
+    jsonResponse: (_response, status, body) => replies.push({ status, body }) }));
+  const res = response();
+  assert.equal(routes.handler(request("GET"), new URL("http://fixture.invalid/api/agent/requests?status=responded"), res), true);
+  res.emit("close");
+  let drained = false;
+  const stopping = routes.stopAcceptingAndDrain().then(() => { drained = true; });
+  await new Promise<void>(resolve => setImmediate(resolve));
+  assert.equal(drained, false); assert.deepEqual(replies, []);
+  records.resolve([record]); await stopping;
+  assert.deepEqual(replies, [{ status: 200, body: { code: 0, data: { requests: [record] } } }]);
+});
 
 test("authenticated send preserves request-owned source without a primary-only grant", async () => {
   const remote: TrustedLanAgentSource = {
@@ -208,7 +226,7 @@ test("discovery digests identify full immutable collections independently of fil
   assert.notEqual(results[0].data.catalogDigest, results[3].data.channelsDigest);
   const digest = (value: unknown) => `sha256:${createHash("sha256").update(JSON.stringify(value)).digest("hex")}`;
   assert.equal(results[0].data.catalogDigest, digest(results[0].data.operations));
-  assert.equal(results[3].data.channelsDigest, digest(results[3].data.channels));
+  assert.equal(results[3].data.channelsDigest, apiDigest(results[3].data.channels));
   assert.notEqual(results[1].data.catalogDigest, digest(results[1].data.operations));
   // Prove content sensitivity without mutating the authoritative frozen registry.
   assert.notEqual(results[0].data.catalogDigest, digest([...results[0].data.operations!, { description: "fixture change" }]));
@@ -249,7 +267,7 @@ test("Help preserves filter intersection, lowercase method and empty search comp
   }
 });
 
-test("send capabilities exposes the parser-owned partial field contract without upgrading baseline", () => {
+test("send capabilities exposes the executable schema and named owner rules without claiming full migration", () => {
   const responses: Array<{ data: any }> = [];
   const routes = createAgentCommunicationRoutes(context({
     jsonResponse: (_response, status, body) => { assert.equal(status, 200); responses.push(body as typeof responses[number]); },
@@ -263,16 +281,16 @@ test("send capabilities exposes the parser-owned partial field contract without 
   assert.equal(data.requestContract, AGENT_SEND_REQUEST_CONTRACT);
   const wire = JSON.parse(JSON.stringify(data));
   assert.deepEqual(wire.requestContract, AGENT_SEND_REQUEST_CONTRACT);
-  const digest = (value: unknown) => `sha256:${createHash("sha256").update(JSON.stringify(value)).digest("hex")}`;
+  const digest = apiDigest;
   assert.equal(data.requestContractDigest, digest(wire.requestContract));
   assert.equal(data.requestContractDigest, responses[1].data.requestContractDigest);
-  assert.notEqual(data.requestContractDigest, digest({ ...wire.requestContract, missing: [] }));
+  assert.notEqual(data.requestContractDigest, digest({ ...wire.requestContract, validators: [] }));
   assert.equal(data.channelsDigest, digest(wire.channels));
-  assert.equal(wire.requestContract.kind, "partial-field-allowlist");
-  assert.ok(wire.requestContract.missing.includes("required-and-conditional-fields"));
-  assert.equal("schema" in wire.requestContract, false);
+  assert.equal(wire.schemaVersion, "2");
+  assert.equal(wire.requestContract.kind, "runtime-json-schema");
+  assert.equal(wire.requestContract.schema.additionalProperties, false);
+  assert.ok(wire.requestContract.validators.some((value: { id: string }) => value.id === "agent.send.channel-target"));
   for (const channel of wire.channels) {
-    assert.deepEqual(wire.requestContract.paramsAllowedFields[channel.channel], Object.keys(channel.params));
     const base = { deliveryId: "discovery-contract", sender: { agentType: "dsh", sessionId: "example-session" }, routeId: "example-route", ...channel.example };
     assert.doesNotThrow(() => prepareAgentSendRequest(base));
     for (const section of ["request", "sender", "payload", "params"]) {
@@ -295,7 +313,7 @@ test("send capabilities returns channels and QQ repair guidance", () => {
   assert.equal(routes.handler(request("GET"), new URL("http://localhost/api/agent/send/capabilities"), response()), true);
   const result = responses[0] as { statusCode: number; body: { data: { channels: Array<{ channel: string }>; contract: { qq: string } } } };
   assert.equal(result.statusCode, 200);
-  assert.deepEqual(result.body.data.channels.map(item => item.channel), ["napcat", "wecom", "weixin", "feishu", "rabilink", "speech", "fennenote", "role_panel", "plan_feedback"]);
+  assert.deepEqual(result.body.data.channels.map(item => item.channel), ["napcat", "wecom", "weixin", "feishu", "rabilink", "speech", "role_panel", "plan_feedback"]);
   assert.match(result.body.data.contract.qq, /channel=napcat/);
 });
 
@@ -305,8 +323,6 @@ test("group-file dispatch denies untrusted sources before upstream access", asyn
   const routes = createAgentCommunicationRoutes(context({
     groupFiles: {
       route: () => { throw new Error("untrusted lookup"); },
-      approvedBinding: () => null,
-      isAgentEnabled: () => false,
       readFiles: async () => { probes++; throw new Error("untrusted probe"); },
       jsonResponse: (_response, status, body) => received.resolve({ status, body })
     }
@@ -337,8 +353,6 @@ test("communication drain waits for in-flight authorized group-file read", async
   const routes = createAgentCommunicationRoutes(context({
     groupFiles: {
       route: id => id === definition.id ? definition : undefined,
-      approvedBinding: () => ({ provider: "dsh", sessionId }),
-      isAgentEnabled: () => true,
       readFiles: async () => { started.resolve(); return page.promise; },
       jsonResponse: (_response, status) => { responses.push(status); }
     }
@@ -366,7 +380,7 @@ test("communication drain includes cancel body parsing and side effects", async 
   const calls: string[] = [];
   const record = agentRequestRecord("request-1", "cancelled");
   const agentRequests = {
-    list: () => [],
+    readRequests: async () => [],
     get: () => undefined,
     cancel: (requestId: string, reason?: string) => {
       calls.push(`cancel:${requestId}:${reason}`);

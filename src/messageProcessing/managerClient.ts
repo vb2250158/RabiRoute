@@ -1,3 +1,4 @@
+import { getTimeoutMs } from "../shared/timeoutSettings.js";
 import type { MessageProcessingSource } from "./board.js";
 import type { MessageAgentReferencedSender } from "./referencedAgentSender.js";
 
@@ -10,7 +11,7 @@ export type ReferencedAgentSenderQuery = {
 export async function findReferencedAgentSenders(
   managerBaseUrl: string,
   query: ReferencedAgentSenderQuery,
-  timeoutMs = 5_000
+  timeoutMs = getTimeoutMs("backend.messageProcessing.managerClient.findReferencedAgentSenders.timeoutMs", 5_000)
 ): Promise<MessageAgentReferencedSender[]> {
   const target = new URL("/api/agent/send/traces", `${managerBaseUrl.replace(/\/+$/, "")}/`);
   if (target.protocol !== "http:" && target.protocol !== "https:") {
@@ -90,7 +91,7 @@ export type MessageProcessingManagerCommand =
 export async function sendMessageProcessingManagerCommand(
   managerBaseUrl: string,
   command: MessageProcessingManagerCommand,
-  timeoutMs = 10_000
+  timeoutMs = getTimeoutMs("backend.messageProcessing.managerClient.sendMessageProcessingManagerCommand.timeoutMs", 10_000)
 ): Promise<Record<string, unknown>> {
   const target = new URL("/api/message-processing/requirements", `${managerBaseUrl.replace(/\/+$/, "")}/`);
   if (target.protocol !== "http:" && target.protocol !== "https:") {

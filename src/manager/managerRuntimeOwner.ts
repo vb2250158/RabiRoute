@@ -1,4 +1,7 @@
+import { getTimeoutMs } from "../shared/timeoutSettings.js";
 export type ManagerRuntimeResourceStop = () => Promise<unknown> | unknown;
+export type ManagerRuntimeStopBudget = Readonly<{ timeoutMs: number; deadlineAt: number }>;
+export type ManagerRuntimeBudgetedResourceStop = (budget: ManagerRuntimeStopBudget) => Promise<unknown> | unknown;
 
 export type ManagerRuntimeOwnerHooks<TPublication> = Readonly<{
   fenceIngress: (reason: string) => void;
@@ -15,7 +18,8 @@ type ManagerRuntimeOwnerState = "acquiring" | "published" | "tearing_down" | "st
 
 type ManagerRuntimeResource = {
   owner: string;
-  stop: ManagerRuntimeResourceStop;
+  stop?: ManagerRuntimeResourceStop;
+  stopWithBudget?: ManagerRuntimeBudgetedResourceStop;
   stopFlight?: Promise<void>;
 };
 
@@ -55,18 +59,26 @@ export class ManagerRuntimeOwner<TPublication> {
   private readonly teardownTimeoutMs: number;
 
   constructor(private readonly hooks: ManagerRuntimeOwnerHooks<TPublication>) {
-    this.resourceStopTimeoutMs = positiveTimeout(hooks.resourceStopTimeoutMs, 10_000);
+    this.resourceStopTimeoutMs = positiveTimeout(hooks.resourceStopTimeoutMs, getTimeoutMs("manager.resourceStop", 10000));
     this.teardownTimeoutMs = positiveTimeout(
       hooks.teardownTimeoutMs,
-      DEFAULT_MANAGER_RUNTIME_TEARDOWN_TIMEOUT_MS
+      getTimeoutMs("backend.manager.managerRuntimeOwner.DEFAULT_MANAGER_RUNTIME_TEARDOWN_TIMEOUT_MS", DEFAULT_MANAGER_RUNTIME_TEARDOWN_TIMEOUT_MS)
     );
   }
 
   register(owner: string, stop: ManagerRuntimeResourceStop): void {
+    this.acquireResource(owner, { stop });
+  }
+
+  registerWithBudget(owner: string, stopWithBudget: ManagerRuntimeBudgetedResourceStop): void {
+    this.acquireResource(owner, { stopWithBudget });
+  }
+
+  private acquireResource(owner: string, stop: Pick<ManagerRuntimeResource, "stop" | "stopWithBudget">): void {
     if (this.state !== "acquiring") {
       throw new Error(`Manager runtime cannot acquire '${owner}' while state=${this.state}.`);
     }
-    this.resources.push({ owner: requiredOwner(owner), stop });
+    this.resources.push({ owner: requiredOwner(owner), ...stop });
   }
 
   publish(publication: TPublication): void {
@@ -153,13 +165,14 @@ export class ManagerRuntimeOwner<TPublication> {
   private stopResource(resource: ManagerRuntimeResource, timeoutMs: number): Promise<void> {
     if (!resource.stopFlight) {
       resource.stopFlight = new Promise<void>((resolve, reject) => {
+        const budget = Object.freeze({ timeoutMs, deadlineAt: performance.now() + timeoutMs });
         let settled = false;
-        const finish = (error?: unknown): void => {
+        const finish = (...result: [] | [unknown]): void => {
           if (settled) return;
           settled = true;
           clearTimeout(timer);
-          if (error === undefined) resolve();
-          else reject(error);
+          if (result.length === 0) resolve();
+          else reject(result[0]);
         };
         const timer = setTimeout(
           () => finish(resourceStopTimeoutError(resource.owner, timeoutMs)),
@@ -167,7 +180,7 @@ export class ManagerRuntimeOwner<TPublication> {
         );
         // 显式 teardown 必须等到有界结果，即使其它资源已全部释放。
         void Promise.resolve()
-          .then(() => resource.stop())
+          .then(() => resource.stopWithBudget ? resource.stopWithBudget(budget) : resource.stop!())
           .then(() => finish(), error => finish(error));
       });
     }

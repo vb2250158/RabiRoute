@@ -1,6 +1,10 @@
 # Using knowledge services after connecting
 
-English | [简体中文](knowledge-bridge-settings.md)
+<!-- docs-language-switch -->
+<div align="center">
+English | <a href="./knowledge-bridge-settings.md">简体中文</a> | <a href="./knowledge-bridge-settings_ja.md">日本語</a>
+</div>
+<!-- /docs-language-switch -->
 
 Connect the application in RabiLink settings and select an online PC to use its knowledge tools. Authenticated devices in the same application can read and write by default, without an MCP address, knowledge secret, role/tool allowlists or device-grant JSON.
 

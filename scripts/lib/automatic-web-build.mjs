@@ -7,7 +7,8 @@ import ts from "typescript";
 import { captureAutomaticInputs, automaticInputsUnchanged, writeAutomaticSnapshot } from "./automatic-update-inputs.mjs";
 import { webPatchInputs, isWebPatchInput } from "./web-patch-inputs.mjs";
 
-export const automaticWebInputs = [...webPatchInputs, "src", "tsconfig.json", "scripts/lib/discover-manager-url.mjs"];
+const managerDiscoveryInputs = ["scripts/lib/discover-manager-url.mjs", "scripts/lib/windows-host-discovery.mjs", "scripts/lib/timeout-settings.mjs"];
+export const automaticWebInputs = [...webPatchInputs, "src", "tsconfig.json", ...managerDiscoveryInputs];
 
 function extractVueScript(text) {
   return [...text.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/gi)]
@@ -51,7 +52,7 @@ export async function captureAutomaticWebInputs(root) {
       queue.push(dependency);
     }
   }
-  for (const filename of ["tsconfig.json", "scripts/lib/discover-manager-url.mjs"]) if (snapshot.files.has(filename)) relevant.add(filename);
+  for (const filename of ["tsconfig.json", ...managerDiscoveryInputs]) if (snapshot.files.has(filename)) relevant.add(filename);
   const inventory = [...relevant].sort().map(filename => [filename, createHash("sha256").update(snapshot.files.get(filename)).digest("hex")]);
   return { ...snapshot, webDigest: createHash("sha256").update(JSON.stringify(inventory)).digest("hex") };
 }

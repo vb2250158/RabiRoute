@@ -13,3 +13,5 @@
 插件列表中的名称和描述随 DSH 的中文、英文语言设置切换。
 
 注入消息使用生产者来源 `source.kind=rabi-dsh-context`，兼容 DSH V4 会话格式；再次提交用户提示时排除同一来源的上下文，避免回传自身内容。
+
+插件从 DSH 的 `agent/created` 读取 `startup`、`resume`、`clear` 或 `compact` 来源，在该 Agent 首次进入模型步骤时发送一次 `SessionStart`；被拒绝的步骤不会消耗该事件。普通 fork 与 subagent 沿用 DSH 发布的来源，不按父会话字段重新分类。Agent 销毁后清理本地状态，恢复同一身份会开始新的生命周期。

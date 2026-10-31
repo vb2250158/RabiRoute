@@ -83,3 +83,32 @@ test("request tracker drains operations registered by an in-flight operation", a
   await stopping;
   assert.equal(tracker.activeOperationCount(), 0);
 });
+
+test("an uncooperative operation bounds retirement without erasing its outstanding lease", { timeout: 3000 }, async () => {
+  const tracker = new ManagerPluginRequestTracker(20);
+  let release!: () => void;
+  tracker.trackOperation(new Promise<void>(resolve => { release = resolve; }));
+  try {
+    await assert.rejects(tracker.stop(), /drain timed out.*operations=1/);
+    assert.equal(tracker.activeOperationCount(), 1);
+    assert.equal(tracker.wrap(() => true)(request, url, response()), false);
+  } finally { release(); }
+  await tracker.stop();
+  assert.equal(tracker.activeOperationCount(), 0);
+});
+
+test("a chain of completing children cannot reset or starve the total drain budget", { timeout: 3000 }, async () => {
+  const tracker = new ManagerPluginRequestTracker(20);
+  let continuing = true;
+  const stopChainingAt = performance.now() + 500;
+  const next = () => {
+    if (continuing && performance.now() < stopChainingAt) tracker.trackOperation(Promise.resolve().then(next));
+  };
+  tracker.trackOperation(Promise.resolve().then(next));
+  try {
+    await assert.rejects(tracker.stop(), /drain timed out/);
+    assert.ok(tracker.activeOperationCount() > 0);
+  } finally { continuing = false; }
+  await tracker.stop();
+  assert.equal(tracker.activeOperationCount(), 0);
+});

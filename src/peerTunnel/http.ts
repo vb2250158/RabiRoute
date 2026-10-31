@@ -1,8 +1,37 @@
-import { apiRequestHeaderAllowed } from "../../packages/rabi-api-contract/request.mjs";
+import { getTimeoutMs } from "../shared/timeoutSettings.js";
+import { apiRequestHeaderAllowed, apiRequestTimingPolicy } from "../../packages/rabi-api-contract/request.mjs";
 import http from "node:http";
 import https from "node:https";
 import { Duplex, Transform, Writable, pipeline } from "node:stream";
 import type { TunnelSession, TunnelStream, TunnelRequest } from "./session.js";
+import type { ApiUpgradeInput, ApiHttpProxyInput } from "../manager/apiOperationContract.js";
+
+export const PEER_PROXY_UPGRADE_HANDSHAKE_MS = 10_000;
+export const PEER_PROXY_CONTRACT_HEADER = "x-rabiroute-proxy-contract";
+export const PEER_PROXY_TARGET_HEADERS = "x-rabiroute-target-headers";
+
+/** Consume current-hop version metadata without changing legacy target headers. */
+export function peerProxyRequestHeaders(headers: http.IncomingHttpHeaders): Record<string, string | string[]> {
+  let forwarded = tunnelHeaders(headers);
+  if (headers[PEER_PROXY_CONTRACT_HEADER] !== undefined) {
+    delete forwarded[PEER_PROXY_CONTRACT_HEADER];
+    delete forwarded["x-rabiroute-expected-application-generation-id"];
+    delete forwarded["x-rabiroute-expected-manager-instance-id"];
+  }
+  const encoded = headers[PEER_PROXY_TARGET_HEADERS];
+  if (encoded !== undefined) {
+    if (typeof encoded !== "string") throw new Error("Invalid peer target headers.");
+    const target = JSON.parse(encoded) as unknown;
+    if (!target || typeof target !== "object" || Array.isArray(target)) throw new Error("Invalid peer target headers.");
+    const entries = Object.entries(target);
+    if (new Set(entries.map(([name]) => name.toLowerCase())).size !== entries.length
+      || entries.some(([name, value]) => !/^[!#$%&'*+.^_`|~0-9a-z-]+$/i.test(name)
+        || (typeof value !== "string" && !Array.isArray(value)) || (Array.isArray(value) ? value : [value]).some(item => typeof item !== "string" || /[\r\n\0]/.test(item)))) throw new Error("Invalid peer target headers.");
+    delete forwarded[PEER_PROXY_TARGET_HEADERS];
+    forwarded = { ...forwarded, ...tunnelHeaders(target as Record<string, unknown>) };
+  }
+  return forwarded;
+}
 
 export type TunnelService = {
   baseUrl: string; pathPrefix?: string; headers?: Record<string, string>;
@@ -15,7 +44,9 @@ export function tunnelHeaders(headers: Record<string, unknown>, response = false
   const result: Record<string, string | string[]> = {};
   for (const [name, value] of Object.entries(headers)) {
     const key = name.toLowerCase();
-    if (!excluded.has(key) && apiRequestHeaderAllowed(key) && (typeof value === "string" && !/[\r\n\0]/.test(value) || Array.isArray(value) && value.every(item => typeof item === "string" && !/[\r\n\0]/.test(item)))) result[key] = value as string | string[];
+    if (!excluded.has(key) && apiRequestHeaderAllowed(key) && (typeof value === "string" && !/[\r\n\0]/.test(value) || Array.isArray(value) && value.every(item => typeof item === "string" && !/[\r\n\0]/.test(item)))) {
+      Object.defineProperty(result, key, { value, enumerable: true, configurable: true, writable: true });
+    }
   }
   return result;
 }
@@ -86,6 +117,7 @@ export function serveTunnel(session: TunnelSession, services: () => Record<strin
         ...(typeof service.internalHeaders === "function" ? service.internalHeaders(request.method, endpoint.pathname + endpoint.search) : {}) };
       if (request.upgrade) { headers.connection = "Upgrade"; headers.upgrade = "websocket"; }
       upstream = (endpoint.protocol === "https:" ? https : http).request(endpoint, { method: request.method, headers }, response => {
+        session.trackProducer(new Promise<void>(resolve => response.once("close", resolve)));
         const responseHeaders = tunnelHeaders(response.headers, true);
         if (responseHeaders.location) {
           let location: URL | undefined;
@@ -97,7 +129,9 @@ export function serveTunnel(session: TunnelSession, services: () => Record<strin
         }
         reply({ status: response.statusCode || 502, headers: responseHeaders }, () => pipeline(response, guard(), stream, () => {}));
       });
+      session.trackProducer(new Promise<void>(resolve => upstream!.once("close", resolve)));
       upstream.once("upgrade", (response, socket, head) => {
+        session.trackProducer(new Promise<void>(resolve => socket.once("close", resolve)));
         if (service.requestAllowed && !service.requestAllowed({ ...request, upgrade: true })) {
           socket.destroy(); reply({ status: 403, headers: { "content-type": "text/plain" } }, () => stream.end("Service upgrade denied.")); return;
         }
@@ -110,7 +144,12 @@ export function serveTunnel(session: TunnelSession, services: () => Record<strin
       });
       upstream.once("error", fail);
       // A WebSocket GET finishes HTTP headers but leaves the tunnel byte stream open.
-      if (request.upgrade) upstream.end(); else stream.pipe(guard()).pipe(upstream);
+      if (request.upgrade) upstream.end(); else {
+        // Caller framing is deliberately stripped. Rebuild framing here even for
+        // DELETE/GET, for which Node otherwise omits a streamed request body.
+        upstream.setHeader("transfer-encoding", "chunked");
+        stream.pipe(guard()).pipe(upstream);
+      }
     } catch {
       upstream?.destroy();
       void stream.reply({ status: 403, headers: { "content-type": "text/plain" } }).then(() => stream.end("Target service unavailable or access denied.")).catch(fail);
@@ -118,57 +157,83 @@ export function serveTunnel(session: TunnelSession, services: () => Record<strin
     }
   });
 }
-export async function proxyTunnel(session: TunnelSession, service: string, pathname: string, request: http.IncomingMessage, response: http.ServerResponse, authorize?: () => void) {
-  authorize?.();
-  const stream = session.open({ service, path: pathname, method: request.method || "GET", headers: tunnelHeaders(request.headers) });
+export async function proxyTunnel(session: TunnelSession, service: string, pathname: string, request: http.IncomingMessage, response: http.ServerResponse, authorize?: () => void,
+  binding?: Pick<ApiHttpProxyInput, "prepareResponse" | "signal" | "assertCurrent"> & { requestHeaders: Record<string, string | string[]> }) {
+  const assertCurrent = () => { binding?.assertCurrent(); authorize?.(); };
+  assertCurrent();
+  const timing = apiRequestTimingPolicy({ method: request.method, path: pathname }, { defaultBudgetMs: getTimeoutMs("history.transport", 3000) });
+  const stream = session.open({ service, path: pathname, method: request.method || "GET", headers: binding?.requestHeaders ?? tunnelHeaders(request.headers) }, assertCurrent);
+  const streamClosed = stream.closed ? Promise.resolve() : new Promise<void>(resolve => stream.once("close", resolve));
   const cancel = () => { if (!response.writableFinished) stream.destroy(); };
   const requestError = (error: Error) => stream.destroy(error);
   response.once("close", cancel); request.once("aborted", cancel); request.once("error", requestError);
-  const timer = setTimeout(() => stream.destroy(new Error("Tunnel response headers timed out.")), 190_000);
+  const aborted = () => stream.destroy(new Error("HTTP proxy request cancelled."));
+  binding?.signal.addEventListener("abort", aborted, { once: true }); if (binding?.signal.aborted) aborted();
+  let deadlineExceeded = false;
+  const timer = setTimeout(() => {
+    deadlineExceeded = Boolean(timing);
+    stream.destroy(new Error(timing ? "SEARCH_DEADLINE_EXCEEDED" : "Tunnel response headers timed out."));
+  }, timing?.budgetMs ?? getTimeoutMs("peer.responseHeaders", 190000));
   const input = new Writable({
     write(chunk, encoding, done) {
-      try { authorize?.(); stream.write(chunk, encoding, done); }
+      try { assertCurrent(); stream.write(chunk, encoding, done); }
       catch (error) { done(error as Error); }
     },
-    final(done) { try { authorize?.(); stream.end(done); } catch (error) { done(error as Error); } }
+    final(done) { try { assertCurrent(); stream.end(done); } catch (error) { done(error as Error); } }
   });
+  const inputClosed = input.closed ? Promise.resolve() : new Promise<void>(resolve => input.once("close", resolve));
   // An input denial must abort the pending header wait, not leave an unhandled sink error.
   input.on("error", error => stream.destroy(error));
   try {
-    authorize?.();
+    assertCurrent();
     request.pipe(input);
-    const head = await stream.response; clearTimeout(timer);
-    authorize?.();
+    const head = await stream.response; if (!timing) clearTimeout(timer);
+    assertCurrent();
     // Keep redirects in the same selected target scope.
     const location = head.headers.location;
     if (typeof location === "string") head.headers.location = "/api/rabilink/peer/http/" + encodeURIComponent(session.remote.deviceId) + "/" + encodeURIComponent(service) + location;
+    binding?.prepareResponse(head.status, head.headers);
     response.writeHead(head.status, head.headers);
     const output = new Writable({
       write(chunk, encoding, done) {
-        try { authorize?.(); response.write(chunk, encoding, done); }
+        try { assertCurrent(); response.write(chunk, encoding, done); }
         catch (error) { done(error as Error); }
       },
-      final(done) { try { authorize?.(); response.end(done); } catch (error) { done(error as Error); } }
+      final(done) { try { assertCurrent(); response.end(done); } catch (error) { done(error as Error); } }
     });
     await new Promise<void>((resolve, reject) => pipeline(stream, output, error => error ? reject(error) : resolve()));
   } catch (error) {
     stream.destroy();
     if (response.headersSent) { response.destroy(); throw error; }
     // Propagate original authority denial to the caller's sanitized JSON boundary.
-    authorize?.();
+    assertCurrent();
+    if (deadlineExceeded) {
+      binding?.prepareResponse(503, { "content-type": "application/json" });
+      response.writeHead(503, { "content-type": "application/json" });
+      response.end(JSON.stringify({ code: -1, errorCode: "SEARCH_DEADLINE_EXCEEDED" }));
+      return;
+    }
+    binding?.prepareResponse(502, { "content-type": "text/plain" });
     response.writeHead(502, { "content-type": "text/plain" });
     response.end("Remote connection interrupted; request result may be unknown.");
   } finally {
     clearTimeout(timer);
     request.unpipe(input);
     input.destroy();
+    stream.destroy();
+    await Promise.all([streamClosed, inputClosed]);
+    binding?.signal.removeEventListener("abort", aborted);
     response.off("close", cancel); request.off("aborted", cancel); request.off("error", requestError);
   }
 }
 export async function tunnelFetch(session: TunnelSession, service: string, pathname: string, init: RequestInit = {}): Promise<Response> {
-  const request = new Request("http://tunnel.local" + pathname, init);
+  const timing = apiRequestTimingPolicy({ method: init.method, path: pathname }, { defaultBudgetMs: getTimeoutMs("history.transport", 3000) });
+  const deadline = timing ? AbortSignal.timeout(timing.budgetMs) : undefined;
+  const signal = deadline && init.signal ? AbortSignal.any([init.signal, deadline]) : deadline ?? init.signal;
+  signal?.throwIfAborted();
+  const request = new Request("http://tunnel.local" + pathname, { ...init, signal });
   const stream = session.open({ service, path: pathname, method: request.method, headers: Object.fromEntries(request.headers) });
-  const abort = () => stream.destroy(new Error("Tunnel request cancelled."));
+  const abort = () => stream.destroy(new Error(deadline?.aborted ? "SEARCH_DEADLINE_EXCEEDED" : "Tunnel request cancelled."));
   if (request.signal.aborted) abort(); else request.signal.addEventListener("abort", abort, { once: true });
   stream.once("close", () => request.signal.removeEventListener("abort", abort));
   if (request.body) {
@@ -183,29 +248,43 @@ export async function tunnelFetch(session: TunnelSession, service: string, pathn
   return new Response(body, { status: head.status, headers });
 }
 
-export async function proxyTunnelUpgrade(session: TunnelSession, service: string, pathname: string, request: http.IncomingMessage, socket: Duplex, initial: Buffer, authorize?: () => void) {
-  try { authorize?.(); } catch { socket.destroy(); return; }
-  const stream = session.open({ service, path: pathname, method: "GET", headers: tunnelHeaders(request.headers), upgrade: true });
-  const timer = setTimeout(() => stream.destroy(new Error("WebSocket upgrade timed out.")), 10_000);
+export async function proxyTunnelUpgrade(session: TunnelSession, service: string, pathname: string, request: http.IncomingMessage, socket: Duplex, initial: Buffer, authorize?: () => void,
+  binding?: Pick<ApiUpgradeInput, "prepareHandshake" | "accept" | "signal" | "assertCurrent"> & { requestHeaders?: Record<string, string | string[]> }) {
+  const assertCurrent = () => { binding?.assertCurrent(); authorize?.(); };
+  try { assertCurrent(); } catch { socket.destroy(); return; }
+  const headers = binding ? binding.requestHeaders ?? peerProxyRequestHeaders(request.headers) : tunnelHeaders(request.headers);
+  const stream = session.open({ service, path: pathname, method: "GET", headers, upgrade: true }, assertCurrent);
+  const timer = setTimeout(() => stream.destroy(new Error("WebSocket upgrade timed out.")), getTimeoutMs("peer.proxyHandshake", PEER_PROXY_UPGRADE_HANDSHAKE_MS));
   const guards: Transform[] = [];
+  const closeEvent = (resource: Duplex): Promise<void> => resource.closed ? Promise.resolve() : new Promise(resolve => resource.once("close", resolve));
+  const guardClosures: Promise<void>[] = [];
+  const closed = Promise.all([closeEvent(socket), closeEvent(stream)]).then(() => Promise.all(guardClosures)).then(() => undefined);
+  const cancel = () => { stream.destroy(); socket.destroy(); };
+  binding?.signal.addEventListener("abort", cancel, { once: true });
+  if (binding?.signal.aborted) cancel();
+  void closed.then(() => binding?.signal.removeEventListener("abort", cancel));
+  let accepted = false;
   const guard = () => {
     const checked = new Transform({
-      transform(chunk, _encoding, callback) { try { authorize?.(); callback(null, chunk); } catch (error) { callback(error as Error); } },
-      flush(callback) { try { authorize?.(); callback(); } catch (error) { callback(error as Error); } }
+      transform(chunk, _encoding, callback) { try { assertCurrent(); callback(null, chunk); } catch (error) { callback(error as Error); } },
+      flush(callback) { try { assertCurrent(); callback(); } catch (error) { callback(error as Error); } }
     });
-    checked.on("error", () => { stream.destroy(); socket.destroy(); }); guards.push(checked); return checked;
+    checked.on("error", cancel); guards.push(checked); guardClosures.push(closeEvent(checked)); return checked;
   };
   socket.once("close", () => stream.destroy()); socket.once("error", () => stream.destroy());
   stream.once("close", () => { socket.destroy(); for (const checked of guards) checked.destroy(); });
   try {
     const head = await stream.response;
-    authorize?.();
+    assertCurrent();
     if (head.status !== 101) throw new Error("Remote WebSocket rejected.");
     const headers = { ...tunnelHeaders(head.headers, true), connection: "Upgrade", upgrade: "websocket" };
+    binding?.prepareHandshake(headers);
+    const incoming = guard(), outgoing = guard();
     socket.write("HTTP/1.1 101 Switching Protocols\r\n" + Object.entries(headers).flatMap(([key, value]) => (Array.isArray(value) ? value : [value]).map(item => key + ": " + item + "\r\n")).join("") + "\r\n");
-    if (initial.length) { authorize?.(); stream.write(initial); }
-    socket.pipe(guard()).pipe(stream); stream.pipe(guard()).pipe(socket);
+    binding?.accept({ closed, close: async () => { cancel(); await closed; } }); accepted = true;
+    if (initial.length) { assertCurrent(); stream.write(initial); }
+    socket.pipe(incoming).pipe(stream); stream.pipe(outgoing).pipe(socket);
     stream.once("error", () => socket.destroy());
   } catch { stream.destroy(); socket.destroy(); }
-  finally { clearTimeout(timer); }
+  finally { clearTimeout(timer); if (binding && !accepted) { cancel(); await closed; } }
 }

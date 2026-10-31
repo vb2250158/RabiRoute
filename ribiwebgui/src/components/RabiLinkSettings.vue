@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { getTimeoutMs } from "../timeoutSettingsClient";
 import { computed, onBeforeUnmount, reactive, ref, watch } from "vue";
 import { onBeforeRouteLeave } from "vue-router";
 import { translateText } from "../i18n";
@@ -39,7 +40,7 @@ watch(() => [props.ready, store.meta.rabiGuid], async () => {
   resetAvailability.value = "loading";
   resetSupported.value = false;
   try {
-    const identity = await readResetIdentity(AbortSignal.any([request.signal, AbortSignal.timeout(5_000)]));
+    const identity = await readResetIdentity(AbortSignal.any([request.signal, AbortSignal.timeout(getTimeoutMs("webgui.identity.read", 5000))]));
     if (disposed || request !== identityRequest || request.signal.aborted) return;
     resetSupported.value = identity.canResetInstanceId && identity.guid === store.meta.rabiGuid;
     resetAvailability.value = identity.guid === store.meta.rabiGuid ? "ready" : "error";
@@ -128,12 +129,12 @@ onBeforeUnmount(() => { disposed = true; identityRequest?.abort(); reset.dispose
       </div>
       <v-divider class="my-3" />
       <div class="section-title mb-2">远端智能体上传</div>
-      <v-text-field v-model.number="draft.maxFileMiB" label="单文件上传上限（MiB）" type="number" min="1" max="2048" step="1" density="compact" hint="允许 1–2048 MiB；保存后重启 RabiRoute 生效。QQ 群文件仍受平台限制。" persistent-hint />
+      <v-text-field v-model.number="draft.maxFileMiB" label="单文件上传上限（MiB）" type="number" min="1" :max="Math.floor(Number.MAX_SAFE_INTEGER / 1024 ** 2)" step="1" density="compact" hint="正整数 MiB，可高于 2048；保存后重启 RabiRoute 生效。实际发送仍取决于目标平台支持的文件大小。" persistent-hint />
       <v-expansion-panels variant="accordion" class="mt-3">
         <v-expansion-panel title="高级连接参数">
           <v-expansion-panel-text>
             <div class="form-grid">
-              <v-text-field v-model="draft.speechServiceUrl" label="本机语音服务地址" density="compact" hide-details="auto" />
+              <v-text-field v-model="draft.speechServiceUrl" label="语音服务地址（本机或远端）" density="compact" hide-details="auto" />
               <v-text-field v-model.number="claimWaitSeconds" label="领取任务等待（秒）" type="number" min="0" max="60" step="1" density="compact" hide-details="auto" />
               <v-text-field v-model.number="replyIdleSeconds" label="回复空闲超时（秒）" type="number" min="1" max="120" step="1" density="compact" hide-details="auto" />
             </div>

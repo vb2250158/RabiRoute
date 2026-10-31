@@ -27,7 +27,9 @@ test("delayed receipt heartbeat startup and shutdown keep timers responsive and 
         if (options?.eval && options.workerData?.control && source.includes("durable delivery heartbeat failed")) {
           source = options.workerData.deliveryId.startsWith("33333333")
             ? 'throw new Error("isolated heartbeat startup failure")'
-            : delay + source.replace("publishStatus(STOPPED);", delay + "publishStatus(STOPPED);");
+            : options.workerData.deliveryId.startsWith("55555555")
+              ? 'const faultFs = require("node:fs"); const originalWrite = faultFs.writeFileSync; faultFs.writeFileSync = function(fd, value, ...args) { originalWrite.call(this, fd, "{", ...args); throw new Error("fixture partial lock initialization"); };' + source
+              : delay + source.replace("publishStatus(STOPPED);", delay + "publishStatus(STOPPED);");
         }
         super(source, options);
       }
@@ -60,7 +62,28 @@ test("delayed receipt heartbeat startup and shutdown keep timers responsive and 
       rootDir: ${JSON.stringify(rootDir)}, namespace: "fixture-only", deliveryId: "33333333-1234-4567-8123-123456789abc",
       payload: { fixture: true }, deliver: async () => { failedSends += 1; return { accepted: true }; }
     });
-    console.log(JSON.stringify({ state: outcome.state, sends, elapsedMs, timerDelayMs: await timer, cancelledSends, cancellationCode, failedSends, failedState: failed.state }));
+    let expiredSends = 0;
+    const expired = await executeDurableDelivery({
+      rootDir: ${JSON.stringify(rootDir)}, namespace: "fixture-only", deliveryId: "44444444-1234-4567-8123-123456789abc",
+      payload: { fixture: true }, executionLeaseMs: 100,
+      deliver: async () => { expiredSends += 1; return { accepted: true }; }
+    });
+    let partialSends = 0;
+    const partialId = "55555555-1234-4567-8123-123456789abc";
+    const partial = await executeDurableDelivery({
+      rootDir: ${JSON.stringify(rootDir)}, namespace: "fixture-only", deliveryId: partialId,
+      payload: { fixture: true }, executionLeaseMs: 30000,
+      deliver: async () => { partialSends += 1; return { accepted: true }; }
+    });
+    const { durableDeliveryReceiptPath } = await import(${JSON.stringify(moduleUrl)});
+    const partialLockRemains = (await import("node:fs")).existsSync(durableDeliveryReceiptPath(${JSON.stringify(rootDir)}, "fixture-only", partialId) + ".mutation.lock");
+    const healthy = await executeDurableDelivery({
+      rootDir: ${JSON.stringify(rootDir)}, namespace: "fixture-only", deliveryId: "66666666-1234-4567-8123-123456789abc",
+      payload: { fixture: true }, executionLeaseMs: 30000, deliver: async () => ({ accepted: true })
+    });
+    console.log(JSON.stringify({ state: outcome.state, sends, elapsedMs, timerDelayMs: await timer, cancelledSends, cancellationCode, failedSends, failedState: failed.state,
+      expiredSends, expiredState: expired.state, expiredReason: expired.reason,
+      partialSends, partialState: partial.state, partialLockRemains, healthyState: healthy.state }));
   `;
   const child = spawn(process.execPath, ["--import", "tsx", "--input-type=module", "--eval", source], {
     cwd: process.cwd(), windowsHide: true, stdio: ["ignore", "pipe", "pipe"]
@@ -70,7 +93,7 @@ test("delayed receipt heartbeat startup and shutdown keep timers responsive and 
   child.stdout?.on("data", chunk => { stdout += String(chunk); });
   const result = await waitForChild(child);
   assert.equal(result.code, 0, result.stderr);
-  const measured = JSON.parse(stdout.trim()) as { state: string; sends: number; elapsedMs: number; timerDelayMs: number; cancelledSends: number; cancellationCode: string; failedSends: number; failedState: string };
+  const measured = JSON.parse(stdout.trim()) as { state: string; sends: number; elapsedMs: number; timerDelayMs: number; cancelledSends: number; cancellationCode: string; failedSends: number; failedState: string; expiredSends: number; expiredState: string; expiredReason: string; partialSends: number; partialState: string; partialLockRemains: boolean; healthyState: string };
   assert.equal(measured.state, "completed");
   assert.equal(measured.sends, 1);
   assert.ok(measured.elapsedMs >= 3000, "both owned Worker transitions must complete before the request resolves");
@@ -79,6 +102,13 @@ test("delayed receipt heartbeat startup and shutdown keep timers responsive and 
   assert.equal(measured.cancellationCode, "AUTHORITY_REVOKED");
   assert.equal(measured.failedSends, 0);
   assert.equal(measured.failedState, "uncertain");
+  assert.equal(measured.expiredSends, 0, "an expired startup must never begin the delivery side effect");
+  assert.equal(measured.expiredState, "uncertain");
+  assert.match(measured.expiredReason, /lease expired before renewal/);
+  assert.equal(measured.partialSends, 0);
+  assert.equal(measured.partialState, "uncertain");
+  assert.equal(measured.partialLockRemains, false, "failed partial initialization must release only its own created lock");
+  assert.equal(measured.healthyState, "completed", "an independent healthy delivery remains usable");
 });
 
 function waitForChild(child: ReturnType<typeof spawn>): Promise<{ code: number | null; stderr: string }> {
@@ -446,7 +476,9 @@ test("a proven non-committing CAS rejection releases its receipt for same-key re
   assert.equal(readDurableDeliveryReceipt(rootDir, base.namespace, base.deliveryId)?.state, "completed");
 });
 
-test("an independent heartbeat fences a remote retry while the main thread is synchronously blocked", async () => {
+for (const overlapMutationRead of [false, true]) test(overlapMutationRead
+  ? "a live heartbeat survives a harmless remote mutation-lock read without reviving expired owners"
+  : "an independent heartbeat fences a remote retry while the main thread is synchronously blocked", async t => {
   const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-durable-worker-heartbeat-"));
   const namespace = "storage-mutation-idempotency";
   const deliveryId = "92345678-1234-4567-8123-123456789abc";
@@ -463,6 +495,18 @@ test("an independent heartbeat fences a remote retry while the main thread is sy
     import os from "node:os";
     Object.defineProperty(os, "hostname", { configurable: true, value: () => ${JSON.stringify(remoteHost)} });
     const { executeDurableDelivery } = await import(${JSON.stringify(moduleUrl)});
+    const receiptFile = ${JSON.stringify(durableDeliveryReceiptPath(rootDir, namespace, deliveryId))};
+    const originalRead = fs.readFileSync;
+    let held = false;
+    fs.readFileSync = function(file, ...args) {
+      if (${overlapMutationRead} && !held && String(file) === receiptFile && fs.existsSync(receiptFile + ".mutation.lock")) {
+        held = true;
+        // Hold only the original contender's real locked read. It sees a live
+        // owner and must return in_progress without stopping its heartbeat.
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 700);
+      }
+      return originalRead.call(this, file, ...args);
+    };
     fs.writeFileSync(${JSON.stringify(contenderReady)}, "ready", "utf8");
     await new Promise(resolve => setTimeout(resolve, 650));
     const outcome = await executeDurableDelivery({
@@ -481,6 +525,12 @@ test("an independent heartbeat fences a remote retry while the main thread is sy
     fs.writeFileSync(${JSON.stringify(resultPath)}, JSON.stringify(outcome), "utf8");
   `;
   let contenderCompletion: Promise<{ code: number | null; stderr: string }> | undefined;
+  let contenderProcess: ReturnType<typeof spawn> | undefined;
+  t.after(async () => {
+    if (contenderProcess && contenderProcess.exitCode === null) contenderProcess.kill();
+    await contenderCompletion;
+    fs.rmSync(rootDir, { recursive: true, force: true });
+  });
 
   const first = executeDurableDelivery({
     rootDir,
@@ -492,8 +542,9 @@ test("an independent heartbeat fences a remote retry while the main thread is sy
       const contender = spawn(
         process.execPath,
         ["--import", "tsx", "--input-type=module", "--eval", contenderSource],
-        { cwd: process.cwd(), stdio: ["ignore", "ignore", "pipe"] }
+        { cwd: process.cwd(), windowsHide: true, stdio: ["ignore", "ignore", "pipe"] }
       );
+      contenderProcess = contender;
       contenderCompletion = waitForChild(contender);
       const readyDeadline = Date.now() + 15_000;
       while (!fs.existsSync(contenderReady)) {
@@ -521,6 +572,7 @@ test("an independent heartbeat fences a remote retry while the main thread is sy
   assert.equal(contenderOutcome.state, "in_progress");
   assert.equal(completed.state, "completed");
   assert.equal(fs.existsSync(duplicateMarker), false);
+  assert.equal(fs.existsSync(durableDeliveryReceiptPath(rootDir, namespace, deliveryId) + ".mutation.lock"), false);
 });
 
 test("a replaced owner fences both completed and uncertain settlement without touching the replacement", async () => {

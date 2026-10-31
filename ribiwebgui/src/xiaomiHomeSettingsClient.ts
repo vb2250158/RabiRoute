@@ -73,8 +73,8 @@ export type XiaomiHomeResource = Readonly<{
   capabilities: readonly string[];
 }>;
 
-async function listResources(): Promise<readonly XiaomiHomeResource[]> {
-  return readHomeDirectory<XiaomiHomeResource>("/api/agent/xiaomi-home/resources?view=detail&limit=50", async url => json(await fetch(url, {
+async function listResources(fetchImpl: typeof fetch = (...args) => fetch(...args)): Promise<readonly XiaomiHomeResource[]> {
+  return readHomeDirectory<XiaomiHomeResource>("/api/agent/xiaomi-home/resources?view=detail&limit=50", async url => json(await fetchImpl(url, {
     headers: { accept: "application/json" }
   })));
 }

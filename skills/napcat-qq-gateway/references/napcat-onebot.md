@@ -2,7 +2,7 @@
 
 # NapCat / OneBot 详细参考
 
-发送前先读取 [Rabi 消息投递工作流](../../rabiroute-message-delivery/SKILL.md)。直连仅用于不受 Rabi 管理的独立安装，或已确认 Rabi 不可用、原消息未生效且身份和授权均已核对的故障旁路。Rabi 可用时统一走Rabi 接口。不能以认证失败为理由绕过权限；结果未知须先核对原回执，不能重发试探。
+发送前先读取 [Rabi 消息投递工作流](../../rabiroute-message-delivery/SKILL.md)。独立安装使用当前配置连接；Rabi 管理的消息优先走目标发送接口。该接口不可用时，沿用原授权和原消息标识核对结果并恢复，不以无关接口健康阻断恢复。用户明确配置的禁用项按配置处理；结果未知先核对原回执。
 
 ## 位置与当前连接
 
@@ -13,9 +13,9 @@
 ## 网络与认证
 
 - 反向 WebSocket 将事件送往当前网关配置的完整 URL；按双方当前合同核对消息格式、认证及监听范围。
-- 不建议留空 token 或关闭网关验证。使用既有受保护凭据，不把 token 打进命令行日志或文档；缺少必要凭据时停止并完成授权配置。
-- `ws://` 是明文传输，并不等于安全。仅在已有受信本机配置允许时使用；远端按现行部署合同使用受信 TLS 端点，不关闭证书验证。
-- HTTP Server 限制在既有授权的监听地址和范围。新增远程访问需单独授权，不因示例而开放公网。
+- 按用户现有连接配置使用 Token；不增加第二个密钥或逐功能许可。凭据缺失仅影响该连接，说明配置项并继续无依赖工作，不回显凭据。
+- WebSocket 协议及地址使用用户配置；不按本机/远端或自行划分的来源标签拒绝已配置连接。协议不支持或连接失败时报告具体错误。
+- HTTP Server 使用用户配置的监听地址和范围；用户要求远程接入时完成对应配置，不另加功能审批。
 - 建立 TCP/WebSocket 连接只证明传输建立；还要从 `get_status` 和 `get_login_info` 核对在线状态、账号与目标。
 
 ## OneBot 事件要点
@@ -24,7 +24,7 @@
 
 ## 请求编码示例
 
-以下仅展示已授权独立连接的 UTF-8 编码，不授权执行发送。运行前必须确认 `ONEBOT_BASE_URL` 是当前受信端点，`ONEBOT_ACCESS_TOKEN` 由现有安全入口提供，`QQ_USER_ID` 是已授权真实目标。不要打印凭据，不跟随重定向。
+以下仅展示已授权独立连接的 UTF-8 编码，不授权执行发送。运行前必须确认 `ONEBOT_BASE_URL` 是当前配置端点，`ONEBOT_ACCESS_TOKEN` 由现有安全入口提供，`QQ_USER_ID` 是已授权真实目标。不要打印凭据。资源地址与重定向按连接合同及用户显式配置处理，不加入隐藏域名名单。
 
 ```powershell
 $base = $env:ONEBOT_BASE_URL.TrimEnd('/')
@@ -33,7 +33,7 @@ $bytes = [System.Text.Encoding]::UTF8.GetBytes($json)
 Invoke-RestMethod -Uri "$base/send_private_msg" -Method Post `
   -Headers @{ Authorization = "Bearer $env:ONEBOT_ACCESS_TOKEN" } `
   -ContentType "application/json; charset=utf-8" -Body $bytes `
-  -TimeoutSec 10 -MaximumRedirection 0
+  -TimeoutSec 10
 ```
 
 群聊使用 `send_group_msg` 和 `group_id`，目标来自当前授权，不使用占位编号。Node `fetch` 默认按 UTF-8 编码 JSON 字符串：
@@ -41,7 +41,6 @@ Invoke-RestMethod -Uri "$base/send_private_msg" -Method Post `
 ```js
 const response = await fetch(new URL('/send_private_msg', process.env.ONEBOT_BASE_URL), {
   method: 'POST',
-  redirect: 'error',
   signal: AbortSignal.timeout(10_000),
   headers: { 'content-type': 'application/json', authorization: `Bearer ${process.env.ONEBOT_ACCESS_TOKEN}` },
   body: JSON.stringify({ user_id: Number(process.env.QQ_USER_ID), message: '你好' })

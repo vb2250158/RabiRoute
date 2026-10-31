@@ -1,3 +1,4 @@
+import { getTimeoutMs } from "./shared/timeoutSettings.js";
 import { rabiPcVersionFromCapabilities } from "./shared/rabiPcVersionContract.js";
 
 export type DiscoveredRabiPeer = {
@@ -28,7 +29,7 @@ export async function discoverRabiPeers(relay: { url: string; token: string; dev
   // Transport requests still name their destination explicitly.
   const params = new URLSearchParams();
   const response = await fetch(`${relay.url.replace(/\/+$/, "")}/api/rabilink/peers?${params}`, {
-    headers: { "x-rabilink-token": relay.token }, redirect: "error", signal: AbortSignal.timeout(5_000)
+    headers: { "x-rabilink-token": relay.token }, redirect: "error", signal: AbortSignal.timeout(getTimeoutMs("backend.rabiPeerDiscovery.discoverRabiPeers.AbortSignal.timeout.request", 5_000))
   });
   const body = await response.json() as { peers?: DiscoveredRabiPeer[] };
   if (!response.ok || !Array.isArray(body.peers)) throw new Error("RabiLink device discovery failed.");

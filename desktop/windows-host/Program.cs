@@ -1,6 +1,5 @@
 namespace RabiRoute.WindowsHost;
 
-using System.Runtime.InteropServices;
 using System.Text.Json;
 
 public static class HostEntry
@@ -8,6 +7,7 @@ public static class HostEntry
     [STAThread]
     public static async Task<int> RunAsync(string[] args, string packageRoot, string stateRoot)
     {
+        HostTimeouts.Load(stateRoot);
         var command = ParseCommand(args);
         var generationId = ParseOption(args, "--application-generation-id");
         var jsonOutput = args.Contains("--json", StringComparer.OrdinalIgnoreCase);
@@ -73,17 +73,6 @@ public static class HostEntry
             if (jsonOutput) WriteJson(response);
             return 78;
         }
-        var retiredEntries = PortableOverlayGuard.FindRetiredLifecycleEntriesForStartup(packageRoot, stateRoot);
-        if (retiredEntries.Count > 0)
-        {
-            var message = PortableOverlayGuard.BlockedMessage(retiredEntries);
-            var response = new HostResponse(false, "legacy_overlay_blocked", message);
-            await using var rejectedLog = new HostLog();
-            rejectedLog.Write($"rejected portable overlay with retired lifecycle entries: {string.Join(", ", retiredEntries)}");
-            if (jsonOutput) WriteJson(response);
-            else PortableOverlayGuard.ShowBlockedMessage(message);
-            return 79;
-        }
         using var cancellation = new CancellationTokenSource();
         ConsoleCancelEventHandler cancelHandler = (_, eventArgs) =>
         {
@@ -97,6 +86,7 @@ public static class HostEntry
         {
             var hostDiagnosticsRoot = Path.Combine(stateRoot, "logs", "host");
             await using var log = new HostLog(hostDiagnosticsRoot);
+            PortableOverlayGuard.WarnForStartup(packageRoot, stateRoot, log.Write);
             return await new HostRuntime(
                 packageRoot,
                 stateRoot,
@@ -112,8 +102,8 @@ public static class HostEntry
 
     internal static TimeSpan CommandTimeout(string command) =>
         command is "activate" or "restart"
-            ? ApplicationGeneration.ManagerReadyTimeout + ApplicationGeneration.TrayReadyTimeout + TimeSpan.FromSeconds(90)
-            : TimeSpan.FromSeconds(30);
+            ? ApplicationGeneration.ManagerReadyTimeout + ApplicationGeneration.TrayReadyTimeout + HostTimeouts.Get("host.command.startGrace", TimeSpan.FromSeconds(90))
+            : HostTimeouts.Get("host.command.request", TimeSpan.FromSeconds(30));
 
     internal static string? ParseCommand(string[] args)
     {
@@ -170,8 +160,6 @@ public static class HostEntry
 
 internal static class PortableOverlayGuard
 {
-    private const uint MessageBoxOk = 0x00000000;
-    private const uint MessageBoxIconError = 0x00000010;
     private static readonly string[] RetiredLifecycleEntries =
     {
         "RabiRoute-Desktop.exe",
@@ -208,25 +196,23 @@ internal static class PortableOverlayGuard
             .ToArray();
     }
 
-    internal static string BlockedMessage(IReadOnlyList<string> retiredEntries) =>
-        "RabiRoute refused to start because this folder still contains retired lifecycle entries: " +
-        $"{string.Join(", ", retiredEntries)}. Do not extract the portable ZIP over an older installation. " +
-        "Extract it to a new empty folder, or run the Windows Setup package to migrate the existing installation safely.";
-
-    internal static void ShowBlockedMessage(string message)
+    internal static void WarnForStartup(string packageRoot, string stateRoot, Action<string> writeWarning)
     {
         try
         {
-            MessageBoxW(IntPtr.Zero, message, "RabiRoute cannot start", MessageBoxOk | MessageBoxIconError);
+            var retiredEntries = FindRetiredLifecycleEntriesForStartup(packageRoot, stateRoot);
+            if (retiredEntries.Count > 0)
+            {
+                writeWarning($"warning: retired lifecycle entries were ignored; Host startup continues: {string.Join(", ", retiredEntries)}");
+            }
         }
-        catch
+        catch (Exception exception)
         {
-            // The JSON response and Host log remain the diagnostic contract when UI presentation is unavailable.
+            // A stale entry or a diagnostic failure cannot become lifecycle authority.
+            try { writeWarning($"warning: retired lifecycle entry inspection failed ({exception.GetType().Name}); Host startup continues."); }
+            catch { }
         }
     }
-
-    [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-    private static extern int MessageBoxW(IntPtr window, string text, string caption, uint type);
 }
 
 internal static class LocalRuntimePath

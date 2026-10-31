@@ -68,3 +68,21 @@ export class DesktopSettingsStore {
     }
   }
 }
+
+/** Functional owner shared by executable HTTP operations; persistence and normalization stay in the original store. */
+export function readDesktopSettingsPayload(store: DesktopSettingsStore): { code: 0; data: DesktopSettings & { autostartConfigured: boolean } } {
+  return { code: 0, data: { ...store.read(), autostartConfigured: store.autostartConfigured() } };
+}
+
+export function writeDesktopSettingsPayload(
+  store: DesktopSettingsStore,
+  body: unknown,
+  changed: (settings: DesktopSettings) => void
+): { code: 0; data: DesktopSettings & { autostartConfigured: true } } {
+  const current = store.read();
+  const row = body as Partial<DesktopSettings> | null | undefined;
+  const screenshot = row && typeof row.screenshot === "object" && !Array.isArray(row.screenshot) ? row.screenshot : {};
+  const data = store.write({ ...current, ...row, screenshot: { ...current.screenshot, ...screenshot } });
+  changed(data);
+  return { code: 0, data: { ...data, autostartConfigured: true } };
+}

@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from .timeout_settings import get_timeout_seconds
+
+
 import logging
 import os
 import threading
@@ -62,7 +65,7 @@ class WindowsAudioSessionIdentity:
         self.icon_path = Path(icon_path or default_audio_session_icon()).expanduser().resolve()
         self.process_id = int(process_id if process_id is not None else os.getpid())
         self.poll_interval_seconds = max(0.005, float(poll_interval_seconds))
-        self.join_timeout_seconds = max(0.05, float(join_timeout_seconds))
+        self.join_timeout_seconds = get_timeout_seconds("speech.windowsAudio.join", max(0.05, float(join_timeout_seconds)))
         self.normalize_volume = bool(normalize_volume)
         self.enabled = os.name == "nt" if enabled is None else bool(enabled)
         self._backend_loader = backend_loader or _load_core_audio_backend
@@ -268,7 +271,7 @@ class WindowsAudioSessionKeepalive:
                 daemon=True,
             )
             self._thread.start()
-        self._ready.wait(max(0.1, float(timeout)))
+        self._ready.wait(get_timeout_seconds("speech.windowsAudio.start", max(0.1, float(timeout))))
         return self.active
 
     def stop(self, timeout: float = 2.0) -> None:
@@ -276,7 +279,7 @@ class WindowsAudioSessionKeepalive:
         with self._lock:
             thread = self._thread
         if thread and thread.is_alive():
-            thread.join(max(0.1, float(timeout)))
+            thread.join(get_timeout_seconds("speech.windowsAudio.stop", max(0.1, float(timeout))))
 
     def _run(self) -> None:
         stream: Any = None

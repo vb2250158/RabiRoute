@@ -33,7 +33,7 @@ try {
     .replace('import wx from "wx";', 'import wx from "../test-mocks/wx.js";')
     .replace("'../../../packages/rabi-api-contract/fingerprint.mjs'", JSON.stringify(pathToFileURL(path.resolve(projectRoot,'../../packages/rabi-api-contract/fingerprint.mjs')).href));
   writeText(path.join(utilsRoot, "rabilink-api.js"), apiSource);
-  for(const file of ['phone-eye-transport.js','rabilink-store.js'])writeText(path.join(utilsRoot,file),readText(path.join(projectRoot,'utils',file)).replace(/import wx from ["']wx["'];/, 'import wx from "../test-mocks/wx.js";'));
+  for(const file of ['phone-eye-transport.js','rabilink-store.js','timeout-settings.js'])writeText(path.join(utilsRoot,file),readText(path.join(projectRoot,'utils',file)).replace('../../../packages/rabi-api-contract/fingerprint.mjs',pathToFileURL(path.resolve(projectRoot,'../../packages/rabi-api-contract/fingerprint.mjs')).href).replace(/import wx from ["']wx["'];/, 'import wx from "../test-mocks/wx.js";'));
   writeText(path.join(tempRoot, "test-mocks", "wx.js"), `
 export const requests = [];
 export const nextResponses = [];

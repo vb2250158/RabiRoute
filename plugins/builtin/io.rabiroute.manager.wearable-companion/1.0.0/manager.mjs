@@ -33,16 +33,23 @@ export const activate = definePlugin({
   }));
   if (state !== "managed") return;
 
-  context.effects.add(() => {
-    const handle = workers.launch(
-      context.identity,
-      new URL("./resources/", import.meta.url).href,
-      config
-    );
-    void handle.failure.then(error => {
-      if (error) context.lifecycle.fail(error);
-    });
-    return () => handle.dispose();
-  }, "run Manager-leased wearable companion worker");
+  let handle;
+  context.publication.add({
+    publish() {},
+    rollback() {},
+    async afterPublish({ previousRetirement, signal }) {
+      await previousRetirement;
+      signal.throwIfAborted();
+      handle = workers.launch(
+        context.identity,
+        new URL("./resources/", import.meta.url).href,
+        config
+      );
+      void handle.failure.then(error => {
+        if (error && !signal.aborted) context.lifecycle.fail(error);
+      });
+    },
+    retire() { return handle?.dispose(); }
+  }, "run published Manager-leased wearable companion worker");
  }
 }).activate;

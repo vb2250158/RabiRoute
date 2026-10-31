@@ -1,30 +1,34 @@
 import test from 'node:test';
+import { createHash } from 'node:crypto';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createDeviceAgentOwner } from './deviceAgentOwner.js';
+import { createDeviceAgentOperations } from './deviceAgentOperations.js';
+import { ManagerPluginRouteRegistry } from '../manager/managerPluginRouteRegistry.js';
 import { createDeviceAgentAdapter } from './deviceAgentAdapter.js';
 import type { RabiDeliveryEnvelope } from '../shared/rabiMessage.js';
 
 async function fixture(run: (f: any) => Promise<void>) {
   const directory=fs.mkdtempSync(path.join(os.tmpdir(),'device-agent-owner-'));
-  let revoked=false, assignmentHook=async()=>{}, authorityCalls=0;
+  let revoked=false, assignmentHook=async()=>{}, authorityCalls=0; const allowedAgents = new Set(['glasses-one']);
   const settings={dataDir:directory,ownerInstanceId:'owner-guid',
     authorize:(request:http.IncomingMessage)=>request.headers.authorization==='device' ? {scope:'scope-one',sourceDeviceId:'glasses-one',deviceOwner:true}
       : request.headers.authorization==='phone' ? {scope:'scope-one',sourceDeviceId:'$application',deviceOwner:false}
       : request.headers.authorization==='other' ? {scope:'scope-two',sourceDeviceId:'glasses-one',deviceOwner:true} : null,
     authorizeDelivery:async(request:http.IncomingMessage)=>{authorityCalls++;return ['managed-route','phone','device'].includes(String(request.headers.authorization)) && !revoked ? {scope:'scope-one'} : null;},
-    assertDeviceAssignment:async(scope:string,agentId:string)=>{await assignmentHook();if(scope!=='scope-one' || agentId!=='glasses-one')throw Object.assign(new Error('WRONG_DEVICE_OWNER'),{code:'WRONG_DEVICE_OWNER',statusCode:403});}
+    assertDeviceAssignment:async(scope:string,agentId:string)=>{await assignmentHook();if(scope!=='scope-one' || !allowedAgents.has(agentId))throw Object.assign(new Error('WRONG_DEVICE_OWNER'),{code:'WRONG_DEVICE_OWNER',statusCode:403});}
   };
   let owner=createDeviceAgentOwner(settings);
-  const server=http.createServer(async(request,response)=>{try{const chunks=[];for await(const part of request)chunks.push(part);const body=chunks.length?JSON.parse(Buffer.concat(chunks).toString()):undefined;await owner.handle(request,response,new URL(request.url!,'http://fixture.invalid'),body);}catch(error){response.writeHead(500);response.end(JSON.stringify({message:String(error)}));}});
+  const registry=new ManagerPluginRouteRegistry(),registration=registry.registerOperations('fixture-device-agent',createDeviceAgentOperations(()=>owner));
+  const server=http.createServer((request,response)=>{if(!registry.handle(request,new URL(request.url!,'http://fixture.invalid'),response))response.writeHead(404,{'content-type':'application/json'}).end(JSON.stringify({code:'DEVICE_AGENT_PATH_NOT_FOUND'}));});
   await new Promise<void>(resolve=>server.listen(0,'127.0.0.1',resolve));
   const base='http://127.0.0.1:'+ (server.address() as any).port;
   const call=async(auth:string,method:string,suffix:string,body?:unknown)=>{const response=await fetch(base+'/api/device-agents'+suffix,{method,headers:{authorization:auth,'content-type':'application/json'},body:body===undefined?undefined:JSON.stringify(body)});return {status:response.status,...await response.json() as any};};
-  try{await run({call,owner:()=>owner,restart:()=>{owner=createDeviceAgentOwner(settings);},revoke:()=>{revoked=true;},onAssignment:(hook:()=>Promise<void>)=>{assignmentHook=hook;},authorityCalls:()=>authorityCalls});}
-  finally{server.closeAllConnections();await new Promise<void>(resolve=>server.close(()=>resolve()));fs.rmSync(directory,{recursive:true,force:true});}
+  try{await run({directory,allowAgent:(id:string)=>allowedAgents.add(id),call,owner:()=>owner,restart:()=>{owner=createDeviceAgentOwner(settings);},revoke:()=>{revoked=true;},onAssignment:(hook:()=>Promise<void>)=>{assignmentHook=hook;},authorityCalls:()=>authorityCalls});}
+  finally{await registration.dispose();server.closeAllConnections();await new Promise<void>(resolve=>server.close(()=>resolve()));assert.equal(path.dirname(path.resolve(directory)),path.resolve(os.tmpdir()));assert.ok(path.basename(directory).startsWith('device-agent-owner-'));fs.rmSync(directory,{recursive:true,force:true});}
 }
 const envelope=(deliveryId:string):RabiDeliveryEnvelope=>({deliveryId,sentAt:'2026-01-01T00:00:00Z',messageSource:{type:'system',eventType:'route',eventName:'Route message',eventId:deliveryId,routeId:'route-one'},messageContent:'Original Route input '+deliveryId});
 const sessionBody={sessionId:'native-session',name:'Glasses Agent',loaded:true,capabilities:['language-model','rabi-api','asr','tts']};
@@ -73,4 +77,32 @@ test('assignment awaits cannot retain revoked Route authority, scopes and exact 
   assert.equal((await f.call('other','PUT','/glasses-one/session',sessionBody)).status,403);
   assert.equal((await f.call('device','POST','/glasses-one/deliveries/claim/extra',sessionBody)).status,404);
   assert.equal((await f.call('device','GET','/constructor/session')).status,400);
+}));
+
+test('one bad device mailbox keeps its raw data and cannot hide healthy same-scope receipts', async()=>fixture(async f=>{
+  await f.call('device','PUT','/glasses-one/session',sessionBody);
+  await f.call('managed-route','POST','/glasses-one/deliveries',{deliveryId:'healthy',envelope:envelope('healthy')});
+  const file=path.join(f.directory,'device-agent-owner',createHash('sha256').update('scope-one').digest('hex')+'.json');
+  const stored=JSON.parse(fs.readFileSync(file,'utf8'));
+  const damaged={broken:null,'broken-delivery':{session:null,deliveries:[null]},'broken-response':{
+    session:null,deliveries:[{...stored.agents['glasses-one'].deliveries[0],response:{status:'completed',text:{invalid:true}}}]
+  }};
+  Object.assign(stored.agents,damaged); fs.writeFileSync(file,JSON.stringify(stored)); f.restart();
+  const directory=await f.call('phone','GET',''); assert.equal(directory.status,200);
+  assert.deepEqual(directory.data.agents.map((row:any)=>row.agentId),['glasses-one']);
+  assert.deepEqual(directory.data.recordIssues.map((row:any)=>row.agentId).sort(),Object.keys(damaged).sort());
+  for(const key of Object.keys(damaged)) {
+    f.allowAgent(key);
+    assert.throws(()=>f.owner().readDelivery('scope-one',key,'healthy'),/DEVICE_AGENT_RECORD_INVALID/);
+    const bad=await f.call('managed-route','POST',`/${key}/deliveries`,{deliveryId:'healthy',envelope:envelope('healthy')});
+    assert.equal(bad.status,409); assert.equal(bad.code,'DEVICE_AGENT_RECORD_INVALID');
+  }
+  assert.equal((await f.call('managed-route','GET','/glasses-one/deliveries/healthy')).data.receipt.status,'queued');
+  const next=await f.call('managed-route','POST','/glasses-one/deliveries',{deliveryId:'next',envelope:envelope('next')}); assert.equal(next.status,202);
+  const after=JSON.parse(fs.readFileSync(file,'utf8')); for(const [key,raw] of Object.entries(damaged)) assert.deepEqual(after.agents[key],raw);
+  f.restart(); assert.equal(f.owner().readDelivery('scope-one','glasses-one','next').status,'queued');
+  assert.throws(()=>f.owner().readDelivery('scope-one','broken','healthy'),/DEVICE_AGENT_RECORD_INVALID/);
+  fs.writeFileSync(file,JSON.stringify({version:999,agents:{}})); const unknown=fs.readFileSync(file,'utf8');
+  assert.equal((await f.call('managed-route','POST','/glasses-one/deliveries',{deliveryId:'uncertain',envelope:envelope('uncertain')})).status,500);
+  assert.equal(fs.readFileSync(file,'utf8'),unknown); assert.deepEqual(f.owner().agents('other-scope'),[]);
 }));

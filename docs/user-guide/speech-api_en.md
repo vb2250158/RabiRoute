@@ -1,6 +1,6 @@
 <!-- docs-language-switch -->
 <div align="center">
-English | <a href="./speech-api.md">简体中文</a>
+English | <a href="./speech-api.md">简体中文</a> | <a href="./speech-api_ja.md">日本語</a>
 </div>
 <!-- /docs-language-switch -->
 

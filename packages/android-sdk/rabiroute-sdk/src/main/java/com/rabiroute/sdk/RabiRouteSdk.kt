@@ -200,8 +200,11 @@ class RabiRouteSdk @JvmOverloads constructor(
     private val managerBaseUrls: List<String> = emptyList(),
     private val rabiLinkPorts: List<Int> = listOf(8794),
     private val timeoutMs: Int = 650,
-    private val managerTransport: RabiLinkManagerHttpTransport? = null
+    private val managerTransport: RabiLinkManagerHttpTransport? = null,
+    private val discoveryTimeout: (String,Long)->Long = { _, fallback -> fallback }
 ) {
+    private val timeoutSnapshots = java.util.concurrent.ConcurrentHashMap<String, RabiTimeoutSettings>()
+    private fun timeoutScope(url: String): String = URL(url).let { "${it.protocol}://${it.host}:${if(it.port < 0) it.defaultPort else it.port}" }
     /** Any current or future public Manager HTTP path; no per-operation Relay adapter. */
     fun requestMobileManager(relayBaseUrl: String, token: String, targetDeviceId: String, path: String,
                              method: String = "GET", body: String? = null, headers: Map<String,String> = emptyMap(),
@@ -248,7 +251,7 @@ class RabiRouteSdk @JvmOverloads constructor(
         return state.workers.firstOrNull { it.id == target || it.guid == target } ?: error("Route target is not connected")
     }
     fun scanLan(context: Context): List<RabiInstance> {
-        val discoveredEndpoints = RabiRouteNsdDiscovery(context, timeoutMs).discoverManagerEndpoints()
+        val discoveredEndpoints = RabiRouteNsdDiscovery(context, timeoutMs, discoveryTimeout).discoverManagerEndpoints()
         val discoveredInstances = discoveredEndpoints.map { endpoint ->
             val verified = readIdentityDocument(endpoint.baseUrl)
             RabiRouteDiscoveryContract.requireMatchingIdentity(
@@ -282,7 +285,7 @@ class RabiRouteSdk @JvmOverloads constructor(
         }
         executor.shutdown()
         val completed = executor.awaitTermination(
-            (timeoutMs.toLong() * targets.size / 8L).coerceAtLeast(1500L),
+            discoveryTimeout("android.discovery.scan",(timeoutMs.toLong() * targets.size / 8L).coerceAtLeast(1500L)),
             TimeUnit.MILLISECONDS
         )
         if (!completed) executor.shutdownNow()
@@ -301,7 +304,7 @@ class RabiRouteSdk @JvmOverloads constructor(
             }
         }
         executor.shutdown()
-        executor.awaitTermination((timeoutMs * hosts.size.coerceAtMost(254) / 8L).coerceAtLeast(1500L), TimeUnit.MILLISECONDS)
+        executor.awaitTermination(discoveryTimeout("android.discovery.scan",(timeoutMs.toLong() * hosts.size.coerceAtMost(254) / 8L).coerceAtLeast(1500L)), TimeUnit.MILLISECONDS)
         return results.sortedWith(compareBy<RabiLinkEndpoint> { !it.ok }.thenBy { it.host }.thenBy { it.port })
     }
 
@@ -336,6 +339,7 @@ class RabiRouteSdk @JvmOverloads constructor(
             managerInstanceId = data.optString("managerInstanceId"),
             guid = data.optString("guid")
         )
+        timeoutSnapshots[timeoutScope(normalizedBaseUrl)] = RabiTimeoutSettings(data.optJSONObject("timeoutOverrides") ?: JSONObject())
         return VerifiedManagerIdentity(
             instance = RabiInstance(
                 guid = data.optString("guid"),
@@ -849,12 +853,19 @@ class RabiRouteSdk @JvmOverloads constructor(
         readTimeoutMs: Int = timeoutMs,
         maxResponseBytes: Int = 4 * 1024 * 1024
     ): JSONObject {
+        val timeouts = timeoutSnapshots[timeoutScope(url)] ?: RabiTimeoutSettings()
+        fun configured(key: String, fallback: Long): Int {
+            val direct = timeouts.get(key,discoveryTimeout(key,fallback))
+            val token = headers.entries.firstOrNull { it.key.equals("X-RabiLink-Token",true) }?.value.orEmpty()
+            return (managerTransport?.timeout(URL(url).let { "${it.protocol}://${it.authority}" },token,key,direct) ?: direct).toInt()
+        }
         val connection = (URL(url).openConnection() as HttpURLConnection).apply {
             requestMethod = method
-            connectTimeout = timeoutMs
-            readTimeout = readTimeoutMs
+            connectTimeout = configured("android.sdk.connect", timeoutMs.toLong())
+            readTimeout = configured("android.sdk.read", readTimeoutMs.toLong())
             instanceFollowRedirects = false
             setRequestProperty("accept", "application/json")
+            setRequestProperty("X-Rabi-Timeout-Ms", readTimeout.toString())
             for ((key, value) in headers) setRequestProperty(key, value)
             if (body != null) {
                 doOutput = true

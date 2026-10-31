@@ -2,6 +2,8 @@ English | [简体中文](plan-resources.md)
 
 # Plan attachments and step file records
 
+When retaining attachments, the service locates each file by its filename in the current plan package and verifies its SHA-256 digest again. Absolute paths from an earlier installation or attachment layout do not prevent saving. Missing files or mismatched digests reject the entire update and preserve the original plan package.
+
 Plan attachments use `attachments` on `PATCH /api/roles/:roleId/plans/:planId`. Read the latest plan and strong ETag, retain existing attachment IDs, then add new content. A request may upload at most 8 new files, 10 MiB each and 25 MiB of new content in total. Retained attachments do not consume that batch budget. Use `If-Match` and a stable `Idempotency-Key`, then read back attachment IDs and SHA-256 digests. Omitting `attachments` preserves the list; an explicit empty array still clears it.
 
 Steps retain changes in `steps[].resourceRecords`, independently of the length-limited description. Each record has a unique `id`, source `sessionId`, ISO `time` and `resources`. Each resource contains `path`, `change` (`added`, `modified`, `deleted`), `summary`, optional `sha256` and `attribution` (`tool-observed` or `agent-reported`). Existing record IDs are immutable. Updating a step without records preserves previous records. Rabi Web displays them under File changes. These records describe provenance, not review or acceptance.

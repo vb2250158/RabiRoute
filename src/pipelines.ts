@@ -161,13 +161,14 @@ function optionalBoolean(value: unknown): boolean | undefined {
 
 function normalizeOutputAdapter(value: unknown): OutputAdapterType | undefined {
   const text = optionalString(value);
+  if (text === "fennenote") return "tts";
   if (text === "codex") return "agent";
   return text && isOutputAdapterType(text) ? text : undefined;
 }
 
 function normalizeOutputPipeline(value: unknown): string | undefined {
   const text = optionalString(value);
-  return text === "codex" ? "agent" : text;
+  return text === "fennenote" ? "tts" : text === "codex" ? "agent" : text;
 }
 
 export function normalizePipelineDefinition(raw: unknown): NormalizedPipelineDefinition | undefined {
@@ -182,7 +183,7 @@ export function normalizePipelineDefinition(raw: unknown): NormalizedPipelineDef
   return {
     id: optionalString(item.id),
     name: optionalString(item.name),
-    inputAdapter: inputAdapter && isMessageEndpointType(inputAdapter) ? inputAdapter : undefined,
+    inputAdapter: inputAdapter === "fennenote" ? "speech" : inputAdapter && isMessageEndpointType(inputAdapter) ? inputAdapter : undefined,
     outputAdapter: normalizeOutputAdapter(item.outputAdapter),
     outputPipeline: normalizeOutputPipeline(item.outputPipeline),
     promptOutputMode: promptOutputMode && isPromptOutputMode(promptOutputMode) ? promptOutputMode : undefined,

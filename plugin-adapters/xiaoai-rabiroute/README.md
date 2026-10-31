@@ -42,6 +42,10 @@ npm.cmd start
 
 The bridge listens on `127.0.0.1:8798` by default. Override it with `XIAOAI_BRIDGE_HOST` and `XIAOAI_BRIDGE_PORT` only when the network boundary has been reviewed.
 
+## Reverse tunnel timeouts
+
+`reverse-tunnel.py` waits up to 10 seconds each for the SSH connection, protocol banner, and authentication. In WebGUI **Settings → Timeout settings**, edit `xiaoai.ssh.connect`, `xiaoai.ssh.banner`, and `xiaoai.ssh.auth` in milliseconds, save, then export the standalone service settings from the advanced section. Set the exported JSON as the tunnel process's `RABIROUTE_TIMEOUT_OVERRIDES` environment variable and restart the tunnel. Unset entries retain their defaults; saving locally does not update a standalone tunnel process. The export contains numeric timeouts only, without SSH credentials.
+
 ## Smoke test
 
 ```powershell

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .timeout_settings import get_timeout_seconds, get_timeout_ms
+
 import ctypes
 import re
 import sys
@@ -652,7 +654,7 @@ class WindowsClipboardSelectionReader(QObject):
         self._copy_sender = copy_sender or self._send_copy_shortcut
         self._clipboard_provider = clipboard_provider or QApplication.clipboard
         self._sequence_provider = sequence_provider or self._clipboard_sequence_number
-        self._timeout_ms = max(120, timeout_ms)
+        self._timeout_ms = get_timeout_ms("desktop.selection.capture", max(120, timeout_ms))
         self._callback: Callable[[SelectedText | None], None] | None = None
         self._original_mime: QMimeData | None = None
         self._original_sequence = 0
@@ -973,7 +975,7 @@ class WindowsGlobalSelectionHook(QObject):
         self._stop_requested.set()
         if self._thread_id:
             ctypes.windll.user32.PostThreadMessageW(self._thread_id, 0x0012, 0, 0)
-        thread.join(timeout=1.5)
+        thread.join(timeout=get_timeout_seconds("desktop.selection.stop", 1.5))
         self._thread = None
         self._thread_id = 0
 

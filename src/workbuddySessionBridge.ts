@@ -1,3 +1,4 @@
+import { getTimeoutMs } from "./shared/timeoutSettings.js";
 /**
  * WorkBuddy session delivery bridge.
  *
@@ -145,7 +146,7 @@ export async function deliverWorkbuddyMessage(
     response = await fetchImpl(`${origin}/api/v1/runs`, {
       method: "POST",
       redirect: "manual",
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      signal: AbortSignal.timeout(getTimeoutMs("backend.workbuddySessionBridge.REQUEST_TIMEOUT_MS", REQUEST_TIMEOUT_MS)),
       headers: {
         Authorization: `Bearer ${password}`,
         "Content-Type": "application/json"
@@ -197,7 +198,7 @@ export async function deliverWorkbuddyMessage(
 
   const settled = await waitForWorkbuddyTurn(origin, runId, password, {
     fetchImpl,
-    timeoutMs: Math.max(0, request.settleTimeoutMs ?? DEFAULT_SETTLE_TIMEOUT_MS)
+    timeoutMs: Math.max(0, request.settleTimeoutMs ?? getTimeoutMs("backend.workbuddySessionBridge.DEFAULT_SETTLE_TIMEOUT_MS", DEFAULT_SETTLE_TIMEOUT_MS))
   });
   return { ok: true, runId, settled };
 }
@@ -215,13 +216,13 @@ export async function waitForWorkbuddyTurn(
 ): Promise<boolean> {
   const origin = assertWorkbuddyLoopback(endpoint);
   const fetchImpl = options.fetchImpl ?? fetch;
-  const deadline = Date.now() + (options.timeoutMs ?? DEFAULT_SETTLE_TIMEOUT_MS);
+  const deadline = Date.now() + (options.timeoutMs ?? getTimeoutMs("backend.workbuddySessionBridge.DEFAULT_SETTLE_TIMEOUT_MS", DEFAULT_SETTLE_TIMEOUT_MS));
   // First poll is immediate: short turns finish long before the deadline.
   for (;;) {
     try {
       const response = await fetchImpl(`${origin}/api/v1/runs/${encodeURIComponent(runId)}`, {
         redirect: "manual",
-        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+        signal: AbortSignal.timeout(getTimeoutMs("backend.workbuddySessionBridge.REQUEST_TIMEOUT_MS", REQUEST_TIMEOUT_MS)),
         headers: { Authorization: `Bearer ${password}` }
       });
       if (response.ok) {

@@ -54,7 +54,7 @@ export const useRoleStore = defineStore("roles", () => {
       const url = `/api/roles?limit=100${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`;
       const page = await roleRequest<{ roles: RoleSummary[]; nextCursor: string | null }>(source ? remotePersonaServicePath(source, url) : url);
       if (generation !== catalogVersion || source !== sourceDeviceId.value) return;
-      collected.push(...page.roles);
+      collected.push(...page.roles.map(role => ({ ...role, avatarUrl: source && role.avatarUrl?.startsWith("/api/") ? remotePersonaServicePath(source, role.avatarUrl) : role.avatarUrl })));
       cursor = page.nextCursor || "";
       catalog.value = [...collected];
     } while (cursor);
@@ -112,6 +112,11 @@ export const useRoleStore = defineStore("roles", () => {
   function touch() { /* dirty is derived from the independent role draft. */ }
   const actions = createRoleEditorActions(() => draft.value, touch);
   async function openConfigFile(type: string, _routeId = "", roleId = selectedRoleId.value) {
+    if (sourceDeviceId.value) {
+      const query = new URLSearchParams({ type, roleId });
+      await roleRequest(remotePersonaServicePath(sourceDeviceId.value, `/api/open-config-file?${query}`), { method: "POST" });
+      return;
+    }
     await routes.openConfigFile(type, "", roleId);
   }
   return { catalog, selectedRoleId, sourceDeviceId, detail, draft, dirty, archived, ready, loading, saving, error,

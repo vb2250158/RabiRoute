@@ -28,24 +28,16 @@ export const activate = definePlugin({
             });
             try {
         const service = new runtime.CopilotControlService();
-        const requestTracker = new runtime.ManagerPluginRequestTracker();
-        const handler = runtime.createAgentProviderControlRouteHandler("copilot", {
-            jsonResponse: runtime.jsonResponse,
+        const operations = await runtime.managerPluginRoutes.registerOperationsAsync(context.identity.instanceId, runtime.createCopilotControlOperations({
             installCopilot: () => service.install(),
             startCopilotLogin: callbacks => service.login(callbacks),
             getCopilotStatus: () => runtime.getCopilotStatus(runtime.agentManagerApiCtx()),
             publishEvent: runtime.publishManagerEvent
-        }, operation => requestTracker.trackOperation(operation));
+        }), context.lifecycle.signal);
         ctx.effect(() => {
-            const unregister = runtime.registerManagerPluginHandlerRoutes(runtime.managerPluginRoutes, "manager:copilot-control", "manager.copilot-control.api", [requestTracker.wrap(handler)], [
-                { routeId: "install", kind: "exact", path: "/api/agent/copilot-install", methods: ["POST"] },
-                { routeId: "login", kind: "exact", path: "/api/agent/copilot-login", methods: ["POST"] },
-                { routeId: "status", kind: "exact", path: "/api/agent/copilot-status", methods: ["GET"] }
-            ]);
             return async () => {
-                unregister();
-                await requestTracker.stop();
-                await service.stop();
+                const retirement = operations.dispose();
+                try { await service.stop(); } finally { await retirement; }
             };
         }, "activate Manager Copilot control plugin");
 

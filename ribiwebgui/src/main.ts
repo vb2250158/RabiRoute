@@ -1,6 +1,7 @@
 import "@mdi/font/css/materialdesignicons.css";
 import "vuetify/styles";
 import "./styles.css";
+import { loadTimeoutSettings } from "./timeoutSettingsClient";
 
 import { createPinia } from "pinia";
 import { createApp } from "vue";
@@ -41,6 +42,7 @@ export async function refreshWebPluginCatalogInBackground(): Promise<void> {
 
 async function bootstrap(): Promise<void> {
   installManagerFetchPrefix();
+  void loadTimeoutSettings().catch(error => console.warn("Timeout settings unavailable; using defaults.", error));
   installFrontendPerformanceReporter();
   if (await redirectLoopbackWebguiToLan()) return;
 

@@ -9,25 +9,45 @@ import { randomUUID, createHash } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import { LanAgentAuthority } from "./lanAgentAuthority.js";
 import { LanAgentRegistry } from "./lanAgentRegistry.js";
-import { handleLanAgentApi } from "./lanAgentRoutes.js";
+import { createLanAgentManagementOperations, type LanAgentRoutesContext } from "./lanAgentRoutes.js";
+import { createLanAgentReadOperations } from "./lanAgentReadOperations.js";
+import { createLanAgentTerminalOperations } from "./lanAgentTerminalRoutes.js";
+import { createLanAgentComputerOperations } from "./lanAgentComputerRoutes.js";
+import { createLanAgentConnectionOperation } from "./lanAgentConnectionOperation.js";
+import { ManagerPluginRouteRegistry } from "./managerPluginRouteRegistry.js";
+import { createApiDiscoveryOperations } from "./apiDiscoveryRoutes.js";
+import { evaluateLanAgentRequest, assertTrustedLanAgentPrincipal } from "./lanAgentRequestAccess.js";
+import { registerLanAgentBodyGuard, assertLanAgentBodyAuthority } from "./lanAgentBodyAuthority.js";
 
 test("first enrollment and real CLI worker provide computer I/O with no Agent binding", {skip:process.platform!=="win32",timeout:90000}, async t => {
   const root=fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(),"rabi-client-entry-")));
   const authority=new LanAgentAuthority({statePath:path.join(root,"authority.json")});
-  const registry=new LanAgentRegistry({statePath:path.join(root,"registry.json"),authenticateNode:token=>authority.authenticate(token),
-    registerAgentCatalog:(token,agents)=>authority.registerAgentCatalog(token,agents),isAgentEnabled:(node,agent)=>authority.isAgentEnabled(node,agent)});
-  const generation=randomUUID(),instance=randomUUID(),guid=randomUUID();let base="";
-  const identity=()=>({guid,rabiGuid:guid,applicationGenerationId:generation,managerInstanceId:instance,managerBaseUrl:base,health:{live:true,requiredReady:true,state:"healthy"}});
+  const registry=new LanAgentRegistry({statePath:path.join(root,"registry.json"),authenticateNode:token=>authority.authenticate(token),});
+  const generation=randomUUID(),instance=randomUUID(),guid=randomUUID(),pluginGenerationId=randomUUID();let base="";
+  const identity=()=>({guid,rabiGuid:guid,applicationGenerationId:generation,managerInstanceId:instance,pluginGenerationId,managerBaseUrl:base,health:{live:true,requiredReady:true,state:"healthy"}});
   const json=(response:http.ServerResponse,status:number,body:unknown)=>{response.writeHead(status,{"content-type":"application/json"});response.end(JSON.stringify(body));};
+  const api=new ManagerPluginRouteRegistry(undefined,{identity});
+  const context:LanAgentRoutesContext={registry,authority,enabled:()=>true,managerIdentity:identity,releases:{} as never,
+    isManagementRequestAuthorized:input=>input.headers["x-fixture-controller"]==="verified",isReleaseRequestAuthorized:()=>false,
+    readJsonBody:async input=>{let body="";for await(const part of input)body+=part;return JSON.parse(body||"{}");},jsonResponse:json};
+  const operations=api.registerOperations("fixture.client-entry",[...createLanAgentReadOperations(context),...createLanAgentManagementOperations(context),
+    ...createLanAgentTerminalOperations(context),...createLanAgentComputerOperations(context)]);
+  const upgrades=api.registerUpgrades("fixture.client-entry",[createLanAgentConnectionOperation(registry,{getToken:()=>"",enabled:()=>true})]);
+  const discovery=api.registerOperations("fixture.discovery",createApiDiscoveryOperations(api));
+  const httpDiagnostic:string[]=[];
   const server=http.createServer((request,response)=>{
     const url=new URL(request.url!,"http://fixture.invalid");
+    response.once("finish",()=>{httpDiagnostic.push(`${request.method} ${url.pathname} ${response.statusCode}`);});
     if(url.pathname==="/meta"||url.pathname==="/.well-known/rabiroute-manager"){json(response,200,{code:0,data:{...identity(),protocolVersion:"1"}});return;}
-    if(!handleLanAgentApi(request,url,response,{registry,authority,enabled:()=>true,managerIdentity:identity,releases:{} as never,
-      isManagementRequestAuthorized:input=>input.headers["x-fixture-controller"]==="verified",isReleaseRequestAuthorized:()=>false,
-      readJsonBody:async input=>{let body="";for await(const part of input)body+=part;return JSON.parse(body||"{}");},jsonResponse:json})){json(response,404,{code:-1});}
+    const access=evaluateLanAgentRequest(request,authority,true);
+    if(access.kind==="denied"){json(response,access.status,{code:-1,error:access.error});return;}
+    registerLanAgentBodyGuard(request,body=>assertLanAgentBodyAuthority(url.pathname,body,assertTrustedLanAgentPrincipal(request)?.source));
+    if(!api.handle(request,url,response))json(response,404,{code:-1});
   });
-  const detach=registry.attach(server,{getToken:()=>"",enabled:()=>true});
+  server.on("upgrade",(request,socket,head)=>{if(!api.handleUpgrade(request,new URL(request.url!,"http://fixture.invalid"),socket,head))socket.destroy();});
   await new Promise<void>(resolve=>server.listen(0,"127.0.0.1",resolve));const address=server.address();assert.ok(address&&typeof address!=="string");base=`http://127.0.0.1:${address.port}`;
+  let stopWorker: () => Promise<void> = async () => {};
+  t.after(async()=>{await stopWorker();upgrades.stopAccepting();registry.close();server.closeAllConnections();await operations.dispose();await discovery.dispose();await upgrades.dispose();await new Promise<void>(resolve=>server.close(()=>resolve()));assert.equal(path.dirname(root),fs.realpathSync.native(os.tmpdir()));fs.rmSync(root,{recursive:true,force:true});});
   const module=await import(pathToFileURL(path.resolve("apps/rabi-agent/rabi-agent.mjs")).href);
   const configPath=path.join(root,"client/config.json");const ticket=authority.issueBootstrapTicket().ticket;
   const variables:Record<string,string|undefined>={RABI_MANAGER_URL:base,RABI_AGENT_BOOTSTRAP_TICKET:ticket,RABI_AGENT_DEFAULT_CWD:root,
@@ -37,13 +57,21 @@ test("first enrollment and real CLI worker provide computer I/O with no Agent bi
     await module.__test.bootstrapConfig(configPath);
   }finally{for(const[key,value]of Object.entries(previous)){if(value===undefined)delete process.env[key];else process.env[key]=value;}}
   const config=JSON.parse(fs.readFileSync(configPath,"utf8"));assert.deepEqual(config.agents,[]);assert.equal(config.codexDesktop,undefined);
+  const help=await(await fetch(`${base}/api/agent/help`,{headers:{"x-fixture-controller":"verified"}})).json();
+  assert.equal(help.code,0);assert.equal(help.data.applicationGenerationId,generation);assert.equal(help.data.managerInstanceId,instance);
+  assert.equal(help.data.operations.find((entry:{id:string})=>entry.id==="manager.lan-agent.connect")?.contract.transport,"websocket");
+  const connectingAt=Date.now();
   const child=spawn(process.execPath,[path.resolve("apps/rabi-agent/rabi-agent.mjs"),"--run","--config",configPath],{windowsHide:true,
     env:{...process.env,RABI_AGENT_SUPERVISED:"1",APPDATA:path.join(root,"appdata"),LOCALAPPDATA:path.join(root,"localappdata")},stdio:["ignore","pipe","pipe","ipc"]});
-  child.stdout!.resume();let error="";child.stderr!.on("data",bytes=>{error=(error+bytes).slice(-2048);});
-  const exited=new Promise<void>(resolve=>child.once("exit",()=>resolve()));
-  t.after(async()=>{if(child.connected)child.disconnect();const deadline=setTimeout(()=>child.kill(),6000);await exited;clearTimeout(deadline);detach();server.closeAllConnections();await new Promise<void>(resolve=>server.close(()=>resolve()));assert.equal(path.dirname(root),fs.realpathSync.native(os.tmpdir()));fs.rmSync(root,{recursive:true,force:true});});
+  child.stdout!.resume();let error="",workerEnded=false;child.stderr!.on("data",bytes=>{error=(error+bytes).slice(-2048).replaceAll(config.nodeCredential,"<redacted>");});
+  const exited=new Promise<void>(resolve=>{child.once("exit",()=>{workerEnded=true;resolve();});child.once("error",cause=>{error=cause.message.replaceAll(config.nodeCredential,"<redacted>");workerEnded=true;resolve();});});
+  stopWorker=async()=>{if(child.connected)child.disconnect();const deadline=setTimeout(()=>child.kill(),6000);try{await exited;
+    // OS exit is the worker barrier; release this fixture's diagnostic pipes afterwards.
+    child.stdout?.destroy();child.stderr?.destroy();
+  }finally{clearTimeout(deadline);}};
   const limit=Date.now()+30000;
-  while(!registry.getNode("client-entry-node")?.connected){assert.equal(child.exitCode,null,error);if(Date.now()>limit)throw new Error("Client CLI did not connect.");await new Promise(resolve=>setTimeout(resolve,30));}
+  while(!registry.getNode("client-entry-node")?.connected){assert.equal(workerEnded,false,JSON.stringify({error,exitCode:child.exitCode,signalCode:child.signalCode,httpDiagnostic}));if(Date.now()>limit)throw new Error(JSON.stringify({message:"Client CLI did not connect.",error,httpDiagnostic}));await new Promise(resolve=>setTimeout(resolve,30));}
+  const connectorReadyMs=Date.now()-connectingAt;
   assert.deepEqual(registry.getNode("client-entry-node")!.agents,[]);
   const terminals=`${base}/api/lan-agent/instances/client-entry-node/terminals`,computer=`${base}/api/lan-agent/instances/client-entry-node/computer`;
   const post=async(url:string,body:unknown)=>{const result=await(await fetch(url,{method:"POST",headers:{"content-type":"application/json","x-fixture-controller":"verified"},body:JSON.stringify(body)})).json();assert.equal(result.code,0,JSON.stringify(result));return result.data;};
@@ -64,4 +92,7 @@ test("first enrollment and real CLI worker provide computer I/O with no Agent bi
   const capture=await post(computer,{action:"screen.capture",maxWidth:320});assert.equal(capture.mimeType,"image/png");
   await post(terminals,{action:"close",terminalId});
   assert.equal(fs.existsSync(path.join(root,"roles")),false);assert.equal(fs.existsSync(path.join(root,"skills")),false);
+  assert.deepEqual(JSON.parse(fs.readFileSync(configPath,"utf8")).agents,[]);
+  t.diagnostic(JSON.stringify({base,applicationGenerationId:generation,managerInstanceId:instance,connectorReadyMs,agents:registry.getNode("client-entry-node")!.agents,
+    terminalEchoVerified:output.includes("CLIENT_ENTRY_463"),uploadedBytes:bytes.length,readBytes:Buffer.from(chunk.data,"base64").length,captureMime:capture.mimeType}));
 });

@@ -1,3 +1,4 @@
+import { getTimeoutMs } from "../shared/timeoutSettings.js";
 import type { ManagerSpeechLocalAdapter } from "../manager/speechControl.js";
 import { inspectLocalSpeechService } from "../manager/speechServiceStatus.js";
 import { requestLocalSpeech, type LocalSpeechResponse } from "../speech/localSpeechClient.js";
@@ -8,7 +9,7 @@ export function speechUsesLocalDevice(pathname: string): boolean {
   return ["/v1/microphone", "/v1/playback", "/v1/audio-streams"].some(prefix => pathname === prefix || pathname.startsWith(prefix + "/") || pathname.startsWith(prefix + "?"));
 }
 export function createPeerSpeechAdapter(runtime: () => Pick<PeerTunnelRuntime, "selected" | "fetch"> | undefined, targetOverride: () => string | undefined = () => undefined): ManagerSpeechLocalAdapter {
-  const binary = async (serviceUrl: string, pathname: string, init: RequestInit = {}, timeoutMs = 190_000): Promise<LocalSpeechResponse> => {
+  const binary = async (serviceUrl: string, pathname: string, init: RequestInit = {}, timeoutMs = getTimeoutMs("backend.peerTunnel.speechAdapter.binary.timeoutMs", 190_000)): Promise<LocalSpeechResponse> => {
     const tunnel = runtime(); const selected = targetOverride() ?? (tunnel?.selected() || "");
     if (!selected || speechUsesLocalDevice(pathname)) return requestLocalSpeech(serviceUrl, pathname, init, { timeoutMs });
     let playback = false;
@@ -23,7 +24,7 @@ export function createPeerSpeechAdapter(runtime: () => Pick<PeerTunnelRuntime, "
       const form = new FormData(); form.append("file", new Blob([new Uint8Array(response.body)], { type: response.contentType }), "remote.wav");
       form.append("model", model); form.append("voice", voice);
       form.append("text", text.slice(0, 4000));
-      const queued = await requestLocalSpeech(serviceUrl, "/v1/playback/audio", { method: "POST", body: form }, { timeoutMs: 15_000 });
+      const queued = await requestLocalSpeech(serviceUrl, "/v1/playback/audio", { method: "POST", body: form }, { timeoutMs: getTimeoutMs("backend.peerTunnel.speechAdapter.binary.requestLocalSpeech.timeoutMs", 15_000) });
       if (queued.status < 200 || queued.status >= 300) throw new Error("远端已合成，但本机播放队列未接受音频；不会重新合成。");
       const job = JSON.parse(queued.body.toString());
       response.headers["x-rabispeech-playback-job"] = String(job.id);

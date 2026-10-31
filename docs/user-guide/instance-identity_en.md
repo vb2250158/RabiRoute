@@ -1,6 +1,10 @@
 # Distinguish PCs and reset an instance ID
 
-English | [简体中文](instance-identity.md)
+<!-- docs-language-switch -->
+<div align="center">
+English | <a href="./instance-identity.md">简体中文</a> | <a href="./instance-identity_ja.md">日本語</a>
+</div>
+<!-- /docs-language-switch -->
 
 Status: introduced in 0.3.21. The installed Windows Host owns the reset; a source-only Manager cannot execute it.
 

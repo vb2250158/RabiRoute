@@ -26,6 +26,8 @@ import {
   presentRoleMemories,
   readRecentMemoryFromStorageInWorker,
   readRoleMemoryCatalogsInWorker,
+  readRecentMemoryCatalogInWorker,
+  publishedRolePlanPackageRecoverySnapshot,
   type RoleMemoryCatalogs,
   type RoleKnowledgeCatalogSnapshot
 } from "../roleKnowledge.js";
@@ -56,13 +58,18 @@ import { verifyCriticalProjectFactRecord, type CriticalProjectFactRecordVerifica
 import { readCodexHookContextInputAsync, type CodexHookContextReadRequest } from "./codexHookContextRead.js";
 
 export type ManagerReadWorkerTask =
+  | { type: "role_recent_memory_catalog"; roleDir: string }
   | { type: "role_memory_catalogs"; roleDir: string }
   | { type: "codex_hook_context_read"; input: CodexHookContextReadRequest }
   | { type: "critical_fact_record_verify"; input: CriticalProjectFactRecordVerificationInput }
   | { type: "all_day_recording_read"; input: import("./allDayRecordingReadStorage.js").AllDayReadJob }
   | { type: "gateway_status_snapshot"; statusPath: string }
   | { type: "desktop_pet_catalog"; roleId: string; roleDir: string; cacheRoot: string; options: import("./desktopPetRoutes.js").DesktopPetPackCatalogOptions }
-  | { type: "role_message_endpoint_history"; roleDir: string; query: RecentMessageContextQuery }
+  | { type: "message_history_search"; roleDir: string; query: RecentMessageContextQuery; indexPath?: string;
+    target?: import("../messageHistorySearchIndex.js").MessageHistorySearchTarget;
+    proof?: import("../messageHistorySourceVersion.js").MessageHistoryAppendProof; visibilityDeadlineAt?: number;
+    ownerTarget?: import("../messageHistorySourceVersion.js").MessageHistoryOwnerTarget }
+  | { type: "message_history_index"; roleDir: string; indexPath?: string }
   | { type: "conversation_window"; dataDir: string; filter: import("../conversationMessageQuery.js").ConversationWindowFilter; query: { afterSequence?: number; limit: number } }
   | { type: "message_processing_send_context"; input: MessageProcessingReadInput }
   | { type: "knowledge_search_delta"; roleDir: string; previous: KnowledgeInventory }
@@ -201,6 +208,7 @@ export type ManagerReadWorkerResponse =
   | { ok: false; message: string; stack?: string };
 
 export type ManagerReadWorkerRequest = {
+  timeoutOverrides?: Record<string, number>;
   requestId: string;
   task: ManagerReadWorkerTask;
 };
@@ -275,7 +283,7 @@ async function readRecentPerformanceSamples(logDirectory: string, limit: number)
     .slice(-safeLimit);
 }
 
-export async function execute(task: Exclude<ManagerReadWorkerTask, { type: "role_message_endpoint_history" | "knowledge_search_delta" | "conversation_window" }>): Promise<unknown> {
+export async function execute(task: Exclude<ManagerReadWorkerTask, { type: "message_history_search" | "message_history_index" | "knowledge_search_delta" | "conversation_window" }>): Promise<unknown> {
   switch (task.type) {
     case "all_day_recording_read": {
       const { readAllDayStorage } = await import("./allDayRecordingReadStorage.js");
@@ -318,6 +326,7 @@ export async function execute(task: Exclude<ManagerReadWorkerTask, { type: "role
       const plans = readPlansFromStorageInWorker(task.roleDir);
       return {
         plans,
+        planRecovery: publishedRolePlanPackageRecoverySnapshot(task.roleDir),
         approvalByPlanId: Object.fromEntries(
           plans.map(plan => [plan.id, planFeedbackSummary(task.roleDir, plan.id)])
         )
@@ -351,6 +360,7 @@ export async function execute(task: Exclude<ManagerReadWorkerTask, { type: "role
       );
       return {
         ...page,
+        planRecovery: publishedRolePlanPackageRecoverySnapshot(task.roleDir),
         // The overview asks for summary rows. Do not touch every plan's feedback
         // directory before returning one eight-row page.
         items: task.summary
@@ -475,6 +485,8 @@ export async function execute(task: Exclude<ManagerReadWorkerTask, { type: "role
       return (await readRoleMemoryCatalogsInWorker(task.roleDir)).counts;
     case "role_memory_catalogs":
       return readRoleMemoryCatalogsInWorker(task.roleDir);
+    case "role_recent_memory_catalog":
+      return readRecentMemoryCatalogInWorker(task.roleDir);
     case "performance_summary": {
       const samples = await readPerformanceSummarySamples(task.logDirectory, task.rangeMs);
       return JSON.stringify({
@@ -487,4 +499,5 @@ export async function execute(task: Exclude<ManagerReadWorkerTask, { type: "role
       return JSON.stringify({ code: 0, data: samples, status: task.status });
     }
   }
+  throw new Error("Unsupported Manager read task.");
 }

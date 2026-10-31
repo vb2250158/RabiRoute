@@ -6,7 +6,8 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { createDevicePeerBootstrapRoutes, DEVICE_PEER_BOOTSTRAP_PATH } from "../manager/devicePeerBootstrapRoutes.js";
+import { createDevicePeerBootstrapOperation, DEVICE_PEER_BOOTSTRAP_PATH } from "../manager/devicePeerBootstrapRoutes.js";
+import { ManagerPluginRouteRegistry } from "../manager/managerPluginRouteRegistry.js";
 import { markAuthenticatedConnectionRequest } from "../manager/connectionRequestAccess.js";
 import { issueInternalManagerHopHeaders, validateInternalManagerHop } from "../shared/internalManagerHop.js";
 import { connectWebsocket } from "./channel.js";
@@ -22,20 +23,20 @@ async function fixture(t: test.TestContext) {
   const eye = loadTunnelIdentity(path.join(dir, "eye.json"), source, "eye-generation");
   let token = "fixture-application", enabled = true, captured: http.IncomingMessage | undefined, eventResponse: http.ServerResponse | undefined;
   const upgradedBytes: string[] = [];
+  const upgradedSockets = new Set<import("node:stream").Duplex>();
   const relay = () => ({ url: "http://127.0.0.1", token });
   const scope = () => createHash("sha256").update(relay().url + "\n" + token).digest("hex");
   let url = "";
   const runtime = new PeerTunnelRuntime({ dataDir: path.join(dir, "pc"), deviceId: "pc", generation,
     allowApplicationConnection: () => enabled, discover: async () => [], signal: async () => { throw new Error("No application bootstrap for Eye."); },
     relay, services: () => ({ manager: { baseUrl: url } }), onStatus: () => {} });
-  const route = createDevicePeerBootstrapRoutes({ current: () => ({ generation, scope: scope(), deviceId: "pc" }),
-    async readJsonBody(req) { const chunks: Buffer[] = []; for await (const chunk of req) chunks.push(Buffer.from(chunk)); return JSON.parse(Buffer.concat(chunks).toString()); },
-    bootstrap: (input, authority) => runtime.grantDeviceConnection(input, authority),
-    jsonResponse(res, status, body) { res.writeHead(status, { "content-type": "application/json" }); res.end(JSON.stringify(body)); } });
+  const route = createDevicePeerBootstrapOperation({ current: () => ({ generation, scope: scope(), deviceId: "pc" }),
+    bootstrap: (input, authority) => runtime.grantDeviceConnection(input, authority) });
+  const registry = new ManagerPluginRouteRegistry(), registration = registry.registerOperations("peer", [route.operation]);
   const server = http.createServer((req, res) => {
     const claims = validateInternalManagerHop(req, { generation, scope: scope() });
     if (claims) markAuthenticatedConnectionRequest(req);
-    if (route.handle(req, new URL(req.url!, url), res)) return;
+    if (registry.handle(req, new URL(req.url!, url), res)) return;
     if (req.url === "/api/future/owner") {
       captured = req; res.writeHead(claims ? 200 : 403); res.end(JSON.stringify({ source: claims?.deviceId, kind: claims?.kind })); return;
     }
@@ -48,12 +49,23 @@ async function fixture(t: test.TestContext) {
     if (runtime.upgrade(req, socket, head)) return;
     const claims = validateInternalManagerHop(req, { generation, scope: scope() });
     if (req.url !== "/api/future/socket" || !claims) { socket.destroy(); return; }
+    upgradedSockets.add(socket); socket.once("close", () => upgradedSockets.delete(socket));
     socket.write("HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n");
     socket.on("data", bytes => { upgradedBytes.push(bytes.toString()); socket.write(bytes); });
   });
   server.listen(0, "127.0.0.1"); await once(server, "listening");
   url = "http://127.0.0.1:" + (server.address() as import("node:net").AddressInfo).port;
-  t.after(async () => { route.stop(); runtime.stop(); server.closeAllConnections(); server.close(); await route.drain(); rmSync(dir, { recursive: true, force: true }); });
+  t.after(async () => {
+    route.stop(); const stopping = runtime.stop(), retiring = registration.dispose(); server.closeAllConnections();
+    // Node excludes upgraded sockets from closeAllConnections; these belong to this fixture.
+    const upgradesClosed = Promise.all([...upgradedSockets].map(socket => new Promise<void>(resolve => {
+      socket.once("close", () => resolve()); socket.destroy();
+    })));
+    const closed = new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+    const results = await Promise.allSettled([stopping, retiring, upgradesClosed, closed]);
+    assert.equal(path.dirname(path.resolve(dir)), path.resolve(os.tmpdir())); rmSync(dir, { recursive: true, force: true });
+    for (const result of results) if (result.status === "rejected") throw result.reason;
+  });
   const signed = (identity = eye, expiresAt = Date.now() + 40_000) => {
     const fields = { source: identity.deviceId, publicKey: identity.publicKey, target: "pc", expiresAt, nonce: randomBytes(24).toString("base64url") };
     return { ...fields, signature: sign(null, Buffer.from(DEVICE_DELEGATION_DOMAIN + JSON.stringify(fields)), identity.privateKey).toString("base64") };

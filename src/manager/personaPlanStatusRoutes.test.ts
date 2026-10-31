@@ -6,7 +6,7 @@ import path from "node:path";
 import test from "node:test";
 import { ensurePersonaPlanWorkflow } from "../personaPlanWorkflow.js";
 import { createPlan, listPlanHistory, readPlansFromStorageInWorker } from "../roleKnowledge.js";
-import { handlePersonaPluginApi } from "./controlPlaneRoutes.js";
+import { createPersonaStorageTestApi } from "./personaManagerIntegration.fixture.js";
 import { RoleStorageApplication } from "./roleStorageApplication.js";
 
 function listen(server: http.Server): Promise<number> {
@@ -40,13 +40,14 @@ test("persona plan status routes provide revision-fenced CRUD and retire after m
     applicationGenerationId: "test-plan-status-generation",
     managerInstanceId: "test-plan-status-manager"
   });
-  const server = http.createServer((request, response) => {
-    const requestUrl = new URL(request.url || "/", `http://${request.headers.host || "127.0.0.1"}`);
-    if (handlePersonaPluginApi(request, requestUrl, response, {
+  const nativeApi = createPersonaStorageTestApi(t, {
       rolesRoot,
       roleDir: () => roleDir,
       roleStorageApplication: () => application
-    })) return;
+    });
+  const server = http.createServer((request, response) => {
+    const requestUrl = new URL(request.url || "/", `http://${request.headers.host || "127.0.0.1"}`);
+    if (nativeApi(request, requestUrl, response)) return;
     response.writeHead(404).end();
   });
   const port = await listen(server);
@@ -146,13 +147,14 @@ test("persona plan status writes require both Idempotency-Key and If-Match", asy
     applicationGenerationId: "test-plan-status-guard-generation",
     managerInstanceId: "test-plan-status-guard-manager"
   });
-  const server = http.createServer((request, response) => {
-    const requestUrl = new URL(request.url || "/", `http://${request.headers.host || "127.0.0.1"}`);
-    if (handlePersonaPluginApi(request, requestUrl, response, {
+  const nativeApi = createPersonaStorageTestApi(t, {
       rolesRoot,
       roleDir: () => roleDir,
       roleStorageApplication: () => application
-    })) return;
+    });
+  const server = http.createServer((request, response) => {
+    const requestUrl = new URL(request.url || "/", `http://${request.headers.host || "127.0.0.1"}`);
+    if (nativeApi(request, requestUrl, response)) return;
     response.writeHead(404).end();
   });
   const port = await listen(server);

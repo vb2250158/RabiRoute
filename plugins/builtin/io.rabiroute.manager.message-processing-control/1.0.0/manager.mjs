@@ -27,35 +27,9 @@ export const activate = definePlugin({
                 }
             });
             try {
-        const requestTracker = new runtime.ManagerPluginRequestTracker();
-        ctx.effect(() => {
-            const unregister = runtime.registerManagerPluginHandlerRoutes(runtime.managerPluginRoutes, "manager:message-processing-control", "manager.message-processing-control.api", [
-                requestTracker.wrap((request, requestUrl, response) => runtime.handleMessageProcessingApi(request, requestUrl, response, {
-                    boardPayload: runtime.messageProcessingBoardPayload,
-                    board: runtime.messageProcessingBoard,
-                    sendContextReview: runtime.messageProcessingSendContextReview,
-                    operationalLog: runtime.managerOperationalLog,
-                    recallKnowledge: runtime.recalledKnowledgeForMessage,
-                    verifyCriticalFactRecord: ({ roleId, requirement, disposition }) => runtime.verifyCriticalProjectFactRecord({
-                        workspaceRoot: runtime.rootDir,
-                        roleDir: roleId ? runtime.roleDirForApi(roleId) : undefined,
-                        requirement,
-                        disposition
-                    }),
-                    setPlanBaseline: runtime.setMessageProcessingPlanBaseline,
-                    scheduleKnowledgeCallbackReminder: runtime.scheduleKnowledgeCallbackReminder,
-                    publishEvent: runtime.publishManagerEvent,
-                    trackOperation: operation => requestTracker.trackOperation(operation)
-                }))
-            ], [
-                { routeId: "board", kind: "exact", path: "/api/message-processing/board", methods: ["GET"] },
-                { routeId: "requirements", kind: "exact", path: "/api/message-processing/requirements", methods: ["POST"] },
-                { routeId: "requirement-resource", kind: "prefix", pathPrefix: "/api/message-processing/requirements/" }
-            ]);
-            return async () => {
-                unregister();
-                await requestTracker.stop();
-            };
+        ctx.effect(async () => {
+            const operations = await runtime.managerPluginRoutes.registerOperationsAsync(context.identity.instanceId, runtime.createMessageProcessingOperations(), context.lifecycle.signal);
+            return () => operations.dispose();
         }, "activate Manager message processing control plugin");
 
                 await Promise.all(pendingEffects);

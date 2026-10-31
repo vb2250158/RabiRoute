@@ -8,10 +8,15 @@ import { WebSocket } from "ws";
 import type { NapCatInstanceConfig } from "../config.js";
 import { createMessageAdapterRuntime } from "../runtime/messageAdapterRuntime.js";
 import {
-  createNapCatAdapter,
+  createNapCatAdapter as createNativeNapCatAdapter,
   type NapCatAdapterDependencies
 } from "./napcatAdapter.js";
 import type { MessageAdapterDefinition } from "./messageAdapter.js";
+
+import { ManagerPluginRouteRegistry } from "../manager/managerPluginRouteRegistry.js";
+
+const createNapCatAdapter = (dependencies: NapCatAdapterDependencies = {}) =>
+  createNativeNapCatAdapter({ apiOperations: new ManagerPluginRouteRegistry(), ...dependencies });
 
 function instance(id: string, port: number): NapCatInstanceConfig {
   return {
@@ -167,6 +172,35 @@ test("NapCat activation failure rolls back listeners created earlier", async (t)
   });
 
   await assert.rejects(async () => { await adapter.start(); }, (error: NodeJS.ErrnoException) => error.code === "EADDRINUSE");
+  const probe = net.createServer();
+  await listen(probe, firstPort);
+  await close(probe);
+  assert.equal(readStatus(dataDir).messageAdapters.napcat.status, "error");
+});
+
+test("NapCat activation preserves its original failure after joining failed listener cleanup", async t => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-napcat-cleanup-failure-"));
+  t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
+  const blocker = net.createServer();
+  const blockedPort = await listen(blocker);
+  t.after(() => close(blocker));
+  const firstPort = await freePort();
+  const registry = new ManagerPluginRouteRegistry();
+  const register = registry.registerExternalListener.bind(registry);
+  t.mock.method(registry, "registerExternalListener", (...args: Parameters<typeof register>) => {
+    const binding = register(...args);
+    return { ...binding, async dispose() { await binding.dispose(); throw undefined; } };
+  });
+  const adapter = createNapCatAdapter({ apiOperations: registry,
+    instances: () => [instance("first", firstPort), instance("blocked", blockedPort)],
+    dataDir: () => dataDir, refreshProfile: () => {}
+  });
+  await assert.rejects(async () => { await adapter.start(); }, error => {
+    assert.ok(error instanceof AggregateError);
+    assert.equal(error.errors[0].code, "EADDRINUSE");
+    assert.equal(error.errors[1], undefined);
+    return true;
+  });
   const probe = net.createServer();
   await listen(probe, firstPort);
   await close(probe);

@@ -2,8 +2,9 @@
 import { attachTunnelBroker } from "./lib/rabilink-tunnel-broker.mjs";
 import { createPcPairingService, findPcCredential, assertPcPairingCsrf } from './rabilink-pc-pairing.mjs';
 import { pcPairingPanelHtml, pcPairingBrowserScript } from './rabilink-pc-pairing-ui.mjs';
-import { API_METHODS, apiRequestHeaderAllowed, validateApiRequest } from '../packages/rabi-api-contract/request.mjs';
+import { API_METHODS, apiRequestHeaderAllowed, apiRequestTimingPolicy, apiRequestDiagnosticPath, validateApiRequest } from '../packages/rabi-api-contract/request.mjs';
 import { createDeviceApiService } from './rabilink-device-api.mjs';
+import { relayTimeout, clientTimeout } from "./lib/relay-timeouts.mjs";
 import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
@@ -15,15 +16,14 @@ import { RelayProxyRequestQueue } from "./rabilink-proxy-request-queue.mjs";
 
 const port = Number(process.env.PORT || process.env.RABILINK_RELAY_PORT || 8788);
 const host = process.env.HOST || process.env.RABILINK_RELAY_HOST || "0.0.0.0";
-const replyTimeoutMs = clamp(Number(process.env.RABILINK_RELAY_REPLY_TIMEOUT_MS || 60000), 1000, 120000);
-const messageWaitMs = clamp(Number(process.env.RABILINK_RELAY_MESSAGE_WAIT_MS || 60000), 0, 60000);
-const outboxWaitMs = clamp(Number(process.env.RABILINK_RELAY_OUTBOX_WAIT_MS || 60000), 0, 60000);
-const workerTaskWaitMs = clamp(Number(process.env.RABILINK_RELAY_WORKER_TASK_WAIT_MS || 60000), 0, 60000);
-const webguiRequestWaitMs = clamp(Number(process.env.RABILINK_RELAY_WEBGUI_REQUEST_WAIT_MS || 30000), 5000, 120000);
+const replyTimeoutMs = relayTimeout("reply", clamp(Number(process.env.RABILINK_RELAY_REPLY_TIMEOUT_MS || 60000), 1000, 120000));
+const outboxWaitMs = relayTimeout("outboxWait", clamp(Number(process.env.RABILINK_RELAY_OUTBOX_WAIT_MS || 60000), 0, 60000));
+const workerTaskWaitMs = relayTimeout("workerWait", clamp(Number(process.env.RABILINK_RELAY_WORKER_TASK_WAIT_MS || 60000), 0, 60000));
+const webguiRequestWaitMs = relayTimeout("webguiWait", clamp(Number(process.env.RABILINK_RELAY_WEBGUI_REQUEST_WAIT_MS || 30000), 5000, 120000));
 const webguiBodyMaxBytes = clamp(Number(process.env.RABILINK_RELAY_WEBGUI_BODY_MAX_BYTES || 40 * 1024 * 1024), 1024 * 1024, 50 * 1024 * 1024);
 const webguiWorkerResponseMaxBytes = Math.ceil(webguiBodyMaxBytes * 4 / 3) + 1024 * 1024;
 const webguiWorkerEventMaxBytes = 1024 * 1024;
-const speechRequestWaitMs = clamp(Number(process.env.RABILINK_RELAY_SPEECH_REQUEST_WAIT_MS || 180000), 5000, 10 * 60 * 1000);
+const speechRequestWaitMs = relayTimeout("speechWait", clamp(Number(process.env.RABILINK_RELAY_SPEECH_REQUEST_WAIT_MS || 180000), 5000, 10 * 60 * 1000));
 const speechBodyMaxBytes = clamp(Number(process.env.RABILINK_RELAY_SPEECH_BODY_MAX_BYTES || 25 * 1024 * 1024), 1024 * 1024, 100 * 1024 * 1024);
 const speechWorkerResponseMaxBytes = Math.ceil(speechBodyMaxBytes * 4 / 3) + 1024 * 1024;
 const speechRetentionMs = clamp(Number(process.env.RABILINK_RELAY_SPEECH_RETENTION_MS || 60000), 5000, 10 * 60 * 1000);
@@ -425,7 +425,7 @@ function sanitizeSharedEventData(value, depth = 0, key = "") {
 }
 
 function writeEvent(event, data) {
-  const row = JSON.stringify({ time: nowIso(), event, data: sanitizeSharedEventData(data) });
+  const row = JSON.stringify({ time: nowIso(), event, data: sanitizeSharedEventData(historyDiagnosticData(data)) });
   fs.appendFile(eventLogPath, `${row}\n`, () => {});
 }
 
@@ -487,6 +487,7 @@ function writeAccountLog(account, event, data = {}) {
 }
 
 function writeAccountLogForApp(app, event, data = {}) {
+  data = historyDiagnosticData(data);
   if (!app?.ownerAccountId) return;
   writeAccountLog({ id: app.ownerAccountId }, event, {
     appId: app.id,
@@ -802,7 +803,7 @@ const deviceApiService = createDeviceApiService({
     const app = readAppStore().apps.find(item => item.id === identity.appId && item.enabled !== false);
     if (!app) throw new Error('API_CONNECTION_CHANGED');
     const worker = mobileWorkerTarget(app, new URL('http://request.invalid'), { targetDeviceId: identity.targetDeviceId });
-    const request = createMobileWebguiRequest(app, worker, packet.method, packet.path, packet.body ?? null);
+    const request = createMobileWebguiRequest(app, worker, packet.method, packet.path, packet.body ?? null, {}, identity.requestTimeoutMs);
     request.headers = { accept: 'application/json', ...packet.headers };
     if (packet.body !== undefined && !request.headers['content-type']) request.headers['content-type'] = 'application/json; charset=utf-8';
     if (packet.bodyBase64 !== undefined) request.bodyBase64 = packet.bodyBase64;
@@ -810,8 +811,8 @@ const deviceApiService = createDeviceApiService({
     request.publicApiTransport = true;
     request.deviceApi = { appId: identity.appId, bindingId: identity.bindingId, targetDeviceId: identity.targetDeviceId, authenticatedAt: identity.authenticatedAt };
     request.deviceApiCredentialHash = identity.credentialHash;
-    const finished = await waitForWebguiRequest(request, webguiRequestWaitMs);
-    if (finished.status !== 'done' || !finished.response) return { structuredContent: { ok: false, uncertain: nonReplayable, code: 'API_TRANSPORT_UNCONFIRMED', operationId: packet.operationId } };
+    const finished = await waitForWebguiRequest(request, Math.max(1,request.expiresAt - Date.now()));
+    if (finished.status !== 'done' || !finished.response) return { structuredContent: { ok: false, uncertain: nonReplayable, code: finished.singleAttempt ? 'SEARCH_DEADLINE_EXCEEDED' : 'API_TRANSPORT_UNCONFIRMED', operationId: packet.operationId } };
     const response = finished.response;
     const raw = Buffer.from(response.bodyBase64 || '', 'base64');
     let data; try { data = JSON.parse(raw.toString('utf8')); } catch { data = { bodyBase64: raw.toString('base64'), contentType: response.headers?.['content-type'] || '' }; }
@@ -1279,7 +1280,7 @@ function sendJson(res, statusCode, body, extraHeaders = {}) {
     "content-type": "application/json; charset=utf-8",
     "access-control-allow-origin": "*",
     "access-control-allow-methods": "GET,POST,PATCH,DELETE,OPTIONS",
-    "access-control-allow-headers": "content-type,authorization,x-rabilink-token,x-rabilink-admin-auth,idempotency-key,if-match",
+    "access-control-allow-headers": "content-type,authorization,x-rabilink-token,x-rabi-timeout-ms,x-rabilink-admin-auth,idempotency-key,if-match",
     ...extraHeaders
   });
   res.end(text);
@@ -1812,6 +1813,32 @@ function createTask(raw, req, auth = { app: null }) {
   return task;
 }
 
+function applyWebguiRequestTiming(request) {
+  const timing = apiRequestTimingPolicy(request, { defaultBudgetMs: Math.min(request.expiresAt-request.createdAt,relayTimeout("history.query",3000)) });
+  if (timing) {
+    request.searchDeadlineAt = performance.now() + timing.budgetMs;
+    request.expiresAt = Math.min(request.expiresAt, Date.now() + timing.budgetMs);
+    request.singleAttempt = true;
+  }
+}
+
+function expireHistoryRequest(request) {
+  if (!request.singleAttempt || request.status === 'done' || request.status === 'failed') return;
+  request.status = 'failed';
+  request.updatedAt = Date.now();
+  request.error = 'SEARCH_DEADLINE_EXCEEDED';
+  finishWebguiWaiters(request);
+}
+
+function historyDiagnosticData(data) {
+  if (!data || !apiRequestTimingPolicy(data)) return data;
+  return { id: data.id, taskId: data.taskId, appId: data.appId, appName: data.appName,
+    workerId: data.workerId, targetDeviceId: data.targetDeviceId, status: data.status,
+    method: data.method || 'GET', path: apiRequestDiagnosticPath(data),
+    title: data.title, detail: 'Message history search', attempts: data.attempts,
+    error: data.error === 'SEARCH_DEADLINE_EXCEEDED' ? data.error : undefined };
+}
+
 function webguiRequestForResponse(request) {
   return {
     id: request.id,
@@ -1828,6 +1855,7 @@ function webguiRequestForResponse(request) {
     headers: request.headers,
     bodyBase64: request.bodyBase64 || "",
     error: request.error || "",
+    ...(request.singleAttempt ? { singleAttempt: true, remainingBudgetMs: Math.max(0, Math.floor(request.searchDeadlineAt - performance.now())) } : {}),
     ...(request.publicApiTransport === true ? { publicApiTransport: true } : {}),
         ...(request.deviceApi ? { nonReplayable: request.nonReplayable === true, connectionIdentity: { appId: request.deviceApi.appId, deviceId: request.deviceApi.bindingId, authenticatedAt: request.deviceApi.authenticatedAt } } : {})
   };
@@ -1835,10 +1863,10 @@ function webguiRequestForResponse(request) {
 
 function cleanupWebguiRequests(now = Date.now()) {
   for (const [id, request] of webguiRequests.entries()) {
-    if (request.status !== "done" && request.status !== "failed" && request.expiresAt <= now) {
+    if (request.status !== "done" && request.status !== "failed" && (request.singleAttempt ? performance.now() >= request.searchDeadlineAt : request.expiresAt <= now)) {
       request.status = "failed";
       request.updatedAt = now;
-      request.error = "WebGUI request timed out before the Rabi PC returned a response.";
+      request.error = request.singleAttempt ? "SEARCH_DEADLINE_EXCEEDED" : "WebGUI request timed out before the Rabi PC returned a response.";
       finishWebguiWaiters(request);
       writeEvent("webgui_request_expired", webguiRequestForResponse(request));
       const app = readAppStore().apps.find((item) => item.id === request.appId);
@@ -1871,7 +1899,7 @@ function hasClaimableWebguiRequests(appId = "", deviceId = "", deviceGuid = "") 
   for (const request of webguiRequests.values()) {
     if (!canWorkerClaimWebguiRequest(request, appId, deviceId, deviceGuid)) continue;
     if (request.status === "queued") return true;
-    if (request.status === "leased" && request.leaseUntil <= now) return true;
+    if (request.status === "leased" && !request.singleAttempt && request.leaseUntil <= now) return true;
   }
   return false;
 }
@@ -1883,7 +1911,7 @@ function claimWebguiRequests(limit, deviceId, appId = "", deviceGuid = "") {
   for (const request of webguiRequests.values()) {
     if (result.length >= limit) break;
     if (!canWorkerClaimWebguiRequest(request, appId, deviceId, deviceGuid)) continue;
-    if (request.status === "leased" && request.leaseUntil <= now) {
+    if (request.status === "leased" && !request.singleAttempt && request.leaseUntil <= now) {
       if (request.nonReplayable) { request.status = 'failed'; request.error = 'API_OUTCOME_UNCERTAIN'; finishWebguiWaiters(request); continue; }
       request.status = "queued";
       request.leaseUntil = 0;
@@ -1929,11 +1957,13 @@ function finishWebguiWaiters(request) {
 }
 
 function waitForWebguiRequest(request, timeoutMs) {
+  if (request.singleAttempt) timeoutMs = Math.min(timeoutMs, Math.max(0, Math.ceil(request.searchDeadlineAt - performance.now())));
   if (request.status === "done" || request.status === "failed") return Promise.resolve(request);
   return new Promise((resolve) => {
     const timer = setTimeout(() => {
       const index = waiters.findIndex((item) => item.taskId === request.id && item.resolve === resolve);
       if (index >= 0) waiters.splice(index, 1);
+      expireHistoryRequest(request);
       resolve(request);
     }, timeoutMs);
     waiters.push({ taskId: request.id, resolve, timer });
@@ -1946,6 +1976,10 @@ function finishWebguiRequest(requestId, body) {
     const error = new Error(`WebGUI request not found: ${requestId}`);
     error.statusCode = 404;
     throw error;
+  }
+  if (request.singleAttempt) {
+    if (performance.now() >= request.searchDeadlineAt) expireHistoryRequest(request);
+    if (request.status === 'done' || request.status === 'failed') return request;
   }
   const ok = body?.ok !== false && Number(body?.statusCode || 0) >= 100;
   request.status = ok ? "done" : "failed";
@@ -2043,7 +2077,7 @@ function createWebguiRequest(req, target, localPath, rawBody) {
     status: "queued",
     createdAt: now,
     updatedAt: now,
-    expiresAt: now + webguiRequestWaitMs,
+    expiresAt: now + clientTimeout(req, webguiRequestWaitMs),
     leaseUntil: 0,
     attempts: 0,
     appId: target.app.id,
@@ -2055,6 +2089,7 @@ function createWebguiRequest(req, target, localPath, rawBody) {
     bodyBase64: Buffer.isBuffer(rawBody) && rawBody.length > 0 ? rawBody.toString("base64") : "",
     response: null
   };
+  applyWebguiRequestTiming(request);
   webguiRequests.set(request.id, request);
   writeEvent("webgui_request_created", webguiRequestForResponse(request));
   writeAccountLogForApp(target.app, "webgui_request_created", {
@@ -2075,7 +2110,7 @@ function createWebguiRequest(req, target, localPath, rawBody) {
   return request;
 }
 
-function createMobileWebguiRequest(app, worker, method, localPath, body = null, mutationHeaders = {}) {
+function createMobileWebguiRequest(app, worker, method, localPath, body = null, mutationHeaders = {}, timeoutMs = webguiRequestWaitMs) {
   if (localPath.startsWith('/__rabilink/')) { const error = new Error('Reserved transport path'); error.statusCode = 403; throw error; }
   const now = Date.now();
   const bodyBuffer = body == null ? Buffer.alloc(0) : Buffer.from(JSON.stringify(body), "utf8");
@@ -2084,7 +2119,7 @@ function createMobileWebguiRequest(app, worker, method, localPath, body = null, 
     status: "queued",
     createdAt: now,
     updatedAt: now,
-    expiresAt: now + webguiRequestWaitMs,
+    expiresAt: now + timeoutMs,
     leaseUntil: 0,
     attempts: 0,
     appId: app.id,
@@ -2100,6 +2135,7 @@ function createMobileWebguiRequest(app, worker, method, localPath, body = null, 
     bodyBase64: bodyBuffer.length > 0 ? bodyBuffer.toString("base64") : "",
     response: null
   };
+  applyWebguiRequestTiming(request);
   webguiRequests.set(request.id, request);
   writeEvent("webgui_request_created", webguiRequestForResponse(request));
   writeAccountLogForApp(app, "webgui_request_created", {
@@ -2146,6 +2182,7 @@ function canWorkerClaimSpeechRequest(request, appId = "", deviceId = "", deviceG
 
 function createSpeechRequest(req, auth, worker, localPath, rawBody) {
   const request = speechRequests.create({
+    timeoutMs: clientTimeout(req, speechRequestWaitMs),
     appId: auth.app.id,
     appName: auth.app.name || "",
     targetDeviceId: worker.id,
@@ -2191,7 +2228,7 @@ function sendSpeechProxyResponse(res, request) {
     ...normalizeProxyResponseHeaders(request.response.headers),
     "access-control-allow-origin": "*",
     "access-control-allow-methods": "GET,POST,OPTIONS",
-    "access-control-allow-headers": "content-type,authorization,x-rabilink-token",
+    "access-control-allow-headers": "content-type,authorization,x-rabilink-token,x-rabi-timeout-ms",
     "cache-control": "no-store",
     "x-rabilink-speech-request-id": request.id
   });
@@ -2219,7 +2256,7 @@ async function handleSpeechProxy(req, url, res) {
     ? Buffer.alloc(0)
     : await readRawBody(req, { maxBytes: speechBodyMaxBytes, label: "Speech" });
   const request = createSpeechRequest(req, auth, worker, localPath, rawBody);
-  const finalRequest = await speechRequests.waitForCompletion(request, speechRequestWaitMs);
+  const finalRequest = await speechRequests.waitForCompletion(request, Math.max(1,request.expiresAt - Date.now()));
   speechRequests.cleanup();
   writeEvent(finalRequest.status === "done" ? "speech_request_done" : "speech_request_failed", speechRequestForLog(finalRequest));
   writeAccountLogForApp(auth.app, finalRequest.status === "done" ? "speech_request_done" : "speech_request_failed", {
@@ -2242,7 +2279,7 @@ async function handleDirectVideoOffer(req, url, res) {
   const worker = requireRokidAppTarget(auth, "video-direct");
   const rawBody = await readRawBody(req, { maxBytes: 64 * 1024, label: "Video signalling" });
   const request = createSpeechRequest(req, auth, worker, "/api/rabilink/video/offer", rawBody);
-  const completed = await speechRequests.waitForCompletion(request, speechRequestWaitMs);
+  const completed = await speechRequests.waitForCompletion(request, Math.max(1,request.expiresAt - Date.now()));
   speechRequests.cleanup();
   return sendSpeechProxyResponse(res, completed);
 }
@@ -2804,7 +2841,7 @@ async function handleRokid(req, url, res, body) {
   const task = createTask(body, req, auth);
   const wait = url.searchParams.get("wait");
   const shouldWait = wait == null || wait === "1" || wait.toLowerCase() === "true";
-  const timeout = clamp(Number(url.searchParams.get("timeoutMs") || replyTimeoutMs), 1000, 120000);
+  const timeout = clamp(Number(url.searchParams.get("timeoutMs") || clientTimeout(req,replyTimeoutMs)), 1, 2147483647);
   const finalTask = shouldWait ? await waitForTask(task, timeout) : task;
   sendJson(res, 200, rokidResponse(finalTask));
 }
@@ -2910,7 +2947,7 @@ async function handleRokidOutboxMessages(req, url, res, body, options = {}) {
     : hasCursor
     ? url.searchParams.get("after") || url.searchParams.get("cursor") || ""
     : currentOutboxCursor();
-  const waitMs = clamp(Number(url.searchParams.get("waitMs") || url.searchParams.get("timeoutMs") || outboxWaitMs), 0, 60000);
+  const waitMs = clamp(Number(url.searchParams.get("waitMs") || url.searchParams.get("timeoutMs") || clientTimeout(req,outboxWaitMs)), 0, 2147483647);
   const response = await waitForOutboxResponse(req, after, waitMs, appId, continuous, identity);
   if (res.writableEnded || res.destroyed) return;
   writeAccountLogForApp(auth.app, "outbox_messages_read", {
@@ -3364,7 +3401,7 @@ async function handleWorkerTasks(req, url, res, body) {
     const peerUrls = url.searchParams.has("peerUrls") ? normalizeWorkerPeerUrls(url.searchParams.get("peerUrls")) : null;
     recordWorkerSeen(appId, deviceId || deviceName, deviceName || deviceId, deviceGuid, declaredCapabilities, peerUrls, url.searchParams.get("deviceKind"));
   }
-  const waitMs = clamp(Number(url.searchParams.get("waitMs") || url.searchParams.get("timeoutMs") || workerTaskWaitMs), 0, 60000);
+  const waitMs = clamp(Number(url.searchParams.get("waitMs") || url.searchParams.get("timeoutMs") || clientTimeout(req,workerTaskWaitMs)), 0, 2147483647);
   const claimed = await claimAfterRelayEvent(
     req,
     "task_available",
@@ -3397,7 +3434,7 @@ async function handleWorkerWebguiRequests(req, url, res, body) {
     const peerUrls = url.searchParams.has("peerUrls") ? normalizeWorkerPeerUrls(url.searchParams.get("peerUrls")) : null;
     recordWorkerSeen(appId, deviceId || deviceName, deviceName || deviceId, deviceGuid, capabilities, peerUrls, url.searchParams.get("deviceKind"));
   }
-  const waitMs = clamp(Number(url.searchParams.get("waitMs") || url.searchParams.get("timeoutMs") || workerTaskWaitMs), 0, 60000);
+  const waitMs = clamp(Number(url.searchParams.get("waitMs") || url.searchParams.get("timeoutMs") || clientTimeout(req,workerTaskWaitMs)), 0, 2147483647);
   const claimed = await claimAfterRelayEvent(
     req,
     "webgui_available",
@@ -3430,7 +3467,7 @@ async function handleWorkerSpeechRequests(req, url, res, body) {
     recordWorkerSeen(appId, deviceId || deviceName, deviceName || deviceId, deviceGuid, capabilities, peerUrls, url.searchParams.get("deviceKind"));
   }
   const predicate = (request) => canWorkerClaimSpeechRequest(request, appId, deviceId, deviceGuid);
-  const waitMs = clamp(Number(url.searchParams.get("waitMs") || url.searchParams.get("timeoutMs") || workerTaskWaitMs), 0, 60000);
+  const waitMs = clamp(Number(url.searchParams.get("waitMs") || url.searchParams.get("timeoutMs") || clientTimeout(req,workerTaskWaitMs)), 0, 2147483647);
   const claimed = await claimAfterRelayEvent(
     req,
     "speech_available",
@@ -4920,6 +4957,7 @@ function webguiProxyFailurePayload(request) {
 }
 
 function sendWebguiProxyResponse(res, request, externalPrefix) {
+  if (request.singleAttempt && request.status !== 'done') return sendJson(res, 503, { code: -1, errorCode: 'SEARCH_DEADLINE_EXCEEDED', requestId: request.id });
   if (request.status !== "done" || !request.response) {
     const failure = webguiProxyFailurePayload(request);
     const headers = {
@@ -5021,7 +5059,7 @@ async function handlePeerRpcProxy(req, url, res, body) {
     status: "queued",
     createdAt: now,
     updatedAt: now,
-    expiresAt: now + webguiRequestWaitMs,
+    expiresAt: now + clientTimeout(req, webguiRequestWaitMs),
     leaseUntil: 0,
     attempts: 0,
     appId: auth.app.id,
@@ -5036,6 +5074,7 @@ async function handlePeerRpcProxy(req, url, res, body) {
     bodyBase64,
     response: null
   };
+  applyWebguiRequestTiming(request);
   webguiRequests.set(request.id, request);
   writeEvent("peer_rpc_proxy_created", { requestId: request.id, targetDeviceId: worker.id });
   relayEventHub.publish("webgui_available", {
@@ -5043,7 +5082,7 @@ async function handlePeerRpcProxy(req, url, res, body) {
     targetDeviceId: request.targetDeviceId,
     data: { requestId: request.id }
   });
-  const finished = await waitForWebguiRequest(request, webguiRequestWaitMs);
+  const finished = await waitForWebguiRequest(request, Math.max(1,request.expiresAt - Date.now()));
   if (finished.status !== "done" || !finished.response) {
     return sendJson(res, finished.status === "failed" ? 502 : 504, {
       code: -1,
@@ -5179,7 +5218,7 @@ async function handleManageWebgui(req, url, res) {
   const localPath = `${match.restPath}${proxySearch.toString() ? `?${proxySearch}` : ""}`;
   const rawBody = req.method === "GET" || req.method === "HEAD" ? Buffer.alloc(0) : await readRawBody(req);
   const proxyRequest = createWebguiRequest(req, target, localPath, rawBody);
-  const finalRequest = await waitForWebguiRequest(proxyRequest, webguiRequestWaitMs);
+  const finalRequest = await waitForWebguiRequest(proxyRequest, Math.max(1,proxyRequest.expiresAt - Date.now()));
   sendWebguiProxyResponse(res, finalRequest, externalPrefix);
   return true;
 }
@@ -5383,7 +5422,7 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === speechProxyPrefix || url.pathname.startsWith(`${speechProxyPrefix}/`)) {
       res.setHeader("access-control-allow-origin", "*");
       res.setHeader("access-control-allow-methods", API_METHODS.join(','));
-      res.setHeader("access-control-allow-headers", "content-type,authorization,x-rabilink-token");
+      res.setHeader("access-control-allow-headers", "content-type,authorization,x-rabilink-token,x-rabi-timeout-ms");
       res.setHeader("access-control-max-age", "86400");
       if (req.method === "OPTIONS") {
         res.writeHead(204, { "cache-control": "no-store" });
@@ -5418,7 +5457,7 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/api/rabilink/device/api' || url.pathname.startsWith('/api/rabilink/device/api/operations/')) {
       const auth = authorizeRabiLinkRequest(req, url, body);
       if (!auth.ok || !auth.app) return sendJson(res, 401, { code: 'API_CONNECTION_REQUIRED' });
-      const identity = { appId: auth.app.id, bindingId: auth.deviceBinding?.id || '$application', targetDeviceId: auth.deviceBinding?.connectionTargetDeviceId || auth.app.connectionOwnerDeviceId, authenticatedAt: Date.now(),
+      const identity = { appId: auth.app.id, bindingId: auth.deviceBinding?.id || '$application', targetDeviceId: auth.deviceBinding?.connectionTargetDeviceId || auth.app.connectionOwnerDeviceId, authenticatedAt: Date.now(), requestTimeoutMs: clientTimeout(req, webguiRequestWaitMs),
         credentialHash: auth.deviceBinding?.credentialHash || sha256(auth.app.token) };
       try {
         if (req.method === 'GET' && url.pathname.startsWith('/api/rabilink/device/api/operations/')) {
@@ -5539,6 +5578,9 @@ const tunnelBroker = attachTunnelBroker(server, (req, url) => {
 });
 server.on("close", () => tunnelBroker.close());
 
+server.requestTimeout = relayTimeout("http.request", 300000);
+server.headersTimeout = Math.min(server.requestTimeout, relayTimeout("http.headers", 60000));
+server.keepAliveTimeout = relayTimeout("http.keepAlive", 5000);
 server.listen(port, host, () => {
   console.log(`RabiLink Relay listening on http://${host}:${port}`);
   console.log(`Data dir: ${dataDir}`);

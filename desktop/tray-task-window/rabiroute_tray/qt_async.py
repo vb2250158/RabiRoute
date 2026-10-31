@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .timeout_settings import get_timeout_ms
+
 from collections.abc import Callable
 from typing import Any
 
@@ -77,4 +79,4 @@ def start_qt_task(
 
 
 def wait_for_qt_tasks(timeout_ms: int = 5_000) -> bool:
-    return QThreadPool.globalInstance().waitForDone(timeout_ms)
+    return QThreadPool.globalInstance().waitForDone(get_timeout_ms("desktop.qt.stop", timeout_ms))

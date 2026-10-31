@@ -4,10 +4,7 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import {
-  handleManagerEventApi,
-  handlePersonaPluginApi
-} from "./controlPlaneRoutes.js";
+import { createPersonaIdentityTestApi } from "./personaManagerIntegration.fixture.js";
 import { updateIdentityRelation } from "../identityRelations.js";
 
 function listen(server: http.Server): Promise<number> {
@@ -73,17 +70,17 @@ async function waitForManagerEvent<T>(
 test("Manager persona-domain HTTP route accepts voice identity PUT and publishes its SSE event", async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-manager-voice-identity-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  const server = http.createServer((request, response) => {
-    const requestUrl = new URL(request.url || "/", `http://${request.headers.host || "127.0.0.1"}`);
-    if (handleManagerEventApi(request, requestUrl, response)) return;
-    if (handlePersonaPluginApi(request, requestUrl, response, {
+  const nativeApi = createPersonaIdentityTestApi(t, {
       rolesRoot: root,
       roleDir: roleId => path.join(root, roleId)
-    })) return;
+    });
+  const server = http.createServer((request, response) => {
+    const requestUrl = new URL(request.url || "/", `http://${request.headers.host || "127.0.0.1"}`);
+    if (nativeApi(request, requestUrl, response)) return;
     response.writeHead(404).end();
   });
   const port = await listen(server);
-  t.after(() => close(server));
+  t.after(async () => { await close(server); });
 
   const baseUrl = `http://127.0.0.1:${port}`;
   const roleId = "Rabi-A";
@@ -118,7 +115,9 @@ test("Manager persona-domain HTTP route accepts voice identity PUT and publishes
     })
   });
   assert.equal(invalidParticipantTypeResponse.status, 400);
-  assert.match(String((await invalidParticipantTypeResponse.json() as Record<string, unknown>).message), /string, null, or omitted/);
+  const invalidType = await invalidParticipantTypeResponse.json() as Record<string, unknown>;
+  assert.equal(invalidType.errorCode, "API_REQUEST_SCHEMA_INVALID");
+  assert.equal(invalidType.field, "body");
 
   let putStatus = 0;
   let putBody: Record<string, any> = {};

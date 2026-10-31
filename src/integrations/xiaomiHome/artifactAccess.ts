@@ -1,15 +1,9 @@
-import { timingSafeEqual } from "node:crypto";
+import { localModelSettingsRequestAllowed } from "../../manager/speechModelSettingsAccess.js";
 import fs from "node:fs";
-import { once } from "node:events";
-import { assertTrustedLanAgentPrincipal } from "../../manager/lanAgentRequestAccess.js";
 import { createXiaomiHomeRequestAuthority } from "./requestAuthority.js";
 import type http from "node:http";
 import { XiaomiHomeManagerApiError } from "./managerApi.js";
 import { XiaomiHomeArtifactStore } from "./artifactStore.js";
-
-export type XiaomiHomeArtifactAccessConfig = {
-  artifactReadTokenEnv?: string;
-};
 
 export type ByteRange = { start: number; end: number };
 
@@ -40,31 +34,12 @@ function safeHeader(value: string | string[] | undefined, fallback: string, maxi
 }
 
 export class XiaomiHomeArtifactAccess {
-  private readonly tokenEnv: string;
+  constructor(private readonly artifacts: XiaomiHomeArtifactStore) {}
 
-  constructor(
-    config: XiaomiHomeArtifactAccessConfig,
-    private readonly artifacts: XiaomiHomeArtifactStore,
-    private readonly env: NodeJS.ProcessEnv = process.env
-  ) {
-    this.tokenEnv = String(config.artifactReadTokenEnv || "RABIROUTE_XIAOMI_HOME_ARTIFACT_TOKEN").trim();
-    if (!/^[A-Z][A-Z0-9_]{2,127}$/.test(this.tokenEnv)) throw new Error("artifactReadTokenEnv is invalid.");
-  }
-
-  stream(request: http.IncomingMessage, response: http.ServerResponse, artifactId: string): void {
+  open(request: http.IncomingMessage, artifactId: string) {
     const authority = createXiaomiHomeRequestAuthority(request);
     authority.assert();
-    const principal = assertTrustedLanAgentPrincipal(request);
-    const configured = String(this.env[this.tokenEnv] || "").trim();
-    if (!configured) throw new XiaomiHomeManagerApiError(503, "xiaomi_home_artifact_authorization_required", `Set ${this.tokenEnv} in the local RabiRoute runtime environment.`);
-    const authorization = String(request.headers.authorization || "");
-    const presented = principal ? String(request.headers["x-rabiroute-artifact-token"] || "").trim()
-      : authorization.startsWith("Bearer ") ? authorization.slice(7).trim() : "";
-    const expectedBytes = Buffer.from(configured);
-    const presentedBytes = Buffer.from(presented);
-    if (expectedBytes.length !== presentedBytes.length || !timingSafeEqual(expectedBytes, presentedBytes)) {
-      throw new XiaomiHomeManagerApiError(401, "xiaomi_home_artifact_unauthorized", "Artifact read authorization failed.");
-    }
+    if (!localModelSettingsRequestAllowed(request)) throw new XiaomiHomeManagerApiError(401, "xiaomi_home_artifact_unauthorized", "An authenticated Manager connection is required.");
     const descriptor = this.artifacts.contentDescriptor(artifactId);
     if (!descriptor) throw new XiaomiHomeManagerApiError(404, "xiaomi_home_artifact_not_found", "Artifact content was not found.");
     const stat = fs.statSync(descriptor.localPath);
@@ -76,35 +51,29 @@ export class XiaomiHomeArtifactAccess {
     const reason = safeHeader(request.headers["x-rabi-read-reason"], "artifact-read", 240);
     this.artifacts.recordAccess({ artifactId, actor, reason, byteRange: range ? `bytes=${start}-${end}` : undefined });
     authority.assert();
-    response.writeHead(range ? 206 : 200, {
+    const headers: Record<string, string> = {
       "accept-ranges": "bytes",
       "cache-control": "no-store",
-      "content-length": contentLength,
+      "content-length": String(contentLength),
       "content-type": descriptor.record.mediaKind,
       ...(range ? { "content-range": `bytes ${start}-${end}/${stat.size}` } : {})
-    });
+    };
     const source = fs.createReadStream(descriptor.localPath, { start, end });
-    const closed = new AbortController();
-    const onClose = () => { closed.abort(); source.destroy(); };
-    response.once("close", onClose);
-    void (async () => {
+    const controller = new AbortController();
+    const closed = new Promise<void>(resolve => source.once("close", resolve));
+    source.on("error", () => {}); // The iterator owns the error, including cancellation before it starts.
+    const cancel = async () => { controller.abort(); source.destroy(); await closed; };
+    const frames = (async function* () {
       try {
         for await (const chunk of source) {
+          if (controller.signal.aborted) return;
           authority.assert();
-          if (!response.write(chunk)) {
-            await once(response, "drain", { signal: closed.signal });
-            authority.assert();
-          }
+          yield Buffer.from(chunk);
         }
-        authority.assert();
-        response.end();
-      } catch {
-        source.destroy();
-        response.destroy();
-      } finally {
-        response.off("close", onClose);
-        source.destroy();
-      }
+        if (!controller.signal.aborted) authority.assert();
+      } catch (error) { if (!controller.signal.aborted) throw error; }
+      finally { source.destroy(); await closed; }
     })();
+    return { status: range ? 206 : 200, headers, frames, cancel };
   }
 }

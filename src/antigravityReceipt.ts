@@ -1,3 +1,4 @@
+import { getTimeoutMs } from "./shared/timeoutSettings.js";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -146,7 +147,7 @@ export async function readAntigravityReceipt(
   options: AntigravityReceiptOptions,
   env: NodeJS.ProcessEnv = process.env
 ): Promise<AntigravityReceipt> {
-  const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const timeoutMs = options.timeoutMs ?? getTimeoutMs("backend.antigravityReceipt.DEFAULT_TIMEOUT_MS", DEFAULT_TIMEOUT_MS);
   const intervalMs = options.intervalMs ?? DEFAULT_INTERVAL_MS;
   const deadline = Date.now() + timeoutMs;
   let lastTotal = 0;

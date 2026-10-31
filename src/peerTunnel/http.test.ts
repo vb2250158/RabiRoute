@@ -3,12 +3,44 @@ import { EventEmitter } from "node:events";
 import http from "node:http";
 import { PassThrough } from "node:stream";
 import test from "node:test";
+import { configureTimeouts, readTimeoutOverrides } from "../shared/timeoutSettings.js";
 import type { TunnelChannel } from "./channel.js";
 import { proxyTunnel, serveTunnel, tunnelFetch, tunnelHeaders } from "./http.js";
 import { TunnelSession, type TunnelStream } from "./session.js";
-import { proxySpeechEventStream } from "../manager/speechEventProxy.js";
+import { SpeechApiOwner, createSpeechApiOperations } from "../manager/speechApiOperations.js";
+import type { SpeechApiContext } from "../manager/speechApiContext.js";
+import { ManagerPluginRouteRegistry } from "../manager/managerPluginRouteRegistry.js";
 import { issueInternalManagerHopHeaders, validateInternalManagerHop } from "../shared/internalManagerHop.js";
 import { listenManagerEndpoint } from "../managerEndpointPolicy.js";
+
+test('message history tunnel deadline includes the response body and cancels the upstream', { timeout: 2500 }, async t => {
+  const { caller, receiver } = sessions(t);
+  let calls = 0;
+  const baseUrl = await server(t, (_req, res) => { calls++; res.writeHead(200); res.write('{'); });
+  serveTunnel(receiver, () => ({ manager: { baseUrl } }));
+  const start = performance.now();
+  const response = await tunnelFetch(caller, 'manager', '/api/roles/fixture/message-endpoint-history?budgetMs=300');
+  await assert.rejects(response.text(), /SEARCH_DEADLINE_EXCEEDED/);
+  assert.equal(calls, 1); assert.ok(performance.now() - start < 1500);
+});
+
+test('history tunnel uses the configured default and permits an explicit budget above three seconds', { timeout: 10000 }, async t => {
+  const previous = readTimeoutOverrides();
+  t.after(() => configureTimeouts(previous));
+  const { caller, receiver } = sessions(t);
+  const baseUrl = await server(t, (_req, res) => {
+    res.writeHead(200); res.write('{');
+    const timer = setTimeout(() => res.end('}'), 3200);
+    res.once('close', () => clearTimeout(timer));
+  });
+  serveTunnel(receiver, () => ({ manager: { baseUrl } }));
+  configureTimeouts({ ...previous, 'history.transport': 6000 });
+  const configured = await tunnelFetch(caller, 'manager', '/api/roles/fixture/message-endpoint-history');
+  assert.equal(await configured.text(), '{}');
+  configureTimeouts({ ...previous, 'history.transport': 20 });
+  const explicit = await tunnelFetch(caller, 'manager', '/api/roles/fixture/message-endpoint-history?budgetMs=6000');
+  assert.equal(await explicit.text(), '{}');
+});
 
 // Exercise the actual session framing and Duplex flow without identity files or live peers.
 function sessions(t: test.TestContext) {
@@ -121,15 +153,16 @@ test("tunnel input chunk denial settles a pending header wait without forwarding
 });
 
 test("tunnel input final denial does not dispatch the completion frame", { timeout: 3000 }, async t => {
-  const { caller, receiver } = sessions(t); const denial = new Error("test-only final revoked"); let checks = 0; let ended = false;
+  const { caller, receiver } = sessions(t); const denial = new Error("test-only final revoked"); let revoked = false; let ended = false;
+  const request = new PassThrough() as unknown as http.IncomingMessage; request.method = "GET"; request.headers = {};
+  const response = new http.ServerResponse(request);
   const remoteClosed = deferred<void>();
   receiver.once("request", (stream: TunnelStream) => {
     stream.resume(); stream.on("end", () => { ended = true; }); stream.once("close", () => remoteClosed.resolve());
+    revoked = true; request.push(null);
   });
-  const front = guardedFront(t, caller, () => { if (++checks >= 3) throw denial; });
-  const response = await fetch(await front.url);
-  assert.equal(response.status, 403); assert.equal(await response.text(), "denied");
-  assert.equal(await front.settled, denial); await remoteClosed.promise; assert.equal(ended, false);
+  await assert.rejects(proxyTunnel(caller, "manager", "/test", request, response, () => { if (revoked) throw denial; }), error => error === denial);
+  await remoteClosed.promise; assert.equal(ended, false);
 });
 
 test("tunnel output chunk and final denial stop disclosure and reject the proxy promise", { timeout: 3000 }, async t => {
@@ -192,13 +225,17 @@ test("tunnel connection errors before headers are sanitized without exposing ups
 test("raw SSE upstream read failure terminates the downstream without an unhandled sink error", { timeout: 3000 }, async t => {
   const source = deferred<ReadableStreamDefaultController<Uint8Array>>();
   const aborted = deferred<void>();
-  const url = await server(t, (_request, response) => proxySpeechEventStream(response, {
-    openUpstream: async signal => new Response(new ReadableStream<Uint8Array>({ start(controller) {
+  const owner = new SpeechApiOwner({
+    speechControl: { eventStream: async (signal: AbortSignal) => new Response(new ReadableStream<Uint8Array>({ start(controller) {
       source.resolve(controller); controller.enqueue(new TextEncoder().encode("data: allowed\n\n"));
       signal.addEventListener("abort", () => aborted.resolve(), { once: true });
-    } }), { headers: { "content-type": "text/event-stream" } })
-  }));
-  const response = await fetch(url); const reader = response.body!.getReader();
+    } }), { headers: { "content-type": "text/event-stream" } }) },
+    capture: () => ({ guard: () => {}, run: <T>(action: () => T) => action(), targetLocal: false })
+  } as unknown as SpeechApiContext);
+  const registry = new ManagerPluginRouteRegistry(), registration = registry.registerOperations("speech-stream-fixture", createSpeechApiOperations(owner).operations.filter(value => value.contract.operationId === "manager.speech.events"));
+  t.after(async () => { await Promise.all([registration.dispose(), owner.events.stop()]); });
+  const url = await server(t, (request, response) => { if (!registry.handle(request, new URL(request.url!, "http://fixture"), response)) response.writeHead(404).end(); });
+  const response = await fetch(url + "/api/speech/events"); const reader = response.body!.getReader();
   assert.match(new TextDecoder().decode((await reader.read()).value), /allowed/);
   (await source.promise).error(new Error("test-only private upstream failure"));
   await assert.rejects(reader.read()); await aborted.promise;
@@ -209,7 +246,7 @@ test("transport write failure rejects the original stream without another send",
   const channel = new EventEmitter() as TunnelChannel;
   let writes = 0;
   channel.send = async () => { writes++; throw new Error("fixture channel failed"); };
-  channel.close = () => channel.emit("close");
+  channel.close = () => { channel.emit("close"); };
   const hello = { deviceId: "fixture", generation: "generation", publicKey: "fixture", ephemeral: "fixture", nonce: "fixture", target: "caller", signature: "fixture" };
   const session = new TunnelSession(hello, { deviceId: "fixture", publicKey: "fixture", services: ["manager"] }, channel,
     { encode: value => Buffer.from(JSON.stringify(value)), decode: bytes => JSON.parse(bytes.toString()) }, true);

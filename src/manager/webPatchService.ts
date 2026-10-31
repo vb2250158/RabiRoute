@@ -1,7 +1,9 @@
+import { DeveloperCandidateProvenance } from "./developerCandidateProvenance.js";
+import type { DeveloperCandidateAdmission } from "./developerCandidateAdmission.js";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { buildWebPatch, verifyWebPatch, WEB_PATCH_HASH, WEB_PATCH_PREFIX, webPatchHash, webPatchPath, writeWebPatchJson, type WebPatchManifest } from "./webPatchCatalog.js";
+import { admitWebPatchCandidate, buildWebPatch, verifyWebPatch, WEB_PATCH_HASH, WEB_PATCH_PREFIX, webPatchHash, writeWebPatchJson, type WebPatchManifest } from "./webPatchCatalog.js";
 import type { WebPluginModule } from "./webPluginModules.js";
 
 export type WebPatchIdentity = { applicationGenerationId: string; managerInstanceId: string; pluginGenerationId: string };
@@ -41,13 +43,15 @@ function validateState(saved: State, backend: string): void {
 export class WebPatchService {
   readonly ready: Promise<void>;
   readonly candidates: string;
+  private readonly developerOrigins: DeveloperCandidateProvenance;
   private baseline?: string;
   private state?: State;
   private fault?: string;
   private initializing = true;
+  private readonly initializationAbort = new AbortController();
+  private readonly admissionAbort = new AbortController();
   private closed = false;
   private queued = 0;
-  private readers = 0;
   private tail: Promise<unknown> = Promise.resolve();
   private importTail: Promise<unknown> = Promise.resolve();
   private pending?: State;
@@ -67,20 +71,29 @@ export class WebPatchService {
 
   constructor(private readonly options: {
     packageRoot: string; stateRoot: string; identity(): WebPatchIdentity;
+    developerSourceRoot?: string; developerAdmission?: DeveloperCandidateAdmission; developerDiagnostic?: (message: string) => void;
     serialize<T>(generation: string, action: () => Promise<T>): Promise<T>;
     audit?(event: string, fields: Record<string, unknown>): void;
   }) {
     this.candidates = path.join(options.stateRoot, "candidates");
-    this.ready = this.initialize().catch(error => { this.fault = String(error); }).finally(() => { this.initializing = false; });
+    this.developerOrigins = new DeveloperCandidateProvenance({ stateRoot: options.stateRoot, sourceRoot: options.developerSourceRoot });
+    this.ready = this.initialize().catch(error => {
+      const signal = this.initializationAbort.signal;
+      const cancelled = signal.aborted && (error === signal.reason || error instanceof Error && error.name === "AbortError");
+      if (!cancelled) this.fault = String(error);
+    }).finally(() => { this.initializing = false; });
   }
 
   private get statePath(): string { return path.join(this.options.stateRoot, "states", `${this.state!.backend}.json`); }
 
   private async initialize(): Promise<void> {
-    this.baseline = await buildWebPatch(this.options.packageRoot, this.candidates);
-    const manifest = await this.manifest(this.baseline);
+    const signal = this.initializationAbort.signal;
+    this.baseline = await buildWebPatch(this.options.packageRoot, this.candidates, signal);
+    signal.throwIfAborted();
+    const manifest = await this.manifest(this.baseline, signal);
+    signal.throwIfAborted();
     this.state = { schemaVersion: 1, backend: manifest.backend, active: this.baseline, revision: 0, operations: [] };
-    const raw = await fs.readFile(this.statePath, "utf8").catch(error => {
+    const raw = await fs.readFile(this.statePath, { encoding: "utf8", signal }).catch(error => {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
       throw error;
     });
@@ -88,7 +101,8 @@ export class WebPatchService {
       if (raw.length > 2 * 1024 * 1024) throw new Error("Web patch state is too large.");
       const saved = JSON.parse(raw) as State;
       validateState(saved, manifest.backend);
-      await this.compatible(saved.active);
+      await this.compatible(saved.active, signal);
+      signal.throwIfAborted();
       const commit = await this.codeCommit(saved.codeRevision);
       commit?.();
       this.state = saved;
@@ -98,7 +112,7 @@ export class WebPatchService {
   status() {
     return { state: this.fault ? "blocked" : this.initializing ? "starting" : "ready", baseline: this.baseline,
       backend: this.state?.backend, active: this.state?.active, previous: this.state?.previous,
-      revision: this.state?.revision, codeRevision: this.state?.codeRevision, queued: this.queued, activeReads: this.readers, error: this.fault,
+      revision: this.state?.revision, codeRevision: this.state?.codeRevision, queued: this.queued, activeReads: 0, error: this.fault,
       identity: this.options.identity(), limits: { candidateBytes: 128 * 1024 * 1024, operations: 2048, candidates: 64 } };
   }
 
@@ -107,20 +121,34 @@ export class WebPatchService {
     return receipt ? structuredClone(receipt) : undefined;
   }
 
-  private async manifest(revision: string): Promise<WebPatchManifest> {
+  private async manifest(revision: string, signal?: AbortSignal): Promise<WebPatchManifest> {
+    signal?.throwIfAborted();
     if (!WEB_PATCH_HASH.test(revision)) throw new Error("Invalid Web release revision.");
     const cached = this.manifests.get(revision);
     if (cached) return cached;
-    const result = await verifyWebPatch(path.join(this.candidates, revision), revision);
+    const result = await verifyWebPatch(path.join(this.candidates, revision), revision, signal);
     if (this.manifests.size >= 8) this.manifests.delete(this.manifests.keys().next().value!);
     this.manifests.set(revision, result);
     return result;
   }
 
-  private async compatible(revision: string): Promise<WebPatchManifest> {
-    const manifest = await this.manifest(revision);
+  private async compatible(revision: string, signal?: AbortSignal): Promise<WebPatchManifest> {
+    const manifest = await this.manifest(revision, signal);
     if (this.state && manifest.backend !== this.state.backend) throw new Error("Web patch backend changed; a coordinated full release is required.");
     return manifest;
+  }
+
+  /** A detached read-only view for the existing native static owner; validates the active backend contract. */
+  async staticManifest(revision: string): Promise<Readonly<WebPatchManifest>> {
+    await this.ready;
+    if (this.closed || this.fault || !this.state) throw new Error("Web patch static manifest is unavailable.");
+    return structuredClone(await this.compatible(revision));
+  }
+
+  async importLocalCandidate(source: string, revision: string, actualSourceRoot: string): Promise<void> {
+    const result = this.importTail.then(() => this.copyCandidate(source, revision, actualSourceRoot));
+    this.importTail = result.catch(() => undefined);
+    return result;
   }
 
   async importCandidate(source: string, revision: string): Promise<void> {
@@ -129,14 +157,16 @@ export class WebPatchService {
     return result;
   }
 
-  private async copyCandidate(source: string, revision: string): Promise<void> {
+  private async copyCandidate(source: string, revision: string, actualSourceRoot?: string): Promise<void> {
     await this.ready;
     if (this.closed) throw new Error("Web patch service is closed.");
     const manifest = await verifyWebPatch(source, revision);
     if (!this.state || this.fault || manifest.backend !== this.state.backend) throw new Error("Web patch backend is incompatible or unavailable.");
+    // Persist the local origin before exposing a newly imported candidate to publication.
+    if (actualSourceRoot) await this.developerOrigins.record("web-patch", revision, actualSourceRoot);
     const destination = path.join(this.candidates, revision);
     if (await fs.stat(destination).catch(() => undefined)) { await verifyWebPatch(destination, revision); return; }
-    if ((await fs.readdir(this.candidates)).filter(name => WEB_PATCH_HASH.test(name)).length >= 64) throw new Error("Web revision retention limit reached; retain current service and review old revisions offline.");
+    await admitWebPatchCandidate(this.candidates, manifest.backend, revision);
     const temporary = path.join(this.candidates, `.import-${randomUUID()}`);
     try {
       await fs.mkdir(temporary, { recursive: true });
@@ -169,10 +199,14 @@ export class WebPatchService {
         const original = this.operation(request.operationId);
         if (original) { if (original.fingerprint !== fingerprint) throw new Error("Web patch operation payload conflict."); return original; }
         await this.compatible(request.candidate);
+        const admission = request.candidate === this.state.previous ? undefined : await this.options.developerAdmission?.prepareManagedCandidate({ kind: "web-patch", sha256: request.candidate,
+          candidateRoot: path.join(this.candidates, request.candidate), originSourceRoot: await this.developerOrigins.source("web-patch", request.candidate) }, this.admissionAbort.signal);
+        if (admission?.diagnostic) this.options.developerDiagnostic?.(admission.diagnostic);
         return this.options.serialize(request.pluginGenerationId, async () => {
           if (this.closed || request.expectedRevision !== this.state!.revision) throw new Error("Web patch baseline changed.");
           if (this.state!.operations.length >= 2048) throw new Error("Web patch receipt limit reached; no history is silently discarded.");
           const commitCode = await this.codeCommit(codeRevision);
+          admission?.assertCurrent();
           const receipt: Receipt = { operationId: request.operationId, fingerprint, state: "committed", revision: this.state!.revision + 1,
             active: request.candidate, previous: this.state!.active, ...(codeRevision === undefined ? {} : { codeRevision }) };
           const next: State = { ...this.state!, active: receipt.active, previous: receipt.previous, revision: receipt.revision,
@@ -224,39 +258,22 @@ export class WebPatchService {
     return { state: "unknown" };
   }
 
-  async automatic(sourceRoot: string): Promise<void> {
+  async automatic(sourceRoot: string, signal?: AbortSignal): Promise<void> {
+    signal?.throwIfAborted();
     const pointerPath = path.join(sourceRoot, "dist/web-patches/latest.json");
-    const raw = await fs.readFile(pointerPath, "utf8");
+    const raw = await fs.readFile(pointerPath, { encoding: "utf8", signal });
     if (raw.length > 4096) throw new Error("Web patch build marker is too large.");
     const pointer = JSON.parse(raw) as { revision: string; operationId: string };
     if (!WEB_PATCH_HASH.test(pointer.revision) || !/^[A-Za-z0-9_-]{1,128}$/.test(pointer.operationId)) throw new Error("Invalid Web patch build marker.");
-    await this.ready;
+    // Cancelling a watcher releases only its wait. Initialization remains owned
+    // by ready and is cancelled and joined separately by service.stop().
+    await this.waitForInitialization(signal);
+    signal?.throwIfAborted();
     if (!this.state || this.fault || this.operation(pointer.operationId) || pointer.revision === this.state.active) return;
-    await this.importCandidate(path.join(sourceRoot, "dist/web-patches", pointer.revision), pointer.revision);
+    await this.importLocalCandidate(path.join(sourceRoot, "dist/web-patches", pointer.revision), pointer.revision, sourceRoot);
+    signal?.throwIfAborted();
     if (await fs.readFile(pointerPath, "utf8") !== raw) return;
     await this.publish({ ...this.options.identity(), operationId: pointer.operationId, candidate: pointer.revision, expectedRevision: this.state.revision });
-  }
-
-  async document(): Promise<{ revision: string; body: string } | undefined> {
-    if (!this.state) return undefined;
-    const revision = this.state.active;
-    const source = (await this.read(revision, "web/index.html")).body.toString();
-    const body = source.replace(/(<html\b)/i, `$1 data-rabi-web-release="${revision}"`)
-      .replace(/((?:src|href)=["'])((?:\.\/|\/)?assets\/[^"']+)/g, (_match, prefix, asset: string) => `${prefix}${WEB_PATCH_PREFIX}${revision}/web/${asset.replace(/^\.?\//, "")}`);
-    return { revision, body };
-  }
-
-  async read(revision: string, filename: string): Promise<{ body: Buffer; path: string; revision: string }> {
-    webPatchPath(filename);
-    this.readers++;
-    try {
-      const manifest = await this.compatible(revision);
-      const file = manifest.files.find(entry => entry.path === filename);
-      if (!file) throw new Error("Web patch asset was not found.");
-      const body = await fs.readFile(path.join(this.candidates, revision, filename));
-      if (webPatchHash(body) !== file.sha256) throw new Error("Web patch asset integrity failed.");
-      return { body, path: filename, revision };
-    } finally { this.readers--; }
   }
 
   async modules(modules: readonly WebPluginModule[], revision?: string | null): Promise<readonly WebPluginModule[]> {
@@ -281,5 +298,20 @@ export class WebPatchService {
       source: Buffer.from(`export { activate } from "${WEB_PATCH_PREFIX}${revision}/${entry.entry}";\n`) };
   }
 
-  async stop(): Promise<void> { this.closed = true; await Promise.all([this.ready, this.tail, this.importTail]); }
+  private waitForInitialization(signal?: AbortSignal): Promise<void> {
+    if (!signal) return this.ready;
+    signal.throwIfAborted();
+    return new Promise((resolve, reject) => {
+      const aborted = () => { signal.removeEventListener("abort", aborted); reject(signal.reason); };
+      signal.addEventListener("abort", aborted, { once: true });
+      void this.ready.then(() => { signal.removeEventListener("abort", aborted); resolve(); });
+    });
+  }
+
+  async stop(): Promise<void> {
+    this.admissionAbort.abort();
+    this.closed = true;
+    if (this.initializing) this.initializationAbort.abort(new Error("Web patch initialization stopped."));
+    await Promise.all([this.ready, this.tail, this.importTail]);
+  }
 }

@@ -4,8 +4,8 @@ import { randomUUID } from "node:crypto";
 import os from "node:os";
 import { TerminalService } from "../lib/terminal-service.mjs";
 import { spawn } from "node:child_process";
-import { pathToFileURL } from "node:url";
-import path from "node:path";
+import { fileURLToPath } from "node:url";
+const packageRoot = fileURLToPath(new URL("..", import.meta.url));
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function waitFor(check, timeoutMs = 15000) { const end = Date.now() + timeoutMs; while(Date.now() < end){if(check())return;await delay(40);}throw new Error("Terminal fixture timed out."); }
 const alive = pid => {try{process.kill(pid,0);return true;}catch{return false;}};
@@ -44,11 +44,11 @@ for(const shell of ["cmd","powershell"]) test(`${shell}: native session, Unicode
 });
 
 test("main-process death closes native hosts, shells and detached descendants", {skip:process.platform!=="win32"}, async t=>{
-  const moduleUrl=pathToFileURL(path.resolve("apps/rabi-agent/lib/terminal-service.mjs")).href;
+  const moduleUrl=new URL("../lib/terminal-service.mjs", import.meta.url).href;
   const descendant="$child=Start-Process powershell.exe -ArgumentList '-NoProfile -Command Start-Sleep 300' -WindowStyle Hidden -PassThru;[Console]::WriteLine(('DESC_'+$child.Id))";
   const encoded=Buffer.from(descendant,"utf16le").toString("base64");
   const fixture=`import {TerminalService} from ${JSON.stringify(moduleUrl)};import {randomUUID} from 'node:crypto';const id=randomUUID();let transcript='';let terminal;const service=new TerminalService({emit:e=>{transcript+=e.data||'';const match=transcript.match(/DESC_(\\d+)/);if(match&&terminal){console.log(JSON.stringify({pid:terminal.pid,descendant:Number(match[1]),host:service.sessions.get(id).child.pid}));transcript='';}}});terminal=await service.execute({action:'open',terminalId:id,shell:'cmd'});await service.execute({action:'input',terminalId:id,sequence:1,data:${JSON.stringify(`powershell.exe -NoProfile -EncodedCommand ${encoded}\r`)}});setInterval(()=>{},1000);`;
-  const owner=spawn(process.execPath,["--input-type=module","-e",fixture],{windowsHide:true,stdio:["ignore","pipe","pipe"]});
+  const owner=spawn(process.execPath,["--input-type=module","-e",fixture],{cwd:packageRoot,windowsHide:true,stdio:["ignore","pipe","pipe"]});
   let output="";owner.stdout.on("data",data=>{output+=data;});
   owner.stderr.resume();const closed=new Promise(resolve=>owner.once("close",resolve));
   t.after(async()=>{if(alive(owner.pid))owner.kill();await closed;});

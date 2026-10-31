@@ -63,7 +63,7 @@ export async function buildCompanionContext(input: {
   roleDirectory: string;
   personaFile?: string;
   session: CompanionSession;
-  recentMemories: readonly RecentMemoryItem[];
+  recentMemories: readonly Pick<RecentMemoryItem, "id" | "title" | "focus" | "updatedAt" | "consolidatedAt">[];
 }): Promise<string> {
   const root = await fs.realpath(input.roleDirectory);
   const config = parseObject(await readSource(root, "personaConfig.json", MAX_JSON_BYTES), "personaConfig.json");

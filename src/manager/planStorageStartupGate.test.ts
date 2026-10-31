@@ -168,9 +168,9 @@ test("plan storage startup gate withholds plan storage read/mutation eligibility
   }), (error: unknown) => {
     assert.ok(error instanceof PlanStorageStartupGateError);
     assert.deepEqual(error.summary.failures, [
-      "YeYu:plan-2:package_recovery:prepared_stage_is_invalid",
       "YeYu:plans/quarantine/tx.json:package_recovery:receipt is malformed"
     ]);
+    assert.equal(error.summary.packageConflicts?.[0].planId, "plan-2");
     return true;
   });
 });

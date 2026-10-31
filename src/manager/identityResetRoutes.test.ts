@@ -4,7 +4,9 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { HostInstanceIdentityReset, handleInstanceIdentityReset } from "./identityResetRoutes.js";
+import { HostInstanceIdentityReset } from "./identityResetRoutes.js";
+import { createCorePublicOperations, type CorePublicOperationsContext } from "./corePublicOperations.js";
+import { ManagerPluginRouteRegistry } from "./managerPluginRouteRegistry.js";
 import { installDataMutationAuditSink, type RecordedDataMutationAudit } from "../observability/dataMutationAudit.js";
 
 const operationId = "4dc1ac0f-12eb-4f71-9cd1-eac946a8b93f";
@@ -12,21 +14,18 @@ const expectedGuid = "647f6388-a4dc-4327-ab17-3ccbd43ef9e2";
 
 async function fixture(t: test.TestContext, available = true, savedGuid = expectedGuid) {
   const calls: unknown[] = [];
+  const registry = new ManagerPluginRouteRegistry();
+  const definitions = createCorePublicOperations({ identity: () => ({ applicationGenerationId: "fixture", managerInstanceId: "manager" }), identityReset: {
+    service: {
+      available: () => available,
+      enqueue: async (input: { operationId: string; expectedGuid: string }) => { calls.push(input); return { operationId: input.operationId, state: "queued" as const }; },
+      status: async (id: string) => id === operationId ? { operationId: id, state: "queued" as const } : undefined
+    }, currentGuid: () => savedGuid
+  } } as CorePublicOperationsContext).filter(value => value.contract.pathTemplate.startsWith("/api/rabi/identity/reset-instance-id"));
+  const registration = registry.registerOperations("reset-fixture", definitions);
+  t.after(() => registration.dispose());
   const server = http.createServer((request, response) => {
-    handleInstanceIdentityReset(request, new URL(request.url!, "http://localhost"), response, {
-      service: {
-        available: () => available,
-        enqueue: async input => { calls.push(input); return { operationId: input.operationId, state: "queued" }; },
-        status: async id => id === operationId ? { operationId: id, state: "queued" } : undefined
-      },
-      currentGuid: () => savedGuid,
-      readJson: async (request, maximum) => {
-        let body = "";
-        for await (const chunk of request) { body += chunk; if (body.length > maximum) throw new Error("too large"); }
-        return JSON.parse(body);
-      },
-      json: (response, status, body) => { response.writeHead(status, { "content-type": "application/json" }); response.end(JSON.stringify(body)); }
-    });
+    if (!registry.handle(request, new URL(request.url!, "http://localhost"), response)) response.writeHead(404).end();
   });
   await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
   t.after(() => new Promise<void>(resolve => server.close(() => resolve())));
@@ -92,7 +91,7 @@ test("reset fences the GUID and rejects missing confirmation, extra fields and o
     { operationId, expectedGuid, confirmed: true, extra: "ignored?" },
     { operationId: "../escape", expectedGuid, confirmed: true },
     { operationId, expectedGuid, confirmed: true, large: "x".repeat(3000) } ]) {
-    assert.equal((await f.request(body)).status, 400);
+    assert.equal((await f.request(body)).status, "large" in body ? 413 : 400);
   }
   assert.equal((await f.request({ operationId, expectedGuid: operationId, confirmed: true })).status, 409);
   assert.equal((await f.request({ operationId, expectedGuid, confirmed: true }, { "content-type": "text/plain" })).status, 415);

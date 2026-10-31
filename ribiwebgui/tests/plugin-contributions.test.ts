@@ -40,14 +40,14 @@ function quickSetup(overrides: Record<string, unknown> = {}): unknown {
   return {
     kind: "command",
     surface: "web.commands",
-    id: "quick-setup",
+    id: "create-role",
     instanceId: "manager:route-control",
     pluginId,
     hosts: ["web"],
-    handlerId: "web.quick-setup",
+    handlerId: "web.create-role",
     slot: "sidebar-footer-primary",
-    icon: "mdi-lightning-bolt-outline",
-    label: { fallback: "快速配置" },
+    icon: "mdi-account-plus-outline",
+    label: { fallback: "新建角色" },
     order: 10,
     ...overrides
   };
@@ -82,7 +82,7 @@ test("command entry disappears when its owner is revoked", () => {
     [quickSetup()],
     [{ ...activePlugin, status: "inactive" }]
   )));
-  assert.deepEqual(active.map(command => command.handlerId), ["web.quick-setup"]);
+  assert.deepEqual(active.map(command => command.handlerId), ["web.create-role"]);
   assert.deepEqual(revoked, []);
 });
 

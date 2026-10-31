@@ -1,3 +1,4 @@
+import { getTimeoutMs } from "../shared/timeoutSettings.js";
 import type {
   PlanFeedbackRecoveryCandidate,
   PlanFeedbackRecoveryOutcome
@@ -6,6 +7,7 @@ import {
   FailureCircuitRegistry,
   type FailureCircuitDecision
 } from "../runtime/failureCircuit.js";
+import { captureNativeStorageWork, nativeStorageWorkClosed, observeNativeStorageWork } from "./nativeStorageWork.js";
 
 export const PLAN_FEEDBACK_RECOVERY_RETRY_MS = 15_000;
 
@@ -89,11 +91,13 @@ export class PlanFeedbackRecoveryService {
   private generation = 0;
   private attemptCancellation: AbortController | undefined;
   private sweepCancellation: AbortController | undefined;
+  private readonly nativeWork = new Set<Promise<void>>();
+  private retirement: Promise<void> | undefined;
 
   constructor(private readonly options: PlanFeedbackRecoveryServiceOptions) {
     this.retryDelayMs = Math.max(0, options.retryDelayMs ?? PLAN_FEEDBACK_RECOVERY_RETRY_MS);
     this.now = options.now ?? Date.now;
-    this.attemptTimeoutMs = Math.max(1_000, options.attemptTimeoutMs ?? 5 * 60_000);
+    this.attemptTimeoutMs = Math.max(1, options.attemptTimeoutMs ?? getTimeoutMs("backend.manager.planFeedbackRecoveryService.owner.Math.max.attemptTimeoutMs", 5 * 60_000));
     this.failureCircuits = new FailureCircuitRegistry({
       baseDelayMs: Math.max(1, this.retryDelayMs),
       maximumDelayMs: Math.max(Math.max(1, this.retryDelayMs), options.maximumRetryDelayMs ?? 15 * 60_000),
@@ -108,6 +112,10 @@ export class PlanFeedbackRecoveryService {
     if (this.stopped) return Promise.resolve();
     this.active = true;
     return this.requestSweep(reason);
+  }
+
+  isActive(): boolean {
+    return this.active && !this.stopped;
   }
 
   allowRetry(roleId: string, planId: string, feedbackId: string): void {
@@ -161,6 +169,26 @@ export class PlanFeedbackRecoveryService {
     if (sweep) await sweep;
   }
 
+  /** Exclusive replacement must join real producers, not just their abortable waiters. */
+  stopAndJoin(): Promise<void> {
+    return this.retirement ??= (async () => {
+      try { await this.stop(); }
+      finally { while (this.nativeWork.size) await Promise.allSettled([...this.nativeWork]); }
+    })();
+  }
+
+  private trackNativeWork<T>(run: () => MaybePromise<T>): Promise<T> {
+    const work = captureNativeStorageWork(() => {
+      const result = Promise.resolve(run());
+      const closed = nativeStorageWorkClosed(result);
+      if (closed) observeNativeStorageWork(closed);
+      return result;
+    });
+    this.nativeWork.add(work.closed);
+    void work.closed.then(() => this.nativeWork.delete(work.closed));
+    return work.result;
+  }
+
   private requestSweep(reason: string): Promise<void> {
     if (!this.active || this.stopped) return Promise.resolve();
     if (this.currentSweep) {
@@ -199,7 +227,7 @@ export class PlanFeedbackRecoveryService {
   private async runSweep(reason: string, generation: number, signal: AbortSignal): Promise<void> {
     let candidates: readonly PlanFeedbackRecoveryCandidate[];
     try {
-      candidates = await waitForAbortable(Promise.resolve(this.options.listCandidates(signal)), signal);
+      candidates = await waitForAbortable(this.trackNativeWork(() => this.options.listCandidates(signal)), signal);
     } catch (error) {
       if (!this.isCurrent(generation)) return;
       const circuit = this.failureCircuits.recordFailure("scan", error);
@@ -267,7 +295,7 @@ export class PlanFeedbackRecoveryService {
       }, this.attemptTimeoutMs);
       attemptTimeout.unref();
       try {
-        const recovery = Promise.resolve(this.options.recoverCandidate(candidate, {
+        const recovery = this.trackNativeWork(() => this.options.recoverCandidate(candidate, {
           signal: attemptCancellation.signal,
           scheduleOnce: async schedule => {
             if (attemptCancellation.signal.aborted
@@ -275,7 +303,7 @@ export class PlanFeedbackRecoveryService {
               || this.attempted.has(key)) return false;
             this.attempted.add(key);
             try {
-              await schedule();
+              await this.trackNativeWork(schedule);
               if (attemptCancellation.signal.aborted) throw attemptCancellation.signal.reason;
               return true;
             } catch (error) {

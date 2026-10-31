@@ -4,6 +4,8 @@
 
 # Host and remote computer clients
 
+An enrolled remote instance has one switch, enabled by default. While enabled, it uses all public host APIs with its existing computer credential, without browser login, saved Agent/session registration or per-feature grants. Every Agent invocation supplies its actual type and complete session ID.
+
 The host computer's Rabi service owns personas, plans, memory, skills, message history and persistent orchestration without a separate controlling Agent. Each remote computer runs a Rabi Agent client exposing its platform's computer capabilities. Ordinary authenticated Agents can query plans, memory and skills and use computer APIs under the same contracts without a primary-persona role.
 
 ```mermaid
@@ -58,7 +60,16 @@ For uploads, retain a UUID `uploadId` and the whole-file SHA-256 before starting
 4. `upload.commit(uploadId)` verifies the full content and commits atomically without overwriting an existing destination.
 5. `upload.abort(uploadId)` discards an unfinished upload.
 
-Uploads are limited to 2 GiB each and four active sessions. A client lifetime retains up to 64 upload records and the latest 256 chunk receipts. Normal shutdown removes unfinished files; abrupt process death may leave `.rabi-upload-<UUID>.tmp`. A new client does not resume old records automatically. Query the original ID after an uncertain result; do not switch IDs or overwrite a destination automatically.
+Uploads have no additional size ceiling by default; byte counts must be non-negative JavaScript safe integers. This file service is separate from the controller's `agentUploads.maxFileMiB`. Users configure the following settings in the **remote Rabi Agent launch environment** and restart that Agent to apply them. Exceeded limits report their current values and configuration entry.
+
+| Environment variable | Default | Meaning |
+| --- | --- | --- |
+| `RABI_AGENT_COMPUTER_MAX_UPLOAD_BYTES` | No additional quota | Bytes per file; `0` permits only empty files |
+| `RABI_AGENT_COMPUTER_MAX_CONCURRENT_IO` | `4` | Concurrent computer I/O operations; `0` removes the quota |
+| `RABI_AGENT_COMPUTER_MAX_ACTIVE_UPLOADS` | `4` | Active uploads; `0` removes the quota |
+| `RABI_AGENT_COMPUTER_MAX_UPLOAD_RECORDS` | `64` | Upload records retained by this process; `0` removes the quota |
+
+All values must be non-negative safe integers. The latest 256 chunk receipts remain available for verification. Normal shutdown removes unfinished files; abrupt process death may leave `.rabi-upload-<UUID>.tmp`. A new client does not resume old records automatically. Query the original ID after an uncertain result; do not switch IDs or overwrite a destination automatically.
 
 ## Windows and images
 

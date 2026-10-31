@@ -15,6 +15,8 @@ import java.util.List;
 
 /** Authenticated, read-only adapter for the mobile speech preview. */
 public final class RabiSpeechPreviewClient {
+    private final android.content.Context context;
+    public RabiSpeechPreviewClient(android.content.Context context) { this.context=context.getApplicationContext(); }
     private static final long WINDOW_SECONDS = 24L * 60L * 60L;
 
     public RabiSpeechPreviewSnapshot load(RabiLinkRelayConfig config, String sourceDeviceId) throws Exception {
@@ -99,8 +101,9 @@ public final class RabiSpeechPreviewClient {
         HttpURLConnection connection = (HttpURLConnection) new URL(config.getBaseUrl() + path).openConnection();
         try {
             connection.setRequestMethod("GET");
-            connection.setConnectTimeout(12_000);
-            connection.setReadTimeout(70_000);
+            connection.setConnectTimeout((int)com.rabi.link.transport.ScopedManagerTimeouts.active(context).get("android.preview.connect",12000));
+            connection.setReadTimeout((int)com.rabi.link.transport.ScopedManagerTimeouts.active(context).get("android.preview.request",70000));
+            connection.setRequestProperty("X-Rabi-Timeout-Ms",Integer.toString(connection.getReadTimeout()));
             connection.setRequestProperty("X-RabiLink-Token", config.getToken());
             connection.setRequestProperty("Accept", "application/json");
             int status = connection.getResponseCode();

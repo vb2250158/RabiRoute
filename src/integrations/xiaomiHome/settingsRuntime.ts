@@ -39,6 +39,8 @@ type RuntimeFile = Readonly<{
 }>;
 
 type RuntimeDependencies = Readonly<{
+  /** Explicit Manager acceptance mode: suppress persistence and autonomous background work. */
+  readOnly?: boolean;
   roleDirectory?: (roleId: string) => string;
   activity?: HomeAssistantActivityPort;
   env?: NodeJS.ProcessEnv;
@@ -103,8 +105,8 @@ export function normalizeXiaomiHomeRuntimeSettings(input: unknown): XiaomiHomeRu
   return Object.freeze({
     ...manager,
     speechBindings,
-    allowPublicBaseUrl: input.allowPublicBaseUrl === true,
-    allowInsecurePrivateHttp: input.allowInsecurePrivateHttp === true,
+    allowPublicBaseUrl: input.allowPublicBaseUrl !== false,
+    allowInsecurePrivateHttp: input.allowInsecurePrivateHttp !== false,
     agentRoleId: input.agentRoleId == null || input.agentRoleId === "" ? "" : controlledText(input.agentRoleId, "", "agentRoleId", 80),
     eventMonitorEnabled: input.eventMonitorEnabled !== false,
     eventDeliveryMode,
@@ -180,6 +182,10 @@ export class XiaomiHomeRuntimeController {
   private monitorValue: XiaomiHomeEventMonitor;
   private activityValue?: HomeAssistantActivityMonitor;
   private started = false;
+  private activated = false;
+  private stopping?: Promise<void>;
+  private readonly retirements = new Set<Promise<void>>();
+  private readonly retirementFailures: unknown[] = [];
   private stopHealthListener?: () => void;
   private healthDelivery: Promise<unknown> = Promise.resolve();
   private readonly credentialStore: XiaomiHomeCredentialStore;
@@ -208,7 +214,8 @@ export class XiaomiHomeRuntimeController {
   get artifactAccess(): XiaomiHomeArtifactAccess { return this.accessValue; }
 
   start(): void {
-    if (this.started) return;
+    if (this.started || this.dependencies.readOnly) return;
+    if (this.stopping) throw new Error('Xiaomi Home runtime has retired.');
     this.started = true;
     this.stopHealthListener = this.deployment.onHealthChange(state => {
       const agentRoleId = this.snapshotValue.settings.agentRoleId;
@@ -232,16 +239,39 @@ export class XiaomiHomeRuntimeController {
     this.activityValue?.start();
   }
 
-  async stop(): Promise<void> {
+  /** Refresh the original files only after the published predecessor has actually retired. */
+  async activate(signal?: AbortSignal): Promise<void> {
+    signal?.throwIfAborted();
+    if (this.stopping) throw new Error('Xiaomi Home runtime has retired.');
+    if (this.dependencies.readOnly) { this.activated = true; return; }
+    this.snapshotValue = this.store.read();
+    await this.replaceRuntime(this.createRuntime(this.snapshotValue.settings));
+    signal?.throwIfAborted();
+    if (this.stopping) throw new Error('Xiaomi Home runtime has retired.');
+    this.artifacts.activate();
+    signal?.throwIfAborted();
+    this.start();
+    this.activated = true;
+  }
+
+  assertAvailable(published = true): void {
+    if (!published || !this.activated || this.stopping) throw new XiaomiHomeManagerApiError(503,
+      'xiaomi_home_runtime_starting', 'Xiaomi Home is awaiting its published native owner.');
+  }
+
+  stop(): Promise<void> {
     this.started = false;
     this.stopHealthListener?.();
     this.stopHealthListener = undefined;
-    await this.vacuumRemote.shutdown();
-    await this.vacuumCloud.video.shutdown();
-    this.monitorValue.stop();
-    await this.activityValue?.stop();
-    await this.deployment.stop();
-    await this.healthDelivery;
+    this.activated = false;
+    return this.stopping ??= (async () => {
+      const results = await Promise.allSettled([
+        this.monitorValue.stop(), this.activityValue?.stop(), this.captureValue.close(),
+        this.vacuumRemote.shutdown(), this.vacuumCloud.video.shutdown(), this.deployment.stop(), this.healthDelivery, ...this.retirements
+      ]);
+      const failures = [...this.retirementFailures, ...results.flatMap(result => result.status === 'rejected' ? [result.reason] : [])];
+      if (failures.length) throw new AggregateError(failures, 'Xiaomi Home runtime retirement was not confirmed.');
+    })();
   }
 
   settings(): XiaomiHomeSettingsSnapshot {
@@ -376,7 +406,7 @@ export class XiaomiHomeRuntimeController {
       ...settings,
       runtimeDir: this.artifacts.runtimeDir
     }, fetchImpl, credentialToken);
-    const access = new XiaomiHomeArtifactAccess(settings, this.artifacts, env);
+    const access = new XiaomiHomeArtifactAccess(this.artifacts);
     const roleDirectory = this.dependencies.roleDirectory;
     const capture = new XiaomiHomeClipCaptureWorker({ ...settings,
       cameraClipCaptureEnabled: settings.cameraClipCaptureEnabled && Boolean(roleDirectory && settings.agentRoleId)
@@ -396,15 +426,23 @@ export class XiaomiHomeRuntimeController {
     return this.credentialStore.resolve();
   }
 
-  private replaceRuntime(runtime: ReturnType<XiaomiHomeRuntimeController["createRuntime"]>): void {
-    this.monitorValue.stop();
-    void this.activityValue?.stop();
+  private replaceRuntime(runtime: ReturnType<XiaomiHomeRuntimeController["createRuntime"]>): Promise<void> {
+    const retiring = Promise.allSettled([this.monitorValue.stop(), this.activityValue?.stop(), this.captureValue.close()]).then(results => {
+      const errors = results.flatMap(result => result.status === "rejected" ? [result.reason] : []);
+      if (errors.length === 1) throw errors[0];
+      if (errors.length) throw new AggregateError(errors, "Previous Xiaomi Home owner cleanup failed.");
+    });
     this.clientValue = runtime.client;
     this.accessValue = runtime.access;
     this.captureValue = runtime.capture;
     this.monitorValue = runtime.monitor;
     this.activityValue = runtime.activity;
-    if (this.started) { this.monitorValue.start(); this.activityValue?.start(); }
+    const transition = retiring.then(() => {
+      if (this.started && this.monitorValue === runtime.monitor) { this.monitorValue.start(); this.activityValue?.start(); }
+    });
+    const observed = transition.catch(error => { this.retirementFailures.push(error); }).finally(() => this.retirements.delete(observed));
+    this.retirements.add(observed);
+    return transition;
   }
 
   private authorizationRevision(credential: XiaomiHomeCredentialResolution): string {

@@ -1,3 +1,5 @@
+import { ReadSettingsError } from "./shared/readSettingsError.js";
+import { getTimeoutMs } from "./shared/timeoutSettings.js";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -6,10 +8,34 @@ import { Marked } from "./vendor/marked.esm.js";
 import WebSocket from "ws";
 
 const IMAGE_WIDTH = 1000;
-const MAX_MARKDOWN_BYTES = 32 * 1024;
-const MAX_IMAGE_HEIGHT = 4096;
-const MAX_PNG_BYTES = 4 * 1024 * 1024;
-const BROWSER_TIMEOUT_MS = 15_000;
+/** Public quotas: zero means no application limit; browser/runtime failures remain visible. */
+function createMarkdownImageSettings(env: NodeJS.ProcessEnv = process.env) {
+  const integer = (name: string, fallback = 0, minimum = 0, maximum = Number.MAX_SAFE_INTEGER) => {
+    const raw = env[name]?.trim();
+    const value = raw ? Number(raw) : fallback;
+    if (!Number.isSafeInteger(value) || value < minimum || value > maximum) throw new ReadSettingsError(name, `must be an integer from ${minimum} to ${maximum}.`);
+    return value;
+  };
+  return Object.freeze({
+    get sourceBytes() { return integer("RABIROUTE_MARKDOWN_MAX_SOURCE_BYTES"); },
+    get height() { return integer("RABIROUTE_MARKDOWN_MAX_HEIGHT"); },
+    get pngBytes() { return integer("RABIROUTE_MARKDOWN_MAX_PNG_BYTES"); },
+    get messagePngBytes() { return integer("RABIROUTE_MARKDOWN_MAX_MESSAGE_PNG_BYTES"); },
+    get timeoutMs() { return getTimeoutMs("markdown.browser", integer("RABIROUTE_MARKDOWN_TIMEOUT_MS", 15000, 1, 2_147_483_647)); }
+  });
+}
+export function readMarkdownImageSettings(env: NodeJS.ProcessEnv = process.env) {
+  const settings = createMarkdownImageSettings(env); Object.values(settings); return settings;
+}
+export const markdownImageSettings = createMarkdownImageSettings();
+export function checkMarkdownQuota(name: string, maximum: number, actual: number): void {
+  if (maximum && actual > maximum) throw new Error(`${name}=${maximum} exceeded (actual ${actual}). Increase this Manager environment setting or set 0 to remove the application quota.`);
+}
+function validateMarkdownSource(markdown: string, settings = markdownImageSettings): void {
+  if (!markdown.trim()) throw new Error("Markdown source must contain text.");
+  checkMarkdownQuota("RABIROUTE_MARKDOWN_MAX_SOURCE_BYTES", settings.sourceBytes, Buffer.byteLength(markdown, "utf8"));
+}
+
 
 function escapeHtml(value: string): string {
   return value.replace(/[&<>"']/g, character => ({
@@ -118,6 +144,7 @@ function browserCandidates(): string[] {
 }
 
 async function launchBrowser(profileDir: string): Promise<{ process: ChildProcessWithoutNullStreams; port: number }> {
+  const timeoutMs = markdownImageSettings.timeoutMs;
   const candidates = browserCandidates();
   if (candidates.length === 0) throw new Error("Markdown image rendering requires an installed Chromium, Chrome, or Edge browser.");
   let lastError: Error | undefined;
@@ -131,7 +158,7 @@ async function launchBrowser(profileDir: string): Promise<{ process: ChildProces
     try {
       const port = await new Promise<number>((resolve, reject) => {
         let stderr = "";
-        const timeout = setTimeout(() => reject(new Error("Markdown browser startup timed out.")), BROWSER_TIMEOUT_MS);
+        const timeout = setTimeout(() => reject(new Error("Markdown browser startup timed out; adjust RABIROUTE_MARKDOWN_TIMEOUT_MS.")), timeoutMs);
         const finish = (error?: Error, value?: number) => {
           clearTimeout(timeout);
           child.stderr.off("data", onData);
@@ -163,7 +190,7 @@ async function launchBrowser(profileDir: string): Promise<{ process: ChildProces
 async function pageWebSocketUrl(port: number): Promise<string> {
   for (let attempt = 0; attempt < 20; attempt++) {
     try {
-      const response = await fetch(`http://127.0.0.1:${port}/json/list`, { signal: AbortSignal.timeout(1000) });
+      const response = await fetch(`http://127.0.0.1:${port}/json/list`, { signal: AbortSignal.timeout(getTimeoutMs("backend.markdownImage.pageWebSocketUrl.AbortSignal.timeout.request", 1000)) });
       const targets = await response.json() as Array<{ type?: string; webSocketDebuggerUrl?: string }>;
       const page = targets.find(target => target.type === "page" && target.webSocketDebuggerUrl);
       if (page?.webSocketDebuggerUrl) return page.webSocketDebuggerUrl;
@@ -174,11 +201,11 @@ async function pageWebSocketUrl(port: number): Promise<string> {
 }
 
 async function captureHtml(port: number, html: string): Promise<Buffer> {
-  const socket = new WebSocket(await pageWebSocketUrl(port), { handshakeTimeout: 5000 });
+  const socket = new WebSocket(await pageWebSocketUrl(port), { handshakeTimeout: markdownImageSettings.timeoutMs });
   return captureHtmlOnSocket(socket, html);
 }
 
-async function captureHtmlOnSocket(socket: WebSocket, html: string, timeoutMs = BROWSER_TIMEOUT_MS): Promise<Buffer> {
+async function captureHtmlOnSocket(socket: WebSocket, html: string, timeoutMs = markdownImageSettings.timeoutMs, settings = markdownImageSettings): Promise<Buffer> {
   type Waiter = { resolve: (value: Record<string, unknown>) => void; reject: (error: Error) => void };
   let sequence = 0;
   let connectionError: Error | undefined;
@@ -188,7 +215,7 @@ async function captureHtmlOnSocket(socket: WebSocket, html: string, timeoutMs = 
   const createWaiter = (method: string, remove: () => void) => {
     let waiter!: Waiter;
     const promise = new Promise<Record<string, unknown>>((resolve, reject) => {
-      const timer = setTimeout(() => waiter.reject(new Error(`Markdown browser ${method} timed out.`)), timeoutMs);
+      const timer = setTimeout(() => waiter.reject(new Error(`Markdown browser ${method} timed out (RABIROUTE_MARKDOWN_TIMEOUT_MS=${timeoutMs}).`)), timeoutMs);
       const finish = (error?: Error, value: Record<string, unknown> = {}) => {
         if (!waiting.delete(waiter)) return;
         clearTimeout(timer);
@@ -263,15 +290,17 @@ async function captureHtmlOnSocket(socket: WebSocket, html: string, timeoutMs = 
     const metrics = await send("Page.getLayoutMetrics");
     const size = (metrics.cssContentSize || metrics.contentSize || {}) as Record<string, unknown>;
     const height = Math.ceil(Number(size.height));
-    if (!Number.isFinite(height) || height < 1 || height > MAX_IMAGE_HEIGHT) {
-      throw new Error(`Markdown image height must be at most ${MAX_IMAGE_HEIGHT}px; split the document into smaller sends.`);
+    if (!Number.isSafeInteger(height) || height < 1 || height > 2_147_483_647) {
+      throw new Error("Markdown image height exceeds the Chromium integer viewport capacity.");
     }
+    checkMarkdownQuota("RABIROUTE_MARKDOWN_MAX_HEIGHT", settings.height, height);
     await send("Emulation.setDeviceMetricsOverride", { width: IMAGE_WIDTH, height, deviceScaleFactor: 1, mobile: false });
     const screenshot = await send("Page.captureScreenshot", { format: "png", captureBeyondViewport: true, fromSurface: true });
     const png = Buffer.from(String(screenshot.data || ""), "base64");
-    if (png.length < 8 || png.length > MAX_PNG_BYTES || !png.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) {
-      throw new Error("Markdown renderer returned an invalid or oversized PNG.");
+    if (png.length < 8 || !png.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) {
+      throw new Error("Markdown renderer returned an invalid PNG.");
     }
+    checkMarkdownQuota("RABIROUTE_MARKDOWN_MAX_PNG_BYTES", settings.pngBytes, png.length);
     return png;
   } finally {
     failAll(new Error("Markdown browser connection closed."));
@@ -287,12 +316,10 @@ async function captureHtmlOnSocket(socket: WebSocket, html: string, timeoutMs = 
 }
 
 /** @internal Socket-level seam for deterministic CDP lifecycle tests. */
-export const markdownImageInternals = { captureHtmlOnSocket, browserCandidates };
+export const markdownImageInternals = { captureHtmlOnSocket, browserCandidates, validateMarkdownSource };
 
 export async function renderMarkdownToPng(markdown: string): Promise<Buffer> {
-  if (!markdown.trim() || Buffer.byteLength(markdown, "utf8") > MAX_MARKDOWN_BYTES) {
-    throw new Error(`Markdown source must contain text and be at most ${MAX_MARKDOWN_BYTES} UTF-8 bytes.`);
-  }
+  validateMarkdownSource(markdown);
   const tempRoot = path.resolve(os.tmpdir());
   const profileDir = fs.mkdtempSync(path.join(tempRoot, "rabiroute-markdown-browser-"));
   let browser: ChildProcessWithoutNullStreams | undefined;

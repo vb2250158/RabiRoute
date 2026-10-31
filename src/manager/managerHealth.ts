@@ -19,6 +19,7 @@ export type ManagerHealthSnapshot = Readonly<{
 export function buildManagerHealthSnapshot(input: Readonly<{
   pluginReadiness: ManagerPluginReadiness;
   planStorageReady: boolean;
+  planStoragePartial?: boolean;
   routesReady: boolean;
   routeReadyCount: number;
   routeRequiredCount: number;
@@ -41,6 +42,8 @@ export function buildManagerHealthSnapshot(input: Readonly<{
       ? "Manager event loop and required capabilities are ready, but optional plugins are degraded."
       : input.sourcePatchesReady === false
         ? "Manager event loop and required capabilities are ready, but source-patched APIs are unavailable; inspect /api/source-patches."
+      : input.planStoragePartial
+        ? "Manager is live; unresolved plan package conflicts are isolated. Unaffected plans remain available; conflicted plans require recovery."
       : !input.planStorageReady
         ? "Manager event loop and required capabilities are ready; plan storage recovery continues in the background."
       : input.routesReady

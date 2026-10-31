@@ -5,7 +5,7 @@ import { once } from "node:events";
 import { compileHotPatchModule } from "./lib/hot-patch-compiler.mjs";
 import { HotPatchModule } from "../src/plugin-kernel/hotPatchModule.ts";
 
-test("HTTP stays listening while source changes, old requests drain and state survives rollback", async () => {
+test("HTTP stays listening while source changes, old requests drain and state survives rollback", { timeout: 30000 }, async () => {
   let release;
   const delayed = new Promise(resolve => { release = resolve; });
   const source = `declare const pause: (slow: boolean) => Promise<void>;
@@ -32,20 +32,32 @@ test("HTTP stays listening while source changes, old requests drain and state su
   await once(server, "listening");
   const address = server.address();
   const base = `http://127.0.0.1:${address.port}`;
+  // The OS may choose a port on fetch's browser-oriented blocked-port list.
+  // This local HTTP fixture uses Node's HTTP transport on its assigned port.
+  const readText = pathname => new Promise((resolve, reject) => {
+    const request = http.get(`${base}${pathname}`, response => {
+      response.setEncoding("utf8");
+      let body = "";
+      response.on("data", chunk => { body += chunk; });
+      response.once("error", reject);
+      response.once("end", () => resolve(body));
+    });
+    request.once("error", reject);
+  });
   try {
-    const oldRequest = fetch(`${base}/slow`).then(response => response.json());
-    await entered;
+    const oldRequest = readText("/slow").then(JSON.parse);
+    await Promise.race([entered, oldRequest]);
     const beforeAddress = server.address();
     module.apply(compileHotPatchModule(source.replace("'before'", "'after'")), 0, { responseVersion: 2 });
-    const reads = await Promise.all(Array.from({ length: 12 }, () => fetch(`${base}/fast`).then(response => response.json())));
+    const reads = await Promise.all(Array.from({ length: 12 }, () => readText("/fast").then(JSON.parse)));
     assert.ok(reads.every(value => value.label === "after"));
     assert.equal(new Set(reads.map(value => value.completed)).size, 12);
-    assert.equal(await fetch(`${base}/health`).then(response => response.text()), "healthy");
+    assert.equal(await readText("/health"), "healthy");
     assert.deepEqual(server.address(), beforeAddress);
     release();
     assert.deepEqual(await oldRequest, { label: "before", completed: 13 });
     module.rollback(1);
-    assert.deepEqual(await fetch(`${base}/fast`).then(response => response.json()), { label: "before", completed: 14 });
+    assert.deepEqual(await readText("/fast").then(JSON.parse), { label: "before", completed: 14 });
     assert.ok(module.snapshot().retained.every(revision => revision.leases === 0));
   } finally {
     release();

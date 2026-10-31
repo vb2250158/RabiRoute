@@ -14,6 +14,7 @@
         android:name="android.permission.BLUETOOTH_ADMIN"
         android:maxSdkVersion="30" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
 
     <uses-permission android:name="android.permission.BLUETOOTH_SCAN" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
@@ -68,6 +69,8 @@
         android:theme="@style/AppTheme"
         tools:replace="android:allowBackup">
         <activity android:name=".recording.RabiRecordingHubActivity" android:exported="false" android:launchMode="singleTop" />
+        <activity android:name=".location.LocationSettingsActivity" android:exported="false" />
+        <service android:name="com.amap.api.location.APSService" android:exported="false" />
         <activity android:name=".modules.rokid.RabiLiveRecordingActivity" android:exported="false" />
         <activity android:name=".modules.rokid.RokidBlePingActivity" android:exported="false" />
         <provider
@@ -170,7 +173,7 @@
         <service
             android:name=".RabiConversationService"
             android:exported="false"
-            android:foregroundServiceType="microphone|dataSync|connectedDevice" />
+            android:foregroundServiceType="microphone|dataSync|connectedDevice|location" />
 
         <receiver
             android:name=".BondedGattProbeReceiver"

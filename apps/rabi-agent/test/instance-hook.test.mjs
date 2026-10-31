@@ -3,8 +3,9 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { requestInstanceHook } from "../lib/instance-hook.mjs";
+import { requestInstanceHook as requestHook } from "../lib/instance-hook.mjs";
 
+const requestInstanceHook = (input, ...args) => requestHook({ ...input, agentType: "dsh" }, ...args);
 const meta = { applicationGenerationId: "generation-fixture", managerInstanceId: "instance-fixture", health: { live: true, state: "healthy", requiredReady: true } };
 async function fixture(run) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "rabi-instance-hook-"));
@@ -20,7 +21,7 @@ test("Hook checks metadata around own context, injects installed API guide only 
     requests.push({ url: String(url), init });
     return Response.json(String(url).endsWith("/meta") ? meta : { code: 0, data: { additionalContext: "fixture-context", action: "context" } });
   };
-  for (const input of [{ session_id: "unrelated" }, {}, { session_id: "session-b", sessionId: "other" }]) assert.equal(await requestInstanceHook(input, configPath, fetcher), undefined);
+  for (const input of [{}, { session_id: "session-b", sessionId: "other" }]) assert.equal(await requestInstanceHook(input, configPath, fetcher), undefined);
   assert.equal(requests.length, 0);
   const result = await requestInstanceHook({ session_id: "session-b", hook_event_name: "SessionStart" }, configPath, fetcher);
   assert.match(result.additionalContext, /^fixture-context/);
@@ -32,9 +33,9 @@ test("Hook checks metadata around own context, injects installed API guide only 
   assert.match(result.additionalContext, /direct user request/);
   assert.match(result.additionalContext, /\.mac or \.ps1.*not permission to execute/);
   assert.equal(result.additionalContext.includes("fixture-only"), false);
-  assert.equal(requests[1].url, "http://manager.test:54321/api/lan-agent/instances/instance-a/agents/agent-b/context");
+  assert.equal(requests[1].url, "http://manager.test:54321/api/codex-hook/context");
   assert.equal(requests.length, 3);
-  for (const { init } of requests) { assert.equal(init.headers.authorization, "Bearer fixture-only"); assert.equal(init.headers["x-rabiroute-agent-id"], "agent-b"); assert.equal(init.redirect, "error"); }
+  for (const { init } of requests) { assert.equal(init.headers.authorization, "Bearer fixture-only"); assert.equal(init.headers["x-rabiroute-agent-type"], "dsh"); assert.equal(init.redirect, "error"); }
   assert.equal(JSON.parse(requests[1].init.body).session_id, "session-b");
 }));
 
@@ -50,13 +51,13 @@ test("Hook rejects Manager-disabled, shared-token, ambiguous and changing Manage
   await assert.rejects(requestInstanceHook({ session_id: "session-b" }, configPath, fetcher), /uncertain/);
   assert.equal(calls, 3);
   fs.writeFileSync(configPath, JSON.stringify({ ...config, nodeCredential: undefined, lanLinkToken: "fixture-legacy" }));
-  await assert.rejects(requestInstanceHook({ session_id: "session-b" }, configPath, fetcher), /re-enroll/);
+  await assert.rejects(requestInstanceHook({ session_id: "session-b" }, configPath, fetcher), /credential/);
   fs.writeFileSync(configPath, JSON.stringify({ ...config, agents: [{ ...config.agents[0], enabled: false }] }));
   const allowed = await requestInstanceHook({ session_id: "session-b" }, configPath, async url => Response.json(String(url).endsWith("/meta") ? meta : { code: 0, data: { action: "context" } }));
   assert.match(allowed.additionalContext, /RabiRoute Manager API/);
   await assert.rejects(requestInstanceHook({ session_id: "session-b" }, configPath, async url => Response.json(String(url).endsWith("/meta") ? meta : { code: 403 }, { status: String(url).endsWith("/meta") ? 200 : 403 })), /Hook failed/);
   fs.writeFileSync(configPath, JSON.stringify({ ...config, agents: [...config.agents, { ...config.agents[0], agentId: "duplicate" }] }));
-  assert.equal(await requestInstanceHook({ session_id: "session-b" }, configPath, fetcher), undefined);
+  assert.ok(await requestInstanceHook({ session_id: "session-b" }, configPath, async url => Response.json(String(url).endsWith("/meta") ? meta : {code:0,data:{action:"context"}})));
   assert.equal(calls, 3);
 }));
 

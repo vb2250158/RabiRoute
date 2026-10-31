@@ -1,3 +1,4 @@
+import { getTimeoutMs } from "../shared/timeoutSettings.js";
 import { createHash } from "node:crypto";
 import path from "node:path";
 import { normalizeAgentInstanceBindings, type AgentInstance, type AgentInstanceBinding } from "../shared/agentInstance.js";
@@ -24,19 +25,11 @@ async function instanceRequest(suffix: string, body?: unknown): Promise<any> {
   const response = await fetch(`${baseUrl.replace(/\/+$/, "")}/api/lan-agent/instances${suffix}`, {
     method: body === undefined ? "GET" : "POST",
     headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
-    body: body === undefined ? undefined : JSON.stringify(body), signal: AbortSignal.timeout(35_000)
+    body: body === undefined ? undefined : JSON.stringify(body), signal: AbortSignal.timeout(getTimeoutMs("backend.agentAdapters.instanceClient.instanceRequest.AbortSignal.timeout.request", 35_000))
   });
   const result = await response.json() as any;
   if (!response.ok || result.code !== 0) throw new Error(result.message || `Instance request failed: HTTP ${response.status}`);
   return result;
-}
-
-export async function readBoundInstanceAgent(binding: AgentInstanceBinding) {
-  const result = await instanceRequest("");
-  const instance = (result.instances as AgentInstance[]).find(item => item.instanceId === binding.instanceId);
-  const agent = instance?.agents.find(item => item.agentId === binding.agentId);
-  if (!instance?.connected || !agent?.enabled || !agent.sessionId || !agent.workspace) throw new Error("The bound instance Agent is offline, disabled, or has no task owner.");
-  return agent;
 }
 
 export async function requestInstanceThread(binding: AgentInstanceBinding, payload: Record<string, unknown>): Promise<Record<string, any>> {

@@ -1,3 +1,4 @@
+import { getTimeoutMs } from "../shared/timeoutSettings.js";
 import fs from "node:fs";
 import path from "node:path";
 import { fork, type ChildProcess } from "node:child_process";
@@ -262,9 +263,9 @@ export class ManagerWatchBroker {
   constructor(options: ManagerWatchBrokerOptions) {
     this.options = {
       ...options,
-      attemptTimeoutMs: Math.max(20, options.attemptTimeoutMs ?? 30_000),
-      terminationCloseTimeoutMs: Math.max(1, options.terminationCloseTimeoutMs ?? 250),
-      forceTerminationCloseTimeoutMs: Math.max(1, options.forceTerminationCloseTimeoutMs ?? 1_000),
+      attemptTimeoutMs: Math.max(1, options.attemptTimeoutMs ?? getTimeoutMs("backend.manager.managerWatchBroker.owner.Math.max.attemptTimeoutMs", 30_000)),
+      terminationCloseTimeoutMs: Math.max(1, options.terminationCloseTimeoutMs ?? getTimeoutMs("backend.manager.managerWatchBroker.owner.Math.max.terminationCloseTimeoutMs", 250)),
+      forceTerminationCloseTimeoutMs: Math.max(1, options.forceTerminationCloseTimeoutMs ?? getTimeoutMs("backend.manager.managerWatchBroker.owner.Math.max.forceTerminationCloseTimeoutMs", 1_000)),
       retryDelayMs: Math.max(1, options.retryDelayMs ?? 500),
       remotePollIntervalMs: Math.max(10, options.remotePollIntervalMs ?? 5_000),
       debounceMs: Math.max(1, options.debounceMs ?? 120)

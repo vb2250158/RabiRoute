@@ -17,7 +17,7 @@ export function apply(ctx, config = {}, request = requestHook) {
   const starts = new Map();
   const finals = new Map();
   const turns = new Map();
-  const status = { version: '0.1.2', lastError: '' };
+  const status = { version: '0.1.3', lastError: '' };
   const invoke = async (agent, eventName, fields = {}) => {
     // Every lifecycle decision is delegated to Manager; this adapter only
     // translates DSH event fields and keeps the host usable on failures.
@@ -32,7 +32,7 @@ export function apply(ctx, config = {}, request = requestHook) {
     }
   };
   // Cache the start reason until DSH opens the first turn for this session.
-  ctx.on('agent/session-start', ({ agent, source }) => { starts.set(agent.id, source); }, { global: true });
+  ctx.on('agent/created', ({ agent, source }) => { starts.set(agent.id, source); }, { global: true });
   ctx.on('session/event', (session, event) => {
     // Remember the latest non-interrupted assistant message for Stop.
     if (event.type === 'assistant/message' && !event.data.interrupted) {
@@ -46,8 +46,9 @@ export function apply(ctx, config = {}, request = requestHook) {
     if (decision.kind !== 'enter') return decision;
     const contexts = [];
     if (starts.has(agent.id)) {
-      const data = await invoke(agent, 'SessionStart', { source: starts.get(agent.id) });
+      const source = starts.get(agent.id);
       starts.delete(agent.id);
+      const data = await invoke(agent, 'SessionStart', { source });
       if (data.additionalContext) contexts.push(data.additionalContext);
     }
     const prompt = messages.filter(message => message.source?.kind !== 'rabi-dsh-context').map(textContent).filter(Boolean).join('\n');
@@ -81,5 +82,4 @@ export function apply(ctx, config = {}, request = requestHook) {
   }, { global: true });
   // Remove all per-session state when DSH disposes the agent.
   ctx.on('agent/disposed', ({ agent }) => { starts.delete(agent.id); finals.delete(agent.id); turns.delete(agent.id); }, { global: true });
-  return status;
 }

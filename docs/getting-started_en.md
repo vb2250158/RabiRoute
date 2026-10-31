@@ -1,6 +1,6 @@
 <!-- docs-language-switch -->
 <div align="center">
-English | <a href="./getting-started.md">简体中文</a>
+English | <a href="./getting-started.md">简体中文</a> | <a href="./getting-started_ja.md">日本語</a>
 </div>
 <!-- /docs-language-switch -->
 
@@ -10,7 +10,7 @@ English | <a href="./getting-started.md">简体中文</a>
 
 ## Requirements
 
-- Node.js 20 or newer.
+- Node.js 22.13 or newer.
 - A NapCat/OneBot environment for QQ. You can skip QQ if you only want to inspect RibiWebGUI or test heartbeat/manual events.
 - Optional but recommended: Codex, the verified handler integration.
 
@@ -22,7 +22,7 @@ For a full Windows source build, double-click `Start-RabiRoute-FromSource.bat` i
 
 ### Linux Host
 
-Linux requires Node.js 20+, npm, and util-linux `flock`; install `xdg-utils` when using Host `open` to launch a browser. To start the existing WebGUI:
+Linux requires Node.js 22.13+, npm, and util-linux `flock`; install `xdg-utils` when using Host `open` to launch a browser. To start the existing WebGUI:
 
 1. Enter the checkout and run the initial build/start script:
 

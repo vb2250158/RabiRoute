@@ -3,8 +3,13 @@ import path from "node:path";
 import { withFileLockSync } from "./shared/filePersistence.js";
 import { recordDataMutationAudit } from "./observability/dataMutationAudit.js";
 
+export const ROLE_PANEL_ATTACHMENT_KINDS = Object.freeze(["file", "image", "voice"] as const);
+export const ROLE_PANEL_DIRECTIONS = Object.freeze(["user", "assistant", "system"] as const);
+export const ROLE_PANEL_MESSAGE_STATUSES = Object.freeze(["pending", "sent", "failed", "draft"] as const);
+export const ROLE_PANEL_DEFAULT_READ_LIMIT = 120;
+
 export type RolePanelAttachment = {
-  kind: "file" | "image" | "voice";
+  kind: typeof ROLE_PANEL_ATTACHMENT_KINDS[number];
   name?: string;
   path?: string;
   url?: string;
@@ -17,11 +22,11 @@ export type RolePanelTimelineMessage = {
   roleId: string;
   gatewayId?: string;
   routeProfileId?: string;
-  direction: "user" | "assistant" | "system";
+  direction: typeof ROLE_PANEL_DIRECTIONS[number];
   sender: string;
   text: string;
   attachments: RolePanelAttachment[];
-  status: "pending" | "sent" | "failed" | "draft";
+  status: typeof ROLE_PANEL_MESSAGE_STATUSES[number];
   replyContext?: Record<string, unknown>;
 };
 
@@ -156,7 +161,7 @@ export function appendRolePanelTimelineMessage(roleDir: string, message: RolePan
   return appendRolePanelTimelineMessageIfAbsent(roleDir, message).message;
 }
 
-export function readRolePanelTimeline(roleDir: string, limit = 120): RolePanelTimelineMessage[] {
+export function readRolePanelTimeline(roleDir: string, limit = ROLE_PANEL_DEFAULT_READ_LIMIT): RolePanelTimelineMessage[] {
   const filePath = rolePanelMessagesPath(roleDir);
   if (!fs.existsSync(filePath)) return [];
   const lines = fs.readFileSync(filePath, "utf8").split(/\r?\n/).filter(Boolean);

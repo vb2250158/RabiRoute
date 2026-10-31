@@ -10,6 +10,8 @@ type PersonaAvatarEnvelope = {
   data?: PersonaAvatarMutationResult;
 };
 
+export function createPersonaAvatarClient(fetchImpl: typeof fetch = (...args) => fetch(...args)) {
+const fetch = fetchImpl;
 function avatarEndpoint(roleId: string): string {
   return `/api/roles/${encodeURIComponent(roleId)}/avatar`;
 }
@@ -23,7 +25,7 @@ async function mutationRequest(roleId: string, init: RequestInit): Promise<Perso
   return body.data;
 }
 
-export const personaAvatarClient = {
+const personaAvatarClient = {
   upload(roleId: string, file: File): Promise<PersonaAvatarMutationResult> {
     if (!PERSONA_AVATAR_CONTENT_TYPES.some(contentType => contentType === file.type)) {
       throw new Error("头像必须是 PNG、JPEG、WebP 或 GIF。");
@@ -42,3 +44,7 @@ export const personaAvatarClient = {
     return mutationRequest(roleId, { method: "DELETE" });
   }
 };
+
+return personaAvatarClient;
+}
+export const personaAvatarClient = createPersonaAvatarClient();

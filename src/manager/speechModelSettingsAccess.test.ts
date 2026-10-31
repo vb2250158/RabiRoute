@@ -19,7 +19,6 @@ function fixture(t: TestContext) {
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const authority = new LanAgentAuthority({ statePath: path.join(root, "authority.json") });
   const credential = authority.enroll(authority.issueBootstrapTicket().ticket, "fixture-node");
-  authority.registerAgentCatalog(credential.token, [{ agentId: "fixture-agent", provider: "codex" }]);
   let policy = { enabled: true, incarnation: "initial" };
   const admit = () => {
     const remote = request("192.0.2.10", {
@@ -70,7 +69,6 @@ test("node revocation and reenrollment cannot fall back through connection, sour
   f.authority.revokeNode("fixture-node");
   assert.equal(localModelSettingsRequestAllowed(remote), false);
   const replacement = f.authority.enroll(f.authority.issueBootstrapTicket().ticket, "fixture-node");
-  f.authority.registerAgentCatalog(replacement.token, [{ agentId: "fixture-agent", provider: "codex" }]);
   remote.headers.authorization = `Bearer ${replacement.token}`;
   assert.equal(localModelSettingsRequestAllowed(remote), false);
 });
@@ -78,10 +76,10 @@ test("node revocation and reenrollment cannot fall back through connection, sour
 test("Agent disable-enable does not revive the original settings request", t => {
   const f = fixture(t);
   const remote = f.admit();
+  f.authority.setNodeEnabled("fixture-node", false);
   f.grantFallbacks(remote);
-  f.authority.setAgentEnabled("fixture-node", "fixture-agent", false);
+  f.authority.setNodeEnabled("fixture-node", true);
   assert.equal(localModelSettingsRequestAllowed(remote), false);
-  f.authority.setAgentEnabled("fixture-node", "fixture-agent", true);
   assert.equal(localModelSettingsRequestAllowed(remote), false);
   assert.equal(localModelSettingsRequestAllowed(f.admit()), true);
 });

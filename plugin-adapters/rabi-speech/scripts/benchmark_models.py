@@ -20,6 +20,8 @@ import uuid
 import wave
 from dataclasses import dataclass
 from pathlib import Path
+import runpy
+get_timeout_seconds = runpy.run_path(str(Path(__file__).resolve().parents[1] / "rabispeech" / "timeout_settings.py"))["get_timeout_seconds"]
 from typing import Any
 
 
@@ -44,7 +46,7 @@ def local_opener() -> urllib.request.OpenerDirector:
     return urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 
-def request_json(method: str, url: str, payload: dict[str, Any] | None = None, timeout: float = 30) -> Any:
+def request_json(method: str, url: str, payload: dict[str, Any] | None = None, timeout: float = get_timeout_seconds("speech.benchmark.request", 30)) -> Any:
     body = None
     headers: dict[str, str] = {}
     if payload is not None:
@@ -99,7 +101,7 @@ def nvidia_snapshot() -> dict[str, float] | None:
         "--format=csv,noheader,nounits",
     ]
     try:
-        completed = subprocess.run(command, capture_output=True, text=True, timeout=5, check=True)
+        completed = subprocess.run(command, capture_output=True, text=True, timeout=get_timeout_seconds("speech.benchmark.gpuProbe", 5), check=True)
         line = completed.stdout.strip().splitlines()[0]
         memory, utilization, power = [float(item.strip()) for item in line.split(",")[:3]]
         return {"memory_mib": memory, "utilization_percent": utilization, "power_w": power}
@@ -134,7 +136,7 @@ class GpuProbe:
     def stop(self) -> dict[str, Any]:
         self._stop.set()
         if self._thread:
-            self._thread.join(timeout=3)
+            self._thread.join(timeout=get_timeout_seconds("speech.benchmark.join", 3))
         if not self.samples:
             return {"sample_count": 0}
         memory = [item["memory_mib"] for item in self.samples]
@@ -244,7 +246,7 @@ def benchmark_tts(args: argparse.Namespace) -> None:
     audio_dir = output_path.parent / "audio" / sanitize_name(args.engine)
     audio_dir.mkdir(parents=True, exist_ok=True)
     base_url = args.url.rstrip("/")
-    health = request_json("GET", f"{base_url}/health", timeout=10)
+    health = request_json("GET", f"{base_url}/health", timeout=get_timeout_seconds("speech.benchmark.health", 10))
     records: list[dict[str, Any]] = []
 
     for index, sample in enumerate(texts):
@@ -270,13 +272,13 @@ def benchmark_tts(args: argparse.Namespace) -> None:
         probe = GpuProbe(interval=args.gpu_sample_interval)
         probe.start()
         started = time.perf_counter()
-        job = request_json("POST", f"{base_url}/speak", payload=payload, timeout=30)
+        job = request_json("POST", f"{base_url}/speak", payload=payload, timeout=get_timeout_seconds("speech.benchmark.request", 30))
         acknowledged = time.perf_counter()
         job_id = str(job["id"])
         status = str(job.get("status", "queued"))
         while status not in TERMINAL_JOB_STATES:
             time.sleep(args.poll_interval)
-            job = request_json("GET", f"{base_url}/status/{urllib.parse.quote(job_id)}", timeout=30)
+            job = request_json("GET", f"{base_url}/status/{urllib.parse.quote(job_id)}", timeout=get_timeout_seconds("speech.benchmark.request", 30))
             status = str(job.get("status", ""))
             if time.perf_counter() - started > args.job_timeout:
                 status = "timeout"
@@ -451,7 +453,7 @@ def benchmark_asr_http(args: argparse.Namespace) -> None:
     worker_before = None
     if args.worker_url:
         try:
-            worker_before = request_json("GET", f"{args.worker_url.rstrip('/')}/health", timeout=3)
+            worker_before = request_json("GET", f"{args.worker_url.rstrip('/')}/health", timeout=get_timeout_seconds("speech.benchmark.workerBefore", 3))
         except (OSError, urllib.error.URLError):
             worker_before = {"ok": False, "loaded": False}
     records: list[dict[str, Any]] = []
@@ -503,7 +505,7 @@ def benchmark_asr_http(args: argparse.Namespace) -> None:
     worker_after = None
     if args.worker_url:
         try:
-            worker_after = request_json("GET", f"{args.worker_url.rstrip('/')}/health", timeout=5)
+            worker_after = request_json("GET", f"{args.worker_url.rstrip('/')}/health", timeout=get_timeout_seconds("speech.benchmark.workerAfter", 5))
         except (OSError, urllib.error.URLError):
             worker_after = None
     total_errors = sum(record["character_errors"] for record in records)
@@ -790,7 +792,7 @@ def build_parser() -> argparse.ArgumentParser:
     tts.add_argument("--speaker-id", type=int)
     tts.add_argument("--max-new-tokens", type=int)
     tts.add_argument("--poll-interval", type=float, default=0.1)
-    tts.add_argument("--job-timeout", type=float, default=900)
+    tts.add_argument("--job-timeout", type=float, default=get_timeout_seconds("speech.benchmark.job", 900))
     tts.add_argument("--gpu-sample-interval", type=float, default=0.2)
     tts.set_defaults(func=benchmark_tts)
 
@@ -816,7 +818,7 @@ def build_parser() -> argparse.ArgumentParser:
     asr_http.add_argument("--tts-results", action="append", required=True)
     asr_http.add_argument("--output", required=True)
     asr_http.add_argument("--language", default="zh")
-    asr_http.add_argument("--timeout", type=float, default=900)
+    asr_http.add_argument("--timeout", type=float, default=get_timeout_seconds("speech.benchmark.asr", 900))
     asr_http.add_argument("--gpu-sample-interval", type=float, default=0.2)
     asr_http.set_defaults(func=benchmark_asr_http)
 

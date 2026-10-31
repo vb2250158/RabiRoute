@@ -1,3 +1,4 @@
+import { getTimeoutMs } from "../shared/timeoutSettings.js";
 import { EventEmitter } from "node:events";
 import { isIPv4 } from "node:net";
 import { networkInterfaces } from "node:os";
@@ -93,7 +94,7 @@ async function defaultBonjourFactory(
   return {
     publish: publication => bonjour.publish(publication) as unknown as BonjourService,
     destroy: () => new Promise<void>(resolve => {
-      const timeout = setTimeout(resolve, 1_000);
+      const timeout = setTimeout(resolve, getTimeoutMs("deadline.manager.managerLanDiscoveryPublisher.defaultBonjourFactory", 1_000));
       try { bonjour.destroy(() => { clearTimeout(timeout); resolve(); }); }
       catch (error) { clearTimeout(timeout); throw error; }
     })
@@ -124,7 +125,7 @@ async function releasePublication(publication: InterfacePublication): Promise<vo
         clearTimeout(timeout);
         resolve();
       };
-      const timeout = setTimeout(finish, 1_000);
+      const timeout = setTimeout(finish, getTimeoutMs("deadline.manager.managerLanDiscoveryPublisher.releasePublication", 1_000));
       // Keep the deadline alive while callers await stop, even if a socket never calls back.
       try { publication.service!.stop(finish); }
       catch { finish(); }

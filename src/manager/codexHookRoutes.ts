@@ -2,6 +2,8 @@ import { errorResponsePresentation } from "../shared/errorPresentation.js";
 import http from "node:http";
 import { validateLanAgentRequestBody } from "./lanAgentBodyAuthority.js";
 import { assertTrustedLanAgentPrincipal } from "./lanAgentRequestAccess.js";
+import { CODEX_HOOK_BODY_MAX_BYTES, CODEX_HOOK_OPERATIONS, codexHookOperationContract, type CodexHookOperationKey } from "./codexHookContract.js";
+import type { ApiOperationDefinition, ApiOperationResult } from "./apiOperationContract.js";
 import {
   CodexHookContextService,
   CodexHookPlanStorageUnavailableError,
@@ -14,7 +16,7 @@ function jsonResponse(response: http.ServerResponse, statusCode: number, body: u
   response.end(JSON.stringify(body, null, 2));
 }
 
-function readJsonBody(request: http.IncomingMessage, maximumBytes = 256 * 1024): Promise<Record<string, unknown>> {
+function readJsonBody(request: http.IncomingMessage, maximumBytes = CODEX_HOOK_BODY_MAX_BYTES): Promise<Record<string, unknown>> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
     let size = 0;
@@ -71,89 +73,53 @@ export function hookContextRequest(body: Record<string, unknown>, request: http.
   };
 }
 
-export function handleCodexHookApi(
-  request: http.IncomingMessage,
-  requestUrl: URL,
-  response: http.ServerResponse,
-  service: CodexHookContextService
-): boolean {
-  const pathname = requestUrl.pathname;
+function hookFailure(error: unknown): ApiOperationResult {
+  const status = error instanceof CodexHookPlanStorageUnavailableError ? error.statusCode : 400;
+  return { status, body: errorResponsePresentation({ code: -1,
+    ...(error instanceof CodexHookPlanStorageUnavailableError ? { error: error.code, commitState: "not_started" } : {}),
+    message: error instanceof Error ? error.message : String(error) }, status) };
+}
 
-  if (request.method === "POST" && pathname === "/api/codex-hook/context") {
-    void readJsonBody(request)
-      .then((body) => {
-        validateLanAgentRequestBody(request, body);
-        return service.handleHook(hookContextRequest(body, request));
-      })
-      .then((data) => jsonResponse(response, 200, { code: 0, data }))
-      .catch((error) => {
-        if (error instanceof CodexHookPlanStorageUnavailableError) {
-          jsonResponse(response, error.statusCode, {
-            code: -1,
-            error: error.code,
-            commitState: "not_started",
-            message: error.message
-          });
-          return;
-        }
-        jsonResponse(response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) });
-      });
-    return true;
-  }
-
-  if (request.method === "GET" && pathname === "/api/codex-hook/roles") {
-    try {
-      jsonResponse(response, 200, { code: 0, data: { roleIds: service.listRoles() } });
-    } catch (error) {
-      jsonResponse(response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) });
+/** One existing service owns both executable dispatch and transitional raw fixtures. */
+async function runCodexHookOperation(key: CodexHookOperationKey, request: http.IncomingMessage,
+  service: CodexHookContextService, sessionId?: string, body?: unknown): Promise<ApiOperationResult> {
+  try {
+    let data: unknown;
+    if (key === "context" || key === "bind") validateLanAgentRequestBody(request, body);
+    switch (key) {
+      case "context": data = await service.handleHook(hookContextRequest(body as Record<string, unknown>, request)); break;
+      case "roles": data = { roleIds: service.listRoles() }; break;
+      case "doctor": data = service.doctor(); break;
+      case "sessions": data = { sessions: service.listBindings() }; break;
+      case "session": data = service.getBinding(sessionId!); break;
+      case "bind": data = service.bindSession(sessionId!, String((body as Record<string, unknown>).roleId || "")); break;
+      case "unbind": assertTrustedLanAgentPrincipal(request); data = { removed: service.unbindSession(sessionId!) }; break;
     }
-    return true;
-  }
+    return { status: 200, body: { code: 0, data } };
+  } catch (error) { return hookFailure(error); }
+}
 
-  if (request.method === "GET" && pathname === "/api/codex-hook/doctor") {
+export function createCodexHookOperations(service: CodexHookContextService): readonly ApiOperationDefinition[] {
+  return CODEX_HOOK_OPERATIONS.map(definition => ({ contract: codexHookOperationContract(definition), handler: input =>
+    runCodexHookOperation(definition.key, input.request, service, input.path.sessionId, input.body) }));
+}
+
+/** Transitional raw adapter; production registers the executable operations above. */
+export function handleCodexHookApi(request: http.IncomingMessage, requestUrl: URL,
+  response: http.ServerResponse, service: CodexHookContextService): boolean {
+  const session = /^\/api\/codex-hook\/sessions\/([^/]+)$/.exec(requestUrl.pathname);
+  const definition = CODEX_HOOK_OPERATIONS.find(item => item.method === request.method
+    && (item.path.includes(":sessionId") ? Boolean(session) : requestUrl.pathname === "/api/codex-hook" + item.path));
+  if (!definition) {
+    if (!session) return false;
+    jsonResponse(response, 405, { code: -1, message: "Method not allowed." }); return true;
+  }
+  const execute = async () => {
     try {
-      jsonResponse(response, 200, { code: 0, data: service.doctor() });
-    } catch (error) {
-      jsonResponse(response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) });
-    }
-    return true;
-  }
-
-  if (request.method === "GET" && pathname === "/api/codex-hook/sessions") {
-    jsonResponse(response, 200, { code: 0, data: { sessions: service.listBindings() } });
-    return true;
-  }
-
-  const sessionMatch = pathname.match(/^\/api\/codex-hook\/sessions\/([^/]+)$/);
-  if (!sessionMatch) return false;
-  const sessionId = decodeURIComponent(sessionMatch[1]);
-
-  if (request.method === "GET") {
-    jsonResponse(response, 200, { code: 0, data: service.getBinding(sessionId) });
-    return true;
-  }
-
-  if (request.method === "PUT" || request.method === "PATCH") {
-    void readJsonBody(request)
-      .then((body) => {
-        validateLanAgentRequestBody(request, body);
-        return service.bindSession(sessionId, String(body.roleId || ""));
-      })
-      .then((data) => jsonResponse(response, 200, { code: 0, data }))
-      .catch((error) => jsonResponse(response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) }));
-    return true;
-  }
-
-  if (request.method === "DELETE") {
-    try {
-      assertTrustedLanAgentPrincipal(request);
-      jsonResponse(response, 200, { code: 0, data: { removed: service.unbindSession(sessionId) } });
-    } catch (error) {
-      jsonResponse(response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) });
-    }
-    return true;
-  }
-
-  jsonResponse(response, 405, { code: -1, message: "Method not allowed." });
+      const body = definition.key === "context" || definition.key === "bind" ? await readJsonBody(request) : undefined;
+      return await runCodexHookOperation(definition.key, request, service, session ? decodeURIComponent(session[1]!) : undefined, body);
+    } catch (error) { return hookFailure(error); }
+  };
+  void execute().then(result => jsonResponse(response, result.status, result.body));
   return true;
 }

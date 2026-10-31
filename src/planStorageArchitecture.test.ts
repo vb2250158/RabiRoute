@@ -2,6 +2,13 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
+import ts from "typescript";
+import http from "node:http";
+import { Socket } from "node:net";
+import os from "node:os";
+import { PersonaStorageOwner, createPersonaStorageOperations, type PersonaStorageOperationsContext } from "./manager/personaStorageOperations.js";
+import type { RoleStorageApplication, RoleStorageCommandContext } from "./manager/roleStorageApplication.js";
+import { apiPathParameters, compileApiOperation } from "./manager/apiOperationContract.js";
 import { fileURLToPath } from "node:url";
 
 const sourceRoot = path.dirname(fileURLToPath(import.meta.url));
@@ -41,12 +48,49 @@ test("legacy layout knowledge remains inside the startup migration boundary", ()
   assert.deepEqual(offenders, ["planStorageMigration.ts"]);
 });
 
-test("HTTP routes submit feedback through the application service", () => {
-  const routes = source(path.join("manager", "controlPlaneRoutes.ts"));
-  assert.match(routes, /submitPlanFeedback\(/);
-  assert.doesNotMatch(routes, /commitPlanFeedback\(/);
-  assert.doesNotMatch(routes, /createPlanFeedbackRecord\(/);
-  assert.match(routes, /canonicalLogicalPlanId\(decodeURIComponent\(planFeedbackMatch\[2\]\)\)/);
+test("HTTP routes submit feedback through the application service", async t => {
+  const routes = source(path.join("manager", "controlPlaneRoutes.ts")), storage = source(path.join("manager", "personaStorageOperations.ts"));
+  assert.match(routes, /application: currentRoleStorageApplication/);
+  assert.match(routes, /personaStorageContext: Object\.freeze\(createPersonaStorageOperationsContext\(\)\)/);
+  for (const text of [routes, storage]) { assert.doesNotMatch(text, /commitPlanFeedback\(/); assert.doesNotMatch(text, /createPlanFeedbackRecord\(/); }
+  assert.match(storage, /canonicalLogicalPlanId\(value\)/);
+  assert.match(storage, /const id = feedbackPlanId\(planId\), actor = await this\.context\.planHistoryContext[\s\S]*a\.assertCurrent\(\);[\s\S]*application\.commands\.submitPlanFeedback\(roleId, id, value, \{ \.\.\.actor, authorize: a\.assertCurrent \}\)/);
+  const applicationSource = source(path.join("manager", "roleStorageApplication.ts"));
+  const commandStart = applicationSource.indexOf("  submitPlanFeedback(roleId:");
+  const commandEnd = applicationSource.indexOf("  updatePlanFeedbackDelivery(", commandStart);
+  assert.ok(commandStart >= 0 && commandEnd > commandStart);
+  const commandSource = applicationSource.slice(commandStart, commandEnd);
+  assert.match(commandSource, /this\.commitProjection\(/);
+  assert.match(commandSource, /expectedRevision: \(\) => this\.requiredExpectedRevision\(context\.expectedRevision\)/);
+  assert.match(commandSource, /this\.mutationPool\.submitPlanFeedback/);
+  assert.match(commandSource, /this\.queries\.planFeedback[\s\S]*if \(!projection\)[\s\S]*projection_unavailable/);
+
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "feedback-application-route-"));
+  t.after(() => { assert.equal(path.dirname(root), path.resolve(os.tmpdir())); fs.rmSync(root, { recursive: true, force: true }); });
+  const identity = { applicationGenerationId: "feedback-generation", managerInstanceId: "feedback-manager" };
+  let commands = 0, afterActor: () => void = () => {};
+  const expectedRevision = '"' + "a".repeat(64) + '"';
+  const application = { commands: { submitPlanFeedback: async (roleId: string, planId: string, _body: unknown, command: RoleStorageCommandContext) => {
+    commands++; assert.equal(roleId, "Fixture"); assert.equal(planId, "plan-fixture"); assert.equal(command.expectedRevision, expectedRevision);
+    assert.equal(command.idempotencyKey, "fixture-feedback"); assert.equal(typeof command.authorize, "function"); command.authorize!();
+    return { operationId: "feedback-op", commit: { created: true, record: { id: "feedback-one", text: "Controlled" }, plan: { id: planId } }, projection: { planRevision: "b".repeat(64) } };
+  } } } as unknown as RoleStorageApplication;
+  const context: PersonaStorageOperationsContext = { application: () => application, roleDirectory: () => root, identity: () => identity, readOnly: () => false,
+    planHistoryContext: async (_request, _body, command) => { await Promise.resolve(); afterActor(); return command; }, scheduleFeedbackPostCommit: () => {}, reportFeedbackScheduleError: () => {}, publish: () => {}, rescheduleMemory: () => {}, noteMemoryRunCompleted: () => {} };
+  const owner = new PersonaStorageOwner(context); t.after(() => owner.stop());
+  const operation = createPersonaStorageOperations(owner).find(value => value.contract.operationId === "manager.personas.storage.feedback.submit")!;
+  const compiled = compileApiOperation(operation);
+  const run = async (id: string) => {
+    const request = new http.IncomingMessage(new Socket());
+    request.headers = { "if-match": expectedRevision, "idempotency-key": "fixture-feedback" };
+    const url = new URL("/api/roles/Fixture/plans/" + id + "/feedback", "http://fixture");
+    try { return await operation.handler({ request, response: new http.ServerResponse(request), url, path: apiPathParameters(compiled, url.pathname)!, query: {}, body: { feedbackId: "feedback-one", text: "Controlled" } }); }
+    finally { request.destroy(); }
+  };
+  const accepted = await run("plan-fixture"); assert.equal(accepted.status, 202); assert.equal(accepted.headers?.etag, '"' + "b".repeat(64) + '"'); assert.equal(commands, 1);
+  assert.equal((await run("%20plan-fixture")).status, 400); assert.equal(commands, 1, "noncanonical decoded ID cannot reach application commands");
+  afterActor = () => { identity.managerInstanceId = "replacement-manager"; };
+  const stale = await run("plan-fixture"); assert.equal(stale.status, 409); assert.equal(commands, 1, "generation change after actor lookup cannot dispatch a storage command");
 });
 
 test("feedback writers use the command service and expose no attachment-only commit", () => {
@@ -69,9 +113,39 @@ test("domain plan lifecycle publishes only complete final snapshots through the 
   assert.doesNotMatch(attachments, /fs\.(?:writeFileSync|mkdirSync|renameSync)\(/);
 });
 
+function importedModules(content: string): string[] {
+  const tree = ts.createSourceFile("source.ts", content, ts.ScriptTarget.Latest, true);
+  const modules: string[] = [];
+  const add = (value: ts.Node | undefined) => {
+    if (value && ts.isStringLiteralLike(value)) modules.push(value.text);
+  };
+  const visit = (node: ts.Node) => {
+    if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) add(node.moduleSpecifier);
+    else if (ts.isImportEqualsDeclaration(node) && ts.isExternalModuleReference(node.moduleReference)) add(node.moduleReference.expression);
+    else if (ts.isCallExpression(node) && (node.expression.kind === ts.SyntaxKind.ImportKeyword
+      || (ts.isIdentifier(node.expression) && node.expression.text === "require"))) add(node.arguments[0]);
+    ts.forEachChild(node, visit);
+  };
+  visit(tree);
+  return modules;
+}
+
+test("physical import detection ignores documentation strings but recognizes actual module dependencies", () => {
+  assert.deepEqual(importedModules(`
+    // import hidden from "./plan-storage/internal/comment.js";
+    const diagnostic = "./plan-storage/internal/description.ts";
+    import { lease } from "./plan-storage/internal/static.js";
+    export { helper } from "./plan-storage/internal/export.js";
+    const lazy = import("./plan-storage/internal/dynamic.js");
+    const common = require("./plan-storage/internal/require.js");
+    import legacy = require("./plan-storage/internal/legacy.js");
+  `), ["./plan-storage/internal/static.js", "./plan-storage/internal/export.js",
+    "./plan-storage/internal/dynamic.js", "./plan-storage/internal/require.js", "./plan-storage/internal/legacy.js"]);
+});
+
 test("only the public plan storage repository facade imports physical internals", () => {
   const offenders = productionTypeScriptFiles(sourceRoot)
-    .filter(filePath => fs.readFileSync(filePath, "utf8").includes("plan-storage/internal/"))
+    .filter(filePath => importedModules(fs.readFileSync(filePath, "utf8")).some(specifier => specifier.includes("plan-storage/internal/")))
     .map(filePath => path.relative(sourceRoot, filePath).replace(/\\/g, "/"))
     .sort();
   assert.deepEqual(offenders, ["planStorageRepository.ts"]);

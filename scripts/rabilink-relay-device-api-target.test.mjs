@@ -34,11 +34,13 @@ test('generic HTTP defaults only to explicit connection metadata and never to th
     const pending=json('/api/rabilink/device/api','POST',{request:{method:'GET',path:'/api/future'},...body},headers);
     const claimed=await poll(targetDeviceId,1000), request=claimed.value.requests[0];assert.ok(request);
     assert.equal(request.targetDeviceId,targetDeviceId);assert.equal(request.path,'/api/future');
+    if(headers['x-rabi-timeout-ms']) assert.equal(request.expiresAt-request.createdAt,Number(headers['x-rabi-timeout-ms']));
     const done=await json('/worker/webgui-requests/'+encodeURIComponent(request.id)+'/response','POST',{
       deviceId:targetDeviceId,deviceGuid:'guid-'+targetDeviceId,ok:true,statusCode:200,headers:{'content-type':'application/json'},bodyBase64:Buffer.from('{"code":0,"data":{"value":1}}').toString('base64')
     },auth);assert.equal(done.status,200);
     const result=await pending;assert.equal(result.status,200);assert.equal(result.value.data.structuredContent.ok,true);
   }
+  await forwarded({...auth,'x-rabi-timeout-ms':'91000'},'pc-owner');
   await forwarded(auth,'pc-owner');
   const binding=await json('/manage/api/apps/'+encodeURIComponent(app.id)+'/devices','POST',{serialNumber:'SN-DEFAULT-TARGET',connectionTargetDeviceId:'pc-device'},{cookie});assert.equal(binding.status,200);
   const credential=await json('/api/rabilink/devices/token','POST',{serialNumber:'SN-DEFAULT-TARGET'});assert.equal(credential.status,200);

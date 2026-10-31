@@ -1,6 +1,15 @@
 """Bounded snapshots and an expiring lease on the existing microphone owner."""
 from __future__ import annotations
 
+if __package__:
+    from .timeout_settings import get_timeout_seconds
+else:
+    # Camera and snapshot workers also run directly without importing the service.
+    from pathlib import Path
+    import runpy
+    get_timeout_seconds = runpy.run_path(str(Path(__file__).with_name("timeout_settings.py")))["get_timeout_seconds"]
+
+
 import asyncio
 import base64
 import ctypes
@@ -68,7 +77,7 @@ def bounded_capture(sources: dict, camera_index: int) -> list[dict]:
     result = subprocess.run(
         [sys.executable, "-B", "-c", bootstrap, json.dumps(sys.path), os.path.abspath(__file__)],
         input=json.dumps({"sources": sources, "cameraIndex": camera_index}),
-        capture_output=True, text=True, encoding="utf-8", timeout=15,
+        capture_output=True, text=True, encoding="utf-8", timeout=get_timeout_seconds("speech.capture.snapshot", 15),
         creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
         env={**os.environ, "PYTHONPATH": os.pathsep.join(sys.path)},
     )

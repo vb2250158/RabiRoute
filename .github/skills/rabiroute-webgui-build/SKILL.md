@@ -11,41 +11,30 @@ description: RabiRoute WebGUI 构建、打包和开发注意事项，包括常�
 
 ## 构建命令
 
-**始终用 cmd /c 包裹，不要直接在 PowerShell 里用 &&：**
+在本轮隔离源码目录执行匹配测试和项目要求的完整构建：
 
 ```powershell
-cmd /c "cd /d <repo> && npm run build"
+npm run build
 ```
 
-前端只改动时可以单独构建：
-```powershell
-cmd /c "cd /d <repo> && npm run webgui:build"
-```
+`npm run webgui:build` 用于单独核对前端产物；开发快路径只有通过对应证明、影响分析和发布准入后才可替代完整验证。不要在运行目录或其他任务的输出目录执行构建。
 
-构建命令只准备产物，不隐含重启。激活前后通过当前 Host status 与 `/meta` 核对 Manager/应用代身份；热补丁应保持进程身份不变，并从实际运行地址回读新资源及页面行为。
+构建命令只准备产物，不隐含重启。激活前后通过 `RabiRouteHost.exe --command status --json` 与 `/meta` 核对 Manager/应用代身份；热补丁应保持进程身份不变，并从实际运行地址回读新资源及页面行为。
 
-只读发现与身份核验示例；状态尚未就绪时有界重试，不启动或重启服务：
+使用项目动态解析器发现地址，核对身份和本次功能的实际依赖：
 
 ```powershell
-$hostExe = if ($env:RABIROUTE_HOST_EXE) { $env:RABIROUTE_HOST_EXE } else { Join-Path $env:LOCALAPPDATA "Programs\RabiRoute\RabiRouteHost.exe" }
-$current = $null
-for ($attempt = 0; $attempt -lt 30; $attempt++) {
-  $candidate = & $hostExe --command status --json | Out-String | ConvertFrom-Json
-  if ($candidate.ok -eq $true -and ($candidate.state -eq "healthy" -or $candidate.state -eq "degraded") -and $candidate.applicationGenerationId -and $candidate.managerInstanceId -and $candidate.managerBaseUrl) {
-    $current = $candidate
-    break
-  }
-  Start-Sleep -Milliseconds 500
+$identity = node <repo>/scripts/resolve-manager.mjs | ConvertFrom-Json
+$meta = Invoke-RestMethod ($identity.managerBaseUrl + "/meta") -TimeoutSec 5
+if ($meta.applicationGenerationId -ne $identity.applicationGenerationId -or $meta.managerInstanceId -ne $identity.managerInstanceId) {
+  throw "Manager 身份已变化，重新发现原实例。"
 }
-if (-not $current) { throw "Host 未在查询期限内返回完整 READY 身份；保留错误证据，核对原维护任务。" }
-$meta = Invoke-RestMethod "$($current.managerBaseUrl)/meta" -TimeoutSec 5
-if ($meta.applicationGenerationId -ne $current.applicationGenerationId -or $meta.managerInstanceId -ne $current.managerInstanceId) {
-  throw "Host READY 与 Manager /meta 身份不一致，须重新发现地址。"
-}
-if (-not $meta.health.live -or -not $meta.health.requiredReady -or $meta.health.state -notin @("healthy", "degraded")) {
-  throw "Manager 必需依赖尚未就绪。"
+if (-not $meta.health.live -or $meta.health.state -notin @("healthy", "degraded")) {
+  throw "Manager 事件循环不可用或健康状态无效。"
 }
 ```
+
+`requiredReady` 记录声明能力状态；缺项由目标接口判断，不阻断无依赖功能。解析失败保留实际错误并核对原维护任务，不启动替代实例。
 
 用户明确要求完整发布、安装包或首次安装时，按[构建与部署](../../../skills/rabiroute-build/SKILL.md)交付完整包。确有 Host/native 运行时、依赖 ABI 或活动状态无法安全迁移时，记录具体诊断，在候选准备和预检完成后由 Host 受控切换；准备期间保留旧服务。
 
@@ -63,14 +52,14 @@ if (-not $meta.health.live -or -not $meta.health.requiredReady -or $meta.health.
 1. **Vite 增量打包缓存污染** — 修改了 `types.ts` 删除字段后，旧 chunk 缓存仍引用已删除的导出
 2. **循环依赖** — store / helper / page 之间出现循环 import
 
-**修复：清理 dist 后全量重建：**
+**修复：先核对循环引用与实际产物版本，再在本任务隔离目录重建：**
 ```powershell
-cmd /c "cd /d <repo> && rmdir /s /q ribiwebgui\dist && npm run build"
+npm run build
 ```
 
-浏览器也要强制刷新（Ctrl+Shift+R）清除缓存。
+确认当前页面的草稿已保存或导出后，再按兼容策略刷新；保留仍在使用的旧页面资源。
 
-**预防：** 删除 `types.ts` 字段前，先 grep 所有引用，确认全部清理干净再构建。
+**预防：** 删除 `types.ts` 字段前，先用 `rg` 查所有引用，确认全部清理干净再构建。
 
 ---
 

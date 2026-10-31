@@ -1,6 +1,6 @@
 <!-- docs-language-switch -->
 <div align="center">
-<a href="./README_en.md">English</a> | 简体中文
+<a href="./README_en.md">English</a> | 简体中文 | <a href="./README_ja.md">日本語</a>
 </div>
 <!-- /docs-language-switch -->
 
@@ -8,7 +8,7 @@
 
 这套手册面向在 RibiWebGUI 中配置和运行 RabiRoute 的软件使用者。它从第一次打开界面讲起，不要求你先理解代码、Schema 或 Agent 内部实现。
 
-> 适用版本：RabiRoute 0.1.x。项目仍在积极开发；界面中的“实验支持”表示已有入口，但外部平台或真机链路仍需按你的环境验收。
+> 适用版本：RabiRoute 0.4.x。项目仍在积极开发；界面中的“实验支持”表示已有入口，但外部平台或真机链路仍需按你的环境验收。
 
 ## 先理解一件事
 
@@ -29,11 +29,11 @@ RabiRoute 是消息分诊和调度层。它接收消息、记录事件、判断�
 
 如果你只想确认软件能跑通，先用 Heartbeat 加 Codex。它不依赖 QQ 登录，最适合验证第一条投递。
 
-1. 打开左下角“快速配置”。
-2. 消息入口选择“定时触发”。
-3. Agent 选择 Codex，并绑定项目目录与 Desktop 任务。
-4. 角色可以先留空，保存配置。
-5. 到“日志诊断”手动触发一次并确认任务收到消息。
+1. 点击左下角“新建角色”，保存角色。
+2. 打开“角色配置 → 消息适配器”，新增消息路由。
+3. 消息端选择 Heartbeat，Agent 选择 Codex，绑定项目目录与 Desktop 任务。
+4. 保存配置并启用该路由。
+5. 手动触发一次，到“日志诊断”核对投递回执与目标任务接收结果。
 
 完整步骤见[跑通第一条 Route](first-route.md)。需要接 QQ 时，再阅读[Route 与消息端](routes-and-adapters.md)。
 
@@ -46,7 +46,9 @@ RabiRoute 是消息分诊和调度层。它接收消息、记录事件、判断�
 | 第一次配置并验证投递 | [跑通第一条 Route](first-route.md) |
 | 看懂导航、状态和保存提示 | [界面与状态](interface-and-status.md) |
 | 区分两台电脑、修复复制过来的实例身份 | [重置实例 ID](instance-identity.md) |
-| 接 QQ、定时器、Webhook 或 RabiLink | [Route 与消息端](routes-and-adapters.md) |
+| 接入 QQ、微信、企业微信或飞书 | [通讯与消息入口](routes-and-adapters.md) |
+| 查看家庭设备并测试动作 | [智能设备](home-devices.md) |
+| 按时间或 Webhook 触发任务 | [Route 与消息端](routes-and-adapters.md) |
 | 从其他设备调用目标 PC 的 TTS / ASR | [从远端调用 TTS 与 ASR](speech-api.md) |
 | 绑定 Codex 或其他处理端 | [Agent、项目与任务](agents-and-sessions.md) |
 | 查看角色保存的技能目录与正文 | [查看角色技能](persona-skills.md) |
@@ -59,7 +61,7 @@ RabiRoute 是消息分诊和调度层。它接收消息、记录事件、判断�
 
 这套手册只解释“怎么使用”和“怎么判断结果”。页面中只在排障确实需要时提到文件名或技术边界。
 
-如果你要扩展适配器、修改路由算法或阅读 API，请从[项目文档索引](../README.md)进入。当前能力边界以[当前能力与成熟度](../current-capabilities.md)为准。
+如果你要阅读接口，在当前文档页选择“接口参考（开发者）”：目录来自正在运行的服务，可搜索路径、查看请求与响应并下载 OpenAPI。具体用法见[接口参考](../api-reference.md)。扩展适配器与架构资料从[项目文档索引](../README.md)进入。当前能力边界以[当前能力与成熟度](../current-capabilities.md)为准。
 
 ## 阅读约定
 

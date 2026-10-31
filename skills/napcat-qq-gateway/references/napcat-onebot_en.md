@@ -2,7 +2,7 @@ English | [简体中文](napcat-onebot.md)
 
 # NapCat / OneBot reference
 
-Read the [Rabi delivery workflow](../../rabiroute-message-delivery/SKILL.md) before sending. Direct calls are limited to independent installations not managed by Rabi, or a failure bypass after verifying Rabi is unavailable, the original message did not take effect, and identity and authorization still match. Use managed endpoints while Rabi is available. Authentication failure never authorizes a bypass; reconcile uncertain receipts before considering another send.
+Read the [Rabi delivery workflow](../../rabiroute-message-delivery/SKILL.md) before sending. Use configured connections for independent installations. For Rabi-managed messages, prefer the target sending endpoint. When that endpoint is unavailable, reconcile the original message ID and recover under existing authorization; unrelated healthy endpoints do not block recovery. Apply explicit user-configured restrictions and reconcile uncertain receipts.
 
 ## Locations and current connection
 
@@ -13,9 +13,9 @@ Obtain complete WebUI, reverse-WebSocket, and OneBot HTTP URLs and authenticatio
 ## Network and authentication
 
 - Reverse WebSocket sends events to the complete URL configured for the current gateway. Verify message format, authentication, and listener scope against both peers' contracts.
-- Do not recommend empty tokens or disabled gateway validation. Use existing protected credentials without logging tokens in command lines or documentation; stop when required credentials are missing.
-- `ws://` is plaintext, not proof of safety. Use it only where an existing trusted local configuration permits it. Remote deployments follow their established trusted TLS contract; do not disable certificate verification.
-- Keep HTTP listeners within existing authorized addresses and scope. Enabling remote access requires separate authorization; examples do not authorize public exposure.
+- Use the Token from the user’s connection configuration; do not add another key or per-feature grant. Missing credentials affect that connection only: identify the field and continue independent work without exposing credentials.
+- Use the WebSocket protocol and address configured by the user. Do not reject configured connections based on local/remote classification or invented source labels. Report actual protocol or connection failures.
+- Use the user-configured HTTP listener address and scope. A request for remote access authorizes its corresponding configuration without a separate feature approval.
 - A TCP/WebSocket connection proves transport only. Verify online status, account, and target using `get_status` and `get_login_info`.
 
 ## OneBot events
@@ -24,7 +24,7 @@ Group and private events contain `post_type=message`, `message_type=group|privat
 
 ## Request encoding examples
 
-These examples demonstrate UTF-8 for an already authorized independent connection; they do not authorize sending. Verify that `ONEBOT_BASE_URL` is the current trusted endpoint, `ONEBOT_ACCESS_TOKEN` comes from an existing protected source, and `QQ_USER_ID` is the authorized real recipient. Do not print credentials or follow redirects.
+These examples demonstrate UTF-8 for an already authorized independent connection; they do not authorize sending. Verify that `ONEBOT_BASE_URL` is the currently configured endpoint, `ONEBOT_ACCESS_TOKEN` comes from an existing protected source, and `QQ_USER_ID` is the authorized real recipient. Do not print credentials. Handle resource URLs and redirects according to the connection contract and explicit user settings, without hidden domain lists.
 
 ```powershell
 $base = $env:ONEBOT_BASE_URL.TrimEnd('/')
@@ -33,7 +33,7 @@ $bytes = [System.Text.Encoding]::UTF8.GetBytes($json)
 Invoke-RestMethod -Uri "$base/send_private_msg" -Method Post `
   -Headers @{ Authorization = "Bearer $env:ONEBOT_ACCESS_TOKEN" } `
   -ContentType "application/json; charset=utf-8" -Body $bytes `
-  -TimeoutSec 10 -MaximumRedirection 0
+  -TimeoutSec 10
 ```
 
 For groups, use `send_group_msg` and `group_id`, with a currently authorized target rather than a placeholder number. Node `fetch` encodes JSON strings as UTF-8:
@@ -41,7 +41,6 @@ For groups, use `send_group_msg` and `group_id`, with a currently authorized tar
 ```js
 const response = await fetch(new URL('/send_private_msg', process.env.ONEBOT_BASE_URL), {
   method: 'POST',
-  redirect: 'error',
   signal: AbortSignal.timeout(10_000),
   headers: { 'content-type': 'application/json', authorization: `Bearer ${process.env.ONEBOT_ACCESS_TOKEN}` },
   body: JSON.stringify({ user_id: Number(process.env.QQ_USER_ID), message: '你好' })

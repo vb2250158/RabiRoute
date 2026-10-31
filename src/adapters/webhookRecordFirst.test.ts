@@ -6,11 +6,15 @@ import test from "node:test";
 import { config } from "../config.js";
 import { readRabiLinkConversationEntries } from "../rabilinkConversationLedger.js";
 
-test("FenneNote webhook can be recorded for idle review without direct Agent forwarding", async () => {
+test("FenneNote webhook can be recorded for idle review without direct Agent forwarding", async t => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-fennenote-record-first-"));
+  const saved = { dataDir: config.dataDir, memoryDataDir: config.memoryDataDir, agentAdapters: config.agentAdapters,
+    routeVariables: config.routeVariables, routeProfiles: config.routeProfiles };
+  t.after(() => { Object.assign(config, saved); fs.rmSync(dataDir, { recursive: true, force: true }); });
   config.dataDir = dataDir;
   config.memoryDataDir = dataDir;
   config.agentAdapters = [];
+  config.routeProfiles = [];
   config.routeVariables = {
     rabilinkRecordFirstSources: "fennenote",
     rabilinkConversationSplitAfterHours: "6"

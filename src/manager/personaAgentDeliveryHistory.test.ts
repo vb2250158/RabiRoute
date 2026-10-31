@@ -82,3 +82,22 @@ test("history write failure cannot turn accepted delivery into a failed send", a
   assert.equal(result.data.status, "delivered");
   assert.equal(result.data.chatHistoryWarning, "history unavailable");
 });
+
+test("new delivery saves the target name and sanitized remote owner", async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "rabi-delivery-names-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  await recordPersonaAgentDelivery(request, {
+    statusCode: 200, data: { threadId: target, thread: { id: target, title: "Review task" }, delivery: { deliveryId: "named", status: "delivered" } }
+  }, {
+    roleForTask: () => "Example", roleDir: () => root, changed: () => {},
+    readDeliveryParties: () => new Map([["named", {
+      source: { threadId: source, agentType: "agent" },
+      target: { threadId: target, agentType: "agent", endpoint: { kind: "instance", provider: "codex", agentId: "agent", sessionId: target,
+        nodeId: "remote-node", instanceId: "remote-node", managerInstanceId: "manager", authorizationIncarnation: "private-proof" } }
+    }]])
+  });
+  const [record] = (await readPersonaChatHistory(root)).entries;
+  assert.equal(record.targetSessionTitle, "Review task");
+  assert.equal(record.targetTaskOwner?.nodeId, "remote-node");
+  assert.equal(JSON.stringify(record).includes("private-proof"), false);
+});

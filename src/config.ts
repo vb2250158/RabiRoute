@@ -165,7 +165,8 @@ function parseNotificationRules(raw: string | undefined): NotificationRule[] | n
 }
 
 export function parseMessageAdapterType(raw: string | undefined): MessageAdapterType {
-  return raw === "webhook" || raw === "rabilink" || raw === "wearable" || raw === "wecom" || raw === "weixin" || raw === "feishu" || raw === "xiaomiHome" || raw === "remoteAgent" || raw === "speech" || raw === "fennenote" || raw === "xiaoai" || raw === "heartbeat" || raw === "rolePanel" || raw === "disabled" || raw === "napcat" ? raw : "napcat";
+  if (raw === "fennenote") return "speech";
+  return raw === "webhook" || raw === "rabilink" || raw === "wearable" || raw === "wecom" || raw === "weixin" || raw === "feishu" || raw === "xiaomiHome" || raw === "remoteAgent" || raw === "speech" || raw === "xiaoai" || raw === "heartbeat" || raw === "rolePanel" || raw === "disabled" || raw === "napcat" ? raw : "napcat";
 }
 
 function isNotificationRouteKind(kind: unknown): kind is NotificationRouteKind {

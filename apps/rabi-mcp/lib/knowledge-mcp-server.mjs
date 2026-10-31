@@ -1,6 +1,7 @@
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { ListToolsRequestSchema, CallToolRequestSchema, McpError, ErrorCode } from '@modelcontextprotocol/sdk/types.js';
+import { KnowledgePolicyError } from './knowledge-tools.mjs';
 
 const safeFailure = () => ({
   isError: true,
@@ -31,8 +32,7 @@ export function createKnowledgeMcpServer({ tools } = {}) {
   });
   server.setRequestHandler(CallToolRequestSchema, async request => {
     try {
-      // Enforce the advertised catalog as well as the tools object's own policy.
-      if (!tools.list().some(tool => tool.name === request.params.name)) return safeFailure();
+      // The contract owns operation validation and the user's configured policy.
       const receipt = await tools.call(request.params.name, request.params.arguments ?? {});
       if (!receipt || typeof receipt !== 'object' || Array.isArray(receipt)) return safeFailure();
       return {
@@ -40,7 +40,8 @@ export function createKnowledgeMcpServer({ tools } = {}) {
         content: [{ type: 'text', text: JSON.stringify(receipt) }],
         structuredContent: receipt
       };
-    } catch {
+    } catch (error) {
+      if (error instanceof KnowledgePolicyError) return { isError: true, content: [{ type: 'text', text: error.message }] };
       // Never forward exception messages/stacks, arguments, credentials or request bodies.
       return safeFailure();
     }

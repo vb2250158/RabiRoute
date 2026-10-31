@@ -12,10 +12,22 @@ const id = "0123456789abcdef0123456789abcdef";
 const url = `https://p.qpic.cn/qq_expression/account/${id}/0`;
 test("favorite IDs survive rotated media credentials; unsupported references are omitted", () => {
   const parsed = parseNapCatStickers([url + "?rkey=private", { url: url + "?rkey=new", md5: id.toUpperCase(), desc: "谢谢" },
-    { url: `https://evil.example/${id}`, md5: id }, { url: `file:///private/${id}`, md5: id }]);
+    { url: `file:///private/${id}`, md5: id }]);
   assert.equal(parsed.length, 1);
   assert.equal(parsed[0]!.id, id);
   assert.equal(parsed[0]!.description, "谢谢");
+});
+
+test("favorite resources accept NapCat supplied CDN domains and explicit ports", () => {
+  for (const host of ["multimedia.nt.qq.com.cn", "cdn.example:8443", "127.0.0.1:43210"]) {
+    const value = `http://${host}/${id}`;
+    assert.equal(parseNapCatStickers([{ url: value, md5: id }])[0]?.url, value);
+  }
+});
+
+test("favorite parsing retains all items actually returned by NapCat", () => {
+  const entries = Array.from({ length: 1001 }, (_, index) => ({ md5: index.toString(16).padStart(32, "0"), url: `https://cdn.example/${index}` }));
+  assert.equal(parseNapCatStickers(entries).length, entries.length);
 });
 test("old NapCat uses basic favorite reads only after explicit unsupported action", async () => {
   const actions: string[] = [];
@@ -88,4 +100,12 @@ test("group/private sticker sends preserve quotes, use native subtype and never 
     assert.equal((await handleAgentSend({ ...request, deliveryId: "sticker-send-removed", params: { target: "private", userId: "1234" } }, opts)).status, "failed");
     assert.equal(sent.length, 2);
   } finally { await new Promise<void>(resolve => server.close(() => resolve())); }
+});
+
+
+test("favorite parsing preserves long signed URLs and descriptions returned upstream", () => {
+  const url = "https://cdn.example/image?signature=" + "x".repeat(5000);
+  const description = "detail ".repeat(200);
+  const [item] = parseNapCatStickers([{ url, md5: id, desc: description }]);
+  assert.equal(item?.url, url); assert.equal(item?.description, description);
 });

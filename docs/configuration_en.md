@@ -6,6 +6,19 @@ English | <a href="./configuration.md">简体中文</a>
 
 # Configuration and Integrations
 
+## Timeout settings
+
+Open **Settings → Timeout settings** in the WebGUI, find an operation, enter integer milliseconds, and save. Leave a field empty to restore its original default. The page reads the saved result back; conflicting edits preserve the draft and request a reload.
+
+Each entry states when it takes effect: a new request, the next connection, or the relevant service's next start. In-flight operations retain their admitted budget. Explicit per-operation deadlines, caller cancellation, and remaining upstream budgets still apply. Increasing a child timeout does not extend an operation already in progress. An uncertain write is reconciled through its original receipt, never automatically resent.
+
+The existing global `data/Config.json` owns `timeoutOverrides`. Missing overrides retain the component's existing configuration, environment variable, or default. The catalog includes connected consumers and deadlines published by registered plugin operations. Polling intervals, backoff, debounce, and retention periods are separate settings.
+
+Developers can read `GET /api/rabi/timeouts` for `{code,data:{overrides,catalog}}` and a strong ETag. Send that ETag as `If-Match` with `PATCH /api/rabi/timeouts`, for example `{ "overrides": { "agent.codex.catalog": 60000 } }`. This replaces the complete override map: remove a key to restore its default and preserve unrelated keys. Missing preconditions return 428, conflicts return 412, and invalid values return 400. Values must be integers from 1 to 2147483647 milliseconds. Read back after saving; reconcile an uncertain result before any retry. Complete pre-change configuration snapshots are retained locally under `data/.runtime/timeout-settings-backups/`; they may contain private configuration and must not be published.
+
+Remote Agents synchronize and cache settings from verified Manager metadata. Initial offline discovery uses the cache or defaults. Child processes receive a JSON snapshot through `RABIROUTE_TIMEOUT_OVERRIDES`, effective at the next start where indicated. Independently launched services need the snapshot in their own launch configuration; saving on another PC does not automatically change them.
+
+
 Remote Agents are execution targets, not message endpoints. Select an instance and Agent through [remote enrollment](lan-rabi-agent-bootstrap_en.md).
 
 Device ownership has changed: configure watches, bands, and glasses in mobile recording, which submits recording events. Separate PC device entries are removed; legacy device protocols below are retained for compatibility maintenance. See [implementation and retirement criteria](mobile-recording-event-boundary_en.md).
@@ -13,6 +26,8 @@ Device ownership has changed: configure watches, bands, and glasses in mobile re
 > Status: current reference. Fields and maturity are based on the active configuration model, Manager APIs, and scan results. See [Current Capabilities](current-capabilities_en.md) for acceptance status.
 
 ## Plugin platform
+
+User-configured package roots can use the execution mode declared by a plugin (`in_process`, `isolated`, or `declarative`) by default, without an extra built-in/external permission distinction. To restrict in-process execution, set `RABIROUTE_PLUGIN_IN_PROCESS_ROOTS` in the Manager startup environment to a JSON array of package-root paths already present in the catalog. `[]` disables all in-process entries; an explicit list permits only those roots. Clear or remove the variable to restore access for all configured roots on the next startup. Rejections identify the actual root, configured value, and setting location. Embedded callers use the equivalent `PluginPackageCatalog` option `trustedInProcessRoots`.
 
 The default Profile is `dist/plugins/profiles/desktop.json`; the default package root is `dist/plugins/packages/`. Source builds generate them from `plugins/profiles/desktop.json` and `plugins/builtin/`.
 
@@ -353,3 +368,9 @@ Each chat endpoint has two response budgets, editable under its message adapter 
 Store this under `messageAdapterPolicies.<endpoint>`. Initial counts accept 1–500; incremental limits accept 2–500. Larger deltas return head/tail excerpts and omission bounds. An omitted index may reuse the same Agent/conversation's reviewed cache; Agent caches are independent. Conversation confirmation remains separate from length and style checks.
 
 See [Agent interfaces](rabi-agent-interfaces_en.md#conversation-index-review-before-sending) for calls, concurrency and search semantics.
+
+## Relay speech endpoint
+
+`rabiLinkRelay.speechServiceUrl` accepts the user-configured local or remote HTTP(S) speech endpoint. An unavailable speech service does not disable unrelated Manager/WebGUI relay requests. Configure the address in RabiLink settings.
+
+Speech HTTP control, status, and recording requests also accept the configured remote endpoint. Local process start/stop only manages a service owned by this computer. For a remote process, use its computer’s Manager; the local API reports that ownership boundary and never starts or kills a same-port local replacement.

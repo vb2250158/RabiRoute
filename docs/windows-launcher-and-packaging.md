@@ -8,11 +8,15 @@
 
 Windows 启动新增一次 UAC 注册的最高权限 Host 任务、拒绝后的降级模式与登录自启同步。权限边界、HA 托管子进程、旧任务迁移和安装后验收见[摄像头与 HA 恢复](home-camera-events.md)。这些源码改动不自动升级当前稳定 Host，也不自动触发 UAC。
 
-升级前必须检查实际运行数据兼容性，不能只通过包哈希和 Host 自检。存在电脑凭据存储时，Setup 与 Developer 激活在停止旧 Host、删除旧任务前运行候选中的 `check-installed-data-compatibility.mjs`；它委托凭据 owner 的只读检查，只输出格式、数量和哈希，不迁移、复制或回显凭据。缺少合同、格式不支持或检查期间数据变化都会拒绝激活，旧服务继续运行。
-
-完整包同时携带远端 Agent 构建生成的 `runtime/`、`dist/agent-hooks/` 和 `dist/native/`。其中原生 DLL 与签名发布清单、托盘脚本共同验证；源码存在或 Manager 健康不能替代这些资源的实际打包校验。
-
 Windows 安装版只有一个应用生命周期入口：`RabiRouteHost.exe`。Manager 是业务与状态 owner，托盘/任务窗口是表现层；二者都是 Host 创建的同代子程序。托盘不是 Manager 的监督器，也不是另一套桌面应用。
+
+## 启动按需加载
+
+打开应用时，Bootstrap 根据 `current.json` 定位本机版本和 Host Core，不读取发布清单、不扫描整包文件，也不逐文件计算哈希。清单缺失、损坏、过期，额外备份文件或不相关资源变化，都不会成为整个应用的启动阻断条件。
+
+发现旧生命周期文件时，Host 记录告警并继续启动，不执行旧入口。该检查或告警记录发生异常时，也不会中断 Host。各功能的加载错误应由对应功能报告和处理，不牵连无关功能。
+
+构建和安装阶段仍可使用发布清单识别产物、验证候选和回退归属；这些离线操作不再成为每次打开应用的前置扫描。版本目录定位、实际 Host Core 装载、唯一 Host owner 和 generation fence 继续负责各自的运行边界。
 
 ## 无 Git 本机快照的受控文件清单
 
@@ -29,6 +33,8 @@ Windows 安装版只有一个应用生命周期入口：`RabiRouteHost.exe`。Ma
 旧安装事务恢复会先执行只读所有权检查，再允许任何指针/bootstrap 还原、登录启动或计划任务恢复、quarantine 移动、版本删除及事务清理。当前 `current.json` 必须与该旧事务保存的 backup 或 candidate 字节一致，且指针结构有效；bootstrap 也必须匹配该事务的 backup 或 candidate。原本不存在的文件只允许仍不存在或匹配 candidate，支持切换/回滚中途两文件分别处于旧、新状态。必要的备份、身份或匹配证据缺失时失败关闭；第三版本、损坏的指针或 bootstrap 漂移均拒绝恢复，保留日志、backup 和相关资源，不自动覆盖后续成功发布。`rolled-back` 仍可能表示回滚不完整，不能仅凭该状态删除或跳过日志。遇到所有权拒绝时，应保留证据并人工核对，不能删除日志后盲目重试。此检查不是完整终态重构，也不判断后续登录启动设置是否仍属于旧事务。
 
 发布清单生成时会核对桌面 profile 中启用插件声明的进程内 Web 入口：入口必须在包内且实际存在，否则拒绝打包并指出插件与缺失路径。单独重建插件包会移除后续 Web 构建生成的入口，因此必须完成 Web Bundle 同步后再冻结发布产物；不能仅凭 Manager 健康或 HTML 可下载判断页面可用。安装验收还需读取与 HTML `webRelease` 一致的模块目录及模块入口。
+
+只恢复已有事务而不继续安装时，在原 `Install-RabiRouteReleaseTransaction.ps1` 调用的完整参数后添加 `-RecoverOnly`。该入口复用相同的安装锁、只读所有权检查和恢复流程；拒绝后续版本或文件漂移，不跳过日志校验。恢复成功返回 `state: recovered`，不解压候选、不退出 Host，也不创建新的安装事务。没有待恢复事务时保持当前安装不变。
 
 ### 安装子进程失败证据
 
@@ -74,7 +80,7 @@ Setup 的 Windows PowerShell 子进程可能继承同时包含 `NO_PROXY` 与 `n
 
 后台任务故障与核心接口就绪分开判断：`health.state` 不因记忆整理等后台 incident 单独降级；`health.backgroundState` 和 `health.backgroundIncidentCount` 保留故障状态，详细原因仍在 `backgroundLifecycle` 和日志中。必需能力、计划存储启动和路线就绪检查不变。后台任务独立退避，不能阻断无关 API。记忆整理的投递结果不确定时持久化待核对状态，后续只读原投递回执；没有确认不能自动重发。移除的调度目标不再计入当前故障汇总。
 
-健康探测单次期限为三十秒，仍要求连续三次失败才重建。计划存储冷启动时 `/health` 可能超过数秒，单次探测会等到本次请求结束；generation、实例和必需能力校验不变。这是容错门槛，不替代长停顿诊断。
+健康探测单次期限为三十秒，仍要求连续三次进程探测失败才重建。计划存储冷启动时 `/health` 可能超过数秒，单次探测会等到本次请求结束。Host 保留有效 READY 对应的 generation、实例、PID、地址与事件循环存活检查；HTTP 正常且 `live=true` 时，`requiredReady=false` 只使该代报告为降级，不会因此拒绝启动或重建整个应用。Manager 仍如实报告缺少的能力；不可达、错误身份、非存活或损坏的探针数据仍判为失败。这不是对长时间卡顿的替代诊断。
 
 Manager 为线程桥发现允许工作目录时，只从 Desktop 索引查询任务 ID、目录及归档标记，保留最近一万条记录的范围；不读取任务正文或侧栏名称索引。任务名称解析与模型设置仍由原 Desktop owner 合同负责，不能用目录发现替代投递身份检查。
 
@@ -107,7 +113,7 @@ Manager 另持有按当前用户与产品安装身份派生的操作系统命名
 
 发布包继续在 `versions/<releaseId>/node.exe` 保存经过清单校验的 Node.js。Host 启动 Manager 前会把该文件校验并同步到安装根目录固定的 `runtime/node.exe`，所有 Manager、Route 和工作进程都从这个固定路径启动。升级只切换版本内容，不再改变 Windows 看到的网络程序路径，因此启用局域网 WebGUI 或 RabiLink 局域网远端访问后，防火墙不会随每个 `releaseId` 重复询问。`runtime/node.exe` 与当前发布副本不一致时由 Host 修复；卸载只在哈希匹配时删除它，其他文件保持不动。
 
-Host 同时向 Manager 与 Desktop 提供只读的发布目录（`RABIROUTE_PACKAGE_ROOT`）和稳定的运行数据目录（`RABIROUTE_STATE_ROOT`）。Desktop 从发布目录读取程序和图标，但截图图片、框选历史、贴图状态、滑词设置和 COM 生成缓存等可写内容只进入安装根目录。`versions/<releaseId>` 不再接收运行数据，因此 Host 后续执行 `status`、重启或升级时仍能按清单验证当前发布。
+Host 同时向 Manager 与 Desktop 提供只读的发布目录（`RABIROUTE_PACKAGE_ROOT`）和稳定的运行数据目录（`RABIROUTE_STATE_ROOT`）。Desktop 从发布目录读取程序和图标，但截图图片、框选历史、贴图状态、滑词设置和 COM 生成缓存等可写内容只进入安装根目录。`versions/<releaseId>` 不接收运行数据；发布清单用于构建和安装工具，不在正常启动或状态读取时扫描整个版本。
 
 ## 实例身份重置
 

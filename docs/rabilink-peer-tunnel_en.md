@@ -34,7 +34,7 @@ Authenticated devices can use all services actually provided by the PC, includin
 
 `tunnel.json` retains selection, pinned keys and application scope rather than per-device service permissions. Existing keys are preserved; successful current-application authentication migrates old records into unified connection records. An old file alone cannot prove current authentication. Every new request rechecks enablement, token scope and the pinned key. Uploads, downloads, SSE and WebSocket also recheck before forwarding body bytes and finishing streams. Disabling the connection, changing credentials or deleting records stops subsequent bytes and closes reused connections in an obsolete scope. Changed keys are never silently replaced.
 
-The `persona` service remains the restricted reference API alias, including language-style selection; its path restrictions are not another device permission. Full administration uses `manager`; knowledge uses existing Manager APIs. The target PC owns service registration and URLs, so remote callers cannot choose arbitrary local addresses.
+The `persona` service is a compatible Manager alias retained for references. It shares available public operations and connection authentication with `manager`, without another business-path allowlist. The target PC runtime supplies service addresses and identity headers.
 
 PCs and phones use `bootstrap-application`. The old `bootstrap-speech`, `bootstrap-resources` and `bootstrap-persona` wire kinds have been removed and are rejected. The current persona page still calls `POST /api/rabilink/peer/persona/bootstrap`; this HTTP entry invokes only the unified application handshake and does not restore an old wire kind.
 
@@ -65,7 +65,7 @@ GET  /api/rabilink/peer/events?ids=[...]  SSE; URL-encode ids
 Supported methods /api/rabilink/peer/http/<device>/<service>/<original-path>
 ~~~
 
-The same http path accepts WebSocket Upgrade for services that permit it; the restricted `persona` service rejects upgrades. Services register a baseUrl and optional pathPrefix, and the application can impose a request allowlist. The persona allowlist is fixed by the application and cannot be overridden in `tunnel.json`. Generic endpoints need no individual remote-business operation registration. Manager URLs are supplied by the current generation, and speech uses existing configuration. Additional services are local administrator configuration, never caller-provided arbitrary URLs. The application owns the built-in `manager` address and identity headers; `tunnel.json` cannot override them. Public peer directory, selection and third-PC forwarding APIs remain accessible through `manager`. Private `receive` and `tunnel/socket` handshake paths are rejected as business requests.
+The same http path accepts WebSocket Upgrade for services that permit it, including the `persona` alias. Services register a baseUrl and optional pathPrefix. The persona alias has no hidden request allowlist. Generic endpoints need no individual remote-business operation registration. Manager URLs are supplied by the current generation, and speech uses existing configuration. Additional services are local administrator configuration, never caller-provided arbitrary URLs. The application owns the built-in `manager` address and identity headers; `tunnel.json` cannot override them. Public peer directory, selection and third-PC forwarding APIs remain accessible through `manager`. Private `receive` and `tunnel/socket` handshake paths are rejected as business requests.
 
 Third-PC access uses the existing public API. After A connects to B, A can request B's `/api/rabilink/peer/http/pc-c/manager/api/example`; B then accesses C through its existing connection owner. Explicit nesting is limited to four forwarding hops. Self-targets, repeated targets and over-limit paths are rejected, without denying the entire `/api/rabilink/peer/` namespace. An unavailable remote target fails instead of executing locally.
 
@@ -73,7 +73,21 @@ Public request headers use the shared `packages/rabi-api-contract` contract, ret
 
 HTTP, binary, uploads, downloads, SSE and WebSocket share framing, multiplexing and per-stream flow control. Each connection supports sixteen streams; frames are bounded to roughly thirty-two KiB, with twelve-KiB data chunks. Whole files are not buffered into JSON. Existing speech control APIs retain their bounded-buffer semantics; streaming consumers use the generic path.
 
-For services permitting redirects, same-service redirects retain the target prefix and cross-origin redirects fail; `persona` rejects every redirect. Body URLs remain application data and are not guessed or rewritten; extension APIs should return service-relative paths. Browser credentials are not copied to peers. Administrators can configure target-owned service headers for independent service authentication.
+For services permitting redirects, same-service redirects retain the target prefix and cross-origin redirects fail; `persona` follows the same rule. Body URLs remain application data and are not guessed or rewritten; extension APIs should return service-relative paths. Browser credentials are not copied to peers. Administrators can configure target-owned service headers for independent service authentication.
+
+### Automatic discovery of connection controls
+
+Six directory, selection read/write, public identity, probe and event operations register under `manager.rabilink.peer.*`; the old control HTTP wrapper is removed. JSON and SSE retain their original connection owner. Selection persistence revalidates admission, and event cancellation detaches listeners and joins RTT callbacks. See [Peer connection controls](rabi-agent-interfaces_en.md#peer-connection-control-contract-source-connected-installed-acceptance-pending) for fields and recovery.
+
+### Automatic discovery of HTTP entries
+
+Seven HTTP methods register as `manager.rabilink.peer.http.<method>`, with paths, proxy contracts and dispatch from the same active snapshot. The old HTTP regex dispatch is removed. Native streaming handles bodies, binary and SSE while retaining target version conditions, repeated public headers and original receipts. The target owner rebuilds framing, including DELETE bodies. Cancellation and retirement join accepted writes and stream cleanup. See [Peer HTTP passthrough](rabi-agent-interfaces_en.md#peer-http-passthrough-contract-source-connected-installed-acceptance-pending) for fields and generic calls.
+
+### Automatic discovery of the upgrade entry
+
+Source now registers transparent upgrade as `manager.rabilink.peer.websocket.proxy`; ordinary HTTP retains its existing handler at the same path. Discovery, actual upgrade dispatch and OpenAPI derive from one active snapshot, with separate HTTP/upgrade projections at a shared URL. The path parameter carries a raw URI suffix and permits the empty service root. Client `openOperation()` preserves text, binary and subprotocols. Explicit local message budgets do not become server business limits.
+
+Proxy digest and target-version conditions are separate. The target-header JSON object follows existing public-header rules without becoming a permission or management key. Actual sends revalidate original admission; retirement joins accepted writes, and revocation does not corrupt other requests' cipher sequences. See the [Peer transparent upgrade contract](rabi-agent-interfaces_en.md#peer-transparent-upgrade-contract-source-connected-installed-acceptance-pending) for fields. Source integration runs real encrypted sessions and sockets with controlled target discovery/pooling. The independent full build and compiled acceptance passed, exercising HTTP and text/binary upgrades at the shared path; the expanded profile still has 13 registered legacy declarations. Real network, two-computer and installed-version acceptance remain outstanding.
 
 ## Security, Relay and lifecycle
 

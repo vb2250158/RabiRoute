@@ -27,20 +27,9 @@ export const activate = definePlugin({
                 }
             });
             try {
-        const requestTracker = new runtime.ManagerPluginRequestTracker();
-        const handler = runtime.createAgentProviderControlRouteHandler("astrbot", {
-            readJsonBody: runtime.readJsonBody,
-            jsonResponse: runtime.jsonResponse,
-            testAstrbotLogin: runtime.testAstrbotLoginEndpoint
-        }, operation => requestTracker.trackOperation(operation));
-        ctx.effect(() => {
-            const unregister = runtime.registerManagerPluginHandlerRoutes(runtime.managerPluginRoutes, "manager:astrbot-control", "manager.astrbot-control.api", [requestTracker.wrap(handler)], [
-                { routeId: "login-test", kind: "exact", path: "/api/agent/astrbot-login-test", methods: ["POST"] }
-            ]);
-            return async () => {
-                unregister();
-                await requestTracker.stop();
-            };
+        ctx.effect(async () => {
+            const operations = await runtime.managerPluginRoutes.registerOperationsAsync(context.identity.instanceId, runtime.createAstrbotControlOperations(), context.lifecycle.signal);
+            return () => operations.dispose();
         }, "activate Manager AstrBot control plugin");
 
                 await Promise.all(pendingEffects);

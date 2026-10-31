@@ -2,14 +2,17 @@
 
 # RabiRoute 插件平台目标架构
 
-> 状态：已实施。本文描述当前正式架构和持续门禁。
+> 状态：插件内核已实现；业务实现的独立交付按模块推进。源码、隔离验收与安装状态分别核对。
 >
 > 主要读者：RabiRoute 维护者、插件作者和接入开发者。
 
+
+当前 diagnostics 的 `/api/gateways` 合同与处理逻辑位于插件包 `operations.mjs`，经通用 operations 服务注册；宿主只提供原 Gateway 状态 owner 的批量查询能力。其他仍消费宿主专用实现注入的包尚未因此自动完成业务拆分。目标插件构建及开发证明见[开发热更新](development-hot-reload.md)，正式版本是否包含该切片以候选与运行回读为准。
+
 ## 当前实施状态
 
-- 正式发行 Profile 为 `plugins/profiles/desktop.json`，包含 29 个独立 Manager 插件包。
-- 7 个插件独立提供 Web Bundle：`core`、`desktop`、`diagnostics`、`message-adapter-control`、`performance`、`persona` 和 `speech`。
+- 正式发行 Profile 为 `plugins/profiles/desktop.json`，声明 31 个独立 Manager 插件包，默认启用 30 个；明确禁用的 `yeyu-gamer` 保持禁用。
+- 10 个插件独立提供 Web Bundle：`core`、`desktop`、`diagnostics`、`message-adapter-control`、`performance`、`persona`、`speech`、`video`、`route-control` 和 `xiaomi-home`。
 - 内置插件和树外插件共用 schema/profile v2、`@rabiroute/plugin-sdk`、严格 Manifest、能力图、权限检查、revision 隔离、generation 切换和 effect scope。
 - Manager、Catalog、Web module 和 Profile 只读取新插件平台。退役的 Bundle、Profile/Patch、多入口 loader、无约束进程宿主和迁移入口已删除；当前 `isolated` 模式只通过受限 Plugin Runtime Host 与 Process Lease Registry 执行。
 - WebGUI 宿主不保存业务页面 ID；页面、导航、命令和状态卡全部来自插件 contribution。
@@ -358,11 +361,29 @@ sequenceDiagram
 - 候选 generation 发布前不接收外部请求；
 - service、route 和 contribution 使用不可变快照一次切换；
 - 旧 generation 不再接收新工作，只完成已接受工作；
-- 准备失败时旧 generation 完全不变；
-- Profile 的 `readyRequires` 未满足时，候选不能发布，Manager 也不能向 Host 报 ready；
-- invariant 失败必须在新 generation 接收业务流量前恢复旧快照；
+- 准备或发布失败只撤回失败组件、共享 Web 实现组及真实依赖者；无关候选仍可发布。旧版本只有在拥有者与回滚均已确认时继续服务；
+- 通用 Kernel 默认严格检查 `readyRequires`；Manager 选择报告模式，发布健康子集并如实报告缺项，不阻断无关功能；
+- 全局发布条件失败时，在新 generation 接收业务流量前回滚已尝试的发布；无法确认回滚时撤回相关旧入口并保留清理围栏，不把未知状态报告为旧版本可用；
 - 处理过真实流量后的失败使用正常故障恢复，不伪造外部副作用回滚；
 - 投递和外发使用持久幂等记录完成重试和恢复。
+
+### 局部加载失败与就绪范围
+
+默认 desktop Profile 的 `readyRequires` 声明 `manager.core@1` 和 `manager.diagnostics@1`，用于必需能力诊断；Manager 使用报告模式，不把它作为整机就绪门。Agent 通信等业务插件故障使健康状态降级、撤回该插件及真实依赖者的入口，不使其它已鉴权客户端失去全部业务接口。自定义 Profile 显式声明的必需能力仍决定 `requiredReady`，不会自动改写用户配置。
+
+启用插件的包读取、Manifest 或信任检查失败时，加载器保存每个实例的 `package_load_failed` 诊断，让有效插件继续参与能力图判断；缺失能力继续显示在 readiness 中；Manager 报告模式允许健康的独立组件发布。更新失败且已有验证过的包时，保留原不可变包及其配置、资源策略和 grants，诊断同时标明 `retainedRevision`；禁用或移除实例仍按配置退役，不借失败回退重新启用。
+
+包加载诊断同时进入 `/meta` 健康状态、插件协调状态与运行日志；它不会被伪装成能力图已经提供服务。HTTP 控制面继续执行既有鉴权、计划/路由存储条件和目标插件生命周期，只隔离真正依赖故障拥有者的操作，不按全局缺失能力统一拒绝所有写请求。
+
+### 批量 API 注册
+
+Manager 扩展使用 `await api.registerOperationsAsync(definitions, context.lifecycle.signal)`。直接使用宿主 Registry 时，签名为 `registerOperationsAsync(instanceId, definitions, signal)`。注册器在第一次等待前固定合同和处理回调，逐条准备时让出事件循环，并在全部成功且未取消后一次挂载；失败不留下部分路由。HTTP proxy 与 WebSocket upgrade 保持原有注册合同。
+
+等待前创建的资源须立即登记幂等 disposer，不能只放进准备函数的局部清理数组。取消、迟到资源及失败的停止仍由原 scope 跟踪，只有真实清理完成才解除拥有者隔离。
+
+普通退役仍按每项副作用的预算有界返回；超时不表示操作已停止。整机退出会在 Manager 拥有者给出的剩余预算内，通过事件继续等待真实资源收尾，全部确认后才允许报告退出成功。原超时诊断保留，并以 `lateConfirmed: true` 标记迟到确认；真实清理失败、回滚未知或未完成的资源仍使退出失败。该等待仅用于应用退出，不延长正常切代或源码发布队列的等待。
+
+同步 `registerOperations` 保留以兼容已有同步 SDK 调用方；内置批量注册使用异步入口，不在准备失败后退回同步编译。现有调用方完成迁移后才可移除同步入口，迁移期间原有校验和路由匹配语义保持不变。
 
 ## 状态 schema
 
@@ -434,9 +455,9 @@ Git 保存历史，仓库不建立源码归档副本。
 
 ## 2026-08-27 最终门禁
 
-- 该次 2026-08-27 验收的 TypeScript noEmit、Vue 类型检查和当时 28 个内置包架构门禁通过；当前发行清单为 29 个包。
+- 该次 2026-08-27 验收的 TypeScript noEmit、Vue 类型检查和内置包架构门禁通过；当前发行清单见本文开头。
 - `npm test`：1401 通过，1 跳过，0 失败。
-- 该次 `npm run build` 生成当时的 28 个独立 Manager 包和 7 个独立 Web Bundle；当前构建生成 29 个 Manager 包。
+- 该次 `npm run build` 生成当时的 28 个独立 Manager 包和 7 个独立 Web Bundle；当前构建清单见本文开头。
 - `npm run check:built-manager`：通过，并生成本机只读验收记录。
 - 运行时代码与配置中的旧运行时标识为 0；`dist/` 为 0；当前事实文档为 0。架构检查脚本只保留 5 个已删除路径名称，用于阻止旧文件重新出现。
 - `git diff --check` 通过。

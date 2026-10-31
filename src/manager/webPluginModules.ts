@@ -53,15 +53,20 @@ export class WebPluginModuleRegistry {
   }
 
   update(loaded: LoadedPluginProfile, generation: PluginGeneration): void {
-    const active = new Set(
+    const active = new Map(
       generation.records
         .filter(record => record.status === "active")
-        .map(record => record.identity.instanceId)
+        .map(record => [record.identity.instanceId, record.identity] as const)
     );
     const pending = new Map<string, PendingWebPluginModule>();
 
     for (const item of loaded.packages) {
-      if (!active.has(item.instance.id)) continue;
+      const identity = active.get(item.instance.id);
+      if (!identity) continue;
+      if (item.package.manifest.id !== identity.pluginId || item.package.manifest.version !== identity.version
+        || item.package.revision !== identity.revision) {
+        throw new Error(`Active Web plugin package does not match its published activation: ${item.instance.id}.`);
+      }
       const webEntry = item.package.manifest.entries.web;
       if (!webEntry) continue;
 

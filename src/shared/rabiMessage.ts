@@ -1,13 +1,17 @@
 import { parseAgentAdapterType, type AgentAdapterType } from "../agentAdapters/types.js";
 
-export type RabiAgentMessageSource = {
-  type: "agent";
+type RabiAgentMessageIdentity = {
   agentAdapter: AgentAdapterType;
   agentType?: string;
   sessionName: string;
   sessionId: string;
   workspace?: string;
 };
+
+export type RabiAgentMessageSource = RabiAgentMessageIdentity & (
+  | { type: "agent" }
+  | { type: "agent_hook" }
+);
 
 export type RabiPlanMessageSource = {
   type: "plan";
@@ -69,9 +73,9 @@ function optionalLine(label: string, value: unknown): string | undefined {
   return text ? `${label}：${text}` : undefined;
 }
 
-function agentSourceLines(source: Omit<RabiAgentMessageSource, "type">, standalone = false): Array<string | undefined> {
+function agentSourceLines(source: Omit<RabiAgentMessageSource, "type">, standalone?: "Agent" | "AgentHook"): Array<string | undefined> {
   return [
-    `${standalone ? "类型：Agent｜" : ""}处理端：${source.agentAdapter === "grokBot" ? "GrokBot" : source.agentAdapter}`,
+    `${standalone ? `类型：${standalone}｜` : ""}处理端：${source.agentAdapter === "grokBot" ? "GrokBot" : source.agentAdapter}`,
     source.agentType?.trim().toLowerCase() === "agent" ? undefined : optionalLine("角色", source.agentType),
     `会话：${source.sessionName}`,
     `会话 ID：${source.sessionId}`,
@@ -86,8 +90,8 @@ function deliverySentAt(value: unknown): string {
 
 export function rabiMessageSourceLines(source: RabiMessageSource, sentAt?: string): string[] {
   const lines: Array<string | undefined> = [RABI_MESSAGE_SOURCE_HEADER];
-  if (source.type === "agent") {
-    lines.push(...agentSourceLines(source, true));
+  if ((source.type === "agent" || source.type === "agent_hook")) {
+    lines.push(...agentSourceLines(source, source.type === "agent_hook" ? "AgentHook" : "Agent"));
   } else if (source.type === "plan") {
     lines.push(
       "消息源类型：计划",
@@ -122,7 +126,7 @@ export function rabiMessageSourceLines(source: RabiMessageSource, sentAt?: strin
       optionalLine("消息路线 ID", source.routeId)
     );
   }
-  lines.push(`${source.type === "agent" ? "投递时间" : "消息包发送时间"}：${deliverySentAt(sentAt)}`);
+  lines.push(`${(source.type === "agent" || source.type === "agent_hook") ? "投递时间" : "消息包发送时间"}：${deliverySentAt(sentAt)}`);
   return lines.filter((line): line is string => Boolean(line));
 }
 
@@ -220,7 +224,7 @@ export function renderRabiMessage(source: RabiMessageSource, content: string, se
 export function agentIdentityForMessageSource(
   source: RabiMessageSource
 ): Omit<RabiAgentMessageSource, "type"> | undefined {
-  if (source.type === "agent") {
+  if ((source.type === "agent" || source.type === "agent_hook")) {
     const { type: _type, ...identity } = source;
     return identity;
   }
@@ -263,7 +267,7 @@ export function normalizeRabiMessageSource(value: unknown): RabiMessageSource {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Missing messageSource.");
   const raw = value as Record<string, unknown>;
   const type = requiredSourceText(raw.type, "messageSource.type", 40);
-  if (type === "agent") return { type, ...normalizeAgentIdentity(raw, "messageSource") };
+  if (type === "agent" || type === "agent_hook") return { type, ...normalizeAgentIdentity(raw, "messageSource") };
   if (type === "plan") {
     return {
       type,
@@ -309,5 +313,5 @@ export function normalizeRabiMessageSource(value: unknown): RabiMessageSource {
       routeId: optionalSourceText(raw.routeId, "messageSource.routeId", 300)
     };
   }
-  throw new Error("Invalid messageSource.type. Expected message_adapter, agent, plan, or system.");
+  throw new Error("Invalid messageSource.type. Expected message_adapter, agent, agent_hook, plan, or system.");
 }

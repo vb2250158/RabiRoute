@@ -4,7 +4,7 @@ import path from "node:path";
 import test, { type TestContext } from "node:test";
 import { EventEmitter } from "node:events";
 import type WebSocket from "ws";
-import { markdownImageHtml, markdownImageInternals, renderMarkdownToPng } from "./markdownImage.js";
+import { markdownImageHtml, markdownImageInternals, renderMarkdownToPng, readMarkdownImageSettings, checkMarkdownQuota } from "./markdownImage.js";
 
 type Command = { id: number; method: string };
 
@@ -146,7 +146,31 @@ test("real browser renders Chinese Markdown, a table, and code to PNG", async (t
   assert.ok(png.length > 10_000);
 });
 
-test("empty or oversized Markdown fails before launching a browser", async () => {
+test("Markdown quotas default to unlimited and explicit restrictions identify their setting", async () => {
   await assert.rejects(renderMarkdownToPng("  "), /must contain text/);
-  await assert.rejects(renderMarkdownToPng("中".repeat(12_000)), /at most 32768 UTF-8 bytes/);
+  const settings = readMarkdownImageSettings({});
+  assert.equal(settings.sourceBytes, 0);
+  assert.doesNotThrow(() => markdownImageInternals.validateMarkdownSource("中".repeat(12_000), settings));
+  assert.throws(() => markdownImageInternals.validateMarkdownSource("中".repeat(12_000), { ...settings, sourceBytes: 32768 }), /RABIROUTE_MARKDOWN_MAX_SOURCE_BYTES=32768.*36000/);
+  assert.doesNotThrow(() => checkMarkdownQuota("RABIROUTE_MARKDOWN_MAX_MESSAGE_PNG_BYTES", 0, 20 * 1024 ** 2));
+  assert.throws(() => checkMarkdownQuota("RABIROUTE_MARKDOWN_MAX_MESSAGE_PNG_BYTES", 10, 11), /MAX_MESSAGE_PNG_BYTES=10.*11/);
+  assert.throws(() => readMarkdownImageSettings({ RABIROUTE_MARKDOWN_MAX_PNG_BYTES: "bad" }), /RABIROUTE_MARKDOWN_MAX_PNG_BYTES/);
+  assert.throws(() => readMarkdownImageSettings({ RABIROUTE_MARKDOWN_TIMEOUT_MS: "0" }), /RABIROUTE_MARKDOWN_TIMEOUT_MS/);
+});
+
+test("CDP accepts tall images by default and enforces only explicit image quotas", async () => {
+  const png = Buffer.concat([Buffer.from([137,80,78,71,13,10,26,10]), Buffer.alloc(4 * 1024 ** 2)]);
+  for (const [overrides, error] of [[{}, undefined], [{ height: 4096 }, /RABIROUTE_MARKDOWN_MAX_HEIGHT=4096/], [{ pngBytes: 1024 }, /RABIROUTE_MARKDOWN_MAX_PNG_BYTES=1024/]] as const) {
+    const socket = new FakeCdpSocket();
+    socket.send = raw => {
+      const command = JSON.parse(raw) as Command;
+      queueMicrotask(() => {
+        socket.reply(command, command.method === "Page.getLayoutMetrics" ? { cssContentSize: { height: 5000 } } : command.method === "Page.captureScreenshot" ? { data: png.toString("base64") } : {});
+        if (command.method === "Page.navigate") socket.emit("message", JSON.stringify({ method: "Page.loadEventFired" }));
+      });
+    };
+    const pending = markdownImageInternals.captureHtmlOnSocket(socket as unknown as WebSocket, "<p>test</p>", 1000, { ...readMarkdownImageSettings({}), ...overrides });
+    const result = error ? assert.rejects(pending, error) : pending.then(actual => assert.deepEqual(actual, png));
+    socket.open(); await result;
+  }
 });

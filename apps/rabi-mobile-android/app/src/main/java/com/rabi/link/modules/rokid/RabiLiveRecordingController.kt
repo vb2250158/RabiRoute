@@ -178,7 +178,7 @@ class RabiLiveRecordingController(
                 owned.waitFor() // Explicit SIGTERM may return a non-zero exit code.
             } catch (_: Exception) {
                 failed = true; owned.destroy()
-                if (!owned.waitFor(10, TimeUnit.SECONDS)) { owned.destroyForcibly(); owned.waitFor() }
+                if (!owned.waitFor(com.rabi.link.transport.ScopedManagerTimeouts.active(this).get("android.recording.stop",10000), TimeUnit.MILLISECONDS)) { owned.destroyForcibly(); owned.waitFor() }
             }
             val processFailed = failed
             main.post {
@@ -228,7 +228,7 @@ class RabiLiveRecordingController(
         val owned = process ?: return // Preparation completion observes stopping and finalizes.
         owned.destroy() // SIGTERM gives MediaMTX time to finalize its current fragment.
         Thread({
-            if (!owned.waitFor(10, TimeUnit.SECONDS)) { forcedStop = true; owned.destroyForcibly() }
+            if (!owned.waitFor(com.rabi.link.transport.ScopedManagerTimeouts.active(this).get("android.recording.stop",10000), TimeUnit.MILLISECONDS)) { forcedStop = true; owned.destroyForcibly() }
         }, "rabi-video-stop").start()
     }
     private fun releaseResources() {

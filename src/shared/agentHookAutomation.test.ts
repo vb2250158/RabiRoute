@@ -1,6 +1,18 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { normalizeAgentCompletionDeliveries, agentHookRuleErrors } from "./agentHookAutomation.js";
+import { normalizeAgentCompletionDeliveries, agentHookRuleErrors, agentHookConditionErrors } from "./agentHookAutomation.js";
+
+test("heartbeat exclusion persists without parameters and uses the same condition validation as the dialog", () => {
+  const [rule] = normalizeAgentCompletionDeliveries([{ id: "heartbeat-filter", enabled: true, event: "task_completed",
+    conditions: [{ type: "exclude_heartbeat" }], destination: { channel: "speech", gatewayId: "route", params: {} } }]);
+  assert.deepEqual(rule.conditions, [{ type: "exclude_heartbeat" }]);
+  assert.deepEqual(agentHookRuleErrors(rule), []);
+  assert.deepEqual(normalizeAgentCompletionDeliveries([rule]), [rule]);
+  assert.ok(agentHookRuleErrors({ ...rule, conditions: [...rule.conditions, ...rule.conditions] }).length);
+  assert.deepEqual(agentHookConditionErrors({ type: "exclude_heartbeat" }), []);
+  assert.ok(agentHookConditionErrors({ type: "project", path: "relative" }).length);
+  assert.ok(agentHookConditionErrors({ type: "include_sessions", sessions: [] }).length);
+});
 
 test("session condition normalization retains IDs and display names and rejects empty selections", () => {
   const base = { id: "rule", enabled: true, event: "task_completed",

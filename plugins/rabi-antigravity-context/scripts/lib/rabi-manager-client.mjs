@@ -1,8 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
-import { spawnSync } from "node:child_process";
+import { discoverWindowsHostIdentity } from "./windows-host-discovery.mjs";
 import os from "node:os";
 
+import { getTimeoutMs } from "./timeout-settings.mjs";
 const DEFAULT_TIMEOUT_MS = 8000;
 
 /**
@@ -26,36 +27,8 @@ const EVENT_MAP = {
   Stop: "Stop"
 };
 
-function discoverManagerUrlFromHost(env) {
-  const candidates = [
-    env.RABIROUTE_HOST_EXE,
-    env.LOCALAPPDATA && path.join(env.LOCALAPPDATA, "Programs", "RabiRoute", "RabiRouteHost.exe")
-  ].filter(Boolean);
-  for (const executable of candidates) {
-    if (!fs.existsSync(executable)) continue;
-    const result = spawnSync(executable, ["--command", "status", "--json"], {
-      encoding: "utf8",
-      windowsHide: true,
-      timeout: 3000
-    });
-    if (result.status !== 0 || !result.stdout) continue;
-    try {
-      const descriptor = JSON.parse(result.stdout.trim());
-      const baseUrl = String(descriptor.managerBaseUrl || descriptor.baseUrl || "").trim();
-      if (/^http:\/\/127\.0\.0\.1:\d+$/.test(baseUrl)) return baseUrl;
-    } catch {
-      // A stale or non-RabiRoute executable is not a discovery source.
-    }
-  }
-  return "";
-}
-
-export function resolveManagerUrl(env = process.env) {
-  const value = String(env.RABI_MANAGER_URL || env.RABI_CODEX_MANAGER_URL || discoverManagerUrlFromHost(env))
-    .trim()
-    .replace(/\/+$/, "");
-  if (!value) throw new Error("RabiRoute Host is not running and no explicit Manager URL was supplied.");
-  return value;
+export async function resolveManagerUrl(env = process.env) {
+  return (await discoverWindowsHostIdentity({ env })).managerBaseUrl;
 }
 
 async function responseBody(response) {
@@ -78,13 +51,13 @@ export async function requestManager(pathname, init = {}, options = {}) {
     const helper = path.join(directory, "hook-client.mjs");
     if (fs.existsSync(helper)) {
       const { requestInstanceHook } = await import(new URL(`file://${helper.replace(/\\/g, "/")}`).href);
-      const result = await requestInstanceHook(JSON.parse(init.body || "{}"), path.join(directory, "config.json"));
+      const result = await requestInstanceHook({ ...JSON.parse(init.body || "{}"), agentType: "antigravity" }, path.join(directory, "config.json"));
       if (result !== undefined) return result;
     }
   }
-  const managerUrl = String(options.managerUrl || resolveManagerUrl(options.env)).replace(/\/+$/, "");
+  const managerUrl = String(options.managerUrl || await resolveManagerUrl(options.env)).replace(/\/+$/, "");
   const controller = new AbortController();
-  const timeoutMs = Number(options.timeoutMs || DEFAULT_TIMEOUT_MS);
+  const timeoutMs = Number(options.timeoutMs ?? getTimeoutMs("hooks.manager.request", DEFAULT_TIMEOUT_MS, options.env ?? process.env));
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const response = await fetch(`${managerUrl}${pathname}`, {
@@ -94,7 +67,7 @@ export async function requestManager(pathname, init = {}, options = {}) {
         ...(init.body ? { "content-type": "application/json; charset=utf-8" } : {}),
         ...init.headers
       },
-      signal: controller.signal
+      signal: init.signal ? AbortSignal.any([init.signal, controller.signal]) : controller.signal
     });
     const payload = await responseBody(response);
     if (!response.ok || payload?.code === -1) {
@@ -190,6 +163,27 @@ function allowOutput() {
   return {};
 }
 
+/**
+ * Standalone Hook packages share this display contract. Receipt recovery stays
+ * with the delivery owner; consuming a result never resends its message.
+ */
+function completionDeliveryMessages(deliveries) {
+  if (!Array.isArray(deliveries)) return [];
+  return deliveries.flatMap(delivery => {
+    if (!delivery || typeof delivery !== "object") return [];
+    const status = String(delivery.status || delivery.state || "unknown");
+    if (["sent", "received", "ignored", "skipped"].includes(status)) return [];
+    const outcome = status === "failed" ? "发送失败"
+      : status === "blocked" ? "发送受阻"
+      : status === "cancelled" ? "已取消" : "送达待确认";
+    const deliveryId = typeof delivery.deliveryId === "string" && delivery.deliveryId.trim() ? delivery.deliveryId : "未返回";
+    const recoveryState = typeof delivery.recoveryState === "string" && delivery.recoveryState.trim() ? delivery.recoveryState : "未返回";
+    const rule = typeof delivery.ruleId === "string" && delivery.ruleId ? `规则 ${delivery.ruleId}；` : "";
+    const reason = typeof delivery.reason === "string" ? delivery.reason : typeof delivery.error === "string" ? delivery.error : "";
+    return [`Rabi 完成通知${outcome}：${rule}投递编号 ${deliveryId}；投递状态 ${status}；恢复状态 ${recoveryState}${reason ? `；${reason}` : ""}`];
+  });
+}
+
 function shouldExposeManagerFailure(input) {
   const eventName = String(input?.hook_event_name || input?.eventName || "");
   if (eventName === "PreInvocation") return true;
@@ -223,7 +217,7 @@ export async function handleAntigravityHookInput(input, options = {}) {
     }
 
     if (eventName === "Stop") {
-      const messages = [];
+      const messages = completionDeliveryMessages(data?.completionDeliveries);
       if (data?.followup?.decision === "block" && data.followup.reason) {
         messages.push(String(data.followup.reason));
       }

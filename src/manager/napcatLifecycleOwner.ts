@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import type { ChildProcess } from "node:child_process";
 import path from "node:path";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { KeyedAsyncLock } from "../shared/keyedAsyncLock.js";
@@ -14,7 +15,7 @@ export type NapcatBinding = {
   webuiUrl?: string;
 };
 export type NapcatProcessIdentity = { pid: number; parentPid: number; startedAt: string; executable: string; napcatRoot?: boolean };
-export type NapcatOwnedProcess = { binding: NapcatBinding; processes: NapcatProcessIdentity[] };
+export type NapcatOwnedProcess = { binding: NapcatBinding; processes: NapcatProcessIdentity[]; launchPending?: boolean };
 export type NapcatProcessDriver = {
   snapshot(): Promise<NapcatProcessIdentity[]>;
   terminate(process: NapcatProcessIdentity): Promise<void>;
@@ -23,14 +24,9 @@ export type NapcatProcessDriver = {
 
 export const napcatBindingKey = (binding: Pick<NapcatBinding, "gatewayId" | "instanceId">): string =>
   JSON.stringify([binding.gatewayId, binding.instanceId]);
-const normalizedPath = (value: string): string => path.resolve(value).replaceAll("\\", "/").toLowerCase();
+const normalizedPath = (value: string): string => process.platform === "win32" ? path.resolve(value).replaceAll("\\", "/").toLowerCase() : path.resolve(value);
 const sameProcess = (left: NapcatProcessIdentity, right: NapcatProcessIdentity): boolean =>
   left.pid === right.pid && left.startedAt === right.startedAt && normalizedPath(left.executable) === normalizedPath(right.executable);
-const isNapcatRoot = (item: NapcatProcessIdentity): boolean =>
-  item.napcatRoot === true;
-function insideDirectory(executable: string, directory: string): boolean {
-  return normalizedPath(executable).startsWith(`${normalizedPath(directory)}/`);
-}
 function sameBinding(left: NapcatBinding, right: NapcatBinding): boolean {
   return napcatBindingKey(left) === napcatBindingKey(right)
     && (left.workingDir ? normalizedPath(left.workingDir) : "") === (right.workingDir ? normalizedPath(right.workingDir) : "")
@@ -77,6 +73,7 @@ export class NapcatLifecycleOwner {
   private changes = new KeyedAsyncLock();
   private operations = new KeyedAsyncLock();
   private initialized = false;
+  private launchChildren = new Map<string, ChildProcess>();
 
   constructor(private readonly options: {
     statePath: string;
@@ -118,25 +115,63 @@ export class NapcatLifecycleOwner {
   prepareLaunch(request: { gatewayId?: string; instanceId?: string }): void {
     const binding = this.assertBound(request);
     const key = napcatBindingKey(binding);
+    if (this.records.has(key) && (this.records.get(key)!.launchPending || !this.records.get(key)!.processes.length)) {
+      throw new NapcatLifecycleError(NapcatState.StartFailed, "上次 NapCat 启动的进程身份尚未确认；已保留原启动记录，不能重复启动。");
+    }
     if (!this.records.has(key)) this.records.set(key, { binding, processes: [] });
+    this.records.get(key)!.launchPending = true;
     this.persist();
+  }
+
+  /** The original child handle proves whether spawn occurred and enables later PID capture. */
+  async launch(request: { gatewayId?: string; instanceId?: string }, spawnChild: () => ChildProcess): Promise<ChildProcess> {
+    this.prepareLaunch(request);
+    const key = napcatBindingKey({ gatewayId: request.gatewayId || "", instanceId: request.instanceId || "" });
+    const unstarted = () => {
+      const record = this.records.get(key);
+      if (!record) return;
+      delete record.launchPending;
+      if (!record.processes.length) this.records.delete(key);
+      this.persist();
+    };
+    let child: ChildProcess;
+    try { child = spawnChild(); } catch (error) { unstarted(); throw error; }
+    this.launchChildren.set(key, child);
+    await new Promise<void>((resolve, reject) => {
+      child.once("spawn", resolve);
+      child.on("error", error => {
+        if (child.pid === undefined) unstarted();
+        reject(error);
+      });
+      child.once("close", () => {
+        if (this.launchChildren.get(key) === child) this.launchChildren.delete(key);
+      });
+    });
+    await this.recordLaunch(request);
+    return child;
   }
 
   async recordLaunch(request: { gatewayId?: string; instanceId?: string }, rootPid?: number): Promise<void> {
     const key = napcatBindingKey({ gatewayId: request.gatewayId || "", instanceId: request.instanceId || "" });
     const record = this.records.get(key);
     if (!record) throw new Error("NapCat launch was not registered before spawn.");
+    const child = this.launchChildren.get(key);
+    const launchPid = rootPid ?? (child?.exitCode === null && child.signalCode === null ? child.pid : undefined);
     const snapshot = await this.options.driver.snapshot();
-    const roots = snapshot.filter(item => item.pid === rootPid || record.processes.some(saved => sameProcess(saved, item))
-      || (isNapcatRoot(item) && record.binding.workingDir && insideDirectory(item.executable, record.binding.workingDir)));
-    record.processes = descendants(snapshot, roots);
+    const confirmedPid = child && (child.exitCode !== null || child.signalCode !== null) ? undefined : launchPid;
+    // Only the original launch callback or already recorded identities establish ownership.
+    const roots = snapshot.filter(item => item.pid === confirmedPid || record.processes.some(saved => sameProcess(saved, item)));
+    const observed = descendants(snapshot, roots);
+    if (observed.length) record.processes = observed;
+    if (confirmedPid !== undefined && roots.some(item => item.pid === confirmedPid)) delete record.launchPending;
     this.persist();
   }
 
   private async stopRecord(key: string, record: NapcatOwnedProcess): Promise<void> {
+    if (record.launchPending || !record.processes.length) throw new NapcatLifecycleError(NapcatState.StopFailed,
+      "NapCat 启动结果尚未确认，没有可核对的进程身份；原启动记录已保留。");
     const snapshot = await this.options.driver.snapshot();
-    const roots = snapshot.filter(item => record.processes.some(saved => sameProcess(saved, item))
-      || (isNapcatRoot(item) && record.binding.workingDir && insideDirectory(item.executable, record.binding.workingDir)));
+    const roots = snapshot.filter(item => record.processes.some(saved => sameProcess(saved, item)));
     const targets = descendants(snapshot, roots);
     record.processes = targets; this.persist();
     // Only ask a verified instance to exit. A stale HTTP port can belong to another account.
@@ -178,18 +213,13 @@ export class NapcatLifecycleOwner {
         if (!desired.has(key) || !sameBinding(record.binding, desired.get(key)!)) this.revoked.add(key);
       }
       for (const key of this.revoked) await Promise.allSettled([...(this.flights.get(key) ?? [])]);
-      const snapshot = await this.options.driver.snapshot();
-      // Recover pre-registry NapCat roots; a normal QQ.exe is never a discovery root.
-      for (const root of snapshot.filter(isNapcatRoot)) {
-        if ([...this.records.values()].some(record => record.processes.some(saved => sameProcess(saved, root)))) continue;
-        const binding = next.find(item => item.workingDir && insideDirectory(root.executable, item.workingDir));
-        const recovered = binding ?? { gatewayId: "unbound", instanceId: `process-${root.pid}-${root.startedAt}`, workingDir: path.dirname(root.executable), httpUrl: "" };
-        const key = napcatBindingKey(recovered);
-        const previous = this.records.get(key);
-        this.records.set(key, { binding: recovered, processes: [...(previous?.processes ?? []), ...descendants(snapshot, [root])] });
-      }
-      this.persist();
+      // Discovery is not ownership. Configuring a directory must not adopt another
+      // Manager's signed-in process; only this store's launch records may be stopped.
       for (const [key, record] of [...this.records]) {
+        if (record.launchPending || !record.processes.length) {
+          this.options.log("napcat_launch_identity_unconfirmed", key);
+          continue;
+        }
         if (!desired.has(key) || !sameBinding(record.binding, desired.get(key)!) || this.removals.has(key)) await this.stopRecord(key, record);
       }
       this.bindings = desired;
@@ -212,9 +242,8 @@ export class NapcatLifecycleOwner {
     this.persist();
     await Promise.allSettled([...(this.flights.get(key) ?? [])]);
     await this.changes.run("bindings", async () => {
-      const record = this.records.get(key) ?? { binding, processes: [] };
-      this.records.set(key, record);
-      await this.stopRecord(key, record);
+      const record = this.records.get(key);
+      if (record) await this.stopRecord(key, record);
     });
   }
 
@@ -222,8 +251,7 @@ export class NapcatLifecycleOwner {
     const binding = this.assertBound(request);
     const key = napcatBindingKey(binding);
     if (this.leases.getStore() !== key) throw new Error("NapCat restart must hold its binding lease.");
-    const record = this.records.get(key) ?? { binding, processes: [] };
-    this.records.set(key, record);
-    await this.stopRecord(key, record);
+    const record = this.records.get(key);
+    if (record) await this.stopRecord(key, record);
   }
 }

@@ -44,5 +44,5 @@ test("immediate route components have a bounded failure state", () => {
   const source = fs.readFileSync(path.resolve(import.meta.dirname, "../src/immediateRouteComponent.ts"), "utf8");
   assert.equal(ROUTE_LOAD_TIMEOUT_MS, 12_000);
   assert.match(source, /errorComponent: options\.errorComponent/);
-  assert.match(source, /timeout: options\.timeoutMs \?\? ROUTE_LOAD_TIMEOUT_MS/);
+  assert.match(source, /timeout: options\.timeoutMs \?\? getTimeoutMs\("webgui\.route\.load", 12000\)/);
 });

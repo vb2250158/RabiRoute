@@ -166,3 +166,10 @@ test("no DNS-SD service is a clean empty discovery result", async () => {
   });
   assert.deepEqual(result, { observedServices: 0, endpoints: [], issues: [] });
 });
+
+
+test("discovery preserves an admitted configurable budget without a hidden three-second cap", async () => {
+  const seen: number[] = [];
+  for (const timeoutMs of [1, 8000]) await discoverManagerLanEndpoints({ timeoutMs, browse: async budget => { seen.push(budget); return []; } });
+  assert.deepEqual(seen, [1, 8000]);
+});

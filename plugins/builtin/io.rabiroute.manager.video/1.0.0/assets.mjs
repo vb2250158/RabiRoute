@@ -30,7 +30,7 @@ export class VideoAssets {
       const id = randomUUID(), file = await safeTarget(this.root, `${id}.${type.extension}`, access);
       uploadedFile = file;
       const handle = await fs.open(file, "wx"); let size = 0;
-      const timer = setTimeout(() => request.destroy(), 120000);
+      const timer = setTimeout(() => request.destroy(), (this.runtime.getTimeoutMs?.("video.asset.upload", 120000) ?? 120000));
       try { for await (const chunk of request) { access?.assert(); size += chunk.length; if (size > type.maxBytes) throw new VideoError("参考素材文件过大。", 413); access?.beforeMutation(); await handle.writeFile(chunk); access?.assert(); } }
       finally { clearTimeout(timer); await handle.close(); }
       access?.assert();

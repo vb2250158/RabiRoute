@@ -52,32 +52,32 @@ test("application bootstrap is deduplicated, pins both keys and enables all offe
   assert.deepEqual(bg.services, []); assert.equal(bg.publicKey, a.identity.publicKey);
   assert.equal(ag.bootstrapScope, bg.bootstrapScope);
   assert.equal((await a.directory()).peers[0].personaSupported, true);
-  // A private tunnel.json entry cannot redirect or relax the persona service.
+  // A private tunnel.json entry cannot redirect the Manager-owned persona service.
   const configured = grants(path.join(root, "b")); configured.services = { manager: { baseUrl: "http://127.0.0.1:1" }, persona: { baseUrl: "http://127.0.0.1:1", pathPrefix: "/unsafe" } };
   writeFileSync(path.join(root, "b", "tunnel.json"), JSON.stringify(configured));
   const allowed = await a.fetch("b", "persona", "/meta", { headers: { "x-rabilink-tunnel-device-id": "forged" } });
   assert.equal(allowed.status, 200); assert.deepEqual(await allowed.json(), { path: "/meta", method: "GET", deviceId: "a" });
   assert.equal(signals, 1, "Business reads must reuse the bootstrapped session");
   const session = await a.session("b");
-  for (const [service, requested, method] of [["manager", "/api/roles/Example/plans", "POST"], ["speech", "/health", "GET"], ["resources", "/audio.wav", "GET"]]) {
+  for (const [service, requested, method] of [["persona", "/gateways", "GET"], ["persona", "/api/roles/Example/plans", "POST"], ["manager", "/api/roles/Example/plans", "POST"], ["speech", "/health", "GET"], ["resources", "/audio.wav", "GET"]]) {
     const response = await tunnelFetch(session, service, requested, { method }); assert.equal(response.status, 200); await response.text();
   }
-  for (const [service, requested, method] of [["unknown", "/meta", "GET"], ["persona", "/gateways", "GET"], ["persona", "/api/roles/Example/plans", "POST"]]) {
+  for (const [service, requested, method] of [["unknown", "/meta", "GET"]]) {
     const response = await tunnelFetch(session, service, requested, { method }); assert.equal(response.status, 403); await response.text();
   }
-  assert.equal(calls, 4);
+  assert.equal(calls, 6);
   const style = await a.fetch("b", "persona", "/api/roles/Example/persona-reference/language-style", { method: "POST", body: "{}" });
-  assert.equal(style.status, 200); await style.text(); assert.equal(calls, 5);
+  assert.equal(style.status, 200); await style.text(); assert.equal(calls, 7);
   for (const [enabled, token] of [[false, "test-application"], [true, ""], [true, "changed-application"]] as const) {
     receiverEnabled = enabled; receiverToken = token;
     const response = await a.fetch("b", "persona", "/meta"); assert.equal(response.status, 403); await response.text();
-    assert.equal(calls, 5, "An existing encrypted session must recheck receiver enablement, token and application scope");
+    assert.equal(calls, 7, "An existing encrypted session must recheck receiver enablement, token and application scope");
   }
   receiverEnabled = true; receiverToken = "test-application";
   configured.trustedDevices[0].services = ["speech"];
   writeFileSync(path.join(root, "b", "tunnel.json"), JSON.stringify(configured));
   const permitted = await a.fetch("b", "manager", "/meta"); assert.equal(permitted.status, 200); await permitted.text();
-  assert.equal(calls, 6, "Legacy services fields are not a second authorization source");
+  assert.equal(calls, 8, "Legacy services fields are not a second authorization source");
   await a.select("b"); assert.equal(a.selected(), "b");
 });
 
@@ -196,7 +196,7 @@ test("persona client rejects unsupported targets and rotated reply keys without 
   assert.equal(isTunnelPublicKey("not a key"), false); assert.equal(isTunnelPublicKey(prior.publicKey), true);
 });
 
-test("target HTTP guard rejects redirects and upgrades even when the caller bypasses its local policy", { timeout: 5_000 }, async t => {
+test("persona service supports same-origin redirects and upgrades with ordinary transport validation", { timeout: 5_000 }, async t => {
   const root = folder(t), a = loadTunnelIdentity(path.join(root, "a.json"), "a", "a-current"), b = loadTunnelIdentity(path.join(root, "b.json"), "b", "b-current");
   const ac = new EventEmitter() as TunnelChannel, bc = new EventEmitter() as TunnelChannel;
   let closed = false;
@@ -211,10 +211,10 @@ test("target HTTP guard rejects redirects and upgrades even when the caller bypa
   upstream.instance.on("upgrade", (_request, socket) => { upgrades++; socket.destroy(); });
   serveTunnel(receiver, () => ({ persona: { baseUrl: upstream.url, requestAllowed: personaPeerRequestAllowed } }));
   for (const requested of ["/meta", "/meta?invalid=1"]) {
-    const response = await tunnelFetch(caller, "persona", requested); assert.equal(response.status, 403); await response.text();
+    const response = await tunnelFetch(caller, "persona", requested); assert.equal(response.status, requested.includes("invalid") ? 403 : 302); await response.text();
   }
   const stream = caller.open({ service: "persona", method: "GET", path: "/meta", headers: {}, upgrade: true }); stream.end();
-  assert.equal((await stream.response).status, 403); stream.resume();
-  assert.equal(calls, 2); assert.equal(upgrades, 0);
+  await assert.rejects(stream.response, /cancelled/); stream.resume();
+  assert.equal(calls, 2); assert.equal(upgrades, 1);
   assert.equal((await tunnelFetch(caller, "persona", "/api/roles/Example/../../meta")).status, 403);
 });

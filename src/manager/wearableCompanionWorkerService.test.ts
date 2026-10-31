@@ -97,7 +97,7 @@ test("Manager directly owns the wearable worker lease and dispose removes it", a
     const registry = new ProcessLeaseRegistry(async candidate => {
       const fake = candidate as unknown as FakeChild;
       fake.exitCode = 0;
-      fake.emit("exit", 0);
+      fake.emit("exit", 0); fake.emit("close", 0);
     });
     const service = new WearableCompanionWorkerService(runtime, registry, {
       spawn(file, args, options) {
@@ -138,7 +138,7 @@ test("concurrent dispose calls share one termination attempt", async () => {
       await new Promise(resolve => setImmediate(resolve));
       const fake = candidate as unknown as FakeChild;
       fake.exitCode = 0;
-      fake.emit("exit", 0);
+      fake.emit("exit", 0); fake.emit("close", 0);
     });
     const service = new WearableCompanionWorkerService(runtime, registry, {
       spawn: () => child as unknown as ChildProcess
@@ -180,7 +180,7 @@ test("unexpected worker crashes respawn with bounded backoff and keep terminal f
     for (let crash = 0; crash < 4; crash += 1) {
       const child = children.at(-1)!;
       child.exitCode = 21;
-      child.emit("exit", 21);
+      child.emit("exit", 21); child.emit("close", 21);
       assert.equal(registry.list().length, 0);
       if (crash < 3) {
         assert.equal(scheduler.pending(), 1);
@@ -229,7 +229,7 @@ test("dispose during retry backoff cancels respawn", async () => {
     });
     const handle = service.launch(identity, resourceRoot, { roleId: "YeYu", serial: "" });
     children[0]!.exitCode = 21;
-    children[0]!.emit("exit", 21);
+    children[0]!.emit("exit", 21); children[0]!.emit("close", 21);
     assert.equal(scheduler.pending(), 1);
 
     await handle.dispose();
@@ -276,7 +276,7 @@ test("Host READY gate prevents any worker lease before publication", async () =>
     const registry = new ProcessLeaseRegistry(async candidate => {
       const child = candidate as unknown as FakeChild;
       child.exitCode = 0;
-      child.emit("exit", 0);
+      child.emit("exit", 0); child.emit("close", 0);
     });
     let spawnCount = 0;
     const service = new WearableCompanionWorkerService(runtime, registry, {
@@ -334,7 +334,7 @@ test("plugin generation handoff never overlaps wearable worker leases", async ()
     const registry = new ProcessLeaseRegistry(async candidate => {
       const child = candidate as unknown as FakeChild;
       child.exitCode = 0;
-      child.emit("exit", 0);
+      child.emit("exit", 0); child.emit("close", 0);
     });
     const service = new WearableCompanionWorkerService(runtime, registry, {
       spawn: () => {
@@ -405,7 +405,7 @@ test("a live-child error cannot release the wearable lease or start a replacemen
     assert.equal(registry.list().length, 1);
 
     children[0]!.exitCode = 0;
-    children[0]!.emit("exit", 0);
+    children[0]!.emit("exit", 0); children[0]!.emit("close", 0);
     assert.equal(registry.list().length, 0);
     await newHandle.dispose();
   } finally {
@@ -423,7 +423,7 @@ test("a failed handle dispose retains its lease and retries the same child", asy
       if (stopAttempts === 1) throw new Error("first process-tree stop failed");
       const fake = candidate as unknown as FakeChild;
       fake.exitCode = 0;
-      fake.emit("exit", 0);
+      fake.emit("exit", 0); fake.emit("close", 0);
     }, { terminationTimeoutMs: 10 });
     const service = new WearableCompanionWorkerService(runtime, registry, {
       spawn: () => child as unknown as ChildProcess
@@ -456,7 +456,7 @@ test("a retried dispose releases a waiting replacement before the handoff deadli
         throw new Error("first process-tree stop failed");
       }
       fake.exitCode = 0;
-      fake.emit("exit", 0);
+      fake.emit("exit", 0); fake.emit("close", 0);
     }, { terminationTimeoutMs: 10 });
     const service = new WearableCompanionWorkerService(runtime, registry, {
       spawn: () => {
@@ -539,7 +539,7 @@ test("failed predecessor termination never publishes a second wearable worker", 
     assert.equal(registry.list().length, 1);
     await newHandle.dispose();
     children[0]!.exitCode = 0;
-    children[0]!.emit("exit", 0);
+    children[0]!.emit("exit", 0); children[0]!.emit("close", 0);
     assert.equal(registry.list().length, 0);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });

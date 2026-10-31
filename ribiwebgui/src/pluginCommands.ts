@@ -10,6 +10,7 @@ export type WebCommandState = Readonly<{
 }>;
 
 export type WebCommandContext = Readonly<{
+  createRole: () => void;
   openQuickSetup: () => void;
   addRoute: () => void;
   openManagerConfig: () => void;

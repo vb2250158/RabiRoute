@@ -217,14 +217,14 @@ internal sealed class HostLog : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         try { _entries.Writer.TryComplete(); } catch { }
-        try { await Task.WhenAny(_writer, Task.Delay(TimeSpan.FromSeconds(2))); } catch { }
+        try { await Task.WhenAny(_writer, Task.Delay(HostTimeouts.Get("host.log.flush", TimeSpan.FromSeconds(2)))); } catch { }
     }
 }
 
 internal sealed class ApplicationGeneration : IAsyncDisposable
 {
-    internal static readonly TimeSpan ManagerReadyTimeout = TimeSpan.FromMinutes(3);
-    internal static readonly TimeSpan TrayReadyTimeout = TimeSpan.FromMinutes(2);
+    internal static TimeSpan ManagerReadyTimeout => HostTimeouts.Get("host.manager.ready", TimeSpan.FromMinutes(3));
+    internal static TimeSpan TrayReadyTimeout => HostTimeouts.Get("host.tray.ready", TimeSpan.FromMinutes(2));
 
     private static readonly TimeSpan HealthProbeInterval = TimeSpan.FromSeconds(2);
     private const int ConsecutiveProbeFailureLimit = 3;
@@ -324,6 +324,7 @@ internal sealed class ApplicationGeneration : IAsyncDisposable
         new Dictionary<string, string?>
         {
             ["PYTHONDONTWRITEBYTECODE"] = "1",
+            ["RABIROUTE_TIMEOUT_OVERRIDES"] = HostTimeouts.SnapshotJson(),
             ["RABIROUTE_HOSTED"] = "1",
             ["RABIROUTE_APPLICATION_GENERATION_ID"] = generationId,
             ["RABIROUTE_HOST_CONTROL_TOKEN"] = null,
@@ -394,7 +395,7 @@ internal sealed class ApplicationGeneration : IAsyncDisposable
 
             using (var admission = new ManagerLifecycleClient())
             {
-                var admissionDeadline = DateTimeOffset.UtcNow + TimeSpan.FromSeconds(30);
+                var admissionDeadline = DateTimeOffset.UtcNow + HostTimeouts.Get("host.process.admission", TimeSpan.FromSeconds(30));
                 ManagerProbeResult? lastProbe = null;
                 while (DateTimeOffset.UtcNow < admissionDeadline)
                 {
@@ -463,7 +464,7 @@ internal sealed class ApplicationGeneration : IAsyncDisposable
             }
             using (var finalAdmission = new ManagerLifecycleClient())
             {
-                var admissionDeadline = DateTimeOffset.UtcNow + TimeSpan.FromSeconds(30);
+                var admissionDeadline = DateTimeOffset.UtcNow + HostTimeouts.Get("host.process.admission", TimeSpan.FromSeconds(30));
                 ManagerProbeResult? finalProbe = null;
                 do
                 {
@@ -520,11 +521,11 @@ internal sealed class ApplicationGeneration : IAsyncDisposable
         {
             if (!_tray.HasExited)
             {
-                var sent = await _trayLifecycle.RequestShutdownAsync(TimeSpan.FromSeconds(3), CancellationToken.None);
+                var sent = await _trayLifecycle.RequestShutdownAsync(HostTimeouts.Get("host.tray.shutdownRequest", TimeSpan.FromSeconds(3)), CancellationToken.None);
                 _log.Write($"generation={Id} Tray graceful shutdown sent={sent}");
                 if (sent)
                 {
-                    await Task.WhenAny(_tray.WaitForExitAsync(), Task.Delay(TimeSpan.FromSeconds(5)));
+                    await Task.WhenAny(_tray.WaitForExitAsync(), Task.Delay(HostTimeouts.Get("host.tray.exit", TimeSpan.FromSeconds(5))));
                 }
             }
         }
@@ -540,7 +541,7 @@ internal sealed class ApplicationGeneration : IAsyncDisposable
                 _log.Write($"generation={Id} Manager graceful shutdown accepted={accepted}");
                 if (accepted)
                 {
-                    await Task.WhenAny(_manager.WaitForExitAsync(), Task.Delay(TimeSpan.FromSeconds(12)));
+                    await Task.WhenAny(_manager.WaitForExitAsync(), Task.Delay(HostTimeouts.Get("host.manager.exit", TimeSpan.FromSeconds(12))));
                 }
             }
         }
@@ -563,7 +564,7 @@ internal sealed class ApplicationGeneration : IAsyncDisposable
     {
         await StopAsync(reason);
         if (_job.MemberProcessIds().Count != 0) _job.Terminate(1);
-        var deadline = DateTimeOffset.UtcNow + TimeSpan.FromSeconds(10);
+        var deadline = DateTimeOffset.UtcNow + HostTimeouts.Get("host.process.exit", TimeSpan.FromSeconds(10));
         while (_job.MemberProcessIds().Count != 0 || !_manager.HasExited || !_tray.HasExited)
         {
             if (DateTimeOffset.UtcNow >= deadline) throw new InvalidOperationException("The identity reset generation did not become empty.");
@@ -927,7 +928,7 @@ internal sealed class HostRuntime
             lock (_mutationAcceptanceGate) _acceptingMutations = false;
             await CompletePendingForHostShutdownAsync("host_shutdown");
             await CompleteAcceptedMutationsForHostShutdownAsync("host_shutdown");
-            if (await Task.WhenAny(controlServer, Task.Delay(TimeSpan.FromSeconds(7))) != controlServer)
+            if (await Task.WhenAny(controlServer, Task.Delay(HostTimeouts.Get("host.control.exit", TimeSpan.FromSeconds(7)))) != controlServer)
             {
                 controlHandlerCancellation.Cancel();
             }
@@ -1651,7 +1652,7 @@ internal sealed class HostRuntime
                     peer,
                     ResolveActorKind(peer));
                 using var readCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                readCancellation.CancelAfter(TimeSpan.FromSeconds(5));
+                readCancellation.CancelAfter(HostTimeouts.Get("host.control.read", TimeSpan.FromSeconds(5)));
                 var request = await HostProtocol.ReadAsync<HostRequest>(server, readCancellation.Token);
                 requestedGenerationId = request.ApplicationGenerationId;
                 requestedCommand = string.IsNullOrWhiteSpace(request.Command)

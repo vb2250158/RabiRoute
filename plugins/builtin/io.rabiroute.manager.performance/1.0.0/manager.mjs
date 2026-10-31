@@ -59,62 +59,48 @@ export const activate = definePlugin({
             }
         ])
             context.contributions.register(contribution);
-        context.effects.add(async () => {
-            const pendingEffects = [];
-            const disposers = [];
-            const disposeStartedEffects = async () => {
-                let firstError;
-                for (const dispose of [...disposers].reverse()) {
-                    try { await dispose(); } catch (error) { firstError ??= error; }
-                }
-                if (firstError) throw firstError;
-            };
-            const ctx = Object.freeze({
-                effect(starter, label) {
-                    const pending = Promise.resolve().then(starter).then(dispose => {
-                        if (typeof dispose !== "function") throw new Error(`Plugin effect did not return a disposer: ${label ?? "effect"}.`);
-                        disposers.push(dispose);
-                        return dispose;
-                    });
-                    pendingEffects.push(pending);
-                    return pending;
-                }
-            });
-            try {
         const recordHttpRequest = (...args) => runtime.performanceMonitoring.recordHttpRequest(...args);
-        runtime.recordManagerHttpRequest = recordHttpRequest;
         const api = new runtime.PerformanceApi({
             service: runtime.performanceMonitoring,
             globalConfig: runtime.rabiGlobalConfig,
-            gatewayExists: gatewayId => Boolean(runtime.runtimes.get(gatewayId)),
-            readWorkerPool: runtime.managerPerformanceWorkerPool
+            gatewayExists: gatewayId => Boolean(runtime.runtimes.get(gatewayId))
         });
-        const requestTracker = new runtime.ManagerPluginRequestTracker();
-        ctx.effect(() => {
-            const unregister = runtime.registerManagerPluginHandlerRoutes(runtime.managerPluginRoutes, "manager:performance", "manager.performance.api", [
-                requestTracker.wrap((request, requestUrl, response) => api.handle(request, requestUrl, response))
-            ], [
-                { routeId: "performance", kind: "prefix", pathPrefix: "/api/performance/" }
+        const collector = runtime.performanceMonitoring.createActivation(runtime.managerReadOnly);
+        let operations;
+        let disposal;
+        let previousHttpHook;
+        const dispose = () => disposal ??= (async () => {
+            const results = await Promise.allSettled([
+                Promise.resolve().then(() => operations?.dispose()),
+                Promise.resolve().then(() => api.close())
             ]);
-            return async () => {
-                unregister();
+            if (runtime.recordManagerHttpRequest === recordHttpRequest)
+                runtime.recordManagerHttpRequest = () => { };
+            const collectorResult = await Promise.allSettled([Promise.resolve().then(() => collector.dispose())]);
+            const failures = [...results, ...collectorResult].filter(result => result.status === "rejected");
+            if (failures.length === 1) throw failures[0].reason;
+            if (failures.length > 1) throw new AggregateError(failures.map(result => result.reason), "Manager performance owner cleanup failed.");
+        })();
+        context.publication.add({
+            publish() {
+                previousHttpHook = runtime.recordManagerHttpRequest;
+                collector.publish();
+                runtime.recordManagerHttpRequest = recordHttpRequest;
+            },
+            rollback() {
                 if (runtime.recordManagerHttpRequest === recordHttpRequest)
-                    runtime.recordManagerHttpRequest = () => { };
-                await requestTracker.stop();
-                api.close();
-                await runtime.performanceMonitoring.stop();
-            };
-        }, "activate Manager performance plugin");
-        if (!runtime.managerReadOnly)
-            await runtime.performanceMonitoring.start();
-
-                await Promise.all(pendingEffects);
-                return disposeStartedEffects;
-            } catch (error) {
-                await Promise.allSettled(pendingEffects);
-                await disposeStartedEffects().catch(() => {});
-                throw error;
-            }
-        }, "activate io.rabiroute.manager.performance");
+                    runtime.recordManagerHttpRequest = previousHttpHook;
+                collector.rollback();
+            },
+            afterPublish: () => collector.start(),
+            retire: dispose
+        }, "publish Manager performance collector");
+        // Registration now yields; the candidate still owns its API and collector
+        // if cancellation rejects before the starter can return this disposer.
+        context.effects.adopt(dispose, "prepared Manager performance owner");
+        context.effects.add(async () => {
+            operations = await runtime.managerPluginRoutes.registerOperationsAsync(context.identity.instanceId, runtime.createPerformanceOperations(api), context.lifecycle.signal);
+            return dispose;
+        }, "activate Manager performance operations");
     }
 }).activate;

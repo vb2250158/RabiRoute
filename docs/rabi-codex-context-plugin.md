@@ -12,6 +12,12 @@
 
 Manager 将角色资料与知识召回的物理读取交给受限存储进程，保留原有召回与查看时间规则。同一会话的上下文请求按顺序处理；每次异步读取后复核会话归属与绑定，解绑或变更会拒绝迟到结果。读取失败不记录成功指纹，可恢复后重试，慢存储期间健康请求仍可响应。
 
+## 安装位置与发现失败
+
+Codex、WorkBuddy 和 Antigravity 的 Hook 共享同一 Host 发现实现，独立插件包包含该实现的生成副本。显式 Manager 地址仍核对 `/meta`；否则使用 `RABIROUTE_HOST_EXE`、Host 发布的 `RABIROUTE_HOST_EXECUTABLE` 或标准安装位置，并可读取 `RABIROUTE_MANAGER_ENDPOINT_FILE`。没有显式指定安装且标准入口不可用时，按精确 Host 进程名取得实际可执行路径，等待 `status --json` 完整输出后核对 generation、instance 和 `/meta`。不扫描端口，不启动或停止服务。
+
+发现失败提示“Host 状态尚未确认”，并指出可配置的 Host/端点文件入口；缺失默认路径不能推断 Host 未运行。显式指定安装时不静默切换到其它安装。源码回归覆盖非默认安装；升级插件后仍需在目标机器核验。
+
 ## 角色可配置的 Stop 追问
 
 已绑定角色的 Stop 只检查该角色的恢复状态，并在同一角色范围内查找计划追问、文件变更提醒和完成通知。其它角色恢复失败不会阻断它；当前角色未恢复时仍在写入前返回 `PLAN_STORAGE_STARTUP_UNAVAILABLE`。未绑定角色的会话仍需等待全部计划恢复后，才能跨角色查找任务绑定。
@@ -190,6 +196,8 @@ codex plugin add rabi-codex-context@rabiroute-local
 
 
 ## 完成通知的内容与配置
+
+完整的心跳控制回复（`heartbeat` 内依次为 `automation_id`、`decision`、`message`）在发送前处理：`DONT_NOTIFY` 不发通知，`NOTIFY` 只发送 `message` 正文；正文为空也不发送。原始 Hook 内容保留给其它消费者。普通回复、代码块中的示例和未识别的格式不做通用标签删除，避免误删业务内容。
 
 完成通知只读取角色 `codexHooks.completionDeliveries` 与绑定计划 `messageChannels` 的显式目标，不根据私有项目路径或问题记录推断发送对象。两者命中同一目标时，每个任务轮次只发送一次。来源任务名称按完整任务 ID 从 Desktop 当前名称读取，无法读取时显示“未命名任务”，不使用旧计划绑定名称。正文保留完整最终回复，不追加计划中的旧“下一步”；QQ 长消息按最多 3000 个 UTF-16 单元分段，保留换行与完整 Unicode 字符，每段复用独立 Outbox 回执，失败时不继续发送后续段。
 

@@ -8,6 +8,8 @@ export class WebPatchWatcher {
   private running = false;
   private dirty = false;
   private stopped = false;
+  private readonly abort = new AbortController();
+  private flight?: Promise<void>;
 
   constructor(private readonly root: string, private readonly service: WebPatchService, private readonly onError: (error: unknown) => void) {
     this.refresh();
@@ -32,22 +34,24 @@ export class WebPatchWatcher {
     if (this.stopped) return;
     this.dirty = true;
     if (this.running || this.timer) return;
-    this.timer = setTimeout(() => { this.timer = undefined; void this.run(); }, 200);
+    this.timer = setTimeout(() => { this.timer = undefined; this.flight = this.run(); }, 200);
   }
 
   private async run(): Promise<void> {
     if (this.stopped) return;
     this.running = true;
     this.dirty = false;
-    try { this.refresh(); await this.service.automatic(this.root); }
-    catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") this.onError(error); }
+    try { this.refresh(); await this.service.automatic(this.root, this.abort.signal); }
+    catch (error) { if (!this.abort.signal.aborted && (error as NodeJS.ErrnoException).code !== "ENOENT") this.onError(error); }
     finally { this.running = false; if (this.dirty) this.schedule(); }
   }
 
-  stop(): void {
+  async stop(): Promise<void> {
     this.stopped = true;
     if (this.timer) clearTimeout(this.timer);
     for (const watcher of this.watchers) watcher.close();
     this.watchers = [];
+    this.abort.abort(new Error("Web patch watcher stopped."));
+    await this.flight;
   }
 }

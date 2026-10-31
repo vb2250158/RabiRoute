@@ -1,3 +1,4 @@
+import { getTimeoutMs } from "../shared/timeoutSettings.js";
 import { execFile } from "node:child_process";
 import { createDecipheriv, createHash } from "node:crypto";
 import fs from "node:fs";
@@ -132,7 +133,7 @@ function int64(value: unknown): string | undefined {
   return typeof value === "string" && /^\d+$/.test(value) ? value : undefined;
 }
 function boundedTimeout(value: number | undefined, fallback: number): number {
-  if (value !== undefined && (!Number.isFinite(value) || value < 1_000 || value > 60_000)) throw new GrokBotError("GROK_BOT_TIMEOUT_INVALID");
+  if (value !== undefined && (!Number.isFinite(value) || value < 1_000 || value > 2147483647)) throw new GrokBotError("GROK_BOT_TIMEOUT_INVALID");
   return Math.floor(value ?? fallback);
 }
 function nativeSessionId(value: string, defaultMain?: true): string {
@@ -292,7 +293,7 @@ export async function readGrokBotNativeProfile(options: NativeProfileOptions = {
   if (process.platform !== "win32") throw new GrokBotError("GROK_BOT_PLATFORM_UNSUPPORTED");
   const profilePath = grokBotProfilePath(options.profilePath);
   const script = grokBotProfileScriptPath(options);
-  const timeoutMs = boundedTimeout(options.timeoutMs, 30_000);
+  const timeoutMs = boundedTimeout(options.timeoutMs, getTimeoutMs("agent.grok.profile", 30000));
   let helperIdentity = 0;
   if (options.runProfileHelper) {
     helperIdentity = helperIdentities.get(options.runProfileHelper) ?? ++nextHelperIdentity;
@@ -337,7 +338,7 @@ export class GrokBotClient {
   readonly backendUrl: string;
   private readonly options: GrokBotClientOptions;
   constructor(options: GrokBotClientOptions = {}) {
-    boundedTimeout(options.timeoutMs, 30_000);
+    boundedTimeout(options.timeoutMs, getTimeoutMs("agent.grok.profile", 30000));
     this.options = options;
     this.backendUrl = normalizeGrokBotBackendUrl(options.backendUrl);
     if (typeof options.readProfile !== "function" && new URL(this.backendUrl).origin !== new URL(DEFAULT_GROK_BOT_BACKEND_URL).origin) {
@@ -366,7 +367,7 @@ export class GrokBotClient {
     let response: Response;
     try {
       response = await (this.options.request || fetch)(new URL("/" + SERVICE_PATH + method, this.backendUrl), {
-        method: "POST", headers, body: JSON.stringify(body), signal: AbortSignal.timeout(boundedTimeout(this.options.timeoutMs, 20_000)), redirect: "error" });
+        method: "POST", headers, body: JSON.stringify(body), signal: AbortSignal.timeout(boundedTimeout(this.options.timeoutMs, getTimeoutMs("agent.grok.request", 20000))), redirect: "error" });
     } catch { throw new GrokBotError("GROK_BOT_TRANSPORT_UNAVAILABLE", { uncertain: true }); }
     if (!response.ok) {
       const status = response.status;

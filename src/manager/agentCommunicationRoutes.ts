@@ -5,18 +5,23 @@ import { createHash } from "node:crypto";
 function discoveryDigest(value: unknown): string {
   return `sha256:${createHash("sha256").update(JSON.stringify(value)).digest("hex")}`;
 }
-import { AGENT_SEND_CHANNEL_HELP, AGENT_SEND_REQUEST_CONTRACT, type AgentSendRequest } from "../agentSend.js";
+import type { AgentSendRequest } from "../agentSend.js";
+import { createAgentSendOperations, agentSendCapabilities, agentSendError, runAgentSend } from "./agentSendOperations.js";
 import { listAgentApiOperations } from "./agentApiPolicy.js";
 import type { AgentRequestStore } from "../agentRequests/store.js";
 import type { AgentSendTraceQuery } from "./agentSendIdempotency.js";
-import { getTrustedLanAgentSource, hasLanAgentBodyGuard, type TrustedLanAgentSource } from "./lanAgentBodyAuthority.js";
+import { type TrustedLanAgentSource } from "./lanAgentBodyAuthority.js";
 import { ManagerPluginRequestTracker } from "./managerPluginRequestTracker.js";
-import { assertTrustedLanAgentPrincipal } from "./lanAgentRequestAccess.js";
-import { handleAgentQqDiagnostics, type AgentQqDiagnosticsContext } from "./agentQqDiagnostics.js";
-import { handleAgentGroupFiles, type AgentGroupFilesContext } from "./agentGroupFiles.js";
-import { handleQqMessageRoutes, type QqMessageRoutesContext } from "./qqMessageRoutes.js";
-import { handleQqStickerRoutes } from "./qqStickerRoutes.js";
+import { createAgentQqDiagnosticsOperation, handleAgentQqDiagnostics, type AgentQqDiagnosticsContext } from "./agentQqDiagnostics.js";
+import { createAgentReceiptMaintenanceOperations, runAgentReceiptMaintenance, agentReceiptMaintenanceFailure } from "./agentSendReceiptOperations.js";
+import { createAgentCommunicationRecordOperations, readAgentRequests, readAgentRequest, cancelAgentRequest, readAgentSendTraces } from "./agentCommunicationRecordOperations.js";
+import type { ApiOperationDefinition } from "./apiOperationContract.js";
+import { createAgentChatHistoryOperation, readAgentChatHistoryResult } from "./agentChatHistoryOperation.js";
+import { createAgentGroupFilesOperation, handleAgentGroupFiles, type AgentGroupFilesContext } from "./agentGroupFiles.js";
+import { createQqMessageOperations, handleQqMessageRoutes, type QqMessageRoutesContext } from "./qqMessageRoutes.js";
+import { createQqStickerOperations, handleQqStickerRoutes } from "./qqStickerRoutes.js";
 import type { ManagerPluginRouteHandler } from "./managerPluginRouteRegistry.js";
+import { createAgentDeliveryRecordOperations, readDeliveryRecords, type DeliveryRecordsContext } from "./agentDeliveryRecords.js";
 
 export type AgentCommunicationHttpResponse = {
   statusCode: number;
@@ -24,6 +29,7 @@ export type AgentCommunicationHttpResponse = {
 };
 
 export type AgentCommunicationRoutesContext = {
+  readNodeDeliveryRecords?: DeliveryRecordsContext["readNodeDeliveryRecords"];
   readJsonBody: <T>(request: http.IncomingMessage) => Promise<T>;
   jsonResponse: (response: http.ServerResponse, statusCode: number, body: unknown) => void;
   receiptResponse: (deliveryId: string) => AgentCommunicationHttpResponse;
@@ -45,6 +51,7 @@ export type AgentCommunicationRoutesContext = {
 
 export type AgentCommunicationRoutes = {
   handler: ManagerPluginRouteHandler;
+  operations: readonly ApiOperationDefinition[];
   stopAcceptingAndDrain: () => Promise<void>;
   activeRequestCount: () => number;
 };
@@ -66,54 +73,38 @@ function handleAgentRequests(
   context: AgentCommunicationRoutesContext,
   trackOperation: TrackOperation
 ): boolean {
+  const deliveryMatch = requestUrl.pathname.match(/^\/api\/agent\/deliveries(?:\/([^/]+))?$/);
+  if (request.method === "GET" && deliveryMatch) {
+    trackHandledOperation(readDeliveryRecords(context, requestUrl, deliveryMatch[1] ? decodeURIComponent(deliveryMatch[1]) : undefined)
+      .then(result => { context.jsonResponse(response, result.status, result.body); }), trackOperation);
+    return true;
+  }
   if (request.method === "GET" && requestUrl.pathname === "/api/agent/chat-history") {
-    if (!context.readChatHistory) {
-      context.jsonResponse(response, 503, { code: -1, message: "Chat history reader is unavailable." }); return true;
-    }
-    trackHandledOperation((async () => {
-      try {
-        assertTrustedLanAgentPrincipal(request);
-        const data = await context.readChatHistory!(requestUrl);
-        assertTrustedLanAgentPrincipal(request);
-        context.jsonResponse(response, 200, { code: 0, data });
-      } catch (error) {
-        context.jsonResponse(response, 400, { code: -1, message: errorMessage(error) });
-      }
-    })(), trackOperation);
+    trackHandledOperation(readAgentChatHistoryResult(request, requestUrl, context)
+      .then(result => { context.jsonResponse(response, result.status, result.body); }), trackOperation);
     return true;
   }
   if (request.method === "GET" && requestUrl.pathname === "/api/agent/requests") {
-    const status = requestUrl.searchParams.get("status")?.trim();
-    const requests = context.agentRequests.list().filter(item => !status || item.status === status);
-    context.jsonResponse(response, 200, { code: 0, data: { requests } });
+    trackHandledOperation(readAgentRequests(requestUrl, context)
+      .then(result => { context.jsonResponse(response, result.status, result.body); }), trackOperation);
     return true;
   }
 
   const requestMatch = requestUrl.pathname.match(/^\/api\/agent\/requests\/([^/]+)$/);
   if (request.method === "GET" && requestMatch) {
     const requestId = decodeURIComponent(requestMatch[1]);
-    const item = context.agentRequests.get(requestId);
-    if (!item) {
-      context.jsonResponse(response, 404, { code: -1, message: `Agent request not found: ${requestId}` });
-      return true;
-    }
-    context.jsonResponse(response, 200, { code: 0, data: item });
+    const result = readAgentRequest(requestId, context);
+    context.jsonResponse(response, result.status, result.body);
     return true;
   }
 
   const cancelMatch = requestUrl.pathname.match(/^\/api\/agent\/requests\/([^/]+)\/cancel$/);
   if (request.method === "POST" && cancelMatch) {
     const requestId = decodeURIComponent(cancelMatch[1]);
-    trackHandledOperation(context.readJsonBody<{ reason?: string }>(request)
-      .then(body => context.agentRequests.cancel(requestId, body.reason))
-      .then(data => {
-        context.refreshAgentRequestReminderTimers();
-        context.publishManagerEvent("agent_requests_changed", { requestId: data.id, status: data.status });
-        context.jsonResponse(response, 200, { code: 0, data });
-      })
-      .catch(error => {
-        context.jsonResponse(response, 400, { code: -1, message: errorMessage(error) });
-      }), trackOperation);
+    trackHandledOperation(context.readJsonBody(request)
+      .then(body => cancelAgentRequest(requestId, body, context))
+      .then(result => { context.jsonResponse(response, result.status, result.body); })
+      .catch(error => { context.jsonResponse(response, 400, { code: -1, message: errorMessage(error) }); }), trackOperation);
     return true;
   }
 
@@ -146,51 +137,17 @@ function handleReceiptMaintenance(
 ): boolean {
   const match = requestUrl.pathname.match(/^\/api\/agent\/send\/receipts\/([^/]+)\/(verify|settle)$/);
   if (request.method !== "POST" || !match) return false;
-  const fail = (statusCode: number, errorCode: string, message: string) => {
-    context.jsonResponse(response, statusCode, { code: -1, ok: false, status: "blocked", errorCode, message });
-  };
-  if (!context.maintenance || typeof context.maintenance[match[2] as "verify" | "settle"] !== "function") {
-    fail(503, "AGENT_SEND_MAINTENANCE_UNAVAILABLE", "Receipt maintenance is unavailable.");
-    return true;
-  }
-  const maintenance = context.maintenance;
   trackHandledOperation(Promise.resolve().then(async () => {
-    let deliveryId: string;
-    try { deliveryId = decodeURIComponent(match[1]); } catch {
-      fail(400, "AGENT_SEND_MAINTENANCE_INVALID_REQUEST", "Invalid receipt maintenance request.");
-      return;
+    const action = match[2] as "verify" | "settle";
+    let result;
+    try {
+      const id = decodeURIComponent(match[1]);
+      const body = context.maintenance && typeof context.maintenance[action] === "function" ? await context.readJsonBody(request) : undefined;
+      result = await runAgentReceiptMaintenance(request, requestUrl, id, action, body, context);
+    } catch {
+      result = agentReceiptMaintenanceFailure(400, "AGENT_SEND_MAINTENANCE_FAILED", "Receipt maintenance failed; read the original receipt before further action.");
     }
-    const body = await context.readJsonBody<unknown>(request);
-    const isObject = (value: unknown): value is Record<string, unknown> => Boolean(value) && typeof value === "object" && !Array.isArray(value);
-    const originalRequest = isObject(body) ? body.originalRequest : undefined;
-    const allowedFields = ["deliveryId", "sender", "routeId", "channel", "params", "payload", "tracking", "styleValidation", "messageLengthConfirmation"];
-    if (requestUrl.search || deliveryId.length > 200 || !/^[A-Za-z0-9._:-]+$/.test(deliveryId)
-      || !isObject(body) || Object.keys(body).length !== 1 || !isObject(originalRequest)
-      || Object.keys(originalRequest).some(key => !allowedFields.includes(key))
-      || originalRequest.deliveryId !== deliveryId
-      || !isObject(originalRequest.sender)
-      || Object.keys(originalRequest.sender).some(key => !["agentType", "sessionId"].includes(key))
-      || typeof originalRequest.sender.agentType !== "string" || !originalRequest.sender.agentType.trim()
-      || typeof originalRequest.sender.sessionId !== "string" || !originalRequest.sender.sessionId.trim()
-      || typeof originalRequest.routeId !== "string" || !originalRequest.routeId.trim()
-      || typeof originalRequest.channel !== "string" || !originalRequest.channel.trim()
-      || !isObject(originalRequest.params) || !isObject(originalRequest.payload)) {
-      fail(400, "AGENT_SEND_MAINTENANCE_INVALID_REQUEST", "Invalid receipt maintenance request.");
-      return;
-    }
-    const remoteSource = getTrustedLanAgentSource(request);
-    if (hasLanAgentBodyGuard(request) && !remoteSource) {
-      fail(403, "AGENT_SEND_MAINTENANCE_SOURCE_UNAVAILABLE", "Trusted source session is unavailable.");
-      return;
-    }
-    const requestAuthority = () => { assertTrustedLanAgentPrincipal(request); };
-    requestAuthority();
-    const result = await maintenance[match[2] as "verify" | "settle"](deliveryId, originalRequest, { remoteSource, requestAuthority });
-    requestAuthority();
-    context.jsonResponse(response, result.statusCode, { code: result.statusCode < 400 ? 0 : -1, ...result.body });
-  }).catch(() => {
-    // Parser and injected-handler exceptions may contain the original request or secrets.
-    fail(400, "AGENT_SEND_MAINTENANCE_FAILED", "Receipt maintenance failed; read the original receipt before further action.");
+    context.jsonResponse(response, result.status, result.body);
   }), trackOperation);
   return true;
 }
@@ -203,16 +160,8 @@ function handleTraces(
 ): boolean {
   if (request.method !== "GET" || requestUrl.pathname !== "/api/agent/send/traces") return false;
 
-  try {
-    const matches = context.findSendTraces({
-      channel: requestUrl.searchParams.get("channel"),
-      sentMessageId: requestUrl.searchParams.get("sentMessageId"),
-      routeId: requestUrl.searchParams.get("routeId")
-    });
-    context.jsonResponse(response, 200, { code: 0, data: { matches } });
-  } catch (error) {
-    context.jsonResponse(response, 400, { code: -1, message: errorMessage(error) });
-  }
+  const result = readAgentSendTraces(requestUrl, context);
+  context.jsonResponse(response, result.status, result.body);
   return true;
 }
 
@@ -275,23 +224,8 @@ function handleSendCapabilities(
   context: AgentCommunicationRoutesContext
 ): boolean {
   if (request.method !== "GET" || requestUrl.pathname !== "/api/agent/send/capabilities") return false;
-  context.jsonResponse(response, 200, {
-    code: 0,
-    data: {
-      schemaVersion: "1",
-      contractRevision: "agent-send-help-1",
-      channelsDigest: discoveryDigest(AGENT_SEND_CHANNEL_HELP),
-      requestContractDigest: discoveryDigest(AGENT_SEND_REQUEST_CONTRACT),
-      requestContract: AGENT_SEND_REQUEST_CONTRACT,
-      generatedAt: new Date().toISOString(),
-      channels: AGENT_SEND_CHANNEL_HELP,
-      contract: {
-        deliveryId: "stable caller-generated ID",
-        retryRule: "On timeout or uncertain result, keep the same deliveryId and GET /api/agent/send/receipts/{deliveryId}; do not change channel or resend automatically.",
-        qq: "QQ/NapCat uses channel=napcat, params.target=group|private; channel=qq is unsupported."
-      }
-    }
-  });
+  const result = agentSendCapabilities();
+  context.jsonResponse(response, result.status, result.body);
   return true;
 }
 
@@ -305,43 +239,9 @@ function handleSend(
   if (request.method !== "POST" || requestUrl.pathname !== "/api/agent/send") return false;
 
   trackHandledOperation(context.readJsonBody<AgentSendRequest>(request)
-    .then(body => {
-      const remoteSource = getTrustedLanAgentSource(request);
-      if (hasLanAgentBodyGuard(request) && !remoteSource) {
-        throw new Error("Remote Agent trusted source session is unavailable.");
-      }
-      const requestAuthority = () => { assertTrustedLanAgentPrincipal(request); };
-      requestAuthority();
-      return context.send(body, { remoteSource, requestAuthority });
-    })
-    .then(result => {
-      assertTrustedLanAgentPrincipal(request);
-      context.jsonResponse(response, result.statusCode, {
-        code: result.body.ok ? 0 : -1,
-        ...result.body
-      });
-    })
-    .catch(error => {
-      context.jsonResponse(response, 400, {
-        code: -1,
-        ok: false,
-        status: "blocked",
-        message: errorMessage(error),
-        ...(error && typeof error === "object" ? {
-          errorCode: typeof (error as { code?: unknown }).code === "string" ? (error as { code: string }).code : "AGENT_SEND_CONTRACT_ERROR",
-          supportedChannels: Array.isArray((error as { supportedChannels?: unknown }).supportedChannels) ? (error as { supportedChannels: string[] }).supportedChannels : undefined,
-          help: Array.isArray((error as { help?: unknown }).help) ? (error as { help: unknown[] }).help : undefined,
-          repair: typeof (error as { repair?: unknown }).repair === "string" ? (error as { repair: string }).repair : undefined
-        } : {}),
-        contract: {
-          method: "POST",
-          path: "/api/agent/send",
-          requiredFields: ["deliveryId", "sender", "routeId", "channel", "params", "payload"],
-          senderFields: ["agentType", "sessionId"],
-          retryRule: "Keep the same deliveryId; on timeout or uncertain result, GET /api/agent/send/receipts/{deliveryId} before retrying."
-        }
-      });
-    }), trackOperation);
+    .then(body => runAgentSend(request, body, context))
+    .catch(agentSendError)
+    .then(result => { context.jsonResponse(response, result.status, result.body); }), trackOperation);
   return true;
 }
 
@@ -381,6 +281,9 @@ export function createAgentCommunicationRoutes(
 ): AgentCommunicationRoutes {
   const requestTracker = new ManagerPluginRequestTracker();
   return {
+    operations: [createAgentChatHistoryOperation(context), createAgentQqDiagnosticsOperation(context.qqDiagnostics), createAgentGroupFilesOperation(context.groupFiles),
+      ...(context.qqMessages ? [...createQqMessageOperations(context.qqMessages), ...createQqStickerOperations(context.qqMessages)] : []),
+      ...createAgentSendOperations(context), ...createAgentReceiptMaintenanceOperations(context), ...createAgentCommunicationRecordOperations(context), ...createAgentDeliveryRecordOperations(context)],
     handler: requestTracker.wrap((request, requestUrl, response) => (
       handleAgentCommunicationApi(
         request,

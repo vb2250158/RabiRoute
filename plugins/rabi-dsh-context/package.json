@@ -1,11 +1,12 @@
 {
   "name": "rabi-dsh-context",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "type": "module",
   "main": "index.mjs",
   "files": [
     "index.mjs",
     "manager-client.mjs",
+    "timeout-settings.mjs",
     "cordis.patch.yml",
     "README.md",
     "README_en.md",

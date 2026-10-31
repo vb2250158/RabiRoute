@@ -45,6 +45,38 @@ test("every platform enrolls only the computer client without an installer Agent
   }
 });
 
+test("existing installations are inspected before download and retain their identity across repair", () => {
+  for (const platform of ["windows", "macos", "linux"] as const) {
+    const prompt = buildLanAgentBootstrapPrompt({ managerUrl: "https://manager.test", token: "fixture-only", publicKeySha256: "a".repeat(64), platform });
+    assert.ok(prompt.indexOf("先盘点已有状态") < prompt.indexOf("/api/lan-agent/releases/manifest"));
+    assert.match(prompt, /配置有效且运行版本、内容和能力均符合当前发布时直接复用/);
+    assert.match(prompt, /已安装但离线时用原启动器恢复连接/);
+    assert.match(prompt, /磁盘已更新而进程仍旧/);
+    assert.match(prompt, /网络超时、服务异常或 connected=false 不等于凭据失效/);
+    assert.match(prompt, /所有启动都明确 --config <同一私有配置绝对路径>/);
+    assert.match(prompt, /多个配置或目标 Manager 身份不符时停止该实例的写入/);
+    assert.match(prompt, /nodeId、nodeCredential、执行程序设置、workspace、允许目录、autoUpdate 和用户禁用项/);
+    assert.match(prompt, /release-identity\.json/);
+    assert.match(prompt, /不能因版本号相同跳过内容核验/);
+    assert.match(prompt, /只下载新版或重跑旧 bootstrap 不会替换有效的旧指针/);
+  }
+});
+
+test("replacement verifies the running connector before retiring old entrypoints or resuming work", () => {
+  const prompt = buildLanAgentBootstrapPrompt({ managerUrl: "https://manager.test", token: "fixture-only", publicKeySha256: "a".repeat(64), platform: "windows" });
+  assert.ok(prompt.indexOf("写前将原私有配置") < prompt.indexOf("先等已接收任务结束"));
+  assert.ok(prompt.indexOf("验收以实际运行结果为准") < prompt.indexOf("先说明具体删除范围"));
+  assert.match(prompt, /确认退出后才切换/);
+  assert.match(prompt, /失败先确认候选退出，再恢复原指针/);
+  assert.match(prompt, /凭据修复已经生效时保留有效新凭据/);
+  assert.match(prompt, /无运行进程和当前指针\/Hook\/启动项引用、不属于其它配置/);
+  assert.match(prompt, /不跟随符号链接或目录联接，不删除整个安装根/);
+  assert.match(prompt, /验证失败不清旧版/);
+  assert.match(prompt, /不保留可再次启动旧连接器的活跃入口/);
+  assert.match(prompt, /回到原任务，复用已有构建产物、上传文件及回执/);
+  assert.doesNotMatch(prompt, /安装到 .*releases\/<version>；|只检查返回的自身 nodeId 与 connected/);
+});
+
 test("copy installs only a freshly issued ticket, never the WebGUI admin token", async () => {
   const source = fs.readFileSync(new URL("../src/pages/LanAgentsPage.vue", import.meta.url), "utf8");
   const script = source.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)![1].replace(/^import .*;\r?\n/gm, "");

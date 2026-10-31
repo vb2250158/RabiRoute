@@ -5,6 +5,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createDeviceAgentOwner } from '../agentAdapters/deviceAgentOwner.js';
+import { createDeviceAgentOperations } from '../agentAdapters/deviceAgentOperations.js';
+import { ManagerPluginRouteRegistry } from './managerPluginRouteRegistry.js';
 import { createDeviceAgentEndpointBridge } from './deviceAgentEndpointBridge.js';
 import { AgentRequestStore } from '../agentRequests/store.js';
 import { executeEndpointAgentDelivery } from '../agentRequests/endpointDelivery.js';
@@ -34,18 +36,20 @@ async function fixture(run: (fixture: {
   const store=new AgentRequestStore(path.join(directory,'requests.json'));
   const pipeline=createAgentEndpointDelivery({store,registry,authority:new LanAgentAuthority({statePath:path.join(directory,'authority.json')}),config:new RabiGlobalConfigStore(directory),
     receiptDirectory:path.join(directory,'transport'),device:bridge,readLocal:async()=>{throw new Error('Native device must not use a PC model or workspace resolver');},localOptions:()=>({allowedWorkspaces:[]})});
+  const routes=new ManagerPluginRouteRegistry(),registration=routes.registerOperations('fixture-device-endpoint',createDeviceAgentOperations(()=>owner));
   const server=http.createServer(async(request,response)=>{
     try {
+      const url=new URL(request.url!,'http://fixture.invalid');
+      if(routes.handle(request,url,response))return;
       const chunks:Buffer[]=[];for await(const chunk of request)chunks.push(Buffer.from(chunk));
       const body=chunks.length?JSON.parse(Buffer.concat(chunks).toString()):undefined;
-      const url=new URL(request.url!,'http://fixture.invalid');
       if(url.pathname==='/api/agent/threads') {
         const actor=principal(request);if(!actor)throw new Error('Unauthorized');
         const captured=JSON.stringify(actor);
         const fence=()=>{if(JSON.stringify(principal(request))!==captured)throw new Error('Connection changed');};
         const result=await executeEndpointAgentDelivery(body,pipeline.options(undefined,fence,actor));
         response.writeHead(result.statusCode,{'content-type':'application/json'});response.end(JSON.stringify(result.data));
-      } else await owner.handle(request,response,url,body);
+      } else response.writeHead(404).end();
     } catch(error) {response.writeHead(409,{'content-type':'application/json'});response.end(JSON.stringify({error:String(error)}));}
   });
   await new Promise<void>(resolve=>server.listen(0,'127.0.0.1',resolve));
@@ -63,7 +67,7 @@ async function fixture(run: (fixture: {
   try {
     for(const agentId of ['eye-a','eye-b'])assert.equal((await call(agentId,'PUT','/api/device-agents/'+agentId+'/session',{sessionId:'session-'+agentId,name:agentId,loaded:true,capabilities:['language-model','rabi-api','asr','tts']})).statusCode,200);
     await run({call,owner,bridge,store,queued});
-  } finally {await Promise.allSettled([...pendingCalls]);registry.close();server.closeAllConnections();await new Promise<void>(resolve=>server.close(()=>resolve()));fs.rmSync(directory,{recursive:true,force:true});}
+  } finally {await Promise.allSettled([...pendingCalls]);await pipeline.recovery.stop();await store.close();registry.close();await registration.dispose();server.closeAllConnections();await new Promise<void>(resolve=>server.close(()=>resolve()));fs.rmSync(directory,{recursive:true,force:true});}
 }
 const source=(id:string)=>({type:'agent' as const,agentAdapter:'deviceAgent' as const,sessionId:'session-'+id,sessionName:id});
 const request:AgentThreadRequest={action:'send',agentAdapter:'deviceAgent',sourceThreadId:'session-eye-a',sourceAgentType:'agent',threadId:'session-eye-b',
@@ -77,7 +81,7 @@ async function claim(f:{call:(auth:string,method:string,url:string,body?:unknown
 test('real native HTTP claim commits the shared request ledger and formal reply reverses exact sessions without cwd',async()=>fixture(async f=>{
   const notice=f.queued('eye-b'),pending=f.call('eye-a','POST','/api/agent/threads',request);await notice;
   const delivered=await claim(f,'eye-b');assert.match(delivered.prompt,/Original native request/);
-  assert.equal(delivered.prompt,f.store.getEndpointDelivery(delivered.deliveryId)!.prompt);
+  assert.equal(delivered.prompt,(await f.store.readEndpointDelivery(delivered.deliveryId))!.prompt);
   const result=await pending;assert.equal(result.statusCode,200);assert.equal(result.body.ok,true);
   const record=f.store.get(result.body.communication.requestId)!;assert.equal(record.status,'awaiting_response');
   assert.equal(record.source.workspace,undefined);assert.equal(record.target.workspace,undefined);

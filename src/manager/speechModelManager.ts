@@ -81,6 +81,7 @@ export class SpeechModelManager {
   private readonly spawnInstaller: typeof spawn;
   private readonly onChange?: (snapshot: SpeechModelManagementSnapshot) => void;
   private activeChild: ChildProcessByStdio<null, Readable, Readable> | null = null;
+  private readonly installerClosures = new Set<Promise<void>>();
   private activeJob: SpeechModelManagementJob | undefined;
   private lastJob: SpeechModelManagementJob | undefined;
   private lastOutput = "";
@@ -245,8 +246,8 @@ export class SpeechModelManager {
     }, guard);
   }
 
-  stop(): void {
-    if (!this.activeChild || !this.activeJob) return;
+  async stop(): Promise<void> {
+    if (!this.activeChild || !this.activeJob) { await this.joinInstallers(); return; }
     const child = this.activeChild;
     this.lastJob = {
       ...this.activeJob,
@@ -259,6 +260,11 @@ export class SpeechModelManager {
     this.activeJob = undefined;
     child.kill();
     this.settleRuntimeWaiters(new SpeechModelManagerError("安装任务因 Manager 关闭而停止。"));
+    await this.joinInstallers();
+  }
+
+  private async joinInstallers(): Promise<void> {
+    while (this.installerClosures.size) await Promise.all([...this.installerClosures]);
   }
 
   private startJob(input: {
@@ -314,6 +320,10 @@ export class SpeechModelManager {
       throw new SpeechModelManagerError("安装程序没有启动，请查看最近任务中的错误。", 500);
     }
     this.activeChild = child;
+    // Child close acknowledges process exit and completion of its stdout/stderr streams.
+    let release!: () => void; const closed = new Promise<void>(resolve => { release = resolve; });
+    this.installerClosures.add(closed);
+    child.once("close", () => { this.installerClosures.delete(closed); release(); });
     // Accepted jobs are owned by their immutable job identity, not a request lease.
     child.stdout.on("data", chunk => { if (this.activeJob?.id === job.id) this.captureOutput(chunk); });
     child.stderr.on("data", chunk => { if (this.activeJob?.id === job.id) this.captureOutput(chunk, true); });

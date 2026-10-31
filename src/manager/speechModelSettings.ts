@@ -1,3 +1,4 @@
+import { getTimeoutMs } from "../shared/timeoutSettings.js";
 import fs from "node:fs";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
@@ -45,7 +46,7 @@ export function validateModelRoot(value: unknown, protectedRoots: string[], fixe
     const script = "$d=Get-CimInstance Win32_LogicalDisk -Filter ('DeviceID=' + [char]39 + $env:RABIROUTE_MODEL_DRIVE + [char]39); if($d.DriveType -eq 3){'fixed'}";
     try {
       return execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], {
-        encoding: "utf8", timeout: 5000, maxBuffer: 4096, windowsHide: true,
+        encoding: "utf8", timeout: getTimeoutMs("backend.manager.speechModelSettings.validateModelRoot.execFileSync.timeout", 5000), maxBuffer: 4096, windowsHide: true,
         env: { ...process.env, RABIROUTE_MODEL_DRIVE: drive }, stdio: ["ignore", "pipe", "ignore"]
       }).trim() === "fixed";
     } catch { return false; }

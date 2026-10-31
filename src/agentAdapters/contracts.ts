@@ -3,6 +3,8 @@ import type { RabiDeliveryEnvelope } from "../shared/rabiMessage.js";
 
 export type AgentDeliveryOptions = {
   imagePaths?: string[];
+  threadId?: string;
+  workspace?: string;
 };
 
 export type AgentAdapter = {

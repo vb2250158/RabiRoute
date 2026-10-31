@@ -5,6 +5,54 @@ import { RabiLinkRelayRuntime } from "./rabiLinkRelayRuntime.js";
 import { createHash } from 'node:crypto';
 import { validateInternalManagerHop } from '../shared/internalManagerHop.js';
 
+for (const behavior of ['success', 'disconnect', 'body-stall'] as const) {
+  test(`message history uses one remaining deadline through ${behavior} and preserves authenticated identity`, async t => {
+    let claims = 0, claimed = false, completed = false, scope = '';
+    let finished: { statusCode?: number; bodyBase64?: string } = {};
+    const local = http.createServer((req, res) => {
+      if (!req.url?.startsWith('/api/roles/fixture/message-endpoint-history?')) { res.end('{}'); return; }
+      claims++;
+      const proof = validateInternalManagerHop(req, { generation: 'history-generation', scope });
+      assert.equal(proof?.deviceId, 'fixture-eye'); assert.equal(proof?.target, req.url);
+      const url = new URL(req.url, 'http://fixture');
+      assert.equal(url.searchParams.get('query'), '测试 query');
+      assert.ok(Number(url.searchParams.get('budgetMs')) <= 600);
+      if (behavior === 'disconnect') { req.socket.destroy(); return; }
+      res.writeHead(200, { 'content-type': 'application/json' });
+      if (behavior === 'body-stall') { res.write('{'); return; }
+      res.end('{"entries":[]}');
+    });
+    const localPort = await listen(local); t.after(() => close(local));
+    const relay = http.createServer((req, res) => {
+      const url = new URL(req.url || '/', 'http://fixture');
+      if (url.pathname === '/api/rabilink/events') { openRelayEvents(res); return; }
+      if (url.pathname === '/worker/webgui-requests') {
+        const requests = claimed ? [] : [{ id: 'history-' + behavior, publicApiTransport: true, remainingBudgetMs: 700,
+          connectionIdentity: { appId: 'fixture-app', deviceId: 'fixture-eye' }, method: 'GET',
+          path: '/api/roles/fixture/message-endpoint-history?query=%E6%B5%8B%E8%AF%95%20query&budgetMs=1500' }];
+        claimed = true; res.end(JSON.stringify({ ok: true, requests })); return;
+      }
+      if (req.method === 'POST' && url.pathname.endsWith('/response')) {
+        let raw = ''; req.on('data', chunk => raw += chunk); req.on('end', () => {
+          finished = JSON.parse(raw); completed = true; res.end('{"ok":true}');
+        }); return;
+      }
+      res.writeHead(404).end();
+    });
+    const relayPort = await listen(relay); t.after(() => close(relay));
+    scope = createHash('sha256').update(`http://127.0.0.1:${relayPort}\nfixture-history-token`).digest('hex');
+    const runtime = new RabiLinkRelayRuntime({ localRequestAttempts: 3 }); t.after(() => runtime.stop());
+    const start = performance.now();
+    runtime.sync({ enabled: true, url: `http://127.0.0.1:${relayPort}`, token: 'fixture-history-token', deviceId: 'fixture-pc', deviceGuid: 'fixture-guid', deviceName: 'Fixture', claimWaitMs: 60000,
+      applicationGenerationId: 'history-generation', localWebguiUrl: `http://127.0.0.1:${localPort}`, localSpeechUrl: '' });
+    await waitForRelayRuntime(runtime, 'history completion', () => completed, () => ({ claims, completed }), 2500);
+    assert.equal(claims, 1); assert.ok(performance.now() - start < 2000);
+    assert.equal(finished.statusCode, behavior === 'success' ? 200 : 503);
+    if (behavior !== 'success') assert.equal(JSON.parse(Buffer.from(finished.bodyBase64!, 'base64').toString()).errorCode,
+      behavior === 'body-stall' ? 'SEARCH_DEADLINE_EXCEEDED' : 'SEARCH_TRANSPORT_ERROR');
+  });
+}
+
 const FETCH_BLOCKED_PORTS = new Set([
   0, 1, 7, 9, 11, 13, 15, 17, 19, 20, 21, 22, 23, 25, 37, 42, 43, 53, 69, 77, 79, 87, 95,
   101, 102, 103, 104, 109, 110, 111, 113, 115, 117, 119, 123, 135, 137, 139, 143, 161, 179,
@@ -337,6 +385,16 @@ test("global Relay runtime registers the PC and proxies remote WebGUI requests",
   const relayPort = await listen(relay);
   t.after(() => close(relay));
 
+  // The configured speech endpoint may be on another computer. Keep this test isolated.
+  const realFetch = globalThis.fetch;
+  let configuredSpeechRequests = 0;
+  t.mock.method(globalThis, "fetch", async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+    if (String(input).startsWith("https://speech.fixture.invalid/")) {
+      configuredSpeechRequests++;
+      return new Response("{}", { status: 503 });
+    }
+    return realFetch(input, init);
+  });
   const relayEvents: Array<{ eventType: string; data: Record<string, unknown> }> = [];
   const runtime = new RabiLinkRelayRuntime({ onEvent: (eventType, data) => relayEvents.push({ eventType, data }) });
   t.after(() => runtime.stop());
@@ -351,7 +409,7 @@ test("global Relay runtime registers the PC and proxies remote WebGUI requests",
     localWebguiUrl: `http://127.0.0.1:${localPort}`,
     peerUrls: ["http://192.168.1.10:24001"],
     rabiPcVersion: "0.3.19",
-    localSpeechUrl: `http://127.0.0.1:${localPort}`
+    localSpeechUrl: "https://speech.fixture.invalid"
   });
 
   await waitForRelayRuntime(
@@ -362,6 +420,7 @@ test("global Relay runtime registers the PC and proxies remote WebGUI requests",
   );
   const finishedBody = relayState.finishedBody;
   assert.ok(finishedBody);
+  assert.ok(configuredSpeechRequests > 0, "Configured remote speech URL was used without blocking WebGUI relay");
   assert.equal(runtime.status().state, "online", JSON.stringify(runtime.status()));
   assert.equal(runtime.status().capabilities?.includes("speech"), false, "A configured address without a speech service must not advertise speech");
   assert.ok(relayEvents.some((event) => event.eventType === "ready"));
@@ -1024,8 +1083,9 @@ test("stop aborts active local proxies, suppresses completion writes, and permit
   const firstStop = runtime.stop();
   const queuedSync = runtime.sync(config);
   const secondStop = runtime.stop();
-  assert.strictEqual(firstStop, secondStop);
-  await Promise.all([firstStop, queuedSync]);
+  // Production instrumentation may wrap the returned Promise; both callers must
+  // still observe the same completed stop and suppress the in-flight response.
+  await Promise.all([firstStop, secondStop, queuedSync]);
   assert.equal(runtime.status().state, "disabled");
   await waitForRelayRuntime(
     runtime,

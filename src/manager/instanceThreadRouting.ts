@@ -16,31 +16,20 @@ export async function routeInstanceThread(request: AgentThreadRequest, transport
     }
     return undefined;
   }
-  const instances = transport.instances();
-  let binding = normalizeAgentInstanceBinding(request.instanceBinding);
-  if (!binding) {
-    const sessionId = request.threadId || request.sourceThreadId;
-    if (!sessionId) return undefined;
-    const owners = instances.filter(instance => !instance.local).flatMap(instance => instance.agents
-      .filter(agent => agent.sessionId === sessionId || agent.managedSessionIds?.includes(sessionId))
-      .map(agent => ({ instanceId: instance.instanceId, agentId: agent.agentId })));
-    if (owners.length > 1) throw new Error("Task identity exists on multiple instances; specify instanceId and agentId.");
-    binding = owners[0];
-    if (!binding) return undefined;
-  }
-  const instance = instances.find(item => item.instanceId === binding!.instanceId);
+  const binding = normalizeAgentInstanceBinding(request.instanceBinding);
+  if (!binding) return undefined;
+  const instance = transport.instances().find(item => item.instanceId === binding.instanceId);
   if (instance?.local) return undefined;
-  const agent = instance?.agents.find(item => item.agentId === binding!.agentId);
-  if (!instance?.connected || !agent?.enabled) throw new Error("The target instance Agent is offline or disabled.");
-  const provider = agent.provider === "codex-desktop" ? "codex" : agent.provider;
-  if (request.agentAdapter && request.agentAdapter !== provider) throw new Error("Task provider does not match its instance Agent.");
+  if (!instance?.connected || instance.enabled === false) throw new Error("The target instance is offline or disabled.");
+  const provider = request.agentAdapter;
+  if (!provider) throw new Error("Explicit Agent type is required; query the provider directory.");
   if (request.imagePaths?.length) throw new Error("Local image paths cannot be used on another instance.");
   if (request.action === "send" || request.action === "reconcile_delivery") {
     if (!transport.endpointDelivery) throw new Error("Remote delivery requires the Manager-owned authenticated endpoint pipeline.");
     return transport.endpointDelivery({ ...request, instanceBinding: binding });
   }
   const { instanceBinding: _binding, ...params } = request;
-  const result = await transport.manage(instance.instanceId, { ...params, agentId: agent.agentId, agentAdapter: provider }) as AgentThreadRequestResult;
+  const result = await transport.manage(instance.instanceId, { ...params, agentId: binding.agentId, agentAdapter: provider }) as AgentThreadRequestResult;
   if (!result || !Number.isInteger(result.statusCode) || !result.data) throw new Error("The instance returned an invalid task result.");
   return result;
 }

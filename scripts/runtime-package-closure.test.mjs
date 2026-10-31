@@ -16,7 +16,7 @@ test('Windows PowerShell prepares the real runtime manifest as individual scalar
   const prepared = JSON.parse(result.stdout.trim());
   assert.equal(prepared.Prepared, true); assert.equal(prepared.RuntimeOnly, true);
   const files = JSON.parse(await fs.readFile(path.join(prepared.BundleRoot, 'scripts/rabilink-relay-runtime-files.json'), 'utf8'));
-  assert.equal(files.length, 10);
+  assert.deepEqual(files, JSON.parse(await fs.readFile(path.join(root, 'scripts/rabilink-relay-runtime-files.json'), 'utf8')));
   for (const file of files) assert.equal((await fs.stat(path.join(prepared.BundleRoot, file))).isFile(), true);
 });
 async function closure(entry, available) {

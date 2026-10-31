@@ -10,7 +10,9 @@ import { RabiGlobalConfigStore } from "./globalConfig.js";
 import { assertTrustedLanAgentPrincipal, evaluateLanAgentRequest } from "./lanAgentRequestAccess.js";
 import { ManagerSpeechControl, type ManagerSpeechLocalAdapter } from "./speechControl.js";
 import { SpeechRuntimeControl } from "./speechRuntimeControl.js";
-import { proxySpeechEventStream } from "./speechEventProxy.js";
+import { SpeechApiOwner, createSpeechApiOperations } from "./speechApiOperations.js";
+import type { SpeechApiContext } from "./speechApiContext.js";
+import { ManagerPluginRouteRegistry } from "./managerPluginRouteRegistry.js";
 import { stickySpeechAuthority, awaitSpeechAuthority } from "./speechRequestAuthority.js";
 import type { SpeechRuntimeStatus } from "../shared/speechControlContract.js";
 
@@ -20,7 +22,7 @@ function deferred() {
   return { promise, resolve };
 }
 const status: SpeechRuntimeStatus = { state: "online", checkedAt: "fixture", configuredUrl: "http://127.0.0.1:8781", defaults: {}, providers: { tts: [], asr: [] } };
-const modes = ["disable", "agent-aba", "global-aba", "binding-replacement", "reenroll"] as const;
+const modes = ["disable", "instance-aba", "global-aba", "reenroll"] as const;
 async function fixture(t: TestContext, handler: http.RequestListener) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabi-speech-authority-"));
   const authority = new LanAgentAuthority({ statePath: path.join(root, "authority.json") });
@@ -28,7 +30,6 @@ async function fixture(t: TestContext, handler: http.RequestListener) {
   config.patch({ webguiLan: { enabled: true } });
   const credential = authority.enroll(authority.issueBootstrapTicket().ticket, "fixture-node");
   const binding = { agentId: "worker", provider: "dsh", sessionId: "fixture-session" };
-  authority.registerAgentCatalog(credential.token, [binding]);
   const server = http.createServer((request, response) => {
     const access = evaluateLanAgentRequest(request, authority, true, () => config.getLanAgentAdmissionPolicy());
     if (access.kind !== "agent") { response.writeHead(403); response.end("denied"); return; }
@@ -38,7 +39,7 @@ async function fixture(t: TestContext, handler: http.RequestListener) {
   const address = server.address(); assert.ok(address && typeof address !== "string");
   t.after(async () => {
     server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve()));
-    fs.rmSync(root, { recursive: true, force: true });
+    assert.equal(path.dirname(path.resolve(root)), path.resolve(os.tmpdir())); fs.rmSync(root, { recursive: true, force: true });
   });
   return {
     url: `http://127.0.0.1:${address.port}/api/speech/status`,
@@ -46,15 +47,15 @@ async function fixture(t: TestContext, handler: http.RequestListener) {
     revoke(mode: typeof modes[number]) {
       if (mode === "global-aba") {
         config.patch({ webguiLan: { enabled: false } }); config.patch({ webguiLan: { enabled: true } });
-      } else if (mode === "binding-replacement") {
-        authority.approveAgentBinding("fixture-node", { ...binding, sessionId: "replacement-session" });
       } else if (mode === "reenroll") {
         authority.revokeNode("fixture-node");
         const replacement = authority.enroll(authority.issueBootstrapTicket().ticket, "fixture-node");
-        authority.registerAgentCatalog(replacement.token, [binding]);
       } else {
-        authority.setAgentEnabled("fixture-node", "worker", false);
-        if (mode === "agent-aba") authority.setAgentEnabled("fixture-node", "worker", true);
+        authority.setNodeEnabled("fixture-node", false);
+        if (mode === "instance-aba") {
+          authority.setNodeEnabled("fixture-node", true);
+          assert.ok(authority.authenticate(credential.token), "Restored instance admits fresh authentication while the original request remains revoked.");
+        }
       }
     }
   };
@@ -129,14 +130,17 @@ for (const mode of modes) {
   test(`authenticated SSE outgoing chunk is fenced after ${mode}`, { timeout: 10000 }, async t => {
     let stream!: ReadableStreamDefaultController<Uint8Array>;
     let aborted = false;
-    const f = await fixture(t, (request, response) => proxySpeechEventStream(response, {
-      guard: () => { assertTrustedLanAgentPrincipal(request); },
-      openUpstream: async signal => new Response(new ReadableStream({ start(controller) {
+    const owner = new SpeechApiOwner({
+      speechControl: { eventStream: async (signal: AbortSignal) => new Response(new ReadableStream({ start(controller) {
         stream = controller; controller.enqueue(new TextEncoder().encode("data: allowed\n\n"));
         signal.addEventListener("abort", () => { aborted = true; controller.error(new Error("aborted")); }, { once: true });
-      } }), { headers: { "content-type": "text/event-stream" } })
-    }));
-    const response = await fetch(f.url, { headers: f.headers }); assert.equal(response.status, 200);
+      } }), { headers: { "content-type": "text/event-stream" } }) },
+      capture: (request: http.IncomingMessage) => ({ guard: stickySpeechAuthority(() => { assertTrustedLanAgentPrincipal(request); }), run: <T>(action: () => T) => action(), targetLocal: false })
+    } as unknown as SpeechApiContext);
+    const registry = new ManagerPluginRouteRegistry(); const registration = registry.registerOperations("speech-authority-fixture", createSpeechApiOperations(owner).operations.filter(value => value.contract.operationId === "manager.speech.events"));
+    t.after(async () => { await Promise.all([registration.dispose(), owner.events.stop()]); });
+    const f = await fixture(t, (request, response) => { if (!registry.handle(request, new URL(request.url!, "http://fixture"), response)) response.writeHead(404).end(); });
+    const response = await fetch(f.url.replace("/status", "/events"), { headers: f.headers }); assert.equal(response.status, 200);
     const reader = response.body!.getReader(); assert.match(new TextDecoder().decode((await reader.read()).value), /allowed/);
     f.revoke(mode); stream.enqueue(new TextEncoder().encode("data: private-stale-event\n\n"));
     await assert.rejects(reader.read()); assert.equal(aborted, true);

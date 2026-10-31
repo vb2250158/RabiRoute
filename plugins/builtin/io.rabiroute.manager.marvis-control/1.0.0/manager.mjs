@@ -27,20 +27,9 @@ export const activate = definePlugin({
                 }
             });
             try {
-        const requestTracker = new runtime.ManagerPluginRequestTracker();
-        const handler = runtime.createAgentProviderControlRouteHandler("marvis", {
-            readJsonBody: runtime.readJsonBody,
-            jsonResponse: runtime.jsonResponse,
-            openMarvis: body => runtime.openMarvis(runtime.agentManagerApiCtx(), body)
-        }, operation => requestTracker.trackOperation(operation));
-        ctx.effect(() => {
-            const unregister = runtime.registerManagerPluginHandlerRoutes(runtime.managerPluginRoutes, "manager:marvis-control", "manager.marvis-control.api", [requestTracker.wrap(handler)], [
-                { routeId: "open", kind: "exact", path: "/api/agent/marvis-open", methods: ["POST"] }
-            ]);
-            return async () => {
-                unregister();
-                await requestTracker.stop();
-            };
+        ctx.effect(async () => {
+            const operations = await runtime.managerPluginRoutes.registerOperationsAsync(context.identity.instanceId, runtime.createMarvisControlOperations(), context.lifecycle.signal);
+            return () => operations.dispose();
         }, "activate Manager Marvis control plugin");
 
                 await Promise.all(pendingEffects);

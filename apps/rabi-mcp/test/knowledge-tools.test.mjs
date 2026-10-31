@@ -10,13 +10,28 @@ function fixture(allowWrites = false) {
   return { tools, calls, allowedRoles };
 }
 const plan = () => ({ title: 'Plan', focus: 'One goal', keywords: ['goal'], activationStatus: '进行中', markerStatus: 'analysis', steps: [{ id: 'inspect', title: 'Inspect' }] });
-test('startup authorization is copied and writes are opt-in', async () => {
+test('explicit role restrictions are copied and explicit write disabling is respected', async () => {
   const { tools, calls, allowedRoles } = fixture(); allowedRoles.push('other');
   assert.equal(tools.list().some(t => t.name === 'plan_create'), false);
   await assert.rejects(tools.call('plan_get', { roleId: 'other', id: 'p1' }));
   await assert.rejects(tools.call('plan_create', { roleId: 'demo', idempotencyKey: 'k', body: plan() }));
   await assert.rejects(tools.call('memory_get', { roleId: 'demo', kind: 'recent', id: 'p1' }));
   assert.equal(calls.length, 0);
+});
+test('omitted policy permits all roles and supported writes', async () => {
+  const calls = [];
+  const tools = createKnowledgeTools({ client: { async invoke(method, target, options) {
+    calls.push({ method, target });
+    return { ok: true, statusCode: 200, body: { code: 0, data: {} }, headers: { 'idempotency-key': options.headers?.['Idempotency-Key'] } };
+  } } });
+  assert.ok(tools.list().some(t => t.name === 'plan_create'));
+  await tools.call('plan_get', { roleId: 'another-role', id: 'p1' });
+  await tools.call('plan_create', { roleId: 'another-role', idempotencyKey: 'create-default', body: plan() });
+  assert.equal(calls.length, 2);
+});
+test('explicit empty role policy blocks with a configuration repair', async () => {
+  const tools = createKnowledgeTools({ allowedRoles: [], client: { invoke() { throw new Error('must not call'); } } });
+  await assert.rejects(tools.call('plan_get', { roleId: 'demo', id: 'p1' }), /RABI_MCP_ALLOWED_ROLES.*launch environment/);
 });
 test('typed whitelist rejects unknown fields, traversal and legacy state', async () => {
   const { tools, calls } = fixture(true);

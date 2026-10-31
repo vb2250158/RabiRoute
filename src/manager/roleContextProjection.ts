@@ -1,3 +1,4 @@
+import { getTimeoutMs } from "../shared/timeoutSettings.js";
 import type http from "node:http";
 import type { RoleKnowledgeSnapshot } from "../roleKnowledge.js";
 
@@ -129,8 +130,8 @@ function managerProjectionUrl(baseUrl: string): string {
 export async function fetchRoleContextProjection(input: FetchRoleContextProjectionInput): Promise<RoleKnowledgeSnapshot> {
   const controller = new AbortController();
   const timeout = setTimeout(
-    () => controller.abort(new Error(`Role context request timed out after ${input.timeoutMs ?? 2_500} ms.`)),
-    input.timeoutMs ?? 2_500
+    () => controller.abort(new Error(`Role context request timed out after ${input.timeoutMs ?? getTimeoutMs("persona.context",  2_500)} ms.`)),
+    input.timeoutMs ?? getTimeoutMs("persona.context",  2_500)
   );
   timeout.unref?.();
   const abortFromCaller = () => controller.abort(input.signal?.reason);

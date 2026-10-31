@@ -1,0 +1,170 @@
+{
+  "operationId": "manager.meta.read",
+  "aliases": [
+    "agent:GET:/meta"
+  ],
+  "contractVersion": "1.0.0",
+  "method": "GET",
+  "pathTemplate": "/meta",
+  "exposure": "public",
+  "transport": "http",
+  "description": "Read current Manager identity and health, including when business dependencies are unready.",
+  "request": {
+    "path": {
+      "type": "object",
+      "properties": {},
+      "additionalProperties": false
+    },
+    "query": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Existing diagnostic owners ignore query parameters. Use exact /meta without query for identity discovery."
+    },
+    "headers": {
+      "type": "object"
+    },
+    "body": {
+      "kind": "none"
+    }
+  },
+  "responses": {
+    "200": {
+      "mediaType": "application/json",
+      "schema": {
+        "type": "object",
+        "required": [
+          "applicationGenerationId",
+          "managerInstanceId",
+          "health"
+        ],
+        "properties": {
+          "version": {
+            "type": "string"
+          },
+          "applicationGenerationId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "managerInstanceId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "health": {
+            "type": "object",
+            "required": [
+              "live",
+              "requiredReady",
+              "state"
+            ],
+            "properties": {
+              "live": {
+                "type": "boolean"
+              },
+              "requiredReady": {
+                "type": "boolean"
+              },
+              "state": {
+                "type": "string"
+              },
+              "businessReady": {
+                "type": "boolean"
+              },
+              "pid": {
+                "type": "integer",
+                "minimum": 1
+              }
+            },
+            "additionalProperties": true
+          },
+          "managerBaseUrl": {
+            "type": "string"
+          },
+          "managerPort": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 65535
+          },
+          "webguiLan": {
+            "type": "object",
+            "properties": {
+              "enabled": {
+                "type": "boolean"
+              },
+              "tokenConfigured": {
+                "type": "boolean"
+              },
+              "listeningOnLan": {
+                "type": "boolean"
+              },
+              "restartRequired": {
+                "type": "boolean"
+              }
+            },
+            "additionalProperties": true
+          },
+          "pluginGeneration": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "sequence": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "additionalProperties": true
+          },
+          "agentUploads": {
+            "type": "object"
+          },
+          "readWorkers": {
+            "type": "object"
+          },
+          "catalogWorkers": {
+            "type": "object"
+          },
+          "agentScanWorkers": {
+            "type": "object"
+          },
+          "performanceWorkers": {
+            "type": "object"
+          },
+          "httpLimits": {
+            "type": "object"
+          },
+          "computerName": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": true
+      },
+      "headers": {
+        "type": "object",
+        "required": [
+          "cache-control"
+        ],
+        "properties": {
+          "cache-control": {
+            "const": "private, no-store"
+          }
+        },
+        "additionalProperties": true
+      }
+    }
+  },
+  "effects": {
+    "mode": "diagnostic-read",
+    "description": "Reads current identity/status through the existing diagnostic owners and performance instrumentation. Does not launch a Runtime, scan Agent sessions, change Route state or grant business permissions."
+  },
+  "recovery": {
+    "strategy": "repeatable-read",
+    "description": "Rediscover through Host/READY on identity change. Health false, startup or unrelated dependency failure remains diagnostic data; it does not authorize a second Manager or a fallback Runtime."
+  },
+  "validators": [
+    {
+      "id": "manager.diagnostics.owner-payload",
+      "description": "Identity strings are nonempty. Health values are validated by type, never required to be healthy/ready. Provider-specific diagnostic sections remain extensible. The same ingress connection authority applies before and after awaited reads; no separate persona, workspace or feature grant is introduced."
+    }
+  ]
+}

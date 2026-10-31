@@ -103,6 +103,8 @@ if (process.argv.includes(WORKER_ARGUMENT)) {
 } else {
   for (const partial of [false, true]) {
   test(`Manager emits structured READY before hung plan storage and permits only recovered roles (partial=${partial})`, { timeout: 45_000 }, async t => {
+    const fixtureStartedAt = Date.now();
+    const timings: string[] = [];
     const fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-manager-ready-plan-storage-"));
     const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
     const fixturePackageRoot = path.join(fixtureRoot, "package");
@@ -127,7 +129,7 @@ if (process.argv.includes(WORKER_ARGUMENT)) {
     const applicationGenerationId = randomUUID();
     const controlToken = randomBytes(32).toString("hex");
     fs.mkdirSync(stateRoot, { recursive: true });
-    const pluginNames = partial ? ["core", "persona"] : [];
+    const pluginNames = ["core", "persona"];
     for (const name of pluginNames) {
       const pluginId = `io.rabiroute.manager.${name}`;
       fs.cpSync(path.join(packageRoot, "dist/plugins/packages", pluginId),
@@ -135,13 +137,16 @@ if (process.argv.includes(WORKER_ARGUMENT)) {
     }
     fs.writeFileSync(profilePath, `${JSON.stringify({
       schemaVersion: 2,
-      readyRequires: partial ? ["manager.persona@1"] : [],
+      readyRequires: ["manager.persona@1"],
       instances: pluginNames.map(name => ({
         id: `manager:${name}`, package: `io.rabiroute.manager.${name}`,
         version: "1.0.0", enabled: true, config: {}, grants: []
       }))
     }, null, 2)}\n`, "utf8");
 
+    let stage = "spawn";
+    const mark = (next: string) => { stage = next; timings.push(`${next}:${Date.now() - fixtureStartedAt}ms`); };
+    mark("spawn");
     let stdout = "";
     let stderr = "";
     const worker = spawn(process.execPath, [
@@ -187,6 +192,8 @@ if (process.argv.includes(WORKER_ARGUMENT)) {
     worker.stderr.on("data", chunk => { stderr += String(chunk); });
 
     t.after(async () => {
+      t.diagnostic(`Fixture stage timings: ${timings.join(", ")}; elapsed=${Date.now() - fixtureStartedAt}ms`);
+      if (t.signal.aborted) t.diagnostic(`Manager fixture interrupted at ${stage}. stderr=${stderr}; stdout=${stdout}`);
       if (worker.exitCode === null && worker.signalCode === null) {
         worker.kill("SIGKILL");
         await waitForExit(worker, 5_000).catch(() => undefined);
@@ -218,6 +225,7 @@ if (process.argv.includes(WORKER_ARGUMENT)) {
     assert.equal(readyUrl.hostname, "127.0.0.1");
     assert.ok(Number(readyUrl.port) > 0, `Manager did not publish a dynamic TCP endpoint: ${ready.baseUrl}`);
 
+    mark("health");
     const healthResponse = await fetch(`${ready.baseUrl}/health`);
     const healthPayload = await healthResponse.json() as Record<string, any>;
     assert.equal(healthResponse.status, 200, JSON.stringify(healthPayload));
@@ -226,6 +234,7 @@ if (process.argv.includes(WORKER_ARGUMENT)) {
     assert.equal(healthPayload.health.businessReady, false);
     assert.equal(healthPayload.backgroundLifecycle.planStorageStartup.state, "running");
 
+    mark("unready-plan-mutation");
     const planMutation = await fetch(`${ready.baseUrl}/api/roles/YeYu/plans`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -236,6 +245,7 @@ if (process.argv.includes(WORKER_ARGUMENT)) {
     assert.equal(planMutationPayload.error, "PLAN_STORAGE_STARTUP_UNAVAILABLE");
 
     if (partial) {
+      mark("ready-plan-create");
       const created = await fetch(`${ready.baseUrl}/api/roles/ReadyRole/plans`, {
         method: "POST", headers: { "content-type": "application/json", "Idempotency-Key": randomUUID() },
         body: JSON.stringify({
@@ -245,10 +255,12 @@ if (process.argv.includes(WORKER_ARGUMENT)) {
       });
       const body = await created.text();
       assert.equal(created.status, 201, body);
+      mark("ready-plan-list");
       const listed = await fetch(`${ready.baseUrl}/api/roles/ReadyRole/plans`);
       const list = await listed.json() as { data: Array<{ title: string }> };
       assert.equal(listed.status, 200, JSON.stringify(list));
       assert.ok(list.data.some(plan => plan.title === "Example partial startup plan"));
+      mark("post-create-health");
       const stillLive = await fetch(`${ready.baseUrl}/health`);
       const status = await stillLive.json() as Record<string, any>;
       assert.equal(status.health.live, true);
@@ -256,6 +268,7 @@ if (process.argv.includes(WORKER_ARGUMENT)) {
       assert.equal(status.backgroundLifecycle.planStorageStartup.summary.readyRoles, 1);
     }
 
+    mark("shutdown");
     const shutdown = await fetch(`${ready.baseUrl}/_rabiroute/host/shutdown`, {
       method: "POST",
       headers: { "x-rabiroute-host-token": controlToken }

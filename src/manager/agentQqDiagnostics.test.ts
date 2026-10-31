@@ -8,8 +8,10 @@ import { getTrustedLanAgentSource, setTrustedLanAgentSource } from "./lanAgentBo
 import { LanAgentAuthority } from "./lanAgentAuthority.js";
 import { evaluateLanAgentRequest } from "./lanAgentRequestAccess.js";
 import { RabiGlobalConfigStore } from "./globalConfig.js";
-import { handleAgentQqDiagnostics, type AgentQqDiagnosticsContext } from "./agentQqDiagnostics.js";
+import { createAgentQqDiagnosticsOperation, handleAgentQqDiagnostics, type AgentQqDiagnosticsContext } from "./agentQqDiagnostics.js";
+import { compileApiOperation, readApiOperationInput, validateApiOperationResult } from "./apiOperationContract.js";
 import type { GatewayDefinition } from "../shared/gatewayConfigModel.js";
+import { markAuthenticatedConnectionRequest } from "./connectionRequestAccess.js";
 
 const route = (): GatewayDefinition => ({ id: "fixture-route", enabled: true, gatewayPort: 9000,
   messageAdapters: ["napcat"], agentAdapters: ["dsh"], primaryAgentAdapter: "dsh",
@@ -26,7 +28,6 @@ function fixture(t: TestContext, options: { remote?: boolean; headers?: Record<s
   const config = new RabiGlobalConfigStore(root);
   config.patch({ webguiLan: { enabled: true } });
   const credential = authority.enroll(authority.issueBootstrapTicket().ticket, "fixture-node");
-  authority.registerAgentCatalog(credential.token, [{ agentId: "fixture-agent", provider: "custom-provider" }]);
   const target = `/api/agent/qq/diagnostics${options.query ?? "?routeId=fixture-route"}`;
   const request = { method: "GET", url: target, headers: { host: "localhost:8000", ...options.headers },
     socket: { remoteAddress: options.address ?? (options.remote === false ? "127.0.0.1" : "192.0.2.1") } } as unknown as http.IncomingMessage;
@@ -42,8 +43,6 @@ function fixture(t: TestContext, options: { remote?: boolean; headers?: Record<s
   const results: Array<{ status: number; body: any }> = [];
   const context: AgentQqDiagnosticsContext = {
     route: id => id === definition.id ? definition : undefined,
-    approvedBinding: () => { throw new Error("obsolete Route binding gate"); },
-    isAgentEnabled: () => { throw new Error("obsolete source gate"); },
     routeRunning: () => true,
     routeStartedAt: () => "2026-01-02T00:00:00.000Z",
     readStatus: () => { statusReads++; return { napcatInstances: { "fixture-instance": { connected: true, activeConnections: 1, lastConnectedAt: "2026-01-02T00:01:00.000Z" } } }; },
@@ -64,6 +63,27 @@ function fixture(t: TestContext, options: { remote?: boolean; headers?: Record<s
     run: () => handleAgentQqDiagnostics(request, new URL(target, "http://localhost:8000"), { setHeader() {} } as unknown as http.ServerResponse, context) };
 }
 
+test("authenticated Relay and Peer diagnostics use the original connection lease", async t => {
+  for (const header of ["x-rabilink-tunnel-local", "x-rabiroute-peer-proxy"]) {
+    const value = fixture(t, { remote: false, address: "192.0.2.2", headers: { [header]: "1" } });
+    let revoked = false;
+    markAuthenticatedConnectionRequest(value.request, () => { if (revoked) throw new Error("revoked"); });
+    await value.run(); assert.equal(value.results[0].status, 200);
+    revoked = true;
+    await value.run(); assert.equal(value.results[1].status, 403); assert.equal(value.counts().probes, 1);
+  }
+});
+
+test("diagnostics use the user configured remote HTTP(S) endpoint", async t => {
+  for (const httpUrl of ["http://192.0.2.5:3000", "https://napcat.example:8443"]) {
+    const value = fixture(t);
+    value.definition.napcatInstances![0]!.httpUrl = httpUrl;
+    let called = false;
+    value.context.probe = async url => { called = true; assert.equal(String(url), httpUrl + "/get_status"); return success(); };
+    await value.run(); assert.equal(value.results[0].status, 200); assert.equal(called, true);
+  }
+});
+
 test("authenticated enabled custom provider without source can diagnose a different Route primary, just like local", async t => {
   for (const remote of [true, false]) {
     const value = fixture(t, { remote });
@@ -73,6 +93,22 @@ test("authenticated enabled custom provider without source can diagnose a differ
       data: { routeId: "fixture-route", instanceId: "fixture-instance", wsConnected: true,
         oneBot: { reachable: true, online: true, good: true } } } }]);
     assert.doesNotMatch(JSON.stringify(value.results), /sensitive|fixture-secret/);
+  }
+});
+
+test("executable diagnostics validates its published query and response while preserving remote and local access", async t => {
+  for (const remote of [true, false]) {
+    const value = fixture(t, { remote });
+    const definition = createAgentQqDiagnosticsOperation(value.context);
+    const operation = compileApiOperation(definition);
+    const url = new URL(value.request.url!, "http://localhost:8000");
+    const input = await readApiOperationInput(operation, value.request, url, { setHeader() {} } as unknown as http.ServerResponse);
+    const result = await definition.handler(input);
+    assert.equal(result.status, 200);
+    assert.equal(validateApiOperationResult(operation, result).mediaType, "application/json");
+    assert.deepEqual(value.counts(), { probes: 1, statusReads: 1 });
+    await assert.rejects(readApiOperationInput(operation, value.request, new URL(url + "&unexpected=1"), input.response), { field: "query" });
+    assert.deepEqual(value.counts(), { probes: 1, statusReads: 1 });
   }
 });
 
@@ -89,7 +125,7 @@ test("missing ingress principal, forged Agent header and source-only marker cann
 
 test("revoked original principal never falls back even on loopback", async t => {
   const value = fixture(t, { address: "127.0.0.1" });
-  value.authority.setAgentEnabled("fixture-node", "fixture-agent", false);
+  value.authority.setNodeEnabled("fixture-node", false);
   delete value.request.headers["x-rabiroute-agent-id"];
   await value.run();
   assert.equal(value.results[0].status, 403);
@@ -109,7 +145,7 @@ test("invalid query, GET body, ambiguous instance, stopped Route and unsafe endp
     if (change === "ambiguous") value.definition.napcatInstances!.push({ ...value.definition.napcatInstances![0], id: "second" });
     if (change === "stopped") value.context.routeRunning = () => false;
     if (change === "disabled") value.definition.messageAdapters = ["heartbeat"];
-    if (change === "unsafe") value.definition.napcatInstances![0]!.httpUrl = "http://remote.invalid:9002";
+    if (change === "unsafe") value.definition.napcatInstances![0]!.httpUrl = "file:///unsupported";
     await value.run();
     assert.ok(value.results[0].status >= 400);
     assert.deepEqual(value.counts(), { probes: 0, statusReads: 0 });
@@ -138,14 +174,14 @@ test("stale or unversioned WS status cannot indicate live connection", async t =
 
 test("revocation between status read and network probe stops upstream access", async t => {
   const value = fixture(t);
-  value.context.readStatus = () => { value.authority.setAgentEnabled("fixture-node", "fixture-agent", false); return {}; };
+  value.context.readStatus = () => { value.authority.setNodeEnabled("fixture-node", false); return {}; };
   await value.run();
   assert.equal(value.results[0].status, 403);
   assert.equal(value.counts().probes, 0);
 });
 
-test("revocation and Agent/global ABA during a pending probe suppress projected result", async t => {
-  for (const change of ["disable", "agent-aba", "global-aba", "credential"]) {
+test("revocation and node/global ABA during a pending probe suppress projected result", async t => {
+  for (const change of ["disable", "node-aba", "global-aba", "credential"]) {
     const value = fixture(t, { address: "127.0.0.1" });
     let finish!: (response: Response) => void;
     let started!: () => void;
@@ -159,10 +195,12 @@ test("revocation and Agent/global ABA during a pending probe suppress projected 
     } else if (change === "credential") {
       value.authority.revokeNode("fixture-node");
       const replacement = value.authority.enroll(value.authority.issueBootstrapTicket().ticket, "fixture-node");
-      value.authority.registerAgentCatalog(replacement.token, [{ agentId: "fixture-agent", provider: "custom-provider" }]);
     } else {
-      value.authority.setAgentEnabled("fixture-node", "fixture-agent", false);
-      if (change === "agent-aba") value.authority.setAgentEnabled("fixture-node", "fixture-agent", true);
+      value.authority.setNodeEnabled("fixture-node", false);
+      if (change === "node-aba") {
+        value.authority.setNodeEnabled("fixture-node", true);
+        assert.ok(value.authority.authenticate(value.request.headers.authorization!.toString().replace(/^Bearer /, "")), "Restored node accepts fresh authentication while the original request lease remains revoked.");
+      }
     }
     delete value.request.headers["x-rabiroute-agent-id"];
     finish(success());
@@ -203,4 +241,12 @@ test("bounded get_status probe failure hides upstream details", async t => {
     if (value.results[0].status === 200) assert.equal(value.results[0].body.data.oneBot.reachable, false);
     else assert.equal(value.results[0].status, 503);
   }
+});
+
+test("status replies above the former 4 KiB probe cap remain reachable", async t => {
+  const value = fixture(t);
+  value.context.probe = async () => Response.json({ status: "ok", retcode: 0, data: { online: true, good: true, diagnostics: "x".repeat(8192) } });
+  await value.run();
+  assert.equal(value.results[0].status, 200);
+  assert.deepEqual(value.results[0].body.data.oneBot, { reachable: true, online: true, good: true });
 });

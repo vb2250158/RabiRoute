@@ -1,3 +1,4 @@
+import { getTimeoutMs } from "../shared/timeoutSettings.js";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
@@ -61,12 +62,19 @@ export class AutomaticCodeService {
   async start(): Promise<void> {
     try {
       await this.baselineReady;
+      if (this.stopped) return;
       await this.options.publication.ready;
+      if (this.stopped) return;
       if (this.options.publication.status().state !== "ready") throw new Error("The unified publication owner requires recovery.");
       if (!this.options.watch) { this.state = { state: "disabled" }; return; }
       const candidateRoot = await fsp.realpath(this.options.sourceRoot ?? this.options.packageRoot);
-      if (!(await fsp.stat(path.join(candidateRoot, "src")).catch(() => undefined))?.isDirectory()
-        || !(await fsp.stat(path.join(candidateRoot, "tsconfig.json")).catch(() => undefined))?.isFile()) {
+      if (this.stopped) return;
+      const [sourceDirectory, sourceConfig] = await Promise.all([
+        fsp.stat(path.join(candidateRoot, "src")).catch(() => undefined),
+        fsp.stat(path.join(candidateRoot, "tsconfig.json")).catch(() => undefined)
+      ]);
+      if (this.stopped) return;
+      if (!sourceDirectory?.isDirectory() || !sourceConfig?.isFile()) {
         this.state = { state: "source_unavailable", reasons: ["The running package has no compiler source inventory; native hot-patching is available, but an actual source owner is required."] };
         return;
       }
@@ -76,6 +84,7 @@ export class AutomaticCodeService {
           if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
           throw error;
         });
+        if (this.stopped) return;
         if (!actual || hash(actual) !== expected) this.startupDirtyInputs.push(relative);
       }
       this.watcher = fs.watch(candidateRoot, { recursive: true }, (_event, name) => {
@@ -152,7 +161,7 @@ export class AutomaticCodeService {
       };
       const timeout = setTimeout(() => {
         void worker.terminate().finally(() => finish(new Error("Automatic compilation exceeded its deadline; the old version remains active.")));
-      }, 120000);
+      }, getTimeoutMs("deadline.manager.automaticCodeService.compile", 120000));
       worker.once("message", (result: Prepared) => {
         if (!result || typeof result.state !== "string") finish(new Error("Automatic compiler returned an invalid receipt."));
         else finish(undefined, result);
@@ -199,7 +208,7 @@ export class AutomaticCodeService {
       });
       if (!retained.includes(`${revision}.json`) && retained.filter(name => /^[a-f0-9]{64}\.json$/.test(name)).length >= 64) throw new Error("Automatic candidate retention limit reached.");
       await writeWebPatchJson(path.join(directory, `${revision}.json`), candidate);
-      if (result.web) await this.options.publication.importCandidate(result.web.directory, result.web.revision);
+      if (result.web) await this.options.publication.importLocalCandidate(result.web.directory, result.web.revision, this.sourceRoot!);
       if (!isCurrent() || this.stopped) return;
       const current = this.options.publication.status();
       await this.options.publication.publish({ ...current.identity, operationId: randomUUID(),

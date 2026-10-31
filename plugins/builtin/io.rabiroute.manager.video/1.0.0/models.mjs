@@ -1,3 +1,4 @@
+import { matchesSettingsRequest, validModelLayout } from "./contracts.mjs";
 import fs from "node:fs/promises";
 import { checkedFs } from "./requestAccess.mjs";
 import path from "node:path";
@@ -43,7 +44,8 @@ async function validSize(file, bytes, access) {
     } finally { await handle.close(); }
   } catch (error) { if (error.code === "ENOENT") return false; throw error; }
 }
-export async function downloadFile(url, target, bytes, sha256, signal, progress, fetcher = fetch) {
+export async function downloadFile(url, target, bytes, sha256, signal, progress, fetcher = fetch, timeoutMs = 4 * 60 * 60 * 1000) {
+  const deadline = AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]);
   const partial = `${target}.part`;
   const base = path.dirname(target);
   await safeTarget(base, path.basename(partial));
@@ -59,7 +61,7 @@ export async function downloadFile(url, target, bytes, sha256, signal, progress,
       const parsed = new URL(url);
       if (parsed.protocol !== "https:" || parsed.username || parsed.password || parsed.port ||
         !(parsed.hostname === "huggingface.co" || parsed.hostname.endsWith(".hf.co") || parsed.hostname.endsWith(".huggingface.co"))) throw new VideoError("模型下载地址不受信任。");
-      response = await fetcher(url, { redirect: "manual", signal: AbortSignal.any([signal, AbortSignal.timeout(4 * 60 * 60 * 1000)]) });
+      response = await fetcher(url, { redirect: "manual", signal: deadline });
       if (![301, 302, 303, 307, 308].includes(response.status)) break;
       const next = response.headers.get("location"); await response.body?.cancel();
       if (!next) throw new VideoError("模型下载重定向无效。");
@@ -90,10 +92,11 @@ export class VideoModels {
   }
   async initialize() {
     const text = await fs.readFile(this.file, "utf8").catch(error => { if (error.code === "ENOENT") return null; throw error; });
+    this.settings = { revision: 0, modelRoot: null, layout: "flat" };
     if (text) {
       const value = JSON.parse(text);
       if (!Number.isSafeInteger(value.revision) || value.revision < 0 || !(value.modelRoot === null || typeof value.modelRoot === "string")) throw new Error("Invalid video model settings");
-      if (value.layout !== undefined && !["flat", "categorized"].includes(value.layout)) throw new Error("Invalid model layout");
+      if (value.layout !== undefined && !validModelLayout(value.layout)) throw new Error("Invalid model layout");
       this.settings = { layout: "flat", ...value };
     }
   }
@@ -108,8 +111,8 @@ export class VideoModels {
   async configure(body, access) {
     const fs = checkedFs(access); access?.assert();
     this.guard();
-    if (!body || Object.keys(body).some(key => !["modelRoot", "expectedRevision", "layout"].includes(key)) || body.expectedRevision !== this.settings.revision || !("modelRoot" in body)) throw new VideoError("目录设置已改变，请刷新后重试。", 409);
-    if (body.layout !== undefined && !["flat", "categorized"].includes(body.layout)) throw new VideoError("模型目录布局无效。");
+    if (!matchesSettingsRequest(body, this.settings.revision)) throw new VideoError("目录设置已改变，请刷新后重试。", 409);
+    if (body.layout !== undefined && !validModelLayout(body.layout)) throw new VideoError("模型目录布局无效。");
     const modelRoot = await this.runtime.validateModelRoot(body.modelRoot, access);
     if (modelRoot) await safeTarget(modelRoot, "model-directory-check", access);
     this.guard();
@@ -169,7 +172,7 @@ export class VideoModels {
   async initializeModels(body, access) {
     access?.assert();
     this.guard();
-    if (!body || Object.keys(body).some(key => key !== "expectedRevision") || body.expectedRevision !== this.settings.revision) throw new VideoError("模型目录已改变，请重新查看下载空间。", 409);
+    if (!matchesSettingsRequest(body, this.settings.revision, true)) throw new VideoError("模型目录已改变，请重新查看下载空间。", 409);
     const plan = await this.downloadPlan(undefined, access); access?.assert();
     if (!plan.canDownload) throw new VideoError(plan.errors.join("\n"), 409);
     return this.begin("models", () => this.downloadModels(this.catalog.models), access);
@@ -204,7 +207,7 @@ export class VideoModels {
           await this.downloadFile(`${model.downloadBase || "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main"}/${folders[key]}/${name}`, target, bytes, model.sha256[key], this.controller.signal, count => {
             this.job.bytes = completed + count;
             if (Date.now() - lastEvent > 1000) { lastEvent = Date.now(); this.publish(); }
-          });
+          }, undefined, (this.runtime.getTimeoutMs?.("video.model.download", 14400000) ?? 14400000));
           completed += bytes; this.job.bytes = completed; this.publish();
         }
       }

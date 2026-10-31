@@ -7,6 +7,11 @@ import { appendAdapterLog, appendVoiceTranscriptEventForAdapter, type VoiceTrans
 import { isRabiLinkRecordFirstSource, recordRabiLinkVoiceObservation } from "../rabilinkObservationRecorder.js";
 import type { ForwardRouteKind } from "../routing/types.js";
 import type { GatewayMessageAdapterType, MessageAdapter, MessageAdapterDispose, MessageAdapterType } from "./messageAdapter.js";
+import { createWebhookHttpOwner, createWebhookRequestProducer, type WebhookHttpReply } from "./webhookHttpOwner.js";
+import { createWebhookNativeOperations, webhookListenerBinding } from "./webhookNativeOperations.js";
+import { getGatewayListenerRuntime } from "../runtime/gatewayListenerRuntime.js";
+import type { ManagerApiOperationsService } from "../manager/apiOperationContract.js";
+import type { ApiExternalListenerPublication, ApiExternalListenerRegistration } from "../manager/apiExternalListenerBinding.js";
 
 export type WebhookPayload = {
   type?: string;
@@ -100,29 +105,19 @@ export type WebhookAdapterProfile = {
   missingTextMessage: string;
 };
 
-type AcceptedWebhookResponse = {
-  statusCode: number;
-  headers?: Record<string, string>;
-  body?: string;
-};
-
-type WebhookAdapterRequestContext = {
-  request: http.IncomingMessage;
-  response: http.ServerResponse;
-  requestUrl: URL;
-  requestPath: string;
-  webhookPath: string;
-  profile: WebhookAdapterProfile;
-};
-
 type WebhookAdapterListeningContext = {
   webhookPath: string;
   profile: WebhookAdapterProfile;
+  server: http.Server;
 };
 
-type WebhookAdapterOptions = {
-  handleRequest?(context: WebhookAdapterRequestContext): boolean | Promise<boolean>;
-  acceptedResponse?(record: VoiceTranscriptEventRecord, payload: WebhookPayload): AcceptedWebhookResponse;
+export type WebhookAdapterOptions = {
+  apiOperations?: Pick<ManagerApiOperationsService, "registerExternalListener">;
+  operationId?(name: string): string;
+  publishListener?(publication: ApiExternalListenerPublication | undefined): void;
+  readReplies?(url: URL): Record<string, unknown>;
+  acceptPayload?(profile: WebhookAdapterProfile, webhookPath: string, payload: WebhookPayload, bodyBytes: number): VoiceTranscriptEventRecord;
+  acceptedResponse?(record: VoiceTranscriptEventRecord, payload: WebhookPayload): WebhookHttpReply;
   onListening?(context: WebhookAdapterListeningContext): void | MessageAdapterDispose | Promise<void | MessageAdapterDispose>;
 };
 
@@ -245,21 +240,6 @@ export function patchRelayStatus(profile: WebhookAdapterProfile, patch: {
 export function normalizeWebhookPath(rawPath: string): string {
   const trimmed = rawPath.trim() || "/webhook";
   return trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
-}
-
-function readRequestBody(request: http.IncomingMessage): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const chunks: Buffer[] = [];
-    request.on("data", (chunk: Buffer) => {
-      chunks.push(chunk);
-      if (Buffer.concat(chunks).byteLength > 1024 * 1024) {
-        reject(new Error("Payload too large"));
-        request.destroy();
-      }
-    });
-    request.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
-    request.on("error", reject);
-  });
 }
 
 export function stringPayloadField(value: unknown): string {
@@ -439,90 +419,36 @@ function defaultWebhookProfile(): WebhookAdapterProfile {
   };
 }
 
-export function createFenneNoteAdapter(): MessageAdapter {
-  return createWebhookAdapter({
-    type: "fennenote",
-    label: "FenneNote / 芬妮笔记",
-    source: "fennenote",
-    path: config.fenneNoteWebhookPath,
-    port: config.fenneNoteWebhookPort,
-    acceptedTypes: ["voice_transcript", "fennenote.voice_transcript", "fennenote.transcript", "webhook.text"],
-    routeKind: "voice_transcript",
-    missingTextMessage: "FenneNote payload has no text/message/content"
-  });
-}
-
-function closeWebhookServer(server: http.Server): Promise<void> {
-  server.closeAllConnections();
-  if (!server.listening) return Promise.resolve();
-  return new Promise<void>((resolve, reject) => {
-    server.close((error) => error ? reject(error) : resolve());
-  });
-}
 
 export function createWebhookAdapter(profile = defaultWebhookProfile(), options: WebhookAdapterOptions = {}): MessageAdapter {
   return {
     type: profile.type,
     start(): Promise<MessageAdapterDispose> {
       const webhookPath = normalizeWebhookPath(profile.path);
-      let acceptingRequests = true;
-      const server = http.createServer(async (request, response) => {
-        if (!acceptingRequests) {
-          response.writeHead(503, { "content-type": "text/plain; charset=utf-8" }).end(`${profile.label} is stopping.`);
+      let listener: ApiExternalListenerRegistration | undefined;
+      const writeReply = (response: http.ServerResponse, reply: WebhookHttpReply) => {
+        if (!response.destroyed && !response.writableEnded) response.writeHead(reply.statusCode, reply.headers).end(reply.body);
+      };
+      const server = http.createServer((request, response) => {
+        if (!producer.accepting()) {
+          writeReply(response, owner.stopping());
           return;
         }
         const requestUrl = new URL(request.url ?? "/", "http://127.0.0.1");
-        const requestPath = requestUrl.pathname;
-        const handled = await options.handleRequest?.({ request, response, requestUrl, requestPath, webhookPath, profile });
-        if (handled) {
-          return;
-        }
-
-        if (request.method === "GET" && requestPath === webhookPath) {
-          response.writeHead(200, { "content-type": "application/json; charset=utf-8" }).end(JSON.stringify({
-            ok: true,
-            adapterType: profile.type,
-            label: profile.label,
-            path: webhookPath,
-            port: profile.port,
-            status: "ready"
-          }));
-          return;
-        }
-
-        if (request.method !== "POST" || requestPath !== webhookPath) {
-          appendAdapterLog(profile.type, {
-            level: "warning",
-            event: "rejected_request",
-            message: `Unsupported ${profile.label} request`,
-            data: {
-              method: request.method,
-              url: request.url,
-              expectedPath: webhookPath
-            }
-          });
-          response.writeHead(404).end();
-          return;
-        }
-
-        try {
-          const body = await readRequestBody(request);
-          if (!acceptingRequests) {
-            response.writeHead(503, { "content-type": "text/plain; charset=utf-8" }).end(`${profile.label} is stopping.`);
-            return;
-          }
-          const payload = JSON.parse(body || "{}") as WebhookPayload;
-          const record = acceptWebhookPayload(profile, webhookPath, payload, Buffer.byteLength(body));
-          const acceptedResponse = options.acceptedResponse?.(record, payload) ?? { statusCode: 204 };
-          response.writeHead(acceptedResponse.statusCode, acceptedResponse.headers).end(acceptedResponse.body);
-        } catch (error) {
-          if (!acceptingRequests) {
-            if (!response.headersSent && !response.destroyed) {
-              response.writeHead(503, { "content-type": "text/plain; charset=utf-8" }).end(`${profile.label} is stopping.`);
-            }
-            return;
-          }
-          const message = error instanceof Error ? error.message : String(error);
+        if (!listener) { writeReply(response, owner.stopping()); return; }
+        if (!listener.handle(request, requestUrl, response)) writeReply(response, owner.rejected(request));
+      });
+      const producer = createWebhookRequestProducer(server);
+      const owner = createWebhookHttpOwner({
+        profile, webhookPath, accepting: producer.accepting,
+        acceptPayload: (payload, bodyBytes) => (options.acceptPayload ?? acceptWebhookPayload)(profile, webhookPath, payload, bodyBytes),
+        acceptedResponse: options.acceptedResponse,
+        readReplies: options.readReplies,
+        reportRejected(method, url) {
+          appendAdapterLog(profile.type, { level: "warning", event: "rejected_request",
+            message: `Unsupported ${profile.label} request`, data: { method, url, expectedPath: webhookPath } });
+        },
+        reportError(message) {
           patchWebhookStatus(profile, {
             status: "error",
             message,
@@ -538,9 +464,19 @@ export function createWebhookAdapter(profile = defaultWebhookProfile(), options:
               port: profile.port
             }
           });
-          response.writeHead(500).end(message);
         }
       });
+      let nativeClosing: Promise<void> | undefined;
+      const closeNative = () => nativeClosing ??= (async () => {
+        listener?.stopAccepting();
+        let publicationFailure: unknown;
+        try { options.publishListener?.(undefined); } catch (error) { publicationFailure = error; }
+        const closed = producer.close();
+        const settled = await Promise.allSettled([closed, ...(listener ? [listener.dispose()] : [])]);
+        const failure = settled.find(result => result.status === "rejected");
+        if (failure?.status === "rejected") throw failure.reason;
+        if (publicationFailure !== undefined) throw publicationFailure;
+      })();
 
       const host = profile.host || "127.0.0.1";
       return new Promise<MessageAdapterDispose>((resolve, reject) => {
@@ -578,7 +514,7 @@ export function createWebhookAdapter(profile = defaultWebhookProfile(), options:
           reportServerError(error);
           if (startupSettled) return;
           startupSettled = true;
-          void closeWebhookServer(server).finally(() => reject(error));
+          void closeNative().then(() => reject(error), () => reject(error));
         };
 
         server.once("error", onStartupError);
@@ -588,13 +524,23 @@ export function createWebhookAdapter(profile = defaultWebhookProfile(), options:
           server.on("error", reportServerError);
           let listeningDispose: MessageAdapterDispose | undefined;
           try {
+            const address = server.address();
+            if (!address || typeof address === "string") throw new Error("Webhook listener has no bound TCP address.");
+            const gateway = options.apiOperations ? undefined : getGatewayListenerRuntime();
+            const operationId = (name: string) => options.operationId?.(`webhook.${profile.type}.${name}`)
+              ?? gateway?.operationId(`webhook.${profile.type}.${name}`) ?? `webhook.${profile.type}.${address.port}.${name}`;
+            const definition = webhookListenerBinding(profile, address.port, operationId("listener"));
+            listener = options.apiOperations ? options.apiOperations.registerExternalListener(definition)
+              : gateway!.registerExternalListener(operationId("owner"), definition);
+            listener.registerHttpProxies(createWebhookNativeOperations({ profile, webhookPath, replies: Boolean(options.readReplies), owner, producer, operationId }));
+            options.publishListener?.(listener.publication());
             patchWebhookStatus(profile, {
               status: "running",
               message: `${profile.label} 消息端已启动。`,
               path: webhookPath,
               port: profile.port
             });
-            const acquiredDispose = await options.onListening?.({ webhookPath, profile });
+            const acquiredDispose = await options.onListening?.({ webhookPath, profile, server });
             if (typeof acquiredDispose === "function") listeningDispose = acquiredDispose;
             const url = `http://${host}:${profile.port}${webhookPath}`;
             appendAdapterLog(profile.type, {
@@ -609,15 +555,12 @@ export function createWebhookAdapter(profile = defaultWebhookProfile(), options:
             });
             console.log(`RabiRoute ${profile.label} adapter listening on ${url}`);
             startupSettled = true;
-            let disposed = false;
-            resolve(async () => {
-              if (disposed) return;
-              disposed = true;
-              acceptingRequests = false;
+            let disposeFlight: Promise<void> | undefined;
+            resolve(() => disposeFlight ??= (async () => {
               server.off("error", reportServerError);
               const disposeErrors: unknown[] = [];
               try {
-                await closeWebhookServer(server);
+                await closeNative();
               } catch (error) {
                 disposeErrors.push(error);
               }
@@ -636,12 +579,11 @@ export function createWebhookAdapter(profile = defaultWebhookProfile(), options:
               });
               if (disposeErrors.length === 1) throw disposeErrors[0];
               if (disposeErrors.length > 1) throw new AggregateError(disposeErrors, `${profile.label} cleanup failed.`);
-            });
+            })());
           } catch (error) {
             startupSettled = true;
-            acceptingRequests = false;
             server.off("error", reportServerError);
-            await closeWebhookServer(server).catch(() => {});
+            await closeNative().catch(() => {});
             if (typeof listeningDispose === "function") {
               await Promise.resolve(listeningDispose()).catch(() => {});
             }

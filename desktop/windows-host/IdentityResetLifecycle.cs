@@ -147,7 +147,7 @@ internal sealed class IdentityResetLifecycle
         var stdoutPath = Path.Combine(logs, attempt + ".stdout.json");
         var stderrPath = Path.Combine(logs, attempt + ".stderr.txt");
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeout.CancelAfter(TimeSpan.FromSeconds(60));
+        timeout.CancelAfter(HostTimeouts.Get("host.identityReset.execute", TimeSpan.FromSeconds(60)));
         using var job = new WindowsJob($"identity-{request.OperationId}-{attempt}");
         using var child = NativeChildProcess.StartSuspendedInJob(job, node, BuildArguments(entry, _stateRoot, request, leasePath, recover), _stateRoot,
             new Dictionary<string, string?>
@@ -180,7 +180,7 @@ internal sealed class IdentityResetLifecycle
             // Closing a Job kills all descendants. Observe both readers before
             // releasing the lease, including timeout/output-limit failure paths.
             if (!child.HasExited || job.MemberProcessIds().Count != 0) job.Terminate(1);
-            await child.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
+            await child.WaitForExitAsync().WaitAsync(HostTimeouts.Get("host.identityReset.exit", TimeSpan.FromSeconds(10)));
             try { await Task.WhenAll(stdout, stderr); } catch (OperationCanceledException) { } catch (InvalidDataException) { }
         }
     }

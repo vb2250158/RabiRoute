@@ -1,3 +1,4 @@
+import { getTimeoutMs } from "../shared/timeoutSettings.js";
 import type { CurrentQqFileBinding } from "./agentDeliveryVerification.js";
 
 const RESPONSE_BYTES = 256 * 1024;
@@ -33,7 +34,7 @@ export async function readQqVerificationAccountIdentity(
     const url = `${origin.origin}/get_login_info`;
     const cancelled = new Promise<never>((_, reject) => { stop = () => reject(new Error("Account observation cancelled")); });
     signal.addEventListener("abort", abort, { once: true });
-    timer = setTimeout(abort, DEADLINE_MS);
+    timer = setTimeout(abort, getTimeoutMs("backend.manager.agentDeliveryAccountIdentity.DEADLINE_MS", DEADLINE_MS));
     const bounded = <T>(operation: Promise<T>): Promise<T> => Promise.race([operation, cancelled]);
     const response = await bounded(transport(url, {
       method: "POST", redirect: "error", cache: "no-store", credentials: "omit", signal: controller.signal,

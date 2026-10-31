@@ -1,10 +1,15 @@
 import assert from "node:assert/strict";
+import http from "node:http";
+import { once } from "node:events";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import test from "node:test";
 import { runPluginActivation } from "../plugin-kernel/pluginActivationContext.js";
 import type { PluginIdentity } from "../plugin-kernel/types.js";
+import { fixtureApiContract } from "./apiOperationContractFixtures.js";
+import type { ApiOperationDefinition, ApiOperationResult } from "./apiOperationContract.js";
 import {
   ManagerPluginRouteRegistry,
+  createManagerApiOperationsService,
   type ManagerPluginRouteDeclaration,
   type ManagerPluginRouteHandler
 } from "./managerPluginRouteRegistry.js";
@@ -12,6 +17,85 @@ import {
 const request = { method: "GET" } as IncomingMessage;
 const response = {} as ServerResponse;
 const url = new URL("http://127.0.0.1/api/test");
+
+function asynchronousOperation(index: number): ApiOperationDefinition {
+  const base = fixtureApiContract();
+  return { contract: { ...base, operationId: `fixture.async.${index}`, pathTemplate: `/api/async/${index}` },
+    handler: () => ({ status: 200, body: { ok: true, value: index } }) };
+}
+
+test("async API preparation yields between operations and mounts one complete batch", async () => {
+  const registry = new ManagerPluginRouteRegistry(), controller = new AbortController();
+  const definitions = Array.from({ length: 8 }, (_, index) => asynchronousOperation(index));
+  let turns = 0, finished = false;
+  const heartbeat = () => {
+    if (finished) return;
+    turns++;
+    assert.equal(registry.catalogSnapshot().operations.length, 0, "Preparation must not publish a partial batch.");
+    setImmediate(heartbeat);
+  };
+  setImmediate(heartbeat);
+  try {
+    const registration = await registry.registerOperationsAsync("async", definitions, controller.signal);
+    finished = true;
+    assert.ok(turns >= definitions.length);
+    assert.equal(registry.catalogSnapshot().operations.length, definitions.length);
+    await registration.dispose();
+    assert.equal(registry.catalogSnapshot().operations.length, 0);
+  } finally { finished = true; }
+});
+
+test("async API registration cancels after preparation has started without mounting routes", async () => {
+  const registry = new ManagerPluginRouteRegistry(), controller = new AbortController();
+  let turns = 0, finished = false;
+  const heartbeat = () => {
+    if (finished) return;
+    if (++turns === 2) controller.abort(new Error("fixture cancellation"));
+    else setImmediate(heartbeat);
+  };
+  setImmediate(heartbeat);
+  try {
+    await assert.rejects(registry.registerOperationsAsync("async", Array.from({ length: 8 }, (_, index) => asynchronousOperation(index)), controller.signal), { name: "AbortError" });
+    assert.equal(turns, 2);
+    assert.equal(registry.catalogSnapshot().operations.length, 0);
+  } finally { finished = true; }
+});
+
+test("async API registration rejects a later invalid schema atomically and captures inputs before yielding", async () => {
+  const registry = new ManagerPluginRouteRegistry(), controller = new AbortController();
+  const valid = asynchronousOperation(0), invalid = asynchronousOperation(1);
+  const base = invalid.contract;
+  const before = registry.catalogSnapshot();
+  await assert.rejects(registry.registerOperationsAsync("async", [valid, { ...invalid, contract: { ...base,
+    request: { ...base.request, query: { type: "invalid" } } } }], controller.signal));
+  assert.equal(registry.catalogSnapshot(), before);
+  const original = JSON.parse(JSON.stringify(valid.contract));
+  const mutable = { contract: original, handler: valid.handler };
+  const definitions = [mutable];
+  const pending = registry.registerOperationsAsync("async", definitions, controller.signal);
+  original.operationId = "fixture.changed";
+  original.pathTemplate = "/api/changed";
+  definitions.length = 0;
+  const registration = await pending;
+  const operation = registry.catalogSnapshot().operations[0]!;
+  assert.equal(operation.contract.operationId, valid.contract.operationId);
+  assert.equal(operation.contract.pathTemplate, valid.contract.pathTemplate);
+  await registration.dispose();
+});
+
+test("async host facade retains the captured Manager activation across yields", async () => {
+  const published = new Set(["live"]), registry = new ManagerPluginRouteRegistry(() => published);
+  const service = createManagerApiOperationsService(registry), controller = new AbortController();
+  assert.throws(() => service.registerOperationsAsync([asynchronousOperation(0)], controller.signal), /active Manager plugin context/);
+  const identity: PluginIdentity = { applicationGenerationId: "generation", managerInstanceId: "manager", activationId: "live",
+    instanceId: "manager:async", pluginId: "io.rabiroute.fixture", version: "1.0.0", revision: "fixture", host: "manager" };
+  const registration = await runPluginActivation(identity, () => service.registerOperationsAsync([asynchronousOperation(0)], controller.signal));
+  assert.equal(registry.snapshot()[0]!.instanceId, identity.instanceId);
+  assert.equal(registry.catalogSnapshot().operations.length, 1);
+  published.clear();
+  assert.equal(registry.catalogSnapshot().operations.length, 0);
+  await registration.dispose();
+});
 
 function exact(
   routeId: string,
@@ -226,3 +310,27 @@ test("Manager plugin route registry snapshot exposes sanitized route declaration
   }]);
   assert.equal(JSON.stringify(registry.snapshot()).includes("test"), false);
 });
+
+
+for (const invalidResult of [undefined, null, 23]) {
+  test("invalid primitive API result " + String(invalidResult) + " releases its endpoint admission", { timeout: 5_000 }, async t => {
+    const registry = new ManagerPluginRouteRegistry(undefined, undefined, { maximumActiveOperationsPerOperation: 1 });
+    let invalid = true;
+    const registration = registry.registerOperations("primitive-result", [{ contract: fixtureApiContract(),
+      handler: () => invalid ? invalidResult as unknown as ApiOperationResult : { status: 200, body: { ok: true, value: 1 } } }]);
+    const server = http.createServer((request, response) => registry.handle(request, new URL(request.url!, "http://localhost"), response));
+    server.listen(0, "127.0.0.1"); await once(server, "listening");
+    t.after(async () => { server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve()));
+      if (registration.activeOperationCount() === 0) await registration.dispose(); });
+    const address = server.address(); assert.ok(address && typeof address !== "string");
+    const send = () => fetch("http://127.0.0.1:" + address.port + "/api/example/records/one", { method: "POST",
+      headers: { "content-type": "application/json" }, body: '{"value":1}' });
+    const rejected = await send(); assert.equal(rejected.status, 500); await rejected.arrayBuffer();
+    await new Promise<void>(resolve => setImmediate(resolve));
+    assert.equal(registration.activeOperationCount(), 0, "A primitive cannot leave an unknown stream owner.");
+    assert.deepEqual(registry.streamRetirementDiagnostics(), []);
+    invalid = false; const healthy = await send(); assert.equal(healthy.status, 200);
+    assert.deepEqual(await healthy.json(), { ok: true, value: 1 });
+    await registration.dispose();
+  });
+}

@@ -1,3 +1,4 @@
+import { getTimeoutMs } from "./timeoutSettingsClient";
 import type { HomeDeviceDirectory } from "@shared/homeDeviceDirectoryContract";
 import type { HomeEntityAction } from "../../src/integrations/xiaomiHome/entityActions";
 import type { XiaomiHomeResource } from "./xiaomiHomeSettingsClient";
@@ -10,13 +11,13 @@ export type ActionResult = { idempotencyKey: string; state: string; receipt?: Re
 const root = "/api/agent/xiaomi-home";
 class RequestFailure extends Error { constructor(readonly status: number, message: string) { super(message); } }
 async function request<T>(url: string, init: RequestInit = {}): Promise<T> {
- const response = await fetch(url, { cache: "no-store", signal: AbortSignal.timeout(30000), ...init });
+ const response = await fetch(url, { cache: "no-store", ...init, signal: AbortSignal.any([...(init.signal ? [init.signal] : []), AbortSignal.timeout(getTimeoutMs("webgui.device.request", 30000))]) });
  const body = await response.json();
  if (!response.ok || body.code !== 0) throw new RequestFailure(response.status, body.error?.message || body.message || `请求失败（${response.status}）`);
  return body.data;
 }
 async function identity() {
- const response = await fetch("/meta", { cache: "no-store", signal: AbortSignal.timeout(12000) });
+ const response = await fetch("/meta", { cache: "no-store", signal: AbortSignal.timeout(getTimeoutMs("webgui.device.identity", 12000)) });
  const meta = await response.json();
  if (!response.ok || !meta.applicationGenerationId || !meta.managerInstanceId) throw Error("运行版本不可确认，请刷新页面。");
  return { applicationGenerationId: String(meta.applicationGenerationId), managerInstanceId: String(meta.managerInstanceId) };
@@ -24,7 +25,7 @@ async function identity() {
 function sameIdentity(a: Awaited<ReturnType<typeof identity>>, b: Awaited<ReturnType<typeof identity>>) {
  return a.applicationGenerationId === b.applicationGenerationId && a.managerInstanceId === b.managerInstanceId;
 }
-async function inspect(resourceId: string, signal?: AbortSignal): Promise<DeviceResource> { return request(root + "/entity-actions?" + new URLSearchParams({ resourceId }), signal ? { signal: AbortSignal.any([signal, AbortSignal.timeout(30000)]) } : {}); }
+async function inspect(resourceId: string, signal?: AbortSignal): Promise<DeviceResource> { return request(root + "/entity-actions?" + new URLSearchParams({ resourceId }), signal ? { signal: AbortSignal.any([signal, AbortSignal.timeout(getTimeoutMs("webgui.device.request", 30000))]) } : {}); }
 async function receipt(key: string): Promise<ActionResult> { return request(root + "/action-requests?" + new URLSearchParams({ idempotencyKey: key })); }
 async function execute(resourceId: string, choice: DeviceActionChoice, parameters: Record<string, unknown>, dryRun: boolean, key: string): Promise<ActionResult> {
  const before = await identity();
@@ -101,7 +102,7 @@ export const vacuumVideoClient = {
   return result;
  },
  stop: (sessionId: string) => videoWrite("stop", {sessionId}, "video-stop-" + sessionId),
- status: (sessionId: string, signal?: AbortSignal) => request<VacuumVideoSession>(root + "/vacuum-cloud/video/status?" + new URLSearchParams({sessionId}), signal ? {signal:AbortSignal.any([signal,AbortSignal.timeout(30000)])} : {}),
+ status: (sessionId: string, signal?: AbortSignal) => request<VacuumVideoSession>(root + "/vacuum-cloud/video/status?" + new URLSearchParams({sessionId}), signal ? {signal:AbortSignal.any([signal,AbortSignal.timeout(getTimeoutMs("webgui.device.request", 30000))])} : {}),
  streamUrl: (sessionId: string) => root + "/vacuum-cloud/video/stream?" + new URLSearchParams({sessionId})
 };
 /** The verified pv11cn video switch is a control entity, not a video stream. */

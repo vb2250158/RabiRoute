@@ -27,7 +27,9 @@ async function responseData<T>(response: Response): Promise<T> {
   return payload.data;
 }
 
-export const desktopPetClient = {
+export function createDesktopPetClient(fetchImpl: typeof fetch = (...args) => fetch(...args)) {
+const fetch = fetchImpl;
+const desktopPetClient = {
   async binding(personaId: string): Promise<DesktopPetBinding> {
     const response = await fetch(`/api/desktop-pet/roles/${encodeURIComponent(personaId)}`);
     return (await responseData<{ personaId: string; binding: DesktopPetBinding }>(response)).binding;
@@ -57,3 +59,7 @@ export const desktopPetClient = {
     return (await responseData<{ personaId: string; pack: DesktopPetPackSummary }>(response)).pack;
   }
 };
+
+return desktopPetClient;
+}
+export const desktopPetClient = createDesktopPetClient();

@@ -1,28 +1,33 @@
+import { constants as bufferConstants } from "node:buffer";
+import { ReadSettingsError } from "../shared/readSettingsError.js";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import type { NapCatEndpoint } from "../napcat.js";
+import { qqReadSettings } from "../shared/qqReadSettings.js";
 
-export const QQ_MEDIA_MAX_BYTES = 64 * 1024 * 1024;
-const MAX_JSON_BYTES = 1024 * 1024;
+// Wire capacity; the owner applies the configured quota before reading.
+export const QQ_MEDIA_MAX_BYTES = bufferConstants.MAX_LENGTH;
 export type QqMessage = { message_id: string | number; message_type: string; group_id?: string | number; user_id?: string | number;
   time?: number; sender?: { user_id?: string | number; nickname?: string; card?: string }; message: unknown; raw_message?: string };
 export type QqMedia = { kind: string; name: string; file?: string; url?: string };
 export class QqReadError extends Error {
-  constructor(public readonly status: number, public readonly code: string) { super(code); }
+  constructor(public readonly status: number, public readonly code: string, detail?: string) { super(detail ? `${code}: ${detail}` : code); }
 }
 
-async function boundedBytes(response: Response, max: number): Promise<Buffer> {
+async function boundedBytes(response: Response, max: number, limitSetting?: string): Promise<Buffer> {
   if (!response.ok || !response.body) throw new QqReadError(503, "QQ_UPSTREAM_UNAVAILABLE");
   const reader = response.body.getReader();
   const chunks: Buffer[] = [];
   let size = 0;
   try {
-    if (Number(response.headers.get("content-length")) > max) throw new QqReadError(413, "QQ_RESPONSE_TOO_LARGE");
+    const tooLarge = () => new QqReadError(413, "QQ_RESPONSE_TOO_LARGE", limitSetting
+      ? `QQ resource exceeds ${limitSetting}; effective limit is ${max} bytes. Set 0 to remove the application quota (runtime Buffer capacity still applies).` : undefined);
+    if (Number(response.headers.get("content-length")) > max) throw tooLarge();
     for (;;) {
       const item = await reader.read();
       if (item.done) break;
       size += item.value.length;
-      if (size > max) throw new QqReadError(413, "QQ_RESPONSE_TOO_LARGE");
+      if (size > max) throw tooLarge();
       chunks.push(Buffer.from(item.value));
     }
     return Buffer.concat(chunks);
@@ -32,18 +37,19 @@ async function boundedBytes(response: Response, max: number): Promise<Buffer> {
 /** No arbitrary OneBot action, request URL or error body crosses the public API. */
 export async function qqRead(endpoint: NapCatEndpoint, action: "get_msg" | "get_group_msg_history" | "get_friend_msg_history" | "get_file", payload: unknown,
   signal: AbortSignal, transport: typeof fetch = fetch): Promise<Record<string, unknown>> {
+  const MAX_JSON_BYTES = qqReadSettings.jsonBytes;
   const origin = new URL(endpoint.httpUrl);
-  if (origin.protocol !== "http:" || !["127.0.0.1", "[::1]"].includes(origin.hostname)
+  if (!["http:", "https:"].includes(origin.protocol)
     || origin.username || origin.password || origin.search || origin.hash || origin.pathname !== "/") throw new QqReadError(409, "QQ_ENDPOINT_UNSAFE");
   try {
     const response = await transport(new URL(action, origin), { method: "POST", redirect: "error", signal,
       headers: { "content-type": "application/json", ...(endpoint.accessToken ? { authorization: `Bearer ${endpoint.accessToken}` } : {}) },
       body: JSON.stringify(payload) });
-    const envelope = JSON.parse((await boundedBytes(response, MAX_JSON_BYTES)).toString("utf8"));
+    const envelope = JSON.parse((await boundedBytes(response, MAX_JSON_BYTES, "RABIROUTE_QQ_JSON_MAX_BYTES")).toString("utf8"));
     if (envelope?.status !== "ok" || envelope.retcode !== 0 || !envelope.data || typeof envelope.data !== "object") throw new QqReadError(503, "QQ_UPSTREAM_UNAVAILABLE");
     return envelope.data;
   } catch (error) {
-    if (error instanceof QqReadError) throw error;
+    if (error instanceof QqReadError || error instanceof ReadSettingsError) throw error;
     throw new QqReadError(503, "QQ_UPSTREAM_UNAVAILABLE");
   }
 }
@@ -81,10 +87,13 @@ export function qqMessageText(message: QqMessage): string {
 }
 
 export async function readQqMedia(endpoint: NapCatEndpoint, media: QqMedia, signal: AbortSignal, transport: typeof fetch = fetch): Promise<Buffer> {
+  const QQ_MEDIA_MAX_BYTES = qqReadSettings.mediaBytes;
   // Never pass a URL, path or base64 value from the message to get_file's arbitrary-file mode.
   if (!media.file || media.file.length > 4096 || /[/\\:]|^base64/i.test(media.file)) throw new QqReadError(422, "QQ_MEDIA_REFERENCE_UNAVAILABLE");
   const result = await qqRead(endpoint, "get_file", { file_id: media.file }, signal, transport);
-  if (Number(result.file_size) > QQ_MEDIA_MAX_BYTES) throw new QqReadError(413, "QQ_MEDIA_TOO_LARGE");
+  const tooLarge = () => new QqReadError(413, "QQ_MEDIA_TOO_LARGE",
+    `QQ attachment exceeds RABIROUTE_QQ_MEDIA_MAX_BYTES; effective limit is ${QQ_MEDIA_MAX_BYTES} bytes. Set 0 to remove the application quota (runtime Buffer capacity still applies).`);
+  if (Number(result.file_size) > QQ_MEDIA_MAX_BYTES) throw tooLarge();
   const localFile = typeof result.file === "string" && path.isAbsolute(result.file) ? result.file : undefined;
   if (localFile) {
     // The trusted local NapCat resolved this path from the selected message's resource ID.
@@ -92,7 +101,7 @@ export async function readQqMedia(endpoint: NapCatEndpoint, media: QqMedia, sign
     try {
       const stat = await handle.stat();
       if (!stat.isFile() || stat.size === 0) throw new QqReadError(422, "QQ_MEDIA_EMPTY");
-      if (stat.size > QQ_MEDIA_MAX_BYTES) throw new QqReadError(413, "QQ_MEDIA_TOO_LARGE");
+      if (stat.size > QQ_MEDIA_MAX_BYTES) throw tooLarge();
       const bytes = Buffer.alloc(stat.size);
       let offset = 0;
       while (offset < bytes.length) {
@@ -105,13 +114,12 @@ export async function readQqMedia(endpoint: NapCatEndpoint, media: QqMedia, sign
       return bytes;
     } finally { await handle.close(); }
   }
-  // Only official QQ media hosts. Do not proxy arbitrary message URLs or redirects.
+  // NapCat resolves the selected attachment; CDN host names and ports are not permissions.
   const value = typeof result.url === "string" && result.url ? result.url : media.url;
   let url: URL;
   try { url = new URL(value ?? ""); } catch { throw new QqReadError(422, "QQ_MEDIA_REFERENCE_UNAVAILABLE"); }
-  if (!["http:", "https:"].includes(url.protocol) || url.username || url.password || url.port
-    || !["qq.com", "qpic.cn"].some(domain => url.hostname.endsWith(`.${domain}`))) throw new QqReadError(422, "QQ_MEDIA_URL_UNSUPPORTED");
-  const bytes = await boundedBytes(await transport(url, { signal, redirect: "error" }), QQ_MEDIA_MAX_BYTES);
+  if (!["http:", "https:"].includes(url.protocol) || url.username || url.password) throw new QqReadError(422, "QQ_MEDIA_URL_UNSUPPORTED");
+  const bytes = await boundedBytes(await transport(url, { signal, redirect: "follow" }), QQ_MEDIA_MAX_BYTES, "RABIROUTE_QQ_MEDIA_MAX_BYTES");
   if (!bytes.length) throw new QqReadError(422, "QQ_MEDIA_EMPTY");
   return bytes;
 }

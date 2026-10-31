@@ -1,7 +1,8 @@
+import { getTimeoutMs } from "./shared/timeoutSettings.js";
 import fs from "node:fs";
 import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
-import { getLoginInfo, sendGroupMessage, sendPrivateMessage, uploadGroupFile, type NapCatEndpoint, type OneBotMessage } from "./napcat.js";
+import { getLoginInfo, sendGroupMessage, sendPrivateMessage, uploadGroupFile, NapCatRequestError, type NapCatEndpoint, type OneBotMessage } from "./napcat.js";
 import { normalizePipelineDefinition, resolvePipeline, type PipelineDefinition, type ResolvedPipeline } from "./pipelines.js";
 import { normalizeWeComError, sendWeComMessage, type WeComEndpoint } from "./wecom.js";
 import { sendFeishuText, type FeishuEndpoint } from "./feishu.js";
@@ -31,9 +32,8 @@ import {
   appendMessageContextToDir,
   messageContextFromOutboxEvent
 } from "./messageContextStore.js";
-import { postFenneNoteOutput } from "./fenneNoteOutput.js";
 import { recordDataMutationAudit } from "./observability/dataMutationAudit.js";
-import { renderMarkdownToPng } from "./markdownImage.js";
+import { renderMarkdownToPng, markdownImageSettings, checkMarkdownQuota } from "./markdownImage.js";
 import { napcatStickerMessage, QQ_STICKER_ID } from "./napcatStickers.js";
 
 export type AgentReplyRequest = {
@@ -173,7 +173,7 @@ export type AgentReplyOptions = {
   fenneNoteReplyToken?: string;
   speechServiceUrl?: string;
   publishEvent?: (eventType: string, data: Record<string, unknown>) => void;
-  planStorageReady?: () => boolean;
+  planStorageReady?: (roleIds?: readonly string[]) => boolean;
   appendRolePanelTimeline?: (
     roleId: string,
     message: RolePanelTimelineMessage
@@ -202,6 +202,7 @@ export type AgentReplyResult = {
   ok: boolean;
   status: "sent" | "draft" | "blocked" | "failed";
   reason?: string;
+  deliveryError?: NapCatRequestError["diagnostic"];
   routeProfileId?: string;
   messageId?: string;
   targetType?: "group" | "private" | "role_panel" | "plan_feedback" | "voice_transcript" | "rabilink";
@@ -608,17 +609,16 @@ function validatedOutboundFilePath(rootDir: string, filePath: string, allowedFil
   if (!stat.isFile()) {
     throw new Error(`Outbound file is not a regular file: ${candidate}`);
   }
-  if (allowedFileRoots.length === 0) {
-    throw new Error("No allowedFileRoots are configured for local file output.");
-  }
   const realCandidate = fs.realpathSync(candidate);
+  // An absent or empty policy does not impose an extra file-output permission.
+  if (allowedFileRoots.length === 0) return realCandidate;
   const allowed = allowedFileRoots.some((configuredRoot) => {
     const resolvedRoot = path.resolve(rootDir, configuredRoot);
     if (!fs.existsSync(resolvedRoot) || !fs.statSync(resolvedRoot).isDirectory()) return false;
     return isPathWithin(fs.realpathSync(resolvedRoot), realCandidate);
   });
   if (!allowed) {
-    throw new Error(`Outbound file is outside the configured allowedFileRoots: ${realCandidate}`);
+    throw new Error(`Outbound file is outside the configured allowedFileRoots: ${realCandidate}. Update this Route's messageAdapterPolicies.<channel>.allowedFileRoots (current: ${JSON.stringify(allowedFileRoots)}); an empty list removes this Route/channel directory restriction.`);
   }
   return realCandidate;
 }
@@ -647,9 +647,7 @@ async function renderNapCatMarkdownSegments(message: OneBotMessage): Promise<One
     }
     const png = await renderMarkdownToPng(String(segment.data.text ?? ""));
     totalPngBytes += png.length;
-    if (totalPngBytes > 8 * 1024 * 1024) {
-      throw new Error("Rendered Markdown images exceed the 8 MiB message limit.");
-    }
+    checkMarkdownQuota("RABIROUTE_MARKDOWN_MAX_MESSAGE_PNG_BYTES", markdownImageSettings.messagePngBytes, totalPngBytes);
     rendered.push({ type: "image", data: { file: `base64://${png.toString("base64")}` } });
   }
   return rendered;
@@ -1070,7 +1068,7 @@ async function observeQqUploadOwner(
   const request = { routeProfileId: expected.routeId, instanceId: expected.instanceId, groupId: expected.groupId };
   if (agentReplyCurrentQqBinding(request, options)?.bindingRevision !== expected.bindingRevision) return undefined;
   try {
-    const login = await getLoginInfo(expected.endpoint, { timeoutMs: 2_000 });
+    const login = await getLoginInfo(expected.endpoint, { timeoutMs: getTimeoutMs("backend.outbox.observeQqUploadOwner.getLoginInfo.timeoutMs", 2_000) });
     const selfId = typeof login.userId === "string" ? login.userId
       : typeof login.userId === "number" && Number.isSafeInteger(login.userId) ? String(login.userId) : "";
     if (!/^[1-9][0-9]{0,15}$/.test(selfId)
@@ -1098,7 +1096,7 @@ function replyPipeline(route: ResolvedRoute, request: AgentReplyRequest, target:
     : explicitChannel === "speech"
       ? "tts"
       : explicitChannel === "fennenote"
-        ? "fennenote"
+        ? "tts"
         : explicitChannel === "wecom"
           ? "wecom"
           : explicitChannel === "feishu"
@@ -1345,15 +1343,6 @@ function napcatPolicy(route: ResolvedRoute): NormalizedMessageAdapterPolicy {
   }, "napcat");
 }
 
-function fenneNotePolicy(route: ResolvedRoute): NormalizedMessageAdapterPolicy {
-  return messageAdapterPolicyFor({
-    id: route.runtime.id,
-    gatewayPort: 0,
-    messageAdapters: ["fennenote"],
-    messageAdapterPolicies: route.runtime.messageAdapterPolicies
-  }, "fennenote");
-}
-
 function speechPolicy(route: ResolvedRoute): NormalizedMessageAdapterPolicy {
   return messageAdapterPolicyFor({
     id: route.runtime.id,
@@ -1584,7 +1573,7 @@ async function appendPlanFeedbackReply(
       targetType: "plan_feedback"
     };
   }
-  if (options.planStorageReady?.() === false) {
+  if (options.planStorageReady?.([roleId]) === false) {
     return {
       ok: false,
       status: "blocked",
@@ -1672,78 +1661,6 @@ async function appendPlanFeedbackReply(
     targetType: "plan_feedback",
     sentMessageId: record.id
   };
-}
-
-function stripRouteSuffix(value: string | undefined): string | undefined {
-  if (!value) return undefined;
-  const text = value.replace(/\s*路由\s*$/, "").trim();
-  return text || value;
-}
-
-function personaNameForFenneNote(options: AgentReplyOptions, route: ResolvedRoute): string | undefined {
-  const roleId = valueString(route.profile?.agentRoleId ?? route.runtime.agentRoleId);
-  const rolesDir = valueString(route.profile?.rolesDir ?? route.runtime.rolesDir) ?? options.rolesRoot;
-  if (!agentReplyPersonaDeviceId(route) && roleId && rolesDir) {
-    const rolePath = path.join(path.isAbsolute(rolesDir) ? rolesDir : path.resolve(options.rootDir, rolesDir), roleId, "persona.md");
-    try {
-      const firstHeading = fs.readFileSync(rolePath, "utf8").split(/\r?\n/).find((line) => line.trim().startsWith("# "));
-      const name = firstHeading?.replace(/^#\s+/, "").trim();
-      if (name) return name;
-    } catch {
-      // Best-effort display name only; route ids remain the durable identity.
-    }
-  }
-  return stripRouteSuffix(route.profile?.name ?? route.runtime.name ?? roleId);
-}
-
-function fenneNoteReplyPayload(
-  options: AgentReplyOptions,
-  request: AgentReplyRequest,
-  route: ResolvedRoute,
-  target: SourceRecord,
-  content: ReplyContent
-): Record<string, unknown> {
-  const context = contextObject(request);
-  const payload = payloadObject(request);
-  const requestFields = request as Record<string, unknown>;
-  return {
-    ...payload,
-    ...requestFields,
-    text: content.text,
-    message: requestFields.message ?? payload.message ?? content.text,
-    content: requestFields.content ?? payload.content ?? content.text,
-    payloadType: requestFields.payloadType ?? payload.payloadType ?? payload.type ?? content.kind,
-    routeProfileId: route.profile?.id ?? route.runtime.id,
-    routeProfileName: route.profile?.name ?? route.runtime.name,
-    agentRoleId: route.profile?.agentRoleId ?? route.runtime.agentRoleId,
-    agentRoleName: personaNameForFenneNote(options, route),
-    messageId: target.messageId ?? valueString(context.messageId),
-    targetType: target.targetType ?? valueString(context.targetType) ?? "voice_transcript",
-    adapterType: "fennenote",
-    speakerId: context.speakerId,
-    speakerName: context.speakerName,
-    speakerKind: context.speakerKind,
-    speakerConfidence: context.speakerConfidence,
-    speakerDecision: context.speakerDecision,
-    replyContext: context,
-    payload
-  };
-}
-
-function shouldUseFenneNotePlayback(
-  request: AgentReplyRequest,
-  target: SourceRecord,
-  pipeline: ResolvedPipeline
-): boolean {
-  const context = contextObject(request);
-  const payload = payloadObject(request);
-  return target.targetType === "voice_transcript"
-    || valueString(context.routeKind) === "voice_transcript"
-    || pipeline.ttsPlay
-    || typeof payload.play === "boolean"
-    || Boolean(valueString(payload.character_id))
-    || Boolean(valueString(payload.worker_url))
-    || Array.isArray(payload.emotion_vector);
 }
 
 function routeVariable(route: ResolvedRoute, key: string): string {
@@ -2123,63 +2040,6 @@ export async function handleAgentReply(request: AgentReplyRequest, options: Agen
     return result;
   }
 
-  if (pipeline.outputAdapter === "fennenote") {
-    const fennePolicy = fenneNotePolicy(route);
-    if (!fennePolicy.outputEnabled) {
-      const result: AgentReplyResult = { ...draft("FenneNote message sending is disabled by this route policy.", text, target, route.profile?.id ?? route.runtime.id), status: "blocked" };
-      appendOutboxLog(options, route, "warning", "reply_blocked", result.reason ?? "blocked", result);
-      return result;
-    }
-    if (!fennePolicy.supportedOutputs.includes(content.kind)) {
-      const result: AgentReplyResult = { ...draft(`FenneNote route policy does not allow ${content.kind} payloads.`, text, target, route.profile?.id ?? route.runtime.id), status: "blocked" };
-      appendOutboxLog(options, route, "warning", "reply_blocked", result.reason ?? "blocked", result);
-      return result;
-    }
-
-    try {
-      const outputMode = shouldUseFenneNotePlayback(request, target, pipeline) ? "playback" : "reply";
-      const forwarded = await postFenneNoteOutput(
-        fenneNoteReplyPayload(options, request, route, target, content),
-        {
-          mode: outputMode,
-          playbackUrl: options.fenneNotePlaybackUrl,
-          playbackToken: options.fenneNotePlaybackToken,
-          replyUrl: options.fenneNoteReplyUrl,
-          replyToken: options.fenneNoteReplyToken
-        }
-      );
-      const result: AgentReplyResult = {
-        ok: true,
-        status: "sent",
-        reason: outputMode === "playback" ? "Sent to FenneNote playback endpoint." : "Sent to FenneNote reply endpoint.",
-        routeProfileId: route.profile?.id ?? route.runtime.id,
-        messageId,
-        targetType: target.targetType,
-        groupId: target.groupId,
-        userId: target.userId,
-        instanceId: target.instanceId,
-        sentMessageId: valueString((forwarded.response as Record<string, unknown>)?.messageId ?? (forwarded.response as Record<string, unknown>)?.id)
-      };
-      appendOutboxLog(options, route, "info", outputMode === "playback" ? "fennenote_playback_sent" : "fennenote_reply_sent", text.slice(0, 500), withConversation({ ...result, forwarded }));
-      return result;
-    } catch (error) {
-      const result: AgentReplyResult = {
-        ok: false,
-        status: "failed",
-        reason: error instanceof Error ? error.message : String(error),
-        routeProfileId: route.profile?.id ?? route.runtime.id,
-        messageId,
-        targetType: target.targetType,
-        groupId: target.groupId,
-        userId: target.userId,
-        instanceId: target.instanceId,
-        draft: { text, targetType: target.targetType, groupId: target.groupId, userId: target.userId }
-      };
-      appendOutboxLog(options, route, "error", "fennenote_reply_failed", result.reason ?? "failed", result);
-      return result;
-    }
-  }
-
   const shouldUseWeCom = pipeline.outputAdapter === "wecom" || target.adapterType === "wecom" || contextTarget.adapterType === "wecom";
   const shouldUseFeishu = pipeline.outputAdapter === "feishu" || target.adapterType === "feishu" || contextTarget.adapterType === "feishu";
   if (shouldUseFeishu) {
@@ -2439,10 +2299,18 @@ export async function handleAgentReply(request: AgentReplyRequest, options: Agen
     appendOutboxLog(options, route, "warning", "reply_blocked", result.reason ?? "blocked", result);
     return result;
   } catch (error) {
-    const reason = content.managedFileId
+    const deliveryError = error instanceof NapCatRequestError ? error.diagnostic : undefined;
+    let reason = content.managedFileId
       ? (options.withManagedGroupFile ? "Managed group file delivery failed." : "Managed group file resolver is unavailable.")
-      : error instanceof Error ? error.message : String(error);
-    const result: AgentReplyResult = { ok: false, status: "failed", reason, routeProfileId: route.profile?.id ?? route.runtime.id, messageId, targetType: target.targetType, groupId: target.groupId, userId: target.userId, instanceId: endpoint.id, draft: { text, targetType: target.targetType, groupId: target.groupId, userId: target.userId } };
+      : deliveryError ? "NapCat delivery failed." : error instanceof Error ? error.message : String(error);
+    if (deliveryError) {
+      const details = [deliveryError.kind,
+        ...(deliveryError.httpStatus === undefined ? [] : [`HTTP ${deliveryError.httpStatus}`]),
+        ...(deliveryError.retcode === undefined ? [] : [`retcode=${deliveryError.retcode}`]),
+        ...(deliveryError.transportCode ? [deliveryError.transportCode] : [])];
+      reason += ` NapCat ${deliveryError.action}: ${details.join(" ")}; inspect the original receipt before any retry.`;
+    }
+    const result: AgentReplyResult = { ok: false, status: "failed", reason, ...(deliveryError ? { deliveryError } : {}), routeProfileId: route.profile?.id ?? route.runtime.id, messageId, targetType: target.targetType, groupId: target.groupId, userId: target.userId, instanceId: endpoint.id, draft: { text, targetType: target.targetType, groupId: target.groupId, userId: target.userId } };
     appendOutboxLog(options, route, "error", "reply_failed", result.reason ?? "failed", withDeliveryTrace(result));
     return result;
   }

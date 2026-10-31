@@ -2,7 +2,9 @@ import { h, type Component } from "vue";
 import { webReleaseQuery } from "./webRelease";
 import {
   beginTrustedWebPageReplacement,
-  notifyTrustedWebPageReplacement,
+  activeTrustedWebPage,
+  mountedTrustedWebPages,
+  onActiveTrustedWebPageChanged,
   registerTrustedWebPage,
   type TrustedWebPageRegistration
 } from "./pluginPages";
@@ -61,6 +63,30 @@ type ActiveModule = Readonly<{ descriptor: WebPluginModuleDescriptor; dispose: (
 
 const active = new Map<string, ActiveModule>();
 let syncQueue: Promise<void> = Promise.resolve();
+let deferredReplacement = false;
+let deferredRefreshFlight: Promise<void> | undefined;
+let disposing = false;
+
+export function retainActiveWebPluginModule(
+  loaded: WebPluginModuleDescriptor,
+  target: WebPluginModuleDescriptor | undefined,
+  page: TrustedWebPageRegistration | undefined = activeTrustedWebPage()
+): boolean {
+  // Revocation still removes the capability. Only a compatible continuing owner is retained.
+  return [page, ...mountedTrustedWebPages()].some(owner => !!target && !!owner && loaded.pluginId === owner.pluginId
+    && loaded.instances.some(instance => instance.instanceId === owner.instanceId)
+    && loaded.instances.every(instance => target.instances.some(next => next.instanceId === instance.instanceId))
+    && target.pluginId === owner.pluginId
+    && target.instances.some(instance => instance.instanceId === owner.instanceId));
+}
+
+onActiveTrustedWebPageChanged(() => {
+  if (!deferredReplacement || deferredRefreshFlight || disposing) return;
+  // Re-read the current catalog; an earlier queued descriptor may already be superseded.
+  deferredRefreshFlight = refreshWebPluginModules()
+    .catch(error => console.warn('Deferred Web plugin refresh failed; unrelated modules remain available.', error))
+    .finally(() => { deferredRefreshFlight = undefined; });
+});
 
 function validInstance(value: unknown): value is WebPluginModuleInstanceDescriptor {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
@@ -91,40 +117,53 @@ export function sameWebPluginModuleInstances(
   return leftIds.size === right.length && right.every(instance => leftIds.has(instance.instanceId));
 }
 
-async function list(): Promise<readonly WebPluginModuleDescriptor[]> {
+async function list(): Promise<{ modules: readonly WebPluginModuleDescriptor[]; invalidIds: ReadonlySet<string>; unidentified: boolean; failures: unknown[] }> {
   const response = await fetch(`/api/plugins/modules${webReleaseQuery()}`, { cache: "no-store" });
   if (!response.ok) throw new Error(`Unable to load Web plugin modules: ${response.status}.`);
   const body = await response.json() as { code?: unknown; data?: { modules?: unknown } };
-  if (body.code !== 0 || !Array.isArray(body.data?.modules) || !body.data.modules.every(validDescriptor)) {
+  if (body.code !== 0 || !Array.isArray(body.data?.modules)) {
     throw new Error("Web plugin module catalog is invalid.");
   }
-  const modules = body.data.modules;
-  if (new Set(modules.map(item => item.id)).size !== modules.length) throw new Error("Web plugin module catalog has duplicate ids.");
-  return Object.freeze([...modules].sort((left, right) => left.id.localeCompare(right.id)));
+  const modules = new Map<string, WebPluginModuleDescriptor>();
+  const invalidIds = new Set<string>();
+  const failures: unknown[] = [];
+  let unidentified = false;
+  for (const candidate of body.data.modules) {
+    const id = candidate && typeof candidate === 'object' && typeof candidate.id === 'string' ? candidate.id : undefined;
+    if (!validDescriptor(candidate) || !id || modules.has(id) || invalidIds.has(id)) {
+      if (id) { invalidIds.add(id); modules.delete(id); } else unidentified = true;
+      failures.push(new Error(`Invalid or ambiguous Web plugin module descriptor: ${id ?? 'unknown identity'}.`));
+      continue;
+    }
+    modules.set(id, candidate);
+  }
+  return { modules: [...modules.values()].sort((left, right) => left.id.localeCompare(right.id)), invalidIds, unidentified, failures };
+
 }
 
 function instanceRegistrationApi(
   descriptor: WebPluginModuleDescriptor,
-  instanceId: string
+  instanceId: string,
+  track: (cleanup: () => void) => () => void
 ): WebPluginInstanceRegistrationApi {
   const owner = { instanceId, pluginId: descriptor.pluginId };
   return Object.freeze({
     ...owner,
     version: descriptor.version,
     h,
-    registerPage: input => registerTrustedWebPage({ ...input, ...owner }),
-    registerSettingsRenderer: input => registerTrustedWebSettingsRenderer({ ...input, ...owner }),
-    registerStatusRenderer: input => registerTrustedWebStatusRenderer({ ...input, ...owner }),
-    registerTheme: input => registerTrustedWebThemeResource({ ...input, ...owner }),
-    registerCommand: input => registerTrustedWebCommand({ ...input, ...owner }),
+    registerPage: input => track(registerTrustedWebPage({ ...input, ...owner })),
+    registerSettingsRenderer: input => track(registerTrustedWebSettingsRenderer({ ...input, ...owner })),
+    registerStatusRenderer: input => track(registerTrustedWebStatusRenderer({ ...input, ...owner })),
+    registerTheme: input => track(registerTrustedWebThemeResource({ ...input, ...owner })),
+    registerCommand: input => track(registerTrustedWebCommand({ ...input, ...owner })),
     asComponent: value => value
   });
 }
 
-function registrationApi(descriptor: WebPluginModuleDescriptor): WebPluginModuleRegistrationApi {
+function registrationApi(descriptor: WebPluginModuleDescriptor, track: (cleanup: () => void) => () => void): WebPluginModuleRegistrationApi {
   const instances = new Map(descriptor.instances.map(instance => [
     instance.instanceId,
-    instanceRegistrationApi(descriptor, instance.instanceId)
+    instanceRegistrationApi(descriptor, instance.instanceId, track)
   ]));
   const instanceIds = Object.freeze([...instances.keys()]);
   return Object.freeze({
@@ -149,8 +188,27 @@ async function importModule(descriptor: WebPluginModuleDescriptor): Promise<WebP
 async function activate(descriptor: WebPluginModuleDescriptor): Promise<ActiveModule> {
   const module = await importModule(descriptor);
   if (typeof module.activate !== "function") throw new Error(`Web plugin module does not export activate(): ${descriptor.id}.`);
-  const cleanup = await module.activate(registrationApi(descriptor));
-  return Object.freeze({ descriptor, dispose: typeof cleanup === "function" ? cleanup : () => {} });
+  const registrations = new Set<() => void>();
+  const track = (cleanup: () => void) => {
+    let live = true;
+    const release = () => { if (!live) return; live = false; registrations.delete(release); cleanup(); };
+    registrations.add(release); return release;
+  };
+  const releaseRegistrations = () => {
+    const failures: unknown[] = [];
+    for (const release of [...registrations].reverse()) { try { release(); } catch (error) { failures.push(error); } }
+    if (failures.length) throw new AggregateError(failures, 'Web module registration cleanup failed.');
+  };
+  let cleanup: void | (() => void | Promise<void>);
+  try { cleanup = await module.activate(registrationApi(descriptor, track)); }
+  catch (error) {
+    try { releaseRegistrations(); } catch (cleanupError) { throw new AggregateError([error, cleanupError], 'Web module activation and cleanup failed.'); }
+    throw error;
+  }
+  return Object.freeze({ descriptor, dispose: async () => {
+    try { await cleanup?.(); } finally { releaseRegistrations(); }
+  } });
+
 }
 
 async function dispose(module: ActiveModule): Promise<void> {
@@ -158,13 +216,20 @@ async function dispose(module: ActiveModule): Promise<void> {
 }
 
 async function syncNow(): Promise<void> {
-  const desired = await list();
+  const catalog = await list();
+  const desired = catalog.modules;
   const desiredById = new Map(desired.map(item => [item.id, item]));
+  const failures: unknown[] = [...catalog.failures];
+  const attempted = new Set<string>();
+  deferredReplacement = false;
   for (const [id, loaded] of [...active]) {
     const target = desiredById.get(id);
+    if (catalog.invalidIds.has(id) || (!target && catalog.unidentified)) continue;
     if (target
       && target.rev === loaded.descriptor.rev
       && sameWebPluginModuleInstances(target.instances, loaded.descriptor.instances)) continue;
+    if (retainActiveWebPluginModule(loaded.descriptor, target)) { deferredReplacement = true; continue; }
+    attempted.add(id);
     const endReplacement = beginTrustedWebPageReplacement();
     try {
       await dispose(loaded);
@@ -180,15 +245,17 @@ async function syncNow(): Promise<void> {
         }
         throw error;
       }
+    } catch (error) {
+      failures.push(error);
     } finally {
       endReplacement();
     }
-    notifyTrustedWebPageReplacement();
   }
   for (const descriptor of desired) {
-    if (active.has(descriptor.id)) continue;
-    active.set(descriptor.id, await activate(descriptor));
+    if (active.has(descriptor.id) || attempted.has(descriptor.id)) continue;
+    try { active.set(descriptor.id, await activate(descriptor)); } catch (error) { failures.push(error); }
   }
+  if (failures.length) throw new AggregateError(failures, "Some Web plugin modules could not be refreshed.");
 }
 
 export function refreshWebPluginModules(): Promise<void> {
@@ -198,7 +265,10 @@ export function refreshWebPluginModules(): Promise<void> {
 }
 
 export async function disposeWebPluginModules(): Promise<void> {
+  disposing = true;
   await syncQueue;
   for (const module of [...active.values()].reverse()) await dispose(module);
   active.clear();
+  deferredReplacement = false;
+  disposing = false;
 }

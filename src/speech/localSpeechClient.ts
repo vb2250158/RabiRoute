@@ -1,3 +1,4 @@
+import { getTimeoutMs } from "../shared/timeoutSettings.js";
 export type LocalSpeechResponse = {
   status: number;
   contentType: string;
@@ -14,23 +15,11 @@ const forwardedHeaderNames = [
   "x-rabispeech-playback-job"
 ];
 
-function isLoopbackHostname(hostname: string): boolean {
-  const normalized = hostname.replace(/^\[|\]$/g, "").toLowerCase();
-  if (normalized === "localhost" || normalized === "::1") return true;
-  const parts = normalized.split(".").map(Number);
-  return parts.length === 4
-    && parts.every(part => Number.isInteger(part) && part >= 0 && part <= 255)
-    && parts[0] === 127;
-}
-
-/** Keep RabiPC's local control plane from turning into an arbitrary HTTP proxy. */
+/** Normalize the user-configured speech HTTP endpoint without restricting its host. */
 export function normalizeLocalSpeechServiceUrl(value: string): string {
   const parsed = new URL(String(value || "").trim());
   if (!(parsed.protocol === "http:" || parsed.protocol === "https:")) {
     throw new Error("语音服务地址只支持 HTTP 或 HTTPS。");
-  }
-  if (!isLoopbackHostname(parsed.hostname)) {
-    throw new Error("语音服务只允许访问本机回环地址。");
   }
   if (parsed.username || parsed.password) {
     throw new Error("语音服务地址不能包含用户名或密码。");
@@ -63,7 +52,7 @@ export async function requestLocalSpeech(
   options: { fetchImpl?: FetchLike; timeoutMs?: number } = {}
 ): Promise<LocalSpeechResponse> {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), options.timeoutMs ?? 190_000);
+  const timer = setTimeout(() => controller.abort(), options.timeoutMs ?? getTimeoutMs("speech.request", 190000));
   try {
     const response = await (options.fetchImpl ?? fetch)(localSpeechEndpoint(configuredUrl, pathname), {
       ...init,

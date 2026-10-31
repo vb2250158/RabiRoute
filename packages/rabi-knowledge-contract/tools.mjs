@@ -8,7 +8,7 @@ function segment(value) {
 }
 const descriptions = {
   knowledge_search: 'Search plan and memory summaries by keywords or full text. Follow returned cursors; an unavailable index is not an empty result.',
-  plan_list: 'List bounded plan summaries for an allowed role. Follow the returned cursor to continue.',
+  plan_list: 'List bounded plan summaries for a role. Follow the returned cursor to continue.',
   plan_get: 'Read one exact plan and its ETag before preparing an update.',
   plan_statuses: 'Read the current role-specific marker status catalog before choosing markerStatus.',
   memory_list: 'List bounded memory summaries without updating view timestamps.',
@@ -19,14 +19,15 @@ const descriptions = {
   recent_memory_update: 'Update a recent memory with its exact strong ETag and a saved stable idempotencyKey; consolidated memory cannot be modified.'
 };
 const writes = new Set(['plan_create', 'plan_update', 'recent_memory_create', 'recent_memory_update']);
+export class KnowledgePolicyError extends Error {}
 export function knowledgeToolIsMutation(name, args) {
   return writes.has(name) || (name === 'memory_get' && args?.kind === 'recent');
 }
 /** client must provide authenticated identity-fenced invoke and honor replaySafe:false. */
-export function createKnowledgeTools({ client, allowedRoles, allowWrites = false } = {}) {
-  if (typeof client?.invoke !== 'function' || !Array.isArray(allowedRoles) || typeof allowWrites !== 'boolean') throw new TypeError('A client and fixed allowedRoles are required.');
-  allowedRoles.forEach(segment);
-  const roles = new Set(allowedRoles);
+export function createKnowledgeTools({ client, allowedRoles, allowWrites = true } = {}) {
+  if (typeof client?.invoke !== 'function' || (allowedRoles !== undefined && !Array.isArray(allowedRoles)) || typeof allowWrites !== 'boolean') throw new TypeError('A client and valid optional knowledge policy are required.');
+  allowedRoles?.forEach(segment);
+  const roles = allowedRoles === undefined ? undefined : new Set(allowedRoles);
   function list() {
     return Object.entries(definitions).filter(([name]) => allowWrites || !writes.has(name)).map(([name, definition]) => {
       const inputSchema = structuredClone(definition);
@@ -42,13 +43,13 @@ export function createKnowledgeTools({ client, allowedRoles, allowWrites = false
     validate(args, definitions[name]);
     // Clone validated values before awaiting a client, so callers cannot change the intent in flight.
     const a = structuredClone(args);
-    if (!roles.has(a.roleId)) throw new Error('Role is not allowed.');
+    if (roles && !roles.has(a.roleId)) throw new KnowledgePolicyError('Role excluded by allowedRoles (RABI_MCP_ALLOWED_ROLES in the MCP launch environment); edit or remove that configured list.');
     // Writable Manager accepts an explicit touch key and echoes it with a revision.
     // A read-only Manager takes a pure-read branch without that receipt: deliberately
     // do not confirm it under this stricter stateful-read contract. Never replay GET.
     const touch = name === 'memory_get' && a.kind === 'recent';
     const mutation = writes.has(name) || touch;
-    if (mutation && !allowWrites) throw new Error('Knowledge writes are disabled (recent memory detail also updates viewedAt).');
+    if (mutation && !allowWrites) throw new KnowledgePolicyError('Knowledge writes disabled by allowWrites=false (RABI_MCP_ALLOW_WRITES=false in the MCP launch environment); change that setting to enable writes. Recent details update viewedAt.');
     const base = `/api/roles/${segment(a.roleId)}`;
     if (a.id !== undefined) segment(a.id);
     let method = 'GET', target, body;

@@ -1,3 +1,4 @@
+import { getTimeoutMs, readTimeoutOverrides } from "../shared/timeoutSettings.js";
 import { fork, type ChildProcess } from "node:child_process";
 import os from "node:os";
 import { fileURLToPath } from "node:url";
@@ -115,7 +116,7 @@ export class AgentAdapterCatalogWorkerPool {
   constructor(options: AgentAdapterCatalogWorkerPoolOptions = {}) {
     this.maxConcurrency = Math.max(1, Math.floor(options.maxConcurrency ?? 1));
     this.maxQueue = Math.max(0, Math.floor(options.maxQueue ?? 1));
-    this.timeoutMs = Math.max(100, Math.floor(options.timeoutMs ?? 5 * 60_000));
+    this.timeoutMs = Math.max(1, Math.floor(options.timeoutMs ?? getTimeoutMs("backend.manager.agentAdapterCatalogWorkerPool.owner.Math.floor.timeoutMs", 5 * 60_000)));
   }
 
   query<T>(
@@ -221,7 +222,7 @@ export class AgentAdapterCatalogWorkerPool {
     const pending: PendingScan = {
       task,
       queuedAt: performance.now(),
-      timeoutMs: Math.max(100, Math.floor(timeoutMs ?? this.timeoutMs)),
+      timeoutMs: Math.max(1, Math.floor(timeoutMs ?? getTimeoutMs("worker.agentCatalog", this.timeoutMs))),
       settled: false,
       promise,
       resolve: resolvePending,
@@ -354,7 +355,7 @@ export class AgentAdapterCatalogWorkerPool {
   private send(slot: WorkerSlot): void {
     const request = {
       requestId: slot.active.requestId,
-      task: slot.active.pending.task
+      task: slot.active.pending.task, timeoutOverrides: readTimeoutOverrides()
     } satisfies AgentAdapterCatalogWorkerRequest;
     try {
       slot.worker.send(request, error => {

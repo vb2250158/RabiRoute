@@ -95,6 +95,18 @@ test("Route load, policy editing and save preserve omitted and explicit group-fi
   }
 });
 
+test("conversation review stays disabled by default and its explicit switch survives save and reload", async () => {
+  const f = await fixture([{ id: "a", configName: "a", enabled: true, messageAdapters: ["napcat"] }]);
+  assert.equal(f.store.gateways[0].messageAdapterPolicies?.napcat?.conversationReview?.enabled, false);
+  for (const enabled of [true, false]) {
+    setMessageAdapterPolicy(f.store.gateways[0], "napcat", { conversationReview: { enabled } });
+    await f.store.save("a");
+    await f.store.load();
+    assert.equal(f.rows[0].messageAdapterPolicies.napcat.conversationReview.enabled, enabled);
+    assert.equal(f.store.gateways[0].messageAdapterPolicies?.napcat?.conversationReview?.enabled, enabled);
+  }
+});
+
 test("instance target selection survives actual store PUT and reload without overwriting local Codex", async () => {
   const f = await fixture();
   const draft = f.store.gateways[0];
@@ -222,6 +234,30 @@ test("a late acknowledgement preserves newer edits and concurrent clicks share o
   assert.equal(f.writes, 1);
   assert.equal(f.store.gateways[0].name, "edited while saving");
   assert.equal(f.store.dirty, true);
+});
+
+test("a second save cannot claim changed fields or another route were included in the in-flight write", async () => {
+  const f = await fixture();
+  let release!: () => void;
+  let entered!: () => void;
+  const reached = new Promise<void>(resolve => { entered = resolve; });
+  f.delay(async () => { entered(); await new Promise<void>(resolve => { release = resolve; }); });
+  f.store.gateways[0].name = "first snapshot";
+  const first = f.store.save("a");
+  await reached;
+  f.store.gateways[0].name = "next draft";
+  await assert.rejects(f.store.save("a"), /上次保存仍在进行/);
+  await assert.rejects(f.store.save("b"), /上次保存仍在进行/);
+  release();
+  await first;
+  assert.equal(f.rows[0].name, "first snapshot");
+  assert.equal(f.store.gateways[0].name, "next draft");
+  assert.equal(f.store.dirty, true);
+  f.delay(async () => {});
+  await f.store.save("a");
+  assert.equal(f.rows[0].name, "next draft");
+  assert.equal(f.writes, 2);
+  assert.equal(f.store.dirty, false);
 });
 
 test("a lost committed response is recovered without resubmitting the write", async () => {

@@ -83,7 +83,9 @@ $requiredPortableRuntimeFiles = @(
     "packages/rabi-companion/observation.json",
     "scripts/Resolve-RabiRouteManagerUrl.ps1",
     "scripts/resolve-manager.mjs",
+    "scripts/upgrade-persona-message-config.mjs",
     "scripts/lib/discover-manager-url.mjs",
+    "scripts/lib/windows-host-discovery.mjs",
     "apps/rabi-agent/lib/manager-client.mjs",
     "apps/rabi-agent/lib/manager-cli.mjs",
     # MCP knowledge tools reuse these canonical contracts independently of Relay.
@@ -426,12 +428,14 @@ foreach ($relative in @(
 }
 
 Copy-RequiredPortableRuntimeFiles
-foreach ($relative in @("apps\rabi-agent\runtime", "apps\rabi-agent\dist\agent-hooks", "apps\rabi-agent\dist\native")) {
+foreach ($relative in @("apps\rabi-agent\runtime", "apps\rabi-agent\dist\agent-hooks")) {
     $source = Join-Path $repo $relative
     if (-not (Test-Path -LiteralPath $source -PathType Container)) { throw "Instance Agent runtime was not built: $relative" }
     $destination = Join-Path $payload $relative
-    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $destination) | Out-Null
-    Copy-Item -LiteralPath $source -Destination $destination -Recurse -Force
+    New-Item -ItemType Directory -Force -Path $destination | Out-Null
+    foreach ($sourceEntry in Get-ChildItem -LiteralPath $source -Force) {
+        Copy-Item -LiteralPath $sourceEntry.FullName -Destination $destination -Recurse -Force
+    }
 }
 
 if ($IncludeSpeech) {
@@ -444,19 +448,10 @@ Write-Step "Installing production-only npm dependencies into the payload"
 & npm.cmd ci --omit=dev --ignore-scripts --prefix $payload
 if ($LASTEXITCODE -ne 0) { throw "Production npm install failed." }
 
-# npm installs local file: dependencies as directory junctions. A release payload
-# must remain self-contained after it leaves the build tree, so materialize the
-# SDK package and reject every remaining reparse point before archiving.
-$pluginSdkSource = Join-Path $payload "plugins\contracts\plugin-sdk"
-$pluginSdkInstall = Join-Path $payload "node_modules\@rabiroute\plugin-sdk"
-if (-not (Test-Path -LiteralPath $pluginSdkSource -PathType Container)) {
-    throw "The packaged plugin SDK source is missing: $pluginSdkSource"
-}
-if (Test-Path -LiteralPath $pluginSdkInstall) {
-    Remove-PayloadEntry $pluginSdkInstall
-}
-New-Item -ItemType Directory -Force -Path (Split-Path -Parent $pluginSdkInstall) | Out-Null
-Copy-Item -LiteralPath $pluginSdkSource -Destination $pluginSdkInstall -Recurse -Force
+# Materialize every local file: dependency from npm's files/exports contract;
+# the tracked resource snapshot may omit new, not-yet-tracked package assets.
+& node.exe (Join-Path $scriptDir 'lib/materialize-local-dependencies.mjs') $repo $payload
+if ($LASTEXITCODE -ne 0) { throw "Local dependency materialization or exported-entry validation failed." }
 
 $payloadReparsePoints = Get-ChildItem -LiteralPath $payload -Recurse -Force | Where-Object {
     ($_.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0

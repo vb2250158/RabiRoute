@@ -4,222 +4,102 @@ import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { atomicWriteFileSync, withFileLockSync } from "../shared/filePersistence.js";
 import { recordDataMutationAudit, type DataMutationAuditRecord } from "../observability/dataMutationAudit.js";
 
-import type { InstanceAgent } from "../shared/agentInstance.js";
-
-export type LanAgentApprovedBinding = Pick<InstanceAgent, "agentId" | "provider" | "sessionId" | "managedSessionIds">;
 export type LanAgentIdentity = { nodeId: string };
 export type LanAgentCredential = LanAgentIdentity & { token: string };
-export type LanAgentAuthoritySnapshot = {
-  revision: string;
-  nodes: Array<LanAgentIdentity & { enabledAgentIds: string[]; agentBindings?: LanAgentApprovedBinding[]; connectionManaged?: true; enabled?: boolean }>;
-};
-
-/** Identify credentials before any loopback exception; malformed lan1 tokens still require auth. */
-export function isLanAgentCredentialToken(token: string): boolean {
-  return typeof token === "string" && token.startsWith("lan1:");
-}
-
-function stateRevision(state: AuthorityState): string {
-  const stored = storageState(state) as { schemaVersion: number; nodes: unknown[] };
-  return createHash("sha256").update(JSON.stringify({ schemaVersion: stored.schemaVersion, nodes: stored.nodes })).digest("hex");
-}
-export type LanAgentBootstrapTicket = { ticket: string; expiresAt: number };
-export type LanAgentAuthorityOptions = {
-  /** Trusted Manager-owned path, never derived from a remote request. */
-  statePath: string;
-  now?: () => number;
-  bootstrapTtlMs?: number;
-  maxBootstrapTickets?: number;
-};
-
+export type LanAgentCredentialDiagnostic = Readonly<{ index: number; nodeId?: string; reason: "invalid_record" | "duplicate_identity" }>;
+export type LanAgentAuthoritySnapshot = { revision: string; nodes: Array<LanAgentIdentity & { enabled: boolean }>; diagnostics: readonly LanAgentCredentialDiagnostic[] };
 export type LanAgentConnectionLease = Readonly<{ nodeId: string; incarnation: string }>;
-export type LanAgentAuthorizationLease = Readonly<{ nodeId: string; agentId: string; incarnation: string; binding?: LanAgentApprovedBinding; connectionManaged?: true }>;
-type NodeGrant = { nodeId: string; secretHash: string; enabledAgentIds: string[]; disabledAgentIds?: string[]; agentBindings?: LanAgentApprovedBinding[]; authorizationIncarnation?: string; connectionManaged?: true; connectionEnabled?: boolean };
-
-/** Every effective node policy change invalidates requests issued before it, including disable/enable ABA. */
-function rotateAuthorizationIncarnation(node: NodeGrant): void {
-  node.authorizationIncarnation = randomBytes(32).toString("hex");
-}
-
-function setNodeAgentEnabled(node: NodeGrant, agentId: string, enabled: boolean): void {
-  const disabled = node.disabledAgentIds ?? [];
-  if (!enabled && !disabled.includes(agentId) && disabled.length >= MAX_AGENTS_PER_NODE) throw new Error("Agent disable capacity reached.");
-  if (enabled && !node.enabledAgentIds.includes(agentId) && node.enabledAgentIds.length >= MAX_AGENTS_PER_NODE) throw new Error("Agent grant capacity reached.");
-  const disabledAgentIds = enabled ? disabled.filter(id => id !== agentId) : [...new Set([...disabled, agentId])];
-  const enabledAgentIds = enabled ? [...new Set([...node.enabledAgentIds, agentId])] : node.enabledAgentIds.filter(id => id !== agentId);
-  if (JSON.stringify(disabled) === JSON.stringify(disabledAgentIds)
-    && JSON.stringify(node.enabledAgentIds) === JSON.stringify(enabledAgentIds)) return;
-  node.disabledAgentIds = disabledAgentIds;
-  node.enabledAgentIds = enabledAgentIds;
-  rotateAuthorizationIncarnation(node);
-}
-export type LanAgentAuthorizationMutation = {
-  nodeId: string; agentId: string; enabled: boolean; binding?: LanAgentApprovedBinding;
-  expectedRevision: string; idempotencyKey: string;
-  /** Trusted synchronous Manager validation; skipped for durable replay, never hashed/persisted. */
-  validateBinding?: () => void;
-};
-/** Historical result of this command, not a claim about current effective policy. */
-export type LanAgentAuthorizationResult = { revision: string; replayed: boolean; enabled: boolean };
-type MutationReceipt = {
-  keyHash: string; requestHash: string; revision: string; enabled: boolean; committedAt: number; expiresAt: number;
-};
-type AuthorityState = { schemaVersion: 1 | 2; nodes: NodeGrant[]; mutationReceipts?: MutationReceipt[] };
-export const LAN_AGENT_MUTATION_RECEIPT_TTL_MS = 24 * 60 * 60_000;
-export const LAN_AGENT_MUTATION_RECEIPT_LIMIT = 1_000;
+export type LanAgentBootstrapTicket = { ticket: string; expiresAt: number };
+export type LanAgentAuthorityOptions = { statePath: string; now?: () => number; bootstrapTtlMs?: number; maxBootstrapTickets?: number };
+type NodeCredential = { nodeId: string; secretHash: string; connectionIncarnation: string; enabled?: boolean };
+type AuthorityState = { schemaVersion: 2; nodes: NodeCredential[] };
+type CredentialSource = { nodes: unknown[]; validIds: Set<string>; diagnostics: LanAgentCredentialDiagnostic[] };
+const credentialSources = new WeakMap<AuthorityState, CredentialSource>();
 const ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const SECRET_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 const MAX_STATE_BYTES = 4 * 1024 * 1024;
 const MAX_NODES = 2_000;
-const MAX_AGENTS_PER_NODE = 1_000;
-
-function validId(value: unknown): value is string {
-  return typeof value === "string" && ID_PATTERN.test(value);
-}
-
-function hashSecret(value: string): string {
-  return createHash("sha256").update(value).digest("hex");
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
-
-function copyBinding(value: unknown, persisted = false): LanAgentApprovedBinding {
-  const validText = (text: unknown, max: number): text is string => typeof text === "string"
-    && text.length > 0 && text.length <= max && text.trim() === text && !/[\u0000-\u001f\u007f]/.test(text);
-  if (!isRecord(value) || !validId(value.agentId) || !validText(value.provider, 80)
-    || (value.sessionId !== undefined && !validText(value.sessionId, 192))
-    || (value.managedSessionIds !== undefined && (!Array.isArray(value.managedSessionIds)
-      || value.managedSessionIds.length > 512 || !value.managedSessionIds.every(id => validText(id, 192))
-      || new Set(value.managedSessionIds).size !== value.managedSessionIds.length))
-    || (persisted && Object.keys(value).some(key => !["agentId", "provider", "sessionId", "managedSessionIds"].includes(key)))) {
-    throw new Error("Invalid LAN agent authority binding.");
+const validId = (value: unknown): value is string => typeof value === "string" && ID_PATTERN.test(value);
+const hashSecret = (value: string) => createHash("sha256").update(value).digest("hex");
+const isRecord = (value: unknown): value is Record<string, unknown> => Boolean(value && typeof value === "object" && !Array.isArray(value));
+const hash = (value: unknown): value is string => typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
+export function isLanAgentCredentialToken(token: string): boolean { return typeof token === "string" && token.startsWith("lan1:"); }
+function storageState(state: AuthorityState): { schemaVersion: 2; nodes: unknown[] } {
+  const source = credentialSources.get(state);
+  if (!source) return state;
+  const remaining = new Map(state.nodes.map(node => [node.nodeId, node]));
+  const nodes: unknown[] = [];
+  for (const original of source.nodes) {
+    const id = isRecord(original) && typeof original.nodeId === "string" ? original.nodeId : undefined;
+    if (id && source.validIds.has(id)) {
+      const node = remaining.get(id);
+      if (node) nodes.push(node);
+      remaining.delete(id);
+    } else nodes.push(original);
   }
-  return {
-    agentId: value.agentId, provider: value.provider,
-    ...(value.sessionId !== undefined ? { sessionId: value.sessionId } : {}),
-    ...(value.managedSessionIds !== undefined ? { managedSessionIds: [...value.managedSessionIds as string[]] } : {})
-  };
+  nodes.push(...remaining.values());
+  return { schemaVersion: 2, nodes };
+}
+function stateRevision(state: AuthorityState): string { return hashSecret(JSON.stringify(storageState(state))); }
+function assertWritableNode(state: AuthorityState, nodeId: string): void {
+  if (credentialSources.get(state)?.diagnostics.some(item => item.nodeId === nodeId)) {
+    throw new Error("Computer credential identity is isolated. Repair its original credential records before changing this node.");
+  }
 }
 
-function loadState(statePath: string): AuthorityState {
+/** One-time retirement of session grants. Preserve credentials and their incarnation; keep exact private recovery bytes. */
+function loadState(statePath: string, migrate = false): AuthorityState {
   let text: string;
   try {
     const stat = fs.lstatSync(statePath);
-    if (!stat.isFile() || stat.size > MAX_STATE_BYTES) throw new Error("Invalid LAN agent authority file.");
+    if (!stat.isFile() || stat.size > MAX_STATE_BYTES) throw new Error("Invalid computer credential file.");
     text = fs.readFileSync(statePath, "utf8");
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { schemaVersion: 1, nodes: [] };
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { schemaVersion: 2, nodes: [] };
     throw error;
   }
   let parsed: unknown;
-  try { parsed = JSON.parse(text); } catch { throw new Error("Invalid LAN agent authority JSON."); }
-  if (isRecord(parsed) && parsed.schemaVersion === 2) return loadConnectionState(parsed);
-  if (!isRecord(parsed) || parsed.schemaVersion !== 1 || !Array.isArray(parsed.nodes)
-    || parsed.nodes.length > MAX_NODES || Object.keys(parsed).some(key => !["schemaVersion", "nodes", "mutationReceipts"].includes(key))) {
-    throw new Error("Invalid LAN agent authority schema.");
+  try { parsed = JSON.parse(text); } catch { throw new Error("Invalid computer credential JSON."); }
+  if (!isRecord(parsed) || ![1, 2].includes(parsed.schemaVersion as number) || !Array.isArray(parsed.nodes) || parsed.nodes.length > MAX_NODES
+    || Object.keys(parsed).some(key => !(parsed.schemaVersion === 1 ? ["schemaVersion", "nodes", "mutationReceipts"] : ["schemaVersion", "nodes"]).includes(key))) throw new Error("Invalid computer credential schema.");
+  const legacy = parsed.schemaVersion === 1;
+  const counts = new Map<string, number>();
+  for (const value of parsed.nodes) if (isRecord(value) && validId(value.nodeId)) counts.set(value.nodeId, (counts.get(value.nodeId) ?? 0) + 1);
+  const nodes: NodeCredential[] = [];
+  const diagnostics: LanAgentCredentialDiagnostic[] = [];
+  for (const [index, value] of parsed.nodes.entries()) {
+    const nodeId = isRecord(value) && validId(value.nodeId) ? value.nodeId : undefined;
+    if (nodeId && counts.get(nodeId)! > 1) { diagnostics.push({ index, nodeId, reason: "duplicate_identity" }); continue; }
+    const invalid = () => diagnostics.push({ index, ...(nodeId ? { nodeId } : {}), reason: "invalid_record" });
+    if (!isRecord(value) || !nodeId || !hash(value.secretHash)) { invalid(); continue; }
+    const incarnation = value.connectionIncarnation ?? (legacy ? value.authorizationIncarnation ?? hashSecret(value.secretHash) : undefined);
+    if (!hash(incarnation) || Object.keys(value).some(key => !(legacy
+      ? ["nodeId", "secretHash", "connectionIncarnation", "authorizationIncarnation", "enabledAgentIds", "disabledAgentIds", "agentBindings", "enabled"]
+      : ["nodeId", "secretHash", "connectionIncarnation", "enabled"]).includes(key))) { invalid(); continue; }
+    if (value.enabled !== undefined && typeof value.enabled !== "boolean") { invalid(); continue; }
+    nodes.push({ nodeId, secretHash: value.secretHash, connectionIncarnation: incarnation, ...(value.enabled === false ? { enabled: false } : {}) });
   }
-  const seen = new Set<string>();
-  const nodes: NodeGrant[] = parsed.nodes.map((node: unknown) => {
-    if (!isRecord(node) || !validId(node.nodeId) || seen.has(node.nodeId)
-      || typeof node.secretHash !== "string" || !/^[a-f0-9]{64}$/.test(node.secretHash)
-      || !Array.isArray(node.enabledAgentIds) || node.enabledAgentIds.length > MAX_AGENTS_PER_NODE
-      || !node.enabledAgentIds.every(validId) || new Set(node.enabledAgentIds).size !== node.enabledAgentIds.length
-      || (node.disabledAgentIds !== undefined && (!Array.isArray(node.disabledAgentIds)
-        || node.disabledAgentIds.length > MAX_AGENTS_PER_NODE || !node.disabledAgentIds.every(validId)
-        || new Set(node.disabledAgentIds).size !== node.disabledAgentIds.length
-        || node.disabledAgentIds.some(id => (node.enabledAgentIds as string[]).includes(id))))
-      || (node.authorizationIncarnation !== undefined && (typeof node.authorizationIncarnation !== "string" || !/^[a-f0-9]{64}$/.test(node.authorizationIncarnation)))
-      || Object.keys(node).some(key => !["nodeId", "secretHash", "enabledAgentIds", "disabledAgentIds", "agentBindings", "authorizationIncarnation"].includes(key))) {
-      throw new Error("Invalid LAN agent authority node.");
-    }
-    seen.add(node.nodeId);
-    let agentBindings: LanAgentApprovedBinding[] | undefined;
-    if (node.agentBindings !== undefined) {
-      if (!Array.isArray(node.agentBindings) || node.agentBindings.length > MAX_AGENTS_PER_NODE) {
-        throw new Error("Invalid LAN agent authority bindings.");
-      }
-      agentBindings = node.agentBindings.map(binding => copyBinding(binding, true));
-      if (new Set(agentBindings.map(binding => binding.agentId)).size !== agentBindings.length) {
-        throw new Error("Invalid LAN agent authority duplicate binding.");
-      }
-    }
-    // Legacy files cannot distinguish a reviewed-but-never-enabled binding from a
-    // deliberately disabled one. Preserve both as disabled; an admin can enable it.
-    // Unbound legacy IDs are not registered implicitly by this migration.
-    const disabledAgentIds = node.disabledAgentIds as string[] | undefined
-      ?? (agentBindings ?? []).filter(binding => !(node.enabledAgentIds as string[]).includes(binding.agentId)).map(binding => binding.agentId);
-    return { nodeId: node.nodeId, secretHash: node.secretHash, enabledAgentIds: [...node.enabledAgentIds],
-      disabledAgentIds: [...disabledAgentIds],
-      ...(agentBindings !== undefined ? { agentBindings } : {}),
-      ...(node.authorizationIncarnation !== undefined ? { authorizationIncarnation: node.authorizationIncarnation as string } : {}) };
-  });
-  let mutationReceipts: MutationReceipt[] | undefined;
-  if (parsed.mutationReceipts !== undefined) {
-    if (!Array.isArray(parsed.mutationReceipts) || parsed.mutationReceipts.length > LAN_AGENT_MUTATION_RECEIPT_LIMIT) {
-      throw new Error("Invalid LAN agent authority receipts.");
-    }
-    const keys = new Set<string>();
-    mutationReceipts = parsed.mutationReceipts.map((receipt: unknown) => {
-      if (!isRecord(receipt) || ![receipt.keyHash, receipt.requestHash, receipt.revision]
-        .every(value => typeof value === "string" && /^[a-f0-9]{64}$/.test(value))
-        || typeof receipt.enabled !== "boolean" || !Number.isSafeInteger(receipt.committedAt)
-        || !Number.isSafeInteger(receipt.expiresAt) || Number(receipt.committedAt) < 0
-        || Number(receipt.expiresAt) - Number(receipt.committedAt) !== LAN_AGENT_MUTATION_RECEIPT_TTL_MS
-        || Object.keys(receipt).some(key => !["keyHash", "requestHash", "revision", "enabled", "committedAt", "expiresAt"].includes(key))) {
-        throw new Error("Invalid LAN agent authority receipt.");
-      }
-      const validated = receipt as MutationReceipt;
-      if (keys.has(validated.keyHash)) throw new Error("Invalid LAN agent authority duplicate receipt.");
-      keys.add(validated.keyHash);
-      return { ...validated };
-    });
+  const state: AuthorityState = { schemaVersion: 2, nodes };
+  credentialSources.set(state, { nodes: parsed.nodes, validIds: new Set(nodes.map(node => node.nodeId)), diagnostics });
+  if (legacy) {
+    if (!migrate) throw new Error("Computer credentials require the locked startup migration.");
+    const backup = statePath + ".before-explicit-sessions-" + randomBytes(12).toString("hex") + ".json";
+    fs.writeFileSync(backup, text, { mode: 0o600, flag: "wx" });
+    if (fs.readFileSync(statePath, "utf8") !== text || fs.readFileSync(backup, "utf8") !== text) throw new Error("Computer credential migration snapshot changed.");
+    atomicWriteFileSync(statePath, JSON.stringify(storageState(state)) + "\n", { mode: 0o600 });
+    const readback = loadState(statePath);
+    if (stateRevision(readback) !== stateRevision(state)) { atomicWriteFileSync(statePath, text, { mode: 0o600 }); throw new Error("Computer credential migration verification failed; restored original."); }
   }
-  return { schemaVersion: 1, nodes, ...(mutationReceipts !== undefined ? { mutationReceipts } : {}) };
+  return state;
 }
 
-function loadConnectionState(parsed: Record<string, unknown>): AuthorityState {
-  if (!Array.isArray(parsed.nodes) || parsed.nodes.length > MAX_NODES
-    || Object.keys(parsed).some(key => !["schemaVersion", "nodes"].includes(key))) throw new Error("Invalid computer credential schema.");
-  const seen = new Set<string>();
-  const nodes = parsed.nodes.map((value: unknown): NodeGrant => {
-    if (!isRecord(value) || !validId(value.nodeId) || seen.has(value.nodeId)
-      || typeof value.secretHash !== "string" || !/^[a-f0-9]{64}$/.test(value.secretHash)
-      || typeof value.connectionIncarnation !== "string" || !/^[a-f0-9]{64}$/.test(value.connectionIncarnation)
-      || (value.enabled !== undefined && typeof value.enabled !== "boolean")
-      || Object.keys(value).some(key => !["nodeId", "secretHash", "connectionIncarnation", "enabled"].includes(key))) {
-      throw new Error("Invalid computer credential node.");
-    }
-    seen.add(value.nodeId);
-    return { nodeId: value.nodeId, secretHash: value.secretHash, enabledAgentIds: [],
-      authorizationIncarnation: value.connectionIncarnation, connectionManaged: true,
-      ...(value.enabled !== undefined ? { connectionEnabled: value.enabled } : {}) };
-  });
-  return { schemaVersion: 2, nodes };
-}
-
-/** Keep the persisted connection format intact; the legacy facade never writes grants into v2 credentials. */
-function storageState(state: AuthorityState): unknown {
-  if (state.schemaVersion === 1) return state;
-  return { schemaVersion: 2, nodes: state.nodes.map(node => ({ nodeId: node.nodeId, secretHash: node.secretHash,
-    connectionIncarnation: node.authorizationIncarnation,
-    ...(node.connectionEnabled !== undefined ? { enabled: node.connectionEnabled } : {}) })) };
-}
-
-/** Read-only upgrade admission; never enrolls, migrates, rewrites or exposes credential values. */
-export function inspectLanAgentCredentialState(statePath: string): { schemaVersion: number; nodeCount: number } {
-  const state = loadState(statePath);
+/** Installation admission uses the same storage validator without migration or credential disclosure. */
+export function inspectLanAgentCredentialState(statePath: string): { schemaVersion: 2; nodeCount: number } {
+  const state = loadState(path.resolve(statePath));
   return { schemaVersion: state.schemaVersion, nodeCount: state.nodes.length };
 }
 
-/**
- * Manager is the sole policy owner. Expose only enrollment/authentication to remote
- * callers; ticket issuance, grant changes and revocation require a trusted admin.
- * All methods are synchronous. Reads use the authoritative file (not registry or
- * connection state); file-locked writes reload it, so offline revocation and other
- * instances cannot be overwritten by a stale in-memory snapshot.
- */
+/** Computer credentials authenticate the connection. Agent type and session ID belong to each invocation. */
 export class LanAgentAuthority {
   private readonly statePath: string;
   private readonly now: () => number;
@@ -236,7 +116,7 @@ export class LanAgentAuthority {
       || !Number.isSafeInteger(this.maxBootstrapTickets) || this.maxBootstrapTickets < 1 || this.maxBootstrapTickets > 4_096) {
       throw new Error("Invalid LAN agent bootstrap limits.");
     }
-    this.readState(); // Corruption must stop startup, never silently reset grants.
+    withFileLockSync(`${this.statePath}.lock`, () => { loadState(this.statePath, true); });
   }
 
   /** Trusted admin only. Tickets are memory-only and invalid after restart. */
@@ -273,18 +153,18 @@ export class LanAgentAuthority {
     if (enrollmentSecret && this.authenticate(credential.token)) return credential;
     if (!this.validateBootstrapTicket(ticket)) this.reject("enroll", "Invalid or expired bootstrap ticket.");
     this.mutate("enroll", state => {
+      assertWritableNode(state, nodeId);
       const existing = state.nodes.find(node => node.nodeId === nodeId);
       if (enrollmentSecret && existing?.secretHash === hashSecret(secret)) return false;
       if (!this.validateBootstrapTicket(ticket)) this.reject("enroll", "Invalid or expired bootstrap ticket.");
       if (existing) {
         if (!enrollmentSecret) this.reject("enroll", "Node already enrolled.");
         existing.secretHash = hashSecret(secret);
-        rotateAuthorizationIncarnation(existing);
+        existing.connectionIncarnation = randomBytes(32).toString("hex");
         return true;
       }
-      if (state.nodes.length >= MAX_NODES) this.reject("enroll", "Node capacity reached.");
-      state.nodes.push({ nodeId, secretHash: hashSecret(secret), enabledAgentIds: [], disabledAgentIds: [],
-        ...(state.schemaVersion === 2 ? { connectionManaged: true as const, authorizationIncarnation: randomBytes(32).toString("hex") } : {}) });
+      if (storageState(state).nodes.length >= MAX_NODES) this.reject("enroll", "Node capacity reached; retained isolated records also occupy storage.");
+      state.nodes.push({ nodeId, secretHash: hashSecret(secret), connectionIncarnation: randomBytes(32).toString("hex") });
       return true;
     });
     this.tickets.delete(hashSecret(ticket));
@@ -294,103 +174,26 @@ export class LanAgentAuthority {
   /** Invalid credentials return null; storage corruption/read failure throws (fail closed). */
   authenticate(token: string): LanAgentIdentity | null {
     const node = this.authenticatedNode(token);
-    return node && node.connectionEnabled !== false ? { nodeId: node.nodeId } : null;
+    return node ? { nodeId: node.nodeId } : null;
   }
 
-  usesConnectionCredentials(): boolean { return this.readState().schemaVersion === 2; }
-
-  isNodeEnabled(nodeId: string): boolean {
-    return this.readState().nodes.some(node => node.nodeId === nodeId && node.connectionEnabled !== false);
-  }
-
+  /** Connection authority belongs to the enrolled computer, never a saved Agent/session. */
   acquireConnectionLease(token: string): LanAgentConnectionLease | null {
     const node = this.authenticatedNode(token);
-    return node?.connectionManaged && node.connectionEnabled !== false
-      ? Object.freeze({ nodeId: node.nodeId, incarnation: node.authorizationIncarnation! }) : null;
+    return node && node.enabled !== false ? Object.freeze({ nodeId: node.nodeId,
+      incarnation: node.connectionIncarnation }) : null;
   }
 
   assertConnectionLease(token: string, lease: LanAgentConnectionLease): void {
     const current = this.acquireConnectionLease(token);
     if (!current || current.nodeId !== lease.nodeId || current.incarnation !== lease.incarnation) {
-      this.reject("revalidate-connection", "Remote computer credential was disabled, revoked or replaced.");
+      this.reject("revalidate-connection", "Remote computer connection was disabled, revoked or replaced.");
     }
   }
 
-  /** Register a complete catalog only from its live authenticated node connection.
-   * Re-authenticate under the write lock, replace (never merge) session claims, and
-   * retain Manager-owned explicit disables even across removal and reappearance.
-   */
-  registerAgentCatalog(token: string, agents: readonly (LanAgentApprovedBinding & { enabled?: boolean })[]): void {
-    if (!Array.isArray(agents) || agents.length > MAX_AGENTS_PER_NODE) this.reject("register-agent-catalog", "Invalid Agent catalog.");
-    if (this.usesConnectionCredentials()) {
-      if (!this.acquireConnectionLease(token)) this.reject("register-agent-catalog", "Invalid node credential.");
-      return; // Discovery does not create a second connection permission or rewrite the credential store.
-    }
-    const bindings = agents.map(agent => copyBinding(agent));
-    if (new Set(bindings.map(binding => binding.agentId)).size !== bindings.length) this.reject("register-agent-catalog", "Duplicate Agent catalog identity.");
-    this.mutate("register-agent-catalog", state => {
-      const identity = this.authenticatedNode(token, state);
-      if (!identity) this.reject("register-agent-catalog", "Invalid node credential.");
-      const node = state.nodes.find(item => item.nodeId === identity.nodeId);
-      if (!node) this.reject("register-agent-catalog", "Node is not enrolled.");
-      // Import legacy connector disables only at first registration. Existing
-      // Manager decisions win, including an enable made before the node returns.
-      // agentBindings remains present after removal, so stale catalogs cannot
-      // re-import an old local switch when that Agent later reappears.
-      if (node.agentBindings === undefined) {
-        for (const agent of agents) {
-          if (agent.enabled === false && !node.enabledAgentIds.includes(agent.agentId)
-            && !node.disabledAgentIds?.includes(agent.agentId)) setNodeAgentEnabled(node, agent.agentId, false);
-        }
-      }
-      const enabledAgentIds = bindings.filter(binding => !node.disabledAgentIds?.includes(binding.agentId)).map(binding => binding.agentId);
-      if (JSON.stringify(node.agentBindings) === JSON.stringify(bindings)
-        && JSON.stringify(node.enabledAgentIds) === JSON.stringify(enabledAgentIds)) return false;
-      node.agentBindings = bindings;
-      node.enabledAgentIds = enabledAgentIds;
-      rotateAuthorizationIncarnation(node);
-      return true;
-    });
-  }
-
-  /** Only authenticated, registered (or explicitly admin-granted) IDs have authority. */
-  authorize(token: string, agentId: string): LanAgentIdentity | null {
-    if (!validId(agentId)) return null;
-    const node = this.authenticatedNode(token);
-    return node && node.connectionEnabled !== false && (node.connectionManaged || node.enabledAgentIds.includes(agentId)) ? { nodeId: node.nodeId } : null;
-  }
-
-  /** Capture credential and policy together from one authoritative read. No session is required for management authority. */
-  acquireAuthorizationLease(token: string, agentId: string): LanAgentAuthorizationLease | null {
-    if (!validId(agentId)) return null;
-    const node = this.authenticatedNode(token);
-    if (!node || node.connectionEnabled === false || (!node.connectionManaged && !node.enabledAgentIds.includes(agentId))) return null;
-    const binding = node.agentBindings?.find(item => item.agentId === agentId);
-    // Legacy policy has a deterministic incarnation until its first effective mutation.
-    const incarnation = node.authorizationIncarnation ?? hashSecret(JSON.stringify(node));
-    return Object.freeze({ nodeId: node.nodeId, agentId, incarnation,
-      ...(node.connectionManaged ? { connectionManaged: true as const } : {}),
-      ...(binding ? { binding: copyBinding(binding) } : {}) });
-  }
-
-  /** Recheck the original credential, enabled grant and incarnation; a new token or re-enable cannot revive an old request. */
-  assertAuthorizationLease(token: string, lease: LanAgentAuthorizationLease): void {
-    if (lease.connectionManaged) { this.assertConnectionLease(token, lease); return; }
-    const current = this.acquireAuthorizationLease(token, lease.agentId);
-    if (!current || current.nodeId !== lease.nodeId || current.incarnation !== lease.incarnation) {
-      this.reject("revalidate-request", "Remote Agent authorization was revoked or replaced.");
-    }
-  }
-
-  /** Manager-only original endpoint grant; never exposed in public catalog DTOs. */
-  getEndpointAuthorization(nodeId: string, agentId: string): LanAgentAuthorizationLease | null {
-    if (!validId(nodeId) || !validId(agentId)) return null;
+  getNodeAuthorization(nodeId: string): LanAgentConnectionLease | null {
     const node = this.readState().nodes.find(item => item.nodeId === nodeId);
-    if (!node || node.connectionEnabled === false || (!node.connectionManaged && !node.enabledAgentIds.includes(agentId))) return null;
-    const binding = node.agentBindings?.find(item => item.agentId === agentId);
-    return Object.freeze({ nodeId, agentId, incarnation: node.authorizationIncarnation ?? hashSecret(JSON.stringify(node)),
-      ...(node.connectionManaged ? { connectionManaged: true as const } : {}),
-      ...(binding ? { binding: copyBinding(binding) } : {}) });
+    return node && node.enabled !== false ? Object.freeze({ nodeId, incarnation: node.connectionIncarnation }) : null;
   }
 
   /** Detached, secret-free view for trusted Manager UI/registry projections. */
@@ -398,168 +201,41 @@ export class LanAgentAuthority {
     const state = this.readState();
     return {
       revision: stateRevision(state),
-      nodes: state.nodes.map(node => ({ nodeId: node.nodeId, enabledAgentIds: [...node.enabledAgentIds],
-        ...(node.connectionManaged ? { connectionManaged: true as const, enabled: node.connectionEnabled !== false } : {}),
-        ...(node.agentBindings !== undefined ? { agentBindings: node.agentBindings.map(binding => copyBinding(binding)) } : {}) }))
+      nodes: state.nodes.map(node => ({ nodeId: node.nodeId, enabled: node.enabled !== false })),
+      diagnostics: (credentialSources.get(state)?.diagnostics ?? []).map(item => ({ ...item }))
     };
   }
 
-  isAgentEnabled(nodeId: string, agentId: string): boolean {
-    if (!validId(nodeId) || !validId(agentId)) return false;
-    return this.readState().nodes.some(node => node.nodeId === nodeId && node.connectionEnabled !== false
-      && (node.connectionManaged || node.enabledAgentIds.includes(agentId)));
-  }
+  isNodeEnabled(nodeId: string): boolean { return this.readState().nodes.some(node => node.nodeId === nodeId && node.enabled !== false); }
 
-  /** Trusted admin only: freezes reviewed identity claims, never called by catalog ingestion. */
-  approveAgentBinding(nodeId: string, agent: LanAgentApprovedBinding, expectedRevision?: string): void {
-    if (this.usesConnectionCredentials()) this.reject("approve-agent-binding", "Per-Agent grants do not apply to computer connections.");
-    if (!validId(nodeId)) this.reject("approve-agent-binding", "Invalid node ID.");
-    let binding: LanAgentApprovedBinding;
-    try { binding = copyBinding(agent); } catch {
-      this.reject("approve-agent-binding", "Invalid LAN agent authority binding.");
-    }
-    this.mutate("approve-agent-binding", state => {
-      if (expectedRevision !== undefined && expectedRevision !== stateRevision(state)) {
-        this.reject("approve-agent-binding", "LAN agent authority revision conflict.");
-      }
+  /** A single instance switch controls the connection, never individual features or sessions. */
+  setNodeEnabled(nodeId: string, enabled: boolean, expectedEnabled?: boolean): void {
+    if (!validId(nodeId) || typeof enabled !== "boolean") this.reject("set-node-enabled", "Invalid instance enabled setting.");
+    this.mutate("set-node-enabled", state => {
+      assertWritableNode(state, nodeId);
       const node = state.nodes.find(item => item.nodeId === nodeId);
-      if (!node) this.reject("approve-agent-binding", "Node is not enrolled.");
-      const bindings = node.agentBindings ?? [];
-      const index = bindings.findIndex(item => item.agentId === binding.agentId);
-      if (index >= 0 && JSON.stringify(bindings[index]) === JSON.stringify(binding)) return false;
-      if (index < 0 && bindings.length >= MAX_AGENTS_PER_NODE) this.reject("approve-agent-binding", "Agent binding capacity reached.");
-      node.agentBindings = index < 0 ? [...bindings, binding] : bindings.map((item, i) => i === index ? binding : item);
-      rotateAuthorizationIncarnation(node);
+      if (!node) this.reject("set-node-enabled", "Computer is not enrolled.");
+      const current = node.enabled !== false;
+      if (current === enabled) return false;
+      if (expectedEnabled !== undefined && current !== expectedEnabled) this.reject("set-node-enabled", "Instance enabled setting conflict.");
+      if (enabled) delete node.enabled; else node.enabled = false;
+      node.connectionIncarnation = randomBytes(32).toString("hex");
       return true;
     });
   }
 
-  /** Trusted admin only. Exact retries replay for 24h before CAS; active receipts are never evicted. */
-  mutateAgentAuthorization(input: LanAgentAuthorizationMutation): LanAgentAuthorizationResult {
-    if (this.usesConnectionCredentials()) this.reject("mutate-agent-authorization", "Per-Agent grants do not apply to computer connections.");
-    const action = "mutate-agent-authorization";
-    if (!validId(input.nodeId) || !validId(input.agentId) || typeof input.enabled !== "boolean"
-      || typeof input.expectedRevision !== "string" || !/^[a-f0-9]{64}$/.test(input.expectedRevision)
-      || typeof input.idempotencyKey !== "string" || !/^[\x21-\x7e]{1,200}$/.test(input.idempotencyKey)) {
-      this.reject(action, "Invalid agent authorization mutation.");
-    }
-    let binding: LanAgentApprovedBinding | undefined;
-    if (input.binding !== undefined) {
-      try { binding = copyBinding(input.binding); } catch { this.reject(action, "Invalid LAN agent authority binding."); }
-      if (binding.agentId !== input.agentId) this.reject(action, "Agent binding identity mismatch.");
-    }
-    if (input.enabled && !binding) this.reject(action, "Agent approval binding is required.");
-    if (!input.enabled && binding) this.reject(action, "Disabled mutation must not replace identity binding.");
-    const keyHash = hashSecret(input.idempotencyKey);
-    const requestHash = hashSecret(JSON.stringify({ nodeId: input.nodeId, agentId: input.agentId,
-      enabled: input.enabled, binding, expectedRevision: input.expectedRevision }));
-    let result: LanAgentAuthorizationResult | undefined;
-    this.mutate(action, state => {
-      const now = this.now();
-      if (!Number.isSafeInteger(now) || now < 0 || !Number.isSafeInteger(now + LAN_AGENT_MUTATION_RECEIPT_TTL_MS)) {
-        this.reject(action, "Invalid authority clock.");
-      }
-      const receipts = (state.mutationReceipts ?? []).filter(receipt => receipt.expiresAt > now);
-      const previous = receipts.find(receipt => receipt.keyHash === keyHash);
-      if (previous) {
-        if (previous.requestHash !== requestHash) this.reject(action, "LAN agent authorization idempotency conflict.");
-        result = { revision: previous.revision, enabled: previous.enabled, replayed: true };
-        this.audit(action, "replayed");
-        return false;
-      }
-      if (input.expectedRevision !== stateRevision(state)) this.reject(action, "LAN agent authority revision conflict.");
-      if (receipts.length >= LAN_AGENT_MUTATION_RECEIPT_LIMIT) this.reject(action, "Agent mutation receipt capacity reached.");
-      input.validateBinding?.();
-      const node = state.nodes.find(item => item.nodeId === input.nodeId);
-      if (!node) this.reject(action, "Node is not enrolled.");
-      if (binding) {
-        const bindings = node.agentBindings ?? [];
-        const index = bindings.findIndex(item => item.agentId === input.agentId);
-        if (index < 0 && bindings.length >= MAX_AGENTS_PER_NODE) this.reject(action, "Agent binding capacity reached.");
-        if (index < 0 || JSON.stringify(bindings[index]) !== JSON.stringify(binding)) {
-          node.agentBindings = index < 0 ? [...bindings, binding] : bindings.map((item, i) => i === index ? binding! : item);
-          rotateAuthorizationIncarnation(node);
-        }
-      }
-      setNodeAgentEnabled(node, input.agentId, input.enabled);
-      const revision = stateRevision(state);
-      state.mutationReceipts = [...receipts, { keyHash, requestHash, revision, enabled: input.enabled,
-        committedAt: now, expiresAt: now + LAN_AGENT_MUTATION_RECEIPT_TTL_MS }];
-      result = { revision, enabled: input.enabled, replayed: false };
-      return true;
-    });
-    return result!;
-  }
-
-  /** Trusted admin only: approve the complete identity snapshot and enable in one CAS write. */
-  approveAndEnableAgent(nodeId: string, agent: LanAgentApprovedBinding, expectedRevision: string): void {
-    if (this.usesConnectionCredentials()) this.reject("approve-and-enable-agent", "Per-Agent grants do not apply to computer connections.");
-    if (!validId(nodeId) || typeof expectedRevision !== "string" || !expectedRevision) {
-      this.reject("approve-and-enable-agent", "Invalid agent approval.");
-    }
-    let binding: LanAgentApprovedBinding;
-    try { binding = copyBinding(agent); } catch {
-      this.reject("approve-and-enable-agent", "Invalid LAN agent authority binding.");
-    }
-    this.mutate("approve-and-enable-agent", state => {
-      if (expectedRevision !== stateRevision(state)) {
-        this.reject("approve-and-enable-agent", "LAN agent authority revision conflict.");
-      }
-      const node = state.nodes.find(item => item.nodeId === nodeId);
-      if (!node) this.reject("approve-and-enable-agent", "Node is not enrolled.");
-      const bindings = node.agentBindings ?? [];
-      const index = bindings.findIndex(item => item.agentId === binding.agentId);
-      const enabled = (node.enabledAgentIds as string[]).includes(binding.agentId);
-      if (index >= 0 && JSON.stringify(bindings[index]) === JSON.stringify(binding) && enabled) return false;
-      if ((index < 0 && bindings.length >= MAX_AGENTS_PER_NODE)
-        || (!enabled && node.enabledAgentIds.length >= MAX_AGENTS_PER_NODE)) {
-        this.reject("approve-and-enable-agent", "Agent approval capacity reached.");
-      }
-      // Replacement, not merge: omitted managed sessions revoke previously approved claims.
-      node.agentBindings = index < 0 ? [...bindings, binding] : bindings.map((item, i) => i === index ? binding : item);
-      setNodeAgentEnabled(node, binding.agentId, true);
-      rotateAuthorizationIncarnation(node);
-      return true;
-    });
-  }
-
-  /** Identity claims only; callers must separately check current enabled authority. */
-  getApprovedAgentBinding(nodeId: string, agentId: string): LanAgentApprovedBinding | null {
-    if (!validId(nodeId) || !validId(agentId)) return null;
-    const binding = this.readState().nodes.find(node => node.nodeId === nodeId)
-      ?.agentBindings?.find(agent => agent.agentId === agentId);
-    return binding ? copyBinding(binding) : null;
-  }
-
-  /** Trusted admin only. HTTP callers must supply the snapshot revision for CAS. */
-  setAgentEnabled(nodeId: string, agentId: string, enabled: boolean, expectedRevision?: string): void {
-    if (this.usesConnectionCredentials()) this.reject("set-agent-enabled", "Per-Agent grants do not apply to computer connections.");
-    if (!validId(nodeId) || !validId(agentId) || typeof enabled !== "boolean") {
-      this.reject("set-agent-enabled", "Invalid agent grant.");
-    }
-    this.mutate("set-agent-enabled", state => {
-      if (expectedRevision !== undefined && expectedRevision !== stateRevision(state)) {
-        this.reject("set-agent-enabled", "LAN agent authority revision conflict.");
-      }
-      const node = state.nodes.find(item => item.nodeId === nodeId);
-      if (!node) this.reject("set-agent-enabled", "Node is not enrolled.");
-      if (enabled ? node.enabledAgentIds.includes(agentId) : node.disabledAgentIds?.includes(agentId)) return false;
-      setNodeAgentEnabled(node, agentId, enabled);
-      return true;
-    });
-  }
-
-  /** Trusted admin only. Idempotently removes credential and all grants. */
+  /** Trusted admin only. Idempotently removes the computer credential. */
   revokeNode(nodeId: string): void {
     if (!validId(nodeId)) this.reject("revoke-node", "Invalid node ID.");
     this.mutate("revoke-node", state => {
+      assertWritableNode(state, nodeId);
       const count = state.nodes.length;
       state.nodes = state.nodes.filter(node => node.nodeId !== nodeId);
       return count !== state.nodes.length;
     });
   }
 
-  private authenticatedNode(token: string, state?: AuthorityState): NodeGrant | null {
+  private authenticatedNode(token: string, state?: AuthorityState): NodeCredential | null {
     if (typeof token !== "string" || token.length > 177) return null;
     const [version, nodeId, secret, extra] = token.split(":");
     if (version !== "lan1" || !validId(nodeId) || !secret || !SECRET_PATTERN.test(secret) || extra !== undefined) return null;
@@ -604,7 +280,7 @@ export class LanAgentAuthority {
     // Never pass request strings, credential hashes, JSON parse errors or raw errors.
     recordDataMutationAudit({
       group: "security", event: "lan_agent_authority", owner: "lan-agent-authority", action,
-      target: { type: "lan-agent-authority", id: "node-grants" },
+      target: { type: "lan-agent-authority", id: "computer-credentials" },
       dataSource: { kind, id: kind === "file" ? this.statePath : "lan-agent-bootstrap-tickets" }, outcome
     });
   }

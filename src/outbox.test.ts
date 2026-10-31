@@ -265,6 +265,7 @@ test("plan feedback replies are written to the plan audit record and published t
 });
 
 test("plan feedback outbox delivery is fail-closed until plan storage startup is ready", async () => {
+  const checkedScopes: Array<readonly string[] | undefined> = [];
   const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-outbox-plan-startup-gate-"));
   const rolesRoot = path.join(rootDir, "data", "roles");
   const result = await handleAgentReply({
@@ -287,12 +288,13 @@ test("plan feedback outbox delivery is fail-closed until plan storage startup is
       agentRoleId: "Rabi",
       pipeline: { outputAdapter: "agent", outputPipeline: "agent" }
     }],
-    planStorageReady: () => false
+    planStorageReady: roleIds => { checkedScopes.push(roleIds); return false; }
   });
 
   assert.equal(result.ok, false);
   assert.equal(result.status, "blocked");
   assert.match(result.reason || "", /PLAN_STORAGE_STARTUP_UNAVAILABLE/);
+  assert.deepEqual(checkedScopes, [["Rabi"]]);
   assert.equal(fs.existsSync(rolesRoot), false);
 });
 
@@ -838,6 +840,29 @@ test("QQ group local files use upload_group_file and only read configured roots"
   assert.equal(calls[3].body.message, "[CQ:reply,id=source-22]【测试包】已上传。");
 });
 
+test("QQ group local file upload needs no root grant when the list is absent or empty", async t => {
+  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-outbox-unrestricted-"));
+  t.after(() => fs.rmSync(rootDir, { recursive: true, force: true }));
+  const filePath = path.join(rootDir, "clip.mp4"); fs.writeFileSync(filePath, "fixture");
+  for (const roots of [undefined, []]) {
+    let uploaded = false;
+    await withJsonServer((body, request) => {
+      if (request.url?.endsWith("get_login_info")) return { status: "ok", retcode: 0, data: { user_id: 9000 } };
+      assert.ok(request.url?.endsWith("upload_group_file"));
+      assert.equal(body.file, fs.realpathSync(filePath)); uploaded = true;
+      return { status: "ok", retcode: 0, data: { file_id: "fixture-id" } };
+    }, async httpUrl => {
+      const result = await handleAgentReply({ payloadType: "file", filePath, targetType: "group", groupId: "20002", routeProfileId: "main" }, {
+        rootDir, routeRoot: "data/route", rolesRoot: "data/roles", runtimes: [{ id: "main",
+          pipeline: { outputAdapter: "qq", outputPipeline: "qq" },
+          messageAdapterPolicies: { napcat: { outputEnabled: true, supportedOutputs: ["file"], ...(roots ? { allowedFileRoots: roots } : {}) } },
+          napcatInstances: [{ id: "main-qq", httpUrl, accessToken: "", enabled: true }] }]
+      });
+      assert.equal(result.status, "sent"); assert.equal(uploaded, true);
+    });
+  }
+});
+
 test("QQ group local file upload is blocked outside allowedFileRoots", async () => {
   const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-outbox-file-blocked-"));
   const allowedDir = path.join(rootDir, "allowed");
@@ -1125,20 +1150,14 @@ test("source reply resolves runtime route from message log and bypasses local Ag
   assert.equal(result.instanceId, "main-qq");
 });
 
-test("FenneNote voice output forwards agent reply to playback with original voice parameters", async () => {
+test("retired FenneNote output context uses RabiSpeech persona voice and configured speech parameters", async t => {
   const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-outbox-fennenote-"));
+  t.after(() => fs.rmSync(rootDir, { recursive: true, force: true }));
   let forwarded: Record<string, unknown> | undefined;
-  const result = await withJsonServer((body) => {
+  const result = await withSpeechJsonServer((body) => {
     forwarded = body;
-    return { ok: true, id: "fenne-play-1" };
   }, (url) => handleAgentReply({
     text: "已经走拉比回复端。",
-    payload: {
-      character_id: "rabi",
-      language: "zh",
-      emotion_vector: [0.2, 0.1, 0],
-      worker_url: "http://127.0.0.1:8793/api/tts"
-    },
     replyContext: {
       routeProfileId: "Rabi",
       routeKind: "voice_transcript",
@@ -1157,12 +1176,15 @@ test("FenneNote voice output forwards agent reply to playback with original voic
     runtimes: [
       {
         id: "拉比路由",
+        agentRoleId: "Rabi",
+        routeVariables: { speechTtsModel: "fixture-tts", speechLanguage: "zh", speechInstructions: "calm" },
         routeProfiles: [{
           id: "Rabi",
           name: "Rabi route",
           pipeline: {
             outputAdapter: "agent",
-            outputPipeline: "agent"
+            outputPipeline: "agent",
+            ttsPlay: true
           }
         }],
         messageAdapterPolicies: {
@@ -1173,26 +1195,26 @@ test("FenneNote voice output forwards agent reply to playback with original voic
         }
       }
     ],
-    fenneNotePlaybackUrl: url
+    speechServiceUrl: url
   }));
 
   assert.equal(result.ok, true);
   assert.equal(result.status, "sent");
-  assert.equal(result.reason, "Sent to FenneNote playback endpoint.");
-  assert.equal(result.sentMessageId, "fenne-play-1");
+  assert.equal(result.reason, "Queued in the RabiSpeech host-wide playback queue.");
+  assert.equal(result.sentMessageId, "speech-play-1");
   assert.ok(forwarded);
-  assert.equal(forwarded.text, "已经走拉比回复端。");
-  assert.equal(forwarded.adapterType, "fennenote");
-  assert.equal(forwarded.routeProfileId, "Rabi");
-  assert.equal(forwarded.messageId, "voice-1");
-  assert.equal(forwarded.speakerName, "秋雨");
-  assert.equal(forwarded.character_id, "rabi");
+  assert.equal(forwarded.input, "已经走拉比回复端。");
+  assert.equal(forwarded.route_id, "Rabi");
+  assert.equal(result.messageId, "voice-1");
+  assert.equal(forwarded.voice, "Rabi");
+  assert.equal(forwarded.model, "fixture-tts");
   assert.equal(forwarded.language, "zh");
-  assert.equal(forwarded.worker_url, "http://127.0.0.1:8793/api/tts");
-  assert.deepEqual(forwarded.emotion_vector, [0.2, 0.1, 0]);
+  assert.equal(forwarded.instructions, "calm");
+  assert.equal(forwarded.play, true);
+  assert.equal(forwarded.response_format, "wav");
 });
 
-test("FenneNote source reply resolves runtime by role fallback and voice transcript log", async () => {
+test("retired FenneNote source history resolves the original runtime and replies through RabiSpeech", async t => {
   const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-outbox-voice-"));
   const roleDir = path.join(rootDir, "data", "roles", "Rabi");
   fs.mkdirSync(roleDir, { recursive: true });
@@ -1205,10 +1227,10 @@ test("FenneNote source reply resolves runtime by role fallback and voice transcr
     rawMessage: "语音输入"
   })}\n`, "utf8");
 
+  t.after(() => fs.rmSync(rootDir, { recursive: true, force: true }));
   let forwarded: Record<string, unknown> | undefined;
-  const result = await withJsonServer((body) => {
+  const result = await withSpeechJsonServer((body) => {
     forwarded = body;
-    return { ok: true, id: "fenne-play-2" };
   }, (url) => handleAgentReply({
     text: "走拉比回复端。",
     replyContext: {
@@ -1247,18 +1269,18 @@ test("FenneNote source reply resolves runtime by role fallback and voice transcr
         agentRoleId: "Other"
       }
     ],
-    fenneNotePlaybackUrl: url
+    speechServiceUrl: url
   }));
 
   assert.equal(result.ok, true);
   assert.equal(result.status, "sent");
   assert.equal(result.routeProfileId, "拉比路由");
   assert.equal(result.targetType, "voice_transcript");
-  assert.equal(result.sentMessageId, "fenne-play-2");
+  assert.equal(result.sentMessageId, "speech-play-1");
   assert.ok(forwarded);
-  assert.equal(forwarded.routeProfileId, "拉比路由");
-  assert.equal(forwarded.messageId, "voice-log-1");
-  assert.equal(forwarded.speakerName, "秋雨");
+  assert.equal(forwarded.route_id, "拉比路由");
+  assert.equal(result.messageId, "voice-log-1");
+  assert.equal(forwarded.voice, "Rabi");
 });
 
 test("RabiSpeech message endpoint binds TTS voice to the persona while preserving legacy fallbacks", async () => {

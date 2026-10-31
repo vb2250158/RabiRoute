@@ -44,7 +44,9 @@ public final class RabiGlassPcBackend {
     public static final String SOURCE_GLASSES = "glasses";
     private static final int MAX_CONTROL_QUEUE_ITEMS = 2000;
     private static final int MAX_MEDIA_QUEUE_ITEMS = 500;
-    private static final int EVENT_STREAM_READ_TIMEOUT_MS = 45_000;
+    private long timeoutSetting(String key,long fallback) {
+        return new com.rabi.link.transport.ScopedManagerTimeouts(context,new com.rabi.link.RabiLinkRelayConfig(baseUrl,token,true),targetWorkerId).get(key,fallback);
+    }
     private static final int AUDIO_CAPTURE_QUEUE_CAPACITY = 256;
     private static final long AUDIO_CAPTURE_QUEUE_MAX_BYTES = 2L * 1024L * 1024L;
 
@@ -466,7 +468,7 @@ public final class RabiGlassPcBackend {
                     audioWritesClosed.countDown();
                 }
             });
-            if (!awaitDrainOrTakeOver(audioWritesClosed, 10L, TimeUnit.SECONDS, this::closeAudioSpoolDurably)) {
+            if (!awaitDrainOrTakeOver(audioWritesClosed, timeoutSetting("android.audio.drain",10000), TimeUnit.MILLISECONDS, this::closeAudioSpoolDurably)) {
                 listener.onStatus("录音关闭等待超过 10 秒 · 已转为同步落盘，完成前不会丢弃队列");
             }
         } catch (Throwable error) {
@@ -1439,10 +1441,10 @@ public final class RabiGlassPcBackend {
                 connection.setRequestMethod("GET");
                 connection.setRequestProperty("Accept", "text/event-stream");
                 connection.setRequestProperty("X-RabiLink-Token", token);
-                connection.setConnectTimeout(15000);
+                connection.setConnectTimeout((int)timeoutSetting("android.relay.connect",15000));
                 // Transport-level stall deadline: Relay emits a keepalive every 15 seconds.
                 // A silent half-open socket must reconnect and run the ready -> cursor catch-up path.
-                connection.setReadTimeout(EVENT_STREAM_READ_TIMEOUT_MS);
+                connection.setReadTimeout((int)timeoutSetting("android.relay.eventIdle",45000));
                 if (connection.getResponseCode() < 200 || connection.getResponseCode() >= 300) {
                     throw new IllegalStateException("RabiLink 事件流连接失败 · HTTP " + connection.getResponseCode());
                 }
@@ -1855,7 +1857,8 @@ public final class RabiGlassPcBackend {
             if (fenced && !activeExpectedEndpointIdentity.equals(endpointIdentity()))
                 throw new IllegalStateException("recorded target changed; audio processing deferred");
             connection = (HttpURLConnection) new URL(baseUrl + path).openConnection();
-            connection.setRequestMethod(method); connection.setConnectTimeout(15000); connection.setReadTimeout(timeout);
+            connection.setRequestMethod(method); connection.setConnectTimeout((int)timeoutSetting("android.relay.connect",15000)); connection.setReadTimeout((int)timeoutSetting("android.relay.request",timeout));
+            connection.setRequestProperty("X-Rabi-Timeout-Ms",Integer.toString(connection.getReadTimeout()));
             connection.setRequestProperty("X-RabiLink-Token", token); connection.setRequestProperty("Accept", "application/json, audio/wav");
             if (fenced) connection.setRequestProperty("X-RabiLink-Expected-Worker-Id", activeExpectedWorkerId);
         }

@@ -44,7 +44,7 @@ test("v2 enrollment and revocation retain credential format, existing incarnatio
   assert.deepEqual(written.nodes[0], f.state.nodes[0]);
   assert.deepEqual(Object.keys(written.nodes[1]).sort(), ["connectionIncarnation", "nodeId", "secretHash"]);
   assert(f.authority.authenticate(credential.token));
-  assert.equal(f.authority.authenticate(f.token), null);
+  assert.deepEqual(f.authority.authenticate(f.token), { nodeId: "computer-fixture" });
   assert.equal(f.authority.acquireConnectionLease(f.token), null);
   f.authority.revokeNode("second-fixture");
   assert.equal(f.authority.authenticate(credential.token), null);
@@ -62,12 +62,14 @@ test("v2 leases fail after disable, credential replacement or revocation, withou
   assert.equal(f.authority.acquireConnectionLease(f.token), null);
 });
 
-test("v2 rejects malformed state instead of resetting credentials or accepting unknown policy fields", t => {
+test("v2 isolates malformed nodes without resetting credentials or accepting unknown policy fields", t => {
   const f = fixture(t);
   for (const nodes of [[{ ...f.state.nodes[0], connectionIncarnation: "invalid" }],
     [{ ...f.state.nodes[0], enabledAgentIds: ["worker"] }], [f.state.nodes[0], f.state.nodes[0]]]) {
     const bytes = JSON.stringify({ schemaVersion: 2, nodes }); fs.writeFileSync(f.statePath, bytes);
-    assert.throws(() => new LanAgentAuthority({ statePath: f.statePath }), /Invalid computer credential/);
+    const isolated = new LanAgentAuthority({ statePath: f.statePath });
+    assert.equal(isolated.authenticate(f.token), null);
+    assert.equal(isolated.getSnapshot().diagnostics.length, nodes.length);
     assert.equal(fs.readFileSync(f.statePath, "utf8"), bytes);
   }
 });
@@ -107,7 +109,7 @@ test("v2 explicit invocation source is frozen and binds business payloads withou
   assert.deepEqual({ provider: source?.provider, sessionId: source?.sessionId }, { provider: "codex", sessionId: "session-fixture" });
   const verified = { agentId: "codex", provider: "codex" as const, sessionId: "session-fixture" };
   assert.doesNotThrow(() => assertLanAgentBodyAuthority("/api/agent/send", { sender: { sessionId: "session-fixture" } }, verified));
-  assert.throws(() => assertLanAgentBodyAuthority("/api/agent/send", { sender: { sessionId: "foreign-fixture" } }, verified), /not owned/);
+  assert.throws(() => assertLanAgentBodyAuthority("/api/agent/send", { sender: { sessionId: "foreign-fixture" } }, verified), /does not match this request's explicit ID/);
   request.headers["x-rabiroute-session-id"] = "foreign-fixture";
   assert.equal(evaluateLanAgentRequest(request, f.authority, true).kind, "denied");
   assert.throws(() => assertTrustedLanAgentPrincipal(request), /principal is unavailable/);

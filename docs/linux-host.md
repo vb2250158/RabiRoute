@@ -6,6 +6,9 @@
 
 # Linux Host：源码启动与运行边界
 
+超时使用全局 `data/Config.json.timeoutOverrides`，可在[WebGUI 超时设置](configuration.md#超时设置)中修改。`linux.host.*` 控制管理请求、重启、启动就绪、退出等待及本地 HTTP 等待；新 Host 进程或新命令读取已保存值。运行中的进程不会重置已经开始的等待。当前变更在 Windows 验证了配置解析与默认恢复；Linux 专属进程生命周期测试需要在 Linux 执行。
+
+
 > 状态：新增 Linux 最小 Host 实现。本文描述当前源码合同，不把构建、本机测试或浏览器可打开当作真实 Relay、双设备投递或长期运行验收。
 
 Linux Host 管理本机 Manager 的启动、当前地址、重启和退出；界面使用已有 RibiWebGUI。Windows Host、托盘、Qt 窗口、系统截图与全局快捷键不属于这条 Linux 路径。Linux Host 启动成功也不意味着 Codex/ChatGPT Desktop、NapCat、语音模型或其他处理端已经可用；各集成仍需自己的宿主、依赖和验收。
@@ -73,7 +76,7 @@ npm run start:linux -- --state-root "$HOME/.local/share/rabiroute"
 
 ## 3. 当前地址与健康核对
 
-Host 从自己启动的 Manager 读取 `RABIROUTE_MANAGER_READY:` 结构化输出，核对进程、`applicationGenerationId` 和非空 `managerInstanceId`，再读取该次 `baseUrl` 的 `/meta`。正常准入要求身份一致，且 `health.live=true`、`health.requiredReady=true`、`health.state` 为 `healthy` 或 `degraded`。单个未配置集成不必阻止控制台正常使用。
+Host 从自己启动的 Manager 读取 `RABIROUTE_MANAGER_READY:` 结构化输出，核对进程、`applicationGenerationId` 和非空 `managerInstanceId`，再读取该次 `baseUrl` 的 `/meta`。准入保留身份一致、`health.live=true` 和已知健康状态检查；`health.requiredReady=false` 使 Host 报告为 `degraded`，不会因此拒绝启动或重建整代。缺失或类型错误的健康字段仍被拒绝；Manager 继续如实报告所缺能力，相关功能按其实际状态处理。
 
 `status --json` 提供 `managerBaseUrl`、`applicationGenerationId`、`managerInstanceId`、`hostInstanceId`、运行状态、只读/自动启动选项及日志路径。自动化使用完整 `managerBaseUrl`，调用业务接口前重新核对 `/meta` 的两项身份和所需能力；身份变化后重新发现，不重放结果未知的写请求。不得扫描端口、读旧锁文件猜地址、直接启动或结束受管 Manager。
 

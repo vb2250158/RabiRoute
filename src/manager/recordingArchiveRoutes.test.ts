@@ -1,3 +1,4 @@
+import { nativeHttpTestFetch as fetch } from "./nativeHttpTestClient.js";
 import test from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
@@ -7,7 +8,8 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 import { RecordingArchiveStore } from "./recordingArchiveStore.js";
 import { recordingManifestHash, type RecordingManifest } from "./recordingArchiveContract.js";
-import { recordingArchiveHandler, recordingArchiveObjectHandler, RECORDING_ARCHIVE_HTTP_MAX_MANIFEST_BYTES } from "./recordingArchiveRoutes.js";
+import { RECORDING_ARCHIVE_HTTP_MAX_MANIFEST_BYTES } from "./recordingArchiveRoutes.js";
+import { recordingArchiveFixtureHandler as recordingArchiveHandler, recordingArchiveObjectFixtureHandler as recordingArchiveObjectHandler } from "./resourceApiTestSupport.js";
 const sha = (value: Buffer) => createHash("sha256").update(value).digest("hex");
 const ns = "12345678-1234-4234-8234-123456789abc";
 async function fixture(t: import("node:test").TestContext) {

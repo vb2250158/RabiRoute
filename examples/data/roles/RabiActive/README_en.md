@@ -10,7 +10,7 @@ English | <a href="./README.md">简体中文</a>
 
 Rabi Active treats proactivity as maintaining an intent model, preparing useful work, and choosing when to intervene. It is not a prompt to answer every transcript fragment.
 
-The policy ranges from L0 silent observation to L5 emergency intervention and weighs user benefit, intent confidence, timeliness, interruption cost, and action risk. Upstream observations and proactive downstream replies use separate queues, while successful deliveries share one conversation ledger.
+The persona shapes initiative and expression. Curiosity, humor, conversation, and shared experiences have value without a task output. Action and expression may be considered separately or blended naturally. L4 means executing, verifying, and following through; ask only when a material user decision is missing. The policy ranges from L0 silent observation to L5 emergency intervention and weighs user benefit, intent confidence, timeliness, interruption cost, and action risk. Upstream observations and proactive downstream replies use separate queues, while successful deliveries share one conversation ledger.
 
 ## Use
 

@@ -14,8 +14,18 @@ import {
   type ManagerReadWorkerChild
 } from "./managerReadWorkerPool.js";
 import { PerformanceStore } from "./performanceStore.js";
+import type { ManagerReadWorkerTask } from "./managerReadWorkerTasks.js";
 
 type FakeReadRequest = Readonly<{ requestId: string; task: unknown }>;
+
+test("the retired history IPC task cannot bypass the versioned search contract", { timeout: 20000 }, async () => {
+  const pool = new ManagerReadWorkerPool({ maxConcurrency: 1, timeoutMs: 10000 });
+  try {
+    const retired = { type: "role_message_endpoint_history", roleDir: "synthetic-retired-role", query: { limit: 1 } } as unknown as ManagerReadWorkerTask;
+    await assert.rejects(pool.run(retired), (error: unknown) => error instanceof ManagerReadWorkerError
+      && error.code === "worker_failed" && /Unsupported Manager read task/.test(error.message));
+  } finally { await pool.stop(); }
+});
 
 class FakeReadWorker extends EventEmitter implements ManagerReadWorkerChild {
   exitCode: number | null = null;
@@ -891,4 +901,19 @@ test("a stopped pool can restart while another pool has an unconfirmed worker", 
     restartedChild.close(0, "SIGTERM");
     await Promise.allSettled([blockedPool.stop(), stoppedPool.stop()]);
   }
+});
+
+
+test("queue deadline rejects waiting search without cancelling the active reader", async () => {
+  let request: FakeReadRequest | undefined;
+  const child = new FakeReadWorker(58001, value => { request = value; }, (_signal, worker) => worker.close(0, 'SIGTERM'));
+  const pool = new ManagerReadWorkerPool({ maxConcurrency: 1, workerFactory: () => child, setWorkerPriority: () => {} });
+  try {
+    const active = pool.run({ type: 'message_history_search', roleDir: 'synthetic', query: { limit: 1 } });
+    await new Promise<void>(resolve => setImmediate(resolve));
+    await assert.rejects(pool.run({ type: 'message_history_search', roleDir: 'synthetic', query: { limit: 1 } }, { queueTimeoutMs: 20 }),
+      (error: unknown) => error instanceof ManagerReadWorkerError && error.code === 'busy');
+    assert.equal(pool.status().active, 1); assert.equal(pool.status().queued, 0);
+    assert.ok(request); child.respond(request, []); await active;
+  } finally { await pool.stop(); }
 });

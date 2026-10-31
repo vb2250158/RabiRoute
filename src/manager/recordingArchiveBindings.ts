@@ -3,11 +3,13 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { randomUUID, createHash } from "node:crypto";
 import { storageRevisionToken } from "../shared/storageRevision.js";
+import { archiveAdminInputSchema, archiveBindingIdentitySchema } from "./recordingArchiveSchemas.js";
+import { RESOURCE_ID_PATTERN, RESOURCE_NAMESPACE_PATTERN, RESOURCE_ZERO_NAMESPACE } from "./resourceCacheProtocol.js";
 
 export interface ArchiveAdminInput { owner: string; roleId: string; storageNamespaceId: string; provision: boolean; enabled: boolean; expectedRevision: number }
 export class ArchiveAdminError extends Error { constructor(readonly status: number, readonly code: string) { super(code); } }
 export function validateArchiveAdminInput(value: unknown): ArchiveAdminInput {
-  keys(value, ["owner", "roleId", "storageNamespaceId", "provision", "enabled", "expectedRevision"]);
+  keys(value, archiveAdminInputSchema.required);
   if (typeof value.provision !== "boolean" || typeof value.enabled !== "boolean") throw new ArchiveAdminError(400, "invalid_request");
   return { owner: opaque(value.owner), roleId: opaque(value.roleId), storageNamespaceId: namespace(value.storageNamespaceId), provision: value.provision, enabled: value.enabled, expectedRevision: revision(value.expectedRevision) };
 }
@@ -21,8 +23,9 @@ import type { RecordingArchiveNamespace } from "./recordingArchiveStore.js";
 
 export interface RecordingArchiveBinding { roleId: string; storageNamespaceId: string; bindingRevision: number; enabled: boolean }
 interface Configuration { schemaVersion: 1; revision: number; ownerRoleBindings: Record<string, RecordingArchiveBinding> }
-const opaque = (v: unknown): string => { if (typeof v !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(v) || ["__proto__", "prototype", "constructor"].includes(v)) throw new Error("Invalid archive binding identity"); return v; };
-const namespace = (v: unknown): string => { if (typeof v !== "string" || !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(v) || v === "00000000-0000-0000-0000-000000000000") throw new Error("Invalid namespace"); return v; };
+const bindingIdentityPattern = new RegExp(RESOURCE_ID_PATTERN), bindingNamespacePattern = new RegExp(RESOURCE_NAMESPACE_PATTERN);
+const opaque = (v: unknown): string => { if (typeof v !== "string" || !bindingIdentityPattern.test(v) || archiveBindingIdentitySchema.not.enum.includes(v)) throw new Error("Invalid archive binding identity"); return v; };
+const namespace = (v: unknown): string => { if (typeof v !== "string" || !bindingNamespacePattern.test(v) || v === RESOURCE_ZERO_NAMESPACE) throw new Error("Invalid namespace"); return v; };
 const revision = (v: unknown): number => { if (typeof v !== "number" || !Number.isSafeInteger(v) || v < 0) throw new Error("Invalid revision"); return v; };
 function keys(v: unknown, expected: string[]): asserts v is Record<string, unknown> {
   if (!v || typeof v !== "object" || Array.isArray(v) || Object.keys(v).length !== expected.length || Object.keys(v).some(k => !expected.includes(k))) throw new Error("Invalid binding configuration");

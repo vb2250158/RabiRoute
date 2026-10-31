@@ -35,7 +35,7 @@ internal static class ReadOnlyHostStatusProbe
 
     internal static async Task<ReadOnlyHostStatusResult> QueryAsync()
     {
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+        using var timeout = new CancellationTokenSource(RabiRoute.WindowsHost.HostTimeouts.Get("host.status.probe", TimeSpan.FromSeconds(2)));
         await using var client = new NamedPipeClientStream(".", PipeName(), PipeDirection.InOut, PipeOptions.Asynchronous, TokenImpersonationLevel.Identification);
         try
         {

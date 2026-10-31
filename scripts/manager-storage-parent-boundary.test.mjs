@@ -9,6 +9,8 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".."
 
 const FORMAL_PARENT_MODULES = Object.freeze([
   "src/manager/controlPlaneRoutes.ts",
+  "src/manager/personaIdentityOwner.ts",
+  "src/manager/wearableHealthRoute.ts",
   "src/outbox.ts",
   "src/manager/planQaFeedback.ts",
   "src/manager/planFeedbackRecovery.ts",
@@ -120,28 +122,30 @@ const HARD_OWNER_MODULES = new Set(
 // The executable baseline below fails when any seam is added, removed, or
 // changes multiplicity; each entry also remains visible as a TODO in test output.
 const EXPECTED_PENDING_PARENT_VIOLATION_COUNTS = Object.freeze([
-  ["src/manager/controlPlaneRoutes.ts|domain-storage-owner-call|identityRelations.recordIdentityCandidateObservation", 1],
-  ["src/manager/controlPlaneRoutes.ts|domain-storage-owner-call|identityRelations.updateIdentityRelation", 2],
-  ["src/manager/controlPlaneRoutes.ts|domain-storage-owner-call|personaVoiceIdentities.updatePersonaVoiceIdentity", 1],
-  ["src/manager/controlPlaneRoutes.ts|domain-storage-owner-call|wearableHealth.updateWearableHealthConfig", 1],
-  ["src/manager/controlPlaneRoutes.ts|domain-storage-owner-import|identityRelations.recordIdentityCandidateObservation", 1],
-  ["src/manager/controlPlaneRoutes.ts|domain-storage-owner-import|identityRelations.updateIdentityRelation", 1],
   ["src/manager/controlPlaneRoutes.ts|domain-storage-owner-import|messageContextStore.appendMessageContextToDir", 1],
-  ["src/manager/controlPlaneRoutes.ts|domain-storage-owner-import|personaVoiceIdentities.updatePersonaVoiceIdentity", 1],
-  ["src/manager/controlPlaneRoutes.ts|domain-storage-owner-import|wearableHealth.ingestWearableHealthObservation", 1],
-  ["src/manager/controlPlaneRoutes.ts|domain-storage-owner-import|wearableHealth.updateWearableHealthConfig", 1],
   ["src/manager/controlPlaneRoutes.ts|role-storage-fs-access|fs.readdirSync", 1],
   ["src/manager/personaAvatarRoutes.ts|domain-storage-owner-call|personaAvatar.removePersonaAvatar", 1],
   ["src/manager/personaAvatarRoutes.ts|domain-storage-owner-call|personaAvatar.savePersonaAvatar", 1],
   ["src/manager/personaAvatarRoutes.ts|domain-storage-owner-import|personaAvatar.removePersonaAvatar", 1],
   ["src/manager/personaAvatarRoutes.ts|domain-storage-owner-import|personaAvatar.savePersonaAvatar", 1],
   ["src/manager/personaAvatarRoutes.ts|role-storage-fs-access|fs.createReadStream", 1],
-  ["src/manager/personaAvatarRoutes.ts|role-storage-fs-access|fs.statSync", 1],
+  ["src/manager/personaAvatarRoutes.ts|role-storage-fs-access|fs.openSync", 1],
   ["src/manager/personaDocumentRoutes.ts|role-storage-fs-access|fs.existsSync", 1],
   ["src/manager/personaDocumentRoutes.ts|role-storage-fs-access|fs.readFileSync", 1],
   ["src/manager/personaDocumentRoutes.ts|role-storage-fs-access|fs.realpathSync", 2],
   ["src/manager/personaDocumentRoutes.ts|role-storage-fs-access|fs.statSync", 1],
+  // Identity and health seams moved from controlPlaneRoutes into native owners.
+  // Their original ledger writes still run in the parent; relocation is not retirement.
+  ["src/manager/personaIdentityOwner.ts|domain-storage-owner-call|identityRelations.recordIdentityCandidateObservation", 1],
+  ["src/manager/personaIdentityOwner.ts|domain-storage-owner-call|identityRelations.updateIdentityRelation", 2],
+  ["src/manager/personaIdentityOwner.ts|domain-storage-owner-call|personaVoiceIdentities.updatePersonaVoiceIdentity", 1],
+  ["src/manager/personaIdentityOwner.ts|domain-storage-owner-import|identityRelations.recordIdentityCandidateObservation", 1],
+  ["src/manager/personaIdentityOwner.ts|domain-storage-owner-import|identityRelations.updateIdentityRelation", 1],
+  ["src/manager/personaIdentityOwner.ts|domain-storage-owner-import|personaVoiceIdentities.updatePersonaVoiceIdentity", 1],
   ["src/manager/planAttachmentRoutes.ts|role-storage-fs-access|fs.readFileSync", 1],
+  ["src/manager/wearableHealthRoute.ts|domain-storage-owner-call|wearableHealth.updateWearableHealthConfig", 1],
+  ["src/manager/wearableHealthRoute.ts|domain-storage-owner-import|wearableHealth.ingestWearableHealthObservation", 1],
+  ["src/manager/wearableHealthRoute.ts|domain-storage-owner-import|wearableHealth.updateWearableHealthConfig", 1],
   ["src/outbox.ts|domain-storage-owner-call|messageContextStore.appendMessageContextToDir", 1],
   ["src/outbox.ts|domain-storage-owner-call|rabilinkConversationLedger.appendRabiLinkConversationEntry", 1],
   ["src/outbox.ts|domain-storage-owner-import|messageContextStore.appendMessageContextToDir", 1],
@@ -150,7 +154,8 @@ const EXPECTED_PENDING_PARENT_VIOLATION_COUNTS = Object.freeze([
   ["src/outbox.ts|role-storage-fs-access|fs.existsSync", 2],
   ["src/outbox.ts|role-storage-fs-access|fs.mkdirSync", 2],
   ["src/outbox.ts|role-storage-fs-access|fs.readFile", 1],
-  ["src/outbox.ts|role-storage-fs-access|fs.readFileSync", 2]
+  // The retired FenneNote persona-name reader was removed; readJsonl still owns one synchronous read.
+  ["src/outbox.ts|role-storage-fs-access|fs.readFileSync", 1]
 ]);
 
 const FORBIDDEN_OWNER_EXPORTS = new Map(
@@ -744,16 +749,52 @@ test("formal Manager parents cannot call promised plan, memory, feedback, or rol
   );
 });
 
+test("native identity and health owners remain inside the same hard storage boundary", () => {
+  for (const ownerPath of ["src/manager/personaIdentityOwner.ts", "src/manager/wearableHealthRoute.ts"]) {
+    assert.ok(FORMAL_PARENT_MODULES.includes(ownerPath), ownerPath);
+    for (const key of HARD_OWNER_GROUP_KEYS) {
+      const group = OWNER_EXPORT_GROUPS[key];
+      const name = group.exports[0];
+      const violations = analyzeSource(ownerPath, `import { ${name} } from "../${group.module}.js";\nfunction mutate(roleDir) { return ${name}(roleDir); }`);
+      assert.deepEqual(violations.filter(isHardParentViolation).map(({ code }) => code), ["domain-storage-owner-import", "domain-storage-owner-call"]);
+    }
+  }
+  assert.deepEqual(productionModuleImporters("personaIdentityOwner"), ["src/manager/personaIdentityOperations.ts"]);
+  assert.deepEqual(productionModuleImporters("wearableHealthRoute"), ["src/manager/personaHealthOperations.ts"]);
+});
+
+test("storage analyzer keeps descriptor-based avatar reads visible without flagging local runtime files", () => {
+  const source = 'import fs from "node:fs";\nfunction read(roleDir, runtimePath) { fs.openSync(roleDir + "/avatar.png", "r"); fs.openSync(runtimePath, "r"); }';
+  assert.deepEqual(violationCounts(analyzeSource("src/manager/__avatar-fixture.ts", source)), [
+    ["src/manager/__avatar-fixture.ts|role-storage-fs-access|fs.openSync", 1]
+  ]);
+});
+
+function topLevelFunctionBody(source, name) {
+  const sourceFile = ts.createSourceFile("owner-contract.ts", source, ts.ScriptTarget.ESNext, true, ts.ScriptKind.TS);
+  const declarations = sourceFile.statements.filter(node => ts.isFunctionDeclaration(node) && node.name?.text === name);
+  assert.equal(declarations.length, 1, `expected one top-level ${name} implementation`);
+  assert.ok(declarations[0].body, `missing ${name} implementation body`);
+  return declarations[0].body.getText(sourceFile);
+}
+
+test("owner contract extraction uses the function AST boundary rather than a neighbouring declaration", () => {
+  const source = 'async function submit() { return "original"; }\ntype RetiredNeighbour = string;\nfunction later() { return "unrelated"; }';
+  assert.equal(topLevelFunctionBody(source, "submit"), '{ return "original"; }');
+  assert.throws(() => topLevelFunctionBody('function outer() { function submit() {} }', "submit"), /expected one top-level/);
+  assert.throws(() => topLevelFunctionBody('function submit() {}\nfunction submit() {}', "submit"), /expected one top-level/);
+});
+
 test("the Agent plan-feedback submit port uses one generation, authoritative revision, and delivery fencing", () => {
   const controlPlane = fs.readFileSync(path.join(repoRoot, "src/manager/controlPlaneRoutes.ts"), "utf8");
-  const start = controlPlane.indexOf("async function submitAgentPlanFeedback(");
-  const end = controlPlane.indexOf("\nfunction respondRoleStorageError", start);
-  assert.ok(start >= 0 && end > start, "missing submitAgentPlanFeedback port implementation");
-  const implementation = controlPlane.slice(start, end);
+  const implementation = topLevelFunctionBody(controlPlane, "submitAgentPlanFeedback");
   const queryAt = implementation.indexOf("await application.queries.planFeedback(");
   const commandAt = implementation.indexOf("await application.commands.submitPlanFeedback(");
   assert.match(implementation, /const application = currentRoleStorageApplication\(\);/);
+  assert.equal(implementation.match(/currentRoleStorageApplication\(/g)?.length, 1, "query and command must retain the same application");
+  assert.match(topLevelFunctionBody(controlPlane, "currentRoleStorageApplication"), /return activeStorageLifecycleGeneration\.roleStorage;/);
   assert.ok(queryAt >= 0 && commandAt > queryAt, "authoritative feedback projection must be queried before command submission");
+  assert.match(implementation.slice(queryAt, commandAt), /if \(!projection\)\s*\{\s*throw new RoleStorageApplicationError\(/);
   assert.match(implementation, /expectedRevision:\s*projection\.planRevision/);
   assert.match(
     implementation,
@@ -764,6 +805,14 @@ test("the Agent plan-feedback submit port uses one generation, authoritative rev
   const outbox = fs.readFileSync(path.join(repoRoot, "src/outbox.ts"), "utf8");
   assert.doesNotMatch(outbox, /from\s+["'][^"']*planFeedbackSubmission(?:\.js)?["']/);
   assert.match(outbox, /submitPlanFeedback\?:\s*AgentPlanFeedbackSubmitPort/);
+  const reply = topLevelFunctionBody(outbox, "appendPlanFeedbackReply");
+  const submitAt = reply.indexOf("await options.submitPlanFeedback(");
+  assert.ok(submitAt > 0, "Outbox must use the injected feedback port");
+  const admission = reply.slice(0, submitAt);
+  assert.match(admission, /if \(routeRoleId && routeRoleId !== roleId\)/);
+  assert.match(admission, /const deliveryId = valueString\(request\.deliveryId\);\s*if \(!deliveryId\)/);
+  assert.match(admission, /if \(!options\.submitPlanFeedback\)/);
+  assert.match(reply.slice(submitAt), /feedbackId: responseId,\s*deliveryId,/);
 });
 
 test("pending formal-parent storage seams match the explicit migration ledger", () => {

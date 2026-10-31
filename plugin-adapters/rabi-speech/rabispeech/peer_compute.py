@@ -1,6 +1,9 @@
 """Microphone compute follows the Manager's selected service; device capture stays local."""
 from __future__ import annotations
 
+from .timeout_settings import get_timeout_seconds
+
+
 from dataclasses import fields
 from pathlib import Path
 from typing import Any
@@ -11,8 +14,8 @@ from .contracts import TranscriptSegment, TranscriptionResult
 
 
 async def selected_remote_transcription(manager_url: str, audio_path: Path, *, model: str, language: str | None, prompt: str | None) -> TranscriptionResult | None:
-    async with httpx.AsyncClient(timeout=190.0, follow_redirects=False) as client:
-        selection = await client.get(f"{manager_url}/api/rabilink/peer/selection", timeout=5.0)
+    async with httpx.AsyncClient(timeout=get_timeout_seconds("speech.peer.request", 190), follow_redirects=False) as client:
+        selection = await client.get(f"{manager_url}/api/rabilink/peer/selection", timeout=get_timeout_seconds("speech.peer.selection", 5))
         if selection.status_code == 404:
             # Standalone Manager without the RabiLink plugin has no remote selection.
             return None

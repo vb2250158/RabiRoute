@@ -64,7 +64,7 @@ test("keeps the legacy Route auto-submit field enabled so keyword mode can recor
 test("speech workbench exposes exact VAD inputs and one host playback volume control", () => {
   const source = fs.readFileSync(new URL("../src/pages/SpeechServicePage.vue", import.meta.url), "utf8");
   const controlPlane = fs.readFileSync(new URL("../../src/manager/controlPlaneRoutes.ts", import.meta.url), "utf8");
-  const speechPlugin = fs.readFileSync(new URL("../../plugins/builtin/io.rabiroute.manager.speech/1.0.0/manager.mjs", import.meta.url), "utf8");
+  const speechPlugin = fs.readFileSync(new URL("../../plugins/builtin/io.rabiroute.manager.speech/1.0.0/lifecycle.mjs", import.meta.url), "utf8");
   assert.doesNotMatch(source, /投递 Route|会话 ID|送入所选 Route|selectedGatewayId|v-model="autoSubmit"/);
   assert.equal(source.match(/<SpeechParameterSlider\b/g)?.length, 8);
   assert.equal(source.match(/label="主机播放音量"/g)?.length, 1);
@@ -123,7 +123,7 @@ test("persona route variables hide speech settings owned by dedicated controls",
   assert.equal(isSpeechRouteVariableKey("speechThreshold"), true);
   assert.equal(isSpeechRouteVariableKey("projectAlias"), false);
   const source = fs.readFileSync(new URL("../src/pages/PersonaTemplatePage.vue", import.meta.url), "utf8");
-  assert.match(source, /filter\(\(\[key\]\) => !isSpeechRouteVariableKey\(key\)\)/);
+  assert.doesNotMatch(source, /v-model="gateway\.variables\.(?:speechAutoSubmit|speechAutoPlay|speechThreshold)"/);
   const routeSource = fs.readFileSync(new URL("../src/pages/RouteConfigPage.vue", import.meta.url), "utf8");
   assert.doesNotMatch(routeSource, /<SpeechParameterSlider/);
   assert.doesNotMatch(routeSource, /SpeechHostMonitor|运行日志与转写预览|实时电平/);

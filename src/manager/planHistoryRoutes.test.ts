@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { createPlan, updatePlan } from "../roleKnowledge.js";
-import { handlePersonaPluginApi } from "./controlPlaneRoutes.js";
+import { createPersonaStorageTestApi } from "./personaManagerIntegration.fixture.js";
 
 function listen(server: http.Server): Promise<number> {
   return new Promise((resolve, reject) => {
@@ -19,8 +19,9 @@ function listen(server: http.Server): Promise<number> {
 }
 
 test("plan history endpoint keeps completed-plan revisions readable", async (t) => {
-  const roleDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabi-plan-history-route-"));
-  t.after(() => fs.rmSync(roleDir, { recursive: true, force: true }));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabi-plan-history-route-"));
+  const roleDir = path.join(root, "Role"); fs.mkdirSync(roleDir);
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const plan = createPlan(roleDir, {
     id: "history-endpoint",
     title: "保留历史",
@@ -35,9 +36,10 @@ test("plan history endpoint keeps completed-plan revisions readable", async (t) 
     currentStepId: "",
     steps: [{ id: "review", title: "复核", status: "已完成" }]
   });
+  const nativeApi = createPersonaStorageTestApi(t, { roleDir: () => roleDir });
   const server = http.createServer((request, response) => {
     const requestUrl = new URL(request.url || "/", `http://${request.headers.host || "127.0.0.1"}`);
-    if (handlePersonaPluginApi(request, requestUrl, response, { roleDir: () => roleDir })) return;
+    if (nativeApi(request, requestUrl, response)) return;
     response.writeHead(404).end();
   });
   const port = await listen(server);

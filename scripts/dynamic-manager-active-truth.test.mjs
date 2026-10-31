@@ -42,8 +42,9 @@ test("WebGUI build skill uses Host READY identity instead of a port owner", () =
   for (const required of ["--command status", "managerBaseUrl", "applicationGenerationId", "managerInstanceId", "/meta"]) {
     assert.ok(skill.includes(required), `missing Host READY contract: ${required}`);
   }
-  assert.match(skill, /state -eq "healthy"/);
-  assert.match(skill, /Start-Sleep -Milliseconds 500/);
+  assert.match(skill, /health\.live/);
+  assert.match(skill, /state -notin @\("healthy", "degraded"\)/);
+  assert.match(skill, /`requiredReady`[\s\S]*不阻断无依赖功能/);
   assert.doesNotMatch(skill, /netstat|Get-NetTCPConnection|Stop-Process|127\.0\.0\.1:8790/i);
   assert.doesNotMatch(skill, /Start-Process\s+["']node["'][\s\S]*manager\.js/i);
 });
@@ -84,7 +85,7 @@ test("all active Skills, workflows, and scripts reject retired Manager discovery
 test("Agent contracts separate identity, request readiness, diagnostics, and write reconciliation", () => {
   for (const relative of ["../AGENTS.md", "../docs/rabi-agent-interfaces.md", "../docs/rabi-agent-interfaces_en.md"]) {
     const source = read(relative);
-    for (const required of ["applicationGenerationId", "managerInstanceId", "health.live=true", "health.requiredReady=true", "`healthy`", "`degraded`", "GET /meta"]) {
+    for (const required of ["applicationGenerationId", "managerInstanceId", "health.live=true", "health.requiredReady", "`healthy`", "`degraded`", "GET /meta"]) {
       assert.ok(source.includes(required), `${relative}: missing layered Manager contract ${required}`);
     }
     assert.doesNotMatch(source, /health\.state=healthy/, `${relative}: aggregate health must not gate unrelated requests`);
@@ -108,7 +109,7 @@ test("repository guidance applies the dynamic Manager contract to future entry p
     "applicationGenerationId",
     "managerInstanceId",
     "<managerBaseUrl>/meta",
-    "不得写死 Manager 端口",
+    "Manager 地址始终由当前发现结果提供",
     "dynamic-manager-active-truth.test.mjs"
   ]) {
     assert.ok(guide.includes(required), `missing repository dynamic Manager rule: ${required}`);

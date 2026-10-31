@@ -1,3 +1,4 @@
+import { getTimeoutMs } from "../shared/timeoutSettings.js";
 import type {
   SpeechProvider,
   SpeechRuntimeStatus,
@@ -140,13 +141,13 @@ export async function inspectLocalSpeechService(
   const fetchImpl = options.fetchImpl ?? fetch;
   const startedAt = performance.now();
   try {
-    const health = await requestJson(fetchImpl, `${baseUrl}/health`, options.timeoutMs ?? 5000);
+    const health = await requestJson(fetchImpl, `${baseUrl}/health`, options.timeoutMs ?? getTimeoutMs("speech.health", 5000));
     const capabilities = options.includeCapabilities === false
       ? {}
       : await requestJson(
           fetchImpl,
           `${baseUrl}/v1/capabilities`,
-          options.timeoutMs ?? 5000
+          options.timeoutMs ?? getTimeoutMs("speech.health", 5000)
         ).catch((): Record<string, unknown> => ({}));
     // Older RabiSpeech versions expose the same provider data from /health.
     const providers = asRecord(health.providers || capabilities.providers);

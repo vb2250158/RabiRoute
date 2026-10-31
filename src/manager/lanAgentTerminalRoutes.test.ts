@@ -8,7 +8,7 @@ import { randomUUID } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import { WebSocket } from "ws";
 import { LanAgentRegistry } from "./lanAgentRegistry.js";
-import { handleLanAgentApi } from "./lanAgentRoutes.js";
+import { handleLanAgentApiFixture as handleLanAgentApi } from "./lanAgentRouteTestSupport.js";
 import { markAuthenticatedConnectionRequest } from "./connectionRequestAccess.js";
 import { createHash } from "node:crypto";
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));

@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import http from "node:http";
 import { RecordingArchiveBindings, archiveAdminDigest, archiveSettingsEtag } from "./recordingArchiveBindings.js";
-import { recordingArchiveAdminHandler } from "./recordingArchiveAdminRoutes.js";
+import { recordingArchiveAdminFixtureHandler as recordingArchiveAdminHandler } from "./resourceApiTestSupport.js";
 import { markAuthenticatedConnectionRequest } from "./connectionRequestAccess.js";
 
 test("administrative settings enforce preconditions, persist replay, and never expose paths", async t => {

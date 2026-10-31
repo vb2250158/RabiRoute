@@ -20,13 +20,20 @@ export type InstanceAgent = {
 
 export type AgentInstance = {
   instanceId: string;
+  /** Manager-owned display alias; empty restores the reported hostname. */
   name?: string;
+  hostname?: string;
   local: boolean;
+  enabled?: boolean;
   address?: string;
   connected: boolean;
   version?: string;
   agents: InstanceAgent[];
 };
+
+export function agentInstanceDisplayName(instance: Pick<AgentInstance, "instanceId" | "name" | "hostname">): string {
+  return instance.name || instance.hostname || instance.instanceId;
+}
 
 export function normalizeAgentInstanceBinding(value: unknown): AgentInstanceBinding | undefined {
   if (value == null) return undefined;
@@ -59,9 +66,8 @@ export function normalizeInstanceAgents(value: unknown): InstanceAgent[] {
     ids.add(binding.agentId);
     if (typeof raw.provider !== "string" || !raw.provider.trim() || raw.provider.length > 80) throw new Error("Agent provider is required.");
     const text = (value: unknown, limit = 1024) => typeof value === "string" ? value.trim().slice(0, limit) || undefined : undefined;
-    return { agentId: binding.agentId, name: text(raw.name, 160) || binding.agentId, provider: raw.provider, enabled: raw.enabled !== false,
-      workspace: text(raw.workspace), sessionId: text(raw.sessionId, 192),
-      managedSessionIds: Array.isArray(raw.managedSessionIds) ? [...new Set(raw.managedSessionIds.map((id: unknown) => text(id, 192)).filter((id: string | undefined): id is string => Boolean(id)))].slice(0, 512) as string[] : undefined,
+    return { agentId: binding.agentId, name: text(raw.name, 160) || binding.agentId, provider: raw.provider, enabled: true,
+      workspace: text(raw.workspace),
       model: text(raw.model, 160), reasoningEffort: text(raw.reasoningEffort, 32), dshBaseUrl: text(raw.dshBaseUrl) };
   });
 }

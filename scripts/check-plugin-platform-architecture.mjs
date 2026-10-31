@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 import { skipArchitectureDirectory } from "./lib/architecture-scan-boundary.mjs";
+import { hasReleasablePluginScope, kernelImportViolations, publicationPackageViolations, relativeModuleSpecifiers } from "./lib/plugin-platform-contract.mjs";
 
 const root = process.cwd();
 const activeRoots = ["src", "scripts", "plugins", "ribiwebgui", "desktop"];
@@ -59,9 +60,34 @@ function relative(file) {
   return path.relative(root, file).replace(/\\/g, "/");
 }
 
+async function packageModuleSources(entryPath, packageRoot) {
+  const realRoot = await fs.realpath(packageRoot);
+  const modules = new Map();
+  const pending = [entryPath];
+  while (pending.length) {
+    const file = pending.pop();
+    const name = path.relative(packageRoot, file).replace(/\\/g, "/");
+    if (modules.has(name)) continue;
+    const realRelative = path.relative(realRoot, await fs.realpath(file));
+    if (!realRelative || realRelative.startsWith("..") || path.isAbsolute(realRelative)) continue;
+    const source = await fs.readFile(file, "utf8");
+    modules.set(name, source);
+    for (const specifier of relativeModuleSpecifiers(source)) {
+      const target = path.resolve(path.dirname(file), specifier);
+      const packageRelative = path.relative(packageRoot, target);
+      if (!packageRelative || packageRelative.startsWith("..") || path.isAbsolute(packageRelative)
+        || !/[.](?:mjs|js|ts)$/.test(target)) continue;
+      const targetStat = await fs.lstat(target).catch(() => undefined);
+      if (targetStat?.isFile() && !targetStat.isSymbolicLink()) pending.push(target);
+    }
+  }
+  return modules;
+}
+
 const textExtensions = new Set([".ts", ".tsx", ".js", ".mjs", ".cjs", ".json", ".py", ".md"]);
 const activeFiles = (await Promise.all(activeRoots.map(filesRecursively))).flat();
 const violations = [];
+const diagnostics = [];
 for (const file of activeFiles) {
   if (!textExtensions.has(path.extname(file).toLowerCase())) continue;
   if (relative(file) === "scripts/check-plugin-platform-architecture.mjs") continue;
@@ -73,12 +99,15 @@ for (const target of removedPaths) if (await exists(target)) violations.push(`Re
 for (const file of await filesRecursively("src/plugin-kernel")) {
   if (!/[.](?:ts|js|mjs)$/.test(file) || file.endsWith(".test.ts")) continue;
   const source = await fs.readFile(file, "utf8");
-  for (const match of source.matchAll(/from\s+["']([^"']+)["']/g)) {
-    const specifier = match[1];
-    if (specifier.startsWith("node:") || specifier.startsWith("./")) continue;
-    violations.push(`${relative(file)} imports outside the Plugin Kernel: ${specifier}`);
-  }
+  violations.push(...kernelImportViolations(relative(file), source));
 }
+
+const sdkRoot = path.join(root, "plugins", "contracts", "plugin-sdk");
+violations.push(...publicationPackageViolations(
+  JSON.parse(await fs.readFile(path.join(sdkRoot, "package.json"), "utf8")),
+  await fs.readFile(path.join(sdkRoot, "publication.mjs"), "utf8"),
+  await fs.readFile(path.join(sdkRoot, "publication.d.ts"), "utf8")
+));
 
 const builtinRoot = path.join(root, "plugins", "builtin");
 const packageDirectories = (await fs.readdir(builtinRoot, { withFileTypes: true })).filter(entry => entry.isDirectory());
@@ -130,7 +159,10 @@ for (const packageEntry of packageDirectories) {
       }
     }
     if (!managerSource.includes("definePlugin(")) violations.push(`${relative(managerPath)} does not use definePlugin`);
-    if (!managerSource.includes("context.effects.add(")) violations.push(`${relative(managerPath)} has no releasable effect scope`);
+    if (!hasReleasablePluginScope(managerSource, {
+      modules: await packageModuleSources(managerPath, versionRoot),
+      fileName: path.relative(versionRoot, managerPath).replace(/\\/g, "/")
+    })) diagnostics.push(`${relative(managerPath)}: no local releasable scope was identified by source inspection; confirm its actual resource owner with lifecycle tests.`);
   }
 }
 
@@ -157,6 +189,9 @@ for (const file of await filesRecursively("src")) {
   if (source.includes("io.rabiroute.manager.")) violations.push(`${relative(file)} branches on a concrete built-in package ID`);
 }
 
+// Local source inspection cannot prove the absence of a parent-owned resource.
+// Keep this heuristic visible without inventing a second lifecycle admission gate.
+if (diagnostics.length) console.warn(diagnostics.map(value => `Warning: ${value}`).join("\n"));
 if (violations.length) {
   console.error(violations.map(value => `- ${value}`).join("\n"));
   process.exitCode = 1;

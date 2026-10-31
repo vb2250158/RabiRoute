@@ -14,6 +14,14 @@ Relay's `POST /api/rabilink/video/offer` accepts only `deviceId` and SDP, limite
 
 Received data is stored under the PC runtime directory as `data/rabilink/video/<sessionId>.h264`. A JSON sidecar records bytes, termination reason and ICE candidate types. These are raw H.264 streams, not shareable MP4 files; they are not automatically sent to an Agent or uploaded to Relay. The receiver permits two concurrent sessions, capped at 256 MiB each. Size limits, storage backpressure, disconnection or 15 seconds without data terminate a session while retaining received bytes.
 
+## Public Manager contracts (source connected; installed acceptance pending)
+
+PC status and signalling use `manager.rabilink.video.status` (GET `/api/rabilink/video/status`) and `manager.rabilink.video.offer` (POST `/api/rabilink/video/offer`). Authenticated remote callers need no Agent-session preregistration or per-feature grant. Both executable contracts use the original receiver; the legacy prefix and HTTP wrapper are removed. Existing Android and Relay paths, SDP and media protocols remain compatible.
+
+JSON signalling is limited to 64 KiB and SDP itself to 60 KiB of UTF-8 bytes. Read-only mode still rejects session creation. Answer disclosure checks original admission and native session validity. HTTP disconnection never replays an offer; accepted WebRTC sessions remain with original timeout/close rules and plugin ownership. Plugin shutdown stops admission, closes the receiver and joins accepted negotiations. A missing active session does not prove an earlier offer never ran; retain deviceId/sessionId when reconciling.
+
+Current local software tests cover native WebRTC, synthetic binary-file integrity, node revocation, rejection of answers after closure and cleanup after disconnection. They capture no glasses picture and do not verify public-network hole punching.
+
 ## Android entry
 
 Place an original local signing key at `apps/rabi-mobile-android/secrets/rokid/signing/debug.keystore`. The `/secrets/` ignore rule protects this directory from normal Git additions; never commit it. Builds prefer this key with the standard Android debug alias and password, then the existing Vela configuration or the machine's default debug key. Compare APK certificate fingerprints before updating an installed app. Device `.lc` files and private SDK material also stay under `secrets/rokid/` and are not automatically bundled into the app.

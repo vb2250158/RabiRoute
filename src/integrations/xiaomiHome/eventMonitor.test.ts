@@ -215,3 +215,26 @@ test("recognizes a new Xiaomi Miot motion video without exposing it in the route
   assert.equal(routed?.kind, "camera_motion_detected");
   assert.equal("playlistUrl" in (routed ?? {}), false);
 });
+
+
+test("heartbeat shutdown still joins admitted delivery and the real socket close", async () => {
+  class SlowSocket extends FakeSocket { override close(): void {} }
+  const socket = new SlowSocket();
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const monitor = new XiaomiHomeEventMonitor({ agentRoleId: "RoleA", eventDeliveryMode: "all" }, {
+    credentialToken: "fixture-only", createSocket: () => socket, deliverEvent: () => gate
+  });
+  monitor.start();
+  socket.emit("message", JSON.stringify({ type: "result", id: 1, success: true }));
+  socket.emit("message", JSON.stringify({ type: "event", id: 1, event: {
+    event_type: "state_changed", data: { new_state: { entity_id: "light.fixture", state: "on" } }
+  } }));
+  let settled = false;
+  const stopping = monitor.stop().then(() => { settled = true; });
+  try {
+    await new Promise(resolve => setImmediate(resolve)); assert.equal(settled, false);
+    release(); await new Promise(resolve => setImmediate(resolve)); assert.equal(settled, false);
+    socket.emit("close"); await stopping; assert.equal(settled, true);
+  } finally { release(); socket.emit("close"); await stopping; }
+});

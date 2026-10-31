@@ -1,9 +1,12 @@
+import { getTimeoutMs } from "../shared/timeoutSettings.js";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { assertTrustedLanAgentPrincipal } from "./lanAgentRequestAccess.js";
 import { AgentUploadStoreError, type AgentUploadStreamInput } from "./agentUploadStore.js";
 import { getTrustedLanAgentSource, type TrustedLanAgentSource } from "./lanAgentBodyAuthority.js";
 import { ManagerPluginRequestTracker } from "./managerPluginRequestTracker.js";
 import type { ManagerPluginRouteHandler } from "./managerPluginRouteRegistry.js";
+import type { ApiOperationDefinition, ApiOperationResult } from "./apiOperationContract.js";
+import { agentUploadIdPattern, agentUploadOperationContract } from "./agentUploadContract.js";
 
 export type AgentUploadDto = { id: string; fileName: string; size: number; sha256: string; expiresAt: string };
 type Owner = { nodeId: string; agentId: string };
@@ -11,11 +14,14 @@ export interface AgentUploadRouteStore {
   readonly limits: { readonly maxFileBytes: number };
   uploadStream(input: AgentUploadStreamInput): Promise<AgentUploadDto>;
   get(owner: Owner, id: string): AgentUploadDto | undefined | Promise<AgentUploadDto | undefined>;
+  getShared?(id: string): AgentUploadDto | undefined | Promise<AgentUploadDto | undefined>;
 }
 export type AgentUploadRoutesContext = {
   store: AgentUploadRouteStore;
   /** Must re-read current policy; a denied or revoked principal must throw. */
   assertAuthorized: (source: TrustedLanAgentSource) => void | Promise<void>;
+  /** Supplied by Manager ingress, including trusted local callers. Never derived from body fields. */
+  assertConnectionAuthorized?: (request: IncomingMessage) => void;
   maxFileBytes?: number;
   maxConcurrentReaders?: number;
   readTimeoutMs?: number;
@@ -38,12 +44,12 @@ const uploadRepairs: Readonly<Record<string, string>> = Object.freeze({
   upload_timeout: "上传读取超时；保留原 uploadId 和内容，先 GET 同一 uploadId 核对回执，再检查传输耗时，不自动重传。",
   upload_aborted: "上传连接中断；保留原 uploadId 和内容，先 GET 同一 uploadId 核对回执，不自动重传。"
 });
-function uploadFailure(code: string) {
+function uploadFailure(code: string, detail?: string) {
   return {
     code,
     errorCode: code,
     help: { method: "GET", path: "/api/agent/help?path=%2Fapi%2Fagent%2Fuploads%2F%3AuploadId" },
-    repair: uploadRepairs[code] ?? "保留原 uploadId、请求头和内容；先 GET 同一 uploadId 核对状态，再处理服务或存储问题，不自动重传。",
+    repair: detail ?? uploadRepairs[code] ?? "保留原 uploadId、请求头和内容；先 GET 同一 uploadId 核对状态，再处理服务或存储问题，不自动重传。",
     retryable: false
   };
 }
@@ -51,7 +57,6 @@ function uploadFailure(code: string) {
 class UploadHttpError extends Error {
   constructor(readonly status: number, readonly code: string) { super(code); }
 }
-const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 function positiveInteger(value: number, name: string): number {
   if (!Number.isSafeInteger(value) || value < 1) throw new Error(`${name} must be a positive safe integer.`);
   return value;
@@ -96,6 +101,7 @@ async function* readBinary(request: IncomingMessage, response: ServerResponse, l
 
 export function createAgentUploadRoutes(context: AgentUploadRoutesContext): {
   handler: ManagerPluginRouteHandler;
+  operations: readonly ApiOperationDefinition[];
   stopAcceptingAndDrain: () => Promise<void>;
   activeRequestCount: () => number;
 } {
@@ -103,7 +109,7 @@ export function createAgentUploadRoutes(context: AgentUploadRoutesContext): {
   const limit = positiveInteger(context.maxFileBytes ?? storeLimit, "maxFileBytes");
   if (limit > storeLimit) throw new Error("maxFileBytes cannot exceed store.limits.maxFileBytes.");
   const concurrency = positiveInteger(context.maxConcurrentReaders ?? 4, "maxConcurrentReaders");
-  const timeout = positiveInteger(context.readTimeoutMs ?? 30 * 60_000, "readTimeoutMs");
+  const timeout = positiveInteger(context.readTimeoutMs ?? getTimeoutMs("agent.upload", 1800000), "readTimeoutMs");
   const tracker = new ManagerPluginRequestTracker();
   const readers = new Map<string, number>();
   let totalReaders = 0;
@@ -119,12 +125,23 @@ export function createAgentUploadRoutes(context: AgentUploadRoutesContext): {
       assertTrustedLanAgentPrincipal(request);
     } catch { throw new UploadHttpError(403, "forbidden"); }
   };
-  const run = async (request: IncomingMessage, url: URL, response: ServerResponse) => {
+  const run = async (request: IncomingMessage, url: URL, response: ServerResponse): Promise<ApiOperationResult> => {
     let ownerKey: string | undefined;
     try {
       let source: TrustedLanAgentSource | undefined;
       try { source = getTrustedLanAgentSource(request); }
       catch { throw new UploadHttpError(403, "forbidden"); }
+      if (request.method === "GET" && context.assertConnectionAuthorized && context.store.getShared) {
+        const id = url.pathname.slice("/api/agent/uploads/".length);
+        if (!agentUploadIdPattern.test(id)) throw new UploadHttpError(400, "invalid_input");
+        try { context.assertConnectionAuthorized(request); }
+        catch { throw new UploadHttpError(403, "forbidden"); }
+        const result = await context.store.getShared(id);
+        try { context.assertConnectionAuthorized(request); }
+        catch { throw new UploadHttpError(403, "forbidden"); }
+        if (!result) throw new UploadHttpError(404, "not_found");
+        return { status: 200, body: { code: 0, data: publicDto(result) } };
+      }
       if (!source) throw new UploadHttpError(403, "forbidden");
       await authorize(request, source);
       if (request.method !== "GET" && request.method !== "PUT") {
@@ -132,15 +149,14 @@ export function createAgentUploadRoutes(context: AgentUploadRoutesContext): {
         throw new UploadHttpError(405, "method_not_allowed");
       }
       const id = url.pathname.slice("/api/agent/uploads/".length);
-      if (!uuidPattern.test(id)) throw new UploadHttpError(400, "invalid_input");
+      if (!agentUploadIdPattern.test(id)) throw new UploadHttpError(400, "invalid_input");
       const owner = { nodeId: source.nodeId, agentId: source.agentId };
       if (request.method === "GET") {
         await authorize(request, source);
         const result = await context.store.get(owner, id);
         if (!result) throw new UploadHttpError(404, "not_found");
         await authorize(request, source);
-        json(response, 200, { code: 0, data: publicDto(result) });
-        return;
+        return { status: 200, body: { code: 0, data: publicDto(result) } };
       }
       if (header(request, "idempotency-key") !== id) throw new UploadHttpError(400, "invalid_idempotency_key");
       response.setHeader("Idempotency-Key", id);
@@ -169,10 +185,9 @@ export function createAgentUploadRoutes(context: AgentUploadRoutesContext): {
       } });
       try { assertTrustedLanAgentPrincipal(request); }
       catch {
-        if (!response.destroyed) json(response, 403, { ...uploadFailure("forbidden"), uncertain: true });
-        return;
+        return { status: 403, body: { ...uploadFailure("forbidden"), uncertain: true } };
       }
-      if (!response.destroyed) json(response, 200, { code: 0, data: publicDto(result) });
+      return { status: 200, body: { code: 0, data: publicDto(result) } };
     } catch (error) {
       const code = error instanceof UploadHttpError ? error.code : (error as { code?: string } | null)?.code;
       const statuses: Record<string, number> = { not_found: 404, invalid_input: 400, conflict: 409, capacity: 507, integrity: 422, unsafe_storage: 500, storage_failure: 500, forbidden: 403, upload_aborted: 400 };
@@ -181,8 +196,10 @@ export function createAgentUploadRoutes(context: AgentUploadRoutesContext): {
         // Close after the JSON response. Discard without buffering; server requestTimeout
         // remains the outer bound for an uncooperative peer. Never destroy before 413.
         if (!request.complete) { response.setHeader("Connection", "close"); request.on("error", () => undefined); request.resume(); }
-        json(response, status, uploadFailure(error instanceof UploadHttpError ? error.code : (code && statuses[code]) ? code : "storage_failure"));
       }
+      return { status, body: uploadFailure(error instanceof UploadHttpError ? error.code : (code && statuses[code]) ? code : "storage_failure",
+        code === "capacity" && error instanceof AgentUploadStoreError ? error.message : code === "file_too_large"
+          ? `当前 agentUploads.maxFileMiB=${limit / 1024 ** 2}；在 WebGUI RabiLink 配置或 data/Config.json 调整，重启 Manager 后生效。` : undefined) };
     } finally {
       if (ownerKey !== undefined) {
         totalReaders--;
@@ -192,10 +209,15 @@ export function createAgentUploadRoutes(context: AgentUploadRoutesContext): {
     }
   };
   const tracked = tracker.wrap((request, url, response) => {
-    void tracker.trackOperation(run(request, url, response)).catch(() => { if (!response.destroyed) response.destroy(); });
+    void tracker.trackOperation(run(request, url, response).then(result => {
+      if (!response.destroyed && !response.writableEnded) json(response, result.status, result.body);
+    })).catch(() => { if (!response.destroyed) response.destroy(); });
     return true;
   });
   return {
+    operations: (["GET", "PUT"] as const).map(method => ({ contract: agentUploadOperationContract(method, limit),
+      handler: input => tracker.trackOperation(accepting ? run(input.request, input.url, input.response)
+        : Promise.resolve({ status: 503, body: uploadFailure("upload_stopping") })) })),
     handler: (request, url, response) => {
       if (!url.pathname.startsWith("/api/agent/uploads/")) return false;
       if (!accepting) { json(response, 503, uploadFailure("upload_stopping")); return true; }

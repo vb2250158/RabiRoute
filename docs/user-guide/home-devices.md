@@ -1,4 +1,8 @@
-[English](home-devices_en.md) | 简体中文
+<!-- docs-language-switch -->
+<div align="center">
+<a href="./home-devices_en.md">English</a> | 简体中文 | <a href="./home-devices_ja.md">日本語</a>
+</div>
+<!-- /docs-language-switch -->
 
 # 查看设备并测试动作
 

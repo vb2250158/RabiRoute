@@ -17,7 +17,7 @@ test("knowledge requests keep same-name roles on their selected source PC", asyn
     const [localCounts, remoteCounts] = await Promise.all([local.loadRoleKnowledgeFileCounts("Shared"), remote.loadRoleKnowledgeFileCounts("Shared")]);
     assert.equal(localCounts.plans, 2);
     assert.equal(remoteCounts.plans, 7);
-    assert.deepEqual(paths.sort(), ["/api/rabilink/peer/http/pc-one/persona/api/roles/Shared/counts", "/api/roles/Shared/counts"].sort());
+    assert.deepEqual(paths.sort(), ["/api/rabilink/peer/http/pc-one/manager/api/roles/Shared/counts", "/api/roles/Shared/counts"].sort());
   } finally { globalThis.fetch = original; }
 });
 

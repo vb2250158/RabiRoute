@@ -1,3 +1,4 @@
+import { getTimeoutMs } from "./shared/timeoutSettings.js";
 import { RTCPeerConnection, type RTCDataChannel } from "werift";
 import type { PeerPacket } from "./rabiPeerProtocol.js";
 
@@ -38,7 +39,7 @@ export class RabiPeerDirect {
   private readonly operations = new Set<Promise<void>>();
   private stopped = false;
   constructor(private readonly receive: (packet: unknown) => Promise<PeerPacket>,
-    private readonly stunUrls = ["stun:stun.l.google.com:19302"], private readonly timeoutMs = 12_000) {
+    private readonly stunUrls = ["stun:stun.l.google.com:19302"], private readonly timeoutMs = getTimeoutMs("backend.rabiPeerDirect.owner.timeoutMs", 12_000)) {
     if (stunUrls.some(url => !/^stun:[a-zA-Z0-9.\-]+:\d+$/.test(url))) throw new Error("Only STUN is supported.");
   }
   private create(): { peer: RTCPeerConnection; close(): Promise<void>; assertActive(): void } {
@@ -52,7 +53,7 @@ export class RabiPeerDirect {
       clearTimeout(timer);
       if (this.connections.delete(peer)) await peer.close();
     };
-    const timer = setTimeout(() => { void close(); }, this.timeoutMs + 5_000);
+    const timer = setTimeout(() => { void close(); }, Math.min(2_147_483_647, this.timeoutMs + 5_000));
     timer.unref();
     peer.connectionStateChange.subscribe(state => {
       if (["failed", "disconnected", "closed"].includes(state)) void close();

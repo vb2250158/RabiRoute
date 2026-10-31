@@ -110,7 +110,8 @@ test("profile deadline failure has a closed timeout code distinct from signed-ou
     for (const name of ["desktop-status.json", "sand-secrets.json", "Local State"]) await fs.writeFile(path.join(directory, name), JSON.stringify({ pid: process.pid }));
     await assert.rejects(readGrokBotNativeProfile({ profileScriptPath: script, profilePath: directory, timeoutMs: 1_000 }), /GROK_BOT_PROFILE_TIMEOUT/);
     assert.throws(() => new GrokBotClient({ timeoutMs: 999 }), /GROK_BOT_TIMEOUT_INVALID/);
-    assert.throws(() => new GrokBotClient({ timeoutMs: 60_001 }), /GROK_BOT_TIMEOUT_INVALID/);
+    assert.doesNotThrow(() => new GrokBotClient({ timeoutMs: 60_001 }));
+    assert.throws(() => new GrokBotClient({ timeoutMs: 2_147_483_648 }), /GROK_BOT_TIMEOUT_INVALID/);
   } finally { await fs.rm(directory, { recursive: true, force: true }); }
 });
 async function profileCacheFixture(t: import("node:test").TestContext) {
@@ -146,7 +147,18 @@ test("profile files changing during a shared helper fail closed and never publis
   const reads = { ...options, runProfileHelper: async () => { calls += 1; started(); await pending; return fixture.profile; } };
   const first = readGrokBotNativeProfile(reads);
   await helperStarted;
+  // Gate on the second reader's actual final protected-file read, then let its
+  // promise continuations join the still-held helper before changing account bytes.
+  const readFile = fs.readFile.bind(fs); let finalReads = 0, secondFingerprintRead!: () => void;
+  const fingerprintRead = new Promise<void>(resolve => { secondFingerprintRead = resolve; });
+  const mockRead = t.mock.method(fs, "readFile", async (...args: Parameters<typeof fs.readFile>) => {
+    const bytes = await readFile(...args);
+    if (String(args[0]) === path.join(options.profilePath, "Local State") && ++finalReads === 1) secondFingerprintRead();
+    return bytes;
+  });
   const second = readGrokBotNativeProfile(reads);
+  await fingerprintRead; await new Promise<void>(resolve => setImmediate(resolve));
+  mockRead.mock.restore();
   await fs.writeFile(path.join(options.profilePath, "sand-secrets.json"), "new protected fixture scope");
   release();
   const results = await Promise.allSettled([first, second]);

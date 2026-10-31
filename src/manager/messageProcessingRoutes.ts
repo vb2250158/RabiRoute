@@ -1,6 +1,4 @@
-import { errorResponsePresentation } from "../shared/errorPresentation.js";
-import type http from "node:http";
-import { validateLanAgentRequestBody } from "./lanAgentBodyAuthority.js";
+import type { ApiOperationResult } from "./apiOperationContract.js";
 import type {
   CriticalProjectFactDisposition,
   KnowledgeMatchCallbackInput,
@@ -10,10 +8,10 @@ import type {
   MessageProcessingRequirement,
   RegisterMessageGroupRequirementInput
 } from "../messageProcessing/board.js";
-import type { MessageProcessingSendContextApprovalInput } from "../messageProcessing/sendContextReview.js";
+import type { MessageProcessingSendContextApproval, MessageProcessingSendContextApprovalInput, MessageProcessingSendContextSnapshot } from "../messageProcessing/sendContextReview.js";
 import type { ManagerOperationalLog } from "./operationalLog.js";
 
-type MessageProcessingRegistrationInput = {
+export type MessageProcessingRegistrationInput = {
   action?: "register_group" | "dispatch" | "dispatch_failed";
   requirementId?: string;
   messageGroupId?: string;
@@ -48,11 +46,11 @@ export type MessageProcessingApiContext = {
     ) => MessageProcessingRequirement;
   };
   sendContextReview: {
-    snapshot: (requirementId: string, sourceMessageId?: string) => Promise<unknown>;
+    snapshot: (requirementId: string, sourceMessageId?: string) => Promise<MessageProcessingSendContextSnapshot>;
     approve: (
       requirementId: string,
       input: MessageProcessingSendContextApprovalInput
-    ) => Promise<{ expiresAt: string } & Record<string, unknown>>;
+    ) => Promise<MessageProcessingSendContextApproval>;
   };
   operationalLog: Pick<ManagerOperationalLog, "record">;
   recallKnowledge: (source: RegisterMessageGroupRequirementInput["source"]) => KnowledgeRecallMatch[];
@@ -64,49 +62,10 @@ export type MessageProcessingApiContext = {
   ) => void;
   scheduleKnowledgeCallbackReminder: (requirement: MessageProcessingRequirement) => void;
   publishEvent: (eventType: string, data: unknown) => void;
-  trackOperation?: <T>(operation: Promise<T>) => Promise<T>;
 };
-
-function jsonResponse(response: http.ServerResponse, statusCode: number, body: unknown): void {
-  body = errorResponsePresentation(body, statusCode);
-  response.writeHead(statusCode, { "content-type": "application/json; charset=utf-8" });
-  response.end(JSON.stringify(body));
-}
-
-function readJsonBody<T>(request: http.IncomingMessage): Promise<T> {
-  return new Promise((resolve, reject) => {
-    const chunks: Buffer[] = [];
-    let bytes = 0;
-    let tooLarge = false;
-    request.on("data", (chunk) => {
-      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-      bytes += buffer.length;
-      if (bytes > 1024 * 1024) { tooLarge = true; chunks.length = 0; }
-      else if (!tooLarge) chunks.push(buffer);
-    });
-    request.on("end", () => {
-      try {
-        if (tooLarge) throw new Error("Request body exceeds 1048576 bytes.");
-        const text = Buffer.concat(chunks).toString("utf8");
-        const body = text ? JSON.parse(text) : {};
-        validateLanAgentRequestBody(request, body);
-        resolve(body as T);
-      } catch (error) {
-        reject(error);
-      }
-    });
-    request.on("error", reject);
-  });
-}
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
-}
-function runTrackedOperation<T>(
-  context: Pick<MessageProcessingApiContext, "trackOperation">,
-  operation: Promise<T>
-): void {
-  void (context.trackOperation?.(operation) ?? operation);
 }
 
 function publishBoardChange(
@@ -153,167 +112,68 @@ async function verifyOutcomeRecords(
   });
 }
 
-export function handleMessageProcessingApi(
-  request: http.IncomingMessage,
-  requestUrl: URL,
-  response: http.ServerResponse,
-  context: MessageProcessingApiContext
-): boolean {
-  if (request.method === "GET" && requestUrl.pathname === "/api/message-processing/board") {
-    const routeId = requestUrl.searchParams.get("routeId")?.trim() || undefined;
-    const limit = Number(requestUrl.searchParams.get("limit") || "100");
-    runTrackedOperation(context, context.boardPayload(routeId, limit)
-      .then((data) => jsonResponse(response, 200, { code: 0, data }))
-      .catch((error) => jsonResponse(response, 500, { code: -1, message: errorMessage(error) })));
-    return true;
-  }
-
-  const requirementMatch = requestUrl.pathname.match(/^\/api\/message-processing\/requirements\/([^/]+)$/);
-  if (request.method === "GET" && requirementMatch) {
-    const requirementId = decodeURIComponent(requirementMatch[1]);
-    const requirement = context.board.getRequirement(requirementId);
-    if (!requirement) {
-      jsonResponse(response, 404, {
-        code: -1,
-        message: `Message processing requirement not found: ${requirementId}`
-      });
-      return true;
-    }
-    jsonResponse(response, 200, { code: 0, data: requirement });
-    return true;
-  }
-
-  const sendContextMatch = requestUrl.pathname.match(
-    /^\/api\/message-processing\/requirements\/([^/]+)\/send-context$/
-  );
-  if (request.method === "GET" && sendContextMatch) {
-    const requirementId = decodeURIComponent(sendContextMatch[1]);
-    const sourceMessageId = requestUrl.searchParams.get("sourceMessageId")?.trim() || undefined;
-    runTrackedOperation(context, Promise.resolve()
-      .then(() => context.sendContextReview.snapshot(requirementId, sourceMessageId))
-      .then(data => jsonResponse(response, 200, { code: 0, data }))
-      .catch(error => jsonResponse(response, 400, { code: -1, message: errorMessage(error) })));
-    return true;
-  }
-  if (request.method === "POST" && sendContextMatch) {
-    const requirementId = decodeURIComponent(sendContextMatch[1]);
-    runTrackedOperation(context, readJsonBody<MessageProcessingSendContextApprovalInput>(request)
-      .then((body) => context.sendContextReview.approve(requirementId, body))
-      .then((data) => {
-        context.operationalLog.record("info", "message_processing_send_context_review_approved", {
-          action: requirementId,
-          result: `expiresAt=${data.expiresAt}`
-        });
-        jsonResponse(response, 200, { code: 0, data });
-      })
-      .catch((error) => jsonResponse(response, 400, { code: -1, message: errorMessage(error) })));
-    return true;
-  }
-
-  if (request.method === "POST" && requestUrl.pathname === "/api/message-processing/requirements") {
-    runTrackedOperation(context, readJsonBody<MessageProcessingRegistrationInput>(request)
-      .then((body) => {
+/** Original board and review services own all persistence, deduplication and approval state. */
+export function createMessageProcessingOwner(context: MessageProcessingApiContext) {
+  const success = (data: unknown): ApiOperationResult => ({ status: 200, body: { code: 0, data } });
+  const failed = (error: unknown, status = 400): ApiOperationResult => ({ status, body: { code: -1, message: errorMessage(error) } });
+  const changed = (id: string, original: MessageProcessingRequirement | undefined) => {
+    if (original && context.board.getRequirement(id)?.updatedAt !== original.updatedAt) throw new Error("Message processing requirement changed; retry verification.");
+  };
+  return Object.freeze({
+    async board(routeId?: string, limit = 100): Promise<ApiOperationResult> {
+      try { return success(await context.boardPayload(routeId, limit)); } catch (error) { return failed(error, 500); }
+    },
+    requirement(id: string): ApiOperationResult {
+      const item = context.board.getRequirement(id);
+      return item ? success(item) : failed(new Error(`Message processing requirement not found: ${id}`), 404);
+    },
+    async contextSnapshot(id: string, sourceMessageId?: string): Promise<ApiOperationResult> {
+      try { return success(await context.sendContextReview.snapshot(id, sourceMessageId)); } catch (error) { return failed(error); }
+    },
+    async approve(id: string, body: MessageProcessingSendContextApprovalInput): Promise<ApiOperationResult> {
+      try {
+        const data = await context.sendContextReview.approve(id, body);
+        context.operationalLog.record("info", "message_processing_send_context_review_approved", { action: id, result: `expiresAt=${data.expiresAt}` });
+        return success(data);
+      } catch (error) { return failed(error); }
+    },
+    register(body: MessageProcessingRegistrationInput): ApiOperationResult {
+      try {
         const requirementId = String(body.requirementId || "").trim();
         if (!requirementId) throw new Error("Missing requirementId.");
         if (body.action === "register_group") {
-          const registration = context.board.registerMessageGroup({
-            requirementId,
-            messageGroupId: String(body.messageGroupId || "").trim(),
-            source: body.source as RegisterMessageGroupRequirementInput["source"],
-            knowledgeMatches: context.recallKnowledge(body.source as RegisterMessageGroupRequirementInput["source"])
-          });
-          if (registration.outcome !== "replay_suppressed") {
-            context.scheduleKnowledgeCallbackReminder(registration.requirement);
-            publishBoardChange(context, registration.requirement);
-          }
-          return registration;
+          const registration = context.board.registerMessageGroup({ requirementId, messageGroupId: String(body.messageGroupId || "").trim(), source: body.source as RegisterMessageGroupRequirementInput["source"], knowledgeMatches: context.recallKnowledge(body.source as RegisterMessageGroupRequirementInput["source"]) });
+          if (registration.outcome !== "replay_suppressed") { context.scheduleKnowledgeCallbackReminder(registration.requirement); publishBoardChange(context, registration.requirement); }
+          return success(registration);
         }
-        const item = body.action === "dispatch"
-          ? context.board.recordDispatch(
-              requirementId,
-              body.worker as NonNullable<MessageProcessingRequirement["worker"]>
-            )
-          : body.action === "dispatch_failed"
-            ? context.board.recordDispatchFailure(
-                requirementId,
-                body.error || "Message Agent dispatch failed."
-              )
-            : (() => { throw new Error("Unsupported message-processing action."); })();
-        context.scheduleKnowledgeCallbackReminder(item);
-        publishBoardChange(context, item);
-        return item;
-      })
-      .then((data) => jsonResponse(response, 200, { code: 0, data }))
-      .catch((error) => jsonResponse(response, 400, { code: -1, message: errorMessage(error) })));
-    return true;
-  }
-
-  const outcomeMatch = requestUrl.pathname.match(
-    /^\/api\/message-processing\/requirements\/([^/]+)\/outcome$/
-  );
-  if (request.method === "POST" && outcomeMatch) {
-    const requirementId = decodeURIComponent(outcomeMatch[1]);
-    runTrackedOperation(context, readJsonBody<MessageProcessingOutcomeInput>(request)
-      .then(async (body) => {
-        const requirement = context.board.getRequirement(requirementId);
+        const item = body.action === "dispatch" ? context.board.recordDispatch(requirementId, body.worker as NonNullable<MessageProcessingRequirement["worker"]>)
+          : body.action === "dispatch_failed" ? context.board.recordDispatchFailure(requirementId, body.error || "Message Agent dispatch failed.")
+          : (() => { throw new Error("Unsupported message-processing action."); })();
+        context.scheduleKnowledgeCallbackReminder(item); publishBoardChange(context, item); return success(item);
+      } catch (error) { return failed(error); }
+    },
+    async outcome(id: string, body: MessageProcessingOutcomeInput, assertOriginalSource: () => void): Promise<ApiOperationResult> {
+      try {
+        const requirement = context.board.getRequirement(id);
         await verifyOutcomeRecords(context, requirement, body);
-        validateLanAgentRequestBody(request, body);
-        if (requirement && context.board.getRequirement(requirementId)?.updatedAt !== requirement.updatedAt) {
-          throw new Error("Message processing requirement changed; retry verification.");
-        }
-        return { body, data: context.board.submitOutcome(requirementId, body) };
-      })
-      .then(({ body, data }) => {
-        context.setPlanBaseline(data, body.roleId, body.planId);
-        context.scheduleKnowledgeCallbackReminder(data);
-        publishBoardChange(context, data);
-        jsonResponse(response, 200, { code: 0, data });
-      })
-      .catch((error) => jsonResponse(response, 400, { code: -1, message: errorMessage(error) })));
-    return true;
-  }
-
-  const knowledgeCallbackMatch = requestUrl.pathname.match(
-    /^\/api\/message-processing\/requirements\/([^/]+)\/knowledge-callback$/
-  );
-  if (request.method === "POST" && knowledgeCallbackMatch) {
-    const requirementId = decodeURIComponent(knowledgeCallbackMatch[1]);
-    runTrackedOperation(context, readJsonBody<KnowledgeMatchCallbackInput>(request)
-      .then(async (body) => {
-        const requirement = context.board.getRequirement(requirementId);
-        if (!requirement) throw new Error(`Message processing requirement not found: ${requirementId}`);
+        assertOriginalSource(); changed(id, requirement);
+        const data = context.board.submitOutcome(id, body);
+        context.setPlanBaseline(data, body.roleId, body.planId); context.scheduleKnowledgeCallbackReminder(data); publishBoardChange(context, data);
+        return success(data);
+      } catch (error) { return failed(error); }
+    },
+    async callback(id: string, body: KnowledgeMatchCallbackInput, assertOriginalSource: () => void): Promise<ApiOperationResult> {
+      try {
+        const requirement = context.board.getRequirement(id);
+        if (!requirement) throw new Error(`Message processing requirement not found: ${id}`);
         const roleId = String(requirement.source.roleId || "").trim() || undefined;
         if ((body.result === "updated" || body.result === "created") && body.recordType && body.recordId) {
-          await context.verifyCriticalFactRecord({
-            roleId,
-            requirement: {
-              ...requirement,
-              criticalFacts: [{ kind: "scope", evidence: body.evidence }]
-            },
-            disposition: {
-              status: "recorded",
-              record: body.recordType === "memory"
-                ? { type: "memory", memoryId: body.recordId }
-                : { type: "plan", planId: body.recordId },
-              evidence: body.evidence,
-              verifiedAt: body.verifiedAt
-            }
-          });
+          await context.verifyCriticalFactRecord({ roleId, requirement: { ...requirement, criticalFacts: [{ kind: "scope", evidence: body.evidence }] }, disposition: { status: "recorded", record: body.recordType === "memory" ? { type: "memory", memoryId: body.recordId } : { type: "plan", planId: body.recordId }, evidence: body.evidence, verifiedAt: body.verifiedAt } });
         }
-        validateLanAgentRequestBody(request, body);
-        if (context.board.getRequirement(requirementId)?.updatedAt !== requirement.updatedAt) {
-          throw new Error("Message processing requirement changed; retry verification.");
-        }
-        return context.board.recordKnowledgeCallback(requirementId, body);
-      })
-      .then((data) => {
-        context.scheduleKnowledgeCallbackReminder(data);
-        publishBoardChange(context, data);
-        jsonResponse(response, 200, { code: 0, data });
-      })
-      .catch((error) => jsonResponse(response, 400, { code: -1, message: errorMessage(error) })));
-    return true;
-  }
-
-  return false;
+        assertOriginalSource(); changed(id, requirement);
+        const data = context.board.recordKnowledgeCallback(id, body);
+        context.scheduleKnowledgeCallbackReminder(data); publishBoardChange(context, data); return success(data);
+      } catch (error) { return failed(error); }
+    }
+  });
 }

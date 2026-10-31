@@ -16,6 +16,8 @@ for (const name of ['rabi-codex-context', 'rabi-dsh-context', 'rabi-workbuddy-co
     recursive: true, force: true,
     filter: file => !['node_modules', '.git', 'test', 'tests'].includes(path.basename(file)) && !file.endsWith('.test.mjs')
   });
+  if (name !== 'rabi-dsh-context') await fs.copyFile(path.join(root, 'scripts/lib/timeout-settings.mjs'), path.join(output, 'plugins', name, 'scripts/lib/timeout-settings.mjs'));
+  if (name !== 'rabi-dsh-context') await fs.copyFile(path.join(root, 'scripts/lib/windows-host-discovery.mjs'), path.join(output, 'plugins', name, 'scripts/lib/windows-host-discovery.mjs'));
 }
 console.log('Built Codex, DSH, WorkBuddy and Antigravity Hook installation packages.');
 

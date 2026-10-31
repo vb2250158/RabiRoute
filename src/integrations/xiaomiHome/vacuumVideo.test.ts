@@ -4,7 +4,29 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
+import http from "node:http";
 import { VacuumVideoTransport, holdVideoStream, safeVideoFailure } from "./vacuumVideo.js";
+
+test("native video byte sources retain original frame/stream endpoints and close their owned upstream", async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "vacuum-video-content-"));
+  const calls: string[] = [], bytes = Buffer.from("owned-fixture-mp4-bytes");
+  let streamClosed!: () => void; const closed = new Promise<void>(resolve => { streamClosed = resolve; });
+  const server = http.createServer((request, response) => {
+    calls.push(request.url!); assert.equal(request.headers.authorization, "Basic owned-fixture");
+    response.writeHead(200, { "content-type": "video/mp4" });
+    if (request.url!.startsWith("/api/frame.mp4")) response.end(bytes);
+    else { response.once("close", streamClosed); response.write(bytes); }
+  });
+  const video = new VacuumVideoTransport(root, async () => { throw new Error("No camera provisioning is permitted in this fixture."); });
+  let activeContent: Awaited<ReturnType<typeof video.openStream>> | undefined;
+  t.after(async () => { await activeContent?.cancel(); (video as any).active = undefined; await video.shutdown(); server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); assert.equal(path.dirname(path.resolve(root)), path.resolve(os.tmpdir())); assert.ok(path.basename(root).startsWith("vacuum-video-content-")); fs.rmSync(root, { recursive: true, force: true }); });
+  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  (video as any).active = { snapshot: { sessionId: "fixture-session", state: "streaming" }, baseUrl: "http://127.0.0.1:" + (server.address() as import("node:net").AddressInfo).port, auth: "Basic owned-fixture", controller: new AbortController() };
+  const frame = await video.openStream("fixture-session", true); const chunks: Buffer[] = []; for await (const chunk of frame.frames) chunks.push(Buffer.from(chunk)); assert.deepEqual(Buffer.concat(chunks), bytes); assert.equal(frame.headers["content-type"], "video/mp4");
+  activeContent = await video.openStream("fixture-session"); await activeContent.cancel(); await closed;
+  assert.deepEqual(calls, ["/api/frame.mp4?src=vacuum&video=h264,h265", "/api/stream.mp4?src=vacuum&video=h264,h265"]);
+  await assert.rejects(video.openStream("different-session"), /not available/);
+});
 
 test("video rejects missing native component before issuing any camera provisioning", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "vacuum-video-")); let calls = 0;

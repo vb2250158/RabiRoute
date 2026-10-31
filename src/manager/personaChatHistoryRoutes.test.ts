@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { handlePersonaChatHistoryApi } from "./personaChatHistoryRoutes.js";
+import { dispatchChatHistoryFixture } from "./personaHistoryOperationTestFixtures.js";
 import { handleCodexHookApi } from "./codexHookRoutes.js";
 import { CodexHookContextService } from "./codexHookContext.js";
 import { publishRoleKnowledgeCatalogSnapshot, readRoleKnowledgeCatalogSnapshot } from "../roleKnowledge.js";
@@ -24,7 +24,7 @@ test("Hook HTTP ingestion and persona history API preserve scope, replay and pag
   const server = http.createServer((request, response) => {
     const url = new URL(request.url!, "http://localhost");
     if (handleCodexHookApi(request, url, response, service)) return;
-    if (handlePersonaChatHistoryApi(request, url, response, roleId => {
+    if (dispatchChatHistoryFixture(request, url, response, roleId => {
       if (!["Example", "Other"].includes(roleId)) throw new Error("Unknown persona.");
       return path.join(root, roleId);
     }, ids => {

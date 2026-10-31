@@ -1,4 +1,8 @@
+[English](feishu-integration_en.md) | 简体中文
+
 # 飞书独立消息端接入
+
+维护者见[原生监听协议](platform-native-listeners.md)：独立地址、可执行 owner 和在途回调关闭规则。
 
 飞书使用独立的 `feishu` adapter、`feishu_message` 路由类型、按 `chat_id` 隔离的会话上下文，以及飞书应用 API 出站。它不会读取或复用通用 Webhook、群机器人 Webhook 或其密钥。
 

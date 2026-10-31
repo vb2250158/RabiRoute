@@ -9,7 +9,9 @@ import { buildWorkflow, validateCommand } from "./workflow.mjs";
 import { VideoAssets } from "./assets.mjs";
 import { VideoService } from "./service.mjs";
 import http from "node:http";
-import { streamMedia } from "./media.mjs";
+import { openMedia } from "./media.mjs";
+import { createReadStream } from "node:fs";
+import { getEventListeners } from "node:events";
 const catalog = JSON.parse(await fs.readFile(new URL("./catalog.json", import.meta.url), "utf8"));
 const model = catalog.models.find(item => item.mode === "reference");
 const command = {model:model.id,prompt:"Animate <Picture 1> with <Video 1> and <Audio 2>.",references:[randomUUID()],width:512,height:512,frames:22,seed:1};
@@ -17,13 +19,33 @@ const command = {model:model.id,prompt:"Animate <Picture 1> with <Video 1> and <
 test("reference playback supports seeking, suffix ranges and rejects invalid ranges", async t => {
   const root=await fs.mkdtemp(path.join(os.tmpdir(),"video-range-")), file=path.join(root,"test.mp4");
   await fs.writeFile(file,"0123456789");
-  const server=http.createServer((request,response)=>{void streamMedia(request,response,file,"video/mp4").catch(()=>response.destroy());});
+  const server=http.createServer((request,response)=>{void (async()=>{const content=await openMedia(request,file,"video/mp4");try{response.writeHead(content.status,content.headers);for await(const chunk of content.frames) response.write(chunk);response.end();}finally{await content.cancel();}})().catch(()=>response.destroy());});
   await new Promise(resolve=>server.listen(0,"127.0.0.1",resolve));
   t.after(async()=>{server.closeAllConnections();await new Promise(resolve=>server.close(resolve));await fs.rm(root,{recursive:true,force:true});});
   const url=`http://127.0.0.1:${server.address().port}`;
   for(const [range,status,body] of [["bytes=2-5",206,"2345"],["bytes=-3",206,"789"],["bytes=10-",416,""],["bytes=8-2",416,""],["bytes=-0",416,""]]) {
     const response=await fetch(url,{headers:{range}});assert.equal(response.status,status);assert.equal(await response.text(),body);
   }
+});
+
+test("native media cancellation joins the original file before and during iteration and removes its signal listener", async t => {
+  const root=await fs.mkdtemp(path.join(os.tmpdir(),"video-native-cancel-")),file=path.join(root,"owned.mp4");
+  t.after(async()=>{assert.equal(path.dirname(path.resolve(root)),path.resolve(os.tmpdir()));assert.ok(path.basename(root).startsWith("video-native-cancel-"));await fs.rm(root,{recursive:true,force:true});});
+  await fs.writeFile(file,Buffer.alloc(1024*1024,0x41));
+  for(const started of [false,true]) {
+    const controller=new AbortController();let source;
+    const content=await openMedia({headers:{}},file,"video/mp4",undefined,undefined,{signal:controller.signal,createReadStream:(...args)=>source=createReadStream(...args)});
+    const iterator=content.frames[Symbol.asyncIterator]();
+    if(started) {assert.ok(!(await iterator.next()).done);controller.abort();}
+    await content.cancel();assert.equal(source.closed,true);assert.equal(getEventListeners(controller.signal,"abort").length,0);assert.equal((await iterator.next()).done,true);
+  }
+});
+
+test("native media cancellation during stat never creates the original raw file stream",async()=>{
+  const controller=new AbortController();let entered,release,streams=0;
+  const started=new Promise(resolve=>entered=resolve),gate=new Promise(resolve=>release=resolve);
+  const pending=openMedia({headers:{}},"owned-fixture","video/mp4",undefined,undefined,{signal:controller.signal,fs:{stat:async()=>{entered();await gate;return {size:10};}},createReadStream:()=>{streams++;throw new Error("Unexpected original stream dispatch");}});
+  await started;controller.abort();release();await assert.rejects(pending,error=>error.name==="AbortError");assert.equal(streams,0);
 });
 
 test("mixed references preserve per-type ordinals and pair video sound with its own video", () => {

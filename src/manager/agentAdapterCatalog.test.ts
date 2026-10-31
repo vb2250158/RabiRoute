@@ -2,10 +2,47 @@ import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import type http from "node:http";
 import test from "node:test";
+import { EffectScope } from "../plugin-kernel/effectScope.js";
 import {
   handleAgentAdapterCatalogApi,
+  mountAgentAdapterCatalogPlugin,
+  type AgentAdapterCatalogServiceOptions,
   type AgentAdapterCatalogService
 } from "./agentAdapterCatalog.js";
+
+test("async catalog preparation joins its worker owner when route registration is cancelled", async () => {
+  let stops = 0;
+  let entered!: () => void, reject!: (error: Error) => void;
+  const reached = new Promise<void>(resolve => { entered = resolve; });
+  const registration = new Promise<never>((_resolve, fail) => { reject = fail; });
+  const mounting = mountAgentAdapterCatalogPlugin({
+    rootDir: ".", getRuntimes: () => [],
+    adopt() {},
+    workerPool: { async stop() { stops++; }, async drain() {} } as unknown as AgentAdapterCatalogServiceOptions["workerPool"],
+    registerOperations: async () => { entered(); return registration; }
+  });
+  const failed = assert.rejects(mounting, /fixture registration cancelled/);
+  await reached;
+  assert.equal(stops, 0);
+  reject(new Error("fixture registration cancelled"));
+  await failed;
+  assert.equal(stops, 1);
+});
+
+test("an aborted catalog preparation retains failed cleanup in its original owner fence", async () => {
+  const scope = new EffectScope();
+  const cancelled = AbortSignal.abort(new Error("fixture signal already cancelled"));
+  let stops = 0;
+  const mounting = mountAgentAdapterCatalogPlugin({
+    rootDir: ".", getRuntimes: () => [], adopt: dispose => scope.adopt(dispose),
+    workerPool: { async stop() { stops++; throw new Error("fixture worker retirement failed"); }, async drain() {} } as unknown as AgentAdapterCatalogServiceOptions["workerPool"],
+    registerOperations: async () => { cancelled.throwIfAborted(); throw new Error("unreachable registration"); }
+  });
+  await assert.rejects(mounting, AggregateError);
+  await assert.rejects(scope.dispose(), AggregateError);
+  assert.equal(scope.retirementConfirmed(), false);
+  assert.equal(stops, 1);
+});
 
 type RecordedResponse = {
   statusCode: number;

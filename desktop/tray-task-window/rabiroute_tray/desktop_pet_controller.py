@@ -13,6 +13,7 @@ from PySide6.QtWidgets import QApplication, QLabel, QMenu, QSlider, QVBoxLayout,
 from .desktop_pet_client import DesktopPetBinding, DesktopPetClient, DesktopPetIdleBehavior, DesktopPetModeAnimationSet, DesktopPetPack, LoadedDesktopPetAnimation
 from .desktop_pet_events import DesktopPetEventStream
 from .desktop_pet_companion import DesktopPetCompanion
+from .desktop_pet_companion_notice import CompanionFailureNotice
 from .desktop_pet_speech import DesktopPetSpeech
 from .desktop_pet_dialogue import DesktopPetDialogue
 from .desktop_pet_bubble_settings import DesktopPetBubbleSettings
@@ -102,7 +103,14 @@ class DesktopPetController(QObject):
         self._speech.changed.connect(self._speech_changed)
         self._owns_events = event_stream is None
         self._events.work_ended.connect(self._work_ended)
+        self._seen_panel_messages: deque[str] = deque(maxlen=128)
+        self._pending_panel_messages: deque[str] = deque(maxlen=32)
+        self._panel_message_timer = QTimer(self)
+        self._panel_message_timer.setSingleShot(True)
+        self._panel_message_timer.timeout.connect(self._show_next_panel_message)
+        self._events.role_panel_message.connect(self._role_panel_message)
         self._companion_session: dict = {}
+        self._companion_failure_notice = CompanionFailureNotice()
         self._companion = DesktopPetCompanion(manager_url, persona_id, self)
         self._companion.changed.connect(self._companion_changed)
         self._companion.failed.connect(lambda message: self.window.show_bubble(self._dialogue.line("fallbacks", "companionFailed")))
@@ -219,6 +227,9 @@ class DesktopPetController(QObject):
 
     def close(self) -> None:
         self._closed = True
+        self._events.role_panel_message.disconnect(self._role_panel_message)
+        self._panel_message_timer.stop()
+        self._pending_panel_messages.clear()
         self._animation_retry_timer.stop()
         self._reaction_timer.stop()
         self._companion.close()
@@ -484,6 +495,8 @@ class DesktopPetController(QObject):
             self.window.show_speech_bubble(str(job["text"]), playing=playing)
         elif was_playing:
             self.window.finish_speech_bubble()
+        if not playing:
+            self._show_next_panel_message()
 
     def _clicked(self) -> None:
         if self.visible:
@@ -668,6 +681,31 @@ class DesktopPetController(QObject):
             on_error=lambda error: error,
         )
 
+    def _role_panel_message(self, payload: object) -> None:
+        if self._closed or not isinstance(payload, dict) or payload.get("roleId") != self.persona_id:
+            return
+        message_id = payload.get("messageId")
+        text = payload.get("text")
+        if not isinstance(message_id, str) or not message_id or not isinstance(text, str) or not text.strip():
+            return
+        if message_id in self._seen_panel_messages:
+            return
+        self._seen_panel_messages.append(message_id)
+        if not self._bubble_enabled or not self.visible or time.monotonic() < self._muted_until:
+            return
+        self._pending_panel_messages.append(text)
+        self._show_next_panel_message()
+
+    def _show_next_panel_message(self) -> None:
+        if self._closed or not self._bubble_enabled or not self.visible or time.monotonic() < self._muted_until:
+            self._pending_panel_messages.clear()
+            return
+        if self._speech_job.get("status") == "playing" or self._panel_message_timer.isActive():
+            return
+        if self._pending_panel_messages:
+            self.window.show_bubble(self._pending_panel_messages.popleft())
+            self._panel_message_timer.start(self.window._bubble_timer.interval())
+
     def _work_ended(self, payload: object) -> None:
         event = payload if isinstance(payload, dict) else {}
         if str(event.get("personaId") or "") != self.persona_id:
@@ -709,12 +747,13 @@ class DesktopPetController(QObject):
         if not self._companion_session:
             self._arm_wander()
         kind = session.get("activityKind")
+        notice = self._companion_failure_notice.update(
+            session, can_notify=self.visible and time.monotonic() >= self._muted_until)
         if self.visible and time.monotonic() >= self._muted_until:
             if kind != previous.get("activityKind") and kind in ("watch", "play", "work"):
                 self.window.show_bubble(self._dialogue.line("openers", kind))
-            error = (session.get("review") or {}).get("error")
-            if error and error != (previous.get("review") or {}).get("error"):
-                self.window.show_bubble(self._dialogue.line("fallbacks", "companionInterrupted"))
+            if notice:
+                self.window.show_bubble(self._dialogue.line("fallbacks", notice))
 
     def _companion_reaction(self, payload: object) -> None:
         event = payload if isinstance(payload, dict) else {}

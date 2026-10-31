@@ -3,11 +3,11 @@ import type { AgentCommunicationPreparation, AgentRequestRecord } from "./store.
 export function agentReplyRequest({ source, target, requestId }: Pick<AgentCommunicationPreparation,
   "source" | "target" | "requestId">): Record<string, unknown> {
   return {
-    action: "send", threadId: source.threadId, cwd: source.workspace,
+    action: "send", threadId: source.threadId, cwd: source.workspace, agentAdapter: source.agentAdapter ?? source.endpoint?.provider,
     ...(source.endpoint?.kind === "instance" || source.endpoint?.kind === "device" ? { instanceBinding: {
       instanceId: source.endpoint.instanceId, agentId: source.endpoint.agentId
-    }, ...(source.endpoint.kind === "device" ? { agentAdapter: "deviceAgent" } : {}) } : {}),
-    ...(source.endpoint?.kind === "local" || source.endpoint?.kind === "service" ? { agentTargetId: `local:${source.endpoint.provider}`, agentAdapter: source.agentAdapter } : {}),
+    } } : {}),
+    ...(source.endpoint?.kind === "local" || source.endpoint?.kind === "service" ? { agentTargetId: `local:${source.endpoint.provider}` } : {}),
     messageSource: { type: "agent", agentAdapter: target.agentAdapter,
       sessionId: target.threadId, sessionName: target.threadName || target.endpoint?.agentId || target.threadId, workspace: target.workspace },
     sourceThreadId: target.threadId, sourceAgentType: target.agentType || "agent",

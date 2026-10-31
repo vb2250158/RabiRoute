@@ -9,7 +9,7 @@ export function createAgentTurnRuntime({ model, executeTool, tools = [], turnId 
   turnTimeoutMs = 180000, maxToolCalls = 16, maxSteps = 32 } = {}) {
   if (!model || typeof executeTool !== 'function' || !/^[A-Za-z0-9:._-]{1,64}$/.test(turnId)) throw failure('TURN_DEPENDENCIES_REQUIRED');
   if (![requestTimeoutMs, turnTimeoutMs, maxToolCalls, maxSteps].every(value => Number.isSafeInteger(value) && value > 0)
-      || requestTimeoutMs > 30000 || turnTimeoutMs > 600000 || maxToolCalls > 128 || maxSteps > 256) throw failure('TURN_LIMIT_INVALID');
+      || requestTimeoutMs > 2147483647 || turnTimeoutMs > 2147483647 || maxToolCalls > 128 || maxSteps > 256) throw failure('TURN_LIMIT_INVALID');
   const allowed = new Set(tools.map(tool => typeof tool === 'string' ? tool : tool?.function?.name));
   let state = 'idle', started = false, cancelled = false, stream = null, reader = null;
   let text = '', calls = 0, steps = 0, uncertain = false, writesUncertain = false, rejectCancellation;

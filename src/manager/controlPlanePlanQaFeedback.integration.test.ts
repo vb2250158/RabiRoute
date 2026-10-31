@@ -7,7 +7,7 @@ import test from "node:test";
 import { readPlanStoragePackage, resolveCanonicalPlanStorageLocation } from "../planStorageRepository.js";
 import { createPlan } from "../roleKnowledge.js";
 import { storageInventoryRevisionToken } from "../shared/storageRevision.js";
-import { handlePersonaPluginApi } from "./controlPlaneRoutes.js";
+import { createPersonaStorageTestApi } from "./personaManagerIntegration.fixture.js";
 import { RoleStorageApplication, RoleStorageApplicationError } from "./roleStorageApplication.js";
 
 function createTestRoleStorage(t: test.TestContext, prefix: string) {
@@ -55,9 +55,10 @@ test("focused GET projects declared legacy markers without changing package byte
   fs.writeFileSync(location.planFile, JSON.stringify(stored));
   const before = fs.readFileSync(location.planFile);
   const revision = planRevision(roleDir, "legacy-marker");
+  const nativeApi = createPersonaStorageTestApi(t, { roleDir: () => roleDir, roleStorageApplication });
   const server = http.createServer((request, response) => {
     const url = new URL(request.url || "/", "http://127.0.0.1");
-    if (!handlePersonaPluginApi(request, url, response, { roleDir: () => roleDir, roleStorageApplication })) response.writeHead(404).end();
+    if (!nativeApi(request, url, response)) response.writeHead(404).end();
   });
   const port = await listen(server);
   t.after(() => new Promise<void>(resolve => server.close(() => resolve())));
@@ -78,9 +79,10 @@ test("focused GET projects declared legacy markers without changing package byte
 test("a focused plan responds 304 for its current view revision and 200 after a plan change", async (t) => {
   const { application, roleDir, roleStorageApplication } = createTestRoleStorage(t, "rabi-focused-plan-cache-");
   createPlan(roleDir, { id: "focused-plan", title: "Focused plan", focus: "Check caching", status: "分析中", keywords: ["cache"], currentStepId: "check", steps: [{ id: "check", title: "Check plan view" }] });
+  const nativeApi = createPersonaStorageTestApi(t, { roleDir: () => roleDir, roleStorageApplication });
   const server = http.createServer((request, response) => {
     const requestUrl = new URL(request.url || "/", `http://${request.headers.host || "127.0.0.1"}`);
-    if (handlePersonaPluginApi(request, requestUrl, response, { roleDir: () => roleDir, roleStorageApplication })) return;
+    if (nativeApi(request, requestUrl, response)) return;
     response.writeHead(404).end();
   });
   const port = await listen(server);
@@ -135,9 +137,10 @@ test("the feedback route ignores Agent guidance summaries but consumes explicit 
     },
     keywords: ["QA"]
   });
+  const nativeApi = createPersonaStorageTestApi(t, { roleDir: () => roleDir, roleStorageApplication });
   const server = http.createServer((request, response) => {
     const requestUrl = new URL(request.url || "/", `http://${request.headers.host || "127.0.0.1"}`);
-    if (handlePersonaPluginApi(request, requestUrl, response, { roleDir: () => roleDir, roleStorageApplication })) return;
+    if (nativeApi(request, requestUrl, response)) return;
     response.writeHead(404).end();
   });
   const port = await listen(server);
@@ -213,9 +216,10 @@ test("the feedback route commits concurrent attachment retries as one durable re
     steps: [{ id: "verify-transaction", title: "事务验收", status: "进行中" }],
     keywords: ["反馈", "事务"]
   });
+  const nativeApi = createPersonaStorageTestApi(t, { roleDir: () => roleDir, roleStorageApplication });
   const server = http.createServer((request, response) => {
     const requestUrl = new URL(request.url || "/", `http://${request.headers.host || "127.0.0.1"}`);
-    if (handlePersonaPluginApi(request, requestUrl, response, { roleDir: () => roleDir, roleStorageApplication })) return;
+    if (nativeApi(request, requestUrl, response)) return;
     response.writeHead(404).end();
   });
   const port = await listen(server);
@@ -297,9 +301,10 @@ test("the feedback route returns 202 after durable commit even when QA post-comm
     steps: [{ id: "verify-post-commit", title: "QA 验收", status: "进行中" }],
     keywords: ["反馈", "QA"]
   });
+  const nativeApi = createPersonaStorageTestApi(t, { roleDir: () => roleDir, roleStorageApplication });
   const server = http.createServer((request, response) => {
     const requestUrl = new URL(request.url || "/", `http://${request.headers.host || "127.0.0.1"}`);
-    if (handlePersonaPluginApi(request, requestUrl, response, { roleDir: () => roleDir, roleStorageApplication })) return;
+    if (nativeApi(request, requestUrl, response)) return;
     response.writeHead(404).end();
   });
   const port = await listen(server);

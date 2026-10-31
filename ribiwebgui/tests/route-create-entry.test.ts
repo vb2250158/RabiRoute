@@ -35,12 +35,23 @@ test("the real route-control package exposes its create command with no routes a
     const store = useGatewayStore();
     assert.equal(store.gateways.length, 0);
     await create.execute({
-      addRoute: () => store.addGatewayAndOpenQuickSetup(), openQuickSetup() {}, openManagerConfig() {},
+      createRole() {}, addRoute: () => store.addGatewayAndOpenQuickSetup(), openQuickSetup() {}, openManagerConfig() {},
       savePage: async () => {}, pageSaveState: () => ({}), notify() {}
     });
     assert.equal(store.gateways.length, 1);
     assert.equal(store.selectedGatewayId, store.gateways[0].id);
     assert.equal(store.quickSetupDialogOpen, true);
+    const addPersona = webCommandsInSlot(commands, "sidebar-footer-primary").find(command => command.handlerId === "web.create-role");
+    assert.ok(addPersona);
+    assert.equal(addPersona.label, "新建角色");
+    let openedPersona = 0;
+    await addPersona.execute({
+      createRole: () => { openedPersona++; }, addRoute() { throw new Error("Persona creation must not create a Route"); },
+      openQuickSetup() { throw new Error("Persona creation must not open Route quick setup"); }, openManagerConfig() {},
+      savePage: async () => {}, pageSaveState: () => ({}), notify() {}
+    });
+    assert.equal(openedPersona, 1);
+    assert.equal(store.gateways.length, 1);
   } finally { dispose(); }
   assert.deepEqual(resolveWebCommandCatalog(availableWebContributions(catalog)), []);
 });

@@ -18,55 +18,58 @@ function run(executable: string, args: string[], cwd: string): Promise<void> {
   });
 }
 
-test("captures a multi-segment HLS clip into a verified artifact with real ffmpeg", {
-  skip: !ffmpegPath || !ffprobePath,
-  timeout: 30000
-}, async () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "xiaomi-clip-e2e-"));
-  const fixtureDir = path.join(root, "fixture");
-  fs.mkdirSync(fixtureDir, { recursive: true });
-  try {
-    await run(ffmpegPath!, [
-      "-loglevel", "error", "-y",
-      "-f", "lavfi", "-i", "testsrc=size=160x90:rate=10",
-      "-t", "2.4", "-c:v", "libx264", "-pix_fmt", "yuv420p",
-      "-f", "hls", "-hls_time", "1", "-hls_list_size", "0",
-      "-hls_segment_filename", "segment-%03d.ts", "source.m3u8"
-    ], fixtureDir);
-    const playlist = fs.readFileSync(path.join(fixtureDir, "source.m3u8"), "utf8");
-    const fakeFetch: typeof fetch = async input => {
-      const url = new URL(String(input));
-      const fileName = path.basename(url.pathname);
-      const filePath = fileName === "event.m3u8" ? path.join(fixtureDir, "source.m3u8") : path.join(fixtureDir, fileName);
-      if (!fs.existsSync(filePath)) return new Response("missing", { status: 404 });
-      return new Response(fs.readFileSync(filePath), { status: 200 });
-    };
-    const artifacts = new XiaomiHomeArtifactStore(path.join(root, "runtime"));
-    const roleDirectory = path.join(root, "role");
-    fs.mkdirSync(roleDirectory);
-    const worker = new XiaomiHomeClipCaptureWorker({
-      cameraClipCaptureEnabled: true,
-      cameraClipAllowedHosts: ["media.example"],
-      ffmpegPath,
-      ffprobePath
-    }, artifacts, fakeFetch, () => roleDirectory);
-    const occurredAt = "2026-08-29T10:00:00.000Z";
-    const artifact = await worker.capture({
-      sourceEventId: "clip-e2e-1",
-      cameraId: "camera-1",
-      resourceId: "home:ha:camera.front_door",
-      resourceName: "门口摄像头",
-      occurredAt,
-      eventType: "PeopleMotion",
-      playlistUrl: "https://media.example/event.m3u8"
-    });
-    assert.equal(artifact.mediaKind, "video/mp4");
-    assert.ok(artifact.byteLength > 0);
-    assert.ok((artifact.durationMs ?? 0) >= 1500);
-    const expected = path.join(roleDirectory, "camera", "camera-1", "2026-08-29", "clip-e2e-1.mp4");
-    assert.equal(fs.existsSync(expected), true);
-    assert.equal(artifacts.contentDescriptor(artifact.artifactId)?.localPath, expected);
-  } finally {
-    fs.rmSync(root, { recursive: true, force: true });
-  }
-});
+for (const restricted of [false, true]) {
+  test(`captures redirected HTTP HLS with real ffmpeg and ${restricted ? "configured" : "unrestricted"} hosts`, {
+    skip: !ffmpegPath || !ffprobePath,
+    timeout: 30000
+  }, async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "xiaomi-clip-e2e-"));
+    const fixtureDir = path.join(root, "fixture");
+    fs.mkdirSync(fixtureDir, { recursive: true });
+    try {
+      await run(ffmpegPath!, [
+        "-loglevel", "error", "-y",
+        "-f", "lavfi", "-i", "testsrc=size=160x90:rate=10",
+        "-t", "2.4", "-c:v", "libx264", "-pix_fmt", "yuv420p",
+        "-f", "hls", "-hls_time", "1", "-hls_list_size", "0",
+        "-hls_segment_filename", "segment-%03d.ts", "source.m3u8"
+      ], fixtureDir);
+      const fakeFetch: typeof fetch = async input => {
+        const url = new URL(String(input));
+        if (url.hostname === "media.example") return new Response(null, { status: 302, headers: { location: "http://cdn.example/event.m3u8" } });
+        const fileName = path.basename(url.pathname);
+        const filePath = fileName === "event.m3u8" ? path.join(fixtureDir, "source.m3u8") : path.join(fixtureDir, fileName);
+        if (!fs.existsSync(filePath)) return new Response("missing", { status: 404 });
+        return new Response(fs.readFileSync(filePath), { status: 200 });
+      };
+      const artifacts = new XiaomiHomeArtifactStore(path.join(root, "runtime"));
+      const roleDirectory = path.join(root, "roles", "CameraOwner");
+      fs.mkdirSync(roleDirectory, { recursive: true });
+      const worker = new XiaomiHomeClipCaptureWorker({
+        cameraClipCaptureEnabled: true,
+        cameraClipAllowedHosts: restricted ? ["media.example", "cdn.example"] : [],
+        ffmpegPath,
+        ffprobePath
+      }, artifacts, fakeFetch, () => roleDirectory, "CameraOwner");
+      const occurredAt = "2026-08-29T10:00:00.000Z";
+      const artifact = await worker.capture({
+        sourceEventId: "clip-e2e-1",
+        cameraId: "camera-1",
+        resourceId: "home:ha:camera.front_door",
+        resourceName: "门口摄像头",
+        occurredAt,
+        eventType: "PeopleMotion",
+        playlistUrl: "https://media.example/event.m3u8"
+      });
+      assert.equal(artifact.mediaKind, "video/mp4");
+      assert.ok(artifact.byteLength > 0);
+      assert.ok((artifact.durationMs ?? 0) >= 1500);
+      const expected = path.join(roleDirectory, "camera", "camera-1", "2026-08-29", "clip-e2e-1.mp4");
+      assert.equal(fs.existsSync(expected), true);
+      assert.equal(artifacts.contentDescriptor(artifact.artifactId)?.localPath, expected);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+}

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { AgentRequestRecord } from "../agentRequests/store.js";
+import { AGENT_REQUEST_REMINDER_MS, AgentRequestStoreUnavailableError, type AgentRequestRecord } from "../agentRequests/store.js";
 import {
   MESSAGE_PROCESSING_AUTOMATION_MAX_DELAY_MS,
   MessageProcessingAutomationService
@@ -69,6 +69,83 @@ async function flushAsync(): Promise<void> {
   await new Promise<void>(resolve => setImmediate(resolve));
   await new Promise<void>(resolve => setImmediate(resolve));
 }
+
+for (const failure of ["queue-full", "unreadable-owner"] as const) {
+  test(`a ${failure} report uses one local retry deadline and leaves other reminders available`, async () => {
+    const timers = fakeTimers(); let now = 1000;
+    const failed = request("failed", new Date(0).toISOString());
+    let healthy = request("healthy", new Date(0).toISOString()), deliveries = 0, reports = 0;
+    const original = structuredClone(failed);
+    const unavailable = new AgentRequestStoreUnavailableError(failure);
+    const service = new MessageProcessingAutomationService({
+      listExistingRequests: () => [failed, healthy],
+      getRequest: id => { if (id === failed.id && failure === "unreadable-owner") throw unavailable; return id === failed.id ? failed : healthy; },
+      deliverReminder: item => {
+        deliveries++;
+        if (item.id === failed.id) throw new Error("Fixture receiver offline.");
+        healthy = { ...healthy, nextReminderAt: undefined };
+      },
+      onError: async () => { reports++; throw unavailable; }, now: () => now,
+      scheduleTimer: timers.schedule, clearTimer: timers.clear
+    });
+    service.start();
+    for (const timer of [...timers.active()]) timers.fire(timer);
+    await flushAsync();
+    assert.equal(deliveries, failure === "queue-full" ? 2 : 1);
+    assert.equal(reports, 1);
+    assert.deepEqual(failed, original);
+    assert.equal(timers.active().length, 1);
+    assert.equal(timers.active()[0]!.delayMs, AGENT_REQUEST_REMINDER_MS);
+    // Repeated refreshes cannot turn an unpersisted due0 into a timer storm.
+    for (let index = 0; index < 20; index++) service.refresh();
+    assert.equal(timers.active().length, 1);
+    assert.equal(timers.active()[0]!.delayMs, AGENT_REQUEST_REMINDER_MS);
+    now += AGENT_REQUEST_REMINDER_MS;
+    timers.fire(timers.active()[0]!); await flushAsync();
+    assert.equal(reports, 2);
+    assert.deepEqual(failed, original);
+    assert.equal(timers.active()[0]!.delayMs, AGENT_REQUEST_REMINDER_MS);
+    const stale = timers.active()[0]!;
+    await service.stop(); timers.fire(stale); await flushAsync();
+    assert.equal(reports, 2); assert.equal(timers.active().length, 0);
+  });
+}
+
+test("an explicit committed request update replaces only its local failed-report deadline", async () => {
+  const timers = fakeTimers(); let now = 1000, current = request("updated", new Date(0).toISOString()), reports = 0;
+  const service = new MessageProcessingAutomationService({ listExistingRequests: () => [current], getRequest: () => current,
+    deliverReminder: () => { throw new Error("Fixture receiver offline."); },
+    onError: async () => { reports++; if (reports === 1) throw new AgentRequestStoreUnavailableError("queue-full");
+      current = { ...current, reminderCount: 1, updatedAt: new Date(now).toISOString(), nextReminderAt: new Date(now + 1234).toISOString() }; },
+    now: () => now, scheduleTimer: timers.schedule, clearTimer: timers.clear });
+  service.start(); timers.fire(timers.active()[0]!); await flushAsync();
+  assert.equal(timers.active()[0]!.delayMs, AGENT_REQUEST_REMINDER_MS);
+  now++;
+  current = { ...current, updatedAt: new Date(now).toISOString(), nextReminderAt: new Date(now).toISOString() };
+  service.schedule(current); assert.equal(timers.active()[0]!.delayMs, 0);
+  timers.fire(timers.active()[0]!); await flushAsync();
+  assert.equal(reports, 2); assert.equal(timers.active()[0]!.delayMs, 1234);
+  await service.stop();
+});
+
+test("stop joins an entered failed-read report and refresh cannot duplicate it", async () => {
+  const timers = fakeTimers(), current = request("read-failure", new Date(0).toISOString());
+  let release!: () => void, reports = 0;
+  const pending = new Promise<void>(resolve => { release = resolve; });
+  const service = new MessageProcessingAutomationService({ listExistingRequests: () => [current],
+    getRequest: () => { throw new AgentRequestStoreUnavailableError("bad-json"); },
+    deliverReminder: () => { assert.fail("An unavailable owner cannot dispatch."); },
+    onError: async () => { reports++; await pending; throw new AgentRequestStoreUnavailableError("bad-json"); },
+    now: () => 0, scheduleTimer: timers.schedule, clearTimer: timers.clear });
+  service.start(); timers.fire(timers.active()[0]!); await flushAsync();
+  for (let index = 0; index < 20; index++) service.refresh();
+  assert.equal(reports, 1); assert.equal(timers.active().length, 0);
+  let stopped = false;
+  const stopping = service.stop().then(() => { stopped = true; });
+  await flushAsync(); assert.equal(stopped, false);
+  release(); await stopping;
+  assert.equal(reports, 1); assert.equal(timers.active().length, 0);
+});
 
 test("start restores awaiting Agent requests and remains idempotent", () => {
   const timers = fakeTimers();

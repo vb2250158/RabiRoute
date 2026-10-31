@@ -1,6 +1,8 @@
+import { getTimeoutMs, readTimeoutOverrides } from "../shared/timeoutSettings.js";
 import { stickySpeechAuthority, awaitSpeechAuthority, type SpeechAuthorityGuard } from "./speechRequestAuthority.js";
 import fs from "node:fs";
 import path from "node:path";
+import os from "node:os";
 import { spawn, type ChildProcess } from "node:child_process";
 import { promisify } from "node:util";
 import { execFile } from "node:child_process";
@@ -62,6 +64,12 @@ function wait(milliseconds: number): Promise<void> {
 
 function servicePort(serviceUrl: string): number {
   const parsed = new URL(normalizeLocalSpeechServiceUrl(serviceUrl));
+  const hostname = parsed.hostname.replace(/^\[|\]$/g, "").toLowerCase();
+  const localAddresses = Object.values(os.networkInterfaces()).flatMap(items => (items ?? []).map(item => item.address.toLowerCase()));
+  if (!["localhost", "::1", os.hostname().toLowerCase(), ...localAddresses].includes(hostname) && !/^127\./.test(hostname)) {
+    throw new SpeechRuntimeControlError("该语音地址属于远端服务，本机无法管理其进程；请通过来源电脑的 Manager 启动或停止。语音 HTTP 调用仍可使用此地址。", 409);
+  }
+
   if (parsed.protocol !== "http:") {
     throw new SpeechRuntimeControlError("WebGUI 只能启动本机 HTTP RabiSpeech 服务。", 409);
   }
@@ -78,26 +86,84 @@ async function inspectWindowsRuntimeOwner(
   expectedHostScript: string
 ): Promise<RuntimeOwner | null> {
   const script = [
+    "$ErrorActionPreference = 'Stop'",
     "$port = [int]$env:RABIROUTE_SPEECH_PORT",
     "$expectedExe = [System.IO.Path]::GetFullPath($env:RABIROUTE_SPEECH_EXE)",
     "$expectedHost = [System.IO.Path]::GetFullPath($env:RABIROUTE_SPEECH_HOST_SCRIPT)",
-    "$connections = @(Get-NetTCPConnection -State Listen -LocalPort $port -ErrorAction SilentlyContinue)",
-    "$pids = @($connections | Select-Object -ExpandProperty OwningProcess -Unique)",
+    // NetTCPIP's cold module/CIM initialization can exceed the plugin's entire
+    // retirement deadline. The OS TCP table gives PIDs without that module;
+    // the process identity check below still decides whether stopping is allowed.
+    "$netstatPath = [System.IO.Path]::Combine($env:SystemRoot, 'System32', 'netstat.exe')",
+    "if (-not [System.IO.Path]::IsPathRooted($netstatPath)) { throw 'Windows system directory is unavailable.' }",
+    "$ownerPids = @()",
+    "$knownStates = @('BOUND', 'CLOSED', 'CLOSE_WAIT', 'CLOSING', 'DELETE_TCB', 'ESTABLISHED', 'FIN_WAIT_1', 'FIN_WAIT_2', 'LAST_ACK', 'LISTENING', 'SYN_RECEIVED', 'SYN_SENT', 'TIME_WAIT')",
+    // Windows exposes IPv4 and IPv6 in separate netstat protocol tables.
+    // Both must be valid before the absence of a listener can be confirmed.
+    "foreach ($protocol in @('tcp', 'tcpv6')) {",
+    "$netstatLines = @(& $netstatPath -ano -p $protocol)",
+    "if ($LASTEXITCODE -ne 0) { throw 'Windows TCP table query failed.' }",
+    "$hasHeader = $false",
+    "foreach ($line in $netstatLines) {",
+    "  if ($line -match '^\\s*\\S+\\s+.+\\s+PID\\s*$' -and $line -notmatch '^\\s*TCP\\s') { $hasHeader = $true; continue }",
+    "  if ($line -notmatch '^\\s*TCP(?:\\s|$)') { if ($hasHeader -and $line.Trim()) { throw 'Unknown Windows TCP table record.' }; continue }",
+    "  $columns = @($line.Trim() -split '\\s+')",
+    "  if ($columns.Count -ne 5) { throw 'Malformed Windows TCP table record.' }",
+    "  if ($columns[1] -notmatch '^(?:\\[[^\\]]+\\]|[^:]+):([0-9]+)$') { throw 'Malformed Windows TCP local endpoint.' }",
+    "  $localPort = 0; if (-not [int]::TryParse($Matches[1], [ref]$localPort) -or $localPort -lt 1 -or $localPort -gt 65535) { throw 'Invalid Windows TCP local port.' }",
+    "  $localHost = $columns[1].Substring(0, $columns[1].LastIndexOf(':')).Trim('[', ']'); $localAddress = $null",
+    "  if (-not [System.Net.IPAddress]::TryParse($localHost, [ref]$localAddress)) { throw 'Invalid Windows TCP local address.' }",
+    "  if ($localPort -ne $port) { continue }",
+    "  if ($knownStates -cnotcontains $columns[3]) { throw 'Unknown Windows TCP state.' }",
+    "  if ($columns[3] -cne 'LISTENING') { continue }",
+    "  $listenerPid = 0; if (-not [int]::TryParse($columns[4], [ref]$listenerPid) -or $listenerPid -le 0) { throw 'Invalid Windows TCP listener PID.' }",
+    "  $ownerPids += $listenerPid",
+    "}",
+    // Headers are localized; PID and TCP are fixed OS field/protocol names.
+    // An empty or unrecognized response must not become an offline confirmation.
+    "if (-not $hasHeader) { throw 'Windows TCP table header is missing.' }",
+    "}",
+    "$pids = @($ownerPids | Select-Object -Unique)",
     "if ($pids.Count -eq 0) { Write-Output 'null'; exit 0 }",
     "if ($pids.Count -ne 1) { throw \"RabiSpeech port has multiple owners.\" }",
     "$targetPid = [int]$pids[0]",
-    "$process = Get-CimInstance Win32_Process -Filter \"ProcessId = $targetPid\"",
-    "if (-not $process) { throw \"RabiSpeech port owner disappeared.\" }",
-    "$actualExe = if ($process.ExecutablePath) { [System.IO.Path]::GetFullPath([string]$process.ExecutablePath) } else { '' }",
+    // A verified executable already satisfies the existing OR ownership rule.
+    // Avoid loading CIM and reading the command line for that sufficient fact.
+    "$nativeProcess = $null; try { $nativeProcess = [System.Diagnostics.Process]::GetProcessById($targetPid) } catch { throw 'RabiSpeech port owner disappeared.' }",
+    "try {",
+    "  $exitState = $null; try { $exitState = $nativeProcess.HasExited } catch { }; if ($exitState -is [bool] -and $exitState) { throw 'RabiSpeech port owner disappeared.' }; $nativeStateKnown = $exitState -is [bool]",
+    "  $canReuseExecutable = $false; try { $heldHandle = $nativeProcess.Handle; $canReuseExecutable = [bool]$heldHandle -and $heldHandle -ne [System.IntPtr]::Zero } catch { }",
+    "  $actualExe = ''; try { $module = $nativeProcess.MainModule; if ($module -and $module.FileName) { $actualExe = [System.IO.Path]::GetFullPath([string]$module.FileName) } } catch { }",
+    "  $exitState = $null; try { $exitState = $nativeProcess.HasExited } catch { }; if ($exitState -is [bool] -and $exitState) { throw 'RabiSpeech port owner disappeared.' }; $nativeStateKnown = $exitState -is [bool]",
+    "  if ($nativeStateKnown -and [System.StringComparer]::OrdinalIgnoreCase.Equals($actualExe, $expectedExe)) { [pscustomobject]@{ pid = $targetPid; owned = $true } | ConvertTo-Json -Compress; return }",
+    // Native WMI exposes the same authoritative Win32_Process properties without
+    // the CIM cmdlet's cold module load. Access/architecture failures above keep
+    // the original executable-or-host-script fallback available.
+    "$identityFields = if ($nativeStateKnown -and $canReuseExecutable -and $actualExe) { 'CommandLine' } else { 'ExecutablePath,CommandLine' }",
+    "$searcher = [System.Management.ManagementObjectSearcher]::new(\"SELECT $identityFields FROM Win32_Process WHERE ProcessId=$targetPid\")",
+    "try {",
+    "$processes = $searcher.Get()",
+    "try {",
+    "$found = $false; $result = $null",
+    "foreach ($process in $processes) { try {",
+    "if ($found) { throw 'Windows process identity query returned multiple owners.' }; $found = $true",
+    "if ($identityFields -ne 'CommandLine') { $actualExe = if ($process.ExecutablePath) { [System.IO.Path]::GetFullPath([string]$process.ExecutablePath) } else { '' } }",
     "$commandLine = [string]$process.CommandLine",
     "$ownedByExe = [System.StringComparer]::OrdinalIgnoreCase.Equals($actualExe, $expectedExe)",
     "$ownedByHost = $commandLine.IndexOf($expectedHost, [System.StringComparison]::OrdinalIgnoreCase) -ge 0",
-    "[pscustomobject]@{ pid = $targetPid; owned = [bool]($ownedByExe -or $ownedByHost) } | ConvertTo-Json -Compress"
+    "$result = [pscustomobject]@{ pid = $targetPid; owned = [bool]($ownedByExe -or $ownedByHost) }",
+    "} finally { $process.Dispose() } }",
+    "if (-not $found) { throw 'RabiSpeech port owner disappeared.' }",
+    "$exitState = $null; try { $exitState = $nativeProcess.HasExited } catch { }; if ($exitState -is [bool] -and $exitState) { throw 'RabiSpeech port owner disappeared.' }",
+    "$result | ConvertTo-Json -Compress",
+    "} finally { $processes.Dispose() }",
+    "} finally { $searcher.Dispose() }",
+    "} finally { $nativeProcess.Dispose() }"
   ].join("\n");
   const { stdout } = await execFileAsync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], {
-    timeout: 8_000,
+    timeout: getTimeoutMs("backend.manager.speechRuntimeControl.inspectWindowsRuntimeOwner.execFileAsync.timeout", 8_000),
     windowsHide: true,
     env: {
+              RABIROUTE_TIMEOUT_OVERRIDES: JSON.stringify(readTimeoutOverrides()),
       ...process.env,
       RABIROUTE_SPEECH_PORT: String(port),
       RABIROUTE_SPEECH_EXE: expectedExecutable,
@@ -105,7 +171,8 @@ async function inspectWindowsRuntimeOwner(
     }
   });
   const text = String(stdout || "").trim();
-  if (!text || text === "null") return null;
+  if (text === "null") return null;
+  if (!text) throw new SpeechRuntimeControlError("无法确认 RabiSpeech 端口所有者：系统查询没有返回结果。", 409);
   const value = JSON.parse(text) as Partial<RuntimeOwner>;
   const pid = Number(value.pid);
   if (!Number.isInteger(pid) || pid <= 0) {
@@ -116,7 +183,7 @@ async function inspectWindowsRuntimeOwner(
 
 async function killWindowsProcessTree(pid: number): Promise<void> {
   await execFileAsync("taskkill.exe", ["/PID", String(pid), "/T", "/F"], {
-    timeout: 8_000,
+    timeout: getTimeoutMs("backend.manager.speechRuntimeControl.killWindowsProcessTree.execFileAsync.timeout", 8_000),
     windowsHide: true
   });
 }
@@ -147,8 +214,8 @@ export class SpeechRuntimeControl {
     this.killProcessTree = options.killProcessTree ?? killWindowsProcessTree;
     this.wait = options.wait ?? wait;
     this.now = options.now ?? Date.now;
-    this.startTimeoutMs = options.startTimeoutMs ?? 120_000;
-    this.stopTimeoutMs = options.stopTimeoutMs ?? 15_000;
+    this.startTimeoutMs = options.startTimeoutMs ?? getTimeoutMs("backend.manager.speechRuntimeControl.owner.startTimeoutMs", 120_000);
+    this.stopTimeoutMs = options.stopTimeoutMs ?? getTimeoutMs("backend.manager.speechRuntimeControl.owner.stopTimeoutMs", 15_000);
   }
 
   start(guard?: SpeechAuthorityGuard, allowFirstInstall = true): Promise<SpeechRuntimeControlResult> {
@@ -213,10 +280,14 @@ export class SpeechRuntimeControl {
       : path.join(paths.serviceRoot, "config.json");
   }
 
-  private assertWindowsRuntimeInstalled(paths: ReturnType<SpeechRuntimeControl["runtimePaths"]>): void {
+  private assertWindowsRuntimePlatform(): void {
     if (this.platform !== "win32") {
       throw new SpeechRuntimeControlError("WebGUI 启停 RabiSpeech 当前只支持 Windows 主机。", 409);
     }
+  }
+
+  private assertWindowsRuntimeInstalled(paths: ReturnType<SpeechRuntimeControl["runtimePaths"]>): void {
+    this.assertWindowsRuntimePlatform();
     if (!this.dependenciesPresent(paths.dependenciesRoot)) {
       throw new SpeechRuntimeControlError("RabiSpeech 尚未安装依赖，请先运行 scripts\\install.ps1。", 409);
     }
@@ -267,6 +338,7 @@ export class SpeechRuntimeControl {
             windowsHide: true,
             env: {
               ...process.env,
+              RABIROUTE_TIMEOUT_OVERRIDES: JSON.stringify(readTimeoutOverrides()),
               PYTHONUTF8: "1",
               PYTHONIOENCODING: "utf-8",
               RABISPEECH_DEPS_ROOT: paths.dependenciesRoot,
@@ -282,7 +354,7 @@ export class SpeechRuntimeControl {
       }
 
       try {
-        const status = await awaitSpeechAuthority(guard, () => this.waitForState(serviceUrl, "online", this.startTimeoutMs, () => {
+        const status = await awaitSpeechAuthority(guard, () => this.waitForState(serviceUrl, "online", getTimeoutMs("speech.start", this.startTimeoutMs), () => {
           if (this.launchChild?.exitCode != null) {
             throw new SpeechRuntimeControlError(
               `RabiSpeech 启动进程提前退出（code ${this.launchChild.exitCode}）。`,
@@ -318,7 +390,9 @@ export class SpeechRuntimeControl {
     const serviceUrl = normalizeLocalSpeechServiceUrl(this.options.serviceUrl());
     const port = servicePort(serviceUrl);
     const paths = this.runtimePaths();
-    this.assertWindowsRuntimeInstalled(paths);
+    // Shutdown needs process ownership, not the dependencies required to start it.
+    // An optional runtime may never have been installed, or its files may be gone.
+    this.assertWindowsRuntimePlatform();
 
     let targetPid: number | null = null;
     if (this.launchChild?.pid && this.launchChild.exitCode === null) {
@@ -327,6 +401,9 @@ export class SpeechRuntimeControl {
       const owner = await awaitSpeechAuthority(guard, () => this.inspectOwner(port, paths.runtimeExecutable, paths.hostScript));
       if (!owner) {
         const status = await awaitSpeechAuthority(guard, () => this.inspect(serviceUrl));
+        if (status.state !== "offline") {
+          throw new SpeechRuntimeControlError("无法确认 RabiSpeech 已停止：服务仍在线，但没有可验证的进程拥有者。", 502);
+        }
         return { action: "already_offline", status };
       }
       if (!owner.owned) {
@@ -337,7 +414,7 @@ export class SpeechRuntimeControl {
 
     await awaitSpeechAuthority(guard, () => this.killProcessTree(targetPid));
     this.launchChild = null;
-    const status = await awaitSpeechAuthority(guard, () => this.waitForState(serviceUrl, "offline", this.stopTimeoutMs, undefined, guard));
+    const status = await awaitSpeechAuthority(guard, () => this.waitForState(serviceUrl, "offline", getTimeoutMs("speech.stop", this.stopTimeoutMs), undefined, guard));
     return { action: "stopped", status };
   }
 

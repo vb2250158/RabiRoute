@@ -1,3 +1,4 @@
+import { readTimeoutOverrides, type TimeoutOverrides } from "../shared/timeoutSettings.js";
 import type http from "node:http";
 
 export const MANAGER_DISCOVERY_PATH = "/.well-known/rabiroute-manager";
@@ -5,6 +6,7 @@ export const MANAGER_DISCOVERY_SERVICE_TYPE = "rabiroute";
 export const MANAGER_DISCOVERY_PROTOCOL_VERSION = 1;
 
 export type ManagerLanDiscoveryDocument = Readonly<{
+  timeoutOverrides?: TimeoutOverrides;
   protocolVersion: 1;
   applicationGenerationId: string;
   managerInstanceId: string;
@@ -36,6 +38,6 @@ export function handleManagerLanDiscoveryRequest(
     options.jsonResponse(response, 405, { code: -1, message: "method not allowed" });
     return true;
   }
-  options.jsonResponse(response, 200, { code: 0, data: options.document() });
+  options.jsonResponse(response, 200, { code: 0, data: { ...options.document(), timeoutOverrides: readTimeoutOverrides() } });
   return true;
 }

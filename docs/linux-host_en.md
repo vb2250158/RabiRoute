@@ -6,6 +6,9 @@ English | <a href="./linux-host.md">简体中文</a>
 
 # Linux Host: source startup and runtime boundaries
 
+Timeouts use the global `data/Config.json.timeoutOverrides`, editable through [WebGUI timeout settings](configuration_en.md#timeout-settings). The `linux.host.*` entries control management requests, restart, startup readiness, exit waits, and local HTTP waits. New Host processes or commands read saved values; existing waits are not restarted. Configuration parsing and default restoration were tested on Windows; Linux-specific process lifecycle tests require Linux.
+
+
 > Status: new minimal Linux Host implementation. This page describes the current source contract. A build, local test, or working browser page does not establish real Relay, two-device delivery, or sustained-operation acceptance.
 
 Linux Host owns local Manager startup, current address discovery, restart, and shutdown. The interface is the existing RibiWebGUI. This Linux path does not provide the Windows Host, tray, Qt windows, system screenshots, or global hotkeys. Starting Linux Host does not establish availability of Codex/ChatGPT Desktop, NapCat, speech models, or other handlers; each integration still needs its own host, dependencies, and acceptance.
@@ -73,7 +76,7 @@ Startup options apply only when creating Host. A request for read-only/no-autost
 
 ## 3. Current address and health validation
 
-Host consumes the `RABIROUTE_MANAGER_READY:` structured output from the Manager it starts, checks the process, `applicationGenerationId`, and nonempty `managerInstanceId`, then reads `/meta` at that run's `baseUrl`. Normal admission requires matching identities, `health.live=true`, `health.requiredReady=true`, and `health.state` equal to `healthy` or `degraded`. One unconfigured integration need not prevent the console from working.
+Host consumes `RABIROUTE_MANAGER_READY:` structured output from its own Manager, checks the process, `applicationGenerationId` and nonempty `managerInstanceId`, then reads `/meta` at that run’s `baseUrl`. Admission retains identity, `health.live=true` and known-state checks. `health.requiredReady=false` reports `degraded` without rejecting startup or rebuilding the generation. Missing or malformed health fields remain rejected. Manager still reports the missing capabilities truthfully, and affected features retain their actual state.
 
 `status --json` provides `managerBaseUrl`, `applicationGenerationId`, `managerInstanceId`, `hostInstanceId`, runtime state, read-only/autostart options, and the log path. Automation must use the complete `managerBaseUrl` and recheck both `/meta` identities and the needed capabilities before business requests. Rediscover after an identity change; do not replay writes with an unknown outcome. Never scan ports, infer an address from an old lock file, or directly launch or kill a managed Manager.
 

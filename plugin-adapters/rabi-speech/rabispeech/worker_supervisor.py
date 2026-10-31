@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from .timeout_settings import get_timeout_seconds
+
+
 import asyncio
 import os
 import subprocess
@@ -55,7 +58,7 @@ class WorkerSupervisor:
                     self._groups[launch.exclusive_group] = current
 
             started = time.perf_counter()
-            deadline = started + launch.startup_timeout_seconds
+            deadline = started + get_timeout_seconds("speech.worker.start", launch.startup_timeout_seconds)
             while time.perf_counter() < deadline:
                 if current.process.poll() is not None:
                     self._forget(current)
@@ -113,10 +116,10 @@ class WorkerSupervisor:
                 else:
                     managed.process.terminate()
                 try:
-                    managed.process.wait(timeout=10)
+                    managed.process.wait(timeout=get_timeout_seconds("speech.worker.stop", 10))
                 except subprocess.TimeoutExpired:
                     managed.process.kill()
-                    managed.process.wait(timeout=5)
+                    managed.process.wait(timeout=get_timeout_seconds("speech.worker.kill", 5))
         finally:
             self._forget(managed)
 
@@ -132,7 +135,7 @@ class WorkerSupervisor:
 
     @staticmethod
     async def _healthy(base_url: str) -> bool:
-        timeout = httpx.Timeout(1.0, connect=0.5)
+        timeout = httpx.Timeout(get_timeout_seconds("speech.worker.health", 1), connect=get_timeout_seconds("speech.worker.healthConnect", 0.5))
         async with httpx.AsyncClient(timeout=timeout) as client:
             for path in ("/health", "/status"):
                 try:

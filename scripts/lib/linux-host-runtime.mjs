@@ -1,3 +1,4 @@
+import { configureTimeouts, getTimeoutMs } from "./timeout-settings.mjs";
 import fs from "node:fs";
 import path from "node:path";
 import http from "node:http";
@@ -51,12 +52,12 @@ export function validateReady(value, generation, pid) {
 export function validateMeta(meta, ready) {
   if (meta?.applicationGenerationId !== ready.applicationGenerationId
     || meta?.managerInstanceId !== ready.managerInstanceId) throw new Error("Manager generation or instance changed.");
-  if (meta.health?.live !== true || meta.health?.requiredReady !== true
-    || !["healthy", "degraded"].includes(meta.health?.state)) throw new Error("Manager required capabilities are not ready.");
-  return meta.health.state;
+  if (meta.health?.live !== true || typeof meta.health?.requiredReady !== "boolean"
+    || !["healthy", "degraded"].includes(meta.health?.state)) throw new Error("Manager health metadata is invalid or not live.");
+  return meta.health.requiredReady === false ? "degraded" : meta.health.state;
 }
 
-export async function requestJson(url, options = {}, timeoutMs = 5000) {
+export async function requestJson(url, options = {}, timeoutMs = getTimeoutMs("linux.host.request", 5000)) {
   return await new Promise((resolve, reject) => {
     const target = new URL(url);
     if (target.protocol !== "http:" || target.hostname !== "127.0.0.1") return reject(new Error("Host requests are loopback-only."));
@@ -102,7 +103,7 @@ export async function sendHostCommand(file, command, applicationGenerationId) {
   const value = await requestJson(`${descriptor.baseUrl}/control`, {
     method: "POST", headers: { "content-type": "application/json", "x-rabiroute-host-token": descriptor.controlToken },
     body: JSON.stringify({ command, hostInstanceId: descriptor.hostInstanceId, applicationGenerationId })
-  }, command === "restart" ? 90000 : 10000);
+  }, command === "restart" ? getTimeoutMs("linux.host.restart", 90000) : getTimeoutMs("linux.host.command", 10000));
   if (value.hostInstanceId !== descriptor.hostInstanceId) throw new Error("Linux Host instance changed.");
   return value;
 }
@@ -116,6 +117,7 @@ function equalToken(actual, expected) {
 export class LinuxHost {
   constructor(options) {
     this.options = options;
+    loadLinuxHostTimeouts(options.stateRoot);
     this.id = randomUUID();
     this.controlToken = randomBytes(32).toString("hex");
     this.state = "starting";
@@ -140,8 +142,8 @@ export class LinuxHost {
     this.log = fs.createWriteStream(this.options.logPath, { flags: "a", mode: 0o600 });
     this.log.on("error", error => { this.lastError = `Host log failed: ${error.code || "I/O error"}`; void this.close(); });
     this.server = http.createServer((request, response) => void this.handleControl(request, response));
-    this.server.requestTimeout = 10000;
-    this.server.headersTimeout = 5000;
+    this.server.requestTimeout = getTimeoutMs("linux.host.http.request", 10000);
+    this.server.headersTimeout = Math.min(this.server.requestTimeout, getTimeoutMs("linux.host.http.headers", 5000));
     await new Promise((resolve, reject) => { this.server.once("error", reject); this.server.listen(0, "127.0.0.1", resolve); });
     const address = this.server.address();
     const descriptor = { schemaVersion: 1, hostInstanceId: this.id, baseUrl: `http://127.0.0.1:${address.port}`, controlToken: this.controlToken };
@@ -238,7 +240,7 @@ export class LinuxHost {
     child.stderr.pipe(this.log, { end: false });
     const lines = createInterface({ input: child.stdout });
     const ready = new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => reject(new Error("Manager did not publish READY within 60 seconds.")), this.options.startupTimeoutMs ?? 60000);
+      const timeout = setTimeout(() => reject(new Error("Manager did not publish READY within the configured startup timeout.")), this.options.startupTimeoutMs ?? getTimeoutMs("linux.host.startup", 60000));
       const finish = (error, value) => { clearTimeout(timeout); error ? reject(error) : resolve(value); };
       lines.on("line", line => {
         if (line.length > 65536) return finish(new Error("Manager output line is too large."));
@@ -258,7 +260,7 @@ export class LinuxHost {
       }
     }
     const descriptor = await ready;
-    const deadline = Date.now() + (this.options.startupTimeoutMs ?? 60000);
+    const deadline = Date.now() + (this.options.startupTimeoutMs ?? getTimeoutMs("linux.host.startup", 60000));
     let failure;
     while (Date.now() < deadline && child.exitCode === null && child.signalCode === null && !this.stopping) {
       try {
@@ -300,7 +302,7 @@ export class LinuxHost {
     }
     // The leader may already have exited while its owned descendants remain.
     signalOwnedGroup(child, "SIGTERM");
-    const deadline = Date.now() + (this.options.stopTimeoutMs ?? 12000);
+    const deadline = Date.now() + (this.options.stopTimeoutMs ?? getTimeoutMs("linux.host.stop", 12000));
     while (liveGroupMembers(child.pid).length && Date.now() < deadline) await delay(50);
     if (liveGroupMembers(child.pid).length) {
       signalOwnedGroup(child, "SIGKILL");
@@ -327,5 +329,18 @@ export class LinuxHost {
       this.options.onClose?.();
     })();
     return this.closing;
+  }
+}
+
+export function loadLinuxHostTimeouts(stateRoot) {
+  if (!stateRoot) return;
+  const file = path.join(stateRoot, "data", "Config.json");
+  try {
+    const raw = JSON.parse(fs.readFileSync(file, "utf8"));
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error("Expected a configuration object.");
+    configureTimeouts(raw.timeoutOverrides);
+  } catch (error) {
+    configureTimeouts(undefined);
+    if (error?.code !== "ENOENT") process.emitWarning("Linux Host could not read optional timeout configuration; using default timeouts. Fix data/Config.json or its read access.", { code: "RABI_TIMEOUT_OVERRIDES" });
   }
 }

@@ -1,7 +1,9 @@
+import { adoptTimeoutSettings, requestTimeout, configureTimeoutStorage } from "./timeout-settings.js";
 import wx from "wx";
 import { fingerprintApiRequest } from '../../../packages/rabi-api-contract/fingerprint.mjs';
 import { phoneEyeHttpRequest, phoneEyeStreamRequest, phoneEyeOpenWebSocket } from './phone-eye-transport.js';
 
+configureTimeoutStorage(wx);
 const DEFAULT_TIMEOUT_MS = 45000;
 const CONTENT_HASH_PATTERN = /^[a-f0-9]{64}$/;
 const OPERATION_ID_PATTERN = /^[A-Za-z0-9:._-]{1,256}$/;
@@ -104,6 +106,7 @@ function requestJson(config, path, options = {}) {
     "content-type": "application/json; charset=utf-8"
   };
   if (options.auth !== false) header["X-RabiLink-Token"] = token;
+  header["X-Rabi-Timeout-Ms"] = String(requestTimeout(config, options.targetDeviceId || options.body?.targetDeviceId, "aiui.http.request", options.timeoutMs || DEFAULT_TIMEOUT_MS));
   Object.assign(header, mutationHeaders(options.mutation));
 
   return new Promise((resolve, reject) => {
@@ -111,7 +114,7 @@ function requestJson(config, path, options = {}) {
       url: `${baseUrl}${path}`,
       method: options.method || "GET",
       data: options.body || undefined,
-      timeout: options.timeoutMs || DEFAULT_TIMEOUT_MS,
+      timeout: requestTimeout(config, options.targetDeviceId || options.body?.targetDeviceId, "aiui.http.request", options.timeoutMs || DEFAULT_TIMEOUT_MS),
       header,
       success(response) {
         const statusCode = Number(response.statusCode || 0);
@@ -210,6 +213,7 @@ export async function getDeviceAgentProfile(config) {
   const owner = await deviceProfileOwner(config);
   return requestManagerJson(config, "/api/rabilink/agent-devices/self/profile", { targetDeviceId: owner, timeoutMs: 12000 }).then(result => {
     if (result?.code !== 0 || !result.data || typeof result.data !== "object") throw new Error("Invalid device profile response");
+    adoptTimeoutSettings(config, owner, result.data.timeoutOverrides);
     return result.data;
   });
 }

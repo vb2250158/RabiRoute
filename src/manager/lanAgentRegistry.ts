@@ -1,8 +1,13 @@
+import { getTimeoutMs } from "../shared/timeoutSettings.js";
+import { atomicWriteFileSync } from "../shared/filePersistence.js";
 import fs from "node:fs";
 import type http from "node:http";
-import type { Socket } from "node:net";
+import type { Duplex } from "node:stream";
+import type { ApiUpgradeInput } from "./apiOperationContract.js";
+import { ManagerPluginRouteRegistry } from "./managerPluginRouteRegistry.js";
+import { createLanAgentConnectionOperation, LAN_AGENT_WEBSOCKET_LIMITS, type LanAgentConnectionOptions } from "./lanAgentConnectionOperation.js";
 import path from "node:path";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { normalizeInstanceAgents, type AgentInstance, type InstanceAgent } from "../shared/agentInstance.js";
 import { WebSocket, WebSocketServer } from "ws";
@@ -12,6 +17,7 @@ import { LanAgentTerminals } from "./lanAgentTerminals.js";
 
 export type LanAgentNodeHello = {
   nodeId: string;
+  hostname?: string;
   version: string;
   platform: string;
   agentTypes?: string[];
@@ -59,7 +65,36 @@ type PersistedState = {
   schemaVersion: 2;
   nodes: LanAgentNodeStatus[];
   tasks: LanAgentTask[];
+  resultReceipts?: LanAgentResultReceipt[];
 };
+
+type LanAgentResultReceipt = {
+  taskId: string;
+  nodeId: string;
+  idempotencyKey: string;
+  assignmentHash: string;
+  status: "completed" | "failed" | "interrupted";
+  createdAt: string;
+  updatedAt: string;
+  resultHash: string;
+  eventId?: string;
+  payloadHash?: string;
+};
+
+const terminalTaskStates = new Set<LanAgentTaskStatus>(["completed", "failed", "interrupted"]);
+const completedTaskHistoryLimit = 500;
+const fingerprint = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
+const assignmentHash = (task: Pick<LanAgentTask, "targetAgent" | "agentId" | "threadId" | "message" | "cwd">) => fingerprint({
+  targetAgent: task.targetAgent, agentId: task.agentId, threadId: task.threadId, message: task.message, cwd: task.cwd
+});
+const resultHash = (result: Pick<LanAgentTask, "status" | "result" | "error">) => fingerprint({ status: result.status, result: result.result, error: result.error });
+const idempotencyScope = (nodeId: string, key: string) => JSON.stringify([nodeId, key]);
+
+function receiptForTask(task: LanAgentTask): LanAgentResultReceipt {
+  if (!terminalTaskStates.has(task.status)) throw new Error("Only a terminal task can be compacted.");
+  return { taskId: task.taskId, nodeId: task.nodeId, idempotencyKey: task.idempotencyKey, assignmentHash: assignmentHash(task),
+    status: task.status as LanAgentResultReceipt["status"], createdAt: task.createdAt, updatedAt: task.updatedAt, resultHash: resultHash(task) };
+}
 
 type Connection = {
   socket: WebSocket;
@@ -67,6 +102,7 @@ type Connection = {
   authenticated: boolean;
   credential?: string;
   authenticatedNodeId?: string;
+  authenticatedNodeIncarnation?: string;
   authenticationTimer: NodeJS.Timeout;
 };
 
@@ -100,11 +136,14 @@ function normalizeHello(value: unknown): LanAgentNodeHello {
     ? value as Partial<LanAgentNodeHello>
     : {};
   const version = typeof raw.version === "string" ? raw.version.trim() : "";
+  const hostname = typeof raw.hostname === "string" ? raw.hostname.trim() : "";
+  if (hostname.length > 255 || /[\u0000-\u001f\u007f]/u.test(hostname)) throw new Error("Rabi Agent hostname must be single-line text of at most 255 characters.");
   const platform = typeof raw.platform === "string" ? raw.platform.trim() : "";
   if (!version || version.length > 80) throw new Error("Rabi Agent version is required.");
   if (!platform || platform.length > 80) throw new Error("Rabi Agent platform is required.");
   return {
     nodeId: normalizeNodeId(raw.nodeId),
+    hostname: hostname || undefined,
     version,
     platform,
     agentTypes: normalizeTextList(raw.agentTypes, 16, 80),
@@ -130,26 +169,137 @@ function parseMessage(value: WebSocket.RawData): Record<string, unknown> | null 
 function closeSocket(socket: WebSocket, code: number, reason: string): void {
   if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) {
     socket.close(code, reason);
+    const timer = setTimeout(() => socket.terminate(), LAN_AGENT_WEBSOCKET_LIMITS.closeGraceMs); timer.unref?.();
+    socket.once("close", () => clearTimeout(timer));
   }
 }
 
-function rejectUpgrade(socket: Socket, statusCode: number, message: string): void {
-  if (!socket.destroyed) {
-    socket.write(`HTTP/1.1 ${statusCode} ${message}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`);
-    socket.destroy();
-  }
-}
 
-function loadState(statePath: string): PersistedState {
+type RegistryIsolation = {
+  nodes: unknown[]; tasks: unknown[]; resultReceipts: unknown[];
+  nodeIds: Set<string>; taskIds: Set<string>; scopes: Set<string>; eventIds: Set<string>;
+  diagnostics: Array<{ collection: string; index: number; reason: string }>;
+};
+function loadState(statePath: string, isolation: RegistryIsolation): PersistedState {
   if (!fs.existsSync(statePath)) return { schemaVersion: 2, nodes: [], tasks: [] };
-  try {
-    const parsed = JSON.parse(fs.readFileSync(statePath, "utf8")) as Partial<PersistedState>;
-    const nodes = Array.isArray(parsed.nodes) ? parsed.nodes.filter((item): item is LanAgentNodeStatus => Boolean(item && typeof item === "object" && typeof item.nodeId === "string")) : [];
-    const tasks = Array.isArray(parsed.tasks) ? parsed.tasks.filter((item): item is LanAgentTask => Boolean(item && typeof item === "object" && typeof item.taskId === "string")) : [];
-    return { schemaVersion: 2, nodes, tasks };
-  } catch {
-    return { schemaVersion: 2, nodes: [], tasks: [] };
+  const original = fs.readFileSync(statePath, "utf8");
+  const parsed = JSON.parse(original) as PersistedState;
+  if (!parsed || parsed.schemaVersion !== 2 || !Array.isArray(parsed.nodes) || !Array.isArray(parsed.tasks)
+    || (parsed.resultReceipts !== undefined && !Array.isArray(parsed.resultReceipts))) throw new Error("Invalid remote computer registry; original file retained.");
+  const object = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value);
+  const text = (value: unknown): value is string => typeof value === "string" && value.length > 0;
+  const date = (value: unknown) => text(value) && Number.isFinite(Date.parse(value));
+  const digest = (value: unknown) => typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
+  const isolate = (collection: "nodes" | "tasks" | "resultReceipts", raw: unknown, index: number, reason: string) => {
+    isolation[collection].push(raw); isolation.diagnostics.push({ collection, index, reason });
+    if (!object(raw)) return;
+    if (collection === "nodes") { if (text(raw.nodeId)) isolation.nodeIds.add(raw.nodeId.trim()); }
+    else {
+      if (text(raw.taskId)) isolation.taskIds.add(raw.taskId.trim());
+      if (text(raw.nodeId) && text(raw.idempotencyKey)) isolation.scopes.add(idempotencyScope(raw.nodeId.trim(), raw.idempotencyKey.trim()));
+      if (text(raw.eventId)) isolation.eventIds.add(raw.eventId);
+    }
+  };
+  const readRows = <T>(collection: "nodes" | "tasks" | "resultReceipts", rows: unknown[], idField: string,
+    normalize: (row: Record<string, unknown>) => T): T[] => {
+    const counts = new Map<string, number>();
+    for (const row of rows) if (object(row) && text(row[idField])) counts.set(row[idField], (counts.get(row[idField]) ?? 0) + 1);
+    const result: T[] = [];
+    rows.forEach((row, index) => {
+      try {
+        if (!object(row) || !text(row[idField])) throw new Error("invalid_record");
+        if (counts.get(row[idField]) !== 1) throw new Error("duplicate_identity");
+        result.push(normalize(row));
+      } catch (error) { isolate(collection, row, index, error instanceof Error && error.message === "duplicate_identity" ? error.message : "invalid_record"); }
+    });
+    return result;
+  };
+  const nodes = readRows("nodes", parsed.nodes, "nodeId", row => {
+    if (normalizeNodeId(row.nodeId) !== row.nodeId
+      || ["version", "platform", "hostname", "name", "remoteAddress", "targetVersion", "lastUpdateError", "taskTargeting"].some(key => row[key] !== undefined && typeof row[key] !== "string")
+      || ["agentTypes", "allowedWorkspaces", "terminalShells", "computerCapabilities"].some(key => row[key] !== undefined
+        && (!Array.isArray(row[key]) || (row[key] as unknown[]).some(value => typeof value !== "string")))
+      || ["connectedAt", "lastSeenAt", "lastUpdateAt"].some(key => row[key] !== undefined && !date(row[key]))
+      || row.updateState !== undefined && (typeof row.updateState !== "string" || !["idle", "requested", "updating", "updated", "failed"].includes(row.updateState))
+      || row.connected !== undefined && typeof row.connected !== "boolean") throw new Error("invalid_record");
+    // Historical rows predate modern Hello fields. Preserve their absence;
+    // new connections still pass the complete normalizeHello admission.
+    return { ...row, ...(row.agents !== undefined ? { agents: normalizeInstanceAgents(row.agents) } : {}) } as LanAgentNodeStatus;
+  });
+  const tasks = readRows("tasks", parsed.tasks, "taskId", row => {
+    if (!text(row.nodeId) || ["idempotencyKey", "targetAgent", "threadId", "message"].some(key => row[key] !== undefined && !text(row[key]))
+      || normalizeNodeId(row.nodeId) !== row.nodeId || row.taskId !== String(row.taskId).trim() || row.idempotencyKey !== undefined && row.idempotencyKey !== String(row.idempotencyKey).trim()
+      || ["agentId", "cwd", "result", "error"].some(key => row[key] !== undefined && typeof row[key] !== "string")
+      || typeof row.status !== "string" || !["queued", "delivered", "acknowledged", "progress", "completed", "failed", "interrupted"].includes(row.status)
+      || !date(row.createdAt) || !date(row.updatedAt)) throw new Error("invalid_record");
+    return row as LanAgentTask;
+  });
+  const resultReceipts = readRows("resultReceipts", parsed.resultReceipts ?? [], "taskId", row => {
+    if (!["nodeId", "idempotencyKey"].every(key => text(row[key])) || !terminalTaskStates.has(row.status as LanAgentTaskStatus)
+      || normalizeNodeId(row.nodeId) !== row.nodeId || row.taskId !== String(row.taskId).trim() || row.idempotencyKey !== String(row.idempotencyKey).trim()
+      || !date(row.createdAt) || !date(row.updatedAt) || !digest(row.assignmentHash) || !digest(row.resultHash)
+      || (row.eventId !== undefined && (!text(row.eventId) || !digest(row.payloadHash)))) throw new Error("invalid_record");
+    return row as LanAgentResultReceipt;
+  });
+  // Index the original identities once. A conflicting receipt or scope must not
+  // leave another readable row able to replay the same uncertain assignment.
+  const rows = [
+    ...tasks.map(row => ({ collection: "tasks" as const, row })),
+    ...resultReceipts.map(row => ({ collection: "resultReceipts" as const, row }))
+  ];
+  const tokens = (row: LanAgentTask | LanAgentResultReceipt) => ["task:" + row.taskId, ...(row.idempotencyKey ? ["scope:" + idempotencyScope(row.nodeId, row.idempotencyKey)] : []),
+    ...("eventId" in row && row.eventId ? ["event:" + row.eventId] : [])];
+  const byToken = new Map<string, typeof rows>();
+  for (const entry of rows) for (const token of tokens(entry.row)) {
+    const group = byToken.get(token) ?? []; group.push(entry); byToken.set(token, group);
   }
+  const pending = [
+    ...[...isolation.taskIds].map(id => "task:" + id), ...[...isolation.scopes].map(scope => "scope:" + scope),
+    ...[...isolation.eventIds].map(id => "event:" + id)
+  ];
+  for (const [token, group] of byToken) {
+    if (!token.startsWith("task:") && new Set(group.map(entry => entry.row.taskId)).size > 1) pending.push(token);
+    if (!token.startsWith("task:") || group.length !== 2) continue;
+    const task = group.find(entry => entry.collection === "tasks")?.row as LanAgentTask | undefined;
+    const receipt = group.find(entry => entry.collection === "resultReceipts")?.row as LanAgentResultReceipt | undefined;
+    if (task && receipt && (task.nodeId !== receipt.nodeId || task.idempotencyKey !== receipt.idempotencyKey
+      || task.status !== receipt.status || assignmentHash(task) !== receipt.assignmentHash
+      // Rehydrated compacted tasks intentionally lack old result text. Validate
+      // actual retained result text, not an invented missing-result default.
+      || (task.result !== undefined || task.error !== undefined) && resultHash(task) !== receipt.resultHash)) pending.push(token);
+  }
+  const excluded = new Set<LanAgentTask | LanAgentResultReceipt>(), visited = new Set<string>();
+  const indexes = { tasks: new Map(parsed.tasks.map((row, index) => [row, index])),
+    resultReceipts: new Map((parsed.resultReceipts ?? []).map((row, index) => [row, index])) };
+  while (pending.length) {
+    const token = pending.pop()!;
+    if (visited.has(token)) continue; visited.add(token);
+    for (const entry of byToken.get(token) ?? []) {
+      if (excluded.has(entry.row)) continue; excluded.add(entry.row);
+      isolate(entry.collection, entry.row, indexes[entry.collection].get(entry.row as never)!, "conflicting_identity");
+      pending.push(...tokens(entry.row));
+    }
+  }
+  const next = { ...parsed, schemaVersion: 2 as const, nodes, tasks: tasks.filter(row => !excluded.has(row)),
+    resultReceipts: resultReceipts.filter(row => !excluded.has(row)) };
+  const stored = { ...next, nodes: [...next.nodes, ...isolation.nodes], tasks: [...next.tasks, ...isolation.tasks],
+    resultReceipts: [...next.resultReceipts, ...isolation.resultReceipts] };
+  const changed = JSON.stringify(stored) !== JSON.stringify(parsed);
+  if (changed || isolation.diagnostics.length) {
+    const backup = isolation.diagnostics.length ? statePath + ".before-record-isolation-" + fingerprint({
+      nodes: isolation.nodes.map(value => JSON.stringify(value)).sort(), tasks: isolation.tasks.map(value => JSON.stringify(value)).sort(),
+      resultReceipts: isolation.resultReceipts.map(value => JSON.stringify(value)).sort()
+    }) + ".json" : statePath + ".before-explicit-sessions-" + randomUUID() + ".json";
+    let created = false;
+    try { fs.writeFileSync(backup, original, { flag: "wx", mode: 0o600 }); created = true; }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; }
+    if (fs.readFileSync(statePath, "utf8") !== original || created && fs.readFileSync(backup,"utf8") !== original) throw new Error("Remote registry migration snapshot changed.");
+    if (changed) {
+      atomicWriteFileSync(statePath, JSON.stringify(stored) + "\n", { mode: 0o600 });
+      if (JSON.stringify(JSON.parse(fs.readFileSync(statePath,"utf8"))) !== JSON.stringify(stored)) { atomicWriteFileSync(statePath, original, { mode: 0o600 }); throw new Error("Remote registry migration verification failed; original restored."); }
+    }
+  }
+  return next;
 }
 
 export class LanAgentNodeNameConflictError extends Error {
@@ -157,13 +307,18 @@ export class LanAgentNodeNameConflictError extends Error {
 }
 
 export class LanAgentRegistry {
-  readonly terminals = new LanAgentTerminals((instanceId, body) => {
+  readonly terminals = new LanAgentTerminals((instanceId, body, assertAuthorized) => {
     if (!this.requireNode(instanceId).terminalShells?.length) throw new Error("This connector does not support remote terminals. Update it first.");
-    return this.manageAgent(instanceId, "terminal", body, 45_000);
+    return this.manageAgent(instanceId, "terminal", body, 45_000, assertAuthorized);
   });
   private readonly connections = new Map<string, Connection>();
   private readonly nodes = new Map<string, LanAgentNodeStatus>();
   private readonly tasks = new Map<string, LanAgentTask>();
+  private readonly isolation: RegistryIsolation = { nodes: [], tasks: [], resultReceipts: [], nodeIds: new Set(), taskIds: new Set(),
+    scopes: new Set(), eventIds: new Set(), diagnostics: [] };
+  private readonly resultReceipts = new Map<string, LanAgentResultReceipt>();
+  private readonly resultEvents = new Map<string, string>();
+  private readonly completedIdempotency = new Map<string, string>();
   private readonly taskChanges = new EventEmitter();
   private readonly deliveryEvents = new EventEmitter();
 
@@ -171,20 +326,23 @@ export class LanAgentRegistry {
     this.deliveryEvents.on("change", listener);
     return () => this.deliveryEvents.off("change", listener);
   }
-  private readonly wss = new WebSocketServer({ noServer: true });
+  private readonly wss = new WebSocketServer({ noServer: true, maxPayload: LAN_AGENT_WEBSOCKET_LIMITS.maxMessageBytes });
+  private protocolGuards = new WeakMap<WebSocket, Pick<ApiUpgradeInput, "validateIncoming" | "validateOutgoing" | "signal">>();
+  private upgradeInputs = new WeakMap<http.IncomingMessage, ApiUpgradeInput>();
+  private upgradeHeadersInstalled = false;
   private readonly statePath: string;
   readonly localInstanceId: string;
-  private readonly managementRequests = new Map<string, { connection: Connection; resolve: (value: unknown) => void; reject: (error: Error) => void; timer: NodeJS.Timeout; operation: string; assertAuthorized?: () => void }>();
+  private readonly managementRequests = new Map<string, { connection: Connection; resolve: (value: unknown) => void; reject: (error: Error) => void; timer: NodeJS.Timeout; operation: string; readOnly: boolean; assertAuthorized?: () => void }>();
   private detachUpgrade: (() => void) | undefined;
 
   constructor(private readonly options: {
     statePath: string;
-    authenticateNode?: (token: string) => { nodeId: string } | null;
-    isAgentEnabled?: (nodeId: string, agentId: string) => boolean;
-    registerAgentCatalog?: (token: string, agents: readonly InstanceAgent[]) => void;
+    authenticateNode?: (token: string) => { nodeId: string; incarnation?: string } | null;
+    nodeEnabled?: (nodeId: string) => boolean;
     currentRelease?: (nodeId: string) => Readonly<{ version: string; releaseDigest: string }>;
   }) {
     this.statePath = path.resolve(options.statePath);
+    this.initializeUpgradeHooks();
     const identityPath = path.join(path.dirname(this.statePath), "agent-instance-id.json");
     fs.mkdirSync(path.dirname(identityPath), { recursive: true });
     try {
@@ -192,42 +350,83 @@ export class LanAgentRegistry {
     } catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; }
     this.localInstanceId = JSON.parse(fs.readFileSync(identityPath, "utf8")).instanceId;
     if (typeof this.localInstanceId !== "string" || !this.localInstanceId) throw new Error("Invalid local instance identity.");
-    const persisted = loadState(this.statePath);
-    for (const node of persisted.nodes.slice(-500)) this.nodes.set(node.nodeId, { ...node, connected: false });
-    for (const task of persisted.tasks.slice(-500)) this.tasks.set(task.taskId, task);
+    const persisted = loadState(this.statePath, this.isolation);
+    for (const node of persisted.nodes) this.nodes.set(node.nodeId, { ...node, connected: false });
+    for (const task of persisted.tasks) this.tasks.set(task.taskId, task);
+    for (const receipt of persisted.resultReceipts ?? []) this.resultReceipts.set(receipt.taskId, receipt);
+    for (const task of this.tasks.values()) {
+      if (terminalTaskStates.has(task.status) && [task.idempotencyKey, task.targetAgent, task.threadId, task.message].every(value => typeof value === "string" && value.length > 0)
+        && !this.resultReceipts.has(task.taskId)) this.resultReceipts.set(task.taskId, receiptForTask(task));
+    }
+    for (const receipt of this.resultReceipts.values()) {
+      this.completedIdempotency.set(idempotencyScope(receipt.nodeId, receipt.idempotencyKey), receipt.taskId);
+      if (receipt.eventId) this.resultEvents.set(receipt.eventId, receipt.taskId);
+    }
   }
 
-  attach(server: http.Server, options: { getToken: () => string; enabled: () => boolean }): () => void {
+  private initializeUpgradeHooks(): void {
+    // Existing native instances predate these fields. Their original sockets stay
+    // owned by the native registry until listener/facade migration is verified.
+    this.protocolGuards ??= new WeakMap(); this.upgradeInputs ??= new WeakMap();
+    if (this.upgradeHeadersInstalled) return;
+    this.wss.on("headers", (headers, request) => {
+      const input = this.upgradeInputs.get(request);
+      if (input) input.prepareHandshake(Object.fromEntries(headers.slice(1).map(line => {
+        const separator = line.indexOf(":"); return [line.slice(0, separator), line.slice(separator + 1).trim()];
+      })));
+    });
+    this.upgradeHeadersInstalled = true;
+  }
+
+  /** Compatibility adapter for standalone owners/tests; production registers this operation in core. */
+  attach(server: http.Server, options: LanAgentConnectionOptions): () => void {
     this.detachUpgrade?.();
-    const onUpgrade = (request: http.IncomingMessage, socket: Socket, head: Buffer): void => {
-      let requestUrl: URL;
-      try {
-        requestUrl = new URL(request.url ?? "/", `http://${request.headers.host ?? "127.0.0.1"}`);
-      } catch {
-        rejectUpgrade(socket, 400, "Bad Request");
-        return;
-      }
-      if (requestUrl.pathname !== "/api/lan-agent/connect") return;
-      if (!options.enabled() || (!this.options.authenticateNode && !options.getToken().trim())) {
-        rejectUpgrade(socket, 401, "Unauthorized");
-        return;
-      }
-      this.wss.handleUpgrade(request, socket, head, websocket => {
-        this.bindSocket(websocket, normalizedRemoteAddress(request.socket.remoteAddress), options.getToken);
-      });
+    const routes = new ManagerPluginRouteRegistry();
+    const registration = routes.registerUpgrades("standalone-lan-agent", [createLanAgentConnectionOperation(this, options)]);
+    const listener = (request: http.IncomingMessage, socket: Duplex, head: Buffer) => {
+      try { routes.handleUpgrade(request, new URL(request.url || "/", "http://manager.invalid"), socket, head); }
+      catch { socket.destroy(); }
     };
-    server.on("upgrade", onUpgrade);
-    this.detachUpgrade = () => {
-      server.off("upgrade", onUpgrade);
-      this.detachUpgrade = undefined;
-    };
+    server.on("upgrade", listener);
+    this.detachUpgrade = () => { server.off("upgrade", listener); registration.stopAccepting(); this.detachUpgrade = undefined; };
     return this.detachUpgrade;
+  }
+
+  async upgradeConnection(input: ApiUpgradeInput, options: LanAgentConnectionOptions): Promise<void> {
+    this.initializeUpgradeHooks();
+    input.assertCurrent();
+    if (!options.enabled() || (!this.options.authenticateNode && !options.getToken().trim())) {
+      input.reject(401, { code: -1, message: "LAN Agent connection is disabled or has no existing credential authority." }); return;
+    }
+    await new Promise<void>((resolve, reject) => {
+      const closed = () => { cleanup(); resolve(); };
+      const cleanup = () => { input.socket.off("close", closed); this.upgradeInputs.delete(input.request); };
+      input.socket.once("close", closed);
+      try {
+        input.assertCurrent();
+        this.upgradeInputs.set(input.request, input);
+        this.wss.handleUpgrade(input.request, input.socket, Buffer.from(input.head), websocket => {
+          cleanup();
+          let settled!: () => void;
+          const complete = new Promise<void>(done => { settled = done; });
+          websocket.once("close", () => { this.protocolGuards?.delete(websocket); queueMicrotask(settled); });
+          this.protocolGuards.set(websocket, input);
+          input.accept({ closed: complete, close: async reason => { closeSocket(websocket, 1001, reason); await complete; } });
+          this.bindSocket(websocket, normalizedRemoteAddress(input.request.socket.remoteAddress), options.getToken);
+          resolve();
+        });
+      } catch (error) { cleanup(); reject(error); }
+    });
   }
 
   listNodes(): LanAgentNodeStatus[] {
     return [...this.nodes.values()]
       .map(node => ({ ...structuredClone(node), connected: this.connections.get(node.nodeId)?.socket.readyState === WebSocket.OPEN }))
       .sort((left, right) => left.nodeId.localeCompare(right.nodeId));
+  }
+
+  storageDiagnostics(): ReadonlyArray<Readonly<{ collection: string; index: number; reason: string }>> {
+    return this.isolation.diagnostics.map(item => ({ ...item }));
   }
 
   getNode(nodeId: string): LanAgentNodeStatus | undefined {
@@ -244,8 +443,8 @@ export class LanAgentRegistry {
 
   listInstances(localAgents: InstanceAgent[] = []): AgentInstance[] {
     return [{ instanceId: this.localInstanceId, local: true, connected: true, agents: localAgents }, ...this.listNodes().map(node => ({
-      instanceId: node.nodeId, name: node.name, local: false, address: node.remoteAddress, connected: node.connected, version: node.version,
-      agents: (node.agents ?? []).map(agent => ({ ...agent, enabled: this.options.isAgentEnabled?.(node.nodeId, agent.agentId) ?? agent.enabled }))
+      instanceId: node.nodeId, name: node.name, hostname: node.hostname, local: false, enabled: this.options.nodeEnabled?.(node.nodeId) ?? true, address: node.remoteAddress, connected: node.connected, version: node.version,
+      agents: (node.agents ?? []).map(agent => ({ ...agent, enabled: agent.enabled }))
     }))];
   }
 
@@ -273,25 +472,29 @@ export class LanAgentRegistry {
     return structuredClone(next);
   }
 
-  manageAgent(instanceId: string, operation: string, params: unknown, timeoutMs = 15_000, assertAuthorized?: () => void): Promise<unknown> {
+  manageAgent(instanceId: string, operation: string, params: unknown, timeoutMs = getTimeoutMs("agent.remote.management", 15000), assertAuthorized?: () => void): Promise<unknown> {
+    if (this.options.nodeEnabled?.(instanceId) === false) throw new Error("Remote instance is disabled.");
     assertAuthorized?.();
-    const connection = this.requireConnection(instanceId);
-    if (!this.requireNode(instanceId).agents) throw new Error("Update this instance connector before managing its Agents.");
-    if (["threads", "prepared_delivery", "reconcile_prepared_delivery"].includes(operation) && this.options.isAgentEnabled) {
-      const input = params as { agentId?: string; action?: string; prompt?: unknown } | null;
-      const initializeNew = input?.agentId === "new-agent" && ["resolve", "create"].includes(input.action ?? "") && !input.prompt;
-      if (!initializeNew && (!input?.agentId || !this.options.isAgentEnabled(instanceId, input.agentId))) throw new Error("Manager has not enabled this remote Agent.");
+    let connection: Connection;
+    try { connection = this.requireConnection(instanceId); }
+    catch (cause) {
+      throw Object.assign(new Error(cause instanceof Error ? cause.message : String(cause), { cause }), {
+        code: "LAN_AGENT_MANAGEMENT_NOT_SENT", deliveryFrameSent: false, instanceId, operation
+      });
     }
+
     const requestId = randomUUID();
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => { this.managementRequests.delete(requestId); reject(new Error("Instance management timed out; refresh before retrying a change.")); }, timeoutMs);
-      this.managementRequests.set(requestId, { connection, resolve, reject, timer, operation, assertAuthorized });
+      const action = params && typeof params === "object" ? (params as Record<string, unknown>).action : undefined;
+      const readOnly = operation === "scan" || operation === "threads" && ["read", "list"].includes(String(action ?? "list"));
+      this.managementRequests.set(requestId, { connection, resolve, reject, timer, operation, readOnly, assertAuthorized });
       try { assertAuthorized?.(); this.send(connection.socket, { type: "manageAgent", requestId, operation, params }); }
       catch (error) { clearTimeout(timer); this.managementRequests.delete(requestId); reject(error); }
     });
   }
 
-  async waitForTaskAcceptance(taskId: string, timeoutMs = 12_000): Promise<LanAgentTask> {
+  async waitForTaskAcceptance(taskId: string, timeoutMs = getTimeoutMs("agent.remote.acceptance", 12000)): Promise<LanAgentTask> {
     return new Promise((resolve, reject) => {
       const finish = (): void => {
         const task = this.tasks.get(taskId);
@@ -306,7 +509,8 @@ export class LanAgentRegistry {
     });
   }
 
-  requestUpdate(nodeId: string, version: string): LanAgentNodeStatus {
+  requestUpdate(nodeId: string, version: string, assertAuthorized?: () => void): LanAgentNodeStatus {
+    assertAuthorized?.();
     const connection = this.requireConnection(nodeId);
     const node = this.requireNode(nodeId);
     const targetVersion = version.trim();
@@ -314,17 +518,22 @@ export class LanAgentRegistry {
     const next = { ...node, targetVersion, updateState: "requested" as const, lastUpdateAt: nowIso(), lastUpdateError: undefined };
     this.nodes.set(nodeId, next);
     this.persist();
+    assertAuthorized?.();
     this.send(connection.socket, { type: "updateAvailable", version: targetVersion });
     return { ...next, connected: true };
   }
 
-  assignTask(input: { nodeId: string; targetAgent: string; agentId?: string; threadId: string; message: string; cwd?: string; taskId?: string; idempotencyKey?: string }): LanAgentTask {
+  assignTask(input: { nodeId: string; targetAgent: string; agentId?: string; threadId: string; message: string; cwd?: string; taskId?: string; idempotencyKey?: string }, assertAuthorized?: () => void): LanAgentTask {
+    assertAuthorized?.();
     const nodeId = normalizeNodeId(input.nodeId);
+    if (this.isolation.nodeIds.has(nodeId) || (input.taskId && this.isolation.taskIds.has(input.taskId.trim()))
+      || (input.idempotencyKey && this.isolation.scopes.has(idempotencyScope(nodeId, input.idempotencyKey.trim())))) {
+      throw new Error("Original remote assignment evidence is isolated; repair its retained record before retrying this identity.");
+    }
     const targetAgent = typeof input.targetAgent === "string" ? input.targetAgent.trim() : "";
     const message = typeof input.message === "string" ? input.message.trim() : "";
     const cwd = typeof input.cwd === "string" && input.cwd.trim() ? input.cwd.trim() : undefined;
     if (!targetAgent || targetAgent.length > 80) throw new Error("Rabi Agent task targetAgent is required.");
-    if (typeof input.agentId !== "string" || !input.agentId || input.agentId !== input.agentId.trim()) throw new Error("Explicit agentId is required; query /api/lan-agent/instances.");
     if (typeof input.threadId !== "string" || !input.threadId || input.threadId !== input.threadId.trim()
       || input.threadId.length > 4096 || /[\0\r\n\u2028\u2029]/u.test(input.threadId)) throw new Error("Explicit full threadId is required; query the Agent thread list.");
     if (!message) throw new Error("Rabi Agent task message is required.");
@@ -336,16 +545,26 @@ export class LanAgentRegistry {
       if (existing.targetAgent !== targetAgent || existing.agentId !== input.agentId || existing.threadId !== input.threadId || existing.message !== message || existing.cwd !== cwd) throw new Error("Remote Agent idempotency key was already used for a different message.");
       return { ...existing };
     }
+    const completedTaskId = this.completedIdempotency.get(idempotencyScope(nodeId, idempotencyKey));
+    const completed = completedTaskId ? this.resultReceipts.get(completedTaskId) : undefined;
+    if (completed) {
+      if (completed.assignmentHash !== assignmentHash({ targetAgent, agentId: input.agentId, threadId: input.threadId, message, cwd })) {
+        throw new Error("Remote Agent idempotency key was already used for a different message.");
+      }
+      const restored: LanAgentTask = { taskId: completed.taskId, idempotencyKey, nodeId, targetAgent, agentId: input.agentId, threadId: input.threadId,
+        message, cwd, status: completed.status, createdAt: completed.createdAt, updatedAt: completed.updatedAt };
+      // Rehydrate proven assignment details for existing acceptance readers; this never dispatches or changes the receipt.
+      this.tasks.set(completed.taskId, restored);
+      return { ...restored };
+    }
+    if (input.taskId && (this.tasks.has(input.taskId.trim()) || this.resultReceipts.has(input.taskId.trim()))) throw new Error("Remote task ID already belongs to an original assignment.");
+    if (this.options.nodeEnabled?.(nodeId) === false) throw new Error("Remote instance is disabled.");
     const connection = this.requireConnection(nodeId);
     if (this.requireNode(nodeId).taskTargeting !== "explicit-session-v1") {
       throw new Error("Upgrade the remote connector: explicit-session-v1 task targeting is required; the configured session will not be used as a fallback.");
     }
-    if (this.options.isAgentEnabled && (!input.agentId || !this.options.isAgentEnabled(nodeId, input.agentId))) throw new Error("Manager has not enabled this remote Agent.");
+
     if (!this.requireNode(nodeId).agentTypes?.includes(targetAgent)) throw new Error("The selected remote node does not support the requested Agent.");
-    if (input.agentId) {
-      const agent = this.requireNode(nodeId).agents?.find(agent => agent.agentId === input.agentId);
-      if (!agent || (!this.options.isAgentEnabled && !agent.enabled) || agent.provider !== targetAgent) throw new Error("The bound instance Agent is missing, disabled, or has a different provider.");
-    }
     const now = nowIso();
     const task: LanAgentTask = {
       taskId: typeof input.taskId === "string" && input.taskId.trim() ? input.taskId.trim() : randomUUID(),
@@ -360,8 +579,10 @@ export class LanAgentRegistry {
       createdAt: now,
       updatedAt: now
     };
+    if (this.tasks.has(task.taskId) || this.resultReceipts.has(task.taskId)) throw new Error("Remote Agent taskId already belongs to an existing assignment.");
     this.tasks.set(task.taskId, task);
-    this.persist();
+    try { this.persist(); } catch (error) { this.tasks.delete(task.taskId); throw error; }
+    assertAuthorized?.();
     this.send(connection.socket, { type: "assignTask", task });
     this.patchTask(task.taskId, { status: "delivered" });
     return { ...(this.tasks.get(task.taskId) ?? task) };
@@ -376,6 +597,7 @@ export class LanAgentRegistry {
       clearTimeout(connection.authenticationTimer);
       closeSocket(connection.socket, 1001, "Manager is stopping.");
     }
+    for (const socket of this.wss.clients) closeSocket(socket, 1001, "Manager is stopping.");
     this.connections.clear();
     this.persist();
     this.wss.close();
@@ -385,7 +607,7 @@ export class LanAgentRegistry {
     let connection: Connection | undefined;
     const authenticationTimer = setTimeout(() => {
       if (!connection?.authenticated) closeSocket(socket, 1008, "Rabi Agent authentication timed out.");
-    }, 10_000);
+    }, LAN_AGENT_WEBSOCKET_LIMITS.authenticationMs);
     authenticationTimer.unref?.();
     connection = { socket, authenticated: false, authenticationTimer };
     socket.on("message", data => {
@@ -395,9 +617,12 @@ export class LanAgentRegistry {
         return;
       }
       try {
+        this.protocolGuards?.get(socket)?.validateIncoming(message, Buffer.isBuffer(data) ? data.byteLength
+          : Array.isArray(data) ? data.reduce((size, item) => size + item.byteLength, 0) : data.byteLength);
         this.handleMessage(connection!, message, getToken, remoteAddress);
       } catch (error) {
-        this.send(socket, { type: "error", error: error instanceof Error ? error.message : String(error) });
+        try { this.send(socket, { type: "error", error: error instanceof Error ? error.message : String(error) }); }
+        catch { socket.terminate(); }
       }
     });
     socket.on("close", () => {
@@ -432,21 +657,22 @@ export class LanAgentRegistry {
       connection.authenticated = true;
       connection.credential = token;
       connection.authenticatedNodeId = identity?.nodeId;
+      connection.authenticatedNodeIncarnation = identity?.incarnation;
       this.send(connection.socket, { type: "authenticated", managerTime: nowIso() });
       return;
     }
-    if (this.options.authenticateNode && this.options.authenticateNode(connection.credential ?? "")?.nodeId !== connection.authenticatedNodeId) {
+    if (!this.connectionAuthorityCurrent(connection)) {
       closeSocket(connection.socket, 1008, "Node credential was revoked.");
       return;
     }
     if (!connection.nodeId) {
       if (type !== "hello") throw new Error("Rabi Agent must send hello after authentication.");
       const hello = normalizeHello(message.node);
+      if (this.isolation.nodeIds.has(hello.nodeId)) throw new Error("Original remote node identity is isolated; repair its retained record before reconnecting this identity.");
       if (this.options.authenticateNode && hello.nodeId !== connection.authenticatedNodeId) {
         closeSocket(connection.socket, 1008, "Node identity does not match its credential.");
         return;
       }
-      if (connection.authenticatedNodeId) this.options.registerAgentCatalog?.(connection.credential!, hello.agents ?? []);
       const previous = this.connections.get(hello.nodeId);
       if (previous && previous.socket !== connection.socket) {
         this.terminals.disconnect(hello.nodeId);
@@ -456,6 +682,7 @@ export class LanAgentRegistry {
       const previousStatus = this.nodes.get(hello.nodeId);
       const status: LanAgentNodeStatus = {
         ...hello,
+        hostname: hello.hostname || previousStatus?.hostname,
         name: previousStatus?.name,
         connected: true,
         connectedAt: nowIso(),
@@ -493,13 +720,14 @@ export class LanAgentRegistry {
       try { pending.assertAuthorized?.(); } catch (error) { pending.reject(error instanceof Error ? error : new Error(String(error))); return; }
       if (message.error) pending.reject(new Error(String(message.error).slice(0, 1024)));
       else pending.resolve(message.result);
-      if (!["reconcile_prepared_delivery", "terminal", "computer"].includes(pending.operation)) this.deliveryEvents.emit("change");
+      const noFrameResult = pending.operation === "prepared_delivery" && message.result && typeof message.result === "object"
+        && (message.result as { status?: unknown }).status === "not_sent";
+      if (!noFrameResult && !pending.readOnly && !["reconcile_prepared_delivery", "delivery_records", "terminal", "computer"].includes(pending.operation)) this.deliveryEvents.emit("change");
       return;
     }
     if (type === "agentCatalog") {
       const agents = normalizeInstanceAgents(message.agents);
-      if (connection.authenticatedNodeId) this.options.registerAgentCatalog?.(connection.credential!, agents);
-      this.nodes.set(connection.nodeId, { ...this.requireNode(connection.nodeId), agents, agentTypes: [...new Set(agents.map(agent => agent.provider))] });
+      this.nodes.set(connection.nodeId, { ...this.requireNode(connection.nodeId), agents });
       this.persist();
       this.deliveryEvents.emit("change");
       return;
@@ -521,12 +749,8 @@ export class LanAgentRegistry {
       return;
     }
     if (type === "taskResult") {
-      const status = message.status === "completed" || message.status === "failed" ? message.status : "failed";
-      this.patchOwnedTask(connection, taskId, {
-        status,
-        result: typeof message.summary === "string" ? message.summary.slice(0, 12_000) : undefined,
-        error: typeof message.error === "string" ? message.error.slice(0, 12_000) : undefined
-      });
+      try { this.receiveTaskResult(connection, taskId, message); }
+      catch (error) { this.nodes.set(connection.nodeId, node); throw error; }
       return;
     }
     if (type === "updateResult") {
@@ -548,17 +772,68 @@ export class LanAgentRegistry {
   }
 
   private patchOwnedTask(connection: Connection, taskId: string, patch: Partial<Pick<LanAgentTask, "status" | "result" | "error">>): void {
-    const task = this.tasks.get(taskId);
+    const task = this.tasks.get(taskId) ?? this.resultReceipts.get(taskId);
     if (!task) throw new Error(`Rabi Agent task was not found: ${taskId}`);
     if (task.nodeId !== connection.nodeId) throw new Error(`Rabi Agent node ${connection.nodeId ?? "unknown"} does not own task ${taskId}.`);
-    this.patchTask(taskId, patch);
+    if (!terminalTaskStates.has(task.status)) this.patchTask(taskId, patch);
+  }
+
+  private receiveTaskResult(connection: Connection, taskId: string, message: Record<string, unknown>): void {
+    const task = this.tasks.get(taskId);
+    const previousReceipt = this.resultReceipts.get(taskId);
+    const owner = task ?? previousReceipt;
+    if (!owner) throw new Error(`Rabi Agent task was not found: ${taskId}`);
+    if (owner.nodeId !== connection.nodeId) throw new Error(`Rabi Agent node ${connection.nodeId ?? "unknown"} does not own task ${taskId}.`);
+    const eventId = message.eventId;
+    if (this.isolation.taskIds.has(taskId) || typeof eventId === "string" && this.isolation.eventIds.has(eventId)) {
+      throw new Error("Original remote result evidence is isolated; repair its retained record before confirming this event.");
+    }
+    if (eventId !== undefined && (typeof eventId !== "string" || !eventId || eventId !== eventId.trim()
+      || eventId.length > 200 || /[\u0000-\u001f\u007f]/u.test(eventId))) throw new Error("Invalid taskResult eventId.");
+    if (eventId !== undefined && !["completed", "failed", "interrupted"].includes(String(message.status))) throw new Error("Invalid taskResult terminal status.");
+    const status = message.status === "completed" || message.status === "interrupted" ? message.status : "failed";
+    const summary = typeof message.summary === "string" ? message.summary : undefined;
+    const error = typeof message.error === "string" ? message.error : undefined;
+    const payloadHash = fingerprint({ taskId, status, summary, error });
+    const patch: Pick<LanAgentTask, "status" | "result" | "error"> = { status, result: summary?.slice(0, 12_000), error: error?.slice(0, 12_000) };
+    if (typeof eventId === "string") {
+      const eventTask = this.resultEvents.get(eventId);
+      if (eventTask && eventTask !== taskId) throw new Error("taskResult eventId conflicts with its original task or node.");
+      if (previousReceipt?.eventId) {
+        if (previousReceipt.eventId !== eventId || previousReceipt.payloadHash !== payloadHash) throw new Error("taskResult eventId or payload conflicts with the committed result.");
+        this.send(connection.socket, { type: "resultAck", eventId, taskId });
+        return;
+      }
+    }
+    if (previousReceipt && previousReceipt.resultHash !== resultHash(patch)) throw new Error("A committed terminal task result cannot be replaced.");
+    // Old connectors get their existing single-write behavior, without claiming a durable result ACK.
+    if (previousReceipt && eventId === undefined) return;
+    const next = previousReceipt ? task : { ...task!, ...patch, updatedAt: nowIso() };
+    const receipt = { ...(previousReceipt ?? receiptForTask(next!)), ...(typeof eventId === "string" ? { eventId, payloadHash } : {}) };
+    if (next) this.tasks.set(taskId, next);
+    this.resultReceipts.set(taskId, receipt);
+    this.completedIdempotency.set(idempotencyScope(receipt.nodeId, receipt.idempotencyKey), taskId);
+    if (typeof eventId === "string") this.resultEvents.set(eventId, taskId);
+    try { this.persist(); }
+    catch (failure) {
+      if (task) this.tasks.set(taskId, task); else this.tasks.delete(taskId);
+      if (previousReceipt) this.resultReceipts.set(taskId, previousReceipt); else {
+        this.resultReceipts.delete(taskId); this.completedIdempotency.delete(idempotencyScope(receipt.nodeId, receipt.idempotencyKey));
+      }
+      if (typeof eventId === "string") this.resultEvents.delete(eventId);
+      throw failure;
+    }
+    if (!previousReceipt) { this.taskChanges.emit(taskId); this.deliveryEvents.emit("change"); }
+    // Once persisted, a lost socket ACK is recovered by an identical event on the original node.
+    if (typeof eventId === "string") this.send(connection.socket, { type: "resultAck", eventId, taskId });
   }
 
   private patchTask(taskId: string, patch: Partial<Pick<LanAgentTask, "status" | "result" | "error">>): void {
     const task = this.tasks.get(taskId);
     if (!task) throw new Error(`Rabi Agent task was not found: ${taskId}`);
+    if (terminalTaskStates.has(task.status)) return;
     this.tasks.set(taskId, { ...task, ...patch, updatedAt: nowIso() });
-    this.persist();
+    try { this.persist(); } catch (error) { this.tasks.set(taskId, task); throw error; }
     this.taskChanges.emit(taskId);
     this.deliveryEvents.emit("change");
   }
@@ -574,25 +849,42 @@ export class LanAgentRegistry {
     if (!connection || connection.socket.readyState !== WebSocket.OPEN) {
       throw new Error(`Rabi Agent node is not connected: ${nodeId}`);
     }
-    if (this.options.authenticateNode && this.options.authenticateNode(connection.credential ?? "")?.nodeId !== nodeId) {
+    if (!this.connectionAuthorityCurrent(connection)) {
       closeSocket(connection.socket, 1008, "Node credential was revoked.");
       throw new Error("Rabi Agent node credential was revoked.");
     }
     return connection;
   }
 
+  private connectionAuthorityCurrent(connection: Connection): boolean {
+    if (!this.options.authenticateNode) return true;
+    const identity = this.options.authenticateNode(connection.credential ?? "");
+    return identity?.nodeId === connection.authenticatedNodeId
+      && (connection.authenticatedNodeIncarnation === undefined || identity?.incarnation === connection.authenticatedNodeIncarnation);
+  }
+
   private send(socket: WebSocket, payload: Record<string, unknown>): void {
     if (socket.readyState !== WebSocket.OPEN) throw new Error("Rabi Agent WebSocket is not open.");
-    socket.send(JSON.stringify(payload));
+    if (this.protocolGuards?.get(socket)?.signal.aborted) { closeSocket(socket, 1001, "Connection retiring."); return; }
+    const json = JSON.stringify(payload);
+    const bytes = Buffer.byteLength(json);
+    this.protocolGuards?.get(socket)?.validateOutgoing(payload, bytes);
+    if (socket.bufferedAmount + bytes > LAN_AGENT_WEBSOCKET_LIMITS.maxBufferedBytes) {
+      socket.terminate(); throw new Error("LAN Agent connection buffered-byte capacity exceeded; inspect original task state before retrying.");
+    }
+    socket.send(json);
   }
 
   private persist(): void {
     fs.mkdirSync(path.dirname(this.statePath), { recursive: true });
-    const state: PersistedState = { schemaVersion: 2, nodes: this.listNodes(), tasks: this.listTasks(500) };
-    const tempPath = `${this.statePath}.${process.pid}.${Date.now()}.tmp`;
+    const tasks = [...this.tasks.values()];
+    const retained = tasks.filter(task => !terminalTaskStates.has(task.status) || !this.resultReceipts.has(task.taskId));
+    retained.push(...tasks.filter(task => terminalTaskStates.has(task.status) && this.resultReceipts.has(task.taskId))
+      .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)).slice(0, completedTaskHistoryLimit));
+    const state = { schemaVersion: 2, nodes: [...this.listNodes(), ...this.isolation.nodes], tasks: [...retained, ...this.isolation.tasks],
+      resultReceipts: [...this.resultReceipts.values(), ...this.isolation.resultReceipts] };
     try {
-      fs.writeFileSync(tempPath, `${JSON.stringify(state, null, 2)}\n`, "utf8");
-      fs.renameSync(tempPath, this.statePath);
+      atomicWriteFileSync(this.statePath, `${JSON.stringify(state, null, 2)}\n`, { mode: 0o600 });
     } catch (error) {
       recordDataMutationAudit({
         level: "error",

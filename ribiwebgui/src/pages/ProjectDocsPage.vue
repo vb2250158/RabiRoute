@@ -2,7 +2,9 @@
 import { computed, nextTick, ref, watch } from "vue";
 import { marked } from "marked";
 import { useRoute, useRouter } from "vue-router";
-import { useI18n } from "../i18n";
+import { useI18n, type AppLocale } from "../i18n";
+import { guideKey as documentKey, guideLocale, guideSection } from "../docs/guideLocale";
+import ApiReferencePanel from "../components/docs/ApiReferencePanel.vue";
 
 type GuideDocument = {
   key: string;
@@ -13,7 +15,7 @@ type GuideDocument = {
   searchText: string;
   section: string;
   order: number;
-  locale: "zh-CN" | "en";
+  locale: AppLocale;
 };
 
 type OutlineItem = {
@@ -22,9 +24,17 @@ type OutlineItem = {
   depth: number;
 };
 
-const { isEnglish, setLocale } = useI18n();
+const { locale, isEnglish, setLocale } = useI18n();
 const route = useRoute();
 const router = useRouter();
+const documentView = computed({
+  get: () => route.query.view === "api" ? "api" : "guides",
+  set: (value: string) => { void router.replace({ query: { ...route.query, view: value === "api" ? "api" : undefined } }); }
+});
+const viewLabels = computed(() => locale.value === "zh-CN"
+  ? { guides: "使用手册", api: "接口参考（开发者）" }
+  : locale.value === "ja" ? { guides: "ユーザーガイド", api: "API リファレンス（開発者）" }
+  : { guides: "User guide", api: "API reference (developers)" });
 
 const rawDocuments = import.meta.glob("../../../docs/user-guide/*.md", {
   eager: true,
@@ -39,9 +49,14 @@ const pageOrder = [
   "first-route",
   "interface-and-status",
   "routes-and-adapters",
+  "home-devices",
   "speech-api",
   "agents-and-sessions",
   "personas-and-rules",
+  "persona-skills",
+  "knowledge-bridge-settings",
+  "interface-theme",
+  "instance-identity",
   "operations-and-troubleshooting",
   "safety-and-data",
   "faq-and-support"
@@ -54,10 +69,6 @@ function cleanSource(source: string): string {
 function documentPath(modulePath: string): string {
   const normalized = modulePath.replace(/\\/g, "/");
   return `docs/user-guide/${normalized.split("/docs/user-guide/")[1] || normalized.split("/").pop() || "README.md"}`;
-}
-
-function documentKey(path: string): string {
-  return (path.split("/").pop() || "README.md").replace(/_en\.md$/, "").replace(/\.md$/, "");
 }
 
 function titleFrom(source: string, path: string): string {
@@ -83,16 +94,6 @@ function plainSearchText(source: string): string {
     .replace(/[#>*_`|~-]/g, " ")
     .replace(/\s+/g, " ")
     .toLowerCase();
-}
-
-function sectionFor(key: string, locale: "zh-CN" | "en"): string {
-  const labels = locale === "en"
-    ? ["Start here", "Use RabiRoute", "Operate safely", "Help"]
-    : ["开始使用", "日常使用", "运行与安全", "获得帮助"];
-  if (key === "README" || key === "first-route") return labels[0];
-  if (["interface-and-status", "routes-and-adapters", "speech-api", "agents-and-sessions", "personas-and-rules"].includes(key)) return labels[1];
-  if (["operations-and-troubleshooting", "safety-and-data"].includes(key)) return labels[2];
-  return labels[3];
 }
 
 function stripInlineMarkdown(value: string): string {
@@ -132,16 +133,16 @@ const allDocuments = Object.entries(rawDocuments)
     const path = documentPath(modulePath);
     const source = cleanSource(String(raw));
     const key = documentKey(path);
-    const locale = path.endsWith("_en.md") ? "en" : "zh-CN";
+    const locale = guideLocale(path);
     const order = pageOrder.indexOf(key);
     return {
       key,
       path,
       title: titleFrom(source, path),
-      summary: summaryFrom(source, locale === "en" ? "Open this guide." : "打开这篇使用指南。"),
+      summary: summaryFrom(source, locale === "ja" ? "このガイドを開く。" : locale === "en" ? "Open this guide." : "打开这篇使用指南。"),
       source,
       searchText: plainSearchText(source),
-      section: sectionFor(key, locale),
+      section: guideSection(key, locale),
       order: order < 0 ? pageOrder.length : order,
       locale
     } satisfies GuideDocument;
@@ -150,7 +151,7 @@ const allDocuments = Object.entries(rawDocuments)
 
 const query = ref("");
 const activeKey = ref("README");
-const documents = computed(() => allDocuments.filter(document => document.locale === (isEnglish.value ? "en" : "zh-CN")));
+const documents = computed(() => allDocuments.filter(document => document.locale === locale.value));
 const activeDocument = computed(() => documents.value.find(document => document.key === activeKey.value) || documents.value[0]);
 
 watch(documents, value => {
@@ -168,7 +169,17 @@ watch(
   { immediate: true }
 );
 
-const labels = computed(() => isEnglish.value ? {
+const labels = computed(() => locale.value === "ja" ? {
+  eyebrow: "RabiRoute ユーザーガイド",
+  title: "最初のメッセージから日常の運用まで",
+  subtitle: "設定、ルーティング、日常の操作、安全、トラブル対処を目的別に説明します。",
+  badge: "件のガイド",
+  search: "ユーザーガイドを検索",
+  count: "件のガイド",
+  empty: "検索条件に一致するガイドはありません。",
+  toc: "このページの目次",
+  nav: "ユーザーガイドのナビゲーション"
+} : isEnglish.value ? {
   eyebrow: "RabiRoute User Guide",
   title: "Use RabiRoute with confidence",
   subtitle: "Task-based instructions for setup, routing, daily operation, safety, and troubleshooting.",
@@ -276,19 +287,24 @@ function handleArticleClick(event: MouseEvent): void {
 </script>
 
 <template>
-  <div class="page-shell user-guide-page">
+  <div class="page-shell user-guide-page" data-no-i18n>
     <header class="guide-header app-card">
       <div>
-        <div class="eyebrow">{{ labels.eyebrow }}</div>
-        <h1 class="guide-title">{{ labels.title }}</h1>
-        <p class="page-subtitle">{{ labels.subtitle }}</p>
+        <div class="eyebrow">{{ documentView === 'api' ? 'RabiRoute API' : labels.eyebrow }}</div>
+        <h1 class="guide-title">{{ documentView === 'api' ? viewLabels.api : labels.title }}</h1>
+        <p v-if="documentView === 'guides'" class="page-subtitle">{{ labels.subtitle }}</p>
       </div>
-      <v-chip color="secondary" variant="tonal" prepend-icon="mdi-book-open-page-variant-outline">
+      <v-chip v-if="documentView === 'guides'" color="secondary" variant="tonal" prepend-icon="mdi-book-open-page-variant-outline">
         {{ documents.length }} {{ labels.badge }}
       </v-chip>
     </header>
 
-    <div class="guide-layout">
+    <v-tabs v-model="documentView" color="secondary" :aria-label="locale === 'zh-CN' ? '文档类型' : 'Documentation'">
+      <v-tab value="guides">{{ viewLabels.guides }}</v-tab>
+      <v-tab value="api">{{ viewLabels.api }}</v-tab>
+    </v-tabs>
+    <ApiReferencePanel v-if="documentView === 'api'" />
+    <div v-else class="guide-layout">
       <aside class="guide-sidebar app-card">
         <v-text-field
           v-model="query"

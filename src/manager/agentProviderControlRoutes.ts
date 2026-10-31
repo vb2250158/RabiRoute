@@ -1,263 +1,64 @@
-import type http from "node:http";
-import type {
-  AstrbotLoginTestRequest,
-  MarvisOpenRequest
-} from "../agentAdapters/managerApi.js";
-import type { ManagerPluginRouteHandler } from "./managerPluginRouteRegistry.js";
+import type { AstrbotLoginTestRequest } from "../agentAdapters/managerApi.js";
+import type { ApiOperationContract, ApiOperationDefinition, ApiOperationResult } from "./apiOperationContract.js";
 
-export type AgentProviderControlProvider = "copilot" | "astrbot" | "marvis";
-
-export type CopilotInstallResult = {
-  stdout?: string;
-  stderr?: string;
-};
-
-export type CopilotLoginExitStatus = {
-  done: boolean;
-  exitCode: number | null;
-  error: string;
-};
-
+export type CopilotInstallResult = { stdout?: string; stderr?: string };
+export type CopilotLoginExitStatus = { done: boolean; exitCode: number | null; error: string };
 export type CopilotLoginResult =
-  | {
-      kind: "device-code";
-      code: string;
-      url: string | null;
-      pid?: number;
-    }
-  | {
-      kind: "completed";
-    }
-  | {
-      kind: "timeout";
-      error?: string;
-    }
-  | {
-      kind: "failed";
-      error: string;
-    };
-
-export type AstrbotLoginTestResult = Record<string, unknown> & {
-  ok: boolean;
+  | { kind: "device-code"; code: string; url: string | null; pid?: number }
+  | { kind: "completed" }
+  | { kind: "timeout"; error?: string }
+  | { kind: "failed"; error: string };
+export type AstrbotLoginTestResult = Record<string, unknown> & { ok: boolean };
+export type CopilotControlOperationsContext = {
+  installCopilot(): Promise<CopilotInstallResult>;
+  startCopilotLogin(callbacks: { onExit(status: CopilotLoginExitStatus): void }): Promise<CopilotLoginResult>;
+  getCopilotStatus(): Promise<Record<string, unknown>>;
+  publishEvent(eventType: string, data: unknown): void;
 };
-
-export type AgentProviderTrackOperation = <T>(operation: Promise<T>) => Promise<T>;
-
-export type AgentProviderHttpRoutesContext = {
-  jsonResponse: (response: http.ServerResponse, statusCode: number, body: unknown) => void;
-  trackOperation?: AgentProviderTrackOperation;
-};
-
-export type CopilotControlRoutesContext = AgentProviderHttpRoutesContext & {
-  installCopilot: () => Promise<CopilotInstallResult>;
-  startCopilotLogin: (callbacks: {
-    onExit: (status: CopilotLoginExitStatus) => void;
-  }) => Promise<CopilotLoginResult>;
-  getCopilotStatus: () => Promise<Record<string, unknown>>;
-  publishEvent: (eventType: string, data: unknown) => void;
-};
-
-export type AstrbotControlRoutesContext = AgentProviderHttpRoutesContext & {
-  readJsonBody: <T>(request: http.IncomingMessage) => Promise<T>;
-  testAstrbotLogin: (request: AstrbotLoginTestRequest) => Promise<AstrbotLoginTestResult>;
-};
-
-export type MarvisControlRoutesContext = AgentProviderHttpRoutesContext & {
-  readJsonBody: <T>(request: http.IncomingMessage) => Promise<T>;
-  openMarvis: (request: MarvisOpenRequest) => Record<string, unknown>;
-};
-
-
-export type AgentProviderControlRoutesContextMap = {
-  copilot: CopilotControlRoutesContext;
-  astrbot: AstrbotControlRoutesContext;
-  marvis: MarvisControlRoutesContext;
-};
-
-export type AgentProviderControlRouteInstance = {
-  [Provider in AgentProviderControlProvider]: {
-    provider: Provider;
-    context: AgentProviderControlRoutesContextMap[Provider];
-  }
-}[AgentProviderControlProvider];
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+const empty = { type: "object", additionalProperties: false } as const;
+const ignored = { type: "object" } as const;
+const json = (schema: Record<string, unknown>) => ({ mediaType: "application/json", schema });
+const failure = { type: "object", additionalProperties: false, required: ["ok"], properties: { ok: { const: false }, error: { type: "string" }, stderr: { type: "string" } } };
+function contract(operationId: string, method: "GET" | "POST", pathTemplate: string, description: string,
+  responses: ApiOperationContract["responses"], effects: ApiOperationContract["effects"], recovery: ApiOperationContract["recovery"], allowIgnoredBody = false): ApiOperationContract {
+  return { operationId, aliases: [`agent:${method}:${pathTemplate}`], contractVersion: "1.0.0", method, pathTemplate, description,
+    exposure: "public", transport: "http", request: { path: empty, query: ignored, headers: ignored, body: { kind: "none", ...(allowIgnoredBody ? { allowIgnoredBody: true } : {}) } }, responses, effects, recovery,
+    validators: [{ id: "native-provider-owner", description: "Use the original provider owner and native environment/path defaults. An authenticated enabled remote connection needs no extra feature grant, persona or Route binding. Unknown query fields are ignored." }] };
 }
-function runTrackedOperation<T>(
-  context: AgentProviderHttpRoutesContext,
-  operation: Promise<T>
-): void {
-  void (context.trackOperation?.(operation) ?? operation);
+function loginResult(result: CopilotLoginResult): ApiOperationResult {
+  if (result.kind === "device-code") return { status: 200, body: { ok: true, code: result.code, url: result.url, ...(result.pid === undefined ? {} : { pid: result.pid }) } };
+  if (result.kind === "completed") return { status: 200, body: { ok: true, done: true } };
+  if (result.kind === "timeout") return { status: 408, body: { ok: false, error: result.error || "Timeout waiting for device code" } };
+  return { status: 500, body: { ok: false, error: result.error } };
+}
+export function createCopilotControlOperations(context: CopilotControlOperationsContext): readonly ApiOperationDefinition[] {
+  return [{ contract: contract("manager.agent.copilot.install", "POST", "/api/agent/copilot-install", "Install the existing global Copilot CLI package through its native process owner.",
+    { "200": json({ type: "object", additionalProperties: false, required: ["ok", "stdout", "stderr"], properties: { ok: { const: true }, stdout: { type: "string" }, stderr: { type: "string" } } }), "500": json(failure) },
+    { mode: "global-package-install", description: "Run the native npm global installation once, with its existing 120-second process timeout; wait for actual process and stdio close before completing or retiring." },
+    { strategy: "inspect-installation-no-replay", receiptPath: "/api/agent/copilot-status", description: "No idempotency key exists. Inspect the installed CLI status after timeout or failure before another explicit install request; do not automatically replay a global installation." }, true),
+    handler: async input => { try { input.signal?.throwIfAborted(); const { stdout = "", stderr = "" } = await context.installCopilot(); return { status: 200, body: { ok: true, stdout: stdout.trim(), stderr: stderr.trim() } }; }
+      catch (error) { const detail = error as { message?: string; stderr?: string }; return { status: 500, body: { ok: false, ...(detail?.message === undefined ? {} : { error: detail.message }), ...(detail?.stderr === undefined ? {} : { stderr: detail.stderr }) } }; } } },
+  { contract: contract("manager.agent.copilot.login", "POST", "/api/agent/copilot-login", "Start the original Copilot CLI login; a returned device code is a pending login, not an authenticated account.",
+    { "200": json({ oneOf: [{ type: "object", additionalProperties: false, required: ["ok", "code", "url"], properties: { ok: { const: true }, code: { type: "string" }, url: { type: ["string", "null"] }, pid: { type: "integer", minimum: 1 } } }, { type: "object", additionalProperties: false, required: ["ok", "done"], properties: { ok: { const: true }, done: { const: true } } }] }), "408": json(failure), "500": json(failure) },
+    { mode: "account-login", description: "The original owner starts Copilot login. Device-code acknowledgement leaves that child running under the same owner; final native close emits copilot_login_status. Plugin retirement stops and joins it before release." },
+    { strategy: "inspect-login-no-replay", receiptPath: "/api/agent/copilot-status", description: "Inspect native login status and the original pending device-code interaction before another explicit login. No request idempotency key exists. A 15-second device-code timeout terminates and joins the original process; no automatic second login." }, true),
+    handler: async input => { try { input.signal?.throwIfAborted(); return loginResult(await context.startCopilotLogin({ onExit: status => context.publishEvent("copilot_login_status", status) })); }
+      catch (error) { return { status: 500, body: { ok: false, error: String(error) } }; } } },
+  { contract: contract("manager.agent.copilot.status", "GET", "/api/agent/copilot-status", "Read the existing Copilot executable discovery and local login-state owner without starting login.",
+    { "200": json({ type: "object", additionalProperties: false, required: ["installed", "binPath", "loggedIn", "copilotHome"], properties: { installed: { type: "boolean" }, binPath: { type: "string" }, loggedIn: { type: "boolean" }, copilotHome: { type: "string" } } }), "500": json(failure) },
+    { mode: "read", description: "Read native executable discovery and existing Copilot home login files; does not install packages, log in or execute prompts." },
+    { strategy: "repeatable-read", description: "Read the same native status again. A discovered executable or saved login flag does not prove a new Agent prompt was executed." }),
+    handler: async () => { try { return { status: 200, body: await context.getCopilotStatus() }; } catch (error) { return { status: 500, body: { ok: false, error: String(error) } }; } } }];
 }
 
-function handleCopilotInstall(
-  request: http.IncomingMessage,
-  requestUrl: URL,
-  response: http.ServerResponse,
-  context: CopilotControlRoutesContext
-): boolean {
-  if (request.method !== "POST" || requestUrl.pathname !== "/api/agent/copilot-install") return false;
-
-  runTrackedOperation(context, context.installCopilot()
-    .then(({ stdout = "", stderr = "" }) => context.jsonResponse(response, 200, {
-      ok: true,
-      stdout: stdout.trim(),
-      stderr: stderr.trim()
-    }))
-    .catch((error: unknown) => {
-      const detail = error as { message?: string; stderr?: string };
-      context.jsonResponse(response, 500, {
-        ok: false,
-        error: detail.message,
-        stderr: detail.stderr
-      });
-    }));
-  return true;
-}
-
-function copilotLoginResponse(
-  response: http.ServerResponse,
-  context: CopilotControlRoutesContext,
-  result: CopilotLoginResult
-): void {
-  if (result.kind === "device-code") {
-    context.jsonResponse(response, 200, {
-      ok: true,
-      code: result.code,
-      url: result.url,
-      pid: result.pid
-    });
-    return;
-  }
-  if (result.kind === "completed") {
-    context.jsonResponse(response, 200, { ok: true, done: true });
-    return;
-  }
-  if (result.kind === "timeout") {
-    context.jsonResponse(response, 408, {
-      ok: false,
-      error: result.error || "Timeout waiting for device code"
-    });
-    return;
-  }
-  context.jsonResponse(response, 500, { ok: false, error: result.error });
-}
-
-function handleCopilotLogin(
-  request: http.IncomingMessage,
-  requestUrl: URL,
-  response: http.ServerResponse,
-  context: CopilotControlRoutesContext
-): boolean {
-  if (request.method !== "POST" || requestUrl.pathname !== "/api/agent/copilot-login") return false;
-
-  runTrackedOperation(context, context.startCopilotLogin({
-    onExit: (status) => context.publishEvent("copilot_login_status", status)
-  })
-    .then((result) => copilotLoginResponse(response, context, result))
-    .catch((error) => context.jsonResponse(response, 500, {
-      ok: false,
-      error: String(error)
-    })));
-  return true;
-}
-
-function handleCopilotStatus(
-  request: http.IncomingMessage,
-  requestUrl: URL,
-  response: http.ServerResponse,
-  context: CopilotControlRoutesContext
-): boolean {
-  if (request.method !== "GET" || requestUrl.pathname !== "/api/agent/copilot-status") return false;
-
-  runTrackedOperation(context, context.getCopilotStatus()
-    .then((result) => context.jsonResponse(response, 200, result))
-    .catch((error) => context.jsonResponse(response, 500, {
-      ok: false,
-      error: String(error)
-    })));
-  return true;
-}
-
-function handleCopilotControlApi(
-  request: http.IncomingMessage,
-  requestUrl: URL,
-  response: http.ServerResponse,
-  context: CopilotControlRoutesContext
-): boolean {
-  return handleCopilotInstall(request, requestUrl, response, context)
-    || handleCopilotLogin(request, requestUrl, response, context)
-    || handleCopilotStatus(request, requestUrl, response, context);
-}
-
-function handleAstrbotControlApi(
-  request: http.IncomingMessage,
-  requestUrl: URL,
-  response: http.ServerResponse,
-  context: AstrbotControlRoutesContext
-): boolean {
-  if (request.method === "POST" && requestUrl.pathname === "/api/agent/astrbot-login-test") {
-    runTrackedOperation(context, context.readJsonBody<AstrbotLoginTestRequest>(request)
-      .then((body) => context.testAstrbotLogin(body))
-      .then((result) => context.jsonResponse(response, result.ok ? 200 : 400, result))
-      .catch((error) => context.jsonResponse(response, 400, {
-        ok: false,
-        message: errorMessage(error)
-      })));
-    return true;
-  }
-
-  return false;
-}
-
-function handleMarvisControlApi(
-  request: http.IncomingMessage,
-  requestUrl: URL,
-  response: http.ServerResponse,
-  context: MarvisControlRoutesContext
-): boolean {
-  if (request.method !== "POST" || requestUrl.pathname !== "/api/agent/marvis-open") return false;
-
-  runTrackedOperation(context, context.readJsonBody<MarvisOpenRequest>(request)
-    .then((body) => context.openMarvis(body))
-    .then((result) => context.jsonResponse(response, 200, result))
-    .catch((error) => context.jsonResponse(response, 400, {
-      ok: false,
-      message: errorMessage(error)
-    })));
-  return true;
-}
-
-export function handleAgentProviderControlApi(
-  request: http.IncomingMessage,
-  requestUrl: URL,
-  response: http.ServerResponse,
-  instance: AgentProviderControlRouteInstance
-): boolean {
-  switch (instance.provider) {
-    case "copilot":
-      return handleCopilotControlApi(request, requestUrl, response, instance.context);
-    case "astrbot":
-      return handleAstrbotControlApi(request, requestUrl, response, instance.context);
-    case "marvis":
-      return handleMarvisControlApi(request, requestUrl, response, instance.context);
-  }
-}
-
-export function createAgentProviderControlRouteHandler<Provider extends AgentProviderControlProvider>(
-  provider: Provider,
-  context: AgentProviderControlRoutesContextMap[Provider],
-  trackOperation?: AgentProviderTrackOperation
-): ManagerPluginRouteHandler {
-  const instance = {
-    provider,
-    context: trackOperation ? { ...context, trackOperation } : context
-  } as AgentProviderControlRouteInstance;
-  return (request, requestUrl, response) => handleAgentProviderControlApi(
-    request,
-    requestUrl,
-    response,
-    instance
-  );
+export function createAstrbotControlOperations(testLogin: (request: AstrbotLoginTestRequest) => Promise<AstrbotLoginTestResult>): readonly ApiOperationDefinition[] {
+  const descriptor = contract("manager.agent.astrbot.login-test", "POST", "/api/agent/astrbot-login-test", "Verify AstrBot Dashboard login with the original login owner and read its project/session discovery; no prompt is sent.",
+    { "200": json({ type: "object", additionalProperties: false, required: ["ok", "status", "message"], properties: { ok: { const: true }, status: { type: "integer", minimum: 0 }, message: { type: "string" } } }),
+      "400": json({ type: "object", additionalProperties: false, required: ["ok", "message"], properties: { ok: { const: false }, status: { type: "integer", minimum: 0 }, message: { type: "string" } } }) },
+    { mode: "account-login-check", description: "Use the original Dashboard auth/login request and subsequent read-only project/session requests. The transient native token is used internally and is never part of this API response. The operation lease joins those native requests after HTTP disconnect." },
+    { strategy: "inspect-login-result", description: "Read the native ok/status/message result. Timeout or failure does not authorize automatic prompt delivery or account reconfiguration; no idempotency key or persisted delivery receipt exists." });
+  return [{ contract: { ...descriptor, request: { ...descriptor.request, body: { kind: "json", maxBytes: 0, allowAnyContentType: true, schema: { type: "object", additionalProperties: true,
+    properties: { url: { type: ["string", "null"], description: "Existing Dashboard URL; empty/null/absent follows native environment/default resolution." }, username: { type: ["string", "null"] }, password: { type: ["string", "null"], writeOnly: true } } } } } },
+    handler: async input => { try { input.signal?.throwIfAborted(); const result = await testLogin(input.body as AstrbotLoginTestRequest); return { status: result.ok ? 200 : 400, body: result }; }
+      catch (error) { return { status: 400, body: { ok: false, message: error instanceof Error ? error.message : String(error) } }; } } }];
 }

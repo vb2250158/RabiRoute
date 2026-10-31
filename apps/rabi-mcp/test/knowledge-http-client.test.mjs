@@ -11,7 +11,7 @@ test('official client reaches real HTTP MCP and rejects argument override', asyn
   try {
     const config = {url:server.address,token};
     const listed = await knowledgeHttpAdapter.request(config,{operation:'list'});
-    assert.equal(listed.tools.length,6);
+    assert.equal(listed.tools.length,10);
     await knowledgeHttpAdapter.request(config,{operation:'call',name:'plan_list',args:{roleId:'example'}});
     assert.equal(calls,1);
     assert.throws(()=>knowledgeHttpAdapter.validate('plan_list',{roleId:'example',url:'https://example.invalid'}));

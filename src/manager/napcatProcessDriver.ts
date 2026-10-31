@@ -1,3 +1,4 @@
+import { getTimeoutMs } from "../shared/timeoutSettings.js";
 import fs from "node:fs";
 import path from "node:path";
 import { execFile } from "node:child_process";
@@ -10,7 +11,7 @@ export async function napcatProcessSnapshot(): Promise<NapcatProcessIdentity[]> 
   if (process.platform === "win32") {
     const { stdout } = await execute("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command",
       "$ErrorActionPreference='Stop'; ConvertTo-Json -Compress -InputObject @(Get-CimInstance -Query 'SELECT ProcessId,ParentProcessId,CreationDate,ExecutablePath FROM Win32_Process' | Where-Object {$_.ExecutablePath -and $_.CreationDate} | ForEach-Object { [pscustomobject]@{pid=$_.ProcessId;parentPid=$_.ParentProcessId;startedAt=$_.CreationDate.ToUniversalTime().ToString('o');executable=$_.ExecutablePath} })"
-    ], { windowsHide: true, timeout: 60000, maxBuffer: 4 * 1024 * 1024 });
+    ], { windowsHide: true, timeout: getTimeoutMs("backend.manager.napcatProcessDriver.napcatProcessSnapshot.execute.timeout", 60000), maxBuffer: 4 * 1024 * 1024 });
     return (JSON.parse(stdout || "[]") as NapcatProcessIdentity[]).map(item => ({ ...item,
       napcatRoot: path.basename(item.executable).toLowerCase() === "napcatwinbootmain.exe"
         && fs.existsSync(path.join(path.dirname(item.executable), "NapCatWinBootHook.dll"))
@@ -41,7 +42,7 @@ export function createNapcatProcessDriver(requestExit?: (binding: NapcatBinding)
       if (!Number.isInteger(port) || port < 1 || port > 65535) return;
       const { stdout } = await execute("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command",
         `ConvertTo-Json -Compress -InputObject @(Get-NetTCPConnection -State Listen -LocalPort ${port} -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess)`
-      ], { windowsHide: true, timeout: 5000 });
+      ], { windowsHide: true, timeout: getTimeoutMs("backend.manager.napcatProcessDriver.requestExit.execute.timeout", 5000) });
       const owners = JSON.parse(stdout || "[]") as number[];
       const current = await napcatProcessSnapshot();
       if (owners.some(pid => processes.some(item => item.pid === pid && current.some(live => live.pid === pid

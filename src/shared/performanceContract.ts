@@ -141,31 +141,39 @@ export type PerformanceSummary = {
   slowOperations: Array<PerformanceSlowOperation & { source: PerformanceSource }>;
 };
 
-export const defaultPerformanceMonitoringConfig = (): PerformanceMonitoringConfig => ({
-  enabled: false,
-  sampleIntervalMs: 5_000,
-  retentionHours: 48,
-  maxDiskMb: 256,
-  slowOperationMs: 2_000
+/** Native normalization and API discovery share these values; request fields remain untyped JSON. */
+export const performanceMonitoringConfigRules = Object.freeze({
+  enabled: Object.freeze({ default: false, conversion: "Only literal true enables recording." }),
+  sampleIntervalMs: Object.freeze({ default: 5_000, minimum: 1_000, maximum: 60_000 }),
+  retentionHours: Object.freeze({ default: 48, minimum: 1, maximum: 24 * 30 }),
+  maxDiskMb: Object.freeze({ default: 256, minimum: 16, maximum: 4_096 }),
+  slowOperationMs: Object.freeze({ default: 2_000, minimum: 100, maximum: 120_000 })
 });
 
-function boundedNumber(value: unknown, fallback: number, minimum: number, maximum: number): number {
+export const defaultPerformanceMonitoringConfig = (): PerformanceMonitoringConfig => ({
+  enabled: performanceMonitoringConfigRules.enabled.default,
+  sampleIntervalMs: performanceMonitoringConfigRules.sampleIntervalMs.default,
+  retentionHours: performanceMonitoringConfigRules.retentionHours.default,
+  maxDiskMb: performanceMonitoringConfigRules.maxDiskMb.default,
+  slowOperationMs: performanceMonitoringConfigRules.slowOperationMs.default
+});
+
+function boundedNumber(value: unknown, rule: { default: number; minimum: number; maximum: number }): number {
   const parsed = Number(value);
-  if (!Number.isFinite(parsed)) return fallback;
-  return Math.min(maximum, Math.max(minimum, Math.round(parsed)));
+  if (!Number.isFinite(parsed)) return rule.default;
+  return Math.min(rule.maximum, Math.max(rule.minimum, Math.round(parsed)));
 }
 
 export function normalizePerformanceMonitoringConfig(raw: unknown): PerformanceMonitoringConfig {
   const source = raw && typeof raw === "object" && !Array.isArray(raw)
     ? raw as Partial<PerformanceMonitoringConfig>
     : {};
-  const defaults = defaultPerformanceMonitoringConfig();
   return {
     enabled: source.enabled === true,
-    sampleIntervalMs: boundedNumber(source.sampleIntervalMs, defaults.sampleIntervalMs, 1_000, 60_000),
-    retentionHours: boundedNumber(source.retentionHours, defaults.retentionHours, 1, 24 * 30),
-    maxDiskMb: boundedNumber(source.maxDiskMb, defaults.maxDiskMb, 16, 4_096),
-    slowOperationMs: boundedNumber(source.slowOperationMs, defaults.slowOperationMs, 100, 120_000)
+    sampleIntervalMs: boundedNumber(source.sampleIntervalMs, performanceMonitoringConfigRules.sampleIntervalMs),
+    retentionHours: boundedNumber(source.retentionHours, performanceMonitoringConfigRules.retentionHours),
+    maxDiskMb: boundedNumber(source.maxDiskMb, performanceMonitoringConfigRules.maxDiskMb),
+    slowOperationMs: boundedNumber(source.slowOperationMs, performanceMonitoringConfigRules.slowOperationMs)
   };
 }
 

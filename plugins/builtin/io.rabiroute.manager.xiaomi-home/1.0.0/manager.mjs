@@ -36,69 +36,72 @@ export const activate = definePlugin({
         order: 51
       }
     });
-    context.effects.add(() => {
-      // Device inspection shares this integration's settings ownership; actions
-      // use its existing typed action-request API rather than a second writer.
-      let activationStage = "request tracker";
+    let xiaomiHomeRuntime;
+    let publishedOwner;
+    let previousOwner;
+    let ready = false;
+    let disposal;
+    const registrations = [];
+    // This activation owns these exact objects. Cleanup is shared by failed
+    // preparation and published retirement and never stops a replacement owner.
+    const dispose = () => disposal ??= (async () => {
+      ready = false;
+      const settled = await Promise.allSettled([
+        ...registrations.map(registration => Promise.resolve().then(() => registration.dispose())),
+        Promise.resolve().then(() => xiaomiHomeRuntime?.stop())
+      ]);
+      if (publishedOwner === xiaomiHomeRuntime) publishedOwner = undefined;
+      const failures = settled.filter(result => result.status === "rejected");
+      if (failures.length) throw new AggregateError(failures.map(result => result.reason), "Xiaomi Home retirement was not confirmed.");
+    })();
+    context.effects.adopt(dispose, "release Xiaomi Home candidate resources");
+    context.publication.add({
+      publish() {
+        previousOwner = publishedOwner;
+        publishedOwner = xiaomiHomeRuntime;
+      },
+      rollback() {
+        if (publishedOwner === xiaomiHomeRuntime) publishedOwner = previousOwner;
+        ready = false;
+      },
+      async afterPublish({ previousRetirement, signal }) {
+        await previousRetirement;
+        signal.throwIfAborted();
+        await xiaomiHomeRuntime.activate(signal);
+        signal.throwIfAborted();
+        ready = true;
+      },
+      retire: dispose
+    }, "publish Xiaomi Home native owner");
+    context.effects.add(async () => {
+      let activationStage = "read-only artifact snapshot";
       try {
-        const tracker = new runtime.ManagerPluginRequestTracker();
-        activationStage = "Home Assistant client";
         const artifacts = new runtime.XiaomiHomeArtifactStore(context.config.runtimeDir);
         activationStage = "settings store";
         const settingsStore = new runtime.XiaomiHomeSettingsStore(artifacts.runtimeDir, context.config);
         activationStage = "runtime controller";
-        const xiaomiHomeRuntime = new runtime.XiaomiHomeRuntimeController(settingsStore, artifacts, {
+        xiaomiHomeRuntime = new runtime.XiaomiHomeRuntimeController(settingsStore, artifacts, {
+          readOnly: runtime.managerReadOnly === true,
           roleDirectory: runtime.roleDirectory,
           deliverEvent: runtime.deliverXiaomiHomeEvent,
           activity: runtime.homeAssistantActivity
         });
-        activationStage = "route handler";
-        const handler = runtime.createXiaomiHomeManagerRouteHandler({
+        activationStage = "executable contracts";
+        const definitions = runtime.createXiaomiHomeManagerOperations({
           runtime: xiaomiHomeRuntime,
+          assertRuntimeAvailable() {
+            xiaomiHomeRuntime.assertAvailable(publishedOwner === xiaomiHomeRuntime && ready && !context.lifecycle.signal.aborted);
+          },
           lifecycleFence: runtime.lifecycleFence,
-          readJsonBody: runtime.readJsonBody,
-          jsonResponse: runtime.jsonResponse,
           controlPlaneAccessAllowed: runtime.webguiLanRequestAllowed,
-          deliverEvent: runtime.deliverXiaomiHomeEvent,
-          trackOperation: operation => tracker.trackOperation(operation)
+          deliverEvent: runtime.deliverXiaomiHomeEvent
         });
         activationStage = "route registration";
-        const unregister = runtime.registerManagerPluginHandlerRoutes(
-          runtime.managerPluginRoutes,
-          context.identity.instanceId,
-          "manager.xiaomi-home.api",
-          [tracker.wrap(handler)],
-          [
-            { routeId: "health", kind: "exact", path: "/api/agent/xiaomi-home/health", methods: ["GET"] },
-            { routeId: "vacuum-cloud", kind: "prefix", pathPrefix: "/api/agent/xiaomi-home/vacuum-cloud/", methods: ["GET", "POST"] },
-            { routeId: "vacuum-remote", kind: "prefix", pathPrefix: "/api/agent/xiaomi-home/vacuum-remote/", methods: ["GET", "POST"] },
-            { routeId: "deployment", kind: "exact", path: "/api/agent/xiaomi-home/deployment", methods: ["GET", "PUT"] },
-            { routeId: "deployment-events", kind: "exact", path: "/api/agent/xiaomi-home/deployment/events", methods: ["GET"] },
-            { routeId: "deployment-start", kind: "exact", path: "/api/agent/xiaomi-home/deployment/start", methods: ["POST"] },
-            { routeId: "deployment-install", kind: "exact", path: "/api/agent/xiaomi-home/deployment/install", methods: ["POST"] },
-            { routeId: "auth", kind: "exact", path: "/api/agent/xiaomi-home/auth", methods: ["GET", "POST", "DELETE"] },
-            { routeId: "auth-refresh", kind: "exact", path: "/api/agent/xiaomi-home/auth/refresh", methods: ["POST"] },
-            { routeId: "settings", kind: "exact", path: "/api/agent/xiaomi-home/settings", methods: ["GET", "PUT"] },
-            { routeId: "resources", kind: "exact", path: "/api/agent/xiaomi-home/resources", methods: ["GET"] },
-            { routeId: "devices", kind: "exact", path: "/api/agent/xiaomi-home/devices", methods: ["GET"] },
-            { routeId: "device", kind: "prefix", pathPrefix: "/api/agent/xiaomi-home/devices/", methods: ["GET"] },
-            { routeId: "entity-actions", kind: "exact", path: "/api/agent/xiaomi-home/entity-actions", methods: ["GET"] },
-            { routeId: "resource", kind: "prefix", pathPrefix: "/api/agent/xiaomi-home/resources/", methods: ["GET"] },
-            { routeId: "capabilities", kind: "exact", path: "/api/agent/xiaomi-home/capabilities", methods: ["GET"] },
-            { routeId: "action-requests", kind: "exact", path: "/api/agent/xiaomi-home/action-requests", methods: ["GET", "POST"] },
-            { routeId: "events", kind: "exact", path: "/api/agent/xiaomi-home/events", methods: ["POST"] },
-            { routeId: "artifacts", kind: "exact", path: "/api/agent/xiaomi-home/artifacts", methods: ["GET", "POST"] },
-            { routeId: "artifact", kind: "prefix", pathPrefix: "/api/agent/xiaomi-home/artifacts/", methods: ["GET"] }
-          ]
-        );
-        activationStage = "runtime start";
-        xiaomiHomeRuntime.start();
-        return async () => {
-          await xiaomiHomeRuntime.stop();
-          unregister();
-          await tracker.stop();
-        };
+        registrations.push(await runtime.managerPluginRoutes.registerOperationsAsync(context.identity.instanceId, definitions.operations, context.lifecycle.signal));
+        registrations.push(runtime.managerPluginRoutes.registerHttpProxies(context.identity.instanceId, definitions.proxies));
+        return dispose;
       } catch (error) {
+        await dispose();
         const message = error instanceof Error ? error.message : String(error);
         throw new Error(`Xiaomi Home activation failed during ${activationStage}: ${message}`, { cause: error });
       }

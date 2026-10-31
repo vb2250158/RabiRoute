@@ -1,3 +1,4 @@
+import { getTimeoutMs } from "./shared/timeoutSettings.js";
 import fs from "node:fs";
 import path from "node:path";
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
@@ -129,7 +130,7 @@ export async function downloadWeixinImages(
     const abortFromParent = () => controller.abort();
     if (signal?.aborted) controller.abort();
     else signal?.addEventListener("abort", abortFromParent, { once: true });
-    const timeout = setTimeout(() => controller.abort(), 20_000);
+    const timeout = setTimeout(() => controller.abort(), getTimeoutMs("deadline.weixinOpenClaw.downloadWeixinImages", 20_000));
     try {
       const response = await fetchImpl(url, { signal: controller.signal });
       if (!response.ok) continue;
@@ -388,7 +389,7 @@ async function requestJson(
   const abortFromParent = () => controller.abort();
   if (options.signal?.aborted) controller.abort();
   else options.signal?.addEventListener("abort", abortFromParent, { once: true });
-  const timeout = setTimeout(() => controller.abort(), options.timeoutMs ?? 35000);
+  const timeout = setTimeout(() => controller.abort(), options.timeoutMs ?? getTimeoutMs("backend.weixinOpenClaw.requestJson.setTimeout.timeoutMs", 35000));
   try {
     const response = await fetch(url, {
       method,
@@ -416,7 +417,7 @@ export function weixinApiError(payload: Record<string, unknown>): string {
 export async function requestWeixinQrSession(baseUrl: string, botType = "3", signal?: AbortSignal): Promise<WeixinQrSession> {
   const data = await requestJson({ baseUrl }, "GET", "ilink/bot/get_bot_qrcode", {
     params: { bot_type: botType },
-    timeoutMs: 15000,
+    timeoutMs: getTimeoutMs("backend.weixinOpenClaw.requestWeixinQrSession.requestJson.timeoutMs", 15000),
     signal
   });
   const qrcode = String(data.qrcode || "").trim();
@@ -432,7 +433,7 @@ export async function pollWeixinQrSession(
 ): Promise<Record<string, unknown>> {
   return requestJson({ baseUrl }, "GET", "ilink/bot/get_qrcode_status", {
     params: { qrcode: session.qrcode },
-    timeoutMs: 35000,
+    timeoutMs: getTimeoutMs("backend.weixinOpenClaw.pollWeixinQrSession.requestJson.timeoutMs", 35000),
     headers: { "iLink-App-ClientVersion": "1" },
     signal
   });
@@ -442,7 +443,7 @@ export async function pollWeixinUpdates(state: WeixinOpenClawState, signal?: Abo
   if (!state.token) throw new Error("微信尚未登录。 ");
   return requestJson(state, "POST", "ilink/bot/getupdates", {
     tokenRequired: true,
-    timeoutMs: 35000,
+    timeoutMs: getTimeoutMs("backend.weixinOpenClaw.pollWeixinUpdates.requestJson.timeoutMs", 35000),
     signal,
     payload: {
       base_info: { channel_version: "rabiroute" },
@@ -534,7 +535,7 @@ async function sendWeixinMedia(
   const ciphertext = encryptAesEcb(plaintext, aesKey);
   const upload = await requestJson(state, "POST", "ilink/bot/getuploadurl", {
     tokenRequired: true,
-    timeoutMs: 15000,
+    timeoutMs: getTimeoutMs("backend.weixinOpenClaw.sendWeixinMedia.requestJson.timeoutMs", 15000),
     payload: {
       filekey: fileKey,
       media_type: kind === "image" ? 1 : 3,
@@ -580,7 +581,7 @@ async function sendWeixinMedia(
 
   const payload = await requestJson(state, "POST", "ilink/bot/sendmessage", {
     tokenRequired: true,
-    timeoutMs: 15000,
+    timeoutMs: getTimeoutMs("backend.weixinOpenClaw.sendWeixinMedia.requestJson.timeoutMs", 15000),
     payload: {
       base_info: { channel_version: "rabiroute" },
       msg: {

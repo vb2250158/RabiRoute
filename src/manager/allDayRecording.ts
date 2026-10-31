@@ -5,6 +5,7 @@ import { recordDataMutationAudit } from "../observability/dataMutationAudit.js";
 import { renameFileWithRetry } from "../shared/filePersistence.js";
 import { ALL_DAY_CAPTURE_SOURCES, ALL_DAY_SOURCES, DEFAULT_ALL_DAY_SETTINGS, isReviewEvent, matchesReviewType, normalizeAllDaySettings, type AllDayCatalog, type AllDayEvent, type AllDaySettings, type AllDaySnapshot } from "../shared/allDayRecording.js";
 import type { HomeAssistantActivityPort, HomeAssistantActivityRecord, HomeAssistantActivityRequest } from "../shared/homeAssistantActivity.js";
+import { MOBILE_RECORDING_MAX_CHUNKS, MOBILE_RECORDING_TEXT_MAX_CODE_UNITS, MOBILE_RECORDING_EVENT_ID_PATTERN, MOBILE_RECORDING_TRANSCRIPTION_STATES, RESOURCE_HASH_PATTERN } from "./resourceCacheProtocol.js";
 
 export type RecordingAuthorization = () => void;
 /** Check before dispatch and after settlement, including failed operations. */
@@ -15,6 +16,7 @@ export async function recordingOperation<T>(authorize: RecordingAuthorization | 
 }
 
 const hash = (value: string) => createHash("sha256").update(value).digest("hex");
+const mobileEventPattern = new RegExp(MOBILE_RECORDING_EVENT_ID_PATTERN), mobileChunkPattern = new RegExp(RESOURCE_HASH_PATTERN);
 const activityDayStart = (time: number) => new Date(time).setHours(0, 0, 0, 0);
 export const recordingDay = (time: number) => new Date(time).toISOString().slice(0, 10);
 export async function atomicRecordingJson(file: string, value: unknown, authorize?: RecordingAuthorization): Promise<void> {
@@ -229,36 +231,42 @@ export class AllDayRecordingStore {
   directory(roleId: string) { return path.join(this.roleDirectory(roleId), "all-day-recording", hash(this.hostId)); }
   async settings(roleId: string, authorize?: RecordingAuthorization): Promise<AllDaySettings> {
     authorize?.();
-    let pending = this.settingReads.get(roleId);
+    const originalDirectory = this.directory(roleId);
+    let pending = this.settingReads.get(originalDirectory);
     if (!pending) {
-      pending = jsonOr(path.join(this.directory(roleId), "settings.json"), DEFAULT_ALL_DAY_SETTINGS).then(normalizeAllDaySettings);
-      this.settingReads.set(roleId,pending);
+      pending = jsonOr(path.join(originalDirectory, "settings.json"), DEFAULT_ALL_DAY_SETTINGS).then(normalizeAllDaySettings);
+      this.settingReads.set(originalDirectory,pending);
       while(this.settingReads.size > 16) this.settingReads.delete(this.settingReads.keys().next().value!);
     }
     try { return structuredClone(await recordingOperation(authorize, () => pending)); }
-    catch(error) { if(this.settingReads.get(roleId) === pending) this.settingReads.delete(roleId); throw error; }
+    catch(error) { if(this.settingReads.get(originalDirectory) === pending) this.settingReads.delete(originalDirectory); throw error; }
   }
   async configure(roleId: string, input: unknown, authorize?: RecordingAuthorization) {
     const settings = normalizeAllDaySettings(input);
-    await atomicRecordingJson(path.join(this.directory(roleId), "settings.json"), settings, authorize);
-    this.settingReads.set(roleId,Promise.resolve(structuredClone(settings)));
+    const originalDirectory = this.directory(roleId);
+    await atomicRecordingJson(path.join(originalDirectory, "settings.json"), settings, authorize);
+    this.settingReads.set(originalDirectory,Promise.resolve(structuredClone(settings)));
     return settings;
   }
   /** Explicit derived-index work returns a task immediately, never an HTTP scan wait. */
   repairIndex(roleId: string, day: string, completed: (error?: unknown) => void = () => {}): Promise<void> {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(day) || !Number.isFinite(Date.parse(day))) throw new Error("Invalid recording day");
-    const key = `${roleId}/${day}`, existing = this.repairs.get(key);
+    const originalDirectory = this.directory(roleId), key = `${originalDirectory}/${day}`, existing = this.repairs.get(key);
     if (existing) return existing;
     if(this.repairs.size >= 32) throw new Error("History reconstruction queue is full; retry later");
     const task = this.repairQueue.catch(() => undefined).then(async () => {
+      if (this.directory(roleId) !== originalDirectory) throw new Error("Recording role directory changed before reconstruction");
       const settings = await this.settings(roleId);
-      await readDay(path.join(this.directory(roleId), "events"),day,undefined,this.readOptions.scan);
+      if (this.directory(roleId) !== originalDirectory) throw new Error("Recording role directory changed before reconstruction");
+      await readDay(path.join(originalDirectory, "events"),day,undefined,this.readOptions.scan);
       if(settings.mobileDeviceIds.length) await readDay(path.join(this.mobileRoot,"events"),day,undefined,this.readOptions.scan);
     });
     this.repairs.set(key,task); this.repairQueue = task;
     void task.then(() => { this.repairs.delete(key); completed(); }, error => { this.repairs.delete(key); completed(error); });
     return task;
   }
+  /** Join accepted derived-index work before releasing the native recording owner. */
+  async waitForRepairs(): Promise<void> { await Promise.allSettled(this.repairs.values()); }
   async hasEvent(roleId: string, event: AllDayEvent): Promise<boolean> {
     try { await fs.access(path.join(this.directory(roleId), "events", recordingDay(event.startedAt), `${hash(event.id)}.json`)); return true; }
     catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return false; throw error; }
@@ -394,22 +402,25 @@ export class AllDayRecordingStore {
     catch (error) { if (this.deviceRead === pending) this.deviceRead = undefined; throw error; }
   }
   private mobileWrite: Promise<unknown> = Promise.resolve();
-  receiveMobile(owner: string, input: unknown): Promise<void> {
+  receiveMobile(owner: string, input: unknown, authorize?: RecordingAuthorization): Promise<void> {
     const operation = this.mobileWrite.catch(() => undefined).then(async () => {
+      authorize?.();
       if (!owner || !input || typeof input !== "object") throw new Error("Invalid mobile event");
       const row = input as Record<string, unknown>;
       const startedAt = Number(row.startedAt), endedAt = Number(row.endedAt);
-      if (typeof row.id !== "string" || !/^[\w-]{1,200}$/.test(row.id) || !Number.isFinite(startedAt) || startedAt < 0 || !Number.isFinite(endedAt) || endedAt < startedAt || endedAt > Date.now() + 86400_000 || typeof row.text !== "string" || row.text.length > 100_000) throw new Error("Invalid mobile event fields");
+      if (typeof row.id !== "string" || !mobileEventPattern.test(row.id) || !Number.isFinite(startedAt) || startedAt < 0 || !Number.isFinite(endedAt) || endedAt < startedAt || endedAt > Date.now() + 86400_000 || typeof row.text !== "string" || row.text.length > MOBILE_RECORDING_TEXT_MAX_CODE_UNITS) throw new Error("Invalid mobile event fields");
       const deviceId = hash(owner);
-      if (!Array.isArray(row.chunks) || row.chunks.length < 1 || row.chunks.length > 16 || row.chunks.some(id => typeof id !== "string" || !/^[a-f0-9]{64}$/.test(id))) throw new Error("Invalid recording media chunks");
+      if (!Array.isArray(row.chunks) || row.chunks.length < 1 || row.chunks.length > MOBILE_RECORDING_MAX_CHUNKS || row.chunks.some(id => typeof id !== "string" || !mobileChunkPattern.test(id))) throw new Error("Invalid recording media chunks");
       const transcriptionState = row.transcriptionState === undefined ? "ready" : row.transcriptionState;
-      if (!["pending","processing","ready","empty","error"].includes(String(transcriptionState))) throw new Error("Invalid transcription state");
+      if (!(MOBILE_RECORDING_TRANSCRIPTION_STATES as readonly string[]).includes(String(transcriptionState))) throw new Error("Invalid transcription state");
       const event: AllDayEvent = { id: `mobile:${deviceId}:${row.id}`, startedAt, endedAt, source: "mobile", deviceId, kind: "audio", text: row.text, state: "saved", transcriptionState: transcriptionState as AllDayEvent["transcriptionState"], mobileMedia: { owner, chunks: row.chunks as string[] } };
-      const complete = await writeIndexedEvent(path.join(this.mobileRoot,"events"),recordingDay(startedAt),hash(event.id),event);
+      const complete = await writeIndexedEvent(path.join(this.mobileRoot,"events"),recordingDay(startedAt),hash(event.id),event,authorize);
+      authorize?.();
       this.readOptions.committed?.(null,event,undefined,complete);
       const devices = await this.mobileDevices();
+      authorize?.();
       const updated = [...devices.filter(device => device.id !== deviceId), { id: deviceId, lastReceivedAt: Date.now() }];
-      await atomicRecordingJson(path.join(this.mobileRoot, "devices.json"), updated);
+      await atomicRecordingJson(path.join(this.mobileRoot, "devices.json"), updated,authorize);
       this.deviceRead = Promise.resolve(updated);
     });
     this.mobileWrite = operation;
@@ -701,12 +712,14 @@ export class AllDayRecordingService {
     session.audioWake.unref();
   }
   /** Playback transcription belongs to the same timeline owner as microphone ASR. */
-  async savePlayback(roleId: string, id: string, startedAt: number, endedAt: number, text: string, wav: Buffer) {
+  async savePlayback(roleId: string, id: string, startedAt: number, endedAt: number, text: string, wav: Buffer, requestAuthorize?: RecordingAuthorization) {
+    requestAuthorize?.();
     const session = this.session;
     if (!session || session.roleId !== roleId || session.stopping) return;
-    const authorize = () => { if (this.session !== session || session.stopping) throw new Error("Recording session has ended"); };
+    const authorize = () => { requestAuthorize?.(); if (this.session !== session || session.stopping) throw new Error("Recording session has ended"); };
     await this.store.append(roleId, { id: `systemPlayback:${id}`, source: "systemAudio", deviceId: this.store.hostId, kind: "audio", state: "saved",
       transcriptionState: text ? "ready" : "empty", startedAt, endedAt, text }, wav, authorize);
+    authorize();
     this.dependencies.changed(roleId);
   }
   private async sample(session: RecordingSession) {

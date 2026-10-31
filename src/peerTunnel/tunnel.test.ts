@@ -15,8 +15,23 @@ import { serveTunnel, serviceEndpoint, tunnelFetch } from "./http.js";
 import { PeerConnections, type TunnelCandidate } from "./connections.js";
 import { TunnelRtc } from "./rtc.js";
 import { APPLICATION_ACCESS_CAPABILITY, PeerTunnelRuntime } from "./runtime.js";
-import { handleInstanceIdentityReset } from "../manager/identityResetRoutes.js";
+import { createCorePublicOperations, type CorePublicOperationsContext } from "../manager/corePublicOperations.js";
 import { validateInternalManagerHop } from "../shared/internalManagerHop.js";
+import { createPeerProxyHttpOperations } from "./apiProxyHttpOperations.js";
+import { createPeerControlOperations } from "./apiControlOperations.js";
+import { ManagerPluginRouteRegistry } from "../manager/managerPluginRouteRegistry.js";
+
+function peerHttpRoutes(t: test.TestContext, runtime: PeerTunnelRuntime) {
+  const registry = new ManagerPluginRouteRegistry();
+  const registration = registry.registerHttpProxies("fixture-peer", createPeerProxyHttpOperations(runtime));
+  const controls = registry.registerOperations("fixture-peer-control", createPeerControlOperations(runtime));
+  t.after(() => registration.dispose());
+  t.after(() => controls.dispose());
+  return (request: http.IncomingMessage, response: http.ServerResponse) => {
+    const url = new URL(request.url!, "http://owner.fixture");
+    return registry.handle(request, url, response);
+  };
+}
 
 function channelPair(): [TunnelChannel, TunnelChannel] {
   const a = new EventEmitter() as TunnelChannel, b = new EventEmitter() as TunnelChannel;
@@ -130,13 +145,17 @@ test("service grants and paths fail closed", { timeout: 5_000 }, async t => {
 test("an authorized service alias cannot impersonate a local identity reset request", async t => {
   const [caller, receiver] = await sessions(t);
   let resets = 0;
+  const registry = new ManagerPluginRouteRegistry();
+  const registration = registry.registerOperations("fixture-alias-reset", createCorePublicOperations({
+    identity: () => ({ applicationGenerationId: "fixture-generation", managerInstanceId: "fixture-manager" }),
+    identityReset: {
+      service: { available: () => true, enqueue: async (input: { operationId: string }) => { ++resets; return { operationId: input.operationId, state: "queued" as const }; }, status: async () => undefined },
+      currentGuid: () => "647f6388-a4dc-4327-ab17-3ccbd43ef9e2"
+    }
+  } as unknown as CorePublicOperationsContext).filter(value => value.contract.pathTemplate.startsWith("/api/rabi/identity/reset-instance-id")));
+  t.after(() => registration.dispose());
   const upstream = await fixtureServer(t, (request, response) => {
-    handleInstanceIdentityReset(request, new URL(request.url!, "http://localhost"), response, {
-      ...{ trustedRemote: () => false },
-      service: { available: () => true, enqueue: async input => { ++resets; return { operationId: input.operationId, state: "queued" }; }, status: async () => undefined },
-      currentGuid: () => "647f6388-a4dc-4327-ab17-3ccbd43ef9e2",
-      readJson: async () => ({}), json: (response, status, body) => { response.writeHead(status); response.end(JSON.stringify(body)); }
-    });
+    if (!registry.handle(request, new URL(request.url!, "http://localhost"), response)) response.writeHead(404).end();
   });
   serveTunnel(receiver, () => ({ alias: { baseUrl: upstream.url, headers: { "x-rabiroute-peer-proxy": "" } } }), service => service === "alias");
   const response = await tunnelFetch(caller, "alias", "/api/rabi/identity/reset-instance-id", {
@@ -261,8 +280,9 @@ test("read-only runtime rejects selection and proxy access", async t => {
   t.after(()=>runtime.stop());
   await assert.rejects(runtime.select(""), /manager_read_only/);
   await assert.rejects(runtime.offer({}), /manager_read_only/);
-  const server = await fixtureServer(t, (req,res) => { runtime.handler(req,new URL(req.url!,"http://localhost"),res,async()=>({deviceId:""})); });
-  assert.equal((await fetch(server.url+"/api/rabilink/peer/selection",{method:"PUT"})).status,423);
+  const handle = peerHttpRoutes(t, runtime);
+  const server = await fixtureServer(t, (req,res) => { handle(req,res); });
+  assert.equal((await fetch(server.url+"/api/rabilink/peer/selection",{method:"PUT",body:JSON.stringify({deviceId:""})})).status,423);
   assert.equal((await fetch(server.url+"/api/rabilink/peer/http/b/test/any")).status,423);
   assert.equal((await fetch(server.url+"/api/rabilink/peer/selection")).status,200);
 });
@@ -275,12 +295,13 @@ test("control endpoints use the injected WebGUI authorization without bypassing 
     discover:async()=>[],signal:async()=>{},relay:()=>({url:"http://127.0.0.1",token:""}),services:()=>({}),onStatus:()=>{},
     allowControl:(request)=>request.headers["x-test-authorized"]==="yes"});
   t.after(()=>runtime.stop());
-  const server=await fixtureServer(t,(req,res)=>{runtime.handler(req,new URL(req.url!,"http://localhost"),res,async()=>({deviceId:""}));});
+  const handle = peerHttpRoutes(t, runtime);
+  const server=await fixtureServer(t,(req,res)=>{handle(req,res);});
   const url=server.url+"/api/rabilink/peer/selection";
   assert.equal((await fetch(url)).status,403);
   assert.equal((await fetch(url,{headers:{"x-test-authorized":"yes"}})).status,200);
-  assert.equal((await fetch(url,{method:"PUT"})).status,403);
-  assert.equal((await fetch(url,{method:"PUT",headers:{"x-test-authorized":"yes"}})).status,200);
+  assert.equal((await fetch(url,{method:"PUT",body:JSON.stringify({deviceId:""})})).status,403);
+  assert.equal((await fetch(url,{method:"PUT",headers:{"x-test-authorized":"yes"},body:JSON.stringify({deviceId:""})})).status,200);
 });
 
 
@@ -313,13 +334,14 @@ test("third-PC generic Manager forwarding preserves an unknown API and public he
   const { folder } = identities(t); const runtimes = new Map<string, PeerTunnelRuntime>(); const lans = new Map<string, string>();
   let ownerWrites = 0, ownerIdentity = "";
   const owners = new Map<string, string>();
+  const handlers = new Map<string, ReturnType<typeof peerHttpRoutes>>();
   for (const id of ["a", "b", "c"]) {
     const owner = await fixtureServer(t, (request, response) => {
       const principal = validateInternalManagerHop(request, { generation: id + "-generation",
         scope: createHash("sha256").update("http://127.0.0.1\nfixture-application").digest("hex") });
       assert.ok(principal, "actual runtime must attest each local Manager request");
       assert.equal(principal.deviceId, id === "b" ? "a" : "b");
-      if (id === "b" && runtimes.get(id)!.handler(request, new URL(request.url!, "http://owner.fixture"), response, async () => ({}))) return;
+      if (id === "b" && handlers.get(id)!(request, response)) return;
       if (id === "c" && request.url === "/api/future-capability?fresh=1") {
         ownerWrites++; ownerIdentity = String(request.headers["x-rabilink-tunnel-device-id"]);
         assert.equal(request.headers["x-rabiroute-new-contract-field"], "future-value");
@@ -336,6 +358,7 @@ test("third-PC generic Manager forwarding preserves an unknown API and public he
       signal: async call => runtimes.get(call.targetDeviceId)!.offer(call.input), relay: () => ({ url: "http://127.0.0.1", token: "fixture-application" }),
       services: () => ({ manager: { baseUrl: owners.get(id)! } }), onStatus: () => {} });
     runtimes.set(id, runtime); t.after(() => runtime.stop());
+    handlers.set(id, peerHttpRoutes(t, runtime));
     lan.server.on("upgrade", (request, socket, head) => runtime.upgrade(request, socket, head));
   }
   const body = Buffer.alloc(100000, 42);

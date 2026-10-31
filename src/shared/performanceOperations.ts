@@ -1,5 +1,7 @@
 export const PERFORMANCE_OPERATIONS = {
   managerMetaBuild: "manager.meta.build",
+  managerMessageSearchTotal: "manager.message_search.total",
+  managerMessageSearchQuery: "manager.message_search.query",
   managerGatewaysBuildSummary: "manager.gateways.build_summary",
   managerGatewaysBuildDiagnostics: "manager.gateways.build_diagnostics",
   managerHttpJsonSerialize: "manager.http.json_serialize",

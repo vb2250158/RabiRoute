@@ -2,6 +2,7 @@ package com.rabiroute.sdk
 
 /** Stateless SDK boundary. The application owns connection selection and lifetime. */
 fun interface RabiLinkManagerHttpTransport {
+    fun timeout(relayBaseUrl: String, token: String, key: String, fallback: Long): Long = fallback
     fun request(relayBaseUrl: String, token: String, target: RabiLinkPc, method: String, path: String,
                 headers: Map<String, String>, body: ByteArray): RabiLinkManagerHttpResponse
 }

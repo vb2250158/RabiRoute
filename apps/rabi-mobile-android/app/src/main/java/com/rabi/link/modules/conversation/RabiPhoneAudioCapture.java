@@ -33,7 +33,7 @@ public final class RabiPhoneAudioCapture {
     private static final String WAKE_LOCK_TAG = "RabiLink:PhoneAudioCapture";
     private static final int SAMPLE_RATE = 16000;
     private static final int BUFFER_BYTES = 3200;
-    private static final long STALL_TIMEOUT_MS = 45_000L;
+    private long stallTimeoutMs() { return com.rabi.link.transport.ScopedManagerTimeouts.active(context).get("android.audio.stall",45000); }
     private static final long HEALTHY_RESET_MS = 60_000L;
     private static final long METRIC_PERSIST_INTERVAL_MS = 10_000L;
     private static final long MAX_RESTART_DELAY_MS = 30_000L;
@@ -155,7 +155,7 @@ public final class RabiPhoneAudioCapture {
                 long now = SystemClock.elapsedRealtime();
                 lastReadElapsed = now;
                 healthySinceElapsed = now;
-                scheduleStallDeadline(next, lifecycleGeneration.get(), STALL_TIMEOUT_MS);
+                scheduleStallDeadline(next, lifecycleGeneration.get(), stallTimeoutMs());
                 new Thread(() -> captureLoop(next), "rabi-phone-continuous-audio").start();
                 persistRuntime(true, reason);
                 listener.onStatus(restartCount == 0
@@ -230,11 +230,11 @@ public final class RabiPhoneAudioCapture {
         if (closed || !requested || generation != lifecycleGeneration.get() || recorder != source) return;
         ensureWakeLock();
         long silence = SystemClock.elapsedRealtime() - lastReadElapsed;
-        if (silence >= STALL_TIMEOUT_MS) {
+        if (silence >= stallTimeoutMs()) {
             scheduleRestart("audio_read_stalled");
             return;
         }
-        scheduleStallDeadline(source, generation, STALL_TIMEOUT_MS - silence);
+        scheduleStallDeadline(source, generation, stallTimeoutMs() - silence);
     }
 
     private void cancelStallDeadline() {

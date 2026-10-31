@@ -1,33 +1,35 @@
 <!-- docs-language-switch -->
 <div align="center">
-English | <a href="./README.md">简体中文</a>
+English | <a href="./README.md">简体中文</a> | <a href="./README_ja.md">日本語</a>
 </div>
 <!-- /docs-language-switch -->
 
 # RabiRoute Documentation
 
-[Controller and remote computer clients](remote-computer-client_en.md): operate multiple computers from the host using terminals, file transfer, window queries and screenshots.
-
-[Connections and API access](connection-access_en.md): authenticate once and use provided APIs.
-
-This directory contains current guides, experimental integrations, designs, research, and historical handoffs. The existence of a file does not mean its feature is complete; check its status before relying on it.
+Start with the user guide for everyday operation, use the API reference for integrations, and find architecture, builds, and migration records in the maintainer section. Experimental and historical material keeps its own status.
 
 ## Start here
 
-- [Desktop-pet companion mode](companion-mode_en.md) — **Experimental**. Start from the pet's context menu and choose adaptive, watch, play, work or quiet company.
+- [RibiWebGUI user guide](user-guide/README_en.md): find setup, operation, and troubleshooting instructions by task.
+- [Getting started](getting-started_en.md): install the application, start it, and open the console.
+- [Complete the first Route](user-guide/first-route_en.md): perform a real delivery and confirm that the target task receives it.
+- [Interface and status](user-guide/interface-and-status_en.md): understand connections, runtime status, and unsaved changes.
+- [Operations, logs, and troubleshooting](user-guide/operations-and-troubleshooting_en.md): locate the break when a message does not arrive.
+- [Safety, replies, and data](user-guide/safety-and-data_en.md): understand reply permissions and diagnostic-data privacy.
+- [Current capabilities and maturity](current-capabilities_en.md): check verified, experimental, and pending scope.
 
-- [Inspect devices and test actions](user-guide/home-devices_en.md) — Inspect device cards, capabilities and states, then test advertised actions.
-- [Workspace plan query](workspace-plan-query_en.md) — Paginated search scoped to host sessions and workspace.
+## Find a task
 
-- [Role all-day recording](persona-all-day-recording_en.md) — **New implementation**. Review computer and selected phone events by date, with explicit capture sources, pause state and coverage gaps.
-
-- [RibiWebGUI User Guide](user-guide/README_en.md) — **Current guide**. Start here on your first use to complete a real delivery, read status, change rules, and recover from common failures.
-- [Getting Started](getting-started_en.md) — **Current guide**. Install RabiRoute, start Manager, and confirm that the console opens.
-- [Interface and status](user-guide/interface-and-status_en.md) — **Current guide**. Understand the current Route, Manager connection, unsaved changes, runtime state, and Settings-page screenshots, selected-text menu, and login startup.
-- [Interface theme](user-guide/interface-theme_en.md) — **Current guide**. Shared light, dark, follow-system, and bounded custom themes for WebGUI and the Windows tray.
-- [Runtime, logs, and troubleshooting](user-guide/operations-and-troubleshooting_en.md) — **Current guide**. When a message does not arrive, start with the diagnosis summary and locate the break.
-- [Safety, replies, and data](user-guide/safety-and-data_en.md) — **Current guide**. Check permissions and privacy before enabling external replies or sharing diagnostics.
-- [Current Capabilities and Maturity](current-capabilities_en.md) — **Current fact**. Check what is verified and what still needs a real account, network, or device acceptance run.
+| What you want to do | Start here |
+| --- | --- |
+| Connect QQ, Weixin, WeCom, or Feishu | [Communication and message inputs](user-guide/routes-and-adapters_en.md) |
+| Inspect home devices, state, and actions | [Smart devices](user-guide/home-devices_en.md) |
+| Start an Agent voice call from a phone | [Mobile calls](mobile-voice-call_en.md) |
+| Save and export phone location tracks | [Phone location recording](mobile-location-recording_en.md) |
+| Review computer and phone events by date | [Role all-day recording](persona-all-day-recording_en.md) (new implementation; check capture sources and coverage gaps) |
+| Enable watch, play, or work companionship | [Desktop-pet companion mode](companion-mode_en.md) (experimental) |
+| Use terminals, files, and screens on other PCs | [Controller and remote computer clients](remote-computer-client_en.md) |
+| Change light, dark, and desktop themes | [Interface theme](user-guide/interface-theme_en.md) |
 
 ## Local installation, configuration, and recovery
 
@@ -44,6 +46,10 @@ This directory contains current guides, experimental integrations, designs, rese
 - [Unattended NapCat](napcat-unattended_en.md) — QQ login state, quick login, Manager recovery, and supervision boundaries.
 
 ## Developer: routing, roles, and Agent interfaces
+
+- [API reference and discovery](api-reference_en.md): browse running operations in the documentation page, search contracts, inspect parameters and responses, copy request templates, and download OpenAPI.
+- [Connections and API access](connection-access_en.md): reuse connection authentication and understand explicit disabled features and API conditions.
+- [Workspace plan query](workspace-plan-query_en.md): paginated search scoped to host sessions and workspace.
 
 - [Home device and speaker Agent API](home-device-agent-api_en.md) — Query every imported entity, discover and invoke its buttons/settings/device actions, bind speech and query durable receipts.
 - [Vacuum cloud map connection](vacuum-cloud-map_en.md) — QR login, raw files and version-2 decoding; live localization and navigation require separate acceptance.
@@ -76,6 +82,32 @@ This directory contains current guides, experimental integrations, designs, rese
 
 - [Camera events and HA recovery](home-camera-events_en.md): explicit persona binding, clip storage, elevated startup, bounded recovery and migration acceptance.
 
+- [Development candidate verification](developer-candidate-admission_en.md): frozen inputs, reusable candidate evidence and admission at existing publication owners.
+
+- [Development validation paths and timing](development-validation_en.md): candidate paths, isolated pilot results, and installed acceptance boundaries.
+
+- [Reliable Agent delivery](reliable-agent-delivery_en.md): durable acceptance, reconnect recovery, original receipts, and delivery-record queries.
+
+- [Persona message configuration upgrades](persona-message-config-upgrade_en.md) — Preview older rules, migrate offline with backups, and restore from snapshots.
+
+- [RabiLink mobile-state contracts](rabilink-mobile-owner-api_en.md) — Maintainer reference for ASR priorities, battery reports, proofs and native idempotent replay.
+- [Route control contracts](route-control-api-contract_en.md) — Developer reference for identity, configuration, binding, message processing and native CAS receipts.
+- [Device-Agent execution contracts](device-agent-api-contracts_en.md) — Developer reference for device sessions, wake, claims, original delivery and durable receipts.
+- [Gateway control contracts](gateway-control-api-contract_en.md) — Maintainer reference for persisted configuration, runtime activation and native CAS transactions.
+- [Agent-thread contracts](agent-thread-api-contracts_en.md) — Developer reference for original host actions, provenance and idempotency ledgers.
+- [Message-processing contracts](message-processing-api-contract_en.md) — Maintainer reference for the original Board, send-context review, fact fencing and receipts.
+
+- [Bilibili browser-history bridge](bilibili-history-bridge_en.md) — Maintainer setup for the fixed extension, persona-private date shards, and executable API contracts.
+
+- [Target architecture for API contract discovery and remote calls](api-contract-discovery-target-architecture_en.md) — **In progress; runtime acceptance incomplete**. Registration and refresh foundations exist; track full public-entry migration, retirement, and two-computer acceptance.
+- [API migration implementation record](api-contract-discovery-implementation-progress_en.md) — Maintainers compare source wiring, compiled profiles and remaining lifecycle acceptance.
+- Persona API contracts: [resources](persona-resource-api-contracts_en.md), [history](persona-history-api-contracts_en.md), [plan controls](persona-plan-api-contracts_en.md), [Skills](persona-skill-api-contracts_en.md), [knowledge](persona-knowledge-api-contracts_en.md), [identity](persona-identity-api-contracts_en.md), [health](persona-health-api-contracts_en.md).
+- [Role configuration and lifecycle](role-configuration-api-contracts_en.md), [core public services](core-public-api-operations_en.md) and [plugin catalog contracts](plugin-catalog-api-contract_en.md) — Native revisions, receipts, readiness and publication boundaries.
+- [Plugin publication lifecycle](plugin-publication-lifecycle_en.md) — Candidate pointer changes, rollback, prior-owner retirement and execution-mode limits.
+- [WebGUI static resource contracts](webgui-static-api-contracts_en.md) — Native files, immutable revisions, final fallback and descriptor cleanup; shared integration status is stated in the document.
+- [Independent listener contracts](external-listener-contracts_en.md) and [platform-native listeners](platform-native-listeners_en.md) — Native addresses, original authentication, trusted lifecycle publication and separately verified remote reachability.
+- [Peer LAN listener discovery](peer-lan-listener-discovery_en.md) — Check the actual bound address, original encrypted protocols, metadata handoff and withdrawal at stop.
+- [Webhook HTTP contract](webhook-http-contract_en.md) — Check native methods, paths, input and shutdown behavior for Webhook and RabiLink listeners.
 - [Long-term maintenance and self-repair](rabi-maintenance_en.md) — **Maintenance workflow** for a stable intake task, original issue ownership, recovery verification, and periodic code-quality work.
 - [Install Rabi knowledge search](../skills/rabi-knowledge-search/README_en.md) — Project maintainers can install the skill to search plans and memories first when online, and use ordinary search when offline.
 - [Install the identity relation skill](../skills/manage-rabiroute-identity-relations/README_en.md) — Resolve who an endpoint account is, confirm or correct ownership, handle concurrent conflicts and shared accounts, and keep on-scene Agents to candidate observations.
@@ -87,6 +119,7 @@ This directory contains current guides, experimental integrations, designs, rese
 - [Plugin Bundles and hot replacement](plugin-bundles_en.md) — **Current implementation guide**. one Profile, independent packages, the shared SDK, generation hot replacement, and browser revision rollback.
 - [Source hot patches](source-hot-patches_en.md) — **In development**. Source mode watches code and declared resources, compiles and validates changes, preserves state, and switches without stopping the service; the document states the installed-runtime acceptance boundary.
 - [Code architecture](code-architecture_en.md) — **Current fact**. Backend, Manager, endpoint, Role Knowledge, WebGUI, and desktop module map.
+- [Message-search indexing and latency budgets](message-history-search_en.md) — Developer maintenance: index updates, frozen snapshots, the default three-second client deadline, recovery and capacity acceptance scope.
 - [Project function map](project-function-map_en.md) — **Current fact**. Locate behavior by maturity, side effect, API, and code owner.
 - [Path and directory conventions](path-and-directory-conventions_en.md) — **Current maintainer guide**. Separates software, public samples, local runtime data, and logs, and defines relative-path and business-ID interfaces.
 - [Project skill distribution and drift detection](project-skill-distribution_en.md) — **Current maintainer guide** for localized copies of RabiRoute-owned skills under a project's `.agents/skills/`, their recorded baseline, and the read-only command an Agent runs to report upstream drift before porting.

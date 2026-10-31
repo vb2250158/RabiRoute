@@ -1,6 +1,6 @@
 <!-- docs-language-switch -->
 <div align="center">
-English | <a href="./safety-and-data.md">简体中文</a>
+English | <a href="./safety-and-data.md">简体中文</a> | <a href="./safety-and-data_ja.md">日本語</a>
 </div>
 <!-- /docs-language-switch -->
 
@@ -40,7 +40,7 @@ A proactive send needs an explicit target. If the target is ambiguous, the paylo
 
 ## Local file uploads
 
-For a NapCat group upload with local `filePath`, the resolved path must remain inside an `allowedFileRoots` directory. RabiRoute checks existence, real path, and ordinary-file type.
+For a NapCat group upload with local `filePath`, no directory restriction applies by default. Only a user-configured nonempty Route `messageAdapterPolicies.napcat.allowedFileRoots` list restricts the resolved path; clear the list to remove that restriction. RabiRoute checks existence, real path, and ordinary-file type.
 
 Public examples use placeholder directories. Do not publish personal directories, build-server paths, real filenames, or private release locations.
 

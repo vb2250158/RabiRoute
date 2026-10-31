@@ -1,3 +1,5 @@
+import { getTimeoutMs, readTimeoutOverrides } from "../shared/timeoutSettings.js";
+import type { RuntimeObservation } from "./bridge/executor.mjs";
 import { fork, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
@@ -17,6 +19,9 @@ import {
   type IsolatedPluginPreparePayload,
   type IsolatedPluginResponse
 } from "./protocol.js";
+
+import { ProtocolSelectingIsolatedExecutor } from "./protocolSelectingExecutor.js";
+import { AsyncPluginOutcomeArchive, type ArchivedOutcome } from "./asyncOutcomeArchive.js";
 
 function hostEntryPath(): string {
   return fileURLToPath(new URL(import.meta.url.endsWith(".ts") ? "./main.ts" : "./main.js", import.meta.url));
@@ -42,7 +47,7 @@ class IsolatedClient {
     child.once("error", fail);
   }
 
-  request(command: IsolatedPluginCommand, payload?: IsolatedPluginPreparePayload, timeoutMs = 60_000): Promise<IsolatedPluginResponse> {
+  request(command: IsolatedPluginCommand, payload?: IsolatedPluginPreparePayload, timeoutMs = getTimeoutMs("backend.plugin-runtime-host.executor.request.timeoutMs", 60_000)): Promise<IsolatedPluginResponse> {
     if (!this.child.connected || this.child.exitCode !== null) return Promise.reject(new Error("Isolated plugin host is unavailable."));
     const requestId = randomUUID();
     const sequence = ++this.#sequence;
@@ -181,8 +186,8 @@ export class IsolatedPluginExecutor implements PluginExecutor {
   readonly #terminationTimeoutMs: number;
   constructor(readonly leases = new ProcessLeaseRegistry(), options: IsolatedPluginExecutorOptions = {}) {
     this.#heartbeatIntervalMs = options.heartbeatIntervalMs ?? 5_000;
-    this.#heartbeatTimeoutMs = options.heartbeatTimeoutMs ?? 3_000;
-    this.#terminationTimeoutMs = options.terminationTimeoutMs ?? 5_000;
+    this.#heartbeatTimeoutMs = options.heartbeatTimeoutMs ?? getTimeoutMs("backend.plugin-runtime-host.executor.owner.heartbeatTimeoutMs", 3_000);
+    this.#terminationTimeoutMs = options.terminationTimeoutMs ?? getTimeoutMs("backend.plugin-runtime-host.executor.owner.terminationTimeoutMs", 5_000);
   }
 
   async prepare(candidate: PluginCandidate, identity: PluginIdentity): Promise<PluginModule> {
@@ -213,7 +218,7 @@ export class IsolatedPluginExecutor implements PluginExecutor {
 
   async #activate(candidate: PluginCandidate, identity: PluginIdentity, context: PluginContext): Promise<void> {
     const processOwner = owner(identity);
-    const shutdownTimeoutMs = candidate.policy?.resources.shutdownTimeoutMs ?? 5_000;
+    const shutdownTimeoutMs = getTimeoutMs("backend.plugin-runtime-host.executor._activate.shutdownTimeoutMs", candidate.policy?.resources.shutdownTimeoutMs ?? 5000);
     const maxChildProcesses = candidate.policy?.resources.maxChildProcesses ?? 2;
     const dependencyServices = [...candidate.manifest.requires, ...candidate.manifest.optional].flatMap(capability => {
       const value = candidate.manifest.requires.includes(capability)
@@ -233,6 +238,7 @@ export class IsolatedPluginExecutor implements PluginExecutor {
         serialization: "advanced",
         stdio: ["ignore", "ignore", "ignore", "ipc"],
         env: {
+          RABIROUTE_TIMEOUT_OVERRIDES: JSON.stringify(readTimeoutOverrides()),
           RABIROUTE_PLUGIN_HOST_NONCE: nonce,
           RABIROUTE_PLUGIN_APP_GENERATION_ID: identity.applicationGenerationId,
           RABIROUTE_PLUGIN_MANAGER_INSTANCE_ID: identity.managerInstanceId,
@@ -364,11 +370,16 @@ export class IsolatedPluginExecutor implements PluginExecutor {
   }
 }
 
-export function createFullPluginExecutor(leases = new ProcessLeaseRegistry()): PluginExecutor {
+export type FullPluginExecutor = PluginExecutor & Readonly<{
+  readAsyncOutcome(identity: PluginIdentity, requestId: string): Promise<Readonly<{ archive: "confirmed" | "unconfirmed"; record: ArchivedOutcome }> | undefined>;
+}>;
+export function createFullPluginExecutor(leases = new ProcessLeaseRegistry(), archive?: AsyncPluginOutcomeArchive, recordAsync?: (observation: RuntimeObservation) => void): FullPluginExecutor {
   const builtin = createBuiltinPluginExecutor();
-  return new RoutingPluginExecutor({
+  const isolated = new ProtocolSelectingIsolatedExecutor(leases, new IsolatedPluginExecutor(leases), archive, recordAsync);
+  const routing = new RoutingPluginExecutor({
     in_process: builtin,
     declarative: builtin,
-    isolated: new IsolatedPluginExecutor(leases)
+    isolated
   });
+  return Object.freeze({ prepare: routing.prepare.bind(routing), readAsyncOutcome: isolated.readUnknownOutcome.bind(isolated) });
 }

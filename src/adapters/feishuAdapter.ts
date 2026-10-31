@@ -1,46 +1,29 @@
-import { createDecipheriv, createHash, timingSafeEqual } from "node:crypto";
 import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
 import { config } from "../config.js";
 import {
   appendAdapterLogToDir,
-  appendFeishuMessage,
   appendFeishuMessageToDir,
   type AdapterLogRecord,
   type FeishuMessageRecord
 } from "../history.js";
 import { forwardMessage } from "../forwarding.js";
 import type { MessageAdapter, MessageAdapterDispose } from "./messageAdapter.js";
+import { createFeishuHttpOwner } from "./feishuHttpOwner.js";
+import { feishuListenerBinding, createFeishuNativeOperations } from "./platformNativeOperations.js";
+import { ManagerPluginRouteRegistry } from "../manager/managerPluginRouteRegistry.js";
+import type { ManagerApiOperationsService } from "../manager/apiOperationContract.js";
+import type { ApiExternalListenerPublication, ApiExternalListenerRegistration } from "../manager/apiExternalListenerBinding.js";
+import { getGatewayListenerRuntime } from "../runtime/gatewayListenerRuntime.js";
 import { recordDataMutationAudit } from "../observability/dataMutationAudit.js";
 
-const MAX_CALLBACK_BYTES = 1024 * 1024;
-const MAX_SIGNATURE_AGE_SECONDS = 5 * 60;
+export { handleFeishuCallback, decryptFeishuCallback, verifyFeishuCallbackSignature,
+  type FeishuCallbackHeaders, type FeishuCallbackResult } from "./feishuNativeProtocol.js";
 
 type GatewayStatus = {
   messageAdapters?: Record<string, Record<string, unknown>>;
   feishu?: Record<string, unknown>;
-};
-
-export type FeishuCallbackHeaders = {
-  timestamp?: string;
-  nonce?: string;
-  signature?: string;
-};
-
-export type FeishuCallbackResult = {
-  statusCode: number;
-  responseBody?: Record<string, unknown>;
-  disposition:
-    | "challenge"
-    | "accepted"
-    | "duplicate"
-    | "ignored"
-    | "invalid_json"
-    | "invalid_signature"
-    | "invalid_token"
-    | "invalid_event";
-  record?: FeishuMessageRecord;
 };
 
 function gatewayStatusPath(dataDir: string): string {
@@ -89,181 +72,6 @@ function patchFeishuStatus(
     throw error;
   }
 }
-function safeEqual(left: string, right: string): boolean {
-  const leftBytes = Buffer.from(left, "utf8");
-  const rightBytes = Buffer.from(right, "utf8");
-  return leftBytes.length === rightBytes.length && timingSafeEqual(leftBytes, rightBytes);
-}
-
-/**
- * Feishu callback signature:
- * SHA256(timestamp + nonce + encryptKey + rawRequestBody).
- */
-export function verifyFeishuCallbackSignature(
-  rawBody: Buffer,
-  headers: FeishuCallbackHeaders,
-  encryptKey: string,
-  nowSeconds = Math.floor(Date.now() / 1000)
-): boolean {
-  const timestamp = String(headers.timestamp ?? "").trim();
-  const nonce = String(headers.nonce ?? "").trim();
-  const signature = String(headers.signature ?? "").trim().toLowerCase();
-  const parsedTimestamp = Number(timestamp);
-  if (!encryptKey || !timestamp || !nonce || !/^[a-f0-9]{64}$/.test(signature)) return false;
-  if (!Number.isFinite(parsedTimestamp) || Math.abs(nowSeconds - parsedTimestamp) > MAX_SIGNATURE_AGE_SECONDS) return false;
-  const expected = createHash("sha256")
-    .update(timestamp, "utf8")
-    .update(nonce, "utf8")
-    .update(encryptKey, "utf8")
-    .update(rawBody)
-    .digest("hex");
-  return safeEqual(expected, signature);
-}
-
-/** Decrypt an encrypted Feishu callback using the configured Encrypt Key. */
-export function decryptFeishuCallback(encrypted: string, encryptKey: string): Record<string, unknown> {
-  const key = createHash("sha256").update(encryptKey, "utf8").digest();
-  const decipher = createDecipheriv("aes-256-cbc", key, key.subarray(0, 16));
-  const plaintext = Buffer.concat([
-    decipher.update(Buffer.from(encrypted, "base64")),
-    decipher.final()
-  ]).toString("utf8");
-  const parsed = JSON.parse(plaintext);
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new Error("Decrypted Feishu callback is not an object.");
-  }
-  return parsed as Record<string, unknown>;
-}
-
-function objectValue(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : {};
-}
-
-function stringValue(value: unknown): string {
-  return typeof value === "string" ? value.trim() : "";
-}
-
-function parseTextContent(value: unknown): string {
-  if (typeof value !== "string") return "";
-  try {
-    return stringValue(objectValue(JSON.parse(value)).text);
-  } catch {
-    return "";
-  }
-}
-
-function verifiedToken(body: Record<string, unknown>, expected: string): boolean {
-  const header = objectValue(body.header);
-  const token = stringValue(body.token) || stringValue(header.token);
-  return Boolean(token && expected && safeEqual(token, expected));
-}
-
-export function handleFeishuCallback(input: {
-  rawBody: Buffer;
-  headers: FeishuCallbackHeaders;
-  verificationToken: string;
-  encryptKey: string;
-  nowSeconds?: number;
-  persist?: (record: FeishuMessageRecord) => boolean;
-  /** App ID identifies this configured endpoint without exposing its secret. */
-  identityNamespace?: string;
-}): FeishuCallbackResult {
-  let envelope: Record<string, unknown>;
-  try {
-    envelope = objectValue(JSON.parse(input.rawBody.toString("utf8")));
-  } catch {
-    return { statusCode: 400, disposition: "invalid_json" };
-  }
-
-  let body = envelope;
-  const encrypted = stringValue(envelope.encrypt);
-  if (encrypted) {
-    if (!verifyFeishuCallbackSignature(
-      input.rawBody,
-      input.headers,
-      input.encryptKey,
-      input.nowSeconds
-    )) {
-      return { statusCode: 401, disposition: "invalid_signature" };
-    }
-    try {
-      body = decryptFeishuCallback(encrypted, input.encryptKey);
-    } catch {
-      return { statusCode: 400, disposition: "invalid_event" };
-    }
-  }
-
-  if (!verifiedToken(body, input.verificationToken)) {
-    return { statusCode: 401, disposition: "invalid_token" };
-  }
-
-  // Feishu excludes URL verification from signature verification. The
-  // configured verification token still authenticates the challenge.
-  if (body.type === "url_verification" && typeof body.challenge === "string") {
-    return {
-      statusCode: 200,
-      responseBody: { challenge: body.challenge },
-      disposition: "challenge"
-    };
-  }
-
-  if (!encrypted && !verifyFeishuCallbackSignature(
-    input.rawBody,
-    input.headers,
-    input.encryptKey,
-    input.nowSeconds
-  )) {
-    return { statusCode: 401, disposition: "invalid_signature" };
-  }
-
-  const header = objectValue(body.header);
-  if (header.event_type !== "im.message.receive_v1") {
-    return { statusCode: 200, disposition: "ignored" };
-  }
-  const event = objectValue(body.event);
-  const message = objectValue(event.message);
-  if (message.message_type !== "text") {
-    return { statusCode: 200, disposition: "ignored" };
-  }
-
-  const eventId = stringValue(header.event_id);
-  const messageId = stringValue(message.message_id);
-  const chatId = stringValue(message.chat_id);
-  const text = parseTextContent(message.content);
-  if (!eventId || !messageId || !chatId || !text) {
-    return { statusCode: 400, disposition: "invalid_event" };
-  }
-  const sender = objectValue(event.sender);
-  const senderId = objectValue(sender.sender_id);
-  const record: FeishuMessageRecord = {
-    time: input.nowSeconds ?? Math.floor(Date.now() / 1000),
-    rawMessage: text,
-    messageId,
-    eventId,
-    adapterType: "feishu",
-    chatId,
-    groupId: chatId,
-    userId: stringValue(senderId.open_id) || stringValue(senderId.user_id),
-    identityNamespace: stringValue(input.identityNamespace),
-    messageType: "text",
-    // Never persist the callback token, encrypted blob, or full raw body.
-    raw: {
-      schema: stringValue(body.schema),
-      eventType: "im.message.receive_v1",
-      eventId,
-      chatType: stringValue(message.chat_type),
-      createTime: stringValue(header.create_time)
-    }
-  };
-  const persisted = (input.persist ?? appendFeishuMessage)(record);
-  return {
-    statusCode: 200,
-    disposition: persisted ? "accepted" : "duplicate",
-    record: persisted ? record : undefined
-  };
-}
 
 /**
  * Feishu is independent from the generic webhook adapter. The listener stays
@@ -288,7 +96,9 @@ export type FeishuAdapterDependencies = {
   now?: () => Date;
   createServer?: (requestListener: http.RequestListener) => http.Server;
   persist?: (record: FeishuMessageRecord, memoryDataDir: string) => boolean;
-  forward?: typeof forwardMessage;
+  forward?: (...args: Parameters<typeof forwardMessage>) => unknown | Promise<unknown>;
+  apiOperations?: Pick<ManagerApiOperationsService, "registerExternalListener"> | ManagerPluginRouteRegistry;
+  publishListener?: (publication: ApiExternalListenerPublication | undefined) => void;
   appendLog?: (
     record: Omit<AdapterLogRecord, "adapter" | "time"> & Partial<AdapterLogRecord>,
     dataDir: string
@@ -348,6 +158,10 @@ export function createFeishuAdapter(
           console.error("Failed to append Feishu runtime log", error);
         }
       };
+      const withdrawPublication = () => {
+        try { dependencies.publishListener?.(undefined); }
+        catch (error) { appendRuntimeLog({ level: "error", event: "listener_publication_withdraw_failed", message: error instanceof Error ? error.message : String(error) }); }
+      };
       const missing = [
         !(settings.appId && settings.appSecret) ? "app_credentials" : "",
         !settings.verificationToken ? "verification_token" : "",
@@ -376,105 +190,18 @@ export function createFeishuAdapter(
 
       const persist = dependencies.persist ?? appendFeishuMessageToDir;
       const deliver = dependencies.forward ?? forwardMessage;
-      const server = (dependencies.createServer ?? http.createServer)(async (request, response) => {
-        if (!lifecycle.active) {
-          response.writeHead(503).end();
-          return;
-        }
-        const requestPath = new URL(request.url ?? "/", "http://127.0.0.1").pathname;
-        if (request.method !== "POST" || requestPath !== settings.webhookPath) {
-          response.writeHead(404).end();
-          return;
-        }
-        const chunks: Buffer[] = [];
-        let size = 0;
-        try {
-          for await (const chunk of request) {
-            if (!lifecycle.active) return;
-            const bytes = Buffer.from(chunk);
-            size += bytes.length;
-            if (size > MAX_CALLBACK_BYTES) {
-              response.writeHead(413).end();
-              return;
-            }
-            chunks.push(bytes);
-          }
-        } catch (error) {
-          if (!lifecycle.active) return;
-          const message = error instanceof Error ? error.message : String(error);
-          appendLog({ level: "warning", event: "request_aborted", message });
-          if (!response.headersSent) response.writeHead(400).end();
-          return;
-        }
-        if (!lifecycle.active) return;
-        const now = lifecycle.now();
-        try {
-          const result = handleFeishuCallback({
-            rawBody: Buffer.concat(chunks),
-            headers: {
-              timestamp: request.headers["x-lark-request-timestamp"] as string | undefined,
-              nonce: request.headers["x-lark-request-nonce"] as string | undefined,
-              signature: request.headers["x-lark-signature"] as string | undefined
-            },
-            verificationToken: settings.verificationToken,
-            encryptKey: settings.encryptKey,
-            nowSeconds: Math.floor(now.getTime() / 1000),
-            persist: (record) => lifecycle.active && persist(record, lifecycle.memoryDataDir),
-            identityNamespace: settings.appId
-          });
-          if (!lifecycle.active) return;
-          if (result.disposition === "challenge") {
-            patchRuntimeStatus({
-              status: "ready",
-              connected: true,
-              authenticated: true,
-              listenerReady: true,
-              subscriptionVerified: true,
-              lastChallengeAt: now.toISOString()
-            }, now);
-          } else if (result.disposition === "accepted" && result.record) {
-            patchRuntimeStatus({
-              status: "ready",
-              connected: true,
-              authenticated: true,
-              listenerReady: true,
-              subscriptionVerified: true,
-              lastMessageAt: now.toISOString(),
-              lastEventId: result.record.eventId
-            }, now);
-            deliver("feishu_message", result.record, {
-              feishuChatId: result.record.chatId,
-              feishuMessageId: result.record.messageId
-            });
-          } else if (result.disposition === "duplicate") {
-            appendRuntimeLog({
-              event: "duplicate_event_ignored",
-              message: "Ignored an already persisted Feishu event."
-            });
-          } else if (result.statusCode >= 400) {
-            appendRuntimeLog({
-              level: "warning",
-              event: "callback_rejected",
-              message: `Rejected Feishu callback: ${result.disposition}.`
-            });
-          }
-          response.writeHead(result.statusCode, {
-            "content-type": "application/json; charset=utf-8"
-          });
-          response.end(JSON.stringify(result.responseBody ?? {}));
-        } catch (error) {
-          if (!lifecycle.active) return;
-          const message = error instanceof Error ? error.message : String(error);
-          patchRuntimeStatus({
-            status: "failed",
-            listenerReady: server.listening,
-            lastError: message,
-            message: `飞书回调处理失败：${message}`
-          });
-          appendRuntimeLog({ level: "error", event: "callback_failed", message });
-          if (!response.headersSent) response.writeHead(500).end();
-        }
+      let binding: ApiExternalListenerRegistration | undefined;
+      const server = (dependencies.createServer ?? http.createServer)((request, response) => {
+        if (!binding) { response.writeHead(503).end(); return; }
+        const url = new URL(request.url ?? "/", "http://127.0.0.1");
+        if (!binding.handle(request, url, response)) response.writeHead(404).end();
       });
+      const owner = createFeishuHttpOwner({ settings, memoryDataDir: lifecycle.memoryDataDir,
+        accepting: () => lifecycle.active, listening: () => server.listening, now: lifecycle.now,
+        persist, deliver, patchStatus: patchRuntimeStatus, appendLog: appendRuntimeLog });
+      const runtime = dependencies.apiOperations ? undefined : getGatewayListenerRuntime();
+      const registry = dependencies.apiOperations ?? { registerExternalListener: (definition: Parameters<ManagerApiOperationsService["registerExternalListener"]>[0]) => runtime!.registerExternalListener("platform.feishu", definition) };
+
       const host = settings.host || "127.0.0.1";
 
       return new Promise<MessageAdapterDispose>((resolve, reject) => {
@@ -509,7 +236,8 @@ export function createFeishuAdapter(
           startupSettled = true;
           lifecycle.active = false;
           reportServerError(error, "listen_error");
-          void closeFeishuServer(server).finally(() => reject(error));
+          void closeFeishuServer(server).then(() => reject(error), cleanupError =>
+            reject(new AggregateError([error, cleanupError], "Feishu startup and listener cleanup failed.")));
         };
 
         server.once("error", onStartupError);
@@ -519,6 +247,18 @@ export function createFeishuAdapter(
           const onServerError = (error: Error) => reportServerError(error, "server_error");
           server.on("error", onServerError);
           try {
+            const address = server.address();
+            if (!address || typeof address === "string") throw new Error("Feishu listener has no TCP address.");
+            const nativeDefinition = feishuListenerBinding(address.port, host);
+            const operationId = runtime?.operationId(nativeDefinition.listenerId) ?? nativeDefinition.listenerId;
+            const definition = { ...nativeDefinition, listenerId: operationId };
+            binding = registry instanceof ManagerPluginRouteRegistry
+              ? registry.registerExternalListener("gateway.feishu", definition)
+              : registry.registerExternalListener(definition);
+            binding.registerHttpProxies(createFeishuNativeOperations(async input => {
+              await owner(input.request, input.response, input.prepareResponse);
+            }, settings.webhookPath, address.port, operationId));
+            dependencies.publishListener?.(binding.publication());
             const message = "飞书独立事件入口已监听，等待已配置的飞书应用完成 URL challenge 或投递事件。";
             patchFeishuStatus({
               status: "listening",
@@ -538,7 +278,12 @@ export function createFeishuAdapter(
                 disposalPromise = (async () => {
                   lifecycle.active = false;
                   server.off("error", onServerError);
-                  await closeFeishuServer(server);
+                  binding?.stopAccepting();
+                  withdrawPublication();
+                  const closed = await Promise.allSettled([closeFeishuServer(server), Promise.resolve().then(() => binding?.dispose())]);
+                  const errors = closed.flatMap(result => result.status === "rejected" ? [result.reason] : []);
+                  if (errors.length === 1) throw errors[0];
+                  if (errors.length) throw new AggregateError(errors, "Feishu listener cleanup failed.");
                   patchRuntimeStatus({
                     status: "disabled",
                     connected: false,
@@ -558,8 +303,12 @@ export function createFeishuAdapter(
             startupSettled = true;
             lifecycle.active = false;
             server.off("error", onServerError);
-            await closeFeishuServer(server).catch(() => {});
-            const startupError = error instanceof Error ? error : new Error(String(error));
+            withdrawPublication();
+            const closed = await Promise.allSettled([closeFeishuServer(server), Promise.resolve().then(() => binding?.dispose())]);
+            const cleanupErrors = closed.flatMap(result => result.status === "rejected" ? [result.reason] : []);
+            const startupError = cleanupErrors.length
+              ? new AggregateError([error, ...cleanupErrors], "Feishu startup and listener cleanup failed.")
+              : error instanceof Error ? error : new Error(String(error));
             reportServerError(startupError, "listen_error");
             reject(startupError);
           }

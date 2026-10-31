@@ -1,3 +1,4 @@
+import { getTimeoutMs } from "../shared/timeoutSettings.js";
 import { openCodexDesktopThread } from "../codexDesktopBridge.js";
 import { readCodexThread } from "../codexRuntime.js";
 import { listDshSessions, openDshSession, readDshSession } from "../dshSessionBridge.js";
@@ -279,7 +280,7 @@ export function createPlanAgentStatusService(
     ?? (async (conversationId: string) => readAntigravitySession(conversationId));
   const openAntigravity = dependencies.openAntigravitySession
     ?? (async (conversationId: string) => { openAntigravitySession(conversationId); });
-  const timeoutMs = (binding: PlanAgentBinding) => Math.max(1, dependencies.timeoutMs ?? (binding.agentType === "dsh" ? PLAN_DSH_AGENT_STATUS_TIMEOUT_MS : PLAN_AGENT_STATUS_TIMEOUT_MS));
+  const timeoutMs = (binding: PlanAgentBinding) => Math.max(1, dependencies.timeoutMs ?? (binding.agentType === "dsh" ? getTimeoutMs("backend.manager.planAgentStatus.PLAN_DSH_AGENT_STATUS_TIMEOUT_MS", PLAN_DSH_AGENT_STATUS_TIMEOUT_MS) : getTimeoutMs("backend.manager.planAgentStatus.PLAN_AGENT_STATUS_TIMEOUT_MS", PLAN_AGENT_STATUS_TIMEOUT_MS)));
   const now = dependencies.now ?? (() => new Date());
 
   // Dispatch on the bound adapter, which is preserved verbatim on the binding.

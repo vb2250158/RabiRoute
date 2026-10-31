@@ -8,6 +8,12 @@ English | <a href="./rabi-codex-context-plugin.md">简体中文</a>
 
 Manager delegates physical role-source and knowledge reads to the bounded storage process while preserving recall and viewed-time policies. Context requests run in order per session; after each asynchronous read, Manager rechecks session ownership and binding and rejects late results after changes or unbinding. Failed reads do not stamp successful context and can be retried after recovery. Health requests remain responsive during slow storage.
 
+## Installation discovery and failures
+
+Codex, WorkBuddy and Antigravity Hooks share one Host discovery implementation; standalone plugin packages contain generated copies. Explicit Manager URLs still verify `/meta`. Otherwise discovery uses `RABIROUTE_HOST_EXE`, the Host-published `RABIROUTE_HOST_EXECUTABLE`, or the standard installation, and can read `RABIROUTE_MANAGER_ENDPOINT_FILE`. When no installation was explicitly selected and the standard entry is unavailable, an exact Host process-name lookup obtains its executable path. Discovery waits for complete `status --json` output and checks generation, instance and `/meta`. It never scans ports or starts or stops services.
+
+Discovery failure reports that Host availability is unconfirmed and identifies the Host/endpoint-file settings. A missing standard path is not evidence of a stopped Host. An explicitly selected installation is never silently replaced by another. Source regression covers custom installations; acceptance on the target computer remains necessary after upgrading the plugin.
+
 ## Persona-configured Stop follow-ups
 
 A persona-bound Stop checks recovery and discovers plan follow-ups, file-change reminders, and completion notifications only for that persona. An unrelated persona's recovery failure does not block it; an unrecovered bound persona still returns `PLAN_STORAGE_STARTUP_UNAVAILABLE` before writes. An unbound session still waits for global plan recovery before discovering task bindings across personas.
@@ -166,6 +172,8 @@ For completion reminders, verify one bound Stop turn reaches only the selected p
 
 
 ## Completion message content and configuration
+
+Complete heartbeat control replies (`heartbeat` containing `automation_id`, `decision`, then `message`) are processed before delivery: `DONT_NOTIFY` suppresses the notification, while `NOTIFY` sends only the message body. Empty bodies are also suppressed. The original Hook content remains available to other consumers. Ordinary replies, fenced examples and unrecognized formats are not subject to generic tag stripping, preventing loss of business content.
 
 Completion notifications use only explicit destinations in persona `codexHooks.completionDeliveries` and bound-plan `messageChannels`; private project paths or issue records never imply a destination. Matching destinations are deduplicated per task turn. The source task name is read from Desktop by the full task ID; unavailable names display “未命名任务” (unnamed task), never an old plan binding label. The complete final reply is preserved without appending a stale plan next action. Long QQ messages are split into at most 3000 UTF-16 units, preserving newlines and Unicode characters. Each part has its own persistent Outbox receipt; a failed part stops subsequent sends.
 

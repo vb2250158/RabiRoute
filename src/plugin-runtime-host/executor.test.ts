@@ -73,6 +73,34 @@ test("isolated executor prepares, commits and disposes a plugin outside Manager"
   assert.equal(executor.leases.list().length, 0);
 });
 
+test("isolated executor explicitly rejects synchronous publication without executing callbacks", async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "rabi-isolated-publication-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const marker = path.join(root, "publication-must-not-run");
+  const entryPath = path.join(root, "manager.mjs");
+  await fs.writeFile(entryPath, `
+    import fs from "node:fs";
+    export function activate(context) {
+      const attempted = () => fs.writeFileSync(${JSON.stringify(marker)}, "unexpected publication");
+      context.publication.add({ publish: attempted, rollback: attempted, afterPublish: attempted, retire: attempted });
+    }
+  `, "utf8");
+  const manifest: PluginManifest = {
+    schemaVersion: 2, id: "io.test.isolated-publication", version: "1.0.0",
+    entries: { manager: { execution: "isolated", module: "./manager.mjs" } },
+    provides: [], requires: [], optional: [], permissions: []
+  };
+  const candidate: PluginCandidate = { instanceId: "isolated-publication", revision: "one", manifest, config: {}, entry: { execution: "isolated", path: entryPath } };
+  const executor = new IsolatedPluginExecutor();
+  const runtime = new GenerationRuntime({ host: "manager", executor });
+  t.after(async () => { await runtime.dispose().catch(() => {}); await executor.leases.disposeAll(); });
+  const result = await runtime.switch([candidate]);
+  assert.equal(result.generation.records[0]?.status, "failed");
+  assert.match(result.generation.records[0]?.error?.message ?? "", /publication is unsupported in isolated execution/);
+  await assert.rejects(fs.stat(marker), { code: "ENOENT" });
+  assert.equal(executor.leases.list().length, 0);
+});
+
 test("isolated executor preserves maxChildProcesses=0 as fail-closed", async t => {
   const manifest: PluginManifest = {
     schemaVersion: 2,

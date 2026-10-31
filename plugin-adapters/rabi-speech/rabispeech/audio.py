@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from .timeout_settings import get_timeout_seconds
+
+
 import asyncio
 import shutil
 import subprocess
@@ -87,7 +90,7 @@ class AudioTranscoder:
             command.extend(["-f", "s16le", "-acodec", "pcm_s16le"])
         command.append(str(output))
         completed = subprocess.run(
-            command, capture_output=True, text=True, timeout=120, check=False,
+            command, capture_output=True, text=True, timeout=get_timeout_seconds("speech.audio.convert", 120), check=False,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
         if completed.returncode != 0:

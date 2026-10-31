@@ -6,6 +6,8 @@ English | <a href="./napcat-unattended.md">简体中文</a>
 
 # Unattended NapCat and Login Stability
 
+Maintainers: see [native listener protocols](platform-native-listeners_en.md) for reverse WS addresses, original authentication and callback shutdown.
+
 > Status: current guide. RabiRoute can discover, manage, and launch NapCat instances, while QQ authentication and security verification remain the responsibility of NapCat and QQNT.
 
 RabiRoute receives NapCat/OneBot events, records messages, evaluates routes, and delivers work to a handler. After the Manager starts listening, or when a user clicks **Start and manage login**, it can coordinate local startup, all three QQ login modes, and OneBot connection repair. QQNT and NapCat still define authentication and security-verification semantics; Rabi only proxies the current local operation. QQ passwords, cookies, and tokens must not be written to `data/route`, `data/roles`, examples, or the repository.

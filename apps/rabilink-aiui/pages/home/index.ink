@@ -147,6 +147,7 @@ import { deviceAgentPageMethods } from "../../utils/device-agent-page.js";
 import { apiToolPageMethods } from "../../utils/api-tool-page.js";
 import { aiuiConversationPageMethods } from "../../utils/aiui-conversation-page.js";
 import { guidancePageMethods } from "../../utils/guidance-page.js";
+import { requestTimeout } from "../../utils/timeout-settings.js";
 import { createAgentTurnRuntime } from "../../utils/agent-turn-runtime.js";
 import { agentLoopModelOptions } from "../../utils/agent-decision-protocol.js";
 import { installHudDisplay } from "../../utils/hud-text.js";
@@ -4724,7 +4725,7 @@ export default {
       if (!current()) return;
       if (!model) throw new Error("大模型会话未初始化");
       const tools = this.chatModelApiRuntime;
-      runtime = createAgentTurnRuntime({ model, tools: this.chatModelAgentTools || [], turnId: "turn-" + promptGeneration,
+      runtime = createAgentTurnRuntime({ requestTimeoutMs: requestTimeout(this.config(), this.data.targetDeviceId, "aiui.model.request", 30000), turnTimeoutMs: requestTimeout(this.config(), this.data.targetDeviceId, "aiui.model.turn", 180000), model, tools: this.chatModelAgentTools || [], turnId: "turn-" + promptGeneration,
         executeTool: event => current() ? this.executeChatTool(event, tools) : { cancelled: true },
         takeGuidance: () => {
           if (!current() || !this.aiuiGuidanceQueue?.length) return [];
@@ -4890,7 +4891,7 @@ export default {
     if (typeof ModelCtor.availability === "function") {
       const status = await Promise.race([
         ModelCtor.availability(),
-        new Promise((_, reject) => setTimeout(() => reject(new Error("检查模型可用性超时")), 10000))
+        new Promise((_, reject) => setTimeout(() => reject(new Error("检查模型可用性超时")), requestTimeout(this.config(), this.data.targetDeviceId, "aiui.model.available",10000)))
       ]).catch((err) => {
         console.warn("[RabiLink AIUI] availability check error:", err);
         return "unavailable";
@@ -4918,7 +4919,7 @@ export default {
             }
             return session;
           }),
-          new Promise((_, reject) => setTimeout(() => reject(new Error("创建会话超时")), 15000))
+          new Promise((_, reject) => setTimeout(() => reject(new Error("创建会话超时")), requestTimeout(this.config(), this.data.targetDeviceId, "aiui.model.create",15000)))
         ]);
         if (!session || generation !== Number(this.chatModelGeneration || 0) || this.destroyed) {
           try { session?.destroy?.(); } catch (_) {}
@@ -5079,7 +5080,7 @@ export default {
     let timer;
     try {
       return await Promise.race([operation, new Promise((_, reject) => {
-        timer = setTimeout(() => reject(new Error(label + "超时")), timeoutMs);
+        timer = setTimeout(() => reject(new Error(label + "超时")), requestTimeout(this.config(),this.data.targetDeviceId,"aiui.model.probe",timeoutMs));
         this.modelProbeTimer = timer;
       })]);
     } finally {
@@ -5091,7 +5092,7 @@ export default {
   async promptConfigurationModel(session, text) {
     let timeoutId = null;
     const timeout = new Promise((_, reject) => {
-      timeoutId = setTimeout(() => reject(new Error("原生 AI 理解超时")), CONFIGURATION_MODEL_TIMEOUT_MS);
+      timeoutId = setTimeout(() => reject(new Error("原生 AI 理解超时")), requestTimeout(this.config(), this.data.targetDeviceId, "aiui.model.configuration",CONFIGURATION_MODEL_TIMEOUT_MS));
       this.configurationPromptTimer = timeoutId;
     });
     try {
@@ -5459,7 +5460,7 @@ export default {
               task.finished.then((info) => {
                 if (finished || this.destroyed || !this.pageVisible || Number(this.speechGeneration || 0) !== speechGeneration) return;
                 const durationMs = (info?.duration ? Number(info.duration) * 1000 : 0) || this.speechDelay(trimmed);
-                this.playerSafetyTimer = setTimeout(() => finishPlayback(null), durationMs + 800);
+                this.playerSafetyTimer = setTimeout(() => finishPlayback(null), requestTimeout(this.config(),this.data.targetDeviceId,"aiui.playback",durationMs + 800));
               }).catch((err) => {
                 finishPlayback(err);
               });

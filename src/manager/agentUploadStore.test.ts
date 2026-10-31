@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { test } from "node:test";
-import { AgentUploadStore, AgentUploadStoreError, type AgentUploadStoreOptions } from "./agentUploadStore.js";
+import { AgentUploadStore, AgentUploadStoreError, readAgentUploadStorageSettings, type AgentUploadStoreOptions } from "./agentUploadStore.js";
 import { installDataMutationAuditSink } from "../observability/dataMutationAudit.js";
 
 const owner = { nodeId: "test-node", agentId: "test-agent" };
@@ -56,7 +56,7 @@ test("streaming reserves cross-instance capacity, bounds bytes, reauthorizes and
     await assert.rejects(g.store.uploadStream({ ...request, size: 4, beforeCommit() { throw new Error("revoked"); }, content: (async function* () { yield request.content; })() }), /revoked/);
     assert.equal(fs.readdirSync(g.rootDir).some(name => name.startsWith(".stream-")), false);
     assert.throws(() => g.store.get(owner, request.uploadId), errorCode("not_found"));
-    assert.throws(() => new AgentUploadStore({ rootDir: g.rootDir, maxFileBytes: 2 * 1024 ** 3 + 1 }), errorCode("invalid_input"));
+    assert.equal(new AgentUploadStore({ rootDir: g.rootDir, maxFileBytes: 2 * 1024 ** 3 + 1 }).maxFileBytes, 2 * 1024 ** 3 + 1);
   } finally { g.close(); }
 });
 
@@ -328,4 +328,38 @@ test("audit contains operation results but no body, private path or original fil
     for (const secret of [f.home, "private payload marker", "private-original-name.txt"]) assert.equal(serialized.includes(secret), false);
     assert.ok(serialized.includes("committed")); assert.ok(serialized.includes("rejected"));
   } finally { release(); f.close(); }
+});
+
+
+test("large configured uploads reserve above 2 GiB and default total accommodates a single file", async () => {
+  const size = 20 * 1024 ** 3;
+  const f = fixture({ maxFileBytes: size });
+  try {
+    assert.equal(f.store.limits.maxTotalBytes, size);
+    let entered = false;
+    await assert.rejects(f.store.uploadStream({ ...input(), size,
+      content: (async function* () {
+        entered = true;
+        const other = new AgentUploadStore({ rootDir: f.rootDir, maxFileBytes: size });
+        // Inventory must accept a >2 GiB reservation and report the actual quota, not integrity failure.
+        await assert.rejects(other.uploadStream({ ...input(), size: 1, content: (async function* () { yield Buffer.from("x"); })() }), /capacity.*RABIROUTE_AGENT_UPLOAD_MAX_TOTAL_BYTES/);
+        throw new Error("fixture stream stopped");
+      })()
+    }), /fixture stream stopped/);
+    assert.equal(entered, true);
+    assert.equal(fs.readdirSync(f.rootDir).some(name => name.startsWith(".stream-")), false);
+  } finally { f.close(); }
+});
+
+test("storage settings are public, validated, and lowering admission does not invalidate accepted files", async () => {
+  assert.deepEqual(readAgentUploadStorageSettings({ RABIROUTE_AGENT_UPLOAD_MAX_TOTAL_BYTES: "123", RABIROUTE_AGENT_UPLOAD_MAX_FILES: "7", RABIROUTE_AGENT_UPLOAD_TTL_MS: "3000" }), { maxTotalBytes: 123, maxFiles: 7, ttlMs: 3000 });
+  assert.throws(() => readAgentUploadStorageSettings({ RABIROUTE_AGENT_UPLOAD_MAX_TOTAL_BYTES: "invalid" }), /RABIROUTE_AGENT_UPLOAD_MAX_TOTAL_BYTES/);
+  const f = fixture({ maxFileBytes: 100 });
+  try {
+    const request = input("accepted file"); const receipt = f.store.upload(request);
+    const lowered = new AgentUploadStore({ rootDir: f.rootDir, maxFileBytes: 1 });
+    assert.equal(lowered.get(owner, receipt.id).size, request.content.length);
+    await lowered.withFile(owner, receipt.id, file => assert.equal(file.sha256, request.sha256));
+    assert.throws(() => lowered.upload(input("new file")), /capacity.*agentUploads.maxFileMiB/);
+  } finally { f.close(); }
 });

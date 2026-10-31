@@ -1,14 +1,15 @@
+import { getTimeoutMs } from "./timeoutSettingsClient";
 import type { VacuumRemoteSnapshot } from "../../src/integrations/xiaomiHome/vacuumRemote";
 export type RemoteSession = VacuumRemoteSnapshot;
 export type RemoteCapabilities = {available:boolean;reason?:string;resourceId?:string;expectedStateVersion?:string;protocolRevision?:string;directions:string[];pauseBeforeEnter?:boolean;activeSession?:RemoteSession};
 const root="/api/agent/xiaomi-home/vacuum-remote";
 class RequestError extends Error {constructor(readonly status:number,message:string){super(message);}}
 async function request<T>(url:string,init:RequestInit={}):Promise<T>{
- const r=await fetch(url,{cache:"no-store",signal:AbortSignal.timeout(30000),...init});const b=await r.json();
+ const r=await fetch(url,{cache:"no-store",...init,signal:AbortSignal.any([...(init.signal ? [init.signal] : []),AbortSignal.timeout(getTimeoutMs("webgui.device.request", 30000))])});const b=await r.json();
  if(!r.ok || b.code!==0)throw new RequestError(r.status,b.error?.message || b.message || "遥控请求失败。");return b.data;
 }
 async function identity(){
- const r=await fetch("/meta",{cache:"no-store",signal:AbortSignal.timeout(10000)});const m=await r.json();
+ const r=await fetch("/meta",{cache:"no-store",signal:AbortSignal.timeout(getTimeoutMs("webgui.vacuum.identity", 10000))});const m=await r.json();
  if(!r.ok || !m.applicationGenerationId || !m.managerInstanceId)throw Error("运行身份未确认，请刷新页面。");
  return {generation:String(m.applicationGenerationId),instance:String(m.managerInstanceId)};
 }

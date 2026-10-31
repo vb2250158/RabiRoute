@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const managerRoot = path.dirname(fileURLToPath(import.meta.url));
 const sourceRoot = path.dirname(managerRoot);
@@ -21,16 +21,87 @@ function productionTypeScriptFiles(directory: string): string[] {
   });
 }
 
-test("background plugins register services but never start from listener readiness", () => {
+type Publication = { publish(): void; retire(): Promise<void>; afterPublish(input: { previousRetirement: Promise<void>; signal: AbortSignal }): Promise<void> };
+const deferred = () => { let resolve!: () => void; const promise = new Promise<void>(done => { resolve = done; }); return { promise, resolve }; };
+const turn = () => new Promise<void>(resolve => setImmediate(resolve));
+async function activateBackground(kind: "memory-consolidation" | "plan-feedback-delivery", readOnly = false) {
+  const plugin = await import(pathToFileURL(path.join(repositoryRoot, "plugins/builtin/io.rabiroute.manager." + kind + "/1.0.0/manager.mjs")).href);
+  const publications: Publication[] = [], effects: Array<() => unknown> = [];
+  const lifecycle = new AbortController(); let constructions = 0, starts = 0, activations = 0, manualStops = 0;
+  const runtime: any = {
+    managerReadOnly: readOnly, activePlanFeedbackDeliveryFlights: new Map<string, Promise<void>>(),
+    manualTriggerProcesses: { stopOwner: async (owner: string) => { assert.equal(owner, "manager:memory-consolidation"); manualStops++; } },
+    createMemoryConsolidationScheduler: () => {
+      constructions++; let active = true, requested = false;
+      return { deferActivation() { active = false; }, isStarted: () => starts > 0, start() { if (active) starts++; else requested = true; },
+        activate(resume: boolean) { activations++; active = true; if (resume || requested) starts++; }, async stop() { active = false; } };
+    },
+    PlanFeedbackRecoveryService: class {
+      constructor() { constructions++; }
+      isActive() { return starts > 0; }
+      async start(reason: string) { assert.equal(reason, "plan and route readiness"); starts++; }
+      async stopAndJoin() {}
+    }
+  };
+  Object.defineProperty(runtime, "managerListenerReady", { get() { throw new Error("Listener readiness must not start background work."); } });
+  await plugin.activate({ identity: { instanceId: "controlled-background" }, lifecycle: { signal: lifecycle.signal, fail(error: unknown) { throw error; } },
+    services: { require: () => runtime, provide: () => {} }, effects: { add: (starter: () => unknown) => effects.push(starter) },
+    publication: { add: (owner: Publication) => publications.push(owner) } });
+  for (const effect of effects) assert.equal(typeof await effect(), "function");
+  return { runtime, publications, lifecycle, counts: () => ({ constructions, starts, activations, manualStops }) };
+}
+
+test("background plugins register services but never start from listener readiness", async () => {
   const memory = read("plugins/builtin/io.rabiroute.manager.memory-consolidation/1.0.0/manager.mjs");
   const feedback = read("plugins/builtin/io.rabiroute.manager.plan-feedback-delivery/1.0.0/manager.mjs");
-
   assert.doesNotMatch(memory, /managerListenerReady|scheduler\.start\s*\(/);
-  assert.doesNotMatch(feedback, /managerListenerReady|(?:^|\n)\s*start\(\);/);
-  assert.doesNotMatch(feedback, /manager plugin activation/);
+  assert.doesNotMatch(feedback, /managerListenerReady|manager plugin activation/);
   assert.match(feedback, /recovery\.start\("plan and route readiness"\)/);
-  assert.match(memory, /runtime\.memoryConsolidationScheduler = scheduler/);
-  assert.match(feedback, /runtime\.startActivePlanFeedbackRecovery = start/);
+  for (const kind of ["memory-consolidation", "plan-feedback-delivery"] as const) for (const requestEarly of [false, true]) {
+    const f = await activateBackground(kind), publication = f.publications[0]!;
+    assert.equal(f.publications.length, 1); assert.equal(f.counts().starts, 0);
+    publication.publish(); assert.equal(f.counts().starts, 0);
+    const predecessor = deferred(), after = publication.afterPublish({ previousRetirement: predecessor.promise, signal: f.lifecycle.signal });
+    await turn(); assert.equal(f.counts().starts, 0); assert.equal(f.counts().activations, 0);
+    if (kind === "plan-feedback-delivery") assert.equal(f.counts().constructions, 0);
+    const startReady = () => kind === "plan-feedback-delivery" ? f.runtime.startActivePlanFeedbackRecovery() : f.runtime.memoryConsolidationScheduler.start();
+    if (requestEarly) startReady();
+    assert.equal(f.counts().starts, 0, "an early readiness request must wait for original predecessor retirement");
+    predecessor.resolve(); await after; assert.equal(f.counts().starts, requestEarly ? 1 : 0);
+    if (!requestEarly) startReady(); assert.equal(f.counts().starts, 1);
+    assert.equal(f.counts().constructions, 1);
+    await publication.retire();
+    if (kind === "memory-consolidation") assert.equal(f.counts().manualStops, 1);
+    else assert.equal(f.runtime.planFeedbackDeliveryActive, false);
+  }
+});
+
+test("read-only and aborted background candidates never acquire running work", async () => {
+  for (const kind of ["memory-consolidation", "plan-feedback-delivery"] as const) {
+    const readOnly = await activateBackground(kind, true); assert.deepEqual(readOnly.counts(), { constructions: 0, starts: 0, activations: 0, manualStops: 0 }); assert.equal(readOnly.publications.length, 0);
+    const f = await activateBackground(kind), publication = f.publications[0]!;
+    publication.publish(); const predecessor = deferred();
+    const after = publication.afterPublish({ previousRetirement: predecessor.promise, signal: f.lifecycle.signal }).catch(error => error);
+    f.lifecycle.abort(); predecessor.resolve(); await after;
+    assert.equal(f.counts().starts, 0); assert.equal(f.counts().activations, 0);
+    if (kind === "plan-feedback-delivery") assert.equal(f.counts().constructions, 0);
+    await publication.retire(); assert.equal(f.counts().manualStops, 0);
+  }
+});
+
+test("feedback retirement joins initial and late original flights in finally even when stopAndJoin rejects", async () => {
+  const f = await activateBackground("plan-feedback-delivery"), publication = f.publications[0]!;
+  publication.publish(); await publication.afterPublish({ previousRetirement: Promise.resolve(), signal: f.lifecycle.signal });
+  const initial = deferred(), late = deferred(), stopping = deferred(), entered = deferred();
+  f.runtime.activePlanFeedbackDeliveryFlights.set("initial", initial.promise);
+  f.runtime.planFeedbackRecoveryService.stopAndJoin = async () => { f.runtime.activePlanFeedbackDeliveryFlights.set("late", late.promise); entered.resolve(); await stopping.promise; throw new Error("controlled stop failure"); };
+  let settled = false;
+  const original = publication.retire(); assert.equal(publication.retire(), original);
+  const retirement = original.then(() => { settled = true; return undefined; }, error => { settled = true; return error; });
+  await entered.promise; stopping.resolve(); await turn(); assert.equal(settled, false);
+  initial.resolve(); await turn(); assert.equal(settled, false);
+  late.resolve(); assert.match(String(await retirement), /controlled stop failure/);
+  assert.equal(f.runtime.planFeedbackDeliveryActive, false);
 });
 
 test("plan and route readiness are the single background start owner", () => {
@@ -40,7 +111,7 @@ test("plan and route readiness are the single background start owner", () => {
   assert.ok(start >= 0 && end > start, "plan-dependent background controller is missing");
   const controller = controlPlane.slice(start, end);
 
-  assert.match(controller, /planStorageStartupLifecycle\.snapshot\(\)\.state !== "ready"/);
+  assert.match(controller, /!\["ready", "partial"\]\.includes\(planStorageStartupLifecycle\.snapshot\(\)\.state\)/);
   assert.match(controller, /routeCatalogStartupLifecycle\.snapshot\(\)\.state !== "ready"/);
   assert.match(controller, /memoryConsolidationScheduler\?\.start\(\)/);
   assert.match(controller, /startActivePlanFeedbackRecovery\(\)/);

@@ -1,3 +1,4 @@
+import { getTimeoutMs } from "./timeoutSettingsClient";
 import { isReviewEvent, type AllDayEvent } from "../../src/shared/allDayRecording";
 
 const previews = new Map<string, { at: number; events: AllDayEvent[] }>();
@@ -7,7 +8,7 @@ function previewDatabase(): Promise<IDBDatabase | null> {
   if (typeof indexedDB === "undefined") return Promise.resolve(null);
   return previewDb ??= new Promise(resolve => {
     const request = indexedDB.open("all-day-recording-preview", 1);
-    const timer = setTimeout(() => { previewDb = undefined; resolve(null); }, 4000);
+    const timer = setTimeout(() => { previewDb = undefined; resolve(null); }, getTimeoutMs("webgui.recording.cache", 4000));
     request.onupgradeneeded = () => request.result.createObjectStore("personas");
     request.onerror = () => { clearTimeout(timer); previewDb = undefined; resolve(null); };
     request.onsuccess = () => {
@@ -24,7 +25,7 @@ async function previewTransaction<T>(roleId: string, snapshot?: { at: number; ev
     const transaction = db.transaction("personas", snapshot ? "readwrite" : "readonly");
     const store = transaction.objectStore("personas");
     const request = snapshot ? store.put(snapshot, roleId) : store.get(roleId);
-    const timer = setTimeout(() => { transaction.abort(); resolve(undefined); }, 4000);
+    const timer = setTimeout(() => { transaction.abort(); resolve(undefined); }, getTimeoutMs("webgui.recording.cache", 4000));
     transaction.oncomplete = () => { clearTimeout(timer); resolve(snapshot ? undefined : request.result); };
     transaction.onerror = transaction.onabort = () => { clearTimeout(timer); resolve(undefined); };
   });
@@ -65,12 +66,12 @@ export function rememberRecordingPreview(roleId: string, events: AllDayEvent[]):
 }
 
 /** Bound the complete read, including response bodies, without retrying capture mutations. */
-export async function readAllDayResource<T>(url: string, read: (response: Response) => Promise<T>, init: RequestInit = {}, signal?: AbortSignal, timeoutMs = 12000): Promise<T> {
+export async function readAllDayResource<T>(url: string, read: (response: Response) => Promise<T>, init: RequestInit = {}, signal?: AbortSignal, timeoutMs = getTimeoutMs("webgui.recording.read", 12000), fetchImpl: typeof fetch = (...args) => fetch(...args)): Promise<T> {
   const deadline = new AbortController();
   const timeout = setTimeout(() => deadline.abort(), timeoutMs);
   const combined = signal ? AbortSignal.any([signal, deadline.signal]) : deadline.signal;
   try {
-    const response = await fetch(url, { ...init, signal: combined });
+    const response = await fetchImpl(url, { ...init, signal: combined });
     return await read(response);
   } catch (error) {
     if (deadline.signal.aborted && !signal?.aborted) {

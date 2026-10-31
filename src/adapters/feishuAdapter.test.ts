@@ -11,13 +11,19 @@ import { createMessageAdapterRuntime } from "../runtime/messageAdapterRuntime.js
 import { builtinMessageAdapterDefinitions } from "./builtinMessageAdapters.js";
 import type { MessageAdapterDefinition, MessageAdapterDispose } from "./messageAdapter.js";
 import {
-  createFeishuAdapter,
+  createFeishuAdapter as createNativeFeishuAdapter,
   decryptFeishuCallback,
   handleFeishuCallback,
   verifyFeishuCallbackSignature,
   type FeishuAdapterDependencies,
   type FeishuAdapterSettings
 } from "./feishuAdapter.js";
+
+import { ManagerPluginRouteRegistry } from "../manager/managerPluginRouteRegistry.js";
+
+// Unit fixtures explicitly own an isolated registry; production defaults use the supervised Gateway runtime.
+const createFeishuAdapter = (dependencies: FeishuAdapterDependencies = {}) =>
+  createNativeFeishuAdapter({ apiOperations: new ManagerPluginRouteRegistry(), ...dependencies });
 
 const verificationToken = "verification-token-for-test";
 const encryptKey = "encrypt-key-for-test";
@@ -58,8 +64,10 @@ function signed(rawBody: Buffer, timestamp = String(nowSeconds), nonce = "nonce-
 
 function encrypt(body: Record<string, unknown>): string {
   const key = createHash("sha256").update(encryptKey).digest();
-  const cipher = createCipheriv("aes-256-cbc", key, key.subarray(0, 16));
+  const iv = Buffer.from("00112233445566778899aabbccddeeff", "hex");
+  const cipher = createCipheriv("aes-256-cbc", key, iv);
   return Buffer.concat([
+    iv,
     cipher.update(Buffer.from(JSON.stringify(body), "utf8")),
     cipher.final()
   ]).toString("base64");
@@ -454,6 +462,7 @@ test("concurrent Feishu disposal callers await the same listener close", async (
     }
 
     closeAllConnections(): void {}
+    address() { return { address: "127.0.0.1", family: "IPv4", port: 12345 }; }
   }
 
   const server = new DelayedCloseServer();

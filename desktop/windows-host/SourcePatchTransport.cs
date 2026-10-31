@@ -56,7 +56,7 @@ internal static class SourcePatchTransport
         var bytes = Encoding.UTF8.GetBytes(payload.GetRawText());
         if (bytes.Length > MaximumRequestBytes) return Result(false, "invalid_request", "Source patch request is too large.");
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeout.CancelAfter(TimeSpan.FromSeconds(20));
+        timeout.CancelAfter(HostTimeouts.Get("host.patch.request", TimeSpan.FromSeconds(20)));
         using var client = new HttpClient(new SocketsHttpHandler { AllowAutoRedirect = false, UseProxy = false })
         { Timeout = Timeout.InfiniteTimeSpan };
         var route = webPatch ? "/_rabiroute/host/web-patches" : "/_rabiroute/host/source-patches";

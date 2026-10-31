@@ -7,13 +7,15 @@ import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { CodexHookContextService, type CodexHookContextServiceOptions } from "./codexHookContext.js";
-import { handleCodexHookApi } from "./codexHookRoutes.js";
+import { createCodexHookOperations, handleCodexHookApi } from "./codexHookRoutes.js";
+import { ManagerPluginRouteRegistry } from "./managerPluginRouteRegistry.js";
+import { apiCatalogOpenApi } from "./apiOperationCatalog.js";
 import { LanAgentAuthority } from "./lanAgentAuthority.js";
 import { evaluateLanAgentRequest, assertTrustedLanAgentPrincipal } from "./lanAgentRequestAccess.js";
 import { assertLanAgentBodyAuthority, registerLanAgentBodyGuard } from "./lanAgentBodyAuthority.js";
 
 async function fixture(planStorageReady: NonNullable<CodexHookContextServiceOptions["planStorageReady"]> = () => true,
-  beforeRequest?: (request: http.IncomingMessage, response: http.ServerResponse) => boolean) {
+  beforeRequest?: (request: http.IncomingMessage, response: http.ServerResponse) => boolean, typed = false) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-codex-hook-api-"));
   const roleDir = path.join(root, "roles", "YeYu");
   fs.mkdirSync(roleDir, { recursive: true });
@@ -23,10 +25,12 @@ async function fixture(planStorageReady: NonNullable<CodexHookContextServiceOpti
     storePath: path.join(root, "data", "codex-hook", "sessions.json"),
     planStorageReady
   });
+  const registry = typed ? new ManagerPluginRouteRegistry() : undefined;
+  const registration = registry?.registerOperations("hook-test", createCodexHookOperations(service));
   const server = http.createServer((request, response) => {
     if (beforeRequest && !beforeRequest(request, response)) return;
     const requestUrl = new URL(request.url || "/", `http://${request.headers.host || "127.0.0.1"}`);
-    if (!handleCodexHookApi(request, requestUrl, response, service)) {
+    if (!(registry ? registry.handle(request, requestUrl, response) : handleCodexHookApi(request, requestUrl, response, service))) {
       response.writeHead(404).end();
     }
   });
@@ -36,28 +40,27 @@ async function fixture(planStorageReady: NonNullable<CodexHookContextServiceOpti
   return {
     root,
     service,
+    registry,
     baseUrl: `http://127.0.0.1:${address.port}`,
-    close: () => new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()))
+    close: async () => { server.closeAllConnections(); await registration?.dispose(); await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve())); }
   };
 }
 
-test("authenticated remote Hook management needs no binding; source events and delayed writes retain authority", async (t) => {
+for (const typed of [false, true]) test(`authenticated remote Hook management needs no binding; source events and delayed writes retain authority (${typed ? "executable" : "raw"})`, async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabi-hook-authority-"));
   const authority = new LanAgentAuthority({ statePath: path.join(root, "authority.json") });
   const credential = authority.enroll(authority.issueBootstrapTicket().ticket, "remote-node");
-  authority.registerAgentCatalog(credential.token, [{ agentId: "worker", provider: "dsh", sessionId: "own-session" }]);
-  authority.setAgentEnabled("remote-node", "worker", true);
   let observed: (() => void) | undefined;
   const app = await fixture(() => true, (request, response) => {
     const access = evaluateLanAgentRequest(request, authority, true);
     if (access.kind !== "agent") { response.writeHead(403).end(); return false; }
     registerLanAgentBodyGuard(request, body => assertLanAgentBodyAuthority(new URL(request.url!, "http://fixture.invalid").pathname,
-      body, assertTrustedLanAgentPrincipal(request)?.binding));
+      body, assertTrustedLanAgentPrincipal(request)?.source));
     observed?.();
     return true;
-  });
+  }, typed);
   t.after(async () => { await app.close(); fs.rmSync(app.root, { recursive: true, force: true }); fs.rmSync(root, { recursive: true, force: true }); });
-  const headers = { authorization: `Bearer ${credential.token}`, "x-rabiroute-agent-id": "worker", "content-type": "application/json" };
+  const headers = { authorization: `Bearer ${credential.token}`, "x-rabiroute-agent-type": "dsh", "x-rabiroute-session-id": "own-session", "content-type": "application/json" };
   const managed = await fetch(`${app.baseUrl}/api/codex-hook/sessions/another-target`, { method: "PUT", headers, body: JSON.stringify({ roleId: "YeYu" }) });
   assert.equal(managed.status, 200);
   const hookBody = { hook_event_name: "SessionStart", session_id: "own-session", agentType: "dsh" };
@@ -74,9 +77,9 @@ test("authenticated remote Hook management needs no binding; source events and d
     writer.on("error", reject); writer.write('{"roleId":');
   });
   await started;
-  authority.setAgentEnabled("remote-node", "worker", false);
+  authority.revokeNode("remote-node");
   writer.end('"YeYu"}');
-  assert.equal(await result, 400);
+  assert.equal(await result, typed ? 403 : 400);
   assert.equal(app.service.getBinding("revoked-target"), null);
 });
 
@@ -125,6 +128,34 @@ async function json(response: Response): Promise<Record<string, any>> {
   assert.equal(body.code, 0);
   return body;
 }
+
+test("executable Hook contracts retain owner binding lifecycle, aliases, diagnostics and Stop recovery semantics", async t => {
+  const app = await fixture(() => false, undefined, true);
+  t.after(async () => { await app.close(); fs.rmSync(app.root, { recursive: true, force: true }); });
+  const base = app.baseUrl + "/api/codex-hook";
+  assert.equal((await json(await fetch(base + "/sessions/typed-session"))).data, null);
+  assert.deepEqual((await json(await fetch(base + "/roles"))).data.roleIds, ["YeYu"]);
+  for (const method of ["PUT", "PATCH"]) {
+    const binding = await json(await fetch(base + "/sessions/typed-session", { method,
+      headers: { "content-type": "application/json" }, body: JSON.stringify({ roleId: "YeYu", retainedCompatibilityField: true }) }));
+    assert.equal(binding.data.sessionId, "typed-session"); assert.equal(binding.data.roleId, "YeYu");
+  }
+  assert.equal((await json(await fetch(base + "/sessions"))).data.sessions[0].sessionId, "typed-session");
+  assert.equal((await json(await fetch(base + "/doctor"))).data.bindings[0].sessionId, "typed-session");
+  const context = await json(await fetch(base + "/context", { method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ eventName: "SessionStart", sessionId: "typed-session", source: "resume" }) }));
+  assert.match(context.data.additionalContext, /由 Rabi Manager 管理/);
+  const stop = await fetch(base + "/context", { method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ hook_event_name: "Stop", session_id: "typed-session", turn_id: "typed-turn" }) });
+  assert.equal(stop.status, 503); const failure = await stop.json();
+  assert.equal(failure.error, "PLAN_STORAGE_STARTUP_UNAVAILABLE"); assert.equal(failure.commitState, "not_started");
+  assert.equal((await json(await fetch(base + "/sessions/typed-session", { method: "DELETE" }))).data.removed.sessionId, "typed-session");
+  assert.equal((await json(await fetch(base + "/sessions/typed-session"))).data, null);
+  const spec = (await apiCatalogOpenApi(app.registry!.catalogSnapshot())) as { paths: Record<string, Record<string, Record<string, any>>> };
+  assert.equal(spec.paths["/api/codex-hook/context"]!.post!["x-rabiroute-operation-aliases"][0], "hook:POST:/api/codex-hook/context");
+  assert.equal(spec.paths["/api/codex-hook/sessions/{sessionId}"]!.patch!.operationId, "agent.hook.bind.patch");
+  const unrecognized = await fetch(base + "/roles?permission=extra"); assert.equal(unrecognized.status, 400);
+});
 
 function runHookCommand(command: string, input: unknown, env: NodeJS.ProcessEnv): Promise<{ code: number | null; stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
@@ -176,7 +207,13 @@ test("Codex Hook HTTP API binds, injects, lists, and unbinds through Manager", a
 });
 
 test("the packaged Codex Hook injects context produced by the Manager service", async (t) => {
-  const app = await fixture();
+  const app = await fixture(() => true, (request, response) => {
+    if (request.url !== "/meta") return true;
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end(JSON.stringify({ applicationGenerationId: "hook-fixture-generation", managerInstanceId: "hook-fixture-manager",
+      health: { live: true, state: "healthy", requiredReady: true } }));
+    return false;
+  });
   t.after(async () => {
     await app.close();
     fs.rmSync(app.root, { recursive: true, force: true });
@@ -189,7 +226,7 @@ test("the packaged Codex Hook injects context produced by the Manager service", 
     hook_event_name: "UserPromptSubmit",
     session_id: "session-plugin-e2e",
     prompt: "[rabi:use YeYu]"
-  }, { ...process.env, PLUGIN_ROOT: pluginRoot, RABI_MANAGER_URL: app.baseUrl });
+  }, { ...process.env, PLUGIN_ROOT: pluginRoot, RABIROUTE_MANAGER_URL: app.baseUrl, RABI_MANAGER_URL: app.baseUrl });
   assert.equal(result.code, 0, result.stderr);
   const output = JSON.parse(result.stdout);
   assert.equal(output.hookSpecificOutput.hookEventName, "UserPromptSubmit");

@@ -1,10 +1,14 @@
 import test from "node:test";
+import { spawnSync } from "node:child_process";
+import { readPersonaReadSettings } from "../shared/personaReadSettings.js";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import http from "node:http";
-import { readPersonaReferenceSnapshot, resolveRemotePersonaSnapshot, validateRemotePersonaLanguageStyle, handlePersonaBootstrapApi, handlePersonaReferenceApi, handlePersonaReferenceLanguageStyleApi, handleRemotePersonaResolutionApi } from "./remotePersonaRoutes.js";
+import { readPersonaReferenceSnapshot, resolveRemotePersonaSnapshot, validateRemotePersonaLanguageStyle, createPersonaBootstrapOperation, handleRemotePersonaResolutionApi } from "./remotePersonaRoutes.js";
+import { createPersonaResourceOperations } from "./personaResourceOperations.js";
+import { ManagerPluginRouteRegistry } from "./managerPluginRouteRegistry.js";
 import { TunnelDenied } from "../peerTunnel/security.js";
 import { ROLE_CONTEXT_ROUTE_HEADER, ROLE_CONTEXT_CAPABILITY_HEADER, ROLE_CONTEXT_GENERATION_HEADER, ROLE_CONTEXT_MANAGER_HEADER } from "./roleContextProjection.js";
 import { LanguageStyleValidator } from "../languageStyleValidation.js";
@@ -48,18 +52,10 @@ test("remote reply cannot substitute another persona or invalid config", async (
   }
 });
 
-test("remote consumer enforces the document byte limit independently of the response envelope", async () => {
-  const atLimit = "x".repeat(2 * 1024 * 1024);
-  const withDocument = (document: string) => reader({ fetchRemote: async (_id, pathname) =>
-    pathname === "/meta" ? reply(meta) : reply({ code: 0, data: { ...snapshot, document } }) });
-  assert.equal((await resolveRemotePersonaSnapshot(definition, withDocument(atLimit))).document.length, atLimit.length);
-  for (const document of ["x".repeat(3 * 1024 * 1024), "兔".repeat(700_000)]) {
-    await assert.rejects(resolveRemotePersonaSnapshot(definition, withDocument(document)), error => {
-      assert.equal((error as { statusCode?: number }).statusCode, 413);
-      assert.equal((error as { code?: string }).code, "PERSONA_FILE_TOO_LARGE");
-      return true;
-    });
-  }
+test("remote consumer accepts documents and envelopes above former fixed quotas", async () => {
+  const document = "x".repeat(5 * 1024 * 1024);
+  const data = await resolveRemotePersonaSnapshot(definition, reader({ fetchRemote: async (_id, pathname) => pathname === "/meta" ? reply(meta) : reply({ code: 0, data: { ...snapshot, document } }) }));
+  assert.equal(data.document, document);
 });
 
 test("remote language style runs on its owner and rejects owner changes or inconsistent replies", async () => {
@@ -94,7 +90,8 @@ test("local source reads bounded persona files without rewriting configuration",
     await fs.writeFile(path.join(root, "personaConfig.json"), "invalid");
     await assert.rejects(readPersonaReferenceSnapshot(root, "Example", "persona.md", remote), /有效 JSON/);
     await fs.writeFile(path.join(root, "persona.md"), Buffer.alloc(2 * 1024 * 1024 + 1));
-    await assert.rejects(readPersonaReferenceSnapshot(root, "Example", "persona.md", remote), /大小/);
+    await fs.writeFile(path.join(root, "personaConfig.json"), JSON.stringify({ extra: "x".repeat(300 * 1024) }));
+    assert.equal((await readPersonaReferenceSnapshot(root, "Example", "persona.md", remote)).document.length, 2 * 1024 * 1024 + 1);
   } finally { await fs.rm(root, { recursive: true, force: true }); }
 });
 test("private route request checks generation, capability and the persisted selection", async () => {
@@ -107,7 +104,7 @@ test("private route request checks generation, capability and the persisted sele
       definition: id => id === definition.id ? definition : undefined,
       verifyCapability: (route, role, cap) => route === definition.id && role === "Example" && cap === "route-capability",
       resolve: async () => { resolveCalls++; if (denied) throw new TunnelDenied("peer_device_not_trusted"); return resolveRemotePersonaSnapshot(definition, reader()); }, json })) {
-      handlePersonaReferenceApi(request, url, response, { roleDirectory: () => "unused", identity: () => local, json });
+      response.writeHead(404).end("{}");
     }
   });
   await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
@@ -126,13 +123,6 @@ test("private route request checks generation, capability and the persisted sele
   } finally { await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())); }
 });
 
-async function jsonRequest(request: http.IncomingMessage, maxBytes: number): Promise<unknown> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of request) chunks.push(Buffer.from(chunk));
-  const bytes = Buffer.concat(chunks);
-  assert.ok(bytes.length <= maxBytes);
-  return JSON.parse(bytes.toString("utf8"));
-}
 const jsonResponse = (res: http.ServerResponse, status: number, data: unknown) => {
   res.writeHead(status, { "content-type": "application/json" }); res.end(JSON.stringify(data));
 };
@@ -146,16 +136,19 @@ test("persona bootstrap requires the authenticated control entry and fences the 
   let current = local;
   let mode = "success";
   const calls: string[] = [];
-  const server = http.createServer((request, response) => handlePersonaBootstrapApi(request, new URL(request.url || "/", "http://localhost"), response, {
-    allowed: () => allowed, identity: () => current, readJson: jsonRequest, json: jsonResponse,
+  const registry = new ManagerPluginRouteRegistry();
+  const registration = registry.registerOperations("peer", [createPersonaBootstrapOperation({
+    allowed: () => allowed, identity: () => current,
     ensure: async deviceId => {
       calls.push(deviceId);
       if (mode === "upgrade") throw new Error("peer_persona_upgrade_required");
       if (mode === "denied") throw new TunnelDenied("peer_identity_changed");
       if (mode === "offline") throw new Error("peer_device_offline");
       if (mode === "changed") current = { ...local, managerInstanceId: "changed" };
+      if (mode === "revoked") allowed = false;
     }
-  }));
+  })]);
+  const server = http.createServer((request, response) => { if (!registry.handle(request, new URL(request.url || "/", "http://localhost"), response)) response.writeHead(404).end(); });
   const base = await listening(server);
   const post = (body: unknown) => fetch(base + "/api/rabilink/peer/persona/bootstrap", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
   try {
@@ -168,12 +161,13 @@ test("persona bootstrap requires the authenticated control entry and fences the 
     }
     assert.deepEqual(calls, []);
     assert.deepEqual(await (await post({ deviceId: "peer-b" })).json(), { code: 0, data: { deviceId: "peer-b" } });
-    for (const [failureMode, expected] of [["upgrade", 426], ["denied", 403], ["offline", 503], ["changed", 409]] as const) {
+    for (const [failureMode, expected] of [["upgrade", 426], ["denied", 403], ["offline", 503], ["changed", 409], ["revoked", 403]] as const) {
       mode = failureMode;
       current = local;
+      allowed = true;
       assert.equal((await post({ deviceId: "peer-b" })).status, expected);
     }
-  } finally { await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())); }
+  } finally { await registration.dispose(); await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())); }
 });
 
 test("source style validation uses only the selected persona binding and current revision", async () => {
@@ -186,8 +180,9 @@ test("source style validation uses only the selected persona binding and current
   await fs.writeFile(path.join(root, "personaConfig.json"), JSON.stringify({ languageStyle: { styleSkillUrl } }));
   const initial = await readPersonaReferenceSnapshot(root, "Example", "persona.md", remote);
   const result = { passed: true, status: "passed" as const, styleSkillUrl, scope: "outbound_message", violations: [], checkedRuleIds: [], skippedRuleIds: [] };
-  const server = http.createServer((request, response) => handlePersonaReferenceLanguageStyleApi(request, new URL(request.url || "/", "http://localhost"), response, {
-    roleDirectory: roleId => { assert.equal(roleId, "Example"); return root; }, identity: () => current, readJson: jsonRequest, json: jsonResponse,
+  const routes = new ManagerPluginRouteRegistry();
+  const registration = routes.registerOperations("fixture-persona-resources", createPersonaResourceOperations({ rolesRoot: path.dirname(root),
+    roleDirectory: roleId => { assert.equal(roleId, "Example"); return root; }, identity: () => current,
     validate: async input => {
       validations++;
       assert.deepEqual(input, { text: "Example reply", styleSkillUrl, scope: "outbound_message" });
@@ -196,6 +191,7 @@ test("source style validation uses only the selected persona binding and current
       return result;
     }
   }));
+  const server = http.createServer((request, response) => { if (!routes.handle(request, new URL(request.url || "/", "http://localhost"), response)) response.writeHead(404).end("{}"); });
   const base = await listening(server);
   const body = { text: "Example reply", file: "persona.md", revision: initial.revision };
   const post = (value: unknown) => fetch(base + "/api/roles/Example/persona-reference/language-style", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(value) });
@@ -211,7 +207,9 @@ test("source style validation uses only the selected persona binding and current
     change = "config";
     assert.equal((await post(body)).status, 409);
   } finally {
+    await registration.dispose();
     await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+    assert.equal(path.dirname(path.resolve(root)), path.resolve(os.tmpdir()));
     await fs.rm(root, { recursive: true, force: true });
   }
 });
@@ -227,9 +225,11 @@ test("owner-local absolute style paths stay on the owner and preserve their conf
   await fs.writeFile(path.join(root, "personaConfig.json"), JSON.stringify({ languageStyle: { styleSkillUrl } }));
   const source = await readPersonaReferenceSnapshot(root, "Example", "persona.md", remote);
   const validator = new LanguageStyleValidator();
-  const server = http.createServer((request, response) => handlePersonaReferenceLanguageStyleApi(request, new URL(request.url || "/", "http://localhost"), response, {
-    roleDirectory: () => root, identity: () => remote, readJson: jsonRequest, json: jsonResponse, validate: input => validator.validate(input)
+  const routes = new ManagerPluginRouteRegistry();
+  const registration = routes.registerOperations("fixture-persona-resources", createPersonaResourceOperations({ rolesRoot: path.dirname(root),
+    roleDirectory: () => root, identity: () => remote, validate: input => validator.validate(input)
   }));
+  const server = http.createServer((request, response) => { if (!routes.handle(request, new URL(request.url || "/", "http://localhost"), response)) response.writeHead(404).end("{}"); });
   const base = await listening(server);
   try {
     const data = await resolveRemotePersonaSnapshot(definition, reader({ fetchRemote: async (_id, pathname) =>
@@ -240,7 +240,31 @@ test("owner-local absolute style paths stay on the owner and preserve their conf
     assert.equal(result.styleSkillUrl, styleSkillUrl);
     assert.match(result.styleDataUrl || "", /^file:/);
   } finally {
+    await registration.dispose();
     await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+    assert.equal(path.dirname(path.resolve(root)), path.resolve(os.tmpdir()));
     await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+
+test("persona quotas are optional and explicit document/config/response quotas identify their setting", () => {
+  assert.deepEqual(readPersonaReadSettings({}), { documentBytes: 0, configBytes: 0, responseBytes: 0 });
+  assert.throws(() => readPersonaReadSettings({ RABIROUTE_PERSONA_CONFIG_MAX_BYTES: "-1" }), /RABIROUTE_PERSONA_CONFIG_MAX_BYTES/);
+  const program = [
+    "import assert from 'node:assert/strict';import fs from 'node:fs/promises';import os from 'node:os';import path from 'node:path';",
+    "import {readPersonaReferenceSnapshot,resolveRemotePersonaSnapshot} from './src/manager/remotePersonaRoutes.ts';",
+    "const setting=process.env.TEST_SETTING;const root=await fs.mkdtemp(path.join(os.tmpdir(),'persona-quota-'));",
+    "try{await fs.writeFile(path.join(root,'persona.md'),'document');await fs.writeFile(path.join(root,'personaConfig.json'),'{}');",
+    "const identity={applicationGenerationId:'generation',managerInstanceId:'instance'};",
+    "const result=setting.endsWith('RESPONSE_MAX_BYTES')?resolveRemotePersonaSnapshot({agentRoleDeviceId:'peer',agentRoleId:'Example'},{identity:()=>identity,managerBaseUrl:'http://localhost',remoteGeneration:async()=>identity.applicationGenerationId,fetchRemote:async()=>Response.json({data:'response'})}):readPersonaReferenceSnapshot(root,'Example','persona.md',identity);",
+    "await assert.rejects(result,error=>{assert.equal(error.code,'PERSONA_FILE_TOO_LARGE');assert.match(error.message,new RegExp(setting+'=1'));return true;});",
+    "}finally{await fs.rm(root,{recursive:true,force:true});}"
+  ].join('\n');
+  for (const setting of ["RABIROUTE_PERSONA_DOCUMENT_MAX_BYTES", "RABIROUTE_PERSONA_CONFIG_MAX_BYTES", "RABIROUTE_PERSONA_RESPONSE_MAX_BYTES"]) {
+    const result = spawnSync(process.execPath, ["--import", "./scripts/test-manager-runtime-env.mjs", "--import", "tsx", "--input-type=module", "--eval", program], {
+      cwd: process.cwd(), env: { ...process.env, TEST_SETTING: setting, [setting]: "1" }, windowsHide: true, encoding: "utf8", timeout: 20000
+    });
+    assert.equal(result.status, 0, result.stderr);
   }
 });

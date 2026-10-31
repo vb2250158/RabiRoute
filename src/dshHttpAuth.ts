@@ -1,9 +1,11 @@
+import { getTimeoutMs } from "./shared/timeoutSettings.js";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveRuntimeLayout } from "./shared/runtimeLayout.js";
 import { DshConnectionStore, DshConnectionError, dshLocalOrigin, type DshSessionCredential, dshConnectionFile } from "./dshConnectionStore.js";
 import { createHash, randomUUID } from "node:crypto";
+import { discoverLocalDsh } from "./dshDiscovery.js";
 
 const cookies = new Map<string, { value: string; expires: number }>();
 // Only legacy calls without request-scoped authority may share an exchange.
@@ -30,7 +32,14 @@ async function launchLogFor(origin: string): Promise<string | undefined> {
   if (!path.isAbsolute(configPath)) throw new Error('RABI_DSH_AUTH_FILE must be absolute.');
   let text: string;
   try { text = await fs.readFile(configPath, 'utf8'); }
-  catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT' && !process.env.RABI_DSH_AUTH_FILE?.trim()) return undefined; throw new Error('DSH authentication configuration is unreadable.'); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT' && !process.env.RABI_DSH_AUTH_FILE?.trim()) {
+      const local = discoverLocalDsh();
+      // Only the known local owner's current log is eligible, never another origin.
+      return local.discoveredBaseUrls.includes(origin) ? path.join(local.homeDir, 'logs', 'web-host.stdout.log') : undefined;
+    }
+    throw new Error('DSH authentication configuration is unreadable.');
+  }
   let config: { endpoints?: Array<{ baseUrl: string; launchLogPath: string }> };
   try { config = JSON.parse(text); } catch { throw new Error('DSH authentication configuration is invalid JSON.'); }
   if (!config || !Array.isArray(config.endpoints)) throw new Error('DSH authentication configuration requires endpoints.');
@@ -44,6 +53,16 @@ async function launchLogFor(origin: string): Promise<string | undefined> {
   if (typeof logPath !== 'string' || !path.isAbsolute(logPath)) throw new Error('DSH launchLogPath must be absolute.');
   // A local launch credential must never be sent to a remote endpoint.
   if (!['localhost', '127.0.0.1', '[::1]'].includes(new URL(origin).hostname)) throw new Error('DSH local launch-log authentication requires a loopback endpoint.');
+  // Older default configuration can point to a retired launcher's missing log.
+  // Explicitly injected configuration remains authoritative.
+  if (!process.env.RABI_DSH_AUTH_FILE?.trim()) {
+    try { await fs.access(logPath); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw new Error('DSH launch log is unreadable; configure the current owner launch log.');
+      const local = discoverLocalDsh();
+      if (local.discoveredBaseUrls.includes(origin)) return path.join(local.homeDir, 'logs', 'web-host.stdout.log');
+    }
+  }
   return logPath;
 }
 
@@ -86,7 +105,7 @@ async function exchange(origin: string, logPath: string, strict = false, signal?
 async function exchangeLaunchUrl(launch: URL, strict = false, signal?: AbortSignal, assertAuthorized?: () => void | Promise<void>): Promise<DshSessionCredential> {
   await assertAuthorized?.();
   let response: Response;
-  try { response = await fetch(launch, { redirect: 'manual', signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(10000)]) : AbortSignal.timeout(10000) }); }
+  try { response = await fetch(launch, { redirect: 'manual', signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(getTimeoutMs("agent.dsh.launch", 10000))]) : AbortSignal.timeout(getTimeoutMs("agent.dsh.launch", 10000)) }); }
   catch {
     await assertAuthorized?.();
     throw new Error('DSH authentication exchange failed; no RPC was sent.');
@@ -206,7 +225,7 @@ async function verifyDshCredential(origin: string, cookie: string, signal?: Abor
   const rpcId = randomUUID();
   let response: Response;
   try {
-    response = await fetch(`${origin}/api/session/list`, { method: 'POST', redirect: 'manual', signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(DSH_CONNECTION_VERIFY_TIMEOUT_MS)]) : AbortSignal.timeout(DSH_CONNECTION_VERIFY_TIMEOUT_MS),
+    response = await fetch(`${origin}/api/session/list`, { method: 'POST', redirect: 'manual', signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(getTimeoutMs("agent.dsh.verify", DSH_CONNECTION_VERIFY_TIMEOUT_MS))]) : AbortSignal.timeout(getTimeoutMs("agent.dsh.verify", DSH_CONNECTION_VERIFY_TIMEOUT_MS)),
       headers: { 'content-type': 'application/json', cookie },
       body: JSON.stringify({ type: 'client-request', rpcId, method: 'session/list', payload: { args: { _request: { paged: true } } } }) });
   } catch {
@@ -255,13 +274,39 @@ export function dshVerifyErrorDetail(error: { code?: unknown; message?: unknown 
   return code || message ? ` DSH error${code ? ` ${code}` : ''}${message ? `: ${message}` : ''}` : '';
 }
 
-/** Authenticate before dispatch. Never retry an RPC, including after a 401. */
+/** Restore an expired local login before dispatch without changing session bindings. */
+async function restoreDshOwner(origin: string, store: DshConnectionStore, signal?: AbortSignal, assertAuthorized?: () => void | Promise<void>) {
+  await assertAuthorized?.();
+  const revision = store.readMetadata().revision;
+  const logPath = await launchLogFor(origin);
+  await assertAuthorized?.();
+  if (!logPath) throw new DshConnectionError('DSH authorization is expired; the current local launch log is unavailable; reconnect in WebGUI.', 401);
+  const credential = await exchange(origin, logPath, true, signal, assertAuthorized);
+  await verifyDshCredential(origin, credential.cookie, signal, assertAuthorized);
+  await assertAuthorized?.();
+  signal?.throwIfAborted();
+  if (store.readMetadata().revision !== revision) {
+    const current = store.resolve(origin);
+    if (current?.state === 'connected') return current;
+    throw new DshConnectionError('DSH authorization changed; refresh the connection before sending.', 409);
+  }
+  store.connect(origin, credential, revision);
+  return { state: 'connected' as const, ...credential };
+}
+
+/** Authenticate before dispatch. A rejected list read may recover once; writes never replay. */
 export async function dshAuthenticatedFetch(baseUrl: string, method: string, body: string, assertAuthorized?: () => void | Promise<void>, signal?: AbortSignal): Promise<Response> {
+  return authenticatedFetch(baseUrl, method, body, assertAuthorized, signal, true);
+}
+
+async function authenticatedFetch(baseUrl: string, method: string, body: string, assertAuthorized: (() => void | Promise<void>) | undefined, signal: AbortSignal | undefined, recoverRead: boolean): Promise<Response> {
   await assertAuthorized?.();
   const origin = originOf(baseUrl);
   if (!/^[A-Za-z][A-Za-z0-9]*(?:[./][A-Za-z][A-Za-z0-9]*)+$/.test(method)) throw new Error('DSH RPC method is invalid.');
-  const saved = currentConnectionStore().resolve(origin);
-  if (saved && saved.state !== 'connected') throw new DshConnectionError('DSH authorization is expired or disconnected; reconnect in WebGUI.', 401);
+  const store = currentConnectionStore();
+  let saved = store.resolve(origin);
+  if (saved?.state === 'disconnected') throw new DshConnectionError('DSH authorization was explicitly disconnected; reconnect in WebGUI.', 401);
+  if (saved?.state === 'expired') saved = await restoreDshOwner(origin, store, signal, assertAuthorized);
   let logPath: string | undefined;
   try { logPath = saved ? undefined : await launchLogFor(origin); }
   catch (error) { await assertAuthorized?.(); throw error; }
@@ -295,7 +340,7 @@ export async function dshAuthenticatedFetch(baseUrl: string, method: string, bod
   let response: Response;
   try {
     response = await fetch(`${origin}/api/${method}`, {
-      method: 'POST', redirect: 'manual', signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(30000)]) : AbortSignal.timeout(30000),
+      method: 'POST', redirect: 'manual', signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(getTimeoutMs("agent.dsh.request", 30000))]) : AbortSignal.timeout(getTimeoutMs("agent.dsh.request", 30000)),
       headers: { 'content-type': 'application/json', ...(cookie ? { cookie } : {}) }, body
     });
   } catch {
@@ -306,6 +351,10 @@ export async function dshAuthenticatedFetch(baseUrl: string, method: string, bod
   if (response.status === 401) {
     if (current?.state === 'connected' && cookie) currentConnectionStore().invalidate(origin, cookie);
     if (logPath && cookies.get(`${origin}\n${logPath}`)?.value === cookie) cookies.delete(`${origin}\n${logPath}`);
+    if (recoverRead && method.replace('.', '/') === 'session/list') {
+      await response.body?.cancel();
+      return authenticatedFetch(baseUrl, method, body, assertAuthorized, signal, false);
+    }
     throw new Error('DSH authentication required or expired. Reconnect DSH in the local RabiRoute WebGUI; this RPC was not replayed.');
   }
   return response;

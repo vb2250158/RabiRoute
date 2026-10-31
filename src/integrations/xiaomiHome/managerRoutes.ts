@@ -3,13 +3,12 @@ import { assertTrustedLanAgentPrincipal } from "../../manager/lanAgentRequestAcc
 import { createXiaomiHomeRequestAuthority, XiaomiHomeRequestAuthorityError, type XiaomiHomeRequestAuthority } from "./requestAuthority.js";
 import type http from "node:http";
 import {
-  XiaomiHomeManagerApiError,
-  type XiaomiHomeActionRequest
+  XiaomiHomeManagerApiError
 } from "./managerApi.js";
-import type { ManagerPluginRouteHandler } from "../../manager/managerPluginRouteRegistry.js";
+import type { ApiOperationResult } from "../../manager/apiOperationContract.js";
+import { hasAuthenticatedConnectionRequest } from "../../manager/connectionRequestAccess.js";
 import type { XiaomiHomeEvent, XiaomiHomeEventDeliveryContext } from "../../xiaomiHomeEventDelivery.js";
 import type { XiaomiHomeArtifactInput } from "./artifactStore.js";
-import type { XiaomiHomeSettingsUpdate } from "../../shared/xiaomiHomeSettingsContract.js";
 import type {
   XiaomiHomeAuthorizationMutationRequest,
   XiaomiHomeAuthorizeRequest
@@ -18,19 +17,17 @@ import type { XiaomiHomeRuntimeController } from "./settingsRuntime.js";
 import { XiaomiHomeAuthMutationReceipts } from "./authMutationReceipts.js";
 import { randomBytes } from "node:crypto";
 import { vacuumCloudConnectPage } from "./vacuumCloudPage.js";
-import type { HomeAssistantDeploymentConfig } from "../../shared/homeAssistantDeploymentContract.js";
 import { parseHomeDirectoryQuery } from "./directoryQuery.js";
 
 export type XiaomiHomeManagerRoutesContext = {
+  /** Activation readiness, not a feature grant; no native work may precede published handoff. */
+  assertRuntimeAvailable?: () => void;
   runtime: XiaomiHomeRuntimeController;
   lifecycleFence: Readonly<{
     applicationGenerationId: string;
     managerInstanceId: string;
   }>;
   authMutationReceipts?: XiaomiHomeAuthMutationReceipts;
-  readJsonBody: <T>(request: http.IncomingMessage) => Promise<T>;
-  jsonResponse: (response: http.ServerResponse, statusCode: number, body: unknown) => void;
-  trackOperation?: <T>(operation: Promise<T>) => Promise<T>;
   controlPlaneAccessAllowed?: (request: http.IncomingMessage, requestUrl: URL) => boolean;
   deliverEvent: (event: XiaomiHomeEvent, context: XiaomiHomeEventDeliveryContext, authority?: XiaomiHomeRequestAuthority) => Promise<unknown>;
 };
@@ -41,48 +38,10 @@ function isLoopbackAddress(address: string | undefined): boolean {
   return normalized === "::1" || normalized === "localhost" || normalized.startsWith("127.") || normalized.startsWith("::ffff:127.");
 }
 
-function isMessageEndpointConfigurationRequest(request: http.IncomingMessage, requestUrl: URL): boolean {
-  const root = "/api/agent/xiaomi-home";
-  return (request.method === "GET" && requestUrl.pathname === `${root}/health`)
-    || (["GET", "PUT"].includes(request.method || "") && requestUrl.pathname === `${root}/settings`)
-    || (request.method === "GET" && requestUrl.pathname === `${root}/auth`)
-    || (request.method === "POST" && requestUrl.pathname === `${root}/auth`)
-    || (request.method === "POST" && requestUrl.pathname === `${root}/auth/refresh`)
-    || (request.method === "DELETE" && requestUrl.pathname === `${root}/auth`);
-}
-
-function presentedError(error: unknown): { status: number; code: string; message: string; outcome?: string } {
+export function presentedXiaomiHomeError(error: unknown): { status: number; code: string; message: string; outcome?: string } {
   if (error instanceof XiaomiHomeRequestAuthorityError) return { status: error.status, code: error.code, message: error.message, outcome: error.outcome };
   if (error instanceof XiaomiHomeManagerApiError) return { status: error.status, code: error.code, message: error.message };
   return { status: 500, code: "xiaomi_home_integration_error", message: "Xiaomi Home integration failed." };
-}
-
-function respond<T>(response: http.ServerResponse, context: XiaomiHomeManagerRoutesContext, authority: XiaomiHomeRequestAuthority, operation: Promise<T>, status = 200): void {
-  const tracked = context.trackOperation?.(operation) ?? operation;
-  void tracked.then(data => {
-    authority.assert();
-    context.jsonResponse(response, status, { code: 0, data });
-  }).catch(error => {
-    try { authority.assert(); } catch (revoked) { error = revoked; }
-    const { status: code, ...presented } = presentedError(error);
-    context.jsonResponse(response, code, { code: -1, error: presented });
-  });
-}
-
-function requireIdempotencyKey(
-  request: http.IncomingMessage,
-  response: http.ServerResponse,
-  context: XiaomiHomeManagerRoutesContext
-): string | undefined {
-  const key = String(request.headers["idempotency-key"] || "").trim();
-  if (!/^[A-Za-z0-9._:-]{16,200}$/.test(key)) {
-    context.jsonResponse(response, 400, {
-      code: -1,
-      error: { code: "xiaomi_home_idempotency_key_required", message: "A stable Idempotency-Key is required." }
-    });
-    return undefined;
-  }
-  return key;
 }
 
 const receiptStores = new WeakMap<XiaomiHomeRuntimeController, XiaomiHomeAuthMutationReceipts>();
@@ -96,367 +55,51 @@ function authReceipts(context: XiaomiHomeManagerRoutesContext): XiaomiHomeAuthMu
   return created;
 }
 
-function requireLifecycleFence(
-  request: http.IncomingMessage,
-  response: http.ServerResponse,
-  context: XiaomiHomeManagerRoutesContext
-): boolean {
-  const expectedApplicationGenerationId = String(request.headers["x-rabiroute-expected-application-generation-id"] || "").trim();
-  const expectedManagerInstanceId = String(request.headers["x-rabiroute-expected-manager-instance-id"] || "").trim();
-  if (!expectedApplicationGenerationId || !expectedManagerInstanceId) {
-    context.jsonResponse(response, 400, {
-      code: -1,
-      error: { code: "xiaomi_home_lifecycle_fence_required", message: "Current application generation and Manager instance headers are required." }
-    });
-    return false;
-  }
-  if (
-    expectedApplicationGenerationId !== context.lifecycleFence.applicationGenerationId
-    || expectedManagerInstanceId !== context.lifecycleFence.managerInstanceId
-  ) {
-    context.jsonResponse(response, 409, {
-      code: -1,
-      error: { code: "xiaomi_home_lifecycle_fence_stale", message: "Manager lifecycle changed; reload /meta before retrying." }
-    });
-    return false;
-  }
-  return true;
-}
-
-export function handleXiaomiHomeManagerApi(
-  request: http.IncomingMessage,
-  requestUrl: URL,
-  response: http.ServerResponse,
-  context: XiaomiHomeManagerRoutesContext
-): boolean {
-  const root = "/api/agent/xiaomi-home";
-  if (!requestUrl.pathname.startsWith(root)) return false;
-  const authority = createXiaomiHomeRequestAuthority(request);
-  let principal;
-  try { principal = assertTrustedLanAgentPrincipal(request); }
-  catch {
-    const { status, ...error } = presentedError(new XiaomiHomeRequestAuthorityError("not_started"));
-    context.jsonResponse(response, status, { code: -1, error });
-    return true;
-  }
-  const readBody = async <T>(): Promise<T> => {
-    authority.assert();
-    const body = await context.readJsonBody<T>(request);
-    authority.assert();
-    return body;
-  };
-  const loopback = isLoopbackAddress(request.socket.remoteAddress);
-  const controlPlaneConfigurationAccess = !principal && isMessageEndpointConfigurationRequest(request, requestUrl)
-    && context.controlPlaneAccessAllowed?.(request, requestUrl) === true;
-  if (!principal && !loopback && !controlPlaneConfigurationAccess) {
-    context.jsonResponse(response, 403, { code: -1, error: { code: "xiaomi_home_loopback_required", message: "Xiaomi Home public APIs require an authenticated admitted Agent or loopback access; authorized WebGUI access covers configuration only." } });
-    return true;
-  }
-  if (request.method === "GET" && requestUrl.pathname === `${root}/health`) {
-    respond(response, context, authority, context.runtime.health(authority));
-    return true;
-  }
-  const cloudRoot = `${root}/vacuum-cloud`;
-  const remoteRoot = `${root}/vacuum-remote`;
-  if(requestUrl.pathname.startsWith(remoteRoot)){
-    const command=requestUrl.pathname.slice(remoteRoot.length+1);
-    const allowedQuery=command==="capabilities"?["resourceId"]:command==="status"?["sessionId","idempotencyKey"]:[];
-    if([...requestUrl.searchParams.keys()].some(k=>!allowedQuery.includes(k)||requestUrl.searchParams.getAll(k).length!==1)){
-      context.jsonResponse(response,400,{code:-1,error:{code:"xiaomi_vacuum_remote_query_invalid",message:"Unexpected remote query parameter."}});return true;
-    }
-    response.setHeader("Cache-Control","no-store");
-    if(request.method==="GET" && command==="capabilities"){respond(response,context,authority,context.runtime.vacuumRemote.capabilities(requestUrl.searchParams.get("resourceId") || ""));return true;}
-    if(request.method==="GET" && command==="status"){
-      respond(response,context,authority,Promise.resolve().then(()=>{
-        if(requestUrl.searchParams.has("sessionId")===requestUrl.searchParams.has("idempotencyKey"))throw new XiaomiHomeManagerApiError(400,"xiaomi_vacuum_remote_query_invalid","Choose one session or original action key.");
-        return requestUrl.searchParams.has("sessionId")?context.runtime.vacuumRemote.status(requestUrl.searchParams.get("sessionId")!):context.runtime.vacuumRemote.receipt(requestUrl.searchParams.get("idempotencyKey")!);
-      }));return true;
-    }
-    if(request.method==="POST" && ["start","pulse","stop","exit"].includes(command)){
-      const key=requireLifecycleFence(request,response,context) && requireIdempotencyKey(request,response,context);if(!key)return true;
-      respond(response,context,authority,context.readJsonBody<Record<string,unknown>>(request).then(body=>context.runtime.vacuumRemote.command(command,body,key)));return true;
-    }
-  }
-  if (requestUrl.pathname.startsWith(cloudRoot)) {
-    const suffix = requestUrl.pathname.slice(cloudRoot.length);
-    const allowedQuery = ["/video/network", "/position", "/telemetry"].includes(suffix) ? ["deviceId", "region"] : suffix === "/video/password" ? ["deviceId", "region", "idempotencyKey"] : suffix === "/video/status" ? ["sessionId", "idempotencyKey"] : ["/video/stream", "/video/frame"].includes(suffix) ? ["sessionId"] : suffix === "/devices" ? ["region"] : ["/plugin-package", "/plugin-information"].includes(suffix) ? ["deviceId", "region", "sdkVersion"] : suffix === "/trajectory" ? ["deviceId", "region", "poseId"] : suffix === "/feedback" ? ["deviceId", "region", "slot", "scope", "poseId"] : suffix === "/path" ? ["deviceId", "region", "slot", "mapHash", "targetX", "targetY", "clearanceMm"] : suffix === "/map" ? ["deviceId", "region", "slot"] : suffix === "/connect" ? ["deviceId", "view"] : [];
-    if ([...requestUrl.searchParams.keys()].some(key => !allowedQuery.includes(key) || requestUrl.searchParams.getAll(key).length !== 1)) {
-      context.jsonResponse(response, 400, { code: -1, error: { code: "xiaomi_vacuum_cloud_query_invalid", message: "Unexpected or repeated cloud query parameter." } });
-      return true;
-    }
-    response.setHeader("Cache-Control", "no-store");
-    if (request.method === "GET" && suffix === "/video/status") {
-      respond(response, context, authority, Promise.resolve().then(() => {
-        if (requestUrl.searchParams.has("sessionId") && requestUrl.searchParams.has("idempotencyKey")) throw new XiaomiHomeManagerApiError(400, "xiaomi_vacuum_video_query_invalid", "Choose a session or action key.");
-        return requestUrl.searchParams.has("idempotencyKey") ? context.runtime.vacuumCloud.video.receipt(requestUrl.searchParams.get("idempotencyKey")!) : context.runtime.vacuumCloud.video.status(requestUrl.searchParams.get("sessionId") || undefined);
-      })); return true;
-    }
-    if (request.method === "GET" && suffix === "/video/network") {
-      respond(response, context, authority, context.runtime.vacuumCloud.videoNetwork(requestUrl.searchParams.get("deviceId") || "", requestUrl.searchParams.get("region") || "cn")); return true;
-    }
-    if (request.method === "GET" && suffix === "/video/password") {
-      respond(response, context, authority, Promise.resolve().then(() => {
-        if (requestUrl.searchParams.has("idempotencyKey")) {
-          if (requestUrl.searchParams.has("deviceId") || requestUrl.searchParams.has("region")) throw new XiaomiHomeManagerApiError(400, "xiaomi_vacuum_video_query_invalid", "Choose a device or action key.");
-          return context.runtime.vacuumCloud.videoPasswordReceipt(requestUrl.searchParams.get("idempotencyKey")!);
-        }
-        return context.runtime.vacuumCloud.videoPasswordStatus(requestUrl.searchParams.get("deviceId") || "", requestUrl.searchParams.get("region") || "cn");
-      })); return true;
-    }
-    if (request.method === "POST" && ["/video/start", "/video/stop", "/video/password/forget"].includes(suffix)) {
-      const key = requireLifecycleFence(request, response, context) && requireIdempotencyKey(request, response, context);
-      if (!key) return true;
-      respond(response, context, authority, context.readJsonBody<Record<string, unknown>>(request).then<unknown>(body => {
-        const allowed = suffix === "/video/start" ? ["deviceId", "region", "password", "rememberPassword"] : suffix === "/video/password/forget" ? ["deviceId", "region"] : ["sessionId"];
-        if (!body || typeof body !== "object" || Array.isArray(body) || Object.keys(body).some(k => !allowed.includes(k))) throw new XiaomiHomeManagerApiError(400, "xiaomi_vacuum_video_body_invalid", "Unexpected video parameter.");
-        if (suffix === "/video/stop") {
-          if (typeof body.sessionId !== "string") throw new XiaomiHomeManagerApiError(400, "xiaomi_vacuum_video_body_invalid", "Supply a video session ID.");
-          return context.runtime.vacuumCloud.video.stop(body.sessionId);
-        }
-        if (typeof body.deviceId !== "string" || body.region !== undefined && typeof body.region !== "string") throw new XiaomiHomeManagerApiError(400, "xiaomi_vacuum_video_body_invalid", "Supply a numeric device ID and optional region.");
-        if (suffix === "/video/password/forget") return context.runtime.vacuumCloud.forgetVideoPassword(body.deviceId, String(body.region || "cn"), key);
-        if (body.rememberPassword !== undefined && typeof body.rememberPassword !== "boolean") throw new XiaomiHomeManagerApiError(400, "xiaomi_vacuum_video_body_invalid", "rememberPassword must be boolean.");
-        if (body.password !== undefined && typeof body.password !== "string") throw new XiaomiHomeManagerApiError(400, "xiaomi_vacuum_video_body_invalid", "视频密码必须是四位数字字符串。");
-        const password = body.password as string | undefined; delete body.password;
-        return context.runtime.vacuumCloud.video.start(body.deviceId, String(body.region || "cn"), key, password, body.rememberPassword === true);
-      })); return true;
-    }
-    if (request.method === "GET" && ["/video/stream", "/video/frame"].includes(suffix)) {
-      const operation = context.runtime.vacuumCloud.video.stream(requestUrl.searchParams.get("sessionId") || "", response, suffix === "/video/frame");
-      void (context.trackOperation?.(operation) ?? operation).catch(error => {
-        if (response.headersSent) { if (!response.destroyed) response.destroy(); return; }
-        const shown = presentedError(error); context.jsonResponse(response, shown.status, { code: -1, error: { code: shown.code, message: shown.message } });
-      }); return true;
-    }
-    if (request.method === "GET" && suffix === "/connect") {
-      if (requestUrl.searchParams.has("view") && requestUrl.searchParams.get("view") !== "embedded"
-        || requestUrl.searchParams.has("deviceId") && !/^\d{1,32}$/.test(requestUrl.searchParams.get("deviceId")!)) {
-        context.jsonResponse(response, 400, { code: -1, error: { code: "xiaomi_vacuum_cloud_query_invalid", message: "Invalid map view or device ID." } }); return true;
-      }
-      const nonce = randomBytes(16).toString("base64");
-      response.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Content-Security-Policy": `default-src 'none'; script-src 'nonce-${nonce}'; style-src 'unsafe-inline'; img-src data:; connect-src 'self'; frame-ancestors 'self'; base-uri 'none'; form-action 'none'`, "Referrer-Policy": "no-referrer", "X-Content-Type-Options": "nosniff" });
-      response.end(vacuumCloudConnectPage(nonce)); return true;
-    }
-    if (request.method === "GET" && suffix === "/status") {
-      respond(response, context, authority, Promise.resolve().then(() => context.runtime.vacuumCloud.status())); return true;
-    }
-    if (request.method === "POST" && suffix === "/login") {
-      const key = requireLifecycleFence(request, response, context) && requireIdempotencyKey(request, response, context);
-      if (!key) return true;
-      respond(response, context, authority, context.readJsonBody<Record<string, never>>(request).then(body => {
-        if (!body || typeof body !== "object" || Array.isArray(body) || Object.keys(body).length) throw new XiaomiHomeManagerApiError(400, "xiaomi_vacuum_cloud_body_invalid", "QR login accepts an empty JSON object.");
-        return context.runtime.vacuumCloud.begin(key);
-      })); return true;
-    }
-    if (request.method === "POST" && suffix === "/login/poll") {
-      if (!requireLifecycleFence(request, response, context)) return true;
-      respond(response, context, authority, context.readJsonBody<{ sessionId: string }>(request).then(body => {
-        if (!body || typeof body !== "object" || Object.keys(body).some(key => key !== "sessionId") || typeof body.sessionId !== "string") throw new XiaomiHomeManagerApiError(400, "xiaomi_vacuum_cloud_body_invalid", "Supply only the current sessionId.");
-        return context.runtime.vacuumCloud.poll(body.sessionId);
-      })); return true;
-    }
-    if (request.method === "GET" && suffix === "/devices") {
-      respond(response, context, authority, context.runtime.vacuumCloud.devices(requestUrl.searchParams.get("region") || "cn")); return true;
-    }
-    if (request.method === "GET" && suffix === "/plugin-package") {
-      respond(response, context, authority, context.runtime.vacuumCloud.pluginPackage(requestUrl.searchParams.get("deviceId") || "", requestUrl.searchParams.get("region") || "cn", Number(requestUrl.searchParams.get("sdkVersion") || 10112))); return true;
-    }
-    if (request.method === "GET" && suffix === "/plugin-information") {
-      respond(response, context, authority, context.runtime.vacuumCloud.pluginInformation(requestUrl.searchParams.get("deviceId") || "", requestUrl.searchParams.get("region") || "cn", Number(requestUrl.searchParams.get("sdkVersion") || 10112))); return true;
-    }
-    if (request.method === "GET" && suffix === "/map") {
-      respond(response, context, authority, context.runtime.vacuumCloud.map(requestUrl.searchParams.get("deviceId") || "", requestUrl.searchParams.get("region") || "cn", requestUrl.searchParams.get("slot") || "0")); return true;
-    }
-    if (request.method === "GET" && suffix === "/path") {
-      respond(response, context, authority, context.runtime.vacuumCloud.path(requestUrl.searchParams.get("deviceId") || "", requestUrl.searchParams.get("region") || "cn", requestUrl.searchParams.get("slot") || "0", requestUrl.searchParams.get("mapHash") || "", requestUrl.searchParams.get("targetX") || "", requestUrl.searchParams.get("targetY") || "", requestUrl.searchParams.get("clearanceMm") || "250")); return true;
-    }
-    if (request.method === "GET" && suffix === "/trajectory") {
-      respond(response, context, authority, context.runtime.vacuumCloud.trajectory(requestUrl.searchParams.get("deviceId") || "", requestUrl.searchParams.get("region") || "cn", requestUrl.searchParams.get("poseId") || "")); return true;
-    }
-    if (request.method === "GET" && suffix === "/feedback") {
-      respond(response, context, authority, context.runtime.vacuumCloud.feedback(requestUrl.searchParams.get("deviceId") || "", requestUrl.searchParams.get("region") || "cn", requestUrl.searchParams.get("slot") || "0", requestUrl.searchParams.get("scope") || "", requestUrl.searchParams.get("poseId") || "")); return true;
-    }
-    if (request.method === "GET" && suffix === "/position") {
-      respond(response, context, authority, context.runtime.vacuumCloud.position(requestUrl.searchParams.get("deviceId") || "", requestUrl.searchParams.get("region") || "cn")); return true;
-    }
-    if (request.method === "GET" && suffix === "/telemetry") {
-      respond(response, context, authority, context.runtime.vacuumCloud.telemetry(requestUrl.searchParams.get("deviceId") || "", requestUrl.searchParams.get("region") || "cn")); return true;
-    }
-  }
-  // Local installation paths and process controls are intentionally loopback-only.
-  if (request.method === "GET" && requestUrl.pathname === `${root}/deployment/events`) {
-    response.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" });
-    response.flushHeaders();
-    const unsubscribe = context.runtime.deployment.subscribe(snapshot => {
-      if (!response.destroyed) response.write(`event: deployment\ndata: ${JSON.stringify(snapshot)}\n\n`);
-    });
-    response.once("close", unsubscribe);
-    return true;
-  }
-  // Public deployment controls retain their lifecycle and revision fences.
-  if (request.method === "GET" && requestUrl.pathname === `${root}/deployment`) {
-    respond(response, context, authority, context.runtime.deployment.inspect(authority));
-    return true;
-  }
-  if (request.method === "PUT" && requestUrl.pathname === `${root}/deployment`) {
-    if (!requireLifecycleFence(request, response, context)) return true;
-    respond(response, context, authority, readBody<{ config: HomeAssistantDeploymentConfig; revision: string }>()
-      .then(body => context.runtime.deployment.save(body.config, body.revision, authority)));
-    return true;
-  }
-  if (request.method === "POST" && requestUrl.pathname === `${root}/deployment/start`) {
-    if (!requireLifecycleFence(request, response, context)) return true;
-    respond(response, context, authority, readBody<{ revision: string }>()
-      .then(body => context.runtime.deployment.ensureReady(body.revision, authority)));
-    return true;
-  }
-  if (request.method === "POST" && requestUrl.pathname === `${root}/deployment/install`) {
-    if (!requireLifecycleFence(request, response, context)) return true;
-    respond(response, context, authority, readBody<{ revision: string }>()
-      .then(body => context.runtime.deployment.install(body.revision, authority)));
-    return true;
-  }
-  if (request.method === "GET" && requestUrl.pathname === `${root}/auth`) {
-    respond(response, context, authority, context.runtime.authorization(authority));
-    return true;
-  }
-  if (request.method === "POST" && requestUrl.pathname === `${root}/auth`) {
-    const key = requireLifecycleFence(request, response, context) && requireIdempotencyKey(request, response, context);
-    if (!key) return true;
-    respond(response, context, authority, readBody<XiaomiHomeAuthorizeRequest>().then(body =>
-      authReceipts(context).execute(key, {
-        operation: "connect",
-        baseUrl: body.baseUrl,
-        settingsRevision: body.settingsRevision,
-        authorizationRevision: body.authorizationRevision,
-        tokenHash: createHash("sha256").update(String(body.accessToken || "")).digest("hex")
-      }, () => context.runtime.authorize(body.accessToken, body.baseUrl, body.settingsRevision, body.authorizationRevision, authority))));
-    return true;
-  }
-  if (request.method === "POST" && requestUrl.pathname === `${root}/auth/refresh`) {
-    const key = requireLifecycleFence(request, response, context) && requireIdempotencyKey(request, response, context);
-    if (!key) return true;
-    respond(response, context, authority, readBody<XiaomiHomeAuthorizationMutationRequest>().then(body =>
-      authReceipts(context).execute(key, { operation: "refresh", authorizationRevision: body.authorizationRevision },
-        () => context.runtime.refreshAuthorization(body.authorizationRevision, authority))));
-    return true;
-  }
-  if (request.method === "DELETE" && requestUrl.pathname === `${root}/auth`) {
-    const key = requireLifecycleFence(request, response, context) && requireIdempotencyKey(request, response, context);
-    if (!key) return true;
-    respond(response, context, authority, readBody<XiaomiHomeAuthorizationMutationRequest>().then(body =>
-      authReceipts(context).execute(key, { operation: "disconnect", authorizationRevision: body.authorizationRevision },
-        () => context.runtime.disconnect(body.authorizationRevision, authority))));
-    return true;
-  }
-  if (request.method === "GET" && requestUrl.pathname === `${root}/settings`) {
-    respond(response, context, authority, Promise.resolve(context.runtime.settings()));
-    return true;
-  }
-  if (request.method === "PUT" && requestUrl.pathname === `${root}/settings`) {
-    if (!requireLifecycleFence(request, response, context)) return true;
-    respond(response, context, authority, readBody<XiaomiHomeSettingsUpdate>()
-      .then(body => context.runtime.update(body.settings, String(body.revision || ""), authority)));
-    return true;
-  }
-  if (request.method === "GET" && requestUrl.pathname === `${root}/resources`) {
-    respond(response, context, authority, Promise.resolve().then(() => context.runtime.client.queryResources(parseHomeDirectoryQuery(requestUrl.searchParams, "resources"), authority)));
-    return true;
-  }
-  if (request.method === "GET" && requestUrl.pathname === `${root}/devices`) {
-    respond(response, context, authority, Promise.resolve().then(() => context.runtime.client.queryDevices(parseHomeDirectoryQuery(requestUrl.searchParams, "devices"), authority)));
-    return true;
-  }
-  if (request.method === "GET" && requestUrl.pathname.startsWith(`${root}/devices/`)) {
-    respond(response, context, authority, Promise.resolve().then(() => {
-      if (requestUrl.search) throw new XiaomiHomeManagerApiError(400, "xiaomi_home_query_invalid", "Device detail does not accept query parameters.");
-      let deviceId: string;
-      try { deviceId = decodeURIComponent(requestUrl.pathname.slice(`${root}/devices/`.length)); }
-      catch { throw new XiaomiHomeManagerApiError(400, "xiaomi_home_device_invalid", "Device ID encoding is invalid."); }
-      return context.runtime.client.getDevice(deviceId, authority);
-    }));
-    return true;
-  }
-  if (request.method === "GET" && requestUrl.pathname === `${root}/entity-actions`) {
-    if (requestUrl.searchParams.getAll("resourceId").length !== 1 || !requestUrl.searchParams.get("resourceId")
-      || [...requestUrl.searchParams.keys()].some(key => key !== "resourceId")) {
-      context.jsonResponse(response, 400, {code: -1, error: {code: "xiaomi_home_query_invalid", message: "Supply one resourceId."}});
-      return true;
-    }
-    respond(response, context, authority, context.runtime.client.getResourceActions(requestUrl.searchParams.get("resourceId")!, authority));
-    return true;
-  }
-  if (request.method === "GET" && requestUrl.pathname === `${root}/capabilities`) {
-    respond(response, context, authority, Promise.resolve(context.runtime.client.getCapabilities()));
-    return true;
-  }
-  if (request.method === "GET" && requestUrl.pathname === `${root}/action-requests`) {
-    if (requestUrl.searchParams.getAll("idempotencyKey").length !== 1 || [...requestUrl.searchParams.keys()].some(key => key !== "idempotencyKey")) {
-      context.jsonResponse(response, 400, { code: -1, error: { code: "xiaomi_home_idempotency_required", message: "Supply one idempotencyKey query parameter." } });
-      return true;
-    }
-    respond(response, context, authority, Promise.resolve().then(() => context.runtime.client.getActionReceipt(requestUrl.searchParams.get("idempotencyKey") || "")));
-    return true;
-  }
-  if (request.method === "GET" && requestUrl.pathname.startsWith(`${root}/resources/`)) {
-    const resourceId = decodeURIComponent(requestUrl.pathname.slice(`${root}/resources/`.length));
-    respond(response, context, authority, context.runtime.client.getResource(resourceId, authority));
-    return true;
-  }
-  if (request.method === "POST" && requestUrl.pathname === `${root}/action-requests`) {
-    if (!requireLifecycleFence(request, response, context)) return true;
-    const idempotencyKey = String(request.headers["idempotency-key"] || "");
-    respond(response, context, authority, readBody<XiaomiHomeActionRequest>()
-      .then(body => context.runtime.client.executeAction(body, idempotencyKey, authority)), 202);
-    return true;
-  }
-  if (request.method === "POST" && requestUrl.pathname === `${root}/events`) {
-    if (!requireLifecycleFence(request, response, context)) return true;
-    respond(response, context, authority, readBody<{ event: XiaomiHomeEvent; agentRoleId: string }>()
-      .then(body => { authority.dispatch(); return context.deliverEvent(body.event, { agentRoleId: body.agentRoleId }, authority); }), 202);
-    return true;
-  }
-  if (request.method === "GET" && requestUrl.pathname === `${root}/artifacts`) {
-    respond(response, context, authority, Promise.resolve(context.runtime.artifacts.list({
-      resourceId: requestUrl.searchParams.get("resourceId") || undefined,
-      eventKind: requestUrl.searchParams.get("eventKind") || undefined
-    })));
-    return true;
-  }
-  if (request.method === "GET" && requestUrl.pathname === `${root}/artifacts/lifecycle`) {
-    respond(response, context, authority, Promise.resolve(context.runtime.artifacts.lifecycleContract()));
-    return true;
-  }
-  if (request.method === "GET" && requestUrl.pathname.startsWith(`${root}/artifacts/`) && requestUrl.pathname.endsWith("/content")) {
-    const encoded = requestUrl.pathname.slice(`${root}/artifacts/`.length, -"/content".length);
-    try {
-      context.runtime.artifactAccess.stream(request, response, decodeURIComponent(encoded));
-    } catch (error) {
-      const presented = presentedError(error);
-      const { status, ...detail } = presented;
-      context.jsonResponse(response, status, { code: -1, error: detail });
-    }
-    return true;
-  }
-  if (request.method === "GET" && requestUrl.pathname.startsWith(`${root}/artifacts/`)) {
-    const artifactId = decodeURIComponent(requestUrl.pathname.slice(`${root}/artifacts/`.length));
-    respond(response, context, authority, Promise.resolve().then(() => {
-      authority.assert();
-      const artifact = context.runtime.artifacts.get(artifactId);
-      if (!artifact) throw new XiaomiHomeManagerApiError(404, "xiaomi_home_artifact_not_found", "Artifact was not found.");
-      return artifact;
-    }));
-    return true;
-  }
-  if (request.method === "POST" && requestUrl.pathname === `${root}/artifacts`) {
-    if (!requireLifecycleFence(request, response, context)) return true;
-    respond(response, context, authority, readBody<XiaomiHomeArtifactInput>().then(body => { authority.dispatch(); return context.runtime.artifacts.register(body); }), 201);
-    return true;
-  }
-  context.jsonResponse(response, 404, { code: -1, error: { code: "xiaomi_home_route_not_found", message: "Xiaomi Home API route was not found." } });
-  return true;
-}
-
-export function createXiaomiHomeManagerRouteHandler(context: XiaomiHomeManagerRoutesContext): ManagerPluginRouteHandler {
-  return (request, requestUrl, response) => handleXiaomiHomeManagerApi(request, requestUrl, response, context);
+export function createXiaomiHomeOperationsOwner(context: XiaomiHomeManagerRoutesContext) {
+  const invalid = (code: string, message: string, status = 400): never => { throw new XiaomiHomeManagerApiError(status, code, message); };
+  return Object.freeze({
+    runtime: context.runtime,
+    prepare(request: http.IncomingMessage, url: URL, configuration = false): XiaomiHomeRequestAuthority {
+      context.assertRuntimeAvailable?.();
+      let principal, authenticated;
+      try { principal = assertTrustedLanAgentPrincipal(request); authenticated = hasAuthenticatedConnectionRequest(request); }
+      catch { throw new XiaomiHomeRequestAuthorityError("not_started"); }
+      if (!principal && !authenticated && !isLoopbackAddress(request.socket.remoteAddress) && !(configuration && context.controlPlaneAccessAllowed?.(request, url))) invalid("xiaomi_home_loopback_required", "Xiaomi Home public APIs require an authenticated admitted connection or loopback access; authorized WebGUI access covers configuration only.", 403);
+      const original = createXiaomiHomeRequestAuthority(request); let dispatched = false;
+      const assert = () => { context.assertRuntimeAvailable?.(); try { hasAuthenticatedConnectionRequest(request); original.assert(); } catch { throw new XiaomiHomeRequestAuthorityError(dispatched ? "unknown" : "not_started"); } };
+      return Object.freeze({ assert, dispatch: () => { assert(); original.dispatch(); dispatched = true; } });
+    },
+    lifecycle(request: http.IncomingMessage) {
+      const generation = String(request.headers["x-rabiroute-expected-application-generation-id"] || "").trim(), instance = String(request.headers["x-rabiroute-expected-manager-instance-id"] || "").trim();
+      if (!generation || !instance) invalid("xiaomi_home_lifecycle_fence_required", "Current application generation and Manager instance headers are required.");
+      if (generation !== context.lifecycleFence.applicationGenerationId || instance !== context.lifecycleFence.managerInstanceId) invalid("xiaomi_home_lifecycle_fence_stale", "Manager lifecycle changed; reload /meta before retrying.", 409);
+    },
+    key(request: http.IncomingMessage): string { const key = String(request.headers["idempotency-key"] || "").trim(); if (!/^[A-Za-z0-9._:-]{16,200}$/.test(key)) invalid("xiaomi_home_idempotency_key_required", "A stable Idempotency-Key is required."); return key; },
+    query(url: URL, fields: readonly string[], code: string) { if ([...url.searchParams.keys()].some(key => !fields.includes(key) || url.searchParams.getAll(key).length !== 1)) invalid(code, "Unexpected or repeated query parameter."); },
+    async result(authority: XiaomiHomeRequestAuthority, operation: () => unknown | Promise<unknown>, status = 200): Promise<ApiOperationResult> {
+      try { authority.assert(); const data = await operation(); authority.assert(); return { status, body: { code: 0, data } }; }
+      catch (cause) { try { authority.assert(); } catch (revoked) { cause = revoked; } const { status, ...error } = presentedXiaomiHomeError(cause); return { status, ...(error.outcome === "not_started" || error.outcome === "unknown" ? { mutationOutcome: error.outcome } : {}), body: { code: -1, error } }; }
+    },
+    authorize(body: XiaomiHomeAuthorizeRequest, key: string, authority: XiaomiHomeRequestAuthority) { return authReceipts(context).execute(key, { operation: "connect", baseUrl: body.baseUrl, settingsRevision: body.settingsRevision, authorizationRevision: body.authorizationRevision, tokenHash: createHash("sha256").update(String(body.accessToken || "")).digest("hex") }, () => context.runtime.authorize(body.accessToken, body.baseUrl, body.settingsRevision, body.authorizationRevision, authority)); },
+    refresh(body: XiaomiHomeAuthorizationMutationRequest, key: string, authority: XiaomiHomeRequestAuthority) { return authReceipts(context).execute(key, { operation: "refresh", authorizationRevision: body.authorizationRevision }, () => context.runtime.refreshAuthorization(body.authorizationRevision, authority)); },
+    disconnect(body: XiaomiHomeAuthorizationMutationRequest, key: string, authority: XiaomiHomeRequestAuthority) { return authReceipts(context).execute(key, { operation: "disconnect", authorizationRevision: body.authorizationRevision }, () => context.runtime.disconnect(body.authorizationRevision, authority)); },
+    video(action: "start" | "stop" | "forget", body: Record<string, unknown>, key: string) {
+      const allowed = action === "start" ? ["deviceId", "region", "password", "rememberPassword"] : action === "forget" ? ["deviceId", "region"] : ["sessionId"];
+      if (!body || typeof body !== "object" || Array.isArray(body) || Object.keys(body).some(key => !allowed.includes(key))) invalid("xiaomi_vacuum_video_body_invalid", "Unexpected video parameter.");
+      if (action === "stop") { if (typeof body.sessionId !== "string") invalid("xiaomi_vacuum_video_body_invalid", "Supply a video session ID."); return context.runtime.vacuumCloud.video.stop(body.sessionId as string); }
+      if (typeof body.deviceId !== "string" || body.region !== undefined && typeof body.region !== "string") invalid("xiaomi_vacuum_video_body_invalid", "Supply a numeric device ID and optional region.");
+      if (action === "forget") return context.runtime.vacuumCloud.forgetVideoPassword(body.deviceId as string, String(body.region || "cn"), key);
+      if (body.rememberPassword !== undefined && typeof body.rememberPassword !== "boolean") invalid("xiaomi_vacuum_video_body_invalid", "rememberPassword must be boolean.");
+      if (body.password !== undefined && typeof body.password !== "string") invalid("xiaomi_vacuum_video_body_invalid", "视频密码必须是四位数字字符串。");
+      const password = body.password as string | undefined; delete body.password;
+      return context.runtime.vacuumCloud.video.start(body.deviceId as string, String(body.region || "cn"), key, password, body.rememberPassword === true);
+    },
+    cloudLogin(body: Record<string, unknown>, key: string) { if (!body || typeof body !== "object" || Array.isArray(body) || Object.keys(body).length) invalid("xiaomi_vacuum_cloud_body_invalid", "QR login accepts an empty JSON object."); return context.runtime.vacuumCloud.begin(key); },
+    cloudPoll(body: Record<string, unknown>) { if (!body || typeof body !== "object" || Object.keys(body).some(key => key !== "sessionId") || typeof body.sessionId !== "string") invalid("xiaomi_vacuum_cloud_body_invalid", "Supply only the current sessionId."); return context.runtime.vacuumCloud.poll(body.sessionId as string); },
+    event(body: { event: XiaomiHomeEvent; agentRoleId: string }, authority: XiaomiHomeRequestAuthority) { authority.dispatch(); return context.deliverEvent(body.event, { agentRoleId: body.agentRoleId }, authority); },
+    artifact(body: XiaomiHomeArtifactInput, authority: XiaomiHomeRequestAuthority) { authority.dispatch(); return context.runtime.artifacts.register(body); },
+    connect(url: URL) { if (url.searchParams.has("view") && url.searchParams.get("view") !== "embedded" || url.searchParams.has("deviceId") && !/^\d{1,32}$/.test(url.searchParams.get("deviceId")!)) invalid("xiaomi_vacuum_cloud_query_invalid", "Invalid map view or device ID."); const nonce = randomBytes(16).toString("base64"); return { status: 200, headers: { "content-security-policy": `default-src 'none'; script-src 'nonce-${nonce}'; style-src 'unsafe-inline'; img-src data:; connect-src 'self'; frame-ancestors 'self'; base-uri 'none'; form-action 'none'`, "referrer-policy": "no-referrer", "x-content-type-options": "nosniff", "cache-control": "no-store" }, body: vacuumCloudConnectPage(nonce) }; },
+    parseDirectory: parseHomeDirectoryQuery,
+    invalid
+  });
 }

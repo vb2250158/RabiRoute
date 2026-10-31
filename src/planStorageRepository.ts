@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { atomicWriteFileSync } from "./shared/filePersistence.js";
 import { orderedPlanHistoryPaths, PLAN_HISTORY_FILE } from "./planHistoryShards.js";
+import { assertPlanStoragePackageRecoveryReady, capturePlanStoragePackageRecoveryConflicts, readPlanPackageRecoveryIdentity, PlanStoragePackageRecoveryPendingError } from "./planStoragePackageFence.js";
 import {
   canonicalHistoricalPlanStorageCollisionKey,
   canonicalLogicalPlanId,
@@ -27,6 +28,35 @@ export {
   withPlanStorageLeaseAsync
 } from "./plan-storage/internal/lease.js";
 export type { PlanStorageLease } from "./plan-storage/internal/lease.js";
+
+// Synchronous scopes are private to the package transaction owner; no async work
+// or unrelated plan may inherit permission to finish an already checked package.
+const packageCommitScopes = new Set<PlanStorageLease>();
+const checkedPackageWriteLeases = new WeakSet<PlanStorageLease>();
+function assertPackageWriteReady(lease: PlanStorageLease): void {
+  assertPlanStorageLeaseOwner(lease);
+  if (!checkedPackageWriteLeases.has(lease)) {
+    const unknown = capturePlanStoragePackageRecoveryConflicts(lease.roleDir).unknown[0];
+    if (unknown) throw new PlanStoragePackageRecoveryPendingError(unknown);
+    checkedPackageWriteLeases.add(lease);
+  }
+  assertPackageRecoveryReady(lease.roleDir, lease.planId);
+}
+function assertPackageRecoveryReady(roleDir: string, planId: string): void {
+  for (const lease of packageCommitScopes) {
+    if (lease.roleDir === path.resolve(roleDir) && lease.planId === planId) {
+      assertPlanStorageLeaseOwner(lease);
+      return;
+    }
+  }
+  assertPlanStoragePackageRecoveryReady(roleDir, planId);
+}
+function withPackageCommitScope<T>(lease: PlanStorageLease, run: () => T): T {
+  assertPlanStorageLeaseOwner(lease);
+  const nested = packageCommitScopes.has(lease);
+  packageCommitScopes.add(lease);
+  try { return run(); } finally { if (!nested) packageCommitScopes.delete(lease); }
+}
 
 export type PlanStorageBucket = "active" | "archive";
 
@@ -77,7 +107,7 @@ export type PlanStoragePackageRecoveryResult = {
     bucket: PlanStorageBucket;
     inventoryHash: string;
   }>;
-  failures: Array<{ transactionPath: string; error: string }>;
+  failures: Array<{ transactionPath: string; error: string; planId?: string }>;
 };
 
 export type ReadPlanStoragePackageResult = {
@@ -117,7 +147,7 @@ export type PlanStorageTransactionCommitResult = {
 export type PlanStorageTransactionRecoveryResult = {
   committed: number;
   alreadyCommitted: number;
-  failures: Array<{ transactionPath: string; error: string }>;
+  failures: Array<{ transactionPath: string; error: string; planId?: string }>;
 };
 
 export type PlanStorageCommitEvent = {
@@ -158,7 +188,7 @@ export type PlanStorageLegacyResolutionResult = {
 
 export type PlanStorageLegacyRecoveryResult = {
   results: PlanStorageLegacyResolutionResult[];
-  failures: Array<{ transactionPath: string; error: string }>;
+  failures: Array<{ transactionPath: string; error: string; planId?: string }>;
 };
 
 export type PlanStorageLifecycleKind = "plan-create" | "plan-update" | "plan-archive";
@@ -193,7 +223,7 @@ export type PlanStorageLifecycleRecoveryResult = {
   // Superseded transitions keep their manifest and payload and are retired in place,
   // so a startup gate reports them without blocking every role forever.
   abandoned: PlanStorageLifecycleAbandonment[];
-  failures: Array<{ transactionPath: string; error: string }>;
+  failures: Array<{ transactionPath: string; error: string; planId?: string }>;
 };
 
 type StoredTransactionOperation =
@@ -255,7 +285,7 @@ function matchesPlanStorageCollision(entryName: string, collisionId: string): bo
     || canonicalHistoricalPlanStorageCollisionKey(entryName) === collisionId;
 }
 
-function fixedDepthTransactionManifests(root: string, directoryDepth: number): string[] {
+function fixedDepthTransactionManifests(root: string, directoryDepth: number, skipCompletedReceipts = false): string[] {
   let directories = [path.resolve(root)];
   for (let depth = 0; depth < directoryDepth; depth += 1) {
     const next: string[] = [];
@@ -276,6 +306,9 @@ function fixedDepthTransactionManifests(root: string, directoryDepth: number): s
     directories = next;
   }
   return directories.flatMap(directory => {
+    // Lifecycle receipts already make these transactions terminal; stale
+    // manifests must not re-enter recovery or block unrelated plans.
+    if (skipCompletedReceipts && fs.existsSync(path.join(directory, "receipt.json"))) return [];
     const manifestPath = path.join(directory, "manifest.json");
     try {
       const stat = fs.lstatSync(manifestPath);
@@ -424,6 +457,7 @@ export function resolveCanonicalPlanStorageLocation(
   roleDir: string,
   planId: string
 ): CanonicalPlanStorageLocation | null {
+  assertPackageRecoveryReady(roleDir, planId);
   const logicalPlanId = canonicalLogicalPlanId(planId);
   const storageId = canonicalPlanStorageKey(logicalPlanId);
   const collisionId = canonicalPlanStorageCollisionKey(logicalPlanId);
@@ -587,7 +621,7 @@ function packageTransactionRoot(input: CommitPlanStoragePackageInput): string {
   return path.join(plansRoot(input.roleDir), "quarantine", "plan-storage-package-transactions", input.storageId, input.transactionId);
 }
 
-function packageReceiptPath(input: CommitPlanStoragePackageInput): string {
+function packageReceiptPath(input: Pick<CommitPlanStoragePackageInput, "roleDir" | "storageId" | "transactionId">): string {
   return path.join(plansRoot(input.roleDir), "quarantine", "plan-storage-package-receipts", input.storageId, `${input.transactionId}.json`);
 }
 
@@ -624,6 +658,7 @@ function ensurePackagePayloadUnderLease(
 
 export function claimPlanStorageIdentity(lease: PlanStorageLease): void {
   assertPlanStorageLeaseOwner(lease);
+  assertPackageWriteReady(lease);
   const collisionId = canonicalPlanStorageCollisionKey(lease.planId);
   for (const bucket of ["active", "archive"] as const) {
     const bucketRoot = path.join(plansRoot(lease.roleDir), bucket);
@@ -722,6 +757,7 @@ function emitCommit(event: PlanStorageCommitEvent): void {
 
 function notifyBeforePlanStorageMutation(lease: PlanStorageLease): void {
   assertPlanStorageLeaseOwner(lease);
+  assertPackageWriteReady(lease);
   const event = { roleDir: lease.roleDir, planId: lease.planId, storageId: lease.storageId };
   for (const listener of beforeMutationListeners) listener(event);
   assertPlanStorageLeaseOwner(lease);
@@ -978,6 +1014,7 @@ export function recoverPlanStorageLegacyResolutions(roleDir: string): PlanStorag
     } catch (error) {
       result.failures.push({
         transactionPath: manifestPath,
+        ...(error instanceof PlanStoragePackageRecoveryPendingError && error.conflict.planId ? { planId: error.conflict.planId } : {}),
         error: error instanceof Error ? error.message : String(error)
       });
     }
@@ -1355,8 +1392,8 @@ export function recoverPlanLifecycleTransitions(
   // Scope before scanning or parsing: another plan's corrupt WAL must not
   // expand this request's admitted write set or contaminate its outcome.
   const manifests = planId === undefined
-    ? fixedDepthTransactionManifests(root, 2)
-    : fixedDepthTransactionManifests(path.join(root, canonicalPlanStorageKey(planId)), 1);
+    ? fixedDepthTransactionManifests(root, 2, true)
+    : fixedDepthTransactionManifests(path.join(root, canonicalPlanStorageKey(planId)), 1, true);
   const result: PlanStorageLifecycleRecoveryResult = { results: [], abandoned: [], failures: [] };
   for (const manifestPath of manifests.sort()) {
     let manifest: StoredPlanStorageLifecycleTransition | undefined;
@@ -1370,11 +1407,11 @@ export function recoverPlanLifecycleTransitions(
       // Only an ownership-verified manifest may enter the retirement path.
       manifest = candidate;
       const outcome = withPlanStorageLease(resolvedRoleDir, manifest.planId, (lease) =>
-        completeLifecycleTransitionUnderLease(lease, manifest as StoredPlanStorageLifecycleTransition, path.dirname(manifestPath))
+        withPackageCommitScope(lease, () => completeLifecycleTransitionUnderLease(lease, manifest as StoredPlanStorageLifecycleTransition, path.dirname(manifestPath)))
       );
       result.results.push(outcome);
     } catch (error) {
-      const retired = manifest
+      const retired = manifest && !(error instanceof PlanStoragePackageRecoveryPendingError)
         ? retireSupersededLifecycleTransition(resolvedRoleDir, manifest, path.dirname(manifestPath))
         : null;
       if (retired) {
@@ -1383,6 +1420,7 @@ export function recoverPlanLifecycleTransitions(
       }
       result.failures.push({
         transactionPath: manifestPath,
+        ...(error instanceof PlanStoragePackageRecoveryPendingError && error.conflict.planId ? { planId: error.conflict.planId } : {}),
         error: error instanceof Error ? error.message : String(error)
       });
     }
@@ -1391,6 +1429,27 @@ export function recoverPlanLifecycleTransitions(
 }
 
 export function commitPlanStoragePackage(input: CommitPlanStoragePackageInput): PlanStoragePackageCommitResult {
+  return withPlanStorageLease(input.roleDir, input.planId, lease => {
+    try {
+      assertPackageWriteReady(lease);
+    } catch (error) {
+      if (!(error instanceof PlanStoragePackageRecoveryPendingError) || error.conflict.planId !== lease.planId) throw error;
+      const manifestPath = path.join(packageTransactionRoot({ ...input, roleDir: lease.roleDir, storageId: lease.storageId }), "manifest.json");
+      if (path.resolve(error.conflict.transactionPath) !== manifestPath) throw error;
+      const identity = readPlanPackageRecoveryIdentity(lease.roleDir, manifestPath);
+      const files = canonicalPackageFiles(input.files);
+      if (identity.planId !== lease.planId || identity.storageId !== input.storageId || identity.bucket !== input.bucket
+        || identity.inventoryHash !== input.inventoryHash || packageInventoryHash(files) !== identity.inventoryHash
+        || packageSpecHash({ ...input, roleDir: lease.roleDir, storageId: lease.storageId }, files) !== identity.specHash) throw error;
+      // Only an exact retry of the already prepared transaction can finish it.
+      const other = capturePlanStoragePackageRecoveryConflicts(lease.roleDir, lease.planId);
+      if (other.unknown.length || other.conflicts.some(conflict => path.resolve(conflict.transactionPath) !== manifestPath)) throw error;
+    }
+    return withPackageCommitScope(lease, () => commitPlanStoragePackageUnchecked(input, lease));
+  });
+}
+
+function commitPlanStoragePackageUnchecked(input: CommitPlanStoragePackageInput, lease: PlanStorageLease): PlanStoragePackageCommitResult {
   const roleDir = path.resolve(input.roleDir);
   const planId = canonicalLogicalPlanId(input.planId);
   const storageId = canonicalPlanStorageKey(planId);
@@ -1403,7 +1462,7 @@ export function commitPlanStoragePackage(input: CommitPlanStoragePackageInput): 
   if (inventoryHash !== input.inventoryHash) throw new Error("Plan storage package inventory hash does not match its bytes.");
   validatePackageIdentity(planId, input.bucket, files);
   const specHash = packageSpecHash(normalizedInput, files);
-  return withPlanStorageLease(roleDir, planId, (lease) => {
+  assertPlanStorageLeaseOwner(lease);
     claimPlanStorageIdentity(lease);
     const receiptPath = packageReceiptPath(normalizedInput);
     const receipt = readPackageReceipt(receiptPath);
@@ -1608,7 +1667,7 @@ export function commitPlanStoragePackage(input: CommitPlanStoragePackageInput): 
       });
     }
     return result;
-  });
+
 }
 
 export function recoverPlanStoragePackageTransactions(
@@ -1620,28 +1679,14 @@ export function recoverPlanStoragePackageTransactions(
   const manifests = fixedDepthTransactionManifests(root, 2);
   const result: PlanStoragePackageRecoveryResult = { results: [], failures: [] };
   for (const manifestPath of manifests.sort()) {
+    let scopedPlanId: string | undefined;
     try {
-      const value = JSON.parse(fs.readFileSync(manifestPath, "utf8")) as {
-        schemaVersion?: unknown;
-        kind?: unknown;
-        status?: unknown;
-        transactionId?: unknown;
-        planId?: unknown;
-        storageId?: unknown;
-        bucket?: unknown;
-        inventoryHash?: unknown;
-      };
-      if (value.schemaVersion !== 1 || value.kind !== "plan_storage_package_transaction" || value.status !== "prepared") {
-        throw new Error("Plan storage package transaction manifest is invalid.");
-      }
-      const planId = canonicalLogicalPlanId(value.planId);
-      const storageId = canonicalPlanStorageKey(planId);
-      const bucket = value.bucket === "active" || value.bucket === "archive" ? value.bucket : null;
-      const transactionId = String(value.transactionId || "");
-      const inventoryHash = String(value.inventoryHash || "").toLocaleLowerCase("en-US");
-      if (!bucket || value.storageId !== storageId || !/^[A-Za-z0-9_-]{1,128}$/.test(transactionId)
-        || !/^[a-f0-9]{64}$/.test(inventoryHash)) {
-        throw new Error("Plan storage package transaction identity is invalid.");
+      const { planId, storageId, bucket, transactionId, inventoryHash, applied } = readPlanPackageRecoveryIdentity(resolvedRoleDir, manifestPath);
+      scopedPlanId = planId;
+      const receiptPath = packageReceiptPath({ roleDir: resolvedRoleDir, storageId, transactionId });
+      if (applied) {
+        result.results.push({ status: "unchanged", receiptPath, planId, storageId, bucket, inventoryHash });
+        continue;
       }
       const transactionRoot = path.dirname(manifestPath);
       const payload = path.join(transactionRoot, "payload");
@@ -1651,7 +1696,7 @@ export function recoverPlanStoragePackageTransactions(
         : physicalPackageInventory(target);
       if (staged.hash !== inventoryHash) throw new Error("Plan storage package transaction payload is incomplete or changed.");
       validatePackageIdentity(planId, bucket, staged.files);
-      const committed = commitPlanStoragePackage({
+      const committed = withPlanStorageLease(resolvedRoleDir, planId, lease => withPackageCommitScope(lease, () => commitPlanStoragePackageUnchecked({
         roleDir: resolvedRoleDir,
         planId,
         storageId,
@@ -1660,11 +1705,12 @@ export function recoverPlanStoragePackageTransactions(
         files: staged.files,
         transactionId,
         archiveDominatesActive: bucket === "archive" ? options.archiveDominatesActive : undefined
-      });
+      }, lease)));
       result.results.push({ ...committed, planId, storageId, bucket, inventoryHash });
     } catch (error) {
       result.failures.push({
         transactionPath: manifestPath,
+        ...((scopedPlanId ?? (error instanceof PlanStoragePackageRecoveryPendingError ? error.conflict.planId : undefined)) ? { planId: scopedPlanId ?? (error as PlanStoragePackageRecoveryPendingError).conflict.planId } : {}),
         error: error instanceof Error ? error.message : String(error)
       });
     }
@@ -1995,12 +2041,13 @@ export function recoverPlanStorageTransactions(
       if (options.kind && manifest.transactionKind !== options.kind) continue;
       const transactionRoot = path.dirname(manifestPath);
       const outcome = withPlanStorageLease(manifest.roleDir, manifest.planId, (lease) =>
-        applyStoredTransactionUnderLease(lease, manifest, transactionRoot)
+        withPackageCommitScope(lease, () => applyStoredTransactionUnderLease(lease, manifest, transactionRoot))
       );
       if (outcome.status === "committed") result.committed += 1;
       else result.alreadyCommitted += 1;
     } catch (error) {
-      result.failures.push({ transactionPath: manifestPath, error: error instanceof Error ? error.message : String(error) });
+      result.failures.push({ transactionPath: manifestPath, error: error instanceof Error ? error.message : String(error),
+        ...(error instanceof PlanStoragePackageRecoveryPendingError && error.conflict.planId ? { planId: error.conflict.planId } : {}) });
     }
   }
   return result;

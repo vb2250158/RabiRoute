@@ -26,8 +26,7 @@ test("persona configuration splits dense content into accessible page tabs", () 
   assert.match(source, /<v-tab value="identity"[^>]*:disabled="!hasPersona"[^>]*>身份关系<\/v-tab>/);
   assert.match(source, /<v-tab value="context"[^>]*>消息上下文<\/v-tab>/);
   assert.match(source, /<v-tab value="automation"[^>]*>自动化<\/v-tab>/);
-  assert.match(source, /<v-tab value="chat-history"[^>]*:disabled="!hasPersona"[^>]*>聊天记录<\/v-tab>/);
-  assert.match(source, /watch\(hasPersona,[\s\S]*\["expression", "avatar", "identity", "chat-history"\][\s\S]*activePersonaPageTab\.value = "profile"/);
+  assert.match(source, /watch\(hasPersona,[\s\S]*\["expression", "avatar", "identity"\][\s\S]*activePersonaPageTab\.value = "profile"/);
 });
 
 test("each persona page tab owns one coherent group of existing cards", () => {
@@ -38,6 +37,6 @@ test("each persona page tab owns one coherent group of existing cards", () => {
   assert.match(pageSection("context", "automation"), /最近消息上下文/);
   assert.doesNotMatch(pageSection("context", "automation"), /路由变量/);
   const routePage = fs.readFileSync(new URL("../src/pages/RouteConfigPage.vue", import.meta.url), "utf8");
-  assert.match(routePage, /<RouteVariablesEditor/);
-  assert.match(pageSection("automation"), /默认消息规则[\s\S]*角色自动化[\s\S]*可用模板变量/);
+  assert.doesNotMatch(routePage, /RouteVariablesEditor/);
+  assert.match(pageSection("automation"), /默认消息规则[\s\S]*automationWorkspaceTab[\s\S]*可用模板变量/);
 });

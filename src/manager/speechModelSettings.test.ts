@@ -47,15 +47,17 @@ test("public settings accept only ingress-authenticated enabled Agents and canno
   try {
     const authority = new LanAgentAuthority({ statePath: path.join(root, "authority.json") });
     const credential = authority.enroll(authority.issueBootstrapTicket().ticket, "fixture-node");
-    authority.registerAgentCatalog(credential.token, [{ agentId: "fixture-agent", provider: "codex" }]);
     const socket = { remoteAddress: "192.0.2.1" };
     const request = { method: "GET", url: "/api/speech/settings", socket,
       headers: { host: "manager.example", authorization: `Bearer ${credential.token}`, "x-rabiroute-agent-id": "fixture-agent" } } as unknown as IncomingMessage;
     assert.equal(localModelSettingsRequestAllowed(request), false);
     assert.equal(evaluateLanAgentRequest(request, authority, true).kind, "agent");
-    assert.equal(localModelSettingsRequestAllowed(request), true);
-    authority.setAgentEnabled("fixture-node", "fixture-agent", false);
-    authority.setAgentEnabled("fixture-node", "fixture-agent", true);
+    authority.setNodeEnabled("fixture-node", false);
+    authority.setNodeEnabled("fixture-node", true);
+    assert.equal(localModelSettingsRequestAllowed(request), false);
+    const fresh = { ...request, headers: { ...request.headers }, socket: { ...socket } } as unknown as IncomingMessage;
+    assert.equal(evaluateLanAgentRequest(fresh, authority, true).kind, "agent");
+    assert.equal(localModelSettingsRequestAllowed(fresh), true);
     socket.remoteAddress = "127.0.0.1";
     request.headers.host = "127.0.0.1:1234";
     assert.equal(localModelSettingsRequestAllowed(request), false);

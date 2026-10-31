@@ -1,3 +1,4 @@
+import { getTimeoutMs } from "../shared/timeoutSettings.js";
 import { readFileSync, writeFileSync, mkdirSync, renameSync } from "node:fs";
 import path from "node:path";
 import { Bonjour, type Browser, type Service } from "bonjour-service";
@@ -10,11 +11,13 @@ import { isTunnelPublicKey, loadTunnelIdentity, TunnelDenied, type TunnelGrant }
 import { establishTunnel, type TunnelSession } from "./session.js";
 import { PeerConnections, type TunnelCandidate } from "./connections.js";
 import { TunnelRtc } from "./rtc.js";
-import { proxyTunnel, proxyTunnelUpgrade, serveTunnel, tunnelFetch, type TunnelService } from "./http.js";
+import { proxyTunnel, proxyTunnelUpgrade, peerProxyRequestHeaders, serveTunnel, tunnelFetch, type TunnelService } from "./http.js";
 import type { DiscoveredRabiPeer } from "../rabiPeerDiscovery.js";
 import type { PeerCall } from "../rabiPeerClient.js";
 import { PERSONA_PEER_SERVICE, PERSONA_REFERENCE_CAPABILITY, personaPeerRequestAllowed } from "../shared/personaPeerService.js";
 import { issueInternalManagerHopHeaders } from "../shared/internalManagerHop.js";
+import type { ApiUpgradeInput, ApiHttpProxyInput } from "../manager/apiOperationContract.js";
+import { openPeerEvents, PEER_EVENT_LIMITS } from "./events.js";
 
 type Config = { selectedDeviceId: string; trustedDevices: TunnelGrant[]; services: Record<string, TunnelService> };
 export const APPLICATION_ACCESS_CAPABILITY = "rabilink-application-access-v1";
@@ -41,7 +44,14 @@ export class PeerTunnelRuntime {
   private readonly applicationBootstrapReady = new Map<string, { scope: string; publicKey: string }>();
   private readonly sessionScopes = new WeakMap<TunnelSession, string>();
   private readonly deviceGrants = new Map<string, DeviceGrant>();
+  private readonly pending = new Set<Promise<unknown>>();
+  private retirement?: Promise<void>;
   readonly identity;
+  private track<T>(work: Promise<T>): Promise<T> {
+    this.pending.add(work);
+    void work.then(() => this.pending.delete(work), () => this.pending.delete(work));
+    return work;
+  }
   constructor(private readonly options: {
     dataDir: string; deviceId: string; generation: string; readOnly?: boolean;
     discover(): Promise<DiscoveredRabiPeer[]>;
@@ -134,9 +144,16 @@ export class PeerTunnelRuntime {
     return { sourceDeviceId: value.source, deviceId: this.identity.deviceId, publicKey: this.identity.publicKey,
       generation: this.identity.generation, managerGeneration: this.options.generation, expiresAt, epoch };
   }
-  async select(id: string) {
+  assertControl(request: http.IncomingMessage, url: URL, mutation = false): void {
+    if (this.controller.signal.aborted || !this.controlAllowed(request, url)) throw new TunnelDenied("peer_service_denied");
+    if (mutation && this.options.readOnly) throw new TunnelDenied("manager_read_only");
+  }
+  events(ids: string[], assertCurrent: () => void) { return openPeerEvents(this.connections, this.controller.signal, ids, assertCurrent); }
+  async select(id: string, assertCurrent?: () => void) {
+    assertCurrent?.();
     if (this.options.readOnly) throw new TunnelDenied("manager_read_only");
-    if (id) { await this.ensureApplicationConnection(id); const peer = await this.target(id); if (!peer.supported) throw new Error("peer_upgrade_required"); }
+    if (id) { await this.ensureApplicationConnection(id); assertCurrent?.(); const peer = await this.target(id); assertCurrent?.(); if (!peer.supported) throw new Error("peer_upgrade_required"); }
+    assertCurrent?.();
     const config = this.config(); config.selectedDeviceId = id;
     mkdirSync(path.dirname(this.file), { recursive: true });
     const temp = this.file + "." + randomUUID() + ".tmp";
@@ -197,9 +214,11 @@ export class PeerTunnelRuntime {
     if (this.sessionScopes.get(session) !== this.bootstrapScope()) { session.close(); throw new TunnelDenied("peer_service_denied"); }
     return session;
   }
-  async probe(ids: string[]) {
-    if (ids.length > 10) throw new Error("At most ten visible peers may be probed.");
-    await Promise.all(ids.map(async id => { try { await this.session(id, true); } catch { /* Status remains visible in the directory. */ } }));
+  async probe(ids: string[], assertCurrent?: () => void) {
+    assertCurrent?.();
+    if (ids.length > PEER_EVENT_LIMITS.ids) throw new Error("At most ten visible peers may be probed.");
+    await Promise.all(ids.map(async id => { assertCurrent?.(); try { await this.session(id, true); } catch { assertCurrent?.(); /* Status remains visible in the directory. */ } assertCurrent?.(); }));
+    assertCurrent?.();
     return this.directory();
   }
   /** Authenticate the current application once before using any offered service. */
@@ -226,7 +245,7 @@ export class PeerTunnelRuntime {
     if (!peer.online) throw new Error("peer_device_offline");
     const fields = { source: this.identity.deviceId, publicKey: this.identity.publicKey, target: id, expiresAt: Date.now() + 30_000 };
     const input = { ...fields, kind: "bootstrap-application", signature: sign(null, Buffer.from(APPLICATION_BOOTSTRAP_DOMAIN + JSON.stringify(fields)), this.identity.privateKey).toString("base64") };
-    const reply = await this.options.signal({ targetDeviceId: id, capability: "transport", operation: "tunnel", input }, AbortSignal.any([this.controller.signal, AbortSignal.timeout(20_000)])) as { deviceId?: string; publicKey?: string; generation?: string };
+    const reply = await this.options.signal({ targetDeviceId: id, capability: "transport", operation: "tunnel", input }, AbortSignal.any([this.controller.signal, AbortSignal.timeout(getTimeoutMs("peer.signal", 20_000))])) as { deviceId?: string; publicKey?: string; generation?: string };
     if (!this.applicationConnectionAllowed() || this.bootstrapScope() !== scope) throw new TunnelDenied("peer_service_denied");
     if (reply?.deviceId !== id || typeof reply.generation !== "string" || !reply.generation.trim() || reply.generation.length > 128
       || !isTunnelPublicKey(reply.publicKey)) throw new TunnelDenied("peer_identity_denied");
@@ -269,14 +288,14 @@ export class PeerTunnelRuntime {
     const sessionScope = this.bootstrapScope();
     const sessionEpoch = grant.epoch;
     this.accepting++;
-    void establishTunnel(channel, this.identity, grant, false, AbortSignal.any([this.controller.signal, AbortSignal.timeout(5_000)]))
-      .then(session => {
+    void this.track(establishTunnel(channel, this.identity, grant, false, AbortSignal.any([this.controller.signal, AbortSignal.timeout(getTimeoutMs("peer.handshake", 5_000))]))
+      .then(async session => {
         const assertSessionCurrent = () => {
           const current = this.grant(source);
           if (session.closed || current.publicKey !== session.remote.publicKey || current.bootstrapScope !== sessionScope || current.epoch !== sessionEpoch) throw new TunnelDenied("peer_service_denied");
         };
-        assertSessionCurrent();
-        this.incoming.add(session); session.once("close", () => this.incoming.delete(session));
+        try { assertSessionCurrent(); } catch (error) { await session.close(); throw error; }
+        this.incoming.add(session); session.once("close", () => { void this.track(session.close()).then(() => this.incoming.delete(session), () => undefined); });
         serveTunnel(session, () => {
           const builtIn = this.options.services();
           const services = { ...builtIn, ...this.config().services };
@@ -301,7 +320,7 @@ export class PeerTunnelRuntime {
         }, service => {
           assertSessionCurrent(); return true;
         });
-      }).catch(() => channel.close()).finally(() => this.accepting--);
+      }).catch(() => channel.close()).finally(() => this.accepting--));
   }
   async offer(input: unknown): Promise<unknown> {
     if (this.options.readOnly) throw new TunnelDenied("manager_read_only");
@@ -336,23 +355,38 @@ export class PeerTunnelRuntime {
     if (value.kind === "p2p") return this.rtc.offer(value.sdp, channel => this.accept(channel, value.source!));
     if (value.kind === "relay" && typeof value.room === "string" && /^[a-f0-9-]{36}$/.test(value.room)) {
       const endpoint = this.relayUrl(value.room);
-      const channel = await connectWebsocket(endpoint.url, endpoint.headers, AbortSignal.any([this.controller.signal, AbortSignal.timeout(5_000)]));
+      const channel = await connectWebsocket(endpoint.url, endpoint.headers, AbortSignal.any([this.controller.signal, AbortSignal.timeout(getTimeoutMs("peer.handshake", 5_000))]));
       this.accept(channel, value.source); return { ready: true };
     }
     throw new Error("Invalid tunnel offer.");
   }
-  proxyUpgrade(request: http.IncomingMessage, socket: Duplex, head: Buffer): boolean {
-    const url = new URL(request.url || "/", "http://peer.local");
-    const match = url.pathname.match(/^\/api\/rabilink\/peer\/http\/([^/]+)\/([^/]+)(\/.*)$/);
-    if (!match) return false;
-    if (decodeURIComponent(match[2]) === PERSONA_PEER_SERVICE) { socket.destroy(); return true; }
-    if (this.options.readOnly) { socket.destroy(); return true; }
-    if (!this.controlAllowed(request, url)) { socket.destroy(); return true; }
+  async openProxyHttp(input: ApiHttpProxyInput): Promise<void> {
+    const { request, url, response, path } = input;
+    const pathname = "/" + path.path + url.search;
     const authorize = () => {
+      input.assertCurrent();
+      if (this.options.readOnly) throw new TunnelDenied("manager_read_only");
+      if (!this.controlAllowed(request, url) || !this.applicationConnectionAllowed()) throw new TunnelDenied("peer_service_denied");
+    };
+    authorize();
+    if (path.service === PERSONA_PEER_SERVICE && !personaPeerRequestAllowed({ method: request.method || "GET", path: pathname })) throw new TunnelDenied("peer_service_denied");
+    const requestHeaders = peerProxyRequestHeaders(request.headers);
+    const session = await this.session(path.deviceId!);
+    authorize();
+    await proxyTunnel(session, path.service!, pathname, request, response, authorize, { ...input, requestHeaders });
+  }
+  async openProxyUpgrade(input: ApiUpgradeInput): Promise<void> {
+    const { request, url, socket } = input;
+    if (this.options.readOnly || !this.controlAllowed(request, url)) { socket.destroy(); return; }
+    const authorize = () => {
+      input.assertCurrent();
       if (this.options.readOnly || !this.controlAllowed(request, url) || !this.applicationConnectionAllowed()) throw new TunnelDenied("peer_service_denied");
     };
-    void this.session(decodeURIComponent(match[1])).then(session => proxyTunnelUpgrade(session, decodeURIComponent(match[2]), match[3] + url.search, request, socket, head, authorize)).catch(() => socket.destroy());
-    return true;
+    authorize();
+    const requestHeaders = peerProxyRequestHeaders(request.headers);
+    const session = await this.session(input.path.deviceId!);
+    authorize();
+    await proxyTunnelUpgrade(session, input.path.service!, "/" + input.path.path + url.search, request, socket, Buffer.from(input.head), authorize, { ...input, requestHeaders });
   }
   upgrade(request: http.IncomingMessage, socket: Duplex, head: Buffer): boolean {
     const url = new URL(request.url || "/", "http://peer.local");
@@ -371,13 +405,12 @@ export class PeerTunnelRuntime {
     const scope = this.bootstrapScope();
     const establish = async (channel: TunnelChannel) => {
       const session = await establishTunnel(channel, this.identity, grant, true, signal);
-      if (signal.aborted || !this.applicationConnectionAllowed() || scope !== this.bootstrapScope()) { session.close(); throw new Error("Tunnel attempt cancelled."); }
+      if (signal.aborted || !this.applicationConnectionAllowed() || scope !== this.bootstrapScope()) { await session.close(); throw new Error("Tunnel attempt cancelled."); }
       this.sessionScopes.set(session, scope); return session;
     };
     if (transport === "lan") {
       const controllers = peer.peerUrls.slice(0, 4).map(() => new AbortController());
-      try {
-        const winner = await Promise.any(peer.peerUrls.slice(0, 4).map(async (raw, index) => {
+      const attempts = peer.peerUrls.slice(0, 4).map(async (raw, index) => {
           const url = new URL(raw); const parts = url.hostname.split(".").map(Number); const [a,b] = parts;
           if (url.protocol !== "http:" || url.username || url.password || parts.length !== 4 || !parts.every(n => Number.isInteger(n) && n >= 0 && n <= 255)
             || !(a === 10 || a === 127 || a === 172 && b >= 16 && b <= 31 || a === 192 && b === 168 || a === 169 && b === 254)) throw new Error("Invalid LAN candidate.");
@@ -385,12 +418,22 @@ export class PeerTunnelRuntime {
           const attempt = AbortSignal.any([signal, controllers[index].signal]);
           const channel = await connectWebsocket(url.toString(), {}, attempt);
           const session = await establishTunnel(channel, this.identity, grant, true, attempt);
-          if (attempt.aborted || !this.applicationConnectionAllowed() || scope !== this.bootstrapScope()) { session.close(); throw new Error("Candidate cancelled."); }
+          if (attempt.aborted || !this.applicationConnectionAllowed() || scope !== this.bootstrapScope()) { await session.close(); throw new Error("Candidate cancelled."); }
           this.sessionScopes.set(session, scope);
           return { session, index };
-        }));
-        controllers.forEach((controller, index) => { if (index !== winner.index) controller.abort(); }); return winner.session;
-      } catch (error) { controllers.forEach(controller => controller.abort()); throw error; }
+        });
+      try {
+        const winner = await Promise.any(attempts);
+        controllers.forEach((controller, index) => { if (index !== winner.index) controller.abort(); });
+        const settled = await Promise.allSettled(attempts);
+        await Promise.all(settled.flatMap((result, index) => result.status === "fulfilled" && index !== winner.index ? [result.value.session.close()] : []));
+        return winner.session;
+      } catch (error) {
+        controllers.forEach(controller => controller.abort());
+        const settled = await Promise.allSettled(attempts);
+        await Promise.allSettled(settled.flatMap(result => result.status === "fulfilled" ? [result.value.session.close()] : []));
+        throw error;
+      }
     }
     const signalRemote = (input: unknown) => this.options.signal({ targetDeviceId: peer.id, capability: "transport", operation: "tunnel", input }, signal);
     if (transport === "p2p") {
@@ -402,59 +445,30 @@ export class PeerTunnelRuntime {
     if (signal.aborted) throw new Error("Tunnel attempt cancelled.");
     return establish(await connectWebsocket(endpoint.url, endpoint.headers, signal));
   }
-  handler(request: http.IncomingMessage, url: URL, response: http.ServerResponse, readJson: (request: http.IncomingMessage, maxBytes: number) => Promise<unknown>): boolean {
-    const prefix = "/api/rabilink/peer/";
-    if (!url.pathname.startsWith(prefix)) return false;
-    const action = url.pathname.slice(prefix.length);
-    if (!["servers", "probe", "selection", "identity", "events"].includes(action) && !action.startsWith("http/")) return false;
-    const send = (status: number, data: unknown) => { if (!response.headersSent) response.writeHead(status, { "content-type": "application/json", "cache-control": "no-store" }); response.end(JSON.stringify(data)); };
-    if (!this.controlAllowed(request, url)) { send(403, { error: "请通过已授权的 WebGUI 访问语音服务器。" }); return true; }
-    if (this.options.readOnly && (request.method !== "GET" || action.startsWith("http/"))) { send(423, { error: "manager_read_only" }); return true; }
-    const run = async () => {
-      if (action === "events" && request.method === "GET") {
-        const ids = JSON.parse(url.searchParams.get("ids") || "[]") as unknown;
-        if (!Array.isArray(ids) || ids.length > 10 || ids.some(id => typeof id !== "string")) throw new Error("Invalid event subscription.");
-        response.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", "x-accel-buffering": "no" }); response.write(": connected\n\n");
-        const listener = (value: { deviceId: string }) => { if (ids.includes(value.deviceId)) { if (response.writableLength > 65_536) response.destroy(); else response.write("event: status\ndata: " + JSON.stringify(value) + "\n\n"); } };
-        const selection = (value: unknown) => response.write("event: selection\ndata: " + JSON.stringify(value) + "\n\n");
-        const stopped = () => response.end();
-        this.connections.on("selection", selection);
-        this.controller.signal.addEventListener("abort", stopped, { once: true });
-        this.connections.on("status", listener);
-        // event-driven-allow: transport heartbeat keepalive; ping only live channels, no directory or business reads.
-        const timer = setInterval(() => { void this.connections.refreshLatency(ids); if (!response.destroyed) response.write(": keepalive\n\n"); }, 15_000);
-        const cleanup = () => { clearInterval(timer); this.connections.removeListener("status", listener); this.connections.removeListener("selection", selection); this.controller.signal.removeEventListener("abort", stopped); };
-        response.once("close", cleanup); return;
-      }
-      if (action === "selection" && request.method === "GET") { send(200, { selectedDeviceId: this.selected() }); return; }
-      if (action === "identity" && request.method === "GET") { const { privateKey, ...identity } = this.identity; send(200, identity); return; }
-      if (action === "servers" && request.method === "GET") { send(200, await this.directory()); return; }
-      if (action === "probe" && request.method === "POST") {
-        const body = await readJson(request, 8192) as { deviceIds: string[] };
-        if (!Array.isArray(body.deviceIds) || body.deviceIds.some(id => typeof id !== "string")) throw new Error("Invalid probe.");
-        send(200, await this.probe(body.deviceIds)); return;
-      }
-      if (action === "selection" && request.method === "PUT") {
-        const body = await readJson(request, 8192) as { deviceId: string };
-        if (typeof body.deviceId !== "string") throw new Error("Invalid selection."); await this.select(body.deviceId); send(200, { selectedDeviceId: body.deviceId }); return;
-      }
-      const match = action.match(/^http\/([^/]+)\/([^/]+)(\/.*)$/);
-      if (match) {
-        const id = decodeURIComponent(match[1]), service = decodeURIComponent(match[2]), pathname = match[3] + url.search;
-        if (service === PERSONA_PEER_SERVICE) {
-          if (!personaPeerRequestAllowed({ method: request.method || "GET", path: pathname })) throw new TunnelDenied("peer_service_denied");
-        }
-        const authorize = () => {
-          if (this.options.readOnly || !this.controlAllowed(request, url) || !this.applicationConnectionAllowed()) throw new TunnelDenied("peer_service_denied");
-        };
-        await proxyTunnel(await this.session(id), service, pathname, request, response, authorize); return;
-      }
-      send(405, { error: "Method not allowed." });
-    };
-    void run().catch(error => send(error instanceof TunnelDenied ? 403 : error?.message === "peer_upgrade_required" ? 426 : 502, {
-      error: error instanceof TunnelDenied || error?.message === "peer_upgrade_required" ? error.message : "远端连接失败，请检查设备版本、连接与网络。"
-    }));
-    return true;
+  stop(): Promise<void> {
+    if (this.retirement) return this.retirement;
+    let resolve!: () => void, reject!: (error: unknown) => void;
+    this.retirement = new Promise<void>((done, failed) => { resolve = done; reject = failed; });
+    const errors: unknown[] = [];
+    const attempt = (action: () => void) => { try { action(); } catch (error) { errors.push(error); } };
+    for (const grant of this.deviceGrants.values()) clearTimeout(grant.timer);
+    this.deviceGrants.clear(); this.controller.abort();
+    attempt(() => this.lanBrowser?.stop()); attempt(() => this.lanPublication?.stop()); attempt(() => this.bonjour?.destroy());
+    const closures = [...this.incoming].map(session => Promise.resolve().then(() => session.close()));
+    attempt(() => this.websocket.close());
+    void (async () => {
+      const cleanup = Promise.allSettled([
+        Promise.resolve().then(() => this.connections.stop()), Promise.resolve().then(() => this.rtc.stop()), ...closures
+      ]);
+      await Promise.allSettled([
+        ...(this.directoryFlight ? [this.directoryFlight] : []), ...this.applicationBootstrapFlights.values()
+      ]);
+      for (const result of await cleanup) if (result.status === "rejected") errors.push(result.reason);
+      while (this.pending.size) await Promise.allSettled([...this.pending]);
+      this.incoming.clear();
+      if (errors.length === 1) throw errors[0];
+      if (errors.length) throw new AggregateError(errors, "Peer transport cleanup failed.");
+    })().then(resolve, reject);
+    return this.retirement;
   }
-  stop() { for (const grant of this.deviceGrants.values()) clearTimeout(grant.timer); this.deviceGrants.clear(); this.lanBrowser?.stop(); this.lanPublication?.stop(); this.bonjour?.destroy(); this.controller.abort(); this.connections.stop(); this.rtc.stop(); for (const session of this.incoming) session.close(); this.incoming.clear(); this.websocket.close(); }
 }

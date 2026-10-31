@@ -3,7 +3,8 @@ import assert from "node:assert/strict";
 import { createServer, type IncomingMessage } from "node:http";
 import { issueInternalManagerHopHeaders } from "../shared/internalManagerHop.js";
 import { markAuthenticatedConnectionRequest } from "./connectionRequestAccess.js";
-import { createDevicePeerBootstrapRoutes, DEVICE_PEER_BOOTSTRAP_PATH, type DevicePeerBootstrapAuthority } from "./devicePeerBootstrapRoutes.js";
+import { createDevicePeerBootstrapOperation, DEVICE_PEER_BOOTSTRAP_PATH, type DevicePeerBootstrapAuthority } from "./devicePeerBootstrapRoutes.js";
+import { ManagerPluginRouteRegistry } from "./managerPluginRouteRegistry.js";
 
 const source = "glasses-0123456789abcdef", target = "pc-owner", scope = "a".repeat(64), generation = "manager-generation";
 const body = (expiresAt = Date.now() + 40_000) => ({ source, target, publicKey: "Runtime validates actual Ed25519 key", expiresAt,
@@ -17,27 +18,24 @@ async function fixture(options: {
   bootstrap?: (authority: DevicePeerBootstrapAuthority, state: State) => Promise<void>;
 } = {}) {
   const state: State = { active: true, current: { scope, generation, deviceId: target }, reads: 0, writes: 0 };
-  const route = createDevicePeerBootstrapRoutes({ current: () => state.current,
-    readJsonBody: async request => {
-      state.reads++;
-      const chunks: Buffer[] = [];
-      for await (const chunk of request) chunks.push(Buffer.from(chunk));
-      const input = JSON.parse(Buffer.concat(chunks).toString());
-      await options.afterBody?.(request, state);
-      return input;
-    },
+  const owner = createDevicePeerBootstrapOperation({ current: () => state.current,
     bootstrap: async (_input, authority) => {
       await options.bootstrap?.(authority, state);
       authority.assertCurrent(); state.writes++; state.lastAuthority = authority;
-      return { deviceId: target, sourceDeviceId: authority.sourceDeviceId, expiresAt: body().expiresAt };
-    },
-    jsonResponse: (response, status, value) => {
-      response.writeHead(status, { "content-type": "application/json" }); response.end(JSON.stringify(value));
+      return { deviceId: target, sourceDeviceId: authority.sourceDeviceId, publicKey: "fixture-public-key", generation: "peer-generation", managerGeneration: generation, expiresAt: body().expiresAt, epoch: "fixture-epoch" };
     }
   });
+  const registry = new ManagerPluginRouteRegistry();
+  const registration = registry.registerOperations("peer", [{ ...owner.operation, prepare: async input => {
+    const prepared = await owner.operation.prepare!(input);
+    if (typeof prepared !== "function") return prepared;
+    state.reads++;
+    return async body => { await options.afterBody?.(input.request, state); return prepared(body); };
+  } }]);
+  const route = { stop: owner.stop, drain: () => registration.dispose() };
   const server = createServer((request, response) => {
     markAuthenticatedConnectionRequest(request, () => { if (!state.active) throw new Error("Original ingress revoked"); });
-    const handled = route.handle(request, new URL(request.url!, "http://fixture.invalid"), response);
+    const handled = registry.handle(request, new URL(request.url!, "http://fixture.invalid"), response);
     assert.equal(typeof handled, "boolean");
     if (!handled) { response.writeHead(404); response.end(); }
   });
@@ -72,6 +70,12 @@ test("real HTTP admits only current signed Relay device and retains original aut
     assert.equal(f.state.writes, 1); assert.equal(f.state.lastAuthority?.issuedAt, authenticatedAt);
     assert.equal(f.state.lastAuthority?.sourceDeviceId, source); assert.equal(f.state.lastAuthority?.scope, scope);
   } finally { await f.close(); }
+});
+
+test("device bootstrap preserves provider extensions and the native absence of an application body cap", async () => {
+  const f = await fixture();
+  try { assert.equal((await f.send({ ...body(), extension: "x".repeat(100000) })).status, 200); assert.equal(f.state.writes, 1); }
+  finally { await f.close(); }
 });
 
 test("real HTTP denies peer, application, missing original authentication and bare or changed headers before body", async () => {

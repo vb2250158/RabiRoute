@@ -102,7 +102,7 @@ export const templateVars = [
   { name: "triggerId", description: "手动触发 ID。" },
   { name: "triggerName", description: "手动触发显示名称。" },
   { name: "voiceTranscriptLogPath", description: "语音转写 JSONL 记录路径。" },
-  { name: "voiceSource", description: "语音转写来源，例如 fennenote、xiaoai 或 webhook。" },
+  { name: "voiceSource", description: "语音转写来源，例如 speech、xiaoai 或 webhook。" },
   { name: "voiceDurationSeconds", description: "语音片段时长，单位秒。" },
   { name: "voicePeak", description: "语音片段峰值音量。" },
   { name: "healthAlertType", description: "穿戴健康告警类型，例如 heart_rate_high、heart_rate_low、sleep_state_changed。" },
@@ -244,7 +244,7 @@ export function adapterRuntimeKey(type: string): string {
 }
 
 export function isWebhookLikeAdapter(type: string): boolean {
-  return type === "webhook" || type === "fennenote" || type === "xiaoai";
+  return type === "webhook" || type === "xiaoai";
 }
 
 export function adapterNeedsGatewayRuntime(type: MessageAdapterType): boolean {
@@ -269,7 +269,6 @@ export function adapterSourceAliases(type: string): string[] {
 }
 
 export function adapterDefaultWebhookPath(type: string): string {
-  if (type === "fennenote") return "/fennenote";
   if (type === "xiaoai") return "/xiaoai";
   if (type === "rabilink") return "/rabilink";
   if (type === "feishu") return "/feishu";
@@ -335,10 +334,6 @@ export function applyAdapterDefaults(gateway: GatewayDefinition): void {
   if (adapters.includes("webhook")) {
     gateway.webhookPort = Number(gateway.webhookPort || Number(gateway.gatewayPort || 8790) + 1);
     gateway.webhookPath = gateway.webhookPath || adapterDefaultWebhookPath("webhook");
-  }
-  if (adapters.includes("fennenote")) {
-    gateway.fenneNoteWebhookPort = Number(gateway.fenneNoteWebhookPort || Number(gateway.webhookPort || gateway.gatewayPort || 8790) + 1);
-    gateway.fenneNoteWebhookPath = gateway.fenneNoteWebhookPath || adapterDefaultWebhookPath("fennenote");
   }
   if (adapters.includes("xiaoai")) {
     gateway.xiaoaiWebhookPort = Number(gateway.xiaoaiWebhookPort || Number(gateway.webhookPort || gateway.gatewayPort || 8790) + 1);
@@ -481,12 +476,6 @@ export function routeKindDefinitionsForGateway(_gateway?: GatewayDefinition) {
       adapter: "speech",
       title: "语音消息端",
       note: "本机语音转写入口；语音热投递或关键词模式仍由 Route 单独控制。",
-      groups: [{ title: "语音转写", routeKinds: ["voice_transcript"] }]
-    },
-    {
-      adapter: "fennenote",
-      title: "FenneNote / 芬妮笔记",
-      note: "FenneNote 转写回调入口；默认作为语音转写事件投递。",
       groups: [{ title: "语音转写", routeKinds: ["voice_transcript"] }]
     },
     {

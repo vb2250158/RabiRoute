@@ -67,75 +67,46 @@ export const activate = definePlugin({
             });
             try {
         ctx.effect(async () => {
-            const requestTracker = new runtime.ManagerPluginRequestTracker();
-            const unregisterRoutes = runtime.registerManagerPluginHandlerRoutes(runtime.managerPluginRoutes, "manager:gateway-runtime", "manager.gateway-runtime.api", [
-                requestTracker.wrap((request, requestUrl, response) => runtime.handleGatewayControlApi(request, requestUrl, response, {
-                    readJsonBody: runtime.readJsonBody,
-                    jsonResponse: runtime.jsonResponse,
-                    redirectResponse: (target, statusCode, location) => {
-                        target.writeHead(statusCode, { location });
-                        target.end();
-                    },
-                    gatewayPayload: options => runtime.standaloneGatewayPayload(options?.includeDiagnostics ?? true, options?.includeConfigDefinitions ?? (options?.includeDiagnostics ?? true)),
-                    writeConfig: runtime.writeConfig,
-                    writeGatewayConfig: runtime.writeGatewayConfig,
-                    resolveRouteMutation: runtime.resolveRouteMutation,
-                    loadRuntimes: runtime.loadRuntimes,
-                    syncRunningGateways: runtime.syncRunningGateways,
-                    runtimeStatuses: () => [...runtime.runtimes.values()].map(runtime.runtimeStatus),
-                    networkOptionsPayload: runtime.networkOptionsPayload,
-                    startGateway: runtime.startGateway,
-                    stopGateway: runtime.stopGateway,
-                    restartGateway: runtime.restartGateway,
-                    removeGatewayConfig: runtime.removeGatewayConfig,
-                    routeCatalogVersion: runtime.routeCatalogVersion,
-                    weixinLoginTarget: id => {
-                        // Keep the host service available while inspecting one GatewayRuntime.
-                        const gatewayRuntime = runtime.runtimes.get(id);
-                        return gatewayRuntime
-                            ? {
-                                enabled: runtime.sharedGatewayAdapterTypes(gatewayRuntime.definition).includes("weixin"),
-                                dataDir: runtime.dataDirFor(gatewayRuntime.definition)
-                            }
-                            : undefined;
-                    },
-                    requestWeixinLogin: runtime.requestWeixinLogin,
-                    triggerManualRule: (id, request) => runtime.triggerGatewayManualRule(id, request, {}, "manager:gateway-runtime"),
-                    testAgentDelivery: runtime.testAgentDelivery,
-                    listDeliveryReplayAttempts: runtime.listGatewayDeliveryReplayAttempts,
-                    replayDelivery: runtime.replayGatewayDelivery,
-                    trackOperation: operation => requestTracker.trackOperation(operation)
-                }))
-            ], [
-                { routeId: "gateways", kind: "exact", path: "/gateways", methods: ["GET", "POST"] },
-                { routeId: "gateway-resource", kind: "prefix", pathPrefix: "/gateways/" },
-                { routeId: "network-options", kind: "exact", path: "/network-options", methods: ["GET"] },
-                { routeId: "reload", kind: "exact", path: "/reload", methods: ["POST"] }
-            ]);
-            const releaseRuntimeLease = runtime.acquireGatewayRuntimePluginLease();
+            const operations = await runtime.managerPluginRoutes.registerOperationsAsync(context.identity.instanceId, runtime.createGatewayControlOperations(), context.lifecycle.signal);
+            let releaseRuntimeLease, listenerProjection, disposal;
+            const dispose = () => disposal ??= (async () => {
+                const finalOwner = releaseRuntimeLease?.() ?? false;
+                releaseRuntimeLease = undefined;
+                const results = await Promise.allSettled([
+                    Promise.resolve().then(() => listenerProjection?.dispose()),
+                    Promise.resolve().then(() => operations.dispose())
+                ]);
+                if (finalOwner) results.push(...await Promise.allSettled([
+                    Promise.resolve().then(() => runtime.manualTriggerProcesses.stopOwner("manager:gateway-runtime")),
+                    Promise.resolve().then(() => runtime.stopAllGatewaysAndWait())
+                ]));
+                const failure = results.find(result => result.status === "rejected");
+                if (failure) throw failure.reason;
+            })();
             try {
-                if (runtime.managerServicesReady && !runtime.managerReadOnly)
-                    runtime.syncRunningGateways();
+                listenerProjection = runtime.createGatewayListenerProjection();
+                context.publication.add({
+                    publish() {
+                        // A lease enables the shared reconcile entry. Acquire it
+                        // in the same synchronous transaction as publication.
+                        releaseRuntimeLease = runtime.acquireGatewayRuntimePluginLease();
+                    },
+                    rollback() {
+                        releaseRuntimeLease?.();
+                        releaseRuntimeLease = undefined;
+                    },
+                    async afterPublish({ previousRetirement, signal }) {
+                        await previousRetirement;
+                        signal.throwIfAborted();
+                        if (runtime.managerServicesReady && !runtime.managerReadOnly)
+                            await runtime.syncRunningGateways();
+                    }
+                }, "publish Manager Gateway runtime owner");
             } catch (error) {
-                unregisterRoutes();
-                await requestTracker.stop();
-                if (releaseRuntimeLease()) {
-                    await Promise.all([
-                        runtime.manualTriggerProcesses.stopOwner("manager:gateway-runtime"),
-                        runtime.stopAllGatewaysAndWait()
-                    ]);
-                }
+                await dispose();
                 throw error;
             }
-            return async () => {
-                unregisterRoutes();
-                await requestTracker.stop();
-                if (!releaseRuntimeLease()) return;
-                await Promise.all([
-                    runtime.manualTriggerProcesses.stopOwner("manager:gateway-runtime"),
-                    runtime.stopAllGatewaysAndWait()
-                ]);
-            };
+            return dispose;
         }, "activate Manager Gateway runtime plugin");
 
                 await Promise.all(pendingEffects);

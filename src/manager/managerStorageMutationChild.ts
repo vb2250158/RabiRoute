@@ -1,3 +1,4 @@
+import { getTimeoutMs } from "../shared/timeoutSettings.js";
 import {
   listPlanFeedback,
   updatePlanFeedbackDelivery,
@@ -586,7 +587,7 @@ async function execute(request: ManagerStorageMutationRequest, identity: Manager
     recoverExistingUncertain: true,
     retryableRejection: result => result.domain === "rejected"
       && result.error.startsWith("STORAGE_MUTATION_REVISION_CONFLICT:"),
-    waitForCompletionMs: 250
+    waitForCompletionMs: getTimeoutMs("storage.mutationReceiptWait", 250)
   });
   if (outcome.state === "completed") {
     const result = outcome.result as DomainDeliveryResult | unknown;

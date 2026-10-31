@@ -7,6 +7,7 @@ import { createAgentEndpointDelivery, type AgentEndpointDeliveryContext, type Ag
 import { AgentRequestStore } from "../agentRequests/store.js";
 import type { AgentThreadRequest } from "../agentThreads.js";
 import type { AgentRequestEndpoint } from "../agentRequests/endpoint.js";
+import { executeEndpointAgentDelivery, type EndpointDeliveryReceipt, type PreparedEndpointDelivery } from "../agentRequests/endpointDelivery.js";
 
 test("factory accepts a source without cwd, freezes trusted device identity and confines cwd requirements to host targets", async t => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "endpoint-factory-"));
@@ -121,4 +122,116 @@ test("refresh visits each endpoint once and reuses a fresh Grok Bot source proof
   assert.deepEqual(refreshed.slice(2), ["target:target-session"]);
   fail = true;
   await assert.rejects(() => factory.refreshEndpoints({ source: target, target: grok }), (error: { role?: string }) => error.role === "target");
+});
+
+function remoteDeliveryFixture(initial: "offline" | "disconnect-before-frame" | "timeout-after-frame" | "unproven-not-sent" | "accepted-before-disconnect") {
+  let connected = initial !== "offline";
+  let failure: string | undefined = initial === "offline" ? undefined : initial;
+  let persisted: unknown;
+  const store = new AgentRequestStore({ read: () => persisted, write: value => { persisted = structuredClone(value); } });
+  const calls: Array<{ operation: string; deliveryId: string }> = [];
+  const ownerReceipts = new Map<string, EndpointDeliveryReceipt>();
+  let sentFrames = 0;
+  const connectionListeners: Array<() => Promise<void>> = [];
+  const registry = {
+    localInstanceId: "manager",
+    listNodes: () => [{ nodeId: "source-node", connected: true }, { nodeId: "target-node", connected }],
+    getInstanceAgent: () => ({ provider: "dsh", name: "Exact remote owner", workspace: "C:/fixture" }),
+    onDeliveryRecoveryEvent: (listener: () => Promise<void>) => { connectionListeners.push(listener); },
+    manageAgent: async (_instanceId: string, operation: string, parameters: { delivery: PreparedEndpointDelivery }, _timeout: number, assertAuthorized: () => void) => {
+      assertAuthorized(); const delivery = parameters.delivery;
+      calls.push({ operation, deliveryId: delivery.deliveryId });
+      if (operation === "reconcile_prepared_delivery") return ownerReceipts.get(delivery.deliveryId);
+      assert.equal(operation, "prepared_delivery");
+      if (failure === "disconnect-before-frame") {
+        connected = false;
+        throw Object.assign(new Error("Original connection disappeared before management send"), { code: "LAN_AGENT_MANAGEMENT_NOT_SENT", deliveryFrameSent: false });
+      }
+      sentFrames++;
+      if (failure === "timeout-after-frame") throw new Error("Management timed out after sending the original frame");
+      if (failure === "unproven-not-sent") throw Object.assign(new Error("No positive frame proof"), { code: "LAN_AGENT_MANAGEMENT_NOT_SENT" });
+      const receipt: EndpointDeliveryReceipt = { deliveryId: delivery.deliveryId, generation: delivery.generation, endpoint: delivery.target,
+        promptHash: delivery.promptHash, executionOptionsHash: delivery.executionOptionsHash, accepted: true, action: "started", transport: "fixture-owner" };
+      ownerReceipts.set(delivery.deliveryId, receipt);
+      if (failure === "accepted-before-disconnect") connected = false;
+      return receipt;
+    }
+  };
+  const context = { store, registry, authority: { getNodeAuthorization: () => ({ incarnation: "original-node-lease" }) },
+    config: { getLanAgentDeliveryPolicy: () => ({ enabled: true, incarnation: "original-policy" }) }, receiptDirectory: "unused-factory-race-receipts",
+    readLocal: async () => { throw new Error("Must not substitute a local owner"); }, localOptions: () => ({}) } as unknown as AgentEndpointDeliveryContext;
+  const factory = createAgentEndpointDelivery(context);
+  registry.onDeliveryRecoveryEvent(() => factory.recovery.onEvent(connected ? store.listEndpointDeliveryMetadata()[0]?.target : undefined));
+  const options = factory.options({ nodeId: "source-node", agentId: "source-backend", sessionId: "source-session", sessionName: "Original source", provider: "dsh" }, () => {});
+  const request: AgentThreadRequest = { action: "send", sourceThreadId: "source-session", sourceAgentType: "agent", threadId: "target-session",
+    agentAdapter: "dsh", instanceBinding: { instanceId: "target-node", agentId: "target-backend" }, deliveryId: "original-durable-intent",
+    responsePolicy: "none", prompt: "Exact fixture payload", messageSource: { type: "agent", agentAdapter: "dsh", sessionId: "source-session", sessionName: "Original source" } };
+  return { factory, options, request, store, calls, sentFrames: () => sentFrames,
+    reconnect: async () => { connected = true; failure = undefined; await Promise.all(connectionListeners.map(listener => listener())); },
+    notifyConnection: async () => { await Promise.all(connectionListeners.map(listener => listener())); } };
+}
+
+test("an initially offline remote target is durably prepared through the factory without invoking management transport", async () => {
+  const f = remoteDeliveryFixture("offline");
+  const outcome = await executeEndpointAgentDelivery(f.request, f.options);
+  assert.equal(outcome.statusCode, 503);
+  assert.equal((outcome.data.error as { stage: string }).stage, "target_verification");
+  const original = (await f.store.listEndpointDeliveries())[0];
+  assert.equal(original.state, "prepared");
+  assert.equal(f.calls.length, 0);
+  assert.equal(f.sentFrames(), 0);
+  await Promise.all([f.reconnect(), f.notifyConnection()]);
+  const recovered = (await f.store.readEndpointDelivery(original.deliveryId))!;
+  assert.equal(recovered.state, "committed");
+  assert.equal(recovered.generation, original.generation);
+  assert.equal(recovered.prompt, original.prompt);
+  assert.equal(f.sentFrames(), 1);
+  assert.deepEqual(f.calls, [{ operation: "prepared_delivery", deliveryId: original.deliveryId }]);
+});
+
+test("a proven disconnect after remote preflight returns the original factory delivery to prepared and reconnect resumes it once", async () => {
+  const f = remoteDeliveryFixture("disconnect-before-frame");
+  const outcome = await executeEndpointAgentDelivery(f.request, f.options);
+  assert.equal(outcome.statusCode, 503);
+  assert.equal((outcome.data.error as { stage: string }).stage, "target_verification");
+  const original = (await f.store.listEndpointDeliveries())[0];
+  assert.equal(original.state, "prepared");
+  assert.equal(f.calls.length, 1);
+  assert.equal(f.sentFrames(), 0);
+  await Promise.all([f.reconnect(), f.notifyConnection()]);
+  const recovered = (await f.store.readEndpointDelivery(original.deliveryId))!;
+  assert.equal(recovered.state, "committed");
+  assert.equal(recovered.generation, original.generation);
+  assert.equal(recovered.promptHash, original.promptHash);
+  assert.equal(f.sentFrames(), 1);
+  assert.deepEqual(f.calls.map(call => call.deliveryId), [original.deliveryId, original.deliveryId]);
+  assert.equal((await executeEndpointAgentDelivery(f.request, f.options)).statusCode, 200);
+  assert.equal(f.sentFrames(), 1);
+});
+
+test("factory timeouts and unproven no-send claims remain dispatching and reconnect never replays the frame", async () => {
+  for (const failure of ["timeout-after-frame", "unproven-not-sent"] as const) {
+    const f = remoteDeliveryFixture(failure);
+    assert.equal((await executeEndpointAgentDelivery(f.request, f.options)).statusCode, 202);
+    const original = (await f.store.listEndpointDeliveries())[0];
+    assert.equal(original.state, "dispatching");
+    assert.equal(f.sentFrames(), 1);
+    await f.reconnect(); await f.notifyConnection();
+    assert.equal(f.store.getEndpointDelivery(original.deliveryId)?.state, "dispatching");
+    assert.equal(f.sentFrames(), 1);
+    assert.deepEqual(f.calls.map(call => call.operation), ["prepared_delivery", "reconcile_prepared_delivery", "reconcile_prepared_delivery"]);
+    assert.ok(f.calls.every(call => call.deliveryId === original.deliveryId));
+  }
+});
+
+test("a remote disconnect after owner acceptance stays uncertain and reconnect recovers its receipt without a second send", async () => {
+  const f = remoteDeliveryFixture("accepted-before-disconnect");
+  assert.equal((await executeEndpointAgentDelivery(f.request, f.options)).statusCode, 202);
+  const original = (await f.store.listEndpointDeliveries())[0];
+  assert.equal(original.state, "dispatching");
+  assert.equal(f.sentFrames(), 1);
+  await f.reconnect();
+  assert.equal(f.store.getEndpointDelivery(original.deliveryId)?.state, "committed");
+  assert.equal(f.sentFrames(), 1);
+  assert.deepEqual(f.calls.map(call => call.operation), ["prepared_delivery", "reconcile_prepared_delivery"]);
 });

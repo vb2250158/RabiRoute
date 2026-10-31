@@ -11,7 +11,7 @@ import { evaluateLanAgentRequest } from "./lanAgentRequestAccess.js";
 import { createVideoRuntime, createVideoRequestAccess } from "./videoRuntime.js";
 import type { ProcessLeaseRegistry } from "../runtime/processLeaseRegistry.js";
 // @ts-ignore Plugin modules are tested through their published JavaScript interface.
-import { dispatchVideoRequest } from "../../plugins/builtin/io.rabiroute.manager.video/1.0.0/manager.mjs";
+import { presentVideoError } from "../../plugins/builtin/io.rabiroute.manager.video/1.0.0/apiOwner.mjs";
 // @ts-ignore Plugin modules are tested through their published JavaScript interface.
 import { VideoService } from "../../plugins/builtin/io.rabiroute.manager.video/1.0.0/service.mjs";
 // @ts-ignore Plugin modules are tested through their published JavaScript interface.
@@ -19,18 +19,28 @@ import { VideoModels } from "../../plugins/builtin/io.rabiroute.manager.video/1.
 // @ts-ignore Plugin modules are tested through their published JavaScript interface.
 import { checkedReadBody } from "../../plugins/builtin/io.rabiroute.manager.video/1.0.0/requestAccess.mjs";
 // @ts-ignore Plugin modules are tested through their published JavaScript interface.
-import { streamMedia } from "../../plugins/builtin/io.rabiroute.manager.video/1.0.0/media.mjs";
+import { openMedia } from "../../plugins/builtin/io.rabiroute.manager.video/1.0.0/media.mjs";
 
 function deferred() { let resolve!: () => void; const promise = new Promise<void>(done => { resolve = done; }); return { promise, resolve }; }
 const jsonResponse = (response: http.ServerResponse, status: number, body: unknown) => { response.writeHead(status, { "content-type": "application/json" }); response.end(JSON.stringify(body)); };
-type Mode = "disable" | "agent-aba" | "global-aba" | "node-aba";
+// Controlled native boundaries use the migrated error owner; no production HTTP dispatcher is imported.
+function dispatchVideoRequest(runtime: { requestAccess: typeof createVideoRequestAccess }, http: { jsonResponse: typeof jsonResponse }, request: http.IncomingMessage, response: http.ServerResponse, handle: (access: ReturnType<typeof createVideoRequestAccess>) => unknown) {
+  let access: ReturnType<typeof createVideoRequestAccess> | undefined;
+  void Promise.resolve().then(() => { access = runtime.requestAccess(request); return handle(access); }).catch(cause => {
+    const result = presentVideoError(cause, access, request.method);
+    if (response.headersSent) { response.destroy(); return; }
+    for (const name of response.getHeaderNames()) response.removeHeader(name);
+    for (const [name, value] of Object.entries(result.headers ?? {})) response.setHeader(name, value as string);
+    http.jsonResponse(response, result.status, result.body);
+  });
+}
+type Mode = "disable" | "instance-aba" | "global-aba" | "node-aba";
 async function fixture(t: TestContext, handler: (request: http.IncomingMessage, response: http.ServerResponse) => void) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "video-authority-"));
   const authority = new LanAgentAuthority({ statePath: path.join(root, "authority.json") });
   const config = new RabiGlobalConfigStore(root); config.patch({ webguiLan: { enabled: true } });
   const credential = authority.enroll(authority.issueBootstrapTicket().ticket, "fixture-node");
   const binding = { agentId: "worker", provider: "dsh", sessionId: "fixture-session" };
-  authority.registerAgentCatalog(credential.token, [binding]);
   const server = http.createServer((request, response) => {
     const admission = evaluateLanAgentRequest(request, authority, true, () => config.getLanAgentAdmissionPolicy());
     if (admission.kind !== "agent") { jsonResponse(response,403,{error:"denied"}); return; }
@@ -40,12 +50,17 @@ async function fixture(t: TestContext, handler: (request: http.IncomingMessage, 
   t.after(async () => { server.closeAllConnections(); await new Promise<void>(resolve=>server.close(()=>resolve())); await fs.rm(root,{recursive:true,force:true}); });
   return {root, url:endpoint.baseUrl, headers:{authorization:`Bearer ${credential.token}`,"x-rabiroute-agent-id":"worker"}, revoke(mode:Mode) {
     if(mode === "global-aba") { config.patch({webguiLan:{enabled:false}});config.patch({webguiLan:{enabled:true}}); }
-    else if(mode === "node-aba") { authority.revokeNode("fixture-node");const replacement=authority.enroll(authority.issueBootstrapTicket().ticket,"fixture-node");authority.registerAgentCatalog(replacement.token,[binding]); }
-    else { authority.setAgentEnabled("fixture-node","worker",false);if(mode === "agent-aba")authority.setAgentEnabled("fixture-node","worker",true); }
+    else if(mode === "node-aba") { authority.revokeNode("fixture-node");const replacement=authority.enroll(authority.issueBootstrapTicket().ticket,"fixture-node"); }
+    else if(mode === "instance-aba") {
+      authority.setNodeEnabled("fixture-node", false);
+      authority.setNodeEnabled("fixture-node", true);
+      assert.ok(authority.authenticate(credential.token), "Restored instance admits fresh authentication while the original request lease remains revoked.");
+    }
+    else {authority.revokeNode("fixture-node");}
   }};
 }
 
-for (const mode of ["disable","agent-aba","global-aba","node-aba"] as Mode[]) {
+for (const mode of ["disable","instance-aba","global-aba","node-aba"] as Mode[]) {
   for (const boundary of ["body","queue","preflight","stream","probe","network"] as const) {
     test(`video ${boundary} blocks original request dispatch after ${mode}`, {timeout:10000}, async t => {
       const entered=deferred(), gate=deferred();t.after(gate.resolve);let dispatches=0;
@@ -62,7 +77,7 @@ for (const mode of ["disable","agent-aba","global-aba","node-aba"] as Mode[]) {
             await service.request("/object_info",{},access);
           }
           if(boundary === "preflight") await service.start(undefined,async()=>{entered.resolve();await gate.promise;},access);
-          if(boundary === "stream") { await streamMedia(request,response,"private-path","video/mp4",undefined,access,{fs:{stat:async()=>{entered.resolve();await gate.promise;return {size:123456};}},createReadStream:()=>{dispatches++;throw new Error("Unexpected raw stream");}});return; }
+          if(boundary === "stream") { await openMedia(request,"private-path","video/mp4",undefined,access,{fs:{stat:async()=>{entered.resolve();await gate.promise;return {size:123456};}},createReadStream:()=>{dispatches++;throw new Error("Unexpected raw stream");}});return; }
           if(boundary === "probe") await (runtime as ReturnType<typeof createVideoRuntime>).inspectAsset("00000000-0000-0000-0000-000000000000","image",access);
           access.assert();dispatches++;jsonResponse(response,200,{secret:"private-command"});
         });
@@ -83,7 +98,7 @@ test("accepted background model operation does not retain initiating request acc
     model=new VideoModels({readOnly:false,alive:()=>false,stateRoot:f.root},{models:[]},()=>{});
     const job=model.begin("models",async()=>{entered.resolve();await gate.promise;dispatches++;},access);access.assert();jsonResponse(response,200,job);
   }));
-  const response=await fetch(`${f.url}/api/video/models`,{headers:f.headers,method:"POST"});assert.equal(response.status,200);await entered.promise;f.revoke("agent-aba");gate.resolve();await model.flight;assert.equal(dispatches,1);assert.equal(model.job.state,"completed");
+  const response=await fetch(`${f.url}/api/video/models`,{headers:f.headers,method:"POST"});assert.equal(response.status,200);await entered.promise;f.revoke("instance-aba");gate.resolve();await model.flight;assert.equal(dispatches,1);assert.equal(model.job.state,"completed");
 });
 
 test("video denial is sticky and reports unknown once a mutation was dispatched", {timeout:10000},async t=>{
@@ -91,7 +106,7 @@ test("video denial is sticky and reports unknown once a mutation was dispatched"
   const f=await fixture(t,(request,response)=>dispatchVideoRequest({requestAccess:createVideoRequestAccess},{jsonResponse},request,response,async(access: ReturnType<typeof createVideoRequestAccess>)=>{
     captured=access;access.beforeMutation();entered.resolve();await gate.promise;assert.equal(createVideoRuntime(f.root,{} as never,{} as ProcessLeaseRegistry).localSettingsAllowed(request),false);try {access.assert();}catch {} throw new Error("private-command");
   }));
-  const pending=fetch(`${f.url}/api/video/jobs`,{headers:f.headers,method:"POST"});await entered.promise;f.revoke("agent-aba");gate.resolve();const response=await pending;assert.equal(response.status,403);assert.equal((await response.json()).mutation,"unknown");assert.throws(()=>captured.assert(),/Video request forbidden/);
+  const pending=fetch(`${f.url}/api/video/jobs`,{headers:f.headers,method:"POST"});await entered.promise;f.revoke("instance-aba");gate.resolve();const response=await pending;assert.equal(response.status,403);assert.equal((await response.json()).mutation,"unknown");assert.throws(()=>captured.assert(),/Video request forbidden/);
 });
 
 test("enabled Agent retains local-equivalent model access despite nonlocal browser headers", {timeout:10000},async t=>{

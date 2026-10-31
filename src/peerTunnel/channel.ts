@@ -1,3 +1,4 @@
+import { getTimeoutMs } from "../shared/timeoutSettings.js";
 import { EventEmitter } from "node:events";
 import WebSocket from "ws";
 import type { RTCDataChannel } from "werift";
@@ -25,7 +26,7 @@ class BufferedChannel extends EventEmitter implements TunnelChannel {
     return this;
   }
 }
-export interface TunnelChannel extends EventEmitter { send(bytes: Buffer): Promise<void>; close(): void; }
+export interface TunnelChannel extends EventEmitter { send(bytes: Buffer): Promise<void>; close(): void | Promise<void>; }
 export function websocketChannel(socket: WebSocket): TunnelChannel {
   const result = new BufferedChannel() as TunnelChannel;
   socket.on("message", bytes => result.emit("data", Buffer.from(bytes as Buffer)));
@@ -35,10 +36,13 @@ export function websocketChannel(socket: WebSocket): TunnelChannel {
     if (socket.readyState !== WebSocket.OPEN || socket.bufferedAmount > 2 * 1024 * 1024) return reject(new Error("Tunnel channel unavailable."));
     socket.send(bytes, error => error ? reject(error) : resolve());
   });
-  result.close = () => socket.terminate();
+  let closing: Promise<void> | undefined;
+  result.close = () => closing ??= socket.readyState === WebSocket.CLOSED ? Promise.resolve() : new Promise<void>(resolve => {
+    socket.once("close", resolve); socket.terminate();
+  });
   return result;
 }
-export function rtcChannel(channel: RTCDataChannel, close: () => void): TunnelChannel {
+export function rtcChannel(channel: RTCDataChannel, close: () => void | Promise<void>): TunnelChannel {
   const result = new BufferedChannel() as TunnelChannel;
   channel.onMessage.subscribe(bytes => result.emit("data", Buffer.from(bytes)));
   channel.stateChange.subscribe(state => { if (state === "closed") result.emit("close"); });
@@ -51,7 +55,7 @@ export function rtcChannel(channel: RTCDataChannel, close: () => void): TunnelCh
 }
 export function connectWebsocket(url: string, headers: Record<string, string>, signal: AbortSignal): Promise<TunnelChannel> {
   return new Promise((resolve, reject) => {
-    const ws = new WebSocket(url, { headers, maxPayload: 40_000, handshakeTimeout: 5_000, followRedirects: false });
+    const ws = new WebSocket(url, { headers, maxPayload: 40_000, handshakeTimeout: getTimeoutMs("backend.peerTunnel.channel.connectWebsocket.handshakeTimeout", 5_000), followRedirects: false });
     const abort = () => { ws.terminate(); reject(new Error("Tunnel connection cancelled.")); };
     if (signal.aborted) { abort(); return; }
     signal.addEventListener("abort", abort, { once: true });

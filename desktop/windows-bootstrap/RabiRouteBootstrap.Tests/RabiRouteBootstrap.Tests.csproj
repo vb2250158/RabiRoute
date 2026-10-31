@@ -9,6 +9,7 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\RabiRouteBootstrap.csproj" />
-    <ProjectReference Include="..\..\windows-host\RabiRouteHost.csproj" />
+    <Compile Remove="HostCoreFixture\**\*.cs" />
+    <ProjectReference Include="HostCoreFixture\HostCoreFixture.csproj" />
   </ItemGroup>
 </Project>

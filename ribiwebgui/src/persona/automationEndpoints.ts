@@ -7,7 +7,7 @@ export const automationEndpoints = [
   { value: "wecom", title: "企业微信 / WeCom", icon: "mdi-account-group", routeKinds: ["wecom_message"] },
   { value: "feishu", title: "飞书 / Feishu", icon: "mdi-message-text-outline", routeKinds: ["feishu_message"] },
   { value: "xiaomiHome", title: "米家 / Xiaomi Home", icon: "mdi-home-automation", routeKinds: ["xiaomi_home_event"] },
-  { value: "fennenote", title: "语音转写 (FenneNote)", icon: "mdi-microphone", routeKinds: ["voice_transcript"] },
+  { value: "speech", title: "语音服务", icon: "mdi-microphone", routeKinds: ["voice_transcript"] },
   { value: "rolePanel", title: "角色面板 / 桌面入口", icon: "mdi-desktop-classic", routeKinds: ["role_panel_message", "manual_trigger"] },
   { value: "wearable", title: "智能手表/手环", icon: "mdi-watch", routeKinds: ["wearable_health_alert"] },
   { value: "rabilink", title: "RabiLink", icon: "mdi-link-variant", routeKinds: ["rabilink"] },
@@ -19,7 +19,9 @@ export function automationEndpoint(rule: PersonaAutomationRuleDefinition): strin
   if (rule.trigger.type === "schedule") return "schedule";
   const kinds = rule.trigger.routeKinds ?? [];
   const endpointType = "endpointType" in rule.trigger ? rule.trigger.endpointType : undefined;
-  const explicit = automationEndpoints.find(option => option.value === endpointType);
+  // Persisted rules keep their filters; only the retired display category is mapped.
+  const currentEndpointType = endpointType === "fennenote" ? "speech" : endpointType;
+  const explicit = automationEndpoints.find(option => option.value === currentEndpointType);
   // Empty kinds match all messages, including legacy rules without an endpoint.
   if (explicit && explicit.value !== "schedule"
     && (explicit.routeKinds.length === 0 || kinds.some(kind => explicit.routeKinds.includes(kind)))) return explicit.value;

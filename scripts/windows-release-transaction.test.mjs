@@ -143,6 +143,7 @@ function makeFixture(scenario = "success", packageVersion = "9.9.9") {
 function run(fixture, fault = "", {
   autostartScript = fixture.helper,
   autostartEnabled = "false",
+  recoverOnly = false,
   extraEnv = {},
 } = {}) {
   const args = ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", transaction,
@@ -151,6 +152,7 @@ function run(fixture, fault = "", {
     "-LegacyTaskMigrationScript", legacyTaskMigration, "-TestLegacyTaskStorePath", fixture.taskStore,
     "-AutostartScript", autostartScript, "-AutostartEnabled", autostartEnabled, "-TestSelfTestScript", fixture.helper];
   if (fault) args.push("-FaultPoint", fault);
+  if (recoverOnly) args.push("-RecoverOnly");
   return spawnSync(powershell, args, {
     encoding: "utf8",
     env: {
@@ -163,22 +165,22 @@ function run(fixture, fault = "", {
   });
 }
 
-test("credential compatibility failure retains the live baseline before Host stop or legacy-task removal", { skip: process.platform !== "win32" }, () => {
+test("recovery-only uses ownership checks and never starts another install", { skip: process.platform !== "win32" }, () => {
   const fixture = makeFixture();
   try {
-    const credentialPath = path.join(fixture.install, "data/.runtime/lan-agent-authority.json");
-    const stopMarker = path.join(fixture.root, "unexpected-stop.txt");
-    fs.mkdirSync(path.dirname(credentialPath), { recursive: true });
-    const original = '{"schemaVersion":2,"nodes":[]}\n'; fs.writeFileSync(credentialPath, original);
-    fs.writeFileSync(fixture.helper, 'param([Parameter(ValueFromRemainingArguments=$true)]$Rest)\nif ($Rest -contains "-WorkingRoot") { [IO.File]::WriteAllText($env:RABI_COMPAT_STOP_MARKER, "stopped") }\nexit 0\n');
-    const result = run(fixture, "", { extraEnv: { RABI_COMPAT_STOP_MARKER: stopMarker } });
-    assert.notEqual(result.status, 0);
-    assert.match(result.stdout + result.stderr, /installed data compatibility preflight/i);
-    assert.equal(fs.existsSync(stopMarker), false);
-    assert.equal(fs.readFileSync(path.join(fixture.install, "current.json"), "utf8"), fixture.previousPointer);
-    assert.equal(fs.readFileSync(path.join(fixture.install, "RabiRouteHost.exe"), "utf8"), "old-bootstrap");
-    assert.equal(fs.readFileSync(credentialPath, "utf8"), original);
-    assert.equal(readLegacyTasks(fixture)[0].state, "Running");
+    const pointer = fs.readFileSync(path.join(fixture.install, "current.json"));
+    const fresh = run(fixture, "", { recoverOnly: true });
+    assert.equal(fresh.status, 0, fresh.stderr || fresh.stdout);
+    assert.equal(JSON.parse(fresh.stdout.trim().split(/\r?\n/).at(-1)).state, "recovered");
+    assert.deepEqual(fs.readFileSync(path.join(fixture.install, "current.json")), pointer);
+    const failed = run(fixture, "after-stage");
+    assert.notEqual(failed.status, 0);
+    assert.ok(fs.existsSync(path.join(fixture.install, ".rabiroute-install-transaction.json")));
+    const recovered = run(fixture, "", { recoverOnly: true });
+    assert.equal(recovered.status, 0, recovered.stderr || recovered.stdout);
+    assert.deepEqual(fs.readFileSync(path.join(fixture.install, "current.json")), pointer);
+    assert.ok(!fs.existsSync(path.join(fixture.install, ".rabiroute-install-transaction.json")));
+    assert.ok(!fs.existsSync(path.join(fixture.install, "versions", fixture.releaseId)));
   } finally { fs.rmSync(fixture.root, { recursive: true, force: true }); }
 });
 

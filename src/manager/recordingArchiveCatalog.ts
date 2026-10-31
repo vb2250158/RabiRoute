@@ -4,6 +4,7 @@ import path from "node:path";
 import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { validateRecordingManifest, recordingManifestHash, validateArchiveReceipt, type RecordingManifest, type ArchiveReceipt } from "./recordingArchiveContract.js";
 import type { RecordingArchiveNamespace } from "./recordingArchiveStore.js";
+import { RECORDING_ARCHIVE_CATALOG_DEFAULT_LIMIT, RECORDING_ARCHIVE_CATALOG_LIMIT, RECORDING_ARCHIVE_CURSOR_MAX_LENGTH, RECORDING_ARCHIVE_SOURCES } from "./recordingArchiveSchemas.js";
 
 const hash = (s: string) => createHash("sha256").update(s).digest("hex");
 export class RecordingArchiveCatalogError extends Error {
@@ -141,9 +142,9 @@ export class RecordingArchiveCatalog {
   }
   async list(owner: string, query: RecordingArchiveCatalogQuery = {}) {
     this.identity(owner);
-    const limit = query.limit ?? 50, from = query.from ?? 0, to = query.to ?? Number.MAX_SAFE_INTEGER;
-    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100 || !Number.isSafeInteger(from) || !Number.isSafeInteger(to) || from < 0 || to < from
-        || query.source !== undefined && !["phone", "glasses", "video"].includes(query.source)) throw new RecordingArchiveCatalogError("invalid_query", 400);
+    const limit = query.limit ?? RECORDING_ARCHIVE_CATALOG_DEFAULT_LIMIT, from = query.from ?? 0, to = query.to ?? Number.MAX_SAFE_INTEGER;
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > RECORDING_ARCHIVE_CATALOG_LIMIT || !Number.isSafeInteger(from) || !Number.isSafeInteger(to) || from < 0 || to < from
+        || query.source !== undefined && !RECORDING_ARCHIVE_SOURCES.includes(query.source)) throw new RecordingArchiveCatalogError("invalid_query", 400);
     const snapshot = this.snapshots.get(owner); if (!snapshot) throw new RecordingArchiveCatalogError("catalog_not_ready", 503);
     let offline = false;
     // Resolver failures are authorization/configuration failures, never evidence of an offline NAS.
@@ -158,7 +159,7 @@ export class RecordingArchiveCatalog {
     let after: { time: number; id: string } | undefined;
     const key = await this.key();
     if (query.cursor) {
-      if (query.cursor.length > 4096) throw new RecordingArchiveCatalogError("invalid_cursor", 400);
+      if (query.cursor.length > RECORDING_ARCHIVE_CURSOR_MAX_LENGTH) throw new RecordingArchiveCatalogError("invalid_cursor", 400);
       const [body, signature, extra] = query.cursor.split(".");
       const expected = createHmac("sha256", key).update(body ?? "").digest();
       const actual = Buffer.from(signature ?? "", "base64url");

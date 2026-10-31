@@ -2,7 +2,7 @@ English | [简体中文](web-hot-patches.md)
 
 # Installed Web hot patches
 
-Status: experimental. Covers WebGUI, static resources, user guides compiled into the page, and independent Web Bundles. Installing this capability or changing the backend, dependency lock, or plugin contract still requires a coordinated full release. Compatible subsequent Web updates keep the Manager PID, application generation and instance unchanged.
+Status: experimental. Covers WebGUI, static resources, user guides compiled into the page, and independent Web Bundles. Compatible Web updates keep the Manager PID, application generation and instance unchanged. A changed backend fingerprint, dependency lock or plugin contract cannot be published with Web-only updates; follow the actual [source hot-patch](source-hot-patches_en.md) and state-migration support matrix. Only a concrete non-migratable boundary or missing runtime support on first installation requires a Host-controlled switch.
 
 ## Pages and versions
 
@@ -14,14 +14,14 @@ Status: experimental. Covers WebGUI, static resources, user guides compiled into
 
 ## Automatic build and activation
 
-1. Have one release owner build and install a version supporting this feature. Discover `managerBaseUrl` through `RabiRouteHost.exe --command status --json`; match `/meta` application/Manager identities and require `health.state=healthy`, `health.requiredReady=true`.
+1. One release owner installs support on first use; later publication follows actual compatibility. Discover `managerBaseUrl` through `RabiRouteHost.exe --command status --json`; match `/meta` application/Manager identities and require `health.live=true` with `health.state=healthy|degraded`. `health.requiredReady` diagnoses declared capabilities; the target interface decides its dependencies, and unrelated capability failures do not veto the operation.
 2. Configure the Host with a trusted `RABIROUTE_HOT_PATCH_SOURCE_ROOT`. `RABIROUTE_HOT_PATCH_WATCH=0` disables automatic activation. Do not select a build directory another task is cleaning.
 3. Use `npm run webgui:build` for one build or `npm run webgui:watch` for continuous work. The latter watches Web sources, shared contracts, resources and documentation, serializing type checks and Vite **production builds**, not a development server. Stopping it does not stop Manager.
 4. Builds exclusively own `ribiwebgui/.web-patch-build.lock`; concurrent builds fail closed. If a crashed process leaves it behind, verify its recorded PID has exited and no build owner remains before removing that lock.
 5. Source changes during a build, type errors, missing assets, bad hashes and incompatible backends do not publish a completion marker. Watch mode retries after the next actual input change, not endlessly for unchanged failures.
 6. A successful build writes `dist/web-patches/<hash>` before atomically replacing `dist/web-patches/latest.json`. Manager validates completed candidates, then atomically records the active pointer and receipt. Do not overwrite installation files.
 
-The backend compatibility fingerprint includes compiled JS/MJS, non-Web JSON, `package.json` and `package-lock.json`. Changes require a full release; do not rewrite fingerprints to bypass this gate.
+The backend compatibility fingerprint includes compiled JS/MJS, non-Web JSON, `package.json` and `package-lock.json`. A changed fingerprint cannot be published through Web-only updates. Use the actual source hot-patch and migration support matrix; do not rewrite fingerprints to bypass compatibility.
 
 ## Query, manual activation and rollback
 
@@ -53,9 +53,9 @@ Freeze each operation's payload. Reusing its ID with a different candidate or re
 
 ## Capacity and maintenance
 
-A candidate is limited to 8192 files and 128 MiB. At most 64 candidates are retained, with 2048 publication receipts per backend baseline. The in-memory manifest cache holds at most eight releases. File reads verify hashes and responses use one complete Buffer.
+A candidate is limited to 8192 files and 128 MiB. Optional imports are admitted only while the current backend has fewer than 64 valid manifest records, with 2048 receipts per backend baseline. The installed baseline is required startup material and is never rejected because historical slots are full, so physical candidate counts can exceed 64. Optional imports retain their existing wait-for-baseline and serialized commit order. Foreign-backend, unknown and unverifiable-manifest history remains untouched and does not count against the current backend. Counting validates manifest hashes and schemas without reading existing payloads; import sources, reused destinations and actual static reads retain full content verification. The in-memory manifest cache holds at most eight releases.
 
-This version **does not automatically delete old disk candidates or receipts**. At capacity, new publication stops while the current service continues; unlimited continuous updating is not claimed. Offline archival requires publication to be frozen, complete state/receipt backups, confirmation that old pages are closed and old backends will not be recovered. Never delete candidates solely by timestamp. Without those conditions, keep the capacity warning and preserve data.
+This version **does not automatically delete old disk candidates or receipts**. At the current backend limit, new optional imports are rejected while idempotent imports and reads of existing releases remain available. Historical candidates are not automatically archived; total disk usage still needs separate management. The current service continues; unlimited continuous updating is not claimed. Offline archival requires publication to be frozen, complete state/receipt backups, confirmation that old pages are closed and old backends will not be recovered. Never delete candidates solely by timestamp. Without those conditions, keep the capacity warning and preserve data.
 
 ## Acceptance
 

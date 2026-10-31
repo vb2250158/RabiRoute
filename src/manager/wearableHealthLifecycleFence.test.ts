@@ -5,7 +5,8 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import type { AddressInfo } from "node:net";
-import { handleWearableHealthApi } from "./controlPlaneRoutes.js";
+import { createPersonaHealthOperations } from "./personaHealthOperations.js";
+import { ManagerPluginRouteRegistry } from "./managerPluginRouteRegistry.js";
 
 const applicationGenerationId = "application-generation-current";
 const managerInstanceId = "manager-instance-current";
@@ -56,23 +57,18 @@ function postObservation(
 test("wearable observation POST is fenced before body ingest and persistence", async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-wearable-fence-"));
   const roleDir = path.join(root, "roles", "YeYu");
+  const registry=new ManagerPluginRouteRegistry(),registration=registry.registerOperations('health-lifecycle-fixture',createPersonaHealthOperations({roleDirectory:()=>roleDir,identity:()=>({applicationGenerationId,managerInstanceId}),lifecycleFence:{applicationGenerationId,managerInstanceId},managerPort:0,deliverAlert:async()=>{throw new Error('No alert expected');}}));
   const server = http.createServer((request, response) => {
-    const pathname = new URL(request.url ?? "/", "http://127.0.0.1").pathname;
-    if (!handleWearableHealthApi(request, pathname, response, {
-      roleDir: () => roleDir,
-      lifecycleFence: { applicationGenerationId, managerInstanceId }
-    })) {
-      response.statusCode = 404;
-      response.end();
-    }
+    if(!registry.handle(request,new URL(request.url??'/','http://fixture.invalid'),response))response.writeHead(404).end();
   });
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
     server.listen(0, "127.0.0.1", resolve);
   });
   t.after(async () => {
+    server.closeAllConnections();await registration.dispose();
     await new Promise<void>(resolve => server.close(() => resolve()));
-    fs.rmSync(root, { recursive: true, force: true });
+    assert.equal(path.dirname(path.resolve(root)),path.resolve(os.tmpdir()));assert.ok(path.basename(root).startsWith('rabiroute-wearable-fence-'));fs.rmSync(root, { recursive: true, force: true });
   });
   const port = (server.address() as AddressInfo).port;
 

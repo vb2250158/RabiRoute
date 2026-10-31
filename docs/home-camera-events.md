@@ -9,7 +9,7 @@
 Bootstrap 在调用 Host 核心前消费自身的 `--elevated-task` 标记；状态命令及其他参数保持原样，非法参数组合继续由核心拒绝。
 状态查询成功但返回 `stopped` 时仍执行首次启动授权；只有实际运行或启动中的 Host 才直接复用。
 
-Windows 稳定入口 `RabiRouteHost.exe` 在启动前校验发布树，再检查本安装、本用户的最高权限任务。首次缺少任务时请求一次 UAC；确认后创建 `RabiRoute.Host.Elevated.<安装与用户哈希>`，固定执行同一 Host 的 `--elevated-task`，支持用户登录触发和按需启动。已有可信任务直接按需启动，不重复 UAC。任务内已提权的 Host 不递归启动自己。状态查询、自检和控制命令不触发提权。
+Windows 稳定入口 `RabiRouteHost.exe` 按 `current.json` 定位本地 Host Core，再检查本安装、本用户的最高权限任务。首次缺少任务时请求一次 UAC；确认后创建 `RabiRoute.Host.Elevated.<安装与用户哈希>`，固定执行同一 Host 的 `--elevated-task`，支持用户登录触发和按需启动。已有可信任务直接按需启动，不重复 UAC。任务内已提权的 Host 不递归启动自己。状态查询、自检和控制命令不触发提权。
 
 任务绑定用户 SID、安装路径、固定动作、最高权限和交互登录；外来或被修改的同名任务不执行、不覆盖。拒绝 UAC 或任务服务不可用时，Host 降级继续运行，通过 `/meta.hostPrivilege`、HA 部署页面及本机 `data/runtime/privilege-status.json` 显示受限功能。自启设置同步任务的登录触发器，关闭自启不禁用按需启动。
 

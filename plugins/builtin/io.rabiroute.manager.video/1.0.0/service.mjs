@@ -1,3 +1,4 @@
+import { validJobView } from "./contracts.mjs";
 import fs from "node:fs/promises";
 import { checkedFs } from "./requestAccess.mjs";
 import path from "node:path";
@@ -18,6 +19,10 @@ export class VideoService {
     this.fetch = dependencies.fetch ?? fetch;
     this.WebSocket = dependencies.WebSocket ?? WebSocket;
     this.jobs = new Map();
+    this.ownsJobState = false;
+    this.recordIssues = [];
+    this.reservedKeys = new Set();
+    this.unknownKeyScopes = new Set();
     this.endpoint = "";
     this.online = false;
     this.frameAdaptationAvailable = false;
@@ -33,25 +38,65 @@ export class VideoService {
     this.serial = next.catch(() => {});
     return next;
   }
-  async initialize() {
-    if (!this.runtime.readOnly) await fs.mkdir(path.join(this.runtime.stateRoot, "jobs"), { recursive: true });
-    if (!this.runtime.readOnly) await fs.mkdir(path.join(this.runtime.stateRoot, "compute", "jobs"), { recursive: true });
-    for (const directory of ["jobs", path.join("compute", "jobs")]) {
-    const files = await fs.readdir(path.join(this.runtime.stateRoot, directory)).catch(error => { if (error.code === "ENOENT") return []; throw error; });
-    for (const file of files) {
-      if (!/^[0-9a-f-]{36}\.json$/.test(file)) continue;
-      const job = JSON.parse(await fs.readFile(path.join(this.runtime.stateRoot, directory, file), "utf8"));
-      if (file !== `${job.id}.json` || !this.catalog.states[job.status] || Boolean(job.computeOnly) !== (directory !== "jobs")) throw new Error("视频任务记录无效，已停止加载。");
-      if (!this.runtime.readOnly && !this.catalog.states[job.status].terminal) {
+  async initialize({ recover = true } = {}) {
+    // Candidate validation may load existing records, but only the published owner
+    // may recover or persist them. Reload after the previous owner actually drains.
+    this.jobs.clear(); this.recordIssues = []; this.reservedKeys.clear(); this.unknownKeyScopes.clear();
+    this.ownsJobState = recover && !this.runtime.readOnly;
+    if (this.ownsJobState) await fs.mkdir(path.join(this.runtime.stateRoot, "jobs"), { recursive: true });
+    if (this.ownsJobState) await fs.mkdir(path.join(this.runtime.stateRoot, "compute", "jobs"), { recursive: true });
+    const records = [], byId = new Map(), byKey = new Map();
+    const keyOf = job => typeof job?.keyHash === "string" && /^[a-f0-9]{64}$/.test(job.keyHash) ? job.keyHash : undefined;
+    const isolate = (record, code) => {
+      if (!record.issue) { record.issue = code; this.recordIssues.push({ id: record.id, scope: record.scope, code }); }
+      const key = keyOf(record.job);
+      if (key) this.reservedKeys.add(record.scope + ":" + key);
+      else this.unknownKeyScopes.add(record.scope);
+    };
+    for (const scope of ["jobs", "compute"]) {
+      const directory = scope === "jobs" ? "jobs" : path.join("compute", "jobs");
+      const files = await fs.readdir(path.join(this.runtime.stateRoot, directory)).catch(error => { if (error.code === "ENOENT") return []; throw error; });
+      for (const file of files) {
+        if (!/^[0-9a-f-]{36}\.json$/.test(file)) continue;
+        const record = { id: file.slice(0, -5), scope }; records.push(record);
+        try { record.job = JSON.parse(await fs.readFile(path.join(this.runtime.stateRoot, directory, file), "utf8")); }
+        catch { isolate(record, "unreadable_record"); }
+        const previous = byId.get(record.id);
+        if (previous) { isolate(previous, "duplicate_id"); isolate(record, "duplicate_id"); }
+        else byId.set(record.id, record);
+        const job = record.job, key = keyOf(job);
+        if (key) {
+          const identity = scope + ":" + key, previousKey = byKey.get(identity);
+          if (previousKey) { isolate(previousKey, "duplicate_key"); isolate(record, "duplicate_key"); }
+          else byKey.set(identity, record);
+        }
+        if (record.issue) continue;
+        if (!job || typeof job !== "object" || Array.isArray(job) || job.id !== record.id
+          || typeof job.status !== "string" || !Object.hasOwn(this.catalog.states, job.status)
+          || Boolean(job.computeOnly) !== (scope === "compute") || typeof job.createdAt !== "string"
+          || typeof job.model !== "string" || !job.model || !validJobView(this.view(job))
+          || (job.references !== undefined && (!Array.isArray(job.references) || job.references.some(id => typeof id !== "string" || !/^[a-f0-9-]{36}$/.test(id))))) {
+          isolate(record, "invalid_record"); continue;
+        }
+        // Legacy readable jobs may lack a usable key; they remain readable, but
+        // cannot prove that an unmatched caller key is a new operation.
+        if (!key) this.unknownKeyScopes.add(scope);
+      }
+    }
+    // Check all identities before recovering any file. Conflicting rows stay untouched.
+    for (const record of records) {
+      if (record.issue) continue;
+      const job = record.job;
+      if (this.ownsJobState && !this.catalog.states[job.status].terminal) {
         if (job.computeDeviceId && job.status === "running" && !this.catalog.states[job.computeOutcome]?.terminal) job.computeOutcome = "unknown";
         job.status = "interrupted";
         job.error = "服务重启，任务未自动重试。";
-        await this.save(job);
+        try { await this.save(job); } catch { isolate(record, "recovery_failed"); continue; }
       }
       this.jobs.set(job.id, job);
     }
-    }
   }
+
   async save(job, access) {
     const fs = checkedFs(access);
     if (this.runtime.readOnly) throw new VideoError("只读模式下不能修改视频任务。", 423);
@@ -71,7 +116,7 @@ export class VideoService {
     return { ...value, mediaKind: image ? "image" : "video", imageUrl: image && job.status === "succeeded" && !job.outputPurged ? `${prefix}/${job.id}/image` : undefined, hasFirstFrame: Boolean(firstFrame), hasLastFrame: Boolean(lastFrame), videoUrl: !image && job.status === "succeeded" && !job.outputPurged ? `${prefix}/${job.id}/video` : undefined };
   }
   snapshot() {
-    return { online: this.online && this.runtime.alive(), availableModels: this.availableModels || [], availableWorkflows: this.availableWorkflows || [], models: this.catalog.models, states: this.catalog.states,
+    return { recordIssues: this.recordIssues.map(issue => ({ ...issue })), online: this.online && this.runtime.alive(), availableModels: this.availableModels || [], availableWorkflows: this.availableWorkflows || [], models: this.catalog.models, states: this.catalog.states,
       jobs: [...this.jobs.values()].filter(job => !job.computeOnly).sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 100).map(job => this.view(job)) };
   }
   async snapshotFor(deviceId, access) {
@@ -135,7 +180,7 @@ export class VideoService {
   async request(route, init = {}, access) {
     access?.assert();
     if (init.method && !["GET", "HEAD"].includes(init.method.toUpperCase())) access?.beforeMutation();
-    const response = await this.fetch(`${this.endpoint}${route}`, { ...init, redirect: "error", signal: AbortSignal.any([this.controller.signal, AbortSignal.timeout(20000)]) });
+    const response = await this.fetch(`${this.endpoint}${route}`, { ...init, redirect: "error", signal: AbortSignal.any([this.controller.signal, AbortSignal.timeout((this.runtime.getTimeoutMs?.("video.runtime.request", 20000) ?? 20000))]) });
     access?.assert();
     if (!response.ok) throw new VideoError(`H3 服务请求失败（HTTP ${response.status}）。`, 502);
     const value = await response.json(); access?.assert(); return value;
@@ -148,7 +193,7 @@ export class VideoService {
       this.endpoint = await this.runtime.start(typeof modelRoot === "function" ? modelRoot() : modelRoot, access);
       access?.assert();
       try {
-        const deadline = Date.now() + 120000;
+        const deadline = Date.now() + (this.runtime.getTimeoutMs?.("video.runtime.start", 120000) ?? 120000);
         while (true) {
           if (!this.runtime.alive()) throw new VideoError("H3 进程已退出，请检查视频服务日志。", 503);
           try { await this.request("/system_stats", {}, access); break; } catch (error) {
@@ -201,11 +246,14 @@ export class VideoService {
     const deviceId = options.deviceId || "";
     const keyHash = hash(`${options.computeOnly ? "compute:" : ""}${key}`), commandHash = hash(JSON.stringify(deviceId ? {...command, computeDeviceId:deviceId} : command));
     return this.exclusive(async () => {
+      const scope = options.computeOnly ? "compute" : "jobs";
+      if (this.reservedKeys.has(scope + ":" + keyHash)) throw new VideoError("原任务记录损坏或存在重复身份，请先核对原回执；不会重新执行。", 409);
       const previous = [...this.jobs.values()].find(job => job.keyHash === keyHash && Boolean(job.computeOnly) === Boolean(options.computeOnly));
       if (previous) {
         if (previous.commandHash !== commandHash) throw new VideoError("同一个幂等键已用于不同参数。", 409);
         return this.view(previous);
       }
+      if (this.unknownKeyScopes.has(scope)) throw new VideoError("该任务目录存在无法识别幂等键的原记录，请恢复原文件后再提交；已有回执仍可查询。", 409);
       const capability = deviceId ? await this.remote.status(deviceId, access) : null;
       if (this.closing || (capability ? !capability.online : !this.online || !this.runtime.alive())) throw new VideoError("请先启动所选电脑的视频生成服务。", 503);
       if ((command.firstFrame || command.lastFrame) && !(capability ? capability.frameAdaptationAvailable : this.frameAdaptationAvailable)) throw new VideoError("视频运行环境缺少 ResizeAndPadImage 自动适配节点，请更新 ComfyUI 后重启视频服务。", 409);
@@ -324,7 +372,7 @@ export class VideoService {
     // The result can fail while the submission HTTP request is still pending.
     result.catch(() => {});
     const abort = () => rejectResult(new VideoError("插件停止，生成已中断。", 503));
-    const timer = setTimeout(() => rejectResult(new VideoError("生成超过两小时，任务未自动重试。", 504)), 2 * 60 * 60 * 1000);
+    const timer = setTimeout(() => rejectResult(new VideoError("生成超过配置的等待时间，任务未自动重试。", 504)), (this.runtime.getTimeoutMs?.("video.generation", 7200000) ?? 7200000));
     this.controller.signal.addEventListener("abort", abort, { once: true });
     const inspect = async () => {
       if (!promptId) return;
@@ -379,7 +427,7 @@ export class VideoService {
     await this.serial;
     await this.runtime.stop();
     this.unsubscribeExit?.();
-    for (const job of this.jobs.values()) if (!this.runtime.readOnly && !this.catalog.states[job.status].terminal) { job.status = "interrupted"; job.error = "插件停止，任务未自动重试。"; await this.save(job); }
+    for (const job of this.jobs.values()) if (this.ownsJobState && !this.catalog.states[job.status].terminal) { job.status = "interrupted"; job.error = "插件停止，任务未自动重试。"; await this.save(job); }
     this.online = false;
   }
 }

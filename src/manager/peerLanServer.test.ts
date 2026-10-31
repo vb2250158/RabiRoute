@@ -88,3 +88,28 @@ test("peer tunnel upgrade is delegated and stop waits for the upgraded connectio
   await server.start();
   assert.equal(server.status().state, "listening");
 });
+
+test("bound address follows the actual socket and status observers do not own or mutate it", async t => {
+  const order: string[] = [], observed: PeerLanStatus[] = [];
+  const server = new PeerLanServer({ ...localOptions, addresses: () => ["10.0.0.99"], peerHandler: () => false,
+    onStatus: status => order.push(`owner:${status.state}`) });
+  t.after(() => server.stop());
+  assert.equal(server.boundAddress(), undefined);
+  const unsubscribe = server.subscribeStatus(status => {
+    order.push(`observer:${status.state}`); observed.push(status); status.urls.length = 0;
+  });
+  assert.deepEqual(observed, []);
+  await server.start();
+  const address = server.boundAddress();
+  assert.ok(address && address.port > 0);
+  assert.equal(address.address, "127.0.0.1");
+  assert.equal(address.port, server.status().port);
+  assert.equal(Object.isFrozen(address), true);
+  assert.deepEqual(server.peerUrls(), [`http://10.0.0.99:${address.port}`]);
+  assert.deepEqual(order, ["owner:starting", "observer:starting", "owner:listening", "observer:listening"]);
+  unsubscribe(); unsubscribe();
+  await server.stop();
+  assert.equal(server.boundAddress(), undefined);
+  assert.equal(observed.length, 2);
+  assert.equal(order.at(-1), "owner:disabled");
+});

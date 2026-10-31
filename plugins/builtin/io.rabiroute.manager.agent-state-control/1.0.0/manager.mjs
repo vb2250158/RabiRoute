@@ -27,17 +27,9 @@ export const activate = definePlugin({
                 }
             });
             try {
-        const requestTracker = new runtime.ManagerPluginRequestTracker();
-        ctx.effect(() => {
-            const unregister = runtime.registerManagerPluginHandlerRoutes(runtime.managerPluginRoutes, "manager:agent-state-control", "manager.agent-state-control.api", [
-                requestTracker.wrap((request, requestUrl, response) => (request.method === "POST" && runtime.handleAgentStateReport(request, requestUrl.pathname, response)))
-            ], [
-                { routeId: "agent-state", kind: "exact", path: "/api/agent-state", methods: ["POST"] }
-            ]);
-            return async () => {
-                unregister();
-                await requestTracker.stop();
-            };
+        ctx.effect(async () => {
+            const operations = await runtime.managerPluginRoutes.registerOperationsAsync(context.identity.instanceId, runtime.createAgentStateReportOperations(), context.lifecycle.signal);
+            return () => operations.dispose();
         }, "activate Manager Agent state control plugin");
 
                 await Promise.all(pendingEffects);

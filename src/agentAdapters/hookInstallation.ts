@@ -1,3 +1,4 @@
+import { getTimeoutMs } from "../shared/timeoutSettings.js";
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -135,7 +136,7 @@ export async function probeWorkbuddyHook(installRoot: string, options: { signal?
   if (!fs.existsSync(scriptPath)) return failed("未找到 Hook 入口脚本");
   const key = path.resolve(scriptPath);
   if (activeWorkbuddyProbes.has(key)) return failed("上一次自检仍未确认退出，请稍后检查");
-  const timeoutMs = Number.isFinite(options.timeoutMs) ? Math.min(20_000, Math.max(1, Math.floor(options.timeoutMs!))) : 20_000;
+  const timeoutMs = Number.isFinite(options.timeoutMs) ? Math.max(1, Math.floor(options.timeoutMs!)) : getTimeoutMs("agent.hookProbe", 20000);
   return new Promise(resolve => {
     let child: ChildProcess;
     try { child = spawn(process.execPath, [scriptPath, "--self-check"], { shell: false, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] }); }
@@ -163,7 +164,7 @@ export async function probeWorkbuddyHook(installRoot: string, options: { signal?
         child.stdout?.pause(); child.stderr?.pause();
         // Keep the resource entry until close; another probe must not pile up.
         finish(failed("自检未能确认退出，已禁止重复启动"));
-      }, 1000);
+      }, getTimeoutMs("deadline.agentAdapters.hookInstallation.probeWorkbuddyHook", 1000));
     };
     const aborted = () => stop("自检已取消");
     const receive = (target: Buffer[], chunk: Buffer) => {
@@ -309,7 +310,7 @@ export function updateAgentHooks(rootDir: string, adapter: string, run?: RunInst
       throw new Error("当前安装缺少 Codex Hook 安装包，请更新 RabiRoute 安装包后重试。");
     }
     const invoke = run ?? ((args: string[]) => execute(process.execPath, [cli, ...args], {
-      cwd: rootDir, windowsHide: true, timeout: 60_000, maxBuffer: 1024 * 1024
+      cwd: rootDir, windowsHide: true, timeout: getTimeoutMs("backend.agentAdapters.hookInstallation.updateAgentHooks.execute.timeout", 60_000), maxBuffer: 1024 * 1024
     }));
     if (adapter === "codex") {
       await invoke(["plugin", "marketplace", "add", bundleRoot]);

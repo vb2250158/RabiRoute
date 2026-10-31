@@ -16,6 +16,7 @@ import sounddevice as sd
 from websockets.asyncio.client import connect
 
 from .config import ClientConfig
+from .timeout_settings import get_timeout_seconds
 
 
 @dataclass
@@ -91,7 +92,7 @@ class RabiVoiceClient:
             additional_headers={"Authorization": f"Bearer {self.config.token}"},
             max_size=32 * 1024 * 1024,
             ping_interval=20,
-            ping_timeout=20,
+            ping_timeout=get_timeout_seconds("desktop.voice.ping", 20),
         ) as websocket:
             self._websocket = websocket
             await websocket.send(json.dumps({
@@ -104,7 +105,7 @@ class RabiVoiceClient:
                 "format": "pcm_s16le",
                 "channels": 1,
             }, ensure_ascii=False))
-            accepted = json.loads(await asyncio.wait_for(websocket.recv(), timeout=10))
+            accepted = json.loads(await asyncio.wait_for(websocket.recv(), timeout=get_timeout_seconds("desktop.voice.handshake", 10)))
             if not isinstance(accepted, dict) or accepted.get("type") != "hello-accepted":
                 raise RuntimeError("RabiSpeech did not accept the audio client handshake.")
             self._set_state(connected=True, last_error="")
@@ -242,7 +243,7 @@ def discover_server(*, port: int = 8783, timeout_seconds: float = 2.0) -> str:
     request = b"RABI_VOICE_DISCOVER_V1"
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-        sock.settimeout(timeout_seconds)
+        sock.settimeout(get_timeout_seconds("desktop.voice.discovery", timeout_seconds))
         sock.bind(("", 0))
         sock.sendto(request, ("255.255.255.255", port))
         while True:

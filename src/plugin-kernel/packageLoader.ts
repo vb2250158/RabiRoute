@@ -116,7 +116,8 @@ async function verifyRuntimePackage(
   return Object.freeze({ manifest, ...entry });
 }
 
-export async function loadPluginPackage(sourceRoot: string, runtimeRoot: string, host: PluginHost): Promise<LoadedPluginPackage> {
+export async function loadPluginPackage(sourceRoot: string, runtimeRoot: string, host: PluginHost,
+  options: Readonly<{ stagingId?: string }> = {}): Promise<LoadedPluginPackage> {
   const source = path.resolve(sourceRoot);
   const runtimeBase = path.resolve(runtimeRoot);
   await assertPlainDirectory(source, "Plugin package source");
@@ -126,7 +127,9 @@ export async function loadPluginPackage(sourceRoot: string, runtimeRoot: string,
   const stagingParent = path.join(runtimeBase, ".staging");
   await fs.mkdir(stagingParent, { recursive: true });
   await assertPlainDirectory(stagingParent, "Plugin staging root");
-  const staging = path.join(stagingParent, randomUUID());
+  const stagingId = options.stagingId ?? randomUUID();
+  if (!/^[0-9a-f-]{36}$/i.test(stagingId)) throw new Error("Plugin staging identity is invalid.");
+  const staging = path.join(stagingParent, stagingId);
   await fs.mkdir(staging);
   try {
     await copyPackageTree(source, staging);

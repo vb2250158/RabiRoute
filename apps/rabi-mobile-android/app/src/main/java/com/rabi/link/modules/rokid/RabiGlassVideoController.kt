@@ -38,7 +38,7 @@ class RabiGlassVideoController(private val context: Context, private val receive
         main.postDelayed({ if (!closed && !acknowledged) {
             status("眼镜尚未开始推流，请检查安装、权限和本地网络")
             close()
-        } }, 90000)
+        } }, com.rabi.link.transport.ScopedManagerTimeouts.active(context).get("android.glass.videoStart",90000))
     }
     private fun ready() {
         if (closed || preparing || !cxr.isLinkReady) return

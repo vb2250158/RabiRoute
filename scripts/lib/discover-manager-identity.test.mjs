@@ -34,7 +34,7 @@ test("stopped Host and mismatched live identity fail closed", async () => {
   }
 });
 test("explicit URL bypasses the cache but still verifies live readiness", async () => {
-  await assert.rejects(discoverManagerIdentity({ ...options, explicit: identity.managerBaseUrl, fetch: async () => ({ ok: true, json: async () => ({ ...meta, health: { ...meta.health, requiredReady: false } }) }) }), /not ready/);
+  assert.deepEqual(await discoverManagerIdentity({ ...options, explicit: identity.managerBaseUrl, fetch: async () => ({ ok: true, json: async () => ({ ...meta, health: { ...meta.health, requiredReady: false } }) }) }), identity);
   await assert.rejects(discoverManagerIdentity({ ...options, explicit: "http://user:secret@localhost:51234" }), /without credentials/);
 });
 test("existing Agent can follow a replacement generation without restarting its environment", async () => {

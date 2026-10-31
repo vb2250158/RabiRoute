@@ -1,3 +1,4 @@
+import { configureTimeouts, validateTimeoutOverrides, type TimeoutOverrides } from "../shared/timeoutSettings.js";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -23,6 +24,7 @@ export type RabiGlobalConfig = {
   webguiLan: WebguiLanAccessConfig;
   performance: PerformanceMonitoringConfig;
   agentUploads: { maxFileMiB: number };
+  timeoutOverrides: TimeoutOverrides;
   createdAt: string;
   updatedAt: string;
 };
@@ -90,7 +92,10 @@ export class RabiGlobalConfigStore {
       this.lanAgentAdmissionIncarnation = randomUUID();
     }
     this.lanAgentAdmissionAvailable = available;
-    if (config) this.current = freezeGlobalConfig(config);
+    if (config) {
+      this.current = freezeGlobalConfig(config);
+      configureTimeouts(config.timeoutOverrides);
+    }
   }
 
   private markDeliveryPublicationPending(): void {
@@ -116,6 +121,7 @@ export class RabiGlobalConfigStore {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     }
     this.current = this.loadOrCreate();
+    configureTimeouts(this.current.timeoutOverrides);
     this.publishDeliveryPolicy(this.current.webguiLan.enabled, fs.existsSync(this.deliveryIntentPath()));
     if (fs.existsSync(this.deliveryIntentPath())) fs.unlinkSync(this.deliveryIntentPath());
   }
@@ -142,6 +148,7 @@ export class RabiGlobalConfigStore {
       webguiLan: defaultWebguiLanAccessConfig(),
       performance: defaultPerformanceMonitoringConfig(),
       agentUploads: { maxFileMiB: 2048 },
+      timeoutOverrides: {},
       createdAt: now,
       updatedAt: now
     };
@@ -154,13 +161,16 @@ export class RabiGlobalConfigStore {
     webguiLan?: Partial<WebguiLanAccessConfig>;
     performance?: Partial<PerformanceMonitoringConfig>;
     agentUploads?: { maxFileMiB: number };
+    timeoutOverrides?: TimeoutOverrides;
   }): RabiGlobalConfig {
-    if (patch.agentUploads !== undefined && (!patch.agentUploads || !Number.isInteger(patch.agentUploads.maxFileMiB) || patch.agentUploads.maxFileMiB < 1 || patch.agentUploads.maxFileMiB > 2048)) {
-      throw new Error("agentUploads.maxFileMiB must be an integer between 1 and 2048.");
+    if (patch.agentUploads !== undefined && (!patch.agentUploads || !Number.isInteger(patch.agentUploads.maxFileMiB) || patch.agentUploads.maxFileMiB < 1 || patch.agentUploads.maxFileMiB > Math.floor(Number.MAX_SAFE_INTEGER / 1024 ** 2))) {
+      throw new Error(`agentUploads.maxFileMiB must be an integer between 1 and ${Math.floor(Number.MAX_SAFE_INTEGER / 1024 ** 2)} (exact byte-count capacity).`);
     }
+    const timeoutOverrides = patch.timeoutOverrides === undefined ? this.current.timeoutOverrides : validateTimeoutOverrides(patch.timeoutOverrides);
     const current = this.current;
     const next: RabiGlobalConfig = {
       ...current,
+      timeoutOverrides,
       rabiName: typeof patch.rabiName === "string" && patch.rabiName.trim()
         ? patch.rabiName.trim()
         : current.rabiName,
@@ -177,12 +187,18 @@ export class RabiGlobalConfigStore {
       updatedAt: new Date().toISOString()
     };
     const changedFields = [
+      JSON.stringify(current.timeoutOverrides) !== JSON.stringify(next.timeoutOverrides) ? "timeoutOverrides" : "",
       current.rabiName !== next.rabiName ? "rabiName" : "",
       JSON.stringify(current.rabiLinkRelay) !== JSON.stringify(next.rabiLinkRelay) ? "rabiLinkRelay" : "",
       JSON.stringify(current.webguiLan) !== JSON.stringify(next.webguiLan) ? "webguiLan" : "",
       current.agentUploads.maxFileMiB !== next.agentUploads.maxFileMiB ? "agentUploads" : "",
       JSON.stringify(current.performance) !== JSON.stringify(next.performance) ? "performance" : ""
     ].filter(Boolean);
+    if (patch.timeoutOverrides !== undefined && changedFields.includes("timeoutOverrides") && fs.existsSync(this.configPath)) {
+      const backupDir = path.join(this.rootDir, "data", ".runtime", "timeout-settings-backups");
+      fs.mkdirSync(backupDir, { recursive: true });
+      fs.copyFileSync(this.configPath, path.join(backupDir, `${Date.now()}-${randomUUID()}.json`), fs.constants.COPYFILE_EXCL);
+    }
     this.publish(next, () => this.persist(next, changedFields.length ? "patch" : "normalize", current.updatedAt, next.updatedAt, changedFields));
     return this.read();
   }
@@ -200,7 +216,8 @@ export class RabiGlobalConfigStore {
         rabiLinkRelay: normalizeRabiLinkRelayConfig(parsed.rabiLinkRelay),
         webguiLan: normalizeWebguiLanAccessConfig(parsed.webguiLan),
         performance: normalizePerformanceMonitoringConfig(parsed.performance),
-        agentUploads: { maxFileMiB: Number.isInteger(parsed.agentUploads?.maxFileMiB) && parsed.agentUploads!.maxFileMiB >= 1 && parsed.agentUploads!.maxFileMiB <= 2048 ? parsed.agentUploads!.maxFileMiB : 2048 },
+        timeoutOverrides: readSavedTimeoutOverrides(parsed.timeoutOverrides),
+        agentUploads: { maxFileMiB: Number.isInteger(parsed.agentUploads?.maxFileMiB) && parsed.agentUploads!.maxFileMiB >= 1 && parsed.agentUploads!.maxFileMiB <= Math.floor(Number.MAX_SAFE_INTEGER / 1024 ** 2) ? parsed.agentUploads!.maxFileMiB : 2048 },
         createdAt: typeof parsed.createdAt === "string" && parsed.createdAt.trim() ? parsed.createdAt.trim() : now,
         updatedAt: typeof parsed.updatedAt === "string" && parsed.updatedAt.trim() ? parsed.updatedAt.trim() : now
       };
@@ -269,6 +286,7 @@ function cloneGlobalConfig(config: RabiGlobalConfig): RabiGlobalConfig {
     rabiLinkRelay: { ...config.rabiLinkRelay },
     webguiLan: { ...config.webguiLan },
     agentUploads: { ...config.agentUploads },
+    timeoutOverrides: { ...config.timeoutOverrides },
     performance: { ...config.performance }
   };
 }
@@ -279,6 +297,7 @@ function freezeGlobalConfig(config: RabiGlobalConfig): RabiGlobalConfig {
   Object.freeze(snapshot.webguiLan);
   Object.freeze(snapshot.performance);
   Object.freeze(snapshot.agentUploads);
+  Object.freeze(snapshot.timeoutOverrides);
   return Object.freeze(snapshot);
 }
 
@@ -318,4 +337,17 @@ function normalizeRabiLinkRelayConfig(raw: unknown): RabiLinkRelayGlobalConfig {
       ? source.speechServiceUrl.trim()
       : defaults.speechServiceUrl
   };
+}
+
+function readSavedTimeoutOverrides(raw: unknown): TimeoutOverrides {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+  const result: TimeoutOverrides = {};
+  for (const [key, value] of Object.entries(raw)) {
+    try {
+      const validated = validateTimeoutOverrides({ [key]: value });
+      Object.defineProperty(result, key, { value: validated[key], enumerable: true, configurable: true, writable: true });
+    }
+    catch { /* Ignore only the malformed timeout; preserve the rest of the saved configuration. */ }
+  }
+  return result;
 }

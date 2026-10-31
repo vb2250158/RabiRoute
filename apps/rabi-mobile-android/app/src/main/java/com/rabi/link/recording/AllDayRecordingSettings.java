@@ -19,7 +19,7 @@ public final class AllDayRecordingSettings {
     public AllDayRecordingSettings(boolean running, String mode, String source, String processingPolicy,
             String routeProfileId, boolean healthEnabled, boolean uploadEnabled, boolean autoResume, long windowStartedAt) {
         this.running = running;
-        this.mode = "video".equals(mode) ? "video" : "health".equals(mode) ? "health" : "audio";
+        this.mode = "location".equals(mode) ? "location" : "video".equals(mode) ? "video" : "health".equals(mode) ? "health" : "audio";
         // Manual preferences migrate to auto. Each capture still freezes its physical source.
         this.source = "video".equals(this.mode) ? "glasses" : "auto";
         this.processingPolicy = "agent".equals(processingPolicy) ? "agent" : "local_only".equals(processingPolicy) ? "local_only" : "transcribe";

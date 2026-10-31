@@ -64,3 +64,13 @@ test("timestamp ASR query uses committed audio during cold history, with role an
  assert.equal(result.loading,true);assert.deepEqual(result.events.map(row=>row.id),["mic-one"]);
  model.dispose();
 });
+
+test('a changed role root separates metadata, live audio and media and suppresses old background publication',async()=>{
+ let directory='/private/original',release!:(value:AllDayCatalog)=>void;const ready:unknown[]=[];
+ const model=new AllDayRecordingReadModel({directory:()=>directory,mobileRoot:'/private/mobile',settings:async()=>DEFAULT_ALL_DAY_SETTINGS,
+  run:job=>job.directory==='/private/original'?new Promise(resolve=>{release=resolve as typeof release;}):Promise.resolve(job.kind==='media'?Buffer.from('new-root'):{events:[],days:[],incompleteDays:[]}),ready:(_role,event)=>ready.push(event)});
+ await model.catalog('one','2026-10-11');const oldAudio={...row('old-audio'),source:'microphone' as const,kind:'audio' as const,text:'Original private speech'};model.committed('one',oldAudio,Buffer.from('old-root'),true);
+ directory='/private/replacement';release({events:[row('old')],days:['2026-10-11'],incompleteDays:[]});await new Promise(resolve=>setImmediate(resolve));assert.equal(ready.length,0);
+ await model.catalog('one','2026-10-11');await new Promise(resolve=>setImmediate(resolve));assert.deepEqual((await model.catalog('one','2026-10-11')).events,[]);
+ assert.deepEqual((await model.transcripts('one',oldAudio.startedAt-1,oldAudio.endedAt+1)).events,[]);assert.deepEqual(await model.media('one','2026-10-11','old-audio','jpg'),Buffer.from('new-root'));model.dispose();
+});

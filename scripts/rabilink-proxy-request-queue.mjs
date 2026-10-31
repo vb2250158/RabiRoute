@@ -24,7 +24,7 @@ export class RelayProxyRequestQueue {
       status: "queued",
       createdAt: now,
       updatedAt: now,
-      expiresAt: now + this.requestWaitMs,
+      expiresAt: now + (Number.isInteger(input.timeoutMs) && input.timeoutMs >= 1 && input.timeoutMs <= 2147483647 ? input.timeoutMs : this.requestWaitMs),
       leaseUntil: 0,
       attempts: 0,
       appId: input.appId || "",

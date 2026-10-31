@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import test from "node:test";
 import { handleAgentThreadRequest, type AgentThreadDriver, type AgentThreadRequest, type AgentThreadRemoteSource } from "./agentThreads.js";
-import { handleAgentThreadControlApi, type AgentThreadControlRoutesContext } from "./manager/agentThreadControlRoutes.js";
+import { createAgentThreadControlOwner, type AgentThreadControlRoutesContext } from "./manager/agentThreadControlRoutes.js";
 import type http from "node:http";
 
 const sessionId = "019f0000-0000-7000-8000-000000000001";
@@ -116,14 +116,11 @@ test("without trusted options source verification still reads local owner", asyn
   assert.deepEqual(reads, [sessionId]);
 });
 
-test("HTTP route takes remoteSource exclusively from request context, not body or options defaults", async () => {
+test("thread ingress takes connector authority from context and explicit session display metadata from the canonical source", async () => {
   for (const trusted of [undefined, remote]) {
     const incoming = { method: "POST" } as http.IncomingMessage;
     let captured: unknown;
-    let operation: Promise<unknown> | undefined;
     const context = {
-      readJsonBody: async () => ({ ...request, remoteSource: remote }),
-      jsonResponse: () => {},
       applyManagedAgentThreadDefaults: (body: AgentThreadRequest) => body,
       // The real Manager merges the route's overrides over its own defaults. The stub must
       // do the same, otherwise a leaked default would be indistinguishable from the truth.
@@ -137,10 +134,8 @@ test("HTTP route takes remoteSource exclusively from request context, not body o
       refreshAgentRequestReminderTimers: () => {},
       agentThreadRequestFailureData: (error: unknown) => { throw error; }
     } as unknown as AgentThreadControlRoutesContext;
-    assert.equal(handleAgentThreadControlApi(incoming, new URL("http://localhost/api/agent/threads"), {} as http.ServerResponse, context, promise => {
-      operation = promise; return promise;
-    }), true);
-    await operation;
-    assert.equal(captured, trusted);
+    const result = await createAgentThreadControlOwner(context).prepare(incoming).execute({ ...request, ...{ remoteSource: remote } });
+    assert.equal(result.status, 200);
+    assert.deepEqual(captured, trusted ? { ...trusted, sessionId: request.sourceThreadId, sessionName: request.messageSource?.type === "agent" ? request.messageSource.sessionName : trusted.sessionName } : undefined);
   }
 });

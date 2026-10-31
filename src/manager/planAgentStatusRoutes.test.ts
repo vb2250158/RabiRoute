@@ -1,30 +1,9 @@
 import assert from "node:assert/strict";
 import http from "node:http";
-import { once } from "node:events";
-import { Readable, Writable } from "node:stream";
 import test from "node:test";
 import type { PlanItem } from "../roleKnowledge.js";
 import type { PlanAgentStatusService } from "./planAgentStatus.js";
-import { handlePlanAgentStatusApi } from "./planAgentStatusRoutes.js";
-
-class MockResponse extends Writable {
-  statusCode = 0;
-  readonly chunks: Buffer[] = [];
-
-  writeHead(statusCode: number): this {
-    this.statusCode = statusCode;
-    return this;
-  }
-
-  _write(chunk: Buffer | string, _encoding: BufferEncoding, callback: (error?: Error | null) => void): void {
-    this.chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-    callback();
-  }
-
-  json(): Record<string, unknown> {
-    return JSON.parse(Buffer.concat(this.chunks).toString("utf8")) as Record<string, unknown>;
-  }
-}
+import { createPlanAgentStatusOwner } from "./planAgentStatusRoutes.js";
 
 function plan(id: string): PlanItem {
   return {
@@ -44,19 +23,17 @@ function plan(id: string): PlanItem {
 test("history open resolves only the server-owned record and rejects missing history", async () => {
   const opened: string[] = [];
   for (const historyId of ["saved", "missing"]) {
-    const request = Readable.from([JSON.stringify({ historyId, actor: { sessionId: "forged" } })]);
-    Object.assign(request, { method: "POST" });
-    const response = new MockResponse();
-    const finished = once(response, "finish");
-    handlePlanAgentStatusApi(request as http.IncomingMessage, new URL("http://localhost/api/roles/Rabi/plan-agents/plan-1/open"), response as unknown as http.ServerResponse, {
+    const owner = createPlanAgentStatusOwner({
       roleDir: () => "role-dir", getPlan: () => plan("plan-1"),
       listPlanHistory: () => [{ id: "saved", planId: "plan-1", kind: "updated", recordedAt: "2026-08-07T00:00:00Z", after: plan("plan-1"), actor: { kind: "agent", agentType: "dsh", sessionId: "original" } }],
       service: { inspectPlans: async () => [], openPlanAgent: async () => { throw new Error("must not use current binding"); },
         openHistoryActor: async record => { opened.push(record.actor!.sessionId!); return { opened: true, agentType: "dsh", threadId: "original", threadTitle: "Original", workspace: "" }; }
       }
     });
-    await finished;
-    assert.equal(response.statusCode, historyId === "saved" ? 202 : 404);
+    const prepared = owner.prepare({ headers: {} } as http.IncomingMessage, 'Rabi');
+    const action = prepared.open('plan-1', { historyId, actor: { sessionId: 'forged' } });
+    if (historyId === 'saved') assert.equal((await action).threadId, 'original');
+    else await assert.rejects(action, (error: any) => error.statusCode === 404);
   }
   assert.deepEqual(opened, ["original"]);
 });
@@ -86,23 +63,12 @@ test("plan Agent status route batches only requested plan ids", async () => {
     },
     openPlanAgent: async () => { throw new Error("not used"); }
   };
-  const response = new MockResponse();
-  const finished = once(response, "finish");
-  const handled = handlePlanAgentStatusApi(
-    { method: "GET" } as http.IncomingMessage,
-    new URL("http://127.0.0.1/api/roles/Rabi/plan-agents/status?planId=plan-2&planId=missing"),
-    response as unknown as http.ServerResponse,
-    {
+  const owner = createPlanAgentStatusOwner({
       roleDir: () => "role-dir",
       listPlans: () => [plan("plan-1"), plan("plan-2")],
       service
-    }
-  );
-  assert.equal(handled, true);
-  await finished;
-
-  assert.equal(response.statusCode, 200);
+  });
+  const data = await owner.prepare({ headers: {} } as http.IncomingMessage, 'Rabi').inspect(['plan-2','missing']);
   assert.deepEqual(inspected, [["plan-2"]]);
-  const body = response.json() as { data?: { missingPlanIds?: string[] } };
-  assert.deepEqual(body.data?.missingPlanIds, ["missing"]);
+  assert.deepEqual(data.missingPlanIds, ["missing"]);
 });

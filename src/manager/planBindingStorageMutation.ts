@@ -1,3 +1,4 @@
+import { getTimeoutMs } from "../shared/timeoutSettings.js";
 import type { PlanItem, PlanSecretaryBinding, PlanTaskBinding } from "../roleKnowledge.js";
 import type { CodexPlanAssistantSession } from "../shared/codexPlanAssistantSessions.js";
 import { replacementPlanTaskBinding, type ResolvedPlanTask } from "./planTaskBindingDelivery.js";
@@ -30,7 +31,7 @@ async function exactPlan(
   roleId: string,
   planId: string
 ): Promise<RoleStoragePlanProjection> {
-  const projection = await storage.queries.plan(roleId, planId, { timeoutMs: QUERY_TIMEOUT_MS });
+  const projection = await storage.queries.plan(roleId, planId, { timeoutMs: getTimeoutMs("backend.manager.planBindingStorageMutation.QUERY_TIMEOUT_MS", QUERY_TIMEOUT_MS) });
   if (!projection) throw new Error(`Role plan was not found: ${planId}`);
   return projection;
 }
@@ -86,7 +87,7 @@ export async function replacePlanTaskBindingForDelivery(
         {
           idempotencyKey: operationKey,
           expectedRevision: projection.revision,
-          timeoutMs: QUERY_TIMEOUT_MS
+          timeoutMs: getTimeoutMs("backend.manager.planBindingStorageMutation.QUERY_TIMEOUT_MS", QUERY_TIMEOUT_MS)
         }
       ));
       return committed.projection.plan;
@@ -147,7 +148,7 @@ export async function ensurePlanSecretaryBindingForEvent(
         {
           idempotencyKey: operationKey,
           expectedRevision: projection.revision,
-          timeoutMs: QUERY_TIMEOUT_MS
+          timeoutMs: getTimeoutMs("backend.manager.planBindingStorageMutation.QUERY_TIMEOUT_MS", QUERY_TIMEOUT_MS)
         }
       ));
       return { plan: committed.projection.plan, target };
@@ -190,7 +191,7 @@ export async function replacePlanSecretaryBindingForEvent(
         {
           idempotencyKey: operationKey,
           expectedRevision: projection.revision,
-          timeoutMs: QUERY_TIMEOUT_MS
+          timeoutMs: getTimeoutMs("backend.manager.planBindingStorageMutation.QUERY_TIMEOUT_MS", QUERY_TIMEOUT_MS)
         }
       ));
       return committed.projection.plan;

@@ -8,7 +8,6 @@ import {
   agentThreadRequestFailureData,
   handleAgentThreadRequest,
   listAgentThreadsFromIndexForTest,
-  validateAgentThreadHandoffPromptForTest,
   type AgentThreadDriver
 } from "./agentThreads.js";
 import { encodeGrokBotSessionId } from "./agentAdapters/grokBotClient.js";
@@ -1027,8 +1026,10 @@ test("Agent-to-Agent send rejects a messageSource session that does not match so
   assert.equal(sendCount, 0);
 });
 
-test("Agent thread send forwards validated workspace image paths to Desktop", async () => {
+test("Agent thread send forwards existing images outside the workspace without a hidden count limit", async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-agent-image-"));
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-agent-image-outside-"));
+  t.after(() => { fs.rmSync(root, { recursive: true, force: true }); fs.rmSync(outside, { recursive: true, force: true }); });
   const imagePath = path.join(root, "message.png");
   fs.writeFileSync(imagePath, Buffer.from([1, 2, 3]));
   let delivered: Parameters<AgentThreadDriver["send"]>[0] | undefined;
@@ -1048,14 +1049,17 @@ test("Agent thread send forwards validated workspace image paths to Desktop", as
   }, { allowedWorkspaces: [root] }, driver);
 
   assert.deepEqual(delivered?.imagePaths, [imagePath]);
-  await assert.rejects(handleAgentThreadRequest({
+  const images = Array.from({ length: 9 }, (_, index) => path.join(outside, `${index}.png`));
+  for (const file of images) fs.writeFileSync(file, Buffer.from([1, 2, 3]));
+  await handleAgentThreadRequest({
     action: "send",
     threadId: "019f0000-0000-7000-8000-000000000091",
     prompt: "查看图片",
     cwd: root,
     messageSource: defaultSystemMessageSource,
-    imagePaths: [path.join(os.tmpdir(), "outside.png")]
-  }, { allowedWorkspaces: [root] }, driver), /inside the target workspace/);
+    imagePaths: images
+  }, { allowedWorkspaces: [root] }, driver);
+  assert.deepEqual(delivered?.imagePaths, images);
 });
 
 test("system-owned task resolution requests the bounded Desktop state index", async () => {
@@ -1242,8 +1246,8 @@ test("compact reply delivers evidence once and remains recoverable after an unce
   const target = { ...source, threadId: "019f0000-0000-7000-8000-000000000712", threadName: "修复任务" };
   for (const required of [true, false]) {
     const agentRequests = new AgentRequestStore(new MemoryAgentRequestPersistence());
-    const initial = agentRequests.prepare({ source, target, responsePolicy: "required", responseInstruction: "修复并回传" });
-    agentRequests.commit(initial);
+    const initial = await agentRequests.prepare({ source, target, responsePolicy: "required", responseInstruction: "修复并回传" });
+    await agentRequests.commit(initial);
     let prompt = "";
     const driver: AgentThreadDriver = {
       read: async (id) => ({ id, title: id === source.threadId ? source.threadName : target.threadName, cwd: process.cwd() }),
@@ -1273,9 +1277,9 @@ test("compact reply delivers evidence once and remains recoverable after an unce
         assert.ok(Object.hasOwn(parameters.request, field), field);
       }
       const altered = prompt.replace(evidence, "altered evidence");
-      assert.equal(recoverAgentResponseDelivery(agentRequests, source.threadId, deliveryId, () => [altered]).status, "delivery_unconfirmed");
+      assert.equal((await recoverAgentResponseDelivery(agentRequests, source.threadId, deliveryId, () => [altered])).status, "delivery_unconfirmed");
     }
-    assert.equal(recoverAgentResponseDelivery(agentRequests, source.threadId, deliveryId, () => [prompt]).status, "receipt_recovered");
+    assert.equal((await recoverAgentResponseDelivery(agentRequests, source.threadId, deliveryId, () => [prompt])).status, "receipt_recovered");
     assert.equal(agentRequests.get(initial.requestId!)?.response?.result, evidence);
     assert.equal(agentRequests.get(initial.requestId!)?.response?.nextAction, next);
   }
@@ -1583,14 +1587,14 @@ test("a reply addressed to a detached Message Agent alias is delivered to its cu
   const currentMessageThreadId = "019f0000-0000-7000-8000-000000000087";
   const targetThreadId = "019f0000-0000-7000-8000-000000000088";
   const agentRequests = new AgentRequestStore(new MemoryAgentRequestPersistence());
-  const tracked = agentRequests.prepare({
+  const tracked = await agentRequests.prepare({
     source: { threadId: oldMessageThreadId, agentType: "message_processing", workspace: process.cwd() },
     target: { threadId: targetThreadId, agentType: "plan_agent", workspace: process.cwd() },
     responsePolicy: "required",
     responseInstruction: "请回复"
   });
-  agentRequests.commit(tracked);
-  agentRequests.reconcileOpenParties((party, _record, role) => role === "source" && party.threadId === oldMessageThreadId
+  await agentRequests.commit(tracked);
+  await agentRequests.reconcileOpenParties((party, _record, role) => role === "source" && party.threadId === oldMessageThreadId
     ? { threadId: currentMessageThreadId, agentType: "message_processing", workspace: process.cwd() }
     : undefined);
   const deliveries: string[] = [];
@@ -1636,13 +1640,13 @@ test("an Agent reply to an archived bound task creates a new replacement instead
   const replacementThreadId = "019f0000-0000-7000-8000-000000000098";
   const title = "星海建造师 策划 程序 协助处理计划1";
   const agentRequests = new AgentRequestStore(new MemoryAgentRequestPersistence());
-  const tracked = agentRequests.prepare({
+  const tracked = await agentRequests.prepare({
     source: { threadId: archivedThreadId, agentType: "plan_agent", threadName: title, workspace: process.cwd() },
     target: { threadId: respondingThreadId, agentType: "message_processing", workspace: process.cwd() },
     responsePolicy: "required",
     responseInstruction: "请回复"
   });
-  agentRequests.commit(tracked);
+  await agentRequests.commit(tracked);
   const deliveries: string[] = [];
   let created = 0;
   const driver: AgentThreadDriver = {
@@ -1699,13 +1703,13 @@ test("an Agent reply replaces a task that disappears after reply redirection", a
   const replacementThreadId = "019f0000-0000-7000-8000-000000000112";
   const title = "星海建造师 策划 程序 协助处理计划2";
   const agentRequests = new AgentRequestStore(new MemoryAgentRequestPersistence());
-  const tracked = agentRequests.prepare({
+  const tracked = await agentRequests.prepare({
     source: { threadId: staleThreadId, agentType: "plan_agent", threadName: title, workspace: process.cwd() },
     target: { threadId: respondingThreadId, agentType: "message_processing", workspace: process.cwd() },
     responsePolicy: "required",
     responseInstruction: "请回复"
   });
-  agentRequests.commit(tracked);
+  await agentRequests.commit(tracked);
   let reads = 0;
   let created = 0;
   const deliveries: string[] = [];
@@ -2214,7 +2218,7 @@ test("Agent-to-Agent send refuses an unknown source task", async () => {
   assert.equal(sendCount, 0);
 });
 
-test("Agent-to-Agent send rejects leaked role initialization before it reaches the target task", async () => {
+test("Agent-to-Agent send accepts quoted role initialization and message markers as content", async () => {
   let sendCount = 0;
   const sourceThreadId = "019f0000-0000-7000-8000-000000000071";
   const driver: AgentThreadDriver = {
@@ -2228,23 +2232,18 @@ test("Agent-to-Agent send rejects leaked role initialization before it reaches t
     send: async () => { sendCount += 1; }
   };
 
-  await assert.rejects(handleAgentThreadRequest({
+  await handleAgentThreadRequest({
     action: "send",
     threadId: "019f0000-0000-7000-8000-000000000072",
-    prompt: "[rabi:bind XinghaiBuilder]\n[消息处理 Agent 初始化]\n你是专职消息处理 Agent，不是主角色。",
+    prompt: "请审查以下提示词示例：\n[rabi:bind Example]\n[消息源]\n[消息处理 Agent 初始化]\n你是专职消息处理 Agent，不是主角色。",
     cwd: process.cwd(),
     messageSource: messageSourceFor(sourceThreadId, "星海建造师 策划 程序 协助处理消息2"),
     sourceThreadId,
-    sourceAgentType: "message_processing"
-  }, { allowedWorkspaces: [process.cwd()] }, driver), /only the newly composed handoff content/);
+    sourceAgentType: "message_processing",
+    responsePolicy: "none"
+  }, { allowedWorkspaces: [process.cwd()] }, driver);
 
-  assert.equal(sendCount, 0);
-  assert.doesNotThrow(() => validateAgentThreadHandoffPromptForTest([
-    "[消息处理交接]",
-    "消息组 ID：message-group-1",
-    "需要主角色决定：是否现在向群里汇报。",
-    "拟发送正文：当前计划已完成静态检查，等待目标包验证。"
-  ].join("\n")));
+  assert.equal(sendCount, 1);
 });
 
 test("Agent-to-Agent send rejects a self-targeted handoff", async () => {
@@ -2649,4 +2648,11 @@ test("thread bridge accepts thread IDs up to 512 characters and rejects longer o
     await assert.rejects(handleAgentThreadRequest(request("x".repeat(length)), options, driver), (error: Error) => !/too long/.test(error.message));
   }
   await assert.rejects(handleAgentThreadRequest(request("x".repeat(513)), options, driver), /sourceThreadId is too long; maximum length is 512/);
+});
+
+test("definite missing thread offers non-replaying list hints while timeouts keep original meaning", async()=>{
+ const driver: AgentThreadDriver={list:async()=>[],read:async()=>{throw Error("task not found")},create:async()=>{throw Error("must not create")},rename:async()=>{throw Error("must not rename")},send:async()=>{throw Error("must not send")}};
+ const result=await handleAgentThreadRequest({action:"resolve",title:"Original missing task",createIfMissing:false},{allowedWorkspaces:[process.cwd()]},driver);
+ assert.equal(result.statusCode,404);assert.equal(result.data.resolution,"missing");assert.equal(result.data.message,"没有找到 Codex Desktop 任务：Original missing task");assert.match(String(result.data.nextAction),/"action":"list"/);assert.match(String(result.data.nextAction),/"agentAdapter":"codex"/);assert.match(String(result.data.nextAction),/nextOffset/);assert.match(String(result.data.nextAction),/updatedAt/);assert.match(String(result.data.nextAction),/不自动/);
+ const failure=agentThreadRequestFailureData(new Error("Instance management timed out; refresh before retrying a change."),{action:"read"});assert.equal(failure.message,"Instance management timed out; refresh before retrying a change.");assert.equal(failure.nextAction,undefined);
 });

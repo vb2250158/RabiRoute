@@ -71,10 +71,10 @@ test("catalog reads bootstrap the selected stable PC identity through RabiLink a
   await browser.selectSource("peer:a");
   assert.equal(browser.catalogState, "ready", "An online untrusted PC must get the automatic handshake attempt");
   assert.equal(browser.personas[0].personaId, "same-role");
-  assert.deepEqual(paths, ["/meta", "/api/rabilink/peer/persona/bootstrap", "/meta", "/api/rabilink/peer/http/peer%3Aa/persona/meta", "/api/rabilink/peer/http/peer%3Aa/persona/api/personas", "/api/rabilink/peer/http/peer%3Aa/persona/meta"]);
+  assert.deepEqual(paths, ["/meta", "/api/rabilink/peer/persona/bootstrap", "/meta", "/api/rabilink/peer/http/peer%3Aa/manager/meta", "/api/rabilink/peer/http/peer%3Aa/manager/api/personas", "/api/rabilink/peer/http/peer%3Aa/manager/meta"]);
   assert.equal(signals.size, 1, "Bootstrap, identity fences and the catalog share the 25-second signal");
   assert.ok([...signals][0] instanceof AbortSignal);
-  assert.ok(paths.every(path => !path.includes("/manager/")), "Persona reads must not request full Manager access");
+  assert.ok(paths.filter(path => path.includes("/peer/http/")).every(path => path.includes("/manager/")), "Persona pages use the existing authenticated full Manager transport");
 });
 
 test("bootstrap distinguishes old PC capability, RabiLink authentication and unavailable PC without reading remote data", async t => {
@@ -132,8 +132,8 @@ test("remote reads use the exact device and role keys and reject owner mismatch"
     return new Response(JSON.stringify({ code: 0, data: reference("other-role", "wrong") }));
   });
   await assert.rejects(remotePersonaClient.reference("peer:a", "same-role", "persona.md"), /身份或配置响应无效/);
-  assert.equal(paths[4], "/api/rabilink/peer/http/peer%3Aa/persona/api/roles/same-role/persona-reference?file=persona.md");
-  assert.equal(remotePersonaServicePath("peer:a", "/api/personas"), "/api/rabilink/peer/http/peer%3Aa/persona/api/personas");
+  assert.equal(paths[4], "/api/rabilink/peer/http/peer%3Aa/manager/api/roles/same-role/persona-reference?file=persona.md");
+  assert.equal(remotePersonaServicePath("peer:a", "/api/personas"), "/api/rabilink/peer/http/peer%3Aa/manager/api/personas");
   assert.throws(() => remotePersonaServicePath("peer:a", "/api/rabilink/peer/servers"), /地址无效/);
 });
 
@@ -159,12 +159,12 @@ test("the remote document reader uses the persona service snapshot and rejects W
     const preparation = localPreparation(String(input), init);
     if (preparation) return preparation;
     if (String(input).endsWith("/meta")) return Response.json(meta);
-    const servicePath = String(input).slice("/api/rabilink/peer/http/peer-a/persona".length);
+    const servicePath = String(input).slice("/api/rabilink/peer/http/peer-a/manager".length);
     assert.ok(personaPeerRequestAllowed({ method: "GET", path: servicePath }), "The production persona whitelist must permit the document request");
     return Response.json({ code: 0, data: reference("same-role", "# Remote persona") });
   });
   assert.equal(await loadPersonaDocument("same-role", "persona.md", "peer-a"), "# Remote persona");
-  assert.deepEqual(paths, ["/meta", "/api/rabilink/peer/persona/bootstrap", "/meta", "/api/rabilink/peer/http/peer-a/persona/meta", "/api/rabilink/peer/http/peer-a/persona/api/roles/same-role/persona-reference?file=persona.md", "/api/rabilink/peer/http/peer-a/persona/meta"]);
+  assert.deepEqual(paths, ["/meta", "/api/rabilink/peer/persona/bootstrap", "/meta", "/api/rabilink/peer/http/peer-a/manager/meta", "/api/rabilink/peer/http/peer-a/manager/api/roles/same-role/persona-reference?file=persona.md", "/api/rabilink/peer/http/peer-a/manager/meta"]);
   t.mock.method(globalThis, "fetch", async (input: string | URL | Request, init?: RequestInit) => localPreparation(String(input), init)
     || (String(input).endsWith("/meta") ? Response.json(meta) : new Response("<html>WebGUI</html>", { headers: { "content-type": "text/html" } })));
   await assert.rejects(loadPersonaDocument("same-role", "persona.md", "peer-a"), error => error instanceof RemotePersonaReadError && error.state === "unsupported");
@@ -194,7 +194,7 @@ test("preview rejects remote generation changes but accepts an identity-stable h
   assert.equal((await remotePersonaClient.reference("peer-a", "same-role", "persona.md")).document, "document");
 });
 
-test("preview validates payload identity, SHA-256 revision and the independent document byte limit", async t => {
+test("preview validates payload identity and SHA-256 revision while retaining server-approved large documents", async t => {
   let snapshot = reference("same-role", "document");
   t.mock.method(globalThis, "fetch", async (input: string | URL | Request, init?: RequestInit) => localPreparation(String(input), init)
     || Response.json(String(input).endsWith("/meta") ? meta : { code: 0, data: snapshot }));
@@ -203,7 +203,7 @@ test("preview validates payload identity, SHA-256 revision and the independent d
   snapshot = { ...reference("same-role", "document"), revision: "invalid" };
   await assert.rejects(remotePersonaClient.reference("peer-a", "same-role", "persona.md"), /身份或配置响应无效/);
   snapshot = reference("same-role", "a".repeat(2 * 1024 * 1024 + 1));
-  await assert.rejects(remotePersonaClient.reference("peer-a", "same-role", "persona.md"), /正文超过/);
+  assert.equal((await remotePersonaClient.reference("peer-a", "same-role", "persona.md")).document, snapshot.document);
 });
 
 test("switching PC discards delayed catalog and same-named persona responses", async () => {
@@ -258,18 +258,13 @@ test("an offline saved PC remains the owner and is not queried as a local person
   assert.notEqual(personaReferenceIdentity({ agentRoleId: "same-role" }), personaReferenceIdentity({ agentRoleId: "same-role", agentRoleDeviceId: "peer-a" }));
 });
 
-test("remote persona views gate all local persona editors and preserve route-only saving", () => {
+test("local and remote persona editors share all tabs and write to the explicit source PC", () => {
   const page = fs.readFileSync(new URL("../src/pages/PersonaTemplatePage.vue", import.meta.url), "utf8");
-  const document = fs.readFileSync(new URL("../src/pages/PersonaDocumentPage.vue", import.meta.url), "utf8");
-  const store = fs.readFileSync(new URL("../src/stores/gatewayStore.ts", import.meta.url), "utf8");
-  assert.match(page, /label="角色来源 PC"/);
-  assert.match(page, /<v-window v-if="!isRemotePersona"/);
-  assert.match(page, /v-if="hasPersona && !isRemotePersona"[^\n]+openConfigFile/);
-  assert.match(page, /removePersonaOwnedGatewayConfig/);
-  assert.match(page, /buildPersonaSourceOptions\(store\.meta, remotePersona\.devices/);
-  assert.doesNotMatch(page, /核对双端设备公钥|允许本机使用 manager 服务/);
-  assert.match(page, /remoteConfigSummary[\s\S]*personaConfig/);
-  assert.doesNotMatch(page, /Object\.assign\(gateway\.value,\s*remotePersona/);
-  assert.match(store, /if \(!gateway\.agentRoleDeviceId\) ensureActiveRoleRules/);
-  assert.match(document, /readPersonaDocument\(roleId, fileName, gateway\.value\?\.agentRoleDeviceId/);
+  const store = fs.readFileSync(new URL("../src/stores/roleStore.ts", import.meta.url), "utf8");
+  assert.match(page, /providePersonaService/);
+  assert.doesNotMatch(page, /v-if="!isRemotePersona"|hasPersona && !isRemotePersona|远端角色配置为只读/);
+  assert.match(page, /createPersonaAvatarClient\(personaService.fetch\)/);
+  assert.match(page, /createPersonaVoiceIdentityClient\(personaService.fetch\)/);
+  assert.match(store, /mutateRole<RoleDetail>\(id, "configuration",[\s\S]*?source\)/);
+  assert.match(store, /remotePersonaServicePath\(sourceDeviceId.value/);
 });

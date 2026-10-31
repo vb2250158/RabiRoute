@@ -17,6 +17,10 @@ import { PeerTunnelRuntime } from '../peerTunnel/runtime.js';
 import { TunnelSession } from '../peerTunnel/session.js';
 import type { TunnelChannel } from '../peerTunnel/channel.js';
 import { serveTunnel } from '../peerTunnel/http.js';
+import { ManagerPluginRouteRegistry } from './managerPluginRouteRegistry.js';
+import { createPeerControlOperations } from '../peerTunnel/apiControlOperations.js';
+import { createPeerProxyHttpOperations } from '../peerTunnel/apiProxyHttpOperations.js';
+import { createPeerProxyUpgradeOperation } from '../peerTunnel/apiProxyUpgradeOperation.js';
 
 // Extract the production callbacks rather than duplicating their authority rule.
 const controlFile = new URL(import.meta.url.endsWith('.ts') ? './controlPlaneRoutes.ts' : './controlPlaneRoutes.js', import.meta.url);
@@ -32,17 +36,17 @@ function find(root: ts.Node, predicate: (node: ts.Node) => boolean): ts.Node {
 const webguiFunction = find(ast, n => ts.isFunctionDeclaration(n) && n.name?.text === 'webguiLanRequestAllowed');
 const peerFactory = find(ast, n => ts.isFunctionDeclaration(n) && n.name?.text === 'createManagerPeerRuntime');
 const control = find(peerFactory, n => ts.isPropertyAssignment(n) && n.name.getText(ast) === 'allowControl') as ts.PropertyAssignment;
-const upgrade = find(ast, n => ts.isVariableDeclaration(n) && n.name.getText(ast) === 'peerTunnelUpgrade') as ts.VariableDeclaration;
+const upgrade = find(ast, n => ts.isFunctionDeclaration(n) && n.name?.text === 'admitPeerProxyUpgrade');
 const callbackCode = ts.transpileModule(webguiFunction.getText(ast)
+  + '\n' + upgrade.getText(ast)
   + '\nglobalThis.peerControl = ' + control.initializer.getText(ast)
-  + ';\nglobalThis.peerUpgrade = ' + upgrade.initializer!.getText(ast) + ';',
+  + ';\nglobalThis.peerUpgradeAdmission = (request, url) => admitPeerProxyUpgrade(request, url, lanAgentAuthority);',
 { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
 
 async function fixture(t: test.TestContext) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'peer-control-access-'));
   const authority = new LanAgentAuthority({ statePath: path.join(directory, 'authority.json') });
   const credential = authority.enroll(authority.issueBootstrapTicket().ticket, 'fixture-node');
-  authority.registerAgentCatalog(credential.token, [{ agentId: 'sessionless', provider: 'custom-provider' }]);
   const admission = { enabled: true, incarnation: 'fixture-admission' };
   const config = { enabled: true, url: 'https://relay.example', token: 'synthetic-application', deviceId: 'fixture-pc' };
   let discoveries = 0, sessionCalls = 0;
@@ -61,7 +65,10 @@ async function fixture(t: test.TestContext) {
     discover: async () => { discoveries++; return []; }, signal: async () => { throw new Error('No remote fixture.'); },
     relay: () => config, services: () => ({}), onStatus: () => {}, allowApplicationConnection: () => true,
     allowControl: context.peerControl as (request: IncomingMessage, url: URL) => boolean });
-  context.activePeerTunnel = tunnel;
+  const registry = new ManagerPluginRouteRegistry();
+  const controls = registry.registerOperations('fixture-peer-control', createPeerControlOperations(tunnel));
+  const proxies = registry.registerHttpProxies('fixture-peer-http', createPeerProxyHttpOperations(tunnel));
+  const upgrades = registry.registerUpgrades('fixture-peer-ws', [createPeerProxyUpgradeOperation(tunnel, context.peerUpgradeAdmission as (request: IncomingMessage, url: URL) => boolean)]);
   const actualSession = tunnel.session.bind(tunnel);
   let providedSession: TunnelSession | undefined;
   tunnel.session = async (id, probe) => {
@@ -76,19 +83,21 @@ async function fixture(t: test.TestContext) {
     try {
       projectRemote(request);
       assert.equal(evaluateLanAgentRequest(request, authority, true, () => ({ ...admission })).kind, 'agent');
-      assert.equal(assertTrustedLanAgentPrincipal(request)?.binding?.sessionId, undefined);
+      assert.equal(assertTrustedLanAgentPrincipal(request)?.source?.sessionId, undefined);
       markAuthenticatedConnectionRequest(request, () => { assertTrustedLanAgentPrincipal(request); });
       if (request.headers['x-fixture-revoke-after-admission']) admission.enabled = false;
-      if (!tunnel.handler(request, new URL(request.url!, 'http://fixture'), response, async () => ({}))) {
+      if (!registry.handle(request, new URL(request.url!, 'http://fixture'), response)) {
         response.writeHead(404); response.end();
       }
     } catch { response.writeHead(403); response.end(); }
   });
-  const upgradeCallback = context.peerUpgrade as (request: IncomingMessage, socket: import('node:stream').Duplex, head: Buffer) => void;
-  server.on('upgrade', (request, socket, head) => { projectRemote(request); upgradeCallback(request, socket, head); });
+  const upgradeCallback = (request: IncomingMessage, socket: import('node:stream').Duplex, head: Buffer) => {
+    return registry.handleUpgrade(request, new URL(request.url!, 'http://fixture'), socket, head);
+  };
+  server.on('upgrade', (request, socket, head) => { projectRemote(request); if (!upgradeCallback(request, socket, head)) socket.destroy(); });
   server.listen(0, '127.0.0.1'); await once(server, 'listening');
   context.managerPort = (server.address() as import('node:net').AddressInfo).port;
-  t.after(async () => { tunnel.stop(); server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); fs.rmSync(directory, { recursive: true, force: true }); });
+  t.after(async () => { await controls.dispose(); await proxies.dispose(); await upgrades.dispose(); tunnel.stop(); server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); fs.rmSync(directory, { recursive: true, force: true }); });
   return { tunnel, context, admission, projectRemote, upgradeCallback,
     origin: 'http://127.0.0.1:' + context.managerPort,
     headers: { authorization: 'Bearer ' + credential.token, 'x-rabiroute-agent-id': 'sessionless' },
@@ -149,12 +158,11 @@ test('production Upgrade leaves other registry paths alone and rejects forged tr
   const f = await fixture(t);
   const { IncomingMessage } = await import('node:http'); const { Socket } = await import('node:net');
   const other = new IncomingMessage(new Socket()); other.url = '/api/lan-agent/socket';
-  let destroyed = 0;
-  const socket = { destroy() { destroyed++; } } as unknown as import('node:stream').Duplex;
-  f.upgradeCallback(other, socket, Buffer.alloc(0)); assert.equal(destroyed, 0);
-  const forged = new IncomingMessage(new Socket()); forged.method = 'GET';
-  forged.url = '/api/rabilink/peer/http/fixture-target/manager/api/future-ws';
-  forged.headers = { ...f.headers, 'x-rabilink-tunnel-local': 'fixture-generation' };
-  f.projectRemote(forged); f.upgradeCallback(forged, socket, Buffer.alloc(0));
-  assert.equal(destroyed, 1); assert.equal(f.sessionCalls(), 0);
+  const socket = new Socket();
+  assert.equal(f.upgradeCallback(other, socket, Buffer.alloc(0)), false); assert.equal(socket.destroyed, false); socket.destroy(); other.destroy();
+  const forged = new WebSocket(f.origin.replace('http:', 'ws:') + '/api/rabilink/peer/http/fixture-target/manager/api/future-ws', {
+    headers: { ...f.headers, 'x-rabilink-tunnel-local': 'fixture-generation' }
+  });
+  forged.on('error', () => {}); await new Promise<void>(resolve => forged.once('close', () => resolve()));
+  assert.equal(f.sessionCalls(), 0);
 });

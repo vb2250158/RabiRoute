@@ -6,6 +6,8 @@
 
 # NapCat 无值守与登录稳定性
 
+维护者见[原生监听协议](platform-native-listeners.md)：反向 WS 地址、原有鉴权边界和回调关闭规则。
+
 > 状态：现行指南。RabiRoute 可管理、扫描和启动 NapCat 实例，但 QQ 登录验证仍由 NapCat/QQNT 负责。
 
 RabiRoute 负责接收 NapCat / OneBot 事件、记录消息、路由和投递处理端，也可以在 Manager 启动后或用户点击“启动并管理登录”时编排本机 NapCat 的启动、三种 QQ 登录方式和 OneBot 连接修复。QQ 登录凭据和安全校验仍由 NapCat / QQNT 解释；Rabi 只代理当前这次本机操作。不要把 QQ 密码、Cookie、token 写进 `data/route`、`data/roles`、示例文件或仓库。

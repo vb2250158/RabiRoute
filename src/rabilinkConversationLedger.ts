@@ -1,3 +1,4 @@
+import { getTimeoutMs } from "./shared/timeoutSettings.js";
 import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
@@ -154,7 +155,7 @@ function waitForConversationLock(delayMs: number): void {
 
 function acquireConversationLock(dataDir: string): () => void {
   const lockPath = path.join(path.resolve(dataDir), RABILINK_CONVERSATION_LOCK_FILE);
-  const deadline = Date.now() + RABILINK_CONVERSATION_LOCK_TIMEOUT_MS;
+  const deadline = Date.now() + getTimeoutMs("backend.rabilinkConversationLedger.RABILINK_CONVERSATION_LOCK_TIMEOUT_MS", RABILINK_CONVERSATION_LOCK_TIMEOUT_MS);
   while (true) {
     try {
       const descriptor = fs.openSync(lockPath, "wx");

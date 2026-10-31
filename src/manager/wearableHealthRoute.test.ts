@@ -1,19 +1,15 @@
-import assert from "node:assert/strict";
-import test from "node:test";
-import { parseWearableHealthResourceRoute } from "./wearableHealthRoute.js";
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import { createPersonaHealthOperations } from './personaHealthOperations.js';
+import { compileApiOperation,apiPathParameters } from './apiOperationContract.js';
 
-test("parses wearable health role routes", () => {
-  assert.deepEqual(parseWearableHealthResourceRoute("/api/roles/YeYu/health/state"), {
-    roleId: "YeYu",
-    resource: "state"
-  });
-  assert.deepEqual(parseWearableHealthResourceRoute("/roles/Rabi%20Active/health/history"), {
-    roleId: "Rabi Active",
-    resource: "history"
-  });
-  assert.deepEqual(parseWearableHealthResourceRoute("/api/roles/YeYu/health"), {
-    roleId: "YeYu",
-    resource: "summary"
-  });
-  assert.equal(parseWearableHealthResourceRoute("/api/roles/YeYu/plans"), null);
+test('exact health contracts preserve both prefixes, encoded role IDs and the summary compatibility path',()=>{
+  const operations=createPersonaHealthOperations({roleDirectory:()=>'.',lifecycleFence:null,managerPort:0,deliverAlert:async()=>[]});
+  assert.equal(operations.length,14);
+  const state=compileApiOperation(operations.find(item=>item.contract.operationId==='manager.personas.health.state')!);
+  assert.deepEqual({...apiPathParameters(state,'/api/roles/Example/health/state')},{roleId:'Example'});
+  const history=compileApiOperation(operations.find(item=>item.contract.operationId==='manager.personas.health.history.alias')!);
+  assert.deepEqual({...apiPathParameters(history,'/roles/Example%20Active/health/history')},{roleId:'Example Active'});
+  assert.equal(apiPathParameters(state,'/api/roles/Example/plans'),undefined);
+  assert.equal(operations.find(item=>item.contract.pathTemplate==='/api/roles/:roleId/health')!.contract.operationId,'manager.personas.health.summary.compat');
 });

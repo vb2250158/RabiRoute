@@ -1,3 +1,4 @@
+import { getTimeoutMs } from "../../src/shared/timeoutSettings";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import vm from "node:vm";
@@ -34,10 +35,13 @@ function component(client: {
   vm.runInNewContext(compiled.outputText, {
     module: output, exports: output.exports,
     require(name: string) {
+      if (name === "../timeoutSettingsClient") return { getTimeoutMs };
       if (name === "vue") return { ...vue, onMounted() {}, onBeforeUnmount() {} };
       if (name === "../companionActivityClient") return client;
       if (name === "../managerApi") return { managerEventSource() {} };
-      if (name === "../speech/speechControlClient") return { speechControlClient: {} };
+      if (name === "../persona/personaServiceClient") return { usePersonaService: () => ({ fetch: globalThis.fetch, events() {} }) };
+      if (name === "../speech/speechControlClient") return { createSpeechControlClient: () => ({}) };
+      if (name === "../browserUuid") return { browserUuid: () => "start-request" };
       if (name === "../userFacingError") return { userFacingError: (error: Error) => error.message };
       throw new Error(`Unexpected component import: ${name}`);
     },

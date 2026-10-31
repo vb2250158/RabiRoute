@@ -16,6 +16,14 @@ A PC persists confirmed connection assignments for offline LAN use. Unknown devi
 
 Verified local tunnels or Relay workers establish identity. Manager trusts injected device identity only on a genuine loopback hop with its current `x-rabilink-tunnel-local` generation and managed transport. Bodies and caller-supplied headers cannot assert identity. Application credentials may manage a specified device's configuration but cannot impersonate a glasses application receipt; acknowledgements require the originating binding.
 
+## Executable contracts and discovery
+
+One definition set installs HTTP routes and discovery entries for six operations: `manager.rabilink.agent-devices.list`, `manager.rabilink.agent-devices.profile.read`, `manager.rabilink.agent-devices.profile.save`, `manager.rabilink.agent-devices.profile.receipt.record`, `manager.rabilink.agent-devices.profile.operation.read`, and `manager.rabilink.persona-template.read`. The template endpoint no longer depends on another route's prefix declaration.
+
+Request and response DTOs share `PROFILE_SCHEMAS` from `packages/rabilink-agent-contract/profile.mjs`. The native validator retains UTF-16 limits, unique IDs, total Skill content, revision and idempotency rules. Admission captures the original connection and PC owner before body decoding; device assignment is checked again after persona reads, and the original context is revalidated before writes and disclosure. Missing connection business context returns `503 PROFILE_CONTEXT_UNAVAILABLE`; it is not a second feature grant. Forged sources and revoked connections remain rejected.
+
+Saving configuration and acknowledging device application are separate facts. Management connections cannot sign a device's application acknowledgement. If a save happened before a later acknowledgement failure, the response includes `uncertain=true`. Inspect `/profile/operations/{key}` using the original `deviceId` and body `idempotencyKey` before retrying. Missing receipts return HTTP 200 with `receipt:null`, which does not prove a request never executed. These operations do not start an Agent, send a prompt, download models or execute MCP tools.
+
 ## Public PC APIs
 
 | Method and path | Result |
@@ -39,7 +47,13 @@ Revisions increase from 1; initial `expectedRevision` is 0. CAS conflicts return
 
 Read back the original receipt and resource after an uncertain outcome. `receipt:null` is not proof of failure. Original receipts remain queryable after a newer revision replaces current state. Application receipt status is `applied` or `failed`, with a restricted errorCode required for failure; unknown revisions and regressions are rejected. Saved configuration, device application, Skill/tool execution and hardware wake are separate evidence.
 
-The PC owns scoped configuration and receipts. Asynchronous source reads are followed by scope and identity checks before writing. Atomic storage uses same-directory temporary files, fsync, snapshots and complete readback; failures restore snapshots and corrupt state fails closed. Multi-process shared-file writes and cross-platform power-loss transactions are not claimed.
+The PC owns scoped configuration and receipts. Asynchronous source reads are followed by scope and identity checks before writing. Atomic storage uses same-directory temporary files, fsync, snapshots and complete readback; failures restore snapshots. This is a write recovery mechanism, not a long-term backup. Multi-process shared-file writes and cross-platform power-loss transactions are not claimed.
+
+## Damaged profile isolation
+
+Profiles are isolated by device. Lists return healthy devices and identify unreadable devices in `coverage.invalidDeviceIds`; requests for those devices' profiles or operation receipts return `503 PROFILE_RECORD_INVALID`. Other devices remain readable and writable, including original receipt lookup. Saving updates only the target device and preserves every other raw record, including damaged records, without replacing them with empty defaults or deleting them.
+
+If the whole file or connection-scope structure is damaged and device ownership cannot be established, operations on that storage scope are rejected. The restriction does not extend to independent modules.
 
 ## Validation status
 

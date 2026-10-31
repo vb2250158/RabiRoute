@@ -69,18 +69,18 @@
       },
       "allowPublicBaseUrl": {
         "type": "boolean",
-        "description": "Explicitly trust a Home Assistant hostname or public address. Redirects and URL credentials remain forbidden.",
-        "default": false
+        "description": "Allow configured hostnames or public addresses by default. Set false to restrict every request and redirect to literal loopback/private IP addresses.",
+        "default": true
       },
       "allowInsecurePrivateHttp": {
         "type": "boolean",
-        "description": "Explicitly allow plaintext HTTP to a non-loopback private IP. Long-lived tokens may be exposed on the local network.",
-        "default": false
+        "description": "Allow configured HTTP endpoints by default. Set false to require HTTPS away from loopback, including redirects.",
+        "default": true
       },
       "runtimeDir": {
         "type": "string",
         "minLength": 3,
-        "description": "Optional absolute local runtime directory. Network paths are rejected."
+        "description": "Optional absolute runtime directory, including user-configured network shares."
       },
       "agentRoleId": {
         "type": "string",
@@ -119,7 +119,8 @@
           "pattern": "^(\\*\\.)?[A-Za-z0-9.-]+$"
         },
         "uniqueItems": true,
-        "default": []
+        "default": [],
+        "description": "Optional media host restriction. Empty means unrestricted; explicit entries also apply to redirects, playlist segments and encryption keys."
       },
       "ffmpegPath": {
         "type": "string",

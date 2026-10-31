@@ -13,6 +13,32 @@ const owner: CompletionRuleOwner = { roleId: "test", rule: { id: "rule", enabled
   destination: { channel: "napcat", gatewayId: "route", params: { target: "group", instanceId: "qq", targetId: "12345" } } } };
 const event = { eventName: "Stop" as const, sessionId: "agent-1", turnId: "turn-1", cwd: "/project", lastAssistantMessage: "Done" };
 
+test("heartbeat completion honors silence and sends only notification text without mutating hook evidence", async () => {
+  const sent: string[] = [];
+  let discoveries = 0;
+  const service = new AgentCompletionDeliveryService({
+    rules: () => { discoveries++; return [owner]; }, projectIdentity: async value => value,
+    deliver: async (_owner, request) => { sent.push(request.lastAssistantMessage!); }
+  });
+  const envelope = (decision: string, message: string) =>
+    `<heartbeat>\n <automation_id>review-check</automation_id>\n <decision>${decision}</decision>\n <message>${message}</message>\n</heartbeat>`;
+  const silent = { ...event, lastAssistantMessage: envelope("DONT_NOTIFY", "No new results") };
+  assert.deepEqual(await service.handle(silent), []);
+  assert.equal(discoveries, 0, "silent heartbeats must not resolve destinations or send");
+  const notify = { ...event, lastAssistantMessage: envelope("NOTIFY", "Ready\nTwo checks passed.") };
+  await service.handle(notify);
+  assert.deepEqual(sent, ["Ready\nTwo checks passed."]);
+  assert.equal(notify.lastAssistantMessage, envelope("NOTIFY", "Ready\nTwo checks passed."));
+  await service.handle({ ...event, lastAssistantMessage: envelope("NOTIFY", "  ") });
+  assert.equal(sent.length, 1, "empty notifications must not produce heading-only messages");
+  const ordinary = ["DONT_NOTIFY is a control value", "<result>Done</result>",
+    "```xml\n" + silent.lastAssistantMessage + "\n```", "Example:\n" + silent.lastAssistantMessage,
+    envelope("UNKNOWN", "Keep evidence"), "<heartbeat>unfinished",
+    silent.lastAssistantMessage + "\n" + notify.lastAssistantMessage];
+  for (const lastAssistantMessage of ordinary) await service.handle({ ...event, lastAssistantMessage });
+  assert.deepEqual(sent.slice(1), ordinary);
+});
+
 test("completion rule discovery receives the same recovered persona scope as Stop", async () => {
   const scopes: Array<readonly string[] | undefined> = [];
   const service = new AgentCompletionDeliveryService({ rules: (_request, roleIds) => { scopes.push(roleIds); return []; },
@@ -20,6 +46,25 @@ test("completion rule discovery receives the same recovered persona scope as Sto
   await service.handle(event, ["ReadyRole"]);
   await service.handle({ ...event, turnId: "unbound-turn" });
   assert.deepEqual(scopes, [["ReadyRole"], undefined]);
+});
+
+test("exclude-heartbeat condition skips heartbeat results per rule without silencing ordinary replies", async () => {
+  const sent: string[] = [];
+  const rules = [{ ...owner, rule: { ...owner.rule, conditions: [{ type: "exclude_heartbeat" }] } }];
+  const service = new AgentCompletionDeliveryService({ rules: () => rules,
+    taskContext: () => ({ plans: [] }), deliver: async (selected, request) => { sent.push(`${selected.rule.id}:${request.lastAssistantMessage}`); } });
+  const envelope = (decision: string) => `<heartbeat><automation_id>review-check</automation_id><decision>${decision}</decision><message>Review result</message></heartbeat>`;
+  for (const decision of ["DONT_NOTIFY", "NOTIFY"]) {
+    assert.deepEqual(await service.handle({ ...event, lastAssistantMessage: envelope(decision) }), []);
+  }
+  assert.deepEqual(sent, []);
+  await service.handle(event);
+  await service.handle({ ...event, lastAssistantMessage: "Example:\n" + envelope("NOTIFY") });
+  await service.handle({ ...event, lastAssistantMessage: "```xml\n" + envelope("NOTIFY") + "\n```" });
+  assert.equal(sent.length, 3, "a normal reply in the same task and quoted examples still match");
+  rules.push({ ...owner, rule: { ...owner.rule, id: "unfiltered", conditions: [] } });
+  await service.handle({ ...event, lastAssistantMessage: envelope("NOTIFY") });
+  assert.equal(sent.at(-1), "unfiltered:Review result", "the condition applies only to its own rule, before destination deduplication");
 });
 
 test("optional plan channels merge with persona rules and deduplicate the same destination", async () => {
@@ -197,6 +242,16 @@ test("completion reaches the selected group through Outbox and repeated events r
     assert.doesNotMatch(delivered, /下一步：/);
     assert.equal((await create().handle(longEvent))[0].status, "sent");
     assert.equal(messages.length, count, "replaying a multipart final reuses every part receipt");
+    const heartbeat = (decision: string) => ({ ...event, turnId: `heartbeat-${decision}`,
+      lastAssistantMessage: `<heartbeat><automation_id>review-check</automation_id><decision>${decision}</decision><message>Checks complete.</message></heartbeat>` });
+    assert.deepEqual(await create().handle(heartbeat("DONT_NOTIFY")), []);
+    assert.equal(messages.length, count, "silent control replies never reach the HTTP endpoint");
+    assert.equal((await create().handle(heartbeat("NOTIFY")))[0].status, "sent");
+    assert.equal(messages.length, count + 1);
+    assert.match(String(messages[count].message), /Checks complete\./);
+    assert.doesNotMatch(String(messages[count].message), /heartbeat|automation_id|decision|<message>/);
+    assert.equal((await create().handle(heartbeat("NOTIFY")))[0].status, "sent");
+    assert.equal(messages.length, count + 1, "heartbeat replay reuses the receipt for the normalized body");
   } finally {
     await new Promise<void>(resolve => server.close(() => resolve()));
     fs.rmSync(rootDir, { recursive: true, force: true });

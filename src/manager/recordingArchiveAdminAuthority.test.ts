@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import http from "node:http";
 import { RecordingArchiveBindings, archiveSettingsEtag } from "./recordingArchiveBindings.js";
-import { recordingArchiveAdminHandler } from "./recordingArchiveAdminRoutes.js";
+import { recordingArchiveAdminFixtureHandler as recordingArchiveAdminHandler } from "./resourceApiTestSupport.js";
 import { LanAgentAuthority } from "./lanAgentAuthority.js";
 import { evaluateLanAgentRequest } from "./lanAgentRequestAccess.js";
 import { RabiGlobalConfigStore } from "./globalConfig.js";
@@ -25,7 +25,6 @@ async function fixture(t: TestContext) {
   const global = new RabiGlobalConfigStore(dir);
   global.patch({ webguiLan: { enabled: true } });
   const credential = authority.enroll(authority.issueBootstrapTicket().ticket, "node");
-  authority.registerAgentCatalog(credential.token, [{ agentId: "agent", provider: "custom-provider" }]);
   const bindings = new RecordingArchiveBindings(dir, () => role);
   const etag = archiveSettingsEtag(await bindings.listBindings());
   const admitted = deferred();
@@ -49,7 +48,7 @@ async function fixture(t: TestContext) {
   const url = `http://127.0.0.1:${(server.address() as import("node:net").AddressInfo).port}/api/resource-cache/archive-settings`;
   const headers = { authorization: `Bearer ${credential.token}`, "x-rabiroute-agent-id": "agent", "content-type": "application/json", "if-match": etag, "idempotency-key": "operation", "x-rabiroute-expected-application-generation-id": "gen", "x-rabiroute-expected-manager-instance-id": "instance" };
   return { dir, role, authority, global, bindings, admitted, options, url, headers,
-    revoke: () => authority.setAgentEnabled("node", "agent", false),
+    revoke: () => authority.setNodeEnabled("node", false),
     put: () => fetch(url, { method: "PUT", headers, body: JSON.stringify(input) }) };
 }
 
@@ -85,16 +84,14 @@ test("archive waits never disclose a revoked or ABA-replaced original principal"
       const pending = fetch(value.url, { headers: value.headers });
       await entered.promise;
       value.revoke();
-      if (mode === "agent-aba") value.authority.setAgentEnabled("node", "agent", true);
+        value.authority.setNodeEnabled("node", true);
       if (mode === "global-aba") {
-        value.authority.setAgentEnabled("node", "agent", true);
         value.global.patch({ webguiLan: { enabled: false } });
         value.global.patch({ webguiLan: { enabled: true } });
       }
       if (mode === "reenroll") {
         value.authority.revokeNode("node");
         const fresh = value.authority.enroll(value.authority.issueBootstrapTicket().ticket, "node");
-        value.authority.registerAgentCatalog(fresh.token, [{ agentId: "agent", provider: "custom-provider" }]);
       }
       release.resolve();
       await denied(await pending, "not_started");

@@ -1,3 +1,4 @@
+import { getTimeoutMs } from "../shared/timeoutSettings.js";
 import fs from "node:fs";
 import path from "node:path";
 import { collectWatchedConfigFiles, configFilesSnapshot } from "./configWatchSnapshot.js";
@@ -65,7 +66,7 @@ function ignoredPluginEntry(relativePath: string): boolean {
 async function pluginTreeSnapshot(
   request: PluginTreeWatchSnapshotRequest
 ): Promise<ManagerWatchSnapshotResult> {
-  const timeoutMs = Math.max(10, request.operationTimeoutMs ?? 1_500);
+  const timeoutMs = Math.max(1, request.operationTimeoutMs ?? getTimeoutMs("backend.manager.managerWatchBrokerWorker.pluginTreeSnapshot.Math.max.operationTimeoutMs", 1_500));
   const errors: string[] = [];
   const rows: string[] = [];
   const files: string[] = [];
@@ -117,7 +118,7 @@ async function pluginTreeSnapshot(
 }
 
 async function configSnapshot(request: ConfigWatchSnapshotRequest): Promise<ManagerWatchSnapshotResult> {
-  const timeoutMs = Math.max(10, request.operationTimeoutMs ?? 1_500);
+  const timeoutMs = Math.max(1, request.operationTimeoutMs ?? getTimeoutMs("backend.manager.managerWatchBrokerWorker.configSnapshot.Math.max.operationTimeoutMs", 1_500));
   const discovered = await collectWatchedConfigFiles({
     routeRoot: request.routeRoot,
     rolesRoot: request.rolesRoot,

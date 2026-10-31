@@ -5,10 +5,11 @@ import fs from "node:fs/promises";
 import test, { type TestContext } from "node:test";
 import { authorizeLanAgentRoleSkillRequest } from "./lanAgentRoleSkillAccess.js";
 import { parseRoleKnowledgeResourceRoute } from "./roleKnowledgeRoute.js";
-import { respondRoleSkillRead } from "./roleSkillReadRoutes.js";
+import { respondSkillReadFixture } from "./personaSkillOperationTestFixtures.js";
 import { managerReadHttpResponse } from "./managerReadHttpResponse.js";
 import { ManagerReadWorkerError } from "./managerReadWorkerPool.js";
 
+const skill = (id: string) => ({ id, title: 'Example', summary: 'Original summary', updatedAt: '2026-01-01', status: 'active', keywords: [], path: 'skills/example/SKILL.md' });
 const principal = { kind: "agent", nodeId: "node-one", agentId: "agent-one" } as const;
 const json = (response: http.ServerResponse, status: number, body: unknown) => {
   response.writeHead(status, { "content-type": "application/json" });
@@ -37,12 +38,12 @@ test("authenticated HTTP reads another persona without binding; aliases, detail 
     const route = parseRoleKnowledgeResourceRoute(pathname);
     assert.ok(route && route.resource === "skills");
     const previous = [request.listenerCount("aborted"), response.listenerCount("close")];
-    completed.push(respondRoleSkillRead(request, response, route.roleId, route.itemId, {
+    completed.push(respondSkillReadFixture(request, response, route.roleId, route.itemId, {
       json,
       querySkills: async (_roleDir, skillId) => {
         reads++;
         if (skillId === "missing") return null;
-        return skillId ? { id: skillId, content: "Public fixture" } : [{ id: "example" }];
+        return skillId ? { ...skill(skillId), content: "Public fixture" } : [skill("example")];
       }
     }).then(() => {
       listenerCounts.push([request.listenerCount("aborted") - previous[0], response.listenerCount("close") - previous[1]]);
@@ -59,7 +60,7 @@ test("authenticated HTTP reads another persona without binding; aliases, detail 
   for (const prefix of ["/api/roles", "/roles"]) {
     const listed = await fetch(`${base}${prefix}/persona-one/skills`, { signal: AbortSignal.timeout(2000) });
     assert.equal(listed.status, 200);
-    assert.deepEqual((await listed.json()).data, [{ id: "example" }]);
+    assert.deepEqual((await listed.json()).data, [skill("example")]);
     const detail = await fetch(`${base}${prefix}/persona-one/skills/example`, { signal: AbortSignal.timeout(2000) });
     assert.equal(detail.status, 200);
     assert.equal((await detail.json()).data.id, "example");
@@ -82,7 +83,7 @@ test("reader unavailable is 503; Skill business failures stay 500 and history de
     if (code === "history") {
       void managerReadHttpResponse(request, response, { read, json, respond: () => assert.fail("unexpected success") });
     } else {
-      void respondRoleSkillRead(request, response, "persona-one", undefined, { json, querySkills: read });
+      void respondSkillReadFixture(request, response, "persona-one", undefined, { json, querySkills: read });
     }
   });
   for (const [path, status] of [["busy", 503], ["timeout", 503], ["termination_unconfirmed", 503], ["business", 500], ["history", 400]] as const) {
@@ -102,8 +103,9 @@ test("real client disconnect aborts the reader and removes listeners without wri
   let listenerDelta: number[] = [];
   const base = await serve(context, (request, response) => {
     const previous = [request.listenerCount("aborted"), response.listenerCount("close")];
-    void respondRoleSkillRead(request, response, "persona-one", undefined, {
-      json: () => { writes++; },
+    const writeHead = response.writeHead;
+    response.writeHead = function(this: http.ServerResponse, ...args: Parameters<typeof writeHead>) { writes++; return Reflect.apply(writeHead, this, args); } as typeof writeHead;
+    void respondSkillReadFixture(request, response, "persona-one", undefined, {
       querySkills: (_roleDir, _skillId, { signal }) => new Promise((_resolve, reject) => {
         signal.addEventListener("abort", () => { aborted = true; reject(signal.reason); }, { once: true });
         start();
@@ -145,14 +147,11 @@ test("already aborted request or destroyed response never starts a read", async 
   }
 });
 
-test("Manager wires role guard before reads and moves list and detail to the interactive pool", async () => {
-  const source = await fs.readFile(new URL("./controlPlaneRoutes.ts", import.meta.url), "utf8");
-  const ingress = source.slice(source.indexOf('if (lanAgentAccess.kind === "agent")'), source.indexOf('guardRequestBodyDeadline(request, response'));
-  assert.match(ingress, /assertResponseAuthority = \(\) => \{ assertTrustedLanAgentPrincipal\(request\); \}/);
-  assert.match(ingress, /authorizeLanAgentRoleSkillRequest\(\s*lanAgentAccess, request\.method, pathname\s*\)/);
-  assert.match(source, /if \(!skillAccess\.allowed\) \{\s*jsonResponse\(response, skillAccess\.status,[\s\S]*?return;/);
-  const branch = source.slice(source.indexOf('if (request.method === "GET" && resource === "skills")'), source.indexOf('if (request.method === "GET" && resource === "memory" && !itemId)'));
-  assert.match(branch, /respondRoleSkillRead\(request, response, roleDir, itemId/);
-  assert.match(branch, /managerKnowledgePageWorkerPool\.run\(/);
-  assert.doesNotMatch(branch, /managerCatalogWorkerPool/);
+test("Skill list/detail definitions use the original functional owner and bounded interactive query", async () => {
+  const owner = await fs.readFile(new URL('./roleSkillReadRoutes.ts', import.meta.url), 'utf8');
+  const factory = await fs.readFile(new URL('./personaSkillOperations.ts', import.meta.url), 'utf8');
+  assert.match(owner, /context\.querySkills\(roleDir,skillId\|\|undefined/);
+  assert.match(factory, /createRoleSkillReadOwner\(context\)/);
+  assert.match(factory, /\['list','detail','download'\]/);
+  assert.doesNotMatch(owner, /respondRoleSkillRead|managerCatalogWorkerPool/);
 });

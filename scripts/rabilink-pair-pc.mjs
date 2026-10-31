@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { getTimeoutMs } from "./lib/timeout-settings.mjs";
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -115,7 +116,7 @@ export async function pairPc(options, { fetchImpl = fetch, print = console.log, 
     if (!/^rpp_[A-Za-z0-9_-]{43}$/.test(pending.proof || '') || !/^rbw_[A-Za-z0-9_-]{43}$/.test(pending.credential || '')
         || pairingHash(pending.proof) !== pending.request.proofHash || pairingHash(pending.credential) !== pending.request.credentialHash)
       throw new Error('配对记录校验失败，保留原文件。');
-    const beginSignal = signal ? AbortSignal.any([signal, AbortSignal.timeout(15_000)]) : AbortSignal.timeout(15_000);
+    const beginSignal = signal ? AbortSignal.any([signal, AbortSignal.timeout(getTimeoutMs("scripts.relay.pair",15000))]) : AbortSignal.timeout(getTimeoutMs("scripts.relay.pair",15000));
     let result;
     try { result = await api(options.relay, '/api/rabilink/pc-pairings/' + pending.request.id + '/receipt', undefined, pending.proof, fetchImpl, beginSignal); }
     catch (error) {

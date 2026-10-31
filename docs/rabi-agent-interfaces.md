@@ -6,6 +6,35 @@
 
 # Agent 需要关注的 Rabi 接口
 
+## 本轮新增可执行接口
+
+设备配置的六项操作见 [设备 Agent 配置接口](aiui-agent-profile-http.md#可执行合同与自动发现)；它们只保存配置和设备回执，不执行 Agent。其它独立模块也从所属拥有者注册：
+
+- `manager.agent-state.report`：合并原 gateway/adapter 的状态；200 表示已合并，202 `ignored` 表示重复或旧序列。原配置持久化失败可能发生在状态修改后，`uncertain=true` 时先读取原 gateway 的 `agentStates`，不把 202 当成持久化证明。
+- `manager.performance.*`：配置读取/保存、样本提交、汇总、日志、状态和原生 SSE 共七项；详见 [性能监控](performance-monitoring.md)。样本的 202 只证明内存接收，SSE 没有断线重放。
+- `manager.agent.marvis.open`：复用原主机启动器；200 只表示尝试打开，不证明程序启动、登录或消息投递。没有幂等回执，结果不确定时先查看主机。
+
+- `manager.bilibili-history.*`：八项业务入口与通用 OPTIONS，使用原浏览器生产者身份与人格私有日期分卷，详见 [历史桥合同](bilibili-history-bridge.md)。Manager 不直接读取真实网站账号。
+- `manager.agent.copilot.install/login/status` 与 `manager.agent.astrbot.login-test`：复用原安装、设备码登录、状态和 Dashboard 验证拥有者。安装/登录不自动重试；设备码返回后仍由原服务拥有进程，退出等待真实 close。
+- YeYu 五项公开计划接口见 [集成说明](../plugins/builtin/io.rabiroute.manager.yeyu-gamer/1.0.0/README.md)。提交固定为计划，带原状态版本与幂等键；接收回执不表示游戏已执行。
+- 手机状态与能力七项见 [手机拥有者接口](rabilink-mobile-owner-api.md)，保留来源 PC、设备归属与原幂等回执；不代表启动设备 Agent。
+- `manager.napcat.*` 十项使用原 NapCat 健康、登录、配置与进程拥有者，成功响应的含义按各操作原合同判断；无本地幂等回执，不自动重放不确定动作。
+- Route、实例身份与 Manager 配置十四项见 [Route 控制合同](route-control-api-contract.md)，继续使用原强 ETag、幂等键及运行时持久化边界。
+- 设备 Agent 十三项见 [设备执行合同](device-agent-api-contracts.md)，保留原加载会话、claim、唤醒 nonce、prepared ledger 与回执；排队不表示模型已接收。
+- 网关十五项见 [网关控制合同](gateway-control-api-contract.md)。配置持久化、运行时激活、手动触发和消息重放分别按原拥有者结果判断。
+- 适配器扫描与桌面设置分别见 [扫描插件](../plugins/builtin/io.rabiroute.manager.message-adapter-control/1.0.0/README.md)、[桌面插件](../plugins/builtin/io.rabiroute.manager.desktop/1.0.0/README.md)；扫描超时不证明离线，打开配置返回不证明窗口已显示。
+- 会话两项、消息处理七项、桌宠十二项的源码合同见 [会话](agent-thread-api-contracts.md)、[消息处理](message-processing-api-contract.md)、[桌宠](../plugins/builtin/io.rabiroute.manager.desktop-pet/1.0.0/README.md)；各自的完整构建与运行验收进度见实施记录。
+
+- 语音 39 项、家居 53 项与视频 35 项从所属插件注册，保留原拥有者及旧发现 ID 别名。视频动态模型代理由通用客户端显式传入原生 HTTP 方法（`options.method` 或 CLI `--operation <ID> --method PROPFIND`）；按方法搜索目录可匹配 wildcard，CONNECT/TRACE 等仍遵守原生传输限制，详见[目标架构](api-contract-discovery-target-architecture.md)。
+- 人格资源、历史、计划控制和 Skill 合同分别见[资源](persona-resource-api-contracts.md)、[历史](persona-history-api-contracts.md)、[计划控制](persona-plan-api-contracts.md)及 [Skill](persona-skill-api-contracts.md)；[知识](persona-knowledge-api-contracts.md)、[身份](persona-identity-api-contracts.md)和[健康](persona-health-api-contracts.md)保留原索引、记录和生命周期围栏。存储双路径共 58 项继续使用原 CAS、稳定幂等键与反馈队列，编译版验收状态以实施记录为准。
+
+- [核心公共服务](core-public-api-operations.md)九项和[插件目录](plugin-catalog-api-contract.md)五项复用 core 插件的可执行注册；[角色配置](role-configuration-api-contracts.md)保留八项原生生命周期操作，原 revision、操作回执与 Host 私有边界分别核对。
+
+这些目录项是发现与调用合同，不是逐功能授权。安装版、真实外部业务和双机效果的证据须单独核对，见 [实施记录](api-contract-discovery-implementation-progress.md)。
+
+
+远端连接器 0.2.6：电脑凭据认证整台实例，“是否启用Agent”控制整个实例，默认启用。启用后可直接使用主机全部公开接口，包括改名、计划、记忆、Skill、文件与任务；不要求浏览器登录、主控 Agent、会话登记、绑定或逐功能授权。每次 Agent 调用明确传入实际类型与完整会话 Id；目录和会话列表用于查询，不授予权限。
+
 ## 本机自动发现地址
 
 Agent 无需填写 Manager 地址。在源码目录运行 `node scripts/resolve-manager.mjs`，返回 `managerBaseUrl`、`applicationGenerationId`、`managerInstanceId`；PowerShell 可用 `$rabi = node scripts/resolve-manager.mjs | ConvertFrom-Json` 保存本轮连接信息。
@@ -24,7 +53,7 @@ Windows Host 在启动成功和生命周期变化时原子生成状态目录中�
 
 家庭设备、音箱播报和媒体控制使用[家庭设备 Agent 接口](home-device-agent-api.md)：先发现资源与参数，再提交带状态版本、生命周期围栏和幂等键的动作，通过原键只读查询回执。服务受理不表示声音已播放。
 
-角色的电脑/手机时间轴查询、来源选择与采集控制见[角色全天记录接口](persona-all-day-recording.md#本机接口)。读取事件不代表已经开启采集，空列表不证明全天没有活动。
+角色的电脑/手机时间轴查询、来源选择与采集控制见[角色全天记录接口](persona-all-day-recording.md#manager-公开接口)。读取事件不代表已经开启采集，空列表不证明全天没有活动。
 
 > 状态：现行 Agent 接口指南。远端 Agent 设备链路仍为实验能力；其它接口按当前 Manager API 和测试核对。
 
@@ -41,7 +70,7 @@ Windows Host 在启动成功和生命周期变化时原子生成状态目录中�
 
 `focused` 消息包只给出本节入口。涉及计划、近期记忆、反馈或整理结果的写入前，必须先读本节及目标接口章节；文档不可读时停止该操作。写入复用连接鉴权，并遵守当前任务授权与投递合同。计划状态先读取当前角色的 `plan-statuses`，不猜 key；附件通过计划 `attachments` 提交。
 
-1. 从 Host 状态（安装版）、结构化 READY（源码版）或测试显式注入取得当前完整 Manager URL。每次请求设置最长 12 秒的有界超时。写入前 GET `/meta`，核对非空 `applicationGenerationId`、`managerInstanceId` 与当前 Host/READY 身份；普通业务请求要求 `health.live=true`、`health.requiredReady=true`，且 `health.state` 为 `healthy` 或 `degraded`。`businessReady=false` 或无关 Route 降级不阻断全部请求，计划恢复、目标路线等依赖由 Manager 对应接口判断。
+1. 从 Host 状态（安装版）、结构化 READY（源码版）或测试显式注入取得当前完整 Manager URL。每次请求采用对应操作的当前有界超时设置；读取、长操作和上传使用各自的预算。写入前 GET `/meta`，核对非空 `applicationGenerationId`、`managerInstanceId` 与当前 Host/READY 身份；普通业务请求要求 `health.live=true`，且 `health.state` 为 `healthy` 或 `degraded`。`health.requiredReady=false`、`businessReady=false` 或无关 Route 降级不阻断全部请求，计划恢复、目标路线等依赖由 Manager 对应接口判断。
 2. 每项逻辑写入先生成并保存稳定 `Idempotency-Key` 与完整请求体。PATCH 计划/近期记忆、POST 计划反馈或回传记忆整理结果前，先 GET 对应单项资源或 feedback，把返回的强 ETag 原样放入 `If-Match`。禁止使用弱 ETag、`*` 或 `updatedAt` 替代版本。新增计划、新增近期记忆和发起整理带幂等键，不带 `If-Match`。
 3. 超时、HTTP 503 或结果不确定时，保留原请求和原键，先权威读回；重试只能使用相同请求体和相同键，不创建第二项操作。HTTP 412 明确表示旧前置版本未提交：废弃旧键和旧 `If-Match`，重新 GET；原意仍适用时保存新键，以新强 ETag 提交。
 4. 成功响应必须回显完全相同的 `Idempotency-Key`、返回强 ETag，且 body 的资源身份必须与目标一致。任一条件不满足时不得宣布成功。
@@ -53,19 +82,245 @@ Windows Host 在启动成功和生命周期变化时原子生成状态目录中�
 
 跨角色投递另读“查询其它角色并投递消息”，保留 deliveryId、来源能力、目标 Route 和跳数合同；远端任务另读“远端 Agent 设备接口”。按需加载说明不会放宽这些要求。
 
+## Manager 事件流（源码已接入，安装版待验收）
+
+`GET /api/events` 现在从同一可执行注册快照发现，transport 为 `sse`。先发送重连间隔与 `ready`，之后是带 JSON data 的事件和协议心跳。断线后重新核对 Manager 身份并刷新当前资源/目录；该流没有持久回放游标，漏收事件不能作为补发业务请求的依据。
+
+流式分发按帧校验并尊重背压。所有已接入调用方共用资源上限：最多 128 个订阅，每个订阅最多缓存 64 帧/4 MiB；超过队列上限会关闭该连接以便重连刷新，订阅已满返回 429 `MANAGER_EVENT_CAPACITY`。这些限额不构成功能许可。客户端断开、插件卸载或源停止后，清理完成才释放在途租约。现有浏览器 EventSource 的查询鉴权继续由入口处理，鉴权参数不进入业务 Schema、目录或 ETag；远端 Agent 仍使用其原连接凭据。
+
+## WebGUI 接入设置的可执行合同（源码已接入，安装版待验收）
+
+`GET /api/webgui-access`、`PATCH /api/webgui-access` 和兼容的 `POST /api/webgui-access` 分别由 `manager.webgui-access.read`、`manager.webgui-access.update`、`manager.webgui-access.update-post` 发现。它们复用原全局配置拥有者；已鉴权连接无需额外人格或 Agent 注册许可。读取可能按原管理身份返回连接凭据和链接，响应为 `private, no-store`，目录不包含凭据值。
+
+写入保留原解析语义：空正文按 `{}` 处理；保留原 Content-Type 不参与解码选择的行为，正文仍按 UTF-8 JSON 解析。只有布尔 `enabled` 改变开关，只有 `regenerateToken: true` 触发显式轮换，其他非 null 的 JSON 值和未知字段继续忽略；`null` 或无效 JSON 返回 400。正文最多 64 KiB。共享合同用 `emptyValue` 和 `allowAnyContentType` 描述此解码方式，OpenAPI 同步标明正文可省略。轮换后的不确定请求先读取设置，不能自动重放；`restartRequired` 仍表达原 Host/监听器状态，本接口不重启 Manager。通过既有鉴权和运行模式检查后，已注册路径的不支持方法返回 405 和 `Allow`，不调用配置拥有者。
+
+## 资源缓存与录音归档的可执行合同（源码已接入，安装版待验收）
+
+同一注册表发布以下 13 个 operation；ID 前缀为 `manager.resources.`。目录、请求校验与实际分发使用同一合同，字段及限额与原存储拥有者共享。
+
+| operation 后缀 | 方法与路径 |
+| --- | --- |
+| `settings.read` / `settings.update` | GET / PUT `/api/resource-cache/settings` |
+| `archive-settings.read` / `archive-settings.update` | GET / PUT `/api/resource-cache/archive-settings` |
+| `object.read` / `object.write` | GET / PUT `/api/resource-cache/data/objects/:objectHash` |
+| `archive.capabilities` | GET `/api/resource-cache/data/archive-capabilities` |
+| `archive.recordings.list` | GET `/api/resource-cache/data/recordings` |
+| `archive.processing.read` | GET `/api/resource-cache/data/recordings/:recordId/processing` |
+| `archive.manifest.read` | GET `/api/resource-cache/data/recordings/:recordId/manifest` |
+| `archive.manifest.commit` | PUT `/api/resource-cache/data/recordings/:recordId/manifests/:manifestHash` |
+| `archive.receipt.read` | GET `/api/resource-cache/data/recordings/:recordId/receipts/:manifestHash` |
+| `recording-events.write` | PUT `/api/resource-cache/data/recording-events` |
+
+已鉴权公开连接复用统一管理入口，无需另取 resources key、绑定人格或预注册 Agent。对象、归档及移动记录接口的 `x-rabilink-resource-owner` 选择现有数据归属，属于业务目标头，不代替连接身份。原设备 resources 传输继续校验其已有身份与凭据；仅带内部转发头不能获得公开管理身份。
+
+归档设置 PUT 要求先 GET 取得强 ETag，再以原样 `If-Match` 和稳定 `Idempotency-Key` 提交。通用连接器从已验证 `/meta` 自动填写 generation/instance 头，调用方不能覆盖。结果不确定时保留原请求与键，先读回设置及原操作结果。
+
+对象 PUT/GET 传输实际字节，上限 1 MiB；模块使用 `bodyBytes`、`responseMode: "bytes"` 和响应 `bodyBytes`，CLI 使用 `--body-file` / `--output`。保留对象及旧 JSON 接口不依赖 Content-Type 选择解码的行为；归档设置 PUT 仍要求 `application/json`，正文上限 8192 字节。目录通过合同说明这些差异。
+
+共享对象路径优先使用现有归档绑定。只有未绑定的对象目标才进入旧缓存；绑定禁用、NAS 缺失、命名空间错误或提交结果不确定均返回原结果，不切换存储目标。归档 manifest 与精确 receipt 用于确认归档提交；旧对象或移动事件的 `durable: true` 仅确认旧拥有者持久化，不能据此删除手机原始录音。设备与实际 NAS 验收见[手机录音归档](mobile-recording-archive.md)。
+
+## 远端 Agent 资料与发布文件合同（源码已接入，安装版待验收）
+
+以下四个读取 operation 共用原资料目录与签名发布拥有者：
+
+| operation ID | GET 路径 |
+| --- | --- |
+| `manager.lan-agent.resources.list` | `/api/lan-agent/resources` |
+| `manager.lan-agent.resources.read` | `/api/lan-agent/resources/read?id=<目录返回的ID>` |
+| `manager.lan-agent.releases.manifest` | `/api/lan-agent/releases/manifest` |
+| `manager.lan-agent.releases.asset` | `/api/lan-agent/releases/:version/:platform/:assetPath` |
+
+已鉴权 RabiLink 与已启用远端节点使用原连接，不需要登记 Agent 会话或绑定人格。首次安装票据保留原发布下载通道，只凭该票据不能读取管理资料。异步资料读取完成后复验原连接；客户端断开后，注册器仍等待实际读取拥有者完成再释放租约。
+
+`request.pathTails: ["assetPath"]` 声明最后一个参数捕获一个或多个路径段，路径模板仍用 `:assetPath`。例如 `assetPath: "lib/manager-client.mjs"` 保留目录分隔，每段分别 URL 编码。Manager、通用连接器和 OpenAPI 使用同一解析模块；OpenAPI 展示 `{assetPath}` 并以 `x-rabiroute-path-tails` 声明该行为。空段、点段、反斜杠和控制字符被拒绝，参数只解码一次。其它单段参数的原编码方式保持有效。旧通用连接器将整段值编码、包含 `%2F` 的调用也可执行，无需逐接口升级。
+
+发布文件返回原始字节，包括 JSON 文件的空白与格式；不转换为 Buffer 元数据或重新序列化 JSON。读取使用现有版本、平台、文件成员和目录约束。安装前仍通过原下载流程核对固定公钥摘要、manifest 签名与文件 hash；发现和下载成功不表示已安装。资料目录继续只提供已发布文档、Skill 入口及同包引用。旧 `resources/read` 查询保留只取第一个 `id`、忽略其它字段的语义。
+
+## 直连视频信令合同（源码已接入，安装版待验收）
+
+`manager.rabilink.video.status` 读取 `/api/rabilink/video/status`；`manager.rabilink.video.offer` 通过 POST `/api/rabilink/video/offer` 协商原 WebRTC 接收器。已鉴权远端直接复用连接，无需 Agent 预登记或新许可。HTTP 只接收有界 SDP 与 deviceId，媒体继续直达原接收器，不上传 Relay。协商成功、录像结束与眼镜真机采集分别核验；断线后不自动重放 offer。详见[手机与电脑视频直连](rabilink-direct-video.md#manager-公共合同源码已接入安装版待验收)。
+
+## 角色面板消息合同（源码已接入，安装版待验收）
+
+| operation ID | 方法与路径 |
+| --- | --- |
+| `manager.role-panel.messages.list` | GET `/api/roles/:roleId/role-panel/messages` |
+| `manager.role-panel.messages.send` | POST `/api/role-panel/messages` |
+
+已鉴权远端复用当前连接，无需 Agent 会话预登记或人格许可。GET 保留旧发现 ID `persona:GET:/api/roles/:roleId/role-panel/messages`，别名解析到同一合同。读取使用首个 `limit` 的 Number 转换，非有限正数回到默认 120；历史非有限时间值按原 JSON 语义输出 null。断线会取消未完成的读取并等待原拥有者清理。
+
+POST 沿用原本机人格投递拥有者：`gatewayId` 省略时选择原运行表首项，提供时使用原清理规则；目标必须属于原本机人格对象。`text` 保留 `String(text || "").trim()` 转换，附件由原归一化器处理，至少需要文本或一个有效附件。JSON 不依赖 Content-Type，`maxBytes: 0` 保留原入口无应用层字节上限的行为。运行中配置变化后，审计仍使用本次受理时捕获的路线身份和存储拥有者。
+
+202 的 `status=delivered` 表示原投递已接受；Agent 的业务任务通过原任务状态核验。`timelineRecorded=false` 表示审计写入失败，不补发消息。投递异常返回 502，并保留 `messageId`、`replyContext`、`uncertain=true` 和 `commitState=uncertain`；执行前验证失败返回 400、`commitState=not_started`。接口没有请求级幂等，每次新请求生成新消息 ID。超时、失败、缺少记录或审计失败后，应核对原 ID 和原任务，不自动重发。
+
+原投递子进程执行预算默认 45 秒，可通过统一超时设置调整。终止请求后仍等待该进程实际关闭、标准输出/错误与已接受日志回调完成；HTTP 断线也保留已接受投递和审计的收尾租约。返回结果前复验原连接，撤销连接会停止披露。
+
+## 远端终端与电脑操作合同（源码已接入，安装版待验收）
+
+五个 operation 复用现有目标电脑连接与执行器；已鉴权调用方无需 Agent 会话登记或人格绑定。目标电脑广告的 shell、文件、窗口或截图能力表示实际实现情况，不是第二层许可。终端列表与控制选择远端电脑；本机终端仍由本机宿主管理。
+
+| operation ID | 方法与路径 |
+| --- | --- |
+| `manager.lan-agent.terminals.list` | GET `/api/lan-agent/instances/:instanceId/terminals` |
+| `manager.lan-agent.terminals.execute` | POST 同一路径 |
+| `manager.lan-agent.terminals.read` | GET `/api/lan-agent/instances/:instanceId/terminals/:terminalId` |
+| `manager.lan-agent.terminals.events` | GET `/api/lan-agent/instances/:instanceId/terminals/:terminalId/events`，SSE |
+| `manager.lan-agent.computer.execute` | POST `/api/lan-agent/instances/:instanceId/computer` |
+
+终端 POST 的 `action` 为 `open/list/get/input/resize/close`。保留 `terminalId`、输入 `sequence` 及原文本；同序号异内容冲突或回执已过期时停止重放。原执行器验证广告 shell、目标电脑绝对目录、UTF-8 输入字节数、尺寸和容量。电脑 POST 支持 `file.stat/read`、`upload.begin/write/commit/status/abort`、`windows.list` 与 `screen.capture`；窗口与截图要求 Windows。文件版本、uploadId、偏移、分片 hash、目标不覆盖及提交后的查询沿用原协议。native desktop 字段保留原转换与跨字段校验，未知正文项继续转交原执行器。正文按 UTF-8 JSON 解码，保留原入口不依赖 Content-Type 的行为。
+
+输出查询 `after` 与 `waitMs` 保留首个查询值的 Number 转换；原回放拥有者验证游标顺序及 0–25000 毫秒等待范围。每个终端共享最多 4 个查看者，回放最多 256 KiB / 2048 条事件；SSE 每个查看者最多排队 512 KiB，协议心跳为 25 秒，退出或断连时立即停止。超出回放范围先发送 `gap`；`exit` 或 `disconnected` 后发送完已排队输出再结束。SSE 使用原 `id` 与 JSON `data` 格式，不把整条输出缓存为一个响应。
+
+断开查看连接、撤销原连接或卸载注册会移除订阅并完成清理，再释放在途租约；这些动作不关闭或重开目标终端。已受理输入或电脑操作继续由原拥有者收尾，即使 HTTP 客户端已经断开；异步结果与流输出前均复验原连接。结果不确定时读取原终端的 `nextInputSequence` 或原上传的 `upload.status`，不换 UUID、序号或目标重发。原始源代码中的布尔 HTTP 包装器已删除；资料与发布读取仍见上一节。
+
+## 节点接入与实例管理合同（源码已接入，安装版待验收）
+
+以下 15 个 operation 复用原 authority、registry 和本机配置拥有者，ID 前缀为 `manager.lan-agent.`；已鉴权远端无需逐功能许可或 Agent 预登记。公共能力目录统一使用版本 2 活动快照，旧版本 1 摘要与 core 的旧前缀分发已删除。
+
+| operation 后缀 | 方法与路径 |
+| --- | --- |
+| `self.read` | GET `/api/lan-agent/self` |
+| `enrollments.create` | POST `/api/lan-agent/enrollments` |
+| `enroll.exchange` | POST `/api/lan-agent/enroll` |
+| `instances.list` | GET `/api/lan-agent/instances` |
+| `instances.enabled` | PUT `/api/lan-agent/instances/:instanceId/enabled` |
+| `instances.name` | PUT `/api/lan-agent/instances/:instanceId/name` |
+| `agents.create` | POST `/api/lan-agent/instances/:instanceId/agents` |
+| `agents.tasks` | POST `/api/lan-agent/instances/:instanceId/agents/:agentId/tasks` |
+| `agents.configure` | POST `/api/lan-agent/instances/:instanceId/agents/:agentId/configure` |
+| `agents.scan` | POST `/api/lan-agent/instances/:instanceId/agents/:agentId/scan` |
+| `agents.threads` | POST `/api/lan-agent/instances/:instanceId/agents/:agentId/threads` |
+| `agents.hooks` | POST `/api/lan-agent/instances/:instanceId/agents/:agentId/hooks` |
+| `nodes.list` | GET `/api/lan-agent/nodes` |
+| `nodes.update` | POST `/api/lan-agent/nodes/:nodeId/update` |
+| `nodes.tasks` | POST `/api/lan-agent/nodes/:nodeId/tasks` |
+
+签发票据忽略正文，包括非 JSON 和空正文，合同使用可省略的原始正文声明；票据和换取凭据的响应禁止缓存。换取接口复用既有票据或有效恢复证明；持有当前 nodeId 与 enrollmentSecret 可以恢复相同凭据，不要求新票据。目录只发布这些字段的结构。
+
+改名携带当前 expectedName；开关携带布尔 enabled 与 expectedEnabled，保留原比较写入及重复状态语义。停用自身后原连接无法继续读取响应；通过已有管理连接读回状态，不能把该响应当作停用未生效并重放。历史节点与任务可能缺少后来增加的协议字段，列表保留这些记录和扩展项。
+
+Agent 的 configure/scan/threads/hooks 正文扩展与结果由原 provider 拥有；路径 agentId 覆盖正文同名项，新增远端 Agent 时不转交正文的 agentId。threads 的列表和动作均显式传 agentAdapter；hooks 保留 90 秒拥有者超时，其它远端管理动作保留 30 秒。实例任务显式传 provider、完整 threadId、message 和稳定 idempotencyKey；节点任务用 targetAgent 指定提供方。原拥有者完成接收确认后才返回任务结果，相同目标及正文的重复键复用原任务，不再次派发。
+
+节点更新未指定非空 version 时使用原签名发布清单的当前版本；202 表示更新请求已提交，仍须读回实际更新状态。异步管理向原拥有者传递连接围栏，任务与更新在持久化后、实际发送前再次复验；已接受操作不因客户端断开而重发，卸载等待拥有者完成。安装版、功能原位升级与真实双机运行仍待验收。
+
+## LAN Agent WebSocket 连接合同（源码已接入，安装版待验收）
+
+`manager.lan-agent.connect` 通过 `registerUpgrades()` 绑定 GET `/api/lan-agent/connect`，与实际 upgrade 共用目录、合同摘要和活动快照。普通 HTTP GET 返回 426；真正的 WebSocket 握手保留原生首帧 `authenticate/token`，随后发送原 hello/node 元数据，不要求额外 HTTP 身份、人格绑定或 Agent 会话登记。连接后沿用原命令、终端事件、任务和更新结果协议；能力发现不重放这些动作。
+
+目录声明 `transport: websocket` 和 `websocket` 描述，OpenAPI 用 `x-rabiroute-websocket` 导出，101 无 HTTP 正文。原消息上限为 100 MiB，发送缓冲上限为 200 MiB，首帧鉴权等待 10 秒，关闭宽限为 2 秒。原生状态机继续校验消息种类、字段及对象归属；首帧凭据错误按原协议关闭。节点或全局开关停用后，即使再启用，旧连接也不能恢复执行，须以原电脑身份重新连接并查询原任务状态。
+
+插件绑定在原生库写握手前调用 `prepareHandshake()`，以 `accept({closed, close})` 交出真实 Socket 生命周期，并对原生输入/输出调用 `validateIncoming/validateOutgoing`。退役先 `stopAccepting()`，等待已接受 HTTP 命令及实际结果，再 `dispose()` 关闭所属 Socket；清理承诺完成后才释放租约。空闲连接不占用自动源码发布的业务请求计数。生产中央监听已移除，独立 `attach()` 兼容入口委托统一注册器，不保留第二份路径分发。
+
+当前通用客户端通过 `openOperation(operationId, options)` 使用 WebSocket；它与 HTTP `invokeOperation()` 共用活动目录、别名及路径/查询解析。HTTP 方法继续拒绝 WebSocket，CLI 可通过 `--operation ID --websocket --output FILE [--frames-stdin]` 流式消费显式 JSONL 帧，完整选项见[连接器命令行](../apps/rabi-agent/README.md#websocket-命令行源码已接入安装版待验收)。连接器自身通过 `openOperation("manager.lan-agent.connect", ...)` 连接，再由原状态机发送 authenticate/hello；旧路径拼接已删除。
+
+`options.onMessage(value, {signal})` 必须显式提供；JSON 模式返回解码值，bytes 模式返回 Buffer。可选 `onOpen(channel, {signal})` 由协议拥有者发送原生首帧；`onClose(result)` 负责所属资源收尾。`channel.sendJson(value)` 适用于 JSON；`send(text)` 校验序列化 JSON，bytes 模式的 `send(bytes)` 只接受 Uint8Array。Schema、单消息、发送缓冲及接收队列上限来自目录合同；消费串行并施加背压。调用 `close()` 请求关闭，在回调之外等待 `closed`，直到已开始的回调真正完成。取消通过 signal 通知拥有者清理；传输不自动重连或重放，错误不回显凭据。
+
+`sendAsync(data)` 与 `sendJsonAsync(value)` 等待已接受的原生写回调，可对连续输入施加背压；回调完成不表示业务接收或执行完成。`closed` 也等待这些写回调。数据捕获可显式设置 `drainOnRemoteClose: true`：正常远端 1000 关闭后排空已校验帧，再通知 `onClose`；取消、异常关闭或消费失败停止排空。该选项默认关闭，原连接器的命令消费者保留断连即停。CLI 文件捕获启用它，避免把缺少尾帧的文件确认为成功。
+
+CLI 的 `--frames-stdin` 接受逐行 `{"type":"json","data":...}`、`{"type":"text","data":"..."}`、`{"type":"binary","data":"<标准Base64>"}` 或 `{"type":"close","code":1000,"reason":"done"}`；目标 Schema 和原协议决定适用的帧及鉴权首帧，CLI 不代造登录或任务。输出使用 json/text/binary 同形 JSONL，binary 的 data 为 Base64。stdin EOF 仅停止发送，省略 `--frames-stdin` 只接收。`--timeout-ms` 是默认 30 秒的总期限；`--ws-max-output-bytes` 是默认 256 MiB 的本机文件预算；透明消费者可用 `--ws-max-message-bytes`、`--ws-max-buffered-bytes` 调整本机容量，以 `--ws-protocols '["protocol.v1"]'` 选择子协议。
+
+CLI 正常关闭且原 generation/instance 复核成功后不覆盖提交输出；取消、超时、容量或写入错误不提交。stdout 只输出文件摘要和传输回执；`businessOutcome: "not-evaluated"` 表示业务仍须读原协议回执，`inputComplete` 表示输入是否消费完，发送回调不等于业务确认。JSON/文本中的本连接凭据会脱敏，二进制反射该凭据时失败。HTTP 正文、`--upload`、`--stream` 不与 WebSocket 帧模式混用。
+
+握手前后核对同一 Manager 身份；握手后仅健康波动不会误判切代。合同冲突使缓存失效且不重试连接。未知 Schema、缺少消费者或旧 Manager 缺少连接合同时报告兼容性错误，保留原节点及任务，不猜旧 URL。其它公共入口、运行中旧 Manager 的闭包/监听迁移、功能原位升级、安装版和真实双机验收仍未完成。
+
+## Peer 连接控制合同（源码已接入，安装版待验收）
+
+以下入口通过 `registerOperations()` 使用原连接拥有者，返回原 JSON 正文；`events` 使用同一注册器的 SSE 生命周期。
+
+| operation ID | 方法与路径 | 作用 |
+| --- | --- | --- |
+| `manager.rabilink.peer.servers.read` | GET `/api/rabilink/peer/servers` | 读取设备目录、选择和连接/RTT 状态 |
+| `manager.rabilink.peer.selection.read` | GET `/api/rabilink/peer/selection` | 读取保存的目标 |
+| `manager.rabilink.peer.identity.read` | GET `/api/rabilink/peer/identity` | 读取本机设备 ID、generation 和公钥，不含私钥 |
+| `manager.rabilink.peer.probe` | POST `/api/rabilink/peer/probe` | 正文 `{deviceIds: [...]}`，最多探测十个设备 |
+| `manager.rabilink.peer.selection.update` | PUT `/api/rabilink/peer/selection` | 正文 `{deviceId: "..."}`；空字符串显式清除选择 |
+| `manager.rabilink.peer.events` | GET `/api/rabilink/peer/events?ids=...` | `ids` 为 JSON 数组，最多十项；重复参数取第一个值 |
+
+两种写请求保留 8 KiB JSON 正文限额和原有未知扩展字段容忍；不要求 JSON 媒体类型。选择保存前、异步结果返回前复验原连接。探测和信任初始化仍归原连接池，不能把请求取消解释为撤销所有共享连接。只读模式继续阻止探测和选择修改，已鉴权 Agent 无需人格或 Agent 预登记。
+
+事件流保留 `: connected`、指定设备的 `status`、所有选择变化的 `selection` 和 15 秒 `: keepalive`。心跳只测量已有通道 RTT，不轮询设备目录或业务。单帧和排队事件均受 64 KiB 限额约束；慢消费者溢出时关闭。取消、卸载或原连接撤销解除监听与定时器，并等待已接受的 RTT 回调结束再释放租约。流无持久回放游标，重连后重新读取目录与选择，不重放业务写入。
+
+## Peer HTTP 透明代理合同（源码已接入，安装版待验收）
+
+普通 HTTP 与 WebSocket 使用同一 URL，HTTP 通过 `registerHttpProxies()` 接入原生拥有者。通用客户端按目录调用以下 operation：
+
+| 方法 | operation ID |
+| --- | --- |
+| GET | `manager.rabilink.peer.http.get` |
+| HEAD | `manager.rabilink.peer.http.head` |
+| OPTIONS | `manager.rabilink.peer.http.options` |
+| POST | `manager.rabilink.peer.http.post` |
+| PUT | `manager.rabilink.peer.http.put` |
+| PATCH | `manager.rabilink.peer.http.patch` |
+| DELETE | `manager.rabilink.peer.http.delete` |
+
+路径为 `/api/rabilink/peer/http/:deviceId/:service/:path`。`pathRemainder: "path"` 保留原始 URI 后缀，空字符串访问服务根。目标接口负责自己的 Schema、对象归属、限额和回执。代理的 `request.body.kind: passthrough`、`responses.default.passthrough: true` 明确正文不经 JSON 解析、重新序列化或整包缓冲；OpenAPI 使用 `*/*` 与 `x-rabiroute-http-proxy` 公布传输事实。
+
+`httpProxy.wire` 复用原生 12,000 字节数据块、65,536 字节流窗口和每会话 16 个流的限制，未声明整条请求或响应的上限。目标状态码、媒体类型和重复公共响应头保留；凭据、私有身份及逐跳头继续沿原规则剥离。目标端重建 HTTP framing，包含 DELETE 正文。
+
+代理版本条件使用 `x-rabiroute-proxy-contract`；目标的 `x-rabiroute-api-contract`、`If-Match`、`Idempotency-Key` 保留原语义。目标 generation/instance 可通过与升级相同的 `x-rabiroute-target-headers` JSON 对象携带。外层版本条件只针对当前 Manager，版本头不授予功能许可。
+
+二进制响应使用显式 `responseMode: "bytes"`；SSE 或长响应使用 `responseMode: "stream"` 与 `onChunk`，也可使用已有文件输出：
+
+~~~js
+await client.invokeOperation("manager.rabilink.peer.http.put", {
+  path: { deviceId: "peer-target", service: "manager", path: "api/example/object" },
+  bodyBytes: bytes,
+  responseMode: "bytes",
+  headers: {
+    "x-rabiroute-api-contract": "<target-contract-digest>",
+    "idempotency-key": "<original-request-key>"
+  }
+});
+~~~
+
+取消、卸载和原连接撤销停止后续派发；租约等待目标获取、已接受写入、输入/输出流和重置回调收尾。不重连或重放写入，不关闭其它请求复用的健康会话。只读验收模式保留 423，persona 兼容别名与 manager 使用相同公共路径和方法；已鉴权连接不增加逐功能许可。安装运行和真实双机验收仍待完成。
+
+## Peer 透明升级合同（源码已接入，安装版待验收）
+
+`manager.rabilink.peer.websocket.proxy` 使用 GET `/api/rabilink/peer/http/:deviceId/:service/:path` 的 WebSocket Upgrade。`pathRemainder: "path"` 表示已编码的原始 URI 后缀：`path: ""` 访问服务根 `/`，其它值不二次编码；入口与目标继续执行既有路径校验。普通 HTTP GET 保留独立拥有者；目录同时注册 HTTP 与升级时，OpenAPI 在普通方法下以 `x-rabiroute-upgrades` 导出完整升级合同。
+
+合同声明 `framing: passthrough`，不解码目标应用协议。原生每块数据最多 12000 字节、每流窗口 65536 字节、每连接最多 16 个流；这些是隧道限额，不是应用消息大小。`handshakeMs: 10000` 从原生目标会话取得后开始，连接发现预算独立。通用 `openOperation()` 返回的文本是 string，二进制是 Buffer，并在回调上下文提供 binary。可用 `protocols` 选择原协议子协议。SDK 对透明消息默认使用本机 100 MiB 消息预算和 200 MiB 缓冲预算，可通过 options.maxMessageBytes/maxBufferedBytes 调整；服务端透明管道没有新增对应整条消息上限。
+
+`request.contractHeader` 为 `x-rabiroute-proxy-contract`，由目录客户端设置代理自身摘要；原 `x-rabiroute-api-contract` 仍可表达目标接口摘要。当前 Manager 自动添加的身份预期不转交成目标身份预期；需要目标版本时，在 `x-rabiroute-target-headers` 的 JSON 对象中携带原目标头。既有公共头过滤继续剥离凭据、代理来源与逐跳字段，真实身份证明由目标传输拥有者生成。该对象也可表达下一跳目标头，不要求增加逐业务转发分支。
+
+源 Node/RabiLink 连接、对端公钥、作用域、generation、服务与资源规则继续由原拥有者核验；persona 是 manager 的兼容别名，公开读写和升级接口采用相同合同，不增加路径或方法许可。排队打开、数据和结束帧在实际加密派发前复验原连接；拒绝只取消本请求，不消耗加密序号或破坏共享会话。卸载停止接收并等待 Socket、隧道流、校验管道及已受理写入/重置回调全部结束；不切回本机或重放消息。普通 Peer HTTP 与其它公开入口仍在迁移，安装版、功能原位升级及真实双机验收尚未完成。
+
+## Remote Agent Hub 合同（源码已接入，安装版待验收）
+
+这是既有实验 v3 bridge 的公共 HTTP 入口，operation ID 前缀为 `manager.remote-agent.`。它与 `/api/lan-agent/` 的电脑凭据/显式会话协议分别保持各自拥有者；迁移不启动备用处理 Runtime，也不增加逐功能或人格许可。
+
+| operation 后缀 | 方法与路径 |
+| --- | --- |
+| `devices.list` | GET `/api/remote-agent/devices` |
+| `scan` | POST `/api/remote-agent/scan` |
+| `connect` | POST `/api/remote-agent/connect` |
+| `disconnect` | POST `/api/remote-agent/disconnect` |
+| `tasks.list` | GET `/api/remote-agent/tasks` |
+| `tasks.create` | POST `/api/remote-agent/tasks` |
+| `task-events.receive` | POST `/api/remote-agent/task-events` |
+
+`devices.list` 与 `scan` 返回当前设备及最近 20 项任务，`tasks.list` 返回最近 100 项；其它 query 保留原忽略行为。scan 忽略正文，包括非 JSON 和空正文；其余写入按原 UTF-8 JSON 与空对象默认值解析，不依赖 Content-Type。原 String/默认值、事件状态与扩展字段的业务解释仍归 Hub，结构合同不根据 TypeScript 标注新增运行时拒绝规则。
+
+connect 继续要求先发现设备，使用原 v3 nonce 与双向 HMAC-SHA256 验证，再把 bridge 密码保存到原本机存储；这是目标 bridge 的既有身份验证。新合同在发送证明、保存密码前复验原调用连接，失败等待新 Socket 关闭。目录不含实际密码，响应禁止缓存。disconnect 保留原目标转换与无目标行为；已关闭 Socket 的收尾纳入 Hub 的卸载等待。
+
+内联文件提供 sha256 时，派发前核对解码字节的实际摘要；错误返回 400，不创建任务或写入 Socket。创建任务保留设备、Gateway、工作目录和线程名的既有默认值，文件只从原数组字段收集，沿用原解码字节限额、路径与摘要规则。返回任务去掉文件内容，实际 Socket 载荷携带原字节。事件必须归属原任务设备；终态重复返回原任务，不重复保存文件或调回业务。源事件的已受理回调由原 Hub 收尾，卸载等待真实结束。
+
+此 Hub 的任务/事件仅保存在内存中，没有持久幂等键；202 表示 Socket 已写入，任务是否完成要读取后续状态。返回 taskId 后保存该 ID；结果不确定时先查看原设备与任务窗口，不能凭空声称已经恢复回执或自动重发。重启可能丢失记录。旧 `agent:GET:/api/remote-agent/devices`、`agent:GET:/api/remote-agent/tasks`、`agent:POST:/api/remote-agent/tasks` ID 通过同一合同 aliases 保持兼容。
+
 ## 消息投递：Rabi 可用时统一走 Rabi
 
 此规则覆盖 Rabi 管理的群聊/私聊、附件、跨角色、持久 Agent 任务正文与续投、任务结果、callback / knowledge-callback 和 Outbox。普通界面对用户的答复、只读任务核对及同一任务内临时子 Agent 协作不属于旁路投递。发送仍须有原动作授权。
 
-先调用 `GET /api/agent/help` 获取当前 Agent API 目录，并可按 `operationId`、方法或路径查询单个接口帮助。返回项会标明 `contractLevel`：`baseline` 是尚未完成精确 schema 核验的帮助，不代表接口不能调用；应读取权威专题合同补齐 `coverage.missing` 后再调用。`auditLevel: implementation-summary` 仅表示已有实现审计摘要，不等于 `verified`。能力汇总仅在 verified 标签、请求与响应精确标记均为 true 且 missing 为空时计入 `verifiedCount`；未知等级或矛盾声明计入 `unverifiedCount`。三类计数 baselineCount + verifiedCount + unverifiedCount 等于 operationCount，不把未知项当成已验证。
+当前源码的 `GET /api/agent/help` 返回 `schemaVersion: "2"`，从活动可执行注册快照投影 operation。每项 `contract` 包含请求/响应 Schema、副作用、恢复方式和具名业务校验；旧发现 ID 可通过 `contract.aliases` 查询到唯一 canonical operation，不安装第二个路由；`help.contractLevel: declared`、`auditLevel: runtime-schema` 表示已声明并参与运行时结构校验，不代表真实环境已验收。覆盖字段的 `scope: registered-routes`、`globalCoverage: not-proven` 明确限定注册器范围，`complete` 不代表全项目验收。`data.coverage.gaps` 列出仍未迁入合同的旧注册声明；它不包含注册器之外的所有分支，不能据此证明全项目覆盖。旧安装版可能仍返回版本 1 的 baseline/verified 摘要，应按返回版本解释，不能把两种计数拼成同一份目录。当前源码的安装更新和双机验收尚未完成。
 
-`contractRevision` 表示帮助结构版本；`catalogDigest` 是完整接口目录的 JSON 序列化内容 SHA-256（`sha256:` 前缀），不随筛选条件或 `generatedAt` 改变。发送能力的 `channelsDigest` 只摘要完整渠道描述数组，不包含外层通用 contract。摘要用于发现内容变化，不是 ETag、授权、schema 验证或 Manager 身份凭据；切代仍须重新发现并核验 `/meta`。
+版本 2 的 `catalogDigest` 对完整可执行合同及已知覆盖缺口作规范化 JSON 的 SHA-256 摘要（`sha256:` 前缀）；筛选和分页不改变目录摘要。`catalogRevision` 与 application/Manager/plugin 身份共同标识快照，`ETag` 标识具体查询表示，支持 `If-None-Match`。摘要与 ETag 不代替鉴权、业务条件或 `/meta` 身份核验。
 
-发送能力另提供 `data.requestContract`（`version: 1`、`kind: partial-field-allowlist`）：`allowedFields.request/sender/payload` 是 `src/agentSend.ts` 拥有的冻结字段名白名单，`prepareAgentSendRequest` 直接使用同一定义；`channelValues` 和 `paramsAllowedFields` 从现有 `AGENT_SEND_CHANNEL_HELP` 派生。`requestContractDigest` 单独摘要该局部结构的 JSON 序列化内容（SHA-256，`sha256:` 前缀）；`channelsDigest` 不覆盖它。字段名数组只说明哪些键允许出现，**不是完整 JSON Schema**，不证明字段必填或值有效。`requestContract.missing` 明确列出未覆盖的值类型/约束、必填与条件、跨字段规则、嵌套 tracking/planAttachment/segments 合同、运行时授权/投递策略及响应/错误合同；请继续读取专题合同。此发现增量不提升 send 的 `baseline` 或精确 schema 标记，不改变解析顺序、执行权限或幂等语义。
+发送能力提供 `data.requestContract`（`version: 2`、`kind: runtime-json-schema`）：`schema` 是发送 operation 实际执行的 JSON Schema，`validators` 明确列出服务端继续执行的文本归一化、目标组合、媒体、来源/状态与幂等规则。字段名和限额由 `src/agentSendContracts.ts` 拥有，旧的局部字段表已退出。`requestContractDigest` 对整份请求合同作规范化 JSON 的 SHA-256 摘要；`channelsDigest` 使用同一规范化算法摘要渠道定义。`GET /api/agent/send/capabilities` 的 `schemaVersion` 为 `2`。客户端应按版本读取 Schema 与具名规则，不能把发现成功当作全部业务条件已满足或真实平台已送达。此处描述当前源码与隔离 HTTP 验证；安装版和双机更新尚未验收。
 
-Help 查询参数为 `operationId`、`path`、`method`，每项最多一次且非空，多个条件取交集；`path` 使用目录中的精确路径模板，`method` 不区分大小写。处理器对未知、重复或空参数返回 400 `AGENT_HELP_INVALID_QUERY` 和修复指引；LAN 权限层可能先拒绝非法查询。指定 `operationId` 未匹配返回 404 `AGENT_HELP_NOT_FOUND`；仅按路径或方法查无结果仍返回 200 空列表以兼容现有调用。错误不回显查询值，不得把凭据放入查询参数。
+版本 2 的 Help 接受 `operationId`、`path`、`method`、`limit`、`cursor`，每项只能出现一次。前三项去除首尾空白后取交集，`method` 不区分大小写，`path` 使用精确路径模板；`limit` 为 1–200。未知、重复、空白或不符合 Schema 的值返回 400 `API_REQUEST_SCHEMA_INVALID`；未匹配的 operation ID 返回 404 `AGENT_HELP_NOT_FOUND`，仅路径/方法查无结果返回 200 空列表。分页 cursor 绑定当前快照和筛选条件，切代或修订失效返回 409 `API_CATALOG_SNAPSHOT_CHANGED`，必须重新读取；不得拼接不同快照。错误不回显查询值，不得在查询参数中放凭据。
 
-插件层还提供 `node scripts/agent-api-route-inventory.mjs`：它输出 exact method/path、`dispatchScopes`（prefix）和 `unresolved`（通配或未展开项）三类清单。扫描使用 TypeScript AST，不执行插件；支持属性换序和带引号属性，忽略注释中的伪声明，动态路径、动态方法与 spread 声明记入 unresolved。它只识别显式含 routeId 的对象，无法覆盖完全由导入或工厂生成的声明；exact 数量按文件与 routeId 区分，不是全局唯一 URL 数量。不要把 prefix 或单一 Agent 目录数量当成全部 Rabi API。群聊/私聊和文件使用 `POST /api/agent/send`。发送前可再调用 `GET /api/agent/send/capabilities` 获取当前渠道、参数说明和示例。内置目录的 `params` 键与发送校验共用字段白名单；字段类型、条件必填和权限仍由实际校验器执行，不应把说明文本当作完整 JSON Schema。QQ/NapCat 使用 `channel: "napcat"`，不能写 `channel: "qq"`。未知渠道会返回 `errorCode`、`help`、`repair` 和支持渠道；其他参数错误的帮助完整度以具体处理器为准；跨角色使用 `POST /api/personas/{targetPersonaId}/messages`；持久任务正文与续投使用 Rabi 线程桥 `POST /api/agent/threads`；正式 callback 按来源需求合同调用。保留原 taskBinding、来源身份、requestId、tracking、引用和稳定幂等字段。Rabi 的 adapter 最终调用 NapCat、Desktop IPC 或其它平台是链路的一部分；调用方绕开 Rabi 才属于旁路。
+插件层还提供 `node scripts/agent-api-route-inventory.mjs`：它输出 exact method/path、`dispatchScopes`（prefix）和 `unresolved`（通配或未展开项）三类清单。扫描使用 TypeScript AST，不执行插件；支持属性换序和带引号属性，忽略注释中的伪声明，动态路径、动态方法与 spread 声明记入 unresolved。旧声明仅展开显式含 routeId 的对象；`executableRegistrations` 另列 registerOperations/registerUpgrades 调用位置，实际 operation 必须读取活动运行目录，调用次数不是接口数量。完全由导入或工厂生成的旧声明仍无法展开；exact 数量按文件与 routeId 区分，不是全局唯一 URL 数量。不要把 prefix 或单一 Agent 目录数量当成全部 Rabi API。群聊/私聊和文件使用 `POST /api/agent/send`。发送前可再调用 `GET /api/agent/send/capabilities` 获取当前渠道、参数说明和示例。内置目录的 `params` 键与发送校验共用字段白名单；字段类型、条件必填和权限仍由实际校验器执行，不应把说明文本当作完整 JSON Schema。QQ/NapCat 使用 `channel: "napcat"`，不能写 `channel: "qq"`。未知渠道会返回 `errorCode`、`help`、`repair` 和支持渠道；其他参数错误的帮助完整度以具体处理器为准；跨角色使用 `POST /api/personas/{targetPersonaId}/messages`；持久任务正文与续投使用 Rabi 线程桥 `POST /api/agent/threads`；正式 callback 按来源需求合同调用。保留原 taskBinding、来源身份、requestId、tracking、引用和稳定幂等字段。Rabi 的 adapter 最终调用 NapCat、Desktop IPC 或其它平台是链路的一部分；调用方绕开 Rabi 才属于旁路。
 
 只有按上节动态发现、核对身份并有界重试后确认 Rabi 不可用，才允许在原授权内使用已核实的当前平台入口。旧端口拒绝连接、Hook 概括提示、参数错误、权限/策略拒绝、owner 未加载或接口能力不足，都不能单独证明 Rabi 已挂。截图或旧任务中的地址不能替代当前 generation。Rabi 健康时应解决具体接口问题，不因工具方便而直发。
 
@@ -75,9 +330,9 @@ Help 查询参数为 `operationId`、`path`、`method`，每项最多一次且�
 
 ### QQ 只读诊断（权限对等源码合同；部署与实际 QQ 未验收）
 
-`GET /api/agent/qq/diagnostics?routeId=<精确RouteID>` 接受统一入口认证且仍启用的 Agent principal，或符合现有 socket、Host、Origin 与代理检查的可信本机管理请求；不接受请求体或其它 query。不再以 Route primary、provider 或来源元数据形成远端专属门禁；原凭据、Agent 启用状态、授权代次与批准 binding 仍由统一认证检查，异步探针及输出前复验原授权。伪造 Agent 请求头、DSH 会话名或请求参数不授权；撤销请求不回退到本机身份。源码实施与回归不代表运行节点已更新，不得绕过鉴权拒绝。
+`GET /api/agent/qq/diagnostics?routeId=<精确RouteID>` 接受统一入口认证且仍启用的 Agent principal，或符合现有 socket、Host、Origin 与代理检查的可信本机管理请求；不接受请求体或其它 query。不再以 Route primary、provider 或来源元数据形成远端专属门禁；原凭据、Agent 启用状态、电脑凭据代次与实例启用状态 仍由统一认证检查，异步探针及输出前复验原授权。伪造 Agent 请求头、DSH 会话名或请求参数不授权；撤销请求不回退到本机身份。源码实施与回归不代表运行节点已更新，不得绕过鉴权拒绝。
 
-授权后要求 Route 已启用、QQ 消息端已启用、恰有一个已启用的配置实例、Gateway 正在运行，并仅向该实例配置的本机 OneBot HTTP origin 发出短时 `GET /get_status`。请求禁止重定向、不缓存、无 body；不访问 WebUI、其它 Route 或其它 QQ 实例。返回只有 `routeId`、`instanceId`、`wsConnected` 和 `oneBot.reachable/online/good` 布尔值，不含 QQ 号、昵称、URL、token、消息正文、原始错误或路径。WS 值来自对应 Route 的实例运行状态，只有其 `lastConnectedAt` 不早于当前 Gateway 的 `startedAt` 才可为 true；历史状态不能代替当前进程；OneBot 探针失败为 HTTP 503/未知，不解释为 QQ 离线。该诊断**不赋予发送权限**，不回填登录/账号配置，不代表真实 QQ 已验收；实际 QQ 烟测须另有明确授权和当前连接证据，不由源码测试自动授权。
+授权后要求 Route 已启用、QQ 消息端已启用、恰有一个已启用的配置实例、Gateway 正在运行，并仅向该实例配置的OneBot HTTP(S) origin（含用户配置的局域网或远端地址） 发出短时 `GET /get_status`。请求禁止重定向、不缓存、无 body；不访问 WebUI、其它 Route 或其它 QQ 实例。返回只有 `routeId`、`instanceId`、`wsConnected` 和 `oneBot.reachable/online/good` 布尔值，不含 QQ 号、昵称、URL、token、消息正文、原始错误或路径。WS 值来自对应 Route 的实例运行状态，只有其 `lastConnectedAt` 不早于当前 Gateway 的 `startedAt` 才可为 true；历史状态不能代替当前进程；OneBot 探针失败为 HTTP 503/未知，不解释为 QQ 离线。该诊断**不赋予发送权限**，不回填登录/账号配置，不代表真实 QQ 已验收；实际 QQ 烟测须另有明确授权和当前连接证据，不由源码测试自动授权。
 
 ### QQ 群文件元数据（源码合同；运行态未验证）
 
@@ -88,6 +343,8 @@ Help 查询参数为 `operationId`、`path`、`method`，每项最多一次且�
 ## 消息查询：先 Rabi，无法完成时才绕过
 
 ### QQ 原消息、历史分页与附件下载
+
+附件及收藏表情直接使用所选 NapCat 返回的 HTTP(S) 地址，支持自定义 CDN 域名、端口及资源重定向；不再额外检查内置腾讯域名名单。
 
 本机 Agent 可通过以下入口读取当前 Route 绑定的 QQ 会话，无需取得 NapCat 地址或 token：
 
@@ -100,13 +357,15 @@ GET /api/agent/qq/messages/<messageId>/attachments/0?routeId=<routeId>&kind=grou
 
 私聊使用 `kind=private`，`target` 为对方账号。先动态发现 Manager 并核对 `/meta`；接口可从 `GET /api/agent/help?path=/api/agent/qq/history` 发现。每次调用必须给出精确 Route、会话类型和目标；`limit` 为 1–100，默认 50。历史页返回 `data.entries`、`nextCursor`、`cursorStalled`、`completenessUnknown: true`；沿游标逐页读取，游标停滞或空页时停止，分页覆盖不保证 QQ 完整历史。原消息优先调用 `get_msg`；缓存失效时查询同会话、原消息 ID 锚定的最多 10 条历史页，未命中返回 404 `QQ_MESSAGE_NOT_IN_PAGE`，不扩大为全群扫描。
 
-消息返回 `messageId`、时间、发送者、正文和 `attachments[]`。每项包含从零开始的 `index`、`kind`、`name`、Manager 相对地址 `contentUrl`；用当前 Manager 地址加 `contentUrl` 下载二进制即可。下载重新核对原消息和会话，再以该消息资源 ID 调用 `get_file`。图片、视频、音频和文件均使用同一入口；视频缩略图不算原视频。结果不暴露 NapCat URL、鉴权或本地路径；不接受调用方 URL、文件路径、任意 OneBot 动作或资源 ID。
+消息返回 `messageId`、时间、发送者、正文和 `attachments[]`。每项包含从零开始的 `index`、`kind`、`name`、Manager 相对地址 `contentUrl`；用当前 Manager 地址加 `contentUrl` 下载二进制即可。索引允许 1–9 位十进制数，返回列表中超过 99 的索引同样可下载。下载重新核对原消息和会话，再以该消息资源 ID 调用 `get_file`。图片、视频、音频和文件均使用同一入口；视频缩略图不算原视频。结果不暴露 NapCat URL、鉴权或本地路径；不接受调用方 URL、文件路径、任意 OneBot 动作或资源 ID。
 
-单附件最多 64 MiB，JSON 响应最多 1 MiB；消息读取最长 8 秒，附件读取最长 30 秒，每个服务上下文最多两个并发读取，超额返回 429 `QQ_READ_BUSY`。下载可能触发 NapCat 自身媒体缓存，Rabi 不另存业务记录。空路径且没有受支持下载地址返回 422 `QQ_MEDIA_REFERENCE_UNAVAILABLE`，超限返回 413，消息 ID／会话不符或读取中 Route 改变返回 409；上游失败返回 503，不回显原始错误。调用方按需要保存返回的文件并检查非空结果。
+源码中这三类入口已注册为 `agent.qq.history.read`、`agent.qq.message.read`、`agent.qq.attachment.read`；收藏表情为 `agent.qq.stickers.read` 与 `agent.qq.sticker.preview`。它们的请求、JSON 投影或有限二进制响应来自可执行合同；OpenAPI 包含当前生效的附件、表情预览字节上限及图片媒体类型；媒体大小默认无应用层配额，运行时 Buffer 能力仍适用。这里的下载由业务拥有者完整读取后返回，不能据此推导持续流式传输。安装版是否包含这些合同须读取该运行实例目录确认。
+
+附件字节、读取超时和并发由 [QQ 读取公开环境配置](connection-access.md#请求仍需正确) 控制；默认附件和上游 JSON 无应用层字节配额（JSON 用 RABIROUTE_QQ_JSON_MAX_BYTES 配置），消息读取 8 秒、附件读取 30 秒、并发 2。繁忙返回 429 `QQ_READ_BUSY` 并说明当前配置；超时返回 `QQ_READ_TIMEOUT` 和对应变量，配置字节限额返回 413 和修改入口。下载可能触发 NapCat 自身媒体缓存，Rabi 不另存业务记录。空路径且没有受支持下载地址返回 422 `QQ_MEDIA_REFERENCE_UNAVAILABLE`，超限返回 413，消息 ID／会话不符或读取中 Route 改变返回 409；上游失败返回 503，不回显原始错误。调用方按需要保存返回的文件并检查非空结果。
 
 这些入口接受统一认证且仍启用的 LAN Agent principal，与可信直接本机管理连接同权；未认证 Relay／隧道请求及伪造 Agent 请求头不授权。异步读取、备用上游读取和输出前复验原授权，撤销返回 403 且不回退到本机身份。仅选择指定 Route 的唯一启用实例，拒绝含多个实例的配置，不跨 Route 或账号回退；本机管理读取权限不赋予发送权限。既有 `message-endpoint-history` 继续用于 Rabi 已记录消息的跨来源检索；原消息与附件需求优先使用上述受管入口。
 
-正常群聊、私聊和最新反馈查询先走 Rabi。安装版通过 `RabiRouteHost.exe --command status --json` 获取当前 `managerBaseUrl`、`applicationGenerationId`、`managerInstanceId`；源码模式使用结构化 READY 地址。读取 `<managerBaseUrl>/meta`，按上节合同核对 generation/实例身份；普通查询要求 `health.live=true`、`health.requiredReady=true`，接受 `healthy` 或 `degraded`，再由目标接口判断依赖是否可用。旧地址或瞬时失败时重新发现并有界重试；Hook 的概括性“Host 未运行”提示不能替代实际失败原因。不扫描端口、不读取退役实例锁、不直接启停 Manager。
+正常群聊、私聊和最新反馈查询先走 Rabi。安装版通过 `RabiRouteHost.exe --command status --json` 获取当前 `managerBaseUrl`、`applicationGenerationId`、`managerInstanceId`；源码模式使用结构化 READY 地址。读取 `<managerBaseUrl>/meta`，按上节合同核对 generation/实例身份；普通查询要求 `health.live=true`，接受 `healthy` 或 `degraded`，再由目标接口判断依赖是否可用。旧地址或瞬时失败时重新发现并有界重试；Hook 的概括性“Host 未运行”提示不能替代实际失败原因。不扫描端口、不读取退役实例锁、不直接启停 Manager。
 
 当前 `GET <managerBaseUrl>/api/gateways` 提供 Route 诊断，其 `messageFiles` 包含近期消息摘要。NapCat 摘要合并群聊和私聊后仅返回最近 8 条，须按目标 Route、群/私聊、消息 ID 和时间筛选；它不是完整历史检索接口。`GET /api/roles/{roleId}/chat-history` 读取的是 Agent 最终回复，不能替代 QQ 群聊历史。
 ### 查询消息端历史消息
@@ -118,17 +377,19 @@ GET /api/agent/qq/messages/<messageId>/attachments/0?routeId=<routeId>&kind=grou
 - 本接口没有 `cursor`、`offset`、`nextCursor` 或完整结束标记。不要用这批结果计算整月消息分布，也不要用“最早时间减一秒”模拟分页：同秒多条消息会遗漏。全量统计先核验来源及时间覆盖；受管 QQ 历史分页也不保证平台全部历史。
 - 响应的 `coverage` 明示 `recordScope=saved_role_messages`、`resultMode=latest_matches`、`completenessUnknown=true`、`paginationSupported=false`、有效 `limit/maxChars/from/to` 和 `limitReducesArchiveScan=false`。传 `cursor` 或 `offset` 返回 400 `MESSAGE_HISTORY_PAGINATION_UNSUPPORTED`，读取前拒绝，防止重复取得同一片段。
 - 已传的 `from/to` 必须是有限 Unix 秒数，双边范围须 `from <= to`；空值、日期文本、`NaN` 或倒置范围返回 400 `MESSAGE_HISTORY_TIME_RANGE_INVALID`，读取前拒绝，避免无效时间条件被静默忽略后扫描全部归档。未传时间范围仍可查询。
-- 冷查询仍需读取候选归档；小 `limit` 和关键词不会缩小文件扫描量。先限定 `target` 或 `conversationKey` 及 Unix 秒 `from/to`，一般从 `limit=10` 开始，再按需要扩展。避免并发扫描全部历史；503 或超时后缩小范围或按既有规则使用已核验的正式来源，不无限重试同一重查询。
-- 历史归档冷读可设置最多 35 秒客户端预算，覆盖读池 30 秒执行预算及少量通信时间；排队另计，不能保证在客户端期限内完成。提前断开会取消读取，不以短超时反复启动同一冷扫描；35 秒是客户端设置，不是 query 参数。Host、`/meta` 和就绪后的知识索引查询通常仍用 5 秒预算。
+- 查询使用本机持久倒排索引，不在请求中扫描原始归档。中文短词、数字和字面子串保持原匹配规则；首次索引未就绪返回 503 并在后台构建，不能把未就绪当空结果。见[持久消息检索](message-history-search.md)。
+- 消息查询客户端总预算建议 3000ms；Manager 默认 2500ms 响应截止包含排队和执行，专用查询池默认最多排队 500ms，均可在超时设置调整。超时、繁忙、未就绪或未覆盖目标来源版本明确返回 503；原始文件扫描不是回退路径。客户端断开不取消后台建索引。
+- 可传 `budgetMs=1..2147483647` 表示客户端剩余毫秒预算，显式值优先于服务端默认值；排队、执行和可见性阶段仍受各自已配置预算及原请求剩余时间约束。成功和进入读服务后的失败包含 `requestId`；`coverage.indexVersion/sourceVersion/indexedAt/sourceSnapshotIndexed` 标识索引及捕获的来源快照覆盖，不能据此把有限片段视为全部历史。可见性等待默认 1500ms，可在超时设置调整，包含在原请求截止内。
+- `coverage.indexCoverage=partial` 表示存在跳过记录、待续末行或旧格式覆盖未知。查看 `sourceRecordsSkipped`、`sourceRecordIssues`、`pendingRecordBytes` 和 `legacyCoverageUnknown`；此时零条结果不证明全部历史无匹配。派生索引单条工作预算由 `maxIndexedRecordBytes` 返回，当前 8 MiB；仅该记录不进入索引，消息写入、原始正文读取和其他正常记录不受影响，原文不删除。详见[持久消息检索](message-history-search.md)。
 - `GET /api/agent/help?path=/api/roles/%3AroleId/message-endpoint-history` 返回相同限制。Help 的 `path` 使用目录中的 `pathTemplate`，保留 `:roleId`，不能替换成实际角色 ID。
 
 知识索引更新使用独立的普通优先级读池，最多 1 个进程、16 个排队任务，执行预算最高 30 秒；仍受全局最多 6 个读任务约束。它不继承后台目录读池的闲置优先级或未确认终止状态；单个目录刷新故障不会封锁知识索引初始化。
 
-读进程只按任务加载依赖：消息检索和知识索引更新不先初始化无关诊断、投递或媒体模块。消息读进程缓存未变化的归档，按文件身份、大小和修改时间校验；当前消息每次重读。缓存最多 128 个文件、估算预算 384 MiB，闲置 120 秒后在下次访问时淘汰；超预算文件直接读取，不写缓存。文件编辑、替换、删除或进程重建后重新读取。查询返回值独立复制，避免调用方修改缓存。
+读进程只按任务加载依赖。消息查询与后台索引使用独立有界进程池；索引在本机持久保存，当前文件只更新变化记录，查询通过来源指纹核对有效性，不读取消息原文件。计划/记忆知识索引仍由自己的服务维护。
 
 知识索引发布已经完成的文件读取批次，并按记录身份重放读取期间的新提交；文件监听发现的变动继续增量核对。持续的计划或记忆更新不再导致整批读取被丢弃、首次索引一直无法就绪。索引读取失败仍保留已发布结果与错误状态，不伪装成完整空索引。
 
-历史检索只解析一次消息字段，复用本轮已读取的当前消息；归档快照按序号范围排序后去除被包含的副本。去重仍先于关键词筛选，时间范围、字符预算及返回顺序保持不变。正式构建中的同步内部调用复用当前请求的代码版本租约，异步工作和迭代器继续独立保留租约；性能验收必须使用正式构建的读进程，不能用未包装的源码耗时代替。
+历史检索在索引构建时规范化记录并保留来源副本；查询在指定来源范围内先确认去重胜者，再匹配关键词，时间范围、字符预算及返回顺序保持不变。正式构建中的同步内部调用复用当前请求的代码版本租约，异步工作和迭代器继续独立保留租约；性能验收必须使用正式构建的读进程，不能用未包装的源码耗时代替。
 
 处理端需要恢复 QQ 群聊、QQ 私聊或其它消息端上下文时，使用只读接口：
 
@@ -136,7 +397,7 @@ GET /api/agent/qq/messages/<messageId>/attachments/0?routeId=<routeId>&kind=grou
 GET /api/roles/{roleId}/message-endpoint-history
 ```
 
-常用参数：`query`（支持空格、英文逗号、中文逗号、顿号分隔的多个关键词）、`match=any|all`（默认 `any`）、`adapter`、`kind=group|private`、`sender`、`target`、`conversationKey`、`from`、`to`、`includeArchives=1`、`limit`。用户说“最近一小时”等时间范围时，必须转换为 Unix 秒 `from`（必要时传 `to`）；用户要求“所有消息”时省略 `query`，不要臆造关键词。`limit` 只是返回上限，不代表完整覆盖；无时间范围的归档查询会扫描完整归档，应避免用于大历史。返回 `entries`、`count` 和 `coverage`；消息记录保留消息端、群/私聊会话键、发送者、目标、消息 ID、回复 ID 和附件摘要。`kind=group` 只查群聊入站消息，`kind=private` 只查私聊入站消息；`reply_sent` 等出站回复不应当当作用户原始反馈。
+常用参数：`query`（支持空格、英文逗号、中文逗号、顿号分隔的多个关键词）、`match=any|all`（默认 `any`）、`adapter`、`kind=group|private`、`sender`、`target`、`conversationKey`、`from`、`to`、`includeArchives=1`、`limit`。用户说“最近一小时”等时间范围时，必须转换为 Unix 秒 `from`（必要时传 `to`）；用户要求“所有消息”时省略 `query`，不要臆造关键词。`limit` 只是返回上限，不代表完整覆盖；无时间范围时也使用索引；结果依然是有限片段，不能作为全量历史证明。返回 `entries`、`count` 和 `coverage`；消息记录保留消息端、群/私聊会话键、发送者、目标、消息 ID、回复 ID 和附件摘要。`kind=group` 只查群聊入站消息，`kind=private` 只查私聊入站消息；`reply_sent` 等出站回复不应当当作用户原始反馈。
 
 查询由有界交互读进程执行，不占用目录整理任务队列；客户端断开会取消排队任务或终止仍在读取的进程。另支持 `channel` 和 `maxChars`；`limit` 默认 50、最多 200，`maxChars` 默认及最多 200,000。既有 `entries/count` 和筛选语义保持兼容，`coverage` 增加上述限制标记；读池繁忙、超时或无法确认子进程终止返回 HTTP 503，业务参数错误仍返回 400，不把失败伪装成零条记录。此隔离不承诺任意大小历史都能在超时前查完，也不代表其它同步入口或线上健康已验收。
 
@@ -273,7 +534,21 @@ npm run manager
 
 此模式仍提供 `/meta`、计划、记忆和校验等 Manager HTTP 接口；`GET /meta` 会返回 `managerAutostart: false`。它关闭已停止 Route 的自动启动和文件监视器，不移除显式运行控制接口。若调用方已经显式启动某条 Route，之后又通过 Manager 保存配置，Manager 仍会重启该运行中 Route 以应用新的会话、模型和消息端设置；否则界面保存态会与真实投递态分叉。调用方仍不得在没有相应授权时请求启动、重启、触发、回传或外发动作。生产托盘和正常消息路由不设置该变量，行为保持不变。
 
+### 身份与网关诊断的可执行合同
+
+源码以 `manager.meta.read` 和 `manager.gateways.read` 注册 `GET /meta`、`GET /api/gateways`。旧 `agent:GET:/meta` ID 解析到同一操作。Meta 在依赖未就绪时仍可返回身份与健康数据，不以 `live`、`requiredReady` 或 `businessReady` 的真假拒绝诊断；普通业务调用继续按当前身份及目标依赖判断。调用方仍须使用原连接鉴权，不能把诊断可读当成额外业务授权。
+
+诊断响应使用 `Cache-Control: private, no-store`。原诊断拥有者忽略的查询参数保持兼容；身份发现仍使用精确 `/meta`。网关提供方字段保持开放，`messageFiles` 是按消息端命名的对象，其中近期片段不代表平台完整历史。安装状态以当前活动目录为准。
+
+### 适配器目录、显式扫描与连接管理
+
+源码通过 `agent.adapters.<key>.<method>` 发布 9 类 operation：`catalog.get`、`all.get`、`dsh.get`、`grokBot.get`、`connection.get`、`connections.get`、`connect.post`、`disconnect.delete`、`hooks.post`。以活动目录中的合同确认实际安装状态。目录只描述已实现的适配能力；扫描须显式请求，不后台轮询，不创建替代会话或执行真实 prompt。新增接口继续复用已鉴权连接，无人格或工作区的第二层许可。
+
+DSH 保存和断开仍须先读取当前 `revision`，正文携带 `expectedRevision`；冲突或结果不确定时重新读取原连接，不能自动重放。正文上限仍为 16 KiB，总预算仍为 90 秒，包含正文等待和连接验证；`launchUrl` 是只写输入，不出现在目录或连接元数据。连接凭据继续由原受保护存储拥有。Hook 更新可能修改已安装集成文件，其响应不证明已执行 Agent 任务。扫描关闭、繁忙和原宿主缺席保持既有取消、排队及失败语义。
+
 ### Codex Hook 上下文接口
+
+源码已通过同一可执行合同发布 Hook 的上下文、角色列表、诊断及会话绑定接口，canonical operation ID 为 `agent.hook.<context|roles|doctor|sessions|session|bind|unbind>.<method>`；旧 `hook:METHOD:/path` ID 解析到同一处理器。JSON 正文上限仍为 256 KiB，服务原有字段别名与归一化规则保留；未知查询参数和重复查询参数在业务前被拒绝。`/context` 可能更新状态或触发既有回传，不自动重放；结果不确定时保留原 session/turn 并核对绑定、计划和投递记录。安装版是否已包含合同，以其活动目录为准。
 
 已启用并鉴权的远端 Agent 可以调用 Hook 角色目录、诊断与会话绑定管理接口，无需工作区、角色或 Route 绑定。提交 `/context` 时须提供该 Agent 真实拥有的会话和匹配的 `agentType`；默认值为 `codex`。读取请求体后、写入前再次核验原连接仍有效，避免撤销后的请求继续写入。消息组登记同样使用公共接口，不再单独限制远端调用方。
 
@@ -332,9 +607,19 @@ POST  /api/roles/:roleId/health/observations
 GET /api/roles/:roleId/persona-reference?file=persona.md
 ```
 
-`file` 只接受角色目录内的单个 `.md` / `.markdown` 文件名。成功返回 `{code:0,data}`，其中 `data` 包含 `schemaVersion:1`、真实 `roleId`、`file`、`document`、规范化 `personaConfig`、SHA-256 `revision`、`applicationGenerationId` 和 `managerInstanceId`。正文上限 2 MiB，配置上限 256 KiB；路径越界、损坏 JSON 或超限均拒绝，不返回冒充完整结果的截断内容。
+`file` 只接受角色目录内的单个 `.md` / `.markdown` 文件名。成功返回 `{code:0,data}`，其中 `data` 包含 `schemaVersion:1`、真实 `roleId`、`file`、`document`、规范化 `personaConfig`、SHA-256 `revision`、`applicationGenerationId` 和 `managerInstanceId`。正文与配置默认不设应用层字节配额；可在来源 Manager 设置 `RABIROUTE_PERSONA_DOCUMENT_MAX_BYTES`、`RABIROUTE_PERSONA_CONFIG_MAX_BYTES`，0 或移除变量取消限制。路径越界、损坏 JSON 或明确配置的超限均拒绝受影响读取，不返回截断内容冒充完整结果；配置无效仅对受影响能力返回 503 和字段说明。
 
-通过当前本机 Manager 的 `/api/rabilink/peer/http/<设备>/persona/...` 访问来源 PC。首次使用通过 `POST /api/rabilink/peer/persona/bootstrap` 提交 `{deviceId}`，复用 RabiLink 已鉴权的应用连接、签名握手和 P2P / Relay 传输，自动固定双方公钥并建立限定的角色服务权限；无需另授完整 `manager` 权限。来源必须声明 `persona-reference-v1` 能力。已有手工条目的明确限权不会被自动扩大，应用停用、凭据变化或撤销权限后拒绝访问。实际 Gateway 解析还核对当前 Route capability、已保存引用和两端 Manager 身份；切代、离线、鉴权失败或绑定变化时停止投递，无同名本机回退。
+通过当前本机 Manager 的 `/api/rabilink/peer/http/<设备>/persona/...` 访问来源 PC。首次使用通过 `POST /api/rabilink/peer/persona/bootstrap` 提交 `{deviceId}`，复用 RabiLink 已鉴权的应用连接、签名握手和 P2P / Relay 传输，并固定双方公钥。启用且已鉴权的应用连接默认可使用来源 PC 全部公共 Manager 接口，无需逐角色或逐服务授权；旧手工服务列表由现有应用连接迁移清理。用户明确停用应用、凭据变化或连接撤销后拒绝访问。实际 Gateway 解析还核对当前 Route capability、已保存引用和两端 Manager 身份，这些检查用于确认上下文和目标；切代、离线、鉴权失败或绑定变化时停止投递，无同名本机回退。
+
+Peer 发现与 bootstrap 使用以下可执行合同；具体版本是否已发布，以目标 Manager 的活动目录为准：
+
+| operation ID | 接口 | 原有执行规则 |
+| --- | --- | --- |
+| `manager.rabilink.peer.list` | `GET /api/rabilink/peer/list` | `deviceKind`、`online=true|false` 按首个查询值筛选，统计注册记录；保留提供方扩展字段 |
+| `manager.rabilink.peer.persona.bootstrap` | `POST /api/rabilink/peer/persona/bootstrap` | 只接收 `{deviceId}`，正文上限 8192 字节，复核原连接与 Manager 身份 |
+| `manager.rabilink.peer.device-bootstrap` | `POST /api/rabilink/peer/device-bootstrap` | 先核验真实 Relay 设备来源，再读正文；保留原 `authenticatedAt`、签名、nonce 和 45 秒绝对有效期。`maxBytes:0` 保留原读取器未设置应用层字节上限的行为 |
+
+设备 bootstrap 的来源证明属于原设备身份合同，普通 Agent 不能在正文中冒充 Relay 设备。私有加密 `/api/rabilink/peer/receive` 仍用于传输信令，不进入公共目录。结构、媒体类型及方法错误由统一注册器返回；原设备有效期、签名和业务错误仍由对应拥有者返回。
 
 本机实际处理 Agent 与消息端保留原 Route 配置，使用远端角色正文、消息规则和最近消息额度。计划、记忆与技能通过来源入口按需查询；本机 `roleDir`、`rolePath` 为空，投递审计留在本机 Route 目录。远端定时/脚本、计划秘书、记忆整理和 Hook 权限不会因此在本机启用。本机角色目录不把该 Route 挂到同名本机角色下，本机跨角色消息接口也拒绝冒充远端发件角色。
 
@@ -350,7 +635,13 @@ GET /api/personas?addressable=true
 GET /api/personas/:personaId
 ```
 
+列表入口已迁入可执行合同 `manager.personas.list`，保留旧发现 ID `agent:GET:/api/personas`，安装版待验收。已鉴权远端直接调用，无需会话预登记或角色许可。目录沿用当前角色快照与运行表，只包含当前存储根的角色；远端拥有的 Route 不计入本机可达性。筛选仅认首个 `addressable` 的精确字符串 `true`，其它查询项保持忽略。读取不启动 Route，也不投递消息。原目录快照尚未安装时返回 503，需等待目录就绪后读取。
+
 列表返回角色的 `personaId`、显示名称、是否可以接收消息，以及绑定的 Route。`addressable=true` 只返回至少绑定一个已启用 Route 的角色；只有一个已启用 Route 时会同时返回 `defaultRouteId`。
+
+角色详情、投递和回执现采用 `manager.personas.read`、`manager.personas.messages.send`、`manager.personas.messages.receipt`，旧 `agent:METHOD:/path` 发现 ID 仍解析到同一合同，安装版待验收。投递保留 65536 字节 JSON 上限、去除首尾空白后 32768 个 UTF-16 码元的文本上限，以及 200 个码元的对话/引用上限；JSON 仍不依赖 Content-Type。读取正文前捕获原存储拥有者，持久处理前后复验原连接，实际投递前复核来源证明，以及原来源和目标的本机归属与启用状态。
+
+投递异常返回原消息 ID、回复上下文及 `uncertain=true`；该失败结果也可能已按原 `deliveryId` 持久保存。回执 `state=completed` 表示幂等记录已完成，投递是否成功仍以 `result.status` 为准。审计失败不补发，HTTP 断线后原进程、日志、审计及持久记录继续收尾。
 
 当前角色需要联系另一个角色时，使用目标角色路径，并从当前 `AgentPacket.replyContext` 读取 `runtimeRouteId` 和 `personaMessagingCapability`。凭据同时绑定 Route 与角色，不能用另一个 Route 或角色的身份复用：
 
@@ -444,6 +735,8 @@ QQ 群文本示例：
 }
 ```
 
+已鉴权远端调用 `send` 或线程桥时，发送来源使用本次显式类型与完整会话 ID，不要求该聊天已列在连接器的 `sessionId/managedSessionIds` 中，也不为此次请求重绑连接器。节点凭据、连接撤销与用户明确停用仍校验。`GET /api/agent/uploads/:uploadId` 复用当前 Manager 连接鉴权，主机及其他已鉴权连接可读取原上传 DTO；使用 `fileId + fileSha256` 时继续核对有效期与真实内容，不再把原上传 Agent 身份当作额外许可。渠道仍按 capabilities 声明的文件发送能力执行。
+
 ### QQ 表情
 
 QQ 系统小表情可在文字中使用 `[CQ:face,id=<QQ 表情 ID>]`。收藏表情先调用 `GET /api/agent/qq/stickers?routeId=<Route ID>&instanceId=<实例 ID>&count=1000`；`instanceId` 在该 Route 只有一个启用账号时可省略，`count` 范围为 1–1000。返回当前账号的 `items { id, name, description, previewUrl }`，`name` 来自 QQ 原生收藏描述，不含原始媒体地址或凭据。`previewUrl` 是同一 Manager 的只读图片接口。旧 NapCat 可安装[名字兼容插件](../plugins/napcat-stickers/README.md)；没有该插件或收藏本身未命名时，名字为空，选择前查看预览。数量上限和 `completenessUnknown` 不证明收藏列表完整。
@@ -472,11 +765,11 @@ NapCat 图文混排使用 `payload.type=image` 和有序的 `payload.segments`�
 }
 ```
 
-`segments` 仅用于 NapCat 图片消息；按数组顺序发送 1–32 个 `text`、`image` 或 `markdown` 段，其中须有 1–16 个图片或 Markdown 段。每个图片段只填 `path` 或 `url` 之一；本地路径逐张按 `allowedFileRoots` 校验，任何一张不合格都会在平台发送前拒绝整条消息。使用 `segments` 时不要再填顶层 `payload.text`、`path`、`url` 或 `planAttachment`。原单图 `payload.text + path/url/planAttachment` 仍可使用。文字与 Markdown 源文会合并用于语言风格校验；`replyImageDescriptions` 仍只描述**被引用的来源消息**中的图片。
+`segments` 仅用于 NapCat 图片消息；按数组顺序发送非空的 `text`、`image` 或 `markdown` 段，至少包含一个图片或 Markdown 段。段数与图片/Markdown 段数默认不限；如需额度，设置 Manager 环境变量 `RABIROUTE_AGENT_SEND_MAX_SEGMENTS` 和 `RABIROUTE_AGENT_SEND_MAX_IMAGES`，0 或删除变量可取消限制，下次加载 Manager 生效。公开 Help 显示当前值；超限错误说明对应设置和取消方式。每个图片段只填 `path` 或 `url` 之一；本地路径逐张按 `allowedFileRoots` 校验，任何一张不合格都会在平台发送前拒绝整条消息。使用 `segments` 时不要再填顶层 `payload.text`、`path`、`url` 或 `planAttachment`。原单图 `payload.text + path/url/planAttachment` 仍可使用。文字与 Markdown 源文会合并用于语言风格校验；`replyImageDescriptions` 仍只描述**被引用的来源消息**中的图片。
 
 单独把 Markdown 文本渲染成图片，提交 `"payload":{"type":"markdown","text":"# 标题\n\n| 项目 | 结果 |\n|---|---|\n| A | 通过 |"}`。需要与普通文字、已有图片交替排布时，在上述 `segments` 数组中加入 `{"type":"markdown","text":"# 标题\n\n**正文**"}`；该段在原位置变成图片，整条消息只发送一次。两种形式都要求 NapCat Route 允许 `image` 输出，不能再附加顶层 `path` 等媒体字段。
 
-Rabi 使用本机 Chromium、Chrome 或 Edge 的无脚本浏览器进程渲染 Markdown，自动检测常见安装位置；也可通过 `RABIROUTE_MARKDOWN_BROWSER_PATH` 指定浏览器可执行文件的绝对路径。标题、列表、表格、引用和代码块会出现在 PNG 中。原始 HTML 转义，链接不可点击，Markdown 图片语法只显示说明占位，不加载本地或远程资源。单段 Markdown 上限 32 KiB、图片高度 4096 像素、PNG 4 MiB；同一消息的 Markdown 图片合计上限 8 MiB。浏览器不可用或渲染失败时，整条消息不进入 NapCat 发送。
+Rabi 使用本机 Chromium、Chrome 或 Edge 的无脚本浏览器进程渲染 Markdown，自动检测常见安装位置；也可通过 `RABIROUTE_MARKDOWN_BROWSER_PATH` 指定浏览器可执行文件的绝对路径。标题、列表、表格、引用和代码块会出现在 PNG 中。原始 HTML 转义，链接不可点击，Markdown 图片语法只显示说明占位，不加载本地或远程资源。默认不设 Markdown 源文、图片高度、PNG 大小或消息图片总量的应用额度；可通过公开的 `RABIROUTE_MARKDOWN_*` 环境变量显式配置，详见[连接与配置限制](./connection-access.md)。Chromium 视口整数范围、内存和实际截图能力仍由运行时决定，失败会如实返回。浏览器不可用或渲染失败时，整条消息不进入 NapCat 发送。
 
 角色可在 `personaConfig.json.languageStyle.styleSkillUrl` 绑定自己的语言风格 Skill。不同角色可以绑定不同 URL。URL 可指向 Skill 目录、`SKILL.md` 或 `references/style-data.json`；Manager 从其中读取程序化 JSON 规则。
 
@@ -497,6 +790,8 @@ Agent 应先检查和精简。一条说不清时，按完整意思拆成少量�
 `styleValidation=1` 且校验不通过时，Manager 返回 `409` 和 `status=style_confirmation_required`，附带规则编号、段落、原因和命中证据，消息尚未进入 Outbox。Agent 确认原文符合本次需求后，使用同一 `deliveryId` 重发，并把 `styleValidation` 改为 `0`。这次跳过不修改角色绑定，后续发送恢复默认校验。
 
 通用校验接口只分析文本，不发送消息：
+
+可执行 operation ID 为 `manager.language-style.validate`，以目标 Manager 的活动目录为准。请求正文上限 512 KiB；正文去除首尾空白后最多 200,000 个 UTF-16 码元。文件地址在目标 Manager 所在电脑解析；`scope` 默认 `outbound_message`，`prompt` 保留原有字符串转换和截断规则。HTTP 200 的 `data.status` 可能是 `passed`、`failed` 或 `unavailable`，应同时读取 `passed` 与具体校验结果。
 
 ```http
 POST /api/language-style/validate
@@ -758,6 +1053,8 @@ GET /api/agent/send/receipts/:deliveryId
 
 核验诊断用 `evidence.historyState` 区分 `missing`、`read_failed`、`oversized`、`changed`、`damaged`、`request_not_found`、`terminal_missing` 和 `completed`。可信历史已找到原请求但没有整次终态时是 `reason=terminal_unproven`，不是读取失败。`binding_missing` 与 `missingBindingFields` 表示原上传 owner 记录确实缺字段；`binding_capability_unavailable`／`platform_capability_unavailable` 表示处理器未装配相应能力，不能解释成远端 Agent 身份错误。原账号及绑定 revision 仅从原 ID 和摘要匹配的 owner 上传记录读取；旧记录缺失时不能拿当前账号补造。新上传记录在发送当时前后核对身份及配置后保存证据；文件存在仍不证明内容 SHA 或配套文字。`state=verified` 只表示核验动作完成。
 
+连接器 0.2.12 的 `POST /api/agent/send` 默认沿用文件上传的 30 分钟等待预算，覆盖文件校验和平台上传；显式 `--timeout-ms` 仍优先。取消或超时不证明发送失败，必须按原 deliveryId 查询回执，不能自动重放。NapCat 失败回执保留动作、HTTP 状态、retcode 或安全传输错误码；不返回原始上游文字、凭据或主机路径。历史通用 502 无法补造缺失的底层诊断。
+
 上传和外发分开确认：`PUT /api/agent/uploads/:uploadId` 上传原始字节；同路径 `GET` 只回读已提交文件元数据，不提供百分比、速率或 ETA。完成上传后以 `payload.fileId` 和 `payload.fileSha256` 调用 `POST /api/agent/send`，再以上述原 deliveryId 查询外发回执。
 
 如果只有消息端回执 ID，可以按渠道反查最多 100 条匹配记录：
@@ -912,7 +1209,7 @@ Outbox 会在字符串消息前添加 OneBot `[CQ:reply,id=123]`，或在消息�
 }
 ```
 
-对应 NapCat 策略必须允许 `file`，并配置 `messageAdapterPolicies.napcat.allowedFileRoots`。RabiRoute 会校验文件存在、类型和真实路径，再调用 `upload_group_file`；成功结果包含 `sentFileName`，NapCat 返回稳定标识时还包含 `sentFileId`。如果文件上传成功但跟随的说明文本失败，返回仍为 `status=sent` 并在 `reason` 中说明文本失败，调用方只能补发文本，不能重复上传文件。
+对应 NapCat 策略必须支持 `file`。`messageAdapterPolicies.napcat.allowedFileRoots` 未配置或为空时不限制本地文件目录；用户设置非空列表时才按其真实目录限制，拒绝提示给出该配置及取消方式。RabiRoute 会校验文件存在、类型和真实路径，再调用 `upload_group_file`；成功结果包含 `sentFileName`，NapCat 返回稳定标识时还包含 `sentFileId`。如果文件上传成功但跟随的说明文本失败，返回仍为 `status=sent` 并在 `reason` 中说明文本失败，调用方只能补发文本，不能重复上传文件。
 
 ### 远端 Agent 上传后发送群文件（实验合同）
 
@@ -923,11 +1220,11 @@ Outbox 会在字符串消息前添加 OneBot `[CQ:reply,id=123]`，或在消息�
 已使用独立节点凭据接入、并由总控批准的 primary Agent，可把远端文件上传到 Manager，再显式调用发送接口。CLI 从私有配置读取凭据和准确 Agent 身份；不使用共享 WebGUI Token，也不把凭据写到命令参数。上传不自动发送：
 
 ```bash
-node rabi-agent.mjs --upload <file> --agent <agentId> --upload-id <UUID>
-node rabi-agent.mjs --api GET /api/agent/uploads/<UUID> --agent <agentId>
+node rabi-agent.mjs --upload <file> --agent-type codex --id "<FULL_SESSION_ID>" --upload-id <UUID>
+node rabi-agent.mjs --api GET /api/agent/uploads/<UUID> --agent-type codex --id "<FULL_SESSION_ID>"
 ```
 
-`--upload-id` 是调用方预先保存的稳定 UUID，必填，不自动生成。底层请求为 `PUT /api/agent/uploads/<UUID>`，正文为文件原始字节，`Content-Type: application/octet-stream`，`Idempotency-Key` 必须与路径 UUID 完全相同；`x-rabiroute-file-name` 为 URI 编码的 basename（不含目录），`x-rabiroute-content-sha256` 为内容 SHA-256。鉴权沿用 Bearer 节点凭据和 `x-rabiroute-agent-id`。`GET` 同一路径回读元数据；成功结构如下，不返回 Manager 的本地 `path`：
+`--upload-id` 是调用方预先保存的稳定 UUID，必填，不自动生成。底层请求为 `PUT /api/agent/uploads/<UUID>`，正文为文件原始字节，`Content-Type: application/octet-stream`，`Idempotency-Key` 必须与路径 UUID 完全相同；`x-rabiroute-file-name` 为 URI 编码的 basename（不含目录），`x-rabiroute-content-sha256` 为内容 SHA-256。鉴权沿用 Bearer 节点凭据和 `x-rabiroute-agent-type` + `x-rabiroute-session-id`。`GET` 同一路径回读元数据；成功结构如下，不返回 Manager 的本地 `path`：
 
 ```json
 {
@@ -955,20 +1252,20 @@ node rabi-agent.mjs --api GET /api/agent/uploads/<UUID> --agent <agentId>
 
 上传错误保留原有字符串 `code`，并附带同值 `errorCode`、`help { method, path }`、`repair` 和 `retryable:false`。`retryable:false` 表示不能自动重放，不表示人工修正后永远不可再调用；415 按提示修正二进制格式，403 核对原身份和启停，409 或不确定结果先 GET 原 ID 核对，不换 ID 绕过。帮助链接不授予额外权限。408 `upload_timeout` 和连接中断 `upload_aborted` 有具体恢复提示，仍为 `retryable:false`；先 GET 原 ID，不自动重传。连接已断开时无法保证收到错误 JSON。
 
-默认限制为单文件 2 GiB（2048 MiB，硬上限）、总量 4 GiB、最多 100 个文件、TTL 24 小时；HTTP 上传总并发上限为 4，跨 owner 合计。归属按 `nodeId + agentId` 隔离，同一 Agent 的多个 session 可共享文件，但每次请求仍须来自可信且已批准的 source；知道 ID 不构成授权。超时、503、响应不确定或 generation 变化后，保留原 UUID、文件内容和摘要，先重新发现并核对当前 `/meta`，再 `GET` 原路径核对 `id/fileName/size/sha256/expiresAt`，不自动重试 PUT 或换 ID。
+默认单文件额度为 2048 MiB（可配置），总量为 max(16 GiB, 单文件额度)、最多 100 个文件、TTL 24 小时；总量、数量和保留时间可通过[公开环境变量](./connection-access.md)调整；HTTP 上传总并发上限为 4，跨 owner 合计。上传来源用于审计与配额记账，不形成第二层读取许可；其他已鉴权连接可查询原上传 ID，并以 fileId 与 SHA-256 引用原文件。内容完整性、有效期、并发和容量仍按原合同检查。超时、503、响应不确定或 generation 变化后，保留原 UUID、文件内容和摘要，先重新发现并核对当前 `/meta`，再 `GET` 原路径核对 `id/fileName/size/sha256/expiresAt`，不自动重试 PUT 或换 ID。
 
 如果磁盘权限或文件锁故障导致临时预留清理失败，系统保守保留其配额并记录审计，不删除可能活跃的数据。需修复存储故障，并在 Host 重启后再次触发回收；不保证任意存储故障都自动恢复。
 
-大文件通过有背压的二进制流上传、落盘和增量 SHA-256 校验，不把完整安装包读入内存，也不使用 JSON/Base64 传包。上传期限为 30 分钟。可在「RabiLink → 配置」保存 `agentUploads.maxFileMiB`，整数范围 `1..2048`，默认 `2048`；值保存在 `data/Config.json`，重启 Manager 后生效。已鉴权连接也可通过 `PATCH /api/rabi/identity` 修改该配置；上传请求仍遵守服务器当前限制。客户端硬上限仍是 2 GiB，Manager 配置更低时以服务器限制为准。
+大文件通过有背压的二进制流上传、落盘和增量 SHA-256 校验，不把完整安装包读入内存，也不使用 JSON/Base64 传包。上传期限为 30 分钟。可在「RabiLink → 配置」保存 `agentUploads.maxFileMiB`，整数范围 `1..8589934591`，默认 `2048`；值保存在 `data/Config.json`，重启 Manager 后生效。已鉴权连接也可通过 `PATCH /api/rabi/identity` 修改该配置；上传请求仍遵守服务器当前限制。Manager 不另加 2 GiB 硬上限；使用支持该额度的客户端。默认存储总容量至少容纳一个已配置的最大文件，存储容量、文件数和过期时间可通过[公开环境变量](./connection-access.md)调整。
 
 受控集成测试已用 **734 MiB（769654784 字节）** 文件完成真实客户端 → loopback HTTP → 文件存储 → 模拟 NapCat 的上传和发送摘要核对；文件由 64 KiB 小块生成，测试禁止大于 8 MiB 的 Buffer 分配/拼接，接收端按块核对。用 `RABI_TEST_LARGE_UPLOAD=1` 启用 `src/manager/agentUploadFlow.test.ts` 的大文件用例，默认日常测试跳过。该结果不是 QQ 平台验收：真实 QQ/NapCat 的文件大小、账号及群权限、磁盘可读性和响应期限仍以实际渠道回执为准。旧连接器须按接入文档执行新版 bootstrap，已缓存旧 Hook 的宿主需重载；服务端增大配额不会升级旧客户端。
 
-最短发送示例：先完成上述上传并确认回执，再把以下 JSON 经标准输入交给 `node rabi-agent.mjs --api POST /api/agent/send --agent <agentId> --body-stdin`。占位身份与目标替换为当前注入模板，`fileId` 使用上传回执 `data.id`；为本次发送保存独立、稳定的 `deliveryId`：
+最短发送示例：先完成上述上传并确认回执，再把以下 JSON 经标准输入交给 `node rabi-agent.mjs --api POST /api/agent/send --agent-type codex --id "<FULL_SESSION_ID>" --body-stdin`。占位身份与目标替换为当前注入模板，`fileId` 使用上传回执 `data.id`；为本次发送保存独立、稳定的 `deliveryId`：
 
 ```json
 {
   "deliveryId": "send-upload-example-001",
-  "sender": { "agentType": "primary_persona", "sessionId": "<approved-complete-session-id>" },
+  "sender": { "agentType": "primary_persona", "sessionId": "<complete-session-id>" },
   "routeId": "<exact-route-id>",
   "channel": "napcat",
   "params": { "target": "group", "groupId": "<group-id>", "instanceId": "<napcat-instance-id>", "replyToMessageId": "" },
@@ -1093,9 +1390,21 @@ Agent 可以主动向自己已经掌握的群号或企业微信群 chat id 发�
 
 这里 AgentType 对应 `provider`，会话 Id 对应 `threadId`；每次投递都必填。省略身份会失败，不选择 `default`、第一个类型或配置中的会话，不通过改绑配置决定本轮目标。已有 Agent 目录身份保留；旧单任务配置不再自动生成 `default` Agent。配置好的消息路线读取自己的目标后，也必须显式提交本轮类型与会话 ID。
 
-旧 `POST /api/lan-agent/nodes/{nodeId}/tasks` 同样必须传 `agentId`、`targetAgent`、`threadId` 和 `message`，不再推断类型。幂等键绑定完整目标与正文；换目标必须是独立请求，结果不确定时先核对原操作。连接器 0.2.3 通过 hello 声明 `taskTargeting:"explicit-session-v1"`；未声明的旧客户端拒绝任务投递并提示升级，防止其忽略新字段后仍投向固定会话。电脑接口继续按原合同使用。
+旧 `POST /api/lan-agent/nodes/{nodeId}/tasks` 同样必须传 `targetAgent`、`threadId` 和 `message`，`agentId` 是可选的目标元数据，不再推断类型。幂等键绑定完整目标与正文；换目标必须是独立请求，结果不确定时先核对原操作。连接器 0.2.3 通过 hello 声明 `taskTargeting:"explicit-session-v1"`；未声明的旧客户端拒绝任务投递并提示升级，防止其忽略新字段后仍投向固定会话。电脑接口继续按原合同使用。
 
 ## Codex 正式线程桥
+
+### 精确 ID 返回 404 后的只读发现
+
+以下是调用方的排障流程，不会自动改绑或重发：
+
+1. 先区分资源 404 与通用 route not found。后者先从当前 help 核对路径、方法和可用能力；超时、权限拒绝、未加载或索引未就绪不证明目标不存在。
+2. 在原机器、Agent 端和工作区范围内，使用 `action=list`，以已知名称作为 `query` 搜索。无明确匹配时省略名称条件，读取最近更新或当前活动的会话；只使用接口实际支持的字段，根据返回的 `updatedAt` 和状态筛选，并按 `nextOffset` 分页。不要凭空添加排序、活动过滤或扫描参数。
+3. 对候选逐一 `action=read`，核对完整 ID、工作区、业务目标、最近上下文与原计划绑定。原 ID 仍存在时继续它；不同 ID 只有在确认与原任务的关系且符合用户授权后才续接，并记录新旧 ID。名字相同或更新时间最新只用于收窄候选；剩余歧义再请用户选择。
+4. 计划详情 404 时，在同一角色通过计划名称搜索和近期计划列表查找，必要时查询归档，核对 `planId/taskBinding` 和历史内容；不重建空计划替代原记录。
+5. 发现过程不创建任务、不修改绑定、不发送消息。已有 `202/delivery_unconfirmed`、超时或其它不确定投递时，保留原 `deliveryId`、来源与目标，先核对原回执和实际接收证据；搜索结果不能作为换目标重发的依据。查询能力不可用时记录具体缺口并继续可独立完成的工作。
+
+返回提示应列出当前可用的名称搜索、近期列表或归档查询等下一步。若发现原对象确实存在却仍无法读取，继续调查并修复原接口或存储问题，不能用候选列表掩盖该故障。
 
 ### 外部 Agent 的来源与稳定投递 ID
 
@@ -1160,7 +1469,10 @@ DSH 目标把 `agentAdapter` 改为 `dsh`，来源字段保持不变。
 
 `send`、`required` 正式回复和远端到远端往返复用同一个 Manager 请求存储。目标使用 `instanceBinding={instanceId,agentId}`，并保留原始完整 `threadId`；正式回复参数由 Manager 放入目标消息，不要自行换目标或缩短会话 ID。权限按已启用的 Provider 通用校验，但执行能力单独检查；没有精确 owner 投递能力时拒绝，不创建替代 Runtime。
 
-Manager 先从原始认证 lease 解析来源和精确目标，再持久化准备结果、渲染一次信封、记录正在投递、交给目标 owner，最后核对回执并提交。完整身份包含 `managerInstanceId`、`instanceId`、`nodeId`、`agentId`、`provider`、原始会话 ID 和授权 incarnation；回执还须匹配原 `deliveryId`、generation 和 prompt hash。连接、Agent 启停、catalog 或批准绑定变化后，不复用旧授权。
+Manager 先从原始认证 lease 解析来源和精确目标，再持久化准备结果、渲染一次信封、记录正在投递、交给目标 owner，最后核对回执并提交。完整身份包含 `managerInstanceId`、`instanceId`、`nodeId`、`agentId`、`provider`、原始会话 ID 和授权 incarnation；回执还须匹配原 `deliveryId`、generation 和 prompt hash。连接、Agent 启停、电脑凭据或实例启用代次变化后，不复用旧授权。
+
+稳定投递键和正文摘要使用 Manager、电脑实例、节点、provider 与完整会话身份；目录中的 `agentId` 别名变化不会产生一条新投递。查原调用键时同时识别既有旧键与回执，保留原 deliveryId；损坏或多义的原预约返回冲突，不能据此重新发送。
+
 
 发送结果不确定时返回 HTTP 202、`delivery_unconfirmed`、`retryable=false`，保留原正式回复 reservation。不得换投递 ID重发正文。`reconcile_delivery` 只核对原目标的传输证据；启动、连接、catalog、回执和 turn 事件触发有去重的恢复，不换 owner、不自动重投。公共核对本身不轮询。打开新轮次的 Desktop IPC 若在调用方等待结束后才成功，或同一 owner 的 rollout 稍后才出现原投递标记，桥接会在默认 60 秒内保留这一次请求并补记回执；确认后按迟到回执提交原投递。追加已有轮次的超时仍只使用原有的短回执宽限。连接器只持有传输 attempt/receipt，不另建业务请求账本。Codex 可从同一个 Desktop owner 的原始用户消息恢复精确 hash；其它 Provider 缺少可读接受证据时继续待确认。
 
@@ -1184,7 +1496,7 @@ POST <managerBaseUrl>/api/agent/threads
 - `rename`：按完整 `threadId` 修改 Desktop 任务名称，已配置 cwd 只提供本次 Desktop IPC 上下文，不改变任务身份；用于持久计划协助槽从单个扩容为多个时，把原“协助处理计划”任务改名为“协助处理计划1”。
 - `send`：通过 Desktop IPC 向已有任务 owner start/steer。
 
-`send` 可选传 `imagePaths`，最多 8 个图片绝对路径。每个文件必须存在、位于目标 `cwd` 工作区内，并使用 PNG/JPEG/GIF/WebP/BMP 扩展名。Manager 校验后把它们作为 Desktop `localImage` 输入发送；该字段主要供消息入口把已经保存的来源图片交给处理任务，不能用于读取工作区外文件。
+`send` 可选传 `imagePaths` 图片绝对路径。文件须存在并使用 PNG/JPEG/GIF/WebP/BMP 扩展名；可位于目标 `cwd` 工作区外，Rabi 不再附加八张上限。Manager 去重后把图片作为 Desktop `localImage` 输入发送；处理端实际不支持图片或拒绝输入时，按真实处理端错误报告，不改称缺少授权。
 
 查询示例：
 
@@ -1360,7 +1672,7 @@ Agent 间 `create` 与 `send` 投递时，Manager 按 `messageSource.agentAdapte
 
 - Codex / DSH 的 `create` / `send` 使用当前 RabiRoute 已配置的工作区，不能在任意路径启动会话。Grok Bot 服务会话不要求本地文件目录；不为它伪造 `cwd` 或启动本地 Runtime。
 - 所有带有非空 `prompt` 的 `create` / `send` 都必须提供完整 `messageSource`。`type=agent` 时，`agentAdapter`、`sessionName` 和完整 `sessionId` 都必填；Agent 互投还必须提供可核对的 `sourceThreadId`，并保证它与 `messageSource.sessionId` 相同。`sourceAgentType` 只声明发送方当前职责，任务名以对应 owner 查询结果为准。
-- Agent 互投正文必须是针对目标任务重新编写的交接内容。Manager 拒绝含 `[rabi:bind]`、消息处理 Agent 初始化或计划秘书初始化的正文，也拒绝来源与目标为同一任务；整份注入上下文不能跨任务复制。消息处理 Agent 的任务 ID如果与主角色 ID相同，消息池会拒绝初始化和投递。
+- Agent 互投允许正文引用 `[rabi:bind]`、消息源标题、消息处理 Agent 或计划秘书初始化等文字，不因匹配字符串拒绝整个请求。真实来源仍由结构化消息信封和 owner 核对，正文标题按原有渲染规则转义。来源与目标为同一任务仍按自投递错误处理；消息处理 Agent 的任务 ID如果与主角色 ID相同，消息池会拒绝初始化和投递。
 - `sandbox` 字段仅为接口兼容参数，不能覆盖目标 Desktop 任务的模型、工具、沙箱或审批；这些能力以 Desktop owner 为唯一真源。
 - 创建线程使用固定的调查边界；没有明确实施授权时，只能调查、整理证据和输出方案。
 - `create` 的固定开发说明和所有 `send` 续投都会追加工作区交付约束；未经当前用户明确授权，不得新建额外工作副本、稀疏检出、复制工程或旁路目录；工作区 `AGENTS.md` 有更严格限制时以它为准。具体项目允许的工作副本、同步方向及历史指令的有效性由该工作区当前规则决定。只有改动已经进入用户实际运行或验收的目标工作区，并完成适用的资源关联、构建或编译及运行验证，才能称为“已修复”或“可验收”。
@@ -1828,9 +2140,9 @@ GET /roles/:roleId/memory/consolidation-runs/:runId
 
 ## YeYu Gamer Manager 本机门面
 
-实验性的 YeYu Gamer 接入不是通用 Agent 执行器。启用后，本机 Agent 只能通过 RabiRoute Manager 读取 `/api/agent/yeyu-gamer/{health,meta,snapshot,capabilities}`，以及向 `/api/agent/yeyu-gamer/work-items` 派发 `mode: "plan"` 的 work item。调用方必须使用新鲜 snapshot 的 `stateVersion` 和稳定的幂等键；成功回执只证明 Manager 已记录计划项。
+实验性的 YeYu Gamer 接入不是通用 Agent 执行器。启用后，已鉴权且启用的远端 Agent 与可信本机调用方可通过 RabiRoute Manager 读取 `/api/agent/yeyu-gamer/{health,meta,snapshot,capabilities}`，以及向 `/api/agent/yeyu-gamer/work-items` 派发 `mode: "plan"` 的 work item。调用方必须使用新鲜 snapshot 的 `stateVersion` 和稳定的幂等键；成功回执只证明 Manager 已记录计划项。
 
-门面只接受 loopback 调用，目标固定为 `http://127.0.0.1:8877/api/v1`。凭据来自 YeYu Gamer 本机运行目录的独立 `rabiroute.token`，不得写入 RabiRoute 配置或返回给调用方。接口不提供 claim、decision、capability invocation、Shell、路径、点击或旧脚本入口。配置、请求和无游戏启动验收方式见 [YeYu Gamer Manager 本机接入](yeyu-gamer-manager-integration.md)。
+门面向已鉴权且启用的远端 Agent 提供同一组公开接口；无 Agent 凭据的本机调用继续通过原 loopback、Host、Origin 与转发头检查。下游目标固定为 `http://127.0.0.1:8877/api/v1`。凭据来自 YeYu Gamer 本机运行目录的独立 `rabiroute.token`，不得写入 RabiRoute 配置或返回给调用方。接口不提供 claim、decision、capability invocation、Shell、路径、点击或旧脚本入口。配置、请求和无游戏启动验收方式见 [YeYu Gamer Manager 本机接入](yeyu-gamer-manager-integration.md)。
 
 ## 错误边界
 
@@ -1896,7 +2208,7 @@ GET /roles/:roleId/skills/:skillId
 安装 launcher 会以当前不可变 release 目录作为工作目录，`./` 不指向用户 shell 或项目目录。请明确选择本机 Rabi Agent 安装目录外、已存在的父目录，并为 `--output` 提供绝对文件路径；最终文件必须不存在。以下 Bash 示例仅在你已选择并确认 `$HOME/Downloads` 存在且位于安装目录外时使用；否则替换为你选择的已有目录，不自动创建目录。`$HOME` 由 shell 展开为绝对路径。
 
 ```bash
-node rabi-agent.mjs --api GET "/api/roles/<roleId>/skills/<skillId>/download" --agent "<agentId>" --output "$HOME/Downloads/selected-skill.zip"
+node rabi-agent.mjs --api GET "/api/roles/<roleId>/skills/<skillId>/download" --agent-type codex --id "<FULL_SESSION_ID>" --output "$HOME/Downloads/selected-skill.zip"
 ```
 
 连接程序从私有配置读取 `managerUrl` 和节点凭据，前后核对 `/meta` 的 generation 与实例身份，拒绝重定向。`--output` 仅用于上述 GET 下载；目标父目录须存在，不覆盖已有文件，不自动解压、安装或运行脚本。客户端流式校验 `Content-Length`、`x-rabiroute-content-sha256` 与 ZIP 签名后，以不覆盖方式完成本地文件；返回 `ok`、本地路径、字节数和 SHA-256。失败删除临时文件，不把 JSON 错误保存为 ZIP。普通 `--api` 的 JSON 输出不能用作二进制下载。原子非覆盖完成依赖目标文件系统支持硬链接；不支持的 Mac/NAS 文件系统明确失败，不自动降级为可能覆盖的复制或重命名。若目标已完成但临时文件清理失败，固定错误会以 `committed:true` 提示目标可能已经存在，应先检查现有文件并与可信 SHA-256 人工核对，不自动重下。下载失败保留固定的本地错误码及允许的 HTTP 状态，不回显服务端正文、传输异常或凭据。
@@ -1936,9 +2248,13 @@ Agent 使用 `POST /api/desktop-pet/roles/:roleId/motion`，并用
 接口只控制桌宠，不改变应用窗口焦点或位置，不修改闲逛配置。
 完整参数、幂等与运行限制见[桌宠移动接口](desktop-pet-agent-motion.md)。
 
-## 聊天发送前索引核对
+## 可选的聊天发送前索引核对
 
-所有聊天渠道（QQ、企业微信、微信、飞书、RabiLink、语音、FenneNote 消息、角色聊天面板）共用 `/api/agent/send` 的 `conversationContext`：
+此功能默认关闭。只有用户明确设置 `messageAdapterPolicies.<消息端>.conversationReview.enabled=true` 才执行下述核对；省略或设为 `false` 时，发送不读取聊天历史，也不因历史读取失败要求二次确认。WebGUI 的 Route → 消息端设置 →“发送前聊天核对”可开启或关闭。已配置的消息数量不隐含启用；原配置没有 `enabled` 的也按关闭处理。
+
+读取 Worker 超时返回 HTTP 503、`status=failed`、`errorCode=MANAGER_READ_TIMEOUT`，错误含具体读取任务类别；不再误报 HTTP 400 无效请求。读取失败仍须核对原 deliveryId 回执，不自动重发。此分类修复和缺省依赖移除已有源码测试，不能代替原故障机器的验收。
+
+显式启用后，各聊天渠道（QQ、企业微信、微信、飞书、RabiLink、语音、角色聊天面板）共用 `/api/agent/send` 的 `conversationContext`：
 
 ```json
 { "conversationContext": { "lastReadMessageIndex": "c1.<会话范围>.<账本序号>", "confirmationToken": "<需要确认时，使用本次返回的凭证>" } }
@@ -1953,7 +2269,7 @@ Agent 使用 `POST /api/desktop-pet/roles/:roleId/motion`，并用
 - 省略内容使用返回的 `search.path`（`GET /api/agent/chat-history`）：传 `routeId`、`channel`、JSON 编码的 `params`、`afterSequence`（不含）、`beforeSequence`（含）、`query` 和 `limit`（最多 200）。它按发送目标读取同一正式账本，不要求角色绑定；返回数量仍不代表全部历史。已有 `message-endpoint-history` 同样支持这两个序号范围过滤，不能用平台消息 ID 代替序号。
 - 已初始化账本缺失 `conversation/current.jsonl` 或归档索引，或读取遇到损坏索引、损坏记录、缺失分卷时，历史查询与发送前检查返回错误；先恢复原账本，再重试。首次使用且尚无账本时仍可按空会话完成确认。已有发送回执保持原幂等处理。
 
-计划审批反馈和 FenneNote 纯播放属于结构化动作，不使用聊天索引。既有来源引用、图片、发送前事实核验、文风、长度和幂等检查继续生效；聊天索引核对不改变接口权限。
+计划审批反馈不使用聊天索引。旧 FenneNote 参数已迁移到 speech 渠道，是否核对由 speech 的上述配置决定。既有来源引用、图片、发送前事实核验、文风、长度和幂等检查继续生效；聊天索引核对不改变接口权限。
 
 ## 远端终端接口
 
@@ -1966,3 +2282,21 @@ Agent 使用 `POST /api/desktop-pet/roles/:roleId/motion`，并用
 - GET /api/lan-agent/instances/:instanceId/terminals/:terminalId/events?after=0：SSE 输出。事件含递增 sequence、type=output|exit|gap|disconnected，以及 data 或 exitCode。after 仅用于断线后补漏，不用于轮询；早于 256 KiB 有界缓存时先返回 gap。
 
 同一 terminalId 的重复 open 只返回原会话，类型或目录不同拒绝。input 同序号同内容只返回原接收事实；不同内容、过期回执或跳号拒绝。接收成功仅表示输入已交给原终端，不表示命令成功执行。超时、5xx 或断线后使用 list/get 核对 nextInputSequence，不更换 ID、自动重建或重发。窗口关闭仅断开查看；close 结束会话及子程序。节点连接变化结束原终端和旧流。命令与输出不进入角色、计划或持久日志。容量与进程生命周期见 [连接器说明](../apps/rabi-agent/README.md)。
+
+## 通用可靠 Agent 投递记录
+
+`GET /api/agent/deliveries` 与 `GET /api/agent/deliveries/:deliveryId` 提供正式只读记录，nodeId 选择原电脑队列；`GET /api/agent/deliveries/caller/:callerDeliveryId` 查询当前可信来源的原键，不发送正文。客户端先持久受理明确的 Agent send，再自动恢复原 ID；此行为不改变其它 HTTP 写入的重放合同。[完整合同、GUI 和限制](reliable-agent-delivery.md)。
+
+
+### Agent Hook 消息来源
+
+自动Hook发起的Agent投递使用 `messageSource.type="agent_hook"`，统一显示为 `AgentHook`；普通Agent主动投递仍用 `agent`。两者共享真实来源处理端、完整会话ID与工作目录核验；`sourceAgentType`仍是原会话职责，不能填AgentHook代替角色。新类型经本机、已鉴权远端、端点持久投递和消息历史保留，不允许用它绕过来源或目标校验。旧记录继续按原类型展示，不追写历史。
+
+
+### 查无原计划或会话时的只读恢复提示
+
+确定的计划读取或历史查询 404 保留原状态码、`code` 和 `message`，并在既有 `nextAction` 中提示当前角色范围内的名称查询：`GET /api/roles/:roleId/plans?limit=20&query=<URL编码的名称>&sort=updated`。省略 `query` 可列最近更新计划，沿 `nextCursor` 分页；`limit` 必须保留，否则旧完整目录分支不应用该筛选。查无结果只表示本次范围没有匹配，不能据此新建计划或改绑。
+
+确定 `resolution=missing` 的线程 404 返回只读提示：在原实例与 Agent 绑定内 `POST /api/agent/threads`，使用 `action:list`、原 `agentAdapter`、`query`、`limit:20`、`offset:0` 按名称查询。`query` 留空列出可发现会话，核对返回的 `updatedAt` 判断最近活动，沿 `nextOffset` 翻页；不保证每个 Adapter 的天然排序一致。核对完整 `threadId`、名称和工作目录后读取原任务。原 `deliveryId/actual` 保留，不自动创建替代任务或重发未确认消息。
+
+此提示仅附加于确定的查无分支，不把线程读取的既有 400、管理超时、连接故障或未知回执改称 404，也不保证名称搜索能够修复底层存储或索引问题。

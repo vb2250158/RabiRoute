@@ -1,3 +1,4 @@
+import { ManagerPluginRouteRegistry } from "./managerPluginRouteRegistry.js";
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import http from "node:http";
@@ -5,7 +6,7 @@ import test from "node:test";
 import type { AddressInfo } from "node:net";
 import {
   closeManagerEventClients,
-  handleManagerEventApi,
+  createManagerEventOperationDefinition,
   installManagerSignalHandlers,
   listenManagerServer,
   type ManagerSignalTarget
@@ -54,14 +55,17 @@ test("Manager signal handlers can be removed without leaving duplicate shutdown 
 });
 
 test("Manager shutdown closes active event-stream responses", async (t) => {
+  const registry = new ManagerPluginRouteRegistry();
+  const registration = registry.registerOperations("event-test", [createManagerEventOperationDefinition()]);
   const server = http.createServer((request, response) => {
     const requestUrl = new URL(request.url || "/", "http://127.0.0.1");
-    if (handleManagerEventApi(request, requestUrl, response)) return;
+    if (registry.handle(request, requestUrl, response)) return;
     response.writeHead(404).end();
   });
   await listenManagerServer(server, 0, "127.0.0.1");
   t.after(async () => {
     closeManagerEventClients();
+    await registration.dispose();
     await closeServer(server);
   });
   const address = server.address() as AddressInfo;

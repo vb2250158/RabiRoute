@@ -1,3 +1,4 @@
+import { getTimeoutMs } from "../shared/timeoutSettings.js";
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -6,7 +7,8 @@ import { Worker } from "node:worker_threads";
 import { atomicWriteFileSync, withFileLockSync } from "../shared/filePersistence.js";
 import { recordDataMutationAudit } from "../observability/dataMutationAudit.js";
 
-export type DurableDeliveryReceiptState = "reserved" | "sending" | "completed" | "uncertain";
+export const DURABLE_DELIVERY_RECEIPT_STATES = Object.freeze(["reserved", "sending", "completed", "uncertain"] as const);
+export type DurableDeliveryReceiptState = (typeof DURABLE_DELIVERY_RECEIPT_STATES)[number];
 
 export type DurableDeliveryReceipt<TResult> = {
   version: 1;
@@ -102,7 +104,44 @@ const FAILURE_OWNER_CHANGED = 3;
 const FAILURE_FENCED = 4;
 const FAILURE_EXPIRED = 5;
 const FAILURE_IO = 6;
-const FAILURE_MUTATION_LOCKED = 7;
+const BUSY = "busy";
+
+// Use the same exclusive-file owner record as filePersistence's mutation lock.
+// A busy lock postpones a renewal; it does not revoke the execution's identity.
+function acquireMutationLock() {
+  let descriptor;
+  try { descriptor = fs.openSync(workerData.mutationLockPath, "wx"); }
+  catch (error) {
+    if (error.code === "EEXIST" || (process.platform === "win32" && error.code === "EPERM"
+      && error.syscall === "open" && error.path === workerData.mutationLockPath)) return false;
+    throw error;
+  }
+  let created;
+  let initializationError;
+  try {
+    created = fs.fstatSync(descriptor);
+    fs.writeFileSync(descriptor, JSON.stringify({ owner: workerData.mutationLockOwner,
+      host: workerData.ownerHost, pid: workerData.ownerPid, createdAt: Date.now() }) + "\n", "utf8");
+    fs.fsyncSync(descriptor);
+  } catch (error) { initializationError = error; }
+  try { fs.closeSync(descriptor); } catch (error) { initializationError ||= error; }
+  if (initializationError) {
+    // The token may be only partly written. The exclusive descriptor's inode
+    // proves this failed initialization owns the file; never delete a replacement.
+    try {
+      if (created && sameIdentity(created, fs.statSync(workerData.mutationLockPath))) fs.unlinkSync(workerData.mutationLockPath);
+    } catch (cleanupError) { initializationError.cause ||= cleanupError; }
+    throw initializationError;
+  }
+  return true;
+}
+
+function releaseMutationLock() {
+  try {
+    if (JSON.parse(fs.readFileSync(workerData.mutationLockPath, "utf8")).owner === workerData.mutationLockOwner)
+      fs.unlinkSync(workerData.mutationLockPath);
+  } catch (error) { if (error.code !== "ENOENT") throw error; }
+}
 
 function publishStatus(status) {
   Atomics.store(control, STATUS_INDEX, status);
@@ -157,16 +196,20 @@ function ownedRecord(record) {
     && record.leaseDurationMs === workerData.leaseMs;
 }
 
-function renew(allowExpired) {
+let renewedThrough = 0;
+
+function renew() {
   let descriptor;
+  let locked = false;
   let failure = 0;
   try {
-    // Claim and terminal mutations linearize under this lock. If it already
-    // exists, a contender may have read an expired receipt and decided to
-    // replace it, so this owner must not revive the old execution.
-    if (fs.existsSync(workerData.mutationLockPath)) {
-      heartbeatFailure(FAILURE_MUTATION_LOCKED);
+    // Claim decisions and renewal share one linearization boundary. Never
+    // touch mtime while a contender is deciding from an expired receipt.
+    if (!acquireMutationLock()) {
+      if (renewedThrough && renewedThrough <= Date.now()) heartbeatFailure(FAILURE_EXPIRED);
+      return BUSY;
     }
+    locked = true;
     descriptor = fs.openSync(workerData.receiptPath, "r+");
     const before = fs.fstatSync(descriptor);
     const raw = fs.readFileSync(descriptor, "utf8");
@@ -177,7 +220,7 @@ function renew(allowExpired) {
     if (!Number.isFinite(record.leaseDurationMs) || record.leaseDurationMs <= 0) {
       heartbeatFailure(FAILURE_INVALID);
     }
-    if (!allowExpired && after.mtimeMs + record.leaseDurationMs <= Date.now()) {
+    if (after.mtimeMs + record.leaseDurationMs <= Date.now()) {
       heartbeatFailure(FAILURE_EXPIRED);
     }
     const currentBefore = fs.statSync(workerData.receiptPath);
@@ -195,12 +238,7 @@ function renew(allowExpired) {
     if (!ownedRecord(parseRecord(fs.readFileSync(workerData.receiptPath, "utf8")))) {
       heartbeatFailure(FAILURE_OWNER_CHANGED);
     }
-    // This second check closes acquisition during renewal: a claimant that
-    // acquires after this point must read the mtime we just advanced, while a
-    // claimant that acquired earlier fences publication of this renewal.
-    if (fs.existsSync(workerData.mutationLockPath)) {
-      heartbeatFailure(FAILURE_MUTATION_LOCKED);
-    }
+    renewedThrough = renewed.mtimeMs + record.leaseDurationMs;
     Atomics.add(control, COUNT_INDEX, 1);
   } catch (error) {
     failure = error && Number.isInteger(error.heartbeatFailure)
@@ -210,23 +248,28 @@ function renew(allowExpired) {
     if (descriptor !== undefined) {
       try { fs.closeSync(descriptor); } catch { failure ||= FAILURE_IO; }
     }
+    if (locked) { try { releaseMutationLock(); } catch { failure ||= FAILURE_IO; } }
   }
   return failure ? fail(failure) : true;
 }
 
 try {
-  // No delivery side effect begins until this first ownership proof succeeds.
-  // It may renew a still-current receipt after a slow Worker startup; the
-  // before/after path identity checks fence any contender that claimed first.
-  if (renew(true)) {
+  // Startup must complete an actual, unexpired ownership proof before ACTIVE.
+  let renewal;
+  do {
+    renewal = renew();
+    if (renewal === BUSY) Atomics.wait(control, STOP_INDEX, 0, 10);
+  } while (renewal === BUSY && Atomics.load(control, STOP_INDEX) === 0);
+  if (renewal === true) {
     publishStatus(ACTIVE);
     while (Atomics.load(control, STOP_INDEX) === 0) {
-      Atomics.wait(control, STOP_INDEX, 0, workerData.intervalMs);
+      Atomics.wait(control, STOP_INDEX, 0, renewal === BUSY ? 10 : workerData.intervalMs);
       if (Atomics.load(control, STOP_INDEX) !== 0) break;
-      if (!renew(false)) break;
+      renewal = renew();
+      if (renewal === false) break;
     }
     if (Atomics.load(control, STATUS_INDEX) === ACTIVE) publishStatus(STOPPED);
-  }
+  } else if (renewal === BUSY) publishStatus(STOPPED);
 } catch {
   fail(FAILURE_IO);
 }
@@ -437,7 +480,7 @@ function withReceiptMutationLock<T>(
   return withFileLockSync(
     receiptMutationLockPath(rootDir, namespace, deliveryId),
     action,
-    { timeoutMs: 1_000, staleMs: 5_000 }
+    { timeoutMs: getTimeoutMs("backend.manager.durableDeliveryIdempotency.withReceiptMutationLock.withFileLockSync.timeoutMs", 1_000), staleMs: 5_000 }
   );
 }
 
@@ -687,8 +730,7 @@ function heartbeatFailure(failure: number, phase: string): Error & { code: strin
     [3, "receipt inode changed"],
     [4, "receipt ownership or fencing token changed"],
     [5, "receipt lease expired before renewal"],
-    [6, "heartbeat I/O failed"],
-    [7, "receipt mutation is already being decided"]
+    [6, "heartbeat I/O failed"]
   ]).get(failure) ?? "heartbeat worker did not confirm receipt ownership";
   return Object.assign(new Error(`Durable delivery lease lost during ${phase}: ${detail}.`), {
     code: "DURABLE_DELIVERY_LEASE_LOST"
@@ -696,7 +738,7 @@ function heartbeatFailure(failure: number, phase: string): Error & { code: strin
 }
 
 function waitForReceiptHeartbeatTransition(worker: Worker, control: Int32Array, expected: number): Promise<number> {
-  const deadlineAt = Date.now() + RECEIPT_HEARTBEAT_WAIT_TIMEOUT_MS;
+  const deadlineAt = Date.now() + getTimeoutMs("backend.manager.durableDeliveryIdempotency.RECEIPT_HEARTBEAT_WAIT_TIMEOUT_MS", RECEIPT_HEARTBEAT_WAIT_TIMEOUT_MS);
   const current = (): number => Atomics.load(control, RECEIPT_HEARTBEAT_STATUS_INDEX);
   if (current() !== expected) return Promise.resolve(current());
   return new Promise(resolve => {
@@ -731,6 +773,21 @@ async function startReceiptHeartbeat(input: Readonly<{
   leaseMs: number;
 }>): Promise<() => Promise<void>> {
   const receiptPath = durableDeliveryReceiptPath(input.rootDir, input.namespace, input.deliveryId);
+  const mutationLockPath = receiptMutationLockPath(input.rootDir, input.namespace, input.deliveryId);
+  const mutationLockOwner = `${input.ownerHost}:${input.ownerPid}:${randomUUID()}`;
+  const releaseJoinedWorkerLock = (): void => {
+    try {
+      if (JSON.parse(fs.readFileSync(mutationLockPath, "utf8")).owner === mutationLockOwner) fs.unlinkSync(mutationLockPath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+      // Termination can leave an incomplete token. Without ownership proof,
+      // retain that lock and diagnostic rather than deleting another claimant.
+      recordDataMutationAudit({ group: "delivery", event: "durable_delivery_heartbeat_lock_cleanup_unconfirmed",
+        owner: "durable-delivery-idempotency", action: "release-heartbeat-lock",
+        target: { type: "delivery", id: input.deliveryId },
+        dataSource: { kind: "file", id: `delivery-receipts/${input.namespace}` }, outcome: "failed", error });
+    }
+  };
   const intervalMs = Math.max(50, Math.floor(input.leaseMs / 3));
   const control = new Int32Array(new SharedArrayBuffer(
     Int32Array.BYTES_PER_ELEMENT * RECEIPT_HEARTBEAT_CONTROL_WORDS
@@ -745,7 +802,8 @@ async function startReceiptHeartbeat(input: Readonly<{
       executionId: input.executionId,
       intervalMs,
       leaseMs: input.leaseMs,
-      mutationLockPath: receiptMutationLockPath(input.rootDir, input.namespace, input.deliveryId),
+      mutationLockPath,
+      mutationLockOwner,
       ownerHost: input.ownerHost,
       ownerPid: input.ownerPid,
       receiptPath,
@@ -759,6 +817,7 @@ async function startReceiptHeartbeat(input: Readonly<{
     Atomics.store(control, RECEIPT_HEARTBEAT_STOP_INDEX, 1);
     Atomics.notify(control, RECEIPT_HEARTBEAT_STOP_INDEX);
     await worker.terminate();
+    releaseJoinedWorkerLock();
     throw heartbeatFailure(
       Atomics.load(control, RECEIPT_HEARTBEAT_FAILURE_INDEX),
       startupStatus === RECEIPT_HEARTBEAT_STARTING ? "heartbeat startup" : "initial renewal"
@@ -774,6 +833,7 @@ async function startReceiptHeartbeat(input: Readonly<{
       Atomics.notify(control, RECEIPT_HEARTBEAT_STOP_INDEX);
       await waitForReceiptHeartbeatTransition(worker, control, RECEIPT_HEARTBEAT_ACTIVE);
       await worker.terminate();
+      releaseJoinedWorkerLock();
       worker.unref();
     })();
   };
@@ -1077,7 +1137,7 @@ export async function executeDurableDelivery<TResult>(
       options.rootDir,
       options.namespace,
       deliveryId,
-      options.waitForCompletionMs ?? DEFAULT_WAIT_MS,
+      options.waitForCompletionMs ?? getTimeoutMs("delivery.receiptWait", DEFAULT_WAIT_MS),
       options.requestAuthority
     ) || existing;
     options.requestAuthority?.();

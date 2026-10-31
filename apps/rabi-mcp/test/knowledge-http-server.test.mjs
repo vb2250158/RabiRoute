@@ -19,7 +19,7 @@ test('official HTTP SDK initializes lists calls and closes a stateless loopback 
   await client.close(); await service.close(); await service.close();
   await assert.rejects(fetch(service.address));
 });
-test('HTTP authorization origin cookies path method and body gates fail closed', async t => {
+test('explicit origin policy, authentication and protocol limits explain refusals', async t => {
   let calls = 0;
   const service = await startKnowledgeHttpServer({ tools: { ...tools, call: async () => { calls++; return { ok: true }; } }, token, allowedOrigins: ['https://controller.example'] });
   t.after(() => service.close());
@@ -28,12 +28,12 @@ test('HTTP authorization origin cookies path method and body gates fail closed',
   assert.equal((await post({ authorization: `Bearer ${'x'.repeat(40)}` })).status, 401);
   assert.equal((await post({ origin: 'https://attacker.example' })).status, 403);
   assert.equal((await post({ origin: 'null' })).status, 403);
-  assert.equal((await post({ cookie: 'session=fixture' })).status, 403);
+  assert.notEqual((await post({ cookie: 'session=fixture' })).status, 403);
   const badHost = await new Promise((resolve, reject) => {
     const req = http.request(service.address, { method: 'POST', headers: { ...headers, host: 'attacker.example' } }, res => { res.resume(); res.on('end', () => resolve(res.statusCode)); });
     req.on('error', reject); req.end('{}');
   });
-  assert.equal(badHost, 403);
+  assert.notEqual(badHost, 403);
   assert.equal((await post({}, '{}', service.address + '?role=other')).status, 404);
   assert.equal((await post({}, 'x'.repeat(MAX_KNOWLEDGE_HTTP_BODY + 1))).status, 413);
   const chunked = await new Promise((resolve, reject) => {
@@ -63,7 +63,18 @@ test('HTTP clients cannot expand role write or endpoint authorization', async t 
   }
   assert.equal(calls, 0);
 });
-test('configuration rejects weak secrets and wildcard origins', async () => {
+test('configuration rejects invalid secrets and malformed origin values', async () => {
   for (const value of ['', 'short', undefined, 'x'.repeat(32) + '\n']) await assert.rejects(startKnowledgeHttpServer({ tools, token: value }));
-  for (const origin of ['*', 'null', 'https://example.test/path', 'https://example.test/']) await assert.rejects(startKnowledgeHttpServer({ tools, token, allowedOrigins: [origin] }));
+  for (const origin of ['https://example.test/path', 'https://example.test/']) await assert.rejects(startKnowledgeHttpServer({ tools, token, allowedOrigins: [origin] }));
+});
+test('default origin policy permits authenticated browser requests and aliases', async t => {
+  const service = await startKnowledgeHttpServer({ tools, token, host: '127.0.0.1', maxBodyBytes: 1024 });
+  t.after(() => service.close());
+  const request = { jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} };
+  const response = await fetch(service.address, { method: 'POST', headers: { ...headers, origin: 'https://controller.example', cookie: 'unrelated=1' }, body: JSON.stringify(request) });
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get('access-control-allow-origin'), 'https://controller.example');
+  assert.equal((await fetch(service.address, { method: 'OPTIONS', headers: { origin: 'https://controller.example' } })).status, 204);
+  const oversized = await fetch(service.address, { method: 'POST', headers, body: 'x'.repeat(1025) });
+  assert.equal(oversized.status, 413); assert.match(await oversized.text(), /RABI_MCP_HTTP_MAX_BODY_BYTES/);
 });

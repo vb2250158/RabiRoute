@@ -4,12 +4,14 @@ import http from "node:http";
 import type { AddressInfo } from "node:net";
 import test from "node:test";
 import {
-  handleRabiApi,
   mobileAdapterStates,
   personaProfileIds,
   publicRabiLinkRelayConfig,
   type RabiApiContext
 } from "./rabiApi.js";
+import { createRabiControlOperations } from "./rabiApiOperations.js";
+import { ManagerPluginRouteRegistry } from "./managerPluginRouteRegistry.js";
+import { markAuthenticatedConnectionRequest } from "./connectionRequestAccess.js";
 import type { RouteCatalogPersonaPresentation } from "./routeCatalogTransaction.js";
 
 function persona(
@@ -224,8 +226,12 @@ test("agent binding enforces strong mutation fencing and returns replayable comm
     routeDataDir: () => process.cwd()
   } as unknown as RabiApiContext;
 
+  const registry = new ManagerPluginRouteRegistry();
+  const registration = registry.registerOperations("route-control-test", createRabiControlOperations(context));
+  t.after(() => registration.dispose());
   const server = http.createServer((request, response) => {
-    const handled = handleRabiApi(request, new URL(request.url || "/", "http://127.0.0.1"), response, context);
+    markAuthenticatedConnectionRequest(request);
+    const handled = registry.handle(request, new URL(request.url || "/", "http://127.0.0.1"), response);
     if (!handled) {
       response.statusCode = 404;
       response.end();

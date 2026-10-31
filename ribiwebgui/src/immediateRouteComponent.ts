@@ -1,3 +1,4 @@
+import { getTimeoutMs } from "./timeoutSettingsClient";
 import {
   defineAsyncComponent,
   defineComponent,
@@ -34,7 +35,7 @@ export function createImmediateRouteComponent(
     loadingComponent,
     errorComponent: options.errorComponent,
     delay: 0,
-    timeout: options.timeoutMs ?? ROUTE_LOAD_TIMEOUT_MS,
+    timeout: options.timeoutMs ?? getTimeoutMs("webgui.route.load", 12000),
     suspensible: false
   });
 

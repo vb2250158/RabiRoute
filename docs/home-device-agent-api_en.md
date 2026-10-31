@@ -83,7 +83,7 @@ The catalog includes the existing 15 controlled light, switch, fan, cover, clima
 | `home.media.select_source@1` / `select_sound_mode@1` | `source` / `soundMode` | Currently advertised option; state readback |
 | `home.media.play_media@1` | `url`, `mediaType` | PLAY_MEDIA feature; provider acceptance |
 
-Media URLs are limited to 2048 characters and HTTP(S), without user credentials, query or fragment. Types are `music`, `url` or `audio/*`. Rabi passes the URL to HA/the player; it does not download, relay or convert local paths into device-accessible URLs. The target must be able to access it. Players without PLAY_MEDIA do not expose URL playback. Speech support does not imply arbitrary audio-file playback.
+Media identifiers are limited to 2048 characters. Signed URLs, query/fragment components, `media-source://` identifiers and video content types pass to Home Assistant for provider validation. Rabi passes the URL to HA/the player; it does not download, relay or convert local paths into device-accessible URLs. The target must be able to access it. Players without PLAY_MEDIA do not expose URL playback. Speech support does not imply arbitrary audio-file playback.
 
 ## Speech bindings
 
@@ -134,3 +134,7 @@ Operators configure `vacuum-remote-bindings.json` in the Xiaomi component runtim
 ```
 
 The binding selects an independent HA release timer, not an additional permission. Configure it for 7 seconds with restore=true; HA timer.finished and startup automations must send verified model release codes 2/4/6 and EXIT_REMOTE. Initialization and each pulse start this timer; confirmed release cancels it and failed release retains it. Unverified models, missing entities/actions or absent timers report unavailable. Old step scripts are retired as remote entry points; HA independent stop scripts remain solely for timer/startup compensation. Migrated callers use start/pulse/stop/exit.
+
+## Configured connection restrictions
+
+Home Assistant hostnames, public addresses and HTTP endpoints are usable by default. Explicit `allowPublicBaseUrl=false` restricts requests to literal loopback/private IPs; `allowInsecurePrivateHttp=false` requires HTTPS away from loopback. Both settings also apply to redirects. Change them in Xiaomi Home settings; existing explicit values remain in force. Runtime receipts may use an absolute network-share directory. Camera capture uses HTTP(S); an empty `cameraClipAllowedHosts` list imposes no host restriction, while explicit entries apply to redirects, segments and encryption keys. These are user settings, not hidden feature grants.

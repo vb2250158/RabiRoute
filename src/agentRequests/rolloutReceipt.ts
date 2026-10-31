@@ -1,3 +1,4 @@
+import { getTimeoutMs } from "../shared/timeoutSettings.js";
 import fs from "node:fs";
 import { createInterface } from "node:readline";
 import { deliveryIdFromPrompt, deliveryUserMessagesFromRollout } from "../shared/deliveryIdentity.js";
@@ -19,7 +20,7 @@ export async function* readRolloutUserMessages(filePath: string): AsyncGenerator
   const size = (await fs.promises.stat(filePath)).size;
   if (!size) return;
   const stream = fs.createReadStream(filePath, {
-    encoding: "utf8", end: size - 1, signal: AbortSignal.timeout(30_000)
+    encoding: "utf8", end: size - 1, signal: AbortSignal.timeout(getTimeoutMs("backend.agentRequests.rolloutReceipt.readRolloutUserMessages.AbortSignal.timeout.request", 30_000))
   });
   const lines = createInterface({ input: stream, crlfDelay: Infinity });
   try {

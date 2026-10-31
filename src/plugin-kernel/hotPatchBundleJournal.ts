@@ -1,3 +1,4 @@
+import { getTimeoutMs } from "./runtimeTimeouts.js";
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -70,7 +71,7 @@ export class HotPatchBundleJournal {
   private async withLock<T>(file: string, action: () => Promise<T>): Promise<T> {
     await fs.mkdir(this.root, { recursive: true });
     const lock = `${file}.lock`;
-    const deadline = Date.now() + 5_000;
+    const deadline = Date.now() + getTimeoutMs("patch.journalLock", 5000);
     let handle: Awaited<ReturnType<typeof fs.open>>;
     while (true) {
       try { handle = await fs.open(lock, "wx"); break; }

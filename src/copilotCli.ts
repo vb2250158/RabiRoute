@@ -1,3 +1,4 @@
+import { getTimeoutMs } from "./shared/timeoutSettings.js";
 import fs from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
@@ -84,7 +85,7 @@ function copilotCwd(): string {
 
 function copilotTimeoutMs(): number {
   const value = Number(process.env.COPILOT_CLI_TIMEOUT_MS);
-  return Number.isFinite(value) && value > 0 ? value : 10 * 60 * 1000;
+  return getTimeoutMs("agent.copilot.command", Number.isFinite(value) && value > 0 ? value : 10 * 60 * 1000);
 }
 
 function parseCopilotArgs(): string[] {

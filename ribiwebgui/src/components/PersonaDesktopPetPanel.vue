@@ -2,13 +2,15 @@
 import { userFacingError } from "../userFacingError";
 import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import { DESKTOP_PET_CORNERS, type DesktopPetBinding } from "@shared/desktopSettingsContract";
-import { desktopPetClient, type DesktopPetPackSummary } from "../desktopPetClient";
+import { createDesktopPetClient, type DesktopPetPackSummary } from "../desktopPetClient";
+import { usePersonaService } from "../persona/personaServiceClient";
 import { registerPageSaveAction } from "../pageSaveAction";
 import { useGatewayStore } from "../stores/gatewayStore";
 import { desktopPetActions } from "../desktopPetActions";
 import DesktopPetAnimationPreview from "./DesktopPetAnimationPreview.vue";
 
 const props = defineProps<{ personaId: string }>();
+const desktopPetClient = createDesktopPetClient(usePersonaService().fetch);
 const store = useGatewayStore();
 const binding = ref<DesktopPetBinding | null>(null);
 const packs = ref<DesktopPetPackSummary[]>([]);

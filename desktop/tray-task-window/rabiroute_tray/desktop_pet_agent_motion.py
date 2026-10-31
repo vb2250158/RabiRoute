@@ -1,6 +1,8 @@
 """Manager motion claims rendered through the existing pet window and animations."""
 from __future__ import annotations
 
+from .timeout_settings import get_timeout_seconds
+
 import json
 import math
 import time
@@ -92,7 +94,7 @@ class DesktopPetAgentMotion(QObject):
     def _post(self, value):
         request = Request(self.url, data=json.dumps(value).encode("utf-8"), method="POST",
                           headers={"content-type": "application/json"})
-        with urlopen(request, timeout=5) as response:
+        with urlopen(request, timeout=get_timeout_seconds("desktop.pet.motion", 5)) as response:
             payload = json.loads(response.read().decode("utf-8"))
         if payload.get("code") != 0:
             raise ValueError("Manager rejected motion runtime request.")

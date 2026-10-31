@@ -1,5 +1,9 @@
 export type PluginHost = "manager" | "gateway" | "web" | "desktop";
-export type PluginIdentity = Readonly<{ instanceId: string; pluginId: string; version: string; revision: string; host: PluginHost }>;
+import type { PluginPublicationRegistrar } from "./publication.js";
+export { PublicationScope } from "./publication.js";
+export type { PluginPublication, PluginPublicationContext, PluginPublicationRegistrar } from "./publication.js";
+export type { ApiMethod, ApiSchema, ApiBodyContract, ApiResponseContract, ApiOperationContract, ApiOperationInput, ApiOperationResult, ApiOperationStream, ApiOperationDefinition, ApiOperationRegistration, ApiUpgradeSession, ApiUpgradeInput, ApiUpgradeDefinition, ApiUpgradeRegistration, ApiHttpProxyInput, ApiHttpProxyDefinition, ManagerApiOperationsService } from "./api-operation-contract.js";
+export type PluginIdentity = Readonly<{ applicationGenerationId: string; managerInstanceId: string; activationId: string; instanceId: string; pluginId: string; version: string; revision: string; host: PluginHost }>;
 export type PluginContribution = Readonly<{ kind: string; id: string; value: unknown }>;
 export type PluginDisposer = () => void | Promise<void>;
 export type PluginContext = Readonly<{
@@ -9,6 +13,8 @@ export type PluginContext = Readonly<{
   contributions: ContributionRegistrar;
   permissions: GrantedPermissions;
   effects: EffectScope;
+  lifecycle: Readonly<{ signal: AbortSignal; fail(error: unknown): void }>;
+  publication: PluginPublicationRegistrar;
 }>;
 export type PluginModule = Readonly<{ activate(context: PluginContext): void | Promise<void> }>;
 export function capability(name: string, major: number): string;
@@ -32,6 +38,8 @@ export class ContributionRegistrar {
 }
 export class EffectScope {
   add(starter: () => PluginDisposer | Promise<PluginDisposer>, label?: string): void;
+  adopt(disposer: PluginDisposer, label?: string): void;
+  signal(): AbortSignal;
   commit(): Promise<void>;
   dispose(): Promise<void>;
 }
@@ -48,7 +56,7 @@ export class ScopedStorage {
   entries(): readonly (readonly [string, unknown])[];
 }
 export function createPluginTestHarness(options?: Readonly<{
-  identity?: PluginIdentity;
+  identity?: Partial<PluginIdentity>;
   config?: unknown;
   services?: readonly (readonly [string, unknown])[];
   permissions?: readonly string[];

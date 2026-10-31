@@ -1,6 +1,6 @@
 <!-- docs-language-switch -->
 <div align="center">
-<a href="./operations-and-troubleshooting_en.md">English</a> | 简体中文
+<a href="./operations-and-troubleshooting_en.md">English</a> | 简体中文 | <a href="./operations-and-troubleshooting_ja.md">日本語</a>
 </div>
 <!-- /docs-language-switch -->
 

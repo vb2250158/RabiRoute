@@ -56,7 +56,7 @@ class RabiDeviceAgentWakeConsumer(context: Context, private val controller: Supp
                             if(!RabiAiuiWakeProbeProtocol.validRequestId(nonce))throw IllegalStateException("DEVICE_AGENT_WAKE_NONCE_INVALID")
                             if(!journal.edit().putString(key,"claim-intent").commit())throw IllegalStateException("DEVICE_AGENT_WAKE_JOURNAL_FAILED")
                             val claim=sdk.requestMobileManager(config.baseUrl,config.token,owner,base+"/wake-requests/"+nonce+"/claim","POST","{}",operationId="device-wake:"+nonce+":claim").getJSONObject("data")
-                            val result=dispatch(nonce) {
+                            val result=dispatch(nonce, com.rabi.link.transport.ScopedManagerTimeouts(app,config,owner).get("android.device.wake",15000)) {
                                 val fresh=RabiLinkRelaySettings.load(app)
                                 !closed && generation==current && fresh.configured && RabiGlassStatusPublisher.identity(fresh.baseUrl,fresh.token)==scope
                             }
@@ -77,7 +77,7 @@ class RabiDeviceAgentWakeConsumer(context: Context, private val controller: Supp
         }
     }
 
-    private fun dispatch(nonce:String,stillAuthorized:()->Boolean):String {
+    private fun dispatch(nonce:String,timeoutMs:Long,stillAuthorized:()->Boolean):String {
         val blocked="security-rejected:"+BuildConfig.VERSION_NAME
         if(journal.getBoolean(blocked,false))return "dispatch_security_rejected"
         val state=Pending(nonce);pending=state
@@ -87,7 +87,7 @@ class RabiDeviceAgentWakeConsumer(context: Context, private val controller: Supp
             if(link==null || !link.isLinkReady) {state.result="cxr_not_connected";state.done.countDown();return@post}
             if(!link.sendVideoCommand(RabiAiuiWakeProbeProtocol.command(nonce))) {state.result="dispatch_failed";state.done.countDown()}
         }
-        try {state.done.await(15,TimeUnit.SECONDS)} catch(_:InterruptedException) {Thread.currentThread().interrupt()}
+        try {state.done.await(timeoutMs,TimeUnit.MILLISECONDS)} catch(_:InterruptedException) {Thread.currentThread().interrupt()}
         if(pending===state)pending=null
         if(state.result=="dispatch_security_rejected")journal.edit().putBoolean(blocked,true).commit()
         return state.result

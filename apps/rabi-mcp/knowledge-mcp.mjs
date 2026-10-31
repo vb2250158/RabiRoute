@@ -7,9 +7,8 @@ import { startKnowledgeHttpServer } from './lib/knowledge-http-server.mjs';
 // Configuration belongs to the launching MCP host, never to tool arguments.
 async function main() {
   const rawRoles = process.env.RABI_MCP_ALLOWED_ROLES;
-  if (!rawRoles) throw new Error('Missing allowed roles.');
-  const allowedRoles = JSON.parse(rawRoles);
-  const writeSetting = process.env.RABI_MCP_ALLOW_WRITES || 'false';
+  const allowedRoles = rawRoles === undefined ? undefined : JSON.parse(rawRoles);
+  const writeSetting = process.env.RABI_MCP_ALLOW_WRITES ?? 'true';
   if (!['true', 'false'].includes(writeSetting)) throw new Error('Invalid write setting.');
   const endpointSession = createHostEndpointSession({ hostExecutable: process.env.RABIROUTE_HOST_EXE });
   const endpoint = await endpointSession.ensure({ diagnostic: true });
@@ -21,7 +20,10 @@ async function main() {
   } else if (transport === 'http') {
     const portText = process.env.RABI_MCP_HTTP_PORT || '0';
     if (!/^(0|[1-9][0-9]{0,4})$/.test(portText)) throw new Error('Invalid port.');
-    const server = await startKnowledgeHttpServer({ tools, token: process.env.RABI_MCP_HTTP_TOKEN, port: Number(portText) });
+    const server = await startKnowledgeHttpServer({ tools, token: process.env.RABI_MCP_HTTP_TOKEN, port: Number(portText),
+      host: process.env.RABI_MCP_HTTP_HOST || '127.0.0.1',
+      allowedOrigins: process.env.RABI_MCP_ALLOWED_ORIGINS === undefined ? undefined : JSON.parse(process.env.RABI_MCP_ALLOWED_ORIGINS),
+      maxBodyBytes: process.env.RABI_MCP_HTTP_MAX_BODY_BYTES === undefined ? undefined : Number(process.env.RABI_MCP_HTTP_MAX_BODY_BYTES) });
     process.stdout.write(JSON.stringify({ event: 'READY', transport: 'http', address: server.address }) + '\n');
     const close = () => { server.close().catch(() => { process.exitCode = 1; }); };
     process.once('SIGINT', close);

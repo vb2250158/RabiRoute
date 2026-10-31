@@ -6,6 +6,33 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.4.0 - 2026-10-31
+
+- Linearize durable-delivery heartbeats and claims under the existing execution lock. Brief query contention no longer permanently stops a live lease; expired or replaced owners cannot renew. Failed lock initialization cleans up only its own newly created file.
+- Isolate invalid optional configuration across desktop, Agent, PowerShell and Linux startup paths. Android lets each target API assess its dependencies without disabling all writes for unrelated unavailable capabilities. Recheck connection configuration after asynchronous discovery before binding the first delivery.
+- Include change time and device identity in history-index source checks to detect same-length replacements with restored modification times; rebuild old checkpoints once. Include timeout dependencies in isolated Web builds and asynchronous registration in the API inventory.
+
+- Full plan lists, history and memory-consolidation records use the existing interactive read queue, so stalled background diagnostics do not block those reads. No pool or request budget is added. Source execution now requires Node.js 22.13 or newer for the built-in SQLite dependency.
+
+- Bind development verification to frozen inputs, actual candidates and toolchain fingerprints; reuse deterministic successful results and build selected plugin packages. Existing plugin, source-patch and Web-patch publication owners apply matching verification while retaining their receipts, transactions, rollback and full-build path. See [candidate verification](docs/developer-candidate-admission_en.md).
+- Move gateway diagnostics behavior into its plugin. The host supplies runtime facts and reads one diagnostics snapshot per collection; failed entries retain their identity without blocking healthy entries.
+- Use stable write order and first-write identity for message searches. Rebuild derived legacy ordering without rewriting original records. Persona chat uses a rebuildable persistent idempotency index, bounded summary pages and on-demand bodies; malformed entries remain identifiable while valid records remain usable.
+- Preserve active plugin pages and their resources during updates, including drafts, selections and in-flight work. A save acknowledges only its submitted draft; a different draft cannot inherit an earlier request's success.
+- Avoid constructing disabled log details and isolate sink failures. Build, isolated runtime, GitHub publication and installed activation retain separate evidence. This user-requested minor version does not claim installed activation or long-term performance acceptance.
+
+- Provide executable public API contracts and discovery through the existing business owners, retaining identity, receipts, cancellation, and resource retirement. Extend discovery for remote computer management, personas, devices, recordings, plans, and external listeners.
+- Authenticated connections retain the common public API contract, explicit user disables, revocation, and source identity. Instances, personas, sessions, and working directories remain distinct. Recover original delivery IDs without creating duplicate deliveries from uncertain results.
+- Add Japanese WebGUI navigation and trilingual user guides; align persona message configuration, Hook conditions, and API references. Fix cleared searches, pagination after failed filters, and optional timeout loading that blocked initial rendering.
+- Isolate invalid listener and timeout entries, pass timeout snapshots to persistence workers, retain conflicting record identities, and join asynchronous resource cleanup. NapCat cleanup uses the original owner's actual process identity.
+- Update production dependency security patches and restore previously fixed versions that had regressed. Short GUID native-library temporary names avoid compiler failures on long workspace paths.
+
+- Isolate plan package recovery conflicts by verified plan identity. Valid plans remain readable and writable; affected plans retain transaction fences, unknown ownership still blocks the persona, and `partial` health diagnostics retain the unresolved conflict count.
+
+- Decouple companion memory reads from plan recovery through a bounded read worker; isolate invalid memories while retaining valid summaries. Context-read failures no longer appear as network interruptions, and repeated retry failures share one notice. Source validation and deployment acceptance remain separate; see [failure isolation](docs/companion-mode_en.md#failure-isolation).
+
+- Add WebGUI timeout settings backed by the existing global configuration, with search, default restoration, version preconditions, and save readback. Connect operation waits across Manager, Agents, plugins, desktop, and clients while preserving per-request remaining budgets. Independent services use launch snapshots. See [timeout settings](docs/configuration_en.md#timeout-settings) for activation stages and the configuration API.
+
+
 ## 0.3.72 - 2026-10-31
 
 - Add an installation/user-scoped elevated Host task with one UAC registration and limited-mode fallback. Consume the task marker before Core startup and distinguish a stopped Host from a running instance. Elevation covers Host, plugins and children while preserving existing authenticated API access.
@@ -15,39 +42,56 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 ## 0.3.71 - 2026-10-28
 
+- Remove retired FenneNote entry points: group transcript automation under Speech service while preserving existing rules; remove old creation and independent runtime registration, read legacy configuration as `speech` / `tts`, and retain historical records. Point the workstation guide to RabiSpeech.
+
 - Set the Windows Host Manager `/health` probe deadline to 30 seconds. Cold plan-catalog startup can make that check take more than a few seconds; the probe waits for the current request, and Host rebuilds a generation only after three consecutive failures. Identity checks, required-capability checks, and the shutdown request deadline stay at their existing values.
 
 ## 0.3.70 - 2026-10-27
 
 - Restore the Home Assistant OS installer's UTF-8 BOM so Windows PowerShell 5.1 can parse startup and background recovery entry points. Add bilingual troubleshooting guidance and preserve ownership checks for existing VMs, disks and recovery tasks. Verify recovery task completion separately from HA Core readiness.
 
-## 0.3.69 - 2026-10-26
+- Reduce synchronous network-interface enumeration during WebGUI authorization. Identify same-machine connections from the kernel-provided socket endpoints and retain existing admission for public assets and current credentials. Credential revocation and nonlocal requests are still checked on each call, reducing main-thread blocking during concurrent resource requests.
+- Restore the read-only remote-computer credential compatibility check used before installation. Reuse runtime validation without rewriting credentials, preventing missing admission checks and lost connections after an upgrade.
+- Move Route configuration from the sidebar to Role configuration → Messages, the second tab after Profile. Filter by persona ID and source PC, support multiple Routes, reference the current persona when adding Routes, and explicitly assign unbound Routes.
+- Replace Quick setup in the lower sidebar with Create persona, opening persona creation. Existing Route links select the same Route in its persona's Messages tab; unbound Routes retain the old editor for assignment without replacement personas or tasks.
+- Remove the duplicate creation button from the persona page. Local and authenticated remote personas share the same writable editor. Operations use the source PC's full Manager transport; editor identities and recording caches include that PC to prevent same-name persona mix-ups, without per-feature grants.
+- Keep one configuration owner: persona rules, context, wake words, language style and Hooks in `personaConfig.json`; endpoint connections, handling Agents and sessions in `adapterConfig.json`. Directories and history stay in place. Migrate legacy Route language style while preserving existing persona values.
+- Ship a [configuration upgrade script](docs/persona-message-config-upgrade_en.md) without developer-tool dependencies: preview by default, offline apply with complete snapshots, concurrent-edit checks, atomic file replacement and readback. Supports failure/interruption recovery, repeat runs and explicit restore. Preview and exit every instance sharing the configuration before applying.
 
-- Support existing v2 computer credentials while retaining their format, secrets, connection incarnation and explicit disabled state. Preserve connection-wide access and per-invocation Agent/session context without reverting to per-Agent grants; legacy v1 stores remain compatible.
-- Before stopping the current Host, Setup and local Developer activation check the actual credential store through the candidate's read-only owner. Failure retains the current service without copying or displaying credentials. Hide inapplicable per-Agent grant controls for v2 connections.
+## 0.3.66 - 2026-10-22
 
-## 0.3.68 - 2026-10-26
+- Connect public Manager plugin APIs, HTTP, binary data, streams and WebSocket to runtime contracts and discovery; connectors invoke those contracts. Preserve native request ownership, cancellation, idempotency and resource closure, with every public API available to authenticated remote connections by default.
+- Integrate instance-wide enrollment, explicit Agent types and full session IDs, connector 0.2.12 and persistent message-history indexing with the independent role configuration from 0.3.64. Source changes, installed-runtime, temporary-package and two-computer acceptance remain separate checks.
+- Apply dependency security patches: follow-redirects 1.16.0 → 1.16.1, hono 4.13.9 → 4.13.11 and Vite 6.4.3 → 6.4.4, addressing sensitive redirect headers, static-path decoding and Windows editor launch issues while preserving existing connection authentication and API permissions.
 
-- Include the remote Agent's precompiled native DLLs in the complete Windows package so packaging retains the assets required by the tray and terminal.
-- Update body-parser, fast-uri, ip-address, Zod, and the qs version required by body-parser to compatible fixes within their existing major versions, addressing denial-of-service and URI handling findings from the current dependency audit while preserving public APIs and connection permissions.
-
-## 0.3.67 - 2026-10-24
-
-- Load the bundled icon in the remote Windows Agent tray and status window, size it for the system tray and dispose owned icon resources on exit.
-- Include only the exact tray ICO in signed release assets, retaining exclusion of other ICO files; cover actual WinForms icons and signed asset readback, with bilingual documentation.
-
-## 0.3.66 - 2026-10-24
-
-- Update follow-redirects, Hono and Vite to 1.16.1, 4.13.11 and 6.4.4 respectively, fixing known locked-dependency issues without adding dependencies from the API migration.
-- Fix default Codex Desktop IPC discovery on macOS/Linux: prefer explicit paths, then CODEX_HOME (default ~/.codex), retaining legacy temporary sockets and the Windows named pipe.
-- Add immutable signed release selection by stable node ID, compare-and-set digests and readback of uncertain post-commit outcomes for authenticated remote nodes. Unassigned nodes retain the common manifest and version-only updates stay compatible.
-- Verify node-pty before POSIX startup and update handoff; restore only a missing owner execute bit on the packaged spawn-helper, preserving its bytes and retaining the previous connector on failure. Resolve npm from the running Node installation.
-- Wire the maintenance into existing native routes and installer flow, with signature, CAS, failed-update retention and IPC protocol regression tests and bilingual documentation.
+- Integrate the producer-owned context source and self-context filtering from rabi-dsh-context 0.1.2, retaining local API-contract migration, instance-wide enrollment, message-history search and dependency security patches.
 
 ## 0.3.65 - 2026-10-21
 
 - Update rabi-dsh-context to 0.1.2. Injected messages use a producer-owned source.kind, fixing failed turns when DSH V4 sessions reject the generic plugin source. Text injected by the plugin is excluded from subsequent user-prompt submissions to Manager. Lifecycle decisions and connection behavior remain unchanged.
 - Add regression assertions for the message source and self-context filtering, and update both plugin READMEs.
+
+## In development: instance-wide access and connector 0.2.12
+
+- Connector 0.2.12 uses the file-upload waiting budget (30 minutes by default) for `POST /api/agent/send`, including file verification and platform upload. Explicit `--timeout-ms` takes precedence. Cancellation or timeout does not prove failure: query the original deliveryId receipt and never replay automatically. NapCat failures retain the action, HTTP status, retcode or safe transport error code, without raw upstream text, credentials or host paths. Missing diagnostics cannot be reconstructed for historical generic 502 receipts.
+
+- Connector 0.2.11 refreshes the stable launcher from the committed successor, removing stale control code after upgrades. Preparation preserves the old launcher; post-commit failures recover through the original owner without replaying tasks.
+
+- Connector 0.2.10 fixes the handshake-size limit incorrectly rejecting launcher status/recovery receipts and preserves Unicode across chunks. Full bounded history is readable while owner and credential checks remain intact.
+
+- Connector 0.2.9 reports the OS hostname as the default remote instance name. Upgrading fills unnamed nodes on reconnect; manual aliases remain intact, and clearing one restores the hostname.
+
+- Keep one instance switch, enabled by default. Enrolled, enabled computers use every public API without another browser login or feature grant.
+- Remove saved default/managed sessions, per-Agent grant endpoints and the artifact-only read key. Each invocation supplies its actual type and full session ID; directories remain queryable.
+- Migrate old private state with exact recovery snapshots, retaining node credentials, real tasks and receipts.
+- Resolve npm from the current Windows, macOS/Linux or Homebrew Node installation without requiring a login-shell PATH.
+- Explicitly include optional dependencies and prepend the running Node directory to installer PATH. POSIX candidates must start and exit a real terminal before taking over. Candidates repair dependencies omitted by old updaters before acknowledging readiness; failure retains the current version.
+
+## In development: message-history search
+
+- Query local persistent FTS5 gram indexes with literal short-term matching. Separate background incremental indexing from online queries while preserving source-scoped deduplication and response semantics.
+- Recommend a 3-second client budget and enforce a 2.5-second HTTP response deadline including queueing. Unready, changed-source and deadline failures remain explicit; no source-scan fallback.
+- See [persistent message search](docs/message-history-search_en.md); capacity and installed-runtime claims require acceptance evidence.
 
 ## 0.3.64 - 2026-10-20
 

@@ -3,18 +3,22 @@ import http from "node:http";
 import fs from "node:fs";
 import type { AddressInfo } from "node:net";
 import test, { type TestContext } from "node:test";
-import { handleRabiApi, type RabiApiContext } from "./rabiApi.js";
+import type { RabiApiContext } from "./rabiApi.js";
+import { createRabiControlOperations } from "./rabiApiOperations.js";
+import { ManagerPluginRouteRegistry } from "./managerPluginRouteRegistry.js";
+import { markAuthenticatedConnectionRequest } from "./connectionRequestAccess.js";
 import { readRabiLinkHome, RabiLinkHomeError } from "./rabiLinkHome.js";
 import type { RabiLinkRelayGlobalConfig } from "./globalConfig.js";
-import { authorizeAgentApiOperation } from "./agentApiPolicy.js";
 
-test("route-control declares the read-only home route behind existing Manager authorization", () => {
+
+test("route-control installs link home from the same executable operation definitions", () => {
   const plugin = fs.readFileSync(new URL("../../plugins/builtin/io.rabiroute.manager.route-control/1.0.0/manager.mjs", import.meta.url), "utf8");
-  assert.match(plugin, /routeId: "rabi-link-home", kind: "exact", path: "\/api\/rabi\/link-home", methods: \["GET"\]/);
-});
-
-test("remote Agent authorization does not grant access to link home", () => {
-  assert.deepEqual(authorizeAgentApiOperation("GET", "/api/rabi/link-home"), { allowed: false, reason: "operation_not_allowed" });
+  assert.match(plugin, /host\.manager\.route-control-registration@1/);
+  assert.match(plugin, /runtime\.prepareRegistration\(\)/);
+  const registration = fs.readFileSync(new URL("../plugin-runtime-host/routeControlAsyncRegistration.ts", import.meta.url), "utf8");
+  assert.match(registration, /registerOperationsAsync/);
+  assert.match(registration, /original\.createRabiControlOperations\(\)/);
+  assert.doesNotMatch(plugin, /handleRabiApi|pathPrefix:|routeId:/);
 });
 
 async function server(t: TestContext, handler: http.RequestListener): Promise<string> {
@@ -33,8 +37,12 @@ function send(response: http.ServerResponse, body: unknown): void {
 }
 async function manager(t: TestContext, read: () => RabiLinkRelayGlobalConfig, readGuid = () => "local-guid"): Promise<string> {
   const context = { applicationGenerationId: "test-generation", managerInstanceId: "test-manager", version: () => "0.3.19", globalConfig: { read: () => ({ rabiLinkRelay: read(), rabiGuid: readGuid() }) } } as unknown as RabiApiContext;
+  const registry = new ManagerPluginRouteRegistry();
+  const registration = registry.registerOperations("route-control-home-test", createRabiControlOperations(context));
+  t.after(() => registration.dispose());
   return server(t, (request, response) => {
-    if (!handleRabiApi(request, new URL(request.url || "/", "http://localhost"), response, context)) { response.statusCode = 404; response.end(); }
+    markAuthenticatedConnectionRequest(request);
+    if (!registry.handle(request, new URL(request.url || "/", "http://localhost"), response)) { response.statusCode = 404; response.end(); }
   });
 }
 

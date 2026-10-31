@@ -6,16 +6,20 @@ import { createHash } from 'node:crypto';
 
 const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const digest = data => createHash('sha256').update(data).digest('hex');
-export async function assertLocalDirectory(value) {
-  if (!path.isAbsolute(value) || /^[/\\]{2}/.test(value)) throw new Error('An absolute local directory is required.');
-  const real = await fs.realpath(value);
-  if (/^[/\\]{2}/.test(real)) throw new Error('Network paths are not allowed.');
-  if (process.platform === 'win32') {
-    const drive = path.parse(real).root.slice(0, 2);
-    const probe = spawnSync('pwsh', ['-NoProfile', '-NonInteractive', '-Command', "$d=Get-CimInstance Win32_LogicalDisk | Where-Object DeviceID -eq $env:RABI_BUILD_DRIVE; if (!$d -or $d.DriveType -ne 3) { exit 1 }"], { env: { ...process.env, RABI_BUILD_DRIVE: drive }, encoding: 'utf8', timeout: 10000, windowsHide: true });
-    if (probe.error || probe.status !== 0) throw new Error('Build directory must reside on a verified fixed local disk.');
-  }
+export async function assertBuildDirectory(value, filesystem = fs) {
+  if (!path.isAbsolute(value)) throw new Error('An absolute directory is required.');
+  const real = await filesystem.realpath(value);
+  if (!(await filesystem.stat(real)).isDirectory()) throw new Error('Build path must be a directory.');
   return real;
+}
+async function npmCommand() {
+  if (process.platform !== 'win32') return { executable: 'npm', args: [] };
+  const candidates = [process.env.npm_execpath, ...[path.dirname(process.execPath), ...(process.env.PATH || '').split(path.delimiter)]
+    .map(directory => path.join(directory, 'node_modules', 'npm', 'bin', 'npm-cli.js'))].filter(Boolean);
+  for (const candidate of candidates) {
+    try { if ((await fs.stat(candidate)).isFile()) return { executable: process.execPath, args: [candidate] }; } catch {}
+  }
+  throw new Error('npm-cli.js was not found; install npm or set npm_execpath before building.');
 }
 async function regular(file) {
   const info = await fs.lstat(file);
@@ -24,9 +28,9 @@ async function regular(file) {
 }
 export async function buildArtifact(output) {
   if (!output || !path.isAbsolute(output)) throw new Error('Pass an explicit absolute --output directory.');
-  await assertLocalDirectory(appRoot);
+  await assertBuildDirectory(appRoot);
   const destination = path.resolve(output);
-  await assertLocalDirectory(path.dirname(destination));
+  await assertBuildDirectory(path.dirname(destination));
   try { await fs.lstat(destination); throw new Error('Output already exists; refusing overwrite.'); }
   catch (error) { if (error.code !== 'ENOENT') throw error; }
   const required = ['package.json', 'package-lock.json', 'README.md', 'README_en.md', 'knowledge-mcp.mjs'];
@@ -41,9 +45,8 @@ export async function buildArtifact(output) {
   for (const [name, bytes] of inputs) if (name !== 'knowledge-mcp.mjs') await fs.writeFile(path.join(destination, name), bytes, { flag: 'wx' });
   const bundled = await fs.readFile(path.join(destination, 'knowledge-mcp.mjs'), 'utf8');
   if (/(?:from\s*|import\s*\()\s*['"]\.\.?\//.test(bundled)) throw new Error('Artifact retains a relative runtime import.');
-  const install = process.platform === 'win32'
-    ? spawnSync('cmd.exe', ['/d', '/s', '/c', 'npm ci --omit=dev --ignore-scripts --no-audit --no-fund --bin-links=false'], { cwd: destination, stdio: 'inherit', windowsHide: true })
-    : spawnSync('npm', ['ci', '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund', '--bin-links=false'], { cwd: destination, stdio: 'inherit' });
+  const npm = await npmCommand();
+  const install = spawnSync(npm.executable, [...npm.args, 'ci', '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund', '--bin-links=false'], { cwd: destination, stdio: 'inherit', windowsHide: true });
   if (install.error || install.status !== 0) throw new Error('Artifact dependency installation failed; incomplete output retained for inspection.');
   const sourceInputs = [];
   for (const name of Object.keys(result.metafile.inputs).sort()) {
@@ -68,6 +71,6 @@ export async function buildArtifact(output) {
 }
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const args = process.argv.slice(2);
-  if (args.length !== 2 || args[0] !== '--output') { console.error('Usage: node scripts/build.mjs --output <new-absolute-local-directory>'); process.exitCode = 1; }
+  if (args.length !== 2 || args[0] !== '--output') { console.error('Usage: node scripts/build.mjs --output <new-absolute-directory>'); process.exitCode = 1; }
   else { try { console.log(JSON.stringify(await buildArtifact(args[1]))); } catch (error) { console.error(error.message); process.exitCode = 1; } }
 }

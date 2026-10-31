@@ -1,3 +1,4 @@
+import { getTimeoutMs } from "../shared/timeoutSettings.js";
 import { readNapCatGroupFiles, type GroupFilesPage, type NapCatEndpoint } from "../napcat.js";
 
 /** Immutable evidence from the original delivery; names cannot identify a file. */
@@ -75,7 +76,7 @@ export async function verifyQqFileCurrentPresence(original: OriginalQqFileBindin
     const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout> | undefined;
     const timeout = new Promise<never>((_, reject) => {
-      timer = setTimeout(() => { controller.abort(); reject(new Error("Verification deadline")); }, 3000);
+      timer = setTimeout(() => { controller.abort(); reject(new Error("Verification deadline")); }, getTimeoutMs("deadline.manager.agentDeliveryVerification.verifyQqFileCurrentPresence", 3000));
     });
     const bounded = <T>(operation: Promise<T>): Promise<T> => Promise.race([operation, timeout]);
     try {

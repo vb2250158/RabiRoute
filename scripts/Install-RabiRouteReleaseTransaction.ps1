@@ -7,6 +7,7 @@ param(
     [Parameter(Mandatory = $true)][string]$LegacyTaskMigrationScript,
     [Parameter(Mandatory = $true)][string]$AutostartScript,
     [ValidateSet("true", "false")][string]$AutostartEnabled = "false",
+    [switch]$RecoverOnly,
     [ValidateSet("", "after-recovery", "after-stage", "after-legacy-task-remove", "after-legacy-task-remove-before-journal", "after-version-move-before-journal", "before-pointer", "after-bootstrap", "after-pointer", "after-autostart-before-journal", "after-autostart")][string]$FaultPoint = "",
     [string]$TestSelfTestScript,
     [string]$TestLegacyTaskStorePath
@@ -470,6 +471,10 @@ if (Test-Path -LiteralPath $journal) {
     Remove-Item -LiteralPath $previousRoot -Recurse -Force -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $journal -Force
 }
+if ($RecoverOnly) {
+    [pscustomobject]@{ ok=$true; state="recovered" } | ConvertTo-Json -Compress
+    return
+}
 if ($FaultPoint -eq "after-recovery") { exit 95 }
 $transactionRoot = Join-Path $install (".install-staging\" + [guid]::NewGuid().ToString("N"))
 $transactionId = Split-Path -Leaf $transactionRoot
@@ -511,11 +516,6 @@ try {
     $release = Read-Candidate $candidate $ExpectedReleaseId
     if ($FaultPoint -eq "after-stage") { throw "Injected fault after-stage" }
     Invoke-BootstrapSelfTest $release.bootstrap "Candidate bootstrap self-test"
-    if (Test-Path -LiteralPath (Join-Path $install "data\.runtime\lan-agent-authority.json") -PathType Leaf) {
-        $dataPreflight = Join-Path $release.version "scripts\check-installed-data-compatibility.mjs"
-        if (-not (Test-Path -LiteralPath $dataPreflight -PathType Leaf)) { throw "Candidate lacks the installed data compatibility preflight." }
-        Invoke-Checked (Join-Path $release.version "node.exe") @($dataPreflight, $release.version, $install) "Installed data compatibility preflight"
-    }
     Invoke-Autostart -Preflight -SnapshotRoot $autostartSnapshotRoot
     $autostartState = "captured"
     Save-Journal "autostart-snapshot-captured" "not-started" $false

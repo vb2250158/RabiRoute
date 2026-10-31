@@ -1,13 +1,15 @@
-import type http from "node:http";
-import fs, { constants } from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
-import { pipeline } from "node:stream/promises";
-import { Transform } from "node:stream";
-import { assertTrustedLanAgentPrincipal } from "./lanAgentRequestAccess.js";
-import { ManagerReadWorkerError } from "./managerReadWorkerPool.js";
-import { roleSkillArchiveLimits } from "./roleSkillArchive.js";
-import { parseRoleSkillDownloadRoute } from "./roleKnowledgeRoute.js";
+import { getTimeoutMs } from "../shared/timeoutSettings.js";
+import type http from 'node:http';
+import fs, { constants, type FileHandle } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import { finished } from 'node:stream/promises';
+import type { ReadStream } from 'node:fs';
+import { ManagerReadWorkerError } from './managerReadWorkerPool.js';
+import { roleSkillArchiveLimits } from './roleSkillArchive.js';
+import { preparePersonaResourceAdmission, type PersonaResourceIdentity } from './personaResourceAdmission.js';
+import { isPortableSkillArchiveSegment } from '../shared/skillArchivePath.js';
+import { sanitizeRoleId } from '../shared/routeIdentity.js';
 
 export type RoleSkillArchiveReply =
   | { ok: true; sizeBytes: number; sha256: string; fileCount: number }
@@ -31,134 +33,82 @@ export class RoleSkillDownloadAdmission {
 }
 const downloadAdmission = new RoleSkillDownloadAdmission();
 
-type Context = {
+export type RoleSkillDownloadContext = {
+  identity?(): PersonaResourceIdentity;
   roleDirectory: (roleId: string) => string;
   archive: (roleDir: string, skillId: string, outputPath: string, options: {
     signal: AbortSignal;
     /** Must be invoked on late confirmed worker exit after termination_unconfirmed. */
     onWorkerReleased: () => void;
   }) => Promise<RoleSkillArchiveReply>;
-  json: (response: http.ServerResponse, status: number, body: unknown) => void;
   /** Existing host error logging; do not log private source or archive paths. */
   reportCleanupError: () => void;
   temporaryRoot?: string;
   admission?: RoleSkillDownloadAdmission;
   transferTimeoutMs?: number;
 };
-const archiveErrorStatus = { not_found: 404, unsafe_path: 403, too_large: 413, conflict: 409 } as const;
 
-/** The caller performs authentication and persona authorization before entering this route. */
-export function handleRoleSkillDownloadApi(
-  request: http.IncomingMessage, pathname: string, response: http.ServerResponse, context: Context
-): boolean {
-  let route: ReturnType<typeof parseRoleSkillDownloadRoute>;
-  try { route = parseRoleSkillDownloadRoute(pathname); }
-  catch { context.json(response, 403, { code: -1, error: "INVALID_SKILL_DOWNLOAD_PATH" }); return true; }
-  if (!route) return false;
-  if (request.method !== "GET") {
-    context.json(response, 405, { code: -1, error: "GET_REQUIRED" }); return true;
-  }
-  if (new URL(request.url || pathname, "http://request.invalid").search) {
-    context.json(response, 400, { code: -1, error: "SKILL_DOWNLOAD_QUERY_NOT_SUPPORTED" }); return true;
-  }
-  void transfer(request, response, route, context).catch(() => context.reportCleanupError());
-  return true;
-}
+const archiveErrorStatus={not_found:404,unsafe_path:403,too_large:413,conflict:409} as const;
+export const ROLE_SKILL_DOWNLOAD_FRAME_BYTES=64*1024;
+function fail(statusCode:number,code:string):never {throw Object.assign(new Error(code),{statusCode,publicCode:code});}
 
-async function transfer(
-  request: http.IncomingMessage, response: http.ServerResponse,
-  route: { roleId: string; skillId: string }, context: Context
-): Promise<void> {
-  if (request.aborted || response.destroyed) return;
-  const releaseLease = (context.admission ?? downloadAdmission).acquire();
-  if (!releaseLease) {
-    context.json(response, 503, { code: -1, error: "SKILL_DOWNLOAD_BUSY" });
-    return;
-  }
-  const controller = new AbortController();
-  const abort = () => controller.abort();
-  const closed = () => { if (!response.writableEnded) abort(); };
-  request.once("aborted", abort);
-  response.once("close", closed);
-  let lease: string | undefined;
-  let workerReleased = false;
-  let quarantined = false;
-  let transferTimer: NodeJS.Timeout | undefined;
-  let cleanupFlight: Promise<void> | undefined;
-  const cleanup = () => cleanupFlight ??= (async () => {
-    if (lease) await fs.rm(lease, { recursive: true, force: true });
-    // Failed cleanup retains admission rather than allowing unbounded orphan artifacts.
-    releaseLease();
-  })();
-  const onWorkerReleased = () => {
-    workerReleased = true;
-    if (quarantined) void cleanup().catch(() => context.reportCleanupError());
-  };
-  try {
-    if (request.aborted || response.destroyed) abort();
-    controller.signal.throwIfAborted();
-    const roleDir = context.roleDirectory(route.roleId);
-    // A fresh private lease lives outside public resource trees. Only the worker gets its path.
-    lease = await fs.mkdtemp(path.join(context.temporaryRoot ?? os.tmpdir(), "rabiroute-skill-"));
-    controller.signal.throwIfAborted();
-    const outputPath = path.join(lease, "download.zip");
-    const result = await context.archive(roleDir, route.skillId, outputPath, { signal: controller.signal, onWorkerReleased });
-    controller.signal.throwIfAborted();
-    assertTrustedLanAgentPrincipal(request);
-    if (!result.ok) {
-      context.json(response, archiveErrorStatus[result.code], { code: -1, error: `SKILL_ARCHIVE_${result.code.toUpperCase()}` });
-      return;
-    }
-    if (!Number.isSafeInteger(result.sizeBytes) || result.sizeBytes < 22
-      || result.sizeBytes > roleSkillArchiveLimits.maxArchiveBytes || !/^[a-f0-9]{64}$/i.test(result.sha256)) {
-      throw new Error("Invalid archive result.");
-    }
-    const transferTimeout = context.transferTimeoutMs ?? roleSkillDownloadPolicy.transferTimeoutMs;
-    if (!Number.isSafeInteger(transferTimeout) || transferTimeout < 1) throw new Error("Invalid transfer timeout.");
-    transferTimer = setTimeout(() => { abort(); response.destroy(); }, transferTimeout);
-    transferTimer.unref();
-    const file = await fs.open(outputPath, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
-    try {
-      const stat = await file.stat();
-      if (!stat.isFile() || stat.nlink !== 1 || stat.size !== result.sizeBytes) throw new Error("Invalid archive artifact.");
-      controller.signal.throwIfAborted();
-      assertTrustedLanAgentPrincipal(request);
-      const asciiName = `${route.skillId}.zip`.replace(/[^A-Za-z0-9._-]/g, "_");
-      response.writeHead(200, {
-        "content-type": "application/zip",
-        "content-length": String(result.sizeBytes),
-        "content-disposition": `attachment; filename="${asciiName}"; filename*=UTF-8''${encodeURIComponent(`${route.skillId}.zip`).replace(/'/g, "%27")}`,
-        "x-rabiroute-content-sha256": result.sha256.toLowerCase(),
-        "etag": `"sha256-${result.sha256.toLowerCase()}"`,
-        "cache-control": "private, no-store",
-        "x-content-type-options": "nosniff"
-      });
-      const authorityGuard = new Transform({
-        transform(chunk, encoding, callback) {
-          try { assertTrustedLanAgentPrincipal(request); callback(null, chunk); }
-          catch (error) { callback(error instanceof Error ? error : new Error(String(error))); }
+/** Native private archive lease; the original pool retains quarantined worker ownership. */
+export function createRoleSkillDownloadOwner(context:RoleSkillDownloadContext) {
+  return {prepare(request:http.IncomingMessage,roleId:string,skillId:string,signal?:AbortSignal) {
+    const admission=preparePersonaResourceAdmission(request,signal,context.identity);
+    if(!isPortableSkillArchiveSegment(roleId)||sanitizeRoleId(roleId)!==roleId||!isPortableSkillArchiveSegment(skillId)||skillId.includes('%'))fail(403,'INVALID_SKILL_DOWNLOAD_PATH');
+    const roleDir=context.roleDirectory(roleId);
+    const assertCurrent=()=>{admission();if(path.resolve(context.roleDirectory(roleId))!==path.resolve(roleDir))throw Object.assign(new Error('Persona directory changed while archiving the original Skill.'),{statusCode:409});};
+    return {async archive(hasQuery:boolean) {
+      assertCurrent();if(hasQuery)fail(400,'SKILL_DOWNLOAD_QUERY_NOT_SUPPORTED');
+      const releaseLease=(context.admission??downloadAdmission).acquire();
+      if(!releaseLease)fail(503,'SKILL_DOWNLOAD_BUSY');
+      const controller=new AbortController();
+      const abort=()=>controller.abort(signal?.reason);
+      signal?.addEventListener('abort',abort,{once:true});if(signal?.aborted)abort();
+      let lease:string|undefined,file:FileHandle|undefined,stream:ReadStream|undefined,closed:Promise<void>|undefined;
+      let workerReleased=false,quarantined=false,timer:ReturnType<typeof setTimeout>|undefined,cleanupFlight:Promise<void>|undefined;
+      const cleanup=()=>cleanupFlight??=(async()=>{
+        if(timer)clearTimeout(timer);signal?.removeEventListener('abort',abort);
+        stream?.destroy();if(closed)await closed;if(file)await file.close();
+        if(lease){
+          const parent=path.resolve(context.temporaryRoot??os.tmpdir());
+          if(path.dirname(path.resolve(lease))!==parent||!path.basename(lease).startsWith('rabiroute-skill-'))throw new Error('Invalid private archive cleanup target.');
+          await fs.rm(lease,{recursive:true,force:true});
         }
-      });
-      await pipeline(file.createReadStream(), authorityGuard, response, { signal: controller.signal });
-    } finally { await file.close(); }
-  } catch (error) {
-    if (error instanceof ManagerReadWorkerError && error.code === "termination_unconfirmed") {
-      // The pool retains its slot. Never delete a directory a live worker can still write.
-      quarantined = !workerReleased;
-    }
-    if (controller.signal.aborted || response.destroyed) return;
-    if (response.headersSent) { response.destroy(); return; }
-    try { assertTrustedLanAgentPrincipal(request); }
-    catch { context.json(response, 403, { code: -1, error: "LAN_AGENT_AUTHORIZATION_REVOKED" }); return; }
-    const unavailable = error instanceof ManagerReadWorkerError
-      && ["busy", "timeout", "termination_unconfirmed"].includes(error.code);
-    context.json(response, unavailable ? 503 : 500, {
-      code: -1, error: unavailable ? "SKILL_ARCHIVE_UNAVAILABLE" : "SKILL_ARCHIVE_FAILED"
-    });
-  } finally {
-    if (transferTimer) clearTimeout(transferTimer);
-    request.removeListener("aborted", abort);
-    response.removeListener("close", closed);
-    if (!quarantined) await cleanup();
-  }
+        releaseLease!();
+      })().catch(error=>{context.reportCleanupError();throw error;});
+      const onWorkerReleased=()=>{workerReleased=true;if(quarantined)void cleanup().catch(()=>{});};
+      try {
+        controller.signal.throwIfAborted();assertCurrent();
+        lease=await fs.mkdtemp(path.join(context.temporaryRoot??os.tmpdir(),'rabiroute-skill-'));
+        controller.signal.throwIfAborted();assertCurrent();
+        const outputPath=path.join(lease,'download.zip');
+        const result=await context.archive(roleDir,skillId,outputPath,{signal:controller.signal,onWorkerReleased});
+        controller.signal.throwIfAborted();assertCurrent();
+        if(!result.ok)fail(archiveErrorStatus[result.code],'SKILL_ARCHIVE_'+result.code.toUpperCase());
+        if(!Number.isSafeInteger(result.sizeBytes)||result.sizeBytes<22||result.sizeBytes>roleSkillArchiveLimits.maxArchiveBytes||!/^[a-f0-9]{64}$/i.test(result.sha256))throw new Error('Invalid archive result.');
+        const timeout=context.transferTimeoutMs?? getTimeoutMs("persona.skillDownload", roleSkillDownloadPolicy.transferTimeoutMs);
+        if(!Number.isSafeInteger(timeout)||timeout<1)throw new Error('Invalid transfer timeout.');
+        timer=setTimeout(()=>controller.abort(new Error('Skill transfer deadline exceeded.')),timeout);timer.unref();
+        file=await fs.open(outputPath,constants.O_RDONLY|(constants.O_NOFOLLOW??0));
+        const stat=await file.stat();
+        if(!stat.isFile()||stat.nlink!==1||stat.size!==result.sizeBytes)throw new Error('Invalid archive artifact.');
+        controller.signal.throwIfAborted();assertCurrent();
+        stream=file.createReadStream({highWaterMark:ROLE_SKILL_DOWNLOAD_FRAME_BYTES,signal:controller.signal});
+        closed=finished(stream).then(()=>{},()=>{});
+        const ownedStream=stream;
+        const frames=(async function*(){try{for await(const chunk of ownedStream){assertCurrent();yield Buffer.from(chunk);}}finally{await cleanup();}})();
+        const asciiName=`${skillId}.zip`.replace(/[^A-Za-z0-9._-]/g,'_');
+        return {headers:{'content-type':'application/zip','content-length':String(result.sizeBytes),'content-disposition':`attachment; filename="${asciiName}"; filename*=UTF-8''${encodeURIComponent(`${skillId}.zip`).replace(/'/g,'%27')}`,
+          'x-rabiroute-content-sha256':result.sha256.toLowerCase(),etag:`"sha256-${result.sha256.toLowerCase()}"`,'cache-control':'private, no-store','x-content-type-options':'nosniff'},
+          stream:{frames,signal:controller.signal,async cancel(reason?:unknown){controller.abort(reason);await cleanup();}}};
+      }catch(error){
+        if(error instanceof ManagerReadWorkerError&&error.code==='termination_unconfirmed')quarantined=!workerReleased;
+        if(!quarantined)await cleanup();
+        else{if(timer)clearTimeout(timer);signal?.removeEventListener('abort',abort);}
+        throw error;
+      }
+    }};
+  }};
 }

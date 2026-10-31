@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -6,10 +7,12 @@ import path from 'node:path';
 import http from 'node:http';
 import { once } from 'node:events';
 import { createRabiLinkAgentDevices } from './rabiLinkAgentDevices.js';
+import { createRabiLinkAgentDeviceOperations } from './rabiLinkAgentDeviceOperations.js';
+import { ManagerPluginRouteRegistry } from './managerPluginRouteRegistry.js';
 
 test('PC owns scoped profile CAS, signed self receipts, source validation and restart-safe operations', async t => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'rabi-pc-profile-'));
-  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  t.after(() => { assert.equal(path.dirname(path.resolve(directory)), path.resolve(os.tmpdir())); fs.rmSync(directory, { recursive: true, force: true }); });
   const make = () => createRabiLinkAgentDevices({ dataDir: directory, sourceDeviceId: 'pc-owner',
     deviceOwnerTarget: async id => id === 'other-owner-device' ? 'other-pc' : 'pc-owner',
     authorize: req => req.headers['x-test-auth'] === '1' ? { scope: String(req.headers['x-test-scope'] || 'app-one'), sourceDeviceId: String(req.headers['x-test-device'] || 'glasses-one'), deviceOwner: req.headers['x-test-admin'] !== '1' } : null,
@@ -17,13 +20,13 @@ test('PC owns scoped profile CAS, signed self receipts, source validation and re
     readTarget: async (id, pathname) => { assert.equal(id, 'pc-persona'); assert.equal(pathname, '/api/personas'); return { personas: [{ personaId: 'Remote' }] }; }
   });
   let owner = make();
+  const registry = new ManagerPluginRouteRegistry();
+  const registration = registry.registerOperations('fixture-profiles', createRabiLinkAgentDeviceOperations(() => owner));
   const server = http.createServer(async (req, res) => {
-    const chunks: Buffer[] = []; for await (const chunk of req) chunks.push(chunk);
-    const body = chunks.length ? JSON.parse(Buffer.concat(chunks).toString('utf8')) : undefined;
-    if (!await owner.handle(req, res, new URL(req.url || '/', 'http://fixture'), body)) res.writeHead(404).end();
+    if (!registry.handle(req, new URL(req.url || '/', 'http://fixture'), res)) res.writeHead(404).end();
   });
   server.listen(0, '127.0.0.1'); await once(server, 'listening');
-  t.after(() => new Promise<void>(resolve => server.close(() => resolve())));
+  t.after(async () => { await registration.dispose(); server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); });
   const base = 'http://127.0.0.1:' + (server.address() as { port: number }).port;
   const url = '/api/rabilink/agent-devices/self/profile';
   async function call(route: string, method = 'GET', body?: unknown, headers: Record<string, string> = { 'x-test-auth': '1' }) {
@@ -49,6 +52,18 @@ test('PC owns scoped profile CAS, signed self receipts, source validation and re
   const listed = (await call('/api/rabilink/agent-devices')).body.data;
   assert.equal(listed.sourceDeviceId, 'pc-owner'); assert.equal(listed.devices[0].id, 'glasses-one');
   assert.equal(listed.devices[0].historyPersonas[0].sourceDeviceId, 'pc-persona');
+  const storeFile = path.join(directory, 'rabilink-agent-devices', createHash('sha256').update('app-one').digest('hex') + '.json');
+  const damaged = JSON.parse(fs.readFileSync(storeFile, 'utf8'));
+  damaged.devices['bad-device'] = { profile: null, retainedEvidence: 'original' };
+  fs.writeFileSync(storeFile, JSON.stringify(damaged));
+  const partial = await call('/api/rabilink/agent-devices');
+  assert.equal(partial.status, 200); assert.equal(partial.body.data.devices.length, 1);
+  assert.deepEqual(partial.body.data.coverage.invalidDeviceIds, ['bad-device']);
+  assert.equal((await call('/api/rabilink/agent-devices/bad-device/profile')).status, 503);
+  assert.equal((await call('/api/rabilink/agent-devices/bad-device/profile', 'PUT', write)).status, 503);
+  assert.equal((await call(url + '/receipt', 'POST', { ...ack, idempotencyKey: 'still-healthy' })).status, 200);
+  assert.deepEqual(JSON.parse(fs.readFileSync(storeFile, 'utf8')).devices['bad-device'], damaged.devices['bad-device']);
+
   assert.equal((await call(url, 'PUT', { expectedRevision: 1, idempotencyKey: 'invalid-source', profile: { ...profile, revision: 2, personaRef: { roleId: 'Missing', sourceDeviceId: 'pc-persona' } } })).status, 404);
   assert.equal((await call('/api/rabilink/agent-devices/other-owner-device/profile', 'PUT', write)).status, 409);
 });

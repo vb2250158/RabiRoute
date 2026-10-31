@@ -124,7 +124,7 @@ internal static class HostProtocol
         JsonElement? webPatch = null,
         JsonElement? identityReset = null)
     {
-        using var timeoutSource = new CancellationTokenSource(timeout);
+        using var timeoutSource = HostTimeouts.Deadline(timeout);
         await using var client = new NamedPipeClientStream(
             ".",
             pipeName ?? HostIdentity.PipeName,

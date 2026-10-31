@@ -1,10 +1,11 @@
 #!/usr/bin/env node
+import { getTimeoutMs } from "./lib/timeout-settings.mjs";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { LinuxHost, HOST_NAMESPACE, descriptorPath, sendHostCommand } from "./lib/linux-host-runtime.mjs";
+import { LinuxHost, HOST_NAMESPACE, descriptorPath, sendHostCommand, loadLinuxHostTimeouts } from "./lib/linux-host-runtime.mjs";
 
 const script = fileURLToPath(import.meta.url);
 const defaultRoot = path.resolve(path.dirname(script), "..");
@@ -54,6 +55,7 @@ function assertRequestedMode(status, options) {
 
 async function main() {
   const options = parseArguments(process.argv.slice(2));
+  loadLinuxHostTimeouts(options.stateRoot);
   if (options.command === "help") {
     console.log("Usage: node scripts/linux-host.mjs [--command start|status|open|restart|quit] [--json] [--foreground] [--read-only] [--no-autostart] [--state-root /absolute/path]"); return;
   }
@@ -94,7 +96,7 @@ async function main() {
     const child = spawn(process.execPath, args, { detached: true, stdio: ["ignore", fd, fd], env: process.env });
     fs.closeSync(fd); child.unref();
     let failure;
-    const deadline = Date.now() + 125000;
+    const deadline = Date.now() + getTimeoutMs("linux.host.launch", 125000);
     while (Date.now() < deadline) {
       try {
         const status = await sendHostCommand(file, "status");

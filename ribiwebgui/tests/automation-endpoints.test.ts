@@ -32,9 +32,22 @@ test("legacy, broad, and unknown rules remain visible without changing their fil
   assert.equal(automationEndpoint(messageRule(["private", "weixin_message"])), "napcat");
 });
 
+test("speech rules use the speech service category and retain legacy filters", () => {
+  for (const endpointType of [undefined, "speech", "fennenote"]) {
+    const rule = messageRule(["voice_transcript"]);
+    if (rule.trigger.type !== "message") throw new Error("message fixture required");
+    Object.assign(rule.trigger, { endpointType, allowedSpeakerNames: ["Speaker"], regex: "hello" });
+    const snapshot = JSON.stringify(rule);
+    assert.equal(automationEndpoint(rule), "speech");
+    assert.equal(JSON.stringify(rule), snapshot);
+  }
+  assert.equal(automationEndpoints.find(endpoint => endpoint.value === "speech")?.title, "语音服务");
+  assert.ok(!automationEndpoints.some(endpoint => endpoint.value === "fennenote"));
+});
+
 test("new rules open the editor directly and schedules use the shared workspace", () => {
   const page = fs.readFileSync(new URL("../src/pages/PersonaTemplatePage.vue", import.meta.url), "utf8");
-  const start = page.indexOf('class="section-title-row automation-workspace-head"');
+  const start = page.indexOf('class="app-card glass-card section-card automation-workspace"');
   const end = page.indexOf('<v-dialog v-model="templateVariablesDialog"');
   assert.ok(start >= 0 && end > start);
   const workspace = page.slice(start, end);

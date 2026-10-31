@@ -4,7 +4,11 @@ import fs from "node:fs/promises";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { HostInstanceIdentityReset, IdentityResetAuthorizationError, handleInstanceIdentityReset } from "./identityResetRoutes.js";
+import { HostInstanceIdentityReset, IdentityResetAuthorizationError } from "./identityResetRoutes.js";
+import { createCorePublicOperations, type CorePublicOperationsContext } from "./corePublicOperations.js";
+import type { ApiOperationInput } from "./apiOperationContract.js";
+import { ManagerPluginRouteRegistry } from "./managerPluginRouteRegistry.js";
+import { registerLanAgentBodyGuard, assertLanAgentBodyAuthority } from "./lanAgentBodyAuthority.js";
 import { LanAgentAuthority } from "./lanAgentAuthority.js";
 import { evaluateLanAgentRequest } from "./lanAgentRequestAccess.js";
 import { RabiGlobalConfigStore } from "./globalConfig.js";
@@ -27,7 +31,6 @@ async function fixture(t: TestContext) {
   const global = new RabiGlobalConfigStore(root);
   global.patch({ webguiLan: { enabled: true } });
   const credential = authority.enroll(authority.issueBootstrapTicket().ticket, "node");
-  authority.registerAgentCatalog(credential.token, [{ agentId: "agent", provider: "custom-provider", sessionId: "custom-session" }]);
   const hooks: {
     body?: () => Promise<void>;
     execute?: () => Promise<void>;
@@ -56,6 +59,18 @@ async function fixture(t: TestContext) {
       return { ok: true, state: "queued", operationId: input.operationId };
     }
   });
+  const registry = new ManagerPluginRouteRegistry();
+  const definitions = createCorePublicOperations({
+    identity: () => ({ applicationGenerationId: "fixture-generation", managerInstanceId: "fixture-manager" }),
+    identityReset: { service, currentGuid: () => expectedGuid }
+  } as unknown as CorePublicOperationsContext).filter(value => value.contract.pathTemplate.startsWith("/api/rabi/identity/reset-instance-id"));
+  const registration = registry.registerOperations("fixture-reset-authority", definitions.map(definition => ({ ...definition,
+    async prepare(input: Omit<ApiOperationInput, "body">) {
+      const prepared = await definition.prepare!(input);
+      if (typeof prepared !== "function") return prepared;
+      return async (parsed: ApiOperationInput) => { if (parsed.request.method === "POST") await hooks.body?.(); return prepared(parsed); };
+    }
+  })));
   const server = http.createServer((request, response) => {
     const access = evaluateLanAgentRequest(request, authority, global.getLanAgentAdmissionPolicy().enabled, () => global.getLanAgentAdmissionPolicy());
     if (access.kind === "denied") {
@@ -67,26 +82,16 @@ async function fixture(t: TestContext) {
       Object.defineProperty(request.socket, "remoteAddress", { value: "192.0.2.10", configurable: true });
     }
     hooks.beforeRoute?.(request);
-    response.setHeader("etag", "private-etag");
-    response.setHeader("idempotency-key", "private-operation");
-    response.setHeader("x-private-status", "private");
-    handleInstanceIdentityReset(request, new URL(request.url!, "http://localhost"), response, {
-      service, currentGuid: () => expectedGuid,
-      readJson: async (request, maximum) => {
-        let body = "";
-        for await (const chunk of request) { body += chunk; if (Buffer.byteLength(body) > maximum) throw new Error("too large"); }
-        await hooks.body?.();
-        return JSON.parse(body);
-      },
-      // Intentionally no central authorization fence: the route must protect its own disclosures.
-      json: (response, status, body) => { response.writeHead(status, { "content-type": "application/json" }); response.end(JSON.stringify(body)); }
-    });
+    registerLanAgentBodyGuard(request, body => assertLanAgentBodyAuthority(new URL(request.url!, "http://localhost").pathname, body, undefined));
+    // The registry owns one response publication; no private business headers precede its authority fence.
+    if (!registry.handle(request, new URL(request.url!, "http://localhost"), response)) response.writeHead(404).end();
     // Do not alter the transport's address for the next keep-alive request.
     if (access.kind === "agent") Reflect.deleteProperty(request.socket, "remoteAddress");
   });
   await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
   t.after(async () => {
     server.closeAllConnections();
+    await registration.dispose();
     await new Promise<void>(resolve => server.close(() => resolve()));
     await fs.rm(root, { recursive: true, force: true });
   });
@@ -94,15 +99,19 @@ async function fixture(t: TestContext) {
   const headers = { authorization: `Bearer ${credential.token}`, "x-rabiroute-agent-id": "agent", "content-type": "application/json" };
   return { root, authority, global, credential, hooks, service, headers, url, statusFile, requestFile, writeStatus,
     hostCalls: () => hostCalls,
-    revoke: () => authority.setAgentEnabled("node", "agent", false),
-    restore: () => authority.setAgentEnabled("node", "agent", true),
+    revoke: () => authority.setNodeEnabled("node", false),
+    restore: () => authority.setNodeEnabled("node", true),
     post: (remote = true, id = operationId, input: unknown = { operationId: id, expectedGuid, confirmed: true }) => fetch(url, {
       method: "POST", headers: remote ? headers : { "content-type": "application/json" }, body: JSON.stringify(input)
     }) };
 }
 async function denied(response: Response, commitState: "not_started" | "unknown") {
   assert.equal(response.status, 403);
-  assert.deepEqual(await response.json(), { code: "authorization_revoked", commitState });
+  const body = await response.json();
+  assert.equal(body.data, undefined);
+  assert.ok(body.code === "authorization_revoked" || /AUTHORITY|SOURCE/.test(body.errorCode ?? ""));
+  assert.equal(body.commitState ?? body.mutationOutcome ?? "not_started", commitState);
+  if (commitState === "unknown") assert.equal(body.uncertain, true);
   for (const header of ["etag", "idempotency-key", "x-private-status"]) assert.equal(response.headers.get(header), null);
   assert.equal(response.headers.get("cache-control"), "no-store");
 }
@@ -127,7 +136,7 @@ test("reset custom-provider principal has equivalent local POST/GET, confirmatio
     for (const input of [{ operationId, expectedGuid }, { operationId, expectedGuid, confirmed: false },
       { operationId, expectedGuid, confirmed: true, privatePath: "ignored?" }]) assert.equal((await f.post(remote, operationId, input)).status, 400);
     assert.equal((await f.post(remote, operationId, { operationId, expectedGuid: newGuid, confirmed: true })).status, 409);
-    assert.equal((await f.post(remote, operationId, { operationId, expectedGuid, confirmed: true, extra: "x".repeat(3000) })).status, 400);
+    assert.equal((await f.post(remote, operationId, { operationId, expectedGuid, confirmed: true, extra: "x".repeat(3000) })).status, 413);
   }
   assert.equal(f.hostCalls(), 2);
 });
@@ -135,7 +144,7 @@ test("reset custom-provider principal has equivalent local POST/GET, confirmatio
 test("reset credential-first ingress denies invalid/disabled agents and never substitutes local authority", async t => {
   const f = await fixture(t);
   const invalidHeaders: Record<string, string>[] = [{ authorization: "Bearer lan1:invalid", "x-rabiroute-agent-id": "agent" },
-    { "x-rabiroute-agent-id": "agent" }, { authorization: `Bearer ${f.credential.token}`, "x-rabiroute-agent-id": "unknown" }];
+    { "x-rabiroute-agent-id": "agent" }];
   for (const headers of invalidHeaders) {
     const response = await fetch(f.url, { method: "POST", headers: { ...headers, "content-type": "application/json" }, body: JSON.stringify({ operationId, expectedGuid, confirmed: true }) });
     assert.ok([401, 403].includes(response.status));

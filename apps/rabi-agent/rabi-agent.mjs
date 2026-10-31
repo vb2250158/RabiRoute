@@ -1,21 +1,25 @@
-import { createHash, createPublicKey, randomBytes, verify } from "node:crypto";
+import { createTimeoutSettings } from "./lib/timeout-settings.mjs";
+import { createHash, createPublicKey, randomBytes, randomUUID, verify } from "node:crypto";
 import { spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
 import net from "node:net";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { installReleaseDependencies, ensureNativeTerminalDependencies } from "./lib/release-dependencies.mjs";
 import { fileURLToPath } from "node:url";
 import { CodexDesktopIpcClient } from "./lib/codex-desktop-ipc.mjs";
 import { normalizeDshBinding, sendDshTask } from "./lib/dsh.mjs";
 import { runManagerCommand } from "./lib/manager-cli.mjs";
-import { createManagerClient } from "./lib/manager-client.mjs";
+import { createManagerClient, createManagerTransport } from "./lib/manager-client.mjs";
+import { DeliveryOwner } from "./lib/delivery-owner.mjs";
+import { runDeliveryCommand } from "./lib/delivery-control.mjs";
 import { createEndpointSession, EndpointAuthenticationError } from "./lib/endpoint-session.mjs";
 import { createDesktopPresentation } from "./lib/desktop-presentation.mjs";
 import { TerminalService } from "./lib/terminal-service.mjs";
 import { ComputerService } from "./lib/computer-service.mjs";
-import { installReleaseDependencies, ensureNativeTerminalDependencies } from "./lib/release-dependencies.mjs";
-import { instanceAgents, agentCatalog, configureInstanceAgent, resolveInstanceAgent, registerManagedSession } from "./lib/instance-agents.mjs";
+import { uploadHistoryDirectory } from "./lib/upload-history-store.mjs";
+import { instanceAgents, agentCatalog, configureInstanceAgent, resolveInstanceAgent, withoutSessionBindings } from "./lib/instance-agents.mjs";
 import { normalizeAllowedWorkspaces, resolveRealDirectory, resolveTaskWorkspace } from "./lib/cwd-policy.mjs";
 
 const packageJson = JSON.parse(fs.readFileSync(new URL("./package.json", import.meta.url), "utf8"));
@@ -25,6 +29,7 @@ const RECONNECT_BASE_MS = 1_000;
 const RECONNECT_MAX_MS = 30_000;
 const HEARTBEAT_MS = 15_000;
 const TASK_HISTORY_LIMIT = 500;
+const MANAGEMENT_READ_LIMIT = 4;
 
 function homeDataDirectory() {
   if (process.platform === "win32") return path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), "AppData", "Local"), "RabiAgent");
@@ -42,13 +47,6 @@ function normalizeManagerUrl(value) {
   if (url.protocol !== "http:" && url.protocol !== "https:") throw new Error("RABI_MANAGER_URL must use http:// or https://.");
   if (url.username || url.password || url.search || url.hash || !["", "/"].includes(url.pathname)) throw new Error("RABI_MANAGER_URL must be an explicit origin without credentials or a path.");
   return url.toString().replace(/\/$/, "");
-}
-
-export function managerWebSocketUrl(managerUrl) {
-  const url = new URL(normalizeManagerUrl(managerUrl));
-  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
-  url.pathname = `${url.pathname.replace(/\/$/, "")}/api/lan-agent/connect`;
-  return url.toString();
 }
 
 function safeRelativePath(value) {
@@ -179,9 +177,15 @@ async function bootstrapLockedConfig(configPath, fetcher) {
     const current = fs.existsSync(configPath) ? fs.readFileSync(configPath, "utf8") : undefined;
     if (current !== original) throw new Error("Configuration changed during connection setup; rerun bootstrap to recover without replacing its bindings.");
     delete config.lanLinkToken; delete config.bootstrapTicket;
-    writePrivateJson(configPath, config);
+    const migrated = withoutSessionBindings(config);
+    if (original && JSON.stringify(JSON.parse(original)) !== JSON.stringify(withoutSessionBindings(JSON.parse(original)))) {
+      const backup = configPath + ".before-explicit-sessions-" + randomUUID() + ".json";
+      fs.writeFileSync(backup, original, { mode: 0o600, flag: "wx" });
+      if (fs.readFileSync(backup,"utf8") !== original) throw new Error("Migration snapshot verification failed.");
+    }
+    writePrivateJson(configPath, migrated);
     fs.rmSync(recoveryPath, { force: true });
-    return config;
+    return migrated;
   };
   // Validate saved credentials before deciding whether this paste needs its ticket.
   if (previous?.nodeCredential && !recovery) {
@@ -198,16 +202,10 @@ async function bootstrapLockedConfig(configPath, fetcher) {
   const allowedWorkspaces = normalizeAllowedWorkspaces(parseWorkspaceList(process.env.RABI_AGENT_ALLOWED_CWDS, defaultWorkspace), defaultWorkspace);
 
   const releasePublicKeySha256 = normalizedPublicKeySha256(process.env.RABI_AGENT_RELEASE_PUBLIC_KEY_SHA256);
-  const codexThreadId = String(process.env.RABI_AGENT_CODEX_THREAD_ID || "").trim();
-  const agentType = process.env.RABI_AGENT_TYPE?.trim() || undefined;
-  if (agentType && !["codex-desktop", "dsh"].includes(agentType)) throw new Error("Unsupported RABI_AGENT_TYPE.");
-  if (agentType === "codex-desktop" && !codexThreadId) throw new Error("RABI_AGENT_CODEX_THREAD_ID is required for Codex Desktop.");
-  const dsh = agentType === "dsh" ? normalizeDshBinding({ baseUrl: process.env.RABI_AGENT_DSH_URL, sessionId: process.env.RABI_AGENT_DSH_SESSION_ID }) : undefined;
   const config = {
     ...previous,
     schemaVersion: 1,
-    agentType: agentType || previous?.agentType,
-    dsh: dsh || previous?.dsh,
+    dsh: previous?.dsh ? { baseUrl: previous.dsh.baseUrl } : undefined,
     managerUrl,
     autoUpdate: previous?.autoUpdate !== false,
     nodeId: previous?.nodeId || recovery?.nodeId || String(process.env.RABI_NODE_ID || "").trim() || randomNodeId(),
@@ -217,26 +215,14 @@ async function bootstrapLockedConfig(configPath, fetcher) {
     managerInstanceId: String(previous?.managerInstanceId || "").trim() || undefined,
     defaultWorkspace,
     allowedWorkspaces,
-    codexDesktop: agentType === "codex-desktop" ? {
-      threadId: codexThreadId,
-      model: String(process.env.RABI_AGENT_CODEX_MODEL || "").trim() || undefined,
-      reasoningEffort: String(process.env.RABI_AGENT_CODEX_REASONING || "medium").trim() || "medium"
-    } : previous?.codexDesktop
+
   };
   // Reconnecting an installed computer must not erase its Agent identities or permitted projects.
   if (previous) {
     config.agents = instanceAgents(previous);
     config.allowedWorkspaces = normalizeAllowedWorkspaces([...(previous.allowedWorkspaces || []), ...allowedWorkspaces], defaultWorkspace);
   }
-  // A computer can enroll without installing or opening an Agent backend.
-  // Existing catalogs retain their identity; an explicit backend opts into binding.
   config.agents ??= [];
-  if (agentType && !config.agents.length) {
-    config.agents = configureInstanceAgent(config, { provider: agentType,
-      sessionId: agentType === "dsh" ? dsh.sessionId : codexThreadId, workspace: defaultWorkspace,
-      model: config.codexDesktop?.model, reasoningEffort: config.codexDesktop?.reasoningEffort,
-      dshBaseUrl: dsh?.baseUrl }).agents;
-  }
   delete config.lanLinkToken;
   delete config.bootstrapTicket;
   if (!recovery) {
@@ -312,6 +298,10 @@ async function stableLauncher(defaultConfigPath, policy) {
   const index = args.indexOf("--config");
   const requestedConfig = index >= 0 && args[index + 1] ? path.resolve(args[index + 1]) : defaultConfigPath;
   const configPath = fs.existsSync(requestedConfig) ? fs.realpathSync(requestedConfig) : requestedConfig;
+  const timeout = (key, fallback) => {
+    const value = JSON.parse(fs.readFileSync(configPath, "utf8")).timeoutOverridesCache?.[key];
+    return Number.isSafeInteger(value) && value > 0 && value <= 2147483647 ? value : fallback;
+  };
   const forwarded = args.filter((value, i) => value !== "--bootstrap" && i !== index && (index < 0 || i !== index + 1));
   const currentPath = path.join(path.dirname(configPath), "current-release.json");
   const configHash = createHash("sha256").update(process.platform === "win32" ? configPath.toLowerCase() : configPath).digest("hex");
@@ -321,7 +311,7 @@ async function stableLauncher(defaultConfigPath, policy) {
     if (!pointer.entrypoint || !fs.statSync(pointer.entrypoint).isFile()) throw new Error("Current release is missing.");
     return path.resolve(pointer.entrypoint);
   };
-  if (forwarded.includes("--api") || forwarded.includes("--upload")) {
+  if (forwarded.includes("--api") || forwarded.includes("--operation") || forwarded.includes("--upload") || forwarded.some(arg => ["--delivery-submit", "--delivery-query", "--delivery-list"].includes(arg))) {
     const child = spawn(process.execPath, [currentEntry(), ...forwarded, "--config", configPath], { stdio: "inherit", windowsHide: true });
     child.once("error", () => { process.exitCode = 1; });
     child.once("exit", code => { process.exitCode = code ?? 1; });
@@ -346,16 +336,19 @@ async function stableLauncher(defaultConfigPath, policy) {
       const socket = net.createConnection(controlTarget);
       const nonce = randomBytes(32).toString("hex");
       let buffer = ""; let authenticated = false; let complete = false;
-      socket.setTimeout(12000, () => socket.destroy(new Error("Launcher stop timed out; result uncertain.")));
+      socket.setTimeout(timeout("agent.launcher.command",12000), () => socket.destroy(new Error("Launcher stop timed out; result uncertain.")));
       socket.once("connect", () => {
         if (diagnostic?.configHash !== configHash || !/^[a-f0-9]{64}$/.test(diagnostic?.token || "")) {
           socket.destroy(new Error("Launcher stop identity is unavailable; no stop sent.")); return;
         }
         socket.write(`hello ${nonce}\n`);
       });
-      socket.on("data", bytes => {
-        buffer += bytes.toString();
-        if (buffer.length > 512) { socket.destroy(new Error("Invalid launcher control response.")); return; }
+      socket.setEncoding("utf8");
+      socket.on("data", chunk => {
+        buffer += chunk;
+        // Status includes the bounded history; the owner handshake stays small.
+        const responseLimit = authenticated && requestedCommand ? 2 * 1024 * 1024 : 512;
+        if (buffer.length > responseLimit) { socket.destroy(new Error("Invalid launcher control response.")); return; }
         let end;
         while ((end = buffer.indexOf("\n")) >= 0) {
           const line = buffer.slice(0, end); buffer = buffer.slice(end + 1);
@@ -404,13 +397,15 @@ async function stableLauncher(defaultConfigPath, policy) {
       `Agent：${publicState.agents || "待确认"}`, `任务：${publicState.task || "暂无"}`, "", "最近状态记录（最多 120 条）：", ...recentEvents].join("\n")
   });
   const send = (child, message) => { if (child?.connected) child.send(message, () => undefined); };
+  const deliveryControls = new Map();
   const control = net.createServer(socket => {
     sockets.add(socket);
-    socket.setTimeout(10000, () => socket.destroy());
+    socket.setEncoding("utf8"); // JSON envelopes may split a Unicode code point across pipe packets.
+    socket.setTimeout(timeout("agent.launcher.handshake",10000), () => socket.destroy());
     let buffer = ""; let nonce;
     socket.on("data", bytes => {
       buffer += bytes.toString();
-      if (buffer.length > 512) { socket.destroy(); return; }
+      if (Buffer.byteLength(buffer) > 4 * 1024 * 1024) { socket.destroy(); return; }
       let end;
       while ((end = buffer.indexOf("\n")) >= 0) {
         const line = buffer.slice(0, end); buffer = buffer.slice(end + 1);
@@ -430,10 +425,38 @@ async function stableLauncher(defaultConfigPath, policy) {
             socket.end(`${JSON.stringify({ ok: true, ...publicSnapshot(), pid: process.pid, workerPid: worker?.pid, trayPid: presentation?.pid })}\n`);
           }).catch(() => socket.end(`${JSON.stringify({ ok: false, error: "Operation refused or failed; existing owner retained." })}\n`));
           return;
+        } else if (nonce && line.startsWith("{")) {
+          let frame, request;
+          try {
+            frame = JSON.parse(line);
+            if (frame.type !== "deliveryControl" || typeof frame.body !== "string"
+              || frame.proof !== proof(token, `delivery:${createHash("sha256").update(frame.body).digest("hex")}`, nonce)) throw new Error("Invalid delivery control proof.");
+            request = JSON.parse(frame.body);
+            if (!/^[a-f0-9-]{36}$/i.test(request.requestId) || !["submit", "query"].includes(request.operation)) throw new Error("Invalid delivery control request.");
+          } catch { socket.destroy(); return; }
+          nonce = undefined;
+          if (!worker?.connected || stopping || transitioning || paused || candidate) {
+            socket.end(JSON.stringify({ requestId: request.requestId, ok: false, accepted: false, error: "DELIVERY_OWNER_UNAVAILABLE" }) + "\n"); return;
+          }
+          const timer = setTimeout(() => {
+            deliveryControls.delete(request.requestId);
+            socket.end(JSON.stringify({ requestId: request.requestId, ok: false, accepted: null, error: "DELIVERY_LOCAL_ACCEPTANCE_UNKNOWN" }) + "\n");
+          }, timeout("agent.launcher.delivery",12000));
+          deliveryControls.set(request.requestId, { socket, timer, worker });
+          worker.send({ type: "deliveryControl", ...request }, error => {
+            if (!error) return;
+            const pending = deliveryControls.get(request.requestId); if (!pending) return;
+            clearTimeout(pending.timer); deliveryControls.delete(request.requestId);
+            socket.end(JSON.stringify({ requestId: request.requestId, ok: false, accepted: null, error: "DELIVERY_LOCAL_ACCEPTANCE_UNKNOWN" }) + "\n");
+          });
+          return;
         } else { socket.destroy(); return; }
       }
     });
-    socket.once("close", () => { sockets.delete(socket); stopWaiters.delete(socket); });
+    socket.once("close", () => {
+      sockets.delete(socket); stopWaiters.delete(socket);
+      for (const [id, pending] of deliveryControls) if (pending.socket === socket) { clearTimeout(pending.timer); deliveryControls.delete(id); }
+    });
     socket.on("error", () => undefined);
   });
   const finishStop = () => {
@@ -460,7 +483,7 @@ async function stableLauncher(defaultConfigPath, policy) {
     if (stopping) return;
     stopping = true; clearTimeout(retryTimer);
     for (const child of children) child.kill("SIGTERM");
-    stopDeadline = setTimeout(() => { for (const child of children) child.kill("SIGKILL"); }, 5000);
+    stopDeadline = setTimeout(() => { for (const child of children) child.kill("SIGKILL"); }, timeout("agent.launcher.stop",5000));
     stopDeadline.unref();
     if (!children.size) finishStop();
   };
@@ -487,7 +510,12 @@ async function stableLauncher(defaultConfigPath, policy) {
     child.on("message", message => {
       if (child === candidate?.child) { send(candidate.owner, { type: "launcherCandidateEvent", requestId: candidate.requestId, event: message }); return; }
       if (child !== worker || stopping) return;
-      if (message?.type === "desktopSnapshot") {
+      if (message?.type === "deliveryControlResult") {
+        const pending = deliveryControls.get(message.requestId);
+        if (pending?.worker !== child) return;
+        clearTimeout(pending.timer); deliveryControls.delete(message.requestId);
+        pending.socket.end(JSON.stringify({ ...message.result, requestId: message.requestId }) + "\n");
+      } else if (message?.type === "desktopSnapshot") {
         for (const key of ["summary", "version", "agents", "task"]) if (typeof message[key] === "string") publicState[key] = message[key].slice(0, 2048);
         publicState.busy = message.busy === true;
         try {
@@ -544,7 +572,7 @@ async function stableLauncher(defaultConfigPath, policy) {
     const owned = worker;
     if (!owned) return;
     await new Promise(resolve => {
-      const deadline = setTimeout(() => owned.kill("SIGKILL"), 5000);
+      const deadline = setTimeout(() => owned.kill("SIGKILL"), timeout("agent.launcher.stop",5000));
       owned.once("close", () => { clearTimeout(deadline); resolve(); });
       owned.kill("SIGTERM");
     });
@@ -613,6 +641,7 @@ async function stableLauncher(defaultConfigPath, policy) {
     fs.chmodSync(diagnosticPath, 0o600);
   } catch (error) { stop(); throw error; }
   presentation = createDesktopPresentation({ currentEntry, snapshot: publicSnapshot, command: desktopCommand,
+    timeout,
     enabled: process.platform === "win32" && policy.desktop !== false,
     onFailure: (summary, fatal) => { publish(summary); if (fatal) { process.exitCode = 1; stop(); } }
   });
@@ -653,7 +682,7 @@ function startupCommand(platform, executable, script, config) {
   return `[Desktop Entry]\nType=Application\nName=Rabi Agent\nExec=${args.map(quote).join(" ")}\nX-GNOME-Autostart-enabled=true\n`;
 }
 
-function startupFiles(platform, executable, script, config, { home, env = {}, uid } = {}) {
+function startupFiles(platform, executable, script, config, { home, env = {}, uid, stopTimeoutMs = 10000 } = {}) {
   const files = [];
   const add = (filename, content) => { files.push({ path: filename, content }); return filename; };
   if (platform === "win32") {
@@ -677,15 +706,15 @@ function startupFiles(platform, executable, script, config, { home, env = {}, ui
     if (/[\r\n\0]/.test(value)) throw new Error("Invalid systemd startup argument.");
     return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/%/g, "%%").replace(/\$/g, "$$")}"`;
   };
-  add(path.join(directory, "systemd", "user", "rabi-agent.service"), `[Unit]\nDescription=Rabi Agent current-user connector\nStartLimitIntervalSec=300\nStartLimitBurst=5\n[Service]\nType=simple\nExecStart=${[executable, script, "--config", config].map(quote).join(" ")}\nRestart=on-failure\nRestartSec=30\nKillMode=control-group\nTimeoutStopSec=10\n[Install]\nWantedBy=default.target\n`);
+  add(path.join(directory, "systemd", "user", "rabi-agent.service"), `[Unit]\nDescription=Rabi Agent current-user connector\nStartLimitIntervalSec=300\nStartLimitBurst=5\n[Service]\nType=simple\nExecStart=${[executable, script, "--config", config].map(quote).join(" ")}\nRestart=on-failure\nRestartSec=30\nKillMode=control-group\nTimeoutStopSec=${stopTimeoutMs / 1000}\n[Install]\nWantedBy=default.target\n`);
   return { files, obsolete: [], mode: "user-systemd", activation: [["systemctl", ["--user", "show-environment"]], ["systemctl", ["--user", "daemon-reload"]], ["systemctl", ["--user", "enable", "--now", "rabi-agent.service"]]],
     fallback: { path: path.join(directory, "autostart", "rabi-agent.desktop"), content: startupCommand("linux", executable, script, config) } };
 }
 
-function runStartupCommand(executable, args) {
+function runStartupCommand(executable, args, timeoutMs = 10000) {
   return new Promise(resolve => {
     const child = spawn(executable, args, { stdio: "ignore", windowsHide: true });
-    const timer = setTimeout(() => { child.kill(); resolve({ ok: false, diagnostic: "command timed out" }); }, 10000);
+    const timer = setTimeout(() => { child.kill(); resolve({ ok: false, diagnostic: "command timed out" }); }, timeoutMs);
     child.once("error", error => { clearTimeout(timer); resolve({ ok: false, diagnostic: error.code }); });
     child.once("exit", code => { clearTimeout(timer); resolve({ ok: code === 0, diagnostic: `exit ${code}` }); });
   });
@@ -695,7 +724,7 @@ async function configureCurrentUserStartup(_entrypoint, configPath, options = {}
   const platform = options.platform || process.platform;
   const script = path.resolve(writeLauncher(configPath));
   const plan = startupFiles(platform, options.executable || process.execPath, script, path.resolve(configPath), {
-    home: options.home || os.homedir(), env: options.env || process.env, uid: options.uid ?? process.getuid?.()
+    home: options.home || os.homedir(), env: options.env || process.env, uid: options.uid ?? process.getuid?.(), stopTimeoutMs: createTimeoutSettings(options.timeoutOverrides).get("agent.startup.serviceStop",10000)
   });
   const write = file => {
     if (fs.existsSync(file.path)) fs.readFileSync(file.path); // Observe before replacement.
@@ -705,7 +734,7 @@ async function configureCurrentUserStartup(_entrypoint, configPath, options = {}
   plan.files.forEach(write);
   for (const obsolete of plan.obsolete) if (fs.existsSync(obsolete)) { fs.readFileSync(obsolete); fs.unlinkSync(obsolete); }
   if (!options.activate) return { mode: plan.mode, activated: false, diagnostic: "Startup configured; current-user service activation not requested." };
-  const run = options.runCommand || runStartupCommand;
+  const run = options.runCommand || ((executable,args) => runStartupCommand(executable,args,createTimeoutSettings(options.timeoutOverrides).get("agent.startup.command",10000)));
   if (platform === "darwin") {
     const loaded = await run(...plan.activation[0]);
     const result = loaded.ok ? loaded : await run(...plan.activation[1]);
@@ -724,41 +753,23 @@ async function configureCurrentUserStartup(_entrypoint, configPath, options = {}
   return { mode: plan.mode, activated: true };
 }
 function readConfig(configPath) {
-  const config = readJson(configPath, null);
-  if (!config || config.schemaVersion !== 1) throw new Error(`Rabi Agent configuration is missing or invalid: ${configPath}`);
-  const managerUrl = normalizeManagerUrl(config.managerUrl);
+  const original = fs.readFileSync(configPath, "utf8");
+  const previous = JSON.parse(original);
+  if (!previous || previous.schemaVersion !== 1) throw new Error("Rabi Agent configuration is missing or invalid.");
+  const config = withoutSessionBindings(previous);
+  if (JSON.stringify(previous) !== JSON.stringify(config)) {
+    if (fs.readFileSync(configPath, "utf8") !== original) throw new Error("Configuration changed during binding retirement; retry from current configuration.");
+    fs.writeFileSync(configPath + ".before-explicit-sessions-" + Date.now() + ".json", original, { mode: 0o600, flag: "wx" });
+    writePrivateJson(configPath, config);
+  }
   const nodeCredential = String(config.nodeCredential || "").trim();
-  if (!nodeCredential && config.lanLinkToken) throw new Error("Legacy lanLinkToken is not accepted; re-enroll using RABI_AGENT_BOOTSTRAP_TICKET. Existing nodeId, agents and workspaces are preserved.");
   const nodeId = String(config.nodeId || "").trim();
-  const releasePublicKeySha256 = normalizedPublicKeySha256(config.releasePublicKeySha256, "Rabi Agent release public key fingerprint");
+  if (!nodeCredential || !nodeId) throw new Error("An enrolled computer credential and node ID are required.");
   const defaultWorkspace = resolveRealDirectory(config.defaultWorkspace, "Rabi Agent default workspace");
-  const allowedWorkspaces = normalizeAllowedWorkspaces(config.allowedWorkspaces, defaultWorkspace);
-  const codexThreadId = String(config.codexDesktop?.threadId || "").trim();
-  const agentType = config.agentType || "codex-desktop";
-  const hasAgentCatalog = Array.isArray(config.agents);
-  if (!["codex-desktop", "dsh"].includes(agentType)) throw new Error("Unsupported Rabi Agent type.");
-  if (!nodeCredential || !nodeId || (!hasAgentCatalog && agentType === "codex-desktop" && !codexThreadId)) throw new Error(`Rabi Agent configuration is incomplete: ${configPath}`);
-  return {
-    agentType,
-    dsh: agentType === "dsh" && (!hasAgentCatalog || config.dsh) ? normalizeDshBinding(config.dsh) : undefined,
-    schemaVersion: 1,
-    agents: config.agents,
-    managerUrl,
-    nodeCredential,
-    nodeId,
-    releasePublicKeySha256,
-    autoUpdate: config.autoUpdate !== false,
-    managerGuid: String(config.managerGuid || "").trim() || undefined,
-    applicationGenerationId: String(config.applicationGenerationId || "").trim() || undefined,
-    managerInstanceId: String(config.managerInstanceId || "").trim() || undefined,
-    defaultWorkspace,
-    allowedWorkspaces,
-    codexDesktop: {
-      threadId: codexThreadId,
-      model: String(config.codexDesktop?.model || "").trim() || undefined,
-      reasoningEffort: String(config.codexDesktop?.reasoningEffort || "medium").trim() || "medium"
-    }
-  };
+  return { ...config, managerUrl: normalizeManagerUrl(config.managerUrl), nodeCredential, nodeId,
+    releasePublicKeySha256: normalizedPublicKeySha256(config.releasePublicKeySha256, "Rabi Agent release public key fingerprint"),
+    autoUpdate: config.autoUpdate !== false, defaultWorkspace,
+    allowedWorkspaces: normalizeAllowedWorkspaces(config.allowedWorkspaces, defaultWorkspace) };
 }
 
 function createAgentState(configPath) {
@@ -769,8 +780,9 @@ function createAgentState(configPath) {
 }
 
 function rememberTask(store, taskId, value) {
+  const managerGuid = store.state.tasks[taskId]?.managerGuid;
   delete store.state.tasks[taskId];
-  store.state.tasks[taskId] = { ...value, updatedAt: new Date().toISOString() };
+  store.state.tasks[taskId] = { ...(managerGuid ? { managerGuid } : {}), ...value, updatedAt: new Date().toISOString() };
   const keys = Object.keys(store.state.tasks);
   while (keys.length > TASK_HISTORY_LIMIT) delete store.state.tasks[keys.shift()];
   writePrivateJson(store.statePath, store.state);
@@ -788,7 +800,7 @@ async function authorizedFetch(config, pathname, fetcher = fetch) {
   if (!pathname.startsWith("/") || pathname.startsWith("//") || /[\\\r\n#]/.test(pathname) || target.origin !== origin || target.username || target.password) throw new Error("Cross-origin Manager request rejected.");
   if (!config.nodeCredential) throw new Error("An independent nodeCredential is required; re-enroll this connector.");
   const url = target.toString();
-  const response = await fetcher(url, { headers: { authorization: `Bearer ${config.nodeCredential}` }, cache: "no-store", redirect: "error", signal: AbortSignal.timeout(30_000) });
+  const response = await fetcher(url, { headers: { authorization: `Bearer ${config.nodeCredential}` }, cache: "no-store", redirect: "error", signal: AbortSignal.timeout(createTimeoutSettings(config.timeoutOverridesCache).get("agent.release.request",30000)) });
   if (!response.ok) throw new Error(`Rabi Manager returned HTTP ${response.status} for ${new URL(url).pathname}.`);
   return response;
 }
@@ -844,7 +856,8 @@ async function installRelease(config, release, configPath = CONFIG_PATH) {
   }
 }
 
-function spawnUpdateCandidate(entrypoint, configPath) {
+function spawnUpdateCandidate(entrypoint, configPath, timeoutOverrides) {
+  const timeouts = createTimeoutSettings(timeoutOverrides);
   const supervised = process.env.RABI_AGENT_SUPERVISED === "1" && process.connected;
   const requestId = `${process.pid}-${Date.now()}`;
   const child = supervised ? new EventEmitter() : spawn(process.execPath, [entrypoint, "--run", "--config", configPath], {
@@ -872,12 +885,12 @@ function spawnUpdateCandidate(entrypoint, configPath) {
   child.on("exit", () => { exited = true; });
   return {
     async wait(type) {
-      const deadline = Date.now() + 30_000;
+      const deadline = Date.now() + timeouts.get("agent.update.candidate",30000);
       while (!failure && !exited && Date.now() < deadline) {
         if (messages.has(type)) return messages.get(type);
         await new Promise(resolve => setTimeout(resolve, 25));
       }
-      throw new Error("Rabi Agent candidate did not connect or acknowledge within 30 seconds; the current version remains active.");
+      throw new Error("Rabi Agent candidate did not connect or acknowledge within the configured timeout; the current version remains active.");
     },
     send(type) {
       return new Promise((resolve, reject) => child.send({ type }, error => error ? reject(error) : resolve()));
@@ -890,7 +903,7 @@ function spawnUpdateCandidate(entrypoint, configPath) {
       // This is our uncommitted child, not an external Agent/Host owner.
       // SIGTERM handlers may retain IPC, so force its exit before rollback.
       child.kill("SIGKILL");
-      const deadline = Date.now() + 5000;
+      const deadline = Date.now() + timeouts.get("agent.update.exit",5000);
       while (!exited && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 25));
       if (!exited) throw new Error("Candidate exit could not be confirmed; old connection remains paused to avoid duplicate node ownership.");
       if (relay) process.removeListener("message", relay);
@@ -926,13 +939,21 @@ class RabiAgentRuntime {
     this.updatePromise = null;
     this.candidatePending = UPDATE_CANDIDATE;
     this.taskQueue = Promise.resolve();
+    this.managementReads = new Set();
+    this.receiptRecoveries = new Set();
+    this.managementMutations = new Set();
+    this.preparedDeliveries = new Set();
+    this.managementMutationQueue = Promise.resolve();
+    this.receiptOperations = new Map();
     this.pendingOperations = 0;
     this.taskByThread = new Map();
     this.desktopSummary = "正在连接主机";
     this.lastDesktopTask = "";
     this.agentExecutionStatus = new Map();
-    this.computer = new ComputerService({ onChange: () => this.publishDesktop() });
-    this.terminals = new TerminalService({ defaultCwd: config.defaultWorkspace,
+    const timeout = (key, fallback) => createTimeoutSettings(this.config.timeoutOverridesCache).get(key, fallback);
+    this.timeout = timeout;
+    this.computer = new ComputerService({ timeout, uploadHistoryRoot: uploadHistoryDirectory(homeDataDirectory(), configPath), onChange: () => this.publishDesktop() });
+    this.terminals = new TerminalService({ timeout, defaultCwd: config.defaultWorkspace, historyDirectory: path.join(path.dirname(configPath), "terminal-history"),
       emit: event => {
         if ((this.socket?.bufferedAmount || 0) > 1048576) {
           void this.terminals.execute({ action: "close", terminalId: event.terminalId }).catch(() => undefined);
@@ -940,11 +961,42 @@ class RabiAgentRuntime {
         }
         this.send({ type: "terminalEvent", event });
       }, onChange: () => this.publishDesktop() });
-    this.desktop = new CodexDesktopIpcClient({ onBroadcast: event => this.handleDesktopBroadcast(event) });
+    this.desktop = new CodexDesktopIpcClient({ timeout, onBroadcast: event => this.handleDesktopBroadcast(event) });
   }
 
   start() {
+    if (!this.candidatePending) this.startDeliveryOwner();
     this.connect();
+  }
+
+  startDeliveryOwner() {
+    if (this.deliveryOwner) return this.deliveryOwner;
+    this.deliveryOwner = new DeliveryOwner({ configPath: this.configPath, config: this.config,
+      resolveManagerIdentity: async () => {
+        const current = readConfig(this.configPath);
+        if (current.nodeId !== this.config.nodeId) throw new Error("Original delivery node identity changed.");
+        const identity = await verifyNodeIdentity(current, fetch, this.configPath);
+        Object.assign(this.config, current); return identity;
+      },
+      client: (agentType, sessionId, managerGuid) => {
+        // Another CLI may have verified and persisted a new endpoint. Reload
+        // its hints rather than indefinitely failing CAS from a stale snapshot.
+        const current = readConfig(this.configPath);
+        if (current.nodeId !== this.config.nodeId) throw new Error("Delivery queue node identity changed; original intents retained.");
+        if (!managerGuid || current.managerGuid !== managerGuid) throw new Error("Original delivery Manager changed before transport creation; intent retained.");
+        Object.assign(this.config, current);
+        return createManagerTransport({ config: current, configPath: this.configPath, agentType, sessionId,
+          timeoutMs: current.deliveryPolicy?.requestTimeoutMs ?? 8000 });
+      },
+      sendEvent: (payload, managerGuid) => this.connected && this.socketManagerGuid === managerGuid && this.sendRaw(payload) });
+    this.deliveryOwner.start();
+    return this.deliveryOwner;
+  }
+
+  deliveryControl(operation, params) {
+    if (this.stopped || this.draining || this.candidatePending) throw new Error("DELIVERY_OWNER_UNAVAILABLE");
+    const owner = this.startDeliveryOwner();
+    return operation === "submit" ? owner.submit(params) : { ok: true, ...owner.query(params) };
   }
 
   publishDesktop(summary = this.desktopSummary) {
@@ -953,7 +1005,7 @@ class RabiAgentRuntime {
     try { managerOrigin = new URL(this.config.managerUrl).origin; } catch { }
     const payload = {
       type: "desktopSnapshot", summary, version: AGENT_VERSION, managerOrigin,
-      agents: instanceAgents(this.config).map(agent => `${agent.provider}: ${agent.sessionId || "未绑定"} · ${this.agentExecutionStatus.get(agent.agentId) || "运行未核验"}`).join("\n") || "未关联智能体 · 电脑接口可用",
+      agents: instanceAgents(this.config).map(agent => `${agent.provider} · ${this.agentExecutionStatus.get(agent.agentId) || "按请求指定会话"}`).join("\n") || "按请求指定 Agent 类型与完整会话 ID",
       task: `${this.lastDesktopTask}${this.terminals.activeCount ? ` · ${this.terminals.activeCount} 个终端` : ""}`,
       busy: this.draining || Boolean(this.updatePromise) || this.pendingOperations > 0 || this.taskByThread.size > 0 || this.terminals.activeCount > 0 || this.computer.activeCount > 0
     };
@@ -965,6 +1017,7 @@ class RabiAgentRuntime {
     if (this.stopped || this.draining || this.updatePromise) return;
     clearTimeout(this.retryTimer); this.retryTimer = null;
     clearInterval(this.heartbeatTimer);
+    this.connectionAbort?.abort();
     const oldSocket = this.socket;
     this.socket = null; this.connected = false;
     oldSocket?.close(1000, "User requested reconnect");
@@ -983,44 +1036,124 @@ class RabiAgentRuntime {
     });
   }
 
+  withReceiptOperation(deliveryId, operation) {
+    // The persisted ledger is keyed by deliveryId, not Manager generation.
+    // Every prepared delivery and recovery shares this actual file owner.
+    const receipt = path.resolve(path.dirname(this.configPath), "endpoint-transport-receipts", `${sha256(String(deliveryId ?? ""))}.json`);
+    const key = process.platform === "win32" ? receipt.toLowerCase() : receipt;
+    const previous = this.receiptOperations.get(key) || Promise.resolve();
+    const pending = previous.catch(() => undefined).then(operation).finally(() => {
+      if (this.receiptOperations.get(key) === pending) this.receiptOperations.delete(key);
+    });
+    this.receiptOperations.set(key, pending);
+    return pending;
+  }
+
+  queueManagementRead(operation, requestId, recovery = false) {
+    // Pending recovery for one unhealthy receipt cannot consume metadata slots.
+    const owners = recovery ? this.receiptRecoveries : this.managementReads;
+    if (owners.size >= MANAGEMENT_READ_LIMIT) {
+      this.send({ type: "managementResult", requestId, error: `Instance management ${recovery ? "recovery" : "read"} capacity reached; this read was not started.` });
+      return;
+    }
+    this.pendingOperations++;
+    this.publishDesktop();
+    const pending = Promise.resolve().then(operation).finally(() => {
+      owners.delete(pending);
+      this.pendingOperations--;
+      this.publishDesktop();
+    });
+    owners.add(pending);
+  }
+
+  queueManagementWrite(operation, requestId, prepared = false) {
+    const owners = prepared ? this.preparedDeliveries : this.managementMutations;
+    if (owners.size >= MANAGEMENT_READ_LIMIT) {
+      this.send({ type: "managementResult", requestId, error: "Instance management " + (prepared ? "delivery" : "mutation") + " capacity reached; this operation was not started." });
+      return;
+    }
+    this.pendingOperations++;
+    this.publishDesktop();
+    // Metadata mutations retain their existing order. Prepared delivery uses its
+    // original receipt-file owner and the host's own execution protocol.
+    const previous = prepared ? Promise.resolve() : this.managementMutationQueue;
+    const pending = previous.catch(() => undefined).then(operation).finally(() => {
+      owners.delete(pending);
+      this.pendingOperations--;
+      this.publishDesktop();
+    });
+    owners.add(pending);
+    if (!prepared) this.managementMutationQueue = pending;
+  }
+
   stop() {
-    if (this.stopped) return;
+    if (this.stopPromise) return this.stopPromise;
     this.stopped = true;
+    this.stopPromise = Promise.resolve().then(async () => {
+      const results = await Promise.allSettled([
+        Promise.resolve().then(() => this.terminals.stop()),
+        Promise.resolve().then(() => this.computer.stop()),
+        Promise.resolve().then(() => this.deliveryOwner?.close())
+      ]);
+      const failures = results.filter(result => result.status === "rejected").map(result => result.reason);
+      if (failures.length) throw new AggregateError(failures, "Rabi Agent resource cleanup failed; original history evidence was retained.");
+    });
+    // Observe failure even when the supervisor has already disconnected. The
+    // original owner promise remains rejected for callers that join shutdown.
+    this.stopPromise.catch(error => {
+      process.stderr.write("Rabi Agent cleanup failed: " + boundedText(error instanceof Error ? error.message : String(error), 1024) + "\n");
+      process.exitCode = 1;
+    });
     this.publishDesktop("连接器已停止");
     clearTimeout(this.retryTimer);
     clearInterval(this.heartbeatTimer);
+    this.connectionAbort?.abort();
     this.socket?.close(1000, "Rabi Agent stopping");
     this.desktop.close();
-    void this.terminals.stop();
-    this.computer.stop();
+    return this.stopPromise;
   }
 
   async connect() {
     if (this.stopped || this.connectionPaused || this.connecting || this.socket?.readyState === WebSocket.OPEN || this.socket?.readyState === WebSocket.CONNECTING) return;
     this.connecting = true;
     this.publishDesktop("正在连接主机");
+    const controller = new AbortController(); this.connectionAbort = controller;
     let socket;
     try {
-      await verifyNodeIdentity(this.config, fetch, fs.existsSync(this.configPath) ? this.configPath : undefined);
+      // A socket belongs to the authenticated Manager captured for this
+      // handshake, even if a concurrent CLI replaces the installed config.
+      const originalConfig = { ...this.config }, connectionConfig = { ...originalConfig };
+      await verifyNodeIdentity(connectionConfig, fetch, fs.existsSync(this.configPath) ? this.configPath : undefined);
       if (this.stopped || this.connectionPaused) return;
-      socket = new WebSocket(managerWebSocketUrl(this.config.managerUrl));
+      const endpointKeys = ["managerUrl", "managerGuid", "applicationGenerationId", "managerInstanceId"];
+      if (["nodeId", "nodeCredential", ...endpointKeys].every(key => this.config[key] === originalConfig[key])) {
+        for (const key of endpointKeys) this.config[key] = connectionConfig[key];
+        this.config.timeoutOverridesCache = connectionConfig.timeoutOverridesCache;
+      }
+      const client = createManagerClient({ config: connectionConfig, configPath: fs.existsSync(this.configPath) ? this.configPath : undefined });
+      await client.openOperation("manager.lan-agent.connect", { signal: controller.signal,
+        onOpen: channel => {
+          socket = channel;
+          if (this.stopped || this.connectionPaused || controller.signal.aborted) { channel.close(); return; }
+          this.socket = channel;
+          this.socketManagerGuid = connectionConfig.managerGuid;
+          this.send({ type: "authenticate", token: connectionConfig.nodeCredential });
+        },
+        onMessage: value => { if (this.socket === socket) this.handleManagerMessage(JSON.stringify(value)); },
+        onClose: async () => {
+          if (this.socket !== socket) return;
+          this.connected = false;
+          clearInterval(this.heartbeatTimer);
+          await this.terminals.closeAll();
+          this.scheduleReconnect();
+        }
+      });
     } catch (error) {
       // EndpointSession already performs bounded stable-GUID rediscovery and
       // persists only verified identities. Never resurrect the old preverify write.
       this.scheduleReconnect(error);
       return;
     } finally { this.connecting = false; }
-    this.socket = socket;
-    socket.addEventListener("open", () => this.send({ type: "authenticate", token: this.config.nodeCredential }));
-    socket.addEventListener("message", event => { if (this.socket === socket) this.handleManagerMessage(event.data); });
-    socket.addEventListener("close", () => {
-      if (this.socket !== socket) return;
-      this.connected = false;
-      void this.terminals.closeAll();
-      clearInterval(this.heartbeatTimer);
-      this.scheduleReconnect();
-    });
-    socket.addEventListener("error", () => undefined);
   }
 
   scheduleReconnect(error) {
@@ -1036,20 +1169,41 @@ class RabiAgentRuntime {
   }
 
   send(payload) {
+    const taskGuid = payload.taskId && this.stateStore.state.tasks[payload.taskId]?.managerGuid;
+    if (payload.taskId && ["ackTask", "progress"].includes(payload.type) && (!taskGuid || taskGuid !== this.socketManagerGuid)) return false;
     if (payload.taskId && ["ackTask", "progress", "taskResult"].includes(payload.type)) {
       const labels = { ackTask: "已接收", progress: "已投递", taskResult: payload.status === "completed" ? "已完成" : "失败" };
       this.lastDesktopTask = `${String(payload.taskId).slice(0, 160)} · ${labels[payload.type]}`;
       this.publishDesktop();
     }
+    if (payload.type === "taskResult" && payload.taskId) {
+      const knownTask = this.stateStore.state.tasks[payload.taskId];
+      this.startDeliveryOwner().enqueueResult(payload, knownTask ? knownTask.managerGuid || null : this.socketManagerGuid || null);
+      return true; // Local durable acceptance; receiver ACK is a separate fact.
+    }
+    return this.sendRaw(payload);
+  }
+
+  sendRaw(payload) {
     if (this.socket?.readyState !== WebSocket.OPEN) return false;
-    this.socket.send(JSON.stringify(payload));
-    return true;
+    try { this.socket.send(JSON.stringify(payload)); return true; }
+    catch { this.socket.close(1000, "Transport unavailable"); return false; }
   }
 
   handleManagerMessage(raw) {
     let message;
     try { message = JSON.parse(String(raw)); } catch { return; }
     if (!message || typeof message !== "object") return;
+    if (message.type === "resultAck") {
+      if (this.connected && this.deliveryOwner) this.deliveryOwner.acknowledge(message, this.socketManagerGuid || null);
+      return;
+    }
+    if (message.type === "manageAgent" && message.operation === "delivery_records") {
+      if (!this.connected || this.candidatePending || this.stopped) return;
+      try { this.sendRaw({ type: "managementResult", requestId: message.requestId, result: this.deliveryControl("query", message.params || {}) }); }
+      catch { this.sendRaw({ type: "managementResult", requestId: message.requestId, error: "DELIVERY_OWNER_UNAVAILABLE" }); }
+      return;
+    }
     if (message.type === "manageAgent" && ["terminal", "computer"].includes(message.operation)) {
       if (!this.connected || this.stopped) return;
       const socket = this.socket;
@@ -1061,7 +1215,7 @@ class RabiAgentRuntime {
       void operation.then(result => {
         if (this.socket === socket && this.connected) this.send({ type: "managementResult", requestId: message.requestId, result });
       }).catch(error => {
-        if (this.socket === socket && this.connected) this.send({ type: "managementResult", requestId: message.requestId, error: boundedText(error.message, 512) });
+        if (this.socket === socket && this.connected) this.send({ type: "managementResult", requestId: message.requestId, error: boundedText(error.message, 512), ...(message.operation === "terminal" && error.code === "TERMINAL_OPEN_NOT_STARTED" ? { errorCode: "TERMINAL_OPEN_NOT_STARTED" } : {}) });
       });
       return;
     }
@@ -1070,9 +1224,10 @@ class RabiAgentRuntime {
         type: "hello",
         node: {
           nodeId: this.config.nodeId,
+          hostname: os.hostname(),
           version: AGENT_VERSION,
           platform: `${process.platform}-${process.arch}`,
-          agentTypes: [...new Set(instanceAgents(this.config).map(agent => agent.provider))],
+          agentTypes: ["codex-desktop", "dsh"],
           taskTargeting: "explicit-session-v1",
           agents: agentCatalog(this.config),
           terminalShells: this.terminals.shells,
@@ -1084,6 +1239,7 @@ class RabiAgentRuntime {
     }
     if (message.type === "connected") {
       this.connected = true;
+      this.deliveryOwner?.wake();
       this.publishDesktop("已连接主机");
       this.retryMs = RECONNECT_BASE_MS;
       clearInterval(this.heartbeatTimer);
@@ -1114,32 +1270,34 @@ class RabiAgentRuntime {
       const originalSocket = this.socket;
       const originalCredential = this.config.nodeCredential;
       const preparedOperation = ["prepared_delivery", "reconcile_prepared_delivery"].includes(message.operation);
-      this.queueOperation(async () => {
+      // Independent reads and recovery must not wait behind another owner.
+      // Recovery never sends a prompt and shares the exact original receipt lock.
+      const independentRead = message.operation === "list" || message.operation === "reconcile_prepared_delivery" || message.operation === "threads"
+        && ["list", "read"].includes(message.params?.action ?? "list");
+      const dispatch = independentRead
+        ? operation => this.queueManagementRead(operation, message.requestId, message.operation === "reconcile_prepared_delivery")
+        : operation => this.queueManagementWrite(operation, message.requestId, preparedOperation);
+      const schedule = operation => dispatch(preparedOperation
+        ? () => this.withReceiptOperation(message.params?.delivery?.deliveryId, operation)
+        : operation);
+      schedule(async () => {
         try {
           if (preparedOperation && (!this.connected || this.socket !== originalSocket || this.config.nodeCredential !== originalCredential)) throw new Error("Original Manager connection changed before queued delivery execution.");
           let result;
           if (message.operation === "list") result = agentCatalog(this.config);
           else if (message.operation === "configure") {
             const next = configureInstanceAgent(this.config, message.params);
-            const agentId = message.params?.agentId;
-            if (agentId && this.taskByThread.has(instanceAgents(this.config).find(agent => agent.agentId === agentId)?.sessionId)) throw new Error("Wait for this Agent's running task before changing its binding.");
             writePrivateJson(this.configPath, next);
             this.config = next;
             result = agentCatalog(next);
             this.send({ type: "agentCatalog", agents: result });
           } else {
             const { manageInstanceAgent, EndpointTransportReceipts, sameAgentEndpoint } = await import("./runtime/management.mjs");
-            const agent = instanceAgents(this.config).find(agent => agent.agentId === message.params?.agentId);
-            const initializeNew = !agent && message.params?.agentId === "new-agent" && ["resolve", "create"].includes(message.params?.action) && !message.params?.prompt;
-            if (message.operation === "threads" && (!agent || (!this.config.nodeCredential && agent.enabled === false)) && !initializeNew) throw new Error("The instance Agent is missing or disabled.");
-            if (message.operation === "threads" && agent && this.config.nodeCredential) {
-              if (!this.connected) throw new Error("Manager connection is unavailable; queued operation was refused.");
-              const authority = await createManagerClient({ config: this.config, configPath: this.configPath, agentId: agent.agentId }).invoke("GET", "/meta");
-              if (!authority.ok || authority.uncertain || authority.identityChanged) throw new Error("Manager no longer authorizes this Agent operation.");
-            }
-            const provider = agent?.provider === "codex-desktop" ? "codex" : agent?.provider;
-            if (provider && message.params?.agentAdapter && message.params.agentAdapter !== provider) throw new Error("The operation provider does not match the instance Agent.");
-            const dsh = (message.operation === "scan" || initializeNew) && message.params?.dshBaseUrl ? normalizeDshBinding({ baseUrl: message.params.dshBaseUrl, sessionId: "scan" }) : agent?.dsh || this.config.dsh;
+            const requestedProvider = message.params?.agentAdapter || message.params?.provider || message.params?.delivery?.target?.provider;
+            const provider = requestedProvider === "codex-desktop" ? "codex" : requestedProvider;
+            if (message.operation === "threads" && !["codex", "dsh"].includes(provider)) throw new Error("Explicit implemented agentAdapter is required.");
+            const agent = instanceAgents(this.config).find(agent => (agent.provider === "codex-desktop" ? "codex" : agent.provider) === provider);
+            const dsh = message.params?.dshBaseUrl ? { baseUrl: message.params.dshBaseUrl } : agent?.dsh || this.config.dsh;
             const params = { ...message.params, ...(provider ? { provider, agentAdapter: provider } : {}) };
             if (message.operation === "threads" && params.cwd) params.cwd = resolveTaskWorkspace(params.cwd, this.config);
             let endpointExecution;
@@ -1147,13 +1305,11 @@ class RabiAgentRuntime {
               const delivery = params.delivery;
               const assertAuthorized = async () => {
                 if (!this.connected || this.socket !== originalSocket || this.config.nodeCredential !== originalCredential || !this.config.nodeCredential) throw new Error("Authenticated Manager connection is required for prepared delivery.");
-                const current = instanceAgents(this.config).find(item => item.agentId === params.agentId);
                 const endpoint = delivery?.target;
-                const currentProvider = current?.provider === "codex-desktop" ? "codex" : current?.provider;
-                if (!current || endpoint?.kind !== "instance" || endpoint.nodeId !== this.config.nodeId
-                  || endpoint.agentId !== current.agentId || endpoint.provider !== currentProvider
-                  || !(endpoint.sessionId === current.sessionId || current.managedSessionIds?.includes(endpoint.sessionId))) throw new Error("Prepared endpoint no longer matches the exact enabled instance owner.");
-                const authority = await createManagerClient({ config: this.config, configPath: this.configPath, agentId: current.agentId })
+                if (endpoint?.kind !== "instance" || endpoint.nodeId !== this.config.nodeId
+                  || endpoint.provider !== provider || !endpoint.sessionId) throw new Error("Prepared endpoint does not match this computer and explicit provider/session.");
+                const authority = await createManagerClient({ config: this.config, configPath: this.configPath,
+                  agentType: endpoint.provider, sessionId: endpoint.sessionId })
                   .invoke("GET", `/api/agent/delivery-authority?deliveryId=${encodeURIComponent(delivery.deliveryId)}&generation=${encodeURIComponent(delivery.generation)}`);
                 if (!authority.ok || authority.uncertain || authority.identityChanged) throw new Error("Original delivery authority is unavailable; operation was refused.");
                 let body; try { body = JSON.parse(authority.body); } catch { throw new Error("Invalid delivery authority response."); }
@@ -1167,18 +1323,13 @@ class RabiAgentRuntime {
               const receipts = new EndpointTransportReceipts(path.join(path.dirname(this.configPath), "endpoint-transport-receipts"));
               endpointExecution = { endpoint: delivery.target, assertAuthorized,
                 readReceipt: prepared => receipts.readReceipt(prepared),
+                readNotSent: prepared => receipts.readNotSentProof(prepared),
+                writeNotSent: (prepared, proof) => receipts.writeNotSent(prepared, proof),
                 beginAttempt: prepared => receipts.beginAttempt(prepared),
                 writeReceipt: (prepared, receipt) => receipts.writeReceipt(prepared, receipt) };
             }
             result = await manageInstanceAgent(message.operation, params, { ...this.config, dsh, endpointExecution, rootDir: path.dirname(fileURLToPath(import.meta.url)) });
-            if (agent && message.operation === "threads" && result.statusCode < 400 && ["resolve", "create"].includes(message.params?.action)) {
-              const next = registerManagedSession(this.config, agent.agentId, result.data?.thread?.id);
-              if (next !== this.config) {
-                writePrivateJson(this.configPath, next);
-                this.config = next;
-                this.send({ type: "agentCatalog", agents: agentCatalog(next) });
-              }
-            }
+
           }
           if (!preparedOperation || (this.connected && this.socket === originalSocket && this.config.nodeCredential === originalCredential)) this.send({ type: "managementResult", requestId: message.requestId, result });
         } catch (error) { if (!preparedOperation || (this.connected && this.socket === originalSocket && this.config.nodeCredential === originalCredential)) this.send({ type: "managementResult", requestId: message.requestId, error: boundedText(error instanceof Error ? error.message : String(error), 1024) }); }
@@ -1193,7 +1344,9 @@ class RabiAgentRuntime {
   enqueueTask(task) {
     const taskId = String(task.taskId || "").trim();
     if (!taskId) return;
+    const managerGuid = this.socketManagerGuid;
     const known = this.stateStore.state.tasks[taskId];
+    if (known && known.managerGuid !== managerGuid) return;
     if (known && !["completed", "failed"].includes(known.status)) {
       this.send({ type: "progress", taskId, summary: "This task was already accepted; it will not be submitted twice." });
       return;
@@ -1202,17 +1355,17 @@ class RabiAgentRuntime {
       this.send({ type: "taskResult", taskId, status: known.status, summary: known.summary || "Rabi Agent deduplicated an already terminal task.", error: known.error });
       return;
     }
-    this.queueOperation(() => this.runTask(task));
+    this.queueOperation(() => this.runTask(task, managerGuid));
   }
 
-  async runTask(task) {
+  async runTask(task, managerGuid) {
     const taskId = String(task.taskId || "").trim();
     if (this.stateStore.state.tasks[taskId]) return;
     let activeAgent;
+    rememberTask(this.stateStore, taskId, { status: "acknowledged", managerGuid });
     this.send({ type: "ackTask", taskId });
-    rememberTask(this.stateStore, taskId, { status: "acknowledged" });
     try {
-      if (!this.connected) throw new Error("Manager connection is unavailable; queued task execution was refused.");
+      if (!this.connected || !managerGuid || this.socketManagerGuid !== managerGuid) throw new Error("Original Manager connection is unavailable; queued task execution was refused.");
       const agent = resolveInstanceAgent(this.config, task);
       activeAgent = agent;
       const cwd = resolveTaskWorkspace(task.cwd || agent.workspace, { defaultWorkspace: this.config.defaultWorkspace, allowedWorkspaces: this.config.allowedWorkspaces });
@@ -1220,8 +1373,11 @@ class RabiAgentRuntime {
       if (!prompt) throw new Error("Rabi Agent task message is empty.");
       // Queued work may outlive a grant revocation. Re-check Manager authority at
       // execution time; connection identity alone does not authorize a host turn.
-      const authority = await createManagerClient({ config: this.config, configPath: this.configPath, agentId: agent.agentId }).invoke("GET", "/meta");
+      const taskConfig = readConfig(this.configPath);
+      if (taskConfig.nodeId !== this.config.nodeId || taskConfig.managerGuid !== managerGuid) throw new Error("Original task Manager binding changed before authority verification.");
+      const authority = await createManagerClient({ config: taskConfig, configPath: this.configPath, agentType: agent.provider === "codex-desktop" ? "codex" : agent.provider, sessionId: task.threadId }).invoke("GET", "/meta");
       if (!authority.ok || authority.uncertain || authority.identityChanged) throw new Error("Manager no longer authorizes this Agent task; host execution was refused.");
+      if (!this.connected || this.socketManagerGuid !== managerGuid) throw new Error("Original Manager connection changed before host task execution.");
       if (agent.provider === "dsh") {
         await sendDshTask({ ...agent.dsh, sessionId: task.threadId }, prompt);
         this.agentExecutionStatus.set(agent.agentId, "宿主已接收");
@@ -1258,12 +1414,12 @@ class RabiAgentRuntime {
     if (!taskId) return;
     const state = JSON.stringify(params.change ?? params);
     if (state.includes('"status":"completed"') || state.includes('"threadRuntimeStatus":{"type":"idle"')) {
-      this.taskByThread.delete(threadId);
       this.send({ type: "taskResult", taskId, status: "completed", summary: "Codex Desktop reported that the target task is complete. Open that task owner to read its response." });
-      rememberTask(this.stateStore, taskId, { status: "completed", summary: "Codex Desktop reported task completion." });
-    } else if (state.includes('"status":"failed"') || state.includes('"status":"interrupted"')) {
       this.taskByThread.delete(threadId);
+      rememberTask(this.stateStore, taskId, { status: "completed", summary: "Codex Desktop reported that the target task is complete. Open that task owner to read its response." });
+    } else if (state.includes('"status":"failed"') || state.includes('"status":"interrupted"')) {
       this.send({ type: "taskResult", taskId, status: "failed", error: "Codex Desktop reported that the target task did not complete." });
+      this.taskByThread.delete(threadId);
       rememberTask(this.stateStore, taskId, { status: "failed", error: "Codex Desktop reported task failure." });
     }
   }
@@ -1282,14 +1438,14 @@ class RabiAgentRuntime {
   }
 
   async drainTasks() {
-    const deadline = Date.now() + 30_000;
+    const deadline = Date.now() + this.timeout("agent.update.drain",30000);
     while (true) {
       if (this.stopped) throw new Error("Rabi Agent update was stopped.");
       const queue = this.taskQueue;
       let settled = false;
       queue.catch(() => undefined).then(() => { settled = true; });
-      while (!settled || this.taskByThread.size || this.terminals.activeCount || this.computer.activeCount) {
-        if (this.stopped || Date.now() >= deadline) throw new Error("Running Agent work did not drain within 30 seconds; the current version remains active.");
+      while (!settled || this.managementReads.size || this.receiptRecoveries.size || this.managementMutations.size || this.preparedDeliveries.size || this.taskByThread.size || this.terminals.activeCount || this.terminals.pendingOpens || this.computer.activeCount) {
+        if (this.stopped || Date.now() >= deadline) throw new Error("Running Agent work did not drain within the configured timeout; the current version remains active.");
         await new Promise(resolve => setTimeout(resolve, 25));
       }
       if (queue === this.taskQueue) return;
@@ -1298,6 +1454,7 @@ class RabiAgentRuntime {
 
   async pauseConnection() {
     this.connectionPaused = true;
+    this.connectionAbort?.abort();
     clearTimeout(this.retryTimer);
     this.retryTimer = null;
     clearInterval(this.heartbeatTimer);
@@ -1305,7 +1462,7 @@ class RabiAgentRuntime {
     if (socket && socket.readyState !== WebSocket.CLOSED) {
       await new Promise((resolve, reject) => {
         const close = () => { clearTimeout(timer); resolve(); };
-        const timer = setTimeout(() => { socket.removeEventListener("close", close); reject(new Error("Old node connection did not close; candidate was not activated.")); }, 5000);
+        const timer = setTimeout(() => { socket.removeEventListener("close", close); reject(new Error("Old node connection did not close; candidate was not activated.")); }, this.timeout("agent.connection.close",5000));
         socket.addEventListener("close", close, { once: true });
         socket.close(1000, "Rabi Agent update handoff");
       });
@@ -1324,20 +1481,21 @@ class RabiAgentRuntime {
       return;
     }
     const entrypoint = await installRelease(this.config, release, this.configPath);
-    await installReleaseDependencies(entrypoint);
+    await installReleaseDependencies(entrypoint, { timeoutOverrides: this.config.timeoutOverridesCache });
     await this.handoffRelease(entrypoint, releaseDigest(release));
   }
 
   async handoffRelease(entrypoint, digest) {
     const sharedPaths = [launcherPath(this.configPath), path.join(path.dirname(this.configPath), "hook-client.mjs"), currentReleasePath(this.configPath)];
     const previous = sharedPaths.map(filename => ({ filename, bytes: fs.existsSync(filename) ? fs.readFileSync(filename) : null }));
-    const candidate = spawnUpdateCandidate(entrypoint, this.configPath);
+    const candidate = spawnUpdateCandidate(entrypoint, this.configPath, this.config.timeoutOverridesCache);
     let committed = false;
     let sharedChanged = false;
     try {
       const prepared = await candidate.wait("candidatePrepared");
       if (prepared.nodeId !== this.config.nodeId) throw new Error("Candidate node identity mismatch.");
       this.draining = true;
+      await this.deliveryOwner?.pause();
       await this.drainTasks();
       await this.pauseConnection();
       if (this.stopped) throw new Error("Rabi Agent update was stopped.");
@@ -1353,7 +1511,9 @@ class RabiAgentRuntime {
       // report updated until the pointer has committed and this fence opens.
       await candidate.release();
       committed = true;
-      this.stop();
+      // The successor already owns the committed pointer. Retired-owner cleanup
+      // failure is reported by stop(); it cannot roll back or terminate that owner.
+      await this.stop().catch(() => undefined);
       if (process.env.RABI_AGENT_SUPERVISED === "1" && process.connected) process.disconnect();
     } catch (error) {
       // Never reconnect the old owner while an unconfirmed candidate may live.
@@ -1367,6 +1527,7 @@ class RabiAgentRuntime {
         }
       }
       this.draining = false;
+      this.deliveryOwner?.resume();
       this.connectionPaused = false;
       if (!this.stopped && !this.connected) this.scheduleReconnect();
       throw error;
@@ -1382,7 +1543,16 @@ const CONFIG_PATH = configPathFromArgs(ARGS);
 async function main() {
   const minimumNodeVersion = String(packageJson.engines.node).replace(/^>=/, "");
   if (!versionAtLeast(process.versions.node, minimumNodeVersion)) throw new Error(`Rabi Agent requires Node.js ${minimumNodeVersion} or newer.`);
-  if (ARGS.includes("--api") || ARGS.includes("--upload")) {
+  if (ARGS.some(arg => ["--delivery-submit", "--delivery-query", "--delivery-list"].includes(arg))) {
+    const receipt = await runDeliveryCommand(ARGS, CONFIG_PATH, async () => {
+      const chunks = []; for await (const chunk of process.stdin) chunks.push(Buffer.from(chunk));
+      return Buffer.concat(chunks).toString("utf8");
+    });
+    process.stdout.write(JSON.stringify(receipt) + "\n");
+    if (!receipt.ok) process.exitCode = 1;
+    return;
+  }
+  if (ARGS.includes("--api") || ARGS.includes("--operation") || ARGS.includes("--upload")) {
     const receipt = await runManagerCommand(ARGS, CONFIG_PATH, { readInput: async () => {
       const chunks = [];
       for await (const chunk of process.stdin) {
@@ -1397,7 +1567,7 @@ async function main() {
   if (ARGS.includes("--bootstrap")) {
     await bootstrapConfig(CONFIG_PATH);
     initializeCurrentRelease(CONFIG_PATH, fileURLToPath(import.meta.url));
-    const startup = await configureCurrentUserStartup(fileURLToPath(import.meta.url), CONFIG_PATH, { activate: true });
+    const startup = await configureCurrentUserStartup(fileURLToPath(import.meta.url), CONFIG_PATH, { activate: true, timeoutOverrides: readConfig(CONFIG_PATH).timeoutOverridesCache });
     if (startup.diagnostic) process.stderr.write(`Rabi Agent startup: ${startup.diagnostic}\n`);
     // Enrollment enters the owner in this process, rather than retaining a
     // second long-lived bootstrap parent above the stable main program.
@@ -1416,7 +1586,7 @@ async function main() {
     await stableLauncher(CONFIG_PATH, { baseDelayMs: 1000, maxDelayMs: 30000, maxRestarts: 5, stableMs: 60000 });
     return;
   }
-  await ensureNativeTerminalDependencies(fileURLToPath(import.meta.url));
+  await ensureNativeTerminalDependencies(fileURLToPath(import.meta.url), { timeoutOverrides: loadedConfig.timeoutOverridesCache });
   const runtime = new RabiAgentRuntime(loadedConfig, CONFIG_PATH);
   if (UPDATE_CANDIDATE) {
     if (!process.send || !process.connected) throw new Error("Update candidate requires the parent IPC handoff.");
@@ -1433,10 +1603,10 @@ async function main() {
         if (process.connected) process.disconnect();
         // Let Windows IPC/WebSocket close callbacks finish before process exit.
         // A stalled close still cannot retain the promoted worker indefinitely.
-        setTimeout(() => process.exit(1), 5000).unref();
+        setTimeout(() => process.exit(1), createTimeoutSettings(loadedConfig.timeoutOverridesCache).get("agent.update.exit",5000)).unref();
       }
     };
-    const deadline = setTimeout(abortCandidate, 90_000);
+    const deadline = setTimeout(abortCandidate, createTimeoutSettings(loadedConfig.timeoutOverridesCache).get("agent.update.commit",90000));
     const finishCommit = () => {
       if (!runtime.candidatePending) return;
       const current = readJson(currentReleasePath(CONFIG_PATH), null);
@@ -1445,8 +1615,12 @@ async function main() {
         || typeof current?.entrypoint !== "string" || path.resolve(current.entrypoint) !== entrypoint || current.digest !== readInstalledDigest(entrypoint)) {
         abortCandidate(); return;
       }
+      // Only the committed successor can materialize its own launcher code.
+      // The retired owner still carries the previous release implementation.
+      try { writeLauncher(CONFIG_PATH); } catch { abortCandidate(); return; }
       clearTimeout(deadline);
       runtime.candidatePending = false;
+      runtime.startDeliveryOwner();
       runtime.send({ type: "updateResult", status: "updated" });
       runtime.publishDesktop("已连接主机");
     };
@@ -1475,8 +1649,17 @@ async function main() {
     writeLauncher(CONFIG_PATH);
     runtime.start();
   }
-  const stop = () => { runtime.stop(); if (process.connected) process.disconnect(); };
+  const stop = () => { void runtime.stop().finally(() => { if (process.connected) process.disconnect(); }).catch(() => undefined); };
   process.on("message", message => {
+    if (message?.type === "deliveryControl") {
+      try {
+        const result = runtime.deliveryControl(message.operation, message.params);
+        process.send?.({ type: "deliveryControlResult", requestId: message.requestId, result });
+      } catch (error) {
+        process.send?.({ type: "deliveryControlResult", requestId: message.requestId,
+          result: { ok: false, accepted: false, error: error instanceof Error ? error.message : "DELIVERY_LOCAL_SUBMIT_FAILED" } });
+      }
+    }
     if (message?.type === "desktopRefresh") runtime.publishDesktop();
     if (message?.type === "desktopReconnect") runtime.reconnect();
   });
@@ -1492,4 +1675,4 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   });
 }
 
-export const __test = { releaseDigest, readInstalledDigest, installRelease, safeRelativePath, versionAtLeast, managerWebSocketUrl, verifyReleaseManifest, manifestPayload, publicKeySha256, bootstrapConfig, readConfig, authorizedFetch, verifyNodeIdentity, writeLauncher, writeCurrentRelease, initializeCurrentRelease, startupCommand, startupFiles, configureCurrentUserStartup, spawnUpdateCandidate, RabiAgentRuntime };
+export const __test = { releaseDigest, readInstalledDigest, installRelease, safeRelativePath, versionAtLeast, verifyReleaseManifest, manifestPayload, publicKeySha256, bootstrapConfig, readConfig, authorizedFetch, verifyNodeIdentity, writeLauncher, writeCurrentRelease, initializeCurrentRelease, startupCommand, startupFiles, configureCurrentUserStartup, spawnUpdateCandidate, RabiAgentRuntime };

@@ -4,12 +4,14 @@ import os from "node:os";
 import path from "node:path";
 import test, { type TestContext } from "node:test";
 import type http from "node:http";
-import { handleAgentGroupFiles, type AgentGroupFilesContext } from "./agentGroupFiles.js";
+import { createAgentGroupFilesOperation, handleAgentGroupFiles, type AgentGroupFilesContext } from "./agentGroupFiles.js";
+import { compileApiOperation, readApiOperationInput, validateApiOperationResult } from "./apiOperationContract.js";
 import { getTrustedLanAgentSource, setTrustedLanAgentSource } from "./lanAgentBodyAuthority.js";
 import { LanAgentAuthority } from "./lanAgentAuthority.js";
 import { evaluateLanAgentRequest } from "./lanAgentRequestAccess.js";
 import { RabiGlobalConfigStore } from "./globalConfig.js";
 import { normalizeGatewayDefinition, type GatewayDefinition } from "../shared/gatewayConfigModel.js";
+import { markAuthenticatedConnectionRequest } from "./connectionRequestAccess.js";
 
 const groupId = "123456";
 const route = (): GatewayDefinition => ({
@@ -27,7 +29,6 @@ function fixture(t: TestContext, options: { remote?: boolean; query?: string; ad
   const config = new RabiGlobalConfigStore(root);
   config.patch({ webguiLan: { enabled: true } });
   const credential = authority.enroll(authority.issueBootstrapTicket().ticket, "node-one");
-  authority.registerAgentCatalog(credential.token, [{ agentId: "agent-one", provider: "custom-provider" }]);
   const target = `/api/agent/qq/group-files?${options.query ?? `routeId=route-one&groupId=${groupId}`}`;
   const request = { method: "GET", url: target, headers: { host: "localhost:8000", ...options.headers },
     socket: { remoteAddress: options.address ?? (options.remote === false ? "127.0.0.1" : "192.0.2.1") } } as unknown as http.IncomingMessage;
@@ -42,8 +43,6 @@ function fixture(t: TestContext, options: { remote?: boolean; query?: string; ad
   const responses: { status: number; body: any }[] = [];
   const context: AgentGroupFilesContext = {
     route: id => id === definition.id ? definition : undefined,
-    approvedBinding: () => { throw new Error("obsolete primary gate"); },
-    isAgentEnabled: () => { throw new Error("obsolete source gate"); },
     jsonResponse: (_response, status, body) => { responses.push({ status, body }); },
     readFiles: async (endpoint, group, folder) => {
       probes++;
@@ -69,6 +68,23 @@ test("local and enabled authenticated Agents read group metadata by default with
   }
 });
 
+test("executable group-file contract validates the same bounded response and preserves authenticated/local access", async t => {
+  for (const remote of [true, false]) {
+    const value = fixture(t, { remote });
+    const definition = createAgentGroupFilesOperation(value.context);
+    const operation = compileApiOperation(definition);
+    const response = { setHeader() {} } as unknown as http.ServerResponse;
+    const input = await readApiOperationInput(operation, value.request, new URL(value.request.url!, "http://localhost:8000"), response);
+    const result = await definition.handler(input);
+    assert.equal(result.status, 200); validateApiOperationResult(operation, result);
+    assert.equal(value.count(), 1);
+    assert.doesNotMatch(JSON.stringify(result.body), /do-not-leak/);
+    const invalid = new URL(value.request.url! + "&unknown=fixture", "http://localhost:8000");
+    await assert.rejects(readApiOperationInput(operation, value.request, invalid, response), { code: "API_REQUEST_SCHEMA_INVALID" });
+    assert.equal(value.count(), 1);
+  }
+});
+
 test("omitted group restriction survives normalization and explicit allowed groups work for local and remote", async t => {
   for (const remote of [true, false]) {
     for (const policy of [undefined, {}, { readableGroupFileIds: undefined }, { readableGroupFileIds: [groupId] }]) {
@@ -90,7 +106,12 @@ test("explicit group restrictions apply equally to local and remote and are not 
       value.definition.targetGroupId = groupId;
       await value.run();
       assert.equal(value.count(), 0);
-      assert.deepEqual(value.responses, [{ status: 403, body: { code: -1, errorCode: "QQ_GROUP_FILES_GROUP_NOT_ALLOWED" } }]);
+      assert.equal(value.responses[0].status, 403);
+      assert.equal(value.responses[0].body.errorCode, "QQ_GROUP_FILES_GROUP_NOT_ALLOWED");
+      assert.match(value.responses[0].body.message, /messageAdapterPolicies\.napcat\.readableGroupFileIds/);
+      assert.ok(value.responses[0].body.message.includes(JSON.stringify(policy)));
+      delete value.definition.messageAdapterPolicies.napcat!.readableGroupFileIds;
+      await value.run(); assert.equal(value.responses[1].status, 200); assert.equal(value.count(), 1);
     }
   }
 });
@@ -124,7 +145,7 @@ test("valid principal is authoritative even when untrusted proxy markers are pre
 
 test("revoked original principal cannot downgrade to loopback", async t => {
   const value = fixture(t, { address: "127.0.0.1" });
-  value.authority.setAgentEnabled("node-one", "agent-one", false);
+  value.authority.setNodeEnabled("node-one", false);
   delete value.request.headers["x-rabiroute-agent-id"];
   await value.run();
   assert.equal(value.count(), 0);
@@ -145,15 +166,37 @@ test("query must be exact and bodyless; unavailable Route, ambiguous and unsafe 
     if (variant === "disabled") value.definition.enabled = false;
     if (variant === "napcat-disabled") value.definition.messageAdapters = ["heartbeat"];
     if (variant === "ambiguous") value.definition.napcatInstances!.push({ ...value.definition.napcatInstances![0], id: "second" });
-    if (variant === "unsafe") value.definition.napcatInstances![0]!.httpUrl = "http://example.com";
+    if (variant === "unsafe") value.definition.napcatInstances![0]!.httpUrl = "file:///unsupported";
     await value.run();
     assert.equal(value.count(), 0);
     assert.ok(value.responses[0].status >= 400);
   }
 });
 
-test("revocation, credential rotation and Agent/global ABA while awaiting upstream suppress all metadata", async t => {
-  for (const variant of ["disable", "agent-aba", "global-aba", "credential"]) {
+test("user configured LAN and HTTPS NapCat endpoints remain available", async t => {
+  for (const httpUrl of ["http://192.0.2.5:3000", "https://napcat.example:8443"]) {
+    const value = fixture(t);
+    value.definition.napcatInstances![0]!.httpUrl = httpUrl;
+    let called = false;
+    value.context.readFiles = async endpoint => { called = true; assert.equal(endpoint.httpUrl, httpUrl); return page; };
+    await value.run();
+    assert.equal(value.responses[0].status, 200); assert.equal(called, true);
+  }
+});
+
+test("authenticated Relay or Peer reads group files without a second source grant", async t => {
+  for (const header of ["x-rabilink-tunnel-local", "x-rabiroute-peer-proxy"]) {
+    const value = fixture(t, { remote: false, address: "192.0.2.2", headers: { [header]: "1" } });
+    let revoked = false;
+    markAuthenticatedConnectionRequest(value.request, () => { if (revoked) throw new Error("revoked"); });
+    await value.run(); assert.equal(value.responses[0].status, 200);
+    revoked = true;
+    await value.run(); assert.equal(value.responses[1].status, 403); assert.equal(value.count(), 1);
+  }
+});
+
+test("revocation, credential rotation and node/global ABA while awaiting upstream suppress all metadata", async t => {
+  for (const variant of ["disable", "node-aba", "global-aba", "credential"]) {
     const value = fixture(t, { address: "127.0.0.1" });
     let finish!: (result: typeof page) => void;
     let started!: () => void;
@@ -167,10 +210,12 @@ test("revocation, credential rotation and Agent/global ABA while awaiting upstre
     } else if (variant === "credential") {
       value.authority.revokeNode("node-one");
       const replacement = value.authority.enroll(value.authority.issueBootstrapTicket().ticket, "node-one");
-      value.authority.registerAgentCatalog(replacement.token, [{ agentId: "agent-one", provider: "custom-provider" }]);
     } else {
-      value.authority.setAgentEnabled("node-one", "agent-one", false);
-      if (variant === "agent-aba") value.authority.setAgentEnabled("node-one", "agent-one", true);
+      value.authority.setNodeEnabled("node-one", false);
+      if (variant === "node-aba") {
+        value.authority.setNodeEnabled("node-one", true);
+        assert.ok(value.authority.authenticate(value.request.headers.authorization!.toString().replace(/^Bearer /, "")), "Restored node accepts fresh authentication while the original request lease remains revoked.");
+      }
     }
     delete value.request.headers["x-rabiroute-agent-id"];
     finish(page);

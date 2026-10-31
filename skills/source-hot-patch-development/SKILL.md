@@ -12,7 +12,7 @@ description: 开发、验证和排障 RabiRoute 原生热补丁。用于动态�
 - 先读 [源码热补丁](../../docs/source-hot-patches.md)、[代码架构](../../docs/code-architecture.md) 和目标功能文档，再检查工作区差异与原 owner。支持矩阵以专题文档标明的当前版本能力、源码与运行回读为事实源；目标设计、构建通过和已部署分别举证。
 - 默认评估热补丁，逐项检查依赖、导出、闭包、类布局、状态拥有者和生命周期。不能仅因修改后端、新增模块或未出现在旧清单中就要求重启；运行版本尚未具备的能力先补齐或报告具体限制，不写成全部已支持。
 - 自动化验收包含未预先登记的新模块、声明与相对类型依赖变更、原子保存、编译中连续修改及非法声明修复。分别核对发现、编译、兼容拒绝与真正激活；发现成功不证明任意状态可迁移。跨模块自动发布复用两阶段事务。
-- 不另建 Manager，不把编辑中的共享源码或构建目录直接覆盖运行服务，不用重复带查询参数的 `import()` 充当补丁，不重跑构造函数、初始化副作用或消费者来恢复状态。
+- 保留在用 Host/Manager。候选验收使用独立端口、进程、测试配置和临时数据目录；这些测试实例不接管在用服务。不把编辑中的共享源码或构建目录覆盖运行服务，不用重复带查询参数的 `import()` 充当补丁，不重跑构造函数、初始化副作用或消费者来恢复状态。
 - 状态结构变化必须通过 `HotPatchRuntime.applyWithStateMigration` 提供显式迁移函数；迁移失败必须保留旧版本并恢复调用方状态，禁止静默重建实例或部分激活。
 - 编译产物是可信开发者的本机可执行代码，`node:vm` 不是安全沙箱。网络 API 只接受候选 hash，不能接受并执行任意源码或路径。
 
@@ -29,10 +29,12 @@ description: 开发、验证和排障 RabiRoute 原生热补丁。用于动态�
 5. 请求租约覆盖业务实际完成，不因客户端断开就释放在途写入。生成器须消费或显式完成清理；不能把遗弃迭代器、后台 Promise、定时器或事件监听器当作已排空。跨进程迭代先核对支持矩阵，缺少相应协议时明确拒绝。
 6. 同步中英文专题文档及必要索引，准确区分源码、构建、隔离运行、安装版和真实业务验收。Skill 只保留流程，接口细节链接权威文档，不复制另一套状态表。
 
+匹配验证与确定性证据复用见[开发候选准入](../../docs/developer-candidate-admission.md)。证据必须覆盖实际输入闭包、工具链和最终候选；不明依赖保留完整验证。手工、watcher 和联合发布由原发布 owner 核对来源与证明，网络请求不能自行声明测试通过。普通发行候选沿原正式合同验证；匹配证明不代替兼容性、迁移、回执和运行读回。
+
 ## 发布与核对
 
 - 只有发布已获授权且相关在途写入和不确定操作已核对时才操作安装环境；按 [长期维护](../../docs/rabi-maintenance.md) 确认唯一发布 owner。源代码开发授权不自动提供共享实例切换窗口；已有明确维护或部署授权时按原范围执行，不重复申请。
-- 用 `RabiRouteHost.exe --command status --json` 动态发现完整 `managerBaseUrl`、`applicationGenerationId`、`managerInstanceId`；调用须等待进程退出并读取完整 JSON，不能把空输出和 shell 退出码当成状态。再读 `/meta` 核对身份、`health.live=true`、`requiredReady=true`、`health.state=healthy|degraded` 和目标能力。不得固定端口、扫描端口或读取退役锁寻找服务。
+- 用 `RabiRouteHost.exe --command status --json` 动态发现完整 `managerBaseUrl`、`applicationGenerationId`、`managerInstanceId`；调用须等待进程退出并读取完整 JSON，不能把空输出和 shell 退出码当成状态。再读 `/meta` 核对身份、`health.live=true`、`health.state=healthy|degraded` 和目标接口依赖；`requiredReady` 记录声明能力状态，不以无关能力缺失阻断发布或核对。不得固定端口、扫描端口或读取退役锁寻找服务。
 - 使用 Host 的 `source-patch` 命令转发本地请求文件，不提取真实 Host token。源码实现存在不代表安装版已有该命令；先核对运行版本能力。
 - 一次发布使用唯一稳定 `operationId` 与精确基线身份；查询原操作后判断 `state`、`commitState`。传输成功或 CLI `ok` 不等于提交成功。
 - `pending`、`indeterminate`、断连或进程更换时冻结原载荷，不盲目重放、换键或直接改回执。正式 `source-patch-reconcile` 仅凭已有运行身份与持久证明核对；没有证明保持未知。

@@ -28,9 +28,10 @@ export function codexDesktopIpcPaths({ platform = process.platform, env = proces
 }
 
 export class CodexDesktopIpcClient {
-  constructor({ pipePaths = codexDesktopIpcPaths(), requestTimeoutMs = 30_000, onBroadcast } = {}) {
+  constructor({ pipePaths = codexDesktopIpcPaths(), requestTimeoutMs = 30_000, timeout = (_key, fallback) => fallback, onBroadcast } = {}) {
     this.pipePaths = pipePaths;
     this.requestTimeoutMs = requestTimeoutMs;
+    this.timeout = timeout;
     this.onBroadcast = onBroadcast;
     this.socket = null;
     this.clientId = "initializing-client";
@@ -143,7 +144,7 @@ export class CodexDesktopIpcClient {
         const timer = setTimeout(() => {
           this.pending.delete(requestId);
           reject(new Error(`Codex Desktop IPC request timed out: ${method}`));
-        }, this.requestTimeoutMs);
+        }, this.timeout("agent.desktop.ipc", this.requestTimeoutMs));
         this.pending.set(requestId, { resolve, reject, timer });
       });
       this.write({ type: "request", requestId, sourceClientId: this.clientId, version, method, params });

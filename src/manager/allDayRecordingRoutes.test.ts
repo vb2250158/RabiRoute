@@ -9,7 +9,8 @@ import { DEFAULT_ALL_DAY_SETTINGS } from "../shared/allDayRecording.js";
 import { EventEmitter } from "node:events";
 import { createHash } from "node:crypto";
 import { AllDayRecordingService, atomicRecordingJson } from "./allDayRecording.js";
-import { allDayRecordingHandler, createAllDayRecording } from "./allDayRecordingRoutes.js";
+import { createAllDayRecording } from "./allDayRecordingRoutes.js";
+import { recordingOperationFixture } from "./personaRecordingOperationTestFixtures.js";
 import { LanAgentAuthority } from "./lanAgentAuthority.js";
 import { RabiGlobalConfigStore } from "./globalConfig.js";
 import { assertTrustedLanAgentPrincipal, evaluateLanAgentRequest } from "./lanAgentRequestAccess.js";
@@ -26,7 +27,6 @@ async function fixture(t: TestContext) {
   const config = new RabiGlobalConfigStore(root);
   config.patch({ webguiLan: { enabled: true } });
   const credential = authority.enroll(authority.issueBootstrapTicket().ticket, "node-fixture");
-  authority.registerAgentCatalog(credential.token, [{ agentId: "worker", provider: "custom-provider" }]);
   const runtime = createAllDayRecording({ roleDirectory: id => path.join(root, id), hostId: "host-fixture", mobileRoot: path.join(root, "mobile"), speechUrl: () => { throw new Error("Unexpected speech call"); }, changed: () => {}, mobileAudio: async () => Buffer.from("RIFFphone"), runRead: async job => readAllDayStorage(job) });
   t.after(() => runtime.dispose());
   runtime.reads.timeline = async (role, since, until) => ({ events: await runtime.store.timeline(role, since, until), loading: false, pendingDays: [], readError: undefined });
@@ -35,13 +35,13 @@ async function fixture(t: TestContext) {
     if (remote) assert.equal(evaluateLanAgentRequest(value, authority, true, () => config.getLanAgentAdmissionPolicy()).kind, "agent");
     return value;
   };
-  const revoke = () => authority.setAgentEnabled("node-fixture", "worker", false);
+  const revoke = () => authority.revokeNode("node-fixture");
   let readOnly = false;
   const invoke = (req: IncomingMessage, readBody: (request: IncomingMessage) => Promise<unknown> = async () => ({})) => {
     const completed = deferred<{ status: number; body: string | Buffer }>();
     let status = 0;
     const response = Object.assign(new EventEmitter(), { writableEnded: false, destroyed: false, headersSent: false, writeHead(code: number) { status = code; this.headersSent = true; return this; }, end(body: string | Buffer) { this.writableEnded = true; completed.resolve({ status, body }); }, destroy() { this.destroyed = true; completed.resolve({ status, body: "" }); } });
-    const handler = allDayRecordingHandler(runtime, { local: req => req.socket.remoteAddress === "127.0.0.1", readOnly: () => readOnly, readBody });
+    const handler = recordingOperationFixture(runtime, { local: req => req.socket.remoteAddress === "127.0.0.1", readOnly: () => readOnly, readBody });
     assert.equal(handler(req, new URL(req.url!, "http://localhost"), response as unknown as ServerResponse), true);
     return completed.promise;
   };
@@ -92,7 +92,7 @@ test("revocation and admission or credential ABA during body read block configur
     const pending = f.invoke(f.request(true, "PUT", "settings"), async () => { entered.resolve(); return body.promise; });
     await entered.promise;
     if (mode === "admission-aba") { f.config.patch({ webguiLan: { enabled: false } }); f.config.patch({ webguiLan: { enabled: true } }); }
-    else { f.revoke(); if (mode === "credential-aba") f.authority.setAgentEnabled("node-fixture", "worker", true); }
+    else { f.revoke(); if (mode === "credential-aba") f.authority.enroll(f.authority.issueBootstrapTicket().ticket, "node-fixture"); }
     body.resolve(screenSettings);
     assert.equal((await pending).status, 403);
     await assert.rejects(fs.access(path.join(f.runtime.store.directory("persona"), "settings.json")), { code: "ENOENT" });
@@ -202,7 +202,7 @@ test("index repair acknowledges a bounded job immediately, retains local authori
   });
   await runtime.store.append("one",{id:"saved",startedAt:Date.parse("2026-10-11"),endedAt:Date.parse("2026-10-11"),source:"window",deviceId:"computer",kind:"window",text:"Editor",state:"saved"});
   let local = true, readOnly = false;
-  const handler = allDayRecordingHandler(runtime,{local: () => local,readOnly: () => readOnly,readBody: async () => ({})});
+  const handler = recordingOperationFixture(runtime,{local: () => local,readOnly: () => readOnly,readBody: async () => ({})});
   const server = http.createServer((request,response) => { if(!handler(request,new URL(request.url!,"http://fixture"),response)) { response.writeHead(404); response.end(); } });
   await new Promise<void>(resolve => server.listen(0,"127.0.0.1",resolve));
   t.after(async () => { release();await runtime.dispose(); server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); await fs.rm(root,{recursive:true,force:true}); });
@@ -216,4 +216,25 @@ test("index repair acknowledges a bounded job immediately, retains local authori
   const catalog = await (await fetch(url.replace("/index-repair/2026-10-11","/catalog?day=2026-10-11"))).json() as {data:{incompleteDays:string[]}};
   assert.deepEqual(catalog.data.incompleteDays,["2026-10-11"]);
   release(); await completed;
+});
+
+
+test("recording cleanup failure still joins an accepted derived-index repair", async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "recording-cleanup-join-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const entered = deferred<void>(), release = deferred<void>();
+  const runtime = createAllDayRecording({ roleDirectory: id => path.join(root, id), hostId: "synthetic", mobileRoot: path.join(root, "mobile"),
+    speechUrl: () => { throw new Error("No real speech request"); }, changed() {}, mobileAudio: async () => Buffer.alloc(0),
+    runRead: async () => { entered.resolve(); await release.promise; return []; } });
+  const failure = new Error("original recording service cleanup failed");
+  runtime.service.dispose = async () => { throw failure; };
+  const repair = runtime.store.repairIndex("role", "2026-10-31");
+  await entered.promise;
+  let settled = false;
+  const stopping = runtime.dispose().then(() => assert.fail("must preserve cleanup failure"), error => { settled = true; assert.equal(error, failure); });
+  t.after(async () => { release.resolve(); await Promise.allSettled([repair, stopping]); });
+  await new Promise<void>(resolve => setImmediate(resolve));
+  assert.equal(settled, false);
+  release.resolve(); await repair; await stopping;
+  assert.equal(settled, true);
 });

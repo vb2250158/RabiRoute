@@ -1,3 +1,4 @@
+import { getTimeoutMs } from "../shared/timeoutSettings.js";
 import { renderRabiDelivery, type RabiDeliveryEnvelope } from '../shared/rabiMessage.js';
 import type { AgentInstanceBinding } from '../shared/agentInstance.js';
 import type { AgentAdapter } from './contracts.js';
@@ -11,7 +12,7 @@ export function createDeviceAgentAdapter(binding?: AgentInstanceBinding, options
   const request = options.request || (async (selected: AgentInstanceBinding, method: string, path: string, body?: unknown) => {
     const base = process.env.GATEWAY_MANAGER_URL?.replace(/\/+$/,''), token = process.env.LAN_AGENT_ACCESS_TOKEN;
     if(!base || !token) throw new Error('DEVICE_AGENT_MANAGER_CONNECTION_REQUIRED');
-    const response=await fetch(base+path,{method,headers:{authorization:'Bearer '+token,'content-type':'application/json','x-rabi-device-agent-instance':selected.instanceId,'x-rabi-device-agent-route':process.env.GATEWAY_ID || ''},body:body===undefined ? undefined : JSON.stringify(body),signal:AbortSignal.timeout(15000)});
+    const response=await fetch(base+path,{method,headers:{authorization:'Bearer '+token,'content-type':'application/json','x-rabi-device-agent-instance':selected.instanceId,'x-rabi-device-agent-route':process.env.GATEWAY_ID || ''},body:body===undefined ? undefined : JSON.stringify(body),signal:AbortSignal.timeout(getTimeoutMs("backend.agentAdapters.deviceAgentAdapter.createDeviceAgentAdapter.AbortSignal.timeout.request", 15000))});
     const result=await response.json() as any;
     if(!response.ok || result.code!==0) throw new Error(result.code || 'DEVICE_AGENT_DELIVERY_UNCONFIRMED');
     return result.data;

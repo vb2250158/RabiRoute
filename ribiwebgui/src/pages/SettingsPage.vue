@@ -1,9 +1,11 @@
 <script setup lang="ts">
+import { translateText } from "../i18n";
 import { useRoleStore } from "../stores/roleStore";
 import ArchivedRoles from "../components/ArchivedRoles.vue";
 import { useRoute } from "vue-router";
 const currentSettingsRoute = useRoute();
 const settingsRoleStore = useRoleStore();
+import TimeoutSettings from "../components/TimeoutSettings.vue";
 import ResourceCacheSettings from "../components/ResourceCacheSettings.vue";
 import { userFacingError } from "../userFacingError";
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
@@ -116,7 +118,7 @@ function toggleWebguiLanAccess(enabled: boolean | null): void {
 }
 
 async function regenerateWebguiLanToken(): Promise<void> {
-  if (webguiLanAccess.value.tokenConfigured && !window.confirm("轮换访问密钥会立即使旧链接失效。确定继续吗？")) return;
+  if (webguiLanAccess.value.tokenConfigured && !window.confirm(translateText("轮换访问密钥会立即使旧链接失效。确定继续吗？"))) return;
   try {
     await updateWebguiLanAccess({ regenerateToken: true });
   } catch {
@@ -248,6 +250,7 @@ onBeforeUnmount(() => {
     <div class="two-column">
       <TrustedWebRendererHost :renderers="settingsRenderers" />
       <ResourceCacheSettings />
+      <TimeoutSettings />
 
       <v-card class="app-card glass-card section-card">
         <div class="section-title-row">

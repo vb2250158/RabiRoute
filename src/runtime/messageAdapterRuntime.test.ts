@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
@@ -8,6 +9,12 @@ import { config } from "../config.js";
 import { createWebhookAdapter, type WebhookAdapterProfile } from "../adapters/webhookAdapter.js";
 import type { MessageAdapterDefinition, MessageAdapterDispose } from "../adapters/messageAdapter.js";
 import { createMessageAdapterRuntime } from "./messageAdapterRuntime.js";
+import { createGatewayListenerRuntime, type GatewayListenerPublication } from "./gatewayListenerRuntime.js";
+
+const listenerFixtures: Array<{
+  runtime: ReturnType<typeof createGatewayListenerRuntime>;
+  publications: GatewayListenerPublication[];
+}> = [];
 
 function profile(port: number): WebhookAdapterProfile {
   return {
@@ -26,6 +33,18 @@ function definition(
   adapterProfile: WebhookAdapterProfile,
   onListening?: () => void | MessageAdapterDispose | Promise<void | MessageAdapterDispose>
 ): MessageAdapterDefinition {
+  // These Fibers run inside this test process, outside the production Gateway supervisor.
+  // Inject the formal listener owner with its real PID and an explicit fixture generation.
+  const identity = { gatewayId: `message-adapter-runtime-fixture-${listenerFixtures.length + 1}`,
+    gatewayGenerationId: `fixture-${randomUUID()}`, pid: process.pid };
+  const publications: GatewayListenerPublication[] = [];
+  const listenerRuntime = createGatewayListenerRuntime({ identity, publish(publication) {
+    assert.equal(publication.pid, process.pid);
+    assert.equal(publication.gatewayId, identity.gatewayId);
+    assert.equal(publication.gatewayGenerationId, identity.gatewayGenerationId);
+    publications.push(publication);
+  } });
+  listenerFixtures.push({ runtime: listenerRuntime, publications });
   return {
     manifest: {
       type: "webhook",
@@ -34,7 +53,11 @@ function definition(
       transport: "http",
       lifecycle: "fiber"
     },
-    create: () => createWebhookAdapter(adapterProfile, { onListening })
+    create: () => createWebhookAdapter(adapterProfile, {
+      apiOperations: { registerExternalListener: definition => listenerRuntime.registerExternalListener("fixture.webhook", definition) },
+      operationId: listenerRuntime.operationId,
+      onListening
+    })
   };
 }
 
@@ -89,10 +112,20 @@ test.before(() => {
   config.messageAdapterTypes = ["webhook"];
 });
 
-test.after(() => {
-  config.dataDir = previousDataDir;
-  config.messageAdapterTypes = previousAdapterTypes;
-  fs.rmSync(testDataDir, { recursive: true, force: true });
+test.after(async () => {
+  try {
+    for (const fixture of listenerFixtures) {
+      assert.equal(fixture.publications.at(-1)?.listeners.length ?? 0, 0,
+        "Message Fiber cleanup must withdraw its actual native listener before fixture teardown.");
+    }
+  } finally {
+    const cleanup = await Promise.allSettled(listenerFixtures.map(fixture => fixture.runtime.dispose()));
+    config.dataDir = previousDataDir;
+    config.messageAdapterTypes = previousAdapterTypes;
+    fs.rmSync(testDataDir, { recursive: true, force: true });
+    const failure = cleanup.find((result): result is PromiseRejectedResult => result.status === "rejected");
+    if (failure) throw failure.reason;
+  }
 });
 
 function resetGatewayStatus(): void {

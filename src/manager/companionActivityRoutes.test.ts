@@ -8,7 +8,7 @@ import os from "node:os";
 import path from "node:path";
 import { CompanionContinuationStore } from "./companionContinuation.js";
 import { CompanionActivity, readCompanionPresets } from "./companionActivity.js";
-import { companionActivityHandler } from "./companionActivityRoutes.js";
+import { companionOperationFixture } from "./personaCompanionOperationTestFixtures.js";
 const presets = readCompanionPresets(JSON.parse(readFileSync("packages/rabi-companion/presets.json", "utf8")));
 
 test("local menu admission resolves the persona Route and recording consent, rejects origin/tunnel/readonly requests", async t => {
@@ -18,7 +18,7 @@ test("local menu admission resolves the persona Route and recording consent, rej
   const continuation = new CompanionContinuationStore(recoveryRoot);
   const service = new CompanionActivity({ presets, context: async () => "fixture persona",
     changed: () => {}, reaction: () => {}, save: async () => {}, cancelSpeech: async () => {}, speak: async () => {}, deliver: async () => {} });
-  const handler = companionActivityHandler(service, { continuation, local: () => true, readOnly: () => readOnly,
+  const handler = companionOperationFixture(service, { continuation, local: () => true, readOnly: () => readOnly,
     verifyGateway: (role, gateway) => { assert.equal(role, "one"); return gateway || "persona-route"; },
     saveSummaryDefault: async () => consent, last: async () => null });
   const server = http.createServer((req, res) => { if (!handler(req, new URL(req.url!, `http://${req.headers.host}`), res)) { res.writeHead(404); res.end(); } });
@@ -61,10 +61,9 @@ test("authenticated remote Agents share companionship start, read and stop", asy
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "companion-remote-"));
   const authority = new LanAgentAuthority({ statePath: path.join(root, "auth.json") });
   const credential = authority.enroll(authority.issueBootstrapTicket().ticket, "remote-fixture");
-  authority.registerAgentCatalog(credential.token, [{ agentId: "worker", provider: "custom-provider" }]);
   const service = new CompanionActivity({ presets, context: async () => "fixture persona",
     changed: () => {}, reaction: () => {}, save: async () => {}, cancelSpeech: async () => {}, speak: async () => {}, deliver: async () => {} });
-  const handler = companionActivityHandler(service, { local: () => false, readOnly: () => false,
+  const handler = companionOperationFixture(service, { local: () => false, readOnly: () => false,
     verifyGateway: () => "persona-route", saveSummaryDefault: async () => false, last: async () => null });
   const server = http.createServer((request, response) => {
     const access = evaluateLanAgentRequest(request, authority, true);
@@ -84,7 +83,7 @@ test("authenticated remote Agents share companionship start, read and stop", asy
   const working = ((await mode.json()) as any).data.session;
   assert.equal(working.id, session.id); assert.equal(working.activityKind, "work");
   const stop = await fetch(`${base}/command`, { method: "POST", headers, body: JSON.stringify({ sessionId: working.id, revision: working.revision, action: "stop" }) });
+  authority.setNodeEnabled("remote-fixture", false);
   assert.equal(stop.status, 200);
-  authority.setAgentEnabled("remote-fixture", "worker", false);
   assert.equal((await fetch(base, { headers })).status, 403);
 });

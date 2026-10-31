@@ -10,6 +10,8 @@
 
 RabiRoute 的唯一 `xiaomiHome` 消息端。它通过 Home Assistant REST API 提供设备目录和状态查询，通过 WebSocket 订阅状态变化，并提供 typed capability 动作门、有人移动事件和本机摄像头 artifact 账本。
 
+插件用同一组可执行合同注册全部 53 个精确接口，包括部署 SSE、地图 HTML、录像 Range 和 MP4 字节读取；原生账号、回执与设备服务继续拥有业务状态。入口、取消和验收边界见[接口合同](../../../../docs/xiaomi-home-api-contract.md)。
+
 ## 配置与授权
 
 连接故障与授权提示在连接卡片处理；事件监听状态和重新检查入口位于监听开关旁，录像关闭时显示“已关闭”；连接成功后即可控制设备。米家卡片顶部仅保留整体状态，不再重复展示“环境和依赖”告警列表。尚未保存的开关变化单独标记，不冒充已生效状态。
@@ -22,13 +24,13 @@ RabiRoute 的唯一 `xiaomiHome` 消息端。它通过 Home Assistant REST API �
 
 启用“启动 Rabi 时自动启动 Home Assistant”并保存后立即执行一次启动检查，此后米家插件启动时自动复用或启动该容器。Windows Docker Desktop 引擎离线时，启动动作尝试官方 `docker desktop start`；失败显示错误，不改用任意脚本。仅管理官方 Home Assistant 镜像且本机 `8123/tcp` 端口映射与已保存服务地址一致的容器，启动使用检测得到的不可变容器 ID。请求串行化，已就绪不重复启动；就绪等待最多 60 秒，失败后可以重试。关闭 Rabi 取消等待，但不会停止共享的 Home Assistant 容器或 Docker 引擎。
 
-部署绑定与自动启动开关由本机 `home-assistant-deployment.json` 唯一保存，独立于登录凭据和 Route 策略。`GET/PUT /api/agent/xiaomi-home/deployment` 与 `POST /api/agent/xiaomi-home/deployment/start`、`POST /api/agent/xiaomi-home/deployment/install` 只允许本机回环；修改要求当前 Manager lifecycle fence 与部署 revision。启动是按目标状态执行的幂等操作。页面只有在已保存地址的服务就绪后才允许打开登录和令牌页。小米账号仍在[小米官方集成](https://github.com/XiaoMi/ha_xiaomi_home/blob/main/doc/README_zh.md)中授权。
+部署绑定与自动启动开关由本机 `home-assistant-deployment.json` 唯一保存，独立于登录凭据和 Route 策略。`GET/PUT /api/agent/xiaomi-home/deployment` 与 `POST /api/agent/xiaomi-home/deployment/start`、`POST /api/agent/xiaomi-home/deployment/install` 接受已鉴权且启用的远端连接；修改要求当前 Manager lifecycle fence 与部署 revision。安装和启动仍在 Manager 所在电脑执行，保留系统管理员交互与安装归属检查。启动是按目标状态执行的幂等操作。页面只有在已保存地址的服务就绪后才允许打开登录和令牌页。小米账号仍在[小米官方集成](https://github.com/XiaoMi/ha_xiaomi_home/blob/main/doc/README_zh.md)中授权。
 
 在 WebGUI 的“消息适配器”中为当前 Route 添加“米家 / Xiaomi Home”，展开后先在 Setup 标签提交 Home Assistant 地址和长期访问令牌，再在设置标签配置事件、设备控制和录像。首次保存前，完整设置来自插件 Profile；首次保存后，本机 Xiaomi Home 运行目录中的 `settings.json` 是策略设置真源。Manager 使用 revision 围栏与原子写入热加载客户端、事件监听和录像抓取，无需编辑 `dist/plugins/profiles/desktop.json`。
 
 登录凭据只由本机受保护凭据库保存：Windows 使用当前用户 DPAPI，其它系统使用权限受限本机密钥和 AES-256-GCM。Route 配置、设置文件、日志和 API 响应不会保存或回显明文 token。认证请求必须携带当前 Manager lifecycle fence 与稳定 `Idempotency-Key`；地址和候选令牌会先一起验证，随后才提交。录像内容复用 Manager 连接鉴权，无独立读取凭据。
 
-所有 PUT/POST mutation 都要求从当前 Manager `/meta` 取得并携带：
+所有 PUT/POST/DELETE mutation 都要求从当前 Manager `/meta` 取得并携带：
 
 - `x-rabiroute-expected-application-generation-id`
 - `x-rabiroute-expected-manager-instance-id`
@@ -39,7 +41,7 @@ WebGUI 使用相对 Manager API，并在每次保存前重新读取 `/meta`，�
 
 Home Assistant 连接成功后即可控制设备，不再提供额外设备控制开关。动作仍使用稳定幂等键和最新状态版本。
 
-默认地址策略允许 `localhost`（会固定为回环 IP）及字面量的回环、私网、链路本地 IPv4/IPv6 地址，避免 DNS 重绑定把 Home Assistant Bearer token 带到另一个目标。除回环外默认必须使用 HTTPS；兼容私网 HTTP 时必须显式开启 `allowInsecurePrivateHttp`，并接受令牌可能在局域网被截获的风险。普通域名（包括 `.local`）必须显式开启 `allowPublicBaseUrl` 才能使用，但公网地址始终要求 HTTPS；这表示操作者信任该域名的解析。地址不得包含用户名、密码、路径、查询或 fragment，REST 请求也不会跟随重定向。
+默认可使用配置的 Home Assistant 域名、公网地址和 HTTP(S) 端点。只有显式设置 `allowPublicBaseUrl=false` 才限制到回环或私网 IP，`allowInsecurePrivateHttp=false` 才要求非回环地址使用 HTTPS；已有显式设置继续生效，两项均可在设置页修改。基础地址须为不含凭据、路径、查询或 fragment 的 origin，REST 重定向遵循相同的用户设置；跨 origin 不携带原地址的认证头。
 
 同一设备动作的完整 intent 会绑定到持久 `Idempotency-Key` receipt。并发请求和 Manager 重启只会读取或恢复同一 receipt；不同 intent 返回冲突。外部调用结果不确定时仅做 Home Assistant 状态读回，无法确认就停止，绝不自动重发设备动作。
 
@@ -51,9 +53,9 @@ Home Assistant 连接成功后即可控制设备，不再提供额外设备控�
 
 事件历史保留在所属角色的 `xiaomi-home-events.jsonl`，以事件 `occurredAt` 写入 `time`/`isoTime`。Manager 通过单写入队列异步追加（最多 64 个待处理事件、每条不超过 256 KiB），角色目录缺失时不重建。写入失败记录脱敏审计，事件路由仍继续。该历史保持追加语义，不承诺跨重启去重；本次不增加自动轮转、归档或删除，也不迁移旧记录。
 
-小米官方 Home Assistant 集成不提供摄像头图片或视频流。社区链路可使用 Xiaomi Miot Auto 暴露的 `motion_video_*` 属性：抓取 Worker 按 `cameraClipAllowedHosts` 白名单读取 HTTPS HLS，处理 AES-128 分片并合并 MP4，再登记为本机 artifact。`cameraClipCaptureEnabled` 默认关闭；只有从真实事件 URL 确认媒体主机后才能登记白名单。
+小米官方 Home Assistant 集成不提供摄像头图片或视频流。社区链路可使用 Xiaomi Miot Auto 暴露的 `motion_video_*` 属性：抓取 Worker 读取 HTTP(S) HLS，处理 AES-128 分片并合并 MP4，再登记为本机 artifact。`cameraClipCaptureEnabled` 默认关闭；开启后 `cameraClipAllowedHosts` 留空不限域名，用户填写名单时同时限制重定向、分片和密钥地址。相对媒体地址按重定向后的播放列表地址解析。
 
-录像列表和元数据通过 `/api/agent/xiaomi-home/artifacts` 读取；内容通过 `/api/agent/xiaomi-home/artifacts/:artifactId/content` 读取，要求 artifact token，支持 HTTP Range，并记录读取审计。临时云 URL 和本机文件路径都不会直接交给 Agent。
+录像列表和元数据通过 `/api/agent/xiaomi-home/artifacts` 读取；内容通过 `/api/agent/xiaomi-home/artifacts/:artifactId/content` 读取，复用 Manager 连接鉴权，支持 HTTP Range，并记录读取审计。临时云 URL 和本机文件路径都不会直接交给 Agent。
 
 ### HA OS 安装边界
 
@@ -73,3 +75,13 @@ HA 由现有插件托管的隐藏子进程检查与恢复，不再注册独立�
 
 
 地图页的手动遥控与 Agent 共用 `/vacuum-remote` 会话接口，设备动作仍通过 HA。进入前确认清扫暂停，初始化后支持前进/左右转与松键停止；视频不设播放时长上限，中继失败可显式重新连接。详见[设备 API](../../../../docs/home-device-agent-api.md)。
+
+## 候选发布与原生 owner 退役
+
+候选准备只读取原设置和录像账本，构造不创建运行目录、不重写 `artifacts/index.json`，也不启动 Home Assistant 恢复、事件监听或 Activity 订阅。同步 publication 只切换当前 activation 的 owner 指针，失败时可回滚；已经发布的旧实例继续拥有自己的资源。
+
+发布成功后，插件先等待 `previousRetirement` 确认真正完成，再核对本 activation 的取消信号。随后 `XiaomiHomeRuntimeController.activate` 重新读取最新设置、凭据与完整录像账本，初始化派生索引并启动原有 deployment/monitor/activity owner。旧实例在候选准备后新增的记录不会被旧快照覆盖。等待期间公开接口返回 `503 xiaomi_home_runtime_starting`，这是运行状态，不是新功能许可。显式 Manager 只读模式保留读取合同，但不做启动初始化、自动恢复或订阅。
+
+退役只关闭本 activation 的 HTTP 注册、遥控／视频资源、部署恢复和 monitor；会等待已接受的事件投递、录像抓取、Activity 保存以及 socket 实际关闭。旧录像抓取完成后不再追加事件投递。设置热切换也先等待旧 monitor/capture 退出，再订阅新配置。停止使用同一个 Promise，取消或超时不表示资源已经释放；未确认的旧 owner 不能被新实例绕过。发布后的初始化失败不回滚已经完成的持久写入，只清理当前实例。
+
+现有设备来源、设置 revision、动作幂等回执、生命周期请求头和连接权限保持原合同。相关测试使用临时目录、受控部署／网络／投递依赖与真实插件 generation；不代表真实设备、Hyper-V、跨重启恢复或全天运行已经验收。

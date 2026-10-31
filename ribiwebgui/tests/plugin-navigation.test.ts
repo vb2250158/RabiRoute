@@ -11,6 +11,7 @@ const rendererByRoute: Readonly<Record<string, string>> = {
   "route.adapters": "builtin.web-page.adapters.v1",
   "route.persona": "builtin.web-page.persona.v1",
   "route.knowledge": "builtin.web-page.knowledge.v1",
+  "role.message-history": "builtin.web-page.message-history.v1",
   "route.persona-sync": "builtin.web-page.persona-sync.v1",
   "route.speech": "builtin.web-page.speech.v1",
   "global.performance": "builtin.web-page.performance.v1",
@@ -175,16 +176,26 @@ test("trusted extensions can register a new route, renderer, path resolver, slot
   }
 });
 
-test("accepted navigation keeps catalog ordering and unscoped Route recovery paths", () => {
+test("legacy Route editing has no independent sidebar navigation", () => {
   const groups = buildWebNavigation([
     ...pair({ id: "adapters", owner: builtinOwner("message-adapter-control"), routeId: "route.adapters", label: "适配器", icon: "mdi-puzzle-outline", slot: "route-primary", order: 20 }),
     ...pair({ id: "overview", owner: builtinOwner("core"), routeId: "route.overview", label: "控制台", icon: "mdi-view-dashboard-outline", slot: "utility", order: 40 })
   ], "");
 
-  assert.deepEqual(groups.routePrimary.map(item => [item.id, item.to]), [
-    ["adapters", "/routes"]
-  ]);
+  assert.deepEqual(groups.routePrimary, []);
   assert.deepEqual(groups.utility.map(item => [item.id, item.to]), [
     ["overview", "/overview"]
   ]);
+});
+
+
+test("message history is a role-scoped sidebar entry after knowledge", () => {
+  const owner = builtinOwner("persona");
+  const contributions = [
+    ...pair({ id: "history", owner, routeId: "role.message-history", label: "消息记录", icon: "mdi-message-text-outline", slot: "route-primary", order: 35 }),
+    ...pair({ id: "knowledge", owner, routeId: "route.knowledge", label: "计划与记忆", icon: "mdi-notebook-check-outline", slot: "route-primary", order: 30 })
+  ];
+  const nav = buildWebNavigation(contributions, "", "demo role");
+  assert.deepEqual(nav.routePrimary.map(item => item.to), ["/roles/demo%20role/knowledge", "/roles/demo%20role/message-history"]);
+  assert.equal(buildWebNavigation(contributions, "", "").routePrimary[1].to, "/roles/message-history");
 });

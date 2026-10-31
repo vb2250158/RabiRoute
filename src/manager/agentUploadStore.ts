@@ -15,7 +15,7 @@ export type AgentUploadStoreOptions = {
 };
 export type AgentUploadErrorCode = "invalid_input" | "not_found" | "conflict" | "capacity" | "integrity" | "unsafe_storage" | "storage_failure" | "forbidden" | "upload_aborted";
 export class AgentUploadStoreError extends Error {
-  constructor(readonly code: AgentUploadErrorCode) { super(`Agent upload ${code}`); this.name = "AgentUploadStoreError"; }
+  constructor(readonly code: AgentUploadErrorCode, detail?: string) { super(`Agent upload ${code}${detail ? `: ${detail}` : ""}`); this.name = "AgentUploadStoreError"; }
 }
 type RecordData = AgentUploadDto & { schemaVersion: 1; owner: AgentUploadOwner };
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
@@ -84,6 +84,18 @@ function syncDirectory(dir: string): void {
   try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
 }
 
+export function readAgentUploadStorageSettings(env: NodeJS.ProcessEnv = process.env, maxFileBytes = 2 * 1024 ** 3) {
+  const positive = (name: string, fallback: number) => {
+    const raw = env[name]?.trim(); const value = raw ? Number(raw) : fallback;
+    if (!Number.isSafeInteger(value) || value <= 0) throw new Error(`${name} must be a positive safe integer.`);
+    return value;
+  };
+  return {
+    maxTotalBytes: positive("RABIROUTE_AGENT_UPLOAD_MAX_TOTAL_BYTES", Math.max(16 * 1024 ** 3, maxFileBytes)),
+    maxFiles: positive("RABIROUTE_AGENT_UPLOAD_MAX_FILES", 100),
+    ttlMs: positive("RABIROUTE_AGENT_UPLOAD_TTL_MS", 24 * 60 * 60 * 1000)
+  };
+}
 /** Manager-owned private local store. rootDir must be dedicated and ACL-restricted by the
  * host on Windows (Node mode bits cannot enforce Windows ACLs). Never expose resolve's path
  * remotely. Use withFile for asynchronous sends; callbacks must not retain the path afterwards.
@@ -95,12 +107,11 @@ export class AgentUploadStore {
   private readonly now: () => number;
 
   constructor(options: AgentUploadStoreOptions) {
+    const defaults = readAgentUploadStorageSettings(process.env, options.maxFileBytes);
     this.limits = Object.freeze({ maxFileBytes: options.maxFileBytes ?? 2 * 1024 ** 3,
-      // Keep the default total quota commensurate with the 2 GiB default single-file bound:
-      // a 4 GiB total only held two maximum-size files, so a handful of ordinary packages
-      // exhausted it while every entry was still inside its TTL.
-      maxTotalBytes: options.maxTotalBytes ?? 16 * 1024 ** 3, maxFiles: options.maxFiles ?? 100, ttlMs: options.ttlMs ?? 24 * 60 * 60 * 1000 });
-    if (this.limits.maxFileBytes > 2 * 1024 ** 3 || Object.values(this.limits).some(value => !Number.isSafeInteger(value) || value <= 0)
+      // Default capacity always admits at least one file at the configured maximum.
+      maxTotalBytes: options.maxTotalBytes ?? defaults.maxTotalBytes, maxFiles: options.maxFiles ?? defaults.maxFiles, ttlMs: options.ttlMs ?? defaults.ttlMs });
+    if (Object.values(this.limits).some(value => !Number.isSafeInteger(value) || value <= 0)
       || typeof options.rootDir !== "string" || !path.isAbsolute(options.rootDir)
       || /^(\\\\|\/\/)/u.test(options.rootDir)) fail("invalid_input");
     this.root = path.resolve(options.rootDir);
@@ -109,13 +120,16 @@ export class AgentUploadStore {
     this.safe(() => this.ensureRoot(true));
   }
 
+  private capacity(): never {
+    throw new AgentUploadStoreError("capacity", `Effective limits: agentUploads.maxFileMiB=${this.limits.maxFileBytes / 1024 ** 2} (WebGUI RabiLink configuration / data/Config.json), RABIROUTE_AGENT_UPLOAD_MAX_TOTAL_BYTES=${this.limits.maxTotalBytes}, RABIROUTE_AGENT_UPLOAD_MAX_FILES=${this.limits.maxFiles}, RABIROUTE_AGENT_UPLOAD_TTL_MS=${this.limits.ttlMs}. Adjust the relevant configuration or release expired uploads.`);
+  }
   get maxFileBytes(): number { return this.limits.maxFileBytes; }
 
   upload(input: AgentUploadInput): AgentUploadDto {
     return this.operation("upload", () => {
       if (!input || !validOwner(input.owner) || !UUID.test(input.uploadId) || !validName(input.fileName)
         || !Buffer.isBuffer(input.content) || !SHA256.test(input.sha256)) fail("invalid_input");
-      if (input.content.length > this.limits.maxFileBytes || input.content.length > this.limits.maxTotalBytes) fail("capacity");
+      if (input.content.length > this.limits.maxFileBytes || input.content.length > this.limits.maxTotalBytes) this.capacity();
       if (hash(input.content) !== input.sha256) fail("integrity");
       return this.locked(() => {
         const now = this.timestamp();
@@ -132,7 +146,7 @@ export class AgentUploadStore {
         }
         const reservations = this.streamReservations();
         const total = records.reduce((sum, record) => sum + record.size, 0) + reservations.bytes;
-        if (records.length + reservations.count >= this.limits.maxFiles || total > this.limits.maxTotalBytes - input.content.length) fail("capacity");
+        if (records.length + reservations.count >= this.limits.maxFiles || total > this.limits.maxTotalBytes - input.content.length) this.capacity();
         const expires = now + this.limits.ttlMs;
         if (!Number.isSafeInteger(expires) || !Number.isFinite(new Date(expires).getTime())) fail("invalid_input");
         const record: RecordData = { schemaVersion: 1, owner: { ...input.owner }, id: input.uploadId,
@@ -156,7 +170,7 @@ export class AgentUploadStore {
     if (!validOwner(input.owner) || !UUID.test(input.uploadId) || !validName(input.fileName) || !SHA256.test(input.sha256)
       || (input.size !== undefined && (!Number.isSafeInteger(input.size) || input.size < 0))) fail("invalid_input");
     const reserved = input.size ?? this.limits.maxFileBytes;
-    if (reserved > this.limits.maxFileBytes) fail("capacity");
+    if (reserved > this.limits.maxFileBytes) this.capacity();
     const previous = this.operation("stream-replay", () => this.locked(() => {
       const records = this.inventory(); this.cleanup(records, this.timestamp());
       if (!maybeStat(path.join(this.root, input.uploadId))) return undefined;
@@ -180,7 +194,7 @@ export class AgentUploadStore {
       const records = this.inventory(); this.cleanup(records, this.timestamp());
       const reservations = this.streamReservations(input.uploadId);
       if (records.length + reservations.count >= this.limits.maxFiles
-        || records.reduce((n, r) => n + r.size, 0) + reservations.bytes + reserved > this.limits.maxTotalBytes) fail("capacity");
+        || records.reduce((n, r) => n + r.size, 0) + reservations.bytes + reserved > this.limits.maxTotalBytes) this.capacity();
       const preparing = path.join(this.root, `.tmp-${randomUUID()}`);
       fs.mkdirSync(preparing, { mode: 0o700 });
       writeNew(path.join(preparing, "reservation.json"), JSON.stringify({ id: input.uploadId, size: reserved, host: os.hostname(), pid: process.pid }));
@@ -193,7 +207,7 @@ export class AgentUploadStore {
       for await (const chunk of input.content) {
         if (!(chunk instanceof Uint8Array)) fail("invalid_input");
         size += chunk.byteLength;
-        if (size > reserved) fail("capacity");
+        if (size > reserved) this.capacity();
         digest.update(chunk);
         let offset = 0;
         while (offset < chunk.byteLength) { const written = await fd.write(chunk, offset, chunk.byteLength - offset); if (!written.bytesWritten) fail("storage_failure"); offset += written.bytesWritten; }
@@ -233,7 +247,7 @@ export class AgentUploadStore {
       if (!UUID.test(name.slice(8))) fail("unsafe_storage");
       const dir = path.join(this.root, name); directory(dir);
       const data: unknown = JSON.parse(readBytes(path.join(dir, "reservation.json"), METADATA_BYTES).toString("utf8"));
-      if (!object(data) || !keys(data, ["id", "size", "host", "pid"]) || typeof data.id !== "string" || !UUID.test(data.id) || !Number.isSafeInteger(data.size) || Number(data.size) < 0 || Number(data.size) > 2 * 1024 ** 3 || typeof data.host !== "string" || !Number.isSafeInteger(data.pid) || Number(data.pid) <= 0) fail("integrity");
+      if (!object(data) || !keys(data, ["id", "size", "host", "pid"]) || typeof data.id !== "string" || !UUID.test(data.id) || !Number.isSafeInteger(data.size) || Number(data.size) < 0 || Number(data.size) > Number.MAX_SAFE_INTEGER || typeof data.host !== "string" || !Number.isSafeInteger(data.pid) || Number(data.pid) <= 0) fail("integrity");
       let alive = true;
       if (data.host === os.hostname()) { try { process.kill(Number(data.pid), 0); } catch (error) { if ((error as NodeJS.ErrnoException).code === "ESRCH") alive = false; } }
       if (!alive) { this.removeStream(dir); continue; }
@@ -245,7 +259,7 @@ export class AgentUploadStore {
   private removeStream(dir: string): void {
     directory(dir);
     const names = fs.readdirSync(dir);
-    for (const name of names) { if (!["data.bin", "record.json", "reservation.json"].includes(name)) fail("unsafe_storage"); regular(path.join(dir, name), name === "data.bin" ? 2 * 1024 ** 3 : METADATA_BYTES); }
+    for (const name of names) { if (!["data.bin", "record.json", "reservation.json"].includes(name)) fail("unsafe_storage"); regular(path.join(dir, name), name === "data.bin" ? Number.MAX_SAFE_INTEGER : METADATA_BYTES); }
     const retired = path.join(this.root, `.tmp-${randomUUID()}`);
     fs.renameSync(dir, retired);
     for (const name of names) fs.unlinkSync(path.join(retired, name));
@@ -260,21 +274,34 @@ export class AgentUploadStore {
     }));
   }
 
+  /** Public Manager resource; the HTTP connection owns access, uploader is audit metadata. */
+  getShared(id: string): AgentUploadDto {
+    return this.operation("get", () => this.locked(() => dto(this.available(id))));
+  }
+
   resolve(owner: AgentUploadOwner, id: string): AgentUploadFile {
     return this.operation("resolve", () => this.locked(() => this.resolveLocked(owner, id)));
   }
 
   async withFile<T>(owner: AgentUploadOwner, id: string, callback: (file: AgentUploadFile) => T | Promise<T>): Promise<T> {
+    return this.withFileLease(owner, id, callback);
+  }
+
+  async withSharedFile<T>(id: string, callback: (file: AgentUploadFile) => T | Promise<T>): Promise<T> {
+    return this.withFileLease(undefined, id, callback);
+  }
+
+  private async withFileLease<T>(owner: AgentUploadOwner | undefined, id: string, callback: (file: AgentUploadFile) => T | Promise<T>): Promise<T> {
     const leaseId = `.lease-${randomUUID()}.json`;
     const file = this.operation("lease", () => this.locked(() => {
-      const record = this.authorized(owner, id);
+      const record = owner ? this.authorized(owner, id) : this.available(id);
       const resolved = { ...dto(record), path: path.join(this.root, id, "data.bin") };
       writeNew(path.join(this.root, id, leaseId), JSON.stringify({ schemaVersion: 1, host: os.hostname(), pid: process.pid }));
       this.audit("lease", "committed", id);
       return resolved;
     }));
     try {
-      const before = regular(file.path, 2 * 1024 ** 3);
+      const before = regular(file.path, Number.MAX_SAFE_INTEGER);
       const handle = await fs.promises.open(file.path, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
       try {
         const opened = await handle.stat();
@@ -354,9 +381,9 @@ export class AgentUploadStore {
     if (!object(raw) || !keys(raw, ["schemaVersion", "owner", "id", "fileName", "size", "sha256", "expiresAt"])
       || raw.schemaVersion !== 1 || raw.id !== id || !validOwner(raw.owner) || !validName(raw.fileName)
       || typeof raw.sha256 !== "string" || !SHA256.test(raw.sha256) || !Number.isSafeInteger(raw.size)
-      || Number(raw.size) < 0 || Number(raw.size) > 2 * 1024 ** 3 || typeof raw.expiresAt !== "string"
+      || Number(raw.size) < 0 || Number(raw.size) > Number.MAX_SAFE_INTEGER || typeof raw.expiresAt !== "string"
       || !Number.isFinite(Date.parse(raw.expiresAt)) || new Date(raw.expiresAt).toISOString() !== raw.expiresAt) fail("integrity");
-    const stat = regular(path.join(dir, "data.bin"), 2 * 1024 ** 3);
+    const stat = regular(path.join(dir, "data.bin"), Number.MAX_SAFE_INTEGER);
     if (stat.size !== raw.size) fail("integrity");
     this.leases(dir); // Validate the complete managed namespace before using/deleting it.
     return raw as RecordData;
@@ -390,7 +417,7 @@ export class AgentUploadStore {
     const files = fs.readdirSync(dir);
     for (const name of files) {
       if (name !== "data.bin" && name !== "record.json" && name !== "reservation.json") fail("unsafe_storage");
-      regular(path.join(dir, name), name === "data.bin" ? 2 * 1024 ** 3 : METADATA_BYTES);
+      regular(path.join(dir, name), name === "data.bin" ? Number.MAX_SAFE_INTEGER : METADATA_BYTES);
     }
     for (const name of files) fs.unlinkSync(path.join(dir, name));
     fs.rmdirSync(dir);
@@ -429,14 +456,20 @@ export class AgentUploadStore {
   }
   private authorized(owner: AgentUploadOwner, id: string): RecordData {
     if (!validOwner(owner) || typeof id !== "string" || !UUID.test(id)) fail("invalid_input");
+    const record = this.available(id);
+    if (record.owner.nodeId !== owner.nodeId || record.owner.agentId !== owner.agentId) fail("not_found");
+    return record;
+  }
+  private available(id: string): RecordData {
+    if (typeof id !== "string" || !UUID.test(id)) fail("invalid_input");
     if (!maybeStat(path.join(this.root, id))) fail("not_found");
     const record = this.readRecord(id);
-    if (record.owner.nodeId !== owner.nodeId || record.owner.agentId !== owner.agentId || Date.parse(record.expiresAt) <= this.timestamp()) fail("not_found");
+    if (Date.parse(record.expiresAt) <= this.timestamp()) fail("not_found");
     return record;
   }
   private verifyContent(record: RecordData): void {
     const file = path.join(this.root, record.id, "data.bin");
-    const before = regular(file, 2 * 1024 ** 3);
+    const before = regular(file, Number.MAX_SAFE_INTEGER);
     const fd = fs.openSync(file, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
     try {
       const opened = fs.fstatSync(fd);

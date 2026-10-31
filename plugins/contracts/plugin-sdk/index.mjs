@@ -1,3 +1,6 @@
+import { PublicationScope } from "./publication.mjs";
+export { PublicationScope } from "./publication.mjs";
+
 function required(value, field) {
   const normalized = String(value ?? "").trim();
   if (!normalized) throw new Error(`${field} is required.`);
@@ -63,33 +66,56 @@ export class EffectScope {
   #starters = [];
   #disposers = [];
   #closed = false;
+  #committed = false;
+  #commitFlight;
+  #controller = new AbortController();
+  #disposal;
   add(starter, label = "plugin effect") {
-    if (this.#closed || typeof starter !== "function") throw new Error("Plugin effect scope is closed or invalid.");
+    if (this.#closed || this.#committed || typeof starter !== "function") throw new Error("Plugin effect scope is closed or invalid.");
     this.#starters.push({ starter, label });
   }
-  async commit() {
-    if (this.#closed) throw new Error("Plugin effect scope is closed.");
-    try {
+  signal() { return this.#controller.signal; }
+  adopt(disposer, label = "adopted plugin resource") {
+    if (this.#closed || typeof disposer !== "function") throw new Error("Plugin effect scope is closed or invalid.");
+    this.#disposers.push(disposer);
+  }
+  commit() {
+    if (this.#closed) return Promise.reject(new Error("Plugin effect scope is closed."));
+    if (this.#committed) return Promise.resolve();
+    // Record the flight before entering user code, including synchronous disposal.
+    this.#commitFlight ??= Promise.resolve().then(async () => {
       for (const effect of this.#starters) {
+        if (this.#closed) throw new Error("Plugin effect scope is closed.");
         const disposer = await effect.starter();
         if (typeof disposer !== "function") throw new Error(`Plugin effect did not return a disposer: ${effect.label}.`);
         this.#disposers.push(disposer);
+        if (this.#closed) throw new Error("Plugin effect scope is closed.");
       }
-    } catch (error) {
+      this.#committed = true;
+    });
+    return this.#commitFlight.catch(async error => {
       await this.dispose().catch(() => {});
       throw error;
-    }
+    });
   }
-  async dispose() {
-    if (this.#closed) return;
+  dispose() {
+    if (this.#disposal) return this.#disposal;
     this.#closed = true;
+    this.#disposal = Promise.resolve().then(() => this.#disposeNow());
+    this.#controller.abort();
+    return this.#disposal;
+  }
+  async #disposeNow() {
+    // Join the actual starter, then release even resources returned after cancellation.
+    await this.#commitFlight?.catch(() => {});
     let firstError;
+    let failed = false;
     for (const dispose of [...this.#disposers].reverse()) {
-      try { await dispose(); } catch (error) { firstError ??= error; }
+      try { await dispose(); } catch (error) { if (!failed) firstError = error; failed = true; }
     }
     this.#starters.length = 0;
     this.#disposers.length = 0;
-    if (firstError) throw firstError;
+    if (failed) throw firstError;
   }
 }
 export class ScopedEventBus {
@@ -125,17 +151,35 @@ export function createPluginTestHarness(options = {}) {
   const contributions = new ContributionRegistrar();
   const permissions = new GrantedPermissions(options.permissions ?? []);
   const effects = new EffectScope();
-  const identity = Object.freeze(options.identity ?? {
-    instanceId: "test:plugin", pluginId: "io.test.plugin", version: "1.0.0", revision: "test", host: "manager"
+  const publication = new PublicationScope(effects);
+  const identity = Object.freeze({
+    applicationGenerationId: "test-application", managerInstanceId: "test-manager", activationId: "test-activation",
+    instanceId: "test:plugin", pluginId: "io.test.plugin", version: "1.0.0", revision: "test", host: "manager",
+    ...options.identity
   });
-  const context = Object.freeze({ identity, config: options.config ?? {}, services, contributions, permissions, effects });
+  const context = Object.freeze({ identity, config: options.config ?? {}, services, contributions, permissions, effects,
+    publication, lifecycle: Object.freeze({ signal: effects.signal(), fail(error) { throw error; } }) });
   return Object.freeze({
     context,
     services,
     contributions,
     permissions,
     effects,
-    async activate(module) { await definePlugin(module).activate(context); await effects.commit(); },
+    async activate(module) {
+      let finalize;
+      try {
+        await definePlugin(module).activate(context);
+        await effects.commit();
+        publication.publish();
+        finalize = publication.seal();
+      } catch (error) {
+        try { publication.rollback(); } finally { await effects.dispose(); }
+        throw error;
+      }
+      finalize();
+      try { await publication.afterPublish(Promise.resolve()); }
+      catch (error) { await effects.dispose(); throw error; }
+    },
     async dispose() { await effects.dispose(); }
   });
 }

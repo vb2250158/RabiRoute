@@ -6,7 +6,7 @@ import { deliverSessionOnce } from "./automation/sessionDelivery.js";
 import { resolveAgentDeliveryExecutor, type AgentSessionDestination } from "./shared/agentDeliveryTarget.js";
 import { getPlan } from "./roleKnowledge.js";
 import { createAgentAdapter } from "./agentAdapters/agentAdapter.js";
-import { readBoundInstanceAgent, requestInstanceThread, instanceWorkerStateDirectory } from "./agentAdapters/instanceClient.js";
+import { requestInstanceThread, instanceWorkerStateDirectory } from "./agentAdapters/instanceClient.js";
 import { resolvePrimaryAgentTarget, type RouteAgentTarget } from "./shared/routeAgentTargets.js";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
@@ -207,19 +207,11 @@ function primaryManagedAgentBinding(): {
 async function managedAgentExecution() {
   const target = resolvePrimaryAgentTarget(config);
   const instanceBinding = target?.binding;
-  if (!instanceBinding) return { binding: primaryManagedAgentBinding(), dataDir: config.dataDir, dependencies: {} };
-  const agent = await readBoundInstanceAgent(instanceBinding);
-  const adapter = agent.provider === "codex-desktop" ? "codex" : agent.provider;
-  // Consulting the capability table keeps a newly supported adapter from being
-  // rejected here just because this check predates it.
-  if (!isPlanAssistantAgentType(adapter) || adapter !== target.provider) {
-    throw new Error("The instance task provider does not match the configured primary Agent.");
-  }
-  return {
-    binding: { agentAdapter: adapter, sessionId: agent.sessionId!, sessionName: agent.name, workspace: agent.workspace! },
-    dataDir: instanceWorkerStateDirectory(config.dataDir, instanceBinding, agent.sessionId!),
-    dependencies: { request: (payload: Record<string, unknown>) => requestInstanceThread(instanceBinding, payload) }
-  };
+  const binding = primaryManagedAgentBinding();
+  if (!instanceBinding) return { binding, dataDir: config.dataDir, dependencies: {} };
+  if (!binding || binding.agentAdapter !== target.provider) throw new Error("Explicit Route target type, full session ID and workspace are required.");
+  return { binding, dataDir: instanceWorkerStateDirectory(config.dataDir, instanceBinding, binding.sessionId),
+    dependencies: { request: (payload: Record<string, unknown>) => requestInstanceThread(instanceBinding, { ...payload, agentAdapter: binding.agentAdapter }) } };
 }
 
 async function activeMessageAgentPool(): Promise<MessageAgentPool> {
@@ -653,7 +645,7 @@ async function dispatchToAgentAdapter(type: AgentAdapterType, envelope: RabiDeli
   const adapter = await createAgentAdapter(type, target.binding ? { binding: target.binding } : "local");
   return measurePerformanceOperation(
     `${PERFORMANCE_OPERATIONS.gatewayAgentDeliver}.${type}`,
-    () => adapter.deliver(envelope, imagePaths.length ? { imagePaths } : undefined)
+    () => adapter.deliver(envelope, { imagePaths, threadId: type === "dsh" ? config.dshSessionId : type === "codex" ? config.codexThreadId : undefined, workspace: type === "dsh" ? config.dshCwd : type === "codex" ? config.codexCwd : undefined })
   );
 }
 

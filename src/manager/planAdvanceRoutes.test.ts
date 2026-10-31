@@ -7,7 +7,8 @@ import path from "node:path";
 import { ensurePersonaPlanWorkflow } from "../personaPlanWorkflow.js";
 import { managerKnowledgePageWorkerPool } from "./managerReadWorkerPool.js";
 import { PlanAdvanceStore } from "./planAdvancePolicy.js";
-import { handlePlanAdvanceApi } from "./planAdvanceRoutes.js";
+import { createPersonaPlanOperations } from "./personaPlanOperations.js";
+import { ManagerPluginRouteRegistry } from "./managerPluginRouteRegistry.js";
 
 function gate() {
   let release!: () => void;
@@ -34,11 +35,13 @@ test("plan advance settings leave health responsive while workflow and policy st
     return originalRead(...args);
   });
   t.mock.method(PlanAdvanceStore.prototype, "read", () => { throw new Error("Synchronous request storage read"); });
+  const registry = new ManagerPluginRouteRegistry();
+  const registration = registry.registerOperations('plan-health-fixture', createPersonaPlanOperations({
+    roleDir: () => dir, send: async () => { throw new Error("Settings must not dispatch"); }
+  }));
   const server = http.createServer((request, response) => {
     if (request.url === "/health") { response.end("ready"); return; }
-    handlePlanAdvanceApi(request, new URL(request.url!, "http://localhost"), response, {
-      roleDir: () => dir, send: async () => { throw new Error("Settings must not dispatch"); }
-    });
+    if (!registry.handle(request, new URL(request.url!, "http://localhost"), response)) response.writeHead(404).end();
   });
   await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
   const base = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
@@ -55,8 +58,9 @@ test("plan advance settings leave health responsive while workflow and policy st
     assert.deepEqual(body.data.roles, workflow.workflow.roles);
   } finally {
     workflowWait.release(); policyWait.release(); await settings.catch(() => {});
+    await registration.dispose();
     server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve()));
-    t.mock.restoreAll(); fs.rmSync(dir, { recursive: true, force: true });
+    t.mock.restoreAll(); clean(dir);
   }
 });
 
@@ -67,5 +71,12 @@ test("asynchronous advance reads preserve policy revision and fail on unreadable
     assert.deepEqual(store.policy(dir, await store.readAsync()), store.policy(dir));
     fs.writeFileSync(store.file, "invalid");
     await assert.rejects(store.readAsync(), SyntaxError);
-  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+  } finally { clean(dir); }
 });
+
+
+function clean(dir: string) {
+  assert.equal(path.dirname(path.resolve(dir)), path.resolve(os.tmpdir()));
+  assert.ok(path.basename(dir).startsWith('plan-advance-'));
+  fs.rmSync(dir, { recursive: true, force: true });
+}

@@ -10,6 +10,19 @@ const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xd9]).toString("base64");
 const start = { requestId: "request-first", gatewayId: "route", presetId: "adaptive", title: "", autoReview: false, voice: true, saveSummary: false, observationOwner: "desktop" as const };
 const catalog = readCompanionPresets(JSON.parse(readFileSync("packages/rabi-companion/presets.json", "utf8")));
 
+test("companion publishes structured context failure without guessing from message text", async t => {
+  for (const code of ["COMPANION_CONTEXT_FAILED", undefined]) {
+    const f = fixture(t, { context: async () => { throw Object.assign(new Error("catalog unavailable"), code ? { code } : {}); } });
+    const session = (await f.service.start("one", start)).session!;
+    f.observe();
+    const result = await f.service.review("one", session.id, session.revision, "");
+    assert.equal(result.session!.review!.status, "failed");
+    assert.equal(result.session!.review!.error, "catalog unavailable");
+    assert.equal(result.session!.review!.errorCode, code);
+    assert.equal(f.delivered.length, 0);
+  }
+});
+
 test("companion reads microphone ASR for the frozen frame interval without a second recognizer",async t=>{
  const f=fixture(t,{transcripts:async(role,from,to)=>{
   assert.equal(role,"one");assert.equal(from,1_000_000);assert.equal(to,1_002_000);

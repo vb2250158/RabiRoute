@@ -1,7 +1,9 @@
 import { definePlugin } from "@rabiroute/plugin-sdk";
+import { createSpeechPluginLifecycle } from "./lifecycle.mjs";
 export const activate = definePlugin({
     async activate(context) {
         const runtime = context.services.require("host.manager.speech@1");
+        const lifecycle = createSpeechPluginLifecycle(runtime, context.identity, context.lifecycle.signal);
         context.services.provide("manager.speech@1", Object.freeze({ instanceId: context.identity.instanceId }));
         for (const contribution of [
             {
@@ -59,62 +61,7 @@ export const activate = definePlugin({
             }
         ])
             context.contributions.register(contribution);
-        context.effects.add(async () => {
-            const pendingEffects = [];
-            const disposers = [];
-            const disposeStartedEffects = async () => {
-                let firstError;
-                for (const dispose of [...disposers].reverse()) {
-                    try { await dispose(); } catch (error) { firstError ??= error; }
-                }
-                if (firstError) throw firstError;
-            };
-            const ctx = Object.freeze({
-                effect(starter, label) {
-                    const pending = Promise.resolve().then(starter).then(dispose => {
-                        if (typeof dispose !== "function") throw new Error(`Plugin effect did not return a disposer: ${label ?? "effect"}.`);
-                        disposers.push(dispose);
-                        return dispose;
-                    });
-                    pendingEffects.push(pending);
-                    return pending;
-                }
-            });
-            try {
-        let active = true;
-        const reconcile = () => runtime.reconcileSpeechMicrophone(runtime.managerServicesReady ? "speech plugin activation" : "manager startup", () => active);
-        runtime.reconcileActiveSpeech = reconcile;
-        const requestTracker = new runtime.ManagerPluginRequestTracker();
-        ctx.effect(() => {
-            const unregister = runtime.registerManagerPluginHandlerRoutes(runtime.managerPluginRoutes, "manager:speech", "manager.speech.api", [
-                requestTracker.wrap((request, requestUrl, response) => runtime.handleSpeechApi(request, requestUrl, response))
-            ], [
-                { routeId: "speech", kind: "prefix", pathPrefix: "/api/speech/" }
-            ]);
-            return async () => {
-                active = false;
-                if (runtime.reconcileActiveSpeech === reconcile)
-                    runtime.reconcileActiveSpeech = () => { };
-                unregister();
-                await requestTracker.stop();
-                await Promise.allSettled([
-                    runtime.speechControl.stopMicrophone(),
-                    runtime.speechControl.stopPlayback(),
-                    runtime.speechRuntimeControl.stop()
-                ]);
-                runtime.speechModelManager.stop();
-            };
-        }, "activate Manager speech plugin");
-        if (runtime.managerServicesReady && !runtime.managerReadOnly)
-            reconcile();
-
-                await Promise.all(pendingEffects);
-                return disposeStartedEffects;
-            } catch (error) {
-                await Promise.allSettled(pendingEffects);
-                await disposeStartedEffects().catch(() => {});
-                throw error;
-            }
-        }, "activate io.rabiroute.manager.speech");
+        context.effects.add(lifecycle.prepare, "activate Manager speech operations");
+        context.publication.add(lifecycle.publication, "publish Manager speech ownership");
     }
 }).activate;

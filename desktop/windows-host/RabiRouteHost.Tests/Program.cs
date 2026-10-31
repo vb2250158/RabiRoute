@@ -22,6 +22,7 @@ await ShortcutRecoveryTests.RunAsync(Check);
 await IdentityResetTests.RunAsync(Check);
 EnvironmentBlockTests.Run(Check);
 ManagerEndpointCacheTests.Run(Check);
+TimeoutSettingsTests.Run(Check);
 
 // The ACL must name the account, never an elevated token's Administrators owner.
 using (var identity = WindowsIdentity.GetCurrent())
@@ -196,11 +197,24 @@ try
     Check(
         retiredEntries.SequenceEqual(new[] { "RabiRoute-Desktop.exe", "scripts/watch-rabiroute-health.ps1" }),
         "portable overlay guard reports only exact retired lifecycle entries");
-    var blockedMessage = PortableOverlayGuard.BlockedMessage(retiredEntries);
-    Check(blockedMessage.Contains("new empty folder", StringComparison.Ordinal),
-        "portable overlay failure directs the user to a clean folder");
-    Check(blockedMessage.Contains("Windows Setup", StringComparison.Ordinal),
-        "portable overlay failure directs the user to the migration owner");
+    var warnings = new List<string>();
+    PortableOverlayGuard.WarnForStartup(portablePackageRoot, portableStateRoot, warnings.Add);
+    Check(warnings.Count == 1 && warnings[0].Contains("Host startup continues", StringComparison.Ordinal),
+        "retired entries produce a warning and return normally");
+    Check(retiredEntries.All(entry => warnings[0].Contains(entry, StringComparison.Ordinal)),
+        "retired entry warning identifies the detected entries");
+    Check(File.Exists(Path.Combine(portableStateRoot, "RabiRoute-Desktop.exe")),
+        "startup warning does not modify retired files");
+    warnings.Clear();
+    PortableOverlayGuard.WarnForStartup("invalid\0root", portableStateRoot, warnings.Add);
+    Check(warnings.Count == 1 && warnings[0].Contains("inspection failed", StringComparison.Ordinal),
+        "inspection failure is reported without rejecting startup");
+    PortableOverlayGuard.WarnForStartup(portablePackageRoot, portableStateRoot, _ => throw new IOException("fixture log unavailable"));
+    PortableOverlayGuard.WarnForStartup("invalid\0root", portableStateRoot, _ => throw new IOException("fixture log unavailable"));
+    Check(true, "warning delivery failure cannot reject startup");
+    warnings.Clear();
+    PortableOverlayGuard.WarnForStartup(Path.Combine(portableRoot, "clean-package"), Path.Combine(portableRoot, "clean-state"), warnings.Add);
+    Check(warnings.Count == 0, "clean startup produces no retired entry warning");
 }
 finally
 {
@@ -363,8 +377,8 @@ using (var requiredCapabilityFailure = JsonDocument.Parse(
            "\"managerBaseUrl\":\"http://127.0.0.1:54321/\",\"health\":{\"state\":\"degraded\",\"pid\":4242,\"live\":true,\"requiredReady\":false}}"))
 {
     Check(
-        ManagerLifecycleClient.ValidateHealth(requiredCapabilityFailure.RootElement, ready!, generation).State == ManagerProbeState.Failed,
-        "required capability loss is not retained as an indefinitely healthy generation");
+        ManagerLifecycleClient.ValidateHealth(requiredCapabilityFailure.RootElement, ready!, generation).State == ManagerProbeState.Degraded,
+        "required capability loss remains a truthful degraded live generation");
 }
 using (var staleMeta = JsonDocument.Parse(
            "{\"applicationGenerationId\":\"generation-b\",\"managerInstanceId\":\"manager-a\"," +
@@ -373,6 +387,24 @@ using (var staleMeta = JsonDocument.Parse(
     Check(
         ManagerLifecycleClient.ValidateHealth(staleMeta.RootElement, ready!, generation).State == ManagerProbeState.Failed,
         "reject stale Manager generation health identity");
+}
+
+var liveCapabilityLossPayload = "{\"applicationGenerationId\":\"generation-a\",\"managerInstanceId\":\"manager-a\"," +
+    "\"managerBaseUrl\":\"http://127.0.0.1:54321\",\"health\":{\"state\":\"degraded\",\"pid\":4242,\"live\":true,\"requiredReady\":false}}";
+foreach (var (name, payload) in new[]
+{
+    ("event-loop not live", liveCapabilityLossPayload.Replace("\"live\":true", "\"live\":false")),
+    ("stale generation", liveCapabilityLossPayload.Replace("generation-a", "generation-other")),
+    ("wrong instance", liveCapabilityLossPayload.Replace("manager-a", "manager-other")),
+    ("wrong pid", liveCapabilityLossPayload.Replace("\"pid\":4242", "\"pid\":4243")),
+    ("wrong endpoint", liveCapabilityLossPayload.Replace("127.0.0.1:54321", "127.0.0.1:54322")),
+    ("missing required-readiness metadata", liveCapabilityLossPayload.Replace(",\"requiredReady\":false", "")),
+    ("invalid health state", liveCapabilityLossPayload.Replace("\"state\":\"degraded\"", "\"state\":\"invalid\""))
+})
+{
+    using var invalidCapabilityLoss = JsonDocument.Parse(payload);
+    Check(ManagerLifecycleClient.ValidateHealth(invalidCapabilityLoss.RootElement, ready!, generation).State == ManagerProbeState.Failed,
+        "capability-loss tolerance retains the " + name + " failure boundary");
 }
 
 var restartWindow = new RestartFailureWindow(5, TimeSpan.FromMinutes(2));
@@ -484,6 +516,8 @@ var lifecycleReady = new ManagerReady(
 string? lifecycleHealthRequest = null;
 string? lifecycleShutdownRequest = null;
 var observedLifecyclePaths = new List<string>();
+var lifecycleRequiredReady = 1;
+var lifecycleHealthProbeCount = 0;
 using var lifecycleServerCancellation = new CancellationTokenSource(TimeSpan.FromSeconds(10));
 string LifecycleObservationSummary()
 {
@@ -529,11 +563,14 @@ var lifecycleServer = Task.Run(async () =>
                 string.Equals(requestPath, "/health", StringComparison.Ordinal))
             {
                 lifecycleHealthRequest ??= requestText;
-                await Task.Delay(TimeSpan.FromSeconds(3), requestDeadline.Token);
+                if (Interlocked.Increment(ref lifecycleHealthProbeCount) == 1)
+                    await Task.Delay(TimeSpan.FromSeconds(3), requestDeadline.Token);
+                var requiredReadyJson = Volatile.Read(ref lifecycleRequiredReady) == 1 ? "true" : "false";
+                var lifecycleHealthState = requiredReadyJson == "true" ? "healthy" : "degraded";
                 status = "200 OK";
                 bodyBytes = Encoding.UTF8.GetBytes(
                     $"{{\"applicationGenerationId\":\"{generation}\",\"managerInstanceId\":\"manager-a\"," +
-                    $"\"managerBaseUrl\":\"http://127.0.0.1:{lifecyclePort}\",\"health\":{{\"state\":\"healthy\",\"pid\":{managerPid},\"live\":true,\"requiredReady\":true}}}}");
+                    $"\"managerBaseUrl\":\"http://127.0.0.1:{lifecyclePort}\",\"health\":{{\"state\":\"{lifecycleHealthState}\",\"pid\":{managerPid},\"live\":true,\"requiredReady\":{requiredReadyJson}}}}}");
             }
             else if (string.Equals(method, "POST", StringComparison.Ordinal) &&
                      string.Equals(requestPath, "/_rabiroute/host/shutdown", StringComparison.Ordinal))
@@ -568,6 +605,13 @@ try
     {
         var probe = await lifecycleClient.ProbeAsync(lifecycleReady, generation, CancellationToken.None);
         Check(probe.State == ManagerProbeState.Healthy, "probe Manager health survives a three-second scheduling delay on an OS-assigned port");
+        Volatile.Write(ref lifecycleRequiredReady, 0);
+        for (var index = 0; index < 4; index++)
+        {
+            var degradedProbe = await lifecycleClient.ProbeAsync(lifecycleReady, generation, CancellationToken.None);
+            Check(degradedProbe.State == ManagerProbeState.Degraded,
+                "post-admission live capability-loss probe stays degraded beyond the three-failure restart threshold: " + index);
+        }
         Check(
             await lifecycleClient.RequestShutdownAsync(lifecycleReady, "host-secret", CancellationToken.None),
             "request protected Manager graceful shutdown");

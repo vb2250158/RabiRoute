@@ -4,7 +4,9 @@ import http from "node:http";
 import path from "node:path";
 import test from "node:test";
 import { readDesktopPetDialogue } from "./desktopPetDialogue.js";
-import { handleDesktopPetApi } from "./desktopPetRoutes.js";
+import { DesktopPetOwner } from "./desktopPetRoutes.js";
+import { createDesktopPetOperations } from "./desktopPetOperations.js";
+import { ManagerPluginRouteRegistry } from "./managerPluginRouteRegistry.js";
 import { appendDesktopPetTranscript } from "../desktopPetTranscript.js";
 
 function fixture(context: test.TestContext): string {
@@ -59,12 +61,17 @@ test("transcripts survive reread, isolate personas and kinds, reject conflicting
 test("HTTP dialogue and transcript routes preserve persona identity, method and disk write receipts", async context => {
   const root = fixture(context);
   writeDialogue(root, "one", { schemaVersion: 1, personaId: "one", openers: { work: "一起努力。" } });
+  const owner = new DesktopPetOwner({ resolveRoleDir: roleId => path.join(root, roleId), cacheRoot: path.join(root, "cache") });
+  const registry = new ManagerPluginRouteRegistry();
+  const registration = registry.registerOperations("dialogue-fixture", createDesktopPetOperations(owner));
   const server = http.createServer((request, response) => {
-    if (!handleDesktopPetApi(request, new URL(request.url!, "http://localhost"), response,
-      roleId => path.join(root, roleId), undefined, path.join(root, "cache"))) response.writeHead(404).end();
+    if (!registry.handle(request, new URL(request.url!, "http://localhost"), response)) response.writeHead(404).end();
   });
   await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
-  context.after(() => server.close());
+  context.after(async () => {
+    try { await registration.dispose(); } finally { await owner.stop(); }
+    server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve()));
+  });
   const address = server.address();
   assert.ok(address && typeof address === "object");
   const base = `http://127.0.0.1:${address.port}/api/desktop-pet/roles`;

@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from ..timeout_settings import get_timeout_seconds
+
+
 import os
 import queue
 import threading
@@ -131,7 +134,7 @@ class OnnxVitsWorker:
         if not self._thread:
             return
         self._queue.put(None)
-        self._thread.join(timeout=5.0)
+        self._thread.join(timeout=get_timeout_seconds("speech.onnx.stop", 5))
         self._thread = None
 
     def submit(self, payload: SpeakPayload) -> dict[str, Any]:

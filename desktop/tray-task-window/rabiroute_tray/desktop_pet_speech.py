@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .timeout_settings import get_timeout_seconds
+
 import json
 import logging
 from collections import deque
@@ -41,7 +43,7 @@ class DesktopPetSpeech(QObject):
 
     def _request(self, path: str) -> dict:
         request = Request(self._url + path, method="GET", headers={"accept": "application/json"})
-        with urlopen(request, timeout=12) as response:
+        with urlopen(request, timeout=get_timeout_seconds("desktop.pet.speech", 12)) as response:
             payload = json.loads(response.read().decode("utf-8"))
         return payload.get("data", payload)
 

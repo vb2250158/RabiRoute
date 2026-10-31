@@ -3,13 +3,35 @@ import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
-import test from "node:test";
+import test, { after } from "node:test";
+import { ManagerPluginRouteRegistry } from "./managerPluginRouteRegistry.js";
+import { createDesktopPetOperations } from "./desktopPetOperations.js";
+import type { DesktopPetSettingsAccess, DesktopPetEventPublisher } from "./desktopPetRoutes.js";
 import {
-  handleDesktopPetApi,
+  DesktopPetOwner,
   listDesktopPetPacks,
   type DesktopPetPackCatalog
 } from "./desktopPetRoutes.js";
 import { DesktopSettingsStore } from "./desktopSettings.js";
+
+
+const controlledRegistrations = new Map<string, { owner: DesktopPetOwner; registry: ManagerPluginRouteRegistry; registration: ReturnType<ManagerPluginRouteRegistry["registerOperations"]> }>();
+after(async () => { await Promise.all([...controlledRegistrations.values()].map(async value => { const retired = value.registration.dispose(); await Promise.all([retired, value.owner.stop()]); })); });
+function removeFixture(target: fs.PathLike, options?: fs.RmOptions): void {
+  const resolved = path.resolve(String(target)); const parent = path.resolve(os.tmpdir());
+  const relative = path.relative(parent, resolved); assert.ok(relative && !relative.startsWith("..") && !path.isAbsolute(relative));
+  fs.rmSync(target, options);
+}
+function dispatchDesktopPet(request: http.IncomingMessage, url: URL, response: http.ServerResponse, resolveRoleDir: (roleId: string) => string, settings?: DesktopPetSettingsAccess, cacheRoot?: string, publishEvent?: DesktopPetEventPublisher): boolean {
+  const key = resolveRoleDir("") + "\n" + cacheRoot;
+  let fixture = controlledRegistrations.get(key);
+  if (!fixture) {
+    const owner = new DesktopPetOwner({ resolveRoleDir, settings, cacheRoot, publishEvent });
+    const registry = new ManagerPluginRouteRegistry();
+    fixture = { owner, registry, registration: registry.registerOperations("pet-fixture", createDesktopPetOperations(owner)) }; controlledRegistrations.set(key, fixture);
+  }
+  return fixture.registry.handle(request, url, response);
+}
 
 function roleFixture(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-desktop-pet-"));
@@ -58,7 +80,7 @@ test("companion mapping keeps only existing looping actions", () => {
     manifest.companionStates = { watch: "thinking", play: "idle-reading", other: "missing", "bad key": "sleep" };
     fs.writeFileSync(manifestPath, JSON.stringify(manifest));
     assert.deepEqual(listDesktopPetPacks("YeYu", roleDir, cacheRoot).packs[0].companionStates, { watch: "thinking" });
-  } finally { fs.rmSync(roleDir, { recursive: true }); fs.rmSync(cacheRoot, { recursive: true }); }
+  } finally { removeFixture(roleDir, { recursive: true }); removeFixture(cacheRoot, { recursive: true }); }
 });
 
 test("mode animation sets expose their own normalized pools without replacing legacy scene mappings", () => {
@@ -77,7 +99,7 @@ test("mode animation sets expose their own normalized pools without replacing le
       randomMaxSeconds: 120, randomStates: ["focus-read"], clickStates: ["focus-read"] } });
     assert.deepEqual(pack.companionStates, { watch: "sleep" });
     assert.deepEqual(pack.idleBehavior?.randomStates, ["idle-reading"]);
-  } finally { fs.rmSync(roleDir, { recursive: true }); fs.rmSync(cacheRoot, { recursive: true }); }
+  } finally { removeFixture(roleDir, { recursive: true }); removeFixture(cacheRoot, { recursive: true }); }
 });
 
 test("catalog reports a malformed mode group instead of silently playing a different pose", () => {
@@ -91,7 +113,7 @@ test("catalog reports a malformed mode group instead of silently playing a diffe
     const catalog = listDesktopPetPacks("sample", roleDir, cacheRoot);
     assert.equal(catalog.packs.length, 0);
     assert.match(catalog.diagnostics[0].message, /returning to thinking/);
-  } finally { fs.rmSync(roleDir, { recursive: true }); fs.rmSync(cacheRoot, { recursive: true }); }
+  } finally { removeFixture(roleDir, { recursive: true }); removeFixture(cacheRoot, { recursive: true }); }
 });
 
 test("desktop pet catalog binds packs to the role and naturally sorts PNG frames", () => {
@@ -172,7 +194,7 @@ test("desktop pet API serves cached assets without opening the shared pack", asy
   writePack(path.join(cacheRoot, "YeYu"));
   const server = http.createServer((request, response) => {
     const requestUrl = new URL(request.url || "/", "http://127.0.0.1");
-    if (!handleDesktopPetApi(request, requestUrl, response, () => roleDir, undefined, cacheRoot)) {
+    if (!dispatchDesktopPet(request, requestUrl, response, () => roleDir, undefined, cacheRoot)) {
       response.writeHead(404).end();
     }
   });
@@ -198,7 +220,7 @@ test("desktop pet runtime catalog does not scan or return shared-source packs", 
   writePack(roleDir, "YeYu", "shared-only-pack");
   const server = http.createServer((request, response) => {
     const requestUrl = new URL(request.url || "/", "http://127.0.0.1");
-    if (!handleDesktopPetApi(request, requestUrl, response, () => roleDir, undefined, cacheRoot)) {
+    if (!dispatchDesktopPet(request, requestUrl, response, () => roleDir, undefined, cacheRoot)) {
       response.writeHead(404).end();
     }
   });
@@ -235,7 +257,7 @@ test("desktop pet API promotes a validated shared-source pack into the runtime c
   writePack(roleDir, "YeYu", "shared-cache-pack");
   const server = http.createServer((request, response) => {
     const requestUrl = new URL(request.url || "/", "http://127.0.0.1");
-    if (!handleDesktopPetApi(request, requestUrl, response, () => roleDir, undefined, cacheRoot, (eventType, data) => publishedEvents.push({ eventType, data }))) {
+    if (!dispatchDesktopPet(request, requestUrl, response, () => roleDir, undefined, cacheRoot, (eventType, data) => publishedEvents.push({ eventType, data }))) {
       response.writeHead(404).end();
     }
   });
@@ -258,6 +280,10 @@ test("desktop pet API promotes a validated shared-source pack into the runtime c
 test("slow pet image metadata does not block independent health requests", async t => {
   const roleDir = roleFixture(), cacheRoot = roleFixture();
   writePack(roleDir);
+  // Install/compile before timing request latency, as the real plugin activation does.
+  const owner = new DesktopPetOwner({ resolveRoleDir: () => roleDir, cacheRoot });
+  const registry = new ManagerPluginRouteRegistry();
+  controlledRegistrations.set(roleDir + "\n" + cacheRoot, { owner, registry, registration: registry.registerOperations("pet-fixture", createDesktopPetOperations(owner)) });
   const syncRealpath = fs.realpathSync;
   const asyncRealpath = fs.promises.realpath;
   let entered!: () => void;
@@ -275,7 +301,7 @@ test("slow pet image metadata does not block independent health requests", async
   const server = http.createServer((request, response) => {
     const url = new URL(request.url || "/", "http://127.0.0.1");
     if (url.pathname === "/health") { response.end("healthy"); return; }
-    handleDesktopPetApi(request, url, response, () => roleDir, undefined, cacheRoot);
+    dispatchDesktopPet(request, url, response, () => roleDir, undefined, cacheRoot);
   });
   await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
   t.after(() => server.close());
@@ -297,7 +323,7 @@ test("desktop pet API serves role-scoped catalog and image assets", async t => {
   const settings = new DesktopSettingsStore(path.join(roleDir, "host-settings.json"));
   const server = http.createServer((request, response) => {
     const requestUrl = new URL(request.url || "/", "http://127.0.0.1");
-    if (!handleDesktopPetApi(
+    if (!dispatchDesktopPet(
       request,
       requestUrl,
       response,

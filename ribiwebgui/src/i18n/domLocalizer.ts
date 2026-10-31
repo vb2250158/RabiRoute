@@ -1,4 +1,4 @@
-import { LOCALE_CHANGED_EVENT, type AppLocale, translateText } from "./index";
+import { LOCALE_CHANGED_EVENT, resolveLocale, type AppLocale, translateText } from "./index";
 import { createFrameBudgetTreeScheduler } from "./frameBudgetTreeScheduler";
 
 const localizedAttributes = ["aria-label", "placeholder", "title"] as const;
@@ -45,7 +45,7 @@ function localizeNode(node: Node, locale: AppLocale): void {
 }
 
 export function installDomLocalizer(): () => void {
-  let locale = (document.documentElement.lang === "en" ? "en" : "zh-CN") as AppLocale;
+  let locale = resolveLocale(document.documentElement.lang, document.documentElement.lang);
   const scheduler = createFrameBudgetTreeScheduler<Node>({
     process: node => localizeNode(node, locale),
     children: node => {
@@ -99,7 +99,7 @@ export function installDomLocalizer(): () => void {
     apply();
   };
   window.addEventListener(LOCALE_CHANGED_EVENT, onLocaleChanged);
-  if (locale === "en") apply();
+  if (locale !== "zh-CN") apply();
   return () => {
     observer.disconnect();
     scheduler.dispose();

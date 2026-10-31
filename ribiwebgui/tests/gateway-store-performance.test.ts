@@ -24,7 +24,8 @@ test("persona sync UI sources and requests have been removed", () => {
   const contributions = fs.readFileSync(new URL("../src/bundles/builtinWebContributions.ts", import.meta.url), "utf8");
   assert.doesNotMatch(contributions, /PersonaSync|persona-sync|persona\/sync/);
   assert.doesNotMatch(personaPageSource, /PersonaSync|persona_sync|persona-sync/);
-  assert.match(personaPageSource, /persona_chat_history_changed/);
+  const historyPageSource = fs.readFileSync(new URL("../src/pages/RoleMessageHistoryPage.vue", import.meta.url), "utf8");
+  assert.match(historyPageSource, /persona_chat_history_changed/);
   assert.match(personaPageSource, /identity_relation_changed/);
 });
 

@@ -1,3 +1,4 @@
+import { getTimeoutMs } from "../shared/timeoutSettings.js";
 import type { ChildProcess } from "node:child_process";
 import { stopChildProcessTree } from "../runtime/windowsProcessTree.js";
 
@@ -75,8 +76,8 @@ export class ManualTriggerProcessRegistry {
     private readonly defaultOwner = DEFAULT_MANUAL_TRIGGER_PROCESS_OWNER,
     options: ManualTriggerProcessRegistryOptions = {}
   ) {
-    this.terminateTimeoutMs = positiveTimeout(options.terminateTimeoutMs, 2_000);
-    this.forceKillTimeoutMs = positiveTimeout(options.forceKillTimeoutMs, 2_000);
+    this.terminateTimeoutMs = positiveTimeout(options.terminateTimeoutMs, getTimeoutMs("process.manualTerminate", 2000));
+    this.forceKillTimeoutMs = positiveTimeout(options.forceKillTimeoutMs, getTimeoutMs("process.manualForceTerminate", 2000));
     this.forceStopProcess = options.forceStopProcess ?? stopChildProcessTree;
   }
 

@@ -62,6 +62,8 @@ export class MemoryConsolidationScheduler {
   private running?: Promise<void>;
   private rerunRequested = false;
   private stopped = false;
+  private activationDeferred = false;
+  private startRequested = false;
   private executionCancellation?: AbortController;
 
   constructor(private readonly options: MemoryConsolidationSchedulerOptions) {
@@ -80,11 +82,27 @@ export class MemoryConsolidationScheduler {
   }
 
   start(): void {
+    this.startRequested = true;
+    if (this.activationDeferred) return;
     this.stopped = false;
     void this.runOnce();
   }
 
+  /** Readiness calls can arrive while a published replacement still joins its predecessor. */
+  deferActivation(): void {
+    if (this.running || this.deadline || this.startRequested) throw new Error("Memory scheduler activation must be deferred before startup.");
+    this.activationDeferred = true;
+  }
+
+  activate(resumeStarted = false): void {
+    this.activationDeferred = false;
+    if (resumeStarted || this.startRequested) this.start();
+  }
+
+  isStarted(): boolean { return this.startRequested; }
+
   stop(): Promise<void> {
+    this.startRequested = false;
     this.stopped = true;
     this.rerunRequested = false;
     this.cancelDeadline();
@@ -93,7 +111,7 @@ export class MemoryConsolidationScheduler {
   }
 
   reschedule(): void {
-    if (this.stopped) return;
+    if (this.stopped || this.activationDeferred) return;
     this.cancelDeadline();
     if (this.running) {
       this.rerunRequested = true;
@@ -115,6 +133,7 @@ export class MemoryConsolidationScheduler {
   }
 
   runOnce(): Promise<void> {
+    if (this.activationDeferred) return Promise.resolve();
     if (this.running) return this.running;
     const executionCancellation = new AbortController();
     this.executionCancellation = executionCancellation;
@@ -151,6 +170,7 @@ export class MemoryConsolidationScheduler {
       try {
         if (this.options.evaluate) {
           const evaluation = await this.options.evaluate(target, signal);
+          if (this.stopped || signal.aborted) break;
           pending = evaluation.pending;
           nextTriggerByRole.set(target.roleKey, evaluation.nextTriggerAt);
           if (!pending && evaluation.dueOperationIdentity) {
@@ -167,6 +187,7 @@ export class MemoryConsolidationScheduler {
         retryAt = Math.min(retryAt ?? Number.POSITIVE_INFINITY, circuit.snapshot.retryAt);
         continue;
       }
+      if (this.stopped || signal.aborted) break;
       if (!pending) {
         this.failureCircuits.recordSuccess(target.roleKey);
         continue;

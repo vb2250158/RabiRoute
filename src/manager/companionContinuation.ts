@@ -28,14 +28,14 @@ export class CompanionContinuationStore {
     return { gatewayId: i.gatewayId, presetId: i.presetId, title: i.title, autoReview: i.autoReview,
       voice: i.voice, saveSummary: i.saveSummary, observationOwner: "desktop" };
   }
-  async save(session: CompanionSession): Promise<void> {
+  async save(session: CompanionSession, assertCurrent?: () => void): Promise<void> {
     if (session.observationOwner !== "desktop") return;
     const intent: CompanionResumeIntent = { gatewayId: session.gatewayId, presetId: session.presetId,
       title: session.title, autoReview: session.autoReview, voice: session.voice,
       saveSummary: session.saveSummary, observationOwner: "desktop" };
-    await atomicRecordingJson(this.file(session.roleId), { schemaVersion: 1, enabled: true, intent });
+    await atomicRecordingJson(this.file(session.roleId), { schemaVersion: 1, enabled: true, intent }, assertCurrent);
   }
-  async clear(roleId: string): Promise<void> {
-    await atomicRecordingJson(this.file(roleId), { schemaVersion: 1, enabled: false });
+  async clear(roleId: string, assertCurrent?: () => void): Promise<void> {
+    await atomicRecordingJson(this.file(roleId), { schemaVersion: 1, enabled: false }, assertCurrent);
   }
 }

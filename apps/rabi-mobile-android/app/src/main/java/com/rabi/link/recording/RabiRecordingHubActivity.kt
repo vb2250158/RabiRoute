@@ -215,6 +215,10 @@ class RabiRecordingHubActivity : Activity() {
         if(transitionPending()) { toast("正在保存上一段，请完成后再开始"); return }
         val value = settings()
         val required = mutableListOf<String>()
+        if(com.rabi.link.location.LocationController.requested(this) && !com.rabi.link.location.LocationController.permitted(this)) {
+            required.add(Manifest.permission.ACCESS_FINE_LOCATION)
+            required.add(Manifest.permission.ACCESS_COARSE_LOCATION)
+        }
         if(value.mode == "audio") required.add(Manifest.permission.RECORD_AUDIO)
         if(value.mode == "audio" || value.mode == "video") {
             required.add(Manifest.permission.BLUETOOTH_CONNECT)
@@ -236,7 +240,12 @@ class RabiRecordingHubActivity : Activity() {
             else if(settings().mode == "audio" && checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
                 toast("眼镜权限未授予，先使用手机录音")
                 serviceAction { RabiConversationService.startRecording(this) }
-            } else toast("录音权限未授予，未开始采集")
+            } else if(settings().mode == "location" && com.rabi.link.location.LocationController.permitted(this)) {
+                serviceAction { RabiConversationService.startRecording(this) }
+            } else if(settings().mode == "health" || (settings().mode == "video" && checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED && checkSelfPermission(Manifest.permission.BLUETOOTH_SCAN) == PackageManager.PERMISSION_GRANTED)) {
+                toast("定位权限未授予，继续已允许的采集")
+                serviceAction { RabiConversationService.startRecording(this) }
+            } else toast("所需采集权限未授予，请在设置中检查")
         } else if(code == 9045) {
             if(grants.firstOrNull() != PackageManager.PERMISSION_GRANTED) toast("通知未获授权，系统可能隐藏通知栏入口；可在应用内暂停记录")
             startRecording() // Notification denial alone does not prohibit an Android foreground service.
@@ -269,10 +278,11 @@ class RabiRecordingHubActivity : Activity() {
         recordingSource?.text = when {
             value.mode == "video" -> "眼镜相机"
             value.mode == "health" -> "健康设备"
+            value.mode == "location" -> "手机定位"
             source == "mobile" || source == "phone" -> "手机麦克风"
             source == "glasses" -> "眼镜麦克风"
             else -> "自动选择音源"
-        }
+        } + if(value.mode != "location" && com.rabi.link.location.LocationSettings(this).enabled) " · 位置" else ""
         recordingToggle?.stateDescription = recordingTitle?.text
         recordingToggle?.isEnabled = !transitionPending()
         updatingToggle = false
@@ -325,7 +335,8 @@ class RabiRecordingHubActivity : Activity() {
         val cards = mutableListOf(
             card("phone","手机",if(audioSource == "mobile") "正在收音" else "本机 · 自动参与录音") {
                 AlertDialog.Builder(this).setTitle("手机").setMessage("手机会在眼镜没有供声时自动录音。开始和暂停使用记录页顶部的总开关。")
-                    .setPositiveButton("完成",null).show()
+                    .setPositiveButton("位置记录") { _, _ -> startActivity(Intent(this, com.rabi.link.location.LocationSettingsActivity::class.java)) }
+                    .setNegativeButton("完成",null).show()
             },
             card("glasses","眼镜",when { audioSource == "glasses" -> "正在收音"; RabiConversationService.currentVideo()?.receiving == true -> "正在接收画面"; authorized -> "已授权 · 暂无音视频"; else -> "待连接" }) {
                 AlertDialog.Builder(this).setTitle("眼镜").setItems(if(RabiConversationService.currentVideo() != null) arrayOf("眼镜设置","连接与授权","视频开播步骤") else arrayOf("眼镜设置","连接与授权")) { _, index ->

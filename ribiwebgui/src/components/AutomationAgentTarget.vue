@@ -3,6 +3,8 @@ import { computed, onBeforeUnmount, ref, watch } from "vue";
 import type { GatewayDefinition } from "@shared/gatewayConfigModel";
 import { normalizeAgentRecipients, primaryDeliveryTarget, type AgentDeliveryTarget } from "@shared/agentDeliveryTarget";
 import { postRouteAgentThreadAction } from "../routeAgentThreadClient";
+import { usePersonaService } from "../persona/personaServiceClient";
+const personaService = usePersonaService();
 import { resolvePrimaryAgentTarget, type RouteAgentTarget } from "@shared/routeAgentTargets";
 import { agentAdapterSupportsManagedTaskFeature, isAgentThreadCapableAdapter } from "@shared/agentAdapterCapabilities";
 import { useI18n } from "../i18n";
@@ -109,7 +111,7 @@ async function loadIdentities(more = false) {
   identityLoading.value = true; identityError.value = "";
   try {
     const result = await postRouteAgentThreadAction({ action: "list", limit: 50, offset: more ? identityOffset.value ?? 0 : 0, query: "",
-      ...(agent.provider === "grokBot" && selectedSession.value?.sessionId ? { threadId: selectedSession.value.sessionId } : {}) }, agent, { accessToken: () => "" });
+      ...(agent.provider === "grokBot" && selectedSession.value?.sessionId ? { threadId: selectedSession.value.sessionId } : {}) }, agent, { fetch: personaService.fetch, accessToken: () => "" });
     if (identityGeneration !== requestGeneration) return;
     identitySessions.value = [...new Map([...(more ? identitySessions.value : []), ...(result.threads ?? [])].map((item: Session) => [item.id, item])).values()] as Session[];
     identityOffset.value = result.nextOffset ?? undefined;
@@ -123,7 +125,7 @@ async function scan(more = false) {
   loading.value = true; error.value = "";
   try {
     const result = await postRouteAgentThreadAction({ action: "list", limit: 50, offset: more ? offset.value ?? 0 : 0, query: query.value,
-      ...(agent.provider === "grokBot" && selectedSession.value?.sessionId ? { threadId: selectedSession.value.sessionId } : {}) }, agent, { accessToken: () => "" });
+      ...(agent.provider === "grokBot" && selectedSession.value?.sessionId ? { threadId: selectedSession.value.sessionId } : {}) }, agent, { fetch: personaService.fetch, accessToken: () => "" });
     const found: Session[] = result.threads ?? [];
     const next: number | undefined = result.nextOffset ?? undefined;
     if (generation !== requestGeneration) return;

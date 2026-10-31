@@ -1,14 +1,15 @@
+import { getTimeoutMs } from "../shared/timeoutSettings.js";
 import fs from "node:fs/promises";
 import fsSync from "node:fs";
 import path from "node:path";
 import { execFile } from "node:child_process";
 import type http from "node:http";
+import { hasAuthenticatedConnectionRequest } from "./connectionRequestAccess.js";
 import { isLoopbackRemoteAddress } from "./webguiLanAccess.js";
 import { assertTrustedLanAgentPrincipal } from "./lanAgentRequestAccess.js";
 import { isLanAgentCredentialToken } from "./lanAgentAuthority.js";
 import { recordDataMutationAudit } from "../observability/dataMutationAudit.js";
 
-const RESET_PATH = "/api/rabi/identity/reset-instance-id";
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 type ResetRequest = Readonly<{ operationId: string; expectedGuid: string }>;
 type ResetStatus = Readonly<{ operationId: string; state: "queued" | "committed" | "rolled_back" | "failed"; newGuid?: string; message?: string }>;
@@ -20,6 +21,11 @@ export class IdentityResetAuthorizationError extends IdentityResetError {
   constructor(readonly commitState: "not_started" | "unknown") {
     super("实例身份操作授权已失效。", 403);
   }
+}
+
+/** The original owner or Manager generation changed; this is not a new permission requirement. */
+export class IdentityResetOwnerChangedError extends IdentityResetError {
+  constructor(readonly commitState: "not_started" | "unknown") { super("实例身份操作的原服务或运行代际已改变。", 409); }
 }
 
 export function instanceIdentityResetAvailable(environment: NodeJS.ProcessEnv = process.env): boolean {
@@ -48,7 +54,7 @@ function localRequest(request: http.IncomingMessage): boolean {
   return true;
 }
 
-function parseRequest(body: unknown): ResetRequest {
+function parseIdentityResetRequest(body: unknown): ResetRequest {
   if (!body || typeof body !== "object" || Array.isArray(body)) throw new IdentityResetError("重置请求无效。", 400);
   const value = body as Record<string, unknown>;
   if (Object.keys(value).length !== 3 || value.confirmed !== true
@@ -74,7 +80,10 @@ export class HostInstanceIdentityReset {
     let requestMayExist = false;
     const assertAccess = () => {
       try { authorize(); }
-      catch { throw new IdentityResetAuthorizationError(requestMayExist ? "unknown" : "not_started"); }
+      catch (error) {
+        if (error instanceof IdentityResetOwnerChangedError) throw new IdentityResetOwnerChangedError(requestMayExist ? "unknown" : "not_started");
+        throw new IdentityResetAuthorizationError(requestMayExist ? "unknown" : "not_started");
+      }
     };
     assertAccess();
     if (!this.available()) throw new IdentityResetError("此操作需要安装版 RabiRoute Host。", 503);
@@ -111,7 +120,7 @@ export class HostInstanceIdentityReset {
     });
     const environment = this.options.environment ?? process.env;
     const execute = this.options.execute ?? ((executable: string, args: readonly string[]) => new Promise<unknown>((resolve, reject) => {
-      execFile(executable, [...args], { windowsHide: true, timeout: 15_000, maxBuffer: 64 * 1024 }, (error, stdout) => {
+      execFile(executable, [...args], { windowsHide: true, timeout: getTimeoutMs("backend.manager.identityResetRoutes.enqueue.execFile.timeout", 15_000), maxBuffer: 64 * 1024 }, (error, stdout) => {
         // A rejected command may still return a structured, audited Host response.
         try { resolve(JSON.parse(stdout.trim())); }
         catch { reject(new IdentityResetError("Host 未确认重置请求，请查询操作状态或从托盘重新打开页面。", 503)); }
@@ -126,7 +135,7 @@ export class HostInstanceIdentityReset {
       ]);
     } catch (error) {
       assertAccess();
-      if (error instanceof IdentityResetAuthorizationError) throw error;
+      if (error instanceof IdentityResetAuthorizationError || error instanceof IdentityResetOwnerChangedError) throw error;
       throw new IdentityResetError("Host 未确认重置请求，请查询操作状态或从托盘重新打开页面。", 503);
     }
     assertAccess();
@@ -152,7 +161,7 @@ export class HostInstanceIdentityReset {
     }
     catch (error) {
       authorize();
-      if (error instanceof IdentityResetAuthorizationError) throw error;
+      if (error instanceof IdentityResetAuthorizationError || error instanceof IdentityResetOwnerChangedError) throw error;
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
       throw new IdentityResetError("操作状态暂不可读取，请不要重复重置。", 503);
     }
@@ -182,7 +191,7 @@ export class HostInstanceIdentityReset {
         if (filename?.toString() === "host-status.json") finish();
       });
       watcher.once("error", finish);
-      const deadline = setTimeout(finish, 10_000);
+      const deadline = setTimeout(finish, getTimeoutMs("deadline.manager.identityResetRoutes.waitStatus", 10_000));
       signal.addEventListener("abort", finish, { once: true });
       // Close the read/register race without repeatedly checking unchanged state.
       void this.status(operationId, authorize).then(value => { if (value?.state !== "queued") finish(); }).catch(finish);
@@ -193,19 +202,20 @@ export class HostInstanceIdentityReset {
   }
 }
 
-export function handleInstanceIdentityReset(request: http.IncomingMessage, url: URL, response: http.ServerResponse, options: Readonly<{
+export type InstanceIdentityResetContext = Readonly<{
   service: Pick<HostInstanceIdentityReset, "available" | "enqueue" | "status"> & Partial<Pick<HostInstanceIdentityReset, "waitStatus">>;
   currentGuid: () => string;
-  readJson: (request: http.IncomingMessage, maximumBytes: number) => Promise<unknown>;
-  json: (response: http.ServerResponse, status: number, body: unknown) => void;
-}>): boolean {
-  if (url.pathname !== RESET_PATH && !url.pathname.startsWith(`${RESET_PATH}/`)) return false;
-  response.setHeader("cache-control", "no-store");
+}>;
+
+/** Capture original authorization before body parsing; a new principal cannot adopt this request. */
+export function captureIdentityResetAuthority(request: http.IncomingMessage, url: URL,
+  outcome: () => "not_started" | "unknown", assertCurrent: () => void = () => {}) {
   let originalPrincipal: ReturnType<typeof assertTrustedLanAgentPrincipal>;
   let principalCaptured = false;
-  let commitState: "not_started" | "unknown" = "not_started";
+
   const assertAccess = () => {
     try {
+      assertCurrent();
       const principal = assertTrustedLanAgentPrincipal(request);
       if (principalCaptured && principal !== originalPrincipal) throw new Error("Request principal changed.");
       // Denied credential candidates cannot borrow the strict local exception.
@@ -214,61 +224,44 @@ export function handleInstanceIdentityReset(request: http.IncomingMessage, url: 
       // Local transport properties can disappear after body consumption; capture that strict exception once.
       if (!principal && (isLanAgentCredentialToken(bearer) || typeof legacy === "string" && isLanAgentCredentialToken(legacy)
         || [...url.searchParams.values()].some(isLanAgentCredentialToken)
-        || !principalCaptured && !localRequest(request))) throw new Error("Local authorization required.");
+        || !principalCaptured && !localRequest(request) && !hasAuthenticatedConnectionRequest(request))) throw new Error("Local authorization required.");
       originalPrincipal = principal; principalCaptured = true;
-    } catch { throw new IdentityResetAuthorizationError(commitState); }
-  };
-  const json = (status: number, body: unknown) => {
-    if (response.destroyed) return;
-    if (response.headersSent) { response.destroy(); return; }
-    try { assertAccess(); }
-    catch { status = 403; body = { code: "authorization_revoked", commitState }; }
-    if (status === 403) {
-      body = { code: "authorization_revoked", commitState };
-      for (const header of response.getHeaderNames()) response.removeHeader(header);
-      response.setHeader("cache-control", "no-store");
+    } catch (error) {
+      if (error instanceof IdentityResetOwnerChangedError) throw error;
+      throw new IdentityResetAuthorizationError(outcome());
     }
-    options.json(response, status, body);
   };
-  try { assertAccess(); }
-  catch { json(403, { code: "authorization_revoked", commitState }); return true; }
-  if (url.search) { json(400, { code: -1, message: "此接口不接受查询参数。" }); return true; }
-  const operationId = url.pathname.slice(RESET_PATH.length + 1);
-  if (request.method === "GET" && url.pathname !== RESET_PATH) {
-    const controller = new AbortController();
-    const close = () => controller.abort();
-    response.once("close", close);
-    void Promise.resolve().then(() => {
-      assertAccess();
-      return options.service.waitStatus ? options.service.waitStatus(operationId, controller.signal, assertAccess) : options.service.status(operationId, assertAccess);
-    }).then(status => {
-      assertAccess();
-      json(status ? 200 : 404, { code: status ? 0 : -1, data: status });
-    }).catch(error => json(error instanceof IdentityResetError ? error.statusCode : 503,
-      { code: -1, message: "操作状态暂不可读取，请不要重复重置。" }))
-      .finally(() => response.removeListener("close", close));
-    return true;
-  }
-  if (request.method !== "POST" || url.pathname !== RESET_PATH) { json(405, { code: -1, message: "Method not allowed." }); return true; }
-  if (!options.service.available()) { json(503, { code: -1, message: "此操作需要安装版 RabiRoute Host。" }); return true; }
-  if (!/^application\/json(?:\s*;|$)/i.test(String(request.headers["content-type"] ?? ""))) {
-    json(415, { code: -1, message: "重置请求必须使用 JSON。" }); return true;
-  }
-  void options.readJson(request, 2048).then(body => {
-    assertAccess();
-    const input = parseRequest(body);
-    const currentGuid = options.currentGuid();
-    if (input.expectedGuid.toLowerCase() !== currentGuid.toLowerCase()) throw new IdentityResetError("实例 ID 已改变，请重新读取页面。", 409);
-    assertAccess();
-    // A delegated service may have effects; the real owner refines this to not_started if no request was written.
-    commitState = "unknown";
-    // Preserve the saved spelling for the offline transaction's exact CAS fence.
-    return options.service.enqueue({ ...input, expectedGuid: currentGuid }, assertAccess);
-  }).then(status => json(status.state === "queued" ? 202 : 200, { code: 0, data: status }))
-    .catch(error => {
-      if (error instanceof IdentityResetAuthorizationError) commitState = error.commitState;
-      json(error instanceof IdentityResetError ? error.statusCode : 400,
-        { code: -1, message: error instanceof IdentityResetError ? error.message : "重置请求无效。" });
-    });
-  return true;
+  assertAccess();
+  return assertAccess;
+}
+
+export function createInstanceIdentityResetOwner(options: InstanceIdentityResetContext) {
+  const service = options.service, currentGuid = options.currentGuid;
+  const available = service.available, enqueue = service.enqueue, status = service.status, waitStatus = service.waitStatus;
+  let dispatched = false;
+  const assertOwner = () => {
+    if (options.service !== service || options.currentGuid !== currentGuid || service.available !== available || service.enqueue !== enqueue || service.status !== status || service.waitStatus !== waitStatus) {
+      throw new IdentityResetOwnerChangedError(dispatched ? "unknown" : "not_started");
+    }
+  };
+  return {
+    available: () => { assertOwner(); const value = available.call(service); assertOwner(); return value; },
+    async enqueue(body: unknown, guard: () => void, onDispatched: () => void) {
+      const assertCurrent = () => { guard(); assertOwner(); };
+      assertCurrent();
+      const input = parseIdentityResetRequest(body), savedGuid = currentGuid();
+      if (input.expectedGuid.toLowerCase() !== savedGuid.toLowerCase()) throw new IdentityResetError("实例 ID 已改变，请重新读取页面。", 409);
+      assertCurrent(); onDispatched(); dispatched = true;
+      const reply = await enqueue.call(service, { ...input, expectedGuid: savedGuid }, assertCurrent);
+      assertCurrent();
+      return { status: reply.state === "queued" ? 202 : 200, body: { code: 0, data: reply } };
+    },
+    async status(operationId: string, signal: AbortSignal, guard: () => void) {
+      const assertCurrent = () => { guard(); assertOwner(); };
+      assertCurrent();
+      const reply = waitStatus ? await waitStatus.call(service, operationId, signal, assertCurrent) : await status.call(service, operationId, assertCurrent);
+      assertCurrent();
+      return { status: reply ? 200 : 404, body: { code: reply ? 0 : -1, data: reply } };
+    }
+  };
 }

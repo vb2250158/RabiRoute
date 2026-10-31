@@ -1,3 +1,4 @@
+import { getTimeoutMs } from "./shared/timeoutSettings.js";
 import { execFileSync, spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -96,7 +97,7 @@ export function readAntigravitySessions(
     stdout = execFileSync(
       process.execPath,
       ["--input-type=module", "--eval", script],
-      { timeout: READ_TIMEOUT_MS, windowsHide: true, encoding: "utf8", maxBuffer: 32 * 1024 * 1024 }
+      { timeout: getTimeoutMs("backend.antigravitySessionStore.READ_TIMEOUT_MS", READ_TIMEOUT_MS), windowsHide: true, encoding: "utf8", maxBuffer: 32 * 1024 * 1024 }
     );
   } catch (error) {
     throw new Error(`Could not read the Antigravity conversation index: ${describeError(error)}`);
@@ -362,7 +363,7 @@ function probeHostViaProcessTable(): boolean {
     const output = execFileSync(
       "tasklist",
       ["/FI", "IMAGENAME eq language_server.exe", "/FO", "CSV", "/NH"],
-      { timeout: 5_000, windowsHide: true, encoding: "utf8" }
+      { timeout: getTimeoutMs("backend.antigravitySessionStore.probeHostViaProcessTable.execFileSync.timeout", 5_000), windowsHide: true, encoding: "utf8" }
     );
     return /language_server\.exe/i.test(output ?? "");
   } catch {

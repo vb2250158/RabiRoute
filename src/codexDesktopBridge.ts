@@ -1,3 +1,4 @@
+import { getTimeoutMs } from "./shared/timeoutSettings.js";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
@@ -11,6 +12,17 @@ import { createCodexWorkspaceMatcher } from "./codexTaskIdentity.js";
 
 export type CodexDesktopSandbox = "read-only" | "workspace-write" | "danger-full-access";
 export type CodexDesktopReasoningEffort = "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
+
+/** A proof about this entire queued delivery, not merely its final IPC request. */
+export class CodexDesktopPromptNotSentError extends Error {
+  readonly code = "CODEX_DESKTOP_PROMPT_NOT_SENT";
+  readonly promptFrameWritten = false;
+  constructor(cause: unknown) {
+    super(cause instanceof Error ? cause.message : String(cause), { cause });
+    this.name = "CodexDesktopPromptNotSentError";
+  }
+}
+type PromptWriteAttempt = { promptWriteAttempted: boolean };
 
 export type CodexDesktopThread = {
   id: string;
@@ -505,7 +517,7 @@ export class CodexDesktopBridge {
   constructor(options: CodexDesktopBridgeOptions = {}) {
     this.options = {
       ...options,
-      requestTimeoutMs: options.requestTimeoutMs ?? 30_000,
+      requestTimeoutMs: options.requestTimeoutMs ?? getTimeoutMs("backend.codexDesktopBridge.owner.requestTimeoutMs", 30_000),
       lateStartReconcileMs: Math.max(0, options.lateStartReconcileMs ?? 60_000),
       deliveryReceiptGraceMs: Math.max(0, options.deliveryReceiptGraceMs ?? 5_000),
       deliveryReceiptPollMs: Math.max(10, options.deliveryReceiptPollMs ?? 250),
@@ -528,9 +540,13 @@ export class CodexDesktopBridge {
     ].filter(Boolean) as string[])];
   }
 
-  private write(message: unknown): void {
+  private write(message: unknown, promptAttempt?: PromptWriteAttempt): void {
+    const frame = encodeFrame(message);
     if (!this.socket?.writable) throw new Error("Codex Desktop IPC is not connected");
-    this.socket.write(encodeFrame(message));
+    // Once socket.write is entered, even a synchronous throw cannot prove that
+    // no bytes reached the peer. Initialization/discovery are not prompt frames.
+    if (promptAttempt) promptAttempt.promptWriteAttempted = true;
+    this.socket.write(frame);
   }
 
   private handleData(data: Buffer): void {
@@ -713,7 +729,7 @@ export class CodexDesktopBridge {
     }
   }
 
-  private async request(method: string, params: unknown, version = 1, beforeInitialized = false, requestId = randomUUID(), assertAuthorized?: () => void | Promise<void>, lateArrival?: { holdMs: number; onResponse: (response: IpcResponse) => void }): Promise<IpcResponse> {
+  private async request(method: string, params: unknown, version = 1, beforeInitialized = false, requestId = randomUUID(), assertAuthorized?: () => void | Promise<void>, lateArrival?: { holdMs: number; onResponse: (response: IpcResponse) => void }, promptAttempt?: PromptWriteAttempt): Promise<IpcResponse> {
     if (!beforeInitialized) await this.connect();
     await assertAuthorized?.();
     const response = new Promise<IpcResponse>((resolve, reject) => {
@@ -725,17 +741,18 @@ export class CodexDesktopBridge {
           this.lateArrivals.set(requestId, { timer: lateTimer, onResponse: lateArrival.onResponse });
         }
         reject(new Error(`Codex Desktop IPC request timed out: ${method}`));
-      }, this.options.requestTimeoutMs);
+      }, getTimeoutMs("agent.codex.ipc", this.options.requestTimeoutMs));
       this.pending.set(requestId, { resolve, reject, timer });
     });
-    this.write({
-      type: "request",
-      requestId,
-      sourceClientId: this.clientId,
-      version,
-      method,
-      params
-    });
+    try {
+      this.write({ type: "request", requestId, sourceClientId: this.clientId, version, method, params }, promptAttempt);
+    } catch (error) {
+      const pending = this.pending.get(requestId);
+      if (pending) { clearTimeout(pending.timer); this.pending.delete(requestId); }
+      // The response promise has not escaped; do not leave a later timer rejection.
+      void response.catch(() => {});
+      throw error;
+    }
     return response;
   }
 
@@ -833,7 +850,7 @@ export class CodexDesktopBridge {
     return result;
   }
 
-  private async steer(params: CodexDesktopTurnDelivery): Promise<boolean> {
+  private async steer(params: CodexDesktopTurnDelivery, attempt: PromptWriteAttempt): Promise<boolean> {
     const imageAttachments = this.imageAttachments(params.imagePaths);
     const method = "thread-follower-steer-turn";
     const requestId = randomUUID();
@@ -857,7 +874,7 @@ export class CodexDesktopBridge {
           cwd: params.cwd,
           createdAt: Date.now()
         }
-      }, desktopIpcProtocolVersion.followerSteerTurn, false, requestId, params.assertAuthorized);
+      }, desktopIpcProtocolVersion.followerSteerTurn, false, requestId, params.assertAuthorized, undefined, attempt);
       const error = responseError(response, method);
       if (error) throw error;
       this.deliveryEvent(params, "steer_accepted", { method, requestId, elapsedMs: Date.now() - startedAt, outcome: "accepted" });
@@ -921,7 +938,7 @@ export class CodexDesktopBridge {
     };
   }
 
-  private async start(params: CodexDesktopTurnDelivery): Promise<boolean> {
+  private async start(params: CodexDesktopTurnDelivery, attempt: PromptWriteAttempt): Promise<boolean> {
     this.checkStartModel(params);
     const method = "thread-follower-start-turn";
     const requestId = randomUUID();
@@ -943,7 +960,7 @@ export class CodexDesktopBridge {
         turnStart: this.startTurnEnvelope(params)
       }, desktopIpcProtocolVersion.followerStartTurn, false, requestId, params.assertAuthorized, marker && this.options.lateStartReconcileMs > 0
         ? { holdMs: this.options.lateStartReconcileMs, onResponse: (response) => { bufferedLate = response; acceptLate(response); } }
-        : undefined);
+        : undefined, attempt);
       const error = responseError(response, method);
       if (error) throw error;
       this.cancelLateArrival(requestId);
@@ -966,9 +983,9 @@ export class CodexDesktopBridge {
     }
   }
 
-  private async deliverToOwner(params: CodexDesktopTurnDelivery): Promise<"started" | "steered"> {
+  private async deliverToOwner(params: CodexDesktopTurnDelivery, attempt: PromptWriteAttempt): Promise<"started" | "steered"> {
     try {
-      const steerReceiptConfirmed = await this.steer(params);
+      const steerReceiptConfirmed = await this.steer(params, attempt);
       if (steerReceiptConfirmed || await this.deliveryReceiptConfirmed(params)) return "steered";
       // A delayed rollout is not proof of non-delivery. Starting again can duplicate accepted input.
       throw this.unconfirmedDelivery(params, "thread-follower-steer-turn");
@@ -980,20 +997,20 @@ export class CodexDesktopBridge {
         error: diagnosticErrorMessage(error)
       });
     }
-    const startReceiptConfirmed = await this.start(params);
+    const startReceiptConfirmed = await this.start(params, attempt);
     if (!startReceiptConfirmed && !await this.deliveryReceiptConfirmed(params)) {
       throw this.unconfirmedDelivery(params, "thread-follower-start-turn");
     }
     return "started";
   }
 
-  private async deliverNow(params: CodexDesktopTurnDelivery): Promise<CodexDesktopDelivery> {
+  private async deliverNow(params: CodexDesktopTurnDelivery, promptAttempt: PromptWriteAttempt): Promise<CodexDesktopDelivery> {
     let openedThread = false;
     let lastError: unknown;
     const deliveryStartedAtMs = Date.now();
     for (let attempt = 0; attempt < this.options.loadRetryAttempts; attempt += 1) {
       try {
-        const action = await this.deliverToOwner(params);
+        const action = await this.deliverToOwner(params, promptAttempt);
         this.activeThreads.add(params.threadId);
         this.activeThreadSinceMs.set(params.threadId, deliveryStartedAtMs);
         this.deliveryEvent(params, "delivery_accepted", { action, openedThread, elapsedMs: Date.now() - deliveryStartedAtMs });
@@ -1018,6 +1035,7 @@ export class CodexDesktopBridge {
   }
 
   async deliver(params: CodexDesktopTurnDelivery): Promise<CodexDesktopDelivery> {
+    const promptAttempt: PromptWriteAttempt = { promptWriteAttempted: false };
     const queuedAt = Date.now();
     this.deliveryEvent(params, "queued");
     const key = params.threadId;
@@ -1025,11 +1043,14 @@ export class CodexDesktopBridge {
     const scheduled = (previous ? previous.catch(() => undefined) : Promise.resolve())
       .then(() => {
         this.deliveryEvent(params, "queue_released", { elapsedMs: Date.now() - queuedAt });
-        return this.deliverNow(params);
+        return this.deliverNow(params, promptAttempt);
       });
     this.deliveryQueues.set(key, scheduled);
     try {
       return await scheduled;
+    } catch (error) {
+      if (!promptAttempt.promptWriteAttempted) throw new CodexDesktopPromptNotSentError(error);
+      throw error;
     } finally {
       if (this.deliveryQueues.get(key) === scheduled) this.deliveryQueues.delete(key);
     }

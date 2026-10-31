@@ -19,6 +19,20 @@ Recording is disabled by default. Disabling it stops new samples; existing files
 
 Performance pages read bounded Manager memory directly: recent raw records are capped at 1,000 rows and 16 MB total, while 10-second, 1-minute, and 5-minute incremental summaries cover at most 48 hours. Samples not yet flushed to JSONL appear immediately. A 720-hour retention setting affects disk files only; Manager does not restore or keep every raw sample resident.
 
+## Plugin updates and shutdown
+
+A performance plugin candidate only prepares its operations and resources. A failed candidate or rollback before publication does not replace the HTTP recording hook or start or stop the current collector. The kernel's `context.publication` transaction switches the hook, then starts the shared collector. Successful updates and revision rollbacks retain the same collector and operation sink without reinitialization.
+
+Once the old version stops accepting requests, it cancels and joins its original event subscriptions, heartbeats, stream generators, and admitted operations. An HTTP timeout response, disconnected client, or plugin cleanup timeout does not prove that work has released its resources. The shared collector stops only after the last published version's actual work has joined. Delayed old cleanup cannot clear the new HTTP hook. Startup failure after publication uses the plugin runtime-failure flow; it is not reported as a rollback before publication.
+
+## Discovering API fields
+
+The current performance operation contracts expose the five config input fields, single-sample and `{samples: [...]}` shapes, the `rangeMs`/`limit` query fields, and system, HTTP, frontend, and slow-operation metrics in existing responses. Config defaults, Number conversion, rounding, and bounds come directly from the native normalization definitions.
+
+Input structure supports discovery while preserving arbitrary JSON: non-object config acts as an empty patch, unknown fields are ignored, and native sample admission returns accepted/rejected counts. No required-field or field-type rejection is added. Queries still use the first value and native conversion; empty and repeated parameters keep their behavior.
+
+Known metric fields are listed, but native sample admission does not deeply validate optional metrics or `pid`. Those values continue to accept existing opaque content. Discoverable fields do not imply complete deep validation; coverage and precision claims remain conservative.
+
 ## File location and format
 
 Performance records are separate from ordinary runtime logs:
@@ -93,7 +107,11 @@ RibiWebGUI uses these Manager APIs:
 - `GET /api/performance/status`: read file count, disk use, pending writes, and errors.
 - `GET /api/performance/events`: receive new-sample notifications for page refresh.
 
-These APIs use the existing Manager WebGUI LAN access checks. Gateway submissions are accepted only from a loopback address and for an existing Gateway ID.
+The seven operations are installed and discovered from the same executable API contracts. Their stable IDs are `manager.performance.config.read`, `config.save`, `batches.append`, `summary.read`, `logs.read`, `status.read`, and `events.subscribe` (the latter six share the `manager.performance.` prefix). Enabled authenticated remote connections can call these public operations without another feature grant. Gateway samples still require loopback provenance and an existing Gateway ID; authenticated remote connections can submit WebGUI samples. Injected Manager samples are rejected.
+
+Configuration PATCH bodies are limited to 16 KiB and batch submissions to 1 MiB. Both retain native JSON decoding and configuration/sample validation. Read configuration back after saving; there is no CAS or request-level idempotency key. Batch status 202 acknowledges memory admission rather than disk persistence; inspect `status` for persistence. Native sample deduplication is bounded, so inspect the original `sampleId` before resubmitting an uncertain request.
+
+The event stream starts with `ready` (3000 ms retry interval), sends `sample` notifications containing `time` and `source`, and emits a keepalive comment every 15 seconds. Each connection has at most 256 queued frames, with a 4096-byte frame limit; overflow disconnects a slow consumer. Disconnect or plugin retirement cancels the original subscription, stops the heartbeat, and joins iterator cleanup. Notifications have no durable replay cursor; reconnect and refresh summary or recent logs.
 
 ## Main-thread protection
 

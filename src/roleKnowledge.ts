@@ -39,6 +39,11 @@ import {
 } from "./shared/storageRevision.js";
 import { requiresWorkerFilesystemAccess } from "./shared/pathPolicy.js";
 import { canonicalLogicalPlanId } from "./planStorageIdentity.js";
+import {
+  capturePlanStoragePackageRecoveryConflicts, capturePlanStoragePackageRecoveryConflictsAsync,
+  assertPlanStoragePackageRecoveryReady, assertPlanStoragePackageRecoveryReadyAsync,
+  assertPlanStoragePackageRecoverySnapshot, PlanStoragePackageRecoveryPendingError, type PlanPackageRecoverySnapshot
+} from "./planStoragePackageFence.js";
 import { appendPlanHistoryRecord, isPlanHistoryPath, orderedPlanHistoryPaths, readPlanHistoryDirectory, PLAN_HISTORY_FILE_LIMIT } from "./planHistoryShards.js";
 import {
   memoryStorageCaseFold,
@@ -515,6 +520,7 @@ export class RoleKnowledgeCacheUnavailableError extends Error {
  */
 export type RoleKnowledgeCatalogSnapshot = {
   plans: PlanItem[];
+  planRecovery?: PlanPackageRecoverySnapshot;
   planWorkflow: PersonaPlanWorkflow;
   recentMemories: RecentMemoryItem[];
   consolidatedMemories: ConsolidatedMemoryItem[];
@@ -2305,10 +2311,29 @@ function findPlanRecord(roleDir: string, planId: string): PlanRecord | null {
   return records[0] ?? null;
 }
 
+const publishedPlanPackageRecovery = new Map<string, PlanPackageRecoverySnapshot>();
+
+export function publishRolePlanPackageRecoverySnapshot(roleDir: string, snapshot: PlanPackageRecoverySnapshot): void {
+  publishedPlanPackageRecovery.set(planListCacheKey(roleDir), immutablePublication(snapshot));
+}
+
+export function publishedRolePlanPackageRecoverySnapshot(roleDir: string): PlanPackageRecoverySnapshot | undefined {
+  return publishedPlanPackageRecovery.get(planListCacheKey(roleDir));
+}
+
+function readablePlanCatalog(roleDir: string, plans: PlanItem[]): PlanItem[] {
+  const recovery = publishedRolePlanPackageRecoverySnapshot(roleDir);
+  if (!recovery) return plans;
+  if (recovery.unknown.length) assertPlanStoragePackageRecoverySnapshot({ conflicts: [], unknown: recovery.unknown });
+  if (!recovery.conflicts.length) return plans;
+  const blocked = new Set(recovery.conflicts.map(item => item.planId));
+  return Object.freeze(plans.filter(plan => !blocked.has(plan.id))) as PlanItem[];
+}
+
 export function listPlans(roleDir: string): PlanItem[] {
   const cacheKey = planListCacheKey(roleDir);
   const cached = planListCache.get(cacheKey);
-  if (cached) return cached.plans;
+  if (cached) return readablePlanCatalog(roleDir, cached.plans);
   throw new RoleKnowledgeCacheUnavailableError(roleDir);
 }
 
@@ -2321,6 +2346,8 @@ export function readPlansFromStorageInWorker(roleDir: string): PlanItem[] {
   const cacheKey = planListCacheKey(roleDir);
   const now = Date.now();
   try {
+    publishRolePlanPackageRecoverySnapshot(roleDir, capturePlanStoragePackageRecoveryConflicts(roleDir));
+    readablePlanCatalog(roleDir, []);
     const files = allPlanFiles(roleDir);
     const { signature, items } = readPlansWithFileCache(roleDir, files);
     const previous = planListCache.get(cacheKey);
@@ -2328,7 +2355,7 @@ export function readPlansFromStorageInWorker(roleDir: string): PlanItem[] {
     planListCache.set(cacheKey, { signature, validUntil: now + PLAN_LIST_CACHE_TTL_MS, plans });
     planListDirtyAt.delete(cacheKey);
     planListDirtyFiles.delete(cacheKey);
-    return plans;
+    return readablePlanCatalog(roleDir, plans);
   } catch (error) {
     clearPlanListCache(roleDir);
     throw error;
@@ -2434,6 +2461,8 @@ export function planPageReadDiagnostics(roleDir: string): { reasons: string[]; r
 
 /** Resident read-worker only. Managed commit fences are consumed before reply. */
 export async function readPlanPageCatalogInWorker(roleDir: string, fence: PlanReadFence, authoritative = false, attempt = 0): Promise<PlanItem[]> {
+  publishRolePlanPackageRecoverySnapshot(roleDir, await capturePlanStoragePackageRecoveryConflictsAsync(roleDir));
+  readablePlanCatalog(roleDir, []);
   const key = planListCacheKey(roleDir);
   planPageWorkerRoles.add(key);
   const watchBacked = ensurePlanListWatchers(roleDir);
@@ -2513,7 +2542,7 @@ export async function readPlanPageCatalogInWorker(roleDir: string, fence: PlanRe
         return await readPlanPageCatalogInWorker(roleDir, fence, false, attempt + 1);
       }
     }
-    return planListCache.get(key)!.plans;
+    return readablePlanCatalog(roleDir, planListCache.get(key)!.plans);
   } catch (error) {
     planPageWorkerState.delete(key);
     clearPlanListCache(roleDir);
@@ -2525,22 +2554,24 @@ export async function listPlansAsync(
   roleDir: string,
   options: { watch?: boolean } = {}
 ): Promise<PlanItem[]> {
+  publishRolePlanPackageRecoverySnapshot(roleDir, await capturePlanStoragePackageRecoveryConflictsAsync(roleDir));
+  readablePlanCatalog(roleDir, []);
   const cacheKey = planListCacheKey(roleDir);
   const cached = planListCache.get(cacheKey);
   const watchBacked = options.watch !== false && ensurePlanListWatchers(roleDir);
   const dirtyAt = planListDirtyAt.get(cacheKey);
   if (cached && watchBacked && dirtyAt === undefined) {
     recordPerformanceOperation(PERFORMANCE_OPERATIONS.managerPlanCatalogCacheHit, 0);
-    return cached.plans;
+    return readablePlanCatalog(roleDir, cached.plans);
   }
   if (cached && watchBacked && dirtyAt !== undefined) {
     if (!planListRefreshTimers.has(cacheKey)) schedulePlanListCacheRefresh(roleDir);
     recordPerformanceOperation(PERFORMANCE_OPERATIONS.managerPlanCatalogCacheHit, 0);
-    return cached.plans;
+    return readablePlanCatalog(roleDir, cached.plans);
   }
   if (cached && !watchBacked && cached.validUntil > Date.now()) {
     recordPerformanceOperation(PERFORMANCE_OPERATIONS.managerPlanCatalogCacheHit, 0);
-    return cached.plans;
+    return readablePlanCatalog(roleDir, cached.plans);
   }
 
   const existingLoad = planListLoadInFlight.get(cacheKey);
@@ -2575,7 +2606,7 @@ export async function listPlansAsync(
         planListDirtyAt.delete(cacheKey);
         planListDirtyFiles.delete(cacheKey);
       }
-      return plans;
+      return readablePlanCatalog(roleDir, plans);
     }
     throw new Error("Plan catalog kept changing while loading; retry shortly.");
   }).catch((error) => {
@@ -2590,6 +2621,8 @@ export async function listPlansAsync(
 
 export function getPlan(roleDir: string, planId: string): PlanItem | null {
   const canonicalPlanId = canonicalLogicalPlanId(planId);
+  const recovery = publishedRolePlanPackageRecoverySnapshot(roleDir);
+  if (recovery) assertPlanStoragePackageRecoverySnapshot(recovery, canonicalPlanId);
   const cacheKey = planListCacheKey(roleDir);
   const cached = planListCache.get(cacheKey);
   const dirtyFiles = planListDirtyFiles.get(cacheKey);
@@ -2602,6 +2635,7 @@ export function getPlan(roleDir: string, planId: string): PlanItem | null {
       if (cachedPlan) return cachedPlan;
     }
   }
+  assertPlanStoragePackageRecoveryReady(roleDir, canonicalPlanId);
   return findPlanRecord(roleDir, canonicalPlanId)?.plan ?? null;
 }
 
@@ -2642,6 +2676,7 @@ export async function getPlanAsync(
   const canonicalPlanId = canonicalLogicalPlanId(planId);
   const { signal } = options;
   signal?.throwIfAborted();
+  await awaitAbortable(assertPlanStoragePackageRecoveryReadyAsync(roleDir, canonicalPlanId, signal), signal);
   const candidates = planCandidateFiles(roleDir, canonicalPlanId);
   const matches: PlanRecord[] = [];
   const candidateRecords = await Promise.all(
@@ -2749,7 +2784,8 @@ function listMemoryCatalog<T extends MemoryCatalogItem>(
 }
 
 async function readMemoryCatalogAsync<T extends MemoryCatalogItem>(
-  directory: string, normalize: (raw: Record<string, unknown>, fallbackId: string) => T | null
+  directory: string, normalize: (raw: Record<string, unknown>, fallbackId: string) => T | null,
+  issues?: Array<{ file: string; message: string }>
 ): Promise<T[]> {
   let entries: fs.Dirent[];
   try { entries = await fs.promises.readdir(directory, { withFileTypes: true }); }
@@ -2783,7 +2819,13 @@ async function readMemoryCatalogAsync<T extends MemoryCatalogItem>(
         }
         const raw = cached.raw;
         values[index] = raw ? normalize(raw, path.basename(name, path.extname(name))) : null;
-      } catch (error) { cachedFiles.delete(name); /* Unreadable, malformed or changing entries never use an older body. */ }
+        if (!values[index]) issues?.push({ file: name, message: "invalid_record" });
+      } catch (error) {
+        cachedFiles.delete(name);
+        const code = (error as NodeJS.ErrnoException)?.code;
+        issues?.push({ file: name, message: error instanceof SyntaxError ? "invalid_json"
+          : typeof code === "string" && /^E[A-Z0-9_]+$/.test(code) ? code : "unreadable_or_changed" });
+      }
     }
   }));
   const seen = new Set<string>();
@@ -2791,6 +2833,20 @@ async function readMemoryCatalogAsync<T extends MemoryCatalogItem>(
     if (!item || seen.has(item.id)) return false;
     seen.add(item.id); return true;
   });
+}
+
+export type RecentMemoryCatalogRead = {
+  memories: Pick<RecentMemoryItem, "id" | "title" | "focus" | "updatedAt" | "consolidatedAt">[];
+  issues: Array<{ file: string; message: string }>;
+};
+
+/** Companion reads only its memory dependency; plan recovery cannot gate this worker task. */
+export async function readRecentMemoryCatalogInWorker(roleDir: string): Promise<RecentMemoryCatalogRead> {
+  const issues: RecentMemoryCatalogRead["issues"] = [];
+  const memories = await readMemoryCatalogAsync(memoryCatalogDirectory(roleDir, "recent"), normalizeRecentMemory, issues);
+  return { memories: memories.filter(memory => !memory.consolidatedAt)
+    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt) || left.id.localeCompare(right.id))
+    .slice(0, 3).map(({ id, title, focus, updatedAt }) => ({ id, title, focus, updatedAt })), issues };
 }
 
 /** One physical memory read supplies context, page rows and counts. */
@@ -3288,6 +3344,7 @@ export function publishRoleKnowledgeCatalogSnapshot(
 }
 
 function storePublishedKnowledgeCatalog(roleDir: string, published: RoleKnowledgeCatalogSnapshot): RoleKnowledgeCatalogSnapshot {
+  if (published.planRecovery) publishRolePlanPackageRecoverySnapshot(roleDir, published.planRecovery);
   storePublishedPlanCatalog(roleDir, published.plans);
   memoryCatalogCache.set(memoryCatalogDirectory(roleDir, "recent"), {
     validUntil: Date.now() + MEMORY_CATALOG_CACHE_TTL_MS,
@@ -3309,6 +3366,7 @@ function storePublishedKnowledgeCatalog(roleDir: string, published: RoleKnowledg
 function normalizedPublishedKnowledgeMetadata(rawSnapshot: RoleKnowledgeCatalogSnapshot) {
   if (!Array.isArray(rawSnapshot.skills)) throw new Error("Role knowledge snapshot must contain a skills array.");
   return {
+    ...(rawSnapshot.planRecovery ? { planRecovery: rawSnapshot.planRecovery } : {}),
     skills: rawSnapshot.skills,
     limits: {
       plan: mergeLimits(DEFAULT_ROLE_KNOWLEDGE_WRITE_LIMITS.plan, rawSnapshot.limits?.plan),
@@ -3360,6 +3418,7 @@ export function readRoleKnowledgeCatalogSnapshot(roleDir: string): RoleKnowledge
   invalidateMemoryCatalog(memoryCatalogDirectory(roleDir, "consolidated"));
   return {
     plans: readPlansFromStorageInWorker(roleDir),
+    planRecovery: publishedRolePlanPackageRecoverySnapshot(roleDir),
     planWorkflow: ensurePersonaPlanWorkflow(roleDir).workflow,
     recentMemories: listRecentMemories(roleDir),
     consolidatedMemories: listConsolidatedMemories(roleDir),
@@ -3380,7 +3439,8 @@ export function publishedRoleKnowledgeCatalogSnapshot(
   const metadata = roleKnowledgeCatalogMetadataCache.get(cacheKey);
   if (!plans || !recentMemories || !consolidatedMemories || !metadata) return undefined;
   return deepFreeze({
-    plans,
+    plans: readablePlanCatalog(roleDir, plans),
+    planRecovery: publishedRolePlanPackageRecoverySnapshot(roleDir),
     recentMemories: recentMemories as RecentMemoryItem[],
     consolidatedMemories: consolidatedMemories as ConsolidatedMemoryItem[],
     skills: metadata.skills,
@@ -3398,12 +3458,15 @@ export function getPublishedPlan(roleDir: string, planId: string): PlanItem | un
   } catch {
     return undefined;
   }
+  const recovery = publishedRolePlanPackageRecoverySnapshot(roleDir);
+  if (recovery) assertPlanStoragePackageRecoverySnapshot(recovery, canonicalPlanId);
   return planListCache.get(planListCacheKey(roleDir))?.plans.find((plan) => plan.id === canonicalPlanId);
 }
 
 /** Memory-only plan catalog lookup; undefined means the cache is not published. */
 export function publishedRolePlans(roleDir: string): readonly PlanItem[] | undefined {
-  return planListCache.get(planListCacheKey(roleDir))?.plans;
+  const plans = planListCache.get(planListCacheKey(roleDir))?.plans;
+  return plans ? readablePlanCatalog(roleDir, plans) : undefined;
 }
 
 export function getRoleSkill(roleDir: string, skillId: string): RoleSkillDetail | undefined {
@@ -3585,6 +3648,11 @@ function applyPreparedPlanAttachments(
     if (filePath === "attachments" || filePath.startsWith("attachments/")) files.delete(filePath);
   }
   for (const item of prepared) {
+    // Retained metadata may predate a storage move. Resolve it within this
+    // package; the existing byte/hash check below still owns acceptance.
+    if (!item.content) {
+      item.metadata = { ...item.metadata, path: path.join(planRoot, "attachments", path.basename(item.metadata.path)) };
+    }
     const relative = path.relative(planRoot, item.metadata.path).replace(/\\/g, "/");
     if (!relative.startsWith("attachments/") || relative.includes("../")) {
       throw new Error(`Prepared plan attachment escaped its managed directory: ${item.metadata.name}.`);
@@ -3608,7 +3676,7 @@ export function normalizePlanForStartupMigration(
 
 export type PersonaPlanStatusStartupMigrationResult = {
   migrated: number;
-  failures: Array<{ planId: string; error: string }>;
+  failures: Array<{ planId: string; error: string; packageRecoveryBlocked?: boolean }>;
 };
 
 function hasLegacyPlanStepState(value: unknown): boolean {
@@ -3690,7 +3758,9 @@ export function migratePersonaPlanStatusesAtStartup(roleDir: string): PersonaPla
         result.migrated += 1;
       });
     } catch (error) {
-      result.failures.push({ planId: normalized.id, error: error instanceof Error ? error.message : String(error) });
+      result.failures.push({ planId: normalized.id, error: error instanceof Error ? error.message : String(error),
+        ...(error instanceof PlanStoragePackageRecoveryPendingError && error.conflict.planId === normalized.id
+          ? { packageRecoveryBlocked: true } : {}) });
     }
   }
   if (result.migrated > 0) clearPlanListCache(roleDir);

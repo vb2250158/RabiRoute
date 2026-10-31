@@ -1,3 +1,4 @@
+import { getTimeoutMs } from "../shared/timeoutSettings.js";
 import fs from "node:fs";
 import net from "node:net";
 import os from "node:os";
@@ -290,7 +291,7 @@ async function detectNapcatProcesses(): Promise<Array<{ name: string; pid: strin
       "} |",
       "ForEach-Object { \"$($_.Name)`t$($_.ProcessId)\" }"
     ].join(" ");
-    const { stdout } = await execFileAsync("powershell.exe", ["-NoProfile", "-Command", script], { timeout: 3000, windowsHide: true });
+    const { stdout } = await execFileAsync("powershell.exe", ["-NoProfile", "-Command", script], { timeout: getTimeoutMs("backend.messageEndpoints.napcatManager.detectNapcatProcesses.execFileAsync.timeout", 3000), windowsHide: true });
     return String(stdout).split(/\r?\n/)
       .map(line => line.trim())
       .filter(Boolean)
@@ -795,7 +796,7 @@ async function listeningPidsForPorts(ports: number[], strict = false): Promise<s
   const wanted = new Set(ports.filter((port) => Number.isInteger(port) && port > 0).map(String));
   if (wanted.size === 0 || process.platform !== "win32") return [];
   try {
-    const { stdout } = await execFileAsync("netstat.exe", ["-ano", "-p", "tcp"], { timeout: 3000, windowsHide: true });
+    const { stdout } = await execFileAsync("netstat.exe", ["-ano", "-p", "tcp"], { timeout: getTimeoutMs("backend.messageEndpoints.napcatManager.listeningPidsForPorts.execFileAsync.timeout", 3000), windowsHide: true });
     const pids = new Set<string>();
     for (const line of String(stdout).split(/\r?\n/)) {
       if (!/\bLISTENING\b/i.test(line)) continue;
@@ -861,15 +862,55 @@ function napcatRuntimes(ctx: NapcatManagerContext): GatewayRuntime[] {
   return [...ctx.getRuntimes()].filter((runtime) => runtimeUsesNapcat(runtime.definition));
 }
 
-function addNapcatWebuiConfigCandidatesForInstance(candidates: Set<string>, ctx: NapcatManagerContext, instance: NapCatInstanceDefinition): void {
+async function findNapcatConfigDirAsync(shellDir: string): Promise<string | null> {
+  const resolved = path.resolve(shellDir);
+  const exists = async (candidate: string): Promise<boolean> => {
+    try { await fs.promises.access(candidate); return true; }
+    catch { return false; }
+  };
+  const cached = napcatConfigDirCache.get(resolved);
+  if (cached && await exists(cached)) return cached;
+  for (const candidate of [path.join(resolved, "napcat", "config"), path.join(resolved, "config"), path.join(resolved, LINUX_NAPCAT_APP_DIR, "config")]) {
+    if (await exists(candidate)) { napcatConfigDirCache.set(resolved, candidate); return candidate; }
+  }
+  for (const versionsDir of [path.join(resolved, "versions"), path.join(resolved, "NapCat.Shell", "versions")]) {
+    try {
+      for (const entry of await fs.promises.readdir(versionsDir, { withFileTypes: true })) {
+        if (!entry.isDirectory()) continue;
+        const candidate = path.join(versionsDir, entry.name, "resources", "app", "napcat", "config");
+        if (await exists(candidate)) { napcatConfigDirCache.set(resolved, candidate); return candidate; }
+      }
+    } catch { /* Continue with the compatibility layout. */ }
+  }
+  const stack = [{ dir: resolved, depth: 0 }];
+  while (stack.length) {
+    const current = stack.pop()!;
+    if (current.depth > 8) continue;
+    let entries: fs.Dirent[];
+    try { entries = await fs.promises.readdir(current.dir, { withFileTypes: true }); }
+    catch { continue; }
+    if (current.dir.replace(/\\/g, "/").endsWith("/resources/app/napcat/config")) {
+      napcatConfigDirCache.set(resolved, current.dir);
+      return current.dir;
+    }
+    for (const entry of entries) {
+      if (entry.isDirectory() && !["node_modules", "static", "plugins"].includes(entry.name.toLowerCase())) {
+        stack.push({ dir: path.join(current.dir, entry.name), depth: current.depth + 1 });
+      }
+    }
+  }
+  return null;
+}
+
+async function* napcatWebuiConfigCandidatesForInstance(ctx: NapcatManagerContext, instance: NapCatInstanceDefinition): AsyncGenerator<string> {
   const workingDir = instance.workingDir?.trim();
   if (workingDir) {
-    addNapcatWebuiConfigCandidate(candidates, path.join(workingDir, "napcat", "config", "webui.json"));
-    addNapcatWebuiConfigCandidate(candidates, path.join(workingDir, "config", "webui.json"));
-    addNapcatWebuiConfigCandidate(candidates, path.join(workingDir, "webui.json"));
-    const nestedConfigDir = findNapcatConfigDir(workingDir);
+    yield path.resolve(workingDir, "napcat", "config", "webui.json");
+    yield path.resolve(workingDir, "config", "webui.json");
+    yield path.resolve(workingDir, "webui.json");
+    const nestedConfigDir = await findNapcatConfigDirAsync(workingDir);
     if (nestedConfigDir) {
-      addNapcatWebuiConfigCandidate(candidates, path.join(nestedConfigDir, "webui.json"));
+      yield path.join(nestedConfigDir, "webui.json");
     }
   }
   const launchCommand = instance.launchCommand?.trim();
@@ -877,26 +918,31 @@ function addNapcatWebuiConfigCandidatesForInstance(candidates: Set<string>, ctx:
     const commandPath = launchCommand.match(/^"([^"]+)"/)?.[1] || launchCommand.split(/\s+/)[0];
     if (commandPath && (commandPath.includes("\\") || commandPath.includes("/"))) {
       const commandDir = path.dirname(path.resolve(workingDir || ctx.rootDir, commandPath));
-      addNapcatWebuiConfigCandidate(candidates, path.join(commandDir, "napcat", "config", "webui.json"));
-      addNapcatWebuiConfigCandidate(candidates, path.join(commandDir, "config", "webui.json"));
+      yield path.join(commandDir, "napcat", "config", "webui.json");
+      yield path.join(commandDir, "config", "webui.json");
     }
   }
 }
 
-function napcatWebuiConfigCandidates(ctx: NapcatManagerContext, preferredInstances: NapCatInstanceDefinition[] = []): string[] {
+async function* napcatWebuiConfigCandidatesUnchecked(ctx: NapcatManagerContext, preferredInstances: NapCatInstanceDefinition[]): AsyncGenerator<string> {
   const candidates = new Set<string>();
   addNapcatWebuiConfigCandidate(candidates, process.env.NAPCAT_WEBUI_CONFIG);
   if (process.env.NAPCAT_CONFIG_DIR) {
     addNapcatWebuiConfigCandidate(candidates, path.join(process.env.NAPCAT_CONFIG_DIR, "webui.json"));
   }
+  yield* candidates;
 
+  const instances = new Set<NapCatInstanceDefinition>();
   for (const instance of preferredInstances) {
-    addNapcatWebuiConfigCandidatesForInstance(candidates, ctx, instance);
+    instances.add(instance);
+    yield* napcatWebuiConfigCandidatesForInstance(ctx, instance);
   }
 
   for (const runtime of ctx.getRuntimes()) {
     for (const instance of napcatInstancesFor(ctx, runtime)) {
-      addNapcatWebuiConfigCandidatesForInstance(candidates, ctx, instance);
+      if (instances.has(instance)) continue;
+      instances.add(instance);
+      yield* napcatWebuiConfigCandidatesForInstance(ctx, instance);
     }
   }
 
@@ -910,19 +956,18 @@ function napcatWebuiConfigCandidates(ctx: NapcatManagerContext, preferredInstanc
   ];
   for (const base of searchRoots) {
     try {
-      if (!fs.existsSync(base)) continue;
-      addNapcatWebuiConfigCandidate(candidates, path.join(base, "napcat", "config", "webui.json"));
-      addNapcatWebuiConfigCandidate(candidates, path.join(base, "config", "webui.json"));
-      for (const entry of fs.readdirSync(base, { withFileTypes: true })) {
+      yield path.join(base, "napcat", "config", "webui.json");
+      yield path.join(base, "config", "webui.json");
+      for (const entry of await fs.promises.readdir(base, { withFileTypes: true })) {
         if (!entry.isDirectory()) continue;
         const dir = path.join(base, entry.name);
-        addNapcatWebuiConfigCandidate(candidates, path.join(dir, "napcat", "config", "webui.json"));
-        addNapcatWebuiConfigCandidate(candidates, path.join(dir, "config", "webui.json"));
-        addNapcatWebuiConfigCandidate(candidates, path.join(dir, "NapCat.Shell", "napcat", "config", "webui.json"));
-        addNapcatWebuiConfigCandidate(candidates, path.join(dir, "NapCat.Shell", "config", "webui.json"));
-        const nestedConfigDir = findNapcatConfigDir(dir);
+        yield path.join(dir, "napcat", "config", "webui.json");
+        yield path.join(dir, "config", "webui.json");
+        yield path.join(dir, "NapCat.Shell", "napcat", "config", "webui.json");
+        yield path.join(dir, "NapCat.Shell", "config", "webui.json");
+        const nestedConfigDir = await findNapcatConfigDirAsync(dir);
         if (nestedConfigDir) {
-          addNapcatWebuiConfigCandidate(candidates, path.join(nestedConfigDir, "webui.json"));
+          yield path.join(nestedConfigDir, "webui.json");
         }
       }
     } catch {
@@ -930,7 +975,17 @@ function napcatWebuiConfigCandidates(ctx: NapcatManagerContext, preferredInstanc
     }
   }
 
-  return [...candidates].filter((candidate) => fs.existsSync(candidate));
+}
+
+async function* napcatWebuiConfigCandidates(ctx: NapcatManagerContext, preferredInstances: NapCatInstanceDefinition[] = []): AsyncGenerator<string> {
+  const seen = new Set<string>();
+  for await (const candidate of napcatWebuiConfigCandidatesUnchecked(ctx, preferredInstances)) {
+    if (seen.has(candidate)) continue;
+    seen.add(candidate);
+    try { await fs.promises.access(candidate); }
+    catch { continue; }
+    yield candidate;
+  }
 }
 
 function normalizeLocalEndpoint(url: string | undefined): string {
@@ -947,9 +1002,9 @@ function normalizeLocalEndpoint(url: string | undefined): string {
   }
 }
 
-function readWebuiConfigSummary(configPath: string): { webuiUrl?: string; token?: string; workingDir?: string } {
+async function readWebuiConfigSummary(configPath: string): Promise<{ webuiUrl?: string; token?: string; workingDir?: string }> {
   try {
-    const parsed = JSON.parse(fs.readFileSync(configPath, "utf8").replace(/^\uFEFF/, "")) as {
+    const parsed = JSON.parse((await fs.promises.readFile(configPath, "utf8")).replace(/^\uFEFF/, "")) as {
       port?: unknown;
       token?: unknown;
       disableWebUI?: unknown;
@@ -1007,20 +1062,20 @@ function napcatNetworkEndpoints(config: NormalizedNapcatOneBotNetworkConfig | nu
   return { httpServers, websocketUrls };
 }
 
-function napcatAccountProbeCandidates(
+async function napcatAccountProbeCandidates(
   ctx: NapcatManagerContext,
   userId: string
-): NapcatAccountProbeCandidate[] {
+): Promise<NapcatAccountProbeCandidate[]> {
   const candidates = new Map<string, NapcatAccountProbeCandidate>();
   for (const runtime of napcatRuntimes(ctx)) {
     for (const instance of napcatInstancesFor(ctx, runtime)) {
       const configuredUserId = String(instance.botUserId || "").trim();
       if (configuredUserId && configuredUserId !== userId) continue;
       const configPath = instance.webuiUrl
-        ? readNapcatWebuiToken(ctx, instance.webuiUrl, instance.webuiToken, [instance]).configPath
+        ? (await readNapcatWebuiToken(ctx, instance.webuiUrl, instance.webuiToken, [instance])).configPath
         : undefined;
       const onebotPath = onebotConfigPathForWebuiConfig(configPath, userId);
-      const endpoints = napcatNetworkEndpoints(readOneBotNetworkConfig(onebotPath));
+      const endpoints = napcatNetworkEndpoints(await readOneBotNetworkConfig(onebotPath));
       addNapcatAccountProbeCandidate(candidates, {
         httpUrl: instance.httpUrl,
         webuiUrl: instance.webuiUrl,
@@ -1036,13 +1091,12 @@ function napcatAccountProbeCandidates(
     }
   }
 
-  for (const webuiConfigPath of napcatWebuiConfigCandidates(ctx)) {
-    const webui = readWebuiConfigSummary(webuiConfigPath);
+  for await (const webuiConfigPath of napcatWebuiConfigCandidates(ctx)) {
+    const webui = await readWebuiConfigSummary(webuiConfigPath);
     const configDir = path.dirname(webuiConfigPath);
     for (const filename of [`onebot11_${userId}.json`, `napcat_protocol_${userId}.json`]) {
       const configPath = path.join(configDir, filename);
-      if (!fs.existsSync(configPath)) continue;
-      const endpoints = napcatNetworkEndpoints(readOneBotNetworkConfig(configPath));
+      const endpoints = napcatNetworkEndpoints(await readOneBotNetworkConfig(configPath));
       for (const server of endpoints.httpServers) {
         addNapcatAccountProbeCandidate(candidates, {
           httpUrl: localUrl(server.port),
@@ -1063,7 +1117,7 @@ async function fetchNapcatOneBotAction<T>(
   httpUrl: string,
   action: string,
   accessToken?: string,
-  timeoutMs = 1500
+  timeoutMs = getTimeoutMs("backend.messageEndpoints.napcatManager.fetchNapcatOneBotAction.timeoutMs", 1500)
 ): Promise<NapcatOneBotResponse<T> | null> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -1095,7 +1149,7 @@ async function findNapcatAccountOwner(
   const targetHttp = normalizeLocalEndpoint(target.httpUrl);
   const targetWebui = normalizeLocalEndpoint(target.webuiUrl);
   const gatewayUrl = `ws://127.0.0.1:${target.gatewayPort}`;
-  const probes = napcatAccountProbeCandidates(ctx, userId)
+  const probes = (await napcatAccountProbeCandidates(ctx, userId))
     .filter((candidate) => {
       const sameHttp = normalizeLocalEndpoint(candidate.httpUrl) === targetHttp;
       const sameWebui = candidate.webuiUrl && normalizeLocalEndpoint(candidate.webuiUrl) === targetWebui;
@@ -1156,13 +1210,13 @@ function expectedBotUserIdForHealth(preferredInstances: NapCatInstanceDefinition
   return String(request.botUserId || preferredInstances.find((item) => item.botUserId)?.botUserId || "").trim();
 }
 
-function readNapcatWebuiToken(ctx: NapcatManagerContext, webuiUrl: string, providedToken?: string, preferredInstances: NapCatInstanceDefinition[] = []): NapcatWebuiTokenInfo {
+async function readNapcatWebuiToken(ctx: NapcatManagerContext, webuiUrl: string, providedToken?: string, preferredInstances: NapCatInstanceDefinition[] = []): Promise<NapcatWebuiTokenInfo> {
   const provided = providedToken?.trim();
   if (provided) {
     // A caller-supplied credential does not erase local configuration ownership.
     // Repair still needs the matching instance's config path; never take a fallback
     // from a different WebUI port merely because its token was discoverable.
-    const local = readNapcatWebuiToken(ctx, webuiUrl, undefined, preferredInstances);
+    const local = await readNapcatWebuiToken(ctx, webuiUrl, undefined, preferredInstances);
     const matchesEndpoint = local.found && !local.correctedWebuiUrl;
     return {
       ...(matchesEndpoint ? { configPath: local.configPath, configPort: local.configPort } : {}),
@@ -1180,11 +1234,13 @@ function readNapcatWebuiToken(ctx: NapcatManagerContext, webuiUrl: string, provi
     expectedPort = 0;
   }
 
-  const candidates = napcatWebuiConfigCandidates(ctx, preferredInstances);
+  let candidateFound = false;
   let fallback: NapcatWebuiTokenInfo | null = null;
-  for (const configPath of candidates) {
+  for await (const configPath of napcatWebuiConfigCandidates(ctx, preferredInstances)) {
     try {
-      const parsed = JSON.parse(fs.readFileSync(configPath, "utf8").replace(/^\uFEFF/, "")) as { token?: unknown; port?: unknown; disableWebUI?: unknown };
+      const raw = await fs.promises.readFile(configPath, "utf8");
+      candidateFound = true;
+      const parsed = JSON.parse(raw.replace(/^\uFEFF/, "")) as { token?: unknown; port?: unknown; disableWebUI?: unknown };
       const fileToken = String(parsed.token || "").trim();
       const token = fileToken;
       if (!token || parsed.disableWebUI === true) continue;
@@ -1213,7 +1269,7 @@ function readNapcatWebuiToken(ctx: NapcatManagerContext, webuiUrl: string, provi
 
   return fallback ?? {
     found: false,
-    message: candidates.length
+    message: candidateFound
       ? "已找到 NapCat webui.json，但没有读到可用 token。"
       : "未找到 NapCat config/webui.json；可在 NapCat 启动日志里查看 WebUI token。"
   };
@@ -1382,10 +1438,10 @@ type NapcatNewDeviceQrResult = {
   ErrorInfo?: string;
 };
 
-function napcatLoginTarget(
+async function napcatLoginTarget(
   ctx: NapcatManagerContext,
   request: NapcatLoginPanelRequest
-): { instance: NapCatInstanceDefinition; webuiUrl: string; tokenInfo: NapcatWebuiTokenInfo } {
+): Promise<{ instance: NapCatInstanceDefinition; webuiUrl: string; tokenInfo: NapcatWebuiTokenInfo }> {
   const gatewayId = request.gatewayId?.trim();
   const instanceId = request.instanceId?.trim();
   if (!gatewayId || !instanceId) throw new Error("缺少 gatewayId 或 instanceId。");
@@ -1394,7 +1450,7 @@ function napcatLoginTarget(
   const instance = napcatInstancesFor(ctx, runtime).find((item) => item.id === instanceId);
   if (!instance) throw new Error(`未找到 NapCat 实例：${instanceId}`);
   const configuredWebuiUrl = instance.webuiUrl?.trim() || "http://127.0.0.1:6099/webui";
-  const tokenInfo = readNapcatWebuiToken(ctx, configuredWebuiUrl, instance.webuiToken, [instance]);
+  const tokenInfo = await readNapcatWebuiToken(ctx, configuredWebuiUrl, instance.webuiToken, [instance]);
   return {
     instance,
     webuiUrl: tokenInfo.correctedWebuiUrl?.trim() || configuredWebuiUrl,
@@ -1406,7 +1462,7 @@ async function requireNapcatWebuiSession(
   ctx: NapcatManagerContext,
   request: NapcatLoginPanelRequest
 ): Promise<{ instance: NapCatInstanceDefinition; session: NapcatWebuiSession }> {
-  const target = napcatLoginTarget(ctx, request);
+  const target = await napcatLoginTarget(ctx, request);
   let session: NapcatWebuiSession | null;
   try {
     session = await loginNapcatWebui(target.webuiUrl, target.tokenInfo);
@@ -1445,7 +1501,7 @@ export async function readNapcatLoginPanel(
   ctx: NapcatManagerContext,
   request: NapcatLoginPanelRequest
 ): Promise<NapcatLoginPanelData> {
-  const { instance } = napcatLoginTarget(ctx, request);
+  const { instance } = await napcatLoginTarget(ctx, request);
   const [health, sessionResult] = await Promise.all([
     testNapcatHealth(ctx, { ...instance, ...request, readWebuiLoginInfo: false, inspectProcesses: false }),
     requireNapcatWebuiSession(ctx, request).then(value => ({ session: value.session, error: "" }),
@@ -1669,10 +1725,10 @@ function napcatProtocolConfigPathForWebuiConfig(configPath: string | undefined, 
   return path.join(path.dirname(configPath), `napcat_protocol_${uin}.json`);
 }
 
-function readOneBotNetworkConfig(configPath: string | null): NormalizedNapcatOneBotNetworkConfig | null {
-  if (!configPath || !fs.existsSync(configPath)) return null;
+async function readOneBotNetworkConfig(configPath: string | null): Promise<NormalizedNapcatOneBotNetworkConfig | null> {
+  if (!configPath) return null;
   try {
-    const parsed = JSON.parse(fs.readFileSync(configPath, "utf8").replace(/^\uFEFF/, "")) as NapcatOneBotNetworkConfig;
+    const parsed = JSON.parse((await fs.promises.readFile(configPath, "utf8")).replace(/^\uFEFF/, "")) as NapcatOneBotNetworkConfig;
     return normalizeOneBotNetworkConfig(parsed);
   } catch {
     return null;
@@ -1790,7 +1846,7 @@ function prepareOneBotConfigForLaunch(
   return [`已预写 QQ ${botUserId} 的 OneBot 配置：HTTP ${httpPort}，WS ${wsUrl}。`];
 }
 
-async function napcatHttpOk(httpUrl: string, token: string | undefined, timeoutMs = 4000): Promise<boolean> {
+async function napcatHttpOk(httpUrl: string, token: string | undefined, timeoutMs = getTimeoutMs("backend.messageEndpoints.napcatManager.napcatHttpOk.timeoutMs", 4000)): Promise<boolean> {
   const headers: Record<string, string> = { "content-type": "application/json; charset=utf-8" };
   if (token?.trim()) headers.authorization = `Bearer ${token.trim()}`;
   const controller = new AbortController();
@@ -1812,7 +1868,7 @@ async function napcatHttpOk(httpUrl: string, token: string | undefined, timeoutM
   }
 }
 
-async function napcatStatusEndpointOk(httpUrl: string | undefined, token: string | undefined, timeoutMs = 3000): Promise<boolean> {
+async function napcatStatusEndpointOk(httpUrl: string | undefined, token: string | undefined, timeoutMs = getTimeoutMs("backend.messageEndpoints.napcatManager.napcatStatusEndpointOk.timeoutMs", 3000)): Promise<boolean> {
   const url = httpUrl?.trim();
   if (!url) return false;
   const headers: Record<string, string> = { "content-type": "application/json; charset=utf-8" };
@@ -1837,7 +1893,7 @@ async function napcatStatusEndpointOk(httpUrl: string | undefined, token: string
   }
 }
 
-async function waitForNapcatReady(ctx: NapcatManagerContext, instance: NapCatInstanceDefinition, timeoutMs = 35000): Promise<Record<string, unknown>> {
+async function waitForNapcatReady(ctx: NapcatManagerContext, instance: NapCatInstanceDefinition, timeoutMs = getTimeoutMs("backend.messageEndpoints.napcatManager.waitForNapcatReady.timeoutMs", 35000)): Promise<Record<string, unknown>> {
   const deadline = Date.now() + timeoutMs;
   const httpUrl = instance.httpUrl?.trim();
   const webuiUrl = instance.webuiUrl?.trim();
@@ -1930,7 +1986,7 @@ export async function requestNapcatBotExit(httpUrl: string | undefined, token: s
       method: "POST",
       headers,
       body: "{}",
-      signal: AbortSignal.timeout(2500)
+      signal: AbortSignal.timeout(getTimeoutMs("backend.messageEndpoints.napcatManager.requestNapcatBotExit.AbortSignal.timeout.request", 2500))
     });
     const body = await resp.json().catch(() => ({})) as NapcatOneBotResponse<unknown>;
     if (resp.ok && (body.retcode == null || body.retcode === 0)) {
@@ -1967,7 +2023,7 @@ function managedNapcatInstanceRoot(ctx: NapcatManagerContext, workingDir: string
 }
 
 
-async function waitForPortsReleased(ports: number[], timeoutMs = 3000): Promise<void> {
+async function waitForPortsReleased(ports: number[], timeoutMs = getTimeoutMs("backend.messageEndpoints.napcatManager.waitForPortsReleased.timeoutMs", 3000)): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const pids = await listeningPidsForPorts(ports);
@@ -1988,7 +2044,7 @@ async function windowsPidsForCommandLineNeedle(needle: string | null, strict = f
       "Where-Object { $_.CommandLine -and $_.CommandLine.ToLowerInvariant().Contains($needle) } |",
       "Select-Object -ExpandProperty ProcessId"
     ].join(" ");
-    const { stdout } = await execFileAsync("powershell.exe", ["-NoProfile", "-Command", script], { timeout: 5000, windowsHide: true });
+    const { stdout } = await execFileAsync("powershell.exe", ["-NoProfile", "-Command", script], { timeout: getTimeoutMs("backend.messageEndpoints.napcatManager.windowsPidsForCommandLineNeedle.execFileAsync.timeout", 5000), windowsHide: true });
     return String(stdout).split(/\r?\n/).map((line) => line.trim()).filter((line) => /^\d+$/.test(line));
   } catch (error) {
     if (strict) throw error;
@@ -2015,7 +2071,7 @@ async function windowsNapcatPidsForBotUserId(botUserId: string | number | undefi
       "Where-Object { $_.CommandLine -and $_.CommandLine -match ('(?i)napcat') -and $_.CommandLine -match ('(?<!\\S)-q\\s+' + [regex]::Escape($userId) + '(?!\\S)') } |",
       "Select-Object -ExpandProperty ProcessId"
     ].join(" ");
-    const { stdout } = await execFileAsync("powershell.exe", ["-NoProfile", "-Command", script], { timeout: 5000, windowsHide: true });
+    const { stdout } = await execFileAsync("powershell.exe", ["-NoProfile", "-Command", script], { timeout: getTimeoutMs("backend.messageEndpoints.napcatManager.windowsNapcatPidsForBotUserId.execFileAsync.timeout", 5000), windowsHide: true });
     return String(stdout).split(/\r?\n/).map((line) => line.trim()).filter((line) => /^\d+$/.test(line));
   } catch (error) {
     if (strict) throw error;
@@ -2041,7 +2097,7 @@ async function windowsNapcatParentPids(pids: string[]): Promise<string[]> {
       "}",
       "$parents"
     ].join("\n");
-    const { stdout } = await execFileAsync("powershell.exe", ["-NoProfile", "-Command", script], { timeout: 5000, windowsHide: true });
+    const { stdout } = await execFileAsync("powershell.exe", ["-NoProfile", "-Command", script], { timeout: getTimeoutMs("backend.messageEndpoints.napcatManager.windowsNapcatParentPids.execFileAsync.timeout", 5000), windowsHide: true });
     return String(stdout).split(/\r?\n/).map((line) => line.trim()).filter((line) => /^\d+$/.test(line));
   } catch {
     return [];
@@ -2079,7 +2135,7 @@ async function configureNapcatOneBotBound(ctx: NapcatManagerContext, request: Na
 
   const preferredInstances = preferredNapcatInstancesForHealth(ctx, request);
   const expectedBotUserId = expectedBotUserIdForHealth(preferredInstances, request);
-  const tokenInfo = readNapcatWebuiToken(ctx, webuiUrl, request.webuiToken, preferredInstances);
+  const tokenInfo = await readNapcatWebuiToken(ctx, webuiUrl, request.webuiToken, preferredInstances);
   const webuiLoginInfo = await readNapcatWebuiLoginInfo(webuiUrl, tokenInfo, expectedBotUserId);
   const webuiLoginUserId = String(webuiLoginInfo?.userId || "").trim();
   if (webuiLoginInfo?.userId && webuiLoginInfo.online !== true) {
@@ -2154,7 +2210,7 @@ export async function testNapcatHealth(ctx: NapcatManagerContext, request: Napca
   if (token) headers.authorization = `Bearer ${token}`;
 
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 5000);
+  const timer = setTimeout(() => controller.abort(), getTimeoutMs("deadline.messageEndpoints.napcatManager.testNapcatHealth", 5000));
   let http: Record<string, unknown>;
   let loginInfo: NapcatLoginInfo | null = null;
   let onebotStatus: { online?: boolean; good?: boolean } | null = null;
@@ -2215,7 +2271,7 @@ export async function testNapcatHealth(ctx: NapcatManagerContext, request: Napca
   }
 
   const preferredInstances = preferredNapcatInstancesForHealth(ctx, request);
-  let tokenInfo = readNapcatWebuiToken(ctx, webuiUrl, request.webuiToken, preferredInstances);
+  let tokenInfo = await readNapcatWebuiToken(ctx, webuiUrl, request.webuiToken, preferredInstances);
   let effectiveWebuiUrl = webuiUrl;
   let webuiReachable = await ctx.checkHttpEndpoint(webuiUrl, 1600);
   const correctedWebuiUrl = tokenInfo.correctedWebuiUrl?.trim();
@@ -2284,7 +2340,7 @@ export async function testNapcatHealth(ctx: NapcatManagerContext, request: Napca
   const onebotPath = onebotConfigPathForWebuiConfig(tokenInfo.configPath, webuiLoginInfo?.userId || expectedBotUserId);
   const httpPort = portFromUrl(httpUrl);
   const wsUrl = gatewayPort > 0 ? `ws://127.0.0.1:${gatewayPort}` : "";
-  const onebotConfig = readOneBotNetworkConfig(onebotPath);
+  const onebotConfig = await readOneBotNetworkConfig(onebotPath);
   const onebotConfigured = onebotConfigMatches(onebotConfig, httpPort, wsUrl);
   const diagnostics: string[] = [];
   if (effectiveWebuiUrl !== webuiUrl) {
@@ -2496,7 +2552,7 @@ async function launchNapcatInstanceUnlocked(ctx: NapcatManagerContext, request: 
   }
   const plan = resolveNapcatLaunchPlan(instance, ctx.rootDir);
   const tokenInfo = instance.webuiUrl
-    ? readNapcatWebuiToken(ctx, instance.webuiUrl, instance.webuiToken, [instance])
+    ? await readNapcatWebuiToken(ctx, instance.webuiUrl, instance.webuiToken, [instance])
     : null;
   const preflightSteps = prepareOneBotConfigForLaunch(instance, tokenInfo);
   const ports = [
@@ -2511,7 +2567,7 @@ async function launchNapcatInstanceUnlocked(ctx: NapcatManagerContext, request: 
     // a plain launch only observes and waits for the existing owner.
     const existingPids = await napcatInstanceProcessPids(ctx, instance, ports);
     if (existingPids.length > 0) {
-      const observed = await waitForNapcatReady(ctx, instance, 5000);
+      const observed = await waitForNapcatReady(ctx, instance, getTimeoutMs("napcat.existingOwnerReady", 5000));
       ctx.appendLog(runtime, `suppress duplicate NapCat launch for ${instance.name || instance.id}: existingPids=${existingPids.join(",")} ready=${observed.ok === true ? String(observed.kind || "ok") : "timeout"}`);
       return {
         ok: observed.ok === true,
@@ -2617,7 +2673,7 @@ async function recheckNapcatUntilReady(
   ctx: NapcatManagerContext,
   gatewayId: string,
   instance: NapCatInstanceDefinition,
-  timeoutMs = 30000,
+  timeoutMs = getTimeoutMs("backend.messageEndpoints.napcatManager.recheckNapcatUntilReady.timeoutMs", 30000),
   requireWsConnection = false
 ): Promise<NapcatEnsureHealth> {
   const deadline = Date.now() + timeoutMs;
@@ -2803,7 +2859,7 @@ async function ensureNapcatInstanceReadyBound(
     && webuiUserId === expectedUserId
     && health.webui?.reachable === true) {
     const webuiUrl = String(health.webui.url || instance.webuiUrl || "").trim();
-    const tokenInfo = readNapcatWebuiToken(ctx, webuiUrl, instance.webuiToken, [instance]);
+    const tokenInfo = await readNapcatWebuiToken(ctx, webuiUrl, instance.webuiToken, [instance]);
     const quickLogin = await requestNapcatQuickLogin(webuiUrl, tokenInfo, expectedUserId);
     if (quickLogin.ok) {
       steps.push("已自动选择并登录绑定的 QQ。");
@@ -3123,7 +3179,7 @@ export async function scanNapcatEndpoint(ctx: NapcatManagerContext): Promise<Mes
     if (!existing || endpoint.healthy) byUrl.set(endpoint.url, endpoint);
     return byUrl;
   }, new Map<string, AdapterEndpoint>()).values()];
-  const napcatWebuiToken = readNapcatWebuiToken(ctx, napcatWebuiEndpoints[0]?.url || "http://127.0.0.1:6099/webui");
+  const napcatWebuiToken = await readNapcatWebuiToken(ctx, napcatWebuiEndpoints[0]?.url || "http://127.0.0.1:6099/webui");
   const napcatConnected = runtimes.some((runtime) =>
     napcatStatusHasUsableConnection((runtime.status ?? {}) as Record<string, any>)
   );

@@ -1,6 +1,6 @@
 <script setup lang="ts">
+import { translateText } from "../i18n";
 import RoleBindingEditor from "../components/RoleBindingEditor.vue";
-import RouteVariablesEditor from "../components/RouteVariablesEditor.vue";
 import { userFacingError } from "../userFacingError";
 import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
@@ -15,7 +15,7 @@ import { addRouteAgent, removeRouteAgent, selectRouteAgent } from "../routeAgent
 import { postRouteAgentThreadAction } from "../routeAgentThreadClient";
 import { routeAgentOperationGuard } from "../routeAgentOperationGuard";
 import { createGrokBotRouteScan, grokBotScanParameters, grokBotPersonaPickerItems, selectGrokBotRoutePersona, type GrokBotRouteConnection } from "../grokBotRouteConfig";
-import type { AgentInstance } from "@shared/agentInstance";
+import { agentInstanceDisplayName, type AgentInstance } from "@shared/agentInstance";
 import PersonaAvatar from "../components/PersonaAvatar.vue";
 import TrustedWebRendererHost from "../components/TrustedWebRendererHost.vue";
 import XiaomiHomeRendererHost from "../components/XiaomiHomeRendererHost.vue";
@@ -44,6 +44,7 @@ import { copyTextToClipboard } from "../clipboard";
 import { routeScopedAdaptersPath, routeScopedRuntimePath } from "../routeScopedNavigation";
 
 const MessageProcessingBoard = defineAsyncComponent(() => import("../components/MessageProcessingBoard.vue"));
+const props = defineProps<{ embedded?: boolean }>();
 
 const messageEndpointSettingsRenderers = computed(() => webRenderersAt(
   pluginCatalogStore.settingsRenderers.value,
@@ -479,7 +480,6 @@ const adapterParamOpen = ref<Record<string, boolean>>({
   feishu: false,
   remoteAgent: false,
   heartbeat: false,
-  fennenote: false,
   xiaoai: false,
   xiaomiHome: false,
   rabilink: false,
@@ -704,6 +704,11 @@ function messageGroupingPolicy(type: MessageAdapterType) {
 function conversationReviewPolicy(type: MessageAdapterType) {
   if (!gateway.value || type === "disabled") return undefined;
   return messageAdapterPolicyFor(gateway.value, type).conversationReview;
+}
+
+function setConversationReviewEnabled(type: MessageAdapterType, enabled: boolean | null): void {
+  if (!gateway.value) return;
+  setMessageAdapterPolicy(gateway.value, type, { conversationReview: { ...conversationReviewPolicy(type), enabled: enabled === true } });
 }
 
 function setConversationReviewPolicy(type: MessageAdapterType, field: "initialMessageCount" | "maxIncrementalMessages", raw: unknown): void {
@@ -952,7 +957,6 @@ function nextNapcatPort(base: number): number {
     ...store.gateways.flatMap((item) => [
       Number(item.gatewayPort),
       Number(item.webhookPort),
-      Number(item.fenneNoteWebhookPort),
       Number(item.xiaoaiWebhookPort),
       Number(item.rabiLinkWebhookPort),
       ...(Array.isArray(item.napcatInstances) ? item.napcatInstances.map(instance => Number(instance.gatewayPort)) : [])
@@ -960,7 +964,6 @@ function nextNapcatPort(base: number): number {
     ...store.managerRows.flatMap((item) => [
       Number(item.gatewayPort),
       Number(item.webhookPort),
-      Number(item.fenneNoteWebhookPort),
       Number(item.xiaoaiWebhookPort),
       Number(item.rabiLinkWebhookPort),
       ...(Array.isArray(item.napcatInstances) ? item.napcatInstances.map(instance => Number(instance.gatewayPort)) : [])
@@ -993,7 +996,6 @@ function autoAssignNapcatPortsForAllGateways(): boolean {
   for (const item of store.gateways) {
     const activeAdapters = gatewayAdapterTypes(item);
     if (activeAdapters.includes("webhook")) claim(item.webhookPort ?? item.gatewayPort);
-    if (activeAdapters.includes("fennenote")) claim(item.fenneNoteWebhookPort ?? item.webhookPort ?? item.gatewayPort);
     if (activeAdapters.includes("xiaoai")) claim(item.xiaoaiWebhookPort ?? item.webhookPort ?? item.gatewayPort);
     if (activeAdapters.includes("rabilink")) claim(item.rabiLinkWebhookPort ?? item.webhookPort ?? item.gatewayPort);
   }
@@ -1257,7 +1259,6 @@ function napcatInstanceWsUrl(instance: NapCatInstance): string {
 }
 
 function webhookPortFor(type: MessageAdapterType): number {
-  if (type === "fennenote") return Number(gateway.value?.fenneNoteWebhookPort || gateway.value?.webhookPort || gateway.value?.gatewayPort || 8790);
   if (type === "xiaoai") return Number(gateway.value?.xiaoaiWebhookPort || gateway.value?.webhookPort || gateway.value?.gatewayPort || 8790);
   if (type === "rabilink") return Number(gateway.value?.rabiLinkWebhookPort || gateway.value?.webhookPort || gateway.value?.gatewayPort || 8790);
   if (type === "feishu") return Number(gateway.value?.feishuWebhookPort || gateway.value?.gatewayPort || 8790);
@@ -1265,7 +1266,6 @@ function webhookPortFor(type: MessageAdapterType): number {
 }
 
 function webhookPathFor(type: MessageAdapterType): string {
-  if (type === "fennenote") return gateway.value?.fenneNoteWebhookPath || adapterDefaultWebhookPath(type);
   if (type === "xiaoai") return gateway.value?.xiaoaiWebhookPath || adapterDefaultWebhookPath(type);
   if (type === "rabilink") return gateway.value?.rabiLinkWebhookPath || adapterDefaultWebhookPath(type);
   if (type === "feishu") return gateway.value?.feishuWebhookPath || adapterDefaultWebhookPath(type);
@@ -1298,8 +1298,7 @@ function callbackHostFor(type: MessageAdapterType): string {
 function setWebhookPort(type: MessageAdapterType, value: unknown): void {
   if (!gateway.value) return;
   const port = Number(value || 0);
-  if (type === "fennenote") gateway.value.fenneNoteWebhookPort = port;
-  else if (type === "xiaoai") gateway.value.xiaoaiWebhookPort = port;
+  if (type === "xiaoai") gateway.value.xiaoaiWebhookPort = port;
   else if (type === "rabilink") gateway.value.rabiLinkWebhookPort = port;
   else if (type === "feishu") gateway.value.feishuWebhookPort = port;
   else gateway.value.webhookPort = port;
@@ -1309,8 +1308,7 @@ function setWebhookPort(type: MessageAdapterType, value: unknown): void {
 function setWebhookPath(type: MessageAdapterType, value: unknown): void {
   if (!gateway.value) return;
   const path = String(value || "");
-  if (type === "fennenote") gateway.value.fenneNoteWebhookPath = path;
-  else if (type === "xiaoai") gateway.value.xiaoaiWebhookPath = path;
+  if (type === "xiaoai") gateway.value.xiaoaiWebhookPath = path;
   else if (type === "rabilink") gateway.value.rabiLinkWebhookPath = path;
   else if (type === "feishu") gateway.value.feishuWebhookPath = path;
   else gateway.value.webhookPath = path;
@@ -1332,7 +1330,6 @@ function callbackUrl(type: MessageAdapterType = "webhook"): string {
 }
 
 function webhookTestEventType(type: MessageAdapterType): string {
-  if (type === "fennenote") return "fennenote.transcript";
   if (type === "xiaoai") return "xiaoai.transcript";
   if (type === "rabilink") return "rabilink.message";
   return "webhook.text";
@@ -2522,7 +2519,6 @@ function collectUsedWsPorts(excludeInstance?: NapCatInstance): Set<number> {
   for (const item of store.gateways) {
     const activeAdapters = gatewayAdapterTypes(item);
     if (activeAdapters.includes("webhook")) claim(item.webhookPort ?? item.gatewayPort);
-    if (activeAdapters.includes("fennenote")) claim(item.fenneNoteWebhookPort ?? item.webhookPort ?? item.gatewayPort);
     if (activeAdapters.includes("xiaoai")) claim(item.xiaoaiWebhookPort ?? item.webhookPort ?? item.gatewayPort);
     if (activeAdapters.includes("rabilink")) claim(item.rabiLinkWebhookPort ?? item.webhookPort ?? item.gatewayPort);
     for (const instance of item.napcatInstances ?? []) {
@@ -3005,7 +3001,7 @@ function openRuntimeLog(): void {
 async function deleteCurrentGateway(): Promise<void> {
   if (!gateway.value || deletingGateway.value) return;
   const name = store.configNameFor(gateway.value);
-  const confirmed = window.confirm(`删除路由配置「${name}」？\n\n只会删除 adapterConfig.json 并停止该路由，历史消息和日志会保留在路由目录里。`);
+  const confirmed = window.confirm(translateText(`删除路由配置「${name}」？\n\n只会删除 adapterConfig.json 并停止该路由，历史消息和日志会保留在路由目录里。`));
   if (!confirmed) return;
   deletingGateway.value = true;
   deleteError.value = "";
@@ -3265,7 +3261,7 @@ const remoteAgentItems = computed(() => (gateway.value?.remoteAgentTargets || []
   const agent = instance?.agents.find(item => item.agentId === target.agentId);
   const definition = agentDefs.find(item => item.type === target.provider);
   const agentLabel = agent?.name || (definition ? `${definition.title} · ${target.agentId}` : target.agentId);
-  return { ...target, instance, agent, title: `远端 · ${instance?.name ? `${instance.name} / ` : ''}${agentLabel}（${instance?.address || target.instanceId}）` };
+  return { ...target, instance, agent, title: `远端 · ${instance ? `${agentInstanceDisplayName(instance)} / ` : ''}${agentLabel}（${instance?.address || target.instanceId}）` };
 }));
 const availableAgentsToAdd = computed(() => [
   ...agentDefs.filter(agent => agent.type !== "deviceAgent" && !agentTypes.value.includes(agent.type)).map(agent => ({ ...agent, key: localAgentTargetKey(agent.type), title: `${agent.type === "grokBot" ? "云端" : "本机"} · ${agent.title}`, nodeId: undefined as string | undefined, agentId: undefined as string | undefined })),
@@ -3275,7 +3271,7 @@ const availableAgentsToAdd = computed(() => [
     if (!def) return [];
     const key = remoteAgentTargetKey({ instanceId: instance.instanceId, agentId: remote.agentId });
     if (remoteAgentItems.value.some(item => item.id === key)) return [];
-    return [{ ...def, key, title: `远端 · ${instance.name ? `${instance.name} / ` : ''}${remote.name}（${instance.address || instance.instanceId}）`, nodeId: instance.instanceId, agentId: remote.agentId }];
+    return [{ ...def, key, title: `远端 · ${agentInstanceDisplayName(instance)} / ${remote.name}（${instance.address || instance.instanceId}）`, nodeId: instance.instanceId, agentId: remote.agentId }];
   }))
 ]);
 const primaryAgent = computed(() => gateway.value ? resolvePrimaryAgentTarget(gateway.value) : undefined);
@@ -4109,7 +4105,7 @@ async function refreshVisibleNapcatHealth(): Promise<void> {
 // Ordinary navigation and browser history are synchronized by App.
 watch(() => gateway.value?.configName, (name, previousName) => {
   configNameError.value = "";
-  if (previousName && route.params.id === previousName && name && name !== previousName) {
+  if (!props.embedded && previousName && route.params.id === previousName && name && name !== previousName) {
     void router.replace({ path: routeScopedAdaptersPath(name), query: route.query, hash: route.hash });
   }
 });
@@ -4151,7 +4147,8 @@ watch(
   <div class="page-shell">
     <div class="page-header">
       <div>
-        <h1 class="page-title">路由配置</h1>
+        <h2 v-if="embedded" class="section-title">消息路由</h2>
+        <h1 v-else class="page-title">消息</h1>
         <div class="page-subtitle">配置消息端和 Agent 端。</div>
       </div>
       <div class="page-actions" v-if="gateway">
@@ -4172,8 +4169,7 @@ watch(
     <v-alert v-if="!gateway" type="info" variant="tonal">暂无路由配置，请先新增或完成快速配置。</v-alert>
 
     <template v-if="gateway">
-      <RoleBindingEditor />
-      <RouteVariablesEditor />
+      <RoleBindingEditor v-if="!embedded" />
       <div class="status-row mb-4" style="gap:8px">
         <span class="route-config-muted-label">配置名</span>
         <v-text-field
@@ -4419,8 +4415,11 @@ watch(
                   </div>
                   <div v-if="!isNonMessageEndpoint(choice.type)" class="dependency-panel mb-3">
                     <div class="section-title small-title">发送前聊天核对</div>
-                    <div class="section-note">Agent 的已读索引落后或缺失时，先返回聊天记录；Agent 核对正文后再次调用确认。同一会话依次发送，不同会话并行。</div>
-                    <div class="catalog-param-grid mt-2">
+                    <v-switch :model-value="conversationReviewPolicy(choice.type)?.enabled === true"
+                      label="发送前要求核对聊天记录" hide-details
+                      @update:model-value="value => setConversationReviewEnabled(choice.type, value)" />
+                    <div class="section-note">默认关闭，发送不等待聊天记录。开启后，已读索引落后或缺失时返回聊天记录供 Agent 确认；可随时关闭。</div>
+                    <div v-if="conversationReviewPolicy(choice.type)?.enabled" class="catalog-param-grid mt-2">
                       <v-text-field type="number" :min="1" :max="500"
                         :model-value="conversationReviewPolicy(choice.type)?.initialMessageCount"
                         label="首次核对消息数" hint="没有已读索引时返回最近消息，默认 50 条。" persistent-hint

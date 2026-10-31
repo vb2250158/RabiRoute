@@ -69,48 +69,14 @@ test("maps only typed capabilities and rejects cross-domain actions", () => {
   }), (error: unknown) => error instanceof XiaomiHomeManagerApiError && error.status === 403);
 });
 
-test("baseUrl requires HTTPS away from loopback and rejects DNS lookalikes by default", () => {
-  assert.equal(resolveXiaomiHomeManagerConfig({ baseUrl: "http://localhost:8123" }).baseUrl, "http://127.0.0.1:8123");
-  assert.equal(resolveXiaomiHomeManagerConfig({ baseUrl: "http://[::1]:8123" }).baseUrl, "http://[::1]:8123");
-  assert.equal(resolveXiaomiHomeManagerConfig({ baseUrl: "https://192.168.10.5:8123" }).baseUrl, "https://192.168.10.5:8123");
-  assert.equal(resolveXiaomiHomeManagerConfig({ baseUrl: "https://[fd12:3456::1]:8123" }).baseUrl, "https://[fd12:3456::1]:8123");
-  assert.equal(resolveXiaomiHomeManagerConfig({
-    baseUrl: "http://192.168.10.5:8123",
-    allowInsecurePrivateHttp: true
-  }).baseUrl, "http://192.168.10.5:8123");
-  assert.throws(
-    () => resolveXiaomiHomeManagerConfig({ baseUrl: "http://192.168.10.5:8123" }),
-    (error: unknown) => error instanceof XiaomiHomeManagerApiError
-      && error.code === "xiaomi_home_insecure_http_rejected"
-  );
-
-  for (const baseUrl of [
-    "http://fd-example.com:8123",
-    "http://fc-attacker.com:8123",
-    "http://public.example:8123",
-    "http://home-assistant.local:8123"
-  ]) {
-    assert.throws(
-      () => resolveXiaomiHomeManagerConfig({ baseUrl }),
-      (error: unknown) => error instanceof XiaomiHomeManagerApiError
-        && error.code === "xiaomi_home_public_url_rejected"
-    );
-  }
-  assert.equal(resolveXiaomiHomeManagerConfig({
-    baseUrl: "https://home.example",
-    allowPublicBaseUrl: true
-  }).baseUrl, "https://home.example");
-  for (const baseUrl of ["http://home.example", "http://8.8.8.8:8123"]) {
-    assert.throws(
-      () => resolveXiaomiHomeManagerConfig({
-        baseUrl,
-        allowPublicBaseUrl: true,
-        allowInsecurePrivateHttp: true
-      }),
-      (error: unknown) => error instanceof XiaomiHomeManagerApiError
-        && error.code === "xiaomi_home_insecure_http_rejected"
-    );
-  }
+test("configured Home Assistant URLs are usable unless the user explicitly restricts them", () => {
+  for (const baseUrl of ["http://192.168.10.5:8123", "http://home-assistant.local:8123", "https://home.example", "http://8.8.8.8:8123"])
+    assert.equal(resolveXiaomiHomeManagerConfig({ baseUrl }).baseUrl, baseUrl);
+  assert.throws(() => resolveXiaomiHomeManagerConfig({ baseUrl: "https://home.example", allowPublicBaseUrl: false }), /allowPublicBaseUrl=false/);
+  assert.throws(() => resolveXiaomiHomeManagerConfig({ baseUrl: "http://192.168.10.5:8123", allowInsecurePrivateHttp: false }), /allowInsecurePrivateHttp=false/);
+  assert.throws(() => resolveXiaomiHomeManagerConfig({ baseUrl: "http://127.home.example", allowInsecurePrivateHttp: false }), /allowInsecurePrivateHttp=false/);
+  assert.equal(resolveXiaomiHomeManagerConfig({ baseUrl: "http://localhost:8123", allowPublicBaseUrl: false, allowInsecurePrivateHttp: false }).baseUrl, "http://127.0.0.1:8123");
+  if (process.platform === "win32") assert.doesNotThrow(() => new XiaomiHomeManagerApiClient({ runtimeDir: "\\\\fixture-host\\share\\receipts" }));
 });
 
 test("baseUrl rejects credentials and non-origin URL components", () => {
@@ -134,34 +100,30 @@ test("baseUrl rejects credentials and non-origin URL components", () => {
   );
 });
 
-test("REST requests never follow redirects or forward the Bearer token to a second target", async () => {
-  const calls: Array<{ url: string; authorization: string; redirect: RequestRedirect | undefined }> = [];
+test("REST redirects follow configured destinations and retain standard origin credential behavior", async () => {
+  const calls: Array<{ url: string; authorization: string }> = [];
   const client = new XiaomiHomeManagerApiClient({}, async (input, init) => {
-    const headers = new Headers(init?.headers);
-    calls.push({
-      url: String(input),
-      authorization: String(headers.get("authorization") || ""),
-      redirect: init?.redirect
-    });
-    return new Response(undefined, {
-      status: 302,
-      headers: { location: "https://attacker.example/collect" }
-    });
-  }, "private-value");
-
-  await assert.rejects(
-    () => client.listResources(),
-    (error: unknown) => error instanceof XiaomiHomeManagerApiError
-      && error.code === "xiaomi_home_redirect_rejected"
-      && !error.message.includes("private-value")
-      && !error.message.includes("attacker.example")
-  );
-  assert.deepEqual(calls, [{
-    url: "http://127.0.0.1:8123/api/states",
-    authorization: "Bearer private-value",
-    redirect: "manual"
-  }]);
+    calls.push({ url: String(input), authorization: new Headers(init?.headers).get("authorization") || "" });
+    return calls.length === 1 ? new Response(null, { status: 302, headers: { location: "/api/next" } })
+      : calls.length === 2 ? new Response(null, { status: 307, headers: { location: "https://home.example/api/states" } })
+      : new Response("[]");
+  }, "fixture-token");
+  await client.listResources();
+  assert.deepEqual(calls.map(call => call.authorization), ["Bearer fixture-token", "Bearer fixture-token", ""]);
+  assert.equal(calls.at(-1)?.url, "https://home.example/api/states");
 });
+
+for (const restriction of ["allowPublicBaseUrl", "allowInsecurePrivateHttp"] as const) {
+  test(`REST redirect respects explicit ${restriction}=false before the next request`, async () => {
+    let calls = 0;
+    const client = new XiaomiHomeManagerApiClient({ [restriction]: false }, async () => {
+      calls++;
+      return new Response(null, { status: 302, headers: { location: restriction === "allowPublicBaseUrl" ? "https://home.example/api/states" : "http://192.168.10.5:8123/api/states" } });
+    }, "fixture-token");
+    await assert.rejects(client.listResources(), new RegExp(`${restriction}=false`));
+    assert.equal(calls, 1);
+  });
+}
 
 test("health stays explicit while Home Assistant authorization is missing", async () => {
   const client = new XiaomiHomeManagerApiClient({}, fetch);
