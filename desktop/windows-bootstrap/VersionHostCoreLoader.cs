@@ -27,6 +27,9 @@ internal sealed class VersionHostLoadContext : AssemblyLoadContext
 
 internal static class VersionHostCoreLoader
 {
+    internal static string[] CoreArguments(string[] args) =>
+        args.Length == 1 && args[0] == "--elevated-task" ? Array.Empty<string>() : args;
+
     internal static async Task<int> LoadAndRunAsync(ResolvedRelease release, string[] args)
     {
         var context = new VersionHostLoadContext(release.CoreAssemblyPath);
@@ -40,7 +43,7 @@ internal static class VersionHostCoreLoader
             types: new[] { typeof(string[]), typeof(string), typeof(string) },
             modifiers: null)
             ?? throw new MissingMethodException("RabiRoute Host core does not expose HostEntry.RunAsync.");
-        var task = method.Invoke(null, new object[] { args, release.PackageRoot, release.StateRoot }) as Task<int>
+        var task = method.Invoke(null, new object[] { CoreArguments(args), release.PackageRoot, release.StateRoot }) as Task<int>
             ?? throw new InvalidOperationException("RabiRoute HostEntry.RunAsync returned an invalid result.");
         return await task.ConfigureAwait(false);
     }

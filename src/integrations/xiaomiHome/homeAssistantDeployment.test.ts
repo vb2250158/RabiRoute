@@ -33,6 +33,34 @@ function fixture(t: test.TestContext) {
     setAvailable: (value: boolean) => { available = value; }, setImage: (value: string) => { image = value; } };
 }
 
+test("recovery stops mutations after its budget but observes later positive health", async t => {
+  const f = fixture(t);
+  let now = Date.now();
+  t.mock.method(Date, "now", () => now);
+  let attempts = 0;
+  const states: string[] = [];
+  const owner = new HomeAssistantDeployment(f.root, () => "http://127.0.0.1:8123", f.io, {
+    inspect: async () => ({ state: "installed", message: "installed" }),
+    run: async () => { attempts++; return { state: "installed", message: "VM running, Core down" }; }
+  });
+  await owner.save({ mode: "haos", containerName: "homeassistant", autoStart: true, recoveryMaxAttempts: 2 }, (await owner.inspect()).revision);
+  owner.onHealthChange(state => states.push(state));
+  owner.start();
+  await owner.recover();
+  now += 300001;
+  await owner.recover();
+  now += 300001;
+  await owner.recover();
+  assert.equal(attempts, 2);
+  assert.equal((await owner.inspect()).recoveryExhausted, true);
+  assert.deepEqual(states, ["unavailable", "exhausted"]);
+  f.setRunning(true);
+  await owner.recover();
+  assert.equal((await owner.inspect()).recoveryExhausted, false);
+  assert.deepEqual(states, ["unavailable", "exhausted", "ready"]);
+  await owner.stop();
+});
+
 test("HA OS startup and disconnect recovery coalesce, respect cooldown and preserve foreground approval", async t => {
   const f = fixture(t);
   const operations: string[] = [];
@@ -90,7 +118,7 @@ test("automatic recovery does not install, take over external services or prompt
   await owner.save({ mode: "haos", containerName: "homeassistant", autoStart: true }, (await owner.inspect()).revision);
   owner.start();
   await owner.recover();
-  assert.match((await owner.inspect()).message, /Windows 管理员/);
+  assert.match((await owner.inspect()).message, /Rabi Host 的管理员权限/);
   assert.equal((await owner.inspect()).installation, "installed");
   await owner.stop();
 });

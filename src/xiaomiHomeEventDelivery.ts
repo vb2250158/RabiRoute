@@ -10,6 +10,8 @@ export type XiaomiHomeEvent = {
   occurredAt: string;
   summary: string;
   artifactId?: string;
+  sourceEventId?: string;
+  cameraId?: string;
 };
 
 export type XiaomiHomeEventDeliveryContext = {

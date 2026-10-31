@@ -1,6 +1,7 @@
 using System.Buffers.Binary;
 using System.IO.Pipes;
 using System.Security.Cryptography;
+using System.Security.AccessControl;
 using System.Security.Principal;
 using System.Text;
 using System.Text.Json;
@@ -89,12 +90,30 @@ internal static class HostProtocol
             ?? throw new InvalidDataException("Host control message is empty.");
     }
 
-    internal static NamedPipeServerStream CreateServer(string? pipeName = null) => new(
-        pipeName ?? HostIdentity.PipeName,
-        PipeDirection.InOut,
-        NamedPipeServerStream.MaxAllowedServerInstances,
-        PipeTransmissionMode.Byte,
-        PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
+    internal static NamedPipeServerStream CreateServer(string? pipeName = null)
+    {
+        // CurrentUserOnly uses token.Owner (Administrators for elevated tokens).
+        // Bind to the account SID so its ordinary CLI can query its elevated Host.
+        using var identity = WindowsIdentity.GetCurrent();
+        var user = identity.User ?? throw new UnauthorizedAccessException("Host account SID is unavailable.");
+        var security = AccountPipeSecurity(user);
+        return NamedPipeServerStreamAcl.Create(
+            pipeName ?? HostIdentity.PipeName,
+            PipeDirection.InOut,
+            NamedPipeServerStream.MaxAllowedServerInstances,
+            PipeTransmissionMode.Byte,
+            PipeOptions.Asynchronous,
+            0, 0, security);
+    }
+
+    internal static PipeSecurity AccountPipeSecurity(SecurityIdentifier user)
+    {
+        var security = new PipeSecurity();
+        security.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
+        security.SetOwner(user);
+        security.AddAccessRule(new PipeAccessRule(user, PipeAccessRights.FullControl, AccessControlType.Allow));
+        return security;
+    }
 
     internal static async Task<HostResponse?> SendAsync(
         string command,

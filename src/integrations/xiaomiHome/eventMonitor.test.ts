@@ -9,10 +9,77 @@ class FakeSocket extends EventEmitter {
   close(): void { this.emit("close"); }
 }
 
+test("malformed source events are isolated from later event delivery", async () => {
+  const socket = new FakeSocket();
+  let delivered = 0;
+  const monitor = new XiaomiHomeEventMonitor({ agentRoleId: "TestRole", eventDeliveryMode: "all" }, {
+    credentialToken: "test-only-token", createSocket: () => socket,
+    deliverEvent: async () => { delivered++; }
+  });
+  monitor.start();
+  assert.doesNotThrow(() => socket.emit("message", JSON.stringify({ type: "event", id: 1, event: null })));
+  socket.emit("message", JSON.stringify({ type: "event", id: 1, event: {
+    event_type: "state_changed", time_fired: "2026-10-29T00:00:00Z",
+    data: { new_state: { entity_id: "light.test", state: "on" } }
+  } }));
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(delivered, 1);
+  monitor.stop();
+});
+
+test("silent event transport reconnects after a missing heartbeat response", t => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const socket = new FakeSocket();
+  const monitor = new XiaomiHomeEventMonitor({ agentRoleId: "TestRole", requestTimeoutMs: 1000 }, {
+    credentialToken: "test-only-token", createSocket: () => socket,
+    deliverEvent: async () => undefined, heartbeatIntervalMs: 1000, reconnectDelayMs: 60000
+  });
+  monitor.start();
+  socket.emit("message", JSON.stringify({ type: "result", id: 1, success: true }));
+  t.mock.timers.tick(1000);
+  assert.equal(JSON.parse(socket.sent.at(-1)!).type, "ping");
+  t.mock.timers.tick(1001);
+  assert.equal(monitor.status().connectionState, "reconnecting");
+  monitor.stop();
+});
+
+test("matching pong keeps the subscription alive and stop releases heartbeat timers", t => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const socket = new FakeSocket();
+  const monitor = new XiaomiHomeEventMonitor({ agentRoleId: "TestRole", requestTimeoutMs: 1000 }, {
+    credentialToken: "test-only-token", createSocket: () => socket,
+    deliverEvent: async () => undefined, heartbeatIntervalMs: 1000
+  });
+  monitor.start();
+  socket.emit("message", JSON.stringify({ type: "result", id: 1, success: true }));
+  t.mock.timers.tick(1000);
+  const ping = JSON.parse(socket.sent.at(-1)!);
+  socket.emit("message", JSON.stringify({ type: "pong", id: ping.id }));
+  t.mock.timers.tick(1000);
+  assert.equal(monitor.status().connectionState, "subscribed");
+  monitor.stop();
+  const sent = socket.sent.length;
+  t.mock.timers.tick(10000);
+  assert.equal(socket.sent.length, sent);
+});
+
+test("unbound event monitor never selects a persona or opens a transport", () => {
+  let connections = 0;
+  const monitor = new XiaomiHomeEventMonitor({}, {
+    credentialToken: "test-only-token",
+    createSocket: () => { connections++; return new FakeSocket(); },
+    deliverEvent: async () => undefined
+  });
+  assert.equal(monitor.start(), false);
+  assert.equal(monitor.status().agentRoleConfigured, false);
+  assert.equal(connections, 0);
+  monitor.stop();
+});
+
 test("transport failure requests deployment recovery but invalid credentials and stop do not", async () => {
   const socket = new FakeSocket();
   let attempts = 0;
-  const owner = new XiaomiHomeEventMonitor({}, {
+  const owner = new XiaomiHomeEventMonitor({ agentRoleId: "TestRole" }, {
     credentialToken: "test-only-token",
     createSocket: () => socket,
     deliverEvent: async () => undefined,
@@ -25,7 +92,7 @@ test("transport failure requests deployment recovery but invalid credentials and
   owner.stop();
   assert.equal(attempts, 1);
   const authSocket = new FakeSocket();
-  const auth = new XiaomiHomeEventMonitor({}, {
+  const auth = new XiaomiHomeEventMonitor({ agentRoleId: "TestRole" }, {
     credentialToken: "test-only-token", createSocket: () => authSocket,
     deliverEvent: async () => undefined, recoverConnection: async () => { attempts++; }
   });
@@ -48,11 +115,11 @@ test("event monitor exposes authorization and subscription state without exposin
     deliveryMode: "significant",
     cameraMotionEntityCount: 0,
     monitoredEntityCount: 0,
-    agentRoleConfigured: true
+    agentRoleConfigured: false
   });
 
   const socket = new FakeSocket();
-  const connected = new XiaomiHomeEventMonitor({}, {
+  const connected = new XiaomiHomeEventMonitor({ agentRoleId: "TestRole" }, {
     credentialToken: "private-value",
     createSocket: () => socket,
     deliverEvent: async () => undefined
@@ -142,6 +209,8 @@ test("recognizes a new Xiaomi Miot motion video without exposing it in the route
   const candidate = xiaomiMiotMotionClipFromStateChange(change);
   assert.equal(candidate?.eventType, "PeopleMotion");
   assert.equal(candidate?.playlistUrl, "https://media.example/new.m3u8");
+  change.data.new_state.attributes.motion_video_latest = "https://media.example/new.m3u8?signature=rotated";
+  assert.equal(xiaomiMiotMotionClipFromStateChange(change)?.sourceEventId, candidate?.sourceEventId);
   const routed = xiaomiHomeEventFromHomeAssistantStateChange(change);
   assert.equal(routed?.kind, "camera_motion_detected");
   assert.equal("playlistUrl" in (routed ?? {}), false);

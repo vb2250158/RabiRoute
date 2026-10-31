@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import fs from "node:fs";
 import { createPluginTestHarness } from "@rabiroute/plugin-sdk";
 import {
   ManagerPluginRouteRegistry,
@@ -10,6 +11,12 @@ import {
 // real activation contract instead of copying its route declarations.
 // @ts-expect-error The package entry intentionally has no source-tree .d.ts file.
 import { activate } from "../../../plugins/builtin/io.rabiroute.manager.xiaomi-home/1.0.0/manager.mjs";
+
+test("shipped Xiaomi profile does not bind a private persona by default", () => {
+  const profile = JSON.parse(fs.readFileSync(new URL("../../../plugins/profiles/desktop.json", import.meta.url), "utf8"));
+  const plugin = profile.instances.find((item: { package: string }) => item.package === "io.rabiroute.manager.xiaomi-home");
+  assert.equal(plugin.config.agentRoleId, undefined);
+});
 
 test("Xiaomi Home plugin registers exact and prefix routes with the Manager contract", async () => {
   const registry = new ManagerPluginRouteRegistry();

@@ -8,6 +8,13 @@ import { XiaomiHomeManagerApiError, normalizeHomeAssistantState } from "./manage
 import { XiaomiHomeCredentialStore } from "./credentials.js";
 import { XiaomiHomeRuntimeController, XiaomiHomeSettingsStore } from "./settingsRuntime.js";
 
+test("missing persona binding remains unconfigured instead of selecting a private role", () => {
+  const root = temporaryDirectory();
+  try {
+    assert.equal(new XiaomiHomeSettingsStore(root, {}).read().settings.agentRoleId, "");
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
 function temporaryDirectory(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-xiaomi-settings-"));
 }
@@ -80,7 +87,7 @@ test("Xiaomi Home runtime hot-loads saved settings without requiring credentials
       deliveryMode: "significant",
       cameraMotionEntityCount: 0,
       monitoredEntityCount: 0,
-      agentRoleConfigured: true
+      agentRoleConfigured: false
     });
     controller.stop();
   } finally {

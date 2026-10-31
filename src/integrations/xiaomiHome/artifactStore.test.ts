@@ -33,6 +33,10 @@ test("artifact ledger is idempotent, hides local paths, and rebuilds its index",
   const rebuilt = new XiaomiHomeArtifactStore(root);
   assert.equal(rebuilt.get(first.artifactId)?.sourceEventId, "event-1");
   assert.equal(rebuilt.getBySourceEventId("event-1")?.artifactId, first.artifactId);
+  assert.equal(rebuilt.getBySourceEventId("event-1", "OtherRole"), undefined);
+  const scoped = firstStore.register({ ...input, ownerRoleId: "OtherRole" });
+  assert.notEqual(scoped.artifactId, first.artifactId);
+  assert.equal(new XiaomiHomeArtifactStore(root).getBySourceEventId("event-1", "OtherRole")?.artifactId, scoped.artifactId);
   assert.equal(rebuilt.list({ resourceId: input.resourceId }).length, 1);
   assert.match(String(rebuilt.lifecycleContract().action), /no archive or deletion/);
 });

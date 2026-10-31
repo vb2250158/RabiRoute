@@ -9359,6 +9359,10 @@ function metaPayload(): Record<string, unknown> {
     rabiLinkRelay: publicRabiLinkRelayConfig(rabiLinkRelayConfigForMeta()),
     rabiLinkRelayRuntime: rabiLinkRelayRuntime.status(),
     managerRuntime: managerRuntimeDiagnosticsSummary(),
+    hostPrivilege: {
+      state: process.env.RABIROUTE_HOST_ELEVATED === "1" ? "administrator" : process.env.RABIROUTE_HOST_ELEVATED === "0" ? "limited" : "unknown",
+      limitedCapabilities: process.env.RABIROUTE_HOST_ELEVATED === "0" ? ["home-assistant-vm", "home-assistant-core-recovery", "loopback-port-forwarding"] : []
+    },
     performance: performanceMonitoring.store.status(),
     operationalLog: managerOperationalLog.status(),
     messageProcessingPersistence: messageProcessingBoardPersistence.status(),
@@ -10611,6 +10615,7 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
       XiaomiHomeArtifactAccess,
       XiaomiHomeRuntimeController,
       XiaomiHomeSettingsStore,
+      roleDirectory: roleDirForApi,
       createXiaomiHomeManagerRouteHandler,
       deliverXiaomiHomeEvent,
       homeAssistantActivity: allDayRecording.service.homeAssistantActivity,

@@ -6,6 +6,8 @@ English | <a href="./windows-launcher-and-packaging.md">简体中文</a>
 
 # Windows Desktop Launch and Packaging
 
+Windows startup adds a highest-privilege Host task registered through one UAC approval, limited-mode fallback and synchronized logon autostart. See [camera events and HA recovery](home-camera-events_en.md) for privilege scope, managed HA children, legacy-task migration and installed acceptance. Source editing does not upgrade the stable Host or trigger UAC.
+
 Check actual runtime-data compatibility before an upgrade; package hashes and Host self-test alone are insufficient. When a computer credential store exists, Setup and Developer activation run the candidate's `check-installed-data-compatibility.mjs` before stopping Host or removing legacy tasks. It delegates to the credential owner's read-only inspector and reports only format, counts and a digest. It never migrates, copies or displays credentials. Missing contracts, unsupported formats or concurrent data changes reject activation while the current service remains running.
 
 The complete package includes the remote Agent build outputs in `runtime/`, `dist/agent-hooks/`, and `dist/native/`. Verify the native DLLs together with the signed release manifest and tray script; source availability or Manager health does not replace checking the actual packaged assets.

@@ -8,6 +8,7 @@ import { recordDataMutationAudit } from "../../observability/dataMutationAudit.j
 
 export type XiaomiMiotMotionClipCandidate = {
   sourceEventId: string;
+  cameraId?: string;
   resourceId: string;
   resourceName: string;
   occurredAt: string;
@@ -129,7 +130,9 @@ export class XiaomiHomeClipCaptureWorker {
   constructor(
     config: XiaomiHomeClipCaptureConfig,
     private readonly artifacts: XiaomiHomeArtifactStore,
-    private readonly fetchImpl: FetchLike = fetch
+    private readonly fetchImpl: FetchLike = fetch,
+    private readonly roleDirectory?: () => string,
+    private readonly ownerRoleId?: string
   ) {
     this.enabled = config.cameraClipCaptureEnabled === true;
     this.allowedHosts = normalizedAllowedHosts(config.cameraClipAllowedHosts);
@@ -155,7 +158,7 @@ export class XiaomiHomeClipCaptureWorker {
 
   capture(candidate: XiaomiMiotMotionClipCandidate): Promise<XiaomiHomeArtifactPublicRecord> {
     if (!this.isEnabled()) return Promise.reject(new Error("Camera clip capture is not enabled or has no allowed media hosts."));
-    const captured = this.artifacts.getBySourceEventId(candidate.sourceEventId);
+    const captured = this.artifacts.getBySourceEventId(candidate.sourceEventId, this.ownerRoleId);
     if (captured) return Promise.resolve(captured);
     const existing = this.inFlight.get(candidate.sourceEventId);
     if (existing) return existing;
@@ -237,6 +240,7 @@ export class XiaomiHomeClipCaptureWorker {
     fs.mkdirSync(workDir, { recursive: true });
     const keyCache = new Map<string, Buffer>();
     const converted: string[] = [];
+    let allocatedPath: string | undefined;
     try {
       for (let index = 0; index < playlist.segments.length; index += 1) {
         const segment = playlist.segments[index];
@@ -262,10 +266,15 @@ export class XiaomiHomeClipCaptureWorker {
       fs.writeFileSync(concatPath, converted.map(value => `file '${path.basename(value)}'`).join("\n") + "\n", "utf8");
       const temporaryOutput = path.join(workDir, "output.mp4");
       await this.runTool(this.ffmpegPath, ["-loglevel", "error", "-y", "-f", "concat", "-safe", "1", "-i", concatPath, "-c", "copy", temporaryOutput], workDir, 60000);
-      const finalPath = this.artifacts.allocateMediaPath(candidate.sourceEventId, candidate.occurredAt, ".mp4");
+      const finalPath = this.roleDirectory
+        ? this.artifacts.allocateCameraPath(this.roleDirectory(), {
+          eventId: candidate.sourceEventId, cameraId: candidate.cameraId ?? candidate.resourceId,
+          occurredAt: candidate.occurredAt, adapterId: "xiaomi-miot", kind: candidate.eventType, resourceId: candidate.resourceId
+        })
+        : this.artifacts.allocateMediaPath(candidate.sourceEventId, candidate.occurredAt, ".mp4");
+      allocatedPath = finalPath;
       try {
-        if (fs.existsSync(finalPath)) fs.unlinkSync(finalPath);
-        fs.renameSync(temporaryOutput, finalPath);
+        fs.copyFileSync(temporaryOutput, finalPath, fs.constants.COPYFILE_EXCL);
       } catch (error) {
         recordDataMutationAudit({
           level: "error",
@@ -295,6 +304,7 @@ export class XiaomiHomeClipCaptureWorker {
       const durationMs = await this.probeDuration(finalPath);
       return this.artifacts.register({
         sourceEventId: candidate.sourceEventId,
+        ownerRoleId: this.ownerRoleId,
         resourceId: candidate.resourceId,
         eventKind: candidate.eventType || "camera_motion_detected",
         occurredAt: candidate.occurredAt,
@@ -305,6 +315,7 @@ export class XiaomiHomeClipCaptureWorker {
         durationMs
       });
     } finally {
+      if (allocatedPath) this.artifacts.releaseCameraPath(allocatedPath);
       fs.rmSync(workDir, { recursive: true, force: true });
     }
   }

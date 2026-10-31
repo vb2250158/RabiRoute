@@ -3,6 +3,25 @@ import test from "node:test";
 import { NapcatSupervisorService } from "./napcatSupervisorService.js";
 import { napcatGuardianDepsFor } from "../messageEndpoints/napcatGuardian.js";
 
+test("supervisor repeats completed health checks and stop cancels the shared wait", async () => {
+  let checks = 0;
+  let waiting: (() => void) | undefined;
+  const entered = new Promise<void>(resolve => { waiting = resolve; });
+  const owner = new NapcatSupervisorService({
+    run: async () => { checks++; },
+    repeatDelayMs: 30000,
+    waitBeforeRestart: async (_delay, signal) => {
+      waiting?.();
+      await new Promise<void>(resolve => signal.addEventListener("abort", () => resolve(), { once: true }));
+    }
+  });
+  void owner.start();
+  await entered;
+  assert.equal(checks, 1);
+  await owner.stop();
+  assert.equal(owner.isActive(), false);
+});
+
 test("startup plugin waits for bound Route readiness before consuming its one automatic login run", async () => {
   const pluginUrl = new URL("../../plugins/builtin/io.rabiroute.manager.napcat-supervisor/1.0.0/manager.mjs", import.meta.url).href;
   const plugin = await import(pluginUrl);

@@ -10,6 +10,9 @@ export type HomeAssistantDeploymentConfig = Readonly<{
   mode: "external" | "docker" | "haos";
   containerName: string;
   autoStart: boolean;
+  healthCheckIntervalMs?: number;
+  recoveryCooldownMs?: number;
+  recoveryMaxAttempts?: number;
 }>;
 
 export type HomeAssistantDeploymentSnapshot = Readonly<{
@@ -29,4 +32,7 @@ export type HomeAssistantDeploymentSnapshot = Readonly<{
   canInstall?: boolean;
   haosInstallPath?: string;
   progress?: HomeAssistantInstallProgress;
+  recoveryAttempts?: number;
+  recoveryExhausted?: boolean;
+  privilege?: "administrator" | "limited" | "unknown";
 }>;

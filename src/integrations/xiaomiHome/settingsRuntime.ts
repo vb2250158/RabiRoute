@@ -1,4 +1,5 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import { recordDataMutationAudit } from "../../observability/dataMutationAudit.js";
 import { normalizeHomeSpeechBindings } from "../../shared/homeMediaContract.js";
 import type { XiaomiHomeRequestAuthority } from "./requestAuthority.js";
 import fs from "node:fs";
@@ -38,6 +39,7 @@ type RuntimeFile = Readonly<{
 }>;
 
 type RuntimeDependencies = Readonly<{
+  roleDirectory?: (roleId: string) => string;
   activity?: HomeAssistantActivityPort;
   env?: NodeJS.ProcessEnv;
   fetchImpl?: typeof fetch;
@@ -103,7 +105,7 @@ export function normalizeXiaomiHomeRuntimeSettings(input: unknown): XiaomiHomeRu
     speechBindings,
     allowPublicBaseUrl: input.allowPublicBaseUrl === true,
     allowInsecurePrivateHttp: input.allowInsecurePrivateHttp === true,
-    agentRoleId: controlledText(input.agentRoleId, "YeYu", "agentRoleId", 80),
+    agentRoleId: input.agentRoleId == null || input.agentRoleId === "" ? "" : controlledText(input.agentRoleId, "", "agentRoleId", 80),
     eventMonitorEnabled: input.eventMonitorEnabled !== false,
     eventDeliveryMode,
     cameraMotionEntityIds: uniqueStrings(input.cameraMotionEntityIds, "cameraMotionEntityIds", /^[a-z0-9_]+\.[a-z0-9_]+$/i),
@@ -178,6 +180,8 @@ export class XiaomiHomeRuntimeController {
   private monitorValue: XiaomiHomeEventMonitor;
   private activityValue?: HomeAssistantActivityMonitor;
   private started = false;
+  private stopHealthListener?: () => void;
+  private healthDelivery: Promise<unknown> = Promise.resolve();
   private readonly credentialStore: XiaomiHomeCredentialStore;
 
   constructor(
@@ -204,7 +208,25 @@ export class XiaomiHomeRuntimeController {
   get artifactAccess(): XiaomiHomeArtifactAccess { return this.accessValue; }
 
   start(): void {
+    if (this.started) return;
     this.started = true;
+    this.stopHealthListener = this.deployment.onHealthChange(state => {
+      const agentRoleId = this.snapshotValue.settings.agentRoleId;
+      if (!agentRoleId) return;
+      const event: XiaomiHomeEvent = {
+        id: `home-assistant-health-${randomUUID()}`,
+        kind: state === "ready" ? "device_state_changed" : state === "exhausted" ? "action_failed" : "device_offline",
+        resourceId: "home:ha:connection", resourceName: "Home Assistant",
+        occurredAt: new Date().toISOString(),
+        summary: state === "ready" ? "Home Assistant 连接已恢复" : state === "exhausted"
+          ? "Home Assistant 自动恢复次数已耗尽，需要人工检查虚拟机与 Core" : "Home Assistant 连接中断，正在检查恢复条件"
+      };
+      this.healthDelivery = this.healthDelivery.then(() => this.dependencies.deliverEvent(event, { agentRoleId })).catch(error => {
+        recordDataMutationAudit({ group: "xiaomi-home", event: "home_assistant_health_delivery_failed",
+          owner: "xiaomi-home-runtime", action: "deliver", target: { type: "event", id: event.id },
+          dataSource: { kind: "runtime", id: "home-assistant-deployment" }, outcome: "failed", error });
+      });
+    });
     this.deployment.start();
     this.monitorValue.start();
     this.activityValue?.start();
@@ -212,11 +234,14 @@ export class XiaomiHomeRuntimeController {
 
   async stop(): Promise<void> {
     this.started = false;
+    this.stopHealthListener?.();
+    this.stopHealthListener = undefined;
     await this.vacuumRemote.shutdown();
     await this.vacuumCloud.video.shutdown();
     this.monitorValue.stop();
     await this.activityValue?.stop();
     await this.deployment.stop();
+    await this.healthDelivery;
   }
 
   settings(): XiaomiHomeSettingsSnapshot {
@@ -352,7 +377,11 @@ export class XiaomiHomeRuntimeController {
       runtimeDir: this.artifacts.runtimeDir
     }, fetchImpl, credentialToken);
     const access = new XiaomiHomeArtifactAccess(settings, this.artifacts, env);
-    const capture = new XiaomiHomeClipCaptureWorker(settings, this.artifacts);
+    const roleDirectory = this.dependencies.roleDirectory;
+    const capture = new XiaomiHomeClipCaptureWorker({ ...settings,
+      cameraClipCaptureEnabled: settings.cameraClipCaptureEnabled && Boolean(roleDirectory && settings.agentRoleId)
+    }, this.artifacts, this.dependencies.fetchImpl,
+    roleDirectory && settings.agentRoleId ? () => roleDirectory(settings.agentRoleId) : undefined, settings.agentRoleId || undefined);
     const monitor = new XiaomiHomeEventMonitor(settings, {
       credentialToken,
       recoverConnection: () => this.deployment.recover(),

@@ -17,7 +17,8 @@ export class XiaomiHomeEventLedger {
     const line = JSON.stringify({
       time: Math.floor(Date.parse(event.occurredAt) / 1000), isoTime: event.occurredAt,
       id: event.id, kind: event.kind, resourceId: event.resourceId, resourceName: event.resourceName,
-      summary: event.summary, artifactId: event.artifactId, areaName: event.areaName, homeId: event.homeId
+      summary: event.summary, artifactId: event.artifactId, areaName: event.areaName, homeId: event.homeId,
+      sourceEventId: event.sourceEventId, cameraId: event.cameraId
     }) + "\n";
     if (Buffer.byteLength(line) > 256 * 1024) throw new Error("Xiaomi event is too large");
     if (this.pending >= this.capacity) throw new Error("Xiaomi event ledger queue full");

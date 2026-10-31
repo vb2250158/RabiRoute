@@ -3,9 +3,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { recordDataMutationAudit } from "../../observability/dataMutationAudit.js";
+import { cameraClipPath, type CameraEvent } from "./cameraEvents.js";
 
 export type XiaomiHomeArtifactInput = {
   sourceEventId: string;
+  ownerRoleId?: string;
   resourceId: string;
   eventKind: string;
   occurredAt: string;
@@ -64,6 +66,10 @@ function publicRecord(record: XiaomiHomeArtifactRecord): XiaomiHomeArtifactPubli
   return safe;
 }
 
+function artifactSourceKey(sourceEventId: string, ownerRoleId?: string): string {
+  return ownerRoleId ? JSON.stringify([ownerRoleId, sourceEventId]) : sourceEventId;
+}
+
 export class XiaomiHomeArtifactStore {
   readonly runtimeDir: string;
   private readonly ledgerDir: string;
@@ -71,6 +77,7 @@ export class XiaomiHomeArtifactStore {
   private readonly accessDir: string;
   private readonly indexPath: string;
   private index: ArtifactIndex;
+  private readonly cameraAllocations = new Set<string>();
 
   constructor(runtimeDir = defaultRuntimeDir(), customMediaDir?: string) {
     this.runtimeDir = localAbsolutePath(runtimeDir, "runtimeDir");
@@ -88,6 +95,16 @@ export class XiaomiHomeArtifactStore {
 
   getMediaDir(): string {
     return this.mediaDir;
+  }
+
+  allocateCameraPath(roleDirectory: string, event: CameraEvent): string {
+    const target = cameraClipPath(roleDirectory, event);
+    this.cameraAllocations.add(target);
+    return target;
+  }
+
+  releaseCameraPath(target: string): void {
+    this.cameraAllocations.delete(target);
   }
 
   allocateMediaPath(sourceEventId: string, occurredAt: string, extension: ".mp4" | ".jpg"): string {
@@ -115,7 +132,7 @@ export class XiaomiHomeArtifactStore {
         const record = JSON.parse(row) as XiaomiHomeArtifactRecord;
         if (!record.artifactId || !record.sourceEventId) continue;
         index.byArtifactId[record.artifactId] = record;
-        index.bySourceEventId[record.sourceEventId] = record.artifactId;
+        index.bySourceEventId[artifactSourceKey(record.sourceEventId, record.ownerRoleId)] = record.artifactId;
       }
     }
     atomicWrite(this.indexPath, `${JSON.stringify(index, null, 2)}\n`);
@@ -125,7 +142,8 @@ export class XiaomiHomeArtifactStore {
   register(input: XiaomiHomeArtifactInput): XiaomiHomeArtifactPublicRecord {
     const sourceEventId = String(input.sourceEventId || "").trim();
     if (!sourceEventId) throw new Error("sourceEventId is required.");
-    const existingId = this.index.bySourceEventId[sourceEventId];
+    const sourceKey = artifactSourceKey(sourceEventId, input.ownerRoleId);
+    const existingId = this.index.bySourceEventId[sourceKey];
     if (existingId) {
       const existing = this.index.byArtifactId[existingId];
       if (existing.sha256 !== input.sha256 || existing.resourceId !== input.resourceId) {
@@ -145,7 +163,7 @@ export class XiaomiHomeArtifactStore {
     }
     const mediaPath = localAbsolutePath(input.localPath, "localPath");
     const relative = path.relative(this.mediaDir, mediaPath);
-    if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
+    if ((!relative || relative.startsWith("..") || path.isAbsolute(relative)) && !this.cameraAllocations.has(mediaPath)) {
       throw new Error("localPath must stay inside the Xiaomi Home artifact media directory.");
     }
     if (!fs.existsSync(mediaPath) || !fs.statSync(mediaPath).isFile()) throw new Error("Artifact media file does not exist.");
@@ -164,7 +182,7 @@ export class XiaomiHomeArtifactStore {
     const current = fs.existsSync(ledgerPath) ? fs.readFileSync(ledgerPath, "utf8") : "";
     atomicWrite(ledgerPath, `${current}${JSON.stringify(record)}\n`);
     this.index.byArtifactId[record.artifactId] = record;
-    this.index.bySourceEventId[record.sourceEventId] = record.artifactId;
+    this.index.bySourceEventId[sourceKey] = record.artifactId;
     atomicWrite(this.indexPath, `${JSON.stringify(this.index, null, 2)}\n`);
     recordDataMutationAudit({
       group: "xiaomi-home",
@@ -185,8 +203,8 @@ export class XiaomiHomeArtifactStore {
     return record ? publicRecord(record) : undefined;
   }
 
-  getBySourceEventId(sourceEventId: string): XiaomiHomeArtifactPublicRecord | undefined {
-    const artifactId = this.index.bySourceEventId[String(sourceEventId || "").trim()];
+  getBySourceEventId(sourceEventId: string, ownerRoleId?: string): XiaomiHomeArtifactPublicRecord | undefined {
+    const artifactId = this.index.bySourceEventId[artifactSourceKey(String(sourceEventId || "").trim(), ownerRoleId)];
     return artifactId ? this.get(artifactId) : undefined;
   }
 

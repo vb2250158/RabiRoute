@@ -4,6 +4,7 @@ export type NapcatSupervisorServiceOptions<Result> = {
   onError?: (error: unknown) => void;
   /** Long-lived owners may retry failed runs; one-shot callers keep the existing default. */
   restartDelayMs?: number;
+  repeatDelayMs?: number | (() => number);
   waitBeforeRestart?: (milliseconds: number, signal: AbortSignal) => Promise<void>;
 };
 
@@ -37,7 +38,9 @@ export class NapcatSupervisorService<Result = unknown> {
           try {
             const result = await this.options.run(controller.signal);
             if (this.active && this.generation === generation) this.options.onResult?.(result);
-            return;
+            if (this.options.repeatDelayMs === undefined) return;
+            const delay = typeof this.options.repeatDelayMs === "function" ? this.options.repeatDelayMs() : this.options.repeatDelayMs;
+            await (this.options.waitBeforeRestart ?? waitBeforeRestart)(Math.max(1_000, delay), controller.signal);
           } catch (error) {
             if (!this.active || this.generation !== generation || controller.signal.aborted) return;
             this.options.onError?.(error);

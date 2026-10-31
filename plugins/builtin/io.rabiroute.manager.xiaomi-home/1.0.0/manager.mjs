@@ -48,6 +48,7 @@ export const activate = definePlugin({
         const settingsStore = new runtime.XiaomiHomeSettingsStore(artifacts.runtimeDir, context.config);
         activationStage = "runtime controller";
         const xiaomiHomeRuntime = new runtime.XiaomiHomeRuntimeController(settingsStore, artifacts, {
+          roleDirectory: runtime.roleDirectory,
           deliverEvent: runtime.deliverXiaomiHomeEvent,
           activity: runtime.homeAssistantActivity
         });

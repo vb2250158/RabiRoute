@@ -269,7 +269,6 @@
         "requestTimeoutMs": 5000,
         "allowPublicBaseUrl": false,
         "allowInsecurePrivateHttp": false,
-        "agentRoleId": "YeYu",
         "eventMonitorEnabled": true,
         "eventDeliveryMode": "significant",
         "cameraMotionEntityIds": [],

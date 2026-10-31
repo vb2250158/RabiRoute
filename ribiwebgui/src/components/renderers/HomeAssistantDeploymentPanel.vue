@@ -49,7 +49,7 @@ async function save() {
   if (!snapshot.value) return;
   busy.value = true;
   try {
-    snapshot.value = await client.save({ mode: mode.value, containerName: containerName.value.trim(), autoStart: autoStart.value }, snapshot.value.revision);
+    snapshot.value = await client.save({ ...snapshot.value.config, mode: mode.value, containerName: containerName.value.trim(), autoStart: autoStart.value }, snapshot.value.revision);
     error.value = "";
   } catch (cause) { error.value = userFacingError(cause); }
   finally { busy.value = false; }
@@ -68,7 +68,7 @@ async function install() {
   busy.value = true;
   installing.value = true;
   try {
-    if (dirty.value) snapshot.value = await client.save({ mode: mode.value, containerName: containerName.value.trim(), autoStart: autoStart.value }, snapshot.value.revision);
+    if (dirty.value) snapshot.value = await client.save({ ...snapshot.value.config, mode: mode.value, containerName: containerName.value.trim(), autoStart: autoStart.value }, snapshot.value.revision);
     snapshot.value = await client.install(snapshot.value.revision);
     error.value = "";
   } catch (cause) { error.value = userFacingError(cause); }
@@ -101,19 +101,21 @@ onUnmounted(() => { unmounted = true; events?.close(); });
     </template>
     <template v-if="mode === 'haos'">
       <v-text-field :model-value="snapshot?.haosInstallPath" label="预设安装路径" readonly hide-details />
-      <v-switch v-model="autoStart" label="随 Windows 启动虚拟机" :disabled="busy || operationActive" color="primary" hide-details />
-      <div class="section-note">需要 Windows 专业版、企业版或教育版及至少 40 GiB 可用空间。安装时会请求管理员确认；需要重启时会暂停，重启后再次点击安装继续。</div>
-      <div class="section-note">服务仅开放到本机 http://127.0.0.1:8123；虚拟机使用 2 核 CPU、2 GiB 内存。启动选项在安装或“启动并检查”时应用。</div>
+      <v-switch v-model="autoStart" label="启动 Rabi 时自动启动 Home Assistant" :disabled="busy || operationActive" color="primary" hide-details />
+      <div class="section-note">需要 Windows 专业版、企业版或教育版、管理员权限及至少 40 GiB 可用空间。需要重启时会暂停，重启后再次点击安装继续。</div>
+      <div class="section-note">服务仅开放到本机 http://127.0.0.1:8123；虚拟机使用 2 核 CPU、2 GiB 内存。</div>
     </template>
     <div v-if="mode === 'haos' && operationActive" class="installation-progress" role="status" aria-live="polite">
       <div class="installation-progress-detail">
-        <span>{{ snapshot?.state === 'installing' ? snapshot.message : '正在准备安装，请确认 Windows 管理员提示。' }}</span>
+        <span>{{ snapshot?.state === 'installing' ? snapshot.message : '正在准备安装。' }}</span>
         <span v-if="snapshot?.progress?.percent !== undefined">{{ snapshot.progress.percent }}%</span>
       </div>
       <v-progress-linear :model-value="snapshot?.progress?.percent ?? 0" :indeterminate="snapshot?.progress?.percent === undefined" color="primary" height="8" rounded aria-label="Home Assistant 当前安装阶段进度" />
       <div v-if="downloadSize" class="section-note"><span>{{ downloadSize }}</span> <span>（当前下载阶段）</span></div>
     </div>
     <v-alert v-else-if="snapshot && mode === snapshot.config.mode" :type="snapshot.state === 'ready' ? 'success' : snapshot.state === 'error' ? 'error' : 'info'" density="compact" variant="tonal">{{ snapshot.message }}</v-alert>
+    <v-alert v-if="snapshot?.privilege === 'limited'" type="warning" density="compact" variant="tonal">Rabi 未获得管理员权限，HA 虚拟机、Core 自动恢复及端口转发受限。其他功能继续运行。</v-alert>
+    <v-alert v-if="snapshot?.recoveryExhausted" type="error" density="compact" variant="tonal">自动恢复次数已耗尽。请检查虚拟机与 Core，处理后点击启动。</v-alert>
     <dl v-if="snapshot && mode === snapshot.config.mode && (snapshot.installation === 'installed' || mode === 'haos')" class="deployment-paths">
       <dt>{{ mode === 'haos' ? '虚拟机安装目录' : '安装目录（Docker 引擎内）' }}</dt><dd>{{ snapshot.installationPath }}</dd>
       <template v-if="snapshot.image"><dt>镜像</dt><dd>{{ snapshot.image }}</dd></template>

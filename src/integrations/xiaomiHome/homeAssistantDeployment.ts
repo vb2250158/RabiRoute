@@ -11,6 +11,7 @@ import { KeyedAsyncLock } from "../../shared/keyedAsyncLock.js";
 import { recordDataMutationAudit } from "../../observability/dataMutationAudit.js";
 import { XiaomiHomeManagerApiError } from "./managerApi.js";
 import { WindowsHomeAssistantOs, type HomeAssistantOsDriver } from "./homeAssistantOs.js";
+import { NapcatSupervisorService } from "../../manager/napcatSupervisorService.js";
 
 const runFile = promisify(execFile);
 type Container = {
@@ -64,7 +65,17 @@ function normalize(input: HomeAssistantDeploymentConfig): HomeAssistantDeploymen
   if (!input || !["external", "docker", "haos"].includes(input.mode) || typeof input.autoStart !== "boolean") invalid("请选择 Home Assistant 部署方式。");
   const name = String(input.containerName ?? "").trim();
   if (!/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/.test(name)) invalid("请填写有效的 Docker 容器名称。");
-  return Object.freeze({ mode: input.mode, containerName: name, autoStart: input.mode !== "external" && input.autoStart });
+  for (const [value, minimum, maximum] of [
+    [input.healthCheckIntervalMs ?? 30000, 1000, 3600000],
+    [input.recoveryCooldownMs ?? 300000, 1000, 3600000],
+    [input.recoveryMaxAttempts ?? 3, 1, 10]
+  ]) {
+    if (!Number.isInteger(value) || value < minimum || value > maximum) invalid("Home Assistant 恢复参数无效。");
+  }
+  return Object.freeze({ mode: input.mode, containerName: name, autoStart: input.mode !== "external" && input.autoStart,
+    healthCheckIntervalMs: input.healthCheckIntervalMs ?? 30000,
+    recoveryCooldownMs: input.recoveryCooldownMs ?? 300000,
+    recoveryMaxAttempts: input.recoveryMaxAttempts ?? 3 });
 }
 
 /** Local deployment ownership is separate from HA credentials and shared Route policy. */
@@ -80,6 +91,9 @@ export class HomeAssistantDeployment {
   private recovery?: Promise<void>;
   private nextRecoveryAt = 0;
   private recoveryController?: AbortController;
+  private supervisor?: NapcatSupervisorService<void>;
+  private recoveryAttempts = 0;
+  private healthState?: "unavailable" | "ready" | "exhausted";
 
   constructor(runtimeDir: string, private readonly baseUrl: () => string, private readonly io = driver, os?: HomeAssistantOsDriver) {
     this.file = path.join(runtimeDir, "home-assistant-deployment.json");
@@ -147,13 +161,16 @@ export class HomeAssistantDeployment {
   async inspect(authority?: XiaomiHomeRequestAuthority): Promise<HomeAssistantDeploymentSnapshot> {
     authority?.assert();
     const saved = this.read();
-    const base = { schemaVersion: 1 as const, ...saved, configured: fs.existsSync(this.file), baseUrl: this.baseUrl(), canStart: false, haosInstallPath: this.os.installationPath };
+    const base = { schemaVersion: 1 as const, ...saved, configured: fs.existsSync(this.file), baseUrl: this.baseUrl(), canStart: false, haosInstallPath: this.os.installationPath,
+      recoveryAttempts: this.recoveryAttempts, recoveryExhausted: this.recoveryAttempts >= (saved.config.recoveryMaxAttempts ?? 3) };
+    const privilege = process.env.RABIROUTE_HOST_ELEVATED === "1" ? "administrator" : process.env.RABIROUTE_HOST_ELEVATED === "0" ? "limited" : "unknown";
+    const privilegeState = { privilege } as const;
     if (saved.config.mode === "haos") {
       try {
         const status = await this.checked(() => this.os.inspect(authority), authority);
         const installed = status.state === "installed" || status.installed === true;
         const ready = installed && await this.ready("http://127.0.0.1:8123", authority);
-        return { ...base, baseUrl: "http://127.0.0.1:8123", installation: installed ? "installed" : "not_found",
+        return { ...base, ...privilegeState, baseUrl: "http://127.0.0.1:8123", installation: installed ? "installed" : "not_found",
           state: this.failure ? "error" : this.installing || status.state === "installing" ? "installing" : ready ? "ready" : status.state === "reboot_required" ? "reboot_required" : status.state === "error" ? "error" : installed ? "starting" : "stopped",
           message: this.failure || (ready ? "Home Assistant OS 已就绪。" : status.message),
           image: status.version ? `Home Assistant OS ${status.version}` : undefined,
@@ -197,6 +214,8 @@ export class HomeAssistantDeployment {
       this.requireRevision(revision);
       if (this.stopped) invalid("米家模块正在停止，请刷新页面。");
       this.failure = "";
+      this.recoveryAttempts = 0;
+      this.nextRecoveryAt = 0;
       if (this.read().config.mode === "haos") {
         return this.runOs("Start", authority);
       }
@@ -282,8 +301,8 @@ export class HomeAssistantDeployment {
       authority?.assert();
       rethrowXiaomiHomeAuthorityError(error);
       this.failure = this.stopped ? "恢复等待已取消。" : operation === "Recover"
-        ? "自动恢复未完成，请点击启动并确认一次 Windows 管理员提示，以配置后台恢复。已有虚拟机和磁盘已保留。"
-        : "安装操作未能完成，请重新检测进度；不要删除已有虚拟机或磁盘。";
+        ? "自动恢复未完成，请检查 Rabi Host 的管理员权限及 HA Core 状态。已有虚拟机和磁盘已保留。"
+        : "HA 操作未能完成，请检查 Rabi 启动权限并重新检测；不要删除已有虚拟机或磁盘。";
       this.audit(operation.toLowerCase(), "failed");
     } finally {
       this.installing = false;
@@ -293,9 +312,17 @@ export class HomeAssistantDeployment {
   }
 
   start(): void {
+    if (this.supervisor?.isActive()) return;
     this.stopped = false;
     this.nextRecoveryAt = 0;
     this.flight = this.recover();
+    this.supervisor = new NapcatSupervisorService({
+      run: () => this.recover(),
+      repeatDelayMs: () => this.read().config.healthCheckIntervalMs ?? 30000,
+      restartDelayMs: this.read().config.healthCheckIntervalMs,
+      onError: () => { this.audit("health-check", "failed"); }
+    });
+    void this.supervisor.start();
   }
 
   /** Startup and transport failures share one bounded recovery; never replay device commands. */
@@ -303,14 +330,26 @@ export class HomeAssistantDeployment {
     if (this.stopped) return Promise.resolve();
     if (this.recovery) return this.recovery;
     const saved = this.read();
-    if (!saved.config.autoStart || saved.config.mode === "external" || Date.now() < this.nextRecoveryAt) return Promise.resolve();
-    this.nextRecoveryAt = Date.now() + 300000;
+    if (!saved.config.autoStart || saved.config.mode === "external") return Promise.resolve();
     const controller = new AbortController();
     this.recoveryController = controller;
     this.recovery = (async () => {
       try {
         const endpoint = saved.config.mode === "haos" ? "http://127.0.0.1:8123" : this.baseUrl();
-        if (await this.io.ready(endpoint)) { this.failure = ""; return; }
+        if (await this.io.ready(endpoint)) {
+          this.failure = "";
+          this.recoveryAttempts = 0;
+          this.healthChanged("ready");
+          return;
+        }
+        this.healthChanged("unavailable");
+        if (this.stopped || controller.signal.aborted || this.recoveryAttempts >= (saved.config.recoveryMaxAttempts ?? 3)) {
+          if (!this.stopped) this.healthChanged("exhausted");
+          return;
+        }
+        if (Date.now() < this.nextRecoveryAt) return;
+        this.nextRecoveryAt = Date.now() + (saved.config.recoveryCooldownMs ?? 300000);
+        this.recoveryAttempts++;
         if (saved.config.mode === "haos") {
           // Installation is never implicit, and background recovery never opens UAC.
           const status = await this.os.inspect();
@@ -320,10 +359,23 @@ export class HomeAssistantDeployment {
             this.requireRevision(saved.revision);
             await this.runOs("Recover", undefined, controller.signal);
           });
-        } else await this.ensureReady(saved.revision);
+        } else {
+          const attempts = this.recoveryAttempts;
+          await this.ensureReady(saved.revision);
+          this.recoveryAttempts = attempts;
+        }
+        if (!this.stopped && await this.io.ready(endpoint)) {
+          this.failure = "";
+          this.recoveryAttempts = 0;
+          this.healthChanged("ready");
+        } else if (!this.stopped) {
+          this.failure ||= "Home Assistant Core 尚未就绪，请检查虚拟机内服务。";
+          if (this.recoveryAttempts >= (saved.config.recoveryMaxAttempts ?? 3)) this.healthChanged("exhausted");
+        }
       } catch {
         this.failure = "自动恢复失败，请检查部署状态后重试。";
         this.audit("recover", "failed");
+        if (!this.stopped && this.recoveryAttempts >= (saved.config.recoveryMaxAttempts ?? 3)) this.healthChanged("exhausted");
       }
     })().finally(() => { this.recovery = undefined; this.recoveryController = undefined; });
     return this.recovery;
@@ -332,9 +384,22 @@ export class HomeAssistantDeployment {
   async stop(): Promise<void> {
     this.stopped = true;
     this.recoveryController?.abort();
+    await this.supervisor?.stop();
     await this.operations.run("deployment", async () => undefined);
     await this.flight;
     await this.recovery;
+  }
+
+  private healthChanged(state: "unavailable" | "ready" | "exhausted"): void {
+    if (this.healthState === state || (this.healthState === "exhausted" && state === "unavailable")) return;
+    this.healthState = state;
+    this.audit(`health-${state}`, state === "ready" ? "committed" : "failed");
+    this.changes.emit("health", state);
+  }
+
+  onHealthChange(listener: (state: "unavailable" | "ready" | "exhausted") => void): () => void {
+    this.changes.on("health", listener);
+    return () => { this.changes.off("health", listener); };
   }
 
   private async checked<T>(operation: () => Promise<T>, authority?: XiaomiHomeRequestAuthority, mutation = false): Promise<T> {

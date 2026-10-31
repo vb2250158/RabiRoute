@@ -6,6 +6,13 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.3.72 - 2026-10-31
+
+- Add an installation/user-scoped elevated Host task with one UAC registration and limited-mode fallback. Consume the task marker before Core startup and distinguish a stopped Host from a running instance. Elevation covers Host, plugins and children while preserving existing authenticated API access.
+- Reuse the existing supervisor for bounded Home Assistant health checks and recovery, verify the live VM address and Core port 8123, and add subscription timeouts and ping/pong. Installation receipts, VM state and Core readiness remain separate acceptance checks.
+- Bind camera events explicitly to a role, stable event ID and role-owned clip path. Xiaomi is the first adapter; real clips still require upstream recording fields and authorized media hosts.
+- Update the locked follow-redirects dependency to compatible fixed version 1.16.2 for cross-realm sensitive-header validation (GHSA-mrwp-f3q8-3g9p).
+
 ## 0.3.71 - 2026-10-28
 
 - Set the Windows Host Manager `/health` probe deadline to 30 seconds. Cold plan-catalog startup can make that check take more than a few seconds; the probe waits for the current request, and Host rebuilds a generation only after three consecutive failures. Identity checks, required-capability checks, and the shutdown request deadline stay at their existing values.

@@ -107,6 +107,20 @@ internal static class ReadOnlyHostStatusProbe
     }
 }
 
-internal sealed record ReadOnlyHostStatusResult(bool Ok, string Json);
+internal sealed record ReadOnlyHostStatusResult(bool Ok, string Json)
+{
+    internal bool IsRunning
+    {
+        get
+        {
+            if (!Ok) return false;
+            using var document = JsonDocument.Parse(Json);
+            var root = document.RootElement;
+            return root.TryGetProperty("ok", out var ok) && ok.ValueKind == JsonValueKind.True &&
+                root.TryGetProperty("state", out var state) && state.ValueKind == JsonValueKind.String &&
+                !string.IsNullOrWhiteSpace(state.GetString()) && state.GetString() != "stopped";
+        }
+    }
+}
 
 internal sealed record ReadOnlyHostStatusRequest(string Command, string? ApplicationGenerationId);

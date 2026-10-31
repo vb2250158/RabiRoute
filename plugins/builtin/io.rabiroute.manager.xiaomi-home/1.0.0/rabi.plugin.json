@@ -85,7 +85,7 @@
       "agentRoleId": {
         "type": "string",
         "minLength": 1,
-        "default": "YeYu"
+        "description": "Explicit persona binding. Events remain disabled until configured."
       },
       "eventMonitorEnabled": {
         "type": "boolean",

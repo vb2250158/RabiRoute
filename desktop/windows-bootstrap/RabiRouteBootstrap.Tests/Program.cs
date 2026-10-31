@@ -8,6 +8,8 @@ void Check(bool condition, string message)
     if (!condition) failures.Add(message);
 }
 
+HostElevationTests.Run(Check);
+
 var nodeLocaleFixture = new[]
 {
     new ReleaseManifestFile("z.txt", 1, new string('0', 64)),

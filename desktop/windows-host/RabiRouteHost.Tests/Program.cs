@@ -3,6 +3,7 @@ using System.Net;
 using System.Net.Sockets;
 using System.IO.Pipes;
 using System.Security.Principal;
+using System.Security.AccessControl;
 using System.Text;
 using System.Text.Json;
 using System.Threading.Channels;
@@ -21,6 +22,23 @@ await ShortcutRecoveryTests.RunAsync(Check);
 await IdentityResetTests.RunAsync(Check);
 EnvironmentBlockTests.Run(Check);
 ManagerEndpointCacheTests.Run(Check);
+
+// The ACL must name the account, never an elevated token's Administrators owner.
+using (var identity = WindowsIdentity.GetCurrent())
+{
+    var user = identity.User!;
+    var security = HostProtocol.AccountPipeSecurity(user);
+    var rules = security.GetAccessRules(true, true, typeof(SecurityIdentifier)).Cast<PipeAccessRule>().ToArray();
+    Check(security.GetOwner(typeof(SecurityIdentifier))?.Equals(user) == true, "Host pipe owner is the account SID across elevation");
+    Check(security.AreAccessRulesProtected, "Host pipe ACL excludes inherited grants");
+    Check(rules.Length == 1 && rules[0].IdentityReference.Equals(user) && rules[0].AccessControlType == AccessControlType.Allow,
+        "Host pipe allows only the exact account, excluding Administrators, Everyone and other accounts");
+    await using var aclServer = HostProtocol.CreateServer("RabiRoute.Acl.Tests." + Guid.NewGuid().ToString("N"));
+    var actual = aclServer.GetAccessControl();
+    var actualRules = actual.GetAccessRules(true, true, typeof(SecurityIdentifier)).Cast<PipeAccessRule>().ToArray();
+    Check(actual.GetOwner(typeof(SecurityIdentifier))?.Equals(user) == true && actualRules.Length == 1 && actualRules[0].IdentityReference.Equals(user),
+        "real Windows named pipe retains the account-only ACL");
+}
 
 var hostImagePath = Environment.ProcessPath!;
 Check(HostControlPeerInspector.IsSameExecutable(hostImagePath, hostImagePath.ToUpperInvariant()), "peer image comparison ignores path case");

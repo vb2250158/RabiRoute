@@ -74,6 +74,8 @@ This directory contains current guides, experimental integrations, designs, rese
 
 ## Maintainer: architecture, builds, and diagnostics
 
+- [Camera events and HA recovery](home-camera-events_en.md): explicit persona binding, clip storage, elevated startup, bounded recovery and migration acceptance.
+
 - [Long-term maintenance and self-repair](rabi-maintenance_en.md) — **Maintenance workflow** for a stable intake task, original issue ownership, recovery verification, and periodic code-quality work.
 - [Install Rabi knowledge search](../skills/rabi-knowledge-search/README_en.md) — Project maintainers can install the skill to search plans and memories first when online, and use ordinary search when offline.
 - [Install the identity relation skill](../skills/manage-rabiroute-identity-relations/README_en.md) — Resolve who an endpoint account is, confirm or correct ownership, handle concurrent conflicts and shared accounts, and keep on-scene Agents to candidate observations.

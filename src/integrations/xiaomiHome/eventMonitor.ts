@@ -8,6 +8,8 @@ import {
 } from "./managerApi.js";
 import type { XiaomiHomeArtifactPublicRecord } from "./artifactStore.js";
 import type { XiaomiMiotMotionClipCandidate } from "./clipCapture.js";
+import { cameraEventId, type CameraEventAdapter } from "./cameraEvents.js";
+import { recordDataMutationAudit } from "../../observability/dataMutationAudit.js";
 
 type HomeAssistantState = {
   entity_id: string;
@@ -48,6 +50,7 @@ type XiaomiHomeEventMonitorDependencies = {
   deliverEvent: (event: XiaomiHomeEvent, context: XiaomiHomeEventDeliveryContext) => Promise<unknown>;
   captureMotionClip?: (candidate: XiaomiMiotMotionClipCandidate) => Promise<XiaomiHomeArtifactPublicRecord>;
   reconnectDelayMs?: number;
+  heartbeatIntervalMs?: number;
   recoverConnection?: () => Promise<void>;
 };
 
@@ -91,9 +94,11 @@ export function xiaomiMiotMotionClipFromStateChange(change: HomeAssistantStateCh
   const occurredAt = attributeTimestamp(rawTime, fallback);
   const resourceName = String(attributes.friendly_name || state.entity_id);
   const eventType = String(attributes.motion_video_type || "camera_motion_detected");
-  const sourceEventId = `xiaomi-miot-clip:${createHash("sha256").update(`${state.entity_id}\n${occurredAt}\n${eventType}\n${playlistUrl}`).digest("hex").slice(0, 32)}`;
+  const cameraId = String(attributes.did ?? state.entity_id).trim();
+  const sourceEventId = cameraEventId("xiaomi-miot", cameraId, occurredAt, eventType);
   return {
     sourceEventId,
+    cameraId,
     resourceId: xiaomiHomeResourceId(state.entity_id),
     resourceName,
     occurredAt,
@@ -102,6 +107,16 @@ export function xiaomiMiotMotionClipFromStateChange(change: HomeAssistantStateCh
     thumbnailUrl: String(attributes.motion_image ?? "").trim() || undefined
   };
 }
+
+export const xiaomiMiotCameraAdapter: CameraEventAdapter<HomeAssistantStateChanged> = {
+  id: "xiaomi-miot",
+  event(change) {
+    const candidate = xiaomiMiotMotionClipFromStateChange(change);
+    if (!candidate) return undefined;
+    return { eventId: candidate.sourceEventId, cameraId: candidate.cameraId!, adapterId: "xiaomi-miot",
+      occurredAt: candidate.occurredAt, kind: candidate.eventType, resourceId: candidate.resourceId };
+  }
+};
 
 function normalizedWords(state: HomeAssistantState): string {
   const attributes = state.attributes ?? {};
@@ -134,10 +149,12 @@ export function xiaomiHomeEventFromHomeAssistantStateChange(
   if (change.event_type !== "state_changed") return undefined;
   const state = change.data?.new_state;
   if (!state?.entity_id) return undefined;
-  const motionClip = xiaomiMiotMotionClipFromStateChange(change);
-  if (motionClip) {
+    const motionClip = xiaomiMiotMotionClipFromStateChange(change);
+  const cameraEvent = xiaomiMiotCameraAdapter.event(change);
+  if (motionClip && cameraEvent) {
     return {
-      id: motionClip.sourceEventId,
+      id: cameraEvent.eventId,
+      cameraId: cameraEvent.cameraId,
       kind: "camera_motion_detected",
       resourceId: motionClip.resourceId,
       resourceName: motionClip.resourceName,
@@ -198,6 +215,13 @@ export class XiaomiHomeEventMonitor {
   private readonly reconnectDelayMs: number;
   private socket?: SocketLike;
   private reconnectTimer?: NodeJS.Timeout;
+  private heartbeatTimer?: NodeJS.Timeout;
+  private heartbeatDeadline?: NodeJS.Timeout;
+  private pendingPingId?: number;
+  private nextPingId = 2;
+  private lastEventAt?: string;
+  private lastTransportError?: string;
+  private lastDeliveryState?: "accepted" | "missed" | "failed";
   private stopped = true;
   private subscriptionId = 1;
   private connectionState: "disabled" | "authorization_required" | "stopped" | "connecting" | "authorizing" | "subscribing" | "subscribed" | "authorization_failed" | "reconnecting" = "stopped";
@@ -205,7 +229,7 @@ export class XiaomiHomeEventMonitor {
   constructor(config: XiaomiHomeEventMonitorConfig, private readonly dependencies: XiaomiHomeEventMonitorDependencies) {
     this.resolved = resolveXiaomiHomeManagerConfig(config);
     this.token = String(dependencies.credentialToken || "").trim();
-    this.agentRoleId = String(config.agentRoleId || "YeYu").trim();
+    this.agentRoleId = String(config.agentRoleId ?? "").trim();
     this.enabled = config.eventMonitorEnabled !== false;
     this.deliveryMode = config.eventDeliveryMode === "all" ? "all" : "significant";
     this.cameraMotionEntityIds = Array.isArray(config.cameraMotionEntityIds) ? config.cameraMotionEntityIds : [];
@@ -239,6 +263,7 @@ export class XiaomiHomeEventMonitor {
     this.stopped = true;
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     this.reconnectTimer = undefined;
+    this.clearHeartbeat();
     this.socket?.close();
     this.socket = undefined;
     this.connectionState = !this.enabled ? "disabled" : !this.token ? "authorization_required" : "stopped";
@@ -253,7 +278,10 @@ export class XiaomiHomeEventMonitor {
       deliveryMode: this.deliveryMode,
       cameraMotionEntityCount: this.cameraMotionEntityIds.length,
       monitoredEntityCount: this.monitoredEntityIds.length,
-      agentRoleConfigured: Boolean(this.agentRoleId)
+      agentRoleConfigured: Boolean(this.agentRoleId),
+      ...(this.lastEventAt ? { lastEventAt: this.lastEventAt } : {}),
+      ...(this.lastTransportError ? { lastTransportError: this.lastTransportError } : {}),
+      ...(this.lastDeliveryState ? { lastDeliveryState: this.lastDeliveryState } : {})
     };
   }
 
@@ -270,14 +298,24 @@ export class XiaomiHomeEventMonitor {
       return;
     }
     this.socket = socket;
-    socket.on("message", data => this.handleMessage(data));
+    this.heartbeatDeadline = setTimeout(() => {
+      if (this.stopped || this.socket !== socket || this.connectionState === "subscribed") return;
+      this.lastTransportError = "subscription_timeout";
+      this.connectionState = "reconnecting";
+      socket.close();
+    }, this.resolved.requestTimeoutMs);
+    this.heartbeatDeadline.unref?.();
+    socket.on("message", data => { if (!this.stopped && this.socket === socket) this.handleMessage(data); });
     socket.on("error", () => {
       if (this.stopped || this.socket !== socket) return;
+      this.lastTransportError = "socket_error";
       this.connectionState = "reconnecting";
       socket.close();
     });
     socket.on("close", () => {
-      if (this.socket === socket) this.socket = undefined;
+      if (this.socket !== socket) return;
+      this.socket = undefined;
+      this.clearHeartbeat();
       if (!this.stopped) {
         this.connectionState = this.connectionState === "authorization_failed" ? "authorization_failed" : "reconnecting";
         if (this.connectionState !== "authorization_failed") {
@@ -286,6 +324,46 @@ export class XiaomiHomeEventMonitor {
         }
       }
     });
+  }
+
+  private clearHeartbeat(): void {
+    if (this.heartbeatTimer) clearTimeout(this.heartbeatTimer);
+    if (this.heartbeatDeadline) clearTimeout(this.heartbeatDeadline);
+    this.heartbeatTimer = undefined;
+    this.heartbeatDeadline = undefined;
+    this.pendingPingId = undefined;
+  }
+
+  private async deliver(event: XiaomiHomeEvent): Promise<void> {
+    try {
+      const result = await this.dependencies.deliverEvent(event, { agentRoleId: this.agentRoleId });
+      const missed = Array.isArray(result) && result.some(item => item?.status === "missed" || item?.status === "failed");
+      this.lastDeliveryState = missed ? "missed" : "accepted";
+      if (!missed) return;
+    } catch { this.lastDeliveryState = "failed"; }
+    recordDataMutationAudit({ group: "xiaomi-home", event: "xiaomi_home_event_delivery_failed", owner: "xiaomi-home-event-monitor",
+      action: "deliver", target: { type: "event", id: event.id }, dataSource: { kind: "runtime", id: "xiaomi-home-event-delivery" },
+      outcome: "failed", result: this.lastDeliveryState });
+  }
+
+  private scheduleHeartbeat(): void {
+    this.clearHeartbeat();
+    if (this.stopped || !this.socket) return;
+    const socket = this.socket;
+    this.heartbeatTimer = setTimeout(() => {
+      if (this.stopped || this.socket !== socket) return;
+      this.pendingPingId = this.nextPingId++;
+      this.heartbeatDeadline = setTimeout(() => {
+        if (this.stopped || this.socket !== socket) return;
+        this.lastTransportError = "heartbeat_timeout";
+        this.connectionState = "reconnecting";
+        socket.close();
+      }, this.resolved.requestTimeoutMs);
+      this.heartbeatDeadline.unref?.();
+      try { socket.send(JSON.stringify({ id: this.pendingPingId, type: "ping" })); }
+      catch { this.lastTransportError = "heartbeat_send_failed"; socket.close(); }
+    }, Math.max(1000, this.dependencies.heartbeatIntervalMs ?? 30000));
+    this.heartbeatTimer.unref?.();
   }
 
   private handleMessage(raw: unknown): void {
@@ -301,6 +379,11 @@ export class XiaomiHomeEventMonitor {
       this.socket?.send(JSON.stringify({ type: "auth", access_token: this.token }));
       return;
     }
+    if (message.type === "pong" && Number(message.id) === this.pendingPingId) {
+      this.lastTransportError = undefined;
+      this.scheduleHeartbeat();
+      return;
+    }
     if (message.type === "auth_invalid") {
       this.connectionState = "authorization_failed";
       this.socket?.close();
@@ -313,36 +396,50 @@ export class XiaomiHomeEventMonitor {
     }
     if (message.type === "result" && Number(message.id) === this.subscriptionId) {
       this.connectionState = message.success === true ? "subscribed" : "reconnecting";
+      if (message.success === true) this.scheduleHeartbeat();
       if (message.success !== true) this.socket?.close();
       return;
     }
     if (message.type !== "event" || Number(message.id) !== this.subscriptionId) return;
     this.connectionState = "subscribed";
-    const stateChange = message.event as HomeAssistantStateChanged;
+    this.lastEventAt = new Date().toISOString();
+    try { this.handleStateChange(message.event as HomeAssistantStateChanged); }
+    catch {
+      recordDataMutationAudit({ group: "xiaomi-home", event: "xiaomi_home_event_processing_failed", owner: "xiaomi-home-event-monitor",
+        action: "normalize-event", target: { type: "event", id: "home-assistant-state-change" },
+        dataSource: { kind: "runtime", id: "home-assistant-websocket" }, outcome: "failed" });
+    }
+  }
+
+  private handleStateChange(stateChange: HomeAssistantStateChanged): void {
     const motionClip = xiaomiMiotMotionClipFromStateChange(stateChange);
     const event = xiaomiHomeEventFromHomeAssistantStateChange(stateChange, {
       deliveryMode: this.deliveryMode,
       cameraMotionEntityIds: this.cameraMotionEntityIds,
       monitoredEntityIds: this.monitoredEntityIds
     });
-    if (event) void this.dependencies.deliverEvent(event, { agentRoleId: this.agentRoleId }).catch(() => undefined);
+    if (event) void this.deliver(event);
     if (motionClip && this.dependencies.captureMotionClip) {
-      void this.dependencies.captureMotionClip(motionClip).then(artifact => this.dependencies.deliverEvent({
+      void this.dependencies.captureMotionClip(motionClip).then(artifact => this.deliver({
         id: `${motionClip.sourceEventId}:ready`,
         kind: "camera_clip_ready",
         resourceId: motionClip.resourceId,
         resourceName: motionClip.resourceName,
         occurredAt: motionClip.occurredAt,
         summary: `${motionClip.resourceName} 的移动事件录像已保存`,
-        artifactId: artifact.artifactId
-      }, { agentRoleId: this.agentRoleId })).catch(() => this.dependencies.deliverEvent({
+        artifactId: artifact.artifactId,
+        sourceEventId: motionClip.sourceEventId,
+        cameraId: motionClip.cameraId
+      }), () => this.deliver({
         id: `${motionClip.sourceEventId}:capture-failed`,
         kind: "action_failed",
         resourceId: motionClip.resourceId,
         resourceName: motionClip.resourceName,
         occurredAt: new Date().toISOString(),
-        summary: `${motionClip.resourceName} 的移动事件录像抓取失败`
-      }, { agentRoleId: this.agentRoleId }).catch(() => undefined));
+        summary: `${motionClip.resourceName} 的移动事件录像抓取失败`,
+        sourceEventId: motionClip.sourceEventId,
+        cameraId: motionClip.cameraId
+      }));
     }
   }
 }

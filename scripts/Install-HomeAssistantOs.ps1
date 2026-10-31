@@ -81,76 +81,72 @@ function Test-InstallationDisk([string]$AttachedPath, [string]$ExpectedPath) {
     return $false
 }
 
-function Test-RecoveryTaskUser([string]$UserId, [string]$ExpectedSid) {
+
+function Set-HomeAssistantLoopback($Vm, [string]$Address) {
+    $proxyReceipt = Join-Path $Root 'loopback-proxy.json'
+    $proxyKey = 'HKLM:\SYSTEM\CurrentControlSet\Services\PortProxy\v4tov4\tcp'
+    $existing = (Get-ItemProperty -LiteralPath $proxyKey -ErrorAction SilentlyContinue).'127.0.0.1/8123'
+    $previous = if (Test-Path -LiteralPath $proxyReceipt) { Get-Content -LiteralPath $proxyReceipt -Raw | ConvertFrom-Json } else { $null }
+    if ($previous -and [string]$previous.vmId -cne [string]$vm.Id) { throw 'Loopback forwarding receipt belongs to another VM; it was not changed.' }
+    $previousPort = if ($previous -and $previous.port) { [int]$previous.port } else { 8123 }
+    if ($existing -and (-not $previous -or $existing -ne ($previous.address + '/' + $previousPort))) { throw 'Local port 8123 has another port-proxy owner; it was not changed.' }
+    if (-not $existing -and (Get-NetTCPConnection -State Listen -LocalPort 8123 -ErrorAction SilentlyContinue)) { throw 'Local port 8123 is already occupied; it was not changed.' }
+    # Only publish to local loopback. No firewall rule, LAN exposure or credential policy changes.
+    Write-Status 'installing' '正在配置本机访问地址。' $version 'configure'
+    Start-Service iphlpsvc
+    & netsh.exe interface portproxy add v4tov4 listenaddress=127.0.0.1 listenport=8123 connectaddress=$address connectport=8123 | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw 'Could not configure the loopback endpoint.' }
+    [IO.File]::WriteAllText($proxyReceipt, (@{ address = $address; port = 8123; vmId = [string]$vm.Id } | ConvertTo-Json), [Text.UTF8Encoding]::new($false))
+}
+
+function Test-HomeAssistantCore([string]$Address) {
     try {
-        $sid = if ($UserId -match '^S-1-') { [Security.Principal.SecurityIdentifier]::new($UserId) }
-        else { [Security.Principal.NTAccount]::new($UserId).Translate([Security.Principal.SecurityIdentifier]) }
-        return $sid.Value -ceq $ExpectedSid
-    } catch { return $false }
+        $response = Invoke-WebRequest -Uri ("http://" + $Address + ':8123/api/') -UseBasicParsing -TimeoutSec 3 -MaximumRedirection 0
+        return $response.StatusCode -eq 200 -and $response.Content -match 'API running'
+    } catch {
+        if (-not $_.Exception.Response -or [int]$_.Exception.Response.StatusCode -ne 401) { return $false }
+        try {
+            $manifest = Invoke-RestMethod -Uri ("http://" + $Address + ':8123/manifest.json') -TimeoutSec 3 -MaximumRedirection 0
+            return $manifest.name -eq 'Home Assistant'
+        } catch { return $false }
+    }
+}
+
+function Wait-HomeAssistantCore($Vm, [int]$TimeoutSeconds) {
+    $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+    do {
+        $addresses = (Get-VMNetworkAdapter -VM $Vm).IPAddresses | Where-Object { $_ -match '^\d+\.\d+\.\d+\.\d+$' -and $_ -notmatch '^(127\.|169\.254\.|0\.)' }
+        foreach ($candidate in $addresses) {
+            if (Test-HomeAssistantCore $candidate) { return $candidate }
+        }
+        Start-Sleep -Seconds 2
+    } while ([DateTime]::UtcNow -lt $deadline)
+    return $null
+}
+
+function Restore-HomeAssistantCore($Vm, [bool]$AllowRestart) {
+    $address = Wait-HomeAssistantCore $Vm 90
+    if ($address) { return $address }
+    if (-not $AllowRestart) { throw 'Home Assistant Core is not ready; the VM was preserved.' }
+    $job = Stop-VM -VM $Vm -AsJob
+    try {
+        $completed = Wait-Job -Job $job -Timeout 90
+        if (-not $completed -or $completed.State -ne 'Completed') { throw 'Graceful HA VM shutdown did not complete; forced shutdown is forbidden.' }
+        Receive-Job -Job $job -ErrorAction Stop | Out-Null
+        $current = Get-VM -Id $Vm.Id
+        if ($current.State -ne 'Off') { throw 'HA VM did not stop; it was not reset.' }
+        Start-VM -VM $current | Out-Null
+    } finally {
+        if ($job.State -in @('Completed', 'Failed', 'Stopped')) { Remove-Job -Job $job }
+    }
+    $address = Wait-HomeAssistantCore $Vm 180
+    if (-not $address) { throw 'Home Assistant Core did not become ready after one graceful VM restart.' }
+    return $address
 }
 
 $administrator = [Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-$recoveryOwner = 'RabiRoute Home Assistant OS recovery: ' + $Root
-$recoveryHash = [Security.Cryptography.SHA256]::Create()
-try { $recoveryId = ([BitConverter]::ToString($recoveryHash.ComputeHash([Text.Encoding]::UTF8.GetBytes($Root.ToLowerInvariant())))).Replace('-', '').Substring(0, 16) }
-finally { $recoveryHash.Dispose() }
-$recoveryTaskName = 'RabiRoute.HomeAssistantOs.Recovery.' + $recoveryId
-$recoveryDirectory = Join-Path $env:ProgramData ('RabiRouteHomeAssistantRecovery\' + $recoveryId)
-$recoveryScript = Join-Path $recoveryDirectory 'Recover-HomeAssistantOs.ps1'
-$recoveryLog = Join-Path $recoveryDirectory 'recovery-run.log'
-$powershellPath = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
-$recoveryCommand = "try { & '" + $recoveryScript.Replace("'", "''") + "' -Operation 'Recover' -Root '" + $Root.Replace("'", "''") + "' -AutoStart 'yes'; exit " + '$LASTEXITCODE' + " } catch { [IO.File]::WriteAllText('" + $recoveryLog.Replace("'", "''") + "', " + '$_.Exception.ToString()' + "); exit 1 }"
-$recoveryArguments = '-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -EncodedCommand ' + [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($recoveryCommand))
-$recoveryLauncher = Join-Path $recoveryDirectory 'Start-RecoveryHidden.vbs'
-$recoveryTaskExecutable = "$env:SystemRoot\System32\wscript.exe"
-$recoveryTaskArguments = '//B //NoLogo "' + $recoveryLauncher + '"'
-$recoveryLaunchCommand = '"' + $powershellPath + '" ' + $recoveryArguments
-# PowerShell's own WindowStyle takes effect after its console has been created.
-$recoveryLauncherContent = @(
-    'Option Explicit',
-    'Dim launcher, exitCode',
-    'Set launcher = CreateObject("WScript.Shell")',
-    ('exitCode = launcher.Run("' + $recoveryLaunchCommand.Replace('"', '""') + '", 0, True)'),
-    'WScript.Quit exitCode'
-) -join "`r`n"
 if (-not $administrator) {
-    if ($Operation -eq 'Recover') {
-        # Only reuse the exact helper authorized by a foreground Start/Install. No UAC in background.
-        $task = Get-ScheduledTask -TaskName $recoveryTaskName -ErrorAction SilentlyContinue
-        $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
-        if (-not $task -or $task.Description -cne $recoveryOwner -or $task.Actions.Count -ne 1 -or
-            $task.Actions[0].Execute -ine $recoveryTaskExecutable -or $task.Actions[0].Arguments -cne $recoveryTaskArguments -or
-            $task.Actions[0].WorkingDirectory -ine $recoveryDirectory -or $task.Principal.LogonType -ne 'Interactive' -or
-            -not (Test-RecoveryTaskUser $task.Principal.UserId $identity.User.Value) -or $task.Principal.RunLevel -ne 'Highest' -or
-            -not (Test-Path -LiteralPath $recoveryLauncher -PathType Leaf) -or [IO.File]::ReadAllText($recoveryLauncher) -cne $recoveryLauncherContent) {
-            throw 'Background recovery needs one foreground Start with Windows administrator approval.'
-        }
-        $before = Get-ScheduledTaskInfo -TaskName $recoveryTaskName
-        $alreadyRunning = $task.State -eq 'Running'
-        $observedRunning = $alreadyRunning
-        if ($task.State -ne 'Running') { Start-ScheduledTask -TaskName $recoveryTaskName }
-        $deadline = [DateTime]::UtcNow.AddMinutes(5)
-        do {
-            Start-Sleep -Seconds 1
-            $task = Get-ScheduledTask -TaskName $recoveryTaskName
-            $info = Get-ScheduledTaskInfo -TaskName $recoveryTaskName
-            if ($task.State -eq 'Running') { $observedRunning = $true }
-            if ($task.State -ne 'Running' -and ($observedRunning -or $info.LastRunTime -gt $before.LastRunTime)) {
-                if ($info.LastTaskResult -ne 0) { throw 'Background recovery failed; inspect deployment status.' }
-                exit 0
-            }
-        } while ([DateTime]::UtcNow -lt $deadline)
-        throw 'Background recovery did not complete in time; the VM was preserved.'
-    }
-    # Elevate only this fixed installer and its bounded arguments, never an HTTP-supplied command.
-    $command = "& '" + $PSCommandPath.Replace("'", "''") + "' -Operation '" + $Operation + "' -Root '" + $Root.Replace("'", "''") + "' -AutoStart '" + $AutoStart + "'"
-    $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command))
-    Write-Status 'installing' '正在等待 Windows 管理员确认。' '' 'permission'
-    try {
-        $child = Start-Process -FilePath "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -ArgumentList @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', $encoded) -Verb RunAs -WindowStyle Hidden -Wait -PassThru
-        if ($child.ExitCode -ne 0) { exit $child.ExitCode }
-    } catch { Write-Status 'error' '管理员授权未完成或安装器未能启动。请再次点击启动或安装并确认 Windows 提示。'; exit 1 }
-    exit
+    throw 'Administrator approval is required at Rabi Host startup. HA automatic recovery and port forwarding are unavailable in limited mode.'
 }
 
 $mutex = [Threading.Mutex]::new($false, 'Global\RabiRoute.HomeAssistantOs.Install')
@@ -230,7 +226,8 @@ try {
         Set-VMProcessor -VM $vm -Count 2
         Set-VMFirmware -VM $vm -EnableSecureBoot Off
     }
-    Set-VM -VM $vm -AutomaticStartAction $(if ($AutoStart -eq 'yes') { 'Start' } else { 'Nothing' }) -AutomaticStopAction ShutDown
+    Set-VM -VM $vm -AutomaticStartAction Nothing -AutomaticStopAction ShutDown
+    $wasRunning = $vm.State -eq 'Running'
     if ($vm.State -eq 'Off') { Start-VM -VM $vm }
     elseif ($vm.State -ne 'Running') { throw 'The VM is in a state that needs manual attention; it was not reset.' }
     Write-Status 'installing' '虚拟机已启动，正在等待网络地址。' $version 'network'
@@ -241,61 +238,11 @@ try {
         if (-not $address) { Start-Sleep -Seconds 2 }
     } while (-not $address -and [DateTime]::UtcNow -lt $deadline)
     if (-not $address) { throw 'VM network address is not ready. Use Start and check later; the VM was preserved.' }
-    $proxyReceipt = Join-Path $Root 'loopback-proxy.json'
-    $proxyKey = 'HKLM:\SYSTEM\CurrentControlSet\Services\PortProxy\v4tov4\tcp'
-    $existing = (Get-ItemProperty -LiteralPath $proxyKey -ErrorAction SilentlyContinue).'127.0.0.1/8123'
-    $previous = if (Test-Path -LiteralPath $proxyReceipt) { Get-Content -LiteralPath $proxyReceipt -Raw | ConvertFrom-Json } else { $null }
-    if ($previous -and [string]$previous.vmId -cne [string]$vm.Id) { throw 'Loopback forwarding receipt belongs to another VM; it was not changed.' }
-    $previousPort = if ($previous -and $previous.port) { [int]$previous.port } else { 8123 }
-    if ($existing -and (-not $previous -or $existing -ne ($previous.address + '/' + $previousPort))) { throw 'Local port 8123 has another port-proxy owner; it was not changed.' }
-    if (-not $existing -and (Get-NetTCPConnection -State Listen -LocalPort 8123 -ErrorAction SilentlyContinue)) { throw 'Local port 8123 is already occupied; it was not changed.' }
-    # Only publish to local loopback. No firewall rule, LAN exposure or credential policy changes.
-    Write-Status 'installing' '正在配置本机访问地址。' $version 'configure'
-    Start-Service iphlpsvc
-    # Current HA OS serves onboarding and Core on port 80; 8123 redirects there.
-    & netsh.exe interface portproxy add v4tov4 listenaddress=127.0.0.1 listenport=8123 connectaddress=$address connectport=80 | Out-Null
-    if ($LASTEXITCODE -ne 0) { throw 'Could not configure the loopback endpoint.' }
-    [IO.File]::WriteAllText($proxyReceipt, (@{ address = $address; port = 80; vmId = [string]$vm.Id } | ConvertTo-Json), [Text.UTF8Encoding]::new($false))
-    if ($Operation -ne 'Recover' -and $AutoStart -eq 'yes') {
-        # On-demand only, bound to this user and installation. Recovery preserves the same VM/disk checks.
-        $existingTask = Get-ScheduledTask -TaskName $recoveryTaskName -ErrorAction SilentlyContinue
-        if ($existingTask -and $existingTask.Description -cne $recoveryOwner) { throw 'Recovery task has another owner; it was not changed.' }
-        # A highest-privilege task must never execute from a user-writable application directory.
-        for ($parent = $recoveryDirectory; $parent -and $parent -ne $env:ProgramData; $parent = [IO.Path]::GetDirectoryName($parent)) {
-            if ((Test-Path -LiteralPath $parent) -and ((Get-Item -LiteralPath $parent -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Recovery helper path cannot contain reparse points.' }
-        }
-        foreach ($directory in @((Join-Path $env:ProgramData 'RabiRouteHomeAssistantRecovery'), $recoveryDirectory)) {
-            New-Item -ItemType Directory -Path $directory -Force | Out-Null
-            $acl = New-Object Security.AccessControl.DirectorySecurity
-            $acl.SetAccessRuleProtection($true, $false)
-            $acl.SetOwner([Security.Principal.SecurityIdentifier]::new('S-1-5-32-544'))
-            foreach ($sid in @('S-1-5-18', 'S-1-5-32-544', 'S-1-5-32-545')) {
-                $rights = if ($sid -eq 'S-1-5-32-545') { 'ReadAndExecute' } else { 'FullControl' }
-                $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new([Security.Principal.SecurityIdentifier]::new($sid), $rights, 'ContainerInherit,ObjectInherit', 'None', 'Allow'))
-            }
-            Set-Acl -LiteralPath $directory -AclObject $acl
-        }
-        if ((Test-Path -LiteralPath $recoveryScript) -and ((Get-Item -LiteralPath $recoveryScript -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Recovery helper cannot be a reparse point.' }
-        $temporaryHelper = Join-Path $recoveryDirectory ('helper-' + [guid]::NewGuid().ToString('N') + '.partial')
-        Copy-Item -LiteralPath $PSCommandPath -Destination $temporaryHelper
-        if (Test-Path -LiteralPath $recoveryScript) { [IO.File]::Replace($temporaryHelper, $recoveryScript, ($recoveryScript + '.previous')) }
-        else { [IO.File]::Move($temporaryHelper, $recoveryScript) }
-        $fileAcl = New-Object Security.AccessControl.FileSecurity
-        $fileAcl.SetAccessRuleProtection($false, $false)
-        $fileAcl.SetOwner([Security.Principal.SecurityIdentifier]::new('S-1-5-32-544'))
-        Set-Acl -LiteralPath $recoveryScript -AclObject $fileAcl
-        if ((Test-Path -LiteralPath $recoveryLauncher) -and ((Get-Item -LiteralPath $recoveryLauncher -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Recovery launcher cannot be a reparse point.' }
-        $temporaryLauncher = Join-Path $recoveryDirectory ('launcher-' + [guid]::NewGuid().ToString('N') + '.partial')
-        [IO.File]::WriteAllText($temporaryLauncher, $recoveryLauncherContent, [Text.Encoding]::Unicode)
-        if (Test-Path -LiteralPath $recoveryLauncher) { [IO.File]::Replace($temporaryLauncher, $recoveryLauncher, ($recoveryLauncher + '.previous')) }
-        else { [IO.File]::Move($temporaryLauncher, $recoveryLauncher) }
-        Set-Acl -LiteralPath $recoveryLauncher -AclObject $fileAcl
-        $action = New-ScheduledTaskAction -Execute $recoveryTaskExecutable -Argument $recoveryTaskArguments -WorkingDirectory $recoveryDirectory
-        $principal = New-ScheduledTaskPrincipal -UserId ([Security.Principal.WindowsIdentity]::GetCurrent().User.Value) -LogonType Interactive -RunLevel Highest
-        $settings = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 5)
-        Register-ScheduledTask -TaskName $recoveryTaskName -Action $action -Principal $principal -Settings $settings -Description $recoveryOwner -Force | Out-Null
-    }
-    Write-Status 'installed' 'Home Assistant OS 已安装并启动。首次初始化仍可能需要几分钟，随后点击重新检测。' $version
+    Set-HomeAssistantLoopback $vm $address
+    Write-Status 'installing' '正在检查 Home Assistant Core；异常时只尝试一次优雅重启虚拟机。' $version 'core-health'
+    $address = Restore-HomeAssistantCore $vm ($wasRunning -and $Operation -eq 'Recover')
+    Set-HomeAssistantLoopback $vm $address
+    Write-Status 'installed' 'Home Assistant OS 与 Core 已就绪。' $version
 } catch {
     Write-Status 'error' ('安装未完成：' + $_.Exception.Message)
     exit 1

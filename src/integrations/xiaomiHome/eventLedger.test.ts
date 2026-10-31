@@ -14,13 +14,15 @@ test("event ledger preserves ordered records and audits without exposing event t
   const ledger = new XiaomiHomeEventLedger(() => root, 2);
   const event = { id: "event-a", kind: "sensor_alert" as const, resourceId: "home:ha:sensor.test", resourceName: "private device", occurredAt: "2026-09-29T00:00:00Z", summary: "private event" };
   const first = ledger.append("example", event);
-  const second = ledger.append("example", { ...event, id: "event-b" });
+  const second = ledger.append("example", { ...event, id: "event-b", sourceEventId: event.id, cameraId: "camera-1", artifactId: "artifact-1" });
   await assert.rejects(ledger.append("example", { ...event, id: "event-c" }), /queue full/);
   await Promise.all([first, second]);
   const rows = (await fs.readFile(path.join(root, "xiaomi-home-events.jsonl"), "utf8")).trim().split("\n").map(row => JSON.parse(row));
   assert.deepEqual(rows.map(row => row.id), ["event-a", "event-b"]);
   assert.equal(rows[0].summary, event.summary);
   assert.equal(rows[0].time, Date.parse(event.occurredAt) / 1000);
+  assert.equal(rows[1].sourceEventId, rows[0].id);
+  assert.equal(rows[1].artifactId, "artifact-1");
   await assert.rejects(ledger.append("../invalid", event));
   await assert.rejects(ledger.append("example", { ...event, summary: "x".repeat(256 * 1024) }), /too large/);
   assert.equal(records.filter(record => record.outcome === "committed").length, 2);

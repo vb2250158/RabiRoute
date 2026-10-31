@@ -6,6 +6,8 @@
 
 # Windows 桌面启动与完整打包
 
+Windows 启动新增一次 UAC 注册的最高权限 Host 任务、拒绝后的降级模式与登录自启同步。权限边界、HA 托管子进程、旧任务迁移和安装后验收见[摄像头与 HA 恢复](home-camera-events.md)。这些源码改动不自动升级当前稳定 Host，也不自动触发 UAC。
+
 升级前必须检查实际运行数据兼容性，不能只通过包哈希和 Host 自检。存在电脑凭据存储时，Setup 与 Developer 激活在停止旧 Host、删除旧任务前运行候选中的 `check-installed-data-compatibility.mjs`；它委托凭据 owner 的只读检查，只输出格式、数量和哈希，不迁移、复制或回显凭据。缺少合同、格式不支持或检查期间数据变化都会拒绝激活，旧服务继续运行。
 
 完整包同时携带远端 Agent 构建生成的 `runtime/`、`dist/agent-hooks/` 和 `dist/native/`。其中原生 DLL 与签名发布清单、托盘脚本共同验证；源码存在或 Manager 健康不能替代这些资源的实际打包校验。

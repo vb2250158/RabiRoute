@@ -114,6 +114,12 @@ $startupDirectory = Join-Path $appData "Microsoft\Windows\Start Menu\Programs\St
 $startupPath = Join-Path $startupDirectory "RabiRoute.lnk"
 $legacyStartupPath = Join-Path $startupDirectory "RabiRoute Desktop.lnk"
 $hostPath = Join-Path $install "RabiRouteHost.exe"
+$currentSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+$taskHash = [Security.Cryptography.SHA256]::Create()
+try { $taskSuffix = ([BitConverter]::ToString($taskHash.ComputeHash([Text.Encoding]::UTF8.GetBytes($currentSid + "`n" + $install.TrimEnd('\').ToUpperInvariant())))).Replace('-', '').Substring(0, 16) }
+finally { $taskHash.Dispose() }
+$elevatedTaskName = 'RabiRoute.Host.Elevated.' + $taskSuffix
+$elevatedTask = Get-ScheduledTask -TaskName $elevatedTaskName -ErrorAction SilentlyContinue
 $allowedTargets = @(
     $hostPath,
     (Join-Path $install "RabiRoute-Desktop.exe"),
@@ -153,6 +159,7 @@ function Save-Snapshot([string]$Root) {
         schemaVersion=1
         installRoot=$install
         entries=$entries
+        elevatedTask=@{ name=$elevatedTaskName; existed=[bool]$elevatedTask; triggerEnabled=$(if ($elevatedTask) { [bool]$elevatedTask.Triggers[0].Enabled } else { $false }) }
     })
 }
 
@@ -191,12 +198,28 @@ function Restore-Snapshot([string]$Root) {
     }
 }
 
+function Invoke-ElevatedHostAutostart([string]$EnabledValue) {
+    # Windows PowerShell does not wait for a GUI-subsystem executable invoked with &.
+    $process = Start-Process -FilePath $hostPath -ArgumentList @('--command', 'elevated-autostart', '--enabled', $EnabledValue) -WorkingDirectory $install -WindowStyle Hidden -Wait -PassThru
+    if ($null -eq $process.ExitCode -or $process.ExitCode -ne 0) { throw "Elevated Host autostart command failed (ExitCode=$($process.ExitCode))." }
+}
+
+function Restore-ElevatedTaskSnapshot([string]$Root) {
+    $metadata = Get-Content -LiteralPath (Join-Path (Assert-SnapshotRoot $Root) 'snapshot.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+    if ($metadata.elevatedTask -and $metadata.elevatedTask.existed) {
+        if ($metadata.elevatedTask.name -cne $elevatedTaskName -or -not $elevatedTask) { throw 'Elevated Host task identity changed; refusing snapshot restore.' }
+        $enabledValue = if ($metadata.elevatedTask.triggerEnabled) { 'true' } else { 'false' }
+        Invoke-ElevatedHostAutostart $enabledValue
+    }
+}
+
 $startupOwnership = Get-ShortcutOwnership $startupPath $allowedTargets $install
 $legacyOwnership = Get-ShortcutOwnership $legacyStartupPath $allowedTargets $install
 if ($startupOwnership -eq "foreign") { throw "Startup\RabiRoute.lnk is not owned by this RabiRoute installation; refusing to overwrite it." }
 if ($legacyOwnership -eq "foreign") { throw "Startup\RabiRoute Desktop.lnk is not owned by this RabiRoute installation; refusing to delete it." }
 if ($RestoreSnapshot) {
     Restore-Snapshot $SnapshotRoot
+    Restore-ElevatedTaskSnapshot $SnapshotRoot
     [pscustomobject]@{ ok = $true; restored = $true; snapshotRoot = (Resolve-FullPath $SnapshotRoot) } | ConvertTo-Json -Compress
     exit 0
 }
@@ -247,7 +270,10 @@ try {
     Write-BytesDurably $settingsTemporary ([Text.UTF8Encoding]::new($false).GetBytes($json))
     Replace-File $settingsTemporary $settingsPath
 
-    if ($Enabled -eq "true") {
+    if ($elevatedTask) {
+        Invoke-ElevatedHostAutostart $Enabled
+        if ($startupOwnership -eq 'owned') { Remove-Item -LiteralPath $startupPath -Force }
+    } elseif ($Enabled -eq "true") {
         $shell = New-Object -ComObject WScript.Shell
         $shortcut = $shell.CreateShortcut($shortcutTemporary)
         $shortcut.TargetPath = $hostPath
@@ -266,13 +292,17 @@ try {
         throw "Desktop autostart setting verification failed."
     }
     $projected = Get-ShortcutOwnership $startupPath @($hostPath) $install
-    if (($Enabled -eq "true" -and $projected -ne "owned") -or ($Enabled -eq "false" -and $projected -ne "absent")) {
+    if (($Enabled -eq "true" -and -not $elevatedTask -and $projected -ne "owned") -or (($Enabled -eq "false" -or $elevatedTask) -and $projected -ne "absent")) {
         throw "Host-only startup shortcut verification failed."
     }
     if ((Get-ShortcutOwnership $legacyStartupPath $allowedTargets $install) -ne "absent") {
         throw "Legacy desktop startup shortcut remained after reconciliation."
     }
 } catch {
+    if ($elevatedTask) {
+        $previousEnabled = if ($elevatedTask.Triggers[0].Enabled) { 'true' } else { 'false' }
+        Invoke-ElevatedHostAutostart $previousEnabled
+    }
     Remove-Item -LiteralPath $settingsTemporary -Force -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $shortcutTemporary -Force -ErrorAction SilentlyContinue
     if ($settingsExisted) { [IO.File]::WriteAllBytes($settingsPath, $settingsBytes) } else { Remove-Item -LiteralPath $settingsPath -Force -ErrorAction SilentlyContinue }

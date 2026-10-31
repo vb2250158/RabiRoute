@@ -73,6 +73,8 @@
 
 ## 维护开发：架构、构建与诊断
 
+- [摄像头事件与 HA 恢复](home-camera-events.md)：显式人格绑定、录像落盘、管理员启动、有界恢复及迁移验收。
+
 - [长期维护与自修复](rabi-maintenance.md) — **维护工作流**。固定故障受理任务、原计划归属、恢复验证与定期代码质量维护。
 - [安装 Rabi 记忆与计划搜索](../skills/rabi-knowledge-search/README.md) — 项目维护者将技能安装到项目，在线时先查计划和记忆，离线时直接普通搜索。
 - [安装身份关系管理技能](../skills/manage-rabiroute-identity-relations/README.md) — 处理端按账号查“这是谁”、确认或纠正归属、处理并发冲突与共用账号，并在现场只提交候选观察。

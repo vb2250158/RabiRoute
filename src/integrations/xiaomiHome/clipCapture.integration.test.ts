@@ -42,15 +42,18 @@ test("captures a multi-segment HLS clip into a verified artifact with real ffmpe
       return new Response(fs.readFileSync(filePath), { status: 200 });
     };
     const artifacts = new XiaomiHomeArtifactStore(path.join(root, "runtime"));
+    const roleDirectory = path.join(root, "role");
+    fs.mkdirSync(roleDirectory);
     const worker = new XiaomiHomeClipCaptureWorker({
       cameraClipCaptureEnabled: true,
       cameraClipAllowedHosts: ["media.example"],
       ffmpegPath,
       ffprobePath
-    }, artifacts, fakeFetch);
+    }, artifacts, fakeFetch, () => roleDirectory);
     const occurredAt = "2026-08-29T10:00:00.000Z";
     const artifact = await worker.capture({
       sourceEventId: "clip-e2e-1",
+      cameraId: "camera-1",
       resourceId: "home:ha:camera.front_door",
       resourceName: "门口摄像头",
       occurredAt,
@@ -60,7 +63,9 @@ test("captures a multi-segment HLS clip into a verified artifact with real ffmpe
     assert.equal(artifact.mediaKind, "video/mp4");
     assert.ok(artifact.byteLength > 0);
     assert.ok((artifact.durationMs ?? 0) >= 1500);
-    assert.equal(fs.existsSync(artifacts.allocateMediaPath("clip-e2e-1", occurredAt, ".mp4")), true);
+    const expected = path.join(roleDirectory, "camera", "camera-1", "2026-08-29", "clip-e2e-1.mp4");
+    assert.equal(fs.existsSync(expected), true);
+    assert.equal(artifacts.contentDescriptor(artifact.artifactId)?.localPath, expected);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
