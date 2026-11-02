@@ -41,6 +41,33 @@ test("batch history references resolve exact IDs and current sidebar names inclu
   assert.equal(readCodexDesktopThreadsByIds(["task"], databasePath, indexPath)[0]?.title, "Renamed task");
 });
 
+test("Desktop resolves only an exact restored rollout sibling with matching session metadata", t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabi-restored-rollout-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const metadata = (id: string) => JSON.stringify({ type: "session_meta", payload: { id } }) + "\n";
+  const restored = path.join(root, "exact.jsonl");
+  const compressed = restored + ".zst";
+  const resolve = (rollout_path = compressed) => listCodexDesktopThreadsFromRowsForTest([
+    { id: "original-task", title: "Original", rollout_path, updated_at: 1 }
+  ])[0]?.rolloutPath;
+  fs.writeFileSync(restored, metadata("original-task"));
+  assert.equal(resolve(), restored);
+  fs.writeFileSync(restored, metadata("different-task"));
+  assert.equal(resolve(), compressed, "another task cannot replace the exact owner");
+  fs.writeFileSync(path.join(root, "similar.jsonl"), metadata("original-task"));
+  fs.unlinkSync(restored);
+  assert.equal(resolve(), compressed, "no directory/name search when both exact forms are absent");
+  fs.writeFileSync(restored, metadata("original-task"));
+  fs.writeFileSync(compressed, Buffer.from([0x28, 0xb5, 0x2f, 0xfd]));
+  assert.equal(resolve(), compressed, "an existing compressed original remains authoritative");
+  assert.equal(resolve(restored), restored, "an existing uncompressed path is unchanged");
+  fs.unlinkSync(compressed);
+  fs.writeFileSync(restored, JSON.stringify({ type: "session_meta", payload: { id: "original-task", padding: "x".repeat(65536) } }) + "\n");
+  assert.equal(resolve(), compressed, "metadata reads are bounded");
+  fs.writeFileSync(restored, "not-json\n" + metadata("original-task"));
+  assert.equal(resolve(), compressed, "only the first record can establish the rollout owner");
+});
+
 test("Desktop left sidebar is the only displayed task-name source", () => {
   const id = "019f0000-0000-7000-8000-000000000065";
   const result = applyCodexSidebarTaskNamesForTest([{

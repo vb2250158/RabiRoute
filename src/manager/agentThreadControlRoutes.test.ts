@@ -102,6 +102,32 @@ test('caller-selected execution options freeze before Route defaults and ignore 
   await owner.prepare(request()).execute({action:'send',cwd:'C:/chosen',...{callerExecutionOptions:{model:'forged'}}});assert.deepEqual(captured,{cwd:'C:/chosen'});
 });
 
+test('caller receipt lookup keeps application access separate from native task ownership',async()=>{
+  const principal={scope:'scope',sourceDeviceId:'local-pc',deviceOwner:false};
+  const endpoint={kind:'local' as const,managerInstanceId:'manager',agentId:'local:codex',provider:'codex',sessionId:'source',authorizationIncarnation:'original'};
+  let received:unknown='not-called';let reads=0;
+  const owner=createAgentThreadControlOwner(context({getTrustedDeviceSource:()=>principal,
+    agentRequests:{readCallerEndpointDelivery:async()=>{reads++;return undefined;},hasEndpointDeliveryReservation:()=>false,getEndpointDeliveryEvidenceStatus:()=>({available:true})} as unknown as AgentRequestStore,
+    readEndpointDeliveryOptions:(_remote,_guard,device)=>{received=device;return {store:context().agentRequests,managerInstanceId:'manager',resolveTarget:()=>assert.fail('caller lookup must not resolve a target'),resolveExecutionOptions:()=>assert.fail('caller lookup must not execute'),dispatch:async()=>assert.fail('caller lookup must not send'),reconcile:async()=>assert.fail('caller lookup must not reconcile'),resolveSource:async()=>({endpoint,threadId:'source',agentAdapter:'codex',agentType:'agent'}),authorize:()=>{}};}}));
+  const prepared=owner.prepare(request());
+  const result=await prepared.lookupCallerDelivery('original-caller',{sourceThreadId:'source',sourceAgentType:'agent',messageSource:{type:'agent',agentAdapter:'codex',sessionId:'source',sessionName:'Source'}});
+  assert.equal(received,undefined);assert.equal(result.status,404);assert.equal(result.body.errorCode,'DELIVERY_NOT_RESERVED');assert.equal(reads,1);
+});
+
+
+test('native caller receipt lookup preserves its frozen identity and original revocation fence',async()=>{
+  const principal={scope:'scope',sourceDeviceId:'native-device',deviceOwner:true};
+  const endpoint={kind:'device' as const,managerInstanceId:'manager',agentId:'native',provider:'deviceAgent',sessionId:'source',authorizationIncarnation:'original'};
+  let current=true;let received:unknown;
+  const req=request();markAuthenticatedConnectionRequest(req,()=>{if(!current)throw new Error('connection revoked');});
+  const owner=createAgentThreadControlOwner(context({getTrustedDeviceSource:()=>principal,
+    agentRequests:{readCallerEndpointDelivery:async()=>{current=false;return undefined;},hasEndpointDeliveryReservation:()=>false,getEndpointDeliveryEvidenceStatus:()=>({available:true})} as unknown as AgentRequestStore,
+    readEndpointDeliveryOptions:(_remote,_guard,device)=>{received=device;return {store:context().agentRequests,managerInstanceId:'manager',resolveTarget:()=>assert.fail('caller lookup must not resolve a target'),resolveExecutionOptions:()=>assert.fail('caller lookup must not execute'),dispatch:async()=>assert.fail('caller lookup must not send'),reconcile:async()=>assert.fail('caller lookup must not reconcile'),resolveSource:async()=>({endpoint,threadId:'source',agentAdapter:'deviceAgent',agentType:'agent'}),authorize:()=>{}};}}));
+  const prepared=owner.prepare(req);
+  await assert.rejects(()=>prepared.lookupCallerDelivery('native-caller',{sourceThreadId:'source',sourceAgentType:'agent',messageSource:{type:'agent',agentAdapter:'deviceAgent',sessionId:'source',sessionName:'Native'}}),/connection revoked/);
+  assert.deepEqual(received,principal);assert.ok(Object.isFrozen(received));
+});
+
 test('application connection never replaces a trusted desktop Agent source',async()=>{
   const original={nodeId:'pc',agentId:'agent',sessionId:'session',provider:'codex' as const,sessionName:'Source'};
   const req=request();registerLanAgentBodyGuard(req,()=>{});let invoked=false;

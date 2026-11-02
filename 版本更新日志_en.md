@@ -6,6 +6,11 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.4.5 - 2026-11-03
+
+- Separate application-connection authentication from native device ownership when reading original delivery receipts. Application requests still verify the actual Agent task owner; native devices retain their original identity and revocation fence.
+- Resolve a stale Codex compressed rollout path only to its exact restored JSONL sibling with matching first-record session metadata. Preserve original deliveries and task bindings without editing the Desktop database or replaying messages.
+
 ## 0.4.4 - 2026-11-02
 
 - Read role catalogs in bounded concurrent batches and open the first available role early. Persist the last role/source selection through desktop settings and retain errors for unavailable sources.

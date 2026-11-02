@@ -240,12 +240,40 @@ export function listCodexDesktopThreadsFromRowsForTest(
     const id = nonEmptyString(row.id);
     const title = nonEmptyString(row.title) || id;
     const cwd = nonEmptyString(row.cwd);
-    const rolloutPath = nonEmptyString(row.rollout_path);
+    let rolloutPath = nonEmptyString(row.rollout_path);
     const updatedAtMs = rowUpdatedAtMs(row);
     const archived = Number(row.archived ?? 0) !== 0;
     if (!id || (archived && !options.includeArchived)) continue;
     if (query && !title.toLocaleLowerCase().includes(query)) continue;
     if (!workspaceAllowed(cwd)) continue;
+
+    // Desktop can retain the compressed path after restoring the same rollout as JSONL.
+    // Resolve only that exact sibling, and prove its task identity before exposing it.
+    if (rolloutPath.endsWith(".jsonl.zst")) {
+      let originalMissing = false;
+      try { fs.statSync(rolloutPath); }
+      catch (error) { originalMissing = (error as NodeJS.ErrnoException).code === "ENOENT"; }
+      if (originalMissing) {
+        const restoredPath = rolloutPath.slice(0, -4);
+        let handle: number | undefined;
+        try {
+          handle = fs.openSync(restoredPath, "r");
+          if (fs.fstatSync(handle).isFile()) {
+            const header = Buffer.alloc(64 * 1024);
+            const length = fs.readSync(handle, header, 0, header.length, 0);
+            const end = header.indexOf(10, 0);
+            if (end >= 0 && end < length) {
+              const record = JSON.parse(header.subarray(0, end).toString("utf8").replace(/^\uFEFF/, ""));
+              if (record.type === "session_meta" && record.payload?.id === id) rolloutPath = restoredPath;
+            }
+          }
+        } catch {
+          // Preserve the recorded path and its normal diagnostic when identity is unproved.
+        } finally {
+          if (handle !== undefined) fs.closeSync(handle);
+        }
+      }
+    }
 
     const candidate = {
       id,

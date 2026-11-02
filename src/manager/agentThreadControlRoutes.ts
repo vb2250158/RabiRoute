@@ -213,7 +213,7 @@ export function createAgentThreadControlOwner(context: AgentThreadControlRoutesC
           // context may be stale; a query must never prove absence for another task.
           if (connectionSource) validateLanAgentRequestBody(request, { action: "send", sourceThreadId, messageSource });
           const effectiveRemote = connectionSource ? { ...connectionSource, sessionId: sourceThreadId! } : undefined;
-          const endpointOptions = context.readEndpointDeliveryOptions?.(effectiveRemote, fence, devicePrincipal);
+          const endpointOptions = context.readEndpointDeliveryOptions?.(effectiveRemote, fence, devicePrincipal?.deviceOwner ? devicePrincipal : undefined);
           if (!endpointOptions) return { status: 503, body: { code: -1, message: "The original delivery owner is unavailable." } };
           const endpoint = (await endpointOptions.resolveSource({ action: "read", ...source,
             sourceThreadId, sourceAgentType: source.sourceAgentType ?? "agent", messageSource })).endpoint;
