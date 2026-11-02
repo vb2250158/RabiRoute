@@ -6,6 +6,11 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.4.3 - 2026-11-02
+
+- Add a QQ community entry, group number and Rabi-branded invitation card to the English, Chinese and Japanese READMEs, with a full-size code link. Preserve and verify the original code pixels separately while following the existing silver-haired, rabbit-eared teal mascot design.
+
+
 ## 0.4.2 - 2026-11-02
 
 - Rework the English, Chinese and Japanese READMEs around connection, message-flow, prompt-onboarding and runtime architecture diagrams, retaining maturity and task-oriented documentation links. Explain Manager-prompt connector installation and distinguish legacy Remote Agent archives from the main application. Align the repository description and Topics with its actual purpose.

@@ -17,15 +17,16 @@
   <a href="https://github.com/vb2250158/RabiRoute/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/vb2250158/RabiRoute?style=flat&color=ff7eae"></a>
   <a href="./LICENSE"><img alt="许可证：MIT" src="https://img.shields.io/badge/license-MIT-f2c744"></a>
   <img alt="Node.js 22.13 或更高版本" src="https://img.shields.io/badge/Node.js-22.13%2B-3c873a">
-  <img alt="当前版本：0.4.2" src="https://img.shields.io/badge/version-0.4.2-3178c6">
+  <img alt="当前版本：0.4.3" src="https://img.shields.io/badge/version-0.4.3-3178c6">
   <img alt="状态：积极开发中" src="https://img.shields.io/badge/status-active%20development-19bfc1">
+  <a href="#交流与反馈"><img alt="QQ 交流群：1130935416" src="https://img.shields.io/badge/QQ-1130935416-12b9bf?logo=qq&amp;logoColor=white"></a>
 </p>
 
 RabiRoute 是一个**可自托管的 AI Agent 消息网关与策略路由器**。把聊天、桌面和智能设备接到你正在使用的 Agent，统一处理角色上下文、定时任务和执行结果。
 
 **RabiRoute 负责连接和路由；模型、工具与任务执行由你的 Agent 负责。**
 
-[连接总览](#连接总览) · [开始使用](#开始使用) · [运行架构](#运行架构) · [文档入口](#文档入口)
+[连接总览](#连接总览) · [开始使用](#开始使用) · [运行架构](#运行架构) · [文档入口](#文档入口) · [交流群](#交流与反馈)
 
 ## 连接总览
 
@@ -122,7 +123,7 @@ npm run status:linux -- --json
 
 ## 接入状态
 
-仓库当前版本为 `0.4.2`。
+仓库当前版本为 `0.4.3`。
 
 | 范围 | 当前状态 |
 | --- | --- |
@@ -171,6 +172,12 @@ flowchart TB
 | 接入语音、设备或另一台电脑 | [客户端](apps/README.md) · [RabiSpeech](docs/rabispeech-plugin.md) · [家庭设备](docs/user-guide/home-devices.md) · [电脑接入](docs/lan-rabi-agent-bootstrap.md) |
 | 接 API 或开发扩展 | [API 发现](docs/api-reference.md) · [架构](docs/architecture.md) · [功能地图](docs/project-function-map.md) |
 | 查找完整资料 | [文档索引](docs/README.md) · [配置](docs/configuration.md) |
+
+## 交流与反馈
+
+QQ 交流群 **Rabi的信件整理站**：**1130935416**。欢迎分享用法、反馈问题和交流方案。使用手机 QQ 扫码，或搜索群号加入；点击卡片可打开高清码图。
+
+[![RabiRoute 角色入群卡片 — QQ 群 1130935416](assets/rabiroute-community-qq.png)](assets/rabiroute-community-qq-qr.png)
 
 ## 许可证
 

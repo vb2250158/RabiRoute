@@ -17,15 +17,16 @@
   <a href="https://github.com/vb2250158/RabiRoute/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/vb2250158/RabiRoute?style=flat&color=ff7eae"></a>
   <a href="./LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-f2c744"></a>
   <img alt="Node.js 22.13 or newer" src="https://img.shields.io/badge/Node.js-22.13%2B-3c873a">
-  <img alt="Current version: 0.4.2" src="https://img.shields.io/badge/version-0.4.2-3178c6">
+  <img alt="Current version: 0.4.3" src="https://img.shields.io/badge/version-0.4.3-3178c6">
   <img alt="Status: active development" src="https://img.shields.io/badge/status-active%20development-19bfc1">
+  <a href="#コミュニティ"><img alt="QQ グループ：1130935416" src="https://img.shields.io/badge/QQ-1130935416-12b9bf?logo=qq&amp;logoColor=white"></a>
 </p>
 
 RabiRoute は、**セルフホストできる AI Agent 向けメッセージゲートウェイとポリシールーター**です。チャット、デスクトップ、スマートデバイスを普段の Agent につなぎ、役割ごとの会話、定期実行、処理結果を管理します。
 
 **接続と経路の選択は RabiRoute が担当し、モデル・ツール・タスクの実行は Agent が担当します。**
 
-[接続の全体像](#接続の全体像) · [はじめる](#はじめる) · [実行時の構成](#実行時の構成) · [ドキュメント](#ドキュメント)
+[接続の全体像](#接続の全体像) · [はじめる](#はじめる) · [実行時の構成](#実行時の構成) · [ドキュメント](#ドキュメント) · [コミュニティ](#コミュニティ)
 
 ## 接続の全体像
 
@@ -122,7 +123,7 @@ Host が返す実際の URL を開きます。Linux Host は実験段階で、Wi
 
 ## 対応状況
 
-リポジトリのバージョンは `0.4.2` です。
+リポジトリのバージョンは `0.4.3` です。
 
 | 機能 | 現在の範囲 |
 | --- | --- |
@@ -171,6 +172,12 @@ flowchart TB
 | 音声・デバイス・別の PC を接続 | [クライアント（英語）](apps/README_en.md) · [RabiSpeech（英語）](docs/rabispeech-plugin_en.md) · [家庭用機器（英語）](docs/user-guide/home-devices_en.md) · [PC 接続（英語）](docs/lan-rabi-agent-bootstrap_en.md) |
 | API や拡張機能を開発する | [API（英語）](docs/api-reference_en.md) · [構成（英語）](docs/architecture_en.md) · [機能マップ（英語）](docs/project-function-map_en.md) |
 | すべての資料を探す | [文書一覧（英語）](docs/README_en.md) · [設定（英語）](docs/configuration_en.md) |
+
+## コミュニティ
+
+QQ グループ **Rabi的信件整理站**、グループ番号 **1130935416**。設定例の共有や質問、RabiRoute の話題にどうぞ。スマートフォン版 QQ で読み取るか、グループ番号で検索してください。画像をクリックすると高解像度のコードを開けます。
+
+[![RabiRoute コミュニティカード — QQ グループ 1130935416](assets/rabiroute-community-qq.png)](assets/rabiroute-community-qq-qr.png)
 
 ## ライセンス
 
