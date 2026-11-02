@@ -17,50 +17,97 @@
   <a href="https://github.com/vb2250158/RabiRoute/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/vb2250158/RabiRoute?style=flat&color=ff7eae"></a>
   <a href="./LICENSE"><img alt="许可证：MIT" src="https://img.shields.io/badge/license-MIT-f2c744"></a>
   <img alt="Node.js 22.13 或更高版本" src="https://img.shields.io/badge/Node.js-22.13%2B-3c873a">
-  <img alt="当前版本：0.4.1" src="https://img.shields.io/badge/version-0.4.1-3178c6">
+  <img alt="当前版本：0.4.2" src="https://img.shields.io/badge/version-0.4.2-3178c6">
   <img alt="状态：积极开发中" src="https://img.shields.io/badge/status-active%20development-19bfc1">
 </p>
 
-RabiRoute 是一个与具体 Agent 解耦的**消息网关与策略路由器**。它连接通讯平台和智能设备，也支持桌面操作与定时触发，再按消息路线（Route）把内容交给指定的 Agent 或程序。
+RabiRoute 是一个**可自托管的 AI Agent 消息网关与策略路由器**。把聊天、桌面和智能设备接到你正在使用的 Agent，统一处理角色上下文、定时任务和执行结果。
 
-Agent 负责回答、写代码、调用工具和执行任务。RabiRoute 负责消息从哪里来、交给谁、附带哪些最近消息、能否向外回复，以及结果和回执保存在哪里。
+**RabiRoute 负责连接和路由；模型、工具与任务执行由你的 Agent 负责。**
 
-[连接入口](#连接入口) · [快速上手](#快速上手) · [当前能力](#当前能力) · [工作方式](#工作方式) · [文档](#文档入口)
+[连接总览](#连接总览) · [开始使用](#开始使用) · [运行架构](#运行架构) · [文档入口](#文档入口)
 
-## 连接入口
+## 连接总览
 
-| 类别 | 可以接入什么 | 可以用来做什么 |
-| --- | --- | --- |
-| **通讯** | QQ、个人微信、企业微信、飞书 | 把群聊、私聊交给指定 Agent，并将回复发回来源会话。 |
-| **智能设备** | RabiLink 手机与眼镜、智能手表 / 手环、米家 / Home Assistant | 让语音、健康与设备事件进入 Agent，按设备能力播报或执行动作。 |
-| **桌面与自动化** | 选词、截图、角色面板、定时任务、Webhook | 从电脑或外部程序发起任务，按消息或时间自动触发。 |
+```mermaid
+flowchart LR
+    C["聊天消息<br/>QQ · 微信 · 企业微信 · 飞书"] --> R["RabiRoute<br/>路由 + 角色上下文"]
+    T["定时任务<br/>Webhook"] --> R
+    I["桌面操作<br/>设备事件"] --> R
+    R --> A["你的 Agent<br/>Codex · DSH · WorkBuddy"]
+    A --> O["回复或执行动作<br/>发送规则 + 回执"]
+    classDef input fill:#e8f2ff,stroke:#4777b7,color:#162b48
+    classDef router fill:#dcf5ed,stroke:#218468,color:#113d31
+    classDef agent fill:#f0e7fa,stroke:#8254a8,color:#372044
+    classDef output fill:#fff0df,stroke:#bf7b30,color:#51351c
+    class C,T,I input
+    class R router
+    class A agent
+    class O output
+```
 
-各入口成熟度不同：QQ 主链已验证，个人微信为实验原型；企业微信、飞书和智能设备按账号、设备与网络分别验收。详见[当前能力](#当前能力)。
+QQ 和 Codex Desktop 的核心路径已经验证。其他接入和真机功能各有成熟度与配置要求，见[接入状态](#接入状态)。
 
-## 适合做什么
+| 你想做什么 | 从这里开始 |
+| --- | --- |
+| 从 QQ、微信、企业微信或飞书找 Agent 办事 | [选择消息来源](docs/current-capabilities.md#消息入口) |
+| 定时或通过 Webhook 触发任务 | [第一条路由](docs/user-guide/first-route.md) |
+| 为角色保留上下文、计划、记忆和技能 | [角色与规则](docs/user-guide/personas-and-rules.md) |
+| 发送选中文字、截图、语音或设备事件 | [桌面与客户端指南](apps/README.md) |
 
-- **让通讯和设备共用 Agent。** 不同入口可以按 Route 交给指定 Agent、项目和任务，分别保留来源与回复目标。
-- **让 Agent 定时工作。** 角色规则可以按间隔、时间窗口、每天指定时间或单次时间触发 Agent，也可以运行明确授权的本机脚本。
-- **操作远端电脑。** 一个主控管理记忆、Skill 和流程，在线客户端提供终端、文件互传、窗口查询和截图，关联 Agent 后端未启动时仍可使用。实验范围见[远端电脑客户端](docs/remote-computer-client.md)。
-- **保留连续上下文。** 每个角色拥有自己的消息记录、计划、记忆和技能引用；每条 Route 可以限制自动附带的最近消息。
-- **按角色配置计划工作流。** 状态 key、名称、说明、颜色、顺序、所在视图、审批行为和延迟归档都来自角色配置；Agent 调整状态目录不需要发布新代码。
-- **控制外部发送。** Agent 必须通过统一发送接口回复 QQ、RabiLink 等外部渠道；目标、引用消息、发送者身份和回执会被校验并记录。
-- **从 Windows 桌面投递文字和图片。** RabiRoute Desktop 支持滑词操作、系统截图、标注、复制、贴图和投递给已启用角色。
-- **连接语音和移动设备。** RabiSpeech、RabiLink 手机/眼镜、穿戴设备与远程 Relay 已有实现，但仍按实验集成验收。
+## 一条消息如何完成任务
 
-## 快速上手
+每条路由指定角色、Agent 任务、工作区和发送规则。下图以聊天触发为例；定时任务使用其配置的回复目标。对外回复是单独记录回执的动作。
 
-### Windows 安装包
+```mermaid
+sequenceDiagram
+    participant S as 聊天或设备
+    participant R as RabiRoute
+    participant A as 原有 Agent 任务
+    S->>R: 收到消息
+    R->>R: 匹配路由并附带最近消息
+    R->>A: 投递到指定任务和工作区
+    A-->>R: 返回结果或完成回调
+    R->>R: 检查发送规则并记录回执
+    R-->>S: 规则允许时回复来源
+```
 
-从 [GitHub Releases](https://github.com/vb2250158/RabiRoute/releases/latest) 下载 `RabiRoute-<版本>-windows-x64-setup.exe`。安装包包含 RabiRoute Host、Desktop 表现层、本机 Manager、RibiWebGUI、Node.js 和生产依赖。在 Windows 上，Host 是唯一的应用生命周期 owner：它创建一代应用，并让 Manager 与 Desktop 始终属于同一代。
+## 开始使用
 
-首次安装可使用 Setup，便携 ZIP 只解压到新的空目录；升级已有安装请使用 Setup。当前 Windows 包未签名，下载后先核对 `SHA256SUMS.txt`。安装校验、数据保留与失败恢复见[Windows 安装与升级](docs/windows-launcher-and-packaging.md)。
+| 你需要什么 | 入口 |
+| --- | --- |
+| **主程序**：Manager、WebGUI 和 Windows 桌面界面 | [Windows 安装与构建](docs/windows-launcher-and-packaging.md) · [源码启动](docs/getting-started.md) |
+| 让**另一台电脑**接入主程序 | [连接电脑](docs/lan-rabi-agent-bootstrap.md) |
+| **Linux 浏览器界面** | [Linux Host](docs/linux-host.md) |
 
-### 从源码运行
+**接入另一台电脑：**在主程序生成安装提示词，交给目标电脑上的 Agent 执行。提示词从当前 Manager 下载并验签安装轻量连接器，无需另找 GitHub 安装包。目标电脑需有 Node.js 22.13+、npm，并能访问 Manager 地址；各平台要求见[电脑接入指南](docs/lan-rabi-agent-bootstrap.md)。
 
-Windows 完整源码构建启动：双击根目录 `Start-RabiRoute-FromSource.bat`，构建并启动 Host、Manager、WebGUI 和托盘，沿用现有安装版的数据。需要已安装 RabiRoute、Node.js/npm 和 .NET 9 SDK；详见[源码启动说明](docs/getting-started.md)。
+```mermaid
+flowchart LR
+    P["主程序<br/>复制安装提示词"] --> T["目标电脑<br/>执行提示词"]
+    T --> V["校验签名<br/>安装连接器"]
+    V --> C["电脑上线<br/>核对版本与摘要"]
+```
 
-Linux 使用新增的最小 Host，需要 Node.js 22.13+、npm 与 util-linux `flock`：
+<details>
+<summary>历史 Windows 安装包</summary>
+
+[发行记录](https://github.com/vb2250158/RabiRoute/releases)保留旧主程序和独立 Remote Agent 安装包。`RabiRoute-Remote-Agent-…` 不会安装主程序。当前源码采用 Host 管理启动；使用上方源码与构建指南，不要仅凭 GitHub 的“Latest”判断主程序版本。
+
+</details>
+
+1. 启动主程序，从托盘或 Host 返回的地址打开 WebGUI。
+2. 选择角色，添加消息路由，绑定 **Agent、原有任务和工作区**。
+3. 使用**通道检查 → 投递测试**，确认原 Agent 聊天收到消息，并在投递记录中看到结果。
+
+投递测试会发送真实消息。前置条件和失败处理见[第一条路由指南](docs/user-guide/first-route.md)。
+
+<details>
+<summary>从源码运行</summary>
+
+**Windows：**已有 RabiRoute 安装、Node.js/npm 和 .NET 9 SDK 时，运行 `Start-RabiRoute-FromSource.bat`。它通过 Host 构建并切换安装版，保留原数据。首次安装或运行依赖变化时，按[完整包指南](docs/windows-launcher-and-packaging.md)操作。
+
+**Linux：**安装 Node.js 22.13+、npm 和 util-linux `flock`，再运行：
 
 ```bash
 git clone https://github.com/vb2250158/RabiRoute.git
@@ -69,193 +116,62 @@ bash Start-RabiRoute-FromSource.sh
 npm run status:linux -- --json
 ```
 
-脚本执行 `npm ci` 和完整构建后在后台启动 Host。Host 管理 Manager，并打印当前回环 WebGUI 地址；产品合同不包含固定本机端口。已有构建时用 `npm run start:linux`，退出用 `npm run stop:linux`。前台/只读模式、日志和生命周期边界见 [Linux Host](docs/linux-host.md)。这条 Linux 路径使用浏览器界面，不提供 Windows 托盘、系统截图和全局快捷键；真实 Relay、设备与长期运行仍待验收。
+打开 Host 返回的实际地址。Linux Host 仍为实验功能，不含 Windows 托盘、截图和全局快捷键；详见[启动与日志](docs/getting-started.md)。
 
-其他支持环境的纯后端开发见[源码启动说明](docs/getting-started.md)。普通首次启动且没有本机数据时，会生成本机设备身份，并从 `examples/data/` 创建脱敏示例配置。RabiLink 需要显式保存已核实的 Relay 地址和应用令牌后才完成配置。
+</details>
 
-### 跑通第一条 Route
+## 接入状态
 
-1. 新建或选择角色，打开“消息适配器”标签，点击“新增消息路由”，在“消息端”卡片添加“定时触发”。
-2. 选择 **Codex Agent**，绑定项目目录和一个已经存在的 Codex/ChatGPT Desktop 任务。
-3. 保存 Route，在同页的“通道检查 → 投递测试”发送一次测试消息。
-4. 确认投递成功，并且同一个 Desktop 任务出现了 RabiRoute 消息。
+仓库当前版本为 `0.4.2`。
 
-投递测试会发送真实消息；定时执行或手动触发规则需要另行配置定时规则。完整步骤和失败检查见[跑通第一条 Route](docs/user-guide/first-route.md)。
+| 范围 | 当前状态 |
+| --- | --- |
+| QQ / NapCat / OneBot 与 Codex Desktop | 核心投递路径已验证 |
+| 路由、定时任务、WebGUI、角色计划与记忆 | 核心路径已验证 |
+| Windows 桌面 | 核心已实现；系统交互仍需对应设备验收 |
+| 个人微信、企业微信、飞书 | 原型或实验功能；真实账号验收各有不同 |
+| DSH、WorkBuddy、Grok Bot 与远端电脑客户端 | 实验功能；需逐处理端、逐目标电脑验证 |
+| Linux Host、RabiSpeech、手机、眼镜、穿戴设备与 Home Assistant | 实验功能；模型、网络和硬件分别验收 |
 
-## 当前能力
+[完整能力矩阵](docs/current-capabilities.md) · [版本变化与迁移](版本更新日志.md)
 
-仓库当前版本为 `0.4.1`。下面只列代码、配置入口和测试能够支持的范围；需要账号、外部服务或真机的功能仍要在对应环境验收。
+## 运行架构
 
-### 通讯
-
-| 平台 | 当前状态 | 用户可以完成什么 |
-| --- | --- | --- |
-| QQ（NapCat / OneBot） | 已验证 | 每条 Route 绑定一个 NapCat；在卡片内完成快速、密码、扫码登录与安全确认，接收群聊和私聊、保存媒体证据，并通过 OneBot HTTP 回复。 |
-| 个人微信（Weixin） | 实验原型 | 通过 iLink 接收文字，向来源会话回复文字或受控本地文件；收到的媒体只记录。长期在线与真实账号稳定性仍待验收。 |
-| 企业微信（WeCom） | 实验支持 | 通过智能机器人长连接接收群消息并回发；需要真实机器人凭据联调。 |
-| 飞书（Feishu） | 本地实现已验收，待真实凭证联调 | 通过应用事件回调接收消息、按聊天隔离上下文并回复文字；需要配置应用凭据和事件订阅。 |
-
-### 智能设备
-
-| 设备与服务 | 当前状态 | 用户可以完成什么 |
-| --- | --- | --- |
-| 手机与眼镜（RabiLink） | 实验支持 | 接入语音并接收回复；Relay 连接、实际扬声器播放与网络环境分别验收。 |
-| 智能手表 / 手环 | 实验支持；小米真机部分链路已验证 | 汇集心率、睡眠等健康观测，查询时间线，按阈值与冷却规则触发 Agent。具体指标取决于采集来源。 |
-| 家庭设备（米家 / Home Assistant） | 实验支持 | 查询已接入实体及其当前按钮、设置与设备动作，调用后核对回执。可从[设备列表](docs/user-guide/home-devices.md)查看并测试。 |
-| 语音服务（RabiSpeech） | 实验支持 | 为语音交互提供转写（ASR）与语音合成（TTS），按模型和设备环境分别验收。 |
-
-已连接 Home Assistant 时，Agent 可以查询全部已接入设备实体，并调用其当前提供的按钮、设置和小米设备动作；复用一次连接鉴权，动作保留回执。接入开发者参阅[家庭设备接口](docs/home-device-agent-api.md)。
-
-米家 Setup 另提供实验性云地图文件扫码连接，见[地图连接说明](docs/vacuum-cloud-map.md)。支持 version-2 地图解码；实时定位与坐标导航须分别验收。
-
-### Agent、桌面与任务管理
-
-角色配置、计划与记忆独立选择角色，未绑定路由的角色也能使用；路由配置负责消息端、Agent 和显式角色引用。归档角色在设置中恢复，彻底删除前检查引用与运行中任务。见[以角色为主的配置架构](docs/role-centric-architecture.md)。
-
-| 范围 | 当前状态 | 用户可以完成什么 |
-| --- | --- | --- |
-| 路由主链 | 已验证 | 接收消息、保存事件、匹配规则、生成 Agent 上下文、投递处理端并记录回传。 |
-| 定时任务与角色自动化 | 已验证 | 按消息或时间触发 Agent；在单独授权后运行角色目录中的本机脚本。 |
-| Codex Desktop | 已验证 | 完整任务 ID 选择既有任务，每次投递单独指定项目目录；只有目标任务写入 `deliveryId` 回执后才报告成功。任务删除或归档后可受控换新。 |
-| RibiWebGUI | 已验证 | 管理 Route、角色、消息端、Agent、计划、记忆、日志、诊断、主题和桌面设置。 |
-| 计划、记忆与消息处理 | 已验证 | 分页查看计划和记忆，提交计划反馈，分配消息处理任务，并保存处理状态和回执。 |
-| 角色计划工作流 | 已验证 | Manager、WebGUI 与 Desktop 共同使用角色配置中的状态 key 和显示资料；Agent 可通过受保护接口新增、修改、替换或退役状态，并保留计划历史。 |
-| Windows 桌面 | 主链已实现 | Host 管理包含 Manager 和托盘/任务窗口表现层的同一代应用；提供滑词、截图和截图标注。部分系统交互仍需 Windows 实机复测。 |
-| Linux Host | 实验支持 | 源码启动最小 Host：构建后管理 Manager、打印当前回环 WebGUI 地址，支持状态查询、打开页面、重启与退出。不含 Windows/Qt 托盘、截图和全局快捷键；真实 Relay 与长期运行仍待验收。 |
-| DSH | 实验支持 | 作为主角色或辅助处理端使用明确的 API、项目目录和会话绑定。 |
-| Grok Bot | 实验支持 | 通过原生 HTTP 投递到已有云端会话，在 Route 设置中选择真实会话；来源、稳定投递 ID 与 QQ/Codex 回传遵循 [Grok Bot 接入合同](docs/grok-bot-agent-adapter.md)，真实往返单独验收。 |
-| WorkBuddy | 实验支持 | 把消息投进用户已有的 WorkBuddy 任务，由该任务用它自带的模型、工具和审批执行。投递需要一次性录入本地网关凭据，缺失时失败关闭。任务发现、绑定和生命周期 Hook 已实现；桌面配对入口尚未提供，冷启动未验证。 |
-| 媒体工作台 | 实验支持 | 保存媒体画布项目，组合图片、视频、音频和文本，按需接入本机 H3；模型安装与 GPU 推理需单独验收。 |
-| 局域网 Rabi Agent | 实验支持 | 通过接入提示词连接其他电脑的 Codex/DSH 既有任务；连接鉴权后使用公开 API 与技能，具体禁用项以用户配置为准。真实双机与旧节点迁移仍需验收。 |
-
-完整状态、限制和事实源见[当前能力与成熟度](docs/current-capabilities.md)。
-
-## 近期变化
-
-### 0.3.25：手机通话与家庭设备接口
-
-手机 Agent 通话复用录音、转写和播放链，固定电脑与路线并隔离迟到回复。家庭设备共用查询与原动作回执，已鉴权连接不再重复按功能授权。使用和限制见[手机通话](docs/mobile-voice-call.md)、[家庭设备](docs/home-device-agent-api.md)及[连接与接口](docs/connection-access.md)；真机和物理动作仍需独立验收。
-
-### 0.3.24：复制提示词接入电脑
-
-在公网 RabiLink 控制台选中应用，复制接入提示词给目标电脑的私密 Agent 任务。三十分钟有效的一次性接入码绑定当前应用，Agent 自动核对下载内容、保留独立身份、保存私有配置，并通过原 Host 连接。电脑长期凭据由本机生成和保管。安装、恢复与验证见[电脑接入提示词](docs/rabilink-pc-pairing.md)。
-
-### 0.3.23：一次连接，默认使用服务
-
-同一 RabiLink 应用已鉴权设备默认可以使用 PC 提供的服务，包括语音、角色、资源、管理和知识读写。配置页移除重复权限开关、MCP 密钥和白名单；设备身份、应用隔离和服务就绪仍分别核对。见[通用连接](docs/rabilink-peer-tunnel.md)及[知识服务](docs/rabilink-knowledge-runtime.md)。
-
-### 0.3.21：区分电脑实例身份
-
-RabiLink 配置新增 **重置实例 ID**，用于修复两台电脑复制配置后共用身份。Host 备份并重置实例 ID 和连接密钥，保留已保存数据，再重启应用；本机归属标记阻止后续外机复制身份继续运行。旧配置、恢复方法及连接边界见[实例身份说明](docs/user-guide/instance-identity.md)。
-
-### 0.3.19 实验实现：本机路由引用远端角色
-
-本机 Route 可以选择另一台 PC 的角色，读取正文、消息规则和上下文额度，同时沿用本机消息端和处理 Agent。0.3.19 新增这项实验实现：两端复用同一 RabiLink 应用认证，自动交换并固定设备公钥，再沿 LAN、P2P 或 Relay 读取受限角色服务，无需逐服务手工授权。0.3.22 起同一应用已鉴权连接默认允许实际提供的服务，固定公钥继续核对；来源 PC 需升级。操作、失败行为和待完成的真实双 PC 验收见[远端角色引用](docs/remote-persona-reference.md)。
-
-### 0.3.5：远端 Agent 授权、审批专注视图与移动记录
-
-- 远端 Agent 使用独立节点凭据和已登记 Agent 身份，可读取受控 API、公开技能及上传文件；旧节点须按[迁移说明](docs/lan-rabi-agent-bootstrap.md)重新接入。
-- 计划新增待处理专注视图，保存审批后显示“已审批”，可回填编辑；确认投递后才转入分析。
-- Android 0.3.38-dev 增加统一时间线回看、声音事件拆分、浅深色皮肤和多电脑连接；多电脑真机及全天长稳验收仍待完成。
-
-### 0.3.4：WorkBuddy 投递与 Hook、冷态角色完成回传
-
-- WorkBuddy Agent 端可以投递了：消息走绑定任务自己的会话进程本地网关，`source.conversation.id` 固定为完整会话 ID，因此以正式用户回合进入该任务对话区，同 ID 复投不新建任务。网关凭据从本地忽略文件读取，缺失时投递失败关闭。WorkBuddy 同时支持和 Codex、DSH 对等的生命周期 Hook。
-- 能力声明收窄到每个适配器真正验证过的范围：WorkBuddy 只声明消息处理与 Hook，不声明计划协助会话、记忆整理与回执恢复。
-- 没写过计划的角色现在是合法冷态，不再中断全部角色的完成回传。详见[版本更新](版本更新日志.md)。
-
-历史版本与迁移说明见[版本更新日志](版本更新日志.md)。
-
-## 工作方式
+Windows 安装包由**一个 Host** 管理 Manager 和桌面界面。Manager 拥有路由与业务状态，插件提供适配器和服务；外部 Agent 任务及可选语音、设备服务保留各自的生命周期。
 
 ```mermaid
-flowchart LR
-    A[通讯：QQ · 微信 · 飞书] --> R[RabiRoute：消息路线与上下文]
-    B[智能设备：手机 · 眼镜 · 穿戴 · 家居] --> R
-    C[桌面与自动化：选词 · 截图 · 定时 · Webhook] --> R
-    R --> D[指定的 Agent 或程序]
-    D --> E[按发送规则回复或执行动作]
-    E --> F[来源会话或设备 · 投递回执]
+flowchart TB
+    H["Windows Host"] --> M["Manager"]
+    H --> W["桌面界面 / 托盘"]
+    U["浏览器 / WebGUI"] <--> M
+    W <--> M
+    M --> K["插件内核"]
+    K --> P["消息适配器<br/>路由 · 计划 · 记忆"]
+    P <--> D[("本机私有数据")]
+    P <--> A["外部 Agent 任务"]
+    P <--> S["可选语音<br/>与设备服务"]
 ```
 
-每条 Route 分开保存消息入口、角色、处理端、项目目录和发送规则。消息端不负责拼接 Agent 指令，Agent 也不能绕过 RabiRoute 直接取得渠道凭据或修改路由状态。
+<details>
+<summary>数据、执行与隐私边界</summary>
 
-Manager 通过一个插件内核装载 默认 Profile 中的 31 个内置插件实例。内置包和树外包统一使用 schema/profile v2、SDK、依赖图、权限检查、generation 切换、执行模式边界和 Web 模块生命周期。当前实现说明见[插件包与热替换](docs/plugin-bundles.md)。
+- 角色正文与配置位于 `data/roles/<RoleId>/`，路由配置位于 `data/route/`；可复制的公开示例见 [examples/data](examples/data/)。
+- 模型、工具、沙箱和审批由目标 Agent 负责；Codex 消息交给选定的 Desktop 任务 owner。
+- 平台凭据、录音、私有消息和运行数据按私有运行资料管理，不进入公开仓库。
+- 手机、眼镜、穿戴设备和跨电脑流程需在实际环境验收；机制见[架构说明](docs/architecture.md)与[插件包](docs/plugin-bundles.md)。
 
-## Agent 与安全边界
-
-- Codex 的真实消息只通过 Desktop IPC 交给选定的 Codex/ChatGPT Desktop 任务 owner。
-- 目标 Desktop 任务拥有自己的模型、工具、沙箱和审批；RabiRoute 不替它执行推理。
-- 项目锁定的 `codex app-server` 只用于创建或命名空任务，不执行 Route 消息。
-- Desktop 不可用、任务无法加载、执行目录未通过校验或 owner 不明确时，投递失败并保留错误记录。
-- 平台账号、登录状态和凭据仍由对应平台拥有。
-- 本机 `data/`、日志、录音、转录文本、token、Cookie 和私有路径不进入公开仓库。
-
-RabiRoute 当前没有通用 Action Queue、统一审批中心或无副作用的 Route 预览界面。手机、眼镜、穿戴设备和多电脑 Agent 的生产闭环仍按实验功能管理。
-
-## 配置和数据
-
-```text
-data/route/<configName>/adapterConfig.json
-data/roles/<RoleId>/persona.md
-data/roles/<RoleId>/personaConfig.json
-```
-
-- `adapterConfig.json` 保存消息入口、处理端、项目目录、Route 规则和角色绑定。
-- `persona.md` 保存角色说明和面向处理端的工作要求。
-- `personaConfig.json` 保存角色自动化、头像、语音关键词和最近消息额度。
-- `data/roles/<RoleId>/conversation/` 保存该角色的消息记录。
-- [`examples/data/`](examples/data/) 保存可公开复制的脱敏样板。
-
-可独立构建的客户端位于 [`apps/`](apps/)，共享 SDK 位于 [`packages/`](packages/)，可复用 Agent 指南位于 [`skills/`](skills/)。
+</details>
 
 ## 文档入口
 
-### 第一次使用
-
-- [跑通第一条 Route](docs/user-guide/first-route.md)：完成一次真实 Codex Desktop 投递。
-- [RibiWebGUI 使用手册](docs/user-guide/README.md)：查看界面、角色、Route、Agent 和排障步骤。
-- [界面与运行状态](docs/user-guide/interface-and-status.md)：判断 Manager、Route 和消息端是否正常。
-- [运行、日志与排障](docs/user-guide/operations-and-troubleshooting.md)：按现象定位失败位置。
-
-### 安装和接入
-
-- [配置说明](docs/configuration.md)：查看本机配置、目录和主要参数。
-- [局域网 Rabi Agent](docs/lan-rabi-agent-bootstrap.md)：连接其他电脑上的 Codex/DSH 任务，核对连接状态和可用能力。
-- [远端角色引用](docs/remote-persona-reference.md)：0.3.19 实验实现，在本机 Route 使用另一台 PC 的角色。
-- [RabiSpeech](docs/rabispeech-plugin.md)：配置本机或远端 TTS / ASR。
-- [客户端应用](apps/README.md)：构建 Android、Rokid AIUI、浏览器桥和 Rabi Agent。
-
-### 通讯与智能设备
-
-- [通讯平台状态](docs/current-capabilities.md#消息入口)：比较 QQ、微信、企业微信和飞书的可用范围。
-- [查看设备并测试动作](docs/user-guide/home-devices.md)：查看家庭设备、状态和当前可用动作。
-- [手机语音通话](docs/mobile-voice-call.md)：从手机发起 Agent 通话，确认录音、转写与播放状态。
-- [米家云地图](docs/vacuum-cloud-map.md)：连接实验性地图文件，核对定位与导航边界。
-
-### 开发和维护
-
-- [接口参考与自动发现](docs/api-reference.md)：在文档页搜索当前运行接口，查看请求与响应并下载 OpenAPI。
-- [当前能力与成熟度](docs/current-capabilities.md)：核对功能是否已验证。
-- [文档索引](docs/README.md)：浏览现行、实验、设计和历史资料。
-- [架构说明](docs/architecture.md)：理解产品边界和数据流。
-- [项目功能手册](docs/project-function-map.md)：查找功能拥有者、API 和代码入口。
-- [家庭设备 Agent 接口](docs/home-device-agent-api.md)：实现设备发现、音箱播报绑定与动作回执查询。
-- [版本更新日志](版本更新日志.md)：查看版本变化和迁移要求。
-
-## 开发
-
-```bash
-npm run manager          # 直接运行 TypeScript Manager
-npm run webgui:dev       # 运行 Vue/Vuetify 前端
-npm run test:webgui      # 运行前端测试
-npm run test             # 运行后端与契约测试
-npm run build            # 构建 Manager、独立插件包与 WebGUI
-npm run check:config     # 检查公开和运行期 JSON 文本
-```
-
-提交公开内容前，删除真实账号标识、聊天内容、token、Cookie、本机用户名、私有路径和运行期 `data/`。
+| 我想…… | 查看 |
+| --- | --- |
+| 完成第一项任务 | [第一条路由](docs/user-guide/first-route.md) · [用户手册](docs/user-guide/README.md) |
+| 查状态或排查故障 | [界面与状态](docs/user-guide/interface-and-status.md) · [运行与排障](docs/user-guide/operations-and-troubleshooting.md) |
+| 接入语音、设备或另一台电脑 | [客户端](apps/README.md) · [RabiSpeech](docs/rabispeech-plugin.md) · [家庭设备](docs/user-guide/home-devices.md) · [电脑接入](docs/lan-rabi-agent-bootstrap.md) |
+| 接 API 或开发扩展 | [API 发现](docs/api-reference.md) · [架构](docs/architecture.md) · [功能地图](docs/project-function-map.md) |
+| 查找完整资料 | [文档索引](docs/README.md) · [配置](docs/configuration.md) |
 
 ## 许可证
 
-RabiRoute 使用 [MIT 许可证](LICENSE)开源。
+采用 [MIT 许可证](LICENSE)。

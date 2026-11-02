@@ -6,6 +6,11 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.4.2 - 2026-11-02
+
+- Rework the English, Chinese and Japanese READMEs around connection, message-flow, prompt-onboarding and runtime architecture diagrams, retaining maturity and task-oriented documentation links. Explain Manager-prompt connector installation and distinguish legacy Remote Agent archives from the main application. Align the repository description and Topics with its actual purpose.
+
+
 ## 0.4.1 - 2026-11-02
 
 - Deduplicate the local PC in the role source picker by its RabiLink device ID while retaining other PCs with the same name. Saved self references read through the local role API without rewriting connections or persona bindings.
