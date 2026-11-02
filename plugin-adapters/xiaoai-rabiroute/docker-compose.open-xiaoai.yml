@@ -3,9 +3,9 @@ services:
     image: idootop/open-xiaoai-migpt:latest
     container_name: open-xiaoai-rabiroute
     ports:
-      - "4399:4399"
+      - "4399"
     environment:
-      RABIROUTE_XIAOAI_BRIDGE_URL: "http://host.docker.internal:8799"
+      RABIROUTE_XIAOAI_BRIDGE_URL: "${RABIROUTE_XIAOAI_BRIDGE_URL:?Set the running bridge URL reachable from the container}"
       XIAOAI_DEVICE_ID: "xiaoai_lx06"
       XIAOAI_DEVICE_NAME: "小爱音箱 Pro"
       XIAOAI_AREA: "home"

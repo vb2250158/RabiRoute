@@ -234,12 +234,16 @@ test("role subfolder transactions validate paths, reject read-only writes and di
     assert.throws(() => executeRouteCatalogTransaction({ ...input, operation: {
       kind: "ensure_role_folder", roleId: "example", subfolder: "other"
     } }), RouteCatalogIdempotencyConflictError);
+    executeRouteCatalogTransaction(transaction(rootDir, "camera-folder", "attempt", {
+      kind: "ensure_role_folder", roleId: "example", subfolder: "camera"
+    }));
+    assert.equal(fs.statSync(path.join(input.rolesRoot, "example", "camera")).isDirectory(), true);
     for (const subfolder of ["", "..", "../outside", "nested/child", "C:\\outside", "CON"]) {
       assert.throws(() => executeRouteCatalogTransaction(transaction(rootDir, `invalid-${subfolder}`, "attempt", {
         kind: "ensure_role_folder", roleId: "example", subfolder
       })), /Invalid persona subfolder/);
     }
-    assert.deepEqual(fs.readdirSync(path.dirname(target)), ["xiaomi-media"]);
+    assert.deepEqual(fs.readdirSync(path.dirname(target)).sort(), ["camera", "xiaomi-media"]);
   } finally { fs.rmSync(rootDir, { recursive: true, force: true }); }
 });
 

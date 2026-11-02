@@ -20,7 +20,7 @@ from urllib.error import HTTPError, URLError
 
 from PySide6.QtCore import QObject, QTimer, Signal
 
-from .desktop_capture import capture_desktop_pixels
+from .desktop_capture import capture_desktop_region
 from .desktop_pet_motion import foreground_window
 from .desktop_pet_media import foreground_media_evidence
 from .qt_async import start_qt_task
@@ -53,17 +53,10 @@ def foreground_observation(sequence: int) -> dict | None:
                 process_name = os.path.basename(name.value)[:120]
         finally:
             kernel32.CloseHandle(handle)
-    # The recording/F1 acquisition owner provides native all-monitor pixels. Crop
-    # to foreground physical bounds, preserving negative-origin monitor layouts.
-    pixels = capture_desktop_pixels()
-    user32.GetSystemMetrics.argtypes = [ctypes.c_int]
-    origin_x, origin_y = user32.GetSystemMetrics(76), user32.GetSystemMetrics(77)
-    left, top, right, bottom = window.bounds
-    bounds = (max(0, left-origin_x), max(0, top-origin_y),
-              min(pixels.width, right-origin_x), min(pixels.height, bottom-origin_y))
-    if bounds[2] <= bounds[0] or bounds[3] <= bounds[1]:
+    pixels = capture_desktop_region(window.bounds)
+    if pixels is None:
         return None
-    pixels = pixels.crop(bounds).convert("RGB")
+    pixels = pixels.convert("RGB")
     pixels.thumbnail((960, 960))
     media = foreground_media_evidence(title.value)
     current = foreground_window()

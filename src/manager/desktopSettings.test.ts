@@ -41,6 +41,7 @@ test("desktop settings keep the safe default while preserving an explicit F3 bin
     clipboardShortcut: " F3 ",
     autoCopy: false
   }, autostart: true }), {
+    lastRoleSelection: null,
     screenshot: { enabled: true, shortcut: "Ctrl+Alt+S", clipboardShortcut: "F3", autoCopy: false },
     autostart: true,
     theme: "system",
@@ -94,6 +95,7 @@ test("desktop settings store writes and reads the single host settings file", ()
     assert.equal(store.read().screenshot.enabled, false);
     store.write({ screenshot: { enabled: true, shortcut: "Ctrl+Shift+S", clipboardShortcut: "F3", autoCopy: false }, autostart: true });
     assert.deepEqual(store.read(), {
+      lastRoleSelection: null,
       screenshot: { enabled: true, shortcut: "Ctrl+Shift+S", clipboardShortcut: "F3", autoCopy: false },
       autostart: true,
       theme: "system",
@@ -168,4 +170,19 @@ test("autostart configuration remains tri-state for missing or corrupt settings"
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
+});
+
+
+test("last role selection is persisted by the desktop settings owner", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "role-selection-"));
+  try {
+    const file = path.join(root, "settings.json");
+    const store = new DesktopSettingsStore(file);
+    store.write({ lastRoleSelection: { roleId: "夜雨", sourceDeviceId: "remote-pc" }, theme: "dark" });
+    const restored = new DesktopSettingsStore(file).read();
+    assert.deepEqual(restored.lastRoleSelection, { roleId: "夜雨", sourceDeviceId: "remote-pc" });
+    assert.equal(restored.theme, "dark");
+    assert.equal(normalizeDesktopSettings({ lastRoleSelection: { roleId: "../bad", sourceDeviceId: "" } }).lastRoleSelection, null);
+    assert.equal(normalizeDesktopSettings({ lastRoleSelection: { roleId: "Valid", sourceDeviceId: "bad\u0000id" } }).lastRoleSelection, null);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });

@@ -6,7 +6,9 @@ from .timeout_settings import get_timeout_seconds
 import asyncio
 import os
 import subprocess
+import tempfile
 import time
+import json
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -27,6 +29,7 @@ class _ManagedProcess:
     key: str
     process: subprocess.Popen[bytes]
     log_handle: object
+    base_url: str = ""
 
 
 class WorkerSupervisor:
@@ -35,16 +38,19 @@ class WorkerSupervisor:
         self._groups: dict[str, _ManagedProcess] = {}
         self._processes: dict[str, _ManagedProcess] = {}
 
-    async def ensure(self, key: str, base_url: str, launch: WorkerLaunch) -> float:
-        if await self._healthy(base_url):
-            return 0.0
+    async def ensure(self, key: str, base_url: str, launch: WorkerLaunch) -> str:
+        managed_command = self._dynamic_command(launch.command)
+        if not managed_command and await self._healthy(base_url):
+            return base_url
         async with self._lock:
-            if await self._healthy(base_url):
-                return 0.0
             current = self._processes.get(key)
             if current and current.process.poll() is not None:
                 self._forget(current)
                 current = None
+            if current and current.base_url and await self._healthy(current.base_url):
+                return current.base_url
+            if not managed_command and await self._healthy(base_url):
+                return base_url
             if not current:
                 if not launch.command:
                     raise RuntimeError(f"Local model worker is offline and has no launch command: {key}")
@@ -52,24 +58,64 @@ class WorkerSupervisor:
                     previous = self._groups.get(launch.exclusive_group)
                     if previous and previous.key != key:
                         await asyncio.to_thread(self._terminate, previous)
-                current = await asyncio.to_thread(self._start, key, launch)
+                endpoint_dir = tempfile.TemporaryDirectory(prefix="rabispeech-worker-") if managed_command else None
+                endpoint_file = Path(endpoint_dir.name) / "endpoint.json" if endpoint_dir else None
+                try:
+                    current = await asyncio.to_thread(self._start, key, launch, managed_command, endpoint_file)
+                except BaseException:
+                    if endpoint_dir:
+                        endpoint_dir.cleanup()
+                    raise
                 self._processes[key] = current
                 if launch.exclusive_group:
                     self._groups[launch.exclusive_group] = current
 
-            started = time.perf_counter()
-            deadline = started + get_timeout_seconds("speech.worker.start", launch.startup_timeout_seconds)
-            while time.perf_counter() < deadline:
-                if current.process.poll() is not None:
-                    self._forget(current)
-                    raise RuntimeError(f"Local model worker exited during startup: {key}")
-                if await self._healthy(base_url):
-                    return time.perf_counter() - started
-                await asyncio.sleep(0.5)
-            await asyncio.to_thread(self._terminate, current)
-            raise TimeoutError(f"Timed out starting local model worker: {key}")
+            else:
+                endpoint_dir = None
+                endpoint_file = None
+            deadline = time.perf_counter() + get_timeout_seconds("speech.worker.start", launch.startup_timeout_seconds)
+            try:
+                while time.perf_counter() < deadline:
+                    if current.process.poll() is not None:
+                        self._forget(current)
+                        raise RuntimeError(f"Local model worker exited during startup: {key}")
+                    if endpoint_file and endpoint_file.is_file():
+                        receipt = json.loads(endpoint_file.read_text(encoding="utf-8"))
+                        port = receipt.get("port")
+                        if type(port) is not int or not 1 <= port <= 65535:
+                            raise RuntimeError(f"Local model worker returned an invalid endpoint: {key}")
+                        current.base_url = f"http://127.0.0.1:{port}"
+                    target = current.base_url or (base_url if not managed_command else "")
+                    if target and await self._healthy(target) and current.process.poll() is None:
+                        current.base_url = target
+                        return target
+                    await asyncio.sleep(0.5)
+                raise TimeoutError(f"Timed out starting local model worker: {key}")
+            except BaseException:
+                await asyncio.to_thread(self._terminate, current)
+                raise
+            finally:
+                if endpoint_dir:
+                    endpoint_dir.cleanup()
 
-    def _start(self, key: str, launch: WorkerLaunch) -> _ManagedProcess:
+    @staticmethod
+    def _dynamic_command(command: tuple[str, ...]) -> tuple[str, ...]:
+        if not any(Path(arg).name in {"local_tts_worker.py", "local_asr_worker.py", "local_onnx_vits_worker.py"} for arg in command):
+            return ()
+        result = list(command)
+        for flag, value in (("--port", "0"), ("--host", "127.0.0.1")):
+            index = next((i for i, arg in enumerate(result) if arg == flag or arg.startswith(flag + "=")), -1)
+            if index < 0:
+                result.extend((flag, value))
+            elif result[index] == flag:
+                if index + 1 >= len(result):
+                    raise ValueError(f"Missing value for {flag} in managed worker command")
+                result[index + 1] = value
+            else:
+                result[index] = flag + "=" + value
+        return tuple(result)
+
+    def _start(self, key: str, launch: WorkerLaunch, command: tuple[str, ...], endpoint_file: Path | None) -> _ManagedProcess:
         workdir = launch.working_directory or Path.cwd()
         log_dir = workdir / "output" / "worker-logs"
         log_dir.mkdir(parents=True, exist_ok=True)
@@ -82,21 +128,27 @@ class WorkerSupervisor:
         environment.pop("PYTHONPATH", None)
         environment.pop("PYTHONHOME", None)
         environment.update(dict(launch.environment))
+        if endpoint_file:
+            environment["RABISPEECH_WORKER_ENDPOINT_FILE"] = str(endpoint_file)
         executable = Path(launch.command[0]).expanduser()
         if executable.is_absolute() and executable.is_file():
             # Some model loaders invoke `pip` for a local requirements check.
             # A venv interpreter launched by absolute path does not activate its
             # Scripts directory, so expose sibling helpers without activating a shell.
             environment["PATH"] = f"{executable.parent}{os.pathsep}{environment.get('PATH', '')}"
-        process = subprocess.Popen(
-            list(launch.command),
-            cwd=str(workdir),
-            env=environment,
-            stdin=subprocess.DEVNULL,
-            stdout=log_handle,
-            stderr=subprocess.STDOUT,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-        )
+        try:
+            process = subprocess.Popen(
+                list(command or launch.command),
+                cwd=str(workdir),
+                env=environment,
+                stdin=subprocess.DEVNULL,
+                stdout=log_handle,
+                stderr=subprocess.STDOUT,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+        except BaseException:
+            log_handle.close()
+            raise
         return _ManagedProcess(key=key, process=process, log_handle=log_handle)
 
     def _terminate(self, managed: _ManagedProcess) -> None:

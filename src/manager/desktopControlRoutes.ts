@@ -78,7 +78,7 @@ export async function desktopConfigFilePayload(
   if (type === "xiaomi-recordings" || type === "xiaomi-media" || type === "camera-clips") {
     const safeRoleId = sanitizeRoleId(roleId ?? route?.agentRoleId);
     if (!safeRoleId) throw new Error("请先选择一个路由角色，再打开录像文件夹。");
-    const mediaDir = await context.ensureRoleFolder(safeRoleId, "xiaomi-media");
+    const mediaDir = await context.ensureRoleFolder(safeRoleId, type === "camera-clips" ? "camera" : "xiaomi-media");
     openPath(mediaDir);
     return { code: 0, data: { path: mediaDir } };
   }
@@ -112,6 +112,7 @@ const ignored = { type: "object" } as const;
 const settingsErrorSchema = { type: "object", required: ["code", "message"], additionalProperties: false, properties: { code: { const: -1 }, message: { type: "string" } } } as const;
 const settingsSchema = { type: "object", required: [...Object.keys(DEFAULT_DESKTOP_SETTINGS), "autostartConfigured"], additionalProperties: false, properties: {
   screenshot: { type: "object", required: Object.keys(DEFAULT_DESKTOP_SETTINGS.screenshot), additionalProperties: false, properties: { enabled: { type: "boolean" }, shortcut: { type: "string" }, clipboardShortcut: { type: "string" }, autoCopy: { type: "boolean" } } },
+  lastRoleSelection: { anyOf: [{ type: "null" }, { type: "object", required: ["roleId", "sourceDeviceId"], additionalProperties: false, properties: { roleId: { type: "string" }, sourceDeviceId: { type: "string" } } }] },
   autostart: { type: "boolean" }, autostartConfigured: { type: "boolean" }, theme: { type: "string" }, webTheme: { type: "string" }, customThemes: { type: "array", items: { type: "object" }, description: "Normalized by the existing shared interface-theme owner." }, pets: { type: "object", description: "Persona bindings normalized by the existing desktop settings owner; no separate pet behavior is implemented here." }
 } } as const;
 const settingsResponse = { mediaType: "application/json", schema: { type: "object", required: ["code", "data"], additionalProperties: false, properties: { code: { const: 0 }, data: settingsSchema } } } as const;

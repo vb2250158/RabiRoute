@@ -187,6 +187,8 @@ export class XiaomiHomeRuntimeController {
   private readonly retirements = new Set<Promise<void>>();
   private readonly retirementFailures: unknown[] = [];
   private stopHealthListener?: () => void;
+  private stopTargetListener?: () => void;
+  private stopConfigListener?: () => void;
   private healthDelivery: Promise<unknown> = Promise.resolve();
   private readonly credentialStore: XiaomiHomeCredentialStore;
 
@@ -217,6 +219,38 @@ export class XiaomiHomeRuntimeController {
     if (this.started || this.dependencies.readOnly) return;
     if (this.stopping) throw new Error('Xiaomi Home runtime has retired.');
     this.started = true;
+    this.stopTargetListener = this.deployment.onTargetChange(identity => {
+      if (identity?.legacyBindingVerified) {
+        const credential = this.resolveCredential();
+        if (credential.metadata && !credential.metadata.managedVmId && credential.metadata.credentialOrigin !== "external"
+          && credential.metadata.boundBaseUrl === this.snapshotValue.settings.baseUrl
+          && credential.metadata.boundBaseUrl === "http://127.0.0.1:8123") {
+          try {
+            this.credentialStore.bindVerifiedLegacyManagedVm({ expectedRevision: credential.metadata.revision,
+              managedVmId: identity.vmId, verifiedLegacyForward: { baseUrl: credential.metadata.boundBaseUrl, vmId: identity.vmId } });
+          } catch (error) {
+            recordDataMutationAudit({ group: "xiaomi-home", event: "legacy_credential_binding_failed",
+              owner: "xiaomi-home-runtime", action: "bind", target: { type: "credential", id: "home-assistant" },
+              dataSource: { kind: "runtime", id: "home-assistant-deployment" }, outcome: "failed", error });
+          }
+        }
+      }
+      void this.replaceRuntime(this.createRuntime(this.snapshotValue.settings)).catch(() => undefined);
+    });
+    this.stopConfigListener = this.deployment.onConfigChange(() => {
+      // Revoke the previous transport synchronously before asynchronous setup.
+      void this.replaceRuntime(this.createRuntime(this.snapshotValue.settings)).catch(() => undefined);
+      if (this.deployment.managedTransportSelected()) {
+        void this.deployment.prepareTransport().then(() => {
+          if (this.started && this.deployment.managedTransportSelected())
+            return this.replaceRuntime(this.createRuntime(this.snapshotValue.settings));
+        }).catch(error => {
+          recordDataMutationAudit({ group: "xiaomi-home", event: "managed_transport_setup_failed",
+            owner: "xiaomi-home-runtime", action: "start", target: { type: "transport", id: "home-assistant" },
+            dataSource: { kind: "runtime", id: "home-assistant-deployment" }, outcome: "failed", error });
+        });
+      }
+    });
     this.stopHealthListener = this.deployment.onHealthChange(state => {
       const agentRoleId = this.snapshotValue.settings.agentRoleId;
       if (!agentRoleId) return;
@@ -235,6 +269,7 @@ export class XiaomiHomeRuntimeController {
       });
     });
     this.deployment.start();
+    this.captureValue.start();
     this.monitorValue.start();
     this.activityValue?.start();
   }
@@ -245,6 +280,7 @@ export class XiaomiHomeRuntimeController {
     if (this.stopping) throw new Error('Xiaomi Home runtime has retired.');
     if (this.dependencies.readOnly) { this.activated = true; return; }
     this.snapshotValue = this.store.read();
+    if (this.deployment.managedTransportSelected()) await this.deployment.prepareTransport();
     await this.replaceRuntime(this.createRuntime(this.snapshotValue.settings));
     signal?.throwIfAborted();
     if (this.stopping) throw new Error('Xiaomi Home runtime has retired.');
@@ -263,6 +299,10 @@ export class XiaomiHomeRuntimeController {
     this.started = false;
     this.stopHealthListener?.();
     this.stopHealthListener = undefined;
+    this.stopTargetListener?.();
+    this.stopTargetListener = undefined;
+    this.stopConfigListener?.();
+    this.stopConfigListener = undefined;
     this.activated = false;
     return this.stopping ??= (async () => {
       const results = await Promise.allSettled([
@@ -297,7 +337,7 @@ export class XiaomiHomeRuntimeController {
   async authorization(authority?: XiaomiHomeRequestAuthority): Promise<XiaomiHomeAuthorizationSnapshot> {
     authority?.assert();
     const stored = this.resolveCredential();
-    const resolution = stored.metadata?.boundBaseUrl === this.snapshotValue.settings.baseUrl
+    const resolution = this.credentialMatches(stored, this.snapshotValue.settings)
       ? stored
       : Object.freeze({ source: "none" as const, removable: stored.removable });
     const health = await this.clientValue.getHealth(authority);
@@ -323,19 +363,37 @@ export class XiaomiHomeRuntimeController {
     }
     authority?.assert();
     this.requireAuthorizationRevision(expectedAuthorizationRevision);
+    const initialAuthorizationRevision = this.authorizationRevision(this.resolveCredential());
     const candidateSettings = normalizeXiaomiHomeRuntimeSettings({
       ...this.snapshotValue.settings,
       baseUrl: String(baseUrl ?? "").trim()
     });
+    const managed = this.deployment.managedTransportSelected();
+    const deploymentRevision = this.deploymentRevision();
+    const identity = managed ? this.deployment.managedIdentity() : undefined;
+    const managedUrl = managed ? this.deployment.managedBaseUrl() : undefined;
+    if (managed && (!identity || !managedUrl || candidateSettings.baseUrl !== this.snapshotValue.settings.baseUrl)) {
+      throw new XiaomiHomeManagerApiError(409, "xiaomi_home_managed_not_ready", "Managed Home Assistant is not ready; wait for its verified connection.");
+    }
     const fetchImpl = this.dependencies.fetchImpl ?? fetch;
     const candidate = new XiaomiHomeManagerApiClient({
       ...candidateSettings,
+      baseUrl: managedUrl ?? candidateSettings.baseUrl,
       runtimeDir: this.artifacts.runtimeDir
     }, fetchImpl, token);
     const verification = await candidate.verifyAuthorization(authority);
     authority?.assert();
+    if (this.snapshotValue.revision !== expectedRevision || this.authorizationRevision(this.resolveCredential()) !== initialAuthorizationRevision) {
+      throw new XiaomiHomeManagerApiError(409, "xiaomi_home_authorization_revision_changed", "Xiaomi Home settings or authorization changed; retry.");
+    }
+    if (this.deploymentRevision() !== deploymentRevision || this.deployment.managedTransportSelected() !== managed
+      || (managed && (this.deployment.managedIdentity() !== identity
+      || this.deployment.managedBaseUrl() !== managedUrl))) {
+      throw new XiaomiHomeManagerApiError(409, "xiaomi_home_managed_changed", "Managed Home Assistant changed during verification; retry.");
+    }
     this.requireAuthorizationRevision(expectedAuthorizationRevision);
-    const preparedCredential = this.credentialStore.prepare(token, candidateSettings.baseUrl, verification);
+    const preparedCredential = this.credentialStore.prepare(token, candidateSettings.baseUrl, { ...verification,
+      managedVmId: identity?.vmId, credentialOrigin: managed ? undefined : "external" });
     authority?.dispatch();
     this.vacuumRemote.assertInactive();
     const saved = this.commitAuthorizationLocally(candidateSettings, expectedRevision, preparedCredential);
@@ -401,9 +459,11 @@ export class XiaomiHomeRuntimeController {
     const env = this.dependencies.env ?? process.env;
     const fetchImpl = this.dependencies.fetchImpl ?? fetch;
     const credential = this.credentialStore.resolve();
-    const credentialToken = credential.metadata?.boundBaseUrl === settings.baseUrl ? credential.token : undefined;
+    const credentialToken = this.credentialMatches(credential, settings) ? credential.token : undefined;
+    const transportSettings = this.deployment.managedTransportSelected()
+      ? { ...settings, baseUrl: this.deployment.managedBaseUrl() ?? "http://127.0.0.1:1" } : settings;
     const client = new XiaomiHomeManagerApiClient({
-      ...settings,
+      ...transportSettings,
       runtimeDir: this.artifacts.runtimeDir
     }, fetchImpl, credentialToken);
     const access = new XiaomiHomeArtifactAccess(this.artifacts);
@@ -412,13 +472,13 @@ export class XiaomiHomeRuntimeController {
       cameraClipCaptureEnabled: settings.cameraClipCaptureEnabled && Boolean(roleDirectory && settings.agentRoleId)
     }, this.artifacts, this.dependencies.fetchImpl,
     roleDirectory && settings.agentRoleId ? () => roleDirectory(settings.agentRoleId) : undefined, settings.agentRoleId || undefined);
-    const monitor = new XiaomiHomeEventMonitor(settings, {
+    const monitor = new XiaomiHomeEventMonitor(transportSettings, {
       credentialToken,
       recoverConnection: () => this.deployment.recover(),
       deliverEvent: this.dependencies.deliverEvent,
       captureMotionClip: capture.isEnabled() ? candidate => capture.capture(candidate) : undefined
     });
-    const activity = this.dependencies.activity ? new HomeAssistantActivityMonitor(settings.baseUrl, { port: this.dependencies.activity, credentialToken }) : undefined;
+    const activity = this.dependencies.activity ? new HomeAssistantActivityMonitor(transportSettings.baseUrl, { port: this.dependencies.activity, credentialToken }) : undefined;
     return { client, access, capture, monitor, activity };
   }
 
@@ -426,7 +486,22 @@ export class XiaomiHomeRuntimeController {
     return this.credentialStore.resolve();
   }
 
+  private credentialMatches(credential: XiaomiHomeCredentialResolution, settings: XiaomiHomeRuntimeSettings): boolean {
+    const metadata = credential.metadata;
+    if (!metadata || metadata.boundBaseUrl !== settings.baseUrl) return false;
+    if (!this.deployment.managedTransportSelected()) return !metadata.managedVmId
+      && (metadata.boundBaseUrl !== "http://127.0.0.1:8123" || metadata.credentialOrigin === "external");
+    const identity = this.deployment.managedIdentity();
+    return Boolean(identity && this.deployment.managedBaseUrl() && metadata.managedVmId === identity.vmId.toLowerCase());
+  }
+
+  private deploymentRevision(): string {
+    const file = path.join(this.artifacts.runtimeDir, "home-assistant-deployment.json");
+    return fs.existsSync(file) ? createHash("sha256").update(fs.readFileSync(file)).digest("hex") : "";
+  }
+
   private replaceRuntime(runtime: ReturnType<XiaomiHomeRuntimeController["createRuntime"]>): Promise<void> {
+    const previousRetirements = [...this.retirements];
     const retiring = Promise.allSettled([this.monitorValue.stop(), this.activityValue?.stop(), this.captureValue.close()]).then(results => {
       const errors = results.flatMap(result => result.status === "rejected" ? [result.reason] : []);
       if (errors.length === 1) throw errors[0];
@@ -437,8 +512,9 @@ export class XiaomiHomeRuntimeController {
     this.captureValue = runtime.capture;
     this.monitorValue = runtime.monitor;
     this.activityValue = runtime.activity;
-    const transition = retiring.then(() => {
-      if (this.started && this.monitorValue === runtime.monitor) { this.monitorValue.start(); this.activityValue?.start(); }
+    const transition = Promise.all([retiring, ...previousRetirements]).then(() => {
+      if (this.retirementFailures.length) throw new AggregateError(this.retirementFailures, "Previous Xiaomi Home owner cleanup failed.");
+      if (this.started && this.monitorValue === runtime.monitor) { this.captureValue.start(); this.monitorValue.start(); this.activityValue?.start(); }
     });
     const observed = transition.catch(error => { this.retirementFailures.push(error); }).finally(() => this.retirements.delete(observed));
     this.retirements.add(observed);

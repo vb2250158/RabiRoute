@@ -1587,15 +1587,15 @@ POST <managerBaseUrl>/api/agent/threads
 RabiRoute 渲染后的正文固定从以下两段开始，相关上下文和回传参数只能放在它们之后：
 
 ```text
-[消息源]
-消息源类型：<消息端 | Agent | 计划 | 系统>
-<该类型的名称、完整 ID、会话、计划或路线字段>
+## 消息源
+- 消息源类型：<消息端 | Agent | 计划 | 系统>
+- <该类型的名称、完整 ID、会话、计划或路线字段>
 
-[消息内容]
+## 消息内容
 <prompt>
 ```
 
-正式回复使用精简模板：`[消息内容]` 内只保留一份 `[回复结果]` 和 `[下一步]`；`prompt` 中与这两个字段完全相同的文字不重复输出，其余文字保留为 `[相关上下文]`。模板不概括或截断证据。回复合同保留投递 ID、原请求 ID、后续请求 ID、回复要求和完整 POST 参数；不再另列一遍接收任务身份或重复说明无需回复。工作区限制由目标 `AGENTS.md` 提供，投递模板不再添加通用协作提醒，也不按项目名称硬编码。
+正式回复使用精简模板：`## 消息内容` 内只保留一份 `[回复结果]` 和 `[下一步]`；`prompt` 中与这两个字段完全相同的文字不重复输出，其余文字保留为 `[相关上下文]`。模板不概括或截断证据。回复合同保留投递 ID、原请求 ID、后续请求 ID、回复要求和完整 POST 参数；不再另列一遍接收任务身份或重复说明无需回复。工作区限制由目标 `AGENTS.md` 提供，投递模板不再添加通用协作提醒，也不按项目名称硬编码。
 
 新投递使用 `[回传参数]` 和完整 JSON 请求。发送前由请求记录保存结构化回复与实际正文校验值；`reconcile_delivery` 核对接收正文后从记录恢复结果，不依赖展示标题。旧格式仅用于尚未关闭的历史预留；详见[模板归属与退出条件](message-delivery-templates.md)。
 
@@ -1603,7 +1603,7 @@ Agent 调用线程桥时通常使用 `type=agent`。`agentAdapter` 填实际 Age
 
 带正文的 `create` 与 `send` 使用同一来源核对规则。`type=agent` 时两者都必须提供 `sourceThreadId`；Manager 从实际 owner 读取来源会话名称并覆盖调用方提交的旧名称，包括 Codex Desktop、DSH 和 Grok Bot 服务 owner。Grok Bot 规范会话 ID 按 Bot owner 核对，不要求它符合 Codex UUID 或 DSH `session-` 形状；这类 `sourceThreadId` 最长 4096 个字符，Codex 与 DSH 来源仍最长 512。消息端来源的 `conversationId` 最长 300 个字符，超长 Bot 会话改用 `type=agent`。计划进展、审批和 QA 等 Manager 计划事件只显示计划名称和计划 ID；只有计划任务本人回传结果时才附带并核对 `sourceAgent`。
 
-`contextBlocks` 排在消息内容之后，`controlBlocks` 再排在上下文之后。回传参数与本次必要的发送要求放入控制块；通用协作段不再注入。两个字段都不能包含 `[消息源]`、`[消息内容]` 或 `[投递源]`。旧 `[投递源]`、旧嵌套信封和旧 Agent 回复会自动迁移；旧重放记录无法还原来源时显示“历史投递记录”，不猜来源身份。
+`contextBlocks` 排在消息内容之后，`controlBlocks` 再排在上下文之后。回传参数与本次必要的发送要求放入控制块；通用协作段不再注入。两个字段都不能包含 `## 消息源`、`## 消息内容`、`[消息源]`、`[消息内容]` 或 `[投递源]`。旧 `[投递源]`、旧嵌套信封和旧 Agent 回复会自动迁移；旧重放记录无法还原来源时显示“历史投递记录”，不猜来源身份。
 
 正式回复仍使用同一个 `send` 动作。回复方必须把 `inReplyToRequestId`、`result` 和 `nextAction` 送回原请求任务，并再次填写 `responsePolicy`：如果新的下一步还要求原请求方处理后返回，使用 `required` 并填写新的 `responseInstruction`；如果本次往返到此结束，使用 `none`。回复中的 `messageSource.agentAdapter`、`messageSource.sessionId`、`sourceThreadId` 和 workspace 必须描述当前正在回复的接收会话；`inReplyToRequestId` 单独指向原请求，不能把原请求会话或回复目标写成回复来源。
 
@@ -1666,7 +1666,7 @@ Desktop 偶尔会在消息已经写入目标任务后才返回启动或追加轮
 
 提醒触发前也执行上述核对。证据仍不完整时保留 reservation、写入 `lastReminderError` 并停止本次“未回复”提醒，不无限重试或要求重发；下一次任务结束或显式核对可重新检查。读取超时、身份/合同不符及旧版本已删除的 `404` 请求均不凭猜测重建，必须保留正式回传未记录的差异。
 
-Agent 间 `create` 与 `send` 投递时，Manager 按 `messageSource.agentAdapter + sourceThreadId` 向实际 owner 核对来源会话。Codex 读取 Desktop 任务状态和左侧聊天栏名称；DSH 通过 apiproxy `session.list` 读取会话名称、工作目录和运行状态。Grok Bot 来源先确认规范 `grokBot:` 会话 ID，再读取 Bot owner 名称；无法解码、owner 缺失或声明的 adapter 不是 `grokBot` 时失败关闭，不退回 Codex/DSH 形状检查放行。来源不存在、工作目录冲突或来源 ID 与 `messageSource.sessionId` 不一致时失败关闭。所有 RabiRoute 非空投递都先显示 `[消息源]`，再显示 `[消息内容]`。消息端来源显示消息端、会话、发送者和消息 ID；Agent 来源显示 Agent 端、会话名称和完整会话 ID；计划来源显示计划名称和计划 ID；系统来源显示事件类型、名称和 ID。提醒、初始化消息、RabiLink 复盘和重放也使用同一信封。
+Agent 间 `create` 与 `send` 投递时，Manager 按 `messageSource.agentAdapter + sourceThreadId` 向实际 owner 核对来源会话。Codex 读取 Desktop 任务状态和左侧聊天栏名称；DSH 通过 apiproxy `session.list` 读取会话名称、工作目录和运行状态。Grok Bot 来源先确认规范 `grokBot:` 会话 ID，再读取 Bot owner 名称；无法解码、owner 缺失或声明的 adapter 不是 `grokBot` 时失败关闭，不退回 Codex/DSH 形状检查放行。来源不存在、工作目录冲突或来源 ID 与 `messageSource.sessionId` 不一致时失败关闭。所有 RabiRoute 非空投递都先显示 `## 消息源`，再显示 `## 消息内容`。消息端来源显示消息端、会话、发送者和消息 ID；Agent 来源显示 Agent 端、会话名称和完整会话 ID；计划来源显示计划名称和计划 ID；系统来源显示事件类型、名称和 ID。提醒、初始化消息、RabiLink 复盘和重放也使用同一信封。
 
 安全边界：
 

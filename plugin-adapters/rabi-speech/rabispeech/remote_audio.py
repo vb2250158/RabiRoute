@@ -590,6 +590,7 @@ class RemoteAudioHub:
         self._last_virtual_chunk_by_source: dict[str, tuple[str, int, str, float]] = {}
         self._virtual_pcm_totals_by_source: dict[str, tuple[int, int]] = {}
         self._server: Any = None
+        self._listening_port = 0
         self._discovery_transport: asyncio.DatagramTransport | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
         self._capture_enabled = False
@@ -790,12 +791,23 @@ class RemoteAudioHub:
             ping_interval=20,
             ping_timeout=get_timeout_seconds("speech.remoteAudio.ping", 20),
         )
-        loop = asyncio.get_running_loop()
-        transport, _protocol = await loop.create_datagram_endpoint(
-            lambda: _DiscoveryProtocol(self.config),
-            local_addr=("0.0.0.0", self.config.discovery_port),
-        )
-        self._discovery_transport = transport
+        try:
+            ports = {int(sock.getsockname()[1]) for sock in self._server.sockets}
+            if len(ports) != 1:
+                raise RuntimeError("Remote audio listeners do not share one discoverable port.")
+            self._listening_port = ports.pop()
+            loop = asyncio.get_running_loop()
+            transport, _protocol = await loop.create_datagram_endpoint(
+                lambda: _DiscoveryProtocol(self.config, self._listening_port),
+                local_addr=("0.0.0.0", self.config.discovery_port),
+            )
+            self._discovery_transport = transport
+        except BaseException:
+            self._server.close()
+            await self._server.wait_closed()
+            self._server = None
+            self._listening_port = 0
+            raise
 
     async def stop(self) -> None:
         self._capture_enabled = False
@@ -811,6 +823,7 @@ class RemoteAudioHub:
             self._server.close()
             await self._server.wait_closed()
             self._server = None
+            self._listening_port = 0
         if self._discovery_transport is not None:
             self._discovery_transport.close()
             self._discovery_transport = None
@@ -885,8 +898,8 @@ class RemoteAudioHub:
             "enabled": self.config.enabled,
             "listening": self._server is not None,
             "host": self.config.host if self.config.enabled else "",
-            "port": self.config.port if self.config.enabled else 0,
-            "discovery_port": self.config.discovery_port if self.config.enabled else 0,
+            "port": self._listening_port,
+            "discovery_port": self._discovery_transport.get_extra_info("sockname")[1] if self._discovery_transport is not None else 0,
             "source": self.source,
             "selected_client_id": self._selected_client_id,
             "selected_online": selected_online,
@@ -1521,8 +1534,9 @@ def _message_adapter_type(value: object, _device_kind: str) -> str:
 
 
 class _DiscoveryProtocol(asyncio.DatagramProtocol):
-    def __init__(self, config: RemoteAudioServerConfig) -> None:
+    def __init__(self, config: RemoteAudioServerConfig, listening_port: int) -> None:
         self.config = config
+        self.listening_port = listening_port
         self.transport: asyncio.DatagramTransport | None = None
 
     def connection_made(self, transport: asyncio.BaseTransport) -> None:
@@ -1535,7 +1549,7 @@ class _DiscoveryProtocol(asyncio.DatagramProtocol):
             "service": "rabi-voice-stream",
             "version": 1,
             "name": self.config.service_name,
-            "port": self.config.port,
+            "port": self.listening_port,
             "transport": "ws",
             "authentication": "bearer",
         }, ensure_ascii=False).encode("utf-8")

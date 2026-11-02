@@ -101,6 +101,79 @@ test("unbound roles are listed and save without creating a Route; clearing role 
   assert.equal(stale.response.status, 412);
 }));
 
+test("role list reads a bounded batch concurrently and preserves cursor order", async () => fixture(async f => {
+  for (const id of ["Alpha", "Beta", "Gamma"]) {
+    const directory = path.join(f.root, "roles", id);
+    await fs.mkdir(directory);
+    await fs.writeFile(path.join(directory, "persona.md"), `# ${id}\n`);
+  }
+  const originalOpen = fs.open;
+  let active = 0;
+  let peak = 0;
+  fs.open = (async (...args: Parameters<typeof fs.open>) => {
+    if (String(args[0]).endsWith("persona.md")) {
+      active++;
+      peak = Math.max(peak, active);
+      try { await new Promise(resolve => setTimeout(resolve, 30)); }
+      finally { active--; }
+    }
+    return originalOpen(...args);
+  }) as typeof fs.open;
+  try {
+    const first = await f.get("?limit=2");
+    assert.deepEqual(first.roles.map((role: { roleId: string }) => role.roleId), ["Alpha", "Beta"]);
+    assert.equal(first.nextCursor, "Beta");
+    const second = await f.get(`?limit=2&cursor=${first.nextCursor}`);
+    assert.deepEqual(second.roles.map((role: { roleId: string }) => role.roleId), ["Example", "Gamma"]);
+    assert.equal(second.nextCursor, null);
+    assert.ok(peak >= 2 && peak <= 4, `unexpected concurrent reads: ${peak}`);
+  } finally { fs.open = originalOpen; }
+}));
+
+test("role list advances past filtered roles without losing damaged entries", async () => fixture(async f => {
+  for (const id of ["Alpha", "Beta", "Gamma"]) {
+    const directory = path.join(f.root, "roles", id);
+    await fs.mkdir(directory);
+    await fs.writeFile(path.join(directory, "persona.md"), `# ${id}\n`);
+  }
+  await fs.writeFile(path.join(f.root, "roles/Alpha/roleMetadata.json"), JSON.stringify({ schemaVersion: 1, revision: 1, archivedAt: "2026-01-01T00:00:00Z" }));
+  await fs.writeFile(path.join(f.root, "roles/Beta/roleMetadata.json"), "{broken");
+  const first = await f.get("?limit=2");
+  assert.deepEqual(first.roles.map((role: { roleId: string }) => role.roleId), ["Beta", "Example"]);
+  assert.ok(first.roles[0].error);
+  assert.equal(first.nextCursor, "Example");
+  const second = await f.get(`?limit=2&cursor=${first.nextCursor}`);
+  assert.deepEqual(second.roles.map((role: { roleId: string }) => role.roleId), ["Gamma"]);
+  assert.equal(second.nextCursor, null);
+  const filtered = await f.get("?query=Gamma&limit=1");
+  assert.deepEqual(filtered.roles.map((role: { roleId: string }) => role.roleId), ["Beta"]);
+  const next = await f.get(`?query=Gamma&limit=1&cursor=${filtered.nextCursor}`);
+  assert.deepEqual(next.roles.map((role: { roleId: string }) => role.roleId), ["Gamma"]);
+}));
+
+test("role list withholds results if the root changes during a concurrent batch", async () => fixture(async f => {
+  await fs.mkdir(path.join(f.root, "roles/Alpha"));
+  await fs.writeFile(path.join(f.root, "roles/Alpha/persona.md"), "# Alpha\n");
+  const originalOpen = fs.open;
+  let signalStarted!: () => void;
+  let release!: () => void;
+  const started = new Promise<void>(resolve => { signalStarted = resolve; });
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  fs.open = (async (...args: Parameters<typeof fs.open>) => {
+    if (String(args[0]).endsWith("persona.md")) { signalStarted(); await gate; }
+    return originalOpen(...args);
+  }) as typeof fs.open;
+  try {
+    const pending = f.call("?limit=2");
+    await started;
+    f.switchRoot();
+    release();
+    const result = await pending;
+    assert.equal(result.response.status, 409);
+    assert.equal(result.body.data, undefined);
+  } finally { release(); fs.open = originalOpen; }
+}));
+
 test("archive persists, rejects new work and stale saves, while admitted work may finish", async () => fixture(async f => {
   const directory = path.join(f.root, "roles/Example");
   const release = await beginRoleWork(directory);

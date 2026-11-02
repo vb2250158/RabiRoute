@@ -30,6 +30,22 @@ class ThemeTest(unittest.TestCase):
         self.assertEqual(resolved, "dark")
         self.assertEqual(menu.styleSheet(), rabi_menu_stylesheet("dark"))
 
+    def test_menu_stylesheet_is_only_reapplied_when_it_changes(self) -> None:
+        class CountingMenu(QMenu):
+            updates = 0
+
+            def setStyleSheet(self, stylesheet: str) -> None:
+                self.updates += 1
+                super().setStyleSheet(stylesheet)
+
+        menu = CountingMenu()
+        apply_rabi_menu_theme(menu, theme="light")
+        apply_rabi_menu_theme(menu, theme="light")
+        self.assertEqual(menu.updates, 1)
+        apply_rabi_menu_theme(menu, theme="dark")
+        self.assertEqual(menu.updates, 2)
+        self.assertEqual(menu.styleSheet(), rabi_menu_stylesheet("dark"))
+
     def test_custom_theme_drives_qt_palette_menu_and_stylesheet(self) -> None:
         theme_id = register_custom_theme({
             "id": "custom:night-rain-green",

@@ -153,8 +153,9 @@ async function launchBuiltManager() {
   };
 }
 
-async function requestJson(fetchImpl, baseUrl, pathname, boundaryName = pathname) {
-  for (let attempt = 0; attempt < 5; attempt += 1) {
+async function requestJson(fetchImpl, baseUrl, pathname, boundaryName = pathname, startup = undefined) {
+  const deadline = startup ? Date.now() + startup.timeoutMs : 0;
+  for (let attempt = 0; ; attempt += 1) {
     let response;
     try {
       response = await fetchImpl(`${baseUrl}${pathname}`, {
@@ -179,21 +180,36 @@ async function requestJson(fetchImpl, baseUrl, pathname, boundaryName = pathname
       body?.message === "Manager read workers are busy; retry shortly."
       || body?.message === "The initial route catalog snapshot is not installed. Retry after startup recovery completes."
     );
-    if (retryableStartupState && attempt < 4) {
+    // Only the initial gateway read has a registration window after the catalog
+    // gate opens. A persistent 404 still fails, and each retry is fenced to the
+    // same Manager generation before another business request is sent.
+    const gatewayRegistrationPending = startup && (
+      (response.status === 404 && body?.message === "Manager API route not found.")
+      || retryableStartupState
+      || (response.status === 503 && body?.message === "RabiRoute Manager is starting.")
+    );
+    if (gatewayRegistrationPending && Date.now() < deadline) {
+      await startup.verifyIdentity();
+      const remaining = deadline - Date.now();
+      if (remaining > 0) {
+        await new Promise(resolve => setTimeout(resolve, Math.min(250 * (attempt + 1), 1000, remaining)));
+        if (Date.now() < deadline) continue;
+      }
+    }
+    if (!startup && retryableStartupState && attempt < 4) {
       await new Promise(resolve => setTimeout(resolve, 250 * (attempt + 1)));
       continue;
     }
     const message = typeof body?.message === "string" ? `: ${body.message}` : "";
     throw new Error(`Built Manager read boundary failed for ${boundaryName} (HTTP ${response.status})${message}.`);
   }
-  throw new Error(`Built Manager read boundary exhausted retries: ${boundaryName}.`);
 }
 
 function endpointCheck(id, response, count) {
   return { id, method: "GET", status: response.status, count, passed: response.status === 200 };
 }
 
-export async function collectBuiltManagerReadOnlySummary(baseUrl, fetchImpl = globalThis.fetch, expectedIdentity) {
+export async function collectBuiltManagerReadOnlySummary(baseUrl, fetchImpl = globalThis.fetch, expectedIdentity, options = {}) {
   const verifyIdentity = async expected => {
     const { body } = await requestJson(fetchImpl, baseUrl, "/meta");
     if (!["healthy", "degraded"].includes(body?.health?.state) || body?.health?.live !== true || body?.health?.requiredReady !== true
@@ -205,7 +221,10 @@ export async function collectBuiltManagerReadOnlySummary(baseUrl, fetchImpl = gl
     return body;
   };
   const identity = await verifyIdentity(expectedIdentity);
-  const gateways = await requestJson(fetchImpl, baseUrl, "/gateways?summary=1");
+  const gateways = await requestJson(fetchImpl, baseUrl, "/gateways?summary=1", undefined, {
+    timeoutMs: options.gatewayStartupTimeoutMs ?? 30000,
+    verifyIdentity: () => verifyIdentity(identity)
+  });
   const [personas, speechMessages] = await Promise.all([
     requestJson(fetchImpl, baseUrl, "/api/personas"),
     requestJson(fetchImpl, baseUrl, "/api/speech/messages?limit=1")

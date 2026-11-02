@@ -27,6 +27,12 @@ test("standalone envelope ID survives transport without an appended marker", () 
   assert.deepEqual(ensureCodexDesktopDeliveryMarkerForTest(prompt), { prompt, deliveryId: id });
 });
 
+test("historical envelopes keep their original delivery identity", () => {
+  const prompt = `[消息源]\n投递 ID：${id}\n\n[消息内容]\nOriginal evidence`;
+  assert.equal(currentEnvelopeDeliveryId(prompt), id);
+  assert.equal(deliveryIdFromPrompt(prompt), id);
+});
+
 test("source-scoped envelope IDs survive the real Desktop writer and receipt extraction", () => {
   const prompts = [
     renderRabiDelivery({ ...envelope, deliveryId: sourceScopedId }),

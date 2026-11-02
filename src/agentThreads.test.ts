@@ -554,8 +554,8 @@ test("Agent thread create uses a configured workspace and fixed investigation in
     ].join("\n"),
     sandbox: "danger-full-access"
   });
-  assert.match(String(createCall.prompt), /^\[消息源\]\n类型：Agent｜处理端：codex\n会话：测试来源任务\n会话 ID：019f0000-0000-7000-8000-000000000001/);
-  assert.match(String(createCall.prompt), /\[消息内容\]\n只读调查功能入口。/);
+  assert.match(String(createCall.prompt), /^## 消息源\n- 类型：Agent｜处理端：codex\n- 会话：测试来源任务\n- 会话 ID：019f0000-0000-7000-8000-000000000001/);
+  assert.match(String(createCall.prompt), /## 消息内容\n只读调查功能入口。/);
 });
 
 test("Agent thread create accepts an existing workspace outside saved Route contexts", async () => {
@@ -600,12 +600,12 @@ test("Agent thread send starts a follow-up turn through the driver", async () =>
   assert.equal(sent.threadId, threadId);
   assert.equal(sent.cwd, path.resolve(process.cwd()));
   assert.equal(sent.sandbox, "workspace-write");
-  assert.match(sent.prompt, /^\[消息源\]\n消息源类型：系统\n事件类型：test\n事件名称：测试投递\n事件 ID：agent-thread-test/);
+  assert.match(sent.prompt, /^## 消息源\n- 消息源类型：系统\n- 事件类型：test\n- 事件名称：测试投递\n- 事件 ID：agent-thread-test/);
   const deliveryId = String((result.data.delivery as Record<string, unknown>).deliveryId);
   assert.match(deliveryId, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
   assert.ok(sent.prompt.includes(`投递 ID：${deliveryId}`));
   assert.doesNotMatch(sent.prompt, /只使用正式 Main、Release 和 Art/);
-  assert.match(sent.prompt, /\[消息内容\]\n补充新证据/);
+  assert.match(sent.prompt, /## 消息内容\n补充新证据/);
 });
 
 test("standalone send preserves the caller delivery identity in prompt and receipt", async () => {
@@ -947,8 +947,8 @@ test("Agent thread send renders content, context, and control blocks in order", 
   }, { allowedWorkspaces: [process.cwd()] }, driver);
 
   const prompt = calls[0].prompt;
-  assert.ok(prompt.indexOf("[消息源]") < prompt.indexOf("[消息内容]"));
-  assert.ok(prompt.indexOf("[消息内容]") < prompt.indexOf("[上下文]"));
+  assert.ok(prompt.indexOf("## 消息源") < prompt.indexOf("## 消息内容"));
+  assert.ok(prompt.indexOf("## 消息内容") < prompt.indexOf("[上下文]"));
   assert.ok(prompt.indexOf("[上下文]") < prompt.indexOf("[控制说明]"));
   assert.doesNotMatch(prompt, /\[协作要求\]/);
 });
@@ -1127,9 +1127,9 @@ test("Agent thread send forwards the Message Agent model independently", async (
   assert.equal(sent.sandbox, "workspace-write");
   assert.equal(sent.model, "gpt-5.6-luna");
   assert.equal(sent.reasoningEffort, "medium");
-  assert.match(sent.prompt, /^\[消息源\]/);
+  assert.match(sent.prompt, /^## 消息源/);
   assert.doesNotMatch(sent.prompt, /只使用正式 Main、Release 和 Art/);
-  assert.match(sent.prompt, /\[消息内容\]\n处理这个消息组/);
+  assert.match(sent.prompt, /## 消息内容\n处理这个消息组/);
 });
 
 for (const scenario of [
@@ -1226,7 +1226,7 @@ test("Agent-to-Agent send shows the verified source task, Agent type, and sessio
   assert.equal(sent.threadId, targetThreadId);
   assert.equal(sent.cwd, path.resolve(process.cwd()));
   assert.equal(sent.sandbox, "workspace-write");
-  assert.match(sent.prompt, /^\[消息源\]/);
+  assert.match(sent.prompt, /^## 消息源/);
   assert.match(sent.prompt, /处理端：codex/);
   assert.match(sent.prompt, /会话：星海建造师 策划 程序 协助处理计划4/);
   assert.match(sent.prompt, /会话 ID：019f0000-0000-7000-8000-000000000003/);
@@ -1237,7 +1237,7 @@ test("Agent-to-Agent send shows the verified source task, Agent type, and sessio
   assert.doesNotMatch(sent.prompt, /本次投递不要求回复/);
   assert.doesNotMatch(sent.prompt, /\[协作要求\]/);
   assert.doesNotMatch(sent.prompt, /只使用正式 Main、Release 和 Art/);
-  assert.match(sent.prompt, /\[消息内容\]\n计划已经完成，请决定是否回复群消息。/);
+  assert.match(sent.prompt, /## 消息内容\n计划已经完成，请决定是否回复群消息。/);
 });
 
 test("compact reply delivers evidence once and remains recoverable after an uncertain receipt", async () => {

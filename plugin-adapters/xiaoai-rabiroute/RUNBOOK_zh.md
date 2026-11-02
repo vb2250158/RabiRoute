@@ -26,7 +26,7 @@
 1. 安装版只通过 `RabiRouteHost.exe` 启动应用；只有源码开发才在仓库根目录构建并单独启动 Manager。
 2. 安装版从 Host `--command status --json` 取得本代 `managerBaseUrl`；源码模式使用 Manager 写到标准输出的 URL。不要假设 Manager 端口。
 3. 检查显式配置的 Webhook URL 后，启用默认禁用的 `xiaoai` Route。
-4. 在显式配置的地址启动本桥接层。下方命令中的 `127.0.0.1:8798` 只是本机示例。
+4. 启动桥接层；它会输出动态分配的本机地址，外部客户端须使用该实际地址。
 5. 启动外部 Open-XiaoAI 兼容 server 或 client 集成。
 6. 只有直连不可用时才增加 SSH 反向隧道。
 
@@ -72,9 +72,10 @@ $managerBaseUrl = $hostStatus.managerBaseUrl
 $managerPort = ([uri]$managerBaseUrl).Port
 Invoke-RestMethod "$managerBaseUrl/meta"
 
-# 8791、8798、4399 是本 Runbook 显式配置的本机适配器示例，不是 Manager 默认端口。
-Get-NetTCPConnection -LocalPort $managerPort,8791,8798,4399 -ErrorAction SilentlyContinue
-Invoke-RestMethod http://127.0.0.1:8798/health
+# 8791、4399 是本 Runbook 显式配置的本机适配器示例，不是 Manager 默认端口。
+Get-NetTCPConnection -LocalPort $managerPort,8791,4399 -ErrorAction SilentlyContinue
+$bridgeUrl = node --input-type=module -e "import { discoverEndpoint } from './bridge-endpoint.mjs'; console.log(await discoverEndpoint())"
+Invoke-RestMethod "$bridgeUrl/health"
 ```
 
 源码模式不查询 Host，应把 `$managerBaseUrl` 设为 Manager 标准输出给出的准确 URL。

@@ -202,13 +202,21 @@ function matchesLegacyReply(request: AgentThreadRequest, delivery: PreparedEndpo
   }
   if (endpointExecutionOptionsHash(execution) !== delivery.executionOptionsHash) return false;
   const frozen = delivery.prompt.replace(/\r\n/g, "\n");
-  const sentAt = /^(?:投递时间|消息包发送时间)：(.+)$/m.exec(frozen)?.[1];
+  const sentAt = /^(?:- )?(?:投递时间|消息包发送时间)：(.+)$/m.exec(frozen)?.[1];
   const footerAt = frozen.lastIndexOf("[回传参数]\n");
   const direct = delivery.target.kind === "service" && delivery.target.provider === "grokBot" && !!execution.grokBotDelivery;
   if (!direct && (!sentAt || footerAt < 0)) return false;
   // Preserve the original machine-generated footer and timestamp, including historical template versions.
-  const prompt = renderEndpointPrompt(request, preparation.source, { ...preparation, result: request.result, nextAction: request.nextAction },
+  let prompt = renderEndpointPrompt(request, preparation.source, { ...preparation, result: request.result, nextAction: request.nextAction },
     delivery.executionOptions, sentAt, footerAt < 0 ? "" : frozen.slice(footerAt));
+  // Old frozen snapshots must still be compared byte-for-byte using their original envelope.
+  if (frozen.startsWith("[消息源]\n") && prompt.startsWith("## 消息源\n")) {
+    const boundary = prompt.indexOf("\n\n## 消息内容\n");
+    if (boundary >= 0) {
+      const header = prompt.slice(0, boundary).split("\n").slice(1).map(line => line.replace(/^- /, ""));
+      prompt = ["[消息源]", ...header].join("\n") + "\n\n[消息内容]\n" + prompt.slice(boundary + "\n\n## 消息内容\n".length);
+    }
+  }
   return agentDeliveryPromptHash(prompt) === delivery.promptHash;
 }
 

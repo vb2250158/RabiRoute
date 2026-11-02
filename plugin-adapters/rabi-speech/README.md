@@ -14,6 +14,8 @@ RabiSpeech 是由 RabiRoute Manager 语音插件管理的本机重型子进程�
 - 所有模型、角色、Route、会话和 Agent 的播放统一进入一个主机级 FIFO。
 - RabiLink Relay 只代理原始 HTTP 请求和响应，不解析角色、声线或转写正文。
 
+通过本插件自带的 `local_tts_worker.py`、`local_asr_worker.py` 或 `local_onnx_vits_worker.py` 命令启动模型时，系统分配空闲回环端口，RabiSpeech 从本次子进程获取地址。没有这些启动命令的外部 worker 仍使用配置的地址。
+
 ## 安装与启动
 
 RabiRoute 标准安装不包含 ASR/TTS 依赖和模型。只有需要语音功能时才运行以下命令；依赖写入插件私有 `.deps`，不会改动系统 Python 环境，模型继续单独按需安装。
@@ -75,7 +77,7 @@ POST /v1/playback/stop
 
 RabiSpeech 本身目前没有声学回声参考或 AEC。桌面远程语音客户端也会在播放期间暂停上传麦克风，因此它尚不具备自然打断能力。不要为了“能打断”而直接关闭 `suppress_during_playback`；没有回声保护证据时应保持 `barge_in_mode=off`。WebGUI 对 `echo_protected` 的启用带显式确认，但该确认只是操作者声明，不替代真实硬件验收。
 
-局域网远程音频是独立的网络声卡通道。启用 `remote_audio` 后，轻量 Windows 客户端通过 TCP `8782` 持续上传 16 kHz 单声道 PCM，并接收主机 FIFO 下发的 WAV；UDP `8783` 只用于同网段发现。客户端不执行 VAD、切句、ASR、TTS 或 Route 投递。音频流选择由回环接口 `GET /v1/audio-streams` 与 `PUT /v1/audio-streams/selection` 管理，默认是本机，远程端断线时不静默回退。RabiLink 手机使用每台安装独立的稳定设备 ID 和稳定流 ID 自动登记；第一台可作为零配置默认输入，后来连接的手机只加入列表，不抢占已保存选择。多台手机可以同时在线，但只有语音服务页面中选中的一路进入 VAD/ASR；选择会持久化，所选手机断线重连后自动恢复。每个客户端状态同时暴露 `received_bytes` 与 `accepted_chunks`，只统计真正进入主机 PCM feed 的新数据；重复 chunk 不增加计数，可用于无需 ADB 的常驻流健康诊断。ADB 只用于安装和调试，不是发现、连接、选择、推流或恢复链路的运行依赖。安装见 [`../../desktop/rabi-voice-client/README.md`](../../desktop/rabi-voice-client/README.md)。RabiLink 不是这条局域网链路的配置依赖。
+局域网远程音频是独立的网络声卡通道。启用 `remote_audio` 后，轻量 Windows 客户端通过自动分配的 TCP 端口持续上传 16 kHz 单声道 PCM，并接收主机 FIFO 下发的 WAV；UDP `8783` 只用于同网段发现。已保存的显式 TCP 端口继续生效；手动直连时使用状态中显示的实际端口。客户端不执行 VAD、切句、ASR、TTS 或 Route 投递。音频流选择由回环接口 `GET /v1/audio-streams` 与 `PUT /v1/audio-streams/selection` 管理，默认是本机，远程端断线时不静默回退。RabiLink 手机使用每台安装独立的稳定设备 ID 和稳定流 ID 自动登记；第一台可作为零配置默认输入，后来连接的手机只加入列表，不抢占已保存选择。多台手机可以同时在线，但只有语音服务页面中选中的一路进入 VAD/ASR；选择会持久化，所选手机断线重连后自动恢复。每个客户端状态同时暴露 `received_bytes` 与 `accepted_chunks`，只统计真正进入主机 PCM feed 的新数据；重复 chunk 不增加计数，可用于无需 ADB 的常驻流健康诊断。ADB 只用于安装和调试，不是发现、连接、选择、推流或恢复链路的运行依赖。安装见 [`../../desktop/rabi-voice-client/README.md`](../../desktop/rabi-voice-client/README.md)。RabiLink 不是这条局域网链路的配置依赖。
 
 控制面状态通过回环 SSE `GET /v1/events` 推送。Manager 将它转发为 `GET /api/speech/events`；`microphone_event`、`playback_changed`、`audio_stream_changed` 分别刷新对应状态，`records_changed` 只在 ASR/TTS 记录成功落盘后刷新记录面板，麦克风电平使用限频的 `microphone_level` 直接更新。SSE 重连只做一次快照补漏，不运行固定间隔状态或记录轮询。
 

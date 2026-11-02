@@ -14,6 +14,19 @@ export type RoleDetail = { roleId: string; archivedAt: string | null; revision: 
 export { roleRequest, mutateRole } from "../roleConfigurationClient";
 import { roleRequest, mutateRole } from "../roleConfigurationClient";
 
+export async function findFirstAvailableRole(source: string): Promise<RoleSummary | undefined> {
+  if (source) await bootstrapRemotePersonaService(source);
+  let cursor = "";
+  do {
+    const url = `/api/roles?limit=3${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`;
+    const page = await roleRequest<{ roles: RoleSummary[]; nextCursor: string | null }>(source ? remotePersonaServicePath(source, url) : url);
+    const first = page.roles.find(role => !role.error);
+    if (first) return first;
+    cursor = page.nextCursor || "";
+  } while (cursor);
+  return undefined;
+}
+
 export const useRoleStore = defineStore("roles", () => {
   const routes = useGatewayStore();
   const catalog = ref<RoleSummary[]>([]);
@@ -51,7 +64,7 @@ export const useRoleStore = defineStore("roles", () => {
     const collected: RoleSummary[] = [];
     let cursor = "";
     do {
-      const url = `/api/roles?limit=100${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`;
+      const url = `/api/roles?limit=3${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`;
       const page = await roleRequest<{ roles: RoleSummary[]; nextCursor: string | null }>(source ? remotePersonaServicePath(source, url) : url);
       if (generation !== catalogVersion || source !== sourceDeviceId.value) return;
       collected.push(...page.roles.map(role => ({ ...role, avatarUrl: source && role.avatarUrl?.startsWith("/api/") ? remotePersonaServicePath(source, role.avatarUrl) : role.avatarUrl })));

@@ -106,14 +106,12 @@ async function list(context: Context, url: URL) {
   const roles: Array<Record<string, unknown>> = [];
   let last = cursor;
   let examined = 0;
-  for (const roleId of entries.filter(id => id > cursor)) {
-    if (examined >= 200) break;
-    last = roleId;
-    examined++;
+  const candidates = entries.filter(id => id > cursor);
+  const readEntry = async (roleId: string): Promise<Record<string, unknown> | null> => {
     try {
       const directory = await context.step(() => checkedRoleDirectory(context.rolesRoot, roleId));
       const metadata = await context.step(() => readRoleMetadata(directory));
-      if (Boolean(metadata.archivedAt) !== archived) continue;
+      if (Boolean(metadata.archivedAt) !== archived) return null;
       let title = "";
       try {
         const handle = await fs.open(path.join(directory, "persona.md"), "r");
@@ -121,16 +119,29 @@ async function list(context: Context, url: URL) {
         finally { await handle.close(); }
       } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
       context.assertCurrent();
-      if (query && !`${title} ${roleId}`.toLocaleLowerCase().includes(query)) continue;
+      if (query && !`${title} ${roleId}`.toLocaleLowerCase().includes(query)) return null;
       const presentation = context.presentation?.(roleId);
-      roles.push({ roleId, title: title || roleId, archivedAt: metadata.archivedAt,
+      return { roleId, title: title || roleId, archivedAt: metadata.archivedAt,
         avatarConfigured: presentation?.avatarConfigured === true,
-        avatarUrl: `/api/roles/${encodeURIComponent(roleId)}/avatar${presentation?.avatarVersion ? `?v=${encodeURIComponent(presentation.avatarVersion)}` : ""}`, error: "" });
+        avatarUrl: `/api/roles/${encodeURIComponent(roleId)}/avatar${presentation?.avatarVersion ? `?v=${encodeURIComponent(presentation.avatarVersion)}` : ""}`, error: "" };
     } catch (error) {
       context.assertCurrent();
-      roles.push({ roleId, title: roleId, archivedAt: null, error: error instanceof Error ? error.message : String(error) });
+      return { roleId, title: roleId, archivedAt: null, error: error instanceof Error ? error.message : String(error) };
     }
-    if (roles.length >= limit || examined >= 200) break;
+  };
+  while (examined < candidates.length && examined < 200 && roles.length < limit) {
+    // Never read beyond the remaining page capacity: the cursor must cover every examined entry.
+    const size = Math.min(4, limit - roles.length, 200 - examined);
+    const batch = candidates.slice(examined, examined + size);
+    const results = await Promise.allSettled(batch.map(readEntry));
+    context.assertCurrent();
+    for (let i = 0; i < batch.length; i++) {
+      const result = results[i];
+      if (result.status === "rejected") throw result.reason;
+      last = batch[i];
+      examined++;
+      if (result.value) roles.push(result.value);
+    }
   }
   return { roles, nextCursor: entries.some(id => id > last) ? last : null };
 }

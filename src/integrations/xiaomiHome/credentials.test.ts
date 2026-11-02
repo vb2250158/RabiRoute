@@ -54,3 +54,47 @@ test("Xiaomi Home credential store has one protected source and clear returns it
     fs.rmSync(runtimeDir, { recursive: true, force: true });
   }
 });
+
+test("verified legacy VM binding preserves encrypted credential and fences stale and mismatched evidence", () => {
+  const runtimeDir = temporaryDirectory();
+  const vmId = "a0000000-0000-0000-0000-000000000001";
+  const otherVmId = "a0000000-0000-0000-0000-000000000002";
+  try {
+    const store = new XiaomiHomeCredentialStore(runtimeDir, protector);
+    const original = store.write("migration-secret", "http://127.0.0.1:8123", {});
+    const before = JSON.parse(fs.readFileSync(store.credentialPath, "utf8"));
+    const request = { expectedRevision: original.metadata!.revision, managedVmId: vmId,
+      verifiedLegacyForward: { baseUrl: "http://127.0.0.1:8123", vmId } };
+    assert.throws(() => store.bindVerifiedLegacyManagedVm({ ...request, verifiedLegacyForward: { ...request.verifiedLegacyForward, vmId: otherVmId } }));
+    assert.throws(() => store.bindVerifiedLegacyManagedVm({ ...request, verifiedLegacyForward: undefined! }));
+    assert.throws(() => store.bindVerifiedLegacyManagedVm({ ...request, expectedRevision: "stale" }));
+    assert.equal(fs.readFileSync(store.credentialPath, "utf8"), `${JSON.stringify(before, null, 2)}\n`);
+    const migrated = store.bindVerifiedLegacyManagedVm(request);
+    const after = JSON.parse(fs.readFileSync(store.credentialPath, "utf8"));
+    assert.equal(migrated.metadata?.managedVmId, vmId);
+    assert.equal(migrated.token, "migration-secret");
+    assert.equal(after.protectedCredential, before.protectedCredential);
+    assert.doesNotMatch(fs.readFileSync(store.credentialPath, "utf8"), /migration-secret/);
+    assert.throws(() => store.bindVerifiedLegacyManagedVm(request));
+    const currentRequest = { ...request, expectedRevision: migrated.metadata!.revision };
+    assert.equal(store.bindVerifiedLegacyManagedVm(currentRequest).metadata?.revision, migrated.metadata!.revision);
+    assert.throws(() => store.bindVerifiedLegacyManagedVm({ ...currentRequest, managedVmId: otherVmId, verifiedLegacyForward: { baseUrl: request.verifiedLegacyForward.baseUrl, vmId: otherVmId } }));
+    store.write("replacement-secret", "http://127.0.0.1:8123", {});
+    assert.throws(() => store.bindVerifiedLegacyManagedVm(currentRequest));
+    const elsewhere = store.write("other-secret", "http://192.168.1.2:8123", {});
+    assert.throws(() => store.bindVerifiedLegacyManagedVm({ ...request, expectedRevision: elsewhere.metadata!.revision }));
+  } finally { fs.rmSync(runtimeDir, { recursive: true, force: true }); }
+});
+
+test("new verified authorization can bind a VM, while ordinary replacement clears the binding", () => {
+  const runtimeDir = temporaryDirectory();
+  try {
+    const store = new XiaomiHomeCredentialStore(runtimeDir, protector);
+    const vmId = "A0000000-0000-0000-0000-000000000001";
+    assert.throws(() => store.write("secret", "http://127.0.0.1:8123", { managedVmId: "invalid" }));
+    const bound = store.write("secret", "http://127.0.0.1:8123", { managedVmId: vmId });
+    assert.equal(bound.metadata?.managedVmId, vmId.toLowerCase());
+    assert.equal(new XiaomiHomeCredentialStore(runtimeDir, protector).resolve().metadata?.managedVmId, vmId.toLowerCase());
+    assert.equal(store.write("new-secret", "http://127.0.0.1:8123", {}).metadata?.managedVmId, undefined);
+  } finally { fs.rmSync(runtimeDir, { recursive: true, force: true }); }
+});

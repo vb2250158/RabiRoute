@@ -40,7 +40,9 @@ $env:XIAOAI_INTERCEPT_REGEX = "^(问\s*Rabi|让\s*Rabi|Rabi|找\s*Rabi|兔兔|�
 npm.cmd start
 ```
 
-桥接层默认监听 `127.0.0.1:8798`。只有在确认网络边界后，才通过 `XIAOAI_BRIDGE_HOST` 和 `XIAOAI_BRIDGE_PORT` 修改监听地址。
+桥接层默认由操作系统分配本机回环端口，并输出实际地址。本机 smoke 客户端会自动发现桥接层并检查地址是否过期；这一检查不提供身份认证。外部 Open-XiaoAI 客户端需配置输出的实际地址。仅在客户端确实需要固定地址时设置 `XIAOAI_BRIDGE_PORT`；修改 `XIAOAI_BRIDGE_HOST` 前需确认网络边界。
+
+Compose 示例同样动态分配宿主机端口，可用 `docker compose -f docker-compose.open-xiaoai.yml port open-xiaoai-rabiroute 4399` 查询。`RABIROUTE_XIAOAI_BRIDGE_URL` 需设置成容器能访问的桥接地址；仅监听宿主机回环地址时，容器不能直接通过 `host.docker.internal` 访问，需明确配置合适的网络绑定。
 
 ## 反向隧道超时
 
@@ -57,7 +59,7 @@ npm.cmd run smoke
 
 ## API
 
-- `GET /health`：返回配置、计数器和最近的占位 speak 请求。
+- `GET /health`：返回桥接状态和计数器，不暴露 Webhook 地址或占位播报文本。
 - `POST /v1/xiaoai/transcript`：把转录作为带 XiaoAI 来源信息的 `voice_transcript` 转给 RabiRoute。
 - `POST /v1/xiaoai/decision`：转发转录并按 `XIAOAI_INTERCEPT_REGEX` 返回 `ignore` 或 `intercept`。
 - `POST /v1/xiaoai/speak`：当前只写入内存日志并返回 `202`，没有连接真实播放，重启后记录丢失。

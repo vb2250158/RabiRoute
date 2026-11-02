@@ -1,5 +1,5 @@
 ﻿param(
-    [ValidateSet('Install', 'Start', 'Recover')][string]$Operation = 'Install',
+    [ValidateSet('Install', 'Start', 'Recover', 'Observe')][string]$Operation = 'Install',
     [Parameter(Mandatory = $true)][string]$Root,
     [ValidateSet('yes', 'no')][string]$AutoStart = 'no'
 )
@@ -13,7 +13,9 @@ if (-not $drive -or $drive.DriveType -ne 3) { throw 'Installation requires a fix
 for ($parent = $Root; $parent; $parent = [IO.Path]::GetDirectoryName($parent)) {
     if ((Test-Path -LiteralPath $parent) -and ((Get-Item -LiteralPath $parent -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Installation paths cannot contain reparse points.' }
 }
-New-Item -ItemType Directory -Path $Root -Force | Out-Null
+if ($Operation -eq 'Observe') {
+    if (-not (Test-Path -LiteralPath $Root -PathType Container)) { Write-Output 'RABIROUTE_HA_OBSERVATION:{"ready":false}'; return }
+} else { New-Item -ItemType Directory -Path $Root -Force | Out-Null }
 $statusPath = Join-Path $Root 'status.json'
 function Write-Status([string]$State, [string]$Message, [string]$Version = '', [string]$Phase = '', [long]$CompletedBytes = 0, [long]$TotalBytes = 0) {
     $value = @{ state = $State; message = $Message; version = $Version; root = $Root; updatedAt = [DateTime]::UtcNow.ToString('o') }
@@ -66,13 +68,14 @@ function Save-ImageDownload([string]$Uri, [string]$Destination, [long]$ExpectedS
     }
 }
 
-function Test-InstallationDisk([string]$AttachedPath, [string]$ExpectedPath) {
+function Test-InstallationDisk([string]$AttachedPath, [string]$ExpectedPath, [bool]$RejectReparse = $false) {
     # Hyper-V may attach an automatic checkpoint instead of the base VHDX.
     $expected = [IO.Path]::GetFullPath($ExpectedPath)
     $directory = [IO.Path]::GetDirectoryName($expected)
     $visited = @{}
     while ($AttachedPath) {
         $current = [IO.Path]::GetFullPath($AttachedPath)
+        if ($RejectReparse -and (-not (Test-Path -LiteralPath $current -PathType Leaf) -or ((Get-Item -LiteralPath $current -Force).Attributes -band [IO.FileAttributes]::ReparsePoint))) { return $false }
         if ($current -eq $expected) { return $true }
         if ([IO.Path]::GetDirectoryName($current) -ne $directory -or $visited.ContainsKey($current) -or $visited.Count -ge 64) { return $false }
         $visited[$current] = $true
@@ -82,34 +85,54 @@ function Test-InstallationDisk([string]$AttachedPath, [string]$ExpectedPath) {
 }
 
 
-function Set-HomeAssistantLoopback($Vm, [string]$Address) {
-    $proxyReceipt = Join-Path $Root 'loopback-proxy.json'
-    $proxyKey = 'HKLM:\SYSTEM\CurrentControlSet\Services\PortProxy\v4tov4\tcp'
-    $existing = (Get-ItemProperty -LiteralPath $proxyKey -ErrorAction SilentlyContinue).'127.0.0.1/8123'
-    $previous = if (Test-Path -LiteralPath $proxyReceipt) { Get-Content -LiteralPath $proxyReceipt -Raw | ConvertFrom-Json } else { $null }
-    if ($previous -and [string]$previous.vmId -cne [string]$vm.Id) { throw 'Loopback forwarding receipt belongs to another VM; it was not changed.' }
-    $previousPort = if ($previous -and $previous.port) { [int]$previous.port } else { 8123 }
-    if ($existing -and (-not $previous -or $existing -ne ($previous.address + '/' + $previousPort))) { throw 'Local port 8123 has another port-proxy owner; it was not changed.' }
-    if (-not $existing -and (Get-NetTCPConnection -State Listen -LocalPort 8123 -ErrorAction SilentlyContinue)) { throw 'Local port 8123 is already occupied; it was not changed.' }
-    # Only publish to local loopback. No firewall rule, LAN exposure or credential policy changes.
-    Write-Status 'installing' '正在配置本机访问地址。' $version 'configure'
-    Start-Service iphlpsvc
-    & netsh.exe interface portproxy add v4tov4 listenaddress=127.0.0.1 listenport=8123 connectaddress=$address connectport=8123 | Out-Null
-    if ($LASTEXITCODE -ne 0) { throw 'Could not configure the loopback endpoint.' }
-    [IO.File]::WriteAllText($proxyReceipt, (@{ address = $address; port = 8123; vmId = [string]$vm.Id } | ConvertTo-Json), [Text.UTF8Encoding]::new($false))
-}
-
-function Test-HomeAssistantCore([string]$Address) {
+function Test-HomeAssistantCore([string]$Address, [int]$Port) {
     try {
-        $response = Invoke-WebRequest -Uri ("http://" + $Address + ':8123/api/') -UseBasicParsing -TimeoutSec 3 -MaximumRedirection 0
+        $response = Invoke-WebRequest -Uri ("http://${Address}:${Port}/api/") -UseBasicParsing -TimeoutSec 3 -MaximumRedirection 0
         return $response.StatusCode -eq 200 -and $response.Content -match 'API running'
     } catch {
         if (-not $_.Exception.Response -or [int]$_.Exception.Response.StatusCode -ne 401) { return $false }
         try {
-            $manifest = Invoke-RestMethod -Uri ("http://" + $Address + ':8123/manifest.json') -TimeoutSec 3 -MaximumRedirection 0
+            $manifest = Invoke-RestMethod -Uri ("http://${Address}:${Port}/manifest.json") -TimeoutSec 3 -MaximumRedirection 0
             return $manifest.name -eq 'Home Assistant'
         } catch { return $false }
     }
+}
+
+function Test-OwnedLegacyLoopback($Vm) {
+    $receiptFile = Join-Path $Root 'loopback-proxy.json'
+    if (-not (Test-Path -LiteralPath $receiptFile -PathType Leaf)) { return $false }
+    try {
+        $receipt = Get-Content -LiteralPath $receiptFile -Raw | ConvertFrom-Json
+        if ([string]$receipt.vmId -cne [string]$Vm.Id -or [int]$receipt.port -notin @(80, 8123)) { return $false }
+        $addresses = @((Get-VMNetworkAdapter -VM $Vm).IPAddresses)
+        if ($addresses -cnotcontains [string]$receipt.address) { return $false }
+        $key = 'HKLM:\SYSTEM\CurrentControlSet\Services\PortProxy\v4tov4\tcp'
+        $mapping = (Get-ItemProperty -LiteralPath $key -ErrorAction SilentlyContinue).'127.0.0.1/8123'
+        return [bool]($mapping -and $mapping -ceq ([string]$receipt.address + '/' + [int]$receipt.port))
+    } catch { return $false }
+}
+
+# Read-only discovery: do not start services or VMs, and do not trust a status file as endpoint evidence.
+function Get-OwnedReadyEndpoint {
+    $vm = Get-VM -Name 'RabiRoute-HomeAssistant' -ErrorAction SilentlyContinue
+    if (-not $vm) { return $null }
+    $disk = Join-Path $Root 'home-assistant.vhdx'
+    $receipt = Join-Path $Root 'image.json'
+    if (-not (Test-Path -LiteralPath $receipt -PathType Leaf) -or ((Get-Item -LiteralPath $receipt -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Managed HA installation receipt is missing or invalid.' }
+    $attached = @(Get-VMHardDiskDrive -VM $vm)
+    if ($vm.Notes -ne ('RabiRoute Home Assistant OS: ' + $Root) -or $attached.Count -ne 1 -or -not (Test-InstallationDisk $attached[0].Path $disk $true)) {
+        throw 'A VM with this name is not owned by this installation.'
+    }
+    if ($vm.State -ne 'Running') { return $null }
+    $addresses = @((Get-VMNetworkAdapter -VM $vm).IPAddresses | Where-Object { $_ -match '^\d+\.\d+\.\d+\.\d+$' -and $_ -notmatch '^(127\.|169\.254\.|0\.)' } | Select-Object -First 8)
+    foreach ($address in $addresses) {
+        foreach ($port in @(80, 8123)) {
+            if (Test-HomeAssistantCore $address $port) {
+                return @{ ready = $true; address = $address; port = $port; vmId = [string]$vm.Id; legacyBindingVerified = (Test-OwnedLegacyLoopback $vm) }
+            }
+        }
+    }
+    return $null
 }
 
 function Wait-HomeAssistantCore($Vm, [int]$TimeoutSeconds) {
@@ -117,7 +140,9 @@ function Wait-HomeAssistantCore($Vm, [int]$TimeoutSeconds) {
     do {
         $addresses = (Get-VMNetworkAdapter -VM $Vm).IPAddresses | Where-Object { $_ -match '^\d+\.\d+\.\d+\.\d+$' -and $_ -notmatch '^(127\.|169\.254\.|0\.)' }
         foreach ($candidate in $addresses) {
-            if (Test-HomeAssistantCore $candidate) { return $candidate }
+            foreach ($port in @(80, 8123)) {
+                if (Test-HomeAssistantCore $candidate $port) { return @{ address = $candidate; port = $port } }
+            }
         }
         Start-Sleep -Seconds 2
     } while ([DateTime]::UtcNow -lt $deadline)
@@ -153,9 +178,22 @@ $mutex = [Threading.Mutex]::new($false, 'Global\RabiRoute.HomeAssistantOs.Instal
 $locked = $false
 try {
     try { $locked = $mutex.WaitOne(0) } catch [Threading.AbandonedMutexException] { $locked = $true }
-    if (-not $locked) { return }
-    foreach ($item in Get-ChildItem -LiteralPath $Root -Force -Recurse) {
-        if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Installation files cannot contain reparse points.' }
+    if (-not $locked) {
+        if ($Operation -eq 'Observe') { Write-Output 'RABIROUTE_HA_OBSERVATION:{"ready":false}' }
+        return
+    }
+    if ($Operation -ne 'Observe') {
+        foreach ($item in Get-ChildItem -LiteralPath $Root -Force -Recurse) {
+            if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Installation files cannot contain reparse points.' }
+        }
+    }
+    if ($Operation -eq 'Observe') {
+        Import-Module Hyper-V
+        $service = Get-Service vmms -ErrorAction SilentlyContinue
+        $result = if ($service -and $service.Status -eq 'Running') { Get-OwnedReadyEndpoint } else { $null }
+        if (-not $result) { $result = @{ ready = $false } }
+        Write-Output ('RABIROUTE_HA_OBSERVATION:' + ($result | ConvertTo-Json -Compress))
+        return
     }
     Write-Status 'installing' '正在检查 Hyper-V。' '' 'check'
     $feature = Get-WindowsOptionalFeature -Online -FeatureName Microsoft-Hyper-V-All
@@ -238,12 +276,12 @@ try {
         if (-not $address) { Start-Sleep -Seconds 2 }
     } while (-not $address -and [DateTime]::UtcNow -lt $deadline)
     if (-not $address) { throw 'VM network address is not ready. Use Start and check later; the VM was preserved.' }
-    Set-HomeAssistantLoopback $vm $address
     Write-Status 'installing' '正在检查 Home Assistant Core；异常时只尝试一次优雅重启虚拟机。' $version 'core-health'
-    $address = Restore-HomeAssistantCore $vm ($wasRunning -and $Operation -eq 'Recover')
-    Set-HomeAssistantLoopback $vm $address
+    $endpoint = Restore-HomeAssistantCore $vm ($wasRunning -and $Operation -eq 'Recover')
     Write-Status 'installed' 'Home Assistant OS 与 Core 已就绪。' $version
+    Write-Output ('RABIROUTE_HA_ENDPOINT:' + (@{ address = $endpoint.address; port = $endpoint.port; vmId = [string]$vm.Id; legacyBindingVerified = (Test-OwnedLegacyLoopback $vm) } | ConvertTo-Json -Compress))
 } catch {
+    if ($Operation -eq 'Observe') { exit 1 }
     Write-Status 'error' ('安装未完成：' + $_.Exception.Message)
     exit 1
 } finally {

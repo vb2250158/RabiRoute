@@ -68,15 +68,32 @@ function eventId(state: HomeAssistantState, occurredAt: string): string {
 }
 
 function attributeTimestamp(value: unknown, fallback: string): string {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return new Date(value > 10_000_000_000 ? value : value * 1000).toISOString();
-  }
   const text = String(value ?? "").trim();
   if (/^\d+(?:\.\d+)?$/.test(text)) {
     const number = Number(text);
-    return new Date(number > 10_000_000_000 ? number : number * 1000).toISOString();
+    const timestamp = new Date(number > 10_000_000_000 ? number : number * 1000);
+    return Number.isFinite(timestamp.getTime()) ? timestamp.toISOString() : fallback;
   }
   return Number.isFinite(Date.parse(text)) ? new Date(text).toISOString() : fallback;
+}
+
+function motionVideoFile(attributes: Record<string, unknown>): Record<string, unknown> | undefined {
+  const value = attributes.motion_video_latest;
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+}
+
+function motionPlaylistUrl(attributes: Record<string, unknown>): string | undefined {
+  const legacy = typeof attributes.motion_video_latest === "string" ? attributes.motion_video_latest.trim() : "";
+  const address = legacy || (typeof attributes.stream_address === "string" ? attributes.stream_address.trim() : "");
+  try {
+    const url = new URL(address);
+    if (!["http:", "https:"].includes(url.protocol) || url.username || url.password) return undefined;
+    // Miot Auto uses this endpoint specifically for cloud event recordings; other stream addresses may be live video.
+    if (!legacy && !url.pathname.endsWith("/common/app/m3u8")) return undefined;
+    return address;
+  } catch {
+    return undefined;
+  }
 }
 
 export function xiaomiMiotMotionClipFromStateChange(change: HomeAssistantStateChanged): XiaomiMiotMotionClipCandidate | undefined {
@@ -84,18 +101,23 @@ export function xiaomiMiotMotionClipFromStateChange(change: HomeAssistantStateCh
   const state = change.data?.new_state;
   if (!state?.entity_id) return undefined;
   const attributes = state.attributes ?? {};
-  const playlistUrl = String(attributes.motion_video_latest ?? "").trim();
+  const rawTime = attributes.motion_video_time;
+  if (rawTime === undefined || rawTime === null || String(rawTime).trim() === "") return undefined;
+  const occurredAt = attributeTimestamp(rawTime, "");
+  if (!occurredAt) return undefined;
+  const playlistUrl = motionPlaylistUrl(attributes);
   if (!playlistUrl) return undefined;
   const oldAttributes = change.data?.old_state?.attributes ?? {};
-  const rawTime = attributes.motion_video_time;
-  if (String(oldAttributes.motion_video_latest ?? "") === playlistUrl
-    && String(oldAttributes.motion_video_time ?? "") === String(rawTime ?? "")) return undefined;
-  const fallback = change.time_fired || state.last_updated || state.last_changed || new Date().toISOString();
-  const occurredAt = attributeTimestamp(rawTime, fallback);
+  const file = motionVideoFile(attributes);
+  const fileId = typeof file?.fileId === "string" ? file.fileId.trim() : "";
+  const oldFile = motionVideoFile(oldAttributes);
+  const oldFileId = typeof oldFile?.fileId === "string" ? oldFile.fileId.trim() : "";
+  if (motionPlaylistUrl(oldAttributes) && attributeTimestamp(oldAttributes.motion_video_time, "") === occurredAt
+    && fileId === oldFileId) return undefined;
   const resourceName = String(attributes.friendly_name || state.entity_id);
-  const eventType = String(attributes.motion_video_type || "camera_motion_detected");
+  const eventType = String(attributes.motion_video_type || file?.eventType || "camera_motion_detected");
   const cameraId = String(attributes.did ?? state.entity_id).trim();
-  const sourceEventId = cameraEventId("xiaomi-miot", cameraId, occurredAt, eventType);
+  const sourceEventId = cameraEventId("xiaomi-miot", cameraId, occurredAt, fileId ? JSON.stringify([eventType, fileId]) : eventType);
   return {
     sourceEventId,
     cameraId,
@@ -125,17 +147,22 @@ function normalizedWords(state: HomeAssistantState): string {
     .join(" ");
 }
 
-function isMotionState(state: HomeAssistantState): boolean {
+function isMotionState(state: HomeAssistantState, oldState: HomeAssistantState | null | undefined): boolean {
   const deviceClass = String(state.attributes?.device_class ?? "").toLowerCase();
+  if (state.entity_id.startsWith("event.")) {
+    const eventType = String(state.attributes?.event_type ?? "").toLowerCase();
+    const occurred = oldState && oldState.state !== "unavailable" && oldState.state !== state.state
+      && Number.isFinite(Date.parse(state.state));
+    if (!occurred || /no[-_ ]motion/.test(eventType)) return false;
+    return ["motion", "occupancy", "presence"].includes(deviceClass)
+      || /(motion|occupancy|presence|person|human|有人|移动|人体)/i.test(normalizedWords(state));
+  }
   if (["motion", "occupancy", "presence"].includes(deviceClass)) return state.state === "on";
-  const words = normalizedWords(state);
-  return state.entity_id.startsWith("event.") && /(motion|occupancy|presence|person|human|有人|移动|人体)/i.test(words);
+  return false;
 }
 
-function isCameraMotionState(state: HomeAssistantState, configuredIds: ReadonlySet<string>): boolean {
-  if (!isMotionState(state)) return false;
-  if (configuredIds.has(state.entity_id.toLowerCase())) return true;
-  return /(camera|doorbell|摄像|门铃)/i.test(normalizedWords(state));
+function isCameraMotionState(state: HomeAssistantState, oldState: HomeAssistantState | null | undefined, configuredIds: ReadonlySet<string>): boolean {
+  return configuredIds.has(state.entity_id.toLowerCase()) && isMotionState(state, oldState);
 }
 
 export function xiaomiHomeEventFromHomeAssistantStateChange(
@@ -175,10 +202,11 @@ export function xiaomiHomeEventFromHomeAssistantStateChange(
   if (state.state === "unavailable") {
     kind = "device_offline";
     summary = `${resourceName} 已离线`;
-  } else if (isCameraMotionState(state, configuredIds)) {
+  } else if (isCameraMotionState(state, oldState, configuredIds)) {
     kind = "camera_motion_detected";
     summary = `${resourceName} 检测到有人移动`;
-  } else if (isMotionState(state) || state.entity_id.startsWith("event.")) {
+  } else if (isMotionState(state, oldState) || (state.entity_id.startsWith("event.") && !!oldState
+    && oldState.state !== "unavailable" && isStateChanged && Number.isFinite(Date.parse(state.state)))) {
     kind = "sensor_alert";
     summary = `${resourceName} 触发事件`;
   } else if (

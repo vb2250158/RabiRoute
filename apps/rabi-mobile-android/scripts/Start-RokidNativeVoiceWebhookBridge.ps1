@@ -1,4 +1,4 @@
-param(
+﻿param(
     [string]$Serial = "",
     [string]$AdbPath = "",
     [string]$WebhookUrl = "",
@@ -24,12 +24,9 @@ if (-not (Test-Path -LiteralPath $watchScript)) {
 }
 
 if ([string]::IsNullOrWhiteSpace($WebhookUrl)) {
-    $WebhookUrl = if ([string]::IsNullOrWhiteSpace($env:RABIROUTE_WEBHOOK_URL)) {
-        "http://127.0.0.1:8791/webhook"
-    } else {
-        $env:RABIROUTE_WEBHOOK_URL
-    }
+    $WebhookUrl = $env:RABIROUTE_WEBHOOK_URL
 }
+if ([string]::IsNullOrWhiteSpace($WebhookUrl) -and -not $DryRun) { throw "请通过 -WebhookUrl 或 RABIROUTE_WEBHOOK_URL 指定已配置的 webhook 地址。" }
 
 if ([string]::IsNullOrWhiteSpace($SessionId)) {
     $SessionId = "rokid-native-" + (Get-Date -Format "yyyyMMdd-HHmmss")

@@ -13,7 +13,10 @@ let version = 0;
 const options = computed(() => {
   const items = [{ title: "无角色", value: "", props: { disabled: false } }, ...catalog.value.map(role => ({ title: `${role.title} · ${role.roleId}`, value: role.roleId, props: { disabled: !!role.error } }))];
   const saved = gateway.value?.agentRoleId || "";
-  if (saved && !items.some(item => item.value === saved)) items.push({ title: `${saved} · 已保存的引用（已归档或不可用）`, value: saved, props: { disabled: true } });
+  if (saved && !items.some(item => item.value === saved)) {
+    const status = loading.value ? "正在加载" : error.value ? "状态待确认" : "已归档或不可用";
+    items.push({ title: `${saved} · 已保存的引用（${status}）`, value: saved, props: { disabled: true } });
+  }
   return items;
 });
 async function load() {
@@ -25,7 +28,7 @@ async function load() {
     let cursor = "";
     const collected: RoleSummary[] = [];
     do {
-      const path = `/api/roles?limit=100${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`;
+      const path = `/api/roles?limit=3${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`;
       const page = await roleRequest<{ roles: RoleSummary[]; nextCursor: string | null }>(source ? remotePersonaServicePath(source, path) : path);
       if (generation !== version) return;
       collected.push(...page.roles); catalog.value = [...collected]; cursor = page.nextCursor || "";
@@ -46,9 +49,9 @@ onBeforeUnmount(() => { version++; });
     <div class="section-title">关联角色</div>
     <div class="form-grid mt-3">
       <v-select :model-value="gateway.agentRoleDeviceId || ''" :items="[{ title: '本机', value: '' }, ...devices.map(device => ({ title: device.name, value: device.deviceId }))]" label="角色来源 PC" @update:model-value="value => sourceChanged(String(value || ''))" />
-      <v-autocomplete :model-value="gateway.agentRoleId || ''" :items="options" label="绑定角色" :loading="loading" :disabled="loading || !!error" @update:model-value="value => store.updateGatewayField('agentRoleId', String(value || ''))" />
+      <v-autocomplete :model-value="gateway.agentRoleId || ''" :items="options" label="绑定角色" :loading="loading" :disabled="(loading || !!error) && !catalog.length" @update:model-value="value => store.updateGatewayField('agentRoleId', String(value || ''))" />
       <v-text-field v-if="gateway.agentRoleId" :model-value="gateway.agentRoleFile || 'persona.md'" label="角色文件名" @update:model-value="value => store.updateGatewayField('agentRoleFile', String(value || 'persona.md'))" />
     </div>
-    <v-alert v-if="error" type="error">{{ error }}</v-alert>
+    <v-alert v-if="error" type="error">{{ error }} <v-btn variant="text" @click="load()">重试</v-btn></v-alert>
   </v-card>
 </template>

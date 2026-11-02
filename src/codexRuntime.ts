@@ -46,10 +46,20 @@ export type CodexIdleNotificationResult = {
 
 export type CodexTurnSandbox = "read-only" | "workspace-write" | "danger-full-access";
 
+export type CodexNotificationTurnOptions = {
+  model: string;
+  reasoningEffort?: CodexDesktopReasoningEffort;
+};
+
 export function resolvePrimaryCodexTurnOptions(settings: {
   agentModel?: string;
   agentReasoningEffort?: CodexDesktopReasoningEffort;
-}): { model?: string; reasoningEffort?: CodexDesktopReasoningEffort } {
+}, override?: CodexNotificationTurnOptions): { model?: string; reasoningEffort?: CodexDesktopReasoningEffort } {
+  if (override) {
+    const model = override.model.trim();
+    if (!model) throw new Error("A notification model override requires a non-empty model.");
+    return { model, ...(override.reasoningEffort ? { reasoningEffort: override.reasoningEffort } : {}) };
+  }
   const model = settings.agentModel?.trim();
   return {
     ...(model ? { model } : {}),
@@ -834,7 +844,8 @@ export async function notifyCodex(message: string, imagePaths: string[] = []): P
   return result;
 }
 
-export async function notifyCodexWhenIdle(message: string): Promise<CodexIdleNotificationResult> {
+export async function notifyCodexWhenIdle(message: string, turnOptions?: CodexNotificationTurnOptions): Promise<CodexIdleNotificationResult> {
+  const deliveryTurnOptions = resolvePrimaryCodexTurnOptions(config, turnOptions);
   const result = notificationQueue.catch(() => undefined).then(async () => {
     const resolved = await resolveMonitorThread(true);
     if (!resolved) throw new Error("Codex Desktop task could not be resolved.");
@@ -851,7 +862,7 @@ export async function notifyCodexWhenIdle(message: string): Promise<CodexIdleNot
         cwd: config.codexCwd,
         deliveryId,
         sandbox: "workspace-write",
-        ...resolvePrimaryCodexTurnOptions(config)
+        ...deliveryTurnOptions
       });
       return {
         status: "delivered",

@@ -103,7 +103,7 @@ onUnmounted(() => { unmounted = true; events?.close(); });
       <v-text-field :model-value="snapshot?.haosInstallPath" label="预设安装路径" readonly hide-details />
       <v-switch v-model="autoStart" label="启动 Rabi 时自动启动 Home Assistant" :disabled="busy || operationActive" color="primary" hide-details />
       <div class="section-note">需要 Windows 专业版、企业版或教育版、管理员权限及至少 40 GiB 可用空间。需要重启时会暂停，重启后再次点击安装继续。</div>
-      <div class="section-note">服务仅开放到本机 http://127.0.0.1:8123；虚拟机使用 2 核 CPU、2 GiB 内存。</div>
+      <div class="section-note">服务仅开放到本机，端口自动分配；虚拟机使用 2 核 CPU、2 GiB 内存。</div>
     </template>
     <div v-if="mode === 'haos' && operationActive" class="installation-progress" role="status" aria-live="polite">
       <div class="installation-progress-detail">

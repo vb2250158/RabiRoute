@@ -4,6 +4,8 @@
 
 # Desktop-pet motion API
 
+Throw trajectories use gravity of 1400 px/s² at a 256 px window size, restitution 0.78 and ground friction 2.5, with no airborne drag. Collision parameters follow the DSH pet defaults; the landing squash animation differs from DSH.
+
 See [implemented requirements](implemented-requirements_en.md) for integration, installation status and the startup timeout memo.
 
 An Agent instructs an enabled pet through Manager; Qt Desktop uses the current pack's walking, running or teleport animations. Wandering need not be enabled and its settings remain unchanged. Application windows are neither focused nor moved.

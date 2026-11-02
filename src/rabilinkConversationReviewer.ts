@@ -6,6 +6,7 @@ import {
   notifyCodex,
   notifyCodexWhenIdle,
   type CodexIdleNotificationResult,
+  type CodexNotificationTurnOptions,
   type CodexMonitorThread
 } from "./codexRuntime.js";
 import { appendAdapterLog } from "./history.js";
@@ -19,6 +20,7 @@ import {
 import { observeIdentityEndpoint, resolveIdentityRelationContext, type IdentityEndpointLookup } from "./identityRelations.js";
 import { identityContextLines } from "./routing/identityContext.js";
 import { renderRabiDelivery } from "./shared/rabiMessage.js";
+import { normalizeCodexReasoningEffort } from "./shared/gatewayConfigModel.js";
 
 const DEFAULT_REVIEW_INTERVAL_MS = 5000;
 const DEFAULT_REVIEW_SETTLE_MS = 4000;
@@ -49,11 +51,24 @@ export type RabiLinkConversationReviewerOptions = {
   intervalMs?: number;
   settleMs?: number;
   reflectionIntervalMs?: number;
+  reflectionTurnOptions?: CodexNotificationTurnOptions;
   now?: () => number;
-  notifyWhenIdle?: (message: string) => Promise<CodexIdleNotificationResult>;
+  notifyWhenIdle?: (message: string, turnOptions?: CodexNotificationTurnOptions) => Promise<CodexIdleNotificationResult>;
   notifyNow?: (message: string) => Promise<unknown>;
   onBackgroundError?: (error: unknown, trigger: string) => void;
 };
+
+export function resolveRabiLinkReflectionTurnOptions(variables: Record<string, string>): CodexNotificationTurnOptions | undefined {
+  const model = variables.rabilinkReflectionModel?.trim();
+  const effort = variables.rabilinkReflectionReasoningEffort?.trim();
+  if (!model) {
+    if (effort) throw new Error("rabilinkReflectionReasoningEffort requires rabilinkReflectionModel.");
+    return undefined;
+  }
+  const reasoningEffort = normalizeCodexReasoningEffort(effort);
+  if (effort && !reasoningEffort) throw new Error("Invalid rabilinkReflectionReasoningEffort.");
+  return { model, ...(reasoningEffort ? { reasoningEffort } : {}) };
+}
 
 function optionalBoolean(value: unknown, fallback: boolean): boolean {
   if (typeof value === "boolean") return value;
@@ -179,9 +194,9 @@ export function buildRabiLinkConversationReviewPrompt(input: {
   const evidenceToolPath = input.reflection ? localEvidenceToolPath(input.agentRolePath) : "";
   const localEvidenceLines = evidenceToolPath
     ? [
-      "[本机现场取证]",
+      "\n### 本机现场取证\n",
       "仅在当前角色提供取证工具、且已有明确授权覆盖本轮采集时运行一次；工具存在不代表获得授权。静默不能证明用户不在场。",
-      `${evidenceToolPath} -CaptureScreen -CaptureCamera -IncludeWindowTitle -OutputPath <本机临时 manifest>。只使用本机临时目录，不把 manifest 或原始材料写回角色目录。`,
+      `\`${evidenceToolPath} -CaptureScreen -CaptureCamera -IncludeWindowTitle -OutputPath <本机临时 manifest>\`。只使用本机临时目录，不把 manifest 或原始材料写回角色目录。`,
       "查看成功采样的一帧，记录来源、时间、事实与未知；前台窗口或探针活动不能证明用户正在操作，摄像头画面不用于身份、健康或情绪诊断。",
       "本机语音只读取已运行的 RabiRoute speech/RabiLink 摘要；不启动第二个常驻录音器。探针失败时回退到低敏元数据并保留未知，不因单个传感器失败结束本轮。",
       "查看后删除 manifest、屏幕图、摄像头图和证据临时目录，并核对已不存在；原始图像、音频和完整转写不得写入日记、记忆或任何外发消息。"
@@ -203,7 +218,7 @@ export function buildRabiLinkConversationReviewPrompt(input: {
     }
   });
   return [
-    "[RabiLink 主动智能会话审阅]",
+    "### RabiLink 主动智能会话审阅\n",
     input.manual
       ? "用户刚刚在眼镜连接会话模式单击触摸板，要求你现在查看会话账本。若当前 turn 正在执行，这是一条引导：不要丢弃当前任务，在本轮下一个安全点完成审阅。"
       : input.reflection
@@ -211,21 +226,21 @@ export function buildRabiLinkConversationReviewPrompt(input: {
         : "RabiRoute 检测到固定 Codex 线程空闲，并发现尚未审阅的眼镜观察记录。",
     "这不是一条可直接回答的转写正文。不要只根据本提示猜测用户说了什么。",
     "",
-    `统一会话账本：${input.ledgerPath}`,
-    `历史会话索引：${input.archiveIndexPath}`,
-    `历史会话目录：${input.archiveDir}`,
-    `本次新增用户记录：${input.pendingUserEntries.length}`,
-    `新增范围：${first?.entryId || "无新增用户记录"} -> ${last?.entryId || "无新增用户记录"}`,
-    `记录时间：${first?.recordedAt || "无新增记录"} -> ${last?.recordedAt || "无新增记录"}`,
-    `本次涉及 Route：${input.pendingRouteProfileIds?.join(", ") || input.routeProfileId}`,
-    `当前角色：${input.agentRolePath || "使用当前线程已绑定角色"}`,
-    input.identityLines?.length ? `[身份定位]\n${input.identityLines.join("\n")}` : "",
+    `\n- 统一会话账本：${input.ledgerPath}`,
+    `- 历史会话索引：${input.archiveIndexPath}`,
+    `- 历史会话目录：${input.archiveDir}`,
+    `- 本次新增用户记录：${input.pendingUserEntries.length}`,
+    `- 新增范围：${first?.entryId || "无新增用户记录"} -> ${last?.entryId || "无新增用户记录"}`,
+    `- 记录时间：${first?.recordedAt || "无新增记录"} -> ${last?.recordedAt || "无新增记录"}`,
+    `- 本次涉及 Route：${input.pendingRouteProfileIds?.join(", ") || input.routeProfileId}`,
+    `- 当前角色：${input.agentRolePath || "使用当前线程已绑定角色"}`,
+    input.identityLines?.length ? `\n### 身份定位\n\n${input.identityLines.join("\n")}` : "",
     input.identityObservationUrl
       ? `本次若出现新的、可核对身份线索，只能 POST ${input.identityObservationUrl} 追加候选观察；说话习惯一致性可以辅助共用账号的本条消息归因，但不能单独确认身份。`
       : "",
     resolvedReviewPolicyPath ? `先完整读取并遵循主动审阅策略：${resolvedReviewPolicyPath}` : "主动审阅策略：使用本提示中的默认策略",
     "",
-    "[审阅范围]",
+    "\n### 审阅范围\n",
     "1. 用结构化方式读取当前 JSONL。每行是一条 JSON；用户观察、Agent 已投递消息和手动审阅请求都在同一条时间线上。新增范围可能跨分卷；当前文件找不到起始 entryId 时，必须读取历史索引并在归档中找到它。",
     input.reflection
       ? "2. 本次可能没有新增用户记录。回看当前账本中足够的用户与 Agent 消息，并检查当前角色目录内相关计划、任务、记忆或最近工具结果；需要跨会话恢复语境时，先读历史索引，再按文件名读取日期归档。"
@@ -233,9 +248,9 @@ export function buildRabiLinkConversationReviewPrompt(input: {
     "3. 区分明确对你说的话、环境交谈、媒体声音、半句话和 ASR 噪声。不要把持续录音中的每句话都当成命令。",
     "4. 结合记录判断当前意图、阻碍和下一步；区分事实、推断与未知。",
     "5. 只有在能带来明确帮助时才主动打断：直接问题、时间敏感提醒、风险、重要遗漏、可立即推进的下一步，或用户明确要求你介入。普通闲聊、重复、背景音和低置信片段保持安静。",
-    ...localEvidenceLines,
     "6. 任何外发、删除、购买、设备控制或配置高风险动作仍需遵守 RabiRoute 安全门；不要因为旁听到一句话就擅自执行。",
-    `[回传参数]\nPOST ${sendApiUrl}\n${proactiveSendBody}\n多个 Route 按记录的 routeProfileId 分别投递。`,
+    ...localEvidenceLines,
+    `\n### 回传参数\n\nPOST ${sendApiUrl}\n\n\`\`\`json\n${proactiveSendBody}\n\`\`\`\n\n多个 Route 按记录的 routeProfileId 分别投递。`,
     "只有接口返回 ok=true 且 status=sent 才视为已投递；成功下行会自动写回同一账本。不要复述内部路径、entryId、JSON 字段或审阅过程，也不要重复已经投递过的内容。",
     input.manual
       ? "这是用户手动要求审阅：即使暂时没有要执行的动作，也应给眼镜一句很短的自然确认，说明你已经看过并给出最有用的一点结论。"
@@ -254,8 +269,9 @@ export class RabiLinkConversationReviewer {
   private readonly intervalMs: number;
   private readonly settleMs: number;
   private readonly reflectionIntervalMs: number;
+  private readonly reflectionTurnOptions?: CodexNotificationTurnOptions;
   private readonly now: () => number;
-  private readonly notifyWhenIdle: (message: string) => Promise<CodexIdleNotificationResult>;
+  private readonly notifyWhenIdle: NonNullable<RabiLinkConversationReviewerOptions["notifyWhenIdle"]>;
   private readonly notifyNow: (message: string) => Promise<unknown>;
   private readonly onBackgroundError: (error: unknown, trigger: string) => void;
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
@@ -271,6 +287,7 @@ export class RabiLinkConversationReviewer {
     this.agentRoleId = options.agentRoleId?.trim() || "";
     this.autoReviewEnabled = options.autoReviewEnabled !== false;
     this.continuousReflectionEnabled = options.continuousReflectionEnabled !== false;
+    this.reflectionTurnOptions = options.reflectionTurnOptions && Object.freeze({ ...options.reflectionTurnOptions });
     this.intervalMs = boundedNumber(options.intervalMs, DEFAULT_REVIEW_INTERVAL_MS, 1000, 60000);
     this.settleMs = boundedNumber(options.settleMs, DEFAULT_REVIEW_SETTLE_MS, 0, 60000);
     this.reflectionIntervalMs = boundedNumber(
@@ -468,7 +485,7 @@ export class RabiLinkConversationReviewer {
     if (manual) {
       deliveryThread = deliveredThread(await this.notifyNow(prompt));
     } else {
-      const delivery = await this.notifyWhenIdle(prompt);
+      const delivery = await this.notifyWhenIdle(prompt, reflection ? this.reflectionTurnOptions : undefined);
       if (delivery.status === "busy") {
         return { status: "busy", pendingUserCount: pendingUserEntries.length, manual: false, reflection };
       }
@@ -534,6 +551,7 @@ export function startDefaultRabiLinkConversationReviewer(): RabiLinkConversation
     agentRoleId: config.agentRoleId,
     autoReviewEnabled,
     continuousReflectionEnabled: optionalBoolean(variables.rabilinkContinuousReflection, autoReviewEnabled),
+    reflectionTurnOptions: resolveRabiLinkReflectionTurnOptions(variables),
     intervalMs: boundedNumber(variables.rabilinkReviewIntervalMs, DEFAULT_REVIEW_INTERVAL_MS, 1000, 60000),
     settleMs: boundedNumber(variables.rabilinkReviewSettleMs, DEFAULT_REVIEW_SETTLE_MS, 0, 60000),
     reflectionIntervalMs: boundedNumber(

@@ -316,6 +316,8 @@ Legacy per-route Relay fields remain readable for compatibility; new configurati
 
 Record-first sources such as FenneNote can be selected through `routeVariables.rabilinkRecordFirstSources`. Configure one owning route only; do not let another direct-delivery route consume the same webhook and create duplicate Agent turns.
 
+`routeVariables.rabilinkReflectionModel` and `rabilinkReflectionReasoningEffort` override only new Codex turns for periodic RabiLink reflection heartbeats. An empty model preserves the Route primary settings. With an explicit model, omitted effort uses the selected model default. Automatic reviews of new observations, manual reviews and ordinary messages retain primary settings. Save these Route variables and verify the configuration activation result.
+
 ## WeCom
 
 `wecomBotId`, `wecomBotSecret`, and optional `wecomWsUrl` configure the smart-bot WebSocket. Prefer `WECOM_BOT_ID`, `WECOM_BOT_SECRET`, and `WECOM_WS_URL` for real credentials. See [WeCom Integration](wecom-integration_en.md).

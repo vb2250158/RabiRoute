@@ -380,10 +380,10 @@ test("AgentPacket reads a NapCat get_msg reply cached in the gateway history for
     });
 
     assert.equal(packet.messageSource.type, "message_adapter");
-    assert.match(packet.message, /^\[消息源\]\n消息源类型：消息端/);
-    assert.match(packet.message, /\n\[消息内容\]\n\[CQ:reply,id=3000\]继续追问/);
+    assert.match(packet.message, /^## 消息源\n- 消息源类型：消息端/);
+    assert.match(packet.message, /\n## 消息内容\n\[CQ:reply,id=3000\]继续追问/);
     assert.match(packet.message, /\[CQ:reply,id=3000\] : 通过 OneBot get_msg 补齐的原始问题/);
-    const currentMessageSectionIndex = packet.message.indexOf("[消息内容]");
+    const currentMessageSectionIndex = packet.message.indexOf("## 消息内容");
     const messageCodeSectionIndex = packet.message.indexOf("[消息代码解析]");
     const identitySectionIndex = packet.message.indexOf("[身份定位]");
     assert.ok(messageCodeSectionIndex > currentMessageSectionIndex);
@@ -587,7 +587,7 @@ test("AgentPacket excludes every fragment already merged into the current messag
   assert.doesNotMatch(String(packet.templateValues.recentMessages), /这个按钮/);
   assert.doesNotMatch(String(packet.templateValues.recentMessages), /再往下挪一点/);
   const recentMessagesSectionIndex = packet.message.indexOf("[最近消息]");
-  const currentMessageSectionIndex = packet.message.indexOf("[消息内容]");
+  const currentMessageSectionIndex = packet.message.indexOf("## 消息内容");
   assert.ok(currentMessageSectionIndex >= 0);
   assert.ok(recentMessagesSectionIndex > currentMessageSectionIndex);
   const replyContext = JSON.parse(String(packet.templateValues.replyContextJson));
@@ -732,7 +732,7 @@ test("AgentPacket presents broad history before the current message and keeps fo
   assert.equal(packet.content.split("改动原因是为了更长的底框").length - 1, 1);
   assert.match(packet.content, /messageId=1000：见\[最近消息\]同 ID 内容/);
   const recentMessagesSectionIndex = packet.message.indexOf("[最近消息]");
-  const currentMessageSectionIndex = packet.message.indexOf("[消息内容]");
+  const currentMessageSectionIndex = packet.message.indexOf("## 消息内容");
   const focusedDiscussionSectionIndex = packet.message.indexOf("[当前讨论片段]");
   assert.ok(currentMessageSectionIndex >= 0);
   assert.ok(recentMessagesSectionIndex > currentMessageSectionIndex);
@@ -798,8 +798,8 @@ test("AgentPacket exposes exact plan secretary sessions without replacing busine
       routeName: "plan assistant route",
       routeId: "route-plan-assistant"
     });
-    assert.match(packet.message, /^\[消息源\]\n消息源类型：系统/);
-    assert.match(packet.message, /\n\[消息内容\]\n推进计划/);
+    assert.match(packet.message, /^## 消息源\n- 消息源类型：系统/);
+    assert.match(packet.message, /\n## 消息内容\n推进计划/);
     assert.match(packet.message, /\[计划协助会话\]/);
     assert.match(packet.message, /threadId=019fa314-2c07-7523-896f-9bb6b638054b/);
     assert.match(packet.message, /秘书负责计划控制面，业务执行交 taskBinding 指定任务/);
@@ -1025,7 +1025,7 @@ test("AgentPacket routes plan approval responses back to the plan instead of lea
     planName: "消息源统一计划",
     planId: "plan-1"
   });
-  assert.match(packet.message, /^\[消息源\]\n消息源类型：计划\n计划名称：消息源统一计划\n计划 ID：plan-1/);
+  assert.match(packet.message, /^## 消息源\n- 消息源类型：计划\n- 计划名称：消息源统一计划\n- 计划 ID：plan-1/);
   assert.match(packet.message, /事件：计划反馈/);
   assert.match(packet.message, /路由类型：plan_feedback/);
   assert.doesNotMatch(packet.message, /\[最近消息\]/);

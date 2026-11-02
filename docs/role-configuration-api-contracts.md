@@ -6,6 +6,8 @@
 
 `createRoleConfigurationOperations` 注册八个可执行 HTTP 契约，`createRoleConfigurationOwner` 持有配置、revision、角色锁、原生操作回执与生命周期编排。角色无需绑定消息路线（Route）。已经鉴权且未显式禁用的远端连接与本机调用使用同一 owner，不额外要求角色绑定、功能白名单或管理密钥。
 
+角色页面把最近一次成功加载的角色 ID 和来源电脑保存在主机桌面设置 `lastRoleSelection`；无指定角色的入口优先恢复该引用。来源不可用或角色已归档时保留原引用并显示实际状态。
+
 | 方法 | 路径 | 行为 |
 | --- | --- | --- |
 | GET | `/api/roles` | 分页列出活动角色；`scope=archived` 查询归档角色；支持 `query`、`cursor`、`limit` |
@@ -17,7 +19,7 @@
 | POST | `/api/roles/:roleId/restore` | 恢复角色 |
 | POST | `/api/roles/:roleId/delete` | 彻底删除已归档且无引用、无工作租约的角色 |
 
-角色 ID 沿用原生 Unicode 字母、数字、下划线和连字符规则。列表每页最多返回 25 项、最多检查 200 个目录；有 `nextCursor` 时继续读取。单个损坏目录返回错误项，不伪装为正常角色。
+角色 ID 沿用原生 Unicode 字母、数字、下划线和连字符规则。列表每页最多返回 25 项、最多检查 200 个目录；有 `nextCursor` 时继续读取。单个损坏目录返回错误项，不伪装为正常角色。每批最多并行读取 4 个目录，结果仍按角色 ID 顺序返回；界面逐页显示结果。
 
 读取不存在角色的 `/configuration` 返回 404、`ROLE_NOT_FOUND`，不创建角色或恢复记录。受管角色根不可用、配置损坏和元数据损坏分别保留原有运行错误；它们不会被转换成角色不存在。
 

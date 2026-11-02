@@ -760,6 +760,8 @@ cd <repo>\apps\rabi-mobile-android
 
 状态：待原生 TTS ack 闭环后启用。当前 CustomApp 路线还没有真实 `RABI_TTS_OK`，所以本节不能作为已完成播放能力验收。
 
+以下保留显式 `8794` 的手动示例；默认启动已改为动态分配端口。桥栈需要通过 `-WebhookUrl` 或 `RABIROUTE_WEBHOOK_URL` 指定已配置的输入地址，启动后从输出的 manifest 读取 `ttsPlaybackUrl`，并将该地址用于消费者和 `FENNOTE_PLAYBACK_URL`。显式指定的端口已被占用时启动失败，不会接管其他服务。
+
 RabiRoute 的 `voice_chat` pipeline 会把播放请求转发到 FenneNote 风格的 playback endpoint。Rokid 原生 TTS 可以用本地播放端兼容这个接口：
 
 ```powershell
@@ -789,7 +791,7 @@ cd <repo>\apps\rabi-mobile-android
 或一键启动桥栈时指定：
 
 ```powershell
-.\scripts\Start-RokidNativeVoiceStack.ps1 -Serial <adb-serial> -TtsCommand rokid_ai_tts
+.\scripts\Start-RokidNativeVoiceStack.ps1 -Serial <adb-serial> -WebhookUrl <configured-webhook-url> -TtsCommand rokid_ai_tts
 ```
 
 `-TtsCommand android_tts` 也可用于 Android 系统 TTS 备用路线。当前默认仍是 `tts`，即眼镜 CustomApp / Glass SDK TTS 路线。
@@ -831,7 +833,7 @@ $env:FENNOTE_PLAYBACK_URL = "http://127.0.0.1:8794/api/fennenote/playback"
 | `pipeline.outputAdapter` | `fennenote` |
 | `pipeline.outputPipeline` | `rokid-native-tts` |
 | `pipeline.ttsProvider` | `rokid-native` |
-| `pipeline.ttsWorkerUrl` | `http://127.0.0.1:8794/api/fennenote/playback` |
+| `pipeline.ttsWorkerUrl` | 初始为空；需要时填写本次 manifest 的 `ttsPlaybackUrl` |
 
 注意：当前 RabiRoute outbox 的 FenneNote playback 实际转发目标读取 `FENNOTE_PLAYBACK_URL` / manager 配置；`ttsWorkerUrl` 主要用于注入给 Agent 和文档化目标。因此真实运行时仍建议设置：
 

@@ -863,6 +863,10 @@ test("legacy prepared replies can prove their frozen payload without a semantic 
   const persisted = f.persistence.value as { deliveries: Record<string, PreparedEndpointDelivery> };
   const legacy = persisted.deliveries[deliveryId];
   delete legacy.requestHash;
+  const boundary = legacy.prompt.indexOf("\n\n## 消息内容\n");
+  assert.ok(boundary >= 0);
+  const oldHeader = legacy.prompt.slice(0, boundary).split("\n").slice(1).map((line: string) => line.replace(/^- /, ""));
+  legacy.prompt = ["[消息源]", ...oldHeader].join("\n") + "\n\n[消息内容]\n" + legacy.prompt.slice(boundary + "\n\n## 消息内容\n".length);
   const footerAt = legacy.prompt.lastIndexOf("[回传参数]\n");
   const parameters = JSON.parse(legacy.prompt.slice(footerAt + "[回传参数]\n".length));
   delete parameters.request.agentAdapter;

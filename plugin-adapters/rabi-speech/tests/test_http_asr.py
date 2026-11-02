@@ -25,7 +25,7 @@ def transcribe_response(tmp_path: Path, monkeypatch, response: dict):
     monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: original_client(transport=transport, **kwargs))
 
     async def ensure(*_args):
-        return 0.0
+        return "http://127.0.0.1:9999"
 
     monkeypatch.setattr(worker_supervisor, "ensure", ensure)
     model = HttpAsrModelSettings("fixture", "Fixture", "Fixture", "http://127.0.0.1:9999", "", True, (), (), WorkerLaunch())

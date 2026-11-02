@@ -4,12 +4,25 @@ import test from "node:test";
 import { NapcatWebuiSessions } from "./napcatWebuiSession.js";
 
 async function serverFor(t: test.TestContext, handler: http.RequestListener): Promise<string> {
-  const server = http.createServer(handler);
-  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
-  t.after(() => { server.closeAllConnections(); return new Promise<void>(resolve => server.close(() => resolve())); });
-  const address = server.address();
-  if (!address || typeof address === "string") throw new Error("Missing test server port");
-  return `http://127.0.0.1:${address.port}`;
+  const server = http.createServer((request, response) => {
+    if (request.method === "HEAD" && request.url === "/__fixture_ready") response.writeHead(204).end();
+    else handler(request, response);
+  });
+  t.after(() => { server.closeAllConnections(); if (server.listening) return new Promise<void>(resolve => server.close(() => resolve())); });
+  for (let attempt = 0; attempt < 16; attempt++) {
+    await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Missing test server port");
+    const base = `http://127.0.0.1:${address.port}`;
+    try {
+      await fetch(base + "/__fixture_ready", { method: "HEAD", signal: AbortSignal.timeout(1000) });
+      return base;
+    } catch (error) {
+      if (!(error instanceof TypeError && error.cause instanceof Error && error.cause.message === "bad port")) throw error;
+      await new Promise<void>(resolve => server.close(() => resolve()));
+    }
+  }
+  throw new Error("No Fetch-compatible test listener was assigned after 16 attempts");
 }
 
 test("parallel panels and repeated status reads reuse one authentication request under login rate limiting", async t => {

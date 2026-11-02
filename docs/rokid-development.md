@@ -77,6 +77,8 @@
 
 ## 后续使用入口
 
+历史原生语音桥的 TTS 播放服务默认自动选择本机端口。启动 `Start-RokidNativeVoiceStack.ps1` 时，通过 `-WebhookUrl` 或 `RABIROUTE_WEBHOOK_URL` 指定已配置的 Webhook 地址；成功启动后使用其 manifest 中的 `ttsPlaybackUrl` 配置消费者。需要固定地址时可显式传入 `-TtsPort`，端口被占用会报告失败。此桥仍需真机验证。
+
 ### 精简手机包自定义消息探针
 
 `RokidProbeActivity` 在精简包中提供 CXR-L 独立测试：连接、查询眼镜组件、显式安装随包组件、启动、发送一次 Ping、复制日志。目标为 `com.rabi.link.glass.video`，不会发送录像开始命令。必须同时确认 CXR/蓝牙连接、当前安装查询和启动回调；发送返回值只记为 SDK 接受，15 秒内匹配本次随机 requestId 的 Pong 才记为自有通道收发成功。断线或退出清除等待状态。

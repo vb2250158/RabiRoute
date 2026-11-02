@@ -1393,15 +1393,15 @@ Every `create` and `send` with a non-empty `prompt` must include `messageSource`
 Every rendered RabiRoute delivery starts with these two wire sections. Collaboration rules, response contracts, event details, and recent messages follow them:
 
 ```text
-[消息源]
-消息源类型：<消息端 | Agent | 计划 | 系统>
-<type-specific name, complete ID, session, plan, or Route fields>
+## 消息源
+- 消息源类型：<消息端 | Agent | 计划 | 系统>
+- <type-specific name, complete ID, session, plan, or Route fields>
 
-[消息内容]
+## 消息内容
 <prompt>
 ```
 
-Formal replies use a compact template: `[消息内容]` contains one `[回复结果]` (result) and one `[下一步]` (next action). Exact copies of those fields in `prompt` are omitted; other text remains under `[相关上下文]` (additional instructions). Evidence is neither summarized nor truncated. The response contract retains delivery and request IDs, response instructions, and complete POST parameters, without repeating the receiving task identity or the no-reply explanation. Workspace restrictions come from the target `AGENTS.md`; the template adds neither generic collaboration reminders nor project-name branches.
+Formal replies use a compact template: `## 消息内容` contains one `[回复结果]` (result) and one `[下一步]` (next action). Exact copies of those fields in `prompt` are omitted; other text remains under `[相关上下文]` (additional instructions). Evidence is neither summarized nor truncated. The response contract retains delivery and request IDs, response instructions, and complete POST parameters, without repeating the receiving task identity or the no-reply explanation. Workspace restrictions come from the target `AGENTS.md`; the template adds neither generic collaboration reminders nor project-name branches.
 
 New deliveries use `[回传参数]` with a complete JSON request. The request store persists structured results and the actual prompt digest before delivery; `reconcile_delivery` matches accepted text and restores results from the record rather than parsing headings. Old formats serve outstanding historical reservations only; see [ownership and retirement](message-delivery-templates_en.md).
 
@@ -1409,7 +1409,7 @@ Agent callers normally use `type=agent`. `agentAdapter` names the actual endpoin
 
 Non-empty `create` and `send` requests use the same source-verification rule. With `type=agent`, both require `sourceThreadId`; Manager reads the actual source name from its owner, including Codex Desktop, DSH and the Grok Bot service, and replaces a stale submitted name. A canonical Grok Bot session ID is verified with the Bot owner and does not have to match a Codex UUID or DSH `session-` shape. That `sourceThreadId` may be up to 4096 characters; Codex and DSH sources stay at 512. A message-adapter `conversationId` is limited to 300 characters, so a longer Bot session uses `type=agent`. Manager-owned plan progress, approval, and QA events show only the plan name and ID. `sourceAgent` is included only when the plan task itself returns a result and the source session is verified.
 
-`contextBlocks` follow the message content, and `controlBlocks` follow context. Reply parameters and current delivery requirements belong in control blocks; generic collaboration blocks are no longer injected. Neither field may contain `[消息源]`, `[消息内容]`, or `[投递源]`. Legacy source wrappers, nested envelopes, and old Agent response wrappers are migrated automatically. A replay whose old record lacks structured provenance is labeled `历史投递记录`; RabiRoute does not guess the source identity.
+`contextBlocks` follow the message content, and `controlBlocks` follow context. Reply parameters and current delivery requirements belong in control blocks; generic collaboration blocks are no longer injected. Neither field may contain `## 消息源`, `## 消息内容`, `[消息源]`, `[消息内容]`, or `[投递源]`. Legacy source wrappers, nested envelopes, and old Agent response wrappers are migrated automatically. A replay whose old record lacks structured provenance is labeled `历史投递记录`; RabiRoute does not guess the source identity.
 
 A formal response uses the same `send` action. The responder must send `inReplyToRequestId`, `result`, and `nextAction` back to the original requester and choose `responsePolicy` again. Use `required` plus a new `responseInstruction` when the requester must act and report back; use `none` when the exchange ends with this response. The reply's `messageSource.agentAdapter`, `messageSource.sessionId`, `sourceThreadId`, and workspace must identify the receiving session that is currently responding. `inReplyToRequestId` alone points to the original request; the requester or reply destination must not be presented as the reply source.
 
@@ -1472,7 +1472,7 @@ Receipt-log capability is required on the original source task that actually rec
 
 Reminder delivery performs the same check first. Incomplete evidence retains the reservation, records `lastReminderError`, and suspends that unanswered-request reminder without endless retries or asking for a resend. A later task completion or explicit reconciliation can check again. Read timeouts, identity/contract mismatches, and deleted legacy `404` requests are not reconstructed by guessing; keep the missing formal-response record explicit.
 
-For Agent-to-Agent `create` and `send`, Manager verifies the source through the actual owner selected by `messageSource.agentAdapter + sourceThreadId`. Codex reads Desktop task state and the current sidebar name; DSH reads session name, workspace, and running state through apiproxy `session.list`. A Grok Bot source must be a canonical `grokBot:` session ID, then the Bot owner name is read; an undecodable ID, a missing owner, or an adapter other than `grokBot` fails closed and is not accepted by falling through to the Codex/DSH shape check. A missing source, workspace conflict, or mismatch between `sourceThreadId` and `messageSource.sessionId` fails closed. Every non-empty RabiRoute delivery starts with `[消息源]`, followed by `[消息内容]`; reminders, initialization messages, RabiLink reviews, and replays use the same envelope.
+For Agent-to-Agent `create` and `send`, Manager verifies the source through the actual owner selected by `messageSource.agentAdapter + sourceThreadId`. Codex reads Desktop task state and the current sidebar name; DSH reads session name, workspace, and running state through apiproxy `session.list`. A Grok Bot source must be a canonical `grokBot:` session ID, then the Bot owner name is read; an undecodable ID, a missing owner, or an adapter other than `grokBot` fails closed and is not accepted by falling through to the Codex/DSH shape check. A missing source, workspace conflict, or mismatch between `sourceThreadId` and `messageSource.sessionId` fails closed. Every non-empty RabiRoute delivery starts with `## 消息源`, followed by `## 消息内容`; reminders, initialization messages, RabiLink reviews, and replays use the same envelope.
 
 Codex and DSH `create` and `send` use workspaces already configured in RabiRoute and cannot start a session in an arbitrary directory. Grok Bot service sessions need no local filesystem directory; do not fabricate `cwd` or start a local Runtime for them. Every non-empty `prompt` requires a complete `messageSource`; `type=agent` also requires `agentAdapter`, `sessionName`, and the complete `sessionId`. Agent-to-Agent sends require a verifiable `sourceThreadId` equal to `messageSource.sessionId`. The `sandbox` field cannot override the target owner model, tools, sandbox, or approvals. Codex fails closed when Desktop, IPC, or the task owner is unavailable. DSH fails closed when its endpoint is unavailable, the session is missing, or the workspace conflicts. Neither adapter falls back to another Agent or Runtime.
 

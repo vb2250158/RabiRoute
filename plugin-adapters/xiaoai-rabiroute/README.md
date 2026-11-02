@@ -40,7 +40,9 @@ $env:XIAOAI_INTERCEPT_REGEX = "^(问\s*Rabi|让\s*Rabi|Rabi|找\s*Rabi|兔兔|�
 npm.cmd start
 ```
 
-The bridge listens on `127.0.0.1:8798` by default. Override it with `XIAOAI_BRIDGE_HOST` and `XIAOAI_BRIDGE_PORT` only when the network boundary has been reviewed.
+The bridge uses an operating-system-assigned loopback port by default and prints its actual URL. The local smoke client discovers the running bridge and checks for a stale descriptor; the check is not authentication. Set `XIAOAI_BRIDGE_PORT` only for clients that require a specific endpoint; configure external Open-XiaoAI clients with the printed URL. Change `XIAOAI_BRIDGE_HOST` only after reviewing the network boundary.
+
+The example Compose service also assigns its host port dynamically. Run `docker compose -f docker-compose.open-xiaoai.yml port open-xiaoai-rabiroute 4399` to discover it. Set `RABIROUTE_XIAOAI_BRIDGE_URL` to the bridge address reachable from the container; a host-only loopback address is not reachable through `host.docker.internal` without an appropriate explicit network binding.
 
 ## Reverse tunnel timeouts
 
@@ -59,7 +61,7 @@ The smoke test proves that the bridge can return a decision and forward a transc
 
 ### `GET /health`
 
-Returns bridge configuration, counters, and the most recent placeholder speak requests.
+Returns bridge status and counters; neither the configured webhook URL nor placeholder speech text is exposed.
 
 ### `POST /v1/xiaoai/transcript`
 

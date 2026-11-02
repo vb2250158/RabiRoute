@@ -35,7 +35,7 @@ async function browse(value: string): Promise<void> {
     if (value) await bootstrapRemotePersonaService(value);
     let cursor = "";
     do {
-      const path = `/api/roles?limit=100${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`;
+      const path = `/api/roles?limit=3${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`;
       const page = await roleRequest<{ roles: RoleSummary[]; nextCursor: string | null }>(value ? remotePersonaServicePath(value, path) : path);
       if (current !== epoch) return;
       items.value.push(...page.roles);

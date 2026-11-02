@@ -1,6 +1,7 @@
 import { getTimeoutMs } from "../../shared/timeoutSettings.js";
 import { createDecipheriv, createHash } from "node:crypto";
 import { spawn } from "node:child_process";
+import { ClipToolAvailability } from "./clipToolAvailability.js";
 import fs from "node:fs";
 import path from "node:path";
 import type { XiaomiHomeArtifactPublicRecord } from "./artifactStore.js";
@@ -82,6 +83,71 @@ function hashFile(filePath: string): Promise<string> {
   });
 }
 
+/** Proves ownership of an exclusively created output across interruption before registration. */
+async function materializeClip(temporaryOutput: string, finalPath: string, runtimeDir: string, ownerRoleId: string | undefined, candidate: XiaomiMiotMotionClipCandidate, digest: string): Promise<{ device: bigint; inode: bigint }> {
+  const journalDir = path.join(runtimeDir, "capture-journal");
+  await fs.promises.mkdir(journalDir, { recursive: true });
+  const directory = await fs.promises.lstat(journalDir);
+  if (!directory.isDirectory() || directory.isSymbolicLink()) throw new Error("Unsafe camera capture journal directory.");
+  const journalPath = path.join(journalDir, `${createHash("sha256").update(JSON.stringify([ownerRoleId ?? null, candidate.sourceEventId])).digest("hex")}.json`);
+  const outputStat = await fs.promises.stat(temporaryOutput, { bigint: true });
+  const expected = { version: 1, ownerRoleId: ownerRoleId ?? null, sourceEventId: candidate.sourceEventId,
+    cameraId: candidate.cameraId ?? null, resourceId: candidate.resourceId, occurredAt: candidate.occurredAt,
+    eventType: candidate.eventType, target: finalPath, sha256: digest, byteLength: outputStat.size.toString() };
+  let targetFile: fs.promises.FileHandle | undefined;
+  try {
+    if (fs.existsSync(journalPath)) {
+      const journalStat = await fs.promises.lstat(journalPath);
+      if (!journalStat.isFile() || journalStat.isSymbolicLink() || journalStat.size > 16384) throw new Error("Unsafe camera capture journal.");
+      const journal = JSON.parse(await fs.promises.readFile(journalPath, "utf8"));
+      if (Object.entries(expected).some(([key, value]) => journal[key] !== value)
+        || typeof journal.device !== "string" || typeof journal.inode !== "string" || journal.inode === "0") {
+        throw new Error("Camera capture journal does not match this event.");
+      }
+      const before = await fs.promises.lstat(finalPath, { bigint: true });
+      if (!before.isFile() || before.isSymbolicLink()) throw new Error("Unsafe existing camera clip.");
+      targetFile = await fs.promises.open(finalPath, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
+      const actual = await targetFile.stat({ bigint: true });
+      if (actual.dev.toString() !== journal.device || actual.ino.toString() !== journal.inode
+        || before.dev !== actual.dev || before.ino !== actual.ino || actual.size !== outputStat.size) {
+        throw new Error("Existing camera clip is not the journaled complete file.");
+      }
+      const actualHash = createHash("sha256");
+      const buffer = Buffer.allocUnsafe(1024 * 1024);
+      for (;;) {
+        const { bytesRead } = await targetFile.read(buffer, 0, buffer.length, null);
+        if (!bytesRead) break;
+        actualHash.update(buffer.subarray(0, bytesRead));
+      }
+      if (actualHash.digest("hex") !== digest) throw new Error("Existing camera clip content does not match the journal.");
+      return { device: actual.dev, inode: actual.ino };
+    }
+    targetFile = await fs.promises.open(finalPath, "wx");
+    const target = await targetFile.stat({ bigint: true });
+    const journalFile = await fs.promises.open(journalPath, "wx");
+    try {
+      await journalFile.writeFile(JSON.stringify({ ...expected, device: target.dev.toString(), inode: target.ino.toString() }));
+      await journalFile.sync();
+    } finally { await journalFile.close(); }
+    const inputFile = await fs.promises.open(temporaryOutput, "r");
+    try {
+      const buffer = Buffer.allocUnsafe(1024 * 1024);
+      for (;;) {
+        const { bytesRead } = await inputFile.read(buffer, 0, buffer.length, null);
+        if (!bytesRead) break;
+        let written = 0;
+        while (written < bytesRead) {
+          const result = await targetFile.write(buffer, written, bytesRead - written);
+          if (!result.bytesWritten) throw new Error("Camera clip write made no progress.");
+          written += result.bytesWritten;
+        }
+      }
+      await targetFile.sync();
+    } finally { await inputFile.close(); }
+    return { device: target.dev, inode: target.ino };
+  } finally { await targetFile?.close(); }
+}
+
 export function parseHlsMediaPlaylist(text: string, playlistUrl: URL, allowedHosts: readonly string[]): HlsSegment[] {
   const lines = text.replace(/\r/g, "").split("\n").map(line => line.trim()).filter(Boolean);
   if (!lines.includes("#EXTM3U")) throw new Error("Camera clip did not return an HLS playlist.");
@@ -122,6 +188,7 @@ export class XiaomiHomeClipCaptureWorker {
   private readonly allowedHosts: string[];
   private readonly ffmpegPath: string;
   private readonly ffprobePath: string;
+  private readonly ffmpegAvailability: ClipToolAvailability;
   private readonly requestTimeoutMs: number;
   private readonly maxSegments: number;
   private readonly maxSegmentBytes: number;
@@ -138,6 +205,7 @@ export class XiaomiHomeClipCaptureWorker {
     this.enabled = config.cameraClipCaptureEnabled === true;
     this.allowedHosts = normalizedAllowedHosts(config.cameraClipAllowedHosts);
     this.ffmpegPath = safeToolPath(config.ffmpegPath, "ffmpeg");
+    this.ffmpegAvailability = new ClipToolAvailability(this.ffmpegPath);
     this.ffprobePath = safeToolPath(config.ffprobePath, "ffprobe");
     this.requestTimeoutMs = getTimeoutMs("backend.integrations.xiaomiHome.clipCapture.owner.Number.cameraClipRequestTimeoutMs", Math.min(30000, Math.max(1000, Number(config.cameraClipRequestTimeoutMs ?? 10000))));
     this.maxSegments = Math.min(500, Math.max(1, Number(config.cameraClipMaxSegments ?? 120)));
@@ -148,10 +216,15 @@ export class XiaomiHomeClipCaptureWorker {
     return this.enabled;
   }
 
+  start(): void {
+    if (this.enabled && !this.stopped) void this.ffmpegAvailability.start();
+  }
+
   status(): Record<string, unknown> {
     return {
       enabled: this.enabled,
-      ready: this.isEnabled(),
+      ready: this.enabled && this.ffmpegAvailability.status() === "ready",
+      ffmpegStatus: this.ffmpegAvailability.status(),
       allowedHostCount: this.allowedHosts.length,
       inFlight: this.inFlight.size
     };
@@ -160,6 +233,7 @@ export class XiaomiHomeClipCaptureWorker {
   capture(candidate: XiaomiMiotMotionClipCandidate): Promise<XiaomiHomeArtifactPublicRecord> {
     if (this.stopped) return Promise.reject(new Error('Camera clip owner has stopped.'));
     if (!this.isEnabled()) return Promise.reject(new Error("cameraClipCaptureEnabled=false. Enable camera clip capture in Xiaomi Home settings."));
+    if (this.ffmpegAvailability.status() === "unavailable") this.start();
     const captured = this.artifacts.getBySourceEventId(candidate.sourceEventId, this.ownerRoleId);
     if (captured) return Promise.resolve(captured);
     const existing = this.inFlight.get(candidate.sourceEventId);
@@ -172,7 +246,7 @@ export class XiaomiHomeClipCaptureWorker {
   /** No new capture is admitted; accepted native fetches/tools are joined, never detached. */
   async close(): Promise<void> {
     this.stopped = true;
-    await Promise.allSettled(this.inFlight.values());
+    await Promise.all([this.ffmpegAvailability.close(), Promise.allSettled(this.inFlight.values())]);
   }
 
   private async fetchMedia(url: URL, maxBytes: number, redirects = 0): Promise<{ bytes: Buffer; url: URL }> {
@@ -187,10 +261,29 @@ export class XiaomiHomeClipCaptureWorker {
     }
     if (!response.ok) throw new Error(`Camera media request failed with HTTP ${response.status}.`);
     const declared = Number(response.headers.get("content-length") || 0);
-    if (declared > maxBytes) throw new Error("Camera media response exceeds the configured size limit.");
-    const bytes = Buffer.from(await response.arrayBuffer());
-    if (bytes.length > maxBytes) throw new Error("Camera media response exceeds the configured size limit.");
-    return { bytes, url };
+    if (declared > maxBytes) {
+      await response.body?.cancel().catch(() => {});
+      throw new Error("Camera media response exceeds the configured size limit.");
+    }
+    if (!response.body) return { bytes: Buffer.alloc(0), url };
+    const reader = response.body.getReader();
+    const chunks: Uint8Array[] = [];
+    let size = 0;
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        size += value.byteLength;
+        if (size > maxBytes) throw new Error("Camera media response exceeds the configured size limit.");
+        chunks.push(value);
+      }
+      return { bytes: Buffer.concat(chunks, size), url };
+    } catch (error) {
+      await reader.cancel().catch(() => {});
+      throw error;
+    } finally {
+      reader.releaseLock();
+    }
   }
 
   private async fetchBytes(url: URL, maxBytes: number): Promise<Buffer> {
@@ -287,8 +380,10 @@ export class XiaomiHomeClipCaptureWorker {
         })
         : this.artifacts.allocateMediaPath(candidate.sourceEventId, candidate.occurredAt, ".mp4");
       allocatedPath = finalPath;
+      const expectedDigest = await hashFile(temporaryOutput);
+      let identity: { device: bigint; inode: bigint };
       try {
-        fs.copyFileSync(temporaryOutput, finalPath, fs.constants.COPYFILE_EXCL);
+        identity = await materializeClip(temporaryOutput, finalPath, this.artifacts.runtimeDir, this.ownerRoleId, candidate, expectedDigest);
       } catch (error) {
         recordDataMutationAudit({
           level: "error",
@@ -305,6 +400,9 @@ export class XiaomiHomeClipCaptureWorker {
       }
       const stat = fs.statSync(finalPath);
       const sha256 = await hashFile(finalPath);
+      const checked = await fs.promises.lstat(finalPath, { bigint: true });
+      if (!checked.isFile() || checked.isSymbolicLink() || checked.dev !== identity.device || checked.ino !== identity.inode
+        || checked.size !== BigInt(stat.size) || sha256 !== expectedDigest) throw new Error("Camera clip changed before artifact registration.");
       recordDataMutationAudit({
         group: "media",
         event: "xiaomi_camera_clip_written",

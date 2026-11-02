@@ -46,6 +46,17 @@ async function read(): Promise<XiaomiHomeSettingsSnapshot> {
   }));
 }
 
+/** Recordings belong to the role configured in the Xiaomi Home owner, not the open role page. */
+export async function openXiaomiHomeRecordings(
+  openFolder: (roleId: string) => Promise<void>,
+  readSettings: typeof read = read
+): Promise<void> {
+  const snapshot = await readSettings();
+  const roleId = snapshot.settings.agentRoleId.trim();
+  if (!roleId) throw new Error("请先在米家设置中配置事件接收角色。");
+  await openFolder(roleId);
+}
+
 async function update(snapshot: XiaomiHomeSettingsSnapshot, settings: XiaomiHomeRuntimeSettings): Promise<XiaomiHomeSettingsSnapshot> {
   const meta = await readMeta();
   return json(await fetch("/api/agent/xiaomi-home/settings", {

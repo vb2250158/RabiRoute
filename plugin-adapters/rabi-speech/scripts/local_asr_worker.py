@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import base64
 import json
+import os
 import sys
 import tempfile
 import threading
@@ -250,7 +251,13 @@ def main() -> int:
     args = parse_args()
     runtime = ModelRuntime(args)
     server = ThreadingHTTPServer((args.host, args.port), make_handler(runtime))
-    print(json.dumps({"url": f"http://{args.host}:{args.port}", **runtime.health()}, ensure_ascii=False), flush=True)
+    endpoint_file = os.environ.get("RABISPEECH_WORKER_ENDPOINT_FILE")
+    if endpoint_file:
+        endpoint = Path(endpoint_file)
+        temporary = endpoint.with_suffix(".tmp")
+        temporary.write_text(json.dumps({"port": server.server_port}), encoding="utf-8")
+        temporary.replace(endpoint)
+    print(json.dumps({"url": f"http://{args.host}:{server.server_port}", **runtime.health()}, ensure_ascii=False), flush=True)
     try:
         server.serve_forever(poll_interval=0.25)
     except KeyboardInterrupt:

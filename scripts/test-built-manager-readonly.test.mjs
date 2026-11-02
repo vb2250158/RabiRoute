@@ -110,7 +110,7 @@ test("built Manager read-only summary fails persona-scoped coverage when no pers
   assert.equal(summary.counts.personasProbed, 0);
 });
 
-test("built Manager read-only summary retries while the initial route catalog is still loading", async () => {
+test("built Manager read-only summary waits for catalog and route registration", async () => {
   let gatewayAttempts = 0;
   const fetchImpl = async url => {
     const request = new URL(url);
@@ -128,9 +128,15 @@ test("built Manager read-only summary retries while the initial route catalog is
           headers: { "content-type": "application/json" }
         });
       }
+      if (gatewayAttempts === 2) {
+        return new Response(JSON.stringify({ message: "Manager API route not found." }), {
+          status: 404,
+          headers: { "content-type": "application/json" }
+        });
+      }
       return jsonResponse({ data: { manager: [] } });
     }
-    assert.equal(gatewayAttempts, 2, "persona reads must wait for the route catalog readiness barrier");
+    assert.equal(gatewayAttempts, 3, "persona reads must wait for route registration");
     if (request.pathname === "/api/personas") return jsonResponse({ personas: [] });
     if (request.pathname === "/api/speech/messages") return jsonResponse({ data: { records: [] } });
     if (request.pathname === "/api/scan/message-adapters") {
@@ -144,7 +150,52 @@ test("built Manager read-only summary retries while the initial route catalog is
   };
 
   await collectBuiltManagerReadOnlySummary("http://127.0.0.1:45678", fetchImpl);
-  assert.equal(gatewayAttempts, 2);
+  assert.equal(gatewayAttempts, 3);
+});
+
+test("built Manager read-only summary fails when a gateway route remains missing", async () => {
+  let gateways = 0;
+  const fetchImpl = async url => {
+    if (new URL(url).pathname === "/meta") return jsonResponse({
+      health: { live: true, state: "healthy", requiredReady: true },
+      applicationGenerationId: "generation", managerInstanceId: "manager"
+    });
+    gateways++;
+    return new Response(JSON.stringify({ message: "Manager API route not found." }), { status: 404 });
+  };
+  await assert.rejects(() => collectBuiltManagerReadOnlySummary("http://127.0.0.1:45678", fetchImpl, undefined,
+    { gatewayStartupTimeoutMs: 0 }), /gateway.*404/i);
+  assert.equal(gateways, 1);
+});
+
+test("built Manager read-only summary sends no retry after its startup deadline", async () => {
+  let gateways = 0, meta = 0;
+  const fetchImpl = async url => {
+    if (new URL(url).pathname === "/meta") {
+      if (++meta > 1) await new Promise(resolve => setTimeout(resolve, 25));
+      return jsonResponse({ health: { live: true, state: "healthy", requiredReady: true },
+        applicationGenerationId: "generation", managerInstanceId: "manager" });
+    }
+    gateways++;
+    return new Response(JSON.stringify({ message: "Manager API route not found." }), { status: 404 });
+  };
+  await assert.rejects(() => collectBuiltManagerReadOnlySummary("http://127.0.0.1:45678", fetchImpl, undefined,
+    { gatewayStartupTimeoutMs: 10 }), /gateway.*404/i);
+  assert.equal(gateways, 1);
+});
+
+test("built Manager read-only summary stops retrying if the Manager generation changes", async () => {
+  let meta = 0, gateways = 0;
+  const fetchImpl = async url => {
+    if (new URL(url).pathname === "/meta") return jsonResponse({
+      health: { live: true, state: "healthy", requiredReady: true },
+      applicationGenerationId: ++meta === 1 ? "old" : "new", managerInstanceId: "manager"
+    });
+    gateways++;
+    return new Response(JSON.stringify({ message: "Manager API route not found." }), { status: 404 });
+  };
+  await assert.rejects(() => collectBuiltManagerReadOnlySummary("http://127.0.0.1:45678", fetchImpl), /READY identity changed/);
+  assert.equal(gateways, 1);
 });
 
 test("built Manager read-only failures redact the persona id from boundary errors", async () => {

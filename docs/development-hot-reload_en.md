@@ -8,7 +8,7 @@ English | <a href="./development-hot-reload.md">简体中文</a>
 
 Development feedback and release acceptance are separate:
 
-- WebGUI uses Vite HMR at `http://127.0.0.1:8793/`.
+- WebGUI uses Vite HMR and selects another port when its preferred port is occupied; use the address shown in its startup output.
 - RabiSpeech can explicitly use Uvicorn reload. Stop the installed service on port `8781` first.
 - Manager is excluded from the safe reload loop. It owns Route child processes, so restarting it would bounce NapCat, RabiLink, personal-Weixin, and persona sessions and may invalidate source-session tokens.
 - Native Android code is not covered by this reload loop and still requires a new APK build.

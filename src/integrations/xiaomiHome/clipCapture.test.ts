@@ -3,18 +3,24 @@ import test from "node:test";
 import { XiaomiHomeClipCaptureWorker, parseHlsMediaPlaylist } from "./clipCapture.js";
 import type { XiaomiHomeArtifactStore } from "./artifactStore.js";
 
-test("camera capture status exposes counts but not allowed host names", () => {
+test("camera capture status reports the probe lifecycle without exposing allowed hosts", async () => {
   const worker = new XiaomiHomeClipCaptureWorker({
     cameraClipCaptureEnabled: true,
     cameraClipAllowedHosts: ["media.private.local"]
   }, {} as XiaomiHomeArtifactStore);
   assert.deepEqual(worker.status(), {
     enabled: true,
-    ready: true,
+    ready: false,
+    ffmpegStatus: "idle",
     allowedHostCount: 1,
     inFlight: 0
   });
   assert.equal(JSON.stringify(worker.status()).includes("media.private.local"), false);
+  worker.start();
+  assert.equal(worker.status().ready, false);
+  assert.equal(worker.status().ffmpegStatus, "checking");
+  await worker.close();
+  assert.equal(worker.status().ffmpegStatus, "stopped");
 });
 
 test("parses an encrypted Xiaomi motion playlist with stable media sequence", () => {
@@ -59,4 +65,34 @@ test("explicit camera hosts also constrain redirect targets before fetching them
     async () => { calls++; return new Response(null, { status: 302, headers: { location: "http://other.example/clip.m3u8" } }); });
   await assert.rejects(worker.capture({ sourceEventId: "redirect-policy", resourceId: "home:ha:camera.example", resourceName: "Fixture", occurredAt: "2026-01-01T00:00:00Z", eventType: "PeopleMotion", playlistUrl: "http://media.example/clip.m3u8" }), /cameraClipAllowedHosts/);
   assert.equal(calls, 1);
+});
+
+for (const declaredLength of [undefined, "12"]) {
+  test(`camera playlist is cancelled when streamed data exceeds its limit (length: ${declaredLength ?? "absent"})`, async () => {
+    let cancelled = false;
+    let pulls = 0;
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pulls++;
+        controller.enqueue(new Uint8Array(600_000));
+      },
+      cancel() { cancelled = true; }
+    });
+    const worker = new XiaomiHomeClipCaptureWorker({ cameraClipCaptureEnabled: true },
+      { getBySourceEventId: () => undefined } as unknown as XiaomiHomeArtifactStore,
+      async () => new Response(stream, { headers: declaredLength ? { "content-length": declaredLength } : undefined }));
+    await assert.rejects(worker.capture({ sourceEventId: `oversize-${declaredLength}`, resourceId: "home:ha:camera.example", resourceName: "Fixture", occurredAt: "2026-01-01T00:00:00Z", eventType: "PeopleMotion", playlistUrl: "http://media.example/clip.m3u8" }), /exceeds the configured size limit/);
+    assert.equal(cancelled, true);
+    assert.ok(pulls <= 3);
+  });
+}
+
+test("camera playlist with an oversized declared length is cancelled without reading", async () => {
+  let cancelled = false;
+  const stream = new ReadableStream<Uint8Array>({ cancel() { cancelled = true; } });
+  const worker = new XiaomiHomeClipCaptureWorker({ cameraClipCaptureEnabled: true },
+    { getBySourceEventId: () => undefined } as unknown as XiaomiHomeArtifactStore,
+    async () => new Response(stream, { headers: { "content-length": "1048577" } }));
+  await assert.rejects(worker.capture({ sourceEventId: "oversize-declared", resourceId: "home:ha:camera.example", resourceName: "Fixture", occurredAt: "2026-01-01T00:00:00Z", eventType: "PeopleMotion", playlistUrl: "http://media.example/clip.m3u8" }), /exceeds the configured size limit/);
+  assert.equal(cancelled, true);
 });

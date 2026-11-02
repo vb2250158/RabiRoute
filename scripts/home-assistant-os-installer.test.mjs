@@ -8,29 +8,121 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 
-test("managed forwarding migrates only its own old port and uses the discovered VM address", { skip: process.platform !== "win32" }, t => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "haos-forwarding-"));
-  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  fs.writeFileSync(path.join(root, "loopback-proxy.json"), JSON.stringify({ address: "192.0.2.1", port: 80, vmId: "test-vm" }));
+test("HA OS discovery selects a responding 80 or 8123 endpoint and ignores unready addresses", { skip: process.platform !== "win32" }, () => {
   const source = fileURLToPath(new URL("./Install-HomeAssistantOs.ps1", import.meta.url));
   const script = `
 $ErrorActionPreference='Stop'; $tokens=$null; $errors=$null
 $ast=[System.Management.Automation.Language.Parser]::ParseFile('${source.replaceAll("'", "''")}',[ref]$tokens,[ref]$errors)
-if($errors.Count){throw 'Installer syntax errors'}
-$function=$ast.Find({param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Set-HomeAssistantLoopback'},$true)
+$function=$ast.Find({param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Wait-HomeAssistantCore'},$true)
 Invoke-Expression $function.Extent.Text
-$Root='${root.replaceAll("'", "''")}'; $version='test'; $script:existing='192.0.2.1/80'; $script:calls=@()
-function Get-ItemProperty { param($LiteralPath,$ErrorAction) return @{'127.0.0.1/8123'=$script:existing} }
-function Write-Status { }
-function Start-Service { }
-function netsh.exe { $script:calls+=($args -join ' '); $global:LASTEXITCODE=0 }
-Set-HomeAssistantLoopback @{Id='test-vm'} '192.0.2.42'
-if($script:calls.Count -ne 1 -or $script:calls[0] -notmatch 'connectaddress=192.0.2.42 connectport=8123'){throw 'Wrong forwarding target'}
-$receipt=Get-Content -LiteralPath (Join-Path $Root 'loopback-proxy.json') -Raw | ConvertFrom-Json
-if($receipt.port -ne 8123 -or $receipt.address -ne '192.0.2.42'){throw 'Wrong forwarding receipt'}
-$script:existing='198.51.100.3/9999'; $rejected=$false
-try { Set-HomeAssistantLoopback @{Id='test-vm'} '192.0.2.43' } catch { $rejected=$true }
-if(-not $rejected -or $script:calls.Count -ne 1){throw 'Foreign forwarding was changed'}
+function Get-VMNetworkAdapter { param($VM) return @{IPAddresses=@('192.0.2.1','192.0.2.2')} }
+function Test-HomeAssistantCore { param($Address,$Port) return $Address -eq '192.0.2.2' -and $Port -eq $script:readyPort }
+foreach($port in @(80,8123)) {
+  $script:readyPort=$port; $endpoint=Wait-HomeAssistantCore @{Id='fixture'} 1
+  if($endpoint.address -ne '192.0.2.2' -or $endpoint.port -ne $port){throw "Endpoint discovery failed for $port"}
+}
+`;
+  execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")], { windowsHide: true, timeout: 15000 });
+});
+
+test("read-only observation verifies VM ownership and never starts or mutates the VM", { skip: process.platform !== "win32" }, t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "haos-observe-test-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(root, "image.json"), "{}", "utf8");
+  fs.writeFileSync(path.join(root, "status.json"), "unchanged", "utf8");
+  const source = fileURLToPath(new URL("./Install-HomeAssistantOs.ps1", import.meta.url));
+  const literal = value => `'${value.replaceAll("'", "''")}'`;
+  const script = `
+$ErrorActionPreference='Stop'; $tokens=$null; $errors=$null
+$ast=[System.Management.Automation.Language.Parser]::ParseFile(${literal(source)},[ref]$tokens,[ref]$errors)
+if($errors.Count){throw 'Installer syntax errors'}
+$function=$ast.Find({param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Get-OwnedReadyEndpoint'},$true)
+Invoke-Expression $function.Extent.Text
+$Root=${literal(root)}; $script:probes=0; $script:readyPort=80
+$script:vm=@{Id='aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';Notes=('RabiRoute Home Assistant OS: '+$Root);State='Running'}
+function Get-VM { param($Name,$ErrorAction) return $script:vm }
+function Get-VMHardDiskDrive { param($VM) return @{Path=(Join-Path $Root 'home-assistant.vhdx')} }
+function Test-InstallationDisk { param($AttachedPath,$ExpectedPath,$RejectReparse) if(-not $RejectReparse){throw 'Observation did not reject reparse points'}; return $AttachedPath -eq $ExpectedPath }
+function Get-VMNetworkAdapter { param($VM) return @{IPAddresses=@('192.0.2.42')} }
+function Test-HomeAssistantCore { param($Address,$Port) $script:probes++; return $Port -eq $script:readyPort }
+function Test-OwnedLegacyLoopback { param($VM) return $true }
+function Start-VM { throw 'Observe must not start a VM' }
+function Stop-VM { throw 'Observe must not stop a VM' }
+function Set-VM { throw 'Observe must not modify a VM' }
+foreach($port in @(80,8123)) {
+  $script:readyPort=$port; $result=Get-OwnedReadyEndpoint
+  if(-not $result.ready -or $result.address -ne '192.0.2.42' -or $result.port -ne $port -or -not $result.legacyBindingVerified){throw 'Owned ready VM was not observed'}
+}
+$script:vm.State='Off'; $before=$script:probes
+if($null -ne (Get-OwnedReadyEndpoint) -or $script:probes -ne $before){throw 'Stopped VM was probed or started'}
+$script:vm.State='Running'; $script:vm.Notes='foreign'; $before=$script:probes; $rejected=$false
+try { Get-OwnedReadyEndpoint } catch { $rejected=$true }
+if(-not $rejected -or $script:probes -ne $before){throw 'Foreign VM was accepted or probed'}
+`;
+  execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")], { windowsHide: true, timeout: 15000 });
+  assert.equal(fs.readFileSync(path.join(root, "status.json"), "utf8"), "unchanged");
+});
+
+test("read-only VM ownership rejects a reparse-point disk in its chain", { skip: process.platform !== "win32" }, () => {
+  const source = fileURLToPath(new URL("./Install-HomeAssistantOs.ps1", import.meta.url));
+  const literal = value => `'${value.replaceAll("'", "''")}'`;
+  const script = `
+$tokens=$null; $errors=$null
+$ast=[System.Management.Automation.Language.Parser]::ParseFile(${literal(source)},[ref]$tokens,[ref]$errors)
+$function=$ast.Find({param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Test-InstallationDisk'},$true)
+Invoke-Expression $function.Extent.Text
+function Test-Path { param($LiteralPath,$PathType) return $true }
+function Get-Item { param($LiteralPath,[switch]$Force) return @{Attributes=[IO.FileAttributes]::ReparsePoint} }
+if(Test-InstallationDisk 'C:\\haos\\home-assistant.vhdx' 'C:\\haos\\home-assistant.vhdx' $true){throw 'Reparse-point disk accepted'}
+`;
+  execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")], { windowsHide: true, timeout: 15000 });
+});
+
+test("HA readiness requires an HA response and never follows redirects", { skip: process.platform !== "win32" }, async t => {
+  let mode = "valid";
+  const server = http.createServer((request, response) => {
+    if (mode === "redirect") { response.writeHead(302, { location: "http://127.0.0.1:1/" }); response.end(); return; }
+    if (request.url === "/api/") { response.writeHead(401); response.end(); return; }
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end(JSON.stringify({ name: mode === "valid" ? "Home Assistant" : "Other" }));
+  });
+  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => server.close());
+  const source = fileURLToPath(new URL("./Install-HomeAssistantOs.ps1", import.meta.url));
+  const script = `
+$tokens=$null; $errors=$null
+$ast=[System.Management.Automation.Language.Parser]::ParseFile('${source.replaceAll("'", "''")}',[ref]$tokens,[ref]$errors)
+$function=$ast.Find({param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Test-HomeAssistantCore'},$true)
+Invoke-Expression $function.Extent.Text
+if(Test-HomeAssistantCore '127.0.0.1' ${server.address().port}) { 'ready' } else { 'not-ready' }
+`;
+  const check = async () => (await promisify(execFile)("powershell.exe", ["-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")], { windowsHide: true, timeout: 15000 })).stdout.trim();
+  assert.equal(await check(), "ready");
+  mode = "other"; assert.equal(await check(), "not-ready");
+  mode = "redirect"; assert.equal(await check(), "not-ready");
+});
+
+test("legacy credential migration requires the matching VM receipt and current OS mapping", { skip: process.platform !== "win32" }, t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "haos-legacy-binding-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const source = fileURLToPath(new URL("./Install-HomeAssistantOs.ps1", import.meta.url));
+  fs.writeFileSync(path.join(root, "loopback-proxy.json"), JSON.stringify({ address: "192.0.2.1", port: 80, vmId: "test-vm" }));
+  const script = `
+$ErrorActionPreference='Stop'; $tokens=$null; $errors=$null
+$ast=[System.Management.Automation.Language.Parser]::ParseFile('${source.replaceAll("'", "''")}',[ref]$tokens,[ref]$errors)
+$function=$ast.Find({param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Test-OwnedLegacyLoopback'},$true)
+Invoke-Expression $function.Extent.Text
+$Root='${root.replaceAll("'", "''")}'; $script:mapping='192.0.2.1/80'
+function Get-ItemProperty { param($LiteralPath,$ErrorAction) return @{'127.0.0.1/8123'=$script:mapping} }
+$script:addresses=@('192.0.2.1')
+function Get-VMNetworkAdapter { param($VM) return @{IPAddresses=$script:addresses} }
+if(-not (Test-OwnedLegacyLoopback @{Id='test-vm'})){throw 'Matching receipt rejected'}
+if(Test-OwnedLegacyLoopback @{Id='foreign-vm'}){throw 'Foreign VM accepted'}
+$script:addresses=@('192.0.2.2')
+if(Test-OwnedLegacyLoopback @{Id='test-vm'}){throw 'Address no longer belongs to VM'}
+$script:addresses=@('192.0.2.1')
+$script:mapping='192.0.2.2/80'
+if(Test-OwnedLegacyLoopback @{Id='test-vm'}){throw 'Changed mapping accepted'}
 `;
   execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")], { windowsHide: true, timeout: 15000 });
 });
@@ -45,7 +137,7 @@ $function=$ast.Find({param($node) $node -is [System.Management.Automation.Langua
 if(-not $function){throw 'Core recovery is missing'}
 Invoke-Expression $function.Extent.Text
 $script:checks=0; $script:stops=0; $script:starts=0; $script:fail=$false
-function Wait-HomeAssistantCore { param($Vm,$TimeoutSeconds) $script:checks++; if($script:checks -gt 1){return '192.0.2.42'} }
+function Wait-HomeAssistantCore { param($Vm,$TimeoutSeconds) $script:checks++; if($script:checks -gt 1){return @{address='192.0.2.42';port=80}} }
 function Stop-VM { param($VM,[switch]$AsJob) $script:stops++; return @{State='Completed'} }
 function Wait-Job { param($Job,$Timeout) if($script:fail){return $null}; return $Job }
 function Receive-Job { param($Job,[switch]$ErrorAction) }
@@ -53,8 +145,8 @@ function Remove-Job { param($Job) }
 function Get-VM { param($Id) return @{Id=$Id;State='Off'} }
 function Start-VM { param($VM) $script:starts++ }
 $vm=@{Id='test-vm';State='Running'}
-$ip=Restore-HomeAssistantCore $vm $true
-if($ip -ne '192.0.2.42' -or $script:stops -ne 1 -or $script:starts -ne 1){throw 'Core recovery did not restart exactly once'}
+$endpoint=Restore-HomeAssistantCore $vm $true
+if($endpoint.address -ne '192.0.2.42' -or $endpoint.port -ne 80 -or $script:stops -ne 1 -or $script:starts -ne 1){throw 'Core recovery did not restart exactly once'}
 $script:checks=0; $script:fail=$true
 $rejected=$false
 try { Restore-HomeAssistantCore $vm $true } catch { $rejected=$true }

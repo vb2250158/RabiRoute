@@ -16,6 +16,8 @@ The Qt layer is kept portable where practical. See the [Windows launcher and pac
 
 ## Current capabilities
 
+Companion observation captures the visible foreground-window region in the background, without reading the entire multi-monitor desktop first. If region capture is unavailable, it falls back to capturing and cropping the full desktop. Shortcut screenshots still cover the full desktop.
+
 - Uses the system tray when available and falls back to a normal window otherwise.
 - Relies on Host's per-user singleton and application generation for exactly one tray; Desktop has no second singleton or autostart mechanism.
 - Reads Routes, runtime status, and role bindings from the Manager.

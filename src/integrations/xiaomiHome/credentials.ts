@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type { XiaomiHomeCredentialSource } from "../../shared/xiaomiHomeAuthContract.js";
@@ -15,6 +15,8 @@ type PersistedCredential = Readonly<{
   protectedCredential: string;
   endpointAccountId: string;
   boundBaseUrl: string;
+  managedVmId?: string;
+  credentialOrigin?: "external";
   providerName?: string;
   providerVersion?: string;
   verifiedAt: string;
@@ -24,6 +26,9 @@ type PersistedCredential = Readonly<{
 export type XiaomiHomeCredentialMetadata = Readonly<{
   endpointAccountId: string;
   boundBaseUrl: string;
+  managedVmId?: string;
+  credentialOrigin?: "external";
+  revision: string;
   providerName?: string;
   providerVersion?: string;
   verifiedAt: string;
@@ -50,6 +55,17 @@ function controlledOptionalText(value: unknown, maximum: number): string | undef
   return text && text.length <= maximum && !/[\u0000-\u001f\u007f]/.test(text) ? text : undefined;
 }
 
+function controlledVmId(value: unknown): string {
+  if (typeof value !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)) {
+    throw new XiaomiHomeManagerApiError(400, "xiaomi_home_managed_vm_invalid", "Managed Home Assistant VM identity is invalid.");
+  }
+  return value.toLowerCase();
+}
+
+function credentialRevision(content: string): string {
+  return `xiaomi-credential:${createHash("sha256").update(content).digest("hex")}`;
+}
+
 export class XiaomiHomeCredentialStore {
   readonly credentialPath: string;
   private readonly lockPath: string;
@@ -71,7 +87,7 @@ export class XiaomiHomeCredentialStore {
   prepare(
     accessToken: unknown,
     boundBaseUrl: string,
-    verification: Readonly<{ providerName?: string; providerVersion?: string }>
+    verification: Readonly<{ providerName?: string; providerVersion?: string; managedVmId?: string; credentialOrigin?: "external" }>
   ): string {
     const token = controlledToken(accessToken);
     const current = this.readProtected();
@@ -84,6 +100,8 @@ export class XiaomiHomeCredentialStore {
       protectedCredential: secret,
       endpointAccountId,
       boundBaseUrl: controlledOptionalText(boundBaseUrl, 2048)!,
+      managedVmId: verification.managedVmId === undefined ? undefined : controlledVmId(verification.managedVmId),
+      credentialOrigin: verification.managedVmId === undefined ? verification.credentialOrigin : undefined,
       providerName: controlledOptionalText(verification.providerName, 160),
       providerVersion: controlledOptionalText(verification.providerVersion, 80),
       verifiedAt: now,
@@ -103,7 +121,7 @@ export class XiaomiHomeCredentialStore {
   write(
     accessToken: unknown,
     boundBaseUrl: string,
-    verification: Readonly<{ providerName?: string; providerVersion?: string }>
+    verification: Readonly<{ providerName?: string; providerVersion?: string; managedVmId?: string; credentialOrigin?: "external" }>
   ): XiaomiHomeCredentialResolution {
     return this.writePrepared(this.prepare(accessToken, boundBaseUrl, verification));
   }
@@ -116,11 +134,45 @@ export class XiaomiHomeCredentialStore {
     });
   }
 
+  /** Caller must independently verify the old 127.0.0.1:8123 forwarding belongs to this VM. */
+  bindVerifiedLegacyManagedVm(input: Readonly<{
+    expectedRevision: string;
+    managedVmId: string;
+    verifiedLegacyForward: Readonly<{ baseUrl: string; vmId: string }>;
+  }>): XiaomiHomeCredentialResolution {
+    const vmId = controlledVmId(input.managedVmId);
+    if (!input.verifiedLegacyForward || input.verifiedLegacyForward.baseUrl !== "http://127.0.0.1:8123"
+      || controlledVmId(input.verifiedLegacyForward.vmId) !== vmId) {
+      throw new XiaomiHomeManagerApiError(409, "xiaomi_home_managed_vm_evidence_invalid", "Verified legacy forwarding ownership is required.");
+    }
+    return withFileLockSync(this.lockPath, () => {
+      if (!fs.existsSync(this.credentialPath)) throw new XiaomiHomeManagerApiError(409, "xiaomi_home_credential_changed", "Credential changed; reload before binding.");
+      const content = fs.readFileSync(this.credentialPath, "utf8");
+      if (!input.expectedRevision || credentialRevision(content) !== input.expectedRevision) {
+        throw new XiaomiHomeManagerApiError(409, "xiaomi_home_credential_changed", "Credential changed; reload before binding.");
+      }
+      const current = this.readProtected()!;
+      if (current.metadata?.boundBaseUrl !== "http://127.0.0.1:8123"
+        || current.metadata.credentialOrigin === "external"
+        || (current.metadata.managedVmId && current.metadata.managedVmId !== vmId)) {
+        throw new XiaomiHomeManagerApiError(409, "xiaomi_home_managed_vm_mismatch", "Credential is not bound to the verified legacy VM.");
+      }
+      if (current.metadata.managedVmId === vmId) return current;
+      const persisted = JSON.parse(content) as PersistedCredential;
+      const updated: PersistedCredential = { ...persisted, managedVmId: vmId, updatedAt: new Date().toISOString() };
+      atomicWriteFileSync(this.credentialPath, `${JSON.stringify(updated, null, 2)}\n`, { mode: 0o600 });
+      if (process.platform !== "win32") fs.chmodSync(this.credentialPath, 0o600);
+      return this.readProtected()!;
+    });
+  }
+
   private readProtected(): XiaomiHomeCredentialResolution | undefined {
     if (!fs.existsSync(this.credentialPath)) return undefined;
     let persisted: PersistedCredential;
+    let content: string;
     try {
-      persisted = JSON.parse(fs.readFileSync(this.credentialPath, "utf8")) as PersistedCredential;
+      content = fs.readFileSync(this.credentialPath, "utf8");
+      persisted = JSON.parse(content) as PersistedCredential;
     } catch {
       throw new XiaomiHomeManagerApiError(500, "xiaomi_home_credential_corrupt", "The protected Xiaomi Home credential file is invalid JSON.");
     }
@@ -129,6 +181,9 @@ export class XiaomiHomeCredentialStore {
       || !persisted.protectedCredential
       || !persisted.endpointAccountId
       || !persisted.boundBaseUrl
+      || (persisted.managedVmId !== undefined && (typeof persisted.managedVmId !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(persisted.managedVmId)))
+      || (persisted.credentialOrigin !== undefined && persisted.credentialOrigin !== "external")
+      || Boolean(persisted.managedVmId && persisted.credentialOrigin)
       || persisted.protection !== this.protector.scheme
     ) {
       throw new XiaomiHomeManagerApiError(500, "xiaomi_home_credential_unavailable", "The protected Xiaomi Home credential is unavailable to this system account.");
@@ -143,6 +198,9 @@ export class XiaomiHomeCredentialStore {
         metadata: Object.freeze({
           endpointAccountId: persisted.endpointAccountId,
           boundBaseUrl: persisted.boundBaseUrl,
+          managedVmId: persisted.managedVmId,
+          credentialOrigin: persisted.credentialOrigin,
+          revision: credentialRevision(content),
           providerName: persisted.providerName,
           providerVersion: persisted.providerVersion,
           verifiedAt: persisted.verifiedAt,

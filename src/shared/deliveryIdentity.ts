@@ -12,10 +12,11 @@ export function withoutLegacyTransportSuffix(prompt: string): string | undefined
 
 export function currentEnvelopeDeliveryId(prompt: string): string {
   const text = prompt.replace(/\r\n/g, "\n");
-  if (!text.startsWith("[消息源]\n")) return "";
-  const headerEnd = text.indexOf("\n\n[消息内容]\n");
+  const markdown = text.startsWith("## 消息源\n");
+  if (!markdown && !text.startsWith("[消息源]\n")) return "";
+  const headerEnd = text.indexOf(markdown ? "\n\n## 消息内容\n" : "\n\n[消息内容]\n");
   if (headerEnd < 0) return "";
-  const headerId = /^投递 ID：([^\n]+)$/m.exec(text.slice(0, headerEnd))?.[1];
+  const headerId = (markdown ? /^- 投递 ID：([^\n]+)$/m : /^投递 ID：([^\n]+)$/m).exec(text.slice(0, headerEnd))?.[1];
   if (headerId && (validId.test(headerId) || /^agent-[0-9a-f]{64}$/.test(headerId))) return headerId;
   const parts = text.split("\n\n[回传参数]\n");
   if (parts.length !== 2) return "";

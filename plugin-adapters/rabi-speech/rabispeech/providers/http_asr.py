@@ -64,9 +64,9 @@ class LocalHttpAsrProvider:
         }
         timeout = httpx.Timeout(get_timeout_seconds("speech.httpAsr.request", self.settings.timeout_seconds), connect=get_timeout_seconds("speech.httpAsr.connect", 10))
         async with self._lock:
-            await worker_supervisor.ensure(f"asr:{self.provider_id}:{model.id}", model.base_url, model.launch)
+            worker_url = await worker_supervisor.ensure(f"asr:{self.provider_id}:{model.id}", model.base_url, model.launch)
         async with httpx.AsyncClient(timeout=timeout) as client:
-            response = await client.post(f"{model.base_url}/transcribe", json=payload)
+            response = await client.post(f"{worker_url}/transcribe", json=payload)
             response.raise_for_status()
             data = response.json()
             self._loaded_model = model.id

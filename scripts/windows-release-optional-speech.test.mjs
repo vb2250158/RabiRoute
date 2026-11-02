@@ -67,6 +67,7 @@ test("Windows release explicitly includes required discovery and Agent transport
       "scripts/lib/windows-host-discovery.mjs",
       "apps/rabi-agent/lib/manager-client.mjs",
       "apps/rabi-agent/lib/manager-cli.mjs",
+      "plugin-adapters/xiaoai-rabiroute/bridge-endpoint.mjs",
       "packages/rabi-knowledge-contract/schema.mjs",
       "packages/rabi-knowledge-contract/tools.mjs",
       "packages/rabi-knowledge-contract/receipt.mjs",
@@ -77,6 +78,8 @@ test("Windows release explicitly includes required discovery and Agent transport
       "apps/rabi-mcp/lib/knowledge-tools.mjs",
       "apps/rabi-mcp/lib/knowledge-receipt.mjs",
       "scripts/lib/release-tracked-manifest.ps1",
+      "scripts/lib/copy-installed-host.ps1",
+      "scripts/lib/copy-agent-native-assets.ps1",
       "scripts/rabilink-relay-runtime-files.json",
       "docs/aiui-agent-profile-http.md",
       "docs/aiui-agent-profile-http_en.md",
@@ -92,7 +95,7 @@ test("Windows release explicitly includes required discovery and Agent transport
   );
   assert.match(
     releaseScript,
-    /Copy-RequiredPortableRuntimeFiles\s*\r?\n\s*foreach \(\$relative in @\("apps\\rabi-agent\\runtime", "apps\\rabi-agent\\dist\\agent-hooks"\)\)[\s\S]*?if \(\$IncludeSpeech\)/
+    /Copy-RequiredPortableRuntimeFiles\s*\r?\n\s*\. \(Join-Path \$scriptDir 'lib\/copy-agent-native-assets\.ps1'\)\s*\r?\n\s*Copy-AgentNativeAssets[^\r\n]*\r?\n\s*foreach \(\$relative in @\("apps\\rabi-agent\\runtime", "apps\\rabi-agent\\dist\\agent-hooks"\)\)[\s\S]*?if \(\$IncludeSpeech\)/
   );
 });
 

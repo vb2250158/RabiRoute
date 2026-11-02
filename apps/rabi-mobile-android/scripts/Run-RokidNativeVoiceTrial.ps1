@@ -1,8 +1,8 @@
-param(
+﻿param(
     [string]$Serial = "",
     [string]$AdbPath = "",
-    [string]$WebhookUrl = "http://127.0.0.1:8791/webhook",
-    [int]$TtsPort = 8794,
+    [string]$WebhookUrl = "",
+    [ValidateRange(0, 65535)][int]$TtsPort = 0,
     [string]$OutputDir = "",
     [string[]]$Commands = @("ping", "tts", "asr_start", "asr_stop"),
     [string]$TtsText = "Rabi 原生 TTS 真机测试",

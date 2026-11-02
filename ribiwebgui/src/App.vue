@@ -4,7 +4,7 @@ import { userFacingError } from "./userFacingError";
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useTheme } from "vuetify";
 import { useRoute, useRouter } from "vue-router";
-import { useRoleStore } from "./stores/roleStore";
+import { findFirstAvailableRole, useRoleStore } from "./stores/roleStore";
 import { isRolePage, roleConfigPath, roleMessageHistoryPath } from "./roleScopedNavigation";
 import { personaMessagesLocation } from "./persona/personaMessageRoutes";
 import LocaleSwitcher from "./components/LocaleSwitcher.vue";
@@ -217,6 +217,25 @@ async function loadGatewayEditorInBackground(): Promise<void> {
 
 
 let roleNavigationVersion = 0;
+let roleSelectionWrite: Promise<void> = Promise.resolve();
+let lastSavedRoleSelection = "";
+function persistRoleSelection(roleId: string, sourceDeviceId: string): void {
+  const selection = { roleId, sourceDeviceId };
+  const key = JSON.stringify(selection);
+  roleSelectionWrite = roleSelectionWrite.catch(() => {}).then(async () => {
+    if (key === lastSavedRoleSelection) return;
+    try {
+      const saved = await desktopSettingsClient.update({ lastRoleSelection: selection });
+      if (JSON.stringify(saved.lastRoleSelection) !== key) throw new Error("角色选择未保存。");
+    } catch (error) {
+      // An interrupted settings write may have committed; inspect the owning store once.
+      const current = await desktopSettingsClient.read().catch(() => null);
+      if (JSON.stringify(current?.lastRoleSelection) !== key) throw error;
+    }
+    lastSavedRoleSelection = key;
+  });
+  void roleSelectionWrite.catch(error => { roles.error = `角色选择保存失败：${userFacingError(error)}`; });
+}
 async function syncRolePage(): Promise<void> {
   const version = ++roleNavigationVersion;
   if (route.path === "/routes" || /^\/routes\/[^/]+(?:\/adapters)?$/.test(route.path)) {
@@ -249,16 +268,28 @@ async function syncRolePage(): Promise<void> {
   const source = String(route.query.source || "");
   const id = String(route.params.roleId || "");
   if (!id) {
+    let savedSelection = null;
+    if (!("source" in route.query)) {
+      try { savedSelection = (await desktopSettingsClient.read()).lastRoleSelection; }
+      catch (error) { if (version === roleNavigationVersion) roles.error = `角色选择读取失败：${userFacingError(error)}`; return; }
+      if (version !== roleNavigationVersion) return;
+    }
+    if (savedSelection?.roleId) {
+      const savedSource = savedSelection.sourceDeviceId;
+      lastSavedRoleSelection = JSON.stringify(savedSelection);
+      await router.replace({ path: route.path.endsWith("/message-history") ? roleMessageHistoryPath(savedSelection.roleId) : route.path.endsWith("/knowledge") ? `/roles/${encodeURIComponent(savedSelection.roleId)}/knowledge` : roleConfigPath(savedSelection.roleId), query: savedSource ? { source: savedSource } : {} });
+      return;
+    }
     roles.sourceDeviceId = source;
-    await roles.loadCatalog();
+    const first = await findFirstAvailableRole(source);
     if (version !== roleNavigationVersion) return;
-    const first = roles.catalog.find(role => !role.error);
     if (first) await router.replace({ path: route.path.endsWith("/message-history") ? roleMessageHistoryPath(first.roleId) : route.path.endsWith("/knowledge") ? `/roles/${encodeURIComponent(first.roleId)}/knowledge` : roleConfigPath(first.roleId), query: source ? { source } : {} });
     else await roles.select("", source);
     return;
   }
   await roles.select(id, source);
   if (version !== roleNavigationVersion) return;
+  if (roles.detail?.roleId === id && !roles.detail.archivedAt) persistRoleSelection(id, source);
   await roles.loadCatalog();
 }
 watch(() => route.fullPath, () => { void syncRolePage().catch(error => { roles.error = userFacingError(error); }); }, { immediate: true });

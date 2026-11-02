@@ -6,6 +6,17 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.4.4 - 2026-11-02
+
+- Read role catalogs in bounded concurrent batches and open the first available role early. Persist the last role/source selection through desktop settings and retain errors for unavailable sources.
+- Resolve managed Home Assistant transport from its existing VM identity while preserving recovery budgets and credential origins. Support structured camera recording fields, bounded streaming downloads and owned-file retry evidence.
+- Discover actual listening ports for speech workers, Rokid playback, the XiaoAI bridge and Relay. Preserve explicit external endpoints and existing authentication contracts.
+- Adjust pet throw physics and avoid redundant menu stylesheet updates. Include plugin/native assets in release packaging and support exact-hash reuse of an installed Host snapshot.
+- Allow independent model/reasoning settings for periodic RabiLink reflection while ordinary messages retain their model. Add read-only elevated process-path lookup during Developer activation.
+
+- Render Agent delivery sources and content with Markdown headings and field lists; organize RabiLink reviews into review, evidence and response sections while retaining historical receipt compatibility.
+- Capture the visible foreground-window region directly for companion observation to reduce multi-monitor graphics readback. Fall back to full-desktop capture and cropping if region capture fails; shortcut screenshots retain full-desktop coverage.
+
 ## 0.4.3 - 2026-11-02
 
 - Add a QQ community entry, group number and Rabi-branded invitation card to the English, Chinese and Japanese READMEs, with a full-size code link. Preserve and verify the original code pixels separately while following the existing silver-haired, rabbit-eared teal mascot design.

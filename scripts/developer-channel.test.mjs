@@ -4,11 +4,29 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { assertDeveloperLocksCompatible } from "./lib/developer-lock-compatibility.mjs";
 
 import { createDeveloperCandidate } from "./new-rabiroute-developer-candidate.mjs";
+
+test("Developer readiness resolves an omitted CIM path with limited query access", { skip: process.platform !== "win32" }, () => {
+  const source = fileURLToPath(new URL("./Invoke-RabiRouteDeveloperApply.ps1", import.meta.url)).replaceAll("'", "''");
+  const command = [
+    "$ErrorActionPreference='Stop'",
+    "$tokens=$null; $errors=$null",
+    "$ast=[System.Management.Automation.Language.Parser]::ParseFile('" + source + "',[ref]$tokens,[ref]$errors)",
+    "if($errors.Count){throw 'PowerShell parse failed'}",
+    "$fn=$ast.Find({param($a) $a -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $a.Name -eq 'Get-ProcessExecutablePath'},$true)",
+    "Invoke-Expression $fn.Extent.Text",
+    "$image=Get-ProcessExecutablePath ([pscustomobject]@{ProcessId=$PID;ExecutablePath=$null})",
+    "if(-not $image -or -not (Test-Path -LiteralPath $image -PathType Leaf)){throw 'Limited process query failed'}",
+    "if(Get-ProcessExecutablePath ([pscustomobject]@{ProcessId=[uint32]::MaxValue;ExecutablePath=$null})){throw 'Missing process became verified'}",
+    "if((Get-ProcessExecutablePath ([pscustomobject]@{ProcessId=0;ExecutablePath='known-path'})) -ne 'known-path'){throw 'CIM path precedence changed'}"
+  ].join("; ");
+  const result = spawnSync("powershell.exe", ["-NoProfile", "-Command", command], { encoding: "utf8", windowsHide: true, timeout: 20000 });
+  assert.equal(result.status, 0, result.stderr || String(result.error || ""));
+});
 
 function write(root, relative, content) {
   const target = path.join(root, ...relative.split("/"));

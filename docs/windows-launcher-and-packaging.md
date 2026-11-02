@@ -227,6 +227,8 @@ Manager 对每个非回环 IPv4 接口独立选择组播出口，`/meta.lanDisco
 
 Windows 构建必须在本机磁盘完成；NAS 只保存源码，不能作为应用、构建中间产物或运行日志位置。
 
+发布包包含按当前 Agent 脚本源码计算标识的终端、电脑控制和托盘预编译组件。打包时校验组件存在、程序集格式和复制后的哈希；缺失时停止打包。
+
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\build-windows-release.ps1 `
   -OutputRoot C:\RabiRouteBuild

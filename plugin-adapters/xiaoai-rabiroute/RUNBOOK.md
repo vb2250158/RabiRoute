@@ -26,7 +26,7 @@ The repository does not vendor Open-XiaoAI. Obtain and review it separately from
 1. Start the installed application through `RabiRouteHost.exe`, or build and start the Manager from the repository root for source-only development.
 2. Obtain the current `managerBaseUrl` from Host `--command status --json`; in source mode, copy the URL printed by Manager to stdout. Do not assume a Manager port.
 3. Enable the disabled `xiaoai` Route after checking its explicitly configured Webhook URL.
-4. Start this bridge at its explicitly configured address. The commands below use `127.0.0.1:8798` only as a local example.
+4. Start the bridge. It prints its dynamically allocated loopback URL, which external clients must use.
 5. Start an external Open-XiaoAI-compatible server or client integration.
 6. Add an SSH reverse tunnel only if direct connectivity is unavailable.
 
@@ -75,8 +75,8 @@ $managerBaseUrl = $hostStatus.managerBaseUrl
 $managerPort = ([uri]$managerBaseUrl).Port
 Invoke-RestMethod "$managerBaseUrl/meta"
 
-# 8791, 8798, and 4399 are this runbook's explicit local adapter examples.
-Get-NetTCPConnection -LocalPort $managerPort,8791,8798,4399 -ErrorAction SilentlyContinue
+# 8791 and 4399 are this runbook's explicit local adapter examples.
+Get-NetTCPConnection -LocalPort $managerPort,8791,4399 -ErrorAction SilentlyContinue
 ```
 
 For source mode, set `$managerBaseUrl` to the exact URL printed by Manager instead of querying Host.
@@ -84,7 +84,8 @@ For source mode, set `$managerBaseUrl` to the exact URL printed by Manager inste
 Bridge health:
 
 ```powershell
-Invoke-RestMethod http://127.0.0.1:8798/health
+$bridgeUrl = node --input-type=module -e "import { discoverEndpoint } from './bridge-endpoint.mjs'; console.log(await discoverEndpoint())"
+Invoke-RestMethod "$bridgeUrl/health"
 ```
 
 Bridge smoke:

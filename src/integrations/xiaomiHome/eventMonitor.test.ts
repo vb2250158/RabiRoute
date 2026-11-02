@@ -150,6 +150,22 @@ test("maps an explicitly configured camera motion entity to the single Xiaomi Ho
   assert.equal(event?.resourceId, "home:ha:binary_sensor.front_door_person");
 });
 
+test("recognizes official Xiaomi Home event timestamps without guessing camera ownership", () => {
+  const entityId = "event.living_room_camera_motion_detected";
+  const attributes = { friendly_name: "Living room camera motion", device_class: "motion", event_type: "Motion detected" };
+  const oldState = { entity_id: entityId, state: "2026-08-29T08:59:00.000+00:00", attributes };
+  const newState = { entity_id: entityId, state: "2026-08-29T09:00:00.000+00:00", attributes };
+  const change = { event_type: "state_changed", data: { entity_id: entityId, old_state: oldState, new_state: newState } };
+  assert.equal(xiaomiHomeEventFromHomeAssistantStateChange(change)?.kind, "sensor_alert");
+  assert.equal(xiaomiHomeEventFromHomeAssistantStateChange(change, { cameraMotionEntityIds: [entityId] })?.kind, "camera_motion_detected");
+  const repeated = { ...change, data: { ...change.data, old_state: newState, new_state: { ...newState, attributes: { ...attributes, friendly_name: "Changed" } } } };
+  assert.equal(xiaomiHomeEventFromHomeAssistantStateChange(repeated, { cameraMotionEntityIds: [entityId] }), undefined);
+  const initial = { ...change, data: { ...change.data, old_state: null } };
+  assert.equal(xiaomiHomeEventFromHomeAssistantStateChange(initial, { cameraMotionEntityIds: [entityId] }), undefined);
+  const binaryOff = { event_type: "state_changed", data: { old_state: { entity_id: "binary_sensor.motion", state: "on" }, new_state: { entity_id: "binary_sensor.motion", state: "off", attributes: { device_class: "motion" } } } };
+  assert.equal(xiaomiHomeEventFromHomeAssistantStateChange(binaryOff, { cameraMotionEntityIds: ["binary_sensor.motion"] }), undefined);
+});
+
 test("significant mode drops ordinary state churn but retains offline state", () => {
   const ordinary = xiaomiHomeEventFromHomeAssistantStateChange({
     event_type: "state_changed",
@@ -214,6 +230,55 @@ test("recognizes a new Xiaomi Miot motion video without exposing it in the route
   const routed = xiaomiHomeEventFromHomeAssistantStateChange(change);
   assert.equal(routed?.kind, "camera_motion_detected");
   assert.equal("playlistUrl" in (routed ?? {}), false);
+});
+
+test("Miot Auto object events use the signed history stream and file identity", () => {
+  const attributes = {
+    friendly_name: "Door camera",
+    motion_video_time: "2026-08-29T09:00:00Z",
+    motion_video_latest: { fileId: "event-file-1", eventType: "PeopleMotion", isAlarm: true },
+    stream_address: "https://business.smartcamera.api.io.mi.com/common/app/m3u8?yetAnotherServiceToken=private-token"
+  };
+  const state = { entity_id: "camera.door", state: "idle", attributes };
+  const change = { event_type: "state_changed", data: { new_state: state } };
+  const candidate = xiaomiMiotMotionClipFromStateChange(change);
+  assert.equal(candidate?.playlistUrl, attributes.stream_address);
+  assert.equal(candidate?.eventType, "PeopleMotion");
+  assert.equal(JSON.stringify(xiaomiHomeEventFromHomeAssistantStateChange(change)).includes("private-token"), false);
+  const rotated = { ...attributes, stream_address: attributes.stream_address.replace("private-token", "rotated-token") };
+  assert.equal(xiaomiMiotMotionClipFromStateChange({ ...change, data: { old_state: state, new_state: { ...state, attributes: rotated } } }), undefined);
+  const next = { ...attributes, motion_video_latest: { ...attributes.motion_video_latest, fileId: "event-file-2" } };
+  const nextCandidate = xiaomiMiotMotionClipFromStateChange({ ...change, data: { old_state: state, new_state: { ...state, attributes: next } } });
+  assert.ok(nextCandidate);
+  assert.notEqual(nextCandidate.sourceEventId, candidate?.sourceEventId);
+  assert.equal(JSON.stringify(nextCandidate).includes("event-file-2"), false);
+  const awaitingUrl = { ...state, attributes: { ...attributes, stream_address: "" } };
+  assert.equal(xiaomiMiotMotionClipFromStateChange({ ...change, data: { old_state: awaitingUrl, new_state: state } })?.sourceEventId, candidate?.sourceEventId);
+});
+
+test("Miot Auto dedicated motion camera is recognized by event time and historical endpoint", () => {
+  const attributes = { motion_video_time: "2026-08-29T09:00:00Z", motion_video_type: "PeopleMotion",
+    stream_address: "https://business.smartcamera.api.io.mi.com/common/app/m3u8?yetAnotherServiceToken=private-token" };
+  const state = { entity_id: "camera.door_motion_event", state: "idle", attributes };
+  const change = { event_type: "state_changed", data: { new_state: state } };
+  assert.equal(xiaomiMiotMotionClipFromStateChange(change)?.playlistUrl, attributes.stream_address);
+  const updated = { ...state, attributes: { ...attributes, stream_address: attributes.stream_address.replace("private-token", "rotated") } };
+  assert.equal(xiaomiMiotMotionClipFromStateChange({ ...change, data: { old_state: state, new_state: updated } }), undefined);
+});
+
+test("ordinary camera streams and incomplete motion events never become recordings", () => {
+  const state = { entity_id: "camera.door", state: "idle" };
+  for (const attributes of [
+    { stream_address: "https://camera.example/live.m3u8" },
+    { motion_video_time: "2026-08-29T09:00:00Z", stream_address: "https://camera.example/live.m3u8" },
+    { motion_video_time: "2026-08-29T09:00:00Z", motion_video_latest: { fileId: "file-1" } },
+    { motion_video_latest: { fileId: "file-1" }, stream_address: "https://business.smartcamera.api.io.mi.com/common/app/m3u8" },
+    { motion_video_time: "invalid", stream_address: "https://business.smartcamera.api.io.mi.com/common/app/m3u8" },
+    { motion_video_time: "9999999999999999999999", stream_address: "https://business.smartcamera.api.io.mi.com/common/app/m3u8" },
+    { motion_video_time: "2026-08-29T09:00:00Z", stream_address: "http://user:password@business.smartcamera.api.io.mi.com/common/app/m3u8" }
+  ]) {
+    assert.equal(xiaomiMiotMotionClipFromStateChange({ event_type: "state_changed", data: { new_state: { ...state, attributes } } }), undefined);
+  }
 });
 
 

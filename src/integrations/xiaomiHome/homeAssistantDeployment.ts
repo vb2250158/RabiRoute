@@ -11,7 +11,8 @@ import { atomicWriteFileSync, withFileLockSync } from "../../shared/filePersiste
 import { KeyedAsyncLock } from "../../shared/keyedAsyncLock.js";
 import { recordDataMutationAudit } from "../../observability/dataMutationAudit.js";
 import { XiaomiHomeManagerApiError } from "./managerApi.js";
-import { WindowsHomeAssistantOs, type HomeAssistantOsDriver } from "./homeAssistantOs.js";
+import { WindowsHomeAssistantOs, type HomeAssistantOsDriver, type HomeAssistantOsStatus } from "./homeAssistantOs.js";
+import { ManagedHaLoopbackProxy } from "./managedHaLoopbackProxy.js";
 import { NapcatSupervisorService } from "../../manager/napcatSupervisorService.js";
 
 const runFile = promisify(execFile);
@@ -91,9 +92,14 @@ export class HomeAssistantDeployment {
   private readonly changes = new EventEmitter();
   private recovery?: Promise<void>;
   private nextRecoveryAt = 0;
+  private nextObservationAt = 0;
   private recoveryController?: AbortController;
   private supervisor?: NapcatSupervisorService<void>;
   private recoveryAttempts = 0;
+  private proxy?: ManagedHaLoopbackProxy;
+  private proxyFlight?: Promise<string>;
+  private managedTarget?: NonNullable<HomeAssistantOsStatus["endpoint"]>;
+  private managedVmId?: string;
   private healthState?: "unavailable" | "ready" | "exhausted";
 
   constructor(runtimeDir: string, private readonly baseUrl: () => string, private readonly io = driver, os?: HomeAssistantOsDriver) {
@@ -125,6 +131,8 @@ export class HomeAssistantDeployment {
         authority?.dispatch();
         atomicWriteFileSync(this.file, `${JSON.stringify({ schemaVersion: 1, config }, null, 2)}\n`);
       });
+      if (config.mode !== "haos") { this.clearManagedTarget(); }
+      this.changes.emit("config", config);
       this.failure = "";
       this.audit("configure", "committed");
       return this.inspect(authority);
@@ -170,8 +178,9 @@ export class HomeAssistantDeployment {
       try {
         const status = await this.checked(() => this.os.inspect(authority), authority);
         const installed = status.state === "installed" || status.installed === true;
-        const ready = installed && await this.ready("http://127.0.0.1:8123", authority);
-        return { ...base, ...privilegeState, baseUrl: "http://127.0.0.1:8123", installation: installed ? "installed" : "not_found",
+        const endpoint = this.managedBaseUrl();
+        const ready = installed && Boolean(this.managedTarget) && Boolean(endpoint) && await this.ready(endpoint!, authority);
+        return { ...base, ...privilegeState, baseUrl: endpoint ?? "", installation: installed ? "installed" : "not_found",
           state: this.failure ? "error" : this.installing || status.state === "installing" ? "installing" : ready ? "ready" : status.state === "reboot_required" ? "reboot_required" : status.state === "error" ? "error" : installed ? "starting" : "stopped",
           message: this.failure || (ready ? "Home Assistant OS 已就绪。" : status.message),
           image: status.version ? `Home Assistant OS ${status.version}` : undefined,
@@ -292,12 +301,84 @@ export class HomeAssistantDeployment {
     return async () => { closed = true; this.changes.off("changed", observed); unsubscribe?.(); await inFlight; };
   }
 
+  managedMode(): boolean { return this.read().config.mode === "haos"; }
+
+  /** Existing installations opt in via the saved deployment configuration. */
+  managedTransportSelected(): boolean { return fs.existsSync(this.file) && this.managedMode(); }
+
+  managedBaseUrl(): string | undefined {
+    try { return this.proxy?.baseUrl; } catch { return undefined; }
+  }
+
+  prepareTransport(): Promise<string> {
+    if (this.stopped || !this.managedMode()) return Promise.reject(new Error("Managed Home Assistant transport is unavailable."));
+    const existing = this.managedBaseUrl();
+    if (existing) return Promise.resolve(existing);
+    if (this.proxyFlight) return this.proxyFlight;
+    const flight = ManagedHaLoopbackProxy.listen().then(async proxy => {
+      if (this.stopped || !this.managedMode()) {
+        await proxy.close();
+        throw new Error("Managed Home Assistant transport is unavailable.");
+      }
+      this.proxy = proxy;
+      return proxy.baseUrl;
+    }).finally(() => { this.proxyFlight = undefined; });
+    this.proxyFlight = flight;
+    return flight;
+  }
+
+  managedIdentity(): NonNullable<HomeAssistantOsStatus["endpoint"]> | undefined {
+    return this.managedTarget;
+  }
+
+  onTargetChange(listener: (identity: NonNullable<HomeAssistantOsStatus["endpoint"]> | undefined) => void): () => void {
+    this.changes.on("target", listener);
+    return () => { this.changes.off("target", listener); };
+  }
+
+  private clearManagedTarget(): void {
+    this.proxy?.setTarget(undefined);
+    if (!this.managedTarget) return;
+    this.managedTarget = undefined;
+    this.changes.emit("target", undefined);
+  }
+
+  private assertManagedVm(endpoint: NonNullable<HomeAssistantOsStatus["endpoint"]>): void {
+    const vmId = endpoint.vmId.toLowerCase();
+    if (this.managedVmId && this.managedVmId !== vmId) throw new Error("Managed Home Assistant VM identity changed.");
+  }
+
+  private setManagedTarget(endpoint: NonNullable<HomeAssistantOsStatus["endpoint"]>): void {
+    this.assertManagedVm(endpoint);
+    if (!this.proxy) throw new Error("Managed Home Assistant transport is unavailable.");
+    this.proxy.setTarget(endpoint);
+    this.managedVmId = endpoint.vmId.toLowerCase();
+    this.managedTarget = Object.freeze({ ...endpoint });
+    this.changes.emit("target", this.managedTarget);
+  }
+
+  onConfigChange(listener: (config: HomeAssistantDeploymentConfig) => void): () => void {
+    this.changes.on("config", listener);
+    return () => { this.changes.off("config", listener); };
+  }
+
   private async runOs(operation: "Install" | "Start" | "Recover", authority?: XiaomiHomeRequestAuthority, signal?: AbortSignal): Promise<HomeAssistantDeploymentSnapshot> {
     this.installing = true;
     this.failure = "";
     this.audit(operation.toLowerCase(), "started");
     try {
+      const revision = this.read().revision;
+      await this.prepareTransport();
+      this.clearManagedTarget();
       const result = await this.checked(() => this.os.run(operation, this.read().config.autoStart, authority, signal), authority, true);
+      if (result.state === "installed" && result.endpoint && !this.stopped && this.managedMode() && this.read().revision === revision) {
+        this.assertManagedVm(result.endpoint);
+        const healthy = await this.io.ready(`http://${result.endpoint.address}:${result.endpoint.port}`);
+        authority?.assert();
+        if (healthy && !signal?.aborted && !this.stopped && this.managedMode() && this.read().revision === revision) {
+          this.setManagedTarget(result.endpoint);
+        }
+      }
       if (result.state === "reboot_required") this.audit("enable-hyper-v", "committed");
       else this.audit(operation.toLowerCase(), result.state === "installed" ? "committed" : "failed");
     } catch (error) {
@@ -318,6 +399,7 @@ export class HomeAssistantDeployment {
     if (this.supervisor?.isActive()) return;
     this.stopped = false;
     this.nextRecoveryAt = 0;
+    this.nextObservationAt = 0;
     this.flight = this.recover();
     this.supervisor = new NapcatSupervisorService({
       run: () => this.recover(),
@@ -337,22 +419,69 @@ export class HomeAssistantDeployment {
     const controller = new AbortController();
     this.recoveryController = controller;
     this.recovery = (async () => {
+      let attempted = false;
+      let becameReady = false;
       try {
-        const endpoint = saved.config.mode === "haos" ? "http://127.0.0.1:8123" : this.baseUrl();
-        if (await this.io.ready(endpoint)) {
+        const checkedTarget = this.managedTarget;
+        const endpoint = saved.config.mode === "haos" ? (checkedTarget ? this.managedBaseUrl() : undefined) : this.baseUrl();
+        const healthy = endpoint ? await this.io.ready(endpoint) : false;
+        if (this.stopped || controller.signal.aborted || this.read().revision !== saved.revision
+          || (saved.config.mode === "haos" && this.managedTarget !== checkedTarget)) return;
+        if (healthy) {
           this.failure = "";
           this.recoveryAttempts = 0;
           this.healthChanged("ready");
           return;
         }
+        // A previously verified guest address can be reassigned after a network
+        // change. Revoke the old transport before waiting for fresh ownership evidence.
+        if (saved.config.mode === "haos" && this.managedTarget) this.clearManagedTarget();
         this.healthChanged("unavailable");
-        if (this.stopped || controller.signal.aborted || this.recoveryAttempts >= (saved.config.recoveryMaxAttempts ?? 3)) {
-          if (!this.stopped) this.healthChanged("exhausted");
+        if (this.stopped || controller.signal.aborted) return;
+        if (this.recoveryAttempts >= (saved.config.recoveryMaxAttempts ?? 3)) {
+          // The restart budget limits VM mutations, not observation. Once it is
+          // exhausted, only the owned VM's read-only endpoint discovery may run.
+          if (saved.config.mode === "haos" && this.os.observe) {
+            if (Date.now() < this.nextObservationAt) {
+              this.healthChanged("exhausted");
+              return;
+            }
+            let observedHealthy = false;
+            try {
+              await this.operations.run("deployment", async () => {
+                if (this.stopped || controller.signal.aborted) return;
+                this.requireRevision(saved.revision);
+                const discovered = await this.os.observe!(controller.signal);
+                if (!discovered || this.stopped || controller.signal.aborted || this.read().revision !== saved.revision) return;
+                await this.prepareTransport();
+                if (this.stopped || controller.signal.aborted || this.read().revision !== saved.revision) return;
+                this.assertManagedVm(discovered);
+                // Keep the shared proxy closed to credentials while checking
+                // this candidate; the readiness request carries no credentials.
+                const healthy = await this.io.ready(`http://${discovered.address}:${discovered.port}`);
+                if (!healthy || this.stopped || controller.signal.aborted || this.read().revision !== saved.revision) return;
+                this.setManagedTarget(discovered);
+                observedHealthy = true;
+              });
+            } finally {
+              // Throttle from completion, including failures, so a slow probe
+              // cannot be followed immediately by a socket reconnect storm.
+              this.nextObservationAt = Date.now() + (saved.config.healthCheckIntervalMs ?? 30000);
+            }
+            if (!this.stopped && !controller.signal.aborted && observedHealthy) {
+              this.failure = "";
+              this.recoveryAttempts = 0;
+              this.healthChanged("ready");
+              return;
+            }
+          }
+          if (!this.stopped && !controller.signal.aborted) this.healthChanged("exhausted");
           return;
         }
         if (Date.now() < this.nextRecoveryAt) return;
         this.nextRecoveryAt = Date.now() + (saved.config.recoveryCooldownMs ?? 300000);
         this.recoveryAttempts++;
+        attempted = true;
         if (saved.config.mode === "haos") {
           // Installation is never implicit, and background recovery never opens UAC.
           const status = await this.os.inspect();
@@ -367,7 +496,12 @@ export class HomeAssistantDeployment {
           await this.ensureReady(saved.revision);
           this.recoveryAttempts = attempts;
         }
-        if (!this.stopped && await this.io.ready(endpoint)) {
+        const currentTarget = this.managedTarget;
+        const currentEndpoint = saved.config.mode === "haos" ? (currentTarget ? this.managedBaseUrl() : undefined) : this.baseUrl();
+        const currentHealthy = currentEndpoint ? await this.io.ready(currentEndpoint) : false;
+        if (!this.stopped && !controller.signal.aborted && this.read().revision === saved.revision
+          && (saved.config.mode !== "haos" || this.managedTarget === currentTarget) && currentHealthy) {
+          becameReady = true;
           this.failure = "";
           this.recoveryAttempts = 0;
           this.healthChanged("ready");
@@ -379,6 +513,10 @@ export class HomeAssistantDeployment {
         this.failure = "自动恢复失败，请检查部署状态后重试。";
         this.audit("recover", "failed");
         if (!this.stopped && this.recoveryAttempts >= (saved.config.recoveryMaxAttempts ?? 3)) this.healthChanged("exhausted");
+      } finally {
+        if (attempted && !becameReady && !this.stopped) {
+          this.nextRecoveryAt = Date.now() + (saved.config.recoveryCooldownMs ?? 300000);
+        }
       }
     })().finally(() => { this.recovery = undefined; this.recoveryController = undefined; });
     return this.recovery;
@@ -391,6 +529,14 @@ export class HomeAssistantDeployment {
     await this.operations.run("deployment", async () => undefined);
     await this.flight;
     await this.recovery;
+    try { await this.proxyFlight; } catch { /* A stopped transport cannot finish preparing. */ }
+    const proxy = this.proxy;
+    this.proxy = undefined;
+    if (this.managedTarget) {
+      this.managedTarget = undefined;
+      this.changes.emit("target", undefined);
+    }
+    await proxy?.close();
   }
 
   private healthChanged(state: "unavailable" | "ready" | "exhausted"): void {

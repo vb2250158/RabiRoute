@@ -1,7 +1,8 @@
-param(
+﻿param(
     [string]$Serial = "",
     [string]$AdbPath = "",
-    [int]$Port = 8794,
+    [ValidateRange(0, 65535)][int]$Port = 0,
+    [string]$ReadyFile = "",
     [string[]]$Paths = @("/api/fennenote/playback", "/api/rokid/tts"),
     [string]$TtsCommand = "tts",
     [int]$CommandWaitSeconds = 3,
@@ -133,9 +134,47 @@ $normalizedPaths = @($Paths | ForEach-Object {
     $path
 })
 
-$listener = [System.Net.HttpListener]::new()
-$listener.Prefixes.Add("http://127.0.0.1:$Port/")
-$listener.Start()
+# Keep this list aligned with src/managerEndpointPolicy.ts: WebGUI and Node Fetch
+# reject these ports even when the operating system successfully allocates them.
+$fetchBlockedPorts = @(1,7,9,11,13,15,17,19,20,21,22,23,25,37,42,43,53,69,77,79,87,95,101,102,103,104,109,110,111,113,115,117,119,123,135,137,139,143,161,179,389,427,465,512,513,514,515,526,530,531,532,540,548,554,556,563,587,601,636,989,990,993,995,1719,1720,1723,2049,3659,4045,4190,5060,5061,6000,6566,6665,6666,6667,6668,6669,6679,6697,10080)
+$listener = $null
+for ($attempt = 0; $attempt -lt 32; $attempt++) {
+    $candidate = $Port
+    if ($candidate -eq 0) {
+        $reservation = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
+        try {
+            $reservation.Start()
+            $candidate = ([System.Net.IPEndPoint]$reservation.LocalEndpoint).Port
+        } finally { $reservation.Stop() }
+    }
+    if ($candidate -in $fetchBlockedPorts) {
+        if ($Port -ne 0 -or $attempt -eq 31) { throw "The requested TTS port is blocked by browser and Fetch clients." }
+        continue
+    }
+    $listener = [System.Net.HttpListener]::new()
+    $listener.Prefixes.Add("http://127.0.0.1:$candidate/")
+    try {
+        $listener.Start()
+        $Port = $candidate
+        break
+    } catch {
+        $listener.Close()
+        $listener = $null
+        if ($Port -ne 0 -or $attempt -eq 31) { throw }
+    }
+}
+if ($ReadyFile) {
+    $ready = [ordered]@{ pid = $PID; port = $Port; playbackUrl = "http://127.0.0.1:$Port/api/fennenote/playback" }
+    $pending = "$ReadyFile.$PID.pending"
+    try {
+        [System.IO.File]::WriteAllText($pending, ($ready | ConvertTo-Json -Compress), [System.Text.UTF8Encoding]::new($false))
+        [System.IO.File]::Move($pending, $ReadyFile)
+    } catch {
+        $listener.Close()
+        if (Test-Path -LiteralPath $pending) { Remove-Item -LiteralPath $pending -Force }
+        throw
+    }
+}
 Write-Host "Rokid native TTS playback server listening on http://127.0.0.1:$Port"
 Write-Host "Accepted paths: $($normalizedPaths -join ', ')"
 Write-Host "TTS command: $TtsCommand"

@@ -280,7 +280,7 @@ def load_settings(path: str | Path | None = None) -> Settings:
         remote_audio=RemoteAudioSettings(
             enabled=_bool(os.environ.get("RABISPEECH_REMOTE_AUDIO_ENABLED", remote_audio.get("enabled")), False),
             host=_env("RABISPEECH_REMOTE_AUDIO_HOST", remote_audio.get("host", "0.0.0.0")).strip(),
-            port=int(_env("RABISPEECH_REMOTE_AUDIO_PORT", remote_audio.get("port", 8782))),
+            port=int(_env("RABISPEECH_REMOTE_AUDIO_PORT", remote_audio.get("port", 0))),
             token=_remote_audio_token(
                 base,
                 remote_audio,

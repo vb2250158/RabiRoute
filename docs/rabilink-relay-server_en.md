@@ -24,6 +24,8 @@ $env:RABILINK_RELAY_PORT = "8788"
 node scripts/rabilink-relay-server.mjs
 ```
 
+For a direct launch, explicitly set `PORT` or `RABILINK_RELAY_PORT` to `0` to let the OS assign a port. After listening, Relay emits a `RABILINK_RELAY_READY` JSON record with the process ID, host and port. The existing default remains `8788` for compatibility. The current Windows deployment script and Caddy share a fixed internal port; changing only one side breaks forwarding.
+
 Read `/health`, then register an account and create an application at HTTPS `/manage`. Copy the PC enrollment prompt from the console; a private Agent on the target PC uses a short-lived single-use code to configure its connection. See [PC enrollment](rabilink-pc-pairing_en.md). Keep credentials out of public logs, examples and screenshots.
 
 Each PC needs an independent deviceId and GUID. Disabling its server connection stops transport without deleting credentials or routes. Bounded `rabi-pc-version-<version>` advertisements provide display metadata, not integrity proof or permissions. Public API access follows the actual target PC's remoteAgent and connection-authentication contracts.

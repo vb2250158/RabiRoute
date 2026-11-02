@@ -1,8 +1,13 @@
 import http from "node:http";
+import { randomUUID } from "node:crypto";
+import { bindFetchCompatible, endpointDirectory, publishEndpoint } from "./bridge-endpoint.mjs";
 
 const host = process.env.XIAOAI_BRIDGE_HOST || "127.0.0.1";
-const port = Number(process.env.XIAOAI_BRIDGE_PORT || "8798");
-const rabiRouteWebhookUrl = process.env.RABIROUTE_WEBHOOK_URL || "http://127.0.0.1:8791/webhook";
+const port = Number(process.env.XIAOAI_BRIDGE_PORT || "0");
+const rabiRouteWebhookUrl = process.env.RABIROUTE_WEBHOOK_URL;
+if (!rabiRouteWebhookUrl) throw new Error("RABIROUTE_WEBHOOK_URL must identify the configured XiaoAI Route webhook.");
+if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error("XIAOAI_BRIDGE_PORT must be between 0 and 65535.");
+const instanceId = randomUUID();
 const interceptPatternText = process.env.XIAOAI_INTERCEPT_REGEX || "^(问\\s*Rabi|让\\s*Rabi|Rabi|找\\s*Rabi|兔兔|问\\s*兔兔)";
 const interceptPattern = new RegExp(interceptPatternText, "i");
 const defaultInterceptSpeakText = process.env.XIAOAI_INTERCEPT_SPEAK_TEXT || "收到，已经转给 Rabi。";
@@ -66,12 +71,14 @@ async function forwardTranscript(payload) {
 
   const response = await fetch(rabiRouteWebhookUrl, {
     method: "POST",
+    redirect: "error",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(upstreamPayload)
   });
 
   if (!response.ok) {
-    throw new Error(`RabiRoute webhook returned ${response.status}: ${await response.text()}`);
+    await response.body?.cancel();
+    throw new Error(`RabiRoute webhook returned HTTP ${response.status}.`);
   }
 
   return upstreamPayload;
@@ -117,10 +124,11 @@ const server = http.createServer(async (request, response) => {
     if (request.method === "GET" && url.pathname === "/health") {
       jsonResponse(response, 200, {
         ok: true,
-        rabiRouteWebhookUrl,
+        instanceId,
+        webhookConfigured: true,
         interceptPattern: interceptPatternText,
         counters,
-        lastSpeakRequests: lastSpeakRequests.slice(-5)
+        recentSpeakRequestCount: lastSpeakRequests.length
       });
       return;
     }
@@ -162,7 +170,8 @@ const server = http.createServer(async (request, response) => {
         requestId: payload.requestId
       };
       lastSpeakRequests.push(item);
-      console.log("[xiaoai:speak]", JSON.stringify(item));
+      if (lastSpeakRequests.length > 5) lastSpeakRequests.shift();
+      console.log("[xiaoai:speak] request accepted");
       jsonResponse(response, 202, {
         ok: true,
         queued: item,
@@ -180,8 +189,14 @@ const server = http.createServer(async (request, response) => {
   }
 });
 
-server.listen(port, host, () => {
-  console.log(`XiaoAI RabiRoute adapter listening on http://${host}:${port}`);
-  console.log(`Forwarding transcripts to ${rabiRouteWebhookUrl}`);
+bindFetchCompatible(server, host, port).then(address => {
+  const localHost = new URL(address).hostname;
+  if (["127.0.0.1", "[::1]"].includes(localHost)) {
+    try { publishEndpoint(address, instanceId); }
+    catch (error) { console.error(`Cannot publish XiaoAI bridge endpoint: ${error.message}`); server.close(); process.exitCode = 1; return; }
+    console.log(`Local bridge endpoint directory: ${endpointDirectory}`);
+  }
+  console.log(`XiaoAI RabiRoute adapter listening on ${address}`);
+  console.log("Forwarding transcripts to the configured RabiRoute webhook.");
   console.log(`XiaoAI intercept regex: ${interceptPatternText}`);
-});
+}).catch(error => { console.error(`Cannot start XiaoAI bridge: ${error.message}`); process.exitCode = 1; });

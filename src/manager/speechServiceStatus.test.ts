@@ -9,6 +9,18 @@ test("speech status accepts configured local and remote service URLs", () => {
   assert.throws(() => normalizeLocalSpeechServiceUrl("file:///tmp/speech"), /HTTP/);
 });
 
+test("an unrelated listener with a successful health response is not RabiSpeech", async () => {
+  let capabilityRequested = false;
+  const fetchImpl = (async (input: string | URL | Request) => {
+    if (String(input).endsWith("/v1/capabilities")) capabilityRequested = true;
+    return new Response(JSON.stringify({ ok: true, service: "OtherService" }), { status: 200 });
+  }) as typeof fetch;
+  const result = await inspectLocalSpeechService("http://127.0.0.1:8781", { fetchImpl });
+  assert.equal(result.state, "offline");
+  assert.match(result.error || "", /RabiSpeech/);
+  assert.equal(capabilityRequested, false);
+});
+
 test("speech status exposes only normalized runtime capabilities", async () => {
   const fetchImpl = (async (input: string | URL | Request) => {
     const url = String(input);

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import test from "node:test";
 import { translateText } from "../src/i18n/index.js";
+import { openXiaomiHomeRecordings } from "../src/xiaomiHomeSettingsClient.js";
 import {
   adapterLabel,
   adapterSourceAliases,
@@ -11,14 +12,58 @@ import {
   HOME_ASSISTANT_AUTHENTICATION_DOCS_URL,
   HOME_ASSISTANT_INSTALLATION_URL,
   HOME_ASSISTANT_XIAOMI_HOME_DOCS_URL,
+  homeAssistantEndpointPresentation,
   homeAssistantLoginUrl,
   homeAssistantProfileUrl
 } from "../src/xiaomiHomeCredentialHelp.js";
+
+test("managed HA uses the actual deployment address for links while preserving the credential origin", () => {
+  const deployment = { config: { mode: "haos" as const }, state: "ready" as const, baseUrl: "http://127.0.0.1:43123" };
+  const value = homeAssistantEndpointPresentation(deployment, "http://127.0.0.1:8123", "http://127.0.0.1:8123");
+  assert.equal(value.address, "http://127.0.0.1:43123");
+  assert.equal(value.loginUrl, "http://127.0.0.1:43123/");
+  assert.equal(value.profileUrl, "http://127.0.0.1:43123/profile/security");
+  assert.equal(value.credentialBaseUrl, "http://127.0.0.1:8123");
+  assert.equal(value.serviceReady, true);
+  assert.equal(homeAssistantEndpointPresentation(deployment, "https://unrelated.example", "http://127.0.0.1:8123").credentialBaseUrl, "http://127.0.0.1:8123");
+  assert.equal(homeAssistantEndpointPresentation({ ...deployment, state: "starting" }, "http://127.0.0.1:8123", "http://127.0.0.1:8123").serviceReady, false);
+  const missing = homeAssistantEndpointPresentation({ ...deployment, state: "starting", baseUrl: "" }, "http://127.0.0.1:8123", "http://127.0.0.1:8123");
+  assert.equal(missing.address, "");
+  assert.equal(missing.loginUrl, "");
+  assert.equal(missing.serviceReady, false);
+  assert.equal(homeAssistantEndpointPresentation({ ...deployment, baseUrl: "javascript:alert(1)" }, "http://127.0.0.1:8123", "http://127.0.0.1:8123").serviceReady, false);
+  assert.equal(homeAssistantEndpointPresentation(undefined, "http://127.0.0.1:8123", "http://127.0.0.1:8123").serviceReady, false);
+});
+
+test("external and Docker endpoints retain manual address and matching readiness", () => {
+  for (const mode of ["external", "docker"] as const) {
+    const deployment = { config: { mode }, state: "ready" as const, baseUrl: "http://192.168.1.10:8123" };
+    const same = homeAssistantEndpointPresentation(deployment, "http://192.168.1.10:8123", "http://old.example");
+    assert.equal(same.credentialBaseUrl, "http://192.168.1.10:8123");
+    assert.equal(same.serviceReady, true);
+    const edited = homeAssistantEndpointPresentation(deployment, "http://192.168.1.11:8123", "http://old.example");
+    assert.equal(edited.address, "http://192.168.1.11:8123");
+    assert.equal(edited.serviceReady, false);
+  }
+});
 
 const routeConfigSource = fs.readFileSync(new URL("../src/pages/RouteConfigPage.vue", import.meta.url), "utf8");
 const settingsPageSource = fs.readFileSync(new URL("../src/pages/SettingsPage.vue", import.meta.url), "utf8");
 const endpointRendererSource = fs.readFileSync(new URL("../src/components/renderers/XiaomiHomeSettingsRenderer.vue", import.meta.url), "utf8");
 const authRendererSource = fs.readFileSync(new URL("../src/components/renderers/XiaomiHomeMessageEndpointRenderer.vue", import.meta.url), "utf8");
+
+test("recordings open on the local Xiaomi owner role, regardless of the displayed role", async t => {
+  let ownerRole = "CameraRecorder";
+  t.mock.method(globalThis, "fetch", async () => Response.json({ code: 0, data: { settings: { agentRoleId: ownerRole } } }));
+  const opened: string[] = [];
+  const displayedRole = "AnotherRole";
+  await openXiaomiHomeRecordings(async roleId => { opened.push(roleId); });
+  assert.deepEqual(opened, ["CameraRecorder"]);
+  assert.notEqual(opened[0], displayedRole);
+  ownerRole = "";
+  await assert.rejects(openXiaomiHomeRecordings(async roleId => { opened.push(roleId); }), /米家设置中配置事件接收角色/);
+  assert.deepEqual(opened, ["CameraRecorder"]);
+});
 
 test("Route message endpoint catalog includes Xiaomi Home as a distinct smart-home input", () => {
   assert.match(routeConfigSource, /title: "智能家居"/);
@@ -33,6 +78,8 @@ test("Route message endpoint catalog includes Xiaomi Home as a distinct smart-ho
   assert.match(endpointRendererSource, /事件、设备控制与录像/);
   assert.match(authRendererSource, /type="password"/);
   assert.match(authRendererSource, /xiaomiHomeAuthClient\.connect\(\{/);
+  assert.match(authRendererSource, /endpoint\.value\.credentialBaseUrl/);
+  assert.match(authRendererSource, /v-if="managed"[\s\S]*:model-value="endpoint.address"[\s\S]*readonly/);
   assert.match(authRendererSource, /accessToken\.value = ""/);
   assert.match(authRendererSource, /不是小米账号密码或设备 token/);
   assert.match(authRendererSource, /打开 Home Assistant/);

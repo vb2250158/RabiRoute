@@ -24,6 +24,8 @@ $env:RABILINK_RELAY_PORT = "8788"
 node scripts/rabilink-relay-server.mjs
 ```
 
+直接启动时可显式将 `PORT` 或 `RABILINK_RELAY_PORT` 设为 `0`，由系统分配端口；监听成功后输出 `RABILINK_RELAY_READY` JSON（含进程 ID、主机和端口）。未指定时仍使用兼容端口 `8788`。当前 Windows 部署脚本与 Caddy 共同配置固定的内部端口；仅更改其中一处会中断转发。
+
 先读取 `/health`，再通过 HTTPS `/manage` 注册账号、创建应用。在控制台复制电脑接入提示词，由目标 PC 的私密 Agent 使用短期一次性接入码配置连接；见[电脑接入](rabilink-pc-pairing.md)。凭据不得出现在公开日志、示例或截图中。
 
 同应用 PC 必须各有独立 `deviceId` 和 GUID。关闭 PC“连接服务器”停止连接，不删除本机凭据或路由。能力广告可透传有界 `rabi-pc-version-<版本>`，版本用于展示，不证明完整性或授予权限。公共 API 的访问条件由实际目标 PC 的 remoteAgent 和连接鉴权合同决定。

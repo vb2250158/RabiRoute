@@ -5582,6 +5582,9 @@ server.requestTimeout = relayTimeout("http.request", 300000);
 server.headersTimeout = Math.min(server.requestTimeout, relayTimeout("http.headers", 60000));
 server.keepAliveTimeout = relayTimeout("http.keepAlive", 5000);
 server.listen(port, host, () => {
-  console.log(`RabiLink Relay listening on http://${host}:${port}`);
+  const endpoint = server.address();
+  if (!endpoint || typeof endpoint === "string") throw new Error("Relay listener did not publish an IP endpoint.");
+  console.log(`RabiLink Relay listening on http://${host}:${endpoint.port}`);
+  console.log(`RABILINK_RELAY_READY:${JSON.stringify({ pid: process.pid, host, port: endpoint.port })}`);
   console.log(`Data dir: ${dataDir}`);
 });

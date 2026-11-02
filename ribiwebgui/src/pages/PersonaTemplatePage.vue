@@ -55,7 +55,7 @@ import { PERSONA_AVATAR_ACCEPT } from "@shared/personaAvatarContract";
 import { copyTextToClipboard } from "../clipboard";
 import { markdownPreviewExcerpt } from "../markdownPreview";
 import { routeScopedPersonaDocumentPath } from "../routeScopedNavigation";
-import { xiaomiHomeSettingsClient, type XiaomiHomeResource } from "../xiaomiHomeSettingsClient";
+import { openXiaomiHomeRecordings, xiaomiHomeSettingsClient, type XiaomiHomeResource } from "../xiaomiHomeSettingsClient";
 import {
   adapterLabel,
   automationRulesForGateway,
@@ -616,16 +616,16 @@ function clearXiaomiEntity(e?: Event): void {
 }
 
 const openingRecordingsFolder = ref(false);
+const recordingsFolderError = ref("");
 
 async function openRecordingsFolder(): Promise<void> {
   if (openingRecordingsFolder.value) return;
   openingRecordingsFolder.value = true;
+  recordingsFolderError.value = "";
   try {
-    const roleId = gateway.value?.agentRoleId;
-    if (!roleId) return;
-    await store.openConfigFile("xiaomi-recordings", "", roleId);
-  } catch {
-    // Graceful fallback if manager fails to open
+    await openXiaomiHomeRecordings(roleId => routeStore.openConfigFile("camera-clips", "", roleId));
+  } catch (error) {
+    recordingsFolderError.value = userFacingError(error);
   } finally {
     openingRecordingsFolder.value = false;
   }
@@ -2122,15 +2122,6 @@ onBeforeUnmount(() => {
                         </div>
                       </template>
                       <div class="full-span d-flex align-center justify-space-between mt-2 flex-wrap ga-2">
-                        <v-switch
-                          :model-value="(activeMessageTrigger as any)?.saveClip !== false"
-                          label="自动下载并保存该事件的录像切片（MP4）"
-                          color="warning"
-                          inset
-                          density="compact"
-                          hide-details
-                          @update:model-value="val => patchAutomationMessageTrigger({ saveClip: Boolean(val) })"
-                        />
                         <v-btn
                           size="small"
                           variant="tonal"
@@ -2139,9 +2130,10 @@ onBeforeUnmount(() => {
                           :loading="openingRecordingsFolder"
                           @click="openRecordingsFolder"
                         >
-                          打开记录文件夹
+                          打开录像文件夹
                         </v-btn>
                       </div>
+                      <v-alert v-if="recordingsFolderError" type="error" variant="tonal" density="compact" class="mt-2">{{ recordingsFolderError }}</v-alert>
                     </div>
                   </template>
 

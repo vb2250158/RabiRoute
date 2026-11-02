@@ -9,7 +9,7 @@
     "promptOutputMode": "voice_short",
     "ttsProvider": "rokid-native",
     "ttsVoice": "rokid-glass",
-    "ttsWorkerUrl": "http://127.0.0.1:8794/api/fennenote/playback",
+    "ttsWorkerUrl": "",
     "ttsPlay": true,
     "preventFeedbackLoop": true,
     "replyToSource": false

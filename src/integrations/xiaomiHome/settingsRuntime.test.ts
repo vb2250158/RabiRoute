@@ -1,12 +1,16 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import http from "node:http";
+import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { WebSocketServer } from "ws";
 import { XiaomiHomeArtifactStore } from "./artifactStore.js";
 import { XiaomiHomeManagerApiError, normalizeHomeAssistantState } from "./managerApi.js";
 import { XiaomiHomeCredentialStore } from "./credentials.js";
 import { XiaomiHomeRuntimeController, XiaomiHomeSettingsStore } from "./settingsRuntime.js";
+import { ManagedHaLoopbackProxy } from "./managedHaLoopbackProxy.js";
 
 test("missing persona binding remains unconfigured instead of selecting a private role", () => {
   const root = temporaryDirectory();
@@ -128,7 +132,7 @@ test("Xiaomi Home hot reload keeps the same durable action receipt runtime", asy
       writeEnabled: false
     });
     const credentials = new XiaomiHomeCredentialStore(runtimeDir, testProtector);
-    credentials.write("secret", "http://127.0.0.1:8123", {});
+    credentials.write("secret", "http://127.0.0.1:8123", { credentialOrigin: "external" });
     const controller = new XiaomiHomeRuntimeController(store, artifacts, {
       fetchImpl,
       deliverEvent: async () => undefined
@@ -251,4 +255,205 @@ test("runtime replacement joins the original capture even after another owner re
     await new Promise<void>(resolve=>setImmediate(resolve)); assert.equal(settled,false);
     release(); await replaced; await stopped;
   } finally {release(); await Promise.allSettled([replacing,stopping]); fs.rmSync(root,{recursive:true,force:true});}
+});
+
+test("managed HA sends credentials only through its verified VM transport", async () => {
+  const root = temporaryDirectory();
+  const calls: Array<{ url: string; authorization: string }> = [];
+  const vmId = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+  const configFile = path.join(root, "home-assistant-deployment.json");
+  fs.writeFileSync(configFile, JSON.stringify({ schemaVersion: 1, config: { mode: "haos", autoStart: false, containerName: "homeassistant" } }));
+  const credentials = new XiaomiHomeCredentialStore(root, testProtector);
+  credentials.write("secret", "http://127.0.0.1:8123", { managedVmId: vmId });
+  const controller = new XiaomiHomeRuntimeController(new XiaomiHomeSettingsStore(root, { eventMonitorEnabled: false }),
+    new XiaomiHomeArtifactStore(root), { env: {}, deliverEvent: async () => undefined, fetchImpl: async (input, init) => {
+      calls.push({ url: String(input), authorization: new Headers(init?.headers).get("authorization") || "" });
+      return new Response(JSON.stringify({ message: "API running." }), { status: 200 });
+    } }, credentials);
+  let identity: { address: string; port: 80; vmId: string; legacyBindingVerified: boolean } | undefined;
+  controller.deployment.managedIdentity = () => identity;
+  controller.deployment.managedBaseUrl = () => "http://127.0.0.1:51234";
+  const refresh = () => Reflect.get(controller, "replaceRuntime").call(controller,
+    Reflect.get(controller, "createRuntime").call(controller, controller.settings().settings)) as Promise<void>;
+  try {
+    await refresh();
+    await controller.health();
+    assert.deepEqual(calls, []);
+    identity = { address: "192.168.1.42", port: 80, vmId, legacyBindingVerified: true };
+    await refresh();
+    await controller.health();
+    assert.deepEqual(calls, [{ url: "http://127.0.0.1:51234/api/", authorization: "Bearer secret" }]);
+    identity = { ...identity, vmId: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb" };
+    await refresh();
+    await controller.health();
+    assert.equal(calls.length, 1, "a different VM must not receive the managed credential");
+    identity = undefined;
+    await refresh();
+    await controller.health();
+    assert.equal(calls.length, 1);
+    fs.writeFileSync(configFile, JSON.stringify({ schemaVersion: 1, config: { mode: "external", autoStart: false, containerName: "homeassistant" } }));
+    await refresh();
+    await controller.health();
+    assert.equal(calls.length, 1, "managed token must not be sent to the old fixed-port service");
+  } finally { await controller.stop(); fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("managed authorization rejects a deployment change while verifying the token", async () => {
+  const root = temporaryDirectory();
+  const configFile = path.join(root, "home-assistant-deployment.json");
+  const config = { mode: "haos", autoStart: false, containerName: "homeassistant" };
+  fs.writeFileSync(configFile, JSON.stringify({ schemaVersion: 1, config }));
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  let entered!: () => void;
+  const started = new Promise<void>(resolve => { entered = resolve; });
+  const credentials = new XiaomiHomeCredentialStore(root, testProtector);
+  const controller = new XiaomiHomeRuntimeController(new XiaomiHomeSettingsStore(root, { eventMonitorEnabled: false }),
+    new XiaomiHomeArtifactStore(root), { env: {}, deliverEvent: async () => undefined, fetchImpl: async () => {
+      entered(); await gate;
+      return new Response(JSON.stringify({ location_name: "Home" }), { status: 200 });
+    } }, credentials);
+  const identity = { address: "192.168.1.42", port: 80 as const, vmId: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", legacyBindingVerified: false };
+  controller.deployment.managedIdentity = () => identity;
+  controller.deployment.managedBaseUrl = () => "http://127.0.0.1:51234";
+  try {
+    const pending = controller.authorize("candidate", "http://127.0.0.1:8123", controller.settings().revision);
+    await started;
+    fs.writeFileSync(configFile, JSON.stringify({ schemaVersion: 1, config: { ...config, autoStart: true } }));
+    release();
+    await assert.rejects(pending, (error: unknown) => error instanceof XiaomiHomeManagerApiError && error.code === "xiaomi_home_managed_changed");
+    assert.equal(fs.existsSync(credentials.credentialPath), false);
+  } finally { release(); await controller.stop(); fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("legacy managed credential is migrated only with verified forwarding ownership", async () => {
+  const root = temporaryDirectory();
+  fs.writeFileSync(path.join(root, "home-assistant-deployment.json"), JSON.stringify({ schemaVersion: 1,
+    config: { mode: "haos", autoStart: false, containerName: "homeassistant" } }));
+  const credentials = new XiaomiHomeCredentialStore(root, testProtector);
+  credentials.write("legacy-secret", "http://127.0.0.1:8123", {});
+  const controller = new XiaomiHomeRuntimeController(new XiaomiHomeSettingsStore(root, { eventMonitorEnabled: false }),
+    new XiaomiHomeArtifactStore(root), { env: {}, deliverEvent: async () => undefined }, credentials);
+  controller.deployment.start = () => undefined;
+  controller.deployment.managedBaseUrl = () => "http://127.0.0.1:51234";
+  let identity = { address: "192.168.1.42", port: 80 as const, vmId: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", legacyBindingVerified: false };
+  controller.deployment.managedIdentity = () => identity;
+  try {
+    controller.start();
+    Reflect.get(controller.deployment, "changes").emit("target", identity);
+    assert.equal(credentials.resolve().metadata?.managedVmId, undefined);
+    identity = { ...identity, legacyBindingVerified: true };
+    Reflect.get(controller.deployment, "changes").emit("target", identity);
+    assert.equal(credentials.resolve().metadata?.managedVmId, identity.vmId);
+  } finally { await controller.stop(); fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("exhausted managed recovery reconnects the event monitor when the owned Core returns", { timeout: 15000 }, async () => {
+  const root = temporaryDirectory();
+  const vmId = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+  const server = http.createServer((_request, response) => {
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end(JSON.stringify({ message: "API running." }));
+  });
+  const sockets = new WebSocketServer({ server });
+  let authenticated = "";
+  let subscribe!: () => void;
+  const subscribed = new Promise<void>(resolve => { subscribe = resolve; });
+  sockets.on("connection", socket => {
+    socket.send(JSON.stringify({ type: "auth_required" }));
+    socket.on("message", data => {
+      const message = JSON.parse(String(data)) as { type?: string; access_token?: string; id?: number };
+      if (message.type === "auth") {
+        authenticated = String(message.access_token || "");
+        socket.send(JSON.stringify({ type: "auth_ok" }));
+      } else if (message.type === "subscribe_events") {
+        socket.send(JSON.stringify({ id: message.id, type: "result", success: true }));
+        subscribe();
+        socket.send(JSON.stringify({ id: message.id, type: "event", event: {
+          event_type: "state_changed", time_fired: "2026-01-01T00:00:00Z", data: {
+            old_state: { entity_id: "binary_sensor.camera_motion", state: "off", attributes: { device_class: "motion" } },
+            new_state: { entity_id: "binary_sensor.camera_motion", state: "on", attributes: { device_class: "motion" } }
+          }
+        } }));
+      }
+    });
+  });
+  await new Promise<void>((resolve, reject) => { server.once("error", reject); server.listen(0, "127.0.0.1", resolve); });
+  const port = (server.address() as net.AddressInfo).port;
+  fs.writeFileSync(path.join(root, "home-assistant-deployment.json"), JSON.stringify({ schemaVersion: 1,
+    config: { mode: "haos", autoStart: true, containerName: "homeassistant", recoveryMaxAttempts: 1 } }));
+  const settings = new XiaomiHomeSettingsStore(root, { baseUrl: "http://127.0.0.1:8123", eventMonitorEnabled: true,
+    agentRoleId: "CameraOwner", cameraMotionEntityIds: ["binary_sensor.camera_motion"] });
+  const credentials = new XiaomiHomeCredentialStore(root, testProtector);
+  credentials.write("fixture-secret", "http://127.0.0.1:8123", {});
+  const events: Array<{ kind: string; role: string }> = [];
+  const controller = new XiaomiHomeRuntimeController(settings, new XiaomiHomeArtifactStore(root), {
+    env: {}, deliverEvent: async (event, options) => { events.push({ kind: event.kind, role: options.agentRoleId }); }
+  }, credentials);
+  let recoveries = 0;
+  let coreReady = false;
+  Reflect.set(controller.deployment, "os", {
+    inspect: async () => ({ state: "error", installed: true, message: "Core unavailable" }),
+    run: async () => { recoveries++; throw new Error("Core unavailable"); },
+    observe: async () => coreReady ? { address: "192.0.2.1", port: 80, vmId, legacyBindingVerified: true } : undefined
+  });
+  Reflect.set(controller.deployment, "proxy", await ManagedHaLoopbackProxy.listen({ connect: () => net.createConnection({ host: "127.0.0.1", port }) }));
+  Reflect.set(controller.deployment, "io", { ...Reflect.get(controller.deployment, "io"),
+    ready: async () => (await fetch(`http://127.0.0.1:${port}/`)).ok });
+  try {
+    await controller.activate();
+    await Reflect.get(controller.deployment, "flight");
+    assert.equal(recoveries, 1);
+    assert.equal((await controller.deployment.inspect()).recoveryExhausted, true);
+    coreReady = true;
+    await controller.deployment.recover();
+    await subscribed;
+    const deadline = Date.now() + 3000;
+    while (!events.some(event => event.kind === "camera_motion_detected") && Date.now() < deadline) {
+      await new Promise(resolve => setTimeout(resolve, 20));
+    }
+    assert.equal(recoveries, 1, "reconnection must not restart the VM after recovery budget exhaustion");
+    assert.equal(credentials.resolve().metadata?.managedVmId, vmId);
+    assert.equal(authenticated, "fixture-secret");
+    assert.ok(events.some(event => event.kind === "camera_motion_detected" && event.role === "CameraOwner"));
+  } finally {
+    await controller.stop();
+    sockets.close();
+    await new Promise<void>(resolve => server.close(() => resolve()));
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("ambiguous legacy loopback credentials require external reauthorization across restart", async () => {
+  const root = temporaryDirectory();
+  const configFile = path.join(root, "home-assistant-deployment.json");
+  const saveMode = (mode: string) => fs.writeFileSync(configFile, JSON.stringify({ schemaVersion: 1,
+    config: { mode, autoStart: false, containerName: "homeassistant" } }));
+  const credentials = new XiaomiHomeCredentialStore(root, testProtector);
+  credentials.write("legacy-secret", "http://127.0.0.1:8123", {});
+  const calls: string[] = [];
+  const dependencies = { env: {}, deliverEvent: async () => undefined, fetchImpl: async (_input: string | URL | Request, init?: RequestInit) => {
+    calls.push(new Headers(init?.headers).get("authorization") || "");
+    return new Response(JSON.stringify({ location_name: "Home", message: "API running." }), { status: 200 });
+  } };
+  saveMode("haos");
+  const first = new XiaomiHomeRuntimeController(new XiaomiHomeSettingsStore(root, { eventMonitorEnabled: false }),
+    new XiaomiHomeArtifactStore(root), dependencies, credentials);
+  saveMode("external");
+  const refresh = Reflect.get(first, "replaceRuntime").call(first,
+    Reflect.get(first, "createRuntime").call(first, first.settings().settings)) as Promise<void>;
+  await refresh;
+  await first.health();
+  assert.deepEqual(calls, []);
+  await first.stop();
+  const restarted = new XiaomiHomeRuntimeController(new XiaomiHomeSettingsStore(root, { eventMonitorEnabled: false }),
+    new XiaomiHomeArtifactStore(root), dependencies, credentials);
+  try {
+    await restarted.health();
+    assert.deepEqual(calls, []);
+    await restarted.authorize("external-new-secret", "http://127.0.0.1:8123", restarted.settings().revision);
+    assert.equal(credentials.resolve().metadata?.credentialOrigin, "external");
+    await restarted.health();
+    assert.deepEqual(calls, ["Bearer external-new-secret", "Bearer external-new-secret"]);
+  } finally { await restarted.stop(); fs.rmSync(root, { recursive: true, force: true }); }
 });

@@ -52,9 +52,9 @@ export type RabiMessageSource =
   | RabiMessageAdapterSource
   | RabiSystemMessageSource;
 
-export const RABI_MESSAGE_SOURCE_HEADER = "[消息源]";
-export const RABI_MESSAGE_CONTENT_HEADER = "[消息内容]";
-const RABI_MESSAGE_ENVELOPE_HEADER_PATTERN = /^\s*\[(?:消息源|消息内容|投递源)\]\s*$/m;
+export const RABI_MESSAGE_SOURCE_HEADER = "## 消息源";
+export const RABI_MESSAGE_CONTENT_HEADER = "## 消息内容";
+const RABI_MESSAGE_ENVELOPE_HEADER_PATTERN = /^\s*(?:\[(?:消息源|消息内容|投递源)\]|## (?:消息源|消息内容))\s*$/m;
 
 export type RabiDeliveryEnvelope = {
   messageSource: RabiMessageSource;
@@ -127,15 +127,15 @@ export function rabiMessageSourceLines(source: RabiMessageSource, sentAt?: strin
     );
   }
   lines.push(`${(source.type === "agent" || source.type === "agent_hook") ? "投递时间" : "消息包发送时间"}：${deliverySentAt(sentAt)}`);
-  return lines.filter((line): line is string => Boolean(line));
+  return lines.filter((line): line is string => Boolean(line)).map((line, index) => index ? `- ${line}` : line);
 }
 
 function stripLeadingRabiEnvelope(value: string): string {
   let text = value.trim();
   for (let pass = 0; pass < 3; pass += 1) {
-    if (text.startsWith(RABI_MESSAGE_SOURCE_HEADER)) {
+    if (text.startsWith(RABI_MESSAGE_SOURCE_HEADER) || text.startsWith("[消息源]")) {
       const lines = text.split(/\r?\n/);
-      const contentIndex = lines.findIndex((line) => line.trim() === RABI_MESSAGE_CONTENT_HEADER);
+      const contentIndex = lines.findIndex((line) => line.trim() === RABI_MESSAGE_CONTENT_HEADER || line.trim() === "[消息内容]");
       if (contentIndex < 0) break;
       text = lines.slice(contentIndex + 1).join("\n").trim();
       continue;
@@ -176,7 +176,7 @@ export function normalizeRabiMessageContent(value: unknown, escapeReservedHeader
   if (!escapeReservedHeaders) return migrated;
   return migrated
     .split(/\r?\n/)
-    .map((line) => /^\[[^\]\r\n]{1,100}\]$/.test(line.trim()) ? `> ${line}` : line)
+    .map((line) => /^(?:\[[^\]\r\n]{1,100}\]|## (?:消息源|消息内容))$/.test(line.trim()) ? `> ${line}` : line)
     .join("\n");
 }
 
@@ -185,7 +185,7 @@ export function renderRabiDelivery(envelope: RabiDeliveryEnvelope): string {
   const sentAt = deliverySentAt(envelope.sentAt);
   return [
     ...rabiMessageSourceLines(messageSource, sentAt),
-    ...(envelope.deliveryId ? [`投递 ID：${envelope.deliveryId}`] : []),
+    ...(envelope.deliveryId ? [`- 投递 ID：${envelope.deliveryId}`] : []),
     "", RABI_MESSAGE_CONTENT_HEADER,
     renderRabiDeliveryContent(envelope)
   ].join("\n").trimEnd();

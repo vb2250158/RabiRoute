@@ -11,8 +11,7 @@ import {
   HOME_ASSISTANT_AUTHENTICATION_DOCS_URL,
   HOME_ASSISTANT_INSTALLATION_URL,
   HOME_ASSISTANT_XIAOMI_HOME_DOCS_URL,
-  homeAssistantLoginUrl,
-  homeAssistantProfileUrl
+  homeAssistantEndpointPresentation
 } from "../../xiaomiHomeCredentialHelp";
 import { xiaomiHomeSettingsClient } from "../../xiaomiHomeSettingsClient";
 
@@ -58,9 +57,11 @@ const stateDetail = computed(() => ({
   timeout: "连接 Home Assistant 超时。请检查地址、网络和 Home Assistant 运行状态。"
 }[authorization.value?.state || "authorization_required"]));
 
-const loginUrl = computed(() => homeAssistantLoginUrl(baseUrl.value));
-const profileUrl = computed(() => homeAssistantProfileUrl(baseUrl.value));
-const serviceReady = computed(() => deployment.value?.state === "ready" && homeAssistantLoginUrl(deployment.value.baseUrl) === loginUrl.value);
+const endpoint = computed(() => homeAssistantEndpointPresentation(deployment.value, baseUrl.value, settings.value?.settings.baseUrl || ""));
+const managed = computed(() => endpoint.value.managed);
+const loginUrl = computed(() => endpoint.value.loginUrl);
+const profileUrl = computed(() => endpoint.value.profileUrl);
+const serviceReady = computed(() => endpoint.value.serviceReady);
 
 const sourceLabel = computed(() => authorization.value?.credentialSource === "protected"
   ? "本机受保护凭证"
@@ -93,7 +94,15 @@ async function connect(): Promise<void> {
     error.value = "米家设置尚未加载。";
     return;
   }
-  const normalizedBaseUrl = baseUrl.value.trim().replace(/\/+$/, "");
+  if (!deployment.value) {
+    error.value = "Home Assistant 部署状态尚未加载。";
+    return;
+  }
+  if (managed.value && !serviceReady.value) {
+    error.value = "Home Assistant 尚未就绪，请等待服务启动或检查上方状态。";
+    return;
+  }
+  const normalizedBaseUrl = endpoint.value.credentialBaseUrl.trim().replace(/\/+$/, "");
   if (!normalizedBaseUrl) {
     baseUrlError.value = "请填写 Home Assistant 地址。";
     return;
@@ -129,7 +138,7 @@ async function connect(): Promise<void> {
 }
 
 async function saveAddress(): Promise<void> {
-  if (busy.value || !settings.value) return;
+  if (busy.value || !settings.value || !deployment.value || managed.value) return;
   busy.value = true;
   try {
     settings.value = await xiaomiHomeSettingsClient.update(settings.value, { ...settings.value.settings, baseUrl: baseUrl.value.trim() });
@@ -192,17 +201,27 @@ onMounted(() => void load());
         {{ stateDetail }}
       </v-alert>
       <v-text-field
+        v-if="managed"
+        :model-value="endpoint.address"
+        label="Home Assistant 地址"
+        placeholder="等待服务地址"
+        readonly
+        class="mt-3"
+      />
+      <v-text-field
+        v-else
         v-model="baseUrl"
         label="Home Assistant 地址"
         placeholder="http://homeassistant.local:8123"
         hint="填写这台电脑能打开的 Home Assistant 首页地址。"
         :error-messages="baseUrlError"
+        :disabled="!deployment"
         class="mt-3"
         @update:model-value="baseUrlError = ''"
       />
       <div class="credential-help-actions">
         <v-btn href="/api/agent/xiaomi-home/vacuum-cloud/connect" target="_blank" rel="noopener noreferrer" variant="tonal" size="small" prepend-icon="mdi-qrcode-scan">连接扫地机地图（实验）</v-btn>
-        <v-btn variant="tonal" :disabled="busy || baseUrl === settings.settings.baseUrl" @click="saveAddress">保存服务地址</v-btn>
+        <v-btn v-if="!managed" variant="tonal" :disabled="busy || !deployment || baseUrl === settings.settings.baseUrl" @click="saveAddress">保存服务地址</v-btn>
         <v-btn
           :href="loginUrl || undefined"
           :disabled="!loginUrl || !serviceReady"
@@ -222,7 +241,9 @@ onMounted(() => void load());
           prepend-icon="mdi-account-key-outline"
         >打开令牌管理</v-btn>
       </div>
-      <div v-if="!loginUrl" class="section-note">先填写有效的 Home Assistant 地址。</div>
+      <div v-if="!deployment" class="section-note">Home Assistant 部署状态尚未获取，请检查上方状态。</div>
+      <div v-else-if="managed && !serviceReady" class="section-note">Home Assistant 尚未就绪，请等待服务启动或检查上方状态。</div>
+      <div v-else-if="!loginUrl" class="section-note">先填写有效的 Home Assistant 地址。</div>
       <div v-else-if="!serviceReady" class="section-note">先在上方启动并检查服务，就绪后再打开登录页面。</div>
       <v-text-field
         v-model="accessToken"
@@ -257,7 +278,7 @@ onMounted(() => void load());
         </v-expansion-panel>
       </v-expansion-panels>
       <div class="endpoint-actions">
-        <v-btn color="primary" :loading="busy" prepend-icon="mdi-shield-key-outline" @click="connect">
+        <v-btn color="primary" :loading="busy" :disabled="!deployment || (managed && !serviceReady)" prepend-icon="mdi-shield-key-outline" @click="connect">
           {{ authorization.configured ? "验证并替换凭证" : "验证并连接" }}
         </v-btn>
         <v-btn variant="tonal" :disabled="busy || !authorization.configured" prepend-icon="mdi-refresh" @click="refresh">检查连接</v-btn>

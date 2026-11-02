@@ -79,6 +79,15 @@ test("Primary Codex turns apply the Route model and reasoning effort together", 
   assert.deepEqual(resolvePrimaryCodexTurnOptions({ agentModel: "" }), {});
 });
 
+test("notification model overrides do not inherit another model's reasoning effort", () => {
+  const primary = { agentModel: "primary-model", agentReasoningEffort: "xhigh" as const };
+  assert.deepEqual(resolvePrimaryCodexTurnOptions(primary, { model: "reflection-model", reasoningEffort: "low" }),
+    { model: "reflection-model", reasoningEffort: "low" });
+  assert.deepEqual(resolvePrimaryCodexTurnOptions(primary, { model: "reflection-model" }), { model: "reflection-model" });
+  assert.deepEqual(resolvePrimaryCodexTurnOptions(primary), { model: "primary-model", reasoningEffort: "xhigh" });
+  assert.throws(() => resolvePrimaryCodexTurnOptions(primary, { model: " " }), /non-empty model/);
+});
+
 test("durable rollout completion clears an older Desktop IPC active marker", () => {
   assert.equal(codexThreadIsActiveFromSourcesForTest(100, {
     state: "inactive",

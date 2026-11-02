@@ -1,5 +1,4 @@
 import { spawn } from "node:child_process";
-import net from "node:net";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
@@ -56,45 +55,8 @@ if (describeOnly) {
   process.exit(0);
 }
 
-function portInUse(port) {
-  return new Promise((resolve, reject) => {
-    const socket = net.createConnection({ host: "127.0.0.1", port });
-    socket.once("connect", () => {
-      socket.destroy();
-      resolve(true);
-    });
-    socket.once("error", (error) => {
-      socket.destroy();
-      if (error?.code === "ECONNREFUSED") {
-        resolve(false);
-        return;
-      }
-      reject(error);
-    });
-    socket.setTimeout(1000, () => {
-      socket.destroy();
-      resolve(false);
-    });
-  });
-}
-
-const occupied = [];
-for (const service of services) {
-  if (await portInUse(service.port)) {
-    occupied.push(`${service.name}:${service.port}`);
-  }
-}
-
-if (occupied.length > 0) {
-  console.error(
-    `Cannot start hot reload because these ports are already in use: ${occupied.join(", ")}. `
-    + "Stop only the corresponding installed services, then run this command again."
-  );
-  process.exit(2);
-}
-
 if (checkOnly) {
-  console.log(`Hot reload preflight passed: ${services.map(({ port }) => port).join(", ")} available.`);
+  console.log("Hot reload configuration accepted; services report their listening addresses at startup.");
   process.exit(0);
 }
 
@@ -111,7 +73,7 @@ const children = services.map((service) => {
       stopAll(code || 1);
     }
   });
-  console.log(`${service.name} hot reload started on http://127.0.0.1:${service.port}`);
+  console.log(`${service.name} hot reload starting; its process will report the listening address.`);
   return child;
 });
 

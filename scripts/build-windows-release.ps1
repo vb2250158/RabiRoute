@@ -4,6 +4,8 @@ param(
     [string]$OutputRoot,
     [string]$DesktopRuntimeRoot,
     [string]$HostRuntimeRoot,
+    [string]$ReuseInstalledHostRoot,
+    [string]$ExpectedInstalledBootstrapSha256,
     [string]$TrackedFilesManifest,
     [switch]$SkipBuild,
     [switch]$SkipDesktopBuild,
@@ -88,6 +90,7 @@ $requiredPortableRuntimeFiles = @(
     "scripts/lib/windows-host-discovery.mjs",
     "apps/rabi-agent/lib/manager-client.mjs",
     "apps/rabi-agent/lib/manager-cli.mjs",
+    "plugin-adapters/xiaoai-rabiroute/bridge-endpoint.mjs",
     # MCP knowledge tools reuse these canonical contracts independently of Relay.
     "packages/rabi-knowledge-contract/schema.mjs",
     "packages/rabi-knowledge-contract/tools.mjs",
@@ -100,6 +103,8 @@ $requiredPortableRuntimeFiles = @(
     "apps/rabi-mcp/lib/knowledge-tools.mjs",
     "apps/rabi-mcp/lib/knowledge-receipt.mjs",
     "scripts/lib/release-tracked-manifest.ps1",
+    "scripts/lib/copy-installed-host.ps1",
+    "scripts/lib/copy-agent-native-assets.ps1",
     "scripts/rabilink-relay-runtime-files.json",
     "docs/aiui-agent-profile-http.md",
     "docs/aiui-agent-profile-http_en.md",
@@ -115,8 +120,8 @@ foreach ($relative in $relayRuntimeFiles) {
 }
 
 $trackedManifestEntries = $null
+. (Join-Path $scriptDir 'lib/release-tracked-manifest.ps1')
 if ($TrackedFilesManifest) {
-    . (Join-Path $scriptDir 'lib/release-tracked-manifest.ps1')
     $trackedManifestEntries = Read-ReleaseTrackedManifest $TrackedFilesManifest $repo
 }
 
@@ -131,11 +136,7 @@ function Copy-TrackedTree([string]$RelativeRoot) {
     foreach ($relative in $files) {
         if (-not $relative.StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase)) { continue }
         if ($excludedRuntimeFiles.Contains($relative)) { continue }
-        $source = Join-Path $repo ($relative -replace "/", "\")
-        if (-not (Test-Path -LiteralPath $source -PathType Leaf)) {
-            if ($null -ne $trackedManifestEntries) { throw "Missing tracked file: $relative" }
-            continue
-        }
+        $source = Resolve-ReleaseTrackedSourcePath $relative $repo
         if ($null -ne $trackedManifestEntries) {
             $expectedHash = ($trackedManifestEntries | Where-Object path -EQ $relative).sha256
             if ((Get-FileHash -LiteralPath $source -Algorithm SHA256).Hash -ne $expectedHash) { throw "Tracked hash changed before copy: $relative" }
@@ -304,9 +305,18 @@ if (-not $SkipDesktopBuild) {
     if ($LASTEXITCODE -ne 0) { throw "Desktop build failed." }
 }
 
-Write-Step "Building the unique Windows application Host"
-& (Join-Path $repo "scripts\build-windows-host.ps1") -OutputRoot $hostRuntime
-if ($LASTEXITCODE -ne 0) { throw "Windows Host build failed." }
+if ($ReuseInstalledHostRoot) {
+    if (-not $ExpectedInstalledBootstrapSha256) { throw 'An expected bootstrap hash is required when reusing an installed Host.' }
+    Assert-LocalDirectory ([IO.Path]::GetFullPath($ReuseInstalledHostRoot))
+    . (Join-Path $scriptDir 'lib/copy-installed-host.ps1')
+    Write-Step "Copying the explicitly selected installed Host snapshot"
+    Copy-InstalledHostSnapshot -InstallRoot $ReuseInstalledHostRoot -Destination $hostRuntime -ExpectedBootstrapSha256 $ExpectedInstalledBootstrapSha256
+} else {
+    if ($ExpectedInstalledBootstrapSha256) { throw 'An expected bootstrap hash requires an installed Host root.' }
+    Write-Step "Building the unique Windows application Host"
+    & (Join-Path $repo "scripts\build-windows-host.ps1") -OutputRoot $hostRuntime
+    if ($LASTEXITCODE -ne 0) { throw "Windows Host build failed." }
+}
 
 if ($IncludeSpeech -and -not $SkipBuild) {
     Write-Step "Building the RabiSpeech Windows process host"
@@ -403,7 +413,7 @@ foreach ($tree in @(
     "examples\data",
     "apps\rabi-agent",
     "plugin-adapters",
-    "plugins\contracts\plugin-sdk",
+    "plugins",
     "scripts"
 )) {
     Copy-TrackedTree $tree
@@ -428,6 +438,8 @@ foreach ($relative in @(
 }
 
 Copy-RequiredPortableRuntimeFiles
+. (Join-Path $scriptDir 'lib/copy-agent-native-assets.ps1')
+Copy-AgentNativeAssets -AgentRoot (Join-Path $repo 'apps/rabi-agent') -PayloadRoot $payload
 foreach ($relative in @("apps\rabi-agent\runtime", "apps\rabi-agent\dist\agent-hooks")) {
     $source = Join-Path $repo $relative
     if (-not (Test-Path -LiteralPath $source -PathType Container)) { throw "Instance Agent runtime was not built: $relative" }

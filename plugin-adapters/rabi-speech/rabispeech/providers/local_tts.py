@@ -54,7 +54,7 @@ class LocalTtsProvider:
         worker_url = model.worker_url or self.settings.default_worker_url
         if not worker_url:
             raise RuntimeError(f"Local TTS model has no worker URL: {model.id}")
-        await worker_supervisor.ensure(f"tts:{model.id}", worker_url, model.launch)
+        worker_url = await worker_supervisor.ensure(f"tts:{model.id}", worker_url, model.launch)
 
         payload: dict[str, object] = {
             "text": request.text,

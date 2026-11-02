@@ -137,6 +137,34 @@ function Set-CurrentPointer([string]$CurrentPath, [byte[]]$Content) {
     }
 }
 
+function Get-ProcessExecutablePath([object]$Process) {
+    if ($Process.ExecutablePath) { return [string]$Process.ExecutablePath }
+    # CIM can omit the path for an elevated Host. Query only its image path,
+    # retaining the exact-path and parent-process checks below.
+    if (-not ("RabiRouteDeveloperProcessPath" -as [type])) {
+        Add-Type -TypeDefinition @'
+using System;
+using System.Text;
+using System.Runtime.InteropServices;
+public static class RabiRouteDeveloperProcessPath {
+    [DllImport("kernel32.dll", SetLastError=true)] static extern IntPtr OpenProcess(uint access, bool inherit, uint pid);
+    [DllImport("kernel32.dll", SetLastError=true, CharSet=CharSet.Unicode)] static extern bool QueryFullProcessImageName(IntPtr process, uint flags, StringBuilder name, ref uint size);
+    [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr handle);
+    public static string Read(uint pid) {
+        IntPtr process = OpenProcess(0x1000, false, pid);
+        if (process == IntPtr.Zero) return null;
+        try {
+            uint length = 32768;
+            var name = new StringBuilder((int)length);
+            return QueryFullProcessImageName(process, 0, name, ref length) ? name.ToString() : null;
+        } finally { CloseHandle(process); }
+    }
+}
+'@
+    }
+    return [RabiRouteDeveloperProcessPath]::Read([uint32]$Process.ProcessId)
+}
+
 function Wait-Ready([string]$HostExe, [string]$CurrentPath, [string]$ExpectedReleaseId, [int]$TimeoutSeconds) {
     $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
     $lastState = "unreachable"
@@ -158,9 +186,11 @@ function Wait-Ready([string]$HostExe, [string]$CurrentPath, [string]$ExpectedRel
                 [int]$meta.managerRuntime.pid -ne [int]$status.managerPid) { continue }
             $processes = @(Get-CimInstance Win32_Process)
             $hostProcesses = @($processes | Where-Object {
-                $_.ExecutablePath -and [IO.Path]::GetFullPath($_.ExecutablePath).Equals(
-                    [IO.Path]::GetFullPath($HostExe), [StringComparison]::OrdinalIgnoreCase) -and
-                $_.CommandLine -notlike "*--command*"
+                $_.Name -eq [IO.Path]::GetFileName($HostExe) -and $_.CommandLine -notlike "*--command*"
+            } | Where-Object {
+                $imagePath = Get-ProcessExecutablePath $_
+                $imagePath -and [IO.Path]::GetFullPath($imagePath).Equals(
+                    [IO.Path]::GetFullPath($HostExe), [StringComparison]::OrdinalIgnoreCase)
             })
             $manager = @($processes | Where-Object { [int]$_.ProcessId -eq [int]$status.managerPid })
             $tray = @($processes | Where-Object { [int]$_.ProcessId -eq [int]$status.trayPid })

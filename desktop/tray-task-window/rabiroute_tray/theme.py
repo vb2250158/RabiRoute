@@ -52,7 +52,8 @@ RABI_MENU_STYLESHEET = rabi_menu_stylesheet()
 def apply_rabi_menu_theme(*menus: QMenu, theme: object = "light") -> None:
     stylesheet = rabi_menu_stylesheet(theme)
     for menu in menus:
-        menu.setStyleSheet(stylesheet)
+        if menu.styleSheet() != stylesheet:
+            menu.setStyleSheet(stylesheet)
 
 
 def apply_rabi_application_theme(app: QApplication, theme: object) -> str:

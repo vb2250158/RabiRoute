@@ -17,6 +17,7 @@ import pytest
 
 from rabispeech.remote_audio import RemoteAudioHub, RemoteAudioServerConfig
 from rabispeech.playback import PlaybackUnavailableError
+from rabispeech.config import load_settings
 
 
 def test_offline_saved_selection_reports_recovery_without_local_fallback(tmp_path: Path) -> None:
@@ -37,6 +38,53 @@ def _free_port() -> int:
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
         return int(sock.getsockname()[1])
+
+
+def test_remote_audio_defaults_to_dynamic_and_preserves_explicit_port(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.delenv("RABISPEECH_REMOTE_AUDIO_PORT", raising=False)
+    config = tmp_path / "config.json"
+    config.write_text("{}", encoding="utf-8")
+    assert load_settings(config).remote_audio.port == 0
+    config.write_text('{"remote_audio":{"port":8782}}', encoding="utf-8")
+    assert load_settings(config).remote_audio.port == 8782
+
+
+def test_dynamic_remote_audio_port_is_advertised_and_connectable(tmp_path: Path) -> None:
+    websockets = pytest.importorskip("websockets.asyncio.client")
+
+    async def scenario() -> None:
+        hub = RemoteAudioHub(
+            RemoteAudioServerConfig(True, "127.0.0.1", 0, "test-token", tmp_path / "selection.json", 0, "dynamic"),
+            local_player=lambda *_args: None, local_stopper=lambda: None,
+        )
+        await hub.start()
+        loop = asyncio.get_running_loop()
+        received = loop.create_future()
+
+        class Client(asyncio.DatagramProtocol):
+            def datagram_received(self, data, _addr):
+                if not received.done():
+                    received.set_result(json.loads(data))
+
+        transport, _ = await loop.create_datagram_endpoint(Client, local_addr=("127.0.0.1", 0))
+        try:
+            discovery_port = hub._discovery_transport.get_extra_info("sockname")[1]
+            assert hub.snapshot()["discovery_port"] == discovery_port > 0
+            transport.sendto(b"RABI_VOICE_DISCOVER_V1", ("127.0.0.1", discovery_port))
+            advertisement = await asyncio.wait_for(received, 3)
+            assert advertisement["port"] == hub.snapshot()["port"] > 0
+            async with websockets.connect(
+                f"ws://127.0.0.1:{advertisement['port']}",
+                additional_headers={"Authorization": "Bearer test-token"},
+            ):
+                pass
+        finally:
+            transport.close()
+            await hub.stop()
+        assert hub.snapshot()["port"] == 0
+        assert hub.snapshot()["discovery_port"] == 0
+
+    asyncio.run(scenario())
 
 
 def test_remote_audio_client_is_only_a_pcm_transport_and_cannot_spoof_rabilink(tmp_path: Path) -> None:

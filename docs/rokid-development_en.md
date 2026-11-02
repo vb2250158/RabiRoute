@@ -4,6 +4,8 @@ English | [简体中文](rokid-development.md)
 
 For RabiLink maintainers. Checked on 2026-09-08. This page records route constraints and evidence, not acceptance of unfinished features.
 
+The historical native voice bridge assigns an available local port for TTS playback by default. Supply the configured webhook address through `-WebhookUrl` or `RABIROUTE_WEBHOOK_URL` when starting `Start-RokidNativeVoiceStack.ps1`, then configure consumers with the `ttsPlaybackUrl` published in its manifest. An explicit `-TtsPort` requests a fixed port and fails if it is occupied. The bridge still requires real-device validation.
+
 ## Current route
 
 ### Custom-command probe in the slim phone build

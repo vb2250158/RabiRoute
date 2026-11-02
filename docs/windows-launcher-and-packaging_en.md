@@ -227,6 +227,8 @@ Manager selects multicast egress separately for every non-loopback IPv4 interfac
 
 Build Windows artifacts on a local disk. NAS storage may hold source, but not application execution, intermediate build output, or runtime logs.
 
+The release includes precompiled terminal, computer control and tray components identified by their current Agent script sources. Packaging verifies their presence, assembly format and copied hashes, and fails if any are missing.
+
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\build-windows-release.ps1 `
   -OutputRoot C:\RabiRouteBuild

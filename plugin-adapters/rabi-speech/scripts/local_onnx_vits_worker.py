@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
+import socket
 import sys
 from pathlib import Path
 
@@ -43,12 +45,21 @@ def main() -> int:
 
     import uvicorn
 
-    uvicorn.run(
-        "rabispeech.onnx_vits.server:app",
-        host=args.host,
-        port=args.port,
-        reload=False,
-    )
+    endpoint_file = os.environ.get("RABISPEECH_WORKER_ENDPOINT_FILE")
+    if endpoint_file:
+        listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            listener.bind((args.host, args.port))
+            listener.listen(128)
+            endpoint = Path(endpoint_file)
+            temporary = endpoint.with_suffix(".tmp")
+            temporary.write_text(json.dumps({"port": listener.getsockname()[1]}), encoding="utf-8")
+            temporary.replace(endpoint)
+            uvicorn.Server(uvicorn.Config("rabispeech.onnx_vits.server:app", host=args.host, port=args.port)).run(sockets=[listener])
+        finally:
+            listener.close()
+    else:
+        uvicorn.run("rabispeech.onnx_vits.server:app", host=args.host, port=args.port, reload=False)
     return 0
 
 

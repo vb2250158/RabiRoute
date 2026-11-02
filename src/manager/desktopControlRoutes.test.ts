@@ -58,7 +58,7 @@ test("recording folder aliases wait for the owner and preserve failures", async 
     const operation = desktopConfigFilePayload(alias, null, "example", context({
       ensureRoleFolder(roleId, subfolder) {
         assert.equal(roleId, "example");
-        assert.equal(subfolder, "xiaomi-media");
+        assert.equal(subfolder, alias === "camera-clips" ? "camera" : "xiaomi-media");
         return ensured.promise;
       },
       openPath: target => { opened.push(target); }
@@ -131,6 +131,16 @@ test("four executable Desktop operations share the native persistent settings ow
   assert.equal(put.status, 200); assert.equal(put.body.data.screenshot.enabled, true); assert.equal(put.body.data.screenshot.shortcut, "F3"); assert.equal(put.body.data.screenshot.autoCopy, false); assert.equal(put.body.data.screenshot.clipboardShortcut, "F4"); assert.equal(put.body.data.autostart, true);
   assert.deepEqual(new DesktopSettingsStore(f.file).read(), f.settings.read()); assert.deepEqual((await f.send()).body.data, put.body.data);
   assert.equal((await f.send(undefined, "PATCH", "null")).status, 200); assert.equal((await f.send(undefined, "PUT", "")).status, 200);
+});
+
+test("role selection survives an HTTP update and an independent owner read", async t => {
+  const f = await fixture(t);
+  const choice = { roleId: "夜雨", sourceDeviceId: "remote-pc" };
+  const written = await f.send(undefined, "PATCH", { lastRoleSelection: choice });
+  assert.equal(written.status, 200);
+  assert.deepEqual(written.body.data.lastRoleSelection, choice);
+  assert.deepEqual((await f.send()).body.data.lastRoleSelection, choice);
+  assert.deepEqual(new DesktopSettingsStore(f.file).read().lastRoleSelection, choice);
 });
 
 test("read-only Desktop settings reject malformed writes before parsing while public open behavior remains available", async t => {

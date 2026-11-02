@@ -6,6 +6,8 @@ Status: source migration. The architecture migration owner coordinates Manager/p
 
 `createRoleConfigurationOperations` registers eight executable HTTP contracts. `createRoleConfigurationOwner` owns configuration, revision checks, role locks, native operation receipts and lifecycle orchestration. Roles do not need a message Route. Authenticated remote connections that are not explicitly disabled and local requests use the same owner without additional role bindings, feature grants or management keys.
 
+The role page stores the last successfully loaded role ID and source PC as `lastRoleSelection` in host desktop settings. An entry without an explicit role restores that reference first; an unavailable source or archived role keeps the reference and shows its actual state.
+
 | Method | Path | Behavior |
 | --- | --- | --- |
 | GET | `/api/roles` | List active roles; `scope=archived` selects archived roles; supports `query`, `cursor` and `limit` |
@@ -17,7 +19,7 @@ Status: source migration. The architecture migration owner coordinates Manager/p
 | POST | `/api/roles/:roleId/restore` | Restore the role |
 | POST | `/api/roles/:roleId/delete` | Permanently delete an archived role with no references or work leases |
 
-Role IDs retain native Unicode letters, numbers, underscores and hyphens. A list page returns at most 25 entries and examines at most 200 directories; continue with `nextCursor` when present. Damaged directories produce error entries rather than healthy role records.
+Role IDs retain native Unicode letters, numbers, underscores and hyphens. A list page returns at most 25 entries and examines at most 200 directories; continue with `nextCursor` when present. Damaged directories produce error entries rather than healthy role records. Up to four directories are read concurrently per batch; results remain ordered by role ID and the interface displays each page as it arrives.
 
 Reading `/configuration` for an absent role returns 404 with `ROLE_NOT_FOUND`, without creating a role or recovery record. Unavailable role storage, damaged configuration and damaged metadata retain their existing operational errors rather than becoming role-not-found responses.
 

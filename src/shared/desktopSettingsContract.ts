@@ -1,3 +1,4 @@
+import { sanitizeRoleId } from "./routeIdentity.js";
 export const DEFAULT_SCREENSHOT_SHORTCUT = "Ctrl+Shift+S";
 // Function keys are common game controls. Keep a safer default, while allowing
 // an explicit user choice such as F3 to remain usable.
@@ -87,7 +88,10 @@ export const DESKTOP_PET_CORNERS = [
 ] as const;
 export type DesktopPetCorner = typeof DESKTOP_PET_CORNERS[number]["id"];
 
+export type DesktopRoleSelection = { roleId: string; sourceDeviceId: string };
+
 export type DesktopSettings = {
+  lastRoleSelection: DesktopRoleSelection | null;
   screenshot: DesktopScreenshotSettings;
   autostart: boolean;
   theme: DesktopTheme;
@@ -117,6 +121,7 @@ export const DEFAULT_DESKTOP_PET_BINDING: DesktopPetBinding = {
 };
 
 export const DEFAULT_DESKTOP_SETTINGS: DesktopSettings = {
+  lastRoleSelection: null,
   screenshot: {
     enabled: false,
     shortcut: DEFAULT_SCREENSHOT_SHORTCUT,
@@ -212,7 +217,13 @@ export function normalizeDesktopSettings(value: unknown): DesktopSettings {
   const webTheme = selectedWebTheme.startsWith("custom:") && !customThemes.some(item => item.id === selectedWebTheme)
     ? theme
     : selectedWebTheme;
+  const selection = row.lastRoleSelection && typeof row.lastRoleSelection === "object" && !Array.isArray(row.lastRoleSelection)
+    ? row.lastRoleSelection as Record<string, unknown> : {};
+  const roleId = typeof selection.roleId === "string" ? sanitizeRoleId(selection.roleId) : "";
+  const sourceDeviceId = typeof selection.sourceDeviceId === "string" && selection.sourceDeviceId.length <= 256 && !/[\u0000-\u001f\u007f]/.test(selection.sourceDeviceId)
+    ? selection.sourceDeviceId : null;
   return {
+    lastRoleSelection: roleId && roleId === selection.roleId && sourceDeviceId !== null ? { roleId, sourceDeviceId } : null,
     screenshot: {
       enabled: screenshot.enabled === true,
       shortcut: text(screenshot.shortcut) || DEFAULT_SCREENSHOT_SHORTCUT,

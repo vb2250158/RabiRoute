@@ -796,7 +796,8 @@ test("Windows release build rejects a network source repository", () => {
 });
 
 test("Windows release payload materializes local packages and rejects reparse points", () => {
-  assert.match(windowsReleaseBuild, /"plugins\\contracts\\plugin-sdk"/);
+  assert.match(windowsReleaseBuild, /"plugins"/);
+  assert.match(windowsReleaseBuild, /Resolve-ReleaseTrackedSourcePath \$relative \$repo/);
   assert.match(windowsReleaseBuild, /node\.exe \(Join-Path \$scriptDir 'lib\/materialize-local-dependencies\.mjs'\) \$repo \$payload/);
   assert.match(windowsReleaseBuild, /Local dependency materialization or exported-entry validation failed/);
   assert.match(windowsReleaseBuild, /FileAttributes\]::ReparsePoint/);

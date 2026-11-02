@@ -65,6 +65,18 @@ class FlightTest(unittest.TestCase):
         self.assertEqual(flight.y, 784)
         self.assertLess(i / 120, 12)
 
+    def test_dsh_bounce_keeps_78_percent_without_air_drag(self):
+        flight = PetFlight(1660, 200, 1200, 0)
+        flight.advance(1 / 120, (256, 256), [self.area])
+        self.assertAlmostEqual(flight.vx, -1200 * .78)
+        self.assertLess(flight.x, 1664)
+
+    def test_floor_bounce_and_friction_follow_dsh_defaults(self):
+        flight = PetFlight(300, 783, 1000, 600)
+        flight.advance(1 / 240, (256, 256), [self.area])
+        self.assertAlmostEqual(flight.vy, -(600 + 1400 / 240) * .78)
+        self.assertAlmostEqual(flight.vx, 1000 * math.exp(-2.5 / 240))
+
     def test_adjacent_panels_pass_through_seam(self):
         left = DisplayArea((-1920, -200, 0, 1080), (-1920, -200, 0, 1040))
         flight = PetFlight(-300, 300, 2000, -200)

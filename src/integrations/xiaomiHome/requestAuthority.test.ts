@@ -31,7 +31,8 @@ async function fixture(t: TestContext, handler: http.RequestListener) {
   const global = new RabiGlobalConfigStore(root);
   global.patch({ webguiLan: { enabled: true } });
   const credential = authority.enroll(authority.issueBootstrapTicket().ticket, "fixture-node");
-  const binding = { agentId: "worker", provider: "dsh", sessionId: "fixture-session" };  const server = http.createServer((request, response) => {
+  const binding = { agentId: "worker", provider: "dsh", sessionId: "fixture-session" };
+  const server = http.createServer((request, response) => {
     const access = evaluateLanAgentRequest(request, authority, true, () => global.getLanAgentAdmissionPolicy());
     if (access.kind !== "agent") { json(response, 403, { error: "ingress denied" }); return; }
     Object.defineProperty(request.socket, "remoteAddress", { value: "192.0.2.20", configurable: true });
@@ -47,7 +48,8 @@ async function fixture(t: TestContext, handler: http.RequestListener) {
       else if (mode === "binding") authority.setNodeEnabled("fixture-node", false);
       else if (mode === "reenroll") {
         authority.revokeNode("fixture-node");
-        const replacement = authority.enroll(authority.issueBootstrapTicket().ticket, "fixture-node");      }
+        const replacement = authority.enroll(authority.issueBootstrapTicket().ticket, "fixture-node");
+      }
       else { authority.setNodeEnabled("fixture-node", false); if (mode === "agent-aba") authority.setNodeEnabled("fixture-node", true); }
     }
   };
@@ -212,6 +214,7 @@ test("deployment queue admission rechecks the original lease before OS dispatch"
     inspect: async () => ({ state: "installed", message: "fixture" }),
     run: async () => { dispatched++; entered.resolve(); await gate.promise; return { state: "installed", message: "fixture" }; }
   });
+  t.after(() => deployment.stop());
   const snapshot = await deployment.inspect();
   const saved = await deployment.save({ ...snapshot.config, mode: "haos" }, snapshot.revision);
   const revision = saved.revision;

@@ -1,6 +1,7 @@
 import { OpenXiaoAIConfig } from "./migpt/xiaoai.js";
 
-const bridgeUrl = process.env.RABIROUTE_XIAOAI_BRIDGE_URL || "http://host.docker.internal:8799";
+const bridgeUrl = process.env.RABIROUTE_XIAOAI_BRIDGE_URL;
+if (!bridgeUrl) throw new Error("RABIROUTE_XIAOAI_BRIDGE_URL must identify the running XiaoAI bridge.");
 
 type XiaoAIDecision = {
   ok: boolean;

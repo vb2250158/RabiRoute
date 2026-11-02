@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { appendRabiLinkConversationEntry } from "./rabilinkConversationLedger.js";
-import { RabiLinkConversationReviewer } from "./rabilinkConversationReviewer.js";
+import { RabiLinkConversationReviewer, resolveRabiLinkReflectionTurnOptions } from "./rabilinkConversationReviewer.js";
 import { listIdentityEndpointAccounts, listIdentityParticipants } from "./identityRelations.js";
 
 const mockThread = {
@@ -49,9 +49,11 @@ test("automatic conversation review waits for an idle Codex thread and then adva
     gatewayManagerUrl: "http://127.0.0.1:8790",
     agentRolePath: path.join(roleDir, "persona.md"),
     agentRoleId: "Xinghai",
+    reflectionTurnOptions: { model: "reflection-model", reasoningEffort: "low" },
     settleMs: 0,
     now: () => Date.parse("2026-07-13T10:01:00.000Z"),
-    notifyWhenIdle: async (prompt) => {
+    notifyWhenIdle: async (prompt, turnOptions) => {
+      assert.equal(turnOptions, undefined);
       prompts.push(prompt);
       return { status: busy ? "busy" : "delivered", thread: mockThread };
     },
@@ -66,11 +68,11 @@ test("automatic conversation review waits for an idle Codex thread and then adva
   const second = await reviewer.check();
   assert.equal(second.status, "delivered");
   assert.equal(second.pendingUserCount, 1);
-  assert.match(prompts.at(-1) || "", /^\[消息源\]\n消息源类型：系统\n事件类型：rabilink_auto_review\n事件名称：RabiLink 自动复盘\n事件 ID：[^\n]+\n消息路线 ID：Ilias\n消息包发送时间：[^\n]+\n\n\[消息内容\]\n/);
+  assert.match(prompts.at(-1) || "", /^## 消息源\n- 消息源类型：系统\n- 事件类型：rabilink_auto_review\n- 事件名称：RabiLink 自动复盘\n- 事件 ID：[^\n]+\n- 消息路线 ID：Ilias\n- 消息包发送时间：[^\n]+\n\n## 消息内容\n/);
   assert.match(prompts.at(-1) || "", /统一会话账本/);
   assert.match(prompts.at(-1) || "", /历史会话索引/);
   assert.match(prompts.at(-1) || "", /本次涉及 Route：Ilias/);
-  assert.match(prompts.at(-1) || "", /\[身份定位\]/);
+  assert.match(prompts.at(-1) || "", /### 身份定位/);
   assert.match(prompts.at(-1) || "", /relay:rabilink/);
   assert.match(prompts.at(-1) || "", /identity-relations\/observations/);
   assert.match(prompts.at(-1) || "", /"routeId":"Ilias"/);
@@ -111,7 +113,7 @@ test("a touchpad review request guides the current turn immediately even without
   assert.equal(result.status, "delivered");
   assert.equal(result.manual, true);
   assert.equal(guided.length, 1);
-  assert.match(guided[0], /^\[消息源\]\n消息源类型：系统\n事件类型：rabilink_review_request\n事件名称：RabiLink 手动复盘\n事件 ID：[^\n]+\n消息路线 ID：RabiLink\n消息包发送时间：[^\n]+\n\n\[消息内容\]\n/);
+  assert.match(guided[0], /^## 消息源\n- 消息源类型：系统\n- 事件类型：rabilink_review_request\n- 事件名称：RabiLink 手动复盘\n- 事件 ID：[^\n]+\n- 消息路线 ID：RabiLink\n- 消息包发送时间：[^\n]+\n\n## 消息内容\n/);
   assert.match(guided[0], /当前 turn 正在执行/);
   assert.match(guided[0], /http:\/\/127\.0\.0\.1:8790\/api\/agent\/send/);
   assert.match(guided[0], /"routeId":"RabiLink"/);
@@ -200,8 +202,10 @@ test("an idle Codex thread periodically reflects on user intent even without a n
     autoReviewEnabled: false,
     continuousReflectionEnabled: true,
     reflectionIntervalMs: 30 * 60 * 1000,
+    reflectionTurnOptions: { model: "reflection-model", reasoningEffort: "low" },
     now: () => Date.parse("2026-07-13T10:31:00.000Z"),
-    notifyWhenIdle: async (prompt) => {
+    notifyWhenIdle: async (prompt, turnOptions) => {
+      assert.deepEqual(turnOptions, { model: "reflection-model", reasoningEffort: "low" });
       prompts.push(prompt);
       return { status: "delivered", thread: mockThread };
     },
@@ -212,12 +216,12 @@ test("an idle Codex thread periodically reflects on user intent even without a n
   assert.equal(first.status, "delivered");
   assert.equal(first.reflection, true);
   assert.equal(first.pendingUserCount, 0);
-  assert.match(prompts[0], /^\[消息源\]\n消息源类型：系统\n事件类型：rabilink_reflection\n事件名称：RabiLink 定期复盘\n事件 ID：[^\n]+\n消息路线 ID：RabiLink\n消息包发送时间：[^\n]+\n\n\[消息内容\]\n/);
+  assert.match(prompts[0], /^## 消息源\n- 消息源类型：系统\n- 事件类型：rabilink_reflection\n- 事件名称：RabiLink 定期复盘\n- 事件 ID：[^\n]+\n- 消息路线 ID：RabiLink\n- 消息包发送时间：[^\n]+\n\n## 消息内容\n/);
   assert.match(prompts[0], /连续反思/);
   assert.match(prompts[0], /当前意图、阻碍和下一步/);
   assert.match(prompts[0], /计划、任务、记忆或最近工具结果/);
   assert.match(prompts[0], /先完整读取并遵循主动审阅策略/);
-  assert.match(prompts[0], /\[本机现场取证\]/);
+  assert.match(prompts[0], /### 本机现场取证/);
   assert.match(prompts[0], /collect-heartbeat-evidence\.ps1 -CaptureScreen -CaptureCamera -IncludeWindowTitle/);
   assert.match(prompts[0], /查看后删除 manifest、屏幕图、摄像头图和证据临时目录/);
 
@@ -386,4 +390,14 @@ test("conversation review state replaces a corrupt cursor atomically", async () 
     "review cursor replacement must not leave temporary files behind"
   );
   assert.equal((await reviewer.check()).status, "idle");
+});
+
+
+test("reflection execution settings are optional and reject incomplete or invalid overrides", () => {
+  assert.equal(resolveRabiLinkReflectionTurnOptions({}), undefined);
+  assert.deepEqual(resolveRabiLinkReflectionTurnOptions({ rabilinkReflectionModel: " reflection-model ", rabilinkReflectionReasoningEffort: "low" }),
+    { model: "reflection-model", reasoningEffort: "low" });
+  assert.deepEqual(resolveRabiLinkReflectionTurnOptions({ rabilinkReflectionModel: "reflection-model" }), { model: "reflection-model" });
+  assert.throws(() => resolveRabiLinkReflectionTurnOptions({ rabilinkReflectionReasoningEffort: "low" }), /requires/);
+  assert.throws(() => resolveRabiLinkReflectionTurnOptions({ rabilinkReflectionModel: "reflection-model", rabilinkReflectionReasoningEffort: "invalid" }), /Invalid/);
 });

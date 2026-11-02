@@ -13,7 +13,7 @@
   "remote_audio": {
     "enabled": false,
     "host": "0.0.0.0",
-    "port": 8782,
+    "port": 0,
     "discovery_port": 8783,
     "token_env": "RABISPEECH_AUDIO_STREAM_TOKEN",
     "token_path": "output/audio-stream-token.txt",

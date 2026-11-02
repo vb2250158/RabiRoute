@@ -142,6 +142,9 @@ export async function inspectLocalSpeechService(
   const startedAt = performance.now();
   try {
     const health = await requestJson(fetchImpl, `${baseUrl}/health`, options.timeoutMs ?? getTimeoutMs("speech.health", 5000));
+    if (health.ok !== true || health.service !== "RabiSpeech") {
+      throw new Error("该地址没有返回有效的 RabiSpeech 健康状态。");
+    }
     const capabilities = options.includeCapabilities === false
       ? {}
       : await requestJson(

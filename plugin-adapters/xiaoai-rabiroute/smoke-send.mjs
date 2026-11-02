@@ -1,4 +1,5 @@
-const bridgeUrl = process.env.XIAOAI_BRIDGE_URL || "http://127.0.0.1:8798";
+import { discoverEndpoint } from "./bridge-endpoint.mjs";
+const bridgeUrl = process.env.XIAOAI_BRIDGE_URL || await discoverEndpoint();
 
 const response = await fetch(`${bridgeUrl}/v1/xiaoai/decision`, {
   method: "POST",

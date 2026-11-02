@@ -74,7 +74,6 @@ class PetFlight:
             dt = min(1 / 240, remaining)
             remaining -= dt
             self.vy += 1400 * scale * dt
-            self.vx *= math.exp(-.12 * dt)
             self.x += self.vx * dt
             self.y += self.vy * dt
             for axis in (0, 1):
@@ -98,14 +97,14 @@ class PetFlight:
                 if any(area is not display and area.contains(*probe) for area in displays):
                     continue
                 value = low if value < low else high
-                velocity = abs(velocity) * .58 if value == low else -abs(velocity) * .58
+                velocity = abs(velocity) * .78 if value == low else -abs(velocity) * .78
                 if axis == 0:
                     self.x, self.vx = value, velocity
                 else:
                     self.y = value
                     if value == high:
-                        self.vx *= math.exp(-5 * dt)
-                        self.vy = 0 if abs(velocity) < 45 * scale else velocity
+                        self.vx *= math.exp(-2.5 * dt)
+                        self.vy = 0 if abs(velocity) < 40 * .78 * scale else velocity
                         if self.vy == 0 and abs(self.vx) < 15 * scale:
                             self.vx = 0
                             self.at_rest = True
