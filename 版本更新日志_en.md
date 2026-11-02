@@ -6,6 +6,11 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.4.1 - 2026-11-02
+
+- Deduplicate the local PC in the role source picker by its RabiLink device ID while retaining other PCs with the same name. Saved self references read through the local role API without rewriting connections or persona bindings.
+
+
 ## 0.4.0 - 2026-10-31
 
 - Linearize durable-delivery heartbeats and claims under the existing execution lock. Brief query contention no longer permanently stops a live lease; expired or replaced owners cannot renew. Failed lock initialization cleans up only its own newly created file.

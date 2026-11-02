@@ -2,9 +2,17 @@ import type { MetaPayload } from "../types";
 import type { PersonaSourceDevice } from "./remotePersonaReference";
 import { rabiPcVersionLabel } from "../rabiLinkHomeClient";
 
+type PersonaSourceMeta = Pick<MetaPayload, "rabiName" | "computerName" | "version" | "rabiLinkRelay">;
+
+/** Discovery includes this PC; saved self references resolve to the existing local entry. */
+export function personaSourceKey(meta: PersonaSourceMeta, deviceId: string): string {
+  const localDeviceId = meta.rabiLinkRelay?.deviceId?.trim();
+  return localDeviceId && deviceId === localDeviceId ? "" : deviceId;
+}
+
 /** Labels are rebuildable views; values remain the saved local/remote reference keys. */
 export function personaSourceOptions(
-  meta: Pick<MetaPayload, "rabiName" | "computerName" | "version">,
+  meta: PersonaSourceMeta,
   devices: PersonaSourceDevice[],
   selectedDeviceId: string,
   translate: (text: string) => string = text => text
@@ -16,7 +24,7 @@ export function personaSourceOptions(
     value: "",
     props: { disabled: false }
   };
-  const options = devices.map(device => {
+  const options = devices.filter(device => personaSourceKey(meta, device.deviceId) !== "").map(device => {
     const status = !device.online ? "离线" : !device.supported ? "在线 · 需要更新" : !device.trusted ? "在线 · 将自动连接" : "在线";
     return {
       title: device.name,
@@ -25,7 +33,7 @@ export function personaSourceOptions(
       props: { disabled: !device.online && device.deviceId !== selectedDeviceId }
     };
   });
-  if (selectedDeviceId && !options.some(option => option.value === selectedDeviceId)) {
+  if (personaSourceKey(meta, selectedDeviceId) && !options.some(option => option.value === selectedDeviceId)) {
     options.push({
       title: selectedDeviceId,
       subtitle: `${rabiPcVersionLabel(null, translate)} · ${translate("已保存的远端 PC · 状态待核对")}`,

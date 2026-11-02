@@ -17,7 +17,7 @@ English | <a href="./README_zh.md">简体中文</a> | <a href="./README_ja.md">�
   <a href="https://github.com/vb2250158/RabiRoute/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/vb2250158/RabiRoute?style=flat&color=ff7eae"></a>
   <a href="./LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-f2c744"></a>
   <img alt="Node.js 22.13 or newer" src="https://img.shields.io/badge/Node.js-22.13%2B-3c873a">
-  <img alt="Current version: 0.4.0" src="https://img.shields.io/badge/version-0.4.0-3178c6">
+  <img alt="Current version: 0.4.1" src="https://img.shields.io/badge/version-0.4.1-3178c6">
   <img alt="Status: active development" src="https://img.shields.io/badge/status-active%20development-19bfc1">
 </p>
 
@@ -84,7 +84,7 @@ The delivery test sends a real message. Configure a scheduling rule separately b
 
 ## Current capabilities
 
-The repository version is `0.4.0`. The table lists behavior backed by current code, configuration surfaces, and tests. Features that require accounts, external services, or physical devices still need acceptance in their target environment.
+The repository version is `0.4.1`. The table lists behavior backed by current code, configuration surfaces, and tests. Features that require accounts, external services, or physical devices still need acceptance in their target environment.
 
 ### Communication
 

@@ -3,7 +3,7 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref } from "vue";
 import { useRoleStore, roleRequest, type RoleSummary } from "../stores/roleStore";
 import { useI18n } from "../i18n";
 import { RemotePersonaReferenceBrowser, bootstrapRemotePersonaService, remotePersonaServicePath } from "../persona/remotePersonaReference";
-import { personaSourceOptions as buildPersonaSourceOptions } from "../persona/personaSourcePresentation";
+import { personaSourceOptions as buildPersonaSourceOptions, personaSourceKey } from "../persona/personaSourcePresentation";
 import { userFacingError } from "../userFacingError";
 
 const emit = defineEmits<{ select: [roleId: string, source: string] }>();
@@ -18,12 +18,14 @@ const error = ref("");
 let epoch = 0;
 const sources = computed(() => buildPersonaSourceOptions(store.meta, remotePersona.devices, store.sourceDeviceId, t));
 const label = computed(() => {
-  const pc = store.sourceDeviceId ? sources.value.find(item => item.value === store.sourceDeviceId)?.title || store.sourceDeviceId : t("本机");
+  const selectedSource = personaSourceKey(store.meta, store.sourceDeviceId);
+  const pc = selectedSource ? sources.value.find(item => item.value === selectedSource)?.title || selectedSource : t("本机");
   const role = store.catalog.find(item => item.roleId === store.selectedRoleId);
   return `${pc} → ${role?.title || store.selectedRoleId || t("选择角色")}`;
 });
 
 async function browse(value: string): Promise<void> {
+  value = personaSourceKey(store.meta, value);
   const current = ++epoch;
   source.value = value;
   items.value = [];

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import test from "node:test";
 import { readRabiLinkHome, rabiLinkDeviceVersionLabel, rabiLinkDeviceKind } from "../src/rabiLinkHomeClient";
-import { personaSourceOptions } from "../src/persona/personaSourcePresentation";
+import { personaSourceOptions, personaSourceKey } from "../src/persona/personaSourcePresentation";
 import { englishCatalog } from "../src/i18n/catalog";
 
 const identity = { id: "example-pc", guid: "example-guid", name: "Example PC", online: true, capabilities: [] };
@@ -71,4 +71,21 @@ test("both pages consume the version presentation without turning the local PC i
   assert.match(home, /rabiLinkDeviceVersionLabel\(device, t\)/);
   assert.match(persona, /buildPersonaSourceOptions\(store\.meta, remotePersona\.devices/);
   assert.match(persona, /t\('角色来源 PC'\)/);
+});
+
+test("persona sources exclude this PC by stable ID while retaining another PC with the same name", () => {
+  const meta = {version:"0.4.0",rabiName:"Office PC",rabiLinkRelay:{deviceId:"office-self"}};
+  const devices = [
+    {deviceId:"office-self",name:"Office PC",online:true,supported:false,trusted:false,rabiPcVersion:"0.4.0"},
+    {deviceId:"other-office",name:"Office PC",online:true,supported:true,trusted:true,rabiPcVersion:"0.3.64"}
+  ];
+  const before = structuredClone(devices);
+  const options = personaSourceOptions(meta,devices,"");
+  assert.deepEqual(options.map(item=>item.value),["","other-office"]);
+  assert.equal(options[1].subtitle,"RabiPC v0.3.64 · 在线");
+  assert.deepEqual(personaSourceOptions(meta,devices,"office-self").map(item=>item.value),["","other-office"],"A saved self reference must not reintroduce a remote duplicate");
+  assert.equal(personaSourceKey(meta,"office-self"),"");
+  assert.equal(personaSourceKey(meta,"other-office"),"other-office");
+  assert.deepEqual(personaSourceOptions({version:"0.4.0",rabiName:"Office PC"},devices,"").map(item=>item.value),["","office-self","other-office"],"Names alone cannot identify the local PC");
+  assert.deepEqual(devices,before,"Presentation must not rewrite connection records");
 });
