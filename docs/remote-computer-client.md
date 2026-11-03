@@ -60,6 +60,10 @@ Windows 构建通过 `scripts/build-agent-native-assets.mjs` 将托盘、终端�
 4. `upload.commit(uploadId)` 校验完整内容并原子提交；不覆盖已存在的目标文件。
 5. 放弃时调用 `upload.abort(uploadId)`，释放临时文件。
 
+找不到原上传记录时，`upload.status` 返回 `{uploadId,state:"absent"}`；新版连接器对未知 ID 的 `upload.abort` 也返回 absent，表示没有可关闭的当前 owner，不伪称历史上传已取消。普通 `file.stat/read` 和状态查询错误不再标记为不确定写入。Manager 同时兼容旧连接器的 not-found 异常。
+
+`begin` 只独占预留同目录临时文件，可以沿**原 ID、原路径、大小和哈希**继续：已有 owner 返回当前偏移，容量释放或目录准备后可正常受理，不把暂时失败保存成永久拒绝。不需要换 ID 或人工解锁。若孤立临时文件或目标已存在，继续报告具体冲突并保留文件；absent 不会绕过这些检查，也不能证明旧历史从未执行。写入或提交结果未知时仍先核对原状态、目标文件和哈希，不自动重放业务操作。
+
 单次上传默认不另设大小上限，字节数必须为 JavaScript 可精确表示的非负整数。这与主控 `agentUploads.maxFileMiB` 是不同的文件服务。以下设置由用户在**远端 Rabi Agent 启动环境**配置，重启该 Agent 后生效；超限错误给出当前值和调整入口。
 
 | 环境变量 | 默认值 | 含义 |

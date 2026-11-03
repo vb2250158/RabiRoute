@@ -6,6 +6,12 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.4.6 - 2026-11-03
+
+- Return a readable absent state for missing upload records. Ordinary read errors no longer claim uncertain writes or permanently freeze an original ID. Resume begin with the same ID and parameters after capacity or directory preparation; retain exclusive temporary reservation and destination protection.
+- Preserve cold terminal facts and hot-record eviction to avoid the old connector exhausting its 64 completed records. Normalize older connectors missing-status replies without changing authentication, signed publication or existing business deliveries.
+- Align bilingual recovery guidance and verify capacity release, same-ID resume, accepted bytes, orphan protection, old-interface compatibility and the real HTTP/WS chain.
+
 ## 0.4.5 - 2026-11-03
 
 - Separate application-connection authentication from native device ownership when reading original delivery receipts. Application requests still verify the actual Agent task owner; native devices retain their original identity and revocation fence.

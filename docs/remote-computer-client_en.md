@@ -60,6 +60,10 @@ For uploads, retain a UUID `uploadId` and the whole-file SHA-256 before starting
 4. `upload.commit(uploadId)` verifies the full content and commits atomically without overwriting an existing destination.
 5. `upload.abort(uploadId)` discards an unfinished upload.
 
+When no original upload record is available, `upload.status` returns `{uploadId,state:"absent"}`. On an upgraded connector, an unknown-ID `upload.abort` also returns absent: there is no current owner to close, rather than a claim that a historical upload was cancelled. Ordinary `file.stat/read` and status-query errors no longer claim uncertain writes. Manager also normalizes the older connector not-found exception.
+
+`begin` exclusively reserves a same-directory temporary and can continue with the **original ID, path, size and hash**. An existing owner returns its current offset; releasing capacity or preparing the directory permits admission without a permanent rejection record. No new ID or manual unlock is required. An orphan temporary or existing destination remains a concrete conflict and is preserved. Absent does not bypass these checks or prove that older history never ran. For uncertain writes or commits, inspect the original status, target and hash before proceeding; never automatically replay business operations.
+
 Uploads have no additional size ceiling by default; byte counts must be non-negative JavaScript safe integers. This file service is separate from the controller's `agentUploads.maxFileMiB`. Users configure the following settings in the **remote Rabi Agent launch environment** and restart that Agent to apply them. Exceeded limits report their current values and configuration entry.
 
 | Environment variable | Default | Meaning |

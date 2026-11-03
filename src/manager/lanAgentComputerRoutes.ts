@@ -7,7 +7,15 @@ export function createLanAgentComputerOperations(context: InteractiveContext): r
     const capability = String(body.action).startsWith("upload.") || ["file.stat", "file.read"].includes(String(body.action)) ? "files"
       : body.action === "windows.list" ? "windows" : body.action === "screen.capture" ? "screenshots" : "";
     if (!capability || !context.registry.getNode(instanceId)?.computerCapabilities?.includes(capability)) throw new Error("Computer capability is unavailable; query the node or update its connector.");
-    const data = await context.registry.manageAgent(instanceId, "computer", body, 45000, guard); guard();
+    let data: unknown;
+    try { data = await context.registry.manageAgent(instanceId, "computer", body, 45000, guard); }
+    catch (error) {
+      // Old connectors use an exception for an ordinary missing-upload status read.
+      if (body.action !== "upload.status" || !(error instanceof Error)
+        || error.message !== "Upload not found; do not create a new ID after an uncertain write.") throw error;
+      data = { uploadId: body.uploadId, state: "absent" };
+    }
+    guard();
     return { status: 200, headers: { "cache-control": "no-store" }, body: { code: 0, data } };
   }));
 }

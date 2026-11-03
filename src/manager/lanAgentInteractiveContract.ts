@@ -51,7 +51,9 @@ export function interactiveOperation(route: InteractiveRoute, context: Interacti
   owner: (input: ApiOperationInput, assertAuthorized: () => void) => ApiOperationResult | Promise<ApiOperationResult>): ApiOperationDefinition {
   return { contract: interactiveApiContract(route), handler: async input => {
     const headers = { "cache-control": "no-store" };
-    const result = (status: number, message: string): ApiOperationResult => ({ status, headers, body: { code: -1, message, ...(route.method === "POST" ? { uncertain: true } : {}) } });
+    const action = (input.body as Record<string, unknown> | undefined)?.action;
+    const readOnly = route.method === "GET" || route.key === "computer.execute" && ["file.stat", "file.read", "upload.status"].includes(String(action));
+    const result = (status: number, message: string): ApiOperationResult => ({ status, headers, body: { code: -1, message, ...(!readOnly ? { uncertain: true } : {}) } });
     const principal = assertTrustedLanAgentPrincipal(input.request);
     const allowed = () => hasAuthenticatedConnectionRequest(input.request) || context.isManagementRequestAuthorized(input.request, input.url);
     if (!allowed()) return result(401, "A verified connection identity is required.");

@@ -41,6 +41,7 @@ export const computerResponseSchema = { anyOf: [
   exact({ path: text, size: integer, version: text, chunkBytes: { const: COMPUTER_LIMITS.chunkBytes } }),
   exact({ path: text, version: text, offset: integer, nextOffset: integer, size: integer, eof: bool, data: text, sha256: hash }),
   exact({ uploadId, path: text, size: integer, sha256: hash, offset: integer, state: { enum: ["uploading", "committed", "aborted"] } }),
+  exact({ uploadId, state: { const: "absent" } }),
   exact({ windows: { type: "array", items: exact({ windowId: text, pid: integer, title: text, minimized: bool, bounds }) }, truncated: bool }),
   exact({ mimeType: { const: "image/png" }, width: { ...integer, minimum: 1 }, height: { ...integer, minimum: 1 }, bounds, capturedAt: text, data: text })
 ] };

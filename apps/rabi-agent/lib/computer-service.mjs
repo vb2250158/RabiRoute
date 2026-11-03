@@ -137,7 +137,10 @@ export class ComputerService {
       this.uploads.set(item.id, item);
       return snapshot(item);
     }
-    if (!item) throw new Error("Upload not found; do not create a new ID after an uncertain write.");
+    // Missing live/history ownership is an observation, not a permanent ban on this ID.
+    // An exact begin can use the normal wx reservation; unknown temporaries are never overwritten.
+    if (!item && ["upload.status", "upload.abort"].includes(input.action)) return { uploadId: input.uploadId, state: "absent" };
+    if (!item) throw new Error("Upload is not open. Continue upload.begin with the original ID and parameters, then query its status.");
     if (input.action === "upload.status") return snapshot(item);
     if (input.action === "upload.abort") {
       if (item.state === "uploading") { item.intent = "aborted"; this.closeUpload(item, "aborted"); }
