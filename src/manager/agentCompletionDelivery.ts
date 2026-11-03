@@ -1,5 +1,6 @@
 import { getTimeoutMs } from "../shared/timeoutSettings.js";
 import { execFile } from "node:child_process";
+import { Marked } from "../vendor/marked.esm.js";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -56,6 +57,43 @@ export function completionTaskContextFromPlans(sessionId: string,
   };
 }
 
+type CompletionSegment = { type: "text" | "markdown"; text: string };
+type RawToken = { type: string; raw: string; tokens?: RawToken[]; items?: RawToken[] };
+
+/** Render actual Markdown tables while preserving all surrounding source text. */
+export function completionMessagePayloads(text: string, renderTables = true): Array<Record<string, unknown>> {
+  if (!renderTables) return splitCompletionMessage(text).map(text => ({ type: "text", text }));
+  const batches: Array<Record<string, unknown>> = [];
+  let segments: CompletionSegment[] = [], chars = 0, prose = "";
+  const flush = () => {
+    if (!segments.length) return;
+    batches.push(segments.some(segment => segment.type === "markdown") ? { type: "image", segments }
+      : { type: "text", text: segments.map(segment => segment.text).join("") });
+    segments = []; chars = 0;
+  };
+  const appendProse = () => {
+    for (const chunk of splitCompletionMessage(prose)) {
+      if (chars + chunk.length > 3000) flush();
+      segments.push({ type: "text", text: chunk }); chars += chunk.length;
+    }
+    prose = "";
+  };
+  const visit = (token: RawToken) => {
+    if (token.type === "table") { appendProse(); segments.push({ type: "markdown", text: token.raw }); return; }
+    const children = token.tokens ?? token.items;
+    if (!children?.length) { prose += token.raw; return; }
+    let offset = 0;
+    for (const child of children) {
+      const at = token.raw.indexOf(child.raw, offset);
+      if (at < 0) continue;
+      prose += token.raw.slice(offset, at); visit(child); offset = at + child.raw.length;
+    }
+    prose += token.raw.slice(offset);
+  };
+  for (const token of new Marked().lexer(text)) visit(token as unknown as RawToken);
+  appendProse(); flush(); return batches;
+}
+
 export async function deliverCompletionToEndpoint(rule: AgentCompletionDeliveryRule, hook: CodexHookContextRequest,
   deliveryId: string, routeId: string, options: AgentReplyOptions, context: CompletionTaskContext = { plans: [] }): Promise<void> {
   const taskName = context.taskName?.trim() || "未命名任务";
@@ -72,11 +110,11 @@ export async function deliverCompletionToEndpoint(rule: AgentCompletionDeliveryR
     styleValidation: 0
   };
   const text = `${heading}\n\n${hook.lastAssistantMessage!.trim()}`;
-  const chunks = channel === "napcat" ? splitCompletionMessage(text) : [text];
-  for (const [index, chunk] of chunks.entries()) {
+  const payloads = channel === "napcat" ? completionMessagePayloads(text, params.renderTables !== "false") : [{ type: "text", text }];
+  for (const [index, payload] of payloads.entries()) {
     const part: AgentSendRequest = { ...request,
       deliveryId: index === 0 ? deliveryId : `${deliveryId}-part-${index + 1}`,
-      payload: { type: "text", text: chunk }
+      payload
     };
     const inspection = await inspectAgentSendDelivery(part, options);
     if (inspection.state === "uncertain") throw new Error(inspection.reason);

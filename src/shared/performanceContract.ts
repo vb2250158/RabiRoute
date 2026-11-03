@@ -106,9 +106,26 @@ export type PerformanceSourceStatus = {
   latest?: PerformanceSeriesPoint;
 };
 
+export type PerformanceInitializationStatus = Readonly<{
+  state: "idle" | "loading" | "ready" | "degraded" | "stopping" | "stopped";
+  attempt: number;
+  incidents: number;
+  lastTransitionAt: string;
+  startedAt?: string;
+  completedAt?: string;
+  lastError?: string;
+}>;
+
+export type PerformanceMonitoringStatus = PerformanceStoreStatus & {
+  collecting: boolean;
+  initialization: PerformanceInitializationStatus;
+};
+
 export type PerformanceStoreStatus = {
   enabled: boolean;
   loaded: boolean;
+  collecting?: boolean;
+  initialization?: PerformanceInitializationStatus;
   logDirectory: string;
   pendingRecords: number;
   retainedRecords: number;

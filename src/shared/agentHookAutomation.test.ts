@@ -56,3 +56,11 @@ test("conditions and endpoint-specific parameters fail closed without imposing Q
   assert.deepEqual(agentHookRuleErrors({ ...base, destination: { channel: "napcat", gatewayId: "route",
     params: { target: "private", targetId: "67890", instanceId: "qq" } } }), []);
 });
+
+test("table rendering setting persists through normalization with boolean and string opt out", () => {
+  for (const renderTables of [true, false, "true", "false"]) {
+    const [rule] = normalizeAgentCompletionDeliveries([{id:"tables",enabled:true,event:"task_completed",conditions:[],destination:{channel:"napcat",gatewayId:"route",params:{target:"group",targetId:"123",instanceId:"qq",renderTables}}}]);
+    assert.equal(rule.destination.params.renderTables, String(renderTables));
+    assert.deepEqual(normalizeAgentCompletionDeliveries([rule]), [rule]);
+  }
+});

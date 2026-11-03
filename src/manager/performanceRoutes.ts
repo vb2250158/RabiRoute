@@ -1,5 +1,5 @@
 import type { IncomingMessage } from "node:http";
-import { normalizePerformanceMonitoringConfig, type PerformanceSample } from "../shared/performanceContract.js";
+import { normalizePerformanceMonitoringConfig, type PerformanceSample, type PerformanceInitializationStatus } from "../shared/performanceContract.js";
 import type { RabiGlobalConfigStore } from "./globalConfig.js";
 import { PerformanceMonitoringService } from "./performanceMonitoring.js";
 import { isLoopbackRemoteAddress } from "./webguiLanAccess.js";
@@ -58,15 +58,16 @@ export class PerformanceApi {
   logs(rawLimit: string | null) {
     this.assertActive();
     const requested = Number(rawLimit || 100);
-    return { code: 0, data: this.context.service.store.recent(Number.isFinite(requested) ? Math.trunc(requested) : 100), status: this.context.service.store.status() };
+    return { code: 0, data: this.context.service.store.recent(Number.isFinite(requested) ? Math.trunc(requested) : 100), status: this.context.service.status() };
   }
 
-  status() { this.assertActive(); return { code: 0, data: this.context.service.store.status(), config: this.config() }; }
+  status() { this.assertActive(); return { code: 0, data: this.context.service.status(), config: this.config() }; }
 
   events(): ApiOperationStream {
     this.assertActive();
     type Frame = { event: "ready"; retry: number; data: Record<string, never> }
-      | { event: "sample"; data: Pick<PerformanceSample, "time" | "source"> } | { comment: string };
+      | { event: "sample"; data: Pick<PerformanceSample, "time" | "source"> }
+      | { event: "status"; data: { state: PerformanceInitializationStatus["state"]; collecting: boolean } } | { comment: string };
     const queued: Frame[] = [{ event: "ready", retry: 3000, data: {} }];
     let stopped = false;
     let stopping: Promise<void> | undefined;
@@ -75,7 +76,7 @@ export class PerformanceApi {
     const abort = new AbortController();
     const stop = () => {
       if (stopped) return stopping ?? Promise.resolve();
-      stopped = true; queued.length = 0; unsubscribe(); clearInterval(heartbeat); wake?.();
+      stopped = true; queued.length = 0; unsubscribe(); unsubscribeStatus(); clearInterval(heartbeat); wake?.();
       stopping = producer.return(undefined).then(() => { this.streams.delete(stop); });
       return stopping;
     };
@@ -87,6 +88,10 @@ export class PerformanceApi {
       queued.push(frame); wake?.();
     };
     const unsubscribe = this.context.service.store.subscribe(sample => push({ event: "sample", data: { time: sample.time, source: sample.source } }));
+    const unsubscribeStatus = this.context.service.subscribeStatus(() => {
+      const status = this.context.service.status();
+      push({ event: "status", data: { state: status.initialization.state, collecting: status.collecting } });
+    });
     // event-driven-allow: SSE protocol keepalive; no performance or business state is queried.
     const heartbeat = setInterval(() => push({ comment: `keepalive ${Date.now()}` }), PERFORMANCE_EVENT_LIMITS.keepAliveMs);
     heartbeat.unref();

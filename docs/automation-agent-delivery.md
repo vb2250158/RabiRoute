@@ -55,3 +55,7 @@ node --import tsx scripts/migrate-agent-delivery-targets.ts --persona data/roles
 ## 验证范围
 
 单元和集成测试覆盖目标选择、并发隔离、原回执恢复、迁移回滚、保存和规则投影。部署验收还需确认新页面资源和 Manager 版本，以及本地、远端目标会话的实际回执。构建通过不代表真实投递已通过。
+
+## 表格转图片
+
+NapCat 完成钩子的 **自动渲染表格** 默认勾选。`destination.params.renderTables` 使用字符串 `"false"` 关闭、`"true"` 开启；旧规则未填写时也默认开启。Markdown 表格在本机渲染成 PNG，保留列对齐、换行和加粗等格式，与前后正文按原位置混排发送。代码块内的表格示例和普通竖线文字仍保留文字，关闭时保留原始表格。渲染沿用 Markdown 图片发送策略与额度，语音仍使用文字。

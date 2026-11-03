@@ -7613,6 +7613,7 @@ function managerHealthPayload(): Record<string, unknown> {
   const operationalLog = managerOperationalLog.status();
   const backgroundLifecycle = {
     planStorageStartup,
+    performance: performanceMonitoring.initializationSnapshot(),
     routeCatalog: routeCatalogStartup,
     memoryConsolidation: memoryConsolidationScheduler?.failureSummary() ?? { backoff: 0, incidents: 0 },
     planFeedbackRecovery: planFeedbackRecoveryService?.failureSummary() ?? { backoff: 0, incidents: 0 },
@@ -7628,7 +7629,8 @@ function managerHealthPayload(): Record<string, unknown> {
     + planStorageStartupSnapshot.incidents
     + (routeCatalogStartup.state === "degraded" ? routeCatalogStartup.incidents : 0)
     + (operationalLog.state === "degraded" ? 1 : 0)
-    + watchIncidentCount;
+    + watchIncidentCount
+    + backgroundLifecycle.performance.incidents;
   return {
     protocolVersion: 1,
     applicationGenerationId: managerHostIdentity?.applicationGenerationId ?? managerInstanceId,
@@ -7692,7 +7694,7 @@ function metaPayload(): Record<string, unknown> {
       state: process.env.RABIROUTE_HOST_ELEVATED === "1" ? "administrator" : process.env.RABIROUTE_HOST_ELEVATED === "0" ? "limited" : "unknown",
       limitedCapabilities: process.env.RABIROUTE_HOST_ELEVATED === "0" ? ["home-assistant-vm", "home-assistant-core-recovery", "loopback-port-forwarding"] : []
     },
-    performance: performanceMonitoring.store.status(),
+    performance: performanceMonitoring.status(),
     operationalLog: managerOperationalLog.status(),
     messageProcessingPersistence: messageProcessingBoardPersistence.status(),
     readWorkers: managerReadWorkerPool.status(),

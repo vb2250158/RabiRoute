@@ -26,6 +26,7 @@ async function fixture(t: test.TestContext, enabled = false) {
   const globalConfig = new RabiGlobalConfigStore(root);
   if (enabled) globalConfig.patch({ performance: { ...globalConfig.read().performance, enabled: true } });
   const service = new PerformanceMonitoringService(root, globalConfig.read().performance);
+  await service.start();
   const api = new PerformanceApi({ service, globalConfig, gatewayExists: id => id === "existing-gateway" });
   const registry = new ManagerPluginRouteRegistry();
   const registration = registry.registerOperations("performance", createPerformanceOperations(api));

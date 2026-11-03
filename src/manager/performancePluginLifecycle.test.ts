@@ -35,6 +35,7 @@ async function fixture(t: test.TestContext) {
   }));
   service.store.start = async () => { counts.storeStarts++; };
   service.store.stop = async () => { counts.storeStops++; };
+  const failure = deferred();
   let generation!: GenerationRuntime;
   const routes = new ManagerPluginRouteRegistry(() => new Set(generation.current().records.filter(record => record.status === "active").map(record => record.identity.activationId)));
   const apis: PerformanceApi[] = [];
@@ -52,7 +53,7 @@ async function fixture(t: test.TestContext) {
   };
   let nextEffect: (() => Promise<() => void>) | undefined;
   let publicationFailure = false;
-  generation = new GenerationRuntime({ host: "manager",
+  generation = new GenerationRuntime({ host: "manager", onRuntimeFailure: () => { failure.resolve(); },
     hostServices: [{ capability: "host.manager.performance@1", value: host }, { capability: "manager.core@1", value: {} }],
     executor: { async prepare() {
       const effect = nextEffect; nextEffect = undefined;
@@ -75,7 +76,7 @@ async function fixture(t: test.TestContext) {
     assert.ok(path.basename(root).startsWith("performance-lifecycle-"));
     fs.rmSync(root, { force: true, recursive: true });
   });
-  return { service, counts, generation, routes, apis, hooks, host, candidate, releaseControlledWork,
+  return { service, counts, generation, routes, apis, hooks, host, candidate, releaseControlledWork, failure,
     effect(value: () => Promise<() => void>) { nextEffect = value; },
     failPublication() { publicationFailure = true; } };
 }
@@ -174,14 +175,14 @@ test("removal cannot stop the collector until the retired producer has actually 
   assert.equal(f.counts.stops, 1);
 });
 
-test("startup and stop serialize around a pending store load and repeated start installs one sink", async t => {
+test("startup and stop join a pending store load without starting a cancelled collector", async t => {
   const f = await fixture(t), loading = deferred(), entered = deferred();
   f.service.store.start = async () => { f.counts.storeStarts++; entered.resolve(); await loading.promise; };
   const start = f.service.start(); await entered.promise;
   const secondStart = f.service.start(), stopping = f.service.stop();
   try { assert.equal(f.counts.starts, 0); assert.equal(f.counts.stops, 0); }
   finally { loading.resolve(); await Promise.all([start, secondStart, stopping]); }
-  assert.equal(f.counts.starts, 1); assert.equal(f.counts.stops, 1); assert.equal(f.counts.storeStarts, 1);
+  assert.equal(f.counts.starts, 0); assert.equal(f.counts.stops, 1); assert.equal(f.counts.storeStarts, 1);
   recordPerformanceOperation("after-stop", 1); assert.equal(f.counts.operations, 0);
 });
 
@@ -231,8 +232,10 @@ test("post-publication startup failure retires that owner rather than restoring 
   const f = await fixture(t);
   f.service.store.start = async () => { throw new Error("controlled published startup failure"); };
   await f.generation.switch([f.candidate("startup-fails")]);
+  await f.failure.promise;
   const record = f.generation.current().records.find(item => item.identity.instanceId === "manager:performance")!;
   assert.equal(record.status, "failed"); assert.match(record.error!.message, /controlled published startup failure/);
+  await f.generation.switch([]);
   assert.equal(f.routes.snapshot().length, 0); assert.equal(f.counts.starts, 0);
   recordPerformanceOperation("retired-failed-start", 1); assert.equal(f.counts.operations, 0);
   const before = f.counts.requests;
@@ -257,3 +260,145 @@ test("read-only publication keeps its collector stopped and stream close joins a
   assert.equal(subscriptions, 0); assert.equal((await pending).done, true);
   assert.equal((await unstarted.frames[Symbol.asyncIterator]().next()).done, true);
 });
+
+test("optional performance publication stays active beyond 30 seconds of owned initialization", async t => {
+  const f = await fixture(t), loading = deferred(), entered = deferred();
+  f.releaseControlledWork.push(loading.resolve);
+  f.service.store.start = async () => { f.counts.storeStarts++; entered.resolve(); await loading.promise; };
+  await f.generation.switch([f.candidate("background")]);
+  await entered.promise;
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"] });
+  t.mock.timers.tick(31_000);
+  assert.equal(f.generation.current().records[0]?.status, "active");
+  assert.equal(f.generation.current().readiness.state, "ready");
+  const snapshot = f.apis[0]!.status();
+  assert.equal(snapshot.code, 0);
+  assert.equal(snapshot.data.loaded, false);
+  assert.equal(snapshot.data.collecting, false);
+  assert.equal(snapshot.data.initialization.state, "loading");
+  assert.equal(f.counts.starts, 0);
+  loading.resolve();
+  await f.service.start();
+  assert.equal(f.counts.starts, 1);
+  assert.equal(f.service.status().collecting, true);
+  assert.equal(f.service.initializationSnapshot().state, "ready");
+  t.mock.timers.reset();
+});
+
+test("retirement joins the original hydration and cannot start its collector late", async t => {
+  const f = await fixture(t), loading = deferred(), entered = deferred();
+  f.releaseControlledWork.push(loading.resolve);
+  f.service.store.start = async () => { f.counts.storeStarts++; entered.resolve(); await loading.promise; };
+  const controller = new AbortController();
+  const activation = f.service.createActivation(false, { signal: controller.signal, fail(error) { throw error; } });
+  activation.publish(); activation.start(); await entered.promise;
+  controller.abort(new Error("synthetic original activation retired"));
+  let completed = false;
+  const disposal = activation.dispose().then(() => { completed = true; });
+  await new Promise<void>(resolve => setImmediate(resolve));
+  assert.equal(completed, false);
+  assert.equal(f.counts.starts, 0);
+  assert.equal(f.service.initializationSnapshot().state, "stopping");
+  loading.resolve(); await disposal;
+  assert.equal(f.counts.starts, 0);
+  assert.equal(f.counts.stops, 1);
+  assert.equal(f.service.status().collecting, false);
+  assert.equal(f.service.initializationSnapshot().state, "stopped");
+});
+
+for (const failureKind of ["rejected", "caught-read-error"] as const) {
+  test(`background ${failureKind} uses the original failure owner and native reconciliation recovers`, async t => {
+    const f = await fixture(t), loading = deferred(), entered = deferred();
+    f.releaseControlledWork.push(loading.resolve);
+    let recovered = false;
+    const originalStatus = f.service.store.status.bind(f.service.store);
+    if (failureKind === "caught-read-error") f.service.store.status = () => ({ ...originalStatus(), loaded: true,
+      ...(recovered ? {} : { lastError: "synthetic caught history failure" }) });
+    f.service.store.start = async () => {
+      f.counts.storeStarts++; entered.resolve(); await loading.promise;
+      if (!recovered && failureKind === "rejected") throw new Error("synthetic initialization rejected");
+    };
+    await f.generation.switch([f.candidate("recoverable")]); await entered.promise;
+    loading.resolve(); await f.failure.promise;
+    assert.equal(f.generation.current().records[0]?.status, "failed");
+    assert.match(f.generation.current().records[0]?.error?.message ?? "", /synthetic/);
+    assert.equal(f.counts.starts, 0);
+    assert.match(f.service.status().lastError ?? "", /synthetic/);
+    recovered = true;
+    await f.generation.switch([f.candidate("recoverable")]);
+    await f.service.start();
+    assert.equal(f.generation.current().records[0]?.status, "active");
+    assert.equal(f.counts.starts, 1);
+    assert.equal(f.service.status().lastError, undefined);
+    assert.equal(f.service.status().collecting, true);
+  });
+}
+
+test("read-only activation does not load history or start a collector", async t => {
+  const f = await fixture(t);
+  f.host.managerReadOnly = true;
+  await f.generation.switch([f.candidate("read-only")]);
+  assert.equal(f.generation.current().records[0]?.status, "active");
+  assert.equal(f.counts.storeStarts, 0);
+  assert.equal(f.counts.starts, 0);
+  assert.equal(f.service.status().collecting, false);
+});
+
+test("a replacement activation owns pending hydration after its old activation retires", async t => {
+  const f = await fixture(t), loading = deferred(), entered = deferred();
+  f.releaseControlledWork.push(loading.resolve);
+  f.service.store.start = async () => { f.counts.storeStarts++; entered.resolve(); await loading.promise; };
+  const firstController = new AbortController(), secondController = new AbortController();
+  const first = f.service.createActivation(false, { signal: firstController.signal, fail(error) { throw error; } });
+  const second = f.service.createActivation(false, { signal: secondController.signal, fail(error) { throw error; } });
+  first.publish(); first.start(); await entered.promise;
+  second.publish(); second.start(); firstController.abort();
+  const retiring = first.dispose();
+  loading.resolve(); await retiring;
+  await f.service.start();
+  assert.equal(f.counts.starts, 1);
+  assert.equal(f.counts.stops, 0);
+  assert.equal(f.service.status().collecting, true);
+  await second.dispose();
+  assert.equal(f.counts.stops, 1);
+});
+
+test("status events expose initialization without accepting samples before hydration", async t => {
+  const f = await fixture(t), loading = deferred(), entered = deferred();
+  f.releaseControlledWork.push(loading.resolve);
+  f.service.store.start = async () => { f.counts.storeStarts++; entered.resolve(); await loading.promise; };
+  await f.generation.switch([f.candidate("status-events")]); await entered.promise;
+  const stream = f.apis[0]!.events(), iterator = stream.frames[Symbol.asyncIterator]();
+  assert.equal((await iterator.next()).value?.event, "ready");
+  assert.equal(f.service.ingest({ schemaVersion: 1, kind: "performance_sample", sampleId: "synthetic-before-hydration",
+    time: new Date().toISOString(), intervalMs: 1000, source: { kind: "webgui", id: "fixture", runtimeId: "fixture" } }), false);
+  const initialized = iterator.next();
+  loading.resolve(); await f.service.start();
+  assert.equal((await initialized).value?.event, "status");
+  await stream.cancel(new Error("owned status fixture complete"));
+});
+
+for (const completed of [false, true]) {
+  test(`rollback still owns cleanup when background initialization is ${completed ? "complete" : "pending"}`, async t => {
+    const f = await fixture(t), loading = deferred(), entered = deferred();
+    f.releaseControlledWork.push(loading.resolve);
+    f.service.store.start = async () => { f.counts.storeStarts++; entered.resolve(); await loading.promise; };
+    const activation = f.service.createActivation(false);
+    activation.publish(); activation.start(); await entered.promise;
+    if (completed) { loading.resolve(); await f.service.start(); assert.equal(f.counts.starts, 1); }
+    activation.rollback();
+    let disposed = false;
+    const disposal = activation.dispose().then(() => { disposed = true; });
+    if (!completed) {
+      await new Promise<void>(resolve => setImmediate(resolve));
+      assert.equal(disposed, false);
+      assert.equal(f.counts.starts, 0);
+      loading.resolve();
+    }
+    await disposal;
+    assert.equal(f.counts.storeStops, 1);
+    assert.equal(f.counts.stops, 1);
+    assert.equal(f.counts.starts, completed ? 1 : 0);
+    assert.equal(f.service.status().collecting, false);
+  });
+}

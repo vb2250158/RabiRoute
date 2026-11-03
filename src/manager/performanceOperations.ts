@@ -59,6 +59,9 @@ const source = object({ kind: { enum: ["manager", "gateway", "webgui"] }, id: st
   pid: { description: "Optional native metadata; the existing sample validator does not constrain pid." } }, ["kind", "id", "runtimeId"]);
 const status = object({ enabled: boolean, loaded: boolean, logDirectory: string, pendingRecords: integer, retainedRecords: integer, fileCount: integer,
   diskBytes: integer, droppedRecords: integer, summaryCacheHits: integer, lastPersistedAt: string, lastError: string,
+  collecting: boolean, initialization: object({ state: { enum: ["idle", "loading", "ready", "degraded", "stopping", "stopped"] },
+    attempt: integer, incidents: integer, lastTransitionAt: string, startedAt: string, completedAt: string, lastError: string },
+    ["state", "attempt", "incidents", "lastTransitionAt"]),
   lastAppendDurationMs: number, lastSummaryDurationMs: number, lastFlushDurationMs: number, lastCleanupDurationMs: number },
   ["enabled", "loaded", "logDirectory", "pendingRecords", "retainedRecords", "fileCount", "diskBytes", "droppedRecords", "summaryCacheHits"]);
 const sample = object({ ...sampleFields, schemaVersion: { const: 1 }, kind: { const: "performance_sample" }, sampleId: string, time: string, intervalMs: number, source },
@@ -112,7 +115,7 @@ export function createPerformanceOperations(owner: PerformanceApi): readonly Api
       effects: "Persist global performance config and update the original store and collector immediately; changes affect recording and retention.",
       recovery: "Read /api/performance/config and compare normalized values before retrying. There is no idempotency key or CAS; a later patch can overwrite fields changed by another writer."
     }),
-    define("batches.append", "POST", "batches", "Submit a sample or {samples: [...]} and receive native accepted/rejected counts. A 202 acknowledges memory admission, not disk persistence.", { "202": json(batch), "400": json(batch) }, input => {
+    define("batches.append", "POST", "batches", "Submit a sample or {samples: [...]} and receive native accepted/rejected counts. A 202 acknowledges memory admission, not disk persistence. Initializing or stopped collectors reject samples until history hydration completes.", { "202": json(batch), "400": json(batch) }, input => {
       const body = owner.ingest(input.body, input.request); return { status: body.accepted ? 202 : 400, body };
     }, { body: { kind: "json", maxBytes: 1024 * 1024, allowAnyContentType: true, emptyValue: {}, schema: batchInput },
       effects: "Append accepted samples to the original bounded store and emit sample notifications; asynchronous persistence follows existing store lifecycle.",
@@ -123,11 +126,11 @@ export function createPerformanceOperations(owner: PerformanceApi): readonly Api
     define("logs.read", "GET", "logs", "Read recent in-memory raw samples, including pending records; limit defaults to 100, invalid numbers use 100, native bounds are 1 to 1000.", { "200": json(object({ code: { const: 0 }, data: array(sample), status })) }, input => result(owner.logs(input.url.searchParams.get("limit"))), {
       query: object({ limit: { description: "First query value only; Number(first value || 100), nonfinite fallback 100, Math.trunc then native bounds 1..1000. Unknown and repeated query keys remain accepted." } }, []) }),
     define("status.read", "GET", "status", "Read the original performance store status and active configuration.", { "200": json(object({ code: { const: 0 }, data: status, config })) }, () => result(owner.status())),
-    define("events.subscribe", "GET", "events", "Subscribe to ready and sample notifications from the original performance store. Events contain time/source only and are not a durable replay log.", { "200": { mediaType: "text/event-stream", stream: {
+    define("events.subscribe", "GET", "events", "Subscribe to ready, initialization status and sample notifications from the original performance store. Sample events contain time/source only and are not a durable replay log.", { "200": { mediaType: "text/event-stream", stream: {
       framing: "sse-json", maxFrameBytes: PERFORMANCE_EVENT_LIMITS.frameBytes,
-      frameSchema: { oneOf: [object({ event: { const: "ready" }, retry: { const: 3000 }, data: empty }), object({ event: { const: "sample" }, data: object({ time: string, source }) }), object({ comment: string })] },
+      frameSchema: { oneOf: [object({ event: { const: "ready" }, retry: { const: 3000 }, data: empty }), object({ event: { const: "sample" }, data: object({ time: string, source }) }), object({ event: { const: "status" }, data: object({ state: { enum: ["idle", "loading", "ready", "degraded", "stopping", "stopped"] }, collecting: boolean }) }), object({ comment: string })] },
       completion: "Client disconnect, original owner retirement or bounded notification queue overflow; no event IDs or replay cursor.",
-      cancellation: `Stop the original store subscription and ${PERFORMANCE_EVENT_LIMITS.keepAliveMs}ms heartbeat, unblock the iterator and drain to EOF before releasing its operation lease. At most ${PERFORMANCE_EVENT_LIMITS.queuedFrames} pending notifications; overflow closes the connection.`
+      cancellation: `Stop the original store and status subscriptions and ${PERFORMANCE_EVENT_LIMITS.keepAliveMs}ms heartbeat, unblock the iterator and drain to EOF before releasing its operation lease. At most ${PERFORMANCE_EVENT_LIMITS.queuedFrames} pending notifications; overflow closes the connection.`
     } } }, () => ({ status: 200, headers: { "cache-control": "no-store, no-transform", "x-accel-buffering": "no" }, stream: owner.events() }), { transport: "sse", recovery: "Reconnect for a fresh ready event and read the current summary/logs; disconnected notifications are not replayed." })
   ];
 }

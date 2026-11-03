@@ -55,3 +55,7 @@ Failed attempts record original rules, recipient definitions, and resolved sessi
 ## Verification
 
 Unit and integration tests cover selection, concurrency, receipt recovery, migration rollback, persistence, and rule projection. Deployment acceptance additionally requires current page resources, Manager version checks, and actual local and remote session receipts. A successful build alone does not establish successful delivery.
+
+## Tables as images
+
+**Automatically render tables** is checked by default in NapCat completion rules. Set `destination.params.renderTables` to `"false"` to opt out or `"true"` to enable it explicitly; existing rules with no value also enable it. Markdown tables are rendered locally to PNG with column alignment, wrapping and emphasis, then sent inline with surrounding text in their original position. Table examples inside code fences and ordinary pipe characters remain text; opting out preserves the original table. Rendering uses the existing Markdown image policy and quotas. Speech continues to use text.

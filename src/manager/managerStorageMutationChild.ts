@@ -592,7 +592,11 @@ async function execute(request: ManagerStorageMutationRequest, identity: Manager
   if (outcome.state === "completed") {
     const result = outcome.result as DomainDeliveryResult | unknown;
     if (result && typeof result === "object" && (result as { domain?: unknown }).domain === "rejected") {
-      throw new Error(String((result as { error?: unknown }).error || "STORAGE_MUTATION_REVISION_CONFLICT: rejected."));
+      const rejection = String((result as { error?: unknown }).error || "STORAGE_MUTATION_REVISION_CONFLICT: rejected.");
+      // The completed domain envelope proves this was rejected before mutation.
+      // Legacy receipts stored plain validation messages; preserve existing protocol codes.
+      throw new Error(rejection.startsWith("STORAGE_MUTATION_") || rejection.startsWith("PERSONA_PLAN_WORKFLOW_REVISION_CONFLICT:")
+        ? rejection : `STORAGE_MUTATION_VALIDATION_REJECTED: ${rejection}`);
     }
     if (result && typeof result === "object" && (result as { domain?: unknown }).domain === "committed") {
       return (result as { value: unknown }).value;

@@ -6,6 +6,13 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.4.12 - 2026-11-04
+
+- Render Markdown tables as images in their original positions in completion hooks. A separate switch defaults on for existing rules; disabling it preserves the original text.
+
+- Track performance-history initialization through the managed background lifecycle with visible loading, failure and stop states. Reuse hydrated history while retaining failed-read recovery so module reactivation does not count it twice.
+- Map legacy completed/rejected storage receipts to HTTP 400 and not-started without rewriting receipts, idempotency keys, request digests or existing error codes. Uncertain writes retain their original recovery path.
+
 ## 0.4.11 - 2026-11-03
 
 - Connector 0.2.14 preserves terminal processes and input receipts through temporary disconnection and transport reconnection. Explicit stop still closes owned resources. Document possible offline output gaps and recovery through the same terminal or original business files.

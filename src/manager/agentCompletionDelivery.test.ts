@@ -5,7 +5,7 @@ import path from "node:path";
 import http from "node:http";
 import { execFileSync } from "node:child_process";
 import test from "node:test";
-import { AgentCompletionDeliveryService, completionProjectIdentity, completionTaskContextFromPlans, deliverCompletionToEndpoint, planCompletionDeliveryRules, splitCompletionMessage, type CompletionRuleOwner } from "./agentCompletionDelivery.js";
+import { AgentCompletionDeliveryService, completionMessagePayloads, completionProjectIdentity, completionTaskContextFromPlans, deliverCompletionToEndpoint, planCompletionDeliveryRules, splitCompletionMessage, type CompletionRuleOwner } from "./agentCompletionDelivery.js";
 import { CodexHookContextService, type CodexHookContextRequest } from "./codexHookContext.js";
 
 const owner: CompletionRuleOwner = { roleId: "test", rule: { id: "rule", enabled: true,
@@ -324,4 +324,41 @@ test("completion text chunks preserve multiline replies, links and Unicode witho
   assert.equal(parts.join(""), text);
   assert.ok(parts.every(part => part.length <= 3000 && !/[\ud800-\udbff]$/.test(part)));
   assert.deepEqual(splitCompletionMessage("abcd😀ef", 5), ["abcd", "😀ef"]);
+});
+
+test("tables preserve source order and honor explicit opt out", () => {
+  const table = "| 固定镜头下的路径 | 实测 |\n|---|---:|\n| LateUpdate | 1.061ms/帧 |\n| StaticShadow | **2793次/帧，方法体0.241ms/帧** |\n";
+  const body = "前文\n\n" + table + "\n后文";
+  const [payload] = completionMessagePayloads(body);
+  const segments = payload.segments as Array<{type:string;text:string}>;
+  assert.deepEqual(segments.map(s => s.type), ["text", "markdown", "text"]);
+  assert.equal(segments.map(s => s.text).join(""), body);
+  assert.deepEqual(completionMessagePayloads(body, false), [{type:"text",text:body}]);
+  const fenced = "```md\n" + table + "```";
+  assert.deepEqual(completionMessagePayloads(fenced, true), [{type:"text",text:fenced}]);
+  const prose = "普通 | 分隔符\n不构成表格";
+  assert.deepEqual(completionMessagePayloads(prose, true), [{type:"text",text:prose}]);
+});
+
+test("table completion sends a PNG inline, reuses its receipt, and opt out sends original text", async () => {
+  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabi-completion-tables-"));
+  const messages: Array<Record<string, unknown>> = [];
+  const server = http.createServer((req,res) => { let body=""; req.on("data",c=>body+=c); req.on("end",()=>{messages.push(JSON.parse(body));res.writeHead(200,{"content-type":"application/json"});res.end(JSON.stringify({status:"ok",retcode:0,data:{message_id:123}}));}); });
+  await new Promise<void>(resolve=>server.listen(0,"127.0.0.1",resolve));
+  const address=server.address(); assert.ok(address && typeof address==="object");
+  const options={rootDir,routeRoot:path.join(rootDir,"data/route"),rolesRoot:path.join(rootDir,"data/roles"),runtimes:[{id:"route",enabled:true,napcatInstances:[{id:"qq",enabled:true,httpUrl:`http://127.0.0.1:${address.port}`,accessToken:""}]}]};
+  const hook={...event,lastAssistantMessage:"前文\n\n| 路径 | 实测 |\n|---|---:|\n| LateUpdate | **1.061ms/帧** |\n| StaticShadow | 2793次/帧 |\n\n后文"};
+  try {
+    await deliverCompletionToEndpoint(owner.rule,hook,"table-receipt","route",options);
+    await deliverCompletionToEndpoint(owner.rule,hook,"table-receipt","route",options);
+    assert.equal(messages.length,1);
+    const segments=messages[0].message as Array<{type:string;data:Record<string,string>}>;
+    assert.deepEqual(segments.map(s=>s.type),["text","image","text"]);
+    assert.match(segments[0].data.text,/前文/); assert.match(segments[2].data.text,/后文/);
+    assert.match(segments[1].data.file,/^base64:\/\/iVBOR/);
+    const disabled={...owner.rule,destination:{...owner.rule.destination,params:{...owner.rule.destination.params,renderTables:"false"}}};
+    await deliverCompletionToEndpoint(disabled,hook,"table-disabled","route",options);
+    assert.match(JSON.stringify(messages[1]),/LateUpdate/);
+    assert.doesNotMatch(JSON.stringify(messages[1]),/base64:\/\//);
+  } finally {await new Promise<void>(resolve=>server.close(()=>resolve()));fs.rmSync(rootDir,{recursive:true,force:true});}
 });

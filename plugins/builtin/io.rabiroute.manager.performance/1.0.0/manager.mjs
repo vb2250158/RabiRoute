@@ -65,7 +65,7 @@ export const activate = definePlugin({
             globalConfig: runtime.rabiGlobalConfig,
             gatewayExists: gatewayId => Boolean(runtime.runtimes.get(gatewayId))
         });
-        const collector = runtime.performanceMonitoring.createActivation(runtime.managerReadOnly);
+        const collector = runtime.performanceMonitoring.createActivation(runtime.managerReadOnly, context.lifecycle);
         let operations;
         let disposal;
         let previousHttpHook;

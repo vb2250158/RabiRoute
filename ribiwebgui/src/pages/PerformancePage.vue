@@ -176,6 +176,7 @@ onMounted(async () => {
   await refresh();
   events = managerEventSource("/api/performance/events");
   events.addEventListener("sample", scheduleRefresh);
+  events.addEventListener("status", scheduleRefresh);
 });
 
 onBeforeUnmount(() => {
@@ -193,13 +194,14 @@ onBeforeUnmount(() => {
         <h1>性能监控</h1>
         <p>持续记录 Manager、Gateway 和当前 WebGUI 的近期性能，数据写入独立 JSONL。</p>
       </div>
-      <div class="performance-live" :class="{ active: config.enabled }">
+      <div class="performance-live" :class="{ active: summary?.status.collecting === true }">
         <i />
-        <span>{{ config.enabled ? "记录中" : "已关闭" }}</span>
+        <span>{{ summary?.status.initialization?.state === "loading" ? "正在加载历史记录" : summary?.status.collecting ? "记录中" : "未采集" }}</span>
       </div>
     </header>
 
     <v-alert v-if="error" type="error" variant="tonal" class="mb-4">{{ error }}</v-alert>
+    <v-alert v-if="summary?.status.lastError" type="warning" variant="tonal" class="mb-4">{{ summary.status.lastError }}</v-alert>
     <v-alert v-if="saved" type="success" variant="tonal" class="mb-4">{{ saved }}</v-alert>
 
     <TrustedWebRendererHost :renderers="performanceStatusRenderers" :context="performanceStatusContext" />

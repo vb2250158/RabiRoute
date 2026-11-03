@@ -156,7 +156,7 @@ async function scanProjects() {
         <div class="hook-rule-label">投递至消息端</div>
         <div class="hook-destination-grid">
           <v-select :model-value="rule.destination.channel" :items="AGENT_HOOK_DESTINATIONS" label="消息端类型" hide-details
-            @update:model-value="value => destination(rule, { channel: value || '', params: value === 'napcat' ? { target: 'group', targetId: '', instanceId: '' } : {} })" />
+            @update:model-value="value => destination(rule, { channel: value || '', params: value === 'napcat' ? { target: 'group', targetId: '', instanceId: '', renderTables: 'true' } : {} })" />
           <v-select :model-value="rule.destination.gatewayId" :items="routes" label="消息路线" hide-details
             @update:model-value="value => destination(rule, { gatewayId: value || '', params: { ...rule.destination.params, instanceId: '' } })" />
           <template v-if="rule.destination.channel === 'napcat'">
@@ -168,6 +168,10 @@ async function scanProjects() {
               @update:model-value="value => params(rule, { targetId: value.trim() })" />
           </template>
         </div>
+        <v-checkbox v-if="rule.destination.channel === 'napcat'"
+          :model-value="rule.destination.params.renderTables !== 'false'" label="自动渲染表格" hide-details
+          @update:model-value="value => params(rule, { renderTables: value ? 'true' : 'false' })" />
+        <p v-if="rule.destination.channel === 'napcat'" class="section-note">将 Markdown 表格转换为图片，按原文顺序与正文混排发送。</p>
         <p v-if="rule.destination.channel === 'speech'" class="section-note mt-3">任务完成后，使用所选消息路线的角色声线、语音合成与自动播放设置播报结果。启用规则并保存后生效。</p>
       </div>
       </div>

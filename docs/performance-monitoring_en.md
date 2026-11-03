@@ -133,3 +133,10 @@ The event stream starts with `ready` (3000 ms retry interval), sends `sample` no
 - Short spike: use the 15-minute range. For sustained growth, use the 6-hour or 24-hour range.
 
 This system retains recent trends and slow-operation evidence. It does not produce flame graphs and does not replace an operating-system profiler.
+
+
+## Background initialization and recovery
+
+The published performance plugin initializes history in the background while pages and unrelated APIs remain available. Collection begins only after hydration. `loaded` means the read attempt has settled; `collecting` reports actual collection, and `initialization` exposes its stage, attempts and errors. New samples are not accepted during initialization, so history and incoming samples cannot be counted twice. The page displays loading and actual errors rather than treating the enabled setting as proof of collection.
+
+Retirement cancels the original activation and joins that same initialization flight, preventing a collector from starting after disposal. Real initialization errors use the original plugin lifecycle and remain a local failure. Correct the cause and use the existing plugin reconciliation entry to recover; no permanent automatic retry is added. A successfully hydrated store is not replayed on restart, while history-read errors retain their recovery path.

@@ -25,6 +25,7 @@ async function fixture(t: test.TestContext) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "performance-fields-"));
   const globalConfig = new RabiGlobalConfigStore(root);
   const service = new PerformanceMonitoringService(root, globalConfig.read().performance);
+  await service.start();
   // Config changes launch native cleanup without returning its Promise. Observe those jobs so
   // this fixture cannot delete its owned filesystem while native cleanup is still using it.
   const cleanupWork: Promise<void>[] = [];

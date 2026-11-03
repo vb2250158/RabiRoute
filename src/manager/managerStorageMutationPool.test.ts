@@ -1,3 +1,4 @@
+import { RoleStorageApplication, RoleStorageApplicationError, roleStorageHttpError, type RoleStorageApplicationOptions } from "./roleStorageApplication.js";
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import { spawn } from "node:child_process";
@@ -20,7 +21,7 @@ import {
   type RolePanelTimelineMessage
 } from "../rolePanelTimeline.js";
 import { storageInventoryRevisionToken, storageMutationRevision, storageRevisionToken } from "../shared/storageRevision.js";
-import { executeDurableDelivery, readDurableDeliveryReceipt } from "./durableDeliveryIdempotency.js";
+import { executeDurableDelivery, readDurableDeliveryReceipt, durableDeliveryReceiptPath } from "./durableDeliveryIdempotency.js";
 import {
   MANAGER_STORAGE_MUTATION_PROTOCOL_VERSION,
   MANAGER_STORAGE_MUTATION_RECEIPT_NAMESPACE,
@@ -1180,4 +1181,41 @@ test("typed mutation surface carries consolidation and feedback update tasks thr
   assert.ok(seen.every(item => item.fence.managerInstanceId === "manager-instance-six"));
   assert.ok(seen.every(item => item.fence.storageGenerationLease === "stable-storage-lease-six"));
   await pool.stop();
+});
+
+
+for (const tagged of [false, true]) test(`completed ${tagged ? "typed" : "legacy plain"} domain rejection is confirmed not-started without rewriting its original receipt`, async t => {
+  const { rolesRoot, roleDir } = tempRolesRoot(t);
+  const input = { id: "focus-rejected", title: "Fixture focus rejection", status: "分析中", currentStepId: "verify", steps: [{ id: "verify", title: "Verify" }], keywords: [] };
+  const key = tagged ? "fixture-typed-focus-rejection" : "fixture-legacy-focus-rejection";
+  const reason = "Plan focus is required and must describe one subject.";
+  const receiptRoot = path.join(roleDir, "runtime");
+  await executeDurableDelivery({ rootDir: receiptRoot, namespace: MANAGER_STORAGE_MUTATION_RECEIPT_NAMESPACE, deliveryId: key,
+    payload: { roleId: "YeYu", planId: input.id, task: { type: "plan_create", input } },
+    deliver: async () => ({ domain: "rejected", error: tagged ? "STORAGE_MUTATION_VALIDATION_REJECTED: " + reason : reason }) });
+  const receiptPath = durableDeliveryReceiptPath(receiptRoot, MANAGER_STORAGE_MUTATION_RECEIPT_NAMESPACE, key);
+  const originalBytes = fs.readFileSync(receiptPath), original = readDurableDeliveryReceipt(receiptRoot, MANAGER_STORAGE_MUTATION_RECEIPT_NAMESPACE, key)!;
+  const domainFiles = () => fs.readdirSync(roleDir, { recursive: true }).map(String).filter(file => file !== "runtime" && !file.startsWith("runtime" + path.sep)).sort();
+  const domainBefore = domainFiles();
+  const identity = { applicationGenerationId: "rejection-generation", managerInstanceId: "rejection-manager" };
+  const pool = new ManagerStorageMutationPool({ rolesRoot, ...identity });
+  const application = new RoleStorageApplication({ rolesRoot, ...identity, mutationPool: pool,
+    readPool: {} as NonNullable<RoleStorageApplicationOptions["readPool"]>, catalogReadPool: {} as NonNullable<RoleStorageApplicationOptions["catalogReadPool"]> });
+  t.after(() => application.stop());
+  for (let repeat = 0; repeat < 2; repeat++) {
+    await assert.rejects(application.commands.createPlan("YeYu", input, { idempotencyKey: key }), (error: unknown) => {
+      assert.ok(error instanceof RoleStorageApplicationError); assert.equal(error.statusCode, 400); assert.equal(error.commitState, "not_started");
+      assert.equal(error.code, "invalid_request"); assert.equal(error.message, reason); assert.equal(error.operationId, key);
+      const response = roleStorageHttpError(error); assert.equal(response.statusCode, 400); assert.equal(response.body.commitState, "not_started");
+      assert.equal(response.headers["idempotency-key"], key); return true;
+    });
+    assert.deepEqual(fs.readFileSync(receiptPath), originalBytes);
+    const receipt = readDurableDeliveryReceipt(receiptRoot, MANAGER_STORAGE_MUTATION_RECEIPT_NAMESPACE, key)!;
+    assert.equal(receipt.deliveryId, key); assert.equal(receipt.requestDigest, original.requestDigest); assert.equal(receipt.state, "completed");
+    assert.deepEqual(domainFiles(), domainBefore);
+  }
+  await assert.rejects(application.commands.createPlan("YeYu", { ...input, focus: "A separate changed fixture payload" }, { idempotencyKey: key }), (error: unknown) => {
+    assert.ok(error instanceof RoleStorageApplicationError); assert.equal(error.statusCode, 409); assert.equal(error.code, "idempotency_conflict"); return true;
+  });
+  assert.deepEqual(fs.readFileSync(receiptPath), originalBytes); assert.deepEqual(domainFiles(), domainBefore);
 });

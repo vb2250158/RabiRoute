@@ -295,7 +295,9 @@ export class PerformanceStore {
   async start(): Promise<void> {
     await fs.promises.mkdir(this.logDirectory, { recursive: true });
     await this.cleanup();
-    await this.loadRecent();
+    // A retired plugin can reactivate the same hydrated store instance.
+    // Its aggregate index already owns historical samples beyond the dedupe window.
+    if (!this.loaded || this.lastError) await this.loadRecent();
     this.scheduleCleanup();
   }
 
