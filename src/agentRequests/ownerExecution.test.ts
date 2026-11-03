@@ -9,6 +9,8 @@ import { assertEndpointOwnerDirectory, executeEndpointOnOwner, recoverEndpointOw
 import type { PreparedEndpointDelivery } from "./endpointDelivery.js";
 import { agentDeliveryPromptHash } from "./store.js";
 import { renderRabiDelivery } from "../shared/rabiMessage.js";
+import { manageInstanceAgent } from "../agentAdapters/instanceManagement.js";
+import { endpointExecutionOptionsHash } from "./executionOptions.js";
 
 test("owner directory checks existence rather than configured workspace membership", async t => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "owner-directory-"));
@@ -89,6 +91,37 @@ test("exact owner recovery accepts a historical suffix only with the original sc
   }
   writeMessage(prompt + suffix);
   await assert.rejects(recoverEndpointOwnerReceipt(delivery, () => { throw new Error("owner revoked"); }), /owner revoked/);
+  const history = Array.from({ length: 150 }, (_, index) => JSON.stringify({ type: "response_item",
+    payload: { type: "message", role: "user", content: [{ type: "input_text", text: `Unrelated historical message ${index}` }] } }) + "\n").join("");
+  for (const matching of [false, true]) {
+    writeMessage(matching ? prompt + suffix : "Unrelated final message");
+    fs.writeFileSync(rolloutPath, history + fs.readFileSync(rolloutPath, "utf8"));
+    let checks = 0;
+    const receipt = await recoverEndpointOwnerReceipt(delivery, async () => { checks++; await Promise.resolve(); });
+    assert.equal(receipt?.accepted, matching ? true : undefined);
+    assert.equal(checks, 3, "authority reads must stay bounded as unrelated history grows");
+    let revoked = false, revocationChecks = 0;
+    await assert.rejects(recoverEndpointOwnerReceipt(delivery, async () => {
+      revocationChecks++;
+      if (revoked) throw new Error("owner revoked during scan");
+      if (revocationChecks === 2) queueMicrotask(() => { revoked = true; });
+    }), /owner revoked during scan/, "both matched and exhausted scans recheck the original authority");
+    assert.equal(revocationChecks, 3);
+    let sends = 0, writes = 0, attempts = 0, productionChecks = 0;
+    const prepared = { ...delivery, executionOptionsHash: endpointExecutionOptionsHash(delivery.executionOptions) };
+    const recovered = await manageInstanceAgent("reconcile_prepared_delivery", { delivery: prepared }, {
+      rootDir: directory, defaultWorkspace: directory, allowedWorkspaces: [directory],
+      endpointExecution: { endpoint: target, assertAuthorized: async () => { productionChecks++; },
+        readReceipt: async () => undefined, readNotSent: async () => undefined,
+        beginAttempt: async () => { attempts++; return true; }, writeReceipt: async () => { writes++; } },
+      ownerTransport: { sendCodex: async () => { sends++; throw new Error("recovery must never send"); } }
+    }) as { accepted?: boolean } | undefined;
+    assert.equal(recovered?.accepted, matching ? true : undefined);
+    assert.equal(sends, 0);
+    assert.equal(writes, matching ? 1 : 0);
+    assert.equal(attempts, matching ? 1 : 0);
+    assert.ok(productionChecks <= 10, "the production prepared-recovery chain keeps authority reads independent of history size");
+  }
   const archivedDb = new DatabaseSync(path.join(directory, "state_5.sqlite"));
   archivedDb.exec("UPDATE threads SET archived = 1");
   archivedDb.close();

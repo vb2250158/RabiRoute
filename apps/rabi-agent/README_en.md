@@ -225,3 +225,5 @@ This count-triggered archival/cache policy explicitly replaces the generic24/72-
 ## Management request isolation
 
 Session listing, session reads and reconciliation of original delivery receipts use independent bounded read lanes. Operations on the same original receipt remain serialized. Creation and mutation use a separate bounded management queue while retaining their relative order. Prepared message dispatch uses a separate bounded lane, with operations on the same original receipt still serialized. These operations no longer wait for legacy task acceptance; the original host and delivery receipt still confirm actual dispatch, and unknown results are never replayed. This change does not prove that all host management timeouts are fixed. Reconcile the original ID after a timeout or unknown result; do not replay automatically.
+
+The current connector version is **0.2.13**. It fixes completed uploads retaining capacity, status reads reported as uncertain writes, and repeated network authorization for every historical message during receipt recovery. Existing identity, revocation checks and delivery IDs are preserved.

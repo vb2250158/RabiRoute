@@ -9,6 +9,7 @@ import { updateAgentHooks } from "./hookInstallation.js";
 import { EndpointDeliveryNotSentError, validateEndpointDeliveryNoFrameProof } from "../agentRequests/deliveryFailure.js";
 
 export type InstanceManagementContext = { rootDir: string; defaultWorkspace: string; allowedWorkspaces: string[]; dsh?: { baseUrl: string }; endpointExecution?: Omit<EndpointExecutionContext, "send">;
+  observeRecovery?: <T>(operation: () => Promise<T>) => Promise<T>;
   ownerTransport?: Parameters<typeof executeEndpointOnOwner>[3] };
 
 /** Both transports execute the same provider operations on the owning computer. */
@@ -25,7 +26,9 @@ export async function manageInstanceAgent(operation: string, params: Record<stri
     const delivery = params.delivery as PreparedEndpointDelivery;
     try {
       return await executePreparedEndpointDelivery(delivery, { ...context.endpointExecution,
-        recoverReceipt: recoverEndpointOwnerReceipt,
+        recoverReceipt: (prepared, assertAuthorized) => context.observeRecovery
+          ? context.observeRecovery(() => recoverEndpointOwnerReceipt(prepared, assertAuthorized))
+          : recoverEndpointOwnerReceipt(prepared, assertAuthorized),
         send: (prepared, assertAuthorized) => executeEndpointOnOwner(prepared, { allowedWorkspaces: context.allowedWorkspaces, dshBaseUrl }, assertAuthorized, context.ownerTransport)
       }, operation === "reconcile_prepared_delivery");
     } catch (error) {

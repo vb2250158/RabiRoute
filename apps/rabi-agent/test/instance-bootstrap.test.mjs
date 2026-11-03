@@ -346,6 +346,48 @@ test("thread and prepared operations reach Manager authority with legacy local d
   } finally { await runtime.stop(); globalThis.fetch = savedFetch; }
 }));
 
+test("prepared-recovery diagnostics distinguish the original receipt wait from authority and retain the original request ID", async () => fixture(async ({ configPath, directory }) => {
+  const savedFetch = globalThis.fetch, replies = [];
+  const runtime = new __test.RabiAgentRuntime({ managerUrl: "http://manager.test:54321", nodeId: "fixture-node", nodeCredential: "private-fixture-credential",
+    defaultWorkspace: directory, allowedWorkspaces: [directory], agents: [] }, configPath);
+  runtime.connected = true; runtime.socket = { close() {} };
+  runtime.send = value => { replies.push(value); return true; };
+  let release, requests = 0;
+  const waiting = runtime.withReceiptOperation("original-delivery", () => new Promise(resolve => { release = resolve; }));
+  globalThis.fetch = async () => { requests++; return Response.json({ code: 403 }, { status: 403 }); };
+  try {
+    await Promise.resolve();
+    runtime.handleManagerMessage(JSON.stringify({ type: "manageAgent", requestId: "original-management-request", operation: "reconcile_prepared_delivery", params: {
+      agentAdapter: "codex", delivery: { deliveryId: "original-delivery", generation: "original-generation", target: {
+        kind: "instance", nodeId: "fixture-node", provider: "codex", sessionId: "exact-owner"
+      } }
+    } }));
+    await new Promise(resolve => setImmediate(resolve));
+    const diagnostic = () => fs.readFileSync(path.join(directory, "logs", "management-diagnostics.json"), "utf8");
+    const queued = JSON.parse(diagnostic()).entries.at(-1);
+    assert.equal(queued.stage, "receipt_wait");
+    assert.equal(queued.requestId, "original-management-request");
+    assert.equal(requests, 0); assert.equal(replies.length, 0);
+    release(); await waiting;
+    await Promise.all([...runtime.receiptRecoveries]);
+    const finished = JSON.parse(diagnostic()).entries.at(-1);
+    assert.equal(finished.stages.receipt_enter.count, 1);
+    assert.equal(finished.stages.module.result, "completed");
+    assert.equal(finished.stages.authority.result, "failed");
+    assert.equal(finished.stages.response.result, "failed");
+    assert.equal(replies.at(-1).requestId, queued.requestId);
+    assert.doesNotMatch(diagnostic(), /private-fixture-credential|Original delivery authority/);
+    runtime.send = () => false;
+    runtime.handleManagerMessage(JSON.stringify({ type: "manageAgent", requestId: "unwritable-response", operation: "reconcile_prepared_delivery", params: {
+      agentAdapter: "codex", delivery: { deliveryId: "original-delivery", generation: "original-generation", target: {
+        kind: "instance", nodeId: "fixture-node", provider: "codex", sessionId: "exact-owner"
+      } }
+    } }));
+    await Promise.all([...runtime.receiptRecoveries]);
+    assert.equal(JSON.parse(diagnostic()).entries.at(-1).stages.response.result, "not_sent");
+  } finally { release?.(); await waiting; await runtime.stop(); globalThis.fetch = savedFetch; }
+}));
+
 test("WebSocket discovers its path and authenticates only with the original node credential after self verification", { timeout: 10000 }, async () => fixture(async ({ configPath, directory }) => {
   const sent = [], requests = [], meta = identity("fixture-node").data;
   const frame = { type: "object", required: ["type"], properties: { type: { type: "string" } }, additionalProperties: true };

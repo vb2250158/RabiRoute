@@ -12,6 +12,7 @@ import { CodexDesktopIpcClient } from "./lib/codex-desktop-ipc.mjs";
 import { normalizeDshBinding, sendDshTask } from "./lib/dsh.mjs";
 import { runManagerCommand } from "./lib/manager-cli.mjs";
 import { createManagerClient, createManagerTransport } from "./lib/manager-client.mjs";
+import { ManagementDiagnostics } from "./lib/management-diagnostics.mjs";
 import { DeliveryOwner } from "./lib/delivery-owner.mjs";
 import { runDeliveryCommand } from "./lib/delivery-control.mjs";
 import { createEndpointSession, EndpointAuthenticationError } from "./lib/endpoint-session.mjs";
@@ -945,6 +946,7 @@ class RabiAgentRuntime {
     this.preparedDeliveries = new Set();
     this.managementMutationQueue = Promise.resolve();
     this.receiptOperations = new Map();
+    this.managementDiagnostics = new ManagementDiagnostics(path.join(path.dirname(configPath), "logs", "management-diagnostics.json"));
     this.pendingOperations = 0;
     this.taskByThread = new Map();
     this.desktopSummary = "正在连接主机";
@@ -1270,6 +1272,7 @@ class RabiAgentRuntime {
       const originalSocket = this.socket;
       const originalCredential = this.config.nodeCredential;
       const preparedOperation = ["prepared_delivery", "reconcile_prepared_delivery"].includes(message.operation);
+      const trace = this.managementDiagnostics.begin({ requestId: message.requestId, operation: message.operation, deliveryId: message.params?.delivery?.deliveryId });
       // Independent reads and recovery must not wait behind another owner.
       // Recovery never sends a prompt and shares the exact original receipt lock.
       const independentRead = message.operation === "list" || message.operation === "reconcile_prepared_delivery" || message.operation === "threads"
@@ -1278,7 +1281,14 @@ class RabiAgentRuntime {
         ? operation => this.queueManagementRead(operation, message.requestId, message.operation === "reconcile_prepared_delivery")
         : operation => this.queueManagementWrite(operation, message.requestId, preparedOperation);
       const schedule = operation => dispatch(preparedOperation
-        ? () => this.withReceiptOperation(message.params?.delivery?.deliveryId, operation)
+        ? () => {
+          trace.mark("queue_enter");
+          trace.mark("receipt_wait");
+          return this.withReceiptOperation(message.params?.delivery?.deliveryId, () => {
+            trace.mark("receipt_enter");
+            return operation();
+          });
+        }
         : operation);
       schedule(async () => {
         try {
@@ -1292,7 +1302,7 @@ class RabiAgentRuntime {
             result = agentCatalog(next);
             this.send({ type: "agentCatalog", agents: result });
           } else {
-            const { manageInstanceAgent, EndpointTransportReceipts, sameAgentEndpoint } = await import("./runtime/management.mjs");
+            const { manageInstanceAgent, EndpointTransportReceipts, sameAgentEndpoint } = await trace.run("module", () => import("./runtime/management.mjs"));
             const requestedProvider = message.params?.agentAdapter || message.params?.provider || message.params?.delivery?.target?.provider;
             const provider = requestedProvider === "codex-desktop" ? "codex" : requestedProvider;
             if (message.operation === "threads" && !["codex", "dsh"].includes(provider)) throw new Error("Explicit implemented agentAdapter is required.");
@@ -1303,7 +1313,7 @@ class RabiAgentRuntime {
             let endpointExecution;
             if (preparedOperation) {
               const delivery = params.delivery;
-              const assertAuthorized = async () => {
+              const assertAuthorized = () => trace.run("authority", async () => {
                 if (!this.connected || this.socket !== originalSocket || this.config.nodeCredential !== originalCredential || !this.config.nodeCredential) throw new Error("Authenticated Manager connection is required for prepared delivery.");
                 const endpoint = delivery?.target;
                 if (endpoint?.kind !== "instance" || endpoint.nodeId !== this.config.nodeId
@@ -1318,21 +1328,28 @@ class RabiAgentRuntime {
                   || proof.promptHash !== delivery.promptHash || proof.executionOptionsHash !== delivery.executionOptionsHash || !sameAgentEndpoint(proof.endpoint, endpoint)
                   || !["dispatching", "committed"].includes(proof.state)) throw new Error("Original delivery incarnation or reservation is no longer authorized.");
                 if (!this.connected || this.socket !== originalSocket || this.config.nodeCredential !== originalCredential) throw new Error("Original Manager connection changed during delivery authority verification.");
-              };
+              });
               await assertAuthorized();
               const receipts = new EndpointTransportReceipts(path.join(path.dirname(this.configPath), "endpoint-transport-receipts"));
               endpointExecution = { endpoint: delivery.target, assertAuthorized,
-                readReceipt: prepared => receipts.readReceipt(prepared),
-                readNotSent: prepared => receipts.readNotSentProof(prepared),
-                writeNotSent: (prepared, proof) => receipts.writeNotSent(prepared, proof),
-                beginAttempt: prepared => receipts.beginAttempt(prepared),
-                writeReceipt: (prepared, receipt) => receipts.writeReceipt(prepared, receipt) };
+                readReceipt: prepared => trace.run("receipt_read", () => receipts.readReceipt(prepared)),
+                readNotSent: prepared => trace.run("not_sent_read", () => receipts.readNotSentProof(prepared)),
+                writeNotSent: (prepared, proof) => trace.run("not_sent_write", () => receipts.writeNotSent(prepared, proof)),
+                beginAttempt: prepared => trace.run("attempt", () => receipts.beginAttempt(prepared)),
+                writeReceipt: (prepared, receipt) => trace.run("receipt_write", () => receipts.writeReceipt(prepared, receipt)) };
             }
-            result = await manageInstanceAgent(message.operation, params, { ...this.config, dsh, endpointExecution, rootDir: path.dirname(fileURLToPath(import.meta.url)) });
+            result = await trace.run("execute", () => manageInstanceAgent(message.operation, params, { ...this.config, dsh, endpointExecution,
+              observeRecovery: operation => trace.run("receipt_recovery", operation), rootDir: path.dirname(fileURLToPath(import.meta.url)) }));
 
           }
-          if (!preparedOperation || (this.connected && this.socket === originalSocket && this.config.nodeCredential === originalCredential)) this.send({ type: "managementResult", requestId: message.requestId, result });
-        } catch (error) { if (!preparedOperation || (this.connected && this.socket === originalSocket && this.config.nodeCredential === originalCredential)) this.send({ type: "managementResult", requestId: message.requestId, error: boundedText(error instanceof Error ? error.message : String(error), 1024) }); }
+          if (!preparedOperation || (this.connected && this.socket === originalSocket && this.config.nodeCredential === originalCredential)) {
+            const sent = this.send({ type: "managementResult", requestId: message.requestId, result }); trace.mark("response", sent ? "sent" : "not_sent");
+          } else trace.mark("response", "connection_changed");
+        } catch (error) {
+          if (!preparedOperation || (this.connected && this.socket === originalSocket && this.config.nodeCredential === originalCredential)) {
+            const sent = this.send({ type: "managementResult", requestId: message.requestId, error: boundedText(error instanceof Error ? error.message : String(error), 1024) }); trace.mark("response", sent ? "failed" : "not_sent");
+          } else trace.mark("response", "connection_changed");
+        }
       });
       return;
     }

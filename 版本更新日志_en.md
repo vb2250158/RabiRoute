@@ -6,6 +6,10 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.4.9 - 2026-11-03
+
+- Bump the connector to 0.2.13. Scan delivery history with authorization before and after recovery and before accepting an exact match, avoiding a network authorization lookup per historical message. Add sanitized recent-request stage diagnostics while preserving original delivery IDs and unconfirmed outcomes.
+
 ## 0.4.8 - 2026-11-03
 
 - Preserve the original deadline when trusted response calculation throws: a finite getter failing after expiry still returns 408 without repeating its business owner.

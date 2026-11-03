@@ -32,13 +32,16 @@ export async function recoverEndpointOwnerReceipt(delivery: PreparedEndpointDeli
   await assertAuthorized();
   const { withoutLegacyTransportSuffix } = await import("../shared/deliveryIdentity.js");
   for await (const prompt of readRolloutUserMessages(owner.rolloutPath)) {
-    await assertAuthorized();
     const prefix = withoutLegacyTransportSuffix(prompt);
     // Historical Desktop transports added a UUID after the frozen Manager envelope.
     // Recovery still requires the original structured identity and exact reserved bytes.
     const exactEvidence = deliveryIdFromPrompt(prompt) === delivery.deliveryId && agentDeliveryPromptHash(prompt) === delivery.promptHash
       || (prefix !== undefined && deliveryIdFromPrompt(prefix) === delivery.deliveryId && agentDeliveryPromptHash(prefix) === delivery.promptHash);
     if (exactEvidence) {
+      // Historical messages are local evidence, not separate execution steps.
+      // Recheck the current grant before accepting evidence, without a remote
+      // authority round trip for every unrelated message in a long rollout.
+      await assertAuthorized();
       return { deliveryId: delivery.deliveryId, generation: delivery.generation, endpoint: delivery.target, promptHash: delivery.promptHash, executionOptionsHash: delivery.executionOptionsHash,
         accepted: true, action: "receipt_recovered", transport: "desktop-ipc" };
     }
