@@ -355,7 +355,11 @@ export class ManagerPluginRouteRegistry {
             await yieldImmediate();
           }
           try { pendingStream = result.stream; }
-          catch (error) { streamCaptureUnconfirmed = true; throw error; }
+          catch (error) {
+            streamCaptureUnconfirmed = true;
+            if (deadlineAt !== undefined && performance.now() >= deadlineAt && !deadline!.signal.aborted) deadline!.abort(deadlineError());
+            throw error;
+          }
         };
         const configuredDeadlineMs = operation.contract.request.deadlineMs === undefined ? undefined : getTimeoutMs(`api.${operation.contract.operationId}.deadline`, operation.contract.request.deadlineMs);
         const deadline = configuredDeadlineMs === undefined ? undefined : new AbortController();
@@ -410,9 +414,8 @@ export class ManagerPluginRouteRegistry {
           assertDeadline();
           // Local response calculation shares its handler's trust and transaction.
           // Validate the result normally; the disclosure boundary checks the same deadline.
-          const value = callback();
-          assertDeadline();
-          return value;
+          try { const value = callback(); assertDeadline(); return value; }
+          catch (error) { assertDeadline(); throw error; }
         };
         const releaseTransport = () => {
           response.off("close", disconnected);

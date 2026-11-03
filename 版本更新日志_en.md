@@ -6,6 +6,10 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.4.8 - 2026-11-03
+
+- Preserve the original deadline when trusted response calculation throws: a finite getter failing after expiry still returns 408 without repeating its business owner.
+
 ## 0.4.7 - 2026-11-03
 
 - Remove duplicate VM watchdogs around trusted local API response access and calculation while retaining authorization, contracts, deadlines and stream cleanup; skip serialization after the original deadline.
