@@ -6,6 +6,15 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.4.11 - 2026-11-03
+
+- Connector 0.2.14 preserves terminal processes and input receipts through temporary disconnection and transport reconnection. Explicit stop still closes owned resources. Document possible offline output gaps and recovery through the same terminal or original business files.
+
+- Verify the original source in the Manager when creating remote Codex tasks. Connector 0.2.14 creates metadata only, then sends the initial message through prepared delivery. Durable caller intent and native task receipts prevent cross-caller title reuse and duplicate creation after an unknown result. Preserve the existing default when create omits its reply policy.
+- Reuse the original HTTP cancellation fence before durable preparation and binding. Join in-flight writes before the existing abort, preserving source/target error classification and dispatched records.
+
+- Align regression fixtures with the retired trusted-callback VM watchdog, verifying finite getter faults, original deadlines and actual IPC frame stages. Synchronous infinite-CPU preemption remains an explicit TODO.
+
 ## 0.4.10 - 2026-11-03
 
 - Transfer delivery evidence as native structured-value chunks to avoid per-field IPC amplification, retaining complete frame byte limits, acknowledgements, cancellation and original records. Release native HTTP proxy response listeners after completion while preserving backpressure, source authorization and producer shutdown.

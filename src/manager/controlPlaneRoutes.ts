@@ -1,3 +1,5 @@
+import { createRemoteCodexAndDeliver } from "./remoteCodexCreate.js";
+import type { CallerCreationMetadataStatus } from "../callerCreationMetadata.js";
 import { publishStartupPlanConflicts } from "./planStorageStartupPublication.js";
 import { getTimeoutMs } from "../shared/timeoutSettings.js";
 import { ManagerEventHub, createManagerEventsOperation } from "./managerEvents.js";
@@ -942,6 +944,25 @@ async function handleAgentThreadRequest(request: AgentThreadRequest, options: Ag
     owner: currentRabiLinkBusinessOwners().deviceAgents
   });
   if (deviceThreadResult) return deviceThreadResult;
+  if (request.action === "create" && request.prompt != null && request.prompt !== "" && request.agentAdapter === "codex" && request.instanceBinding && !("ownerDeviceId" in request.instanceBinding && request.instanceBinding.ownerDeviceId) && instanceThreadTransport && !instanceThreadTransport.instances().some(item => item.local && item.instanceId === request.instanceBinding!.instanceId)) {
+    if (!agentEndpointDelivery) throw new Error("Manager endpoint delivery authority is unavailable.");
+    const endpoint = agentEndpointDelivery.options(options.remoteSource, options.requestAuthority, trustedDeviceSource, undefined, options.callerExecutionOptions);
+    const transport = instanceThreadTransport;
+    const manageCreation = async (binding: NonNullable<AgentThreadRequest["instanceBinding"]>, params: Record<string, unknown>): Promise<CallerCreationMetadataStatus> => {
+      options.requestAuthority?.();
+      const instance = transport.instances().find(item => item.instanceId === binding.instanceId);
+      if (!instance?.connected || instance.enabled === false || instance.local) throw new Error("The original target computer is unavailable for metadata creation.");
+      const result = await transport.manage(binding.instanceId, { ...params, agentId: binding.agentId, agentAdapter: "codex" }, options.requestAuthority) as { statusCode?: number; data?: { creation?: CallerCreationMetadataStatus; message?: string } };
+      options.requestAuthority?.();
+      if (!result || !result.statusCode || result.statusCode < 200 || result.statusCode >= 300 || !result.data?.creation) throw new Error(result?.data?.message || "Original target SDK metadata creation receipt is unavailable.");
+      return result.data.creation;
+    };
+    return createRemoteCodexAndDeliver({ rootDir, request, endpoint,
+      metadataStatus: (binding, key) => manageCreation(binding, { action: "creation_status", creationIntent: { callerKey: key } }),
+      createMetadata: metadata => { const { instanceBinding, ...body } = metadata; return manageCreation(instanceBinding!, { ...body, action: "create_metadata" }); },
+      sendPrepared: body => handleLocalAgentThreadRequest(body, { ...options, endpointDelivery: endpoint, ...(options.remoteSource ? { remoteEndpoint: agentEndpointDelivery!.remoteEndpoint } : {}) })
+    });
+  }
   if (request.action === "send" || request.action === "reconcile_delivery") {
     if (!agentEndpointDelivery) throw new Error("Manager endpoint delivery authority is unavailable.");
     return handleLocalAgentThreadRequest(request, { ...options,
@@ -8062,7 +8083,7 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
   });
   instanceThreadTransport = {
     instances: () => lanAgentRegistry.listInstances(),
-    manage: (instanceId, params) => lanAgentRegistry.manageAgent(instanceId, "threads", params, 30_000)
+    manage: (instanceId, params, assertAuthorized) => lanAgentRegistry.manageAgent(instanceId, "threads", params, 30_000, assertAuthorized)
   };
   agentEndpointDelivery = createAgentEndpointDelivery({ store: agentRequests, authority: lanAgentAuthority,
     registry: lanAgentRegistry, config: rabiGlobalConfig,

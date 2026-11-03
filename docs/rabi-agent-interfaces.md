@@ -2281,7 +2281,17 @@ Agent 使用 `POST /api/desktop-pet/roles/:roleId/motion`，并用
 - POST 同一路径：action 为 open、list、get、input、resize 或 close。open 需要稳定 UUID terminalId、shell=cmd|powershell，可选已有绝对目录 cwd；get/close 需要 terminalId；input 需要 terminalId、从 1 递增的 sequence 和最多 16 KiB 的 data；resize 需要 cols=20..400、rows=5..200。
 - GET /api/lan-agent/instances/:instanceId/terminals/:terminalId/events?after=0：SSE 输出。事件含递增 sequence、type=output|exit|gap|disconnected，以及 data 或 exitCode。after 仅用于断线后补漏，不用于轮询；早于 256 KiB 有界缓存时先返回 gap。
 
-同一 terminalId 的重复 open 只返回原会话，类型或目录不同拒绝。input 同序号同内容只返回原接收事实；不同内容、过期回执或跳号拒绝。接收成功仅表示输入已交给原终端，不表示命令成功执行。超时、5xx 或断线后使用 list/get 核对 nextInputSequence，不更换 ID、自动重建或重发。窗口关闭仅断开查看；close 结束会话及子程序。节点连接变化结束原终端和旧流。命令与输出不进入角色、计划或持久日志。容量与进程生命周期见 [连接器说明](../apps/rabi-agent/README.md)。
+同一 terminalId 的重复 open 只返回原会话，类型或目录不同拒绝。input 同序号同内容只返回原接收事实；不同内容、过期回执或跳号拒绝。接收成功仅表示输入已交给原终端，不表示命令成功执行。超时、5xx 或断线后使用 list/get 核对 nextInputSequence，不更换 ID、自动重建或重发。窗口关闭仅断开查看；close 结束会话及子程序。Manager 连接变化结束旧流，保留原连接器进程内的终端、ID 和输入回执；新连接仍须鉴权。 断连期间新增输出没有 SDK 回放缓存，可能存在缺口。Host 切代后查询同一 terminalId，并使用新 Manager 返回的游标，不重放输入；业务已重定向到文件的输出按原文件读取。命令与输出不进入角色、计划或持久日志。容量与进程生命周期见 [连接器说明](../apps/rabi-agent/README.md)。
+
+## 跨机创建 Codex 任务并发送初始消息
+
+`action=create`、`agentAdapter=codex`、明确的远端 `instanceBinding` 和初始 `prompt` 由 Manager 核验真实来源；连接器 0.2.14 先创建原生任务元数据，再由既有 prepared delivery 发送正文。远端不再查询另一台电脑的来源会话，也不把调用方自报字段当作来源证明。
+
+显式 `deliveryId` 绑定来源、目标、标题、目录、初始正文、执行选项和回复语义。同一键与同一意图复用原任务；冲突在创建前拒绝。省略键时，响应提供本次操作的 `callerDeliveryId`，恢复时保留这个键；结果未知不能靠新键或同名查询再建任务。创建省略 `responsePolicy` 仍按 `none`，需要回复的 `messageProcessing` 仍显式使用 `required`。
+
+Manager 与目标连接器都需要对应实现。旧连接器缺少调用者创建回执协议时，在创建前返回具体能力缺项；内部 `creation_status/create_metadata` 只通过既有受信管理通道使用，不是公共 `threads` action。源码和隔离测试通过不代表任一已安装节点已经采用，实际采用按节点版本、运行模块和原回执分别核对。
+
+投递请求取消时，在 prepare/bind 前复用原请求生命周期检查；已在途写入仍等待原确认再收尾。prepared 预留撤销与 dispatching/已发送记录分别处理，查不到 actual 不能单独证明未发送。
 
 ## 通用可靠 Agent 投递记录
 

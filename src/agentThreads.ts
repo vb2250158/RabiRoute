@@ -3,7 +3,7 @@ import { executeEndpointAgentDelivery, type EndpointDeliveryOptions, type Prepar
 import { agentDeliveryPromptHash } from "./agentRequests/store.js";
 export { executeEndpointOnOwner } from "./agentRequests/ownerExecution.js";
 import { AgentReplyStateError } from "./agentRequests/replyError.js";
-import { AgentThreadContractError, normalizeAgentThreadSourceType, type AgentThreadSourceType } from "./agentRequests/requestValidation.js";
+import { AgentThreadContractError, callerAgentDeliveryId, completeAgentSessionId, normalizeAgentThreadSourceType, type AgentThreadSourceType } from "./agentRequests/requestValidation.js";
 export type { AgentThreadSourceType } from "./agentRequests/requestValidation.js";
 import { promptConfirmsDelivery } from "./agentRequests/rolloutReceipt.js";
 import type { AgentInstanceBinding } from "./shared/agentInstance.js";
@@ -188,6 +188,9 @@ export type AgentThreadRemoteSource = {
 };
 
 export type AgentThreadRequestOptions = {
+  /** Trusted SDK metadata creation context; never sourced from the request body. */
+  creationIntent?: { key: string; hash: string };
+  creationRootDir?: string;
   endpointDelivery?: EndpointDeliveryOptions;
   /** Trusted entry-point snapshot of explicit execution fields before managed defaults are applied. */
   callerExecutionOptions?: EndpointDeliveryOptions["callerExecutionOptions"];
@@ -243,7 +246,33 @@ function missingThreadNextAction(agentAdapter: string): string {
     + '；或 query 留空列出可发现会话，按返回 updatedAt 核对最近活动并沿 nextOffset 分页。核对完整 threadId、名称和工作目录后读取原会话；保留原 deliveryId/actual，不自动创建替代会话或重发未确认消息。';
 }
 
-export function agentThreadRequestFailureData(
+export function agentThreadRequestFailureData(error: unknown, request: Pick<AgentThreadRequest, "action" | "sourceAgentType"> = {}): Record<string, unknown> {
+  const failure = agentThreadRequestFailureDataWithoutCaller(error, request);
+  const callerDeliveryId = (error as { callerDeliveryId?: unknown } | null)?.callerDeliveryId;
+  return typeof callerDeliveryId === "string" ? { ...failure, callerDeliveryId } : failure;
+}
+
+/** Validate a remote create's initial delivery before creating native metadata. Uses the same field normalizers as local create/send. */
+export function normalizeAgentThreadInitialDeliveryRequest(request: AgentThreadRequest): AgentThreadRequest {
+  const prompt = optionalText(request.prompt, "prompt", maxPromptLength);
+  const title = normalizeCodexThreadTitle(requiredText(request.title, "title", maxTitleInputLength));
+  const sandbox = normalizeSandbox(request.sandbox);
+  const model = optionalText(request.model, "model", 120) || undefined;
+  const reasoningEffort = normalizeReasoningEffort(request.reasoningEffort);
+  const responsePolicy = request.responsePolicy === undefined ? "none" : normalizeAgentResponsePolicy(request.responsePolicy);
+  if (request.messageProcessing && responsePolicy !== "required") throw new Error("messageProcessing handoff requires responsePolicy=required.");
+  if (request.imagePaths != null && !Array.isArray(request.imagePaths)) throw new Error("imagePaths must be an array.");
+  if (request.imagePaths?.length) throw new Error("Endpoint delivery does not transfer local attachment paths.");
+  return { ...request, title, prompt, sandbox: request.sandbox === undefined ? undefined : sandbox, model, reasoningEffort, responsePolicy,
+    deliveryId: callerAgentDeliveryId(request.deliveryId), sourceThreadId: completeAgentSessionId(request.sourceThreadId, "sourceThreadId"),
+    sourceAgentType: normalizeAgentThreadSourceType(request.sourceAgentType, true), messageSource: normalizeRabiMessageSource(request.messageSource),
+    contextBlocks: deliveryBlocks(request.contextBlocks, "contextBlocks"), controlBlocks: deliveryBlocks(request.controlBlocks, "controlBlocks"),
+    inReplyToRequestId: optionalText(request.inReplyToRequestId, "inReplyToRequestId", 100) || undefined,
+    responseInstruction: optionalText(request.responseInstruction, "responseInstruction", 4_000) || undefined,
+    result: optionalText(request.result, "result", 12_000) || undefined, nextAction: optionalText(request.nextAction, "nextAction", 4_000) || undefined };
+}
+
+function agentThreadRequestFailureDataWithoutCaller(
   error: unknown,
   request: Pick<AgentThreadRequest, "action" | "sourceAgentType"> = {}
 ): Record<string, unknown> {
@@ -907,13 +936,14 @@ async function createThreadDurably(
   cwd: string,
   replacementForThreadId?: string
 ): Promise<CodexThreadCreateResult> {
-  const rootDir = options.defaultWorkspace;
+  const rootDir = options.creationIntent ? options.creationRootDir : options.defaultWorkspace;
   if (!rootDir) return createThread({ ...request, title, cwd }, options, driver, title);
   return createCodexThreadWithReservation({
     rootDir,
     title,
     workspace: cwd,
     replacementForThreadId,
+    callerIntent: options.creationIntent,
     confirmMissing: async () => {
       if (replacementForThreadId) return true;
       const matches = await listThreads(title, maxResolveCandidates, 0, [cwd], options, driver, true);
@@ -1289,6 +1319,7 @@ async function executeAgentThreadRequest(
     }
     const sandbox = normalizeSandbox(request.sandbox);
     const initialPrompt = optionalText(request.prompt, "prompt", maxPromptLength);
+    if (options.creationIntent && initialPrompt) throw new Error("Caller-bound metadata creation cannot execute an initial prompt.");
     const declaredMessageSource = initialPrompt
       ? normalizeRabiMessageSource(request.messageSource)
       : undefined;
@@ -1371,7 +1402,7 @@ async function executeAgentThreadRequest(
     }
     let resolution: CodexSessionResolution<AgentThreadSummary>;
     try {
-      resolution = await resolveCodexSession({
+      resolution = options.creationIntent ? { kind: "created", thread: await createThreadDurably(deliveryRequest, options, driver, title, cwd) } : await resolveCodexSession({
         title,
         cwd,
         createIfMissing: true

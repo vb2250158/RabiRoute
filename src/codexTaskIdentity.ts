@@ -81,7 +81,7 @@ export function canonicalCodexWorkspacePath(value: string | undefined): string {
   return result;
 }
 
-function lexicalWorkspaceKey(value: string): string {
+export function lexicalWorkspaceKey(value: string): string {
   const withoutNamespace = withoutWindowsNamespace(value.trim());
   const windowsPath = isWindowsPath(withoutNamespace);
   const normalized = (windowsPath ? path.win32.normalize(withoutNamespace) : withoutNamespace).replace(/\\/g, "/").replace(/\/+$/, "");

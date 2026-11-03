@@ -185,6 +185,7 @@ export function createAgentEndpointDelivery(context: AgentEndpointDeliveryContex
       if (originalSource) authorize(originalSource);
     };
     return { store: context.store, managerInstanceId, callerExecutionOptions: originalCallerExecutionOptions,
+      assertRequestCurrent: requestAuthority,
       authorize: (endpoint, role) => { assertRequest(); authorize(endpoint, role); },
       refreshEndpoints: async (identities, phase) => { assertRequest(); await refreshEndpoints(identities, phase); assertRequest(); },
       resolveExecutionOptions: (request, target) => {

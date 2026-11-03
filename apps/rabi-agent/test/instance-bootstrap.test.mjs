@@ -418,3 +418,45 @@ test("WebSocket discovers its path and authenticates only with the original node
     listener.closeAllConnections(); await new Promise(resolve => listener.close(resolve));
   }
 }));
+
+
+test("caller creation status reads bypass an occupied mutation queue while metadata create remains ordered", async () => fixture(async ({ configPath, directory }) => {
+  const savedFetch = globalThis.fetch, replies = [];
+  const runtime = new __test.RabiAgentRuntime({ managerUrl: "http://manager.test:54321", nodeId: "fixture-node", nodeCredential: "fixture-only",
+    defaultWorkspace: directory, allowedWorkspaces: [directory], agents: [] }, configPath);
+  runtime.connected = true; runtime.socket = { close() {} };
+  runtime.send = value => { replies.push(value); return true; };
+  globalThis.fetch = async () => { throw new Error("The scheduler fixture must not connect to any Manager."); };
+  let releaseWrite, writeStarted = false;
+  const gate = new Promise(resolve => { releaseWrite = resolve; });
+  try {
+    runtime.queueManagementWrite(async () => { writeStarted = true; await gate; }, "fixture-held-write");
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(writeStarted, true);
+    const creationIntent = { callerKey: "agent-" + "c".repeat(64) };
+    // Missing intentHash deliberately stops at SDK validation after the write queue opens.
+    // This exercises scheduling without creating a real native task.
+    runtime.handleManagerMessage(JSON.stringify({ type: "manageAgent", requestId: "fixture-metadata-create", operation: "threads", params: {
+      agentAdapter: "codex", action: "create_metadata", creationIntent, title: "Fixture metadata", cwd: directory
+    } }));
+    runtime.handleManagerMessage(JSON.stringify({ type: "manageAgent", requestId: "fixture-creation-status", operation: "threads", params: {
+      agentAdapter: "codex", action: "creation_status", creationIntent
+    } }));
+    assert.equal(runtime.managementReads.size, 1, "status uses the existing independent read owner");
+    assert.equal(runtime.managementMutations.size, 2, "metadata create stays behind the original write");
+    await Promise.all([...runtime.managementReads]);
+    const status = replies.find(value => value.requestId === "fixture-creation-status");
+    assert.equal(status?.result?.data?.creation?.protocolVersion, 1, JSON.stringify(replies));
+    assert.equal(status.result.data.creation.state, "absent");
+    assert.equal(replies.some(value => value.requestId === "fixture-metadata-create"), false, "no create executes while the prior mutation owns the queue");
+    assert.equal(runtime.managementMutations.size, 2);
+    releaseWrite();
+    await Promise.all([...runtime.managementMutations]);
+    assert.match(replies.find(value => value.requestId === "fixture-metadata-create")?.error || "", /frozen intent hash/);
+    assert.equal(runtime.managementReads.size, 0); assert.equal(runtime.managementMutations.size, 0);
+    assert.equal(runtime.pendingOperations, 0);
+  } finally {
+    releaseWrite?.(); await Promise.allSettled([...runtime.managementReads, ...runtime.managementMutations]);
+    await runtime.stop(); globalThis.fetch = savedFetch;
+  }
+}));

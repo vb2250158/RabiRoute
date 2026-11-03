@@ -967,3 +967,110 @@ test("only positive no-frame proof restores a dispatch reservation to prepared f
     assert.equal(store.getEndpointDelivery(original.deliveryId)?.state, provenUnsent ? "committed" : "dispatching");
   }
 });
+
+
+type PreparationCancellationBoundary = "resolver" | "caller-read" | "prepare-ack" | "bind-ack";
+async function verifyPreparationCancellationBoundary(boundary: PreparationCancellationBoundary) {
+  const f = fixture(), controller = new AbortController();
+  const reason = new DOMException("Fixture request cancelled", "AbortError");
+  let enter!: () => void, release!: () => void;
+  const entered = new Promise<void>(resolve => { enter = resolve; });
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  let writes = 0, reads = 0, prepares = 0, binds = 0, aborts = 0, bindAcknowledged = false;
+  const write = f.persistence.write.bind(f.persistence);
+  f.persistence.write = value => { writes++; write(value); };
+  const pause = async () => { enter(); await gate; };
+  f.options.authorize = () => controller.signal.throwIfAborted();
+  f.options.assertRequestCurrent = () => controller.signal.throwIfAborted();
+  f.options.resolveTarget = async () => { if (boundary === "resolver") await pause(); return party("b"); };
+  const read = f.store.readCallerEndpointDelivery.bind(f.store);
+  f.store.readCallerEndpointDelivery = async (...args) => {
+    const value = await read(...args);
+    if (++reads === 2 && boundary === "caller-read") await pause();
+    return value;
+  };
+  const prepare = f.store.prepare.bind(f.store);
+  f.store.prepare = async (...args) => {
+    prepares++;
+    const value = await prepare(...args);
+    if (boundary === "prepare-ack") await pause();
+    return value;
+  };
+  const bind = f.store.bindEndpointDelivery.bind(f.store);
+  f.store.bindEndpointDelivery = async (...args) => {
+    binds++;
+    await bind(...args);
+    if (boundary === "bind-ack") await pause();
+    bindAcknowledged = true;
+  };
+  const abort = f.store.abort.bind(f.store);
+  f.store.abort = async (...args) => {
+    aborts++;
+    if (boundary === "bind-ack") assert.equal(bindAcknowledged, true, "Join the original bind acknowledgement before aborting");
+    return abort(...args);
+  };
+  const request = { ...f.request, deliveryId: "same-cancelled-fixture-caller", responsePolicy: boundary === "prepare-ack" ? "required" as const : "none" as const };
+  let failure: unknown;
+  const pending = executeEndpointAgentDelivery(request, f.options).catch(error => { failure = error; });
+  try {
+    await entered;
+    controller.abort(reason);
+    await new Promise<void>(resolve => setImmediate(resolve));
+    assert.equal(aborts, 0, "Cancellation must not race the in-flight owner result");
+    release();
+    await pending;
+    assert.ok(failure instanceof Error);
+    assert.match(failure.message, /Fixture request cancelled/);
+    assert.equal(f.dispatched(), 0);
+    assert.deepEqual(f.store.listEndpointDeliveryMetadata(), []);
+    assert.deepEqual(f.store.list(), []);
+    if (boundary === "resolver" || boundary === "caller-read") {
+      assert.equal(prepares, 0); assert.equal(binds, 0); assert.equal(aborts, 0); assert.equal(writes, 0);
+    } else if (boundary === "prepare-ack") {
+      assert.equal(prepares, 1); assert.equal(binds, 0); assert.equal(aborts, 1); assert.equal(writes, 2);
+    } else {
+      assert.equal(prepares, 1); assert.equal(binds, 1); assert.equal(aborts, 1); assert.equal(writes, 2);
+    }
+  } finally { release(); await pending; await f.store.close(); }
+}
+
+for (const boundary of ["resolver", "caller-read", "prepare-ack", "bind-ack"] as const) {
+  test(`cancellation fence preserves original transaction at ${boundary}`, async () => {
+    await verifyPreparationCancellationBoundary(boundary);
+  });
+}
+
+test("cancellation fence cannot release an already dispatching original reservation", async () => {
+  const f = fixture(), dispatch = f.options.dispatch;
+  try {
+    const response = await executeEndpointAgentDelivery({ ...f.request, deliveryId: "same-dispatching-fixture-caller" }, {
+      ...f.options,
+      dispatch: async (delivery, guard) => { await dispatch(delivery, guard); throw new Error("Fixture lost acknowledgement"); }
+    });
+    assert.equal(response.statusCode, 202);
+    assert.equal(f.dispatched(), 1);
+    const metadata = f.store.listEndpointDeliveryMetadata()[0]!;
+    assert.equal(metadata.state, "dispatching");
+    const original = await f.store.readEndpointDelivery(metadata.deliveryId);
+    assert.ok(original);
+    await assert.rejects(f.store.abort(original.preparation), /Dispatched endpoint delivery cannot release its durable reservation/);
+    assert.equal(f.store.getEndpointDelivery(original.deliveryId)?.state, "dispatching");
+    assert.equal(f.dispatched(), 1);
+  } finally { await f.store.close(); }
+});
+
+test("preparation fence reuses the original request authority without additional endpoint checks", async () => {
+  const f = fixture(), controller = new AbortController();
+  const reason = new DOMException("Original request cancelled", "AbortError");
+  const requestAuthority = () => controller.signal.throwIfAborted();
+  const context = { store: f.store, registry: { localInstanceId: "manager", getInstanceAgent: () => undefined },
+    authority: { getNodeAuthorization: () => undefined }, config: { getLanAgentDeliveryPolicy: () => ({ enabled: true, incarnation: "fixture" }) },
+    receiptDirectory: "unused-fixture-receipts", localOptions: () => ({}), readLocal: async () => { throw new Error("No task lookup expected"); }
+  } as unknown as AgentEndpointDeliveryContext;
+  try {
+    const options = createAgentEndpointDelivery(context).options(undefined, requestAuthority);
+    assert.equal(options.assertRequestCurrent, requestAuthority);
+    controller.abort(reason);
+    assert.throws(() => options.assertRequestCurrent!(), error => error === reason);
+  } finally { await f.store.close(); }
+});

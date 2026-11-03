@@ -4,18 +4,21 @@ import { normalizeAgentInstanceBinding } from "../shared/agentInstance.js";
 
 export type InstanceThreadTransport = {
   instances: () => AgentInstance[];
-  manage: (instanceId: string, params: Record<string, unknown>) => Promise<unknown>;
+  manage: (instanceId: string, params: Record<string, unknown>, assertAuthorized?: () => void) => Promise<unknown>;
   endpointDelivery?: (request: AgentThreadRequest) => Promise<AgentThreadRequestResult>;
 };
 
 /** Resolve identity before any local provider lookup, including when the remote computer is offline. */
-export async function routeInstanceThread(request: AgentThreadRequest, transport: InstanceThreadTransport): Promise<AgentThreadRequestResult | undefined> {
-  if (request.agentTargetId !== undefined) {
-    if (!request.agentAdapter || request.agentTargetId !== `local:${request.agentAdapter}` || request.instanceBinding) {
-      throw new Error("Explicit local task target must match its provider and cannot include a remote binding.");
-    }
-    return undefined;
+export function assertAgentThreadTargetSelection(request: AgentThreadRequest): void {
+  if (request.agentTargetId !== undefined && (!request.agentAdapter || request.agentTargetId !== `local:${request.agentAdapter}` || request.instanceBinding)) {
+    throw new Error("Explicit local task target must match its provider and cannot include a remote binding.");
   }
+}
+
+export async function routeInstanceThread(request: AgentThreadRequest, transport: InstanceThreadTransport): Promise<AgentThreadRequestResult | undefined> {
+  if (["creation_status", "create_metadata"].includes(String(request.action))) throw new Error("Caller metadata actions are internal Manager-to-SDK operations, not public thread actions.");
+  assertAgentThreadTargetSelection(request);
+  if (request.agentTargetId !== undefined) return undefined;
   const binding = normalizeAgentInstanceBinding(request.instanceBinding);
   if (!binding) return undefined;
   const instance = transport.instances().find(item => item.instanceId === binding.instanceId);

@@ -161,11 +161,12 @@ test("prepared encodings still pass the original response validator before discl
   assert.equal((await response.json()).errorCode, "API_RESPONSE_SCHEMA_INVALID");
 });
 
-test("ordinary owner output keeps its original JSON behavior and dangerous getter budget", { timeout: 5000 }, async t => {
+test("ordinary owner output preserves native JSON and finite getter errors without replay", { timeout: 5000 }, async t => {
   const registry = new ManagerPluginRouteRegistry();
+  let getterCalls = 0, unsafeOwnerCalls = 0;
   const definition = (unsafe: boolean) => ({ contract: fixtureApiContract({ operationId: unsafe ? "fixture.unsafe" : "fixture.ordinary", method: "GET", pathTemplate: unsafe ? "/api/unsafe" : "/api/ordinary",
     request: { path: { type: "object", additionalProperties: false }, query: { type: "object", additionalProperties: false }, headers: { type: "object" }, body: { kind: "none" } } }),
-    handler() { return { status: 200, body: unsafe ? { ok: true, get value(): number { for (;;) { /* deliberate owner fault */ } } } : { ok: true, value: 42 } }; } });
+    handler() { if (unsafe) unsafeOwnerCalls++; return { status: 200, body: unsafe ? { ok: true, get value(): number { getterCalls++; throw new Error("deliberate finite owner getter fault"); } } : { ok: true, value: 42 } }; } });
   const registration = registry.registerOperations("ordinary-owner", [definition(false), definition(true)]);
   const server = http.createServer((request, response) => registry.handle(request, new URL(request.url!, "http://localhost"), response));
   server.listen(0, "127.0.0.1"); await once(server, "listening");
@@ -176,5 +177,47 @@ test("ordinary owner output keeps its original JSON behavior and dangerous gette
   assert.equal(ordinary.status, 200); assert.equal(await ordinary.text(), '{"ok":true,"value":42}');
   const unsafe = await fetch(base + "/api/unsafe");
   assert.equal(unsafe.status, 500); assert.equal((await unsafe.json()).errorCode, "API_OPERATION_FAILED");
+  assert.equal(getterCalls, 1); assert.equal(unsafeOwnerCalls, 1);
   assert.equal((await fetch(base + "/api/ordinary")).status, 200);
+});
+
+
+// Trusted in-process callbacks intentionally run in the owning transaction's realm.
+// An event-loop timer cannot preempt a callback that never returns; do not put an
+// infinite loop in this process and mistake node:test's timeout for hard isolation.
+test("unbounded trusted in-process getter CPU requires a process-isolated owner", {
+  todo: "Hard CPU preemption is not supported for trusted in_process owners after 0.4.7 removed the duplicate VM watchdog. Validate a future process-isolated owner in a separately bounded child; do not run an infinite loop in this test process."
+});
+
+test("finite owner getter errors after the original deadline return 408 without replay", { timeout: 5000 }, async t => {
+  const monotonic = { now: performance.now() };
+  t.mock.method(performance, "now", () => monotonic.now);
+  const registry = new ManagerPluginRouteRegistry();
+  let getterCalls = 0, ownerCalls = 0;
+  const registration = registry.registerOperations("finite-getter-deadline", [{ contract: fixtureApiContract({
+    operationId: "fixture.finite-getter-deadline", method: "GET", pathTemplate: "/api/finite-getter-deadline",
+    request: { deadlineMs: 1000, path: { type: "object", additionalProperties: false }, query: { type: "object", additionalProperties: false }, headers: { type: "object" }, body: { kind: "none" } }
+  }), handler() {
+    ownerCalls++;
+    return { status: 200, body: { ok: true, get value(): number {
+      getterCalls++;
+      // Model a finite computation returning control after its original deadline.
+      // A deterministic monotonic clock avoids scheduler load expiring before entry.
+      monotonic.now += 1001;
+      throw new Error("finite getter completed with an error after expiry");
+    } } };
+  } }, { contract: fixtureApiContract({ operationId: "fixture.after-finite-getter", method: "GET", pathTemplate: "/api/after-finite-getter",
+    request: { path: { type: "object", additionalProperties: false }, query: { type: "object", additionalProperties: false }, headers: { type: "object" }, body: { kind: "none" } }
+  }), handler() { return { status: 200, body: { ok: true, value: 42 } }; } }]);
+  const server = http.createServer((request, response) => registry.handle(request, new URL(request.url!, "http://localhost"), response));
+  server.listen(0, "127.0.0.1"); await once(server, "listening");
+  t.after(async () => { await registration.dispose(); server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); });
+  const address = server.address(); assert.ok(address && typeof address === "object");
+  const base = `http://127.0.0.1:${address.port}`;
+  const response = await fetch(base + "/api/finite-getter-deadline");
+  assert.equal(response.status, 408);
+  assert.equal((await response.json()).errorCode, "API_REQUEST_DEADLINE_EXCEEDED");
+  assert.equal(ownerCalls, 1); assert.equal(getterCalls, 1);
+  const recovered = await fetch(base + "/api/after-finite-getter");
+  assert.equal(recovered.status, 200); assert.equal(await recovered.text(), '{"ok":true,"value":42}');
 });

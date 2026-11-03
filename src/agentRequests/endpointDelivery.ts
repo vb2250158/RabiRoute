@@ -56,6 +56,8 @@ export type EndpointDeliveryOptions = {
   resolveExecutionOptions: (request: AgentThreadRequest, target: AgentRequestParty) => EndpointExecutionOptions;
   /** Captured from the original HTTP body before Manager defaults; never read as a body authority object. */
   callerExecutionOptions?: Pick<AgentThreadRequest, "cwd" | "model" | "reasoningEffort" | "sandbox" | "dshDeliveryMode">;
+  /** Original request-lifetime fence; background recovery has no HTTP request. */
+  assertRequestCurrent?: () => void;
   authorize: (endpoint: AgentRequestEndpoint, role?: "source" | "target") => void;
   refreshEndpoints?: (identities: Pick<PreparedEndpointDelivery, "source" | "target">, phase?: "prepare" | "dispatch" | "reconcile") => Promise<void>;
   dispatch: (delivery: PreparedEndpointDelivery, assertAuthorized: () => void) => Promise<EndpointDeliveryReceipt>;
@@ -320,6 +322,7 @@ export async function executeEndpointAgentDelivery(request: AgentThreadRequest, 
     // An awaited formal-reply reconciliation may have allowed another identical caller to reserve this key.
     const reserved = await resumeCallerDelivery(request, source, target, stableDeliveryId, requestHash, options);
     if (reserved) return reserved;
+    options.assertRequestCurrent?.();
     const preparation = await options.store.prepare({ source, target, responsePolicy: request.responsePolicy!,
       ...(stableDeliveryId ? { deliveryId: stableDeliveryId } : {}),
       responseInstruction: request.responseInstruction, inReplyToRequestId: request.inReplyToRequestId,
@@ -331,6 +334,7 @@ export async function executeEndpointAgentDelivery(request: AgentThreadRequest, 
       delivery = { deliveryId: preparation.deliveryId, generation: randomUUID(), source: sourceEndpoint,
         target: targetEndpoint, prompt, promptHash: agentDeliveryPromptHash(prompt), executionOptions, executionOptionsHash, preparation, state: "prepared",
         requestHash, ...(callerDeliveryId === undefined ? {} : { callerDeliveryId }) };
+      options.assertRequestCurrent?.();
       await options.store.bindEndpointDelivery(delivery);
       guard(delivery, options)();
     } catch (error) {

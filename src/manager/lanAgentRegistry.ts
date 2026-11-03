@@ -487,7 +487,7 @@ export class LanAgentRegistry {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => { this.managementRequests.delete(requestId); reject(new Error("Instance management timed out; refresh before retrying a change.")); }, timeoutMs);
       const action = params && typeof params === "object" ? (params as Record<string, unknown>).action : undefined;
-      const readOnly = operation === "scan" || operation === "threads" && ["read", "list"].includes(String(action ?? "list"));
+      const readOnly = operation === "scan" || operation === "threads" && ["read", "list", "creation_status"].includes(String(action ?? "list"));
       this.managementRequests.set(requestId, { connection, resolve, reject, timer, operation, readOnly, assertAuthorized });
       try { assertAuthorized?.(); this.send(connection.socket, { type: "manageAgent", requestId, operation, params }); }
       catch (error) { clearTimeout(timer); this.managementRequests.delete(requestId); reject(error); }

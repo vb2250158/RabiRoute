@@ -957,7 +957,7 @@ class RabiAgentRuntime {
     this.computer = new ComputerService({ timeout, uploadHistoryRoot: uploadHistoryDirectory(homeDataDirectory(), configPath), onChange: () => this.publishDesktop() });
     this.terminals = new TerminalService({ timeout, defaultCwd: config.defaultWorkspace, historyDirectory: path.join(path.dirname(configPath), "terminal-history"),
       emit: event => {
-        if ((this.socket?.bufferedAmount || 0) > 1048576) {
+        if (this.connected && this.socket?.readyState === WebSocket.OPEN && (this.socket.bufferedAmount || 0) > 1048576) {
           void this.terminals.execute({ action: "close", terminalId: event.terminalId }).catch(() => undefined);
           return;
         }
@@ -1023,7 +1023,7 @@ class RabiAgentRuntime {
     const oldSocket = this.socket;
     this.socket = null; this.connected = false;
     oldSocket?.close(1000, "User requested reconnect");
-    void this.terminals.closeAll();
+    // Reconnect changes the transport, not the native terminal owner.
     this.retryMs = RECONNECT_BASE_MS;
     this.publishDesktop("正在重新连接主机");
     if (this.connecting) this.scheduleReconnect(); else this.connect();
@@ -1146,7 +1146,7 @@ class RabiAgentRuntime {
           if (this.socket !== socket) return;
           this.connected = false;
           clearInterval(this.heartbeatTimer);
-          await this.terminals.closeAll();
+          // Native terminals belong to this worker; explicit stop joins their cleanup.
           this.scheduleReconnect();
         }
       });
@@ -1276,7 +1276,7 @@ class RabiAgentRuntime {
       // Independent reads and recovery must not wait behind another owner.
       // Recovery never sends a prompt and shares the exact original receipt lock.
       const independentRead = message.operation === "list" || message.operation === "reconcile_prepared_delivery" || message.operation === "threads"
-        && ["list", "read"].includes(message.params?.action ?? "list");
+        && ["list", "read", "creation_status"].includes(message.params?.action ?? "list");
       const dispatch = independentRead
         ? operation => this.queueManagementRead(operation, message.requestId, message.operation === "reconcile_prepared_delivery")
         : operation => this.queueManagementWrite(operation, message.requestId, preparedOperation);

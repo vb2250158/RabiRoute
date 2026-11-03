@@ -40,7 +40,7 @@ Mac 使用当前用户 LaunchAgent，支持文件互传与连接器 0.2.4 的 Zs
 | `GET /api/lan-agent/instances/:instanceId/terminals/:terminalId/events?after=0` | 实时 SSE 输出 |
 | `POST /api/lan-agent/instances/:instanceId/computer` | 文件互传、窗口查询和截图 |
 
-终端使用稳定 UUID `terminalId`；Windows 的 `shell` 为 `cmd` 或 `powershell`，Mac/Linux 为电脑实际提供的 `zsh`、`bash` 或 `sh`。输入使用递增 `sequence`，命令以 `\r` 结尾。JSON 输出字段为 `terminal`、`outputEvents`、`nextOutputSequence`、`truncated`；下一次以 `nextOutputSequence` 作为 `after`。关闭网页保留终端，退出终端结束所属子程序；连接断开或主程序退出结束终端。超时查询原会话，不自动重建或重发输入。
+终端使用稳定 UUID `terminalId`；Windows 的 `shell` 为 `cmd` 或 `powershell`，Mac/Linux 为电脑实际提供的 `zsh`、`bash` 或 `sh`。输入使用递增 `sequence`，命令以 `\r` 结尾。JSON 输出字段为 `terminal`、`outputEvents`、`nextOutputSequence`、`truncated`；下一次以 `nextOutputSequence` 作为 `after`。关闭网页保留终端，退出终端结束所属子程序；Manager 短暂断连保留原连接器进程内的终端、ID 和输入回执，新连接仍须鉴权；远端主程序退出或连接器停止才结束全部终端。 断连期间新增输出没有 SDK 回放缓存，可能存在缺口。Host 切代后查询同一 terminalId，并使用新 Manager 返回的游标，不重放输入；业务已重定向到文件的输出按原文件读取。超时查询原会话，不自动重建或重发输入。
 
 新终端收到真实 Shell 提示符后才接受输入，启动最多等待 30 秒；桌面辅助操作也有 30 秒期限，主控转发等待最多 45 秒。机器繁忙或刚登录时允许启动过程完成，不以创建了进程代替 Shell 就绪。
 

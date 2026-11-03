@@ -48,19 +48,48 @@ test("real IPC connect/initialize failures prove zero prompt frames; prompt time
   const missing = new CodexDesktopBridge({ pipePaths: [pipe()], requestTimeoutMs: 30 });
   t.after(() => missing.close());
   await assert.rejects(missing.deliver(turn), CodexDesktopPromptNotSentError);
+  // The protocol timeout starts at the client write; Windows may schedule that
+  // timer before the server's pipe read. Observe the real frame first, then
+  // advance only this test's request timer instead of racing the host scheduler.
+  const realSetTimeout = globalThis.setTimeout, realClearTimeout = globalThis.clearTimeout;
+  const waitForStage = async (observed: Promise<void>, label: string) => {
+    let timer: NodeJS.Timeout | undefined;
+    try { await Promise.race([observed, new Promise<never>((_, reject) => {
+      timer = realSetTimeout(() => reject(new Error("Fixture did not observe " + label)), 5000);
+    })]); } finally { if (timer) realClearTimeout(timer); }
+  };
+  let sawInitialize!: () => void;
+  const initializeObserved = new Promise<void>(resolve => { sawInitialize = resolve; });
   const initAddress = pipe();
-  const initRouter = await desktop(initAddress, () => {}); t.after(() => initRouter.close());
+  const initRouter = await desktop(initAddress, request => { assert.equal(request.method, "initialize"); sawInitialize(); }); t.after(() => initRouter.close());
   const init = new CodexDesktopBridge({ pipePaths: [initAddress], requestTimeoutMs: 25 }); t.after(() => init.close());
-  await assert.rejects(init.deliver(turn), CodexDesktopPromptNotSentError);
-  assert.deepEqual(initRouter.requests.map(x => x.method), ["initialize"]);
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  try {
+    const failed = assert.rejects(init.deliver(turn), CodexDesktopPromptNotSentError);
+    await waitForStage(initializeObserved, "initialize before timeout");
+    t.mock.timers.tick(25);
+    await waitForStage(failed, "initialize timeout rejection");
+    assert.deepEqual(initRouter.requests.map(x => x.method), ["initialize"]);
+  } finally { t.mock.timers.reset(); }
 
+  let sawPrompt!: () => void;
+  const promptObserved = new Promise<void>(resolve => { sawPrompt = resolve; });
   const writtenAddress = pipe();
-  const writtenRouter = await desktop(writtenAddress, (request, socket) => { if (request.method === "initialize") reply(socket, request); });
+  const writtenRouter = await desktop(writtenAddress, (request, socket) => {
+    if (request.method === "initialize") reply(socket, request);
+    else { assert.equal(request.method, "thread-follower-steer-turn"); sawPrompt(); }
+  });
   t.after(() => writtenRouter.close());
   const written = new CodexDesktopBridge({ pipePaths: [writtenAddress], requestTimeoutMs: 25, deliveryReceiptGraceMs: 0, lateStartReconcileMs: 0 });
   t.after(() => written.close());
-  await assert.rejects(written.deliver(turn), error => error instanceof Error && !(error instanceof CodexDesktopPromptNotSentError));
-  assert.equal(writtenRouter.requests.filter(x => x.method === "thread-follower-steer-turn").length, 1);
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  try {
+    const failed = assert.rejects(written.deliver(turn), error => error instanceof Error && !(error instanceof CodexDesktopPromptNotSentError));
+    await waitForStage(promptObserved, "the original prompt frame before timeout");
+    t.mock.timers.tick(25);
+    await waitForStage(failed, "prompt timeout rejection");
+    assert.equal(writtenRouter.requests.filter(x => x.method === "thread-follower-steer-turn").length, 1);
+  } finally { t.mock.timers.reset(); }
 
   const fallbackAddress = pipe();
   const fallbackRouter = await desktop(fallbackAddress, (request, socket) => reply(socket, request,

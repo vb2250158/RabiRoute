@@ -20,6 +20,7 @@ export type CodexThreadCreationState =
 export type CodexThreadCreationReservation = {
   version: 1;
   key: string;
+  callerIntentHash?: string;
   title: string;
   workspace: string;
   state: CodexThreadCreationState;
@@ -43,7 +44,14 @@ export class CodexThreadCreationBlockedError extends Error {
   }
 }
 
-function creationKey(title: string, workspace: string, replacementForThreadId = ""): string {
+export type CodexCreationCallerIntent = { key: string; hash: string };
+export class CodexCreationIntentConflictError extends Error {
+  constructor() { super("This caller creation ID already owns a different frozen source, target or initial-message intent."); this.name = "CodexCreationIntentConflictError"; }
+}
+export class CodexMetadataNotStartedError extends Error {}
+
+function creationKey(title: string, workspace: string, replacementForThreadId = "", callerIntent?: CodexCreationCallerIntent): string {
+  if (callerIntent) return JSON.stringify(["codex-desktop-caller", callerIntent.key]);
   return JSON.stringify(["codex-desktop", canonicalCodexWorkspacePath(workspace), title, replacementForThreadId]);
 }
 
@@ -86,20 +94,22 @@ function writeReservation(rootDir: string, reservation: CodexThreadCreationReser
   });
 }
 
-function reserveCreation(rootDir: string, title: string, workspace: string, replacementForThreadId = ""): {
+function reserveCreation(rootDir: string, title: string, workspace: string, replacementForThreadId = "", callerIntent?: CodexCreationCallerIntent): {
   created: boolean;
   reservation: CodexThreadCreationReservation;
 } {
-  const key = creationKey(title, workspace, replacementForThreadId);
+  const key = creationKey(title, workspace, replacementForThreadId, callerIntent);
   const filePath = reservationPath(rootDir, key);
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   const existing = parseReservation(filePath);
+  if (existing && callerIntent && (existing.key !== key || existing.callerIntentHash !== callerIntent.hash)) throw new CodexCreationIntentConflictError();
   if (existing && existing.state !== "failed_before_create") return { created: false, reservation: existing };
 
   const now = new Date().toISOString();
   const reservation: CodexThreadCreationReservation = {
     version: 1,
     key,
+    ...(callerIntent ? { callerIntentHash: callerIntent.hash } : {}),
     title,
     workspace: canonicalCodexWorkspacePath(workspace),
     state: "reserved",
@@ -133,6 +143,7 @@ function reserveCreation(rootDir: string, title: string, workspace: string, repl
     if (!raced) {
       throw new Error(`Codex Desktop task creation reservation is unreadable: ${filePath}`);
     }
+    if (callerIntent && (raced.key !== key || raced.callerIntentHash !== callerIntent.hash)) throw new CodexCreationIntentConflictError();
     recordDataMutationAudit({
       group: "agent-session",
       event: "codex_thread_creation_reservation_replayed",
@@ -170,14 +181,24 @@ export async function createCodexThreadWithReservation(
     create: (onStage: (state: "thread_created" | "naming" | "initial_turn", threadId: string) => void) => Promise<CodexThreadCreateResult>;
     confirmMissing?: () => Promise<boolean>;
     replacementForThreadId?: string;
+    callerIntent?: CodexCreationCallerIntent;
+    recoverCreated?: (reservation: Readonly<CodexThreadCreationReservation>) => Promise<CodexThreadCreateResult | undefined>;
     staleCreatingMs?: number;
     now?: () => Date;
   }
 ): Promise<CodexThreadCreateResult> {
-  let reserved = reserveCreation(params.rootDir, params.title, params.workspace, params.replacementForThreadId);
+  let reserved = reserveCreation(params.rootDir, params.title, params.workspace, params.replacementForThreadId, params.callerIntent);
   if (!reserved.created) {
     if (reserved.reservation.state === "completed" && reserved.reservation.result) {
       return reserved.reservation.result;
+    }
+    if (params.callerIntent && params.recoverCreated && ["creating", "thread_created", "naming", "uncertain"].includes(reserved.reservation.state)) {
+      const recovered = await params.recoverCreated(Object.freeze({ ...reserved.reservation }));
+      if (recovered) {
+        if (reserved.reservation.threadId && reserved.reservation.threadId !== recovered.id) throw new Error("Original creation receipt names a different task.");
+        writeReservation(params.rootDir, { ...reserved.reservation, state: "completed", threadId: recovered.id, result: recovered, error: undefined, updatedAt: new Date().toISOString() });
+        return recovered;
+      }
     }
     const now = params.now?.() ?? new Date();
     const lastUpdated = Date.parse(reserved.reservation.updatedAt || reserved.reservation.createdAt);
@@ -187,7 +208,7 @@ export async function createCodexThreadWithReservation(
     if (stale) {
       let missingConfirmed = false;
       let evidenceError = "";
-      if (!reserved.reservation.threadId && params.confirmMissing) {
+      if (!params.callerIntent && !reserved.reservation.threadId && params.confirmMissing) {
         try {
           missingConfirmed = await params.confirmMissing();
         } catch (error) {
@@ -201,7 +222,7 @@ export async function createCodexThreadWithReservation(
           error: "The stale creating reservation had no threadId and the Desktop state database confirmed that no matching task exists.",
           updatedAt: now.toISOString()
         });
-        reserved = reserveCreation(params.rootDir, params.title, params.workspace, params.replacementForThreadId);
+        reserved = reserveCreation(params.rootDir, params.title, params.workspace, params.replacementForThreadId, params.callerIntent);
       } else {
         const uncertain: CodexThreadCreationReservation = {
           ...reserved.reservation,
@@ -238,6 +259,7 @@ export async function createCodexThreadWithReservation(
       };
       writeReservation(params.rootDir, current);
     });
+    if (params.callerIntent && current.threadId && current.threadId !== result.id) throw new Error("Native metadata result differs from the original created task.");
     current = {
       ...current,
       state: "completed",
@@ -251,11 +273,22 @@ export async function createCodexThreadWithReservation(
   } catch (error) {
     current = {
       ...current,
-      state: "uncertain",
+      state: params.callerIntent && error instanceof CodexMetadataNotStartedError ? "failed_before_create" : "uncertain",
       error: error instanceof Error ? error.message : String(error),
       updatedAt: new Date().toISOString()
     };
     writeReservation(params.rootDir, current);
+    if (params.callerIntent && error instanceof CodexMetadataNotStartedError) throw error;
     throw new CodexThreadCreationBlockedError(current);
   }
+}
+
+
+/** Read only the exact caller reservation. Corrupt evidence is not absence. */
+export function readCallerCodexCreation(rootDir: string, callerKey: string): CodexThreadCreationReservation | null {
+  const key = creationKey("", "", "", { key: callerKey, hash: "" }), filePath = reservationPath(rootDir, key);
+  try { fs.readFileSync(filePath); } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return null; throw error; }
+  const reservation = parseReservation(filePath);
+  if (!reservation || reservation.key !== key || typeof reservation.callerIntentHash !== "string" || reservation.result && reservation.threadId !== reservation.result.id) throw new Error("Original caller creation evidence is unreadable.");
+  return reservation;
 }
