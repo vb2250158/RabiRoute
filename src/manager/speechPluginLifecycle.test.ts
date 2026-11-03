@@ -13,8 +13,8 @@ import { SpeechEventStreamOwner } from "./speechEventOperation.js";
 import type { ApiOperationDefinition, ApiOperationRegistration } from "./apiOperationContract.js";
 import { SpeechModelManager } from "./speechModelManager.js";
 import { SpeechRuntimeControl } from "./speechRuntimeControl.js";
+import { createSpeechPluginRuntime, type SpeechPluginPorts, type SpeechPluginResources } from "./speechPluginRuntime.js";
 
-const plugin = await import(new URL("../../plugins/builtin/io.rabiroute.manager.speech/1.0.0/manager.mjs", import.meta.url).href);
 const lifecycleModule = await import(new URL("../../plugins/builtin/io.rabiroute.manager.speech/1.0.0/lifecycle.mjs", import.meta.url).href);
 function deferred() {
   let resolve!: () => void;
@@ -23,6 +23,25 @@ function deferred() {
 }
 const tick = () => new Promise<void>(resolve => setImmediate(resolve));
 type SpeechReconcile = (() => void) & { readonly retired?: Promise<void> };
+type PublishedSpeech = ReturnType<typeof createSpeechPluginRuntime>;
+const testResources = new WeakMap<object, SpeechPluginResources>();
+function ownedRuntime(host: { SpeechApiOwner: unknown; createSpeechApiOperations: unknown; speechRuntimeControl?: { releaseOwnedRuntime(): unknown }; speechModelManager?: { stop(): unknown }; reconcileSpeechMicrophone?: (reason: string, guard: () => boolean) => void }, current: () => unknown) {
+  let resources = testResources.get(host);
+  if (!resources) {
+    resources = {
+      speechControl: { reconcileMicrophone: (guard: () => void) => host.reconcileSpeechMicrophone?.("test", () => { try { guard(); return true; } catch { return false; } }) },
+      speechRuntimeControl: { start: async () => {}, releaseOwnedRuntime: () => host.speechRuntimeControl?.releaseOwnedRuntime(), stop: () => assert.fail("Plugin retirement must use the owned-runtime lifecycle release.") },
+      speechModelManager: { stop: () => host.speechModelManager?.stop() },
+      speechIngressStore: {}, selectionSpeechSettings: {}, drains: new Set(), operations: new Set(), shutdown: undefined
+    } as unknown as SpeechPluginResources;
+    testResources.set(host, resources);
+  }
+  const ports = { currentService: current, api: {}, reportError: () => {} } as unknown as SpeechPluginPorts;
+  const service = createSpeechPluginRuntime(ports, { resources }, "manager:speech");
+  const runtime = Object.create(host, { ...Object.getOwnPropertyDescriptors(service),
+    SpeechApiOwner: { value: host.SpeechApiOwner }, createSpeechApiOperations: { value: host.createSpeechApiOperations } });
+  return { service, runtime };
+}
 
 test("kernel speech shutdown confirms an uninstalled runtime without starting optional speech", { timeout: 15000 }, async t => {
   const f = await fixture(t);
@@ -36,7 +55,7 @@ test("kernel speech shutdown confirms an uninstalled runtime without starting op
     spawnRuntime: () => { assert.fail("shutdown must not launch optional speech"); },
     killProcessTree: async () => { assert.fail("shutdown must not kill an absent runtime"); }
   });
-  f.nativeStops.runtime = async () => { await control.stop(); };
+  f.nativeStops.runtime = async () => { await control.releaseOwnedRuntime(); };
   f.nativeStops.microphone = async () => { assert.fail("an absent optional runtime must not receive a microphone stop request"); };
   f.nativeStops.playback = async () => { assert.fail("an absent optional runtime must not receive a playback stop request"); };
   await f.kernel.switch([f.candidate("uninstalled")]);
@@ -58,10 +77,11 @@ test("speech preparation passes its lifecycle signal to async registration and c
       },
       registerHttpProxies: () => { assert.fail("cancelled preparation must not register proxies"); }
     },
-    speechRuntimeControl: { stop: async () => { assert.fail("an unpublished candidate must not stop the shared runtime"); } },
+    speechRuntimeControl: { releaseOwnedRuntime: async () => { assert.fail("an unpublished candidate must not stop the shared runtime"); } },
     speechModelManager: { stop: async () => { assert.fail("an unpublished candidate must not stop the shared installer"); } }
   };
-  const lifecycle = lifecycleModule.createSpeechPluginLifecycle(host, { instanceId: "speech" }, controller.signal);
+  const { runtime } = ownedRuntime(host, () => undefined);
+  const lifecycle = lifecycleModule.createSpeechPluginLifecycle(runtime, { instanceId: "speech" }, controller.signal);
   const preparing = lifecycle.prepare(); await entered.promise;
   controller.abort(new Error("Controlled registration cancellation.")); release.resolve();
   await assert.rejects(preparing, /Controlled registration cancellation/);
@@ -75,7 +95,7 @@ async function fixture(t: test.TestContext) {
   const owners: Owner[] = [];
   const publications: Array<() => void> = [];
   let kernel!: GenerationRuntime;
-  let ready = true, readyWrites = 0, reconcile: (() => void) | undefined;
+  let ready = true, readyWrites = 0;
   let failProxy = false;
   let work = async (_owner: Owner) => {};
   let extraOperations = (_owner: Owner): ApiOperationDefinition[] => [];
@@ -99,11 +119,10 @@ async function fixture(t: test.TestContext) {
     SpeechApiOwner: Owner, speechApiContext: {}, managerReadOnly: false,
     get managerServicesReady() { return ready; },
     set managerServicesReady(value: boolean) { readyWrites++; ready = value; },
-    get reconcileActiveSpeech() { return reconcile; },
-    set reconcileActiveSpeech(value: (() => void) | undefined) { reconcile = value; },
+    get reconcileActiveSpeech(): SpeechReconcile | undefined { return (kernel.current().services.services.get("manager.speech@1")?.value as PublishedSpeech | undefined)?.reconcile; },
     reconcileSpeechMicrophone: (_reason: string, guard: () => boolean) => { guards.push(guard); },
     speechControl: { stopMicrophone: () => nativeStops.microphone(), stopPlayback: () => nativeStops.playback() },
-    speechRuntimeControl: { stop: () => nativeStops.runtime() }, speechModelManager: { stop: () => nativeStops.installer() },
+    speechRuntimeControl: { releaseOwnedRuntime: () => nativeStops.runtime() }, speechModelManager: { stop: () => nativeStops.installer() },
     createSpeechApiOperations: (owner: Owner) => ({ operations: [{ contract: fixtureApiContract(), handler: async () => {
       await work(owner); return { status: 200, body: { ok: true, value: owner.value } };
     } }, ...extraOperations(owner)], proxies: [] }),
@@ -124,7 +143,12 @@ async function fixture(t: test.TestContext) {
   const candidate = (revision: string, afterPrepare?: () => Promise<void>, publication?: PluginPublication) => {
     const result: PluginCandidate = { instanceId: "manager:speech", revision, manifest, config: {}, entry: { execution: "in_process", path: "fixture.mjs" } };
     modules.set(result, { activate: async (context: PluginContext) => {
-      await plugin.activate(context);
+      const { service, runtime } = ownedRuntime(host, () => kernel.current().services.services.get("manager.speech@1")?.value);
+      const lifecycle = lifecycleModule.createSpeechPluginLifecycle(runtime, context.identity, context.lifecycle.signal);
+      Object.defineProperty(service.reconcile, "retired", { get: () => lifecycle.retired });
+      context.services.provide("manager.speech@1", service);
+      context.effects.add(lifecycle.prepare, "prepare speech lifecycle");
+      context.publication.add(lifecycle.publication, "publish speech lifecycle");
       if (afterPrepare) context.effects.add(async () => { await afterPrepare(); return () => {}; });
       if (publication) context.publication.add(publication);
     } });
@@ -136,6 +160,7 @@ async function fixture(t: test.TestContext) {
   const send = (signal?: AbortSignal) => fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: '{"value":1}', signal }).then(async response => ({ status: response.status, body: await response.json() as { value: number } }));
   t.after(async () => { await kernel.dispose().catch(() => {}); server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); });
   return { kernel, candidate, host, nativeStops, events, owners, guards, send, url,
+    currentService: () => kernel.current().services.services.get("manager.speech@1")?.value as PublishedSpeech | undefined,
     readyWrites: () => readyWrites, failProxy: () => { failProxy = true; }, work: (value: typeof work) => { work = value; },
     extraOperations: (value: typeof extraOperations) => { extraOperations = value; },
     nextPublication: () => new Promise<void>(resolve => publications.push(resolve)) };
@@ -207,6 +232,31 @@ test("disconnected accepted work keeps old retirement pending while new requests
   release.resolve(); await switching;
   assert.equal(f.guards.length, 2); assert.equal(f.guards[1]!(), true);
   assert.deepEqual(f.events, ["events-stop:1"]);
+});
+
+test("host ASR and TTS work admitted by the native service completes before its shared resources stop", async t => {
+  const f = await fixture(t), entered = deferred(), release = deferred(); t.after(release.resolve);
+  await f.kernel.switch([f.candidate("speech")]);
+  const original = f.currentService()!;
+  const pending = original.runAcceptedWork(async () => { entered.resolve(); await release.promise; return "original audio"; });
+  await entered.promise;
+  const removal = f.kernel.switch([]);
+  await tick();
+  assert.throws(() => original.runAcceptedWork(async () => "new work"), /no longer current/);
+  assert.equal(f.events.includes("runtime-stop"), false);
+  release.resolve(); assert.equal(await pending, "original audio"); await removal;
+  assert.equal(f.events.includes("runtime-stop"), true);
+});
+
+test("a failed accepted ASR task keeps its original error without misreporting confirmed service retirement", async t => {
+  const f = await fixture(t), entered = deferred(), release = deferred(); t.after(release.resolve);
+  await f.kernel.switch([f.candidate("speech")]);
+  const pending = f.currentService()!.runAcceptedWork(async () => { entered.resolve(); await release.promise; throw new Error("Original ASR failure"); });
+  const originalFailure = assert.rejects(pending, /Original ASR failure/);
+  await entered.promise; const removal = f.kernel.switch([]); await tick(); release.resolve();
+  await originalFailure; const result = await removal;
+  assert.deepEqual(result.generation.cleanupDiagnostics, []);
+  assert.equal(f.events.includes("runtime-stop"), true);
 });
 
 test("published retirement joins native installer close despite another cleanup failure and is idempotent", { timeout: 15000 }, async t => {
@@ -312,45 +362,51 @@ test("old SSE retirement joins native reader cancellation while replacement reta
   assert.equal(f.owners[0]!.events.activeCount(), 0); assert.deepEqual(f.events, ["events-stop:1"]);
 });
 
-test("candidate preparation joins an original timed-out shutdown and late disposal cannot stop new ownership", { timeout: 15000 }, async () => {
-  let current: SpeechReconcile | undefined, started = 0, stopped = 0;
+test("native previous-retirement barrier blocks new resource calls and late disposal cannot stop new ownership", { timeout: 15000 }, async () => {
+  let current: PublishedSpeech | undefined, started = 0, stopped = 0;
   const draining = deferred(), entered = deferred();
   const host = { SpeechApiOwner: class { events = { stop: async () => {} }; }, speechApiContext: {}, managerServicesReady: true, managerReadOnly: false,
-    get reconcileActiveSpeech() { return current; }, set reconcileActiveSpeech(value) { current = value; },
     reconcileSpeechMicrophone: () => { started++; }, createSpeechApiOperations: () => ({ operations: [], proxies: [] }),
     managerPluginRoutes: { registerOperationsAsync: async () => ({ dispose: async () => {} }), registerHttpProxies: () => ({ dispose: async () => {} }) },
-    speechControl: { stopMicrophone: async () => {}, stopPlayback: async () => {} }, speechRuntimeControl: { stop: async () => {} },
+    speechControl: { stopMicrophone: async () => {}, stopPlayback: async () => {} }, speechRuntimeControl: { releaseOwnedRuntime: async () => {} },
     speechModelManager: { stop: async () => { stopped++; entered.resolve(); await draining.promise; } }
   };
   const signal = new AbortController().signal;
-  const old = lifecycleModule.createSpeechPluginLifecycle(host, { instanceId: "speech" }, signal), retire = await old.prepare(); old.publication.publish(); await old.publication.afterPublish({ previousRetirement: Promise.resolve(), signal });
-  const retiring = retire(); await entered.promise;
-  const next = lifecycleModule.createSpeechPluginLifecycle(host, { instanceId: "speech" }, signal);
-  let prepared = false; const preparation = next.prepare().then((dispose: () => Promise<void>) => { prepared = true; return dispose; });
-  await tick(); assert.equal(prepared, false); assert.equal(started, 1);
-  draining.resolve(); await retiring; const disposeNext = await preparation; next.publication.publish(); await next.publication.afterPublish({ previousRetirement: retiring, signal });
+  const previous = ownedRuntime(host, () => current);
+  const old = lifecycleModule.createSpeechPluginLifecycle(previous.runtime, { instanceId: "speech" }, signal), retire = await old.prepare();
+  current = previous.service; old.publication.publish(); await old.publication.afterPublish({ previousRetirement: Promise.resolve(), signal }); await tick();
+  current = undefined; const retiring = retire(); await entered.promise;
+  const nextHost = { ...host, speechModelManager: { stop: async () => { stopped++; } } };
+  const replacement = ownedRuntime(nextHost, () => current);
+  const next = lifecycleModule.createSpeechPluginLifecycle(replacement.runtime, { instanceId: "speech" }, signal);
+  const disposeNext = await next.prepare(); current = replacement.service; next.publication.publish();
+  const startup = next.publication.afterPublish({ previousRetirement: retiring, signal });
+  assert.throws(() => replacement.service.speechRuntimeControl.start(), /waiting/);
+  await tick(); assert.equal(started, 1);
+  draining.resolve(); await retiring; await startup; await tick();
   await retire(); assert.equal(started, 2); assert.equal(stopped, 1);
   await disposeNext(); assert.equal(stopped, 2);
 });
 
 test("startup barrier rejection still joins the original native work before shared shutdown", { timeout: 15000 }, async () => {
-  let current: SpeechReconcile | undefined, registrations = 0, stopped = 0;
+  let current: PublishedSpeech | undefined, registrations = 0, stopped = 0;
   const draining = deferred(), entered = deferred();
   const host = { SpeechApiOwner: class { events = { stop: async () => {} }; }, speechApiContext: {}, managerServicesReady: true, managerReadOnly: false,
-    get reconcileActiveSpeech() { return current; }, set reconcileActiveSpeech(value) { current = value; },
     reconcileSpeechMicrophone: () => {}, createSpeechApiOperations: () => ({ operations: [], proxies: [] }),
     managerPluginRoutes: {
       registerOperationsAsync: async () => { const original = ++registrations === 1; return { dispose: async () => { if (original) { entered.resolve(); await draining.promise; } } }; },
       registerHttpProxies: () => ({ dispose: async () => {} })
     },
-    speechControl: { stopMicrophone: async () => {}, stopPlayback: async () => {} }, speechRuntimeControl: { stop: async () => { stopped++; } },
+    speechControl: { stopMicrophone: async () => {}, stopPlayback: async () => {} }, speechRuntimeControl: { releaseOwnedRuntime: async () => { stopped++; } },
     speechModelManager: { stop: async () => {} }
   };
   const signal = new AbortController().signal;
-  const old = lifecycleModule.createSpeechPluginLifecycle(host, { instanceId: "speech" }, signal), retireOld = await old.prepare();
-  old.publication.publish(); await old.publication.afterPublish({ signal, previousRetirement: Promise.resolve() });
-  const next = lifecycleModule.createSpeechPluginLifecycle(host, { instanceId: "speech" }, signal), retireNext = await next.prepare();
-  next.publication.publish(); const oldWork = retireOld(); await entered.promise;
+  const previous = ownedRuntime(host, () => current);
+  const old = lifecycleModule.createSpeechPluginLifecycle(previous.runtime, { instanceId: "speech" }, signal), retireOld = await old.prepare();
+  current = previous.service; old.publication.publish(); await old.publication.afterPublish({ signal, previousRetirement: Promise.resolve() });
+  const replacement = ownedRuntime(host, () => current);
+  const next = lifecycleModule.createSpeechPluginLifecycle(replacement.runtime, { instanceId: "speech" }, signal), retireNext = await next.prepare();
+  current = replacement.service; next.publication.publish(); const oldWork = retireOld(); await entered.promise;
   await assert.rejects(next.publication.afterPublish({ signal, previousRetirement: Promise.reject(new Error("Controlled kernel retirement deadline.")) }), /retirement deadline/);
   let finished = false; const retiring = retireNext().then(() => { finished = true; });
   try { await tick(); assert.equal(finished, false); assert.equal(stopped, 0); }

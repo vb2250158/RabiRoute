@@ -7,6 +7,19 @@ import type { ManagerReadWorkerTask } from "./managerReadWorkerTasks.js";
 import { installDataMutationAuditSink, type RecordedDataMutationAudit } from "../observability/dataMutationAudit.js";
 import { publishMessageHistoryChange } from "../messageHistoryChanges.js";
 
+test('browsing cursor conflicts cross the worker boundary without rebuilding a healthy index', async t => {
+  stopMessageHistorySearch(); t.after(stopMessageHistorySearch);
+  let builds = 0, code = 'MESSAGE_HISTORY_CURSOR_EXPIRED';
+  t.mock.method(managerMessageSearchWorkerPool,'run',async()=>{throw new ManagerReadWorkerError(code,'worker_failed');});
+  t.mock.method(managerMessageIndexWorkerPool,'run',async()=>{builds++;return {};});
+  for(const [value,statusCode] of [['MESSAGE_HISTORY_CURSOR_EXPIRED',409],['MESSAGE_HISTORY_CURSOR_INVALID',400]] as const) {
+    code=value;
+    await assert.rejects(queryMessageHistory('synthetic-channel-cursor',{limit:10,page:{cursor:'original'}},{signal:new AbortController().signal}),
+      (error:unknown)=>(error as {statusCode?:number}).statusCode===statusCode&&(error as Error).message===value);
+  }
+  await setImmediate(); assert.equal(builds,0);
+});
+
 test("a timed-out background build resumes without another user query and stop cancels retries", async t => {
   stopMessageHistorySearch(); t.after(stopMessageHistorySearch);
   t.mock.timers.enable({ apis: ["setTimeout"] });

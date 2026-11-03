@@ -6,6 +6,16 @@
 
 # RabiRoute 代码架构
 
+消息端的运行实现、管理操作、配置卡片和扫描由各自插件包拥有。`plugins/profiles/desktop.json` 声明默认实例；`PluginProfileSettings` 在独立的实例文件中持久化用户覆盖，不改安装包的默认 Profile。坏实例设置只影响该实例，正常插件仍可列出和使用。QQ 的配置、进程控制和守护已合并进 NapCat 消息端插件；米家与语音服务的实现也随自己的包构建，不由控制面注入平台类。语音消息端和共享语音服务分别启停，移动消息端与共享连接传输分别拥有生命周期。
+
+消息端包在 `route-config.json` 声明自己负责的 Route 字段、运行字段映射与回退依赖。只改这些字段时，原目录 CAS 队列将不可变快照交给常驻 Gateway，原生插件 owner 准备新实例、发布并排空旧实例，其他消息端保持运行。身份、处理端目标、公共管道及未声明字段仍按真实依赖闭包重启 Gateway。启动快照在 Route 私有运行目录按进程代际保存，环境变量只传路径和摘要；Gateway 一次读取并冻结，后续更新复用原进程标准管道。
+
+配置持久化与运行生效分别回读。原子进程、代际、操作 ID 与前后版本共同限定 ACK；丢失 ACK 只查询原操作，后台目录回读不暗中重试已拒绝配置。入口不可用警告与配置版本分开，不以无关坏入口拒绝正常更新。平台外发也走原生插件能力：同一回复的上传、附言、凭据和回执共用原请求租约，关闭插件后拒绝新外发并等待已受理工作结束。SDK 的外发操作名可扩展，具体协议与校验归平台包。
+
+左侧栏底部的[插件页](user-guide/plugins.md)参考 DSH 的列表与详情交互，读取原生插件实例的真实状态。`src/manager/pluginManagement.ts` 复用原生 generation、发布记录和退役诊断；启用设置与实际运行状态分别展示。应用生命周期持有插件管理、身份/健康、目录、事件流和静态页面入口，业务核心停用后仍能恢复；业务接口继续归原插件，未另建一套业务路由或状态。
+
+已连接主机的现状与目标见[远端 Agent 架构](connected-host-agent-architecture.md)。`src/manager/managerPeerRuntime.ts` 组合现有 Peer 候选及 operation，控制面保留配置与 active 指针，原插件 owner 负责发布、回滚和退役；本轮另接入 `ManagerLocalComputer`，直接复用连接器的平台服务与原终端重放/SSE；`peerAgentEndpointBridge.ts` 复用原 prepared delivery 和回执，A 原投递账本保持唯一正式意图。源码接线与运行、安装版及真实双机验收分别记录。
+
 开发候选验证复用现有发布 owner，匹配测试与候选内容绑定，不持有第二套发布状态；网关诊断的业务 handler 位于独立插件，宿主仅暴露稳定运行事实。消息记录与派生索引的唯一真源、稳定写入顺序及故障边界见[消息检索](message-history-search.md)，开发准入与证据复用见[开发候选验证](developer-candidate-admission.md)。源码实现不等于安装版生效。
 
 Windows Bootstrap 仅按 `current.json` 定位本地版本并加载 Host Core；启动链不读取发布清单，也不执行整包枚举或逐文件哈希。旧生命周期文件检查为日志告警，检查或日志异常不阻断 Host；不再保留因清单差异或旧文件存在而终止整个应用的启动入口。构建和安装工具的产物清单仍用于离线交付。具体边界见 [Windows 启动与打包](windows-launcher-and-packaging.md#启动按需加载)。
@@ -46,7 +56,7 @@ Manager 内部 HTTP 转发由 `src/shared/internalManagerHop.ts` 证明来源；
 
 实验视频直连由 `RabiDirectVideoSender.kt` 与 `src/manager/rabiDirectVideo.ts` 承担两端传输。RabiLink Manager 插件拥有接收器生命周期和本机文件；`rabiDirectVideoRoutes.ts` 仅接收有界 SDP，Relay 不接收视频字节。SDK 取流留在眼镜适配器。见 [能力与验收限制](rabilink-direct-video.md)。
 
-> 状态：当前代码地图。默认 [desktop Profile](../plugins/profiles/desktop.json) 声明 31 个内置 Manager 实例，对应独立插件包。
+> 状态：当前代码地图。默认 [desktop Profile](../plugins/profiles/desktop.json) 声明内置实例，对应独立插件包；具体启用与运行结果以当前实例列表为准。
 
 这份文档面向需要改代码的人。它不重复解释 RabiRoute 的产品定位；产品边界见 [架构说明](architecture.md)。这里主要说明代码里的 Module 怎么分工、一条消息怎么流动、改某类功能应该先看哪里。
 
@@ -429,7 +439,7 @@ startManager();
 
 正式 Manager 只通过 `startManager()` 初始化。`src/plugin-kernel/` 负责 Manifest 校验、包 revision 隔离、单一 Profile、能力图、权限、generation 和 effect 释放。默认构建从 `dist/plugins/profiles/desktop.json` 与 `dist/plugins/packages/` 加载；树外插件可通过 `RABIROUTE_PLUGIN_PROFILE` 和 `RABIROUTE_PLUGIN_PACKAGE_ROOTS` 选择独立 Profile 与额外包根目录。运行时不读取旧配置格式，也不从源码插件目录加载。
 
-`plugins/builtin/` 中的 31 个内置能力各自拥有独立包 ID、Manifest、Manager 入口和中英文说明。它们与树外插件都通过 `@rabiroute/plugin-sdk` 使用 `services`、`contributions`、`permissions` 和 `effects`。宿主提供版本化原语能力；插件通过 `provides`、`requires` 和 `optional` 组合，不通过中央包枚举互相调用。
+`plugins/builtin/` 中的内置插件各自拥有独立包 ID、Manifest、Manager 入口和中英文说明。它们与树外插件都通过 `@rabiroute/plugin-sdk` 使用 `services`、`contributions`、`permissions` 和 `effects`。宿主提供版本化原语能力；插件通过 `provides`、`requires` 和 `optional` 组合，不通过中央包枚举互相调用。
 
 `GenerationRuntime` 按真实依赖组件切换。revision、配置、权限和依赖 revision 不变时复用现有实例；变化只重载受影响组件。缺少必需能力的实例进入 `waiting_dependency`。候选激活或 effect 发布失败时，旧组件继续服务；不相关组件照常更新。成功发布后释放旧 effect scope。Manager API 从 generation 的不可变 service 与 contribution 快照生成 Plugin Catalog；Web 模块按包 ID、版本和 SHA-256 revision 发布不可变资源。
 
@@ -446,7 +456,9 @@ data/plugins/.runtime/
 
 ### Manager 插件持有的运行资源
 
-插件资源激活函数需要把有顺序要求的卸载步骤放在同一个 disposer 中。Manager 根 Fiber 还持有 `managerReadWorkerPool`、`managerCatalogWorkerPool`、`managerPerformanceWorkerPool` 和 `CoalescingMessageProcessingBoardPersistence`。Manager 退出和启动失败回收显式串行执行 `managerPluginKernel.dispose() -> managerSharedResourcesRuntime.unmount() -> managerCordisRoot.dispose()`。共享资源 Runtime 先停止持久化服务并刷新待写数据，再停止读取池；任一停止失败时仍继续清理其余资源，最后汇总第一个错误。读取池拒绝新任务、取消排队和共享请求、终止活动与空闲 Worker，并等待子进程退出。Cordis 同一 Fiber 的多个 disposer 通过 `Promise.all(...)` 并行执行，不能依赖多个 `ctx.effect()` 的登记顺序。一个插件需要按以下顺序停止：
+全局关闭先封闭新入口，并通过包 Catalog 原有的幂等 `dispose()` 取消尚未发布的元数据准备；原 Catalog 资源 owner 继续等待同一清理 Promise。更新批次等待所有已进入的加载 lane、原元数据子进程关闭和临时目录清理，取消后不再调度下一包或回退旧包，随后才完成更新队列与 Kernel 的关闭。单次请求取消只停止自身批次，不关闭共享 Catalog；已发布不可变包不作为未发布临时目录删除。
+
+插件资源激活函数需要把有顺序要求的卸载步骤放在同一个 disposer 中。Manager 根 Fiber 还持有 `managerReadWorkerPool`、`managerCatalogWorkerPool`、`managerPerformanceWorkerPool` 和 `CoalescingMessageProcessingBoardPersistence`。Manager 退出与启动失败由 `ManagerRuntimeOwner` 按实际预算串行执行插件 Kernel 关停、共享资源 Runtime 卸载和 Cordis 根释放。共享资源 Runtime 先停止持久化服务并刷新待写数据，再停止读取池；任一停止失败时仍继续清理其余资源，最后汇总第一个错误。读取池拒绝新任务、取消排队和共享请求、终止活动与空闲 Worker，并等待子进程退出。Cordis 同一 Fiber 的多个 disposer 通过 `Promise.all(...)` 并行执行，不能依赖多个 `ctx.effect()` 的登记顺序。一个插件需要按以下顺序停止：
 
 ```text
 unregister routes

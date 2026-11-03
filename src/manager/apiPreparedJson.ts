@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { runPluginSynchronousWork } from "../plugin-kernel/synchronousExecution.js";
+import { isFrozenApiJsonData } from "./apiOperationContract.js";
 
 // Only this module can bind an encoding to its exact, immutable data object.
 // The registry still validates that original object before disclosing its bytes.
@@ -30,7 +31,7 @@ async function snapshotJsonData(root: object, signal?: AbortSignal) {
     if (value === null || value === undefined || typeof value === "string" || typeof value === "boolean") return value;
     if (typeof value === "number" && Number.isFinite(value)) return value;
     if (typeof value !== "object") throw new TypeError("Prepared API JSON requires plain JSON data.");
-    if (immutableData.has(value)) return value;
+    if (immutableData.has(value) || isFrozenApiJsonData(value)) return value;
     let record = copies.get(value);
     if (!record) {
       const prototype = Object.getPrototypeOf(value);

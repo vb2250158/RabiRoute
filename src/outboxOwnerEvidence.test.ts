@@ -6,7 +6,7 @@ import test from "node:test";
 import {
   agentReplyCurrentQqBinding, agentReplyHistorySource, handleAgentReply, projectAgentReplyHistoryResult,
   type AgentReplyOptions, type AgentReplyRequest
-} from "./outbox.js";
+} from "./endpointEgress.fixture.js";
 
 function fixture(rootDir: string): AgentReplyOptions {
   return {

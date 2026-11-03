@@ -2,6 +2,9 @@
   "schemaVersion": 2,
   "id": "io.rabiroute.manager.video",
   "version": "1.0.0",
+  "displayName": "视频生成工作台",
+  "description": "管理视频生成、模型、媒体项目与任务",
+  "icon": "mdi-movie-open",
   "entries": {
     "manager": { "execution": "in_process", "module": "./manager.mjs" },
     "web": { "execution": "in_process", "module": "./web/client.mjs" }

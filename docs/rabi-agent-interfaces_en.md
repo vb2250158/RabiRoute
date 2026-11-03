@@ -223,6 +223,32 @@ CLI commits output without overwrite only after normal closure and original gene
 
 Manager identity is verified before and after the handshake; a post-handshake health fluctuation alone is not an identity change. Contract conflicts invalidate discovery without retrying the connection. Unsupported schemas, missing consumers or an older Manager lacking a connection contract produce compatibility errors while retaining node/task identity, without guessing legacy URLs. Other public entries, closure/listener migration in an existing Manager, feature-specific in-place upgrade, installed deployment and real two-computer acceptance remain outstanding.
 
+## Connected-host native delivery (source connected)
+
+A full Rabi host provides local computer and Agent APIs through its existing RabiLink Peer connection, without a self-connected client, target Route, session enrollment or per-feature grants. Each Peer target saves `ownerDeviceId + instanceId + agentId` and its original `sessionId/sessionName/workspace`; an unselected session never borrows the caller PC's default task.
+
+Agent-to-Agent messages retain `/api/agent/threads` and original formal receipts; `instanceBinding.ownerDeviceId` addresses the target host. A native Agent on a connected PC may initiate a message. Formal replies and caller lookups retain `ledgerOwnerDeviceId`. The originating Manager owns the formal intent; target `/api/agent/prepared-deliveries` and `/reconcile` record execution evidence only.
+
+Ordinary Routes, explicit-session deliveries and workers use native delivery for their original packets, without inventing an Agent source for user/system events. Call through the caller's Manager and its existing Peer path:
+
+```http
+POST /api/rabilink/peer/http/<targetDeviceId>/manager/api/agent/route-deliveries
+Content-Type: application/json
+
+{"instanceId":"<targetLocalInstanceId>","provider":"codex","threadId":"<fullSessionId>","deliveryId":"<originalDeliveryId>","cwd":"<targetWorkspace>","prompt":"<renderedRabiEnvelope>"}
+```
+
+Original-receipt queries need neither the prompt nor a currently unarchived task:
+
+```http
+POST /api/rabilink/peer/http/<targetDeviceId>/manager/api/agent/route-deliveries/reconcile
+Content-Type: application/json
+
+{"instanceId":"<targetLocalInstanceId>","provider":"codex","threadId":"<fullSessionId>","deliveryId":"<originalDeliveryId>"}
+```
+
+`200` confirms the original execution receipt; `202` retains uncertainty and the original ID. A business `409` with `commitState: "not_started"` reports that this attempt did not start; a prior success never masks a different payload. Only persisted original no-frame proof permits another attempt with the same ID; unknown outcomes only reconcile. B supplies the source-A API context, reusing native execution and receipt storage. Discover exact fields, responses and platform capabilities from the target's current operation catalog. Source, isolated candidates, installed versions and physical two-computer acceptance remain separate.
+
 ## Peer connection-control contract (source connected; installed acceptance pending)
 
 These entries use the original connection owner through `registerOperations()` and retain the original JSON bodies. `events` uses the same registry's SSE lifecycle.
@@ -357,7 +383,7 @@ GET /api/agent/qq/messages/<messageId>/attachments/0?routeId=<routeId>&kind=grou
 
 For direct messages, use `kind=private` and the peer account as `target`. Discover the current Manager and validate `/meta` first. Find these operations through `GET /api/agent/help?path=/api/agent/qq/history`. Every request requires an exact Route, conversation kind, and target. `limit` is 1–100, default 50. History returns `data.entries`, `nextCursor`, `cursorStalled`, and `completenessUnknown: true`. Follow the cursor; stop on an empty page or stalled cursor. Pages do not guarantee complete QQ history. A single-message read tries `get_msg` first, then, on upstream cache failure, reads at most ten messages anchored on that same message ID in the same conversation. A missing match returns 404 `QQ_MESSAGE_NOT_IN_PAGE`, without scanning the whole group.
 
-Messages include `messageId`, time, sender, text, and `attachments[]`. Each attachment has a zero-based `index`, `kind`, `name`, and Manager-relative `contentUrl`; append that URL to the current Manager address to download binary content. Downloads recheck the source message and conversation, then call `get_file` with the message resource ID. Images, videos, audio, and files share this endpoint; a video thumbnail is never treated as the video. Responses hide NapCat URLs, credentials, and local paths. Caller-supplied URLs, paths, resource IDs, and arbitrary OneBot actions are rejected.
+Messages include `messageId`, time, sender, text, safe structured display `parts[]`, and `attachments[]`. Display parts preserve literal text, mentions, replies and media indices without exposing transport URLs. Each attachment has a zero-based `index`, `kind`, `name`, and Manager-relative `contentUrl`; append that URL to the current Manager address to download binary content. Downloads recheck the source message and conversation, then call `get_file` with the message resource ID. Images, videos, audio, and files share this endpoint; a video thumbnail is never treated as the video. Responses hide NapCat URLs, credentials, and local paths. Caller-supplied URLs, paths, resource IDs, and arbitrary OneBot actions are rejected.
 
 Attachment indices accept 1–9 decimal digits; returned indices above 99 are also downloadable. In source, the three endpoints register as `agent.qq.history.read`, `agent.qq.message.read` and `agent.qq.attachment.read`; favorites register as `agent.qq.stickers.read` and `agent.qq.sticker.preview`. Their request shapes and JSON projections or finite binary responses come from executable contracts. OpenAPI includes effective attachment/preview byte bounds and supported image media types. Media sizes default to no application quota, while runtime Buffer capacity still applies. The business owner fully reads these downloads before returning bytes; this does not imply continuous streaming. Inspect the installed instance's catalog to determine whether its release includes these contracts.
 
@@ -407,6 +433,17 @@ For a new session, extract the object and keywords from the user message first, 
 Use the current NapCat connection or official logs only when Rabi is unreachable, an endpoint is unavailable, or the verified summary window cannot cover the requested history. When Rabi is available, obtain the connection from the current Route binding and status. Otherwise, use only a connection explicitly supplied for the current task, configuration belonging to the running instance, or a verified official log location. Before direct queries, verify online status and account identity with `get_status` and `get_login_info`, then call read-only history/message APIs. Do not try accounts or ports from old tasks, memory, or leftover installations. Never echo credentials or bypass an authorization denial.
 
 Check the target and time coverage before interpreting an empty result. Distinguish connection failure, a successful empty result, and missing historical coverage. Explain the reason, actual source, and time range when bypassing Rabi. Query authorization does not authorize sending or replaying messages, configuration changes, or service restarts. Start with Rabi again for each independent query.
+
+## Browse persona messages by channel
+
+- `GET /api/roles/:roleId/message-history-conversations[?cursor=<original-continuation>]` reads QQ conversations and latest previews from the original role index, at most 100 per page, returning `data.conversations/nextConversationCursor`. Full Route, account and conversation keys remain distinct. The channel catalog also returns credential-free `qqRoutes` references.
+- `GET /api/agent/qq/contacts?routeId=<exact-route>` returns safe group/friend display fields and `time/preview` from up to 50 recent conversations for ordering; a failure in one list preserves the other with `warnings`. `GET /api/agent/qq/group-members?routeId=<exact-route>&kind=group&target=<group-id>` returns `entries {id,name,role}` and rejects private-chat parameters. Both reuse the original QQ read owner’s authority, exact-account selection, concurrency, deadline and post-await revocation checks. Neither sends messages. Upstream methods follow the [official NapCat API](https://napneko.github.io/onebot/api).
+
+- `GET /api/roles/:roleId/message-history-channels` returns `data.adapters/chatCategories/warnings` from the selected role's configured Route endpoints. System messages, Agent deliveries, role-panel messages and task replies retain separate built-in entries. Disabled channels retain history. Metadata queries do not project message bodies. An unavailable ledger leaves other channels usable with warnings; revoked authority or a replaced role directory still prevents disclosure.
+- `GET /api/roles/:roleId/message-endpoint-timeline?adapter=napcat&includeArchives=1&limit=50` returns `requestId` and `data.entries/count/coverage/nextCursor`. Incoming and outgoing records share a channel; existing filters such as `conversationKey` apply. Entries follow stable write order, oldest first in each response; the UI displays newest first.
+- Encode a non-null `nextCursor` unchanged as the next `cursor`, retaining role, channel and filters. Cursors bind index generation, source layout and physical position, including legacy records without sequences. Ordinary appends in the same generation do not shift previous pages. An index rebuild, source replacement or changed filter expires the cursor with `409 + MESSAGE_HISTORY_CURSOR_EXPIRED`; refresh the channel. A record exceeding the remaining character budget stays for the next page; the first record may exceed that budget. A final full page may require an empty read to confirm the end.
+- `chat-history` accepts optional `category=agent|panel|replies|aiui` inside its original bounded byte-cursor read, retaining damaged-record counts and ID-based body reads. Omission preserves its original contract. The UI has no All tab and retains per-tab pages, filters and reading positions.
+- Original `message-endpoint-history` remains a bounded Agent-context excerpt, rejecting `cursor/offset`. Browsing does not change that endpoint's coverage, deadlines, authority, worker-pool or cancellation responsibilities.
 
 ## Context supplied to the handler
 

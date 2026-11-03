@@ -3,6 +3,7 @@ import { userFacingError } from "../userFacingError";
 import { ref, watch } from "vue";
 import type { AgentInstance, InstanceAgent } from "@shared/agentInstance";
 import { managerAccessToken } from "../managerApi";
+import { peerManagerPath } from "../peerManagerTarget";
 const props = defineProps<{ instance: AgentInstance; agent: InstanceAgent;  }>();
 const emit = defineEmits<{ saved: [] }>();
 const draft = ref({ ...props.agent });
@@ -23,7 +24,7 @@ async function operate(operation: string, params: Record<string, unknown>): Prom
   try {
     const access = await fetch("/api/webgui-access").then(response => response.json());
     const suffix = !props.agent.agentId && operation === "configure" ? "" : `/${encodeURIComponent(props.agent.agentId || "new-agent")}/${operation}`;
-    const response = await fetch(`/api/lan-agent/instances/${encodeURIComponent(props.instance.instanceId)}/agents${suffix}`, {
+    const response = await fetch(peerManagerPath(props.instance.ownerDeviceId || "", `/api/lan-agent/instances/${encodeURIComponent(props.instance.instanceId)}/agents${suffix}`), {
       method: "POST", headers: { "content-type": "application/json", "x-rabiroute-webgui-token": access.data?.token || managerAccessToken() }, body: JSON.stringify(params)
     });
     const body = await response.json();

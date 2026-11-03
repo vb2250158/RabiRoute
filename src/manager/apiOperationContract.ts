@@ -177,10 +177,27 @@ export function apiDigest(value: unknown): string {
   return `sha256:${createHash("sha256").update(canonicalApiJson(value)).digest("hex")}`;
 }
 
+// Native ownership proof, never inferred from an external Object.freeze call.
+// Only plain JSON references whose descendants were proved by this owner enter it.
+const frozenApiJsonData = new WeakSet<object>();
+export function isFrozenApiJsonData(value: object): boolean { return frozenApiJsonData.has(value); }
+
+function immutableJsonValue(value: unknown): boolean {
+  return value === null || value === undefined || typeof value === "string" || typeof value === "boolean"
+    || typeof value === "number" && Number.isFinite(value)
+    || typeof value === "object" && frozenApiJsonData.has(value);
+}
+
 export function freezeApiData<T>(value: T): T {
   if (value && typeof value === "object") {
+    if (frozenApiJsonData.has(value)) return value;
     for (const child of Object.values(value)) freezeApiData(child);
     Object.freeze(value);
+    const prototype = Object.getPrototypeOf(value);
+    if ((Array.isArray(value) || prototype === Object.prototype || prototype === null)
+      && Object.entries(Object.getOwnPropertyDescriptors(value)).every(([key, descriptor]) =>
+        Object.hasOwn(descriptor, "value") && !(key === "toJSON" && typeof descriptor.value === "function")
+        && (!descriptor.enumerable || immutableJsonValue(descriptor.value)))) frozenApiJsonData.add(value);
   }
   return value;
 }

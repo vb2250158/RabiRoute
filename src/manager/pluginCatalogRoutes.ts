@@ -16,6 +16,10 @@ export type PluginCatalogApiContext = {
   reconciliation?: PluginReconciliationApiContext;
   /** Original configured source root; never a caller-supplied path. */
   root?: () => string;
+  management?: {
+    list(invocation: PluginCatalogInvocation): Promise<unknown>;
+    update(instanceId: string, input: { expectedRevision: string; enabled: boolean }, invocation: PluginCatalogInvocation): Promise<unknown>;
+  };
   webModules?: {
     list(webRelease?: string | null, invocation?: PluginCatalogInvocation): Promise<readonly WebPluginModule[]> | readonly WebPluginModule[];
     read(id: string, rev: string, relativePath: string, invocation?: PluginCatalogInvocation): Promise<Readonly<{ module: WebPluginModule; source: Buffer; path: string }>>;

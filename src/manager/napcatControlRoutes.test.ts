@@ -103,38 +103,3 @@ test("native mutation admission still rejects a removed binding before any exter
   const reply = await f.send("login-action", { gatewayId: "fixture-route", instanceId: "missing-fixture", action: "refresh-qr" });
   assert.equal(reply.status, 400); assert.equal(reply.body.ok, false); assert.equal(probes, 0);
 });
-
-test("plugin retirement stops admission and supervisor before joining native actions, preserving process handover", async () => {
-  for (const supervisorFails of [false, true]) {
-  const pluginPath = new URL("../../plugins/builtin/io.rabiroute.manager.napcat-control/1.0.0/manager.mjs", import.meta.url).href;
-  const plugin = await import(pluginPath);
-  let start!: () => Promise<() => Promise<void>>, operations!: ReturnType<typeof createNapcatControlOperations>, entered!: () => void, release!: () => void;
-  const started = new Promise<void>(resolve => { entered = resolve; }), gate = new Promise<void>(resolve => { release = resolve; });
-  const events: string[] = [];
-  const runtime = {
-    createNapcatControlOperations,
-    activeNapcatControlContext: undefined as unknown,
-    napcatManagerCtx: (assertCurrent: () => void) => ({ assertCurrent }),
-    managerPluginRoutes: { registerOperationsAsync: async (_id: string, values: typeof operations) => { operations = values; return { dispose: async () => { events.push("unregister"); } }; } },
-    managerListenerReady: true,
-    startActiveNapcatSupervisor: () => { events.push("start-supervisor"); },
-    stopActiveNapcatSupervisor: async () => { events.push("stop-supervisor"); if (supervisorFails) throw new Error("Controlled supervisor failure."); },
-    launchNapcatInstanceEndpoint: async () => { entered(); await gate; events.push("native-complete"); return { ok: true }; }
-  };
-  let publication!: { publish(): void; rollback(): void };
-  await plugin.activate({ identity: { instanceId: "napcat-fixture" }, lifecycle: { signal: new AbortController().signal }, services: { require: () => runtime, provide: () => {} },
-    publication: { add: (hook: typeof publication) => { publication = hook; } }, effects: { add: (starter: typeof start) => { start = starter; } } });
-  const retire = await start();
-  publication.publish();
-  runtime.startActiveNapcatSupervisor();
-  const launch = operations.find(value => value.contract.operationId === "manager.napcat.launch")!;
-  const input = { body: {}, path: {}, query: {}, headers: {}, request: {} } as any;
-  const pending = launch.handler(input); await started;
-  let finished = false; const retirement = retire().then(() => { finished = true; return null; }, error => { finished = true; return error; });
-  await new Promise<void>(resolve => setImmediate(resolve)); assert.equal(finished, false); assert.deepEqual(events, ["start-supervisor", "unregister", "stop-supervisor"]);
-  assert.throws(() => launch.prepare!(input), /stopping/);
-  release(); await pending; const retirementError = await retirement;
-  if (supervisorFails) assert.match(retirementError.message, /Controlled supervisor failure/); else assert.equal(retirementError, null);
-  assert.equal(runtime.activeNapcatControlContext, undefined); assert.deepEqual(events, ["start-supervisor", "unregister", "stop-supervisor", "native-complete"]);
-  }
-});

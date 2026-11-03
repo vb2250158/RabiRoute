@@ -2,9 +2,15 @@ import { definePlugin } from "@rabiroute/plugin-sdk";
 import { createSpeechPluginLifecycle } from "./lifecycle.mjs";
 export const activate = definePlugin({
     async activate(context) {
-        const runtime = context.services.require("host.manager.speech@1");
+        const host = context.services.require("host.message-endpoints@1");
+        const { createImplementation, hostModules } = await import("./manager-runtime.mjs");
+        await host.prepareModules(hostModules);
+        const implementation = createImplementation(host);
+        const service = implementation.createSpeechPluginRuntime(host.manager.speechPorts,
+            host.manager.speechPorts.currentService("manager.speech@1"), context.identity.instanceId);
+        const runtime = Object.create(host.manager.speechLifecycle, Object.getOwnPropertyDescriptors(service));
         const lifecycle = createSpeechPluginLifecycle(runtime, context.identity, context.lifecycle.signal);
-        context.services.provide("manager.speech@1", Object.freeze({ instanceId: context.identity.instanceId }));
+        context.services.provide("manager.speech@1", service);
         for (const contribution of [
             {
                 "kind": "page",

@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 2,
+  "id": "io.rabiroute.endpoint.feishu",
+  "version": "1.0.0",
+  "entries": {
+    "manager": {
+      "execution": "in_process",
+      "module": "./manager.mjs"
+    },
+    "gateway": {
+      "execution": "in_process",
+      "module": "./gateway.mjs"
+    },
+    "web": {
+      "execution": "in_process",
+      "module": "./web/client.mjs"
+    }
+  },
+  "provides": [
+    "endpoint.feishu@1",
+    "endpoint.feishu.egress@1"
+  ],
+  "requires": [
+    "host.message-endpoints@1"
+  ],
+  "optional": [],
+  "permissions": [],
+  "displayName": "飞书",
+  "description": "连接飞书应用消息",
+  "icon": "mdi-message-text"
+}

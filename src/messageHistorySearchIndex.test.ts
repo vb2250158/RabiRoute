@@ -496,7 +496,7 @@ test("new write-order projection upgrades schema six and keeps the first physica
   refreshMessageHistoryIndex(f.directory, f.index);
   const lease = acquireMessageIndexLease(f.index);
   const db = new DatabaseSync(lease.databasePath);
-  db.exec("DROP INDEX document_write_order; ALTER TABLE documents DROP COLUMN sourceOrder; UPDATE meta SET value='6' WHERE key='schema'");
+  db.exec("DROP INDEX document_write_order; DROP INDEX document_conversation_order; ALTER TABLE documents DROP COLUMN sourceOrder; UPDATE meta SET value='6' WHERE key='schema'");
   db.close(); lease.release();
   assert.throws(() => searchMessageHistoryIndex(f.directory, { limit: 10 }, f.index), /NOT_READY/);
   assert.equal(refreshMessageHistoryIndex(f.directory, f.index).filesRead, 0);

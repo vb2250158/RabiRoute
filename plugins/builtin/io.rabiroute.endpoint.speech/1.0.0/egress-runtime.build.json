@@ -1,0 +1,11 @@
+{
+  "exports": [
+    {
+      "source": "src/speech/localSpeechClient.ts",
+      "name": "requestLocalSpeech"
+    }
+  ],
+  "ownedSources": [
+    "src/speech/localSpeechClient.ts"
+  ]
+}

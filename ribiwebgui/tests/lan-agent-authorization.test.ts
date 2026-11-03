@@ -3,6 +3,8 @@ import fs from "node:fs";
 import test from "node:test";
 import vm from "node:vm";
 import ts from "typescript";
+import { peerManagerPath } from "../src/peerManagerTarget.js";
+import { agentInstanceDisplayName } from "../../src/shared/agentInstance.js";
 
 const settingsSource = fs.readFileSync(new URL("../src/components/InstanceAgentSettings.vue", import.meta.url), "utf8");
 const pageSource = fs.readFileSync(new URL("../src/pages/LanAgentsPage.vue", import.meta.url), "utf8");
@@ -11,7 +13,8 @@ function evaluate(source: string, exposed: string, context: Record<string, unkno
   const script = source.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)![1].replace(/^import .*;\r?\n/gm, "");
   const code = ts.transpileModule(script + `\nreturn { ${exposed} };`, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None } }).outputText;
   return vm.runInNewContext(`(function() { ${code} })()`, {
-    ref: (value: unknown) => ({ value }), computed: () => ({}), onMounted: () => {}, watch: () => {},
+    ref: (value: unknown) => ({ value }), computed: (read: () => unknown) => ({ get value() { return read(); } }), onMounted: () => {}, onBeforeUnmount: () => {}, watch: () => {},
+    peerManagerPath, agentInstanceDisplayName, AbortController,
     managerAccessToken: () => "fixture-fallback", userFacingError: String, ...context
   });
 }
@@ -19,6 +22,9 @@ function requests(responses: Reply[]) {
   const calls: Array<{ url: string; init?: RequestInit }> = [];
   return { calls, fetch: async (url: string, init?: RequestInit) => {
     calls.push({ url, init });
+    if (url.endsWith("/api/lan-agent/nodes")) return Response.json({ code: 0, nodes: [], tasks: [] });
+    if (url.endsWith("/meta")) return Response.json({});
+    if (url === "/api/rabilink/peer/servers") return Response.json({ peers: [] });
     const response = responses.shift();
     if (!response) throw new Error(`Unexpected request: ${url}`);
     return response;
@@ -34,10 +40,11 @@ function settings(responses: Reply[], local = false, agentId = "agent-fixture") 
   });
   return { state, ...transport, agent, instance, events };
 }
-function page(responses: Reply[]) {
+function page(responses: Reply[], deviceId = "") {
   const transport = requests(responses);
-  const state = evaluate(pageSource, "setInstanceEnabled, instances, error, enablingInstanceId, connectionToken, refresh", {
-    ...transport, window: { location: { origin: "https://manager.test", hostname: "manager.test" } }, useGatewayStore: () => ({ gateways: [] })
+  const state = evaluate(pageSource, "setInstanceEnabled, instances, error, enablingInstanceId, connectionToken, refresh, connectionAvailable, captureScreen, screenshot, screenshotName", {
+    ...transport, window: { location: { origin: "https://manager.test", hostname: "manager.test" } }, useGatewayStore: () => ({ gateways: [] }),
+    useRoute: () => ({ query: { deviceId } }), useRouter: () => ({ replace: () => {} })
   });
   state.connectionToken.value = "fixture-admin";
   return { state, ...transport };
@@ -83,6 +90,36 @@ test("local save retains local executor enable and session configuration", async
   assert.equal(payload(calls[1]).enabled, true);
   assert.equal(payload(calls[1]).sessionId, "selected-local-session");
   assert.deepEqual(payload(calls[1]).managedSessionIds, ["saved-managed"]);
+});
+
+test("connected host settings keep the target PC and need no second login", async () => {
+  const { state, calls, instance } = settings([access(), saved()], true);
+  Object.assign(instance, { ownerDeviceId: "pc-b" });
+  await state.save();
+  assert.equal(calls[1].url, "/api/rabilink/peer/http/pc-b/manager/api/lan-agent/instances/node%3Afixture/agents/agent-fixture/configure");
+  assert.equal(calls.length, 2);
+});
+
+test("connected host catalog loads through Peer even when local LAN enrollment is disabled", async () => {
+  const { state, calls } = page([access(), catalog(true)], "pc-b");
+  await state.refresh();
+  assert.equal(state.instances.value[0].ownerDeviceId, "pc-b");
+  assert.ok(calls.some(call => call.url === "/api/rabilink/peer/http/pc-b/manager/api/lan-agent/instances"));
+  assert.equal(calls.filter(call => call.init?.method === "POST").length, 0);
+  assert.equal(state.error.value, "");
+  assert.equal(state.connectionAvailable.value, false, "missing target enrollment metadata does not borrow local readiness");
+});
+
+test("a late screenshot cannot replace the latest requested computer image", async () => {
+  let release!: (response: Response) => void;
+  const earlier = new Promise<Response>(resolve => { release = resolve; });
+  const { state } = page([earlier, json({ code: 0, data: { mimeType: "image/png", data: "new-image", width: 1, height: 1 } })], "pc-b");
+  const pending = state.captureScreen({ ...instance(true), name: "Earlier", instanceId: "earlier", ownerDeviceId: "pc-b" });
+  await state.captureScreen({ ...instance(true), name: "Latest", instanceId: "latest", ownerDeviceId: "pc-b" });
+  release(json({ code: 0, data: { mimeType: "image/png", data: "old-image", width: 1, height: 1 } }));
+  await pending;
+  assert.equal(state.screenshot.value.data, "new-image");
+  assert.equal(state.screenshotName.value, "Latest");
 });
 
 test("failed save retains edited draft and emits no saved result", async () => {

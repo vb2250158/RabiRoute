@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref } from "vue";
 import { useRoute } from "vue-router";
-import PersonaChatHistory from "../components/PersonaChatHistory.vue";
+import PersonaMessageHistory from "../components/PersonaMessageHistory.vue";
 import { providePersonaService } from "../persona/personaServiceClient";
 import { useI18n } from "../i18n";
 
@@ -27,7 +27,7 @@ onBeforeUnmount(() => { events?.close(); });
 
 <template>
   <div class="page-shell">
-    <PersonaChatHistory v-if="roleId" :role-id="roleId" :version="version" />
+    <PersonaMessageHistory v-if="roleId" :key="roleId" :role-id="roleId" :version="version" />
     <v-alert v-else type="info" variant="tonal">{{ t('请选择或新建角色。') }}</v-alert>
   </div>
 </template>

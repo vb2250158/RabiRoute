@@ -1,5 +1,5 @@
 import { ReadSettingsError } from "../shared/readSettingsError.js";
-import type { ApiOperationDefinition, ApiOperationResult } from "./apiOperationContract.js";
+import type { ApiOperationContract, ApiOperationDefinition, ApiOperationResult } from "./apiOperationContract.js";
 import { QQ_READ_LIMITS, QQ_READ_KINDS, QQ_MESSAGE_ID_PATTERN, QQ_ATTACHMENT_INDEX_PATTERN, QQ_TARGET_ID_PATTERN,
   QQ_HISTORY_QUERY_SCHEMA, QQ_MESSAGE_QUERY_SCHEMA, projectPublicQqMessage, qqReadOperationContract, type QqReadTarget } from "./qqReadContract.js";
 import type http from "node:http";
@@ -8,7 +8,9 @@ import { normalizeNapCatInstances, definitionUsesNapcat, type GatewayDefinition 
 import { getTrustedLanAgentSource, hasLanAgentBodyGuard } from "./lanAgentBodyAuthority.js";
 import { assertTrustedLanAgentPrincipal } from "./lanAgentRequestAccess.js";
 import { hasAuthenticatedConnectionRequest } from "./connectionRequestAccess.js";
-import { QqReadError, qqRead, qqMessageMatches, qqMessageMedia, readQqMedia, type QqMessage } from "./qqMessageMedia.js";
+import { QqReadError, qqRead, qqMessageMatches, qqMessageMedia, qqMessageText, readQqMedia, type QqMessage } from "./qqMessageMedia.js";
+import type { QqDirectoryContact, QqGroupMember } from '../shared/qqConversationHistory.js';
+import {qqPartsPreview,qqStructuredMessageParts} from '../shared/qqMessageParts.js';
 
 export type QqMessageRoutesContext = {
   local: (request: http.IncomingMessage) => boolean;
@@ -65,7 +67,7 @@ const messagePath = new RegExp(`^/api/agent/qq/messages/(${QQ_MESSAGE_ID_PATTERN
 
 /** The same read owner returns finite DTO/byte results to executable and transitional adapters. */
 async function readQqMessageResult(request: http.IncomingMessage, url: URL,
-  response: Pick<http.ServerResponse, "once" | "off" | "writableEnded">, context: QqMessageRoutesContext, selected: QqReadTarget): Promise<ApiOperationResult> {
+  response: Pick<http.ServerResponse, "once" | "off" | "writableEnded">, context: QqMessageRoutesContext, selected: QqReadTarget | { kind: 'contacts' } | { kind: 'members' }): Promise<ApiOperationResult> {
   const history = selected.kind === "history";
   const headers = { "cache-control": "private, no-store" };
   const fail = (status: number, errorCode: string, message?: string): ApiOperationResult => ({ status, headers, body: { code: -1, errorCode, ...(message ? { message } : {}) } });
@@ -80,7 +82,8 @@ async function readQqMessageResult(request: http.IncomingMessage, url: URL,
     } catch { return false; }
   };
   if (!authorized()) return fail(403, "QQ_READ_AUTH_REQUIRED");
-  const allowed = Object.keys(history ? QQ_HISTORY_QUERY_SCHEMA.properties : QQ_MESSAGE_QUERY_SCHEMA.properties);
+  const contacts = selected.kind === 'contacts';
+  const allowed = contacts ? ['routeId'] : Object.keys(history ? QQ_HISTORY_QUERY_SCHEMA.properties : QQ_MESSAGE_QUERY_SCHEMA.properties);
   const keys = [...url.searchParams.keys()];
   const routeId = url.searchParams.get("routeId") ?? "";
   const kind = url.searchParams.get("kind") ?? "";
@@ -88,7 +91,8 @@ async function readQqMessageResult(request: http.IncomingMessage, url: URL,
   const cursor = url.searchParams.get("cursor");
   const limit = Number(url.searchParams.get("limit") ?? QQ_READ_LIMITS.historyDefault);
   if (keys.some(key => !allowed.includes(key) || !url.searchParams.get(key)) || new Set(keys).size !== keys.length
-    || !routeId || routeId.length > QQ_READ_LIMITS.routeIdChars || !(QQ_READ_KINDS as readonly string[]).includes(kind) || !QQ_TARGET_ID_PATTERN.test(target)
+    || !routeId || routeId.length > QQ_READ_LIMITS.routeIdChars || (!contacts && (!(QQ_READ_KINDS as readonly string[]).includes(kind) || !QQ_TARGET_ID_PATTERN.test(target)))
+    || (selected.kind === 'members' && kind !== 'group')
     || (cursor !== null && !QQ_MESSAGE_ID_PATTERN.test(cursor)) || !Number.isInteger(limit) || limit < 1 || limit > QQ_READ_LIMITS.historyMax
     || request.headers["content-length"] !== undefined || request.headers["transfer-encoding"] !== undefined) return fail(400, "QQ_READ_INVALID_QUERY");
   const definition = context.route(routeId);
@@ -128,6 +132,56 @@ async function readQqMessageResult(request: http.IncomingMessage, url: URL,
   };
   const project = (row: QqMessage) => projectPublicQqMessage(row, { routeId, kind: kind as "group" | "private", target });
   try {
+    if (selected.kind === 'contacts') {
+      current();
+      const results = await Promise.allSettled([
+        ...(['get_group_list','get_friend_list','get_login_info'] as const).map(action => qqRead(endpoint,action,{},controller.signal,context.transport)),
+        qqRead(endpoint,'get_recent_contact',{count:50},controller.signal,context.transport)
+      ]);
+      current();
+      const entries: QqDirectoryContact[] = [], warnings: string[] = [];
+      for (const [index,result] of results.slice(0,2).entries()) {
+        if (result.status !== 'fulfilled' || !Array.isArray(result.value)) { warnings.push(index ? 'QQ_FRIEND_LIST_UNAVAILABLE' : 'QQ_GROUP_LIST_UNAVAILABLE'); continue; }
+        for (const value of result.value) {
+          if (!value || typeof value !== 'object') continue;
+          const row = value as Record<string,unknown>, target = String(index ? row.user_id ?? '' : row.group_id ?? '');
+          if (!QQ_TARGET_ID_PATTERN.test(target)) continue;
+          entries.push({kind:index?'private':'group',target,name:String(index ? row.remark || row.nickname || target : row.group_name || target),
+            ...(!index && typeof row.member_count==='number' ? {memberCount:row.member_count} : {})});
+        }
+      }
+      const login=results[2],userId=login?.status==='fulfilled'?String(login.value.user_id??''):'';
+      const account=QQ_TARGET_ID_PATTERN.test(userId)?{userId,name:String(login?.status==='fulfilled'?login.value.nickname??userId:userId)}:undefined;
+      const recent=results[3];
+      if(recent?.status==='fulfilled'&&Array.isArray(recent.value))for(const value of recent.value) {
+        if(!value||typeof value!=='object')continue;
+        const row=value as Record<string,unknown>,kind=Number(row.chatType)===2?'group':Number(row.chatType)===1?'private':undefined;
+        const target=String(row.peerUin??'');if(!kind||!QQ_TARGET_ID_PATTERN.test(target))continue;
+        let entry=entries.find(item=>item.kind===kind&&item.target===target);
+        if(!entry){entry={kind,target,name:String(row.remark||row.peerName||target)};entries.push(entry);}
+        const time=Number(row.msgTime);if(Number.isFinite(time)&&time>0)entry.time=time;
+        if(row.lastestMsg&&typeof row.lastestMsg==='object'){
+          const message=row.lastestMsg as QqMessage;
+          const prefix=kind==='group'?String(row.sendMemberName||row.sendNickName||''):'';
+          entry.preview=(prefix?prefix+': ':'')+qqPartsPreview(qqStructuredMessageParts(message.message,qqMessageText(message)));
+        }
+      }
+      return ok({routeId,instanceId:instance.id,entries,warnings,...(account?{account}:{})});
+    }
+    if (selected.kind === 'members') {
+      current();
+      const result = await qqRead(endpoint,'get_group_member_list',{group_id:target},controller.signal,context.transport);
+      current();
+      if (!Array.isArray(result)) throw new QqReadError(503,'QQ_GROUP_MEMBERS_INVALID_RESPONSE');
+      const entries: QqGroupMember[] = [];
+      for (const value of result) {
+        if (!value || typeof value !== 'object') continue;
+        const row = value as Record<string,unknown>, id = String(row.user_id ?? '');
+        if (!QQ_TARGET_ID_PATTERN.test(id)) continue;
+        entries.push({id,name:String(row.card || row.nickname || id),role:String(row.role || 'member')});
+      }
+      return ok({routeId,instanceId:instance.id,target,entries});
+    }
     if (selected.kind === "history") {
       const rows = await page(cursor, limit); current();
       const oldest = rows.reduce<QqMessage | undefined>((a, b) => !a || Number(b.time) < Number(a.time) ? b : a, undefined);
@@ -156,11 +210,24 @@ async function readQqMessageResult(request: http.IncomingMessage, url: URL,
 }
 
 export function createQqMessageOperations(context: QqMessageRoutesContext): readonly ApiOperationDefinition[] {
-  return (["history", "message", "attachment"] as const).map(kind => ({ contract: qqReadOperationContract(kind), handler: input => {
+  const messages: ApiOperationDefinition[] = (["history", "message", "attachment"] as const).map(kind => ({ contract: qqReadOperationContract(kind), handler: input => {
     const selected: QqReadTarget = kind === "history" ? { kind } : kind === "message" ? { kind, messageId: input.path.messageId! }
       : { kind, messageId: input.path.messageId!, index: Number(input.path.attachmentIndex) };
     return readQqMessageResult(input.request, input.url, input.response, context, selected);
   } }));
+  for (const kind of ['contacts','members'] as const) {
+    const base = qqReadOperationContract('history');
+    const pathTemplate = `/api/agent/qq/${kind==='members'?'group-members':'contacts'}`;
+    const contract: ApiOperationContract = {...base,operationId:`agent.qq.${kind}.read`,pathTemplate,aliases:[`agent:GET:${pathTemplate}`],
+      description:kind==='members' ? 'Read members of the exact selected QQ group; private chats never use this operation.' : 'Read safe group/friend display names for the exact selected QQ account.',
+      request:{...base.request,query:kind==='contacts'
+        ? {type:'object',required:['routeId'],additionalProperties:false,properties:{routeId:{type:'string',minLength:1,maxLength:QQ_READ_LIMITS.routeIdChars}}}
+        : {...QQ_MESSAGE_QUERY_SCHEMA,properties:{...QQ_MESSAGE_QUERY_SCHEMA.properties,kind:{const:'group'}}}},
+      responses:{...base.responses,'200':{mediaType:'application/json',schema:{type:'object',required:['code','data'],properties:{code:{const:0},data:{type:'object',required:['routeId','instanceId','entries'],properties:{routeId:{type:'string'},instanceId:{type:'string'},entries:{type:'array',items:{type:'object'}},warnings:{type:'array',items:{type:'string'}},account:{type:'object',required:['userId','name'],additionalProperties:false,properties:{userId:{type:'string',pattern:QQ_TARGET_ID_PATTERN.source},name:{type:'string'}}}}}}}}}
+    };
+    messages.push({contract,handler:input=>readQqMessageResult(input.request,input.url,input.response,context,{kind})});
+  }
+  return messages;
 }
 
 /** Transitional raw adapter; production registration uses the executable operations above. */

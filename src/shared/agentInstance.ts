@@ -1,7 +1,7 @@
 import { isAgentAdapterType } from "./agentAdapterCapabilities.js";
 
 /** Computer identity is independent of its current network address and provider. */
-export type AgentInstanceBinding = { instanceId: string; agentId: string };
+export type AgentInstanceBinding = { instanceId: string; agentId: string; ownerDeviceId?: string };
 
 export type InstanceAgent = {
   agentId: string;
@@ -20,6 +20,10 @@ export type InstanceAgent = {
 
 export type AgentInstance = {
   instanceId: string;
+  /** RabiLink Manager owning this instance; absent for the current Manager. */
+  ownerDeviceId?: string;
+  terminalShells?: string[];
+  computerCapabilities?: string[];
   /** Manager-owned display alias; empty restores the reported hostname. */
   name?: string;
   hostname?: string;
@@ -40,7 +44,8 @@ export function normalizeAgentInstanceBinding(value: unknown): AgentInstanceBind
   const raw = value as Partial<AgentInstanceBinding>;
   const validId = (id: unknown): id is string => typeof id === "string" && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,191}$/.test(id);
   if (!validId(raw.instanceId) || !validId(raw.agentId)) throw new Error("Agent binding requires stable instanceId and agentId.");
-  return { instanceId: raw.instanceId, agentId: raw.agentId };
+  if (raw.ownerDeviceId !== undefined && !validId(raw.ownerDeviceId)) throw new Error("Invalid Agent instance owner device.");
+  return { instanceId: raw.instanceId, agentId: raw.agentId, ...(raw.ownerDeviceId ? { ownerDeviceId: raw.ownerDeviceId } : {}) };
 }
 
 export function normalizeAgentInstanceBindings(value: unknown): Record<string, AgentInstanceBinding> | undefined {

@@ -45,6 +45,12 @@ export const router = createRouter({
   routes: [
     { path: "/", redirect: "/roles" },
     {
+      path: "/plugins",
+      name: "plugins",
+      component: immediatePage(() => import("./pages/PluginsPage.vue")),
+      meta: { title: "插件" }
+    },
+    {
       path: "/plugin-recovery",
       name: PLUGIN_RECOVERY_ROUTE_NAME,
       component: PluginCatalogRecoveryPage,

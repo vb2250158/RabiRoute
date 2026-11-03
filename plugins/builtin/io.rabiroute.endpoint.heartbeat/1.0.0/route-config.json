@@ -1,0 +1,31 @@
+{
+  "endpointType": "heartbeat",
+  "routeKeys": [
+    "heartbeatIntervalSeconds",
+    "heartbeatMessage",
+    "heartbeatSkipWhenAgentBusy"
+  ],
+  "runtimeFields": {
+    "heartbeatIntervalSeconds": {
+      "paths": [
+        "heartbeatIntervalSeconds"
+      ],
+      "default": 900,
+      "format": "positive-number"
+    },
+    "heartbeatMessage": {
+      "paths": [
+        "heartbeatMessage"
+      ],
+      "default": "定时心跳巡检：请按当前计划、记忆和可用状态执行必要检查。",
+      "emptyDefault": true
+    },
+    "heartbeatSkipWhenAgentBusy": {
+      "paths": [
+        "heartbeatSkipWhenAgentBusy"
+      ],
+      "default": false,
+      "format": "boolean"
+    }
+  }
+}

@@ -131,3 +131,8 @@ Zero or a negative value disables this periodic check. The check only detects an
 5. If the saved quick-login identity has expired, switch the card to **QR login** and refresh the code rather than repeatedly retrying quick login.
 6. If QQ disconnects frequently, synchronize Windows time before restarting NapCat/QQNT.
 7. For unattended operation, configure Windows startup and then the NapCat-side `ACCOUNT` and password/MD5 variables.
+
+
+## Recovering an unresolved launch
+
+A retained launch without captured process identity still blocks duplicate starts. For the bundled `NapCatWinBootMain.exe` inside the bound directory, the normal launch owner may inspect complete process visibility, directory and command references, and HTTP/WebUI listening ports while holding the original binding lease. Only proven current absence permits archiving the original record and proof before a new attempt. This never reclassifies the old attempt as not started or adopts external QQ processes. New attempts retain PID, spawn, close and exit-code receipts; archived ownership records remain in the adjacent `.history` directory. External launchers, unreadable evidence and existing processes or listeners keep the fence.

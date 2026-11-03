@@ -1,10 +1,24 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { addRemoteAgentTarget, localAgentTargetKey, normalizeRouteAgentTargets, primaryAgentInstanceBindings, remoteAgentTargetKey, removeRouteAgentTarget, resolvePrimaryAgentTarget } from "./routeAgentTargets.js";
+import { addRemoteAgentTarget, localAgentTargetKey, normalizeRouteAgentTargets, primaryAgentInstanceBindings, remoteAgentTargetKey, removeRouteAgentTarget, resolvePrimaryAgentTarget, peerRouteAgentSession } from "./routeAgentTargets.js";
 import { normalizeGatewayDefinition } from "./gatewayConfigModel.js";
 
 const binding = { instanceId: "node:one", agentId: "agent:one" };
 const remote = { ...binding, provider: "codex" as const, id: remoteAgentTargetKey(binding) };
+
+test("peer session references survive normalization and remain distinct from provider defaults and other targets", () => {
+  const first = { ...remote, ownerDeviceId: "pc-a", sessionId: "a-full-task", sessionName: "A task", workspace: "/a" };
+  first.id = remoteAgentTargetKey(first);
+  const second = { ...first, ownerDeviceId: "pc-b", sessionId: "b-full-task", sessionName: "B task", workspace: "/b" };
+  second.id = remoteAgentTargetKey(second);
+  const normalized = normalizeGatewayDefinition({ id: "test", gatewayPort: 8801, agentAdapters: ["codex"], codexThreadId: "local-task", remoteAgentTargets: [first, second], primaryAgentTarget: second.id });
+  assert.deepEqual(normalized.remoteAgentTargets, [first, second]);
+  assert.deepEqual(peerRouteAgentSession(normalized), { sessionId: "b-full-task", sessionName: "B task", workspace: "/b" });
+  assert.equal(peerRouteAgentSession({ ...normalized, primaryAgentTarget: "local:codex" }), undefined);
+  const unbound = { ...first, sessionId: undefined, sessionName: undefined, workspace: undefined };
+  assert.deepEqual(peerRouteAgentSession({ ...normalized, remoteAgentTargets: [unbound], primaryAgentTarget: first.id }),
+    { sessionId: undefined, sessionName: undefined, workspace: undefined });
+});
 test("legacy migration restores local card and keeps the same remote primary without creating sessions", () => {
   const result = normalizeGatewayDefinition({ id: "example", gatewayPort: 8801, agentAdapters: ["codex", "dsh"], primaryAgentAdapter: "codex", agentInstanceBindings: { codex: binding } });
   assert.deepEqual(result.agentAdapters, ["codex", "dsh"]);

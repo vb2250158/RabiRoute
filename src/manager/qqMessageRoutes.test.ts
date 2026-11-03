@@ -284,3 +284,50 @@ test("private conversation reads use its exact peer without silently selecting a
   try { assert.equal((await fetch(app.base + "/api/agent/qq/history" + query.replace("kind=group", "kind=private"))).status, 200); }
   finally { await app.close(); }
 });
+
+
+test('QQ directory reads isolate malformed contacts and keep group membership private-chat free', async t => {
+  const actions: string[] = [];
+  const f = await serve(async (input, init) => {
+    const action = new URL(String(input)).pathname; actions.push(action);
+    if(action==='/get_group_list')return envelope([{group_id:10001,group_name:'Example group',member_count:3},null,{group_id:'invalid'}]);
+    if(action==='/get_friend_list')return envelope([{user_id:20002,nickname:'Example friend',remark:'Friend alias'}]);
+    if(action==='/get_login_info')return envelope({user_id:30001,nickname:'Example account',access_token:'never exposed'});
+    if(action==='/get_recent_contact'){
+      assert.equal(JSON.parse(String(init?.body)).count,50);
+      return envelope([{peerUin:'10001',chatType:2,msgTime:'123',lastestMsg:{message:[{type:'text',data:{text:'Latest'}}]}},
+        {peerUin:'20003',chatType:1,msgTime:'124',peerName:'Recent contact',lastestMsg:{raw_message:'Private'}},
+        {peerUin:'10001',chatType:99,msgTime:'999'},{peerUin:'invalid',chatType:1,msgTime:'999'}]);
+    }
+    assert.equal(action,'/get_group_member_list');assert.equal(JSON.parse(String(init?.body)).group_id,'10001');
+    return envelope([{user_id:20002,nickname:'Member name',card:'Member card',role:'admin'},null,{user_id:'invalid'}]);
+  },{typed:true});t.after(f.close);
+  const contacts=await (await fetch(f.base+'/api/agent/qq/contacts?routeId=test-route')).json() as any;
+  assert.deepEqual(contacts.data.entries,[{kind:'group',target:'10001',name:'Example group',memberCount:3,time:123,preview:'Latest'},{kind:'private',target:'20002',name:'Friend alias'},{kind:'private',target:'20003',name:'Recent contact',time:124,preview:'Private'}]);
+  assert.deepEqual(contacts.data.account,{userId:'30001',name:'Example account'});
+  assert.equal(JSON.stringify(contacts).includes('never exposed'),false);
+  const members=await (await fetch(f.base+'/api/agent/qq/group-members?routeId=test-route&kind=group&target=10001')).json() as any;
+  assert.deepEqual(members.data.entries,[{id:'20002',name:'Member card',role:'admin'}]);
+  const count=actions.length;
+  assert.equal((await fetch(f.base+'/api/agent/qq/group-members?routeId=test-route&kind=private&target=20002')).status,400);
+  assert.equal(actions.length,count);
+});
+
+test('QQ directory partial failure retains available names and rejects an account change during a member read', async t => {
+  let active = {...definition,napcatInstances:definition.napcatInstances!.map(item=>({...item}))};
+  let release!:()=>void, entered!:()=>void;
+  const wait=new Promise<void>(resolve=>release=resolve), started=new Promise<void>(resolve=>entered=resolve);
+  const f=await serve(async input=>{
+    const action=new URL(String(input)).pathname;
+    if(action==='/get_group_list')return envelope([{group_id:10001,group_name:'Example group'}]);
+    if(action==='/get_friend_list')throw new Error('upstream unavailable');
+    if(action==='/get_login_info')throw new Error('login info unavailable');
+    if(action==='/get_recent_contact')throw new Error('recent contacts unavailable');
+    entered();await wait;return envelope([{user_id:20002,nickname:'Member'}]);
+  },{typed:true,route:()=>active});t.after(f.close);t.after(release);
+  const contacts=await (await fetch(f.base+'/api/agent/qq/contacts?routeId=test-route')).json() as any;
+  assert.equal(contacts.data.entries.length,1);assert.deepEqual(contacts.data.warnings,['QQ_FRIEND_LIST_UNAVAILABLE']);
+  const pending=fetch(f.base+'/api/agent/qq/group-members?routeId=test-route&kind=group&target=10001');
+  await started;active={...active};release();const result=await pending;
+  assert.equal(result.status,409);assert.equal((await result.json() as any).errorCode,'QQ_READ_ROUTE_CHANGED');
+});

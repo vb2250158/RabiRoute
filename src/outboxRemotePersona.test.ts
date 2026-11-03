@@ -4,7 +4,7 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { agentReplyDataDirsForRoute, handleAgentReply, type AgentReplyOptions } from "./outbox.js";
+import { agentReplyDataDirsForRoute, handleAgentReply, type AgentReplyOptions } from "./endpointEgress.fixture.js";
 import { recentMessageContextItems } from "./messageContextStore.js";
 
 function fixture(t: test.TestContext, remoteInProfile = false) {

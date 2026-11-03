@@ -90,7 +90,7 @@ function stateSchemaVersion(value: unknown): number | undefined {
 }
 export function parsePluginManifest(value: unknown): PluginManifest {
   const raw = record(value, "Plugin manifest");
-  const allowed = new Set(["schemaVersion", "id", "version", "entries", "provides", "requires", "optional", "permissions", "configSchema", "stateSchemaVersion"]);
+  const allowed = new Set(["schemaVersion", "id", "version", "displayName", "description", "icon", "entries", "provides", "requires", "optional", "permissions", "configSchema", "stateSchemaVersion"]);
   const unknown = Object.keys(raw).filter(key => !allowed.has(key));
   if (unknown.length) throw new Error(`Plugin manifest contains unsupported fields: ${unknown.sort().join(", ")}.`);
   if (raw.schemaVersion !== PLUGIN_MANIFEST_SCHEMA_VERSION) throw new Error(`Unsupported plugin manifest schema: ${String(raw.schemaVersion)}.`);
@@ -105,6 +105,9 @@ export function parsePluginManifest(value: unknown): PluginManifest {
     schemaVersion: PLUGIN_MANIFEST_SCHEMA_VERSION,
     id: identifier(raw.id, "Plugin id"),
     version: version(raw.version),
+    ...(raw.displayName === undefined ? {} : { displayName: text(raw.displayName, "Plugin displayName", 160) }),
+    ...(raw.description === undefined ? {} : { description: text(raw.description, "Plugin description", 2000) }),
+    ...(raw.icon === undefined ? {} : { icon: identifier(raw.icon, "Plugin icon") }),
     entries: entries(raw.entries),
     provides,
     requires,

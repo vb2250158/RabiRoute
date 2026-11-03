@@ -4,6 +4,7 @@ import path from "node:path";
 import { withPersonaHistoryIndex } from "./personaChatHistoryIndex.js";
 import { recordDataMutationAudit } from "./observability/dataMutationAudit.js";
 import type { PersonaChatReply, PersonaChatHistoryPage } from "./shared/personaChatHistory.js";
+import { chatHistoryCategory, CHAT_HISTORY_CATEGORIES, type ChatHistoryCategory } from './shared/personaHistoryChannels.js';
 
 const HISTORY_PATH = "chat-history/final-replies.jsonl";
 const writes = new Map<string, Promise<unknown>>();
@@ -98,7 +99,8 @@ export async function appendPersonaAiuiExchange(roleDir: string, input: { sessio
 }
 
 /** Reads backwards by byte offset, so paging never reloads the complete history. */
-export async function readPersonaChatHistory(roleDir: string, cursor?: number, limit = 50, options: { summary?: boolean; direction?: "older" | "newer"; id?: string } = {}): Promise<PersonaChatHistoryPage> {
+export async function readPersonaChatHistory(roleDir: string, cursor?: number, limit = 50, options: { summary?: boolean; direction?: "older" | "newer"; id?: string; category?: ChatHistoryCategory } = {}): Promise<PersonaChatHistoryPage> {
+  if (options.category && !CHAT_HISTORY_CATEGORIES.includes(options.category)) throw new Error('Invalid chat history category.');
   if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw new Error("limit must be an integer from 1 to 100.");
   if (cursor !== undefined && (!Number.isSafeInteger(cursor) || cursor < 0)) throw new Error("Invalid chat history cursor.");
   if (options.direction === 'newer') return readForwardHistory(roleDir, cursor ?? 0, limit, options);
@@ -161,7 +163,7 @@ export async function readPersonaChatHistory(roleDir: string, cursor?: number, l
           try {
             if (line.length > 1024 * 1024) throw new Error("Oversized record");
             const record = parseReply(line.toString("utf8"));
-            entries.push(options.summary ? summarizeReply(record, start + lineStart, start + end + 1) : record);
+            if (!options.category || chatHistoryCategory(record) === options.category) entries.push(options.summary ? summarizeReply(record, start + lineStart, start + end + 1) : record);
           } catch { invalidRecords++; }
           responseBytes += line.length;
         }
@@ -186,7 +188,7 @@ function summarizeReply(record: PersonaChatReply, start: number, end: number): P
 }
 
 async function readForwardHistory(roleDir: string, cursor: number, limit: number,
-  options: { summary?: boolean; id?: string }): Promise<PersonaChatHistoryPage> {
+  options: { summary?: boolean; id?: string; category?: ChatHistoryCategory }): Promise<PersonaChatHistoryPage> {
   const file = path.resolve(roleDir, HISTORY_PATH);
   // Await the writer for a coherent boundary; its failure does not invalidate readable rows.
   await writes.get(file)?.catch(() => undefined);
@@ -216,7 +218,7 @@ async function readForwardHistory(roleDir: string, cursor: number, limit: number
             if (line.length > 1024 * 1024) throw new Error('Persona chat history record is too large.');
             const record = parseReply(line.toString('utf8'));
             if (options.id && record.id !== options.id) throw new Error('Chat history identity changed; refresh this reply.');
-            entries.push(options.summary ? summarizeReply(record, start, end) : record);
+            if (!options.category || chatHistoryCategory(record) === options.category) entries.push(options.summary ? summarizeReply(record, start, end) : record);
           } catch (error) { if (options.id) throw error; invalidRecords++; }
           bytes += line.length;
         }
@@ -232,4 +234,9 @@ async function readForwardHistory(roleDir: string, cursor: number, limit: number
     if (pending.length && !discardOversized) invalidRecords++;
     return { entries: entries.reverse(), nextCursor: cursor > 0 ? cursor : null, newerCursor: null, invalidRecords };
   } finally { await handle.close(); }
+}
+export async function readPersonaChatHistoryCategories(roleDir: string): Promise<ChatHistoryCategory[]> {
+  const file = path.resolve(roleDir, HISTORY_PATH);
+  await writes.get(file)?.catch(() => undefined);
+  return withPersonaHistoryIndex(file, parseReply, async index => index.categories());
 }

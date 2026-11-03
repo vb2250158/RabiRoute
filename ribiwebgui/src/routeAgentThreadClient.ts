@@ -7,6 +7,13 @@ export async function postRouteAgentThreadAction(
   options: { fetch?: typeof fetch; accessToken: () => string }
 ): Promise<Record<string, any>> {
   const request = options.fetch || globalThis.fetch;
+  if (target?.binding?.ownerDeviceId) {
+    const response = await request("/api/agent/threads", { method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ...payload, agentAdapter: target.provider, instanceBinding: target.binding }) });
+    const body = await response.json();
+    if (!response.ok || body.code === -1) throw new Error(body.message || "远端主机任务操作失败，请核对原投递回执。");
+    return body;
+  }
   if (target?.binding) {
     const accessResponse = await request("/api/webgui-access");
     const access = await accessResponse.json();

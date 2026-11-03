@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { resolveInProcessRoots } from "../plugin-kernel/pluginExecutionSettings.js";
 import { PluginPackageCatalog, loadPluginProfile } from "../plugin-kernel/profile.js";
@@ -17,7 +16,13 @@ import { currentPluginActivation } from "../plugin-kernel/pluginActivationContex
 
 test("normally packaged real Route control entry runs in its own process and parent registry owns registration", { timeout: 30000 }, async t => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "route-control-isolated-"));
-  const packageRoot = fileURLToPath(new URL(import.meta.url.endsWith(".ts") ? "../../dist/plugins/packages/" : "../plugins/packages/", import.meta.url));
+  // Use the normal packager in an isolated output; stale/missing dist is not this runtime contract.
+  // @ts-expect-error The production JavaScript builder is outside src.
+  const { buildPluginPackages } = await import("../../scripts/build-plugin-packages.mjs");
+  let packageRoot: string;
+  try {
+    packageRoot = (await buildPluginPackages(process.cwd(), {packages: ["io.rabiroute.manager.route-control"], outputDirectory: path.join(root, "built")})).packagesRoot;
+  } catch (error) { await fs.rm(root, {recursive: true, force: true}); throw error; }
   const catalog = new PluginPackageCatalog([packageRoot]);
   const leases = new ProcessLeaseRegistry();
   const archive = new AsyncPluginOutcomeArchive(path.join(root, "outcomes"));
@@ -53,7 +58,7 @@ test("normally packaged real Route control entry runs in its own process and par
   const profilePath = path.join(root, "profile.json");
   await fs.writeFile(profilePath, JSON.stringify({ schemaVersion: 2, readyRequires: [], instances: [{ id: "manager:route-control", package: "io.rabiroute.manager.route-control", version: "1.0.0", enabled: true, config: {}, grants: [] }] }));
   const loaded = await loadPluginProfile({ profilePath, packageCatalog: catalog, runtimeRoot: path.join(root, "immutable"), host: "manager" });
-  assert.equal(loaded.loadFailures.length, 0);
+  assert.equal(loaded.loadFailures.length, 0, JSON.stringify(loaded.loadFailures));
   assert.equal(loaded.candidates[0]!.entry.execution, "isolated");
   const result = await runtime.switch(loaded.candidates);
   assert.equal(result.generation.records[0]!.status, "active", JSON.stringify(result.generation.records[0]!.error));

@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import path from 'node:path';
 import type { PersonaChatReply } from './shared/personaChatHistory.js';
+import { chatHistoryCategory, type ChatHistoryCategory } from './shared/personaHistoryChannels.js';
 
 export type HistoryIndexRow = { id: string; start: number; end: number; valid: number; textHash: string };
 type Checkpoint = { size: number; mtimeMs: number; ctimeMs: number; dev: number; ino: number; invalid: number; identityUnknown: number };
@@ -38,17 +39,23 @@ export class PersonaHistoryIndex {
     try {
       this.db.exec(`PRAGMA cache_size=-2048; CREATE TABLE IF NOT EXISTS history (id TEXT PRIMARY KEY, start INTEGER, end INTEGER, valid INTEGER, textHash TEXT);
         CREATE INDEX IF NOT EXISTS history_position ON history(start); CREATE TABLE IF NOT EXISTS checkpoint (value TEXT);`);
+      if (!this.db.prepare('PRAGMA table_info(history)').all().some(row => row.name === 'category')) {
+        this.db.exec('ALTER TABLE history ADD COLUMN category TEXT; DELETE FROM checkpoint;');
+      }
     } catch (error) { this.db.close(); throw error; }
   }
   close() { this.db.close(); }
   get invalidRecords() { return this.checkpoint.invalid; }
   get size() { return this.checkpoint.size; }
+  categories(): ChatHistoryCategory[] {
+    return this.db.prepare('SELECT DISTINCT category FROM history WHERE valid=1 AND category IS NOT NULL').all().map(row => row.category as ChatHistoryCategory);
+  }
   find(id: string): HistoryIndexRow | undefined { return this.db.prepare('SELECT * FROM history WHERE id=?').get(id) as HistoryIndexRow | undefined; }
   assertIdentityComplete() {
     if (this.checkpoint.identityUnknown) throw new Error('Chat history contains a damaged record with unknown identity; repair that record before adding new replies. Existing replies remain readable.');
   }
   private insert(record: PersonaChatReply, start: number, end: number) {
-    this.db.prepare('INSERT OR IGNORE INTO history VALUES (?,?,?,?,?)').run(record.id, start, end, 1, hash(record.text));
+    this.db.prepare('INSERT OR IGNORE INTO history(id,start,end,valid,textHash,category) VALUES (?,?,?,?,?,?)').run(record.id, start, end, 1, hash(record.text), chatHistoryCategory(record));
   }
 
   private saveCheckpoint() {
@@ -93,7 +100,7 @@ export class PersonaHistoryIndex {
                     const partial = JSON.parse(line);
                     if (typeof partial?.id === 'string' && partial.id) identity = partial.id;
                   } catch { /* An unreadable identity cannot prove absence for writes. */ }
-                  if (identity) this.db.prepare('INSERT OR IGNORE INTO history VALUES (?,?,?,?,?)').run(identity, offset, end, 0, '');
+                  if (identity) this.db.prepare('INSERT OR IGNORE INTO history(id,start,end,valid,textHash) VALUES (?,?,?,?,?)').run(identity, offset, end, 0, '');
                   else this.checkpoint.identityUnknown++;
                 }
                 if (record) this.insert(record, offset, end);

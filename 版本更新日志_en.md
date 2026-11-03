@@ -6,6 +6,28 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.5.0 - 2026-11-04
+
+- Isolate performance-history read and cleanup failures per shard. Rebuild existing bounded aggregates on recovery to avoid recounting history beyond the recent dedupe window, show history gaps separately, keep live collection available and preserve best-effort write drop accounting.
+- Plugin retirement releases only locally managed speech processes, leaving external speech services running and retaining uncertainty if owned termination fails. Application shutdown first cancels unpublished package preparation, joins original metadata processes, staging cleanup and the plugin reconciliation queue, and records late retirement confirmation from actual resource completion.
+- Stream static resources through a separate producer while joining the original HTTP response, preserving backpressure, authority revocation, cancellation and file closure without raising listener limits.
+
+- Add signed cold recovery for macOS Agent installation maintenance. After the original owner exits normally, select an installed release using the original launcher lease, node identity, frozen asset signature and pointer CAS, preserving configuration and unknown receipts. The same entry verifies rollback assets without relying on a faulty old client's serial online-update queue.
+
+- Add default-on table rendering to QQ automatic delivery: render Markdown tables as images inline with surrounding text. The option is independent and also enabled for existing rules without a saved value.
+
+- Give QQ / NapCat, WeCom, Weixin, Feishu, Webhook, scheduled triggers, mobile, speech input and Xiaomi Home their own runtime, management operations and configuration cards. Remove the production static input factory; separate speech input from shared speech services and mobile input from shared connection transport.
+- Add Plugins at the bottom of the sidebar with DSH-style lists, search, details and switches. Packages declare readable names, purposes and icons. Desired enablement and actual execution remain separate, and the original management shell can restore a disabled business core.
+- Apply endpoint-owned settings through the existing catalog CAS queue and resident Gateway pipes, replacing only affected plugin instances. Shared identity, Agent targets and pipelines retain their real process lifecycle. Read back persistence, activation, partial availability and uncertainty without silently replaying an operation.
+- Native plugin capabilities own platform egress. Uploads, captions and receipts share the original request lease; disabling rejects new egress and joins accepted work. Credentials stay with the admitted request, and explicitly clearing a value no longer restores an old environment value after restart.
+- Persist settings independently per instance, preserving malformed originals and isolating their failures. Lists omit raw configuration and credential fragments from JSON parser errors. Preserve unavailable configured inputs and leave the list empty after removing the last input.
+- Reuse immutable JSON evidence established by its original data owner to avoid repeated copying, freezing and bookkeeping of large API catalogs, retaining Schema, source, deadline and cancellation checks. Plugin lists read manifests without preparing executable packages for metadata display.
+- Reuse original tasks, connector services and durable receipts for local and remote Agent delivery, preserving identity, delivery IDs and uncertain outcomes.
+
+- Keep System, Agent delivery, role-panel and task-reply history, while endpoint tabs follow added configuration, sharing configuration-card names and icons with original capitalization. Recover absent bundled NapCat launches by archiving original intents and retaining new process exit receipts.
+
+- Combine QQ groups and private chats in a two-line conversation list ordered by QQ recent activity. Read native history online, open at the newest message and load earlier messages above, with a draggable divider and remembered width. Groups show members; private chats hide them. Conversations, message senders and members display QQ avatars. Display readable CQ content and retrieve original-message attachments on demand for preview or download.
+
 ## 0.4.12 - 2026-11-04
 
 - Render Markdown tables as images in their original positions in completion hooks. A separate switch defaults on for existing rules; disabling it preserves the original text.
@@ -36,6 +58,7 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 ## 0.4.7 - 2026-11-03
 
+- Avoid a separate network authorization check for each unrelated historical user message during original-task receipt recovery, retaining checks before accepting evidence and around persistence. Add bounded stage diagnostics for the latest 16 prepared/reconcile management requests without prompt text, credentials or delivery-receipt authority.
 - Remove duplicate VM watchdogs around trusted local API response access and calculation while retaining authorization, contracts, deadlines and stream cleanup; skip serialization after the original deadline.
 
 ## 0.4.6 - 2026-11-03
@@ -48,6 +71,7 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 - Separate application-connection authentication from native device ownership when reading original delivery receipts. Application requests still verify the actual Agent task owner; native devices retain their original identity and revocation fence.
 - Resolve a stale Codex compressed rollout path only to its exact restored JSONL sibling with matching first-record session metadata. Preserve original deliveries and task bindings without editing the Desktop database or replaying messages.
+
 
 ## 0.4.4 - 2026-11-02
 
@@ -74,6 +98,14 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 - Deduplicate the local PC in the role source picker by its RabiLink device ID while retaining other PCs with the same name. Saved self references read through the local role API without rewriting connections or persona bindings.
 
+
+## Unreleased — 2026-11-02
+
+- Group message history into channel tabs without All, discovering configured and historical channels while retaining disabled-channel history, independent pagination, directions, conversation filters and tab reading positions. Add a channel browsing API while preserving the original bounded search contract.
+
+- Message history now scrolls with the browser page, matching Plans and Memory, while retaining virtual rendering, expandable messages, pagination and reading-position preservation.
+
+- Extract Manager Peer candidate composition into a dedicated module, retaining existing connections, operations and plugin publication/rollback/retirement. The control plane keeps configuration and active pointers. Add [current and target connected-host architecture](docs/connected-host-agent-architecture_en.md), and connect Manager-owned host execution using existing terminal, file, Windows window and screenshot services. Cross-host prepared delivery and receipts retain one formal intent. Include optional POSIX terminal dependencies and Windows native assets. Source, isolated execution and installed/physical two-computer acceptance are reported separately.
 
 ## 0.4.0 - 2026-10-31
 
@@ -2889,3 +2921,9 @@ Unify provenance, body, context and reply parameters without generic collaborati
 - Instances link to their bound routes' complete settings. Message-processing and memory-consolidation state is isolated by instance and primary task; registered assistant tasks use their owning computer. Reinstallation preserves instance and Agent identities.
 - Fixed installed connector resource lookup, task-operation failure messages, and remote settings reading local task values.
 - Added a real connector/WebSocket two-Agent delivery fixture. Real two-computer and complete advanced-feature parity acceptance remain pending.
+
+- Agent completion Hooks: NapCat/QQ includes linked local files by default, with group/private uploads, independent receipts, deduplication and partial-failure reporting.
+
+- NapCat completion Hooks render Mermaid diagrams locally and send ordered mixed text/images by default, with opt out, source fallback and persistent receipt deduplication.
+
+- QQ completion Hooks preserve existing Markdown image order and include local Codex native generated images from the same turn, excluding user inputs, tool screenshots and other turns; images are no longer duplicated as file uploads.

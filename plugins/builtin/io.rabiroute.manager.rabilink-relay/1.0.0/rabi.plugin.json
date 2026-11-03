@@ -17,5 +17,8 @@
     "manager.persona@1"
   ],
   "optional": [],
-  "permissions": []
+  "permissions": [],
+  "displayName": "跨设备连接服务",
+  "description": "共享电脑连接、远程任务、文件和语音通道；手机消息端独立启停",
+  "icon": "mdi-cellphone"
 }

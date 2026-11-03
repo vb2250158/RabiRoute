@@ -51,6 +51,48 @@ test("missing, empty, oversized and unreadable history fail closed", async t => 
   assert.equal((await f.inspect()).historyState, "oversized");
   await fs.rm(f.logPath); await fs.mkdir(f.logPath); assert.equal((await f.inspect()).historyState, "read_failed");
 });
+
+test("history beyond the old file limit streams exact terminal evidence and detects later conflicts", async t => {
+  const f = await fixture(t, true);
+  const original = { ...f.success, routeProfileId: "example-route", groupId: "100001", selfId: "100002", bindingRevision: "original-revision" };
+  const unrelated = `${JSON.stringify({ event: "other", data: { deliveryId: "other", text: "鱼".repeat(4096) } })}\r\n`;
+  const handle = await fs.open(f.logPath, "w");
+  try {
+    for (let size = 0; size <= MAX_AGENT_SEND_HISTORY_BYTES; size += Buffer.byteLength(unrelated)) await handle.write(unrelated);
+  } finally { await handle.close(); }
+  await fs.appendFile(f.logPath, `${f.line("group_file_uploaded", original)}\n${f.line("group_file_caption_sent", {
+    ...f.success, sentMessageId: "caption", text: "example caption"
+  })}\n`);
+  const history = await f.inspect();
+  assert.equal(history.historyState, "completed");
+  assert.equal(history.terminalComplete, true);
+  assert.equal(history.originalBinding?.state, "present");
+  await fs.appendFile(f.logPath, `${f.line("send_requested", { deliveryRequestDigest: "conflicting-original" })}\n`);
+  assert.equal((await f.inspect()).historyConflict, true);
+});
+
+test("replacement of the path during streaming cannot prove original delivery", async t => {
+  const f = await fixture(t);
+  await f.write([f.line("group_file_uploaded", f.success)]);
+  const stat = fs.stat;
+  const replacement = t.mock.method(fs, "stat", async (...args: Parameters<typeof fs.stat>) => {
+    if (args[0] === f.logPath) {
+      await fs.rename(f.logPath, `${f.logPath}.original`);
+      await f.write([f.line("group_file_uploaded", f.success)]);
+    }
+    return stat(...args);
+  });
+  assert.equal((await f.inspect()).historyState, "changed");
+  replacement.mock.restore();
+});
+
+test("only a file-leading UTF-8 BOM is accepted", async t => {
+  const f = await fixture(t);
+  await fs.writeFile(f.logPath, `\uFEFF${f.line("group_file_uploaded", f.success)}\n`);
+  assert.equal((await f.inspect()).terminalComplete, true);
+  await fs.writeFile(f.logPath, `${f.line("send_requested")}\n\uFEFF${f.line("group_file_uploaded", f.success)}\n`);
+  assert.equal((await f.inspect()).historyState, "damaged");
+});
 test("upload alone cannot complete a file caption; matching upload plus caption can", async t => {
   const f = await fixture(t, true);
   await f.write([f.line("group_file_uploaded", f.success)]);

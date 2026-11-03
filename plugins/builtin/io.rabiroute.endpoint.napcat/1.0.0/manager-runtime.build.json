@@ -1,0 +1,77 @@
+{
+  "exports": [
+    {
+      "name": "createNapcatManagerOwner",
+      "source": "src/integrations/napcat/managerOwner.ts"
+    },
+    {
+      "name": "createNapcatControlOperations",
+      "source": "src/manager/napcatControlRoutes.ts"
+    },
+    {
+      "name": "NapcatSupervisorService",
+      "source": "src/manager/napcatSupervisorService.ts"
+    },
+    {
+      "name": "autoLoginNapcatInstancesOnRabiStart",
+      "source": "src/messageEndpoints/napcatManager.ts"
+    },
+    {
+      "name": "configureNapcatOneBot",
+      "source": "src/messageEndpoints/napcatManager.ts"
+    },
+    {
+      "name": "ensureNapcatInstanceReady",
+      "source": "src/messageEndpoints/napcatManager.ts"
+    },
+    {
+      "name": "testNapcatHealth",
+      "source": "src/messageEndpoints/napcatManager.ts"
+    },
+    {
+      "name": "readNapcatLoginPanel",
+      "source": "src/messageEndpoints/napcatManager.ts"
+    },
+    {
+      "name": "runNapcatLoginAction",
+      "source": "src/messageEndpoints/napcatManager.ts"
+    },
+    {
+      "name": "launchNapcatInstance",
+      "source": "src/messageEndpoints/napcatManager.ts"
+    },
+    {
+      "name": "restartNapcatInstance",
+      "source": "src/messageEndpoints/napcatManager.ts"
+    },
+    {
+      "name": "napcatGuardianInstances",
+      "source": "src/messageEndpoints/napcatManager.ts"
+    },
+    {
+      "name": "observeNapcatGuardianInstance",
+      "source": "src/messageEndpoints/napcatManager.ts"
+    },
+    {
+      "name": "relaunchNapcatGuardianInstance",
+      "source": "src/messageEndpoints/napcatManager.ts"
+    },
+    {
+      "name": "runNapcatGuardianLoop",
+      "source": "src/messageEndpoints/napcatGuardian.ts"
+    },
+    {
+      "name": "napcatGuardianDepsFor",
+      "source": "src/messageEndpoints/napcatGuardian.ts"
+    }
+  ],
+  "ownedPrefixes": [
+    "src/integrations/napcat/"
+  ],
+  "ownedSources": [
+    "src/manager/napcatControlRoutes.ts",
+    "src/manager/napcatSupervisorService.ts",
+    "src/manager/napcatLifecycleOwner.ts",
+    "src/manager/napcatProcessDriver.ts"
+  ]
+}

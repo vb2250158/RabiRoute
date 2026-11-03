@@ -1,4 +1,6 @@
 import { getTimeoutMs, readTimeoutOverrides } from "../shared/timeoutSettings.js";
+import { SpeechRuntimeControlError } from "../shared/speechErrors.js";
+export { SpeechRuntimeControlError } from "../shared/speechErrors.js";
 import { stickySpeechAuthority, awaitSpeechAuthority, type SpeechAuthorityGuard } from "./speechRequestAuthority.js";
 import fs from "node:fs";
 import path from "node:path";
@@ -22,24 +24,12 @@ const execFileAsync = promisify(execFile);
 // verifies the actual imports and runtime, including their transitive dependencies.
 
 type RuntimeChild = Pick<ChildProcess, "exitCode" | "pid" | "unref"> &
-  Partial<Pick<ChildProcess, "stdout" | "stderr">>;
+  Partial<Pick<ChildProcess, "stdout" | "stderr" | "signalCode">>;
 
 type RuntimeOwner = {
   pid: number;
   owned: boolean;
 };
-
-export class SpeechRuntimeControlError extends Error {
-  constructor(
-    message: string,
-    readonly status = 502,
-    readonly detail = "",
-    readonly resolution = ""
-  ) {
-    super(message);
-    this.name = "SpeechRuntimeControlError";
-  }
-}
 
 export type SpeechRuntimeControlOptions = {
   rootDir: string;
@@ -62,11 +52,15 @@ function wait(milliseconds: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, milliseconds));
 }
 
+function isLocalSpeechHost(value: string): boolean {
+  const hostname = value.replace(/^\[|\]$/g, "").toLowerCase();
+  const localAddresses = Object.values(os.networkInterfaces()).flatMap(items => (items ?? []).map(item => item.address.toLowerCase()));
+  return ["localhost", "::1", os.hostname().toLowerCase(), ...localAddresses].includes(hostname) || /^127\./.test(hostname);
+}
+
 function servicePort(serviceUrl: string): number {
   const parsed = new URL(normalizeLocalSpeechServiceUrl(serviceUrl));
-  const hostname = parsed.hostname.replace(/^\[|\]$/g, "").toLowerCase();
-  const localAddresses = Object.values(os.networkInterfaces()).flatMap(items => (items ?? []).map(item => item.address.toLowerCase()));
-  if (!["localhost", "::1", os.hostname().toLowerCase(), ...localAddresses].includes(hostname) && !/^127\./.test(hostname)) {
+  if (!isLocalSpeechHost(parsed.hostname)) {
     throw new SpeechRuntimeControlError("该语音地址属于远端服务，本机无法管理其进程；请通过来源电脑的 Manager 启动或停止。语音 HTTP 调用仍可使用此地址。", 409);
   }
 
@@ -201,6 +195,7 @@ export class SpeechRuntimeControl {
   private readonly stopTimeoutMs: number;
   private transition: Promise<void> = Promise.resolve();
   private launchChild: RuntimeChild | null = null;
+  private launchServiceUrl: string | null = null;
   private launchOutput = "";
 
   constructor(private readonly options: SpeechRuntimeControlOptions) {
@@ -228,6 +223,41 @@ export class SpeechRuntimeControl {
     const authority = stickySpeechAuthority(guard);
     authority();
     return this.runExclusive(() => awaitSpeechAuthority(authority, () => this.stopUnlocked(authority)));
+  }
+
+  /** Release this workspace's native resources without asserting that an external service is offline. */
+  releaseOwnedRuntime(): Promise<void> {
+    return this.runExclusive(async () => {
+      if (this.platform !== "win32") return;
+      // A launch keeps its original address even if the user subsequently edits the service URL.
+      const serviceUrl = this.launchServiceUrl ?? normalizeLocalSpeechServiceUrl(this.options.serviceUrl());
+      const parsed = new URL(serviceUrl);
+      if (parsed.protocol !== "http:" || !isLocalSpeechHost(parsed.hostname)) return;
+      const port = servicePort(serviceUrl), paths = this.runtimePaths();
+      const child = this.launchChild;
+      const childAlive = () => Boolean(child && child.exitCode === null && !child.signalCode);
+      // The launcher and its native port worker may be different processes.
+      const initialOwner = await this.inspectOwner(port, paths.runtimeExecutable, paths.hostScript);
+      const portOwnerPid = initialOwner?.owned ? initialOwner.pid : undefined;
+      const targetPid = childAlive() ? child!.pid : portOwnerPid;
+      if (!targetPid) {
+        this.launchChild = null;
+        this.launchServiceUrl = null;
+        return;
+      }
+      await this.killProcessTree(targetPid);
+      const deadline = this.now() + getTimeoutMs("speech.stop", this.stopTimeoutMs);
+      for (;;) {
+        const owner = await this.inspectOwner(port, paths.runtimeExecutable, paths.hostScript);
+        // A new foreign listener is not a resource retained by this activation.
+        const originalWorkerAlive = owner?.owned && (owner.pid === portOwnerPid || owner.pid === targetPid);
+        if (!childAlive() && !originalWorkerAlive) break;
+        if (this.now() >= deadline) throw new SpeechRuntimeControlError("RabiSpeech 自有进程停止超时，无法确认资源已释放。", 502);
+        await this.wait(500);
+      }
+      this.launchChild = null;
+      this.launchServiceUrl = null;
+    });
   }
 
   private runExclusive<T>(operation: () => Promise<T>): Promise<T> {
@@ -349,6 +379,7 @@ export class SpeechRuntimeControl {
             }
           }
         );
+        this.launchServiceUrl = serviceUrl;
         this.captureLaunchOutput(this.launchChild);
         this.launchChild.unref();
       }
@@ -414,6 +445,7 @@ export class SpeechRuntimeControl {
 
     await awaitSpeechAuthority(guard, () => this.killProcessTree(targetPid));
     this.launchChild = null;
+    this.launchServiceUrl = null;
     const status = await awaitSpeechAuthority(guard, () => this.waitForState(serviceUrl, "offline", getTimeoutMs("speech.stop", this.stopTimeoutMs), undefined, guard));
     return { action: "stopped", status };
   }

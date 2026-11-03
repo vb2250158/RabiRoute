@@ -1091,7 +1091,7 @@ export function messageAdapterOutputEnabled(gateway: GatewayDefinition, type: Me
 
 export function gatewayAdapterTypes(gateway: GatewayDefinition): MessageEndpointType[] {
   if (gateway.messageInputsDisabled) return [];
-  const configured = Array.isArray(gateway.messageAdapters) && gateway.messageAdapters.length > 0
+  const configured = Array.isArray(gateway.messageAdapters)
     ? gateway.messageAdapters
     : [gateway.messageAdapterType || "napcat"];
   const adapters = normalizeMessageAdapters(configured);
@@ -1100,13 +1100,13 @@ export function gatewayAdapterTypes(gateway: GatewayDefinition): MessageEndpoint
     .filter((type) => !disabled.has(type) && messageAdapterPolicyFor(gateway, type).inputEnabled);
 }
 
-export function gatewayMessageAdapterTypes(gateway: GatewayDefinition): GatewayMessageAdapterType[] {
-  return selectGatewayMessageAdapterTypes(gatewayAdapterTypes(gateway));
+export function gatewayMessageAdapterTypes(gateway: GatewayDefinition, declaredGatewayTypes: ReadonlySet<string>): GatewayMessageAdapterType[] {
+  return selectGatewayMessageAdapterTypes(gatewayAdapterTypes(gateway), declaredGatewayTypes);
 }
 
 export function setGatewayAdapters(gateway: GatewayDefinition, adapters: MessageAdapterType[]): void {
   const next = normalizeMessageAdapters(adapters);
-  gateway.messageAdapters = next.length > 0 ? next : ["napcat"];
+  gateway.messageAdapters = next;
   gateway.messageAdapterType = gateway.messageAdapters[0];
   const disabledAdapters = normalizeOptionalMessageAdapters(gateway.messageAdaptersDisabled)
     .filter((type) => next.includes(type));
@@ -1434,7 +1434,7 @@ export function normalizeGatewayDefinition(definition: GatewayDefinition, option
   const rawMessageAdapters = definition.messageAdapters ?? [definition.messageAdapterType ?? "napcat"];
   const messageInputsDisabled = definition.messageInputsDisabled === true || rawMessageAdapters.includes("disabled");
   const normalizedMessageAdapters = normalizeMessageAdapters(rawMessageAdapters);
-  const messageAdapters = normalizedMessageAdapters.length > 0 ? normalizedMessageAdapters : ["napcat" as MessageEndpointType];
+  const messageAdapters = normalizedMessageAdapters;
   const messageAdaptersDisabled = normalizeOptionalMessageAdapters(definition.messageAdaptersDisabled).filter((type) => messageAdapters.includes(type));
   const messageAdapterPolicies = normalizeMessageAdapterPolicies(definition.messageAdapterPolicies, messageAdapters, messageAdaptersDisabled);
   const activeMessageAdapters = gatewayAdapterTypes({
@@ -1521,7 +1521,7 @@ export function normalizeGatewayDefinition(definition: GatewayDefinition, option
     name: definition.name ?? routeName,
     configName,
     enabled: definition.enabled !== false,
-    messageAdapterType: messageAdapters[0] ?? "napcat",
+    messageAdapterType: messageAdapters[0],
     messageAdapters,
     messageAdaptersDisabled,
     messageInputsDisabled,

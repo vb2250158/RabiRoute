@@ -4,9 +4,10 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { AGENT_SEND_CHANNEL_HELP, AGENT_SEND_REQUEST_CONTRACT, agentSendChannelHelp, handleAgentSend, inspectAgentSendDelivery, prepareAgentSendRequest, type AgentSendRequest } from "./agentSend.js";
+import { AGENT_SEND_CHANNEL_HELP, AGENT_SEND_REQUEST_CONTRACT, agentSendChannelHelp, handleAgentSend, inspectAgentSendDelivery, prepareAgentSendRequest, type AgentSendRequest } from "./endpointEgress.fixture.js";
 import { AGENT_SEND_FIELD_NAMES } from "./agentSendContracts.js";
 import type { AgentReplyOptions } from "./outbox.js";
+import { nativeHttpTestFetch } from "./manager/nativeHttpTestClient.js";
 
 test("channel discovery is deeply immutable and matches accepted channel examples", () => {
   const assertFrozen = (value: unknown): void => {
@@ -89,9 +90,20 @@ async function withJsonServer(
   });
   const address = server.address();
   assert.ok(address && typeof address === "object");
+  const fixtureOrigin = `http://127.0.0.1:${address.port}`;
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (input, init) => {
+    if (typeof input === "string" || input instanceof URL) {
+      let url: URL;
+      try { url = new URL(input); } catch { return originalFetch(input, init); }
+      if (url.origin === fixtureOrigin) return nativeHttpTestFetch(url, init);
+    }
+    return originalFetch(input, init);
+  };
   try {
-    await run(`http://127.0.0.1:${address.port}`);
+    await run(fixtureOrigin);
   } finally {
+    globalThis.fetch = originalFetch;
     await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
   }
 }

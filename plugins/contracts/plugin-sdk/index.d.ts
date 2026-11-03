@@ -19,6 +19,33 @@ export type PluginContext = Readonly<{
 export type PluginModule = Readonly<{ activate(context: PluginContext): void | Promise<void> }>;
 export function capability(name: string, major: number): string;
 export function definePlugin(module: PluginModule): PluginModule;
+/** Shared owners are supplied as explicit ports; platform factories stay in their packages. */
+export type MessageEndpointHostPorts = Readonly<{
+  prepareModules(ids: readonly string[]): Promise<void>;
+  module<T = Readonly<Record<string, unknown>>>(id: string): T;
+  assertModules(ids: readonly string[]): void;
+}>;
+export type MessageEndpoint = Readonly<{ type: string; start(): void | PluginDisposer | Promise<void | PluginDisposer> }>;
+export function ownMessageEndpoint(context: PluginContext, endpoint: MessageEndpoint): void;
+export function ownMessageEndpointScan(context: PluginContext, provider: Readonly<{ type: string; label: string; maturity: "verified" | "experimental" | "stub"; scan(): unknown | Promise<unknown> }>): void;
+export type PluginAcceptedWork = Readonly<{
+  runAcceptedWork<T>(operation: () => T | Promise<T>): Promise<T>;
+  acquire(snapshot: Readonly<Record<string, unknown>>): Readonly<{ snapshot: Readonly<Record<string, unknown>>; run<T>(operation: () => T | Promise<T>): Promise<T>; release(): void }>;
+  inspect(): Readonly<{ accepting: boolean; activeLeases: number }>;
+}>;
+export function ownPluginAcceptedWork(context: PluginContext, label?: string, cleanup?: PluginDisposer): PluginAcceptedWork;
+export type MessageEndpointEgressLease = Readonly<{ snapshot: Readonly<Record<string, unknown>>; call<T>(operation: string, args: readonly unknown[]): Promise<T>; release(): void }>;
+export type MessageEndpointEgressProvider = Readonly<{ identity: PluginIdentity; acquire(snapshot: Readonly<Record<string, unknown>>): MessageEndpointEgressLease; runAcceptedWork<T>(operation: () => T | Promise<T>): Promise<T>; inspect(): Readonly<{ accepting: boolean; activeLeases: number }> }>;
+export function ownMessageEndpointEgress(context: PluginContext, definition: Readonly<{ type: string; operations: Readonly<Record<string, (...args: any[]) => unknown>>; dispose?: PluginDisposer }>): MessageEndpointEgressProvider;
+export type MessageEndpointCatalog = Readonly<{
+  title: string; note: string; icon: string; order: number;
+  group: Readonly<{ id: string; title: string; note: string; order: number }>;
+}>;
+export type MessageEndpointSettings = Readonly<{
+  surface: "route.adapters"; endpointType: string; catalog?: MessageEndpointCatalog;
+  rendererId: string; schemaId: string; readCommandId: string; writeCommandId: string;
+  label: Readonly<{ fallback: string; key?: string }>; slot: string; hosts: readonly ("web" | "desktop")[]; order?: number; icon?: string;
+}>;
 export class ServiceResolver {
   constructor(services?: readonly (readonly [string, unknown])[]);
   require<T>(capabilityRef: string): T;

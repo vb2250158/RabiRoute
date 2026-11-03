@@ -137,3 +137,8 @@ setx NAPCAT_LOGIN_REFRESH_SECONDS "30"
 5. 若显示“快速登录已过期”，在卡片切到“扫码登录”并刷新二维码；不要持续点击快速登录。
 6. 如果 QQ 经常掉线，先同步 Windows 时间，再重启 NapCat / QQNT。
 7. 如果需要无值守，配置 Windows 开机启动 NapCat，再配置 NapCat 侧 `ACCOUNT` 和密码/MD5 环境变量。
+
+
+## 旧启动记录恢复
+
+已保留但未捕获进程身份的启动记录继续阻止重复启动。对绑定目录内的 bundled `NapCatWinBootMain.exe`，正式启动入口可在原绑定租约内核对完整进程可读性、目录与命令引用，以及 HTTP/WebUI 监听端口。只有确认当前实例已不存在时，才归档原记录及缺席证明，并开始新的尝试；不把旧启动改判为从未发生，不接管外部 QQ。新尝试保存原 PID、spawn、close 和退出码，原归属历史保留在 ownership 文件相邻的 `.history` 目录。外部启动器、不可读状态或仍有进程/端口时继续保留阻断。

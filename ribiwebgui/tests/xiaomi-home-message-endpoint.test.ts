@@ -66,9 +66,11 @@ test("recordings open on the local Xiaomi owner role, regardless of the displaye
 });
 
 test("Route message endpoint catalog includes Xiaomi Home as a distinct smart-home input", () => {
-  assert.match(routeConfigSource, /title: "智能家居"/);
-  assert.match(routeConfigSource, /type: "xiaomiHome", title: "米家 \/ Xiaomi Home"/);
-  assert.match(routeConfigSource, /"heartbeat", "xiaomiHome", "webhook"/);
+  const pluginSource = fs.readFileSync(new URL("../../plugins/builtin/io.rabiroute.manager.xiaomi-home/1.0.0/manager.mjs", import.meta.url), "utf8");
+  assert.match(pluginSource, /"group":\s*\{[\s\S]*?"title": "设备与自定义接入"/);
+  assert.match(pluginSource, /"endpointType": "xiaomiHome"/);
+  assert.match(pluginSource, /"title": "米家 \/ Xiaomi Home"/);
+  assert.match(routeConfigSource, /messageEndpointCatalog\(pluginCatalogStore.settingsRenderers.value\)/);
   assert.doesNotMatch(routeConfigSource, /type: "xiaoai", title:/);
   const quickSetupSource = fs.readFileSync(new URL("../src/components/QuickSetupDialog.vue", import.meta.url), "utf8");
   assert.doesNotMatch(quickSetupSource, /type: "xiaoai", title:/);
@@ -100,7 +102,9 @@ test("Route message endpoint catalog includes Xiaomi Home as a distinct smart-ho
 });
 
 test("Xiaomi Home diagnostics stay beside their owning settings instead of the top dependency panel", () => {
-  assert.match(routeConfigSource, /v-if="choice\.type !== 'xiaomiHome'" class="dependency-panel mb-3"/);
+  assert.doesNotMatch(routeConfigSource, /choice\.type === 'xiaomiHome'|choice\.type !== 'xiaomiHome'/);
+  const cardSource = fs.readFileSync(new URL("../src/messageEndpoints/XiaomiHomeEndpointCard.vue", import.meta.url), "utf8");
+  assert.match(cardSource, /XiaomiHomeRendererHost/);
   assert.match(routeConfigSource, /scan: messageScanFor\(choice\.type\)/);
   assert.match(endpointRendererSource, /item\.id === "event-monitor"/);
   assert.match(endpointRendererSource, /aria-label="监听设备事件"/);

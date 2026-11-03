@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 2,
+  "id": "io.rabiroute.endpoint.heartbeat",
+  "version": "1.0.0",
+  "entries": {
+    "manager": {
+      "execution": "in_process",
+      "module": "./manager.mjs"
+    },
+    "gateway": {
+      "execution": "in_process",
+      "module": "./gateway.mjs"
+    },
+    "web": {
+      "execution": "in_process",
+      "module": "./web/client.mjs"
+    }
+  },
+  "provides": [
+    "endpoint.heartbeat@1"
+  ],
+  "requires": [
+    "host.message-endpoints@1"
+  ],
+  "optional": [],
+  "permissions": [],
+  "displayName": "定时触发",
+  "description": "按时间安排触发人格任务",
+  "icon": "mdi-timer-outline"
+}

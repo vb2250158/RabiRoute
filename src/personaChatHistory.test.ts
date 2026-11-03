@@ -7,7 +7,7 @@ import { DatabaseSync } from "node:sqlite";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { pathToFileURL } from "node:url";
-import { appendPersonaChatReply, readPersonaChatHistory } from "./personaChatHistory.js";
+import { appendPersonaChatReply, readPersonaChatHistory, readPersonaChatHistoryCategories } from "./personaChatHistory.js";
 import { CodexHookContextService } from "./manager/codexHookContext.js";
 import { publishRoleKnowledgeCatalogSnapshot, readRoleKnowledgeCatalogSnapshot } from "./roleKnowledge.js";
 
@@ -188,4 +188,19 @@ test("checkpoint transaction failure preserves durable ledger and process restar
     assert.equal(JSON.parse(String(recovered.prepare('SELECT value FROM checkpoint').get()!.value)).size, (await fs.stat(file)).size);
     assert.equal((await fs.readFile(file, 'utf8')).trim().split('\n').length, 2);
   } finally { recovered.close(); }
+});
+
+
+test('category filtering pages through other channels without losing earlier matches or mixed AIUI exchanges', async t => {
+  const f = await fixture(t);
+  await appendPersonaChatReply(f.roleDir, {kind:'agent_delivery',sessionId:'source',targetSessionId:'target',deliveryId:'delivery',text:'Agent message'});
+  for(let n=0;n<80;n++)await appendPersonaChatReply(f.roleDir,{sessionId:'task',turnId:'turn-'+n,text:'Reply '+n});
+  await appendPersonaChatReply(f.roleDir, {kind:'user_delivery',sessionId:'panel',targetSessionId:'target',deliveryId:'feedback',text:'Panel message'});
+  const agent = await readPersonaChatHistory(f.roleDir,undefined,1,{summary:true,category:'agent'});
+  assert.deepEqual(agent.entries.map(row=>row.text),['Agent message']);
+  assert.deepEqual((await readPersonaChatHistory(f.roleDir,undefined,1,{category:'panel'})).entries.map(row=>row.text),['Panel message']);
+  assert.deepEqual((await readPersonaChatHistory(f.roleDir,undefined,1,{category:'replies'})).entries.map(row=>row.text),['Reply 79']);
+  assert.deepEqual((await readPersonaChatHistory(f.roleDir,0,100,{direction:'newer',category:'agent'})).entries.map(row=>row.text),['Agent message']);
+  assert.deepEqual((await readPersonaChatHistoryCategories(f.roleDir)).sort(),['agent','panel','replies']);
+  await assert.rejects(readPersonaChatHistory(f.roleDir,undefined,1,{category:'invalid' as any}),/Invalid chat history category/);
 });

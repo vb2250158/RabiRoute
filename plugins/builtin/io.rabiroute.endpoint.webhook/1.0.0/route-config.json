@@ -1,0 +1,23 @@
+{
+  "endpointType": "webhook",
+  "routeKeys": [
+    "webhookPort",
+    "webhookPath"
+  ],
+  "runtimeFields": {
+    "webhookPort": {
+      "paths": [
+        "webhookPort",
+        "gatewayPort"
+      ],
+      "default": 8789,
+      "format": "number"
+    },
+    "webhookPath": {
+      "paths": [
+        "webhookPath"
+      ],
+      "default": "/webhook"
+    }
+  }
+}

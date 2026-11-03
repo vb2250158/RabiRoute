@@ -1,17 +1,32 @@
 <script setup lang="ts">
 import { userFacingError } from "../userFacingError";
-import { computed, onMounted, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { useRoute, useRouter } from "vue-router";
 import { agentInstanceDisplayName, type AgentInstance } from "@shared/agentInstance";
 import InstanceAgentSettings from "../components/InstanceAgentSettings.vue";
 import RemoteTerminalDialog from "../components/RemoteTerminalDialog.vue";
 import { routeScopedAdaptersPath } from "../routeScopedNavigation";
 import { copyTextToClipboard } from "../clipboard";
 import { managerAccessToken } from "../managerApi";
+import { peerManagerPath } from "../peerManagerTarget";
 import { buildLanAgentBootstrapPrompt, lanAgentBootstrapPlatforms, type LanAgentBootstrapPlatform } from "../lanAgentBootstrap";
 import { useGatewayStore } from "../stores/gatewayStore";
 const gatewayStore = useGatewayStore();
+const route = useRoute();
+const router = useRouter();
+const ownerDeviceId = computed(() => typeof route.query.deviceId === "string" ? route.query.deviceId : "");
+const hosts = ref<Array<{ deviceId: string; name: string; online: boolean }>>([]);
+const hostError = ref("");
+const hostItems = computed(() => {
+  const items = [{ title: "本机", value: "" }, ...hosts.value.map(host => ({ title: `${host.name || host.deviceId}${host.online ? "" : "（离线）"}`, value: host.deviceId }))];
+  if (ownerDeviceId.value && !items.some(item => item.value === ownerDeviceId.value)) items.push({ title: ownerDeviceId.value, value: ownerDeviceId.value });
+  return items;
+});
+const selectedHostName = computed(() => hostItems.value.find(item => item.value === ownerDeviceId.value)?.title || "本机");
+let refreshController: AbortController | undefined;
+const instancePath = (instance: AgentInstance, suffix: string) => peerManagerPath(instance.ownerDeviceId || "", `/api/lan-agent/instances/${encodeURIComponent(instance.instanceId)}${suffix}`);
 function agentRoutes(instance: AgentInstance, agentId: string, routeId?: string) {
-  return gatewayStore.gateways.filter(route => instance.local ? route.id === routeId : Object.values(route.agentInstanceBindings || {}).some(binding => binding.instanceId === instance.instanceId && binding.agentId === agentId));
+  return gatewayStore.gateways.filter(route => instance.local && !instance.ownerDeviceId ? route.id === routeId : Object.values(route.agentInstanceBindings || {}).some(binding => (binding.ownerDeviceId || "") === (instance.ownerDeviceId || "") && binding.instanceId === instance.instanceId && binding.agentId === agentId));
 }
 
 type NodeStatus = {
@@ -62,6 +77,27 @@ const terminalInstance = ref<AgentInstance>();
 const nodeName = ref("");
 const savingName = ref(false);
 const nameError = ref("");
+const screenshot = ref<{ mimeType: string; data: string; width: number; height: number }>();
+const screenshotName = ref("");
+const capturingInstanceId = ref("");
+let captureRevision = 0;
+
+async function captureScreen(instance: AgentInstance): Promise<void> {
+  const revision = ++captureRevision;
+  const name = instance.local ? selectedHostName.value : agentInstanceDisplayName(instance);
+  capturingInstanceId.value = instance.instanceId;
+  error.value = "";
+  try {
+    const body = await readJson(await fetch(instancePath(instance, "/computer"), {
+      method: "POST", headers: { "content-type": "application/json", "x-rabiroute-webgui-token": connectionToken.value },
+      body: JSON.stringify({ action: "screen.capture" })
+    }));
+    if (revision !== captureRevision) return;
+    screenshotName.value = name;
+    screenshot.value = body.data as typeof screenshot.value;
+  } catch (reason) { if (revision === captureRevision) error.value = userFacingError(reason); }
+  finally { if (revision === captureRevision) capturingInstanceId.value = ""; }
+}
 
 function editName(instance: AgentInstance): void {
   namingInstance.value = instance;
@@ -75,7 +111,7 @@ async function saveName(): Promise<void> {
   savingName.value = true;
   nameError.value = "";
   try {
-    await readJson(await fetch(`/api/lan-agent/instances/${encodeURIComponent(instance.instanceId)}/name`, {
+    await readJson(await fetch(instancePath(instance, "/name"), {
       method: "PUT",
       headers: { "content-type": "application/json", "x-rabiroute-webgui-token": connectionToken.value },
       body: JSON.stringify({ name: nodeName.value, expectedName: instance.name || "" })
@@ -98,7 +134,7 @@ async function setInstanceEnabled(instance: AgentInstance, enabled: unknown): Pr
   if (typeof enabled !== "boolean" || enablingInstanceId.value) return;
   enablingInstanceId.value = instance.instanceId; error.value = "";
   try {
-    await readJson(await fetch(`/api/lan-agent/instances/${encodeURIComponent(instance.instanceId)}/enabled`, { method: "PUT", headers: { "content-type": "application/json", "x-rabiroute-webgui-token": connectionToken.value }, body: JSON.stringify({ enabled, expectedEnabled: instance.enabled !== false }) }));
+    await readJson(await fetch(instancePath(instance, "/enabled"), { method: "PUT", headers: { "content-type": "application/json", "x-rabiroute-webgui-token": connectionToken.value }, body: JSON.stringify({ enabled, expectedEnabled: instance.enabled !== false }) }));
     await refresh();
     if (instances.value.find(item => item.instanceId === instance.instanceId)?.enabled !== enabled) throw new Error("实例开关保存结果未确认，请刷新核对。");
   } catch (reason) { error.value = userFacingError(reason); } finally { enablingInstanceId.value = ""; }
@@ -108,17 +144,19 @@ async function copyInstallPrompt(): Promise<void> {
   if (issuingTicket.value) return;
   if (!targetPlatform.value) { error.value = "请先选择目标电脑系统。"; return; }
   const platform = targetPlatform.value;
+  const target = { deviceId: ownerDeviceId.value, managerUrl: managerUrl.value, publicKeySha256: releasePublicKeySha256.value };
   error.value = "";
   copied.value = false;
   issuingTicket.value = true;
   try {
-    const body = await readJson(await fetch("/api/lan-agent/enrollments", {
+    const body = await readJson(await fetch(peerManagerPath(target.deviceId, "/api/lan-agent/enrollments"), {
       method: "POST", headers: { "x-rabiroute-webgui-token": connectionToken.value }
     }));
     const data = body.data as { ticket?: string; expiresAt?: number };
+    if (target.deviceId !== ownerDeviceId.value) return;
     if (!data?.ticket || !Number.isFinite(data.expiresAt) || data.expiresAt! <= Date.now()) throw new Error("未取得有效的一次性接入票据，请刷新后重试。");
     ticketExpiresAt.value = new Date(data.expiresAt!).toISOString();
-    await copyTextToClipboard(buildLanAgentBootstrapPrompt({ managerUrl: managerUrl.value, token: data.ticket, expiresAt: ticketExpiresAt.value, publicKeySha256: releasePublicKeySha256.value, platform }));
+    await copyTextToClipboard(buildLanAgentBootstrapPrompt({ managerUrl: target.managerUrl, token: data.ticket, expiresAt: ticketExpiresAt.value, publicKeySha256: target.publicKeySha256, platform }));
     copied.value = true;
   } catch (reason) {
     error.value = userFacingError(reason);
@@ -127,7 +165,7 @@ async function copyInstallPrompt(): Promise<void> {
   }
 }
 
-const onlineCount = computed(() => nodes.value.filter(node => node.connected).length);
+const onlineCount = computed(() => instances.value.filter(instance => instance.connected).length);
 
 function text(value: unknown): string {
   return typeof value === "string" ? value : "";
@@ -146,26 +184,50 @@ async function readJson(response: Response): Promise<Record<string, unknown>> {
 }
 
 async function refresh(): Promise<void> {
+  refreshController?.abort();
+  const controller = new AbortController();
+  refreshController = controller;
+  const deviceId = ownerDeviceId.value;
   loading.value = true;
   error.value = "";
+  releasePublicKeySha256.value = "";
   try {
-    const access = await readJson(await fetch("/api/webgui-access", { cache: "no-store" }));
+    const access = await readJson(await fetch("/api/webgui-access", { cache: "no-store", signal: controller.signal }));
+    if (controller.signal.aborted) return;
     const data = access.data as { enabled?: boolean; token?: string; listeningOnLan?: boolean; urls?: { url: string }[] };
     connectionToken.value = data.token || managerAccessToken();
-    connectionAvailable.value = data.enabled === true && data.listeningOnLan === true;
-    const instanceCatalog = await readJson(await fetch("/api/lan-agent/instances", { cache: "no-store", headers: { "x-rabiroute-webgui-token": connectionToken.value } }));
-    instances.value = instanceCatalog.instances as AgentInstance[];
-    if (!data.enabled) { nodes.value = []; tasks.value = []; return; }
-    if (["localhost", "127.0.0.1", "[::1]"].includes(window.location.hostname) && data.urls?.[0]) managerUrl.value = new URL(data.urls[0].url).origin;
-    const body = await readJson(await fetch("/api/lan-agent/nodes", { cache: "no-store", headers: { "x-rabiroute-webgui-token": connectionToken.value } }));
+    connectionAvailable.value = !deviceId && data.enabled === true && data.listeningOnLan === true;
+    const init = { cache: "no-store" as const, signal: controller.signal, headers: { "x-rabiroute-webgui-token": connectionToken.value } };
+    const [catalog, nodeCatalog, directory, meta] = await Promise.allSettled([
+      fetch(peerManagerPath(deviceId, "/api/lan-agent/instances"), init).then(readJson),
+      fetch(peerManagerPath(deviceId, "/api/lan-agent/nodes"), init).then(readJson),
+      fetch("/api/rabilink/peer/servers", init).then(async response => { if (!response.ok) throw new Error("读取主机列表失败"); return response.json(); }),
+      fetch(peerManagerPath(deviceId, "/meta"), init).then(async response => { if (!response.ok) throw new Error("读取主机状态失败"); return response.json(); })
+    ]);
+    if (controller.signal.aborted) return;
+    if (directory.status === "fulfilled") {
+      hosts.value = (directory.value.peers || []).filter((host: { deviceId: string }) => host.deviceId !== gatewayStore.meta.rabiLinkRelay?.deviceId);
+      hostError.value = "";
+    } else hostError.value = userFacingError(directory.reason);
+    if (catalog.status === "rejected") throw catalog.reason;
+    instances.value = (catalog.value.instances as AgentInstance[]).map(instance => ({ ...instance, ...(deviceId ? { ownerDeviceId: deviceId } : {}) }));
+    if (meta.status === "fulfilled") {
+      const lan = meta.value.webguiLan;
+      connectionAvailable.value = deviceId ? lan?.enabled === true && lan?.listeningOnLan === true : connectionAvailable.value;
+      const address = meta.value.lanDiscovery?.interfaces?.[0]?.address;
+      if (address && meta.value.managerPort) managerUrl.value = `http://${address.includes(":") ? `[${address}]` : address}:${meta.value.managerPort}`;
+      else if (deviceId) connectionAvailable.value = false;
+    } else if (!deviceId && ["localhost", "127.0.0.1", "[::1]"].includes(window.location.hostname) && data.urls?.[0]) managerUrl.value = new URL(data.urls[0].url).origin;
+    if (nodeCatalog.status === "rejected") { nodes.value = []; tasks.value = []; error.value = userFacingError(nodeCatalog.reason); return; }
+    const body = nodeCatalog.value;
     nodes.value = Array.isArray(body.nodes) ? body.nodes as NodeStatus[] : [];
     tasks.value = Array.isArray(body.tasks) ? body.tasks as Task[] : [];
     releaseVersion.value = text(body.releaseVersion);
     releasePublicKeySha256.value = text(body.releasePublicKeySha256);
   } catch (reason) {
-    error.value = userFacingError(reason);
+    if (!controller.signal.aborted) error.value = userFacingError(reason);
   } finally {
-    loading.value = false;
+    if (!controller.signal.aborted) loading.value = false;
   }
 }
 
@@ -173,7 +235,7 @@ async function requestUpdate(node: NodeStatus): Promise<void> {
   updatingNodeId.value = node.nodeId;
   error.value = "";
   try {
-    await readJson(await fetch(`/api/lan-agent/nodes/${encodeURIComponent(node.nodeId)}/update`, {
+    await readJson(await fetch(peerManagerPath(ownerDeviceId.value, `/api/lan-agent/nodes/${encodeURIComponent(node.nodeId)}/update`), {
       method: "POST",
       headers: { "content-type": "application/json", "x-rabiroute-webgui-token": connectionToken.value },
       body: JSON.stringify({ version: releaseVersion.value || undefined })
@@ -186,7 +248,16 @@ async function requestUpdate(node: NodeStatus): Promise<void> {
   }
 }
 
+watch(ownerDeviceId, () => {
+  captureRevision++; capturingInstanceId.value = "";
+  managerUrl.value = ""; releaseVersion.value = ""; releasePublicKeySha256.value = ""; connectionAvailable.value = false;
+  copied.value = false; ticketExpiresAt.value = ""; enrollmentOpen.value = false;
+  instances.value = []; nodes.value = []; tasks.value = [];
+  terminalInstance.value = undefined; namingInstance.value = undefined; screenshot.value = undefined; addingInstanceId.value = "";
+  void refresh();
+});
 onMounted(() => { void refresh(); });
+onBeforeUnmount(() => { refreshController?.abort(); captureRevision++; });
 </script>
 
 <template>
@@ -194,7 +265,7 @@ onMounted(() => { void refresh(); });
     <div class="d-flex flex-wrap align-center justify-space-between ga-2 mb-3">
       <div>
         <h2 class="text-subtitle-1 font-weight-bold">远端智能体</h2>
-        <p class="text-body-2 lan-muted mb-0">在线 {{ onlineCount }} / {{ nodes.length }} 个节点。</p>
+        <p class="text-body-2 lan-muted mb-0">{{ selectedHostName }} · 在线 {{ onlineCount }} / {{ instances.length }} 个执行实例。</p>
       </div>
       <div class="d-flex flex-wrap ga-2">
         <v-btn prepend-icon="mdi-plus" color="primary" @click="enrollmentOpen = true">接入一台电脑</v-btn>
@@ -202,8 +273,14 @@ onMounted(() => { void refresh(); });
       </div>
     </div>
 
+    <v-select :model-value="ownerDeviceId" :items="hostItems" label="电脑主机" density="compact" :disabled="savingName || !!enablingInstanceId || !!updatingNodeId || issuingTicket" @update:model-value="value => router.replace({ query: { ...route.query, deviceId: value || undefined } })" />
+    <v-alert v-if="hostError" type="info" variant="tonal" class="mb-3">{{ hostError }}</v-alert>
+
     <v-alert v-if="error" type="error" variant="tonal" class="mb-4">{{ error }}</v-alert>
-    <RemoteTerminalDialog v-if="terminalInstance" :key="terminalInstance.instanceId" :instance-id="terminalInstance.instanceId" :name="agentInstanceDisplayName(terminalInstance)" :token="connectionToken" @close="terminalInstance = undefined" />
+    <RemoteTerminalDialog v-if="terminalInstance" :key="`${terminalInstance.ownerDeviceId || ''}:${terminalInstance.instanceId}`" :instance-id="terminalInstance.instanceId" :owner-device-id="terminalInstance.ownerDeviceId" :name="terminalInstance.local ? selectedHostName : agentInstanceDisplayName(terminalInstance)" :token="connectionToken" @close="terminalInstance = undefined" />
+    <v-dialog :model-value="!!screenshot" max-width="1200" @update:model-value="value => { if (!value) screenshot = undefined; }">
+      <v-card :title="`${screenshotName} · 当前画面`"><v-card-text><img v-if="screenshot" :src="`data:${screenshot.mimeType};base64,${screenshot.data}`" :alt="`${screenshotName}截图`" style="max-width: 100%; height: auto" /></v-card-text><v-card-actions><v-spacer /><v-btn @click="screenshot = undefined">关闭</v-btn></v-card-actions></v-card>
+    </v-dialog>
     <v-dialog :model-value="!!namingInstance" :persistent="savingName" max-width="480" @update:model-value="value => { if (!value && !savingName) namingInstance = undefined; }">
       <v-card title="修改名称">
         <v-card-text>
@@ -243,13 +320,13 @@ onMounted(() => { void refresh(); });
       </v-expansion-panel>
     </v-expansion-panels>
     <v-alert v-if="!loading && !nodes.length" type="info" variant="tonal" class="mb-4">
-      暂无已接入节点。新电脑完成 Rabi Agent 自助接入后会显示在这里。
+      当前主机的终端与电脑能力可直接使用。只运行轻量客户端的其他电脑，可通过“接入一台电脑”加入此主机。
     </v-alert>
 
     <v-expansion-panels multiple>
       <v-expansion-panel v-for="instance in instances" :key="instance.instanceId">
         <v-expansion-panel-title>
-          <span class="instance-title">{{ instance.local ? "实例：本机" : `${agentInstanceDisplayName(instance)}（${instance.address || "离线"}）` }}</span>
+          <span class="instance-title">{{ instance.local ? `实例：${selectedHostName}` : `${agentInstanceDisplayName(instance)}（${instance.address || "离线"}）` }}</span>
           <v-chip class="ml-3" size="small" :color="instance.connected ? 'success' : 'default'">{{ instance.connected ? "在线" : "离线" }}</v-chip>
           <v-btn v-if="!instance.local" class="ml-2" icon="mdi-pencil" size="small" variant="text" title="修改名称" aria-label="修改名称" @click.stop="editName(instance)" />
         </v-expansion-panel-title>
@@ -264,9 +341,10 @@ onMounted(() => { void refresh(); });
             </v-expansion-panel>
           </v-expansion-panels>
           <p v-if="!instance.agents.length" class="text-body-2 my-3">{{ instance.local ? '此实例还没有智能体。' : '按每次请求的 Agent 类型和完整会话 ID 使用执行程序；可按需配置连接参数。' }}</p>
+          <v-btn class="mt-3 mr-2" :disabled="!instance.connected" prepend-icon="mdi-console" @click="terminalInstance = instance">终端</v-btn>
+          <v-btn v-if="instance.computerCapabilities?.includes('screenshots')" class="mt-3 mr-2" :disabled="!instance.connected" :loading="capturingInstanceId === instance.instanceId" prepend-icon="mdi-monitor-screenshot" @click="captureScreen(instance)">查看画面</v-btn>
           <template v-if="!instance.local">
             <v-switch :model-value="instance.enabled !== false" label="是否启用Agent" hint="控制整个远端实例，默认启用；启用后可直接使用全部公开接口。" persistent-hint :loading="enablingInstanceId === instance.instanceId" :disabled="!!enablingInstanceId" @update:model-value="setInstanceEnabled(instance, $event)" />
-            <v-btn class="mt-3 mr-2" :disabled="!instance.connected" prepend-icon="mdi-console" @click="terminalInstance = instance">远端终端</v-btn>
             <v-btn class="mt-3 mr-2" :disabled="!instance.connected" @click="addingInstanceId = addingInstanceId === instance.instanceId ? '' : instance.instanceId">配置执行程序</v-btn>
             <InstanceAgentSettings v-if="addingInstanceId === instance.instanceId" class="mt-4" :instance="instance" :agent="{ agentId: '', name: 'Agent', provider: instance.agents[0]?.provider || 'codex-desktop', enabled: true }" @saved="addingInstanceId = ''; refresh()" />
             <v-btn v-for="node in nodes.filter(node => node.nodeId === instance.instanceId)" :key="node.nodeId" class="mt-3" :disabled="!node.connected" :loading="updatingNodeId === node.nodeId" @click="requestUpdate(node)">更新连接程序至 {{ releaseVersion }}</v-btn>

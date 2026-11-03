@@ -276,7 +276,7 @@ export const activate = definePlugin({
         ctx.effect(async () => {
             const upgrades = runtime.managerPluginRoutes.registerUpgrades(context.identity.instanceId, [runtime.createLanAgentConnectionOperation()]);
             try {
-            const registration = await runtime.managerPluginRoutes.registerOperationsAsync(context.identity.instanceId, [...runtime.createCorePublicOperations(), ...runtime.createPluginCatalogOperations(), runtime.createManagerEventOperationDefinition(), ...runtime.createWebguiAccessOperations(), ...runtime.createResourceCacheOperations(), ...runtime.createLanAgentReadOperations(lanAgentContext), ...runtime.createLanAgentTerminalOperations(lanAgentContext), ...runtime.createLanAgentComputerOperations(lanAgentContext), ...runtime.createLanAgentManagementOperations(lanAgentContext)], context.lifecycle.signal);
+            const registration = await runtime.managerPluginRoutes.registerOperationsAsync(context.identity.instanceId, [...runtime.createCorePublicOperations(), ...runtime.createResourceCacheOperations(), ...runtime.createLanAgentReadOperations(lanAgentContext), ...runtime.createLanAgentTerminalOperations(lanAgentContext), ...runtime.createLanAgentComputerOperations(lanAgentContext), ...runtime.createLanAgentManagementOperations(lanAgentContext)], context.lifecycle.signal);
             return async () => {
                 const errors = [];
                 try { upgrades.stopAccepting(); } catch (error) { errors.push(error); }
@@ -288,12 +288,7 @@ export const activate = definePlugin({
                 if (errors.length) throw new AggregateError(errors, "Manager core operation and upgrade cleanup failed.");
             };
             } catch (error) { await upgrades.dispose(); throw error; }
-        }, "activate executable Manager events, access, resources and Agent operations");
-        ctx.effect(() => {
-            const definitions = runtime.createWebguiStaticOperations();
-            const registration = runtime.managerPluginRoutes.registerHttpProxies(context.identity.instanceId, [...definitions.resources, definitions.fallback]);
-            return () => registration.dispose();
-        }, "activate native Manager WebGUI resources and final static fallback");
+        }, "activate Manager business, resources and Agent operations");
 
 
                 await Promise.all(pendingEffects);

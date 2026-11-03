@@ -59,6 +59,15 @@ test("first catalog failure exposes recovery mode without plugin pages", () => {
   assert.deepEqual(resolveWebPageCatalog(null, "loading"), { mode: "loading", pages: [] });
 });
 
+test("plugin bundles cannot replace the shell's plugin management route", () => {
+  assert.throws(() => registerTrustedWebPage({
+    instanceId: "manager:example", pluginId: "io.test.example",
+    routeId: "example.plugins", rendererId: "example.plugins.renderer",
+    loader: async () => defineComponent({ template: "<div />" }),
+    paths: [{ path: "/plugins", title: "Example" }]
+  }), /Trusted Web page paths\[0\]\.path is invalid/);
+});
+
 test("navigation requires an active page from the same plugin owner", () => {
   const dispose = registerPerformancePage();
   try {

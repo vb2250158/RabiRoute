@@ -30,6 +30,7 @@
 | 开启桌宠观看、游戏或工作陪伴 | [桌宠陪伴模式](companion-mode.md)（实验功能） |
 | 操作其他电脑的终端、文件与画面 | [主控与远端电脑客户端](remote-computer-client.md) |
 | 调整浅色、深色和桌面主题 | [界面主题](user-guide/interface-theme.md) |
+| 查看、启停消息端及其他插件 | [管理插件](user-guide/plugins.md) |
 
 ## 本机安装、配置与恢复
 
@@ -79,6 +80,8 @@
 - [角色数据同步退役说明](persona-data-sync.md) — **已退役**。不再提供自动/手动同步或同步 API；改用现有 RabiLink 远端角色、Agent 与数据访问，不复制数据，保留历史资料。
 
 ## 维护开发：架构、构建与诊断
+
+- [已连接主机的远端 Agent 架构](connected-host-agent-architecture.md)：现状与目标图、连接/执行/投递拥有者、已完成的代码整理和待实施接线。
 
 - [摄像头事件与 HA 恢复](home-camera-events.md)：显式人格绑定、录像落盘、管理员启动、有界恢复及迁移验收。
 

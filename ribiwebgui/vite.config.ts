@@ -48,11 +48,19 @@ export default defineConfig(({ command }) => {
           managerMessageAdapterControlPlugin: fileURLToPath(new URL("./src/bundles/builtin/message-adapter-control.ts", import.meta.url)),
           managerPersonaPlugin: fileURLToPath(new URL("./src/bundles/builtin/persona.ts", import.meta.url)),
           managerSpeechPlugin: fileURLToPath(new URL("./src/bundles/builtin/speech.ts", import.meta.url)),
+          speechEndpointPlugin: fileURLToPath(new URL("./src/bundles/endpoints/speech.ts", import.meta.url)),
           managerVideoPlugin: fileURLToPath(new URL("./src/bundles/builtin/video.ts", import.meta.url)),
           managerPerformancePlugin: fileURLToPath(new URL("./src/bundles/builtin/performance.ts", import.meta.url)),
           managerDiagnosticsPlugin: fileURLToPath(new URL("./src/bundles/builtin/diagnostics.ts", import.meta.url)),
           managerDesktopPlugin: fileURLToPath(new URL("./src/bundles/builtin/desktop.ts", import.meta.url)),
-          managerXiaomiHomePlugin: fileURLToPath(new URL("./src/bundles/builtin/xiaomi-home.ts", import.meta.url))
+          managerXiaomiHomePlugin: fileURLToPath(new URL("./src/bundles/builtin/xiaomi-home.ts", import.meta.url)),
+          endpointNapcatPlugin: fileURLToPath(new URL("./src/bundles/endpoints/napcat.ts", import.meta.url)),
+          endpointHeartbeatPlugin: fileURLToPath(new URL("./src/bundles/endpoints/heartbeat.ts", import.meta.url)),
+          endpointWecomPlugin: fileURLToPath(new URL("./src/bundles/endpoints/wecom.ts", import.meta.url)),
+          endpointWeixinPlugin: fileURLToPath(new URL("./src/bundles/endpoints/weixin.ts", import.meta.url)),
+          endpointFeishuPlugin: fileURLToPath(new URL("./src/bundles/endpoints/feishu.ts", import.meta.url)),
+          endpointWebhookPlugin: fileURLToPath(new URL("./src/bundles/endpoints/webhook.ts", import.meta.url)),
+          endpointRabilinkPlugin: fileURLToPath(new URL("./src/bundles/endpoints/rabilink.ts", import.meta.url))
         }
       }
     },

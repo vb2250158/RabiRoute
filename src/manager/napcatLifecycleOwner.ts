@@ -2,6 +2,7 @@ import fs from "node:fs";
 import type { ChildProcess } from "node:child_process";
 import path from "node:path";
 import { AsyncLocalStorage } from "node:async_hooks";
+import { randomUUID } from "node:crypto";
 import { KeyedAsyncLock } from "../shared/keyedAsyncLock.js";
 import { atomicWriteFileSync } from "../shared/filePersistence.js";
 import { NapcatState, NapcatLifecycleError } from "../shared/napcatStateContract.js";
@@ -15,11 +16,16 @@ export type NapcatBinding = {
   webuiUrl?: string;
 };
 export type NapcatProcessIdentity = { pid: number; parentPid: number; startedAt: string; executable: string; napcatRoot?: boolean };
-export type NapcatOwnedProcess = { binding: NapcatBinding; processes: NapcatProcessIdentity[]; launchPending?: boolean };
+export type NapcatLaunchScope = { commandPath: string; cwd: string };
+export type NapcatStoppedProof = { checkedAt: string; commandPath: string };
+export type NapcatOwnedProcess = { binding: NapcatBinding; processes: NapcatProcessIdentity[]; launchPending?: boolean;
+  recoveredLaunch?: { archive: string; proof: NapcatStoppedProof };
+  launchAttempt?: { id: string; requestedAt: string; pid?: number; spawnedAt?: string; closedAt?: string; exitCode?: number | null; signal?: string | null } };
 export type NapcatProcessDriver = {
   snapshot(): Promise<NapcatProcessIdentity[]>;
   terminate(process: NapcatProcessIdentity): Promise<void>;
   requestExit?(binding: NapcatBinding, processes: NapcatProcessIdentity[]): Promise<void>;
+  confirmBundledInstanceStopped?(binding: NapcatBinding, plan: NapcatLaunchScope): Promise<NapcatStoppedProof | undefined>;
 };
 
 export const napcatBindingKey = (binding: Pick<NapcatBinding, "gatewayId" | "instanceId">): string =>
@@ -115,16 +121,45 @@ export class NapcatLifecycleOwner {
   prepareLaunch(request: { gatewayId?: string; instanceId?: string }): void {
     const binding = this.assertBound(request);
     const key = napcatBindingKey(binding);
-    if (this.records.has(key) && (this.records.get(key)!.launchPending || !this.records.get(key)!.processes.length)) {
+    if (this.records.has(key) && (this.records.get(key)!.launchPending || (!this.records.get(key)!.processes.length && !this.records.get(key)!.recoveredLaunch))) {
       throw new NapcatLifecycleError(NapcatState.StartFailed, "上次 NapCat 启动的进程身份尚未确认；已保留原启动记录，不能重复启动。");
     }
     if (!this.records.has(key)) this.records.set(key, { binding, processes: [] });
     this.records.get(key)!.launchPending = true;
+    this.records.get(key)!.launchAttempt = { id: randomUUID(), requestedAt: new Date().toISOString() };
     this.persist();
   }
 
   /** The original child handle proves whether spawn occurred and enables later PID capture. */
-  async launch(request: { gatewayId?: string; instanceId?: string }, spawnChild: () => ChildProcess): Promise<ChildProcess> {
+  async launch(request: { gatewayId?: string; instanceId?: string }, spawnChild: () => ChildProcess, plan?: NapcatLaunchScope): Promise<ChildProcess> {
+    return this.run(request, () => this.launchBound(request, spawnChild, plan));
+  }
+
+  private async launchBound(request: { gatewayId?: string; instanceId?: string }, spawnChild: () => ChildProcess, plan?: NapcatLaunchScope): Promise<ChildProcess> {
+    const binding = this.assertBound(request);
+    const pendingKey = napcatBindingKey(binding), pending = this.records.get(pendingKey);
+    const attemptIdBeforeProof = pending?.launchAttempt?.id;
+    if (pending && (pending.launchPending || !pending.processes.length) && plan && this.options.driver.confirmBundledInstanceStopped) {
+      const original = this.launchChildren.get(pendingKey);
+      // A live original child must be captured, never replaced by a second launch.
+      if (!original || original.exitCode !== null || original.signalCode !== null) {
+        const proof = await this.options.driver.confirmBundledInstanceStopped(binding, plan);
+        const currentBinding = this.assertBound(request);
+        if (!sameBinding(currentBinding, binding) || currentBinding.httpUrl !== binding.httpUrl || currentBinding.webuiUrl !== binding.webuiUrl) {
+          throw new NapcatLifecycleError(NapcatState.StartFailed, "NapCat 连接配置已变化，请重新检查当前实例。");
+        }
+        if (proof && this.records.get(pendingKey) === pending && pending.launchAttempt?.id === attemptIdBeforeProof) {
+          const archive = path.join(`${this.options.statePath}.history`, `${randomUUID()}.json`);
+          fs.mkdirSync(path.dirname(archive), { recursive: true });
+          atomicWriteFileSync(archive, JSON.stringify({ schemaVersion: 1, resolution: "no-live-instance", proof, record: pending }));
+          // Preserve the old attempt and its resolution. This does not claim that spawn never happened.
+          const resolved = { ...pending, recoveredLaunch: { archive, proof }, launchPending: false };
+          this.records.set(pendingKey, resolved);
+          try { this.persist(); } catch (error) { this.records.set(pendingKey, pending); throw error; }
+          this.options.log("napcat_pending_launch_resolved_absent", pendingKey);
+        }
+      }
+    }
     this.prepareLaunch(request);
     const key = napcatBindingKey({ gatewayId: request.gatewayId || "", instanceId: request.instanceId || "" });
     const unstarted = () => {
@@ -136,15 +171,28 @@ export class NapcatLifecycleOwner {
     };
     let child: ChildProcess;
     try { child = spawnChild(); } catch (error) { unstarted(); throw error; }
+    const attemptId = this.records.get(key)!.launchAttempt!.id;
     this.launchChildren.set(key, child);
     await new Promise<void>((resolve, reject) => {
-      child.once("spawn", resolve);
+      child.once("spawn", () => {
+        const record = this.records.get(key);
+        if (record?.launchAttempt?.id === attemptId) {
+          record.launchAttempt.pid = child.pid; record.launchAttempt.spawnedAt = new Date().toISOString();
+          try { this.persist(); } catch (error) { reject(error); return; }
+        }
+        resolve();
+      });
       child.on("error", error => {
         if (child.pid === undefined) unstarted();
         reject(error);
       });
       child.once("close", () => {
         if (this.launchChildren.get(key) === child) this.launchChildren.delete(key);
+        const record = this.records.get(key);
+        if (record?.launchAttempt?.id === attemptId) {
+          Object.assign(record.launchAttempt, { closedAt: new Date().toISOString(), exitCode: child.exitCode, signal: child.signalCode });
+          try { this.persist(); } catch { this.options.log("napcat_launch_receipt_persist_failed", key); }
+        }
       });
     });
     await this.recordLaunch(request);

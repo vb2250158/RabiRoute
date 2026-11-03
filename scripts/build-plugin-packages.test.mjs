@@ -6,6 +6,59 @@ import path from "node:path";
 import test from "node:test";
 import { pathToFileURL } from "node:url";
 import { buildPluginPackages } from "./build-plugin-packages.mjs";
+import { execFileSync } from "node:child_process";
+import { bundleMessageEndpointRuntime } from "./build-message-endpoint-runtime.mjs";
+
+test("endpoint dependencies follow emitted owner reads and preserve explicit bare initialization imports", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "endpoint-emitted-owners-"));
+  try {
+    await fs.mkdir(path.join(root, "src/shared"), {recursive: true});
+    await fs.writeFile(path.join(root, "src/endpoint.ts"), 'import { unused } from "./shared/unused.js"; import { used } from "./shared/used.js"; import "./shared/initialize.js"; export function run() { return used(); }');
+    await fs.writeFile(path.join(root, "src/shared/unused.ts"), 'export const unused = "unrelated owner";');
+    await fs.writeFile(path.join(root, "src/shared/used.ts"), 'export function used() { return "source owner must stay external"; }');
+    await fs.writeFile(path.join(root, "src/shared/initialize.ts"), 'export const initialized = true;');
+    const filename = path.join(root, "runtime.mjs");
+    const bundle = await bundleMessageEndpointRuntime(root, {exports: [{source: "src/endpoint.ts", name: "run"}], ownedSources: ["src/endpoint.ts"]}, filename);
+    assert.deepEqual(bundle.hostModules, ["shared/initialize", "shared/used"]);
+    const reads = [];
+    const implementation = (await import(pathToFileURL(filename).href)).createImplementation({module(id) {
+      reads.push(id);
+      if (id === "shared/unused") throw new Error("Unused owner must not initialize.");
+      return id === "shared/used" ? {used: () => "injected original singleton"} : {};
+    }});
+    assert.equal(implementation.run(), "injected original singleton");
+    assert.deepEqual(reads.sort(), ["shared/initialize", "shared/used"]);
+  } finally {await fs.rm(root, {recursive: true, force: true});}
+});
+
+test("endpoint bundles own frozen implementation, module URL, resources and standalone worker bytes", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "endpoint-bundle-build-"));
+  try {
+    const plugin = path.join(root, "plugins/builtin/io.test.endpoint/1.0.0");
+    await fs.mkdir(plugin, { recursive: true });
+    await fs.mkdir(path.join(root, "src/shared"), { recursive: true });
+    await fs.mkdir(path.join(root, "resources"), { recursive: true });
+    await fs.writeFile(path.join(root, "src/endpoint.ts"), 'import { readShared } from "./shared/owner.js"; export function make() { return { value: readShared(), url: import.meta.url }; }');
+    await fs.writeFile(path.join(root, "src/shared/owner.ts"), 'export function readShared() { return "host source must stay external"; }');
+    await fs.writeFile(path.join(root, "src/worker.ts"), 'import { version } from "./workerValue.js"; console.log("worker-" + version);');
+    await fs.writeFile(path.join(root, "src/workerValue.ts"), 'export const version = "frozen";');
+    await fs.writeFile(path.join(root, "resources/install.ps1"), "frozen installer");
+    await writeJson(path.join(root, "plugins/profiles/desktop.json"), { schemaVersion: 2, readyRequires: [], instances: [{ id: "endpoint:test", package: "io.test.endpoint", version: "1.0.0", enabled: true, config: {}, grants: [] }] });
+    await writeJson(path.join(plugin, "rabi.plugin.json"), { schemaVersion: 2, id: "io.test.endpoint", version: "1.0.0", entries: { manager: { execution: "in_process", module: "./manager.mjs" } }, provides: [], requires: [], optional: [], permissions: [] });
+    await fs.writeFile(path.join(plugin, "manager.mjs"), 'export function activate() {}');
+    await writeJson(path.join(plugin, "manager-runtime.build.json"), { exports: [{ name: "make", source: "src/endpoint.ts" }],
+      resources: [{ source: "resources/install.ps1", target: "resources/install.ps1" }], workers: [{ source: "src/worker.ts", target: "workers/run.mjs" }] });
+    await fs.cp(path.resolve("plugins/contracts/plugin-sdk"), path.join(root, "plugins/contracts/plugin-sdk"), { recursive: true });
+    const built = await buildPluginPackages(root, { afterInputSnapshot: async () => { await fs.writeFile(path.join(root, "resources/install.ps1"), "later source edit"); await fs.writeFile(path.join(root, "src/workerValue.ts"), 'export const version = "later";'); } });
+    const output = path.join(built.packagesRoot, "io.test.endpoint/1.0.0");
+    const generatedUrl = pathToFileURL(path.join(output, "manager-runtime.mjs")).href;
+    const generated = await import(generatedUrl);
+    assert.deepEqual(generated.hostModules, ["shared/owner"]);
+    assert.deepEqual(generated.createImplementation({ module: id => { assert.equal(id, "shared/owner"); return { readShared: () => "actual host singleton" }; } }).make(), { value: "actual host singleton", url: generatedUrl });
+    assert.equal(await fs.readFile(path.join(output, "resources/install.ps1"), "utf8"), "frozen installer");
+    assert.equal(execFileSync(process.execPath, [path.join(output, "workers/run.mjs")], { encoding: "utf8", timeout: 5000, windowsHide: true }).trim(), "worker-frozen");
+  } finally { await fs.rm(root, { recursive: true, force: true }); }
+});
 
 test("route-control package includes the Manager and independently generated Web command entry", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "rabiroute-route-control-build-"));

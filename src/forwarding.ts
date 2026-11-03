@@ -7,7 +7,7 @@ import { resolveAgentDeliveryExecutor, type AgentSessionDestination } from "./sh
 import { getPlan } from "./roleKnowledge.js";
 import { createAgentAdapter } from "./agentAdapters/agentAdapter.js";
 import { requestInstanceThread, instanceWorkerStateDirectory } from "./agentAdapters/instanceClient.js";
-import { resolvePrimaryAgentTarget, type RouteAgentTarget } from "./shared/routeAgentTargets.js";
+import { resolvePrimaryAgentTarget, peerRouteAgentSession, type RouteAgentTarget } from "./shared/routeAgentTargets.js";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import type { AgentAdapterType } from "./agentAdapters/types.js";
@@ -167,7 +167,15 @@ function primaryManagedAgentBinding(): {
   sessionName: string;
   workspace: string;
 } | undefined {
-  if (resolvePrimaryAgentTarget(config)?.binding) return undefined;
+  const target = resolvePrimaryAgentTarget(config);
+  const peer = peerRouteAgentSession(config);
+  if (peer && target && isPlanAssistantAgentType(target.provider)) {
+    return peer.sessionId && peer.workspace ? {
+      agentAdapter: target.provider, sessionId: peer.sessionId,
+      sessionName: peer.sessionName || peer.sessionId, workspace: peer.workspace
+    } : undefined;
+  }
+  if (target?.binding) return undefined;
   if (configuredPrimaryAgentAdapter() === "dsh" && config.dshSessionId && config.dshSessionName && config.dshCwd) {
     return {
       agentAdapter: "dsh",
@@ -643,9 +651,12 @@ function logKindForRoute(routeKind: ForwardRouteKind): ForwardLogKind {
 async function dispatchToAgentAdapter(type: AgentAdapterType, envelope: RabiDeliveryEnvelope, imagePaths: string[] = [], target?: RouteAgentTarget): Promise<void> {
   if (!target || target.provider !== type) throw new Error("Primary Agent target is missing or mismatched.");
   const adapter = await createAgentAdapter(type, target.binding ? { binding: target.binding } : "local");
+  const peer = target.binding?.ownerDeviceId ? target : undefined;
   return measurePerformanceOperation(
     `${PERFORMANCE_OPERATIONS.gatewayAgentDeliver}.${type}`,
-    () => adapter.deliver(envelope, { imagePaths, threadId: type === "dsh" ? config.dshSessionId : type === "codex" ? config.codexThreadId : undefined, workspace: type === "dsh" ? config.dshCwd : type === "codex" ? config.codexCwd : undefined })
+    () => adapter.deliver(envelope, { imagePaths,
+      threadId: peer ? peer.sessionId : type === "dsh" ? config.dshSessionId : type === "codex" ? config.codexThreadId : undefined,
+      workspace: peer ? peer.workspace : type === "dsh" ? config.dshCwd : type === "codex" ? config.codexCwd : undefined })
   );
 }
 

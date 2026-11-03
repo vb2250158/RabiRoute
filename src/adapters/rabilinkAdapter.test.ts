@@ -6,16 +6,16 @@ import path from "node:path";
 import test from "node:test";
 import { config } from "../config.js";
 import { createMessageAdapterRuntime } from "../runtime/messageAdapterRuntime.js";
-import { rabiLinkMessageAdapterDefinition } from "./builtinMessageAdapters.js";
+import type { MessageAdapterDefinition } from "./messageAdapter.js";
 import { rabiLinkRelayWorkerSnapshotForTests } from "./rabilinkRelayWorker.js";
 import { createRabiLinkAdapter } from "./rabilinkAdapter.js";
 import { ManagerPluginRouteRegistry } from "../manager/managerPluginRouteRegistry.js";
 
 function controlledRabiLinkDefinition() {
   const registry = new ManagerPluginRouteRegistry();
-  return { ...rabiLinkMessageAdapterDefinition, create: () => createRabiLinkAdapter({
+  return { manifest: { type: "rabilink", label: "RabiLink fixture", host: "gateway", transport: "http", lifecycle: "fiber" }, create: () => createRabiLinkAdapter({
     apiOperations: { registerExternalListener: definition => registry.registerExternalListener("rabilink-fixture", definition) }
-  }) };
+  }) } satisfies MessageAdapterDefinition;
 }
 
 async function listen(server: http.Server, port = 0): Promise<number> {

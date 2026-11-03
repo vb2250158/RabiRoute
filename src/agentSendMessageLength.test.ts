@@ -5,7 +5,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
 import { AgentSendMessageLengthGuard } from "./agentSendMessageLength.js";
-import { handleAgentSend, prepareAgentSendRequest, type AgentSendRequest } from "./agentSend.js";
+import { handleAgentSend, prepareAgentSendRequest, type AgentSendRequest } from "./endpointEgress.fixture.js";
 import type { AgentReplyOptions } from "./outbox.js";
 import { executeIdempotentAgentSend, readAgentSendReceipt } from "./manager/agentSendIdempotency.js";
 

@@ -2,11 +2,12 @@ import { getTimeoutMs } from "./shared/timeoutSettings.js";
 import fs from "node:fs";
 import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
-import { getLoginInfo, sendGroupMessage, sendPrivateMessage, uploadGroupFile, NapCatRequestError, type NapCatEndpoint, type OneBotMessage } from "./napcat.js";
+import type { NapCatEndpoint, OneBotMessage } from "./napcat.js";
+import { NapCatRequestError } from "./shared/napcatDeliveryError.js";
+import type { MessageEndpointEgressProvider, MessageEndpointEgressLease } from "@rabiroute/plugin-sdk";
 import { normalizePipelineDefinition, resolvePipeline, type PipelineDefinition, type ResolvedPipeline } from "./pipelines.js";
-import { normalizeWeComError, sendWeComMessage, type WeComEndpoint } from "./wecom.js";
-import { sendFeishuText, type FeishuEndpoint } from "./feishu.js";
-import { sendWeixinFile, sendWeixinImage, sendWeixinText } from "./weixinOpenClaw.js";
+import type { WeComEndpoint } from "./wecom.js";
+import type { FeishuEndpoint } from "./feishu.js";
 import {
   normalizeRolePanelAttachments,
   type RolePanelAttachment,
@@ -22,8 +23,6 @@ import {
 } from "./shared/gatewayConfigModel.js";
 import type { LanguageStyleBinding } from "./shared/languageStyle.js";
 import { resolveSpeechRouteProfile } from "./shared/speechControlContract.js";
-import { publishRabiLinkRelayMessage, uploadRabiLinkRelayAttachment } from "./adapters/rabilinkRelayWorker.js";
-import { requestLocalSpeech } from "./speech/localSpeechClient.js";
 import {
   appendRabiLinkConversationEntry,
   DEFAULT_RABILINK_CONVERSATION_SPLIT_AFTER_MS
@@ -33,7 +32,7 @@ import {
   messageContextFromOutboxEvent
 } from "./messageContextStore.js";
 import { recordDataMutationAudit } from "./observability/dataMutationAudit.js";
-import { renderMarkdownToPng, markdownImageSettings, checkMarkdownQuota } from "./markdownImage.js";
+import { renderMarkdownToPng, mermaidDiagramSource, markdownImageSettings, checkMarkdownQuota } from "./markdownImage.js";
 import { napcatStickerMessage, QQ_STICKER_ID } from "./napcatStickers.js";
 
 export type AgentReplyRequest = {
@@ -163,6 +162,8 @@ export type AgentPlanFeedbackSubmitPort = (
 ) => Promise<AgentPlanFeedbackSubmitResult>;
 
 export type AgentReplyOptions = {
+  /** Trusted native service owner; never accepted from request JSON. */
+  endpointEgress?: (capability: string) => MessageEndpointEgressProvider | undefined;
   rootDir: string;
   routeRoot: string;
   rolesRoot: string;
@@ -629,6 +630,14 @@ function validatedNapCatImageMessage(rootDir: string, message: OneBotMessage, al
     if (segment.type.toLowerCase() !== "image") return segment;
     const file = valueString(segment.data.file);
     if (!file) throw new Error("Missing image url/path.");
+    if (file.startsWith("base64://")) {
+      const bytes = Buffer.from(file.slice(9), "base64");
+      const valid = bytes.subarray(0,8).equals(Buffer.from([137,80,78,71,13,10,26,10]))
+        || (bytes[0] === 255 && bytes[1] === 216 && bytes[2] === 255)
+        || (bytes.toString("ascii",0,4) === "RIFF" && bytes.toString("ascii",8,12) === "WEBP");
+      if (!valid) throw new Error("Inline image must contain PNG, JPEG or WebP bytes.");
+      return segment;
+    }
     const validatedFile = isRemoteFileReference(file)
       ? file
       : validatedOutboundFilePath(rootDir, file, allowedFileRoots);
@@ -645,7 +654,14 @@ async function renderNapCatMarkdownSegments(message: OneBotMessage): Promise<One
       rendered.push(segment);
       continue;
     }
-    const png = await renderMarkdownToPng(String(segment.data.text ?? ""));
+    const source = String(segment.data.text ?? "");
+    let png: Buffer;
+    try { png = await renderMarkdownToPng(source); }
+    catch (error) {
+      if (mermaidDiagramSource(source) === undefined) throw error;
+      rendered.push({ type: "text", data: { text: `[图表转换失败，已保留源码]\n${source}` } });
+      continue;
+    }
     totalPngBytes += png.length;
     checkMarkdownQuota("RABIROUTE_MARKDOWN_MAX_MESSAGE_PNG_BYTES", markdownImageSettings.messagePngBytes, totalPngBytes);
     rendered.push({ type: "image", data: { file: `base64://${png.toString("base64")}` } });
@@ -1062,7 +1078,8 @@ export function agentReplyCurrentQqBinding(request: AgentReplyRequest, options: 
 
 async function observeQqUploadOwner(
   expected: AgentReplyCurrentQqBinding | undefined,
-  options: AgentReplyOptions
+  options: AgentReplyOptions,
+  getLoginInfo: typeof import("./napcat.js").getLoginInfo
 ): Promise<{ selfId: string; bindingRevision: string } | undefined> {
   if (!expected) return undefined;
   const request = { routeProfileId: expected.routeId, instanceId: expected.instanceId, groupId: expected.groupId };
@@ -1672,7 +1689,8 @@ async function postRabiSpeechOutput(
   request: AgentReplyRequest,
   route: ResolvedRoute,
   pipeline: ResolvedPipeline,
-  text: string
+  text: string,
+  requestLocalSpeech: typeof import("./speech/localSpeechClient.js").requestLocalSpeech
 ): Promise<{ playbackJob?: string; provider?: string; model?: string }> {
   const context = contextObject(request);
   const roleId = valueString(route.profile?.agentRoleId ?? route.runtime.agentRoleId) || "default";
@@ -1705,6 +1723,49 @@ async function postRabiSpeechOutput(
 }
 
 export async function handleAgentReply(request: AgentReplyRequest, options: AgentReplyOptions): Promise<AgentReplyResult> {
+  const leases = new Map<string, MessageEndpointEgressLease>();
+  const captured = structuredClone(request);
+  const snapshotOptions = { ...options, runtimes: structuredClone(options.runtimes) };
+  const bind = <T extends (...args: any[]) => any>(type: string, operation: string): T => ((...args: unknown[]) => {
+    let lease = leases.get(type);
+    if (!lease) {
+      const provider = options.endpointEgress?.(`endpoint.${type}.egress@1`);
+      if (!provider) { throw Object.assign(new Error(`Endpoint ${type} is disabled or unavailable.`), { code: "ENDPOINT_EGRESS_UNAVAILABLE" }); }
+      lease = provider.acquire({ request: captured });
+      leases.set(type, lease);
+    }
+    return lease.call(operation, args);
+  }) as T;
+  try {
+    return await handleAgentReplyWithEgress(captured, snapshotOptions, options, bind);
+  } finally { for (const lease of leases.values()) lease.release(); }
+}
+
+function egressFailureStatus(error: unknown): "blocked" | "failed" {
+  return (error as {code?: string} | undefined)?.code === "ENDPOINT_EGRESS_UNAVAILABLE" ? "blocked" : "failed";
+}
+
+function normalizeWeComError(error: unknown): string {
+  if (!(error instanceof Error)) return String(error);
+  const code = (error as Error & {code?: string}).code;
+  return code ? `${code}: ${error.message}` : error.message;
+}
+
+async function handleAgentReplyWithEgress(request: AgentReplyRequest, options: AgentReplyOptions, currentOptions: AgentReplyOptions,
+  bind: <T extends (...args: any[]) => any>(type: string, operation: string) => T): Promise<AgentReplyResult> {
+  const getLoginInfo = bind<typeof import("./napcat.js").getLoginInfo>("napcat", "getLoginInfo");
+  const sendGroupMessage = bind<typeof import("./napcat.js").sendGroupMessage>("napcat", "sendGroupMessage");
+  const sendPrivateMessage = bind<typeof import("./napcat.js").sendPrivateMessage>("napcat", "sendPrivateMessage");
+  const uploadGroupFile = bind<typeof import("./napcat.js").uploadGroupFile>("napcat", "uploadGroupFile");
+  const uploadPrivateFile = bind<typeof import("./napcat.js").uploadPrivateFile>("napcat", "uploadPrivateFile");
+  const sendWeComMessage = bind<typeof import("./wecom.js").sendWeComMessage>("wecom", "sendWeComMessage");
+  const sendFeishuText = bind<typeof import("./feishu.js").sendFeishuText>("feishu", "sendFeishuText");
+  const sendWeixinText = bind<typeof import("./weixinOpenClaw.js").sendWeixinText>("weixin", "sendWeixinText");
+  const sendWeixinFile = bind<typeof import("./weixinOpenClaw.js").sendWeixinFile>("weixin", "sendWeixinFile");
+  const sendWeixinImage = bind<typeof import("./weixinOpenClaw.js").sendWeixinImage>("weixin", "sendWeixinImage");
+  const publishRabiLinkRelayMessage = bind<typeof import("./adapters/rabilinkRelayWorker.js").publishRabiLinkRelayMessage>("rabilink", "publishRabiLinkRelayMessage");
+  const uploadRabiLinkRelayAttachment = bind<typeof import("./adapters/rabilinkRelayWorker.js").uploadRabiLinkRelayAttachment>("rabilink", "uploadRabiLinkRelayAttachment");
+  const requestLocalSpeech = bind<typeof import("./speech/localSpeechClient.js").requestLocalSpeech>("speech", "requestLocalSpeech");
   const content = requestContent(request);
   const text = content.text;
   const context = contextObject(request);
@@ -1888,7 +1949,7 @@ export async function handleAgentReply(request: AgentReplyRequest, options: Agen
     } catch (error) {
       const result: AgentReplyResult = {
         ok: false,
-        status: "failed",
+        status: egressFailureStatus(error),
         reason: error instanceof Error ? error.message : String(error),
         routeProfileId: route.profile?.id ?? route.runtime.id,
         messageId: target.messageId,
@@ -1960,7 +2021,7 @@ export async function handleAgentReply(request: AgentReplyRequest, options: Agen
     } catch (error) {
       const result: AgentReplyResult = {
         ok: false,
-        status: "failed",
+        status: egressFailureStatus(error),
         reason: error instanceof Error ? error.message : String(error),
         routeProfileId: route.profile?.id ?? route.runtime.id,
         messageId,
@@ -1994,7 +2055,7 @@ export async function handleAgentReply(request: AgentReplyRequest, options: Agen
       return result;
     }
     try {
-      const speech = await postRabiSpeechOutput(options, request, route, pipeline, text);
+      const speech = await postRabiSpeechOutput(options, request, route, pipeline, text, requestLocalSpeech);
       const result: AgentReplyResult = {
         ok: true,
         status: "sent",
@@ -2009,7 +2070,7 @@ export async function handleAgentReply(request: AgentReplyRequest, options: Agen
     } catch (error) {
       const result: AgentReplyResult = {
         ok: false,
-        status: "failed",
+        status: egressFailureStatus(error),
         reason: error instanceof Error ? error.message : String(error),
         routeProfileId: route.profile?.id ?? route.runtime.id,
         messageId,
@@ -2062,7 +2123,7 @@ export async function handleAgentReply(request: AgentReplyRequest, options: Agen
       appendOutboxLog(options, route, "info", "feishu_reply_sent", text.slice(0, 500), withConversation({ ...result, sent }));
       return result;
     } catch (error) {
-      const result: AgentReplyResult = { ok: false, status: "failed", reason: error instanceof Error ? error.message : String(error), routeProfileId: route.profile?.id ?? route.runtime.id, messageId, targetType: "group", groupId: chatId, userId: target.userId, instanceId: target.instanceId, draft: { text, targetType: "group", groupId: chatId, userId: target.userId } };
+      const result: AgentReplyResult = { ok: false, status: egressFailureStatus(error), reason: error instanceof Error ? error.message : String(error), routeProfileId: route.profile?.id ?? route.runtime.id, messageId, targetType: "group", groupId: chatId, userId: target.userId, instanceId: target.instanceId, draft: { text, targetType: "group", groupId: chatId, userId: target.userId } };
       appendOutboxLog(options, route, "error", "feishu_reply_failed", result.reason ?? "failed", result);
       return result;
     }
@@ -2120,7 +2181,7 @@ export async function handleAgentReply(request: AgentReplyRequest, options: Agen
     } catch (error) {
       const result: AgentReplyResult = {
         ok: false,
-        status: "failed",
+        status: egressFailureStatus(error),
         reason: normalizeWeComError(error),
         routeProfileId: route.profile?.id ?? route.runtime.id,
         messageId,
@@ -2184,9 +2245,9 @@ export async function handleAgentReply(request: AgentReplyRequest, options: Agen
           const uploadEndpoint = { httpUrl: endpoint.httpUrl, accessToken: endpoint.accessToken };
           const uploadInstanceId = endpoint.id;
           const binding = qqBindingForRoute(route, groupId, uploadInstanceId);
-          const before = await observeQqUploadOwner(binding, options);
+          const before = await observeQqUploadOwner(binding, currentOptions, getLoginInfo);
           const uploaded = await uploadGroupFile({ groupId, filePath, fileName }, uploadEndpoint);
-          const after = before ? await observeQqUploadOwner(binding, options) : undefined;
+          const after = before ? await observeQqUploadOwner(binding, currentOptions, getLoginInfo) : undefined;
           const ownerEvidence = before && after && before.selfId === after.selfId
             && before.bindingRevision === after.bindingRevision
             ? { selfId: before.selfId, bindingRevision: before.bindingRevision }
@@ -2284,6 +2345,17 @@ export async function handleAgentReply(request: AgentReplyRequest, options: Agen
       return result;
     }
     if (target.targetType === "private" && target.userId) {
+      if (content.kind === "file") {
+        const filePath = validatedOutboundFilePath(options.rootDir, content.file!, policy.allowedFileRoots);
+        const fileName = content.fileName || path.basename(filePath);
+        const uploaded = await uploadPrivateFile({ userId: target.userId, filePath, fileName }, endpoint);
+        const result: AgentReplyResult = { ok: true, status: "sent", routeProfileId: route.profile?.id ?? route.runtime.id,
+          messageId, targetType: "private", userId: target.userId, instanceId: endpoint.id,
+          sentFileId: uploaded.fileId, sentMessageId: uploaded.messageId, sentFileName: fileName };
+        appendOutboxLog(options, route, "info", "private_file_uploaded", fileName, withConversation(withDeliveryTrace({ ...result,
+          attachments: [{ kind: "file", name: fileName, size: fs.statSync(filePath).size }] })));
+        return result;
+      }
       const privateMessage = content.kind === "image"
         ? validatedNapCatImageMessage(options.rootDir, content.message, policy.allowedFileRoots)
         : napcatSegmentsFromAgentText(text);
@@ -2310,7 +2382,7 @@ export async function handleAgentReply(request: AgentReplyRequest, options: Agen
         ...(deliveryError.transportCode ? [deliveryError.transportCode] : [])];
       reason += ` NapCat ${deliveryError.action}: ${details.join(" ")}; inspect the original receipt before any retry.`;
     }
-    const result: AgentReplyResult = { ok: false, status: "failed", reason, ...(deliveryError ? { deliveryError } : {}), routeProfileId: route.profile?.id ?? route.runtime.id, messageId, targetType: target.targetType, groupId: target.groupId, userId: target.userId, instanceId: endpoint.id, draft: { text, targetType: target.targetType, groupId: target.groupId, userId: target.userId } };
+    const result: AgentReplyResult = { ok: false, status: egressFailureStatus(error), reason, ...(deliveryError ? { deliveryError } : {}), routeProfileId: route.profile?.id ?? route.runtime.id, messageId, targetType: target.targetType, groupId: target.groupId, userId: target.userId, instanceId: endpoint.id, draft: { text, targetType: target.targetType, groupId: target.groupId, userId: target.userId } };
     appendOutboxLog(options, route, "error", "reply_failed", result.reason ?? "failed", withDeliveryTrace(result));
     return result;
   }

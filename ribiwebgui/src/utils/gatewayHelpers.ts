@@ -20,6 +20,7 @@ import {
 import { isGatewayMessageAdapterType, isMessageEndpointType } from "@shared/messageEndpointTypes";
 import { applySpeechRouteVariableDefaults } from "@shared/speechControlContract";
 import { SPEECH_ROUTE_AUTO_SUBMIT } from "../speech/speechDeliveryMode";
+import { pluginCatalogStore } from "../pluginCatalogStore";
 
 /** Device setup belongs to mobile recording; remote execution belongs to Agent targets. Legacy keys remain readable
  * until existing clients migrate to recording events; see docs/mobile-recording-event-boundary.md. */
@@ -248,7 +249,7 @@ export function isWebhookLikeAdapter(type: string): boolean {
 }
 
 export function adapterNeedsGatewayRuntime(type: MessageAdapterType): boolean {
-  return isGatewayMessageAdapterType(type);
+  return isGatewayMessageAdapterType(type, pluginCatalogStore.gatewayEndpointTypes.value);
 }
 
 export function adaptersNeedGatewayRuntime(types: MessageAdapterType[]): boolean {

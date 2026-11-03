@@ -80,16 +80,33 @@ test("speech workbench exposes exact VAD inputs and one host playback volume con
   assert.match(source, /没有 Route 订阅时只保存主机记录/);
   assert.match(source, /同一段 ASR 会广播给全部/);
   assert.match(source, /<SpeechHostMonitor[^>]+:subscriber-count="speechSubscriberRoutes\.length"/);
-  assert.match(controlPlane, /capability: "host\.manager\.speech@1"/);
-  assert.match(controlPlane, /let reconcileActiveSpeech = \(\): void => \{\};[\s\S]*reconcileActiveSpeech\(\)/);
-  assert.match(speechPlugin, /runtime\.reconcileActiveSpeech = reconcile/);
-  assert.match(speechPlugin, /runtime\.speechRuntimeControl\.stop\(\)/);
+  assert.match(controlPlane, /resolvePublishedPluginService\("manager\.speech@1"\)/);
+  assert.match(controlPlane, /createPluginServicePort\(\(\) => currentSpeechService\(\)\.speechRuntimeControl\)/);
+  assert.doesNotMatch(controlPlane, /host\.manager\.speech@1|let reconcileActiveSpeech/);
+  assert.match(speechPlugin, /await previousRetirement[\s\S]*runtime\.markReady\(\)[\s\S]*runtime\.reconcile\("speech plugin activation"\)/);
+  assert.match(speechPlugin, /runtime\.stopResources\(\)/);
   assert.doesNotMatch(controlPlane, /reconcileSpeechMicrophone\("gateway save"\)/);
   assert.doesNotMatch(controlPlane, /reconcileSpeechMicrophone\("manual reload"\)/);
   const monitorSource = fs.readFileSync(new URL("../src/components/SpeechHostMonitor.vue", import.meta.url), "utf8");
   assert.match(monitorSource, /主机语音链路/);
   assert.match(monitorSource, /运行日志与转写预览/);
   assert.match(monitorSource, /广播投递/);
+});
+
+test("speech plugin retirement joins accepted work before releasing its original owned runtime", () => {
+  const source = fs.readFileSync(new URL("../../src/manager/speechPluginRuntime.ts", import.meta.url), "utf8");
+  assert.match(source, /runAcceptedWork<T>[\s\S]*service\.assertCurrent\(\);\s*const pending = Promise\.resolve\(\)\.then\(operation\);\s*resources\.operations\.add\(pending\);/);
+  const start = source.indexOf("    stopResources() {");
+  assert.ok(start >= 0);
+  const retirement = source.slice(start);
+  assert.match(retirement, /^\s*stopResources\(\) \{\s*ready = false;\s*return resources\.shutdown \?\?= \(async \(\) => \{/);
+  const drains = retirement.indexOf("await Promise.allSettled([...resources.drains])");
+  const accepted = retirement.indexOf("await Promise.allSettled([...resources.operations])");
+  const release = retirement.indexOf("resources.speechRuntimeControl.releaseOwnedRuntime()");
+  assert.ok(drains >= 0 && accepted > drains && release > accepted, "Join both original drain groups before releasing the native owner.");
+  assert.match(retirement, /results\.push\(\.\.\.await Promise\.allSettled\(\[\s*Promise\.resolve\(\)\.then\(\(\) => resources\.speechRuntimeControl\.releaseOwnedRuntime\(\)\),\s*Promise\.resolve\(\)\.then\(\(\) => resources\.speechModelManager\.stop\(\)\)\s*\]\)\);/);
+  assert.match(retirement, /const failure = results\.find\(result => result\.status === "rejected"\);\s*if \(failure\?\.status === "rejected"\) throw failure\.reason;/);
+  assert.doesNotMatch(retirement, /resources\.speechRuntimeControl\.stop\(/);
 });
 
 test("speech workbench renders one mode switch and keeps device logs collapsed by default", () => {
@@ -124,7 +141,7 @@ test("persona route variables hide speech settings owned by dedicated controls",
   assert.equal(isSpeechRouteVariableKey("projectAlias"), false);
   const source = fs.readFileSync(new URL("../src/pages/PersonaTemplatePage.vue", import.meta.url), "utf8");
   assert.doesNotMatch(source, /v-model="gateway\.variables\.(?:speechAutoSubmit|speechAutoPlay|speechThreshold)"/);
-  const routeSource = fs.readFileSync(new URL("../src/pages/RouteConfigPage.vue", import.meta.url), "utf8");
+  const routeSource = fs.readFileSync(new URL("../src/messageEndpoints/SpeechEndpointCard.vue", import.meta.url), "utf8");
   assert.doesNotMatch(routeSource, /<SpeechParameterSlider/);
   assert.doesNotMatch(routeSource, /SpeechHostMonitor|运行日志与转写预览|实时电平/);
   assert.match(routeSource, /label="热投递"/);

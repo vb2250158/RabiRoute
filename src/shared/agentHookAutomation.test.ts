@@ -57,10 +57,29 @@ test("conditions and endpoint-specific parameters fail closed without imposing Q
     params: { target: "private", targetId: "67890", instanceId: "qq" } } }), []);
 });
 
+
+test("file delivery setting survives configuration normalization including explicit opt out", () => {
+  for (const includeFiles of ["true", "false"]) {
+    const [rule] = normalizeAgentCompletionDeliveries([{ id: "files", enabled: true, event: "task_completed", conditions: [],
+      destination: { channel: "napcat", gatewayId: "route", params: { target: "group", targetId: "123", instanceId: "qq", includeFiles } } }]);
+    assert.equal(rule.destination.params.includeFiles, includeFiles);
+    assert.deepEqual(normalizeAgentCompletionDeliveries([rule]), [rule]);
+  }
+});
+
+
 test("table rendering setting persists through normalization with boolean and string opt out", () => {
   for (const renderTables of [true, false, "true", "false"]) {
     const [rule] = normalizeAgentCompletionDeliveries([{id:"tables",enabled:true,event:"task_completed",conditions:[],destination:{channel:"napcat",gatewayId:"route",params:{target:"group",targetId:"123",instanceId:"qq",renderTables}}}]);
     assert.equal(rule.destination.params.renderTables, String(renderTables));
+    assert.deepEqual(normalizeAgentCompletionDeliveries([rule]), [rule]);
+  }
+});
+
+test("diagram rendering opt out persists through Hook normalization", () => {
+  for (const renderDiagrams of ["true", "false"]) {
+    const [rule] = normalizeAgentCompletionDeliveries([{id:"diagrams",enabled:true,event:"task_completed",conditions:[],destination:{channel:"napcat",gatewayId:"route",params:{target:"group",targetId:"123",instanceId:"qq",renderDiagrams}}}]);
+    assert.equal(rule.destination.params.renderDiagrams, renderDiagrams);
     assert.deepEqual(normalizeAgentCompletionDeliveries([rule]), [rule]);
   }
 });

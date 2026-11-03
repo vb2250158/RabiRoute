@@ -38,8 +38,22 @@ async function fixture(t:test.TestContext) {
   return {directory,roleDir,root,identity,context,definitions,calls,call,authority,credential};
 }
 
-test('all eleven exact history operations and aliases permit an authenticated empty node and preserve native AIUI replay',async t=>{
-  const f=await fixture(t);assert.equal(f.definitions.length,11);
+test('channel tabs contain only configured message endpoints, independent of saved chat categories and historical adapters',async t=>{
+  const f=await fixture(t);
+  f.context.configuredHistoryAdapters=()=>['speech','napcat','heartbeat'];
+  let historyReads=0;f.context.queryHistory=async()=>{historyReads++;throw Error('A catalog must not query saved endpoint history');};
+  const channels=await f.call('message-history-channels');
+  assert.equal(channels.status,200,JSON.stringify(channels.body));
+  assert.deepEqual(channels.body.data.adapters,['speech','napcat','heartbeat']);
+  assert.deepEqual(channels.body.data.chatCategories,[]);assert.equal(historyReads,0);
+  f.context.configuredHistoryAdapters=()=>['speech'];
+  assert.deepEqual((await f.call('message-history-channels')).body.data.adapters,['speech']);
+  f.context.configuredHistoryAdapters=()=>[];
+  assert.deepEqual((await f.call('message-history-channels')).body.data.adapters,[]);
+});
+
+test('all history operations and aliases permit an authenticated empty node and preserve native AIUI replay',async t=>{
+  const f=await fixture(t);assert.equal(f.definitions.length,14);
   const situation=recordConversationSituation(f.roleDir,'original-route','group_message',conversationSituationForIdentity(undefined,{conversationId:'original-conversation',messageIds:['original-message']}))!;
   const input={sessionId:'original-session',turnId:'original-turn',userText:'Original question',assistantText:'Original answer'};
   const appendResult = await f.call('chat-history/aiui','POST',input); assert.equal(appendResult.status,200,JSON.stringify(appendResult.body));

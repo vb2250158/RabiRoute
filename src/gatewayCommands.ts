@@ -1,6 +1,8 @@
 import { resolvePrimaryAgentTarget } from "./shared/routeAgentTargets.js";
 import { notifyInstanceAgent } from "./agentAdapters/lanAgentAdapter.js";
-import { config } from "./config.js";
+import { config, runtimeLayout } from "./config.js";
+import path from "node:path";
+import { messageEndpointCommandEnabled } from "./plugin-runtime-host/messageEndpointCommandSettings.js";
 import { createAgentAdapter } from "./agentAdapters/agentAdapter.js";
 import { parseAgentAdapterType } from "./agentAdapters/types.js";
 import { triggerManualRule } from "./manualTrigger.js";
@@ -18,7 +20,8 @@ import {
   speechForwardProcessOutcome,
   speechQuarantinedProcessOutcome,
   speechRecordedProcessOutcome,
-  writeSpeechProcessResult
+  writeSpeechProcessResult,
+  SPEECH_EXIT_RECORDED
 } from "./speechMessageDelivery.js";
 import { replayDeliveryAttempts } from "./deliveryReplay.js";
 import { rolePanelDeliveryExitCode } from "./rolePanelDelivery.js";
@@ -315,6 +318,22 @@ export async function runGatewayCommand(argv: readonly string[] = process.argv):
     const text = record.rawMessage;
     const adapterType = record.adapterType || ingress.messageAdapterType;
     try {
+      const enabled = await messageEndpointCommandEnabled(adapterType, {
+        profilePath: process.env.RABIROUTE_PLUGIN_PROFILE?.trim() || path.join(runtimeLayout.packageRoot, "dist/plugins/profiles/desktop.json"),
+        settingsRoot: path.join(runtimeLayout.stateRoot, "data/plugins/settings"),
+        packageRoots: process.env.RABIROUTE_PLUGIN_PACKAGE_ROOTS?.split(path.delimiter).filter(Boolean) || [path.join(runtimeLayout.packageRoot, "dist/plugins/packages")],
+        instanceId: process.env.RABIROUTE_MESSAGE_ENDPOINT_INSTANCE_ID?.trim() || undefined,
+        manager: process.env.GATEWAY_MANAGER_URL?.trim() ? {
+          baseUrl: process.env.GATEWAY_MANAGER_URL.trim(),
+          applicationGenerationId: process.env.RABIROUTE_APPLICATION_GENERATION_ID?.trim() || undefined,
+          managerInstanceId: process.env.RABIROUTE_MANAGER_INSTANCE_ID?.trim() || undefined,
+          accessToken: process.env.LAN_AGENT_ACCESS_TOKEN?.trim() || undefined
+        } : undefined
+      });
+      if (!enabled) {
+        writeSpeechProcessResult({ status: "recorded", reason: "endpoint_plugin_disabled", detail: `Transcript remains in its original ingress store; endpoint ${adapterType} is disabled or unavailable.` });
+        process.exit(SPEECH_EXIT_RECORDED);
+      }
       appendVoiceTranscriptEventForAdapter(adapterType, record);
       const route = requestedRouteProfileId
         ? config.routeProfiles.find((item) => item.id === requestedRouteProfileId)

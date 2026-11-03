@@ -1,49 +1,40 @@
 <script setup lang="ts">
 import { translateText } from "../i18n";
+import { readConnectedAgentInstances } from "../connectedAgentInstances";
 import RoleBindingEditor from "../components/RoleBindingEditor.vue";
 import { userFacingError } from "../userFacingError";
 import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { useGatewayStore } from "../stores/gatewayStore";
-import { useSpeechStore } from "../stores/speechStore";
 import InstanceAgentSettings from "../components/InstanceAgentSettings.vue";
+import PeerRouteAgentSettings from "../components/PeerRouteAgentSettings.vue";
 import DshConnectionPanel from "../components/DshConnectionPanel.vue";
-import { normalizeAgentRecipients, resolveAgentDeliveryExecutor } from "@shared/agentDeliveryTarget";
 import PrimaryAgentAdvancedSettings from "../components/PrimaryAgentAdvancedSettings.vue";
 import { localAgentTargetKey, remoteAgentTargetKey, resolvePrimaryAgentTarget } from "@shared/routeAgentTargets";
-import { addRouteAgent, removeRouteAgent, selectRouteAgent } from "../routeAgentTargetEditor";
+import { addRouteAgent, removeRouteAgent, selectRouteAgent, selectPeerRouteSession } from "../routeAgentTargetEditor";
 import { postRouteAgentThreadAction } from "../routeAgentThreadClient";
 import { routeAgentOperationGuard } from "../routeAgentOperationGuard";
 import { createGrokBotRouteScan, grokBotScanParameters, grokBotPersonaPickerItems, selectGrokBotRoutePersona, type GrokBotRouteConnection } from "../grokBotRouteConfig";
 import { agentInstanceDisplayName, type AgentInstance } from "@shared/agentInstance";
-import PersonaAvatar from "../components/PersonaAvatar.vue";
-import TrustedWebRendererHost from "../components/TrustedWebRendererHost.vue";
-import XiaomiHomeRendererHost from "../components/XiaomiHomeRendererHost.vue";
-import { NapcatState, type NapcatLoginPanelData, type NapcatHealthSnapshot } from "@shared/napcatStateContract";
 import { managerEventSource, managerAccessToken } from "../managerApi";
 import { pluginCatalogStore } from "../pluginCatalogStore";
 import { webRenderersAt } from "../pluginRenderers";
-import { hotDeliveryEnabled, speechPushModeForHotDelivery } from "../speech/speechDeliveryMode";
-import type { MessageAdapterType, MessageEndpointType, AgentAdapterType, AgentDeliveryTestResult, AgentMaturity, AgentScanResult, AgentScanSession, MessageAdapterScanResult, NapCatInstance } from "../types";
+import type { MessageAdapterType, MessageEndpointType, AgentAdapterType, AgentDeliveryTestResult, AgentMaturity, AgentScanResult, AgentScanSession, MessageAdapterScanResult } from "../types";
 import { codexModelPickerItems, dshModelPickerItems, dshModelValue, parseDshModelValue, reasoningEffortPickerItems } from "../agentModelPicker";
-import { isNonMessageEndpoint, adapterDefaultWebhookPath, adapterLabel, adapterRuntimeKey, adapterSourceAliases, adapterErrorsFor, applyAdapterDefaults, configNameFor, gatewayAdapterTypes, isAdapterDisabled, isMessageInputsDisabled, isWebhookLikeAdapter, adapterConfigPathFor, messageAdapterPolicyFor, setGatewayAdapters, setMessageAdapterPolicy, toggleAdapterDisabled } from "../utils/gatewayHelpers";
+import { isNonMessageEndpoint, adapterLabel, applyAdapterDefaults, gatewayAdapterTypes, isAdapterDisabled, isMessageInputsDisabled, messageAdapterPolicyFor, setGatewayAdapters, setMessageAdapterPolicy, toggleAdapterDisabled } from "../utils/gatewayHelpers";
 import { initializeAgentSessionForRoute } from "@shared/codexSessionInitialization";
 import { codexThreadItems, selectCodexThread, type CodexThreadSummary } from "@shared/codexThreadSelection";
-import { DEFAULT_CODEX_MEMORY_CONSOLIDATION_AGENT_MODEL, codexMemoryConsolidationAgentTitle } from "@shared/codexMemoryConsolidationAgent";
+import { DEFAULT_CODEX_MEMORY_CONSOLIDATION_AGENT_MODEL } from "@shared/codexMemoryConsolidationAgent";
 import { agentAdapterManifest, agentAdapterSupportsManagedTaskFeature, DEFAULT_CODEX_HOOK_SETTINGS, DEFAULT_MESSAGE_PROCESSING_AGENT_MODEL, DEFAULT_MESSAGE_PROCESSING_AGENT_REASONING_EFFORT, MAX_MESSAGE_PROCESSING_AGENTS, messageAdapterUsesAutomaticGrouping } from "@shared/gatewayConfigModel";
-import {
-  DEFAULT_CODEX_PLAN_ASSISTANT_MODEL,
-  codexPlanAssistantInitializationPrompt,
-  codexPlanAssistantSessionTitles,
-  normalizeCodexPlanAssistantCount,
-  filterCodexPlanAssistantSessionsForTarget,
-  planAssistantSessionAgentAdapter
-} from "@shared/codexPlanAssistantSessions";
-import { applySpeechRouteVariableDefaults } from "@shared/speechControlContract";
+import { DEFAULT_CODEX_PLAN_ASSISTANT_MODEL, codexPlanAssistantInitializationPrompt, codexPlanAssistantSessionTitles, normalizeCodexPlanAssistantCount, filterCodexPlanAssistantSessionsForTarget, planAssistantSessionAgentAdapter } from "@shared/codexPlanAssistantSessions";
 import { copyTextToClipboard } from "../clipboard";
-import { routeScopedAdaptersPath, routeScopedRuntimePath } from "../routeScopedNavigation";
+import { routeScopedAdaptersPath } from "../routeScopedNavigation";
+import { deviceAgentInstanceFromCatalog } from "../deviceAgentCatalog";
+import MessageEndpointCardHost from "../messageEndpoints/MessageEndpointCardHost.vue";
+import { messageEndpointCatalog, messageEndpointGroups } from "../messageEndpoints/messageEndpointCatalog";
 
 const MessageProcessingBoard = defineAsyncComponent(() => import("../components/MessageProcessingBoard.vue"));
+
 const props = defineProps<{ embedded?: boolean }>();
 
 const messageEndpointSettingsRenderers = computed(() => webRenderersAt(
@@ -52,34 +43,37 @@ const messageEndpointSettingsRenderers = computed(() => webRenderersAt(
 ));
 
 function settingsRenderersForMessageEndpoint(type: MessageAdapterType) {
-  return messageEndpointSettingsRenderers.value.filter(renderer => renderer.slot === type);
+  return messageEndpointSettingsRenderers.value.filter(renderer => renderer.slot === type && renderer.endpointType === type);
 }
 
 const store = useGatewayStore();
-const speech = useSpeechStore();
+
 const route = useRoute();
+
 const router = useRouter();
+
 const messageProcessingBoardOpen = ref(false);
+
 const channelCheckDialogOpen = ref(false);
+
 const agentDeliveryTest = ref<{ loading: string | null; result: AgentDeliveryTestResult | null; error: string }>({
   loading: null,
   result: null,
   error: ""
 });
+
 const runtime = computed(() => store.selectedRuntime);
-const personaAvatarUrl = computed(() => (runtime.value.roleInfo?.options || [])
-  .find(option => option.value === store.selectedGateway?.agentRoleId)?.avatarUrl || "");
-const speechDefaultVariables = applySpeechRouteVariableDefaults(undefined);
-const speechAdapterActionBusy = ref(false);
-const speechAdapterActionError = ref("");
-const weixinLoginBusy = ref(false);
-const weixinLoginError = ref("");
-let speechConfigSaveTimer = 0;
+
 const adapterQuery = ref("");
+
 const configNameError = ref("");
+
 const codexBinding = ref({ loading: false, error: "", pending: false });
+
 const managedAgentSessionAction = ref({ loading: false, message: "", error: "" });
+
 const codexPlanAssistants = ref({ count: 1, loading: false, message: "", error: "" });
+
 const agentScan = ref({
   threadNames: [] as string[],
   cwdOptions: [] as string[],
@@ -89,10 +83,15 @@ const agentScan = ref({
   agents: {} as Partial<Record<AgentAdapterType, AgentScanResult>>,
   loading: false,
 });
+
 const dshScanLoading = ref(false);
+
 const dshScanRevision = ref(0);
+
 const grokBotSelectionError = ref("");
+
 const grokBotScan = createGrokBotRouteScan(grokBotConnection);
+
 watch(() => grokBotScan.state.result, result => {
   if (result) agentScan.value.agents = { ...agentScan.value.agents, grokBot: result };
 }, { flush: "sync" });
@@ -102,6 +101,7 @@ function grokBotConnection(): GrokBotRouteConnection {
 }
 
 const codexModelItems = computed(() => codexModelPickerItems(agentScan.value.agents.codex?.models ?? []));
+
 const codexReasoningEffortItems = computed(() => {
   const discovered = reasoningEffortPickerItems(
     agentScan.value.agents.codex?.models ?? [],
@@ -109,11 +109,14 @@ const codexReasoningEffortItems = computed(() => {
   );
   return discovered.length > 0 ? discovered : ["low", "medium", "high", "xhigh", "max"];
 });
+
 const dshModelItems = computed(() => dshModelPickerItems(agentScan.value.agents.dsh?.models ?? []));
+
 const configuredDshModelValue = computed(() => dshModelValue(
   store.selectedGateway?.dshModelProvider,
   store.selectedGateway?.dshModel
 ));
+
 const dshReasoningEffortItems = computed(() => reasoningEffortPickerItems(
   agentScan.value.agents.dsh?.models ?? [],
   store.selectedGateway?.dshModel,
@@ -155,44 +158,6 @@ const messageAdapterScan = ref({
   durationMs: 0,
   checkedAt: ""
 });
-const repairingNapcatAll = ref(false);
-const napcatAutoSteps = ref<Record<string, { ok?: boolean; message: string; steps: string[] }>>({});
-
-type NapCatAccountRow = {
-  key: string;
-  instance: NapCatInstance;
-  endpointLabel: string;
-  endpointHealthy?: boolean;
-  source: "scan" | "configured" | "runtime" | "discovered";
-};
-
-type NapcatLoginMode = "quick" | "password" | "qrcode";
-
-type NapcatLoginUiState = {
-  visible: boolean;
-  loading: boolean;
-  busy: boolean;
-  mode: NapcatLoginMode;
-  quickUserId: string;
-  userId: string;
-  password: string;
-  message: string;
-  error: string;
-  panel: NapcatLoginPanelData | null;
-  captcha: { proofWaterUrl: string } | null;
-  newDevice: {
-    jumpUrl: string;
-    newDevicePullQrCodeSig: string;
-    qrCodeDataUrl: string;
-    bytesToken: string;
-    status: "loading" | "waiting" | "scanned" | "confirmed" | "error";
-  } | null;
-};
-
-type NapCatScanHealthEntry = Record<string, any> & {
-  gatewayName?: string;
-  instanceName?: string;
-};
 
 async function runMessageAdapterScan(): Promise<void> {
   if (messageAdapterScan.value.loading) return;
@@ -212,17 +177,6 @@ async function runMessageAdapterScan(): Promise<void> {
     if (data.repair?.changed) {
       await store.load();
     }
-    await applyNapcatScanHealth(data.napcatHealth);
-    if (data.repair?.messages?.length) {
-      napcatAutoSteps.value = {
-        ...napcatAutoSteps.value,
-        backendScan: {
-          ok: true,
-          message: data.repair.changed ? "后端检查完成，已修复基础配置。" : "只读扫描完成，未启动、登录或修复任何消息端。",
-          steps: data.repair.messages
-        }
-      };
-    }
   } catch (error) {
     messageAdapterScan.value.adapters = {};
     messageAdapterScan.value.overall = null;
@@ -232,10 +186,6 @@ async function runMessageAdapterScan(): Promise<void> {
     messageAdapterScan.value.error = userFacingError(error);
   }
   finally { messageAdapterScan.value.loading = false; }
-}
-
-async function rescanNapcatInstances(): Promise<void> {
-  await runMessageAdapterScan();
 }
 
 async function runAgentScan(): Promise<void> {
@@ -269,11 +219,12 @@ async function runAgentScan(): Promise<void> {
   finally { agentScan.value.loading = false; }
 }
 
-import { deviceAgentInstanceFromCatalog } from "../deviceAgentCatalog";
-
 const agentInstances = ref<AgentInstance[]>([]);
+
 const lanAgentLoading = ref(false);
+
 const lanAgentError = ref("");
+
 async function refreshLanAgentNodes(): Promise<void> {
   if (lanAgentLoading.value) return;
   lanAgentLoading.value = true;
@@ -295,8 +246,9 @@ async function refreshLanAgentNodes(): Promise<void> {
         return instance ? [instance] : [];
       })
     ]);
-    agentInstances.value = catalogs.flatMap(result => result.status === "fulfilled" ? result.value : []);
-    lanAgentError.value = catalogs.flatMap(result => result.status === "rejected" ? [userFacingError(result.reason)] : []).join("；");
+    const peers = await readConnectedAgentInstances(fetch, headers).catch(error => ({ instances: [], errors: [userFacingError(error)] }));
+    agentInstances.value = [...catalogs.flatMap(result => result.status === "fulfilled" ? result.value : []), ...peers.instances];
+    lanAgentError.value = [...catalogs.flatMap(result => result.status === "rejected" ? [userFacingError(result.reason)] : []), ...peers.errors].join("；");
   } catch (error) {
     agentInstances.value = [];
     lanAgentError.value = userFacingError(error);
@@ -400,21 +352,18 @@ async function loadMoreDshSessions(): Promise<void> {
 
 // 会话/项目扫描只在进入设置页时自动执行一次；后续刷新必须由用户点击扫描按钮触发。
 onMounted(() => { void runAgentScan(); });
-onMounted(() => { void speech.refreshPersonas().catch(() => undefined); });
 
-onBeforeUnmount(() => {
-  grokBotScan.dispose();
-  window.clearTimeout(speechConfigSaveTimer);
-  for (const timer of napcatNewDevicePollTimers.values()) window.clearTimeout(timer);
-  napcatNewDevicePollTimers.clear();
-});
+onBeforeUnmount(() => { grokBotScan.dispose(); });
 
 // Copilot CLI 安装/登录
 const copilotStatus = ref<{ installed?: boolean; binPath?: string; loggedIn?: boolean; copilotHome?: string } | null>(null);
+
 const copilotInstalling = ref(false);
+
 const copilotLoginState = ref<{ loading: boolean; code: string | null; url: string | null; done: boolean; error: string | null }>({
   loading: false, code: null, url: null, done: false, error: null
 });
+
 const agentParamOpen = ref<Record<string, boolean>>({});
 
 async function fetchCopilotStatus(): Promise<void> {
@@ -471,87 +420,28 @@ watch(
   (open) => { if (open && copilotStatus.value === null) fetchCopilotStatus(); }
 );
 
+const adapterParamOpen = ref<Record<string, boolean>>({});
 
-const adapterParamOpen = ref<Record<string, boolean>>({
-  speech: false,
-  napcat: false,
-  wecom: false,
-  weixin: false,
-  feishu: false,
-  remoteAgent: false,
-  heartbeat: false,
-  xiaoai: false,
-  xiaomiHome: false,
-  rabilink: false,
-  wearable: false,
-  webhook: false
-});
+const adapterLifecycleRevision = ref<Record<string, number>>({});
+const adapterActionBusy = ref<Record<string, boolean>>({});
+
 const addAdapterMenu = ref(false);
-const adapterCatalogCache = ref<Record<string, MessageAdapterType[]>>({});
-const adapterGroups: Array<{ title: string; note: string; choices: Array<{ type: MessageEndpointType; title: string; note: string; icon: string }> }> = [
-  {
-    title: "本地桌面",
-    note: "由本机常驻服务提供的消息入口。",
-    choices: [
-      { type: "speech", title: "语音消息端", note: "订阅主机 ASR，并配置投递策略与回复播放", icon: "mdi-microphone-message" }
-    ]
-  },
-  {
-    title: "实时消息",
-    note: "来自聊天软件或即时通信平台的入口。",
-    choices: [
-      { type: "napcat", title: "NapCat / OneBot", note: "接收 QQ 群聊和私聊实时消息", icon: "mdi-message-badge-outline" },
-      { type: "wecom", title: "企业微信 / WeCom", note: "接收企业微信群聊并支持回发消息", icon: "mdi-domain" },
-      { type: "weixin", title: "个人微信 / Weixin", note: "RabiRoute 原生扫码登录，接收个人微信私聊，并向来源会话回传文本或受控本地文件", icon: "mdi-wechat" },
-      { type: "feishu", title: "飞书 / Feishu", note: "独立应用事件订阅，按来源 chat 收发文本", icon: "mdi-message-text-outline" }
-    ]
-  },
-  {
-    title: "内部触发",
-    note: "由 RabiRoute 自己产生的事件。",
-    choices: [
-      { type: "heartbeat", title: "定时触发", note: "按间隔主动生成内部消息", icon: "mdi-timer-outline" }
-    ]
-  },
-  {
-    title: "智能家居",
-    note: "来自 Home Assistant 的米家设备状态与摄像头事件。",
-    choices: [
-      { type: "xiaomiHome", title: "米家 / Xiaomi Home", note: "把米家状态和摄像头事件投递到当前角色", icon: "mdi-home-automation" }
-    ]
-  },
-  {
-    title: "移动设备",
-    note: "来自手机端、手环或眼镜的记录与事件。",
-    choices: [
-      { type: "rabilink", title: "移动端（全天记录）", note: "接收手机端全天记录与语音事件，并与当前角色绑定", icon: "mdi-cellphone-clock" }
-    ]
-  },
-  {
-    title: "外部接口",
-    note: "未命名系统的 HTTP 兜底入口。",
-    choices: [
-      { type: "webhook", title: "通用 Webhook", note: "没有专用消息端时的通用外部 POST 兜底入口", icon: "mdi-webhook" }
-    ]
-  }
-];
+
+const endpointCatalog = computed(() => messageEndpointCatalog(pluginCatalogStore.settingsRenderers.value));
+
+const adapterGroups = computed(() => messageEndpointGroups(endpointCatalog.value, addedAdapters.value.filter(type => !isNonMessageEndpoint(type))));
+
 const gateway = computed(() => store.selectedGateway);
-const speechPersonaConfig = computed(() => speech.personas.find(item => item.id === gateway.value?.agentRoleId));
-const personaConfigRoute = computed(() => gateway.value
-  ? `/persona/${encodeURIComponent(configNameFor(gateway.value))}`
-  : "/persona");
 
 function uniqueAdapters(types: MessageAdapterType[]): MessageAdapterType[] {
   return [...new Set(types.filter((type) => type !== "disabled" && type !== "rolePanel"))];
 }
 
 function configuredAdapterCatalog(gw: NonNullable<typeof gateway.value>): MessageAdapterType[] {
-  if (Array.isArray(gw.messageAdapters) && gw.messageAdapters.length > 0) {
+  if (Array.isArray(gw.messageAdapters)) {
     return uniqueAdapters(gw.messageAdapters);
   }
-  const cached = adapterCatalogCache.value[gw.id];
-  if (cached?.length) return uniqueAdapters(cached);
-  return uniqueAdapters([gw.messageAdapterType || "napcat"]);
+  return gw.messageAdapterType ? uniqueAdapters([gw.messageAdapterType]) : [];
 }
 
 // 所有已添加的 adapter（含禁用），用于 UI 列表显示
@@ -560,80 +450,30 @@ const addedAdapters = computed<MessageAdapterType[]>(() => {
   if (!gw) return [];
   return configuredAdapterCatalog(gw);
 });
+
 // 仅启用的 adapter（不含禁用）
 const adapters = computed(() => gateway.value ? gatewayAdapterTypes(gateway.value) : []);
+
 const messageInputsDisabled = computed(() => gateway.value ? isMessageInputsDisabled(gateway.value) : false);
-const messageAdapterInactive = computed(() => Boolean(gateway.value?.enabled === false || runtime.value.enabled === false || messageInputsDisabled.value));
-const napcatState = computed(() => runtime.value.gatewayStatus?.napcat || {} as Record<string, any>);
-const wecomState = computed(() => runtime.value.gatewayStatus?.messageAdapters?.wecom || runtime.value.gatewayStatus?.wecom || {} as Record<string, any>);
-const weixinState = computed(() => runtime.value.gatewayStatus?.messageAdapters?.weixin || {} as Record<string, any>);
-const feishuState = computed(() => runtime.value.gatewayStatus?.messageAdapters?.feishu || runtime.value.gatewayStatus?.feishu || {} as Record<string, any>);
-const heartbeatState = computed(() => runtime.value.gatewayStatus?.heartbeat || {} as Record<string, any>);
-const adapterErrors = (type: MessageAdapterType) => gateway.value ? adapterErrorsFor(type, gateway.value, runtime.value) : [];
 
-async function requestPersonalWeixinLogin(): Promise<void> {
-  if (!gateway.value || weixinLoginBusy.value) return;
-  weixinLoginBusy.value = true;
-  weixinLoginError.value = "";
-  try {
-    const response = await fetch(`/gateways/${encodeURIComponent(gateway.value.id)}/weixin-login`, { method: "POST" });
-    const payload = await response.json().catch(() => ({})) as { message?: string };
-    if (!response.ok) throw new Error(payload.message || `HTTP ${response.status}`);
-    await store.load();
-  } catch (error) {
-    weixinLoginError.value = userFacingError(error);
-  } finally {
-    weixinLoginBusy.value = false;
-  }
-}
+const visibleActiveAdapters = computed<MessageAdapterType[]>(() => uniqueAdapters(adapters.value)
+  .filter(type => !isNonMessageEndpoint(type) && endpointCatalog.value.some(item => item.type === type)));
 
-function weixinSessionPhaseLabel(value: unknown): string {
-  const labels: Record<string, string> = {
-    never_logged_in: "从未登录",
-    restoring: "正在恢复",
-    restored: "已恢复",
-    temporarily_unreachable: "暂时不可达（凭据保留）",
-    invalid: "会话已失效"
-  };
-  return labels[String(value || "")] || "未知";
-}
-const visibleActiveAdapters = computed<MessageAdapterType[]>(() => uniqueAdapters(adapters.value).filter(type => !isNonMessageEndpoint(type)));
 const activeAdapterCount = computed(() => visibleActiveAdapters.value.length);
-const testingNapcatHealth = ref(false);
-const testingNapcatInstance = ref<Record<string, boolean>>({});
-const launchingNapcatInstance = ref<Record<string, boolean>>({});
-const restartingNapcatInstance = ref<Record<string, boolean>>({});
-const managingNapcatLogin = ref<Record<string, boolean>>({});
-const napcatLoginPanels = ref<Record<string, NapcatLoginUiState>>({});
-let napcatPanelPollTimer = 0;
-let napcatPanelDisposed = false;
-onBeforeUnmount(() => {
-  napcatPanelDisposed = true;
-  window.clearTimeout(napcatPanelPollTimer);
-});
-const napcatNewDevicePollTimers = new Map<string, number>();
-const adoptingNapcatOwner = ref<Record<string, boolean>>({});
-const fixingNapcatPorts = ref(false);
-const napcatPortFixResult = ref<Record<string, { ok: boolean; message: string }>>({});
-const configuringNapcatOneBot = ref<Record<string, boolean>>({});
-const napcatOneBotFixResult = ref<Record<string, { ok: boolean; message: string }>>({});
-const napcatHealthResult = ref<NapcatHealthSnapshot | null>(null);
-const napcatInstanceHealthResult = ref<Record<string, typeof napcatHealthResult.value>>({});
-const napcatScanHealthByWebui = ref<Record<string, NapCatScanHealthEntry[]>>({});
-const napcatLaunchResult = ref<Record<string, { ok: boolean; message: string }>>({});
-const autoCheckingNapcat = ref(false);
-const lastAutoNapcatHealthKey = ref("");
-const napcatHealthPausedAfterFix = ref<Record<string, boolean>>({});
+
 const copyResult = ref("");
-const triggeringHeartbeat = ref(false);
-const heartbeatTriggerResult = ref<{ ok: boolean; message: string } | null>(null);
+
 const deletingGateway = ref(false);
+
 const deleteError = ref("");
+
 const openingMarvis = ref(false);
+
 const marvisOpenResult = ref<{ ok: boolean; message: string } | null>(null);
+
 const visibleAdapterGroups = computed(() => {
   const query = adapterQuery.value.trim().toLowerCase();
-  return adapterGroups
+  return adapterGroups.value
     .map(group => ({
       ...group,
       choices: group.choices.filter(choice => {
@@ -650,46 +490,11 @@ const visibleAdapterGroups = computed(() => {
     }))
     .filter(group => group.choices.length > 0);
 });
-const codexCwdOptions = computed(() => {
-  const values = new Set<string>();
-  store.gateways.forEach(item => {
-    if (item.codexCwd) values.add(item.codexCwd);
-  });
-  return [...values];
-});
 
 async function setAdapterEnabled(type: MessageAdapterType, value: unknown): Promise<void> {
-  if (!gateway.value) return;
-  const enabled = value === true;
-  if (enabled === !isAdapterDisabled(gateway.value, type)) return;
+  if (!gateway.value || (value === true) === !isAdapterDisabled(gateway.value, type)) return;
   toggleAdapterDisabled(gateway.value, type);
   store.touch();
-  if (type === "rabilink" && enabled) {
-    void bindMobileRecordingToCurrentRole();
-  }
-  if (type !== "speech") return;
-
-  await persistAndSyncSpeechAdapter();
-}
-
-async function persistAndSyncSpeechAdapter(): Promise<void> {
-  if (!gateway.value) return;
-  speechAdapterActionBusy.value = true;
-  speechAdapterActionError.value = "";
-  try {
-    await store.save();
-    await speech.reconcileMicrophone();
-  } catch (cause) {
-    speechAdapterActionError.value = userFacingError(cause);
-  } finally {
-    speechAdapterActionBusy.value = false;
-  }
-}
-
-function scheduleSpeechConfigSave(): void {
-  window.clearTimeout(speechConfigSaveTimer);
-  if (!gateway.value || isAdapterDisabled(gateway.value, "speech")) return;
-  speechConfigSaveTimer = window.setTimeout(() => void persistAndSyncSpeechAdapter(), 700);
 }
 
 function hasAdapterParams(type: MessageAdapterType): boolean {
@@ -718,17 +523,6 @@ function setConversationReviewPolicy(type: MessageAdapterType, field: "initialMe
   store.touch();
 }
 
-function napcatTextConfirmationThreshold(): number {
-  return gateway.value ? messageAdapterPolicyFor(gateway.value, "napcat").textConfirmationThreshold : 0;
-}
-
-function setNapcatTextConfirmationThreshold(value: unknown): void {
-  const threshold = Number(value);
-  if (!gateway.value || !Number.isInteger(threshold) || threshold < 0 || threshold > 200_000) return;
-  setMessageAdapterPolicy(gateway.value, "napcat", { textConfirmationThreshold: threshold });
-  store.touch();
-}
-
 function usesAutomaticMessageGrouping(type: MessageAdapterType): boolean {
   return type !== "disabled" && messageAdapterUsesAutomaticGrouping(type);
 }
@@ -742,501 +536,35 @@ function setMessageGroupingPolicy(type: MessageAdapterType, patch: Record<string
   store.touch();
 }
 
-function speechVariable(name: string, fallback = ""): string {
-  return String(gateway.value?.routeVariables?.[name] ?? fallback);
-}
-
-function setSpeechVariable(name: string, value: unknown): void {
-  if (!gateway.value) return;
-  gateway.value.routeVariables = gateway.value.routeVariables ?? {};
-  gateway.value.routeVariables[name] = String(value ?? "");
-  store.touch();
-  scheduleSpeechConfigSave();
-}
-
-function setSpeechHotDelivery(value: unknown): void {
-  if (!gateway.value) return;
-  gateway.value.speechPushMode = speechPushModeForHotDelivery(value === true);
-  store.touch();
-  scheduleSpeechConfigSave();
-}
-
-function setSpeechAutoPlay(value: unknown): void {
-  if (!gateway.value) return;
-  const enabled = value === true;
-  setSpeechVariable("speechAutoPlay", String(enabled));
-  gateway.value.pipeline = { ...gateway.value.pipeline, ttsPlay: enabled };
-  store.touch();
-}
-
-function adapterLogEntries(type: MessageAdapterType): Array<Record<string, any>> {
-  return runtime.value.adapterLogs?.[adapterRuntimeKey(type)]?.entries ?? [];
-}
-
-function adapterLogPaths(type: MessageAdapterType): string[] {
-  return runtime.value.adapterLogs?.[adapterRuntimeKey(type)]?.paths ?? [];
-}
-
-function messageFileEntries(type: MessageAdapterType): Array<Record<string, any>> {
-  return runtime.value.messageFiles?.[adapterRuntimeKey(type)]?.entries ?? [];
-}
-
-function messageFilePaths(type: MessageAdapterType): string[] {
-  return runtime.value.messageFiles?.[adapterRuntimeKey(type)]?.paths ?? [];
-}
-
-function formatLogTime(entry: Record<string, any>): string {
-  const ms = Number(entry.timeMs || 0);
-  if (Number.isFinite(ms) && ms > 0) {
-    return new Date(ms).toLocaleString();
-  }
-  if (entry.time) return String(entry.time);
-  return "-";
-}
-
-function logPreview(entry: Record<string, any>): string {
-  const text = String(entry.text || entry.message || "");
-  if (text) return text;
-  try {
-    return JSON.stringify(entry.raw ?? entry, null, 2);
-  } catch {
-    return String(entry.raw ?? "");
-  }
-}
-
-function logEventTitle(entry: Record<string, any>): string {
-  return [entry.level && entry.level !== "info" ? String(entry.level) : "", entry.event || entry.source || "log"]
-    .filter(Boolean)
-    .join(" · ");
-}
-
-function rawLogJson(entry: Record<string, any>): string {
-  try {
-    return JSON.stringify(entry.raw ?? entry, null, 2);
-  } catch {
-    return String(entry.raw ?? "");
-  }
-}
-
 function toggleAdapterParams(type: MessageAdapterType): void {
   adapterParamOpen.value[type] = !adapterParamOpen.value[type];
-  if (adapterParamOpen.value[type]) {
-    void runMessageAdapterScan();
-    if (type === "rabilink") void loadMobileRecordingInfo();
-  }
+  if (adapterParamOpen.value[type]) void runMessageAdapterScan();
 }
 
 function removeAdapter(type: MessageAdapterType): void {
   if (!gateway.value) return;
-  const next = adapters.value.filter(t => t !== type);
+  const next = addedAdapters.value.filter(t => t !== type);
   setGatewayAdapters(gateway.value, next as MessageAdapterType[]);
   applyAdapterDefaults(gateway.value);
   adapterParamOpen.value[type] = false;
   store.touch();
 }
 
-const availableToAdd = computed(() => {
-  const allTypes: MessageAdapterType[] = ["napcat", "wecom", "weixin", "feishu", "speech", "heartbeat", "xiaomiHome", "webhook", "rabilink"];
-  return allTypes.filter(t => !addedAdapters.value.includes(t));
-});
-
-const mobileRecordingInfo = ref<{
-  devices: Array<{ id: string; lastReceivedAt: number }>;
-  loading: boolean;
-}>({ devices: [], loading: false });
-
-async function loadMobileRecordingInfo(): Promise<void> {
-  const roleId = gateway.value?.agentRoleId;
-  if (!roleId) return;
-  mobileRecordingInfo.value.loading = true;
-  try {
-    const res = await fetch(`/api/roles/${encodeURIComponent(roleId)}/all-day-recording`);
-    if (res.ok) {
-      const json = await res.json();
-      if (json.code === 0 && json.data) {
-        mobileRecordingInfo.value.devices = json.data.devices || [];
-      }
-    }
-  } catch (err) {
-    console.error("Failed to load mobile recording info:", err);
-  } finally {
-    mobileRecordingInfo.value.loading = false;
-  }
-}
-
-async function bindMobileRecordingToCurrentRole(): Promise<void> {
-  const roleId = gateway.value?.agentRoleId;
-  if (!roleId) return;
-  try {
-    const res = await fetch(`/api/roles/${encodeURIComponent(roleId)}/all-day-recording`);
-    if (!res.ok) return;
-    const json = await res.json();
-    if (json.code !== 0 || !json.data) return;
-    const snapshot = json.data;
-    const devices: Array<{ id: string }> = snapshot.devices || [];
-    const currentDeviceIds: string[] = snapshot.settings?.mobileDeviceIds || [];
-    const allDeviceIds = [...new Set([...currentDeviceIds, ...devices.map(d => d.id)])];
-
-    if (allDeviceIds.length > currentDeviceIds.length) {
-      await fetch(`/api/roles/${encodeURIComponent(roleId)}/all-day-recording/settings`, {
-        method: "PUT",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          ...snapshot.settings,
-          mobileDeviceIds: allDeviceIds
-        })
-      });
-    }
-    await loadMobileRecordingInfo();
-  } catch (err) {
-    console.error("Failed to bind mobile recording devices:", err);
-  }
-}
-
-watch(
-  () => [gateway.value?.id, gateway.value?.messageAdapterType, JSON.stringify(gateway.value?.messageAdapters ?? [])] as const,
-  ([id]) => {
-    const configured = Array.isArray(gateway.value?.messageAdapters)
-      ? uniqueAdapters(gateway.value.messageAdapters)
-      : [];
-    if (!id || configured.length === 0) return;
-    adapterCatalogCache.value = {
-      ...adapterCatalogCache.value,
-      [id]: addedAdapters.value
-    };
-  },
-  { immediate: true }
-);
-
+const availableToAdd = computed(() => endpointCatalog.value.filter(item => !addedAdapters.value.includes(item.type)).map(item => item.type));
 
 function addAdapter(type: MessageAdapterType): void {
   if (!gateway.value) return;
-  const next = [...addedAdapters.value, type];
-  setGatewayAdapters(gateway.value, next as MessageAdapterType[]);
+  setGatewayAdapters(gateway.value, [...addedAdapters.value, type]);
   applyAdapterDefaults(gateway.value);
   adapterParamOpen.value[type] = true;
+  adapterLifecycleRevision.value[type] = (adapterLifecycleRevision.value[type] || 0) + 1;
   void runMessageAdapterScan();
-  if (type === "rabilink") {
-    void bindMobileRecordingToCurrentRole();
-  }
   store.touch();
 }
 
 function touch(): void {
   if (gateway.value) applyAdapterDefaults(gateway.value);
-  if (gateway.value?.messageAdapters?.includes("napcat") || gateway.value?.messageAdapterType === "napcat") {
-    syncPrimaryNapcatFromInstances();
-  }
   store.touch();
-}
-
-function defaultNapcatWebuiUrl(): string {
-  const scanned = messageAdapterScan.value.adapters.napcat?.endpoints?.find(endpoint => endpoint.healthy)?.url;
-  return scanned || gateway.value?.napcatWebuiUrl?.trim() || "http://127.0.0.1:6099/webui";
-}
-
-function ensureNapcatInstances(): NapCatInstance[] {
-  return gateway.value?.napcatInstances ?? [];
-}
-
-function syncPrimaryNapcatFromInstances(): void {
-  if (!gateway.value) return;
-  const primary = ensureNapcatInstances().find((item) => item.enabled !== false) ?? ensureNapcatInstances()[0];
-  if (!primary) return;
-  gateway.value.gatewayPort = Number(primary.gatewayPort || gateway.value.gatewayPort || 8790);
-  gateway.value.napcatHttpUrl = primary.httpUrl || gateway.value.napcatHttpUrl;
-  gateway.value.napcatWebuiUrl = primary.webuiUrl || gateway.value.napcatWebuiUrl;
-  gateway.value.napcatAccessToken = primary.accessToken || gateway.value.napcatAccessToken;
-  gateway.value.napcatWebuiToken = primary.webuiToken || gateway.value.napcatWebuiToken;
-}
-
-function nextNapcatPort(base: number): number {
-  const used = new Set<number>([
-    Number(store.meta.managerPort || 0),
-    ...ensureNapcatInstances().map((item) => Number(item.gatewayPort)),
-    ...store.gateways.flatMap((item) => [
-      Number(item.gatewayPort),
-      Number(item.webhookPort),
-      Number(item.xiaoaiWebhookPort),
-      Number(item.rabiLinkWebhookPort),
-      ...(Array.isArray(item.napcatInstances) ? item.napcatInstances.map(instance => Number(instance.gatewayPort)) : [])
-    ]),
-    ...store.managerRows.flatMap((item) => [
-      Number(item.gatewayPort),
-      Number(item.webhookPort),
-      Number(item.xiaoaiWebhookPort),
-      Number(item.rabiLinkWebhookPort),
-      ...(Array.isArray(item.napcatInstances) ? item.napcatInstances.map(instance => Number(instance.gatewayPort)) : [])
-    ])
-  ].filter(port => Number.isFinite(port) && port > 0));
-  let port = base;
-  while (used.has(port)) port += 1;
-  return port;
-}
-
-function allocateAvailablePort(used: Set<number>, base: number): number {
-  let port = Math.max(1, Math.min(65535, Number(base) || 8790));
-  while (port <= 65535 && used.has(port)) port += 1;
-  if (port > 65535) {
-    throw new Error("没有可用端口了，请手动释放一个 1-65535 范围内的端口。");
-  }
-  used.add(port);
-  return port;
-}
-
-function autoAssignNapcatPortsForAllGateways(): boolean {
-  const usedWs = new Set<number>();
-  const usedWebui = new Set<number>();
-  const claim = (value: unknown): void => {
-    const port = Number(value || 0);
-    if (Number.isInteger(port) && port >= 1 && port <= 65535) usedWs.add(port);
-  };
-
-  claim(store.meta.managerPort || 0);
-  for (const item of store.gateways) {
-    const activeAdapters = gatewayAdapterTypes(item);
-    if (activeAdapters.includes("webhook")) claim(item.webhookPort ?? item.gatewayPort);
-    if (activeAdapters.includes("xiaoai")) claim(item.xiaoaiWebhookPort ?? item.webhookPort ?? item.gatewayPort);
-    if (activeAdapters.includes("rabilink")) claim(item.rabiLinkWebhookPort ?? item.webhookPort ?? item.gatewayPort);
-  }
-
-  let changed = false;
-  const claimWebui = (url: string | undefined): void => {
-    const port = portFromLocalUrl(url);
-    if (Number.isInteger(port) && port >= 1 && port <= 65535) usedWebui.add(port);
-  };
-  for (const item of store.gateways) {
-    if (!gatewayAdapterTypes(item).includes("napcat")) continue;
-    const configuredInstances = Array.isArray(item.napcatInstances) && item.napcatInstances.length > 0
-      ? item.napcatInstances
-      : [{
-          id: "default",
-          name: "默认 NapCat",
-          enabled: true,
-          gatewayPort: item.gatewayPort,
-          httpUrl: item.napcatHttpUrl || "http://127.0.0.1:3000",
-          webuiUrl: item.napcatWebuiUrl || defaultNapcatWebuiUrl(),
-          accessToken: item.napcatAccessToken || "",
-          webuiToken: item.napcatWebuiToken || ""
-        } as NapCatInstance];
-    const instances = [configuredInstances.find(instance => instance.enabled !== false) ?? configuredInstances[0]];
-    instances[0].enabled = true;
-    item.napcatInstances = instances;
-    for (const instance of instances) {
-      if (instance.enabled === false) continue;
-      const current = Number(instance.gatewayPort || 0);
-      if (!Number.isInteger(current) || current < 1 || current > 65535 || usedWs.has(current)) {
-        instance.gatewayPort = allocateAvailablePort(usedWs, Math.max(current + 1, Number(item.gatewayPort || 8789) + 1));
-        changed = true;
-      } else {
-        usedWs.add(current);
-      }
-
-      if (!portFromLocalUrl(instance.httpUrl)) {
-        const configuredHttpUrl = item.napcatHttpUrl;
-        instance.httpUrl = configuredHttpUrl && portFromLocalUrl(configuredHttpUrl)
-          ? configuredHttpUrl
-          : "http://127.0.0.1:3000";
-        changed = true;
-      }
-
-      const webuiPort = portFromLocalUrl(instance.webuiUrl);
-      if (!webuiPort || usedWebui.has(webuiPort)) {
-        instance.webuiUrl = nextAvailableLocalUrl(instance.webuiUrl || item.napcatWebuiUrl || defaultNapcatWebuiUrl(), usedWebui, 6099);
-        changed = true;
-      } else {
-        claimWebui(instance.webuiUrl);
-      }
-    }
-    const primary = instances.find(instance => instance.enabled !== false) ?? instances[0];
-    if (primary && Number(item.gatewayPort || 0) !== Number(primary.gatewayPort || 0)) {
-      item.gatewayPort = Number(primary.gatewayPort);
-      item.napcatHttpUrl = primary.httpUrl || item.napcatHttpUrl;
-      item.napcatWebuiUrl = primary.webuiUrl || item.napcatWebuiUrl;
-      item.napcatAccessToken = primary.accessToken || item.napcatAccessToken;
-      item.napcatWebuiToken = primary.webuiToken || item.napcatWebuiToken;
-      changed = true;
-    }
-  }
-  if (changed) store.touch();
-  return changed;
-}
-
-function portFromLocalUrl(value: string | undefined): number {
-  try {
-    return Number(new URL(value || "").port || 0);
-  } catch {
-    return 0;
-  }
-}
-
-function nextAvailableLocalUrl(baseUrl: string, used: Set<number>, fallbackPort: number): string {
-  let parsed: URL;
-  try {
-    parsed = new URL(baseUrl || `http://127.0.0.1:${fallbackPort}`);
-  } catch {
-    parsed = new URL(`http://127.0.0.1:${fallbackPort}`);
-  }
-  const original = Number(parsed.port || fallbackPort);
-  const port = allocateAvailablePort(used, original || fallbackPort);
-  parsed.port = String(port);
-  return parsed.toString().replace(/\/$/, "");
-}
-
-function nextLocalHttpUrl(baseUrl: string, fallbackPort: number): string {
-  let parsed: URL;
-  try {
-    parsed = new URL(baseUrl || `http://127.0.0.1:${fallbackPort}`);
-  } catch {
-    parsed = new URL(`http://127.0.0.1:${fallbackPort}`);
-  }
-  const used = new Set<number>([
-    ...ensureNapcatInstances().flatMap(item => [
-      portFromLocalUrl(item.httpUrl),
-      portFromLocalUrl(item.webuiUrl)
-    ]),
-    ...store.gateways.flatMap(item => [
-      portFromLocalUrl(item.napcatHttpUrl),
-      portFromLocalUrl(item.napcatWebuiUrl),
-      ...(Array.isArray(item.napcatInstances) ? item.napcatInstances.flatMap(instance => [
-        portFromLocalUrl(instance.httpUrl),
-        portFromLocalUrl(instance.webuiUrl)
-      ]) : [])
-    ])
-  ].filter(port => Number.isFinite(port) && port > 0));
-  let port = Number(parsed.port || fallbackPort);
-  while (used.has(port)) port += 1;
-  parsed.port = String(port);
-  return parsed.toString().replace(/\/$/, "");
-}
-
-function recentNapcatTemplate(): Partial<NapCatInstance> {
-  const configured = ensureNapcatInstances();
-  return [...configured].reverse().find(instance =>
-    Boolean(instance.launchCommand || instance.workingDir || instance.webuiUrl || instance.accessToken)
-  ) || configured[0] || {};
-}
-
-function napcatInstanceIgnoreKeys(instance: Partial<NapCatInstance>): string[] {
-  const keys = new Set<string>();
-  const add = (prefix: string, value: unknown): void => {
-    const text = String(value ?? "").trim();
-    if (text) keys.add(`${prefix}:${text}`);
-  };
-  add("id", instance.id);
-  add("ws", instance.gatewayPort);
-  add("http", instance.httpUrl);
-  add("webui", instance.webuiUrl);
-  add("qq", instance.botUserId);
-  return [...keys];
-}
-
-function ignoredNapcatKeys(): Set<string> {
-  return new Set((gateway.value?.ignoredNapcatInstanceIds ?? []).map(item => String(item || "").trim()).filter(Boolean));
-}
-
-function isIgnoredNapcatInstance(instance: Partial<NapCatInstance>): boolean {
-  const ignored = ignoredNapcatKeys();
-  return napcatInstanceIgnoreKeys(instance).some(key => ignored.has(key));
-}
-
-function clearIgnoredNapcatInstance(instance: Partial<NapCatInstance>): void {
-  if (!gateway.value?.ignoredNapcatInstanceIds?.length) return;
-  const keys = new Set(napcatInstanceIgnoreKeys(instance));
-  const next = gateway.value.ignoredNapcatInstanceIds.filter(item => !keys.has(String(item || "").trim()));
-  if (next.length !== gateway.value.ignoredNapcatInstanceIds.length) {
-    gateway.value.ignoredNapcatInstanceIds = next;
-    store.touch();
-  }
-}
-
-function ignoreNapcatInstance(instance: Partial<NapCatInstance>): void {
-  if (!gateway.value) return;
-  const next = new Set((gateway.value.ignoredNapcatInstanceIds ?? []).map(item => String(item || "").trim()).filter(Boolean));
-  for (const key of napcatInstanceIgnoreKeys(instance)) next.add(key);
-  gateway.value.ignoredNapcatInstanceIds = [...next];
-  store.touch();
-}
-
-function clearNapcatInstanceUiState(id: string): void {
-  for (const state of [
-    napcatInstanceHealthResult,
-    napcatLaunchResult,
-    napcatPortFixResult,
-    napcatOneBotFixResult,
-    napcatHealthPausedAfterFix,
-    testingNapcatInstance,
-    launchingNapcatInstance,
-    managingNapcatLogin,
-    napcatLoginPanels,
-    configuringNapcatOneBot
-  ]) {
-    const next = { ...state.value };
-    delete next[id];
-    state.value = next;
-  }
-}
-
-function napcatRemovePayload(instance: NapCatInstance): Record<string, unknown> {
-  return {
-    gatewayId: gateway.value?.id,
-    instanceId: instance.id,
-    name: instance.name,
-    gatewayPort: instance.gatewayPort,
-    httpUrl: instance.httpUrl,
-    webuiUrl: instance.webuiUrl,
-    accessToken: instance.accessToken,
-    webuiToken: instance.webuiToken,
-    launchCommand: instance.launchCommand,
-    workingDir: instance.workingDir,
-    botUserId: napcatAccountUserId(instance),
-    botNickname: napcatAccountNickname(instance)
-  };
-}
-
-async function removeNapcatInstance(instance: NapCatInstance): Promise<void> {
-  if (!gateway.value) return;
-  napcatLaunchResult.value = {
-    ...napcatLaunchResult.value,
-    [instance.id]: { ok: true, message: "正在退出登录并停止 NapCat..." }
-  };
-  try {
-    if (store.dirty) await store.save();
-    const resp = await fetch("/api/message/napcat-remove", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(napcatRemovePayload(instance))
-    });
-    const body = await resp.json().catch(() => ({}));
-    napcatLaunchResult.value = {
-      ...napcatLaunchResult.value,
-      [instance.id]: {
-        ok: resp.ok && body.ok !== false,
-        message: body.message || (resp.ok ? "已退出登录、停止并移除。" : "删除失败。")
-      }
-    };
-    if (resp.ok && body.ok !== false) {
-      ignoreNapcatInstance(instance);
-      clearNapcatInstanceUiState(instance.id);
-      if (store.dirty) await store.save();
-    }
-    await store.load();
-    await runMessageAdapterScan();
-  } catch (e: unknown) {
-    napcatLaunchResult.value = {
-      ...napcatLaunchResult.value,
-      [instance.id]: { ok: false, message: userFacingError(e) }
-    };
-  }
-}
-
-function removeNapcatInstanceById(id: string): void {
-  const instance = napcatAccountInstances().find(item => item.id === id);
-  if (instance) void removeNapcatInstance(instance);
-}
-
-function isConfiguredNapcatInstance(instance: NapCatInstance): boolean {
-  return ensureNapcatInstances().some(item => sameNapcatInstance(item as NapCatInstance & Record<string, any>, instance as NapCatInstance & Record<string, any>));
 }
 
 function openExternalUrl(url: string | undefined): void {
@@ -1245,136 +573,10 @@ function openExternalUrl(url: string | undefined): void {
   window.open(target, "_blank", "noopener,noreferrer");
 }
 
-function normalizedPath(value: string | undefined, fallback: string): string {
-  const raw = value?.trim() || fallback;
-  return raw.startsWith("/") ? raw : `/${raw}`;
-}
-
-function napcatWsUrl(): string {
-  return `ws://127.0.0.1:${gateway.value?.gatewayPort || 8790}`;
-}
-
-function napcatInstanceWsUrl(instance: NapCatInstance): string {
-  return `ws://127.0.0.1:${instance.gatewayPort || 8790}`;
-}
-
-function webhookPortFor(type: MessageAdapterType): number {
-  if (type === "xiaoai") return Number(gateway.value?.xiaoaiWebhookPort || gateway.value?.webhookPort || gateway.value?.gatewayPort || 8790);
-  if (type === "rabilink") return Number(gateway.value?.rabiLinkWebhookPort || gateway.value?.webhookPort || gateway.value?.gatewayPort || 8790);
-  if (type === "feishu") return Number(gateway.value?.feishuWebhookPort || gateway.value?.gatewayPort || 8790);
-  return Number(gateway.value?.webhookPort || gateway.value?.gatewayPort || 8790);
-}
-
-function webhookPathFor(type: MessageAdapterType): string {
-  if (type === "xiaoai") return gateway.value?.xiaoaiWebhookPath || adapterDefaultWebhookPath(type);
-  if (type === "rabilink") return gateway.value?.rabiLinkWebhookPath || adapterDefaultWebhookPath(type);
-  if (type === "feishu") return gateway.value?.feishuWebhookPath || adapterDefaultWebhookPath(type);
-  return gateway.value?.webhookPath || adapterDefaultWebhookPath(type);
-}
-
-function webhookHostFor(type: MessageAdapterType): string {
-  if (type === "rabilink") return gateway.value?.rabiLinkWebhookHost || "0.0.0.0";
-  return "127.0.0.1";
-}
-
-function isUnspecifiedHttpHost(host: string): boolean {
-  const normalized = host.trim().toLowerCase();
-  return normalized === "0.0.0.0" || normalized === "::" || normalized === "[::]";
-}
-
-function localCallbackHost(): string {
-  const browserHost = window.location.hostname;
-  if (browserHost && !isUnspecifiedHttpHost(browserHost) && browserHost !== "localhost" && !browserHost.startsWith("127.")) {
-    return browserHost;
-  }
-  return store.networkOptions.localAddresses?.find((item) => item.address)?.address || "127.0.0.1";
-}
-
-function callbackHostFor(type: MessageAdapterType): string {
-  const host = webhookHostFor(type);
-  return type === "rabilink" && isUnspecifiedHttpHost(host) ? localCallbackHost() : host;
-}
-
-function setWebhookPort(type: MessageAdapterType, value: unknown): void {
-  if (!gateway.value) return;
-  const port = Number(value || 0);
-  if (type === "xiaoai") gateway.value.xiaoaiWebhookPort = port;
-  else if (type === "rabilink") gateway.value.rabiLinkWebhookPort = port;
-  else if (type === "feishu") gateway.value.feishuWebhookPort = port;
-  else gateway.value.webhookPort = port;
-  touch();
-}
-
-function setWebhookPath(type: MessageAdapterType, value: unknown): void {
-  if (!gateway.value) return;
-  const path = String(value || "");
-  if (type === "xiaoai") gateway.value.xiaoaiWebhookPath = path;
-  else if (type === "rabilink") gateway.value.rabiLinkWebhookPath = path;
-  else if (type === "feishu") gateway.value.feishuWebhookPath = path;
-  else gateway.value.webhookPath = path;
-  touch();
-}
-
-function setWebhookHost(type: MessageAdapterType, value: unknown): void {
-  if (!gateway.value || type !== "rabilink") return;
-  gateway.value.rabiLinkWebhookHost = String(value || "").trim() || "0.0.0.0";
-  touch();
-}
-
-function webhookUrl(type: MessageAdapterType = "webhook"): string {
-  return `http://${webhookHostFor(type)}:${webhookPortFor(type)}${normalizedPath(webhookPathFor(type), adapterDefaultWebhookPath(type))}`;
-}
-
-function callbackUrl(type: MessageAdapterType = "webhook"): string {
-  return `http://${callbackHostFor(type)}:${webhookPortFor(type)}${normalizedPath(webhookPathFor(type), adapterDefaultWebhookPath(type))}`;
-}
-
-function webhookTestEventType(type: MessageAdapterType): string {
-  if (type === "xiaoai") return "xiaoai.transcript";
-  if (type === "rabilink") return "rabilink.message";
-  return "webhook.text";
-}
-
-function webhookCurl(type: MessageAdapterType = "webhook"): string {
-  const source = adapterSourceAliases(type)[0] || type;
-  const eventType = webhookTestEventType(type);
-  return `curl -X POST "${callbackUrl(type)}" -H "content-type: application/json" -d "{\"source\":\"${source}\",\"type\":\"${eventType}\",\"message\":\"hello from RabiRoute\"}"`;
-}
-function sourceLogEntries(type: MessageAdapterType): Array<Record<string, any>> {
-  return adapterLogEntries(type);
-}
-
-function sourceMessageFileEntries(type: MessageAdapterType): Array<Record<string, any>> {
-  return messageFileEntries(type);
-}
-
-function sourceTitle(type: MessageAdapterType): string {
-  return adapterLabel(type);
-}
-
-function messageScanFor(type: MessageAdapterType): MessageAdapterScanResult | undefined {
-  const scan = messageAdapterScan.value.adapters[type];
-  if (type !== "napcat") return scan;
-  const instance = gateway.value?.napcatInstances?.[0];
-  const panel = instance && napcatLoginPanels.value[instance.id]?.panel;
-  if (!panel) return scan;
-  return {
-    ...scan, type, label: "NapCat / OneBot", maturity: scan?.maturity ?? "experimental", installed: true,
-    health: {
-      state: panel.health?.ok === true ? "healthy" : panel.loggedIn ? "degraded" : panel.offline ? "offline" : panel.managementAvailable ? "needs_login" : "unknown",
-      message: panel.message || "正在读取当前 QQ 状态。"
-    },
-    requirements: [
-      { id: "qq-login", label: "当前 QQ 登录", required: true, ok: panel.loggedIn === true && panel.state !== NapcatState.AccountMismatch, detail: panel.message },
-      { id: "onebot-http", label: "当前实例 OneBot HTTP", required: true, ok: panel.health?.ok === true, detail: instance.httpUrl },
-      { id: "webui", label: "当前实例管理服务", required: false, ok: panel.managementAvailable === true, detail: instance.webuiUrl }
-    ],
-    warnings: panel.warnings || []
-  };
-}
+function messageScanFor(type: MessageAdapterType): MessageAdapterScanResult | undefined { return messageAdapterScan.value.adapters[type]; }
 
 const channelCheckItems = computed(() => {
-  const catalog = new Map(adapterGroups.flatMap(group => group.choices).map(choice => [choice.type, choice]));
+  const catalog = new Map(adapterGroups.value.flatMap(group => group.choices).map(choice => [choice.type, choice]));
   return addedAdapters.value
     .filter((type): type is MessageEndpointType => type !== "disabled" && !isNonMessageEndpoint(type))
     .map(type => catalog.get(type) ?? {
@@ -1473,25 +675,13 @@ function channelCheckDetail(scan?: MessageAdapterScanResult): string {
   return scan.installed ? "已发现消息端，连接状态需要进一步确认。" : "尚未发现所需配置或服务。";
 }
 
-function requirementColor(requirement: { ok?: boolean }): string {
-  if (requirement.ok === true) return "success";
-  if (requirement.ok === false) return "warning";
-  return "secondary";
-}
-
-function requirementLabel(requirement: { ok?: boolean; required?: boolean }): string {
-  if (requirement.ok === true) return "已满足";
-  if (requirement.ok === false) return requirement.required ? "缺少" : "未发现";
-  return "需确认";
-}
-
 function scanConnectionLabel(scan?: MessageAdapterScanResult): string {
   if (!scan) return messageAdapterScan.value.loading ? "扫描中" : "未扫描";
   const labels: Record<NonNullable<MessageAdapterScanResult["health"]>["state"], string> = {
     healthy: "可用",
     degraded: "部分可用",
-    offline: scan.type === "napcat" ? "QQ 离线" : "未连接",
-    needs_login: scan.type === "napcat" ? "QQ 未登录" : "未登录",
+    offline: "未连接",
+    needs_login: "未登录",
     unconfigured: "未配置",
     unknown: "待确认",
     timeout: "检查超时",
@@ -1520,1459 +710,6 @@ function openScanCandidate(candidate: { url?: string; path?: string }): void {
   if (candidate.path) void copyText(candidate.path, "已复制本地路径");
 }
 
-function napcatRuntimeInstances(): Record<string, any>[] {
-  const raw = napcatState.value.instances ?? napcatState.value.napcatInstances ?? runtime.value.gatewayStatus?.napcatInstances;
-  if (Array.isArray(raw)) return raw;
-  if (raw && typeof raw === "object") return Object.entries(raw).map(([id, value]) => ({ id, ...(value as Record<string, any>) }));
-  return [];
-}
-
-function napcatInstanceSourceId(instance: Partial<NapCatInstance> & Record<string, any>): string {
-  return String(instance.sourceInstanceId || instance.instanceId || instance.id || "").trim();
-}
-
-function napcatInstanceScope(instance: Partial<NapCatInstance> & Record<string, any>): string {
-  return String(instance.routeId || instance.gatewayId || instance.configName || gateway.value?.id || "").trim();
-}
-
-function sameNapcatInstance(left: Partial<NapCatInstance> & Record<string, any>, right: Partial<NapCatInstance> & Record<string, any>): boolean {
-  const leftWebui = String(left.webuiUrl || left.napcatWebuiUrl || "").trim();
-  const rightWebui = String(right.webuiUrl || right.napcatWebuiUrl || "").trim();
-  if (leftWebui && rightWebui) return leftWebui === rightWebui;
-
-  const leftHttp = String(left.httpUrl || left.napcatHttpUrl || "").trim();
-  const rightHttp = String(right.httpUrl || right.napcatHttpUrl || "").trim();
-  if (leftHttp && rightHttp) return leftHttp === rightHttp;
-
-  const leftPort = Number(left.gatewayPort || left.port || left.wsPort || 0);
-  const rightPort = Number(right.gatewayPort || right.port || right.wsPort || 0);
-  if (leftPort > 0 && rightPort > 0 && leftPort === rightPort) return true;
-
-  const leftId = napcatInstanceSourceId(left);
-  const rightId = napcatInstanceSourceId(right);
-  if (!leftId || !rightId || leftId !== rightId) return false;
-
-  return napcatInstanceScope(left) === napcatInstanceScope(right);
-}
-
-function scopedRuntimeNapcatId(item: Record<string, any>, rawId: string, port: number): string {
-  const scope = napcatInstanceScope(item).replace(/[^\p{L}\p{N}_-]+/gu, "-").replace(/^-+|-+$/g, "");
-  const id = rawId || `ws-${port || "unknown"}`;
-  if (!scope || scope === gateway.value?.id || scope === store.configNameFor(gateway.value as any)) return id;
-  return `${scope}-${id}`;
-}
-
-function napcatIdFromFile(file: string | undefined, fallback: string): string {
-  const raw = String(file || "").replace(/\.json$/i, "");
-  const match = raw.match(/onebot11[_-]?(.+)?$/i);
-  return (match?.[1] || raw || fallback).replace(/[^\p{L}\p{N}_-]+/gu, "-").replace(/^-+|-+$/g, "") || fallback;
-}
-
-function portFromWsOption(option: Record<string, any>): number {
-  const raw = option.value || option.port || option.url;
-  const direct = Number(raw);
-  if (Number.isInteger(direct) && direct > 0) return direct;
-  try {
-    return Number(new URL(String(option.url || raw)).port || 0);
-  } catch {
-    const match = String(raw || "").match(/:(\d+)(?:\/|$)/);
-    return Number(match?.[1] || 0);
-  }
-}
-
-function napcatDiscoveredInstances(): NapCatInstance[] {
-  const napcatOptions = ((store.networkOptions.adapters as Record<string, any>)?.napcat || {}) as {
-    httpServers?: Array<Record<string, any>>;
-    websocketClients?: Array<Record<string, any>>;
-  };
-  const byKey = new Map<string, Partial<NapCatInstance> & { file?: string }>();
-  const keyFor = (item: Record<string, any>, index: number) => String(item.file || item.configPath || item.value || item.url || `discovered-${index + 1}`);
-
-  (napcatOptions.httpServers || []).forEach((server, index) => {
-    const key = keyFor(server, index);
-    const current = byKey.get(key) || {};
-    byKey.set(key, {
-      ...current,
-      file: server.file,
-      id: current.id || napcatIdFromFile(server.file, `discovered-${index + 1}`),
-      name: current.name || napcatIdFromFile(server.file, `QQ ${index + 1}`),
-      httpUrl: String(server.value || server.url || current.httpUrl || ""),
-      webuiUrl: current.webuiUrl || defaultNapcatWebuiUrl()
-    });
-  });
-
-  (napcatOptions.websocketClients || []).forEach((client, index) => {
-    const key = keyFor(client, index);
-    const current = byKey.get(key) || {};
-    const port = portFromWsOption(client);
-    byKey.set(key, {
-      ...current,
-      file: client.file,
-      id: current.id || napcatIdFromFile(client.file, `discovered-${index + 1}`),
-      name: current.name || napcatIdFromFile(client.file, `QQ ${index + 1}`),
-      gatewayPort: port || current.gatewayPort,
-      webuiUrl: current.webuiUrl || defaultNapcatWebuiUrl()
-    });
-  });
-
-  return [...byKey.values()]
-    .filter(item => {
-      const httpPort = portFromLocalUrl(item.httpUrl);
-      const webuiPort = portFromLocalUrl(item.webuiUrl);
-      return Boolean((item.gatewayPort || httpPort) && (httpPort || webuiPort));
-    })
-    .map((item, index) => ({
-      id: String(item.id || `discovered-${index + 1}`),
-      name: String(item.name || item.id || `QQ ${index + 1}`),
-      enabled: false,
-      gatewayPort: Number(item.gatewayPort || nextNapcatPort(Number(gateway.value?.gatewayPort || 8789) + index + 1)),
-      httpUrl: String(item.httpUrl || nextLocalHttpUrl(gateway.value?.napcatHttpUrl || "http://127.0.0.1:3000", 3000 + index)),
-      webuiUrl: String(item.webuiUrl || defaultNapcatWebuiUrl()),
-      accessToken: "",
-      webuiToken: "",
-      ...(item as Record<string, any>),
-      __discovered: true
-    } as NapCatInstance));
-}
-
-function napcatEndpointLabelFromInstance(instance: Partial<NapCatInstance> & Record<string, any>, fallback = "NapCat WebUI"): string {
-  const base = String(instance.name || instance.id || "").trim();
-  if (!base) return fallback;
-  return /\bWebUI\b/i.test(base) ? base : `${base} WebUI`;
-}
-
-function normalizeNapcatDisplayName(value: unknown): string {
-  return String(value || "")
-    .replace(/\s*NapCat\s*WebUI$/i, "")
-    .replace(/\s*WebUI$/i, "")
-    .replace(/\s*NapCat$/i, "")
-    .trim();
-}
-
-function napcatAccountRowKey(instance: NapCatInstance, source: NapCatAccountRow["source"], endpointLabel: string): string {
-  const identity = String(instance.webuiUrl || instance.httpUrl || instance.gatewayPort || instance.id || endpointLabel || "unknown");
-  return `${source}:${identity}`;
-}
-
-function napcatAccountRows(): NapCatAccountRow[] {
-  const configured = ensureNapcatInstances();
-  const rows: NapCatAccountRow[] = configured
-    .filter(instance => !isIgnoredNapcatInstance(instance))
-    .map(instance => {
-      const label = napcatEndpointLabelFromInstance(instance);
-      return {
-        key: napcatAccountRowKey(instance, "configured", label),
-        instance,
-        endpointLabel: label,
-        source: "configured"
-      };
-    });
-  return rows;
-}
-
-function napcatAccountInstances(): NapCatInstance[] {
-  return ensureNapcatInstances().slice(0, 1);
-}
-
-function napcatAccountRowFor(instance: NapCatInstance): NapCatAccountRow | undefined {
-  return napcatAccountRows().find(row => row.instance === instance || sameNapcatInstance(row.instance as NapCatInstance & Record<string, any>, instance as NapCatInstance & Record<string, any>));
-}
-
-function napcatDisplayEndpointLabel(instance: NapCatInstance): string {
-  return napcatAccountRowFor(instance)?.endpointLabel || napcatEndpointLabelFromInstance(instance);
-}
-
-function napcatDisplayInstanceName(instance: NapCatInstance): string {
-  const configuredName = String(instance.name || instance.id || "").trim();
-  if (configuredName) return configuredName;
-  return napcatDisplayEndpointLabel(instance)
-    .replace(/\s*NapCat\s*WebUI$/i, " NapCat")
-    .replace(/\s*WebUI$/i, "")
-    .trim() || "QQ 实例";
-}
-
-function napcatDisplayEndpointHealthy(instance: NapCatInstance): boolean | undefined {
-  return napcatAccountRowFor(instance)?.endpointHealthy;
-}
-
-function napcatWebuiStatusLabel(instance: NapCatInstance): string {
-  const reachable = napcatHealthFor(instance).webui?.reachable;
-  if (reachable === true) return "可用";
-  if (reachable === false) return "未响应";
-  const healthy = napcatDisplayEndpointHealthy(instance);
-  if (healthy === true) return "可用";
-  if (healthy === false) return "未响应";
-  return "未扫描";
-}
-
-function napcatWebuiStatusClass(instance: NapCatInstance): string {
-  const reachable = napcatHealthFor(instance).webui?.reachable;
-  if (reachable === true) return "text-success";
-  if (reachable === false) return "text-warning";
-  const healthy = napcatDisplayEndpointHealthy(instance);
-  if (healthy === true) return "text-success";
-  if (healthy === false) return "text-warning";
-  return "text-info";
-}
-
-function isDiscoveredNapcatAccount(instance: NapCatInstance): boolean {
-  const row = napcatAccountRowFor(instance);
-  return Boolean((instance as Record<string, any>).__discovered || (row && row.source !== "configured" && !isConfiguredNapcatInstance(instance)));
-}
-
-function addDiscoveredNapcatInstance(instance: NapCatInstance): void {
-  clearIgnoredNapcatInstance(instance);
-  const clean = { ...instance } as NapCatInstance & Record<string, any>;
-  delete clean.__discovered;
-  delete clean.sourceInstanceId;
-  delete clean.routeId;
-  delete clean.configName;
-  delete clean.botUserId;
-  delete clean.botNickname;
-  delete clean.connected;
-  clean.enabled = true;
-  clean.name = clean.name || "NapCat";
-  clean.gatewayPort = Number(clean.gatewayPort || nextNapcatPort(Number(gateway.value?.gatewayPort || 8789) + 1));
-  clean.httpUrl = clean.httpUrl || nextLocalHttpUrl(gateway.value?.napcatHttpUrl || "http://127.0.0.1:3000", 3000);
-  clean.webuiUrl = clean.webuiUrl || defaultNapcatWebuiUrl();
-  if (gateway.value) gateway.value.napcatInstances = [clean];
-  syncPrimaryNapcatFromInstances();
-  store.touch();
-}
-
-function matchingDiscoveredNapcatInstance(instance: NapCatInstance): NapCatInstance | undefined {
-  const id = String(instance.id || "");
-  const port = Number(instance.gatewayPort || 0);
-  const httpUrl = String(instance.httpUrl || "");
-  return napcatDiscoveredInstances().find(item =>
-    (id && String(item.id) === id) ||
-    (port && Number(item.gatewayPort || 0) === port) ||
-    (httpUrl && String(item.httpUrl || "") === httpUrl)
-  );
-}
-
-async function autofillNapcatInstance(instance: NapCatInstance): Promise<boolean> {
-  if (!messageAdapterScan.value.adapters.napcat && !messageAdapterScan.value.loading) {
-    await runMessageAdapterScan();
-  }
-  const discovered = matchingDiscoveredNapcatInstance(instance);
-  const template = recentNapcatTemplate();
-  let changed = false;
-  const fill = <K extends keyof NapCatInstance>(key: K, value: NapCatInstance[K] | undefined): void => {
-    if (instance[key] != null && String(instance[key]).trim()) return;
-    if (value == null || !String(value).trim()) return;
-    instance[key] = value;
-    changed = true;
-  };
-
-  fill("httpUrl", discovered?.httpUrl || template.httpUrl || nextLocalHttpUrl(gateway.value?.napcatHttpUrl || "http://127.0.0.1:3000", 3000));
-  fill("webuiUrl", discovered?.webuiUrl || template.webuiUrl || defaultNapcatWebuiUrl());
-  fill("accessToken", template.accessToken || "");
-  fill("launchCommand", discovered?.launchCommand || template.launchCommand);
-  fill("workingDir", discovered?.workingDir || template.workingDir);
-  if (!isValidPort(instance.gatewayPort)) {
-    instance.gatewayPort = discovered?.gatewayPort || nextNapcatPort(Number(gateway.value?.gatewayPort || 8789) + 1);
-    changed = true;
-  }
-  if (changed) {
-    syncPrimaryNapcatFromInstances();
-    store.touch();
-  }
-  return changed;
-}
-
-function webuiTokenMissing(body: Record<string, any>): boolean {
-  return !(body.webui?.tokenFound || body.webui?.found);
-}
-
-async function launchNapcatInstanceAndRecheck(
-  instance: NapCatInstance,
-  startMessage = "NapCat WebUI 未响应，正在启动 NapCat 后台...",
-  healthPayloadPatch: Record<string, unknown> = {},
-  options: { forceRestart?: boolean; visible?: boolean } = {}
-): Promise<{ ok: boolean; message: string; target: NapCatInstance; health?: Record<string, any>; launch?: Record<string, any> }> {
-  if (!gateway.value) {
-    return { ok: false, message: "当前路由未加载，无法启动 NapCat。", target: instance };
-  }
-  if (!instance.launchCommand || !isConfiguredNapcatInstance(instance)) {
-    return {
-      ok: false,
-      message: "NapCat 管理服务未响应，且此 QQ 实例没有可用启动命令。",
-      target: instance
-    };
-  }
-  launchingNapcatInstance.value = { ...launchingNapcatInstance.value, [instance.id]: true };
-  napcatLaunchResult.value = {
-    ...napcatLaunchResult.value,
-    [instance.id]: { ok: true, message: startMessage }
-  };
-  try {
-    const launchResp = await fetch("/api/message/napcat-launch", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        gatewayId: gateway.value.id,
-        instanceId: instance.id,
-        forceRestart: options.forceRestart === true,
-        visible: options.visible === true
-      })
-    });
-    const launchBody = await launchResp.json().catch(() => ({}));
-    const launchOk = launchResp.ok && launchBody.ok !== false;
-    const launchMessage = launchBody.message || (launchOk ? "已尝试启动 NapCat 后台，正在复查。" : "启动失败。");
-    napcatLaunchResult.value = {
-      ...napcatLaunchResult.value,
-      [instance.id]: { ok: launchOk, message: launchMessage }
-    };
-    if (!launchOk) return { ok: false, message: launchMessage, target: instance, launch: launchBody };
-
-    await sleep(2500);
-    let target = resolveConfiguredNapcatInstance(instance);
-    const health = await runNapcatInstanceHealth(target, healthPayloadPatch);
-    if (applyNapcatHealthToInstance(target, health) && store.dirty) {
-      await store.save();
-      target = resolveConfiguredNapcatInstance(target);
-    }
-    return { ok: true, message: launchMessage, target, health, launch: launchBody };
-  } catch (e: unknown) {
-    const message = userFacingError(e);
-    napcatLaunchResult.value = {
-      ...napcatLaunchResult.value,
-      [instance.id]: { ok: false, message }
-    };
-    return { ok: false, message, target: instance };
-  } finally {
-    launchingNapcatInstance.value = { ...launchingNapcatInstance.value, [instance.id]: false };
-  }
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise(resolve => window.setTimeout(resolve, ms));
-}
-
-async function runNapcatInstanceHealth(instance: NapCatInstance, payloadPatch: Record<string, unknown> = {}): Promise<Record<string, any>> {
-  const resp = await fetch("/api/message/napcat-health", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ ...napcatHealthPayload(instance), ...payloadPatch })
-  });
-  const body = await resp.json().catch(() => ({}));
-  return { ok: Boolean(body.ok), ...body };
-}
-
-function resolveConfiguredNapcatInstance(instance: NapCatInstance): NapCatInstance {
-  return ensureNapcatInstances().find(item => item.id === instance.id) ?? instance;
-}
-
-function applyNapcatHealthToInstance(instance: NapCatInstance, body: Record<string, any>, options: { updateConfig?: boolean } = {}): boolean {
-  if (options.updateConfig === false) return false;
-  let changed = false;
-  const userId = body.http?.userId || (body.loginInfo?.source !== "webui" ? body.loginInfo?.userId : "");
-  const nickname = body.http?.nickname || (body.loginInfo?.source !== "webui" ? body.loginInfo?.nickname : "");
-  if (userId && !instance.botUserId) {
-    instance.botUserId = userId;
-    changed = true;
-  }
-  if (nickname && !instance.botNickname) {
-    instance.botNickname = nickname;
-    changed = true;
-  }
-  const correctedWebuiUrl = body.webui?.correctedUrl || body.webui?.correctedWebuiUrl || body.webui?.url;
-  if (correctedWebuiUrl && instance.webuiUrl !== correctedWebuiUrl) {
-    instance.webuiUrl = correctedWebuiUrl;
-    changed = true;
-  }
-  if (changed) store.touch();
-  return changed;
-}
-
-async function applyNapcatScanHealth(payload: unknown): Promise<void> {
-  if (!gateway.value || !payload || typeof payload !== "object") return;
-  const byGateway = payload as Record<string, { instances?: Record<string, Record<string, any>> }>;
-  const nextByWebui: Record<string, NapCatScanHealthEntry[]> = {};
-  for (const [gatewayName, gatewayHealth] of Object.entries(byGateway)) {
-    const instances = gatewayHealth?.instances;
-    if (!instances || typeof instances !== "object") continue;
-    for (const [instanceName, raw] of Object.entries(instances)) {
-      const body = { ok: Boolean(raw?.ok), ...(raw || {}), gatewayName, instanceName } as NapCatScanHealthEntry;
-      const webuiUrl = String(body.webui?.url || body.webui?.configuredUrl || "");
-      if (!webuiUrl) continue;
-      nextByWebui[webuiUrl] = [...(nextByWebui[webuiUrl] || []), body];
-    }
-  }
-  napcatScanHealthByWebui.value = nextByWebui;
-  const current = byGateway[gateway.value.id]?.instances;
-  if (!current || typeof current !== "object") return;
-  const nextHealth = { ...napcatInstanceHealthResult.value };
-  const nextPaused = { ...napcatHealthPausedAfterFix.value };
-  for (const [id, raw] of Object.entries(current)) {
-    const body = { ok: Boolean(raw?.ok), ...(raw || {}) };
-    nextHealth[id] = body;
-    delete nextPaused[id];
-  }
-  napcatInstanceHealthResult.value = nextHealth;
-  napcatHealthPausedAfterFix.value = nextPaused;
-}
-
-function napcatHealthUserId(body: Record<string, any>): string {
-  return String(body.http?.userId || body.loginInfo?.userId || body.webui?.loginInfo?.userId || "");
-}
-
-function napcatHealthShowsExpectedLogin(instance: NapCatInstance, body: Record<string, any> | undefined): boolean {
-  if (!body) return false;
-  const qqLoggedIn = Boolean(
-    body.http?.ok
-    || body.http?.online === true
-    || (body.loginInfo?.source !== "webui" && body.loginInfo?.online === true)
-    || (body.loginInfo?.source === "webui" && body.loginInfo?.online === true)
-    || body.webui?.loginInfo?.online === true
-  );
-  if (!qqLoggedIn) return false;
-  const expected = napcatExpectedUserId(instance);
-  const actual = napcatHealthUserId(body);
-  return !expected || !actual || expected === actual;
-}
-
-function scheduleNapcatLoginRecheck(instance: NapCatInstance): void {
-  for (const delay of [8000, 20000, 45000]) {
-    window.setTimeout(async () => {
-      const target = resolveConfiguredNapcatInstance(instance);
-      try {
-        const health = await runNapcatInstanceHealth(target);
-        napcatInstanceHealthResult.value = {
-          ...napcatInstanceHealthResult.value,
-          [target.id]: health
-        };
-        if (napcatHealthShowsExpectedLogin(target, health)) {
-          napcatLaunchResult.value = {
-            ...napcatLaunchResult.value,
-            [target.id]: {
-              ok: true,
-              message: "QQ 已登录，NapCat 已进入可用状态。"
-            }
-          };
-        }
-      } catch {
-        // The visible health panel already keeps the latest explicit check result.
-      }
-    }, delay);
-  }
-}
-
-function napcatLoginUi(instance: NapCatInstance): NapcatLoginUiState {
-  const existing = napcatLoginPanels.value[instance.id];
-  if (existing) return existing;
-  const created: NapcatLoginUiState = {
-    visible: false,
-    loading: false,
-    busy: false,
-    mode: "quick",
-    quickUserId: String(instance.botUserId || ""),
-    userId: String(instance.botUserId || ""),
-    password: "",
-    message: "",
-    error: "",
-    panel: null,
-    captcha: null,
-    newDevice: null
-  };
-  napcatLoginPanels.value = { ...napcatLoginPanels.value, [instance.id]: created };
-  return created;
-}
-
-function napcatQuickLoginOptions(instance: NapCatInstance): Array<{ title: string; value: string }> {
-  return (napcatLoginUi(instance).panel?.quickAccounts ?? []).map(account => ({
-    title: account.nickname ? `${account.nickname}（${account.userId}）` : `QQ ${account.userId}`,
-    value: account.userId
-  }));
-}
-
-async function loadNapcatLoginPanel(instance: NapCatInstance): Promise<void> {
-  const target = resolveConfiguredNapcatInstance(instance);
-  const ui = napcatLoginUi(target);
-  const gatewayId = gateway.value?.id;
-  if (ui.loading || napcatPanelDisposed) return;
-  ui.loading = true;
-  ui.error = "";
-  try {
-    const response = await fetch("/api/message/napcat-login-panel", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ gatewayId, instanceId: target.id })
-    });
-    const body = await response.json().catch(() => ({})) as NapcatLoginPanelData;
-    if (!response.ok || body.ok === false) throw new Error(body.message || "NapCat 登录控制加载失败。");
-    if (gateway.value?.id !== gatewayId || napcatPanelDisposed) return;
-    ui.panel = body;
-    if (body.health) napcatInstanceHealthResult.value = { ...napcatInstanceHealthResult.value, [target.id]: body.health };
-    ui.message = body.message || "";
-    const expected = String(body.expectedUserId || target.botUserId || "");
-    const firstQuick = body.quickAccounts?.find(account => account.userId === expected)
-      ?? body.quickAccounts?.find(account => account.quickLoginAvailable)
-      ?? body.quickAccounts?.[0];
-    if (!ui.quickUserId) ui.quickUserId = firstQuick?.userId || expected;
-    if (!ui.userId) ui.userId = expected || firstQuick?.userId || "";
-    if (!body.loggedIn && ui.mode === "quick" && !body.quickAccounts?.length) ui.mode = "qrcode";
-    if (body.loggedIn) {
-      ui.password = "";
-      ui.captcha = null;
-      cancelNapcatNewDevice(target);
-      napcatLaunchResult.value = { ...napcatLaunchResult.value, [target.id]: { ok: body.state !== NapcatState.AccountMismatch, message: body.message || "QQ 已登录。" } };
-    }
-  } catch (error) {
-    if (gateway.value?.id !== gatewayId || napcatPanelDisposed) return;
-    ui.panel = null;
-    ui.error = userFacingError(error);
-  } finally {
-    ui.loading = false;
-    if (!napcatPanelDisposed && gateway.value?.id === gatewayId && ui.visible) {
-      window.clearTimeout(napcatPanelPollTimer);
-      napcatPanelPollTimer = window.setTimeout(() => { void loadNapcatLoginPanel(target); }, 3000);
-    }
-  }
-}
-
-async function postNapcatLoginAction(instance: NapCatInstance, payload: Record<string, unknown>): Promise<Record<string, any>> {
-  const response = await fetch("/api/message/napcat-login-action", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ gatewayId: gateway.value?.id, instanceId: instance.id, ...payload })
-  });
-  const body = await response.json().catch(() => ({}));
-  if (!response.ok || body.ok === false) throw new Error(body.message || "NapCat 登录请求失败。");
-  return body;
-}
-
-function scheduleNapcatPanelRefresh(instance: NapCatInstance): void {
-  for (const delay of [1500, 5000, 10000]) {
-    window.setTimeout(() => {
-      const ui = napcatLoginUi(instance);
-      if (!ui.visible) return;
-      void loadNapcatLoginPanel(resolveConfiguredNapcatInstance(instance));
-    }, delay);
-  }
-  scheduleNapcatLoginRecheck(instance);
-}
-
-async function submitNapcatQuickLogin(instance: NapCatInstance): Promise<void> {
-  const ui = napcatLoginUi(instance);
-  if (!ui.quickUserId) {
-    ui.error = "当前没有可用的快速登录账号。";
-    return;
-  }
-  ui.busy = true;
-  ui.error = "";
-  try {
-    const result = await postNapcatLoginAction(instance, { action: "quick-login", userId: ui.quickUserId });
-    ui.message = result.message || "已提交快速登录请求。";
-    scheduleNapcatPanelRefresh(instance);
-  } catch (error) {
-    ui.error = userFacingError(error);
-  } finally {
-    ui.busy = false;
-  }
-}
-
-async function refreshNapcatLoginQr(instance: NapCatInstance): Promise<void> {
-  const ui = napcatLoginUi(instance);
-  ui.busy = true;
-  ui.error = "";
-  try {
-    if (ui.panel?.managementAvailable === false || !ui.panel) {
-      await startNapcatAndManage(instance);
-      if (ui.panel?.managementAvailable !== true) throw new Error(ui.panel?.message || "NapCat 尚未启动，请检查启动结果。");
-    }
-    const result = await postNapcatLoginAction(instance, { action: "refresh-qr" });
-    ui.message = result.message || "已刷新二维码。";
-    await sleep(350);
-    await loadNapcatLoginPanel(instance);
-  } catch (error) {
-    ui.error = userFacingError(error);
-  } finally {
-    ui.busy = false;
-  }
-}
-
-async function handleNapcatPasswordChallenge(instance: NapCatInstance, result: Record<string, any>): Promise<void> {
-  const ui = napcatLoginUi(instance);
-  const data = result.data && typeof result.data === "object" ? result.data as Record<string, any> : {};
-  if (data.needCaptcha && data.proofWaterUrl) {
-    ui.captcha = { proofWaterUrl: String(data.proofWaterUrl) };
-    ui.message = "QQ 要求完成安全验证码。";
-    return;
-  }
-  if (data.needNewDevice && data.jumpUrl) {
-    ui.newDevice = {
-      jumpUrl: String(data.jumpUrl),
-      newDevicePullQrCodeSig: String(data.newDevicePullQrCodeSig || ""),
-      qrCodeDataUrl: "",
-      bytesToken: "",
-      status: "loading"
-    };
-    ui.message = "QQ 检测到新设备，请扫码确认。";
-    await prepareNapcatNewDeviceQr(instance);
-    return;
-  }
-  ui.message = result.message || "已提交密码登录请求。";
-  scheduleNapcatPanelRefresh(instance);
-}
-
-async function submitNapcatPasswordLogin(instance: NapCatInstance): Promise<void> {
-  const ui = napcatLoginUi(instance);
-  if (!ui.userId || !ui.password) {
-    ui.error = "请填写 QQ 号和密码。";
-    return;
-  }
-  ui.busy = true;
-  ui.error = "";
-  ui.captcha = null;
-  cancelNapcatNewDevice(instance);
-  try {
-    const result = await postNapcatLoginAction(instance, {
-      action: "password-login",
-      userId: ui.userId,
-      password: ui.password
-    });
-    await handleNapcatPasswordChallenge(instance, result);
-  } catch (error) {
-    ui.error = userFacingError(error);
-  } finally {
-    ui.busy = false;
-  }
-}
-
-async function loadTencentCaptchaScript(): Promise<void> {
-  const captchaWindow = window as Window & { TencentCaptcha?: unknown };
-  if (captchaWindow.TencentCaptcha) return;
-  const existing = document.querySelector<HTMLScriptElement>('script[data-rabi-napcat-captcha="true"]');
-  if (existing) {
-    await new Promise<void>((resolve, reject) => {
-      existing.addEventListener("load", () => resolve(), { once: true });
-      existing.addEventListener("error", () => reject(new Error("QQ 验证码脚本加载失败。")), { once: true });
-    });
-    return;
-  }
-  await new Promise<void>((resolve, reject) => {
-    const script = document.createElement("script");
-    script.src = "https://captcha.gtimg.com/TCaptcha.js";
-    script.dataset.rabiNapcatCaptcha = "true";
-    script.onload = () => resolve();
-    script.onerror = () => reject(new Error("QQ 验证码脚本加载失败。"));
-    document.head.appendChild(script);
-  });
-}
-
-async function startNapcatCaptcha(instance: NapCatInstance): Promise<void> {
-  const ui = napcatLoginUi(instance);
-  const proofWaterUrl = ui.captcha?.proofWaterUrl;
-  if (!proofWaterUrl) return;
-  ui.busy = true;
-  ui.error = "";
-  try {
-    await loadTencentCaptchaScript();
-    const parsed = new URL(proofWaterUrl);
-    const appId = parsed.searchParams.get("aid") || "2081081773";
-    const sid = parsed.searchParams.get("sid") || "";
-    const Captcha = (window as Window & {
-      TencentCaptcha?: new (
-        appId: string,
-        callback: (result: { ret?: number; ticket?: string; randstr?: string }) => void,
-        options?: Record<string, unknown>
-      ) => { show(): void; destroy?(): void };
-    }).TencentCaptcha;
-    if (!Captcha) throw new Error("QQ 验证码组件没有正确加载。");
-    let captcha: { show(): void; destroy?(): void } | null = null;
-    captcha = new Captcha(appId, (result) => {
-      captcha?.destroy?.();
-      if (result.ret !== 0 || !result.ticket || !result.randstr) {
-        ui.busy = false;
-        ui.error = "验证码未完成，请重试。";
-        return;
-      }
-      void submitNapcatCaptcha(instance, result.ticket, result.randstr, sid);
-    }, {
-      type: "popup",
-      showHeader: false,
-      login_appid: parsed.searchParams.get("login_appid") || undefined,
-      uin: parsed.searchParams.get("uin") || ui.userId,
-      sid,
-      enableAged: true
-    });
-    captcha.show();
-  } catch (error) {
-    ui.busy = false;
-    ui.error = userFacingError(error);
-  }
-}
-
-async function submitNapcatCaptcha(instance: NapCatInstance, ticket: string, randstr: string, sid: string): Promise<void> {
-  const ui = napcatLoginUi(instance);
-  try {
-    const result = await postNapcatLoginAction(instance, {
-      action: "captcha-login",
-      userId: ui.userId,
-      password: ui.password,
-      ticket,
-      randstr,
-      sid
-    });
-    ui.captcha = null;
-    await handleNapcatPasswordChallenge(instance, result);
-  } catch (error) {
-    ui.error = userFacingError(error);
-  } finally {
-    ui.busy = false;
-  }
-}
-
-function cancelNapcatNewDevice(instance: NapCatInstance): void {
-  const timer = napcatNewDevicePollTimers.get(instance.id);
-  if (timer) window.clearTimeout(timer);
-  napcatNewDevicePollTimers.delete(instance.id);
-  const ui = napcatLoginPanels.value[instance.id];
-  if (ui) ui.newDevice = null;
-}
-
-async function prepareNapcatNewDeviceQr(instance: NapCatInstance): Promise<void> {
-  const ui = napcatLoginUi(instance);
-  if (!ui.newDevice) return;
-  ui.newDevice.status = "loading";
-  try {
-    const result = await postNapcatLoginAction(instance, {
-      action: "new-device-qr",
-      userId: ui.userId,
-      jumpUrl: ui.newDevice.jumpUrl
-    });
-    if (!ui.newDevice) return;
-    ui.newDevice.qrCodeDataUrl = String(result.data?.qrCodeDataUrl || "");
-    ui.newDevice.bytesToken = String(result.data?.bytes_token || "");
-    if (!ui.newDevice.qrCodeDataUrl || !ui.newDevice.bytesToken) throw new Error("新设备二维码内容不完整，请重试。");
-    ui.newDevice.status = "waiting";
-    scheduleNapcatNewDevicePoll(instance);
-  } catch (error) {
-    if (ui.newDevice) ui.newDevice.status = "error";
-    ui.error = userFacingError(error);
-  }
-}
-
-function scheduleNapcatNewDevicePoll(instance: NapCatInstance): void {
-  const current = napcatNewDevicePollTimers.get(instance.id);
-  if (current) window.clearTimeout(current);
-  const timer = window.setTimeout(() => void pollNapcatNewDevice(instance), 2500);
-  napcatNewDevicePollTimers.set(instance.id, timer);
-}
-
-async function pollNapcatNewDevice(instance: NapCatInstance): Promise<void> {
-  const ui = napcatLoginUi(instance);
-  const challenge = ui.newDevice;
-  if (!challenge?.bytesToken) return;
-  try {
-    const result = await postNapcatLoginAction(instance, {
-      action: "new-device-poll",
-      userId: ui.userId,
-      bytesToken: challenge.bytesToken
-    });
-    const status = Number(result.data?.uint32_guarantee_status ?? -1);
-    if (status === 3) challenge.status = "scanned";
-    if (status === 1) {
-      challenge.status = "confirmed";
-      const token = String(result.data?.str_nt_succ_token || challenge.newDevicePullQrCodeSig || "");
-      const login = await postNapcatLoginAction(instance, {
-        action: "new-device-login",
-        userId: ui.userId,
-        password: ui.password,
-        newDevicePullQrCodeSig: token
-      });
-      cancelNapcatNewDevice(instance);
-      await handleNapcatPasswordChallenge(instance, login);
-      return;
-    }
-    scheduleNapcatNewDevicePoll(instance);
-  } catch (error) {
-    if (ui.newDevice) ui.newDevice.status = "error";
-    ui.error = userFacingError(error);
-  }
-}
-
-async function startNapcatAndManage(instance: NapCatInstance): Promise<void> {
-  if (!gateway.value) return;
-  let target = resolveConfiguredNapcatInstance(instance);
-  managingNapcatLogin.value = { ...managingNapcatLogin.value, [instance.id]: true };
-  napcatLaunchResult.value = {
-    ...napcatLaunchResult.value,
-    [instance.id]: { ok: true, message: "正在准备 QQ，请稍候..." }
-  };
-  try {
-    await autofillNapcatInstance(target);
-    autoAssignNapcatPortsForAllGateways();
-    if (store.dirty) {
-      await store.save();
-      target = resolveConfiguredNapcatInstance(target);
-    }
-    const response = await fetch("/api/message/napcat-ensure-ready", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ gatewayId: gateway.value.id, instanceId: target.id })
-    });
-    const body = await response.json().catch(() => ({}));
-    if (body.health) {
-      napcatInstanceHealthResult.value = {
-        ...napcatInstanceHealthResult.value,
-        [target.id]: { ok: Boolean(body.health.ok), ...body.health }
-      };
-      if (applyNapcatHealthToInstance(target, body.health) && store.dirty) {
-        await store.save();
-        target = resolveConfiguredNapcatInstance(target);
-      }
-    }
-    if (body.needsUserAction === true) scheduleNapcatLoginRecheck(target);
-    const loginUi = napcatLoginUi(target);
-    loginUi.visible = true;
-    await loadNapcatLoginPanel(target);
-    napcatLaunchResult.value = {
-      ...napcatLaunchResult.value,
-      [target.id]: {
-        ok: response.ok && body.ok !== false,
-        message: body.message || (response.ok ? "NapCat 已启动，登录控制已加载。" : "NapCat 暂时无法启动，请再试一次。")
-      }
-    };
-  } catch (e: unknown) {
-    napcatLaunchResult.value = {
-      ...napcatLaunchResult.value,
-      [instance.id]: { ok: false, message: userFacingError(e) }
-    };
-  } finally {
-    managingNapcatLogin.value = { ...managingNapcatLogin.value, [instance.id]: false };
-  }
-}
-
-function napcatLoginState(instance: NapCatInstance): string {
-  return String(napcatLoginPanels.value[instance.id]?.panel?.state || napcatHealthFor(instance).state || napcatHealthFor(instance).loginState || "");
-}
-
-function napcatAccountOwner(instance: NapCatInstance): Record<string, any> | null {
-  const owner = napcatHealthFor(instance).accountOwner;
-  return owner && typeof owner === "object" ? owner : null;
-}
-
-function napcatAccountOwnerLabel(instance: NapCatInstance): string {
-  const owner = napcatAccountOwner(instance);
-  if (!owner) return "";
-  const account = owner.nickname
-    ? `QQ ${owner.userId || napcatExpectedUserId(instance)} / ${owner.nickname}`
-    : `QQ ${owner.userId || napcatExpectedUserId(instance)}`;
-  return `${account} 正在 ${owner.instanceName || owner.workingDir || owner.httpUrl || "另一 NapCat 实例"} 在线`;
-}
-
-async function adoptNapcatAccountOwner(instance: NapCatInstance): Promise<void> {
-  if (!gateway.value) return;
-  const owner = napcatAccountOwner(instance);
-  if (!owner?.httpUrl) return;
-  const expected = napcatExpectedUserId(instance);
-  const actual = String(owner.userId || "");
-  if (expected && actual && expected !== actual) {
-    napcatLaunchResult.value = {
-      ...napcatLaunchResult.value,
-      [instance.id]: { ok: false, message: `在线实例属于 QQ ${actual}，与当前绑定 QQ ${expected} 不一致，未采用。` }
-    };
-    return;
-  }
-  adoptingNapcatOwner.value = { ...adoptingNapcatOwner.value, [instance.id]: true };
-  try {
-    const target = resolveConfiguredNapcatInstance(instance);
-    target.httpUrl = String(owner.httpUrl);
-    if (owner.webuiUrl) target.webuiUrl = String(owner.webuiUrl);
-    if (owner.workingDir) target.workingDir = String(owner.workingDir);
-    syncPrimaryNapcatFromInstances();
-    store.touch();
-    await store.save();
-    const health = await runNapcatInstanceHealth(target);
-    napcatInstanceHealthResult.value = {
-      ...napcatInstanceHealthResult.value,
-      [target.id]: health
-    };
-    napcatLaunchResult.value = {
-      ...napcatLaunchResult.value,
-      [target.id]: {
-        ok: Boolean(health.ok),
-        message: health.ok
-          ? "已采用现有在线 NapCat，会话未被中断。"
-          : owner.routesToGateway
-            ? "已采用在线实例，但健康检查尚未通过，请稍后再检查。"
-            : "已采用在线实例；它尚未连接当前 RabiRoute，请在详情中修复 OneBot 路由。"
-      }
-    };
-  } catch (e: unknown) {
-    napcatLaunchResult.value = {
-      ...napcatLaunchResult.value,
-      [instance.id]: { ok: false, message: userFacingError(e) }
-    };
-  } finally {
-    adoptingNapcatOwner.value = { ...adoptingNapcatOwner.value, [instance.id]: false };
-  }
-}
-
-function napcatExpectedUserId(instance: NapCatInstance): string {
-  const runtimeInfo = napcatRuntimeFor(instance);
-  const health = napcatHealthFor(instance);
-  return String(instance.botUserId || runtimeInfo.botUserId || runtimeInfo.userId || runtimeInfo.selfId || health.http?.userId || "");
-}
-
-function napcatWebuiSessionUserId(instance: NapCatInstance): string {
-  const health = napcatHealthFor(instance);
-  return String(health.webui?.loginInfo?.userId || (health.loginInfo?.source === "webui" ? health.loginInfo?.userId : "") || "");
-}
-
-function napcatWebuiSessionLabel(instance: NapCatInstance): string {
-  const health = napcatHealthFor(instance);
-  const userId = napcatWebuiSessionUserId(instance);
-  const nickname = String(health.webui?.loginInfo?.nickname || (health.loginInfo?.source === "webui" ? health.loginInfo?.nickname : "") || "");
-  if (userId && nickname) return `QQ ${userId} / ${nickname}`;
-  if (userId) return `QQ ${userId}`;
-  return "";
-}
-
-function napcatWebuiSessionMismatch(instance: NapCatInstance): boolean {
-  const expected = napcatExpectedUserId(instance);
-  const webuiUser = napcatWebuiSessionUserId(instance);
-  return Boolean(expected && webuiUser && expected !== webuiUser);
-}
-
-function napcatInstanceCanBeManaged(instance: NapCatInstance): boolean {
-  return Boolean(instance.launchCommand?.trim() && instance.workingDir?.trim());
-}
-
-function normalizedLocalEndpoint(value: string | undefined): string {
-  try {
-    const parsed = new URL(value || "");
-    const port = parsed.port || (parsed.protocol === "https:" ? "443" : "80");
-    return `${parsed.protocol}//${parsed.hostname}:${port}`.toLowerCase();
-  } catch {
-    return "";
-  }
-}
-
-async function cleanupNapcatInstancesAfterScan(): Promise<boolean> {
-  if (!gateway.value || !gatewayAdapterTypes(gateway.value).includes("napcat")) return false;
-  const instances = Array.isArray(gateway.value.napcatInstances) ? gateway.value.napcatInstances : [];
-  if (instances.length === 0) return false;
-
-  let changed = false;
-  const seenUsers = new Set<string>();
-  const seenWebui = new Set<string>();
-  const seenHttp = new Set<string>();
-  const seenWs = new Set<number>();
-  const kept: NapCatInstance[] = [];
-
-  for (const instance of instances) {
-    let health: Record<string, any> = {};
-    try {
-      health = await runNapcatInstanceHealth(instance);
-      napcatInstanceHealthResult.value[instance.id] = health;
-      if (applyNapcatHealthToInstance(instance, health)) changed = true;
-    } catch {
-      health = {};
-    }
-
-    const userId = napcatHealthUserId(health) || String(instance.botUserId || "");
-    const webuiKey = normalizedLocalEndpoint(instance.webuiUrl);
-    const httpKey = normalizedLocalEndpoint(instance.httpUrl);
-    const wsPort = Number(instance.gatewayPort || 0);
-    const healthy = Boolean(health.ok || userId);
-    const manageable = napcatInstanceCanBeManaged(instance);
-    const duplicateUser = Boolean(userId && seenUsers.has(userId));
-    const duplicateWebui = Boolean(webuiKey && seenWebui.has(webuiKey));
-    const duplicateHttp = Boolean(httpKey && seenHttp.has(httpKey));
-    const duplicateWs = Boolean(Number.isInteger(wsPort) && wsPort > 0 && seenWs.has(wsPort));
-    const staleGenerated = !manageable && !healthy;
-    const duplicate = duplicateUser || duplicateWebui || duplicateHttp || duplicateWs;
-
-    if (duplicate || staleGenerated) {
-      changed = true;
-      continue;
-    }
-
-    kept.push(instance);
-    if (userId) seenUsers.add(userId);
-    if (webuiKey) seenWebui.add(webuiKey);
-    if (httpKey) seenHttp.add(httpKey);
-    if (Number.isInteger(wsPort) && wsPort > 0) seenWs.add(wsPort);
-  }
-
-  if (kept.length !== instances.length) {
-    gateway.value.napcatInstances = kept;
-    changed = true;
-  }
-  if (autoAssignNapcatPortsForAllGateways()) changed = true;
-  syncPrimaryNapcatFromInstances();
-  if (changed) store.touch();
-  return changed;
-}
-
-function collectUsedWsPorts(excludeInstance?: NapCatInstance): Set<number> {
-  const used = new Set<number>();
-  const claim = (value: unknown): void => {
-    const port = Number(value || 0);
-    if (Number.isInteger(port) && port >= 1 && port <= 65535) used.add(port);
-  };
-  claim(store.meta.managerPort || 0);
-  for (const item of store.gateways) {
-    const activeAdapters = gatewayAdapterTypes(item);
-    if (activeAdapters.includes("webhook")) claim(item.webhookPort ?? item.gatewayPort);
-    if (activeAdapters.includes("xiaoai")) claim(item.xiaoaiWebhookPort ?? item.webhookPort ?? item.gatewayPort);
-    if (activeAdapters.includes("rabilink")) claim(item.rabiLinkWebhookPort ?? item.webhookPort ?? item.gatewayPort);
-    for (const instance of item.napcatInstances ?? []) {
-      if (excludeInstance && item.id === gateway.value?.id && instance.id === excludeInstance.id) continue;
-      if (instance.enabled === false) continue;
-      claim(instance.gatewayPort);
-    }
-  }
-  return used;
-}
-
-async function fixNapcatPorts(instance?: NapCatInstance): Promise<void> {
-  if (fixingNapcatPorts.value) return;
-  fixingNapcatPorts.value = true;
-  const resultKey = instance?.id || "_global";
-  try {
-    const beforePort = Number(instance?.gatewayPort || 0);
-    if (instance && !isConfiguredNapcatInstance(instance)) {
-      addDiscoveredNapcatInstance(instance);
-    }
-    autoAssignNapcatPortsForAllGateways();
-    if (instance) {
-      const target = resolveConfiguredNapcatInstance(instance);
-      if (Number(target.gatewayPort || 0) === beforePort || !isValidPort(target.gatewayPort)) {
-        const used = collectUsedWsPorts(target);
-        target.gatewayPort = allocateAvailablePort(used, Math.max(beforePort + 1, Number(gateway.value?.gatewayPort || 8789) + 1));
-        syncPrimaryNapcatFromInstances();
-        store.touch();
-      }
-      napcatInstanceHealthResult.value = {
-        ...napcatInstanceHealthResult.value,
-        [target.id]: {
-          ok: true,
-          fixAvailable: false,
-          message: `已自动分配 RabiRoute WS 端口：${target.gatewayPort}。请把对应 NapCat WebSocket Client 连接到 ws://127.0.0.1:${target.gatewayPort}。`,
-          diagnostics: ["旧检查结果已失效，请在 NapCat 侧重载网络配置后再点检查。"],
-          wsUrl: `ws://127.0.0.1:${target.gatewayPort}`
-        }
-      };
-      napcatPortFixResult.value = {
-        ...napcatPortFixResult.value,
-        [resultKey]: { ok: true, message: `已分配端口 ${target.gatewayPort} 并保存。` }
-      };
-    }
-    if (store.dirty) {
-      await store.save();
-    }
-  } catch (e: unknown) {
-    const message = userFacingError(e);
-    store.error = message;
-    napcatPortFixResult.value = {
-      ...napcatPortFixResult.value,
-      [resultKey]: { ok: false, message }
-    };
-  } finally {
-    fixingNapcatPorts.value = false;
-  }
-}
-
-async function configureNapcatOneBot(instance: NapCatInstance): Promise<void> {
-  if (!gateway.value) return;
-  if (napcatWebuiSessionMismatch(instance)) {
-    napcatOneBotFixResult.value = {
-      ...napcatOneBotFixResult.value,
-      [instance.id]: {
-        ok: false,
-        message: `当前 WebUI 登录的是 ${napcatWebuiSessionLabel(instance)}，但这个实例绑定的是 QQ ${napcatExpectedUserId(instance)}；请先在对应 NapCat WebUI 切换到正确账号后再修复。`
-      }
-    };
-    return;
-  }
-  configuringNapcatOneBot.value = { ...configuringNapcatOneBot.value, [instance.id]: true };
-  napcatOneBotFixResult.value = { ...napcatOneBotFixResult.value, [instance.id]: { ok: true, message: "正在写入 NapCat OneBot 配置..." } };
-  try {
-    let target = resolveConfiguredNapcatInstance(instance);
-    const resp = await fetch("/api/message/napcat-configure-onebot", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(napcatHealthPayload(target))
-    });
-    const body = await resp.json().catch(() => ({}));
-    napcatOneBotFixResult.value = {
-      ...napcatOneBotFixResult.value,
-      [target.id]: {
-        ok: resp.ok && body.ok !== false,
-        message: body.message || (resp.ok ? "已写入 NapCat OneBot 配置。" : "写入失败。")
-      }
-    };
-    if (body.userId && !target.botUserId) target.botUserId = body.userId;
-    if (body.nickname && !target.botNickname) target.botNickname = body.nickname;
-    if (body.userId || body.nickname) {
-      store.touch();
-      await store.save();
-      target = resolveConfiguredNapcatInstance(target);
-    }
-    napcatInstanceHealthResult.value = {
-      ...napcatInstanceHealthResult.value,
-      [target.id]: {
-        ok: Boolean(body.httpReady),
-        fixAvailable: false,
-        message: body.message || "已写入 NapCat OneBot 配置；请重载 NapCat 网络配置后复查。",
-        diagnostics: Array.isArray(body.steps) && body.steps.length
-          ? body.steps
-          : ["配置已写入当前登录 QQ 的 OneBot 文件。", "如果 HTTP 仍未连通，请稍后再点检查。"],
-        onebot: {
-          ...(napcatInstanceHealthResult.value[target.id]?.onebot || {}),
-          currentUserId: body.userId,
-          currentNickname: body.nickname,
-          configPath: body.configPath
-        },
-        wsUrl: body.wsUrl || napcatInstanceWsUrl(target)
-      }
-    };
-    napcatHealthPausedAfterFix.value = {
-      ...napcatHealthPausedAfterFix.value,
-      [target.id]: true,
-      [instance.id]: true
-    };
-  } catch (e: unknown) {
-    napcatOneBotFixResult.value = {
-      ...napcatOneBotFixResult.value,
-      [instance.id]: { ok: false, message: userFacingError(e) }
-    };
-  } finally {
-    configuringNapcatOneBot.value = { ...configuringNapcatOneBot.value, [instance.id]: false };
-  }
-}
-
-function napcatRuntimeFor(instance: NapCatInstance): Record<string, any> {
-  const id = String(instance.id || "");
-  const port = Number(instance.gatewayPort || 0);
-  const found = napcatRuntimeInstances().find(item =>
-    sameNapcatInstance(instance as NapCatInstance & Record<string, any>, item as Record<string, any>)
-  );
-  if (found) return found;
-  if (id === "default" || port === Number(gateway.value?.gatewayPort || 0)) return napcatState.value;
-  return {};
-}
-
-function napcatHealthFor(instance: NapCatInstance): Record<string, any> {
-  const panelHealth = napcatLoginPanels.value[instance.id]?.panel?.health;
-  if (panelHealth) return panelHealth;
-  const byId = napcatInstanceHealthResult.value[instance.id];
-  if (byId) return byId;
-  const candidates = napcatScanHealthByWebui.value[String(instance.webuiUrl || "")] || [];
-  if (candidates.length === 0) return {};
-  const port = Number(instance.gatewayPort || 0);
-  return candidates.find(item => item.gatewayName === gateway.value?.id && item.instanceName === instance.id && Number(item.gatewayPort || 0) === port)
-    || {};
-}
-
-function napcatAccountUserId(instance: NapCatInstance): string {
-  const panel = napcatLoginPanels.value[instance.id]?.panel;
-  if (panel) return String(panel.currentAccount?.userId || panel.expectedUserId || "");
-  const runtimeInfo = napcatRuntimeFor(instance);
-  const health = napcatHealthFor(instance);
-  return String(instance.botUserId || runtimeInfo.botUserId || runtimeInfo.userId || runtimeInfo.selfId || health.http?.userId || (health.loginInfo?.source !== "webui" ? health.loginInfo?.userId : "") || "");
-}
-
-function napcatAccountNickname(instance: NapCatInstance): string {
-  const panel = napcatLoginPanels.value[instance.id]?.panel;
-  if (panel) return String(panel.currentAccount?.nickname || (!panel.currentAccount ? instance.botNickname : "") || "");
-  const runtimeInfo = napcatRuntimeFor(instance);
-  const health = napcatHealthFor(instance);
-  return String(instance.botNickname || runtimeInfo.botNickname || runtimeInfo.nickname || health.http?.nickname || (health.loginInfo?.source !== "webui" ? health.loginInfo?.nickname : "") || "");
-}
-
-function napcatMeaningfulNickname(instance: NapCatInstance): string {
-  const nickname = napcatAccountNickname(instance).trim();
-  if (!nickname || /^QQ小助手$/i.test(nickname)) return "";
-  return nickname;
-}
-
-function napcatAccountTitle(instance: NapCatInstance): string {
-  if (managingNapcatLogin.value[instance.id]) return "正在准备登录控制";
-  if (launchingNapcatInstance.value[instance.id]) return "正在启动 NapCat";
-  if (store.loading || testingNapcatInstance.value[instance.id] || autoCheckingNapcat.value) return "正在查询 QQ 状态";
-  return napcatDisplayInstanceName(instance);
-}
-
-function napcatAccountSubtitle(instance: NapCatInstance): string {
-  if (managingNapcatLogin.value[instance.id]) return "正在启动 NapCat 并加载登录状态...";
-  if (launchingNapcatInstance.value[instance.id]) return "正在启动 NapCat 后台...";
-  if (store.loading || testingNapcatInstance.value[instance.id] || autoCheckingNapcat.value) return "加载 NapCat 登录资料...";
-  const userId = napcatAccountUserId(instance);
-  const nickname = napcatMeaningfulNickname(instance);
-  if (userId && nickname) return `QQ ${userId} / ${nickname}`;
-  if (userId) return `QQ ${userId}`;
-  return "等待 QQ 登录";
-}
-
-function napcatAccountLogTitle(instance: NapCatInstance): string {
-  const userId = napcatAccountUserId(instance);
-  const nickname = napcatMeaningfulNickname(instance);
-  if (userId && nickname) return `${userId} / ${nickname}`;
-  return userId || nickname || napcatDisplayInstanceName(instance);
-}
-
-function napcatAccountConnected(instance: NapCatInstance): boolean {
-  const panel = napcatLoginPanels.value[instance.id]?.panel;
-  if (panel) return panel.loggedIn === true && panel.state !== NapcatState.AccountMismatch;
-  const checked = napcatInstanceHealthResult.value[instance.id];
-  if (checked) return checked.ok === true;
-  if (napcatAccountOffline(instance)) return false;
-  const runtimeInfo = napcatRuntimeFor(instance);
-  const health = napcatHealthFor(instance);
-  if (typeof instance.connected === "boolean") return instance.connected;
-  if (typeof runtimeInfo.connected === "boolean") return runtimeInfo.connected;
-  if (health.http?.ok) return true;
-  if (health.loginInfo?.source !== "webui" && health.loginInfo?.online === true) return true;
-  return false;
-}
-
-function napcatAccountOffline(instance: NapCatInstance): boolean {
-  const panel = napcatLoginPanels.value[instance.id]?.panel;
-  if (panel) return panel.offline === true || panel.currentAccount?.online === false;
-  const checked = napcatInstanceHealthResult.value[instance.id];
-  if (checked) return checked.state === "offline";
-  const runtimeInfo = napcatRuntimeFor(instance);
-  const health = napcatHealthFor(instance);
-  return runtimeInfo.online === false
-    || runtimeInfo.good === false
-    || health.http?.online === false
-    || health.http?.good === false
-    || (health.loginInfo?.source !== "webui" && health.loginInfo?.online === false)
-    || /online:false|已离线/.test(String(runtimeInfo.loginInfoError || instance.loginInfoError || ""));
-}
-
-function napcatPrimaryOffline(): boolean {
-  return napcatState.value.online === false
-    || napcatState.value.good === false
-    || /online:false|已离线/.test(String(napcatState.value.loginInfoError || ""));
-}
-
-function napcatAccountLoginLabel(instance: NapCatInstance): string {
-  const userId = napcatAccountUserId(instance);
-  const runtimeInfo = napcatRuntimeFor(instance);
-  const health = napcatHealthFor(instance);
-  if (store.loading || testingNapcatInstance.value[instance.id] || autoCheckingNapcat.value) return "正在查询";
-  if (napcatLoginState(instance) === NapcatState.AccountOnlineElsewhere) return "QQ 在其他实例在线";
-  if (napcatLoginState(instance) === NapcatState.QuickLoginInvalid) return "快速登录已过期，需扫码";
-  if (napcatLoginState(instance) === NapcatState.QrLoginRequired) return "无快速登录身份，需扫码";
-  if (napcatLoginState(instance) === NapcatState.LoginConflict) return "QQ 登录冲突";
-  if (napcatLoginState(instance) === NapcatState.AccountMismatch) return "账号不匹配";
-  if (napcatAccountOffline(instance)) return "QQ 已离线";
-  const panel = napcatLoginPanels.value[instance.id]?.panel;
-  if (panel) return panel.health?.ok === true ? "已登录" : panel.loggedIn ? "QQ 已登录，OneBot 待连接" : "等待 QQ 登录";
-  if (runtimeInfo.loginInfoError || instance.loginInfoError) return String(runtimeInfo.loginInfoError || instance.loginInfoError);
-  if (napcatAccountConnected(instance) || health.http?.ok) return "已登录";
-  if (userId) return "已绑定 QQ";
-  if (napcatHealthFor(instance).webui?.loginInfo?.userId) return "WebUI 有其他账号会话";
-  return "等待 QQ 登录";
-}
-
-function napcatAccountLoginClass(instance: NapCatInstance): string {
-  if (napcatLoginState(instance) === NapcatState.AccountOnlineElsewhere) return "text-warning";
-  if ([NapcatState.QuickLoginInvalid, NapcatState.QrLoginRequired, NapcatState.LoginConflict, NapcatState.AccountMismatch].some(state => state === napcatLoginState(instance))) return "text-error";
-  if (napcatAccountOffline(instance)) return "text-error";
-  if (napcatAccountConnected(instance) || napcatHealthFor(instance).http?.ok) return "text-success";
-  if (napcatAccountUserId(instance) || napcatWebuiSessionUserId(instance)) return "text-info";
-  return "text-warning";
-}
-
-function isValidPort(value: unknown): boolean {
-  const port = Number(value);
-  return Number.isInteger(port) && port >= 1 && port <= 65535;
-}
-
-function napcatInstancePortError(instance: NapCatInstance): string {
-  return isValidPort(instance.gatewayPort) ? "" : "端口必须是 1-65535 的整数";
-}
-
-function napcatInstanceStatusLabel(instance: NapCatInstance): string {
-  if (isDiscoveredNapcatAccount(instance)) return "已发现";
-  if (managingNapcatLogin.value[instance.id]) return "正在准备";
-  if (launchingNapcatInstance.value[instance.id]) return "正在启动";
-  if (restartingNapcatInstance.value[instance.id]) return "正在重启";
-  if (instance.enabled === false) return "已停用";
-  if (store.loading || testingNapcatInstance.value[instance.id] || autoCheckingNapcat.value) return "查询中";
-  if (napcatLoginState(instance) === NapcatState.AccountOnlineElsewhere) return "账号在别处在线";
-  if (napcatLoginState(instance) === NapcatState.QuickLoginInvalid) return "需要扫码";
-  if (napcatLoginState(instance) === NapcatState.QrLoginRequired) return "需要扫码";
-  if (napcatLoginState(instance) === NapcatState.LoginConflict) return "登录冲突";
-  if (napcatLoginState(instance) === NapcatState.AccountMismatch) return "账号不匹配";
-  if (napcatAccountOffline(instance)) return "QQ 已离线";
-  if (napcatAccountConnected(instance)) return "QQ 已登录";
-  if (napcatHealthFor(instance).http?.ok) return "OneBot 已登录";
-  if (napcatAccountUserId(instance)) return "已绑定";
-  if (napcatHealthFor(instance).webui?.loginInfo?.userId) return "WebUI 有会话";
-  if (napcatAccountLoginLabel(instance) !== "等待 QQ 登录") return "登录异常";
-  return "待检查";
-}
-
-function napcatInstanceStatusColor(instance: NapCatInstance): string {
-  if (isDiscoveredNapcatAccount(instance)) return "info";
-  if (managingNapcatLogin.value[instance.id] || launchingNapcatInstance.value[instance.id] || restartingNapcatInstance.value[instance.id]) return "info";
-  if (instance.enabled === false) return "secondary";
-  if (store.loading || testingNapcatInstance.value[instance.id] || autoCheckingNapcat.value) return "info";
-  if (napcatLoginState(instance) === NapcatState.AccountOnlineElsewhere) return "warning";
-  if ([NapcatState.QuickLoginInvalid, NapcatState.QrLoginRequired, NapcatState.LoginConflict, NapcatState.AccountMismatch].some(state => state === napcatLoginState(instance))) return "error";
-  if (napcatAccountOffline(instance)) return "error";
-  if (napcatAccountConnected(instance)) return "success";
-  if (napcatAccountUserId(instance)) return "secondary";
-  const runtimeInfo = napcatRuntimeFor(instance);
-  if (runtimeInfo.loginInfoError || instance.loginInfoError) return "error";
-  return "warning";
-}
-
-function napcatConnectedCount(): number {
-  return napcatAccountInstances().filter(instance => instance.enabled !== false && napcatAccountConnected(instance)).length;
-}
-
-function napcatAutoFixTargets(): NapCatInstance[] {
-  return ensureNapcatInstances().filter(instance =>
-    instance.enabled !== false && Boolean(napcatInstanceHealthResult.value[instance.id]?.fixAvailable) && !napcatWebuiSessionMismatch(instance)
-  );
-}
-
-function napcatAutoFixCount(): number {
-  return napcatAutoFixTargets().length;
-}
-
-function napcatRepairAllSteps(body: Record<string, any>): string[] {
-  const steps: string[] = [];
-  if (Array.isArray(body.repair?.messages)) steps.push(...body.repair.messages);
-  for (const result of Array.isArray(body.results) ? body.results : []) {
-    const instanceId = result?.instanceId ? ` ${result.instanceId}` : "";
-    const message = result?.message || (result?.ok ? "已处理。" : "处理失败。");
-    if (result?.action === "configure-onebot") {
-      steps.push(`NapCat${instanceId}：${message}`);
-    } else if (result?.action === "health-check") {
-      steps.push(`自测${instanceId}：${message}`);
-    } else {
-      steps.push(String(message));
-    }
-  }
-  return steps.length ? steps : ["没有发现可自动修复项。"];
-}
-
-async function repairAllNapcatIssues(): Promise<void> {
-  if (repairingNapcatAll.value || !gateway.value) return;
-  repairingNapcatAll.value = true;
-  napcatAutoSteps.value = {
-    ...napcatAutoSteps.value,
-    repairAll: {
-      message: "正在修复扫描发现的可自动处理项...",
-      steps: ["正在写入 RabiRoute 端口配置和 NapCat OneBot 配置。"]
-    }
-  };
-  try {
-    const resp = await fetch("/api/message/napcat-repair-all", { method: "POST" });
-    const body = await resp.json().catch(() => ({}));
-    if (body.repair?.changed || body.gatewayPayload?.data?.config) {
-      await store.load();
-    }
-    await applyNapcatScanHealth(body.napcatHealth);
-    const fixedResults = new Map<string, Record<string, any>>();
-    for (const result of Array.isArray(body.results) ? body.results : []) {
-      if (
-        result?.ok &&
-        result?.instanceId &&
-        (result?.action === "configure-onebot" || result?.reloadRequired || result?.wsUrl)
-      ) {
-        fixedResults.set(String(result.instanceId), result);
-      }
-    }
-    if (fixedResults.size > 0) {
-      napcatHealthPausedAfterFix.value = {
-        ...napcatHealthPausedAfterFix.value,
-        ...Object.fromEntries([...fixedResults.keys()].map(id => [id, true]))
-      };
-      napcatInstanceHealthResult.value = {
-        ...napcatInstanceHealthResult.value,
-        ...Object.fromEntries([...fixedResults.entries()].map(([id, result]) => {
-          const current = napcatInstanceHealthResult.value[id] || {};
-          return [id, {
-            ok: true,
-            fixAvailable: false,
-            message: result.message || "已写入 NapCat OneBot 配置；请在 NapCat WebUI 保存/重载网络配置或重启 NapCat 后重新扫描。",
-            diagnostics: [
-              "配置已写入，但运行中的 NapCat 可能需要保存/重载网络配置后才会开放 OneBot HTTP。"
-            ],
-            onebot: {
-              ...(current.onebot || {}),
-              currentUserId: result.userId || current.onebot?.currentUserId,
-              currentNickname: result.nickname || current.onebot?.currentNickname,
-              configPath: result.configPath || current.onebot?.configPath
-            },
-            webui: current.webui,
-            wsUrl: result.wsUrl || current.wsUrl
-          }];
-        }))
-      };
-    }
-    napcatAutoSteps.value = {
-      ...napcatAutoSteps.value,
-      repairAll: {
-        ok: resp.ok && body.ok !== false,
-        message: resp.ok && body.ok !== false ? "已修复全部可自动处理项。" : (body.message || "修复失败。"),
-        steps: napcatRepairAllSteps(body)
-      }
-    };
-  } catch (e: unknown) {
-    napcatAutoSteps.value = {
-      ...napcatAutoSteps.value,
-      repairAll: {
-        ok: false,
-        message: "修复失败。",
-        steps: [userFacingError(e)]
-      }
-    };
-  } finally {
-    repairingNapcatAll.value = false;
-  }
-}
-
-function napcatSetupHint(): string {
-  const instances = ensureNapcatInstances();
-  if (instances.length === 0) return "请配置当前 Route 的 NapCat 连接。";
-  const invalid = instances.find(instance => instance.enabled !== false && !isValidPort(instance.gatewayPort));
-  if (invalid) return `${invalid.name || invalid.id} 的 WS 端口无效，保存前需要改成 1-65535。`;
-  const enabled = instances.filter(instance => instance.enabled !== false);
-  if (enabled.length === 0) return "当前 NapCat 连接未启用。";
-  if (!enabled.some(instance => napcatAccountConnected(instance))) return "下一步：在当前卡片启动 NapCat、完成 QQ 登录，并修复 OneBot 连接。";
-  return "NapCat 已连接；收到消息后会投递到当前 Route。";
-}
-
-function napcatEntryMatchesInstance(entry: Record<string, any>, instance: NapCatInstance, allowUnscoped: boolean): boolean {
-  const instanceIds = [entry.instanceId, entry.napcatInstanceId, entry.adapterInstanceId, entry.raw?.instanceId].filter(Boolean).map(String);
-  const userIds = [entry.botUserId, entry.selfId, entry.RobotQQId, entry.raw?.botUserId, entry.raw?.self_id, entry.event === "login_info" ? entry.data?.userId : undefined].filter(Boolean).map(String);
-  const ports = [entry.gatewayPort, entry.port, entry.wsPort, entry.raw?.gatewayPort].filter(Boolean).map(Number);
-  const hasScope = instanceIds.length > 0 || userIds.length > 0 || ports.length > 0;
-  if (!hasScope) return allowUnscoped;
-  const targetUserId = napcatAccountUserId(instance);
-  if (userIds.length && targetUserId && userIds.some(id => id !== targetUserId)) return false;
-  if (instanceIds.length && !instanceIds.includes(String(instance.id))) return false;
-  if (ports.length && !ports.includes(Number(instance.gatewayPort || 0))) return false;
-  return instanceIds.includes(String(instance.id)) ||
-    (targetUserId ? userIds.includes(targetUserId) : false) ||
-    ports.includes(Number(instance.gatewayPort || 0));
-}
-
-function napcatLogEntriesFor(instance: NapCatInstance): Array<Record<string, any>> {
-  const instances = napcatAccountInstances();
-  const allowUnscoped = instances.length === 1;
-  return adapterLogEntries("napcat").filter(entry => napcatEntryMatchesInstance(entry, instance, allowUnscoped));
-}
-
-function napcatMessageFileEntriesFor(instance: NapCatInstance): Array<Record<string, any>> {
-  const instances = napcatAccountInstances();
-  const allowUnscoped = instances.length === 1;
-  return messageFileEntries("napcat").filter(entry => napcatEntryMatchesInstance(entry, instance, allowUnscoped));
-}
-
 async function copyText(text: string, message = "已复制"): Promise<void> {
   let result = message;
   try {
@@ -2984,18 +721,6 @@ async function copyText(text: string, message = "已复制"): Promise<void> {
   window.setTimeout(() => {
     if (copyResult.value === result) copyResult.value = "";
   }, 1800);
-}
-
-function showCopyResult(message: string): void {
-  copyResult.value = message;
-  window.setTimeout(() => {
-    if (copyResult.value === message) copyResult.value = "";
-  }, 2400);
-}
-
-function openRuntimeLog(): void {
-  const name = store.selectedGateway ? configNameFor(store.selectedGateway) : "";
-  void router.push(routeScopedRuntimePath(name));
 }
 
 async function deleteCurrentGateway(): Promise<void> {
@@ -3011,30 +736,6 @@ async function deleteCurrentGateway(): Promise<void> {
     deleteError.value = userFacingError(error);
   } finally {
     deletingGateway.value = false;
-  }
-}
-
-async function triggerHeartbeatNow(): Promise<void> {
-  if (!gateway.value || triggeringHeartbeat.value) return;
-  triggeringHeartbeat.value = true;
-  heartbeatTriggerResult.value = null;
-  try {
-    const result = await store.manualTriggerGateway(gateway.value.id, {
-      triggerId: "heartbeat-now",
-      triggerName: "立即触发心跳",
-      routeKind: "heartbeat",
-      message: gateway.value.heartbeatMessage || "定时心跳巡检：请按当前计划、记忆和可用状态执行必要检查。"
-    });
-    heartbeatTriggerResult.value = {
-      ok: true,
-      message: result.alreadyRunning
-        ? "这次心跳已经在后台投递中，没有重复启动；请到运行日志查看最终结果。"
-        : "心跳已接受，正在后台投递；请到运行日志查看最终结果。"
-    };
-  } catch (e: unknown) {
-    heartbeatTriggerResult.value = { ok: false, message: userFacingError(e) };
-  } finally {
-    triggeringHeartbeat.value = false;
   }
 }
 
@@ -3057,168 +758,6 @@ async function openMarvis(): Promise<void> {
     marvisOpenResult.value = { ok: false, message: userFacingError(e) };
   } finally {
     openingMarvis.value = false;
-  }
-}
-
-async function testNapcatHealth(): Promise<void> {
-  if (!gateway.value) return;
-  testingNapcatHealth.value = true;
-  napcatHealthResult.value = null;
-  try {
-    const resp = await fetch("/api/message/napcat-health", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        httpUrl: gateway.value.napcatHttpUrl,
-        webuiUrl: defaultNapcatWebuiUrl(),
-        accessToken: gateway.value.napcatAccessToken,
-        webuiToken: gateway.value.napcatWebuiToken,
-        gatewayPort: gateway.value.gatewayPort
-      })
-    });
-    const body = await resp.json().catch(() => ({}));
-    napcatHealthResult.value = { ok: Boolean(body.ok), ...body };
-  } catch (e: unknown) {
-    napcatHealthResult.value = { ok: false, message: userFacingError(e) };
-  } finally {
-    testingNapcatHealth.value = false;
-  }
-}
-
-function napcatHealthPayload(instance?: NapCatInstance): Record<string, unknown> {
-  if (instance) {
-    return {
-      gatewayId: gateway.value?.id,
-      instanceId: instance.id,
-      httpUrl: instance.httpUrl,
-      webuiUrl: instance.webuiUrl || defaultNapcatWebuiUrl(),
-      accessToken: instance.accessToken,
-      webuiToken: instance.webuiToken,
-      gatewayPort: instance.gatewayPort,
-      botUserId: instance.botUserId,
-      botNickname: instance.botNickname
-    };
-  }
-  return {
-    gatewayId: gateway.value?.id,
-    httpUrl: gateway.value?.napcatHttpUrl,
-    webuiUrl: defaultNapcatWebuiUrl(),
-    accessToken: gateway.value?.napcatAccessToken,
-    webuiToken: gateway.value?.napcatWebuiToken,
-    gatewayPort: gateway.value?.gatewayPort
-  };
-}
-
-async function testNapcatInstanceHealth(instance: NapCatInstance): Promise<void> {
-  if (!gateway.value) return;
-  testingNapcatInstance.value = { ...testingNapcatInstance.value, [instance.id]: true };
-  napcatInstanceHealthResult.value = { ...napcatInstanceHealthResult.value, [instance.id]: null };
-  const nextPaused = { ...napcatHealthPausedAfterFix.value };
-  delete nextPaused[instance.id];
-  napcatHealthPausedAfterFix.value = nextPaused;
-  const nextOneBotFix = { ...napcatOneBotFixResult.value };
-  delete nextOneBotFix[instance.id];
-  napcatOneBotFixResult.value = nextOneBotFix;
-  try {
-    let target = instance;
-    if (!isConfiguredNapcatInstance(target)) {
-      addDiscoveredNapcatInstance(target);
-      target = ensureNapcatInstances().find(item => item.id === instance.id) ?? target;
-    }
-    await autofillNapcatInstance(target);
-    autoAssignNapcatPortsForAllGateways();
-    if (store.dirty) {
-      await store.save();
-      target = resolveConfiguredNapcatInstance(target);
-    }
-
-    let body = await runNapcatInstanceHealth(target);
-    if (applyNapcatHealthToInstance(target, body) && store.dirty) {
-      await store.save();
-      target = resolveConfiguredNapcatInstance(target);
-    }
-
-    if (webuiTokenMissing(body) && target.launchCommand && isConfiguredNapcatInstance(target)) {
-      const launched = await launchNapcatInstanceAndRecheck(target, "未读到 WebUI 登录密钥，正在尝试启动 NapCat 后台后复查...");
-      if (launched.health) {
-        target = launched.target;
-        body = launched.health;
-      }
-    }
-
-    napcatInstanceHealthResult.value = {
-      ...napcatInstanceHealthResult.value,
-      [target.id]: body
-    };
-    if (store.dirty) {
-      await store.save();
-    }
-  } catch (e: unknown) {
-    napcatInstanceHealthResult.value = {
-      ...napcatInstanceHealthResult.value,
-      [instance.id]: { ok: false, message: userFacingError(e) }
-    };
-  } finally {
-    testingNapcatInstance.value = { ...testingNapcatInstance.value, [instance.id]: false };
-  }
-}
-
-async function launchNapcatInstance(instance: NapCatInstance): Promise<void> {
-  if (!gateway.value) return;
-  launchingNapcatInstance.value = { ...launchingNapcatInstance.value, [instance.id]: true };
-  napcatLaunchResult.value = { ...napcatLaunchResult.value, [instance.id]: { ok: true, message: "正在启动..." } };
-  try {
-    const resp = await fetch("/api/message/napcat-launch", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ gatewayId: gateway.value.id, instanceId: instance.id })
-    });
-    const body = await resp.json().catch(() => ({}));
-    napcatLaunchResult.value = {
-      ...napcatLaunchResult.value,
-      [instance.id]: {
-        ok: resp.ok && body.ok !== false,
-        message: body.message || (resp.ok ? "已尝试启动 NapCat 后台。" : "启动失败。")
-      }
-    };
-  } catch (e: unknown) {
-    napcatLaunchResult.value = {
-      ...napcatLaunchResult.value,
-      [instance.id]: { ok: false, message: userFacingError(e) }
-    };
-  } finally {
-    launchingNapcatInstance.value = { ...launchingNapcatInstance.value, [instance.id]: false };
-  }
-}
-
-async function restartNapcatInstance(instance: NapCatInstance): Promise<void> {
-  if (!gateway.value) return;
-  restartingNapcatInstance.value = { ...restartingNapcatInstance.value, [instance.id]: true };
-  napcatLaunchResult.value = { ...napcatLaunchResult.value, [instance.id]: { ok: true, message: "正在重启 NapCat..." } };
-  try {
-    if (store.dirty) await store.save();
-    const resp = await fetch("/api/message/napcat-restart", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ gatewayId: gateway.value.id, instanceId: instance.id })
-    });
-    const body = await resp.json().catch(() => ({}));
-    napcatLaunchResult.value = {
-      ...napcatLaunchResult.value,
-      [instance.id]: {
-        ok: resp.ok && body.ok !== false,
-        message: body.message || (resp.ok ? "已尝试重启 NapCat。" : "重启失败。")
-      }
-    };
-    await sleep(2500);
-    await testNapcatInstanceHealth(resolveConfiguredNapcatInstance(instance));
-  } catch (e: unknown) {
-    napcatLaunchResult.value = {
-      ...napcatLaunchResult.value,
-      [instance.id]: { ok: false, message: userFacingError(e) }
-    };
-  } finally {
-    restartingNapcatInstance.value = { ...restartingNapcatInstance.value, [instance.id]: false };
   }
 }
 
@@ -3251,40 +790,43 @@ const agentShortLabels: Partial<Record<AgentAdapterType, string>> = {
 };
 
 const addAgentMenu = ref(false);
+
 const testingAstrbotLogin = ref(false);
+
 const astrbotLoginResult = ref<{ ok: boolean; message: string } | null>(null);
 
 const agentTypes = computed(() => gateway.value?.agentAdapters ?? []);
+
 const visibleAgentItems = computed(() => agentDefs.filter(agent => agentTypes.value.includes(agent.type)).map(agent => ({ ...agent, title: `${agent.type === "grokBot" ? "云端" : "本机"} · ${agent.title}` })));
+
 const remoteAgentItems = computed(() => (gateway.value?.remoteAgentTargets || []).map(target => {
-  const instance = agentInstances.value.find(item => item.instanceId === target.instanceId);
+  const instance = agentInstances.value.find(item => item.instanceId === target.instanceId && item.ownerDeviceId === target.ownerDeviceId);
   const agent = instance?.agents.find(item => item.agentId === target.agentId);
   const definition = agentDefs.find(item => item.type === target.provider);
   const agentLabel = agent?.name || (definition ? `${definition.title} · ${target.agentId}` : target.agentId);
   return { ...target, instance, agent, title: `远端 · ${instance ? `${agentInstanceDisplayName(instance)} / ` : ''}${agentLabel}（${instance?.address || target.instanceId}）` };
 }));
+
 const availableAgentsToAdd = computed(() => [
-  ...agentDefs.filter(agent => agent.type !== "deviceAgent" && !agentTypes.value.includes(agent.type)).map(agent => ({ ...agent, key: localAgentTargetKey(agent.type), title: `${agent.type === "grokBot" ? "云端" : "本机"} · ${agent.title}`, nodeId: undefined as string | undefined, agentId: undefined as string | undefined })),
+  ...agentDefs.filter(agent => agent.type !== "deviceAgent" && !agentTypes.value.includes(agent.type)).map(agent => ({ ...agent, key: localAgentTargetKey(agent.type), title: `${agent.type === "grokBot" ? "云端" : "本机"} · ${agent.title}`, nodeId: undefined as string | undefined, agentId: undefined as string | undefined, ownerDeviceId: undefined as string | undefined })),
   ...agentInstances.value.flatMap(instance => instance.agents.flatMap(remote => {
-    if (instance.local && remote.provider !== "deviceAgent") return [];
+    if (instance.local && !instance.ownerDeviceId && remote.provider !== "deviceAgent") return [];
     const def = agentDefs.find(agent => agent.type === (remote.provider === "codex-desktop" ? "codex" : remote.provider));
     if (!def) return [];
-    const key = remoteAgentTargetKey({ instanceId: instance.instanceId, agentId: remote.agentId });
+    const key = remoteAgentTargetKey({ instanceId: instance.instanceId, agentId: remote.agentId, ownerDeviceId: instance.ownerDeviceId });
     if (remoteAgentItems.value.some(item => item.id === key)) return [];
-    return [{ ...def, key, title: `远端 · ${agentInstanceDisplayName(instance)} / ${remote.name}（${instance.address || instance.instanceId}）`, nodeId: instance.instanceId, agentId: remote.agentId }];
+    return [{ ...def, key, title: `远端 · ${agentInstanceDisplayName(instance)} / ${remote.name}（${instance.address || instance.instanceId}）`, nodeId: instance.instanceId, agentId: remote.agentId, ownerDeviceId: instance.ownerDeviceId }];
   }))
 ]);
+
 const primaryAgent = computed(() => gateway.value ? resolvePrimaryAgentTarget(gateway.value) : undefined);
+
 const primaryAgentType = computed(() => primaryAgent.value?.provider);
+
 const primaryLocalAgentType = computed(() => primaryAgent.value?.binding ? undefined : primaryAgent.value?.provider);
+
 const remoteAgentParamOpen = ref<Record<string, boolean>>({});
-const managedMessageAgentModeEnabled = computed(() => (
-  gateway.value?.automationRules?.some(rule => {
-    if (rule.enabled === false || rule.action.type !== "deliver_agent" || !rule.action.target) return false;
-    try { return resolveAgentDeliveryExecutor(rule.action.target, normalizeAgentRecipients(gateway.value?.agentRecipients)) === "message_pool"; }
-    catch { return false; }
-  }) ?? false
-));
+
 const primaryAgentItems = computed(() => [
   ...visibleAgentItems.value.map(agent => ({ title: agent.title, value: localAgentTargetKey(agent.type) })),
   ...remoteAgentItems.value.map(agent => ({ title: agent.title, value: agent.id }))
@@ -3730,6 +1272,7 @@ function selectCodexSession(value: unknown): void {
 }
 
 const hookUpdate = ref({ loading: false, message: "", error: "" });
+
 async function updateHooksToAgent(type: AgentAdapterType): Promise<void> {
   if (hookUpdate.value.loading) return;
   hookUpdate.value = { loading: true, message: "", error: "" };
@@ -3852,12 +1395,17 @@ function agentWarnings(type: AgentAdapterType): string[] {
   return [...new Set(warnings)];
 }
 
-function addAgent(type: AgentAdapterType, nodeId?: string, agentId?: string): void {
+function addAgent(type: AgentAdapterType, nodeId?: string, agentId?: string, ownerDeviceId?: string): void {
   if (!gateway.value) return;
   if (type === "deviceAgent" && (!nodeId || !agentId)) return;
-  addRouteAgent(gateway.value, type, nodeId, agentId);
+  addRouteAgent(gateway.value, type, nodeId, agentId, ownerDeviceId);
   if (nodeId && agentId) {
-    remoteAgentParamOpen.value[remoteAgentTargetKey({ instanceId: nodeId, agentId })] = true;
+    const targetId = remoteAgentTargetKey({ instanceId: nodeId, agentId, ownerDeviceId });
+    if (ownerDeviceId) {
+      const agent = agentInstances.value.find(item => item.instanceId === nodeId && item.ownerDeviceId === ownerDeviceId)?.agents.find(item => item.agentId === agentId);
+      if (agent?.sessionId) selectPeerRouteSession(gateway.value, targetId, { sessionId: agent.sessionId, sessionName: agent.name, workspace: agent.workspace });
+    }
+    remoteAgentParamOpen.value[targetId] = true;
     store.touch();
     return;
   }
@@ -4084,23 +1632,6 @@ function toggleAgentParams(type: AgentAdapterType): void {
   }
 }
 
-async function refreshVisibleNapcatHealth(): Promise<void> {
-  if (!gateway.value || !gatewayAdapterTypes(gateway.value).includes("napcat")) return;
-  if (store.dirty) return;
-  if (repairingNapcatAll.value) return;
-  const instances = ensureNapcatInstances().filter(instance => instance.enabled !== false && !napcatHealthPausedAfterFix.value[instance.id]);
-  if (instances.length === 0) return;
-  autoCheckingNapcat.value = true;
-  try {
-    await Promise.all(instances.map(async (instance) => {
-      napcatLoginUi(instance).visible = true;
-      await loadNapcatLoginPanel(instance);
-    }));
-  } finally {
-    autoCheckingNapcat.value = false;
-  }
-}
-
 // Only an explicit edit of the current config name changes its URL here.
 // Ordinary navigation and browser history are synchronized by App.
 watch(() => gateway.value?.configName, (name, previousName) => {
@@ -4111,11 +1642,10 @@ watch(() => gateway.value?.configName, (name, previousName) => {
 });
 
 watch(() => gateway.value?.id, () => {
+  adapterLifecycleRevision.value = {};
+  adapterActionBusy.value = {};
   grokBotScan.state.queryDraft = "";
   grokBotSelectionError.value = "";
-  window.clearTimeout(napcatPanelPollTimer);
-  napcatLoginPanels.value = {};
-  napcatInstanceHealthResult.value = {};
   codexPlanAssistants.value = {
     count: Math.max(1, gateway.value?.codexPlanAssistantSessions?.length || 1),
     loading: false,
@@ -4123,26 +1653,7 @@ watch(() => gateway.value?.id, () => {
     error: ""
   };
 }, { immediate: true });
-
-watch(
-  () => [store.loading, store.dirty, gateway.value?.id, JSON.stringify((gateway.value?.napcatInstances ?? []).map(instance => ({
-    id: instance.id,
-    enabled: instance.enabled,
-    gatewayPort: instance.gatewayPort,
-    httpUrl: instance.httpUrl,
-    webuiUrl: instance.webuiUrl
-  })))],
-  ([loading, dirty, gatewayId, instancesKey]) => {
-    if (loading || dirty || autoCheckingNapcat.value || repairingNapcatAll.value) return;
-    const key = `${gatewayId || ""}:${instancesKey || ""}`;
-    if (key === lastAutoNapcatHealthKey.value) return;
-    lastAutoNapcatHealthKey.value = key;
-    void refreshVisibleNapcatHealth();
-  },
-  { immediate: true }
-);
 </script>
-
 <template>
   <div class="page-shell">
     <div class="page-header">
@@ -4257,8 +1768,9 @@ watch(
                       inset
                       hide-details
                       :model-value="!isAdapterDisabled(gateway, choice.type)"
-                      :loading="choice.type === 'speech' && speechAdapterActionBusy"
-                      :disabled="choice.type === 'speech' && speechAdapterActionBusy"
+                      :loading="adapterActionBusy[choice.type]"
+                      :disabled="!choice.available || adapterActionBusy[choice.type]"
+
                       @update:model-value="value => void setAdapterEnabled(choice.type, value)"
                     />
                   </div>
@@ -4273,108 +1785,17 @@ watch(
                 </div>
               </div>
               <v-expand-transition>
-                <div v-if="adapterParamOpen[choice.type]" class="catalog-param-panel">
-                  <div v-if="choice.type !== 'xiaomiHome'" class="dependency-panel mb-3">
-                    <div class="section-title-row compact-row">
-                      <div>
-                        <div class="section-title small-title">环境和依赖</div>
-                        <div class="section-note">先确认这个消息端需要的外部工具、桥接服务和回调入口是否就绪。</div>
-                      </div>
-                      <div class="d-flex ga-2 flex-wrap">
-                        <v-chip size="small" :color="scanConnectionColor(messageScanFor(choice.type))" variant="tonal">
-                          {{ scanConnectionLabel(messageScanFor(choice.type)) }}
-                        </v-chip>
-                        <v-btn size="small" variant="text" prepend-icon="mdi-refresh" :loading="messageAdapterScan.loading" @click="choice.type === 'napcat' ? rescanNapcatInstances() : runMessageAdapterScan()">
-                          {{ choice.type === "napcat" ? "只读扫描" : "重新扫描" }}
-                        </v-btn>
-                      </div>
-                    </div>
-                    <v-alert
-                      v-if="messageAdapterScan.error"
-                      type="warning"
-                      variant="tonal"
-                      density="compact"
-                      class="mb-3"
-                    >
-                      {{ messageAdapterScan.error }}
-                    </v-alert>
-                    <template v-if="messageScanFor(choice.type)">
-                      <v-alert
-                        v-if="messageScanFor(choice.type)?.health?.message"
-                        :type="messageScanFor(choice.type)?.health?.state === 'healthy' ? 'success' : 'warning'"
-                        variant="tonal"
-                        density="compact"
-                        class="mb-3"
-                      >
-                        {{ messageScanFor(choice.type)?.health?.message }}
-                      </v-alert>
-                      <div v-if="messageScanFor(choice.type)?.requirements?.length" class="dependency-list">
-                        <div
-                          v-for="requirement in messageScanFor(choice.type)?.requirements"
-                          :key="requirement.id"
-                          class="dependency-row"
-                        >
-                          <v-chip size="x-small" :color="requirementColor(requirement)" variant="tonal">
-                            {{ requirementLabel(requirement) }}
-                          </v-chip>
-                          <div>
-                            <strong>{{ requirement.label }}</strong>
-                            <span>{{ requirement.detail || (requirement.required ? "这是必需项。" : "这是可选项。") }}</span>
-                          </div>
-                          <v-btn
-                            v-if="requirement.url || requirement.path"
-                            size="small"
-                            variant="text"
-                            :prepend-icon="requirement.url ? 'mdi-open-in-new' : 'mdi-content-copy'"
-                            @click="openScanCandidate(requirement)"
-                          >
-                            {{ requirement.actionLabel || (requirement.url ? "打开" : "复制路径") }}
-                          </v-btn>
-                        </div>
-                      </div>
-                      <div v-if="choice.type !== 'napcat' && messageScanFor(choice.type)?.endpoints?.length" class="dependency-endpoints mt-2">
-                        <div
-                          v-for="endpoint in messageScanFor(choice.type)?.endpoints"
-                          :key="`${endpoint.label}-${endpoint.url}`"
-                          class="status-row compact-status-row"
-                        >
-                          <span>{{ endpoint.label }}</span>
-                          <b :class="endpoint.healthy ? 'text-success' : 'text-warning'">{{ endpoint.url }} · {{ endpoint.healthy ? "可用" : "未响应" }}</b>
-                        </div>
-                      </div>
-                      <div v-if="messageScanFor(choice.type)?.installCandidates?.length" class="dependency-actions mt-2">
-                        <v-btn
-                          v-for="candidate in messageScanFor(choice.type)?.installCandidates"
-                          :key="candidate.label"
-                          size="small"
-                          variant="tonal"
-                          :prepend-icon="candidate.url ? 'mdi-open-in-new' : 'mdi-content-copy'"
-                          @click="openScanCandidate(candidate)"
-                        >
-                          {{ candidate.label }}
-                        </v-btn>
-                      </div>
-                      <v-alert
-                        v-for="warning in messageScanFor(choice.type)?.warnings ?? []"
-                        :key="warning"
-                        type="warning"
-                        variant="tonal"
-                        density="compact"
-                        class="mt-2"
-                      >
-                        {{ warning }}
-                      </v-alert>
-                    </template>
+                <div v-show="adapterParamOpen[choice.type]" class="catalog-param-panel">
 
-                    <div v-else class="section-note">尚未扫描。展开面板后会自动扫描，也可以手动刷新。</div>
-                  </div>
-                  <component
-                    :is="choice.type === 'xiaomiHome' ? XiaomiHomeRendererHost : TrustedWebRendererHost"
-                    v-if="settingsRenderersForMessageEndpoint(choice.type).length"
+                  <MessageEndpointCardHost
                     :renderers="settingsRenderersForMessageEndpoint(choice.type)"
                     :context="{ messageEndpointType: choice.type, routeId: gateway?.id ?? '', scan: messageScanFor(choice.type), scanError: messageAdapterScan.error, scanLoading: messageAdapterScan.loading, refreshScan: runMessageAdapterScan }"
+                    :active="adapterParamOpen[choice.type]"
+                    :enabled="!isAdapterDisabled(gateway, choice.type)"
+                    :lifecycle-revision="adapterLifecycleRevision[choice.type] || 0"
+                    @busy="value => adapterActionBusy[choice.type] = value"
                   />
-                  <div v-if="usesAutomaticMessageGrouping(choice.type)" class="dependency-panel mb-3">
+                  <div v-if="choice.available && usesAutomaticMessageGrouping(choice.type)" class="dependency-panel mb-3">
                     <div class="section-title small-title">消息组等待</div>
                     <div class="section-note">聊天消息默认使用消息组，不需要单独开启。这里仅调整等待一句话说完的时间。</div>
                     <v-alert type="info" variant="tonal" density="compact" class="mt-2 mb-0">
@@ -4413,7 +1834,7 @@ watch(
                       />
                     </div>
                   </div>
-                  <div v-if="!isNonMessageEndpoint(choice.type)" class="dependency-panel mb-3">
+                  <div v-if="choice.available && !isNonMessageEndpoint(choice.type)" class="dependency-panel mb-3">
                     <div class="section-title small-title">发送前聊天核对</div>
                     <v-switch :model-value="conversationReviewPolicy(choice.type)?.enabled === true"
                       label="发送前要求核对聊天记录" hide-details
@@ -4430,947 +1851,7 @@ watch(
                         @update:model-value="value => setConversationReviewPolicy(choice.type, 'maxIncrementalMessages', value)" />
                     </div>
                   </div>
-                  <div v-if="choice.type === 'napcat'" class="dependency-panel mb-3">
-                    <div class="section-title small-title">长消息确认</div>
-                    <div class="section-note">超过字数时提醒 Agent 先精简；一条说不清就按意思分条说。需要保留单条长消息时，再次调用确认后发送。</div>
-                    <v-text-field
-                      type="number"
-                      :min="0"
-                      :max="200000"
-                      :model-value="napcatTextConfirmationThreshold()"
-                      label="确认阈值（字）"
-                      hint="0 表示关闭。字数含数字、英文、标点和正文中的空格；引用与 @ 标记不计入。"
-                      persistent-hint
-                      class="mt-2"
-                      @update:model-value="setNapcatTextConfirmationThreshold"
-                    />
-                  </div>
-                  <div v-if="choice.type === 'napcat'" class="catalog-param-grid napcat-manager-panel">
-                    <div class="full-span napcat-setup-strip">
-                      <div class="napcat-setup-main">
-                        <v-icon size="22">mdi-connection</v-icon>
-                        <div>
-                          <strong>NapCat 连接</strong>
-                          <span>{{ napcatSetupHint() }}</span>
-                        </div>
-                      </div>
-                      <div class="napcat-setup-stats">
-                        <div><b>1</b><span>每个 Route</span></div>
-                        <div><b>{{ napcatConnectedCount() }}</b><span>已连接</span></div>
-                      </div>
-                    </div>
-                    <v-alert type="info" variant="tonal" density="compact" class="full-span">
-                      当前 Route 只绑定一个 NapCat。需要连接另一个 QQ 时，请新建 Route，让账号的策略、日志和运行状态彼此隔离。
-                    </v-alert>
-                    <v-alert
-                      v-for="(auto, key) in napcatAutoSteps"
-                      :key="key"
-                      :type="auto.ok === false ? 'error' : auto.ok === true ? 'success' : 'info'"
-                      variant="tonal"
-                      density="compact"
-                      class="full-span"
-                    >
-                      <div>{{ auto.message }}</div>
-                      <div v-for="step in auto.steps" :key="step" class="section-note">{{ step }}</div>
-                    </v-alert>
-                    <div class="full-span">
-                      <div class="section-title-row mb-2">
-                        <div>
-                          <div class="section-title small-title">当前绑定</div>
-                          <div class="section-note">Rabi 直接管理这个 NapCat 的启动、登录、OneBot 配置和连接状态。</div>
-                        </div>
-                      </div>
-                      <div class="napcat-account-grid">
-                        <div
-                          v-for="instance in napcatAccountInstances()"
-                          :key="instance.id"
-                          class="napcat-account-card"
-                          :class="{ disabled: instance.enabled === false }"
-                        >
-                          <div class="napcat-account-head">
-                            <div>
-                              <div class="napcat-account-title">{{ napcatAccountTitle(instance) }}</div>
-                              <div class="section-note">{{ napcatAccountSubtitle(instance) }}</div>
-                            </div>
-                            <div class="napcat-card-controls">
-                              <v-chip size="x-small" :color="napcatInstanceStatusColor(instance)" variant="tonal">
-                                {{ napcatInstanceStatusLabel(instance) }}
-                              </v-chip>
-                            </div>
-                          </div>
-                          <div class="napcat-card-summary">
-                            <div><span>WS</span><b :class="napcatInstancePortError(instance) ? 'text-error' : ''">{{ napcatInstanceWsUrl(instance) }}</b></div>
-                            <div><span>HTTP</span><b>{{ instance.httpUrl || "-" }}</b></div>
-                            <div><span>管理接口</span><b :class="napcatWebuiStatusClass(instance)">{{ instance.webuiUrl || "-" }} · {{ napcatWebuiStatusLabel(instance) }}</b></div>
-                            <div><span>OneBot</span><b :class="napcatAccountLoginClass(instance)">{{ napcatAccountLoginLabel(instance) }}</b></div>
-                            <div v-if="napcatWebuiSessionLabel(instance)"><span>NapCat 会话</span><b :class="napcatWebuiSessionMismatch(instance) ? 'text-warning' : 'text-info'">{{ napcatWebuiSessionLabel(instance) }}</b></div>
-                          </div>
-                          <v-alert
-                            v-if="napcatLoginState(instance) === NapcatState.AccountOnlineElsewhere && napcatAccountOwner(instance)"
-                            type="warning"
-                            variant="tonal"
-                            density="compact"
-                            class="mt-2"
-                          >
-                            <div>{{ napcatAccountOwnerLabel(instance) }}。Rabi 已保留这份会话，没有启动重复实例。</div>
-                            <div class="section-note mt-1">
-                              {{ napcatAccountOwner(instance)?.routesToGateway ? "该实例已经指向当前 RabiRoute，可以直接采用。" : "采用后还需要在详情中修复 OneBot 路由。" }}
-                            </div>
-                            <div class="d-flex ga-2 flex-wrap mt-2">
-                              <v-btn
-                                size="small"
-                                color="warning"
-                                variant="tonal"
-                                prepend-icon="mdi-connection"
-                                :loading="adoptingNapcatOwner[instance.id]"
-                                :disabled="adoptingNapcatOwner[instance.id]"
-                                @click="adoptNapcatAccountOwner(instance)"
-                              >
-                                采用在线实例
-                              </v-btn>
-                            </div>
-                          </v-alert>
-                          <v-alert
-                            v-else-if="[NapcatState.QuickLoginInvalid, NapcatState.QrLoginRequired].some(state => state === napcatLoginState(instance))"
-                            type="error"
-                            variant="tonal"
-                            density="compact"
-                            class="mt-2"
-                          >
-                            {{ napcatLoginState(instance) === NapcatState.QrLoginRequired ? "这个 QQ 没有可用的快速登录身份，或当前二维码已经过期。" : "NapCat 保存的快速登录身份已经过期。" }}
-                            请在下方登录控制中刷新二维码后扫码；扫码完成前 Rabi 不会误用其他 QQ，也不会反复重试旧身份。
-                          </v-alert>
-                          <div class="agent-action-bar mt-2">
-                            <div class="agent-action-status">
-                              <span class="section-note">一键启动并在当前卡片管理登录；只有 QQ 安全验证需要你确认</span>
-                            </div>
-                            <div class="d-flex ga-2 flex-wrap">
-                              <v-btn
-                                size="small"
-                                variant="tonal"
-                                color="primary"
-                                prepend-icon="mdi-play-circle-outline"
-                                :loading="managingNapcatLogin[instance.id]"
-                                :disabled="managingNapcatLogin[instance.id]"
-                                @click="startNapcatAndManage(instance)"
-                              >
-                                {{ managingNapcatLogin[instance.id] ? "正在准备..." : "启动并管理登录" }}
-                              </v-btn>
-                              <v-btn
-                                v-if="isConfiguredNapcatInstance(instance) || isDiscoveredNapcatAccount(instance)"
-                                size="small"
-                                variant="text"
-                                color="error"
-                                prepend-icon="mdi-delete-outline"
-                                @click="removeNapcatInstanceById(instance.id)"
-                              >
-                                删除
-                              </v-btn>
-                            </div>
-                          </div>
-                          <v-card
-                            v-if="napcatLoginUi(instance).visible"
-                            class="napcat-login-control mt-3"
-                            variant="flat"
-                          >
-                            <div class="napcat-login-control-head">
-                              <div>
-                                <div class="section-title small-title">QQ 登录控制</div>
-                                <div class="section-note">登录请求由 Rabi 转交本机 NapCat；WebUI 密钥和密码不会显示在这里的结果中。</div>
-                              </div>
-                              <v-btn
-                                size="small"
-                                variant="text"
-                                prepend-icon="mdi-refresh"
-                                :loading="napcatLoginUi(instance).loading"
-                                @click="loadNapcatLoginPanel(instance)"
-                              >
-                                刷新状态
-                              </v-btn>
-                            </div>
-                            <v-alert
-                              v-if="napcatLoginUi(instance).panel?.loggedIn"
-                              :type="napcatLoginUi(instance).panel?.state === NapcatState.AccountMismatch ? 'warning' : 'success'"
-                              variant="tonal"
-                              density="compact"
-                              class="mb-3"
-                            >
-                              {{ napcatLoginUi(instance).panel?.message }}
-                            </v-alert>
-                            <v-alert
-                              v-if="napcatLoginUi(instance).error"
-                              type="error"
-                              variant="tonal"
-                              density="compact"
-                              class="mb-3"
-                            >
-                              {{ napcatLoginUi(instance).error }}
-                            </v-alert>
-                            <v-alert
-                              v-else-if="napcatLoginUi(instance).message && !napcatLoginUi(instance).panel?.loggedIn"
-                              type="info"
-                              variant="tonal"
-                              density="compact"
-                              class="mb-3"
-                            >
-                              {{ napcatLoginUi(instance).message }}
-                            </v-alert>
-                            <div v-if="napcatLoginUi(instance).panel?.currentAccount" class="mb-3">
-                              当前账号：QQ {{ napcatLoginUi(instance).panel?.currentAccount?.userId }}
-                              {{ napcatLoginUi(instance).panel?.currentAccount?.nickname || "" }}
-                              <div v-if="napcatLoginUi(instance).panel?.state === NapcatState.AccountMismatch" class="text-warning">
-                                此 Route 绑定：QQ {{ instance.botUserId }} {{ instance.botNickname || "" }}
-                              </div>
-                            </div>
-                            <v-alert v-if="napcatLoginUi(instance).panel?.managementAvailable === false" type="warning" variant="tonal" density="compact" class="mb-3">
-                              NapCat 管理服务未响应，登录操作暂不可用。请点击“启动并管理登录”查看启动结果。
-                            </v-alert>
-                            <v-tabs v-if="!napcatLoginUi(instance).panel?.loggedIn && napcatLoginUi(instance).panel?.managementAvailable" v-model="napcatLoginUi(instance).mode" density="compact" color="primary" grow>
-                              <v-tab value="quick">快速登录</v-tab>
-                              <v-tab value="password">密码登录</v-tab>
-                              <v-tab value="qrcode">扫码登录</v-tab>
-                            </v-tabs>
-                            <v-window v-if="!napcatLoginUi(instance).panel?.loggedIn && napcatLoginUi(instance).panel?.managementAvailable" v-model="napcatLoginUi(instance).mode" class="napcat-login-window">
-                              <v-window-item value="quick">
-                                <div class="napcat-login-pane">
-                                  <v-select
-                                    v-if="napcatQuickLoginOptions(instance).length"
-                                    v-model="napcatLoginUi(instance).quickUserId"
-                                    :items="napcatQuickLoginOptions(instance)"
-                                    label="已保存的 QQ 登录身份"
-                                    hide-details="auto"
-                                  />
-                                  <v-alert v-else type="info" variant="tonal" density="compact">
-                                    这个 NapCat 还没有可用的快速登录身份，请先扫码或使用密码登录一次。
-                                  </v-alert>
-                                  <v-btn
-                                    color="primary"
-                                    variant="tonal"
-                                    prepend-icon="mdi-lightning-bolt-outline"
-                                    :loading="napcatLoginUi(instance).busy"
-                                    :disabled="!napcatLoginUi(instance).quickUserId"
-                                    @click="submitNapcatQuickLogin(instance)"
-                                  >
-                                    快速登录
-                                  </v-btn>
-                                </div>
-                              </v-window-item>
-                              <v-window-item value="password">
-                                <div class="napcat-login-pane">
-                                  <template v-if="napcatLoginUi(instance).newDevice">
-                                    <v-alert type="warning" variant="tonal" density="compact">
-                                      检测到新设备登录。请使用手机 QQ 扫码，并在手机上确认。
-                                    </v-alert>
-                                    <img
-                                      v-if="napcatLoginUi(instance).newDevice?.qrCodeDataUrl"
-                                      class="napcat-login-qr"
-                                      :src="napcatLoginUi(instance).newDevice?.qrCodeDataUrl"
-                                      alt="QQ 新设备验证二维码"
-                                    />
-                                    <v-progress-circular v-else indeterminate color="primary" />
-                                    <div class="section-note">
-                                      {{ napcatLoginUi(instance).newDevice?.status === 'scanned' ? '已扫码，请在手机 QQ 上确认。' : napcatLoginUi(instance).newDevice?.status === 'confirmed' ? '验证完成，正在登录。' : napcatLoginUi(instance).newDevice?.status === 'error' ? '验证状态读取失败，请重新获取二维码。' : '等待扫码确认。' }}
-                                    </div>
-                                    <div class="d-flex ga-2 flex-wrap">
-                                      <v-btn size="small" variant="tonal" @click="prepareNapcatNewDeviceQr(instance)">重新获取二维码</v-btn>
-                                      <v-btn size="small" variant="text" color="error" @click="cancelNapcatNewDevice(instance)">取消验证</v-btn>
-                                    </div>
-                                  </template>
-                                  <template v-else-if="napcatLoginUi(instance).captcha">
-                                    <v-alert type="warning" variant="tonal" density="compact">
-                                      QQ 要求完成安全验证码。验证码由腾讯页面处理，结果只用于本次登录。
-                                    </v-alert>
-                                    <v-btn
-                                      color="warning"
-                                      variant="tonal"
-                                      prepend-icon="mdi-shield-check-outline"
-                                      :loading="napcatLoginUi(instance).busy"
-                                      @click="startNapcatCaptcha(instance)"
-                                    >
-                                      打开安全验证
-                                    </v-btn>
-                                    <v-btn size="small" variant="text" color="error" @click="napcatLoginUi(instance).captcha = null">取消验证</v-btn>
-                                  </template>
-                                  <template v-else>
-                                    <v-text-field
-                                      v-model="napcatLoginUi(instance).userId"
-                                      label="QQ 号"
-                                      inputmode="numeric"
-                                      autocomplete="off"
-                                      hide-details="auto"
-                                    />
-                                    <v-text-field
-                                      v-model="napcatLoginUi(instance).password"
-                                      label="QQ 密码"
-                                      type="password"
-                                      autocomplete="new-password"
-                                      hint="仅用于本次本机登录请求，不保存到 Route 配置。"
-                                      persistent-hint
-                                    />
-                                    <v-btn
-                                      color="primary"
-                                      variant="tonal"
-                                      prepend-icon="mdi-login-variant"
-                                      :loading="napcatLoginUi(instance).busy"
-                                      @click="submitNapcatPasswordLogin(instance)"
-                                    >
-                                      密码登录
-                                    </v-btn>
-                                  </template>
-                                </div>
-                              </v-window-item>
-                              <v-window-item value="qrcode">
-                                <div class="napcat-login-pane napcat-login-qr-pane">
-                                  <img
-                                    v-if="napcatLoginUi(instance).panel?.qrCodeDataUrl"
-                                    class="napcat-login-qr"
-                                    :src="napcatLoginUi(instance).panel?.qrCodeDataUrl"
-                                    alt="QQ 登录二维码"
-                                  />
-                                  <v-alert v-else type="info" variant="tonal" density="compact">
-                                    暂时没有可用二维码，请刷新；如果 NapCat 尚未启动，先点上方“启动并管理登录”。
-                                  </v-alert>
-                                  <div class="section-note">请使用手机 QQ 或 TIM 扫描二维码。</div>
-                                  <v-btn
-                                    color="primary"
-                                    variant="tonal"
-                                    prepend-icon="mdi-qrcode-scan"
-                                    :loading="napcatLoginUi(instance).busy || napcatLoginUi(instance).loading"
-                                    @click="refreshNapcatLoginQr(instance)"
-                                  >
-                                    刷新二维码
-                                  </v-btn>
-                                </div>
-                              </v-window-item>
-                            </v-window>
-                          </v-card>
-                          <v-expansion-panels class="napcat-detail-panel mt-2" variant="accordion">
-                            <v-expansion-panel>
-                              <v-expansion-panel-title>更多详情</v-expansion-panel-title>
-                              <v-expansion-panel-text>
-                          <v-alert
-                            v-if="napcatInstancePortError(instance)"
-                            type="error"
-                            variant="tonal"
-                            density="compact"
-                            class="mt-2"
-                          >
-                            {{ napcatInstancePortError(instance) }}
-                            <div class="d-flex ga-2 flex-wrap mt-2">
-                              <v-btn
-                                size="small"
-                                color="error"
-                                variant="tonal"
-                                prepend-icon="mdi-auto-fix"
-                                :loading="fixingNapcatPorts"
-                                :disabled="fixingNapcatPorts"
-                                @click="fixNapcatPorts(instance)"
-                              >
-                                自动分配端口并保存
-                              </v-btn>
-                            </div>
-                          </v-alert>
-                          <v-alert
-                            v-if="napcatPortFixResult[instance.id]"
-                            :type="napcatPortFixResult[instance.id].ok ? 'success' : 'error'"
-                            variant="tonal"
-                            density="compact"
-                            class="mt-2"
-                          >
-                            {{ napcatPortFixResult[instance.id].message }}
-                          </v-alert>
-                          <v-alert
-                            v-if="napcatOneBotFixResult[instance.id]"
-                            :type="napcatOneBotFixResult[instance.id].ok ? 'success' : 'error'"
-                            variant="tonal"
-                            density="compact"
-                            class="mt-2"
-                          >
-                            {{ napcatOneBotFixResult[instance.id].message }}
-                          </v-alert>
-                          <v-alert
-                            v-if="napcatWebuiSessionMismatch(instance)"
-                            type="warning"
-                            variant="tonal"
-                            density="compact"
-                            class="mt-2"
-                          >
-                            当前 NapCat 会话是 {{ napcatWebuiSessionLabel(instance) }}，但这个 Route 绑定的是 QQ {{ napcatExpectedUserId(instance) }}。它不会覆盖 Route 身份；修复 OneBot 前请先在上方登录卡片切到正确 QQ。
-                          </v-alert>
-                          <v-expansion-panels class="napcat-detail-panel mt-2" variant="accordion">
-                            <v-expansion-panel>
-                              <v-expansion-panel-title>自动分配详情</v-expansion-panel-title>
-                              <v-expansion-panel-text>
-                                <v-alert type="info" variant="tonal" density="compact" class="mb-3">
-                                  RabiRoute 会自动生成和维护这些值，用户通常只需要登录 QQ 并勾选是否作为消息渠道。
-                                </v-alert>
-                                <div class="napcat-auto-summary">
-                                  <div><span>管理接口</span><b>{{ instance.webuiUrl || "-" }}</b></div>
-                                  <div><span>HTTP</span><b>{{ instance.httpUrl || "-" }}</b></div>
-                                  <div><span>WS</span><b>{{ napcatInstanceWsUrl(instance) }}</b></div>
-                                  <div><span>工作目录</span><b>{{ instance.workingDir || "自动生成" }}</b></div>
-                                </div>
-                                <v-switch
-                                  v-model="instance.autoLoginOnRabiStart"
-                                  class="mt-2"
-                                  label="启动 Rabi 时自动登录"
-                                  hint="默认开启。Manager 启动完成后在后台启动该 NapCat，并使用已保存的快速登录身份。"
-                                  persistent-hint
-                                  color="primary"
-                                  @update:model-value="touch"
-                                />
-                                <v-expansion-panels class="mt-3" variant="accordion">
-                                  <v-expansion-panel>
-                                    <v-expansion-panel-title>高级配置</v-expansion-panel-title>
-                                    <v-expansion-panel-text>
-                                      <div class="catalog-param-grid">
-                                        <v-text-field v-model="instance.name" label="内部备注" placeholder="可选，仅用于排障" :disabled="!isConfiguredNapcatInstance(instance)" @update:model-value="touch" />
-                                        <v-text-field v-model.number="instance.gatewayPort" type="number" label="RabiRoute WS 端口" :error-messages="napcatInstancePortError(instance)" :disabled="!isConfiguredNapcatInstance(instance)" @update:model-value="touch" />
-                                        <v-text-field v-model="instance.httpUrl" label="NapCat HTTP 地址" :disabled="!isConfiguredNapcatInstance(instance)" @update:model-value="touch" />
-                                        <v-text-field v-model="instance.webuiUrl" label="NapCat 管理接口地址" :disabled="!isConfiguredNapcatInstance(instance)" @update:model-value="touch" />
-                                        <v-text-field v-model="instance.accessToken" label="OneBot HTTP 鉴权密钥" placeholder="一般留空；仅 HTTP Server 设置 token 时填写" :disabled="!isConfiguredNapcatInstance(instance)" @update:model-value="touch" />
-                                        <v-text-field v-model="instance.launchCommand" class="full-span" label="启动命令" placeholder="自动生成" :disabled="!isConfiguredNapcatInstance(instance)" @update:model-value="touch" />
-                                        <v-text-field v-model="instance.workingDir" class="full-span" label="NapCat Shell 工作目录" placeholder="自动生成" :disabled="!isConfiguredNapcatInstance(instance)" @update:model-value="touch" />
-                                      </div>
-                                    </v-expansion-panel-text>
-                                  </v-expansion-panel>
-                                </v-expansion-panels>
-                              </v-expansion-panel-text>
-                            </v-expansion-panel>
-                          </v-expansion-panels>
-                          <v-alert
-                            v-if="!instance.launchCommand && !napcatAccountUserId(instance)"
-                            type="info"
-                            variant="tonal"
-                            density="compact"
-                            class="mt-2"
-                          >
-                            当前绑定还没有启动命令；RabiRoute 只能检查连接并给出 WS 地址，不能自动拉起 NapCat 后台。
-                          </v-alert>
-                          <v-alert
-                            v-if="napcatLaunchResult[instance.id]"
-                            :type="napcatLaunchResult[instance.id].ok ? 'success' : 'error'"
-                            variant="tonal"
-                            density="compact"
-                            class="mt-2"
-                          >
-                            {{ napcatLaunchResult[instance.id].message }}
-                          </v-alert>
-                          <v-alert
-                            v-if="napcatInstanceHealthResult[instance.id]"
-                            :type="napcatInstanceHealthResult[instance.id]?.ok ? 'success' : 'error'"
-                            variant="tonal"
-                            density="compact"
-                            class="mt-2"
-                          >
-                            <div v-if="napcatInstanceHealthResult[instance.id]?.message">{{ napcatInstanceHealthResult[instance.id]?.message }}</div>
-                            <div v-if="napcatInstanceHealthResult[instance.id]?.http">
-                              HTTP：{{ napcatInstanceHealthResult[instance.id]?.http?.ok ? `可用，${napcatInstanceHealthResult[instance.id]?.http?.nickname || napcatInstanceHealthResult[instance.id]?.http?.userId || '已登录'}` : (napcatInstanceHealthResult[instance.id]?.http?.message || '不可用') }}
-                            </div>
-                            <div v-if="napcatInstanceHealthResult[instance.id]?.onebot?.currentUserId">
-                              当前 NapCat QQ：{{ napcatInstanceHealthResult[instance.id]?.onebot?.currentUserId }}{{ napcatInstanceHealthResult[instance.id]?.onebot?.currentNickname ? ` / ${napcatInstanceHealthResult[instance.id]?.onebot?.currentNickname}` : "" }}
-                            </div>
-                            <div v-if="napcatInstanceHealthResult[instance.id]?.webui">
-                              管理接口：{{ napcatInstanceHealthResult[instance.id]?.webui?.reachable ? "可访问" : "未响应" }} · {{ napcatInstanceHealthResult[instance.id]?.webui?.url }}
-                            </div>
-                            <div v-if="napcatInstanceHealthResult[instance.id]?.webui?.found">
-                              管理凭据：已从 NapCat webui.json 读取 {{ napcatInstanceHealthResult[instance.id]?.webui?.tokenLength || "-" }} 位；仅由 Rabi 后端代理使用。
-                            </div>
-                            <div v-else-if="napcatInstanceHealthResult[instance.id]?.webui?.source === 'provided'">
-                              管理凭据：使用当前 Route 保存的 {{ napcatInstanceHealthResult[instance.id]?.webui?.tokenLength || "-" }} 位凭据。
-                            </div>
-                            <div v-else-if="napcatInstanceHealthResult[instance.id]?.webui?.message">
-                              管理凭据：{{ napcatInstanceHealthResult[instance.id]?.webui?.message }}
-                            </div>
-                            <div>WS：请在对应 NapCat WebSocket Client 里连接 {{ napcatInstanceHealthResult[instance.id]?.wsUrl || napcatInstanceWsUrl(instance) }}</div>
-                            <ul v-if="napcatInstanceHealthResult[instance.id]?.diagnostics?.length" class="health-diagnostics">
-                              <li v-for="item in napcatInstanceHealthResult[instance.id]?.diagnostics" :key="item">{{ item }}</li>
-                            </ul>
-                          </v-alert>
-                          <div class="adapter-log-panel mt-3">
-                            <div class="section-title-row compact-row">
-                              <div>
-                                <div class="section-title small-title">{{ napcatAccountLogTitle(instance) }} 日志</div>
-                                <div class="section-note">只展示此 QQ / 实例对应的连接、登录、入站和解析日志。</div>
-                              </div>
-                              <v-btn size="small" variant="text" prepend-icon="mdi-refresh" @click="store.load">刷新</v-btn>
-                            </div>
-                            <div v-if="napcatLogEntriesFor(instance).length" class="adapter-log-list">
-                              <v-expansion-panels variant="accordion" density="compact">
-                                <v-expansion-panel
-                                  v-for="(entry, logIndex) in napcatLogEntriesFor(instance)"
-                                  :key="`${entry.path}-${entry.messageId || logIndex}`"
-                                >
-                                  <v-expansion-panel-title>
-                                    <div class="adapter-log-title">
-                                      <span>{{ formatLogTime(entry) }}</span>
-                                      <b>{{ logEventTitle(entry) }}</b>
-                                      <span>{{ entry.target || "-" }}</span>
-                                      <span class="adapter-log-text">{{ logPreview(entry) }}</span>
-                                    </div>
-                                  </v-expansion-panel-title>
-                                  <v-expansion-panel-text>
-                                    <div class="status-row"><span>实例</span><b>{{ entry.instanceId || instance.id || "-" }}</b></div>
-                                    <div class="status-row"><span>消息 ID</span><b>{{ entry.messageId || "-" }}</b></div>
-                                    <div class="status-row"><span>来源</span><b>{{ entry.sender || entry.target || "-" }}</b></div>
-                                    <div class="status-row"><span>日志文件</span><b>{{ entry.path }}</b></div>
-                                    <pre class="mono-box compact-mono">{{ rawLogJson(entry) }}</pre>
-                                  </v-expansion-panel-text>
-                                </v-expansion-panel>
-                              </v-expansion-panels>
-                            </div>
-                            <div v-else class="empty-state compact-empty">
-                              <div>
-                                <strong>暂无此账号日志</strong>
-                                <span>{{ adapterLogPaths('napcat').join(' / ') || '等待启动或收到连接后生成日志。' }}</span>
-                              </div>
-                            </div>
-                            <div class="adapter-message-file-panel mt-2">
-                              <div class="section-title small-title">{{ napcatAccountLogTitle(instance) }} 消息文件</div>
-                              <div class="section-note">{{ messageFilePaths('napcat').join(' / ') || '尚未生成消息文件。' }}</div>
-                              <div v-if="napcatMessageFileEntriesFor(instance).length" class="adapter-message-preview">
-                                <div
-                                  v-for="(entry, messageIndex) in napcatMessageFileEntriesFor(instance).slice(0, 3)"
-                                  :key="`${entry.path}-${entry.messageId || messageIndex}`"
-                                >
-                                  {{ formatLogTime(entry) }} · {{ entry.source }} · {{ logPreview(entry) }}
-                                </div>
-                              </div>
-                            </div>
-                          </div>
-                              </v-expansion-panel-text>
-                            </v-expansion-panel>
-                          </v-expansion-panels>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                  <template v-if="choice.type === 'napcat' && runtime.running !== undefined">
-                    <v-alert v-if="!gateway.napcatInstances?.some(instance => napcatLoginPanels[instance.id]?.panel) && adapterErrors('napcat').length" type="error" variant="tonal" density="compact" class="mt-2 mb-1">
-                      <div v-for="reason in adapterErrors('napcat')" :key="reason" class="text-body-2">{{ reason }}</div>
-                    </v-alert>
-                    <div class="status-row"><span>运行状态</span><b :class="messageAdapterInactive ? 'route-config-muted-text' : ''">{{ gateway.enabled === false || runtime.enabled === false ? "已关闭" : runtime.running ? "运行中" : "已停止" }}</b></div>
-                    <div class="status-row"><span>WS 连接</span><b :class="messageAdapterInactive ? 'route-config-muted-text' : napcatPrimaryOffline() ? 'text-error' : napcatState.connected ? 'text-success' : 'text-error'">{{ messageAdapterInactive ? "未启用" : napcatPrimaryOffline() ? "QQ 已离线" : napcatState.connected ? "已连接" : "未连接" }}</b></div>
-                    <div class="status-row"><span>远端地址</span><b>{{ napcatState.remoteAddress || "-" }}</b></div>
-                    <div class="status-row"><span>最后连接</span><b>{{ napcatState.lastConnectedAt || "-" }}</b></div>
-                    <div class="status-row"><span>最后断开</span><b>{{ napcatState.lastDisconnectedAt || "-" }}</b></div>
-                    <div v-if="!gateway.napcatInstances?.some(instance => napcatLoginPanels[instance.id]?.panel)" class="status-row"><span>登录资料</span><b :class="napcatState.loginInfoError ? 'text-error' : ''">{{ napcatState.loginInfoError || napcatState.lastLoginInfoAt || "-" }}</b></div>
-                  </template>
-                  <div v-else-if="choice.type === 'speech'" class="catalog-param-grid">
-                    <v-alert v-if="speechAdapterActionError" class="full-span" type="error" variant="tonal" density="compact">
-                      {{ speechAdapterActionError }}
-                    </v-alert>
-                    <div class="full-span">
-                      <v-switch
-                        :model-value="hotDeliveryEnabled(gateway.speechPushMode)"
-                        color="primary"
-                        label="热投递"
-                        hint="开启（hot）：每段 ASR 立即投递。关闭（keyword）：未命中关键词时只记录，命中当前角色关键词时才投递。"
-                        persistent-hint
-                        @update:model-value="setSpeechHotDelivery"
-                      />
-                      <v-alert
-                        v-if="!hotDeliveryEnabled(gateway.speechPushMode) && !(gateway.speechTriggerKeywords || []).length"
-                        class="mt-2"
-                        type="warning"
-                        variant="tonal"
-                        density="compact"
-                      >
-                        <div>当前角色没有语音唤醒关键词。关闭热投递后，转写仍会记录，但不会唤醒 Agent。</div>
-                        <v-btn
-                          class="mt-2"
-                          size="small"
-                          variant="tonal"
-                          prepend-icon="mdi-account-cog-outline"
-                          :to="personaConfigRoute"
-                        >
-                          配置角色关键词
-                        </v-btn>
-                      </v-alert>
-                    </div>
-                    <div class="full-span persona-speech-summary">
-                      <div>
-                        <PersonaAvatar :role-id="gateway.agentRoleId || ''" :avatar-url="personaAvatarUrl" :size="42" />
-                        <span>角色</span>
-                        <b>{{ gateway.agentRoleId || "未选择" }}</b>
-                      </div>
-                      <div>
-                        <span>TTS 模型</span>
-                        <b>{{ speechPersonaConfig?.defaultModel || "由角色 voice-profile 配置" }}</b>
-                      </div>
-                      <div>
-                        <span>语言</span>
-                        <b>{{ speechPersonaConfig?.language || "由角色 voice-profile 配置" }}</b>
-                      </div>
-                      <div>
-                        <span>声音风格</span>
-                        <b>{{ speechPersonaConfig?.voiceStyleSummary || speechPersonaConfig?.instructions || "尚未配置" }}</b>
-                      </div>
-                    </div>
-                    <v-alert class="full-span" type="info" variant="tonal" density="compact">
-                      当前 Route 只负责订阅主机 ASR 广播、热投递/角色关键词策略和是否播放回复。ASR 模型、麦克风、VAD 与切句参数属于整台电脑，请到“语音服务”统一设置；TTS 模型、声线、语言、语速和发声说明归当前角色的 <code>voice/voice-profile.json</code> 管理。
-                    </v-alert>
-                    <v-switch
-                      color="primary"
-                      label="Agent 回复自动排队播放"
-                      :model-value="speechVariable('speechAutoPlay', speechDefaultVariables.speechAutoPlay) !== 'false'"
-                      @update:model-value="setSpeechAutoPlay"
-                    />
-                    <v-alert class="full-span" type="warning" variant="tonal" density="compact">
-                      主机只做一次 ASR，再把同一份文字广播给订阅 Route；不会为每个角色重复占用麦克风或重复跑识别模型。
-                    </v-alert>
-                  </div>
-                  <div v-else-if="choice.type === 'heartbeat'" class="catalog-param-grid">
-                    <v-alert v-if="managedMessageAgentModeEnabled" class="full-span" type="success" variant="tonal" density="compact">
-                      Codex 消息处理 Agent已开启。heartbeat 会立即交给独立消息处理 Agent，不会因为主角色会话正在工作而跳过，也不进入聊天消息合并等待。
-                    </v-alert>
-                    <v-alert v-else class="full-span" type="info" variant="tonal" density="compact">
-                      定时计划在“角色配置 / 消息模板规则”的 heartbeat 规则里维护。下面的忙时策略只影响 heartbeat，普通群聊、私聊和其他消息仍按正常路由直接投递。
-                    </v-alert>
-                    <v-switch
-                      v-if="!managedMessageAgentModeEnabled"
-                      v-model="gateway.heartbeatSkipWhenAgentBusy"
-                      class="full-span"
-                      color="primary"
-                      label="会话工作中时跳过心跳"
-                      hint="开启后，仅当 Agent 会话仍在工作时把本次 heartbeat 记为 skipped；普通消息不受影响。"
-                      persistent-hint
-                      @update:model-value="touch"
-                    />
-                  </div>
-                  <template v-if="choice.type === 'heartbeat' && runtime.running !== undefined">
-                    <v-alert v-if="adapterErrors('heartbeat').length" type="error" variant="tonal" density="compact" class="mt-2 mb-1">
-                      <div v-for="reason in adapterErrors('heartbeat')" :key="reason" class="text-body-2">{{ reason }}</div>
-                    </v-alert>
-                    <div class="status-row"><span>运行状态</span><b :class="messageAdapterInactive ? 'route-config-muted-text' : ''">{{ gateway.enabled === false || runtime.enabled === false ? "已关闭" : runtime.running ? "运行中" : "已停止" }}</b></div>
-                    <div class="status-row"><span>触发器状态</span><b :class="messageAdapterInactive ? 'route-config-muted-text' : heartbeatState.enabled === false ? 'text-error' : 'text-success'">{{ messageAdapterInactive ? "未启用" : heartbeatState.enabled === false ? "未启用" : "已启用" }}</b></div>
-                    <div class="status-row"><span>计划数量</span><b>{{ heartbeatState.scheduleCount ?? "-" }}</b></div>
-                    <div class="status-row"><span>下次触发</span><b>{{ heartbeatState.nextTickAt || "-" }}</b></div>
-                    <div class="agent-action-bar mt-2">
-                      <div class="agent-action-status">
-                        <span class="section-note">立即触发会向当前 Agent 端投递一条心跳消息；日志页可看完整结果。</span>
-                      </div>
-                      <div class="d-flex ga-2 flex-wrap">
-                        <v-btn
-                          size="small"
-                          variant="tonal"
-                          color="secondary"
-                          prepend-icon="mdi-play-circle-outline"
-                          :loading="triggeringHeartbeat"
-                          :disabled="triggeringHeartbeat || !runtime.running"
-                          @click="triggerHeartbeatNow"
-                        >
-                          立即触发
-                        </v-btn>
-                        <v-btn size="small" variant="text" prepend-icon="mdi-text-box-search-outline" @click="openRuntimeLog">
-                          打开日志
-                        </v-btn>
-                      </div>
-                    </div>
-                    <v-alert
-                      v-if="heartbeatTriggerResult"
-                      :type="heartbeatTriggerResult.ok ? 'success' : 'error'"
-                      variant="tonal"
-                      density="compact"
-                      class="mt-2"
-                    >
-                      {{ heartbeatTriggerResult.message }}
-                    </v-alert>
-                    <div class="adapter-log-panel mt-3">
-                      <div class="section-title-row compact-row">
-                        <div>
-                          <div class="section-title small-title">适配器日志</div>
-                          <div class="section-note">启用、tick 和投递过程日志。</div>
-                        </div>
-                        <v-btn size="small" variant="text" prepend-icon="mdi-refresh" @click="store.load">刷新</v-btn>
-                      </div>
-                      <div v-if="adapterLogEntries('heartbeat').length" class="adapter-log-list">
-                        <v-expansion-panels variant="accordion" density="compact">
-                          <v-expansion-panel
-                            v-for="(entry, logIndex) in adapterLogEntries('heartbeat')"
-                            :key="`${entry.path}-${entry.messageId || logIndex}`"
-                          >
-                            <v-expansion-panel-title>
-                              <div class="adapter-log-title">
-                                <span>{{ formatLogTime(entry) }}</span>
-                                <b>{{ logEventTitle(entry) }}</b>
-                                <span class="adapter-log-text">{{ logPreview(entry) }}</span>
-                              </div>
-                            </v-expansion-panel-title>
-                            <v-expansion-panel-text>
-                              <div class="status-row"><span>消息 ID</span><b>{{ entry.messageId || "-" }}</b></div>
-                              <div class="status-row"><span>日志文件</span><b>{{ entry.path }}</b></div>
-                              <pre class="mono-box compact-mono">{{ rawLogJson(entry) }}</pre>
-                            </v-expansion-panel-text>
-                          </v-expansion-panel>
-                        </v-expansion-panels>
-                      </div>
-                      <div v-else class="empty-state compact-empty">
-                        <div>
-                          <strong>暂无心跳适配器日志</strong>
-                          <span>{{ adapterLogPaths('heartbeat').join(' / ') || '等待启动或触发后生成日志。' }}</span>
-                        </div>
-                      </div>
-                      <div class="adapter-message-file-panel mt-2">
-                        <div class="section-title small-title">消息文件</div>
-                        <div class="section-note">{{ messageFilePaths('heartbeat').join(' / ') || '尚未生成消息文件。' }}</div>
-                        <div v-if="messageFileEntries('heartbeat').length" class="adapter-message-preview">
-                          <div
-                            v-for="(entry, messageIndex) in messageFileEntries('heartbeat').slice(0, 3)"
-                            :key="`${entry.path}-${entry.messageId || messageIndex}`"
-                          >
-                            {{ formatLogTime(entry) }} · {{ logPreview(entry) }}
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  </template>
-                  <div v-else-if="choice.type === 'feishu'" class="catalog-param-grid">
-                    <v-text-field v-model="gateway.feishuAppId" label="飞书 App ID" placeholder="cli_xxx" @update:model-value="touch" />
-                    <v-text-field v-model="gateway.feishuAppSecret" type="password" label="飞书 App Secret" @update:model-value="touch" />
-                    <v-text-field v-model="gateway.feishuVerificationToken" type="password" label="Verification Token" @update:model-value="touch" />
-                    <v-text-field v-model="gateway.feishuEncryptKey" type="password" label="Encrypt Key" @update:model-value="touch" />
-                    <v-text-field :model-value="webhookPortFor('feishu')" type="number" label="本机回调端口" @update:model-value="value => setWebhookPort('feishu', value)" />
-                    <v-text-field :model-value="webhookPathFor('feishu')" label="独立回调路径" placeholder="/feishu" @update:model-value="value => setWebhookPath('feishu', value)" />
-                    <v-switch
-                      v-model="gateway.feishuEventSubscriptionEnabled"
-                      class="full-span"
-                      color="primary"
-                      density="compact"
-                      hide-details
-                      label="已在飞书应用中配置公网 HTTPS 回调并订阅 im.message.receive_v1"
-                      @update:model-value="touch"
-                    />
-                    <v-alert type="warning" variant="tonal" density="compact" class="full-span">
-                      这里仅接受飞书应用凭据与事件订阅配置。群机器人 Webhook 属于通用 Webhook 预留，不能作为飞书消息端。
-                    </v-alert>
-                    <v-alert type="info" variant="tonal" density="compact" class="full-span">
-                      未同时配置 App ID、App Secret、Verification Token、Encrypt Key，并勾选事件订阅确认时，监听和出站都会保持关闭。
-                    </v-alert>
-                  </div>
-                  <template v-if="choice.type === 'feishu' && runtime.running !== undefined">
-                    <div class="status-row"><span>运行状态</span><b>{{ runtime.running ? "运行中" : "已停止" }}</b></div>
-                    <div class="status-row"><span>回调监听</span><b :class="feishuState.listenerReady ? 'text-success' : 'text-warning'">{{ feishuState.listenerReady ? "已监听" : feishuState.message || "保持关闭" }}</b></div>
-                    <div class="status-row"><span>订阅验证</span><b :class="feishuState.subscriptionVerified ? 'text-success' : 'text-warning'">{{ feishuState.subscriptionVerified ? "已收到验证/事件" : "尚未验证" }}</b></div>
-                    <div class="status-row"><span>最近消息</span><b>{{ feishuState.lastMessageAt || "-" }}</b></div>
-                    <div class="status-row"><span>最近事件 ID</span><b>{{ feishuState.lastEventId || "-" }}</b></div>
-                  </template>
-                  <div v-else-if="choice.type === 'wecom'" class="catalog-param-grid">
-                    <v-text-field v-model="gateway.wecomBotId" label="企业微信 Bot ID" placeholder="可留空使用 WECOM_BOT_ID" @update:model-value="touch" />
-                    <v-text-field v-model="gateway.wecomBotSecret" type="password" label="企业微信 Bot Secret" placeholder="可留空使用 WECOM_BOT_SECRET" @update:model-value="touch" />
-                    <v-text-field v-model="gateway.wecomWsUrl" class="full-span" label="企业微信 WebSocket 地址" placeholder="留空使用 SDK 默认地址；私有部署时填写" @update:model-value="touch" />
-                    <v-alert type="info" variant="tonal" density="compact" class="full-span">
-                      企业微信消息端使用智能机器人 WebSocket 长连接，主场景是企业微信群聊；模板变量会尽量对齐 NapCat 的 groupId、userId、sender、message 和 messageId。
-                    </v-alert>
-                  </div>
-                  <template v-if="choice.type === 'wecom' && runtime.running !== undefined">
-                    <div class="status-row"><span>运行状态</span><b>{{ runtime.running ? "运行中" : "已停止" }}</b></div>
-                    <div class="status-row"><span>连接</span><b :class="wecomState.connected && wecomState.authenticated ? 'text-success' : 'text-warning'">{{ wecomState.connected && wecomState.authenticated ? "已认证" : wecomState.message || "未连接" }}</b></div>
-                    <div class="status-row"><span>最近消息</span><b>{{ wecomState.lastMessageAt || "-" }}</b></div>
-                    <div class="status-row"><span>消息数</span><b>{{ wecomState.messageCount ?? 0 }}</b></div>
-                    <v-alert v-if="wecomState.lastError" type="error" variant="tonal" density="compact" class="mt-2">
-                      {{ wecomState.lastError }}
-                    </v-alert>
-                    <div class="adapter-log-panel mt-3">
-                      <div class="section-title-row compact-row">
-                        <div>
-                          <div class="section-title small-title">企业微信适配器日志</div>
-                          <div class="section-note">连接、认证、消息接收和错误日志。</div>
-                        </div>
-                        <v-btn size="small" variant="text" prepend-icon="mdi-refresh" @click="store.load">刷新</v-btn>
-                      </div>
-                      <div v-if="adapterLogEntries('wecom').length" class="adapter-log-list">
-                        <v-expansion-panels variant="accordion" density="compact">
-                          <v-expansion-panel
-                            v-for="(entry, logIndex) in adapterLogEntries('wecom')"
-                            :key="`${entry.path}-${entry.messageId || logIndex}`"
-                          >
-                            <v-expansion-panel-title>
-                              <div class="adapter-log-title">
-                                <span>{{ formatLogTime(entry) }}</span>
-                                <b>{{ logEventTitle(entry) }}</b>
-                                <span class="adapter-log-text">{{ logPreview(entry) }}</span>
-                              </div>
-                            </v-expansion-panel-title>
-                            <v-expansion-panel-text>
-                              <div class="status-row"><span>消息 ID</span><b>{{ entry.messageId || "-" }}</b></div>
-                              <div class="status-row"><span>日志文件</span><b>{{ entry.path }}</b></div>
-                              <pre class="mono-box compact-mono">{{ rawLogJson(entry) }}</pre>
-                            </v-expansion-panel-text>
-                          </v-expansion-panel>
-                        </v-expansion-panels>
-                      </div>
-                      <div v-else class="empty-state compact-empty">
-                        <div>
-                          <strong>暂无企业微信适配器日志</strong>
-                          <span>{{ adapterLogPaths('wecom').join(' / ') || '等待启动后生成日志。' }}</span>
-                        </div>
-                      </div>
-                      <div class="adapter-message-file-panel mt-2">
-                        <div class="section-title small-title">消息文件</div>
-                        <div class="section-note">{{ messageFilePaths('wecom').join(' / ') || '尚未生成消息文件。' }}</div>
-                        <div v-if="messageFileEntries('wecom').length" class="adapter-message-preview">
-                          <div
-                            v-for="(entry, messageIndex) in messageFileEntries('wecom').slice(0, 3)"
-                            :key="`${entry.path}-${entry.messageId || messageIndex}`"
-                          >
-                            {{ formatLogTime(entry) }} · {{ logPreview(entry) }}
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  </template>
-                  <div v-else-if="choice.type === 'weixin'" class="catalog-param-grid">
-                    <v-expansion-panels class="full-span" variant="accordion">
-                      <v-expansion-panel>
-                        <v-expansion-panel-title>高级设置（通常无需修改）</v-expansion-panel-title>
-                        <v-expansion-panel-text>
-                          <div class="catalog-param-grid">
-                            <v-text-field v-model="gateway.weixinBaseUrl" class="full-span" label="个人微信 iLink API" placeholder="https://ilinkai.weixin.qq.com" @update:model-value="touch" />
-                            <v-text-field v-model="gateway.weixinBotType" label="Bot Type" placeholder="3" @update:model-value="touch" />
-                          </div>
-                        </v-expansion-panel-text>
-                      </v-expansion-panel>
-                    </v-expansion-panels>
-                  </div>
-                  <template v-if="choice.type === 'weixin' && runtime.running !== undefined">
-                    <div class="status-row"><span>运行状态</span><b>{{ runtime.running ? "运行中" : "已停止" }}</b></div>
-                    <div class="status-row"><span>会话</span><b :class="weixinState.loggedIn ? 'text-success' : 'text-warning'">{{ weixinState.message || "状态未知" }}</b></div>
-                    <div class="status-row"><span>恢复状态</span><b>{{ weixinSessionPhaseLabel(weixinState.sessionPhase) }}</b></div>
-                    <div class="status-row"><span>凭据保留</span><b>{{ weixinState.credentialsRetained ? "是" : "否" }}</b></div>
-                    <div class="status-row"><span>扫码状态</span><b>{{ weixinState.qrStatus || "-" }}</b></div>
-                    <div class="status-row"><span>最近消息</span><b>{{ weixinState.lastMessageAt || "-" }}</b></div>
-                    <div class="status-row"><span>消息数</span><b>{{ weixinState.messageCount ?? 0 }}</b></div>
-                    <div v-if="!weixinState.loggedIn && weixinState.qrCodeDataUrl" class="full-span d-flex flex-column align-center ga-2 mt-2">
-                      <v-img :src="weixinState.qrCodeDataUrl" width="320" max-width="100%" aspect-ratio="1" alt="个人微信登录二维码" />
-                      <span class="section-note">请使用手机微信扫码；二维码约 5 分钟后自动刷新。</span>
-                    </div>
-                    <v-alert v-if="weixinState.lastError" type="error" variant="tonal" density="compact" class="mt-2 full-span">
-                      {{ weixinState.lastError }}
-                    </v-alert>
-                    <v-alert v-if="weixinLoginError" type="error" variant="tonal" density="compact" class="mt-2 full-span">
-                      {{ weixinLoginError }}
-                    </v-alert>
-                    <div class="agent-action-bar full-span mt-2">
-                      <div class="agent-action-status"><span class="section-note">登录态只保存在当前 Route 的运行期 data 目录，不写进公开配置。</span></div>
-                      <div class="d-flex ga-2 flex-wrap">
-                        <v-btn
-                          v-if="weixinState.loginRequired && !weixinState.qrCodeDataUrl"
-                          size="small"
-                          color="warning"
-                          variant="tonal"
-                          prepend-icon="mdi-qrcode"
-                          :loading="weixinLoginBusy"
-                          @click="requestPersonalWeixinLogin"
-                        >
-                          生成登录二维码
-                        </v-btn>
-                        <v-btn size="small" variant="tonal" prepend-icon="mdi-refresh" @click="store.load">刷新状态</v-btn>
-                        <v-btn size="small" variant="text" prepend-icon="mdi-text-box-search-outline" @click="openRuntimeLog">打开日志</v-btn>
-                      </div>
-                    </div>
-                  </template>
-                  <template v-else-if="choice.type === 'rabilink'">
-                    <div class="status-row"><span>绑定人员</span><b>{{ gateway?.agentRoleId || "未绑定" }}</b></div>
-                    <div class="status-row"><span>已关联手机设备</span>
-                      <b>
-                        <span v-if="mobileRecordingInfo.devices.length">
-                          {{ mobileRecordingInfo.devices.map(d => `手机 ${d.id.slice(0, 8)} (${new Date(d.lastReceivedAt).toLocaleString()})`).join('、') }}
-                        </span>
-                        <span v-else class="muted">尚未收到手机事件或暂无发现的设备</span>
-                      </b>
-                    </div>
-                    <div class="agent-action-bar mt-2">
-                      <div class="agent-action-status">
-                        <span class="section-note">移动端（手机、手环或眼镜）通过 RabiLink 上传的全天记录事件将汇流并绑定到当前人员。</span>
-                      </div>
-                      <div class="d-flex ga-2 flex-wrap">
-                        <v-btn size="small" variant="tonal" color="primary" prepend-icon="mdi-timeline-clock-outline" :to="`/routes/${encodeURIComponent(gateway?.agentRoleId || '')}/persona`">
-                          前往全天记录
-                        </v-btn>
-                        <v-btn size="small" variant="text" prepend-icon="mdi-refresh" :loading="mobileRecordingInfo.loading" @click="loadMobileRecordingInfo">
-                          刷新设备
-                        </v-btn>
-                      </div>
-                    </div>
-                  </template>
-                  <div v-else-if="isWebhookLikeAdapter(choice.type)" class="catalog-param-grid">
-                    <v-text-field :model-value="webhookPortFor(choice.type)" type="number" :label="`${sourceTitle(choice.type)} 监听端口`" @update:model-value="value => setWebhookPort(choice.type, value)" />
-                    <v-text-field :model-value="webhookPathFor(choice.type)" :label="`${sourceTitle(choice.type)} 路径`" :placeholder="adapterDefaultWebhookPath(choice.type)" @update:model-value="value => setWebhookPath(choice.type, value)" />
-                  </div>
-                  <template v-if="isWebhookLikeAdapter(choice.type) && runtime.running !== undefined">
-                    <div class="status-row"><span>运行状态</span><b>{{ runtime.running ? "运行中" : "已停止" }}</b></div>
-                    <div class="status-row"><span>监听地址</span><b>{{ webhookUrl(choice.type) }}</b></div>
-                    <div class="agent-action-bar mt-2">
-                      <div class="agent-action-status">
-                        <span class="section-note">{{ sourceTitle(choice.type) }} 使用 HTTP 回调接收事件。</span>
-                      </div>
-                      <div class="d-flex ga-2 flex-wrap">
-                        <v-btn size="small" variant="tonal" color="primary" prepend-icon="mdi-content-copy" @click="copyText(callbackUrl(choice.type), `已复制 ${sourceTitle(choice.type)} 回调地址`)">
-                          复制回调
-                        </v-btn>
-                        <v-btn size="small" variant="text" prepend-icon="mdi-console" @click="copyText(webhookCurl(choice.type), '已复制 curl 示例')">
-                          复制 curl
-                        </v-btn>
-                        <v-btn size="small" variant="text" prepend-icon="mdi-text-box-search-outline" @click="openRuntimeLog">
-                          打开日志
-                        </v-btn>
-                      </div>
-                    </div>
-                    <v-alert v-if="copyResult" type="success" variant="tonal" density="compact" class="mt-2">
-                      {{ copyResult }}
-                    </v-alert>
-                    <div class="adapter-log-panel mt-3">
-                      <div class="section-title-row compact-row">
-                        <div>
-                          <div class="section-title small-title">{{ sourceTitle(choice.type) }} 适配器日志</div>
-                          <div class="section-note">按 voiceSource / source 匹配请求、接收、拒绝和错误等过程日志。</div>
-                        </div>
-                        <v-btn size="small" variant="text" prepend-icon="mdi-refresh" @click="store.load">刷新</v-btn>
-                      </div>
-                      <div v-if="sourceLogEntries(choice.type).length" class="adapter-log-list">
-                        <v-expansion-panels variant="accordion" density="compact">
-                          <v-expansion-panel
-                            v-for="(entry, logIndex) in sourceLogEntries(choice.type)"
-                            :key="`${entry.path}-${entry.messageId || logIndex}`"
-                          >
-                            <v-expansion-panel-title>
-                              <div class="adapter-log-title">
-                                <span>{{ formatLogTime(entry) }}</span>
-                                <b>{{ logEventTitle(entry) }}</b>
-                                <span>{{ entry.sender || "-" }}</span>
-                                <span class="adapter-log-text">{{ logPreview(entry) }}</span>
-                              </div>
-                            </v-expansion-panel-title>
-                            <v-expansion-panel-text>
-                              <div class="status-row"><span>消息 ID</span><b>{{ entry.messageId || "-" }}</b></div>
-                              <div class="status-row"><span>来源</span><b>{{ entry.sender || entry.target || "-" }}</b></div>
-                              <div class="status-row"><span>日志文件</span><b>{{ entry.path }}</b></div>
-                              <pre class="mono-box compact-mono">{{ rawLogJson(entry) }}</pre>
-                            </v-expansion-panel-text>
-                          </v-expansion-panel>
-                        </v-expansion-panels>
-                      </div>
-                      <div v-else class="empty-state compact-empty">
-                        <div>
-                          <strong>暂无 {{ sourceTitle(choice.type) }} 日志</strong>
-                          <span>{{ adapterLogPaths(choice.type).join(' / ') || '等待启动或收到请求后生成日志。' }}</span>
-                        </div>
-                      </div>
-                      <div class="adapter-message-file-panel mt-2">
-                        <div class="section-title small-title">{{ sourceTitle(choice.type) }} 消息文件</div>
-                        <div class="section-note">{{ messageFilePaths(choice.type).join(' / ') || '尚未生成消息文件。' }}</div>
-                        <div v-if="sourceMessageFileEntries(choice.type).length" class="adapter-message-preview">
-                          <div
-                            v-for="(entry, messageIndex) in sourceMessageFileEntries(choice.type).slice(0, 3)"
-                            :key="`${entry.path}-${entry.messageId || messageIndex}`"
-                          >
-                            {{ formatLogTime(entry) }} · {{ entry.source }} · {{ logPreview(entry) }}
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  </template>
+
                 </div>
               </v-expand-transition>
             </div>
@@ -5406,7 +1887,7 @@ watch(
               <v-list-item
                 v-for="type in availableToAdd"
                 :key="type"
-                :title="adapterLabel(type)"
+                :title="endpointCatalog.find(item => item.type === type)?.title || type"
                 @click="addAdapter(type)"
               />
             </v-list>
@@ -5617,7 +2098,7 @@ watch(
                     />
                   </div>
                   <v-btn
-                    
+
                     class="mt-3"
                     variant="tonal"
                     prepend-icon="mdi-view-dashboard-outline"
@@ -6431,6 +2912,7 @@ watch(
             <v-expand-transition>
               <div v-if="remoteAgentParamOpen[target.id]" class="catalog-param-panel">
                 <v-alert v-if="target.provider === 'deviceAgent'" type="warning" variant="tonal">实验设备 Agent：角色在设备设置中绑定，模型和语音由设备宿主提供。设备未完成加载时消息保留原投递身份等待，不会改投电脑模型。真机唤醒与执行需另行验收。</v-alert>
+                <PeerRouteAgentSettings v-else-if="target.ownerDeviceId" :key="`${gateway.id}:${target.id}`" :target="target" :agent="target.agent" :connected="!!target.instance?.connected" @selected="session => { selectPeerRouteSession(gateway, target.id, session); touch(); }" />
                 <InstanceAgentSettings v-else-if="target.instance && target.agent" :key="target.id" :instance="target.instance" :agent="target.agent" @saved="refreshLanAgentNodes" />
                 <v-alert v-else type="warning" variant="tonal">此远端 Agent 暂不可用，配置仍然保留，不会改投本机。请刷新实例列表。</v-alert>
                 <v-btn class="mt-2" size="small" variant="text" prepend-icon="mdi-refresh" :loading="lanAgentLoading" @click="refreshLanAgentNodes">刷新实例列表</v-btn>
@@ -6474,7 +2956,7 @@ watch(
                 v-for="agent in availableAgentsToAdd"
                 :key="agent.key"
                 :title="agent.title"
-                @click="addAgent(agent.type, agent.nodeId, agent.agentId)"
+                @click="addAgent(agent.type, agent.nodeId, agent.agentId, agent.ownerDeviceId)"
               />
             </v-list>
           </v-menu>

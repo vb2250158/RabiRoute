@@ -1,3 +1,4 @@
+import type { NativeOwnerDeliveryEvidence } from "./nativeOwnerDelivery.js";
 import { createHash, randomUUID } from "node:crypto";
 import { endpointExecutionOptionsHash, normalizeEndpointExecutionOptions, type EndpointExecutionOptions } from "./executionOptions.js";
 import type { AgentThreadRequest, AgentThreadRequestResult } from "../agentThreads.js";
@@ -89,7 +90,7 @@ async function refreshEndpointIdentities(identities: Pick<PreparedEndpointDelive
   }
 }
 
-export function validateEndpointReceipt(delivery: PreparedEndpointDelivery, receipt: EndpointDeliveryReceipt): void {
+export function validateEndpointReceipt(delivery: NativeOwnerDeliveryEvidence, receipt: EndpointDeliveryReceipt): void {
   if (!receipt || receipt.accepted !== true || receipt.deliveryId !== delivery.deliveryId
     || receipt.generation !== delivery.generation || receipt.promptHash !== delivery.promptHash
     || receipt.executionOptionsHash !== delivery.executionOptionsHash

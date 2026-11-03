@@ -2,6 +2,7 @@ import { ReadSettingsError } from "./shared/readSettingsError.js";
 import { getTimeoutMs } from "./shared/timeoutSettings.js";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { Marked } from "./vendor/marked.esm.js";
@@ -143,7 +144,7 @@ function browserCandidates(): string[] {
   return result;
 }
 
-async function launchBrowser(profileDir: string): Promise<{ process: ChildProcessWithoutNullStreams; port: number }> {
+async function launchBrowser(profileDir: string, diagrams = false): Promise<{ process: ChildProcessWithoutNullStreams; port: number }> {
   const timeoutMs = markdownImageSettings.timeoutMs;
   const candidates = browserCandidates();
   if (candidates.length === 0) throw new Error("Markdown image rendering requires an installed Chromium, Chrome, or Edge browser.");
@@ -151,7 +152,7 @@ async function launchBrowser(profileDir: string): Promise<{ process: ChildProces
   for (const browser of candidates) {
     const child = spawn(browser, [
       "--headless=new", "--disable-gpu", "--disable-extensions", "--disable-background-networking",
-      "--disable-javascript", "--no-first-run", "--no-default-browser-check", "--disable-sync",
+      ...(diagrams ? [] : ["--disable-javascript"]), "--no-first-run", "--no-default-browser-check", "--disable-sync",
       "--remote-debugging-port=0", `--user-data-dir=${profileDir}`, "about:blank"
     ], { stdio: ["pipe", "pipe", "pipe"], windowsHide: true });
     child.stdin.end();
@@ -200,12 +201,12 @@ async function pageWebSocketUrl(port: number): Promise<string> {
   throw new Error("Markdown browser did not expose a page target.");
 }
 
-async function captureHtml(port: number, html: string): Promise<Buffer> {
+async function captureHtml(port: number, html: string, prepareScript?: string): Promise<Buffer> {
   const socket = new WebSocket(await pageWebSocketUrl(port), { handshakeTimeout: markdownImageSettings.timeoutMs });
-  return captureHtmlOnSocket(socket, html);
+  return captureHtmlOnSocket(socket, html, markdownImageSettings.timeoutMs, markdownImageSettings, prepareScript);
 }
 
-async function captureHtmlOnSocket(socket: WebSocket, html: string, timeoutMs = markdownImageSettings.timeoutMs, settings = markdownImageSettings): Promise<Buffer> {
+async function captureHtmlOnSocket(socket: WebSocket, html: string, timeoutMs = markdownImageSettings.timeoutMs, settings = markdownImageSettings, prepareScript?: string): Promise<Buffer> {
   type Waiter = { resolve: (value: Record<string, unknown>) => void; reject: (error: Error) => void };
   let sequence = 0;
   let connectionError: Error | undefined;
@@ -287,6 +288,10 @@ async function captureHtmlOnSocket(socket: WebSocket, html: string, timeoutMs = 
       loaded,
       send("Page.navigate", { url: `data:text/html;base64,${Buffer.from(html).toString("base64")}` })
     ]);
+    if (prepareScript) {
+      const rendered = await send("Runtime.evaluate", { expression: prepareScript, awaitPromise: true, returnByValue: true });
+      if (rendered.exceptionDetails) throw new Error("Mermaid diagram could not be rendered.");
+    }
     const metrics = await send("Page.getLayoutMetrics");
     const size = (metrics.cssContentSize || metrics.contentSize || {}) as Record<string, unknown>;
     const height = Math.ceil(Number(size.height));
@@ -318,14 +323,38 @@ async function captureHtmlOnSocket(socket: WebSocket, html: string, timeoutMs = 
 /** @internal Socket-level seam for deterministic CDP lifecycle tests. */
 export const markdownImageInternals = { captureHtmlOnSocket, browserCandidates, validateMarkdownSource };
 
+/** Only fenced Mermaid diagrams are executed by the trusted local renderer. */
+export function mermaidDiagramSource(markdown: string): string | undefined {
+  const tokens = new Marked().lexer(markdown).filter(token => token.type !== "space");
+  if (tokens.length !== 1 || tokens[0].type !== "code") return;
+  const token = tokens[0];
+  if (token.lang?.trim().toLowerCase() === "mermaid"
+    || (!token.lang && /^(?:flowchart|graph|sequenceDiagram|classDiagram|stateDiagram(?:-v2)?|erDiagram|architecture-beta)\b/.test(token.text.trim()))) return token.text;
+}
+
 export async function renderMarkdownToPng(markdown: string): Promise<Buffer> {
   validateMarkdownSource(markdown);
   const tempRoot = path.resolve(os.tmpdir());
   const profileDir = fs.mkdtempSync(path.join(tempRoot, "rabiroute-markdown-browser-"));
   let browser: ChildProcessWithoutNullStreams | undefined;
   try {
-    const launched = await launchBrowser(profileDir);
+    const diagram = mermaidDiagramSource(markdown);
+    const launched = await launchBrowser(profileDir, diagram !== undefined);
     browser = launched.process;
+    if (diagram !== undefined) {
+      const bundlePath = path.join(path.dirname(createRequire(import.meta.url).resolve("mermaid")), "mermaid.min.js");
+      const bundle = await fs.promises.readFile(bundlePath, "utf8");
+      const html = `<!doctype html><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:; connect-src 'none'"><style>html,body{margin:0;background:white;width:1000px}body{padding:24px;box-sizing:border-box;font-family:'Microsoft YaHei',sans-serif}svg{max-width:100%;height:auto}</style><main id="diagram"></main>`;
+      const script = bundle + `; (async () => {
+        mermaid.initialize({ startOnLoad: false, securityLevel: "strict", theme: "default", deterministicIds: true,
+          fontFamily: "Microsoft YaHei, sans-serif", flowchart: { htmlLabels: false },
+          secure: ["securityLevel", "startOnLoad", "maxTextSize", "suppressErrorRendering", "secure"], suppressErrorRendering: true });
+        const result = await mermaid.render("completion-diagram", ${JSON.stringify(diagram)});
+        document.getElementById("diagram").innerHTML = result.svg;
+        await document.fonts.ready;
+      })()`;
+      return await captureHtml(launched.port, html, script);
+    }
     return await captureHtml(launched.port, markdownImageHtml(markdown));
   } finally {
     browser?.kill();

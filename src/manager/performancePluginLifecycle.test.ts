@@ -311,9 +311,9 @@ for (const failureKind of ["rejected", "caught-read-error"] as const) {
     const f = await fixture(t), loading = deferred(), entered = deferred();
     f.releaseControlledWork.push(loading.resolve);
     let recovered = false;
-    const originalStatus = f.service.store.status.bind(f.service.store);
-    if (failureKind === "caught-read-error") f.service.store.status = () => ({ ...originalStatus(), loaded: true,
-      ...(recovered ? {} : { lastError: "synthetic caught history failure" }) });
+    const originalHistory = f.service.store.historyStatus.bind(f.service.store);
+    if (failureKind === "caught-read-error") f.service.store.historyStatus = () => ({ ...originalHistory(),
+      ...(recovered ? {} : { fatalError: "synthetic caught history failure" }) });
     f.service.store.start = async () => {
       f.counts.storeStarts++; entered.resolve(); await loading.promise;
       if (!recovered && failureKind === "rejected") throw new Error("synthetic initialization rejected");
@@ -333,6 +333,24 @@ for (const failureKind of ["rejected", "caught-read-error"] as const) {
     assert.equal(f.service.status().collecting, true);
   });
 }
+
+test("a local history warning keeps native publication and real-time collection available with degraded status", async t => {
+  const f = await fixture(t);
+  f.service.store.historyStatus = () => ({ incidents: 1, lastError: "synthetic isolated bad history shard" });
+  await f.generation.switch([f.candidate("partial-history")]);
+  await f.service.start();
+  assert.equal(f.generation.current().records[0]?.status, "active");
+  assert.equal(f.service.status().collecting, true);
+  assert.equal(f.service.initializationSnapshot().state, "degraded");
+  assert.equal(f.service.initializationSnapshot().incidents, 1);
+  assert.match(f.apis[0]!.status().data.lastError ?? "", /isolated bad history shard/);
+  recordPerformanceOperation("live-during-history-warning", 1);
+  assert.equal(f.counts.operations, 1);
+  assert.equal(f.service.ingest({ schemaVersion: 1, kind: "performance_sample", sampleId: "live-webgui-with-warning",
+    time: new Date().toISOString(), intervalMs: 1000, source: { kind: "webgui", id: "synthetic", runtimeId: "synthetic" } }), true);
+  await f.generation.switch([]); await f.generation.shutdown();
+  assert.equal(f.counts.stops, 1);
+});
 
 test("read-only activation does not load history or start a collector", async t => {
   const f = await fixture(t);

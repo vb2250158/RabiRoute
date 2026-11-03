@@ -243,25 +243,47 @@ export async function loadPluginProfile(input: Readonly<{
   host: PluginHost;
   /** Only successfully loaded immutable packages from the preceding reconciliation. */
   previous?: LoadedPluginProfile;
+  /** Effective profile from the single settings owner; avoids a second disk/config truth. */
+  profile?: PluginProfile;
+  /** The producer's original lifecycle; individual shared package jobs are not cancelled here. */
+  assertCurrent?: () => void;
 }>): Promise<LoadedPluginProfile> {
-  const profile = await input.packageCatalog.loadProfile(input.profilePath);
+  let cancellation: Readonly<{ error: unknown }> | undefined;
+  const assertCurrent = () => {
+    if (cancellation) throw cancellation.error;
+    try { input.assertCurrent?.(); }
+    catch (error) { cancellation = { error }; throw error; }
+  };
+  assertCurrent();
+  const profile = input.profile ?? await input.packageCatalog.loadProfile(input.profilePath);
+  assertCurrent();
   const enabled = profile.instances.filter(instance => instance.enabled);
   const packages = [...new Map(enabled.map(instance => [JSON.stringify([instance.package, instance.version]), instance])).entries()];
   const packageResults = new Map<string, PromiseSettledResult<LoadedPluginPackage>>();
   let next = 0;
   // Backpressure belongs to this batch producer. A large valid Profile must not
   // flood the catalog queue or give duplicate failing packages both producer lanes.
-  await Promise.all(Array.from({ length: Math.min(packages.length, input.packageCatalog.snapshot().maxConcurrency) }, async () => {
+  const lanes = await Promise.allSettled(Array.from({ length: Math.min(packages.length, input.packageCatalog.snapshot().maxConcurrency) }, async () => {
     while (next < packages.length) {
+      assertCurrent();
       const [key, instance] = packages[next++]!;
+      let result: PromiseSettledResult<LoadedPluginPackage>;
       try {
-        packageResults.set(key, { status: "fulfilled", value: await input.packageCatalog.loadPackage(instance.package, instance.version, input.runtimeRoot, input.host) });
-      } catch (reason) { packageResults.set(key, { status: "rejected", reason }); }
+        result = { status: "fulfilled", value: await input.packageCatalog.loadPackage(instance.package, instance.version, input.runtimeRoot, input.host) };
+      } catch (reason) { result = { status: "rejected", reason }; }
+      // A lifecycle denial is not a bad package and must not enter fallback.
+      assertCurrent();
+      packageResults.set(key, result);
     }
   }));
+  // All entered metadata I/O remains owned until every lane really settles.
+  const failedLane = lanes.find(result => result.status === "rejected");
+  if (failedLane?.status === "rejected") throw failedLane.reason;
+  assertCurrent();
   const loaded: Array<Readonly<{ instance: PluginProfileEntry; package: LoadedPluginPackage; candidate: PluginCandidate }>> = [];
   const loadFailures: PluginProfileLoadFailure[] = [];
   for (const instance of enabled) {
+    assertCurrent();
     const result = packageResults.get(JSON.stringify([instance.package, instance.version]))!;
     if (result.status === "fulfilled") {
       const plugin = result.value;
@@ -280,11 +302,18 @@ export async function loadPluginProfile(input: Readonly<{
     let retained = false;
     let failure = result.reason instanceof Error ? result.reason.message : String(result.reason);
     if (previousCandidate && previousPackage) {
+      assertCurrent();
+      let admission: PromiseSettledResult<void>;
       try {
         await input.packageCatalog.assertPackageExecutionAllowed(previousPackage.package);
+        admission = { status: "fulfilled", value: undefined };
+      } catch (reason) { admission = { status: "rejected", reason }; }
+      assertCurrent();
+      if (admission.status === "fulfilled") {
         loaded.push(Object.freeze({ ...previousPackage, candidate: previousCandidate }));
         retained = true;
-      } catch (error) {
+      } else {
+        const error = admission.reason;
         failure += ` Previous revision was not retained: ${error instanceof Error ? error.message : String(error)}`;
       }
     }
@@ -296,6 +325,7 @@ export async function loadPluginProfile(input: Readonly<{
       error: Object.freeze({ code: "package_load_failed", message: failure })
     }));
   }
+  assertCurrent();
   const grantsById = new Map(loaded.map(item => [item.instance.id, item.instance.grants]));
   return Object.freeze({
     profile,

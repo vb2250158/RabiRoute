@@ -2,6 +2,9 @@
   "schemaVersion": 2,
   "id": "io.rabiroute.manager.wearable-companion",
   "version": "1.0.0",
+  "displayName": "可穿戴健康同步",
+  "description": "从手机与可穿戴设备同步健康记录",
+  "icon": "mdi-watch",
   "entries": {
     "manager": {
       "execution": "in_process",

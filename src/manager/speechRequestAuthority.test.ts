@@ -15,6 +15,7 @@ import type { SpeechApiContext } from "./speechApiContext.js";
 import { ManagerPluginRouteRegistry } from "./managerPluginRouteRegistry.js";
 import { stickySpeechAuthority, awaitSpeechAuthority } from "./speechRequestAuthority.js";
 import type { SpeechRuntimeStatus } from "../shared/speechControlContract.js";
+import { nativeHttpTestFetch, nativeHttpTestStreamFetch } from "./nativeHttpTestClient.js";
 
 function deferred() {
   let resolve!: () => void;
@@ -89,7 +90,7 @@ for (const mode of modes) {
         guard(); response.writeHead(200); response.end(result.body);
       }).catch(() => { response.writeHead(403); response.end("denied"); });
     });
-    const pending = fetch(f.url, { headers: f.headers });
+    const pending = nativeHttpTestFetch(f.url, { headers: f.headers });
     await entered.promise; f.revoke(mode); gate.resolve();
     const response = await pending;
     assert.equal(response.status, 403); assert.doesNotMatch(await response.text(), /private-wave|private upstream/);
@@ -106,7 +107,7 @@ for (const mode of modes) {
         response.writeHead(200); response.end("unexpected");
       }).catch(() => { response.writeHead(403); response.end("denied"); });
     });
-    const pending = fetch(f.url, { headers: f.headers });
+    const pending = nativeHttpTestFetch(f.url, { headers: f.headers });
     await entered.promise; f.revoke(mode); gate.resolve();
     assert.equal((await pending).status, 403); assert.deepEqual(dispatches, ["/v1/microphone/status"]);
   });
@@ -123,7 +124,7 @@ for (const mode of modes) {
       void pending.then(() => { response.writeHead(200); response.end("unexpected"); })
         .catch(() => { response.writeHead(403); response.end("denied"); });
     });
-    const pending = fetch(f.url, { headers: f.headers }); await queued.promise;
+    const pending = nativeHttpTestFetch(f.url, { headers: f.headers }); await queued.promise;
     f.revoke(mode); gate.resolve(); await blocker;
     assert.equal((await pending).status, 403); assert.equal(inspections, 1); assert.equal(launches, 0);
   });
@@ -140,7 +141,7 @@ for (const mode of modes) {
     const registry = new ManagerPluginRouteRegistry(); const registration = registry.registerOperations("speech-authority-fixture", createSpeechApiOperations(owner).operations.filter(value => value.contract.operationId === "manager.speech.events"));
     t.after(async () => { await Promise.all([registration.dispose(), owner.events.stop()]); });
     const f = await fixture(t, (request, response) => { if (!registry.handle(request, new URL(request.url!, "http://fixture"), response)) response.writeHead(404).end(); });
-    const response = await fetch(f.url.replace("/status", "/events"), { headers: f.headers }); assert.equal(response.status, 200);
+    const response = await nativeHttpTestStreamFetch(f.url.replace("/status", "/events"), { headers: f.headers }); assert.equal(response.status, 200);
     const reader = response.body!.getReader(); assert.match(new TextDecoder().decode((await reader.read()).value), /allowed/);
     f.revoke(mode); stream.enqueue(new TextEncoder().encode("data: private-stale-event\n\n"));
     await assert.rejects(reader.read()); assert.equal(aborted, true);

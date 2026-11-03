@@ -52,6 +52,12 @@ export function resetWeComClientFactory(): void {
   clientCache.clear();
 }
 
+/** Only this protocol implementation's cached clients are released. */
+export function disposeWeComClients(): void {
+  for (const client of clientCache.values()) client.disconnect();
+  clientCache.clear();
+}
+
 export function normalizeWeComError(error: unknown): string {
   if (error instanceof Error) {
     const code = (error as Error & { code?: string }).code;
@@ -61,7 +67,7 @@ export function normalizeWeComError(error: unknown): string {
 }
 
 function endpointKey(endpoint: WeComEndpoint): string {
-  return `${endpoint.botId}\n${endpoint.wsUrl || ""}`;
+  return `${endpoint.botId}\n${endpoint.wsUrl || ""}\n${endpoint.secret}`;
 }
 
 export function assertWeComEndpoint(endpoint: Partial<WeComEndpoint>): asserts endpoint is WeComEndpoint {

@@ -1,0 +1,42 @@
+{
+  "endpointType": "napcat",
+  "routeKeys": [
+    "napcatInstances",
+    "napcatHttpUrl",
+    "napcatWebuiUrl",
+    "napcatAccessToken",
+    "napcatWebuiToken"
+  ],
+  "runtimeFields": {
+    "napcatInstances": {
+      "paths": [
+        "napcatInstances"
+      ],
+      "default": []
+    },
+    "napcatHttpUrl": {
+      "paths": [
+        "napcatHttpUrl"
+      ],
+      "default": "http://127.0.0.1:3000"
+    },
+    "napcatWebuiUrl": {
+      "paths": [
+        "napcatWebuiUrl"
+      ],
+      "default": "http://127.0.0.1:6099/webui"
+    },
+    "napcatAccessToken": {
+      "paths": [
+        "napcatAccessToken"
+      ],
+      "default": ""
+    },
+    "napcatWebuiToken": {
+      "paths": [
+        "napcatWebuiToken"
+      ],
+      "default": ""
+    }
+  }
+}

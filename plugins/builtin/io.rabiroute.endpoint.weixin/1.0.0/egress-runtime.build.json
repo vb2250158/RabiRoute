@@ -1,0 +1,19 @@
+{
+  "exports": [
+    {
+      "source": "src/weixinOpenClaw.ts",
+      "name": "sendWeixinText"
+    },
+    {
+      "source": "src/weixinOpenClaw.ts",
+      "name": "sendWeixinFile"
+    },
+    {
+      "source": "src/weixinOpenClaw.ts",
+      "name": "sendWeixinImage"
+    }
+  ],
+  "ownedSources": [
+    "src/weixinOpenClaw.ts"
+  ]
+}

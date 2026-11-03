@@ -3,6 +3,7 @@ import { readPersonaChatHistory, appendPersonaAiuiExchange } from "../personaCha
 import { enrichPersonaChatTasks, type PersonaChatTaskMetadataContext } from "./personaChatTaskMetadata.js";
 
 import path from "node:path";
+import type { HistoryQqRoute } from '../shared/qqConversationHistory.js';
 import { preparePersonaResourceAdmission, type PersonaResourceIdentity } from "./personaResourceAdmission.js";
 
 export type PersonaChatHistoryContext = PersonaChatTaskMetadataContext & {
@@ -10,6 +11,8 @@ export type PersonaChatHistoryContext = PersonaChatTaskMetadataContext & {
   identity?(): PersonaResourceIdentity;
   read?: typeof readPersonaChatHistory;
   append?: typeof appendPersonaAiuiExchange;
+  configuredHistoryAdapters?(roleId: string): string[];
+  historyQqRoutes?(roleId: string): HistoryQqRoute[];
 };
 
 export function createPersonaChatHistoryOwner(context: PersonaChatHistoryContext) {
@@ -22,6 +25,13 @@ export function createPersonaChatHistoryOwner(context: PersonaChatHistoryContext
         if (path.resolve(context.roleDir(roleId)) !== path.resolve(roleDir)) throw Object.assign(new Error('Persona directory changed while using the original chat history.'), { statusCode: 409 });
       };
       return {
+        assertCurrent,
+        async catalog() {
+          assertCurrent();
+          const adapters = context.configuredHistoryAdapters?.(roleId) ?? [];
+          const qqRoutes = context.historyQqRoutes?.(roleId) ?? [];
+          assertCurrent(); return { adapters, qqRoutes, chatCategories: [], warnings: [] as string[] };
+        },
         async read(cursor: number | undefined, limit: number, options: Parameters<typeof readPersonaChatHistory>[3] = {}) {
           assertCurrent();
           const data = await (context.read ?? readPersonaChatHistory)(roleDir, cursor, limit, options);

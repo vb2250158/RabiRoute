@@ -7,6 +7,9 @@ test("parsePluginManifest accepts the unified multi-host contract", () => {
     schemaVersion: 2,
     id: "io.rabiroute.agent.codex",
     version: "1.0.0",
+    displayName: "Example endpoint",
+    description: "Owns its transport and configuration.",
+    icon: "mdi-message",
     entries: {
       manager: { execution: "in_process", module: "./manager.mjs" },
       web: { execution: "in_process", module: "./web.mjs" }
@@ -21,6 +24,9 @@ test("parsePluginManifest accepts the unified multi-host contract", () => {
   assert.deepEqual(manifest.entries.manager, { execution: "in_process", module: "./manager.mjs" });
   assert.deepEqual(manifest.provides, ["agent.adapter.codex@1"]);
   assert.equal(manifest.stateSchemaVersion, 2);
+  assert.equal(manifest.displayName, "Example endpoint");
+  assert.equal(manifest.description, "Owns its transport and configuration.");
+  assert.equal(manifest.icon, "mdi-message");
 });
 
 test("parsePluginManifest rejects old host and entry fields", () => {

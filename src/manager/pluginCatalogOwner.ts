@@ -7,7 +7,7 @@ import { getTrustedLanAgentSource } from "./lanAgentBodyAuthority.js";
 import type { PluginCatalogApiContext, PluginCatalogInvocation } from "./pluginCatalogRoutes.js";
 import { errorResponsePresentation } from "../shared/errorPresentation.js";
 
-export type PluginCatalogAction = "catalog.read" | "reconciliation.read" | "reconciliation.run" | "modules.list" | "modules.read";
+export type PluginCatalogAction = "catalog.read" | "reconciliation.read" | "reconciliation.run" | "modules.list" | "modules.read" | "instances.read" | "instances.update";
 const noStore = { "cache-control": "no-store" };
 function json(status: number, body: unknown, headers: Record<string, string> = {}): ApiOperationResult {
   return { status, body: errorResponsePresentation(body, status), headers: { ...noStore, ...headers } };
@@ -23,8 +23,9 @@ export function createPluginCatalogOwner(context: PluginCatalogApiContext, readO
       const reconcile = reconciliation?.reconcile, diagnostics = reconciliation?.diagnostics, readReadiness = reconciliation?.readiness;
       const list = modules?.list, read = modules?.read, rootReader = context.root;
       const originalGeneration = runtime.current();
+      const management = context.management, listInstances = management?.list, updateInstance = management?.update;
       const root = rootReader?.();
-      const mutation = action === "reconciliation.run";
+      const mutation = action === "reconciliation.run" || action === "instances.update";
       const fail = (status: number, code: string, field: string): never => {
         throw new ApiContractError(status, code, field, operationId, dispatched, mutation ? dispatched ? "unknown" : "not_started" : undefined);
       };
@@ -46,7 +47,8 @@ export function createPluginCatalogOwner(context: PluginCatalogApiContext, readO
         if (now.applicationGenerationId !== originalGeneration.applicationGenerationId || now.managerInstanceId !== originalGeneration.managerInstanceId) {
           fail(409, "API_REQUEST_IDENTITY_CHANGED", "identity");
         }
-        if (context.runtime !== runtime || context.renderCatalog !== render || context.reconciliation !== reconciliation
+        if (context.management !== management || management?.list !== listInstances || management?.update !== updateInstance
+          || context.runtime !== runtime || context.renderCatalog !== render || context.reconciliation !== reconciliation
           || context.webModules !== modules || reconciliation?.reconcile !== reconcile || reconciliation?.diagnostics !== diagnostics
           || reconciliation?.readiness !== readReadiness || modules?.list !== list || modules?.read !== read || context.root !== rootReader || rootReader?.() !== root) {
           fail(409, "API_PLUGIN_SOURCE_CHANGED", "source");
@@ -69,10 +71,20 @@ export function createPluginCatalogOwner(context: PluginCatalogApiContext, readO
       };
       return {
         invocation,
-        async execute(input: { host?: string | null; webRelease?: string | null; id?: string; rev?: string; relativePath?: string }): Promise<ApiOperationResult> {
+        async execute(input: { host?: string | null; webRelease?: string | null; id?: string; rev?: string; relativePath?: string; expectedRevision?: string; enabled?: boolean }): Promise<ApiOperationResult> {
           try {
             assertCurrent();
             if (mutation && readOnly) return { ...json(403, { code: -1, message: "Manager is running in read-only acceptance mode." }), mutationOutcome: "not_started" };
+            if (action === "instances.read" || action === "instances.update") {
+              if (!management || !listInstances || !updateInstance) return json(503, { code: -1, message: "Plugin management is unavailable." });
+              let value: unknown;
+              if (action === "instances.update") {
+                assertCurrent(); dispatched = true;
+                value = await updateInstance.call(management, input.id!, { expectedRevision: input.expectedRevision!, enabled: input.enabled! }, invocation);
+              } else value = await listInstances.call(management, invocation);
+              assertCurrent();
+              return { ...json(200, { code: 0, data: value }), ...(mutation ? { mutationOutcome: "unknown" as const } : {}) };
+            }
             if (action === "reconciliation.read") return json(200, { code: 0, data: status() });
             if (action === "reconciliation.run") {
               if (!reconcile) return { ...json(405, { code: -1, message: "Method not allowed." }), mutationOutcome: "not_started" };
@@ -113,7 +125,9 @@ export function createPluginCatalogOwner(context: PluginCatalogApiContext, readO
             assertCurrent();
             if (error instanceof ApiContractError) throw error;
             const unavailable = action === "catalog.read";
-            const statusCode = unavailable ? 503 : action === "modules.read" && (error as NodeJS.ErrnoException)?.code === "ENOENT" ? 404 : 500;
+            const managementStatus = action.startsWith("instances.") ? (error as { status?: number }).status : undefined;
+            const statusCode = managementStatus && [400, 404, 409].includes(managementStatus) ? managementStatus
+              : unavailable ? 503 : action === "modules.read" && (error as NodeJS.ErrnoException)?.code === "ENOENT" ? 404 : 500;
             return { ...json(statusCode, { code: -1, message: unavailable ? "Plugin catalog presentation is unavailable."
               : error instanceof Error ? error.message : String(error) }), ...(mutation ? { mutationOutcome: dispatched ? "unknown" as const : "not_started" as const } : {}) };
           }

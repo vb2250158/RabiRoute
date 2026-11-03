@@ -4,6 +4,8 @@
 
 # 远端智能体接入与更新
 
+完整 Rabi 主机互联使用已有 RabiLink 连接，源码已接入主机自身的终端、文件、Windows 窗口与截图，以及跨主机 Agent 投递边界。无需再安装自连接的连接器。下文安装步骤用于轻量电脑客户端；平台和验收范围见[电脑能力](remote-computer-client.md)与[主机架构](connected-host-agent-architecture.md)。
+
 连接器 0.2.11 修复升级后残留旧版生成启动器的问题。新候选仅在指针与身份确认、提交围栏打开后，使用自己的代码原子更新启动器，再报告成功；失败由稳定 owner 恢复，不重放任务。准备或连接阶段保留原启动器。
 
 Windows 连接器 0.2.10 修复状态／恢复命令在状态历史超过 512 字符时失败的问题。握手仍单独校验；已鉴权回执支持完整的有界历史及分块 Unicode 文本，不再因状态变长拒绝查询或恢复命令。
@@ -197,6 +199,14 @@ node rabi-agent.mjs --api POST /api/agent/send --agent-type codex --id "<FULL_SE
 `fileSha256` 为使用 `fileId` 时的必填项，必须取上传 `data.sha256`（64 位小写十六进制），防止 24 小时过期后 UUID 复用使旧引用换成其它内容。发送 callback 在 lease 内核对实际 hash，不匹配拒发。
 
 上传者用于审计与计量；其他已鉴权实例也可读取并引用主机上的同一上传文件。单文件上限 2 GiB、总量 4 GiB、最多 100 个文件、TTL 24 小时、上传总并发 4。按原 uploadId 和 SHA-256 核验，不自动重发文件或补发正文；实际文件与渠道回执见 [Agent 接口](rabi-agent-interfaces.md)。
+
+## 原投递回执核对诊断
+
+`reconcile_prepared_delivery` 只读取原回执及原任务的接受证据，不发送正文。扫描 Codex 历史记录时，在读取前和接受匹配证据或结束扫描时核对当前授权；无关历史消息不逐条触发网络授权查询。原 ID、完整正文 hash、执行参数 hash、端点代际及持久化前后的授权核对保持不变。
+
+连接器在配置文件同级的 `logs/management-diagnostics.json` 保存最近 16 个 prepared/reconcile 管理请求的诊断快照，包含 management `requestId`、`deliveryId`、操作、阶段、次数、耗时及固定结果值。阶段区分队列、原 receipt owner 等待、模块加载、授权、回执读取、原任务证据恢复和响应。可通过正式文件读取接口查看；不保存凭据、正文或任意错误文本，日志失败不改变原操作。
+
+该文件是有界观测快照，连接器新进程首次记录时开始新的窗口。它不是投递账本或接受回执；文件或记录缺失不能证明未发送。由原发送端或接收端以真实来源对同一 `deliveryId` 调用正式 `reconcile_delivery`，按返回证据判断，不能换 ID 补发。
 
 ## API
 

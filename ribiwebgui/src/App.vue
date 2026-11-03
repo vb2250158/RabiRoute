@@ -52,6 +52,8 @@ const roleCreation = ref<InstanceType<typeof RoleManagementActions> | null>(null
 const showRoleSwitcher = computed(() => isRolePage(route.path));
 const roleSourceQuery = computed(() => roles.sourceDeviceId ? { source: roles.sourceDeviceId } : {});
 const embeddedPlanView = computed(() => Boolean(route.params.planId) && window.self !== window.top);
+const isPluginManagementPage = computed(() => route.path === "/plugins");
+const bootstrapManagerConnected = ref(false);
 const { t } = useI18n();
 const vuetifyTheme = useTheme();
 const interfaceThemePreference = ref<WebThemeId>("system");
@@ -149,8 +151,10 @@ const utilityNavItems = computed(() => navigationGroups.value.utility.map(item =
 const footerNavItems = computed(() => navigationGroups.value.footer.map(item => ({ ...item, title: t(item.title) })));
 const sidebarPrimaryCommands = computed(() => webCommandsInSlot(pluginCatalogStore.commands.value, "sidebar-footer-primary"));
 const sidebarCommands = computed(() => webCommandsInSlot(pluginCatalogStore.commands.value, "sidebar-footer"));
-const topbarCommands = computed(() => webCommandsInSlot(pluginCatalogStore.commands.value, "topbar-primary").filter(command => command.handlerId !== "web.add-route" || route.path.startsWith("/routes")));
-const managerConnected = computed(() => !store.managerError);
+const topbarCommands = computed(() => webCommandsInSlot(pluginCatalogStore.commands.value, "topbar-primary").filter(command =>
+  (command.handlerId !== "web.add-route" || route.path.startsWith("/routes"))
+  && (!isPluginManagementPage.value || command.handlerId !== "web.save-page")));
+const managerConnected = computed(() => isPluginManagementPage.value ? bootstrapManagerConnected.value : !store.managerError);
 const activePageSaveAction = computed(() => pageSaveAction.value);
 const hasUnsavedChanges = computed(() => store.dirty || roles.dirty || activePageSaveAction.value?.dirty.value === true);
 const pageTitle = computed(() => t(String(route.meta.title || "RibiWebGUI")));
@@ -214,6 +218,16 @@ async function loadGatewayEditorInBackground(): Promise<void> {
   }
   void ensurePageDiagnostics();
 }
+
+async function refreshManagementMetadata(): Promise<void> {
+  try { await store.loadMeta(true); bootstrapManagerConnected.value = true; }
+  catch { bootstrapManagerConnected.value = false; }
+}
+
+watch(() => route.path, (path, previous) => {
+  if (path === "/plugins") void refreshManagementMetadata();
+  else if (previous === "/plugins") void store.loadRouteSummaries().then(() => loadGatewayEditorInBackground());
+});
 
 
 let roleNavigationVersion = 0;
@@ -306,7 +320,8 @@ const releaseRoleGuard = router.beforeEach((to, from) => {
 
 onMounted(() => {
   void loadInterfaceTheme();
-  void store.loadRouteSummaries().then(() => loadGatewayEditorInBackground());
+  if (isPluginManagementPage.value) void refreshManagementMetadata();
+  else void store.loadRouteSummaries().then(() => loadGatewayEditorInBackground());
   window.addEventListener("beforeunload", beforeUnload);
   window.addEventListener(INTERFACE_THEME_CHANGED, onInterfaceThemeChanged);
   systemThemeQuery.addEventListener("change", onSystemThemeChanged);
@@ -356,7 +371,8 @@ onBeforeUnmount(() => {
 });
 
 async function refresh(): Promise<void> {
-  await Promise.all([store.load(), roles.loadCatalog(), pluginCatalogStore.refresh()]);
+  if (isPluginManagementPage.value) await Promise.all([refreshManagementMetadata(), pluginCatalogStore.refresh()]);
+  else await Promise.all([store.load(), roles.loadCatalog(), pluginCatalogStore.refresh()]);
   if (showRoleSwitcher.value && (!roles.dirty || window.confirm(translateText("放弃当前角色未保存修改并刷新？")))) await roles.load();
   await refreshWebPluginModulesSafely();
   const routeId = typeof route.meta.pluginRouteId === "string" ? route.meta.pluginRouteId : "";
@@ -445,6 +461,9 @@ function selectGateway(id: string): void {
             @click="executeCommand(command)"
           >
             {{ t(command.label) }}
+          </v-btn>
+          <v-btn block class="sidebar-footer-btn" variant="text" prepend-icon="mdi-puzzle-outline" to="/plugins">
+            {{ t("插件") }}
           </v-btn>
           <v-btn block class="sidebar-footer-btn" variant="text" prepend-icon="mdi-github" :href="store.meta.githubUrl" target="_blank">
             GitHub
@@ -540,7 +559,7 @@ function selectGateway(id: string): void {
     </v-app-bar>
 
     <v-main :class="{ 'navigation-collapsed': !drawer }">
-      <v-alert v-if="store.error" type="error" variant="tonal" class="ma-4">{{ store.error }}</v-alert>
+      <v-alert v-if="store.error && !isPluginManagementPage" type="error" variant="tonal" class="ma-4">{{ store.error }}</v-alert>
       <v-btn v-if="store.saveState === 'conflict'" class="ma-4" @click="store.reloadSelectedGateway().catch(error => { store.error = String(error); })">{{ t("重新加载当前路线") }}</v-btn>
       <v-alert v-else-if="store.saveMessage" :type="store.saveState === 'saved' ? 'success' : 'info'" variant="tonal" class="ma-4" role="status">{{ t(store.saveMessage) }}</v-alert>
       <v-alert v-if="store.routeSelectionMissing && !showRoleSwitcher" type="error" variant="tonal" class="ma-4">

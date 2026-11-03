@@ -1,7 +1,8 @@
 import { readRolloutUserMessages } from "./rolloutReceipt.js";
 import { agentDeliveryPromptHash } from "./store.js";
 import { deliveryIdFromPrompt } from "../shared/deliveryIdentity.js";
-import type { PreparedEndpointDelivery, EndpointDeliveryReceipt } from "./endpointDelivery.js";
+import type { EndpointDeliveryReceipt } from "./endpointDelivery.js";
+import type { NativeOwnerDelivery } from "./nativeOwnerDelivery.js";
 import { sendCodexThreadMessage } from "../codexRuntime.js";
 import { CodexDesktopPromptNotSentError, codexDesktopLateStartAccepted, readCodexDesktopThread } from "../codexDesktopBridge.js";
 import { EndpointDeliveryNotSentError } from "./deliveryFailure.js";
@@ -19,7 +20,7 @@ export function assertEndpointOwnerDirectory(cwd: string | undefined): asserts c
   }
 }
 
-export async function recoverEndpointOwnerReceipt(delivery: PreparedEndpointDelivery, assertAuthorized: () => void | Promise<void>): Promise<EndpointDeliveryReceipt | undefined> {
+export async function recoverEndpointOwnerReceipt(delivery: NativeOwnerDelivery, assertAuthorized: () => void | Promise<void>): Promise<EndpointDeliveryReceipt | undefined> {
   await assertAuthorized();
   if (delivery.target.provider !== "codex") return undefined;
   if (codexDesktopLateStartAccepted(delivery.target.sessionId, delivery.deliveryId)) {
@@ -51,7 +52,7 @@ export async function recoverEndpointOwnerReceipt(delivery: PreparedEndpointDeli
 }
 
 /** Executes the already-rendered Manager envelope on the exact existing owner; never resolves/replaces it. */
-export async function executeEndpointOnOwner(delivery: PreparedEndpointDelivery, options: Pick<AgentThreadRequestOptions, "dshBaseUrl"> & { allowedWorkspaces?: string[] },
+export async function executeEndpointOnOwner(delivery: NativeOwnerDelivery, options: Pick<AgentThreadRequestOptions, "dshBaseUrl"> & { allowedWorkspaces?: string[] },
   assertAuthorized: () => void | Promise<void>, transport: { sendCodex: typeof sendCodexThreadMessage } = { sendCodex: sendCodexThreadMessage }): Promise<{ threadId: string; action: string; transport: string }> {
   const endpoint = delivery.target;
   const { cwd, model, reasoningEffort, sandbox, dshDeliveryMode } = delivery.executionOptions;

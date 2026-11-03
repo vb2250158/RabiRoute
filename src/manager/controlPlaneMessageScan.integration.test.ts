@@ -4,13 +4,17 @@ import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import test from "node:test";
+import test, { before } from "node:test";
 import { fileURLToPath } from "node:url";
+// Register this owner's cleanup on the test file, rather than inside its before-hook.
+import { pluginPackagesCandidateForTests } from "./diagnosticsCandidate.fixture.js";
 
 const WORKER_ARGUMENT = "--rabiroute-scan-history-worker";
 const SCAN_READ_MARKER = "RABIROUTE_TEST_MAIN_THREAD_HISTORY_READ";
 const START_MANAGER_RETURNED_MARKER = "RABIROUTE_TEST_START_MANAGER_RETURNED";
 const READY_PREFIX = "RABIROUTE_MANAGER_READY:";
+const SCAN_PLUGIN_IDS = ["core", "gateway-runtime", "message-adapter-control"].map(name => `io.rabiroute.manager.${name}`)
+  .concat("io.rabiroute.endpoint.webhook");
 
 type ReadyDescriptor = Readonly<{
   protocolVersion: 1;
@@ -93,6 +97,10 @@ if (process.argv.includes(WORKER_ARGUMENT)) {
     process.exitCode = 1;
   });
 } else {
+  let pluginCandidateRoot: string;
+  before(async () => {
+    pluginCandidateRoot = await pluginPackagesCandidateForTests(SCAN_PLUGIN_IDS);
+  }, { timeout: 30_000 });
   test("message-adapter scan does not read message history on the Manager HTTP thread", { timeout: 120_000 }, async t => {
     const fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-manager-message-scan-"));
     const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -111,9 +119,8 @@ if (process.argv.includes(WORKER_ARGUMENT)) {
     for (const file of ["presets.json", "scene-rules.json", "observation.json"]) {
       fs.copyFileSync(path.join(packageRoot, "packages/rabi-companion", file), path.join(companionFixtureRoot, file));
     }
-    for (const name of ["core", "gateway-runtime", "message-adapter-control"]) {
-      const pluginId = `io.rabiroute.manager.${name}`;
-      fs.cpSync(path.join(packageRoot, "dist/plugins/packages", pluginId),
+    for (const pluginId of SCAN_PLUGIN_IDS) {
+      fs.cpSync(path.join(pluginCandidateRoot, "packages", pluginId),
         path.join(fixturePackageRoot, "dist/plugins/packages", pluginId), { recursive: true });
     }
     const stateRoot = path.join(fixtureRoot, "state");
@@ -125,9 +132,9 @@ if (process.argv.includes(WORKER_ARGUMENT)) {
     fs.mkdirSync(stateRoot, { recursive: true });
     fs.writeFileSync(profilePath, `${JSON.stringify({
       schemaVersion: 2,
-      readyRequires: ["manager.message-adapter-control@1"],
-      instances: ["core", "gateway-runtime", "message-adapter-control"].map(name => ({
-        id: `manager:${name}`, package: `io.rabiroute.manager.${name}`,
+      readyRequires: ["manager.message-adapter-control@1", "endpoint.webhook@1"],
+      instances: SCAN_PLUGIN_IDS.map(pluginId => ({
+        id: pluginId.replace(/^io\.rabiroute\.(manager|endpoint)\./, "$1:"), package: pluginId,
         version: "1.0.0", enabled: true, config: {}, grants: []
       }))
     }, null, 2)}\n`, "utf8");
@@ -221,7 +228,9 @@ if (process.argv.includes(WORKER_ARGUMENT)) {
     assert.equal(health.status, 200);
     assert.ok(performance.now() - startedAt < 750, "scan blocked the health response");
     const scan = await scanPromise;
-    assert.equal(scan.status, 200, await scan.text());
+    const scanText = await scan.text();
+    assert.equal(scan.status, 200, scanText);
+    assert.equal(JSON.parse(scanText).adapters.webhook.type, "webhook", "the original route must use a real published scan provider");
     assert.ok(!stdout.includes(SCAN_READ_MARKER), "HTTP scan synchronously probed message history");
 
     const shutdown = await fetch(`${ready.baseUrl}/_rabiroute/host/shutdown`, {

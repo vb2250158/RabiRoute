@@ -5,12 +5,102 @@ import path from "node:path";
 import test, { type TestContext } from "node:test";
 import { loadPluginProfile, parsePluginProfile, PluginPackageCatalog } from "./profile.js";
 import { GenerationRuntime, RequiredPluginCapabilitiesUnavailableError } from "./generationRuntime.js";
+import type { LoadedPluginPackage } from "./packageLoader.js";
 
 const profile = {
   schemaVersion: 2,
   readyRequires: ["manager.core@1"],
   instances: [{ id: "test:source", package: "io.test.source", version: "1.0.0", enabled: true, config: {}, grants: ["network.local"] }]
 };
+
+function cancellationGate() {
+  let resolve!: () => void, reject!: (error: Error) => void;
+  const promise = new Promise<void>((yes, no) => { resolve = yes; reject = no; });
+  return { promise, resolve, reject };
+}
+
+function controlledPackage(id: string): LoadedPluginPackage {
+  return { sourceRoot: `C:/synthetic-profile/${id}`, runtimeRoot: `C:/synthetic-runtime/${id}`, revision: id,
+    execution: "in_process", entryPath: `C:/synthetic-runtime/${id}/manager.mjs`,
+    manifest: { schemaVersion: 2, id, version: "1.0.0", entries: { manager: { execution: "in_process", module: "./manager.mjs" } },
+      provides: [], requires: [], optional: [], permissions: [] } };
+}
+
+function controlledInput(t: TestContext, names: string[]) {
+  const catalog = new PluginPackageCatalog(["C:/synthetic-profile"], { loading: { maxConcurrency: 2 } });
+  t.after(() => catalog.dispose());
+  return { profilePath: "synthetic-profile.json", runtimeRoot: "C:/synthetic-runtime", host: "manager" as const,
+    profile: parsePluginProfile({ schemaVersion: 2, readyRequires: [], instances: names.map(name => ({
+      id: name, package: `io.test.${name}`, version: "1.0.0", enabled: true, config: {}, grants: []
+    })) }), packageCatalog: catalog };
+}
+
+test("a cancelled profile producer enters no package I/O", async t => {
+  const input = controlledInput(t, ["one"]), denied = new Error("original lifecycle stopped before metadata");
+  t.mock.method(input.packageCatalog, "loadPackage", async () => { assert.fail("cancelled producer cannot begin metadata"); });
+  await assert.rejects(loadPluginProfile({ ...input, assertCurrent() { throw denied; } }), error => error === denied);
+});
+
+test("profile cancellation stops future scheduling and fallback but joins both entered metadata lanes before rejecting", async t => {
+  const input = controlledInput(t, ["one", "two", "later"]);
+  t.mock.method(input.packageCatalog, "loadPackage", async (id: string) => controlledPackage(id));
+  const previous = await loadPluginProfile(input);
+  const first = cancellationGate(), second = cancellationGate();
+  t.after(() => { first.resolve(); second.resolve(); });
+  const entered: string[] = [], completed = [false, false];
+  t.mock.method(input.packageCatalog, "loadPackage", async (id: string) => {
+    entered.push(id);
+    const lane = id === "io.test.one" ? 0 : 1;
+    assert.notEqual(id, "io.test.later", "shutdown cannot schedule the next package");
+    try { await (lane === 0 ? first.promise : second.promise); return controlledPackage(id); }
+    finally { completed[lane] = true; }
+  });
+  t.mock.method(input.packageCatalog, "assertPackageExecutionAllowed", async () => { assert.fail("shutdown must not enter previous-package fallback I/O"); });
+  let stopped = false, settled = false, activations = 0;
+  const denied = new Error("original Manager shutdown fence");
+  const runtime = new GenerationRuntime({ host: "manager", executor: { prepare: async () => ({ activate() { activations++; } }) } });
+  t.after(() => runtime.dispose());
+  const original = runtime.current();
+  const loading = loadPluginProfile({ ...input, previous, assertCurrent() { if (stopped) throw denied; } })
+    .then(loaded => runtime.switch(loaded.candidates));
+  void loading.then(() => { settled = true; }, () => { settled = true; });
+  const rejected = assert.rejects(loading, error => error === denied);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(entered, ["io.test.one", "io.test.two"]);
+  stopped = true;
+  first.reject(new Error("original metadata job cancelled by its catalog owner"));
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(completed, [true, false]);
+  assert.equal(settled, false, "the other lane still owns its original I/O");
+  assert.deepEqual(entered, ["io.test.one", "io.test.two"]);
+  second.resolve(); await rejected;
+  assert.deepEqual(completed, [true, true]);
+  assert.equal(activations, 0); assert.equal(runtime.current(), original);
+});
+
+test("cancellation during previous-package admission joins that I/O and preserves the lifecycle rejection", async t => {
+  const input = controlledInput(t, ["one"]);
+  t.mock.method(input.packageCatalog, "loadPackage", async (id: string) => controlledPackage(id));
+  const previous = await loadPluginProfile(input);
+  const entered = cancellationGate(), admission = cancellationGate();
+  t.after(admission.resolve);
+  t.mock.method(input.packageCatalog, "loadPackage", async () => { throw new Error("ordinary bad package update"); });
+  let completed = false, stopped = false, settled = false;
+  t.mock.method(input.packageCatalog, "assertPackageExecutionAllowed", async () => {
+    entered.resolve();
+    try { await admission.promise; } finally { completed = true; }
+  });
+  const denied = new Error("original lifecycle stopped during fallback");
+  const loading = loadPluginProfile({ ...input, previous, assertCurrent() { if (stopped) throw denied; } });
+  void loading.then(() => { settled = true; }, () => { settled = true; });
+  const rejected = assert.rejects(loading, error => error === denied);
+  await entered.promise; stopped = true;
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(settled, false); assert.equal(completed, false);
+  admission.reject(new Error("underlying admission I/O also failed"));
+  await rejected;
+  assert.equal(completed, true);
+});
 
 test("parsePluginProfile rejects the removed plugins profile shape", () => {
   assert.throws(() => parsePluginProfile({ schemaVersion: 1, plugins: [] }), /unsupported fields/);

@@ -11,7 +11,7 @@ const strings = { anyOf: [{ type: 'array', items: { type: 'string' } }, { type: 
 /** Structure only: adapter-owned semantic validation remains in the original driver and ledger. */
 const threadRequest = { type: 'object', properties: {
   action: { enum: ['list', 'read', 'reconcile_delivery', 'open', 'resolve', 'create', 'rename', 'send'] },
-  agentAdapter: { enum: [...agentAdapterTypes, '', null] }, agentTargetId: text, instanceBinding: { anyOf: [{ type: 'object', required: ['instanceId', 'agentId'], properties: { instanceId: text, agentId: text } }, { type: 'null' }] },
+  agentAdapter: { enum: [...agentAdapterTypes, '', null] }, agentTargetId: text, ledgerOwnerDeviceId: text, instanceBinding: { anyOf: [{ type: 'object', required: ['instanceId', 'agentId'], properties: { instanceId: text, agentId: text, ownerDeviceId: text } }, { type: 'null' }] },
   query: text, limit: true, offset: true, threadId: text, deliveryId: text, title: text, prompt: text, cwd: text,
   createIfMissing: true, lookupMode: true, sandbox: true, model: text, reasoningEffort: true, imagePaths: strings,
   dshBaseUrl: text, dshAgentPreset: text, dshDeliveryMode: true, grokBotDelivery: { anyOf: [{ type: 'object', properties: { deliveryType: text, sendMode: text, senderAgentId: text } }, { type: 'null' }] },
@@ -56,7 +56,7 @@ export function createAgentThreadControlOperations(owner: AgentThreadControlOwne
       contractVersion: '1.0.0', method: 'GET', pathTemplate: '/api/agent/deliveries/caller/:callerDeliveryId', exposure: 'public', transport: 'http',
       description: 'Read the original delivery reservation scoped to the current authenticated source and stable caller ID. Does not dispatch.',
       request: { path: { type: 'object', required: ['callerDeliveryId'], properties: { callerDeliveryId: { type: 'string', minLength: 1 } }, additionalProperties: false },
-        query: { type: 'object', properties: { sourceThreadId: text, sourceAgentType: text, agentAdapter: text }, additionalProperties: false },
+        query: { type: 'object', properties: { sourceThreadId: text, sourceAgentType: text, agentAdapter: text, inReplyToRequestId: text, ledgerOwnerDeviceId: text }, additionalProperties: false },
         headers: ignored, body: { kind: 'none' } },
       responses: Object.fromEntries([200, 400, 404, 409, 503].map(status => [String(status), { mediaType: 'application/json', schema: {
         type: 'object', required: ['code'], properties: { code: { type: 'integer' }, data: { type: 'object' }, message: { type: 'string' },
@@ -71,6 +71,8 @@ export function createAgentThreadControlOperations(owner: AgentThreadControlOwne
         const sourceAgentType = input.url.searchParams.get('sourceAgentType') as AgentThreadRequest['sourceAgentType'] ?? undefined;
         const adapter = input.url.searchParams.get('agentAdapter') as AgentThreadRequest['agentAdapter'] ?? undefined;
         return toResult(await prepared.lookupCallerDelivery(input.path.callerDeliveryId!, { sourceThreadId, sourceAgentType,
+          inReplyToRequestId: input.url.searchParams.get('inReplyToRequestId') ?? undefined,
+          ledgerOwnerDeviceId: input.url.searchParams.get('ledgerOwnerDeviceId') ?? undefined,
           ...(adapter && sourceThreadId ? { messageSource: { type: 'agent', agentAdapter: adapter, sessionId: sourceThreadId, sessionName: sourceThreadId } } : {}) }));
       } catch (error) { return toResult({ status: 400, body: { code: -1, message: error instanceof Error ? error.message : String(error) } }); }
     }

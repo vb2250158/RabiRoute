@@ -25,7 +25,9 @@ const registration = registry.registerOperations("manager:fixture-stream", [{ co
     // Finite after-await fault: return after deadline before its timer gets a turn.
     while (performance.now() - enteredAt < 75) { /* Owned child only. */ }
   } else if (mode === "live-getter-finite") {
-    await new Promise(resolve => setTimeout(resolve, 20));
+    // Cross the asynchronous owner boundary without an unrelated timer consuming
+    // the request's live window before the getter under test has started.
+    await Promise.resolve();
   } else await gate;
   const stream: ApiOperationStream = {
     frames: (async function* () { try { yield Buffer.from("discarded cleanup frame"); } finally { drained = true; } })(),

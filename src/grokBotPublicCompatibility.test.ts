@@ -4,7 +4,7 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { handleAgentSend, prepareAgentSendRequest, type AgentSendRequest } from "./agentSend.js";
+import { handleAgentSend, prepareAgentSendRequest, type AgentSendRequest } from "./endpointEgress.fixture.js";
 import { normalizeGatewayDefinition, primaryMessageProcessingAgentEnabled, type GatewayDefinition } from "./shared/gatewayConfigModel.js";
 import { resolvePrimaryAgentTarget } from "./shared/routeAgentTargets.js";
 

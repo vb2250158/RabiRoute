@@ -2,8 +2,8 @@ import { createHash } from "node:crypto";
 import type { Stats } from "node:fs";
 import fs, { type FileHandle } from "node:fs/promises";
 import path from "node:path";
-import { Readable, Transform } from "node:stream";
-import { pipeline } from "node:stream/promises";
+import { PassThrough, Readable, Transform } from "node:stream";
+import { finished, pipeline } from "node:stream/promises";
 import { StringDecoder } from "node:string_decoder";
 import type { ApiHttpProxyInput } from "./apiOperationContract.js";
 import { WEB_PATCH_HASH, WEB_PATCH_PREFIX, webPatchPath, type WebPatchManifest } from "./webPatchCatalog.js";
@@ -118,12 +118,14 @@ export class NativeWebguiStaticOwner {
   }
 
   private async sendFile(file: OpenFile, input: ApiHttpProxyInput, headers: Record<string, string>, revision?: string): Promise<void> {
+    let source: Readable | undefined, pump: Transform | undefined;
+    let transfer: Promise<void> | undefined, responseFinished: Promise<void> | undefined;
     try {
       await this.assertFile(file, input);
       input.prepareResponse(200, headers); input.assertCurrent(); input.response.writeHead(200, headers);
       if (input.request.method === "HEAD") { input.response.end(); return; }
       const owner = this;
-      const source = Readable.from((async function* () {
+      source = Readable.from((async function* () {
         let position = 0;
         while (true) {
           await owner.assertFile(file, input);
@@ -134,9 +136,21 @@ export class NativeWebguiStaticOwner {
           position += bytesRead; yield buffer.subarray(0, bytesRead);
         }
       })(), { highWaterMark: 1 });
-      if (revision) await pipeline(source, documentRewrite(revision), input.response, { signal: input.signal });
-      else await pipeline(source, input.response, { signal: input.signal });
-    } finally { await this.close(file); }
+      pump = revision ? documentRewrite(revision) : new PassThrough({ highWaterMark: 64 * 1024 });
+      responseFinished = finished(input.response, { cleanup: true });
+      void responseFinished.catch(() => {});
+      // Keep pipeline's producer listeners on its own stream, while joining the original HTTP completion.
+      transfer = pipeline(source, pump, { signal: input.signal });
+      pump.pipe(input.response);
+      await Promise.all([transfer, responseFinished]);
+    } catch (error) {
+      if (input.response.headersSent && !input.response.destroyed) input.response.destroy();
+      throw error;
+    } finally {
+      pump?.unpipe(input.response); pump?.destroy(); source?.destroy();
+      await Promise.allSettled([...(transfer ? [transfer] : []), ...(responseFinished ? [responseFinished] : [])]);
+      await this.close(file);
+    }
   }
 
   private send(input: ApiHttpProxyInput, status: number, body: string, headers: Record<string, string>): void {

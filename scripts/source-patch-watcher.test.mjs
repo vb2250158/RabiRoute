@@ -23,6 +23,31 @@ async function until(predicate, failure) {
   }
 }
 
+/** Fake publication still requires the real watcher contract: verified candidate bytes and origin before admission. */
+function withLocalCandidateProvenance(service, root, expectedCandidate) {
+  const localCandidates = [];
+  const origins = new Map();
+  const assertRecorded = sha256 => assert.ok(origins.has(sha256), `Candidate ${sha256} must have local provenance before publication.`);
+  return {
+    ...service,
+    localCandidates,
+    async recordLocalCandidate(sha256, sourceRoot) {
+      assert.equal(sourceRoot, await fs.realpath(root));
+      if (expectedCandidate !== undefined) assert.equal(sha256, expectedCandidate);
+      else {
+        assert.match(sha256, /^[a-f0-9]{64}$/);
+        const bytes = await fs.readFile(path.join(root, "candidates", `${sha256}.json`));
+        assert.equal(createHash("sha256").update(bytes).digest("hex"), sha256);
+      }
+      localCandidates.push({ sha256, sourceRoot });
+      origins.set(sha256, sourceRoot);
+    },
+    ...(service.publish ? { publish: async request => { assertRecorded(request.candidateSha256); return service.publish(request); } } : {}),
+    ...(service.publishBundle ? { publishBundle: async request => { request.entries.forEach(entry => assertRecorded(entry.candidateSha256)); return service.publishBundle(request); } } : {}),
+    ...(service.ensureModule ? { ensureModule: async (id, sha256, ...args) => { assertRecorded(sha256); return service.ensureModule(id, sha256, ...args); } } : {})
+  };
+}
+
 test("external source watcher commits repeated code and resource versions without reusing old receipts", { timeout: 45000 }, async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "rabi-watcher-service-"));
   const sourceRoot = path.join(root, "source");
@@ -91,10 +116,10 @@ test("source watcher compiles and publishes a changed declared module", async ()
   const outputDirectory = path.join(root, "candidates");
   const published = [];
   const errors = [];
-  const service = {
+  const service = withLocalCandidateProvenance({
     status: () => ({ modules: [{ id: "watched", state: "ready", uncertainOperation: undefined, activeCandidateSha256: "active-candidate", active: { snapshot: { revision: 0 } } }] }),
     publish: async request => { published.push(request); return { state: "committed" }; },
-  };
+  }, root);
   const runtime = { current: () => ({ applicationGenerationId: "app", managerInstanceId: "manager", id: "plugin" }) };
   let watcher;
   try {
@@ -111,6 +136,7 @@ test("source watcher compiles and publishes a changed declared module", async ()
     assert.deepEqual(errors, []);
     assert.equal(published[0].moduleId, "watched");
     assert.equal(published[0].expectedRevision, 0);
+    assert.deepEqual(service.localCandidates.at(-1), { sha256: published[0].candidateSha256, sourceRoot: await fs.realpath(root) });
     assert.match(published[0].operationId, /^auto-[a-f0-9]{32}$/);
     assert.equal(typeof published[0].contract.resources["source-patches/resource.json"], "string");
     assert.equal((await fs.readdir(outputDirectory)).length, 1);
@@ -130,7 +156,7 @@ test("source watcher coalesces rapid saves and applies the latest candidate seri
   const sourcePath = path.join(sourceDirectory, "module.ts");
   const outputDirectory = path.join(root, "candidates");
   const published = [];
-  const service = { status: () => ({ modules: [{ id: "watched", state: "ready", uncertainOperation: undefined, activeCandidateSha256: "active", active: { snapshot: { revision: published.length } } }] }), publish: async request => { published.push(request); await new Promise(resolve => setTimeout(resolve, 250)); return { state: "committed" }; } };
+  const service = withLocalCandidateProvenance({ status: () => ({ modules: [{ id: "watched", state: "ready", uncertainOperation: undefined, activeCandidateSha256: "active", active: { snapshot: { revision: published.length } } }] }), publish: async request => { published.push(request); await new Promise(resolve => setTimeout(resolve, 250)); return { state: "committed" }; } }, root);
   const runtime = { current: () => ({ applicationGenerationId: "app", managerInstanceId: "manager", id: "plugin" }) };
   let watcher;
   try {
@@ -157,7 +183,7 @@ test("source watcher preserves a code change when a resource save arrives during
   const published = [];
   let release;
   let watcher;
-  const service = { status: () => ({ modules: [{ id: "watched", state: "ready", uncertainOperation: undefined, activeCandidateSha256: "active", active: { snapshot: { revision: published.length } } }] }), publish: async request => { published.push(request); await new Promise(resolve => { release = resolve; }); return { state: "committed" }; } };
+  const service = withLocalCandidateProvenance({ status: () => ({ modules: [{ id: "watched", state: "ready", uncertainOperation: undefined, activeCandidateSha256: "active", active: { snapshot: { revision: published.length } } }] }), publish: async request => { published.push(request); await new Promise(resolve => { release = resolve; }); return { state: "committed" }; } }, root);
   const runtime = { current: () => ({ applicationGenerationId: "app", managerInstanceId: "manager", id: "plugin" }) };
   try {
     await fs.mkdir(sourceDirectory, { recursive: true });
@@ -178,15 +204,15 @@ test("source watcher preserves a code change when a resource save arrives during
 });
 
 test("source watcher skips stale discovery groups before compiling and retries independent modules", async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "rabi-watcher-stale-discovery-"));
+  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "rabi-watcher-stale-discovery-")));
   const definitions = ["bad", "good"].map(id => ({ id, source: `${id}.ts` }));
   const compiled = [];
   const registered = [];
   const errors = [];
-  const service = {
+  const service = withLocalCandidateProvenance({
     status: () => ({ modules: [] }),
     ensureModule: async id => { registered.push(id); },
-  };
+  }, root, "good-candidate");
   const compiler = { close: async () => undefined };
   const build = async ({ sourcePath }) => {
     const id = path.basename(sourcePath, ".ts");
@@ -209,11 +235,13 @@ test("source watcher skips stale discovery groups before compiling and retries i
     assert.deepEqual(compiled, []);
     assert.deepEqual([...watcher.pending], ["bad", "good"]);
     assert.deepEqual(registered, []);
+    assert.deepEqual(service.localCandidates, []);
     clearTimeout(watcher.timer);
     watcher.timer = undefined;
     await watcher.apply();
     assert.deepEqual(compiled, ["bad", "good"]);
     assert.deepEqual(registered, ["good"]);
+    assert.deepEqual(service.localCandidates, [{ sha256: "good-candidate", sourceRoot: await fs.realpath(root) }]);
     assert.deepEqual(errors, ["Invalid independent source."]);
     assert.equal(watcher.pending.size, 0);
   } finally { watcher.stop(); await fs.rm(root, { recursive: true, force: true }); }
@@ -270,11 +298,11 @@ test("shared resource atomic replacement updates every declaring module and keep
   const definitions = ["first", "second"].map(id => ({ id, source: "source-patches/module.ts", resources: ["source-patches/resource.txt"] }));
   const published = [];
   const errors = [];
-  const service = {
+  const service = withLocalCandidateProvenance({
     status: () => ({ modules: definitions.map(({ id }) => ({ id, state: "ready", activeCandidateSha256: "initial", active: { snapshot: { revision: 0 } } })) }),
     publish: async () => { assert.fail("Shared resource updates must use the managed bundle transaction."); },
     publishBundle: async request => { published.push(...request.entries.map(entry => ({ ...entry, operationId: request.operationId }))); return { state: "committed" }; },
-  };
+  }, root);
   const runtime = { current: () => ({ applicationGenerationId: "app", managerInstanceId: "manager", id: "plugin" }) };
   let watcher;
   try {
@@ -301,7 +329,7 @@ test("shared resource atomic replacement updates every declaring module and keep
 test("local TypeScript dependency changes trigger the owning module", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "rabi-dependency-watcher-"));
   const published = [];
-  const service = { status: () => ({ modules: [{ id: "watched", state: "ready", activeCandidateSha256: "active", active: { snapshot: { revision: published.length } } }] }), publish: async request => { published.push(request); return { state: "committed" }; } };
+  const service = withLocalCandidateProvenance({ status: () => ({ modules: [{ id: "watched", state: "ready", activeCandidateSha256: "active", active: { snapshot: { revision: published.length } } }] }), publish: async request => { published.push(request); return { state: "committed" }; } }, root);
   const runtime = { current: () => ({ applicationGenerationId: "app", managerInstanceId: "manager", id: "plugin" }) };
   let watcher;
   try {
@@ -324,10 +352,10 @@ test("catalog changes replace resource watches and invalid edits keep the last v
   const published = [];
   const errors = [];
   let active;
-  const service = {
+  const service = withLocalCandidateProvenance({
     status: () => ({ modules: [{ id: "watched", state: "ready", activeCandidateSha256: active?.candidateSha256 ?? "active", active: { snapshot: { revision: published.length, contract: active?.contract } } }] }),
     publish: async request => { active = request; published.push(request); return { state: "committed" }; },
-  };
+  }, root);
   const runtime = { current: () => ({ applicationGenerationId: "app", managerInstanceId: "manager", id: "plugin" }) };
   let watcher;
   try {

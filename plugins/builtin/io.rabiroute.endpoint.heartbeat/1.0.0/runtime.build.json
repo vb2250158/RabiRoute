@@ -1,0 +1,4 @@
+{
+  "source": "src/adapters/heartbeatAdapter.ts",
+  "factory": "createHeartbeatAdapter"
+}

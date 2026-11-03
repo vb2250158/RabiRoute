@@ -11,11 +11,19 @@ const entries = [
   ["src/bundles/builtin/message-adapter-control.ts", "io.rabiroute.manager.message-adapter-control"],
   ["src/bundles/builtin/persona.ts", "io.rabiroute.manager.persona"],
   ["src/bundles/builtin/speech.ts", "io.rabiroute.manager.speech"],
+  ["src/bundles/endpoints/speech.ts", "io.rabiroute.endpoint.speech"],
   ["src/bundles/builtin/video.ts", "io.rabiroute.manager.video"],
   ["src/bundles/builtin/performance.ts", "io.rabiroute.manager.performance"],
   ["src/bundles/builtin/diagnostics.ts", "io.rabiroute.manager.diagnostics"],
   ["src/bundles/builtin/desktop.ts", "io.rabiroute.manager.desktop"],
-  ["src/bundles/builtin/xiaomi-home.ts", "io.rabiroute.manager.xiaomi-home"]
+  ["src/bundles/builtin/xiaomi-home.ts", "io.rabiroute.manager.xiaomi-home"],
+  ["src/bundles/endpoints/napcat.ts", "io.rabiroute.endpoint.napcat"],
+  ["src/bundles/endpoints/heartbeat.ts", "io.rabiroute.endpoint.heartbeat"],
+  ["src/bundles/endpoints/wecom.ts", "io.rabiroute.endpoint.wecom"],
+  ["src/bundles/endpoints/weixin.ts", "io.rabiroute.endpoint.weixin"],
+  ["src/bundles/endpoints/feishu.ts", "io.rabiroute.endpoint.feishu"],
+  ["src/bundles/endpoints/webhook.ts", "io.rabiroute.endpoint.webhook"],
+  ["src/bundles/endpoints/rabilink.ts", "io.rabiroute.endpoint.rabilink"]
 ];
 for (const [source, pluginId] of entries) {
   const built = manifest[source];

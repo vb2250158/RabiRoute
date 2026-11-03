@@ -103,7 +103,11 @@ test("developer candidate overlays only built runtime layers and leaves the immu
     write(base, 'scripts/Invoke-RabiRouteDeveloperApply.ps1', 'obsolete activation budget\n');
     write(base, 'scripts/Publish-RabiRouteDeveloperCandidate.ps1', 'obsolete publisher budget\n');
     write(base, 'scripts/Install-HomeAssistantOs.ps1', 'obsolete visible recovery launcher\n');
-    fs.cpSync(new URL('../node_modules/ws', import.meta.url), path.join(base, 'node_modules/ws'), { recursive: true });
+    const wsSource = new URL('../node_modules/ws', import.meta.url);
+    const wsTarget = path.join(base, 'node_modules/ws');
+    fs.cpSync(wsSource, wsTarget, { recursive: true, dereference: true });
+    assert.equal(fs.lstatSync(wsTarget).isSymbolicLink(), false);
+    assert.deepEqual(fs.readFileSync(path.join(wsTarget, 'package.json')), fs.readFileSync(new URL('package.json', `${wsSource.href}/`)));
     writeKnowledgeRuntime(build);
     write(build, "dist/manager.js", "new manager\n");
     write(build, "dist/plugins/profiles/desktop.json", JSON.stringify({ instances: [{ package: "example.runtime", version: "1", enabled: true }] }));

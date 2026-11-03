@@ -1,4 +1,6 @@
 import { config, runtimeLayout } from "./config.js";
+import { readGatewayRouteBootSnapshot } from "./shared/gatewayRouteSnapshotBoot.js";
+import { mountGatewayRouteSnapshotRuntime } from "./runtime/gatewayRouteSnapshotReceiver.js";
 import { gatewayReadyLine, type GatewayEndpoint } from "./gatewayLifecycle.js";
 import type { GatewayMessageAdapterType } from "./adapters/messageAdapter.js";
 import { startGatewayPerformanceReporter } from "./performance/gatewayPerformanceReporter.js";
@@ -15,10 +17,8 @@ import {
   getBuiltinGatewayCordisRoot,
   type GatewayCordisRoot
 } from "./runtime/gatewayCordisRoot.js";
-import {
-  mountMessageAdapterRuntime,
-  type MessageAdapterRuntimeMount
-} from "./runtime/messageAdapterRuntime.js";
+import path from "node:path";
+import { mountGatewayEndpointPlugins, type GatewayEndpointPluginOptions, type GatewayEndpointPluginRuntime } from "./runtime/gatewayEndpointPlugins.js";
 import { createManagerOperationalLog, installOperationalMutationAuditSink } from "./manager/operationalLog.js";
 
 const GATEWAY_CONTRIBUTION_RUNTIME_KEY = "rabi.runtime.contributions.gateway";
@@ -37,13 +37,16 @@ export type GatewayMainOptions = {
   adapterTypes?: readonly GatewayMessageAdapterType[];
   processLifecycle?: GatewayProcessLifecycle;
   startPerformanceReporter?: () => () => void;
+  endpointPlugins?: Partial<GatewayEndpointPluginOptions>;
 };
 
 export type GatewayMainRuntime = {
   root: GatewayCordisRoot;
   agentAdapters: AgentAdapterRuntimeMount;
   contributions: ContributionRuntimeMount;
-  messageAdapters: MessageAdapterRuntimeMount;
+  messageAdapters: GatewayEndpointPluginRuntime;
+  routeSnapshotRevision?: string;
+  routeSnapshotUnavailableInstances?: readonly string[];
   dispose(): Promise<void>;
 };
 
@@ -56,7 +59,16 @@ async function initializeGatewayMain(
   const adapterTypes = options.adapterTypes ?? config.gatewayMessageAdapterTypes;
   const lifecycle = options.processLifecycle ?? process;
   const startReporter = options.startPerformanceReporter ?? startGatewayPerformanceReporter;
+  const bootFilename = process.env.RABIROUTE_ROUTE_SNAPSHOT_PATH?.trim() ?? "";
+  const bootRevision = process.env.RABIROUTE_ROUTE_REVISION?.trim() ?? "";
+  const gatewayId = process.env.GATEWAY_ID?.trim() ?? "";
+  const gatewayGenerationId = process.env.RABIROUTE_GATEWAY_GENERATION_ID?.trim() ?? "";
+  const initialRouteDefinition = bootFilename || bootRevision
+    ? readGatewayRouteBootSnapshot(bootFilename, bootRevision, gatewayId) : undefined;
+  let routeSnapshotRevision: string | undefined;
+  let routeSnapshotUnavailableInstances: readonly string[] | undefined;
   let gatewayDisposePromise: Promise<void> | undefined;
+  let routeSnapshotRuntime: Awaited<ReturnType<typeof mountGatewayRouteSnapshotRuntime>> | undefined;
   const listeners = new Map<GatewayLifecycleEvent, GatewayLifecycleListener>();
 
   function removeLifecycleListeners(): void {
@@ -70,6 +82,7 @@ async function initializeGatewayMain(
     if (!gatewayDisposePromise) {
       gatewayDisposePromise = (async () => {
         removeLifecycleListeners();
+        await routeSnapshotRuntime?.unmount();
         await root.dispose();
       })();
     }
@@ -84,11 +97,33 @@ async function initializeGatewayMain(
     );
     const messageAdapters = await root.ensure(
       GATEWAY_MESSAGE_ADAPTER_RUNTIME_KEY,
-      (host) => mountMessageAdapterRuntime(host)
+      (host) => mountGatewayEndpointPlugins(host, {
+        profilePath: process.env.RABIROUTE_PLUGIN_PROFILE?.trim() || path.join(runtimeLayout.packageRoot, "dist/plugins/profiles/desktop.json"),
+        settingsRoot: path.join(runtimeLayout.stateRoot, "data/plugins/settings"),
+        packageRoots: process.env.RABIROUTE_PLUGIN_PACKAGE_ROOTS?.split(path.delimiter).filter(Boolean) || [path.join(runtimeLayout.packageRoot, "dist/plugins/packages")],
+        runtimeRoot: path.join(config.dataDir, ".rabi-runtime", "endpoint-plugins"),
+        adapterTypes,
+        ...(initialRouteDefinition ? { initialRouteDefinition, initialRouteRevision: bootRevision } : {}),
+        ...options.endpointPlugins
+      })
     );
 
-    for (const type of adapterTypes) {
-      await messageAdapters.mount(type);
+    if (initialRouteDefinition) {
+      if (!gatewayGenerationId || messageAdapters.routeRevision() !== bootRevision) throw new Error("Gateway Route boot revision is not active.");
+      const unavailableInstances = () => Object.freeze([...new Set([
+        ...messageAdapters.diagnostics().map(item => item.instanceId),
+        ...messageAdapters.current().records.filter(record => record.status !== "active" || record.error).map(record => record.identity.instanceId)
+      ])]);
+      routeSnapshotRuntime = await root.ensure("rabi.runtime.routeSnapshot.gateway", host => mountGatewayRouteSnapshotRuntime(host, {
+        identity: { gatewayId, gatewayGenerationId, pid: process.pid },
+        initialRevision: bootRevision,
+        input: process.stdin,
+        output: process.stdout,
+        applySnapshot: (definition, revision) => messageAdapters.applyRouteSnapshot(definition, revision),
+        unavailableInstances
+      }));
+      routeSnapshotRevision = bootRevision;
+      routeSnapshotUnavailableInstances = unavailableInstances();
     }
 
     await root.ensure(
@@ -106,10 +141,13 @@ async function initializeGatewayMain(
       agentAdapters,
       contributions,
       messageAdapters,
+      routeSnapshotRevision,
+      routeSnapshotUnavailableInstances,
       dispose: disposeGatewayRuntime
     };
   } catch (error) {
     removeLifecycleListeners();
+    await routeSnapshotRuntime?.unmount();
     await root.dispose();
     throw error;
   }
@@ -144,8 +182,9 @@ export async function runGatewayMain(): Promise<void> {
   process.once("SIGINT", flushOperationalLog);
   process.once("SIGTERM", flushOperationalLog);
   process.once("beforeExit", flushOperationalLog);
+  let runtime: GatewayMainRuntime;
   try {
-    await startGatewayMain();
+    runtime = await startGatewayMain();
   } catch (error) {
     process.removeListener("SIGINT", flushOperationalLog);
     process.removeListener("SIGTERM", flushOperationalLog);
@@ -183,6 +222,7 @@ export async function runGatewayMain(): Promise<void> {
     gatewayGenerationId,
     pid: process.pid,
     readyAt: new Date().toISOString(),
+    ...(runtime.routeSnapshotRevision ? { routeSnapshotProtocol: 1 as const, routeRevision: runtime.routeSnapshotRevision, unavailableInstances: runtime.routeSnapshotUnavailableInstances } : {}),
     endpoints
   }));
 }

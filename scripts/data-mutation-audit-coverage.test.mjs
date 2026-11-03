@@ -7,13 +7,14 @@ import ts from "typescript";
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const sourceRoot = path.join(repositoryRoot, "src");
-const reviewedTestFixtures = ["src/manager/pluginCatalogOperations.fixture.ts", "src/manager/diagnosticsCandidate.fixture.ts"];
+const reviewedTestFixtures = ["src/manager/pluginCatalogOperations.fixture.ts", "src/manager/diagnosticsCandidate.fixture.ts", "src/manager/napcatEndpointPlugin.fixture.ts"];
 
 const mutationPattern = /\bfs(?:\.promises)?\.(?:writeFile|appendFile|rename|unlink|rm|copyFile|writeFileSync|appendFileSync|renameSync|unlinkSync|rmSync|copyFileSync|futimesSync|utimesSync|createWriteStream)\s*\(/;
 const auditPattern = /\bauditRecordingArchiveMutation\s*\(|\brecordDataMutationAudit\s*\(|\batomicWriteFileSync\s*\(|\bappendAdapterLog\s*\(/;
 
 const infrastructureExclusions = new Map([
   ...reviewedTestFixtures.map(file => [file, "test-only helper creates/removes private os.tmpdir() plugin packages and fixture resources; no production business data; test-only imports are enforced below"]),
+  ["src/shared/gatewayRouteSnapshotBoot.ts", "generation-owned immutable transport copy of Route configuration from the audited catalog CAS owner; exclusive wx/0600 creation in the Route private runtime directory, hash-bound read-only consumption, cleanup on READY/error/close and failed spawn preparation; authoritative Route mutations remain audited by routeCatalogStartupLifecycle"],
   ["src/manager/developerCandidateProvenance.ts", "hash-bound local build-origin metadata in the existing candidate store; source/Web publication commits and failures retain their owning service audit callbacks; no persona or business records"],
   ["src/personaChatHistoryIndex.ts", "rebuildable SQLite projection of the authoritative chat ledger; only deletes its derived index on corruption; original ledger mutations remain audited by personaChatHistory"],
   ["src/plugin-kernel/pluginPackageLoadWorker.ts", "dependency-free Loader worker removes only validated UUID staging directories under the original runtime cache, with plain-directory root checks; no user records"],

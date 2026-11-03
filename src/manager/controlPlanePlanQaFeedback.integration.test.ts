@@ -108,7 +108,7 @@ test("a focused plan responds 304 for its current view revision and 200 after a 
   assert.equal((await changed.json()).data.title, "Updated plan");
 });
 
-async function waitUntil(check: () => boolean | Promise<boolean>, timeoutMs = 30_000): Promise<void> {
+async function waitUntil(check: () => boolean | Promise<boolean>, timeoutMs = 30_000, diagnostic?: () => unknown): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (true) {
     try {
@@ -116,7 +116,7 @@ async function waitUntil(check: () => boolean | Promise<boolean>, timeoutMs = 30
     } catch (error) {
       if (!(error instanceof RoleStorageApplicationError) || error.code !== "busy") throw error;
     }
-    if (Date.now() >= deadline) throw new Error("Timed out waiting for plan feedback post-commit state.");
+    if (Date.now() >= deadline) throw new Error(`Timed out waiting for plan feedback post-commit state.${diagnostic ? ` ${JSON.stringify(diagnostic())}` : ""}`);
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
 }
@@ -194,18 +194,27 @@ test("the feedback route ignores Agent guidance summaries but consumes explicit 
     source: "webgui"
   });
   assert.equal(passed.data.postCommit.status, "pending");
+  let postCommitDiagnostic: unknown;
   await waitUntil(async () => {
     const record = (await application.queries.planFeedback("Rabi", "plan-route-qa-verdict"))?.records
       .find((item) => item.id === "route-user-qa-pass");
+    postCommitDiagnostic = {
+      feedbackId: record?.id,
+      status: record?.postCommit?.status,
+      attempts: record?.postCommit?.attempts,
+      message: record?.postCommit?.message,
+      qaOutcome: record?.qaHandling?.outcome
+    };
+    assert.notEqual(record?.postCommit?.status, "failed", `Plan feedback post-commit failed: ${JSON.stringify(postCommitDiagnostic)}`);
     return record?.postCommit?.status === "completed";
-  });
+  }, 30_000, () => postCommitDiagnostic);
   const completedProjection = await application.queries.planFeedback("Rabi", "plan-route-qa-verdict");
   const consumed = completedProjection?.records.find((item) => item.id === "route-user-qa-pass");
   assert.equal(consumed?.qaHandling?.outcome, "passed");
   assert.equal(completedProjection?.plan.status, "完成");
 });
 
-test("the feedback route commits concurrent attachment retries as one durable record", async (t) => {
+for (const unavailableProjection of [false, true]) test(`the feedback route commits concurrent attachment retries as one durable record${unavailableProjection ? " (committed projection unavailable)" : ""}`, async (t) => {
   const { application, roleDir, roleStorageApplication } = createTestRoleStorage(t, "rabi-control-plane-feedback-transaction-");
   createPlan(roleDir, {
     id: "plan-route-feedback-transaction",
@@ -270,16 +279,42 @@ test("the feedback route commits concurrent attachment retries as one durable re
   assert.equal(nonCanonical.status, 400);
   assert.match(String(nonCanonicalResult.message || ""), /trimmed and Unicode NFC-normalized/);
 
+  let projectionFailureInjected = false;
+  if (unavailableProjection) {
+    const queryPlanFeedback = application.queries.planFeedback.bind(application.queries);
+    application.queries.planFeedback = async (...args) => {
+      const projection = await queryPlanFeedback(...args);
+      if (!projectionFailureInjected && projection?.records.some(record => record.id === body.feedbackId)) {
+        projectionFailureInjected = true;
+        throw new RoleStorageApplicationError("Controlled post-commit feedback projection is unavailable.", "busy", 503);
+      }
+      return projection;
+    };
+  }
   const concurrent = await Promise.all([post(), post()]);
+  let committedProjectionFailures = 0;
   for (const response of concurrent) {
     if (response.status === 202) {
       assert.equal(response.result.data.id, body.feedbackId);
       continue;
     }
     assert.equal(response.status, 503, JSON.stringify(response.result));
-    assert.equal(response.result.state, "indeterminate", JSON.stringify(response.result));
+    if (response.result.commitState === "committed") {
+      assert.equal(response.result.state, "projection_unavailable", JSON.stringify(response.result));
+      assert.equal(response.result.reason, "projection_unavailable");
+      assert.match(response.result.nextAction, /write succeeded/);
+      committedProjectionFailures++;
+    } else {
+      assert.equal(response.result.commitState, "unknown", JSON.stringify(response.result));
+      assert.equal(response.result.state, "indeterminate", JSON.stringify(response.result));
+    }
+    assert.equal(response.result.retryable, false);
     assert.equal(response.result.retry, "same_idempotency_key_only", JSON.stringify(response.result));
     assert.equal(response.result.idempotencyKey, "feedback-test:route-feedback-transaction");
+  }
+  if (unavailableProjection) {
+    assert.equal(projectionFailureInjected, true);
+    assert.ok(committedProjectionFailures >= 1, "The original application must report its actual committed projection failure.");
   }
   const records = (await application.queries.planFeedback("Rabi", "plan-route-feedback-transaction"))?.records ?? [];
   assert.equal(records.length, 1);
@@ -288,6 +323,20 @@ test("the feedback route commits concurrent attachment retries as one durable re
     fs.readFileSync(records[0].attachments[0].path, "utf8"),
     "one durable attachment"
   );
+  const readback = await fetch(endpoint);
+  assert.equal(readback.status, 200);
+  const readbackBody = await readback.json() as Record<string, any>;
+  assert.deepEqual(readbackBody.data.records, records);
+  const feedbackFile = path.join(path.dirname(resolveCanonicalPlanStorageLocation(roleDir, "plan-route-feedback-transaction")!.planFile), "feedback.jsonl");
+  const durableFeedback = fs.readFileSync(feedbackFile);
+  const durableAttachment = fs.readFileSync(records[0].attachments[0].path);
+  const replay = await post();
+  assert.equal(replay.status, 202, JSON.stringify(replay.result));
+  assert.equal(replay.result.data.id, body.feedbackId);
+  assert.deepEqual(fs.readFileSync(feedbackFile), durableFeedback);
+  assert.deepEqual(fs.readFileSync(records[0].attachments[0].path), durableAttachment);
+  const replayedRecords = (await application.queries.planFeedback("Rabi", "plan-route-feedback-transaction"))?.records ?? [];
+  assert.deepEqual(replayedRecords, records);
 });
 
 test("the feedback route returns 202 after durable commit even when QA post-commit fails", async (t) => {

@@ -5,7 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { parseNapCatStickers, readNapCatStickers } from "./napcatStickers.js";
-import { prepareAgentSendRequest, handleAgentSend } from "./agentSend.js";
+import { prepareAgentSendRequest, handleAgentSend } from "./endpointEgress.fixture.js";
 import type { AgentReplyOptions } from "./outbox.js";
 
 const id = "0123456789abcdef0123456789abcdef";

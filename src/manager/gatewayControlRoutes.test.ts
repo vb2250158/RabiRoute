@@ -174,12 +174,20 @@ test("scoped save reports persistence separately from activation and supports re
     const body = await json(response);
     assert.equal(response.status, 200);
     assert.equal(body.receipt.state, "committed");
-    assert.equal(body.activation.state, "failed");
+    assert.equal(body.receipt.operationId, "test:scoped");
+    assert.deepEqual(body.activation, { state: "uncertain", code: "runtime_reconciliation_failed" });
     assert.equal(fixture.calls.filter(call => call.name === "writeConfig").length, 0);
     assert.equal(fixture.calls.filter(call => call.name === "writeGatewayConfig").length, 1);
+    assert.equal(fixture.calls.filter(call => call.name === "syncRunningGateways").length, 1);
+    assert.equal(fixture.calls.find(call => call.name === "writeGatewayConfig")?.args[3], "test:scoped");
     const recovered = await json(await fetch(`${server.baseUrl}/gateways/mutations/test%3Ascoped`));
     assert.equal(recovered.receipt.state, "committed");
     assert.equal(recovered.receipt.operationId, "test:scoped");
+    assert.deepEqual(recovered.activation, { operationId: "test:scoped", state: "uncertain", code: "activation_receipt_unavailable" });
+    assert.deepEqual(fixture.calls.filter(call => call.name === "resolveRouteMutation").map(call => call.args), [["test:scoped"]]);
+    assert.equal(fixture.calls.filter(call => call.name === "writeGatewayConfig").length, 1, "recovery must not repeat the committed write");
+    assert.equal(fixture.calls.filter(call => call.name === "writeConfig").length, 0);
+    assert.equal(fixture.calls.filter(call => call.name === "syncRunningGateways").length, 1, "recovery must not replay activation");
   } finally { await server.close(); }
 });
 

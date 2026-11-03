@@ -16,6 +16,7 @@ import { agentIdentityForMessageSource } from "../shared/rabiMessage.js";
 import type { RabiLinkAgentPrincipal } from "./rabiLinkAgentDevices.js";
 import { AgentThreadContractError, completeAgentSessionId, normalizeAgentThreadSourceType } from "../agentRequests/requestValidation.js";
 import { EndpointDeliveryNotSentError, validateEndpointDeliveryNoFrameProof } from "../agentRequests/deliveryFailure.js";
+import type { PeerAgentEndpointBridge } from "./peerAgentEndpointBridge.js";
 
 export type AgentServiceSourcePrincipal = {
   provider: AgentAdapterType;
@@ -51,6 +52,7 @@ export type AgentEndpointDeliveryContext = {
   localOptions: (request: AgentThreadRequest) => AgentThreadRequestOptions;
   device?: AgentDeviceEndpointBridge;
   service?: AgentServiceEndpointBridge;
+  peer?: PeerAgentEndpointBridge;
 };
 const digest = (parts: unknown[]) => createHash("sha256").update(JSON.stringify(parts)).digest("hex");
 
@@ -71,6 +73,7 @@ export function createAgentEndpointDelivery(context: AgentEndpointDeliveryContex
   }
   function authorize(endpoint: AgentRequestEndpoint, role?: "source" | "target"): void {
     if (endpoint.managerInstanceId !== managerInstanceId) throw new Error("Endpoint belongs to another Manager authority.");
+    if (context.peer?.owns(endpoint)) { context.peer.authorize(endpoint); return; }
     if (context.service?.owns(endpoint)) {
       context.service.authorize(endpoint, role);
       return;
@@ -96,6 +99,11 @@ export function createAgentEndpointDelivery(context: AgentEndpointDeliveryContex
     for (const role of ["target", "source"] as const) {
       const endpoint = identities[role];
       try {
+        if (context.peer?.owns(endpoint)) {
+          // Preparation reads the exact owner; new dispatch rechecks it, while receipt reconciliation remains historical.
+          if (phase === "dispatch") await context.peer.refresh(endpoint);
+          context.peer.authorize(endpoint); continue;
+        }
         if (phase !== "prepare" && role === "target" && endpoint.kind === "instance"
           && !context.registry.listNodes().some(node => node.nodeId === endpoint.nodeId && node.connected)) {
           throw new Error("The original computer is offline. Its prepared delivery will resume when it reconnects.");
@@ -128,6 +136,8 @@ export function createAgentEndpointDelivery(context: AgentEndpointDeliveryContex
     const agentId = `local:${provider}`;
     return { agentAdapter: provider, agentType: type, threadId: sessionId, threadName: summary.title, workspace: summary.cwd,
       endpoint: { kind: "local", managerInstanceId, agentId, provider, sessionId,
+        ...((request.instanceBinding?.ownerDeviceId || request.ledgerOwnerDeviceId
+          || request.action === "reconcile_delivery" && context.store.getEndpointDelivery(request.deliveryId || "")?.source.ownerDeviceId) && context.peer ? { ownerDeviceId: context.peer.localDeviceId() } : {}),
         authorizationIncarnation: digest([managerInstanceId, agentId, provider, sessionId]) } };
   }
   function remoteParty(nodeId: string, agentId: string, sessionId: string, type: string, provider?: string): AgentRequestParty {
@@ -139,6 +149,7 @@ export function createAgentEndpointDelivery(context: AgentEndpointDeliveryContex
   }
   async function transport(delivery: PreparedEndpointDelivery, assertAuthorized: () => void, reconcile: boolean): Promise<EndpointDeliveryReceipt | undefined> {
     assertAuthorized();
+    if (context.peer?.owns(delivery.target)) return context.peer.transport(delivery, assertAuthorized, reconcile);
     if (context.service?.owns(delivery.target)) return context.service.transport(delivery, assertAuthorized, reconcile);
     if (delivery.target.kind === "device") {
       if (!context.device) throw new Error("Device endpoint owner is unavailable.");
@@ -184,7 +195,10 @@ export function createAgentEndpointDelivery(context: AgentEndpointDeliveryContex
       requestAuthority?.();
       if (originalSource) authorize(originalSource);
     };
-    return { store: context.store, managerInstanceId, callerExecutionOptions: originalCallerExecutionOptions,
+    const withLedgerAddress = (source: AgentRequestParty, request: AgentThreadRequest): AgentRequestParty =>
+      source.endpoint && context.peer && (request.instanceBinding?.ownerDeviceId || request.ledgerOwnerDeviceId || source.endpoint.ownerDeviceId)
+        ? { ...source, endpoint: { ...source.endpoint, ledgerOwnerDeviceId: context.peer.localDeviceId() } } : source;
+    const deliveryOptions: EndpointDeliveryOptions = { store: context.store, managerInstanceId, callerExecutionOptions: originalCallerExecutionOptions,
       assertRequestCurrent: requestAuthority,
       authorize: (endpoint, role) => { assertRequest(); authorize(endpoint, role); },
       refreshEndpoints: async (identities, phase) => { assertRequest(); await refreshEndpoints(identities, phase); assertRequest(); },
@@ -200,13 +214,18 @@ export function createAgentEndpointDelivery(context: AgentEndpointDeliveryContex
         const id = completeAgentSessionId(request.sourceThreadId, "sourceThreadId");
         const sourceAgentType = normalizeAgentThreadSourceType(request.sourceAgentType, true);
         request = { ...request, sourceAgentType };
+        const peerSource = await context.peer?.resolveSource(request, originalDeviceSource);
+        assertRequest();
+        if (peerSource) return peerSource;
         const device = await context.device?.resolveSource(request, originalDeviceSource);
         assertRequest();
         if (device) return device;
         if (originalDeviceSource) throw new Error("Authenticated device source has no exact native owner; source substitution is forbidden.");
         if (remoteSource) {
           if (id !== remoteSource.sessionId) throw new Error("Source does not match ingress-authenticated owner.");
-          return remoteParty(remoteSource.nodeId, remoteSource.agentId, id, sourceAgentType, remoteSource.provider);
+          const party = remoteParty(remoteSource.nodeId, remoteSource.agentId, id, sourceAgentType, remoteSource.provider);
+          return { ...party, threadName: remoteSource.sessionName,
+            ...(remoteSource.workspace ? { workspace: remoteSource.workspace } : {}) };
         }
         const service = await context.service?.resolveSource(request, originalServiceSource);
         assertRequest();
@@ -231,6 +250,9 @@ export function createAgentEndpointDelivery(context: AgentEndpointDeliveryContex
       resolveTarget: async request => {
         assertRequest();
         const id = completeAgentSessionId(request.threadId, "threadId");
+        const peerTarget = await context.peer?.resolveTarget(request);
+        assertRequest();
+        if (peerTarget) return peerTarget;
         const service = await context.service?.resolveTarget(request);
         assertRequest();
         if (service) {
@@ -244,13 +266,22 @@ export function createAgentEndpointDelivery(context: AgentEndpointDeliveryContex
         if (binding && binding.instanceId !== managerInstanceId) {
           const party = remoteParty(binding.instanceId, binding.agentId, id, request.messageProcessing?.targetAgentType || "agent", request.agentAdapter);
           if (request.agentAdapter && request.agentAdapter !== party.agentAdapter) throw new Error("Target provider does not match approved endpoint.");
+          if (!party.workspace && !request.cwd) {
+            const result = await context.registry.manageAgent(binding.instanceId, "threads", {
+              agentId: binding.agentId, agentAdapter: party.agentAdapter, action: "read", threadId: id
+            }, 30_000, assertRequest) as { statusCode?: number; data?: { thread?: AgentThreadSummary } };
+            assertRequest();
+            if (result.statusCode !== 200 || result.data?.thread?.id !== id || result.data.thread.archived) throw new Error("Exact connector target owner is unavailable.");
+            party.workspace = result.data.thread.cwd;
+          }
           return party;
         }
         const provider = request.agentAdapter;
         if (!provider) throw new Error("Explicit target provider is required for endpoint delivery.");
         if (binding && binding.agentId !== `local:${provider}`) throw new Error("Local binding provider mismatch.");
         if (request.agentTargetId && request.agentTargetId !== `local:${provider}`) throw new Error("Explicit local provider mismatch.");
-        const party = await localParty(provider, id, request.messageProcessing?.targetAgentType || "agent", request, true);
+        const party = await localParty(provider, id, request.messageProcessing?.targetAgentType || "agent",
+          originalDeviceSource?.deviceOwner && context.peer ? { ...request, ledgerOwnerDeviceId: context.peer.localDeviceId() } : request, true);
         assertRequest();
         return party;
       },
@@ -259,6 +290,9 @@ export function createAgentEndpointDelivery(context: AgentEndpointDeliveryContex
         if (!receipt) throw new Error("No exact owner receipt; original attempt must not be replayed.");
         return receipt;
       }, reconcile: (delivery, guard) => transport(delivery, guard, true) };
+    const resolveSource = deliveryOptions.resolveSource;
+    deliveryOptions.resolveSource = async request => withLedgerAddress(await resolveSource(request), request);
+    return deliveryOptions;
   }
   const recovery = new EndpointDeliveryRecovery(options());
   return { options, authorize, refreshEndpoints, recovery, remoteEndpoint };

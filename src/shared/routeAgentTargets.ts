@@ -1,8 +1,9 @@
 import { isAgentAdapterType, type AgentAdapterType } from "./agentAdapterCapabilities.js";
 import { normalizeAgentInstanceBinding, normalizeAgentInstanceBindings, type AgentInstanceBinding } from "./agentInstance.js";
 
-export type RemoteAgentTarget = AgentInstanceBinding & { id: string; provider: AgentAdapterType };
-export type RouteAgentTarget = { id: string; provider: AgentAdapterType; binding?: AgentInstanceBinding };
+export type AgentTargetSession = { sessionId?: string; sessionName?: string; workspace?: string };
+export type RemoteAgentTarget = AgentInstanceBinding & AgentTargetSession & { id: string; provider: AgentAdapterType };
+export type RouteAgentTarget = AgentTargetSession & { id: string; provider: AgentAdapterType; binding?: AgentInstanceBinding };
 export type RouteAgentTargetsDefinition = {
   agentAdapters?: AgentAdapterType[];
   remoteAgentTargets?: RemoteAgentTarget[];
@@ -13,6 +14,7 @@ export type RouteAgentTargetsDefinition = {
 };
 export function localAgentTargetKey(provider: AgentAdapterType): string { return `local:${provider}`; }
 export function remoteAgentTargetKey(binding: AgentInstanceBinding): string {
+  if (binding.ownerDeviceId) return `peer:${encodeURIComponent(binding.ownerDeviceId)}:${encodeURIComponent(binding.instanceId)}:${encodeURIComponent(binding.agentId)}`;
   return `remote:${encodeURIComponent(binding.instanceId)}:${encodeURIComponent(binding.agentId)}`;
 }
 
@@ -21,12 +23,21 @@ export function normalizeRouteAgentTargets<T extends RouteAgentTargetsDefinition
   const legacy = definition.remoteAgentTargets === undefined ? normalizeAgentInstanceBindings(definition.agentInstanceBindings) : undefined;
   if (definition.remoteAgentTargets !== undefined && !Array.isArray(definition.remoteAgentTargets)) throw new Error("Invalid remote Agent targets.");
   const remoteAgentTargets: RemoteAgentTarget[] = [];
-  for (const raw of definition.remoteAgentTargets ?? Object.entries(legacy ?? {}).map(([provider, binding]) => ({ ...binding, provider, id: remoteAgentTargetKey(binding) }))) {
+  const remoteInputs: Array<AgentInstanceBinding & AgentTargetSession & { provider: string; id: string }> =
+    definition.remoteAgentTargets ?? Object.entries(legacy ?? {}).map(([provider, binding]) => ({ ...binding, provider, id: remoteAgentTargetKey(binding) }));
+  for (const raw of remoteInputs) {
     if (!isAgentAdapterType(raw.provider)) throw new Error("Unknown remote Agent provider.");
     const binding = normalizeAgentInstanceBinding(raw);
     if (!binding || raw.id !== remoteAgentTargetKey(binding)) throw new Error("Invalid remote Agent target identity.");
     if (remoteAgentTargets.some(target => target.id === raw.id)) throw new Error("Duplicate remote Agent target identity.");
-    remoteAgentTargets.push({ ...binding, id: raw.id, provider: raw.provider });
+    const session: AgentTargetSession = {};
+    for (const key of ["sessionId", "sessionName", "workspace"] as const) {
+      if (raw[key] !== undefined) {
+        if (typeof raw[key] !== "string") throw new Error("Invalid remote Agent session reference.");
+        session[key] = raw[key];
+      }
+    }
+    remoteAgentTargets.push({ ...binding, ...session, id: raw.id, provider: raw.provider });
   }
   const candidates: RouteAgentTarget[] = [...agentAdapters.map(provider => ({ id: localAgentTargetKey(provider), provider })), ...remoteAgentTargets];
   const oldPrimary = definition.primaryAgentAdapter ?? agentAdapters[0];
@@ -38,8 +49,17 @@ export function normalizeRouteAgentTargets<T extends RouteAgentTargetsDefinition
 export function resolvePrimaryAgentTarget(definition: RouteAgentTargetsDefinition): RouteAgentTarget | undefined {
   const normalized = normalizeRouteAgentTargets(definition);
   const remote = normalized.remoteAgentTargets.find(target => target.id === normalized.primaryAgentTarget);
-  if (remote) return { id: remote.id, provider: remote.provider, binding: { instanceId: remote.instanceId, agentId: remote.agentId } };
+  if (remote) return { id: remote.id, provider: remote.provider, binding: normalizeAgentInstanceBinding(remote),
+    ...(remote.sessionId !== undefined ? { sessionId: remote.sessionId } : {}),
+    ...(remote.sessionName !== undefined ? { sessionName: remote.sessionName } : {}),
+    ...(remote.workspace !== undefined ? { workspace: remote.workspace } : {}) };
   return normalized.primaryAgentAdapter ? { id: localAgentTargetKey(normalized.primaryAgentAdapter), provider: normalized.primaryAgentAdapter } : undefined;
+}
+/** A connected host target owns its session reference; missing values never borrow another computer's provider defaults. */
+export function peerRouteAgentSession(definition: RouteAgentTargetsDefinition, provider?: AgentAdapterType): AgentTargetSession | undefined {
+  const target = resolvePrimaryAgentTarget(definition);
+  return target?.binding?.ownerDeviceId && (!provider || target.provider === provider)
+    ? { sessionId: target.sessionId, sessionName: target.sessionName, workspace: target.workspace } : undefined;
 }
 export function primaryAgentInstanceBindings(definition: RouteAgentTargetsDefinition): Record<string, AgentInstanceBinding> | undefined {
   const target = resolvePrimaryAgentTarget(definition);
@@ -49,7 +69,8 @@ export function addRemoteAgentTarget<T extends RouteAgentTargetsDefinition>(defi
   const normalized = normalizeRouteAgentTargets(definition);
   const id = remoteAgentTargetKey(target);
   if (normalized.remoteAgentTargets.some(item => item.id === id && item.provider !== target.provider)) throw new Error("Remote Agent identity cannot change provider.");
-  return normalizeRouteAgentTargets({ ...normalized, remoteAgentTargets: [...normalized.remoteAgentTargets.filter(item => item.id !== id), { ...target, id }] });
+  const existing = normalized.remoteAgentTargets.find(item => item.id === id);
+  return normalizeRouteAgentTargets({ ...normalized, remoteAgentTargets: [...normalized.remoteAgentTargets.filter(item => item.id !== id), { ...existing, ...target, id }] });
 }
 export function removeRouteAgentTarget<T extends RouteAgentTargetsDefinition>(definition: T, targetId: string) {
   const normalized = normalizeRouteAgentTargets(definition);

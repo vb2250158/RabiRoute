@@ -1,5 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { writeGatewayRouteBootSnapshot } from "../shared/gatewayRouteSnapshotBoot.js";
+import { EventEmitter } from "node:events";
 import {
   ManagerGatewayRuntimeService,
   type ManagerGatewayRuntimeStore
@@ -239,4 +244,99 @@ test("restartRuntime callback takes precedence and owns needsRestart state", () 
 
   assert.deepEqual(events, ["restart:managed:needsRestart=true"]);
   assert.equal(managed.needsRestart, false);
+});
+
+test("a real EEXIST boot snapshot failure is reported for its Route while the next Route starts; explicit start still throws", t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "gateway-local-start-failure-"));
+  t.after(() => { assert.equal(path.dirname(directory), path.resolve(os.tmpdir())); assert.ok(path.basename(directory).startsWith("gateway-local-start-failure-")); fs.rmSync(directory, { recursive: true, force: true }); });
+  const badDataDir = path.join(directory, "bad-data");
+  fs.writeFileSync(badDataDir, "original private data file");
+  const definitions = [
+    { id: "bad", gatewayPort: 23001, dataDir: badDataDir },
+    { id: "good", gatewayPort: 23002, dataDir: path.join(directory, "good-data") }
+  ];
+  const records = new Map(definitions.map(definition => [definition.id, { definition, needsRestart: true }]));
+  const started = new Set<string>(), failures: Array<{ id: string; error: unknown; action: string }> = [];
+  const service = new ManagerGatewayRuntimeService(records, {
+    loadDefinitions: () => definitions, normalizeDefinition: definition => definition, definitionFingerprint: JSON.stringify,
+    createRuntime: definition => ({ definition, needsRestart: false }), isRunning: item => started.has(item.definition.id),
+    reconcileAction: () => "start",
+    startRuntime(item) { writeGatewayRouteBootSnapshot(item.definition.dataDir, item.definition.id, item.definition); started.add(item.definition.id); },
+    stopRuntime() {}, onRuntimeError: (item, error, action) => { failures.push({ id: item.definition.id, error, action }); }
+  });
+  assert.doesNotThrow(() => service.reconcile());
+  assert.deepEqual([...started], ["good"]);
+  assert.equal(failures[0]?.id, "bad"); assert.equal(failures[0]?.action, "start");
+  assert.equal((failures[0]?.error as NodeJS.ErrnoException).code, "EEXIST");
+  assert.equal(fs.readFileSync(badDataDir, "utf8"), "original private data file");
+  assert.equal(fs.existsSync(path.join(definitions[1]!.dataDir, "good.json")), true);
+  assert.equal(records.get("bad")?.needsRestart, true, "failed start must not claim acceptance");
+  assert.throws(() => service.start("bad"), { code: "EEXIST" });
+  assert.equal(failures.length, 1, "explicit calls keep their original error instead of hiding it in collection reporting");
+});
+
+test("a failing error observer cannot prevent later runtime actions or erase the original failure", () => {
+  const records = new Map([runtime("bad"), runtime("good")].map(item => [item.definition.id, item]));
+  const original = new Error("original start failure"), observer = new Error("observer failure"), started: string[] = [];
+  const service = new ManagerGatewayRuntimeService(records, {
+    loadDefinitions: () => [], normalizeDefinition: item => item, definitionFingerprint: JSON.stringify,
+    createRuntime: definition => ({ definition, needsRestart: false }), isRunning: () => false, reconcileAction: () => "start",
+    startRuntime(item) { if (item.definition.id === "bad") throw original; started.push(item.definition.id); }, stopRuntime() {},
+    onRuntimeError() { throw observer; }
+  });
+  assert.throws(() => service.reconcile(), (error: unknown) => error instanceof AggregateError && error.errors.includes(original) && error.errors.includes(observer));
+  assert.deepEqual(started, ["good"]);
+});
+
+test("a collection without an error observer still attempts later Routes before reporting its failures", () => {
+  const records = new Map([runtime("bad"), runtime("good")].map(item => [item.definition.id, item]));
+  const original = new Error("unreported start failure"), started: string[] = [];
+  const service = new ManagerGatewayRuntimeService(records, {
+    loadDefinitions: () => [], normalizeDefinition: item => item, definitionFingerprint: JSON.stringify,
+    createRuntime: definition => ({ definition, needsRestart: false }), isRunning: () => false, reconcileAction: () => "start",
+    startRuntime(item) { if (item.definition.id === "bad") throw original; started.push(item.definition.id); }, stopRuntime() {}
+  });
+  assert.throws(() => service.reconcile(), (error: unknown) => error instanceof AggregateError && error.errors.includes(original));
+  assert.deepEqual(started, ["good"]);
+});
+
+test("stopAll attempts healthy children after a failing stop and observer, preserves the live failed owner and reports aggregate failure", () => {
+  const records = new Map([runtime("bad", 1, true), runtime("good", 1, true)].map(item => [item.definition.id, item]));
+  const live = new Set(["bad", "good"]), attempted: string[] = [];
+  const original = new Error("stop was not accepted"), observer = new Error("stop observer failed");
+  const service = new ManagerGatewayRuntimeService(records, {
+    loadDefinitions: () => [], normalizeDefinition: item => item, definitionFingerprint: JSON.stringify,
+    createRuntime: definition => ({ definition, needsRestart: false }), isRunning: item => live.has(item.definition.id), reconcileAction: () => "none", startRuntime() {},
+    stopRuntime(item) { attempted.push(item.definition.id); if (item.definition.id === "bad") throw original; live.delete(item.definition.id); },
+    onRuntimeError() { throw observer; }
+  });
+  assert.throws(() => service.stopAll(), (error: unknown) => error instanceof AggregateError && error.errors.includes(original) && error.errors.includes(observer));
+  assert.deepEqual(attempted, ["bad", "good"]); assert.deepEqual([...live], ["bad"]);
+  assert.equal(records.has("bad"), true); assert.equal(records.get("bad")?.needsRestart, false); assert.equal(records.get("good")?.needsRestart, false);
+});
+
+test("a child-exit background restart contains real boot I/O and reporter failures without starting a manually stopped neighbor", t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "gateway-exit-restart-failure-"));
+  t.after(() => { assert.equal(path.dirname(directory), path.resolve(os.tmpdir())); assert.ok(path.basename(directory).startsWith("gateway-exit-restart-failure-")); fs.rmSync(directory, { recursive: true, force: true }); });
+  const badPath = path.join(directory, "bad-data"); fs.writeFileSync(badPath, "original private file");
+  const definitions = [{ id: "restarting", gatewayPort: 23001, dataDir: badPath }, { id: "manually-stopped", gatewayPort: 23002, dataDir: path.join(directory, "neighbor") }];
+  const records = new Map(definitions.map(definition => [definition.id, { definition, needsRestart: false }]));
+  const attempted: string[] = [], reporterFailure = new Error("Controlled background reporter failure");
+  const service = new ManagerGatewayRuntimeService(records, {
+    loadDefinitions: () => definitions, normalizeDefinition: item => item, definitionFingerprint: JSON.stringify,
+    createRuntime: definition => ({ definition, needsRestart: false }), isRunning: () => false, reconcileAction: () => "start",
+    startRuntime(item) { attempted.push(item.definition.id); writeGatewayRouteBootSnapshot(item.definition.dataDir, item.definition.id, item.definition); },
+    stopRuntime() {}, onRuntimeError() { throw reporterFailure; }
+  });
+  const child = new EventEmitter();
+  let failures: readonly unknown[] = [];
+  child.on("exit", () => { failures = service.startInBackground("restarting"); });
+  assert.doesNotThrow(() => child.emit("exit", 0, null));
+  assert.equal((failures[0] as NodeJS.ErrnoException).code, "EEXIST");
+  assert.equal(failures[1], reporterFailure);
+  assert.deepEqual(attempted, ["restarting"]);
+  assert.equal(fs.existsSync(definitions[1]!.dataDir), false);
+  assert.equal(fs.readFileSync(badPath, "utf8"), "original private file");
+  assert.throws(() => service.start("restarting"), { code: "EEXIST" });
+  assert.throws(() => service.restart("restarting"), { code: "EEXIST" });
 });

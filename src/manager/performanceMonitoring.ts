@@ -36,15 +36,16 @@ export class PerformanceMonitoringService {
         startedAt: new Date().toISOString(), completedAt: undefined, lastError: undefined });
       try {
         await this.store.start();
-        const loadError = this.store.status().lastError;
-        if (loadError) throw new Error(loadError);
+        const history = this.store.historyStatus();
+        if (history.fatalError) throw new Error(history.fatalError);
         // The load owns its original I/O until completion. A retired activation
         // cannot start a collector merely because that I/O completed later.
         if (sequence !== this.stopSequence || !isCurrent()) return;
         this.collector.start(this.config);
         this.uninstallOperationSink = installPerformanceOperationSink(record => this.collector.recordOperation(record));
         this.running = true;
-        this.setInitialization({ state: "ready", incidents: 0, completedAt: new Date().toISOString(), lastError: undefined });
+        this.setInitialization({ state: history.incidents ? "degraded" : "ready", incidents: history.incidents,
+          completedAt: new Date().toISOString(), lastError: history.lastError });
       } catch (error) {
         this.collector.stop();
         let failure = error;
@@ -98,9 +99,10 @@ export class PerformanceMonitoringService {
   initializationSnapshot(): PerformanceInitializationStatus { return this.initialization; }
 
   status(): PerformanceMonitoringStatus {
-    return { ...this.store.status(), collecting: this.running && this.config.enabled,
+    const native = this.store.status();
+    return { ...native, collecting: this.running && this.config.enabled,
       initialization: this.initialization,
-      ...(this.initialization.lastError ? { lastError: this.initialization.lastError } : {}) };
+      ...(!native.lastError && this.initialization.lastError ? { lastError: this.initialization.lastError } : {}) };
   }
 
   subscribeStatus(listener: () => void): () => void {

@@ -1,3 +1,5 @@
+import { NapCatRequestError } from "./shared/napcatDeliveryError.js";
+export { NapCatRequestError } from "./shared/napcatDeliveryError.js";
 import { getTimeoutMs } from "./shared/timeoutSettings.js";
 import { config, type NapCatInstanceConfig } from "./config.js";
 
@@ -122,13 +124,6 @@ export type UploadGroupFileResult = {
 
 export type NapCatEndpoint = Pick<NapCatInstanceConfig, "httpUrl" | "accessToken">;
 
-/** Safe protocol fields for receipts; raw upstream text can contain private paths. */
-export class NapCatRequestError extends Error {
-  constructor(message: string, readonly diagnostic: {
-    action: string; kind: "http" | "rejected" | "transport" | "invalid_response";
-    httpStatus?: number; retcode?: number; transportCode?: string;
-  }) { super(message); this.name = "NapCatRequestError"; }
-}
 
 export type LoginInfo = {
   userId?: number | string;
@@ -355,4 +350,14 @@ export async function uploadGroupFile(params: UploadGroupFileParams, endpoint?: 
     fileId: data && typeof data === "object" ? String(data.file_id ?? data.id ?? "").trim() || undefined : undefined,
     fileName: data && typeof data === "object" ? String(data.file_name ?? data.name ?? params.fileName).trim() || params.fileName : params.fileName
   };
+}
+
+/** Upload a local attachment to a QQ private conversation. */
+export async function uploadPrivateFile(params: { userId: string; filePath: string; fileName: string }, endpoint?: NapCatEndpoint): Promise<{ fileId?: string; messageId?: string }> {
+  const response = await callNapCat<OneBotResponse<Record<string, unknown>> | Record<string, unknown>>("upload_private_file", {
+    user_id: Number(params.userId), file: params.filePath, name: params.fileName
+  }, endpoint);
+  const data = (response as OneBotResponse<Record<string, unknown>>).data ?? response as Record<string, unknown>;
+  return { fileId: String(data?.file_id ?? data?.id ?? "").trim() || undefined,
+    messageId: String(data?.message_id ?? "").trim() || undefined };
 }

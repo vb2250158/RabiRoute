@@ -3,6 +3,7 @@ import fs from "node:fs";
 import http from "node:http";
 import https from "node:https";
 import path from "node:path";
+import { PEER_NATIVE_DELIVERY_UNCONFIRMED } from "./agentAdapters/peerRouteClient.js";
 import { atomicWriteFileSync } from "./shared/filePersistence.js";
 import { sameCodexWorkspace } from "./codexTaskIdentity.js";
 import { parseAgentAdapterType, type AgentAdapterType } from "./agentAdapters/types.js";
@@ -668,6 +669,7 @@ export class MessageAgentPool {
   ): Promise<MessageAgentWorker> {
     if (!routing?.messageSource) throw new Error("Message Agent delivery requires messageSource.");
     const messageSource = routing.messageSource;
+    const sentAt = new Date(group.createdAt).toLocaleString("zh-CN", { hour12: false });
     const allocation = await this.withAllocationLock(async () => {
       await this.ensureSourceThreadName();
       await this.ensureWorkerTitles();
@@ -729,6 +731,7 @@ export class MessageAgentPool {
             createIfMissing: true,
             cwd: allocation.worker.workspace,
             messageSource,
+            sentAt,
             contextBlocks: deliveryContextBlocks,
             controlBlocks: deliveryControlBlocks,
             sandbox: "workspace-write",
@@ -759,6 +762,7 @@ export class MessageAgentPool {
             createIfMissing: true,
             cwd: allocation.worker.workspace,
             messageSource,
+            sentAt,
             contextBlocks: deliveryContextBlocks,
             controlBlocks: deliveryControlBlocks,
             sandbox: "workspace-write",
@@ -774,7 +778,8 @@ export class MessageAgentPool {
             }
           }),
           recover: async (error) => {
-            if (!/timeout|timed out|aborted|connection closed|EPIPE/i.test(error instanceof Error ? error.message : String(error))) throw error;
+            if ((error as { code?: unknown })?.code !== PEER_NATIVE_DELIVERY_UNCONFIRMED
+              && !/timeout|timed out|aborted|connection closed|EPIPE/i.test(error instanceof Error ? error.message : String(error))) throw error;
             const readback = await this.request({ action: "read", agentAdapter: workerAgentAdapter(allocation.worker), threadId: allocation.worker.threadId, deliveryId: batch.deliveryId });
             const state = String(readback.delivery?.state || "uncertain");
             if (state === "accepted" || state === "completed") return { state: "completed", result: readback };

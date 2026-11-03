@@ -6,6 +6,7 @@ import { addRouteAgent, removeRouteAgent, selectRouteAgent } from "../src/routeA
 import { remoteAgentTargetKey } from "../../src/shared/routeAgentTargets";
 import { removePersonaOwnedGatewayConfig } from "../../src/shared/remotePersonaReference";
 import { setMessageAdapterPolicy } from "../src/utils/gatewayHelpers";
+import type { RouteActivationFeedback } from "../src/routeActivationFeedback";
 
 Object.assign(globalThis, { window: { location: { pathname: "/", hash: "" } } });
 const { useGatewayStore } = await import("../src/stores/gatewayStore");
@@ -25,8 +26,9 @@ async function fixture(initialRows: any[] = [{ id: "a", configName: "a", enabled
   let beforeCatalogReply: (() => void) | undefined;
   let generation = "test-generation";
   let revision = "a".repeat(64);
+  let activation: RouteActivationFeedback | undefined;
   const committed = new Set<string>();
-  const payload = () => ({ code: 0, data: { config: { gateways: rows }, manager: [] }, routeCatalog: { routeConfigHash: revision } });
+  const payload = () => ({ code: 0, data: { config: { gateways: rows }, manager: [] }, routeCatalog: { routeConfigHash: revision }, ...(activation ? { activation } : {}) });
   globalThis.fetch = (async (url: string, init?: RequestInit) => {
     if (url.endsWith("/meta")) return Response.json({ applicationGenerationId: generation, managerInstanceId: "test-manager" });
     if (url.endsWith("/network-options")) return Response.json({ code: 0, data: {} });
@@ -73,9 +75,54 @@ async function fixture(initialRows: any[] = [{ id: "a", configName: "a", enabled
     catalogResponse(reply: (() => Response) | undefined) { catalogResponse = reply; },
     beforeCatalogReply(action: () => void) { beforeCatalogReply = action; },
     changeGeneration() { generation = "next-generation"; },
-    changeRevision() { revision = "b".repeat(64); }
+    changeRevision() { revision = "b".repeat(64); },
+    activation(value: RouteActivationFeedback) { activation = value; }
   };
 }
+
+test("a committed save displays the native activation outcome and keeps the Route editable", async () => {
+  for (const [state, message] of [
+    ["applied", "当前路线已保存并生效"],
+    ["requested", "当前路线已保存，等待运行端生效"],
+    ["rejected", "当前路线已保存，运行端未应用本次更新"],
+    ["uncertain", "当前路线已保存，运行生效待确认"]
+  ]) {
+    const f = await fixture();
+    f.activation({ state });
+    f.store.gateways[0].name = "submitted";
+    f.delay(async () => { f.store.gateways[0].name = "new unsaved draft"; });
+    await f.store.save("a");
+    assert.equal(f.store.saveState, "saved");
+    assert.equal(f.store.saveMessage, message);
+    assert.equal(f.rows[0].name, "submitted");
+    assert.equal(f.store.gateways[0].name, "new unsaved draft");
+    f.activation({ state: "applied" });
+    f.delay(async () => {});
+    await f.store.save("a");
+    assert.equal(f.writes, 2);
+    assert.equal(f.rows[0].name, "new unsaved draft");
+  }
+});
+
+test("original-operation recovery preserves an uncertain native result without repeating the committed write", async () => {
+  const f = await fixture();
+  f.activation({ state: "uncertain" });
+  f.loseResponse();
+  f.store.gateways[0].name = "persisted once";
+  await f.store.save("a");
+  assert.equal(f.writes, 1);
+  assert.equal(f.recoveries, 1);
+  assert.equal(f.store.saveState, "saved");
+  assert.equal(f.store.saveMessage, "当前路线已保存，运行生效待确认");
+});
+
+test("a successful changed endpoint with an unavailable sibling displays a partial-entry warning", async () => {
+  const f = await fixture();
+  f.activation({ state: "applied", gateways: [{ unavailableInstances: ["endpoint:wecom"] }] });
+  await f.store.save("a");
+  assert.equal(f.store.saveState, "saved");
+  assert.equal(f.store.saveMessage, "当前路线已保存，部分入口不可用");
+});
 
 test("Route load, policy editing and save preserve omitted and explicit group-file restrictions", async () => {
   for (const readableGroupFileIds of [undefined, [], ["123456"]]) {

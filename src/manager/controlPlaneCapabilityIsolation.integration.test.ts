@@ -15,9 +15,11 @@ const workerArgument = "--capability-isolation-fixture";
 const readyPrefix = "RABIROUTE_MANAGER_READY:";
 
 async function startFixtureWorker(): Promise<void> {
+  process.stdout.write("RABIROUTE_TEST_IMPORTING_MANAGER\n");
   const [{ startManager }, { PlanStorageStartupLifecycle }, { RouteCatalogStartupLifecycle }] = await Promise.all([
     import("./controlPlaneRoutes.js"), import("./planStorageStartupLifecycle.js"), import("./routeCatalogStartupLifecycle.js")
   ]);
+  process.stdout.write("RABIROUTE_TEST_IMPORTED_MANAGER\n");
   const pending = new Promise<never>(() => {});
   await startManager({
     planStorageStartupLifecycle: new PlanStorageStartupLifecycle({ rolesRoot: process.env.ROLES_DIR!, readOnly: false,
@@ -69,9 +71,9 @@ export function activate(context) {
       readJsonBody: core.readJsonBody, jsonResponse: core.jsonResponse,
       isManagementRequestAuthorized: () => false, isReleaseRequestAuthorized: () => false
     }).filter(operation => operation.contract.pathTemplate === '/api/lan-agent/self');
-    const reconciliation = core.createPluginCatalogOperations().filter(operation => operation.contract.pathTemplate === '/api/plugins/reconciliation');
-    const metadata = core.createCorePublicOperations().filter(operation => operation.contract.pathTemplate === '/meta');
-    const registration = host.registerOperations([...metadata, ...self, ...reconciliation]);
+    // Identity and reconciliation belong to the Host bootstrap and remain available
+    // when optional plugins fail. This fixture owns only its original self operation.
+    const registration = host.registerOperations(self);
     return () => registration.dispose();
   });
 }` },

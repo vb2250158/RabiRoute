@@ -1,4 +1,6 @@
 import { stickySpeechAuthority, type SpeechAuthorityGuard } from "./speechRequestAuthority.js";
+import { SpeechModelManagerError } from "../shared/speechErrors.js";
+export { SpeechModelManagerError } from "../shared/speechErrors.js";
 import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
@@ -52,13 +54,6 @@ function defaultModelRoot(rootDir: string): string {
   return localAppData
     ? path.join(localAppData, "RabiPC", "models", "rabispeech")
     : path.join(rootDir, "..", "models", "rabispeech");
-}
-
-export class SpeechModelManagerError extends Error {
-  constructor(message: string, readonly status = 409) {
-    super(message);
-    this.name = "SpeechModelManagerError";
-  }
 }
 
 export type SpeechModelManagerOptions = {

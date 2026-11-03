@@ -25,7 +25,7 @@ export function interactiveApiContract(route: InteractiveRoute): ApiOperationCon
   const names = [...route.pathTemplate.matchAll(/:([A-Za-z][A-Za-z0-9_]*)/g)].map(match => match[1]!);
   const stream = route.key === "terminals.events";
   return { operationId: `manager.lan-agent.${route.key}`, contractVersion: "1.0.0", method: route.method, pathTemplate: route.pathTemplate,
-    exposure: "public", transport: stream ? "sse" : "http", description: "Use the existing remote-computer or terminal owner without a second Agent registration, persona binding or execution runtime.",
+    exposure: "public", transport: stream ? "sse" : "http", description: "Use the target host's local computer services or existing connector without a second Agent registration, persona binding or execution runtime.",
     request: { path: { type: "object", required: names, properties: Object.fromEntries(names.map(name => [name, name === "terminalId" ? terminalIdSchema : text])), additionalProperties: false },
       query: { type: "object", additionalProperties: true }, headers: { type: "object", additionalProperties: true },
       body: route.method === "GET" ? { kind: "none" } : { kind: "json", allowAnyContentType: true, maxBytes: Number.MAX_SAFE_INTEGER,
@@ -40,7 +40,7 @@ export function interactiveApiContract(route: InteractiveRoute): ApiOperationCon
         : route.key === "computer.execute" ? computerResponseSchema : { anyOf: [terminalSnapshotSchema, terminalListSchema] }),
       "400": failure, "401": failure, "403": failure },
     effects: { mode: stream ? "bounded-subscription" : route.method === "POST" ? "remote-interactive-action" : "remote-read",
-      description: "The original terminal replay/remote connector owns sessions, ordered input, immutable upload identities, file versions and execution. Await actual command acceptance/cleanup. Reads may ask the existing connector for current session state." },
+      description: "The original host service or connector owns sessions, ordered input, immutable upload identities, file versions and execution; the Registry retains bounded terminal output replay. Await actual command acceptance/cleanup." },
     recovery: { strategy: "query-original-session-and-sequence", description: "Retain instanceId, terminalId/input sequence or uploadId/offset/hash. After uncertain execution, read the same terminal or upload status before retrying. Reconnect terminal output using the same after cursor and handle gap/disconnected; never replay commands because a stream ended." },
     validators: [{ id: "lan-agent.interactive.original-admission", description: "Use the authenticated public connection or existing local management identity. Revalidate that original admission before remote dispatch and after awaited completion; revocation never falls back to local identity." },
       { id: "lan-agent.interactive.native-protocol", description: "The original executor validates advertised shells, absolute remote paths, UTF-8 input bytes, sequence receipts, canonical chunk bytes/digests, offsets, file versions, upload publication and native desktop conversions. Unknown body fields remain forwarded. Desktop fields preserve native conversion semantics." },

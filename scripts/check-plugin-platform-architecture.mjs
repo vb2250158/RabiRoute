@@ -1,6 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
+import { pathToFileURL } from "node:url";
+import { bundleMessageEndpointRuntime } from "./build-message-endpoint-runtime.mjs";
 import { skipArchitectureDirectory } from "./lib/architecture-scan-boundary.mjs";
 import { hasReleasablePluginScope, kernelImportViolations, publicationPackageViolations, relativeModuleSpecifiers } from "./lib/plugin-platform-contract.mjs";
 
@@ -60,30 +62,67 @@ function relative(file) {
   return path.relative(root, file).replace(/\\/g, "/");
 }
 
-async function packageModuleSources(entryPath, packageRoot) {
-  const realRoot = await fs.realpath(packageRoot);
+/** Read physical modules or compile outputs declared by the same descriptors consumed by the packager. */
+export function packageModuleSourceReader(packageRoot, buildRoot = root) {
+  const reads = new Map();
+  const inside = (directory, file) => {
+    const value = path.relative(directory, file);
+    return value !== "" && !value.startsWith("..") && !path.isAbsolute(value);
+  };
+  const physical = async file => {
+    let stat;
+    try { stat = await fs.lstat(file); }
+    catch (error) { if (error.code === "ENOENT") return; throw error; }
+    if (!stat.isFile() || stat.isSymbolicLink()) return null;
+    if (!inside(await fs.realpath(packageRoot), await fs.realpath(file))) return null;
+    return fs.readFile(file, "utf8");
+  };
+  return file => {
+    file = path.resolve(file);
+    if (!reads.has(file)) reads.set(file, (async () => {
+      if (!inside(packageRoot, file)) return;
+      const source = await physical(file);
+      if (source !== undefined) return source ?? undefined;
+      // These are output mappings from build-plugin-packages, not exemptions for missing files.
+      const descriptorName = ["runtime.build.json", "manager-runtime.build.json", "egress-runtime.build.json"].find(name =>
+        path.resolve(packageRoot, name.replace(".build.json", ".mjs")) === file);
+      if (!descriptorName) return;
+      const descriptor = await physical(path.join(packageRoot, descriptorName));
+      if (descriptor == null) return;
+      const specification = JSON.parse(descriptor);
+      if (!specification || typeof specification !== "object" || Array.isArray(specification)
+        || !(Array.isArray(specification.exports) ? specification.exports.length > 0 : typeof specification.source === "string" && typeof specification.factory === "string")) {
+        throw new Error(`Invalid generated runtime descriptor: ${descriptorName}`);
+      }
+      // No output path: compile the real implementation and dependencies without touching source or dist.
+      return (await bundleMessageEndpointRuntime(buildRoot, specification)).contents;
+    })());
+    return reads.get(file);
+  };
+}
+
+async function packageModuleSources(entryPath, packageRoot, readSource = packageModuleSourceReader(packageRoot)) {
   const modules = new Map();
   const pending = [entryPath];
   while (pending.length) {
     const file = pending.pop();
     const name = path.relative(packageRoot, file).replace(/\\/g, "/");
     if (modules.has(name)) continue;
-    const realRelative = path.relative(realRoot, await fs.realpath(file));
-    if (!realRelative || realRelative.startsWith("..") || path.isAbsolute(realRelative)) continue;
-    const source = await fs.readFile(file, "utf8");
+    const source = await readSource(file);
+    if (source === undefined) continue;
     modules.set(name, source);
     for (const specifier of relativeModuleSpecifiers(source)) {
       const target = path.resolve(path.dirname(file), specifier);
       const packageRelative = path.relative(packageRoot, target);
       if (!packageRelative || packageRelative.startsWith("..") || path.isAbsolute(packageRelative)
         || !/[.](?:mjs|js|ts)$/.test(target)) continue;
-      const targetStat = await fs.lstat(target).catch(() => undefined);
-      if (targetStat?.isFile() && !targetStat.isSymbolicLink()) pending.push(target);
+      if (await readSource(target) !== undefined) pending.push(target);
     }
   }
   return modules;
 }
 
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
 const textExtensions = new Set([".ts", ".tsx", ".js", ".mjs", ".cjs", ".json", ".py", ".md"]);
 const activeFiles = (await Promise.all(activeRoots.map(filesRecursively))).flat();
 const violations = [];
@@ -114,7 +153,7 @@ const packageDirectories = (await fs.readdir(builtinRoot, { withFileTypes: true 
 const profilePath = path.join(root, "plugins", "profiles", "desktop.json");
 const profile = JSON.parse(await fs.readFile(profilePath, "utf8"));
 const selectedBuiltins = new Map((profile.instances ?? []).map(instance => [instance.package, instance]));
-const allowedManifestFields = new Set(["schemaVersion", "id", "version", "entries", "provides", "requires", "optional", "permissions", "configSchema", "stateSchemaVersion"]);
+const allowedManifestFields = new Set(["schemaVersion", "id", "version", "displayName", "description", "icon", "entries", "provides", "requires", "optional", "permissions", "configSchema", "stateSchemaVersion"]);
 for (const packageEntry of packageDirectories) {
   const selected = selectedBuiltins.get(packageEntry.name);
   if (!selected || typeof selected.version !== "string") {
@@ -128,6 +167,14 @@ for (const packageEntry of packageDirectories) {
   const unknownFields = Object.keys(manifest).filter(field => !allowedManifestFields.has(field));
   if (unknownFields.length) violations.push(`${relative(manifestPath)} contains removed manifest fields: ${unknownFields.join(", ")}`);
   if (manifest.id !== packageEntry.name) violations.push(`${relative(manifestPath)} package identity mismatch`);
+  for (const [field, maximum] of [["displayName", 160], ["description", 2000], ["icon", 160]]) {
+    const value = manifest[field];
+    if (value === undefined) continue;
+    if (typeof value !== "string" || !value.trim() || value.trim().length > maximum || /[\u0000-\u001f\u007f]/.test(value.trim())
+      || (field === "icon" && !/^[A-Za-z0-9][A-Za-z0-9._:/-]*$/.test(value.trim()))) {
+      violations.push(`${relative(manifestPath)} has an invalid ${field}`);
+    }
+  }
   const managerEntry = manifest.entries?.manager;
   if (!managerEntry || !["in_process", "isolated", "declarative"].includes(managerEntry.execution)) {
     violations.push(`${relative(manifestPath)} has no valid Manager entry`);
@@ -144,7 +191,9 @@ for (const packageEntry of packageDirectories) {
     if (invalidEntryFields.length) violations.push(`${relative(manifestPath)} has forbidden ${host} entry fields: ${invalidEntryFields.join(", ")}`);
   }
   if (managerEntry?.execution !== "declarative" && typeof managerEntry?.module === "string") {
+    try {
     const managerPath = path.join(versionRoot, managerEntry.module);
+    const readSource = packageModuleSourceReader(versionRoot);
     const managerSource = await fs.readFile(managerPath, "utf8");
     const imports = [...managerSource.matchAll(/from\s+["']([^"']+)["']/g)].map(match => match[1]);
     for (const specifier of imports) {
@@ -154,15 +203,17 @@ for (const packageEntry of packageDirectories) {
       if (!specifier.startsWith("./") || !packageRelative || packageRelative.startsWith("..") || path.isAbsolute(packageRelative)) {
         violations.push(`${relative(managerPath)} imports outside its package and shared SDK: ${specifier}`);
       } else {
-        const targetStat = await fs.lstat(target).catch(() => undefined);
-        if (!targetStat?.isFile() || targetStat.isSymbolicLink()) violations.push(`${relative(managerPath)} imports a missing or linked package module: ${specifier}`);
+        if (await readSource(target) === undefined) violations.push(`${relative(managerPath)} imports a missing or linked package module: ${specifier}`);
       }
     }
     if (!managerSource.includes("definePlugin(")) violations.push(`${relative(managerPath)} does not use definePlugin`);
     if (!hasReleasablePluginScope(managerSource, {
-      modules: await packageModuleSources(managerPath, versionRoot),
+      modules: await packageModuleSources(managerPath, versionRoot, readSource),
       fileName: path.relative(versionRoot, managerPath).replace(/\\/g, "/")
     })) diagnostics.push(`${relative(managerPath)}: no local releasable scope was identified by source inspection; confirm its actual resource owner with lifecycle tests.`);
+    } catch (error) {
+      violations.push(`${relative(manifestPath)} package module validation failed: ${error.message}`);
+    }
   }
 }
 
@@ -197,4 +248,5 @@ if (violations.length) {
   process.exitCode = 1;
 } else {
   console.log(`Plugin platform architecture check passed for ${packageDirectories.length} built-in packages.`);
+}
 }

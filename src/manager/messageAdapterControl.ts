@@ -143,6 +143,24 @@ function fallbackScanResult(provider: MessageAdapterScanProvider, diagnostic: Sc
 export class MessageAdapterScanProviderRegistry {
   private readonly providers = new Map<MessageEndpointType, MessageAdapterScanProvider>();
 
+  /** Candidate registrations remain invisible until their own activation publishes. */
+  prepare(provider: MessageAdapterScanProvider) {
+    let previous: MessageAdapterScanProvider | undefined;
+    let published = false;
+    return {
+      publication: {
+        publish: () => { previous = this.providers.get(provider.type); this.providers.set(provider.type, provider); published = true; },
+        rollback: () => {
+          if (published && this.providers.get(provider.type) === provider) {
+            if (previous) this.providers.set(provider.type, previous); else this.providers.delete(provider.type);
+          }
+          published = false;
+        }
+      },
+      dispose: () => { if (this.providers.get(provider.type) === provider) this.providers.delete(provider.type); }
+    };
+  }
+
   register(provider: MessageAdapterScanProvider): () => void {
     if (this.providers.has(provider.type)) {
       throw new Error(`Message adapter scan provider already registered: ${provider.type}`);
@@ -190,7 +208,8 @@ export class MessageAdapterControlService {
   async scanAdapters(): Promise<MessageAdapterScanBundle> {
     if (!this.accepting) throw new Error("Message adapter control plugin is stopping or inactive.");
     const providers = this.providers.snapshot();
-    const boundedProviders = providers.filter(provider => provider.mode !== "immediate");
+    // Even an immediate provider can fail; the collection boundary isolates it like every native probe.
+    const boundedProviders = providers;
     const tasks: Array<BoundedScanTask<string, MessageAdapterScanResult>> = boundedProviders.map(provider => ({
       key: provider.type,
       run: () => this.trackProbe(provider.scan()),
@@ -201,9 +220,6 @@ export class MessageAdapterControlService {
     for (const provider of boundedProviders) {
       const result = bounded.values[provider.type];
       if (result) values.set(provider.type, result);
-    }
-    for (const provider of providers.filter(provider => provider.mode === "immediate")) {
-      values.set(provider.type, await this.trackProbe(provider.scan()));
     }
     const adapters = Object.fromEntries(
       providers
@@ -461,7 +477,10 @@ export async function messageAdapterControlPayload(
 ): Promise<Record<string, unknown>> {
   const [adapterScan, napcatScan] = await Promise.all([
     context.service.scanAdapters(),
-    context.scanNapcatHealth()
+    context.scanNapcatHealth().catch((error): NapcatHealthScanBundle => ({
+      payload: {}, diagnostics: { napcat: { state: "error", durationMs: 0, message: error instanceof Error ? error.message : String(error) } },
+      partial: true, durationMs: 0, deadlineMs: 0
+    }))
   ]);
   const health: IndependentAdapterHealthSummary = summarizeIndependentAdapterHealth({
     adapters: adapterScan.adapters,

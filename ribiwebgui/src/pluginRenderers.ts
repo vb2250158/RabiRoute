@@ -33,6 +33,16 @@ export type WebRendererContribution = Readonly<{
   slot: string;
   order: number;
   component: Component;
+  endpointType?: string;
+  catalog?: MessageEndpointCatalogMetadata;
+}>;
+
+export type MessageEndpointCatalogMetadata = Readonly<{
+  title: string;
+  note: string;
+  icon: string;
+  group: Readonly<{ id: string; title: string; note: string; order: number }>;
+  order: number;
 }>;
 
 type RegisteredSettingsRenderer = Omit<TrustedWebSettingsRendererRegistration, "loader"> & Readonly<{ component: Component }>;
@@ -225,7 +235,26 @@ function parseSettingsRenderer(value: unknown): WebRendererContribution | undefi
     || value.writeCommandId !== registration.writeCommandId
   ) return undefined;
   const identity = parseRendererIdentity(value, registration);
-  return identity ? { ...identity, component: registration.component } : undefined;
+  if (!identity) return undefined;
+  if (value.endpointType === undefined && value.catalog === undefined) return { ...identity, component: registration.component };
+  const endpointType = controlledSymbol(value.endpointType, 80);
+  const metadata = value.catalog;
+  if (value.kind !== "message-endpoint-settings" || endpointType !== identity.slot || !isRecord(metadata) || !isRecord(metadata.group)) return undefined;
+  const title = controlledText(metadata.title, 160);
+  const note = controlledText(metadata.note, 1000);
+  const icon = controlledSymbol(metadata.icon, 80);
+  const groupId = controlledSymbol(metadata.group.id, 80);
+  const groupTitle = controlledText(metadata.group.title, 160);
+  const groupNote = controlledText(metadata.group.note, 1000);
+  const order = controlledOrder(metadata.order);
+  const groupOrder = controlledOrder(metadata.group.order);
+  if (!endpointType || !title || !note || !icon || !groupId || !groupTitle || !groupNote || order === undefined || groupOrder === undefined) return undefined;
+  return {
+    ...identity,
+    component: registration.component,
+    endpointType,
+    catalog: { title, note, icon, order, group: { id: groupId, title: groupTitle, note: groupNote, order: groupOrder } }
+  };
 }
 
 function parseStatusRenderer(value: unknown): WebRendererContribution | undefined {

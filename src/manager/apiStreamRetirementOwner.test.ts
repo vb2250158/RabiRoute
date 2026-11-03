@@ -128,7 +128,7 @@ test("a finite live getter completes before the original expired response retire
   const owner = await fixture(t, "live-getter-finite");
   const response = owner.get("/feature"); void response.catch(() => undefined);
   const getter = await owner.wait("getter");
-  assert.equal(getter.responseEnded, false, "Fixture missed the live budget window; it does not establish this branch's coverage.");
+  assert.equal(getter.responseEnded, false, `Fixture missed the live budget window after ${getter.elapsedSinceHandlerMs}ms; it does not establish this branch's coverage.`);
 
   assert.equal((await response).status, 408); assert.equal((await owner.get("/health")).status, 200);
 });

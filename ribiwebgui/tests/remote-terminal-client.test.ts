@@ -29,6 +29,23 @@ test("a failed mutation does not resend command input", async () => {
   assert.equal(calls, 1);
 });
 
+test("terminal commands and output stay on the selected connected host", async () => {
+  const requests: string[] = [];
+  const fetcher = (async (url: string) => {
+    requests.push(url);
+    return url.endsWith("/events") ? new Response("data: {\"sequence\":1,\"type\":\"exit\",\"exitCode\":0}\n\n")
+      : new Response(JSON.stringify({ code: 0, data: { sessions: [] } }));
+  }) as typeof fetch;
+  const client = new RemoteTerminalClient("instance-b", "fixture", fetcher, "peer b");
+  await client.request();
+  await client.request({ action: "input", terminalId: "terminal-b", sequence: 1, data: "echo target\r" });
+  const events: unknown[] = [];
+  await client.events("terminal-b", new AbortController().signal, event => events.push(event));
+  const base = "/api/rabilink/peer/http/peer%20b/manager/api/lan-agent/instances/instance-b/terminals";
+  assert.deepEqual(requests, [base, base, `${base}/terminal-b/events`]);
+  assert.deepEqual(events, [{ sequence: 1, type: "exit", exitCode: 0 }]);
+});
+
 test("the browser fetch receiver is preserved when the client stores it", async () => {
   const original = globalThis.fetch;
   globalThis.fetch = async function () { assert.equal(this, globalThis); return new Response(JSON.stringify({ code: 0, data: { sessions: [] } })); } as typeof fetch;

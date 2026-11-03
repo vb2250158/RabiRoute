@@ -56,6 +56,29 @@ Failed attempts record original rules, recipient definitions, and resolved sessi
 
 Unit and integration tests cover selection, concurrency, receipt recovery, migration rollback, persistence, and rule projection. Deployment acceptance additionally requires current page resources, Manager version checks, and actual local and remote session receipts. A successful build alone does not establish successful delivery.
 
+
+## Agent completion files
+
+In Role → Automation → Agent Hooks → Event delivery, NapCat (QQ) rules provide **Include files in automatic delivery**, checked by default. Existing rules without `destination.params.includeFiles` also include files; the string `"false"` opts out and `"true"` enables it explicitly. This setting is saved with the role's Hook rules for each Agent.
+
+After sending the full reply, the Hook uploads files referenced by local Markdown links to the same QQ group or private chat. Absolute paths and `file://` links are supported, including URL encoding, angle-bracket paths with spaces, source line suffixes and anchors. Web links and links in code examples are excluded. Each normalized local path is uploaded once per completion target and turn. The existing Route file policy still applies.
+
+Text parts and files keep independent delivery IDs and persistent receipts. A missing or blocked file does not stop the other files; the Hook reports partial failure. Uncertain or failed receipts remain available for diagnosis and are not blindly resent. The file must be accessible on the Manager computer; a path from another computer does not transfer its contents automatically.
+
+
+## Flowchart and architecture diagram images
+
+NapCat completion rules include **Automatically recognize flowcharts/architecture diagrams**, checked by default. `destination.params.renderDiagrams` uses `"false"` to opt out and `"true"` to enable explicitly; missing values use the default. Mermaid fenced code blocks are rendered locally to PNG, then sent inline with surrounding text in the original order. Unlabelled fenced Mermaid flowchart, sequence, class, state, ER and architecture diagrams are also recognized. Other code blocks remain text. This does not infer diagrams from arbitrary prose or ASCII art.
+
+Rendering uses the bundled Mermaid dependency and an installed Chromium-family browser, without sending diagram contents to an external service. Existing Route image-output policies and Markdown rendering quotas apply. A failed conversion retains the source with a conversion-failure notice and sends the remaining content. Mixed messages reuse existing delivery IDs and persistent receipts; speech delivery remains text.
+
+
 ## Tables as images
 
-**Automatically render tables** is checked by default in NapCat completion rules. Set `destination.params.renderTables` to `"false"` to opt out or `"true"` to enable it explicitly; existing rules with no value also enable it. Markdown tables are rendered locally to PNG with column alignment, wrapping and emphasis, then sent inline with surrounding text in their original position. Table examples inside code fences and ordinary pipe characters remain text; opting out preserves the original table. Rendering uses the existing Markdown image policy and quotas. Speech continues to use text.
+**Automatically render tables** is checked by default in NapCat completion rules. Set `destination.params.renderTables` to `"false"` to opt out or `"true"` to enable it explicitly; existing rules with no value also enable it. Markdown tables are rendered locally to PNG with column alignment, wrapping and emphasis, then sent inline with surrounding text in their original position. This setting is independent of diagram rendering. Table examples inside code fences and ordinary pipe characters remain text; opting out preserves the original table. Rendering uses the existing Markdown image policy and quotas. Speech continues to use text.
+
+## Existing images in completion replies
+
+Original Markdown images are sent inline in their original text order, including local absolute paths, `file://`, relative paths resolved against the task workspace, and HTTP(S) images. This remains active when diagram conversion is disabled. Images are not uploaded again as file attachments; ordinary linked documents still follow the file-delivery option. Code examples remain text.
+
+For a local Codex task, the native thread owner supplies the exact rollout path. The completion reader extracts only successful `image_gen.generation` outputs from the same turn, excluding user inputs, tool screenshots and other turns. These native outputs appear after the final prose, as in Desktop, using inline image bytes without a second disk cache. A generated image already embedded through a local Markdown image is not appended again. Original delivery IDs and receipts still prevent duplicate sends. This native-image extraction requires the local owning Codex history; remote-host native image resources require their owning host to supply media, rather than interpreting a remote path locally.

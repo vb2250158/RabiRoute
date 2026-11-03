@@ -4,7 +4,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import net from "node:net";
-import { fileURLToPath } from "node:url";
+import { xiaomiHomeVideoWorkerPath } from "./pluginResources.js";
 import { atomicWriteFileSync } from "../../shared/filePersistence.js";
 import { recordDataMutationAudit } from "../../observability/dataMutationAudit.js";
 import { XiaomiHomeManagerApiError } from "./managerApi.js";
@@ -135,7 +135,7 @@ export class VacuumVideoTransport {
       allow_paths: ["/api", "/api/frame.mp4", "/api/stream.mp4"] }, rtsp: { listen: "" }, webrtc: { listen: "" },
       log: { level: "disabled" }, streams: { vacuum: "${RABI_VIDEO_SOURCE}" } };
     atomicWriteFileSync(active.configPath, JSON.stringify(config), { mode: 0o600 });
-    const child = spawn(process.execPath, [fileURLToPath(new URL("./vacuumVideoWorker.js", import.meta.url)), path.join(this.root, "go2rtc.exe"), active.configPath], {
+    const child = spawn(process.execPath, [xiaomiHomeVideoWorkerPath(), path.join(this.root, "go2rtc.exe"), active.configPath], {
       windowsHide: true, stdio: ["ignore", "ignore", "ignore", "ipc"], env: { ...process.env, RABI_VIDEO_SOURCE: source, RABI_VIDEO_PASSWORD: password }, cwd: this.root
     });
     active.child = child; active.snapshot.supervisorPid = child.pid;

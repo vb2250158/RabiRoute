@@ -6,6 +6,7 @@ import { performance } from "node:perf_hooks";
 import ts from "typescript";
 import { generatePluginApiTypes } from "./generate-plugin-api-types.mjs";
 import { fileURLToPath } from "node:url";
+import { bundleMessageEndpointRuntime, bundleMessageEndpointWorker } from "./build-message-endpoint-runtime.mjs";
 
 async function pathExists(target) {
   try { await fs.access(target); return true; } catch { return false; }
@@ -127,9 +128,24 @@ export async function buildPluginPackages(root = process.cwd(), options = {}) {
     if (!selected.some(instance => instance.package === id)) throw new Error(`Package is not in the build profile: ${id}`);
   }
   const unique = [...new Map(selected.map(instance => [`${instance.package}@${instance.version}`, instance])).values()];
+  const endpointInputs = new Set();
+  for (const instance of unique) {
+    for (const name of ["runtime.build.json", "manager-runtime.build.json", "egress-runtime.build.json"]) {
+      const specificationPath = path.join(sourceRoot, "builtin", encodeURIComponent(instance.package), instance.version, name);
+      if (!await pathExists(specificationPath)) continue;
+      const specification = JSON.parse(await fs.readFile(specificationPath, "utf8"));
+      const bundle = await bundleMessageEndpointRuntime(root, specification);
+      for (const input of bundle.inputs) endpointInputs.add(input);
+      for (const resource of specification.resources ?? []) endpointInputs.add(path.resolve(root, resource.source));
+      for (const worker of specification.workers ?? []) {
+        for (const input of (await bundleMessageEndpointWorker(root, worker)).inputs) endpointInputs.add(input);
+      }
+    }
+  }
   const contractSource = path.join(root, "src/manager/apiOperationContract.ts");
   const inputPaths = [profilePath, path.join(sourceRoot, "contracts/plugin-sdk"), contractSource,
-    path.join(root, "scripts/build-plugin-packages.mjs"), path.join(root, "scripts/generate-plugin-api-types.mjs"),
+    path.join(root, "scripts/build-plugin-packages.mjs"), path.join(root, "scripts/build-message-endpoint-runtime.mjs"), path.join(root, "scripts/generate-plugin-api-types.mjs"),
+    ...endpointInputs,
     path.join(root, "package-lock.json"), ...unique.map(instance => path.join(sourceRoot, "builtin", encodeURIComponent(instance.package), instance.version))];
   await fs.mkdir(path.dirname(outputRoot), { recursive: true });
   const stageRoot = await fs.mkdtemp(path.join(path.dirname(outputRoot), ".plugin-build-"));
@@ -179,6 +195,25 @@ export async function buildPluginPackages(root = process.cwd(), options = {}) {
       }
       await fs.mkdir(path.dirname(stagedTarget), { recursive: true });
       await fs.cp(source, stagedTarget, { recursive: true, force: true });
+      for (const name of ["runtime.build.json", "manager-runtime.build.json", "egress-runtime.build.json"]) {
+        const endpointBuild = path.join(source, name);
+        if (await pathExists(endpointBuild)) {
+          const specification = JSON.parse(await fs.readFile(endpointBuild, "utf8"));
+          await bundleMessageEndpointRuntime(rawRoot, specification, path.join(stagedTarget, name.replace(".build.json", ".mjs")), { dependencyRoot: root });
+          for (const resource of specification.resources ?? []) {
+            const destination = path.resolve(stagedTarget, resource.target);
+            if (!inside(stagedTarget, destination)) throw new Error(`Endpoint resource escapes its package: ${resource.target}`);
+            await fs.mkdir(path.dirname(destination), { recursive: true });
+            await fs.cp(path.resolve(rawRoot, resource.source), destination, { recursive: true });
+          }
+          for (const worker of specification.workers ?? []) {
+            const destination = path.resolve(stagedTarget, worker.target);
+            if (!inside(stagedTarget, destination)) throw new Error(`Endpoint worker escapes its package: ${worker.target}`);
+            await fs.mkdir(path.dirname(destination), { recursive: true });
+            await bundleMessageEndpointWorker(rawRoot, worker, destination, { dependencyRoot: root });
+          }
+        }
+      }
       await bundlePluginSdk(stagedTarget, manifest, sdkSource);
       const versions = desired.get(encodedPackage) ?? new Set();
       versions.add(instance.version);

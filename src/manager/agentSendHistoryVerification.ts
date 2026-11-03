@@ -1,11 +1,13 @@
 import fs from "node:fs/promises";
 import { TextDecoder } from "node:util";
+import { createHash } from "node:crypto";
 import { agentSendIdempotencyPayload, prepareAgentSendRequest, type AgentSendRequest, type AgentSendResult } from "../agentSend.js";
 import type { AgentReplyRequest, AgentReplyResult } from "../outbox.js";
 import type { AgentSendHistoryEvidence, AgentSendHistoryState } from "./agentSendVerificationEvidence.js";
 import { projectOriginalAgentSendBinding, type OriginalAgentSendBindingObservation } from "./agentSendOriginalBinding.js";
 import { durableDeliveryRequestDigest } from "./durableDeliveryIdempotency.js";
 
+// Bound individual records, not the lifetime of the append-only history.
 export const MAX_AGENT_SEND_HISTORY_BYTES = 16 * 1024 * 1024;
 export type AgentSendHistoryVerificationOptions = Readonly<{
   /** Trusted owner-selected path, never an HTTP-supplied path. */
@@ -27,37 +29,61 @@ function nonempty(value: unknown): value is string { return typeof value === "st
 class HistoryReadFailure extends Error {
   constructor(readonly state: AgentSendHistoryState) { super("Original send history is not authoritative."); }
 }
-async function readStableHistory(logPath: string): Promise<string> {
+async function readStableHistory(logPath: string, visit: (line: string) => void): Promise<void> {
   let handle: Awaited<ReturnType<typeof fs.open>>;
   try { handle = await fs.open(logPath, "r"); }
   catch (error) { throw new HistoryReadFailure((error as NodeJS.ErrnoException)?.code === "ENOENT" ? "missing" : "read_failed"); }
   try {
     const before = await handle.stat({ bigint: true });
     if (!before.isFile()) throw new HistoryReadFailure("read_failed");
-    if (before.size > BigInt(MAX_AGENT_SEND_HISTORY_BYTES)) throw new HistoryReadFailure("oversized");
+    if (before.size > BigInt(Number.MAX_SAFE_INTEGER)) throw new HistoryReadFailure("oversized");
     const size = Number(before.size);
     // Fixed-position, bounded reads cannot follow an indefinitely growing log.
-    const read = async () => {
-      const bytes = Buffer.alloc(size);
+    const read = async (observe: boolean) => {
+      const bytes = Buffer.alloc(64 * 1024);
+      const hash = createHash("sha256");
+      let parts: Buffer[] = [];
+      let lineBytes = 0;
+      let firstLine = true;
+      const append = (part: Buffer) => {
+        lineBytes += part.length;
+        if (lineBytes > MAX_AGENT_SEND_HISTORY_BYTES) throw new HistoryReadFailure("oversized");
+        if (part.length) parts.push(Buffer.from(part));
+      };
       let offset = 0;
       while (offset < size) {
-        const result = await handle.read(bytes, offset, size - offset, offset);
+        const result = await handle.read(bytes, 0, Math.min(bytes.length, size - offset), offset);
         if (!result.bytesRead) throw new HistoryReadFailure("changed");
         offset += result.bytesRead;
+        const chunk = bytes.subarray(0, result.bytesRead);
+        hash.update(chunk);
+        if (!observe) continue;
+        let start = 0;
+        for (let end = chunk.indexOf(10); end !== -1; end = chunk.indexOf(10, start)) {
+          append(chunk.subarray(start, end));
+          let line: string;
+          try { line = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(Buffer.concat(parts, lineBytes)); }
+          catch { throw new HistoryReadFailure("damaged"); }
+          // Match whole-file UTF-8 decoding: only a file-leading BOM is stripped.
+          if (firstLine && line.startsWith("\uFEFF")) line = line.slice(1);
+          firstLine = false;
+          visit(line);
+          parts = []; lineBytes = 0; start = end + 1;
+        }
+        append(chunk.subarray(start));
       }
-      return bytes;
+      if (observe && lineBytes) throw new HistoryReadFailure("damaged");
+      return hash.digest("hex");
     };
-    const first = await read();
-    const second = await read();
+    const first = await read(true);
+    const second = await read(false);
     const after = await handle.stat({ bigint: true });
     let current: typeof before;
     try { current = await fs.stat(logPath, { bigint: true }); }
     catch (error) { throw new HistoryReadFailure((error as NodeJS.ErrnoException)?.code === "ENOENT" ? "changed" : "read_failed"); }
     const same = (value: typeof before) => value.isFile() && value.dev === before.dev && value.ino === before.ino
       && value.size === before.size && value.mtimeNs === before.mtimeNs && value.ctimeNs === before.ctimeNs;
-    if (!same(after) || !same(current) || !first.equals(second)) throw new HistoryReadFailure("changed");
-    try { return new TextDecoder("utf-8", { fatal: true }).decode(first); }
-    catch { throw new HistoryReadFailure("damaged"); }
+    if (!same(after) || !same(current) || first !== second) throw new HistoryReadFailure("changed");
   } catch (error) {
     throw error instanceof HistoryReadFailure ? error : new HistoryReadFailure("read_failed");
   } finally { await handle.close(); }
@@ -81,37 +107,34 @@ export async function inspectOriginalAgentSendHistory(
     const identity = { deliveryId: prepared.deliveryId, requestDigest: outerRequestDigest };
     const unknown = (historyState: AgentSendHistoryState): AgentSendHistoryEvidence => ({ ...identity, historyConflict: false,
       historyState, inspection: { state: "uncertain", reason: "Original send history is not authoritative." } });
-    let text: string;
-    try { text = await readStableHistory(options.logPath); }
-    catch (error) { return unknown(error instanceof HistoryReadFailure ? error.state : "read_failed"); }
-    let damaged = Boolean(text && !text.endsWith("\n"));
+    let damaged = false;
     let conflict = false;
     let seen = false;
     let completed: AgentReplyResult | undefined;
     let terminalComplete = false;
     let uploadedFileId: string | undefined;
     let originalBinding: OriginalAgentSendBindingObservation | undefined;
-    for (const line of text.split(/\r?\n/)) {
-      if (!line.trim()) continue;
+    try { await readStableHistory(options.logPath, line => {
+      if (!line.trim()) return;
       let entry: Record<string, unknown> | undefined;
-      try { entry = record(JSON.parse(line)); } catch { damaged = true; continue; }
+      try { entry = record(JSON.parse(line)); } catch { damaged = true; return; }
       const data = record(entry?.data);
-      if (!entry || !data || typeof entry.event !== "string") { damaged = true; continue; }
+      if (!entry || !data || typeof entry.event !== "string") { damaged = true; return; }
       const nested = record(data.request);
       const id = data.deliveryId ?? nested?.deliveryId;
-      if (typeof id !== "string" || id.trim() !== trace.deliveryId) continue;
+      if (typeof id !== "string" || id.trim() !== trace.deliveryId) return;
       seen = true;
       // Never derive a missing historical digest from a potentially incomplete nested request.
-      if (!nonempty(data.deliveryRequestDigest)) { damaged = true; continue; }
-      if (data.deliveryRequestDigest !== trace.deliveryRequestDigest) { conflict = true; continue; }
-      if (nested && nonempty(nested.deliveryId) && nested.deliveryId !== trace.deliveryId) { damaged = true; continue; }
+      if (!nonempty(data.deliveryRequestDigest)) { damaged = true; return; }
+      if (data.deliveryRequestDigest !== trace.deliveryRequestDigest) { conflict = true; return; }
+      if (nested && nonempty(nested.deliveryId) && nested.deliveryId !== trace.deliveryId) { damaged = true; return; }
       if (data.ok !== true || data.status !== "sent") {
         if (entry.event === "group_file_caption_failed" || completed) terminalComplete = false;
-        continue;
+        return;
       }
-      if (!nonempty(data.sentFileId) && !nonempty(data.sentMessageId)) continue;
+      if (!nonempty(data.sentFileId) && !nonempty(data.sentMessageId)) return;
       try { completed = options.projectResult(data); }
-      catch { damaged = true; continue; }
+      catch { damaged = true; return; }
       terminalComplete = false;
       const originalPayload = record(internal.payload);
       const hasCaption = nonempty(internal.text) || nonempty(originalPayload?.text);
@@ -135,7 +158,7 @@ export async function inspectOriginalAgentSendHistory(
           terminalComplete = true;
         }
       }
-    }
+    }); } catch (error) { return unknown(error instanceof HistoryReadFailure ? error.state : "read_failed"); }
     // A known conflict outranks completion AND unrelated malformed records.
     if (conflict) return { ...identity, historyConflict: true, inspection: { state: "uncertain", reason: "Original send history has a payload conflict." } };
     if (damaged) return unknown("damaged");

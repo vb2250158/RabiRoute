@@ -139,12 +139,15 @@ test("partial native scan is returned while retirement still joins the actual un
   } finally { release(); }
 });
 
-test("native aggregate failure retains the original 500 code/message response", async t => {
+test("one native endpoint inspection failure returns partial diagnostics and preserves other endpoint scans", async t => {
   const f = await operationFixture(t, { napcat: async () => { throw new Error("Controlled native scan failure."); } });
-  const reply = await f.send(); assert.equal(reply.status, 500); assert.deepEqual(reply.body, { code: -1, message: "Controlled native scan failure." });
+  const reply = await f.send(); assert.equal(reply.status, 200);
+  assert.equal((reply.body as any).scan.partial, true);
+  assert.equal((reply.body as any).scan.napcatInstances.napcat.message, "Controlled native scan failure.");
+  assert.ok((reply.body as any).adapters.webhook);
 });
 
-test("plugin retirement joins timed-out native NapCat probes before unregistering scan providers", { timeout: 10000 }, async () => {
+test("aggregate plugin retirement joins timed-out probes and preserves endpoint-owned scan providers", { timeout: 10000 }, async () => {
   const { scanNapcatHealthReadOnly } = await import("../messageEndpoints/napcatHealthScan.js");
   const { ManagerPluginRouteRegistry } = await import("./managerPluginRouteRegistry.js");
   const plugin = await import(new URL("../../plugins/builtin/io.rabiroute.manager.message-adapter-control/1.0.0/manager.mjs", import.meta.url).href);
@@ -152,14 +155,13 @@ test("plugin retirement joins timed-out native NapCat probes before unregisterin
   let release!: () => void, start!: () => Promise<() => Promise<void>>, operations!: ReturnType<typeof createMessageAdapterControlOperations>;
   const probe = new Promise<Record<string, unknown>>(resolve => { release = () => resolve({ ok: true }); });
   const events: string[] = [], registry = new ManagerPluginRouteRegistry();
+  const messageEndpointScanProviders = new MessageAdapterScanProviderRegistry();
+  messageEndpointScanProviders.register({ type: "webhook", label: "fixture", maturity: "experimental", scan: adapterResult });
   const runtime = {
+    messageEndpointScanProviders,
     MessageAdapterScanProviderRegistry, MessageAdapterControlService, createMessageAdapterControlOperations,
     managerPluginRoutes: { registerOperationsAsync: async (id: string, definitions: typeof operations, signal: AbortSignal) => { operations = definitions; return registry.registerOperationsAsync(id, definitions, signal); } },
-    registerBuiltinMessageAdapterScanProviders: (providers: MessageAdapterScanProviderRegistry) => {
-      const unregister = providers.register({ type: "webhook", label: "fixture", maturity: "experimental", scan: adapterResult });
-      return () => { events.push("providers-unregistered"); unregister(); };
-    },
-    napcatScanHealthPayload: (trackProbe: <T>(value: Promise<T>) => Promise<T>) => scanNapcatHealthReadOnly({
+    inspectEndpoint: (_type: string, trackProbe: <T>(value: Promise<T>) => Promise<T>) => scanNapcatHealthReadOnly({
       runtimes: ["fixture"], gatewayId: value => value, instances: () => ["fixture"], instanceId: value => value,
       instanceEnabled: () => true, instanceMetadata: () => ({}), testHealth: () => trackProbe(probe)
     }, { deadlineMs: 1 }),
@@ -174,6 +176,7 @@ test("plugin retirement joins timed-out native NapCat probes before unregisterin
     assert.equal((result.body as any).napcatHealth.fixture.instances.fixture.scanState, "timeout");
     let stopped = false; const stopping = retire().then(() => { stopped = true; });
     await new Promise<void>(resolve => setImmediate(resolve)); assert.equal(stopped, false); assert.deepEqual(events, []);
-    release(); await stopping; assert.equal(stopped, true); assert.deepEqual(events, ["providers-unregistered"]);
+    release(); await stopping; assert.equal(stopped, true); assert.deepEqual(events, []);
+    assert.equal(messageEndpointScanProviders.snapshot().length, 1, "The aggregate does not own another endpoint's provider.");
   } finally { release(); clearTimeout(keepAlive); }
 });

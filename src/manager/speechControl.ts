@@ -1,4 +1,6 @@
 import { stickySpeechAuthority, awaitSpeechAuthority, type SpeechAuthorityGuard } from "./speechRequestAuthority.js";
+import { SpeechControlError } from "../shared/speechErrors.js";
+export { SpeechControlError } from "../shared/speechErrors.js";
 import { randomUUID } from "node:crypto";
 import {
   DEFAULT_SPEECH_ROUTE_PROFILE,
@@ -106,16 +108,6 @@ export type ManagerSpeechControlDependencies = {
   createMessageId?: () => string;
   statusCacheTtlMs?: number;
 };
-
-export class SpeechControlError extends Error {
-  constructor(
-    message: string,
-    readonly status: number
-  ) {
-    super(message);
-    this.name = "SpeechControlError";
-  }
-}
 
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)

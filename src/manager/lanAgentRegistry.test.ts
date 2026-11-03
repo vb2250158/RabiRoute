@@ -505,6 +505,68 @@ test("registry retains every unfinished task and durable result/idempotency mark
   }
 });
 
+for (const action of ["management", "assignment"] as const) {
+test(`retiring connection rejects ${action} without a frame or a false delivered state`, async t => {
+  const statePath = temporaryStatePath();
+  const registry = new LanAgentRegistry({ statePath });
+  const server = http.createServer();
+  registry.attach(server, { enabled: () => true, getToken: () => "fixture" });
+  const port = await listen(server);
+  let retired: ConnectedClient | undefined;
+  let healthy: ConnectedClient | undefined;
+  try {
+    retired = await connectNode(port, "fixture", "retired");
+    healthy = await connectNode(port, "fixture", "healthy");
+    // Inject the transport-owned lifecycle signal after the real handshake.
+    const internals = registry as unknown as {
+      connections: Map<string, { socket: WebSocket }>;
+      protocolGuards: WeakMap<WebSocket, { signal: AbortSignal }>;
+      managementRequests: Map<string, { timer: ReturnType<typeof setTimeout> }>;
+    };
+    const controller = new AbortController();
+    const reason = new Error("fixture connection retired");
+    controller.abort(reason);
+    internals.protocolGuards.set(internals.connections.get("retired")!.socket, { signal: controller.signal });
+    const closed = new Promise<void>(resolve => retired!.socket.once("close", () => resolve()));
+    if (action === "management") {
+      const setPending = t.mock.method(internals.managementRequests, "set");
+      const clearTimer = t.mock.method(globalThis, "clearTimeout");
+      const pending = registry.manageAgent("retired", "threads", { action: "read" });
+      // Assert synchronous cleanup, before any socket close callback or deadline.
+      assert.equal(internals.managementRequests.size, 0);
+      const timer = setPending.mock.calls[0].arguments[1].timer;
+      assert.ok(clearTimer.mock.calls.some(call => call.arguments[0] === timer));
+      await assert.rejects(pending, error => {
+        assert.match((error as Error).message, /connection is retiring; frame was not sent/);
+        assert.equal((error as Error).cause, reason);
+        assert.equal((error as { code?: string }).code, undefined);
+        return true;
+      });
+      setPending.mock.restore(); clearTimer.mock.restore();
+    } else {
+      assert.throws(() => registry.assignTask({ nodeId: "retired", taskId: "retired-task",
+        targetAgent: "codex-desktop", threadId: "fixture-thread", message: "fixture" }), /connection is retiring/);
+      assert.equal(registry.listTasks().find(task => task.taskId === "retired-task")?.status, "queued");
+      const saved = JSON.parse(fs.readFileSync(statePath, "utf8"));
+      assert.equal(saved.tasks.find((task: LanAgentTask) => task.taskId === "retired-task").status, "queued");
+    }
+    await closed;
+    assert.equal(retired.messages.filter(message => ["manageAgent", "assignTask"].includes(String(message.type))).length, 0);
+    // An unrelated connection still completes both ordinary public operations.
+    const pending = registry.manageAgent("healthy", "threads", { action: "read" });
+    const request = await healthy.waitFor("manageAgent");
+    healthy.socket.send(JSON.stringify({ type: "managementResult", requestId: request.requestId, result: { threadId: "fixture-thread" } }));
+    assert.deepEqual(await pending, { threadId: "fixture-thread" });
+    const task = registry.assignTask({ nodeId: "healthy", targetAgent: "codex-desktop", threadId: "fixture-thread", message: "fixture" });
+    assert.equal(task.status, "delivered");
+    assert.equal(((await healthy.waitFor("assignTask")).task as LanAgentTask).taskId, task.taskId);
+  } finally {
+    retired?.socket.close(); healthy?.socket.close(); registry.close(); await closeServer(server);
+    fs.rmSync(path.dirname(statePath), { recursive: true, force: true });
+  }
+});
+}
+
 test("management exposes no-frame proof only when the original connection is unavailable before sending", async () => {
   const statePath = temporaryStatePath(); const registry = new LanAgentRegistry({ statePath });
   const server = http.createServer(); registry.attach(server, { enabled: () => true, getToken: () => "fixture" }); const port = await listen(server);

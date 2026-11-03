@@ -65,9 +65,15 @@ type RouteCatalogInput = Omit<
   "operation" | "requestId" | "attemptToken" | "operationId"
 >;
 
+export type RouteCatalogApplicationContext = Readonly<{
+  operationId: string;
+  kind: RouteCatalogTransactionOperation["kind"];
+  resolveOperationId?: string;
+}>;
+
 export type RouteCatalogStartupLifecycleOptions = Readonly<{
   input?: () => RouteCatalogInput;
-  apply(snapshot: RouteCatalogSnapshot): void | Promise<void>;
+  apply(snapshot: RouteCatalogSnapshot, context: RouteCatalogApplicationContext): void | Promise<void>;
   attemptTimeoutMs?: number;
   retryBaseMs?: number;
   retryMaxMs?: number;
@@ -641,7 +647,11 @@ export class RouteCatalogStartupLifecycle {
         if (this.stopped || this.currentAttempt?.identity !== identity || this.currentAttempt.settled) return;
         const token = this.currentAttempt;
         const validated = validateSnapshot(snapshot, identity);
-        const application = Promise.resolve(this.options.apply(validated));
+        const application = Promise.resolve(this.options.apply(validated, Object.freeze({
+          operationId: entry.operationId,
+          kind: entry.operation.kind,
+          ...(entry.operation.kind === "capture" && entry.operation.resolveOperationId ? { resolveOperationId: entry.operation.resolveOperationId } : {})
+        })));
         this.applicationFlight = application;
         try { await application; } finally {
           if (this.applicationFlight === application) this.applicationFlight = undefined;
@@ -698,7 +708,11 @@ export class RouteCatalogStartupLifecycle {
       this.currentAttempt = undefined;
       try {
         const validated = validateSnapshot(snapshot, token.identity);
-        const application = Promise.resolve(this.options.apply(validated));
+        const application = Promise.resolve(this.options.apply(validated, Object.freeze({
+          operationId: entry.operationId,
+          kind: entry.operation.kind,
+          ...(entry.operation.kind === "capture" && entry.operation.resolveOperationId ? { resolveOperationId: entry.operation.resolveOperationId } : {})
+        })));
         this.applicationFlight = application;
         try { await application; } finally { if (this.applicationFlight === application) this.applicationFlight = undefined; }
         if (this.stopped) return;

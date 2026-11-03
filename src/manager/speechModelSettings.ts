@@ -1,14 +1,12 @@
 import { getTimeoutMs } from "../shared/timeoutSettings.js";
+import { SpeechModelSettingsError } from "../shared/speechErrors.js";
+export { SpeechModelSettingsError } from "../shared/speechErrors.js";
 import fs from "node:fs";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { atomicWriteFileSync, withFileLockSync } from "../shared/filePersistence.js";
 import { recordDataMutationAudit } from "../observability/dataMutationAudit.js";
 import type { SpeechModelDirectorySettings } from "../shared/speechModelManagement.js";
-
-export class SpeechModelSettingsError extends Error {
-  constructor(message: string, readonly status = 400) { super(message); }
-}
 
 export function validateModelRoot(value: unknown, protectedRoots: string[], fixedDrive?: (drive: string) => boolean): string | null {
   if (value === null || value === "") return null;

@@ -273,6 +273,10 @@ export class PerformanceStore {
   private activeFlush: Promise<void> | undefined;
   private listeners = new Set<Listener>();
   private loaded = false;
+  private loadingHistory = false;
+  private historyFailure: string | undefined;
+  private historyWarning: string | undefined;
+  private historyIncidents = 0;
   private lastPersistedAt: string | undefined;
   private lastError: string | undefined;
   private droppedRecords = 0;
@@ -293,12 +297,26 @@ export class PerformanceStore {
   }
 
   async start(): Promise<void> {
-    await fs.promises.mkdir(this.logDirectory, { recursive: true });
-    await this.cleanup();
-    // A retired plugin can reactivate the same hydrated store instance.
-    // Its aggregate index already owns historical samples beyond the dedupe window.
-    if (!this.loaded || this.lastError) await this.loadRecent();
-    this.scheduleCleanup();
+    const hydrate = !this.loaded || Boolean(this.historyFailure || this.historyWarning);
+    this.historyFailure = undefined;
+    this.historyWarning = undefined;
+    this.historyIncidents = 0;
+    if (hydrate) this.loadingHistory = true;
+    try {
+      await fs.promises.mkdir(this.logDirectory, { recursive: true });
+      await this.cleanup();
+      if (hydrate) {
+        // Join admitted writes before rebuilding the bounded, derived history.
+        // Telemetry writes retain their existing best-effort/drop accounting.
+        await this.flush();
+        await this.loadRecent();
+      }
+      this.scheduleCleanup();
+    } finally { this.loadingHistory = false; }
+  }
+
+  historyStatus(): Readonly<{ incidents: number; lastError?: string; fatalError?: string }> {
+    return { incidents: this.historyIncidents, lastError: this.historyWarning, fatalError: this.historyFailure };
   }
 
   applyConfig(config: PerformanceMonitoringConfig): void {
@@ -312,7 +330,7 @@ export class PerformanceStore {
 
   append(sample: PerformanceSample): boolean {
     const startedAt = performance.now();
-    if (!this.config.enabled || !isPerformanceSample(sample)) return false;
+    if (this.loadingHistory || !this.config.enabled || !isPerformanceSample(sample)) return false;
     if (this.sampleIds.has(sample.sampleId)) return false;
     let serialized: string;
     try {
@@ -408,7 +426,7 @@ export class PerformanceStore {
       lastFlushDurationMs: this.lastFlushDurationMs,
       lastCleanupDurationMs: this.lastCleanupDurationMs,
       summaryCacheHits: this.summaryCacheHits,
-      lastError: this.lastError
+      lastError: [this.lastError, this.historyFailure, this.historyWarning].filter(Boolean).join("; ") || undefined
     };
   }
 
@@ -526,6 +544,8 @@ export class PerformanceStore {
   }
 
   private async loadRecent(): Promise<void> {
+    this.loaded = false;
+    this.historyFailure = undefined;
     try {
       const entries = await fs.promises.readdir(this.logDirectory, { withFileTypes: true });
       const cutoff = Date.now() - Math.min(48, this.config.retentionHours) * 60 * 60 * 1_000;
@@ -534,27 +554,51 @@ export class PerformanceStore {
         .map(entry => entry.name)
         .filter(filename => performanceShardStart(filename) + 60 * 60 * 1_000 >= cutoff)
         .sort();
+      // A retry replaces the old derived index, including samples beyond the
+      // bounded dedupe window. Successful warm starts never enter this path.
+      this.aggregateIndex = new PerformanceAggregateIndex();
+      this.recentSamples = [];
+      this.recentSampleBytes = 0;
+      this.sampleIds.clear();
+      this.sampleIdOrder = [];
+      this.lastAggregatePruneAt = 0;
+      this.sampleVersion++;
+      this.summaryCache.clear();
       for (const filename of files) {
-        const input = fs.createReadStream(path.join(this.logDirectory, filename), { encoding: "utf8" });
-        const lines = readline.createInterface({ input, crlfDelay: Infinity });
-        for await (const line of lines) {
-          if (!line.trim()) continue;
-          try {
-            if (Buffer.byteLength(line) > PERFORMANCE_STORE_MEMORY_LIMITS.serializedSampleBytes) continue;
-            const sample = JSON.parse(line) as unknown;
-            if (isPerformanceSample(sample) && sampleTime(sample) >= cutoff) {
-              this.remember(sample, Buffer.byteLength(line) + 1);
+        let input: fs.ReadStream | undefined;
+        let lines: readline.Interface | undefined;
+        try {
+          input = fs.createReadStream(path.join(this.logDirectory, filename), { encoding: "utf8" });
+          lines = readline.createInterface({ input, crlfDelay: Infinity });
+          for await (const line of lines) {
+            if (!line.trim()) continue;
+            try {
+              if (Buffer.byteLength(line) > PERFORMANCE_STORE_MEMORY_LIMITS.serializedSampleBytes) continue;
+              const sample = JSON.parse(line) as unknown;
+              if (isPerformanceSample(sample) && sampleTime(sample) >= cutoff) {
+                this.remember(sample, Buffer.byteLength(line) + 1);
+              }
+            } catch {
+              // An incomplete or malformed record does not hide later records.
             }
-          } catch {
-            // A partially written final line is ignored; later records remain readable.
+          }
+        } catch (error) {
+          this.historyIssue(filename, error);
+        } finally {
+          lines?.close();
+          if (input) {
+            const closed = input.closed ? Promise.resolve() : new Promise<void>(resolve => input!.once("close", resolve));
+            input.destroy();
+            await closed;
           }
         }
       }
-      this.lastError = undefined;
     } catch (error) {
-      this.lastError = error instanceof Error ? error.message : String(error);
+      this.historyFailure = error instanceof Error ? error.message : String(error);
     } finally {
       this.loaded = true;
+      this.sampleVersion++;
+      this.summaryCache.clear();
       await this.refreshDiskStatus();
     }
   }
@@ -576,19 +620,25 @@ export class PerformanceStore {
       .filter(entry => entry.isFile() && /^performance-.*\.jsonl$/.test(entry.name))
       .map(async entry => {
         const filePath = path.join(this.logDirectory, entry.name);
-        const stat = await fs.promises.stat(filePath);
-        return { filePath, name: entry.name, mtimeMs: stat.mtimeMs, size: stat.size };
-      }))).sort((left, right) => left.mtimeMs - right.mtimeMs);
+        try {
+          const stat = await fs.promises.stat(filePath);
+          return { filePath, name: entry.name, mtimeMs: stat.mtimeMs, size: stat.size };
+        } catch (error) { this.historyIssue(entry.name, error); return undefined; }
+      }))).filter((item): item is NonNullable<typeof item> => Boolean(item)).sort((left, right) => left.mtimeMs - right.mtimeMs);
+    let retainedExpiredBytes = 0;
     for (const file of files.filter(item => item.mtimeMs < cutoff)) {
-      await fs.promises.rm(file.filePath, { force: true });
+      try { await fs.promises.rm(file.filePath, { force: true }); }
+      catch (error) { retainedExpiredBytes += file.size; this.historyIssue(file.name, error); }
     }
     const remaining = files.filter(item => item.mtimeMs >= cutoff);
     const maximumBytes = this.config.maxDiskMb * 1024 * 1024;
-    let totalBytes = remaining.reduce((sum, item) => sum + item.size, 0);
+    let totalBytes = retainedExpiredBytes + remaining.reduce((sum, item) => sum + item.size, 0);
     for (const file of remaining) {
       if (totalBytes <= maximumBytes) break;
-      await fs.promises.rm(file.filePath, { force: true });
-      totalBytes -= file.size;
+      try {
+        await fs.promises.rm(file.filePath, { force: true });
+        totalBytes -= file.size;
+      } catch (error) { this.historyIssue(file.name, error); }
     }
     await this.refreshDiskStatus();
     this.lastCleanupDurationMs = Math.round((performance.now() - startedAt) * 10) / 10;
@@ -598,12 +648,19 @@ export class PerformanceStore {
     try {
       const entries = await fs.promises.readdir(this.logDirectory, { withFileTypes: true });
       const files = entries.filter(entry => entry.isFile() && /^performance-.*\.jsonl$/.test(entry.name));
-      const stats = await Promise.all(files.map(entry => fs.promises.stat(path.join(this.logDirectory, entry.name))));
+      const stats = await Promise.all(files.map(async entry => {
+        try { return await fs.promises.stat(path.join(this.logDirectory, entry.name)); }
+        catch (error) { this.historyIssue(entry.name, error); return undefined; }
+      }));
       this.fileCount = files.length;
-      this.diskBytes = stats.reduce((sum, stat) => sum + stat.size, 0);
-    } catch {
-      this.fileCount = 0;
-      this.diskBytes = 0;
+      this.diskBytes = stats.reduce((sum, stat) => sum + (stat?.size ?? 0), 0);
+    } catch (error) {
+      this.historyFailure = error instanceof Error ? error.message : String(error);
     }
+  }
+
+  private historyIssue(filename: string, error: unknown): void {
+    this.historyIncidents++;
+    this.historyWarning ??= `${filename}: ${error instanceof Error ? error.message : String(error)} (history or disk statistics may be incomplete)`;
   }
 }

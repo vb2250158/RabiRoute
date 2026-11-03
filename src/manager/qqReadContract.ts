@@ -1,6 +1,7 @@
 import { freezeApiData, type ApiOperationContract, type ApiSchema } from "./apiOperationContract.js";
 import { QQ_MEDIA_MAX_BYTES, qqMessageMedia, qqMessageText, type QqMessage } from "./qqMessageMedia.js";
 import { qqReadSettings } from "../shared/qqReadSettings.js";
+import {qqStructuredMessageParts} from '../shared/qqMessageParts.js';
 
 export const QQ_READ_LIMITS = Object.freeze({ routeIdChars: 256, historyDefault: 50, historyMax: 100, fallbackCount: 10,
   get concurrency() { return qqReadSettings.readConcurrency; }, get timeoutMs() { return qqReadSettings.readTimeoutMs; }, get mediaTimeoutMs() { return qqReadSettings.mediaTimeoutMs; } });
@@ -29,6 +30,7 @@ const projection = freezeApiData<Readonly<Record<string, ProjectionField>>>({
   sender: { schema: text, read: row => String(row.sender?.user_id ?? row.user_id ?? "") },
   senderName: { schema: true, optional: true, read: row => row.sender?.card || row.sender?.nickname },
   text: { schema: text, read: row => qqMessageText(row) },
+  parts: {schema:{type:'array',items:{type:'object'}},read:row=>qqStructuredMessageParts(row.message,qqMessageText(row),qqMessageMedia(row.message??row.raw_message).map(media=>media.name))},
   attachments: { schema: { type: "array", items: attachment }, read: (row, selection) => qqMessageMedia(row.message ?? row.raw_message).map((media, index) => ({
     index, kind: media.kind, name: media.name,
     contentUrl: `/api/agent/qq/messages/${encodeURIComponent(String(row.message_id))}/attachments/${index}?${new URLSearchParams(selection)}`

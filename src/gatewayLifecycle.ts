@@ -14,6 +14,9 @@ export type GatewayReady = Readonly<{
   gatewayGenerationId: string;
   pid: number;
   readyAt: string;
+  routeSnapshotProtocol?: 1;
+  routeRevision?: string;
+  unavailableInstances?: readonly string[];
   endpoints: readonly GatewayEndpoint[];
 }>;
 
@@ -47,6 +50,9 @@ export function parseGatewayReadyLine(
     || ready.gatewayGenerationId !== expected.gatewayGenerationId
     || ready.pid !== expected.pid
     || !Date.parse(ready.readyAt)
+    || ((ready.routeSnapshotProtocol !== undefined || ready.routeRevision !== undefined)
+      && (ready.routeSnapshotProtocol !== 1 || typeof ready.routeRevision !== "string" || !/^[a-f0-9]{64}$/.test(ready.routeRevision)))
+    || (ready.unavailableInstances !== undefined && (!Array.isArray(ready.unavailableInstances) || !ready.unavailableInstances.every(id => typeof id === "string" && id.length > 0 && !/[\u0000-\u001f\u007f]/.test(id))))
     || !Array.isArray(ready.endpoints)
     || !ready.endpoints.every(validEndpoint)) return null;
   return Object.freeze({ ...ready, endpoints: Object.freeze([...ready.endpoints]) });

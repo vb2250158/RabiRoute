@@ -9,6 +9,7 @@ import { parseSpeechProcessResult } from "./speechMessageDelivery.js";
 import { SpeechIngressStore } from "./speechIngressStore.js";
 import type { RoleKnowledgeSnapshot } from "./roleKnowledge.js";
 import { handleRoleContextProjectionRequest } from "./manager/roleContextProjection.js";
+import { PluginProfileSettings } from "./plugin-runtime-host/profileSettings.js";
 
 type ChildResult = {
   code: number | null;
@@ -24,7 +25,7 @@ type SpeechCliFixture = {
   ingressStore: SpeechIngressStore;
 };
 
-async function startRoleContextFixture(roleId: string, roleDir: string, gatewayId: string): Promise<{
+async function startRoleContextFixture(roleId: string, roleDir: string, gatewayId: string, endpointStatus = "active"): Promise<{
   env: NodeJS.ProcessEnv;
   close: () => Promise<void>;
 }> {
@@ -53,6 +54,14 @@ async function startRoleContextFixture(roleId: string, roleDir: string, gatewayI
   };
   const server = http.createServer((request, response) => {
     const url = new URL(request.url || "/", `http://${request.headers.host || "127.0.0.1"}`);
+    if (request.method === "GET" && url.pathname === "/api/plugins/instances") {
+      jsonResponse(response, 200, { code: 0, data: { ...identity, instances: ["speech", "rabilink"].map(type => ({
+        instanceId: `endpoint:${type}`, pluginId: `io.test.endpoint.${type}`, version: "1.0.0", enabled: true, status: endpointStatus,
+        manifest: { schemaVersion: 2, id: `io.test.endpoint.${type}`, version: "1.0.0", entries: { manager: { execution: "in_process", module: "./manager.mjs" } },
+          provides: [`endpoint.${type}@1`], requires: [], optional: [], permissions: [] }
+      })) } });
+      return;
+    }
     if (!handleRoleContextProjectionRequest(request, url, response, {
       identity,
       isLoopback: () => true,
@@ -118,6 +127,15 @@ function createFixture(roleId: string): SpeechCliFixture {
   const roleDir = path.join(rolesDir, roleId);
   fs.mkdirSync(roleDir, { recursive: true });
   fs.writeFileSync(path.join(roleDir, "persona.md"), `# ${roleId}\n`, "utf8");
+  const instances = ["speech", "rabilink"].map(type => ({ id: `endpoint:${type}`, package: `io.test.endpoint.${type}`, version: "1.0.0", enabled: true, config: {}, grants: [] }));
+  fs.mkdirSync(path.join(root, "plugins"), { recursive: true });
+  fs.writeFileSync(path.join(root, "plugins/profile.json"), JSON.stringify({ schemaVersion: 2, readyRequires: [], instances }));
+  for (const instance of instances) {
+    const directory = path.join(root, "plugins/packages", instance.package, instance.version);
+    fs.mkdirSync(directory, { recursive: true });
+    fs.writeFileSync(path.join(directory, "rabi.plugin.json"), JSON.stringify({ schemaVersion: 2, id: instance.package, version: instance.version,
+      entries: { manager: { execution: "in_process", module: "./manager.mjs" } }, provides: [`endpoint.${instance.id.slice(9)}@1`], requires: [], optional: [], permissions: [] }));
+  }
   return { root, ingressDir, rolesDir, roleDir, ingressStore: new SpeechIngressStore(ingressDir) };
 }
 
@@ -130,9 +148,12 @@ function speechCliEnvironment(
 ): NodeJS.ProcessEnv {
   return {
     ...process.env,
+    RABIROUTE_STATE_ROOT: fixture.root,
+    RABIROUTE_PLUGIN_PROFILE: path.join(fixture.root, "plugins/profile.json"),
+    RABIROUTE_PLUGIN_PACKAGE_ROOTS: path.join(fixture.root, "plugins/packages"),
     RABIROUTE_SPEECH_MESSAGES_DIR: fixture.ingressDir,
     GATEWAY_ID: gatewayId,
-    GATEWAY_MANAGER_URL: process.env.GATEWAY_MANAGER_URL,
+    GATEWAY_MANAGER_URL: undefined,
     MESSAGE_ADAPTER_TYPE: adapterType,
     MESSAGE_ADAPTER_TYPES: JSON.stringify([adapterType]),
     AGENT_ADAPTERS: "marvis",
@@ -243,6 +264,33 @@ test("speech CLI reads the host record once and writes one RabiLink persona even
   assert.equal(replyContext.adapterType, "rabilink");
   assert.deepEqual(replyContext.targetDeviceIds, ["phone-cli"]);
   assert.notDeepEqual(replyContext.targetDeviceIds, ["phone-cli-stream-9"]);
+});
+
+test("a real RabiLink CLI child retains the original transcript after its plugin is disabled and never reaches Agent routing", async () => {
+  const fixture = createFixture("DisabledMobile");
+  fixture.ingressStore.append({ recordId: "cli-disabled-mobile", text: "Do not dispatch this disabled endpoint.", messageAdapterType: "rabilink", sourceDeviceId: "test-phone" });
+  const settings = new PluginProfileSettings({ profilePath: path.join(fixture.root, "plugins/profile.json"), settingsRoot: path.join(fixture.root, "data/plugins/settings") });
+  await settings.update("endpoint:rabilink", { expectedRevision: (await settings.snapshot()).revision, enabled: false });
+  const result = await runSpeechCli(["--speech-message=cli-disabled-mobile"], speechCliEnvironment(fixture, "DisabledMobile", "DisabledMobile", "rabilink", []));
+  assert.equal(result.code, 3, result.stderr || result.stdout);
+  assert.equal(parseSpeechProcessResult(result.stdout)?.reason, "endpoint_plugin_disabled");
+  assert.equal(fixture.ingressStore.list().length, 1);
+  assert.equal(fs.existsSync(path.join(fixture.roleDir, "agent-packets.jsonl")), false);
+});
+
+test("an enabled Speech CLI child with a missing native dependency preserves ingress without reaching Agent routing", async () => {
+  const fixture = createFixture("MissingSpeechDependency");
+  fixture.ingressStore.append({ recordId: "cli-waiting-speech", text: "Keep the original transcript.", messageAdapterType: "speech" });
+  const manager = await startRoleContextFixture("MissingSpeechDependency", fixture.roleDir, "WaitingSpeech", "waiting_dependency");
+  try {
+    const result = await runSpeechCli(["--speech-message=cli-waiting-speech"], {
+      ...speechCliEnvironment(fixture, "WaitingSpeech", "MissingSpeechDependency", "speech", []), ...manager.env
+    });
+    assert.equal(result.code, 3, result.stderr || result.stdout);
+    assert.equal(parseSpeechProcessResult(result.stdout)?.reason, "endpoint_plugin_disabled");
+    assert.equal(fixture.ingressStore.list().length, 1);
+    assert.equal(fs.existsSync(path.join(fixture.roleDir, "agent-packets.jsonl")), false);
+  } finally { await manager.close(); }
 });
 
 test("speech CLI keeps the PC microphone on the independent voice endpoint", async () => {

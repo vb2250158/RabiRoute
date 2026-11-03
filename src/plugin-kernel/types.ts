@@ -20,6 +20,9 @@ export type PluginManifest = Readonly<{
   schemaVersion: 2;
   id: string;
   version: string;
+  displayName?: string;
+  description?: string;
+  icon?: string;
   entries: PluginEntries;
   provides: readonly string[];
   requires: readonly string[];

@@ -90,6 +90,8 @@ export type AgentThreadRequest = {
   /** Explicit local owner selection; remote requests use instanceBinding. */
   agentTargetId?: string;
   instanceBinding?: AgentInstanceBinding;
+  /** Original business ledger location for a formal cross-PC reply; never grants source authority. */
+  ledgerOwnerDeviceId?: string;
   action?: "list" | "read" | "reconcile_delivery" | "open" | "resolve" | "create" | "rename" | "send";
   agentAdapter?: AgentAdapterType;
   query?: string;

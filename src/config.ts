@@ -5,7 +5,6 @@ import { fileURLToPath } from "node:url";
 import dotenv from "dotenv";
 import { normalizeAgentAdapters, type AgentAdapterType } from "./agentAdapters/types.js";
 import {
-  isGatewayMessageAdapterType,
   isMessageEndpointType,
   type GatewayMessageAdapterType,
   type LegacyMessageAdapterType,
@@ -166,7 +165,7 @@ function parseNotificationRules(raw: string | undefined): NotificationRule[] | n
 
 export function parseMessageAdapterType(raw: string | undefined): MessageAdapterType {
   if (raw === "fennenote") return "speech";
-  return raw === "webhook" || raw === "rabilink" || raw === "wearable" || raw === "wecom" || raw === "weixin" || raw === "feishu" || raw === "xiaomiHome" || raw === "remoteAgent" || raw === "speech" || raw === "xiaoai" || raw === "heartbeat" || raw === "rolePanel" || raw === "disabled" || raw === "napcat" ? raw : "napcat";
+  return raw === "disabled" || isMessageEndpointType(raw) ? raw : "napcat";
 }
 
 function isNotificationRouteKind(kind: unknown): kind is NotificationRouteKind {
@@ -203,11 +202,11 @@ export function parseMessageAdapterTypes(rawTypes: string | undefined, rawType: 
       const parsed = JSON.parse(rawTypes) as unknown;
       if (Array.isArray(parsed)) {
         const adapters = normalizeMessageAdapterTypes(parsed);
-        return adapters.length > 0 ? adapters : ["napcat"];
+        return adapters;
       }
     } catch {
       const adapters = normalizeMessageAdapterTypes(rawTypes.split(",").map((item) => item.trim()));
-      return adapters.length > 0 ? adapters : ["napcat"];
+      return adapters;
     }
   }
 
@@ -492,7 +491,8 @@ const activeCodexPlanAssistantSessions: CodexPlanAssistantSession[] = codexPlanA
   : [];
 const messageAdapterTypes = parseMessageAdapterTypes(process.env.MESSAGE_ADAPTER_TYPES, process.env.MESSAGE_ADAPTER_TYPE);
 const messageEndpointTypes: MessageEndpointType[] = messageAdapterTypes.filter(isMessageEndpointType);
-const gatewayMessageAdapterTypes: GatewayMessageAdapterType[] = messageEndpointTypes.filter(isGatewayMessageAdapterType);
+// These are candidate IDs; the native loader selects only packages declaring entries.gateway.
+const gatewayMessageAdapterTypes: GatewayMessageAdapterType[] = [...messageEndpointTypes];
 const messageInputsDisabled = messageAdapterTypes.includes("disabled");
 const messageAdapterPolicies = normalizeMessageAdapterPolicies(
   parseJsonEnvironmentValue(process.env.MESSAGE_ADAPTER_POLICIES, "MESSAGE_ADAPTER_POLICIES"),

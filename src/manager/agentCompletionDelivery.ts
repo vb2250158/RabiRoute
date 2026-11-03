@@ -1,9 +1,10 @@
 import { getTimeoutMs } from "../shared/timeoutSettings.js";
 import { execFile } from "node:child_process";
-import { Marked } from "../vendor/marked.esm.js";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { Marked } from "../vendor/marked.esm.js";
 import { promisify } from "node:util";
 import type { AgentCompletionDeliveryRule } from "../shared/gatewayConfigModel.js";
 import type { CodexHookContextRequest } from "./codexHookContext.js";
@@ -12,6 +13,8 @@ import type { AgentReplyOptions } from "../outbox.js";
 import type { PlanItem } from "../roleKnowledge.js";
 import { AGENT_HOOK_EVENTS, agentHookRuleErrors } from "../shared/agentHookAutomation.js";
 import { agentAdapterManifest, isAgentAdapterType, agentAdapterSupportsLifecycleHooks as supportsHooks } from "../shared/agentAdapterCapabilities.js";
+
+import { mermaidDiagramSource } from "../markdownImage.js";
 
 const execute = promisify(execFile);
 export type CompletionDeliveryResult = { ruleId: string; status: "sent" | "failed"; reason?: string };
@@ -22,7 +25,7 @@ export function planCompletionDeliveryRules(roleId: string, plans: readonly Pick
       id: `plan-${plan.id}-${index}`, enabled: true, event: "task_completed", conditions: [{ type: "bound_plan" }], destination
     } })));
 }
-export type CompletionTaskContext = { taskName?: string; plans: Array<{ id: string; title: string }> };
+export type CompletionTaskContext = { taskName?: string; plans: Array<{ id: string; title: string }>; images?: string[]; imageReadError?: boolean };
 
 /** Only a complete control envelope is interpreted; quoted examples and other XML remain content. */
 function completionNotification(text: string): { text: string; heartbeat: boolean } {
@@ -57,20 +60,47 @@ export function completionTaskContextFromPlans(sessionId: string,
   };
 }
 
-type CompletionSegment = { type: "text" | "markdown"; text: string };
-type RawToken = { type: string; raw: string; tokens?: RawToken[]; items?: RawToken[] };
+/** Parse actual Markdown links, excluding code examples, and retain local absolute file targets. */
+export function completionLocalFiles(message: string): string[] {
+  const markdown = new Marked();
+  const files = new Map<string, string>();
+  markdown.walkTokens(markdown.lexer(message), token => {
+    if (token.type !== "link") return;
+    let value = token.href;
+    try {
+      value = /^file:/i.test(value) ? fileURLToPath(value) : decodeURIComponent(value);
+    } catch { return; }
+    value = value.replace(/^\/([a-z]:[\\/])/i, "$1").replace(/#.*$/, "").replace(/:\d+(?::\d+)?$/, "");
+    if (!path.isAbsolute(value) && !/^[a-z]:[\\/]/i.test(value)) return;
+    const resolved = path.normalize(value);
+    files.set(process.platform === "win32" ? resolved.toLowerCase() : resolved, resolved);
+  });
+  return [...files.values()];
+}
 
-/** Render actual Markdown tables while preserving all surrounding source text. */
-export function completionMessagePayloads(text: string, renderTables = true): Array<Record<string, unknown>> {
-  if (!renderTables) return splitCompletionMessage(text).map(text => ({ type: "text", text }));
+type CompletionSegment = { type: "text" | "markdown"; text: string } | { type: "image"; path: string } | { type: "image"; url: string };
+type RawToken = { type: string; raw: string; href?: string; tokens?: RawToken[]; items?: RawToken[] };
+
+function imageSegment(href: string, cwd?: string): CompletionSegment | undefined {
+  if (/^(?:https?:|base64:)\/\//i.test(href)) return { type: "image", url: href };
+  try {
+    const file = (/^file:/i.test(href) ? fileURLToPath(href) : decodeURIComponent(href)).replace(/^\/([a-z]:[\\/])/i, "$1");
+    if (/^[a-z][a-z0-9+.-]*:/i.test(file) && !/^[a-z]:[\\/]/i.test(file)) return;
+    if (path.isAbsolute(file) || /^[a-z]:[\\/]/i.test(file)) return { type: "image", path: path.normalize(file) };
+    if (cwd) return { type: "image", path: path.resolve(cwd, file) };
+  } catch { /* Preserve the original text when the image reference cannot be resolved. */ }
+}
+
+export function completionMessagePayloads(text: string, renderDiagrams: boolean, cwd?: string, images: string[] = [], renderTables = true): Array<Record<string, unknown>> {
   const batches: Array<Record<string, unknown>> = [];
-  let segments: CompletionSegment[] = [], chars = 0, prose = "";
+  let segments: CompletionSegment[] = [], chars = 0;
   const flush = () => {
     if (!segments.length) return;
-    batches.push(segments.some(segment => segment.type === "markdown") ? { type: "image", segments }
-      : { type: "text", text: segments.map(segment => segment.text).join("") });
+    batches.push(segments.some(segment => segment.type !== "text") ? { type: "image", segments }
+      : { type: "text", text: segments.map(segment => "text" in segment ? segment.text : "").join("") });
     segments = []; chars = 0;
   };
+  let prose = "";
   const appendProse = () => {
     for (const chunk of splitCompletionMessage(prose)) {
       if (chars + chunk.length > 3000) flush();
@@ -79,7 +109,16 @@ export function completionMessagePayloads(text: string, renderTables = true): Ar
     prose = "";
   };
   const visit = (token: RawToken) => {
-    if (token.type === "table") { appendProse(); segments.push({ type: "markdown", text: token.raw }); return; }
+    if (renderTables && token.type === "table") {
+      appendProse(); segments.push({ type: "markdown", text: token.raw }); return;
+    }
+    if (renderDiagrams && token.type === "code" && mermaidDiagramSource(token.raw) !== undefined) {
+      appendProse(); segments.push({ type: "markdown", text: token.raw }); return;
+    }
+    if (token.type === "image" && token.href) {
+      const image = imageSegment(token.href, cwd);
+      if (image) { appendProse(); segments.push(image); return; }
+    }
     const children = token.tokens ?? token.items;
     if (!children?.length) { prose += token.raw; return; }
     let offset = 0;
@@ -91,7 +130,12 @@ export function completionMessagePayloads(text: string, renderTables = true): Ar
     prose += token.raw.slice(offset);
   };
   for (const token of new Marked().lexer(text)) visit(token as unknown as RawToken);
-  appendProse(); flush(); return batches;
+  appendProse();
+  for (const source of images) {
+    const image = imageSegment(source, cwd);
+    if (image && !segments.some(segment => JSON.stringify(segment) === JSON.stringify(image))) segments.push(image);
+  }
+  flush(); return batches;
 }
 
 export async function deliverCompletionToEndpoint(rule: AgentCompletionDeliveryRule, hook: CodexHookContextRequest,
@@ -110,7 +154,18 @@ export async function deliverCompletionToEndpoint(rule: AgentCompletionDeliveryR
     styleValidation: 0
   };
   const text = `${heading}\n\n${hook.lastAssistantMessage!.trim()}`;
-  const payloads = channel === "napcat" ? completionMessagePayloads(text, params.renderTables !== "false") : [{ type: "text", text }];
+  let images = context.images ?? [];
+  if (channel === "napcat" && images.length) {
+    const linked = completionMessagePayloads(text, false, hook.cwd).flatMap(payload => Array.isArray(payload.segments) ? payload.segments : [])
+      .filter((segment): segment is { type: "image"; path: string } => segment.type === "image" && typeof segment.path === "string");
+    const embedded = new Set<string>();
+    for (const segment of linked) {
+      try { embedded.add(`base64://${(await fs.promises.readFile(segment.path)).toString("base64")}`); }
+      catch { /* The regular send boundary reports missing or unreadable linked images. */ }
+    }
+    images = images.filter(image => !embedded.has(image));
+  }
+  const payloads = channel === "napcat" ? completionMessagePayloads(text, params.renderDiagrams !== "false", hook.cwd, images, params.renderTables !== "false") : [{ type: "text", text }];
   for (const [index, payload] of payloads.entries()) {
     const part: AgentSendRequest = { ...request,
       deliveryId: index === 0 ? deliveryId : `${deliveryId}-part-${index + 1}`,
@@ -121,6 +176,25 @@ export async function deliverCompletionToEndpoint(rule: AgentCompletionDeliveryR
     const result = inspection.state === "completed" ? inspection.result : await handleAgentSend(part, options);
     if (result.status !== "sent" || (channel === "napcat" && !result.sentMessageId)) throw new Error(result.reason || "完成消息未取得发送回执。");
   }
+  if (channel === "napcat" && params.includeFiles !== "false") {
+    const failures: string[] = [];
+    for (const file of completionLocalFiles(hook.lastAssistantMessage!)) {
+      const part: AgentSendRequest = { ...request,
+        deliveryId: `${deliveryId}-file-${createHash("sha256").update(process.platform === "win32" ? file.toLowerCase() : file).digest("hex")}`,
+        payload: { type: "file", path: file, fileName: path.basename(file) }
+      };
+      try {
+        const inspection = await inspectAgentSendDelivery(part, options);
+        if (inspection.state === "uncertain") { failures.push(inspection.reason); continue; }
+        const result = inspection.state === "completed" ? inspection.result : await handleAgentSend(part, options);
+        if (result.status !== "sent" || !(result.sentFileId || result.sentMessageId)) {
+          failures.push(`${path.basename(file)}: ${result.reason || "文件未取得发送回执。"}`);
+        }
+      } catch (error) { failures.push(`${path.basename(file)}: ${error instanceof Error ? error.message : String(error)}`); }
+    }
+    if (failures.length) throw new Error(`正文已发送，部分附件未确认：${failures.join("；")}`);
+  }
+  if (context.imageReadError) throw new Error("正文已发送，但部分原生图片读取失败。");
 }
 
 function canonicalPath(value: string): string {

@@ -163,6 +163,8 @@ export type RecentMessageContextQuery = {
   to?: number;
   afterSequence?: number;
   beforeSequence?: number;
+  /** UI browsing is separate from bounded Agent-context excerpts. */
+  page?: { cursor?: string; includeAdapters?: boolean; catalogOnly?: boolean; conversations?: boolean; conversationCursor?: string };
 };
 
 type RecentMessageContextOptions = Omit<RecentMessageContextQuery, "limit">;

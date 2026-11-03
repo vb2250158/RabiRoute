@@ -22,6 +22,7 @@ import {
 import { routeKeyFromWebguiHash } from "../routeScopedNavigation";
 import { agentAdapterValues } from "@shared/gatewayConfigModel";
 import { cloneGatewayValue, mergeGatewayDraft, sameGatewayValue } from "../gatewayDraft";
+import { routeActivationSaveMessage, type RouteActivationFeedback } from "../routeActivationFeedback";
 import { localAgentTargetKey } from "@shared/routeAgentTargets";
 import { applyRouteAgentDraft } from "../routeAgentTargetEditor";
 import {
@@ -402,12 +403,12 @@ export const useGatewayStore = defineStore("gateway", () => {
     applyRouteCatalogVersion(body.routeCatalog);
   }
 
-  async function recoverPendingMutation(pending: PendingRouteCatalogMutation): Promise<GatewayPayload & { receipt?: { state?: string } }> {
+  async function recoverPendingMutation(pending: PendingRouteCatalogMutation): Promise<GatewayPayload & { receipt?: { state?: string }; activation?: RouteActivationFeedback }> {
     saveState.value = "confirming";
     saveMessage.value = "正在确认上次保存结果";
     const lifecycleKey = await loadMeta(true);
     const response = await boundedRouteCatalogMutationFetch(`${apiBase}/gateways/mutations/${encodeURIComponent(pending.operationId)}`, {});
-    const body = await response.json().catch(() => ({})) as GatewayPayload & { receipt?: { state?: string; operationId?: string } };
+    const body = await response.json().catch(() => ({})) as GatewayPayload & { receipt?: { state?: string; operationId?: string }; activation?: RouteActivationFeedback };
     if (!response.ok || body.code !== 0 || body.receipt?.operationId !== pending.operationId
       || !["committed", "not_committed"].includes(body.receipt?.state || "")) {
       if (routeCatalogMutationFailureIsDefinitive(response.status)) {
@@ -517,7 +518,7 @@ export const useGatewayStore = defineStore("gateway", () => {
         },
         body: JSON.stringify(definition)
       });
-      const body = await result.json().catch(() => ({})) as GatewayPayload & { error?: string; activation?: { state: string; message?: string } };
+      const body = await result.json().catch(() => ({})) as GatewayPayload & { error?: string; activation?: RouteActivationFeedback };
       if (!result.ok || body.code !== 0) {
         if (routeCatalogMutationFailureIsDefinitive(result.status)) {
           routeCatalogMutationLedger.complete(pending);
@@ -533,16 +534,14 @@ export const useGatewayStore = defineStore("gateway", () => {
       pendingSaveDrafts.delete(pending.operationId);
       pending = undefined;
       saveState.value = "saved";
-      saveMessage.value = body.activation?.state === "failed"
-        ? `已保存，运行生效失败：${body.activation.message || "请查看日志"}`
-        : "当前路线已保存";
+      saveMessage.value = routeActivationSaveMessage(body.activation);
     } catch (saveError) {
       if (pending && submitted) {
         try {
           const recovered = await recoverPendingMutation(pending);
           if (recovered.receipt?.state === "committed") {
             saveState.value = "saved";
-            saveMessage.value = "已确认当前路线保存成功";
+            saveMessage.value = routeActivationSaveMessage(recovered.activation, true);
             return;
           }
         } catch (recoveryError) {
@@ -997,6 +996,7 @@ export const useGatewayStore = defineStore("gateway", () => {
     touch,
     openQuickSetup,
     closeQuickSetup,
+    loadMeta,
     loadRouteSummaries,
     load,
     ensureDiagnostics,

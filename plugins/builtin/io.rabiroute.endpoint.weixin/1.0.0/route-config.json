@@ -1,0 +1,25 @@
+{
+  "endpointType": "weixin",
+  "routeKeys": [
+    "weixinBaseUrl",
+    "weixinBotType"
+  ],
+  "runtimeFields": {
+    "weixinBaseUrl": {
+      "paths": [
+        "weixinBaseUrl"
+      ],
+      "default": "https://ilinkai.weixin.qq.com",
+      "trim": true,
+      "emptyDefault": true
+    },
+    "weixinBotType": {
+      "paths": [
+        "weixinBotType"
+      ],
+      "default": "3",
+      "trim": true,
+      "emptyDefault": true
+    }
+  }
+}

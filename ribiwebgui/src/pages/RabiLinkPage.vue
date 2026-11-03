@@ -178,6 +178,7 @@ onBeforeUnmount(() => { disposed = true; metaRequest?.abort(); managerEvents?.cl
                 <v-chip v-for="label in device.services.known" :key="label" size="small" variant="outlined">{{ label }}</v-chip>
                 <span v-if="!device.services.known.length" class="section-note">{{ device.services.advanced.length ? '其他服务能力' : '未声明服务能力' }}</span>
               </div>
+              <v-btn v-if="device.kind === 'desktop'" class="mt-2" size="small" variant="tonal" prepend-icon="mdi-remote-desktop" :to="{ path: '/rabilink', query: { tab: 'agents', deviceId: device.isLocal ? undefined : device.id } }">操作电脑与智能体</v-btn>
               <details class="section-note mt-2">
                 <summary>高级信息</summary>
                 <dl class="rabilink-device-details">

@@ -12,6 +12,8 @@ RabiRoute's single `xiaomiHome` message endpoint. It uses the Home Assistant RES
 
 One set of executable definitions registers all 53 exact endpoints, including deployment SSE, map HTML, artifact Range and MP4 byte reads. Original account, receipt and device services retain business state. See the [API contract](../../../../docs/xiaomi-home-api-contract_en.md) for endpoints, cancellation and evidence boundaries.
 
+This plugin owns its message-endpoint menu and card, authentication, device protocols, monitors, settings and receipt services. The build produces an independent `manager-runtime.mjs` and includes the HA installation script and camera subprocess under `resources/` and `workers/`; runtime does not read the source workspace. Manager supplies existing Route execution and shared authorization, storage and timeout owners through `host.message-endpoints@1`. Disabling the plugin removes its entry and APIs, stops and joins its subprocesses, and retains accounts, settings, event ledgers and receipts for reactivation.
+
 ## Configuration and authorization
 
 Connection failures and authorization guidance appear in the connection card. Event monitoring status and its check action sit beside the monitoring switch; disabled recording shows “Off”; device control becomes available after connection. The Xiaomi card keeps only its overall status at the top, without a duplicate environment/dependency alert list. Unsaved switch changes are marked separately rather than presented as active settings.

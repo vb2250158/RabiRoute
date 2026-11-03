@@ -22,6 +22,98 @@ export function definePlugin(module) {
   if (!module || typeof module.activate !== "function") throw new Error("Plugin module must define activate(context).");
   return Object.freeze({ activate: module.activate });
 }
+
+/** The endpoint activation owns exactly its transport, including a late start after cancellation. */
+export function ownMessageEndpoint(context, endpoint) {
+  if (!endpoint || typeof endpoint.start !== "function") throw new Error("Endpoint must define start().");
+  let starting;
+  let stop;
+  let retiring;
+  let stopped = false;
+  const retire = () => retiring ??= (async () => {
+    stopped = true;
+    if (starting) await starting;
+    if (stop) { const ownedStop = stop; stop = undefined; await ownedStop(); }
+  })();
+  context.effects.adopt(retire, `release endpoint ${endpoint.type}`);
+  context.publication.add({
+    publish() {},
+    rollback() {},
+    async afterPublish({ previousRetirement, signal }) {
+      await previousRetirement;
+      signal.throwIfAborted();
+      if (stopped) throw new Error(`Endpoint ${endpoint.type} is retiring.`);
+      starting = Promise.resolve().then(() => endpoint.start()).then(dispose => {
+        stop = typeof dispose === "function" ? dispose : undefined;
+      });
+      await starting;
+      signal.throwIfAborted();
+    },
+    retire
+  }, `publish endpoint ${endpoint.type}`);
+}
+export function ownMessageEndpointScan(context, provider) {
+  const host = context.services.require("host.message-endpoints@1");
+  const registration = host.scanProviders.prepare(provider);
+  context.effects.adopt(registration.dispose, `release endpoint scan ${provider.type}`);
+  context.publication.add(registration.publication, `publish endpoint scan ${provider.type}`);
+}
+
+/** One native activation owns accepted work until its real completion. */
+export function ownPluginAcceptedWork(context, label = "plugin accepted work", cleanup) {
+  let accepting = false, retirement;
+  const leases = new Set();
+  const emptyWaiters = new Set();
+  const acquire = snapshot => {
+    if (!accepting || context.lifecycle.signal.aborted) throw Object.assign(new Error(`${label} is disabled or retiring.`), { code: "ENDPOINT_EGRESS_UNAVAILABLE" });
+    const lease = { snapshot: Object.freeze(structuredClone(snapshot ?? {})), released: false, pending: 0 };
+    leases.add(lease);
+    const settle = () => {
+      if (!lease.released || lease.pending) return;
+      leases.delete(lease);
+      if (!leases.size) for (const resolve of [...emptyWaiters]) { emptyWaiters.delete(resolve); resolve(); }
+    };
+    return Object.freeze({ snapshot: lease.snapshot,
+      async run(operation) {
+        if (lease.released) throw new Error(`${label} lease was released.`);
+        lease.pending++;
+        try { return await operation(); } finally { lease.pending--; settle(); }
+      },
+      release() { lease.released = true; settle(); }
+    });
+  };
+  const retire = () => retirement ??= (async () => {
+    accepting = false;
+    if (leases.size) await new Promise(resolve => emptyWaiters.add(resolve));
+    await cleanup?.();
+  })();
+  context.effects.adopt(retire, label);
+  context.publication.add({ publish() { accepting = true; }, rollback() { accepting = false; }, retire }, label);
+  return Object.freeze({ acquire,
+    async runAcceptedWork(operation) { const lease = acquire({}); try { return await lease.run(operation); } finally { lease.release(); } },
+    inspect: () => ({ accepting, activeLeases: leases.size })
+  });
+}
+
+/** Native services, rather than a second active registry, publish the endpoint egress owner. */
+export function ownMessageEndpointEgress(context, definition) {
+  const work = ownPluginAcceptedWork(context, `endpoint ${definition.type} egress`, definition.dispose);
+  const provider = Object.freeze({ identity: context.identity, runAcceptedWork: work.runAcceptedWork, inspect: work.inspect,
+    acquire(snapshot) {
+      const lease = work.acquire(snapshot);
+      return Object.freeze({ snapshot: lease.snapshot,
+        call(operation, args) {
+          const execute = definition.operations[operation];
+          if (typeof execute !== "function") throw new Error(`Endpoint ${definition.type} does not implement egress operation ${operation}.`);
+          const ownedArguments = structuredClone(args);
+          return lease.run(() => execute(...ownedArguments));
+        }, release: lease.release
+      });
+    }
+  });
+  context.services.provide(`endpoint.${definition.type}.egress@1`, provider);
+  return provider;
+}
 export class ServiceResolver {
   #services;
   constructor(services = []) { this.#services = new Map(services); }

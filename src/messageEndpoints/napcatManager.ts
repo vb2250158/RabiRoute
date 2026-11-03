@@ -38,7 +38,7 @@ type GatewayDefinition = {
   messageAdapters?: string[];
   messageAdaptersDisabled?: string[];
   messageInputsDisabled?: boolean;
-  messageAdapterPolicies?: Record<string, { inputEnabled?: boolean }>;
+  messageAdapterPolicies?: Partial<Record<string, { inputEnabled?: boolean }>>;
   gatewayPort: number;
   napcatHttpUrl?: string;
   napcatWebuiUrl?: string;

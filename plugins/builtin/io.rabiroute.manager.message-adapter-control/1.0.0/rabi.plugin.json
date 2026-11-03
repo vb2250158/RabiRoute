@@ -2,6 +2,9 @@
   "schemaVersion": 2,
   "id": "io.rabiroute.manager.message-adapter-control",
   "version": "1.0.0",
+  "displayName": "消息端发现",
+  "description": "扫描已安装消息端与可用连接",
+  "icon": "mdi-connection",
   "entries": {
     "manager": {
       "execution": "in_process",

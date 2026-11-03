@@ -16,9 +16,12 @@
     "manager.speech@1"
   ],
   "requires": [
-    "host.manager.speech@1",
-    "manager.core@1"
+    "manager.core@1",
+    "host.message-endpoints@1"
   ],
   "optional": [],
-  "permissions": []
+  "permissions": [],
+  "displayName": "语音服务",
+  "description": "管理共享的语音识别、合成、播放与模型服务",
+  "icon": "mdi-waveform"
 }

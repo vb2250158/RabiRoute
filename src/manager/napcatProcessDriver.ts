@@ -4,9 +4,41 @@ import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { runWindowsTaskkill } from "../runtime/windowsProcessTree.js";
-import type { NapcatBinding, NapcatProcessDriver, NapcatProcessIdentity } from "./napcatLifecycleOwner.js";
+import type { NapcatBinding, NapcatProcessDriver, NapcatProcessIdentity, NapcatLaunchScope, NapcatStoppedProof } from "./napcatLifecycleOwner.js";
 
 const execute = promisify(execFile);
+/** One script is used by the native driver and executable inspection fixtures. */
+export function napcatStoppedInspectionScript(): string {
+  return `$ErrorActionPreference='Stop'; $dir=[IO.Path]::GetFullPath($env:RABI_NAPCAT_RECOVERY_DIR).TrimEnd('\\')+'\\';
+    $all=@(Get-CimInstance -Query 'SELECT ProcessId,Name,ExecutablePath,CommandLine FROM Win32_Process');
+    $unknown=@($all | Where-Object {$_.Name -match '^(QQ|NapCatWinBootMain|cmd|powershell|pwsh)\\.exe$' -and (!$_.ExecutablePath -or !$_.CommandLine)});
+    $matching=@($all | Where-Object {($_.ExecutablePath -and $_.ExecutablePath.StartsWith($dir,[StringComparison]::OrdinalIgnoreCase)) -or ($_.CommandLine -and $_.CommandLine.Replace('/','\\').IndexOf($dir,[StringComparison]::OrdinalIgnoreCase) -ge 0)});
+    $ports=@($env:RABI_NAPCAT_RECOVERY_PORTS.Split(',') | ForEach-Object {[int]$_});
+    $listeners=@(Get-NetTCPConnection -State Listen | Where-Object {$_.LocalPort -in $ports});
+    [pscustomobject]@{complete=($unknown.Count -eq 0); matching=$matching.Count; listeners=$listeners.Count} | ConvertTo-Json -Compress`;
+}
+
+/** Negative proof is limited to the bundled launcher/QQ layout. External launchers stay fenced. */
+export async function confirmBundledNapcatStopped(binding: NapcatBinding, plan: NapcatLaunchScope): Promise<NapcatStoppedProof | undefined> {
+  if (process.platform !== "win32" || !binding.workingDir || !path.isAbsolute(binding.workingDir)) return;
+  const directory = path.resolve(binding.workingDir);
+  const same = (left: string, right: string) => path.resolve(left).toLowerCase() === path.resolve(right).toLowerCase();
+  if (!fs.existsSync(directory) || !same(fs.realpathSync(directory), directory)) return;
+  if (!same(plan.cwd, directory) || !same(plan.commandPath, path.join(directory, "NapCatWinBootMain.exe"))
+    || !["QQ.exe", "NapCatWinBootMain.exe", "NapCatWinBootHook.dll"].every(file => fs.existsSync(path.join(directory, file)))) return;
+  const ports = [binding.httpUrl, binding.webuiUrl].filter((url): url is string => Boolean(url)).map(value => {
+    const url = new URL(value);
+    if (!["127.0.0.1", "localhost", "[::1]"].includes(url.hostname)) throw new Error("Cannot reconcile a remote NapCat launch.");
+    return Number(url.port || (url.protocol === "https:" ? 443 : 80));
+  });
+  const script = napcatStoppedInspectionScript();
+  const { stdout } = await execute("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], {
+    windowsHide: true, timeout: 20000, maxBuffer: 1024 * 1024,
+    env: { ...process.env, RABI_NAPCAT_RECOVERY_DIR: directory, RABI_NAPCAT_RECOVERY_PORTS: ports.join(",") }
+  });
+  const proof = JSON.parse(stdout);
+  if (proof.complete === true && proof.matching === 0 && proof.listeners === 0) return { checkedAt: new Date().toISOString(), commandPath: plan.commandPath };
+}
 export async function napcatProcessSnapshot(): Promise<NapcatProcessIdentity[]> {
   if (process.platform === "win32") {
     const { stdout } = await execute("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command",
@@ -34,6 +66,7 @@ export async function napcatProcessSnapshot(): Promise<NapcatProcessIdentity[]> 
 export function createNapcatProcessDriver(requestExit?: (binding: NapcatBinding) => Promise<void>): NapcatProcessDriver {
   return {
     snapshot: napcatProcessSnapshot,
+    confirmBundledInstanceStopped: confirmBundledNapcatStopped,
     async requestExit(binding, processes) {
       if (!requestExit || process.platform !== "win32" || !binding.httpUrl) return;
       const url = new URL(binding.httpUrl);

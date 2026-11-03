@@ -13,7 +13,7 @@ import { LanAgentAuthority } from "./lanAgentAuthority.js";
 import { evaluateLanAgentRequest, assertTrustedLanAgentPrincipal } from "./lanAgentRequestAccess.js";
 import { markAuthenticatedConnectionRequest } from "./connectionRequestAccess.js";
 import { registerLanAgentBodyGuard, assertLanAgentBodyAuthority, validateLanAgentRequestBody } from "./lanAgentBodyAuthority.js";
-import type { PluginPublication } from "../plugin-kernel/types.js";
+import { createSpeechPluginRuntime, type SpeechPluginPorts, type SpeechPluginResources } from "./speechPluginRuntime.js";
 
 async function fixture(t: test.TestContext, options: { control?: Partial<ManagerSpeechControl>; readOnly?: boolean; capture?: SpeechApiContext["capture"] } = {}) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "speech-operation-fixture-")), calls: Array<{ method: string; args: unknown[] }> = [], targets: Array<string | undefined> = [];
@@ -167,20 +167,26 @@ test("typed audio retirement joins accepted native work after HTTP disconnect", 
 });
 
 test("speech plugin retirement joins original installer cleanup even when another native cleanup fails", async () => {
-  const plugin = await import(new URL("../../plugins/builtin/io.rabiroute.manager.speech/1.0.0/manager.mjs", import.meta.url).href);
-  let start!: () => Promise<() => Promise<void>>, release!: () => void;
-  let publication!: PluginPublication;
+  const lifecycle = await import(new URL("../../plugins/builtin/io.rabiroute.manager.speech/1.0.0/lifecycle.mjs", import.meta.url).href);
+  let release!: () => void;
   const gate = new Promise<void>(resolve => { release = resolve; }), events: string[] = [];
-  const runtime = { SpeechApiOwner, createSpeechApiOperations: () => ({ operations: [], proxies: [] }), speechApiContext: {}, managerServicesReady: false, managerReadOnly: false, reconcileSpeechMicrophone: () => {}, reconcileActiveSpeech: undefined as unknown,
+  const host = { managerServicesReady: false, managerReadOnly: false,
     managerPluginRoutes: { registerOperationsAsync: async () => ({ dispose: async () => { events.push("typed-retired"); } }), registerHttpProxies: () => ({ dispose: async () => { events.push("proxy-retired"); } }) },
-    speechControl: { stopMicrophone: async () => { events.push("microphone-stop"); throw new Error("Controlled microphone cleanup failure."); }, stopPlayback: async () => { events.push("playback-stop"); } },
-    speechRuntimeControl: { stop: async () => { events.push("runtime-stop"); throw new Error("Controlled runtime cleanup failure."); } }, speechModelManager: { stop: async () => { events.push("installer-stop"); await gate; events.push("installer-closed"); } }
   };
-  await plugin.activate({ identity: { instanceId: "speech-fixture" }, lifecycle: { signal: new AbortController().signal }, services: { require: () => runtime, provide: () => {} }, contributions: { register: () => {} }, effects: { add: (starter: typeof start) => { start = starter; } }, publication: { add: (entry: PluginPublication) => { publication = entry; } } });
-  const retire = await start(); publication.publish(); await publication.afterPublish?.({ signal: new AbortController().signal, previousRetirement: Promise.resolve() });
-  let finished = false; const retiring = retire().then(() => null, error => { finished = true; return error; }); await new Promise<void>(resolve => setImmediate(resolve));
+  const resources = { speechControl: {}, speechIngressStore: {}, selectionSpeechSettings: {},
+    speechRuntimeControl: { releaseOwnedRuntime: async () => { events.push("runtime-stop"); throw new Error("Controlled runtime cleanup failure."); } },
+    speechModelManager: { stop: async () => { events.push("installer-stop"); await gate; events.push("installer-closed"); } },
+    drains: new Set(), operations: new Set(), shutdown: undefined } as unknown as SpeechPluginResources;
+  let current: unknown;
+  const service = createSpeechPluginRuntime({ api: {}, currentService: () => current } as unknown as SpeechPluginPorts, { resources }, "speech-fixture");
+  current = service;
+  const runtime = Object.create(host, { ...Object.getOwnPropertyDescriptors(service),
+    createSpeechApiOperations: { value: () => ({ operations: [], proxies: [] }) } });
+  const owner = lifecycle.createSpeechPluginLifecycle(runtime, { instanceId: "speech-fixture" }, new AbortController().signal);
+  const retire = await owner.prepare(); owner.publication.publish(); await owner.publication.afterPublish({ signal: new AbortController().signal, previousRetirement: Promise.resolve() });
+  let finished = false; const retiring: Promise<unknown> = retire().then(() => null, (error: unknown) => { finished = true; return error; }); await new Promise<void>(resolve => setImmediate(resolve));
   assert.equal(finished, false); assert.deepEqual(events, ["typed-retired", "proxy-retired", "runtime-stop", "installer-stop"]);
-  release(); const failure = await retiring; assert.match(failure.message, /Controlled runtime cleanup failure/); assert.equal(events.at(-1), "installer-closed");
+  release(); const failure = await retiring; assert.ok(failure instanceof Error); assert.match(failure.message, /Controlled runtime cleanup failure/); assert.equal(events.at(-1), "installer-closed");
 });
 
 test("native bodyless audio statuses remain bodyless rather than becoming schema failures", async t => {

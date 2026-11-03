@@ -2,6 +2,9 @@
   "schemaVersion": 2,
   "id": "io.rabiroute.manager.copilot-control",
   "version": "1.0.0",
+  "displayName": "Copilot 连接",
+  "description": "管理 Copilot 安装、登录与连接状态",
+  "icon": "mdi-github",
   "entries": {
     "manager": {
       "execution": "in_process",

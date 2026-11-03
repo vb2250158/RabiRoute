@@ -4,6 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
+import { historyPageScope, historyPageCursor, readHistoryPageCursor } from './messageHistoryPageCursor.js';
+import type { QqConversation } from './shared/qqConversationHistory.js';
 import { refreshManagedMessageIndex, quarantineMessageIndexProjection } from "./messageHistoryIndexLifecycle.js";
 import { openMessageHistoryReader } from "./messageHistoryIndexReaders.js";
 import { atomicWriteFileSync } from "./shared/filePersistence.js";
@@ -17,6 +19,7 @@ const SCHEMA_VERSION = "7";
 const ANALYZER_VERSION = `utf16-grams-v1:${process.versions.unicode}:${Intl.DateTimeFormat().resolvedOptions().locale}`;
 export type MessageHistorySearchResult = {
   entries: MessageContextRecord[];
+  page?: { nextCursor: string | null; adapters?: string[]; conversations?: QqConversation[]; nextConversationCursor?: string | null };
   coverage: { indexVersion: string; sourceVersion: string; indexedAt: string; sourceSnapshotIndexed: boolean;
     indexCoverage?: "complete" | "partial"; sourceRecordsSkipped?: number; pendingRecordBytes?: number; maxIndexedRecordBytes?: number;
     legacyCoverageUnknown?: boolean;
@@ -118,6 +121,7 @@ function initialize(db: DatabaseSync): void {
     CREATE INDEX IF NOT EXISTS document_sequence ON documents(seq DESC,time DESC);
     CREATE INDEX IF NOT EXISTS document_conversation ON documents(conversationKey,seq DESC);
     CREATE INDEX IF NOT EXISTS document_time ON documents(time,seq DESC);
+    CREATE INDEX IF NOT EXISTS document_adapter ON documents(adapter);
     CREATE VIRTUAL TABLE IF NOT EXISTS terms USING fts5(g1,g2,g3,content='',contentless_delete=1,detail=column,tokenize='ascii');`);
   const version = db.prepare("SELECT value FROM meta WHERE key='schema'").get()?.value;
   if (version && version !== SCHEMA_VERSION && version !== "4" && version !== "5" && version !== "6") throw new Error("MESSAGE_HISTORY_INDEX_VERSION_MISMATCH");
@@ -126,6 +130,7 @@ function initialize(db: DatabaseSync): void {
   if (!db.prepare("PRAGMA table_info(documents)").all().some(column => column.name === "sourceOrder")) {
     db.exec("ALTER TABLE documents ADD COLUMN sourceOrder INTEGER NOT NULL DEFAULT 0");
   }
+  db.exec('CREATE INDEX IF NOT EXISTS document_conversation_order ON documents(adapter,conversationKey,sourceOrder DESC,position DESC)');
   if (version && version !== SCHEMA_VERSION) {
     // Repeat safely after interruption between adding the derived column and
     // publishing the new schema. Original payloads and ledgers never change.
@@ -374,7 +379,40 @@ export function searchMessageHistoryIndexResult(directory: string, query: Recent
     const pendingRecordBytes = Number(issues.pending);
     const legacyCoverageUnknown = meta.get("legacyCoverageUnknown") === "1";
     const partial = sourceRecordsSkipped > 0 || pendingRecordBytes > 0 || legacyCoverageUnknown;
+    const stableSources = query.page ? JSON.stringify(db.prepare('SELECT file,fingerprint FROM sources WHERE current=0 ORDER BY ordinal').all()) : '';
+    const pageScope = query.page ? historyPageScope(query, reader.generation, (meta.get('layout') ?? '') + stableSources, epoch ?? '') : '';
+    const before = query.page?.cursor ? readHistoryPageCursor(query.page.cursor, pageScope) : undefined;
+    let nextPageCursor: string | null = null;
+    const adapters = query.page?.includeAdapters
+      ? db.prepare(`SELECT DISTINCT d.adapter FROM documents d JOIN sources s ON s.file=d.source WHERE ${sourceClause(query, 's', [])} ORDER BY d.adapter`).all().map(row => String(row.adapter)).filter(Boolean)
+      : undefined;
+    let conversations: QqConversation[] | undefined, nextConversationCursor: string | null = null;
+    if (query.page?.conversations) {
+      const scopeArgs: (string|number)[] = [], scope = sourceClause(query,'s',scopeArgs);
+      const visibility = currentRecordLimit === undefined ? '' : ' AND (s.current=0 OR d.position<?)';
+      if(currentRecordLimit!==undefined)scopeArgs.push(currentRecordLimit);
+      const keys = db.prepare(`SELECT DISTINCT d.conversationKey FROM documents d JOIN sources s ON s.file=d.source WHERE ${scope}${visibility} AND d.adapter='napcat' AND d.conversationKey>? ORDER BY d.conversationKey LIMIT 101`).all(...scopeArgs,query.page.conversationCursor ?? '').map(row => String(row.conversationKey));
+      nextConversationCursor = keys.length > 100 ? keys[99]! : null;
+      conversations = [];
+      const originalArgs: (string|number)[] = [], originalScope = sourceClause(query,'original_source',originalArgs);
+      const originalVisibility = currentRecordLimit === undefined ? '' : ' AND (original_source.current=0 OR original.position<?)';
+      if(currentRecordLimit!==undefined)originalArgs.push(currentRecordLimit);
+      const latest = db.prepare(`SELECT d.payload FROM documents d JOIN sources s ON s.file=d.source WHERE ${scope}${visibility} AND d.adapter='napcat' AND d.conversationKey=?
+        AND d.rowid=(SELECT original.rowid FROM documents original JOIN sources original_source ON original_source.file=original.source
+          WHERE original.recordKey=d.recordKey AND ${originalScope}${originalVisibility} ORDER BY original_source.ordinal,original.position,original.rowid LIMIT 1)
+        ORDER BY d.sourceOrder DESC,d.position DESC,d.rowid DESC LIMIT 1`);
+      for (const key of keys.slice(0,100)) {
+        const latestRow = latest.get(...scopeArgs,key,...originalArgs);
+        if(!latestRow)continue;
+        const record = JSON.parse(String(latestRow.payload)) as MessageContextRecord;
+        if(!record || record.adapter!=='napcat' || record.conversationKey!==key || typeof record.text!=='string' || !Number.isFinite(record.time))throw new Error('MESSAGE_HISTORY_INDEX_INTEGRITY: invalid_conversation');
+        const match = key.match(/:(group|private):([1-9]\d*)$/);
+        conversations.push({conversationKey:key,gatewayId:record.gatewayId,instanceId:record.instanceId,
+          kind:match ? match[1] as 'group'|'private' : 'unknown',target:match?.[2] ?? record.target ?? key,time:record.time,preview:record.text.slice(0,120)});
+      }
+    }
     const finish = (entries: MessageContextRecord[]): MessageHistorySearchResult => ({ entries,
+      ...(query.page ? { page: { nextCursor: nextPageCursor, ...(adapters ? { adapters } : {}), ...(conversations ? {conversations,nextConversationCursor} : {}) } } : {}),
       coverage: {
         indexVersion: createHash("sha256").update(`${reader.generation}:${SCHEMA_VERSION}:${ANALYZER_VERSION}:${meta.get("updatedAt")}:${meta.get("snapshot")}`).digest("hex"),
         sourceVersion: createHash("sha256").update(JSON.stringify({ layout: target.owner?.layoutVersion ?? meta.get("layout"),
@@ -385,6 +423,7 @@ export function searchMessageHistoryIndexResult(directory: string, query: Recent
       }, metrics: { strategy, candidates, elapsedMs: performance.now() - began, snapshotMs, projectionMs,
         candidateMs: Math.max(0, performance.now() - began - snapshotMs - projectionMs) } });
     const matchExpression = terms.map(term => { const size = Math.min(3, term.length); return `(g${size}: (${messageSearchGrams(term, size).split(" ").map(gram => `"${gram}"`).join(" AND ")}))`; }).join(query.queryMatch === "all" ? " AND " : " OR ");
+    if (query.page?.catalogOnly) return finish([]);
     let orderedMembership = false;
     if (terms.length) {
       const corpus = Number(meta.get("records") || 0);
@@ -414,6 +453,7 @@ export function searchMessageHistoryIndexResult(directory: string, query: Recent
     if (Number.isFinite(query.to)) { filters.push("d.time<=?"); args.push(Number(query.to)); }
     if (query.afterSequence !== undefined) { filters.push("d.seq>?"); args.push(query.afterSequence); }
     if (query.beforeSequence !== undefined) { filters.push("d.seq<=?"); args.push(query.beforeSequence); }
+    if (before) { filters.push('(d.sourceOrder,d.position,d.rowid)<(?,?,?)'); args.push(before.sourceOrder, before.position, before.rowid); }
     // Mid-sized postings use indexed write-order traversal with a membership set;
     // this avoids sorting every matching document before yielding the first K.
     const select = `SELECT d.rowid,d.recordKey,d.seq,d.time,d.id,s.ordinal AS sourceOrder,d.position,d.chars
@@ -457,13 +497,18 @@ export function searchMessageHistoryIndexResult(directory: string, query: Recent
     // SQLite streams the index (or spills selective posting sorts to disk); JS
     // retains only the requested result window, never a corpus-sized map or array.
     const iterator = db.prepare(select + " ORDER BY d.sourceOrder DESC,d.position DESC,d.rowid DESC").iterate(...args) as Iterable<SearchRow>;
+    let pageBudgetReached = false;
     for (const row of iterator) {
       candidates++;
       const winner = duplicates.get(row.recordKey, ...duplicateQueryArgs);
       if (winner?.rowid !== row.rowid) continue;
+      // A page must retain an over-budget row for the next page, rather than skip it.
+      if (query.page && result.length && chars + row.chars > maxChars) { pageBudgetReached = true; break; }
       collect(row);
-      if (complete()) break;
+      if (query.page) nextPageCursor = historyPageCursor(pageScope, row);
+      if (complete()) return finish(result.reverse());
     }
+    if (!pageBudgetReached) nextPageCursor = null;
     return finish(result.reverse());
   } catch (error) {
     if (error instanceof SyntaxError || (error instanceof Error && error.message.startsWith("MESSAGE_HISTORY_INDEX_INTEGRITY"))) {

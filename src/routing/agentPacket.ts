@@ -1202,6 +1202,7 @@ function buildAgentMessage(
   const replyLocator = sendRequest ? JSON.stringify({ routeId: sendRequest.routeId, channel: sendRequest.channel, params: sendRequest.params }) : "";
   const delivery: RabiDeliveryEnvelope = {
     messageSource,
+    sentAt: new Date().toLocaleString("zh-CN", { hour12: false }),
     messageContent: [raw, !companion && supplement ? section("补充", [supplement]) : ""].filter(Boolean).join("\n\n"),
     contextBlocks: contexts.filter(Boolean),
     controlBlocks: companion ? [] : [section("查询入口", ["GET /api/agent/help", optionalLine("回传定位", replyLocator)])],
@@ -1484,6 +1485,7 @@ function buildDetailedAgentMessage(
 
   const delivery: RabiDeliveryEnvelope = {
     messageSource,
+    sentAt: new Date().toLocaleString("zh-CN", { hour12: false }),
     messageContent: [
       String(values.message || record.rawMessage || ""),
       routeKind === "manual_trigger" || routeKind === "heartbeat" ? section("事件执行要求", [
@@ -1556,7 +1558,7 @@ export function buildAgentPacket(
     const messageContent = userTemplateText || decision.routeText;
     if (!messageContent.trim()) throw new Error("Grok direct delivery requires message text.");
     return { rule, templateValues, messageSource: built.messageSource,
-      delivery: { messageSource: built.messageSource, messageContent }, content: messageContent, message: messageContent };
+      delivery: { messageSource: built.messageSource, messageContent, sentAt: built.delivery.sentAt }, content: messageContent, message: messageContent };
   }
   return {
     rule,

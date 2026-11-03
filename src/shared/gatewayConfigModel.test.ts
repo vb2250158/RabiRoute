@@ -1,5 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { gatewayEndpointTypesFromManifests } from "./messageEndpointTypes.js";
+import { parsePluginManifest } from "../plugin-kernel/manifest.js";
 import {
   agentAdapterSupportsManagedTaskFeature,
   autoAssignGatewayPorts,
@@ -28,9 +32,14 @@ import {
   resolvePrimaryNapCatInstance,
   sanitizeConfigName,
   syncPrimaryNapCatInstanceFields,
+  setGatewayAdapters,
   validateGatewayPortConflicts,
   type GatewayDefinition
 } from "./gatewayConfigModel.js";
+
+const pluginProfile = JSON.parse(await fs.readFile(path.resolve("plugins/profiles/desktop.json"), "utf8")) as {instances: Array<{package: string; version: string}>};
+const declaredGatewayTypes = gatewayEndpointTypesFromManifests(await Promise.all(pluginProfile.instances.map(async instance =>
+  parsePluginManifest(JSON.parse(await fs.readFile(path.resolve("plugins/builtin", instance.package, instance.version, "rabi.plugin.json"), "utf8"))))));
 
 function localUrl(port: number, pathname = ""): string {
   return `http://127.0.0.1:${port}${pathname}`;
@@ -71,7 +80,7 @@ test("remote persona identity is retained in Gateway and derived Route profiles"
   assert.throws(() => normalizeGatewayDefinition(gateway({ agentRoleDeviceId: "https://target" })), /device ID/);
 });
 
-test("message endpoint and Gateway adapter contracts have exact host-owned members", () => {
+test("legacy endpoint labels remain readable while installed packages own the live catalog", () => {
   assert.deepEqual([...MESSAGE_ENDPOINT_TYPES], [
     "napcat", "remoteAgent", "heartbeat", "rolePanel", "speech", "fennenote", "xiaoai",
     "rabilink", "wearable", "webhook", "wecom", "weixin", "feishu", "xiaomiHome"
@@ -88,10 +97,21 @@ test("message endpoint and Gateway adapter contracts have exact host-owned membe
 test("legacy disabled selection normalizes to state instead of an endpoint type", () => {
   const normalized = normalizeGatewayDefinition(gateway({ messageAdapters: ["disabled"] }));
   assert.equal(normalized.messageInputsDisabled, true);
-  assert.equal(normalized.messageAdapterType, "napcat");
-  assert.deepEqual(normalized.messageAdapters, ["napcat"]);
+  assert.equal(normalized.messageAdapterType, undefined);
+  assert.deepEqual(normalized.messageAdapters, []);
   assert.deepEqual(gatewayAdapterTypes(normalized), []);
-  assert.deepEqual(gatewayMessageAdapterTypes(normalized), []);
+  assert.deepEqual(gatewayMessageAdapterTypes(normalized, declaredGatewayTypes), []);
+});
+
+test("a new plugin ID and its opaque settings survive save while removing the final endpoint keeps the Route empty", () => {
+  const input = { ...gateway({ messageAdapters: ["example.custom-channel"] }), messageEndpointSettings: { "example.custom-channel": { channel: "sample", enabledFeatures: ["text"] } } };
+  const normalized = normalizeGatewayDefinition(input);
+  const reloaded = JSON.parse(JSON.stringify(normalized));
+  assert.deepEqual(reloaded.messageAdapters, ["example.custom-channel"]);
+  assert.deepEqual(reloaded.messageEndpointSettings, input.messageEndpointSettings);
+  setGatewayAdapters(reloaded, []);
+  assert.deepEqual(normalizeGatewayDefinition(reloaded).messageAdapters, []);
+  assert.equal(normalizeGatewayDefinition(reloaded).messageAdapterType, undefined);
 });
 
 test("message adapters honor disabled input and disabled adapter lists", () => {
@@ -216,14 +236,14 @@ test("a Route keeps only its primary NapCat endpoint when migrating a multi-inst
   assert.equal(firstEnabled[0]?.autoLoginOnRabiStart, false);
 });
 
-test("Xiaomi Home survives Route save and reload without becoming a Gateway runtime adapter", () => {
+test("Xiaomi Home survives Route save and reload for package-declared host selection", () => {
   const saved = JSON.stringify(normalizeGatewayDefinition(gateway({
     messageAdapters: ["xiaoai", "xiaomiHome"]
   })));
   const reloaded = normalizeGatewayDefinition(JSON.parse(saved));
   assert.deepEqual(reloaded.messageAdapters, ["xiaoai", "xiaomiHome"]);
   assert.deepEqual(gatewayAdapterTypes(reloaded), ["xiaoai", "xiaomiHome"]);
-  assert.deepEqual(gatewayMessageAdapterTypes(reloaded), ["xiaoai"]);
+  assert.deepEqual(gatewayMessageAdapterTypes(reloaded, declaredGatewayTypes), [], "Manager-owned Xiaomi input remains configured without requiring a resident Gateway.");
   assert.deepEqual(
     reloaded.notificationRules?.find(rule => rule.routeKinds?.includes("xiaomi_home_event"))?.routeKinds,
     ["xiaomi_home_event"]
@@ -727,7 +747,7 @@ test("wearable health is a Relay-backed message adapter without its own listener
   }));
 
   assert.deepEqual(gatewayAdapterTypes(normalized), ["rabilink", "wearable"]);
-  assert.deepEqual(gatewayMessageAdapterTypes(normalized), ["rabilink"]);
+  assert.deepEqual(gatewayMessageAdapterTypes(normalized, declaredGatewayTypes), ["rabilink"]);
   assert.deepEqual(normalized.notificationRules?.map(rule => rule.id), ["default-rabilink", "default-wearable"]);
   assert.deepEqual(normalized.notificationRules?.[1]?.routeKinds, ["wearable_health_alert"]);
   const claims = collectGatewayPortClaims([normalized], { managerPort: 8790 });

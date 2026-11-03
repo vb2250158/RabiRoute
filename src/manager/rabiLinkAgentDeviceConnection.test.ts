@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import type { IncomingMessage } from 'node:http';
 import { markAuthenticatedConnectionRequest } from './connectionRequestAccess.js';
 import { issueInternalManagerHopHeaders } from '../shared/internalManagerHop.js';
-import { rabiLinkAgentDevicePrincipal, rabiLinkConnectionScope } from './rabiLinkAgentDeviceConnection.js';
+import { rabiLinkAgentDevicePrincipal, rabiLinkAgentTaskSource, rabiLinkConnectionScope } from './rabiLinkAgentDeviceConnection.js';
 
 test('only the current loopback transport may assert device receipt ownership; app management remains separate', () => {
   const config = { enabled: true, url: 'https://relay.example', token: 'fixture-token', deviceId: 'pc-owner' };
@@ -11,12 +11,14 @@ test('only the current loopback transport may assert device receipt ownership; a
   const headers = issueInternalManagerHopHeaders({ kind: 'peer', generation: 'generation-one', scope: rabiLinkConnectionScope(config), deviceId: 'glasses', method: 'GET', target: '/' });
   const signed = request('::ffff:127.0.0.1', headers);
   assert.equal(rabiLinkAgentDevicePrincipal(signed, config, 'generation-one')?.deviceOwner, true);
+  assert.equal(rabiLinkAgentTaskSource(signed, config, 'generation-one')?.sourceDeviceId, 'glasses');
   assert.equal(rabiLinkAgentDevicePrincipal(signed, config, 'generation-two'), null);
   const forged = request('192.168.0.2', headers); markAuthenticatedConnectionRequest(forged);
   assert.equal(rabiLinkAgentDevicePrincipal(forged, config, 'generation-one'), null);
   const admin = request('127.0.0.1'); assert.equal(rabiLinkAgentDevicePrincipal(admin, config, 'generation-one'), null);
   markAuthenticatedConnectionRequest(admin);
   assert.deepEqual(rabiLinkAgentDevicePrincipal(admin, config, 'generation-one'), { scope: rabiLinkConnectionScope(config), sourceDeviceId: 'pc-owner', deviceOwner: false });
+  assert.equal(rabiLinkAgentTaskSource(admin, config, 'generation-one'), undefined);
   const app = request('127.0.0.1', issueInternalManagerHopHeaders({ kind: 'peer', generation: 'generation-one', scope: rabiLinkConnectionScope(config), deviceId: '$application', method: 'GET', target: '/' }));
   assert.equal(rabiLinkAgentDevicePrincipal(app, config, 'generation-one')?.deviceOwner, false);
   assert.equal(rabiLinkAgentDevicePrincipal(signed, { ...config, enabled: false }, 'generation-one'), null);

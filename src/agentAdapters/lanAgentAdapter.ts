@@ -1,3 +1,4 @@
+import { requestPeerRouteDelivery } from "./peerRouteClient.js";
 import { getTimeoutMs } from "../shared/timeoutSettings.js";
 import { randomUUID } from "node:crypto";
 import { renderRabiDelivery, type RabiDeliveryEnvelope } from "../shared/rabiMessage.js";
@@ -12,17 +13,26 @@ export async function notifyInstanceAgent(type: AgentAdapterType, binding: Agent
   const nodeId = binding.instanceId;
   const baseUrl = process.env.GATEWAY_MANAGER_URL?.trim();
   const token = process.env.LAN_AGENT_ACCESS_TOKEN?.trim();
-  const state = { monitorThreadSource: nodeId, agentAdapterType: type, instanceId: nodeId, agentId: binding.agentId };
+  const state = { monitorThreadSource: nodeId, agentAdapterType: type, instanceId: nodeId, agentId: binding.agentId, ...(binding.ownerDeviceId ? { ownerDeviceId: binding.ownerDeviceId } : {}) };
   try {
     if (!nodeId) throw new Error("请在消息适配器中选择已接入的远端 Agent 节点。");
-    if (!baseUrl || !token) throw new Error("Manager 局域网连接未就绪；请检查局域网访问设置并重新启动此消息路线。");
+    if (!baseUrl || !token && !binding.ownerDeviceId) throw new Error("Manager 局域网连接未就绪；请检查局域网访问设置并重新启动此消息路线。");
     if (options?.imagePaths?.length) throw new Error("远端 Agent 尚不支持传送本机图片文件，请使用远端可访问的附件链接。");
     if (!options?.threadId || options.threadId !== options.threadId.trim()) throw new Error("Explicit full target session ID is required for remote delivery.");
-    const response = await fetch(`${baseUrl.replace(/\/$/, "")}/api/lan-agent/instances/${encodeURIComponent(nodeId)}/agents/${encodeURIComponent(binding.agentId)}/tasks`, {
+    const deliveryId = envelope.deliveryId || randomUUID();
+    if (binding.ownerDeviceId) {
+      const receipt = await requestPeerRouteDelivery(binding, { action: "send", agentAdapter: type, threadId: options.threadId,
+        cwd: options.workspace, prompt: renderRabiDelivery(envelope), deliveryId });
+      reportAgentState(type, { ...state, bound: true, lastTaskId: deliveryId, lastTaskStatus: receipt.status,
+        lastNotificationAt: new Date().toISOString(), lastNotificationError: null });
+      return;
+    }
+    const targetPath = `/api/lan-agent/instances/${encodeURIComponent(nodeId)}/agents/${encodeURIComponent(binding.agentId)}/tasks`;
+    const response = await fetch(`${baseUrl.replace(/\/$/, "")}${targetPath}`, {
       method: "POST",
       headers: { "content-type": "application/json", "authorization": `Bearer ${token}` },
       body: JSON.stringify({ message: renderRabiDelivery(envelope), provider: type === "codex" ? "codex-desktop" : type,
-        threadId: options.threadId, cwd: options.workspace, idempotencyKey: envelope.deliveryId || randomUUID() }),
+        threadId: options.threadId, cwd: options.workspace, idempotencyKey: deliveryId }),
       signal: AbortSignal.timeout(getTimeoutMs("backend.agentAdapters.lanAgentAdapter.notifyInstanceAgent.AbortSignal.timeout.request", 15_000))
     });
     const body = await response.json() as { code?: number; message?: string; result?: { taskId?: string; status?: string } };

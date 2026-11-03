@@ -3,6 +3,34 @@ import type { TimeoutCatalogEntry } from "./timeoutSettings.js";
 /** Configurable operation deadlines; dynamic plugin operations register with their owner. */
 export const timeoutCatalog: readonly TimeoutCatalogEntry[] = [
   {
+    "key": "backend.manager.gatewayRouteSnapshot.ack",
+    "defaultMs": 30000,
+    "label": "消息端配置生效回执",
+    "scope": "src/manager/gatewayRouteSnapshotSupervisor.ts",
+    "effect": "next-request"
+  },
+  {
+    "key": "backend.plugin-runtime-host.messageEndpointCommandSettings.snapshot",
+    "defaultMs": 15000,
+    "label": "消息端命令运行状态核对",
+    "scope": "src/plugin-runtime-host/messageEndpointCommandSettings.ts",
+    "effect": "next-request"
+  },
+  {
+    "key": "webgui.plugins.read",
+    "defaultMs": 15000,
+    "label": "插件列表读取",
+    "scope": "ribiwebgui/src/pluginManagementClient.ts",
+    "effect": "next-request"
+  },
+  {
+    "key": "webgui.plugins.update",
+    "defaultMs": 45000,
+    "label": "插件启停提交",
+    "scope": "ribiwebgui/src/pluginManagementClient.ts",
+    "effect": "next-request"
+  },
+  {
     "key": "agent.client.discovery",
     "defaultMs": 5000,
     "label": "Agent 发现与身份核验",

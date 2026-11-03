@@ -7,9 +7,9 @@ import { userFacingError } from "../userFacingError";
 import { browserUuid } from "../browserUuid";
 import "@xterm/xterm/css/xterm.css";
 
-const props = defineProps<{ instanceId: string; name: string; token: string }>();
+const props = defineProps<{ instanceId: string; name: string; token: string; ownerDeviceId?: string }>();
 const emit = defineEmits<{ close: [] }>();
-const client = new RemoteTerminalClient(props.instanceId, props.token);
+const client = new RemoteTerminalClient(props.instanceId, props.token, undefined, props.ownerDeviceId);
 const sessions = ref<RemoteTerminal[]>([]);
 const shells = ref<string[]>([]);
 const shell = ref("cmd"); const cwd = ref("");

@@ -1,0 +1,5 @@
+{
+  "exports": [{ "name": "createSpeechPluginRuntime", "source": "src/manager/speechPluginRuntime.ts" }],
+  "ownedSources": ["src/speechIngressStore.ts", "src/manager/selectionSpeechSettings.ts", "src/peerTunnel/speechAdapter.ts"],
+  "ownedPrefixes": ["src/manager/speech", "src/speech/"]
+}

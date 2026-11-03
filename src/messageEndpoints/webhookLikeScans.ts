@@ -46,7 +46,7 @@ export function recentMessageEvidence<Runtime>(
   return results.includes(true) ? true : results.includes(undefined) ? undefined : false;
 }
 
-function scanCallbacks<Runtime>(ctx: WebhookLikeScanContext<Runtime>, type: Extract<GatewayMessageAdapterType, "rabilink" | "webhook">): {
+function scanCallbacks<Runtime>(ctx: WebhookLikeScanContext<Runtime>, type: "rabilink" | "webhook"): {
   runtimes: Runtime[];
   callbacks: AdapterEndpoint[];
   callbackReady: boolean;

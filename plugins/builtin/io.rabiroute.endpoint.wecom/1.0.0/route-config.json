@@ -1,0 +1,34 @@
+{
+  "endpointType": "wecom",
+  "routeKeys": [
+    "wecomBotId",
+    "wecomBotSecret",
+    "wecomWsUrl"
+  ],
+  "runtimeFields": {
+    "wecomBotId": {
+      "paths": [
+        "wecomBotId"
+      ],
+      "default": "",
+      "trim": true,
+      "emptyDefault": true
+    },
+    "wecomBotSecret": {
+      "paths": [
+        "wecomBotSecret"
+      ],
+      "default": "",
+      "trim": true,
+      "emptyDefault": true
+    },
+    "wecomWsUrl": {
+      "paths": [
+        "wecomWsUrl"
+      ],
+      "default": "",
+      "trim": true,
+      "emptyDefault": true
+    }
+  }
+}

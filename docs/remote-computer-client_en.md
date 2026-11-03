@@ -4,15 +4,20 @@
 
 # Host and remote computer clients
 
+Full Rabi hosts provide their own computer capabilities over the established RabiLink connection without a self-connected client. Selecting a target PC on the RabiLink home page keeps computer operations on that Manager. Lightweight clients serve computers without a full host. Source wiring is implemented; installed and physical two-computer acceptance depend on actual running versions. See [architecture and evidence limits](connected-host-agent-architecture_en.md).
+
 An enrolled remote instance has one switch, enabled by default. While enabled, it uses all public host APIs with its existing computer credential, without browser login, saved Agent/session registration or per-feature grants. Every Agent invocation supplies its actual type and complete session ID.
 
-The host computer's Rabi service owns personas, plans, memory, skills, message history and persistent orchestration without a separate controlling Agent. Each remote computer runs a Rabi Agent client exposing its platform's computer capabilities. Ordinary authenticated Agents can query plans, memory and skills and use computer APIs under the same contracts without a primary-persona role.
+The host computer's Rabi service owns personas, plans, memory, skills, message history and persistent orchestration without a separate controlling Agent. Manager owns computer services on full hosts; lightweight computers use a Rabi Agent client. Both reuse the same supported platform execution. Ordinary authenticated Agents can query plans, memory and skills and use computer APIs under the same contracts without a primary-persona role.
 
 ```mermaid
 flowchart LR
   A[Host Rabi service: data, memory, skills, workflows] --> C[Public APIs]
   B[Ordinary authenticated Agent] --> C
-  C <--> D[Remote client: one main program]
+  C --> H[Full host: Manager-owned computer services]
+  C <--> D[Lightweight client: one main program]
+  H --> E
+  H --> F
   D --> E[Platform terminals: CMD / PowerShell / Zsh / Bash]
   D --> F[Files, windows and screenshots]
   D --> G[Optional associated Codex / DSH]
@@ -22,7 +27,7 @@ The client does not run another Manager or replicate persona, memory or skill st
 
 ## Setup and use
 
-Follow [remote client enrollment](lan-rabi-agent-bootstrap_en.md) and keep one main program on each computer. The connector, tray, terminal host and capture helper are child programs. Associated Agents can start later; a private configuration with `agents: []` can also establish a computer connection.
+Full hosts use their current RabiLink connection. Computers without a full host follow [remote client enrollment](lan-rabi-agent-bootstrap_en.md), keeping one client main program each. The connector, tray, terminal host and capture helper are child programs. Associated Agents can start later; a private configuration with `agents: []` can also establish a computer connection.
 
 Select Windows, Mac (macOS) or Linux before installing only the computer client. The installation-time Agent association checkbox has been removed. Omitting `RABI_AGENT_TYPE` and session variables on first enrollment makes `--bootstrap` save an empty Agent catalog. Later Agent registration preserves computer identity; each delivery supplies an explicit provider and full session ID.
 

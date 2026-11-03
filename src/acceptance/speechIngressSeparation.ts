@@ -9,6 +9,7 @@ import { handleRoleContextProjectionRequest } from "../manager/roleContextProjec
 import type { RoleKnowledgeSnapshot } from "../roleKnowledge.js";
 import { parseSpeechProcessResult } from "../speechMessageDelivery.js";
 import { SpeechIngressStore } from "../speechIngressStore.js";
+import { parsePluginManifest } from "../plugin-kernel/manifest.js";
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const DEFAULT_ENTRY = path.join(REPO_ROOT, "dist", "index.js");
@@ -183,6 +184,17 @@ async function startRoleContextFixture(
     managerInstanceId: "speech-acceptance-manager"
   };
   const capability = "speech-acceptance-capability";
+  const packageDirectory = path.join(REPO_ROOT, import.meta.url.endsWith(".ts") ? "plugins/builtin" : "dist/plugins/packages");
+  const instances = ["speech", "rabilink"].map(type => {
+    const pluginId = `io.rabiroute.endpoint.${type}`;
+    const manifest = parsePluginManifest(JSON.parse(fs.readFileSync(path.join(packageDirectory, pluginId, "1.0.0", "rabi.plugin.json"), "utf8")));
+    if (manifest.id !== pluginId || manifest.version !== "1.0.0" || !manifest.entries.manager || !manifest.provides.includes(`endpoint.${type}@1`)) {
+      throw new Error(`Isolated speech acceptance endpoint manifest does not match its fixture: ${type}.`);
+    }
+    // These are explicitly active test publications; no real Manager or plugin lifecycle is consulted.
+    return { instanceId: `endpoint:${type}`, pluginId, version: manifest.version, enabled: true, status: "active", missingCapabilities: [], manifest };
+  });
+  const publication = { ...identity, revision: sha256(JSON.stringify(instances)), instances, isolatedFixture: true };
   const routeRoles = new Map(roles.map(role => [role.gatewayId, role.roleId]));
   const projections = new Map(roles.map(role => [role.roleId, {
     roleDir: role.roleDir,
@@ -215,6 +227,14 @@ async function startRoleContextFixture(
   };
   const server = http.createServer((request, response) => {
     const url = new URL(request.url || "/", `http://${request.headers.host || "127.0.0.1"}`);
+    if (request.method === "GET" && url.pathname === "/meta") {
+      jsonResponse(response, 200, { protocolVersion: 1, ...identity, health: { live: true, requiredReady: false, state: "degraded" }, isolatedFixture: true });
+      return;
+    }
+    if (request.method === "GET" && url.pathname === "/api/plugins/instances") {
+      jsonResponse(response, 200, { code: 0, data: publication });
+      return;
+    }
     if (!handleRoleContextProjectionRequest(request, url, response, {
       identity,
       isLoopback: () => true,

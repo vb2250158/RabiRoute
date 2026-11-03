@@ -2,7 +2,7 @@ import { definePlugin } from "@rabiroute/plugin-sdk";
 export const activate = definePlugin({
     async activate(context) {
         const runtime = context.services.require("host.manager.rabilink-relay@1");
-        context.services.provide("manager.rabilink-relay@1", Object.freeze({ instanceId: context.identity.instanceId }));
+        context.services.provide("manager.rabilink-relay@1", Object.freeze({ instanceId: context.identity.instanceId, connection: runtime.connection }));
         for (const contribution of [])
             context.contributions.register(contribution);
         context.effects.add(async () => {
@@ -40,7 +40,7 @@ export const activate = definePlugin({
             return work;
         };
         let video, peer;
-        let peerUpgrades, peerHttp, peerControls, videoOperations, profileOperations, mobileOperations, deviceAgentOperations;
+        let peerUpgrades, peerHttp, peerControls, videoOperations, profileOperations, deviceAgentOperations;
         const preparations = new Set();
         const assertPreparing = () => {
             context.lifecycle.signal.throwIfAborted();
@@ -64,7 +64,7 @@ export const activate = definePlugin({
             peerUpgrades?.stopAccepting();
             peer?.stopAccepting();
             const results = await Promise.allSettled([
-                ...[deviceAgentOperations, profileOperations, mobileOperations, videoOperations, peerControls, peerHttp, peerUpgrades]
+                ...[deviceAgentOperations, profileOperations, videoOperations, peerControls, peerHttp, peerUpgrades]
                     .filter(Boolean).map(registration => Promise.resolve().then(() => registration.dispose())),
                 Promise.resolve().then(() => video?.stop()),
                 ...synchronizations,
@@ -84,7 +84,6 @@ export const activate = definePlugin({
         await prepare(async () => { peer = await runtime.createPeerRuntime(); });
         await prepare(async () => { videoOperations = await runtime.managerPluginRoutes.registerOperationsAsync(context.identity.instanceId, runtime.createDirectVideoOperations(video), context.lifecycle.signal); });
         await prepare(async () => { profileOperations = await runtime.managerPluginRoutes.registerOperationsAsync(context.identity.instanceId, runtime.createRabiLinkAgentDeviceOperations(), context.lifecycle.signal); });
-        await prepare(async () => { mobileOperations = await runtime.managerPluginRoutes.registerOperationsAsync(context.identity.instanceId, runtime.createRabiLinkMobileOperations(), context.lifecycle.signal); });
         await prepare(async () => { deviceAgentOperations = await runtime.managerPluginRoutes.registerOperationsAsync(context.identity.instanceId, runtime.createDeviceAgentOperations(), context.lifecycle.signal); });
         assertPreparing();
         peerUpgrades = runtime.managerPluginRoutes.registerUpgrades(context.identity.instanceId, [peer.upgradeOperation]);

@@ -7,6 +7,7 @@ import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { NapcatLifecycleOwner, type NapcatBinding, type NapcatProcessIdentity } from "./napcatLifecycleOwner.js";
 import { validateNapcatRouteCardinality } from "../shared/gatewayConfigModel.js";
+import { confirmBundledNapcatStopped } from './napcatProcessDriver.js';
 
 function fixture(t: test.TestContext) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "napcat-owner-test-"));
@@ -224,4 +225,53 @@ test("a temporarily missing snapshot captures the original live child on later r
   await f.owner.recordLaunch(f.binding("a"));
   assert.equal(JSON.parse(fs.readFileSync(f.options.statePath, "utf8")).records[0].launchPending, undefined);
   await f.owner.reconcile([]); assert.deepEqual(f.stopped, [child.pid]);
+});
+
+test('a legacy pending launch recovers only with a bundled absence proof and retains its original record', async t => {
+  const f=fixture(t);await f.owner.reconcile([f.binding('a')]);f.owner.prepareLaunch(f.binding('a'));
+  const original=JSON.parse(fs.readFileSync(f.options.statePath,'utf8')).records[0];
+  const proof={checkedAt:new Date().toISOString(),commandPath:path.join(f.root,'a','NapCatWinBootMain.exe')};
+  const owner=new NapcatLifecycleOwner({...f.options,driver:{...f.options.driver,confirmBundledInstanceStopped:async()=>proof}});
+  await owner.reconcile([f.binding('a')]);let closed!:Promise<unknown>;
+  const child=await owner.run(f.binding('a'),()=>owner.launch(f.binding('a'),()=>{const process=spawn(globalThis.process.execPath,['-e','process.exit(7)'],{windowsHide:true,stdio:'ignore'});closed=once(process,'close');return process;}, {cwd:path.join(f.root,'a'),commandPath:proof.commandPath}));
+  await closed;
+  const recovered=JSON.parse(fs.readFileSync(f.options.statePath,'utf8')).records[0];
+  const archive=JSON.parse(fs.readFileSync(recovered.recoveredLaunch.archive,'utf8'));
+  assert.equal(archive.resolution,'no-live-instance');assert.deepEqual(archive.record,original);
+  assert.equal(recovered.launchAttempt.pid,child.pid);assert.equal(recovered.launchAttempt.exitCode,7);assert.ok(recovered.launchAttempt.closedAt);
+  assert.notEqual(recovered.launchAttempt.id,original.launchAttempt.id);
+});
+
+test('unproven pending launch remains fenced, including a closed launcher with possible children', async t => {
+  const f=fixture(t);await f.owner.reconcile([f.binding('a')]);f.owner.prepareLaunch(f.binding('a'));
+  const owner=new NapcatLifecycleOwner({...f.options,driver:{...f.options.driver,confirmBundledInstanceStopped:async()=>undefined}});
+  await owner.reconcile([f.binding('a')]);let spawned=false;
+  await assert.rejects(owner.run(f.binding('a'),()=>owner.launch(f.binding('a'),()=>{spawned=true;throw Error('must not spawn');},{cwd:f.root,commandPath:'launcher'})),/身份尚未确认/);
+  assert.equal(spawned,false);assert.equal(fs.existsSync(f.options.statePath+'.history'),false);
+});
+
+test('a live original child cannot be replaced even when a driver supplies absence proof', async t => {
+  const f=fixture(t);let checks=0;const owner=new NapcatLifecycleOwner({...f.options,driver:{...f.options.driver,confirmBundledInstanceStopped:async()=>{checks++;return {checkedAt:'now',commandPath:'launcher'};}}});
+  await owner.reconcile([f.binding('a')]);let child!:ReturnType<typeof spawn>;
+  await owner.launch(f.binding('a'),()=>child=spawn(globalThis.process.execPath,['-e','setInterval(()=>{},1000)'],{windowsHide:true,stdio:'ignore'}));
+  t.after(async()=>{const closed=once(child,'close');child.kill();await closed;});
+  await assert.rejects(owner.launch(f.binding('a'),()=>{throw Error('must not replace');},{cwd:f.root,commandPath:'launcher'}),/身份尚未确认/);
+  assert.equal(checks,0);
+});
+
+test('external launch plans and incomplete bundled layouts never provide stopped proof', async t => {
+  const f=fixture(t);
+  assert.equal(await confirmBundledNapcatStopped(f.binding('a'),{cwd:f.root,commandPath:'external.exe'}),undefined);
+  assert.equal(await confirmBundledNapcatStopped(f.binding('a'),{cwd:path.join(f.root,'a'),commandPath:path.join(f.root,'a','NapCatWinBootMain.exe')}),undefined);
+});
+
+test('failure to persist a recovered launch keeps the original pending fence in memory',async t=>{
+  const f=fixture(t);await f.owner.reconcile([f.binding('a')]);f.owner.prepareLaunch(f.binding('a'));
+  const owner=new NapcatLifecycleOwner({...f.options,driver:{...f.options.driver,confirmBundledInstanceStopped:async()=>({checkedAt:'now',commandPath:'bundled'})}});
+  await owner.reconcile([f.binding('a')]);
+  const saved=fs.readFileSync(f.options.statePath);fs.unlinkSync(f.options.statePath);fs.mkdirSync(f.options.statePath);
+  let spawned=false;
+  await assert.rejects(owner.launch(f.binding('a'),()=>{spawned=true;throw Error('must not start');},{cwd:f.root,commandPath:'bundled'}));
+  assert.equal(spawned,false);assert.throws(()=>owner.prepareLaunch(f.binding('a')),/身份尚未确认/);
+  fs.rmdirSync(f.options.statePath);fs.writeFileSync(f.options.statePath,saved);
 });

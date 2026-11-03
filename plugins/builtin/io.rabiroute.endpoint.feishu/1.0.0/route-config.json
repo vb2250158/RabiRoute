@@ -1,0 +1,69 @@
+{
+  "endpointType": "feishu",
+  "routeKeys": [
+    "feishuAppId",
+    "feishuAppSecret",
+    "feishuVerificationToken",
+    "feishuEncryptKey",
+    "feishuEventSubscriptionEnabled",
+    "feishuWebhookPort",
+    "feishuWebhookPath"
+  ],
+  "runtimeFields": {
+    "feishuAppId": {
+      "paths": [
+        "feishuAppId"
+      ],
+      "default": "",
+      "trim": true,
+      "emptyDefault": true
+    },
+    "feishuAppSecret": {
+      "paths": [
+        "feishuAppSecret"
+      ],
+      "default": "",
+      "trim": true,
+      "emptyDefault": true
+    },
+    "feishuVerificationToken": {
+      "paths": [
+        "feishuVerificationToken"
+      ],
+      "default": "",
+      "trim": true,
+      "emptyDefault": true
+    },
+    "feishuEncryptKey": {
+      "paths": [
+        "feishuEncryptKey"
+      ],
+      "default": "",
+      "trim": true,
+      "emptyDefault": true
+    },
+    "feishuEventSubscriptionEnabled": {
+      "paths": [
+        "feishuEventSubscriptionEnabled"
+      ],
+      "default": false,
+      "format": "boolean"
+    },
+    "feishuWebhookPort": {
+      "paths": [
+        "feishuWebhookPort",
+        "gatewayPort"
+      ],
+      "default": 8789,
+      "format": "number"
+    },
+    "feishuWebhookPath": {
+      "paths": [
+        "feishuWebhookPath"
+      ],
+      "default": "/feishu",
+      "trim": true,
+      "emptyDefault": true
+    }
+  }
+}

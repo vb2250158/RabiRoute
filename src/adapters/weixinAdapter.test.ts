@@ -6,7 +6,6 @@ import test from "node:test";
 import type { WeixinMessageRecord } from "../history.js";
 import { createMessageAdapterRuntime } from "../runtime/messageAdapterRuntime.js";
 import type { WeixinOpenClawState } from "../weixinOpenClaw.js";
-import { builtinMessageAdapterDefinitions } from "./builtinMessageAdapters.js";
 import type { MessageAdapterDefinition, MessageAdapterDispose } from "./messageAdapter.js";
 import {
   createWeixinAdapter,
@@ -180,15 +179,8 @@ test("Weixin Fiber creates a fresh long poll for each mount", async (t) => {
   assert.equal(readStatus(dataDir).messageAdapters.weixin.status, "disabled");
 });
 
-test("built-in Message Adapter manifests include Weixin", () => {
-  assert.deepEqual(
-    builtinMessageAdapterDefinitions().find((definition) => definition.manifest.type === "weixin")?.manifest,
-    {
-      type: "weixin",
-      label: "个人微信",
-      host: "gateway",
-      transport: "http",
-      lifecycle: "fiber"
-    }
-  );
+test("weixin owns an independent SDK package entry", () => {
+  const manifest = JSON.parse(fs.readFileSync(new URL("../../plugins/builtin/io.rabiroute.endpoint.weixin/1.0.0/rabi.plugin.json", import.meta.url), "utf8"));
+  assert.deepEqual(manifest.entries.gateway, { execution: "in_process", module: "./gateway.mjs" });
+  assert.ok(manifest.provides.includes("endpoint.weixin@1"));
 });

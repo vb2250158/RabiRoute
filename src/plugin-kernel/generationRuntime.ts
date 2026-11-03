@@ -893,13 +893,7 @@ export class GenerationRuntime {
           `Previous plugin activation did not retire: ${state.identity.instanceId}.`);
       }) : Promise.resolve();
       const retirementBarrier = previousRetirement.then(() => {
-        const unconfirmed = this.#unconfirmedRetirements.get(state.identity.instanceId);
-        if (!unconfirmed) return;
-        for (const previousState of unconfirmed) {
-          if (previousState.scope.retirementConfirmed()) unconfirmed.delete(previousState);
-        }
-        if (!unconfirmed.size) { this.#unconfirmedRetirements.delete(state.identity.instanceId); return; }
-        throw new Error(`Previous plugin activation retirement is unconfirmed: ${state.identity.instanceId}.`);
+        this.#assertRetirementConfirmed(state.identity.instanceId);
       });
       // Optional barrier: plugins without an exclusive worker need not wait for
       // old request/stream drain. Always observe rejection even if unused.
@@ -956,7 +950,9 @@ export class GenerationRuntime {
       if (failures.length || this.#shutdownStates.some(state => !state.scope.retirementConfirmed())) {
         throw new AggregateError(failures, "Plugin shutdown retirement remains unconfirmed.");
       }
-      const confirmedIds = new Set(this.#shutdownStates.map(state => state.identity.activationId));
+      const confirmedStates = [...this.#shutdownStates,
+        ...[...this.#unconfirmedRetirements.values()].flatMap(states => [...states])];
+      const confirmedIds = new Set(confirmedStates.filter(state => state.scope.retirementConfirmed()).map(state => state.identity.activationId));
       this.#current = Object.freeze({ ...this.#current,
         cleanupDiagnostics: Object.freeze(this.#current.cleanupDiagnostics.map(diagnostic =>
           confirmedIds.has(diagnostic.activationId) ? Object.freeze({ ...diagnostic, lateConfirmed: true as const }) : diagnostic
@@ -1077,19 +1073,31 @@ export class GenerationRuntime {
 
   async #retireStates(states: readonly ActivePluginState[], phase: PluginCleanupDiagnostic["phase"]): Promise<readonly PluginCleanupDiagnostic[]> {
     const diagnostics = await cleanupStates(states, phase);
+    const confirmedIds = new Set<string>();
     for (const state of states) {
-      if (state.scope.retirementConfirmed()) continue;
+      if (state.scope.retirementConfirmed()) { confirmedIds.add(state.identity.activationId); continue; }
       const unconfirmed = this.#unconfirmedRetirements.get(state.identity.instanceId) ?? new Set<ActivePluginState>();
       unconfirmed.add(state);
       this.#unconfirmedRetirements.set(state.identity.instanceId, unconfirmed);
     }
-    return diagnostics;
+    return Object.freeze(diagnostics.map(diagnostic => confirmedIds.has(diagnostic.activationId)
+      ? Object.freeze({ ...diagnostic, lateConfirmed: true as const }) : diagnostic));
   }
 
   #assertRetirementConfirmed(instanceId: string): void {
     const unconfirmed = this.#unconfirmedRetirements.get(instanceId);
     if (!unconfirmed) return;
-    for (const state of unconfirmed) if (state.scope.retirementConfirmed()) unconfirmed.delete(state);
+    const confirmedIds = new Set<string>();
+    for (const state of unconfirmed) if (state.scope.retirementConfirmed()) {
+      confirmedIds.add(state.identity.activationId);
+      unconfirmed.delete(state);
+    }
+    // A later publication can still reject; retain the original scope's proof
+    // before pruning its last reference from the retirement gate.
+    if (confirmedIds.size) this.#current = Object.freeze({ ...this.#current,
+      cleanupDiagnostics: Object.freeze(this.#current.cleanupDiagnostics.map(diagnostic =>
+        confirmedIds.has(diagnostic.activationId) ? Object.freeze({ ...diagnostic, lateConfirmed: true as const }) : diagnostic
+      )) });
     if (!unconfirmed.size) { this.#unconfirmedRetirements.delete(instanceId); return; }
     throw new Error(`Previous plugin activation retirement is unconfirmed: ${instanceId}.`);
   }

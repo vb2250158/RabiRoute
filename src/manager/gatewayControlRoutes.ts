@@ -1,4 +1,5 @@
 import type http from "node:http";
+import type { RouteCatalogActivationReceipt } from "./gatewayRouteActivationOwner.js";
 import type { ApiOperationResult } from "./apiOperationContract.js";
 import type { AgentDeliveryTestResult } from "../agentDeliveryTest.js";
 import type { AgentAdapterType } from "../agentAdapters/types.js";
@@ -41,6 +42,7 @@ export type GatewayControlRoutesContext = {
   resolveRouteMutation: (operationId: string) => Promise<{ state: "committed" | "not_committed" }>;
   loadRuntimes: () => Promise<void>;
   syncRunningGateways: () => void;
+  routeMutationActivation?: (operationId: string) => RouteCatalogActivationReceipt | undefined;
   runtimeStatuses: () => unknown[];
   networkOptionsPayload: () => Record<string, unknown>;
   startGateway: (id: string) => void;
@@ -180,7 +182,7 @@ function withRouteCatalogVersion(
 }
 
 function withRouteMutationReceipt(
-  context: Pick<GatewayControlRoutesContext, "routeCatalogVersion">,
+  context: Pick<GatewayControlRoutesContext, "routeCatalogVersion" | "routeMutationActivation">,
   operationId: string,
   payload: Record<string, unknown>
 ): Record<string, unknown> {
@@ -192,7 +194,8 @@ function withRouteMutationReceipt(
       operationId,
       routeConfigHash: routeCatalog.routeConfigHash
     },
-    routeCatalog
+    routeCatalog,
+    activation: context.routeMutationActivation?.(operationId) ?? { operationId, state: "requested" }
   };
 }
 export type GatewayMutation = Readonly<{ operationId: string; contentHash: string }>;
@@ -225,11 +228,11 @@ export function createGatewayControlOwner(context: GatewayControlRoutesContext) 
         // A committed save remains committed even if runtime activation fails.
         let activationError: string | undefined;
         try { context.syncRunningGateways(); } catch (error) { activationError = errorMessage(error); }
-        return success({ ...withRouteMutationReceipt(context, mutation.operationId, context.gatewayPayload({ includeDiagnostics: false, includeConfigDefinitions: true })), activation: activationError ? { state: "failed", message: activationError } : { state: "requested" } });
+        return success({ ...withRouteMutationReceipt(context, mutation.operationId, context.gatewayPayload({ includeDiagnostics: false, includeConfigDefinitions: true })), activation: activationError ? { state: "uncertain", code: "runtime_reconciliation_failed" } : context.routeMutationActivation?.(mutation.operationId) ?? { state: "requested" } });
       } catch (error) { return mutationFailed(error, true); }
     },
     async resolve(operationId: string): Promise<ApiOperationResult> {
-      try { const result = await context.resolveRouteMutation(operationId); return success({ ...withRouteCatalogVersion(context, context.gatewayPayload({ includeDiagnostics: false, includeConfigDefinitions: true })), receipt: { ...result, operationId, routeConfigHash: context.routeCatalogVersion().routeConfigHash } }); }
+      try { const result = await context.resolveRouteMutation(operationId); return success({ ...withRouteCatalogVersion(context, context.gatewayPayload({ includeDiagnostics: false, includeConfigDefinitions: true })), receipt: { ...result, operationId, routeConfigHash: context.routeCatalogVersion().routeConfigHash }, ...(result.state === "committed" ? { activation: context.routeMutationActivation?.(operationId) ?? { operationId, state: "uncertain", code: "activation_receipt_unavailable" } } : {}) }); }
       catch (error) { return mutationFailed(error, true); }
     },
     action(id: string, action: "start" | "stop" | "restart"): ApiOperationResult {

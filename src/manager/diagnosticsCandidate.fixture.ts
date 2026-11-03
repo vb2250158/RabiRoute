@@ -8,19 +8,29 @@ import { buildPluginPackages } from "../../scripts/build-plugin-packages.mjs";
 
 let ownedRoot: string | undefined;
 let preparation: Promise<string> | undefined;
-let preparedPackage: string | undefined;
-after(async () => { if (ownedRoot) await fs.rm(ownedRoot, { recursive: true, force: true }); });
+let preparedPackages: string | undefined;
+after(async () => {
+  // A cancelled consumer must not remove files while their original build still owns them.
+  await preparation?.catch(() => {});
+  if (ownedRoot) await fs.rm(ownedRoot, { recursive: true, force: true });
+});
 
 /** One formal build per test worker; each test copies it before mutating candidates. */
 export function diagnosticsCandidateForTests(packageId: string): Promise<string> {
+  return pluginPackagesCandidateForTests([packageId]);
+}
+
+/** Formal package preparation is a fixture phase, independent of Manager request/READY budgets. */
+export function pluginPackagesCandidateForTests(packageIds: readonly string[]): Promise<string> {
   const configured = process.env.RABI_PLUGIN_CANDIDATE_ROOT;
   if (configured) return Promise.resolve(path.resolve(configured));
-  if (preparedPackage && preparedPackage !== packageId) throw new Error("A test worker can only reuse its original candidate package.");
-  preparedPackage = packageId;
+  const selected = JSON.stringify([...new Set(packageIds)].sort());
+  if (preparedPackages && preparedPackages !== selected) throw new Error("A test worker can only reuse its original candidate packages.");
+  preparedPackages = selected;
   return preparation ??= (async () => {
     ownedRoot = await fs.mkdtemp(path.join(os.tmpdir(), "rabi-diagnostics-candidate-"));
     const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
-    await buildPluginPackages(repository, { packages: [packageId], outputDirectory: ownedRoot });
+    await buildPluginPackages(repository, { packages: JSON.parse(selected), outputDirectory: ownedRoot });
     return ownedRoot;
   })();
 }

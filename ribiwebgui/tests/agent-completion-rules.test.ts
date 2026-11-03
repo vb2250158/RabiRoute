@@ -11,6 +11,8 @@ test("completion rule creation works with LAN HTTP crypto and starts disabled", 
   assert.match(first.id, /^completion-[a-f0-9]{32}$/);
   assert.notEqual(first.id, second.id);
   assert.equal(first.enabled, false);
+  assert.equal(first.destination.params.includeFiles, "true");
+  assert.equal(first.destination.params.renderDiagrams, "true");
   assert.equal(first.destination.params.renderTables, "true");
   assert.equal(first.destination.params.targetId, "");
   assert.deepEqual(first.conditions, []);

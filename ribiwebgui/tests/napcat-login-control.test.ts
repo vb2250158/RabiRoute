@@ -4,7 +4,7 @@ import test from "node:test";
 import ts from "typescript";
 import { translateText, setLocale } from "../src/i18n/index";
 
-const pageSource = fs.readFileSync(new URL("../src/pages/RouteConfigPage.vue", import.meta.url), "utf8");
+const pageSource = fs.readFileSync(new URL("../src/messageEndpoints/NapcatEndpointCard.vue", import.meta.url), "utf8");
 const quickSetupSource = fs.readFileSync(new URL("../src/components/QuickSetupDialog.vue", import.meta.url), "utf8");
 
 test("NapCat login copy switches languages without changing account identities or endpoints", () => {

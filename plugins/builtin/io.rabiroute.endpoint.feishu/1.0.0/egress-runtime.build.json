@@ -1,0 +1,11 @@
+{
+  "exports": [
+    {
+      "source": "src/feishu.ts",
+      "name": "sendFeishuText"
+    }
+  ],
+  "ownedSources": [
+    "src/feishu.ts"
+  ]
+}

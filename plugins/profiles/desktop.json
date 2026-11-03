@@ -192,24 +192,8 @@
       "grants": []
     },
     {
-      "id": "manager:napcat-control",
-      "package": "io.rabiroute.manager.napcat-control",
-      "version": "1.0.0",
-      "enabled": true,
-      "config": {},
-      "grants": []
-    },
-    {
       "id": "manager:remote-agent",
       "package": "io.rabiroute.manager.remote-agent",
-      "version": "1.0.0",
-      "enabled": true,
-      "config": {},
-      "grants": []
-    },
-    {
-      "id": "manager:napcat-supervisor",
-      "package": "io.rabiroute.manager.napcat-supervisor",
       "version": "1.0.0",
       "enabled": true,
       "config": {},
@@ -268,6 +252,70 @@
         "ffmpegPath": "ffmpeg",
         "ffprobePath": "ffprobe"
       },
+      "grants": []
+    },
+    {
+      "id": "endpoint:napcat",
+      "package": "io.rabiroute.endpoint.napcat",
+      "version": "1.0.0",
+      "enabled": true,
+      "config": {},
+      "grants": []
+    },
+    {
+      "id": "endpoint:heartbeat",
+      "package": "io.rabiroute.endpoint.heartbeat",
+      "version": "1.0.0",
+      "enabled": true,
+      "config": {},
+      "grants": []
+    },
+    {
+      "id": "endpoint:wecom",
+      "package": "io.rabiroute.endpoint.wecom",
+      "version": "1.0.0",
+      "enabled": true,
+      "config": {},
+      "grants": []
+    },
+    {
+      "id": "endpoint:weixin",
+      "package": "io.rabiroute.endpoint.weixin",
+      "version": "1.0.0",
+      "enabled": true,
+      "config": {},
+      "grants": []
+    },
+    {
+      "id": "endpoint:feishu",
+      "package": "io.rabiroute.endpoint.feishu",
+      "version": "1.0.0",
+      "enabled": true,
+      "config": {},
+      "grants": []
+    },
+    {
+      "id": "endpoint:webhook",
+      "package": "io.rabiroute.endpoint.webhook",
+      "version": "1.0.0",
+      "enabled": true,
+      "config": {},
+      "grants": []
+    },
+    {
+      "id": "endpoint:speech",
+      "package": "io.rabiroute.endpoint.speech",
+      "version": "1.0.0",
+      "enabled": true,
+      "config": {},
+      "grants": []
+    },
+    {
+      "id": "endpoint:rabilink",
+      "package": "io.rabiroute.endpoint.rabilink",
+      "version": "1.0.0",
+      "enabled": true,
+      "config": {},
       "grants": []
     }
   ]

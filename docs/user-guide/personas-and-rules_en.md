@@ -12,6 +12,20 @@ The Message adapters tab under Role configuration configures message Routes. Mes
 
 Custom Route variables are maintained through internal configuration and code. WebGUI no longer exposes a variable editor; existing values and template references remain effective.
 
+## Browse message history by channel
+
+The QQ tab combines groups and private chats in one conversation list, ordered by their latest message. Drag the divider between the list and messages to resize it; the browser remembers the width. Focus the divider and use the arrow keys to resize, or double-click to restore the default. Groups additionally show members, owners and admins; private chats hide the member panel. Names come from the selected account’s existing QQ connection. Offline connections leave saved conversations and messages usable. Route, account and conversation identity keep identical numeric targets on different accounts separate. On phones, choose a conversation before viewing its history, with expandable group members. Online accounts read their available recent conversations and QQ history; offline accounts can browse saved role records. Conversation rows have two lines, with the most recently active conversation first. Messages run from oldest to newest; opening a conversation positions the page at its newest message, with earlier history above. This page adds no send action.
+
+Conversation rows, message bubbles and group members display QQ avatars, with initials or icons when an image or sender identity is unavailable. Outgoing messages use the account reported by the selected QQ connection.
+
+Mentions, quotes, emoji and forwarded messages show readable labels instead of raw CQ codes. Select an image, voice message, video or file to retrieve its attachment using the original account, conversation and message, then preview or download it. Historical conversations without a confirmed current connection or original message ID retain attachment labels. A failed attachment leaves other messages usable; select it again to retry. Quote and forwarded-message labels do not imply their full contents have been retrieved.
+
+Open Message history in the sidebar. System messages, Agent deliveries, role-panel messages and task replies remain available. Each additional endpoint tab represents one message endpoint added to the selected role, using the same name and icon as its configuration card, with original capitalization. There is no All tab or tab for an endpoint that has not been added. Removing NapCat hides its tab; adding it again restores access to retained records. Plugin endpoints use their plugin metadata.
+
+Each channel loads and filters independently using browser-page scrolling. Switching tabs retains loaded messages, conversation filters and reading position. Load earlier messages continues backwards; Refresh returns to the channel’s latest page. Copy a Conversation ID from Conversation and source to filter it. Incoming and outgoing messages appear together. Endpoint history preserves original conversation and send/receive identities without inventing shared receipts.
+
+An unavailable index leaves other tabs usable and displays a warning. Refresh channels discovers channels again. Rebuilding an index, changing archive layout or replacing a source expires its continuation; refresh the channel to start again.
+
 ## Switch computers and roles
 
 Open the role menu in the top bar, choose Local PC or another computer, then select a role in the second level. The top bar shows “computer → role”. Browsing computers leaves the current role unchanged. Refresh remote PCs from the same menu; the separate source PC panel has been removed.

@@ -2,6 +2,9 @@
   "schemaVersion": 2,
   "id": "io.rabiroute.manager.gateway-runtime",
   "version": "1.0.0",
+  "displayName": "消息网关运行",
+  "description": "启动、停止并管理各路由的消息网关",
+  "icon": "mdi-server-network",
   "entries": {
     "manager": {
       "execution": "in_process",

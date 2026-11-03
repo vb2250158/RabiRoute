@@ -56,7 +56,7 @@ export function normalizeAgentCompletionDeliveries(value: unknown): AgentComplet
     const params = object(destination.params);
     const channel = text(destination.channel);
     const normalizedParams: Record<string, string> = channel === "napcat"
-      ? { target: text(params.target), targetId: text(params.targetId), instanceId: text(params.instanceId), ...(params.renderTables !== undefined ? { renderTables: params.renderTables === "false" || params.renderTables === false ? "false" : "true" } : {}) }
+      ? { target: text(params.target), targetId: text(params.targetId), instanceId: text(params.instanceId), ...(params.renderTables !== undefined ? { renderTables: params.renderTables === "false" || params.renderTables === false ? "false" : "true" } : {}), ...(params.renderDiagrams !== undefined ? { renderDiagrams: params.renderDiagrams === "false" || params.renderDiagrams === false ? "false" : "true" } : {}), ...(params.includeFiles !== undefined ? { includeFiles: params.includeFiles === "false" || params.includeFiles === false ? "false" : "true" } : {}) }
       : channel === "speech" ? (text(params.sessionId) ? { sessionId: text(params.sessionId) } : {})
       : Object.fromEntries(Object.entries(params).map(([key, value]) => [key, text(value)]));
     const conditions: AgentHookCondition[] = legacy

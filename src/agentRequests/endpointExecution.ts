@@ -1,3 +1,4 @@
+import type { NativeOwnerDelivery } from "./nativeOwnerDelivery.js";
 import type { PreparedEndpointDelivery, EndpointDeliveryReceipt } from "./endpointDelivery.js";
 import { endpointExecutionOptionsHash } from "./executionOptions.js";
 import { agentDeliveryPromptHash } from "./store.js";
@@ -5,31 +6,38 @@ import type { AgentRequestEndpoint } from "./endpoint.js";
 import { sameAgentEndpoint, normalizeAgentRequestEndpoint } from "./endpoint.js";
 import { EndpointDeliveryNotSentError, validateEndpointDeliveryNoFrameProof, type EndpointDeliveryNoFrameProof } from "./deliveryFailure.js";
 
-export type EndpointExecutionContext = {
+export type NativeOwnerExecutionContext<T extends NativeOwnerDelivery> = {
   endpoint: AgentRequestEndpoint;
   assertAuthorized: () => void | Promise<void>;
-  send: (delivery: PreparedEndpointDelivery, assertAuthorized: () => Promise<void>) => Promise<{ threadId: string; action: string; transport: string }>;
-  readReceipt: (delivery: PreparedEndpointDelivery) => Promise<EndpointDeliveryReceipt | undefined>;
-  writeReceipt: (delivery: PreparedEndpointDelivery, receipt: EndpointDeliveryReceipt) => Promise<void>;
-  beginAttempt: (delivery: PreparedEndpointDelivery) => Promise<boolean>;
-  readNotSent?: (delivery: PreparedEndpointDelivery) => Promise<EndpointDeliveryNoFrameProof | undefined>;
-  writeNotSent?: (delivery: PreparedEndpointDelivery, proof: EndpointDeliveryNotSentError) => Promise<void>;
-  recoverReceipt?: (delivery: PreparedEndpointDelivery, assertAuthorized: () => Promise<void>) => Promise<EndpointDeliveryReceipt | undefined>;
+  send: (delivery: T, assertAuthorized: () => Promise<void>) => Promise<{ threadId: string; action: string; transport: string }>;
+  readReceipt: (delivery: T) => Promise<EndpointDeliveryReceipt | undefined>;
+  writeReceipt: (delivery: T, receipt: EndpointDeliveryReceipt) => Promise<void>;
+  beginAttempt: (delivery: T) => Promise<boolean>;
+  readNotSent?: (delivery: T) => Promise<EndpointDeliveryNoFrameProof | undefined>;
+  writeNotSent?: (delivery: T, proof: EndpointDeliveryNotSentError) => Promise<void>;
+  recoverReceipt?: (delivery: T, assertAuthorized: () => Promise<void>) => Promise<EndpointDeliveryReceipt | undefined>;
 };
+
+export type EndpointExecutionContext = NativeOwnerExecutionContext<PreparedEndpointDelivery>;
 
 /** Connector stores transport receipts only, never prepares or owns business requests. */
 export async function executePreparedEndpointDelivery(delivery: PreparedEndpointDelivery, context: EndpointExecutionContext,
   reconcile = false): Promise<EndpointDeliveryReceipt | undefined> {
-  normalizeAgentRequestEndpoint(delivery.target);
   normalizeAgentRequestEndpoint(delivery.source);
   if (!["dispatching", "committed"].includes(delivery.state)
     || delivery.preparation.source.threadId !== delivery.source.sessionId
     || delivery.preparation.target.threadId !== delivery.target.sessionId
-    || !sameAgentEndpoint(delivery.target, context.endpoint) || delivery.deliveryId !== delivery.preparation.deliveryId
-    || !delivery.generation || delivery.promptHash !== agentDeliveryPromptHash(delivery.prompt)
-    || delivery.executionOptionsHash !== endpointExecutionOptionsHash(delivery.executionOptions)
+    || delivery.deliveryId !== delivery.preparation.deliveryId
     || !sameAgentEndpoint(delivery.target, delivery.preparation.target.endpoint)
     || !sameAgentEndpoint(delivery.source, delivery.preparation.source.endpoint)) throw new Error("Prepared delivery identity or hash mismatch.");
+  return executeNativeOwnerDelivery(delivery, context, reconcile);
+}
+
+/** Shared transport algorithm: native Route envelopes have no synthetic Agent preparation. */
+export async function executeNativeOwnerDelivery<T extends NativeOwnerDelivery>(delivery: T, context: NativeOwnerExecutionContext<T>, reconcile = false): Promise<EndpointDeliveryReceipt | undefined> {
+  normalizeAgentRequestEndpoint(delivery.target);
+  if (!sameAgentEndpoint(delivery.target, context.endpoint) || !delivery.generation || delivery.promptHash !== agentDeliveryPromptHash(delivery.prompt)
+    || delivery.executionOptionsHash !== endpointExecutionOptionsHash(delivery.executionOptions)) throw new Error("Native owner delivery hash mismatch.");
   const assertAuthorized = async () => { await context.assertAuthorized(); };
   await assertAuthorized();
   const prior = await context.readReceipt(delivery);

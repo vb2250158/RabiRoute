@@ -26,7 +26,7 @@ const choices = computed(() => [...recipients.value.map(item => {
 const agentName = (provider: string) => provider === "codex" ? "Codex" : provider === "dsh" ? "DSH" : provider === "grokBot" ? "Grok Bot" : provider;
 const agents = computed<Array<RouteAgentTarget & { title: string }>>(() => [
   ...(props.gateway.agentAdapters ?? []).filter(isAgentThreadCapableAdapter).map(provider => ({ id: `local:${provider}`, provider, title: `${agentName(provider)} · ${t("本机")}` })),
-  ...(props.gateway.remoteAgentTargets ?? []).filter(item => isAgentThreadCapableAdapter(item.provider)).map(item => ({ ...item, binding: { instanceId: item.instanceId, agentId: item.agentId }, title: `${agentName(item.provider)} · ${item.instanceId} · ${item.agentId}` }))
+  ...(props.gateway.remoteAgentTargets ?? []).filter(item => isAgentThreadCapableAdapter(item.provider)).map(item => ({ ...item, binding: { instanceId: item.instanceId, agentId: item.agentId, ...(item.ownerDeviceId ? { ownerDeviceId: item.ownerDeviceId } : {}) }, title: `${agentName(item.provider)} · ${item.ownerDeviceId ? item.ownerDeviceId + ' / ' : ''}${item.instanceId} · ${item.agentId}` }))
 ]);
 const selectedAgentId = ref("");
 const query = ref("");

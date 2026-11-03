@@ -2,6 +2,9 @@
   "schemaVersion": 2,
   "id": "io.rabiroute.manager.message-processing-automation",
   "version": "1.0.0",
+  "displayName": "消息自动跟进",
+  "description": "跟进待处理消息与知识回调并发送提醒",
+  "icon": "mdi-bell-ring",
   "entries": {
     "manager": {
       "execution": "in_process",

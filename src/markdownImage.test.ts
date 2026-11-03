@@ -174,3 +174,12 @@ test("CDP accepts tall images by default and enforces only explicit image quotas
     socket.open(); await result;
   }
 });
+
+
+test("real browser renders a Mermaid flowchart and rejects an invalid diagram", async () => {
+  const png = await renderMarkdownToPng("```mermaid\nflowchart TD\n A[请求开始] --> B{处理成功}\n B --> C[保存完成]\n```");
+  assert.equal(png.readUInt32BE(16), 1000);
+  assert.ok(png.readUInt32BE(20) > 100);
+  assert.ok(png.length > 5000);
+  await assert.rejects(renderMarkdownToPng("```mermaid\nnot-a-valid-diagram !!!\n```"), /could not be rendered/);
+});

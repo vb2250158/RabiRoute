@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { userFacingError } from "../userFacingError";
-import { nextTick, onBeforeUnmount, ref, watch } from "vue";
+import { nextTick, onBeforeUnmount, ref, watch, type VNodeRef } from "vue";
 import type { PersonaChatHistoryPage, PersonaChatReply } from "@shared/personaChatHistory";
+import type { ChatHistoryCategory } from '@shared/personaHistoryChannels';
 import { mergeChatHistoryBatch, readChatHistoryAddition, retainChatHistoryWindow } from "../personaChatHistoryUpdates";
 import { waitForChatHistoryFrame } from "../personaChatHistoryLayout";
 import { renderMarkdownPreview } from "../markdownPreview";
@@ -9,7 +10,7 @@ import { useI18n } from "../i18n";
 import { usePersonaService } from "../persona/personaServiceClient";
 const fetch = usePersonaService().fetch;
 
-const props = defineProps<{ roleId: string; version: number }>();
+const props = defineProps<{ roleId: string; version: number; category?: ChatHistoryCategory; title?: string; active?: boolean }>();
 const { t } = useI18n();
 const entries = ref<PersonaChatReply[]>([]);
 const nextCursor = ref<number | null>(null);
@@ -42,6 +43,7 @@ async function load(older = false, resumeGap = false, newer = false): Promise<vo
   const refreshed = new Map<string, PersonaChatReply>();
   const readPage = async (cursor?: number): Promise<PersonaChatHistoryPage> => {
     const query = new URLSearchParams({ limit: "50", summary: "true", ...(newer ? { direction: "newer" } : {}) });
+    if (props.category) query.set('category', props.category);
     if (cursor !== undefined) query.set("cursor", String(cursor));
     const response = await fetch(`/api/roles/${encodeURIComponent(roleId)}/chat-history?${query}`, { signal: controller.signal });
     const result = await response.json() as { code: number; data: PersonaChatHistoryPage; message?: string };
@@ -171,7 +173,8 @@ watch(() => props.roleId, () => {
   nextCursor.value = null;
   void load();
 }, { immediate: true });
-watch(() => props.version, () => { void load(); });
+watch(() => props.version, () => { if (props.active !== false) void load(); });
+watch(() => props.active, active => { if (active) void load(); else { request?.abort(); pendingUpdate = false; } });
 onBeforeUnmount(() => { bodyRequest?.abort(); pendingUpdate = false; request?.abort(); request = undefined; });
 </script>
 
@@ -179,8 +182,8 @@ onBeforeUnmount(() => { bodyRequest?.abort(); pendingUpdate = false; request?.ab
   <v-card class="app-card glass-card pa-4">
     <div class="d-flex align-center justify-space-between ga-3 mb-3">
       <div>
-        <div class="text-h6">{{ t('消息记录') }}</div>
-        <div class="text-body-2 text-medium-emphasis">{{ t('显示当前角色的用户消息、最终回复和 Agent 之间的投递，最新在前。') }}</div>
+        <div class="text-h6">{{ t(props.title || '消息记录') }}</div>
+        <div class="text-body-2 text-medium-emphasis">{{ t('最新消息在前。') }}</div>
       </div>
       <v-btn variant="text" prepend-icon="mdi-refresh" :loading="loading" @click="load()">{{ t('刷新') }}</v-btn>
     </div>
@@ -196,8 +199,9 @@ onBeforeUnmount(() => { bodyRequest?.abort(); pendingUpdate = false; request?.ab
     <v-alert v-if="invalidRecords" type="warning" variant="tonal" class="mb-3">{{ t('部分消息记录损坏，其他消息仍可浏览。') }}</v-alert>
     <v-btn v-if="newerCursor !== null" variant="tonal" :disabled="loading" @click="load(false, false, true)">{{ t('加载较新的回复') }}</v-btn>
     <div ref="listElement" class="chat-history-list" aria-live="polite" :aria-busy="loading">
-      <v-virtual-scroll v-if="entries.length" ref="virtualList" :items="entries" item-key="id" :height="600" :item-height="180">
-      <template #default="{ item: entry }">
+      <v-virtual-scroll v-if="entries.length" ref="virtualList" :items="entries" item-key="id" :renderless="true" :item-height="180">
+      <template #default="{ item: entry, itemRef }: { item: PersonaChatReply; itemRef?: VNodeRef }">
+      <div :ref="itemRef" class="chat-history-item">
       <article :key="entry.id" :data-entry-id="entry.id" class="chat-reply">
         <div class="text-caption text-medium-emphasis mb-2">
           <time :datetime="entry.receivedAt">{{ new Date(entry.receivedAt).toLocaleString() }}</time>
@@ -240,6 +244,7 @@ onBeforeUnmount(() => { bodyRequest?.abort(); pendingUpdate = false; request?.ab
           <v-btn v-if="entry.textTruncated || entry.text.length > 2000" variant="text" @click="collapseBody(entry.id)">{{ t('收起') }}</v-btn>
         </template>
       </article>
+      </div>
       </template>
       </v-virtual-scroll>
     </div>
@@ -248,9 +253,9 @@ onBeforeUnmount(() => { bodyRequest?.abort(); pendingUpdate = false; request?.ab
 </template>
 
 <style scoped>
-.chat-history-list :deep(.v-virtual-scroll) { overflow-anchor: none; }
+.chat-history-list { overflow-anchor: none; }
 .chat-reply-summary { white-space: pre-wrap; display: -webkit-box; -webkit-line-clamp: 8; -webkit-box-orient: vertical; overflow: hidden; }
-.chat-history-list .chat-reply { margin-bottom: 16px; }
+.chat-history-item { padding-bottom: 16px; }
 .chat-reply { padding: 16px; border: 1px solid rgba(var(--v-theme-on-surface), .12); border-radius: 12px; min-width: 0; }
 .chat-reply-text { overflow-wrap: anywhere; line-height: 1.65; }
 .chat-reply-text :deep(> :first-child) { margin-top: 0; }

@@ -4,7 +4,7 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { handleAgentReply, inspectAgentReplyDelivery, projectAgentReplyHistoryResult, napcatGroupReplyMessage, napcatSegmentsFromAgentText, type AgentReplyOptions } from "./outbox.js";
+import { handleAgentReply, inspectAgentReplyDelivery, projectAgentReplyHistoryResult, napcatGroupReplyMessage, napcatSegmentsFromAgentText, type AgentReplyOptions } from "./endpointEgress.fixture.js";
 import { publishRabiLinkRelayMessage } from "./adapters/rabilinkRelayWorker.js";
 import { resetWeComClientFactory, setWeComClientFactory, type WeComClientLike } from "./wecom.js";
 import { recentMessageContextItems } from "./messageContextStore.js";

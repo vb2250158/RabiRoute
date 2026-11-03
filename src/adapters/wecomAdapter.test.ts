@@ -6,7 +6,6 @@ import test from "node:test";
 import type { WsFrame } from "@wecom/aibot-node-sdk";
 import type { WeComMessageRecord } from "../history.js";
 import { createMessageAdapterRuntime } from "../runtime/messageAdapterRuntime.js";
-import { builtinMessageAdapterDefinitions } from "./builtinMessageAdapters.js";
 import type { WeComClientLike } from "../wecom.js";
 import {
   createWeComAdapter,
@@ -242,15 +241,8 @@ test("WeCom records unsupported inbound kinds and forwards ordinary user message
   assert.deepEqual(calls, ["record", "forward"]);
 });
 
-test("built-in Message Adapter manifests include WeCom", () => {
-  assert.deepEqual(
-    builtinMessageAdapterDefinitions().find((definition) => definition.manifest.type === "wecom")?.manifest,
-    {
-      type: "wecom",
-      label: "企业微信",
-      host: "gateway",
-      transport: "websocket",
-      lifecycle: "fiber"
-    }
-  );
+test("wecom owns an independent SDK package entry", () => {
+  const manifest = JSON.parse(fs.readFileSync(new URL("../../plugins/builtin/io.rabiroute.endpoint.wecom/1.0.0/rabi.plugin.json", import.meta.url), "utf8"));
+  assert.deepEqual(manifest.entries.gateway, { execution: "in_process", module: "./gateway.mjs" });
+  assert.ok(manifest.provides.includes("endpoint.wecom@1"));
 });

@@ -9,7 +9,7 @@ import { config, type RouteProfile } from "./config.js";
 import { deliverPacketToPrimaryAgentAdapter, forwardMessage, forwardMessageAndWait, resetMessageProcessingRuntime, routeKindUsesAutomaticMessageGrouping, shouldSkipHeartbeatDelivery } from "./forwarding.js";
 import type { GroupMessageRecord, HeartbeatEventRecord, PlanFeedbackMessageRecord, VoiceTranscriptEventRecord } from "./history.js";
 import { ManagerSpeechControl } from "./manager/speechControl.js";
-import { handleAgentReply } from "./outbox.js";
+import { handleAgentReply } from "./endpointEgress.fixture.js";
 import { resolvePipeline } from "./pipelines.js";
 import { appendDeliveryReplayAttempt, readDeliveryReplayAttempts } from "./deliveryReplayLedger.js";
 import { listIdentityEndpointAccounts, listIdentityParticipants } from "./identityRelations.js";

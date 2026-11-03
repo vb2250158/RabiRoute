@@ -545,6 +545,116 @@ test("speech runtime stop without dependencies still rejects an unrelated owner"
   await assert.rejects(control.stop(), /拒绝停止/);
 });
 
+test("lifecycle release after dependency failure leaves a foreign runtime intact while explicit stop still rejects it", async () => {
+  let kills = 0;
+  const control = new SpeechRuntimeControl({
+    rootDir: "C:/RabiRoute", platform: "win32", serviceUrl: () => "http://127.0.0.1:8781",
+    existsSync: () => false, inspect: async () => status("offline"),
+    ensureDependencies: async () => { throw new Error("optional capture environment unavailable"); },
+    inspectOwner: async () => ({ pid: 999, owned: false }),
+    killProcessTree: async () => { kills++; }
+  });
+  await assert.rejects(control.start(), /optional capture environment unavailable/);
+  await control.releaseOwnedRuntime();
+  assert.equal(kills, 0);
+  await assert.rejects(control.stop(), /拒绝停止/);
+});
+
+test("lifecycle release confirms only its owned PID, not the availability of a replacement external service", async () => {
+  let killed = false;
+  const control = new SpeechRuntimeControl({
+    rootDir: "C:/RabiRoute", platform: "win32", serviceUrl: () => "http://127.0.0.1:8781",
+    existsSync: () => false, inspect: async () => { assert.fail("release must not claim external HTTP offline"); },
+    inspectOwner: async () => killed ? { pid: 999, owned: false } : { pid: 456, owned: true },
+    killProcessTree: async pid => { assert.equal(pid, 456); killed = true; }
+  });
+  await control.releaseOwnedRuntime();
+  assert.equal(killed, true);
+});
+
+test("lifecycle release preserves OS ownership, owned termination, and still-alive failures", async () => {
+  for (const failure of ["query", "kill", "alive"] as const) {
+    let clock = 0;
+    const control = new SpeechRuntimeControl({
+      rootDir: "C:/RabiRoute", platform: "win32", serviceUrl: () => "http://127.0.0.1:8781",
+      existsSync: () => false, stopTimeoutMs: 1, now: () => clock, wait: async ms => { clock += ms; },
+      inspectOwner: async () => { if (failure === "query") throw new Error("OS ownership query failed"); return { pid: 456, owned: true }; },
+      killProcessTree: async () => { if (failure === "kill") throw new Error("owned termination failed"); }
+    });
+    await assert.rejects(control.releaseOwnedRuntime(), failure === "query" ? /OS ownership query failed/ : failure === "kill" ? /owned termination failed/ : /自有进程停止超时/);
+  }
+});
+
+test("lifecycle release joins an in-flight start and releases its original child and URL after configuration changes", async () => {
+  let prepared!: () => void;
+  const preparation = new Promise<void>(resolve => { prepared = resolve; });
+  let spawned = false, killed = false, serviceUrl = "http://127.0.0.1:54321";
+  const child = { pid: 321, exitCode: null as number | null, unref() {} };
+  const control = new SpeechRuntimeControl({
+    rootDir: "C:/RabiRoute", platform: "win32", serviceUrl: () => serviceUrl, existsSync: installed,
+    inspect: async () => status(spawned ? "online" : "offline"), ensureDependencies: async () => preparation,
+    spawnRuntime: () => { spawned = true; return child; },
+    inspectOwner: async port => { assert.equal(port, 54321); return null; },
+    killProcessTree: async pid => { assert.equal(pid, 321); killed = true; child.exitCode = 0; }
+  });
+  const starting = control.start();
+  await new Promise(resolve => setImmediate(resolve));
+  const releasing = control.releaseOwnedRuntime();
+  serviceUrl = "http://192.0.2.10:54322";
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(spawned, false); assert.equal(killed, false);
+  prepared(); await starting; await releasing;
+  assert.equal(spawned, true); assert.equal(killed, true);
+});
+
+for (const workerRetires of [false, true]) {
+  test(`lifecycle release ${workerRetires ? "waits for" : "rejects"} an owned port worker surviving its different launcher PID`, async () => {
+    let spawned = false, workerAlive = true, clock = 0, waits = 0, ownerReads = 0;
+    const killed: number[] = [];
+    const launcher = { pid: 321, exitCode: null as number | null, unref() {} };
+    const control = new SpeechRuntimeControl({
+      rootDir: "C:/RabiRoute", platform: "win32", serviceUrl: () => "http://127.0.0.1:54321", existsSync: installed,
+      inspect: async () => status(spawned ? "online" : "offline"),
+      spawnRuntime: () => { spawned = true; return launcher; },
+      inspectOwner: async () => { ownerReads++; return workerAlive ? { pid: 654, owned: true } : null; },
+      killProcessTree: async pid => { assert.equal(ownerReads, 1, "capture the original worker before killing its launcher"); killed.push(pid); launcher.exitCode = 0; },
+      stopTimeoutMs: 1, now: () => clock,
+      wait: async ms => { waits++; clock += ms; if (workerRetires) workerAlive = false; }
+    });
+    await control.start();
+    if (workerRetires) await control.releaseOwnedRuntime();
+    else {
+      const scope = new EffectScope();
+      scope.adopt(() => control.releaseOwnedRuntime(), "original launcher and port worker");
+      await assert.rejects(scope.dispose(), /自有进程停止超时/);
+      assert.equal(scope.retirementConfirmed(), false);
+      await assert.rejects(scope.waitForRetirement(), (error: unknown) => {
+        assert.ok(error instanceof Error && error.cause instanceof Error);
+        assert.match(error.cause.message, /自有进程停止超时/);
+        return true;
+      });
+      assert.equal(scope.retirementConfirmed(), false, "a surviving original worker remains unconfirmed at shutdown");
+    }
+    assert.deepEqual(killed, [321], "the original launcher tree is the termination target");
+    assert.equal(launcher.exitCode, 0);
+    assert.equal(waits, 1, "launcher exit alone cannot confirm the worker's retirement");
+    assert.ok(ownerReads >= 3);
+    assert.equal(workerAlive, !workerRetires);
+  });
+}
+
+test("lifecycle release has no native resources for an absent owner or remote speech service", async () => {
+  for (const serviceUrl of ["http://127.0.0.1:8781", "http://192.0.2.10:8781"]) {
+    const control = new SpeechRuntimeControl({
+      rootDir: "C:/RabiRoute", platform: "win32", serviceUrl: () => serviceUrl, existsSync: () => false,
+      inspectOwner: async () => { assert.match(serviceUrl, /127\.0\.0\.1/); return null; },
+      inspect: async () => { assert.fail("release is not a global service-offline command"); },
+      killProcessTree: async () => { assert.fail("there is no owned process"); }
+    });
+    await control.releaseOwnedRuntime();
+  }
+});
+
 test("speech runtime stop cannot confirm offline while an unverified service remains online", async () => {
   const control = new SpeechRuntimeControl({
     rootDir: "C:/RabiRoute", platform: "win32", serviceUrl: () => "http://127.0.0.1:8781",

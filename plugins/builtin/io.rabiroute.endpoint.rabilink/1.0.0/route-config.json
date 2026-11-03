@@ -1,0 +1,33 @@
+{
+  "endpointType": "rabilink",
+  "routeKeys": [
+    "rabiLinkWebhookPort",
+    "rabiLinkWebhookPath",
+    "rabiLinkWebhookHost"
+  ],
+  "runtimeFields": {
+    "rabiLinkWebhookPort": {
+      "paths": [
+        "rabiLinkWebhookPort",
+        "webhookPort",
+        "gatewayPort"
+      ],
+      "default": 8789,
+      "format": "number"
+    },
+    "rabiLinkWebhookPath": {
+      "paths": [
+        "rabiLinkWebhookPath"
+      ],
+      "default": "/rabilink"
+    },
+    "rabiLinkWebhookHost": {
+      "paths": [
+        "rabiLinkWebhookHost"
+      ],
+      "default": "0.0.0.0",
+      "trim": true,
+      "emptyDefault": true
+    }
+  }
+}

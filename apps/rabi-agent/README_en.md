@@ -212,6 +212,14 @@ Output commits without overwrite only after normal 1000 closure, completed write
 - Each computer is an instance with multiple Agents. Legacy single-task settings no longer synthesize a `default` Agent. Existing catalog identities are preserved; each delivery explicitly specifies its provider and full session ID. Execution configuration stays on that computer, with unified Manager administration.
 - A connected node, queued task or passing local fixture does not prove a completed reply. Cross-computer continuous delivery, login startup, disconnect/update recovery and advanced plan/memory workflows still require real-device acceptance.
 
+## Signed cold recovery of an installed release
+
+When an old macOS connector cannot drain its online update queue, the installation owner can use the separate `recover-release.mjs <frozen-request.json>` installer. Stop the original worker and launcher normally first, preserving configuration, original receipts and rollback assets. This entry neither stops processes nor starts another Agent runtime.
+
+The request binds the original config/node, pointer and verifier hashes, frozen manifest hash, installed release directory, asset count and private snapshot directory. The installer acquires the original launcher's exclusive lease, verifies the signature against the configured public key and checks every asset, version and pointer CAS before committing only the release selection. The original launcher starts the selected worker, which updates its own launcher/hook. A busy lease, damaged asset or CAS conflict fails only this recovery.
+
+After a failed start, confirm the new owner exited normally, then use the same entry with the original signed manifest, retained old assets and current pointer hash to select the old release. Never hand-edit pointers, delete unknown receipts or replay the original message. Keep the Manager's node-specific publication aligned with the selected version without changing common publication or other nodes. Verify adoption, public reads, original message reception and its receipt separately.
+
 ## Terminal history for computer uploads
 
 Source capability: after an upload is confirmed committed or aborted, its real file handle is closed, and temporary data is cleaned, the client stores an immutable result under the original ID before acknowledging that operation. The hot map retains 64 recent upload records by default. Explicit `RABI_AGENT_COMPUTER_MAX_UPLOAD_RECORDS` still controls this budget (0 means unlimited). Capacity pressure evicts only closed terminal records that already have cold evidence. In-flight uploads, unconfirmed cleanup, and unconfirmed archival are retained; the existing four upload-resource quota is not increased.

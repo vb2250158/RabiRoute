@@ -14,6 +14,7 @@ import { WebSocket, WebSocketServer } from "ws";
 import { webguiTokenMatches } from "./webguiLanAccess.js";
 import { recordDataMutationAudit } from "../observability/dataMutationAudit.js";
 import { LanAgentTerminals } from "./lanAgentTerminals.js";
+import type { ManagerLocalComputer } from "./managerLocalComputer.js";
 
 export type LanAgentNodeHello = {
   nodeId: string;
@@ -308,6 +309,7 @@ export class LanAgentNodeNameConflictError extends Error {
 
 export class LanAgentRegistry {
   readonly terminals = new LanAgentTerminals((instanceId, body, assertAuthorized) => {
+    if (instanceId === this.localInstanceId && this.localComputer) return this.localComputer.execute("terminal", body, assertAuthorized);
     if (!this.requireNode(instanceId).terminalShells?.length) throw new Error("This connector does not support remote terminals. Update it first.");
     return this.manageAgent(instanceId, "terminal", body, 45_000, assertAuthorized);
   });
@@ -332,6 +334,7 @@ export class LanAgentRegistry {
   private upgradeHeadersInstalled = false;
   private readonly statePath: string;
   readonly localInstanceId: string;
+  readonly localComputer?: ManagerLocalComputer;
   private readonly managementRequests = new Map<string, { connection: Connection; resolve: (value: unknown) => void; reject: (error: Error) => void; timer: NodeJS.Timeout; operation: string; readOnly: boolean; assertAuthorized?: () => void }>();
   private detachUpgrade: (() => void) | undefined;
 
@@ -340,6 +343,7 @@ export class LanAgentRegistry {
     authenticateNode?: (token: string) => { nodeId: string; incarnation?: string } | null;
     nodeEnabled?: (nodeId: string) => boolean;
     currentRelease?: (nodeId: string) => Readonly<{ version: string; releaseDigest: string }>;
+    createLocalComputer?: (instanceId: string, emit: (event: Record<string, unknown>) => void) => ManagerLocalComputer;
   }) {
     this.statePath = path.resolve(options.statePath);
     this.initializeUpgradeHooks();
@@ -362,6 +366,7 @@ export class LanAgentRegistry {
       this.completedIdempotency.set(idempotencyScope(receipt.nodeId, receipt.idempotencyKey), receipt.taskId);
       if (receipt.eventId) this.resultEvents.set(receipt.eventId, receipt.taskId);
     }
+    this.localComputer = options.createLocalComputer?.(this.localInstanceId, event => this.terminals.receive(this.localInstanceId, event));
   }
 
   private initializeUpgradeHooks(): void {
@@ -442,15 +447,26 @@ export class LanAgentRegistry {
   }
 
   listInstances(localAgents: InstanceAgent[] = []): AgentInstance[] {
-    return [{ instanceId: this.localInstanceId, local: true, connected: true, agents: localAgents }, ...this.listNodes().map(node => ({
+    return [{ instanceId: this.localInstanceId, local: true, connected: true, agents: localAgents,
+      terminalShells: this.localComputer?.terminalShells, computerCapabilities: this.localComputer?.computerCapabilities }, ...this.listNodes().map(node => ({
       instanceId: node.nodeId, name: node.name, hostname: node.hostname, local: false, enabled: this.options.nodeEnabled?.(node.nodeId) ?? true, address: node.remoteAddress, connected: node.connected, version: node.version,
-      agents: (node.agents ?? []).map(agent => ({ ...agent, enabled: agent.enabled }))
+      agents: (node.agents ?? []).map(agent => ({ ...agent, enabled: agent.enabled })),
+      terminalShells: node.terminalShells, computerCapabilities: node.computerCapabilities
     }))];
   }
 
   getInstanceAgent(instanceId: string, agentId: string): InstanceAgent | undefined {
     const agent = this.nodes.get(instanceId)?.agents?.find(agent => agent.agentId === agentId);
     return agent ? { ...agent } : undefined;
+  }
+
+  computerCapabilities(instanceId: string): readonly string[] {
+    return instanceId === this.localInstanceId ? this.localComputer?.computerCapabilities ?? [] : this.nodes.get(instanceId)?.computerCapabilities ?? [];
+  }
+
+  async stopLocalComputer(): Promise<void> {
+    try { await this.localComputer?.stop(); }
+    finally { this.terminals.disconnect(this.localInstanceId); }
   }
 
   setNodeName(nodeId: string, name: unknown, expectedName: string): LanAgentNodeStatus {
@@ -473,6 +489,9 @@ export class LanAgentRegistry {
   }
 
   manageAgent(instanceId: string, operation: string, params: unknown, timeoutMs = getTimeoutMs("agent.remote.management", 15000), assertAuthorized?: () => void): Promise<unknown> {
+    if (instanceId === this.localInstanceId && this.localComputer && (operation === "terminal" || operation === "computer")) {
+      return this.localComputer.execute(operation, params as Record<string, unknown>, assertAuthorized);
+    }
     if (this.options.nodeEnabled?.(instanceId) === false) throw new Error("Remote instance is disabled.");
     assertAuthorized?.();
     let connection: Connection;
@@ -865,7 +884,12 @@ export class LanAgentRegistry {
 
   private send(socket: WebSocket, payload: Record<string, unknown>): void {
     if (socket.readyState !== WebSocket.OPEN) throw new Error("Rabi Agent WebSocket is not open.");
-    if (this.protocolGuards?.get(socket)?.signal.aborted) { closeSocket(socket, 1001, "Connection retiring."); return; }
+    const connectionSignal = this.protocolGuards?.get(socket)?.signal;
+    if (connectionSignal?.aborted) {
+      closeSocket(socket, 1001, "Connection retiring.");
+      // A skipped frame is a failed send, not a successful request awaiting a reply.
+      throw new Error("LAN Agent connection is retiring; frame was not sent.", { cause: connectionSignal.reason });
+    }
     const json = JSON.stringify(payload);
     const bytes = Buffer.byteLength(json);
     this.protocolGuards?.get(socket)?.validateOutgoing(payload, bytes);

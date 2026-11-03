@@ -6,7 +6,7 @@ export function createLanAgentComputerOperations(context: InteractiveContext): r
     const body = input.body as Record<string, unknown>, instanceId = input.path.instanceId!;
     const capability = String(body.action).startsWith("upload.") || ["file.stat", "file.read"].includes(String(body.action)) ? "files"
       : body.action === "windows.list" ? "windows" : body.action === "screen.capture" ? "screenshots" : "";
-    if (!capability || !context.registry.getNode(instanceId)?.computerCapabilities?.includes(capability)) throw new Error("Computer capability is unavailable; query the node or update its connector.");
+    if (!capability || !context.registry.computerCapabilities(instanceId).includes(capability)) throw new Error("Computer capability is unavailable on this platform; query the instance capabilities or update its connector.");
     let data: unknown;
     try { data = await context.registry.manageAgent(instanceId, "computer", body, 45000, guard); }
     catch (error) {

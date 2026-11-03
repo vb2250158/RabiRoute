@@ -5,6 +5,40 @@ import { once } from "node:events";
 import { prepareApiJsonBody, preparedApiJson } from "./apiPreparedJson.js";
 import { ManagerPluginRouteRegistry } from "./managerPluginRouteRegistry.js";
 import { fixtureApiContract } from "./apiOperationContractFixtures.js";
+import { freezeApiData, isFrozenApiJsonData } from "./apiOperationContract.js";
+
+test("prepared responses reuse only the original native deep JSON ownership proof", async () => {
+  const contract = freezeApiData({ responses: { "200": { schema: { properties: { id: { type: "string" } } } } } });
+  const external = Object.freeze({ nested: Object.freeze({ value: "external" }) });
+  const operations = [{ contract, external }], body = { operations };
+  assert.equal(isFrozenApiJsonData(contract), true);
+  assert.equal(isFrozenApiJsonData(external), false);
+  const result = await prepareApiJsonBody(body, operations);
+  assert.equal(result.operations[0]!.contract, contract, "a native immutable contract must not be cloned and frozen again");
+  assert.notEqual(result.operations[0]!.external, external, "external Object.freeze cannot assert native ownership");
+  assert.equal(preparedApiJson(result), JSON.stringify(body));
+  assert.equal(Object.isFrozen(body), false); assert.equal(Object.isFrozen(operations[0]), false);
+});
+
+test("native freezing cannot certify accessors, custom JSON or non-JSON records", async () => {
+  let calls = 0;
+  const accessor = freezeApiData({ get value() { calls++; return 1; } });
+  const callsAfterOriginalFreeze = calls;
+  assert.equal(isFrozenApiJsonData(accessor), false);
+  await assert.rejects(prepareApiJsonBody({ accessor }, accessor), /accessors/);
+  assert.equal(calls, callsAfterOriginalFreeze, "preparation must never invoke owner accessors");
+  const custom = freezeApiData({ toJSON() { calls++; return "replaced"; } });
+  assert.equal(isFrozenApiJsonData(custom), false);
+  await assert.rejects(prepareApiJsonBody({ custom }, custom), /custom serialization/);
+  assert.equal(calls, callsAfterOriginalFreeze);
+  const invalid = freezeApiData({ value: Number.NaN });
+  assert.equal(isFrozenApiJsonData(invalid), false);
+  await assert.rejects(prepareApiJsonBody({ invalid }, invalid), /plain JSON data/);
+  const date = freezeApiData(new Date());
+  assert.equal(isFrozenApiJsonData(date), false);
+  const datedBody = { date };
+  await assert.rejects(prepareApiJsonBody(datedBody, datedBody), /plain JSON records/);
+});
 
 test("prepared JSON matches native bytes and never freezes or trusts mutable owner input", async () => {
   const operations = [{ text: 'quote" / newline\n 中文', optional: undefined, nested: [true, null, undefined] }];
@@ -159,6 +193,29 @@ test("prepared encodings still pass the original response validator before discl
   const response = await fetch(`http://127.0.0.1:${address.port}/api/prepared`);
   assert.equal(response.status, 500);
   assert.equal((await response.json()).errorCode, "API_RESPONSE_SCHEMA_INVALID");
+});
+
+test("ordinary raw output keeps its JSON behavior while prepared output rejects accessors without executing them", { timeout: 5000 }, async t => {
+  const registry = new ManagerPluginRouteRegistry();
+  let getterCalls = 0;
+  const definition = (unsafe: boolean) => ({ contract: fixtureApiContract({ operationId: unsafe ? "fixture.unsafe" : "fixture.ordinary", method: "GET", pathTemplate: unsafe ? "/api/unsafe" : "/api/ordinary",
+    request: { path: { type: "object", additionalProperties: false }, query: { type: "object", additionalProperties: false }, headers: { type: "object" }, body: { kind: "none" } } }),
+    async handler() {
+      const body = unsafe ? { ok: true, get value(): number { getterCalls++; return 42; } } : { ok: true, value: 42 };
+      return { status: 200, body: unsafe ? await prepareApiJsonBody(body, body) : body };
+    } });
+  const registration = registry.registerOperations("ordinary-owner", [definition(false), definition(true)]);
+  const server = http.createServer((request, response) => registry.handle(request, new URL(request.url!, "http://localhost"), response));
+  server.listen(0, "127.0.0.1"); await once(server, "listening");
+  t.after(async () => { await registration.dispose(); server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); });
+  const address = server.address(); assert.ok(address && typeof address === "object");
+  const base = `http://127.0.0.1:${address.port}`;
+  const ordinary = await fetch(base + "/api/ordinary");
+  assert.equal(ordinary.status, 200); assert.equal(await ordinary.text(), '{"ok":true,"value":42}');
+  const unsafe = await fetch(base + "/api/unsafe");
+  assert.equal(unsafe.status, 500); assert.equal((await unsafe.json()).errorCode, "API_OPERATION_FAILED");
+  assert.equal(getterCalls, 0);
+  assert.equal((await fetch(base + "/api/ordinary")).status, 200);
 });
 
 test("ordinary owner output preserves native JSON and finite getter errors without replay", { timeout: 5000 }, async t => {

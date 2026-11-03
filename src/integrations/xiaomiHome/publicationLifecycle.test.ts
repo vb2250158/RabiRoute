@@ -18,8 +18,18 @@ import { XiaomiHomeClipCaptureWorker } from './clipCapture.js';
 import { markAuthenticatedConnectionRequest } from '../../manager/connectionRequestAccess.js';
 import { createXiaomiHomeManagerOperations } from './managerOperations.js';
 import type { XiaomiHomeManagerRoutesContext } from './managerRoutes.js';
-// @ts-expect-error Plain ESM builtin entry deliberately has no declaration file.
-import { activate } from '../../../plugins/builtin/io.rabiroute.manager.xiaomi-home/1.0.0/manager.mjs';
+import { MessageAdapterScanProviderRegistry } from '../../manager/messageAdapterControl.js';
+import { createXiaomiHomeGatewayDelivery } from './gatewayDelivery.js';
+
+// Controlled handoff tests link the real entry to source implementations so native
+// retirement can be gated. pluginContract.test separately executes the real built package.
+const entryUrl = new URL('../../../plugins/builtin/io.rabiroute.manager.xiaomi-home/1.0.0/manager.mjs', import.meta.url);
+const sdkUrl = new URL('../../../plugins/contracts/plugin-sdk/index.mjs', import.meta.url);
+const source = fs.readFileSync(entryUrl, 'utf8')
+  .replace('from "@rabiroute/plugin-sdk"', `from ${JSON.stringify(sdkUrl.href)}`)
+  .replace('import { createImplementation, hostModules } from "./manager-runtime.mjs";', 'const hostModules = []; const createImplementation = host => host.fixtureImplementation;')
+  .replaceAll('import.meta.url', JSON.stringify(entryUrl.href));
+const { activate } = await import('data:text/javascript;base64,' + Buffer.from(source).toString('base64'));
 
 function gate(){let release!:()=>void;const promise=new Promise<void>(resolve=>{release=resolve;});return {promise,release};}
 const tick=()=>new Promise<void>(resolve=>setImmediate(resolve));
@@ -35,11 +45,21 @@ function fixture(t:test.TestContext,readOnly=false){
     lifecycleFence:{applicationGenerationId:'fixture-generation',managerInstanceId:'fixture-manager'},deliverXiaomiHomeEvent:async()=>{throw new Error('Real Agent delivery is outside this fixture.');},webguiLanRequestAllowed:()=>true,
     homeAssistantActivity:{subscribe(listener:(request:null)=>void){if(behavior.failSubscribe)throw new Error('Controlled subscription failure');counts.subscribed++;listener(null);let active=true;return()=>{if(active){active=false;counts.unsubscribed++;}};},receive:async()=>false,report:()=>{}},
     managerPluginRoutes:new ManagerPluginRouteRegistry(),createXiaomiHomeManagerOperations(context:XiaomiHomeManagerRoutesContext){contexts.push(context);return createXiaomiHomeManagerOperations(context);}};
+  const host = {
+    scanProviders: new MessageAdapterScanProviderRegistry(), prepareModules: async () => {},
+    fixtureImplementation: { XiaomiHomeArtifactStore, XiaomiHomeSettingsStore, XiaomiHomeRuntimeController: ControlledController,
+      createXiaomiHomeManagerOperations: runtime.createXiaomiHomeManagerOperations, createXiaomiHomeGatewayDelivery,
+      configureXiaomiHomePluginResources() {} },
+    manager: { readOnly, rootDir: root, roleDirectory: (roleId: string) => path.join(root, 'roles', roleId),
+      activity: runtime.homeAssistantActivity, access: runtime.webguiLanRequestAllowed,
+      lifecycleFence: runtime.lifecycleFence, routes: runtime.managerPluginRoutes },
+    gatewayExecution: { rootDir: root, routeSnapshots: () => [], childCommand() { throw new Error('Real Agent delivery is outside this fixture.'); }, environmentForGateway: () => ({}), appendLog() {} }
+  };
   const closures:Array<()=>Promise<unknown>>=[];
   t.after(async()=>{for(const close of closures.reverse())await close();assert.equal(path.dirname(path.resolve(root)),path.resolve(os.tmpdir()));assert.ok(path.basename(root).startsWith('xiaomi-publication-'));fs.rmSync(root,{recursive:true,force:true});});
-  const prepared=async()=>{const harness=createPluginTestHarness({config:{runtimeDir:directory,eventMonitorEnabled:false},services:[['host.manager.xiaomi-home@1',runtime]]});const publication=new PublicationScope(harness.effects);await activate({...harness.context,publication});await harness.effects.commit();closures.push(()=>harness.dispose());return {harness,publication,context:contexts.at(-1)!,controller:controllers.at(-1)!};};
-  const candidate=(revision:string):PluginCandidate=>({instanceId:'manager:xiaomi-home',revision,config:{runtimeDir:directory,eventMonitorEnabled:false},entry:{execution:'in_process',path:'fixture.mjs'},manifest:{schemaVersion:2,id:'io.test.xiaomi',version:'1.0.0',entries:{manager:{execution:'in_process',module:'./fixture.mjs'}},provides:['manager.xiaomi-home@1'],requires:['host.manager.xiaomi-home@1'],optional:[],permissions:[]},policy:{restart:{mode:'never',maxAttempts:0,windowMs:1,initialBackoffMs:1,maximumBackoffMs:1},resources:{maxChildProcesses:0,shutdownTimeoutMs:1000}}});
-  return {root,directory,runtime,counts,contexts,controllers,behavior,prepared,candidate,closures};
+  const prepared=async()=>{const harness=createPluginTestHarness({config:{runtimeDir:directory,eventMonitorEnabled:false},services:[['host.message-endpoints@1',host]]});const publication=new PublicationScope(harness.effects);await activate({...harness.context,publication});await harness.effects.commit();closures.push(()=>harness.dispose());return {harness,publication,context:contexts.at(-1)!,controller:controllers.at(-1)!};};
+  const candidate=(revision:string):PluginCandidate=>({instanceId:'manager:xiaomi-home',revision,config:{runtimeDir:directory,eventMonitorEnabled:false},entry:{execution:'in_process',path:'fixture.mjs'},manifest:{schemaVersion:2,id:'io.test.xiaomi',version:'1.0.0',entries:{manager:{execution:'in_process',module:'./fixture.mjs'}},provides:['manager.xiaomi-home@1'],requires:['host.message-endpoints@1'],optional:[],permissions:[]},policy:{restart:{mode:'never',maxAttempts:0,windowMs:1,initialBackoffMs:1,maximumBackoffMs:1},resources:{maxChildProcesses:0,shutdownTimeoutMs:1000}}});
+  return {root,directory,runtime,host,counts,contexts,controllers,behavior,prepared,candidate,closures};
 }
 function seed(store:XiaomiHomeArtifactStore,id:string){const occurredAt='2026-10-21T00:00:00Z',localPath=store.allocateMediaPath(id,occurredAt,'.jpg'),bytes=Buffer.from([255,216,255,217]);fs.writeFileSync(localPath,bytes);return store.register({sourceEventId:id,resourceId:'home:ha:camera.fixture',eventKind:'camera_motion_detected',occurredAt,mediaKind:'image/jpeg',localPath,sha256:createHash('sha256').update(bytes).digest('hex'),byteLength:bytes.length});}
 
@@ -50,7 +70,7 @@ test('candidate effects and synchronous publication perform no persistence or ba
   previous.release();await startup;assert.equal(f.counts.activation,1);assert.equal(f.counts.deployment,1);assert.equal(f.counts.subscribed,1);p.context.assertRuntimeAvailable!();assert.equal(p.controller.artifacts.get(record.artifactId)?.artifactId,record.artifactId);assert.equal(p.controller.settings().settings.eventDeliveryMode,'all');assert.equal(fs.existsSync(path.join(f.directory,'artifacts/index.json')),true);
 });
 test('optional downstream publication failure leaves Xiaomi Home healthy and preserves its artifact index',async t=>{
-  const f=fixture(t);const kernel=new GenerationRuntime({host:'manager',hostServices:[{capability:'host.manager.xiaomi-home@1',value:f.runtime}],executor:{prepare:async candidate=>candidate.instanceId==='zz:failure'?{activate(context){context.services.provide('test.failure@1',{});context.publication.add({publish(){throw new Error('Controlled publish failure');},rollback(){}});}}:{activate}}});f.closures.push(()=>kernel.dispose());
+  const f=fixture(t);const kernel=new GenerationRuntime({host:'manager',hostServices:[{capability:'host.message-endpoints@1',value:f.host}],executor:{prepare:async candidate=>candidate.instanceId==='zz:failure'?{activate(context){context.services.provide('test.failure@1',{});context.publication.add({publish(){throw new Error('Controlled publish failure');},rollback(){}});}}:{activate}}});f.closures.push(()=>kernel.dispose());
   await kernel.switch([f.candidate('old')]);const original=kernel.current(),old=f.controllers[0],record=seed(old.artifacts,'original-record'),file=path.join(f.directory,'artifacts/index.json'),before=fs.readFileSync(file);
   const bad:PluginCandidate={...f.candidate('failure'),instanceId:'zz:failure',manifest:{schemaVersion:2,id:'io.test.failure',version:'1.0.0',entries:{manager:{execution:'in_process',module:'./fixture.mjs'}},provides:['test.failure@1'],requires:['manager.xiaomi-home@1'],optional:[],permissions:[]}};
   const {generation}=await kernel.switch([f.candidate('new'),bad],{readyRequires:['manager.xiaomi-home@1']});
@@ -78,7 +98,7 @@ test('explicit Manager read-only mode publishes read contracts without initializ
   const f=fixture(t,true),p=await f.prepared();p.publication.publish();p.publication.seal()();await p.publication.afterPublish(Promise.resolve());p.context.assertRuntimeAvailable!();assert.equal(f.runtime.managerPluginRoutes.catalogSnapshot().operations.length,53);assert.equal(fs.existsSync(f.directory),false);assert.equal(f.counts.deployment,0);assert.equal(f.counts.subscribed,0);
 });
 test('real generation handoff awaits actual previous retirement and old cleanup cannot stop its replacement',async t=>{
-  const f=fixture(t);const kernel=new GenerationRuntime({host:'manager',hostServices:[{capability:'host.manager.xiaomi-home@1',value:f.runtime}],executor:{prepare:async()=>({activate})}});f.closures.push(()=>kernel.dispose());
+  const f=fixture(t);const kernel=new GenerationRuntime({host:'manager',hostServices:[{capability:'host.message-endpoints@1',value:f.host}],executor:{prepare:async()=>({activate})}});f.closures.push(()=>kernel.dispose());
   await kernel.switch([f.candidate('old')]);assert.equal(f.counts.deployment,1);const old=f.controllers[0],entered=gate(),release=gate();f.behavior.stop=async()=>{entered.release();await release.promise;};
   const pending=kernel.switch([f.candidate('new')]);await entered.promise;assert.equal(f.controllers.length,2);assert.equal(f.counts.deployment,1);assert.throws(()=>f.contexts[1].assertRuntimeAvailable!());release.release();f.behavior.stop=undefined;await pending;
   assert.equal(f.counts.deployment,2);assert.equal(f.counts.subscribed,2);assert.equal(f.counts.unsubscribed,1);await old.stop();assert.equal(f.counts.unsubscribed,1);f.contexts[1].assertRuntimeAvailable!();

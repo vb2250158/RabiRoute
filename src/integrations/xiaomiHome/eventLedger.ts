@@ -11,6 +11,8 @@ export class XiaomiHomeEventLedger {
   private pending = 0;
   constructor(private readonly roleDirectory: (roleId: string) => string, private readonly capacity = 64) {}
 
+  async drain(): Promise<void> { await this.tail; }
+
   async append(roleId: string, event: XiaomiHomeEvent): Promise<void> {
     if (!roleId || sanitizeRoleId(roleId) !== roleId) throw new Error("Invalid Xiaomi event role");
     validateXiaomiHomeEvent(event);

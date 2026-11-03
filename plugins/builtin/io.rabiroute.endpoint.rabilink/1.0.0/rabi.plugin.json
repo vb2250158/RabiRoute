@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 2,
+  "id": "io.rabiroute.endpoint.rabilink",
+  "version": "1.0.0",
+  "entries": {
+    "manager": {
+      "execution": "in_process",
+      "module": "./manager.mjs"
+    },
+    "gateway": {
+      "execution": "in_process",
+      "module": "./gateway.mjs"
+    },
+    "web": {
+      "execution": "in_process",
+      "module": "./web/client.mjs"
+    }
+  },
+  "provides": [
+    "endpoint.rabilink@1",
+    "endpoint.rabilink.egress@1"
+  ],
+  "requires": [
+    "host.message-endpoints@1"
+  ],
+  "optional": [
+    "manager.rabilink-relay@1"
+  ],
+  "permissions": [],
+  "displayName": "手机 / RabiLink",
+  "description": "连接 RabiLink 手机及 Relay 消息",
+  "icon": "mdi-cellphone"
+}

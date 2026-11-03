@@ -16,8 +16,8 @@
     "manager.xiaomi-home@1"
   ],
   "requires": [
-    "host.manager.xiaomi-home@1",
-    "manager.core@1"
+    "manager.core@1",
+    "host.message-endpoints@1"
   ],
   "optional": [],
   "permissions": [],
@@ -149,5 +149,8 @@
         "default": 33554432
       }
     }
-  }
+  },
+  "displayName": "米家 / Xiaomi Home",
+  "description": "连接家庭设备、状态与事件",
+  "icon": "mdi-home-automation"
 }

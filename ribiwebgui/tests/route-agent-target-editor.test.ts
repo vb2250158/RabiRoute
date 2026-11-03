@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { GatewayDefinition } from "../src/types";
-import { addRouteAgent, applyRouteAgentDraft, removeRouteAgent, selectRouteAgent } from "../src/routeAgentTargetEditor";
+import { addRouteAgent, applyRouteAgentDraft, removeRouteAgent, selectRouteAgent, selectPeerRouteSession } from "../src/routeAgentTargetEditor";
 import { remoteAgentTargetKey, resolvePrimaryAgentTarget } from "../../src/shared/routeAgentTargets";
 
 const first = { instanceId: "computer-a", agentId: "codex-one" };
@@ -9,6 +9,19 @@ const second = { instanceId: "computer-b", agentId: "codex-one" };
 function route(): GatewayDefinition {
   return { id: "route", agentAdapters: ["codex", "dsh"], primaryAgentAdapter: "codex", codexThreadId: "local-thread", codexCwd: "C:/Project", dshSessionId: "local-dsh" } as GatewayDefinition;
 }
+
+test("selecting a peer task changes only that Route target reference", () => {
+  const draft = route();
+  addRouteAgent(draft, "codex", first.instanceId, first.agentId, "pc-a");
+  addRouteAgent(draft, "codex", second.instanceId, second.agentId, "pc-b");
+  const id = remoteAgentTargetKey({ ...first, ownerDeviceId: "pc-a" });
+  const untouched = structuredClone(draft.remoteAgentTargets![1]);
+  selectPeerRouteSession(draft, id, { sessionId: "task-a", sessionName: "Task A", workspace: "/a" });
+  assert.equal(draft.remoteAgentTargets![0].sessionId, "task-a");
+  assert.deepEqual(draft.remoteAgentTargets![1], untouched);
+  assert.equal(draft.codexThreadId, "local-thread");
+  assert.equal(draft.codexCwd, "C:/Project");
+});
 
 test("adding multiple remote Codex targets preserves local form and primary; same target deduplicates", () => {
   const draft = route();

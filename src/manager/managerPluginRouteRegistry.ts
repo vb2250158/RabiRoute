@@ -178,6 +178,10 @@ function rejectApiUpgrade(socket: Duplex, status: number, body: unknown, headers
 }
 
 export class ManagerPluginRouteRegistry {
+  readonly #applicationOwnerKey?: object;
+  readonly #applicationRegistration = new AsyncLocalStorage<string>();
+  readonly #applicationInstances = new Set<string>();
+  readonly #applicationBatches = new WeakSet<ManagerPluginRouteBatch>();
   private readonly batches: ManagerPluginRouteBatch[] = [];
   private readonly externalListeners: ExternalListenerOwner[] = [];
   private readonly externalSources: Array<{ instanceId: string; activationId?: string; revision?: string; source: ApiExternalListenerSource }> = [];
@@ -195,10 +199,22 @@ export class ManagerPluginRouteRegistry {
     identity(): ApiCatalogIdentity;
     changed?(snapshot: ApiCatalogSnapshot): void;
     nativeHttpRequestFactory?: NativeHttpRequestFactory;
-  }, requestLimits: Readonly<{ maximumActiveOperationsPerOperation?: number }> = {}) {
+  }, requestLimits: Readonly<{ maximumActiveOperationsPerOperation?: number; applicationOwnerKey?: object }> = {}) {
+    this.#applicationOwnerKey = requestLimits.applicationOwnerKey;
     const maximum = requestLimits.maximumActiveOperationsPerOperation ?? 64;
     if (!Number.isSafeInteger(maximum) || maximum < 1) throw new RangeError("API operation admission limit must be a positive safe integer.");
     this.maximumActiveOperationsPerOperation = maximum;
+  }
+
+  /** The application retains this capability; plugin names alone never grant Host ownership. */
+  createApplicationOwner(key: object, instanceId: string): Readonly<{ instanceId: string; run<T>(action: () => T): T }> {
+    if (!this.#applicationOwnerKey || key !== this.#applicationOwnerKey || currentPluginActivation()) throw new Error("Application route ownership is unavailable to this caller.");
+    const owner = required(instanceId, "Application route instanceId");
+    this.#applicationInstances.add(owner);
+    return Object.freeze({ instanceId: owner, run: <T>(action: () => T): T => {
+      if (currentPluginActivation()) throw new Error("Plugin activation cannot register application routes.");
+      return this.#applicationRegistration.run(owner, action);
+    } });
   }
 
   registerExternalListener(instanceId: string, definition: ApiExternalListenerDefinition): ApiExternalListenerRegistration {
@@ -664,8 +680,10 @@ export class ManagerPluginRouteRegistry {
 
   register(instanceId: string, declarations: readonly ManagerPluginRouteDeclaration[]): () => void {
     const activationId = currentPluginActivation()?.activationId;
-    if (this.publishedActivations && !activationId) throw new Error("Managed plugin routes require a plugin activation context.");
     const normalizedInstanceId = required(instanceId, "Manager plugin route instanceId");
+    const applicationOwned = !activationId && this.#applicationRegistration.getStore() === normalizedInstanceId;
+    if (this.#applicationInstances.has(normalizedInstanceId) && !applicationOwned) throw new Error("Application route instanceId is owned by the Host.");
+    if (this.publishedActivations && !activationId && !applicationOwned) throw new Error("Managed plugin routes require a plugin activation context.");
     const existingRoutes = this.batches.flatMap(batch => batch.routes);
     const routes = declarations.map(declaration => {
       const routeId = required(declaration.routeId, "Manager plugin routeId");
@@ -737,6 +755,7 @@ export class ManagerPluginRouteRegistry {
       }
     }
     const batch = { instanceId: normalizedInstanceId, activationId, routes, revision: currentPluginActivation()?.revision };
+    if (applicationOwned) this.#applicationBatches.add(batch);
     this.batches.push(batch);
     let active = true;
     return () => {
@@ -751,13 +770,13 @@ export class ManagerPluginRouteRegistry {
     const published = this.publishedActivations?.();
     const latestByInstance = new Map<string, string | undefined>();
     for (const batch of this.batches) {
-      if (published && (!batch.activationId || !published.has(batch.activationId))) continue;
+      if (published && !this.#applicationBatches.has(batch) && (!batch.activationId || !published.has(batch.activationId))) continue;
       latestByInstance.set(batch.instanceId, batch.activationId);
     }
     return this.batches.filter(batch =>
       latestByInstance.has(batch.instanceId)
       && latestByInstance.get(batch.instanceId) === batch.activationId
-      && (!published || !!batch.activationId && published.has(batch.activationId))
+      && (!published || this.#applicationBatches.has(batch) || !!batch.activationId && published.has(batch.activationId))
     );
   }
 

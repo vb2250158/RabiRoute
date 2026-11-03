@@ -1,3 +1,5 @@
+import { peerManagerPath } from "./peerManagerTarget";
+
 export type RemoteTerminal = { terminalId: string; shell: "cmd" | "powershell" | "zsh" | "bash" | "sh"; cwd: string; state: string; pid?: number; createdAt: string; nextInputSequence: number; exitCode?: number };
 const remoteShellLabels: Record<string, string> = { cmd: "CMD", powershell: "PowerShell", zsh: "Zsh", bash: "Bash", sh: "Shell" };
 export const remoteShellLabel = (shell: string) => remoteShellLabels[shell] || shell;
@@ -5,8 +7,8 @@ export type TerminalEvent = { sequence: number; type: string; data?: string; exi
 
 export class RemoteTerminalClient {
   private readonly base: string;
-  constructor(instanceId: string, private readonly token: string, private readonly fetcher: typeof fetch = globalThis.fetch.bind(globalThis)) {
-    this.base = `/api/lan-agent/instances/${encodeURIComponent(instanceId)}/terminals`;
+  constructor(instanceId: string, private readonly token: string, private readonly fetcher: typeof fetch = globalThis.fetch.bind(globalThis), ownerDeviceId = "") {
+    this.base = peerManagerPath(ownerDeviceId, `/api/lan-agent/instances/${encodeURIComponent(instanceId)}/terminals`);
   }
   private headers() { return { "x-rabiroute-webgui-token": this.token, "content-type": "application/json" }; }
   async request<T>(body?: Record<string, unknown>): Promise<T> {

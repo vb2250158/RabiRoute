@@ -1,0 +1,27 @@
+{
+  "exports": [
+    {
+      "source": "src/napcat.ts",
+      "name": "getLoginInfo"
+    },
+    {
+      "source": "src/napcat.ts",
+      "name": "sendGroupMessage"
+    },
+    {
+      "source": "src/napcat.ts",
+      "name": "sendPrivateMessage"
+    },
+    {
+      "source": "src/napcat.ts",
+      "name": "uploadGroupFile"
+    },
+    {
+      "source": "src/napcat.ts",
+      "name": "uploadPrivateFile"
+    }
+  ],
+  "ownedSources": [
+    "src/napcat.ts"
+  ]
+}

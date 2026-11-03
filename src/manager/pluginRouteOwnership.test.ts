@@ -222,14 +222,14 @@ test("Outbox no longer calls the retired FenneNote output implementation", () =>
 });
 
 
-test("NapCat plugin shutdown uses only launch-owned child processes and recorded PIDs", () => {
-  const plugin = source("plugins/builtin/io.rabiroute.manager.napcat-control/1.0.0/manager.mjs");
-  assert.match(plugin, /const activeOperations = new Set/);
-  assert.match(plugin, /napcatManagerCtx\(assertAccepting\)/);
-  assert.match(plugin, /const retired = registration\?\.dispose\(\);[\s\S]*accepting = false;[\s\S]*while \(activeOperations\.size > 0\) await Promise\.allSettled\(\[\.\.\.activeOperations\]\); await retired;/);
-  assert.match(plugin, /runtime\.removeManagedNapcatInstance\(body\)/);
-  // Persisted NapcatLifecycleOwner owns process identity across Manager handovers.
-  assert.doesNotMatch(plugin, /rememberLaunchPids|ownedInstances|releaseOwnership|runWindowsTaskkill|process\.kill|stopNapcatInstanceEndpoint\(controlContext/);
+test("NapCat endpoint owns native process lifecycle and drains its own actions", () => {
+  const plugin = source("plugins/builtin/io.rabiroute.endpoint.napcat/1.0.0/manager.mjs");
+  assert.match(plugin, /owner\.context\(assertAccepting\)/);
+  assert.match(plugin, /supervisor\.stop\(\), retired, \.\.\.flights/);
+  assert.match(plugin, /owner\.remove\(body\)/);
+  assert.doesNotMatch(plugin, /runWindowsTaskkill|process\.kill/);
+  assert.match(source("src/integrations/napcat/managerOwner.ts"), /new NapcatLifecycleOwner/);
+  assert.doesNotMatch(source("src/manager/controlPlaneRoutes.ts"), /new NapcatLifecycleOwner/);
 });
 
 test("Remote Agent rejects WebSocket work before HTTP request drain", () => {

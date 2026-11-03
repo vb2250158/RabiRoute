@@ -6,6 +6,7 @@ export type InstanceThreadTransport = {
   instances: () => AgentInstance[];
   manage: (instanceId: string, params: Record<string, unknown>, assertAuthorized?: () => void) => Promise<unknown>;
   endpointDelivery?: (request: AgentThreadRequest) => Promise<AgentThreadRequestResult>;
+  peer?: (binding: NonNullable<AgentThreadRequest["instanceBinding"]>, request: AgentThreadRequest) => Promise<AgentThreadRequestResult>;
 };
 
 /** Resolve identity before any local provider lookup, including when the remote computer is offline. */
@@ -21,6 +22,10 @@ export async function routeInstanceThread(request: AgentThreadRequest, transport
   if (request.agentTargetId !== undefined) return undefined;
   const binding = normalizeAgentInstanceBinding(request.instanceBinding);
   if (!binding) return undefined;
+  if (binding.ownerDeviceId) {
+    if (!transport.peer) throw new Error("Peer Manager task transport is unavailable.");
+    return transport.peer(binding, request);
+  }
   const instance = transport.instances().find(item => item.instanceId === binding.instanceId);
   if (instance?.local) return undefined;
   if (!instance?.connected || instance.enabled === false) throw new Error("The target instance is offline or disabled.");

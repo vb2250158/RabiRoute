@@ -7,7 +7,7 @@ import type { InteractiveContext } from "./lanAgentInteractiveContract.js";
 const id = "12345678-1234-4234-8234-123456789abc";
 function fixture(message: string, authorized = true) {
   const request = new IncomingMessage(new Socket()); request.headers = {};
-  const operation = createLanAgentComputerOperations({ registry: { getNode: () => ({ computerCapabilities: ["files"] }), manageAgent: async () => { throw new Error(message); } }, isManagementRequestAuthorized: () => authorized } as unknown as InteractiveContext)[0]!;
+  const operation = createLanAgentComputerOperations({ registry: { computerCapabilities: () => ["files"], manageAgent: async () => { throw new Error(message); } }, isManagementRequestAuthorized: () => authorized } as unknown as InteractiveContext)[0]!;
   return async (action: string) => operation.handler({ request, response: new ServerResponse(request), url: new URL("http://fixture.invalid/computer"), path: { instanceId: "fixture-node" }, query: {}, body: { action, uploadId: id } });
 }
 test("old connector missing-upload status is usable without inventing a terminal outcome", async () => {

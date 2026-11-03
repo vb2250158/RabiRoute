@@ -38,3 +38,9 @@ export function rabiLinkAgentDevicePrincipal(request: IncomingMessage, config: R
     return hasAuthenticatedConnectionRequest(request) ? { scope, sourceDeviceId: config.deviceId, deviceOwner: false } : null;
   } catch { return null; }
 }
+
+/** Application access is not a native device task source; ordinary Agents keep their original resolver. */
+export function rabiLinkAgentTaskSource(request: IncomingMessage, config: RabiLinkConnectionConfig, generation: string): RabiLinkAgentPrincipal | undefined {
+  const principal = rabiLinkAgentDevicePrincipal(request, config, generation);
+  return principal?.deviceOwner ? principal : undefined;
+}

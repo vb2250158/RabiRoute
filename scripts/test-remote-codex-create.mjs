@@ -8,7 +8,7 @@ import { spawnSync } from "node:child_process";
 const repositoryRoot = path.resolve(process.argv[2] || fileURLToPath(new URL("../", import.meta.url)));
 const typescript = createRequire(path.join(repositoryRoot, "package.json"))("typescript");
 const fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), "rabi-remote-create-contract-"));
-const owned = ["src/agentAdapters/instanceManagement.ts","src/agentThreads.ts","src/callerCreationMetadata.ts","src/codexTaskIdentity.ts","src/codexThreadCreationReservations.ts","src/manager/controlPlaneRoutes.ts","src/manager/instanceThreadRouting.ts","src/manager/lanAgentRegistry.ts","src/manager/remoteCodexCreate.ts"];
+const owned = ["src/agentAdapters/instanceManagement.ts","src/agentThreads.ts","src/callerCreationMetadata.ts","src/codexTaskIdentity.ts","src/codexThreadCreationReservations.ts","src/manager/controlPlaneRoutes.ts","src/manager/instanceThreadRouting.ts","src/manager/lanAgentRegistry.ts","src/manager/remoteCodexCreate.ts","src/manager/nativeHttpTestClient.ts"];
 try {
   fs.mkdirSync(path.join(fixtureRoot, "compiled"), { recursive: true });
   fs.writeFileSync(path.join(fixtureRoot, "compiled/package.json"), '{"type":"module"}');

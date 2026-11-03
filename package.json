@@ -1,6 +1,6 @@
 {
   "name": "rabiroute",
-  "version": "0.4.12",
+  "version": "0.5.0",
   "license": "MIT",
   "private": true,
   "type": "module",
@@ -70,6 +70,7 @@
     "bonjour-service": "1.4.4",
     "cordis": "4.0.0-rc.8",
     "dotenv": "^16.4.7",
+    "mermaid": "12.2.0",
     "qrcode": "^1.5.4",
     "typescript": "^5.7.3",
     "werift": "0.24.4",
@@ -98,5 +99,8 @@
   },
   "engines": {
     "node": ">=22.13.0"
+  },
+  "optionalDependencies": {
+    "node-pty": "1.1.0"
   }
 }

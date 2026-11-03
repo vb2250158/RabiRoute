@@ -2,6 +2,9 @@
   "schemaVersion": 2,
   "id": "io.rabiroute.manager.core",
   "version": "1.0.0",
+  "displayName": "核心管理",
+  "description": "管理更新、资源与远程电脑；可在插件页重新启用",
+  "icon": "mdi-cog",
   "entries": {
     "manager": {
       "execution": "in_process",

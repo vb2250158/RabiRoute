@@ -34,5 +34,8 @@ test("WebGUI route pages use the trusted renderer registry and asynchronous page
   assert.match(pluginPagesSource, /registerTrustedWebPage/);
   assert.match(pluginPagesSource, /allowedSlots/);
   assert.match(pluginPagesSource, /allowedIcons/);
-  assert.doesNotMatch(routerSource, /import\("\.\/pages\//);
+  // The shell's management page must remain available when business Bundles are
+  // disabled. Keep its own lazy chunk while all business pages stay registered.
+  assert.deepEqual([...routerSource.matchAll(/import\("\.\/pages\/([^\"]+)"\)/g)].map(match => match[1]), ["PluginsPage.vue"]);
+  assert.match(routerSource, /path: "\/plugins",[\s\S]*?component: immediatePage\(\(\) => import\("\.\/pages\/PluginsPage\.vue"\)\)/);
 });

@@ -1,3 +1,4 @@
+import { withTestEndpointEgress } from "../endpointEgress.fixture.js";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
@@ -5,7 +6,7 @@ import path from "node:path";
 import http from "node:http";
 import { execFileSync } from "node:child_process";
 import test from "node:test";
-import { AgentCompletionDeliveryService, completionMessagePayloads, completionProjectIdentity, completionTaskContextFromPlans, deliverCompletionToEndpoint, planCompletionDeliveryRules, splitCompletionMessage, type CompletionRuleOwner } from "./agentCompletionDelivery.js";
+import { AgentCompletionDeliveryService, completionProjectIdentity, completionTaskContextFromPlans, deliverCompletionToEndpoint, completionLocalFiles, completionMessagePayloads, planCompletionDeliveryRules, splitCompletionMessage, type CompletionRuleOwner } from "./agentCompletionDelivery.js";
 import { CodexHookContextService, type CodexHookContextRequest } from "./codexHookContext.js";
 
 const owner: CompletionRuleOwner = { roleId: "test", rule: { id: "rule", enabled: true,
@@ -218,7 +219,7 @@ test("completion reaches the selected group through Outbox and repeated events r
   try {
     const create = () => new AgentCompletionDeliveryService({ rules: () => [owner], projectIdentity: async value => value,
       taskContext: () => ({ taskName: "修复登录失败", plans: [{ id: "plan-1", title: "登录窗口修复计划" }] }),
-      deliver: ({ rule }, hook, id, context) => deliverCompletionToEndpoint(rule, hook, id, "route", options, context) });
+      deliver: ({ rule }, hook, id, context) => deliverCompletionToEndpoint(rule, hook, id, "route", withTestEndpointEgress(options), context) });
     assert.equal((await create().handle(event))[0].status, "sent");
     assert.equal((await create().handle(event))[0].status, "sent");
     assert.equal(messages.length, 1);
@@ -284,7 +285,7 @@ test("endpoint selection delivers to private QQ or speech with independent param
   const speechRule = { ...owner.rule, id: "speech", conditions: [], destination: { channel: "speech", gatewayId: "route", params: {} } };
   const create = () => new AgentCompletionDeliveryService({ rules: () => [{ ...owner, rule: privateRule }, { ...owner, rule: speechRule }],
     projectIdentity: async value => value,
-    deliver: ({ rule }, hook, id, context) => deliverCompletionToEndpoint(rule, hook, id, "route", options, context) });
+    deliver: ({ rule }, hook, id, context) => deliverCompletionToEndpoint(rule, hook, id, "route", withTestEndpointEgress(options), context) });
   try {
     const first = await create().handle(event);
     assert.deepEqual(first.map(result => result.status), ["sent", "sent"], JSON.stringify(first));
@@ -302,7 +303,7 @@ test("endpoint selection delivers to private QQ or speech with independent param
     assert.equal(received[1].body.play, true);
     includePlaybackJob = false;
     const synthesisOnly = new AgentCompletionDeliveryService({ rules: () => [{ ...owner, rule: speechRule }],
-      deliver: ({ rule }, hook, id, context) => deliverCompletionToEndpoint(rule, hook, id, "route", options, context) });
+      deliver: ({ rule }, hook, id, context) => deliverCompletionToEndpoint(rule, hook, id, "route", withTestEndpointEgress(options), context) });
     assert.equal((await synthesisOnly.handle({ ...event, turnId: "synthesis-only", cwd: undefined }))[0].status, "sent");
     assert.equal((await synthesisOnly.handle({ ...event, turnId: "synthesis-only", cwd: undefined }))[0].status, "sent");
     assert.equal(received.length, 3, "synthesis without a playback job still has an authoritative receipt");
@@ -326,14 +327,58 @@ test("completion text chunks preserve multiline replies, links and Unicode witho
   assert.deepEqual(splitCompletionMessage("abcd😀ef", 5), ["abcd", "😀ef"]);
 });
 
-test("tables preserve source order and honor explicit opt out", () => {
+
+test("completion local links decode paths, strip source anchors, deduplicate and ignore web links and code", () => {
+  const base = path.join(os.tmpdir(), "结果 (final).md");
+  const url = new URL(`file:///${base.replaceAll("\\", "/").replace(/^\//, "")}`).href;
+  assert.deepEqual(completionLocalFiles(`[报告](<${base}:12>) [重复](${url}) [web](https://example.com/a.md)\n\n` +
+    "```md\n[example](/private/secret.md)\n```"), [path.normalize(base)]);
+});
+
+test("QQ completion attachments use group/private uploads, isolate missing files, preserve receipts and honor opt out", async () => {
+  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabi-completion-files-"));
+  const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+  const server = http.createServer((req, res) => {
+    let body = ""; req.on("data", chunk => { body += chunk; }); req.on("end", () => {
+      calls.push({ url: req.url!, body: JSON.parse(body) });
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ status: "ok", retcode: 0, data: req.url!.includes("upload") ? { file_id: "uploaded-" + calls.length } : { message_id: calls.length } }));
+    });
+  });
+  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address(); assert.ok(address && typeof address === "object");
+  const options = { rootDir, routeRoot: path.join(rootDir, "data/route"), rolesRoot: path.join(rootDir, "data/roles"),
+    runtimes: [{ id: "route", enabled: true, napcatInstances: [{ id: "qq", httpUrl: `http://127.0.0.1:${address.port}`, accessToken: "", enabled: true }] }] };
+  const a = path.join(rootDir, "report.html"), b = path.join(rootDir, "详情 (final).md"), missing = path.join(rootDir, "missing.md");
+  fs.writeFileSync(a, "report"); fs.writeFileSync(b, "details");
+  const lastAssistantMessage = `[报告](<${a}>) [丢失](<${missing}>) [详情](<${b}>) [重复](<${a}>)`;
+  try {
+    for (const target of ["group", "private"]) {
+      const rule = { ...owner.rule, destination: { ...owner.rule.destination, params: { ...owner.rule.destination.params, target } } };
+      const hook = { ...event, lastAssistantMessage };
+      const id = "attachment-" + target;
+      await assert.rejects(deliverCompletionToEndpoint(rule, hook, id, "route", withTestEndpointEgress(options)), /部分附件未确认/);
+      const uploads = calls.filter(call => call.url === `/upload_${target}_file`);
+      assert.deepEqual(uploads.map(call => call.body.file), [a, b]);
+      const count = calls.length;
+      await assert.rejects(deliverCompletionToEndpoint(rule, hook, id, "route", withTestEndpointEgress(options)), /部分附件未确认/);
+      assert.equal(calls.length, count, "confirmed text and uploads must not repeat after partial failure");
+      const disabled = { ...rule, destination: { ...rule.destination, params: { ...rule.destination.params, includeFiles: "false" } } };
+      await deliverCompletionToEndpoint(disabled, hook, id + "-disabled", "route", withTestEndpointEgress(options));
+      assert.equal(calls.length, count + 1, "opt out sends only text");
+    }
+  } finally { await new Promise<void>(resolve => server.close(() => resolve())); fs.rmSync(rootDir, { recursive: true, force: true }); }
+});
+
+
+test("tables render independently of diagrams, preserve source order and honor explicit opt out", () => {
   const table = "| 固定镜头下的路径 | 实测 |\n|---|---:|\n| LateUpdate | 1.061ms/帧 |\n| StaticShadow | **2793次/帧，方法体0.241ms/帧** |\n";
   const body = "前文\n\n" + table + "\n后文";
-  const [payload] = completionMessagePayloads(body);
+  const [payload] = completionMessagePayloads(body, false);
   const segments = payload.segments as Array<{type:string;text:string}>;
   assert.deepEqual(segments.map(s => s.type), ["text", "markdown", "text"]);
   assert.equal(segments.map(s => s.text).join(""), body);
-  assert.deepEqual(completionMessagePayloads(body, false), [{type:"text",text:body}]);
+  assert.deepEqual(completionMessagePayloads(body, true, undefined, [], false), [{type:"text",text:body}]);
   const fenced = "```md\n" + table + "```";
   assert.deepEqual(completionMessagePayloads(fenced, true), [{type:"text",text:fenced}]);
   const prose = "普通 | 分隔符\n不构成表格";
@@ -349,16 +394,105 @@ test("table completion sends a PNG inline, reuses its receipt, and opt out sends
   const options={rootDir,routeRoot:path.join(rootDir,"data/route"),rolesRoot:path.join(rootDir,"data/roles"),runtimes:[{id:"route",enabled:true,napcatInstances:[{id:"qq",enabled:true,httpUrl:`http://127.0.0.1:${address.port}`,accessToken:""}]}]};
   const hook={...event,lastAssistantMessage:"前文\n\n| 路径 | 实测 |\n|---|---:|\n| LateUpdate | **1.061ms/帧** |\n| StaticShadow | 2793次/帧 |\n\n后文"};
   try {
-    await deliverCompletionToEndpoint(owner.rule,hook,"table-receipt","route",options);
-    await deliverCompletionToEndpoint(owner.rule,hook,"table-receipt","route",options);
+    await deliverCompletionToEndpoint(owner.rule,hook,"table-receipt","route",withTestEndpointEgress(options));
+    await deliverCompletionToEndpoint(owner.rule,hook,"table-receipt","route",withTestEndpointEgress(options));
     assert.equal(messages.length,1);
     const segments=messages[0].message as Array<{type:string;data:Record<string,string>}>;
     assert.deepEqual(segments.map(s=>s.type),["text","image","text"]);
     assert.match(segments[0].data.text,/前文/); assert.match(segments[2].data.text,/后文/);
     assert.match(segments[1].data.file,/^base64:\/\/iVBOR/);
     const disabled={...owner.rule,destination:{...owner.rule.destination,params:{...owner.rule.destination.params,renderTables:"false"}}};
-    await deliverCompletionToEndpoint(disabled,hook,"table-disabled","route",options);
+    await deliverCompletionToEndpoint(disabled,hook,"table-disabled","route",withTestEndpointEgress(options));
     assert.match(JSON.stringify(messages[1]),/LateUpdate/);
     assert.doesNotMatch(JSON.stringify(messages[1]),/base64:\/\//);
   } finally {await new Promise<void>(resolve=>server.close(()=>resolve()));fs.rmSync(rootDir,{recursive:true,force:true});}
+});
+
+test("diagram completion payloads preserve prose/image order and opt out leaves source intact", () => {
+  const diagram = "```mermaid\nflowchart TD\n A[开始] --> B[完成]\n```\n";
+  const body = "正文之前\n\n" + diagram + "\n正文之后";
+  const [payload] = completionMessagePayloads(body, true);
+  assert.equal(payload.type, "image");
+  const segments = payload.segments as Array<{type:string;text:string}>;
+  assert.deepEqual(segments.map(segment => segment.type), ["text", "markdown", "text"]);
+  assert.equal(segments.map(segment => segment.text).join(""), body);
+  assert.deepEqual(completionMessagePayloads(body, false), [{type:"text",text:body}]);
+  const long = completionMessagePayloads("段落\n".repeat(1800) + diagram + body, true);
+  assert.ok(long.length > 1);
+  assert.equal(long.flatMap(part => part.type === "text" ? [String(part.text)] : (part.segments as typeof segments).map(segment => segment.text)).join(""), "段落\n".repeat(1800) + diagram + body);
+});
+
+
+test("completion sends real Mermaid PNG inline to QQ and reuses the mixed-message receipt", async () => {
+  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabi-completion-diagrams-"));
+  const messages: Array<Record<string, unknown>> = [];
+  const server = http.createServer((req,res) => {let body="";req.on("data",c=>body+=c);req.on("end",()=>{messages.push(JSON.parse(body));res.writeHead(200,{"content-type":"application/json"});res.end(JSON.stringify({status:"ok",retcode:0,data:{message_id:123}}));});});
+  await new Promise<void>(resolve=>server.listen(0,"127.0.0.1",resolve));
+  const address=server.address();assert.ok(address && typeof address==="object");
+  const options={rootDir,routeRoot:path.join(rootDir,"data/route"),rolesRoot:path.join(rootDir,"data/roles"),runtimes:[{id:"route",enabled:true,napcatInstances:[{id:"qq",enabled:true,httpUrl:`http://127.0.0.1:${address.port}`,accessToken:""}]}]};
+  const hook={...event,lastAssistantMessage:"前文\n\n```mermaid\nflowchart TD\n A[开始] --> B[结束]\n```\n\n后文"};
+  try {
+    await deliverCompletionToEndpoint(owner.rule,hook,"mixed-receipt","route",withTestEndpointEgress(options));
+    await deliverCompletionToEndpoint(owner.rule,hook,"mixed-receipt","route",withTestEndpointEgress(options));
+    assert.equal(messages.length,1);
+    const segments=messages[0].message as Array<{type:string;data:Record<string,string>}>;
+    assert.deepEqual(segments.map(s=>s.type),["text","image","text"]);
+    assert.match(segments[0].data.text,/前文/);assert.match(segments[2].data.text,/后文/);
+    assert.match(segments[1].data.file,/^base64:\/\/iVBOR/);
+    await deliverCompletionToEndpoint(owner.rule,{...hook,lastAssistantMessage:"前文\n\n```mermaid\nINVALID DIAGRAM !\n```\n\n后文"},"mixed-invalid","route",withTestEndpointEgress(options));
+    assert.match(JSON.stringify(messages[1]),/图表转换失败/);
+    assert.match(JSON.stringify(messages[1]),/后文/);
+  } finally {await new Promise<void>(resolve=>server.close(()=>resolve()));fs.rmSync(rootDir,{recursive:true,force:true});}
+});
+
+
+test("unlabelled Mermaid diagrams are recognized while other fenced code remains text", () => {
+  for (const source of ["flowchart TD\n A --> B", "architecture-beta\n service api(server)[API]"]) {
+    assert.equal(completionMessagePayloads("```\n" + source + "\n```",true)[0].type,"image");
+  }
+  const source="```ts\nconst graph = 'flowchart';\n```";
+  assert.deepEqual(completionMessagePayloads(source,true),[{type:"text",text:source}]);
+});
+
+
+test("existing Markdown images preserve inline order, including nested formatting and code examples", () => {
+  const source="Before `![example](not-an-image.png)` **![photo](https://example.test/a.png)** after\n\n![local](<C:/demo/a b.png>)";
+  const [payload]=completionMessagePayloads(source,false);
+  const segments=payload.segments as Array<any>;
+  assert.equal(payload.type,"image");
+  assert.deepEqual(segments.filter(s=>s.type==="image"),[{type:"image",url:"https://example.test/a.png"},{type:"image",path:path.normalize("C:/demo/a b.png")}]);
+  assert.match(segments[0].text,/`!\[example\]/);
+  assert.deepEqual(completionLocalFiles("![image](C:/demo/a.png) [file](C:/demo/report.md)"),[path.normalize("C:/demo/report.md")]);
+  const native=completionMessagePayloads("Caption",false,undefined,["base64://abc","base64://abc"]);
+  assert.deepEqual((native[0].segments as Array<any>).map(s=>s.type),["text","image"]);
+});
+
+test("QQ completion preserves original local and native images with text and reuses the mixed receipt", async () => {
+  const rootDir=fs.mkdtempSync(path.join(os.tmpdir(),"completion-images-send-"));
+  const calls:Array<any>=[];
+  const server=http.createServer((req,res)=>{let body="";req.on("data",c=>body+=c);req.on("end",()=>{calls.push(JSON.parse(body));res.writeHead(200,{"content-type":"application/json"});res.end(JSON.stringify({status:"ok",retcode:0,data:{message_id:calls.length}}));});});
+  await new Promise<void>(resolve=>server.listen(0,"127.0.0.1",resolve));const address=server.address();assert.ok(address&&typeof address==="object");
+  const options={rootDir,routeRoot:path.join(rootDir,"data/route"),rolesRoot:path.join(rootDir,"data/roles"),runtimes:[{id:"route",enabled:true,napcatInstances:[{id:"qq",enabled:true,httpUrl:`http://127.0.0.1:${address.port}`,accessToken:""}]}]};
+  const png=Buffer.from([137,80,78,71,13,10,26,10,0]);const file=path.join(rootDir,"photo.png");fs.writeFileSync(file,png);
+  const hook={...event,lastAssistantMessage:`Before\n\n![photo](<${file}>)\n\nAfter`};
+  const context={plans:[],images:["base64://"+Buffer.concat([png,Buffer.from([1])]).toString("base64")]};
+  try{
+    for(const target of ["group","private"]){
+      const rule={...owner.rule,destination:{...owner.rule.destination,params:{...owner.rule.destination.params,target,renderDiagrams:"false"}}};
+      await deliverCompletionToEndpoint(rule,hook,"photos-"+target,"route",withTestEndpointEgress(options),context);
+      await deliverCompletionToEndpoint(rule,hook,"photos-"+target,"route",withTestEndpointEgress(options),context);
+    }
+    assert.equal(calls.length,2);
+    for(const call of calls){const segments=call.message as Array<any>;assert.deepEqual(segments.map(s=>s.type),["text","image","text","image"]);assert.match(segments[0].data.text,/Before/);assert.match(segments[2].data.text,/After/);assert.equal(segments[3].data.file,context.images[0]);}
+    await assert.rejects(deliverCompletionToEndpoint(owner.rule,{...event,lastAssistantMessage:"Text remains available"},"image-read-failed","route",withTestEndpointEgress(options),{plans:[],imageReadError:true}),/正文已发送/);
+    assert.equal(calls.length,3);
+    assert.match(String(calls[2].message),/Text remains available/);
+  }finally{await new Promise<void>(resolve=>server.close(()=>resolve()));fs.rmSync(rootDir,{recursive:true,force:true});}
+});
+
+
+test("Desktop slash-prefixed Windows links resolve to actual drive paths", () => {
+  assert.deepEqual(completionLocalFiles("[报告](</C:/Reports/报告.md>)"), [path.normalize("C:/Reports/报告.md")]);
+  const [payload] = completionMessagePayloads("![截图](</C:/Reports/截图.png>)", false);
+  assert.deepEqual(payload.segments, [{type:"image",path:path.normalize("C:/Reports/截图.png")}]);
 });

@@ -12,6 +12,7 @@ import { ManagerPluginRouteRegistry } from "./managerPluginRouteRegistry.js";
 import { LanAgentAuthority } from "./lanAgentAuthority.js";
 import { evaluateLanAgentRequest } from "./lanAgentRequestAccess.js";
 import { markAuthenticatedConnectionRequest } from "./connectionRequestAccess.js";
+import { registerLanAgentBodyGuard, assertLanAgentBodyAuthority } from "./lanAgentBodyAuthority.js";
 import type { PluginCatalogApiContext, PluginCatalogInvocation } from "./pluginCatalogRoutes.js";
 
 export function deferred() {
@@ -87,6 +88,7 @@ export async function pluginCatalogFixture(t: TestContext, options: {
     } else {
       const admission = evaluateLanAgentRequest(request, authority, true);
       if (admission.kind !== "agent") { response.writeHead(403).end(); return; }
+      registerLanAgentBodyGuard(request, body => assertLanAgentBodyAuthority(new URL(request.url!, "http://localhost").pathname, body, undefined));
     }
     if (!registry.handle(request, new URL(request.url!, "http://localhost"), response)) response.writeHead(404).end();
   });

@@ -203,6 +203,14 @@ node rabi-agent.mjs --operation <operationId> --websocket --frames-stdin --outpu
 
 文件在正常 1000 关闭、写入完成及原 Manager generation/instance 复核通过后不覆盖提交；失败清理本次临时文件。stdout 只输出回执和文件摘要。`ok`、`framesSent` 与 `framesReceived` 说明本次传输/捕获；`businessOutcome: "not-evaluated"` 明示业务结果仍由原协议确认，`inputComplete` 说明输入是否消费完毕。任何失败均不重连或重放。
 
+## 已安装版本的签名冷恢复
+
+macOS 旧连接器的在线更新无法排空时，可由安装维护者使用独立的 `recover-release.mjs <frozen-request.json>`。先正常停止原 worker 与 launcher，保留配置、原回执和旧版资产；该入口不停止进程，也不启动替代 Runtime。
+
+恢复请求绑定原配置与节点、原指针和校验器 SHA、冻结 manifest SHA、目标已安装目录、资产数量及私有快照目录。安装器取得与原 launcher 相同的独占 lease，使用原配置固定的公钥验证签名，并核对全部资产、版本与指针 CAS 后，仅提交版本选择。新 worker 由原启动器启动并自行更新 launcher/hook。lease 被占用、资产损坏或 CAS 冲突只使本次恢复失败。
+
+启动失败后，先确认新 owner 正常退出，再用同一入口、原签名 manifest、保留的旧资产及当前指针 SHA 选择旧版。不得手写指针、清除未知回执或重投原消息。Manager 的节点专属发布选择须与采用版本一致；公共发布和其他节点保持原选择。进程采用、公共读取、原消息接收与原回执分别验收。
+
 ## 旧安装与运行边界
 
 - 旧配置缺少 `nodeCredential` 时必须以新票据重新接入，不能迁移 `lanLinkToken` 为节点凭据；保留原实例、Agent、任务与允许的工作目录。已有独立凭据的重连不重复兑换。

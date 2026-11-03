@@ -1,0 +1,4 @@
+{
+  "source": "src/adapters/napcatAdapter.ts",
+  "factory": "createNapCatAdapter"
+}

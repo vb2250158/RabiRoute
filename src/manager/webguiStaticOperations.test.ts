@@ -4,6 +4,7 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { once } from "node:events";
+import { finished } from "node:stream/promises";
 import test from "node:test";
 import { NativeWebguiStaticOwner } from "./nativeWebguiStaticOwner.js";
 import { createWebguiStaticOperations } from "./webguiStaticOperations.js";
@@ -13,8 +14,10 @@ import { compileApiContract } from "./apiOperationContract.js";
 import { markAuthenticatedConnectionRequest } from "./connectionRequestAccess.js";
 import { fixtureApiContract } from "./apiOperationContractFixtures.js";
 import { apiCatalogOpenApi } from "./apiOperationCatalog.js";
+import { observeManagerHttpAbort } from "./managerHttpAbort.js";
+import { guardRequestBodyDeadline } from "./agentUploadDeadline.js";
 
-async function fixture(t: test.TestContext, patch = false, linkedRoot = false, script = "export const ready=true;") {
+async function fixture(t: test.TestContext, patch = false, linkedRoot = false, script = "export const ready=true;", entryLifecycle = false) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "webgui-static-owner-"));
   t.after(async () => {
     assert.equal(path.dirname(path.resolve(root)), path.resolve(os.tmpdir()));
@@ -45,12 +48,14 @@ async function fixture(t: test.TestContext, patch = false, linkedRoot = false, s
     isControlPath: value => value === "/api" || value.startsWith("/api/") || value === "/health" || value === "/meta" });
   const operations = createWebguiStaticOperations(owner);
   const registry = new ManagerPluginRouteRegistry();
+  let streamDeadline: AbortController | undefined;
   const registration = registry.registerHttpProxies("fixture-static", [...operations.resources, operations.fallback].map(definition => ({ ...definition, async handler(input) {
     if (input.request.headers["x-fixture-deadline"] !== "yes") return definition.handler(input);
-    const deadline = new AbortController(); const timer = setTimeout(() => deadline.abort(new Error("Fixture request deadline.")), 100);
+    const deadline = new AbortController();
+    streamDeadline = deadline;
     try { await definition.handler({ ...input, signal: AbortSignal.any([input.signal, deadline.signal]),
       assertCurrent() { input.assertCurrent(); deadline.signal.throwIfAborted(); } }); }
-    finally { clearTimeout(timer); }
+    finally { if (streamDeadline === deadline) streamDeadline = undefined; }
   } })));
   const business = registry.registerOperations("fixture-other-owner", [{ contract: fixtureApiContract({ operationId: "fixture.business.read", method: "GET", pathTemplate: "/api/fixture-known",
     request: { path: { type: "object" }, query: { type: "object" }, headers: { type: "object" }, body: { kind: "none" } },
@@ -59,7 +64,20 @@ async function fixture(t: test.TestContext, patch = false, linkedRoot = false, s
     request: { path: { type: "object" }, query: { type: "object" }, headers: { type: "object" }, body: { kind: "none" } },
     responses: { "403": { mediaType: "application/json", schema: { type: "object" } } } }), handler: () => ({ status: 403, body: { privateOwner: true } }) }]);
   let revoked = false;
+  const responseLifetimes: { response: http.ServerResponse; baseline: number; peak: number; completed: Promise<void> }[] = [];
   const server = http.createServer((request, response) => {
+    if (entryLifecycle) {
+      const lifetime = { response, baseline: response.listenerCount("close"), peak: response.listenerCount("close"), completed: Promise.resolve() };
+      response.on("newListener", event => {
+        if (event === "close") lifetime.peak = Math.max(lifetime.peak, response.listenerCount("close") + 1);
+      });
+      observeManagerHttpAbort(response, () => {});
+      guardRequestBodyDeadline(request, response, { isAuthorizedUpload: false });
+      // Observe the real HTTP completion while the original entry and proxy owners remain installed.
+      lifetime.completed = finished(response, { cleanup: true });
+      void lifetime.completed.catch(() => {});
+      responseLifetimes.push(lifetime);
+    }
     if (request.headers["x-fixture-connection"] === "yes") markAuthenticatedConnectionRequest(request, () => { if (revoked) throw new Error("fixture revoked"); });
     const url = new URL(request.url!, "http://fixture.invalid");
     if (registry.handle(request, url, response)) return;
@@ -82,8 +100,36 @@ async function fixture(t: test.TestContext, patch = false, linkedRoot = false, s
       }); outgoing.on("error", reject); outgoing.end();
     });
   }
-  return { owner, root, dist, servedRoot, patches, registration, registry, operations, request, port, revoke: () => { revoked = true; } };
+  return { owner, root, dist, servedRoot, patches, registration, registry, operations, request, port, responseLifetimes, revoke: () => { revoked = true; },
+    expireStreamDeadline() {
+      assert.ok(streamDeadline, "The original resource owner must still own the request deadline.");
+      streamDeadline.abort(new Error("Fixture request deadline."));
+    } };
 }
+
+test("static shell and asset preserve entry lifecycles without accumulating response close listeners", async t => {
+  const f = await fixture(t, true, false, undefined, true);
+  const warnings: Error[] = [];
+  const warning = (value: Error & { emitter?: unknown }) => {
+    if (value.name === "MaxListenersExceededWarning" && f.responseLifetimes.some(item => item.response === value.emitter)) warnings.push(value);
+  };
+  process.on("warning", warning); t.after(() => process.off("warning", warning));
+  const shell = await f.request("/"); assert.equal(shell.status, 200);
+  assert.match(shell.body, /data-rabi-web-release=/);
+  const asset = await f.request(`/_rabiroute/web/${f.patches.status().active}/web/assets/main-abcdefgh.js`);
+  assert.equal(asset.status, 200); assert.equal(asset.body, "export const ready=true;");
+  await Promise.all(f.responseLifetimes.map(item => item.completed));
+  for (const item of f.responseLifetimes) if (!item.response.closed) await once(item.response, "close");
+  await f.registration.dispose();
+  await new Promise<void>(resolve => setImmediate(resolve));
+  assert.equal(warnings.length, 0);
+  assert.equal(f.responseLifetimes.length, 2);
+  for (const item of f.responseLifetimes) {
+    assert.ok(item.peak <= 10, `A single response reached ${item.peak} close listeners.`);
+    assert.equal(item.response.listenerCount("close"), item.baseline);
+  }
+  assert.equal(f.owner.activeFileCount(), 0); assert.equal(f.registration.activeOperationCount(), 0);
+});
 
 for (const pinned of [false, true]) test(`complete large WebGUI resources reach EOF (${pinned ? "pinned" : "distribution"})`, { timeout: 20000 }, async t => {
   const expected = "x".repeat(1024 * 1024 + 17);
@@ -215,9 +261,16 @@ test("an owner deadline under backpressure closes the actual descriptor before i
   const f = await fixture(t); await fs.writeFile(path.join(f.dist, "large.bin"), Buffer.alloc(16 * 1024 * 1024, 0x61));
   await new Promise<void>((resolve, reject) => {
     const request = http.get({ host: "127.0.0.1", port: f.port, path: "/large.bin", headers: { "x-fixture-deadline": "yes" } }, response => {
-      response.once("data", () => { response.pause(); setTimeout(() => response.resume(), 200); });
+      response.once("data", () => {
+        response.pause();
+        assert.equal(f.owner.activeFileCount(), 1, "Backpressure must hold the actual file descriptor before expiration.");
+        assert.ok(f.registration.activeOperationCount() > 0);
+        f.expireStreamDeadline();
+        setTimeout(() => response.resume(), 200);
+      });
       response.once("aborted", () => { response.destroy(); resolve(); });
       response.once("error", () => resolve());
+      response.once("end", () => reject(new Error("An expired backpressured owner reached successful EOF.")));
     }); request.on("error", reject);
   });
   await f.registration.dispose(); assert.equal(f.owner.activeFileCount(), 0); assert.equal(f.registration.activeOperationCount(), 0);

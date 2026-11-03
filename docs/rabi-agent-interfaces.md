@@ -223,7 +223,35 @@ CLI 正常关闭且原 generation/instance 复核成功后不覆盖提交输出�
 
 握手前后核对同一 Manager 身份；握手后仅健康波动不会误判切代。合同冲突使缓存失效且不重试连接。未知 Schema、缺少消费者或旧 Manager 缺少连接合同时报告兼容性错误，保留原节点及任务，不猜旧 URL。其它公共入口、运行中旧 Manager 的闭包/监听迁移、功能原位升级、安装版和真实双机验收仍未完成。
 
+## 已连接主机的原生投递（源码已接入）
+
+完整 Rabi 主机通过原 RabiLink Peer 连接提供本机电脑和 Agent 接口，无需另装自连接客户端、B Route、会话登记或逐功能授权。每个 Peer 目标单独保存 `ownerDeviceId + instanceId + agentId` 及原 `sessionId/sessionName/workspace`；会话未选时不借用调用方电脑的默认任务。
+
+Agent 间消息继续使用 `/api/agent/threads` 和原正式回执，`instanceBinding.ownerDeviceId` 指明目标主机。已连接 PC 的真实原生 Agent 可以主动发起消息；正式回复及 caller 回读使用原 `ledgerOwnerDeviceId`。来源主机拥有正式意图，接收主机的 `/api/agent/prepared-deliveries` 与 `/reconcile` 只记录执行回执。
+
+普通 Route、显式会话和后台 worker 的原消息包使用原生投递接口；不把用户或系统事件伪装成 Agent 来源。调用方从自己的 Manager 经现有 Peer 路径访问目标：
+
+```http
+POST /api/rabilink/peer/http/<targetDeviceId>/manager/api/agent/route-deliveries
+Content-Type: application/json
+
+{"instanceId":"<targetLocalInstanceId>","provider":"codex","threadId":"<fullSessionId>","deliveryId":"<originalDeliveryId>","cwd":"<targetWorkspace>","prompt":"<renderedRabiEnvelope>"}
+```
+
+原回执查询不要求重新发送正文，也不要求任务当前未归档：
+
+```http
+POST /api/rabilink/peer/http/<targetDeviceId>/manager/api/agent/route-deliveries/reconcile
+Content-Type: application/json
+
+{"instanceId":"<targetLocalInstanceId>","provider":"codex","threadId":"<fullSessionId>","deliveryId":"<originalDeliveryId>"}
+```
+
+`200` 表示原执行回执已确认，`202` 保留未知状态及原 ID；业务 `409` 的 `commitState: "not_started"` 表示本次未启动，明确冲突不会被旧成功回执覆盖。只有持久化的原无帧证明允许同 ID 新 attempt；未知状态只查询原回执。B 提供指回 A 的来源接口上下文，复用同一原生执行器与回执保存入口。字段、响应与平台能力以目标当前 operation 目录为准；源码、隔离候选、安装版和真实双机分别验收。
+
 ## Peer 连接控制合同（源码已接入，安装版待验收）
+
+已连接主机的执行与投递总览见[原生投递](#已连接主机的原生投递源码已接入)和[架构图](connected-host-agent-architecture.md)。
 
 以下入口通过 `registerOperations()` 使用原连接拥有者，返回原 JSON 正文；`events` 使用同一注册器的 SSE 生命周期。
 
@@ -357,7 +385,7 @@ GET /api/agent/qq/messages/<messageId>/attachments/0?routeId=<routeId>&kind=grou
 
 私聊使用 `kind=private`，`target` 为对方账号。先动态发现 Manager 并核对 `/meta`；接口可从 `GET /api/agent/help?path=/api/agent/qq/history` 发现。每次调用必须给出精确 Route、会话类型和目标；`limit` 为 1–100，默认 50。历史页返回 `data.entries`、`nextCursor`、`cursorStalled`、`completenessUnknown: true`；沿游标逐页读取，游标停滞或空页时停止，分页覆盖不保证 QQ 完整历史。原消息优先调用 `get_msg`；缓存失效时查询同会话、原消息 ID 锚定的最多 10 条历史页，未命中返回 404 `QQ_MESSAGE_NOT_IN_PAGE`，不扩大为全群扫描。
 
-消息返回 `messageId`、时间、发送者、正文和 `attachments[]`。每项包含从零开始的 `index`、`kind`、`name`、Manager 相对地址 `contentUrl`；用当前 Manager 地址加 `contentUrl` 下载二进制即可。索引允许 1–9 位十进制数，返回列表中超过 99 的索引同样可下载。下载重新核对原消息和会话，再以该消息资源 ID 调用 `get_file`。图片、视频、音频和文件均使用同一入口；视频缩略图不算原视频。结果不暴露 NapCat URL、鉴权或本地路径；不接受调用方 URL、文件路径、任意 OneBot 动作或资源 ID。
+消息返回 `messageId`、时间、发送者、正文、安全结构化展示段 `parts[]` 和 `attachments[]`。展示段保留文字、提及、引用与媒体索引；原生文字不会再次作为 CQ 代码解析。每项包含从零开始的 `index`、`kind`、`name`、Manager 相对地址 `contentUrl`；用当前 Manager 地址加 `contentUrl` 下载二进制即可。索引允许 1–9 位十进制数，返回列表中超过 99 的索引同样可下载。下载重新核对原消息和会话，再以该消息资源 ID 调用 `get_file`。图片、视频、音频和文件均使用同一入口；视频缩略图不算原视频。结果不暴露 NapCat URL、鉴权或本地路径；不接受调用方 URL、文件路径、任意 OneBot 动作或资源 ID。
 
 源码中这三类入口已注册为 `agent.qq.history.read`、`agent.qq.message.read`、`agent.qq.attachment.read`；收藏表情为 `agent.qq.stickers.read` 与 `agent.qq.sticker.preview`。它们的请求、JSON 投影或有限二进制响应来自可执行合同；OpenAPI 包含当前生效的附件、表情预览字节上限及图片媒体类型；媒体大小默认无应用层配额，运行时 Buffer 能力仍适用。这里的下载由业务拥有者完整读取后返回，不能据此推导持续流式传输。安装版是否包含这些合同须读取该运行实例目录确认。
 
@@ -407,6 +435,17 @@ GET /api/roles/{roleId}/message-endpoint-history
 只有 Rabi 无法访问、接口不可用或已确认摘要无法覆盖所需历史时，才使用当前 NapCat 或正式日志补查。Rabi 可用时从当前 Route 绑定和状态取得连接；不可用时只使用当前任务明确提供的连接、当前运行实例配置或已确认的正式日志。直连前用 `get_status`、`get_login_info` 核对在线状态及账号，再调用只读历史/消息接口。不得从旧任务、记忆或安装残留逐个试账号和端口；凭据不回显。鉴权拒绝不得通过旁路逃避权限。
 
 空结果先核对目标及时间覆盖，不应归为连接故障。返回结果时区分“连接失败”“查到零条”“历史未覆盖”；绕过时说明原因、实际来源与时间范围。查询不授权发送、重放消息、修改配置或重启服务。下一次独立查询仍从 Rabi 开始。
+
+## 按渠道浏览角色消息
+
+- `GET /api/roles/:roleId/message-history-conversations[?cursor=<原续页标识>]` 从角色的原索引读取 QQ 会话及最近预览，每页最多 100 个会话，返回 `data.conversations/nextConversationCursor`。会话身份保留完整 Route、实例与会话键，不按群号或好友号跨账号合并。渠道目录另返回不含凭据的 `qqRoutes` 引用。
+- `GET /api/agent/qq/contacts?routeId=<精确Route>` 返回群与好友的安全显示字段，并从最多 50 个最近会话提供 `time/preview`，用于最近对话排序；群列表或好友列表单独失败时保留另一部分并返回 `warnings`。`GET /api/agent/qq/group-members?routeId=<精确Route>&kind=group&target=<群号>` 返回 `entries {id,name,role}`，私聊参数拒绝。两者复用原 QQ 读取拥有者的鉴权、唯一账号选择、并发、超时和写后撤销检查；均不发送消息。上游接口依照 [NapCat 官方 API](https://napneko.github.io/onebot/api)。
+
+- `GET /api/roles/:roleId/message-history-channels` 返回 `data.adapters/chatCategories/warnings`。消息端列表来自当前角色关联 Route 的配置，不因历史记录新增消息端标签；系统消息、Agent 间投递、角色面板与任务回复的内置入口另外保留；停用不删除历史。元数据查询不投影消息正文，单个账本不可用时保留其他渠道并返回警告，撤销鉴权或角色目录变化仍拒绝披露。
+- `GET /api/roles/:roleId/message-endpoint-timeline?adapter=napcat&includeArchives=1&limit=50` 返回 `requestId` 和 `data.entries/count/coverage/nextCursor`。收发记录共享一个渠道；可用 `conversationKey` 等原筛选参数。记录保持原稳定写入顺序，响应正文为旧到新；界面按新到旧显示。
+- 将非空 `nextCursor` 原样编码到下一次 `cursor`，保持角色、渠道与筛选条件一致。游标绑定索引代、来源布局及物理位置，支持旧记录缺少 sequence；同代普通追加不使旧页漂移。索引重建、来源替换或过滤条件变化会返回 `409 + MESSAGE_HISTORY_CURSOR_EXPIRED`，应刷新当前渠道。字符预算不足时下一条留给下一页，不跳过；首次单条仍可超过预算。最后一个满页可能需要再读一次空页确认结束。
+- `chat-history` 增加可选 `category=agent|panel|replies|aiui`，在原字节游标读取中分类，保留有界扫描、坏记录计数和按 ID 读取正文。省略时沿用原合同。消息页不提供“全部”标签，分别保留各标签的分页、筛选和阅读位置。
+- 原 `message-endpoint-history` 仍为有限上下文片段，继续拒绝 `cursor/offset`；浏览能力不改变其覆盖声明、超时、鉴权、查询池和取消责任。
 
 ## 上下文注入
 

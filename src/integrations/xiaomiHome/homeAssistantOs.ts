@@ -4,7 +4,7 @@ import { execFile } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { isIP } from "node:net";
-import { fileURLToPath } from "node:url";
+import { xiaomiHomeInstallScriptPath } from "./pluginResources.js";
 import { promisify } from "node:util";
 import type { HomeAssistantInstallProgress } from "../../shared/homeAssistantDeploymentContract.js";
 
@@ -56,7 +56,7 @@ export function parseManagedHaObservation(stdout: string): NonNullable<HomeAssis
 /** Fixed local installer; the HTTP caller cannot supply commands, paths or image URLs. */
 export class WindowsHomeAssistantOs implements HomeAssistantOsDriver {
   private readonly root: string;
-  private readonly script = fileURLToPath(new URL("../../../scripts/Install-HomeAssistantOs.ps1", import.meta.url));
+  private readonly script = xiaomiHomeInstallScriptPath();
 
   constructor(runtimeDir: string) {
     this.root = path.resolve(runtimeDir, "home-assistant-os");

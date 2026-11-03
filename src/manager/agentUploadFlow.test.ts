@@ -7,7 +7,7 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { handleAgentSend, type AgentSendRequest } from "../agentSend.js";
+import { handleAgentSend, type AgentSendRequest } from "../endpointEgress.fixture.js";
 import type { AgentReplyOptions } from "../outbox.js";
 import { executeIdempotentAgentSend } from "./agentSendIdempotency.js";
 import { createAgentUploadRoutes } from "./agentUploadRoutes.js";

@@ -25,7 +25,7 @@ export function createMessageEndpointHistoryOwner(context: MessageEndpointHistor
   return {prepare(request:http.IncomingMessage,roleId:string,signal?:AbortSignal) {
     const receivedAt=performance.now(),admission=preparePersonaResourceAdmission(request,signal,context.identity),roleDir=context.roleDirectory(roleId);
     const assertCurrent=()=>{admission();if(path.resolve(context.roleDirectory(roleId))!==path.resolve(roleDir))throw Object.assign(new Error('Persona directory changed while reading original message history.'),{statusCode:409});};
-    return {async read(parameters:URLSearchParams) {
+    return {assertCurrent, async read(parameters:URLSearchParams, timeline = false) {
       assertCurrent();
       const url={searchParams:parameters};
       const budget = url.searchParams.get("budgetMs");
@@ -35,7 +35,7 @@ export function createMessageEndpointHistoryOwner(context: MessageEndpointHistor
       }
       const deadlineAt = receivedAt + (budget === null ? getTimeoutMs("history.request", 2500) : Number(budget));
       const requestId = randomUUID();
-      if (url.searchParams.has("cursor") || url.searchParams.has("offset")) {
+      if ((!timeline && url.searchParams.has("cursor")) || url.searchParams.has("offset")) {
         fail({ code: -1, errorCode: "MESSAGE_HISTORY_PAGINATION_UNSUPPORTED",
           message: "This endpoint returns a bounded excerpt and does not support cursor or offset pagination.",
           repair: "Use conversation and Unix-second from/to filters for excerpts; verify a complete source before full-history statistics.", retryable: false });
@@ -69,6 +69,7 @@ export function createMessageEndpointHistoryOwner(context: MessageEndpointHistor
           afterSequence: afterSequence === null ? undefined : Number(afterSequence),
           beforeSequence: beforeSequence === null ? undefined : Number(beforeSequence)
         };
+      if (timeline) query.page = { cursor: parameters.get('cursor') || undefined, includeAdapters: parameters.get('includeAdapters') === '1', catalogOnly: parameters.get('catalog') === '1', conversations: parameters.get('includeConversations') === '1', conversationCursor: parameters.get('conversationCursor') || undefined };
 
           const controller=new AbortController();
       let timer:ReturnType<typeof setTimeout>|undefined;
@@ -85,9 +86,10 @@ export function createMessageEndpointHistoryOwner(context: MessageEndpointHistor
         const data=await Promise.race([read,stopped]);
         assertCurrent();
         const entries=Array.isArray(data)?data:data.entries;
-        return {requestId,data:{entries,count:entries.length,coverage:{
+        if (timeline && Array.isArray(data)) throw new Error('MESSAGE_HISTORY_TIMELINE_UNAVAILABLE');
+        return {requestId,data:{entries,count:entries.length,...(!Array.isArray(data) && data.page ? data.page : {}),coverage:{
         roleId, includeArchives: query.includeArchives, adapter: query.adapter || null, channel: query.channel || null,
-        recordScope: "saved_role_messages", resultMode: "latest_matches", completenessUnknown: true, paginationSupported: false,
+        recordScope: "saved_role_messages", resultMode: timeline ? 'channel_timeline' : "latest_matches", completenessUnknown: true, paginationSupported: timeline,
         limit: query.limit, maxChars: query.maxChars,
         from: Number.isFinite(query.from) ? query.from : null, to: Number.isFinite(query.to) ? query.to : null,
         afterSequence: query.afterSequence ?? null, beforeSequence: query.beforeSequence ?? null,
@@ -97,11 +99,13 @@ export function createMessageEndpointHistoryOwner(context: MessageEndpointHistor
         }}};
       } catch(error) {
         signal?.throwIfAborted();
+        const cursorError = error instanceof Error ? error.message.match(/MESSAGE_HISTORY_CURSOR_(EXPIRED|INVALID)/)?.[0] : undefined;
         const worker=error instanceof ManagerReadWorkerError;
         const unavailable=worker&&['busy','timeout','termination_unconfirmed'].includes(error.code);
         const details={code:-1,requestId,message:error instanceof Error?error.message:String(error),
+          ...(cursorError ? { errorCode: cursorError, repair: 'Refresh this channel to obtain its current first page.', retryable: false } : {}),
           ...(worker&&error.code==='timeout'?{errorCode:'SEARCH_DEADLINE_EXCEEDED'}:error instanceof Error&&/^(MESSAGE_HISTORY_INDEX_[A-Z_]+|SEARCH_BUSY)/.test(error.message)?{errorCode:error.message.match(/^[A-Z_]+/)![0]}:unavailable?{errorCode:'SEARCH_BUSY'}:{})};
-        throw Object.assign(error instanceof Error?error:new Error(String(error)),{statusCode:(error as {statusCode?:number})?.statusCode??(unavailable?503:400),publicDetails:details});
+        throw Object.assign(error instanceof Error?error:new Error(String(error)),{statusCode:cursorError?.endsWith('EXPIRED')?409:(error as {statusCode?:number})?.statusCode??(unavailable?503:400),publicDetails:details});
       } finally {clearTimeout(timer);signal?.removeEventListener('abort',onAbort);}
     }};
   }};

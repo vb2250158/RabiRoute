@@ -1,0 +1,15 @@
+{
+  "exports": [
+    {
+      "source": "src/wecom.ts",
+      "name": "sendWeComMessage"
+    },
+    {
+      "source": "src/wecom.ts",
+      "name": "disposeWeComClients"
+    }
+  ],
+  "ownedSources": [
+    "src/wecom.ts"
+  ]
+}

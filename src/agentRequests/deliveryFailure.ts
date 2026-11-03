@@ -1,4 +1,4 @@
-import type { PreparedEndpointDelivery } from "./endpointDelivery.js";
+import type { NativeOwnerDeliveryEvidence } from "./nativeOwnerDelivery.js";
 import { sameAgentEndpoint, type AgentRequestEndpoint } from "./endpoint.js";
 
 /** Authenticated execution owner evidence for one exact durable transport attempt. */
@@ -15,7 +15,7 @@ export type EndpointDeliveryNoFrameProof = {
   observedAt: string;
 };
 
-export function validateEndpointDeliveryNoFrameProof(delivery: PreparedEndpointDelivery, input: unknown): asserts input is EndpointDeliveryNoFrameProof {
+export function validateEndpointDeliveryNoFrameProof(delivery: NativeOwnerDeliveryEvidence, input: unknown): asserts input is EndpointDeliveryNoFrameProof {
   const proof = input as Partial<EndpointDeliveryNoFrameProof> | null;
   if (!proof || proof.kind !== "no-prompt-frame" || proof.deliveryId !== delivery.deliveryId || proof.generation !== delivery.generation
     || proof.promptHash !== delivery.promptHash || proof.executionOptionsHash !== delivery.executionOptionsHash

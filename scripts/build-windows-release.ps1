@@ -441,6 +441,7 @@ Copy-RequiredPortableRuntimeFiles
 . (Join-Path $scriptDir 'lib/copy-agent-native-assets.ps1')
 Copy-AgentNativeAssets -AgentRoot (Join-Path $repo 'apps/rabi-agent') -PayloadRoot $payload
 foreach ($relative in @("apps\rabi-agent\runtime", "apps\rabi-agent\dist\agent-hooks")) {
+
     $source = Join-Path $repo $relative
     if (-not (Test-Path -LiteralPath $source -PathType Container)) { throw "Instance Agent runtime was not built: $relative" }
     $destination = Join-Path $payload $relative

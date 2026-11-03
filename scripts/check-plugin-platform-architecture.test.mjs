@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
+import { packageModuleSourceReader } from "./check-plugin-platform-architecture.mjs";
+import { bundleMessageEndpointRuntime } from "./build-message-endpoint-runtime.mjs";
 import { hasReleasablePluginScope, kernelImportViolations, publicationPackageViolations } from "./lib/plugin-platform-contract.mjs";
 
 const file = "src/plugin-kernel/example.ts";
@@ -9,6 +13,70 @@ const plugin = body => `export const activate = definePlugin({ activate(context)
 const cleanup = `{ publish() {}, rollback() {}, retire() { return owner.stopAndJoin(); } }`;
 const manifest = { exports: { "./publication": { types: "./publication.d.ts", import: "./publication.mjs", default: "./publication.mjs" } },
   files: ["publication.mjs", "publication.d.ts"] };
+
+test("architecture checking compiles each packager runtime descriptor without creating missing outputs", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "endpoint-checker-generated-"));
+  const packageRoot = path.join(root, "package");
+  try {
+    await fs.mkdir(packageRoot);
+    await fs.mkdir(path.join(root, "src"));
+    await fs.writeFile(path.join(root, "src/endpoint.ts"), 'export function create() { return { dispose() {} }; } export function send(value: string) { return "real-egress-" + value; }');
+    for (const name of ["runtime.build.json", "manager-runtime.build.json", "egress-runtime.build.json"]) {
+      const specification = name === "runtime.build.json" ? {source: "src/endpoint.ts", factory: "create", ownedSources: ["src/endpoint.ts"]}
+        : {exports: [{source: "src/endpoint.ts", name: "send"}], ownedSources: ["src/endpoint.ts"]};
+      await fs.writeFile(path.join(packageRoot, name), JSON.stringify(specification));
+      const target = path.join(packageRoot, name.replace(".build.json", ".mjs"));
+      const actual = await packageModuleSourceReader(packageRoot, root)(target);
+      assert.equal(actual, (await bundleMessageEndpointRuntime(root, specification)).contents, name);
+      assert.match(actual, /createImplementation/);
+      await assert.rejects(fs.access(target), {code: "ENOENT"});
+    }
+  } finally { await fs.rm(root, {recursive: true, force: true}); }
+});
+
+test("missing, malformed and unbuildable egress modules remain architecture failures", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "endpoint-checker-invalid-"));
+  try {
+    const target = path.join(root, "egress-runtime.mjs");
+    assert.equal(await packageModuleSourceReader(root, root)(target), undefined);
+    await fs.writeFile(path.join(root, "egress-runtime.build.json"), "{}");
+    await assert.rejects(packageModuleSourceReader(root, root)(target), /Invalid generated runtime descriptor/);
+    await fs.writeFile(path.join(root, "egress-runtime.build.json"), JSON.stringify({exports: [{source: "src/missing-endpoint.ts", name: "send"}]}));
+    await assert.rejects(packageModuleSourceReader(root, root)(target), /Could not resolve/);
+    await fs.writeFile(path.join(root, "unknown.build.json"), JSON.stringify({source: "src/missing-endpoint.ts", factory: "create"}));
+    assert.equal(await packageModuleSourceReader(root, root)(path.join(root, "unknown.mjs")), undefined);
+  } finally { await fs.rm(root, {recursive: true, force: true}); }
+});
+
+test("a generated-runtime declaration cannot authorize a linked output or descriptor", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "endpoint-checker-linked-"));
+  const packageRoot = path.join(root, "package");
+  try {
+    await fs.mkdir(packageRoot);
+    const outside = path.join(root, "outside.mjs");
+    await fs.writeFile(outside, 'export const fake = true;');
+    const outsideDirectory = path.join(root, "outside-directory");
+    await fs.mkdir(outsideDirectory);
+    const link = async filename => {
+      try { await fs.symlink(outside, filename); }
+      catch (error) {
+        if (error.code !== "EPERM" || process.platform !== "win32") throw error;
+        // Windows permits directory junctions without file-symlink privileges.
+        // Both must be rejected by the same physical-module boundary.
+        await fs.symlink(outsideDirectory, filename, "junction");
+      }
+    };
+    const target = path.join(packageRoot, "egress-runtime.mjs");
+    const descriptor = path.join(packageRoot, "egress-runtime.build.json");
+    await fs.writeFile(descriptor, JSON.stringify({source: "src/endpoint.ts", factory: "create"}));
+    await link(target);
+    assert.equal(await packageModuleSourceReader(packageRoot, root)(target), undefined);
+    await fs.rm(target, {force: true});
+    await fs.unlink(descriptor);
+    await link(descriptor);
+    assert.equal(await packageModuleSourceReader(packageRoot, root)(target), undefined);
+  } finally { await fs.rm(root, {recursive: true, force: true}); }
+});
 
 test("kernel permits only named publication lifecycle values and types from its formal leaf", () => {
   const source = `

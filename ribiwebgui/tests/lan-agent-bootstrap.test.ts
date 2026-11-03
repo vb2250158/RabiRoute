@@ -4,6 +4,13 @@ import fs from "node:fs";
 import vm from "node:vm";
 import ts from "typescript";
 import { buildLanAgentBootstrapPrompt } from "../src/lanAgentBootstrap";
+import { peerManagerPath } from "../src/peerManagerTarget";
+
+const pageBindings = {
+  computed: (read: () => unknown) => ({ get value() { return read(); } }),
+  watch: () => {}, onBeforeUnmount: () => {},
+  useRoute: () => ({ query: {} }), useRouter: () => ({ replace: () => {} }), peerManagerPath
+};
 
 test("LAN bootstrap includes the selected Mac platform, trust pin and explicit per-request targets", () => {
   const prompt = buildLanAgentBootstrapPrompt({ managerUrl: "http://192.168.1.20:23456/#/lan-agents", token: "fixture-only", publicKeySha256: "a".repeat(64), platform: "macos" });
@@ -86,7 +93,8 @@ test("copy installs only a freshly issued ticket, never the WebGUI admin token",
   let requestCount = 0;
   const expiresAt = Date.now() + 30 * 60_000;
   const context = {
-    ref: (value: unknown) => ({ value }), computed: () => ({}), onMounted: () => {},
+    ...pageBindings,
+    ref: (value: unknown) => ({ value }), onMounted: () => {},
     window: { location: { origin: "https://manager.test" } }, useGatewayStore: () => ({}),
     userFacingError: String, buildLanAgentBootstrapPrompt,
     copyTextToClipboard: async (value: string) => { assert.equal(requested, true); copied = value; },
@@ -126,7 +134,8 @@ test("copy guards concurrent clicks and reports clipboard failure without succes
   const pending = new Promise<void>(resolve => { release = resolve; });
   let requests = 0;
   const state = vm.runInNewContext(`(function() { ${code} })()`, {
-    ref: (value: unknown) => ({ value }), computed: () => ({}), onMounted: () => {},
+    ...pageBindings,
+    ref: (value: unknown) => ({ value }), onMounted: () => {},
     window: { location: { origin: "https://manager.test" } }, useGatewayStore: () => ({}),
     userFacingError: String, buildLanAgentBootstrapPrompt,
     copyTextToClipboard: async () => { throw new Error("fixture clipboard unavailable"); },

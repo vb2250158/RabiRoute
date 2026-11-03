@@ -8,6 +8,7 @@ import { ensurePersonaPlanWorkflow } from "../personaPlanWorkflow.js";
 import { createPlan, listPlanHistory, readPlansFromStorageInWorker } from "../roleKnowledge.js";
 import { createPersonaStorageTestApi } from "./personaManagerIntegration.fixture.js";
 import { RoleStorageApplication } from "./roleStorageApplication.js";
+import { nativeHttpTestFetch } from "./nativeHttpTestClient.js";
 
 function listen(server: http.Server): Promise<number> {
   return new Promise((resolve, reject) => {
@@ -25,7 +26,7 @@ async function jsonRequest(
   pathname: string,
   init: RequestInit = {}
 ): Promise<{ response: Response; payload: any }> {
-  const response = await fetch(`${baseUrl}${pathname}`, init);
+  const response = await nativeHttpTestFetch(`${baseUrl}${pathname}`, init);
   return { response, payload: await response.json() };
 }
 

@@ -18,8 +18,11 @@ import { hasAuthenticatedConnectionRequest } from "./connectionRequestAccess.js"
 import type { RabiLinkAgentPrincipal } from "./rabiLinkAgentDevices.js";
 import { sourceScopedAgentDeliveryId } from "../agentRequests/endpointDelivery.js";
 import { callerAgentDeliveryId } from "../agentRequests/requestValidation.js";
+import type { PeerCallerSource } from "./peerAgentEndpointBridge.js";
 
 export type AgentThreadControlRoutesContext = {
+  forwardPeerReply?: (request: AgentThreadRequest, guard: () => void) => Promise<AgentThreadRequestResult | undefined>;
+  forwardPeerCallerLookup?: (callerId: string, source: PeerCallerSource, guard: () => void) => Promise<{ status: number; body: Record<string, unknown> } | undefined>;
   getTrustedRemoteSource?: (request: http.IncomingMessage) => AgentThreadRemoteSource | undefined;
   getTrustedDeviceSource?: (request: http.IncomingMessage) => RabiLinkAgentPrincipal | undefined;
   assertCurrent?: () => void;
@@ -201,8 +204,10 @@ export function createAgentThreadControlOwner(context: AgentThreadControlRoutesC
       };
       fence();
       return Object.freeze({
-        async lookupCallerDelivery(callerId: string, source: Pick<AgentThreadRequest, "sourceThreadId" | "sourceAgentType" | "messageSource"> = {}): Promise<AgentThreadControlResult> {
+        async lookupCallerDelivery(callerId: string, source: PeerCallerSource = {}): Promise<AgentThreadControlResult> {
           fence();
+          const forwarded = await context.forwardPeerCallerLookup?.(callerId, source, fence);
+          if (forwarded) return forwarded;
           const id = callerAgentDeliveryId(callerId);
           if (!id) return { status: 400, body: { code: -1, message: "A valid stable caller delivery ID is required." } };
           const sourceThreadId = source.sourceThreadId ?? connectionSource?.sessionId;
@@ -255,6 +260,8 @@ export function createAgentThreadControlOwner(context: AgentThreadControlRoutesC
             : connectionSource;
           try {
             fence();
+            const forwarded = await context.forwardPeerReply?.(body, fence);
+            if (forwarded) return { status: forwarded.statusCode, body: forwarded.data };
             if (sourceEvent && guarded && !remoteSource && !deviceSource?.deviceOwner) throw new Error("Remote Agent trusted source session is unavailable.");
             const result = await handleAgentThreadBody(body, context, remoteSource, fence, deviceSource);
             try { fence(); }

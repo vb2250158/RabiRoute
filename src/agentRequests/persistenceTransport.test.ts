@@ -4,6 +4,30 @@ import { MessageChannel } from "node:worker_threads";
 import { serialize } from "node:v8";
 import { AgentRequestPersistenceTransport } from "./persistenceTransport.js";
 
+test("metadata fills bounded frames without excess acknowledgement round trips", async t => {
+  const { port1, port2 } = new MessageChannel();
+  let frames = 0, maximum = 0;
+  const original = port1.postMessage.bind(port1);
+  t.mock.method(port1, "postMessage", (value: any) => {
+    if (value.channel === "agent-request-value") {
+      frames++; maximum = Math.max(maximum, serialize(value).byteLength + 4);
+    }
+    original(value);
+  });
+  const value = Array.from({ length: 1000 }, (_, id) => ({ id, state: "committed", active: false }));
+  let resolve!: (value: unknown) => void, reject!: (reason: unknown) => void;
+  const received = new Promise((yes, no) => { resolve = yes; reject = no; });
+  const sender = new AgentRequestPersistenceTransport(port1, () => assert.fail("Unexpected reply"), reject);
+  const receiver = new AgentRequestPersistenceTransport(port2, (_id, result) => resolve(result), reject);
+  try {
+    await sender.send("metadata-fixture", value);
+    assert.deepEqual(await received, value);
+    assert.ok(frames > 1, "Metadata crosses an actual native IPC frame boundary");
+    assert.ok(frames < 60, `Small metadata used ${frames} acknowledgement round trips`);
+    assert.ok(maximum <= 32768);
+  } finally { sender.stop(new Error("Fixture closed")); receiver.stop(new Error("Fixture closed")); port1.close(); port2.close(); }
+});
+
 test("complete IPC envelopes stay under 32KiB with Unicode, escapes, empty strings and prototype-like JSON keys", { timeout: 10_000 }, async t => {
   const { port1, port2 } = new MessageChannel();
   let maximum = 0, frames = 0, outstanding = 0, peak = 0;

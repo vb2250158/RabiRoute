@@ -46,33 +46,19 @@ export const activate = definePlugin({
             });
             try {
         ctx.effect(async () => {
-            const providers = new runtime.MessageAdapterScanProviderRegistry();
+            const providers = runtime.messageEndpointScanProviders;
             const service = new runtime.MessageAdapterControlService(providers);
-            const unregisterProviders = runtime.registerBuiltinMessageAdapterScanProviders(providers, {
-                rootDir: runtime.rootDir,
-                adapterRuntimes: runtime.adapterRuntimes,
-                routeCallbackEndpoint: runtime.routeCallbackEndpoint,
-                routeHasRecentMessages: runtime.routeHasRecentMessages,
-                checkHttpEndpoint: runtime.checkHttpEndpoint,
-                scanNapcatEndpoint: () => runtime.scanNapcatEndpoint(runtime.napcatManagerCtx()),
-                remoteAgentScanResult: runtime.remoteAgentMessageAdapterScanResult,
-                speechStatus: () => runtime.speechControl.status(),
-                xiaomiHomeHealth: runtime.xiaomiHomeHealthForScan,
-                readGatewayStatus: runtime.readGatewayStatus,
-                weixinDefaultBaseUrl: () => process.env.WEIXIN_BASE_URL || "https://ilinkai.weixin.qq.com"
-            });
             let registration;
             const retire = async () => {
                 const retired = registration?.dispose();
                 const results = await Promise.allSettled([retired, service.stop()]);
-                unregisterProviders();
                 const failure = results.find(result => result.status === "rejected");
                 if (failure) throw failure.reason;
             };
             try {
                 registration = await runtime.managerPluginRoutes.registerOperationsAsync(context.identity.instanceId, runtime.createMessageAdapterControlOperations({
                     service,
-                    scanNapcatHealth: () => runtime.napcatScanHealthPayload(probe => service.trackProbe(probe)),
+                    scanNapcatHealth: () => runtime.inspectEndpoint("napcat", probe => service.trackProbe(probe)),
                     gatewayPayload: () => runtime.standaloneGatewayPayload()
                 }), context.lifecycle.signal);
                 return retire;

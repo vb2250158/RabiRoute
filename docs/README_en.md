@@ -30,6 +30,7 @@ Start with the user guide for everyday operation, use the API reference for inte
 | Enable watch, play, or work companionship | [Desktop-pet companion mode](companion-mode_en.md) (experimental) |
 | Use terminals, files, and screens on other PCs | [Controller and remote computer clients](remote-computer-client_en.md) |
 | Change light, dark, and desktop themes | [Interface theme](user-guide/interface-theme_en.md) |
+| Inspect and enable message inputs or other plugins | [Manage plugins](user-guide/plugins_en.md) |
 
 ## Local installation, configuration, and recovery
 
@@ -113,6 +114,7 @@ Start with the user guide for everyday operation, use the API reference for inte
 - [Install the identity relation skill](../skills/manage-rabiroute-identity-relations/README_en.md) — Resolve who an endpoint account is, confirm or correct ownership, handle concurrent conflicts and shared accounts, and keep on-scene Agents to candidate observations.
 - [Installed Web hot patches](web-hot-patches_en.md) — Build, activate, pin, and roll back compatible Web bundles.
 - [Architecture](architecture_en.md) — **Current fact**. Product boundaries, the Codex Desktop owner, current Outbox, and future Action Queue are separated.
+- [Remote Agent architecture for connected hosts](connected-host-agent-architecture_en.md) — Current/target diagrams, connection/execution/delivery owners, completed code cleanup and remaining wiring.
 - [Plugin architecture lessons from DSH](dsh-plugin-architecture-lessons_en.md) — **Research and implementation summary**. Covers the completed migration of built-in Manager plugins, WebGUI/Desktop minimal extension hosts, contribution points, process-isolation boundaries, and the future third-party presentation Extension Host.
 - [How DSH uses Cordis](dsh-cordis-runtime-analysis_en.md) — **Implementation research**. Explains profiles, Loader, Fibers, service realms, the browser plugin tree, dynamic code, and process-sandbox boundaries.
 - [RabiRoute plugin platform target architecture](manager-plugin-implementation-hot-swap_en.md) — **Current architecture**. Defines a minimal Plugin Kernel, independent capability packages, one SDK, multi-host extension, atomic generation switching, out-of-tree plugin acceptance, and one complete removal of the old runtime.

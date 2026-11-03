@@ -4,8 +4,10 @@ import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import test from "node:test";
+import test, { before } from "node:test";
 import { fileURLToPath } from "node:url";
+// Register this owner's cleanup on the test file, rather than inside its before-hook.
+import { pluginPackagesCandidateForTests } from "./diagnosticsCandidate.fixture.js";
 import type { PlanStorageStartupGateSummary } from "./planStorageStartupGate.js";
 
 const WORKER_ARGUMENT = "--rabiroute-hung-plan-storage-worker";
@@ -101,6 +103,10 @@ if (process.argv.includes(WORKER_ARGUMENT)) {
     process.exitCode = 1;
   });
 } else {
+  let pluginCandidateRoot: string;
+  before(async () => {
+    pluginCandidateRoot = await pluginPackagesCandidateForTests(["core", "persona"].map(name => `io.rabiroute.manager.${name}`));
+  }, { timeout: 30_000 });
   for (const partial of [false, true]) {
   test(`Manager emits structured READY before hung plan storage and permits only recovered roles (partial=${partial})`, { timeout: 45_000 }, async t => {
     const fixtureStartedAt = Date.now();
@@ -132,7 +138,7 @@ if (process.argv.includes(WORKER_ARGUMENT)) {
     const pluginNames = ["core", "persona"];
     for (const name of pluginNames) {
       const pluginId = `io.rabiroute.manager.${name}`;
-      fs.cpSync(path.join(packageRoot, "dist/plugins/packages", pluginId),
+      fs.cpSync(path.join(pluginCandidateRoot, "packages", pluginId),
         path.join(fixturePackageRoot, "dist/plugins/packages", pluginId), { recursive: true });
     }
     fs.writeFileSync(profilePath, `${JSON.stringify({

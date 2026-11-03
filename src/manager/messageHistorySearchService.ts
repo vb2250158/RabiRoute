@@ -170,8 +170,12 @@ export async function queryMessageHistory(directory: string, query: RecentMessag
     const message = error instanceof Error ? error.message : String(error);
     if (visibilityBegan !== undefined) timing.visibilityMs = performance.now() - visibilityBegan;
     recordMessageHistoryQueryTrace(requestId, performance.now() - began, timing, undefined,
-      message.match(/^(?:MESSAGE_HISTORY_INDEX_[A-Z_]+|SEARCH_[A-Z_]+)/)?.[0]
+      message.match(/^(?:MESSAGE_HISTORY_INDEX_[A-Z_]+|MESSAGE_HISTORY_CURSOR_[A-Z_]+|SEARCH_[A-Z_]+)/)?.[0]
         ?? (error instanceof ManagerReadWorkerError ? error.code : "SEARCH_FAILED"));
+    // A stale or malformed browsing cursor is an input/snapshot conflict, not a broken index.
+    if (/^MESSAGE_HISTORY_CURSOR_(?:INVALID|EXPIRED)/.test(message)) {
+      throw Object.assign(new Error(message), { statusCode: message.startsWith('MESSAGE_HISTORY_CURSOR_EXPIRED') ? 409 : 400 });
+    }
     if (/^MESSAGE_HISTORY_INDEX_(?:NOT_READY|LAGGING)/.test(message)) {
       if (!state.flight && !state.retry) refresh(key, state);
       throw new ManagerReadWorkerError(message, "busy");

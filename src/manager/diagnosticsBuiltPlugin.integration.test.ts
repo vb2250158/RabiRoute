@@ -4,14 +4,17 @@ import os from "node:os";
 import path from "node:path";
 import http from "node:http";
 import { once } from "node:events";
-import test from "node:test";
+import test, { before } from "node:test";
 import { GenerationRuntime } from "../plugin-kernel/generationRuntime.js";
 import { loadPluginProfile, PluginPackageCatalog } from "../plugin-kernel/profile.js";
 import { ManagerPluginRouteRegistry, createManagerApiOperationsService } from "./managerPluginRouteRegistry.js";
 import { diagnosticsCandidateForTests } from "./diagnosticsCandidate.fixture.js";
 
+let preparedSource: string;
+before(async () => { preparedSource = await diagnosticsCandidateForTests("io.rabiroute.manager.diagnostics"); }, { timeout: 30_000 });
+
 test("built diagnostics package survives replacement and failed candidate, drains and unloads", { timeout: 30000 }, async t => {
-  const source = await diagnosticsCandidateForTests("io.rabiroute.manager.diagnostics");
+  const source = preparedSource;
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "rabi-diagnostics-loader-"));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   await fs.cp(source, root, { recursive: true });
@@ -39,7 +42,9 @@ test("built diagnostics package survives replacement and failed candidate, drain
       response.on("end", () => resolve({ status: response.statusCode!, body: data ? JSON.parse(data) : null }));
     }).on("error", reject);
   });
-  const load = () => loadPluginProfile({ profilePath, packageCatalog: new PluginPackageCatalog([packageRoot], { trustedInProcessRoots: [packageRoot] }), runtimeRoot: path.join(root, "runtime"), host: "manager" });
+  const packageCatalog = new PluginPackageCatalog([packageRoot], { trustedInProcessRoots: [packageRoot] });
+  t.after(() => packageCatalog.dispose());
+  const load = () => loadPluginProfile({ profilePath, packageCatalog, runtimeRoot: path.join(root, "runtime"), host: "manager" });
   await profile([instance]);
   let loaded = await load();
   let result = await runtime.switch(loaded.candidates);

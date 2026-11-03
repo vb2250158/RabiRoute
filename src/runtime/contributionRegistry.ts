@@ -17,6 +17,14 @@ export type RabiContributionBase = {
 
 export type RabiCommandDangerLevel = "safe" | "confirm" | "dangerous";
 
+export type MessageEndpointCatalog = {
+  title: string;
+  note: string;
+  icon: string;
+  group: { id: string; title: string; note: string; order: number };
+  order: number;
+};
+
 export type RabiUiContribution =
   | (RabiContributionBase & {
     kind: "page";
@@ -39,6 +47,8 @@ export type RabiUiContribution =
   })
   | (RabiContributionBase & {
     kind: "message-endpoint-settings";
+    endpointType?: string;
+    catalog?: MessageEndpointCatalog;
     label: RabiContributionLabel;
     rendererId: string;
     schemaId: string;
@@ -173,7 +183,22 @@ function normalizeContribution(value: RabiUiContribution): RabiUiContribution {
         rendererId: normalizeSymbol(value.rendererId, `Contribution rendererId (${id})`),
         schemaId: normalizeSymbol(value.schemaId, `Contribution schemaId (${id})`),
         readCommandId: normalizeSymbol(value.readCommandId, `Contribution readCommandId (${id})`),
-        writeCommandId: normalizeSymbol(value.writeCommandId, `Contribution writeCommandId (${id})`)
+        writeCommandId: normalizeSymbol(value.writeCommandId, `Contribution writeCommandId (${id})`),
+        ...(value.kind !== "message-endpoint-settings" ? {} : {
+          ...(value.endpointType === undefined ? {} : { endpointType: normalizeSymbol(value.endpointType, `Contribution endpointType (${id})`) }),
+          ...(value.catalog === undefined ? {} : { catalog: {
+            title: normalizeIdentity(value.catalog.title, `Endpoint title (${id})`),
+            note: value.catalog.note.trim(),
+            icon: normalizeSymbol(value.catalog.icon, `Endpoint icon (${id})`),
+            group: {
+              id: normalizeSymbol(value.catalog.group.id, `Endpoint group (${id})`),
+              title: normalizeIdentity(value.catalog.group.title, `Endpoint group title (${id})`),
+              note: value.catalog.group.note.trim(),
+              order: value.catalog.group.order
+            },
+            order: value.catalog.order
+          } })
+        })
       };
     case "status-card":
       return {
@@ -229,6 +254,12 @@ function validateContribution(value: RabiUiContribution): void {
   }
   if (value.order !== undefined && !Number.isSafeInteger(value.order)) {
     throw new Error(`Contribution order is unsupported: ${value.id}`);
+  }
+  if (value.kind === "message-endpoint-settings" && value.catalog) {
+    if (!value.endpointType) throw new Error(`Endpoint catalog requires endpointType: ${value.id}`);
+    if (!Number.isSafeInteger(value.catalog.order) || !Number.isSafeInteger(value.catalog.group.order)) {
+      throw new Error(`Endpoint catalog order is unsupported: ${value.id}`);
+    }
   }
   const capabilities = value.requiredCapabilities ?? [];
   if (new Set(capabilities).size !== capabilities.length) {

@@ -8,7 +8,6 @@ import path from "node:path";
 import test from "node:test";
 import { appendFeishuMessageToDir } from "../history.js";
 import { createMessageAdapterRuntime } from "../runtime/messageAdapterRuntime.js";
-import { builtinMessageAdapterDefinitions } from "./builtinMessageAdapters.js";
 import type { MessageAdapterDefinition, MessageAdapterDispose } from "./messageAdapter.js";
 import {
   createFeishuAdapter as createNativeFeishuAdapter,
@@ -370,17 +369,10 @@ test("Feishu missing configuration does not create a server", async (t) => {
   await dispose?.();
 });
 
-test("built-in Message Adapter manifests include Feishu", () => {
-  assert.deepEqual(
-    builtinMessageAdapterDefinitions().find((item) => item.manifest.type === "feishu")?.manifest,
-    {
-      type: "feishu",
-      label: "飞书",
-      host: "gateway",
-      transport: "http",
-      lifecycle: "fiber"
-    }
-  );
+test("feishu owns an independent SDK package entry", () => {
+  const manifest = JSON.parse(fs.readFileSync(new URL("../../plugins/builtin/io.rabiroute.endpoint.feishu/1.0.0/rabi.plugin.json", import.meta.url), "utf8"));
+  assert.deepEqual(manifest.entries.gateway, { execution: "in_process", module: "./gateway.mjs" });
+  assert.ok(manifest.provides.includes("endpoint.feishu@1"));
 });
 
 
