@@ -45,8 +45,8 @@ async function fixture(t: TestContext, mode: string) {
     try { await bounded(closed, 3_000); }
     catch { if (!didClose) child.kill(); await bounded(closed); }
     const contained = messages.find(message => message.type === "closing-fixture");
-    if (contained && mode !== "cancel-throw") assert.equal(contained.registryRetirementConfirmed, false,
-      "Fault containment must not be reported as a confirmed resource retirement.");
+    if (contained) assert.equal(contained.registryRetirementConfirmed, mode !== "capture-throw",
+      "Only the unresolved throwing getter retains a retirement fence.");
   });
   const wait = async (kind: string) => {
     const deadline = performance.now() + 5_000;
@@ -80,7 +80,7 @@ async function fixture(t: TestContext, mode: string) {
   return { child, get, wait, snapshot };
 }
 
-for (const mode of ["capture-loop"] as const) {
+for (const mode of ["capture-throw"] as const) {
   test(mode + " retains one truthful endpoint quarantine while unrelated API remains available", { timeout: 12_000 }, async t => {
     const owner = await fixture(t, mode);
     assert.equal((await owner.get("/feature")).status, 408);
@@ -117,19 +117,19 @@ test("trusted slow cancellation and iterator cleanup finish their original final
   assert.equal(owner.snapshot().iteration, "eof");
 });
 
-test("an expired result establishes HTTP408 before invoking its faulty cleanup getter", { timeout: 12_000 }, async t => {
+test("an expired result establishes HTTP408 before invoking its finite cleanup getter", { timeout: 12_000 }, async t => {
   const owner = await fixture(t, "expired-getter");
   const response = owner.get("/feature"); void response.catch(() => undefined);
   const getter = await owner.wait("getter"); assert.equal(getter.responseEnded, true);
   assert.equal((await response).status, 408); assert.equal((await owner.get("/health")).status, 200);
 });
 
-test("a live result getter receives only its remaining original deadline budget", { timeout: 12_000 }, async t => {
-  const owner = await fixture(t, "live-getter-budget");
+test("a finite live getter completes before the original expired response retires its stream", { timeout: 12_000 }, async t => {
+  const owner = await fixture(t, "live-getter-finite");
   const response = owner.get("/feature"); void response.catch(() => undefined);
   const getter = await owner.wait("getter");
   assert.equal(getter.responseEnded, false, "Fixture missed the live budget window; it does not establish this branch's coverage.");
-  assert.equal(typeof getter.budget, "number"); assert.ok(getter.budget > 0 && getter.budget < 50, String(getter.budget));
+
   assert.equal((await response).status, 408); assert.equal((await owner.get("/health")).status, 200);
 });
 

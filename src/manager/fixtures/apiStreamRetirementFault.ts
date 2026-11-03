@@ -1,22 +1,16 @@
 import http from "node:http";
 import { once } from "node:events";
-import { Script } from "node:vm";
 import { ManagerPluginRouteRegistry } from "../managerPluginRouteRegistry.js";
 import { fixtureApiContract } from "../apiOperationContractFixtures.js";
 import type { ApiOperationStream } from "../apiOperationContract.js";
 
 const mode = process.argv[2] ?? "";
-if (!["capture-loop", "cancel-throw", "expired-getter", "live-getter-budget"].includes(mode) || !process.send) throw new Error("Owned fault fixture arguments required.");
+if (!["capture-throw", "cancel-throw", "expired-getter", "live-getter-finite"].includes(mode) || !process.send) throw new Error("Owned fault fixture arguments required.");
 const registry = new ManagerPluginRouteRegistry(undefined, undefined, { maximumActiveOperationsPerOperation: 1 });
 const empty = { type: "object", additionalProperties: false, properties: {} } as const;
 let release!: () => void;
 const gate = new Promise<void>(resolve => { release = resolve; });
-let handlerCalls = 0, cancelCalls = 0, drained = false, currentVmBudget: unknown;
-const originalVm = Script.prototype.runInContext;
-Script.prototype.runInContext = function (this: Script, ...args: Parameters<Script["runInContext"]>) {
-  const previous = currentVmBudget; currentVmBudget = (args[1] as { timeout?: unknown } | undefined)?.timeout;
-  try { return Reflect.apply(originalVm, this, args); } finally { currentVmBudget = previous; }
-};
+let handlerCalls = 0, cancelCalls = 0, drained = false;
 const featureContract = fixtureApiContract({ operationId: "fixture.stream.feature", method: "GET", pathTemplate: "/feature",
   request: { path: empty, query: empty, headers: { type: "object" }, body: { kind: "none" }, deadlineMs: 60 },
   responses: { "200": { mediaType: "application/octet-stream", stream: { framing: "bytes", maxFrameBytes: 1024,
@@ -30,7 +24,7 @@ const registration = registry.registerOperations("manager:fixture-stream", [{ co
     await Promise.resolve();
     // Finite after-await fault: return after deadline before its timer gets a turn.
     while (performance.now() - enteredAt < 75) { /* Owned child only. */ }
-  } else if (mode === "live-getter-budget") {
+  } else if (mode === "live-getter-finite") {
     await new Promise(resolve => setTimeout(resolve, 20));
   } else await gate;
   const stream: ApiOperationStream = {
@@ -41,8 +35,10 @@ const registration = registry.registerOperations("manager:fixture-stream", [{ co
     }
   };
   return { status: 200, get stream() {
-    process.send?.({ type: "getter", responseEnded: input.response.writableEnded, budget: currentVmBudget, elapsedSinceHandlerMs: performance.now() - enteredAt });
-    if (["capture-loop", "expired-getter", "live-getter-budget"].includes(mode)) { while (true) { /* External child watchdog also owns this fixture. */ } }
+    process.send?.({ type: "getter", responseEnded: input.response.writableEnded, elapsedSinceHandlerMs: performance.now() - enteredAt });
+    if (mode === "capture-throw") throw new Error("Trusted getter failed before returning ownership.");
+    const until = performance.now() + 80;
+    while (performance.now() < until) { /* Finite trusted calculation must complete. */ }
     return stream;
   } };
 } }, { contract: healthContract, handler: () => ({ status: 200, body: { ok: true, value: 1 } }) }]);
@@ -59,6 +55,6 @@ process.on("message", message => {
     // This is an isolated negative fault fixture, not a claim of resource retirement.
     // Closing this whole fixture process is its final containment boundary.
     process.send?.({ type: "closing-fixture", registryRetirementConfirmed: registry.streamRetirementDiagnostics().length === 0 });
-    server.closeAllConnections(); server.close(() => { Script.prototype.runInContext = originalVm; process.disconnect?.(); });
+    server.closeAllConnections(); server.close(() => { process.disconnect?.(); });
   }
 });

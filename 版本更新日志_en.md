@@ -6,6 +6,10 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.4.7 - 2026-11-03
+
+- Remove duplicate VM watchdogs around trusted local API response access and calculation while retaining authorization, contracts, deadlines and stream cleanup; skip serialization after the original deadline.
+
 ## 0.4.6 - 2026-11-03
 
 - Return a readable absent state for missing upload records. Ordinary read errors no longer claim uncertain writes or permanently freeze an original ID. Resume begin with the same ID and parameters after capacity or directory preparation; retain exclusive temporary reservation and destination protection.

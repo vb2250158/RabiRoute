@@ -346,46 +346,16 @@ export class ManagerPluginRouteRegistry {
         let pendingStream: ApiOperationStream | undefined;
         let streamCaptureUnconfirmed = false;
         const capturePendingStream = async (result: ApiOperationResult) => {
-          // Primitive results cannot own a stream; ordinary response validation reports the invalid result.
           if (result === null || (typeof result !== "object" && typeof result !== "function")) return;
-          let remaining = deadlineAt === undefined ? Infinity : Math.floor(deadlineAt - performance.now());
+          // This is the same trusted in-process owner as the handler. Read once;
+          // retain the actual stream and cleanup lease instead of interrupting a getter.
           if (deadline && performance.now() >= deadlineAt! && !deadline.signal.aborted) deadline.abort(deadlineError());
-          // A VM budget is an integer. If less than one millisecond remains,
-          // yield to the original deadline instead of granting a fresh budget.
-          if (deadline && remaining < 1 && !signal.aborted) {
-            await new Promise<void>(resolve => {
-              const aborted = () => { signal.removeEventListener("abort", aborted); resolve(); };
-              signal.addEventListener("abort", aborted, { once: true });
-              if (signal.aborted) aborted();
-            });
-          }
           if (signal.aborted || response.writableEnded || response.destroyed) {
             failResponse(signal.reason);
-            // Let the framework's already-ended response reach its transport
-            // before invoking any cleanup-only getter that may be faulty.
             await yieldImmediate();
           }
-          remaining = deadlineAt === undefined ? Infinity : Math.floor(deadlineAt - performance.now());
-          let budget = signal.aborted || response.writableEnded || response.destroyed ? getTimeoutMs("backend.plugin-kernel.synchronousExecution.DEFAULT_PLUGIN_SYNCHRONOUS_TIMEOUT_MS", DEFAULT_PLUGIN_SYNCHRONOUS_TIMEOUT_MS)
-            : Math.min(getTimeoutMs("backend.plugin-kernel.synchronousExecution.DEFAULT_PLUGIN_SYNCHRONOUS_TIMEOUT_MS", DEFAULT_PLUGIN_SYNCHRONOUS_TIMEOUT_MS), remaining);
-          if (budget < 1) {
-            if (!signal.aborted) await new Promise<void>(resolve => {
-              const aborted = () => { signal.removeEventListener("abort", aborted); resolve(); };
-              signal.addEventListener("abort", aborted, { once: true });
-              if (signal.aborted) aborted();
-            });
-            failResponse(signal.reason);
-            await yieldImmediate();
-            budget = getTimeoutMs("backend.plugin-kernel.synchronousExecution.DEFAULT_PLUGIN_SYNCHRONOUS_TIMEOUT_MS", DEFAULT_PLUGIN_SYNCHRONOUS_TIMEOUT_MS);
-          }
-          try {
-            runPluginSynchronousWork(() => { pendingStream = result.stream; }, "API stream ownership " + operation.contract.operationId,
-              budget);
-          } catch (error) {
-            streamCaptureUnconfirmed = true;
-            if (deadlineAt !== undefined && performance.now() >= deadlineAt && !deadline!.signal.aborted) deadline!.abort(deadlineError());
-            throw error;
-          }
+          try { pendingStream = result.stream; }
+          catch (error) { streamCaptureUnconfirmed = true; throw error; }
         };
         const configuredDeadlineMs = operation.contract.request.deadlineMs === undefined ? undefined : getTimeoutMs(`api.${operation.contract.operationId}.deadline`, operation.contract.request.deadlineMs);
         const deadline = configuredDeadlineMs === undefined ? undefined : new AbortController();
@@ -436,12 +406,13 @@ export class ManagerPluginRouteRegistry {
           assertDeadline();
           return callback();
         };
-        const invokeCalculation = <T>(callback: () => T, label: string): T => {
+        const invokeCalculation = <T>(callback: () => T, _label: string): T => {
           assertDeadline();
-          const budgetMs = deadlineAt === undefined ? getTimeoutMs("backend.plugin-kernel.synchronousExecution.DEFAULT_PLUGIN_SYNCHRONOUS_TIMEOUT_MS", DEFAULT_PLUGIN_SYNCHRONOUS_TIMEOUT_MS)
-            : Math.min(getTimeoutMs("backend.plugin-kernel.synchronousExecution.DEFAULT_PLUGIN_SYNCHRONOUS_TIMEOUT_MS", DEFAULT_PLUGIN_SYNCHRONOUS_TIMEOUT_MS), Math.max(1, Math.ceil(deadlineAt - performance.now())));
-          try { return runPluginSynchronousWork(callback, label, budgetMs); }
-          catch (error) { assertDeadline(); throw error; }
+          // Local response calculation shares its handler's trust and transaction.
+          // Validate the result normally; the disclosure boundary checks the same deadline.
+          const value = callback();
+          assertDeadline();
+          return value;
         };
         const releaseTransport = () => {
           response.off("close", disconnected);
@@ -499,6 +470,7 @@ export class ManagerPluginRouteRegistry {
               if (executionStarted && error instanceof ApiContractError) throw new ApiContractError(error.status, error.code, error.field, error.operationId, true);
               throw error;
             }
+            assertDeadline();
             const payload = snapshot.stream || request.method === "HEAD" || snapshot.body === undefined ? undefined
               : descriptor.binary ? snapshot.body : descriptor.mediaType.includes("json") ? preparedApiJson(snapshot.body) ?? JSON.stringify(snapshot.body) : snapshot.body;
             return { descriptor, stream: snapshot.stream, status: snapshot.status, headers: Object.entries(snapshot.headers ?? {}), payload };
