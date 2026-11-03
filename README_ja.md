@@ -17,7 +17,7 @@
   <a href="https://github.com/vb2250158/RabiRoute/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/vb2250158/RabiRoute?style=flat&color=ff7eae"></a>
   <a href="./LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-f2c744"></a>
   <img alt="Node.js 22.13 or newer" src="https://img.shields.io/badge/Node.js-22.13%2B-3c873a">
-  <img alt="Current version: 0.4.9" src="https://img.shields.io/badge/version-0.4.9-3178c6">
+  <img alt="Current version: 0.4.10" src="https://img.shields.io/badge/version-0.4.10-3178c6">
   <img alt="Status: active development" src="https://img.shields.io/badge/status-active%20development-19bfc1">
   <a href="#コミュニティ"><img alt="QQ グループ：1130935416" src="https://img.shields.io/badge/QQ-1130935416-12b9bf?logo=qq&amp;logoColor=white"></a>
 </p>
@@ -123,7 +123,7 @@ Host が返す実際の URL を開きます。Linux Host は実験段階で、Wi
 
 ## 対応状況
 
-リポジトリのバージョンは `0.4.9` です。
+リポジトリのバージョンは `0.4.10` です。
 
 | 機能 | 現在の範囲 |
 | --- | --- |

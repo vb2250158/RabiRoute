@@ -2,7 +2,7 @@ import http from "node:http";
 import https from "node:https";
 import { createHash } from "node:crypto";
 import { Transform } from "node:stream";
-import { pipeline } from "node:stream/promises";
+import { finished, pipeline } from "node:stream/promises";
 import { tunnelHeaders } from "../peerTunnel/http.js";
 import { TUNNEL_STREAM_LIMITS } from "../peerTunnel/session.js";
 import { registerApiHttpProxies } from "./apiHttpProxyBinding.js";
@@ -126,6 +126,7 @@ async function forwardNativeHttp(input: ApiHttpProxyInput, operation: ApiPublish
   void responseReady.catch(() => {});
   // Observe both producers immediately, including a native early response while upload is still active.
   let upload: Promise<void> | undefined;
+  let responsePump: Transform | undefined, responseTransfer: Promise<void> | undefined, responseFinished: Promise<void> | undefined;
   try {
     assertCurrent(); started = true;
     upload = pipeline(input.request, guard(), upstream); void upload.catch(() => upstream.destroy());
@@ -142,12 +143,18 @@ async function forwardNativeHttp(input: ApiHttpProxyInput, operation: ApiPublish
       if (destination.origin === target.origin) responseHeaders.location = prefix + destination.pathname + destination.search + destination.hash;
     }
     input.prepareResponse(response.statusCode ?? 502, responseHeaders); input.response.writeHead(response.statusCode ?? 502, responseHeaders);
-    await pipeline(response, guard(), input.response); await upload; assertCurrent();
+    responsePump = guard();
+    responseFinished = finished(input.response, { cleanup: true });
+    void responseFinished.catch(() => undefined);
+    responseTransfer = pipeline(response, responsePump);
+    responsePump.pipe(input.response);
+    await Promise.all([responseTransfer, responseFinished]); await upload; assertCurrent();
   } catch (error) {
     if (started && !input.response.destroyed) input.response.destroy();
     throw error;
   } finally {
     input.signal.removeEventListener("abort", cancelled); upstream.destroy(); response?.destroy();
-    await Promise.allSettled([producerClosed, ...(sourceClosed ? [sourceClosed] : []), ...(upload ? [upload] : [])]);
+    responsePump?.unpipe(input.response); responsePump?.destroy();
+    await Promise.allSettled([producerClosed, ...(sourceClosed ? [sourceClosed] : []), ...(upload ? [upload] : []), ...(responseTransfer ? [responseTransfer] : []), ...(responseFinished ? [responseFinished] : [])]);
   }
 }

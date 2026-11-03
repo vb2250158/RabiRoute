@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import http from "node:http";
+import { Transform } from "node:stream";
 import { once } from "node:events";
 import { ManagerPluginRouteRegistry } from "./managerPluginRouteRegistry.js";
 import { ManagerPluginRequestTracker } from "./managerPluginRequestTracker.js";
@@ -9,7 +10,7 @@ import type { ApiHttpProxyDefinition, ApiHttpProxyInput, ApiOperationContract } 
 import type { NativeHttpRequestFactory } from "./apiExternalListenerHttpProxy.js";
 
 async function fixture(t: test.TestContext, handler: (input: ApiHttpProxyInput) => Promise<void>, nativeHttpRequestFactory?: NativeHttpRequestFactory,
-  options: { contract?: Partial<ApiOperationContract>; identity?(): { applicationGenerationId: string; managerInstanceId: string; pluginGenerationId: string } } = {}) {
+  options: { observeResponse?(response: http.ServerResponse): void; contract?: Partial<ApiOperationContract>; identity?(): { applicationGenerationId: string; managerInstanceId: string; pluginGenerationId: string } } = {}) {
   const gateway = new ManagerPluginRouteRegistry(), manager = new ManagerPluginRouteRegistry(undefined, { identity: options.identity ?? (() => ({ applicationGenerationId: "fixture", managerInstanceId: "fixture", pluginGenerationId: "fixture" })), nativeHttpRequestFactory });
   let lease!: ReturnType<typeof gateway.registerExternalListener>;
   const native = http.createServer((request, response) => lease.handle(request, new URL(request.url!, "http://native"), response));
@@ -23,6 +24,7 @@ async function fixture(t: test.TestContext, handler: (input: ApiHttpProxyInput) 
   lease.registerHttpProxies([{ contract, handler }]);
   const remove = manager.registerExternalListenerSource("original-native-process", { isCurrent: () => true, read: () => [lease.publication()] });
   const server = http.createServer((request, response) => {
+    options.observeResponse?.(response);
     assert.equal(request.headers.authorization, "Bearer fixture-node");
     if (!manager.handle(request, new URL(request.url!, "http://manager"), response)) response.writeHead(404).end();
   });
@@ -140,4 +142,31 @@ test("Manager native transport preserves HEAD, 404, repeated public headers, red
   const count = calls;
   assert.equal((await request(sample.origin, sample.target, "GET", { ...headers, [sample.access.contractHeader]: sample.operation.contractDigest }).result).status, 409);
   assert.equal((await request(sample.origin, sample.target, "GET", { ...headers, "x-rabiroute-api-contract": "sha256:old" }).result).status, 409); assert.equal(calls, count);
+});
+
+
+test("native proxy completion releases destination response listeners", async t => {
+  const responses: http.ServerResponse[] = [];
+  const sample = await fixture(t, async input => { input.request.resume(); input.prepareResponse(200, { "content-type": "text/plain" }); input.response.end("native-ready"); }, undefined, { observeResponse: response => responses.push(response) });
+  for (let index = 0; index < 8; index++) assert.equal((await request(sample.origin, sample.target, "GET", {}).result).body, "native-ready");
+  for (let index = 0; index < 20 && responses.some(response => !response.closed); index++) await new Promise<void>(resolve => setImmediate(resolve));
+  assert.equal(responses.length, 8);
+  assert.ok(responses.every(response => response.closed));
+  assert.deepEqual(responses.map(response => response.listenerCount("close")), Array(8).fill(0));
+});
+
+
+test("native proxy synchronous destination pipe failure observes and joins response completion", { timeout: 4000 }, async t => {
+  const own = Object.getOwnPropertyDescriptor(Transform.prototype, "pipe"), original = Transform.prototype.pipe;
+  let failures = 0; const responses: http.ServerResponse[] = [];
+  Object.defineProperty(Transform.prototype, "pipe", { configurable: true, writable: true, value: function(this: Transform, destination: NodeJS.WritableStream, options?: { end?: boolean }) {
+    if (destination instanceof http.ServerResponse) { failures++; throw new Error("fixture destination pipe failed"); }
+    return Reflect.apply(original, this, [destination, options]);
+  } });
+  t.after(() => { if (own) Object.defineProperty(Transform.prototype, "pipe", own); else Reflect.deleteProperty(Transform.prototype, "pipe"); });
+  const sample = await fixture(t, async input => { input.request.resume(); input.prepareResponse(200, {}); input.response.end("native-ready"); }, undefined, { observeResponse: response => responses.push(response) });
+  await assert.rejects(request(sample.origin, sample.target, "GET", {}).result);
+  await sample.manager.disposeNativeListenerHttp();
+  assert.equal(failures, 1); assert.equal(responses.length, 1);
+  assert.ok(responses[0]!.closed); assert.equal(responses[0]!.listenerCount("close"), 0);
 });

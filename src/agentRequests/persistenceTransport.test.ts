@@ -32,3 +32,32 @@ test("complete IPC envelopes stay under 32KiB with Unicode, escapes, empty strin
     assert.equal(peak, 1); assert.equal(outstanding, 0);
   } finally { sender.stop(new Error("Fixture closed")); receiver.stop(new Error("Fixture closed")); port1.close(); port2.close(); }
 });
+
+test('partial native values remain private and sequence mismatch reports the original failure',async()=>{
+ let listener: (message: any) => void = () => {}; let received=0; let error: unknown;const port={postMessage(){},on(_event: "message", fn: (message: any) => void){listener=fn},off(){}};
+ const receiver=new AgentRequestPersistenceTransport(port,()=>received++,e=>{error=e});
+ listener({channel:'agent-request-value',id:'original',sequence:0,bytes:serialize({data:'original'}).subarray(0,3),end:false});
+ await new Promise(resolve=>setImmediate(resolve));assert.equal(received,0);
+ listener({channel:'agent-request-value',id:'original',sequence:2,bytes:new Uint8Array(),end:true});
+ await new Promise(resolve=>setImmediate(resolve));assert.ok(error instanceof Error);assert.match(error.message,/sequence mismatch/);assert.equal(received,0);receiver.stop(Error('closed'));
+});
+test('stopping an unacknowledged value rejects that send and releases its listener',async()=>{
+ let removed=0;const port={postMessage(){},on(){},off(){removed++}};const sender=new AgentRequestPersistenceTransport(port,()=>assert.fail(),()=>assert.fail());
+ const original=Error('original close');const send=sender.send('original',{large:'x'.repeat(100000)});await new Promise(resolve=>setImmediate(resolve));sender.stop(original);await assert.rejects(send,e=>e===original);assert.equal(removed,1);
+});
+test('oversized envelope rejects before exposing a decoded value',async()=>{
+ let listener: (message: any) => void = () => {}; let error: unknown;const receiver=new AgentRequestPersistenceTransport({postMessage(){},on(_event: "message", fn: (message: any) => void){listener=fn},off(){}},()=>assert.fail(),e=>{error=e});
+ listener({channel:'agent-request-value',id:'original',sequence:0,bytes:new Uint8Array(32768),end:true});await new Promise(resolve=>setImmediate(resolve));assert.ok(error instanceof Error);assert.match(error.message,/wire-byte bound/);receiver.stop(Error('closed'));
+});
+test('duplicate frame cannot publish a partial original value',async()=>{
+ let listener: (message: any) => void = () => {}; let received=0; let error: unknown;const receiver=new AgentRequestPersistenceTransport({postMessage(){},on(_event: "message", fn: (message: any) => void){listener=fn},off(){}},()=>received++,e=>{error=e});
+ const first={channel:'agent-request-value',id:'original',sequence:0,bytes:serialize({value:'original'}).subarray(0,3),end:false};listener(first);await new Promise(resolve=>setImmediate(resolve));listener(first);await new Promise(resolve=>setImmediate(resolve));assert.ok(error instanceof Error);assert.match(error.message,/sequence mismatch/);assert.equal(received,0);receiver.stop(Error('closed'));
+});
+test('end without a complete native value reports failure without publication',async()=>{
+ let listener: (message: any) => void = () => {}; let error: unknown;const receiver=new AgentRequestPersistenceTransport({postMessage(){},on(_event: "message", fn: (message: any) => void){listener=fn},off(){}},()=>assert.fail(),e=>{error=e});
+ listener({channel:'agent-request-value',id:'original',sequence:0,bytes:new Uint8Array(),end:true});await new Promise(resolve=>setImmediate(resolve));assert(error instanceof Error);receiver.stop(Error('closed'));
+});
+test('receiver stop before the scheduled acknowledgement publishes neither acknowledgement nor value',async()=>{
+ let listener: (message: any) => void = () => {}; let acks=0;const receiver=new AgentRequestPersistenceTransport({postMessage(){acks++},on(_event: "message", fn: (message: any) => void){listener=fn},off(){}},()=>assert.fail(),()=>assert.fail());
+ listener({channel:'agent-request-value',id:'original',sequence:0,bytes:serialize({value:'original'}),end:true});receiver.stop(Error('closed'));await new Promise(resolve=>setImmediate(resolve));assert.equal(acks,0);
+});

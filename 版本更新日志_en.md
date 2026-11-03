@@ -6,6 +6,10 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.4.10 - 2026-11-03
+
+- Transfer delivery evidence as native structured-value chunks to avoid per-field IPC amplification, retaining complete frame byte limits, acknowledgements, cancellation and original records. Release native HTTP proxy response listeners after completion while preserving backpressure, source authorization and producer shutdown.
+
 ## 0.4.9 - 2026-11-03
 
 - Bump the connector to 0.2.13. Scan delivery history with authorization before and after recovery and before accepting an exact match, avoiding a network authorization lookup per historical message. Add sanitized recent-request stage diagnostics while preserving original delivery IDs and unconfirmed outcomes.
