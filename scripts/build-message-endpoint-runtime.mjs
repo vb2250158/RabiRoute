@@ -71,19 +71,20 @@ export async function bundleMessageEndpointRuntime(root, specification, outputFi
         const explicitInitialization = (await initializationImports.get(args.importer)).has(args.path);
         // These virtual modules only read an already-owned namespace. An explicit
         // bare import retains initialization; unused value imports add no dependency.
-        return { path: candidate, namespace: "endpoint-host-owner", sideEffects: explicitInitialization };
+        return { path: relative, namespace: "endpoint-host-owner", sideEffects: explicitInitialization };
       });
       builder.onLoad({ filter: /.*/, namespace: "endpoint-host-owner" }, async args => {
-        inputs.add(args.path);
-        const moduleId = path.relative(path.join(root, "src"), args.path).replaceAll("\\", "/").replace(/\.ts$/, "");
-        const values = await exportedValues(await fs.readFile(args.path, "utf8"), args.path, inputs);
+        const sourcePath = path.resolve(root, args.path);
+        inputs.add(sourcePath);
+        const moduleId = args.path.slice(4).replace(/\.ts$/, "");
+        const values = await exportedValues(await fs.readFile(sourcePath, "utf8"), sourcePath, inputs);
         return { contents: `const owner = __endpointHostPorts.module(${JSON.stringify(moduleId)});\n${values.map(name => `export const ${name} = owner[${JSON.stringify(name)}];`).join("\n")}`, loader: "js" };
       });
     } }]
   });
   const emittedOwners = new Set(Object.values(result.metafile.outputs).flatMap(output => Object.entries(output.inputs)
     .filter(([input, data]) => input.startsWith("endpoint-host-owner:") && data.bytesInOutput > 0)
-    .map(([input]) => path.relative(path.join(root, "src"), input.slice("endpoint-host-owner:".length)).replaceAll("\\", "/").replace(/\.ts$/, ""))));
+    .map(([input]) => input.slice("endpoint-host-owner:src/".length).replace(/\.ts$/, ""))));
   const hostModules = [...modules].filter(id => emittedOwners.has(id)).sort();
   for (const input of Object.keys(result.metafile.inputs)) {
     if (input.startsWith("endpoint-host-owner:") || input === "endpoint-entry.ts") continue;

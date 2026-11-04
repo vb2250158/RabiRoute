@@ -132,12 +132,20 @@ test("preparation is visible without blocking start and capture waits for readin
     capture: async () => { captured = true; return [{ source: "screen", jpeg: Buffer.from([0xff, 0xd8, 0xff, 0xd9]).toString("base64") }]; },
     startMicrophone: async () => {}, stopMicrophone: async () => {}, audio: async () => [], audioFile: async () => Buffer.alloc(0)
   });
-  t.after(() => service.dispose());
+  t.after(() => { ready(); return service.dispose(); });
   await service.configure("one", { ...DEFAULT_ALL_DAY_SETTINGS, sources: { ...DEFAULT_ALL_DAY_SETTINGS.sources, screen: true } });
-  await service.start("one"); await preparing;
+  const waitForPhase = async (promise: Promise<void>, phase: string) => {
+    let deadline: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([promise, new Promise<never>((_resolve, reject) => {
+        deadline = setTimeout(() => reject(new Error(`Recording fixture did not reach ${phase}.`)), 5_000);
+      })]);
+    } finally { clearTimeout(deadline); }
+  };
+  await waitForPhase(Promise.all([service.start("one"), preparing]).then(() => undefined), "preparation");
   assert.equal(captured, false);
   assert.equal((await service.snapshot("one")).preparing, true);
-  ready(); await completed;
+  ready(); await waitForPhase(completed, "capture completion");
   assert.equal((await service.snapshot("one")).preparing, false);
   assert.ok((await service.snapshot("one")).lastSampleAt);
 });

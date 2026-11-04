@@ -33,10 +33,10 @@ test("authenticated HTTP/WS terminal lifecycle streams a real Windows shell and 
   await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
   const address = server.address(); assert.ok(address && typeof address !== "string");
   const base = `http://127.0.0.1:${address.port}`;
-  const socket = new WebSocket(`${base.replace("http", "ws")}/api/lan-agent/connect`);
   const module = await import(pathToFileURL(path.resolve("apps/rabi-agent/rabi-agent.mjs")).href);
   const config = { nodeId: "fixture-node", nodeCredential: token, managerUrl: base, defaultWorkspace: root, agents: [], autoUpdate: false };
   const configPath = path.join(root,"client.json"); fs.writeFileSync(configPath,JSON.stringify(config));
+  const socket = new WebSocket(`${base.replace("http", "ws")}/api/lan-agent/connect`);
   const runtime = new module.__test.RabiAgentRuntime(config,configPath); runtime.socket = socket;
   runtime.taskQueue = new Promise(() => undefined); // A blocked Agent queue cannot block computer I/O.
   runtime.desktop.connect = () => { throw new Error("No Agent backend may start in this fixture."); };

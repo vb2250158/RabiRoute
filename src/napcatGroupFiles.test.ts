@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { getTimeoutMs } from "./shared/timeoutSettings.js";
 import { parseNapCatGroupFiles, readNapCatGroupFiles } from "./napcat.js";
 
 const file = { file_id: "file_1", file_name: "sample.txt", file_size: 12, upload_time: 100, uploader: 123, busid: 102 };
@@ -41,8 +42,23 @@ test("rejects oversized streamed responses, HTTP errors and upstream timeout", a
   const endpoint = { httpUrl: "http://127.0.0.1:3000", accessToken: "fake-token" };
   await assert.rejects(readNapCatGroupFiles(endpoint, "123456", undefined, (async () => new Response("x".repeat(300_000))) as typeof fetch));
   await assert.rejects(readNapCatGroupFiles(endpoint, "123456", undefined, (async () => new Response("secret upstream", { status: 500 })) as typeof fetch));
-  await assert.rejects(readNapCatGroupFiles(endpoint, "123456", undefined, (async (_url, init) => {
-    await new Promise((_resolve, reject) => init?.signal?.addEventListener("abort", () => reject(new Error("timeout")), { once: true }));
-    throw new Error("unreachable");
-  }) as typeof fetch));
+  const observed: { signal?: AbortSignal } = {};
+  let fixtureDeadline: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const rejected = assert.rejects(readNapCatGroupFiles(endpoint, "123456", undefined, (async (_url, init) => {
+      const signal = init?.signal;
+      observed.signal = signal ?? undefined;
+      assert.ok(signal, "Read action must supply its original deadline signal.");
+      signal.throwIfAborted();
+      await new Promise((_resolve, reject) => signal.addEventListener("abort", () => reject(signal.reason), { once: true }));
+      throw new Error("unreachable");
+    }) as typeof fetch));
+    // AbortSignal.timeout is unref'ed; this transport stub has no real socket.
+    // The outer failure is outside assert.rejects, so it cannot fake a successful timeout test.
+    await Promise.race([rejected, new Promise<never>((_resolve, reject) => {
+      fixtureDeadline = setTimeout(() => reject(new Error("Original upstream deadline did not abort the fixture transport.")),
+        getTimeoutMs("backend.napcat.readNapCatGroupFiles.AbortSignal.timeout.request", 3000) + 1000);
+    })]);
+    assert.equal(observed.signal?.aborted, true, "The original upstream signal must actually abort.");
+  } finally { clearTimeout(fixtureDeadline); }
 });

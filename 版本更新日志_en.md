@@ -6,6 +6,12 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.5.1 - 2026-11-04
+
+- Restore local candidate verification with the bundled Node 22 runtime while preserving single-process tests and the existing identity and receipt checks.
+
+- Keep message-endpoint plugin bundles free of build-machine absolute paths. Shared modules use stable repository-relative names so identical sources produce identical bundles across build directories, preserving owner identity and initialization order.
+
 ## 0.5.0 - 2026-11-04
 
 - Isolate performance-history read and cleanup failures per shard. Rebuild existing bounded aggregates on recovery to avoid recounting history beyond the recent dedupe window, show history gaps separately, keep live collection available and preserve best-effort write drop accounting.

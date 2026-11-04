@@ -20,6 +20,11 @@ test("endpoint dependencies follow emitted owner reads and preserve explicit bar
     const filename = path.join(root, "runtime.mjs");
     const bundle = await bundleMessageEndpointRuntime(root, {exports: [{source: "src/endpoint.ts", name: "run"}], ownedSources: ["src/endpoint.ts"]}, filename);
     assert.deepEqual(bundle.hostModules, ["shared/initialize", "shared/used"]);
+    assert.equal(bundle.contents.includes(root), false, "Published bundle must not expose the build root");
+    const relocated = path.join(root, "relocated");
+    await fs.cp(path.join(root, "src"), path.join(relocated, "src"), {recursive: true});
+    const rebuilt = await bundleMessageEndpointRuntime(relocated, {exports: [{source: "src/endpoint.ts", name: "run"}], ownedSources: ["src/endpoint.ts"]});
+    assert.equal(rebuilt.contents, bundle.contents, "Identical endpoint sources must bundle identically across build directories");
     const reads = [];
     const implementation = (await import(pathToFileURL(filename).href)).createImplementation({module(id) {
       reads.push(id);

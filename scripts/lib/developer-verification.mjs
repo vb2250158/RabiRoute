@@ -223,7 +223,7 @@ function runTests(root, tests, candidateRoot, environment, signal) {
     let child;
     let output = '';
     // Keep the Node runner in one owned process so cancellation also ends its tests.
-    try { child = spawn(process.execPath, ['--test', '--test-isolation=none', ...tests], { cwd: root, env, signal, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] }); }
+    try { child = spawn(process.execPath, ['--test', '--experimental-test-isolation=none', ...tests], { cwd: root, env, signal, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] }); }
     catch (error) { resolve({ status: signal?.aborted ? 'cancelled' : 'failed', error: error.message }); return; }
     let failure;
     const collect = chunk => { output = (output + chunk.toString()).slice(-16384); };

@@ -120,7 +120,8 @@ function faultChildFactory(root: string, roleDir: string, key: string, fault: Ba
     },
     execArgv: import.meta.url.endsWith(".ts") ? ["--import", "tsx"] : [],
     serialization: "json",
-    stdio: ["ignore", "ignore", "ignore", "ipc"]
+    // Match the normal worker pipes; the pool drains both and unrefs its IPC.
+    stdio: ["ignore", "pipe", "pipe", "ipc"]
   });
 }
 
