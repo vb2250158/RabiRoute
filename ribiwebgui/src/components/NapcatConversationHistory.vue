@@ -11,6 +11,7 @@ import QqGroupMembers from './QqGroupMembers.vue';
 import QqReadNotice from './QqReadNotice.vue';
 import { qqConversationTime } from '../qqChatLayout';
 import { waitForChatHistoryFrame } from '../personaChatHistoryLayout';
+import {qqNavigationRead} from '../qqPreviewQueue';
 import { mergeQqConversations, qqConversationIdentity, qqMessagePreview,qqPartsPreview,qqDisplayParts,type QqHistoryRecord } from '../qqMessagePresentation';
 
 const props = defineProps<{roleId:string;version:number;messageVersion?:number;active:boolean;routes:HistoryQqRoute[]}>();
@@ -79,7 +80,7 @@ function latestMessage(record:QqHistoryRecord){
   row.time=record.time;row.preview=(prefix?prefix+': ':'')+qqPartsPreview(qqDisplayParts(record.text,record.qqParts,record.attachments)).slice(0,120);row.previewFormat='plain';
 }
 async function json(url:string,signal:AbortSignal) {
-  const response=await fetch(url,{signal}),result=await response.json();
+  const response=await (url.startsWith('/api/agent/qq/')?qqNavigationRead(signal,()=>fetch(url,{signal})):fetch(url,{signal})),result=await response.json();
   if(!response.ok||result.code!==0)throw new Error(result.message||result.errorCode||t('消息记录读取失败'));
   return result.data;
 }

@@ -11,6 +11,7 @@ import QqImagePreview from './QqImagePreview.vue';
 import QqMessageContent from './QqMessageContent.vue';
 import QqReadNotice from './QqReadNotice.vue';
 import { qqTimeBreak, qqMessageTime } from '../qqChatLayout';
+import {qqNavigationRead} from '../qqPreviewQueue';
 import { qqHistoryRecord,mergeQqHistoryWindow, type QqHistoryMessage as QqNativeHistoryMessage, type QqHistoryRecord, type QqSelection } from '../qqMessagePresentation';
 
 const props = defineProps<{ roleId: string; adapter: string; title: string; version: number; messageVersion?:number; active: boolean; conversationKey?: string; bubble?: boolean; senderNames?: Record<string,string>; senderAvatars?: Record<string,string>; ownQqId?: string; qqSelection?: QqSelection; qqLive?:boolean; memberCount?:number }>();
@@ -42,7 +43,7 @@ async function load(older = false,update=false) {
     const query = new URLSearchParams(live?{...live,limit:'50'}:{ adapter: props.adapter, limit: '50', includeArchives: '1' });
     if (!live&&appliedConversation.value) query.set('conversationKey', appliedConversation.value);
     if (older && cursor.value) query.set('cursor', cursor.value);
-    const response = await fetch(live?`/api/agent/qq/history?${query}`:`/api/roles/${encodeURIComponent(props.roleId)}/message-endpoint-timeline?${query}`, { signal: controller.signal });
+    const response = await (live?qqNavigationRead(controller.signal,()=>fetch(`/api/agent/qq/history?${query}`,{signal:controller.signal})):fetch(`/api/roles/${encodeURIComponent(props.roleId)}/message-endpoint-timeline?${query}`, { signal: controller.signal }));
     const result = await response.json();
     if (!response.ok || result.code !== 0) throw new Error(result.message || t('消息记录读取失败'));
     if (controller.signal.aborted) return;

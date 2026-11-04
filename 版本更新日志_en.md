@@ -6,6 +6,10 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.5.6 - 2026-11-04
+
+- Share one QQ navigation read queue across contacts, group members and native history while keeping previews independent, preventing same-page refreshes from competing for read slots. Preserve cancellation, failure release, reading position and existing backend settings without automatic retries.
+
 ## 0.5.5 - 2026-11-04
 
 - Fix phantom QQ attachments, empty segments and legacy message parsing while preserving literal CQ text, real attachments and stable conversation/sender identities.

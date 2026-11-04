@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {qqDisplayParts,qqHistoryRecord,mergeQqHistoryWindow} from '../src/qqMessagePresentation';
-import {qqPreviewRead} from '../src/qqPreviewQueue';
+import {qqPreviewRead,qqNavigationRead} from '../src/qqPreviewQueue';
 const selection={routeId:'test',kind:'group' as const,target:'10001'};
 const row=(id:number)=>qqHistoryRecord({messageId:String(id),time:id,sender:'20002',text:`message ${id}`},selection);
 
@@ -31,4 +31,17 @@ test('preview lane releases rejected work and skips cancelled queued requests',a
   const rejection=assert.rejects(second);aborted.abort();
   const last=qqPreviewRead(new AbortController().signal,async()=>{third=true;});
   release();await first;await rejection;await last;assert.equal(started,false);assert.equal(third,true);
+});
+
+test('navigation uses its own single lane and remains available during a slow preview',async()=>{
+  const signal=new AbortController().signal;
+  let releasePreview!:()=>void,releaseNavigation!:()=>void,active=0,maximum=0,secondStarted=false;
+  const enter=()=>{active++;maximum=Math.max(maximum,active);};
+  const preview=qqPreviewRead(signal,async()=>{enter();await new Promise<void>(resolve=>releasePreview=resolve);active--;});
+  const first=qqNavigationRead(signal,async()=>{enter();await new Promise<void>(resolve=>releaseNavigation=resolve);active--;});
+  const second=qqNavigationRead(signal,async()=>{enter();secondStarted=true;active--;});
+  await Promise.resolve();assert.equal(active,2);assert.equal(secondStarted,false);
+  releaseNavigation();await first;await second;
+  assert.equal(secondStarted,true);assert.equal(active,1);assert.equal(maximum,2);
+  releasePreview();await preview;assert.equal(active,0);
 });
