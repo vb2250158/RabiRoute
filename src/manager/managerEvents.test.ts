@@ -90,3 +90,9 @@ test("queue overflow closes the real HTTP stream and drains its activation lease
   try { while (!(await reader.read()).done) { /* Drain frames already accepted before overflow. */ } } catch { /* Forced transport closure is expected. */ }
   await registration.dispose(); assert.equal(registration.activeOperationCount(), 0);
 });
+
+test("default event subscriptions have no arbitrary count quota",async()=>{
+ const hub=new ManagerEventHub(),streams=[];
+ try{for(let i=0;i<140;i++){const stream=hub.open();assert(stream);streams.push(stream);}assert.equal(hub.activeSubscriberCount(),140);}finally{await Promise.all(streams.map(stream=>stream.cancel("fixture done")));}
+ assert.equal(hub.activeSubscriberCount(),0);
+});

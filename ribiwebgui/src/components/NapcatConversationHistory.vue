@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useDisplay } from 'vuetify';
 import type { HistoryQqRoute, QqConversation, QqDirectoryContact, QqGroupMember } from '@shared/qqConversationHistory';
 import { usePersonaService } from '../persona/personaServiceClient';
@@ -7,18 +7,23 @@ import { useI18n } from '../i18n';
 import { userFacingError } from '../userFacingError';
 import MessageEndpointHistory from './MessageEndpointHistory.vue';
 import QqAvatar from './QqAvatar.vue';
+import QqGroupMembers from './QqGroupMembers.vue';
+import { qqConversationTime } from '../qqChatLayout';
+import { waitForChatHistoryFrame } from '../personaChatHistoryLayout';
 import { mergeQqConversations, qqConversationIdentity, qqMessagePreview } from '../qqMessagePresentation';
 
 const props = defineProps<{roleId:string;version:number;active:boolean;routes:HistoryQqRoute[]}>();
-const {fetch} = usePersonaService(), {t} = useI18n();
+const {fetch} = usePersonaService(), {t,locale} = useI18n();
 const display = useDisplay();
-const narrow = computed(()=>display.width.value<760);
+const narrow = computed(()=>display.width.value<=760);
 const conversations = ref<QqConversation[]>([]), selectedKey = ref('');
 const directoryConversations = ref<QqConversation[]>([]);
 const search = ref(''), cursor = ref<string|null>(null), loading = ref(false), error = ref(''), directoryWarning = ref('');
-const contacts = ref(new Map<string,QqDirectoryContact>()), members = ref<QqGroupMember[]>([]), membersLoading = ref(false), memberError = ref(''), memberLimit = ref(40);
+const contacts = ref(new Map<string,QqDirectoryContact>()), members = ref<QqGroupMember[]>([]), membersLoading = ref(false), memberError = ref('');
+const membersOpen=ref(false);
 const accountIds=ref(new Map<string,string>());
 const detailOpen = ref(false);
+let detailPosition:{key:string;y:number}|undefined, restorePosition:AbortController|undefined;
 const layout = ref<HTMLElement>(), layoutWidth=ref(1000), listWidth = ref(240), dragging = ref(false);
 const widthKey = 'rabiroute.qq.conversation-list-width';
 const maxListWidth = computed(()=>Math.max(200,Math.min(440,layoutWidth.value-312-(display.width.value>1200&&selected.value?.kind==='group'?222:0))));
@@ -118,9 +123,20 @@ async function load(older=false) {
   }catch(cause){if(!controller.signal.aborted)error.value=userFacingError(cause);}
   finally{if(request===controller){request=undefined;loading.value=false;}}
 }
-function choose(conversation:QqConversation){selectedKey.value=conversation.conversationKey;detailOpen.value=true;}
+function showList(){restorePosition?.abort();detailPosition={key:selectedKey.value,y:window.scrollY};detailOpen.value=false;}
+async function choose(conversation:QqConversation){
+  restorePosition?.abort();
+  const position=narrow.value&&!detailOpen.value&&selectedKey.value===conversation.conversationKey&&detailPosition?.key===conversation.conversationKey?detailPosition.y:undefined;
+  selectedKey.value=conversation.conversationKey;detailOpen.value=true;
+  if(position===undefined)return;
+  const controller=new AbortController();restorePosition=controller;
+  const interrupt=()=>controller.abort(),events=['wheel','touchstart','pointerdown','keydown'] as const;
+  for(const event of events)window.addEventListener(event,interrupt,{passive:true});
+  try{await nextTick();for(let frame=0;frame<8;frame++){if(!await waitForChatHistoryFrame(controller.signal))break;window.scrollTo(0,position);}}
+  finally{for(const event of events)window.removeEventListener(event,interrupt);}
+}
 async function loadMembers() {
-  memberRequest?.abort();members.value=[];memberError.value='';memberLimit.value=40;membersLoading.value=false;
+  memberRequest?.abort();members.value=[];memberError.value='';membersLoading.value=false;
   const conversation=selected.value;
   if(!props.active||conversation?.kind!=='group')return;
   const route=routeFor(conversation);
@@ -132,71 +148,68 @@ async function loadMembers() {
   }catch(cause){if(!controller.signal.aborted)memberError.value=userFacingError(cause);}
   finally{if(memberRequest===controller)membersLoading.value=false;}
 }
-watch([selectedKey,()=>props.active],()=>void loadMembers());
+watch([selectedKey,()=>props.active],()=>{membersOpen.value=false;void loadMembers();});
 watch(()=>props.routes,()=>{if(props.active){void loadContacts();void loadMembers();}});
-watch(()=>props.active,active=>{if(active){if(!conversations.value.length)void load();void loadContacts();}else{request?.abort();memberRequest?.abort();directoryRequest?.abort();}},{immediate:true});
+watch(()=>props.active,active=>{if(active){if(!conversations.value.length)void load();void loadContacts();}else{restorePosition?.abort();request?.abort();memberRequest?.abort();directoryRequest?.abort();}},{immediate:true});
 watch(()=>props.version,()=>{if(props.active)void load();});
-onBeforeUnmount(()=>{stopDrag();layoutObserver?.disconnect();request?.abort();memberRequest?.abort();directoryRequest?.abort();});
+onBeforeUnmount(()=>{restorePosition?.abort();stopDrag();layoutObserver?.disconnect();request?.abort();memberRequest?.abort();directoryRequest?.abort();});
 </script>
 
 <template>
   <div ref="layout" class="qq-conversations" :style="{'--qq-list-width':`${listWidth}px`}" :class="{'qq-has-selection':detailOpen,'qq-is-group':selected?.kind==='group','qq-resizing':dragging}">
-    <v-card class="qq-conversation-list app-card glass-card pa-3" :aria-label="t('QQ 会话')">
-      <div class="d-flex align-center justify-space-between mb-2"><strong>NapCat / QQ</strong><v-btn icon="mdi-refresh" size="small" variant="text" :aria-label="t('刷新会话')" @click="load();loadContacts()" /></div>
-      <v-text-field v-model="search" :label="t('搜索会话')" prepend-inner-icon="mdi-magnify" clearable hide-details class="mb-2" />
+    <v-card class="qq-conversation-list app-card glass-card" :aria-label="t('QQ 会话')">
+      <div class="qq-list-search"><v-text-field v-model="search" :placeholder="t('搜索会话')" :aria-label="t('搜索会话')" prepend-inner-icon="mdi-magnify" density="compact" variant="solo-filled" flat clearable hide-details /><v-btn icon="mdi-refresh" size="small" variant="text" :aria-label="t('刷新会话')" @click="load();loadContacts()" /></div>
       <v-progress-linear v-if="loading" indeterminate />
       <v-alert v-if="error" :type="conversations.length?'warning':'error'" variant="tonal" class="mt-2">{{ error }}</v-alert>
       <v-alert v-if="directoryWarning" type="warning" variant="tonal" class="mt-2">{{ directoryWarning }}</v-alert>
-      <v-list bg-color="transparent" aria-label="QQ conversations">
+      <v-list class="qq-session-scroll" bg-color="transparent" aria-label="QQ conversations">
         <v-list-item v-for="conversation in visible" :key="conversation.conversationKey" :active="selectedKey===conversation.conversationKey" @click="choose(conversation)">
-          <template #prepend><QqAvatar :id="conversation.kind==='unknown'?undefined:conversation.target" :kind="conversation.kind==='group'?'group':'private'" :name="nameFor(conversation)" :size="40" /></template>
-          <v-list-item-title class="qq-conversation-title" data-no-i18n><span>{{ nameFor(conversation) }}</span><time v-if="conversation.time">{{ new Date(conversation.time*1000).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}) }}</time></v-list-item-title>
+          <template #prepend><QqAvatar :id="conversation.kind==='unknown'?undefined:conversation.target" :kind="conversation.kind==='group'?'group':'private'" :name="nameFor(conversation)" :size="44" /></template>
+          <v-list-item-title class="qq-conversation-title" data-no-i18n><span :title="nameFor(conversation)">{{ nameFor(conversation) }}</span><time v-if="conversation.time" :title="new Date(conversation.time*1000).toLocaleString(locale)">{{ qqConversationTime(conversation.time,undefined,locale) }}</time></v-list-item-title>
           <v-list-item-subtitle data-no-i18n>{{ conversation.preview }}</v-list-item-subtitle>
         </v-list-item>
-      </v-list>
       <div v-if="!visible.length&&!loading" class="text-body-2 text-medium-emphasis pa-3">{{ t('暂无匹配会话。') }}</div>
       <v-btn v-if="cursor" :disabled="loading" variant="text" @click="load(true)">{{ t('更多会话') }}</v-btn>
+      </v-list>
     </v-card>
     <div class="qq-splitter" role="separator" tabindex="0" aria-orientation="vertical" :aria-label="t('调整会话列表宽度')" :aria-valuenow="listWidth" :aria-valuemin="200" :aria-valuemax="maxListWidth" @pointerdown="startDrag" @pointermove="moveDrag" @pointerup="stopDrag" @pointercancel="stopDrag" @lostpointercapture="stopDrag" @keydown="resizeKey" @dblclick="resizeList(240);saveWidth()" />
     <div class="qq-conversation-detail">
-      <v-btn class="qq-back mb-2" prepend-icon="mdi-arrow-left" variant="text" @click="detailOpen=false">{{ t('返回会话') }}</v-btn>
-      <MessageEndpointHistory v-if="selected" :key="selected.conversationKey" :role-id="roleId" adapter="napcat" :title="nameFor(selected)" :conversation-key="selected.storedConversationKey??selected.conversationKey" :qq-selection="routeFor(selected)&&selected.kind!=='unknown'?{routeId:routeFor(selected)!.routeId,kind:selected.kind,target:selected.target}:undefined" :qq-live="Boolean(ownQqId)" :sender-names="senderNames" :sender-avatars="senderAvatars" :own-qq-id="ownQqId" :version="version" :active="active" bubble />
+      <MessageEndpointHistory v-if="selected" :key="selected.conversationKey" :role-id="roleId" adapter="napcat" :title="nameFor(selected)" :conversation-key="selected.storedConversationKey??selected.conversationKey" :qq-selection="routeFor(selected)&&selected.kind!=='unknown'?{routeId:routeFor(selected)!.routeId,kind:selected.kind,target:selected.target}:undefined" :qq-live="Boolean(ownQqId)" :sender-names="senderNames" :sender-avatars="senderAvatars" :own-qq-id="ownQqId" :member-count="selected.kind==='group'&&!membersLoading&&!memberError?members.length:undefined" :version="version" :active="active&&(!narrow||detailOpen)" bubble>
+        <template #back><v-btn class="qq-back" icon="mdi-arrow-left" size="small" variant="text" :aria-label="t('返回会话')" @click="showList" /></template>
+        <template #actions><v-btn v-if="selected.kind==='group'" class="qq-members-toggle" icon="mdi-account-group-outline" size="small" variant="text" :aria-label="t('群成员')" @click="membersOpen=true" /></template>
+      </MessageEndpointHistory>
       <v-alert v-else type="info" variant="tonal">{{ t('选择群聊或私聊查看消息记录。') }}</v-alert>
     </div>
-    <v-card v-if="selected?.kind==='group'" class="qq-members app-card glass-card pa-3" :aria-label="t('群成员')">
-      <details :open="!narrow"><summary class="qq-member-heading"><strong>{{ t('群成员') }}<span v-if="!membersLoading&&!memberError"> · {{ members.length }}</span></strong></summary>
-      <v-btn icon="mdi-refresh" size="small" variant="text" :aria-label="t('刷新群成员')" @click="loadMembers" />
-      <v-progress-linear v-if="membersLoading" indeterminate />
-      <v-alert v-if="memberError" type="warning" variant="tonal" class="mt-2">{{ memberError }}</v-alert>
-      <v-list bg-color="transparent" density="compact"><v-list-item v-for="member in members.slice(0,memberLimit)" :key="member.id" :title="member.name" :subtitle="member.id" data-no-i18n><template #prepend><QqAvatar :id="member.id" :name="member.name" :size="28" class="mr-2" /></template><template v-if="member.role==='owner'||member.role==='admin'" #append><v-chip size="x-small" color="secondary">{{ t(member.role==='owner'?'群主':'管理员') }}</v-chip></template></v-list-item></v-list>
-      <v-btn v-if="memberLimit<members.length" variant="text" @click="memberLimit+=40">{{ t('更多成员') }}</v-btn>
-      </details>
-    </v-card>
+    <aside v-if="selected?.kind==='group'" class="qq-members"><QqGroupMembers :key="selectedKey" :members="members" :loading="membersLoading" :error="memberError" @refresh="loadMembers" /></aside>
+    <v-dialog v-if="selected?.kind==='group'" v-model="membersOpen" max-width="360" scrollable><v-card><QqGroupMembers :key="selectedKey" class="qq-members-dialog" :members="members" :loading="membersLoading" :error="memberError" @refresh="loadMembers" /><v-card-actions><v-spacer /><v-btn @click="membersOpen=false">{{ t('关闭') }}</v-btn></v-card-actions></v-card></v-dialog>
   </div>
 </template>
 
 <style scoped>
-.qq-conversation-title {display:flex;align-items:center;gap:8px;min-width:0;}
+.qq-conversation-title {display:flex;align-items:center;gap:8px;min-width:0;font-size:14px;line-height:22px;}
 .qq-conversation-title>span {min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .qq-conversation-title>time {flex-shrink:0;margin-left:auto;font-size:11px;opacity:.6;}
 .qq-conversation-list :deep(.v-list-item-subtitle) {display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-height:20px;line-height:20px;}
-.qq-conversation-list :deep(.v-list-item) {min-height:64px;}
-@media(min-width:760px) {
-  .qq-conversation-list,.qq-members {position:sticky;top:128px;max-height:calc(100dvh - 152px);overflow-y:auto;}
-}
+.qq-conversation-list :deep(.v-list-item) {min-height:72px;padding:8px 10px;border-radius:5px;margin:2px 4px;}
+.qq-conversation-list :deep(.v-list-item__prepend .v-list-item__spacer) {width:12px;}
+.qq-conversation-list :deep(.v-list-item__content) {min-width:0;}
+.qq-conversation-list :deep(.v-list-item-subtitle) {font-size:12px;}
+.qq-conversation-list {display:flex;flex-direction:column;overflow:hidden!important;max-height:calc(100dvh - 140px);padding:0!important;border:0!important;background:rgba(var(--v-theme-on-surface),.025)!important;border-radius:0!important;box-shadow:none!important;}
+.qq-list-search {display:flex;align-items:center;gap:4px;padding:10px 8px;flex:none;}
+.qq-list-search :deep(.v-field) {font-size:12px;border-radius:7px;}
+.qq-session-scroll {min-height:0;overflow-y:auto;overflow-x:hidden;overscroll-behavior:contain;padding-top:0;}
 .qq-conversations { display:grid; grid-template-columns:var(--qq-list-width,240px) 12px minmax(0,1fr); column-gap:0; row-gap:16px; align-items:start; }
-.qq-conversations.qq-is-group { grid-template-columns:var(--qq-list-width,240px) 12px minmax(0,1fr) 210px; }
+.qq-conversations.qq-is-group { grid-template-columns:var(--qq-list-width,240px) 12px minmax(0,1fr) 222px; }
 .qq-splitter { align-self:stretch; min-height:240px; cursor:col-resize; touch-action:none; position:relative; outline:none; }
 .qq-splitter::after { content:''; position:absolute; top:0; bottom:0; left:5px; width:2px; border-radius:2px; background:rgba(var(--v-theme-on-surface),.12); }
 .qq-splitter:hover::after,.qq-splitter:focus-visible::after,.qq-resizing .qq-splitter::after { background:rgb(var(--v-theme-secondary)); }
 .qq-resizing { user-select:none; cursor:col-resize; }
-.qq-members { margin-left:12px; }
-.qq-conversation-list,.qq-members { position:sticky; top:128px; min-width:0; }
+.qq-members {height:calc(100dvh - 140px);max-height:calc(100dvh - 140px);overflow:hidden;border-left:1px solid rgba(var(--v-theme-on-surface),.08);}
+.qq-conversation-list,.qq-members { position:sticky; top:120px; min-width:0; }
 .qq-conversation-detail { min-width:0; }
-.qq-conversation-list :deep(.v-list) { max-height:calc(100vh - 330px); overflow-y:auto; }
-.qq-members :deep(.v-list) { max-height:calc(100vh - 240px); overflow-y:auto; }
-.qq-member-heading { cursor:pointer; }
+.qq-members-dialog {height:65dvh;}
+.qq-members-toggle {display:none;}
 .qq-back { display:none; }
-@media(max-width:1200px) { .qq-conversations.qq-is-group {grid-template-columns:var(--qq-list-width,240px) 12px minmax(0,1fr);} .qq-members {position:static;grid-column:3;margin-left:0;} }
-@media(max-width:760px) { .qq-conversations,.qq-conversations.qq-is-group {display:flex;flex-direction:column;gap:12px;} .qq-splitter{display:none;} .qq-conversation-list {position:static;width:100%;order:0;} .qq-conversation-detail,.qq-members {display:none;width:100%;} .qq-has-selection .qq-conversation-list {display:none;} .qq-has-selection .qq-conversation-detail,.qq-has-selection .qq-members {display:block;} .qq-back {display:inline-flex;} .qq-members {order:1;position:static;margin-left:0;} .qq-conversation-detail{order:2;} }
+@media(max-width:1200px) { .qq-conversations.qq-is-group {grid-template-columns:var(--qq-list-width,240px) 12px minmax(0,1fr);} .qq-members {display:none;} .qq-members-toggle {display:inline-flex;} }
+@media(max-width:760px) { .qq-conversations,.qq-conversations.qq-is-group {display:flex;flex-direction:column;gap:12px;} .qq-splitter{display:none;} .qq-conversation-list {position:static;width:100%;order:0;max-height:calc(100dvh - 180px);} .qq-conversation-detail {display:none;width:100%;} .qq-has-selection .qq-conversation-list {display:none;} .qq-has-selection .qq-conversation-detail {display:block;} .qq-back {display:inline-flex;} .qq-conversation-detail{order:2;} }
 </style>

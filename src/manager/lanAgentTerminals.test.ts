@@ -34,3 +34,11 @@ test("host Agent reads output with a cursor and event-driven bounded waiting", a
   const disconnected = hub.read("node-a",terminalId,1,1000); hub.disconnect("node-a");
   await assert.rejects(disconnected,/changed/);
 });
+
+test("terminal replay count and observer count do not reject valid work",async()=>{
+ const hub=new LanAgentTerminals(async(_instance,body)=>({terminalId:body.terminalId,state:"running"})),live=randomUUID();
+ await hub.execute("node",{action:"open",terminalId:live});let received=0;const observers=Array.from({length:9},()=>hub.subscribe("node",live,0,()=>received++));
+ hub.receive("node",{terminalId:live,type:"output",data:"all observers"});assert.equal(received,9);
+ for(let i=0;i<140;i++){const terminalId=randomUUID();await hub.execute("node",{action:"open",terminalId});hub.receive("node",{terminalId,type:"exit",exitCode:0});}
+ const result=await hub.read("node",live,0) as {outputEvents:unknown[]};assert.equal(result.outputEvents.length,1);observers.forEach(stop=>stop());
+});

@@ -6,6 +6,14 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.5.2 - 2026-11-04
+
+- Make plan/memory focus optional using the existing title default, and accept multiline summaries; keep explicitly configured length limits.
+- Remove unconfigured plan/memory write quotas and attachment/approval item-count gates; preserve explicit user limits and request-byte, ownership and transaction boundaries. Reuse verified API discovery, refresh only on invalidation or a missing operation, and remove default operation/subscription/search-waiter and alias-count gates without removing authority or server contract checks.
+- Remove the local-message directory allowlist type, configuration and sending checks instead of replacing them with an empty list or another switch. Ordinary QQ group sends may omit an empty reply reference; retain file existence, real-path, managed ownership and hash checks.
+- Remove arbitrary connector configuration, active-terminal/observer and generic query-field count gates. File I/O and active uploads have no default count quota; explicit resource settings retain their effect. Hot history compacts completed facts without blocking independent work, retaining original records and diagnostics on archival failure.
+- Use compact QQ history bubbles, grouped times, fixed headers, message details, searchable single-scroll member lists and mobile return-position restoration, preserving browser scrolling and existing channel entry points.
+
 ## 0.5.1 - 2026-11-04
 
 - Restore local candidate verification with the bundled Node 22 runtime while preserving single-process tests and the existing identity and receipt checks.

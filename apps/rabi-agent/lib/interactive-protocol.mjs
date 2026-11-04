@@ -1,7 +1,7 @@
 /** Protocol facts shared by the remote executors, Manager replay owner and API contracts. */
 export const TERMINAL_LIMITS = Object.freeze({ idPattern: "^[a-f0-9-]{36}$", inputBytes: 16384, eventCodeUnits: 16384,
-  replayBytes: 262144, replayEvents: 2048, viewers: 4, waitMs: 25000, transportSessions: 128,
-  activeSessions: 8, retainedSessions: 64, inputReceipts: 256, inputQueueBytes: 65536,
+  replayBytes: 262144, replayEvents: 2048, waitMs: 25000, transportSessions: 128,
+  retainedSessions: 64, inputReceipts: 256, inputQueueBytes: 65536,
   minCols: 20, maxCols: 400, minRows: 5, maxRows: 200, streamQueueBytes: 524288, heartbeatMs: 25000 });
 export const COMPUTER_LIMITS = Object.freeze({ chunkBytes: 65536, chunkBase64CodeUnits: 87384, uploadBytes: Number.MAX_SAFE_INTEGER,
   uploadIdPattern: TERMINAL_LIMITS.idPattern, hashPattern: "^[a-f0-9]{64}$" });

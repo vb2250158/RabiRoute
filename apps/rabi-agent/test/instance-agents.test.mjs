@@ -21,6 +21,22 @@ test("backend configuration never saves a default session and instance enablemen
  const catalog=agentCatalog(next);assert.equal(catalog[0].sessionId,undefined);assert.equal(catalog[0].managedSessionIds,undefined);assert.equal(catalog[0].enabled,true);
 });
 
+test("optional backend configurations have no arbitrary 128-entry limit and retain explicit selection",()=>{
+ const agents=Array.from({length:256},(_,index)=>({agentId:`backend-${index}`,provider:"codex-desktop",workspace:config.defaultWorkspace,name:`Backend ${index}`}));
+ const existing={...config,agents};
+ const next=configureInstanceAgent(existing,{agentId:"new-backend",provider:"codex-desktop",name:"New backend"});
+ assert.equal(next.agents.length,257);
+ assert.deepEqual(next.agents.slice(0,256),agents);
+ assert.equal(existing.agents.length,256);
+ assert.equal(resolveInstanceAgent(next,{targetAgent:"codex-desktop",threadId:"exact-session",agentId:"new-backend"}).agentId,"new-backend");
+ assert.throws(()=>resolveInstanceAgent(next,{targetAgent:"codex-desktop",threadId:"exact-session"}),/explicitly select/);
+ const edited=configureInstanceAgent(next,{agentId:"backend-128",name:"Updated"});
+ assert.equal(edited.agents.length,257);
+ assert.equal(edited.agents[128].name,"Updated");
+ assert.throws(()=>configureInstanceAgent(next,{agentId:"invalid id",provider:"codex-desktop"}),/Invalid Agent identity/);
+ assert.throws(()=>configureInstanceAgent(next,{agentId:"new-backend",provider:"dsh"}),/changing providers/);
+});
+
 test("bad optional backend rows preserve the config bytes while healthy backends and computer startup remain usable", async t => {
  const directory=fs.mkdtempSync(path.join(os.tmpdir(),"rabi-agent-bad-profile-"));
  t.after(()=>fs.rmSync(directory,{recursive:true,force:true}));

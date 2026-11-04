@@ -40,7 +40,7 @@ A proactive send needs an explicit target. If the target is ambiguous, the paylo
 
 ## Local file uploads
 
-For a NapCat group upload with local `filePath`, no directory restriction applies by default. Only a user-configured nonempty Route `messageAdapterPolicies.napcat.allowedFileRoots` list restricts the resolved path; clear the list to remove that restriction. RabiRoute checks existence, real path, and ordinary-file type.
+Local image and file sends do not use a directory allowlist or require directory-permission configuration. RabiRoute checks existence, real path, ordinary-file type and readability.
 
 Public examples use placeholder directories. Do not publish personal directories, build-server paths, real filenames, or private release locations.
 

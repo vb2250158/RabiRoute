@@ -15,7 +15,9 @@ test("retained attachments do not consume a new upload batch", t => {
   assert.equal(next.length, 9);
   assert.deepEqual(next.slice(0, 8).map(item => item.metadata), previous);
   assert.equal(next.filter(item => item.content).length, 1);
-  assert.throws(() => preparePlanAttachments(root, "p", Array.from({ length: 9 }, (_, i) => ({ name: `${i}.txt`, contentBase64: "eA==" }))), /at most 8 attachments/);
+  const fresh = preparePlanAttachments(root, "p", Array.from({ length: 9 }, (_, i) => ({ name: `${i}.txt`, contentBase64: "eA==" })));
+  assert.equal(fresh.length, 9);
+  assert.equal(fresh.filter(item => item.content).length, 9);
 });
 
 test("step resources survive plan persistence without changing step text", t => {

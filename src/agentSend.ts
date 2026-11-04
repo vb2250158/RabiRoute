@@ -342,13 +342,6 @@ function normalizeAgentSend(request: AgentSendRequest): NormalizedAgentSend {
     const groupId = targetType === "group" ? textValue(params.groupId, "params.groupId") : undefined;
     const userId = targetType === "private" ? textValue(params.userId, "params.userId") : undefined;
     const hasReplyToMessageId = Object.prototype.hasOwnProperty.call(params, "replyToMessageId");
-    if (targetType === "group" && !hasReplyToMessageId) {
-      throw new Error(
-        "NapCat group sends must include params.replyToMessageId. "
-        + "Use the source QQ message ID whenever the message can be quoted, "
-        + "or pass an empty string (\"\") for an intentional unquoted group message."
-      );
-    }
     if (hasReplyToMessageId && typeof params.replyToMessageId !== "string" && typeof params.replyToMessageId !== "number") {
       throw new Error("params.replyToMessageId must be a QQ message ID string/number, or an empty string for an intentional unquoted group message.");
     }

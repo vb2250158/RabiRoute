@@ -225,7 +225,6 @@ export function validateAgentApiRequestTarget(method: string, requestTarget: str
   const query: string[] = [];
   if (separator >= 0) {
     const rawQuery = requestTarget.slice(separator + 1);
-    if (rawQuery.split("&").length > 128) return { allowed: false, reason: "query_not_allowed" };
     for (const field of rawQuery ? rawQuery.split("&") : []) {
       const equals = field.indexOf("=");
       try {

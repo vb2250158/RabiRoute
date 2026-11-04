@@ -265,3 +265,8 @@ test("framework errors are exported without dropping the owner's binary response
   assert.equal(validateApiOperationResult(operation, failure).mediaType, "application/json");
   assert.ok(operation.contract.responses["400"]?.alternatives?.some(value => value.mediaType === "application/json"));
 });
+
+test("valid operation aliases have no unrelated count quota and still reject ambiguous IDs",()=>{
+ const contract={...fixtureApiContract(),aliases:Array.from({length:101},(_,i)=>"legacy.operation."+i)};const compiled=compileApiOperation({contract,handler:()=>({status:200,body:{ok:true,value:1}})});assert.equal(compiled.contract.aliases?.length,101);
+ assert.throws(()=>compileApiOperation({contract:{...contract,aliases:[contract.operationId]},handler:()=>({status:200,body:{ok:true,value:1}})}),/alias|identifier|ambiguous/i);
+});

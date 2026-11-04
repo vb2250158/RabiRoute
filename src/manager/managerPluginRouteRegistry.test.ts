@@ -334,3 +334,12 @@ for (const invalidResult of [undefined, null, 23]) {
     await registration.dispose();
   });
 }
+
+test("default API admission does not reject a 65th valid concurrent request", {timeout:8000}, async t => {
+ const registry=new ManagerPluginRouteRegistry(); let arrivals=0,release!:()=>void; const gate=new Promise<void>(resolve=>{release=resolve;});
+ const registration=registry.registerOperations("concurrency",[{contract:fixtureApiContract(),handler:async()=>{arrivals++;await gate;return{status:200,body:{ok:true,value:1}};}}]);
+ const server=http.createServer((request,response)=>registry.handle(request,new URL(request.url!,"http://localhost"),response));server.listen(0,"127.0.0.1");await once(server,"listening");
+ const address=server.address();assert(address&&typeof address!=="string");const pending=Array.from({length:65},()=>fetch("http://127.0.0.1:"+address.port+"/api/example/records/one",{method:"POST",headers:{"content-type":"application/json"},body:'{"value":1}'}).then(async response=>({status:response.status,body:await response.json()})));
+ try{const until=Date.now()+3500;while(arrivals<65&&Date.now()<until)await new Promise(resolve=>setTimeout(resolve,10));assert.equal(arrivals,65,"Every valid request reaches the existing owner before its result is released.");release();const results=await Promise.all(pending);assert(results.every(row=>row.status===200));}
+ finally{release();await Promise.allSettled(pending);server.closeAllConnections();await new Promise<void>(resolve=>server.close(()=>resolve()));if(registration.activeOperationCount()===0)await registration.dispose();}
+});

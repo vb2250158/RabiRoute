@@ -1594,7 +1594,7 @@ test("only running plans outside approval accept whole-plan guidance", () => {
   assert.equal(planAcceptsGuidance(approval, workflow), false);
 });
 
-test("plan attachments enforce count, per-file, and total size limits", () => {
+test("plan attachments accept nine small files and enforce per-file and total size limits", t => {
   const roleDir = makeRoleDir();
   const base = {
     title: "附件限制",
@@ -1603,15 +1603,18 @@ test("plan attachments enforce count, per-file, and total size limits", () => {
     steps: [{ id: "inspect", title: "检查附件" }],
     keywords: ["附件"]
   };
-  assert.throws(() => createPlan(roleDir, {
+  t.after(() => fs.rmSync(roleDir, { recursive: true, force: true }));
+  const attachedPlan = createPlan(roleDir, {
     ...base,
-    id: "too-many-attachments",
+    id: "nine-small-attachments",
     attachments: Array.from({ length: 9 }, (_, index) => ({
       name: `note-${index}.txt`,
       mimeType: "text/plain",
       contentBase64: Buffer.from("x").toString("base64")
     }))
-  }), /at most 8 attachments/);
+  });
+  assert.equal(attachedPlan.attachments.length, 9);
+  assert(attachedPlan.attachments.every(attachment => fs.readFileSync(attachment.path, "utf8") === "x"));
 
   const oversized = path.join(roleDir, "oversized.bin");
   fs.writeFileSync(oversized, Buffer.alloc(10 * 1024 * 1024 + 1));
@@ -2457,7 +2460,8 @@ test("memory content alone does not create a required read match", () => {
   assert.deepEqual(snapshot.matchedItems, []);
 });
 
-test("role knowledge writes enforce configured limits and a single-line focus", () => {
+test("role knowledge writes enforce configured limits and preserve normalized focus", t => {
+  t.after(() => fs.rmSync(roleDir, { recursive: true, force: true }));
   const roleDir = makeRoleDir();
   writePersonaConfig(roleDir, {
     knowledgeLimits: {
@@ -2502,21 +2506,28 @@ test("role knowledge writes enforce configured limits and a single-line focus", 
   });
   assert.equal(memory.focus, "模拟器偏好");
 
-  assert.throws(() => createPlan(roleDir, {
+  const inferredPlan = createPlan(roleDir, {
     title: "缺少焦点",
+    status: "暂停",
+    steps: [{ id: "infer", title: "默认主题" }],
     keywords: ["焦点"]
-  }), /Plan focus is required/);
-  assert.throws(() => createRecentMemory(roleDir, {
+  });
+  assert.equal(inferredPlan.focus, "缺少焦点");
+  const inferredMemory = createRecentMemory(roleDir, {
     title: "缺少焦点",
     content: "内容",
     keywords: ["焦点"]
-  }), /Memory focus is required/);
+  });
+  assert.equal(inferredMemory.focus, "缺少焦点");
 
-  assert.throws(() => createPlan(roleDir, {
+  const multilinePlan = createPlan(roleDir, {
     title: "混合计划",
     focus: "每日\n周常",
+    status: "暂停",
+    steps: [{ id: "multi", title: "多行主题" }],
     keywords: ["混合"]
-  }), /focus must be a single line/);
+  });
+  assert.equal(multilinePlan.focus, "每日\n周常");
   assert.throws(() => createPlan(roleDir, {
     title: "过长步骤",
     focus: "过长步骤",
@@ -3002,4 +3013,89 @@ test("unreadable directory Skill entry does not hide compatible flat entries", t
     return original(...args);
   });
   assert.deepEqual(listRoleSkills(sample.roleDir).map(item => item.id), ["flat"]);
+});
+
+
+import { roleKnowledgeWriteLimits, DEFAULT_ROLE_KNOWLEDGE_WRITE_LIMITS } from "./roleKnowledge.js";
+
+test("unconfigured knowledge accepts normal long content and larger plans, including snapshot roundtrip", t => {
+  const roleDir=makeRoleDir();t.after(()=>fs.rmSync(roleDir,{recursive:true,force:true}));
+  const memory=createRecentMemory(roleDir,{title:"title".repeat(30),focus:"One subject",content:"x".repeat(20000),keywords:Array.from({length:40},(_,i)=>"keyword"+i)});
+  assert.equal(memory.content.length,20000);assert.equal(memory.keywords.length,40);
+  const reloadedMemory = getRecentMemory(roleDir, memory.id);
+  assert.equal(reloadedMemory?.content, memory.content);
+  assert.deepEqual(reloadedMemory?.keywords, memory.keywords);
+  const plan=createPlan(roleDir,{title:"title".repeat(30),focus:"One subject",status:"暂停",keywords:["fixture"],attachments:Array.from({length:9},(_,i)=>({id:"file-"+i,name:"note-"+i+".txt",contentBase64:Buffer.from("x").toString("base64")})),steps:Array.from({length:120},(_,i)=>({id:"step-"+i,title:"Step "+i,detail:"x".repeat(800),status:"未开始"}))});
+  assert.equal(plan.attachments.length,9);assert(plan.attachments.every(a=>fs.readFileSync(a.path,"utf8")==="x"));assert.equal(plan.steps.length,120);assert.equal(plan.steps[119]!.detail?.length,800);
+  const savedPlan = JSON.parse(fs.readFileSync(planJsonFile(roleDir, plan.id, "active"), "utf8"));
+  assert.deepEqual(savedPlan.steps, JSON.parse(JSON.stringify(plan.steps)));
+  assert.deepEqual(getPlan(roleDir, plan.id)?.steps, plan.steps);
+  const physical=readRoleKnowledgeCatalogSnapshot(roleDir),serialized=JSON.parse(JSON.stringify(physical));
+  const published=publishRoleKnowledgeCatalogSnapshot(roleDir,serialized);
+  assert.deepEqual(published.limits,DEFAULT_ROLE_KNOWLEDGE_WRITE_LIMITS);
+  assert.equal(published.limits.memory.contentChars,Number.MAX_SAFE_INTEGER);
+  assert.deepEqual(published.contextInjection,roleContextInjectionPolicy(roleDir));
+  assert(Object.values(published.limits.plan).every(Number.isSafeInteger));
+});
+test("explicit knowledge limits and the existing zero-as-default meaning survive snapshot publication",t=>{
+ const roleDir=makeRoleDir();t.after(()=>fs.rmSync(roleDir,{recursive:true,force:true}));
+ writePersonaConfig(roleDir,{knowledgeLimits:{memory:{contentChars:5,titleChars:250001,focusChars:0},plan:{maxSteps:2}}});
+ const limits=roleKnowledgeWriteLimits(roleDir);assert.equal(limits.memory.contentChars,5);assert.equal(limits.memory.titleChars,250001);assert.equal(limits.memory.focusChars,DEFAULT_ROLE_KNOWLEDGE_WRITE_LIMITS.memory.focusChars);
+ assert.throws(()=>createRecentMemory(roleDir,{title:"small",focus:"one",content:"123456",keywords:["fixture"]}),/content exceeds 5/);
+ assert.throws(()=>createPlan(roleDir,{title:"small",focus:"one",status:"暂停",keywords:["fixture"],steps:[1,2,3].map(i=>({id:"s"+i,title:"step",status:"未开始"}))}),/maximum is 2/);
+ const published=publishRoleKnowledgeCatalogSnapshot(roleDir,JSON.parse(JSON.stringify(readRoleKnowledgeCatalogSnapshot(roleDir))));assert.deepEqual(published.limits,limits);
+});
+test("complete approval descriptions are not rejected by fixed fifty-item business quotas",t=>{
+ const roleDir=makeRoleDir();t.after(()=>fs.rmSync(roleDir,{recursive:true,force:true}));const items=Array.from({length:51},(_,i)=>"fixture-"+i);
+ const contract={approver:"Owner",request:"Review only",recommendation:"Approve fixture only",reason:"Fixture",files:items.map(p=>({path:p,action:"modify",change:"fixture"})),commands:items.map(p=>({command:p,purpose:"fixture"})),changes:items.map(p=>({target:p,change:"fixture"})),alternatives:items,validation:items,rollback:items,outOfScope:items,requestedAt:"2026-11-04T00:00:00Z",feedbackId:"fixture-feedback",responseStatus:"pending"};
+ const plan=createPlan(roleDir,{title:"Approval fixture",focus:"One subject",status:"待审批",currentStepId:"review",keywords:["fixture"],steps:[{id:"review",title:"Review",status:"进行中",approvalRequest:contract}]});
+ assert.equal(plan.steps[0]!.approvalRequest!.files.length,51);assert.equal(plan.steps[0]!.approvalRequest!.validation.length,51);assert.equal(planApprovalGate(plan).state,"pending");
+ const stored = JSON.parse(fs.readFileSync(planJsonFile(roleDir, plan.id, "active"), "utf8")).steps[0].approvalRequest;
+ const reloaded = getPlan(roleDir, plan.id)!.steps[0]!.approvalRequest!;
+ for (const key of ["files", "commands", "changes", "alternatives", "validation", "rollback", "outOfScope"] as const) {
+   assert.deepEqual(stored[key], contract[key]);
+   assert.deepEqual(JSON.parse(JSON.stringify(reloaded[key])), contract[key]);
+ }
+});
+
+
+test("omitted or empty focus uses existing titles for plans and both memory kinds", async t => {
+  const roleDir = makeRoleDir();
+  t.after(() => fs.rmSync(roleDir, { recursive: true, force: true }));
+  const plan = createPlan(roleDir, { title: "Default plan focus", status: "暂停", steps: [{ id: "check", title: "Check" }], keywords: ["focus"] });
+  assert.equal(plan.focus, plan.title);
+  const empty = createPlan(roleDir, { title: "Empty plan focus", focus: "", status: "暂停", steps: [{ id: "check", title: "Check" }], keywords: ["focus"] });
+  assert.equal(empty.focus, empty.title);
+  const recent = createRecentMemory(roleDir, { title: "Default memory focus", content: "Content", keywords: ["focus"] });
+  assert.equal(recent.focus, recent.title);
+  const emptyRecent = createRecentMemory(roleDir, { title: "Empty memory focus", focus: "", content: "Content", keywords: ["focus"] });
+  assert.equal(emptyRecent.focus, emptyRecent.title);
+  writeRecentMemory(roleDir, { id: "aged-focus-source", title: "src", content: "Source", createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z", keywords: ["focus"] });
+  const request = pendingMemoryConsolidation(roleDir, "api", 24, 72, true);
+  assert.ok(request);
+  const result = await completeMemoryConsolidation(roleDir, request.run.id, [{ title: "Default consolidated focus", content: "Stable content", keywords: ["focus"] }, { title: "Empty consolidated focus", focus: "", content: "Stable content", keywords: ["focus"] }]);
+  assert.equal(result.memories.length, 2);
+  assert(result.memories.every(item => item.focus === item.title));
+});
+
+test("focus shape is unrestricted while explicit character budgets still apply in all write paths", async t => {
+  const roleDir = makeRoleDir();
+  t.after(() => fs.rmSync(roleDir, { recursive: true, force: true }));
+  writePersonaConfig(roleDir, { knowledgeLimits: { plan: { focusChars: 5 }, memory: { focusChars: 5 } } });
+  const input = { title: "ok", focus: "a\nb", status: "暂停", steps: [{ id: "check", title: "Check" }], keywords: ["focus"] };
+  const plan = createPlan(roleDir, input);
+  assert.equal(plan.focus, "a\nb");
+  assert.equal(updatePlan(roleDir, plan.id, { focus: " " }).focus, "");
+  assert.throws(() => updatePlan(roleDir, plan.id, { focus: "123456" }), /Plan focus exceeds 5/);
+  assert.throws(() => createPlan(roleDir, { ...input, focus: "123456" }), /Plan focus exceeds 5/);
+  const memory = createRecentMemory(roleDir, { title: "ok", focus: "a\nb", content: "Content", keywords: ["focus"] });
+  assert.equal(memory.focus, "a\nb");
+  assert.equal(updateRecentMemory(roleDir, memory.id, { focus: " " }).focus, "");
+  assert.throws(() => createRecentMemory(roleDir, { title: "ok", focus: "123456", content: "Content", keywords: ["focus"] }), /Memory focus exceeds 5/);
+  writeRecentMemory(roleDir, { id: "aged-focus-source", title: "src", content: "Source", createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z", keywords: ["focus"] });
+  const request = pendingMemoryConsolidation(roleDir, "api", 24, 72, true);
+  assert.ok(request);
+  await assert.rejects(completeMemoryConsolidation(roleDir, request.run.id, [{ title: "ok", focus: "123456", content: "Stable", keywords: ["focus"] }]), /Consolidated memory focus exceeds 5/);
+  const result = await completeMemoryConsolidation(roleDir, request.run.id, [{ title: "ok", focus: "a\nb", content: "Stable", keywords: ["focus"] }]);
+  assert.equal(result.memories[0]!.focus, "a\nb");
 });

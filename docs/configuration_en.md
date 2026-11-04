@@ -117,9 +117,6 @@ On a clean start, the Manager copies the public `examples/data` package when ava
         "voice",
         "file"
       ],
-      "allowedFileRoots": [
-        "C:/Path/To/Your/Project/ReleasePkg"
-      ],
       "messageGrouping": {
         "settleSeconds": 6,
         "incompleteSettleSeconds": 12,
@@ -175,7 +172,7 @@ On a clean start, the Manager copies the public `examples/data` package when ava
 - `messageAdapterPolicies`: `inputEnabled`, `outputEnabled`, `supportedOutputs`, and adapter-specific restrictions. QQ, Weixin, Feishu, WeCom, role-panel, and RabiLink text chats use message groups automatically without an off switch. `messageGrouping` exposes only ordinary settle, unfinished-fragment settle, and maximum wait values, defaulting to `6 / 12 / 20` seconds. ASR/voice transcripts, heartbeat, commands, approvals, health alerts, and structured events continue direct delivery without this wait. Chat dispatch changes only when Codex Message Agent mode is also enabled; otherwise delivery remains per-message. Legacy allow-group/user and output-mode fields are no longer active fine-grained filters.
 - `supportedOutputs`: outbound payload kinds. NapCat supports `text`, `image`, `voice`, and `file` in the current policy model.
 - `messageAdapterPolicies.napcat.textConfirmationThreshold`: the character threshold for a second Agent confirmation of one QQ message; defaults to `0` (off). Set it under NapCat's **Long-message confirmation**. Numbers, letters, punctuation and interior spaces count; quote and mention control tags do not. Over-length checks return before Outbox delivery and suggest shortening the text or continuing in separate messages at natural breaks, each checked and sent independently. If one message must retain its original text, review and retry its original ID with the returned confirmation token. See the [confirmation contract](rabi-agent-interfaces_en.md#napcat-long-message-confirmation).
-- `allowedFileRoots`: real-path allowlist for local file output. A local QQ group-file upload is blocked when this is empty or the resolved file leaves the allowlist.
+- Local file sends: no directory allowlist or directory-permission setting is required. Sends check real paths, existence, ordinary-file type and readability.
 - `messageAdapterPolicies.napcat.readableGroupFileIds`: optional restrictions on QQ group-file metadata reads. When absent, local and enabled authenticated remote Agents may query by default. An explicit array allows only its exact group IDs; `[]` denies all. Saving configuration does not fill in an empty array; removing the field restores the default. Requests still require an exact Route and one enabled NapCat instance; QQ determines which groups the account can access. Reads return metadata from one directory without downloading, recursion or QQ mutations. `completenessUnknown` and `potentiallyTruncated` mean the response cannot establish a complete inventory.
 - `gatewayPort`: NapCat WebSocket Client target port.
 - `napcatHttpUrl`: OneBot HTTP endpoint called by RabiRoute. A Route binds exactly one NapCat; use separate Routes for separate QQ accounts. Multiple Routes may still explicitly share one NapCat and HTTP URL. Automatic port assignment applies only to listeners owned by RabiRoute and does not move an existing NapCat endpoint to an unstarted port.

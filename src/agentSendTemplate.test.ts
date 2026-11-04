@@ -25,7 +25,7 @@ test("NapCat send template steers the Agent toward image-with-caption by default
   assert.match(String(payload?.type || ""), /image/);
   assert.match(String(payload?.type || ""), /text/);
   // A pasteable image path placeholder is required for the Agent to reach for image sends.
-  assert.match(String(payload?.path || ""), /allowedFileRoots|output|图片路径/);
+  assert.match(String(payload?.path || ""), /本地图片路径/);
   assert.match(String(payload?.text || ""), /图片来源/);
 });
 

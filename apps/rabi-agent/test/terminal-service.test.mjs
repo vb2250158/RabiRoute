@@ -60,3 +60,17 @@ test("main-process death closes native hosts, shells and detached descendants", 
   owner.kill("SIGKILL");await closed;
   await waitFor(()=>!alive(pids.pid)&&!alive(pids.descendant)&&!alive(pids.host));
 });
+
+test("active terminals are not rejected by an arbitrary count or history window",async()=>{
+ const service=new TerminalService({defaultCwd:os.tmpdir(),emit:()=>{}});
+ service.start=item=>{item.state="running";item.ready=Promise.resolve();};
+ try{for(let i=0;i<70;i++)await service.execute({action:"open",terminalId:randomUUID(),shell:service.shells[0]});
+ assert.equal(service.activeCount,70);assert.equal(service.sessions.size,70);}finally{service.sessions.clear();}
+});
+test("archive failure retains original exited history without blocking a new terminal",async()=>{
+ const service=new TerminalService({defaultCwd:os.tmpdir(),emit:()=>{}}),ids=[];
+ service.start=item=>{item.state="running";item.ready=Promise.resolve();};
+ service.history.save=async()=>{throw Object.assign(new Error("fixture archive unavailable"),{code:"ENOSPC"});};
+ for(let i=0;i<64;i++){const id=randomUUID();ids.push(id);service.sessions.set(id,{id,shell:service.shells[0],cwd:os.tmpdir(),state:"exited",createdAt:new Date().toISOString(),nextInputSequence:1,inputs:new Map(),exitCode:0});}
+ try{const created=await service.execute({action:"open",terminalId:randomUUID(),shell:service.shells[0]});assert.equal(created.state,"running");assert(ids.every(id=>service.sessions.has(id)));assert(service.historyDiagnostics.some(d=>d.code==="ENOSPC"));}finally{service.sessions.clear();}
+});

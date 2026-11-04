@@ -130,7 +130,7 @@ async function fixture(t: test.TestContext, captionFails = false, hashSink = fal
     rootDir, routeRoot: path.join(rootDir, "data", "route"), rolesRoot: path.join(rootDir, "data", "roles"),
     runtimes: [{ id: "fixture-route", enabled: true,
       napcatInstances: [{ id: "fixture-napcat", enabled: true, httpUrl: napcatUrl, accessToken: "" }],
-      messageAdapterPolicies: { napcat: { outputEnabled: true, supportedOutputs: ["file"], allowedFileRoots: [] } }
+      messageAdapterPolicies: { napcat: { outputEnabled: true, supportedOutputs: ["file"] } }
     }],
     withManagedGroupFile: (fileId, expectedSha256, send) => {
       assertAuthorized(source);

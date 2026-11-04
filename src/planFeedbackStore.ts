@@ -6,7 +6,6 @@ import { normalizeStoredPlanAttachments } from "./planAttachments.js";
 import {
   PLAN_FEEDBACK_ATTACHMENT_MAX_BYTES,
   PLAN_FEEDBACK_ATTACHMENTS_MAX_BYTES,
-  PLAN_FEEDBACK_MAX_ATTACHMENTS,
   type PlanFeedbackAttachment,
   type PlanFeedbackAttachmentUpload
 } from "./shared/planFeedbackContract.js";
@@ -182,9 +181,6 @@ function preparePlanFeedbackAttachments(
   value: unknown
 ): PreparedPlanFeedbackAttachment[] {
   if (!Array.isArray(value)) throw new Error("Approval feedback attachments must be an array.");
-  if (value.length > PLAN_FEEDBACK_MAX_ATTACHMENTS) {
-    throw new Error(`Approval feedback supports at most ${PLAN_FEEDBACK_MAX_ATTACHMENTS} attachments.`);
-  }
   canonicalLocationUnderLease(lease);
   const relativeDirectory = feedbackAttachmentRelativeDirectory(feedbackId);
   let total = 0;

@@ -175,3 +175,11 @@ test("query traces correlate request stages without recording search text or mes
   assert.equal(serialized.includes("private-query-marker"), false);
   assert.equal(serialized.includes("synthetic-private-marker"), false);
 });
+
+test("independent visibility waits share the index without a sixteen-caller admission gate",async t=>{
+ stopMessageHistorySearch();t.after(stopMessageHistorySearch);let built=false,finish!:(value:unknown)=>void;
+ t.mock.method(managerMessageIndexWorkerPool,"run",()=>built?Promise.resolve({}):new Promise(resolve=>{finish=resolve;}));
+ t.mock.method(managerMessageSearchWorkerPool,"run",async()=>built?{ready:true,result:{entries:[],coverage:{indexVersion:"index",sourceVersion:"target",indexedAt:"now",sourceSnapshotIndexed:true},metrics:{strategy:"ordered",candidates:0,elapsedMs:1}}}:{ready:false,reason:"MESSAGE_HISTORY_INDEX_LAGGING",target:{guards:{current:"target"}}});
+ const pending=Promise.all(Array.from({length:33},()=>queryMessageHistory("synthetic-many-readers",{limit:10},{signal:new AbortController().signal})));
+ await setImmediate();await setImmediate();built=true;finish({});const rows=await pending;assert.equal(rows.length,33);assert(rows.every(row=>Array.isArray(row.entries)));
+});

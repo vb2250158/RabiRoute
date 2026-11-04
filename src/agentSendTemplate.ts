@@ -71,7 +71,7 @@ export function agentSendRequestTemplateForSource(context: Record<string, unknow
       text: "<填写正文及图片来源类型与关注点；type=markdown 时填 Markdown 源文；多段混排时删除 text/path，改填有序 segments：text、image 或 markdown 段>",
       // Only NapCat carries a local path; other channels resolve media by URL or their own id.
       ...(channel === "napcat"
-        ? { path: "<单图时填写allowedFileRoots内已实际查看过的图片路径；Markdown 或多段混排时删除此字段>" }
+        ? { path: "<单图时填写已实际查看过的本地图片路径；Markdown 或多段混排时删除此字段>" }
         : {})
     },
     ...(context.messageProcessingRequirementId

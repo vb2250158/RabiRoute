@@ -14,9 +14,6 @@
         "voice",
         "file"
       ],
-      "allowedFileRoots": [
-        "C:/Path/To/Your/Project/ReleasePkg"
-      ],
       "messageGrouping": {
         "settleSeconds": 6,
         "incompleteSettleSeconds": 12,

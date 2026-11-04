@@ -102,7 +102,7 @@ test("explicit group restrictions apply equally to local and remote and are not 
   for (const remote of [true, false]) {
     for (const policy of [[], ["999999"], [" 123456"], ["0123456"]]) {
       const value = fixture(t, { remote });
-      value.definition.messageAdapterPolicies = { napcat: { readableGroupFileIds: policy, allowedFileRoots: ["/tmp"], outputEnabled: true } };
+      value.definition.messageAdapterPolicies = { napcat: { readableGroupFileIds: policy, outputEnabled: true } };
       value.definition.targetGroupId = groupId;
       await value.run();
       assert.equal(value.count(), 0);

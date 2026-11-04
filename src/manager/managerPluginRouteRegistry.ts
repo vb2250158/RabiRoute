@@ -201,8 +201,8 @@ export class ManagerPluginRouteRegistry {
     nativeHttpRequestFactory?: NativeHttpRequestFactory;
   }, requestLimits: Readonly<{ maximumActiveOperationsPerOperation?: number; applicationOwnerKey?: object }> = {}) {
     this.#applicationOwnerKey = requestLimits.applicationOwnerKey;
-    const maximum = requestLimits.maximumActiveOperationsPerOperation ?? 64;
-    if (!Number.isSafeInteger(maximum) || maximum < 1) throw new RangeError("API operation admission limit must be a positive safe integer.");
+    const maximum = requestLimits.maximumActiveOperationsPerOperation ?? 0;
+    if (!Number.isSafeInteger(maximum) || maximum < 0) throw new RangeError("API operation admission limit must be a non-negative safe integer.");
     this.maximumActiveOperationsPerOperation = maximum;
   }
 
@@ -326,7 +326,7 @@ export class ManagerPluginRouteRegistry {
     // on the stable endpoint identity, so a new activation cannot erase it.
     const key = JSON.stringify([instanceId.trim(), operationId]);
     const slot = this.operationAdmissions.get(key) ?? { active: 0 };
-    if (slot.active >= this.maximumActiveOperationsPerOperation) return undefined;
+    if (this.maximumActiveOperationsPerOperation > 0 && slot.active >= this.maximumActiveOperationsPerOperation) return undefined;
     this.operationAdmissions.set(key, slot);
     slot.active++;
     let released = false;

@@ -149,8 +149,6 @@ export type MessageAdapterPolicy = {
   inputEnabled?: boolean;
   outputEnabled?: boolean;
   supportedOutputs?: MessagePayloadKind[];
-  /** Empty or omitted imposes no directory restriction; a nonempty list limits local sends to these roots. */
-  allowedFileRoots?: string[];
   /** Omitted permits all groups; an explicit list restricts metadata reads, and [] disables them. */
   readableGroupFileIds?: string[];
   messageGrouping?: MessageGroupingPolicy;
@@ -1015,13 +1013,6 @@ function normalizePayloadKinds(value: unknown, adapterType: MessageEndpointType)
   return kinds.length > 0 ? kinds : defaults;
 }
 
-function normalizePathList(value: unknown): string[] {
-  if (!Array.isArray(value)) return [];
-  return [...new Set(value
-    .map((item) => String(item || "").trim())
-    .filter(Boolean))];
-}
-
 export function normalizeReadableGroupFileIds(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   return [...new Set(value.filter((item): item is string => typeof item === "string" && /^[1-9][0-9]{0,15}$/.test(item)))].slice(0, 128);
@@ -1049,7 +1040,6 @@ export function normalizeMessageAdapterPolicy(
     inputEnabled: raw.inputEnabled ?? !options.legacyInputDisabled,
     outputEnabled: raw.outputEnabled ?? true,
     supportedOutputs: normalizePayloadKinds(raw.supportedOutputs, adapterType),
-    allowedFileRoots: normalizePathList(raw.allowedFileRoots),
     ...(adapterType === "napcat" && raw.readableGroupFileIds !== undefined
       ? { readableGroupFileIds: normalizeReadableGroupFileIds(raw.readableGroupFileIds) } : {}),
     messageGrouping: normalizeMessageGroupingPolicy(raw.messageGrouping, adapterType),

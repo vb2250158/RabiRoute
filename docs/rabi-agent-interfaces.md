@@ -714,7 +714,7 @@ GET /api/personas/messages/receipts/:deliveryId
 
 ```text
 明确发送 API：`<managerBaseUrl>/api/agent/send`；安装版从 Host `status --json` 发现本代地址，源码模式由 Manager 标准输出提供。
-明确发送请求模板：{"deliveryId":"<stable-id>","sender":{"agentType":"primary_persona","sessionId":"<当前 Codex 主角色完整会话 ID>"},"routeId":"main","channel":"napcat","styleValidation":1,"params":{"target":"group","groupId":"456","instanceId":"default","replyToMessageId":"<能引用时填源消息 ID；不引用时填空字符串>","replyImageDescriptions":[]},"payload":{"type":"text","text":"<正文>"}}
+明确发送请求模板：{"deliveryId":"<stable-id>","sender":{"agentType":"primary_persona","sessionId":"<当前 Codex 主角色完整会话 ID>"},"routeId":"main","channel":"napcat","styleValidation":1,"params":{"target":"group","groupId":"456","instanceId":"default","replyToMessageId":"<回复具体消息时填源消息 ID；普通不引用发送可省略此字段>","replyImageDescriptions":[]},"payload":{"type":"text","text":"<正文>"}}
 来源上下文（只用于核对来源，不可直接作为发送参数）：{"routeKind":"direct_at","messageId":"123","groupId":"456"}
 ```
 
@@ -804,7 +804,7 @@ NapCat 图文混排使用 `payload.type=image` 和有序的 `payload.segments`�
 }
 ```
 
-`segments` 仅用于 NapCat 图片消息；按数组顺序发送非空的 `text`、`image` 或 `markdown` 段，至少包含一个图片或 Markdown 段。段数与图片/Markdown 段数默认不限；如需额度，设置 Manager 环境变量 `RABIROUTE_AGENT_SEND_MAX_SEGMENTS` 和 `RABIROUTE_AGENT_SEND_MAX_IMAGES`，0 或删除变量可取消限制，下次加载 Manager 生效。公开 Help 显示当前值；超限错误说明对应设置和取消方式。每个图片段只填 `path` 或 `url` 之一；本地路径逐张按 `allowedFileRoots` 校验，任何一张不合格都会在平台发送前拒绝整条消息。使用 `segments` 时不要再填顶层 `payload.text`、`path`、`url` 或 `planAttachment`。原单图 `payload.text + path/url/planAttachment` 仍可使用。文字与 Markdown 源文会合并用于语言风格校验；`replyImageDescriptions` 仍只描述**被引用的来源消息**中的图片。
+`segments` 仅用于 NapCat 图片消息；按数组顺序发送非空的 `text`、`image` 或 `markdown` 段，至少包含一个图片或 Markdown 段。段数与图片/Markdown 段数默认不限；如需额度，设置 Manager 环境变量 `RABIROUTE_AGENT_SEND_MAX_SEGMENTS` 和 `RABIROUTE_AGENT_SEND_MAX_IMAGES`，0 或删除变量可取消限制，下次加载 Manager 生效。公开 Help 显示当前值；超限错误说明对应设置和取消方式。每个图片段只填 `path` 或 `url` 之一；本地路径逐张检查文件存在、是普通文件并可读取；不设目录白名单，文件本身无效时在平台发送前拒绝整条消息。使用 `segments` 时不要再填顶层 `payload.text`、`path`、`url` 或 `planAttachment`。原单图 `payload.text + path/url/planAttachment` 仍可使用。文字与 Markdown 源文会合并用于语言风格校验；`replyImageDescriptions` 仍只描述**被引用的来源消息**中的图片。
 
 单独把 Markdown 文本渲染成图片，提交 `"payload":{"type":"markdown","text":"# 标题\n\n| 项目 | 结果 |\n|---|---|\n| A | 通过 |"}`。需要与普通文字、已有图片交替排布时，在上述 `segments` 数组中加入 `{"type":"markdown","text":"# 标题\n\n**正文**"}`；该段在原位置变成图片，整条消息只发送一次。两种形式都要求 NapCat Route 允许 `image` 输出，不能再附加顶层 `path` 等媒体字段。
 
@@ -851,7 +851,7 @@ POST /api/language-style/validate
 
 | `channel` | `params` 必填目标 |
 | --- | --- |
-| `napcat` | `target=group + groupId`，或 `target=private + userId`。群聊必须显式提交 `replyToMessageId`：能取得来源消息时尽量填写真实消息 ID；明确不引用时填写空字符串 `""`。引用消息含图片时，`replyImageDescriptions` 必须按原图顺序逐张填写图片内容和想表达的意思；缺失、数量不符、空泛描述、图片不可读或来源消息无法核对都会在进入幂等发送前报错。完全省略 `replyToMessageId` 也会在进入 Outbox 前返回可行动错误。同一来源消息在 10 分钟内已有成功回复时，新的改写默认返回 `409`；只有确有新增事实的后续回复才显式填写 `allowAdditionalReply=true`。 |
+| `napcat` | `target=group + groupId`，或 `target=private + userId`。普通群发送可省略 `replyToMessageId` 或填空字符串 `""`，表示不引用；回复具体来源消息时应填写真实消息 ID，`message_processing` 的实际群回复仍必须提供有效来源引用。引用消息含图片时，`replyImageDescriptions` 必须按原图顺序逐张填写图片内容和想表达的意思；缺失、数量不符、空泛描述、图片不可读或来源消息无法核对都会在进入幂等发送前报错。同一来源消息在 10 分钟内已有成功回复时，新的改写默认返回 `409`；只有确有新增事实的后续回复才显式填写 `allowAdditionalReply=true`。 |
 | `wecom` | `chatId` |
 | `feishu` | `chatId` |
 | `weixin` | `sessionId` |
@@ -1204,7 +1204,7 @@ Content-Type: application/json
 
 当当前路由消息明确提到多台电脑、角色/角色同步或 persona sync 时，AgentPacket 会把上述回环地址、当前 `roleId`、一次性执行要求和冲突判定直接注入绑定角色的当前任务；普通聊天不注入这段能力说明。默认只同步当前角色，只有用户明确要求时才允许省略 `roleId` 同步全部角色；peer 不唯一时必须先确认目标，不能猜测，也不能用轮询等待覆盖率。
 
-NapCat 群聊始终需要提交 `params.replyToMessageId`。能取得来源消息时尽量填写真实消息 ID：
+NapCat 普通群发送可省略 `params.replyToMessageId`；回复具体来源消息时应填写真实消息 ID，`message_processing` 的实际群回复仍必须提供有效来源引用：
 
 ```json
 {
@@ -1228,7 +1228,7 @@ NapCat 群聊始终需要提交 `params.replyToMessageId`。能取得来源消�
 
 Outbox 会在字符串消息前添加 OneBot `[CQ:reply,id=123]`，或在消息段数组前插入 `reply` 段。`replyImageDescriptions` 的数量必须与被引用消息的图片数量完全一致，并按消息中的图片顺序一一对应；每项都要写实际看到的内容和图片想表达的意思，不能只写“已查看”。发送成功后，RabiRoute 会在每张本机图片旁创建或追加图片同名的 `.md`，保存来源消息 ID、图片序号、Agent 类型、完整会话 ID、发送 ID、QQ 回执 ID 和本次描述。存档回执只返回映射文件，不把描述正文复制进运维追踪结果。
 
-主动无源群消息应明确填写 `"replyToMessageId":""`，并保持 `"replyImageDescriptions":[]`，表示有意不引用；这时不会添加引用段。完全省略 `replyToMessageId` 会拒绝请求，并提示 Agent：能引用时使用来源 QQ 消息 ID，确实不引用时传空字符串。私聊不要求该字段。
+主动无源群消息可以省略 `replyToMessageId` 或填空字符串；这时不会添加引用段，也无需提供来源图片说明。回复具体消息时保留真实来源引用及对应图片说明；`message_processing` 的实际群回复不能省略有效来源引用。私聊不要求该字段。
 
 发送本地 QQ 群文件时仍使用同一个发送接口：
 
@@ -1248,7 +1248,7 @@ Outbox 会在字符串消息前添加 OneBot `[CQ:reply,id=123]`，或在消息�
 }
 ```
 
-对应 NapCat 策略必须支持 `file`。`messageAdapterPolicies.napcat.allowedFileRoots` 未配置或为空时不限制本地文件目录；用户设置非空列表时才按其真实目录限制，拒绝提示给出该配置及取消方式。RabiRoute 会校验文件存在、类型和真实路径，再调用 `upload_group_file`；成功结果包含 `sentFileName`，NapCat 返回稳定标识时还包含 `sentFileId`。如果文件上传成功但跟随的说明文本失败，返回仍为 `status=sent` 并在 `reason` 中说明文本失败，调用方只能补发文本，不能重复上传文件。
+对应 NapCat 策略必须支持 `file`。本地文件发送不设置目录白名单，无需配置目录许可。RabiRoute 会校验文件存在、类型、真实路径和可读性，再调用 `upload_group_file`；成功结果包含 `sentFileName`，NapCat 返回稳定标识时还包含 `sentFileId`。如果文件上传成功但跟随的说明文本失败，返回仍为 `status=sent` 并在 `reason` 中说明文本失败，调用方只能补发文本，不能重复上传文件。
 
 ### 远端 Agent 上传后发送群文件（实验合同）
 
@@ -1313,14 +1313,14 @@ node rabi-agent.mjs --api GET /api/agent/uploads/<UUID> --agent-type codex --id 
 ```
 
 - 使用 `fileId` 时必须同时提交 `fileSha256=上传 data.sha256`（64 位小写十六进制），把引用绑定到原始内容，防止 TTL 到期后 UUID 复用改变旧引用的文件字节。发送 callback 在 lease 内核对实际 hash，不匹配即拒发。
-- `payload.text` 可省略；`replyToMessageId` 必须是具体来源消息 ID 或明确不引用的空字符串，原引用核对和 tracking 要求不变。
+- `payload.text` 可省略；普通群发送可省略 `replyToMessageId` 或填空字符串；引用回复使用具体来源消息 ID，`message_processing` 的实际群回复仍必须提供有效来源引用，原引用核对和 tracking 要求不变。
 - `fileId` 仅用于 `channel=napcat`、`target=group`、`type=file`，与 `path`/`url`/`fileName` 互斥；不能借此发送图片、语音或其它渠道。显示文件名（`displayName`）取自上传元数据，不由发送请求另行覆盖。
-- Manager 内部可信 resolver 每次请求重新核对授权、归属、完整性和 TTL，并持有 inflight lease 防止在途文件被清理；不扩大 `allowedFileRoots`，原本地 `path` 流程及其根目录检查照旧。
+- Manager 内部可信 resolver 每次请求重新核对授权、归属、完整性和 TTL，并持有 inflight lease 防止在途文件被清理；普通本地 `path` 发送仍核对文件存在、类型和可读性，不设目录白名单。
 - 渠道仍须允许发送并支持 `file`；发送者身份仍按投递合同核对。上传成功不是群发送成功，必须检查 `/api/agent/send` 的 Manager 与 NapCat 回执；发送不确定时查询原 `deliveryId` 回执。
 - NapCat 已接受群文件但随后 caption 失败时，仍保留 `status=sent`，只补发文本，不重发文件。当前 NapCat 接口读取 Manager 交给它的文件路径；异机 NapCat 必须能够通过共享目录读取该路径。本功能只解决远端 Agent 到 Manager 的上传，不解决任意跨机 NapCat 文件可读性。
 - 远端线程投递通过 Manager 持有的端点合同处理，支持 `responsePolicy: "none"`、`required`、`inReplyToRequestId` 正式回复以及远端到远端投递；来源必须来自原始认证 lease，目标必须是已启用的精确实例 Agent 会话，不接受请求正文自称的身份。旧连接、停用后重新启用、换会话或换 owner 均不能继承原授权。未支持精确 owner 执行的 Provider 失败关闭，不启动备用 Runtime。
 
-当图片或文件已经作为计划附件存在时，可用 `payload.planAttachment` 按 ID 引用，不必先复制到 `allowedFileRoots` 里的目录：
+当图片或文件已经作为计划附件存在时，可用 `payload.planAttachment` 按 ID 引用，不必先复制或重新填写本地路径：
 
 ```json
 {
@@ -1338,13 +1338,13 @@ node rabi-agent.mjs --api GET /api/agent/uploads/<UUID> --agent-type codex --id 
 ```
 
 - `planAttachment` 只接受 `type=image` 或 `type=file`，与 `path`/`url`/`fileId` 互斥；`roleId` 为拥有该计划的角色角色 ID。
-- Manager 每次请求从真实计划存储解析该附件，并再次核对解析结果仍位于该计划的附件目录内；计划或附件不存在、类型不符、逃出目录都拒发。它**不**扩大 `allowedFileRoots`，普通 `path` 流程的根目录检查完全照旧。
+- Manager 每次请求从真实计划存储解析该附件，并再次核对解析结果仍位于该计划的附件目录内；计划或附件不存在、类型不符、逃出目录都拒发。普通 `path` 发送不设目录白名单，仍检查文件存在、类型和可读性。
 - 与 `fileId` 一样，信任边界是「按 ID 引用对象」，不是「任意路径可读」；未接入该 resolver 的运行环境会明确失败而不是退回读取原路径。
 
 `payload.text` 中的 CQ 码按固定白名单解析为真实消息段，而不是按纯文本发送：
 
 - 支持 `[CQ:at,qq=<QQ或all>]`、`[CQ:reply,id=<消息ID>]`、`[CQ:face,id=<表情ID>]`，参数值按 URL 解码；`at` 的 `qq` 必须是数字或 `all`。
-- 其余 CQ 形态（`image`、`record`、`video`、`file`、`json`、`xml`、`forward`、`node`）会被明确拒绝，因为文本注入这些段会绕过渠道的 `payloadKind` 策略和 `allowedFileRoots` 校验；需要发这些内容请改用带 `path`/`url`/`planAttachment` 的类型化 payload。
+- 其余 CQ 形态（`image`、`record`、`video`、`file`、`json`、`xml`、`forward`、`node`）会被明确拒绝，因为文本注入这些段会绕过渠道的 `payloadKind` 策略及类型化媒体输入校验；需要发这些内容请改用带 `path`/`url`/`planAttachment` 的类型化 payload。
 - 无法识别的 CQ 样式 token（例如缺少必需参数）会从文本中剥离，不再作为字面文本进入群聊。正文里若要展示 CQ 字样，请改用全角字符或拆分书写。
 
 Agent 可以主动向自己已经掌握的群号或企业微信群 chat id 发送推进消息，不需要引用原消息，但必须明确 `channel` 和目标参数。是否能发由消息端发送开关、消息端可用性和 payload 策略决定。

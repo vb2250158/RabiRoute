@@ -14,7 +14,7 @@ function fixture(rootDir: string): AgentReplyOptions {
     runtimes: [{ id: "gateway", configName: "route-config", enabled: true,
       routeProfiles: [{ id: "profile", enabled: true }],
       pipeline: { outputAdapter: "qq", outputPipeline: "qq" },
-      messageAdapterPolicies: { napcat: { outputEnabled: true, supportedOutputs: ["file"], allowedFileRoots: [rootDir] } },
+      messageAdapterPolicies: { napcat: { outputEnabled: true, supportedOutputs: ["file"] } },
       napcatInstances: [{ id: "qq", httpUrl: "http://mock.invalid", accessToken: "fake-fixture-secret", enabled: true }]
     }]
   };

@@ -1,5 +1,5 @@
 export const TERMINAL_LIMITS: Readonly<{ idPattern: string; inputBytes: number; eventCodeUnits: number; replayBytes: number; replayEvents: number;
-  viewers: number; waitMs: number; transportSessions: number; activeSessions: number; retainedSessions: number; inputReceipts: number;
+  waitMs: number; transportSessions: number; retainedSessions: number; inputReceipts: number;
   inputQueueBytes: number; minCols: number; maxCols: number; minRows: number; maxRows: number; streamQueueBytes: number; heartbeatMs: number }>;
 export const COMPUTER_LIMITS: Readonly<{ chunkBytes: number; chunkBase64CodeUnits: number; uploadBytes: number; uploadIdPattern: string; hashPattern: string }>;
 export const terminalIdSchema: Readonly<Record<string, unknown>>;

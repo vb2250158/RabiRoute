@@ -80,7 +80,11 @@ test("external native HTTP discovery selects the original owner, preserves opaqu
   assert.equal(registry.catalogSnapshot().operations.find(value => value.contract.operationId === "fixture.native")!.binding!.address.port, port);
   current = false;
   assert.equal(registry.catalogSnapshot().operations.some(value => value.contract.operationId === "fixture.native"), false);
+  await assert.rejects(transport.client.invokeOperation("fixture.native", { body: {} }), { code: "API_LISTENER_BINDING_CHANGED" });
+  assert.deepEqual(received, bytes, "A stale cached binding must fail before native invocation without replay.");
+  transport.client.catalog.handleEvent({ type: "api.catalog.changed" });
   await assert.rejects(transport.client.invokeOperation("fixture.native", { body: {} }), /absent from current discovery/);
+  assert.deepEqual(received, bytes);
 });
 
 test("native Authorization has a separate explicit credential boundary and never inherits the Manager bearer", async t => {

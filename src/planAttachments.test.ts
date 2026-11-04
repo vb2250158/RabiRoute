@@ -101,3 +101,13 @@ test("the actual Manager send caller passes the same identity and forwards the o
   assert.match(callerText, /item\.id === reference\.attachmentId/);
   assert.match(callerText, /attachment\.kind !== "image" && attachment\.kind !== "file"/);
 });
+
+
+import { preparePlanAttachments } from "./planAttachments.js";
+test("nine valid plan uploads are materialized without an unrelated file-count quota",t=>{
+ const f=fixture(t),uploads=Array.from({length:9},(_,i)=>({id:"upload-"+i,name:"part-"+i+".txt",contentBase64:Buffer.from("x").toString("base64")}));
+ const prepared=preparePlanAttachments(f.roleDir,f.planId,uploads);assert.equal(prepared.length,9);assert(prepared.every(p=>p.content?.toString()==="x"));
+ assert.throws(()=>preparePlanAttachments(f.roleDir,f.planId,[uploads[0],uploads[0]]),/duplicated/);
+ assert.throws(()=>preparePlanAttachments(f.roleDir,f.planId,[{path:path.join(f.root,"missing.txt")}]),/does not exist/);
+ assert.throws(()=>preparePlanAttachments(f.roleDir,f.planId,[{name:"large.bin",contentBase64:Buffer.alloc(10*1024*1024+1).toString("base64")}]),/exceeds/);
+});

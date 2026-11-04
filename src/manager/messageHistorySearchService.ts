@@ -73,7 +73,6 @@ function refresh(directory: string, state: RoleIndex): void {
 function waitForIndexProgress(state: RoleIndex, observed: number, deadlineAt: number, signal: AbortSignal): Promise<void> {
   signal.throwIfAborted();
   if (state.stopped || (state.progress ?? 0) !== observed) return Promise.resolve();
-  if ((state.waiters?.size ?? 0) >= 16) throw new ManagerReadWorkerError("SEARCH_BUSY: visibility wait limit exceeded", "busy");
   return new Promise((resolve, reject) => {
     let timer: NodeJS.Timeout | undefined;
     const finish = (error?: unknown) => {

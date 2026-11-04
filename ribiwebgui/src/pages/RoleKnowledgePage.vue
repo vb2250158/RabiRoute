@@ -10,7 +10,6 @@ import { useRoleStore } from "../stores/roleStore";
 import {
   PLAN_FEEDBACK_ATTACHMENT_MAX_BYTES,
   PLAN_FEEDBACK_ATTACHMENTS_MAX_BYTES,
-  PLAN_FEEDBACK_MAX_ATTACHMENTS,
   type PlanFeedbackAttachmentUpload
 } from "@shared/planFeedbackContract";
 import {
@@ -2112,14 +2111,6 @@ function clipboardAttachmentName(file: File, kind: "file" | "image", index: numb
 function addApprovalFiles(planId: string, files: File[], fromClipboard = false): void {
   if (!files.length || approvalPending[planId]) return;
   const current = approvalAttachmentsFor(planId);
-  if (current.length + files.length > PLAN_FEEDBACK_MAX_ATTACHMENTS) {
-    approvalAttachmentError(
-      planId,
-      `最多只能添加 ${PLAN_FEEDBACK_MAX_ATTACHMENTS} 个附件。`,
-      `You can attach at most ${PLAN_FEEDBACK_MAX_ATTACHMENTS} files.`
-    );
-    return;
-  }
   const oversized = files.find((file) => file.size > PLAN_FEEDBACK_ATTACHMENT_MAX_BYTES);
   if (oversized) {
     approvalAttachmentError(

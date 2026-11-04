@@ -1,6 +1,6 @@
 import type { ApiOperationDefinition, ApiOperationStream } from "./apiOperationContract.js";
 
-export const MANAGER_EVENT_LIMITS = Object.freeze({ subscribers: 128, queuedFrames: 64, queuedBytes: 4 * 1024 * 1024,
+export const MANAGER_EVENT_LIMITS = Object.freeze({ subscribers: 0, queuedFrames: 64, queuedBytes: 4 * 1024 * 1024,
   frameBytes: 4 * 1024 * 1024, heartbeatMs: 15_000, retryMs: 3000 });
 type Frame = Readonly<{ event?: string; data?: unknown; retry?: number; comment?: string }>;
 type QueuedFrame = { frame: Frame; bytes: number };
@@ -20,7 +20,7 @@ export class ManagerEventHub {
     limits?: Partial<EventLimits>;
   } = {}) {
     const limits = { ...MANAGER_EVENT_LIMITS, ...options.limits };
-    for (const limit of Object.values(limits)) if (!Number.isSafeInteger(limit) || limit < 1) throw new Error("Invalid Manager event resource limit.");
+    for (const [name, limit] of Object.entries(limits)) if (!Number.isSafeInteger(limit) || limit < (name === "subscribers" ? 0 : 1)) throw new Error("Invalid Manager event resource limit.");
     this.limits = Object.freeze(limits); this.subscribe = options.subscribe;
     const initial = [this.prepare({ retry: limits.retryMs }), this.prepare({ event: "ready", data: {} })];
     if (limits.queuedFrames < initial.length || limits.queuedBytes < initial.reduce((size, value) => size + value.bytes, 0)
@@ -60,7 +60,7 @@ export class ManagerEventHub {
     for (const subscriber of [...this.subscribers]) this.push(subscriber, frame);
   }
   open(): ApiOperationStream | undefined {
-    if (this.subscribers.size >= this.limits.subscribers) return undefined;
+    if (this.limits.subscribers > 0 && this.subscribers.size >= this.limits.subscribers) return undefined;
     const subscriber: Subscriber = { queue: [], bytes: 0, closed: false, controller: new AbortController() };
     this.subscribers.add(subscriber);
     try {
@@ -110,7 +110,7 @@ export function createManagerEventsOperation(hub: ManagerEventHub): ApiOperation
         properties: { code: { const: -1 }, errorCode: { const: "MANAGER_EVENT_CAPACITY" }, retryable: { const: false } } } } },
     effects: { mode: "subscription", description: "Keeps one bounded in-memory notification subscription and shared keepalive/knowledge event listener. Does not run the referenced business actions." },
     recovery: { strategy: "reconnect-and-refresh", description: "The stream has no durable replay cursor. On EOF/reconnect, refresh current resources and API discovery under the current Manager identity; never replay writes because an event was missed." },
-    validators: [{ id: "manager.events.capacity", description: `All admitted callers share limits of ${hub.limits.subscribers} subscriptions, ${hub.limits.queuedFrames} queued frames and ${hub.limits.queuedBytes} queued bytes per subscriber. Slow consumers close on queue overflow. Only protocol keepalive uses a timer; no business polling is added.` }]
+    validators: [{ id: "manager.events.capacity", description: `${hub.limits.subscribers > 0 ? `An explicit limit permits ${hub.limits.subscribers} subscriptions.` : "Subscription count has no default quota."} Each subscriber retains bounded queues of ${hub.limits.queuedFrames} frames and ${hub.limits.queuedBytes} bytes. Slow consumers close on queue overflow. Only protocol keepalive uses a timer; no business polling is added.` }]
   }, handler: () => {
     const stream = hub.open();
     return stream ? { status: 200, stream, headers: { "cache-control": "no-store, no-transform", connection: "keep-alive", "x-accel-buffering": "no" } }

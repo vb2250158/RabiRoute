@@ -459,36 +459,36 @@ export type RoleKnowledgeWriteLimits = {
 
 export const DEFAULT_ROLE_KNOWLEDGE_WRITE_LIMITS: RoleKnowledgeWriteLimits = {
   plan: {
-    titleChars: 80,
-    focusChars: 80,
-    currentStepChars: 1200,
-    stepTitleChars: 120,
-    stepDetailChars: 600,
-    stepWaitingForChars: 300,
-    stepBlockedByChars: 300,
-    approvalRequestChars: 600,
-    approvalReasonChars: 600,
-    approvalPathChars: 1000,
-    approvalDetailChars: 800,
-    approvalCommandChars: 2000,
-    approvalListItemChars: 800,
-    maxSteps: 100,
-    nextActionChars: 600,
-    waitingForChars: 300,
-    blockedByChars: 600,
-    sourceSummaryChars: 240,
-    keywordChars: 32,
-    maxKeywords: 24,
-    totalChars: 12000
+    titleChars: Number.MAX_SAFE_INTEGER,
+    focusChars: Number.MAX_SAFE_INTEGER,
+    currentStepChars: Number.MAX_SAFE_INTEGER,
+    stepTitleChars: Number.MAX_SAFE_INTEGER,
+    stepDetailChars: Number.MAX_SAFE_INTEGER,
+    stepWaitingForChars: Number.MAX_SAFE_INTEGER,
+    stepBlockedByChars: Number.MAX_SAFE_INTEGER,
+    approvalRequestChars: Number.MAX_SAFE_INTEGER,
+    approvalReasonChars: Number.MAX_SAFE_INTEGER,
+    approvalPathChars: Number.MAX_SAFE_INTEGER,
+    approvalDetailChars: Number.MAX_SAFE_INTEGER,
+    approvalCommandChars: Number.MAX_SAFE_INTEGER,
+    approvalListItemChars: Number.MAX_SAFE_INTEGER,
+    maxSteps: Number.MAX_SAFE_INTEGER,
+    nextActionChars: Number.MAX_SAFE_INTEGER,
+    waitingForChars: Number.MAX_SAFE_INTEGER,
+    blockedByChars: Number.MAX_SAFE_INTEGER,
+    sourceSummaryChars: Number.MAX_SAFE_INTEGER,
+    keywordChars: Number.MAX_SAFE_INTEGER,
+    maxKeywords: Number.MAX_SAFE_INTEGER,
+    totalChars: Number.MAX_SAFE_INTEGER
   },
   memory: {
-    titleChars: 80,
-    focusChars: 80,
-    contentChars: 4000,
-    sourceSummaryChars: 240,
-    keywordChars: 32,
-    maxKeywords: 24,
-    totalChars: 4600
+    titleChars: Number.MAX_SAFE_INTEGER,
+    focusChars: Number.MAX_SAFE_INTEGER,
+    contentChars: Number.MAX_SAFE_INTEGER,
+    sourceSummaryChars: Number.MAX_SAFE_INTEGER,
+    keywordChars: Number.MAX_SAFE_INTEGER,
+    maxKeywords: Number.MAX_SAFE_INTEGER,
+    totalChars: Number.MAX_SAFE_INTEGER
   }
 };
 
@@ -933,7 +933,7 @@ function recordValue(value: unknown): Record<string, unknown> {
 function positiveLimit(value: unknown, fallback: number): number {
   const parsed = Number(value);
   if (!Number.isFinite(parsed) || parsed < 1) return fallback;
-  return Math.min(100_000, Math.floor(parsed));
+  return Math.min(Number.MAX_SAFE_INTEGER, Math.floor(parsed));
 }
 
 function boundedContextLimit(value: unknown, fallback: number, minimum: number, maximum: number): number {
@@ -986,16 +986,11 @@ function textChars(value: unknown): number {
 }
 
 function assertTextLimit(label: string, value: unknown, maximum: number): void {
+  if (maximum === Number.MAX_SAFE_INTEGER) return;
   const actual = textChars(value);
   if (actual > maximum) {
     throw new RoleStorageValidationError(`${label} exceeds ${maximum} characters (received ${actual}). Split it into focused items.`);
   }
-}
-
-function assertSingleFocus(label: string, focus: string, maximum: number): void {
-  if (!focus.trim()) throw new RoleStorageValidationError(`${label} focus is required.`);
-  if (/\r|\n/.test(focus)) throw new RoleStorageValidationError(`${label} focus must be a single line and describe one subject.`);
-  assertTextLimit(`${label} focus`, focus, maximum);
 }
 
 function assertKeywordLimits(label: string, keywords: string[], maximumItems: number, maximumChars: number): void {
@@ -1161,9 +1156,6 @@ function validateApprovalRequest(contract: PlanApprovalRequest, limits: PlanWrit
   assertTextLimit("Plan approvalRequest.request", contract.request, limits.approvalRequestChars);
   assertTextLimit("Plan approvalRequest.recommendation", contract.recommendation, limits.approvalRequestChars);
   assertTextLimit("Plan approvalRequest.reason", contract.reason, limits.approvalReasonChars);
-  if (contract.files.length > 50) throw new RoleStorageValidationError("Plan approvalRequest.files cannot contain more than 50 items.");
-  if (contract.commands.length > 50) throw new RoleStorageValidationError("Plan approvalRequest.commands cannot contain more than 50 items.");
-  if (contract.changes.length > 50) throw new RoleStorageValidationError("Plan approvalRequest.changes cannot contain more than 50 items.");
   for (const item of contract.files) {
     assertTextLimit("Plan approvalRequest file path", item.path, limits.approvalPathChars);
     assertTextLimit("Plan approvalRequest file destination", item.destination, limits.approvalPathChars);
@@ -1185,7 +1177,6 @@ function validateApprovalRequest(contract: PlanApprovalRequest, limits: PlanWrit
     ["rollback", contract.rollback],
     ["outOfScope", contract.outOfScope]
   ] as const) {
-    if (items.length > 50) throw new RoleStorageValidationError(`Plan approvalRequest.${label} cannot contain more than 50 items.`);
     for (const item of items) assertTextLimit(`Plan approvalRequest.${label} item`, item, limits.approvalListItemChars);
   }
   assertTextLimit("Plan approvalRequest.requestedAt", contract.requestedAt, 80);
@@ -1263,7 +1254,7 @@ function validatePlanWrite(
   const workflow = ensurePersonaPlanWorkflow(roleDir).workflow;
   const status = assertWritablePlanStatus(workflow, plan.status);
   assertTextLimit("Plan title", plan.title, limits.titleChars);
-  assertSingleFocus("Plan", plan.focus, limits.focusChars);
+  assertTextLimit("Plan focus", plan.focus, limits.focusChars);
   assertTextLimit("Plan currentStep", plan.currentStep, limits.currentStepChars);
   assertTextLimit("Plan nextAction", plan.nextAction, limits.nextActionChars);
   assertTextLimit("Plan waitingFor", plan.waitingFor, limits.waitingForChars);
@@ -1292,7 +1283,7 @@ function validatePlanWrite(
   } else if (plan.isBlocked === true || plan.steps.some((step) => step.isBlocked === true)) {
     throw new RoleStorageValidationError("isBlocked is Manager-derived and is only valid for a complete pending approval contract.");
   }
-  const total = planTextTotal(plan);
+  const total = limits.totalChars === Number.MAX_SAFE_INTEGER ? 0 : planTextTotal(plan);
   if (total > limits.totalChars) {
     throw new RoleStorageValidationError(`Plan text exceeds ${limits.totalChars} characters in total (received ${total}). Split it into one plan per subject.`);
   }
@@ -1305,11 +1296,11 @@ function validateMemoryWrite(
   limits = roleKnowledgeWriteLimits(roleDir).memory
 ): void {
   assertTextLimit(`${label} title`, memory.title, limits.titleChars);
-  assertSingleFocus(label, memory.focus, limits.focusChars);
+  assertTextLimit(`${label} focus`, memory.focus, limits.focusChars);
   assertTextLimit(`${label} content`, memory.content, limits.contentChars);
   assertTextLimit(`${label} source.summary`, memory.source?.summary, limits.sourceSummaryChars);
   assertKeywordLimits(label, memory.keywords, limits.maxKeywords, limits.keywordChars);
-  const total = memoryTextTotal(memory);
+  const total = limits.totalChars === Number.MAX_SAFE_INTEGER ? 0 : memoryTextTotal(memory);
   if (total > limits.totalChars) {
     throw new RoleStorageValidationError(`${label} text exceeds ${limits.totalChars} characters in total (received ${total}). Split it into one memory per subject.`);
   }
@@ -3777,7 +3768,6 @@ export function createPlan(
   input: Record<string, unknown>,
   mutation?: StorageMutationStamp
 ): PlanItem {
-  if (!String(input.focus || "").trim()) throw new Error("Plan focus is required and must describe one subject.");
   const workflow = ensurePersonaPlanWorkflow(roleDir).workflow;
   validatePlanStatusInput(workflow, input.status);
   const state = planStateForWrite(input, undefined, workflow);
@@ -3994,7 +3984,6 @@ export function createRecentMemory(
   mutation?: StorageMutationStamp,
   checkpoint?: () => void
 ): RecentMemoryItem {
-  if (!String(input.focus || "").trim()) throw new Error("Memory focus is required and must describe one subject.");
   const id = typeof input.id === "string" && input.id.trim() ? input.id : generatedId("memory", String(input.title || ""));
   const memory = normalizeRecentMemory({
     ...input,
@@ -4311,9 +4300,6 @@ async function completeMemoryConsolidationUnlocked(
   const output = items.flatMap((item, index) => {
     if (!item || typeof item !== "object" || Array.isArray(item)) return [];
     const source = item as Record<string, unknown>;
-    if (!String(source.focus || "").trim()) {
-      throw new Error("Consolidated memory focus is required and must describe one subject.");
-    }
     const id = typeof source.id === "string" && source.id
       ? source.id
       : mutation

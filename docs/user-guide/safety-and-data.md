@@ -40,7 +40,7 @@ Desktop 允许 Agent 读取文件，不等于允许把文件发到群里。RabiR
 
 ## 本地文件上传
 
-NapCat 群文件使用本地 `filePath` 时，默认不限制文件目录。只有用户在 Route 的 `messageAdapterPolicies.napcat.allowedFileRoots` 设置非空列表时，路径才须位于其中之一；清空列表可取消目录限制。RabiRoute 会检查真实路径、文件存在性和普通文件类型。
+本地图片和文件发送不设置目录白名单，也不需要目录许可配置。RabiRoute 会检查真实路径、文件存在性、普通文件类型和可读性。
 
 公开示例只使用占位目录。不要把个人目录、构建服务器路径、真实文件名或私有发布目录写进仓库。
 

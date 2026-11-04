@@ -194,7 +194,7 @@ node rabi-agent.mjs --api POST /api/agent/send --agent-type codex --id "<FULL_SE
 
 已用 734 MiB（769654784 字节）的受控文件完成真实客户端到 loopback Manager、磁盘及模拟 NapCat 的 size/SHA-256 集成验收；生成和接收均按 64 KiB 小块，大于 8 MiB 的 Buffer 分配/拼接被测试防线拒绝。大测试由 `RABI_TEST_LARGE_UPLOAD=1` 显式启用，临时文件自动清理。**尚未验证真实 QQ 平台接收这一大小的文件**，仍须核对 NapCat/QQ 限制及群权限。旧连接器需要新版 bootstrap（保留已有节点凭据），旧 Hook 缓存需要重载宿主；仅更新 Manager 不会让旧客户端支持大包。
 
-发送仍用原 `/api/agent/send`，保留稳定 `deliveryId`、`sender`、准确 `routeId`、`channel=napcat`，以及 `params.target=group/groupId/instanceId/replyToMessageId`；引用 ID 必须是具体消息 ID 或空字符串。标准输入 JSON 的文件部分为 `payload:{type:'file',fileId:<upload-data.id>,fileSha256:<upload-data.sha256>,text?}`。`fileId` 与 `path`、`url`、`fileName` 互斥，显示名从上传元数据取得，只用于群文件，不用于图片、语音或其它 channel。原引用核对和 tracking 合同仍生效。
+发送仍用原 `/api/agent/send`，保留稳定 `deliveryId`、`sender`、准确 `routeId`、`channel=napcat`，以及 `params.target=group/groupId/instanceId`；普通不引用发送可省略 `replyToMessageId` 或填空字符串，引用回复填写具体来源消息 ID，`message_processing` 的实际群回复仍须有效来源引用。标准输入 JSON 的文件部分为 `payload:{type:'file',fileId:<upload-data.id>,fileSha256:<upload-data.sha256>,text?}`。`fileId` 与 `path`、`url`、`fileName` 互斥，显示名从上传元数据取得，只用于群文件，不用于图片、语音或其它 channel。原引用核对和 tracking 合同仍生效。
 
 `fileSha256` 为使用 `fileId` 时的必填项，必须取上传 `data.sha256`（64 位小写十六进制），防止 24 小时过期后 UUID 复用使旧引用换成其它内容。发送 callback 在 lease 内核对实际 hash，不匹配拒发。
 

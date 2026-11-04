@@ -200,7 +200,8 @@ test("WebGUI fences plan feedback with a current-generation strong ETag and stab
 
 test("WebGUI bounds an uncertain plan feedback POST and permits retry with the same key", async () => {
   const originalFetch = globalThis.fetch;
-  const originalSetTimeout = globalThis.setTimeout;
+  // The in-memory fetch fixture has no socket to keep native abort deadlines alive.
+  const keepAlive = setInterval(() => {}, 1000);
   const mutationHeaders: Headers[] = [];
   globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input);
@@ -237,10 +238,6 @@ test("WebGUI bounds an uncertain plan feedback POST and permits retry with the s
   };
   try {
     await loadPlanFeedbackWithRevision(feedback.roleId, feedback.planId);
-    globalThis.setTimeout = ((callback: TimerHandler) => {
-      if (typeof callback === "function") callback();
-      return 0;
-    }) as typeof setTimeout;
     for (let attempt = 0; attempt < 2; attempt += 1) {
       await assert.rejects(
         submitPlanFeedback(feedback),
@@ -248,7 +245,7 @@ test("WebGUI bounds an uncertain plan feedback POST and permits retry with the s
       );
     }
   } finally {
-    globalThis.setTimeout = originalSetTimeout;
+    clearInterval(keepAlive);
     globalThis.fetch = originalFetch;
   }
   assert.equal(mutationHeaders.length, 2);

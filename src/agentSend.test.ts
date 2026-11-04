@@ -237,7 +237,7 @@ test("NapCat renders Markdown to a PNG image segment in the ordered message", as
   }, async url => {
     const opts = options(rootDir, url);
     opts.runtimes[0].messageAdapterPolicies!.napcat = {
-      outputEnabled: true, supportedOutputs: ["text", "image"], allowedFileRoots: [imageDir]
+      outputEnabled: true, supportedOutputs: ["text", "image"]
     };
     const request: AgentSendRequest = {
       deliveryId: "markdown-group-send",
@@ -321,7 +321,7 @@ test("NapCat sends ordered text and multiple images in one group or private mess
   }, async url => {
     const opts = options(rootDir, url);
     opts.runtimes[0].messageAdapterPolicies!.napcat = {
-      outputEnabled: true, supportedOutputs: ["text", "image"], allowedFileRoots: [imageDir]
+      outputEnabled: true, supportedOutputs: ["text", "image"]
     };
     const request: AgentSendRequest = {
       deliveryId: "ordered-images-group",
@@ -349,27 +349,45 @@ test("NapCat sends ordered text and multiple images in one group or private mess
     assert.equal(sent.length, 2);
     assert.equal(sent[1].path, "/send_private_msg");
     assert.deepEqual(sent[1].body.message, sent[0].body.message);
-    const blocked = await handleAgentSend({
+    const outsideResult = await handleAgentSend({
       ...request, deliveryId: "ordered-images-invalid-path",
       payload: { type: "image", segments: [
         { type: "image", path: first }, { type: "image", path: outside }
       ] }
     }, opts);
-    assert.equal(blocked.status, "failed");
-    assert.match(blocked.reason ?? "", /outside the configured allowedFileRoots/);
-    assert.equal(sent.length, 2, "no partial platform message may be sent");
+    assert.equal(outsideResult.status, "sent");
+    assert.equal(sent.length, 3, "local images are not constrained to an output directory");
+    const missing = await handleAgentSend({
+      ...request, deliveryId: "ordered-images-missing-path",
+      payload: { type: "image", segments: [
+        { type: "image", path: first }, { type: "image", path: path.join(rootDir, "missing.png") }
+      ] }
+    }, opts);
+    assert.equal(missing.status, "failed");
+    assert.match(missing.reason ?? "", /does not exist/);
+    assert.equal(sent.length, 3, "missing files still reject the whole platform message before sending");
   });
 });
 
-test("NapCat group sends require an explicit reply choice", () => {
-  assert.throws(() => prepareAgentSendRequest({
+test("ordinary NapCat group sends may omit a quote while message processing retains source ownership", () => {
+  const unquoted = prepareAgentSendRequest({
     deliveryId: "group-send-without-reply-choice",
     sender: { agentType: "codex", sessionId: "codex-thread-1" },
     routeId: "route-main",
     channel: "napcat",
     params: { target: "group", groupId: "456" },
     payload: { type: "text", text: "naked progress update" }
-  }), /NapCat group sends must include params\.replyToMessageId.*use the source QQ message ID.*empty string.*intentional unquoted group message/i);
+  });
+  assert.equal(unquoted.target.replyToMessageId, undefined);
+  assert.equal(unquoted.internal.messageId, undefined);
+  assert.deepEqual(unquoted.internal.replyContext, { replyToSource: false });
+
+  assert.throws(() => prepareAgentSendRequest({
+    deliveryId: "message-processing-group-send-with-missing-reply-choice",
+    sender: { agentType: "message_processing", sessionId: "message-processing-thread-1" },
+    routeId: "route-main", channel: "napcat", params: { target: "group", groupId: "456" },
+    payload: { type: "text", text: "message processing still needs its source" }
+  }), /message_processing.*non-empty params\.replyToMessageId/i);
 
   assert.doesNotThrow(() => prepareAgentSendRequest({
     deliveryId: "group-send-with-empty-reply-choice",
@@ -406,6 +424,30 @@ test("NapCat group sends require an explicit reply choice", () => {
     params: { target: "group", groupId: "456", replyToMessageId: "123", allowAdditionalReply: "yes" },
     payload: { type: "text", text: "invalid follow-up flag" }
   }), /params\.allowAdditionalReply must be a boolean/i);
+});
+
+test("ordinary NapCat group sends without a reply field reach the endpoint and reuse their original receipt", async (t) => {
+  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-agent-send-unquoted-"));
+  t.after(() => fs.rmSync(rootDir, { recursive: true, force: true }));
+  const messages: Record<string, unknown>[] = [];
+  await withJsonServer((body, request) => {
+    if (request.url === "/send_group_msg") messages.push(body);
+    return { status: "ok", retcode: 0, data: { message_id: 7789 } };
+  }, async url => {
+    const request: AgentSendRequest = {
+      deliveryId: "send-napcat-unquoted", sender: { agentType: "codex", sessionId: "thread-unquoted" },
+      routeId: "route-main", channel: "napcat", params: { target: "group", groupId: "456", instanceId: "qq-main" },
+      styleValidation: 0, payload: { type: "text", text: "主动进度通知" }
+    };
+    const result = await handleAgentSend(request, options(rootDir, url));
+    assert.equal(result.status, "sent");
+    assert.equal(result.sentMessageId, "7789");
+    const inspection = await inspectAgentSendDelivery(request, options(rootDir, url));
+    assert.equal(inspection.state, "completed");
+    if (inspection.state === "completed") assert.equal(inspection.result.sentMessageId, "7789");
+    assert.equal(messages.length, 1);
+    assert.doesNotMatch(JSON.stringify(messages[0].message), /CQ:reply/);
+  });
 });
 
 test("explicit NapCat send cannot be redirected to speech by the Route default pipeline", async (t) => {
@@ -579,7 +621,7 @@ test("managed group file lease covers upload and caption; readback retains fileI
     return { status: "failed", retcode: 1, wording: filePath };
   }, async url => {
     const opts = options(rootDir, url);
-    opts.runtimes[0].messageAdapterPolicies!.napcat = { outputEnabled: true, supportedOutputs: ["file"], allowedFileRoots: [] };
+    opts.runtimes[0].messageAdapterPolicies!.napcat = { outputEnabled: true, supportedOutputs: ["file"] };
     opts.withManagedGroupFile = async (id, expectedSha256, send) => {
       assert.equal(id, managedFileId);
       assert.equal(expectedSha256, fileSha256);
@@ -663,7 +705,7 @@ test("managed group files fail closed without resolver, owner authority, or outp
 test("a managed plan attachment image is sent through the resolver port only", async (t) => {
   const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-plan-attachment-"));
   t.after(() => fs.rmSync(rootDir, { recursive: true, force: true }));
-  // Deliberately outside any allowedFileRoots, mirroring the real plan attachment layout.
+  // Keep the file in the actual plan attachment layout.
   const attachmentDir = path.join(rootDir, "data", "roles", "XinghaiBuilder", "plans", "active", "plan-abc", "attachments");
   fs.mkdirSync(attachmentDir, { recursive: true });
   const imagePath = path.join(attachmentDir, "attachment-shot-1.png");
@@ -677,9 +719,7 @@ test("a managed plan attachment image is sent through the resolver port only", a
     const opts = options(rootDir, url);
     opts.runtimes[0].messageAdapterPolicies!.napcat = {
       outputEnabled: true,
-      supportedOutputs: ["text", "image"],
-      // The plan attachment directory is intentionally NOT an allowedFileRoot.
-      allowedFileRoots: []
+      supportedOutputs: ["text", "image"]
     };
     const request: AgentSendRequest = {
       deliveryId: "send-plan-attachment-1",

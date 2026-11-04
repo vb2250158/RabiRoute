@@ -256,7 +256,7 @@ A plan describes one focused objective. Common fields:
 
 An explicit discussion wait writes the key referenced by `planWorkflow.roles.discussion`. An ordinary pause uses `roles.paused`; resumption chooses the key referenced by the real next role, normally analysis or execution.
 
-`attachments` is the optional plan-level attachment list. For a new attachment, an Agent may provide a local `path`, or `name`, optional `mimeType`, and `contentBase64` in POST/PATCH. Manager validates and copies the content into that plan directory: `plans/active/<planId>/attachments/`. Plan JSON stores only `id/kind/name/path/size/mimeType/sha256` metadata and never stores Base64. A plan may contain up to 8 attachments, limited to 10 MiB each and 25 MiB in total. Omitting `attachments` from PATCH preserves the current list; sending `attachments: []` clears the list from the plan record.
+`attachments` is the optional plan-level attachment list. For a new attachment, an Agent may provide a local `path`, or `name`, optional `mimeType`, and `contentBase64` in POST/PATCH. Manager validates and copies the content into that plan directory: `plans/active/<planId>/attachments/`. Plan JSON stores only `id/kind/name/path/size/mimeType/sha256` metadata and never stores Base64. There is no attachment-count gate; each new file remains limited to 10 MiB and each batch to 25 MiB of new content. Omitting `attachments` from PATCH preserves the current list; sending `attachments: []` clears the list from the plan record.
 
 After runtime data is copied as a unit or the installation root changes, an older `plan.json` may still contain an absolute path under the previous root. Manager does not read that old location. It resolves the same filename only inside the current plan-attachment directories and requires both file size and SHA-256 to match the plan metadata; otherwise the attachment is reported as unavailable.
 
@@ -290,9 +290,9 @@ Only plans with `activationStatus=已完成` are automatically archived after `u
 
 ## Focus and write limits
 
-Every plan and memory must have a single-line `focus` describing one subject. Independent subjects belong in separate items.
+`focus` summarizes the subject and defaults to the title when omitted. A concise subject is recommended; single-line formatting is not a write gate. Split independent objectives when it helps the actual task.
 
-Default plan limits:
+Example explicit plan limits (not defaults):
 
 ```text
 titleChars=80
@@ -318,7 +318,7 @@ maxKeywords=24
 totalChars=12000
 ```
 
-Default memory limits:
+Example explicit memory limits (not defaults):
 
 ```text
 titleChars=80
@@ -330,7 +330,7 @@ maxKeywords=24
 totalChars=4600
 ```
 
-Override these limits under:
+Without `knowledgeLimits`, business text, keyword and step counts have no implicit write quota. Existing explicit persona limits still apply; model-context injection budgets remain separate. Configure optional write limits under:
 
 ```json
 {

@@ -447,7 +447,7 @@ test("Agent text conversion preserves whitespace without weakening CQ policy", (
 });
 
 test("Agent text cannot smuggle media or forward codes past the route policy", () => {
-  // Media codes would bypass payload-kind and allowedFileRoots validation.
+  // Media codes would bypass payload-kind and typed attachment validation.
   assert.throws(
     () => napcatSegmentsFromAgentText("这是截图 [CQ:image,file=file:///C:/secret.png] 请查收。"),
     /cannot embed \[CQ:image\]/
@@ -626,7 +626,7 @@ test("QQ group image send converts CQ codes in its caption text", async () => {
         id: "main",
         pipeline: { outputAdapter: "qq", outputPipeline: "qq", replyToSource: false },
         messageAdapterPolicies: {
-          napcat: { outputEnabled: true, supportedOutputs: ["text", "image", "voice", "file"], allowedFileRoots: [imageDir] }
+          napcat: { outputEnabled: true, supportedOutputs: ["text", "image", "voice", "file"] }
         },
         napcatInstances: [{ id: "main-qq", httpUrl: url, accessToken: "", enabled: true }]
       }]
@@ -678,7 +678,7 @@ test("QQ group image send drops an unsupported CQ code from its caption", async 
         id: "main",
         pipeline: { outputAdapter: "qq", outputPipeline: "qq", replyToSource: false },
         messageAdapterPolicies: {
-          napcat: { outputEnabled: true, supportedOutputs: ["text", "image", "voice", "file"], allowedFileRoots: [imageDir] }
+          napcat: { outputEnabled: true, supportedOutputs: ["text", "image", "voice", "file"] }
         },
         napcatInstances: [{ id: "main-qq", httpUrl: url, accessToken: "", enabled: true }]
       }]
@@ -729,7 +729,7 @@ test("QQ group image send still rejects a media CQ code in the caption", async (
           id: "main",
           pipeline: { outputAdapter: "qq", outputPipeline: "qq", replyToSource: false },
           messageAdapterPolicies: {
-            napcat: { outputEnabled: true, supportedOutputs: ["text", "image", "voice", "file"], allowedFileRoots: [imageDir] }
+            napcat: { outputEnabled: true, supportedOutputs: ["text", "image", "voice", "file"] }
           },
           napcatInstances: [{ id: "main-qq", httpUrl: url, accessToken: "", enabled: true }]
         }]
@@ -818,7 +818,7 @@ test("QQ group local files use upload_group_file and only read configured roots"
         id: "main",
         pipeline: { outputAdapter: "qq", outputPipeline: "qq", replyToSource: true },
         messageAdapterPolicies: {
-          napcat: { outputEnabled: true, supportedOutputs: ["text", "file"], allowedFileRoots: [releaseDir] }
+          napcat: { outputEnabled: true, supportedOutputs: ["text", "file"] }
         },
         napcatInstances: [{ id: "main-qq", httpUrl: url, accessToken: "", enabled: true }]
       }]
@@ -840,11 +840,11 @@ test("QQ group local files use upload_group_file and only read configured roots"
   assert.equal(calls[3].body.message, "[CQ:reply,id=source-22]【测试包】已上传。");
 });
 
-test("QQ group local file upload needs no root grant when the list is absent or empty", async t => {
+test("QQ group local file upload ignores retired directory grants", async t => {
   const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-outbox-unrestricted-"));
   t.after(() => fs.rmSync(rootDir, { recursive: true, force: true }));
   const filePath = path.join(rootDir, "clip.mp4"); fs.writeFileSync(filePath, "fixture");
-  for (const roots of [undefined, []]) {
+  for (const roots of [undefined, [], [path.join(rootDir, "different-directory")]]) {
     let uploaded = false;
     await withJsonServer((body, request) => {
       if (request.url?.endsWith("get_login_info")) return { status: "ok", retcode: 0, data: { user_id: 9000 } };
@@ -855,44 +855,12 @@ test("QQ group local file upload needs no root grant when the list is absent or 
       const result = await handleAgentReply({ payloadType: "file", filePath, targetType: "group", groupId: "20002", routeProfileId: "main" }, {
         rootDir, routeRoot: "data/route", rolesRoot: "data/roles", runtimes: [{ id: "main",
           pipeline: { outputAdapter: "qq", outputPipeline: "qq" },
-          messageAdapterPolicies: { napcat: { outputEnabled: true, supportedOutputs: ["file"], ...(roots ? { allowedFileRoots: roots } : {}) } },
+          messageAdapterPolicies: { napcat: { outputEnabled: true, supportedOutputs: ["file"], ...(roots ? { allowedFileRoots: roots } as any : {}) } },
           napcatInstances: [{ id: "main-qq", httpUrl, accessToken: "", enabled: true }] }]
       });
       assert.equal(result.status, "sent"); assert.equal(uploaded, true);
     });
   }
-});
-
-test("QQ group local file upload is blocked outside allowedFileRoots", async () => {
-  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-outbox-file-blocked-"));
-  const allowedDir = path.join(rootDir, "allowed");
-  fs.mkdirSync(allowedDir, { recursive: true });
-  const secretPath = path.join(rootDir, "secret.txt");
-  fs.writeFileSync(secretPath, "do-not-send", "utf8");
-
-  const result = await handleAgentReply({
-    payloadType: "file",
-    filePath: secretPath,
-    targetType: "group",
-    groupId: "20002",
-    routeProfileId: "main"
-  }, {
-    rootDir,
-    routeRoot: "data/route",
-    rolesRoot: "data/roles",
-    runtimes: [{
-      id: "main",
-      pipeline: { outputAdapter: "qq", outputPipeline: "qq" },
-      messageAdapterPolicies: {
-        napcat: { outputEnabled: true, supportedOutputs: ["file"], allowedFileRoots: [allowedDir] }
-      },
-      napcatInstances: [{ id: "main-qq", httpUrl: "http://127.0.0.1:1", accessToken: "", enabled: true }]
-    }]
-  });
-
-  assert.equal(result.ok, false);
-  assert.equal(result.status, "failed");
-  assert.match(result.reason ?? "", /outside the configured allowedFileRoots/);
 });
 
 test("Outbox history projection never leaks upload owner evidence and retains explicit draft compatibility", () => {
@@ -984,7 +952,7 @@ test("QQ group image replies keep explanatory text and a validated local image i
         id: "main",
         pipeline: { outputAdapter: "qq", outputPipeline: "qq", replyToSource: true },
         messageAdapterPolicies: {
-          napcat: { outputEnabled: true, supportedOutputs: ["text", "image"], allowedFileRoots: [imageDir] }
+          napcat: { outputEnabled: true, supportedOutputs: ["text", "image"] }
         },
         napcatInstances: [{ id: "main-qq", httpUrl: url, accessToken: "", enabled: true }]
       }]
@@ -1000,39 +968,6 @@ test("QQ group image replies keep explanatory text and a validated local image i
     { type: "text", data: { text: "【限时订单】图中标出了当前页面与待验收区域。" } },
     { type: "image", data: { file: fs.realpathSync(imagePath) } }
   ]);
-});
-
-test("QQ local image replies are blocked outside allowedFileRoots", async () => {
-  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-outbox-image-blocked-"));
-  const allowedDir = path.join(rootDir, "allowed");
-  fs.mkdirSync(allowedDir, { recursive: true });
-  const privateImagePath = path.join(rootDir, "private.png");
-  fs.writeFileSync(privateImagePath, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
-
-  const result = await handleAgentReply({
-    payloadType: "image",
-    imagePath: privateImagePath,
-    text: "这张图不应被发送。",
-    targetType: "group",
-    groupId: "20002",
-    routeProfileId: "main"
-  }, {
-    rootDir,
-    routeRoot: "data/route",
-    rolesRoot: "data/roles",
-    runtimes: [{
-      id: "main",
-      pipeline: { outputAdapter: "qq", outputPipeline: "qq" },
-      messageAdapterPolicies: {
-        napcat: { outputEnabled: true, supportedOutputs: ["image"], allowedFileRoots: [allowedDir] }
-      },
-      napcatInstances: [{ id: "main-qq", httpUrl: "http://127.0.0.1:1", accessToken: "", enabled: true }]
-    }]
-  });
-
-  assert.equal(result.ok, false);
-  assert.equal(result.status, "failed");
-  assert.match(result.reason ?? "", /outside the configured allowedFileRoots/);
 });
 
 test("explicit group target can proactively use NapCat even when pipeline stays in the Agent session", async () => {
@@ -1810,7 +1745,7 @@ test("RabiLink mobile endpoint uploads and delivers an Agent file attachment", a
     }, {
       rootDir, routeRoot: path.join(rootDir, "data", "route"), rolesRoot: path.join(rootDir, "data", "roles"),
       runtimes: [{ id: "RabiLink", rabiLinkRelay: { enabled: true, url: `http://127.0.0.1:${address.port}`, token: "test-token", deviceId: "pc-test" },
-        messageAdapterPolicies: { rabilink: { outputEnabled: true, supportedOutputs: ["text", "image", "voice", "file"], allowedFileRoots: [releaseDir] } } }]
+        messageAdapterPolicies: { rabilink: { outputEnabled: true, supportedOutputs: ["text", "image", "voice", "file"] } } }]
     });
     assert.equal(result.ok, true);
     const attachments = deliveredBody.attachments as Array<Record<string, unknown>>;

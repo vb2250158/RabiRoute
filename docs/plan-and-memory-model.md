@@ -293,9 +293,9 @@ Manager 只通过计划存储 Repository 新建、更新和归档此目录。旧
 
 `keywords` 由 Agent 在新增或更新计划时主动填写，用于 RabiRoute 在投递前做轻量命中召回。`archiveStatus=已归档` 的计划会在召回前被排除，即使标题或关键词完全命中也不会进入候选；只有明确计划 ID 查询或归档视图能读取。RabiRoute 不在每条消息到来时对计划内容做智能分词。
 
-`focus` 是单条计划的唯一主题声明。新增计划必须显式填写，且只能是一行；一个计划只推进一个主题，遇到无关目标或独立阻塞时应拆成另一条计划，不能继续堆进 `currentStep`。
+`focus` 用来概括主题，省略时沿用标题。建议简洁描述当前目标；单行格式不作为写入门槛，是否拆分独立目标由写入者按实际任务判断。
 
-`attachments` 是计划本体的可选附件列表。Agent 可在 POST/PATCH 中为新附件提供本机 `path`，或提供 `name`、可选 `mimeType` 与 `contentBase64`。Manager 校验后复制到该计划目录的 `plans/active/<planId>/attachments/`，计划 JSON 只保存 `id/kind/name/path/size/mimeType/sha256` 元数据，不保存 Base64。最多 8 个，单个不超过 10 MiB、总计不超过 25 MiB。PATCH 省略 `attachments` 时保留原附件；显式传 `attachments: []` 时清空计划记录中的附件列表。
+`attachments` 是计划本体的可选附件列表。Agent 可在 POST/PATCH 中为新附件提供本机 `path`，或提供 `name`、可选 `mimeType` 与 `contentBase64`。Manager 校验后复制到该计划目录的 `plans/active/<planId>/attachments/`，计划 JSON 只保存 `id/kind/name/path/size/mimeType/sha256` 元数据，不保存 Base64。不设附件数量门槛，单个不超过 10 MiB、单次新内容总计不超过 25 MiB。PATCH 省略 `attachments` 时保留原附件；显式传 `attachments: []` 时清空计划记录中的附件列表。
 
 整体复制运行数据或更换安装目录后，旧 `plan.json` 可能仍保留原根目录的绝对路径。Manager 不读取该旧位置，而是在当前计划的附件目录中按原文件名定位副本，并要求文件大小和 SHA-256 与计划元数据一致；不匹配时返回附件不存在。
 
@@ -331,13 +331,13 @@ Manager 提供只读批量状态接口 `GET /api/roles/:roleId/plan-agents/statu
 
 ## 聚焦与长度校验
 
-计划、近期记忆和沉淀记忆的写入都经过后端校验。新增计划、近期记忆或沉淀结果必须显式提供单行 `focus`；`keywords` 至少一个。超出字段长度、关键词数量或总文本长度时，API 返回 `400`，要求 Agent 拆成更聚焦的条目。读取旧文件保持兼容，现有违规条目可通过校验接口发现：
+计划、近期记忆和沉淀记忆的写入都经过后端校验。计划、近期记忆和沉淀结果的 `focus` 可省略，沿用标题；关键词按检索需要填写。仅在超出该角色显式设置的字段长度、关键词数量或总文本限制时，API 返回 `400`。读取旧文件保持兼容，现有违规条目可通过校验接口发现：
 
 ```http
 GET /api/roles/:roleId/knowledge-validation
 ```
 
-默认限制可由角色的 `personaConfig.json` 中 `knowledgeLimits` 收紧：
+未配置 `knowledgeLimits` 时不按业务字数、关键词数量或步骤数量拒绝写入。下面是角色 `personaConfig.json` 可选的显式限制示例，原有显式配置继续有效；注入模型的上下文预算独立管理：
 
 ```json
 {
@@ -378,7 +378,7 @@ GET /api/roles/:roleId/knowledge-validation
 }
 ```
 
-字符数按 Unicode code point 计算；`totalChars` 统计该条目的主要文本字段和关键词。一个记忆只记录一个事实、偏好、结论或问题；一个计划只记录一个可推进目标。系统用必填单行 `focus` 和硬长度上限约束结构，语义是否混题仍由写入 Agent 负责拆分。
+字符数按 Unicode code point 计算；`totalChars` 统计该条目的主要文本字段和关键词。一个记忆只记录一个事实、偏好、结论或问题；一个计划只记录一个可推进目标。系统保留角色显式设置的长度限制；主题是否需要拆分由写入者判断，不以额外必填字段或单行格式拒绝正常写入。
 
 默认模板的计划状态含义如下；自定义角色以 `personaConfig.json.planWorkflow` 为准：
 

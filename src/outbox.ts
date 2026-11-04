@@ -182,10 +182,8 @@ export type AgentReplyOptions = {
   submitPlanFeedback?: AgentPlanFeedbackSubmitPort;
   /**
    * Trusted code only: resolves a managed plan attachment to a concrete, validated file on
-   * disk. Plan-attachment directories are not route-configured allowedFileRoots, so this
-   * port is the only way Agent request JSON can reference one; it must re-check that the
-   * plan and attachment really belong to this host's managed storage. Never supplied by
-   * request JSON, and it never widens allowedFileRoots for ordinary paths.
+   * disk. Attachment IDs are resolved against this host's managed plan storage and
+   * checked for ownership and integrity. The resolver is never supplied by request JSON.
    */
   withManagedPlanAttachment?: <T>(
     reference: { roleId?: string; planId: string; attachmentId: string },
@@ -363,8 +361,7 @@ function napCatCqSegmentFor(type: string, params: Record<string, string>): { typ
  * token so NapCat cannot silently render it as literal group text.
  *
  * Media, forward and node codes are rejected: letting Agent text inject them would
- * bypass the route policy's payload-kind check and the allowedFileRoots guard,
- * which only runs for typed image/file payloads.
+ * bypass the route policy's payload-kind check and typed image/file validation.
  */
 export function napcatSegmentsFromAgentText(text: string): OneBotMessage {
   const source = String(text ?? "");
@@ -427,8 +424,8 @@ function textSegmentsForAgentText(text: string): Array<{ type: string; data: Rec
 }
 /**
  * A managed plan attachment is addressed by id, never by a filesystem path. The Manager
- * resolves it against real plan storage through `withManagedPlanAttachment`, so the
- * route's allowedFileRoots guard stays untouched for every ordinary path.
+ * resolves ownership and integrity against real plan storage through
+ * `withManagedPlanAttachment`.
  */
 function managedPlanAttachmentReference(
   payload: Record<string, unknown>,
@@ -593,12 +590,7 @@ function isRemoteFileReference(value: string): boolean {
   return /^https?:\/\//i.test(value);
 }
 
-function isPathWithin(root: string, candidate: string): boolean {
-  const relative = path.relative(root, candidate);
-  return relative === "" || (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
-}
-
-function validatedOutboundFilePath(rootDir: string, filePath: string, allowedFileRoots: string[]): string {
+function validatedOutboundFilePath(rootDir: string, filePath: string): string {
   if (isRemoteFileReference(filePath)) {
     throw new Error("Remote URLs are not uploaded through the local QQ group-file API.");
   }
@@ -610,21 +602,10 @@ function validatedOutboundFilePath(rootDir: string, filePath: string, allowedFil
   if (!stat.isFile()) {
     throw new Error(`Outbound file is not a regular file: ${candidate}`);
   }
-  const realCandidate = fs.realpathSync(candidate);
-  // An absent or empty policy does not impose an extra file-output permission.
-  if (allowedFileRoots.length === 0) return realCandidate;
-  const allowed = allowedFileRoots.some((configuredRoot) => {
-    const resolvedRoot = path.resolve(rootDir, configuredRoot);
-    if (!fs.existsSync(resolvedRoot) || !fs.statSync(resolvedRoot).isDirectory()) return false;
-    return isPathWithin(fs.realpathSync(resolvedRoot), realCandidate);
-  });
-  if (!allowed) {
-    throw new Error(`Outbound file is outside the configured allowedFileRoots: ${realCandidate}. Update this Route's messageAdapterPolicies.<channel>.allowedFileRoots (current: ${JSON.stringify(allowedFileRoots)}); an empty list removes this Route/channel directory restriction.`);
-  }
-  return realCandidate;
+  return fs.realpathSync(candidate);
 }
 
-function validatedNapCatImageMessage(rootDir: string, message: OneBotMessage, allowedFileRoots: string[]): OneBotMessage {
+function validatedNapCatImageMessage(rootDir: string, message: OneBotMessage): OneBotMessage {
   if (typeof message === "string") return message;
   return message.map((segment) => {
     if (segment.type.toLowerCase() !== "image") return segment;
@@ -640,7 +621,7 @@ function validatedNapCatImageMessage(rootDir: string, message: OneBotMessage, al
     }
     const validatedFile = isRemoteFileReference(file)
       ? file
-      : validatedOutboundFilePath(rootDir, file, allowedFileRoots);
+      : validatedOutboundFilePath(rootDir, file);
     return { ...segment, data: { ...segment.data, file: validatedFile } };
   });
 }
@@ -1881,7 +1862,7 @@ async function handleAgentReplyWithEgress(request: AgentReplyRequest, options: A
     try {
       const attachments: Array<Record<string, unknown>> = [];
       if (content.kind !== "text" && content.file) {
-        const filePath = validatedOutboundFilePath(options.rootDir, content.file, policy.allowedFileRoots);
+        const filePath = validatedOutboundFilePath(options.rootDir, content.file);
         attachments.push(await uploadRabiLinkRelayAttachment(
           filePath,
           mobileAttachmentContentType(content.kind, filePath),
@@ -1988,7 +1969,7 @@ async function handleAgentReplyWithEgress(request: AgentReplyRequest, options: A
     const deliveryId = requestField(request, "deliveryId") || randomUUID();
     try {
       const filePath = content.file
-        ? validatedOutboundFilePath(options.rootDir, content.file, policy.allowedFileRoots)
+        ? validatedOutboundFilePath(options.rootDir, content.file)
         : undefined;
       const sent = content.kind === "image" && filePath
         ? await sendWeixinImage(
@@ -2305,7 +2286,7 @@ async function handleAgentReplyWithEgress(request: AgentReplyRequest, options: A
         if (content.managedPlanAttachment) {
           return await resolveManagedPlanAttachment(options, content.managedPlanAttachment, sendFile);
         }
-        const filePath = validatedOutboundFilePath(options.rootDir, content.file!, policy.allowedFileRoots);
+        const filePath = validatedOutboundFilePath(options.rootDir, content.file!);
         return await sendFile({ path: filePath, fileName: content.fileName || path.basename(filePath) });
       }
       if (content.managedPlanAttachment) {
@@ -2328,7 +2309,7 @@ async function handleAgentReplyWithEgress(request: AgentReplyRequest, options: A
         });
       }
       const outboundMessage = content.kind === "image"
-        ? validatedNapCatImageMessage(options.rootDir, content.message, policy.allowedFileRoots)
+        ? validatedNapCatImageMessage(options.rootDir, content.message)
         : napcatSegmentsFromAgentText(text);
       const renderedMessage = await renderNapCatMarkdownSegments(outboundMessage);
       const sent = await sendGroupMessage({
@@ -2346,7 +2327,7 @@ async function handleAgentReplyWithEgress(request: AgentReplyRequest, options: A
     }
     if (target.targetType === "private" && target.userId) {
       if (content.kind === "file") {
-        const filePath = validatedOutboundFilePath(options.rootDir, content.file!, policy.allowedFileRoots);
+        const filePath = validatedOutboundFilePath(options.rootDir, content.file!);
         const fileName = content.fileName || path.basename(filePath);
         const uploaded = await uploadPrivateFile({ userId: target.userId, filePath, fileName }, endpoint);
         const result: AgentReplyResult = { ok: true, status: "sent", routeProfileId: route.profile?.id ?? route.runtime.id,
@@ -2357,7 +2338,7 @@ async function handleAgentReplyWithEgress(request: AgentReplyRequest, options: A
         return result;
       }
       const privateMessage = content.kind === "image"
-        ? validatedNapCatImageMessage(options.rootDir, content.message, policy.allowedFileRoots)
+        ? validatedNapCatImageMessage(options.rootDir, content.message)
         : napcatSegmentsFromAgentText(text);
       const sent = await sendPrivateMessage({
         userId: target.userId,

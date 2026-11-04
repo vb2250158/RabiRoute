@@ -94,19 +94,25 @@ test("Gateway lost-response ledger survives generation changes and unavailable s
   const newHash = "b".repeat(64);
   const first = await ledger.retain("save", { gateways: [{ enabled: true, id: "route-1" }] }, oldHash);
 
-  await assert.rejects(
-    boundedRouteCatalogMutationFetch("/gateways", { method: "POST" }, {
-      timeoutMs: 1,
-      fetchImpl: (async (_input, init) => await new Promise<Response>((_resolve, reject) => {
-        init?.signal?.addEventListener(
-          "abort",
-          () => reject(new DOMException("aborted", "AbortError")),
-          { once: true }
-        );
-      })) as typeof fetch
-    }),
-    /retry will reuse the same Idempotency-Key/
-  );
+  // Mock fetch has no socket; keep this real abort deadline alive until it settles.
+  const keepAlive = setInterval(() => {}, 1000);
+  try {
+    await assert.rejects(
+      boundedRouteCatalogMutationFetch("/gateways", { method: "POST" }, {
+        timeoutMs: 1,
+        fetchImpl: (async (_input, init) => await new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener(
+            "abort",
+            () => reject(new DOMException("aborted", "AbortError")),
+            { once: true }
+          );
+        })) as typeof fetch
+      }),
+      /retry will reuse the same Idempotency-Key/
+    );
+  } finally {
+    clearInterval(keepAlive);
+  }
   assert.equal(
     (await ledger.retain("save", { gateways: [{ id: "route-1", enabled: true }] }, oldHash)).operationId,
     first.operationId,

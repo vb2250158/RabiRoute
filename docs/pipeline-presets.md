@@ -93,7 +93,7 @@ POST /api/agent/send
 
 旧配置如果手写了 `allowedGroups` / `allowedUsers`、`outputMode`、`enabledPipelines` 或 `disabledPipelines`，这些具体过滤字段不再生效。发送关闭或消息类型不在 `supportedOutputs` 内时，会返回 `blocked`，不会调用对应消息端。
 
-允许发送时，RabiRoute 使用对应消息端的发送封装：NapCat 调用 OneBot HTTP，企业微信调用智能机器人 SDK。`payload.type` 支持 `text|image|voice|file`；非文本内容必须在 `payload.path` 或 `payload.url` 中给出来源。NapCat 群聊的本地文件会经过 `allowedFileRoots` 校验后调用 `upload_group_file`；上传成功后再发送可选说明文本，说明文本失败不会把已经上传的文件误判为整体失败并重复上传。发送请求、成功、失败、草稿和拦截记录都会写入路由数据目录下的 `outbox-adapter.log.jsonl`。
+允许发送时，RabiRoute 使用对应消息端的发送封装：NapCat 调用 OneBot HTTP，企业微信调用智能机器人 SDK。`payload.type` 支持 `text|image|voice|file`；非文本内容必须在 `payload.path` 或 `payload.url` 中给出来源。NapCat 群聊的本地文件核对存在性、普通文件类型和可读性后调用 `upload_group_file`；上传成功后再发送可选说明文本，说明文本失败不会把已经上传的文件误判为整体失败并重复上传。发送请求、成功、失败、草稿和拦截记录都会写入路由数据目录下的 `outbox-adapter.log.jsonl`。
 
 企业微信群聊发送必须使用 `channel=wecom`，并在 `params.chatId` 中填写目标群。若需要引用当前企业微信回调，可同时传 `params.reqId`；没有 `reqId` 时按主动发送处理。缺少明确 `chatId` 时请求会被拒绝。
 

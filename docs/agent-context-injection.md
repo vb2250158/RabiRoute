@@ -322,7 +322,7 @@ MVP 使用 ID、标题 `includes` 和 Agent 写入的 `keywords` 做打分。不
 
 处理端写出的 Codex 最终文本只属于当前任务记录，不代表来源用户、主角色或另一个 Agent 已经收到。需要向消息端发送时，处理端必须从 `sendRequestJson` 开始，填写 `sender.agentType` 和当前完整 `sender.sessionId`，再明确提交 `routeId`、`channel`、渠道专用 `params` 和 `payload`，并取得该渠道回执；不得把 `replyContextJson` 原样提交，也不得根据来源自动猜测目标。NapCat 群聊引用消息含图片时，必须按原图顺序填写 `params.replyImageDescriptions`，逐张写明实际内容和图片表达的意思；不能查看、缺少描述或数量不一致时不得发送。需要交给主角色、秘书或计划 Agent 时，必须调用 Manager 线程桥并携带发送任务自己的完整 ID 和 Agent 类型。只生成回复草稿、审批问题或阶段摘要而没有进入上述出口，不能标记为已回复或已通知。
 
-`sendRequestJson` 的 `payload.type` 是待填占位而不是固定的 `text`：只要存在已实际核对、能降低理解成本的图片、截图、效果图、流程图或文档页面，就应提交 `type=image` 并在同一 `payload.text` 里写清图片来源类型与关注点；纯文字是没有可用图片时的退路。NapCat 模板额外给出授权目录内的 `payload.path` 占位，本地图片仍只能取自路由 `allowedFileRoots`，越界即拒发。图片与说明必须落在同一条消息；配图不改变引用、`replyImageDescriptions`、发送回执或 QA 证据边界。
+`sendRequestJson` 的 `payload.type` 是待填占位而不是固定的 `text`：只要存在已实际核对、能降低理解成本的图片、截图、效果图、流程图或文档页面，就应提交 `type=image` 并在同一 `payload.text` 里写清图片来源类型与关注点；纯文字是没有可用图片时的退路。NapCat 模板额外给出本地图片的 `payload.path` 占位；发送时核对真实文件存在、是普通文件并可读取，不另设目录白名单。图片与说明必须落在同一条消息；配图不改变引用、`replyImageDescriptions`、发送回执或 QA 证据边界。
 
 需要多段文字与多张图交替发送时，NapCat 使用 `payload: {"type":"image","segments":[{"type":"text","text":"说明一"},{"type":"image","path":"<授权图片路径>"},{"type":"text","text":"说明二"},{"type":"image","path":"<另一张授权图片路径>"}]}`；不再同时填顶层 `payload.text` 或 `payload.path`。各段按原顺序组成一条消息，所有本地图片在发送前校验。
 
@@ -389,7 +389,7 @@ Rabi，帮我看看计划和记忆机制怎么设计。
 
 [回传参数]
 明确发送 API：`<managerBaseUrl>/api/agent/send`；安装版从 Host `status --json` 发现本代地址，源码模式由 Manager 标准输出提供。
-发送请求模板：{"deliveryId":"<稳定发送 ID>","sender":{"agentType":"primary_persona","sessionId":"<当前主角色完整会话 ID>"},"routeId":"default-main","channel":"napcat","params":{"target":"group","groupId":"example-group-id","replyToMessageId":"<能引用时填源消息 ID；不引用时填空字符串>","replyImageDescriptions":[]},"payload":{"type":"text","text":"<发送正文>"}}
+发送请求模板：{"deliveryId":"<稳定发送 ID>","sender":{"agentType":"primary_persona","sessionId":"<当前主角色完整会话 ID>"},"routeId":"default-main","channel":"napcat","params":{"target":"group","groupId":"example-group-id","replyToMessageId":"<回复具体消息时填源消息 ID；普通不引用发送可省略此字段>","replyImageDescriptions":[]},"payload":{"type":"text","text":"<发送正文>"}}
 所有发送方填写实际 Agent 角色与当前完整会话 ID，按统一投递合同发送。
 来源上下文（仅供审计）：{"runtimeRouteId":"default-main","routeProfileId":"default-main","routeKind":"group_message","targetType":"group","messageId":"example-message-id","groupId":"example-group-id"}
 

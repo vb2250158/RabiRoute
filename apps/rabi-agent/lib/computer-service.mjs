@@ -21,8 +21,8 @@ function capacityError(name, value) { return new Error(`Computer resource limit 
 export class ComputerService {
   constructor({ onChange = () => undefined, uploadHistoryRoot, historyIo, timeout = (_key, fallback) => fallback,
     maxUploadBytes = configuredLimit("RABI_AGENT_COMPUTER_MAX_UPLOAD_BYTES", Number.MAX_SAFE_INTEGER),
-    maxConcurrentIo = configuredLimit("RABI_AGENT_COMPUTER_MAX_CONCURRENT_IO", 4),
-    maxActiveUploads = configuredLimit("RABI_AGENT_COMPUTER_MAX_ACTIVE_UPLOADS", 4),
+    maxConcurrentIo = configuredLimit("RABI_AGENT_COMPUTER_MAX_CONCURRENT_IO", 0),
+    maxActiveUploads = configuredLimit("RABI_AGENT_COMPUTER_MAX_ACTIVE_UPLOADS", 0),
     maxUploadRecords = configuredLimit("RABI_AGENT_COMPUTER_MAX_UPLOAD_RECORDS", 64) } = {}) {
     for (const [name, value] of Object.entries({ MAX_UPLOAD_BYTES: maxUploadBytes, MAX_CONCURRENT_IO: maxConcurrentIo, MAX_ACTIVE_UPLOADS: maxActiveUploads, MAX_UPLOAD_RECORDS: maxUploadRecords })) {
       if (!Number.isSafeInteger(value) || value < 0) throw new Error(`RABI_AGENT_COMPUTER_${name} must be a non-negative exact byte count or resource count.`);
@@ -123,7 +123,7 @@ export class ComputerService {
         // Count pressure overrides age windows: only cold-confirmed closed terminal facts may leave heat.
         const closed = [...this.uploads.values()].filter(value => this.terminalClosed(value));
         const terminal = closed.find(value => value.archived) ?? closed[0];
-        if (!terminal) throw new Error("Upload session capacity reached; unresolved original owners are retained.");
+        if (!terminal) break; // A hot-history target must not reject independent active uploads.
         await this.persistTerminal(terminal);
         if (this.uploads.get(terminal.id) === terminal && terminal.archived) this.uploads.delete(terminal.id);
       }

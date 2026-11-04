@@ -16,7 +16,12 @@ export class LanAgentTerminals {
     if (body.action === "open") {
       const key = this.key(instanceId, body.terminalId);
       if (!this.sessions.has(key)) {
-        if (this.sessions.size >= TERMINAL_LIMITS.transportSessions) throw new Error("Terminal transport history is full; close sessions before restarting the node connection.");
+        if (this.sessions.size >= TERMINAL_LIMITS.transportSessions) {
+          for (const [cachedKey, cached] of this.sessions) {
+            if (cached.ended && !cached.listeners.size) this.sessions.delete(cachedKey);
+            if (this.sessions.size < TERMINAL_LIMITS.transportSessions) break;
+          }
+        }
         this.sessions.set(key, { events: [], bytes: 0, sequence: 0, ended: false, listeners: new Set() });
       }
     }
@@ -31,7 +36,6 @@ export class LanAgentTerminals {
     if (!Number.isInteger(waitMs) || waitMs < 0 || waitMs > getTimeoutMs("agent.terminalWait", TERMINAL_LIMITS.waitMs)) throw new Error(`waitMs must be between 0 and ${getTimeoutMs("agent.terminalWait", TERMINAL_LIMITS.waitMs)}.`);
     if (waitMs && after === session.sequence && !session.ended) {
       await new Promise<void>((resolve, reject) => {
-        if (session.listeners.size >= TERMINAL_LIMITS.viewers) { reject(new Error("Terminal already has four attached viewers.")); return; }
         const finish = () => { clearTimeout(deadline); session.listeners.delete(listener); resolve(); };
         const listener = () => finish();
         const deadline = setTimeout(finish, waitMs);
@@ -65,7 +69,6 @@ export class LanAgentTerminals {
     const session = this.sessions.get(this.key(instanceId, terminalId));
     if (!session) throw new Error("Terminal stream not found. Query or open the session first.");
     if (!Number.isSafeInteger(after) || after < 0 || after > session.sequence) throw new Error("Invalid terminal output cursor.");
-    if (session.listeners.size >= TERMINAL_LIMITS.viewers) throw new Error("Terminal already has four attached viewers.");
     const oldest = session.events[0]?.sequence ?? 1;
     if (after < oldest - 1) listener({ type: "gap", sequence: oldest - 1, data: "Earlier terminal output was discarded from the bounded buffer." });
     for (const event of session.events) if (event.sequence > after) listener(event);

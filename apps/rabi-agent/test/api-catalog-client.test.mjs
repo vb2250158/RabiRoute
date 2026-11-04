@@ -131,3 +131,20 @@ test("raw proxy suffix and an outer contract header are derived for HTTP without
   await assert.rejects(client.invokeOperation("plugin.future", { path: { peer: "node", path: "x" }, headers: { "X-RabiRoute-Proxy-Contract": "override" } }), /owns its API contract header/);
   assert.equal(calls.length, 1);
 });
+
+test("valid operation aliases are not rejected by a fixed alias count", async () => {
+  const value = catalog(); value.operations[0].contract.aliases = Array.from({length: 101}, (_, i) => "legacy.alias."+i);
+  const calls = [];
+  const client = createApiCatalogClient({request: async (_method, target, options) => {
+    if(target === "/api/agent/help") return receipt(value);
+    calls.push({target,options}); return {statusCode:200,ok:true,body:'{"code":0}'};
+  }});
+  const result=await client.invokeOperation("legacy.alias.100", {path:{id:"existing"}});
+  assert.equal(result.statusCode,200);assert.equal(calls.length,1);assert.equal(calls[0].target,"/api/future-1/existing");
+  assert.equal(calls[0].options.headers["x-rabiroute-api-contract"],value.operations[0].contractDigest);
+});
+
+test("unchanged operation calls reuse verified discovery",async()=>{let discovery=0,sends=0;const client=createApiCatalogClient({request:async(_method,target)=>{if(target==="/api/agent/help"){discovery++;return receipt(catalog());}sends++;return{statusCode:200,ok:true,body:'{"code":0}'};}});await client.invokeOperation("plugin.future",{path:{id:"one"}});await client.invokeOperation("plugin.future",{path:{id:"two"}});assert.equal(discovery,1);assert.equal(sends,2);});
+test("an operation absent from a cached snapshot is discovered on demand",async()=>{let discovery=0,current=catalog();const client=createApiCatalogClient({request:async(_method,target)=>{if(target==="/api/agent/help"){discovery++;return receipt(current);}return{statusCode:200,ok:true,body:'{"code":0}'};}});await client.invokeOperation("plugin.future",{path:{id:"one"}});current=catalog(2);current.operations.push({...current.operations[0],id:"plugin.new",contract:{...current.operations[0].contract,operationId:"plugin.new",pathTemplate:"/api/new/:id"}});assert.equal((await client.invokeOperation("plugin.new",{path:{id:"two"}})).statusCode,200);assert.equal(discovery,2);});
+test("a stale contract rejection invalidates without replaying the write",async()=>{let discovery=0,sends=0,current=catalog();const client=createApiCatalogClient({request:async(_method,target,options)=>{if(target==="/api/agent/help"){discovery++;return receipt(current);}sends++;assert.equal(options.headers["idempotency-key"],"original");return target.includes("future-1")&&current.catalogRevision===2?{statusCode:409,ok:false,body:'{"errorCode":"API_CONTRACT_CHANGED"}'}:{statusCode:200,ok:true,body:'{"code":0}'};}});const options={path:{id:"one"},headers:{"idempotency-key":"original"}};await client.invokeOperation("plugin.future",options);current=catalog(2);const rejected=await client.invokeOperation("plugin.future",options);assert.equal(rejected.statusCode,409);assert.equal(sends,2);assert.equal(discovery,1);assert.equal((await client.invokeOperation("plugin.future",options)).statusCode,200);assert.equal(sends,3);assert.equal(discovery,2);});
+test("missing routes and changed receipt identities retire cached discovery",async()=>{for(const result of [{statusCode:404,ok:false,body:'{}'},{statusCode:200,ok:true,body:'{}',identity:{applicationGenerationId:"another",managerInstanceId:"another"}}]){let discovery=0,sends=0;const client=createApiCatalogClient({request:async(_method,target)=>{if(target==="/api/agent/help"){discovery++;return receipt(catalog());}sends++;return result;}});await client.invokeOperation("plugin.future",{path:{id:"one"}});await client.invokeOperation("plugin.future",{path:{id:"two"}});assert.equal(discovery,2);assert.equal(sends,2);}});

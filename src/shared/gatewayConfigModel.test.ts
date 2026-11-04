@@ -131,7 +131,7 @@ test("message adapter policies control input while keeping output defaults enabl
   assert.equal(messageAdapterPolicyFor(normalized, "napcat").outputEnabled, true);
   assert.equal(messageAdapterPolicyFor(normalized, "heartbeat").outputEnabled, false);
   assert.deepEqual(messageAdapterPolicyFor(normalized, "heartbeat").supportedOutputs, ["text", "image", "voice", "file"]);
-  assert.deepEqual(messageAdapterPolicyFor(normalized, "heartbeat").allowedFileRoots, []);
+  assert.equal("allowedFileRoots" in messageAdapterPolicyFor(normalized, "heartbeat"), false);
   assert.deepEqual(messageAdapterPolicyFor(normalized, "napcat").messageGrouping, {
     enabled: true,
     settleSeconds: 6,
@@ -325,16 +325,14 @@ test("Codex managed-task settings are removed when a route has no Codex adapter"
   assert.deepEqual(normalized.codexHooks, normalizeCodexHookSettings(undefined));
 });
 
-test("message adapter policies normalize allowed outbound file roots", () => {
-  const normalized = normalizeGatewayDefinition(gateway({
-    messageAdapterPolicies: {
-      napcat: {
-        supportedOutputs: ["text", "file"],
-        allowedFileRoots: [" C:/Builds ", "C:/Builds", "D:/Artifacts"]
-      }
-    }
-  }));
-  assert.deepEqual(messageAdapterPolicyFor(normalized, "napcat").allowedFileRoots, ["C:/Builds", "D:/Artifacts"]);
+test("retired outbound directory grants are discarded from every message endpoint", () => {
+  for (const adapter of ["napcat", "rabilink", "weixin"] as const) {
+    const normalized = normalizeGatewayDefinition(gateway({ messageAdapterPolicies: {
+      [adapter]: { supportedOutputs: ["text", "file"], allowedFileRoots: ["C:/Builds"] }
+    } as any }));
+    assert.equal("allowedFileRoots" in messageAdapterPolicyFor(normalized, adapter), false);
+    assert.equal(JSON.stringify(normalized.messageAdapterPolicies).includes("allowedFileRoots"), false);
+  }
 });
 
 test("WeCom is a message/output adapter and does not claim a local ingress port", () => {
@@ -763,7 +761,6 @@ test("legacy message adapter target restrictions are ignored", () => {
   }));
 
   assert.deepEqual(Object.keys(messageAdapterPolicyFor(normalized, "napcat")).sort(), [
-    "allowedFileRoots",
     "conversationReview",
     "inputEnabled",
     "messageGrouping",
@@ -787,7 +784,7 @@ test("NapCat text confirmation defaults off and roundtrips an explicitly configu
 
 test("group-file restriction remains omitted by default across normalization and serialization", () => {
   const base = gateway({ messageAdapters: ["napcat"], targetGroupId: "123456",
-    messageAdapterPolicies: { napcat: { outputEnabled: true, allowedFileRoots: ["/somewhere"] } } });
+    messageAdapterPolicies: { napcat: { outputEnabled: true } } });
   const normalized = normalizeGatewayDefinition(base);
   const restored = normalizeGatewayDefinition(JSON.parse(JSON.stringify(normalized)));
   for (const value of [normalized, restored]) {

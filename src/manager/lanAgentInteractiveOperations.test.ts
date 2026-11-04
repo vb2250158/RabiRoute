@@ -110,8 +110,14 @@ test("registration retirement cancels a terminal viewer without closing or re-ex
   await started; await f.registration.dispose(); await stream;
   assert.equal(f.registration.activeOperationCount(), 0); assert.equal(f.sessions.get(f.terminalId)!.state, "running");
   assert.equal(f.calls.filter(call => call.params.action === "close").length, 0);
-  const remove = Array.from({ length: 4 }, () => f.computers.terminals.subscribe(f.instanceId, f.terminalId, 0, () => {}));
-  assert.throws(() => f.computers.terminals.subscribe(f.instanceId, f.terminalId, 0, () => {}), /four/); remove.forEach(fn => fn());
+  let delivered = 0; const nativeCalls = f.calls.length;
+  const remove = Array.from({ length: 5 }, () => f.computers.terminals.subscribe(f.instanceId, f.terminalId, 0, () => { delivered++; }));
+  f.computers.terminals.receive(f.instanceId, { terminalId: f.terminalId, type: "output", data: "all current viewers" });
+  assert.equal(delivered, 5, "All subscribers receive output without a hidden viewer quota.");
+  remove.forEach(fn => fn());
+  f.computers.terminals.receive(f.instanceId, { terminalId: f.terminalId, type: "output", data: "after unsubscribe" });
+  assert.equal(delivered, 5, "Every viewer subscription was removed.");
+  assert.equal(f.calls.length, nativeCalls); assert.equal(f.sessions.get(f.terminalId)!.state, "running");
 });
 
 test("aborted terminal input retains its operation lease until the original remote response settles", { timeout: 15000 }, async t => {

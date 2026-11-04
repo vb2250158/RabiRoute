@@ -4,7 +4,6 @@ import path from "node:path";
 import {
   PLAN_ATTACHMENT_MAX_BYTES,
   PLAN_ATTACHMENTS_MAX_BYTES,
-  PLAN_MAX_ATTACHMENTS,
   type PlanAttachment,
   type PlanAttachmentInput
 } from "./shared/planAttachmentContract.js";
@@ -183,7 +182,6 @@ export function preparePlanAttachments(
   const attachmentDir = planAttachmentDirectory(roleDir, planId, bucket);
   const usedIds = new Set<string>();
   let total = 0;
-  let uploads = 0;
   const prepared = value.map((item, index) => {
     if (!item || typeof item !== "object" || Array.isArray(item)) {
       throw new Error(`Plan attachment ${index + 1} is invalid.`);
@@ -199,9 +197,6 @@ export function preparePlanAttachments(
       return { metadata: prior };
     }
     // Retained attachments do not consume this request's upload budget.
-    if (++uploads > PLAN_MAX_ATTACHMENTS) {
-      throw new Error(`A request supports at most ${PLAN_MAX_ATTACHMENTS} attachments with new content.`);
-    }
     if (hasBase64 === Boolean(sourcePath)) {
       throw new Error(`Plan attachment ${index + 1} must provide exactly one of path or contentBase64.`);
     }

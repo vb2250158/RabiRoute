@@ -6894,11 +6894,9 @@ function roleDirForApi(roleId: string): string {
 }
 
 /**
- * Resolves `payload.planAttachment` for an Agent send. Plan attachment directories live
- * outside the route's configured allowedFileRoots, so this is the only sanctioned way to
- * send one: the attachment must resolve through real plan storage, and the returned file
- * must still sit inside that plan's managed attachment directories. It never widens
- * allowedFileRoots for ordinary paths, and a missing plan or attachment fails closed.
+ * Resolves `payload.planAttachment` through its real plan storage owner.
+ * Preserve attachment identity and the managed path; ordinary local files use
+ * the sending boundary's existence, real-path and readability checks.
  */
 async function resolveSendManagedPlanAttachment<T>(
   reference: { roleId?: string; planId: string; attachmentId: string },

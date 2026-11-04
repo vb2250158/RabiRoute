@@ -7,8 +7,7 @@
     "weixin": {
       "inputEnabled": true,
       "outputEnabled": true,
-      "supportedOutputs": ["text"],
-      "allowedFileRoots": []
+      "supportedOutputs": ["text"]
     }
   },
   "agentAdapters": ["codex"],

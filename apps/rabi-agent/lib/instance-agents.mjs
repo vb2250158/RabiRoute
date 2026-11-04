@@ -31,7 +31,6 @@ export function configureInstanceAgent(config, input) {
     dsh: provider === "dsh" ? { baseUrl: normalizeDshBinding({ baseUrl: input.dshBaseUrl || current?.dsh?.baseUrl || config.dsh?.baseUrl, sessionId: "configuration" }).baseUrl } : undefined
   };
 
-  if (!current && agents.length >= 128) throw new Error("This instance already has 128 Agents.");
   // Preserve unrecognized raw entries when editing an unrelated healthy backend.
   const rawAgents = Array.isArray(config.agents) ? config.agents : [];
   return { ...config, agents: current ? rawAgents.map(item => isProfileRecord(item) && item.agentId === agentId ? agent : item) : [...rawAgents, agent] };

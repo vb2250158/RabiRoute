@@ -56,3 +56,15 @@ test("page compiles with full-panel disclosure, authoritative reload and structu
   assert.match(source, /保留原审批附件/);
   assert.match(source, /const focusedPlanId = computed/);
 });
+
+import ts from "typescript";
+test("approval attachment picker accepts nine small files and retains byte limits",()=>{
+ const source=fs.readFileSync(new URL("../src/pages/RoleKnowledgePage.vue",import.meta.url),"utf8"),parsed=parse(source).descriptor.scriptSetup!;
+ const ast=ts.createSourceFile("picker.ts",parsed.content,ts.ScriptTarget.Latest,true),fn=ast.statements.find((s):s is ts.FunctionDeclaration=>ts.isFunctionDeclaration(s)&&s.name?.text==="addApprovalFiles");assert(fn);
+ const emitted=ts.transpileModule(fn.getText(ast),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ES2022}}).outputText;
+ const drafts:Record<string,Array<{size:number}>>={},errors:string[]=[];let nextId=0;
+ const add=new Function("approvalPending","approvalAttachmentsFor","approvalAttachmentError","PLAN_FEEDBACK_ATTACHMENT_MAX_BYTES","PLAN_FEEDBACK_ATTACHMENTS_MAX_BYTES","attachmentDraftId","markRaw","clipboardAttachmentName","approvalAttachments","approvalNotices",emitted+";return addApprovalFiles;")({},(id:string)=>drafts[id]||[],(_id:string,_zh:string,en:string)=>errors.push(en),10*1024*1024,25*1024*1024,()=>String(++nextId),(file:File)=>file,()=>"clipboard.txt",drafts,{}) as (id:string,files:File[])=>void;
+ add("plan",Array.from({length:9},(_,i)=>new File(["x"],"note-"+i+".txt",{type:"text/plain"})));assert.equal((drafts.plan||[]).length,9);assert.deepEqual(errors,[]);
+ add("plan",[new File([new Uint8Array(10*1024*1024+1)],"large.bin")]);assert.match(errors.at(-1)!,/exceeds 10 MB/);assert.equal((drafts.plan||[]).length,9);
+ add("plan",Array.from({length:3},(_,i)=>new File([new Uint8Array(9*1024*1024)],"part-"+i+".bin")));assert.match(errors.at(-1)!,/25 MB in total/);assert.equal((drafts.plan||[]).length,9);
+});

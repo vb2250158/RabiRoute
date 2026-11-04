@@ -113,9 +113,6 @@ Codex 已并入新的 ChatGPT desktop，但 Codex 仍是 Agent 和 runtime 的�
         "voice",
         "file"
       ],
-      "allowedFileRoots": [
-        "C:/Path/To/Your/Project/ReleasePkg"
-      ],
       "messageGrouping": {
         "settleSeconds": 6,
         "incompleteSettleSeconds": 12,
@@ -170,7 +167,7 @@ Codex 已并入新的 ChatGPT desktop，但 Codex 仍是 Agent 和 runtime 的�
 
 - `messageAdapterPolicies`：每个消息端的管道级权限。`inputEnabled` 控制是否接收，`outputEnabled` 控制是否允许出站。QQ、微信、飞书、企业微信、角色面板和 RabiLink 文字聊天默认使用消息组，不提供关闭开关；可用 `messageGrouping` 的三个秒数调整普通停顿、疑似半句话停顿和最长等待，默认 `6 / 12 / 20` 秒。ASR / 语音转写、heartbeat、命令、审批、健康告警和结构化事件照常直接投递，不进入这段等待。只有 Codex Agent 同时开启消息处理模式时，聊天消息才交给消息处理 Agent；否则保持原有逐条路由。
 - `supportedOutputs`：这个消息端允许发送的消息类型。NapCat/OneBot 当前支持 `text`、`image`、`voice`、`file`；旧的纯文本 `text/message/content` 请求仍兼容。QQ 群本地文件使用 `upload_group_file`，不是把大文件伪装成普通文本或普通消息段。
-- `allowedFileRoots`：本地文件出站白名单目录，仅在 `payloadType=file` 且使用本地路径时生效。文件必须真实存在、是普通文件，并且解析真实路径后仍位于其中一个目录内；未配置时本地群文件上传会被阻止。公开示例只能使用占位路径，运行期按角色实际构建产物目录配置。
+- 本地文件发送：不设目录白名单，无需配置目录许可；发送时核对真实路径、存在性、普通文件类型和可读性。
 - `messageAdapterPolicies.napcat.textConfirmationThreshold`：单条 QQ 正文超过多少字时提示 Agent 再次确认，默认 `0` 关闭；可在 NapCat 的“长消息确认”中设置。数字、英文、标点与正文内空格计入，引用与 @ 控制标记不计入。超限检查在 Outbox 前返回，提示先精简；一条说不清就按完整意思分条，每条独立检查和发送。确需保留单条原文时带原编号和接口返回的确认凭据再次调用。详见[长消息确认接口](rabi-agent-interfaces.md#napcat-长消息确认)。
 - `messageAdapterPolicies.napcat.readableGroupFileIds`：可选的 QQ 群文件元数据读取限制。未设置时，本机与已启用且鉴权的远端 Agent 默认可查询；显式数组仅允许所列精确群号，`[]` 拒绝全部。保存配置不自动填入空数组；移除该字段恢复默认。调用仍须精确 Route 和唯一启用的 NapCat 实例，账号能访问哪些群由 QQ 决定。只读取当前目录元数据，不下载、递归或修改 QQ。响应中的 `completenessUnknown` 与 `potentiallyTruncated` 表示无法证明群文件已查全。
 - `gatewayPort`：NapCat WebSocket Client 连接的端口。

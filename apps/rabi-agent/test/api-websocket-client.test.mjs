@@ -137,6 +137,7 @@ test("unsupported schemas, missing consumers and credential overrides never esta
   await assert.rejects(f.open(), /explicit onMessage/);
   await assert.rejects(f.open({ onMessage: () => {}, headers: { authorization: "private-value" } }), /transport-owned/);
   f.contract.websocket.incomingSchema = { type: "object", unrecognizedKeyword: true };
+  f.client.catalog.handleEvent({ type: "api.catalog.changed" });
   await assert.rejects(f.open({ onMessage: () => {} }), /UNSUPPORTED_SCHEMA/); assert.equal(f.upgrades.length, 0);
 });
 

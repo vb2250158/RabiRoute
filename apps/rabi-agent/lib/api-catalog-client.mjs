@@ -39,7 +39,7 @@ function parseCatalog(receipt) {
       || entry.access.contractHeader !== "x-rabiroute-native-proxy-contract"
       || !/^sha256:[a-f0-9]{64}$/.test(entry.access.contractDigest) || contract.transport !== "http")) throw new Error("Manager returned an invalid native HTTP owner mapping.");
     if (contract.request?.contractHeader !== undefined && !/^x-rabiroute-[a-z0-9-]+-contract$/.test(contract.request.contractHeader)) throw new Error("Manager returned an invalid operation contract header.");
-    if (contract.aliases !== undefined && (!Array.isArray(contract.aliases) || contract.aliases.length > 100)) throw new Error("Manager returned invalid API operation aliases.");
+    if (contract.aliases !== undefined && (!Array.isArray(contract.aliases))) throw new Error("Manager returned invalid API operation aliases.");
     for (const id of [entry.id, ...(contract.aliases ?? [])]) {
       if (typeof id !== "string" || !/^[A-Za-z][A-Za-z0-9._:/-]{0,4095}$/.test(id) || ids.has(id)) throw new Error("Manager returned ambiguous API operation identifiers.");
       ids.add(id);
@@ -91,16 +91,22 @@ export function createApiCatalogClient({ request, openWebSocket, requestExternal
   }
 
   async function prepare(operationId, options) {
-    // This is an on-demand conditional read, not background polling. It also covers owners without a live event subscription.
-    let catalog, resolved = options;
-    try { catalog = await refresh({ signal: options.signal }); }
+    // Discovery supplies a verified contract snapshot, not authorization. The
+    // real transport and handler still validate identity, access and its digest.
+    let catalog = cached, resolved = options;
+    const reusedCatalog = Boolean(catalog);
+    try { if (!catalog) catalog = await refresh({ signal: options.signal }); }
     catch (error) {
       const cached = await cachedDelivery?.(operationId, options);
       if (!cached) throw error;
       catalog = cached.catalog; resolved = cached.options;
     }
     const { path: pathValues = {}, query = {}, method: requestedMethod, ...httpOptions } = resolved;
-    const entry = catalog.operations.find(value => value.id === operationId || value.contract.aliases?.includes(operationId));
+    let entry = catalog.operations.find(value => value.id === operationId || value.contract.aliases?.includes(operationId));
+    if (!entry && reusedCatalog) {
+      catalog = await refresh({ signal: options.signal });
+      entry = catalog.operations.find(value => value.id === operationId || value.contract.aliases?.includes(operationId));
+    }
     if (!entry) throw new Error("Operation is absent from current discovery. This is not a remote permission decision.");
     const contract = entry.contract;
     if (options.nativeHeaders !== undefined && !entry.binding) throw new Error("Explicit native credential headers are only valid for a native listener operation.");
@@ -125,7 +131,7 @@ export function createApiCatalogClient({ request, openWebSocket, requestExternal
 
   async function invokeOperation(operationId, options = {}) {
     const prepared = await prepare(operationId, options), contract = prepared.entry.contract, httpOptions = prepared.options;
-    if (!["http", "sse"].includes(contract.transport ?? "http")) throw new Error("The selected API transport requires a compatible connector; this HTTP call was not executed.");
+    if (!["http", "sse"].includes(contract.transport ?? "http")) { invalidate(); throw new Error("The selected API transport requires a compatible connector; this HTTP call was not executed."); }
     if (contract.transport === "sse" && !httpOptions.outputPath) {
       if (typeof httpOptions.onChunk === "function" && httpOptions.responseMode === undefined) httpOptions.responseMode = "stream";
       if (httpOptions.responseMode !== "stream" || typeof httpOptions.onChunk !== "function") throw new Error("SSE operation requires an explicit output file or onChunk stream consumer before invocation.");
@@ -136,7 +142,10 @@ export function createApiCatalogClient({ request, openWebSocket, requestExternal
       : await request(prepared.method, prepared.target, httpOptions);
     let result;
     try { result = JSON.parse(receipt.body); } catch { /* Binary/stream responses retain the generic transport result. */ }
-    if (receipt.identityChanged || receipt.bindingChanged || result?.errorCode === "API_CONTRACT_CHANGED" || result?.errorCode === "API_LISTENER_BINDING_CHANGED") invalidate();
+    const changedIdentity = receipt.identity && (receipt.identity.applicationGenerationId !== prepared.catalog.applicationGenerationId
+      || receipt.identity.managerInstanceId !== prepared.catalog.managerInstanceId);
+    if (receipt.identityChanged || changedIdentity || receipt.bindingChanged || receipt.statusCode === 404
+      || result?.errorCode === "API_CONTRACT_CHANGED" || result?.errorCode === "API_LISTENER_BINDING_CHANGED") invalidate();
     // Never replay a business call, including a GET that might persist viewed state.
     return receipt;
   }
@@ -145,7 +154,7 @@ export function createApiCatalogClient({ request, openWebSocket, requestExternal
     if (typeof options.onMessage !== "function") throw new Error("WebSocket operation requires an explicit onMessage consumer.");
     if (["body", "bodyText", "bodyBytes", "bodyStream", "outputPath", "onChunk"].some(key => options[key] !== undefined)) throw new Error("WebSocket operation accepts frames through its session, not an HTTP body or output file.");
     const prepared = await prepare(operationId, options);
-    if (prepared.entry.contract.transport !== "websocket") throw new Error("The selected operation is not a WebSocket transport.");
+    if (prepared.entry.contract.transport !== "websocket") { invalidate(); throw new Error("The selected operation is not a WebSocket transport."); }
     const connector = prepared.entry.binding ? openExternalWebSocket : openWebSocket;
     if (typeof connector !== "function") throw new Error("The selected API transport requires a compatible connector; no WebSocket was opened.");
     try { return await connector(prepared.target, prepared.options, prepared.entry.contract, prepared.catalog, prepared.entry); }

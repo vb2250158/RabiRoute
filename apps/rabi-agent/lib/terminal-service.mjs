@@ -95,25 +95,22 @@ export class TerminalService {
         if (item.shell !== input.shell || item.cwd !== canonical) throw new Error("Terminal identity conflict; the existing session is unchanged.");
         return { item };
       }
-      if (this.activeCount >= TERMINAL_LIMITS.activeSessions) throw new Error("This node already has eight active terminals.");
       if (this.sessions.size >= TERMINAL_LIMITS.retainedSessions) {
-        let archived = false;
+        // Archive confirmed history opportunistically; never evict a live owner.
         // One damaged/conflicting receipt must not poison every independent
-        // completed session. The hot-table cap also bounds this attempt loop.
+        // completed session; failed original records remain queryable.
         for (const candidate of this.sessions.values()) {
           if (candidate.state !== "exited") continue;
           try {
             await this.history.save({ schemaVersion: 1, terminal: this.snapshot(candidate), inputs: [...candidate.inputs],
               ...(candidate.startError ? { startError: candidate.startError } : {}) });
-            this.sessions.delete(candidate.id); archived = true; break;
+            this.sessions.delete(candidate.id); break;
           } catch (error) {
             this.historyDiagnostics.push({ terminalId: candidate.id, code: String(error.code || error.name || "ARCHIVE_FAILED").slice(0, 64) });
             if (this.historyDiagnostics.length > 8) this.historyDiagnostics.shift();
-            // A shared full disk cannot be repaired by trying other identities.
-            if (error.code === "ENOSPC") throw error;
+            // Keep the failed original receipt in memory; other terminals remain usable.
           }
         }
-        if (!archived) throw new Error("No confirmed exited terminal record could be archived; existing sessions remain available.");
       }
       if (this.stopped) throw new Error("The main program is stopping.");
       item = { id, shell: input.shell, cwd: canonical, state: "starting", createdAt: new Date().toISOString(), nextInputSequence: 1, inputs: new Map() };

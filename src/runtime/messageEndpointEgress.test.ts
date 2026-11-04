@@ -28,7 +28,7 @@ test("the actual NapCat package drains the original upload and caption lease whi
   const options: AgentReplyOptions = { rootDir: fixture.root, routeRoot: path.join(fixture.root, "route"), rolesRoot: path.join(fixture.root, "roles"),
     endpointEgress: capability => fixture.kernel.current().services.services.get(capability)?.value as MessageEndpointEgressProvider | undefined,
     runtimes: [{ id: "route", enabled: true, pipeline: { outputAdapter: "qq", outputPipeline: "qq" },
-      messageAdapterPolicies: {napcat: { outputEnabled: true, supportedOutputs: ["file", "text"], allowedFileRoots: [fixture.root] }},
+      messageAdapterPolicies: {napcat: { outputEnabled: true, supportedOutputs: ["file", "text"] }},
       napcatInstances: [{ id: "qq", enabled: true, httpUrl: `http://127.0.0.1:${(server.address() as {port: number}).port}`, accessToken: "original-test-token" }] }] };
   try {
     await fixture.kernel.switch([fixture.candidate("original")]);

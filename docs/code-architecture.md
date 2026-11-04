@@ -398,7 +398,7 @@ Agent 任务间的回复责任由 `src/agentRequests/` 单独保存到 `data/.ru
 - 找原始 source message。
 - 检查 pipeline 是否允许自动回复。
 - NapCat 群聊在 `replyToSource=true` 且存在源 `messageId` 时，由 Outbox 统一补 OneBot reply 段；角色和处理端不需要手写 CQ reply，并会避免重复添加。
-- NapCat 本地群文件必须位于 `messageAdapterPolicies.napcat.allowedFileRoots`，Outbox 校验真实路径和普通文件类型后调用 `src/napcat.ts` 的 `upload_group_file` 封装；可选说明文本在上传成功后单独发送，避免文本失败导致重复上传大文件。
+- NapCat 本地群文件由 Outbox 核对真实路径、文件存在性、普通文件类型和可读性后调用 `src/napcat.ts` 的 `upload_group_file` 封装；可选说明文本在上传成功后单独发送，避免文本失败导致重复上传大文件。
 - 允许时调用对应消息端发送封装，例如 NapCat HTTP 或企业微信智能机器人 SDK。
 - 不允许时返回 `blocked` 并附带 draft 数据；发送失败时返回 `failed` 并保留 draft 数据；未选择外部输出时可以返回 `draft` 或把结果保留在 Agent 会话。
 

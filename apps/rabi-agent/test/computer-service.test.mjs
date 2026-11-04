@@ -129,3 +129,13 @@ test("Windows helper queries and captures an owned window without any Agent back
   const desktop = await service.execute({ action:"screen.capture",maxWidth:320 });
   assert.equal(desktop.width,320); assert.equal(desktop.mimeType,"image/png");
 });
+
+test("default I/O and active uploads remain usable beyond the hot history window",async t=>{
+ const root=fs.mkdtempSync(path.join(os.tmpdir(),"rabi-no-hidden-cap-"));const service=new ComputerService({maxUploadRecords:2,uploadHistoryRoot:path.join(root,"history")});
+ t.after(async()=>{await service.stop();removePrivateFixture(root);});
+ assert.equal(service.maxConcurrentIo,0);assert.equal(service.maxActiveUploads,0);
+ const reads=[],originalRead=service.readFile;service.readFile=()=>new Promise(resolve=>reads.push(resolve));
+ const pending=Array.from({length:9},()=>service.execute({action:"file.stat"}));assert.equal(service.pending,9);reads.forEach(resolve=>resolve({}));await Promise.all(pending);service.readFile=originalRead;
+ const ids=[];for(let i=0;i<9;i++){const uploadId=randomUUID();ids.push(uploadId);await service.execute({action:"upload.begin",uploadId,path:path.join(root,i+".bin"),size:0,sha256:sha("")});}
+ assert.equal(service.activeUploads(),9);assert.equal(service.uploads.size,9);for(const uploadId of ids)await service.execute({action:"upload.abort",uploadId});
+});

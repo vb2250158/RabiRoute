@@ -14,7 +14,7 @@ import {
   recoverPlanFeedbackStoreTransactions
 } from "./planFeedbackStore.js";
 import type { PlanStorageTransactionHooks } from "./planStorageRepository.js";
-import { PLAN_MAX_ATTACHMENTS, type PlanAttachment } from "./shared/planAttachmentContract.js";
+import type { PlanAttachment } from "./shared/planAttachmentContract.js";
 import type { PlanFeedbackAttachment } from "./shared/planFeedbackContract.js";
 import { createStorageRevision, type StorageMutationStamp } from "./shared/storageRevision.js";
 
@@ -145,9 +145,6 @@ export function resolvePlanFeedbackPlanAttachments(
   const existing = normalizeStoredPlanAttachments(existingValue);
   if (requestedValue === undefined) return existing;
   if (!Array.isArray(requestedValue)) throw new Error("Plan attachment mentions must be an array of attachment ids.");
-  if (requestedValue.length > PLAN_MAX_ATTACHMENTS) {
-    throw new Error(`Approval feedback can mention at most ${PLAN_MAX_ATTACHMENTS} plan attachments.`);
-  }
   const requestedIds = requestedValue.map((value) => String(value || "").trim());
   if (requestedIds.some((id) => !id)) throw new Error("Plan attachment mention id is required.");
   if (new Set(requestedIds).size !== requestedIds.length) {

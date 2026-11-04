@@ -437,3 +437,17 @@ test("save-only user feedback has no delivery or post-commit work", () => {
     assert.equal(delivered.postCommit?.status, "pending");
   }
 });
+
+
+test("nine small feedback uploads and existing plan references remain usable",t=>{
+ const {roleDir,planId}=canonicalPlanFixture();t.after(()=>fs.rmSync(roleDir,{recursive:true,force:true}));
+ const uploads=Array.from({length:9},(_,i)=>({name:"note-"+i+".txt",contentBase64:Buffer.from("x").toString("base64")}));
+ const record=createPlanFeedbackRecord({id:"feedback-nine",roleId:"Fixture",planId,planTitle:"Fixture",text:"Nine small files"});const result=commitPlanFeedback(roleDir,record,uploads);
+ assert.equal(result.record.attachments.length,9);assert(result.record.attachments.every(a=>fs.readFileSync(a.path,"utf8")==="x"));
+ const refs=Array.from({length:9},(_,i)=>({id:"ref-"+i,kind:"file" as const,name:"ref.txt",path:"C:/fixture/"+i,size:1,sha256:"a".repeat(64)}));
+ assert.equal(resolvePlanFeedbackPlanAttachments(refs,refs.map(r=>r.id)).length,9);
+ assert.throws(()=>resolvePlanFeedbackPlanAttachments(refs,["missing"]),/not found/);
+ assert.throws(()=>resolvePlanFeedbackPlanAttachments(refs,[refs[0]!.id,refs[0]!.id]),/unique/);
+ const huge=Buffer.alloc(10*1024*1024+1).toString("base64");const second=createPlanFeedbackRecord({id:"feedback-large",roleId:"Fixture",planId,planTitle:"Fixture",text:"Reject actual oversized bytes"});
+ assert.throws(()=>commitPlanFeedback(roleDir,second,[{name:"large.bin",contentBase64:huge}]),/exceeds/);
+});

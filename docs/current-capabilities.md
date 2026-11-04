@@ -116,9 +116,9 @@ Manager 插件使用 schema/profile v2，明确选择 `in_process`、`isolated` 
 
 | 输出 | 当前行为 |
 | --- | --- |
-| QQ / NapCat | 必须明确群/私聊目标；支持 text/image/voice/file，以及把 Markdown 文本在本机浏览器渲染成 PNG 后作为图片发送。图片消息可用有序 `segments` 把文字、图片和 Markdown 图排成一条消息；本地图片逐张校验 `allowedFileRoots`。群文件使用 `upload_group_file`。群聊必须提交 `params.replyToMessageId`，真实 ID 生成引用回复段，空字符串表示明确不引用，省略字段则返回可行动错误。引用消息含图片时还必须按原图顺序提交 `replyImageDescriptions`；发送成功后，每张来源图片旁保存同名 `.md` 说明和 Agent 会话映射。 |
+| QQ / NapCat | 必须明确群/私聊目标；支持 text/image/voice/file，以及把 Markdown 文本在本机浏览器渲染成 PNG 后作为图片发送。图片消息可用有序 `segments` 把文字、图片和 Markdown 图排成一条消息；本地图片逐张检查文件存在、类型和可读性，不设目录白名单。群文件使用 `upload_group_file`。普通群发送可省略 `params.replyToMessageId` 或填空字符串；真实 ID 生成引用回复段，`message_processing` 的实际群回复仍须有效来源引用。引用消息含图片时还必须按原图顺序提交 `replyImageDescriptions`；发送成功后，每张来源图片旁保存同名 `.md` 说明和 Agent 会话映射。 |
 | WeCom | 必须提供明确 `params.chatId`；使用 SDK 发送，受 adapter policy 限制。 |
-| 个人微信 | 仅支持回复已收到消息并保存了 context token 的来源会话；可发送文本，或发送消息端策略允许的本地文件；仅配置非空 `messageAdapterPolicies.weixin.allowedFileRoots` 时按该目录列表限制。不能主动向任意联系人发消息；图片、语音和视频的专用发送类型未实现。 |
+| 个人微信 | 仅支持回复已收到消息并保存了 context token 的来源会话；可发送文本，或发送消息端策略允许的本地文件，不设本地文件目录白名单。不能主动向任意联系人发消息；图片、语音和视频的专用发送类型未实现。 |
 | 飞书 | 仅支持文本，回复到原始 `chat_id`；要求应用凭据、事件订阅确认和 adapter 出站 policy。不会回退到通用 Webhook。 |
 | 旧 FenneNote 输出配置 | 读取时迁移到统一 TTS；旧发送通道仅作为转到语音服务的迁移别名，不调用独立 FenneNote 播放服务。 |
 | RabiLink | 受 Route policy 控制；必须明确设备 ID 或设备类型，非主动发送还需 `sourceMessageId`。主动下行不需要伪造来源任务。 |

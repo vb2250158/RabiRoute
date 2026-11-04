@@ -321,7 +321,7 @@ export function compileApiContract(definition: Pick<ApiOperationDefinition, "con
 
 function compileCapturedApiContract(contract: ApiOperationContract): CompiledApiContract {
   if (!/^[A-Za-z][A-Za-z0-9._:-]{0,191}$/.test(contract.operationId)) throw new Error("Invalid API operationId.");
-  if (contract.aliases !== undefined && (!Array.isArray(contract.aliases) || contract.aliases.length > 100
+  if (contract.aliases !== undefined && (!Array.isArray(contract.aliases)
     || contract.aliases.some(alias => typeof alias !== "string" || !/^[A-Za-z][A-Za-z0-9._:/-]{0,4095}$/.test(alias)))) throw new Error("Invalid API operation aliases.");
   const namesAndAliases = [contract.operationId, ...(contract.aliases ?? [])];
   if (new Set(namesAndAliases).size !== namesAndAliases.length) throw new Error("Duplicate API operation alias.");

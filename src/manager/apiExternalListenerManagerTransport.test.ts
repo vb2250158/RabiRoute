@@ -66,5 +66,8 @@ test("generic external native HTTP crosses an established encrypted Manager tunn
   assert.equal(receipt.statusCode, 206); assert.equal(receipt.uncertain, false); assert.deepEqual(Buffer.from(receipt.bodyBytes!), bytes); assert.equal(nativeCalls, 1);
   assert.equal(calls.some(target => target.startsWith("/api/native-listeners/")), true);
   current = false;
+  await assert.rejects(client.invokeOperation(contract.operationId, { bodyBytes: bytes }), { code: "API_LISTENER_BINDING_CHANGED" });
+  assert.equal(nativeCalls, 1, "A stale cached binding must fail before native invocation without replay.");
+  client.catalog.handleEvent({ type: "api.catalog.changed" });
   await assert.rejects(client.invokeOperation(contract.operationId, { bodyBytes: bytes }), /absent from current discovery/); assert.equal(nativeCalls, 1);
 });
