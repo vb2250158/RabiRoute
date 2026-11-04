@@ -6,6 +6,11 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.5.3 - 2026-11-04
+
+- Preflight remote Codex creation receipts before freezing a previously unused caller intent, so unsupported clients do not lock an unexecuted initial message; retain exact original-intent recovery after reservation or uncertain effects.
+- Improve QQ Mermaid flowchart readability with wider nodes, tighter spacing and content-width cropping. Send tall flowcharts as ordered PNG pages cut between labels; preserve the complete PNG export, ordinary Markdown/tables, surrounding text and original delivery deduplication.
+
 ## 0.5.2 - 2026-11-04
 
 - Make plan/memory focus optional using the existing title default, and accept multiline summaries; keep explicitly configured length limits.

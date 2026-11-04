@@ -32,7 +32,7 @@ import {
   messageContextFromOutboxEvent
 } from "./messageContextStore.js";
 import { recordDataMutationAudit } from "./observability/dataMutationAudit.js";
-import { renderMarkdownToPng, mermaidDiagramSource, markdownImageSettings, checkMarkdownQuota } from "./markdownImage.js";
+import { renderMarkdownToPngPages, mermaidDiagramSource, markdownImageSettings, checkMarkdownQuota } from "./markdownImage.js";
 import { napcatStickerMessage, QQ_STICKER_ID } from "./napcatStickers.js";
 
 export type AgentReplyRequest = {
@@ -636,16 +636,19 @@ async function renderNapCatMarkdownSegments(message: OneBotMessage): Promise<One
       continue;
     }
     const source = String(segment.data.text ?? "");
-    let png: Buffer;
-    try { png = await renderMarkdownToPng(source); }
+    let pages: Buffer[];
+    try { pages = await renderMarkdownToPngPages(source); }
     catch (error) {
       if (mermaidDiagramSource(source) === undefined) throw error;
       rendered.push({ type: "text", data: { text: `[图表转换失败，已保留源码]\n${source}` } });
       continue;
     }
-    totalPngBytes += png.length;
+    totalPngBytes += pages.reduce((sum, png) => sum + png.length, 0);
     checkMarkdownQuota("RABIROUTE_MARKDOWN_MAX_MESSAGE_PNG_BYTES", markdownImageSettings.messagePngBytes, totalPngBytes);
-    rendered.push({ type: "image", data: { file: `base64://${png.toString("base64")}` } });
+    for (const [index, png] of pages.entries()) {
+      if (pages.length > 1) rendered.push({ type: "text", data: { text: `\n[流程图 ${index + 1}/${pages.length}]\n` } });
+      rendered.push({ type: "image", data: { file: `base64://${png.toString("base64")}` } });
+    }
   }
   return rendered;
 }

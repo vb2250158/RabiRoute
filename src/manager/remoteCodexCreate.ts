@@ -11,7 +11,7 @@ import { normalizeAgentInstanceBinding } from "../shared/agentInstance.js";
 import { lexicalWorkspaceKey } from "../codexTaskIdentity.js";
 import { normalizeCodexThreadTitle } from "../shared/codexThreadTitle.js";
 import { createCodexThreadWithReservation } from "../codexThreadCreationReservations.js";
-import { CodexCreationIntentConflictError, CodexMetadataNotStartedError } from "../codexThreadCreationReservations.js";
+import { CodexCreationIntentConflictError, CodexMetadataNotStartedError, readCallerCodexCreation } from "../codexThreadCreationReservations.js";
 import type { CallerCreationMetadataStatus } from "../callerCreationMetadata.js";
 
 type MetadataRequest = AgentThreadRequest & { creationIntent: { callerKey: string; intentHash: string } };
@@ -78,6 +78,9 @@ export async function createRemoteCodexAndDeliver(params: {
   };
   const metadataRequest: MetadataRequest = { action: "create", agentAdapter: "codex", instanceBinding: binding,
     creationIntent: { callerKey, intentHash: hash }, title, cwd: request.cwd, sandbox: request.sandbox, model: request.model, reasoningEffort: request.reasoningEffort };
+  // A read-only unsupported/status failure must not freeze a brand-new unused intent.
+  // Existing reservations retain their original hash and normal recovery/concurrency rules.
+  if (!readCallerCodexCreation(params.rootDir, callerKey)) await readStatus();
   const created = await createCodexThreadWithReservation({ rootDir: params.rootDir, title, workspace,
     callerIntent: { key: callerKey, hash },
     recoverCreated: async () => { const status = await readStatus(); return status.state === "completed" ? completedThread(status) : undefined; },

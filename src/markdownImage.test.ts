@@ -4,7 +4,7 @@ import path from "node:path";
 import test, { type TestContext } from "node:test";
 import { EventEmitter } from "node:events";
 import type WebSocket from "ws";
-import { markdownImageHtml, markdownImageInternals, renderMarkdownToPng, readMarkdownImageSettings, checkMarkdownQuota } from "./markdownImage.js";
+import { markdownImageHtml, markdownImageInternals, renderMarkdownToPng, renderMarkdownToPngPages, readMarkdownImageSettings, checkMarkdownQuota } from "./markdownImage.js";
 
 type Command = { id: number; method: string };
 
@@ -178,8 +178,46 @@ test("CDP accepts tall images by default and enforces only explicit image quotas
 
 test("real browser renders a Mermaid flowchart and rejects an invalid diagram", async () => {
   const png = await renderMarkdownToPng("```mermaid\nflowchart TD\n A[请求开始] --> B{处理成功}\n B --> C[保存完成]\n```");
-  assert.equal(png.readUInt32BE(16), 1000);
+  assert.ok(png.readUInt32BE(16) > 100 && png.readUInt32BE(16) < 1000, "diagram canvas fits its content instead of a fixed blank width");
   assert.ok(png.readUInt32BE(20) > 100);
   assert.ok(png.length > 5000);
   await assert.rejects(renderMarkdownToPng("```mermaid\nnot-a-valid-diagram !!!\n```"), /could not be rendered/);
+});
+
+test("diagram page boundaries preserve nodes and edge labels, including oversized nodes", () => {
+  const labels = [{ top: 850, bottom: 950 }, { top: 930, bottom: 990 }, { top: 1700, bottom: 1770 }];
+  const cuts = markdownImageInternals.diagramPageCuts(800, 2200, labels);
+  assert.equal(cuts[0], 0); assert.equal(cuts.at(-1), 2200);
+  assert.ok(cuts.length > 2);
+  for (let i = 1; i < cuts.length; i++) {
+    assert.ok(cuts[i] > cuts[i - 1]);
+    assert.ok(!labels.some(label => label.top < cuts[i] && label.bottom > cuts[i]));
+  }
+  assert.deepEqual(markdownImageInternals.diagramPageCuts(400, 1800, [{top: 10,bottom:1790}]), [0, 1800]);
+  assert.deepEqual(markdownImageInternals.diagramPageCuts(800, 600, labels), [0, 600]);
+});
+
+test("tall Chinese flowcharts render as readable consecutive pages while PNG export remains whole", async () => {
+  const source = "```mermaid\nflowchart TD\n" + Array.from({length:12},(_,i)=>`N${i}[\"阶段${i}：保存数据并确认当前结果\"]`).join("\n")
+    + "\n" + Array.from({length:11},(_,i)=>`N${i} --> N${i+1}`).join("\n") + "\n```";
+  const whole = await renderMarkdownToPng(source);
+  const pages = await renderMarkdownToPngPages(source);
+  assert.ok(pages.length > 1);
+  assert.ok(whole.readUInt32BE(16) < 1000);
+  assert.equal(pages.reduce((height, png) => height + png.readUInt32BE(20), 0), whole.readUInt32BE(20), "pages cover the complete diagram without lost or duplicated rows");
+  for (const page of pages) {
+    assert.equal(page.readUInt32BE(16), whole.readUInt32BE(16));
+    assert.ok(page.readUInt32BE(20) <= page.readUInt32BE(16) * 1.3 + 16);
+  }
+  const table = await renderMarkdownToPngPages("| 项目 | 状态 |\n|---|---|\n| 测试 | 通过 |");
+  assert.equal(table.length, 1); assert.equal(table[0].readUInt32BE(16), 1000);
+});
+
+test("sequence diagrams retain their single-image layout", async () => {
+  const source = "```mermaid\nsequenceDiagram\nparticipant A as 发送者\nparticipant B as 接收者\n"
+    + Array.from({length: 15}, (_, i) => `A->>B: 消息${i}保存结果`).join("\n") + "\n```";
+  const pages = await renderMarkdownToPngPages(source);
+  assert.equal(pages.length, 1);
+  assert.ok(pages[0].readUInt32BE(16) > 100);
+  assert.ok(pages[0].readUInt32BE(20) > 100);
 });

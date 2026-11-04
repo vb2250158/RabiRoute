@@ -201,12 +201,42 @@ async function pageWebSocketUrl(port: number): Promise<string> {
   throw new Error("Markdown browser did not expose a page target.");
 }
 
-async function captureHtml(port: number, html: string, prepareScript?: string): Promise<Buffer> {
+type DiagramLabelBounds = { top: number; bottom: number };
+
+/** Split only between labels/nodes; a large indivisible node remains on one page. */
+function diagramPageCuts(width: number, height: number, labels: DiagramLabelBounds[]): number[] {
+  if (height <= width * 1.3) return [0, height];
+  const ranges: DiagramLabelBounds[] = [];
+  for (const label of [...labels].sort((a, b) => a.top - b.top)) {
+    const previous = ranges.at(-1);
+    if (previous && label.top <= previous.bottom + 16) previous.bottom = Math.max(previous.bottom, label.bottom);
+    else ranges.push({ ...label });
+  }
+  const cuts = [0];
+  const targetHeight = width * 1.15;
+  while (height - cuts.at(-1)! > width * 1.3) {
+    const start = cuts.at(-1)!;
+    let cut = start + targetHeight;
+    const occupied = ranges.find(range => range.top < cut && range.bottom > cut);
+    if (occupied) cut = occupied.top > start + targetHeight * 0.4 ? occupied.top - 4 : occupied.bottom + 4;
+    cut = Math.min(height, Math.ceil(cut));
+    if (height - cut < width * 0.25) break;
+    cuts.push(cut);
+  }
+  cuts.push(height);
+  return cuts;
+}
+
+async function captureHtml(port: number, html: string, prepareScript?: string, paginate = false): Promise<Buffer[]> {
   const socket = new WebSocket(await pageWebSocketUrl(port), { handshakeTimeout: markdownImageSettings.timeoutMs });
-  return captureHtmlOnSocket(socket, html, markdownImageSettings.timeoutMs, markdownImageSettings, prepareScript);
+  return captureHtmlPagesOnSocket(socket, html, markdownImageSettings.timeoutMs, markdownImageSettings, prepareScript, paginate);
 }
 
 async function captureHtmlOnSocket(socket: WebSocket, html: string, timeoutMs = markdownImageSettings.timeoutMs, settings = markdownImageSettings, prepareScript?: string): Promise<Buffer> {
+  return (await captureHtmlPagesOnSocket(socket, html, timeoutMs, settings, prepareScript))[0];
+}
+
+async function captureHtmlPagesOnSocket(socket: WebSocket, html: string, timeoutMs = markdownImageSettings.timeoutMs, settings = markdownImageSettings, prepareScript?: string, paginate = false): Promise<Buffer[]> {
   type Waiter = { resolve: (value: Record<string, unknown>) => void; reject: (error: Error) => void };
   let sequence = 0;
   let connectionError: Error | undefined;
@@ -288,9 +318,21 @@ async function captureHtmlOnSocket(socket: WebSocket, html: string, timeoutMs = 
       loaded,
       send("Page.navigate", { url: `data:text/html;base64,${Buffer.from(html).toString("base64")}` })
     ]);
+    let width = IMAGE_WIDTH;
+    let labelBounds: DiagramLabelBounds[] = [];
+    let paginateFlowchart = false;
     if (prepareScript) {
       const rendered = await send("Runtime.evaluate", { expression: prepareScript, awaitPromise: true, returnByValue: true });
       if (rendered.exceptionDetails) throw new Error("Mermaid diagram could not be rendered.");
+      const layout = (rendered.result as { value?: { width?: number; labels?: DiagramLabelBounds[]; flowchart?: boolean } } | undefined)?.value;
+      const diagramWidth = layout?.width;
+      if (typeof diagramWidth === "number") {
+        width = Math.ceil(diagramWidth);
+        if (!Number.isSafeInteger(width) || width < 1 || width > IMAGE_WIDTH) throw new Error("Invalid diagram viewport width.");
+        await send("Emulation.setDeviceMetricsOverride", { width, height: 100, deviceScaleFactor: 1, mobile: false });
+        labelBounds = layout?.labels ?? [];
+        paginateFlowchart = paginate && layout?.flowchart === true;
+      }
     }
     const metrics = await send("Page.getLayoutMetrics");
     const size = (metrics.cssContentSize || metrics.contentSize || {}) as Record<string, unknown>;
@@ -299,14 +341,20 @@ async function captureHtmlOnSocket(socket: WebSocket, html: string, timeoutMs = 
       throw new Error("Markdown image height exceeds the Chromium integer viewport capacity.");
     }
     checkMarkdownQuota("RABIROUTE_MARKDOWN_MAX_HEIGHT", settings.height, height);
-    await send("Emulation.setDeviceMetricsOverride", { width: IMAGE_WIDTH, height, deviceScaleFactor: 1, mobile: false });
-    const screenshot = await send("Page.captureScreenshot", { format: "png", captureBeyondViewport: true, fromSurface: true });
-    const png = Buffer.from(String(screenshot.data || ""), "base64");
-    if (png.length < 8 || !png.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) {
-      throw new Error("Markdown renderer returned an invalid PNG.");
+    await send("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor: 1, mobile: false });
+    const cuts = paginateFlowchart ? diagramPageCuts(width, height, labelBounds) : [0, height];
+    const pages: Buffer[] = [];
+    for (let page = 1; page < cuts.length; page++) {
+      const screenshot = await send("Page.captureScreenshot", { format: "png", captureBeyondViewport: true, fromSurface: true,
+        ...(paginateFlowchart ? { clip: { x: 0, y: cuts[page - 1], width, height: cuts[page] - cuts[page - 1], scale: 1 } } : {}) });
+      const png = Buffer.from(String(screenshot.data || ""), "base64");
+      if (png.length < 8 || !png.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) {
+        throw new Error("Markdown renderer returned an invalid PNG.");
+      }
+      checkMarkdownQuota("RABIROUTE_MARKDOWN_MAX_PNG_BYTES", settings.pngBytes, png.length);
+      pages.push(png);
     }
-    checkMarkdownQuota("RABIROUTE_MARKDOWN_MAX_PNG_BYTES", settings.pngBytes, png.length);
-    return png;
+    return pages;
   } finally {
     failAll(new Error("Markdown browser connection closed."));
     socket.off("message", onMessage);
@@ -321,7 +369,7 @@ async function captureHtmlOnSocket(socket: WebSocket, html: string, timeoutMs = 
 }
 
 /** @internal Socket-level seam for deterministic CDP lifecycle tests. */
-export const markdownImageInternals = { captureHtmlOnSocket, browserCandidates, validateMarkdownSource };
+export const markdownImageInternals = { captureHtmlOnSocket, browserCandidates, validateMarkdownSource, diagramPageCuts };
 
 /** Only fenced Mermaid diagrams are executed by the trusted local renderer. */
 export function mermaidDiagramSource(markdown: string): string | undefined {
@@ -333,6 +381,15 @@ export function mermaidDiagramSource(markdown: string): string | undefined {
 }
 
 export async function renderMarkdownToPng(markdown: string): Promise<Buffer> {
+  return (await renderMarkdownImages(markdown, false))[0];
+}
+
+/** QQ previews stay readable by sending tall diagrams as consecutive node-safe images. */
+export function renderMarkdownToPngPages(markdown: string): Promise<Buffer[]> {
+  return renderMarkdownImages(markdown, true);
+}
+
+async function renderMarkdownImages(markdown: string, paginate: boolean): Promise<Buffer[]> {
   validateMarkdownSource(markdown);
   const tempRoot = path.resolve(os.tmpdir());
   const profileDir = fs.mkdtempSync(path.join(tempRoot, "rabiroute-markdown-browser-"));
@@ -344,16 +401,27 @@ export async function renderMarkdownToPng(markdown: string): Promise<Buffer> {
     if (diagram !== undefined) {
       const bundlePath = path.join(path.dirname(createRequire(import.meta.url).resolve("mermaid")), "mermaid.min.js");
       const bundle = await fs.promises.readFile(bundlePath, "utf8");
-      const html = `<!doctype html><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:; connect-src 'none'"><style>html,body{margin:0;background:white;width:1000px}body{padding:24px;box-sizing:border-box;font-family:'Microsoft YaHei',sans-serif}svg{max-width:100%;height:auto}</style><main id="diagram"></main>`;
+      const html = `<!doctype html><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:; connect-src 'none'"><style>html,body{margin:0;background:white;width:1000px}body{padding:16px;box-sizing:border-box;font-family:'Microsoft YaHei',sans-serif}svg{display:block;height:auto}</style><main id="diagram"></main>`;
       const script = bundle + `; (async () => {
         mermaid.initialize({ startOnLoad: false, securityLevel: "strict", theme: "default", deterministicIds: true,
-          fontFamily: "Microsoft YaHei, sans-serif", flowchart: { htmlLabels: false },
+          fontFamily: "Microsoft YaHei, sans-serif", fontSize: 20,
+          flowchart: { htmlLabels: false, wrappingWidth: 360, nodeSpacing: 28, rankSpacing: 28, padding: 12, diagramPadding: 8, useMaxWidth: false },
           secure: ["securityLevel", "startOnLoad", "maxTextSize", "suppressErrorRendering", "secure"], suppressErrorRendering: true });
         const result = await mermaid.render("completion-diagram", ${JSON.stringify(diagram)});
         document.getElementById("diagram").innerHTML = result.svg;
         await document.fonts.ready;
+        const svg = document.querySelector("#diagram svg");
+        const contentWidth = Math.min(${IMAGE_WIDTH} - 32, Math.ceil(svg.viewBox.baseVal.width));
+        svg.style.width = contentWidth + "px";
+        svg.style.maxWidth = "none";
+        document.documentElement.style.width = document.body.style.width = (contentWidth + 32) + "px";
+        const labels = [...svg.querySelectorAll(".node, .edgeLabel, .cluster-label, .diagramTitleText")].map(element => {
+          const rect = element.getBoundingClientRect();
+          return { top: rect.top, bottom: rect.bottom };
+        });
+        return { width: contentWidth + 32, labels, flowchart: svg.getAttribute("aria-roledescription")?.startsWith("flowchart") === true };
       })()`;
-      return await captureHtml(launched.port, html, script);
+      return await captureHtml(launched.port, html, script, paginate);
     }
     return await captureHtml(launched.port, markdownImageHtml(markdown));
   } finally {

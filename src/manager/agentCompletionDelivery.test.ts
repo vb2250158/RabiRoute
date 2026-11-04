@@ -442,6 +442,17 @@ test("completion sends real Mermaid PNG inline to QQ and reuses the mixed-messag
     await deliverCompletionToEndpoint(owner.rule,{...hook,lastAssistantMessage:"前文\n\n```mermaid\nINVALID DIAGRAM !\n```\n\n后文"},"mixed-invalid","route",withTestEndpointEgress(options));
     assert.match(JSON.stringify(messages[1]),/图表转换失败/);
     assert.match(JSON.stringify(messages[1]),/后文/);
+    const chain = Array.from({length: 12}, (_, i) => `N${i}[\"保存阶段${i}确认结果\"]`).join("\n")
+      + "\n" + Array.from({length: 11}, (_, i) => `N${i} --> N${i + 1}`).join("\n");
+    const longHook = {...hook, lastAssistantMessage: `前文\n\n\`\`\`mermaid\nflowchart TD\n${chain}\n\`\`\`\n\n后文`};
+    await deliverCompletionToEndpoint(owner.rule,longHook,"mixed-long-diagram","route",withTestEndpointEgress(options));
+    await deliverCompletionToEndpoint(owner.rule,longHook,"mixed-long-diagram","route",withTestEndpointEgress(options));
+    assert.equal(messages.length, 3, "all diagram pages share the original mixed-message receipt");
+    const pages = messages[2].message as Array<{type:string;data:Record<string,string>}>;
+    const imageCount = pages.filter(segment => segment.type === "image").length;
+    assert.ok(imageCount > 1);
+    assert.match(pages[0].data.text, /前文/); assert.match(pages.at(-1)!.data.text, /后文/);
+    for (let i = 1; i <= imageCount; i++) assert.ok(pages.some(segment => segment.type === "text" && segment.data.text.includes(`[流程图 ${i}/${imageCount}]`)));
   } finally {await new Promise<void>(resolve=>server.close(()=>resolve()));fs.rmSync(rootDir,{recursive:true,force:true});}
 });
 

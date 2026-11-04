@@ -6,6 +6,11 @@ English | <a href="./rabi-agent-interfaces.md">简体中文</a>
 
 # Rabi Interfaces for Handlers
 
+## Preflight for a new remote conversation
+
+A first creation reads the target SDK creation receipt before reserving a new caller intent. An unsupported old client or failed read-only preflight freezes no new intent, creates no conversation and sends no initial message. Existing intents recover with the original source, target, caller ID and initial text. `DELIVERY_NOT_RESERVED` describes the later message-delivery ledger only; it does not prove the creation intent is absent. `canSubmitSameIntent` does not authorize changing a frozen intent. Reconcile an uncertain result through its original receipt without a new key or replay.
+
+
 ## Newly executable interfaces
 
 The six device profile operations are described in [device Agent profiles](aiui-agent-profile-http_en.md#executable-contracts-and-discovery). They save configuration and device acknowledgements without executing an Agent. Independent owners also register:
