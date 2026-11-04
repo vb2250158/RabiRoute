@@ -1,21 +1,24 @@
-import type { NativeOwnerDelivery } from "./nativeOwnerDelivery.js";
+import type { NativeOwnerDelivery, NativeOwnerDeliveryEvidence } from "./nativeOwnerDelivery.js";
 import type { PreparedEndpointDelivery, EndpointDeliveryReceipt } from "./endpointDelivery.js";
 import { endpointExecutionOptionsHash } from "./executionOptions.js";
 import { agentDeliveryPromptHash } from "./store.js";
 import type { AgentRequestEndpoint } from "./endpoint.js";
-import { sameAgentEndpoint, normalizeAgentRequestEndpoint } from "./endpoint.js";
+import { sameAgentEndpoint, normalizeAgentRequestEndpoint, normalizeAgentDeliverySource, sameAgentDeliverySource, agentDeliverySourceForParty } from "./endpoint.js";
 import { EndpointDeliveryNotSentError, validateEndpointDeliveryNoFrameProof, type EndpointDeliveryNoFrameProof } from "./deliveryFailure.js";
 
-export type NativeOwnerExecutionContext<T extends NativeOwnerDelivery> = {
-  endpoint: AgentRequestEndpoint;
+export type NativeOwnerReceiptContext<T extends NativeOwnerDeliveryEvidence> = {
   assertAuthorized: () => void | Promise<void>;
-  send: (delivery: T, assertAuthorized: () => Promise<void>) => Promise<{ threadId: string; action: string; transport: string }>;
   readReceipt: (delivery: T) => Promise<EndpointDeliveryReceipt | undefined>;
   writeReceipt: (delivery: T, receipt: EndpointDeliveryReceipt) => Promise<void>;
   beginAttempt: (delivery: T) => Promise<boolean>;
   readNotSent?: (delivery: T) => Promise<EndpointDeliveryNoFrameProof | undefined>;
-  writeNotSent?: (delivery: T, proof: EndpointDeliveryNotSentError) => Promise<void>;
   recoverReceipt?: (delivery: T, assertAuthorized: () => Promise<void>) => Promise<EndpointDeliveryReceipt | undefined>;
+};
+
+export type NativeOwnerExecutionContext<T extends NativeOwnerDelivery> = NativeOwnerReceiptContext<T> & {
+  endpoint: AgentRequestEndpoint;
+  send: (delivery: T, assertAuthorized: () => Promise<void>) => Promise<{ threadId: string; action: string; transport: string }>;
+  writeNotSent?: (delivery: T, proof: EndpointDeliveryNotSentError) => Promise<void>;
 };
 
 export type EndpointExecutionContext = NativeOwnerExecutionContext<PreparedEndpointDelivery>;
@@ -23,13 +26,13 @@ export type EndpointExecutionContext = NativeOwnerExecutionContext<PreparedEndpo
 /** Connector stores transport receipts only, never prepares or owns business requests. */
 export async function executePreparedEndpointDelivery(delivery: PreparedEndpointDelivery, context: EndpointExecutionContext,
   reconcile = false): Promise<EndpointDeliveryReceipt | undefined> {
-  normalizeAgentRequestEndpoint(delivery.source);
+  normalizeAgentDeliverySource(delivery.source);
   if (!["dispatching", "committed"].includes(delivery.state)
-    || delivery.preparation.source.threadId !== delivery.source.sessionId
+    || delivery.source.kind !== "connection" && delivery.preparation.source.threadId !== delivery.source.sessionId
     || delivery.preparation.target.threadId !== delivery.target.sessionId
     || delivery.deliveryId !== delivery.preparation.deliveryId
     || !sameAgentEndpoint(delivery.target, delivery.preparation.target.endpoint)
-    || !sameAgentEndpoint(delivery.source, delivery.preparation.source.endpoint)) throw new Error("Prepared delivery identity or hash mismatch.");
+    || !sameAgentDeliverySource(delivery.source, agentDeliverySourceForParty(delivery.preparation.source))) throw new Error("Prepared delivery identity or hash mismatch.");
   return executeNativeOwnerDelivery(delivery, context, reconcile);
 }
 
@@ -38,6 +41,7 @@ export async function executeNativeOwnerDelivery<T extends NativeOwnerDelivery>(
   normalizeAgentRequestEndpoint(delivery.target);
   if (!sameAgentEndpoint(delivery.target, context.endpoint) || !delivery.generation || delivery.promptHash !== agentDeliveryPromptHash(delivery.prompt)
     || delivery.executionOptionsHash !== endpointExecutionOptionsHash(delivery.executionOptions)) throw new Error("Native owner delivery hash mismatch.");
+  if (reconcile) return reconcileNativeOwnerDelivery(delivery, context);
   const assertAuthorized = async () => { await context.assertAuthorized(); };
   await assertAuthorized();
   const prior = await context.readReceipt(delivery);
@@ -46,26 +50,6 @@ export async function executeNativeOwnerDelivery<T extends NativeOwnerDelivery>(
     const { validateEndpointReceipt } = await import("./endpointDelivery.js");
     validateEndpointReceipt(delivery, prior);
     return prior;
-  }
-  if (reconcile) {
-    const noFrameProof = await context.readNotSent?.(delivery);
-    if (noFrameProof) {
-      validateEndpointDeliveryNoFrameProof(delivery, noFrameProof);
-      await assertAuthorized();
-      throw new EndpointDeliveryNotSentError("Persisted transport owner evidence: no prompt frame was written by the original attempt.", noFrameProof);
-    }
-    const recovered = await context.recoverReceipt?.(delivery, assertAuthorized);
-    await assertAuthorized();
-    if (recovered) {
-      const { validateEndpointReceipt } = await import("./endpointDelivery.js");
-      validateEndpointReceipt(delivery, recovered);
-      // Reservation records recovered transport evidence only; reconciliation never calls send.
-      await context.beginAttempt(delivery);
-      await assertAuthorized();
-      await context.writeReceipt(delivery, recovered);
-      await assertAuthorized();
-    }
-    return recovered;
   }
   await assertAuthorized();
   const fresh = await context.beginAttempt(delivery);
@@ -95,9 +79,40 @@ export async function executeNativeOwnerDelivery<T extends NativeOwnerDelivery>(
   await assertAuthorized();
   if (accepted.threadId !== delivery.target.sessionId) throw new Error("Owner accepted a different session; receipt is unconfirmed.");
   const receipt: EndpointDeliveryReceipt = { deliveryId: delivery.deliveryId, generation: delivery.generation,
-    endpoint: delivery.target, promptHash: delivery.promptHash, executionOptionsHash: delivery.executionOptionsHash, accepted: true,
-    action: accepted.action, transport: accepted.transport };
+    endpoint: delivery.target, promptHash: delivery.promptHash, executionOptionsHash: delivery.executionOptionsHash,
+    accepted: true, action: accepted.action, transport: accepted.transport };
   await context.writeReceipt(delivery, receipt);
   await assertAuthorized();
   return receipt;
+}
+
+/** Recover the original owner evidence without a prompt, a new dispatch token or a send callback. */
+export async function reconcileNativeOwnerDelivery<T extends NativeOwnerDeliveryEvidence>(delivery: T, context: NativeOwnerReceiptContext<T>): Promise<EndpointDeliveryReceipt | undefined> {
+  const assertAuthorized = async () => { await context.assertAuthorized(); };
+  await assertAuthorized();
+  const prior = await context.readReceipt(delivery);
+  await assertAuthorized();
+  if (prior) {
+    const { validateEndpointReceipt } = await import("./endpointDelivery.js");
+    validateEndpointReceipt(delivery, prior);
+    return prior;
+  }
+  const noFrameProof = await context.readNotSent?.(delivery);
+  if (noFrameProof) {
+    validateEndpointDeliveryNoFrameProof(delivery, noFrameProof);
+    await assertAuthorized();
+    throw new EndpointDeliveryNotSentError("Persisted transport owner evidence: no prompt frame was written by the original attempt.", noFrameProof);
+  }
+  const recovered = await context.recoverReceipt?.(delivery, assertAuthorized);
+  await assertAuthorized();
+  if (recovered) {
+    const { validateEndpointReceipt } = await import("./endpointDelivery.js");
+    validateEndpointReceipt(delivery, recovered);
+    // Reservation records recovered evidence only; this helper has no send callback.
+    await context.beginAttempt(delivery);
+    await assertAuthorized();
+    await context.writeReceipt(delivery, recovered);
+    await assertAuthorized();
+  }
+  return recovered;
 }

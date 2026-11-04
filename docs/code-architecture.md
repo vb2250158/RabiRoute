@@ -8,9 +8,13 @@
 
 消息端的运行实现、管理操作、配置卡片和扫描由各自插件包拥有。`plugins/profiles/desktop.json` 声明默认实例；`PluginProfileSettings` 在独立的实例文件中持久化用户覆盖，不改安装包的默认 Profile。坏实例设置只影响该实例，正常插件仍可列出和使用。QQ 的配置、进程控制和守护已合并进 NapCat 消息端插件；米家与语音服务的实现也随自己的包构建，不由控制面注入平台类。语音消息端和共享语音服务分别启停，移动消息端与共享连接传输分别拥有生命周期。
 
-消息端包在 `route-config.json` 声明自己负责的 Route 字段、运行字段映射与回退依赖。只改这些字段时，原目录 CAS 队列将不可变快照交给常驻 Gateway，原生插件 owner 准备新实例、发布并排空旧实例，其他消息端保持运行。身份、处理端目标、公共管道及未声明字段仍按真实依赖闭包重启 Gateway。启动快照在 Route 私有运行目录按进程代际保存，环境变量只传路径和摘要；Gateway 一次读取并冻结，后续更新复用原进程标准管道。
+消息端包在 `route-config.json` 声明自己负责的 Route 字段、运行字段映射与回退依赖。只改这些字段时，原目录 CAS 队列将不可变快照交给常驻 Gateway，原生插件 owner 准备新实例、发布并排空旧实例，其他消息端保持运行。主 Agent 选择、成员列表、远端目标、共用模型、计划助手配置、公共管道及未声明字段仍按真实依赖闭包重启 Gateway。Agent 包的连接、密码和普通直接投递绑定可局部更新；当前本机主 Agent 已启用消息处理或记忆整理 worker 时，其会话 ID、名称和工作目录变化仍进入共享 worker 闭包，按原生命周期更新。启动快照在 Route 私有运行目录按进程代际保存，环境变量只传路径和摘要；Gateway 一次读取并冻结，后续更新复用原进程标准管道。
 
 配置持久化与运行生效分别回读。原子进程、代际、操作 ID 与前后版本共同限定 ACK；丢失 ACK 只查询原操作，后台目录回读不暗中重试已拒绝配置。入口不可用警告与配置版本分开，不以无关坏入口拒绝正常更新。平台外发也走原生插件能力：同一回复的上传、附言、凭据和回执共用原请求租约，关闭插件后拒绝新外发并等待已受理工作结束。SDK 的外发操作名可扩展，具体协议与校验归平台包。
+
+Agent 端同样按平台独立成包：Codex、DSH、Copilot CLI、Marvis、AstrBot、WorkBuddy、Antigravity、Device Agent 与 Grok Bot。每包发布执行能力、管理操作、发现与扫描及配置卡片，宿主沿原插件 generation 和启用设置解析当前能力；平台类型与 capability 显式对应，保留旧配置中的类型大小写。
+
+Route、主 Agent 选择、任务身份、创建预留和投递账本仍由原宿主拥有。停用插件保留已有目标与配置，不自动改投另一会话；缺失卡片仅在本卡显示不可用。扫描按插件隔离执行和结算，页面进入或显式刷新才扫描；查询健康、展开卡片和保存配置不触发扫描。各平台继续使用真实执行 owner，不建立备用 Runtime，也不停止外部桌面应用。
 
 左侧栏底部的[插件页](user-guide/plugins.md)参考 DSH 的列表与详情交互，读取原生插件实例的真实状态。`src/manager/pluginManagement.ts` 复用原生 generation、发布记录和退役诊断；启用设置与实际运行状态分别展示。应用生命周期持有插件管理、身份/健康、目录、事件流和静态页面入口，业务核心停用后仍能恢复；业务接口继续归原插件，未另建一套业务路由或状态。
 
@@ -22,7 +26,7 @@ Windows Bootstrap 仅按 `current.json` 定位本地版本并加载 Host Core；
 
 通用投递复用原客户端持久队列、Manager 记录和真实任务 owner；CLI 退出与断线不清除已受理责任。实现边界、状态及当前验收范围见[可靠 Agent 投递](reliable-agent-delivery.md)。
 
-远端电脑凭据与整台实例的启用开关由 `lanAgentAuthority.ts` 唯一持有（schema 2）；一次迁移先保存私有恢复快照，再清除旧逐 Agent 授权及会话声明。每次请求显式传类型和完整 Id，目录不授权也不选择默认会话。实例默认启用，启用后使用全部公开接口，无需浏览器登录。详见[连接使用](connection-access.md)。
+远端电脑凭据与整台实例的启用开关由 `lanAgentAuthority.ts` 唯一持有（schema 2）；一次迁移先保存私有恢复快照，再清除旧逐 Agent 授权及会话声明。已有会话时记录类型和完整 Id；没有会话时记录真实节点或本机连接，目录不授权也不选择默认会话。实例默认启用，启用后使用全部公开接口，无需浏览器登录。详见[连接使用](connection-access.md)。
 
 ## 远端 Agent 主程序与托盘
 
@@ -32,7 +36,7 @@ Linux 源码 Host 由 `scripts/linux-host.mjs` 和 `scripts/lib/linux-host-runti
 
 家庭设备遥控由 `vacuumRemote.ts` 唯一持有会话和松键序列，WebGUI 与 Agent 共用 Manager 接口；暂停读回、初始化等待、HA 独立计时器与退出协调见[设备 API](home-device-agent-api.md)。
 
-完成连接鉴权后即可使用已提供的接口，不再增加逐功能或逐角色授权。发送仍须遵守来源身份、目标、消息格式和幂等回执合同。详见[连接与接口使用](connection-access.md)。
+完成连接鉴权后即可使用已提供的接口，不再增加逐功能或逐角色授权。发送按实际目标、消息格式和幂等回执合同执行；来源信息只记归属。详见[连接与接口使用](connection-access.md)。
 
 家庭设备简化参数合同在 `src/shared/homeMediaContract.ts`；`src/integrations/xiaomiHome/entityActions.ts` 从实时 HA 服务、目标 feature 与实体参数派生通用动作目录、revision 和 Schema，并校验调用。设备客户端与持久回执由同目录 `managerApi.ts` 唯一持有；通用动作与简化动作共用执行和回执链，不新增旁路或逐设备权限。音箱便捷播报仍显式绑定到通知实体。WebGUI 不持有 HA 凭据，Agent 使用[设备接口](home-device-agent-api.md)。
 

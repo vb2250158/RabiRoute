@@ -142,8 +142,31 @@ test("message source normalization rejects omitted or incomplete source identity
     type: "plan",
     planName: "计划",
     planId: "plan-1",
-    sourceAgent: { agentAdapter: "unknown", sessionName: "来源", sessionId: "source-1" }
+    sourceAgent: { agentAdapter: "invalid/type", sessionName: "来源", sessionId: "source-1" }
   }), /Invalid messageSource\.sourceAgent\.agentAdapter/);
+});
+
+test("message source normalization preserves an unavailable plugin and its complete native identity", () => {
+  const identity = { agentAdapter: "unknown", sessionName: "来源", sessionId: "opaque:original-session", workspace: "C:/Data/Original" };
+  for (const source of [
+    { type: "agent", ...identity },
+    { type: "agent_hook", ...identity },
+    { type: "plan", planName: "计划", planId: "original-plan", sourceAgent: identity }
+  ]) {
+    const before = structuredClone(source);
+    const normalized = normalizeRabiMessageSource(source);
+    const nativeIdentity = normalized.type === "plan" ? normalized.sourceAgent! : normalized;
+    for (const [field, value] of Object.entries(identity)) assert.equal((nativeIdentity as Record<string, unknown>)[field], value);
+    assert.deepEqual(source, before);
+  }
+});
+
+test("message source normalization rejects nonstring Agent IDs without coercing them", () => {
+  for (const agentAdapter of [true, false, 123, {}, ["codex"]]) {
+    const identity = { agentAdapter, sessionName: "来源", sessionId: "original-session", workspace: "C:/Data/Original" };
+    assert.throws(() => normalizeRabiMessageSource({ type: "agent", ...identity }), /messageSource\.agentAdapter/);
+    assert.throws(() => normalizeRabiMessageSource({ type: "plan", planName: "计划", planId: "original-plan", sourceAgent: identity }), /messageSource\.sourceAgent\.agentAdapter/);
+  }
 });
 
 test("delivery renders the packet send time inside the message source", () => {

@@ -3,6 +3,13 @@ import { TERMINAL_LIMITS } from "../../apps/rabi-agent/lib/interactive-protocol.
 export type RemoteTerminalEvent = { sequence: number; type: string; data?: string; exitCode?: number | null };
 type Session = { events: RemoteTerminalEvent[]; bytes: number; sequence: number; ended: boolean; listeners: Set<(event: RemoteTerminalEvent) => void> };
 
+/** Local Registry evidence: invocation stopped before a dispatch was started. Never deserialize this from a peer. */
+export class TerminalDispatchNotSentError extends Error {
+  constructor(cause: unknown) {
+    super(cause instanceof Error ? cause.message : String(cause), { cause });
+  }
+}
+
 /** Ephemeral transport replay only. The remote process owns session state. */
 export class LanAgentTerminals {
   private readonly sessions = new Map<string, Session>();
@@ -13,6 +20,7 @@ export class LanAgentTerminals {
   }
   async execute(instanceId: string, body: Record<string, unknown>, assertAuthorized: () => void = () => {}): Promise<unknown> {
     assertAuthorized();
+    let created: { key: string; session: Session } | undefined;
     if (body.action === "open") {
       const key = this.key(instanceId, body.terminalId);
       if (!this.sessions.has(key)) {
@@ -22,10 +30,21 @@ export class LanAgentTerminals {
             if (this.sessions.size < TERMINAL_LIMITS.transportSessions) break;
           }
         }
-        this.sessions.set(key, { events: [], bytes: 0, sequence: 0, ended: false, listeners: new Set() });
+        const session: Session = { events: [], bytes: 0, sequence: 0, ended: false, listeners: new Set() };
+        this.sessions.set(key, session); created = { key, session };
       }
     }
-    assertAuthorized(); const result = await this.invoke(instanceId, body, assertAuthorized); assertAuthorized(); return result;
+    let pending: Promise<unknown>;
+    try { assertAuthorized(); pending = this.invoke(instanceId, body, assertAuthorized); }
+    catch (error) {
+      // Synchronous local evidence is handled before yielding, so another open cannot
+      // dispatch through this placeholder between failed admission and its removal.
+      if (error instanceof TerminalDispatchNotSentError && created
+        && this.sessions.get(created.key) === created.session
+        && created.session.sequence === 0 && !created.session.listeners.size) this.sessions.delete(created.key);
+      throw error;
+    }
+    const result = await pending; assertAuthorized(); return result;
   }
   async read(instanceId: string, terminalId: string, after = 0, waitMs = 0, assertAuthorized: () => void = () => {}): Promise<unknown> {
     assertAuthorized();

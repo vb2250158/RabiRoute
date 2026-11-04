@@ -1,0 +1,16 @@
+{
+  "exports": [
+    {
+      "source": "src/agentAdapters/pluginImplementations/antigravity.ts",
+      "name": "createAgentOperations"
+    }
+  ],
+  "ownedPrefixes": [
+    "src/agentAdapters/",
+    "src/antigravity"
+  ],
+  "scopedEnvironment": true,
+  "hostSources": [
+    "src/agentAdapters/stateReporter.ts"
+  ]
+}

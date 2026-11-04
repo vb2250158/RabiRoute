@@ -156,10 +156,16 @@ flowchart TD
 
 ## 投递诊断日志
 
-闲置任务启动新一轮前，未显式指定模型的投递会通过 Desktop IPC 临时订阅当前 owner 的快照，检查实际生效的模型（协作模式中的模型优先），随后取消订阅；不读取旧聊天记录来自动选模型。模型为空或最多 3 秒内没有收到快照时，不发送 start，也不自动重试。请在 Codex 目标任务重新选择模型后重试；`The '' model is not supported` 表示模型设置错误，继续等待不会恢复。正在运行的任务仍使用 steer，不改变该轮模型。
+闲置任务启动新一轮时，显式模型沿本次请求传入；未指定模型时省略模型字段，由目标 Desktop owner 使用自身默认值。不以任务模型快照缺失阻止投递，不从旧聊天记录自动选模型。显式空白模型仍报参数错误。正在运行的任务使用 steer，不改变该轮模型。
 
-`queue_released.elapsedMs` 表示同一任务队列的等待时间；`model_checked` 记录模型和来源 `request` / `desktop-owner`，`model_rejected` 记录未发送的原因。显式配置的模型仍具有优先权，不自动替换为其他模型。
+`queue_released.elapsedMs` 表示同一任务队列的等待时间；`model_checked` 记录模型来源 `request` / `desktop-default`，`model_rejected` 记录显式模型无效的原因。显式配置的模型仍具有优先权，不自动替换为其他模型。
 
 运行期数据目录下的 `codex-adapter.log.jsonl` 记录 `desktop_delivery_*` 阶段。按 `data.deliveryMarker` 和 `data.threadId` 串联投递，按 `data.requestId` 配对 IPC 请求与响应。日志包含请求方法、协议版本、耗时 `elapsedMs`、记录确认等待上限 `receiptWaitMs` 和结果 `outcome`，不新增 prompt、附件正文或凭据日志。
 
-`steer_accepted` / `start_accepted` 只说明 IPC 已受理；`delivery_receipt_confirmed` 说明编号已进入任务记录；`delivery_unconfirmed` 表示需要核对原任务，不应自动重发。这些记录均不证明模型已经执行完毕，结束仍以任务最终回复和完成事件为准。
+`steer_accepted` / `start_accepted` 只说明 IPC 已受理；`delivery_receipt_confirmed` 可来自匹配的任务记录或原请求的迟到 IPC 成功响应，需按事件阶段核对证据来源；`delivery_unconfirmed` 表示需要核对原任务，不应自动重发。这些记录均不证明模型已经执行完毕，结束仍以任务最终回复和完成事件为准。
+
+### 有界确认与连接器交接（源码修正，运行版单独验收）
+
+回执 reader 即使返回永不完成的 Promise，也必须受原确认截止时间约束，并释放同任务投递队列。IPC 成功但原生记录超出确认窗口时，复用既有迟到窗口只读观察同一任务和投递编号；只有匹配的接收证据才补记确认。观察不重发正文、不扩大原窗口，关闭 bridge 会取消观察，迟到结果不能重建已结束的观察器。窗口结束仍无证据时保留未确认，不能推断未派发或标成 received。
+
+连接器交接的暂停在途发送与排空共用 `agent.update.drain` 的同一截止时间。持久 pending/unknown 记录不是活跃操作，不必先变成 received 才能交接；真实在途责任仍需收尾。预算耗尽时拒绝本次采用并保留旧 owner 与原记录，不删除 active/回执来伪造排空。无预算的正常 stop/close 仍等待实际收尾。该源码修正不表示旧运行连接器已经采用，也不授予停止其它服务或强制终止旧 owner 的权限。

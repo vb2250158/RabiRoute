@@ -4,6 +4,7 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import http from "node:http";
+import { nativeHttpTestFetch } from "./nativeHttpTestClient.js";
 import { RecordingArchiveBindings, archiveSettingsEtag } from "./recordingArchiveBindings.js";
 import { recordingArchiveAdminFixtureHandler as recordingArchiveAdminHandler } from "./resourceApiTestSupport.js";
 import { LanAgentAuthority } from "./lanAgentAuthority.js";
@@ -49,7 +50,7 @@ async function fixture(t: TestContext) {
   const headers = { authorization: `Bearer ${credential.token}`, "x-rabiroute-agent-id": "agent", "content-type": "application/json", "if-match": etag, "idempotency-key": "operation", "x-rabiroute-expected-application-generation-id": "gen", "x-rabiroute-expected-manager-instance-id": "instance" };
   return { dir, role, authority, global, bindings, admitted, options, url, headers,
     revoke: () => authority.setNodeEnabled("node", false),
-    put: () => fetch(url, { method: "PUT", headers, body: JSON.stringify(input) }) };
+    put: () => nativeHttpTestFetch(url, { method: "PUT", headers, body: JSON.stringify(input) }) };
 }
 
 async function denied(response: Response, commitState: "not_started" | "unknown") {
@@ -61,8 +62,8 @@ async function denied(response: Response, commitState: "not_started" | "unknown"
 
 test("archive authenticated custom provider has local-equivalent settings and exact durable replay", async t => {
   const value = await fixture(t);
-  const remote = await fetch(value.url, { headers: value.headers });
-  const local = await fetch(value.url);
+  const remote = await nativeHttpTestFetch(value.url, { headers: value.headers });
+  const local = await nativeHttpTestFetch(value.url);
   assert.equal(remote.status, 200); assert.equal(local.status, 200);
   assert.deepEqual(await remote.json(), await local.json());
   assert.equal(remote.headers.get("etag"), local.headers.get("etag"));
@@ -81,7 +82,7 @@ test("archive waits never disclose a revoked or ABA-replaced original principal"
       child.mock.method(value.bindings, "listBindings", async () => {
         const data = await read(); entered.resolve(); await release.promise; return data;
       });
-      const pending = fetch(value.url, { headers: value.headers });
+      const pending = nativeHttpTestFetch(value.url, { headers: value.headers });
       await entered.promise;
       value.revoke();
         value.authority.setNodeEnabled("node", true);

@@ -141,3 +141,28 @@ test("page confirms a toggle through independent owner readback and keeps errors
   assert.match(f.state.rowErrors.value.speech, /Toggle failed/);
   assert.equal(f.state.error.value, ""); assert.equal(f.state.saving.value.size, 0);
 });
+
+
+test("independent plugin versions distinguish configured upgrade from retained running owner", () => {
+  const configured = instancesResponse();
+  configured.data.instances[0].version = "2.0.0";
+  const catalog = parsePluginManagementCatalog(response());
+  const retained = parsePluginInstances(configured, catalog).plugins[0];
+  assert.equal(retained.manifest.version, "2.0.0");
+  assert.equal(retained.runningVersion, undefined, "an older catalog cannot prove current execution");
+  const authoritative = { ...configured, data: { ...configured.data, instances: [
+    { ...configured.data.instances[0], runningVersion: "1.1.0" },
+    { ...configured.data.instances[0], instanceId: "other", pluginId: "io.test.other", version: "4.3.2", status: "disabled" }
+  ] } };
+  const rows = parsePluginInstances(authoritative, catalog).plugins;
+  assert.equal(rows[0].runningVersion, "1.1.0");
+  assert.equal(rows[1].manifest.version, "4.3.2");
+  assert.equal(rows[1].runningVersion, undefined);
+  for (const status of ["disabled", "inactive", "failed", "active"]) {
+    const current = { ...configured, data: { ...configured.data, instances: [
+      { ...configured.data.instances[0], enabled: status === "active", status }
+    ] } };
+    assert.equal(parsePluginInstances(current, catalog).plugins[0].runningVersion, undefined,
+      "a parallel stale catalog must not invent a running version, even for the same package/instance");
+  }
+});

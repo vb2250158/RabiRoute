@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import path from 'node:path';
 import type { PersonaChatReply } from './shared/personaChatHistory.js';
+import { personaHistoryTaskReferences, type PersonaHistoryTaskPage } from './shared/personaChatHistory.js';
 import { chatHistoryCategory, type ChatHistoryCategory } from './shared/personaHistoryChannels.js';
 
 export type HistoryIndexRow = { id: string; start: number; end: number; valid: number; textHash: string };
@@ -42,6 +43,11 @@ export class PersonaHistoryIndex {
       if (!this.db.prepare('PRAGMA table_info(history)').all().some(row => row.name === 'category')) {
         this.db.exec('ALTER TABLE history ADD COLUMN category TEXT; DELETE FROM checkpoint;');
       }
+      if (!this.db.prepare('PRAGMA table_info(history)').all().some(row => row.name === 'summary')) {
+        this.db.exec('ALTER TABLE history ADD COLUMN summary TEXT; DELETE FROM checkpoint;');
+      }
+      this.db.exec(`CREATE TABLE IF NOT EXISTS task_refs (taskKey TEXT, recordId TEXT, start INTEGER, descriptor TEXT, PRIMARY KEY(taskKey,recordId));
+        CREATE INDEX IF NOT EXISTS task_refs_record ON task_refs(recordId); CREATE INDEX IF NOT EXISTS task_refs_position ON task_refs(taskKey,start);`);
     } catch (error) { this.db.close(); throw error; }
   }
   close() { this.db.close(); }
@@ -55,7 +61,32 @@ export class PersonaHistoryIndex {
     if (this.checkpoint.identityUnknown) throw new Error('Chat history contains a damaged record with unknown identity; repair that record before adding new replies. Existing replies remain readable.');
   }
   private insert(record: PersonaChatReply, start: number, end: number) {
-    this.db.prepare('INSERT OR IGNORE INTO history(id,start,end,valid,textHash,category) VALUES (?,?,?,?,?,?)').run(record.id, start, end, 1, hash(record.text), chatHistoryCategory(record));
+    const inserted = this.db.prepare('INSERT OR IGNORE INTO history(id,start,end,valid,textHash,category,summary) VALUES (?,?,?,?,?,?,?)').run(record.id, start, end, 1, hash(record.text), chatHistoryCategory(record), JSON.stringify({...record,text:record.text.slice(0,2000),textTruncated:record.text.length>2000,historyCursor:start,historyEndCursor:end}));
+    if (inserted.changes) for (const task of personaHistoryTaskReferences(record)) this.db.prepare('INSERT INTO task_refs VALUES (?,?,?,?)').run(task.key,record.id,start,JSON.stringify(task));
+  }
+
+  tasks(options: { category?: ChatHistoryCategory; cursor?: string; query?: string; peerOf?: string; limit?: number }): PersonaHistoryTaskPage {
+    const args: (string|number)[] = [], conditions = ['h.valid=1'];
+    if(options.category){conditions.push('h.category=?');args.push(options.category);}
+    if(options.peerOf){conditions.push('r.taskKey<>? AND EXISTS (SELECT 1 FROM task_refs peer WHERE peer.recordId=r.recordId AND peer.taskKey=?)');args.push(options.peerOf,options.peerOf);}
+    if(options.query){conditions.push("instr(lower(json_extract(r.descriptor,'$.title')),lower(?))>0");args.push(options.query);}
+    let having='';
+    if(options.cursor){
+      let cursor: {start:number;key:string;scope:string};
+      try {cursor=JSON.parse(Buffer.from(options.cursor,'base64url').toString());}catch{throw new Error('Invalid task list cursor.');}
+      if(!Number.isSafeInteger(cursor.start)||typeof cursor.key!=='string'||cursor.scope!==JSON.stringify([options.category,options.peerOf,options.query]))throw new Error('Invalid task list cursor.');
+      having='HAVING MAX(r.start)<? OR (MAX(r.start)=? AND r.taskKey>?)';args.push(cursor.start,cursor.start,cursor.key);
+    }
+    const limit=options.limit??50;
+    const rows=this.db.prepare(`SELECT r.taskKey,r.descriptor,MAX(r.start) AS latest FROM task_refs r JOIN history h ON h.id=r.recordId WHERE ${conditions.join(' AND ')} GROUP BY r.taskKey ${having} ORDER BY latest DESC,r.taskKey LIMIT ?`).all(...args,limit+1);
+    const page=rows.slice(0,limit),last=page.at(-1);
+    return {items:page.map(row=>JSON.parse(String(row.descriptor))),nextCursor:rows.length>limit&&last?Buffer.from(JSON.stringify({start:Number(last.latest),key:String(last.taskKey),scope:JSON.stringify([options.category,options.peerOf,options.query])})).toString('base64url'):null,invalidRecords:this.invalidRecords};
+  }
+  taskHistory(taskKey:string, category:ChatHistoryCategory|undefined,cursor:number|undefined,limit:number,newer:boolean) {
+    const args:(string|number)[]=[taskKey],conditions=['r.taskKey=?','h.valid=1'];
+    if(category){conditions.push('h.category=?');args.push(category);}
+    if(cursor!==undefined){conditions.push(newer?'h.start>=?':'h.start<?');args.push(cursor);}
+    return this.db.prepare(`SELECT h.* FROM history h JOIN task_refs r ON r.recordId=h.id WHERE ${conditions.join(' AND ')} ORDER BY h.start ${newer?'ASC':'DESC'} LIMIT ?`).all(...args,limit+1) as (HistoryIndexRow&{summary:string})[];
   }
 
   private saveCheckpoint() {
@@ -74,7 +105,7 @@ export class PersonaHistoryIndex {
         : this.checkpoint.size === 0)) return;
     this.db.exec('BEGIN');
     try {
-      this.db.exec('DELETE FROM history');
+      this.db.exec('DELETE FROM history; DELETE FROM task_refs;');
       this.checkpoint = { size: info?.size ?? 0, mtimeMs: info?.mtimeMs ?? 0, ctimeMs: info?.ctimeMs ?? 0, dev: info?.dev ?? 0, ino: info?.ino ?? 0, invalid: 0, identityUnknown: 0 };
       if (info) {
         const input = await fs.open(this.file, 'r');

@@ -6,6 +6,7 @@ import {
 export type { AgentAdapterType } from "../shared/agentAdapterCapabilities.js";
 
 export function parseAgentAdapterType(value: string | undefined): AgentAdapterType | null {
+  if (value === "codexDesktop" || value === "codexApp") return null;
   return isAgentAdapterType(value) ? value : null;
 }
 
@@ -19,7 +20,7 @@ export function normalizeAgentAdapters(items: unknown[] | undefined): AgentAdapt
     return ["codex"];
   }
   const adapters = items
-    .map((item) => migrateConfiguredAgentAdapterType(item == null ? undefined : String(item)))
+    .map((item) => typeof item === "string" ? migrateConfiguredAgentAdapterType(item) : null)
     .filter((item): item is AgentAdapterType => Boolean(item));
   const unique = [...new Set(adapters)];
   return unique;

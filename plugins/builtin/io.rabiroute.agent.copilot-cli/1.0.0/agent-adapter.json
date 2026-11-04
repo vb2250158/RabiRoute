@@ -1,0 +1,18 @@
+{
+  "type": "copilotCli",
+  "capability": "agent.adapter.copilot-cli@1",
+  "manifest": {
+    "type": "copilotCli",
+    "label": "Copilot CLI",
+    "maturity": "experimental",
+    "transport": {
+      "protocol": "process",
+      "mode": "copilot-cli"
+    },
+    "capabilities": {}
+  },
+  "sessionBinding": {
+    "sessionName": "copilotThreadName",
+    "workspace": "copilotCwd"
+  }
+}

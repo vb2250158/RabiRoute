@@ -262,7 +262,8 @@ export function hasReleasablePluginScope(source, { modules = new Map(), fileName
       const object = resolve(node.arguments[0]);
       if (object && ts.isObjectLiteralExpression(object)) {
         const activate = resolve(property(object, "activate"));
-        if (activate && ts.isFunctionLike(activate) && activate.body && ts.isIdentifier(activate.parameters[0]?.name)) activations.push(activate);
+        const parameter = activate && ts.isFunctionLike(activate) ? activate.parameters[0] : undefined;
+        if (activate?.body && parameter && ts.isIdentifier(parameter.name)) activations.push(activate);
       }
     }
     ts.forEachChild(node, find);

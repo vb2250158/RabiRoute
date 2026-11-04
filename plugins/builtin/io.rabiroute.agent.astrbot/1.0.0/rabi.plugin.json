@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 2,
+  "id": "io.rabiroute.agent.astrbot",
+  "version": "1.0.0",
+  "displayName": "AstrBot",
+  "description": "将消息发送到绑定的 AstrBot 会话，由其处理和回复。",
+  "icon": "mdi-robot-outline",
+  "entries": {
+    "manager": {
+      "execution": "in_process",
+      "module": "./manager.mjs"
+    },
+    "gateway": {
+      "execution": "in_process",
+      "module": "./gateway.mjs"
+    },
+    "web": {
+      "execution": "in_process",
+      "module": "./web/client.mjs"
+    }
+  },
+  "provides": [
+    "agent.adapter.astrbot@1"
+  ],
+  "requires": [
+    "host.agent-adapters@1"
+  ],
+  "optional": [],
+  "permissions": []
+}

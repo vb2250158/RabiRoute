@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import ts from "typescript";
@@ -9,6 +10,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { mountAgentAdapterCatalogPlugin } from "./agentAdapterCatalog.js";
 import type { ApiOperationDefinition } from "./apiOperationContract.js";
 import { createNapcatControlOperations } from "./napcatControlRoutes.js";
+import { ManagerPluginRouteRegistry } from "./managerPluginRouteRegistry.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 
@@ -171,41 +173,116 @@ test("plugin route modules retain every migrated endpoint family", () => {
   ]) assert.ok(napcatPaths.includes(route), `Native NapCat definitions must retain ${route}`);
 });
 
-test("catalog plugin activation owns every dedicated scan route", async () => {
+test("catalog owns aggregate APIs while nine Agent packages independently own dedicated scan routes", async t => {
   const { EffectScope, PublicationScope } = await import(pathToFileURL(path.join(root, "plugins/contracts/plugin-sdk/index.mjs")).href);
   const { activate } = await import(pathToFileURL(path.join(root, "plugins/builtin/io.rabiroute.manager.agent-adapter-catalog/1.0.0/manager.mjs")).href);
-  const effects = new EffectScope();
-  const publication = new PublicationScope(effects);
-  let claims: readonly ApiOperationDefinition[] = [];
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "agent-route-owners-"));
+  const routes = new ManagerPluginRouteRegistry();
+  const scopes = new Map<string, InstanceType<typeof EffectScope>>();
+  t.after(async () => {
+    const results = await Promise.allSettled([...scopes.values()].map(scope => scope.dispose()));
+    fs.rmSync(directory, { recursive: true, force: true });
+    const failures = results.filter(result => result.status === "rejected").map(result => result.reason);
+    if (failures.length) throw new AggregateError(failures, "Agent route fixture owners did not finish cleanup.");
+  });
+  async function mount(instanceId: string, entry: typeof activate, host: unknown) {
+    const effects = new EffectScope();
+    scopes.set(instanceId, effects);
+    const publication = new PublicationScope(effects);
+    await entry({ identity: { instanceId }, effects, publication, lifecycle: { signal: effects.signal() },
+      services: { require() { return host; }, provide() {} }, contributions: { register() {} } });
+    await effects.commit();
+    publication.publish();
+    publication.seal()();
+    await publication.afterPublish(Promise.resolve());
+  }
+  function owners(url: string) {
+    return routes.catalogSnapshot().operations.filter(operation =>
+      operation.contract.pathTemplate === url && operation.contract.method === "GET"
+    ).map(operation => operation.owner.instanceId);
+  }
   let stopped = false;
-  let retired = false;
   const runtime = {
-    rootDir: root, runtimes: new Map(), managerPluginRoutes: {
-      async registerOperationsAsync(_instance: string, definitions: readonly ApiOperationDefinition[]) {
-        claims = definitions;
-        return { async dispose() { retired = true; }, activeOperationCount: () => 0 };
-      }
-    },
+    rootDir: root, runtimes: new Map(), managerPluginRoutes: routes,
     async mountAgentAdapterCatalogPlugin(options: Parameters<typeof mountAgentAdapterCatalogPlugin>[0]) {
       const mount = await mountAgentAdapterCatalogPlugin({ ...options, listManifests: async () => [] });
       return { ...mount, async stop(reason?: string) { await mount.stop(reason); stopped = true; } };
     },
     agentAdapterCatalogService: undefined as unknown
   };
-  await activate({ identity: { instanceId: "manager:agent-adapter-catalog" }, effects, publication, lifecycle: { signal: effects.signal() },
-    services: { require() { return runtime; }, provide() {} }, contributions: { register() {} } });
-  await effects.commit();
-  publication.publish();
-  publication.seal()();
-  await publication.afterPublish(Promise.resolve());
-  for (const url of ["/api/scan/agents", "/api/scan/agents/dsh", "/api/scan/agents/grokBot"]) {
-    const exact = claims.filter(claim => claim.contract.pathTemplate === url);
-    assert.equal(exact.length, 1, `${url} must have one plugin owner`);
-    assert.equal(exact[0].contract.method, "GET");
+  const catalogInstance = "manager:agent-adapter-catalog";
+  await mount(catalogInstance, activate, runtime);
+  const aggregateRoutes = routes.catalogSnapshot().operations.filter(operation => operation.owner.instanceId === catalogInstance);
+  assert.deepEqual(aggregateRoutes.map(operation => operation.contract.pathTemplate).sort(), [
+    "/api/agent-adapters/catalog", "/api/agent-adapters/hooks/update", "/api/scan/agents"
+  ]);
+  for (const url of ["/api/scan/agents", "/api/agent-adapters/catalog"]) {
+    assert.deepEqual(owners(url), [catalogInstance]);
   }
-  await effects.dispose();
+
+  const packageRoot = path.join(root, "plugins/builtin");
+  const packages = fs.readdirSync(packageRoot).filter(name =>
+    name.startsWith("io.rabiroute.agent.") && fs.existsSync(path.join(packageRoot, name, "1.0.0/agent-adapter.json"))
+  );
+  assert.equal(packages.length, 9);
+  const agents: Array<{ type: string; instanceId: string; remount(): Promise<void> }> = [];
+  for (const packageId of packages) {
+    const sourceRoot = path.join(packageRoot, packageId, "1.0.0");
+    const descriptor = JSON.parse(source(path.relative(root, path.join(sourceRoot, "agent-adapter.json"))));
+    const spec = JSON.parse(source(path.relative(root, path.join(sourceRoot, "manager-runtime.build.json"))));
+    const implementation = spec.exports.find((entry: { name: string }) => entry.name === "createManager");
+    assert.ok(implementation, packageId);
+    const fixtureRoot = path.join(directory, packageId);
+    const sdkRoot = path.join(fixtureRoot, "node_modules/@rabiroute/plugin-sdk");
+    fs.mkdirSync(sdkRoot, { recursive: true });
+    fs.copyFileSync(path.join(sourceRoot, "manager.mjs"), path.join(fixtureRoot, "manager.mjs"));
+    fs.copyFileSync(path.join(sourceRoot, "agent-adapter.json"), path.join(fixtureRoot, "agent-adapter.json"));
+    fs.writeFileSync(path.join(sdkRoot, "package.json"), JSON.stringify({ type: "module", exports: "./index.mjs" }));
+    fs.writeFileSync(path.join(sdkRoot, "index.mjs"),
+      `export * from ${JSON.stringify(pathToFileURL(path.join(root, "plugins/contracts/plugin-sdk/index.mjs")).href)};`);
+    // Source-level activation: only replace the generated bundle wrapper. The
+    // actual entry, package metadata, platform factory, SDK and registry execute.
+    fs.writeFileSync(path.join(fixtureRoot, "manager-runtime.mjs"),
+      `import * as owned from ${JSON.stringify(pathToFileURL(path.join(root, implementation.source)).href)};\n`
+      + `export const hostModules = [];\nexport function createImplementation() { return { createManager: owned[${JSON.stringify(implementation.exportName ?? implementation.name)}] }; }\n`);
+    const { activate: activateAgent } = await import(pathToFileURL(path.join(fixtureRoot, "manager.mjs")).href);
+    const instanceId = `agent:${packageId.slice("io.rabiroute.agent.".length)}`;
+    const host = {
+      async prepareModules(modules: unknown[]) { assert.deepEqual(modules, []); },
+      manager: {
+        rootDir: directory, packageRoot: root, readOnly: () => false,
+        managerInstanceId: () => "fixture-manager", getRuntimes: () => [],
+        publishManagerEvent() {}, deliveryReceiptChanged() {},
+        runScan() { throw new Error("Route publication must not run discovery."); },
+        registerOperations: (instance: string, definitions: readonly ApiOperationDefinition[], signal: AbortSignal) =>
+          routes.registerOperationsAsync(instance, definitions, signal)
+      }
+    };
+    const remount = () => mount(instanceId, activateAgent, host);
+    await remount();
+    agents.push({ type: descriptor.type, instanceId, remount });
+  }
+  const assertScanOwners = (removed = new Set<string>()) => {
+    for (const agent of agents) {
+      assert.deepEqual(owners(`/api/agent-adapters/scan/${agent.type}`), removed.has(agent.type) ? [] : [agent.instanceId]);
+    }
+    for (const type of ["dsh", "grokBot"]) {
+      const agent = agents.find(agent => agent.type === type)!;
+      assert.deepEqual(owners(`/api/scan/agents/${type}`), removed.has(type) ? [] : [agent.instanceId]);
+    }
+    assert.deepEqual(owners("/api/scan/agents"), [catalogInstance]);
+  };
+  assertScanOwners();
+  for (const agent of agents) {
+    await scopes.get(agent.instanceId)!.dispose();
+    assertScanOwners(new Set([agent.type]));
+    await agent.remount();
+    assertScanOwners();
+  }
+  for (const agent of agents) await scopes.get(agent.instanceId)!.dispose();
+  await scopes.get(catalogInstance)!.dispose();
   assert.equal(stopped, true);
-  assert.equal(retired, true);
+  assert.deepEqual(routes.snapshot(), []);
 });
 
 test("Agent state reporting is registered by the Agent state plugin package", () => {

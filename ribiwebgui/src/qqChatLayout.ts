@@ -11,7 +11,9 @@ export function qqConversationTime(time: number, now = new Date(), locale = 'zh-
 }
 
 export function qqTimeBreak(time: number, previous?: number): boolean {
-  return previous === undefined || !sameDay(new Date(time * 1000), new Date(previous * 1000)) || time - previous >= 300;
+  const date = new Date(time * 1000);
+  if (Number.isNaN(date.getTime())) return false;
+  return previous === undefined || !sameDay(date, new Date(previous * 1000)) || time - previous >= 300;
 }
 
 export function qqMessageTime(time: number, now = new Date(), locale = 'zh-CN'): string {

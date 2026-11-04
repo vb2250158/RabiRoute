@@ -2,6 +2,8 @@
 
 # Desktop-pet companion mode
 
+Persona configuration groups desktop pet settings and Shared activities under Virtual avatar, with no separate Shared activities tab. The activity panel supports starting companionship, opening a local video, pausing or ending an activity, and text or voice discussion.
+
 Companion comments use the [shared desktop pet bubble and speech presentation](desktop-pet-bubbles_en.md). Text follows playback and fades after its display lease. Ordinary persona speech shares the same customizable bubble, without collapse or replay buttons.
 
 Status: experimental. Enable **Companion mode** from the Windows pet's context menu, then choose Adaptive, Watch together, Play together, Work mode or Quiet company under **Companion style**. Options come from Manager's preset catalog. Switching retains the session, Route and discussion while invalidating earlier frame replies and speech.
@@ -57,7 +59,7 @@ Companion deliveries carry only the current situation, frame and concise reply l
 
 The existing all-day RabiSpeech microphone session keeps listening. Companion delivery reads completed microphone transcripts using the storyboard interval, retaining segment timestamps without a second microphone ASR call. Speech completion and frame capture are independent.
 
-If all-day recording is already enabled for the persona, starting, user discussion, Agent replies and mode/pause changes checkpoint progress; ending saves a summary and timeline entry. Raw frames, window titles and subtitles are not saved. Capture sources and recording settings are preserved. Otherwise the menu activity remains ephemeral. Turning recording off stops subsequent checkpoints and summaries but does not delete existing records. The persona's **Shared activities** page can explicitly opt into saving progress and discussion.
+If all-day recording is already enabled for the persona, starting, user discussion, Agent replies and mode/pause changes checkpoint progress; ending saves a summary and timeline entry. Raw frames, window titles and subtitles are not saved. Capture sources and recording settings are preserved. Otherwise the menu activity remains ephemeral. Turning recording off stops subsequent checkpoints and summaries but does not delete existing records. **Shared activities** under the persona's **Virtual avatar** tab can explicitly opt into saving progress and discussion.
 
 The optional local-video player accepts WebVTT subtitles and synchronizes current position and active subtitle cues. Future subtitle content is not sent to the Agent. The manual speech button records at most 30 seconds through the existing ASR service, then submits the transcript as user speech. It does not listen continuously or transcribe media audio.
 

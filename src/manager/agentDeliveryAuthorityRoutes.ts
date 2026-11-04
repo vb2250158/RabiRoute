@@ -1,6 +1,6 @@
 import type { AgentRequestStore } from "../agentRequests/store.js";
 import type { AgentRequestEndpoint } from "../agentRequests/endpoint.js";
-import { sameAgentEndpoint } from "../agentRequests/endpoint.js";
+import { sameAgentEndpoint, sameAgentDeliverySource } from "../agentRequests/endpoint.js";
 import type { PreparedEndpointDelivery } from "../agentRequests/endpointDelivery.js";
 
 export type AgentDeliveryAuthorityContext = {
@@ -26,24 +26,26 @@ export async function readAgentDeliveryAuthority(identity: Readonly<{ deliveryId
     if (!delivery || delivery.generation !== generation || !["dispatching", "committed", "cancelled"].includes(delivery.state)) {
       throw new Error("Original delivery reservation is unavailable.");
     }
-    const ledgerManagerInstanceId = context.managerInstanceId ?? delivery.source.managerInstanceId;
-    if (delivery.source.managerInstanceId !== ledgerManagerInstanceId || delivery.target.managerInstanceId !== ledgerManagerInstanceId) {
+    const ledgerManagerInstanceId = context.managerInstanceId ?? delivery.target.managerInstanceId;
+    if (delivery.target.managerInstanceId !== ledgerManagerInstanceId) {
       throw new Error("Delivery belongs to another ledger authority.");
     }
-    const terminal = delivery.state === "cancelled";
+    const cancelledRequestIds = [delivery.preparation.requestId, delivery.preparation.inReplyToRequestId]
+      .filter((id): id is string => Boolean(id && context.store.get(id)?.status === "cancelled"));
+    const terminal = delivery.state === "cancelled" || cancelledRequestIds.length > 0;
     if (!terminal) {
       context.store.assertEndpointDeliveryActive(deliveryId);
       await context.refreshEndpoints?.({ source: Object.freeze({ ...delivery.source }), target: Object.freeze({ ...delivery.target }) });
       guard();
-      context.authorize(delivery.source, "source");
       context.authorize(delivery.target, "target");
     }
     guard();
     if (terminal) {
       const current = context.store.getEndpointDelivery(deliveryId);
-      if (!current || current.state !== "cancelled" || current.generation !== delivery.generation
+      if (!current || current.state !== delivery.state || current.generation !== delivery.generation
         || current.promptHash !== delivery.promptHash || current.executionOptionsHash !== delivery.executionOptionsHash
-        || !sameAgentEndpoint(current.source, delivery.source) || !sameAgentEndpoint(current.target, delivery.target)) {
+        || !sameAgentDeliverySource(current.source, delivery.source) || !sameAgentEndpoint(current.target, delivery.target)
+        || cancelledRequestIds.some(id => context.store.get(id)?.status !== "cancelled")) {
         throw new Error("Original terminal reservation changed.");
       }
     } else context.store.assertEndpointDeliveryActive(deliveryId);

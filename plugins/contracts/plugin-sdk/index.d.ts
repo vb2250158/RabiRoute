@@ -27,6 +27,27 @@ export type MessageEndpointHostPorts = Readonly<{
 }>;
 export type MessageEndpoint = Readonly<{ type: string; start(): void | PluginDisposer | Promise<void | PluginDisposer> }>;
 export function ownMessageEndpoint(context: PluginContext, endpoint: MessageEndpoint): void;
+export type AgentAdapterHostPorts = MessageEndpointHostPorts & Readonly<{ environment?: Readonly<Record<string, string | undefined>>; manager?: unknown; forActivation?(configuration: unknown): AgentAdapterHostPorts }>;
+export type AgentAdapterDescriptor = Readonly<{ type: string; label: string; maturity: "verified" | "experimental" | "stub";
+  transport: Readonly<{ protocol: string; mode: string }>; host?: Readonly<{ name: string; required: boolean }>;
+  capabilities: Readonly<Record<string, unknown>> }>;
+export function parseAgentAdapterDescriptor(value: unknown): AgentAdapterDescriptor;
+export type AgentAdapterPackageDescriptor = Readonly<{ type: string; capability: string; manifest: AgentAdapterDescriptor; sessionBinding: Readonly<Record<string, string>> }>;
+export function parseAgentAdapterPackageDescriptor(value: unknown): AgentAdapterPackageDescriptor;
+export type AgentAdapterInvocation = Readonly<{ signal?: AbortSignal; assertCurrent?(): void; snapshot?: Readonly<Record<string, unknown>>; [key: string]: unknown }>;
+export type AgentAdapterProvider = Readonly<{ type: string; capability: string; manifest: AgentAdapterDescriptor; sessionBinding: Readonly<Record<string, string>>; identity: PluginIdentity; serviceEndpoint?: unknown; deviceEndpoint?: unknown;
+  acquire(snapshot: Readonly<Record<string, unknown>>): Readonly<{ snapshot: Readonly<Record<string, unknown>>;
+    call<T = unknown>(operation: string, payload: unknown, invocation?: AgentAdapterInvocation): Promise<T>; release(): void }>;
+  invoke<T = unknown>(operation: string, payload: unknown, invocation?: AgentAdapterInvocation): Promise<T>;
+  runAcceptedWork<T>(operation: () => T | Promise<T>): Promise<T>; inspect(): Readonly<{ accepting: boolean; activeLeases: number }> }>;
+export type AgentAdapterContext = Readonly<Pick<PluginContext, "identity" | "lifecycle" | "publication"> & {
+  services: Pick<ServiceResolver, "provide">;
+  contributions: Pick<ContributionRegistrar, "register">;
+  effects: Pick<EffectScope, "adopt">;
+}>;
+export function ownAgentAdapter(context: AgentAdapterContext, definition: Readonly<{ type: string; capability: string; manifest: AgentAdapterDescriptor; sessionBinding?: Readonly<Record<string, string>>;
+  operations: Readonly<Record<string, (payload: any, invocation?: AgentAdapterInvocation, snapshot?: Readonly<Record<string, unknown>>) => unknown | Promise<unknown>>>;
+  serviceEndpoint?: unknown; deviceEndpoint?: unknown; dispose?(): void | Promise<void> }>): AgentAdapterProvider;
 export function ownMessageEndpointScan(context: PluginContext, provider: Readonly<{ type: string; label: string; maturity: "verified" | "experimental" | "stub"; scan(): unknown | Promise<unknown> }>): void;
 export type PluginAcceptedWork = Readonly<{
   runAcceptedWork<T>(operation: () => T | Promise<T>): Promise<T>;

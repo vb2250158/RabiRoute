@@ -1,5 +1,5 @@
 import { freezeApiData, type ApiOperationContract, type ApiSchema } from "./apiOperationContract.js";
-import { QQ_MEDIA_MAX_BYTES, qqMessageMedia, qqMessageText, type QqMessage } from "./qqMessageMedia.js";
+import { QQ_MEDIA_MAX_BYTES, qqMessageMedia, qqMessageText, qqMessageTimestamp, type QqMessage } from "./qqMessageMedia.js";
 import { qqReadSettings } from "../shared/qqReadSettings.js";
 import {qqStructuredMessageParts} from '../shared/qqMessageParts.js';
 
@@ -24,7 +24,7 @@ const attachment = { type: "object", required: ["index", "kind", "name", "conten
 type ProjectionField = { schema: ApiSchema; optional?: boolean; read(row: QqMessage, selection: QqReadSelection): unknown };
 const projection = freezeApiData<Readonly<Record<string, ProjectionField>>>({
   messageId: { schema: { type: "string", pattern: QQ_MESSAGE_ID_PATTERN.source }, read: row => String(row.message_id) },
-  time: { schema: true, optional: true, read: row => row.time },
+  time: { schema: { type: "number" }, optional: true, read: row => qqMessageTimestamp(row.time) },
   kind: { schema: { enum: QQ_READ_KINDS }, read: (_row, selection) => selection.kind },
   target: { schema: { type: "string", pattern: QQ_TARGET_ID_PATTERN.source }, read: (_row, selection) => selection.target },
   sender: { schema: text, read: row => String(row.sender?.user_id ?? row.user_id ?? "") },
@@ -65,7 +65,8 @@ export function qqReadOperationContract(kind: QqReadTarget["kind"]): ApiOperatio
       } } } : envelope(kind === "history" ? {
         type: "object", required: ["routeId", "instanceId", "entries", "nextCursor", "cursorStalled", "completenessUnknown"], additionalProperties: false,
         properties: { routeId: text, instanceId: text, entries: { type: "array", maxItems: QQ_READ_LIMITS.historyMax, items: message },
-          nextCursor: { anyOf: [{ type: "null" }, { type: "string", pattern: QQ_MESSAGE_ID_PATTERN.source }] }, cursorStalled: { type: "boolean" }, completenessUnknown: { const: true } }
+          nextCursor: { anyOf: [{ type: "null" }, { type: "string", pattern: QQ_MESSAGE_ID_PATTERN.source }] }, cursorStalled: { type: "boolean" }, completenessUnknown: { const: true },
+          skippedCount: { type: "integer", minimum: 1, description: "Rows excluded from this upstream page because their identity is malformed or does not match the selected conversation. No excluded content or identity is returned." } }
       } : { ...message, required: ["routeId", "instanceId", ...messageRequired], properties: { routeId: text, instanceId: text, ...messageProperties } }),
       "400": error, "403": error, "404": error, "405": error, "409": error, "413": error, "422": error, "429": error, "503": error },
     effects: { mode: "read", description: "Reads only the selected Route/conversation/message and bounded provider media. Never sends messages, downloads arbitrary caller URLs, or changes the selected account." },

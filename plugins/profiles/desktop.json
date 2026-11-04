@@ -86,7 +86,7 @@
     {
       "id": "manager:rabilink-relay",
       "package": "io.rabiroute.manager.rabilink-relay",
-      "version": "1.0.0",
+      "version": "2.0.0",
       "enabled": true,
       "config": {},
       "grants": []
@@ -146,7 +146,7 @@
     {
       "id": "manager:agent-adapter-catalog",
       "package": "io.rabiroute.manager.agent-adapter-catalog",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "enabled": true,
       "config": {},
       "grants": []
@@ -154,31 +154,7 @@
     {
       "id": "manager:agent-communication",
       "package": "io.rabiroute.manager.agent-communication",
-      "version": "1.0.0",
-      "enabled": true,
-      "config": {},
-      "grants": []
-    },
-    {
-      "id": "manager:copilot-control",
-      "package": "io.rabiroute.manager.copilot-control",
-      "version": "1.0.0",
-      "enabled": true,
-      "config": {},
-      "grants": []
-    },
-    {
-      "id": "manager:astrbot-control",
-      "package": "io.rabiroute.manager.astrbot-control",
-      "version": "1.0.0",
-      "enabled": true,
-      "config": {},
-      "grants": []
-    },
-    {
-      "id": "manager:marvis-control",
-      "package": "io.rabiroute.manager.marvis-control",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "enabled": true,
       "config": {},
       "grants": []
@@ -313,6 +289,78 @@
     {
       "id": "endpoint:rabilink",
       "package": "io.rabiroute.endpoint.rabilink",
+      "version": "1.0.0",
+      "enabled": true,
+      "config": {},
+      "grants": []
+    },
+    {
+      "id": "agent:codex",
+      "package": "io.rabiroute.agent.codex",
+      "version": "1.0.0",
+      "enabled": true,
+      "config": {},
+      "grants": []
+    },
+    {
+      "id": "agent:copilot-cli",
+      "package": "io.rabiroute.agent.copilot-cli",
+      "version": "1.0.0",
+      "enabled": true,
+      "config": {},
+      "grants": []
+    },
+    {
+      "id": "agent:marvis",
+      "package": "io.rabiroute.agent.marvis",
+      "version": "1.0.0",
+      "enabled": true,
+      "config": {},
+      "grants": []
+    },
+    {
+      "id": "agent:astrbot",
+      "package": "io.rabiroute.agent.astrbot",
+      "version": "1.0.0",
+      "enabled": true,
+      "config": {},
+      "grants": []
+    },
+    {
+      "id": "agent:dsh",
+      "package": "io.rabiroute.agent.dsh",
+      "version": "1.0.0",
+      "enabled": true,
+      "config": {},
+      "grants": []
+    },
+    {
+      "id": "agent:workbuddy",
+      "package": "io.rabiroute.agent.workbuddy",
+      "version": "1.0.0",
+      "enabled": true,
+      "config": {},
+      "grants": []
+    },
+    {
+      "id": "agent:antigravity",
+      "package": "io.rabiroute.agent.antigravity",
+      "version": "1.0.0",
+      "enabled": true,
+      "config": {},
+      "grants": []
+    },
+    {
+      "id": "agent:device-agent",
+      "package": "io.rabiroute.agent.device-agent",
+      "version": "1.0.0",
+      "enabled": true,
+      "config": {},
+      "grants": []
+    },
+    {
+      "id": "agent:grok-bot",
+      "package": "io.rabiroute.agent.grok-bot",
       "version": "1.0.0",
       "enabled": true,
       "config": {},

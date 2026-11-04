@@ -138,7 +138,7 @@ test("tracked release manifests accept only the stable shared runtime contracts"
     const quote = value => "'" + value.replaceAll("'", "''") + "'";
     const env = { ...process.env };
     // Windows PowerShell must initialize its own module path rather than inherit PowerShell 7 modules.
-    delete env.PSModulePath;
+    for (const key of Object.keys(env)) if (key.toLowerCase() === "psmodulepath") delete env[key];
     return spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", `$ErrorActionPreference='Stop'; . ${quote(helper)}; $manifestEntries = Read-ReleaseTrackedManifest ${quote(manifestFile)} ${quote(root)}; if ($manifestEntries.Count -ne ${entries.length}) { throw 'Unexpected entry count' }`], { encoding: "utf8", env });
   };
   try {

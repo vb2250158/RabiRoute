@@ -21,8 +21,8 @@ let currentAudit: RecordedDataMutationAudit[] = [];
 let releaseOwner = () => {};
 const stopAudit = installDataMutationAuditSink(record => currentAudit.push(record));
 const methods = new Set(["bindEndpointDelivery", "markEndpointDispatching", "noteEndpointDeliveryFailure", "markEndpointNotSent",
-  "commitEndpointReceipt", "reconcileOpenParties", "prepare", "bindResponseEvidence", "commit", "abort",
-  "recordTargetTurnEnded", "recordPendingResponseCheck", "recordReminderResult", "cancel"]);
+  "commitEndpointReceipt", "reconcileOpenParties", "recordConnectionResponse", "prepare", "bindResponseEvidence", "commit", "abort",
+  "recordTargetTurnEnded", "recordPendingResponseCheck", "recordReminderResult", "cancel", "cancelEndpointDelivery"]);
 function failure(error: unknown) {
   if (!(error instanceof Error)) return { thrown: error };
   return { name: error.name, message: error.message, stack: error.stack, properties: Object.fromEntries(Object.entries(error).filter(([key]) => key !== "cause")) };

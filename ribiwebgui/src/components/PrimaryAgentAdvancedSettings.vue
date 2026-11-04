@@ -6,7 +6,11 @@ const boardOpen = ref(false);
 import { agentAdapterSupportsManagedTaskFeature, DEFAULT_MESSAGE_PROCESSING_AGENT_MODEL, DEFAULT_MESSAGE_PROCESSING_AGENT_REASONING_EFFORT, MAX_MESSAGE_PROCESSING_AGENTS } from "@shared/gatewayConfigModel";
 import { DEFAULT_CODEX_MEMORY_CONSOLIDATION_AGENT_MODEL } from "@shared/codexMemoryConsolidationAgent";
 import { DEFAULT_CODEX_PLAN_ASSISTANT_MODEL } from "@shared/codexPlanAssistantSessions";
-const props = defineProps<{ gateway: GatewayDefinition; provider: AgentAdapterType; targetTitle: string; busy?: boolean; error?: string; notice?: string }>();
+import type { AgentAdapterCapabilities, ManagedTaskAgentFeature } from "@shared/agentAdapterCapabilities";
+const props = defineProps<{ gateway: GatewayDefinition; provider: AgentAdapterType; targetTitle: string; capabilities?: AgentAdapterCapabilities; busy?: boolean; error?: string; notice?: string }>();
+function supportsManagedTaskFeature(feature: ManagedTaskAgentFeature): boolean {
+  return props.capabilities !== undefined ? props.capabilities.managedTasks?.[feature] === true : agentAdapterSupportsManagedTaskFeature(props.provider, feature);
+}
 const emit = defineEmits<{ change: [] }>();
 function policy() { return props.gateway.messageProcessingAgents?.[props.provider]; }
 function updatePolicy(patch: Record<string, unknown>) {
@@ -18,7 +22,7 @@ function updatePolicy(patch: Record<string, unknown>) {
   <div class="dependency-panel mt-3">
     <div class="section-title small-title">主控 Agent 高级设置</div>
     <p class="section-note">以下设置用于当前路线的主控：{{ targetTitle }}。更换主控后沿用路线设置；远端不可用时不会改投本机。</p>
-    <template v-if="agentAdapterSupportsManagedTaskFeature(provider, 'messageProcessingAgent')">
+    <template v-if="supportsManagedTaskFeature('messageProcessingAgent')">
       <p class="section-note">消息处理模型和会话池供自动化规则选择。</p>
       <v-alert v-if="provider === 'deviceAgent'" type="info" variant="tonal">设备 Agent 使用宿主配置的模型、推理和语音；此处仅设置路线的消息处理策略。</v-alert>
       <div v-if="provider !== 'deviceAgent'" class="catalog-param-grid">
@@ -31,10 +35,10 @@ function updatePolicy(patch: Record<string, unknown>) {
         <v-card><v-card-title class="d-flex justify-space-between"><span>消息处理看板</span><v-btn icon="mdi-close" variant="text" title="关闭" @click="boardOpen = false" /></v-card-title><v-card-text><MessageProcessingBoard v-if="boardOpen" :gateway-id="gateway.id" :enabled="true" /></v-card-text></v-card>
       </v-dialog>
     </template>
-    <template v-if="agentAdapterSupportsManagedTaskFeature(provider, 'memoryConsolidationAgent')">
+    <template v-if="supportsManagedTaskFeature('memoryConsolidationAgent')">
       <v-text-field v-if="provider === 'codex'" :model-value="gateway.codexMemoryConsolidationAgentModel || DEFAULT_CODEX_MEMORY_CONSOLIDATION_AGENT_MODEL" label="记忆整理模型" @update:model-value="value => { gateway.codexMemoryConsolidationAgentModel = String(value || DEFAULT_CODEX_MEMORY_CONSOLIDATION_AGENT_MODEL); emit('change'); }" />
     </template>
-    <template v-if="agentAdapterSupportsManagedTaskFeature(provider, 'planAssistantSessions')">
+    <template v-if="supportsManagedTaskFeature('planAssistantSessions')">
       <v-switch v-model="gateway.codexPlanAssistantEnabled" label="配置计划秘书" @update:model-value="emit('change')" />
       <v-text-field v-if="gateway.codexPlanAssistantEnabled && provider === 'codex'" :model-value="gateway.codexPlanAssistantModel || DEFAULT_CODEX_PLAN_ASSISTANT_MODEL" label="计划秘书模型" @update:model-value="value => { gateway.codexPlanAssistantModel = String(value || DEFAULT_CODEX_PLAN_ASSISTANT_MODEL); emit('change'); }" />
       <slot name="plan-actions" />

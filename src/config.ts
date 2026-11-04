@@ -59,6 +59,7 @@ export const defaultVoiceTranscriptNotificationTemplate = "";
 export type NotificationRouteKind = "private" | "group_message" | "direct_at" | "direct_reply" | "indirect_reply" | "heartbeat" | "manual_trigger" | "role_panel_message" | "plan_feedback" | "voice_transcript" | "rabilink" | "wearable_health_alert" | "wecom_message" | "weixin_message" | "feishu_message" | "xiaomi_home_event";
 
 export type NotificationRule = {
+  recentMessageLimit?: number;
   agentTarget?: import("./shared/agentDeliveryTarget.js").AgentDeliveryTarget;
   sourceRouteIds?: string[];
   triggerIds?: string[];
@@ -77,7 +78,7 @@ export type RouteProfile = {
   id: string;
   name: string;
   enabled: boolean;
-  /** Legacy read-only fallback. New code must use recentMessageLimits. */
+  /** Legacy read-only fallback. Configure history on automation action.recentMessageLimit. */
   recentMessageLimit: number;
   recentMessageLimits?: RecentMessageLimits;
   speechPushMode?: SpeechPushMode;
@@ -354,6 +355,7 @@ function normalizeNotificationRule(item: unknown, index: number): NotificationRu
   return {
     id: raw.id || `rule-${index + 1}`,
     agentTarget: raw.agentTarget,
+    ...(raw.recentMessageLimit == null ? {} : { recentMessageLimit: normalizeRecentMessageLimit(raw.recentMessageLimit) }),
     sourceRouteIds: raw.sourceRouteIds,
     triggerIds: raw.triggerIds,
     name: raw.name || raw.id || `规则 ${index + 1}`,

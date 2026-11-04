@@ -1,5 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import Ajv from "ajv";
+import { terminalListSchema } from "../lib/interactive-protocol.mjs";
 import { randomUUID } from "node:crypto";
 import os from "node:os";
 import { TerminalService } from "../lib/terminal-service.mjs";
@@ -65,7 +67,14 @@ test("active terminals are not rejected by an arbitrary count or history window"
  const service=new TerminalService({defaultCwd:os.tmpdir(),emit:()=>{}});
  service.start=item=>{item.state="running";item.ready=Promise.resolve();};
  try{for(let i=0;i<70;i++)await service.execute({action:"open",terminalId:randomUUID(),shell:service.shells[0]});
- assert.equal(service.activeCount,70);assert.equal(service.sessions.size,70);}finally{service.sessions.clear();}
+ assert.equal(service.activeCount,70);assert.equal(service.sessions.size,70);
+ const listed=await service.execute({action:"list"});
+ const validate=new Ajv({strict:false}).compile(terminalListSchema);
+ assert.equal(listed.sessions.length,70);
+ assert.deepEqual(listed.sessions.map(item=>item.terminalId),[...service.sessions.keys()]);
+ assert.equal(validate(listed),true,JSON.stringify(validate.errors));
+ assert.equal(validate({...listed,sessions:[{...listed.sessions[0],terminalId:"invalid id"}]}),false,"session identities remain schema-validated");
+ }finally{service.sessions.clear();}
 });
 test("archive failure retains original exited history without blocking a new terminal",async()=>{
  const service=new TerminalService({defaultCwd:os.tmpdir(),emit:()=>{}}),ids=[];
@@ -73,4 +82,24 @@ test("archive failure retains original exited history without blocking a new ter
  service.history.save=async()=>{throw Object.assign(new Error("fixture archive unavailable"),{code:"ENOSPC"});};
  for(let i=0;i<64;i++){const id=randomUUID();ids.push(id);service.sessions.set(id,{id,shell:service.shells[0],cwd:os.tmpdir(),state:"exited",createdAt:new Date().toISOString(),nextInputSequence:1,inputs:new Map(),exitCode:0});}
  try{const created=await service.execute({action:"open",terminalId:randomUUID(),shell:service.shells[0]});assert.equal(created.state,"running");assert(ids.every(id=>service.sessions.has(id)));assert(service.historyDiagnostics.some(d=>d.code==="ENOSPC"));}finally{service.sessions.clear();}
+});
+
+for (const repeatedId of [false, true]) test(`terminal admission accepts 70 queued ${repeatedId ? "same-ID retries" : "independent opens"} without using the history threshold`, async t => {
+  const service = new TerminalService({ defaultCwd: os.tmpdir(), emit: () => {} });
+  let enter, release, reads = 0, starts = 0;
+  const entered = new Promise(resolve => { enter = resolve; });
+  const gate = new Promise(resolve => { release = resolve; });
+  service.history.read = async () => { if (++reads === 1) { enter(); await gate; } return undefined; };
+  service.start = item => { starts++; item.state = "running"; item.pid = starts; item.ready = Promise.resolve(); };
+  t.after(async () => { release(); service.sessions.clear(); await service.stop(); });
+  const sharedId = randomUUID();
+  const ids = Array.from({ length: 70 }, () => repeatedId ? sharedId : randomUUID());
+  const opening = Promise.allSettled(ids.map(terminalId => service.execute({ action: "open", terminalId, shell: service.shells[0] })));
+  await entered;
+  release();
+  const results = await opening;
+  assert.equal(results.filter(result => result.status === "rejected").length, 0, "the hot history window is not an admission limit");
+  assert.equal(starts, repeatedId ? 1 : 70);
+  assert.equal(service.pendingOpens, 0);
+  if (repeatedId) assert.equal(new Set(results.map(result => result.value.pid)).size, 1, "all retries return the original owner");
 });

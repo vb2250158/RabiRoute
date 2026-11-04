@@ -1,0 +1,35 @@
+{
+  "exports": [
+    {
+      "source": "src/agentAdapters/grokBotManagerProvider.ts",
+      "name": "createManager"
+    }
+  ],
+  "ownedPrefixes": [
+    "src/agentAdapters/",
+    "src/shared/grokBot",
+    "src/manager/grokBot"
+  ],
+  "scopedEnvironment": true,
+  "hostSources": [
+    "src/agentAdapters/stateReporter.ts"
+  ],
+  "ownedSources": [
+    "src/agentAdapters/managerNativeOperations.ts",
+    "src/manager/grokBotEndpointBridge.ts",
+    "src/manager/grokBotConfiguration.ts",
+    "src/manager/grokBotThreads.ts"
+  ],
+  "workers": [
+    {
+      "source": "src/agentAdapters/grokBotManagerApi.ts",
+      "target": "workers/scan.mjs"
+    }
+  ],
+  "resources": [
+    {
+      "source": "scripts/grok-bot-native-profile.ps1",
+      "target": "resources/grok-bot-native-profile.ps1"
+    }
+  ]
+}

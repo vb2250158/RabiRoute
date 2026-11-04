@@ -210,6 +210,16 @@ node rabi-agent.mjs --api POST /api/agent/send --agent-type codex --id "<FULL_SE
 
 ## API
 
+### 管理超时与重连恢复
+
+管理请求超时只结束本次等待，不证明原消息未发送。Manager 保留有界的超时变更请求关联，迟到的原连接回执会唤醒原 ID 对账；重连发生在原执行结束前时，连接器在原回执 owner 释放后发送 `deliveryRecovery` 提示。提示和节点在线都不是接收证明，只有原宿主回执才能进入 `received`。
+
+原 receipt owner 忙碌或正在交接时，连接器的对账先读取原持久快照。已有接收回执或未发送证明照原样返回；其余返回 `in_progress`，不等待同一把执行锁、不发送正文。后到恢复事件合并补查，并让其他目标继续恢复。普通管理结果也只回到发起它的原连接。
+
+WebSocket 使用原连接的 ping/pong 检测静默失联，期限到后走正常断线及重连流程。默认探测间隔 30 秒、pong 期限 15 秒；现有超时配置项为 `agent.remote.connectionProbeInterval`、`agent.remote.connectionPongTimeout`。`agent.remote.lateManagementResultRetention` 默认保留迟到请求关联 5 分钟、最多 256 条，仅用于恢复唤醒，不保存正文或复制投递账本。管理业务超时不会强杀仍在执行的任务。
+
+这些行为需要包含本轮修复的 Manager 与连接器运行版本。旧连接器的在线状态不能代替升级验证；保留原 enrollment、节点、会话和 delivery ID，经正式发布入口升级后再核对实际回执。
+
 仅持有节点凭据可做接入诊断；已启用且通过鉴权的 Agent 与本机管理端具有相同公开接口和配置权限。
 
 - `POST /api/lan-agent/enrollments`：受信管理端签发一次性票据。

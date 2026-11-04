@@ -8,7 +8,9 @@ function contributionPayload(generation: PluginCatalogInput, host?: "web" | "des
     const value = contribution.value && typeof contribution.value === "object" && !Array.isArray(contribution.value)
       ? contribution.value as Record<string, unknown> : {};
     const hosts = Array.isArray(value.hosts) ? value.hosts.filter(item => typeof item === "string") as string[] : [];
-    if (host && !hosts.includes(host)) return [];
+    // Provider metadata describes the active Manager owner to every UI host.
+    // Executable UI contributions still require their declared host placement.
+    if (host && !hosts.includes(host) && contribution.kind !== "agent-adapter") return [];
     return [{ instanceId: contribution.instanceId, pluginId: pluginIds.get(contribution.instanceId) ?? "", kind: contribution.kind, id: contribution.id, ...value }];
   });
 }

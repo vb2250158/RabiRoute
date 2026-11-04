@@ -30,6 +30,8 @@ export type AgentCommunicationHttpResponse = {
 
 export type AgentCommunicationRoutesContext = {
   readNodeDeliveryRecords?: DeliveryRecordsContext["readNodeDeliveryRecords"];
+  controlNodeDeliveryRecord?: DeliveryRecordsContext["controlNodeDeliveryRecord"];
+  reconcileManagerDelivery?: DeliveryRecordsContext["reconcileManagerDelivery"];
   readJsonBody: <T>(request: http.IncomingMessage) => Promise<T>;
   jsonResponse: (response: http.ServerResponse, statusCode: number, body: unknown) => void;
   receiptResponse: (deliveryId: string) => AgentCommunicationHttpResponse;

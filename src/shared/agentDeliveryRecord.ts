@@ -3,6 +3,7 @@ export type AgentDeliveryRecordState = "queued" | "sending" | "awaiting_confirma
 
 export type AgentDeliveryRecordParty = {
   kind?: string;
+  connection?: { managerInstanceId: string; transport: string; id: string };
   instanceId?: string;
   nodeId?: string;
   provider?: string;
@@ -25,6 +26,8 @@ export type AgentDeliveryRecord = {
   errorCode?: string;
   receipt?: Record<string, unknown>;
   targetAcceptedAt?: string;
+  /** The computer stopped its queue; the original Manager reservation still needs cancellation. */
+  managerCancelPending?: boolean;
   ownerScope: "manager" | "node";
 };
 

@@ -127,7 +127,8 @@ onBeforeUnmount(() => { live = false; controller?.abort(); });
       <section class="plugin-detail-section">
         <h2>{{ t("插件信息") }}</h2>
         <dl class="plugin-facts">
-          <div><dt>{{ t("当前版本") }}</dt><dd>{{ selected.manifest.version || "—" }}</dd></div>
+          <div><dt>{{ t("配置版本") }}</dt><dd>{{ selected.manifest.version || "—" }}</dd></div>
+          <div><dt>{{ t("运行版本") }}</dt><dd>{{ selected.runningVersion || "—" }}</dd></div>
           <div><dt>{{ t("实例") }}</dt><dd><code>{{ selected.instanceId }}</code></dd></div>
           <div><dt>{{ t("运行位置") }}</dt><dd>{{ selected.manifest.hosts.join(" · ") || "—" }}</dd></div>
           <div><dt>{{ t("运行状态") }}</dt><dd>{{ statusLabel(selected) }}</dd></div>
@@ -152,7 +153,7 @@ onBeforeUnmount(() => { live = false; controller?.abort(); });
             <span class="plugin-icon"><v-icon :icon="plugin.manifest.icon || 'mdi-puzzle-outline'" /></span>
             <span class="plugin-row-copy"><span class="plugin-name">{{ t(pluginDisplayName(plugin)) }}</span><span v-if="plugin.manifest.description" class="plugin-description">{{ t(plugin.manifest.description) }}</span></span>
           </button>
-          <div class="plugin-row-state"><span v-if="plugin.manifest.version" class="plugin-version">v{{ plugin.manifest.version }}</span><v-chip :color="statusColor(plugin)" size="small" variant="tonal">{{ statusLabel(plugin) }}</v-chip><v-switch :model-value="plugin.enabled" :aria-label="`${t('启用插件')} ${pluginDisplayName(plugin)}`" color="primary" hide-details density="compact" :loading="saving.has(plugin.instanceId)" :disabled="saving.has(plugin.instanceId)" @update:model-value="togglePlugin(plugin, $event === true)" /></div>
+          <div class="plugin-row-state"><span v-if="plugin.manifest.version" class="plugin-version">{{ plugin.runningVersion && plugin.runningVersion !== plugin.manifest.version ? `${t("配置版本")} ` : "" }}v{{ plugin.manifest.version }}<template v-if="plugin.runningVersion && plugin.runningVersion !== plugin.manifest.version"> · {{ t("运行版本") }} v{{ plugin.runningVersion }}</template></span><v-chip :color="statusColor(plugin)" size="small" variant="tonal">{{ statusLabel(plugin) }}</v-chip><v-switch :model-value="plugin.enabled" :aria-label="`${t('启用插件')} ${pluginDisplayName(plugin)}`" color="primary" hide-details density="compact" :loading="saving.has(plugin.instanceId)" :disabled="saving.has(plugin.instanceId)" @update:model-value="togglePlugin(plugin, $event === true)" /></div>
           <p v-if="rowErrors[plugin.instanceId] || plugin.error" class="plugin-row-error" :class="plugin.status === 'active' && !rowErrors[plugin.instanceId] ? 'text-warning' : 'text-error'" role="alert">{{ rowErrors[plugin.instanceId] || errorText(plugin.error) }}</p>
         </li>
       </ul>

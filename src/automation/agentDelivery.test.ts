@@ -3,6 +3,21 @@ import test from "node:test";
 import { executeAgentDelivery, type AgentDeliveryHandlers } from "./agentDelivery.js";
 import { defaultAgentRecipients, normalizeAgentDeliveryTarget, validateAgentDeliveryTarget } from "../shared/agentDeliveryTarget.js";
 import { normalizePersonaAutomationRules, notificationRulesFromPersonaAutomations } from "../shared/gatewayConfigModel.js";
+import { personaAutomationRulesFromNotificationRules } from "../shared/gatewayConfigModel.js";
+
+test("automation history counts survive saving, legacy conversion and notification projection", () => {
+  for (const [input, expected] of [[0, 0], [3, 3], [250, 200], [-1, 0], [2.9, 2]] as const) {
+    const saved = normalizePersonaAutomationRules([{ id: "chat", trigger: { type: "message", routeKinds: ["private"] },
+      action: { type: "deliver_agent", recentMessageLimit: input } }]);
+    const reloaded = normalizePersonaAutomationRules(JSON.parse(JSON.stringify(saved)));
+    const projected = notificationRulesFromPersonaAutomations(reloaded);
+    assert.equal(projected[0].recentMessageLimit, expected);
+    const migrated = personaAutomationRulesFromNotificationRules(projected)[0];
+    assert.equal(migrated.action.type === "deliver_agent" && migrated.action.recentMessageLimit, expected);
+  }
+  const legacy = normalizePersonaAutomationRules([{ id: "old", trigger: { type: "message" }, action: { type: "deliver_agent" } }]);
+  assert.equal(notificationRulesFromPersonaAutomations(legacy)[0].recentMessageLimit, undefined);
+});
 
 test("the selected recipient alone decides execution, including data-defined recipient IDs", async () => {
   const calls: string[] = [];

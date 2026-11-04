@@ -14,6 +14,7 @@
 - [快速上手](getting-started.md)：完成安装，启动应用并打开控制台。
 - [跑通第一条 Route](user-guide/first-route.md)：完成一次真实投递，并确认目标任务收到消息。
 - [界面与状态](user-guide/interface-and-status.md)：看懂连接、运行状态和未保存修改。
+- [查看消息记录](message-history.md)：按任务查看全部收发、往来任务和各消息端历史。
 - [运行、日志与排障](user-guide/operations-and-troubleshooting.md)：消息没有送达时，逐项找到断点。
 - [安全、回传与数据](user-guide/safety-and-data.md)：确认外部回复和诊断资料的权限与隐私边界。
 - [当前能力与成熟度](current-capabilities.md)：核对已验证、实验和待验收范围。

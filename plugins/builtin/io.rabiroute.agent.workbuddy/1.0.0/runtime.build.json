@@ -1,0 +1,16 @@
+{
+  "exports": [
+    {
+      "source": "src/agentAdapters/pluginImplementations/workbuddy.ts",
+      "name": "createAgentOperations"
+    }
+  ],
+  "ownedPrefixes": [
+    "src/agentAdapters/",
+    "src/workbuddy"
+  ],
+  "scopedEnvironment": true,
+  "hostSources": [
+    "src/agentAdapters/stateReporter.ts"
+  ]
+}

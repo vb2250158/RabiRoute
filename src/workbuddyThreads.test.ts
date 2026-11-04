@@ -6,6 +6,8 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { randomBytes } from "node:crypto";
 import { handleAgentThreadRequest } from "./agentThreads.js";
+import { nativeOperations } from "./agentAdapters/managerNativeOperations.js";
+import type { AgentManagerOperationInvoker } from "./agentAdapters/managerInvocation.js";
 import {
   agentThreadCapableAgentTypes,
   isAgentThreadCapableAdapter
@@ -166,8 +168,18 @@ test("public thread bridge returns scoped WorkBuddy pages without a fallback dri
   ]);
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   await withHome(root, async () => {
+    const operations = nativeOperations({ listWorkbuddyThreads, readWorkbuddyThread, sendWorkbuddyThreadMessage });
+    const invokeAgentOperation: AgentManagerOperationInvoker = async <T>(
+      type: string, operation: string, payload: unknown,
+      invocation?: import("@rabiroute/plugin-sdk").AgentAdapterInvocation
+    ) => {
+      assert.equal(type, "workbuddy", "The request must stay with its original WorkBuddy owner.");
+      const handler = operations[operation];
+      assert.ok(handler, `Unexpected native operation: ${operation}`);
+      return await handler(payload, invocation) as T;
+    };
     const request = { action: "list", agentAdapter: "workbuddy", limit: 1 } as const;
-    const options = { allowedWorkspaces: ["C:\\work\\one"] };
+    const options = { invokeAgentOperation, allowedWorkspaces: ["C:\\work\\one"] };
     const first = await handleAgentThreadRequest(request, options);
     assert.equal(first.statusCode, 200);
     assert.deepEqual((first.data.threads as Array<{ id: string }>).map(thread => thread.id), ["allowed-new"]);

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { translateText } from "../i18n";
-import { readConnectedAgentInstances } from "../connectedAgentInstances";
+import { agentDirectoryDiagnosticsForTarget, agentDirectoryFailure, readAgentInstanceDirectory, unassignedAgentDirectoryDiagnostics, type AgentDirectoryDiagnostic } from "../connectedAgentInstances";
 import RoleBindingEditor from "../components/RoleBindingEditor.vue";
 import { userFacingError } from "../userFacingError";
 import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, ref, watch } from "vue";
@@ -8,30 +8,42 @@ import { useRoute, useRouter } from "vue-router";
 import { useGatewayStore } from "../stores/gatewayStore";
 import InstanceAgentSettings from "../components/InstanceAgentSettings.vue";
 import PeerRouteAgentSettings from "../components/PeerRouteAgentSettings.vue";
-import DshConnectionPanel from "../components/DshConnectionPanel.vue";
 import PrimaryAgentAdvancedSettings from "../components/PrimaryAgentAdvancedSettings.vue";
 import { localAgentTargetKey, remoteAgentTargetKey, resolvePrimaryAgentTarget } from "@shared/routeAgentTargets";
 import { addRouteAgent, removeRouteAgent, selectRouteAgent, selectPeerRouteSession } from "../routeAgentTargetEditor";
 import { postRouteAgentThreadAction } from "../routeAgentThreadClient";
 import { routeAgentOperationGuard } from "../routeAgentOperationGuard";
-import { createGrokBotRouteScan, grokBotScanParameters, grokBotPersonaPickerItems, selectGrokBotRoutePersona, type GrokBotRouteConnection } from "../grokBotRouteConfig";
 import { agentInstanceDisplayName, type AgentInstance } from "@shared/agentInstance";
-import { managerEventSource, managerAccessToken } from "../managerApi";
+import { managerAccessToken } from "../managerApi";
 import { pluginCatalogStore } from "../pluginCatalogStore";
 import { webRenderersAt } from "../pluginRenderers";
-import type { MessageAdapterType, MessageEndpointType, AgentAdapterType, AgentDeliveryTestResult, AgentMaturity, AgentScanResult, AgentScanSession, MessageAdapterScanResult } from "../types";
-import { codexModelPickerItems, dshModelPickerItems, dshModelValue, parseDshModelValue, reasoningEffortPickerItems } from "../agentModelPicker";
+import type { MessageAdapterType, MessageEndpointType, AgentAdapterType, AgentDeliveryTestResult, AgentMaturity, AgentScanResult, MessageAdapterScanResult } from "../types";
 import { isNonMessageEndpoint, adapterLabel, applyAdapterDefaults, gatewayAdapterTypes, isAdapterDisabled, isMessageInputsDisabled, messageAdapterPolicyFor, setGatewayAdapters, setMessageAdapterPolicy, toggleAdapterDisabled } from "../utils/gatewayHelpers";
-import { initializeAgentSessionForRoute } from "@shared/codexSessionInitialization";
-import { codexThreadItems, selectCodexThread, type CodexThreadSummary } from "@shared/codexThreadSelection";
 import { DEFAULT_CODEX_MEMORY_CONSOLIDATION_AGENT_MODEL } from "@shared/codexMemoryConsolidationAgent";
-import { agentAdapterManifest, agentAdapterSupportsManagedTaskFeature, DEFAULT_CODEX_HOOK_SETTINGS, DEFAULT_MESSAGE_PROCESSING_AGENT_MODEL, DEFAULT_MESSAGE_PROCESSING_AGENT_REASONING_EFFORT, MAX_MESSAGE_PROCESSING_AGENTS, messageAdapterUsesAutomaticGrouping } from "@shared/gatewayConfigModel";
+import { DEFAULT_CODEX_HOOK_SETTINGS, DEFAULT_MESSAGE_PROCESSING_AGENT_MODEL, DEFAULT_MESSAGE_PROCESSING_AGENT_REASONING_EFFORT, MAX_MESSAGE_PROCESSING_AGENTS, messageAdapterUsesAutomaticGrouping } from "@shared/gatewayConfigModel";
 import { DEFAULT_CODEX_PLAN_ASSISTANT_MODEL, codexPlanAssistantInitializationPrompt, codexPlanAssistantSessionTitles, normalizeCodexPlanAssistantCount, filterCodexPlanAssistantSessionsForTarget, planAssistantSessionAgentAdapter } from "@shared/codexPlanAssistantSessions";
 import { copyTextToClipboard } from "../clipboard";
 import { routeScopedAdaptersPath } from "../routeScopedNavigation";
-import { deviceAgentInstanceFromCatalog } from "../deviceAgentCatalog";
+import { createRouteAgentScanController } from "../agentAdapters/routeAgentScanController";
+import AgentAdapterCardHost from "../agentAdapters/AgentAdapterCardHost.vue";
+import { configuredAgentRows, agentLocationLabel } from "../agentAdapters/agentAdapterCatalog";
+import type { AgentAdapterCardContext } from "../agentAdapters/agentAdapterCardContext";
 import MessageEndpointCardHost from "../messageEndpoints/MessageEndpointCardHost.vue";
 import { messageEndpointCatalog, messageEndpointGroups } from "../messageEndpoints/messageEndpointCatalog";
+
+function agentCardContext(type: AgentAdapterType, targetId = localAgentTargetKey(type)): AgentAdapterCardContext {
+  const routeId = gateway.value!.id;
+  return { routeId, targetId, agentType: type, runtime: runtime.value,
+    scanState: { ...agentScan.value, loading: !!agentScanLoading.value[type] }, scanError: agentScanErrors.value[type] || "",
+    touch: () => { if (gateway.value?.id === routeId) touch(); },
+    refreshScan: async (options = {}) => { if (gateway.value?.id === routeId) await runAgentTypeScan(type, options); },
+    loadMoreSessions: async () => {
+      const page = agentScan.value.agents[type]?.sessionPage;
+      if (gateway.value?.id === routeId && page?.hasMore && page.nextOffset != null)
+        await runAgentTypeScan(type, { append: true, offset: page.nextOffset, limit: page.limit });
+    }
+  };
+}
 
 const MessageProcessingBoard = defineAsyncComponent(() => import("../components/MessageProcessingBoard.vue"));
 
@@ -68,86 +80,11 @@ const adapterQuery = ref("");
 
 const configNameError = ref("");
 
-const codexBinding = ref({ loading: false, error: "", pending: false });
-
-const managedAgentSessionAction = ref({ loading: false, message: "", error: "" });
-
 const codexPlanAssistants = ref({ count: 1, loading: false, message: "", error: "" });
 
-const agentScan = ref({
-  threadNames: [] as string[],
-  cwdOptions: [] as string[],
-  copilotSessions: [] as { name: string; cwd?: string; userNamed?: boolean }[],
-  copilotBins: [] as string[],
-  marvisAppIds: [] as string[],
-  agents: {} as Partial<Record<AgentAdapterType, AgentScanResult>>,
-  loading: false,
-});
+const agentScanner = createRouteAgentScanController({ route: () => gateway.value, catalog: () => agentDefs.value });
 
-const dshScanLoading = ref(false);
-
-const dshScanRevision = ref(0);
-
-const grokBotSelectionError = ref("");
-
-const grokBotScan = createGrokBotRouteScan(grokBotConnection);
-
-watch(() => grokBotScan.state.result, result => {
-  if (result) agentScan.value.agents = { ...agentScan.value.agents, grokBot: result };
-}, { flush: "sync" });
-
-function grokBotConnection(): GrokBotRouteConnection {
-  return { id: gateway.value?.id || "" };
-}
-
-const codexModelItems = computed(() => codexModelPickerItems(agentScan.value.agents.codex?.models ?? []));
-
-const codexReasoningEffortItems = computed(() => {
-  const discovered = reasoningEffortPickerItems(
-    agentScan.value.agents.codex?.models ?? [],
-    store.selectedGateway?.agentModel
-  );
-  return discovered.length > 0 ? discovered : ["low", "medium", "high", "xhigh", "max"];
-});
-
-const dshModelItems = computed(() => dshModelPickerItems(agentScan.value.agents.dsh?.models ?? []));
-
-const configuredDshModelValue = computed(() => dshModelValue(
-  store.selectedGateway?.dshModelProvider,
-  store.selectedGateway?.dshModel
-));
-
-const dshReasoningEffortItems = computed(() => reasoningEffortPickerItems(
-  agentScan.value.agents.dsh?.models ?? [],
-  store.selectedGateway?.dshModel,
-  store.selectedGateway?.dshModelProvider
-));
-
-function selectCodexModel(value: unknown): void {
-  if (!store.selectedGateway) return;
-  store.selectedGateway.agentModel = String(value || "").trim();
-  const selected = agentScan.value.agents.codex?.models?.find(model => model.id === store.selectedGateway?.agentModel);
-  const efforts = selected?.reasoningEfforts?.map(effort => effort.id) ?? [];
-  if (selected && (!store.selectedGateway.agentReasoningEffort || !efforts.includes(store.selectedGateway.agentReasoningEffort))) {
-    store.selectedGateway.agentReasoningEffort = selected.defaultReasoningEffort as typeof store.selectedGateway.agentReasoningEffort;
-  }
-  touch();
-}
-
-function selectDshModel(value: unknown): void {
-  if (!store.selectedGateway) return;
-  const parsed = parseDshModelValue(value, agentScan.value.agents.dsh?.models ?? []);
-  store.selectedGateway.dshModelProvider = parsed.provider;
-  store.selectedGateway.dshModel = parsed.model;
-  const selected = agentScan.value.agents.dsh?.models?.find(model => (
-    model.provider === parsed.provider && model.id === parsed.model
-  ));
-  const efforts = selected?.reasoningEfforts?.map(effort => effort.id) ?? [];
-  if (selected && (!store.selectedGateway.dshReasoningEffort || !efforts.includes(store.selectedGateway.dshReasoningEffort))) {
-    store.selectedGateway.dshReasoningEffort = selected.defaultReasoningEffort || "";
-  }
-  touch();
-}
+const agentScan = agentScanner.state;
 
 const messageAdapterScan = ref({
   adapters: {} as Partial<Record<MessageAdapterType, MessageAdapterScanResult>>,
@@ -188,241 +125,67 @@ async function runMessageAdapterScan(): Promise<void> {
   finally { messageAdapterScan.value.loading = false; }
 }
 
-async function runAgentScan(): Promise<void> {
-  void refreshLanAgentNodes();
-  if (agentScan.value.loading) return;
-  agentScan.value.loading = true;
-  const dshRevisionAtStart = dshScanRevision.value;
-  const grokBotRevisionAtStart = grokBotScan.revision;
-  const grokBotConnectionAtStart = grokBotConnection();
-  try {
-    const params = new URLSearchParams();
-    const dshBaseUrl = gateway.value?.dshBaseUrl?.trim();
-    if (dshBaseUrl) params.set("dshBaseUrl", dshBaseUrl);
-    for (const [key, value] of grokBotScanParameters(grokBotConnectionAtStart)) params.set(key, value);
-    const res = await fetch(`/api/scan/agents${params.size ? `?${params}` : ""}`);
-    const data = await res.json();
-    agentScan.value.threadNames = data.threadNames ?? [];
-    agentScan.value.cwdOptions = [...new Set([...agentScan.value.cwdOptions, ...(data.cwdOptions ?? [])])];
-    agentScan.value.copilotSessions = data.copilotSessions ?? [];
-    agentScan.value.copilotBins = data.copilotBins ?? [];
-    agentScan.value.marvisAppIds = data.marvisAppIds ?? [];
-    const currentDsh = agentScan.value.agents.dsh;
-    await grokBotScan.initialize(data.agents?.grokBot, grokBotConnectionAtStart, grokBotRevisionAtStart);
-    const currentGrokBot = grokBotScan.state.result ?? agentScan.value.agents.grokBot;
-    agentScan.value.agents = {
-      ...(data.agents ?? {}),
-      ...(dshScanRevision.value !== dshRevisionAtStart && currentDsh ? { dsh: currentDsh } : {}),
-      grokBot: currentGrokBot
-    };
-  } catch { /* ignore */ }
-  finally { agentScan.value.loading = false; }
-}
+const agentScanLoading = agentScanner.loading;
+
+const agentScanErrors = agentScanner.errors;
+
+const runAgentTypeScan = agentScanner.scan;
+
+async function runAgentScan(): Promise<void> { await agentScanner.scanAll(); }
 
 const agentInstances = ref<AgentInstance[]>([]);
 
 const lanAgentLoading = ref(false);
 
-const lanAgentError = ref("");
+const agentDirectoryDiagnostics = ref<AgentDirectoryDiagnostic[]>([]);
+let agentDirectoryRequest: AbortController | undefined;
+
+function directoryDiagnosticTitle(diagnostic: AgentDirectoryDiagnostic): string {
+  const titles: Record<AgentDirectoryDiagnostic["source"], string> = {
+    access: "Agent 目录访问", "local-instances": "电脑 Agent 目录", "device-agents": "设备 Agent 目录",
+    "peer-directory": "已连接电脑目录", "peer-instances": "远端 Agent 实例", "peer-adapters": "远端 Agent 能力目录"
+  };
+  return `${translateText(titles[diagnostic.source])}${diagnostic.ownerDeviceId ? ` (${diagnostic.ownerDeviceId})` : ""}`;
+}
 
 async function refreshLanAgentNodes(): Promise<void> {
   if (lanAgentLoading.value) return;
+  const request = new AbortController();
+  agentDirectoryRequest = request;
   lanAgentLoading.value = true;
-  lanAgentError.value = "";
   try {
-    const access = await fetch("/api/webgui-access").then(response => response.json());
+    const access = await fetch("/api/webgui-access", { signal: request.signal }).then(response => response.json());
     const token = access.data?.token || managerAccessToken();
     const headers = { "x-rabiroute-webgui-token": token };
-    const catalogs = await Promise.allSettled([
-      fetch("/api/lan-agent/instances", { cache: "no-store", headers }).then(async response => {
-        const body = await response.json();
-        if (!response.ok || body.code !== 0) throw new Error(body.message || "读取电脑 Agent 实例失败");
-        return (body.instances || []) as AgentInstance[];
-      }),
-      fetch("/api/device-agents", { cache: "no-store", headers }).then(async response => {
-        const body = await response.json();
-        if (!response.ok || body.code !== 0) throw new Error(body.message || "设备 Agent 未配置：请在设备设置中绑定角色和所属电脑后刷新。");
-        const instance = deviceAgentInstanceFromCatalog(body.data);
-        return instance ? [instance] : [];
-      })
-    ]);
-    const peers = await readConnectedAgentInstances(fetch, headers).catch(error => ({ instances: [], errors: [userFacingError(error)] }));
-    agentInstances.value = [...catalogs.flatMap(result => result.status === "fulfilled" ? result.value : []), ...peers.instances];
-    lanAgentError.value = [...catalogs.flatMap(result => result.status === "rejected" ? [userFacingError(result.reason)] : []), ...peers.errors].join("；");
+    const directory = await readAgentInstanceDirectory(fetch, headers, request.signal);
+    if (request.signal.aborted || agentDirectoryRequest !== request) return;
+    agentInstances.value = directory.instances;
+    agentDirectoryDiagnostics.value = directory.diagnostics;
   } catch (error) {
+    if (request.signal.aborted || agentDirectoryRequest !== request) return;
     agentInstances.value = [];
-    lanAgentError.value = userFacingError(error);
-  } finally { lanAgentLoading.value = false; }
-}
-
-function refreshAgentScan(type: AgentAdapterType): void {
-  if (type === "grokBot") { void runGrokBotAgentScan(); return; }
-  const scan = type === "dsh" ? runDshAgentScan : runAgentScan;
-  void scan();
-}
-
-async function runGrokBotAgentScan(): Promise<void> {
-  grokBotSelectionError.value = "";
-  await grokBotScan.refresh();
-}
-
-function selectGrokBotPersona(value: unknown): void {
-  if (!gateway.value || grokBotScan.state.loading) return;
-  if (!selectGrokBotRoutePersona(gateway.value, grokBotScan.state.result, value)) {
-    grokBotSelectionError.value = "未发现该 Bot 的默认主会话，请刷新后重新选择。";
-    return;
-  }
-  if (value) selectRouteAgent(gateway.value, localAgentTargetKey("grokBot"));
-  grokBotSelectionError.value = "";
-  touch();
-}
-
-async function runDshAgentScan(options: { append?: boolean; offset?: number; limit?: number } = {}): Promise<void> {
-  if (dshScanLoading.value) return;
-  dshScanLoading.value = true;
-  try {
-    const params = new URLSearchParams();
-    if (options.offset != null) params.set("dshOffset", String(options.offset));
-    if (options.limit != null) params.set("dshLimit", String(options.limit));
-    const dshBaseUrl = gateway.value?.dshBaseUrl?.trim();
-    if (dshBaseUrl) params.set("dshBaseUrl", dshBaseUrl);
-    const res = await fetch(`/api/scan/agents/dsh${params.size ? `?${params}` : ""}`);
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.message || `DSH 扫描失败（HTTP ${res.status}）`);
-    const currentDsh = agentScan.value.agents.dsh;
-    const nextDsh = data.agents?.dsh as AgentScanResult | undefined;
-    const sessions = options.append
-      ? [...(currentDsh?.sessions ?? []), ...(nextDsh?.sessions ?? [])]
-      : [...(nextDsh?.sessions ?? [])];
-    const uniqueSessions = [...new Map(sessions.map(session => [
-      session.id || `${session.name}:${session.projectPath || ""}:${session.updatedAt || ""}`,
-      session
-    ])).values()];
-    agentScan.value.agents = {
-      ...agentScan.value.agents,
-      dsh: nextDsh ? { ...nextDsh, sessions: uniqueSessions } : currentDsh
-    };
-    agentScan.value.cwdOptions = [...new Set([...agentScan.value.cwdOptions, ...(data.cwdOptions ?? [])])];
-    dshScanRevision.value += 1;
-  } catch {
-    // Keep the last successful DSH scan visible.
+    agentDirectoryDiagnostics.value = [agentDirectoryFailure("access", error)];
   } finally {
-    dshScanLoading.value = false;
+    if (agentDirectoryRequest === request) { agentDirectoryRequest = undefined; lanAgentLoading.value = false; }
   }
 }
 
-async function loadMoreCodexSessions(): Promise<void> {
-  const page = agentScan.value.agents.codex?.sessionPage;
-  if (agentScan.value.loading || !page?.hasMore || page.nextOffset == null) return;
-  agentScan.value.loading = true;
-  try {
-    const params = new URLSearchParams({
-      codexOffset: String(page.nextOffset),
-      codexLimit: String(page.limit)
-    });
-    const res = await fetch(`/api/scan/agents?${params}`);
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.message || `Agent 扫描失败（HTTP ${res.status}）`);
-    const currentCodex = agentScan.value.agents.codex;
-    const nextCodex = data.agents?.codex as AgentScanResult | undefined;
-    const sessions = [...(currentCodex?.sessions ?? []), ...(nextCodex?.sessions ?? [])];
-    const uniqueSessions = [...new Map(sessions.map(session => [
-      session.id || `${session.name}:${session.projectPath || ""}:${session.updatedAt || ""}`,
-      session
-    ])).values()];
-    agentScan.value.agents = {
-      ...agentScan.value.agents,
-      ...(data.agents ?? {}),
-      codex: nextCodex ? { ...nextCodex, sessions: uniqueSessions } : currentCodex
-    };
-    agentScan.value.threadNames = [...new Set([...agentScan.value.threadNames, ...(data.threadNames ?? [])])];
-    agentScan.value.cwdOptions = [...new Set([...agentScan.value.cwdOptions, ...(data.cwdOptions ?? [])])];
-  } catch {
-    // Keep the already loaded task page available.
-  } finally {
-    agentScan.value.loading = false;
-  }
-}
+function refreshAgentScan(type: AgentAdapterType): void { void runAgentTypeScan(type); }
 
-async function loadMoreDshSessions(): Promise<void> {
-  const page = agentScan.value.agents.dsh?.sessionPage;
-  if (!page?.hasMore || page.nextOffset == null) return;
-  await runDshAgentScan({ append: true, offset: page.nextOffset, limit: page.limit });
-}
+function scanAgentsOnEntry(): void { agentScanner.enter(); }
 
-// 会话/项目扫描只在进入设置页时自动执行一次；后续刷新必须由用户点击扫描按钮触发。
-onMounted(() => { void runAgentScan(); });
+onMounted(() => { scanAgentsOnEntry(); void refreshLanAgentNodes(); });
 
-onBeforeUnmount(() => { grokBotScan.dispose(); });
-
-// Copilot CLI 安装/登录
-const copilotStatus = ref<{ installed?: boolean; binPath?: string; loggedIn?: boolean; copilotHome?: string } | null>(null);
-
-const copilotInstalling = ref(false);
-
-const copilotLoginState = ref<{ loading: boolean; code: string | null; url: string | null; done: boolean; error: string | null }>({
-  loading: false, code: null, url: null, done: false, error: null
-});
+onBeforeUnmount(() => { agentScanner.dispose(); agentDirectoryRequest?.abort(); agentDirectoryRequest = undefined; });
 
 const agentParamOpen = ref<Record<string, boolean>>({});
 
-async function fetchCopilotStatus(): Promise<void> {
-  try {
-    const res = await fetch("/api/agent/copilot-status");
-    copilotStatus.value = await res.json();
-  } catch { /* ignore */ }
-}
-
-async function installCopilotCli(): Promise<void> {
-  if (copilotInstalling.value) return;
-  copilotInstalling.value = true;
-  try {
-    const res = await fetch("/api/agent/copilot-install", { method: "POST" });
-    const data = await res.json();
-    if (data.ok) await fetchCopilotStatus();
-    else copilotLoginState.value.error = data.stderr || data.error || "安装失败";
-  } catch (e) { copilotLoginState.value.error = String(e); }
-  finally { copilotInstalling.value = false; }
-}
-
-async function startCopilotLogin(): Promise<void> {
-  copilotLoginState.value = { loading: true, code: null, url: null, done: false, error: null };
-  try {
-    const res = await fetch("/api/agent/copilot-login", { method: "POST" });
-    const data = await res.json();
-    if (data.done) {
-      copilotLoginState.value = { loading: false, code: null, url: null, done: true, error: null };
-      await fetchCopilotStatus();
-    } else if (data.code) {
-      copilotLoginState.value = { loading: false, code: data.code, url: data.url, done: false, error: null };
-      const events = managerEventSource("/api/events");
-      events.addEventListener("copilot_login_status", async (raw) => {
-        const event = JSON.parse((raw as MessageEvent).data || "{}");
-        events.close();
-        if (event.done) {
-          await fetchCopilotStatus();
-          copilotLoginState.value.done = true;
-          copilotLoginState.value.code = null;
-        } else {
-          copilotLoginState.value.error = event.error || "登录失败";
-        }
-      });
-    } else {
-      copilotLoginState.value = { loading: false, code: null, url: null, done: false, error: data.error || "启动失败" };
-    }
-  } catch (e) {
-    copilotLoginState.value = { loading: false, code: null, url: null, done: false, error: String(e) };
-  }
-}
-
-watch(
-  () => agentParamOpen.value["copilotCli"],
-  (open) => { if (open && copilotStatus.value === null) fetchCopilotStatus(); }
-);
+const agentCardOpened = ref<Record<string, boolean>>({});
 
 const adapterParamOpen = ref<Record<string, boolean>>({});
 
 const adapterLifecycleRevision = ref<Record<string, number>>({});
+
 const adapterActionBusy = ref<Record<string, boolean>>({});
 
 const addAdapterMenu = ref(false);
@@ -444,14 +207,12 @@ function configuredAdapterCatalog(gw: NonNullable<typeof gateway.value>): Messag
   return gw.messageAdapterType ? uniqueAdapters([gw.messageAdapterType]) : [];
 }
 
-// 所有已添加的 adapter（含禁用），用于 UI 列表显示
 const addedAdapters = computed<MessageAdapterType[]>(() => {
   const gw = gateway.value;
   if (!gw) return [];
   return configuredAdapterCatalog(gw);
 });
 
-// 仅启用的 adapter（不含禁用）
 const adapters = computed(() => gateway.value ? gatewayAdapterTypes(gateway.value) : []);
 
 const messageInputsDisabled = computed(() => gateway.value ? isMessageInputsDisabled(gateway.value) : false);
@@ -466,10 +227,6 @@ const copyResult = ref("");
 const deletingGateway = ref(false);
 
 const deleteError = ref("");
-
-const openingMarvis = ref(false);
-
-const marvisOpenResult = ref<{ ok: boolean; message: string } | null>(null);
 
 const visibleAdapterGroups = computed(() => {
   const query = adapterQuery.value.trim().toLowerCase();
@@ -739,79 +496,35 @@ async function deleteCurrentGateway(): Promise<void> {
   }
 }
 
-async function openMarvis(): Promise<void> {
-  if (openingMarvis.value) return;
-  openingMarvis.value = true;
-  marvisOpenResult.value = null;
-  try {
-    const resp = await fetch("/api/agent/marvis-open", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ appId: gateway.value?.marvisAppId })
-    });
-    const body = await resp.json().catch(() => ({}));
-    marvisOpenResult.value = {
-      ok: resp.ok && body.ok !== false,
-      message: body.message || (resp.ok ? "已尝试打开 Marvis。" : "打开 Marvis 失败。")
-    };
-  } catch (e: unknown) {
-    marvisOpenResult.value = { ok: false, message: userFacingError(e) };
-  } finally {
-    openingMarvis.value = false;
-  }
-}
-
 function renameCurrentConfig(value: unknown): void {
   if (!gateway.value) return;
   const result = store.renameGatewayConfig(gateway.value.id, value);
   configNameError.value = result.message || "";
 }
 
-const agentDefs: Array<{ type: AgentAdapterType; title: string; note: string; icon: string; hasCwd: boolean; hasThread: boolean }> = [
-  { type: "grokBot", title: "Grok Bot", note: "由已有 Grok cloud 服务执行，复用当前账号的真实会话", icon: "mdi-cloud-outline", hasCwd: false, hasThread: true },
-  { type: "codex",       title: "Codex Agent",    note: "消息由桌面任务执行并实时显示", icon: "mdi-monitor-dashboard", hasCwd: true, hasThread: true },
-  { type: "copilotCli",  title: "Copilot CLI",   note: "通过 GitHub Copilot CLI 投递消息",  icon: "mdi-robot-outline", hasCwd: true, hasThread: true },
-  { type: "marvis",      title: "Marvis",         note: "打开 Marvis 并复制 prompt（人工接力）", icon: "mdi-message-processing-outline", hasCwd: false, hasThread: false },
-  { type: "astrbot",     title: "AstrBot",         note: "通过 AstrBot ChatUI / 机器人框架投递消息",    icon: "mdi-robot-happy-outline", hasCwd: false, hasThread: false },
-  { type: "dsh",         title: "DSH（DeepSeek Harness 会话）", note: "通过 session.prompt API 投递到本机 DSH 会话", icon: "mdi-brain", hasCwd: true, hasThread: true },
-  { type: "workbuddy",   title: "WorkBuddy（腾讯 AI 办公工作台）", note: "通过会话网关投递到本机 WorkBuddy 已有任务", icon: "mdi-briefcase-outline", hasCwd: true, hasThread: true },
-  { type: "deviceAgent", title: "设备 Agent（实验）", note: "由已绑定设备执行；电脑仅负责消息投递和回执", icon: "mdi-glasses", hasCwd: false, hasThread: false },
-  { type: "antigravity", title: "Antigravity（Google 的 Agent 开发环境）", note: "通过官方 agy agentapi 投递到本机 Antigravity 会话", icon: "mdi-rocket-launch-outline", hasCwd: true, hasThread: true },
-];
-
-/** Short display names for panels that name the bound session owner. Falls back to the manifest label so a newly registered adapter is never mislabelled as Codex. */
-const agentShortLabels: Partial<Record<AgentAdapterType, string>> = {
-  codex: "Codex Desktop",
-  dsh: "DSH",
-  workbuddy: "WorkBuddy",
-  antigravity: "Antigravity",
-  deviceAgent: "设备 Agent",
-  grokBot: "Grok Bot 云端会话"
-};
+const agentDefs = computed(() => pluginCatalogStore.agentAdapters.value);
 
 const addAgentMenu = ref(false);
 
-const testingAstrbotLogin = ref(false);
-
-const astrbotLoginResult = ref<{ ok: boolean; message: string } | null>(null);
-
 const agentTypes = computed(() => gateway.value?.agentAdapters ?? []);
 
-const visibleAgentItems = computed(() => agentDefs.filter(agent => agentTypes.value.includes(agent.type)).map(agent => ({ ...agent, title: `${agent.type === "grokBot" ? "云端" : "本机"} · ${agent.title}` })));
+const visibleAgentItems = computed(() => configuredAgentRows(agentDefs.value, agentTypes.value).map(agent => ({ ...agent, title: `${agentLocationLabel(agent.location)} · ${agent.title}` })));
 
 const remoteAgentItems = computed(() => (gateway.value?.remoteAgentTargets || []).map(target => {
   const instance = agentInstances.value.find(item => item.instanceId === target.instanceId && item.ownerDeviceId === target.ownerDeviceId);
   const agent = instance?.agents.find(item => item.agentId === target.agentId);
-  const definition = agentDefs.find(item => item.type === target.provider);
+  const definition = agentDefs.value.find(item => item.type === target.provider);
   const agentLabel = agent?.name || (definition ? `${definition.title} · ${target.agentId}` : target.agentId);
-  return { ...target, instance, agent, title: `远端 · ${instance ? `${agentInstanceDisplayName(instance)} / ` : ''}${agentLabel}（${instance?.address || target.instanceId}）` };
+  return { ...target, instance, agent, diagnostics: agentDirectoryDiagnosticsForTarget(agentDirectoryDiagnostics.value, target), title: `远端 · ${instance ? `${agentInstanceDisplayName(instance)} / ` : ''}${agentLabel}（${instance?.address || target.instanceId}）` };
 }));
 
+const agentDiscoveryDiagnostics = computed(() => unassignedAgentDirectoryDiagnostics(agentDirectoryDiagnostics.value, gateway.value?.remoteAgentTargets || []));
+
 const availableAgentsToAdd = computed(() => [
-  ...agentDefs.filter(agent => agent.type !== "deviceAgent" && !agentTypes.value.includes(agent.type)).map(agent => ({ ...agent, key: localAgentTargetKey(agent.type), title: `${agent.type === "grokBot" ? "云端" : "本机"} · ${agent.title}`, nodeId: undefined as string | undefined, agentId: undefined as string | undefined, ownerDeviceId: undefined as string | undefined })),
+  ...agentDefs.value.filter(agent => agent.location !== "device" && !agentTypes.value.includes(agent.type)).map(agent => ({ ...agent, key: localAgentTargetKey(agent.type), title: `${agentLocationLabel(agent.location)} · ${agent.title}`, nodeId: undefined as string | undefined, agentId: undefined as string | undefined, ownerDeviceId: undefined as string | undefined })),
   ...agentInstances.value.flatMap(instance => instance.agents.flatMap(remote => {
     if (instance.local && !instance.ownerDeviceId && remote.provider !== "deviceAgent") return [];
-    const def = agentDefs.find(agent => agent.type === (remote.provider === "codex-desktop" ? "codex" : remote.provider));
+    const def = agentDefs.value.find(agent => agent.type === (remote.provider === "codex-desktop" ? "codex" : remote.provider));
     if (!def) return [];
     const key = remoteAgentTargetKey({ instanceId: instance.instanceId, agentId: remote.agentId, ownerDeviceId: instance.ownerDeviceId });
     if (remoteAgentItems.value.some(item => item.id === key)) return [];
@@ -826,6 +539,8 @@ const primaryAgentType = computed(() => primaryAgent.value?.provider);
 const primaryLocalAgentType = computed(() => primaryAgent.value?.binding ? undefined : primaryAgent.value?.provider);
 
 const remoteAgentParamOpen = ref<Record<string, boolean>>({});
+
+const remoteAgentCardOpened = ref<Record<string, boolean>>({});
 
 const primaryAgentItems = computed(() => [
   ...visibleAgentItems.value.map(agent => ({ title: agent.title, value: localAgentTargetKey(agent.type) })),
@@ -872,7 +587,7 @@ function channelAgentDetail(type: AgentAdapterType): string {
   if (typeof state.message === "string" && state.message.trim()) return state.message;
   const scan = agentScanFor(type);
   if (scan?.auth?.message) return scan.auth.message;
-  return agentDefs.find(agent => agent.type === type)?.note || "当前 Route 已添加的 Agent 端。";
+  return agentDefs.value.find(agent => agent.type === type)?.note || "当前 Route 已添加的 Agent 端。";
 }
 
 function messageProcessingAgentPolicy(type: AgentAdapterType) {
@@ -886,7 +601,7 @@ function messageProcessingAgentPolicy(type: AgentAdapterType) {
 }
 
 function supportsManagedTaskFeature(type: AgentAdapterType, feature: "messageProcessingAgent" | "memoryConsolidationAgent" | "planAssistantSessions" | "hooks"): boolean {
-  return agentAdapterSupportsManagedTaskFeature(type, feature);
+  return agentDefs.value.find(item => item.type === type)?.manifest.capabilities.managedTasks?.[feature] === true;
 }
 
 function setMessageProcessingAgentPolicy(type: AgentAdapterType, patch: Record<string, unknown>): void {
@@ -900,66 +615,13 @@ function setMessageProcessingAgentPolicy(type: AgentAdapterType, patch: Record<s
 }
 
 function agentStateFor(type: AgentAdapterType): Record<string, any> {
+  if (!agentDefs.value.some(agent => agent.type === type)) return {};
   // Provider-only runtime state belongs to the selected owner, not every same-provider card.
   if (primaryAgent.value?.binding || primaryLocalAgentType.value !== type) return {};
   return runtime.value.agentStates?.[type] ?? {};
 }
 
-function codexDeliveryChannelLabel(state: Record<string, any>): string {
-  if (state.lastDeliveryChannel === "desktop-ipc") return "Codex Desktop IPC";
-  return "-";
-}
-
-function normalizeClientPath(value?: string): string {
-  return (value || "").replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
-}
-
-function samePath(left?: string, right?: string): boolean {
-  const a = normalizeClientPath(left);
-  const b = normalizeClientPath(right);
-  return Boolean(a && b && a === b);
-}
-
-function agentScanFor(type: AgentAdapterType): AgentScanResult | undefined {
-  const scan = agentScan.value.agents[type];
-  if (type !== "astrbot" || !gateway.value) return scan;
-
-  const localUrl = gateway.value.astrbotUrl?.trim();
-  const localPassword = gateway.value.astrbotPassword?.trim();
-  const endpoints = [...(scan?.endpoints ?? [])];
-  if (localUrl && !endpoints.some(endpoint => endpoint.url === localUrl)) {
-    endpoints.unshift({ label: "当前 AstrBot", url: localUrl });
-  }
-
-  if (!scan) {
-    return {
-      type: "astrbot",
-      label: "AstrBot",
-      maturity: "experimental",
-      installed: false,
-      auth: {
-        required: true,
-        loggedIn: false,
-        message: localPassword ? "已填写本地 AstrBot 密码，保存后写入 route 配置。" : "缺少 AstrBot 密码；请填写本地配置或设置 ASTRBOT_PASSWORD。"
-      },
-      endpoints,
-      warnings: []
-    };
-  }
-
-  return {
-    ...scan,
-    endpoints,
-    auth: localPassword
-      ? {
-          ...(scan.auth ?? { required: true }),
-          required: true,
-          loggedIn: scan.auth?.loggedIn,
-          message: scan.auth?.loggedIn ? scan.auth.message : (scan.auth?.message || "已填写本地 AstrBot 密码，尚未验证登录。")
-        }
-      : scan.auth
-  };
-}
+function agentScanFor(type: AgentAdapterType): AgentScanResult | undefined { return agentScan.value.agents[type]; }
 
 function maturityLabel(value?: AgentMaturity): string {
   if (value === "verified") return "已验证";
@@ -980,6 +642,7 @@ function agentAuthLabel(type: AgentAdapterType): string {
 }
 
 function agentConnectionLabel(type: AgentAdapterType): string {
+  if (!agentDefs.value.some(agent => agent.type === type)) return "插件不可用";
   const scan = agentScanFor(type);
   if (!scan) return agentScan.value.loading ? "扫描中" : "未扫描";
   if (type === "grokBot" && scan.auth?.loggedIn === undefined) return "尚未扫描";
@@ -997,279 +660,18 @@ function agentConnectionColor(type: AgentAdapterType): string {
   return "error";
 }
 
-function currentAgentProject(type: AgentAdapterType): string {
-  if (!gateway.value) return "";
-  if (type === "copilotCli") return gateway.value.copilotCwd || "";
-  if (type === "codex") return gateway.value.codexCwd || "";
-  if (type === "dsh") return gateway.value.dshCwd || "";
-  if (type === "workbuddy") return gateway.value.workbuddyCwd || "";
-  if (type === "antigravity") return gateway.value.antigravityCwd || "";
-  return "";
-}
-
 function fallbackCodexThreadName(): string {
   if (!gateway.value) return "RabiRoute";
   return gateway.value.routeName || gateway.value.name || store.configNameFor(gateway.value) || gateway.value.id || "RabiRoute";
 }
 
-function agentProjectItems(type: AgentAdapterType): string[] {
-  const projects = agentScanFor(type)?.projects ?? [];
-  if (projects.length) return projects.map(project => project.path);
-  return agentScan.value.cwdOptions;
+function managedAgentSessionContext(type: AgentAdapterType) {
+  if (!gateway.value) return null;
+  const session = agentDefs.value.find(agent => agent.type === type)?.renderer.agentRoute?.session?.(gateway.value);
+  return session ? { ...session, agentAdapter: type, sessionName: session.sessionName || fallbackCodexThreadName() } : null;
 }
 
-function agentSessions(type: AgentAdapterType): AgentScanSession[] {
-  const sessions = agentScanFor(type)?.sessions;
-  if (sessions) return sessions;
-  if (type === "copilotCli") {
-    return agentScan.value.copilotSessions.map(session => ({
-      name: session.name,
-      projectPath: session.cwd,
-      userNamed: session.userNamed
-    }));
-  }
-  if (type === "codex") {
-    return agentScan.value.threadNames.map(name => ({ name }));
-  }
-  return [];
-}
-
-function astrbotProjectItems(): Array<{ title: string; value: string; path?: string }> {
-  return (agentScanFor("astrbot")?.projects ?? []).map(project => ({
-    title: project.label || project.path || project.id || "未命名项目",
-    value: project.id || project.path,
-    path: project.path
-  }));
-}
-
-function astrbotSessionItems(): Array<{ title: string; value: string; subtitle?: string }> {
-  const projectId = gateway.value?.astrbotProjectId || "";
-  return (agentScanFor("astrbot")?.sessions ?? [])
-    .filter(session => !projectId || session.projectId === projectId)
-    .map(session => ({
-      title: session.name,
-      value: session.id || session.name,
-      subtitle: session.projectPath || session.updatedAt
-    }));
-}
-
-function selectAstrbotProject(value: unknown): void {
-  if (!gateway.value) return;
-  gateway.value.astrbotProjectId = String(value || "");
-  const sessions = astrbotSessionItems();
-  if (gateway.value.astrbotSessionId && !sessions.some(session => session.value === gateway.value?.astrbotSessionId)) {
-    gateway.value.astrbotSessionId = "";
-  }
-  touch();
-}
-
-function selectAstrbotSession(value: unknown): void {
-  if (!gateway.value) return;
-  gateway.value.astrbotSessionId = String(value || "");
-  const selected = (agentScanFor("astrbot")?.sessions ?? []).find(session => (session.id || session.name) === gateway.value?.astrbotSessionId);
-  if (selected?.projectId && !gateway.value.astrbotProjectId) {
-    gateway.value.astrbotProjectId = selected.projectId;
-  }
-  touch();
-}
-
-function sessionNamesFor(type: AgentAdapterType): string[] {
-  const selectedProject = currentAgentProject(type);
-  return [...new Set(agentSessions(type)
-    .filter(session => !selectedProject || !session.projectPath || samePath(session.projectPath, selectedProject))
-    .map(session => session.name))];
-}
-
-function codexSessionItems(): Array<{ title: string; value: string }> {
-  return codexThreadItems(codexThreadSummaries());
-}
-
-function codexThreadSummaries(): CodexThreadSummary[] {
-  return agentSessions("codex")
-    .filter(session => session.id)
-    .map(session => ({
-      id: session.id!,
-      title: session.name,
-      updatedAt: session.updatedAt,
-      cwd: session.projectPath
-    }));
-}
-
-function dshSessionItems(): Array<{ title: string; value: string; subtitle?: string }> {
-  return agentSessions("dsh")
-    .filter((session) => session.id)
-    .filter((session) => !gateway.value?.dshCwd || !session.projectPath || samePath(session.projectPath, gateway.value.dshCwd))
-    .map((session) => ({
-      title: session.name,
-      value: session.id!,
-      subtitle: [session.projectPath, session.updatedAt].filter(Boolean).join(" · ")
-    }));
-}
-
-function selectDshSession(value: unknown): void {
-  if (!gateway.value) return;
-  const raw = String(value || "").trim();
-  const selected = agentSessions("dsh").find((session) => session.id === raw);
-  if (selected?.id) {
-    gateway.value.dshSessionId = selected.id;
-    gateway.value.dshSessionName = selected.name;
-    if (selected.projectPath) gateway.value.dshCwd = selected.projectPath;
-  } else {
-    gateway.value.dshSessionId = "";
-    gateway.value.dshSessionName = raw;
-  }
-  codexBinding.value.error = "";
-  codexBinding.value.pending = false;
-  touch();
-}
-
-function workbuddySessionItems(): Array<{ title: string; value: string; subtitle?: string }> {
-  return agentSessions("workbuddy")
-    .filter((session) => session.id)
-    .filter((session) => !gateway.value?.workbuddyCwd || !session.projectPath || samePath(session.projectPath, gateway.value.workbuddyCwd))
-    .map((session) => ({
-      title: session.name,
-      value: session.id!,
-      subtitle: [
-        session.projectPath,
-        session.live === true ? "在线" : session.live === false ? "已离线" : undefined,
-        session.updatedAt
-      ].filter(Boolean).join(" · ")
-    }));
-}
-
-function selectWorkbuddySession(value: unknown): void {
-  if (!gateway.value) return;
-  const raw = String(value || "").trim();
-  const selected = agentSessions("workbuddy").find((session) => session.id === raw);
-  if (selected?.id) {
-    gateway.value.workbuddySessionId = selected.id;
-    gateway.value.workbuddySessionName = selected.name;
-    if (selected.projectPath) gateway.value.workbuddyCwd = selected.projectPath;
-  } else {
-    gateway.value.workbuddySessionId = "";
-    gateway.value.workbuddySessionName = raw;
-  }
-  touch();
-}
-
-function antigravitySessionItems(): Array<{ title: string; value: string; subtitle?: string }> {
-  return agentSessions("antigravity")
-    .filter((session) => session.id)
-    .filter((session) => !gateway.value?.antigravityCwd || !session.projectPath || samePath(session.projectPath, gateway.value.antigravityCwd))
-    .map((session) => ({
-      title: session.name,
-      value: session.id!,
-      subtitle: [
-        session.projectPath,
-        session.live === true ? "宿主在线" : session.live === false ? "宿主未运行" : undefined,
-        session.updatedAt
-      ].filter(Boolean).join(" · ")
-    }));
-}
-
-function selectAntigravitySession(value: unknown): void {
-  if (!gateway.value) return;
-  const raw = String(value || "").trim();
-  const selected = agentSessions("antigravity").find((session) => session.id === raw);
-  if (selected?.id) {
-    gateway.value.antigravityConversationId = selected.id;
-    gateway.value.antigravityConversationName = selected.name;
-    if (selected.projectPath) gateway.value.antigravityCwd = selected.projectPath;
-  } else {
-    gateway.value.antigravityConversationId = "";
-    gateway.value.antigravityConversationName = raw;
-  }
-  touch();
-}
-
-function managedAgentSessionContext(type: AgentAdapterType): {
-  agentAdapter: "codex" | "dsh" | "workbuddy" | "antigravity";
-  sessionId: string;
-  sessionName: string;
-  workspace: string;
-  dshBaseUrl?: string;
-} | null {
-  if (!gateway.value || (type !== "codex" && type !== "dsh" && type !== "workbuddy" && type !== "antigravity")) return null;
-  if (type === "dsh") {
-    return {
-      agentAdapter: "dsh",
-      sessionId: String(gateway.value.dshSessionId || "").trim(),
-      sessionName: String(gateway.value.dshSessionName || fallbackCodexThreadName()).trim(),
-      workspace: String(gateway.value.dshCwd || "").trim(),
-      dshBaseUrl: String(gateway.value.dshBaseUrl || "").trim() || undefined
-    };
-  }
-  if (type === "workbuddy") {
-    return {
-      agentAdapter: "workbuddy",
-      sessionId: String(gateway.value.workbuddySessionId || "").trim(),
-      sessionName: String(gateway.value.workbuddySessionName || fallbackCodexThreadName()).trim(),
-      workspace: String(gateway.value.workbuddyCwd || "").trim()
-    };
-  }
-  if (type === "antigravity") {
-    return {
-      agentAdapter: "antigravity",
-      sessionId: String(gateway.value.antigravityConversationId || "").trim(),
-      sessionName: String(gateway.value.antigravityConversationName || fallbackCodexThreadName()).trim(),
-      workspace: String(gateway.value.antigravityCwd || "").trim()
-    };
-  }
-  return {
-    agentAdapter: "codex",
-    sessionId: String(gateway.value.codexThreadId || "").trim(),
-    sessionName: String(gateway.value.codexThreadName || fallbackCodexThreadName()).trim(),
-    workspace: String(gateway.value.codexCwd || "").trim()
-  };
-}
-
-function managedAgentLabel(type: AgentAdapterType): string {
-  return agentShortLabels[type] || agentAdapterManifest(type).label;
-}
-
-function hasManagedAgentSessionBinding(type: "codex" | "dsh"): boolean {
-  const session = managedAgentSessionContext(type);
-  return Boolean(session?.sessionId && session.workspace);
-}
-
-async function openManagedAgentSession(agentAdapter: "codex" | "dsh"): Promise<void> {
-  if (managedAgentSessionAction.value.loading) return;
-  const session = managedAgentSessionContext(agentAdapter);
-  if (!session?.sessionId || !session.workspace) return;
-  managedAgentSessionAction.value = { loading: true, message: "", error: "" };
-  try {
-    await postAgentThreadAction({
-      action: "open",
-      agentAdapter: session.agentAdapter,
-      threadId: session.sessionId,
-      cwd: session.workspace,
-      ...(session.dshBaseUrl ? { dshBaseUrl: session.dshBaseUrl } : {})
-    });
-    managedAgentSessionAction.value = {
-      loading: false,
-      message: agentAdapter === "dsh" ? "已在 DSH 中定位主角色会话。" : "已在 Codex Desktop 中定位主角色任务。",
-      error: ""
-    };
-  } catch (error) {
-    managedAgentSessionAction.value = {
-      loading: false,
-      message: "",
-      error: userFacingError(error)
-    };
-  }
-}
-
-function selectCodexSession(value: unknown): void {
-  if (!gateway.value) return;
-  const selection = selectCodexThread(value, codexThreadSummaries());
-  gateway.value.codexThreadId = selection.threadId;
-  gateway.value.codexThreadName = selection.threadName;
-  if (selection.selected?.cwd) gateway.value.codexCwd = selection.selected.cwd;
-  codexBinding.value.error = "";
-  codexBinding.value.pending = false;
-  touch();
-}
+function managedAgentLabel(type: AgentAdapterType): string { return agentDefs.value.find(item => item.type === type)?.title || type; }
 
 const hookUpdate = ref({ loading: false, message: "", error: "" });
 
@@ -1288,116 +690,16 @@ async function updateHooksToAgent(type: AgentAdapterType): Promise<void> {
   }
 }
 
-async function lookupCodexThreadBinding(): Promise<void> {
-  if (!gateway.value || codexBinding.value.loading) return;
-  const title = gateway.value.codexThreadName?.trim() || fallbackCodexThreadName();
-  codexBinding.value = { loading: true, error: "", pending: false };
-  try {
-    const response = await fetch("/api/agent/threads", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        action: "resolve",
-        threadId: gateway.value.codexThreadId || undefined,
-        title,
-        cwd: gateway.value.codexCwd || undefined,
-        createIfMissing: false
-      })
-    });
-    const body = await response.json().catch(() => ({}));
-    if (response.status === 404 && body.resolution === "missing") {
-      gateway.value.codexThreadId = "";
-      codexBinding.value.pending = true;
-      touch();
-      return;
-    }
-    if (!response.ok || !body.thread?.id) {
-      throw new Error(body.message || "无法查找 Codex Desktop 会话。");
-    }
-    gateway.value.codexThreadId = body.thread.id;
-    gateway.value.codexThreadName = body.thread.title || title;
-    if (body.thread.cwd) gateway.value.codexCwd = body.thread.cwd;
-    touch();
-  } catch (error) {
-    codexBinding.value.error = userFacingError(error);
-  } finally {
-    codexBinding.value.loading = false;
-  }
-}
-
-async function initializeManagedAgentSession(agentAdapter: "codex" | "dsh"): Promise<void> {
-  if (!gateway.value || managedAgentSessionAction.value.loading) return;
-  managedAgentSessionAction.value = { loading: true, message: "", error: "" };
-  try {
-    await initializeAgentSessionForRoute({
-      agentAdapter,
-      save: () => store.save(),
-      currentGatewayId: () => gateway.value?.id || "",
-      deliver: async ({ gatewayId, text }) => {
-        const response = await fetch("/api/role-panel/messages", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ gatewayId, text, attachments: [] })
-        });
-        const body = await response.json().catch(() => ({}));
-        if (!response.ok || body.code !== 0) {
-          throw new Error(body.message || "角色初始化消息投递失败。");
-        }
-      }
-    });
-    managedAgentSessionAction.value = {
-      loading: false,
-      message: agentAdapter === "dsh"
-        ? "已保存名称 + 会话 ID，并通过 DSH owner 投递角色初始化消息。"
-        : "已保存名称 + 线程 ID，并通过 Desktop owner 投递角色初始化消息。",
-      error: ""
-    };
-    await store.load();
-  } catch (error) {
-    managedAgentSessionAction.value = {
-      loading: false,
-      message: "",
-      error: userFacingError(error)
-    };
-  }
-}
-
-function selectCopilotSession(value: unknown): void {
-  if (!gateway.value) return;
-  gateway.value.copilotThreadName = String(value || "");
-  touch();
-  const selected = agentSessions("copilotCli").find(session => session.name === gateway.value?.copilotThreadName);
-  if (selected?.projectPath && !gateway.value.copilotCwd) {
-    gateway.value.copilotCwd = selected.projectPath;
-  }
-}
-
-function agentWarnings(type: AgentAdapterType): string[] {
-  const warnings = [...(agentScanFor(type)?.warnings ?? [])];
-  if (type === "astrbot") {
-    const hasLocalPassword = Boolean(gateway.value?.astrbotPassword?.trim());
-    const scan = agentScanFor("astrbot");
-    const pluginReady = scan?.plugins?.every(plugin => plugin.installed) ?? false;
-    const endpointReady = scan?.endpoints?.some(endpoint => endpoint.healthy) ?? false;
-    return [...new Set(warnings.filter(warning => {
-      if (hasLocalPassword && warning.includes("缺少 AstrBot 密码")) return false;
-      if (warning.includes("默认管线") || warning.includes("无可选会话列表")) return false;
-      if (hasLocalPassword && pluginReady && endpointReady && warning.includes("尚未验证列会话")) return false;
-      return true;
-    }))];
-  }
-  if (type === "copilotCli" && gateway.value?.copilotCwd && gateway.value.copilotThreadName) {
-    const selected = agentSessions(type).find(session => session.name === gateway.value?.copilotThreadName);
-    if (selected?.projectPath && !samePath(selected.projectPath, gateway.value.copilotCwd)) {
-      warnings.push(`当前会话属于 ${selected.projectPath}，和工作目录不一致。`);
-    }
-  }
-  return [...new Set(warnings)];
+function agentWarnings(type: AgentAdapterType): readonly string[] {
+  const scan = agentScanFor(type);
+  const project = agentDefs.value.find(agent => agent.type === type)?.renderer.agentRoute?.warnings;
+  return project && gateway.value ? project(gateway.value, scan) : (scan?.warnings ?? []);
 }
 
 function addAgent(type: AgentAdapterType, nodeId?: string, agentId?: string, ownerDeviceId?: string): void {
   if (!gateway.value) return;
   if (type === "deviceAgent" && (!nodeId || !agentId)) return;
+  addAgentMenu.value = false;
   addRouteAgent(gateway.value, type, nodeId, agentId, ownerDeviceId);
   if (nodeId && agentId) {
     const targetId = remoteAgentTargetKey({ instanceId: nodeId, agentId, ownerDeviceId });
@@ -1413,7 +715,7 @@ function addAgent(type: AgentAdapterType, nodeId?: string, agentId?: string, own
   if (supportsManagedTaskFeature(type, "hooks") && !gateway.value.codexHooks) {
     gateway.value.codexHooks = { ...DEFAULT_CODEX_HOOK_SETTINGS };
   }
-  if (type === "copilotCli" && copilotStatus.value === null) void fetchCopilotStatus();
+
   store.touch();
 }
 
@@ -1598,42 +900,18 @@ function selectPrimaryAgent(value: unknown): void {
   store.touch();
 }
 
-async function testAstrbotLogin(): Promise<void> {
-  if (!gateway.value) return;
-  testingAstrbotLogin.value = true;
-  astrbotLoginResult.value = null;
-  try {
-    const resp = await fetch("/api/agent/astrbot-login-test", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        url: gateway.value.astrbotUrl,
-        username: gateway.value.astrbotUsername,
-        password: gateway.value.astrbotPassword
-      })
-    });
-    const body = await resp.json().catch(() => ({}));
-    astrbotLoginResult.value = {
-      ok: Boolean(body.ok),
-      message: body.message || (resp.ok ? "AstrBot 登录验证成功。" : "AstrBot 登录验证失败。")
-    };
-  } catch (e: unknown) {
-    astrbotLoginResult.value = { ok: false, message: userFacingError(e) };
-  } finally {
-    testingAstrbotLogin.value = false;
-  }
-}
-
 function toggleAgentParams(type: AgentAdapterType): void {
-  const nextOpen = !agentParamOpen.value[type];
-  agentParamOpen.value[type] = nextOpen;
-  if (nextOpen) {
-    if (type === "copilotCli" && copilotStatus.value === null) void fetchCopilotStatus();
-  }
+  agentCardOpened.value[type] = true;
+  agentParamOpen.value[type] = !agentParamOpen.value[type];
 }
 
-// Only an explicit edit of the current config name changes its URL here.
-// Ordinary navigation and browser history are synchronized by App.
+function toggleRemoteAgentParams(targetId: string): void {
+  remoteAgentCardOpened.value[targetId] = true;
+  remoteAgentParamOpen.value[targetId] = !remoteAgentParamOpen.value[targetId];
+}
+
+watch(() => [gateway.value?.id, agentDefs.value.map(provider => provider.renderer.key).join("\n")], scanAgentsOnEntry);
+
 watch(() => gateway.value?.configName, (name, previousName) => {
   configNameError.value = "";
   if (!props.embedded && previousName && route.params.id === previousName && name && name !== previousName) {
@@ -1644,8 +922,7 @@ watch(() => gateway.value?.configName, (name, previousName) => {
 watch(() => gateway.value?.id, () => {
   adapterLifecycleRevision.value = {};
   adapterActionBusy.value = {};
-  grokBotScan.state.queryDraft = "";
-  grokBotSelectionError.value = "";
+
   codexPlanAssistants.value = {
     count: Math.max(1, gateway.value?.codexPlanAssistantSessions?.length || 1),
     loading: false,
@@ -1956,12 +1233,12 @@ watch(() => gateway.value?.id, () => {
               </div>
             </div>
             <v-expand-transition>
-              <div v-if="agentParamOpen[agent.type]" class="catalog-param-panel">
+              <div v-if="agentCardOpened[agent.type] || agentParamOpen[agent.type]" v-show="agentParamOpen[agent.type]" class="catalog-param-panel">
                 <div class="dependency-panel mb-3">
                   <div class="section-title-row compact-row">
                     <div>
                       <div class="section-title small-title">环境和依赖</div>
-                      <div class="section-note">{{ agent.type === 'grokBot' ? "确认当前 Grok Bot 账号与云端会话；服务负责实际执行。" : "先确认处理端是否安装、登录、插件可用，以及能否读取项目和会话。" }}</div>
+                      <div class="section-note">{{ agent.note }}</div>
                     </div>
                     <div class="d-flex ga-2 flex-wrap">
                       <v-chip size="small" :color="maturityColor(agentScanFor(agent.type)?.maturity)" variant="tonal">
@@ -1970,11 +1247,12 @@ watch(() => gateway.value?.id, () => {
                       <v-chip size="small" :color="agentConnectionColor(agent.type)" variant="tonal">
                         {{ agentConnectionLabel(agent.type) }}
                       </v-chip>
-                      <v-btn size="small" variant="text" prepend-icon="mdi-refresh" :loading="agent.type === 'grokBot' ? grokBotScan.state.loading : agent.type === 'dsh' ? dshScanLoading : agentScan.loading" @click="refreshAgentScan(agent.type)">
+                      <v-btn size="small" variant="text" prepend-icon="mdi-refresh" :loading="agentScanLoading[agent.type]" @click="refreshAgentScan(agent.type)">
                         重新扫描
                       </v-btn>
                     </div>
                   </div>
+                  <v-alert v-if="agentScanErrors[agent.type]" type="warning" variant="tonal" density="compact">{{ agentScanErrors[agent.type] }}</v-alert>
                   <div class="dependency-list">
                     <div class="dependency-row">
                       <v-chip size="x-small" :color="agentScanFor(agent.type)?.installed ? 'success' : 'warning'" variant="tonal">
@@ -2123,677 +1401,7 @@ watch(() => gateway.value?.id, () => {
                   </v-dialog>
                 </div>
                 <!-- Codex -->
-                <template v-if="agent.type === 'codex'">
-                  <v-alert type="info" variant="tonal" density="compact" class="mb-2">
-                    实际消息只交给 Codex/ChatGPT Desktop 当前任务执行，因此桌面端会立即显示消息并沿用该任务的工具、模型与权限。Desktop 未启动或目标任务无法加载时会明确失败，不会启动备用 Runtime。
-                  </v-alert>
-                  <div class="catalog-param-grid">
-                    <v-combobox
-                      :model-value="gateway.agentModel"
-                      :items="codexModelItems"
-                      item-title="title"
-                      item-value="value"
-                      :return-object="false"
-                      label="主角色模型"
-                      hint="Desktop 可用时读取当前账号的模型目录；读取失败时仍可手动输入。留空则沿用目标任务自己的模型。"
-                      persistent-hint
-                      clearable
-                      data-no-i18n
-                      @update:model-value="selectCodexModel"
-                    >
-                      <template #item="{ props, item }">
-                        <v-list-item v-bind="props" :subtitle="item.raw.subtitle" />
-                      </template>
-                      <template #append-inner>
-                        <v-progress-circular v-if="agentScan.loading" size="16" width="2" indeterminate />
-                        <v-icon v-else icon="mdi-refresh" size="18" class="scan-btn" title="重新读取模型" @click.stop="runAgentScan" />
-                      </template>
-                    </v-combobox>
-                    <v-select
-                      v-model="gateway.agentReasoningEffort"
-                      :items="codexReasoningEffortItems"
-                      label="主角色推理强度"
-                      hint="与主角色模型一起应用到 Desktop 新轮次；留空时沿用 Desktop 当前设置。"
-                      persistent-hint
-                      clearable
-                      data-no-i18n
-                      @update:model-value="touch"
-                    />
-                    <v-combobox v-model="gateway.codexCwd" :items="agentProjectItems('codex')" label="工作目录" placeholder="留空，使用 RabiRoute 根目录" hint="用于同名任务的自动查找和新建；选择已有任务时会自动采用任务自己的目录" persistent-hint @update:model-value="touch">
-                    </v-combobox>
-                    <v-combobox :model-value="gateway.codexThreadId || gateway.codexThreadName" :items="codexSessionItems()" item-title="title" item-value="value" :return-object="false" label="会话名 + 最后会话时间" placeholder="选择已有会话，或输入新会话名" hint="每次读取 200 个 Desktop 任务且不显示 ID；可继续加载，输入名称后只查找，唯一匹配就绑定，没有匹配则在点击保存时创建" persistent-hint @update:model-value="selectCodexSession" @blur="lookupCodexThreadBinding">
-                      <template #append-inner>
-                        <v-progress-circular v-if="agentScan.loading || codexBinding.loading" size="16" width="2" indeterminate />
-                        <v-icon v-else-if="codexSessionItems().length === 0" icon="mdi-magnify" size="18" class="scan-btn" @click.stop="runAgentScan" title="扫描" />
-                      </template>
-                    </v-combobox>
-                    <v-btn
-                      v-if="agentScanFor('codex')?.sessionPage?.hasMore"
-                      size="small"
-                      variant="text"
-                      prepend-icon="mdi-chevron-down"
-                      :loading="agentScan.loading"
-                      @click="loadMoreCodexSessions"
-                    >
-                      加载更多 Desktop 任务
-                    </v-btn>
-                  </div>
-                  <div class="d-flex align-center ga-2 flex-wrap mt-2">
-                    <v-btn
-                      v-if="hasManagedAgentSessionBinding('codex')"
-                      color="primary"
-                      variant="tonal"
-                      prepend-icon="mdi-crosshairs-gps"
-                      :loading="managedAgentSessionAction.loading"
-                      :disabled="managedAgentSessionAction.loading"
-                      @click="openManagedAgentSession('codex')"
-                    >
-                      定位会话
-                    </v-btn>
-                    <v-btn
-                      v-else
-                      color="primary"
-                      variant="tonal"
-                      prepend-icon="mdi-account-sync-outline"
-                      :loading="managedAgentSessionAction.loading"
-                      :disabled="managedAgentSessionAction.loading"
-                      @click="initializeManagedAgentSession('codex')"
-                    >
-                      自动初始化会话
-                    </v-btn>
-                    <span class="section-note">已有完整 ID 和工作目录时可定位原 Desktop 任务；未绑定时可初始化会话。</span>
-                  </div>
-                  <v-alert v-if="managedAgentSessionAction.error" type="error" variant="tonal" density="compact" class="mt-2 mb-1">
-                    {{ managedAgentSessionAction.error }}
-                  </v-alert>
-                  <v-alert v-else-if="managedAgentSessionAction.message" type="success" variant="tonal" density="compact" class="mt-2 mb-1">
-                    {{ managedAgentSessionAction.message }}
-                  </v-alert>
-                  <v-alert v-if="codexBinding.error" type="warning" variant="tonal" density="compact" class="mt-2 mb-1">
-                    {{ codexBinding.error }}
-                  </v-alert>
-                  <v-alert v-else-if="codexBinding.pending" type="info" variant="tonal" density="compact" class="mt-2 mb-1">
-                    尚无同名 Desktop 会话；点击保存时会创建任务、写入完整 ID 并切换绑定。
-                  </v-alert>
-                  <template v-if="runtime.running !== undefined">
-                    <v-alert v-if="agentStateFor('codex').lastNotificationError" type="warning" variant="tonal" density="compact" class="mt-2 mb-1">
-                      {{ agentStateFor('codex').lastNotificationError }}
-                    </v-alert>
-                    <v-alert v-else-if="agentStateFor('codex').message" type="warning" variant="tonal" density="compact" class="mt-2 mb-1">
-                      {{ agentStateFor('codex').message }}
-                    </v-alert>
-                    <div class="status-row mt-1"><span>连接状态</span><b :class="agentStateFor('codex').monitorThreadId ? 'text-success' : 'text-warning'">{{ agentStateFor('codex').monitorThreadId ? '已绑定' : '未绑定' }}</b></div>
-                    <div class="status-row"><span>线程名</span><b>{{ agentStateFor('codex').monitorThreadName || "-" }}</b></div>
-                    <div class="status-row"><span>最后成功</span><b>{{ agentStateFor('codex').lastNotificationAt || "-" }}</b></div>
-                    <div class="status-row"><span>投递协议</span><b>{{ codexDeliveryChannelLabel(agentStateFor('codex')) }}</b></div>
-                    <div class="status-row"><span>桌面宿主</span><b>Codex/ChatGPT Desktop（必需）</b></div>
-                  </template>
-                </template>
-                <!-- Grok Bot -->
-                <template v-else-if="agent.type === 'grokBot'">
-                  <div class="section-note mb-3">先启动并登录 Grok Bot，登录状态会自动读取。</div>
-                  <div class="status-row mb-3">
-                    <span>登录资料目录</span>
-                    <code class="text-break">{{ agentScanFor('grokBot')?.profilePath || '等待 Grok Bot 启动' }}</code>
-                  </div>
-                  <v-autocomplete
-                    :model-value="gateway.grokBotAgentId || null"
-                    :items="grokBotPersonaPickerItems(grokBotScan.state.result)"
-                    item-title="title"
-                    item-value="value"
-                    :disabled="grokBotScan.state.loading || !agentScanFor('grokBot')?.auth?.loggedIn"
-                    label="主角色 Bot"
-                    hint="使用所选 Bot 的默认主会话。"
-                    persistent-hint
-                    clearable
-                    @update:model-value="selectGrokBotPersona"
-                  />
-                  <v-btn size="small" variant="tonal" prepend-icon="mdi-refresh" class="mt-2"
-                    :loading="grokBotScan.state.loading" @click="runGrokBotAgentScan">刷新 Grok Bot</v-btn>
-                  <v-alert v-if="grokBotScan.state.error || grokBotSelectionError" type="error" variant="tonal" density="compact" class="mt-2">
-                    {{ grokBotScan.state.error || grokBotSelectionError }}
-                  </v-alert>
-                  <v-alert v-else-if="grokBotScan.state.result?.auth?.loggedIn && !grokBotPersonaPickerItems(grokBotScan.state.result).length"
-                    type="info" variant="tonal" density="compact" class="mt-2">当前账号没有可选 Bot，请先在 Grok Bot 中创建。</v-alert>
-                </template>
-                <!-- Copilot CLI -->
-                <template v-else-if="agent.type === 'copilotCli'">
-                  <div class="catalog-param-grid">
-                    <v-combobox v-model="gateway.copilotCliBin" :items="agentScan.copilotBins" label="CLI 可执行路径" placeholder="copilot" hint="留空则使用 PATH 中的 copilot" persistent-hint @update:model-value="touch">
-                      <template #append-inner>
-                        <v-progress-circular v-if="agentScan.loading" size="16" width="2" indeterminate />
-                        <v-icon v-else-if="agentScan.copilotBins.length === 0" icon="mdi-magnify" size="18" class="scan-btn" @click.stop="runAgentScan" title="扫描" />
-                      </template>
-                    </v-combobox>
-                    <v-combobox v-model="gateway.copilotCwd" :items="agentProjectItems('copilotCli')" label="工作目录 (-C)" placeholder="留空则使用 RabiRoute 根目录" hint="copilot -C &lt;目录&gt;，影响会话分组" persistent-hint @update:model-value="touch">
-                      <template #append-inner>
-                        <v-progress-circular v-if="agentScan.loading" size="16" width="2" indeterminate />
-                        <v-icon v-else-if="agentProjectItems('copilotCli').length === 0" icon="mdi-magnify" size="18" class="scan-btn" @click.stop="runAgentScan" title="扫描" />
-                      </template>
-                    </v-combobox>
-                    <v-combobox v-model="gateway.copilotThreadName" :items="sessionNamesFor('copilotCli')" label="会话线程名" placeholder="Rabi" hint="Copilot CLI session 名称（--name 参数）" persistent-hint @update:model-value="selectCopilotSession">
-                      <template #append-inner>
-                        <v-progress-circular v-if="agentScan.loading" size="16" width="2" indeterminate />
-                        <v-icon v-else-if="sessionNamesFor('copilotCli').length === 0" icon="mdi-magnify" size="18" class="scan-btn" @click.stop="runAgentScan" title="扫描" />
-                      </template>
-                    </v-combobox>
-                  </div>
-                  <!-- 安装/登录操作区 -->
-                  <div class="agent-action-bar mt-2">
-                    <div class="agent-action-status">
-                      <span v-if="copilotStatus === null" class="section-note">检测中…</span>
-                      <template v-else>
-                        <v-chip size="x-small" :color="copilotStatus.installed ? 'success' : 'error'" variant="tonal" class="mr-1">
-                          {{ copilotStatus.installed ? '已安装' : '未安装' }}
-                        </v-chip>
-                        <v-chip size="x-small" :color="copilotStatus.loggedIn ? 'success' : 'warning'" variant="tonal">
-                          {{ copilotStatus.loggedIn ? '已登录' : '未登录' }}
-                        </v-chip>
-                      </template>
-                    </div>
-                    <div class="d-flex ga-2 flex-wrap">
-                      <v-btn v-if="copilotStatus && !copilotStatus.installed" size="small" variant="tonal" color="primary"
-                        :loading="copilotInstalling" prepend-icon="mdi-download" @click="installCopilotCli">
-                        安装 Copilot CLI
-                      </v-btn>
-                      <v-btn v-if="copilotStatus && copilotStatus.installed && !copilotStatus.loggedIn && !copilotLoginState.code"
-                        size="small" variant="tonal" color="secondary"
-                        :loading="copilotLoginState.loading" prepend-icon="mdi-login" @click="startCopilotLogin">
-                        登录
-                      </v-btn>
-                      <v-btn v-if="copilotStatus" size="small" variant="text" icon="mdi-refresh" @click="fetchCopilotStatus" title="刷新状态" />
-                    </div>
-                  </div>
-                  <!-- 登录 device code -->
-                  <v-alert v-if="copilotLoginState.code" type="info" variant="tonal" density="compact" class="mt-2">
-                    <div class="d-flex align-center justify-space-between flex-wrap ga-2">
-                      <div>
-                        在浏览器访问 <a :href="copilotLoginState.url ?? 'https://github.com/login/device'" target="_blank">github.com/login/device</a>，输入验证码：
-                        <strong class="ml-1" style="font-size:1.1em;letter-spacing:2px">{{ copilotLoginState.code }}</strong>
-                      </div>
-                      <v-chip size="small" color="info" variant="tonal">等待授权…</v-chip>
-                    </div>
-                  </v-alert>
-                  <v-alert v-if="copilotLoginState.done" type="success" variant="tonal" density="compact" class="mt-2">登录成功</v-alert>
-                  <v-alert v-if="copilotLoginState.error" type="error" variant="tonal" density="compact" class="mt-2">{{ copilotLoginState.error }}</v-alert>
-                  <!-- 运行时诊断 -->
-                  <template v-if="runtime.running !== undefined">
-                    <div class="mt-2">
-                      <template v-if="agentStateFor('copilotCli').lastNotificationError">
-                        <v-alert type="warning" variant="tonal" density="compact" class="mb-1">
-                          {{ agentStateFor('copilotCli').lastNotificationError }}
-                        </v-alert>
-                      </template>
-                      <div class="status-row"><span>最后成功</span><b>{{ agentStateFor('copilotCli').lastNotificationAt || "-" }}</b></div>
-                      <div class="status-row"><span>来源</span><b>{{ agentStateFor('copilotCli').monitorThreadSource || "-" }}</b></div>
-                      <div class="status-row"><span>状态文件</span><b>{{ agentStateFor('copilotCli').statePath || "-" }}</b></div>
-                    </div>
-                  </template>
-                </template>
-                <!-- Marvis -->
-                <template v-else-if="agent.type === 'marvis'">
-                  <v-alert type="info" variant="tonal" density="compact" class="mb-2">
-                    当前 Marvis 适配器不会列出会话，也不会创建或复用线程；它只负责打开目标 App 并把 prompt 放到剪贴板。
-                  </v-alert>
-                  <div class="catalog-param-grid">
-                    <v-combobox v-model="gateway.marvisAppId" :items="agentScan.marvisAppIds" label="应用 ID" placeholder="Tencent.Marvis" hint="留空使用默认 Tencent.Marvis" persistent-hint @update:model-value="touch">
-                      <template #append-inner>
-                        <v-progress-circular v-if="agentScan.loading" size="16" width="2" indeterminate />
-                        <v-icon v-else-if="agentScan.marvisAppIds.length === 0" icon="mdi-magnify" size="18" class="scan-btn" @click.stop="runAgentScan" title="扫描" />
-                      </template>
-                    </v-combobox>
-                  </div>
-                  <div class="agent-action-bar mt-2">
-                    <div class="agent-action-status">
-                      <span class="section-note">可先打开 Marvis 确认桌面端可用；真正消息会在路由触发时复制为 prompt。</span>
-                    </div>
-                    <div class="d-flex ga-2 flex-wrap">
-                      <v-btn
-                        size="small"
-                        variant="tonal"
-                        color="primary"
-                        prepend-icon="mdi-open-in-app"
-                        :loading="openingMarvis"
-                        :disabled="openingMarvis"
-                        @click="openMarvis"
-                      >
-                        打开 Marvis
-                      </v-btn>
-                      <v-btn size="small" variant="text" prepend-icon="mdi-refresh" :loading="agentScan.loading" @click="runAgentScan">
-                        重新扫描
-                      </v-btn>
-                    </div>
-                  </div>
-                  <v-alert
-                    v-if="marvisOpenResult"
-                    :type="marvisOpenResult.ok ? 'success' : 'error'"
-                    variant="tonal"
-                    density="compact"
-                    class="mt-2"
-                  >
-                    {{ marvisOpenResult.message }}
-                  </v-alert>
-                </template>
-                <template v-else-if="agent.type === 'dsh'">
-                  <v-alert type="info" variant="tonal" density="compact" class="mb-2">
-                    RabiRoute 通过 DSH apiproxy 发现、创建、重命名、绑定和续投会话。实际消息由同一个 DSH session owner 执行；失败时不会改投 Codex。
-                  </v-alert>
-                  <DshConnectionPanel :base-url="gateway.dshBaseUrl" @update:base-url="gateway.dshBaseUrl = $event; touch()" />
-                  <div class="catalog-param-grid">
-                    <v-combobox
-                      v-model="gateway.dshAgentPreset"
-                      :items="agentScanFor('dsh')?.agentPresets?.filter(preset => !preset.broken).map(preset => ({ title: preset.name || preset.id, value: preset.id })) ?? []"
-                      item-title="title"
-                      item-value="value"
-                      :return-object="false"
-                      label="会话模式"
-                      hint="保存时同步到 DSH。已有对话的会话不能切换模式，请选择新会话；留空沿用当前模式。"
-                      persistent-hint
-                      clearable
-                      @update:model-value="touch"
-                    />
-                    <v-combobox
-                      v-model="gateway.dshBaseUrl"
-                      :items="agentScanFor('dsh')?.endpoints?.map(endpoint => endpoint.url) ?? []"
-                      label="DSH 地址"
-                      hint="留空时按本机 DSH 启动日志自动发现；写死的默认端口不是安装状态。修改地址后请重新验证连接，再扫描会话。"
-                      persistent-hint
-                      data-no-i18n
-                      @update:model-value="touch"
-                    >
-                      <template #append-inner>
-                        <v-progress-circular v-if="dshScanLoading" size="16" width="2" indeterminate />
-                        <v-icon v-else icon="mdi-refresh" size="18" class="scan-btn" title="按当前地址扫描" @click.stop="runDshAgentScan" />
-                      </template>
-                    </v-combobox>
-                    <v-combobox
-                      :model-value="configuredDshModelValue"
-                      :items="dshModelItems"
-                      item-title="title"
-                      item-value="value"
-                      :return-object="false"
-                      label="主角色模型"
-                      placeholder="provider/model"
-                      hint="DSH 可用时读取模型目录；读取失败时可手动输入 provider/model。配置会在主角色下一次投递前应用到绑定会话。"
-                      persistent-hint
-                      clearable
-                      data-no-i18n
-                      @update:model-value="selectDshModel"
-                    >
-                      <template #item="{ props, item }">
-                        <v-list-item v-bind="props" :subtitle="item.raw.subtitle" />
-                      </template>
-                      <template #append-inner>
-                        <v-progress-circular v-if="dshScanLoading" size="16" width="2" indeterminate />
-                        <v-icon v-else icon="mdi-refresh" size="18" class="scan-btn" title="重新读取模型" @click.stop="runDshAgentScan" />
-                      </template>
-                    </v-combobox>
-                    <v-combobox
-                      v-model="gateway.dshReasoningEffort"
-                      :items="dshReasoningEffortItems"
-                      label="主角色推理强度"
-                      hint="优先显示所选 DSH 模型支持的值；目录不可用时可以手动输入。留空则沿用模型或 DSH 当前默认值。"
-                      persistent-hint
-                      clearable
-                      data-no-i18n
-                      @update:model-value="touch"
-                    />
-                    <v-combobox
-                      v-model="gateway.dshCwd"
-                      :items="agentProjectItems('dsh')"
-                      label="工作目录"
-                      placeholder="C:/Path/To/Project"
-                      hint="用于同名会话消歧和新建；选择已有会话时自动采用会话目录"
-                      persistent-hint
-                      @update:model-value="touch"
-                    >
-                      <template #append-inner>
-                        <v-progress-circular v-if="dshScanLoading" size="16" width="2" indeterminate />
-                        <v-icon v-else-if="agentProjectItems('dsh').length === 0" icon="mdi-magnify" size="18" class="scan-btn" title="扫描" @click.stop="runDshAgentScan" />
-                      </template>
-                    </v-combobox>
-                    <v-combobox
-                      :model-value="gateway.dshSessionId || gateway.dshSessionName"
-                      :items="dshSessionItems()"
-                      item-title="title"
-                      item-value="value"
-                      :return-object="false"
-                      label="DSH 会话"
-                      placeholder="选择已有会话，或输入新会话名"
-                      hint="选择后保存完整 ID、名称和工作目录；输入新名称会清空旧 ID，保存时查找或只创建一次"
-                      persistent-hint
-                      @update:model-value="selectDshSession"
-                    >
-                      <template #item="{ props, item }">
-                        <v-list-item v-bind="props" :subtitle="item.raw.subtitle" />
-                      </template>
-                      <template #append-inner>
-                        <v-progress-circular v-if="dshScanLoading" size="16" width="2" indeterminate />
-                        <v-icon v-else-if="dshSessionItems().length === 0" icon="mdi-magnify" size="18" class="scan-btn" title="扫描" @click.stop="runDshAgentScan" />
-                      </template>
-                    </v-combobox>
-                    <v-btn
-                      v-if="agentScanFor('dsh')?.sessionPage?.hasMore"
-                      size="small"
-                      variant="text"
-                      prepend-icon="mdi-chevron-down"
-                      :loading="dshScanLoading"
-                      @click="loadMoreDshSessions"
-                    >
-                      加载更多 DSH 会话
-                    </v-btn>
-                  </div>
-                  <div class="d-flex align-center ga-2 flex-wrap mt-2">
-                    <v-btn
-                      v-if="hasManagedAgentSessionBinding('dsh')"
-                      color="primary"
-                      variant="tonal"
-                      prepend-icon="mdi-crosshairs-gps"
-                      :loading="managedAgentSessionAction.loading"
-                      :disabled="managedAgentSessionAction.loading"
-                      @click="openManagedAgentSession('dsh')"
-                    >
-                      定位会话
-                    </v-btn>
-                    <v-btn
-                      v-else
-                      color="primary"
-                      variant="tonal"
-                      prepend-icon="mdi-account-sync-outline"
-                      :loading="managedAgentSessionAction.loading"
-                      :disabled="managedAgentSessionAction.loading"
-                      @click="initializeManagedAgentSession('dsh')"
-                    >
-                      自动初始化会话
-                    </v-btn>
-                    <span class="section-note">已有完整 ID 和工作目录时可定位原 DSH 会话；未绑定时可初始化会话。</span>
-                  </div>
-                  <v-alert v-if="managedAgentSessionAction.error" type="error" variant="tonal" density="compact" class="mt-2 mb-1">
-                    {{ managedAgentSessionAction.error }}
-                  </v-alert>
-                  <v-alert v-else-if="managedAgentSessionAction.message" type="success" variant="tonal" density="compact" class="mt-2 mb-1">
-                    {{ managedAgentSessionAction.message }}
-                  </v-alert>
-                  <div class="mt-2">
-                    <div class="status-row">
-                      <span>会话发现</span>
-                      <b :class="dshSessionItems().length ? 'text-success' : 'text-warning'">{{ dshSessionItems().length ? `可选 ${dshSessionItems().length} 个` : '未读取到会话' }}</b>
-                    </div>
-                    <div class="status-row">
-                      <span>项目发现</span>
-                      <b :class="agentProjectItems('dsh').length ? 'text-success' : 'text-warning'">{{ agentProjectItems('dsh').length ? `可选 ${agentProjectItems('dsh').length} 个` : '未读取到项目目录' }}</b>
-                    </div>
-                    <div class="status-row">
-                      <span>投递协议</span>
-                      <b>session.prompt · mode=queue</b>
-                    </div>
-                  </div>
-                </template>
-                <template v-else-if="agent.type === 'workbuddy'">
-                  <v-alert type="info" variant="tonal" density="compact" class="mb-2">
-                    RabiRoute 通过会话网关投递到本机 WorkBuddy 的<b>已有任务</b>：任务 ID 就是路由键，同一任务续投不会新建任务，消息由该任务的 WorkBuddy owner 执行。
-                  </v-alert>
-                  <v-alert type="warning" variant="tonal" density="compact" class="mb-2">
-                    需要一次性录入本机网关凭据（<code>data/workbuddy-auth.json</code>）。凭据缺失、任务所属进程已退出或任务 ID 已归档时会明确失败，不会改投其它 Agent。
-                  </v-alert>
-                  <div class="catalog-param-grid">
-                    <v-combobox
-                      :model-value="gateway.workbuddySessionId || gateway.workbuddySessionName"
-                      :items="workbuddySessionItems()"
-                      item-title="title"
-                      item-value="value"
-                      :return-object="false"
-                      label="WorkBuddy 任务"
-                      placeholder="选择已有任务，或输入任务名称"
-                      hint="选择后保存完整任务 ID、名称和工作目录；同一任务续投不会新建任务"
-                      persistent-hint
-                      @update:model-value="selectWorkbuddySession"
-                    >
-                      <template #item="{ props, item }">
-                        <v-list-item v-bind="props" :subtitle="item.raw.subtitle" />
-                      </template>
-                      <template #append-inner>
-                        <v-progress-circular v-if="agentScan.loading" size="16" width="2" indeterminate />
-                        <v-icon v-else icon="mdi-refresh" size="18" class="scan-btn" title="重新扫描任务" @click.stop="runAgentScan" />
-                      </template>
-                    </v-combobox>
-                    <v-text-field
-                      v-model="gateway.workbuddySessionName"
-                      label="任务名称"
-                      hint="用于界面显示；任务 ID 为空时按名称查找"
-                      persistent-hint
-                      @update:model-value="touch"
-                    />
-                    <v-combobox
-                      v-model="gateway.workbuddyCwd"
-                      :items="agentProjectItems('workbuddy')"
-                      label="工作目录"
-                      placeholder="C:/Path/To/Project"
-                      hint="用于消歧同名任务；选择已有任务时自动采用任务目录"
-                      persistent-hint
-                      @update:model-value="touch"
-                    >
-                      <template #append-inner>
-                        <v-progress-circular v-if="agentScan.loading" size="16" width="2" indeterminate />
-                        <v-icon v-else-if="agentProjectItems('workbuddy').length === 0" icon="mdi-magnify" size="18" class="scan-btn" title="扫描" @click.stop="runAgentScan" />
-                      </template>
-                    </v-combobox>
-                    <v-text-field
-                      v-model="gateway.workbuddyEndpoint"
-                      label="上次网关地址"
-                      placeholder="http://127.0.0.1:0000"
-                      hint="留空则从存活会话实时发现；端口每次启动都会变，不建议长期固定"
-                      persistent-hint
-                      data-no-i18n
-                      @update:model-value="touch"
-                    />
-                  </div>
-                  <div class="mt-2">
-                    <div class="status-row">
-                      <span>WorkBuddy 连接</span>
-                      <b :class="`text-${agentConnectionColor('workbuddy')}`">{{ agentConnectionLabel('workbuddy') }}</b>
-                    </div>
-                    <div class="status-row">
-                      <span>任务发现</span>
-                      <b :class="workbuddySessionItems().length ? 'text-success' : 'text-warning'">{{ workbuddySessionItems().length ? `可选 ${workbuddySessionItems().length} 个` : '未读取到任务' }}</b>
-                    </div>
-                    <div class="status-row">
-                      <span>投递协议</span>
-                      <b>会话网关 · 同 ID 续投</b>
-                    </div>
-                  </div>
-                </template>
-                <template v-else-if="agent.type === 'antigravity'">
-                  <v-alert type="info" variant="tonal" density="compact" class="mb-2">
-                    RabiRoute 通过 Antigravity 官方 <code>agy agentapi</code> 投递到本机<b>已有会话</b>：会话 ID 就是路由键，同一会话续投不会新建会话。
-                  </v-alert>
-                  <v-alert type="warning" variant="tonal" density="compact" class="mb-2">
-                    需要 Antigravity 桌面正在运行：language server 端口按进程动态发现，CSRF 令牌从桌面启动日志读取，均无需手工填写。会话 ID 留空时每次投递都会新开会话。
-                  </v-alert>
-                  <div class="catalog-param-grid">
-                    <v-combobox
-                      :model-value="gateway.antigravityConversationId || gateway.antigravityConversationName"
-                      :items="antigravitySessionItems()"
-                      item-title="title"
-                      item-value="value"
-                      :return-object="false"
-                      label="Antigravity 会话"
-                      placeholder="选择已有会话，或输入会话名称"
-                      hint="选择后保存完整会话 ID 和名称；同一会话续投不会新建会话"
-                      persistent-hint
-                      @update:model-value="selectAntigravitySession"
-                    >
-                      <template #item="{ props, item }">
-                        <v-list-item v-bind="props" :subtitle="item.raw.subtitle" />
-                      </template>
-                      <template #append-inner>
-                        <v-progress-circular v-if="agentScan.loading" size="16" width="2" indeterminate />
-                        <v-icon v-else icon="mdi-refresh" size="18" class="scan-btn" title="重新扫描会话" @click.stop="runAgentScan" />
-                      </template>
-                    </v-combobox>
-                    <v-text-field
-                      v-model="gateway.antigravityConversationName"
-                      label="会话名称"
-                      hint="用于界面显示；会话 ID 为空时按名称查找"
-                      persistent-hint
-                      @update:model-value="touch"
-                    />
-                    <v-combobox
-                      v-model="gateway.antigravityCwd"
-                      :items="agentProjectItems('antigravity')"
-                      label="工作目录"
-                      placeholder="C:/Path/To/Project"
-                      hint="用于消歧同名会话；选择已有会话时自动采用会话目录"
-                      persistent-hint
-                      @update:model-value="touch"
-                    >
-                      <template #append-inner>
-                        <v-progress-circular v-if="agentScan.loading" size="16" width="2" indeterminate />
-                        <v-icon v-else-if="agentProjectItems('antigravity').length === 0" icon="mdi-magnify" size="18" class="scan-btn" title="扫描" @click.stop="runAgentScan" />
-                      </template>
-                    </v-combobox>
-                  </div>
-                  <div class="mt-2">
-                    <div class="status-row">
-                      <span>Antigravity 连接</span>
-                      <b :class="`text-${agentConnectionColor('antigravity')}`">{{ agentConnectionLabel('antigravity') }}</b>
-                    </div>
-                    <div class="status-row">
-                      <span>会话发现</span>
-                      <b :class="antigravitySessionItems().length ? 'text-success' : 'text-warning'">{{ antigravitySessionItems().length ? `可选 ${antigravitySessionItems().length} 个` : '未读取到 Antigravity 会话' }}</b>
-                    </div>
-                    <div class="status-row">
-                      <span>投递协议</span>
-                      <b>agy agentapi · 同 ID 续投</b>
-                    </div>
-                  </div>
-                </template>
-                <template v-else-if="agent.type === 'astrbot'">
-                  <v-alert type="info" variant="tonal" density="compact" class="mb-2">
-                    AstrBot 必须绑定 ChatUI 项目和会话；消息只通过 /api/chat/send 投递。
-                  </v-alert>
-                  <div class="catalog-param-grid">
-                    <v-combobox
-                      v-model="gateway.astrbotUrl"
-                      :items="agentScanFor('astrbot')?.endpoints?.map(endpoint => endpoint.url) ?? []"
-                      label="AstrBot 地址"
-                      placeholder="http://127.0.0.1:6185"
-                      hint="AstrBot ChatUI 地址；消息只通过 /api/chat/send 投递"
-                      persistent-hint
-                      @update:model-value="touch"
-                    >
-                    </v-combobox>
-                    <v-text-field
-                      v-model="gateway.astrbotUsername"
-                      label="AstrBot 用户名"
-                      placeholder="留空使用环境变量 ASTRBOT_USERNAME"
-                      hint="不填则默认沿用适配器默认用户名"
-                      persistent-hint
-                      @update:model-value="touch"
-                    />
-                    <v-text-field
-                      v-model="gateway.astrbotPassword"
-                      type="password"
-                      label="AstrBot 密码"
-                      placeholder="留空则使用环境变量 ASTRBOT_PASSWORD"
-                      hint="仅写入本地 route 配置；也可用私有环境变量提供"
-                      persistent-hint
-                      @update:model-value="touch"
-                    />
-                    <v-select
-                      v-model="gateway.astrbotProjectId"
-                      :items="astrbotProjectItems()"
-                      item-title="title"
-                      item-value="value"
-                      label="AstrBot 项目"
-                      placeholder="可选：先选项目再筛选会话"
-                      hint="来自 AstrBot ChatUI 项目列表；没有项目也可以直接选会话"
-                      persistent-hint
-                      clearable
-                      @update:model-value="selectAstrbotProject"
-                    >
-                      <template #append-inner>
-                        <v-progress-circular v-if="agentScan.loading" size="16" width="2" indeterminate />
-                        <v-icon v-else icon="mdi-refresh" size="18" class="scan-btn" title="重新扫描" @click.stop="runAgentScan" />
-                      </template>
-                    </v-select>
-                    <v-select
-                      v-model="gateway.astrbotSessionId"
-                      :items="astrbotSessionItems()"
-                      item-title="title"
-                      item-value="value"
-                      label="AstrBot 会话"
-                      placeholder="选择一个 ChatUI 会话"
-                      hint="选择后消息通过 /api/chat/send 投递；未选择时不可用"
-                      persistent-hint
-                      clearable
-                      @update:model-value="selectAstrbotSession"
-                    >
-                      <template #item="{ props, item }">
-                        <v-list-item v-bind="props" :subtitle="item.raw.subtitle" />
-                      </template>
-                      <template #append-inner>
-                        <v-progress-circular v-if="agentScan.loading" size="16" width="2" indeterminate />
-                        <v-icon v-else icon="mdi-refresh" size="18" class="scan-btn" title="重新扫描" @click.stop="runAgentScan" />
-                      </template>
-                    </v-select>
-                  </div>
-                  <div class="mt-2">
-                    <div
-                      v-for="endpoint in agentScanFor('astrbot')?.endpoints ?? []"
-                      :key="endpoint.url"
-                      class="status-row"
-                    >
-                      <span>{{ endpoint.label }}</span>
-                      <b :class="endpoint.healthy ? 'text-success' : 'text-warning'">{{ endpoint.url }} · {{ endpoint.healthy ? "可访问" : "未响应" }}</b>
-                    </div>
-                    <div class="status-row">
-                      <span>鉴权</span>
-                      <b :class="agentScanFor('astrbot')?.auth?.loggedIn ? 'text-success' : 'text-warning'">
-                        {{ agentScanFor('astrbot')?.auth?.message || "-" }}
-                      </b>
-                    </div>
-                    <div class="status-row">
-                      <span>ChatUI 会话</span>
-                      <b :class="astrbotSessionItems().length ? 'text-success' : 'text-warning'">
-                        {{ astrbotSessionItems().length ? `可选 ${astrbotSessionItems().length} 个` : "未读取到会话" }}
-                      </b>
-                    </div>
-                    <div
-                      v-for="plugin in agentScanFor('astrbot')?.plugins ?? []"
-                      :key="plugin.id"
-                      class="status-row"
-                    >
-                      <span>{{ plugin.name }}</span>
-                      <b :class="plugin.installed ? 'text-success' : 'text-warning'">{{ plugin.installed ? "已安装" : "未安装" }}</b>
-                    </div>
-                  </div>
-                  <div class="agent-action-bar mt-2">
-                    <div class="agent-action-status">
-                      <span class="section-note">用当前填写的地址、用户名和密码请求 AstrBot 登录接口。</span>
-                    </div>
-                    <v-btn
-                      size="small"
-                      variant="tonal"
-                      color="secondary"
-                      prepend-icon="mdi-login-variant"
-                      :loading="testingAstrbotLogin"
-                      :disabled="testingAstrbotLogin"
-                      @click="testAstrbotLogin"
-                    >
-                      验证登录
-                    </v-btn>
-                  </div>
-                  <v-alert
-                    v-if="astrbotLoginResult"
-                    :type="astrbotLoginResult.ok ? 'success' : 'error'"
-                    variant="tonal"
-                    density="compact"
-                    class="mt-2"
-                  >
-                    {{ astrbotLoginResult.message }}
-                  </v-alert>
-                </template>
+                <AgentAdapterCardHost :renderer="agent.renderer" :context="agentCardContext(agent.type)" />
                   <div v-if="primaryLocalAgentType === agent.type && supportsManagedTaskFeature(agent.type, 'memoryConsolidationAgent')" class="dependency-panel mt-3">
                     <div class="section-title-row compact-row">
                       <div>
@@ -2897,7 +1505,7 @@ watch(() => gateway.value?.id, () => {
           </div>
 
           <div v-for="target in remoteAgentItems" :key="target.id" class="catalog-item">
-            <div class="catalog-row active" @click="remoteAgentParamOpen[target.id] = !remoteAgentParamOpen[target.id]">
+            <div class="catalog-row active" @click="toggleRemoteAgentParams(target.id)">
               <v-icon class="catalog-row-icon" color="secondary">mdi-monitor-dashboard</v-icon>
               <span class="catalog-row-main">
                 <strong>{{ target.title }}</strong>
@@ -2905,18 +1513,21 @@ watch(() => gateway.value?.id, () => {
               </span>
               <div class="catalog-row-actions">
                 <v-chip size="x-small" :color="target.provider !== 'deviceAgent' && target.instance?.connected && target.agent ? 'success' : 'warning'" variant="tonal">{{ target.provider === 'deviceAgent' ? '实验设备' : target.instance?.connected && target.agent ? '实例在线' : '暂不可用' }}</v-chip>
-                <v-btn :icon="remoteAgentParamOpen[target.id] ? 'mdi-chevron-up' : 'mdi-chevron-down'" size="small" variant="text" :title="remoteAgentParamOpen[target.id] ? '收起参数' : '展开参数'" @click.stop="remoteAgentParamOpen[target.id] = !remoteAgentParamOpen[target.id]" />
+                <v-btn :icon="remoteAgentParamOpen[target.id] ? 'mdi-chevron-up' : 'mdi-chevron-down'" size="small" variant="text" :title="remoteAgentParamOpen[target.id] ? '收起参数' : '展开参数'" @click.stop="toggleRemoteAgentParams(target.id)" />
                 <v-btn icon="mdi-close" size="small" variant="text" color="error" title="从此路线移除远端 Agent" @click.stop="removeRemoteAgent(target.id)" />
               </div>
             </div>
             <v-expand-transition>
-              <div v-if="remoteAgentParamOpen[target.id]" class="catalog-param-panel">
-                <v-alert v-if="target.provider === 'deviceAgent'" type="warning" variant="tonal">实验设备 Agent：角色在设备设置中绑定，模型和语音由设备宿主提供。设备未完成加载时消息保留原投递身份等待，不会改投电脑模型。真机唤醒与执行需另行验收。</v-alert>
+              <div v-if="remoteAgentCardOpened[target.id] || remoteAgentParamOpen[target.id]" v-show="remoteAgentParamOpen[target.id]" class="catalog-param-panel">
+                <v-alert v-for="(diagnostic, index) in target.diagnostics" :key="`${diagnostic.source}:${index}`" type="warning" variant="tonal" density="compact" class="mb-2">
+                  <strong>{{ directoryDiagnosticTitle(diagnostic) }}</strong>：{{ userFacingError({ message: diagnostic.message }) }}
+                </v-alert>
+                <AgentAdapterCardHost v-if="target.provider === 'deviceAgent'" :renderer="agentDefs.find(item => item.type === target.provider)?.renderer" :context="agentCardContext(target.provider, target.id)" />
                 <PeerRouteAgentSettings v-else-if="target.ownerDeviceId" :key="`${gateway.id}:${target.id}`" :target="target" :agent="target.agent" :connected="!!target.instance?.connected" @selected="session => { selectPeerRouteSession(gateway, target.id, session); touch(); }" />
                 <InstanceAgentSettings v-else-if="target.instance && target.agent" :key="target.id" :instance="target.instance" :agent="target.agent" @saved="refreshLanAgentNodes" />
                 <v-alert v-else type="warning" variant="tonal">此远端 Agent 暂不可用，配置仍然保留，不会改投本机。请刷新实例列表。</v-alert>
                 <v-btn class="mt-2" size="small" variant="text" prepend-icon="mdi-refresh" :loading="lanAgentLoading" @click="refreshLanAgentNodes">刷新实例列表</v-btn>
-                <PrimaryAgentAdvancedSettings v-if="gateway.primaryAgentTarget === target.id && target.provider !== 'deviceAgent'" :gateway="gateway" :provider="target.provider" :target-title="target.title" :error="codexPlanAssistants.error" :notice="codexPlanAssistants.message" @change="touch">
+                <PrimaryAgentAdvancedSettings v-if="gateway.primaryAgentTarget === target.id && target.provider !== 'deviceAgent'" :gateway="gateway" :provider="target.provider" :target-title="target.title" :capabilities="agentDefs.find(item => item.type === target.provider)?.manifest.capabilities || {}" :error="codexPlanAssistants.error" :notice="codexPlanAssistants.message" @change="touch">
                   <template #plan-actions>
                     <div v-if="gateway.codexPlanAssistantEnabled" class="catalog-param-grid">
                       <v-text-field v-model.number="codexPlanAssistants.count" type="number" :min="1" :max="8" label="协助会话数量" />
@@ -2929,7 +1540,6 @@ watch(() => gateway.value?.id, () => {
             </v-expand-transition>
           </div>
           <v-alert v-if="primaryAgentItems.length && !primaryAgent" type="warning" variant="tonal">尚未选择主控 Agent。请选择并保存后再投递消息。</v-alert>
-          <v-alert v-if="lanAgentError" type="warning" variant="tonal">{{ lanAgentError }}</v-alert>
           <div v-if="visibleAgentItems.length === 0 && remoteAgentItems.length === 0" class="empty-state compact-empty">
             <div>
               <strong>尚未添加任何 Agent 端</strong>
@@ -2939,14 +1549,14 @@ watch(() => gateway.value?.id, () => {
         </div>
 
         <div class="adapter-add-row">
-          <v-menu v-model="addAgentMenu" location="bottom start">
+          <v-menu v-model="addAgentMenu" location="bottom start" :close-on-content-click="false">
             <template #activator="{ props }">
               <v-btn
                 v-bind="props"
                 prepend-icon="mdi-plus"
                 variant="tonal"
                 size="small"
-                :disabled="availableAgentsToAdd.length === 0"
+                :aria-label="translateText('添加 Agent')"
               >
                 添加 Agent
               </v-btn>
@@ -2958,6 +1568,17 @@ watch(() => gateway.value?.id, () => {
                 :title="agent.title"
                 @click="addAgent(agent.type, agent.nodeId, agent.agentId, agent.ownerDeviceId)"
               />
+              <v-list-item v-if="availableAgentsToAdd.length === 0" :title="translateText('暂无可添加的 Agent')" disabled />
+              <v-divider />
+              <div class="pa-3">
+                <details v-if="agentDiscoveryDiagnostics.length" class="mb-2">
+                  <summary>{{ translateText('发现诊断') }} ({{ agentDiscoveryDiagnostics.length }})</summary>
+                  <v-alert v-for="(diagnostic, index) in agentDiscoveryDiagnostics" :key="`${diagnostic.source}:${diagnostic.ownerDeviceId || ''}:${index}`" type="warning" variant="tonal" density="compact" class="mt-2">
+                    <strong>{{ directoryDiagnosticTitle(diagnostic) }}</strong>：{{ userFacingError({ message: diagnostic.message }) }}
+                  </v-alert>
+                </details>
+                <v-btn size="small" variant="text" prepend-icon="mdi-refresh" :loading="lanAgentLoading" @click="refreshLanAgentNodes">刷新实例列表</v-btn>
+              </div>
             </v-list>
           </v-menu>
         </div>

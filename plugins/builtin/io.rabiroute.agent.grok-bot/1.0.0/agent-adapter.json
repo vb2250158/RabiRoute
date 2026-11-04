@@ -1,0 +1,26 @@
+{
+  "type": "grokBot",
+  "capability": "agent.adapter.grok-bot@1",
+  "manifest": {
+    "type": "grokBot",
+    "label": "Grok Bot",
+    "maturity": "experimental",
+    "transport": {
+      "protocol": "http",
+      "mode": "grok-bot-owner"
+    },
+    "host": {
+      "name": "Grok Bot cloud owner",
+      "required": true
+    },
+    "capabilities": {
+      "managedTasks": {
+        "agentThreads": true
+      }
+    }
+  },
+  "sessionBinding": {
+    "sessionId": "grokBotSessionId",
+    "sessionName": "grokBotSessionName"
+  }
+}

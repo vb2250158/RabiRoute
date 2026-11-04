@@ -8,8 +8,16 @@ import { qqReadSettings } from "../shared/qqReadSettings.js";
 // Wire capacity; the owner applies the configured quota before reading.
 export const QQ_MEDIA_MAX_BYTES = bufferConstants.MAX_LENGTH;
 export type QqMessage = { message_id: string | number; message_type: string; group_id?: string | number; user_id?: string | number;
+  self_id?: string | number; post_type?: string;
   time?: number; sender?: { user_id?: string | number; nickname?: string; card?: string }; message: unknown; raw_message?: string };
 export type QqMedia = { kind: string; name: string; file?: string; url?: string };
+/** Optional native seconds: keep numeric legacy strings, leave absent or malformed time unknown. */
+export function qqMessageTimestamp(value: unknown): number | undefined {
+  if (typeof value !== "number" && (typeof value !== "string" || !value.trim())) return undefined;
+  const time = Number(value);
+  return Number.isFinite(time) ? time : undefined;
+}
+
 export class QqReadError extends Error {
   constructor(public readonly status: number, public readonly code: string, detail?: string) { super(detail ? `${code}: ${detail}` : code); }
 }
@@ -57,11 +65,34 @@ export async function qqRead(endpoint: NapCatEndpoint, action: "get_msg" | "get_
   }
 }
 
-export function qqMessageMatches(value: unknown, kind: string, target: string): value is QqMessage {
-  if (!value || typeof value !== "object") return false;
+function qqIdentityText(value: unknown): string | undefined {
+  return typeof value === "string" || typeof value === "number" ? String(value) : undefined;
+}
+
+export function qqMessageHasId(value: unknown, messageId: string): value is QqMessage {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value)
+    && qqIdentityText((value as QqMessage).message_id) === messageId);
+}
+
+/** NapCat omits the recipient on self-sent private messages; get_msg alone cannot prove their peer. */
+export function qqPrivateMessageNeedsHistory(value: unknown): value is QqMessage {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const row = value as QqMessage;
-  return row.message_type === kind && String(kind === "group" ? row.group_id : row.user_id) === target
-    && /^-?\d{1,20}$/.test(String(row.message_id));
+  const selfId = qqIdentityText(row.self_id);
+  return row.message_type === "private" && row.post_type === "message_sent"
+    && selfId !== undefined && /^[1-9]\d{0,15}$/.test(selfId) && qqIdentityText(row.user_id) === selfId
+    && qqIdentityText(row.sender?.user_id) === selfId;
+}
+
+export function qqMessageMatches(value: unknown, kind: string, target: string, source: "message" | "history" = "message"): value is QqMessage {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const row = value as QqMessage;
+  const selfId = qqIdentityText(row.self_id), messageId = qqIdentityText(row.message_id);
+  const selfSender = selfId !== undefined && /^[1-9]\d{0,15}$/.test(selfId) && qqIdentityText(row.user_id) === selfId;
+  const matchesTarget = kind === "private" && (row.post_type === "message_sent" || selfSender)
+    ? source === "history" && qqPrivateMessageNeedsHistory(row) : qqIdentityText(kind === "group" ? row.group_id : row.user_id) === target;
+  return row.message_type === kind && matchesTarget
+    && messageId !== undefined && /^-?\d{1,20}$/.test(messageId);
 }
 
 /** Video thumbnails are deliberately excluded: only actual message media is downloadable. */

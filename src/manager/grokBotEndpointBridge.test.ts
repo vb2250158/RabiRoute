@@ -229,24 +229,43 @@ test("common service ledger persists group identity options and recovers without
   assert.equal(saved.executionOptionsHash, endpointExecutionOptionsHash(saved.executionOptions));
 });
 
-test("service endpoint uses the native canonical owner and context principal instead of body authority", async () => {
+test("service source attribution never reads a roster or requires a registered source session", async () => {
   const f = fixture();
+  const profileStatus = f.client.profileStatus;
+  let sourceReads = 0;
+  f.client.profileStatus = async () => { sourceReads++; throw new Error("source metadata service unavailable"); };
   const source = (await f.bridge.resolveSource(f.request))!;
   assert.equal(source.threadId, f.id);
-  assert.equal(source.threadName, "Native Bot A");
+  assert.equal(source.threadName, "Declared display name");
   assert.equal(source.workspace, undefined);
   assert.equal(source.endpoint?.kind, "service");
   assert.equal(source.endpoint?.agentId, "bot-a");
   assert.equal(source.endpoint?.provider, "grokBot");
   const principal = { provider: "grokBot" as const, agentId: "bot-a", sessionId: f.id, authorizationIncarnation: source.endpoint!.authorizationIncarnation };
   assert.equal((await f.bridge.resolveSource(f.request, principal))?.threadId, f.id);
-  await assert.rejects(() => f.bridge.resolveSource(f.request, { ...principal, authorizationIncarnation: "forged" }), { code: "GROK_BOT_SESSION_OWNER_MISMATCH" });
+  assert.equal((await f.bridge.resolveSource(f.request, { ...principal, authorizationIncarnation: "captured-connection" }))?.endpoint?.authorizationIncarnation, "captured-connection");
   const missing = encodeGrokBotSessionId("bot-a", "missing-session");
-  await assert.rejects(() => f.bridge.resolveSource({ ...f.request, sourceThreadId: missing,
-    messageSource: { ...f.request.messageSource, sessionId: missing }, servicePrincipal: principal, authorizationIncarnation: principal.authorizationIncarnation } as typeof f.request),
-    { code: "GROK_BOT_SESSION_NOT_FOUND" });
-  assert.deepEqual(f.bridge.resolveExecutionOptions(f.request, source), {});
-  assert.throws(() => f.bridge.resolveExecutionOptions({ ...f.request, cwd: "local-directory" }, source), { code: "GROK_BOT_PC_EXECUTION_OPTIONS_UNSUPPORTED" });
+  assert.equal((await f.bridge.resolveSource({ ...f.request, sourceThreadId: missing,
+    messageSource: { ...f.request.messageSource, sessionId: missing } }))?.threadId, missing);
+  const label = "unregistered-source-label";
+  assert.equal((await f.bridge.resolveSource({ ...f.request, sourceThreadId: label,
+    messageSource: { ...f.request.messageSource, sessionId: label } }))?.threadId, label);
+  assert.equal(sourceReads, 0);
+  f.client.profileStatus = profileStatus;
+  const target = (await f.bridge.resolveTarget(f.request))!;
+  assert.deepEqual(f.bridge.resolveExecutionOptions(f.request, target), {});
+  assert.throws(() => f.bridge.resolveExecutionOptions({ ...f.request, cwd: "local-directory" }, target), { code: "GROK_BOT_PC_EXECUTION_OPTIONS_UNSUPPORTED" });
+});
+
+test("source display fields never gate service selection or trigger native reads", async () => {
+  const f = fixture();
+  f.client.profileStatus = async () => { throw new Error("source owner must not be read"); };
+  for (const sessionName of [undefined, "", "name".repeat(200)]) {
+    const request = { ...f.request, messageSource: { ...f.request.messageSource, sessionName } } as unknown as typeof f.request;
+    assert.equal(f.bridge.handlesSource!(request), true);
+    assert.equal((await f.bridge.resolveSource(request))?.threadId, f.id);
+    assert.equal(f.bridge.handlesSource!({ ...request, messageSource: { ...request.messageSource, agentAdapter: "codex" } }), false);
+  }
 });
 
 test("refresh invalidates original owner proof on account/profile changes, unavailable credentials and missing or foreign sessions", async () => {
@@ -296,7 +315,7 @@ test("proved default-main keeps its canonical endpoint and native empty address 
   assert.equal(owner.sessionId, "");
   const source = (await f.bridge.resolveSource(f.request))!;
   assert.equal(source.threadId, f.id);
-  await assert.rejects(() => f.bridge.resolveSource({ ...f.request, sourceThreadId: "" }), { field: "sourceThreadId" });
+  assert.equal((await f.bridge.resolveSource({ ...f.request, sourceThreadId: "" }))?.threadId, f.id);
   const delivery = await f.prepared();
   assert.equal(delivery.target.sessionId, f.id);
   await f.bridge.transport(delivery, () => {}, false);

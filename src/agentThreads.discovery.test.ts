@@ -5,6 +5,17 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { handleAgentThreadRequest } from "./agentThreads.js";
+import { listDshSessions, readDshSession, readDshPrimaryBindingAsync } from "./dshSessionBridge.js";
+import { nativeOperations } from "./agentAdapters/managerNativeOperations.js";
+import type { AgentManagerOperationInvoker } from "./agentAdapters/managerInvocation.js";
+
+const dshOperations = nativeOperations({ listDshSessions, readDshSession, readDshPrimaryBindingAsync });
+const invokeDshFixture: AgentManagerOperationInvoker = async <T>(type: string, operation: string, payload: unknown, invocation?: import("@rabiroute/plugin-sdk").AgentAdapterInvocation) => {
+  assert.equal(type, "dsh");
+  const handler = dshOperations[operation];
+  assert.ok(handler, operation);
+  return await handler(payload, invocation) as T;
+};
 
 const sessionId = "session-00000000-0000-4000-8000-000000000001";
 
@@ -63,7 +74,7 @@ test("DSH thread read/list discover the owner without a complete primary binding
   fs.writeFileSync(process.env.RABI_DSH_AUTH_FILE, JSON.stringify({ endpoints: [] }));
 
   async function verify(expected: string, dshBaseUrl?: string) {
-    const options = { allowedWorkspaces: [temp], ...(dshBaseUrl ? { dshBaseUrl } : {}) };
+    const options = { invokeAgentOperation: invokeDshFixture, allowedWorkspaces: [temp], ...(dshBaseUrl ? { dshBaseUrl } : {}) };
     const read = await handleAgentThreadRequest({ action: "read", agentAdapter: "dsh", threadId: sessionId }, options);
     assert.equal(read.statusCode, 200);
     assert.equal((read.data.thread as { id: string; title: string }).id, sessionId);

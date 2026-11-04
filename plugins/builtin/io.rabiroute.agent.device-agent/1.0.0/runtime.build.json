@@ -1,0 +1,17 @@
+{
+  "exports": [
+    {
+      "source": "src/agentAdapters/pluginImplementations/device-agent.ts",
+      "name": "createAgentOperations"
+    }
+  ],
+  "ownedPrefixes": [
+    "src/agentAdapters/",
+    "src/shared/deviceAgent",
+    "src/manager/deviceAgent"
+  ],
+  "scopedEnvironment": true,
+  "hostSources": [
+    "src/agentAdapters/stateReporter.ts"
+  ]
+}

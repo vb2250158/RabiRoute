@@ -9,7 +9,7 @@ const recentCreationTtlMs = 60_000;
 export type CodexSessionThread = {
   id: string;
   title: string;
-  updatedAt: string;
+  updatedAt?: string;
   cwd?: string;
   archived?: boolean;
 };
@@ -52,7 +52,7 @@ function uniquelyLatestThread<TThread extends CodexSessionThread>(matches: TThre
   let latestTime = Number.NEGATIVE_INFINITY;
   let latestCount = 0;
   for (const thread of matches) {
-    const parsed = Date.parse(thread.updatedAt);
+    const parsed = Date.parse(thread.updatedAt ?? "");
     const updatedAt = Number.isFinite(parsed) ? parsed : Number.NEGATIVE_INFINITY;
     if (updatedAt > latestTime) {
       latest = thread;

@@ -11,8 +11,9 @@ test("built-in Manager capabilities are independent SDK packages", async () => {
   assert.deepEqual(profile.readyRequires, ["manager.core@1", "manager.diagnostics@1"],
     "default application readiness covers the control plane; business plugin failure must not reject every healthy client operation");
   const packageDirectories = (await fs.readdir(path.join(root, "builtin"), { withFileTypes: true })).filter(entry => entry.isDirectory());
-  assert.equal(profile.instances.length, packageDirectories.length);
-  assert.equal(new Set(profile.instances.map(instance => instance.package)).size, packageDirectories.length);
+  const available = new Set(packageDirectories.map(entry => entry.name));
+  for (const instance of profile.instances) assert.ok(available.has(encodeURIComponent(instance.package)), `Profile package is installed: ${instance.package}`);
+  assert.equal(new Set(profile.instances.map(instance => instance.id)).size, profile.instances.length);
   assert.equal(
     profile.instances.some(instance => instance.package === "io.rabiroute.manager.wearable-companion"),
     true
@@ -23,7 +24,10 @@ test("built-in Manager capabilities are independent SDK packages", async () => {
     const source = await fs.readFile(path.join(packageRoot, "manager.mjs"), "utf8");
     assert.equal(manifest.id, instance.package);
     assert.deepEqual(manifest.entries.manager, { execution: instance.package === "io.rabiroute.manager.route-control" ? "isolated" : "in_process", module: "./manager.mjs" });
-    if (manifest.entries.web) assert.deepEqual(manifest.entries.web, { execution: "in_process", module: "./web/client.mjs" });
+    if (manifest.entries.web) {
+      assert.deepEqual(manifest.entries.web, { execution: "in_process", module: "./web/client.mjs" },
+        "the Web release builder consumes the generated asset wrapper directly");
+    }
     assert.match(source, /from "@rabiroute\/plugin-sdk"/);
     assert.doesNotMatch(source, /from ["'][^"']*src\/|from ["'][^"']*manager\/controlPlaneRoutes/);
     for (const earlyReturn of source.matchAll(/^ {8}if [^\n]+\r?\n {12}return;$/gm)) {

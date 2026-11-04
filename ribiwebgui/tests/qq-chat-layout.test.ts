@@ -21,3 +21,13 @@ test('message time separators retain midnight boundaries and group nearby messag
   assert.equal(qqTimeBreak(noon+300,noon),true);
   assert.equal(qqMessageTime(before,new Date(2026,0,2,12)),'昨天 23:59');
 });
+
+
+test('an unformattable message timestamp omits only its divider while the next valid timestamp remains usable',()=>{
+  const healthy=seconds(new Date(2026,0,2,12));
+  for(const invalid of [Number.NaN,Number.POSITIVE_INFINITY,1e20]) {
+    assert.equal(qqTimeBreak(invalid),false);
+    assert.equal(qqTimeBreak(healthy,invalid),true);
+    assert.doesNotThrow(()=>new Date(healthy*1000).toISOString());
+  }
+});

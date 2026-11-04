@@ -206,7 +206,8 @@ test("catalog mount joins its service even if route retirement fails and repeate
   const first = mount.stop(), second = mount.stop();
   assert.equal(first, second);
   await assert.rejects(first, AggregateError);
-  assert.equal(mount.service.workerStatus().state, "stopped");
+  assert.equal(mount.service.activeCount(), 0);
+  assert.throws(() => mount.service.scanAll(), /stopping/);
   await assert.rejects(second, AggregateError);
 });
 

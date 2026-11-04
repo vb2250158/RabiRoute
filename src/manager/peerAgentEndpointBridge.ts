@@ -62,9 +62,15 @@ export function createPeerAgentEndpointBridge(options: PeerAgentEndpointOptions)
       authorizationIncarnation: createHash("sha256").update(JSON.stringify([options.scope(), options.managerInstanceId,
         binding.ownerDeviceId, binding.instanceId, provider, sessionId])).digest("hex") };
   }
+  function localEndpoint(ownerDeviceId: string, provider: string, sessionId: string): AgentRequestEndpoint {
+    return { kind: 'local', managerInstanceId: options.managerInstanceId, ownerDeviceId,
+      agentId: 'local:' + provider, provider, sessionId,
+      authorizationIncarnation: createHash('sha256').update(JSON.stringify([options.scope(), options.managerInstanceId,
+        ownerDeviceId, provider, sessionId])).digest('hex') };
+  }
   function authorize(value: AgentRequestEndpoint) {
-    if (!owns(value) || !options.scope() || !sameAgentEndpoint(value, endpoint({ ownerDeviceId: value.ownerDeviceId,
-      instanceId: value.instanceId!, agentId: value.agentId }, value.provider, value.sessionId))) throw new Error("Original peer execution owner changed.");
+    if (!owns(value) || !options.scope() || !sameAgentEndpoint(value, value.kind === "local" ? localEndpoint(value.ownerDeviceId!, value.provider, value.sessionId)
+      : endpoint({ ownerDeviceId: value.ownerDeviceId, instanceId: value.instanceId!, agentId: value.agentId }, value.provider, value.sessionId))) throw new Error("Original peer execution owner changed.");
   }
   async function readRemote(value: AgentRequestEndpoint, verifyInstance = false): Promise<AgentThreadSummary> {
     const guard = fence(); authorize(value);
@@ -85,6 +91,15 @@ export function createPeerAgentEndpointBridge(options: PeerAgentEndpointOptions)
     return { endpoint: value, agentAdapter: request.agentAdapter, agentType: request.messageProcessing?.targetAgentType || "agent",
       threadId: summary.id, threadName: summary.title, workspace: summary.cwd };
   }
+  /** The stored return address becomes an execution target only when a reply is sent. */
+  async function resolveStoredTarget(party: AgentRequestParty): Promise<AgentRequestParty> {
+    if (!party.endpoint || !owns(party.endpoint)) throw new Error("An explicit peer target address is required.");
+    const address = party.endpoint;
+    const target = address.kind === "local" ? localEndpoint(address.ownerDeviceId!, address.provider, address.sessionId)
+      : endpoint({ ownerDeviceId: address.ownerDeviceId, instanceId: address.instanceId!, agentId: address.agentId }, address.provider, address.sessionId);
+    const summary = await readRemote(target);
+    return { ...party, endpoint: target, threadName: summary.title, workspace: summary.cwd };
+  }
   async function routeThread(binding: AgentInstanceBinding, request: AgentThreadRequest): Promise<AgentThreadRequestResult> {
     if (!binding.ownerDeviceId) throw new Error("An explicit peer Manager address is required.");
     if (request.action === "send" || request.action === "reconcile_delivery") throw new Error("Peer sends must use the original Manager endpoint ledger.");
@@ -97,28 +112,12 @@ export function createPeerAgentEndpointBridge(options: PeerAgentEndpointOptions)
     return { statusCode: 200, data };
   }
   async function resolveSource(request: AgentThreadRequest, principal?: RabiLinkAgentPrincipal): Promise<AgentRequestParty | undefined> {
-    if (!principal?.deviceOwner) return undefined;
-    if (!request.inReplyToRequestId) {
-      if (principal.scope !== options.scope()) throw new Error("Original peer source connection changed.");
-      const identity = request.messageSource && agentIdentityForMessageSource(request.messageSource);
-      if (!identity || !request.sourceThreadId || identity.sessionId !== request.sourceThreadId) throw new Error("Peer source requires its actual provider and complete session ID.");
-      const guard = fence();
-      const catalog = unwrap(await options.request(principal.sourceDeviceId, "GET", "/api/lan-agent/instances")); guard();
-      const local = catalog.instances?.find(row => row.local);
-      if (!local) throw new Error("Peer source Manager has no local execution instance.");
-      const value = endpoint({ ownerDeviceId: principal.sourceDeviceId, instanceId: local.instanceId, agentId: `local:${identity.agentAdapter}` }, identity.agentAdapter, identity.sessionId);
-      const summary = await readRemote(value); guard();
-      return { endpoint: value, agentAdapter: identity.agentAdapter, agentType: request.sourceAgentType || "agent",
-        threadId: summary.id, threadName: summary.title, workspace: summary.cwd };
-    }
-    const original = options.store.get(request.inReplyToRequestId), source = original?.target;
-    if (!source?.endpoint?.ownerDeviceId || source.endpoint.ownerDeviceId !== principal.sourceDeviceId) return undefined;
-    if (principal.scope !== options.scope() || request.ledgerOwnerDeviceId !== options.localDeviceId()
-      || request.sourceThreadId !== source.threadId || !request.messageSource
-      || agentIdentityForMessageSource(request.messageSource)?.sessionId !== source.threadId
-      || agentIdentityForMessageSource(request.messageSource)?.agentAdapter !== source.agentAdapter) throw new Error("Reply must preserve the original peer task source.");
-    await readRemote(source.endpoint);
-    return { ...source, agentType: request.sourceAgentType || source.agentType };
+    const identity = request.messageSource && agentIdentityForMessageSource(request.messageSource);
+    if (!principal || !identity || identity.agentAdapter === "deviceAgent") return undefined;
+    const sessionId = request.sourceThreadId || identity.sessionId;
+    return { endpoint: localEndpoint(principal.sourceDeviceId, identity.agentAdapter, sessionId),
+      agentAdapter: identity.agentAdapter, agentType: request.sourceAgentType || 'agent',
+      threadId: sessionId, threadName: identity.sessionName, ...(identity.workspace ? { workspace: identity.workspace } : {}) };
   }
   async function transport(delivery: PreparedEndpointDelivery, guard: () => void, reconcile: boolean): Promise<EndpointDeliveryReceipt | undefined> {
     const current = fence(); guard(); authorize(delivery.target);
@@ -132,12 +131,7 @@ export function createPeerAgentEndpointBridge(options: PeerAgentEndpointOptions)
   }
   async function forwardReply(request: AgentThreadRequest, guard: () => void): Promise<AgentThreadRequestResult | undefined> {
     if (!request.ledgerOwnerDeviceId || request.ledgerOwnerDeviceId === options.localDeviceId()) return undefined;
-    if (!request.inReplyToRequestId || !request.sourceThreadId || !request.messageSource) throw new Error("Cross-PC reply requires the original request and source task.");
-    const identity = agentIdentityForMessageSource(request.messageSource);
-    if (!identity || identity.sessionId !== request.sourceThreadId) throw new Error("Reply source must match its actual local task.");
     const current = fence(); guard();
-    const local = await options.readLocal(identity.agentAdapter, request.sourceThreadId); current(); guard();
-    if (local.id !== request.sourceThreadId || local.archived) throw new Error("Original local reply owner is unavailable.");
     const response = await options.request(request.ledgerOwnerDeviceId, "POST", "/api/agent/threads", request); current(); guard();
     const data = response as Record<string, unknown>;
     if (!data || typeof data !== "object") throw new Error("Ledger owner returned no formal reply result.");
@@ -145,14 +139,13 @@ export function createPeerAgentEndpointBridge(options: PeerAgentEndpointOptions)
   }
   async function forwardCallerLookup(callerId: string, source: PeerCallerSource, guard: () => void) {
     if (!source.ledgerOwnerDeviceId || source.ledgerOwnerDeviceId === options.localDeviceId()) return undefined;
-    if (!source.inReplyToRequestId || !source.sourceThreadId || !source.messageSource) throw new Error("Peer reply lookup requires its original request and complete source.");
-    const identity = agentIdentityForMessageSource(source.messageSource);
-    if (!identity || identity.sessionId !== source.sourceThreadId) throw new Error("Peer lookup source must match its original local task.");
     const current = fence(); guard();
-    const local = await options.readLocal(identity.agentAdapter, source.sourceThreadId); current(); guard();
-    if (local.id !== source.sourceThreadId || local.archived) throw new Error("Original local source is unavailable.");
-    const query = new URLSearchParams({ sourceThreadId: source.sourceThreadId, sourceAgentType: source.sourceAgentType || "agent",
-      agentAdapter: identity.agentAdapter, inReplyToRequestId: source.inReplyToRequestId, ledgerOwnerDeviceId: source.ledgerOwnerDeviceId });
+    const identity = source.messageSource && agentIdentityForMessageSource(source.messageSource);
+    const query = new URLSearchParams();
+    for (const [name, value] of Object.entries({ sourceThreadId: source.sourceThreadId, sourceAgentType: source.sourceAgentType,
+      agentAdapter: identity?.agentAdapter, inReplyToRequestId: source.inReplyToRequestId, ledgerOwnerDeviceId: source.ledgerOwnerDeviceId })) {
+      if (value !== undefined) query.set(name, value);
+    }
     const pathname = "/api/agent/deliveries/caller/" + encodeURIComponent(callerId) + "?" + query;
     if (options.requestResult) {
       const result = await options.requestResult(source.ledgerOwnerDeviceId, "GET", pathname); current(); guard();
@@ -173,9 +166,10 @@ export function createPeerAgentEndpointBridge(options: PeerAgentEndpointOptions)
     guard();
     return async (input: { ledgerOwnerDeviceId: string; delivery: PreparedEndpointDelivery }, reconcile: boolean) => {
       guard(); const delivery = input.delivery;
-      if (input.ledgerOwnerDeviceId !== principal.sourceDeviceId || !delivery?.target || delivery.target.ownerDeviceId !== options.localDeviceId()
-        || delivery.target.instanceId !== options.managerInstanceId || delivery.target.nodeId !== options.managerInstanceId
-        || delivery.target.managerInstanceId !== delivery.source?.managerInstanceId || delivery.target.kind !== "instance") throw new Error("Prepared delivery does not target this Manager's exact execution instance.");
+      if (!delivery?.target || delivery.target.ownerDeviceId !== options.localDeviceId()
+        || !(delivery.target.kind === 'local' || delivery.target.kind === 'instance'
+          && delivery.target.instanceId === options.managerInstanceId && delivery.target.nodeId === options.managerInstanceId))
+        throw new Error("Prepared delivery does not target this Manager's exact execution instance.");
       const result = await executePreparedEndpointDelivery(delivery, { endpoint: delivery.target, assertAuthorized: guard,
         readReceipt: value => receipts.readReceipt(value), writeReceipt: (value, receipt) => receipts.writeReceipt(value, receipt),
         readNotSent: value => receipts.readNotSentProof(value), writeNotSent: (value, error) => receipts.writeNotSent(value, error),
@@ -186,6 +180,6 @@ export function createPeerAgentEndpointBridge(options: PeerAgentEndpointOptions)
     };
   }
   return { owns, authorize, resolveTarget, resolveSource, transport, forwardReply, forwardCallerLookup, prepareExecution, routeThread,
-    localDeviceId: options.localDeviceId, refresh: async (value: AgentRequestEndpoint) => { await readRemote(value); } };
+    localDeviceId: options.localDeviceId, resolveStoredTarget, refresh: async (value: AgentRequestEndpoint) => { await readRemote(value); } };
 }
 export type PeerAgentEndpointBridge = ReturnType<typeof createPeerAgentEndpointBridge>;

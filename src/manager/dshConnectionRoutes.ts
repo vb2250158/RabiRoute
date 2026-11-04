@@ -9,7 +9,8 @@ export function dshConnectionRequestAllowed(request: http.IncomingMessage): bool
   return localModelSettingsRequestAllowed(request);
 }
 
-export const DSH_CONNECTION_BODY_MAX_BYTES = 16384;
+import { DSH_CONNECTION_BODY_MAX_BYTES, DSH_CONNECTION_REQUEST_TIMEOUT_MS } from "../shared/dshConnectionLimits.js";
+export { DSH_CONNECTION_BODY_MAX_BYTES, DSH_CONNECTION_REQUEST_TIMEOUT_MS } from "../shared/dshConnectionLimits.js";
 function connectionBody(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new DshConnectionError("DSH connection request must be JSON.");
   return value as Record<string, unknown>;
@@ -34,7 +35,7 @@ async function readBody(request: http.IncomingMessage, signal: AbortSignal): Pro
 }
 
 /** Must exceed the 60-second DSH credential verification budget so slow DSH hosts can finish. */
-export const DSH_CONNECTION_REQUEST_TIMEOUT_MS = 90_000;
+
 
 export async function handleDshConnectionRequest(request: http.IncomingMessage, url: URL, store = new DshConnectionStore(), serviceSignal?: AbortSignal,
   parsedBody?: Readonly<{ value: unknown; signal?: AbortSignal }>) {

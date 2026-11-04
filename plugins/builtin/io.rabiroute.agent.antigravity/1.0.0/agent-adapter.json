@@ -1,0 +1,32 @@
+{
+  "type": "antigravity",
+  "capability": "agent.adapter.antigravity@1",
+  "manifest": {
+    "type": "antigravity",
+    "label": "Antigravity（Google 的 Agent 开发环境）",
+    "maturity": "experimental",
+    "transport": {
+      "protocol": "agentapi",
+      "mode": "desktop-or-cli-owner"
+    },
+    "host": {
+      "name": "Antigravity Desktop",
+      "required": true
+    },
+    "capabilities": {
+      "managedTasks": {
+        "messageProcessingAgent": true,
+        "planAssistantSessions": true,
+        "memoryConsolidationAgent": true,
+        "hooks": true,
+        "agentThreads": true,
+        "deliveryReceiptRecovery": true
+      }
+    }
+  },
+  "sessionBinding": {
+    "sessionId": "antigravityConversationId",
+    "sessionName": "antigravityConversationName",
+    "workspace": "antigravityCwd"
+  }
+}

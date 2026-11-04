@@ -16,6 +16,39 @@ import { DEFAULT_FOCUSED_CONTEXT_INJECTION, type RoleKnowledgeSnapshot } from ".
 
 process.env.GATEWAY_MANAGER_URL ||= "http://127.0.0.1:8790";
 
+test("each matched automation carries its own recent count and zero excludes chat history", () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-rule-history-"));
+  try {
+    for (let index = 1; index <= 3; index++) appendGroupMessage(dataDir, {
+      time: index, groupId: 9001, userId: 10001, rawMessage: `prior-message-${index}`,
+      messageId: 4000 + index, senderName: "Example"
+    });
+    const rules: NotificationRule[] = [0, 1, 2].map(limit => ({ id: `history-${limit}`, name: `history ${limit}`,
+      enabled: true, routeKinds: ["group_message"], template: "", recentMessageLimit: limit }));
+    const route: RouteProfile = { id: "history", name: "history", enabled: true, recentMessageLimit: 12,
+      recentMessageLimits: { napcat: 3 }, resolvedPipeline: resolvePipeline("agent"), agentRoleFile: "",
+      rolesDir: dataDir, dataDir, routeVariables: {}, notificationRules: rules };
+    const record: GroupMessageRecord = { time: 4, groupId: 9001, userId: 10001, rawMessage: "current-message", messageId: 4004 };
+    const decision: RouteDecision = { route, routeKind: "group_message", record, extraValues: {},
+      matchedRules: rules, routeVariables: {}, routeText: record.rawMessage };
+    const context = { roleId: "", roleDir: "", rolePath: "", dataDir };
+    for (const detail of [undefined, "full"] as const) {
+      const packets = rules.map(rule => buildPublishedAgentPacket(decision, rule, context, { contextDetail: detail }));
+      assert.deepEqual(packets.map(packet => packet.templateValues.recentMessageLimit), [0, 1, 2]);
+      assert.doesNotMatch(packets[0].message, /prior-message-|\[最近消息\]/);
+      assert.match(String(packets[1].templateValues.recentMessages), /prior-message-3/);
+      assert.doesNotMatch(String(packets[1].templateValues.recentMessages), /prior-message-[12]/);
+      assert.match(String(packets[2].templateValues.recentMessages), /prior-message-2/);
+      assert.doesNotMatch(String(packets[2].templateValues.recentMessages), /prior-message-1/);
+      const inherited = buildPublishedAgentPacket(decision, { ...rules[0], recentMessageLimit: undefined }, context, { contextDetail: detail });
+      assert.equal(inherited.templateValues.recentMessageLimit, 3);
+      assert.match(String(inherited.templateValues.recentMessages), /prior-message-1/);
+    }
+  } finally {
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
 test("focused packets render one required item and gate optional remote instructions", () => {
   const roleDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-compact-packet-"));
   const previousEndpoints = config.messageEndpointTypes;

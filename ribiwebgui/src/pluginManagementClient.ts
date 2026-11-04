@@ -4,6 +4,7 @@ export type ManagedPlugin = Readonly<{
   instanceId: string;
   pluginId: string;
   enabled: boolean;
+  runningVersion?: string;
   status: string;
   manifest: Readonly<{
     id: string;
@@ -46,6 +47,7 @@ export function parsePluginManagementCatalog(value: unknown): PluginManagementCa
         || !record(item.manifest) || typeof item.manifest.id !== "string" || typeof item.status !== "string") return [];
       return [{
         instanceId: item.instanceId, pluginId: item.pluginId, enabled: item.status !== "inactive", status: item.status,
+        ...(item.status === "active" && typeof item.manifest.version === "string" ? { runningVersion: item.manifest.version } : {}),
         manifest: {
           id: item.manifest.id, version: typeof item.manifest.version === "string" ? item.manifest.version : "",
           hosts: strings(item.manifest.hosts), capabilities: strings(item.manifest.capabilities),
@@ -82,6 +84,7 @@ export function parsePluginInstances(value: unknown, catalog?: PluginManagementC
       const manifest = record(item.manifest) ? item.manifest : {};
       return [{
         instanceId: item.instanceId, pluginId: item.pluginId, enabled: item.enabled,
+        ...(typeof item.runningVersion === "string" ? { runningVersion: item.runningVersion } : {}),
         status: typeof item.status === "string" ? item.status : existing?.status || (!item.enabled ? "disabled" : "inactive"),
         manifest: {
           id: item.pluginId, version: typeof item.version === "string" ? item.version : existing?.manifest.version || "",

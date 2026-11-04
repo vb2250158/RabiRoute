@@ -276,7 +276,7 @@ test("late original host settlement completes the same SDK retirement and cold f
 test("the same factory keeps legacy clone-only packages on their existing isolated protocol", { timeout: 15000 }, async t => {
   const f = await fixture(t, [{ id: "org.example.clone", provides: ["fixture.clone@1"], source: `export function activate(c){c.services.provide('fixture.clone@1',{pid:process.pid,label:c.config.label});}` }]);
   const result = await f.runtime.switch(f.loaded.candidates);
-  assert.equal(result.generation.records[0].status, "active");
+  assert.equal(result.generation.records[0].status, "active", JSON.stringify(result.generation.records.map(row => ({ instanceId: row.identity.instanceId, status: row.status, error: row.error }))));
   const value = result.generation.services.services.get("fixture.clone@1")?.value as { pid: number; label: string };
   assert.notEqual(value.pid, process.pid); assert.equal(value.label, "org.example.clone"); assert.equal(f.leases.list().length, 1);
 });
@@ -289,7 +289,7 @@ test("real factory child import blocking fails locally while unrelated plugin an
   let ticks = 0; const timer = setInterval(() => ticks++, 5); t.after(() => clearInterval(timer));
   const result = await f.runtime.switch(f.loaded.candidates);
   assert.equal(result.generation.records.find(row => row.identity.instanceId === "org.example.blocked")?.status, "failed");
-  assert.equal(result.generation.records.find(row => row.identity.instanceId === "org.example.usable")?.status, "active");
+  assert.equal(result.generation.records.find(row => row.identity.instanceId === "org.example.usable")?.status, "active", JSON.stringify(result.generation.records.map(row => ({ instanceId: row.identity.instanceId, status: row.status, error: row.error }))));
   assert.ok(ticks > 2); assert.equal((result.generation.services.services.get("fixture.usable@1")?.value as { ready: boolean }).ready, true);
 });
 
@@ -302,7 +302,7 @@ test("actual host result body getter is never read after original execution", { 
   const f = await fixture(t, [{ id: "org.example.body-getter", requires: ["host.fixture@1"], provides: ["fixture.result@1"], asyncProvides: {}, source: `export async function activate(c){try{await c.services.require('host.fixture@1').run();}catch(e){c.services.provide('fixture.result@1',{operationId:e.operationId,effectOutcome:e.effectOutcome,code:e.code});}}` }], [{ capability: "host.fixture@1", value: service }]);
   const timer = setInterval(() => ticks++, 5); t.after(() => clearInterval(timer));
   const result = await f.runtime.switch(f.loaded.candidates), value = result.generation.services.services.get("fixture.result@1")?.value as { operationId: string; effectOutcome: string; code: string };
-  assert.equal(result.generation.records[0].status, "active"); assert.equal(calls, 1); assert.equal(getterReads, 0); assert.ok(ticks > 0);
+  assert.equal(result.generation.records[0].status, "active", JSON.stringify(result.generation.records.map(row => ({ instanceId: row.identity.instanceId, status: row.status, error: row.error })))); assert.equal(calls, 1); assert.equal(getterReads, 0); assert.ok(ticks > 0);
   assert.equal(value.operationId, "fixture.body.original"); assert.equal(value.effectOutcome, "unknown"); assert.equal(value.code, "HOST_RESPONSE_UNAVAILABLE");
 });
 

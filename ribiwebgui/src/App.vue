@@ -35,7 +35,7 @@ import { PLUGIN_RECOVERY_ROUTE_NAME } from "./router";
 import { managerEventSource } from "./managerApi";
 import { API_REFERENCE_CHANGED } from "./docs/apiReferenceClient";
 import { disposeWebPluginModules } from "./pluginModules";
-import { refreshWebPluginModulesSafely } from "./pluginModuleBootstrap";
+import { refreshWebPluginModulesSafely, webPluginPageLoading } from "./pluginModuleBootstrap";
 import {
   webCommandForHandler,
   webCommandsInSlot,
@@ -157,7 +157,8 @@ const topbarCommands = computed(() => webCommandsInSlot(pluginCatalogStore.comma
 const managerConnected = computed(() => isPluginManagementPage.value ? bootstrapManagerConnected.value : !store.managerError);
 const activePageSaveAction = computed(() => pageSaveAction.value);
 const hasUnsavedChanges = computed(() => store.dirty || roles.dirty || activePageSaveAction.value?.dirty.value === true);
-const pageTitle = computed(() => t(String(route.meta.title || "RibiWebGUI")));
+const pageTitle = computed(() => t(route.name === PLUGIN_RECOVERY_ROUTE_NAME && webPluginPageLoading(pluginCatalogStore.status.value)
+  ? "页面已切换，正在加载内容" : String(route.meta.title || "RibiWebGUI")));
 const routeOptions = computed(() => store.gateways.map(gateway => {
   const runtime = store.runtimeFor(gateway.id);
   const title = String(gateway.routeName || gateway.name || gateway.id);
@@ -416,7 +417,7 @@ function selectGateway(id: string): void {
         </v-avatar>
         <div class="min-w-0">
           <div class="font-weight-black text-primary text-h6 lh-1">RabiRoute</div>
-          <div class="section-note">v{{ store.meta.version }}</div>
+          <div v-if="store.meta.version" class="section-note">v{{ store.meta.version }}</div>
         </div>
       </div>
 

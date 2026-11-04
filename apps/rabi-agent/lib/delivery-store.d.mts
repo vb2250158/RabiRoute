@@ -1,7 +1,7 @@
 export type StoredDeliveryState = "pending" | "sending" | "unknown" | "delivered" | "blocked" | "cancelled";
 export type StoredDeliveryRecord = { intentId: string; kind: string; state: StoredDeliveryState; payloadHash: string; attempts: number;
-  createdAt: string; updatedAt: string; nextAttemptAt: string | null; error: string | null; receipt?: Record<string, unknown> };
-export type RawDeliveryRecord = { id: string; kind: string; state: StoredDeliveryState; payload: Record<string, unknown>; attempts: number; receipt: string | null; manager_guid?: string | null; manager_origin?: string | null; target_key?: string | null };
+  createdAt: string; updatedAt: string; nextAttemptAt: string | null; error: string | null; managerCancelPending?: boolean; receipt?: Record<string, unknown> };
+export type RawDeliveryRecord = { id: string; kind: string; state: StoredDeliveryState; payload: Record<string, unknown>; attempts: number; receipt: string | null; manager_guid?: string | null; manager_origin?: string | null; target_key?: string | null; manager_cancel_pending?: number };
 export function canonicalJson(value: unknown): string;
 export function contentHash(value: unknown): string;
 export class DeliveryStore {
@@ -14,6 +14,8 @@ export class DeliveryStore {
   due(limit?: number, options?: { ordered?: boolean; perTarget?: number; excludeIds?: string[]; activeTargets?: { targetKey: string; slots: number }[] }): RawDeliveryRecord[];
   bindManagerGuid(id: string, guid: string): void;
   update(id: string, state: StoredDeliveryState, options?: { error?: string | null; receipt?: Record<string, unknown>; delayMs?: number; attempt?: boolean }): StoredDeliveryRecord | undefined;
+  cancel(id: string): StoredDeliveryRecord | undefined;
+  resolveCancellation(id: string, options?: { pending?: boolean; receipt?: Record<string, unknown>; error?: string; delayMs?: number }): StoredDeliveryRecord | undefined;
   acknowledgeEvent(id: string, taskId: string): boolean;
   close(): void;
 }

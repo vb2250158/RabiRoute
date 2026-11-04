@@ -12,7 +12,7 @@ import QqReadNotice from './QqReadNotice.vue';
 import { qqConversationTime } from '../qqChatLayout';
 import { waitForChatHistoryFrame } from '../personaChatHistoryLayout';
 import {qqNavigationRead} from '../qqPreviewQueue';
-import { mergeQqConversations, qqConversationIdentity, qqMessagePreview,qqPartsPreview,qqDisplayParts,type QqHistoryRecord } from '../qqMessagePresentation';
+import { mergeQqConversations, qqConversationIdentity, qqConfiguredRoute, qqMessagePreview,qqPartsPreview,qqDisplayParts,type QqHistoryRecord } from '../qqMessagePresentation';
 
 const props = defineProps<{roleId:string;version:number;messageVersion?:number;active:boolean;routes:HistoryQqRoute[]}>();
 const {fetch} = usePersonaService(), {t,locale} = useI18n();
@@ -69,11 +69,18 @@ const senderAvatars=computed(()=>{
 });
 const ownQqId=computed(()=>selected.value?accountIds.value.get(JSON.stringify([selected.value.gatewayId,selected.value.instanceId])):undefined);
 const qqLive=computed(()=>Boolean(selected.value&&availableAccounts.value.has(JSON.stringify([selected.value.gatewayId,selected.value.instanceId]))));
-const routeFor = (conversation:QqConversation) => props.routes.find(route=>route.routeId===conversation.gatewayId && (!conversation.instanceId || route.instanceId===conversation.instanceId));
+const routeFor = (conversation:QqConversation) => qqConfiguredRoute(conversation,props.routes);
 const contactKey = (routeId:string,instanceId:string|undefined,kind:string,target:string)=>JSON.stringify([routeId,instanceId??'',kind,target]);
 const groupNames=computed(()=>new Map([...contacts.value.values()].filter(row=>row.kind==='group').map(row=>[row.target,row.name])));
 const nameFor = (conversation:QqConversation) => contacts.value.get(contactKey(conversation.gatewayId??'',conversation.instanceId,conversation.kind,conversation.target))?.name || (conversation.kind==='group'?groupNames.value.get(conversation.target):undefined) || `${t(conversation.kind==='group'?'群聊':conversation.kind==='private'?'私聊':'历史会话')} ${conversation.target}`;
 const visible = computed(()=>conversations.value.filter(item=>!(search.value||'').trim() || (nameFor(item)+' '+item.target).toLowerCase().includes((search.value||'').trim().toLowerCase())).sort((a,b)=>b.time-a.time));
+const historyOpen=ref(false);
+const conversationSections=computed(()=>[
+  {id:'current',historical:false,rows:visible.value.filter(row=>routeFor(row))},
+  {id:'historical',historical:true,rows:visible.value.filter(row=>!routeFor(row))}
+]);
+watch([search,()=>selectedKey.value,()=>Boolean(selected.value&&!routeFor(selected.value))],()=>{if(search.value?.trim()||(selected.value&&!routeFor(selected.value)))historyOpen.value=true;});
+const firstConversation=()=>conversationSections.value.find(section=>section.rows.length)?.rows[0];
 function latestMessage(record:QqHistoryRecord){
   const row=selected.value;if(!row||record.time<row.time)return;
   const prefix=row.kind==='group'?(record.qqSenderName||senderNames.value[record.sender??'']||record.sender||''):'';
@@ -129,7 +136,7 @@ async function loadContacts() {
     conversations.value=mergeQqConversations(directoryConversations.value,conversations.value);
     const same=retained&&conversations.value.find(row=>qqConversationIdentity(row)===qqConversationIdentity(retained));
     if(same)selectedKey.value=same.conversationKey;
-    else if(!selected.value&&visible.value[0])selectedKey.value=visible.value[0].conversationKey;
+    else if(!selected.value&&firstConversation())selectedKey.value=firstConversation()!.conversationKey;
   }
   if(directoryRequest===controller)directoryRequest=undefined;
 }
@@ -144,7 +151,7 @@ async function load(older=false) {
     const incoming=(data.conversations as QqConversation[]).map(row=>({...row,preview:row.previewFormat==='plain'?row.preview:qqMessagePreview(row.preview)}));
     conversations.value=older?mergeQqConversations(conversations.value,incoming):mergeQqConversations(retained?[retained]:[],mergeQqConversations(incoming,directoryConversations.value));
     cursor.value=data.nextConversationCursor;
-    if(!selected.value&&conversations.value.length){const first=conversations.value.slice().sort((a,b)=>b.time-a.time)[0]!;selectedKey.value=first.conversationKey;}
+    if(!selected.value&&firstConversation())selectedKey.value=firstConversation()!.conversationKey;
   }catch(cause){if(!controller.signal.aborted)error.value=userFacingError(cause);}
   finally{if(request===controller){request=undefined;loading.value=false;if(pendingRefresh&&props.active){pendingRefresh=false;void load();}}}
 }
@@ -196,11 +203,14 @@ onBeforeUnmount(()=>{restorePosition?.abort();stopDrag();layoutObserver?.disconn
       <QqReadNotice v-if="error" summary="会话暂时无法更新，已有记录仍可查看。" :detail="error" @retry="load()" />
       <QqReadNotice v-if="directoryWarning" :summary="directoryWarning" @retry="loadContacts();loadMembers()" />
       <v-list class="qq-session-scroll" bg-color="transparent" aria-label="QQ conversations">
-        <v-list-item v-for="conversation in visible" :key="conversation.conversationKey" :active="selectedKey===conversation.conversationKey" @click="choose(conversation)">
+        <component :is="section.historical?'details':'div'" v-for="section in conversationSections" v-show="section.rows.length" :key="section.id" :class="{'qq-historical-conversations':section.historical}" :open="section.historical?historyOpen:undefined" @toggle="section.historical&&(historyOpen=($event.target as HTMLDetailsElement).open)">
+          <summary v-if="section.historical&&section.rows.length" class="qq-history-summary">{{ t('历史记录') }} · {{ section.rows.length }}</summary>
+        <v-list-item v-for="conversation in section.rows" :key="conversation.conversationKey" :active="selectedKey===conversation.conversationKey" @click="choose(conversation)">
           <template #prepend><QqAvatar :id="conversation.kind==='unknown'?undefined:conversation.target" :kind="conversation.kind==='group'?'group':'private'" :name="nameFor(conversation)" :size="44" /></template>
           <v-list-item-title class="qq-conversation-title" data-no-i18n><span :title="nameFor(conversation)">{{ nameFor(conversation) }}</span><small v-if="!routeFor(conversation)" class="qq-source-badge" :title="`${conversation.gatewayId??''} ${conversation.instanceId??''}`">{{ t('历史记录') }}</small><small v-else-if="routes.length>1" class="qq-source-badge" :title="routeFor(conversation)?.name">{{ routeFor(conversation)?.name }}</small><time v-if="conversation.time" :title="new Date(conversation.time*1000).toLocaleString(locale)">{{ qqConversationTime(conversation.time,undefined,locale) }}</time></v-list-item-title>
           <v-list-item-subtitle data-no-i18n>{{ conversation.preview }}</v-list-item-subtitle>
         </v-list-item>
+        </component>
       <div v-if="!visible.length&&!loading" class="text-body-2 text-medium-emphasis pa-3">{{ t('暂无匹配会话。') }}</div>
       <v-btn v-if="cursor" :disabled="loading" variant="text" @click="load(true)">{{ t('更多会话') }}</v-btn>
       </v-list>
@@ -232,6 +242,7 @@ onBeforeUnmount(()=>{restorePosition?.abort();stopDrag();layoutObserver?.disconn
 .qq-list-search {display:flex;align-items:center;gap:4px;padding:10px 8px;flex:none;}
 .qq-list-search :deep(.v-field) {font-size:12px;border-radius:7px;}
 .qq-session-scroll {min-height:0;overflow-y:auto;overflow-x:hidden;overscroll-behavior:contain;padding-top:0;}
+.qq-history-summary {cursor:pointer;padding:12px 10px;font-size:12px;color:rgba(var(--v-theme-on-surface),.65);border-top:1px solid rgba(var(--v-theme-on-surface),.08);}
 .qq-conversations { display:grid; grid-template-columns:var(--qq-list-width,240px) 12px minmax(0,1fr); column-gap:0; row-gap:16px; align-items:start; }
 .qq-conversations.qq-is-group { grid-template-columns:var(--qq-list-width,240px) 12px minmax(0,1fr) 222px; }
 .qq-splitter { align-self:stretch; min-height:240px; cursor:col-resize; touch-action:none; position:relative; outline:none; }

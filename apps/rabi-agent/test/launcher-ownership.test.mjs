@@ -64,7 +64,9 @@ log('start');
     // Only fixture-owned PIDs are signalled; never use diagnostic PIDs as authority.
     for (const item of processes) if (!item.done) item.child.kill("SIGKILL");
     await Promise.all(processes.map(item => item.closed));
-    await waitFor(() => started().every(item => !alive(item.pid)), "fixture workers exited");
+    // API/upload launchers remain alive until their own child exits; the awaited
+    // client.closed already proves that exit. Do not re-check their reusable PIDs.
+    await waitFor(() => started().filter(item => item.supervised === "1").every(item => !alive(item.pid)), "fixture workers exited");
     assert.equal(fs.readFileSync(config, "utf8"), configBytes);
     assert.deepEqual(fs.readFileSync(path.join(root, "current-release.json")), pointerBytes);
     assert.equal(path.dirname(root), os.tmpdir());

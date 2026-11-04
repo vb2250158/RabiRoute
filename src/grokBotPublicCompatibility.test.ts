@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import http from "node:http";
+import { nativeHttpTestFetch } from "./manager/nativeHttpTestClient.js";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -44,6 +45,7 @@ test("Grok ordinary and default main Route identities survive normalization and 
 });
 
 test("a Grok source can reply to the original QQ message through the standard send channel", async (t) => {
+  t.mock.method(globalThis, "fetch", nativeHttpTestFetch);
   const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-grok-send-fixture-"));
   t.after(() => fs.rmSync(rootDir, { recursive: true, force: true }));
   const dataDir = path.join(rootDir, "data", "route", "grok-route");
@@ -87,7 +89,7 @@ test("a Grok source can reply to the original QQ message through the standard se
       messageAdapterPolicies: { napcat: { outputEnabled: true, supportedOutputs: ["text"] } }
     }]
   });
-  assert.equal(delivered, 1);
+  assert.equal(delivered, 1, JSON.stringify({ port: address.port, result }));
   assert.equal(receivedPath, "/send_group_msg");
   assert.equal(receivedBody.group_id, 456);
   assert.match(String(receivedBody.message), /CQ:reply,id=123/);

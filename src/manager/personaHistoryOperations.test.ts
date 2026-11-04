@@ -53,12 +53,13 @@ test('channel tabs contain only configured message endpoints, independent of sav
 });
 
 test('all history operations and aliases permit an authenticated empty node and preserve native AIUI replay',async t=>{
-  const f=await fixture(t);assert.equal(f.definitions.length,14);
+  const f=await fixture(t);assert.equal(f.definitions.length,16);
   const situation=recordConversationSituation(f.roleDir,'original-route','group_message',conversationSituationForIdentity(undefined,{conversationId:'original-conversation',messageIds:['original-message']}))!;
   const input={sessionId:'original-session',turnId:'original-turn',userText:'Original question',assistantText:'Original answer'};
   const appendResult = await f.call('chat-history/aiui','POST',input); assert.equal(appendResult.status,200,JSON.stringify(appendResult.body));
   const replay=await f.call('chat-history/aiui','POST',input,'/roles');assert.equal(replay.status,200);assert.equal(replay.body.data.receipt.deduplicated,true);
   for(const prefix of ['/api/roles','/roles']) {
+    const tasks=await f.call('chat-history/tasks?category=agent','GET',undefined,prefix);assert.equal(tasks.status,200,JSON.stringify(tasks.body));assert.deepEqual(tasks.body.data.items,[]);
     const chat=await f.call('chat-history','GET',undefined,prefix);assert.equal(chat.status,200,JSON.stringify(chat.body));assert.equal(chat.body.data.entries.length,2);assert.equal(chat.body.data.entries[0].sessionId,'aiui:original-session');
     const summary = await f.call('chat-history?summary=true&limit=1','GET',undefined,prefix);
     assert.equal(summary.status,200); assert.equal(typeof summary.body.data.entries[0].historyCursor,'number');

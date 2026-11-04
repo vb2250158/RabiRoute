@@ -3,46 +3,52 @@ import fs from "node:fs";
 import test from "node:test";
 
 const pageSource = fs.readFileSync(new URL("../src/pages/RouteConfigPage.vue", import.meta.url), "utf8");
-const catalogSource = fs.readFileSync(new URL("../../src/manager/agentAdapterCatalog.ts", import.meta.url), "utf8");
+const cardSource = fs.readFileSync(new URL("../src/agentAdapters/DshAgentCard.vue", import.meta.url), "utf8");
+const scanSource = fs.readFileSync(new URL("../src/agentAdapters/routeAgentScanController.ts", import.meta.url), "utf8");
+const bundleSource = fs.readFileSync(new URL("../src/bundles/agents/dsh.ts", import.meta.url), "utf8");
 const workerPoolSource = fs.readFileSync(new URL("../../src/manager/agentAdapterCatalogWorkerPool.ts", import.meta.url), "utf8");
 const workerSource = fs.readFileSync(new URL("../../src/manager/agentAdapterCatalogWorker.ts", import.meta.url), "utf8");
 
 test("DSH refresh and pagination use the dedicated scan endpoint", () => {
-  assert.match(pageSource, /async function runDshAgentScan[\s\S]*fetch\(`\/api\/scan\/agents\/dsh/);
-  assert.match(pageSource, /loadMoreDshSessions[\s\S]*runDshAgentScan\(\{ append: true/);
-  assert.match(pageSource, /function refreshAgentScan[\s\S]*type === "dsh" \? runDshAgentScan : runAgentScan/);
+  assert.match(cardSource, /async function runDshAgentScan[\s\S]*props\.context\.refreshScan\(options\)/);
+  assert.match(scanSource, /fetch\)\(`\/api\/agent-adapters\/scan\/\$\{encodeURIComponent\(type\)\}/);
+  assert.match(pageSource, /runAgentTypeScan\(type, \{ append: true, offset: page\.nextOffset, limit: page\.limit \}\)/);
+  assert.match(bundleSource, /params\.set\("dshBaseUrl", route\.dshBaseUrl\.trim\(\)\)/);
   assert.match(pageSource, /@click="refreshAgentScan\(agent\.type\)"/);
-  assert.match(pageSource, /title="按当前地址扫描" @click\.stop="runDshAgentScan"/);
-  assert.equal(pageSource.match(/onMounted\(\(\) => \{ void runDshAgentScan/g)?.length ?? 0, 0);
+  assert.match(cardSource, /title="按当前地址扫描" @click\.stop="runDshAgentScan"/);
+  assert.equal(cardSource.match(/onMounted/g)?.length ?? 0, 0);
 });
 
 test("dedicated DSH scan only merges DSH state", () => {
-  const start = pageSource.indexOf("async function runDshAgentScan");
-  const end = pageSource.indexOf("async function loadMoreCodexSessions", start);
-  const block = pageSource.slice(start, end);
-  assert.match(block, /agentScan\.value\.agents = \{[\s\S]*\.\.\.agentScan\.value\.agents,[\s\S]*dsh:/);
-  assert.doesNotMatch(block, /\.\.\.\(data\.agents/);
-  assert.match(block, /agentScan\.value\.cwdOptions = \[\.\.\.new Set/);
+  assert.match(scanSource, /observations\.set\(type,/);
+  assert.match(scanSource, /agents: Object\.fromEntries\(\[\.\.\.observations\]/);
+  assert.doesNotMatch(scanSource, /\.\.\.\(data\.agents/);
+  assert.match(scanSource, /cwdOptions: \[\.\.\.new Set/);
 });
 
-test("Agent adapter catalog owns the dedicated DSH scan route", () => {
-  const operations = fs.readFileSync(new URL("../../src/manager/agentAdapterCatalogOperations.ts", import.meta.url), "utf8");
-  const contract = fs.readFileSync(new URL("../../src/manager/agentAdapterCatalogContract.ts", import.meta.url), "utf8");
-  assert.match(contract, /key: "dsh", method: "GET", path: "\/api\/scan\/agents\/dsh"/);
-  assert.match(operations, /key === "dsh" \? await service\.scanDsh\(options, lifetime\.signal\)/);
-  assert.match(operations, /AGENT_CATALOG_OPERATIONS\.map/);
-  assert.doesNotMatch(operations, /scanDshAgentAdapter/);
+test("the DSH package owns its canonical scan and compatibility alias", () => {
+  const provider = fs.readFileSync(new URL("../../src/agentAdapters/dshManagerProvider.ts", import.meta.url), "utf8");
+  const operations = fs.readFileSync(new URL("../../src/agentAdapters/managerNativeOperations.ts", import.meta.url), "utf8");
+  const spec = JSON.parse(fs.readFileSync(new URL("../../plugins/builtin/io.rabiroute.agent.dsh/1.0.0/manager-runtime.build.json", import.meta.url), "utf8"));
+  assert.match(provider, /createAgentScanOperations\(descriptor\.type/);
+  assert.match(provider, /['"]\/api\/scan\/agents\/dsh['"]/);
+  assert.match(operations, /\/api\/agent-adapters\/scan\/\$\{type\}/);
+  assert.deepEqual(spec.workers, [{ source: "src/agentAdapters/dshManagerApi.ts", target: "workers/scan.mjs" }]);
 });
 
-test("Agent adapter catalog dispatches DSH scans through its owned worker pool", () => {
-  const start = catalogSource.indexOf("  scanDsh(");
-  const end = catalogSource.indexOf("  workerStatus()", start);
-  const block = catalogSource.slice(start, end);
-  assert.ok(start >= 0 && end > start);
-  assert.match(block, /this\.workerPool\.query<Record<string, unknown>>\(\{[\s\S]*kind: "dsh"/);
+test("DSH scans resolve their published provider and execute only its owned worker entry", () => {
+  const operations = fs.readFileSync(new URL("../../src/agentAdapters/managerNativeOperations.ts", import.meta.url), "utf8");
+  const manager = fs.readFileSync(new URL("../../plugins/builtin/io.rabiroute.agent.dsh/1.0.0/manager.mjs", import.meta.url), "utf8");
+  assert.match(operations, /invoke\("scan",\s*payload,\s*\{ signal: input\.signal/);
+  assert.match(manager, /new URL\(["']\.\/workers\/scan\.mjs["']/);
+  assert.match(manager, /scannerExport: ["']scanDshAgentAdapter["']/);
   assert.match(workerPoolSource, /fork\(workerEntryPath\(\)/);
   assert.match(workerPoolSource, /stopChildProcessTree\(worker\)/);
-  assert.match(workerSource, /task\.kind === "dsh"[\s\S]*scanDshAgentAdapter\(context, task\.options\)[\s\S]*scanAgentAdapters\(context, task\.options\)/);
+  assert.match(workerSource, /path\.isAbsolute\(task\.entry\)/);
+  assert.match(workerSource, /import\(pathToFileURL\(task\.entry\)\.href\)/);
+  assert.match(workerSource, /implementation\[task\.exportName/);
+  assert.match(workerSource, /return scan\([\s\S]*task\.options\)/);
+  assert.doesNotMatch(workerSource, /from ["']\.\.\/agentAdapters\/.*ManagerApi/);
 });
 
 test("DSH plugin diagnostics render the live health fields", () => {

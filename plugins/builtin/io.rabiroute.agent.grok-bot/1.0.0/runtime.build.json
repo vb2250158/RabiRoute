@@ -1,0 +1,23 @@
+{
+  "exports": [
+    {
+      "source": "src/agentAdapters/pluginImplementations/grok-bot.ts",
+      "name": "createAgentOperations"
+    }
+  ],
+  "ownedPrefixes": [
+    "src/agentAdapters/",
+    "src/shared/grokBot",
+    "src/manager/grokBot"
+  ],
+  "scopedEnvironment": true,
+  "hostSources": [
+    "src/agentAdapters/stateReporter.ts"
+  ],
+  "resources": [
+    {
+      "source": "scripts/grok-bot-native-profile.ps1",
+      "target": "resources/grok-bot-native-profile.ps1"
+    }
+  ]
+}

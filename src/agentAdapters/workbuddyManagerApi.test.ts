@@ -166,3 +166,43 @@ test("WorkBuddy scan degrades to an actionable empty result on a clean machine",
   assert.deepEqual(agent.endpoints, []);
   assert.ok((agent.warnings ?? []).some(warning => warning.includes("未发现 WorkBuddy 任务")));
 });
+
+test("WorkBuddy pagination stops at the final partial page and an offset beyond the directory", async () => {
+  const fixture = createFixture({ tasks: [
+    { id: "first", cwd: "C:\\Fixture", title: "First", updated_at: 3000 },
+    { id: "second", cwd: "C:\\Fixture", title: "Second", updated_at: 2000 },
+    { id: "third", cwd: "C:\\Fixture", title: "Third", updated_at: 1000 }
+  ] });
+  const original = fs.readFileSync(fixture.databasePath);
+  try {
+    const pages = await Promise.all([0, 2, 3].map(workbuddyOffset => scanWorkbuddyAgentAdapter(contextFor(fixture), { workbuddyOffset, workbuddyLimit: 2 })));
+    assert.deepEqual(pages.map(page => page.agents.workbuddy.sessions?.map(row => row.id)), [["first", "second"], ["third"], []]);
+    assert.deepEqual(pages.map(page => page.agents.workbuddy.sessionPage), [
+      { offset: 0, limit: 2, returned: 2, hasMore: true, nextOffset: 2 },
+      { offset: 2, limit: 2, returned: 1, hasMore: false },
+      { offset: 3, limit: 2, returned: 0, hasMore: false }
+    ]);
+    assert.deepEqual(fs.readFileSync(fixture.databasePath), original, "scanning retains all native data bytes");
+  } finally { fs.rmSync(fixture.rootDir, { recursive: true, force: true }); }
+});
+
+test("WorkBuddy selects matching workspaces and queries beyond the first 200 native tasks", async () => {
+  const fixture = createFixture({ tasks: Array.from({ length: 205 }, (_, index) => ({
+    id: `task-${String(index).padStart(3, "0")}`,
+    cwd: index === 204 ? "C:\\FixtureLate" : "C:\\FixtureEarly",
+    title: index === 204 ? "Unique far row" : `Task ${index}`,
+    updated_at: 30000 - index
+  })) });
+  const original = fs.readFileSync(fixture.databasePath);
+  try {
+    const query = await scanWorkbuddyAgentAdapter(contextFor(fixture), { workbuddyQuery: "Unique far", workbuddyLimit: 2 });
+    const workspace = await scanWorkbuddyAgentAdapter(contextFor(fixture), { workbuddyWorkspace: "c:/fixturelate", workbuddyLimit: 2 });
+    const lastPage = await scanWorkbuddyAgentAdapter(contextFor(fixture), { workbuddyOffset: 200, workbuddyLimit: 10 });
+    assert.deepEqual(query.agents.workbuddy.sessions?.map(row => row.id), ["task-204"]);
+    assert.deepEqual(workspace.agents.workbuddy.sessions?.map(row => row.id), ["task-204"]);
+    assert.equal(query.agents.workbuddy.sessionPage?.hasMore, false);
+    assert.deepEqual(lastPage.agents.workbuddy.sessions?.map(row => row.id), ["task-200", "task-201", "task-202", "task-203", "task-204"]);
+    assert.equal(lastPage.agents.workbuddy.sessionPage?.hasMore, false);
+    assert.deepEqual(fs.readFileSync(fixture.databasePath), original);
+  } finally { fs.rmSync(fixture.rootDir, { recursive: true, force: true }); }
+});

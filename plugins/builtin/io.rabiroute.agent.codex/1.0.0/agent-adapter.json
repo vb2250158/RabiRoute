@@ -1,0 +1,32 @@
+{
+  "type": "codex",
+  "capability": "agent.adapter.codex@1",
+  "manifest": {
+    "type": "codex",
+    "label": "Codex（ChatGPT 中的编码 Agent）",
+    "maturity": "verified",
+    "transport": {
+      "protocol": "Codex Desktop IPC",
+      "mode": "desktop-owner"
+    },
+    "host": {
+      "name": "Codex/ChatGPT Desktop",
+      "required": true
+    },
+    "capabilities": {
+      "managedTasks": {
+        "messageProcessingAgent": true,
+        "planAssistantSessions": true,
+        "memoryConsolidationAgent": true,
+        "hooks": true,
+        "agentThreads": true,
+        "deliveryReceiptRecovery": true
+      }
+    }
+  },
+  "sessionBinding": {
+    "sessionId": "codexThreadId",
+    "sessionName": "codexThreadName",
+    "workspace": "codexCwd"
+  }
+}

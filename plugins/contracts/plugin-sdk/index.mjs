@@ -114,6 +114,100 @@ export function ownMessageEndpointEgress(context, definition) {
   context.services.provide(`endpoint.${definition.type}.egress@1`, provider);
   return provider;
 }
+
+function immutableAgentMetadata(value) {
+  const cloned = structuredClone(value);
+  const freeze = value => { if (value && typeof value === "object") { for (const child of Object.values(value)) freeze(child); Object.freeze(value); } return value; };
+  return freeze(cloned);
+}
+
+export function parseAgentAdapterDescriptor(descriptor) {
+  const type = descriptor?.type;
+  const object = value => value && typeof value === "object" && !Array.isArray(value);
+  const nonempty = value => typeof value === "string" && Boolean(value.trim());
+  if (typeof type !== "string" || !/^[A-Za-z][A-Za-z0-9_.-]*$/.test(type) || !object(descriptor) || descriptor.type !== type
+    || !nonempty(descriptor.label) || !["verified", "experimental", "stub"].includes(descriptor.maturity)
+    || !object(descriptor.transport) || !nonempty(descriptor.transport.protocol) || !nonempty(descriptor.transport.mode)
+    || descriptor.host !== undefined && (!object(descriptor.host) || !nonempty(descriptor.host.name) || typeof descriptor.host.required !== "boolean")
+    || !object(descriptor.capabilities) || descriptor.capabilities.managedTasks !== undefined && (!object(descriptor.capabilities.managedTasks)
+      || Object.values(descriptor.capabilities.managedTasks).some(value => typeof value !== "boolean"))) {
+    throw new Error("Invalid Agent adapter descriptor.");
+  }
+  const normalized = structuredClone(descriptor);
+  if (normalized.capabilities.managedTasks) normalized.capabilities.managedTasks = Object.fromEntries(Object.entries(normalized.capabilities.managedTasks).filter(([,value]) => value === true));
+  return immutableAgentMetadata(normalized);
+}
+
+/** Validate package metadata before evaluating its platform implementation. */
+export function parseAgentAdapterPackageDescriptor(value) {
+  const object = value => value && typeof value === "object" && !Array.isArray(value);
+  if (!object(value) || typeof value.type !== "string"
+    || typeof value.capability !== "string" || !/^[a-z][a-z0-9._:-]*@[1-9][0-9]*$/.test(value.capability)
+    || !object(value.sessionBinding) || Object.values(value.sessionBinding).some(field => typeof field !== "string")) {
+    throw new Error("Invalid Agent package descriptor.");
+  }
+  const manifest = parseAgentAdapterDescriptor(value.manifest);
+  if (manifest.type !== value.type) throw new Error("Agent package descriptor identity does not match its manifest.");
+  for (const key of ["sessionId", "sessionName", "workspace"]) {
+    if (value.sessionBinding[key] !== undefined && !value.sessionBinding[key].trim()) throw new Error("Agent session binding field must be non-empty.");
+  }
+  return immutableAgentMetadata({type:value.type,capability:value.capability,manifest,sessionBinding:value.sessionBinding});
+}
+
+/** One Agent package owns its operations and the original accepted-work lifetime. */
+export function ownAgentAdapter(context, definition) {
+  const type = required(definition?.type, "Agent adapter type");
+  const capabilityRef = required(definition?.capability, "Agent adapter capability");
+  const descriptor = parseAgentAdapterPackageDescriptor({ type, capability: capabilityRef, manifest: definition.manifest, sessionBinding: definition.sessionBinding ?? {} });
+  const manifest = descriptor.manifest;
+  if (!definition.operations || typeof definition.operations !== "object") {
+    throw new Error("Agent adapter must declare its type, capability, manifest and owned operations.");
+  }
+  const operations = Object.freeze({ ...definition.operations });
+  for (const operation of Object.values(operations)) if (typeof operation !== "function") throw new Error("Agent adapter operations must be functions.");
+  const sessionBinding = descriptor.sessionBinding;
+  const work = ownPluginAcceptedWork(context, `Agent adapter ${type}`, definition.dispose);
+  let ready = false;
+  context.publication.add({ publish() {}, rollback() { ready = false; },
+    async afterPublish({ previousRetirement, signal }) {
+      await previousRetirement;
+      signal.throwIfAborted();
+      ready = true;
+    }, retire() { ready = false; }
+  }, `join previous Agent adapter ${type}`);
+  const acquire = snapshot => {
+    if (!ready) throw Object.assign(new Error(`Agent adapter ${type} is not ready or is retiring.`), { code: "AGENT_ADAPTER_UNAVAILABLE" });
+    let original;
+    try { original = work.acquire(snapshot); }
+    catch (error) {
+      if (error?.code !== "ENDPOINT_EGRESS_UNAVAILABLE") throw error;
+      throw Object.assign(new Error(`Agent adapter ${type} is disabled or retiring.`, { cause: error }), { code: "AGENT_ADAPTER_UNAVAILABLE" });
+    }
+    return Object.freeze({ snapshot: original.snapshot,
+      call(operation, payload, invocation) {
+        const handler = operations[operation];
+        if (typeof handler !== "function") throw new Error(`Agent adapter ${type} does not implement ${operation}.`);
+        const input = structuredClone(payload);
+        return original.run(() => handler(input, invocation, original.snapshot));
+      }, release: original.release });
+  };
+  const provider = Object.freeze({ type, capability: capabilityRef, manifest, sessionBinding, identity: context.identity,
+    ...(definition.serviceEndpoint === undefined ? {} : { serviceEndpoint: definition.serviceEndpoint }),
+    ...(definition.deviceEndpoint === undefined ? {} : { deviceEndpoint: definition.deviceEndpoint }),
+    acquire, runAcceptedWork(operation) {
+      if (!ready) throw Object.assign(new Error(`Agent adapter ${type} is not ready or is retiring.`), { code: "AGENT_ADAPTER_UNAVAILABLE" });
+      return work.runAcceptedWork(operation);
+    }, inspect: () => ({ ...work.inspect(), accepting: ready && work.inspect().accepting }),
+    async invoke(operation, payload, invocation) {
+      const lease = acquire(invocation?.snapshot ?? {});
+      try { return await lease.call(operation, payload, invocation); }
+      finally { lease.release(); }
+    }
+  });
+  context.services.provide(capabilityRef, provider);
+  context.contributions.register({ kind: "agent-adapter", id: `agent.${type}.provider`, value: { type, capability: capabilityRef, manifest, sessionBinding } });
+  return provider;
+}
 export class ServiceResolver {
   #services;
   constructor(services = []) { this.#services = new Map(services); }

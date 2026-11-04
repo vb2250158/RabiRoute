@@ -1,4 +1,4 @@
-import { readRolloutUserMessages } from "./rolloutReceipt.js";
+import {invokeScopedAgentManagerOperation} from "../agentAdapters/managerInvocation.js";
 import { readCodexDesktopThread } from "../codexDesktopBridge.js";
 import { sameCodexWorkspace } from "../codexTaskIdentity.js";
 import { AgentRequestStore, agentDeliveryPromptHash, type AgentCommunicationPreparation } from "./store.js";
@@ -35,11 +35,8 @@ export async function recoverAgentResponseDelivery(
     return { ...communication, status: "adapter_has_no_receipt_log" };
   }
   if (followup && (followup.status === "cancelled"
-    || followup.source.agentAdapter !== original.target.agentAdapter
     || followup.target.agentAdapter !== original.source.agentAdapter
-    || followup.source.threadId !== original.target.threadId
     || followup.target.threadId !== original.source.threadId
-    || !sameCodexWorkspace(followup.source.workspace || "", original.target.workspace || "")
     || !sameCodexWorkspace(followup.target.workspace || "", original.source.workspace || ""))) {
     return { ...communication, status: "identity_mismatch" };
   }
@@ -54,11 +51,8 @@ export async function recoverAgentResponseDelivery(
       if (!exactEvidence || preparation.deliveryId !== deliveryId
         || preparation.inReplyToRequestId !== original.id
         || preparation.requestId !== followup?.id
-        || preparation.source.agentAdapter !== original.target.agentAdapter
         || preparation.target.agentAdapter !== original.source.agentAdapter
-        || preparation.source.threadId !== original.target.threadId
         || preparation.target.threadId !== original.source.threadId
-        || !sameCodexWorkspace(preparation.source.workspace || "", original.target.workspace || "")
         || !sameCodexWorkspace(preparation.target.workspace || "", original.source.workspace || "")) continue;
       if (preparation.source.endpoint || preparation.target.endpoint) continue;
       await store.commit(preparation, { action: "receipt_recovered", transport: "desktop-ipc" });
@@ -114,25 +108,6 @@ export async function recoverAgentResponseDelivery(
 }
 
 /** Use the entire exact rollout for explicit recovery; keep the pure verifier shared. */
-export async function recoverAgentResponseDeliveryFromRollout(
-  store: AgentRequestStore,
-  threadId: string,
-  deliveryId: string
-): Promise<Awaited<ReturnType<typeof recoverAgentResponseDelivery>>> {
-  const initial = await recoverAgentResponseDelivery(store, threadId, deliveryId, () => []);
-  if (initial.status !== "delivery_unconfirmed") return initial;
-  const thread = readCodexDesktopThread(threadId);
-  if (!thread?.rolloutPath) return { ...initial, status: "receipt_source_missing" };
-  const evidenceHash = initial.inReplyToRequestId
-    ? store.get(initial.inReplyToRequestId)?.pendingResponseEvidence?.promptHash : undefined;
-  try {
-    for await (const prompt of readRolloutUserMessages(thread.rolloutPath)) {
-      if (!prompt.includes(deliveryId) && agentDeliveryPromptHash(prompt) !== evidenceHash) continue;
-      const result = await recoverAgentResponseDelivery(store, threadId, deliveryId, () => [prompt]);
-      if (result.status !== "delivery_unconfirmed") return result;
-    }
-  } catch (error) {
-    throw new Error(`Reply receipt recovery could not complete: ${(error as NodeJS.ErrnoException).code || (error as Error).name || "recovery_failed"}. Keep the original deliveryId and verify task-record access and request-storage persistence before retrying recovery.`);
-  }
-  return initial;
+export async function recoverAgentResponseDeliveryFromRollout(store:AgentRequestStore,threadId:string,deliveryId:string):Promise<Awaited<ReturnType<typeof recoverAgentResponseDelivery>>> {
+ return invokeScopedAgentManagerOperation('codex','recoverResponseDelivery',{sourceThreadId:threadId,pendingDeliveryId:deliveryId},{store});
 }

@@ -1,4 +1,7 @@
 import { defineAsyncComponent, markRaw, ref, type Component, type AsyncComponentLoader } from "vue";
+import { isPluginCapabilityReference } from "../../src/plugin-kernel/capabilityReference";
+import type { AgentScanResult, GatewayDefinition } from "./types";
+import type { AgentCardScanOptions } from "./agentAdapters/agentAdapterCardContext";
 
 export type WebRendererPlacementId = string;
 
@@ -12,11 +15,14 @@ type TrustedWebRendererBase = Readonly<{
 }>;
 
 export type TrustedWebSettingsRendererRegistration = TrustedWebRendererBase & Readonly<{
-  contributionKind: "settings-section" | "message-endpoint-settings";
+  contributionKind: "settings-section" | "message-endpoint-settings" | "agent-adapter-settings";
   contributionSurface: "shared.settings" | "route.adapters";
   schemaId: string;
   readCommandId: string;
   writeCommandId: string;
+  /** Pure query projection supplied by the owning Agent Web bundle. */
+  agentScanQuery?: (route: GatewayDefinition, options: AgentCardScanOptions) => URLSearchParams;
+  agentRoute?: AgentRoutePresentation;
 }>;
 
 export type TrustedWebStatusRendererRegistration = TrustedWebRendererBase & Readonly<{
@@ -35,6 +41,22 @@ export type WebRendererContribution = Readonly<{
   component: Component;
   endpointType?: string;
   catalog?: MessageEndpointCatalogMetadata;
+  agentType?: string;
+  agentCapability?: string;
+  agentCatalog?: AgentAdapterCatalogMetadata;
+  agentScanQuery?: (route: GatewayDefinition, options: AgentCardScanOptions) => URLSearchParams;
+  agentRoute?: AgentRoutePresentation;
+}>;
+
+export type AgentRoutePresentation = Readonly<{
+  session?: (route: GatewayDefinition) => { sessionId: string; sessionName: string; workspace: string; dshBaseUrl?: string };
+  warnings?: (route: GatewayDefinition, scan: AgentScanResult | undefined) => readonly string[];
+}>;
+
+export type AgentAdapterCatalogMetadata = Readonly<{
+  title: string; note: string; icon: string; order: number;
+  location: "local" | "cloud" | "device";
+  hasCwd: boolean; hasThread: boolean;
 }>;
 
 export type MessageEndpointCatalogMetadata = Readonly<{
@@ -89,7 +111,7 @@ function controlledSettingsContributionKind(
   value: unknown
 ): TrustedWebSettingsRendererRegistration["contributionKind"] | "" {
   const normalized = controlledSymbol(value);
-  return normalized === "settings-section" || normalized === "message-endpoint-settings" ? normalized : "";
+  return normalized === "settings-section" || normalized === "message-endpoint-settings" || normalized === "agent-adapter-settings" ? normalized : "";
 }
 
 function controlledSettingsContributionSurface(
@@ -105,6 +127,9 @@ function rendererComponent(loader: AsyncComponentLoader): Component {
 }
 
 export function registerTrustedWebSettingsRenderer(input: TrustedWebSettingsRendererRegistration): () => void {
+  if (input.agentScanQuery !== undefined && typeof input.agentScanQuery !== "function") throw new Error("Trusted Agent scan query is invalid.");
+  if (input.agentRoute && ((input.agentRoute.session !== undefined && typeof input.agentRoute.session !== "function")
+    || (input.agentRoute.warnings !== undefined && typeof input.agentRoute.warnings !== "function"))) throw new Error("Trusted Agent route presentation is invalid.");
   const rendererId = controlledSymbol(input.rendererId);
   const contributionKind = controlledSettingsContributionKind(input.contributionKind);
   const contributionSurface = controlledSettingsContributionSurface(input.contributionSurface);
@@ -129,6 +154,8 @@ export function registerTrustedWebSettingsRenderer(input: TrustedWebSettingsRend
     schemaId: controlledSymbol(input.schemaId),
     readCommandId: controlledSymbol(input.readCommandId),
     writeCommandId: controlledSymbol(input.writeCommandId),
+    agentScanQuery: input.agentScanQuery,
+    agentRoute: input.agentRoute,
     component: rendererComponent(input.loader)
   });
   if (
@@ -236,6 +263,19 @@ function parseSettingsRenderer(value: unknown): WebRendererContribution | undefi
   ) return undefined;
   const identity = parseRendererIdentity(value, registration);
   if (!identity) return undefined;
+  if (value.kind === "agent-adapter-settings") {
+    const agentType = controlledSymbol(value.agentType, 80);
+    const agentCapability = typeof value.capability === "string" && isPluginCapabilityReference(value.capability) ? value.capability : "";
+    const metadata = value.catalog;
+    if (!agentType || agentType !== identity.slot || !agentCapability || !isRecord(metadata)) return undefined;
+    const title = controlledText(metadata.title, 160), note = controlledText(metadata.note, 1000);
+    const icon = controlledSymbol(metadata.icon, 80), order = controlledOrder(metadata.order);
+    const location = metadata.location;
+    if (!title || !note || !icon || order === undefined || !["local", "cloud", "device"].includes(String(location))
+      || typeof metadata.hasCwd !== "boolean" || typeof metadata.hasThread !== "boolean") return undefined;
+    return { ...identity, component: registration.component, agentType, agentCapability, agentScanQuery: registration.agentScanQuery, agentRoute: registration.agentRoute,
+      agentCatalog: { title, note, icon, order, location: location as AgentAdapterCatalogMetadata["location"], hasCwd: metadata.hasCwd, hasThread: metadata.hasThread } };
+  }
   if (value.endpointType === undefined && value.catalog === undefined) return { ...identity, component: registration.component };
   const endpointType = controlledSymbol(value.endpointType, 80);
   const metadata = value.catalog;

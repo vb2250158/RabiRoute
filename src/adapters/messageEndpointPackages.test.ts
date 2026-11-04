@@ -10,7 +10,7 @@ test("Gateway endpoints come from independent selected packages with their own i
   for (const instance of profile.instances) {
     const directory = path.resolve("plugins/builtin", instance.package, instance.version);
     const manifest = parsePluginManifest(JSON.parse(await fs.readFile(path.join(directory, "rabi.plugin.json"), "utf8")));
-    if (!manifest.entries.gateway) continue;
+    if (!manifest.entries.gateway || !manifest.provides.some(capability => capability.startsWith("endpoint."))) continue;
     hosts.push(instance.package);
     assert.ok(manifest.entries.manager);
     assert.ok(manifest.entries.web);

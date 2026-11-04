@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { endpointExecutionOptionsHash } from "./executionOptions.js";
-import { normalizeAgentRequestEndpoint, sameAgentEndpoint, sameAgentParty, agentDeliverySourceIdentity, sourceScopedAgentDeliveryId, type AgentRequestEndpoint } from "./endpoint.js";
+import { normalizeAgentRequestEndpoint, normalizeAgentConnectionSource, normalizeAgentDeliverySource, sameAgentDeliverySource, agentDeliverySourceForParty, sameAgentEndpoint, sameAgentParty, sameAgentPartyAddress, agentDeliveryCallerSourceIdentity, sourceScopedAgentDeliveryId, type AgentRequestEndpoint, type AgentConnectionSource, type AgentDeliverySource } from "./endpoint.js";
 import type { PreparedEndpointDelivery, EndpointDeliveryReceipt } from "./endpointDelivery.js";
 import { AgentReplyStateError } from "./replyError.js";
 import { validateEndpointDeliveryNoFrameProof, type EndpointDeliveryNoFrameProof } from "./deliveryFailure.js";
@@ -31,6 +31,7 @@ export type AgentRequestStatus = "pending_delivery" | "awaiting_response" | "res
 
 export type AgentRequestParty = {
   endpoint?: AgentRequestEndpoint;
+  connection?: AgentConnectionSource;
   agentAdapter?: AgentAdapterType;
   threadId: string;
   agentType: string;
@@ -111,18 +112,21 @@ function cleanMessageResult(value: unknown): string {
   return normalizeRabiMessageContent(typeof value === "string" ? value : "", true).slice(0, 12_000);
 }
 
-function normalizedParty(value: AgentRequestParty): AgentRequestParty {
+function normalizedParty(value: AgentRequestParty, role: "source" | "target" = "target"): AgentRequestParty {
   const threadId = cleanText(value.threadId, 4096);
   if (value.threadId !== threadId) throw new Error("Agent party requires complete, unmodified threadId.");
   const endpoint = value.endpoint ? normalizeAgentRequestEndpoint(value.endpoint) : undefined;
+  const connection = value.connection ? normalizeAgentConnectionSource(value.connection) : undefined;
+  if (connection && (role === "target" || endpoint)) throw new Error("A connection source is not an executable task target.");
   if (endpoint && endpoint.sessionId !== threadId) throw new Error("Agent endpoint sessionId does not match party threadId.");
-  const agentType = cleanText(value.agentType, 80);
-  if (!threadId) throw new Error("Agent request party requires threadId.");
-  if (!agentType) throw new Error("Agent request party requires agentType.");
+  const agentType = cleanText(value.agentType, 80) || (role === "source" ? "agent" : "");
+  if (!threadId && !connection) throw new Error("Agent request party requires threadId.");
+  if (!agentType && role === "target") throw new Error("Agent request party requires agentType.");
   const workspace = cleanText(value.workspace, 2_000);
   const agentAdapter = parseAgentAdapterType(cleanText(value.agentAdapter, 40));
   return {
     ...(endpoint ? { endpoint } : {}),
+    ...(connection ? { connection } : {}),
     ...(agentAdapter ? { agentAdapter } : {}),
     threadId,
     agentType,
@@ -132,12 +136,11 @@ function normalizedParty(value: AgentRequestParty): AgentRequestParty {
 }
 
 export function resolveAgentRequestReplyDestination(record: AgentRequestRecord | undefined,
-  respondingParty: AgentRequestParty, requestedTarget: AgentRequestParty): AgentRequestParty | undefined {
+  _respondingParty: AgentRequestParty, requestedTarget: AgentRequestParty): AgentRequestParty | undefined {
   if (!record || record.status !== "awaiting_response") return undefined;
-  const source = normalizedParty(respondingParty), target = normalizedParty(requestedTarget);
-  if (!sameAgentParty(source, record.target)) return undefined;
-  return sameAgentParty(target, record.source) || !record.source.endpoint
-    && (record.sourceHistory ?? []).some(party => sameAgentParty(target, party)) ? structuredClone(record.source) : undefined;
+  const target = normalizedParty(requestedTarget);
+  return sameAgentPartyAddress(target, record.source) || !record.source.endpoint
+    && (record.sourceHistory ?? []).some(party => sameAgentPartyAddress(target, party)) ? structuredClone(record.source) : undefined;
 }
 
 function workspaceMatches(left?: string, right?: string): boolean {
@@ -161,10 +164,10 @@ function parseRecord(value: unknown): AgentRequestRecord | undefined {
       id: record.id,
       deliveryId: record.deliveryId,
       status: record.status as AgentRequestStatus,
-      source: normalizedParty(record.source),
+      source: normalizedParty(record.source, "source"),
       sourceHistory: Array.isArray(record.sourceHistory)
         ? record.sourceHistory.flatMap((party) => {
-            try { return [normalizedParty(party)]; } catch { return []; }
+            try { return [normalizedParty(party, "source")]; } catch { return []; }
           })
         : undefined,
       target: normalizedParty(record.target),
@@ -177,7 +180,7 @@ function parseRecord(value: unknown): AgentRequestRecord | undefined {
       response: record.response && typeof record.response === "object"
         ? {
             deliveryId: record.response.deliveryId,
-            by: normalizedParty(record.response.by),
+            by: normalizedParty(record.response.by, "source"),
             result: cleanMessageResult(record.response.result),
             nextAction: cleanText(record.response.nextAction, 4_000),
             respondedAt: cleanText(record.response.respondedAt, 100) || new Date(0).toISOString()
@@ -246,13 +249,13 @@ export class AgentRequestState {
         if (!value?.deliveryId || value.preparation?.deliveryId !== value.deliveryId
           || !value.source || !value.target || typeof value.prompt !== "string"
           || value.promptHash !== agentDeliveryPromptHash(value.prompt)) throw new Error("Invalid delivery identity or prompt evidence.");
-        normalizeAgentRequestEndpoint(value.source);
+        normalizeAgentDeliverySource(value.source);
+        if (value.source.kind === "connection" && !sameAgentDeliverySource(value.source, value.preparation?.source && agentDeliverySourceForParty(value.preparation.source))) throw new Error("Connection source evidence mismatch.");
         normalizeAgentRequestEndpoint(value.target);
         if (persistedId !== value.deliveryId || !value.generation || value.executionOptionsHash !== endpointExecutionOptionsHash(value.executionOptions)
           || !["prepared", "dispatching", "committed", "cancelled"].includes(value.state)
-          || !sameAgentEndpoint(value.source, value.preparation.source?.endpoint)
           || !sameAgentEndpoint(value.target, value.preparation.target?.endpoint)
-          || value.preparation.source.threadId !== value.source.sessionId || value.preparation.target.threadId !== value.target.sessionId) throw new Error("Invalid delivery evidence.");
+          || value.preparation.target.threadId !== value.target.sessionId) throw new Error("Invalid delivery evidence.");
         if (value.callerDeliveryId !== undefined && (!callerAgentDeliveryId(value.callerDeliveryId) || !/^[a-f0-9]{64}$/.test(value.requestHash || ""))) throw new Error("Invalid caller delivery evidence.");
         if (value.state === "committed" && !value.receipt) throw new Error("Committed delivery receipt is missing.");
         if (value.receipt && (value.receipt.accepted !== true || value.receipt.deliveryId !== value.deliveryId
@@ -399,17 +402,17 @@ export class AgentRequestState {
   }
 
   /** The durable owner also checks quarantined evidence; a new alias cannot bypass an old reservation. */
-  readCallerEndpointDelivery(source: AgentRequestEndpoint, callerDeliveryId: string): PreparedEndpointDelivery | undefined {
-    const identity = agentDeliverySourceIdentity(source);
+  readCallerEndpointDelivery(source: AgentDeliverySource, callerDeliveryId: string): PreparedEndpointDelivery | undefined {
+    const identity = agentDeliveryCallerSourceIdentity(source);
     const conflict = (reserved = false) => new AgentThreadContractError("Original caller delivery evidence is ambiguous or damaged; automatic replay is forbidden.",
       "deliveryId", "validation", "Inspect the original delivery reservations and receipts; do not create another operation.",
       reserved ? "AGENT_DELIVERY_RESERVATION_EXISTS" : "AGENT_DELIVERY_ID_CONFLICT");
     // A crash between prepare and bind has a request reservation but no delivery body yet.
     for (const value of [...this.requests.values(), ...this.quarantinedRequests.values()]) {
-      const request = value as Partial<AgentRequestRecord> | null, endpoint = request?.source?.endpoint;
+      const request = value as Partial<AgentRequestRecord> | null, endpoint = request?.source && agentDeliverySourceForParty(request.source);
       if (!endpoint || !request?.deliveryId || this.deliveries.has(request.deliveryId)) continue;
       let matches = false;
-      try { matches = agentDeliverySourceIdentity(endpoint) === identity
+      try { matches = agentDeliveryCallerSourceIdentity(endpoint) === identity
         && [sourceScopedAgentDeliveryId(endpoint, callerDeliveryId), sourceScopedAgentDeliveryId(endpoint, callerDeliveryId, true)].includes(request.deliveryId); }
       catch { /* Do not infer caller ownership from an incomplete source; its original reservation remains retained. */ }
       if (matches) throw conflict(true);
@@ -417,13 +420,13 @@ export class AgentRequestState {
     for (const value of this.quarantinedDeliveries.values()) {
       const candidate = value as Partial<PreparedEndpointDelivery> | null;
       if (candidate?.callerDeliveryId !== callerDeliveryId) continue;
-      try { if (agentDeliverySourceIdentity(candidate.source!) !== identity) continue; }
+      try { if (agentDeliveryCallerSourceIdentity(candidate.source!) !== identity) continue; }
       catch { throw conflict(true); }
       throw conflict(true);
     }
     let found: PreparedEndpointDelivery | undefined;
     for (const delivery of this.deliveries.values()) {
-      if (delivery.callerDeliveryId !== callerDeliveryId || agentDeliverySourceIdentity(delivery.source) !== identity) continue;
+      if (delivery.callerDeliveryId !== callerDeliveryId || agentDeliveryCallerSourceIdentity(delivery.source) !== identity) continue;
       if (found) throw conflict();
       found = delivery;
     }
@@ -463,22 +466,22 @@ export class AgentRequestState {
     const request = preparation.requestId ? this.requests.get(preparation.requestId) : undefined;
     const original = preparation.inReplyToRequestId ? this.requests.get(preparation.inReplyToRequestId) : undefined;
     if ((preparation.requestId && (!request || request.status === "cancelled" || request.deliveryId !== deliveryId
-        || !sameAgentParty(request.source, preparation.source) || !sameAgentParty(request.target, preparation.target)))
+        || !sameAgentParty(request.target, preparation.target)))
       || (preparation.inReplyToRequestId && (!original || original.status === "cancelled"
-        || !sameAgentParty(original.target, preparation.source) || !sameAgentParty(original.source, preparation.target)
+        || !sameAgentPartyAddress(original.source, preparation.target)
         || (original.pendingResponseDeliveryId !== deliveryId && original.response?.deliveryId !== deliveryId)))) {
       throw new Error("Endpoint request was cancelled or its exact reservation changed; execution and reconciliation are forbidden.");
     }
   }
 
   bindEndpointDelivery(delivery: PreparedEndpointDelivery): void {
+    normalizeAgentDeliverySource(delivery.source);
+    if (delivery.source.kind === "connection" && !sameAgentDeliverySource(delivery.source, agentDeliverySourceForParty(delivery.preparation.source))) throw new Error("Connection source evidence mismatch.");
     if (this.deliveries.has(delivery.deliveryId) || delivery.state !== "prepared"
       || delivery.promptHash !== agentDeliveryPromptHash(delivery.prompt)
       || delivery.executionOptionsHash !== endpointExecutionOptionsHash(delivery.executionOptions)
       || delivery.preparation.deliveryId !== delivery.deliveryId
-      || !sameAgentEndpoint(delivery.source, delivery.preparation.source.endpoint)
       || !sameAgentEndpoint(delivery.target, delivery.preparation.target.endpoint)
-      || delivery.source.sessionId !== delivery.preparation.source.threadId
       || delivery.target.sessionId !== delivery.preparation.target.threadId) throw new Error("Invalid prepared endpoint delivery.");
     const timestamp = this.now().toISOString();
     this.deliveries.set(delivery.deliveryId, { ...structuredClone(delivery), createdAt: timestamp, updatedAt: timestamp, attemptCount: 0 });
@@ -588,7 +591,7 @@ export class AgentRequestState {
     for (const record of this.requests.values()) {
       if (record.status !== "pending_delivery" && record.status !== "awaiting_response") continue;
       // Endpoint-bound requests never follow pool/session replacements, including remote ABA.
-      if (record.source.endpoint || record.target.endpoint) continue;
+      if (record.source.endpoint || record.source.connection || record.target.endpoint) continue;
       const source = resolve(structuredClone(record.source), structuredClone(record), "source");
       const target = resolve(structuredClone(record.target), structuredClone(record), "target");
       if (source === undefined && target === undefined) continue;
@@ -605,8 +608,8 @@ export class AgentRequestState {
       }
       let changed = false;
       if (source && source.threadId !== record.source.threadId) {
-        record.sourceHistory = appendPartyHistory(record.sourceHistory, record.source);
-        record.source = normalizedParty(source);
+        record.sourceHistory = appendPartyHistory(record.sourceHistory, record.source, "source");
+        record.source = normalizedParty(source, "source");
         changed = true;
       }
       if (target && target.threadId !== record.target.threadId) {
@@ -650,12 +653,8 @@ export class AgentRequestState {
   }
 
   prepare(input: PrepareAgentCommunicationInput): AgentCommunicationPreparation {
-    const source = normalizedParty(input.source);
+    const source = normalizedParty(input.source, "source");
     const target = normalizedParty(input.target);
-    if (source.endpoint && target.endpoint ? sameAgentEndpoint(source.endpoint, target.endpoint) : sameAgentParty(source, target)) {
-      throw new AgentThreadContractError("Agent request source and target task must be different.", "threadId", "validation",
-        "Select a different complete target owner; changing the Agent role does not create a different session.");
-    }
     const responsePolicy = input.responsePolicy;
     if (responsePolicy !== "required" && responsePolicy !== "none") {
       throw new Error("responsePolicy must be required or none.");
@@ -683,13 +682,8 @@ export class AgentRequestState {
       if (repliedRequest.pendingResponseDeliveryId) {
         throw new Error(`Agent request already has a response delivery in progress: ${inReplyToRequestId}`);
       }
-      if (!sameAgentParty(source, repliedRequest.target) || !sameAgentParty(target, repliedRequest.source)) {
-        throw new Error("Agent response must be sent from the original target task back to the original source task.");
-      }
-      if ((!source.endpoint || !target.endpoint || !repliedRequest.source.endpoint || !repliedRequest.target.endpoint)
-        && (!workspaceMatches(source.workspace, repliedRequest.target.workspace)
-          || !workspaceMatches(target.workspace, repliedRequest.source.workspace))) {
-        throw new Error("Agent response workspace does not match the original request.");
+      if (!sameAgentPartyAddress(target, repliedRequest.source)) {
+        throw new Error("Agent response must be sent back to the original source task.");
       }
       if (!result) throw new Error("result is required when replying to an Agent request.");
       if (!nextAction) throw new Error("nextAction is required when replying to an Agent request.");
@@ -752,6 +746,36 @@ export class AgentRequestState {
       messageProcessingRequirementId,
       planId
     };
+  }
+
+  /** A source connection has no native reply target: retain the response on its original Manager request. */
+  recordConnectionResponse(requestId: string, actualSource: AgentRequestParty, responseDeliveryId: string, result: string, nextAction: string): AgentRequestRecord {
+    const record = this.requests.get(cleanText(requestId, 100));
+    if (!record) throw new Error(`Agent request not found: ${requestId}`);
+    if (!record.source.connection || record.source.endpoint) throw new Error("This request has a native task reply destination.");
+    const source = normalizedParty(actualSource, "source"), deliveryId = callerAgentDeliveryId(responseDeliveryId);
+    const responseResult = cleanMessageResult(result), responseNext = cleanText(nextAction, 4_000);
+    if (!deliveryId) throw new Error("A stable response delivery ID is required.");
+    if (!responseResult) throw new Error("result is required when replying to an Agent request.");
+    if (!responseNext) throw new Error("nextAction is required when replying to an Agent request.");
+    if (record.status === "responded") {
+      if (record.response?.deliveryId === deliveryId && record.response.result === responseResult && record.response.nextAction === responseNext) return structuredClone(record);
+      throw new AgentThreadContractError("Response conflicts with the original recorded result.", "deliveryId", "validation",
+        "Read the original request and retain the original result and response delivery ID.", "AGENT_DELIVERY_ID_CONFLICT");
+    }
+    if (record.status !== "awaiting_response" || record.pendingResponseDeliveryId) throw new AgentReplyStateError(record,
+      record.pendingResponseDeliveryId ? "response_delivery_in_progress" : "request_state_does_not_accept_reply");
+    if (this.hasEndpointDeliveryReservation(deliveryId)) throw new AgentThreadContractError("Response delivery ID is already reserved by another operation.",
+      "deliveryId", "validation", "Retain the original operation ID and use a distinct caller ID for a different response.", "AGENT_DELIVERY_ID_CONFLICT");
+    const before = structuredClone(record), timestamp = nowIso(this.now);
+    record.status = "responded";
+    record.response = { deliveryId, by: source, result: responseResult, nextAction: responseNext, respondedAt: timestamp };
+    record.nextReminderAt = undefined;
+    record.lastReminderError = undefined;
+    record.updatedAt = timestamp;
+    try { this.persistMutations([{ action: "responded", requestId: record.id, beforeStatus: "awaiting_response", afterStatus: "responded" }]); }
+    catch (error) { this.requests.set(record.id, before); throw error; }
+    return structuredClone(record);
   }
 
   bindResponseEvidence(preparation: AgentCommunicationPreparation, prompt: string): void {
@@ -973,16 +997,52 @@ export class AgentRequestState {
     return structuredClone(record);
   }
 
+  /** Stop this reservation without asserting that its target never received the prompt. */
+  cancelEndpointDelivery(deliveryId: string): PreparedEndpointDelivery {
+    const delivery = this.deliveries.get(deliveryId);
+    if (!delivery) throw Object.assign(new Error("Original delivery evidence is unavailable."), { code: "DELIVERY_EVIDENCE_UNAVAILABLE" });
+    if (delivery.state === "committed" || delivery.receipt) throw Object.assign(new Error("An accepted delivery cannot be cancelled."), { code: "DELIVERY_ALREADY_RECEIVED" });
+    if (delivery.state === "cancelled") return structuredClone(delivery);
+    const preparation = delivery.preparation;
+    const request = preparation.requestId ? this.requests.get(preparation.requestId) : undefined;
+    const original = preparation.inReplyToRequestId ? this.requests.get(preparation.inReplyToRequestId) : undefined;
+    const linked = request?.deliveryId === deliveryId && sameAgentParty(request.source, preparation.source)
+      && sameAgentParty(request.target, preparation.target) ? request
+      : original?.pendingResponseDeliveryId === deliveryId
+        && sameAgentPartyAddress(original.source, preparation.target) ? original : undefined;
+    const reason = "Delivery tracking was cancelled. This does not prove that the target never accepted the original prompt.";
+    if (linked && linked.status !== "responded" && linked.status !== "cancelled") {
+      this.cancel(linked.id, reason);
+    } else {
+      const before = structuredClone(delivery);
+      delivery.state = "cancelled";
+      delivery.updatedAt = nowIso(this.now);
+      delivery.lastError = { code: "DELIVERY_CANCELLED", message: reason };
+      delete delivery.nextAttemptAt;
+      delete delivery.blockedReason;
+      try { this.persist(); } catch (error) { this.deliveries.set(deliveryId, before); throw error; }
+    }
+    return structuredClone(this.deliveries.get(deliveryId)!);
+  }
+
   cancel(requestId: string, reason?: string): AgentRequestRecord {
     const record = this.requests.get(cleanText(requestId, 100));
     if (!record) throw new Error(`Agent request not found: ${requestId}`);
     if (record.status === "responded" || record.status === "cancelled") return structuredClone(record);
     const beforeStatus = record.status;
     const before = structuredClone(record);
-    const affected = [...this.deliveries.values()].filter(delivery => delivery.preparation.requestId === record.id || delivery.preparation.inReplyToRequestId === record.id);
+    const affected = [...this.deliveries.values()].filter(delivery => delivery.state !== "committed" && !delivery.receipt
+      && delivery.state !== "cancelled" && (delivery.preparation.requestId === record.id || delivery.preparation.inReplyToRequestId === record.id));
     const deliveryBefore = affected.map(delivery => structuredClone(delivery));
-    for (const delivery of affected) delivery.state = "cancelled";
     const timestamp = nowIso(this.now);
+    for (const delivery of affected) {
+      delivery.state = "cancelled";
+      delivery.updatedAt = timestamp;
+      delivery.lastError = { code: "DELIVERY_CANCELLED", message: cleanText(reason, 1_024)
+        || "Delivery tracking was cancelled. This does not prove that the target never accepted the original prompt." };
+      delete delivery.nextAttemptAt;
+      delete delivery.blockedReason;
+    }
     record.status = "cancelled";
     record.cancelledAt = timestamp;
     record.cancelReason = cleanText(reason, 2_000) || undefined;
@@ -1042,9 +1102,10 @@ class AgentRequestDraftMap<T extends object> extends Map<string, T> {
 
 function appendPartyHistory(
   history: AgentRequestParty[] | undefined,
-  party: AgentRequestParty
+  party: AgentRequestParty,
+  role: "source" | "target" = "target"
 ): AgentRequestParty[] {
-  const rows = [...(history ?? []), normalizedParty(party)];
+  const rows = [...(history ?? []), normalizedParty(party, role)];
   const unique = new Map<string, AgentRequestParty>();
   for (const row of rows) unique.set(`${row.threadId}\n${row.workspace || ""}`, row);
   return [...unique.values()].slice(-20);

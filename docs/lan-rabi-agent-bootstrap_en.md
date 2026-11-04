@@ -210,6 +210,16 @@ This is an observation snapshot, with a new window when a new connector process 
 
 ## API
 
+### Management timeouts and reconnect recovery
+
+A management deadline ends the current wait; it does not prove that the original message was never sent. Manager retains bounded correlation for timed-out mutations so a late result on the original connection wakes reconciliation of the original ID. When reconnection precedes completion, the connector emits a `deliveryRecovery` hint after releasing the original receipt owner. Neither this hint nor an online node proves receipt: only original-owner evidence can produce `received`.
+
+When the original receipt owner is busy or draining, reconciliation reads its persisted snapshot first. It returns existing acceptance or positive no-frame evidence; otherwise it reports `in_progress` without waiting for the execution lock or sending a prompt. Later recovery events are coalesced and other targets can progress. Ordinary management responses also remain bound to their original connection.
+
+The original WebSocket owner detects silent disconnection through ping/pong and follows normal close/reconnect handling when its deadline expires. Defaults are a 30-second probe interval and a 15-second pong deadline, configurable through `agent.remote.connectionProbeInterval` and `agent.remote.connectionPongTimeout`. `agent.remote.lateManagementResultRetention` retains late-request correlation for five minutes, with at most 256 entries. This wake-up metadata contains no prompt and is not a second delivery ledger. A business deadline does not kill work that may still be executing.
+
+These behaviors require Manager and connector runtime builds containing this fix. Online status on an older connector is not upgrade acceptance. Preserve its enrollment, node, task and delivery IDs, upgrade through the formal publication lifecycle, and verify actual owner receipts.
+
 A node credential alone permits enrollment diagnostics. An enabled authenticated Agent has the same public API and configuration access as local management.
 
 - `POST /api/lan-agent/enrollments`: trusted management issues a single-use ticket.

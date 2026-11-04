@@ -11,6 +11,7 @@ import { atomicWriteFileSync } from "../shared/filePersistence.js";
 import { EndpointDeliveryNotSentError, validateEndpointDeliveryNoFrameProof, type EndpointDeliveryNoFrameProof } from "./deliveryFailure.js";
 
 type NoFrameProof = { kind: "no-prompt-frame"; attemptId: string; observedAt: string };
+const sha256Pattern = /^[a-f0-9]{64}$/;
 type TransportEvidence = { deliveryId: string; generation: string; promptHash: string; executionOptionsHash: string;
   executionOptions?: EndpointExecutionOptions; target: NativeOwnerDeliveryEvidence["target"]; receipt?: EndpointDeliveryReceipt;
   attemptId?: string; attemptSequence?: number; state?: "attempting" | "not_sent";
@@ -57,13 +58,18 @@ export class EndpointTransportReceipts {
     return evidence.executionOptions;
   }
   /** Historical native receipt query: caller supplies the exact owner, not a live task or the original prompt. */
-  readReceiptByIdentity(identity: Pick<NativeOwnerDeliveryEvidence, "deliveryId" | "generation" | "target">): { found: boolean; receipt?: EndpointDeliveryReceipt; notSent?: boolean } {
+  readReceiptByIdentity(identity: Pick<NativeOwnerDeliveryEvidence, "deliveryId" | "generation" | "target">): { found: boolean; delivery?: NativeOwnerDeliveryEvidence; receipt?: EndpointDeliveryReceipt; notSent?: boolean } {
     let evidence: TransportEvidence;
     try { evidence = JSON.parse(fs.readFileSync(this.file(identity), "utf8")); }
     catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return { found: false }; throw error; }
     if (evidence.deliveryId !== identity.deliveryId || evidence.generation !== identity.generation || !sameAgentEndpoint(evidence.target, identity.target)) throw Object.assign(new Error("Transport evidence identity mismatch."), { code: "DELIVERY_INPUT_CONFLICT" });
+    if (typeof evidence.promptHash !== "string" || !sha256Pattern.test(evidence.promptHash)
+      || typeof evidence.executionOptionsHash !== "string" || !sha256Pattern.test(evidence.executionOptionsHash)) throw new Error("Transport evidence is missing its original content hashes; the attempt remains unconfirmed.");
+    if (evidence.executionOptions && endpointExecutionOptionsHash(evidence.executionOptions) !== evidence.executionOptionsHash) throw new Error("Transport execution snapshot hash mismatch.");
     if (evidence.receipt) validateEndpointReceipt(evidence, evidence.receipt);
-    return { found: true, ...(evidence.receipt ? { receipt: evidence.receipt } : {}),
+    const delivery: NativeOwnerDeliveryEvidence = { ...identity, promptHash: evidence.promptHash, executionOptionsHash: evidence.executionOptionsHash,
+      executionOptions: evidence.executionOptions, dispatchAttemptId: evidence.dispatchAttemptId };
+    return { found: true, delivery, ...(evidence.receipt ? { receipt: evidence.receipt } : {}),
       ...(evidence.state === "not_sent" && this.noFrameProof({ ...evidence, target: identity.target }, evidence) ? { notSent: true } : {}) };
   }
   /** Native Route owner may renew only its own durable positive no-frame proof, never an unknown attempt. */

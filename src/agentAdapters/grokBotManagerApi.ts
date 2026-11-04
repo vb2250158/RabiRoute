@@ -4,6 +4,7 @@ import { discoverGrokBotAgent, grokBotActionableError, type GrokBotDiscoveryOpti
 import { GrokBotClient, GrokBotError, type GrokBotClientOptions } from "./grokBotClient.js";
 
 export type GrokBotScanOptions = GrokBotClientOptions & {
+  manifest?: import("@rabiroute/plugin-sdk").AgentAdapterDescriptor;
   client?: GrokBotClient;
   grokBotAgentId?: string;
   grokBotLimit?: number;
@@ -14,7 +15,7 @@ export type GrokBotManagerScanResult = AgentScanResult & { hasProject: false; ha
   bots: Array<{ agentId: string; name: string; mainSessionId?: string; kind?: string | number }>;
   profilePath: string };
 export async function scanGrokBotAgent(options: GrokBotScanOptions = {}): Promise<GrokBotManagerScanResult> {
-  const manifest = agentAdapterManifest("grokBot");
+  const manifest = options.manifest ?? agentAdapterManifest("grokBot");
   const discoveryOptions: GrokBotDiscoveryOptions = { ...options, agentId: options.grokBotAgentId,
     limit: options.grokBotLimit, offset: options.grokBotOffset, query: options.grokBotQuery };
   const discovery = await discoverGrokBotAgent(discoveryOptions);
@@ -26,8 +27,8 @@ export async function scanGrokBotAgent(options: GrokBotScanOptions = {}): Promis
     sessionPage: discovery.sessionPage, profilePath: discovery.profilePath,
     bots: discovery.bots.map(bot => ({ agentId: bot.agentId, name: bot.name, mainSessionId: bot.mainSessionId, kind: bot.kind })), warnings: discovery.warnings };
 }
-export async function scanGrokBotAgentAdapter(_ctx: AgentManagerApiContext, options: GrokBotScanOptions = {}): Promise<{ agents: { grokBot: AgentScanResult }; cwdOptions: string[] }> {
-  return { agents: { grokBot: await scanGrokBotAgent(options) }, cwdOptions: [] };
+export async function scanGrokBotAgentAdapter(ctx: AgentManagerApiContext, options: GrokBotScanOptions = {}): Promise<{ agents: { grokBot: AgentScanResult }; cwdOptions: string[] }> {
+  return { agents: { grokBot: await scanGrokBotAgent({ ...options, manifest: ctx.manifest }) }, cwdOptions: [] };
 }
 /** Health/status avoids roster/session scans and never creates a Bot or routine. */
 export async function getGrokBotStatus(options: GrokBotClientOptions & { client?: GrokBotClient } = {}): Promise<{ status: "signed-in" | "unavailable"; errorCode?: string; warnings: string[] }> {

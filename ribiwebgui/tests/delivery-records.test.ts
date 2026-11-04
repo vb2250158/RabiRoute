@@ -1,8 +1,185 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { readDeliveryComputers, readDeliveryRecord, readDeliveryRecords } from "../src/deliveries/deliveryRecordClient";
+import { deliveryRecordOwnerId, readDeliveryComputers, readDeliveryRecord, readDeliveryRecords, recoverDeliveryRecord } from "../src/deliveries/deliveryRecordClient";
 import { deliveryRecordCopy, deliveryStateLabels } from "../src/deliveries/deliveryRecordCopy";
 import { deliveryComputerOptions, deliveryEndpointLabel, deliveryStatePresentation, deliveryTimeLabel } from "../src/deliveries/deliveryRecordPresentation";
+import * as presentation from "../src/deliveries/deliveryRecordPresentation";
+import fs from "node:fs";
+import vm from "node:vm";
+import { compileScript, parse } from "@vue/compiler-sfc";
+import ts from "typescript";
+import * as vue from "vue";
+
+test("recovery posts once to the original computer and ID, then independently reads persisted state", async () => {
+  for (const action of ["cancel", "reconcile"] as const) {
+    const calls: { path: string; init?: RequestInit }[] = [];
+    const record = await recoverDeliveryRecord("original/id?+", action, new AbortController().signal, async (input, init) => {
+      calls.push({ path: String(input), init });
+      return Response.json({ code: 0, data: { deliveryId: "original/id?+", state: calls.length === 1 ? "received" : "awaiting_confirmation" } });
+    }, "node+/");
+    assert.equal(calls.length, 2);
+    assert.equal(new URL(calls[0].path, "https://example.invalid").pathname, `/api/agent/deliveries/original%2Fid%3F%2B/${action}`);
+    for (const call of calls) assert.equal(new URL(call.path, "https://example.invalid").searchParams.get("nodeId"), "node+/");
+    assert.equal(calls[0].init?.method, "POST");
+    assert.equal(calls[0].init?.body, "{}");
+    assert.equal(new Headers(calls[0].init?.headers).get("content-type"), "application/json");
+    assert.equal(calls[1].init?.method, "GET");
+    assert.equal(record.state, "awaiting_confirmation");
+  }
+});
+
+test("recovery errors and readback failures never retry the mutation", async () => {
+  for (const status of [404, 409, 503]) {
+    let calls = 0;
+    await assert.rejects(recoverDeliveryRecord("original", "cancel", new AbortController().signal, async () => {
+      calls++; return Response.json({ code: -1, message: "owner rejected" }, { status });
+    }), /owner rejected/);
+    assert.equal(calls, 1);
+  }
+  let calls = 0;
+  await assert.rejects(recoverDeliveryRecord("original", "reconcile", new AbortController().signal, async () => {
+    calls++;
+    if (calls === 1) return Response.json({ code: 0, data: { state: "received" } });
+    throw new Error("readback unavailable");
+  }), /readback unavailable/);
+  assert.equal(calls, 2);
+  const controller = new AbortController(); controller.abort();
+  await assert.rejects(recoverDeliveryRecord("original", "cancel", controller.signal, async () => { throw new Error("must not send"); }), { name: "AbortError" });
+});
+
+function recoveryPage(recover: (...args: any[]) => Promise<any>, read?: (...args: any[]) => Promise<any>) {
+  const source = fs.readFileSync(new URL("../src/pages/DeliveryRecordsPage.vue", import.meta.url), "utf8");
+  const script = compileScript(parse(source).descriptor, { id: "delivery-recovery" });
+  const compiled = ts.transpileModule(script.content, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } });
+  const output = { exports: {} as any };
+  const route = vue.reactive({ query: { nodeId: "node-original" } });
+  const record = { id: "original", deliveryId: "original", state: "awaiting_confirmation", source: {}, target: {}, ownerScope: "node" };
+  vm.runInNewContext(compiled.outputText, { module: output, exports: output.exports, console, Error, AbortController, fetch,
+    require(name: string) {
+      if (name === "vue") return { ...vue, onMounted() {}, onBeforeUnmount() {} };
+      if (name === "vue-router") return { useRoute: () => route, useRouter: () => ({ replace() {} }) };
+      if (name === "../i18n") return { useI18n: () => ({ locale: vue.ref("zh-CN") }) };
+      if (name === "../userFacingError") return { userFacingError: (error: Error) => error.message };
+      if (name === "../deliveries/deliveryRecordCopy") return { deliveryRecordCopy, deliveryStateLabels };
+      if (name === "../deliveries/deliveryRecordPresentation") return presentation;
+      if (name === "../deliveries/deliveryRecordClient") return {
+        deliveryRecordOwnerId,
+        readDeliveryComputers: async () => [], readDeliveryRecords: async () => ({ records: [record], observedAt: "fixture", coverage: {} }),
+        readDeliveryRecord: read ?? (async () => ({ ...record })), recoverDeliveryRecord: recover
+      };
+      throw new Error("Unexpected import " + name);
+    }
+  });
+  return { page: output.exports.default.setup({}, { expose() {} }), route, record };
+}
+
+test("recovery UI keeps saved state on failure and adopts only readback", async () => {
+  let reject = true;
+  const { page, record } = recoveryPage(async () => {
+    if (reject) throw new Error("readback unavailable");
+    return { ...record, state: "cancelled" };
+  });
+  await page.showDetails(record);
+  await page.recover("cancel");
+  assert.equal(page.detail.value.state, "awaiting_confirmation");
+  assert.match(page.detailError.value, /readback unavailable/);
+  assert.equal(page.actionBusy.value, "");
+  reject = false;
+  await page.recover("cancel");
+  assert.equal(page.detail.value.state, "cancelled");
+  assert.equal(page.records.value[0].state, "cancelled");
+  assert.match(page.actionNotice.value, /已取消/);
+  assert.equal(page.canCancel.value, false);
+  page.detail.value = { ...record, state: "blocked", errorCode: "DELIVERY_EVIDENCE_UNAVAILABLE" };
+  assert.equal(page.canCancel.value, false);
+});
+
+test("detail refresh reads only and retains its previous snapshot when unavailable", async () => {
+  let unavailable = false;
+  const record = { id: "original", deliveryId: "original", state: "awaiting_confirmation", source: {}, target: {}, ownerScope: "node" };
+  const { page } = recoveryPage(async () => { throw new Error("must not mutate"); }, async () => {
+    if (unavailable) throw new Error("offline");
+    return record;
+  });
+  await page.showDetails(record);
+  unavailable = true;
+  await page.showDetails(record, true);
+  assert.equal(page.detail.value.deliveryId, "original");
+  assert.equal(page.detail.value.state, "awaiting_confirmation");
+  assert.equal(page.detailError.value, "offline");
+  assert.equal(page.detailLoading.value, false);
+});
+
+test("local cancellation pending at the Manager remains visibly unresolved and can reconcile", async () => {
+  const actions: string[] = [];
+  const { page, record } = recoveryPage(async (_id, action) => {
+    actions.push(action);
+    return { ...record, state: "cancelled", managerCancelPending: action === "cancel" };
+  });
+  await page.showDetails(record);
+  await page.recover("cancel");
+  assert.equal(page.detail.value.state, "cancelled");
+  assert.equal(page.canReconcile.value, true);
+  assert.equal(page.canCancel.value, false);
+  assert.equal(page.recordStatus(page.detail.value).color, "warning");
+  assert.equal(page.recordStatus(page.records.value[0]).label, "取消待核对");
+  assert.match(page.actionNotice.value, /取消待核对/);
+  await page.recover("reconcile");
+  assert.deepEqual(actions, ["cancel", "reconcile"]);
+  assert.equal(page.detail.value.managerCancelPending, false);
+  assert.equal(page.canReconcile.value, false);
+  assert.equal(page.recordStatus(page.detail.value).label, "已取消");
+  for (const locale of ["zh-CN", "en", "ja"] as const) {
+    const copy = deliveryRecordCopy(locale);
+    assert(copy.managerCancelPendingNote);
+    assert.notEqual(copy.cancelPendingStatus, deliveryStateLabels[locale].cancelled);
+  }
+});
+
+test("node detail and recovery retain the local intent when receipt delivery IDs change", async () => {
+  const local = { id: "local-row", intentId: "local-intent", deliveryId: "manager-before", state: "awaiting_confirmation", source: {}, target: {}, ownerScope: "node" as const };
+  const settled = { ...local, id: "local-row-after", deliveryId: "manager-after", state: "cancelled" };
+  const reads: any[][] = [];
+  const actions: any[][] = [];
+  let current = local;
+  const { page } = recoveryPage(async (...args) => {
+    actions.push(args); current = settled; return settled;
+  }, async (...args) => { reads.push(args); return current; });
+  await page.showDetails(local);
+  page.records.value = [local];
+  await page.recover("cancel");
+  assert.equal(actions.length, 1);
+  assert.equal(actions[0][0], "local-intent");
+  assert.equal(actions[0][4], "node-original");
+  assert.equal(page.detail.value.deliveryId, "manager-after");
+  assert.equal(page.records.value[0].deliveryId, "manager-after");
+  assert.match(page.actionNotice.value, /已取消/);
+  await page.showDetails(page.detail.value, true);
+  assert.deepEqual(reads.map(args => [args[0], args[3]]), [["local-intent", "node-original"], ["local-intent", "node-original"]]);
+  assert.equal(deliveryRecordOwnerId({ ...local, intentId: undefined } as any), "local-row");
+  assert.equal(deliveryRecordOwnerId({ ...local, ownerScope: "manager" } as any), "manager-before");
+});
+
+test("changing computers or closing details ignores late recovery and prevents duplicate commands", async () => {
+  for (const exit of ["computer", "close"]) {
+    let resolve!: (value: unknown) => void;
+    const calls: any[][] = [];
+    const { page, route, record } = recoveryPage((...args) => { calls.push(args); return new Promise(done => { resolve = done; }); });
+    await page.showDetails(record);
+    const pending = page.recover("reconcile");
+    await page.recover("cancel");
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0][0], "original"); assert.equal(calls[0][4], "node-original");
+    if (exit === "computer") route.query.nodeId = "node-other";
+    else page.detailOpen.value = false;
+    await vue.nextTick();
+    assert.equal(calls[0][2].aborted, true);
+    resolve({ ...record, state: "received" }); await pending;
+    assert.equal(page.detail.value.state, "awaiting_confirmation");
+    assert.equal(page.actionNotice.value, "");
+    assert.equal(page.actionBusy.value, "");
+  }
+});
 
 test("reads only the existing owner using encoded filters and opaque pagination", async () => {
   const calls: { input: string; init?: RequestInit }[] = [];
@@ -106,6 +283,7 @@ test("cancellation reaches the transport without a second read", async () => {
 test("unknown historical metadata stays unknown; full endpoint identities remain visible", () => {
   assert.equal(deliveryTimeLabel(undefined, "zh-CN"), "未记录");
   assert.equal(deliveryEndpointLabel({}, "en"), "Not recorded");
+  assert.equal(deliveryEndpointLabel({ kind: "connection", connection: { managerInstanceId: "manager", transport: "lan-agent", id: "computer-a" } }, "zh-CN"), "computer-a · lan-agent");
   assert.equal(deliveryEndpointLabel({ instanceId: "computer", provider: "codex-desktop", sessionId: "full-task-id" }, "zh-CN"), "computer · codex-desktop · full-task-id");
   assert.equal(deliveryTimeLabel("legacy-unparsed-time", "en"), "legacy-unparsed-time");
 });

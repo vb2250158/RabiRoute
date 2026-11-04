@@ -152,21 +152,22 @@ const builtinRoot = path.join(root, "plugins", "builtin");
 const packageDirectories = (await fs.readdir(builtinRoot, { withFileTypes: true })).filter(entry => entry.isDirectory());
 const profilePath = path.join(root, "plugins", "profiles", "desktop.json");
 const profile = JSON.parse(await fs.readFile(profilePath, "utf8"));
-const selectedBuiltins = new Map((profile.instances ?? []).map(instance => [instance.package, instance]));
+const installedVersions = (await Promise.all(packageDirectories.map(async entry => {
+  const versions = await fs.readdir(path.join(builtinRoot, entry.name), { withFileTypes: true });
+  return versions.filter(version => version.isDirectory()).map(version => ({ name: entry.name, version: version.name }));
+}))).flat();
+const installedVersionKeys = new Set(installedVersions.map(entry => JSON.stringify([entry.name, entry.version])));
 const allowedManifestFields = new Set(["schemaVersion", "id", "version", "displayName", "description", "icon", "entries", "provides", "requires", "optional", "permissions", "configSchema", "stateSchemaVersion"]);
-for (const packageEntry of packageDirectories) {
-  const selected = selectedBuiltins.get(packageEntry.name);
-  if (!selected || typeof selected.version !== "string") {
-    violations.push(`${packageEntry.name} has no selected desktop profile version`);
-    continue;
-  }
-  const versionRoot = path.join(builtinRoot, packageEntry.name, selected.version);
+// Installed compatibility packages can be omitted from the default profile.
+// Their source contracts still receive the same validation as selected packages.
+for (const packageEntry of installedVersions) {
+  const versionRoot = path.join(builtinRoot, packageEntry.name, packageEntry.version);
   const manifestPath = path.join(versionRoot, "rabi.plugin.json");
   const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
   if (manifest.schemaVersion !== 2) violations.push(`${relative(manifestPath)} must use plugin manifest schema 2`);
   const unknownFields = Object.keys(manifest).filter(field => !allowedManifestFields.has(field));
   if (unknownFields.length) violations.push(`${relative(manifestPath)} contains removed manifest fields: ${unknownFields.join(", ")}`);
-  if (manifest.id !== packageEntry.name) violations.push(`${relative(manifestPath)} package identity mismatch`);
+  if (manifest.id !== packageEntry.name || manifest.version !== packageEntry.version) violations.push(`${relative(manifestPath)} package identity mismatch`);
   for (const [field, maximum] of [["displayName", 160], ["description", 2000], ["icon", 160]]) {
     const value = manifest[field];
     if (value === undefined) continue;
@@ -220,7 +221,12 @@ for (const packageEntry of packageDirectories) {
 if (Object.keys(profile).some(field => !["schemaVersion", "readyRequires", "instances"].includes(field))) violations.push("desktop profile contains unsupported top-level fields");
 if (profile.schemaVersion !== 2) violations.push("desktop profile must use schema 2");
 if (!Array.isArray(profile.readyRequires) || !profile.readyRequires.includes("manager.core@1")) violations.push("desktop profile must declare manager.core@1 readiness");
-if (!Array.isArray(profile.instances) || profile.instances.length !== packageDirectories.length) violations.push("desktop profile must select every built-in package exactly once");
+if (!Array.isArray(profile.instances)) violations.push("desktop profile must declare its selected instances");
+for (const instance of profile.instances ?? []) {
+  if (!installedVersionKeys.has(JSON.stringify([instance.package, instance.version]))) {
+    violations.push(`desktop profile selects an unavailable package version: ${instance.package}@${instance.version}`);
+  }
+}
 if (new Set(profile.instances?.map(instance => instance.package)).size !== profile.instances?.length) violations.push("desktop profile contains duplicate packages");
 
 const packageLoaderSource = await fs.readFile(path.join(root, "src", "plugin-kernel", "packageLoader.ts"), "utf8");

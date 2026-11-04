@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import type { PluginExecutionConfigurationDiagnostic } from "./pluginExecutionSettings.js";
 import type { LoadedPluginPackage } from "./packageLoader.js";
 import { PluginPackageLoader, type PluginPackageLoadingOptions } from "./pluginPackageLoader.js";
@@ -243,6 +244,8 @@ export async function loadPluginProfile(input: Readonly<{
   host: PluginHost;
   /** Only successfully loaded immutable packages from the preceding reconciliation. */
   previous?: LoadedPluginProfile;
+  /** Enable settings act on published immutable owners; source updates use ordinary loading. */
+  reuseUnchangedPackages?: boolean;
   /** Effective profile from the single settings owner; avoids a second disk/config truth. */
   profile?: PluginProfile;
   /** The producer's original lifecycle; individual shared package jobs are not cancelled here. */
@@ -258,7 +261,32 @@ export async function loadPluginProfile(input: Readonly<{
   const profile = input.profile ?? await input.packageCatalog.loadProfile(input.profilePath);
   assertCurrent();
   const enabled = profile.instances.filter(instance => instance.enabled);
-  const packages = [...new Map(enabled.map(instance => [JSON.stringify([instance.package, instance.version]), instance])).entries()];
+  const instancesByPackage = new Map<string, PluginProfileEntry[]>();
+  for (const instance of enabled) {
+    const key = JSON.stringify([instance.package, instance.version]);
+    const instances = instancesByPackage.get(key) ?? [];
+    instances.push(instance); instancesByPackage.set(key, instances);
+  }
+  const packages = [...instancesByPackage].map(([key, instances]) => [key, instances[0]!] as const);
+  const reusable = new Map<string, LoadedPluginPackage>();
+  if (input.reuseUnchangedPackages && input.previous) {
+    const previousEntries = new Map(input.previous.packages.map(entry => [entry.instance.id, entry]));
+    const previousCandidates = new Map(input.previous.candidates.map(candidate => [candidate.instanceId, candidate]));
+    for (const [key, instances] of instancesByPackage) {
+      let selected: LoadedPluginPackage | undefined;
+      for (const instance of instances) {
+        const entry = previousEntries.get(instance.id), candidate = previousCandidates.get(instance.id);
+        if (!entry || !candidate || !isDeepStrictEqual(entry.instance, instance)
+          || pluginPackageForCandidate(candidate) !== entry.package
+          || selected && (selected.revision !== entry.package.revision || selected.runtimeRoot !== entry.package.runtimeRoot)) {
+          selected = undefined; break;
+        }
+        selected = entry.package;
+      }
+      if (selected) reusable.set(key, selected);
+    }
+  }
+  const reuseAdmissions = new Map<string, PromiseSettledResult<void>>();
   const packageResults = new Map<string, PromiseSettledResult<LoadedPluginPackage>>();
   let next = 0;
   // Backpressure belongs to this batch producer. A large valid Profile must not
@@ -268,8 +296,18 @@ export async function loadPluginProfile(input: Readonly<{
       assertCurrent();
       const [key, instance] = packages[next++]!;
       let result: PromiseSettledResult<LoadedPluginPackage>;
+      const current = reusable.get(key);
       try {
-        result = { status: "fulfilled", value: await input.packageCatalog.loadPackage(instance.package, instance.version, input.runtimeRoot, input.host) };
+        if (current) {
+          try {
+            await input.packageCatalog.assertPackageExecutionAllowed(current);
+            reuseAdmissions.set(key, { status: "fulfilled", value: undefined });
+          } catch (reason) {
+            reuseAdmissions.set(key, { status: "rejected", reason }); throw reason;
+          }
+        }
+        result = { status: "fulfilled", value: current
+          ?? await input.packageCatalog.loadPackage(instance.package, instance.version, input.runtimeRoot, input.host) };
       } catch (reason) { result = { status: "rejected", reason }; }
       // A lifecycle denial is not a bad package and must not enter fallback.
       assertCurrent();
@@ -303,11 +341,13 @@ export async function loadPluginProfile(input: Readonly<{
     let failure = result.reason instanceof Error ? result.reason.message : String(result.reason);
     if (previousCandidate && previousPackage) {
       assertCurrent();
-      let admission: PromiseSettledResult<void>;
-      try {
-        await input.packageCatalog.assertPackageExecutionAllowed(previousPackage.package);
-        admission = { status: "fulfilled", value: undefined };
-      } catch (reason) { admission = { status: "rejected", reason }; }
+      let admission = reuseAdmissions.get(JSON.stringify([instance.package, instance.version]));
+      if (!admission) {
+        try {
+          await input.packageCatalog.assertPackageExecutionAllowed(previousPackage.package);
+          admission = { status: "fulfilled", value: undefined };
+        } catch (reason) { admission = { status: "rejected", reason }; }
+      }
       assertCurrent();
       if (admission.status === "fulfilled") {
         loaded.push(Object.freeze({ ...previousPackage, candidate: previousCandidate }));

@@ -1,0 +1,20 @@
+{
+  "endpointType": "agent:marvis",
+  "agentType": "marvis",
+  "capability": "agent.adapter.marvis@1",
+  "routeKeys": [
+    "marvisAppId"
+  ],
+  "runtimeFields": {
+    "marvisAppId": {
+      "paths": [
+        "marvisAppId"
+      ],
+      "default": "",
+      "trim": true
+    }
+  },
+  "environmentFields": {
+    "MARVIS_APP_ID": "marvisAppId"
+  }
+}

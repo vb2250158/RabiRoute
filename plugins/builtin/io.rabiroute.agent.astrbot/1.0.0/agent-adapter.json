@@ -1,0 +1,17 @@
+{
+  "type": "astrbot",
+  "capability": "agent.adapter.astrbot@1",
+  "manifest": {
+    "type": "astrbot",
+    "label": "AstrBot",
+    "maturity": "experimental",
+    "transport": {
+      "protocol": "http",
+      "mode": "astrbot-plugin"
+    },
+    "capabilities": {}
+  },
+  "sessionBinding": {
+    "sessionId": "astrbotSessionId"
+  }
+}

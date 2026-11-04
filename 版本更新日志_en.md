@@ -6,6 +6,37 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.6.0 - 2026-11-04
+
+- Read the host version from the running service and omit the old placeholder until that read completes.
+- Distinguish plugin startup loading from an actual read failure on first opening, retaining the recovery entry after a failed load.
+- Authenticated connected endpoints can send freely; source fields record attribution. Sessionless sources use their real connection without invented tasks. Ordinary sends default to no reply. Formal replies without an original task address update only the original request record, preserving original IDs, actual responders and cancellation outcomes.
+- Isolate invalid QQ history rows while keeping healthy messages available. Omit missing or invalid time labels, show local partial-result notices and preserve pagination.
+- Preserve legacy DSH and Grok Bot scan operation IDs. Correct remote reply sender workspace using the delivery execution directory.
+
+- Finalize the original build receipt after generating Web plugin entries, covering every final file and the original input-directory membership. Formal CLI checks still reject extra or modified files; standalone Web builds remain independent.
+- Prepare only affected instances for plugin toggles and reuse unchanged verified immutable packages. Source updates retain the original publication verification, avoiding repeated preparation of every enabled package for one switch.
+- Version the host and each plugin independently: host candidate `0.6.0`, with each of the nine new Agent packages starting at `1.0.0`. Plugin management distinguishes configured versions from the original owner's running version, including retained activations after failed upgrades.
+- One-shot deliveries use the admitted Route snapshot until the original process closes. Remote client source advances to `0.3.0` and uses the same native Agent packages for discovery, sessions and real execution instead of two fixed providers. No remote upgrade was triggered.
+- Give Codex, DSH, Copilot CLI, Marvis, AstrBot, WorkBuddy, Antigravity, Device Agent and Grok Bot individual native plugin packages for execution, discovery, session management and configuration cards, using the existing plugin activation and publication lifecycle.
+- Build Agent menus and cards from plugin contributions. Disabled or failed plugins retain saved targets, fields and the primary Agent choice. Valid unknown plugin IDs remain saved; non-string configuration or message-source fields never become invented plugin IDs. Individual scan failures remain local while healthy providers return results; scanning runs on page entry or explicit refresh. Computer and device directory diagnostics stay with their original targets; diagnostics from unused sources appear in the add area without blocking healthy local cards or saving.
+- Keep task IDs, workspaces, remote-instance identity and durable delivery receipts with their existing host owners. No fallback execution Runtime or catalog-based task retargeting is introduced. A missing explicitly selected remote backend reports its original target instead of borrowing the default workspace. Canonical and legacy Codex names match the same original backend while preserving its workspace and model; supported types still work without a saved backend when none was selected.
+- Verify source, isolated candidates and installed applications separately. This GitHub update does not imply a switch of the in-use Host or Manager.
+- Merge today's send contract: retire old directory grants for ordinary local files without reviving legacy defaults or adding another permission. Preserve file validity, managed-attachment ownership and original send receipts.
+- List actual active terminal sessions while retaining per-session protocol validation. Release only newly allocated placeholders proven not dispatched; admitted or uncertain terminal identities remain intact.
+- Keep group-member search usable after clearing it. Unformattable message times omit only their optional separator; original messages and healthy neighboring records remain available.
+- Strengthen Windows transaction tests with confirmed process exits and actual fault-stage assertions. The whole-transaction watchdog covers sequential steps and rollback; uncertain exits retain their test fixture. Production installer logic and wait contracts are unchanged.
+- Recover remote management receipts after deadlines: late replies, completion after reconnect and overlapping recovery events wake reconciliation of the original ID. Busy or draining connectors read persisted snapshots first; workers can recover original-owner acceptance evidence. Add WebSocket liveness checks, original-connection response binding and positive pre-send no-frame evidence. Unknown outcomes retain their original intent without fabricated acceptance or prompt replay.
+- Remove the persona Message context tab. Each automation message rule now controls whether to include recent messages and how many (1–200) under Notify Agent. Existing rules retain endpoint counts; disabling history preserves chat records.
+- Add original-receipt checks and cancellation to delivery records, including orphan uncertain records. Cancelling a related reply preserves acceptance evidence. Administrative checks never resend or requeue, and unconfirmed cross-computer cancellation remains visibly pending.
+- Move Shared activities into Virtual avatar on the persona configuration page, removing its separate tab while preserving companionship, video and discussion controls.
+- Upgrade the Agent communication plugin independently to `1.1.0` for original-receipt reconciliation and cancellation APIs. Preserve the published `1.0.0` package, select the new version in the host Profile, and retain compatible `@1` capability majors.
+- Release native Agent catalog `1.1.0` and RabiLink Relay `2.0.0` after separating Device Agent management. Preserve published package bytes. Retired AstrBot, Copilot and Marvis controls keep their original `1.0.0`; the default Profile selects the corresponding Agent plugins instead of overwriting old packages with throwing stubs.
+
+- Unify message history around conversation lists, timelines and related details. Agent deliveries aggregate both directions per task and list counterpart tasks on the right. Panel submissions and task replies are grouped by task; other endpoints use the full historical conversation catalog. Preserve NapCat media, pagination, original receipts and narrow-screen navigation. See [Message history](docs/message-history_en.md) for the candidate APIs and deployment status.
+
+- Fix target identification for self-sent QQ private messages and retain original-conversation media reads. Keep legacy-source conversations in an expandable, searchable history group with their original keys and messages, separate from current accounts.
+
 ## 0.5.6 - 2026-11-04
 
 - Share one QQ navigation read queue across contacts, group members and native history while keeping previews independent, preventing same-page refreshes from competing for read slots. Preserve cancellation, failure release, reading position and existing backend settings without automatic retries.

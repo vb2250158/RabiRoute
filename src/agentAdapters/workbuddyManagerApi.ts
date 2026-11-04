@@ -35,7 +35,7 @@ export async function scanWorkbuddyAgentAdapter(
     "workbuddyLimit" | "workbuddyOffset" | "workbuddyQuery" | "workbuddyWorkspace"
   > = {}
 ): Promise<{ agents: { workbuddy: AgentScanResult }; cwdOptions: string[] }> {
-  const manifest = agentAdapterManifest("workbuddy");
+  const manifest = ctx.manifest ?? agentAdapterManifest("workbuddy");
   const limit = Math.max(1, Math.min(500, Math.floor(options.workbuddyLimit ?? 200)));
   const offset = Math.max(0, Math.floor(options.workbuddyOffset ?? 0));
   const query = String(options.workbuddyQuery || "").trim() || undefined;
@@ -60,14 +60,9 @@ export async function scanWorkbuddyAgentAdapter(
     warnings.push("未发现 WorkBuddy 任务；请确认 WorkBuddy 桌面已启动并至少有过一次对话。");
   }
 
-  const allTasks = listWorkbuddyTasks({ databasePath, descriptors, includeArchived: false });
-  const filtered = allTasks
-    .filter(task => !workspace || normalizeWorkbuddyWorkspace(task.workspace) === normalizeWorkbuddyWorkspace(workspace))
-    .filter(task => !query
-      || task.name.toLocaleLowerCase().includes(query.toLocaleLowerCase())
-      || task.autoTitle.toLocaleLowerCase().includes(query.toLocaleLowerCase()));
-  const hasMore = filtered.length > limit;
-  const page = filtered.slice(offset, offset + limit);
+  const tasks = listWorkbuddyTasks({ databasePath, descriptors, includeArchived: false, query, workspace, limit: limit + 1, offset });
+  const hasMore = tasks.length > limit;
+  const page = tasks.slice(0, limit);
   const sessions: AgentScanSession[] = page.map(task => ({
     id: task.id,
     name: task.name,

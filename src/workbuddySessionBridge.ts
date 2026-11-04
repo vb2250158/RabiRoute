@@ -267,10 +267,10 @@ export function workbuddyRouteConfigPath(): string {
  * WorkBuddy task, so the adapter stays inert instead of guessing a target.
  */
 export function readWorkbuddyPrimaryBinding(
-  routeConfigPath: string = workbuddyRouteConfigPath()
+  routeConfigPath: string = workbuddyRouteConfigPath(), configuration?: Record<string, unknown>
 ): WorkbuddyPrimaryBinding | null {
   try {
-    const parsed = JSON.parse(fs.readFileSync(routeConfigPath, "utf8")) as Record<string, unknown>;
+    const parsed = configuration ?? JSON.parse(fs.readFileSync(routeConfigPath, "utf8")) as Record<string, unknown>;
     const sessionId = typeof parsed.workbuddySessionId === "string" ? parsed.workbuddySessionId.trim() : "";
     const cwd = typeof parsed.workbuddyCwd === "string" ? parsed.workbuddyCwd.trim() : "";
     if (!sessionId || !cwd) return null;
@@ -343,9 +343,10 @@ export function ensureWorkbuddyDeliverable(
  */
 export async function notifyWorkbuddySession(
   message: string,
-  options: { senderId?: string; settleTimeoutMs?: number } = {}
+  options: { senderId?: string; settleTimeoutMs?: number } = {},
+  configuration?: Record<string, unknown>
 ): Promise<{ sessionId: string; runId: string }> {
-  const binding = readWorkbuddyPrimaryBinding();
+  const binding = readWorkbuddyPrimaryBinding(undefined, configuration);
   if (!binding) {
     throw new WorkbuddyDeliveryError(
       "当前路由没有配置 WorkBuddy 任务绑定；请先在设置里选择任务并保存。",

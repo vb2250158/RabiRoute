@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { agentIdentityForMessageSource } from '../shared/rabiMessage.js';
 import type { createDeviceAgentOwner } from '../agentAdapters/deviceAgentOwner.js';
 import type { AgentThreadRequest } from '../agentThreads.js';
 import type { AgentRequestEndpoint } from '../agentRequests/endpoint.js';
@@ -47,17 +48,15 @@ export function createDeviceAgentEndpointBridge(options: DeviceAgentEndpointBrid
     return {endpoint,agentAdapter:'deviceAgent',threadId:sessionId,threadName:session.name,agentType};
   }
   function authorize(endpoint: AgentRequestEndpoint,role?:'source'|'target') {
-    const requireLoaded=role==='source';
+    if(role==='source')return;
     if(endpoint.kind!=='device' || endpoint.managerInstanceId!==options.managerInstanceId || endpoint.provider!=='deviceAgent')throw failure('DEVICE_AGENT_ENDPOINT_CHANGED',401);
     if(endpoint.instanceId===options.ownerInstanceId) {
       if(!sameAgentEndpoint(endpoint,party(endpoint.agentId,endpoint.sessionId,'agent').endpoint))throw failure('DEVICE_AGENT_ENDPOINT_CHANGED',401);
-      if(requireLoaded && !options.owner.sessions(options.scope()).find(row=>row.agentId===endpoint.agentId && row.sessionId===endpoint.sessionId)?.loaded)throw failure('DEVICE_AGENT_NOT_LOADED');
       return;
     }
     const proof=proofs.get(key(endpoint.agentId,endpoint.sessionId));
     if(!proof || proof.scope!==options.scope() || proof.localDeviceId!==options.peer?.localDeviceId() || proof.validUntil<Date.now()
       || !sameAgentEndpoint(endpoint,proof.party.endpoint))throw failure('DEVICE_AGENT_ENDPOINT_CHANGED',401);
-    if(requireLoaded && !proof.loaded)throw failure('DEVICE_AGENT_NOT_LOADED');
   }
   async function assignment(scope: string, agentId: string, endpoint: AgentRequestEndpoint) {
     await options.assertDeviceAssignment(scope,agentId);
@@ -85,18 +84,31 @@ export function createDeviceAgentEndpointBridge(options: DeviceAgentEndpointBrid
     return {party:selected,loaded:session.loaded};
   }
   async function refresh(endpoint:AgentRequestEndpoint,role?:'source'|'target') {
-    if(endpoint.kind!=='device')return;
+    if(role==='source' || endpoint.kind!=='device')return;
     const current=await lookup(endpoint.agentId,endpoint.sessionId,'agent');
     if(!sameAgentEndpoint(current.party.endpoint,endpoint))throw failure('DEVICE_AGENT_ENDPOINT_CHANGED',401);
     authorize(endpoint,role);
   }
+  function handlesSource(_request: AgentThreadRequest, principal?: RabiLinkAgentPrincipal): boolean {
+    return principal?.deviceOwner === true;
+  }
+  function handlesTarget(request: AgentThreadRequest): boolean {
+    if (request.agentAdapter) return request.agentAdapter === "deviceAgent";
+    const binding = request.instanceBinding, scope = options.scope();
+    const sessions = scope ? options.owner.sessions(scope) : [];
+    return binding?.instanceId === options.ownerInstanceId
+      ? sessions.some(row => row.agentId === binding.agentId && row.sessionId === request.threadId)
+      : !binding && sessions.some(row => row.sessionId === request.threadId);
+  }
   async function resolveSource(request: AgentThreadRequest, principal?: RabiLinkAgentPrincipal): Promise<AgentRequestParty|undefined> {
-    if(!principal?.deviceOwner) return undefined;
-    if(principal.scope!==options.scope()) throw failure('DEVICE_AGENT_CONNECTION_CHANGED',401);
-    if(!request.sourceThreadId || !request.sourceAgentType) throw failure('DEVICE_AGENT_SOURCE_REQUIRED',400);
-    const source=await lookup(principal.sourceDeviceId,request.sourceThreadId,request.sourceAgentType);
-    if(!source.loaded)throw failure('DEVICE_AGENT_NOT_LOADED');
-    return source.party;
+    const identity=request.messageSource && agentIdentityForMessageSource(request.messageSource);
+    const sessionId=request.sourceThreadId || identity?.sessionId;
+    if(!principal?.deviceOwner || !sessionId || identity && identity.agentAdapter!=='deviceAgent') return undefined;
+    const agentId=principal.sourceDeviceId;
+    return {endpoint:{kind:'device',managerInstanceId:options.managerInstanceId,instanceId:options.ownerInstanceId,
+      agentId,provider:'deviceAgent',sessionId,
+      authorizationIncarnation:createHash('sha256').update(JSON.stringify([principal.scope,options.ownerInstanceId,agentId,sessionId])).digest('hex')},
+      agentAdapter:'deviceAgent',threadId:sessionId,threadName:identity?.sessionName || sessionId,agentType:request.sourceAgentType || 'agent'};
   }
   async function resolveTarget(request: AgentThreadRequest): Promise<AgentRequestParty|undefined> {
     if(request.agentAdapter && request.agentAdapter!=='deviceAgent') return undefined;
@@ -105,6 +117,11 @@ export function createDeviceAgentEndpointBridge(options: DeviceAgentEndpointBrid
     const selected=binding?.instanceId===options.ownerInstanceId ? sessions.find(row=>row.agentId===binding.agentId && row.sessionId===request.threadId)
       : !binding ? sessions.find(row=>row.sessionId===request.threadId) : undefined;
     if(request.agentAdapter!=='deviceAgent' && !selected) return undefined;
+    // A reply's stored source host is a routing hint. Resolve its exact device/session as a target now.
+    if(binding && request.inReplyToRequestId) {
+      if(!request.threadId)throw failure('DEVICE_AGENT_SESSION_NOT_FOUND',404);
+      return (await lookup(binding.agentId,request.threadId,request.messageProcessing?.targetAgentType || 'agent')).party;
+    }
     if(binding && binding.instanceId!==options.ownerInstanceId) {
       if(!request.threadId)throw failure('DEVICE_AGENT_SESSION_NOT_FOUND',404);
       const target=await lookup(binding.agentId,request.threadId,request.messageProcessing?.targetAgentType || 'agent');
@@ -126,7 +143,7 @@ export function createDeviceAgentEndpointBridge(options: DeviceAgentEndpointBrid
       const proof=proofs.get(key(delivery.target.agentId,delivery.target.sessionId))!;
       const response=await options.peer.request(proof.ownerDeviceId,'POST','/api/device-agents/'+encodeURIComponent(delivery.target.agentId)+'/prepared-deliveries'+(reconcile?'/reconcile':''),
         {ledgerOwnerDeviceId:options.peer.localDeviceId(),delivery});fence();
-      await refresh(delivery.source,'source');fence();await refresh(delivery.target,'target');fence();guard();
+      await refresh(delivery.target,'target');fence();guard();
       return unwrap(response).receipt || undefined;
     }
     await assignment(scope,delivery.target.agentId,delivery.target);guard();
@@ -135,10 +152,10 @@ export function createDeviceAgentEndpointBridge(options: DeviceAgentEndpointBrid
       guard();
       // Queued or phone-submitted wake is not a native-owner receipt. Wait for the existing claim event.
       await options.owner.waitReceipt(scope,delivery.target.agentId,delivery.deliveryId,12000);
-      fence();await refresh(delivery.source,'source');fence();guard();
+      fence();guard();
     }
     return options.owner.readPreparedReceipt(scope,delivery.target.agentId,delivery);
   }
-  return {resolveSource,resolveTarget,authorize,transport,refresh};
+  return {handlesSource,handlesTarget,resolveSource,resolveTarget,authorize,transport,refresh};
 }
 export type DeviceAgentEndpointBridge = ReturnType<typeof createDeviceAgentEndpointBridge>;

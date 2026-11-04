@@ -16,7 +16,7 @@ export function createLanAgentConnectionOperation(registry: LanAgentRegistry, op
       headers: { type: "object", additionalProperties: true }, body: { kind: "none" } },
     websocket: { protocol: "rabiroute.lan-agent.native-v1", framing: "json", ...LAN_AGENT_WEBSOCKET_LIMITS,
       incomingSchema: { type: "object", additionalProperties: true, properties: Object.fromEntries([
-        "type", "token", "node", "agents", "requestId", "result", "error", "taskId", "eventId", "status", "summary", "event"
+        "type", "token", "node", "agents", "requestId", "result", "error", "taskId", "eventId", "status", "summary", "event", "deliveryId", "generation"
       ].map(name => [name, nativeField])) },
       outgoingSchema: { type: "object", required: ["type"], properties: { type: { type: "string" } }, additionalProperties: true },
       authentication: "The existing enabled switch and first authenticate/token message, then hello/node metadata, own admission. No HTTP-only identity or Agent/persona registration is added. Native credentials are rechecked by the existing message owner.",
@@ -29,7 +29,7 @@ export function createLanAgentConnectionOperation(registry: LanAgentRegistry, op
       "400": { ...failure, alternatives: [{ mediaType: "text/html", schema: { type: "string" } }] } },
     effects: { mode: "native-agent-connection", description: "The existing registry owns authentication, hello, Agent catalogs, terminal events, management results, task acceptance/results and update status. Task state and credentials remain with their original owners." },
     recovery: { strategy: "reconnect-original-node-without-replay", description: "Rediscover the Manager and reconnect using the original computer credential. Resubmit a retained taskResult with its original eventId; Manager persists the result before resultAck and deduplicates across restarts. Reconnection and catalog changes never replay commands or task assignments." },
-    validators: [{ id: "lan-agent.websocket.native-state-machine", description: "JSON object framing is shared with native parsing; authenticate, hello, heartbeat, agentCatalog, managementResult, terminalEvent, ackTask/progress/taskResult and updateResult keep their original stateful field/ownership/error rules. Unknown messages receive the native error; native ws validates handshake headers and rejects invalid JSON/oversize frames." },
+    validators: [{ id: "lan-agent.websocket.native-state-machine", description: "JSON object framing is shared with native parsing; authenticate, hello, heartbeat, agentCatalog, managementResult, deliveryRecovery, terminalEvent, ackTask/progress/taskResult and updateResult keep their original stateful field/ownership/error rules. deliveryRecovery carries only the original deliveryId/generation and wakes original-ledger reconciliation, never confirming execution. Unknown messages receive the native error; native ws validates handshake headers and rejects invalid JSON/oversize frames." },
       { id: "lan-agent.websocket.capacity", description: "The original ws default 100 MiB message bound is explicit; outgoing buffered bytes are bounded at 200 MiB. First authentication expires at ten seconds. These are shared transport capacities, not feature permissions." }] },
     handler: input => registry.upgradeConnection(input, options) } satisfies ApiUpgradeDefinition;
 }

@@ -1,5 +1,6 @@
 import test from "node:test";
 import http from "node:http";
+import net from "node:net";
 import { once } from "node:events";
 import { WebSocketServer } from "ws";
 import assert from "node:assert/strict";
@@ -9,6 +10,48 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import { withoutSessionBindings } from "../lib/instance-agents.mjs";
 import { __test } from "../rabi-agent.mjs";
+
+// The runtime reaches its published Codex plugin; only the external Desktop IPC
+// peer is isolated. No production Desktop receives a fixture task.
+async function codexPeer(directory, turns) {
+  const pipePath = process.platform === "win32"
+    ? `\\\\.\\pipe\\rabi-agent-test-${process.pid}-${path.basename(directory)}`
+    : path.join(directory, "codex.sock");
+  const sockets = new Set();
+  const listener = net.createServer(socket => {
+    sockets.add(socket);
+    socket.once("close", () => sockets.delete(socket));
+    let pending = Buffer.alloc(0);
+    socket.on("data", bytes => {
+      pending = Buffer.concat([pending, bytes]);
+      while (pending.length >= 4 && pending.length >= 4 + pending.readUInt32LE(0)) {
+        const length = pending.readUInt32LE(0);
+        const message = JSON.parse(pending.subarray(4, length + 4).toString("utf8"));
+        pending = pending.subarray(length + 4);
+        if (message.method === "thread-follower-start-turn") turns.push(message.params.turnStart.request);
+        assert.ok(["initialize", "thread-follower-start-turn"].includes(message.method));
+        const response = Buffer.from(JSON.stringify({
+          requestId: message.requestId,
+          resultType: "success",
+          result: message.method === "initialize" ? { clientId: "fixture-client" } : {}
+        }));
+        const header = Buffer.alloc(4);
+        header.writeUInt32LE(response.length);
+        socket.write(Buffer.concat([header, response]));
+      }
+    });
+  });
+  listener.listen(pipePath);
+  await once(listener, "listening");
+  const previous = process.env.CODEX_DESKTOP_IPC_PATH;
+  process.env.CODEX_DESKTOP_IPC_PATH = pipePath;
+  return async () => {
+    if (previous === undefined) delete process.env.CODEX_DESKTOP_IPC_PATH;
+    else process.env.CODEX_DESKTOP_IPC_PATH = previous;
+    for (const socket of sockets) socket.destroy();
+    await new Promise((resolve, reject) => listener.close(error => error ? reject(error) : resolve()));
+  };
+}
 
 const identity = nodeId => ({ code: 0, data: { nodeId, applicationGenerationId: "generation-fixture", managerInstanceId: "manager-fixture", guid: "guid-fixture", rabiGuid: "guid-fixture", health: { live: true, state: "healthy", requiredReady: true } } });
 async function fixture(run) {
@@ -242,12 +285,14 @@ test("launcher installs a pointer-resolving Hook shim and provides stable API fo
 test("queued task revoked before execution never enters the host", async () => fixture(async ({ configPath, directory }) => {
   const savedFetch = globalThis.fetch;
   let requests = 0;
-  let turns = 0;
+  const turns = [];
   let releaseQueue;
   globalThis.fetch = async (url, init) => { requests++; if (String(url).endsWith("/.well-known/rabiroute-manager")) return Response.json({ code: 0, data: { ...identity("fixture-node").data, protocolVersion: "1" } }); return Response.json({ code: 403 }, { status: 403 }); };
   const runtime = new __test.RabiAgentRuntime({ managerUrl: "http://manager.test:54321", nodeId: "fixture-node", nodeCredential: "fixture-node", defaultWorkspace: directory, allowedWorkspaces: [directory],
     agents: [{ agentId: "default", provider: "codex-desktop", sessionId: "fixture-session", workspace: directory }] }, configPath);
-  runtime.desktop.startTurn = async () => { turns++; };
+  let closePeer;
+  try {
+  closePeer = await codexPeer(directory, turns);
   // Exercise authority revocation, not the earlier disconnected-transport guard.
   runtime.connected = true;
   runtime.socketManagerGuid = "guid-fixture";
@@ -255,15 +300,14 @@ test("queued task revoked before execution never enters the host", async () => f
   fs.writeFileSync(configPath, JSON.stringify(runtime.config));
   runtime.send = () => true;
   runtime.taskQueue = new Promise(resolve => { releaseQueue = resolve; });
-  try {
     runtime.enqueueTask({ taskId: "fixture-task", agentId: "default", targetAgent: "codex-desktop", threadId: "explicit-target", message: "fixture", cwd: directory });
     assert.equal(requests, 0);
     releaseQueue();
     await runtime.taskQueue;
     assert.ok(requests > 0);
-    assert.equal(turns, 0);
+    assert.equal(turns.length, 0);
     assert.equal(runtime.stateStore.state.tasks["fixture-task"].status, "failed");
-  } finally { await runtime.stop(); globalThis.fetch = savedFetch; }
+  } finally { try { await runtime.stop(); } finally { await closePeer?.(); globalThis.fetch = savedFetch; } }
 }));
 
 test("prepared management captures original connection before queue execution and sends no replacement receipt", async () => fixture(async ({ configPath, directory }) => {
@@ -279,6 +323,7 @@ test("prepared management captures original connection before queue execution an
   runtime.socket = { close() {} };
   releaseQueue();
   await runtime.taskQueue;
+  await Promise.all([...runtime.preparedDeliveries]);
   assert.equal(replies.length, 0);
   await runtime.stop();
 }));
@@ -288,6 +333,8 @@ test("Manager enablement controls queued execution despite a legacy local disabl
   const agent = { agentId: "worker", provider: "codex-desktop", sessionId: "fixture-session", workspace: directory, enabled: false };
   const runtime = new __test.RabiAgentRuntime({ managerUrl: "http://manager.test:54321", nodeId: "fixture-node", nodeCredential: "fixture-node",
     defaultWorkspace: directory, allowedWorkspaces: [directory], agents: [agent] }, configPath);
+  let closePeer;
+  try {
   let enabled = true;
   let requests = 0;
   const turns = [];
@@ -297,14 +344,13 @@ test("Manager enablement controls queued execution despite a legacy local disabl
   fs.writeFileSync(configPath, JSON.stringify(runtime.config));
   runtime.send = () => true;
   runtime.send = () => true;
-  runtime.desktop.startTurn = async turn => { turns.push(turn); };
+  closePeer = await codexPeer(directory, turns);
   globalThis.fetch = async (url, init) => {
     if (String(url).endsWith("/.well-known/rabiroute-manager")) return Response.json({ code: 0, data: { ...identity("fixture-node").data, protocolVersion: "1" } });
     requests++;
     if (init.headers["x-rabiroute-agent-type"]) assert.equal(init.headers["x-rabiroute-agent-type"], "codex");
     return enabled || String(url).endsWith("/api/lan-agent/self") || !init.headers["x-rabiroute-agent-type"] ? Response.json(identity("fixture-node")) : Response.json({ code: 403 }, { status: 403 });
   };
-  try {
     await runtime.runTask({ taskId: "enabled-task", agentId: agent.agentId, targetAgent: agent.provider, threadId: "explicit-target", message: "fixture", cwd: directory }, "guid-fixture");
     assert.equal(turns.length, 1, JSON.stringify(runtime.stateStore.state.tasks));
     assert.equal(turns[0].threadId, "explicit-target");
@@ -316,7 +362,7 @@ test("Manager enablement controls queued execution despite a legacy local disabl
     assert.ok(requests > beforeDenied);
     assert.equal(turns.length, 1, JSON.stringify(runtime.stateStore.state.tasks));
     assert.match(runtime.stateStore.state.tasks["disabled-task"].error, /Manager no longer authorizes/);
-  } finally { await runtime.stop(); globalThis.fetch = savedFetch; }
+  } finally { try { await runtime.stop(); } finally { await closePeer?.(); globalThis.fetch = savedFetch; } }
 }));
 
 test("thread and prepared operations reach Manager authority with legacy local disabled state", async () => fixture(async ({ configPath, directory }) => {
@@ -346,7 +392,7 @@ test("thread and prepared operations reach Manager authority with legacy local d
   } finally { await runtime.stop(); globalThis.fetch = savedFetch; }
 }));
 
-test("prepared-recovery diagnostics distinguish the original receipt wait from authority and retain the original request ID", async () => fixture(async ({ configPath, directory }) => {
+test("prepared-recovery diagnostics retain the original request while observing a busy receipt owner without waiting", async () => fixture(async ({ configPath, directory }) => {
   const savedFetch = globalThis.fetch, replies = [];
   const runtime = new __test.RabiAgentRuntime({ managerUrl: "http://manager.test:54321", nodeId: "fixture-node", nodeCredential: "private-fixture-credential",
     defaultWorkspace: directory, allowedWorkspaces: [directory], agents: [] }, configPath);
@@ -362,16 +408,17 @@ test("prepared-recovery diagnostics distinguish the original receipt wait from a
         kind: "instance", nodeId: "fixture-node", provider: "codex", sessionId: "exact-owner"
       } }
     } }));
-    await new Promise(resolve => setImmediate(resolve));
+    await Promise.all([...runtime.receiptRecoveries]);
     const diagnostic = () => fs.readFileSync(path.join(directory, "logs", "management-diagnostics.json"), "utf8");
     const queued = JSON.parse(diagnostic()).entries.at(-1);
-    assert.equal(queued.stage, "receipt_wait");
     assert.equal(queued.requestId, "original-management-request");
-    assert.equal(requests, 0); assert.equal(replies.length, 0);
+    assert.equal(runtime.receiptOperations.size, 1, "the original execution still owns its receipt");
+    assert.ok(requests > 0); assert.equal(replies.length, 1);
+    assert.equal(queued.stages.receipt_wait, undefined, "snapshot observation must not queue behind native work");
     release(); await waiting;
     await Promise.all([...runtime.receiptRecoveries]);
     const finished = JSON.parse(diagnostic()).entries.at(-1);
-    assert.equal(finished.stages.receipt_enter.count, 1);
+    assert.equal(finished.stages.receipt_enter, undefined);
     assert.equal(finished.stages.module.result, "completed");
     assert.equal(finished.stages.authority.result, "failed");
     assert.equal(finished.stages.response.result, "failed");

@@ -32,14 +32,18 @@ Agent 的 `send` 与 `reconcile_delivery` 进入 `createAgentEndpointDelivery` �
 
 发送超时或回执缺失返回 `delivery_unconfirmed`。调用方应查询或协调原 `deliveryId`；`reconcile_delivery` 只读取原证据，不生成第二次投递。重启恢复沿用原记录，不能换会话、换凭据、换 owner 或重放已开始的消息。
 
-原身份撤销、设备 owner epoch 改变、会话归档或回执哈希不一致时，原投递无法确认。重新绑定不是原投递的回执，必须保留其结果不确定状态。
+投递页可通过原记录的 `/reconcile` 和 `/cancel` 接口核对或取消，包括没有关联待回复请求的孤儿记录，详见[投递记录操作](reliable-agent-delivery.md#查看投递记录)。管理核对使用只读回执策略，不能因“没有发送正文帧”的证据重新排队。取消是停止原账本的继续恢复，不是证明目标未接收；已确认接收的记录保持原事实，取消关联回复请求也不会覆盖接收回执。
 
-跨电脑设备投递区分两种身份：`managerInstanceId` 是持有原投递记录的 Manager，设备 `instanceId` 是实际设备 owner PC。准备、发送、协调及回执确认时，异步取得双方当前身份凭证，并与原 endpoint 比对；刷新只能核验原身份，不能把新会话或新 epoch 写回原记录。
+原身份撤销、设备 owner epoch 改变或回执哈希不一致时，原投递无法确认。会话归档后不再接受新的正文投递，但仍可按原投递编号与哈希匹配的历史证据确认既有接收。重新绑定不是原投递的回执，必须保留其结果不确定状态。
 
-来源必须仍是已加载的原 owner；目标未加载时可以排队并等待唤醒。校验顺序为来源、目标、再检查来源，防止等待目标凭证时遗漏来源失活。同步授权检查也明确区分来源与目标，不用目标排队能力放宽来源要求。
+跨电脑设备投递区分账本与实际目标：`managerInstanceId` 是持有原投递记录的 Manager，设备 `instanceId` 是实际设备 owner PC。准备和实际派发按原目标 endpoint 核验执行身份、代次及参数；回执核对保持原 deliveryId、generation、正文与执行参数 hash 匹配。来源信息只记录真实连接及已有上下文，刷新不能把新目标会话或新 epoch 写回原记录。
+
+入口沿用当前已鉴权连接，异步操作仍检查该连接是否有效。来源 owner 是否加载、来源目录与角色不构成发送资格；目标未加载时可以排队等待原 owner 唤醒。实际执行仍核验原目标，不以来源标签代替目标身份，也不改用其他 Runtime。
 
 `GET /api/agent/delivery-authority` 是已鉴权连接可读取的公共接口，不要求调用方绑定目标会话。它返回原记录的 ledger 身份、来源、目标、准备参数及哈希，不返回消息正文。原连接有效性与原记录身份仍须核验。实际执行端还必须核验发送连接确属该 ledger PC，并反查原记录；读取凭证本身不构成执行许可。
 
 原记录明确为 `cancelled` 时，此接口返回 HTTP 200、`authorized: false` 及原身份与哈希。这只是原取消事实，不要求旧来源仍加载或旧 epoch 仍可执行，也不能授权发送。设备仅在与原运输记录逐项匹配后，将该运输记录标为结果未知并继续后续队列；原业务数据保留，不能记为已接收。未知记录、代次不符或当前读取连接失效仍拒绝。
+
+如果关联的原待回复请求已取消，此接口同样返回 HTTP 200 和 `authorized: false`，但 `state` 保留真实投递状态：原投递已是 `committed` 时继续为 `committed`，原账本中的接收回执保持不变，不能改写为 `cancelled` 或“未接收”。该响应只供查询和核对终止证据，不授权新的派发，也不新增回执实体或正文。尚未确认接收而已取消的投递仍按上述 `cancelled` 分支处理。
 
 实现入口：`src/manager/agentEndpointDelivery.ts`、`src/agentRequests/endpointDelivery.ts`、`src/agentRequests/ownerExecution.ts` 与 `src/manager/deviceAgentEndpointBridge.ts`。设备接入见 [原生设备 Agent](device-agent-adapter.md)。

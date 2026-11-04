@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import http from "node:http";
+import { nativeHttpTestFetch } from "./nativeHttpTestClient.js";
 import test from "node:test";
 import os from "node:os";
 import path from "node:path";
@@ -8,7 +9,7 @@ import { promises as fs } from "node:fs";
 import { createQqMessageOperations, handleQqMessageRoutes, type QqMessageRoutesContext } from "./qqMessageRoutes.js";
 import { ManagerPluginRouteRegistry } from "./managerPluginRouteRegistry.js";
 import { apiCatalogOpenApi } from "./apiOperationCatalog.js";
-import { qqMessageMedia, readQqMedia, QQ_MEDIA_MAX_BYTES, qqRead } from "./qqMessageMedia.js";
+import { qqMessageMedia, qqMessageMatches, qqPrivateMessageNeedsHistory, readQqMedia, QQ_MEDIA_MAX_BYTES, qqRead } from "./qqMessageMedia.js";
 import type { GatewayDefinition } from "../shared/gatewayConfigModel.js";
 import { LanAgentAuthority } from "./lanAgentAuthority.js";
 import { evaluateLanAgentRequest } from "./lanAgentRequestAccess.js";
@@ -46,7 +47,7 @@ test("history carries cursor, masks upstream URLs and returns usable attachment 
     return envelope({ messages: [row] });
   });
   try {
-    const result = await fetch(app.base + "/api/agent/qq/history" + query + "&cursor=124&limit=20");
+    const result = await nativeHttpTestFetch(app.base + "/api/agent/qq/history" + query + "&cursor=124&limit=20");
     assert.equal(result.status, 200);
     const text = await result.text(); assert.ok(!text.includes("private-key")); assert.ok(!text.includes("test-secret"));
     const data = JSON.parse(text).data;
@@ -67,18 +68,18 @@ test("executable QQ history/message/download share projection schemas and return
     return new Response(bytes);
   }, { typed: true });
   try {
-    const history = await fetch(app.base + "/api/agent/qq/history" + query); assert.equal(history.status, 200);
+    const history = await nativeHttpTestFetch(app.base + "/api/agent/qq/history" + query); assert.equal(history.status, 200);
     const historyData = (await history.json()).data; assert.equal(historyData.entries[0].attachments.length, 101);
-    const message = await fetch(app.base + "/api/agent/qq/messages/123" + query); assert.equal(message.status, 200);
+    const message = await nativeHttpTestFetch(app.base + "/api/agent/qq/messages/123" + query); assert.equal(message.status, 200);
     const data = (await message.json()).data;
     const link = data.attachments[100].contentUrl; assert.match(link, /\/attachments\/100\?/);
-    const media = await fetch(app.base + link); assert.equal(media.status, 200);
+    const media = await nativeHttpTestFetch(app.base + link); assert.equal(media.status, 200);
     assert.deepEqual(Buffer.from(await media.arrayBuffer()), bytes);
     assert.equal(media.headers.get("x-rabiroute-content-sha256"), createHash("sha256").update(bytes).digest("hex"));
     const spec = (await apiCatalogOpenApi(app.registry!.catalogSnapshot())) as { paths: Record<string, any> };
     assert.deepEqual(spec.paths["/api/agent/qq/messages/{messageId}/attachments/{attachmentIndex}"].get.responses["200"]["x-rabiroute-binary"], { minBytes: 1, maxBytes: QQ_MEDIA_MAX_BYTES });
     assert.equal(JSON.stringify(app.registry!.catalogSnapshot()).includes("test-secret"), false);
-    assert.equal((await fetch(app.base + "/api/agent/qq/history" + query + "&kind=private")).status, 400);
+    assert.equal((await nativeHttpTestFetch(app.base + "/api/agent/qq/history" + query + "&kind=private")).status, 400);
   } finally { await app.close(); }
 });
 
@@ -91,7 +92,7 @@ test("expired get_msg falls back to a bounded page anchored on the same message"
     return envelope({ messages: [row] });
   });
   try {
-    const result = await fetch(app.base + "/api/agent/qq/messages/123" + query);
+    const result = await nativeHttpTestFetch(app.base + "/api/agent/qq/messages/123" + query);
     assert.equal(result.status, 200); assert.equal((await result.json()).data.messageId, "123");
     assert.equal(actions.length, 2);
   } finally { await app.close(); }
@@ -107,7 +108,7 @@ test("download reads actual video bytes returned by get_file, never its thumbnai
     return envelope({ file, file_size: String(bytes.length) });
   });
   try {
-    const result = await fetch(app.base + "/api/agent/qq/messages/123/attachments/0" + query);
+    const result = await nativeHttpTestFetch(app.base + "/api/agent/qq/messages/123/attachments/0" + query);
     assert.equal(result.status, 200); assert.deepEqual(Buffer.from(await result.arrayBuffer()), bytes);
     assert.equal(result.headers.get("x-rabiroute-content-sha256"), createHash("sha256").update(bytes).digest("hex"));
     assert.match(result.headers.get("content-disposition")!, /video-1.mp4/);
@@ -119,7 +120,7 @@ test("foreign conversation or message IDs fail closed without downloading", asyn
     let calls = 0;
     const app = await serve(async () => { calls++; return envelope(foreign); });
     try {
-      const result = await fetch(app.base + "/api/agent/qq/messages/123/attachments/0" + query);
+      const result = await nativeHttpTestFetch(app.base + "/api/agent/qq/messages/123/attachments/0" + query);
       assert.equal(result.status, 409); assert.equal(calls, 1);
     } finally { await app.close(); }
   }
@@ -131,11 +132,11 @@ test("remote, relay, duplicate and arbitrary-url requests never reach OneBot", a
   const remote = await serve(transport, { local: false });
   const local = await serve(transport);
   try {
-    assert.equal((await fetch(remote.base + "/api/agent/qq/messages/123" + query)).status, 403);
-    assert.equal((await fetch(local.base + "/api/agent/qq/messages/123" + query, { headers: { "x-rabilink-tunnel-local": "1" } })).status, 403);
-    assert.equal((await fetch(local.base + "/api/agent/qq/messages/123" + query, { headers: { "x-rabiroute-peer-proxy": "1" } })).status, 403);
+    assert.equal((await nativeHttpTestFetch(remote.base + "/api/agent/qq/messages/123" + query)).status, 403);
+    assert.equal((await nativeHttpTestFetch(local.base + "/api/agent/qq/messages/123" + query, { headers: { "x-rabilink-tunnel-local": "1" } })).status, 403);
+    assert.equal((await nativeHttpTestFetch(local.base + "/api/agent/qq/messages/123" + query, { headers: { "x-rabiroute-peer-proxy": "1" } })).status, 403);
     for (const extra of ["&routeId=other", "&url=http://127.0.0.1/private", "&file=/private", "&limit=101"]) {
-      assert.equal((await fetch(local.base + "/api/agent/qq/history" + query + extra)).status, 400);
+      assert.equal((await nativeHttpTestFetch(local.base + "/api/agent/qq/history" + query + extra)).status, 400);
     }
     assert.equal(calls, 0);
   } finally { await remote.close(); await local.close(); }
@@ -155,11 +156,11 @@ test("enabled authenticated Agent reads public QQ without a Route owner grant an
     return envelope(row);
   }, { local: false, authority });
   try {
-    assert.equal((await fetch(app.base + "/api/agent/qq/messages/123" + query, { headers })).status, 200);
-    assert.equal((await fetch(app.base + "/api/agent/qq/messages/123" + query, { headers: { "x-rabiroute-agent-id": "fixture-agent" } })).status, 403);
+    assert.equal((await nativeHttpTestFetch(app.base + "/api/agent/qq/messages/123" + query, { headers })).status, 200);
+    assert.equal((await nativeHttpTestFetch(app.base + "/api/agent/qq/messages/123" + query, { headers: { "x-rabiroute-agent-id": "fixture-agent" } })).status, 403);
     assert.equal(calls, 1);
     revoke = true;
-    const result = await fetch(app.base + "/api/agent/qq/messages/123" + query, { headers });
+    const result = await nativeHttpTestFetch(app.base + "/api/agent/qq/messages/123" + query, { headers });
     assert.equal(result.status, 403);
     assert.equal((await result.json()).errorCode, "QQ_READ_AUTHORIZATION_REVOKED");
     assert.equal(calls, 2);
@@ -179,11 +180,11 @@ test("verified Relay and Peer connections read the same QQ API; spoofed headers 
       ? () => { if (!enabled) throw new Error("Connection revoked."); } : undefined });
     const headers = { authorization: "Bearer fixture-verified-connection", "x-rabilink-tunnel-local": "fixture-generation", [proxyHeader]: "1" };
     try {
-      assert.equal((await fetch(app.base + "/api/agent/qq/messages/123" + query, { headers: { "x-rabilink-tunnel-local": "fixture-generation", [proxyHeader]: "1" } })).status, 403);
+      assert.equal((await nativeHttpTestFetch(app.base + "/api/agent/qq/messages/123" + query, { headers: { "x-rabilink-tunnel-local": "fixture-generation", [proxyHeader]: "1" } })).status, 403);
       assert.equal(calls, 0);
-      assert.equal((await fetch(app.base + "/api/agent/qq/messages/123" + query, { headers })).status, 200);
+      assert.equal((await nativeHttpTestFetch(app.base + "/api/agent/qq/messages/123" + query, { headers })).status, 200);
       revokeDuringRead = true;
-      const result = await fetch(app.base + "/api/agent/qq/messages/123" + query, { headers });
+      const result = await nativeHttpTestFetch(app.base + "/api/agent/qq/messages/123" + query, { headers });
       assert.equal(result.status, 403);
       assert.equal((await result.json()).errorCode, "QQ_READ_AUTHORIZATION_REVOKED");
       assert.equal(calls, 2);
@@ -194,7 +195,7 @@ test("verified Relay and Peer connections read the same QQ API; spoofed headers 
 test("route changes while reading withhold the result", async () => {
   let current: GatewayDefinition | undefined = definition;
   const app = await serve(async () => { current = undefined; return envelope(row); }, { route: () => current });
-  try { assert.equal((await fetch(app.base + "/api/agent/qq/messages/123" + query)).status, 409); }
+  try { assert.equal((await nativeHttpTestFetch(app.base + "/api/agent/qq/messages/123" + query)).status, 409); }
   finally { await app.close(); }
 });
 
@@ -281,7 +282,7 @@ test("private conversation reads use its exact peer without silently selecting a
     assert.equal(JSON.parse(String(init?.body)).user_id, "456");
     return envelope({ messages: [{ ...row, message_type: "private", group_id: undefined, user_id: "456" }] });
   });
-  try { assert.equal((await fetch(app.base + "/api/agent/qq/history" + query.replace("kind=group", "kind=private"))).status, 200); }
+  try { assert.equal((await nativeHttpTestFetch(app.base + "/api/agent/qq/history" + query.replace("kind=group", "kind=private"))).status, 200); }
   finally { await app.close(); }
 });
 
@@ -302,14 +303,14 @@ test('QQ directory reads isolate malformed contacts and keep group membership pr
     assert.equal(action,'/get_group_member_list');assert.equal(JSON.parse(String(init?.body)).group_id,'10001');
     return envelope([{user_id:20002,nickname:'Member name',card:'Member card',role:'admin'},null,{user_id:'invalid'}]);
   },{typed:true});t.after(f.close);
-  const contacts=await (await fetch(f.base+'/api/agent/qq/contacts?routeId=test-route')).json() as any;
+  const contacts=await (await nativeHttpTestFetch(f.base+'/api/agent/qq/contacts?routeId=test-route')).json() as any;
   assert.deepEqual(contacts.data.entries,[{kind:'group',target:'10001',name:'Example group',memberCount:3,time:123,preview:'Latest'},{kind:'private',target:'20002',name:'Friend alias'},{kind:'private',target:'20003',name:'Recent contact',time:124,preview:'Private'}]);
   assert.deepEqual(contacts.data.account,{userId:'30001',name:'Example account'});
   assert.equal(JSON.stringify(contacts).includes('never exposed'),false);
-  const members=await (await fetch(f.base+'/api/agent/qq/group-members?routeId=test-route&kind=group&target=10001')).json() as any;
+  const members=await (await nativeHttpTestFetch(f.base+'/api/agent/qq/group-members?routeId=test-route&kind=group&target=10001')).json() as any;
   assert.deepEqual(members.data.entries,[{id:'20002',name:'Member card',role:'admin'}]);
   const count=actions.length;
-  assert.equal((await fetch(f.base+'/api/agent/qq/group-members?routeId=test-route&kind=private&target=20002')).status,400);
+  assert.equal((await nativeHttpTestFetch(f.base+'/api/agent/qq/group-members?routeId=test-route&kind=private&target=20002')).status,400);
   assert.equal(actions.length,count);
 });
 
@@ -325,9 +326,121 @@ test('QQ directory partial failure retains available names and rejects an accoun
     if(action==='/get_recent_contact')throw new Error('recent contacts unavailable');
     entered();await wait;return envelope([{user_id:20002,nickname:'Member'}]);
   },{typed:true,route:()=>active});t.after(f.close);t.after(release);
-  const contacts=await (await fetch(f.base+'/api/agent/qq/contacts?routeId=test-route')).json() as any;
+  const contacts=await (await nativeHttpTestFetch(f.base+'/api/agent/qq/contacts?routeId=test-route')).json() as any;
   assert.equal(contacts.data.entries.length,1);assert.deepEqual(contacts.data.warnings,['QQ_FRIEND_LIST_UNAVAILABLE','QQ_LOGIN_INFO_UNAVAILABLE','QQ_RECENT_CONTACT_UNAVAILABLE']);
-  const pending=fetch(f.base+'/api/agent/qq/group-members?routeId=test-route&kind=group&target=10001');
+  const pending=nativeHttpTestFetch(f.base+'/api/agent/qq/group-members?routeId=test-route&kind=group&target=10001');
   await started;active={...active};release();const result=await pending;
   assert.equal(result.status,409);assert.equal((await result.json() as any).errorCode,'QQ_READ_ROUTE_CHANGED');
+});
+
+test('private history accepts incoming and scoped self-sent messages without exposing another peer', async t => {
+  const incoming={...row,message_type:'private',user_id:456,self_id:789,post_type:'message',sender:{user_id:456}};
+  const outgoing={...incoming,message_id:124,user_id:789,post_type:'message_sent',sender:{user_id:789}};
+  const f=await serve(async()=>envelope({messages:[incoming,outgoing]}));t.after(f.close);
+  const response=await nativeHttpTestFetch(f.base+'/api/agent/qq/history?routeId=test-route&kind=private&target=456');
+  assert.equal(response.status,200);const data=(await response.json()).data;
+  assert.deepEqual(data.entries.map((entry:any)=>entry.sender),['456','789']);
+  assert.deepEqual(data.entries.map((entry:any)=>entry.target),['456','456']);
+});
+
+test('self-sent private get_msg must prove its ID in the selected peer history before reading media', async t => {
+  const outgoing={...row,message_type:'private',user_id:789,self_id:789,post_type:'message_sent',sender:{user_id:789}};
+  let selectedRows=[outgoing];let downloads=0;const actions:string[]=[];
+  const f=await serve(async(url,init)=>{const action=new URL(String(url)).pathname;actions.push(action);
+    if(action==='/get_msg')return envelope(outgoing);
+    if(action==='/get_friend_msg_history'){const payload=JSON.parse(String(init?.body));assert.equal(payload.message_seq,'123');assert.equal(payload.count,10);assert.ok(['456','789'].includes(payload.user_id));return envelope({messages:selectedRows});}
+    downloads++;return envelope({});});t.after(f.close);
+  for(const target of ['456','789']){const response=await nativeHttpTestFetch(f.base+'/api/agent/qq/messages/123?routeId=test-route&kind=private&target='+target);assert.equal(response.status,200);}
+  assert.deepEqual(actions,['/get_msg','/get_friend_msg_history','/get_msg','/get_friend_msg_history']);
+  selectedRows=[];const missing=await nativeHttpTestFetch(f.base+'/api/agent/qq/messages/123/attachments/0?routeId=test-route&kind=private&target=456');
+  assert.equal(missing.status,404);assert.equal((await missing.json()).errorCode,'QQ_MESSAGE_NOT_IN_PAGE');assert.equal(downloads,0);
+  selectedRows=[{...outgoing,post_type:'message',user_id:999,sender:{user_id:999}}];
+  const foreign=await nativeHttpTestFetch(f.base+'/api/agent/qq/messages/123?routeId=test-route&kind=private&target=456');assert.equal(foreign.status,409);assert.equal((await foreign.json()).errorCode,'QQ_MESSAGE_TARGET_MISMATCH');
+});
+
+test('private history isolates malformed self-sent rows and foreign incoming rows while retaining healthy messages', async t=>{
+  const outgoing={...row,message_type:'private',user_id:789,self_id:789,post_type:'message_sent',sender:{user_id:789}};
+  let selectedRows:any[]=[];const f=await serve(async()=>envelope({messages:selectedRows}),{typed:true});t.after(f.close);
+  for(const invalid of [{...outgoing,sender:{user_id:456}},{...outgoing,self_id:undefined},{...outgoing,post_type:'message'},{...outgoing,message_id:'invalid'},
+    {...row,message_id:777,message_type:'private',user_id:999,message:'foreign-content'},null,true,[],{...outgoing,message_id:{toString:null}}]){
+    selectedRows=[{...row,message_type:'private',user_id:456},invalid];
+    const response=await nativeHttpTestFetch(f.base+'/api/agent/qq/history?routeId=test-route&kind=private&target=456');assert.equal(response.status,200);
+    const body=await response.json();assert.deepEqual(body.data.entries.map((entry:any)=>entry.messageId),['123']);
+    assert.equal(body.data.skippedCount,1);assert.equal(body.data.nextCursor,'123');assert.equal(body.data.cursorStalled,false);assert.equal(body.data.completenessUnknown,true);
+    assert.doesNotMatch(JSON.stringify(body),/foreign-content|777/);
+  }
+});
+
+test('all-invalid history reports stalled incomplete progress without leaking a foreign cursor', async t=>{
+  const f=await serve(async()=>envelope({messages:[null,{...row,message_id:777,message_type:'private',user_id:999,message:'foreign-content'}]}),{typed:true});t.after(f.close);
+  for(const suffix of ['', '&cursor=123']){
+    const response=await nativeHttpTestFetch(f.base+'/api/agent/qq/history?routeId=test-route&kind=private&target=456'+suffix);
+    assert.equal(response.status,200);const body=await response.json();assert.deepEqual(body.data.entries,[]);
+    assert.equal(body.data.nextCursor,null);assert.equal(body.data.cursorStalled,true);assert.equal(body.data.completenessUnknown,true);assert.equal(body.data.skippedCount,2);
+    assert.doesNotMatch(JSON.stringify(body),/foreign-content|777/);
+  }
+});
+
+test('history cursor uses healthy records and preserves the existing stalled-anchor meaning', async t=>{
+  const f=await serve(async()=>envelope({messages:[{...row,message_type:'private',user_id:456},
+    {...row,message_id:122,message_type:'private',user_id:456,time:99},
+    {...row,message_id:777,message_type:'private',user_id:999,time:1}]}),{typed:true});t.after(f.close);
+  const response=await nativeHttpTestFetch(f.base+'/api/agent/qq/history?routeId=test-route&kind=private&target=456&cursor=122');
+  assert.equal(response.status,200);const data=(await response.json()).data;
+  assert.equal(data.nextCursor,null);assert.equal(data.cursorStalled,true);assert.equal(data.skippedCount,1);assert.equal(data.entries[0].messageId,'123');
+});
+
+test('exact history fallback ignores unrelated malformed and foreign rows but still rejects the requested mismatched row', async t=>{
+  const healthy={...row,message_type:'private',user_id:456};
+  let selectedRows:any[]=[null,true,{message_id:{toString:null}},{...healthy,message_id:777,user_id:999},healthy];
+  const f=await serve(async url=>String(url).endsWith('get_msg')?Response.json({status:'failed',retcode:1}):envelope({messages:selectedRows}),{typed:true});t.after(f.close);
+  const base=f.base+'/api/agent/qq/messages/123?routeId=test-route&kind=private&target=456';
+  const response=await nativeHttpTestFetch(base);assert.equal(response.status,200);assert.equal((await response.json()).data.messageId,'123');
+  selectedRows=[{...healthy,message_id:125}, {...healthy,user_id:999}];
+  const foreign=await nativeHttpTestFetch(base);assert.equal(foreign.status,409);assert.equal((await foreign.json()).errorCode,'QQ_MESSAGE_TARGET_MISMATCH');
+  selectedRows=[{...healthy,message_id:125}, {...healthy,user_id:789,self_id:789,post_type:'message_sent',sender:{user_id:456}}];
+  const malformed=await nativeHttpTestFetch(base);assert.equal(malformed.status,409);assert.equal((await malformed.json()).errorCode,'QQ_MESSAGE_TARGET_MISMATCH');
+  selectedRows=[null,{...healthy,message_id:125}];
+  const absent=await nativeHttpTestFetch(base);assert.equal(absent.status,404);assert.equal((await absent.json()).errorCode,'QQ_MESSAGE_NOT_IN_PAGE');
+});
+
+test('QQ identity matchers reject malformed JSON identity values without throwing or coercing arrays', ()=>{
+  for(const value of [null,true,123,'text',[],{message_type:'private',message_id:{toString:null},self_id:{toString:null}},
+    {...row,message_type:'private',user_id:['456']},{...row,message_id:['123']}]){
+    assert.equal(qqMessageMatches(value,'private','456','history'),false);
+    assert.equal(qqPrivateMessageNeedsHistory(value),false);
+  }
+});
+
+test('optional malformed QQ time does not block healthy neighbours or escape through message projection', async t=>{
+  const healthy={...row,message_type:'private',user_id:456};
+  const malformed={...healthy,message_id:124,time:{toString:null},message:[{type:'text',data:{text:'retain this message'}}]};
+  const f=await serve(async url=>String(url).endsWith('get_msg')?envelope(malformed):envelope({messages:[healthy,malformed]}),{typed:true});t.after(f.close);
+  const history=await nativeHttpTestFetch(f.base+'/api/agent/qq/history?routeId=test-route&kind=private&target=456');
+  assert.equal(history.status,200);const data=(await history.json()).data;
+  assert.deepEqual(data.entries.map((entry:any)=>entry.messageId),['123','124']);
+  assert.equal(data.entries[0].time,100);assert.equal(Object.hasOwn(data.entries[1],'time'),false);
+  assert.equal(data.entries[1].text,'retain this message');assert.equal(data.nextCursor,'123');assert.equal(data.skippedCount,undefined);
+  const detail=await nativeHttpTestFetch(f.base+'/api/agent/qq/messages/124?routeId=test-route&kind=private&target=456');
+  assert.equal(detail.status,200);const exact=(await detail.json()).data;
+  assert.equal(exact.messageId,'124');assert.equal(exact.text,'retain this message');assert.equal(Object.hasOwn(exact,'time'),false);
+});
+
+test('QQ optional time preserves numeric and legacy string timestamps while missing or malformed time stays unknown', async t=>{
+  let optionalTime:any=100;
+  const f=await serve(async()=>envelope({messages:[{...row,message_type:'private',user_id:456,time:optionalTime}]}),{typed:true});t.after(f.close);
+  for(const [input,expected] of [[100,100],['100',100],[0,0],['0',0],[null,undefined],[undefined,undefined],['',undefined],[' ',undefined],['unknown',undefined],[true,undefined],[[],undefined],[{toString:null},undefined]] as const){
+    optionalTime=input;
+    const response=await nativeHttpTestFetch(f.base+'/api/agent/qq/history?routeId=test-route&kind=private&target=456');assert.equal(response.status,200);
+    const data=(await response.json()).data;assert.equal(data.entries[0].time,expected);assert.equal(data.entries[0].messageId,'123');
+    assert.equal(data.nextCursor,'123');assert.equal(data.cursorStalled,false);assert.equal(data.skippedCount,undefined);
+    if(expected===undefined)assert.equal(Object.hasOwn(data.entries[0],'time'),false);
+  }
+});
+
+test('private self target never treats malformed self-sent records as incoming direct proof', async t=>{
+  let value:any={...row,message_type:'private',user_id:789,self_id:789,sender:{user_id:789}};
+  let historyReads=0;const f=await serve(async url=>{if(String(url).endsWith('get_msg'))return envelope(value);historyReads++;return envelope({messages:[value]});});t.after(f.close);
+  for(const post_type of ['message',undefined,'malformed']){value.post_type=post_type;const response=await nativeHttpTestFetch(f.base+'/api/agent/qq/messages/123?routeId=test-route&kind=private&target=789');assert.equal(response.status,409);}
+  value.post_type='message_sent';value.sender={user_id:456};const response=await nativeHttpTestFetch(f.base+'/api/agent/qq/messages/123?routeId=test-route&kind=private&target=789');assert.equal(response.status,409);assert.equal(historyReads,0);
 });

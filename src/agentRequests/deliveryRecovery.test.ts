@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { AgentRequestStore, type AgentRequestPersistence, type AgentCommunicationPreparation, type AgentRequestRecord } from "./store.js";
+import { AgentRequestStore, type AgentRequestPersistence, type AgentCommunicationPreparation, type AgentRequestRecord, type AgentRequestParty } from "./store.js";
 import type { AgentAdapterType } from "../agentAdapters/types.js";
 import { deliveryUserMessagesFromRollout, recoverAgentResponseDelivery } from "./deliveryRecovery.js";
 import { renderRabiDelivery } from "../shared/rabiMessage.js";
@@ -97,11 +97,8 @@ test("mixed-adapter recovery rejects altered body and structured reservation or 
     ["delivery", preparation => { preparation.deliveryId = "wrong-delivery"; }],
     ["reply request", preparation => { preparation.inReplyToRequestId = "wrong-original"; }],
     ["followup request", preparation => { preparation.requestId = "wrong-followup"; }],
-    ["source adapter", preparation => { preparation.source.agentAdapter = "codex"; }],
     ["target adapter", preparation => { preparation.target.agentAdapter = "dsh"; }],
-    ["source task", preparation => { preparation.source.threadId = "wrong-source"; }],
     ["target task", preparation => { preparation.target.threadId = "wrong-target"; }],
-    ["source workspace", preparation => { preparation.source.workspace = "C:/wrong"; }],
     ["target workspace", preparation => { preparation.target.workspace = "C:/wrong"; }]
   ];
   for (const [name, mutate] of mutations) {
@@ -127,11 +124,8 @@ test("mixed-adapter recovery rejects altered body and structured reservation or 
 
 test("mixed-adapter followup reservation cannot change adapter or task direction", async () => {
   const mutations: Array<[string, (record: AgentRequestRecord) => void]> = [
-    ["source adapter", record => { record.source.agentAdapter = "codex"; }],
     ["target adapter", record => { record.target.agentAdapter = "dsh"; }],
-    ["source task", record => { record.source.threadId = "wrong-source"; }],
     ["target task", record => { record.target.threadId = "wrong-target"; }],
-    ["source workspace", record => { record.source.workspace = "C:/wrong"; }],
     ["target workspace", record => { record.target.workspace = "C:/wrong"; }]
   ];
   for (const [name, mutate] of mutations) {
@@ -170,14 +164,14 @@ test("failed receipt persistence retains recoverable evidence for a same-process
     () => ["accepted prompt"])).status, "receipt_recovered");
 });
 
-async function fixture(required = true, adapters: { source: AgentAdapterType; target: AgentAdapterType } = { source: "codex", target: "codex" }) {
+async function fixture(required = true, adapters: { source: AgentAdapterType; target: AgentAdapterType } = { source: "codex", target: "codex" }, actualSender?: AgentRequestParty) {
   const persistence = new MemoryPersistence();
   const store = new AgentRequestStore(persistence);
   const source = { threadId: "source", agentAdapter: adapters.source, agentType: "agent", workspace: "C:\\repo" };
   const target = { ...source, threadId: "target", agentAdapter: adapters.target };
   const initial = await store.prepare({ source, target, responsePolicy: "required", responseInstruction: "修复" });
   await store.commit(initial);
-  const reply = await store.prepare({ source: target, target: source,
+  const reply = await store.prepare({ source: actualSender ?? target, target: source,
     inReplyToRequestId: initial.requestId, responsePolicy: required ? "required" : "none",
     responseInstruction: required ? "验收新包" : undefined, result: "修复完成\n测试通过", nextAction: "构建\n验收" });
   const message = `[消息源]\n消息源类型：Agent\nAgent 端：codex\n会话 ID：target\n工作目录：C:\\repo\n消息包发送时间：today\n\n[消息内容]\n已完成\n\n[Agent 回复合同]\n本次投递 deliveryId：${reply.deliveryId}\n是否要求回复：${required ? "是" : "否"}\n本次消息已经正式回复请求：${initial.requestId}\n回复结果：${reply.result}\n下一步：${reply.nextAction}`
@@ -255,4 +249,22 @@ test("rollout proof excludes tool output, assistant quotations and incomplete ta
     type: "message", role, content: [{ type: "input_text", text: "accepted message" }]
   } });
   assert.deepEqual(deliveryUserMessagesFromRollout(`partial\n${record("assistant")}\n${record("tool")}\n${record("user")}\n{`), ["accepted message"]);
+});
+
+
+test("exact reply evidence recovers a connected delegate without the original target's adapter, task or cwd", async () => {
+  for (const required of [false, true]) {
+    const actualSender = { threadId: "connected-delegate", agentAdapter: "astrbot" as const, agentType: "custom_sender" };
+    const { persistence, store, initial, reply } = await fixture(required, { source: "codex", target: "dsh" }, actualSender);
+    const prompt = "Exact accepted delegate reply";
+    await store.bindResponseEvidence(reply, prompt);
+    const restarted = new AgentRequestStore(persistence);
+    assert.equal((await recoverAgentResponseDelivery(restarted, "source", reply.deliveryId, () => [prompt + " altered"])).status, "delivery_unconfirmed");
+    assert.equal((await recoverAgentResponseDelivery(restarted, "source", reply.deliveryId, () => [prompt])).status, "receipt_recovered");
+    const recorded = restarted.get(initial.requestId!)!;
+    assert.equal(recorded.response?.by.threadId, actualSender.threadId);
+    assert.equal(recorded.response?.by.agentAdapter, "astrbot");
+    assert.equal(recorded.response?.by.workspace, undefined);
+    assert.equal(recorded.response?.deliveryId, reply.deliveryId);
+  }
 });

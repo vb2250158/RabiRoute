@@ -1,6 +1,7 @@
 import type http from "node:http";
-import { readPersonaChatHistory, appendPersonaAiuiExchange } from "../personaChatHistory.js";
+import { readPersonaChatHistory, appendPersonaAiuiExchange, readPersonaHistoryTasks } from "../personaChatHistory.js";
 import { enrichPersonaChatTasks, type PersonaChatTaskMetadataContext } from "./personaChatTaskMetadata.js";
+import { personaHistoryTaskKey } from '../shared/personaChatHistory.js';
 
 import path from "node:path";
 import type { HistoryQqRoute } from '../shared/qqConversationHistory.js';
@@ -36,8 +37,18 @@ export function createPersonaChatHistoryOwner(context: PersonaChatHistoryContext
           assertCurrent();
           const data = await (context.read ?? readPersonaChatHistory)(roleDir, cursor, limit, options);
           assertCurrent();
-          data.entries = await enrichPersonaChatTasks(data.entries, context);
+          data.entries = await enrichPersonaChatTasks(data.entries.map(row=>({...row,
+            sourceTaskKey:personaHistoryTaskKey(row.sessionId,row.sourceTaskOwner),
+            ...(row.targetSessionId?{targetTaskKey:personaHistoryTaskKey(row.targetSessionId,row.targetTaskOwner)}:{})})), context);
           assertCurrent(); return data;
+        },
+        async tasks(options: Parameters<typeof readPersonaHistoryTasks>[1]) {
+          assertCurrent();
+          const data=await readPersonaHistoryTasks(roleDir,options);
+          assertCurrent();
+          const rows=await enrichPersonaChatTasks(data.items.map(task=>({id:task.key,sessionId:task.sessionId,sessionTitle:task.title,sourceTaskOwner:task.owner,receivedAt:task.receivedAt,text:task.preview})),context);
+          data.items=data.items.map((task,i)=>({...task,title:rows[i]!.sessionTitle||task.title,taskUrl:rows[i]!.taskUrl}));
+          assertCurrent();return data;
         },
         async append(raw: unknown) {
           assertCurrent();

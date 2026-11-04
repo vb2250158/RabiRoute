@@ -14,8 +14,11 @@ const source = { type: 'object', required: ['type'], properties: { type: { enum:
 const blocks = { type: 'array', maxItems: DEVICE_AGENT_LIMITS.blocks, items: { type: 'string', maxLength: DEVICE_AGENT_LIMITS.message } };
 const envelope = object({ deliveryId: identifier, messageSource: source, messageContent: { type: 'string', maxLength: DEVICE_AGENT_LIMITS.message }, contextBlocks: blocks, controlBlocks: blocks, escapeMessageContentHeaders: true, sentAt: text }, ['deliveryId', 'messageSource', 'messageContent'], true);
 const endpoint = object({ kind: { enum: ['local', 'instance', 'device', 'service'] }, managerInstanceId: text, instanceId: text, nodeId: text, agentId: text, provider: text, sessionId: text, authorizationIncarnation: text }, ['kind', 'managerInstanceId', 'agentId', 'provider', 'sessionId', 'authorizationIncarnation'], true);
-const party = { type: 'object', properties: { threadId: text, threadName: text, agentAdapter: text, agentType: text, endpoint } };
-const prepared = object({ ledgerOwnerDeviceId: identifier, delivery: object({ deliveryId: identifier, generation: text, source: endpoint, target: endpoint,
+const connection = object({ kind: { const: 'connection' }, managerInstanceId: text, transport: { enum: ['lan-agent', 'rabilink', 'local', 'service'] }, id: text,
+  authorizationIncarnation: text, ledgerOwnerDeviceId: text }, ['kind', 'managerInstanceId', 'transport', 'id']);
+const deliverySource = { anyOf: [endpoint, connection] };
+const party = { type: 'object', properties: { threadId: text, threadName: text, agentAdapter: text, agentType: text, endpoint, connection } };
+const prepared = object({ ledgerOwnerDeviceId: identifier, delivery: object({ deliveryId: identifier, generation: text, source: deliverySource, target: endpoint,
   prompt: { type: 'string', maxLength: DEVICE_AGENT_LIMITS.prompt }, promptHash: text, executionOptionsHash: text, executionOptions: { type: 'object' },
   preparation: object({ deliveryId: text, requestId: text, inReplyToRequestId: text, responsePolicy: text, responseInstruction: text, result: text, nextAction: text, source: party, target: party,
     messageProcessingRequirementId: text, planId: text }, ['deliveryId', 'responsePolicy', 'source', 'target'], true),

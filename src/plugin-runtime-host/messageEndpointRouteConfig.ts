@@ -3,24 +3,41 @@ import path from "node:path";
 import type { PluginPackageCatalog, PluginProfile } from "../plugin-kernel/profile.js";
 import type { PluginManifest } from "../plugin-kernel/types.js";
 import { gatewayEndpointTypesFromManifests } from "../shared/messageEndpointTypes.js";
+import { resolvePrimaryAgentTarget } from "../shared/routeAgentTargets.js";
 import { gatewayRouteSnapshotRevision as routeSnapshotRevision } from "../shared/gatewayRouteSnapshot.js";
 export { gatewayRouteSnapshotRevision as routeSnapshotRevision } from "../shared/gatewayRouteSnapshot.js";
 
 export type EndpointRouteConfigDeclaration = Readonly<{
   endpointType: string;
+  /** Explicit native service mapping for non-message adapter owners. */
+  capability?: string;
+  agentType?: string;
+  environmentFields?: Readonly<Record<string, string>>;
+  /** A shared worker's source binding remains in its real dependency closure. */
+  sharedBindingKeys?: readonly string[];
+  sharedWhenEnabledPaths?: readonly (readonly string[])[];
   routeKeys: readonly string[];
-  runtimeFields: Readonly<Record<string, Readonly<{ paths: readonly string[]; default?: unknown; trim?: boolean; emptyDefault?: boolean; format?: "number" | "positive-number" | "boolean" }>>>;
+  runtimeFields: Readonly<Record<string, Readonly<{ paths: readonly string[]; default?: unknown; defaultFrom?: "cwd" | "stateRoot"; trim?: boolean; emptyDefault?: boolean; format?: "number" | "positive-number" | "boolean" | "workspace" }>>>;
 }>;
 
 function parseDeclaration(value: unknown, manifest: PluginManifest): EndpointRouteConfigDeclaration {
   const raw = value as EndpointRouteConfigDeclaration | undefined;
-  if (!raw || typeof raw.endpointType !== "string" || !gatewayEndpointTypesFromManifests([manifest]).has(raw.endpointType)
+  if (!raw || typeof raw.endpointType !== "string"
+    || !(raw.agentType ? typeof raw.agentType === "string" && manifest.entries.gateway && typeof raw.capability === "string" && manifest.provides.includes(raw.capability)
+      && raw.endpointType === `agent:${raw.agentType}` : gatewayEndpointTypesFromManifests([manifest]).has(raw.endpointType))
     || !Array.isArray(raw.routeKeys) || raw.routeKeys.some(key => typeof key !== "string" || !key)
     || !raw.runtimeFields || typeof raw.runtimeFields !== "object" || Object.values(raw.runtimeFields).some(field => !field || !Array.isArray(field.paths) || field.paths.some(key => typeof key !== "string"))) {
     throw new Error(`Invalid endpoint-owned Route projection: ${manifest.id}`);
   }
   if (raw.routeKeys.some(key => !Object.values(raw.runtimeFields).some(field => field.paths.includes(key)))) throw new Error(`Endpoint-owned Route key has no runtime projection: ${manifest.id}`);
+  if (raw.environmentFields && Object.entries(raw.environmentFields).some(([key, field]) => !/^[A-Z][A-Z0-9_]*$/.test(key) || !raw.runtimeFields[field])) throw new Error(`Invalid adapter environment projection: ${manifest.id}`);
+  if (raw.sharedBindingKeys && (!Array.isArray(raw.sharedBindingKeys) || raw.sharedBindingKeys.some(key => typeof key !== "string" || !raw.routeKeys.includes(key)))) throw new Error(`Invalid adapter shared binding projection: ${manifest.id}`);
+  if (raw.sharedWhenEnabledPaths && (!Array.isArray(raw.sharedWhenEnabledPaths) || raw.sharedWhenEnabledPaths.some(keys => !Array.isArray(keys) || !keys.length || keys.some(key => typeof key !== "string" || !key)))) throw new Error(`Invalid adapter shared dependency: ${manifest.id}`);
   return raw;
+}
+
+export function routeDeclarationCapability(declaration: EndpointRouteConfigDeclaration): string {
+  return declaration.capability ?? `endpoint.${declaration.endpointType}@1`;
 }
 
 function parseDeclarationJson(text: string, manifest: PluginManifest): EndpointRouteConfigDeclaration {
@@ -71,6 +88,8 @@ export function endpointRouteProjection(definition: object, declaration: Endpoin
     if (value === undefined) value = mapping.default;
     if (mapping.trim && typeof value === "string") value = value.trim();
     if (mapping.emptyDefault && value === "") value = mapping.default;
+    if ((value === undefined || value === "") && mapping.defaultFrom) value = mapping.defaultFrom === "cwd" ? process.cwd() : process.env.RABIROUTE_STATE_ROOT || process.cwd();
+    if (mapping.format === "workspace" && typeof value === "string" && value) value = path.resolve(process.env.RABIROUTE_STATE_ROOT || process.cwd(), value);
     if (mapping.format === "number") value = Number(value);
     if (mapping.format === "positive-number") { const number = Number(value); value = Number.isFinite(number) && number > 0 ? number : mapping.default; }
     if (mapping.format === "boolean") value = typeof value === "boolean" ? value : ["1", "true", "yes", "on"].includes(String(value ?? "").trim().toLowerCase());
@@ -94,7 +113,18 @@ export function classifyRouteChange(previous: object, next: object, declarations
   const endpointTypes = declarations.filter(declaration =>
     routeSnapshotRevision({ config: endpointRouteProjection(previous, declaration), inputs: endpointRouteInputs(previous, declaration) }) !== routeSnapshotRevision({ config: endpointRouteProjection(next, declaration), inputs: endpointRouteInputs(next, declaration) })
   ).map(declaration => declaration.endpointType);
-  const sharedChanged = routeSnapshotRevision(sharedRouteProjection(previous, declarations)) !== routeSnapshotRevision(sharedRouteProjection(next, declarations));
+  const bindingDependencyChanged = declarations.some(declaration => {
+    if (!declaration.agentType || !declaration.sharedBindingKeys?.length) return false;
+    const readPath = (definition: object, keys: readonly string[]): unknown => keys.reduce<unknown>((value, key) => value && typeof value === "object" ? (value as Record<string, unknown>)[key] : undefined, definition);
+    const usesSharedBinding = (definition: object) => {
+      const target = resolvePrimaryAgentTarget(definition);
+      return Boolean(target && target.provider === declaration.agentType && !target.binding
+        && declaration.sharedWhenEnabledPaths?.some(keys => readPath(definition, keys) === true));
+    };
+    return (usesSharedBinding(previous) || usesSharedBinding(next))
+      && declaration.sharedBindingKeys.some(key => routeSnapshotRevision(readPath(previous, [key])) !== routeSnapshotRevision(readPath(next, [key])));
+  });
+  const sharedChanged = bindingDependencyChanged || routeSnapshotRevision(sharedRouteProjection(previous, declarations)) !== routeSnapshotRevision(sharedRouteProjection(next, declarations));
   return { kind: sharedChanged ? "shared" as const : endpointTypes.length ? "endpoint" as const : "none" as const, sharedChanged, endpointTypes };
 }
 

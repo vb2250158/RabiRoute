@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import test from "node:test";
 
-const routeConfigSource = fs.readFileSync(new URL("../src/pages/RouteConfigPage.vue", import.meta.url), "utf8");
+const routeConfigSource = fs.readFileSync(new URL("../src/agentAdapters/AstrbotAgentCard.vue", import.meta.url), "utf8");
 const quickSetupSource = fs.readFileSync(new URL("../src/components/QuickSetupDialog.vue", import.meta.url), "utf8");
 
 test("AstrBot WebGUI uses only the ChatUI send path", () => {

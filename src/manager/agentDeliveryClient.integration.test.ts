@@ -5,7 +5,7 @@ import path from "node:path";
 import http from "node:http";
 import test from "node:test";
 import { AgentRequestStore } from "../agentRequests/store.js";
-import { executeEndpointAgentDelivery, type EndpointDeliveryOptions } from "../agentRequests/endpointDelivery.js";
+import { executeEndpointAgentDelivery, reconcileEndpointDelivery, type EndpointDeliveryOptions } from "../agentRequests/endpointDelivery.js";
 import type { AgentRequestEndpoint } from "../agentRequests/endpoint.js";
 import { createAgentThreadControlOwner, type AgentThreadControlRoutesContext } from "./agentThreadControlRoutes.js";
 import { createAgentThreadControlOperations } from "./agentThreadControlOperations.js";
@@ -49,7 +49,8 @@ async function fixture(t: test.TestContext) {
   async function listen() {
     const registry = new ManagerPluginRouteRegistry();
     registrations.push(registry.registerOperations("fixture-threads", createAgentThreadControlOperations(createAgentThreadControlOwner(context))));
-    registrations.push(registry.registerOperations("fixture-records", createAgentDeliveryRecordOperations({ agentRequests: store })));
+    registrations.push(registry.registerOperations("fixture-records", createAgentDeliveryRecordOperations({ agentRequests: store,
+      reconcileManagerDelivery: (deliveryId, guard) => reconcileEndpointDelivery(deliveryId, { ...options(), assertRequestCurrent: guard }, { receiptOnly: true }) })));
     const server = http.createServer((request, response) => {
       const identity = { guid: "fixture-guid", applicationGenerationId: "fixture-generation-" + generation, managerInstanceId: "fixture-runtime-" + generation };
       const url = new URL(request.url!, "http://fixture.invalid");
@@ -117,4 +118,33 @@ test("real prepared reservation resumes the exact caller intent after pre-send t
   f.deny(false); f.advance(); await f.owner.tick();
   assert.equal(f.owner.query({ action: "get", intentId: "prepared-original" }).item!.state, "received"); assert.equal(f.dispatches(), 1);
   assert.equal((await f.store().listEndpointDeliveries()).length, 1);
+});
+
+test("cancelling a node's prepared intent stops both durable owners over real HTTP", async t => {
+  const f = await fixture(t);
+  f.deny(true);
+  f.submit("prepared-cancelled");
+  await f.owner.flight;
+  assert.equal((await f.store().listEndpointDeliveries())[0]?.state, "prepared");
+  const result = await f.owner.control({ action: "cancel", intentId: "prepared-cancelled" });
+  assert.equal(result.record.state, "cancelled");
+  assert.equal(result.record.managerCancelPending, undefined);
+  assert.equal((await f.store().listEndpointDeliveries())[0]?.state, "cancelled");
+  f.deny(false);
+  f.advance();
+  await f.owner.tick();
+  assert.equal(f.dispatches(), 0);
+});
+
+test("manual node reconciliation recovers the original owner receipt over real HTTP without dispatching twice", async t => {
+  const f = await fixture(t);
+  f.loseDispatchAck();
+  f.submit("manual-receipt");
+  await f.owner.flight;
+  assert.equal((await f.store().listEndpointDeliveries())[0]?.state, "dispatching");
+  f.recoverTargetReceipt();
+  const result = await f.owner.control({ action: "reconcile", intentId: "manual-receipt" });
+  assert.equal(result.record.state, "received");
+  assert.equal((await f.store().listEndpointDeliveries())[0]?.state, "committed");
+  assert.equal(f.dispatches(), 1);
 });

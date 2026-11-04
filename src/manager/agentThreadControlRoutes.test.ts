@@ -76,12 +76,12 @@ test("unrelated thread listing does not refresh an unavailable request ledger", 
   assert.equal((await f.call("GET")).status, 200); assert.equal(refreshes, 0);
 });
 
-test('sessionless remote management remains public while source events require authenticated provenance', async t=>{
+test('connected management and sends have no additional source-owner gate', async t=>{
   let invoked=0;
   const f=await fixture(t,context({ handleAgentThreadRequest:async()=>{invoked++;return {statusCode:200,data:{ok:true,threads:[]}};} }),req=>{registerLanAgentBodyGuard(req,()=>{});return true;});
   assert.equal((await f.call('GET')).status,200);assert.equal(invoked,1);
   const forged=await f.call('POST',{action:'send',remoteSource:{sessionId:'forged'}});
-  assert.equal(forged.status,400);assert.equal(invoked,1);
+  assert.equal(forged.status,200);assert.equal(invoked,2);
 });
 
 test('explicit unsaved source attribution retains the connector and ignores body authority fields',async()=>{
@@ -93,6 +93,27 @@ test('explicit unsaved source attribution retains the connector and ignores body
   const result=await prepared.execute({action:'send',sourceThreadId:'explicit-session',messageSource:{type:'agent',agentAdapter:'dsh',sessionId:'explicit-session',sessionName:'Current task'},
     ...{remoteSource:{nodeId:'forged'},trustedDeviceSource:{sourceDeviceId:'forged'}}});
   assert.equal(result.status,200);assert.deepEqual(source,{...original,sessionId:'explicit-session',sessionName:'Current task'});assert.equal(original.sessionId,'saved-session');
+});
+
+test('HTTP send reuses connected session context when the payload has only destination and content', async t => {
+  const connected = { nodeId: 'connected-node', agentId: 'codex', provider: 'codex' as const,
+    sessionId: 'opaque-current-session', sessionName: 'Current Agent', authorizationIncarnation: 'captured-connection' };
+  let calls = 0;
+  const f = await fixture(t, context({ getTrustedRemoteSource: () => connected,
+    agentThreadRequestOptions: (_body, extra) => ({ allowedWorkspaces: [], ...extra }),
+    handleAgentThreadRequest: async (body, options) => {
+      calls++;
+      assert.equal(body.sourceThreadId, connected.sessionId);
+      assert.equal(body.sourceAgentType, 'agent');
+      assert.equal(body.messageSource?.type, 'agent');
+      assert.equal(body.messageSource?.type === 'agent' && body.messageSource.sessionId, connected.sessionId);
+      assert.equal(options.remoteSource?.authorizationIncarnation, connected.authorizationIncarnation);
+      return { statusCode: 200, data: { ok: true, status: 'delivered' } };
+    }
+  }), req => { markAuthenticatedConnectionRequest(req); return true; });
+  const response = await f.call('POST', { action: 'send', agentAdapter: 'codex', threadId: 'actual-target', prompt: 'Message' });
+  assert.equal(response.status, 200);
+  assert.equal(calls, 1);
 });
 
 test('caller-selected execution options freeze before Route defaults and ignore body-provided snapshots',async()=>{
@@ -140,11 +161,11 @@ test('HTTP native source comes only from ingress and retains the original revoca
   const verified={scope:'scope',sourceDeviceId:'glasses-a',deviceOwner:true};let current=true;const observed:unknown[]=[];
   const began=deferred<void>(),resume=deferred<void>();t.after(()=>resume.resolve());
   const f=await fixture(t,context({getTrustedDeviceSource:req=>req.headers['x-test-source']==='verified'?verified:undefined,
-    agentThreadRequestOptions:(_body,extra)=>({allowedWorkspaces:[],...extra}),handleAgentThreadRequest:async(_body,options,source)=>{observed.push(source);if(observed.length===2){began.resolve();await resume.promise;}options.requestAuthority?.();return {statusCode:200,data:{ok:true}};}}),req=>{
+    agentThreadRequestOptions:(_body,extra)=>({allowedWorkspaces:[],...extra}),handleAgentThreadRequest:async(_body,options,source)=>{observed.push(source);if(observed.length===3){began.resolve();await resume.promise;}options.requestAuthority?.();return {statusCode:200,data:{ok:true}};}}),req=>{
       registerLanAgentBodyGuard(req,()=>{});markAuthenticatedConnectionRequest(req,()=>{if(!current)throw new Error('connection revoked');});return true;});
   const body={action:'send',...{trustedDeviceSource:verified,remoteSource:{sessionId:'forged'}}};
-  assert.equal((await f.call('POST',body)).status,400);assert.equal(observed.length,0);
-  assert.equal((await f.call('POST',body,'',{'x-test-source':'verified'})).status,200);assert.deepEqual(observed,[verified]);
+  assert.equal((await f.call('POST',body)).status,200);assert.deepEqual(observed,[undefined]);
+  assert.equal((await f.call('POST',body,'',{'x-test-source':'verified'})).status,200);assert.deepEqual(observed,[undefined,verified]);
   const pending=f.call('POST',body,'',{'x-test-source':'verified'});await began.promise;current=false;resume.resolve();
   const rejected=await pending;assert.equal(rejected.status,403);assert.equal(rejected.body.errorCode,'API_REQUEST_AUTHORITY_REVOKED');
 });
@@ -175,14 +196,14 @@ test('an authenticated empty remote node can list full names and IDs through the
   assert.equal(nativeNulls.status,200);assert.equal(nativeNulls.body.threads[0].id,fullId);
 });
 
-test('a prepared thread request cannot gain a replacement connector or generation before dispatch',async()=>{
+test('source metadata changes do not gate a prepared request while its execution owner lifetime remains active',async()=>{
   let current={nodeId:'original-node',agentId:'connector',provider:'codex' as const,sessionId:'saved',sessionName:'Original'},generation=1,invoked=0;
   const owner=createAgentThreadControlOwner(context({getTrustedRemoteSource:()=>current,assertCurrent:()=>{if(generation!==1)throw new Error('Original thread owner generation changed');},
     handleAgentThreadRequest:async()=>{invoked++;return {statusCode:200,data:{ok:true}};}}));
   const prepared=owner.prepare(request());current={...current,nodeId:'replacement-node'};
-  const changed=await prepared.execute({action:'list'});assert.equal(changed.status,400);assert.match(String(changed.body.message),/source connection changed/);assert.equal(invoked,0);
+  const changed=await prepared.execute({action:'list'});assert.equal(changed.status,200);assert.equal(invoked,1);
   current={...current,nodeId:'original-node'};const original=owner.prepare(request());generation=2;
-  const replaced=await original.execute({action:'list'});assert.equal(replaced.status,400);assert.match(String(replaced.body.message),/generation changed/);assert.equal(invoked,0);
+  const replaced=await original.execute({action:'list'});assert.equal(replaced.status,400);assert.match(String(replaced.body.message),/generation changed/);assert.equal(invoked,1);
 });
 
 test('source revocation after native mutation returns uncertainty before handoff tracking or reminders',async()=>{

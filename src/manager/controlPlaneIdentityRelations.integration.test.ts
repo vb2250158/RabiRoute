@@ -7,6 +7,7 @@ import test from "node:test";
 import { recordConversationSituation } from "../conversationSituationStore.js";
 import { conversationSituationForIdentity } from "../routing/conversationSituation.js";
 import { createPersonaIdentityTestApi } from "./personaManagerIntegration.fixture.js";
+import { nativeHttpTestFetch as fetch } from "./nativeHttpTestClient.js";
 
 function listen(server: http.Server): Promise<number> {
   return new Promise((resolve, reject) => {

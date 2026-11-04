@@ -188,6 +188,8 @@ export function grokBotProfileScriptPath(options: Pick<GrokBotClientOptions, "pr
   const packageRoot = process.env.RABIROUTE_PACKAGE_ROOT?.trim();
   const candidates = options.profileScriptPath ? [path.resolve(options.profileScriptPath)] : [
     ...(packageRoot ? [path.join(packageRoot, "dist", "scripts", "grok-bot-native-profile.ps1"), path.join(packageRoot, "scripts", "grok-bot-native-profile.ps1")] : []),
+    fileURLToPath(new URL("./resources/grok-bot-native-profile.ps1", import.meta.url)),
+    fileURLToPath(new URL("../resources/grok-bot-native-profile.ps1", import.meta.url)),
     fileURLToPath(new URL("../scripts/grok-bot-native-profile.ps1", import.meta.url)),
     fileURLToPath(new URL("../../scripts/grok-bot-native-profile.ps1", import.meta.url))
   ];

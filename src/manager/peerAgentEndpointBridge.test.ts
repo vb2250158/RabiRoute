@@ -52,6 +52,8 @@ test("connected native Peer source can start a new conversation on A and receive
     prompt: "B starts a new message", deliveryId: "new-from-b", responsePolicy: "required", responseInstruction: "Reply to B" }, options);
   assert.equal(initial.data.status, "delivered"); assert.equal(executesA, 1);
   const delivered = store.getEndpointDelivery((initial.data.delivery as { deliveryId: string }).deliveryId)!;
+  assert.notEqual(delivered.source.kind, "connection");
+  if (delivered.source.kind === "connection") throw new Error("Expected the original task source");
   assert.equal(delivered.source.ownerDeviceId, "pc-b"); assert.equal(delivered.source.ledgerOwnerDeviceId, "pc-a");
   const reply = { ...agentReplyRequest(delivered.preparation), result: "A finished", nextAction: "Read", deliveryId: "reply-from-a" } as AgentThreadRequest;
   const response = await executeEndpointAgentDelivery(reply, owner.options());
@@ -99,7 +101,7 @@ for (const sourceKind of ["local", "connector"] as const) test(`two delivery own
     threadId: "target-b", sourceThreadId: "source-a", sourceAgentType: "agent", messageSource: { type: "agent", agentAdapter: "codex", sessionId: "source-a", sessionName: "Source A" },
     deliveryId: "original-caller-id", prompt: "Work on the exact original task", responsePolicy: "required", responseInstruction: "Return the result" };
   const connectorSource: AgentThreadRemoteSource | undefined = sourceKind === "connector"
-    ? { nodeId: "connector-a", agentId: "source-agent", provider: "codex", sessionId: "source-a", sessionName: "Source A" } : undefined;
+    ? { nodeId: "connector-a", agentId: "source-agent", provider: "codex", sessionId: "source-a", sessionName: "Source A", authorizationIncarnation: "captured-connection-incarnation" } : undefined;
   const initial = await executeEndpointAgentDelivery(request, deliveryOwner.options(connectorSource, guard));
   assert.equal(initial.data.status, "delivery_unconfirmed"); assert.equal(executes, 1);
   const confirmed = await executeEndpointAgentDelivery(request, deliveryOwner.options(connectorSource, guard));
@@ -126,5 +128,49 @@ for (const sourceKind of ["local", "connector"] as const) test(`two delivery own
   const response = await b.forwardReply(reply, guard);
   assert.equal(response?.data.status, "delivered"); assert.equal(replyExecutions, 1);
   assert.equal(aStore.get(delivery.preparation.requestId!)?.status, "responded");
-  await assert.rejects(a.resolveSource({ ...reply, sourceThreadId: "another-task" }, { scope: scope(), sourceDeviceId: "pc-b", deviceOwner: true }), /original peer task/);
+  const routed = await a.resolveSource({ ...reply, sourceThreadId: "another-task" }, { scope: scope(), sourceDeviceId: "pc-b", deviceOwner: true });
+  assert.equal(routed?.threadId, "another-task");
+  assert.equal(routed?.endpoint?.ownerDeviceId, "pc-b");
+});
+
+
+test("Peer source, reply and original caller lookup use coordinates without reading any source owner", async t => {
+  const directory=fs.mkdtempSync(path.join(os.tmpdir(),"peer-source-metadata-")),store=new AgentRequestStore(path.join(directory,"requests.json"));
+  t.after(async()=>{await store.close();fs.rmSync(directory,{recursive:true,force:true});});
+  const calls: Array<{device:string;method:string;path:string;body:unknown}>=[];
+  const bridge=createPeerAgentEndpointBridge({managerInstanceId:"a",localDeviceId:()=>"pc-a",scope:()=>"scope",store,
+    receiptDirectory:path.join(directory,"receipts"),readLocal:async()=>{throw new Error("No local source owner reads");},localOptions:()=>({allowedWorkspaces:[]}),principal:()=>undefined,
+    request:async(device,method,path,body)=>{calls.push({device,method,path,body});return {ok:true,status:"delivered"};},
+    requestResult:async(device,method,path,body)=>{calls.push({device,method,path,body});return {status:404,body:{errorCode:"DELIVERY_NOT_RESERVED"}};} });
+  const source=await bridge.resolveSource({action:"send",sourceThreadId:"unregistered-session",messageSource:{type:"agent",agentAdapter:"codex",sessionId:"another-declaration",sessionName:"Declared"}},
+    {scope:"scope",sourceDeviceId:"pc-b",deviceOwner:true});
+  assert.equal(source?.endpoint?.kind,"local"); assert.equal(source?.endpoint?.ownerDeviceId,"pc-b");
+  assert.equal(source?.endpoint?.instanceId,undefined); assert.equal(source?.threadId,"unregistered-session"); assert.equal(calls.length,0);
+  assert.equal((await bridge.forwardReply({action:"send",ledgerOwnerDeviceId:"pc-b",inReplyToRequestId:"original"},()=>{}))?.data.status,"delivered");
+  assert.equal((await bridge.forwardCallerLookup("original-id",{ledgerOwnerDeviceId:"pc-b"},()=>{}))?.status,404);
+  assert.equal(calls.length,2); assert.equal(calls[0]!.device,"pc-b");
+  assert.ok(calls[1]!.path.includes("/caller/original-id"));
+});
+
+
+test("a stored peer return address resolves its actual target cwd and rejects another task", async t => {
+  const directory=fs.mkdtempSync(path.join(os.tmpdir(),"peer-return-target-")),store=new AgentRequestStore(path.join(directory,"requests.json"));
+  t.after(async()=>{await store.close();fs.rmSync(directory,{recursive:true,force:true});});
+  let returnedId="target-b",reads=0,scope="scope";
+  const bridge=createPeerAgentEndpointBridge({managerInstanceId:"a",localDeviceId:()=>"pc-a",scope:()=>scope,store,
+    receiptDirectory:path.join(directory,"receipts"),readLocal:async()=>{throw new Error("Not a local target");},localOptions:()=>({allowedWorkspaces:[]}),principal:()=>undefined,
+    request:async(device,method,path,body)=>{reads++;assert.equal(device,"pc-b");assert.equal(method,"POST");assert.equal(path,"/api/agent/threads");
+      assert.deepEqual(body,{action:"read",agentAdapter:"codex",agentTargetId:"local:codex",threadId:"target-b"});
+      return {thread:{id:returnedId,title:"B target",cwd:directory,updatedAt:""}};} });
+  const address=await bridge.resolveSource({action:"send",sourceThreadId:"target-b",messageSource:{type:"agent",agentAdapter:"codex",sessionId:"target-b",sessionName:"B"}},
+    {scope:"scope",sourceDeviceId:"pc-b",deviceOwner:true});
+  assert.equal(reads,0); assert.equal(address?.workspace,undefined);
+  const target=await bridge.resolveStoredTarget(address!);assert.equal(reads,1);assert.equal(target.workspace,directory);
+  assert.deepEqual(target.endpoint,address!.endpoint);
+  scope="reconnected-scope";
+  const reconnected=await bridge.resolveStoredTarget(address!);
+  assert.notEqual(reconnected.endpoint?.authorizationIncarnation,address!.endpoint?.authorizationIncarnation);
+  assert.equal(reconnected.endpoint?.sessionId,address!.endpoint?.sessionId);
+  assert.equal(reconnected.workspace,directory);
+  returnedId="another-task";await assert.rejects(bridge.resolveStoredTarget(address!),/Exact peer task owner/);
 });

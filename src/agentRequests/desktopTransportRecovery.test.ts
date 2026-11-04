@@ -18,6 +18,19 @@ import { executeEndpointAgentDelivery, reconcileEndpointDelivery, EndpointDelive
 import { LanAgentRegistry } from "../manager/lanAgentRegistry.js";
 import { createAgentEndpointDelivery, type AgentEndpointDeliveryContext } from "../manager/agentEndpointDelivery.js";
 import { manageInstanceAgent } from "../agentAdapters/instanceManagement.js";
+import * as codexOwner from "../agentAdapters/codexOwnerExecution.js";
+import type { AgentManagerOperationInvoker } from "../agentAdapters/managerInvocation.js";
+
+// Inject the real package-owned native boundary; the IPC and durable stores below remain real fixtures.
+const invokeCodexFixture: AgentManagerOperationInvoker = async <T>(type: string, operation: string, _payload: unknown, invocation?: import("@rabiroute/plugin-sdk").AgentAdapterInvocation) => {
+  assert.equal(type, "codex");
+  assert.ok(invocation?.nativeArgs, "Original owner arguments are required.");
+  if (operation === "endpoint.execute") {
+    return await codexOwner.executeEndpointOnOwner(...invocation.nativeArgs as Parameters<typeof codexOwner.executeEndpointOnOwner>) as T;
+  }
+  assert.equal(operation, "endpoint.recover");
+  return await codexOwner.recoverEndpointOwnerReceipt(...invocation.nativeArgs as Parameters<typeof codexOwner.recoverEndpointOwnerReceipt>) as T;
+};
 
 type Request = { type: string; requestId: string; method: string };
 function frame(value: unknown) {
@@ -144,7 +157,7 @@ test("real owner IPC no-frame proof survives Manager commit crash, restores orig
       await ledger.writeNotSent(d, proof); if (crash) persistence.fail = true;
     },
     writeReceipt: (d: Parameters<typeof executePreparedEndpointDelivery>[0], r: Parameters<EndpointTransportReceipts["writeReceipt"]>[1]) => ledger.writeReceipt(d, r),
-    send: (d: Parameters<typeof executePreparedEndpointDelivery>[0], guard: () => Promise<void>) => executeEndpointOnOwner(d, {}, guard,
+    send: (d: Parameters<typeof executePreparedEndpointDelivery>[0], guard: () => Promise<void>) => executeEndpointOnOwner(d, { invokeAgentOperation: invokeCodexFixture }, guard,
       { sendCodex: async params => { sends++; return bridge.deliver(params); } }) });
   const options = (): EndpointDeliveryOptions => ({ store, managerInstanceId: "manager", authorize: () => {}, resolveSource: () => ({ threadId: source.sessionId, agentType: "agent", agentAdapter: "dsh", endpoint: source }),
     resolveTarget: () => ({ threadId: target.sessionId, agentType: "agent", agentAdapter: "codex", endpoint: target }), resolveExecutionOptions: () => ({ cwd: root }),
@@ -244,6 +257,7 @@ test("authenticated remote management recovers its durable no-frame proof after 
           if (message.operation === "prepared_delivery") preparedCalls++; else if (message.operation === "reconcile_prepared_delivery") reconcileCalls++;
           const assertAuthorized = () => { assert.equal(socket.readyState, WebSocket.OPEN); assert.equal(delivery.target.nodeId, nodeId); };
           const result = await manageInstanceAgent(message.operation, message.params, { rootDir: root, defaultWorkspace: root, allowedWorkspaces: [root],
+            invokeAgentOperation: invokeCodexFixture,
             endpointExecution: { endpoint: delivery.target, assertAuthorized,
               readReceipt: d => ledger.readReceipt(d), beginAttempt: d => ledger.beginAttempt(d), writeReceipt: (d, receipt) => ledger.writeReceipt(d, receipt),
               readNotSent: d => ledger.readNotSentProof(d), writeNotSent: (d, proof) => ledger.writeNotSent(d, proof) },

@@ -1,13 +1,14 @@
 import { joinChildProcess } from "../runtime/joinedChildProcess.js";
 import { MessageEndpointManagers } from "../plugin-runtime-host/messageEndpointManagers.js";
 import { createMessageEndpointHostPorts } from "../runtime/messageEndpointHostPorts.js";
-import { readCodexTurnImages } from "./completionImages.js";
+import { createAgentAdapterHostPorts } from "../runtime/agentAdapterHostPorts.js";
 import { createRemoteCodexAndDeliver } from "./remoteCodexCreate.js";
 import type { CallerCreationMetadataStatus } from "../callerCreationMetadata.js";
 import { publishStartupPlanConflicts } from "./planStorageStartupPublication.js";
 import { getTimeoutMs } from "../shared/timeoutSettings.js";
 import { ManagerEventHub, createManagerEventsOperation } from "./managerEvents.js";
 import { PluginProfilePublication } from "./pluginProfilePublication.js";
+import { pluginProfilePackageResolution } from "./pluginProfilePackageResolution.js";
 import { preparedApiJson } from "./apiPreparedJson.js";
 import { AgentRequestRouteReconciliation } from "./agentRequestRouteReconciliation.js";
 import { parseAgentChatHistoryQuery, projectAgentChatHistory } from "./agentChatHistoryOperation.js";
@@ -28,13 +29,9 @@ import { createAgentStateReportOwner, createAgentStateReportOperations } from ".
 import { createGatewayListenerPublicationHost } from "./gatewayListenerPublication.js";
 import { currentPluginActivation } from "../plugin-kernel/pluginActivationContext.js";
 import { createPerformanceOperations } from "./performanceOperations.js";
-import { createMarvisControlOperations } from "./marvisControlOperations.js";
 import { createBilibiliHistoryOperations } from "./bilibiliHistoryOperations.js";
-import { createDeviceAgentOwner } from "../agentAdapters/deviceAgentOwner.js";
-import { createDeviceAgentOperations } from "../agentAdapters/deviceAgentOperations.js";
+import type { DeviceAgentOwnerOptions } from "../agentAdapters/deviceAgentOwner.js";
 import { deviceAgentDeliveryPrincipal } from "./deviceAgentDeliveryAccess.js";
-import { handleDeviceAgentThreadRequest } from "./deviceAgentThreads.js";
-import { createDeviceAgentEndpointBridge } from "./deviceAgentEndpointBridge.js";
 import { createDeviceAgentPeerAuthority } from "./deviceAgentPeerAuthority.js";
 import { createRabiLinkMobileOwner } from "./rabiLinkMobileOwner.js";
 import { createRabiLinkMobileOperations } from "./rabiLinkMobileOperations.js";
@@ -81,7 +78,7 @@ import path from "node:path";
 import { subscribeKnowledgeChanges } from "../roleKnowledgeSearch.js";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
 
 import {
@@ -90,14 +87,9 @@ import {
   type AgentDeliveryTestResult
 } from "../agentDeliveryTest.js";
 import { normalizeAgentAdapters, parseAgentAdapterType, type AgentAdapterType } from "../agentAdapters/types.js";
-import { agentAdapterManifest, normalizePlanBindingAgentType } from "../shared/agentAdapterCapabilities.js";
+import { installAgentAdapterManifestReader, normalizePlanBindingAgentType, type AgentAdapterManifest } from "../shared/agentAdapterCapabilities.js";
 import { agentThreadRequestFailureData, handleAgentThreadRequest as handleLocalAgentThreadRequest, readAgentEndpointSummary, type AgentThreadRequest, type AgentThreadRemoteSource, type AgentThreadRequestOptions } from "../agentThreads.js";
 import { createAgentEndpointDelivery } from "./agentEndpointDelivery.js";
-import { createGrokBotEndpointBridge, readGrokBotNativeOwner } from "./grokBotEndpointBridge.js";
-import { GrokBotError } from "../agentAdapters/grokBotClient.js";
-import { subscribeCodexDesktopDelivery } from "../codexDesktopBridge.js";
-import { handleGrokBotThreadRequest } from "./grokBotThreads.js";
-import { grokBotEndpointConfiguration } from "./grokBotConfiguration.js";
 import { createCorePublicOperations } from "./corePublicOperations.js";
 import { routeInstanceThread, type InstanceThreadTransport } from "./instanceThreadRouting.js";
 import { instanceWorkerStateDirectory } from "../agentAdapters/instanceClient.js";
@@ -106,24 +98,15 @@ import { recordPersonaAgentDelivery } from "./personaAgentDeliveryHistory.js";
 import { readChatDeliveryParties } from "./personaChatDeliveryLookup.js";
 import { agentIdentityForMessageSource, type RabiAgentMessageSource, type RabiDeliveryEnvelope, type RabiMessageSource } from "../shared/rabiMessage.js";
 import { AgentRequestStore, type AgentRequestRecord } from "../agentRequests/store.js";
-import { recoverAgentResponseDeliveryFromRollout } from "../agentRequests/deliveryRecovery.js";
 import { agentRequestStatePath } from "../agentRequests/persistence.js";
 import { projectDirectoryLayout } from "../shared/projectDirectoryLayout.js";
 import { resolveRuntimeLayout } from "../shared/runtimeLayout.js";
-import { readCodexDesktopThread } from "../codexDesktopBridge.js";
-import { isDshSessionId, readDshPrimaryBindingAsync } from "../dshSessionBridge.js";
-import { DshOwnerRecovery } from "../dshOwnerRecovery.js";
+import { isDshSessionId } from "../shared/dshSessionIdentity.js";
 import { CompanionFrameDelivery } from "./companionFrameDelivery.js";
 import { readCompanionObservationPolicy } from "./companionObservationInterval.js";
 import { bindDshSessionForSave } from "../shared/codexSessionBinding.js";
 import { sameCodexWorkspace } from "../codexTaskIdentity.js";
 import { selectAgentThreadRouteId } from "./agentThreadRouteSelection.js";
-import {
-  getCopilotStatus,
-  openMarvis,
-  testAstrbotLogin as testAstrbotLoginEndpoint,
-  type AgentManagerApiContext
-} from "../agentAdapters/managerApi.js";
 import type { MessageAdapterType } from "../adapters/messageAdapter.js";
 import type { ForwardRouteKind } from "../forwarding.js";
 import { appendAdapterLogToDir } from "../history.js";
@@ -284,6 +267,7 @@ import { createLanguageStyleOperations } from "./languageStyleRoutes.js";
 import { createRolePanelOperations } from "./rolePanelOperations.js";
 import { notifyRolePanelMessage } from "./rolePanelNotification.js";
 import { runLocalAgentMessageProcess } from "./localAgentMessageProcess.js";
+import { spawnGatewayCommandProcess } from "./gatewayCommandProcess.js";
 import { createPluginCatalogOperations } from "./pluginCatalogOperations.js";
 import type { PluginCatalogInvocation } from "./pluginCatalogRoutes.js";
 import { createSourcePatchHostService, ManagerSourcePatchService } from "./sourcePatchService.js";
@@ -348,9 +332,14 @@ import { createApiDiscoveryOperations } from "./apiDiscoveryRoutes.js";
 import { AgentUploadStore } from "./agentUploadStore.js";
 import { createAgentUploadRoutes } from "./agentUploadRoutes.js";
 import { guardRequestBodyDeadline } from "./agentUploadDeadline.js";
-import { createCopilotControlOperations, createAstrbotControlOperations } from "./agentProviderControlRoutes.js";
-import { CopilotControlService } from "./agentProviderControlService.js";
 import { AgentAdapterCatalogService, mountAgentAdapterCatalogPlugin } from "./agentAdapterCatalog.js";
+import { AgentAdapterCatalogWorkerPool } from "./agentAdapterCatalogWorkerPool.js";
+import type { AgentAdapterCatalogWorkerTask } from "./agentAdapterCatalogWorker.js";
+import { invokeAgentManagerOperation, resolvePublishedAgentManagerProviders, resolvePublishedAgentManagerProvider, loadInstalledAgentManagerDescriptors,
+  createPublishedAgentServiceEndpointBridge, createPublishedAgentDeviceEndpointBridge, type AgentManagerDescriptor } from "./agentManagerProviders.js";
+import { mergeAgentSessionDescriptors, readAgentSessionBinding } from "../agentAdapters/agentPluginSessionBinding.js";
+import type { AgentAdapterInvocation } from "@rabiroute/plugin-sdk";
+
 import {
   MessageAdapterControlService,
   MessageAdapterScanProviderRegistry,
@@ -450,7 +439,7 @@ import { createWebguiAccessOperations } from "./webguiAccessOperations.js";
 import { LanAgentAuthority } from "./lanAgentAuthority.js";
 import { evaluateLanAgentRequest, isLanNodeMetadataRequest, assertTrustedLanAgentPrincipal } from "./lanAgentRequestAccess.js";
 import { AgentResourceCatalog } from "./agentResourceCatalog.js";
-import { assertLanAgentBodyAuthority, registerLanAgentBodyGuard, validateLanAgentRequestBody, setTrustedLanAgentSource, getTrustedLanAgentSource, type TrustedLanAgentSource } from "./lanAgentBodyAuthority.js";
+import { validateLanAgentRequestBody, captureTrustedLanAgentSource, getTrustedLanAgentSource, type TrustedLanAgentSource } from "./lanAgentBodyAuthority.js";
 import { migrateLanAgentSharedCredential } from "./lanAgentCredentialMigration.js";
 import {
   generateWebguiAccessToken,
@@ -812,34 +801,31 @@ function agentMessageSourceForSession(
 /**
  * Read the primary Agent's session identity from the definition.
  *
- * Each adapter stores its own fields, so this is a table rather than a boolean
- * test: a missing branch would fall back to another adapter's fields and report
- * a session that belongs to a different owner.
+ * Installed package metadata owns field mappings, even while a plugin is disabled.
+ * Missing mappings never borrow a different platform's saved task.
  */
+function currentAgentSessionDescriptors(): ReadonlyMap<string, AgentManagerDescriptor> {
+  return mergeAgentSessionDescriptors(installedAgentDescriptors.values(),
+    resolvePublishedAgentManagerProviders(publishedPluginGeneration()).map(provider => ({
+      type: provider.type, capability: provider.capability, manifest: provider.manifest,
+      sessionBinding: provider.sessionBinding ?? {}
+    })));
+}
+
 function configuredLocalAgentSessionFields(
   definition: GatewayDefinition,
   agentAdapter: AgentAdapterType
 ): { sessionId?: string; sessionName?: string; workspace?: string } {
-  switch (agentAdapter) {
-    case "grokBot":
-      return { sessionId: definition.grokBotSessionId, sessionName: definition.grokBotSessionName };
-    case "dsh":
-      return { sessionId: definition.dshSessionId, sessionName: definition.dshSessionName, workspace: definition.dshCwd };
-    case "antigravity":
-      return {
-        sessionId: definition.antigravityConversationId,
-        sessionName: definition.antigravityConversationName,
-        workspace: definition.antigravityCwd
-      };
-    case "workbuddy":
-      return {
-        sessionId: definition.workbuddySessionId,
-        sessionName: definition.workbuddySessionName,
-        workspace: definition.workbuddyCwd
-      };
-    default:
-      return { sessionId: definition.codexThreadId, sessionName: definition.codexThreadName, workspace: definition.codexCwd };
+  return readAgentSessionBinding(currentAgentSessionDescriptors().get(agentAdapter), definition);
+}
+
+function configuredAgentProviderTypes(definition: GatewayDefinition): AgentAdapterType[] {
+  const providers = new Set(normalizeAgentAdapters(definition.agentAdapters));
+  for (const descriptor of currentAgentSessionDescriptors().values()) {
+    const type = parseAgentAdapterType(descriptor.type);
+    if (type && readAgentSessionBinding(descriptor, definition).sessionId) providers.add(type);
   }
+  return [...providers];
 }
 
 function primaryAgentSessionFields(definition: GatewayDefinition, agentAdapter: AgentAdapterType) {
@@ -912,9 +898,6 @@ function runtimeOwnsAgentSession(runtime: GatewayRuntime, sessionId: string): bo
 
 let instanceThreadTransport: InstanceThreadTransport | undefined;
 let agentEndpointDelivery: ReturnType<typeof createAgentEndpointDelivery> | undefined;
-function currentGrokBotConfiguration(sessionId?: string) {
-  return grokBotEndpointConfiguration([...runtimes.values()].map(runtime => runtime.definition), sessionId);
-}
 function effectiveInstanceDefinition(definition: GatewayDefinition): GatewayDefinition {
   // Route destinations already contain the explicit provider/session; never replace them from a computer catalog.
   return definition;
@@ -928,12 +911,16 @@ function messageWorkerDataDir(definition: GatewayDefinition): string {
 }
 async function handleAgentThreadRequest(request: AgentThreadRequest, options: AgentThreadRequestOptions,
   trustedDeviceSource?: NonNullable<ReturnType<typeof rabiLinkAgentDevicePrincipal>>) {
-  const deviceThreadResult = await handleDeviceAgentThreadRequest(request, options, {
-    ownerInstanceId: rabiGlobalConfig.read().rabiGuid,
-    scope: () => rabiLinkConnectionScope(rabiLinkRelayConfigForMeta()),
-    owner: currentRabiLinkBusinessOwners().deviceAgents
-  });
-  if (deviceThreadResult) return deviceThreadResult;
+  const deviceProvider = resolvePublishedAgentManagerProviders(publishedPluginGeneration()).find(provider => provider.type === "deviceAgent");
+  const deviceEndpoint = deviceProvider?.deviceEndpoint as { handlesThreadRequest?(request: AgentThreadRequest): boolean } | undefined;
+  const handlesDeviceMetadata = deviceEndpoint?.handlesThreadRequest
+    ? deviceEndpoint.handlesThreadRequest(request)
+    : Boolean(deviceProvider && request.agentAdapter === deviceProvider.type && request.action !== "send" && request.action !== "reconcile_delivery");
+  if (deviceProvider && handlesDeviceMetadata) {
+    const result = await deviceProvider.invoke<Awaited<ReturnType<typeof import("./deviceAgentThreads.js").handleDeviceAgentThreadRequest>>>(
+      "threads.request", { request }, { nativeArgs: [request, options], assertCurrent: options.requestAuthority });
+    if (result) return result;
+  }
   if (request.action === "create" && request.prompt != null && request.prompt !== "" && request.agentAdapter === "codex" && request.instanceBinding && !("ownerDeviceId" in request.instanceBinding && request.instanceBinding.ownerDeviceId) && instanceThreadTransport && !instanceThreadTransport.instances().some(item => item.local && item.instanceId === request.instanceBinding!.instanceId)) {
     if (!agentEndpointDelivery) throw new Error("Manager endpoint delivery authority is unavailable.");
     const endpoint = agentEndpointDelivery.options(options.remoteSource, options.requestAuthority, trustedDeviceSource, undefined, options.callerExecutionOptions);
@@ -957,19 +944,13 @@ async function handleAgentThreadRequest(request: AgentThreadRequest, options: Ag
     if (!agentEndpointDelivery) throw new Error("Manager endpoint delivery authority is unavailable.");
     return handleLocalAgentThreadRequest(request, { ...options,
       endpointDelivery: agentEndpointDelivery.options(options.remoteSource, options.requestAuthority, trustedDeviceSource, undefined, options.callerExecutionOptions),
-      // A remote source's formal reply is routed through the same lease that admitted the
-      // original request, so a revoked or unapproved endpoint keeps refusing it.
+      // Return coordinates reuse ingress attribution without another source-owner lookup.
       ...(options.remoteSource ? { remoteEndpoint: agentEndpointDelivery.remoteEndpoint } : {}) });
   }
   options.requestAuthority?.();
   const remote = instanceThreadTransport ? await routeInstanceThread(request, instanceThreadTransport) : undefined;
   options.requestAuthority?.();
-  if (!remote) {
-    const grokBot = await handleGrokBotThreadRequest(request,
-      request.agentAdapter === "grokBot" ? currentGrokBotConfiguration(request.threadId) : {});
-    options.requestAuthority?.();
-    return grokBot ?? handleLocalAgentThreadRequest(request, options);
-  }
+  if (!remote) return handleLocalAgentThreadRequest(request, options);
   return remote;
 }
 
@@ -1013,6 +994,8 @@ function agentThreadRequestOptions(
     : undefined;
   const explicitDshBaseUrl = String(request.dshBaseUrl || "").trim();
   return {
+    invokeAgentOperation: invokePublishedAgentOperation,
+    getProviders: () => resolvePublishedAgentManagerProviders(publishedPluginGeneration()),
     allowedWorkspaces: agentThreadAllowedWorkspaces(),
     defaultWorkspace: rootDir,
     // Defaults belong to the target Route, never to an unrelated sending persona.
@@ -1044,15 +1027,8 @@ function agentThreadRequestOptions(
         : {}),
     ...extra,
     dshAgentPreset: request.dshAgentPreset?.trim() || extra.dshAgentPreset,
-    readGrokBotSource: async (sessionId) => {
-      try {
-        const owner = await readGrokBotNativeOwner(sessionId, currentGrokBotConfiguration(sessionId));
-        return { sessionId: owner.id, sessionName: owner.bot.name.trim() || owner.agentId };
-      } catch (error) {
-        if (error instanceof GrokBotError && (error.code === "GROK_BOT_SESSION_NOT_FOUND" || error.code === "GROK_BOT_DUPLICATE_OWNER_ID")) return null;
-        throw error;
-      }
-    }
+    readGrokBotSource: (sessionId) => invokePublishedAgentOperation<{ sessionId: string; sessionName: string } | null>(
+      "grokBot", "readGrokBotSource", { sessionId })
   };
 }
 
@@ -1103,7 +1079,6 @@ const allDayRecording = createAllDayRecording({
   indexChanged: (roleId, indexDay, indexFailed) => publishManagerEvent("all_day_recording", { roleId, indexDay, indexFailed }),
   readChanged: (roleId, event) => publishManagerEvent("all_day_recording", { roleId, ...event })
 });
-const companionDshOwnerRecovery = new DshOwnerRecovery();
 const companionFrameDelivery = new CompanionFrameDelivery(rootDir);
 const companionObservationPolicy = readCompanionObservationPolicy(JSON.parse(fs.readFileSync(path.join(packageRoot, "packages", "rabi-companion", "observation.json"), "utf8")));
 const companionActivity = new CompanionActivity({
@@ -1167,10 +1142,9 @@ const companionActivity = new CompanionActivity({
     assertLocalPersonaOwner(runtime.definition, "Companion activity");
     let recoveredOwnerUrl: string | undefined;
     if (runtime.definition.primaryAgentAdapter === "dsh") {
-      const binding = await readDshPrimaryBindingAsync(adapterConfigPath(runtime.definition.configName || runtime.definition.id));
-      assertCurrent?.();
-      if (!binding) throw new Error("当前角色没有绑定 DSH 会话");
-      recoveredOwnerUrl = await companionDshOwnerRecovery.ensure(binding);
+      recoveredOwnerUrl = await invokePublishedAgentOperation<string>("dsh", "ensureCompanionOwner", {
+        configPath: adapterConfigPath(runtime.definition.configName || runtime.definition.id)
+      }, { assertCurrent });
       assertCurrent?.();
       appendLog(runtime, `companion Agent owner ready: ${review.id}`);
     }
@@ -1653,7 +1627,7 @@ const agentCompletionDelivery = new AgentCompletionDeliveryService({
   taskContext: async ({ roleId, rule }, request) => {
     const plans = listPlans(roleDirForApi(roleId));
     let taskName: string | undefined;
-    try { taskName = readCodexDesktopThread(request.sessionId)?.title?.trim(); }
+    try { taskName = (await invokePublishedAgentOperation<{ title?: string } | undefined>("codex", "readCodexDesktopThread", { sessionId: request.sessionId }))?.title?.trim(); }
     catch (error) {
       managerOperationalLog.record("warn", "completion_task_title_unavailable", {
         action: request.sessionId, error: managerOperationalError(error, rootDir)
@@ -1668,8 +1642,8 @@ const agentCompletionDelivery = new AgentCompletionDeliveryService({
         });
       };
       try {
-        const thread = readCodexDesktopThread(request.sessionId);
-        if (thread?.rolloutPath) context.images = await readCodexTurnImages(thread.rolloutPath, request.turnId, imageError);
+        context.images = await invokePublishedAgentOperation<Awaited<ReturnType<typeof import("./completionImages.js").readCodexTurnImages>>>(
+          "codex", "readCompletionImages", { sessionId: request.sessionId, turnId: request.turnId }, { onError: imageError });
       } catch (error) { imageError(error); }
     }
     return context;
@@ -1762,6 +1736,12 @@ const planTaskCompletionDelivery = createPlanTaskCompletionDelivery<GatewayRunti
 });
 type PublishedSpeechService = ReturnType<typeof import("./speechPluginRuntime.js").createSpeechPluginRuntime>;
 let resolvePublishedPluginService: (capability: string) => unknown = () => undefined;
+let publishedPluginGeneration: () => PluginGeneration | undefined = () => undefined;
+let installedAgentDescriptors: ReadonlyMap<string, AgentManagerDescriptor> = new Map();
+function invokePublishedAgentOperation<T = unknown>(type: string, operation: string, payload: unknown, invocation?: AgentAdapterInvocation): Promise<T> {
+  return invokeAgentManagerOperation<T>(publishedPluginGeneration(), type, operation, payload, invocation);
+}
+
 function currentSpeechService(): PublishedSpeechService {
   const service = resolvePublishedPluginService("manager.speech@1") as PublishedSpeechService | undefined;
   if (!service) throw new SpeechControlError("Speech service plugin is disabled or unavailable.", 503);
@@ -1895,6 +1875,7 @@ const agentStateByGateway = new Map<string, Partial<Record<AgentAdapterType, Age
 const remoteAgentToken = process.env.REMOTE_AGENT_TOKEN?.trim() || "";
 let remoteAgentHub: RemoteAgentHub | undefined;
 let agentAdapterCatalogService: AgentAdapterCatalogService | undefined;
+let agentManagerScanWorkers: AgentAdapterCatalogWorkerPool | undefined;
 let watchedConfigSnapshot = "";
 // Route catalog mutations already apply their committed snapshot to the live
 // Manager. The config watcher observes that same durable write later; consuming
@@ -2307,9 +2288,7 @@ async function rabiLinkReadResponse(response: Response): Promise<any> {
   if (!response.ok || value.code !== undefined && value.code !== 0) throw Object.assign(new Error("MANAGER_READ_FAILED"), { code: "MANAGER_READ_FAILED", statusCode: response.ok ? 502 : response.status });
   return value.data ?? value;
 }
-let releaseDeviceEndpointRecovery: (() => void) | undefined;
-let rabiLinkDeviceEndpointBridge: { key: string; bridge: ReturnType<typeof createDeviceAgentEndpointBridge> } | undefined;
-let rabiLinkBusinessOwners: { key: string; agents: ReturnType<typeof createRabiLinkAgentDevices>; deviceAgents: ReturnType<typeof createDeviceAgentOwner> } | undefined;
+let rabiLinkBusinessOwners: { key: string; agents: ReturnType<typeof createRabiLinkAgentDevices> } | undefined;
 async function assertCurrentDeviceAgentAssignment(scope: string, agentId: string): Promise<void> {
   const config = rabiLinkRelayConfigForMeta();
   if (scope !== rabiLinkConnectionScope(config)) throw Object.assign(new Error("DEVICE_AGENT_CONNECTION_CHANGED"), { code: "DEVICE_AGENT_CONNECTION_CHANGED", statusCode: 401 });
@@ -2317,23 +2296,6 @@ async function assertCurrentDeviceAgentAssignment(scope: string, agentId: string
   if (scope !== rabiLinkConnectionScope(rabiLinkRelayConfigForMeta()) || owner !== config.deviceId) {
     throw Object.assign(new Error("DEVICE_AGENT_OWNER_MISMATCH"), { code: "DEVICE_AGENT_OWNER_MISMATCH", statusCode: 409 });
   }
-}
-function currentDeviceAgentEndpointBridge(endpointManagerInstanceId: string) {
-  const owners = currentRabiLinkBusinessOwners();
-  const key = JSON.stringify([owners.key, endpointManagerInstanceId]);
-  if (rabiLinkDeviceEndpointBridge?.key === key) return rabiLinkDeviceEndpointBridge.bridge;
-  const bridge = createDeviceAgentEndpointBridge({ managerInstanceId: endpointManagerInstanceId,
-    ownerInstanceId: rabiGlobalConfig.read().rabiGuid,
-    scope: () => rabiLinkConnectionScope(rabiLinkRelayConfigForMeta()),
-    owner: owners.deviceAgents, assertDeviceAssignment: assertCurrentDeviceAgentAssignment,
-    peer: {
-      localDeviceId: () => rabiLinkRelayConfigForMeta().deviceId,
-      targetDeviceId: id => rabiLinkDeviceConnections.deviceTarget(id),
-      request: requestPeerManagerApi
-    }
-  });
-  rabiLinkDeviceEndpointBridge = { key, bridge };
-  return bridge;
 }
 async function requestPeerManagerApi(targetDeviceId: string, method: string, pathname: string, body?: unknown): Promise<unknown> {
   return withPeerManagerResponse(targetDeviceId, method, pathname, body, rabiLinkReadResponse);
@@ -2368,13 +2330,10 @@ async function withPeerManagerResponse<T>(targetDeviceId: string, method: string
   assertCurrent();
   return value;
 }
-function currentRabiLinkBusinessOwners() {
-  const sourceDeviceId = rabiLinkRelayConfigForMeta().deviceId, sourceDeviceGuid = rabiGlobalConfig.read().rabiGuid;
-  const key = JSON.stringify([sourceDeviceId, sourceDeviceGuid, rabiLinkConnectionScope(rabiLinkRelayConfigForMeta()), managerHostIdentity?.applicationGenerationId ?? managerInstanceId]);
-  if (rabiLinkBusinessOwners?.key === key) return rabiLinkBusinessOwners;
-  releaseDeviceEndpointRecovery?.();
-  releaseDeviceEndpointRecovery = undefined;
-  rabiLinkDeviceEndpointBridge = undefined;
+function deviceAgentHostContext(endpointManagerInstanceId: string) {
+  const config = rabiLinkRelayConfigForMeta();
+  const sourceDeviceGuid = rabiGlobalConfig.read().rabiGuid;
+  const key = JSON.stringify([config.deviceId, sourceDeviceGuid, rabiLinkConnectionScope(config), managerHostIdentity?.applicationGenerationId ?? managerInstanceId]);
   const authorize = (request: http.IncomingMessage) => rabiLinkAgentDevicePrincipal(request, rabiLinkRelayConfigForMeta(), managerHostIdentity?.applicationGenerationId ?? managerInstanceId);
   const peerAuthority = createDeviceAgentPeerAuthority({
     scope: () => rabiLinkConnectionScope(rabiLinkRelayConfigForMeta()),
@@ -2382,7 +2341,7 @@ function currentRabiLinkBusinessOwners() {
     trustedTransport: request => rabiLinkTrustedTransport(request, managerHostIdentity?.applicationGenerationId ?? managerInstanceId, rabiLinkConnectionScope(rabiLinkRelayConfigForMeta())),
     readProof: (id, deliveryId, generation) => requestPeerManagerApi(id, "GET", "/api/agent/delivery-authority?" + new URLSearchParams({ deliveryId, generation }))
   });
-  const deviceAgents = createDeviceAgentOwner({
+  const ownerOptions: DeviceAgentOwnerOptions = {
     dataDir: path.join(rootDir, "data", "rabilink"), ownerInstanceId: sourceDeviceGuid, authorize,
     assertCurrent: () => {
       const config = rabiLinkRelayConfigForMeta();
@@ -2397,8 +2356,24 @@ function currentRabiLinkBusinessOwners() {
       ownerInstanceId: () => rabiGlobalConfig.read().rabiGuid,
     }),
     assertDeviceAssignment: assertCurrentDeviceAgentAssignment
-  });
-  releaseDeviceEndpointRecovery = deviceAgents.onChange(() => { void agentEndpointDelivery?.recovery.onEvent(); });
+  };
+  return { key, ownerOptions, endpointOptions: {
+    managerInstanceId: endpointManagerInstanceId,
+    ownerInstanceId: sourceDeviceGuid,
+    scope: () => rabiLinkConnectionScope(rabiLinkRelayConfigForMeta()),
+    assertDeviceAssignment: assertCurrentDeviceAgentAssignment,
+    peer: {
+      localDeviceId: () => rabiLinkRelayConfigForMeta().deviceId,
+      targetDeviceId: (id: string) => rabiLinkDeviceConnections.deviceTarget(id),
+      request: requestPeerManagerApi
+    }
+  } };
+}
+function currentRabiLinkBusinessOwners() {
+  const sourceDeviceId = rabiLinkRelayConfigForMeta().deviceId, sourceDeviceGuid = rabiGlobalConfig.read().rabiGuid;
+  const key = JSON.stringify([sourceDeviceId, sourceDeviceGuid, rabiLinkConnectionScope(rabiLinkRelayConfigForMeta()), managerHostIdentity?.applicationGenerationId ?? managerInstanceId]);
+  if (rabiLinkBusinessOwners?.key === key) return rabiLinkBusinessOwners;
+  const authorize = (request: http.IncomingMessage) => rabiLinkAgentDevicePrincipal(request, rabiLinkRelayConfigForMeta(), managerHostIdentity?.applicationGenerationId ?? managerInstanceId);
   const agents = createRabiLinkAgentDevices({
     dataDir: path.join(rootDir, "data", "rabilink"), sourceDeviceId, authorize,
     assertCurrent: () => {
@@ -2415,7 +2390,7 @@ function currentRabiLinkBusinessOwners() {
       return rabiLinkReadResponse(await activePeerTunnel.fetch(id, "manager", pathname, { signal: AbortSignal.timeout(getTimeoutMs("backend.manager.controlPlaneRoutes.readTarget.AbortSignal.timeout.request", 30_000)) }));
     }
   });
-  return rabiLinkBusinessOwners = { key, agents, deviceAgents };
+  return rabiLinkBusinessOwners = { key, agents };
 }
 
 async function syncRabiLinkRelayRuntime(onLanReady?: () => void | Promise<void>): Promise<void> {
@@ -3259,69 +3234,21 @@ function readAgentState(definition: GatewayDefinition, adapterType: AgentAdapter
 }
 
 function defaultAgentState(definition: GatewayDefinition, adapterType: AgentAdapterType): Record<string, unknown> {
-  if (adapterType === "grokBot") {
-    return {
-      agentAdapterType: adapterType, bound: false, owner: "grok_bot_cloud", transport: "native-cloud-owner-http",
-      monitorThreadId: definition.grokBotSessionId, monitorThreadName: definition.grokBotSessionName,
-      message: "Grok Bot 云端会话已配置；等待当前 Manager 收到原生投递回执。"
-    };
-  }
-  if (adapterType === "copilotCli") {
-    return {
-      agentAdapterType: adapterType,
-      bound: false,
-      monitorThreadName: resolveCopilotThreadName(definition),
-      monitorThreadSource: definition.copilotCliBin || process.env.COPILOT_CLI_BIN || "copilot",
-      monitorProjectPath: definition.copilotCwd || rootDir,
-      message: "Copilot CLI 已配置；等待当前 Manager 进程收到成功投递上报。"
-    };
-  }
-
-  if (adapterType === "marvis") {
-    return {
-      agentAdapterType: adapterType,
-      bound: false,
-      handoffOnly: true,
-      monitorThreadName: "Marvis",
-      monitorThreadSource: definition.marvisAppId?.trim() || process.env.MARVIS_APP_ID || "Tencent.Marvis",
-      message: "Marvis 当前是打开桌面端并复制 prompt 的人工接力，不做线程绑定。"
-    };
-  }
-
-  if (adapterType === "astrbot") {
-    const astrbotUrl = definition.astrbotUrl?.trim() || process.env.ASTRBOT_URL || "http://127.0.0.1:6185";
-    return {
-      agentAdapterType: adapterType,
-      bound: false,
-      monitorThreadName: "AstrBot Agent",
-      monitorThreadSource: astrbotUrl,
-      message: "AstrBot 已配置；等待当前 Manager 进程收到成功投递上报。"
-    };
-  }
-
-  if (adapterType === "dsh") {
-    const dshBaseUrl = definition.dshBaseUrl?.trim() || "http://127.0.0.1:3080";
-    return {
-      agentAdapterType: adapterType,
-      bound: Boolean(definition.dshSessionId?.trim() && definition.dshCwd?.trim()),
-      monitorThreadName: definition.dshSessionName?.trim() || "DSH 主角色",
-      monitorThreadSource: dshBaseUrl,
-      monitorThreadId: definition.dshSessionId?.trim() || "",
-      monitorThreadCwd: definition.dshCwd?.trim() || "",
-      deliveryTransport: "http",
-      message: "DSH 会话主角色：投递通过 DSH apiproxy session.prompt 完成。"
-    };
-  }
-
+  const descriptor = currentAgentSessionDescriptors().get(adapterType);
+  const fields = configuredLocalAgentSessionFields(definition, adapterType);
   return {
     agentAdapterType: adapterType,
     bound: false,
-    monitorThreadName: resolveCodexThreadName(definition),
-    monitorProjectPath: normalizeCodexCwd(definition.codexCwd) ?? rootDir,
-    deliveryTransport: "desktop-ipc",
-    desktopHostName: "Codex/ChatGPT Desktop",
-    desktopHostRequired: true,
-    message: "等待 Codex Desktop 首次接收投递；Desktop 未就绪时不会启动备用 Runtime。"
+    ...(fields.sessionId ? { monitorThreadId: fields.sessionId } : {}),
+    ...(fields.sessionName ? { monitorThreadName: fields.sessionName } : {}),
+    ...(fields.workspace ? { monitorThreadCwd: fields.workspace, monitorProjectPath: fields.workspace } : {}),
+    ...(descriptor ? {
+      deliveryTransport: descriptor.manifest.transport.protocol,
+      transportMode: descriptor.manifest.transport.mode,
+      ...(descriptor.manifest.host ? { hostName: descriptor.manifest.host.name, hostRequired: descriptor.manifest.host.required } : {}),
+      ...(descriptor.manifest.maturity === "stub" ? { handoffOnly: true } : {}),
+      message: `${descriptor.manifest.label} 已配置；等待原执行端的投递状态。`
+    } : { message: `Agent 插件不可用：${adapterType}。配置和原目标已保留。` })
   };
 }
 
@@ -3405,17 +3332,6 @@ function routeHasRecentMessages(runtime: GatewayRuntime, type: MessageAdapterTyp
   const service = activeGatewayDiagnosticsSnapshotService();
   service.requestRefresh();
   return service.hasRecentMessages(runtime.definition.id, type);
-}
-
-
-
-function agentManagerApiCtx(): AgentManagerApiContext {
-  return {
-    rootDir,
-    getRuntimes: () => runtimes.values(),
-    checkHttpEndpoint,
-    resolveWingetCopilot
-  };
 }
 
 
@@ -3656,12 +3572,7 @@ function deliverWearableAlertViaGateway(
 ): Promise<WearableGatewayDeliveryResult> {
   return new Promise((resolve) => {
     const command = childCommand(["--wearable-health-alert-stdin"]);
-    const child = spawn(command.command, command.args, {
-      cwd: rootDir,
-      env: envFor(runtime.definition),
-      shell: command.shell,
-      windowsHide: true
-    });
+    const child = spawnGatewayCommand(runtime, command);
     let stdout = "";
     let settled = false;
     const finish = (result: WearableGatewayDeliveryResult): void => {
@@ -4397,6 +4308,23 @@ type ManualTriggerCompletionCallbacks = {
   onFailure?: (error: Error) => void;
 };
 
+function spawnGatewayCommand(
+  runtime: GatewayRuntime,
+  command: { command: string; args: readonly string[]; shell?: boolean | string },
+  additionalEnvironment?: NodeJS.ProcessEnv
+): ChildProcessWithoutNullStreams {
+  return spawnGatewayCommandProcess({
+    definition: runtime.definition,
+    snapshotDirectory: path.join(dataDirFor(runtime.definition), ".rabi-runtime", "route-snapshots"),
+    cwd: rootDir, ...command,
+    environment: definition => ({ ...envFor(definition), ...additionalEnvironment }),
+    cleanupError: error => {
+      runtime.log.push(`[${new Date().toISOString()}] Command Route snapshot cleanup failed: ${(error as NodeJS.ErrnoException).code ?? "IO_ERROR"}`);
+      if (runtime.log.length > 200) runtime.log.splice(0, runtime.log.length - 200);
+    }
+  });
+}
+
 function triggerGatewayManualRule(
   id: string,
   request: ManualTriggerRequest = {},
@@ -4430,12 +4358,7 @@ function triggerGatewayManualRule(
     processKey,
     () => {
       appendLog(runtime, `manual trigger requested: ${triggerName}`);
-      return spawn(command.command, command.args, {
-        cwd: rootDir,
-        env: envFor(runtime.definition),
-        shell: command.shell,
-        windowsHide: true
-      });
+      return spawnGatewayCommand(runtime, command);
     },
     {
       onStdout: (text) => {
@@ -4534,12 +4457,7 @@ function replayGatewayDelivery(id: string, request: DeliveryReplayRequest = {}):
   const command = childCommand(args);
   appendLog(runtime, `delivery replay requested: mode=${mode} attempts=${attemptIds.join(",") || "none"} message=${routeKind && messageId ? `${routeKind}:${messageId}` : "none"}`);
   return new Promise((resolve, reject) => {
-    const child = spawn(command.command, command.args, {
-      cwd: rootDir,
-      env: envFor(runtime.definition),
-      shell: command.shell,
-      windowsHide: true
-    });
+    const child = spawnGatewayCommand(runtime, command);
 
     child.stdout.on("data", (data) => {
       for (const line of data.toString("utf8").split(/\r?\n/).filter(Boolean)) {
@@ -4843,7 +4761,9 @@ async function deliverAgentRequestReminder(request: AgentRequestRecord): Promise
   const current = agentRequests.get(request.id);
   if (!current || current.status !== "awaiting_response") return;
   if (current.pendingResponseDeliveryId) {
-    const recovery = await recoverAgentResponseDeliveryFromRollout(agentRequests, current.source.threadId, current.pendingResponseDeliveryId);
+    const recovery = await invokePublishedAgentOperation<Awaited<ReturnType<typeof import("../agentRequests/deliveryRecovery.js").recoverAgentResponseDeliveryFromRollout>>>(
+      "codex", "recoverResponseDelivery", { sourceThreadId: current.source.threadId, pendingDeliveryId: current.pendingResponseDeliveryId },
+      { store: agentRequests });
     await agentRequests.recordPendingResponseCheck(current.id, current.pendingResponseDeliveryId, recovery.status);
     if (recovery.status === "receipt_recovered" && current.messageProcessingRequirementId) {
       messageProcessingBoard.recordHandoffReturned(current.messageProcessingRequirementId, current.target.threadId);
@@ -5966,7 +5886,7 @@ async function resolvePlanSecretaryDeliveryTarget(
   const primaryTarget = resolvePrimaryAgentTarget(runtime.definition);
   if (!primaryTarget || primaryTarget.provider !== targetAgentAdapter || ("agentTargetId" in target && target.agentTargetId && target.agentTargetId !== primaryTarget.id)) throw new Error("Plan secretary does not belong to the primary Agent target.");
   const effective = effectiveInstanceDefinition(runtime.definition);
-  const ownerWorkspace = targetAgentAdapter === "dsh" ? effective.dshCwd : effective.codexCwd;
+  const ownerWorkspace = primaryAgentSessionFields(effective, targetAgentAdapter).workspace;
   if (!sameCodexWorkspace(target.workspace, ownerWorkspace)) {
     throw new Error("Plan secretary session is outside the Primary Persona workspace.");
   }
@@ -6619,6 +6539,9 @@ function triggerGatewayLocalAgentMessage(
   assertCurrent?.();
   return runLocalAgentMessageProcess({ command: command.command, args: command.args, shell: command.shell,
     cwd: rootDir, env: { ...envFor(runtime.definition), ...deliveryEnv }, text, messageId, label: logLabel,
+    spawnProcess: (executable, args, options) => spawnGatewayCommand(runtime, {
+      command: executable, args, shell: options.shell
+    }, deliveryEnv),
     onLog: line => appendLog(runtime, line) });
 }
 
@@ -6643,11 +6566,7 @@ function triggerGatewaySpeechMessage(runtime: GatewayRuntime, record: SpeechIngr
   return endpoint.runAcceptedWork(async () => {
     appendLog(runtime, `speech message requested: ${messageId}`);
     let stdoutText = "";
-    const child = spawn(command.command, command.args, {
-      cwd: rootDir,
-      env: environment,
-      shell: command.shell, windowsHide: true
-    });
+    const child = spawnGatewayCommand(runtime, command, environment);
     let closed;
     try {
       closed = await joinChildProcess(child, {
@@ -6695,7 +6614,7 @@ async function testGatewayAgentDelivery(
   if (!adapter || (requestedAdapter && requestedAdapter !== adapter)) {
     throw new Error("目标 Agent 未添加到当前 Route。");
   }
-  if (agentAdapterManifest(adapter).maturity === "stub") {
+  if (resolvePublishedAgentManagerProvider(publishedPluginGeneration(), adapter).manifest.maturity === "stub") {
     throw new Error("该 Agent 当前只支持人工接力，无法确认真实投递。");
   }
 
@@ -6719,12 +6638,7 @@ async function testGatewayAgentDelivery(
     let settled = false;
     let stdout = "";
     let stderr = "";
-    const child = spawn(command.command, command.args, {
-      cwd: rootDir,
-      env: envFor(runtime.definition),
-      shell: command.shell,
-      windowsHide: true
-    });
+    const child = spawnGatewayCommand(runtime, command);
     const finish = (action: () => void): void => {
       if (settled) return;
       settled = true;
@@ -6780,12 +6694,7 @@ function triggerGatewayDirectAgentMessage(id: string, envelope: RabiDeliveryEnve
   appendLog(runtime, "remote agent result requested direct delivery");
   return new Promise((resolve, reject) => {
     let settled = false;
-    const child = spawn(command.command, command.args, {
-      cwd: rootDir,
-      env: envFor(runtime.definition),
-      shell: command.shell,
-      windowsHide: true
-    });
+    const child = spawnGatewayCommand(runtime, command);
     const finish = (action: () => void): void => {
       if (settled) return;
       settled = true;
@@ -7011,7 +6920,11 @@ function activeGatewayDiagnosticsSnapshotService(): GatewayDiagnosticsSnapshotSe
   gatewayDiagnosticsSnapshotService ??= new GatewayDiagnosticsSnapshotService({
     capture: () => captureGatewayDiagnosticsWorkerInput(
       runtimes.values(),
-      gatewayId => agentStateByGateway.get(gatewayId),
+      gatewayId => {
+        const states = agentStateByGateway.get(gatewayId);
+        return states && Object.fromEntries(Object.entries(states).filter(
+          (entry): entry is [string, AgentRuntimeState] => entry[1] !== undefined));
+      },
       routeCatalogPersonas()
     ),
     minRefreshIntervalMs: 5_000,
@@ -7252,7 +7165,7 @@ function metaPayload(): Record<string, unknown> {
     messageProcessingPersistence: messageProcessingBoardPersistence.status(),
     readWorkers: managerReadWorkerPool.status(),
     catalogWorkers: managerCatalogWorkerPool.status(),
-    agentScanWorkers: agentAdapterCatalogService?.workerStatus() ?? {
+    agentScanWorkers: agentManagerScanWorkers?.status() ?? {
       executionMode: "child_process",
       state: "stopped",
       active: 0,
@@ -7344,12 +7257,14 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
     })}\n`);
   };
   let stopPluginPackagePreparation: (() => Promise<void>) | undefined;
+  let stopAgentScanWorkers: (() => Promise<void>) | undefined;
   const managerRuntimeOwner = new ManagerRuntimeOwner<ActiveStorageLifecycleGeneration>({
     fenceIngress(reason) {
       shuttingDown = true;
       // Cancel unpublished metadata before any admitted request owner joins its tail.
       // The catalog resource below still awaits the same memoized disposal.
       void stopPluginPackagePreparation?.().catch(() => {});
+      void stopAgentScanWorkers?.().catch(() => {});
       // Fence purely queued work before plugin retirement waits for its callers.
       // The original resource owner joins this same memoized close at the end.
       void agentRequests.close().catch(() => {});
@@ -7570,6 +7485,7 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
   try {
   let managerPluginKernel: GenerationRuntime | undefined;
   resolvePublishedPluginService = capability => managerPluginKernel?.current().services.services.get(capability)?.value;
+  publishedPluginGeneration = () => managerPluginKernel?.current();
   const managerPluginProcessLeases = new ProcessLeaseRegistry();
   managerRuntimeOwner.register("manager_plugin_process_leases", () => managerPluginProcessLeases.disposeAll());
   let loadedManagerPluginProfile: LoadedPluginProfile | undefined;
@@ -7667,14 +7583,8 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
   agentEndpointDelivery = createAgentEndpointDelivery({ store: agentRequests, authority: lanAgentAuthority,
     registry: lanAgentRegistry, config: rabiGlobalConfig,
     peer: peerAgentBridge,
-    service: createGrokBotEndpointBridge({ managerInstanceId: lanAgentRegistry.localInstanceId, configuration: currentGrokBotConfiguration }),
-    device: {
-      resolveSource: (request, principal) => currentDeviceAgentEndpointBridge(lanAgentRegistry.localInstanceId).resolveSource(request, principal),
-      resolveTarget: request => currentDeviceAgentEndpointBridge(lanAgentRegistry.localInstanceId).resolveTarget(request),
-      authorize: (endpoint, role) => currentDeviceAgentEndpointBridge(lanAgentRegistry.localInstanceId).authorize(endpoint, role),
-      transport: (delivery, guard, reconcile) => currentDeviceAgentEndpointBridge(lanAgentRegistry.localInstanceId).transport(delivery, guard, reconcile),
-      refresh: (endpoint, role) => currentDeviceAgentEndpointBridge(lanAgentRegistry.localInstanceId).refresh(endpoint, role)
-    },
+    service: createPublishedAgentServiceEndpointBridge(() => managerPluginKernel?.current()),
+    device: createPublishedAgentDeviceEndpointBridge(() => managerPluginKernel?.current()),
     receiptDirectory: path.join(rootDir, "data", ".runtime", "endpoint-transport-receipts"),
     readLocal: readAgentEndpointSummary, localOptions: request => agentThreadRequestOptions(request) });
   const endpointRecovery = agentEndpointDelivery.recovery;
@@ -7683,20 +7593,11 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
   };
   void endpointRecovery.start().catch(error => managerOperationalLog.record("error", "agent_endpoint_recovery_start_failed", { error: managerOperationalError(error, rootDir) }));
   const releaseEndpointRecovery = lanAgentRegistry.onDeliveryRecoveryEvent(recoverEndpointDeliveries);
-  const releaseLateDeliveryRecovery = subscribeCodexDesktopDelivery((event) => {
-    if (event.stage === "delivery_receipt_confirmed" && event.late && event.method === "thread-follower-start-turn") {
-      recoverEndpointDeliveries();
-    }
-  });
   recoverEndpointDeliveries();
   managerRuntimeOwner.register("lan_agent_registry", async () => {
     const recoveryStopped = endpointRecovery.stop();
-    releaseLateDeliveryRecovery();
     releaseEndpointRecovery();
-    releaseDeviceEndpointRecovery?.();
-    releaseDeviceEndpointRecovery = undefined;
     rabiLinkBusinessOwners = undefined;
-    rabiLinkDeviceEndpointBridge = undefined;
     agentEndpointDelivery = undefined;
     instanceThreadTransport = undefined;
     lanAgentRegistry.close();
@@ -7740,7 +7641,34 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
         },
         identityReset: { service: instanceIdentityReset, currentGuid: () => rabiGlobalConfig.read().rabiGuid }
       });
+  const agentScanPool = new AgentAdapterCatalogWorkerPool();
+  agentManagerScanWorkers = agentScanPool;
+  let agentScanDisposal: Promise<void> | undefined;
+  stopAgentScanWorkers = () => agentScanDisposal ??= agentScanPool.stop("Manager is stopping.");
+  managerRuntimeOwner.register("agent_provider_scan_workers", () => stopAgentScanWorkers!());
+  let releaseAgentMetadataProjection: (() => void) | undefined;
+  managerRuntimeOwner.register("agent_adapter_metadata_projection", () => {
+    releaseAgentMetadataProjection?.();
+    releaseAgentMetadataProjection = undefined;
+  });
+  const nativePluginHostPorts = await createMessageEndpointHostPorts();
   const managerPluginHostServices: readonly HostService[] = withRouteControlAsyncRegistration(Object.freeze([
+    Object.freeze({ capability: "host.agent-adapters@1", value: createAgentAdapterHostPorts({
+      manager: Object.freeze({
+        rootDir,
+        packageRoot,
+        readOnly: () => managerReadOnly,
+        getRuntimes: () => runtimes.values(),
+        publishManagerEvent,
+        deliveryReceiptChanged: recoverEndpointDeliveries,
+        deviceContext: () => deviceAgentHostContext(lanAgentRegistry.localInstanceId),
+        managerInstanceId: () => lanAgentRegistry.localInstanceId,
+        runScan: (task: AgentAdapterCatalogWorkerTask, invocation?: AgentAdapterInvocation) =>
+          agentScanPool.query(task, { signal: invocation?.signal }),
+        registerOperations: (instanceId: string, definitions: readonly ApiOperationDefinition[], signal: AbortSignal) =>
+          managerPluginRoutes.registerOperationsAsync(instanceId, definitions, signal)
+      })
+    }) }),
     Object.freeze({ capability: "host.message-endpoints@1", value: Object.freeze({
       manager: Object.freeze({
         roleDirectory: roleDirForApi,
@@ -7797,7 +7725,7 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
           get managerServicesReady() { return managerServicesReady; }
         })
       }),
-      ...await createMessageEndpointHostPorts(),
+      ...nativePluginHostPorts,
       gatewayExecution: Object.freeze({
         rootDir,
         routeSnapshots: () => [...runtimes.values()].map(runtime => ({ definition: structuredClone(runtime.definition) })),
@@ -7914,35 +7842,13 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
       lanAgentReleaseStore,
       manageLocalAgent: async (agentId: string, operation: string, body: Record<string, unknown>, assertAuthorized?: () => void) => {
         assertAuthorized?.();
-        const definition = routeCatalogConfig.gateways.find(definition => ["codex", "dsh", ...(definition.agentAdapters ?? ["codex"])].some(provider => `${definition.id}:${provider}` === agentId));
+        const definition = routeCatalogConfig.gateways.find(definition => configuredAgentProviderTypes(definition).some(provider => `${definition.id}:${provider}` === agentId));
         if (!definition) throw new Error("Local Agent was not found.");
         const provider = agentId.slice(definition.id.length + 1) as AgentAdapterType;
         if (operation === "configure") {
-          if (provider !== "codex" && provider !== "dsh") throw new Error("请从该 Agent 的完整路由设置中修改此处理端配置。");
-          const updated = structuredClone(definition);
-          if (body.enabled === false) updated.agentAdapters = (updated.agentAdapters ?? ["codex"]).filter(type => type !== provider);
-          if (body.enabled === true) {
-            updated.agentAdapters = [...new Set([...(updated.agentAdapters ?? ["codex"]), provider])];
-          }
-          if (provider === "codex") {
-            updated.codexThreadName = String(body.name || "");
-            updated.codexThreadId = String(body.sessionId || ""); updated.codexCwd = String(body.workspace || "");
-            updated.agentModel = String(body.model || ""); updated.agentReasoningEffort = body.reasoningEffort as GatewayDefinition["agentReasoningEffort"];
-          } else if (provider === "dsh") {
-            updated.dshSessionName = String(body.name || "");
-            updated.dshSessionId = String(body.sessionId || ""); updated.dshCwd = String(body.workspace || "");
-            updated.dshModel = String(body.model || ""); updated.dshReasoningEffort = String(body.reasoningEffort || "");
-            updated.dshBaseUrl = String(body.dshBaseUrl || definition.dshBaseUrl || "");
-          } else if (provider === "antigravity") {
-            updated.antigravityConversationName = String(body.name || "");
-            updated.antigravityConversationId = String(body.sessionId || "");
-            updated.antigravityCwd = String(body.workspace || "");
-          } else if (provider === "workbuddy") {
-            updated.workbuddySessionName = String(body.name || "");
-            updated.workbuddySessionId = String(body.sessionId || "");
-            updated.workbuddyCwd = String(body.workspace || "");
-            updated.workbuddyEndpoint = String(body.workbuddyEndpoint || definition.workbuddyEndpoint || "");
-          }
+          const updated = await invokePublishedAgentOperation<GatewayDefinition>(provider, "binding.configure", {
+            definition, body
+          }, { assertCurrent: assertAuthorized });
           assertAuthorized?.();
           await writeGatewayConfig(definition.id, updated, String(body.configRevision || ""), randomUUID());
           assertAuthorized?.();
@@ -7950,20 +7856,17 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
           return { saved: true };
         }
         assertAuthorized?.();
-        const result = await manageInstanceAgent(operation, { ...body, provider, agentAdapter: provider }, { rootDir, defaultWorkspace: definition.codexCwd || definition.dshCwd || rootDir, allowedWorkspaces: [definition.codexCwd || definition.dshCwd || rootDir], dsh: definition.dshBaseUrl ? { baseUrl: definition.dshBaseUrl } : undefined });
+        const workspace = configuredLocalAgentSessionFields(definition, provider).workspace || rootDir;
+        const result = await manageInstanceAgent(operation, { ...body, provider, agentAdapter: provider }, {
+          rootDir, defaultWorkspace: workspace, allowedWorkspaces: [workspace],
+          getProviders: () => resolvePublishedAgentManagerProviders(managerPluginKernel?.current()),
+          invokeAgentOperation: invokePublishedAgentOperation,
+          dsh: definition.dshBaseUrl ? { baseUrl: definition.dshBaseUrl } : undefined
+        });
         assertAuthorized?.();
         return result;
       },
-      localInstanceAgents: () => routeCatalogConfig.gateways.flatMap(definition => [...new Set<AgentAdapterType>([
-        ...(definition.agentAdapters ?? ["codex"]),
-        ...(definition.codexThreadId ? ["codex" as const] : []),
-        ...(definition.dshSessionId ? ["dsh" as const] : []),
-        ...(definition.antigravityConversationId ? ["antigravity" as const] : []),
-        ...(definition.workbuddySessionId ? ["workbuddy" as const] : [])
-      ])].map(provider => {
-        // Reuse the shared field table: the identity of a local Agent is
-        // adapter-specific, and a per-adapter ternary here had already drifted
-        // from the one used when the route is saved.
+      localInstanceAgents: () => routeCatalogConfig.gateways.flatMap(definition => configuredAgentProviderTypes(definition).map(provider => {
         const fields = configuredLocalAgentSessionFields(definition, provider);
         return {
           agentId: `${definition.id}:${provider}`,
@@ -7972,10 +7875,10 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
           enabled: (definition.agentAdapters ?? ["codex"]).includes(provider),
           routeId: definition.id,
           configRevision: routeCatalogVersion().routeConfigHash,
-          workspace: fields.workspace || definition.codexCwd,
+          workspace: fields.workspace,
           sessionId: fields.sessionId,
-          model: provider === "dsh" ? definition.dshModel : definition.agentModel,
-          reasoningEffort: provider === "dsh" ? definition.dshReasoningEffort : definition.agentReasoningEffort,
+          model: provider === "dsh" ? definition.dshModel : provider === "codex" ? definition.agentModel : undefined,
+          reasoningEffort: provider === "dsh" ? definition.dshReasoningEffort : provider === "codex" ? definition.agentReasoningEffort : undefined,
           dshBaseUrl: provider === "dsh" ? definition.dshBaseUrl : undefined
         };
       })),
@@ -8185,7 +8088,6 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
       createDirectVideoReceiver: () => new RabiDirectVideo(path.join(rootDir, "data", "rabilink", "video")),
       createDirectVideoOperations: (receiver: RabiDirectVideo) => createDirectVideoOperations(receiver, managerReadOnly),
       createRabiLinkAgentDeviceOperations: () => createRabiLinkAgentDeviceOperations(() => currentRabiLinkBusinessOwners().agents),
-      createDeviceAgentOperations: () => createDeviceAgentOperations(() => currentRabiLinkBusinessOwners().deviceAgents),
       managerPluginRoutes,
       peerLanServer,
       rabiLinkRelayRuntime,
@@ -8293,6 +8195,7 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
     Object.freeze({ capability: "host.manager.agent-adapter-catalog@1", value: Object.freeze({
       managerPluginRoutes,
       mountAgentAdapterCatalogPlugin,
+      getGeneration: () => managerPluginKernel?.current(),
       rootDir,
       runtimes,
       get agentAdapterCatalogService() { return agentAdapterCatalogService; },
@@ -8300,6 +8203,20 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
     }) }),
     Object.freeze({ capability: "host.manager.agent-communication@1", value: Object.freeze({
       agentRequests,
+      reconcileManagerDelivery: (deliveryId: string, assertCurrent: () => void) => {
+        if (!agentEndpointDelivery) throw new Error("The original delivery owner is unavailable.");
+        return agentEndpointDelivery.reconcileRecord(deliveryId, assertCurrent);
+      },
+      controlNodeDeliveryRecord: async (nodeId: string, input: { action: "cancel" | "reconcile"; intentId: string }, assertCurrent: () => void) => {
+        assertCurrent();
+        const response = await lanAgentRegistry.manageAgent(nodeId, "delivery_records", input, getTimeoutMs("agent.remote.management", 10_000), assertCurrent);
+        assertCurrent();
+        if (!response || typeof response !== "object") throw new Error("The original computer did not return a delivery record.");
+        const value = response as Record<string, unknown>;
+        const record = value.record ?? value.item ?? (value.id ? value : undefined);
+        if (!record) throw new Error("Delivery record not found on the original computer.");
+        return record;
+      },
       readNodeDeliveryRecords: async (nodeId: string, query: { action: "list" | "get"; intentId?: string; cursor?: string; limit?: number; state?: string; query?: string }) => {
         const response = await lanAgentRegistry.manageAgent(nodeId, "delivery_records", query, 10_000);
         if (!response || typeof response !== "object") throw new Error("The original computer did not return delivery records.");
@@ -8377,22 +8294,6 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
       readJsonBody,
       refreshAgentRequestReminderTimers,
       rootDir,
-    }) }),
-    Object.freeze({ capability: "host.manager.copilot-control@1", value: Object.freeze({
-      CopilotControlService,
-      agentManagerApiCtx,
-      createCopilotControlOperations,
-      getCopilotStatus,
-      managerPluginRoutes,
-      publishManagerEvent,
-    }) }),
-    Object.freeze({ capability: "host.manager.astrbot-control@1", value: Object.freeze({
-      managerPluginRoutes,
-      createAstrbotControlOperations: () => createAstrbotControlOperations(testAstrbotLoginEndpoint),
-    }) }),
-    Object.freeze({ capability: "host.manager.marvis-control@1", value: Object.freeze({
-      managerPluginRoutes,
-      createMarvisControlOperations: () => createMarvisControlOperations(body => openMarvis(agentManagerApiCtx(), body)),
     }) }),
     Object.freeze({ capability: "host.manager.agent-thread-control@1", value: Object.freeze({
       agentRequests,
@@ -8631,7 +8532,7 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
   }
   const reconcileManagerPlugins = (
     reason: string,
-    options: Readonly<{ readyOnly?: boolean; invocation?: PluginCatalogInvocation }> = {}
+    options: Readonly<{ readyOnly?: boolean; invocation?: PluginCatalogInvocation; reuseUnchangedPackages?: boolean }> = {}
   ): Promise<void> => {
     const assertReconciliationOpen = (): void => {
       if (shuttingDown) throw new Error("Manager plugin reconciliation stopped during shutdown.");
@@ -8642,26 +8543,6 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
       const previousProfile = loadedManagerPluginProfile;
       const previousGenerationId = managerPluginKernel!.current().id;
       const desiredProfile = (await managerPluginSettings.snapshot()).profile;
-      const manifestReads = new Map<string, ReturnType<typeof readPluginManagementManifest>>();
-      const readInstalledManifest = (packageId: string, version: string) => {
-        const key = JSON.stringify([packageId, version]);
-        let reading = manifestReads.get(key);
-        if (!reading) { reading = readPluginManagementManifest(managerPluginPackageCatalog, packageId, version); manifestReads.set(key, reading); }
-        return reading;
-      };
-      const [ownership, routeOwnership] = await Promise.all([
-        readInstalledGatewayEndpointTypes(desiredProfile, readInstalledManifest),
-        readInstalledEndpointRouteDeclarations(desiredProfile, managerPluginPackageCatalog, readInstalledManifest)
-      ]);
-      assertReconciliationOpen();
-      installedGatewayEndpointTypes = ownership.types;
-      installedEndpointRouteDeclarations = routeOwnership.declarations;
-      for (const diagnostic of ownership.diagnostics) managerOperationalLog.record("warn", "endpoint_host_declaration_unavailable", {
-        owner: diagnostic.instanceId, error: managerOperationalError(new Error(diagnostic.message), rootDir)
-      });
-      for (const diagnostic of routeOwnership.diagnostics) if (!ownership.diagnostics.some(item => item.instanceId === diagnostic.instanceId)) managerOperationalLog.record("warn", "endpoint_route_declaration_unavailable", {
-        owner: diagnostic.instanceId, error: managerOperationalError(new Error(diagnostic.message), rootDir)
-      });
       const loaded = await loadPluginProfile({
         profilePath: managerPluginProfilePath,
         profile: desiredProfile,
@@ -8669,7 +8550,37 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
         runtimeRoot: path.join(rootDir, "data", "plugins", ".runtime"),
         host: "manager",
         previous: previousProfile,
+        reuseUnchangedPackages: options.reuseUnchangedPackages,
         assertCurrent: assertReconciliationOpen
+      });
+      assertReconciliationOpen();
+      const metadata = pluginProfilePackageResolution(desiredProfile, loaded, managerPluginPackageCatalog);
+      const manifestReads = new Map<string, ReturnType<typeof readPluginManagementManifest>>();
+      const readInstalledManifest = (packageId: string, version: string) => {
+        const key = JSON.stringify([packageId, version]);
+        let reading = manifestReads.get(key);
+        if (!reading) { reading = readPluginManagementManifest(metadata.catalog, packageId, version); manifestReads.set(key, reading); }
+        return reading;
+      };
+      const [ownership, routeOwnership, agentOwnership] = await Promise.all([
+        readInstalledGatewayEndpointTypes(metadata.profile, readInstalledManifest),
+        readInstalledEndpointRouteDeclarations(metadata.profile, metadata.catalog, readInstalledManifest),
+        loadInstalledAgentManagerDescriptors(metadata.profile, metadata.catalog, readInstalledManifest)
+      ]);
+      assertReconciliationOpen();
+      installedGatewayEndpointTypes = ownership.types;
+      installedEndpointRouteDeclarations = routeOwnership.declarations;
+      installedAgentDescriptors = new Map(agentOwnership.descriptors.map(descriptor => [descriptor.type, descriptor]));
+      releaseAgentMetadataProjection ??= installAgentAdapterManifestReader(() =>
+        [...currentAgentSessionDescriptors().values()].map(descriptor => descriptor.manifest as AgentAdapterManifest));
+      for (const diagnostic of agentOwnership.diagnostics) managerOperationalLog.record("warn", "agent_package_descriptor_unavailable", {
+        owner: diagnostic.instanceId, error: managerOperationalError(new Error(diagnostic.message), rootDir)
+      });
+      for (const diagnostic of ownership.diagnostics) managerOperationalLog.record("warn", "endpoint_host_declaration_unavailable", {
+        owner: diagnostic.instanceId, error: managerOperationalError(new Error(diagnostic.message), rootDir)
+      });
+      for (const diagnostic of routeOwnership.diagnostics) if (!ownership.diagnostics.some(item => item.instanceId === diagnostic.instanceId)) managerOperationalLog.record("warn", "endpoint_route_declaration_unavailable", {
+        owner: diagnostic.instanceId, error: managerOperationalError(new Error(diagnostic.message), rootDir)
       });
       // Package loading prepares requested metadata; only a published activation
       // can replace the confirmed package/configuration used by future fallback.
@@ -8756,7 +8667,7 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
   const pluginManagement = createPluginManagement({
     runtime: managerPluginKernel!, settings: managerPluginSettings,
     manifest: (packageId, version) => readPluginManagementManifest(managerPluginPackageCatalog, packageId, version),
-    reconcile: () => reconcileManagerPlugins("committed plugin instance settings changed")
+    reconcile: () => reconcileManagerPlugins("committed plugin instance settings changed", { reuseUnchangedPackages: true })
   });
   const pluginManagementRegistration = managerApplicationRoutes.run(() => managerPluginRoutes.registerOperations(managerApplicationRoutes.instanceId, createPluginManagementOperations({
     runtime: managerPluginKernel!, root: () => packageRoot,
@@ -8894,19 +8805,7 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
           jsonResponse(response, skillAccess.status, { code: -1, error: skillAccess.error });
           return;
         }
-        const binding = assertTrustedLanAgentPrincipal(request)!.source;
-        // Normalize the wire provider the same way `lanAgentBodyAuthority` does,
-        // then accept any adapter that supports managed plan tasks. The previous
-        // literal list predated Antigravity and silently dropped its binding.
-        const bindingProvider = binding?.provider;
-        if (binding?.sessionId) {
-          setTrustedLanAgentSource(request, { nodeId: lanAgentAccess.nodeId, agentId: lanAgentAccess.agentId,
-            provider: binding.provider, sessionId: binding.sessionId, sessionName: binding.agentId });
-        }
-        registerLanAgentBodyGuard(request, body => {
-          const invocation = assertTrustedLanAgentPrincipal(request)!.source;
-          assertLanAgentBodyAuthority(pathname, body, invocation);
-        });
+        captureTrustedLanAgentSource(request, rabiGlobalConfig.getLanAgentDeliveryPolicy().incarnation);
       }
       guardRequestBodyDeadline(request, response, {
         normalMs: managerHttpLimits.requestTimeoutMs,

@@ -21,7 +21,7 @@ export const terminalRequestSchema = { anyOf: [branch("list", []),
 export const terminalSnapshotSchema = { type: "object", required: ["terminalId", "shell", "cwd", "state", "createdAt", "nextInputSequence"],
   properties: { terminalId: terminalIdSchema, shell: text, cwd: text, state: { enum: ["starting", "running", "closing", "exited"] }, createdAt: text,
     nextInputSequence: { ...integer, minimum: 1 }, pid: integer, exitCode: { anyOf: [{ type: "integer" }, { type: "null" }] } }, additionalProperties: false };
-export const terminalListSchema = exact({ shells: { type: "array", items: text }, sessions: { type: "array", maxItems: TERMINAL_LIMITS.retainedSessions, items: terminalSnapshotSchema } });
+export const terminalListSchema = exact({ shells: { type: "array", items: text }, sessions: { type: "array", items: terminalSnapshotSchema } });
 export const terminalEventSchema = { type: "object", required: ["sequence", "type"], properties: { sequence: integer,
   type: { enum: ["output", "exit", "gap", "disconnected"] }, data: text, exitCode: { anyOf: [{ type: "integer" }, { type: "null" }] } }, additionalProperties: false };
 export const terminalReadSchema = exact({ terminal: terminalSnapshotSchema, outputEvents: { type: "array", maxItems: TERMINAL_LIMITS.replayEvents, items: terminalEventSchema }, nextOutputSequence: integer, truncated: bool });

@@ -1,0 +1,48 @@
+{
+  "endpointType": "agent:workbuddy",
+  "agentType": "workbuddy",
+  "capability": "agent.adapter.workbuddy@1",
+  "routeKeys": [
+    "workbuddySessionId",
+    "workbuddySessionName",
+    "workbuddyCwd",
+    "workbuddyEndpoint"
+  ],
+  "runtimeFields": {
+    "workbuddySessionId": {
+      "paths": [
+        "workbuddySessionId"
+      ],
+      "default": "",
+      "trim": true
+    },
+    "workbuddySessionName": {
+      "paths": [
+        "workbuddySessionName"
+      ],
+      "default": "",
+      "trim": true
+    },
+    "workbuddyCwd": {
+      "paths": [
+        "workbuddyCwd"
+      ],
+      "default": "",
+      "trim": true,
+      "format": "workspace"
+    },
+    "workbuddyEndpoint": {
+      "paths": [
+        "workbuddyEndpoint"
+      ],
+      "default": "",
+      "trim": true
+    }
+  },
+  "environmentFields": {
+    "WORKBUDDY_SESSION_ID": "workbuddySessionId",
+    "WORKBUDDY_SESSION_NAME": "workbuddySessionName",
+    "WORKBUDDY_CWD": "workbuddyCwd",
+    "WORKBUDDY_ENDPOINT": "workbuddyEndpoint"
+  }
+}

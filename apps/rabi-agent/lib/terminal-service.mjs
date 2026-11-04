@@ -31,7 +31,6 @@ export class TerminalService {
     if (input.action === "list") return { shells: this.shells, sessions: [...this.sessions.values()].map(item => this.snapshot(item)) };
     const id = terminalId(input.terminalId);
     if (input.action === "open") {
-      if (this.pendingOpens >= TERMINAL_LIMITS.retainedSessions) throw Object.assign(new Error("Terminal creation queue is full; query before retrying."), { code: "TERMINAL_OPEN_NOT_STARTED" });
       this.pendingOpens++;
       const admission = this.openAdmission.then(() => this.admitOpen(id, input));
       this.openAdmission = admission.then(() => undefined, () => undefined);

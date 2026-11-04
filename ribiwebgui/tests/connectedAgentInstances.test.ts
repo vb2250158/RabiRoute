@@ -25,5 +25,8 @@ test("connected host catalogs preserve the owning PC and isolate one unavailable
   assert.equal(result.instances[0]?.instanceId, "instance-b");
   assert.equal(result.instances[0]?.local, false);
   assert.deepEqual(result.instances[0]?.agents, [{ agentId: "local:codex", name: "Codex Desktop", provider: "codex", enabled: true }], "an empty Route catalog must not require Agent registration before querying its real native sessions");
-  assert.match(result.errors[0]!, /pc-c.*host unavailable/);
+  assert.deepEqual(result.diagnostics, [
+    { source: "peer-instances", ownerDeviceId: "pc-c", message: "host unavailable" },
+    { source: "peer-adapters", ownerDeviceId: "pc-c", message: "host unavailable" }
+  ]);
 });

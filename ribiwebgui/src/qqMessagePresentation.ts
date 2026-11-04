@@ -3,10 +3,12 @@ export {qqMessageParts} from '../../src/shared/qqMessageParts';
 export {qqPartsPreview} from '../../src/shared/qqMessageParts';
 export type {QqMessagePart} from '../../src/shared/qqMessageParts';
 import type { MessageContextRecord } from '../../src/messageContextStore';
-import type { QqConversation } from '../../src/shared/qqConversationHistory';
+import type { QqConversation, HistoryQqRoute } from '../../src/shared/qqConversationHistory';
 import type { MessageContextAttachment } from '../../src/messageContextStore';
 export type QqSelection = { routeId:string; kind:'group'|'private'; target:string };
 export const qqConversationIdentity=(row:QqConversation)=>row.kind==='unknown'?row.conversationKey:JSON.stringify([row.gatewayId,row.instanceId??'',row.kind,row.target]);
+/** A missing source is historical evidence, never permission to select the current account. */
+export const qqConfiguredRoute=(row:QqConversation,routes:HistoryQqRoute[])=>routes.find(route=>Boolean(row.gatewayId)&&route.routeId===row.gatewayId&&(route.instanceId??'')===(row.instanceId??''));
 export function mergeQqConversations(preferred:QqConversation[],additional:QqConversation[]):QqConversation[] {
   const rows:QqConversation[]=[],indices=new Map<string,number>();
   for(const row of [...preferred,...additional]) {

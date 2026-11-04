@@ -527,18 +527,37 @@ test("repository rebases stale same-workspace drive cwd when saving", () => {
   assert.equal(saved.codexCwd, ".");
 });
 
-test("repository fails closed for explicitly invalid agent adapters", () => {
+test("repository preserves a valid unavailable agent adapter and its opaque binding on save", () => {
   const rootDir = makeTempRoot();
-  writeJson(path.join(rootDir, "data", "route", "main", "adapterConfig.json"), {
+  const configPath = path.join(rootDir, "data", "route", "main", "adapterConfig.json");
+  writeJson(configPath, {
     enabled: true,
     messageAdapters: ["heartbeat"],
     gatewayPort: 8789,
-    agentAdapters: ["unknown"]
+    agentAdapters: ["unknown"],
+    unknownThreadId: "opaque-original-task"
   });
 
   const repo = new ManagerConfigRepository({ rootDir, managerPort: 8790 });
   const config = repo.readConfig();
 
+  assert.deepEqual(config.gateways[0].agentAdapters, ["unknown"]);
+  repo.writeConfig(config);
+  const saved = JSON.parse(fs.readFileSync(configPath, "utf8"));
+  assert.deepEqual(saved.agentAdapters, ["unknown"]);
+  assert.equal(saved.unknownThreadId, "opaque-original-task");
+});
+
+test("repository rejects invalid agent adapter syntax and nonstring values without inventing IDs", () => {
+  const rootDir = makeTempRoot();
+  writeJson(path.join(rootDir, "data", "route", "main", "adapterConfig.json"), {
+    enabled: true,
+    messageAdapters: ["heartbeat"],
+    gatewayPort: 8789,
+    agentAdapters: ["bad/type", "bad type", "", true, false, 123, {}, ["codex"], null]
+  });
+  const repo = new ManagerConfigRepository({ rootDir, managerPort: 8790 });
+  const config = repo.readConfig();
   assert.deepEqual(config.gateways[0].agentAdapters, []);
 });
 

@@ -1,6 +1,6 @@
 {
   "name": "rabi-agent",
-  "version": "0.2.15",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
   "description": "Enrolled computer connector with explicit Agent type and session targeting",
@@ -12,7 +12,8 @@
     "ajv": "^8.20.0",
     "ajv-formats": "^3.0.1",
     "ws": "^8.18.0",
-    "bonjour-service": "1.4.4"
+    "bonjour-service": "1.4.4",
+    "dotenv": "^16.4.7"
   },
   "optionalDependencies": {
     "node-pty": "1.1.0"

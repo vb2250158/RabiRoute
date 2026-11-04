@@ -114,7 +114,7 @@ export const useGatewayStore = defineStore("gateway", () => {
   const quickSetupDialogOpen = ref(false);
   const pendingSelectedConfigName = ref("");
   const meta = ref<MetaPayload>({
-    version: "0.1.0",
+    version: "",
     githubUrl: "https://github.com/vb2250158/RabiRoute",
     managerPort: 0,
     rabiGuid: "",

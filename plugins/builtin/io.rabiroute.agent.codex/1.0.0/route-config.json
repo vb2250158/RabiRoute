@@ -1,0 +1,55 @@
+{
+  "endpointType": "agent:codex",
+  "agentType": "codex",
+  "capability": "agent.adapter.codex@1",
+  "routeKeys": [
+    "codexThreadId",
+    "codexThreadName",
+    "codexCwd"
+  ],
+  "runtimeFields": {
+    "codexThreadId": {
+      "paths": [
+        "codexThreadId"
+      ],
+      "default": "",
+      "trim": true
+    },
+    "codexThreadName": {
+      "paths": [
+        "codexThreadName"
+      ],
+      "default": "QQ 消息监听",
+      "trim": true
+    },
+    "codexCwd": {
+      "paths": [
+        "codexCwd"
+      ],
+      "default": "",
+      "trim": true,
+      "format": "workspace",
+      "defaultFrom": "cwd"
+    }
+  },
+  "environmentFields": {
+    "CODEX_THREAD_ID": "codexThreadId",
+    "CODEX_THREAD_NAME": "codexThreadName",
+    "CODEX_CWD": "codexCwd"
+  },
+  "sharedBindingKeys": [
+    "codexThreadId",
+    "codexThreadName",
+    "codexCwd"
+  ],
+  "sharedWhenEnabledPaths": [
+    [
+      "messageProcessingAgents",
+      "codex",
+      "enabled"
+    ],
+    [
+      "codexMemoryConsolidationAgentEnabled"
+    ]
+  ]
+}

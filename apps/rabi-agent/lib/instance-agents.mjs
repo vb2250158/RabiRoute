@@ -13,14 +13,14 @@ export function agentCatalog(config) {
   return instanceAgents(config).map(({ agentId, name, provider, enabled, workspace, model, reasoningEffort, dsh }) => ({ agentId, name, provider, enabled: true, workspace, model, reasoningEffort, dshBaseUrl: dsh?.baseUrl }));
 }
 
-export function configureInstanceAgent(config, input) {
+export function configureInstanceAgent(config, input, providers) {
   if (!input || typeof input !== "object") throw new Error("Agent configuration is required.");
   const agents = instanceAgents(config);
   const agentId = input.agentId || randomUUID();
   if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,191}$/.test(agentId)) throw new Error("Invalid Agent identity.");
   const current = agents.find(agent => agent.agentId === agentId);
   const provider = input.provider || current?.provider;
-  if (!["codex-desktop", "dsh"].includes(provider)) throw new Error("Unsupported Agent provider.");
+  if (!providers?.some(owner => owner.type === (provider === "codex-desktop" ? "codex" : provider))) throw new Error("Unsupported or unavailable Agent provider.");
   if (current && current.provider !== provider) throw new Error("Create a new Agent when changing providers.");
   const workspace = resolveTaskWorkspace(input.workspace || current?.workspace, config);
   if (input.sessionId !== undefined || input.managedSessionIds !== undefined) throw new Error("Saved session bindings were removed; pass the full session ID in each request.");
@@ -36,13 +36,16 @@ export function configureInstanceAgent(config, input) {
   return { ...config, agents: current ? rawAgents.map(item => isProfileRecord(item) && item.agentId === agentId ? agent : item) : [...rawAgents, agent] };
 }
 
-export function resolveInstanceAgent(config, task) {
+export function resolveInstanceAgent(config, task, providers) {
   const agents = instanceAgents(config);
   if (typeof task.targetAgent !== "string" || !task.targetAgent.trim()) throw new Error("Explicit targetAgent is required.");
   if (typeof task.threadId !== "string" || !task.threadId || task.threadId !== task.threadId.trim()
     || task.threadId.length > 4096 || /[\0\r\n\u2028\u2029]/u.test(task.threadId)) throw new Error("Explicit full threadId is required; query the Agent thread list.");
-  if (!["codex-desktop", "dsh"].includes(task.targetAgent)) throw new Error("This computer does not implement the requested Agent type.");
-  const matches = agents.filter(agent => agent.provider === task.targetAgent && (!task.agentId || agent.agentId === task.agentId));
+  const targetProvider = task.targetAgent === "codex-desktop" ? "codex" : task.targetAgent;
+  if (!providers?.some(owner => owner.type === targetProvider)) throw new Error("This computer does not implement the requested active Agent type.");
+  if (task.agentId !== undefined && typeof task.agentId !== "string") throw new Error("Explicit backend identity must be a string.");
+  const matches = agents.filter(agent => (agent.provider === "codex-desktop" ? "codex" : agent.provider) === targetProvider && (!task.agentId || agent.agentId === task.agentId));
+  if (task.agentId && matches.length === 0) throw new Error("The explicitly selected backend is unavailable; restore or select the original backend configuration.");
   if (matches.length > 1) throw new Error("Multiple backend configurations exist; explicitly select the backend connection.");
   const agent = matches[0] || { agentId: task.targetAgent, provider: task.targetAgent, workspace: config.defaultWorkspace, dsh: config.dsh };
   return agent;

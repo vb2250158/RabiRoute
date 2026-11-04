@@ -2,11 +2,11 @@ import type { NativeOwnerDeliveryEvidence } from "./nativeOwnerDelivery.js";
 import { createHash, randomUUID } from "node:crypto";
 import { endpointExecutionOptionsHash, normalizeEndpointExecutionOptions, type EndpointExecutionOptions } from "./executionOptions.js";
 import type { AgentThreadRequest, AgentThreadRequestResult } from "../agentThreads.js";
-import { renderRabiDelivery, normalizeRabiMessageSource, agentIdentityForMessageSource } from "../shared/rabiMessage.js";
+import { renderRabiDelivery, normalizeRabiMessageSource } from "../shared/rabiMessage.js";
 import { renderAgentReplyParameters } from "./replyParameters.js";
 import { renderAgentResponseContent } from "./responseContent.js";
 import { agentDeliveryPromptHash, type AgentRequestStore, type AgentRequestParty, type AgentCommunicationPreparation } from "./store.js";
-import { normalizeAgentRequestEndpoint, stableAgentEndpointIdentity, sourceScopedAgentDeliveryId, sameAgentEndpoint, sameAgentParty, type AgentRequestEndpoint } from "./endpoint.js";
+import { normalizeAgentRequestEndpoint, normalizeAgentDeliverySource, agentDeliverySourceForParty, stableAgentEndpointIdentity, agentDeliverySourceIdentity, agentDeliveryCallerSourceIdentity, sourceScopedAgentDeliveryId, sameAgentEndpoint, sameAgentParty, sameAgentPartyAddress, type AgentRequestEndpoint, type AgentDeliverySource } from "./endpoint.js";
 export { sourceScopedAgentDeliveryId } from "./endpoint.js";
 import { AgentThreadContractError, callerAgentDeliveryId, completeAgentSessionId, normalizeAgentThreadSourceType } from "./requestValidation.js";
 import { EndpointDeliveryNotSentError, type EndpointDeliveryNoFrameProof } from "./deliveryFailure.js";
@@ -14,7 +14,7 @@ import { EndpointDeliveryNotSentError, type EndpointDeliveryNoFrameProof } from 
 export type PreparedEndpointDelivery = {
   deliveryId: string;
   generation: string;
-  source: AgentRequestEndpoint;
+  source: AgentDeliverySource;
   target: AgentRequestEndpoint;
   prompt: string;
   promptHash: string;
@@ -85,9 +85,7 @@ function verificationRole(error: unknown): "source" | "target" | undefined {
 async function refreshEndpointIdentities(identities: Pick<PreparedEndpointDelivery, "source" | "target">, options: EndpointDeliveryOptions,
   phase: "prepare" | "dispatch" | "reconcile"): Promise<void> {
   await options.refreshEndpoints?.({ source: Object.freeze({ ...identities.source }), target: Object.freeze({ ...identities.target }) }, phase);
-  for (const role of ["source", "target"] as const) {
-    try { options.authorize(identities[role], role); } catch (error) { throw verificationRole(error) ? error : new EndpointVerificationError(role, error); }
-  }
+  try { options.authorize(identities.target, "target"); } catch (error) { throw verificationRole(error) ? error : new EndpointVerificationError("target", error); }
 }
 
 export function validateEndpointReceipt(delivery: NativeOwnerDeliveryEvidence, receipt: EndpointDeliveryReceipt): void {
@@ -101,7 +99,6 @@ export function validateEndpointReceipt(delivery: NativeOwnerDeliveryEvidence, r
 
 function guard(delivery: PreparedEndpointDelivery, options: EndpointDeliveryOptions): () => void {
   return () => {
-    options.authorize(delivery.source, "source");
     options.authorize(delivery.target, "target");
     options.store.assertEndpointDeliveryActive(delivery.deliveryId);
   };
@@ -109,7 +106,7 @@ function guard(delivery: PreparedEndpointDelivery, options: EndpointDeliveryOpti
 
 /** Nothing crossed the execution boundary: the delivery stays prepared and the same deliveryId may safely retry. */
 function notSentResult(delivery: PreparedEndpointDelivery, error: unknown): AgentThreadRequestResult {
-  const stage = verificationRole(error) === "target" ? "target_verification" : "source_verification";
+  const stage = "target_verification";
   return { statusCode: 503, data: {
     action: "send", ok: false, status: "failed", threadId: delivery.target.sessionId,
     delivery: { deliveryId: delivery.deliveryId, generation: delivery.generation,
@@ -133,13 +130,18 @@ function result(delivery: Omit<PreparedEndpointDelivery, "prompt">, confirmed: b
 }
 
 function requestInputHash(request: AgentThreadRequest, source: AgentRequestParty, target: AgentRequestParty,
-  callerExecutionOptions?: EndpointDeliveryOptions["callerExecutionOptions"], legacyAliases = false): string {
+  callerExecutionOptions?: EndpointDeliveryOptions["callerExecutionOptions"],
+  sourceFormat: "current" | "previous-metadata" | "previous-aliases" | "previous-address" = "current"): string {
   const messageSource = normalizeRabiMessageSource(request.messageSource);
   const explicit = callerExecutionOptions ?? request;
+  const legacyAliases = sourceFormat === "previous-aliases";
+  const legacySourceMetadata = sourceFormat === "previous-metadata" || legacyAliases;
+  const sourceAddress = agentDeliverySourceForParty(source)!;
   return createHash("sha256").update(JSON.stringify({
-    source: (legacyAliases ? normalizeAgentRequestEndpoint : stableAgentEndpointIdentity)(source.endpoint!),
+    source: legacySourceMetadata && sourceAddress.kind !== "connection" ? (legacyAliases ? normalizeAgentRequestEndpoint : stableAgentEndpointIdentity)(sourceAddress)
+      : JSON.parse((sourceFormat === "previous-address" ? agentDeliverySourceIdentity : agentDeliveryCallerSourceIdentity)(sourceAddress)),
     target: (legacyAliases ? normalizeAgentRequestEndpoint : stableAgentEndpointIdentity)(target.endpoint!),
-    sourceAgentType: source.agentType, targetAgentType: target.agentType,
+    ...(legacySourceMetadata ? { sourceAgentType: source.agentType } : {}), targetAgentType: target.agentType,
     messageSource: messageSource.type === "plan" ? { type: messageSource.type, planId: messageSource.planId, planName: messageSource.planName } : { type: messageSource.type },
     prompt: request.prompt, contextBlocks: request.contextBlocks ?? [], controlBlocks: request.controlBlocks ?? [],
     responsePolicy: request.responsePolicy, responseInstruction: request.responseInstruction,
@@ -152,15 +154,22 @@ function requestInputHash(request: AgentThreadRequest, source: AgentRequestParty
   })).digest("hex");
 }
 
+function matchesRequestHash(original: PreparedEndpointDelivery, request: AgentThreadRequest, options: EndpointDeliveryOptions): boolean {
+  return [requestInputHash(request, original.preparation.source, original.preparation.target, options.callerExecutionOptions),
+    requestInputHash(request, original.preparation.source, original.preparation.target, options.callerExecutionOptions, "previous-metadata"),
+    requestInputHash(request, original.preparation.source, original.preparation.target, options.callerExecutionOptions, "previous-aliases"),
+    requestInputHash(request, original.preparation.source, original.preparation.target, options.callerExecutionOptions, "previous-address")]
+    .includes(original.requestHash!);
+}
+
 async function resumeCallerDelivery(request: AgentThreadRequest, source: AgentRequestParty, target: AgentRequestParty,
-  deliveryId: string | undefined, requestHash: string | undefined, options: EndpointDeliveryOptions): Promise<AgentThreadRequestResult | undefined> {
+  deliveryId: string | undefined, options: EndpointDeliveryOptions): Promise<AgentThreadRequestResult | undefined> {
   if (!deliveryId) return undefined;
-  const original = await options.store.readCallerEndpointDelivery(source.endpoint!, request.deliveryId!);
+  const original = await options.store.readCallerEndpointDelivery(agentDeliverySourceForParty(source)!, request.deliveryId!);
   if (!original) return undefined;
   if (original.callerDeliveryId !== request.deliveryId
-    || !sameAgentParty(source, original.preparation.source) || !sameAgentParty(target, original.preparation.target)
-    || (original.requestHash !== requestHash && original.requestHash !== requestInputHash(request, original.preparation.source,
-      original.preparation.target, options.callerExecutionOptions, true))) {
+    || !sameAgentParty(target, original.preparation.target)
+    || !matchesRequestHash(original, request, options)) {
     throw new AgentThreadContractError("deliveryId conflicts with the original complete endpoints or request content.", "deliveryId", "validation",
       "Keep the original endpoints and payload on retries; use a new deliveryId only for a new operation.", "AGENT_DELIVERY_ID_CONFLICT");
   }
@@ -177,18 +186,36 @@ function resumeReservedDelivery(original: PreparedEndpointDelivery, options: End
   return Promise.resolve(result(original, original.state === "committed"));
 }
 
+function sourceDescription(value: unknown, limit: number): string | undefined {
+  return typeof value === "string" ? value.replace(/[\r\n\u2028\u2029]/g, " ").trim().slice(0, limit) || undefined : undefined;
+}
+
+function resolvedSourceMetadata(source: AgentRequestParty) {
+  return { agentAdapter: source.agentAdapter!, sessionId: source.threadId,
+    sessionName: sourceDescription(source.threadName, 500) || sourceDescription(source.endpoint?.agentId, 500) || "Agent",
+    workspace: sourceDescription(source.workspace, 2_000), agentType: normalizeAgentThreadSourceType(source.agentType) };
+}
+
+function resolvedMessageSource(request: AgentThreadRequest, source: AgentRequestParty) {
+  if (source.connection) return { type: "system" as const, eventType: "agent_connection", eventName: "Connected sender",
+    eventId: source.connection.id.slice(0, 300), actorType: source.connection.transport,
+    actorId: source.connection.id.slice(0, 300), actorName: sourceDescription(source.threadName, 500) };
+  const identity = resolvedSourceMetadata(source), declared = request.messageSource;
+  if (declared?.type === "plan") {
+    const planId = sourceDescription(declared.planId, 500);
+    if (planId) return { type: "plan" as const, planId, planName: sourceDescription(declared.planName, 500) || planId, sourceAgent: identity };
+  }
+  return { ...identity, type: declared?.type === "agent_hook" ? "agent_hook" as const : "agent" as const };
+}
+
 function renderEndpointPrompt(request: AgentThreadRequest, source: AgentRequestParty, preparation: AgentCommunicationPreparation,
   executionOptions: EndpointExecutionOptions, sentAt?: string, replyParameters = renderAgentReplyParameters(preparation)): string {
   const content = preparation.inReplyToRequestId ? renderAgentResponseContent(request.prompt || "", preparation.result || "", preparation.nextAction || "") : request.prompt;
   if (typeof content !== "string" || !content.trim() || content.length > 200_000) throw new Error("Endpoint delivery requires a non-empty bounded prompt.");
-  const messageSource = normalizeRabiMessageSource(request.messageSource);
-  const verifiedIdentity = { ...agentIdentityForMessageSource(messageSource)!, sessionName: source.threadName || source.endpoint!.agentId,
-    workspace: source.workspace, agentType: source.agentType };
-  const verifiedSource = messageSource.type === "plan" ? { ...messageSource, sourceAgent: verifiedIdentity }
-    : { ...verifiedIdentity, type: messageSource.type === "agent_hook" ? "agent_hook" as const : "agent" as const };
+  const messageSource = resolvedMessageSource(request, source);
   return preparation.target.endpoint!.kind === "service" && preparation.target.endpoint!.provider === "grokBot" && executionOptions.grokBotDelivery
     ? content
-    : renderRabiDelivery({ messageSource: verifiedSource, messageContent: content, sentAt,
+    : renderRabiDelivery({ messageSource, messageContent: content, sentAt,
       contextBlocks: request.contextBlocks, controlBlocks: [...(request.controlBlocks ?? []), replyParameters] });
 }
 
@@ -223,18 +250,16 @@ function matchesLegacyReply(request: AgentThreadRequest, delivery: PreparedEndpo
   return agentDeliveryPromptHash(prompt) === delivery.promptHash;
 }
 
-async function resumeFormalReply(request: AgentThreadRequest, source: AgentRequestParty, target: AgentRequestParty,
-  requestHash: string, options: EndpointDeliveryOptions): Promise<AgentThreadRequestResult | undefined> {
+async function resumeFormalReply(request: AgentThreadRequest, target: AgentRequestParty, options: EndpointDeliveryOptions): Promise<AgentThreadRequestResult | undefined> {
   if (!request.inReplyToRequestId) return undefined;
   const original = options.store.get(request.inReplyToRequestId);
   const deliveryId = original?.pendingResponseDeliveryId ?? original?.response?.deliveryId;
   if (!deliveryId) return undefined;
   const delivery = await options.store.readEndpointDelivery(deliveryId);
-  if (!delivery || !sameAgentParty(source, delivery.preparation.source) || !sameAgentParty(target, delivery.preparation.target)) {
+  if (!delivery || !sameAgentParty(target, delivery.preparation.target)) {
     throw new Error("Reserved reply lacks exact authenticated endpoint evidence; reconcile the original delivery.");
   }
-  if (delivery.requestHash ? delivery.requestHash !== requestHash && delivery.requestHash !== requestInputHash(request,
-    delivery.preparation.source, delivery.preparation.target, options.callerExecutionOptions, true) : !matchesLegacyReply(request, delivery, options)) {
+  if (delivery.requestHash ? !matchesRequestHash(delivery, request, options) : !matchesLegacyReply(request, delivery, options)) {
     throw new AgentThreadContractError("Reply conflicts with its original frozen payload or its legacy evidence cannot establish an exact match.",
       "inReplyToRequestId", "validation", "Keep the original payload and endpoints. Reconcile the original delivery if its legacy evidence is incomplete; do not replace its reservation.",
       "AGENT_DELIVERY_ID_CONFLICT");
@@ -264,20 +289,42 @@ function prepareSingleDelivery(store: AgentRequestStore, key: string | undefined
 
 export async function executeEndpointAgentDelivery(request: AgentThreadRequest, options: EndpointDeliveryOptions): Promise<AgentThreadRequestResult> {
   await options.store.ready();
-  request = { ...request, sourceThreadId: completeAgentSessionId(request.sourceThreadId, "sourceThreadId"),
-    sourceAgentType: normalizeAgentThreadSourceType(request.sourceAgentType, true) };
   if (request.action === "reconcile_delivery") {
-    const delivery = options.store.getEndpointDelivery(request.deliveryId || "");
+    const deliveryId = callerAgentDeliveryId(request.deliveryId);
+    if (!deliveryId) throw new Error("Reconciliation requires the original delivery ID.");
+    const delivery = await options.store.readEndpointDelivery(deliveryId);
     if (!delivery) throw new Error("Original endpoint delivery evidence is unavailable; automatic replay is forbidden.");
-    const source = await options.resolveSource(request);
-    if (!sameAgentParty(source, delivery.preparation.source) && !sameAgentParty(source, delivery.preparation.target)) {
-      throw new Error("Only an original endpoint may reconcile this delivery.");
-    }
-    await reconcileEndpointDelivery(delivery.deliveryId, options);
-    return result(options.store.getEndpointDelivery(delivery.deliveryId)!, options.store.getEndpointDelivery(delivery.deliveryId)?.state === "committed");
+    options.assertRequestCurrent?.();
+    await reconcileEndpointDelivery(delivery.deliveryId, options, { receiptOnly: true });
+    const current = options.store.getEndpointDelivery(delivery.deliveryId)!;
+    return result(current, current.state === "committed");
   }
   if (request.action !== "send") throw new Error("Endpoint delivery only supports send and reconcile_delivery.");
-  request = { ...request, threadId: completeAgentSessionId(request.threadId, "threadId") };
+  const originalConnectionRequest = request.inReplyToRequestId ? options.store.get(request.inReplyToRequestId) : undefined;
+  if (originalConnectionRequest?.source.connection) {
+    if (request.responsePolicy !== undefined && request.responsePolicy !== "none" && request.responsePolicy !== "required") throw new AgentThreadContractError("Record-only responsePolicy must be none.",
+      "responsePolicy", "validation", "Use none when recording the original request result.");
+    if (request.responsePolicy === "required") throw new AgentThreadContractError("A record-only response needs an actual target for a new required follow-up.",
+      "responsePolicy", "validation", "Record this response with none; address a new required send to its actual task target.");
+    if (originalConnectionRequest.status === "pending_delivery") await reconcileEndpointDelivery(originalConnectionRequest.deliveryId, options, { receiptOnly: true });
+    const source = await options.resolveSource({ ...request, sourceAgentType: normalizeAgentThreadSourceType(request.sourceAgentType) });
+    const address = agentDeliverySourceForParty(source);
+    if (!address) throw new Error("The connected response source is unavailable.");
+    const callerId = callerAgentDeliveryId(request.deliveryId) ?? `response:${originalConnectionRequest.id}`;
+    const responseId = sourceScopedAgentDeliveryId(address, callerId);
+    options.assertRequestCurrent?.();
+    const recorded = await options.store.recordConnectionResponse(originalConnectionRequest.id, source, responseId, request.result || "", request.nextAction || "",
+      options.assertRequestCurrent);
+    try { options.assertRequestCurrent?.(); }
+    catch (error) {
+      if (error && typeof error === "object") Object.assign(error, { uncertain: true });
+      throw error;
+    }
+    return { statusCode: 200, data: { action: "send", ok: true, status: "response_recorded",
+      communication: { deliveryId: recorded.response!.deliveryId, inReplyToRequestId: recorded.id, responsePolicy: "none" }, response: recorded.response } };
+  }
+  request = { ...request, threadId: completeAgentSessionId(request.threadId, "threadId"),
+    sourceAgentType: normalizeAgentThreadSourceType(request.sourceAgentType), responsePolicy: request.responsePolicy === undefined ? "none" : request.responsePolicy };
   const callerDeliveryId = callerAgentDeliveryId(request.deliveryId);
   if (request.imagePaths?.length) throw new Error("Endpoint delivery does not transfer local attachment paths.");
   const source = await options.resolveSource(request);
@@ -289,39 +336,36 @@ export async function executeEndpointAgentDelivery(request: AgentThreadRequest, 
     throw new AgentThreadContractError("Resolved target does not match the complete requested owner.", "threadId", "validation",
       "Select the exact target adapter and session; a resolver cannot substitute another owner.");
   }
-  if (!source.endpoint || !target.endpoint || source.endpoint.managerInstanceId !== options.managerInstanceId
-    || target.endpoint.managerInstanceId !== options.managerInstanceId) throw new Error("Both parties require verified Manager-owned endpoint identities.");
-  const sourceEndpoint = source.endpoint, targetEndpoint = target.endpoint;
-  const messageSource = normalizeRabiMessageSource(request.messageSource);
-  const sourceIdentity = messageSource ? agentIdentityForMessageSource(messageSource) : undefined;
-  if (!messageSource || !sourceIdentity || sourceIdentity.sessionId !== source.threadId
-    || sourceIdentity.agentAdapter !== source.agentAdapter || request.sourceThreadId !== source.threadId
-    || !request.sourceAgentType || request.sourceAgentType !== source.agentType) {
-    throw new AgentThreadContractError("Message source must match the authenticated complete source session and Agent type.",
-      "messageSource", "source_verification", "Declare the actual Agent owner or plan.sourceAgent matching sourceThreadId and sourceAgentType; system sources cannot replace that owner.");
+  const sourceAddress = agentDeliverySourceForParty(source);
+  if (!sourceAddress || !target.endpoint || target.endpoint.managerInstanceId !== options.managerInstanceId) {
+    throw new Error("The current delivery record requires a source address and an exact target endpoint.");
   }
-  await refreshEndpointIdentities({ source: source.endpoint, target: target.endpoint }, options, "prepare");
-  const stableDeliveryId = callerDeliveryId === undefined ? undefined : sourceScopedAgentDeliveryId(source.endpoint, callerDeliveryId);
+  const sourceEndpoint = normalizeAgentDeliverySource(sourceAddress), targetEndpoint = target.endpoint;
+  // Source metadata is attached from the resolver snapshot, never compared as a second admission gate.
+  request = { ...request, sourceThreadId: source.threadId, sourceAgentType: source.agentType,
+    messageSource: resolvedMessageSource(request, source) };
+  await refreshEndpointIdentities({ source: sourceEndpoint, target: target.endpoint }, options, "prepare");
+  const stableDeliveryId = callerDeliveryId === undefined ? undefined : sourceScopedAgentDeliveryId(sourceEndpoint, callerDeliveryId);
   const requestHash = requestInputHash(request, source, target, options.callerExecutionOptions);
-  return prepareSingleDelivery(options.store, stableDeliveryId ? `delivery:${stableDeliveryId}`
+  return prepareSingleDelivery(options.store, stableDeliveryId ? `delivery:${agentDeliveryCallerSourceIdentity(sourceEndpoint)}:${callerDeliveryId}`
     : request.inReplyToRequestId ? `reply:${request.inReplyToRequestId}` : undefined, requestHash, async () => {
-    const resumed = await resumeCallerDelivery(request, source, target, stableDeliveryId, requestHash, options);
+    const resumed = await resumeCallerDelivery(request, source, target, stableDeliveryId, options);
     if (resumed) return resumed;
     if (request.inReplyToRequestId) {
       const original = options.store.get(request.inReplyToRequestId);
       if (original?.status === "pending_delivery" && original.source.endpoint && original.target.endpoint) {
-        if (!sameAgentParty(source, original.target) || !sameAgentParty(target, original.source)) {
-          throw new Error("Formal reply must reverse the original exact authenticated endpoints.");
+        if (!sameAgentPartyAddress(target, original.source)) {
+          throw new Error("Formal reply must use the original request target address.");
         }
         await reconcileEndpointDelivery(original.deliveryId, options);
       }
-      const reply = await resumeFormalReply(request, source, target, requestHash, options);
+      const reply = await resumeFormalReply(request, target, options);
       if (reply) return reply;
     }
     const executionOptions = normalizeEndpointExecutionOptions(options.resolveExecutionOptions(request, target));
     const executionOptionsHash = endpointExecutionOptionsHash(executionOptions);
     // An awaited formal-reply reconciliation may have allowed another identical caller to reserve this key.
-    const reserved = await resumeCallerDelivery(request, source, target, stableDeliveryId, requestHash, options);
+    const reserved = await resumeCallerDelivery(request, source, target, stableDeliveryId, options);
     if (reserved) return reserved;
     options.assertRequestCurrent?.();
     const preparation = await options.store.prepare({ source, target, responsePolicy: request.responsePolicy!,
@@ -402,7 +446,7 @@ async function verifyThenDispatch(delivery: PreparedEndpointDelivery, options: E
   }
 }
 
-export async function reconcileEndpointDelivery(deliveryId: string, options: EndpointDeliveryOptions): Promise<boolean> {
+export async function reconcileEndpointDelivery(deliveryId: string, options: EndpointDeliveryOptions, policy: { receiptOnly?: boolean } = {}): Promise<boolean> {
   await options.store.ready();
   const delivery = await options.store.readEndpointDelivery(deliveryId);
   if (!delivery) throw new Error("Original endpoint delivery is unavailable.");
@@ -421,7 +465,7 @@ export async function reconcileEndpointDelivery(deliveryId: string, options: End
     return true;
   } catch (error) {
     try {
-      if (error instanceof EndpointDeliveryNotSentError && options.store.getEndpointDelivery(deliveryId)?.state === "dispatching") {
+      if (!policy.receiptOnly && error instanceof EndpointDeliveryNotSentError && options.store.getEndpointDelivery(deliveryId)?.state === "dispatching") {
         await options.store.markEndpointNotSent(deliveryId, error.proof);
       }
       await options.store.noteEndpointDeliveryFailure(deliveryId, error);
@@ -438,6 +482,7 @@ export async function reconcileEndpointDelivery(deliveryId: string, options: End
 /** Events reconcile unknown attempts; a bounded timer retries only prepared host reservations. */
 export class EndpointDeliveryRecovery {
   private readonly active = new Map<string, Promise<boolean>>();
+  private readonly pendingEvents = new Set<string>();
   private executing = 0;
   private readonly waiters: Array<() => void> = [];
   private timer?: NodeJS.Timeout;
@@ -500,24 +545,45 @@ export class EndpointDeliveryRecovery {
     if (this.stopped) return Promise.resolve(false);
     const existing = this.active.get(deliveryId);
     if (existing) return existing;
-    const recovery = (async () => {
+    // Publish the single flight before entering it, including synchronous stop/read failures.
+    const recovery = Promise.resolve().then(async () => {
       if (this.executing >= this.maximumBatchSize) await new Promise<void>(resolve => this.waiters.push(resolve));
       else this.executing++;
       try {
-        if (this.stopped) return false;
-        const delivery = await this.options.store.readEndpointDelivery(deliveryId);
-        if (this.stopped) return false;
-        return delivery?.state === "prepared"
-          ? await dispatchPreparedDelivery(delivery, this.options).then(value => value.statusCode === 200)
-          : await reconcileEndpointDelivery(deliveryId, this.options);
+        let recovered = false, failed = false, failure: unknown, passes = 0;
+        do {
+          this.pendingEvents.delete(deliveryId);
+          if (this.stopped) return false;
+          try {
+            const delivery = await this.options.store.readEndpointDelivery(deliveryId);
+            if (this.stopped) return false;
+            recovered = delivery?.state === "prepared"
+              ? await dispatchPreparedDelivery(delivery, this.options).then(value => value.statusCode === 200)
+              : await reconcileEndpointDelivery(deliveryId, this.options, { receiptOnly: true });
+            failed = false;
+          } catch (error) { failed = true; failure = error; }
+          // Only external recovery events request another pass. Store failure updates
+          // merely schedule prepared work and cannot create an unknown-receipt loop.
+        } while (++passes < 2 && !this.stopped && this.pendingEvents.has(deliveryId));
+        if (failed) throw failure;
+        return recovered;
       } finally {
+        // Retire synchronously with the last pass, so an event cannot attach to a
+        // completed flight after its pending-event check but before cleanup.
+        const pendingEvent = this.pendingEvents.delete(deliveryId);
+        this.active.delete(deliveryId);
         const next = this.waiters.shift();
         if (next) next(); else this.executing--;
+        this.schedule();
+        // A hot target gets one coalesced pass per flight, then releases its slot.
+        // Remaining real events requeue once so other targets can make progress.
+        if (pendingEvent && !this.stopped) queueMicrotask(() => {
+          if (!this.stopped && !this.active.has(deliveryId)) void this.recover(deliveryId).catch(() => {});
+        });
       }
-    })();
-    const promise = recovery.finally(() => { this.active.delete(deliveryId); this.schedule(); });
-    this.active.set(deliveryId, promise);
-    return promise;
+    });
+    this.active.set(deliveryId, recovery);
+    return recovery;
   }
   async onEvent(endpoint?: AgentRequestEndpoint): Promise<void> {
     if (this.stopped) return;
@@ -528,7 +594,10 @@ export class EndpointDeliveryRecovery {
         && (endpoint || !delivery.nextAttemptAt || Date.parse(delivery.nextAttemptAt) <= Date.now())) && (!endpoint || sameAgentEndpoint(endpoint, delivery.target)))
       .map(delivery => delivery.deliveryId);
     for (let offset = 0; offset < candidates.length && !this.stopped; offset += this.maximumBatchSize) {
-      await Promise.allSettled(candidates.slice(offset, offset + this.maximumBatchSize).map(deliveryId => this.recover(deliveryId)));
+      await Promise.allSettled(candidates.slice(offset, offset + this.maximumBatchSize).map(deliveryId => {
+        if (this.active.has(deliveryId)) this.pendingEvents.add(deliveryId);
+        return this.recover(deliveryId);
+      }));
     }
   }
 }

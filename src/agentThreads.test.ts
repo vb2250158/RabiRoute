@@ -1,3 +1,18 @@
+import * as ownedDshRuntime from "./dshSessionBridge.js";
+import { nativeOperations } from "./agentAdapters/managerNativeOperations.js";
+import type { AgentManagerOperationInvoker } from "./agentAdapters/managerInvocation.js";
+const dshNativeOperations = nativeOperations({
+  readDshPrimaryBindingAsync: ownedDshRuntime.readDshPrimaryBindingAsync,
+  listDshSessions: ownedDshRuntime.listDshSessions, readDshSession: ownedDshRuntime.readDshSession,
+  resolveDshSession: ownedDshRuntime.resolveDshSession, openDshSession: ownedDshRuntime.openDshSession,
+  renameDshSession: ownedDshRuntime.renameDshSession, sendDshSessionMessage: ownedDshRuntime.sendDshSessionMessage
+});
+const invokeDshFixture: AgentManagerOperationInvoker = async <T>(type: string, operation: string, payload: unknown, invocation?: import("@rabiroute/plugin-sdk").AgentAdapterInvocation) => {
+  assert.equal(type, "dsh");
+  const handler = dshNativeOperations[operation];
+  assert.ok(handler, operation);
+  return await handler(payload, invocation) as T;
+};
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
@@ -10,7 +25,6 @@ import {
   listAgentThreadsFromIndexForTest,
   type AgentThreadDriver
 } from "./agentThreads.js";
-import { encodeGrokBotSessionId } from "./agentAdapters/grokBotClient.js";
 import { listCodexDesktopThreadsFromRowsForTest } from "./codexDesktopBridge.js";
 import { proactiveCommunicationPolicyLines } from "./shared/agentCommunicationPolicy.js";
 import { errorResponsePresentation } from "./shared/errorPresentation.js";
@@ -554,7 +568,7 @@ test("Agent thread create uses a configured workspace and fixed investigation in
     ].join("\n"),
     sandbox: "danger-full-access"
   });
-  assert.match(String(createCall.prompt), /^## 消息源\n- 类型：Agent｜处理端：codex\n- 会话：测试来源任务\n- 会话 ID：019f0000-0000-7000-8000-000000000001/);
+  assert.match(String(createCall.prompt), /^## 消息源\n- 类型：Agent｜处理端：codex\n- 会话：提交的旧名称\n- 会话 ID：019f0000-0000-7000-8000-000000000001/);
   assert.match(String(createCall.prompt), /## 消息内容\n只读调查功能入口。/);
 });
 
@@ -642,290 +656,55 @@ test("Agent thread send delegates workspace restrictions to the target AGENTS.md
   assert.doesNotMatch(calls[0]!.prompt, /SampleProject 只使用/);
 });
 
-test("Agent thread send rejects a missing delivery source", async () => {
-  let sendCount = 0;
-  const driver: AgentThreadDriver = {
-    read: async () => ({}),
-    create: async () => { throw new Error("not used"); },
-    send: async () => { sendCount += 1; }
-  };
-
-  await assert.rejects(handleAgentThreadRequest({
-    action: "send",
-    threadId: "019f0000-0000-7000-8000-000000000002",
-    prompt: "补充新证据",
-    cwd: process.cwd()
-  }, { allowedWorkspaces: [process.cwd()] }, driver), /Missing messageSource/);
-  assert.equal(sendCount, 0);
-});
-
-test("Agent thread create with prompt rejects a missing delivery source", async () => {
-  let createCount = 0;
-  const driver: AgentThreadDriver = {
-    read: async () => ({}),
-    create: async () => {
-      createCount += 1;
-      throw new Error("not used");
-    },
-    send: async () => undefined
-  };
-
-  await assert.rejects(handleAgentThreadRequest({
-    action: "create",
-    title: "调查任务",
-    prompt: "只读调查。",
-    cwd: process.cwd()
-  }, { allowedWorkspaces: [process.cwd()] }, driver), /Missing messageSource/);
-  assert.equal(createCount, 0);
-});
-
-test("Agent thread create rejects an Agent source without sourceThreadId", async () => {
-  let createCount = 0;
-  const driver: AgentThreadDriver = {
-    read: async () => ({}),
-    create: async () => {
-      createCount += 1;
-      throw new Error("not used");
-    },
-    send: async () => undefined
-  };
-
-  await assert.rejects(handleAgentThreadRequest({
-    action: "create",
-    title: "调查任务",
-    prompt: "只读调查。",
-    cwd: process.cwd(),
-    messageSource: messageSourceFor("019f0000-0000-7000-8000-000000000003", "提交的旧名称")
-  }, { allowedWorkspaces: [process.cwd()] }, driver), /Agent message source requires sourceThreadId verification/);
-  assert.equal(createCount, 0);
-});
-
-test("Agent thread create accepts a verified Grok Bot source and still rejects garbage ids", async () => {
-  const native = "s".repeat(400);
-  const sessionId = encodeGrokBotSessionId("example-owner", native);
-  assert.ok(sessionId.startsWith("grokBot:"));
-  assert.ok(sessionId.length > 512 && sessionId.length <= 4096);
-  const reads: string[] = [];
-  let createdPrompt = "";
-  const driver: AgentThreadDriver = {
-    read: async (threadId) => {
-      reads.push(threadId);
-      return {
-        id: threadId,
-        title: "Desktop owner",
-        cwd: process.cwd(),
-        updatedAt: "2026-10-19T00:00:00.000Z"
-      };
-    },
-    create: async (params) => {
-      createdPrompt = params.prompt;
-      return {
-        id: "019f0000-0000-7000-8000-000000000231",
-        title: params.title,
-        updatedAt: "2026-10-19T00:00:00.000Z",
-        source: "test",
-        initialTurnStatus: "started"
-      };
-    },
-    send: async () => undefined
-  };
-  const adapterSessionId = encodeGrokBotSessionId("example-owner", "n".repeat(160));
-  assert.ok(adapterSessionId.length > 80 && adapterSessionId.length <= 300);
-  const readGrokBotSource = async (id: string) => id === sessionId || id === adapterSessionId
-    ? { sessionId: id, sessionName: "已核验的 Bot" }
-    : null;
-  const created = await handleAgentThreadRequest({
-    action: "create",
-    agentAdapter: "codex",
-    title: "Bot 发起的 Codex 任务",
-    prompt: "请处理这件新任务。",
-    cwd: process.cwd(),
-    messageSource: {
-      type: "agent",
-      agentAdapter: "grokBot",
-      sessionId,
-      sessionName: "提交的旧名称"
-    },
-    sourceThreadId: sessionId,
-    sourceAgentType: "agent"
-  }, { allowedWorkspaces: [process.cwd()], readGrokBotSource }, driver);
-  assert.equal(created.statusCode, 201);
-  assert.match(createdPrompt, /处理端：GrokBot/);
-  assert.match(createdPrompt, /会话：已核验的 Bot/);
-  assert.match(createdPrompt, new RegExp(sessionId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
-  assert.doesNotMatch(createdPrompt, /提交的旧名称/);
-  assert.equal(reads.includes(sessionId), false);
-
-  const dshSource = "session-00000000-0000-4000-8000-000000000231";
-  const dsh = await handleAgentThreadRequest({
-    action: "create",
-    agentAdapter: "dsh",
-    title: "Bot 发起的 DSH 会话",
-    prompt: "请处理这件新任务。",
-    cwd: process.cwd(),
-    messageSource: {
-      type: "agent",
-      agentAdapter: "grokBot",
-      sessionId,
-      sessionName: "提交的旧名称"
-    },
-    sourceThreadId: sessionId,
-    sourceAgentType: "agent"
-  }, { allowedWorkspaces: [process.cwd()], readGrokBotSource }, driver);
-  assert.equal(dsh.statusCode, 201);
-
-  let adapterPrompt = "";
-  const adapterDriver: AgentThreadDriver = {
-    read: async () => ({}),
-    create: async (params) => {
-      adapterPrompt = params.prompt;
-      return {
-        id: "019f0000-0000-7000-8000-000000000232",
-        title: params.title,
-        updatedAt: "2026-10-19T00:00:00.000Z",
-        source: "test",
-        initialTurnStatus: "started"
-      };
-    },
-    send: async () => undefined
-  };
-  const adapter = await handleAgentThreadRequest({
-    action: "create",
-    title: "消息端来源任务",
-    prompt: "来自消息端。",
-    cwd: process.cwd(),
-    messageSource: {
-      type: "message_adapter",
-      messageAdapter: "grokBot",
-      conversationType: "private",
-      conversationId: adapterSessionId,
-      messageId: "message-1",
-      senderName: "Example Bot"
-    },
-    sourceThreadId: adapterSessionId
-  }, { allowedWorkspaces: [process.cwd()], readGrokBotSource }, adapterDriver);
-  assert.equal(adapter.statusCode, 201);
-  assert.match(adapterPrompt, /消息端：GrokBot/);
-  assert.match(adapterPrompt, new RegExp(adapterSessionId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
-
-  const codexSource = "019f0000-0000-7000-8000-000000000233";
-  const codex = await handleAgentThreadRequest({
-    action: "create",
-    title: "原 Codex 来源",
-    prompt: "继续原规则。",
-    cwd: process.cwd(),
-    messageSource: {
-      type: "agent",
-      agentAdapter: "codex",
-      sessionId: codexSource,
-      sessionName: "提交的旧名称"
-    },
-    sourceThreadId: codexSource,
-    sourceAgentType: "agent"
-  }, { allowedWorkspaces: [process.cwd()], readGrokBotSource }, driver);
-  assert.equal(codex.statusCode, 201);
-  assert.equal((codex.data.messageSource as { sessionName?: string }).sessionName, "Desktop owner");
-  assert.equal(reads.includes(codexSource), true);
-
-  const dshOwned = await handleAgentThreadRequest({
-    action: "create",
-    title: "原 DSH 来源",
-    prompt: "继续原规则。",
-    cwd: process.cwd(),
-    messageSource: {
-      type: "agent",
-      agentAdapter: "dsh",
-      sessionId: dshSource,
-      sessionName: "提交的旧名称"
-    },
-    sourceThreadId: dshSource,
-    sourceAgentType: "agent"
-  }, { allowedWorkspaces: [process.cwd()], readGrokBotSource }, driver);
-  assert.equal(dshOwned.statusCode, 201);
-  assert.equal((dshOwned.data.messageSource as { agentAdapter?: string }).agentAdapter, "dsh");
-  assert.equal((dshOwned.data.messageSource as { sessionName?: string }).sessionName, "Desktop owner");
-  assert.equal((dshOwned.data.messageSource as { sessionId?: string }).sessionId, dshSource);
-
+test("Agent thread send accepts absent attribution without inventing a source owner", async () => {
   let sends = 0;
-  const sendDriver: AgentThreadDriver = {
-    read: async (threadId) => ({ id: threadId, title: "目标任务", cwd: process.cwd(), updatedAt: "2026-10-19T00:00:00.000Z" }),
-    create: async () => { throw new Error("not used"); },
-    send: async (params) => {
-      sends += 1;
-      assert.match(params.prompt, /已核验的 Bot/);
-      assert.match(params.prompt, /处理端：GrokBot/);
-    }
-  };
-  const sent = await handleAgentThreadRequest({
-    action: "send",
-    threadId: codexSource,
-    prompt: "投给已有任务。",
-    cwd: process.cwd(),
-    messageSource: {
-      type: "agent",
-      agentAdapter: "grokBot",
-      sessionId,
-      sessionName: "提交的旧名称"
-    },
-    sourceThreadId: sessionId,
-    sourceAgentType: "agent",
-    responsePolicy: "none"
-  }, { allowedWorkspaces: [process.cwd()], readGrokBotSource }, sendDriver);
-  assert.equal(sent.data.status, "delivered");
-  assert.equal(sends, 1);
+  const driver: AgentThreadDriver = { read: async () => { throw new Error("No source read"); },
+    create: async () => { throw new Error("not used"); }, send: async value => {
+      sends++; assert.match(value.prompt, /补充新证据/); assert.doesNotMatch(value.prompt, /## 消息源/);
+    } };
+  const result = await handleAgentThreadRequest({ action: "send", threadId: "019f0000-0000-7000-8000-000000000002",
+    prompt: "补充新证据", cwd: process.cwd() }, { allowedWorkspaces: [process.cwd()] }, driver);
+  assert.equal(result.data.status, "delivered"); assert.equal(sends, 1);
+});
 
-  const rejectCreate = async (sourceThreadId: string, messageSource: Record<string, unknown>) => {
-    let creates = 0;
-    const rejecting: AgentThreadDriver = {
-      read: async () => { throw new Error("Codex Desktop task was not found"); },
-      create: async () => { creates += 1; throw new Error("not used"); },
-      send: async () => undefined
-    };
-    await assert.rejects(handleAgentThreadRequest({
-      action: "create",
-      title: "应拒绝",
-      prompt: "不要创建。",
-      cwd: process.cwd(),
-      messageSource: messageSource as never,
-      sourceThreadId,
-      sourceAgentType: "agent"
-    }, { allowedWorkspaces: [process.cwd()], readGrokBotSource }, rejecting), /Invalid threadId/);
-    assert.equal(creates, 0);
-  };
-  await rejectCreate("not-a-thread", {
-    type: "agent", agentAdapter: "codex", sessionId: "not-a-thread", sessionName: "垃圾"
-  });
-  await rejectCreate("grokBot:!!!", {
-    type: "agent", agentAdapter: "grokBot", sessionId: "grokBot:!!!", sessionName: "垃圾"
-  });
-  await rejectCreate(codexSource, {
-    type: "agent", agentAdapter: "grokBot", sessionId: codexSource, sessionName: "垃圾"
-  });
-  const tooLong = `grokBot:${"a".repeat(4090)}`;
-  await assert.rejects(handleAgentThreadRequest({
-    action: "create",
-    title: "超长",
-    prompt: "不要创建。",
-    cwd: process.cwd(),
-    messageSource: { type: "agent", agentAdapter: "grokBot", sessionId, sessionName: "超长" },
-    sourceThreadId: tooLong,
-    sourceAgentType: "agent"
-  }, { allowedWorkspaces: [process.cwd()], readGrokBotSource }, driver), /sourceThreadId is too long/);
-  await assert.rejects(handleAgentThreadRequest({
-    action: "create",
-    title: "未核验",
-    prompt: "不要创建。",
-    cwd: process.cwd(),
-    messageSource: {
-      type: "message_adapter",
-      messageAdapter: "grokBot",
-      conversationType: "private",
-      conversationId: encodeGrokBotSessionId("missing-owner", "missing-session"),
-      messageId: "message-2",
-      senderName: "Missing"
-    },
-    sourceThreadId: encodeGrokBotSessionId("missing-owner", "missing-session")
-  }, { allowedWorkspaces: [process.cwd()], readGrokBotSource }, adapterDriver), /无法核对来源任务/);
+test("Agent create accepts a prompt without source attribution", async () => {
+  let creates = 0;
+  const driver: AgentThreadDriver = { read: async () => { throw new Error("No source read"); },
+    create: async value => { creates++; return { id: "019f0000-0000-7000-8000-000000000231", title: value.title,
+      updatedAt: "", source: "test", initialTurnStatus: "started" }; }, send: async () => undefined };
+  const result = await handleAgentThreadRequest({ action: "create", title: "调查任务", prompt: "只读调查。", cwd: process.cwd() },
+    { allowedWorkspaces: [process.cwd()] }, driver);
+  assert.equal(result.statusCode, 201); assert.equal(creates, 1);
+});
+
+test("Agent create uses declared source without a separate sourceThreadId", async () => {
+  let creates = 0;
+  const driver: AgentThreadDriver = { read: async () => { throw new Error("No source read"); },
+    create: async value => { creates++; return { id: "019f0000-0000-7000-8000-000000000231", title: value.title,
+      updatedAt: "", source: "test", initialTurnStatus: "started" }; }, send: async () => undefined };
+  const result = await handleAgentThreadRequest({ action: "create", title: "调查任务", prompt: "只读调查。", cwd: process.cwd(), messageSource: messageSourceFor("declared-source", "提交的名称") },
+    { allowedWorkspaces: [process.cwd()] }, driver);
+  assert.equal(result.statusCode, 201); assert.equal(creates, 1);
+});
+
+test("legacy create and send record declared sources without reading any source owner", async () => {
+  let creates = 0, sends = 0;
+  const driver: AgentThreadDriver = { read: async () => { throw new Error("Source owner is unavailable"); },
+    create: async value => { creates++; assert.match(value.prompt, /提交的名称/); return {
+      id: "019f0000-0000-7000-8000-000000000231", title: value.title, updatedAt: "", source: "test", initialTurnStatus: "started" }; },
+    send: async value => { sends++; assert.match(value.prompt, /提交的名称/); } };
+  for (const agentAdapter of ["grokBot", "codex", "dsh"] as const) {
+    const attribution = { messageSource: { type: "agent" as const, agentAdapter, sessionId: "unregistered-source", sessionName: "提交的名称" },
+      sourceThreadId: "different-opaque-source", sourceAgentType: "agent" as const };
+    const options = { allowedWorkspaces: [process.cwd()], readGrokBotSource: async () => { throw new Error("No source proof reads"); } };
+    assert.equal((await handleAgentThreadRequest({ action: "create", title: "声明来源 " + agentAdapter, prompt: "创建任务", cwd: process.cwd(), ...attribution }, options, driver)).statusCode, 201);
+    assert.equal((await handleAgentThreadRequest({ action: "send", threadId: "019f0000-0000-7000-8000-000000000002",
+      prompt: "投给原目标", cwd: process.cwd(), ...attribution }, options, driver)).data.status, "delivered");
+  }
+  assert.equal(creates, 3); assert.equal(sends, 3);
+  await assert.rejects(handleAgentThreadRequest({ action: "send", threadId: "x".repeat(513), prompt: "bad target", cwd: process.cwd() },
+    { allowedWorkspaces: [process.cwd()] }, driver), /threadId is too long/);
+  assert.equal(sends, 3);
 });
 
 test("Agent thread send renders content, context, and control blocks in order", async () => {
@@ -999,31 +778,14 @@ test("Agent thread create without prompt does not require messageSource", async 
   assert.equal((calls[0] as { prompt: string }).prompt, "");
 });
 
-test("Agent-to-Agent send rejects a messageSource session that does not match sourceThreadId", async () => {
-  let sendCount = 0;
-  const sourceThreadId = "019f0000-0000-7000-8000-000000000003";
-  const driver: AgentThreadDriver = {
-    read: async () => ({
-      id: sourceThreadId,
-      title: "计划任务",
-      cwd: process.cwd(),
-      updatedAt: "2026-08-04T08:01:00.000Z"
-    }),
-    create: async () => { throw new Error("not used"); },
-    send: async () => { sendCount += 1; }
-  };
-
-  await assert.rejects(handleAgentThreadRequest({
-    action: "send",
-    threadId: "019f0000-0000-7000-8000-000000000002",
-    prompt: "结果",
-    cwd: process.cwd(),
-    messageSource: defaultMessageSource,
-    sourceThreadId,
-    sourceAgentType: "plan_secretary",
-    responsePolicy: "none"
-  }, { allowedWorkspaces: [process.cwd()] }, driver), /messageSource.sessionId must match sourceThreadId/);
-  assert.equal(sendCount, 0);
+test("legacy send does not compare declared source sessions", async () => {
+  let sends = 0;
+  const driver: AgentThreadDriver = { read: async () => { throw new Error("No source reads"); },
+    create: async () => { throw new Error("not used"); }, send: async () => { sends++; } };
+  const result = await handleAgentThreadRequest({ action: "send", threadId: "019f0000-0000-7000-8000-000000000002", prompt: "结果", cwd: process.cwd(),
+    messageSource: defaultMessageSource, sourceThreadId: "another-declared-source", sourceAgentType: "plan_secretary", responsePolicy: "none" },
+    { allowedWorkspaces: [process.cwd()] }, driver);
+  assert.equal(result.data.status, "delivered"); assert.equal(sends, 1);
 });
 
 test("Agent thread send forwards existing images outside the workspace without a hidden count limit", async (t) => {
@@ -1162,7 +924,7 @@ for (const scenario of [
   });
 }
 
-test("Agent-to-Agent send shows the verified source task, Agent type, and session id", async () => {
+test("Agent-to-Agent send shows declared source metadata without owner reads", async () => {
   const calls: unknown[] = [];
   const targetThreadId = "019f0000-0000-7000-8000-000000000002";
   const sourceThreadId = "019f0000-0000-7000-8000-000000000003";
@@ -1218,8 +980,7 @@ test("Agent-to-Agent send shows the verified source task, Agent type, and sessio
     agentType: "plan_secretary",
     agentLabel: "计划秘书 Agent",
     threadId: sourceThreadId,
-    threadName: "星海建造师 策划 程序 协助处理计划4",
-    workspace: process.cwd()
+    threadName: "星海建造师 策划 程序 协助处理计划4"
   });
   assert.equal(calls.length, 1);
   const sent = calls[0] as { threadId: string; prompt: string; cwd: string; sandbox: string };
@@ -1231,7 +992,7 @@ test("Agent-to-Agent send shows the verified source task, Agent type, and sessio
   assert.match(sent.prompt, /会话：星海建造师 策划 程序 协助处理计划4/);
   assert.match(sent.prompt, /会话 ID：019f0000-0000-7000-8000-000000000003/);
   assert.match(sent.prompt, /角色：计划秘书 Agent/);
-  assert.ok(sent.prompt.includes(`工作目录：${process.cwd()}`));
+  assert.doesNotMatch(sent.prompt, /工作目录：/);
   assert.match(sent.prompt, /\[回传参数\]/);
   assert.match(sent.prompt, /"responsePolicy": "none"/);
   assert.doesNotMatch(sent.prompt, /本次投递不要求回复/);
@@ -1273,9 +1034,10 @@ test("compact reply delivers evidence once and remains recoverable after an unce
     assert.doesNotMatch(prompt, /当前接收会话|本次投递不要求回复|\[补充说明\]/);
     if (required) {
       const parameters = JSON.parse(prompt.split("[回传参数]\n")[1]);
-      for (const field of ["action", "threadId", "cwd", "messageSource", "sourceThreadId", "sourceAgentType", "inReplyToRequestId", "result", "nextAction", "responsePolicy"]) {
+      for (const field of ["action", "threadId", "messageSource", "sourceThreadId", "sourceAgentType", "inReplyToRequestId", "result", "nextAction", "responsePolicy"]) {
         assert.ok(Object.hasOwn(parameters.request, field), field);
       }
+      assert.equal(parameters.request.cwd, undefined, "no source cwd is inferred from the original target snapshot");
       const altered = prompt.replace(evidence, "altered evidence");
       assert.equal((await recoverAgentResponseDelivery(agentRequests, source.threadId, deliveryId, () => [altered])).status, "delivery_unconfirmed");
     }
@@ -1475,13 +1237,12 @@ test("unconfirmed delivery retains its request across restart and recovers on an
   });
   assert.equal(sends, 1);
   markerVisible = true;
-  await assert.rejects(handleAgentThreadRequest({
+  const response = await handleAgentThreadRequest({
     ...reply, messageSource: messageSourceFor(sourceThreadId), sourceThreadId
-  }, { ...options, agentRequests: restarted }, driver));
-  assert.equal(restarted.get(record.id)?.status, "pending_delivery");
-  const response = await handleAgentThreadRequest(reply, { ...options, agentRequests: restarted }, driver);
+  }, { ...options, agentRequests: restarted }, driver);
   assert.equal(response.data.status, "delivered");
   assert.equal(restarted.get(record.id)?.status, "responded");
+  assert.equal(restarted.get(record.id)?.response?.by.threadId, sourceThreadId, "record the current caller instead of impersonating the original target");
   assert.equal(sends, 2);
 });
 
@@ -2178,7 +1939,7 @@ test("Agent thread failures expose the action, missing field, and retry guidance
   });
 });
 
-test("Agent-to-Agent send requires an explicit response policy", async () => {
+test("legacy send defaults to no formal reply requirement", async () => {
   const sourceThreadId = "019f0000-0000-7000-8000-000000000091";
   let sendCount = 0;
   const driver: AgentThreadDriver = {
@@ -2186,7 +1947,7 @@ test("Agent-to-Agent send requires an explicit response policy", async () => {
     create: async () => { throw new Error("not used"); },
     send: async () => { sendCount += 1; }
   };
-  await assert.rejects(handleAgentThreadRequest({
+  const result = await handleAgentThreadRequest({
     action: "send",
     threadId: "019f0000-0000-7000-8000-000000000092",
     prompt: "调查结果",
@@ -2194,19 +1955,20 @@ test("Agent-to-Agent send requires an explicit response policy", async () => {
     messageSource: messageSourceFor(sourceThreadId, "计划任务"),
     sourceThreadId,
     sourceAgentType: "plan_agent"
-  }, { allowedWorkspaces: [process.cwd()] }, driver), /responsePolicy is required/);
-  assert.equal(sendCount, 0);
+  }, { allowedWorkspaces: [process.cwd()] }, driver);
+  assert.equal(result.data.status, "delivered");
+  assert.equal(sendCount, 1);
 });
 
-test("Agent-to-Agent send refuses an unknown source task", async () => {
+test("legacy send accepts an unregistered source task", async () => {
   let sendCount = 0;
   const driver: AgentThreadDriver = {
-    read: async () => ({}),
+    read: async () => { throw new Error("No source read"); },
     create: async () => { throw new Error("not used"); },
     send: async () => { sendCount += 1; }
   };
 
-  await assert.rejects(handleAgentThreadRequest({
+  const result = await handleAgentThreadRequest({
     action: "send",
     threadId: "019f0000-0000-7000-8000-000000000002",
     prompt: "结果",
@@ -2214,8 +1976,9 @@ test("Agent-to-Agent send refuses an unknown source task", async () => {
     messageSource: messageSourceFor("019f0000-0000-7000-8000-000000000003", "未知来源任务"),
     sourceThreadId: "019f0000-0000-7000-8000-000000000003",
     sourceAgentType: "plan_agent"
-  }, { allowedWorkspaces: [process.cwd()] }, driver), /无法核对来源任务/);
-  assert.equal(sendCount, 0);
+  }, { allowedWorkspaces: [process.cwd()] }, driver);
+  assert.equal(result.data.status, "delivered");
+  assert.equal(sendCount, 1);
 });
 
 test("Agent-to-Agent send accepts quoted role initialization and message markers as content", async () => {
@@ -2246,7 +2009,7 @@ test("Agent-to-Agent send accepts quoted role initialization and message markers
   assert.equal(sendCount, 1);
 });
 
-test("Agent-to-Agent send rejects a self-targeted handoff", async () => {
+test("legacy send can address the same task as its declared source", async () => {
   let sendCount = 0;
   const threadId = "019f0000-0000-7000-8000-000000000073";
   const driver: AgentThreadDriver = {
@@ -2255,7 +2018,7 @@ test("Agent-to-Agent send rejects a self-targeted handoff", async () => {
     send: async () => { sendCount += 1; }
   };
 
-  await assert.rejects(handleAgentThreadRequest({
+  const result = await handleAgentThreadRequest({
     action: "send",
     threadId,
     prompt: "内部结果",
@@ -2263,8 +2026,9 @@ test("Agent-to-Agent send rejects a self-targeted handoff", async () => {
     messageSource: messageSourceFor(threadId, "消息处理任务"),
     sourceThreadId: threadId,
     sourceAgentType: "message_processing"
-  }, { allowedWorkspaces: [process.cwd()] }, driver), /source and target task must be different/);
-  assert.equal(sendCount, 0);
+  }, { allowedWorkspaces: [process.cwd()] }, driver);
+  assert.equal(result.data.status, "delivered");
+  assert.equal(sendCount, 1);
 });
 
 test("Agent thread rename preserves the exact task id and validates the configured workspace", async () => {
@@ -2407,6 +2171,7 @@ test("DSH Agent thread flow discovers, creates, renames, resolves, and delivers 
       allowedWorkspaces: [process.cwd()],
       defaultWorkspace: process.cwd(),
       dshBaseUrl: "http://127.0.0.1:3080",
+      invokeAgentOperation: invokeDshFixture,
       dshAgentPreset: "rabi-primary"
     };
     const created = await handleAgentThreadRequest({
@@ -2462,7 +2227,7 @@ test("DSH Agent thread flow discovers, creates, renames, resolves, and delivers 
   }
 });
 
-test("DSH Agent-to-Agent delivery verifies the DSH source and does not relabel it as Codex", async () => {
+test("DSH declared source stays DSH without source owner verification", async () => {
   const sourceThreadId = "session-00000000-0000-4000-8000-000000000031";
   const targetThreadId = "session-00000000-0000-4000-8000-000000000032";
   const calls: Array<Record<string, unknown>> = [];
@@ -2622,6 +2387,7 @@ test("Agent thread open locates the exact DSH session with its configured base U
     }, {
       allowedWorkspaces: [process.cwd()],
       dshBaseUrl: baseUrl,
+      invokeAgentOperation: invokeDshFixture,
       openDshSession: async (id, url) => { opened.push({ id, url }); }
     });
 
@@ -2634,20 +2400,18 @@ test("Agent thread open locates the exact DSH session with its configured base U
   }
 });
 
-test("thread bridge accepts thread IDs up to 512 characters and rejects longer ones", async () => {
-  const driver: AgentThreadDriver = {
-    read: async id => ({ id, title: "unused", cwd: process.cwd() }),
-    create: async () => { throw new Error("not used"); },
-    send: async () => { throw new Error("not used"); }
-  };
-  const options = { allowedWorkspaces: [process.cwd()] };
-  const request = (sourceThreadId: string) => ({ action: "send" as const, threadId: "019f0000-0000-7000-8000-000000000002", cwd: process.cwd(),
-    prompt: "Scoped task", sourceThreadId, sourceAgentType: "agent" as const, responsePolicy: "none" as const,
-    messageSource: { type: "agent" as const, agentAdapter: "codex" as const, sessionId: sourceThreadId, sessionName: "Long source" } });
-  for (const length of [90, 512]) {
-    await assert.rejects(handleAgentThreadRequest(request("x".repeat(length)), options, driver), (error: Error) => !/too long/.test(error.message));
+test("source coordinates are opaque metadata while target thread length remains bounded", async () => {
+  let sends = 0;
+  const driver: AgentThreadDriver = { read: async () => { throw new Error("No source read"); },
+    create: async () => { throw new Error("not used"); }, send: async () => { sends++; } };
+  for (const length of [90, 512, 513, 4096]) {
+    const sourceThreadId = "x".repeat(length);
+    const result = await handleAgentThreadRequest({ action: "send", threadId: "019f0000-0000-7000-8000-000000000002", cwd: process.cwd(),
+      prompt: "Scoped task", sourceThreadId, messageSource: { type: "agent", agentAdapter: "codex", sessionId: sourceThreadId, sessionName: "Long source" } },
+      { allowedWorkspaces: [process.cwd()] }, driver);
+    assert.equal(result.data.status, "delivered");
   }
-  await assert.rejects(handleAgentThreadRequest(request("x".repeat(513)), options, driver), /sourceThreadId is too long; maximum length is 512/);
+  assert.equal(sends, 4);
 });
 
 test("definite missing thread offers non-replaying list hints while timeouts keep original meaning", async()=>{
@@ -2655,4 +2419,18 @@ test("definite missing thread offers non-replaying list hints while timeouts kee
  const result=await handleAgentThreadRequest({action:"resolve",title:"Original missing task",createIfMissing:false},{allowedWorkspaces:[process.cwd()]},driver);
  assert.equal(result.statusCode,404);assert.equal(result.data.resolution,"missing");assert.equal(result.data.message,"没有找到 Codex Desktop 任务：Original missing task");assert.match(String(result.data.nextAction),/"action":"list"/);assert.match(String(result.data.nextAction),/"agentAdapter":"codex"/);assert.match(String(result.data.nextAction),/nextOffset/);assert.match(String(result.data.nextAction),/updatedAt/);assert.match(String(result.data.nextAction),/不自动/);
  const failure=agentThreadRequestFailureData(new Error("Instance management timed out; refresh before retrying a change."),{action:"read"});assert.equal(failure.message,"Instance management timed out; refresh before retrying a change.");assert.equal(failure.nextAction,undefined);
+});
+
+
+test("free source labels preserve prototype property names as text", async () => {
+  for (const sourceAgentType of ["constructor", "toString", "__proto__"]) {
+    const driver: AgentThreadDriver = { read: async () => { throw new Error("No source owner reads"); },
+      create: async () => { throw new Error("not used"); }, send: async value => { assert.ok(value.prompt.includes(sourceAgentType)); } };
+    const result = await handleAgentThreadRequest({ action: "send", threadId: "019f0000-0000-7000-8000-000000000002", prompt: "结果", cwd: process.cwd(),
+      sourceAgentType, sourceThreadId: "declared-session", messageSource: { type: "agent", agentAdapter: "codex", sessionId: "declared-session", sessionName: "Sender" } },
+      { allowedWorkspaces: [process.cwd()] }, driver);
+    assert.equal(result.data.status, "delivered");
+    assert.equal((result.data.source as { agentLabel: string }).agentLabel, sourceAgentType);
+    assert.equal((result.data.messageSource as { agentType: string }).agentType, sourceAgentType);
+  }
 });

@@ -220,6 +220,7 @@ export type PipelineDefinition = {
 };
 
 export type NotificationRuleDefinition = {
+  recentMessageLimit?: number;
   agentTarget?: AgentDeliveryTarget;
   sourceRouteIds?: string[];
   triggerIds?: string[];
@@ -265,6 +266,8 @@ export type PersonaAutomationTriggerDefinition =
 export type PersonaAutomationActionDefinition =
   | {
     type: "deliver_agent";
+    /** 0 disables recent chat injection; absent values inherit legacy endpoint settings. */
+    recentMessageLimit?: number;
     target?: AgentDeliveryTarget;
     message?: string;
     template?: string;
@@ -659,6 +662,7 @@ export function normalizeRuleDefinitions(rules: unknown): NotificationRuleDefini
     const raw = rule && typeof rule === "object" ? rule as Partial<NotificationRuleDefinition> : {};
     return {
       id: typeof raw.id === "string" && raw.id.trim() ? raw.id : `rule-${index + 1}`,
+      ...(raw.recentMessageLimit == null ? {} : { recentMessageLimit: normalizeRecentMessageLimit(raw.recentMessageLimit) }),
       ...(raw.agentTarget === undefined ? {} : { agentTarget: normalizeAgentDeliveryTarget(raw.agentTarget) }),
       ...(raw.sourceRouteIds ? { sourceRouteIds: raw.sourceRouteIds } : {}),
       ...(raw.triggerIds ? { triggerIds: raw.triggerIds } : {}),
@@ -812,6 +816,7 @@ function normalizeAutomationAction(value: unknown): PersonaAutomationActionDefin
   return {
     type: "deliver_agent",
     target: raw.target === undefined ? undefined : normalizeAgentDeliveryTarget(raw.target),
+    ...(raw.recentMessageLimit == null ? {} : { recentMessageLimit: normalizeRecentMessageLimit(raw.recentMessageLimit) }),
     message: typeof raw.message === "string" ? normalizeTemplateText(raw.message) : "",
     template: typeof raw.template === "string" ? normalizeTemplateText(raw.template) : ""
   };
@@ -893,6 +898,7 @@ function notificationRuleAutomation(rule: NotificationRuleDefinition): PersonaAu
     action: {
       type: "deliver_agent",
       target: rule.agentTarget === undefined ? undefined : normalizeAgentDeliveryTarget(rule.agentTarget),
+      ...(rule.recentMessageLimit == null ? {} : { recentMessageLimit: rule.recentMessageLimit }),
       template: rule.template ?? ""
     }
   };
@@ -953,6 +959,7 @@ export function notificationRulesFromPersonaAutomations(
       triggerIds: automation.trigger.triggerIds,
       template: automation.action.template ?? "",
       agentTarget: automation.action.target === undefined ? undefined : normalizeAgentDeliveryTarget(automation.action.target),
+      ...(automation.action.recentMessageLimit == null ? {} : { recentMessageLimit: automation.action.recentMessageLimit }),
       sourceRouteIds: automation.sourceRouteIds
     });
   }

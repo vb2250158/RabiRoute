@@ -8,8 +8,8 @@ import { usePersonaService } from '../persona/personaServiceClient';
 import { useI18n } from '../i18n';
 import { userFacingError } from '../userFacingError';
 import { waitForChatHistoryFrame } from '../personaChatHistoryLayout';
-import MessageEndpointHistory from './MessageEndpointHistory.vue';
-import PersonaChatHistory from './PersonaChatHistory.vue';
+import EndpointConversationHistory from './EndpointConversationHistory.vue';
+import PersonaTaskHistory from './PersonaTaskHistory.vue';
 import NapcatConversationHistory from './NapcatConversationHistory.vue';
 
 const props = defineProps<{ roleId: string; version: number; messageVersion?:number }>();
@@ -68,9 +68,9 @@ onBeforeUnmount(() => { request?.abort(); layout?.abort(); });
     <v-alert v-for="warning in warnings" :key="warning" type="warning" variant="tonal" class="mb-3">{{ t(warning) }}</v-alert>
     <template v-for="channel in channels" :key="channel.id">
       <div v-if="visited.has(channel.id)" v-show="selected === channel.id" :data-history-channel="channel.id" role="tabpanel" :aria-label="t(channel.label)">
-        <PersonaChatHistory v-if="channel.category" :role-id="roleId" :version="version" :active="selected===channel.id" :category="channel.category" />
+        <PersonaTaskHistory v-if="channel.category" :role-id="roleId" :version="version" :active="selected===channel.id" :category="channel.category" />
         <NapcatConversationHistory v-else-if="channel.adapter==='napcat'" :role-id="roleId" :version="version" :active="selected===channel.id" :routes="catalog.qqRoutes??[]" :message-version="messageVersion" />
-        <MessageEndpointHistory v-else-if="channel.adapter" :role-id="roleId" :adapter="channel.adapter" :title="channel.label" :version="version" :active="selected === channel.id" />
+        <EndpointConversationHistory v-else-if="channel.adapter" :role-id="roleId" :adapter="channel.adapter" :title="channel.label" :version="version" :message-version="messageVersion" :active="selected === channel.id" />
       </div>
     </template>
   </div>

@@ -1,0 +1,8 @@
+{
+  "endpointType": "agent:deviceAgent",
+  "agentType": "deviceAgent",
+  "capability": "agent.adapter.device-agent@1",
+  "routeKeys": [],
+  "runtimeFields": {},
+  "environmentFields": {}
+}

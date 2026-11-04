@@ -10,6 +10,14 @@ This document defines the product, architecture, interface, reliability, UI, sec
 
 Not every handler has projects, persistent sessions, tools, streaming, or cancellation. The adapter must declare what it actually supports, and the UI must not present an unverified capability as available.
 
+## Per-provider plugin delivery contract
+
+Each Agent platform ships as an individual native package with `rabi.plugin.json`, `agent-adapter.json`, and Manager, Gateway and Web entries. Its descriptor owns capability, maturity and saved-field mappings. Runtime services and trusted configuration cards belong to the same plugin identity. A new platform connects its real owner rather than adding a name that delegates back to a monolithic factory.
+
+Manager and Gateway use the same plugin Profile and enablement settings, publishing host-specific capabilities. Each package owns execution, discovery, sessions and platform management. Original shared owners retain Routes, creation reservations, source authorization, plans, memory and formal delivery ledgers. Disabling rejects new work and joins actual completion of accepted resources, without closing external applications or services.
+
+An individual scan loads the package implementation in its isolated execution boundary. Aggregation settles each provider separately so a broken package or data item affects only its own result. Page entry scans automatically once; further scans require explicit refresh. Card loading, expansion, input, health queries and saving do not scan. Missing plugins preserve saved fields, complete task IDs, remote-instance identity and primary Agent selection, without borrowing another platform's task or retargeting a delivery.
+
 ## Base integration and optional host enhancements
 
 RabiRoute owns the common binding, resolution, delivery and receipt contracts; each adapter translates only the session interface owned by its host. DSH uses its owner API. An additional Rabi tool plugin, pinned plugin version or enhancement status is not a prerequisite for base discovery/delivery. Scanning does not request the retired `rabirouteAgent/status` endpoint or recommend installing retired plugin collections.

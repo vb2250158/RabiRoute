@@ -53,7 +53,7 @@ test("panel clears secrets, loads once, has no timers and never changes session 
   assert.match(component, /finally \{ launchUrl.value = ""/);
   assert.doesNotMatch(component, /localStorage|sessionStorage|console\.|setInterval|setTimeout|sessionId|session\/prompt/);
   assert.match(component, /不会删除 DSH 会话/);
-  const page = fs.readFileSync(new URL("../src/pages/RouteConfigPage.vue", import.meta.url), "utf8");
+  const page = fs.readFileSync(new URL("../src/agentAdapters/DshAgentCard.vue", import.meta.url), "utf8");
   assert.match(page, /<DshConnectionPanel/);
   assert.doesNotMatch(page, /DSH 扫描会读取 <code>RabiRoute Agent/);
 });

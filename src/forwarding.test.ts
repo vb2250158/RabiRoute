@@ -22,6 +22,7 @@ import { getBuiltinAgentAdapterRuntime } from "./runtime/agentAdapterRuntime.js"
 import { normalizeRouteAgentTargets } from "./shared/routeAgentTargets.js";
 import { migrateAgentDeliveryConfiguration } from "./manager/agentDeliveryMigration.js";
 import { notificationRulesFromPersonaAutomations, type PersonaAutomationRuleDefinition } from "./shared/gatewayConfigModel.js";
+import { mountForwardingAgentFixture } from "./forwardingAgentPlugin.fixture.js";
 
 // Tests may use their own loopback Manager fixtures, never installed Agent owners.
 const adapterRegistry = (await getBuiltinAgentAdapterRuntime()).registry;
@@ -279,10 +280,12 @@ async function withForwardingConfig<T>(patch: ForwardingConfigPatch, run: () => 
     fs.mkdirSync(roleDir, { recursive: true });
     publishRoleKnowledgeCatalogSnapshot(roleDir, readRoleKnowledgeCatalogSnapshot(roleDir));
   }
+  const native = await mountForwardingAgentFixture(config.agentAdapters, config, { installReaders: true });
   try {
     return await run();
   } finally {
     resetMessageProcessingRuntime();
+    await native.dispose();
     Object.assign(config, previous);
   }
 }

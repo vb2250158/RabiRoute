@@ -1,73 +1,50 @@
+import {agentNativeFunction,withAgentManagerInvocation,type AgentManagerOperationInvoker} from './agentAdapters/managerInvocation.js';
+import {isDshSessionId} from './shared/dshSessionIdentity.js';
 import { renderAgentReplyParameters } from "./agentRequests/replyParameters.js";
 import { executeEndpointAgentDelivery, type EndpointDeliveryOptions, type PreparedEndpointDelivery, type EndpointDeliveryReceipt } from "./agentRequests/endpointDelivery.js";
 import { agentDeliveryPromptHash } from "./agentRequests/store.js";
 export { executeEndpointOnOwner } from "./agentRequests/ownerExecution.js";
 import { AgentReplyStateError } from "./agentRequests/replyError.js";
-import { AgentThreadContractError, callerAgentDeliveryId, completeAgentSessionId, normalizeAgentThreadSourceType, type AgentThreadSourceType } from "./agentRequests/requestValidation.js";
+import { AgentThreadContractError, callerAgentDeliveryId, normalizeAgentThreadSourceType, type AgentThreadSourceType } from "./agentRequests/requestValidation.js";
 export type { AgentThreadSourceType } from "./agentRequests/requestValidation.js";
 import { promptConfirmsDelivery } from "./agentRequests/rolloutReceipt.js";
 import type { AgentInstanceBinding } from "./shared/agentInstance.js";
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { recoverAgentResponseDeliveryFromRollout } from "./agentRequests/deliveryRecovery.js";
 import { renderAgentResponseContent } from "./agentRequests/responseContent.js";
 import fs from "node:fs";
 import path from "node:path";
-import {
-  createCodexThread,
-  listCodexThreads,
-  readCodexThread,
-  renameCodexThread,
-  sendCodexThreadMessage,
-  type CodexThreadCreateResult,
-  type CodexTurnSandbox
-} from "./codexRuntime.js";
+import {type CodexThreadCreateResult,type CodexTurnSandbox} from "./codexRuntime.js";
 import { isCodexTaskId } from "./codexTaskIdentity.js";
 import type { AgentRequestEndpoint } from "./agentRequests/endpoint.js";
-import {
-  codexDesktopDeliveryReceiptConfirmed,
-  openCodexDesktopThread
-} from "./codexDesktopBridge.js";
+
 import {
   resolveCodexSession,
   type CodexSessionResolution
 } from "./codexSessionResolver.js";
-import {
-  isDshSessionId,
-  listDshSessions,
-  openDshSession,
-  readDshSession,
-  readDshPrimaryBinding,
-  renameDshSession,
-  resolveDshSession,
-  sendDshSessionMessage
-} from "./dshSessionBridge.js";
+
 import {
   CodexThreadCreationBlockedError,
   createCodexThreadWithReservation
 } from "./codexThreadCreationReservations.js";
-import { resolveDshBaseUrl } from "./dshDiscovery.js";
+
 import { normalizeCodexThreadTitle } from "./shared/codexThreadTitle.js";
 import { proactiveCommunicationPolicyLines } from "./shared/agentCommunicationPolicy.js";
 import type { CodexReasoningEffort } from "./shared/gatewayConfigModel.js";
-import { readAntigravitySession } from "./antigravitySessionStore.js";
+
 import {
   isAgentThreadCapableAdapter,
   type PlanAssistantAgentType
 } from "./shared/agentAdapterCapabilities.js";
-import {
-  listWorkbuddyThreads,
-  readWorkbuddyThread,
-  sendWorkbuddyThreadMessage
-} from "./workbuddyThreads.js";
+
 import { normalizePathForComparison } from "./shared/pathPolicy.js";
-import { decodeGrokBotSessionId } from "./agentAdapters/grokBotClient.js";
 import { parseAgentAdapterType, type AgentAdapterType } from "./agentAdapters/types.js";
 import { agentAdapterSupportsReceiptRecovery } from "./shared/agentAdapterCapabilities.js";
 import {
   agentIdentityForMessageSource,
   normalizeRabiDeliveryBlock,
-  normalizeRabiMessageSource,
   renderRabiDelivery,
+  renderRabiDeliveryContent,
   type RabiMessageSource
 } from "./shared/rabiMessage.js";
 import {
@@ -76,9 +53,26 @@ import {
   type AgentResponsePolicy
 } from "./agentRequests/store.js";
 
+const createCodexThread=agentNativeFunction<typeof import("./codexRuntime.js")["createCodexThread"]>("codex","createCodexThread");
+const listCodexThreads=agentNativeFunction<typeof import("./codexRuntime.js")["listCodexThreads"]>("codex","listCodexThreads");
+const readCodexThread=agentNativeFunction<typeof import("./codexRuntime.js")["readCodexThread"]>("codex","readCodexThread");
+const renameCodexThread=agentNativeFunction<typeof import("./codexRuntime.js")["renameCodexThread"]>("codex","renameCodexThread");
+const sendCodexThreadMessage=agentNativeFunction<typeof import("./codexRuntime.js")["sendCodexThreadMessage"]>("codex","sendCodexThreadMessage");
+const codexDesktopDeliveryReceiptConfirmed=agentNativeFunction<typeof import("./codexDesktopBridge.js")["codexDesktopDeliveryReceiptConfirmed"]>("codex","codexDesktopDeliveryReceiptConfirmed");
+const openCodexDesktopThread=agentNativeFunction<typeof import("./codexDesktopBridge.js")["openCodexDesktopThread"]>("codex","openCodexDesktopThread");
+const listDshSessions=agentNativeFunction<typeof import("./dshSessionBridge.js")["listDshSessions"]>("dsh","listDshSessions");
+const readDshPrimaryBindingAsync=agentNativeFunction<typeof import("./dshSessionBridge.js")["readDshPrimaryBindingAsync"]>("dsh","readDshPrimaryBindingAsync");
+const openDshSession=agentNativeFunction<typeof import("./dshSessionBridge.js")["openDshSession"]>("dsh","openDshSession");
+const readDshSession=agentNativeFunction<typeof import("./dshSessionBridge.js")["readDshSession"]>("dsh","readDshSession");
+const renameDshSession=agentNativeFunction<typeof import("./dshSessionBridge.js")["renameDshSession"]>("dsh","renameDshSession");
+const resolveDshSession=agentNativeFunction<typeof import("./dshSessionBridge.js")["resolveDshSession"]>("dsh","resolveDshSession");
+const sendDshSessionMessage=agentNativeFunction<typeof import("./dshSessionBridge.js")["sendDshSessionMessage"]>("dsh","sendDshSessionMessage");
+const readAntigravitySession=agentNativeFunction<typeof import("./antigravitySessionStore.js")["readAntigravitySession"]>("antigravity","readAntigravitySession");
+const listWorkbuddyThreads=agentNativeFunction<typeof import("./workbuddyThreads.js")["listWorkbuddyThreads"]>("workbuddy","listWorkbuddyThreads");
+const readWorkbuddyThread=agentNativeFunction<typeof import("./workbuddyThreads.js")["readWorkbuddyThread"]>("workbuddy","readWorkbuddyThread");
+const sendWorkbuddyThreadMessage=agentNativeFunction<typeof import("./workbuddyThreads.js")["sendWorkbuddyThreadMessage"]>("workbuddy","sendWorkbuddyThreadMessage");
+
 const maxThreadIdLength = 512;
-/** Public opaque session contract shared with endpoint send, longer than a Codex/DSH id. */
-const maxGrokBotSourceIdLength = 4096;
 const maxQueryLength = 240;
 const maxTitleInputLength = 200_000;
 const maxPromptLength = 200_000;
@@ -134,7 +128,7 @@ export type AgentThreadRequest = {
 export type AgentThreadSummary = {
   id: string;
   title: string;
-  updatedAt: string;
+  updatedAt?: string;
   cwd?: string;
   archived?: boolean;
 };
@@ -179,17 +173,20 @@ export type AgentThreadDriver = {
   }>;
 };
 
-/** Manager-approved identity from the authenticated HTTP request, never its JSON body. */
+/** Connection/request attribution captured at ingress; this does not prove a source task owner. */
 export type AgentThreadRemoteSource = {
   nodeId: string;
-  agentId: string;
-  provider: AgentAdapterType;
-  sessionId: string;
-  sessionName: string;
+  agentId?: string;
+  provider?: AgentAdapterType;
+  sessionId?: string;
+  sessionName?: string;
   workspace?: string;
+  authorizationIncarnation?: string;
 };
 
 export type AgentThreadRequestOptions = {
+  invokeAgentOperation?: AgentManagerOperationInvoker;
+  getProviders?: () => readonly import("@rabiroute/plugin-sdk").AgentAdapterProvider[];
   /** Trusted SDK metadata creation context; never sourced from the request body. */
   creationIntent?: { key: string; hash: string };
   creationRootDir?: string;
@@ -199,12 +196,8 @@ export type AgentThreadRequestOptions = {
   /** Original HTTP admission fence, captured by the Manager route, never by request JSON. */
   requestAuthority?: () => void;
   remoteSource?: AgentThreadRemoteSource;
-  /**
-   * Manager-owned constructor for a remote source's durable endpoint. It carries the
-   * original authorization lease, so a cross-instance reply is routed through the same
-   * approval and revocation fence instead of one invented here.
-   */
-  remoteEndpoint?: (nodeId: string, agentId: string, sessionId: string, provider?: string) => AgentRequestEndpoint;
+  /** Build an already-addressed return endpoint from ingress metadata, without source qualification. */
+  remoteEndpoint?: (nodeId: string, agentId: string, sessionId: string, provider?: string, authorizationIncarnation?: string) => AgentRequestEndpoint;
   onChatHistoryDelivery?: (request: AgentThreadRequest, result: AgentThreadRequestResult) => Promise<void>;
   allowedWorkspaces: string[];
   defaultWorkspace?: string;
@@ -216,10 +209,7 @@ export type AgentThreadRequestOptions = {
   sessionIndexPath?: string;
   agentRequests?: AgentRequestStore;
   confirmCodexDelivery?: (threadId: string, deliveryId: string) => boolean | Promise<boolean>;
-  /**
-   * Reads the Grok Bot service owner for a canonical `grokBot:` source id.
-   * Codex and DSH sources never use it. Absent or null fails closed.
-   */
+  /** Legacy caller metadata hook; delivery never invokes it to qualify a source. */
   readGrokBotSource?: (sessionId: string) => Promise<{ sessionId: string; sessionName: string } | null>;
   onMessageProcessingHandoff?: (event: {
     requirementId: string;
@@ -266,8 +256,8 @@ export function normalizeAgentThreadInitialDeliveryRequest(request: AgentThreadR
   if (request.imagePaths != null && !Array.isArray(request.imagePaths)) throw new Error("imagePaths must be an array.");
   if (request.imagePaths?.length) throw new Error("Endpoint delivery does not transfer local attachment paths.");
   return { ...request, title, prompt, sandbox: request.sandbox === undefined ? undefined : sandbox, model, reasoningEffort, responsePolicy,
-    deliveryId: callerAgentDeliveryId(request.deliveryId), sourceThreadId: completeAgentSessionId(request.sourceThreadId, "sourceThreadId"),
-    sourceAgentType: normalizeAgentThreadSourceType(request.sourceAgentType, true), messageSource: normalizeRabiMessageSource(request.messageSource),
+    deliveryId: callerAgentDeliveryId(request.deliveryId), sourceThreadId: request.sourceThreadId,
+    sourceAgentType: normalizeAgentThreadSourceType(request.sourceAgentType), messageSource: request.messageSource,
     contextBlocks: deliveryBlocks(request.contextBlocks, "contextBlocks"), controlBlocks: deliveryBlocks(request.controlBlocks, "controlBlocks"),
     inReplyToRequestId: optionalText(request.inReplyToRequestId, "inReplyToRequestId", 100) || undefined,
     responseInstruction: optionalText(request.responseInstruction, "responseInstruction", 4_000) || undefined,
@@ -339,16 +329,14 @@ function agentThreadRequestFailureDataWithoutCaller(
   };
 }
 
-function dshBaseUrlFor(options?: AgentThreadRequestOptions): string {
-  return options?.dshBaseUrl?.trim()
-    || readDshPrimaryBinding()?.baseUrl
-    || resolveDshBaseUrl();
+async function dshBaseUrlFor(options?: AgentThreadRequestOptions): Promise<string> {
+  return options?.dshBaseUrl?.trim() || (await readDshPrimaryBindingAsync())?.baseUrl || "";
 }
 
 const defaultDriver: AgentThreadDriver = {
   list: listCodexThreads,
   read: async (threadId) => isDshSessionId(threadId)
-    ? readDshSession(threadId, dshBaseUrlFor())
+    ? readDshSession(threadId, await dshBaseUrlFor())
     : readCodexThread(threadId),
   create: createCodexThread,
   rename: renameCodexThread,
@@ -357,7 +345,7 @@ const defaultDriver: AgentThreadDriver = {
         sessionId: params.threadId,
         prompt: params.prompt,
         cwd: params.cwd,
-        baseUrl: dshBaseUrlFor(),
+        baseUrl: await dshBaseUrlFor(),
         imagePaths: params.imagePaths
       })
     : sendCodexThreadMessage(params)
@@ -401,12 +389,16 @@ function deliveryBlocks(value: unknown, name: "contextBlocks" | "controlBlocks")
 
 function standaloneWorkspacePolicyPrompt(
   rawPrompt: string,
-  messageSource: RabiMessageSource,
+  messageSource: RabiMessageSource | undefined,
   cwd: string,
   contextBlocks: readonly string[] = [],
   controlBlocks: readonly string[] = [],
   deliveryId?: string
 ): string {
+  if (!messageSource) return [
+    ...(deliveryId ? ['[投递编号]\ndeliveryId: ' + deliveryId] : []),
+    renderRabiDeliveryContent({ messageContent: rawPrompt, contextBlocks, controlBlocks })
+  ].join('\n\n');
   return renderRabiDelivery({
     messageSource,
     messageContent: rawPrompt,
@@ -459,33 +451,9 @@ function normalizeThreadId(value: unknown): string {
   return threadId;
 }
 
-function sourceThreadIdText(value: unknown): string {
-  if (value == null || value === "") return "";
-  const text = typeof value === "string" ? value.trim() : "";
-  const limit = text.startsWith("grokBot:") ? maxGrokBotSourceIdLength : maxThreadIdLength;
-  return requiredText(value, "sourceThreadId", limit);
-}
-
-function isCanonicalGrokBotSourceId(value: string): boolean {
-  if (!value.startsWith("grokBot:")) return false;
-  try {
-    decodeGrokBotSessionId(value);
-    return true;
-  } catch {
-    return false;
-  }
-}
 
 type ThreadCapableAgentAdapter = PlanAssistantAgentType;
 
-/**
- * Identify the adapter that owns a thread id, when the id alone is conclusive.
- *
- * Only DSH's `session-` prefix is self-identifying. A bare UUID is deliberately
- * *not* mapped to Codex here: Antigravity conversation ids use the same form, so
- * treating the shape as evidence of Codex would silently misattribute every
- * Antigravity session. Callers that need the owner must supply `agentAdapter`.
- */
 function inferredThreadAdapter(threadId: string): ThreadCapableAgentAdapter | undefined {
   return isDshSessionId(threadId) ? "dsh" : undefined;
 }
@@ -542,11 +510,11 @@ async function readAgentThreadForAdapter(
 ): Promise<{ value: unknown; summary: AgentThreadSummary | null }> {
   if (driver !== defaultDriver) return readAgentThread(threadId, driver);
   const value = adapter === "dsh"
-    ? await readDshSession(threadId, dshBaseUrlFor(options))
+    ? await readDshSession(threadId, await dshBaseUrlFor(options))
     : adapter === "antigravity"
-      ? readAntigravitySession(threadId)
+      ? await readAntigravitySession(threadId)
       : adapter === "workbuddy"
-        ? readWorkbuddyThread(threadId)
+        ? await readWorkbuddyThread(threadId)
         : await readCodexThread(threadId);
   return { value, summary: threadSummary(value) };
 }
@@ -563,7 +531,7 @@ async function listThreadsForAdapter(
 ): Promise<AgentThreadSummary[]> {
   if (adapter === "dsh" && driver === defaultDriver) {
     return listDshSessions({
-      baseUrl: dshBaseUrlFor(options),
+      baseUrl: await dshBaseUrlFor(options),
       query,
       limit,
       offset,
@@ -599,6 +567,11 @@ export function resolveAgentThreadWorkspaceForTest(
   return requested;
 }
 
+function threadUpdatedAtSortKey(value: string | undefined): number {
+  const parsed = Date.parse(value ?? "");
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
 function parseThreadIndex(content: string): AgentThreadSummary[] {
   const latestById = new Map<string, AgentThreadSummary>();
   for (const line of content.split(/\r?\n/)) {
@@ -616,14 +589,14 @@ function parseThreadIndex(content: string): AgentThreadSummary[] {
         updatedAt: value.updated_at
       };
       const current = latestById.get(candidate.id);
-      if (!current || Date.parse(candidate.updatedAt) > Date.parse(current.updatedAt)) {
+      if (!current || threadUpdatedAtSortKey(candidate.updatedAt) > threadUpdatedAtSortKey(current.updatedAt)) {
         latestById.set(candidate.id, candidate);
       }
     } catch {
       // Ignore incomplete or malformed JSONL records.
     }
   }
-  return [...latestById.values()].sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt));
+  return [...latestById.values()].sort((left, right) => threadUpdatedAtSortKey(right.updatedAt) - threadUpdatedAtSortKey(left.updatedAt));
 }
 
 function readThreadIndex(indexPath: string): AgentThreadSummary[] {
@@ -652,9 +625,13 @@ function listAgentThreads(query: string, limit: number, indexPath: string): Agen
 }
 
 export async function readAgentEndpointSummary(provider: AgentAdapterType, sessionId: string, options: AgentThreadRequestOptions): Promise<AgentThreadSummary> {
+return withAgentManagerInvocation(options, async () => {
+
   const thread = await readAgentThreadForAdapter(threadAgentAdapter({ agentAdapter: provider }), sessionId, options, defaultDriver);
   if (!thread.summary) throw new Error("Exact endpoint owner metadata is unavailable.");
   return thread.summary;
+
+});
 }
 
 function threadSummary(value: unknown): AgentThreadSummary | null {
@@ -664,7 +641,7 @@ function threadSummary(value: unknown): AgentThreadSummary | null {
   return {
     id: item.id,
     title: item.title,
-    updatedAt: typeof item.updatedAt === "string" ? item.updatedAt : new Date(0).toISOString(),
+    ...(typeof item.updatedAt === "string" ? { updatedAt: item.updatedAt } : {}),
     cwd: typeof item.cwd === "string" ? item.cwd : undefined,
     archived: item.archived === true
   };
@@ -679,211 +656,60 @@ async function readAgentThread(
   return { value, summary };
 }
 
-async function requireGrokBotSourceProof(
-  sessionId: string,
-  options: AgentThreadRequestOptions
-): Promise<{ sessionId: string; sessionName: string }> {
-  const proof = await options.readGrokBotSource?.(sessionId);
-  if (!proof || proof.sessionId !== sessionId || !proof.sessionName.trim()) {
-    throw new Error(`无法核对来源任务：${sessionId}`);
+/** Source text is descriptive. Missing SDK display fields never qualify an invocation. */
+function describeAgentThreadMessageSource(value: unknown, remote?: AgentThreadRemoteSource): RabiMessageSource | undefined {
+  const raw = value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+  const text = (field: unknown, max = 500) => typeof field === "string" ? field.replace(/[\r\n\u2028\u2029]/g, " ").trim().slice(0, max) || undefined : undefined;
+  const identity = (input: Record<string, unknown>, context?: AgentThreadRemoteSource) => {
+    const provider = (typeof input.agentAdapter === "string" ? parseAgentAdapterType(input.agentAdapter) : undefined) ?? context?.provider;
+    const sessionId = text(input.sessionId, 4096) ?? context?.sessionId;
+    if (!provider || !sessionId) return undefined;
+    const agentType = text(input.agentType, 80), workspace = text(input.workspace, 2000) ?? context?.workspace;
+    return { agentAdapter: provider, sessionId, sessionName: text(input.sessionName) ?? context?.sessionName ?? sessionId,
+      ...(agentType ? { agentType } : {}), ...(workspace ? { workspace } : {}) };
+  };
+  if (raw.type === "agent" || raw.type === "agent_hook" || raw.type === undefined) {
+    const source = identity(raw, remote);
+    return source ? { type: raw.type === "agent_hook" ? "agent_hook" : "agent", ...source } : undefined;
   }
-  return { sessionId: proof.sessionId, sessionName: proof.sessionName.trim() };
+  if (raw.type === "plan") {
+    const planId = text(raw.planId, 300); if (!planId) return undefined;
+    const sourceAgent = raw.sourceAgent && typeof raw.sourceAgent === "object" ? identity(raw.sourceAgent as Record<string, unknown>, remote) : undefined;
+    return { type: "plan", planId, planName: text(raw.planName) ?? planId, ...(sourceAgent ? { sourceAgent } : {}) };
+  }
+  if (raw.type === "system") {
+    const eventType = text(raw.eventType), eventId = text(raw.eventId); if (!eventType || !eventId) return undefined;
+    return { type: "system", eventType, eventId, eventName: text(raw.eventName) ?? eventType,
+      actorType: text(raw.actorType), actorName: text(raw.actorName), actorId: text(raw.actorId), routeName: text(raw.routeName), routeId: text(raw.routeId) };
+  }
+  if (raw.type === "message_adapter") {
+    const messageAdapter = text(raw.messageAdapter,100), conversationType = text(raw.conversationType,100), conversationId = text(raw.conversationId,300), messageId = text(raw.messageId,300);
+    const senderName = text(raw.senderName), senderId = text(raw.senderId,300);
+    if (!messageAdapter || !conversationType || !conversationId || !messageId || !senderName && !senderId) return undefined;
+    return { type: "message_adapter", messageAdapter, conversationType, conversationId, messageId, senderName, senderId,
+      conversationName: text(raw.conversationName), messageGroupId: text(raw.messageGroupId,300), routeName: text(raw.routeName), routeId: text(raw.routeId) };
+  }
+  return undefined;
 }
 
-/**
- * Grok Bot session ids are a source identity, not Codex task ids or DSH `session-` ids.
- * A message-adapter source is checked for existence and then kept as a message source.
- * An agent or plan source replaces the submitted name with the verified owner name.
- */
-async function resolveGrokBotThreadSource(
-  request: AgentThreadRequest,
-  options: AgentThreadRequestOptions,
-  messageSource: RabiMessageSource,
-  rawSourceThreadId: string
-): Promise<{
-  messageSource: RabiMessageSource;
-  source: {
-    agentAdapter: AgentAdapterType;
-    agentType: AgentThreadSourceType;
-    agentLabel: string;
-    threadId: string;
-    threadName: string;
-    workspace?: string;
-    nodeId?: string;
-    agentId?: string;
-    endpoint?: AgentRequestEndpoint;
-  };
-} | null> {
-  if (!isCanonicalGrokBotSourceId(rawSourceThreadId)) throw new Error("Invalid threadId.");
-  if (messageSource.type === "message_adapter") {
-    if (messageSource.conversationId !== rawSourceThreadId) {
-      throw new Error("messageSource.conversationId must match sourceThreadId for a Grok Bot message source.");
-    }
-    await requireGrokBotSourceProof(rawSourceThreadId, options);
-    return null;
-  }
-  const sourceIdentity = agentIdentityForMessageSource(messageSource);
-  if (!sourceIdentity) {
-    throw new Error("Agent-to-Agent delivery requires messageSource.type=agent/agent_hook or a plan sourceAgent.");
-  }
-  if (sourceIdentity.sessionId !== rawSourceThreadId) {
-    throw new Error("messageSource.sessionId must match sourceThreadId for Agent-to-Agent delivery.");
-  }
-  if (sourceIdentity.agentAdapter !== "grokBot") {
-    throw new Error("messageSource.agentAdapter must be grokBot when sourceThreadId is a Grok Bot session.");
-  }
-  const proof = await requireGrokBotSourceProof(rawSourceThreadId, options);
-  const agentType = normalizeAgentThreadSourceType(requiredText(request.sourceAgentType, "sourceAgentType", 40));
-  const source = {
-    agentAdapter: "grokBot" as const,
-    agentType,
-    agentLabel: agentThreadSourceLabels[agentType],
-    threadId: rawSourceThreadId,
-    threadName: proof.sessionName
-  };
-  const resolvedAgent = {
-    agentAdapter: "grokBot" as const,
-    agentType: source.agentLabel,
-    sessionId: rawSourceThreadId,
-    sessionName: proof.sessionName
-  };
-  const resolvedMessageSource: RabiMessageSource = (messageSource.type === "agent" || messageSource.type === "agent_hook")
-    ? { type: messageSource.type === "agent_hook" ? "agent_hook" : "agent", ...resolvedAgent }
-    : messageSource.type === "plan"
-      ? { ...messageSource, sourceAgent: resolvedAgent }
-      : (() => { throw new Error("Agent-to-Agent delivery requires messageSource.type=agent/agent_hook or a plan sourceAgent."); })();
-  return { messageSource: resolvedMessageSource, source };
-}
-
-async function resolveAgentThreadSendSource(
-  request: AgentThreadRequest,
-  options: AgentThreadRequestOptions,
-  driver: AgentThreadDriver,
-  messageSource: RabiMessageSource
-): Promise<{
-  messageSource: RabiMessageSource;
-  source: {
-    agentAdapter: AgentAdapterType;
-    agentType: AgentThreadSourceType;
-    agentLabel: string;
-    threadId: string;
-    threadName: string;
-    workspace?: string;
-    nodeId?: string;
-    agentId?: string;
-    endpoint?: AgentRequestEndpoint;
-  };
-} | null> {
-  const remote = options.remoteSource;
-  if (remote) {
-    const identity = agentIdentityForMessageSource(messageSource);
-    if (!identity || request.sourceThreadId !== remote.sessionId
-      || identity.sessionId !== remote.sessionId || identity.agentAdapter !== remote.provider) {
-      throw new Error("messageSource.sessionId and adapter must exactly match the trusted remote sourceThreadId.");
-    }
-    const nodeId = requiredText(remote.nodeId, "remoteSource.nodeId", 300);
-    const agentId = requiredText(remote.agentId, "remoteSource.agentId", 300);
-    const sessionId = requiredText(remote.sessionId, "remoteSource.sessionId", 300);
-    const sessionName = requiredText(remote.sessionName, "remoteSource.sessionName", maxTitleInputLength);
-    if (remote.provider !== "codex" && remote.provider !== "dsh") {
-      throw new Error("Invalid trusted remote source provider.");
-    }
-    // A formal reply needs a durable endpoint that still carries the original authorization
-    // lease. Without one, or once it is revoked, the reply stays refused instead of unpointed.
-    const needsReplyRoute = request.responsePolicy !== "none" || Boolean(request.inReplyToRequestId);
-    const endpoint = needsReplyRoute ? options.remoteEndpoint?.(nodeId, agentId, sessionId, remote.provider) : undefined;
-    if (needsReplyRoute && !endpoint) {
-      throw new Error("Trusted remote source reply requires an approved, unrevoked remote endpoint.");
-    }
-    const agentType = normalizeAgentThreadSourceType(requiredText(request.sourceAgentType, "sourceAgentType", 40));
-    const threadId = `instance-${createHash("sha256").update(JSON.stringify([nodeId, agentId, sessionId])).digest("hex")}`;
-    const resolvedAgent = {
-      agentAdapter: remote.provider,
-      agentType: agentThreadSourceLabels[agentType],
-      sessionId: threadId,
-      sessionName,
-      ...(remote.workspace ? { workspace: remote.workspace } : {})
-    };
-    return {
-      messageSource: messageSource.type === "plan"
-        ? { ...messageSource, sourceAgent: resolvedAgent }
-        : { type: messageSource.type === "agent_hook" ? "agent_hook" : "agent", ...resolvedAgent },
-      source: {
-        agentAdapter: remote.provider,
-        agentType,
-        agentLabel: agentThreadSourceLabels[agentType],
-        threadId,
-        threadName: sessionName,
-        ...(remote.workspace ? { workspace: remote.workspace } : {}),
-        ...(endpoint ? { endpoint } : {}),
-        nodeId,
-        agentId
-      }
-    };
-  }
-  const rawSourceThreadId = sourceThreadIdText(request.sourceThreadId);
-  if (!rawSourceThreadId) {
-    if (request.sourceAgentType != null) {
-      throw new Error("sourceAgentType requires sourceThreadId.");
-    }
-    if ((messageSource.type === "agent" || messageSource.type === "agent_hook")) {
-      throw new Error("Agent message source requires sourceThreadId verification.");
-    }
-    return null;
-  }
-
-  const declaredIdentity = agentIdentityForMessageSource(messageSource);
-  if (rawSourceThreadId.startsWith("grokBot:") || declaredIdentity?.agentAdapter === "grokBot") {
-    return resolveGrokBotThreadSource(request, options, messageSource, rawSourceThreadId);
-  }
-
-  const sourceThreadId = normalizeThreadId(rawSourceThreadId);
-  const sourceIdentity = agentIdentityForMessageSource(messageSource);
-  if (!sourceIdentity) {
-    throw new Error("Agent-to-Agent delivery requires messageSource.type=agent/agent_hook or a plan sourceAgent.");
-  }
-  if (sourceIdentity.sessionId !== sourceThreadId) {
-    throw new Error("messageSource.sessionId must match sourceThreadId for Agent-to-Agent delivery.");
-  }
-  const sourceAdapter = threadAgentAdapter({
-    agentAdapter: sourceIdentity.agentAdapter,
-    threadId: sourceThreadId
-  });
-  const agentType = normalizeAgentThreadSourceType(requiredText(request.sourceAgentType, "sourceAgentType", 40));
-  let sourceThread: AgentThreadSummary | null = null;
-  try {
-    sourceThread = (await readAgentThreadForAdapter(sourceAdapter, sourceThreadId, options, driver)).summary;
-  } catch (error) {
-    if (!missingThreadError(error)) throw error;
-  }
-  if (!sourceThread || sourceThread.id !== sourceThreadId || sourceThread.archived) {
-    throw new Error(`无法核对来源任务：${sourceThreadId}`);
-  }
-
-  const source = {
-    agentAdapter: sourceAdapter,
-    agentType,
-    agentLabel: agentThreadSourceLabels[agentType],
-    threadId: sourceThreadId,
-    threadName: sourceThread.title,
-    ...(sourceThread.cwd ? { workspace: sourceThread.cwd } : {})
-  };
-  const resolvedAgent = {
-    agentAdapter: sourceAdapter,
-    agentType: source.agentLabel,
-    sessionId: sourceThreadId,
-    sessionName: sourceThread.title,
-    ...(sourceThread.cwd ? { workspace: sourceThread.cwd } : {})
-  };
-  let resolvedMessageSource: RabiMessageSource;
-  if ((messageSource.type === "agent" || messageSource.type === "agent_hook")) {
-    resolvedMessageSource = { type: messageSource.type === "agent_hook" ? "agent_hook" : "agent", ...resolvedAgent };
-  } else if (messageSource.type === "plan") {
-    resolvedMessageSource = { ...messageSource, sourceAgent: resolvedAgent };
-  } else {
-    throw new Error("Agent-to-Agent delivery requires messageSource.type=agent/agent_hook or a plan sourceAgent.");
-  }
-  return { messageSource: resolvedMessageSource, source };
+/** Record declared attribution and an existing return route without reading the source owner. */
+function agentThreadSendAttribution(request: AgentThreadRequest, options: AgentThreadRequestOptions,
+  messageSource: RabiMessageSource) {
+  const identity = agentIdentityForMessageSource(messageSource), remote = options.remoteSource;
+  const agentAdapter = identity?.agentAdapter ?? remote?.provider;
+  const threadId = request.sourceThreadId ?? identity?.sessionId ?? remote?.sessionId;
+  if (!agentAdapter || !threadId) return null;
+  const agentType = normalizeAgentThreadSourceType(request.sourceAgentType);
+  const agentLabel = Object.hasOwn(agentThreadSourceLabels, agentType) ? agentThreadSourceLabels[agentType] : agentType;
+  const threadName = identity?.sessionName ?? remote?.sessionName ?? threadId;
+  const workspace = identity?.workspace ?? remote?.workspace;
+  const endpoint = remote && options.remoteEndpoint
+    ? options.remoteEndpoint(remote.nodeId, remote.agentId ?? agentAdapter, threadId, agentAdapter, remote.authorizationIncarnation) : undefined;
+  return { messageSource: messageSource.type === "agent" && !messageSource.agentType
+    ? { ...messageSource, agentType: agentLabel } : messageSource,
+    source: { agentAdapter, agentType, agentLabel,
+    threadId, threadName, ...(workspace ? { workspace } : {}), ...(endpoint ? { endpoint } : {}),
+    ...(remote ? { nodeId: remote.nodeId, agentId: remote.agentId } : {}) } };
 }
 
 function missingThreadError(error: unknown): boolean {
@@ -904,7 +730,7 @@ async function createThread(
   const prompt = rawPrompt
     ? standaloneWorkspacePolicyPrompt(
         rawPrompt,
-        normalizeRabiMessageSource(request.messageSource),
+        describeAgentThreadMessageSource(request.messageSource, options.remoteSource),
         cwd,
         deliveryBlocks(request.contextBlocks, "contextBlocks"),
         deliveryBlocks(request.controlBlocks, "controlBlocks")
@@ -1055,7 +881,7 @@ export async function handleAgentThreadRequest(
   options: AgentThreadRequestOptions,
   driver: AgentThreadDriver = defaultDriver
 ): Promise<AgentThreadRequestResult> {
-  const result = await executeAgentThreadRequest(request, options, driver);
+  const result = await withAgentManagerInvocation(options, () => executeAgentThreadRequest(request, options, driver));
   if (request.action === "send" && (request.messageSource?.type === "agent" || request.messageSource?.type === "agent_hook")
     && (!options.remoteSource || Boolean(result.data.source && result.data.messageSource))
     && ["delivered", "delivered_tracking_failed", "delivery_unconfirmed"].includes(String(result.data.status))) {
@@ -1083,6 +909,12 @@ async function executeAgentThreadRequest(
   const action = request.action;
   if (options.endpointDelivery && (action === "send" || action === "reconcile_delivery")) {
     return executeEndpointAgentDelivery(request, options.endpointDelivery);
+  }
+  if (request.agentAdapter === "grokBot") {
+    if (!options.invokeAgentOperation) throw new Error("The Grok Bot plugin is unavailable.");
+    return options.invokeAgentOperation<AgentThreadRequestResult>("grokBot", "threads.request", { request }, {
+      assertCurrent: options.requestAuthority
+    });
   }
   if (action === "list") {
     const agentAdapter = threadAgentAdapter(request);
@@ -1175,7 +1007,7 @@ async function executeAgentThreadRequest(
       throw new Error("Opening a WorkBuddy task happens inside the WorkBuddy app; the bridge cannot open one.");
     }
     if (agentAdapter === "dsh") {
-      await (options.openDshSession ?? openDshSession)(threadId, dshBaseUrlFor(options));
+      await (options.openDshSession ?? openDshSession)(threadId, await dshBaseUrlFor(options));
     } else {
       await (options.openCodexThread ?? openCodexDesktopThread)(threadId);
     }
@@ -1206,7 +1038,7 @@ async function executeAgentThreadRequest(
         title,
         cwd: requestedWorkspace,
         createIfMissing: request.createIfMissing !== false,
-        baseUrl: dshBaseUrlFor(options),
+        baseUrl: await dshBaseUrlFor(options),
         agentPreset: options.dshAgentPreset
       });
       if (resolution.kind === "ambiguous") {
@@ -1323,12 +1155,12 @@ async function executeAgentThreadRequest(
     const initialPrompt = optionalText(request.prompt, "prompt", maxPromptLength);
     if (options.creationIntent && initialPrompt) throw new Error("Caller-bound metadata creation cannot execute an initial prompt.");
     const declaredMessageSource = initialPrompt
-      ? normalizeRabiMessageSource(request.messageSource)
+      ? describeAgentThreadMessageSource(request.messageSource, options.remoteSource)
       : undefined;
-    const verifiedSendSource = declaredMessageSource
-      ? await resolveAgentThreadSendSource(request, options, driver, declaredMessageSource)
+    const sendAttribution = declaredMessageSource
+      ? agentThreadSendAttribution(request, options, declaredMessageSource)
       : null;
-    const messageSource = verifiedSendSource?.messageSource ?? declaredMessageSource;
+    const messageSource = sendAttribution?.messageSource ?? declaredMessageSource;
     const deliveryRequest = messageSource ? { ...request, messageSource } : request;
     const rawTitle = requiredText(request.title, "title", maxTitleInputLength);
     const title = agentAdapter === "dsh" ? rawTitle : normalizeCodexThreadTitle(rawTitle);
@@ -1338,7 +1170,7 @@ async function executeAgentThreadRequest(
         title,
         cwd,
         createIfMissing: true,
-        baseUrl: dshBaseUrlFor(options),
+        baseUrl: await dshBaseUrlFor(options),
         agentPreset: options.dshAgentPreset
       });
       if (resolution.kind === "ambiguous") {
@@ -1381,7 +1213,7 @@ async function executeAgentThreadRequest(
               deliveryBlocks(request.controlBlocks, "controlBlocks")
             ),
             cwd,
-            baseUrl: dshBaseUrlFor(options),
+            baseUrl: await dshBaseUrlFor(options),
             imagePaths: imagePathsForDelivery(request.imagePaths)
           });
           initialTurnStatus = "started";
@@ -1508,7 +1340,7 @@ async function executeAgentThreadRequest(
           sessionId: threadId,
           title,
           cwd,
-          baseUrl: dshBaseUrlFor(options)
+          baseUrl: await dshBaseUrlFor(options)
         })
       : driver.rename
         ? await driver.rename({ threadId, title, cwd })
@@ -1523,8 +1355,8 @@ async function executeAgentThreadRequest(
     const rawPrompt = request.inReplyToRequestId && options.agentRequests
       ? optionalText(request.prompt, "prompt", maxPromptLength) || ""
       : requiredText(request.prompt, "prompt", maxPromptLength);
-    const messageSource = normalizeRabiMessageSource(request.messageSource);
-    const sendSource = await resolveAgentThreadSendSource(request, options, driver, messageSource);
+    const messageSource = describeAgentThreadMessageSource(request.messageSource, options.remoteSource);
+    const sendSource = messageSource ? agentThreadSendAttribution(request, options, messageSource) : null;
     let cwd = resolveAgentThreadWorkspaceForTest(request.cwd, options);
     const inReplyToRequestId = optionalText(request.inReplyToRequestId, "inReplyToRequestId", 100) || undefined;
     let requestedTitle = optionalText(request.title, "title", maxTitleInputLength);
@@ -1532,10 +1364,8 @@ async function executeAgentThreadRequest(
     if (sendSource && inReplyToRequestId && options.agentRequests) {
       const pending = options.agentRequests.get(inReplyToRequestId);
       if (pending?.status === "pending_delivery") {
-        // Identity binding is what protects the reply; the participants' directories are
-        // identity detail, so a cross-directory reply is not refused by default.
+        // The original request supplies the reply route; only its real receipt can confirm acceptance.
         const reason = !agentAdapterSupportsReceiptRecovery(pending.target.agentAdapter) ? "delivery_receipt_adapter_not_supported"
-          : pending.target.threadId !== sendSource.source.threadId ? "reply_sender_does_not_match_original_target"
           : pending.source.threadId !== threadId ? "reply_destination_does_not_match_original_source"
           : undefined;
         if (reason) throw new AgentReplyStateError(pending, reason);
@@ -1580,7 +1410,7 @@ async function executeAgentThreadRequest(
         title,
         cwd,
         createIfMissing: request.createIfMissing !== false,
-        baseUrl: dshBaseUrlFor(options),
+        baseUrl: await dshBaseUrlFor(options),
         agentPreset: options.dshAgentPreset
       });
       if (resolution.kind === "ambiguous") {
@@ -1660,7 +1490,7 @@ async function executeAgentThreadRequest(
         title: threadId,
         cwd,
         createIfMissing: false,
-        baseUrl: dshBaseUrlFor(options),
+        baseUrl: await dshBaseUrlFor(options),
         agentPreset: options.dshAgentPreset
       });
       if (resolution.kind === "missing") {
@@ -1674,11 +1504,6 @@ async function executeAgentThreadRequest(
         : resolution;
       threadId = resolution.thread.id;
     }
-    if (sendSource) {
-      if (sendSource.source.threadId === threadId) {
-        throw new Error("Agent-to-Agent handoff source and target task must be different.");
-      }
-    }
     const sandbox = normalizeSandbox(request.sandbox);
     const requestedModel = optionalText(request.model, "model", 120) || undefined;
     const defaults = targetAgentAdapter === "codex" ? options.codexDefaults : undefined;
@@ -1687,7 +1512,7 @@ async function executeAgentThreadRequest(
       ?? (requestedModel ? undefined : normalizeReasoningEffort(defaults?.reasoningEffort));
     const imagePaths = imagePathsForDelivery(request.imagePaths);
     const messageProcessing = request.messageProcessing;
-    const responsePolicy = sendSource ? normalizeAgentResponsePolicy(request.responsePolicy) : undefined;
+    const responsePolicy = sendSource ? normalizeAgentResponsePolicy(request.responsePolicy ?? "none") : undefined;
     if (messageProcessing && responsePolicy !== "required") {
       throw new Error("messageProcessing handoff requires responsePolicy=required.");
     }
@@ -1786,16 +1611,13 @@ async function executeAgentThreadRequest(
       planTitle?: string;
     } | undefined;
     if (messageProcessing != null) {
-      if (!sendSource || sendSource.source.agentType !== "message_processing") {
-        throw new Error("messageProcessing handoff requires a verified message_processing source task.");
-      }
       const requirementId = requiredText(messageProcessing.requirementId, "messageProcessing.requirementId", 300);
       if (messageProcessing.outcome !== "handoff") {
         throw new Error("messageProcessing.outcome must be handoff for Agent thread delivery.");
       }
       messageProcessingEvent = {
         requirementId,
-        sourceThreadId: sendSource.source.threadId,
+        sourceThreadId: sendSource?.source.threadId ?? request.sourceThreadId ?? "",
         targetThreadId: threadId,
         targetAgentType: normalizeAgentThreadSourceType(requiredText(messageProcessing.targetAgentType, "messageProcessing.targetAgentType", 40)),
         planId: optionalText(messageProcessing.planId, "messageProcessing.planId", 300) || undefined,
@@ -1819,7 +1641,7 @@ async function executeAgentThreadRequest(
             sessionId: threadId,
             prompt,
             cwd,
-            baseUrl: dshBaseUrlFor(options),
+            baseUrl: await dshBaseUrlFor(options),
             mode: request.dshDeliveryMode,
             imagePaths: delivery.imagePaths
           })

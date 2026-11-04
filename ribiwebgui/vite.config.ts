@@ -42,6 +42,15 @@ export default defineConfig(({ command }) => {
       rollupOptions: {
         preserveEntrySignatures: "exports-only",
         input: {
+          agentCodexPlugin: fileURLToPath(new URL("./src/bundles/agents/codex.ts", import.meta.url)),
+          agentCopilotCliPlugin: fileURLToPath(new URL("./src/bundles/agents/copilot-cli.ts", import.meta.url)),
+          agentMarvisPlugin: fileURLToPath(new URL("./src/bundles/agents/marvis.ts", import.meta.url)),
+          agentAstrbotPlugin: fileURLToPath(new URL("./src/bundles/agents/astrbot.ts", import.meta.url)),
+          agentDshPlugin: fileURLToPath(new URL("./src/bundles/agents/dsh.ts", import.meta.url)),
+          agentWorkbuddyPlugin: fileURLToPath(new URL("./src/bundles/agents/workbuddy.ts", import.meta.url)),
+          agentAntigravityPlugin: fileURLToPath(new URL("./src/bundles/agents/antigravity.ts", import.meta.url)),
+          agentDevicePlugin: fileURLToPath(new URL("./src/bundles/agents/device-agent.ts", import.meta.url)),
+          agentGrokBotPlugin: fileURLToPath(new URL("./src/bundles/agents/grok-bot.ts", import.meta.url)),
           app: fileURLToPath(new URL("./index.html", import.meta.url)),
           managerCorePlugin: fileURLToPath(new URL("./src/bundles/builtin/core.ts", import.meta.url)),
           managerRouteControlPlugin: fileURLToPath(new URL("./src/bundles/builtin/route-control.ts", import.meta.url)),

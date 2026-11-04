@@ -388,28 +388,30 @@ export function searchMessageHistoryIndexResult(directory: string, query: Recent
       : undefined;
     let conversations: QqConversation[] | undefined, nextConversationCursor: string | null = null;
     if (query.page?.conversations) {
+      const adapter=query.adapter||'napcat';
       const scopeArgs: (string|number)[] = [], scope = sourceClause(query,'s',scopeArgs);
       const visibility = currentRecordLimit === undefined ? '' : ' AND (s.current=0 OR d.position<?)';
       if(currentRecordLimit!==undefined)scopeArgs.push(currentRecordLimit);
-      const keys = db.prepare(`SELECT DISTINCT d.conversationKey FROM documents d JOIN sources s ON s.file=d.source WHERE ${scope}${visibility} AND d.adapter='napcat' AND d.conversationKey>? ORDER BY d.conversationKey LIMIT 101`).all(...scopeArgs,query.page.conversationCursor ?? '').map(row => String(row.conversationKey));
+      const keys = db.prepare(`SELECT DISTINCT d.conversationKey FROM documents d JOIN sources s ON s.file=d.source WHERE ${scope}${visibility} AND d.adapter=? AND d.conversationKey>? ORDER BY d.conversationKey LIMIT 101`).all(...scopeArgs,adapter,query.page.conversationCursor ?? '').map(row => String(row.conversationKey));
       nextConversationCursor = keys.length > 100 ? keys[99]! : null;
       conversations = [];
       const originalArgs: (string|number)[] = [], originalScope = sourceClause(query,'original_source',originalArgs);
       const originalVisibility = currentRecordLimit === undefined ? '' : ' AND (original_source.current=0 OR original.position<?)';
       if(currentRecordLimit!==undefined)originalArgs.push(currentRecordLimit);
-      const latest = db.prepare(`SELECT d.payload FROM documents d JOIN sources s ON s.file=d.source WHERE ${scope}${visibility} AND d.adapter='napcat' AND d.conversationKey=?
+      const latest = db.prepare(`SELECT d.payload FROM documents d JOIN sources s ON s.file=d.source WHERE ${scope}${visibility} AND d.adapter=? AND d.conversationKey=?
         AND d.rowid=(SELECT original.rowid FROM documents original JOIN sources original_source ON original_source.file=original.source
           WHERE original.recordKey=d.recordKey AND ${originalScope}${originalVisibility} ORDER BY original_source.ordinal,original.position,original.rowid LIMIT 1)
         ORDER BY d.sourceOrder DESC,d.position DESC,d.rowid DESC LIMIT 1`);
       for (const key of keys.slice(0,100)) {
-        const latestRow = latest.get(...scopeArgs,key,...originalArgs);
+        const latestRow = latest.get(...scopeArgs,adapter,key,...originalArgs);
         if(!latestRow)continue;
         const record = JSON.parse(String(latestRow.payload)) as MessageContextRecord;
-        if(!record || record.adapter!=='napcat' || record.conversationKey!==key || typeof record.text!=='string' || !Number.isFinite(record.time))throw new Error('MESSAGE_HISTORY_INDEX_INTEGRITY: invalid_conversation');
+        if(!record || record.adapter!==adapter || record.conversationKey!==key || typeof record.text!=='string' || !Number.isFinite(record.time))throw new Error('MESSAGE_HISTORY_INDEX_INTEGRITY: invalid_conversation');
         const match = key.match(/:(group|private):([1-9]\d*)$/);
         conversations.push({conversationKey:key,gatewayId:record.gatewayId,instanceId:record.instanceId,
+          ...(adapter==='napcat'?{}:{title:record.target||record.sender||key}),
           kind:match ? match[1] as 'group'|'private' : 'unknown',target:match?.[2] ?? record.target ?? key,time:record.time,
-          preview:qqPartsPreview(record.qqParts??qqMessageParts(record.text)).slice(0,120),previewFormat:'plain'});
+          preview:(adapter==='napcat'?qqPartsPreview(record.qqParts??qqMessageParts(record.text)):record.text).slice(0,120),previewFormat:'plain'});
       }
     }
     const finish = (entries: MessageContextRecord[]): MessageHistorySearchResult => ({ entries,

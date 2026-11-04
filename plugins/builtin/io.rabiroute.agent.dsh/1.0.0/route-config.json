@@ -1,0 +1,99 @@
+{
+  "endpointType": "agent:dsh",
+  "agentType": "dsh",
+  "capability": "agent.adapter.dsh@1",
+  "routeKeys": [
+    "dshSessionId",
+    "dshSessionName",
+    "dshCwd",
+    "dshBaseUrl",
+    "dshAgentPreset",
+    "dshModelProvider",
+    "dshModel",
+    "dshReasoningEffort"
+  ],
+  "runtimeFields": {
+    "dshSessionId": {
+      "paths": [
+        "dshSessionId"
+      ],
+      "default": "",
+      "trim": true
+    },
+    "dshSessionName": {
+      "paths": [
+        "dshSessionName"
+      ],
+      "default": "Rabi Agent",
+      "trim": true
+    },
+    "dshCwd": {
+      "paths": [
+        "dshCwd"
+      ],
+      "default": "",
+      "trim": true,
+      "format": "workspace"
+    },
+    "dshBaseUrl": {
+      "paths": [
+        "dshBaseUrl"
+      ],
+      "default": "http://127.0.0.1:3080",
+      "trim": true
+    },
+    "dshAgentPreset": {
+      "paths": [
+        "dshAgentPreset"
+      ],
+      "default": "",
+      "trim": true
+    },
+    "dshModelProvider": {
+      "paths": [
+        "dshModelProvider"
+      ],
+      "default": "",
+      "trim": true
+    },
+    "dshModel": {
+      "paths": [
+        "dshModel"
+      ],
+      "default": "",
+      "trim": true
+    },
+    "dshReasoningEffort": {
+      "paths": [
+        "dshReasoningEffort"
+      ],
+      "default": "",
+      "trim": true
+    }
+  },
+  "environmentFields": {
+    "DSH_SESSION_ID": "dshSessionId",
+    "DSH_SESSION_NAME": "dshSessionName",
+    "DSH_CWD": "dshCwd",
+    "DSH_BASE_URL": "dshBaseUrl",
+    "DSH_AGENT_PRESET": "dshAgentPreset",
+    "DSH_MODEL_PROVIDER": "dshModelProvider",
+    "DSH_MODEL": "dshModel",
+    "DSH_REASONING_EFFORT": "dshReasoningEffort"
+  },
+  "sharedBindingKeys": [
+    "dshSessionId",
+    "dshSessionName",
+    "dshCwd"
+  ],
+  "sharedWhenEnabledPaths": [
+    [
+      "messageProcessingAgents",
+      "dsh",
+      "enabled"
+    ],
+    [
+      "codexMemoryConsolidationAgentEnabled"
+    ]
+  ]
+}

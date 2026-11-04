@@ -10,6 +10,7 @@ import { fileURLToPath } from "node:url";
 import { WebSocketServer } from "ws";
 import { withoutSessionBindings } from "../lib/instance-agents.mjs";
 import { __test } from "../rabi-agent.mjs";
+import { DeliveryOwner } from "../lib/delivery-owner.mjs";
 
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 const entrypoint = fileURLToPath(new URL("../rabi-agent.mjs", import.meta.url));
@@ -41,6 +42,67 @@ function fixture() {
   runtime.connected = true;
   return { root, configPath, config, runtime };
 }
+
+test("handoff pause deadline rejects a hung observer and restores the original owner", { timeout: 15000 }, async () => {
+  const f = fixture(), c = candidate(f.root);
+  const oldEntry = path.join(f.root, "old.mjs"); fs.writeFileSync(oldEntry, "");
+  __test.writeCurrentRelease(f.configPath, oldEntry, "a".repeat(64)); __test.writeLauncher(f.configPath);
+  const pointer = fs.readFileSync(path.join(f.root, "current-release.json"));
+  let release, entered, requests = 0;
+  const waiting = new Promise(resolve => { release = resolve; });
+  const started = new Promise(resolve => { entered = resolve; });
+  const owner = new DeliveryOwner({ configPath: f.configPath, config: { ...f.config, managerGuid: "fixture-guid" },
+    client: () => ({ request: async method => {
+      requests++; assert.equal(method, "GET"); entered(); await waiting;
+      return { ok: false, statusCode: 503, body: "{}" };
+    } }), sendEvent: () => false });
+  owner.store.submit("original-observer", "agent-delivery", { nodeId: f.config.nodeId, agentType: "codex", sessionId: "fixture-source",
+    request: { action: "send", deliveryId: "original-observer", sourceThreadId: "fixture-source", threadId: "fixture-target", agentAdapter: "codex", prompt: "unchanged original" } },
+    { managerGuid: "fixture-guid" });
+  owner.store.update("original-observer", "unknown");
+  const running = owner.tick(); await started; f.runtime.deliveryOwner = owner;
+  const timeout = f.runtime.timeout;
+  f.runtime.timeout = (key, fallback) => key === "agent.update.drain" ? 40 : timeout(key, fallback);
+  const active = owner.active.get("original-observer"), record = owner.store.raw("original-observer");
+  try {
+    await assert.rejects(f.runtime.handoffRelease(c.filename, "b".repeat(64)), { code: "DELIVERY_OWNER_DRAIN_TIMEOUT" });
+    assert.equal(f.runtime.draining, false); assert.equal(f.runtime.stopped, false); assert.equal(f.runtime.connected, true);
+    assert.equal(owner.paused, false, "failed adoption restores the original scheduler");
+    assert.equal(owner.active.get("original-observer"), active);
+    assert.deepEqual(owner.store.raw("original-observer"), record);
+    assert.deepEqual(fs.readFileSync(path.join(f.root, "current-release.json")), pointer);
+    assert.deepEqual(c.events().map(event => event.type), ["prepared"]);
+    assert.equal(requests, 1, "failure must not replay the original request");
+  } finally {
+    release(); await running; await f.runtime.stop();
+    await fs.promises.rm(f.root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
+  }
+});
+
+test("handoff shares the original drain deadline across pause and task draining", { timeout: 15000 }, async t => {
+  const f = fixture(), c = candidate(f.root);
+  const oldEntry = path.join(f.root, "old.mjs"); fs.writeFileSync(oldEntry, "");
+  __test.writeCurrentRelease(f.configPath, oldEntry, "a".repeat(64)); __test.writeLauncher(f.configPath);
+  const pointer = fs.readFileSync(path.join(f.root, "current-release.json"));
+  let pauseDeadline, drainDeadline, resumed = 0;
+  const timeout = f.runtime.timeout;
+  f.runtime.timeout = (key, fallback) => key === "agent.update.drain" ? 40 : timeout(key, fallback);
+  t.mock.timers.enable({ apis: ["Date"], now: 1000 });
+  f.runtime.deliveryOwner = { pause: async ({ deadline }) => { pauseDeadline = deadline; t.mock.timers.tick(41); },
+    resume: () => { resumed++; }, close: async () => {} };
+  const drain = f.runtime.drainTasks.bind(f.runtime);
+  f.runtime.drainTasks = deadline => { drainDeadline = deadline; return drain(deadline); };
+  try {
+    await assert.rejects(f.runtime.handoffRelease(c.filename, "b".repeat(64)), /configured timeout/);
+    assert.equal(pauseDeadline, 1040); assert.equal(drainDeadline, pauseDeadline, "task draining must not start a new budget");
+    assert.equal(resumed, 1); assert.equal(f.runtime.draining, false); assert.equal(f.runtime.stopped, false);
+    assert.deepEqual(fs.readFileSync(path.join(f.root, "current-release.json")), pointer);
+    assert.deepEqual(c.events().map(event => event.type), ["prepared"]);
+  } finally {
+    t.mock.timers.reset(); await f.runtime.stop();
+    await fs.promises.rm(f.root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
+  }
+});
 function candidate(root, mode = "ready") {
   const filename = path.join(root, "candidate.mjs");
   const marker = path.join(root, "candidate-events.jsonl");
@@ -257,7 +319,8 @@ test("production candidate over ephemeral WebSocket sends updated only after poi
   const messages = [];
   child.on("message", message => messages.push(message));
   try {
-    await waitFor(() => messages.some(item => item.type === "candidatePrepared"));
+    // Cold production imports use the actual candidate preparation budget.
+    await waitFor(() => messages.some(item => item.type === "candidatePrepared"), f.runtime.timeout("agent.update.candidate", 30000));
     assert.equal(events.length, 0);
     // Simulate completed old-queue changes: candidate must reload this binding at ACTIVATE.
     const latest = { ...config, agents: [{ ...config.agents[0], sessionId: "latest-task" }] };
@@ -325,7 +388,7 @@ for (const failure of ["socket", "pointer", "digest", "launcher"]) {
     const messages = []; child.on("message", message => messages.push(message));
     let exit; child.once("exit", (code, signal) => { exit = { code, signal }; });
     try {
-      await waitFor(() => messages.some(item => item.type === "candidatePrepared"));
+      await waitFor(() => messages.some(item => item.type === "candidatePrepared"), f.runtime.timeout("agent.update.candidate", 30000));
       child.send({ type: "activateCandidate" });
       await waitFor(() => messages.some(item => item.type === "candidateConnected"));
       __test.writeCurrentRelease(f.configPath, f.releaseEntry, f.digest);

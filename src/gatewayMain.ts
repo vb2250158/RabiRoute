@@ -109,6 +109,7 @@ async function initializeGatewayMain(
         packageRoots: process.env.RABIROUTE_PLUGIN_PACKAGE_ROOTS?.split(path.delimiter).filter(Boolean) || [path.join(runtimeLayout.packageRoot, "dist/plugins/packages")],
         runtimeRoot: path.join(config.dataDir, ".rabi-runtime", "endpoint-plugins"),
         adapterTypes,
+        agentRegistry: agentAdapters.registry,
         ...(initialRouteDefinition ? { initialRouteDefinition, initialRouteRevision: bootRevision } : {}),
         ...options.endpointPlugins
       })

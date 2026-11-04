@@ -7,41 +7,46 @@ import {
   handleAgentAdapterCatalogApi,
   mountAgentAdapterCatalogPlugin,
   type AgentAdapterCatalogServiceOptions,
-  type AgentAdapterCatalogService
+  AgentAdapterCatalogService
 } from "./agentAdapterCatalog.js";
 
-test("async catalog preparation joins its worker owner when route registration is cancelled", async () => {
-  let stops = 0;
-  let entered!: () => void, reject!: (error: Error) => void;
-  const reached = new Promise<void>(resolve => { entered = resolve; });
-  const registration = new Promise<never>((_resolve, fail) => { reject = fail; });
-  const mounting = mountAgentAdapterCatalogPlugin({
-    rootDir: ".", getRuntimes: () => [],
-    adopt() {},
-    workerPool: { async stop() { stops++; }, async drain() {} } as unknown as AgentAdapterCatalogServiceOptions["workerPool"],
-    registerOperations: async () => { entered(); return registration; }
-  });
-  const failed = assert.rejects(mounting, /fixture registration cancelled/);
-  await reached;
-  assert.equal(stops, 0);
-  reject(new Error("fixture registration cancelled"));
-  await failed;
-  assert.equal(stops, 1);
+test("catalog stop cancels and joins only the queries it started, retaining shared provider availability", async () => {
+  let entered!: () => void;
+  const started = new Promise<void>(resolve => { entered = resolve; });
+  const provider = {
+    type: "fixture",
+    invoke: async (_operation: string, _payload: unknown, invocation?: { signal?: AbortSignal }) => {
+      if (!invocation?.signal) return { agents: {}, cwdOptions: [] };
+      entered();
+      await new Promise<void>(resolve => invocation.signal!.addEventListener("abort", () => resolve(), { once: true }));
+      invocation.signal.throwIfAborted();
+    }
+  } as unknown as import("./agentManagerProviders.js").AgentManagerProvider;
+  const service = new AgentAdapterCatalogService({ rootDir: ".", getRuntimes: () => [], getProviders: () => [provider] });
+  const query = service.scanOne("fixture");
+  const rejected = assert.rejects(query);
+  await started;
+  assert.equal(service.activeCount(), 1);
+  await service.stop("catalog retired");
+  await rejected;
+  assert.equal(service.activeCount(), 0);
+  assert.throws(() => service.scanOne("fixture"), /stopping/);
+  assert.deepEqual(await provider.invoke("scan", {}), { agents: {}, cwdOptions: [] });
 });
 
-test("an aborted catalog preparation retains failed cleanup in its original owner fence", async () => {
+test("catalog retirement keeps an unconfirmed API registration cleanup in its original owner fence", async () => {
   const scope = new EffectScope();
-  const cancelled = AbortSignal.abort(new Error("fixture signal already cancelled"));
-  let stops = 0;
-  const mounting = mountAgentAdapterCatalogPlugin({
+  let disposals = 0;
+  const mount = await mountAgentAdapterCatalogPlugin({
     rootDir: ".", getRuntimes: () => [], adopt: dispose => scope.adopt(dispose),
-    workerPool: { async stop() { stops++; throw new Error("fixture worker retirement failed"); }, async drain() {} } as unknown as AgentAdapterCatalogServiceOptions["workerPool"],
-    registerOperations: async () => { cancelled.throwIfAborted(); throw new Error("unreachable registration"); }
+    registerOperations: async () => ({
+      async dispose() { disposals++; throw new Error("fixture API retirement failed"); }
+    }) as unknown as import("./apiOperationContract.js").ApiOperationRegistration
   });
-  await assert.rejects(mounting, AggregateError);
+  await assert.rejects(mount.stop(), AggregateError);
   await assert.rejects(scope.dispose(), AggregateError);
   assert.equal(scope.retirementConfirmed(), false);
-  assert.equal(stops, 1);
+  assert.equal(disposals, 1);
 });
 
 type RecordedResponse = {

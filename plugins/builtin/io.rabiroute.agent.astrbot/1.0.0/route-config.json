@@ -1,0 +1,55 @@
+{
+  "endpointType": "agent:astrbot",
+  "agentType": "astrbot",
+  "capability": "agent.adapter.astrbot@1",
+  "routeKeys": [
+    "astrbotUrl",
+    "astrbotUsername",
+    "astrbotPassword",
+    "astrbotProjectId",
+    "astrbotSessionId"
+  ],
+  "runtimeFields": {
+    "astrbotUrl": {
+      "paths": [
+        "astrbotUrl"
+      ],
+      "default": "http://127.0.0.1:6185",
+      "trim": true
+    },
+    "astrbotUsername": {
+      "paths": [
+        "astrbotUsername"
+      ],
+      "default": "",
+      "trim": true
+    },
+    "astrbotPassword": {
+      "paths": [
+        "astrbotPassword"
+      ],
+      "default": ""
+    },
+    "astrbotProjectId": {
+      "paths": [
+        "astrbotProjectId"
+      ],
+      "default": "",
+      "trim": true
+    },
+    "astrbotSessionId": {
+      "paths": [
+        "astrbotSessionId"
+      ],
+      "default": "",
+      "trim": true
+    }
+  },
+  "environmentFields": {
+    "ASTRBOT_URL": "astrbotUrl",
+    "ASTRBOT_USERNAME": "astrbotUsername",
+    "ASTRBOT_PASSWORD": "astrbotPassword",
+    "ASTRBOT_PROJECT_ID": "astrbotProjectId",
+    "ASTRBOT_SESSION_ID": "astrbotSessionId"
+  }
+}

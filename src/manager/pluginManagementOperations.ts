@@ -24,7 +24,7 @@ export function createPluginManagementOperations(context: PluginCatalogApiContex
           code: { const: 0 }, data: { type: "object", required: ["applicationGenerationId", "managerInstanceId", "revision", "instances"], properties: {
             applicationGenerationId: { type: "string", minLength: 1 }, managerInstanceId: { type: "string", minLength: 1 },
             revision: { type: "string" }, instances: { type: "array", items: { type: "object", required: ["instanceId", "pluginId", "version", "enabled", "status"], properties: {
-              instanceId: { type: "string" }, pluginId: { type: "string" }, version: { type: "string" }, enabled: { type: "boolean" }, status: { type: "string" }
+              instanceId: { type: "string" }, pluginId: { type: "string" }, version: { type: "string" }, runningVersion: { type: "string" }, enabled: { type: "boolean" }, status: { type: "string" }
             } } }
           } }
         } } },

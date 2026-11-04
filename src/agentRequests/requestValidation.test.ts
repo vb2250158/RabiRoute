@@ -21,12 +21,14 @@ test("opaque source and target validation identifies the repair field without gu
   }
 });
 
-test("source role normalization shares the documented vocabulary and preserves the legacy optional default", () => {
+test("source roles are descriptive labels with an optional ordinary Agent default", () => {
   assert.equal(normalizeAgentThreadSourceType(undefined), "agent");
+  assert.equal(normalizeAgentThreadSourceType(undefined, true), "agent");
   assert.equal(normalizeAgentThreadSourceType(" plan_agent ", true), "plan_agent");
-  for (const value of [undefined, "", "system", "constructor", "toString", 42]) {
-    assert.throws(() => normalizeAgentThreadSourceType(value, true), { field: "sourceAgentType", stage: "source_verification" });
+  for (const value of ["system", "constructor", "toString", "custom_connected_agent"]) {
+    assert.equal(normalizeAgentThreadSourceType(value, true), value);
   }
+  for (const value of [undefined, "", 42]) assert.equal(normalizeAgentThreadSourceType(value, true), "agent");
   assert.equal(callerAgentDeliveryId(undefined), undefined);
   assert.equal(callerAgentDeliveryId("operation-1"), "operation-1");
   for (const value of [null, "", " padded", "bad\nkey", "x".repeat(101)]) assert.throws(() => callerAgentDeliveryId(value), { field: "deliveryId" });

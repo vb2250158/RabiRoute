@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { constants as bufferConstants } from "node:buffer";
 import { randomUUID, randomBytes, createHmac, createHash } from "node:crypto";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
@@ -45,13 +46,20 @@ async function startBuiltManager(t, readOnly = true, bridgeFixture, peerFixture,
   const stateRoot = path.join(root, "state"); await fs.mkdir(stateRoot);
   const generation = randomUUID();
   const controlToken = randomUUID();
-  // Build a private fixture profile from the published dependency graph. It includes
-  // readiness dependencies only, avoiding unrelated post-READY device activation.
+  // Select the exercised API/native owners from the real published graph. Core
+  // READY alone does not install API discovery or the independent Agent providers.
   const profile = JSON.parse(await fs.readFile(path.join(packageRoot, "dist/plugins/profiles/desktop.json"), "utf8"));
+  profile.readyRequires = [...new Set([...profile.readyRequires,
+    "manager.agent-communication@1", "endpoint.napcat@1",
+    "agent.adapter.codex@1", "agent.adapter.copilot-cli@1", "agent.adapter.marvis@1",
+    "agent.adapter.astrbot@1", "agent.adapter.dsh@1", "agent.adapter.workbuddy@1",
+    "agent.adapter.antigravity@1", "agent.adapter.device-agent@1", "agent.adapter.grok-bot@1"
+  ])];
   if (bridgeFixture) profile.readyRequires = [...new Set([...profile.readyRequires, "manager.remote-agent@1"])];
-  if (peerFixture) profile.readyRequires = [...new Set([...profile.readyRequires, "manager.rabilink-relay@1", "manager.remote-agent@1"])];
+  // The mobile APIs belong to the independent RabiLink message endpoint, not Relay or Device Agent.
+  if (peerFixture) profile.readyRequires = [...new Set([...profile.readyRequires, "manager.rabilink-relay@1", "manager.remote-agent@1", "endpoint.rabilink@1"])];
   if (contractFixture) profile.readyRequires = [...new Set([...profile.readyRequires, ...contractFixture.capabilities])];
-  if (nativeFixture) profile.readyRequires = [...new Set([...profile.readyRequires, "manager.gateway-runtime@1"])];
+  if (nativeFixture) profile.readyRequires = [...new Set([...profile.readyRequires, "manager.gateway-runtime@1", "endpoint.webhook@1"])];
   const providers = new Map();
   await Promise.all(profile.instances.filter(instance => instance.enabled !== false || contractFixture).map(async instance => {
     const manifest = JSON.parse(await fs.readFile(path.join(packageRoot, "dist/plugins/packages", instance.package, instance.version, "rabi.plugin.json"), "utf8"));
@@ -165,7 +173,7 @@ async function startBuiltManager(t, readOnly = true, bridgeFixture, peerFixture,
   const worker = spawn(process.execPath, ["--input-type=module", "--eval", `${prelude}const {startManager}=await import(${JSON.stringify(entry)}); await startManager();`], {
     cwd: stateRoot, windowsHide: true, stdio: nativeFixture || peerFixture ? ["ignore", "pipe", "pipe", "ipc"] : ["ignore", "pipe", "pipe"],
     env: { ...process.env,
-      ...((peerFixture || contractFixture || nativeFixture) ? { APPDATA: path.join(root, "appdata"), LOCALAPPDATA: path.join(root, "localappdata"), USERPROFILE: path.join(root, "userprofile") } : {}),
+      APPDATA: path.join(root, "appdata"), LOCALAPPDATA: path.join(root, "localappdata"), USERPROFILE: path.join(root, "userprofile"),
       GATEWAY_MANAGER_HOST: "127.0.0.1", GATEWAY_MANAGER_PORT: "0", GATEWAY_MANAGER_URL: "",
       RABIROUTE_APPLICATION_GENERATION_ID: generation, RABIROUTE_HOST_CONTROL_TOKEN: controlToken, RABIROUTE_HOSTED: "1",
       RABIROUTE_HOST_EXECUTABLE: "",
@@ -209,6 +217,18 @@ async function startBuiltManager(t, readOnly = true, bridgeFixture, peerFixture,
   });
   if (nativeFixture) worker.stdout.on("data", bytes => { output = (output + bytes.toString()).slice(-262_144); });
   const get = target => fetch(ready.baseUrl + target, { signal: AbortSignal.timeout(10_000) });
+  const fixtureMeta = await (await get("/meta")).json();
+  assert.equal(fixtureMeta.applicationGenerationId, generation);
+  assert.equal(fixtureMeta.managerInstanceId, ready.managerInstanceId);
+  assert.deepEqual(fixtureMeta.pluginGeneration?.readiness.missingCapabilities, [],
+    `Required fixture capabilities are not ready: ${JSON.stringify(profile.readyRequires)}`);
+  const ownerResponse = await get("/api/plugins/instances");
+  assert.equal(ownerResponse.status, 200);
+  const owners = (await ownerResponse.json()).data.instances;
+  for (const instance of profile.instances) {
+    const owner = owners.find(row => row.instanceId === instance.id);
+    assert.equal(owner?.status, "active", `Fixture owner ${instance.id} is not active: ${JSON.stringify(owner)}`);
+  }
   return { root, stateRoot, generation, ready, get, worker, output: () => output };
 }
 
@@ -340,7 +360,10 @@ async function waitForNativeRouteCatalog({ ready, get }) {
 
 function assertCorePublicContracts(catalog) {
   assert.equal(catalog.operations.filter(operation => operation.id.startsWith("manager.core-public.")).length, 9);
-  assert.equal(catalog.operations.filter(operation => operation.id.startsWith("manager.plugins.")).length, 5);
+  assert.deepEqual(catalog.operations.filter(operation => operation.id.startsWith("manager.plugins.")).map(operation => operation.id).sort(), [
+    "manager.plugins.catalog.read", "manager.plugins.instances.read", "manager.plugins.instances.update",
+    "manager.plugins.modules.list", "manager.plugins.modules.read", "manager.plugins.reconciliation.read", "manager.plugins.reconciliation.run"
+  ].sort());
   assert.equal(new Set(catalog.operations.map(operation => operation.id)).size, catalog.operations.length);
   assert.equal(catalog.operations.filter(operation => operation.id.startsWith("manager.webgui-static.")).length, 2);
   assert.equal(catalog.operations.find(operation => operation.id === "manager.webgui-static.distribution").contract.httpProxy.dispatch, "final-fallback");
@@ -565,15 +588,36 @@ test("compiled peer plugin publishes seven fixed HTTP proxies, native fallback a
   const profileOperations = help.operations.filter(value => value.id.startsWith("manager.rabilink.agent-devices.") || value.id === "manager.rabilink.persona-template.read");
   assert.equal(profileOperations.length, 6);
   assert.ok(!help.coverage.gaps.some(value => /agent-device-directory|agent-device-profile/.test(value.routeId)));
-  const deviceProfiles = await client.invokeOperation("manager.rabilink.agent-devices.list"); assert.equal(deviceProfiles.statusCode, 200); assert.deepEqual(JSON.parse(deviceProfiles.body), { code: 0, data: { devices: [], sourceDeviceId: "fixture-source" } });
+  const deviceProfiles = await client.invokeOperation("manager.rabilink.agent-devices.list"); assert.equal(deviceProfiles.statusCode, 200); assert.deepEqual(JSON.parse(deviceProfiles.body), { code: 0, data: { devices: [], sourceDeviceId: "fixture-source", coverage: { invalidDeviceIds: [] } } });
   const invalidTemplate = await client.invokeOperation("manager.rabilink.persona-template.read", { body: { roleId: "Fixture", skillIds: ["same", "same"] } }); assert.equal(invalidTemplate.statusCode, 400);
-  assert.equal(help.operations.filter(value => value.id.startsWith('manager.rabilink.mobile.') || value.id === 'manager.rabilink.devices.health-capabilities.read').length, 7);
+  assert.deepEqual(help.operations.filter(value => value.id.startsWith('manager.rabilink.mobile.') || value.id === 'manager.rabilink.devices.health-capabilities.read').map(value => value.id).sort(), [
+    'manager.rabilink.devices.health-capabilities.read', 'manager.rabilink.mobile.asr-settings.read',
+    'manager.rabilink.mobile.asr-settings.save', 'manager.rabilink.mobile.device-status.read',
+    'manager.rabilink.mobile.device-status.record', 'manager.rabilink.mobile.proof.record', 'manager.rabilink.mobile.proofs.list'
+  ].sort());
   assert.ok(!help.coverage.gaps.some(value => value.routeId === 'manager.rabilink.owners.mobile-state-owner'));
   const healthCapabilities = await client.invokeOperation('manager.rabilink.devices.health-capabilities.read'); assert.equal(healthCapabilities.statusCode, 200);
   assert.deepEqual(JSON.parse(healthCapabilities.body), { rabilinkWearableObservation: { processingPolicies: ['transcribe', 'agent'], expectedWorkerFencing: true, processingPolicyFrozen: true } });
   assert.equal(help.operations.filter(value => value.id.startsWith('manager.personas.resources.')).length, 6);
   assert.equal(help.operations.filter(value => value.id.startsWith('manager.personas.plans.')).length, 8);
-  assert.equal(help.operations.filter(value => value.id.startsWith('manager.personas.history.')).length, 11);
+  assert.deepEqual(help.operations.filter(value => value.id.startsWith('manager.personas.history.')).map(value => value.id).sort(), [
+    'manager.personas.history.chat.aiui.append',
+    'manager.personas.history.chat.aiui.append.alias',
+    'manager.personas.history.chat.read',
+    'manager.personas.history.chat.read.alias',
+    'manager.personas.history.chat.tasks',
+    'manager.personas.history.chat.tasks.alias',
+    'manager.personas.history.messages.channels',
+    'manager.personas.history.messages.conversations',
+    'manager.personas.history.messages.search',
+    'manager.personas.history.messages.timeline',
+    'manager.personas.history.situations.detail',
+    'manager.personas.history.situations.detail.alias',
+    'manager.personas.history.situations.list',
+    'manager.personas.history.situations.list.alias',
+    'manager.personas.history.voice.read',
+    'manager.personas.history.voice.read.alias',
+  ].sort());
   assert.equal(help.operations.filter(value => value.id.startsWith('manager.personas.skills.')).length, 6);
   const resourceRole = path.join(root, 'roles/CompiledResourceRole'); await fs.mkdir(resourceRole, { recursive: true });
   await fs.writeFile(path.join(resourceRole, 'persona.md'), '# Compiled resource\n');
@@ -768,9 +812,20 @@ test("built Manager publishes executable API discovery and reports registered co
     "agent.send", "agent.send.capabilities", "agent.send.receipt.read", "agent.send.receipt.verify", "agent.send.receipt.settle",
     "agent.requests.list", "agent.requests.read", "agent.requests.cancel", "agent.send.traces", "agent.chat-history.read",
     "agent.hook.context.post", "agent.hook.roles.get", "agent.hook.doctor.get", "agent.hook.sessions.get", "agent.hook.session.get", "agent.hook.bind.put", "agent.hook.bind.patch", "agent.hook.unbind.delete",
-    "agent.adapters.catalog.get", "agent.adapters.all.get", "agent.adapters.dsh.get", "agent.adapters.grokBot.get", "agent.adapters.connection.get", "agent.adapters.connections.get", "agent.adapters.connect.post", "agent.adapters.disconnect.delete", "agent.adapters.hooks.post",
+    "agent.adapters.catalog.get", "agent.adapters.all.get", "agent.adapters.dsh.scan.get", "agent.adapters.grokBot.scan.get", "agent.adapters.connection.get", "agent.adapters.connections.get", "agent.adapters.connect.post", "agent.adapters.disconnect.delete", "agent.adapters.hooks.post",
     "manager.meta.read", "manager.gateways.read", "manager.webgui-access.read", "manager.webgui-access.update", "manager.webgui-access.update-post"]) {
     assert.ok(helpData.operations.some(operation => operation.id === id), `Missing executable operation: ${id}`);
+  }
+  for (const type of ["dsh", "grokBot"]) {
+    const oldId = `agent.adapters.${type}.get`, currentId = `agent.adapters.${type}.scan.get`;
+    const resolved = helpData.operations.filter(operation => operation.id === oldId || operation.contract.aliases?.includes(oldId));
+    assert.equal(resolved.length, 1, `The published scan ID must resolve exactly once: ${oldId}`);
+    assert.equal(resolved[0].id, currentId);
+    const oldHelp = await get(`/api/agent/help?operationId=${encodeURIComponent(oldId)}`);
+    assert.equal(oldHelp.status, 200);
+    const oldHelpData = (await oldHelp.json()).data;
+    assert.equal(oldHelpData.count, 1); assert.equal(oldHelpData.operations[0].id, currentId);
+    assert.ok(helpData.operations.some(operation => operation.id === `${currentId}.legacy1`), "The original scan URL remains a native operation");
   }
   const resources = ["settings.read", "settings.update", "archive-settings.read", "archive-settings.update", "object.read", "object.write", "archive.capabilities",
     "archive.recordings.list", "archive.processing.read", "archive.manifest.read", "archive.manifest.commit", "archive.receipt.read", "recording-events.write"];
@@ -802,9 +857,11 @@ test("built Manager publishes executable API discovery and reports registered co
   assert.equal(openapi.paths["/api/lan-agent/connect"].get.responses["101"].content, undefined);
   assert.ok(openapi.paths["/api/agent/uploads/{uploadId}"].put);
   assert.deepEqual(openapi.paths["/api/agent/qq/messages/{messageId}/attachments/{attachmentIndex}"].get.responses["200"]["x-rabiroute-binary"],
-    { minBytes: 1, maxBytes: 64 * 1024 * 1024 });
-  assert.deepEqual(Object.keys(openapi.paths["/api/agent/qq/stickers/{stickerId}/preview"].get.responses["200"].content).sort(),
-    ["image/gif", "image/jpeg", "image/png", "image/webp"]);
+    { minBytes: 1, maxBytes: bufferConstants.MAX_LENGTH });
+  const stickerPreview = openapi.paths["/api/agent/qq/stickers/{stickerId}/preview"].get.responses["200"];
+  assert.deepEqual(Object.keys(stickerPreview.content), ["*/*"]);
+  assert.equal(stickerPreview["x-rabiroute-header-schema"].properties["content-type"].pattern, "^image/[^*]+$");
+  assert.deepEqual(stickerPreview["x-rabiroute-binary"], { minBytes: 1, maxBytes: bufferConstants.MAX_LENGTH });
   const hookRoles = await get("/api/codex-hook/roles"); assert.equal(hookRoles.status, 200);
   assert.ok(Array.isArray((await hookRoles.json()).data.roleIds));
   const hookSessions = await get("/api/codex-hook/sessions"); assert.equal(hookSessions.status, 200);
@@ -909,7 +966,7 @@ test("built Manager publishes executable API discovery and reports registered co
 
 test('built Manager installs independent state, performance, output, provider, history and game-plan owners', { timeout: 90000 }, async t => {
   const { ready, get } = await startBuiltManager(t, false, undefined, undefined, {
-    capabilities: ['manager.agent-state-control@1', 'manager.performance@1', 'manager.marvis-control@1', 'manager.bilibili-history@1', 'manager.astrbot-control@1', 'manager.copilot-control@1', 'manager.yeyu-gamer@1', 'manager.napcat-control@1', 'manager.route-control@1', 'manager.gateway-runtime@1', 'manager.message-adapter-control@1', 'manager.desktop@1', 'manager.agent-thread-control@1', 'manager.message-processing-control@1', 'manager.desktop-pet@1', 'manager.speech@1', 'manager.xiaomi-home@1', 'manager.video@1'],
+    capabilities: ['manager.agent-state-control@1', 'manager.performance@1', 'agent.adapter.marvis@1', 'manager.bilibili-history@1', 'agent.adapter.astrbot@1', 'agent.adapter.copilot-cli@1', 'manager.yeyu-gamer@1', 'endpoint.napcat@1', 'manager.route-control@1', 'manager.gateway-runtime@1', 'manager.message-adapter-control@1', 'manager.desktop@1', 'manager.agent-thread-control@1', 'manager.message-processing-control@1', 'manager.desktop-pet@1', 'manager.speech@1', 'manager.xiaomi-home@1', 'manager.video@1'],
   });
   const local = createManagerClient({ managerUrl: ready.baseUrl, localHost: true, endpointSession: { async ensure() { return { managerUrl: ready.baseUrl, meta: await (await get('/meta')).json() }; } } });
   assert.equal((await local.invokeOperation('manager.webgui-access.update', { body: { enabled: true } })).statusCode, 200);
@@ -939,7 +996,24 @@ test('built Manager installs independent state, performance, output, provider, h
   assert.ok(gamer.every(value => value.contract.aliases.includes('gamer:' + value.contract.method + ':' + value.contract.pathTemplate)));
   assert.equal(catalog.operations.filter(value => value.id.startsWith('manager.napcat.')).length, 10);
   const absentNapcat = await client.invokeOperation('manager.napcat.health', { body: { gatewayId: 'absent-compiled-gateway', instanceId: 'absent-compiled-instance' } }); assert.equal(absentNapcat.statusCode, 400); assert.equal(JSON.parse(absentNapcat.body).ok, false);
-  assert.equal(catalog.operations.filter(value => value.id.startsWith('manager.route-control.')).length, 14);
+  assert.deepEqual(catalog.operations.filter(value => value.id.startsWith('manager.route-control.')).map(value => value.id).sort(), [
+    'manager.route-control.agent-binding.post',
+    'manager.route-control.agent-binding.update',
+    'manager.route-control.agent-options.read',
+    'manager.route-control.identity.read',
+    'manager.route-control.identity.update',
+    'manager.route-control.instances.list',
+    'manager.route-control.link-home.read',
+    'manager.route-control.manager-config.read',
+    'manager.route-control.manager-config.update',
+    'manager.route-control.message-processing.cleanup',
+    'manager.route-control.message-processing.read',
+    'manager.route-control.message-processing.update',
+    'manager.route-control.rabilink-replies.list',
+    'manager.route-control.routes.list',
+    'manager.route-control.timeouts.read',
+    'manager.route-control.timeouts.update',
+  ].sort());
   await waitForNativeRouteCatalog({ ready, get });
   const identity = await client.invokeOperation('manager.route-control.identity.read'); assert.equal(identity.statusCode, 200);
   const identityData = JSON.parse(identity.body).data; assert.equal(identityData.port, Number(new URL(ready.baseUrl).port)); assert.equal(identityData.managerInstanceId, ready.managerInstanceId); assert.equal(identityData.applicationGenerationId, ready.applicationGenerationId);

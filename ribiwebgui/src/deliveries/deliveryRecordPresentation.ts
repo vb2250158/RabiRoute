@@ -1,5 +1,6 @@
 import { deliveryRecordCopy, deliveryStateLabels, type DeliveryRecordLocale } from "./deliveryRecordCopy";
 import { agentInstanceDisplayName, type AgentInstance } from "@shared/agentInstance";
+import type { AgentDeliveryRecordParty } from "@shared/agentDeliveryRecord";
 
 export function deliveryComputerOptions(instances: AgentInstance[], locale: DeliveryRecordLocale, selectedNodeId = "") {
   const copy = deliveryRecordCopy(locale);
@@ -18,7 +19,8 @@ export function deliveryStatePresentation(state: string, locale: DeliveryRecordL
   return { label: deliveryStateLabels[locale][state] || deliveryRecordCopy(locale).unknownState, color: colors[state] || "grey" };
 }
 
-export function deliveryEndpointLabel(endpoint: { kind?: string; instanceId?: string; nodeId?: string; provider?: string; sessionId?: string }, locale: DeliveryRecordLocale): string {
+export function deliveryEndpointLabel(endpoint: AgentDeliveryRecordParty, locale: DeliveryRecordLocale): string {
+  if (endpoint.connection) return [endpoint.connection.id, endpoint.connection.transport].join(" · ");
   return [endpoint.instanceId || endpoint.nodeId || endpoint.kind, endpoint.provider, endpoint.sessionId].filter(Boolean).join(" · ") || deliveryRecordCopy(locale).unknown;
 }
 

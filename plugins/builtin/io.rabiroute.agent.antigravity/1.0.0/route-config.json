@@ -1,0 +1,54 @@
+{
+  "endpointType": "agent:antigravity",
+  "agentType": "antigravity",
+  "capability": "agent.adapter.antigravity@1",
+  "routeKeys": [
+    "antigravityConversationId",
+    "antigravityConversationName",
+    "antigravityCwd"
+  ],
+  "runtimeFields": {
+    "antigravityConversationId": {
+      "paths": [
+        "antigravityConversationId"
+      ],
+      "default": "",
+      "trim": true
+    },
+    "antigravityConversationName": {
+      "paths": [
+        "antigravityConversationName"
+      ],
+      "default": "",
+      "trim": true
+    },
+    "antigravityCwd": {
+      "paths": [
+        "antigravityCwd"
+      ],
+      "default": "",
+      "trim": true,
+      "format": "workspace"
+    }
+  },
+  "environmentFields": {
+    "ANTIGRAVITY_CONVERSATION_ID": "antigravityConversationId",
+    "ANTIGRAVITY_CONVERSATION_NAME": "antigravityConversationName",
+    "ANTIGRAVITY_CWD": "antigravityCwd"
+  },
+  "sharedBindingKeys": [
+    "antigravityConversationId",
+    "antigravityConversationName",
+    "antigravityCwd"
+  ],
+  "sharedWhenEnabledPaths": [
+    [
+      "messageProcessingAgents",
+      "antigravity",
+      "enabled"
+    ],
+    [
+      "codexMemoryConsolidationAgentEnabled"
+    ]
+  ]
+}

@@ -53,10 +53,14 @@ for (const [name, source] of [
   test(name!, { timeout: 5000 }, async t => {
     const data = fixture(t, source!);
     const result = await probeWorkbuddyHook(data.root, { timeoutMs: 2000 });
-    assert.equal(result.ok, false);
+    assert.equal(result.ok, false, result.detail);
+    if (name === "nonzero exit overrides successful JSON") {
+      assert.match(result.detail, /\uFF087\uFF09/u, `Expected the original child to close with exit code 7: ${result.detail}`);
+    }
     assert.doesNotMatch(result.detail, /synthetic-sensitive-value/);
     fs.writeFileSync(data.script, healthy);
-    assert.equal((await probeWorkbuddyHook(data.root, { timeoutMs: 2000 })).ok, true, "closed child releases the probe slot");
+    const recovered = await probeWorkbuddyHook(data.root, { timeoutMs: 2000 });
+    assert.equal(recovered.ok, true, `closed child releases the probe slot: ${recovered.detail}`);
   });
 }
 

@@ -1,7 +1,7 @@
 import { getTimeoutMs } from "../shared/timeoutSettings.js";
 import type { AgentScanOptions } from "../agentAdapters/managerApi.js";
 import { freezeApiData, type ApiOperationContract, type ApiSchema } from "./apiOperationContract.js";
-import { DSH_CONNECTION_BODY_MAX_BYTES, DSH_CONNECTION_REQUEST_TIMEOUT_MS } from "./dshConnectionRoutes.js";
+import { DSH_CONNECTION_BODY_MAX_BYTES, DSH_CONNECTION_REQUEST_TIMEOUT_MS } from "../shared/dshConnectionLimits.js";
 
 const grok = { grokBotLimit: 100, grokBotOffset: 0, grokBotQuery: null, grokBotAgentId: null, grokBotProfilePath: null, grokBotBackendUrl: null };
 const dsh = { dshLimit: 200, dshOffset: 0, dshQuery: null, dshBaseUrl: null };

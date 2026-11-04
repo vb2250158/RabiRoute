@@ -549,7 +549,7 @@ function messageCodeParseText(record: RouteDecision["record"], dataDir: string):
   return result.lines.join("\n");
 }
 
-function recentMessageContextForDecision(decision: RouteDecision, roleContext: AgentRoleContext): {
+function recentMessageContextForDecision(decision: RouteDecision, rule: NotificationRule, roleContext: AgentRoleContext): {
   endpoint?: string;
   transport?: string;
   conversationKey?: string;
@@ -574,9 +574,9 @@ function recentMessageContextForDecision(decision: RouteDecision, roleContext: A
       text: ""
     };
   }
-  const limit = decision.route.recentMessageLimits
+  const limit = rule.recentMessageLimit ?? (decision.route.recentMessageLimits
     ? recentMessageLimitFor(decision.route.recentMessageLimits, scope.endpoint)
-    : Math.max(0, Math.min(200, Math.floor(Number(decision.route.recentMessageLimit) || 0)));
+    : Math.max(0, Math.min(200, Math.floor(Number(decision.route.recentMessageLimit) || 0))));
   const excludedMessageIds = new Set<string>();
   if (decision.record.messageId != null) excludedMessageIds.add(String(decision.record.messageId));
   for (const messageId of decision.record.messageGroupMessageIds ?? []) {
@@ -933,7 +933,7 @@ function outputPipelineForDecision(decision: RouteDecision): ResolvedPipeline {
   return pipeline;
 }
 
-function templateValuesForDecision(decision: RouteDecision, roleContext: AgentRoleContext): ForwardTemplateValues {
+function templateValuesForDecision(decision: RouteDecision, rule: NotificationRule, roleContext: AgentRoleContext): ForwardTemplateValues {
   const record = decision.record;
   const route = decision.route;
   const isVoiceTranscript = isVoiceTranscriptRecord(record);
@@ -979,7 +979,7 @@ function templateValuesForDecision(decision: RouteDecision, roleContext: AgentRo
   const conversationCurrentPath = relativeWorkspacePath(messageContextCurrentPath(personaDataDir));
   const conversationArchiveDir = relativeWorkspacePath(messageContextArchiveDir(personaDataDir));
   const conversationArchiveIndexPath = relativeWorkspacePath(messageContextArchiveIndexPath(personaDataDir));
-  const recentContext = recentMessageContextForDecision(decision, roleContext);
+  const recentContext = recentMessageContextForDecision(decision, rule, roleContext);
   const voiceprintIds = isVoiceTranscript ? voiceprintIdsForRecord(record) : [];
   const personaVoiceIdentities = isVoiceTranscript && roleContext.roleDir && record.sourceHostId && voiceprintIds.length > 0
     ? resolvePersonaVoiceIdentities(roleContext.roleDir, record.sourceHostId, voiceprintIds)
@@ -1537,7 +1537,7 @@ export function buildAgentPacket(
     roleContext = { roleId: remote.roleId, roleDir: "", rolePath: "", routeDataDir, personaDataDir: routeDataDir };
   }
   const templateValues = {
-    ...templateValuesForDecision(decision, roleContext),
+    ...templateValuesForDecision(decision, rule, roleContext),
     ...decision.extraValues,
     routeKind: decision.routeKind
   };

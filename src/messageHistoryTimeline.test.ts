@@ -21,6 +21,12 @@ function fixture(t: test.TestContext, rows: MessageContextRecord[]) {
 }
 const row = (n: number, adapter = 'napcat', text = `消息 😀 ${n}`): MessageContextRecord => ({ schemaVersion: 1, id: `id-${n}`, sequence: 0, time: 1000 + n, direction: n % 2 ? 'inbound' : 'outbound', adapter, conversationKey: 'room', text });
 
+test('conversation catalog covers system, timer, speech and future plugins without crossing adapters',t=>{
+  const adapters=['system','heartbeat','speech','future-plugin'];
+  const f=fixture(t,adapters.flatMap((adapter,index)=>[{...row(index*2,adapter,'[CQ:image,file=literal-plugin-text]'),conversationKey:'shared-key',target:adapter},{...row(index*2+1,adapter),conversationKey:'old-key',target:adapter+' old'}]));
+  for(const adapter of adapters){const page=f.read({adapter,limit:1,includeArchives:true,page:{catalogOnly:true,conversations:true}});assert.equal(page.entries.length,0);assert.equal(page.page?.conversations?.length,2);assert.equal(page.page?.conversations?.find(c=>c.conversationKey==='shared-key')?.title,adapter);assert.equal(page.page?.conversations?.find(c=>c.conversationKey==='shared-key')?.preview,'[CQ:image,file=literal-plugin-text]');}
+});
+
 test('channel pages traverse physical writes without omissions across duplicate and sequence-less legacy rows and concurrent appends', t => {
   const rows = Array.from({ length: 151 }, (_, n) => row(n, n % 3 ? 'napcat' : 'other'));
   const f = fixture(t, [...rows, { ...rows[1]!, text: 'later duplicate' }]);

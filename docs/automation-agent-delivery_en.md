@@ -16,6 +16,10 @@ Open **Persona → Automation**, edit a rule, and choose **Delivery target** und
 
 Save and refresh to verify the selection. Changing the primary binding affects subsequent rules referencing it; custom sessions remain unchanged.
 
+Message rules also offer **Include recent messages** and **Recent message count** (1–200) under **Notify Agent**. Each rule controls whether to include the current conversation's last N messages. Disabling this keeps chat records intact. The current message and explicit quoted replies still follow the existing delivery flow. Scheduled tasks do not automatically include chat history.
+
+The count is stored in `automationRules[].action.recentMessageLimit`; `0` disables history. Existing rules without this field retain their previous endpoint count (12 by default). Editing this option saves a rule-specific value. The separate **Message context** tab has been removed from persona settings.
+
 ## Configuration ownership
 
 `automationRules[].action.target` in the persona's `personaConfig.json` owns the target selection. References store stable recipient IDs. The `agentRecipients` catalog and existing instance, session, and model settings belong to the route's Agent configuration.

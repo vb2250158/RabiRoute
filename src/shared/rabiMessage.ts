@@ -251,6 +251,7 @@ function optionalSourceText(value: unknown, field: string, maxLength = 500): str
 function normalizeAgentIdentity(value: unknown, field: string): Omit<RabiAgentMessageSource, "type"> {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`Missing ${field}.`);
   const raw = value as Record<string, unknown>;
+  if (raw.agentAdapter != null && typeof raw.agentAdapter !== "string") throw new Error(`Invalid ${field}.agentAdapter.`);
   const rawAdapter = requiredSourceText(raw.agentAdapter, `${field}.agentAdapter`, 40);
   const agentAdapter = parseAgentAdapterType(rawAdapter);
   if (!agentAdapter) throw new Error(`Invalid ${field}.agentAdapter.`);

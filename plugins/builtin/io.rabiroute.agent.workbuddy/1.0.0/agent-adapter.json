@@ -1,0 +1,30 @@
+{
+  "type": "workbuddy",
+  "capability": "agent.adapter.workbuddy@1",
+  "manifest": {
+    "type": "workbuddy",
+    "label": "WorkBuddy（腾讯 AI 办公工作台）",
+    "maturity": "experimental",
+    "transport": {
+      "protocol": "http",
+      "mode": "session-gateway"
+    },
+    "host": {
+      "name": "WorkBuddy Desktop",
+      "required": true
+    },
+    "capabilities": {
+      "managedTasks": {
+        "messageProcessingAgent": true,
+        "hooks": true,
+        "agentThreads": true
+      }
+    }
+  },
+  "sessionBinding": {
+    "sessionId": "workbuddySessionId",
+    "sessionName": "workbuddySessionName",
+    "workspace": "workbuddyCwd",
+    "defaultName": "WorkBuddy 主角色"
+  }
+}

@@ -24,6 +24,18 @@ plugins/
 
 Out-of-tree plugins use the same package layout, schemas, SDK, and Profile instance contract. Built-in identity grants no extra lifecycle authority.
 
+## Host and plugin versions
+
+The RabiRoute host uses the root `package.json` version; `/meta` and the sidebar show the running value. Every plugin has its own `rabi.plugin.json.version`. A Profile selects a concrete `package + version`, and the directory version must match the manifest. Neither version is derived from the other: host `0.6.0` can run a DSH plugin at `1.0.0` alongside another plugin at `1.2.3`.
+
+Increment each changed plugin independently: patch for compatible fixes, minor for compatible features, and major for breaking public contracts. Host changes do not mechanically bump every plugin. Publish a new plugin version in its own version directory, explicitly select it in the Profile, and retain a recoverable prior package. Candidate content revisions/hashes identify exact bytes; they do not replace user-visible versions.
+
+Settings toggles operate on the original published immutable packages. Unchanged instances reuse their verified package and configuration ownership instead of preparing every package again. Re-enabling or changing a package version or instance configuration prepares the affected instance. Source watching, manual publication and startup retain full package reading and validation; toggling is not a same-version source-update command.
+
+Plugin management distinguishes configured and actually running versions. If an upgrade fails while the old activation is retained, it continues to report the original owner's version rather than claiming the requested upgrade succeeded. Compatibility uses the existing `requires`/`provides` `name@major` contract and only affects the relevant dependency scope. Manifest `schemaVersion`, package version, capability major and runtime revision serve different purposes.
+
+After generating Web plugin entries, the complete `npm run build` finalizes the original build receipt with both native files and the final wrappers. It rechecks contents and membership of the original input directories. Formal candidate verification still rejects extra or modified files. Only the complete build explicitly requests this finalization; standalone `npm run webgui:build` and Web hot patches remain independent and do not require a native receipt.
+
 ## Manifest v2
 
 ```json
@@ -189,3 +201,9 @@ The new `host.manager.route-control-registration@1` capability is an asynchronou
 When source inspection cannot identify a local release statement in the plugin entry, the build reports a non-blocking diagnostic: resources may belong to a parent through asynchronous registration. This source heuristic does not replace the actual lifecycle contract or resource retirement tests. Explicit schema, invalid-entry and cross-package dependency violations still fail the check. Do not add a fake disposer to satisfy a text pattern.
 
 When explicitly configured, `RABIROUTE_PLUGIN_IN_PROCESS_ROOTS` is a JSON array of directories; `[]` disables only `in_process` plugins. An unset setting adds no directory restriction. A malformed value records the field and editing location and skips this invalid optional setting, keeping each plugin’s declared execution mode. A missing directory produces a diagnostic while other matching configured directories remain enabled. A nonempty array with no matching directory is skipped as an invalid optional restriction; a valid `[]` still disables `in_process` plugins. Diagnostics do not echo the malformed value. This setting does not grant or revoke API access.
+
+## Built-in package selection in 0.6.0
+
+The default Profile selects Agent catalog `1.1.0`, Agent communication `1.1.0` and RabiLink Relay `2.0.0`. Device Agent management belongs to the independent Device Agent plugin; Relay retains transport and device configuration. Compatible provided service capabilities remain `@1`; package versions and capability majors are maintained separately.
+
+Published `1.0.0` packages retain their original bytes for the retention period of their recovery releases. Legacy AstrBot, Copilot and Marvis control instances are absent from this default Profile and are replaced by their corresponding Agent plugins. Route task IDs, sessions and working directories keep their original bindings. Recovery of an older release uses its original Profile rather than starting two control owners in the new default graph.

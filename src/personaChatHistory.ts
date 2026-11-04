@@ -11,7 +11,8 @@ const writes = new Map<string, Promise<unknown>>();
 function parseReply(line: string): PersonaChatReply {
   const value = JSON.parse(line) as PersonaChatReply;
   const identity = (value?.kind === "agent_delivery" || value?.kind === "user_delivery") ? [value.deliveryId, value.targetSessionId] : [value?.turnId];
-  if (!value || ![value.id, value.receivedAt, value.sessionId, value.text, ...identity].every(item => typeof item === "string" && item.length > 0)) {
+  if (!value || (value.kind !== undefined && typeof value.kind !== "string")
+    || ![value.id, value.receivedAt, value.sessionId, value.text, ...identity].every(item => typeof item === "string" && item.length > 0)) {
     throw new Error("Invalid persona chat history record.");
   }
   return value;
@@ -99,10 +100,21 @@ export async function appendPersonaAiuiExchange(roleDir: string, input: { sessio
 }
 
 /** Reads backwards by byte offset, so paging never reloads the complete history. */
-export async function readPersonaChatHistory(roleDir: string, cursor?: number, limit = 50, options: { summary?: boolean; direction?: "older" | "newer"; id?: string; category?: ChatHistoryCategory } = {}): Promise<PersonaChatHistoryPage> {
+export async function readPersonaChatHistory(roleDir: string, cursor?: number, limit = 50, options: { summary?: boolean; direction?: "older" | "newer"; id?: string; category?: ChatHistoryCategory; taskKey?: string } = {}): Promise<PersonaChatHistoryPage> {
   if (options.category && !CHAT_HISTORY_CATEGORIES.includes(options.category)) throw new Error('Invalid chat history category.');
   if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw new Error("limit must be an integer from 1 to 100.");
   if (cursor !== undefined && (!Number.isSafeInteger(cursor) || cursor < 0)) throw new Error("Invalid chat history cursor.");
+  if (options.taskKey && !options.id) {
+    const file=path.resolve(roleDir,HISTORY_PATH);
+    await writes.get(file)?.catch(()=>undefined);
+    return withPersonaHistoryIndex(file,parseReply,async index=>{
+      if(cursor!==undefined&&cursor>index.size)throw new Error('Chat history changed; refresh the list.');
+      const newer=options.direction==='newer',rows=index.taskHistory(options.taskKey!,options.category,cursor,limit,newer),selected=rows.slice(0,limit);
+      const entries=await Promise.all(selected.map(row=>options.summary?JSON.parse(row.summary) as PersonaChatReply:index.read(row)));
+      return {entries:newer?entries.reverse():entries,nextCursor:newer?(cursor??0)||null:rows.length>limit?selected.at(-1)!.start:null,
+        newerCursor:newer?(rows.length>limit?selected.at(-1)!.end:null):null,invalidRecords:index.invalidRecords};
+    });
+  }
   if (options.direction === 'newer') return readForwardHistory(roleDir, cursor ?? 0, limit, options);
   const file = path.resolve(roleDir, HISTORY_PATH);
   // Await the writer for a coherent boundary; its failure does not invalidate readable rows.
@@ -239,4 +251,11 @@ export async function readPersonaChatHistoryCategories(roleDir: string): Promise
   const file = path.resolve(roleDir, HISTORY_PATH);
   await writes.get(file)?.catch(() => undefined);
   return withPersonaHistoryIndex(file, parseReply, async index => index.categories());
+}
+
+export async function readPersonaHistoryTasks(roleDir:string,options:{category?:ChatHistoryCategory;cursor?:string;query?:string;peerOf?:string;limit?:number}={}) {
+  if(options.category&&!CHAT_HISTORY_CATEGORIES.includes(options.category))throw new Error('Invalid chat history category.');
+  if(options.limit!==undefined&&(!Number.isInteger(options.limit)||options.limit<1||options.limit>100))throw new Error('Invalid task list limit.');
+  const file=path.resolve(roleDir,HISTORY_PATH);await writes.get(file)?.catch(()=>undefined);
+  return withPersonaHistoryIndex(file,parseReply,async index=>index.tasks(options));
 }

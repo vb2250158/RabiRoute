@@ -51,7 +51,7 @@ async function success(store: AgentRequestStore, delivery: PreparedEndpointDeliv
   const result = await query(store, delivery, { ...options, authorize: value => { authorized.push(value); options.authorize?.(value); } });
   assert.deepEqual(result, { status: 200, body: { code: 0, data: { authorized: true, deliveryId: delivery.deliveryId,
     generation: delivery.generation, promptHash: delivery.promptHash, executionOptionsHash: delivery.executionOptionsHash, ledgerManagerInstanceId: delivery.source.managerInstanceId, source: delivery.source, endpoint: delivery.target, preparation: delivery.preparation, state: delivery.state } } });
-  assert.deepEqual(authorized, [delivery.source, delivery.target]);
+  assert.deepEqual(authorized, [delivery.target]);
 }
 async function fixture(onDispatch?: (store: AgentRequestStore, delivery: PreparedEndpointDelivery) => void | Promise<void>, target = endpoint("b")) {
   target = normalizeAgentRequestEndpoint(target)!;
@@ -116,14 +116,17 @@ test("real HTTP sessionless authenticated Agent reads another owner reservation 
   assert.deepEqual(data.source, f.delivery.source);
   assert.deepEqual(data.preparation, JSON.parse(JSON.stringify(f.delivery.preparation)));
   assert.equal(JSON.stringify(data).includes(f.delivery.prompt), false);
+  const accepted = f.store.getEndpointDelivery(f.delivery.deliveryId);
   await f.store.cancel(f.delivery.preparation.requestId!);
   originalOwnerAvailable = false;
   const terminalResponse = await fetch(url, { headers }); assert.equal(terminalResponse.status, 200);
   const terminal = (await terminalResponse.json()).data;
-  assert.equal(terminal.authorized, false); assert.equal(terminal.state, 'cancelled');
+  assert.equal(terminal.authorized, false); assert.equal(terminal.state, 'committed');
+  assert.equal(f.store.get(f.delivery.preparation.requestId!)?.status, 'cancelled');
+  assert.deepEqual(f.store.getEndpointDelivery(f.delivery.deliveryId), accepted, 'Cancellation retains the accepted state and original receipt.');
   assert.deepEqual(terminal.source, f.delivery.source); assert.equal(terminal.promptHash, f.delivery.promptHash);
   authority.setNodeEnabled("reader-node", false);
-  assert.equal(f.store.getEndpointDelivery(f.delivery.deliveryId)?.state, 'cancelled');
+  assert.equal(f.store.getEndpointDelivery(f.delivery.deliveryId)?.state, 'committed');
   assert.equal((await fetch(url, { headers })).status, 403);
 });
 
@@ -152,16 +155,55 @@ test("prepared reservations and cancellation during authorization deny; original
     context: { refreshEndpoints: async () => { throw new Error('old execution identity must not be refreshed'); } } });
   assert.equal(cancellation.status, 200);
   assert.equal((cancellation.body as { data: { authorized: boolean; state: string } }).data.authorized, false);
-  assert.equal((cancellation.body as { data: { state: string } }).data.state, 'cancelled');
+  assert.equal((cancellation.body as { data: { state: string } }).data.state, 'committed');
+  assert.equal(f.store.get(f.delivery.preparation.requestId!)?.status, 'cancelled');
+  assert.deepEqual(await f.store.readEndpointDelivery(f.delivery.deliveryId), f.delivery, 'Terminal evidence does not overwrite accepted state or receipt.');
   assert.deepEqual(await query(f.store, f.delivery, { context: { assertRequestAuthority: () => { throw new Error('reader revoked'); } } }), { status: 403, body: denied });
 });
 
-test("source or target revocation fails closed without grant disclosure", async () => {
+test("an unconfirmed cancelled dispatch returns terminal evidence without claiming acceptance", async () => {
+  const f = await fixture(async () => { throw new Error("Original dispatch acknowledgement was lost."); });
+  assert.equal(f.delivery.state, "dispatching"); assert.equal(f.delivery.receipt, undefined);
+  await f.store.cancel(f.delivery.preparation.requestId!);
+  const cancelled = f.store.getEndpointDelivery(f.delivery.deliveryId)!;
+  assert.equal(cancelled.state, "cancelled"); assert.equal(cancelled.receipt, undefined);
+  const cancelledRecord = await f.store.readEndpointDelivery(f.delivery.deliveryId);
+  assert.ok(cancelledRecord);
+  const result = await query(f.store, cancelledRecord, { authorize: () => { throw new Error("No new target grant"); },
+    context: { refreshEndpoints: async () => { throw new Error("Do not refresh a terminal dispatch"); } } });
+  assert.equal(result.status, 200);
+  assert.equal((result.body as { data: { authorized: boolean; state: string } }).data.authorized, false);
+  assert.equal((result.body as { data: { state: string } }).data.state, "cancelled");
+  assert.deepEqual(f.store.getEndpointDelivery(f.delivery.deliveryId), cancelled);
+});
+
+test("cancelled original request status and accepted evidence survive a file-backed owner restart", async t => {
   const f = await fixture();
-  for (const endpointToDeny of [f.delivery.source, f.delivery.target]) {
-    assert.deepEqual(await query(f.store, f.delivery, { authorize: value => { if (value.sessionId === endpointToDeny.sessionId) throw new Error("revoked"); } }),
-      { status: 403, body: denied });
-  }
+  await f.store.cancel(f.delivery.preparation.requestId!);
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "rabi-cancelled-authority-restart-"));
+  const statePath = path.join(directory, "requests.json");
+  fs.writeFileSync(statePath, JSON.stringify(f.persistence.value));
+  const restarted = new AgentRequestStore(statePath);
+  t.after(async () => {
+    await restarted.close();
+    assert.equal(path.dirname(path.resolve(directory)), path.resolve(os.tmpdir()));
+    fs.rmSync(directory, { recursive: true, force: true });
+  });
+  await restarted.ready();
+  assert.equal(restarted.get(f.delivery.preparation.requestId!)?.status, "cancelled");
+  const readback = await query(restarted, f.delivery, { authorize: () => { throw new Error("No replacement target grant"); } });
+  assert.equal(readback.status, 200);
+  assert.equal((readback.body as { data: { authorized: boolean; state: string } }).data.authorized, false);
+  assert.equal((readback.body as { data: { state: string } }).data.state, "committed");
+  const accepted = await restarted.readEndpointDelivery(f.delivery.deliveryId);
+  assert.equal(accepted?.state, "committed"); assert.deepEqual(accepted?.receipt, f.delivery.receipt);
+  assert.deepEqual(accepted, JSON.parse(JSON.stringify(f.delivery)), "File persistence retains the same JSON record, excluding undefined properties.");
+});
+
+test("target revocation fails closed while source attribution is not a second grant", async () => {
+  const f = await fixture();
+  assert.deepEqual(await query(f.store, f.delivery, { authorize: value => { if (value.sessionId === f.delivery.target.sessionId) throw new Error("revoked"); } }),
+    { status: 403, body: denied });
 });
 
 for (const change of ["disabled", "node-ABA", "re-enrolled", "global-ABA"] as const) {

@@ -2,13 +2,11 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import test from "node:test";
 
-const source = fs.readFileSync(new URL("../src/pages/RouteConfigPage.vue", import.meta.url), "utf8");
-
 test("bound Codex and DSH primary sessions show Locate session instead of initialization", () => {
-  assert.match(source, /function hasManagedAgentSessionBinding\(type: "codex" \| "dsh"\)/);
-  assert.match(source, /action: "open",[\s\S]*agentAdapter: session\.agentAdapter,[\s\S]*threadId: session\.sessionId,[\s\S]*cwd: session\.workspace/);
-
-  for (const adapter of ["codex", "dsh"]) {
+  for (const [adapter, card] of [["codex", "Codex"], ["dsh", "Dsh"]]) {
+    const source = fs.readFileSync(new URL(`../src/agentAdapters/${card}AgentCard.vue`, import.meta.url), "utf8");
+    assert.match(source, /function hasManagedAgentSessionBinding\(type: "codex" \| "dsh"\)/);
+    assert.match(source, /action: "open",[\s\S]*agentAdapter: session\.agentAdapter,[\s\S]*threadId: session\.sessionId,[\s\S]*cwd: session\.workspace/);
     const marker = "v-if=\"hasManagedAgentSessionBinding('" + adapter + "')\"";
     const start = source.indexOf(marker);
     const end = source.indexOf("</div>", start);

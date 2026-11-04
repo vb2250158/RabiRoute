@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { LanAgentTerminals } from "./lanAgentTerminals.js";
+import { LanAgentTerminals, TerminalDispatchNotSentError } from "./lanAgentTerminals.js";
 
 test("terminal replay is isolated, bounded and never persists or re-executes input", async () => {
   const calls: unknown[] = [];
@@ -41,4 +41,57 @@ test("terminal replay count and observer count do not reject valid work",async()
  hub.receive("node",{terminalId:live,type:"output",data:"all observers"});assert.equal(received,9);
  for(let i=0;i<140;i++){const terminalId=randomUUID();await hub.execute("node",{action:"open",terminalId});hub.receive("node",{terminalId,type:"exit",exitCode:0});}
  const result=await hub.read("node",live,0) as {outputEvents:unknown[]};assert.equal(result.outputEvents.length,1);observers.forEach(stop=>stop());
+});
+
+
+test("terminal failed admission removes only its own new empty placeholder before yielding", async () => {
+  let fail = true, calls = 0;
+  const hub = new LanAgentTerminals((_instance, body) => {
+    calls++;
+    if (fail) throw new TerminalDispatchNotSentError(new Error("Original connection was unavailable before dispatch."));
+    return Promise.resolve({ terminalId: body.terminalId, state: "running" });
+  });
+  const terminalId = randomUUID();
+  const rejected = hub.execute("node", { action: "open", terminalId });
+  fail = false;
+  const accepted = hub.execute("node", { action: "open", terminalId });
+  await assert.rejects(rejected, TerminalDispatchNotSentError); await accepted;
+  const stop = hub.subscribe("node", terminalId, 0, () => {}); stop();
+  fail = true;
+  await assert.rejects(hub.execute("node", { action: "open", terminalId }), TerminalDispatchNotSentError);
+  const existing = hub.subscribe("node", terminalId, 0, () => {}); existing();
+  assert.equal(calls, 3);
+});
+
+test("terminal replay retains observed events even if a local invocation reports no dispatch", async () => {
+  let hub: LanAgentTerminals;
+  hub = new LanAgentTerminals((instance, body) => {
+    hub.receive(instance, { terminalId: body.terminalId, type: "output", data: "already observed" });
+    throw new TerminalDispatchNotSentError(new Error("Before this dispatch."));
+  });
+  const terminalId = randomUUID(); await assert.rejects(hub.execute("node", { action: "open", terminalId }));
+  const observed: string[] = [];
+  const stop = hub.subscribe("node", terminalId, 0, event => observed.push(event.data ?? "")); stop();
+  assert.deepEqual(observed, ["already observed"]);
+});
+
+for (const reason of ["Instance management timed out; refresh before retrying a change.", "Instance disconnected during management."]) {
+  test(`terminal accepted dispatch keeps its original ID on ${reason}`, async () => {
+    let calls = 0, rejectOriginal!: (error: Error) => void;
+    const hub = new LanAgentTerminals(() => { calls++; return new Promise((_resolve, reject) => { rejectOriginal = reject; }); });
+    const terminalId = randomUUID(), pending = hub.execute("node", { action: "open", terminalId });
+    rejectOriginal(new Error(reason)); await assert.rejects(pending, error => error instanceof Error && error.message === reason);
+    const stop = hub.subscribe("node", terminalId, 0, () => {}); stop();
+    assert.equal(calls, 1);
+  });
+}
+
+test("terminal cleanup does not trust peer error names, codes or not-sent fields", async () => {
+  let calls = 0;
+  const hub = new LanAgentTerminals(() => { calls++; throw Object.assign(new Error("not_sent"), {
+    name: "TerminalDispatchNotSentError", code: "LAN_AGENT_MANAGEMENT_NOT_SENT", deliveryFrameSent: false
+  }); });
+  const terminalId = randomUUID(); await assert.rejects(hub.execute("node", { action: "open", terminalId }));
+  const stop = hub.subscribe("node", terminalId, 0, () => {}); stop();
+  assert.equal(calls, 1);
 });

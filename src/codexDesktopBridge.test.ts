@@ -16,6 +16,8 @@ import {
   listCodexDesktopThreadsFromRowsForTest,
   subscribeCodexDesktopDelivery
 } from "./codexDesktopBridge.js";
+import type { AgentManagerImplementationOptions } from "./manager/agentManagerHostPorts.js";
+import type { AgentManagerDescriptor } from "./manager/agentManagerProviders.js";
 
 test("batch history references resolve exact IDs and current sidebar names including archived tasks", t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabi-task-names-"));
@@ -342,6 +344,7 @@ test("Desktop bridge never resends an accepted steer when its receipt is delayed
       cwd: process.cwd(),
       sandbox: "workspace-write"
     }), { name: "CodexDesktopDeliveryUnconfirmedError" });
+    await waitFor(() => events.some(event => event.stage === "delivery_receipt_confirmed" && event.late));
     assert.deepEqual(methods.filter(method => method.startsWith("thread-follower-")), [
       "thread-follower-steer-turn"
     ]);
@@ -351,7 +354,8 @@ test("Desktop bridge never resends an accepted steer when its receipt is delayed
       "steer_requested",
       "steer_accepted",
       "delivery_receipt_missing",
-      "delivery_unconfirmed"
+      "delivery_unconfirmed",
+      "delivery_receipt_confirmed"
     ]);
     const requested = events.find(event => event.stage === "steer_requested")!;
     const accepted = events.find(event => event.stage === "steer_accepted")!;
@@ -361,6 +365,206 @@ test("Desktop bridge never resends an accepted steer when its receipt is delayed
     assert.ok(accepted.elapsedMs! >= 0);
     assert.ok(events.every(event => event.deliveryMarker === "88888888-1111-4222-8333-444444444444"));
     assert.ok(!JSON.stringify(events).includes("验证投递"));
+  } finally {
+    bridge.close();
+    await router.close();
+  }
+});
+
+test("receipt reader deadline releases the same task queue when the reader never settles", async () => {
+  const signals: AbortSignal[] = [];
+  const router = await createMockDesktopRouter(request => ({
+    type: "response", requestId: request.requestId, resultType: "success",
+    result: request.method === "initialize" ? { clientId: "rabi" } : {}
+  }));
+  const bridge = new CodexDesktopBridge({
+    pipePaths: [router.pipePath], deliveryReceiptGraceMs: 30, lateStartReconcileMs: 0,
+    deliveryReceiptReader: (_threadId, _marker, signal) => {
+      signals.push(signal!);
+      return new Promise<boolean>(() => {});
+    }
+  });
+  try {
+    const first = bridge.deliver({
+      threadId: "019f0000-0000-7000-8000-000000000170",
+      prompt: "本次投递 deliveryId：11111111-aaaa-4bbb-8ccc-111111111170",
+      cwd: process.cwd(), sandbox: "workspace-write"
+    });
+    const rejected = assert.rejects(first, { name: "CodexDesktopDeliveryUnconfirmedError" });
+    let secondFinished = false;
+    const second = bridge.deliver({
+      threadId: "019f0000-0000-7000-8000-000000000170", prompt: "ordinary next input",
+      cwd: process.cwd(), sandbox: "workspace-write"
+    }).then(value => { secondFinished = true; return value; });
+    await waitFor(() => secondFinished);
+    await rejected;
+    assert.equal((await second).action, "steered");
+    assert.ok(signals.length > 0 && signals.every(signal => signal.aborted));
+    assert.deepEqual(router.methods.filter(method => method.startsWith("thread-follower-")), [
+      "thread-follower-steer-turn", "thread-follower-steer-turn"
+    ]);
+  } finally {
+    bridge.close();
+    await router.close();
+  }
+});
+
+for (const action of ["started", "steered"] as const) {
+  test(`accepted ${action} observes the original late native receipt without sending again`, async () => {
+    const marker = action === "started" ? "11111111-aaaa-4bbb-8ccc-111111111171" : "11111111-aaaa-4bbb-8ccc-111111111172";
+    const threadId = "019f0000-0000-7000-8000-000000000171";
+    const events: CodexDesktopDeliveryEvent[] = [];
+    let visible = false;
+    let receiptChanges = 0;
+    const { createManager } = await import("./agentAdapters/codexManagerProvider.js");
+    const descriptor: AgentManagerDescriptor = {
+      type: "codex", capability: "agent.adapter.codex@1",
+      manifest: { type: "codex", label: "Codex event fixture", maturity: "experimental", transport: { protocol: "fixture", mode: "owner" }, capabilities: {} },
+      sessionBinding: { sessionId: "fixtureSessionId", sessionName: "fixtureSessionName", workspace: "fixtureCwd", defaultName: "Existing task" }
+    };
+    const nativeOwner = createManager({ host: { deliveryReceiptChanged: () => { receiptChanges++; } } } as AgentManagerImplementationOptions,
+      descriptor, new AbortController().signal);
+    let afterUnpublishBridge: CodexDesktopBridge | undefined;
+
+    const router = await createMockDesktopRouter(request => {
+      if (request.method === "initialize") return { type: "response", requestId: request.requestId, resultType: "success", result: { clientId: "rabi" } };
+      if (action === "started" && request.method === "thread-follower-steer-turn") return { type: "response", requestId: request.requestId, resultType: "error", error: "NoActiveTurn" };
+      return { type: "response", requestId: request.requestId, resultType: "success", result: {} };
+    });
+    const bridge = new CodexDesktopBridge({
+      pipePaths: [router.pipePath], deliveryReceiptGraceMs: 0,
+      lateStartReconcileMs: 300, deliveryReceiptPollMs: 10,
+      deliveryReceiptReader: (id, deliveryMarker) => {
+        assert.equal(id, threadId); assert.equal(deliveryMarker, marker);
+        return visible;
+      }, onDeliveryEvent: event => events.push(event)
+    });
+    try {
+      await nativeOwner.start?.();
+      await assert.rejects(bridge.deliver({ threadId, prompt: `本次投递 deliveryId：${marker}`,
+        cwd: process.cwd(), sandbox: "workspace-write" }), { name: "CodexDesktopDeliveryUnconfirmedError" });
+      assert.equal(codexDesktopLateStartAccepted(threadId, marker), false);
+      assert.equal(receiptChanges, 0, "IPC acceptance and non-late events do not confirm a receipt");
+      visible = true;
+      await waitFor(() => events.some(event => event.late === true));
+      const late = events.find(event => event.late)!;
+      const method = action === "started" ? "thread-follower-start-turn" : "thread-follower-steer-turn";
+      assert.equal(late.action, action);
+      assert.equal(late.method, method);
+      assert.equal(late.requestId, events.find(event => event.method === method && event.stage.endsWith("_requested"))?.requestId);
+      assert.equal(codexDesktopLateStartAccepted(threadId, marker), true);
+      assert.deepEqual(router.methods.filter(value => value.startsWith("thread-follower-")), action === "started"
+        ? ["thread-follower-steer-turn", "thread-follower-start-turn"] : ["thread-follower-steer-turn"]);
+      assert.equal(receiptChanges, 1, "the actual native provider wakes its original receipt query for both late methods");
+      await nativeOwner.unpublish?.();
+      let afterVisible = false, afterConfirmed = false;
+      const afterMarker = marker.slice(0, -1) + (action === "started" ? "8" : "9");
+      afterUnpublishBridge = new CodexDesktopBridge({
+        pipePaths: [router.pipePath], deliveryReceiptGraceMs: 0, lateStartReconcileMs: 300, deliveryReceiptPollMs: 10,
+        deliveryReceiptReader: () => afterVisible,
+        onDeliveryEvent: event => { if (event.late && event.deliveryMarker === afterMarker) afterConfirmed = true; }
+      });
+      await assert.rejects(afterUnpublishBridge.deliver({ threadId, prompt: `本次投递 deliveryId：${afterMarker}`,
+        cwd: process.cwd(), sandbox: "workspace-write" }), { name: "CodexDesktopDeliveryUnconfirmedError" });
+      afterVisible = true;
+      await waitFor(() => afterConfirmed);
+      assert.equal(receiptChanges, 1, "unpublish releases the original native subscriber before later private fixture events");
+    } finally {
+      afterUnpublishBridge?.close();
+      bridge.close();
+      try { await nativeOwner.dispose?.(); } finally { await router.close(); }
+    }
+  });
+}
+
+test("late native observation keeps missing or mismatched evidence unconfirmed", async () => {
+  const marker = "11111111-aaaa-4bbb-8ccc-111111111173";
+  const threadId = "019f0000-0000-7000-8000-000000000173";
+  const events: CodexDesktopDeliveryEvent[] = [];
+  const signals: AbortSignal[] = [];
+  const visibleMarkers = new Set(["another-original-marker"]);
+  const router = await createMockDesktopRouter(request => ({ type: "response", requestId: request.requestId,
+    resultType: "success", result: request.method === "initialize" ? { clientId: "rabi" } : {} }));
+  const bridge = new CodexDesktopBridge({
+    pipePaths: [router.pipePath], deliveryReceiptGraceMs: 0, lateStartReconcileMs: 40, deliveryReceiptPollMs: 10,
+    deliveryReceiptReader: (id, deliveryMarker, signal) => {
+      assert.equal(id, threadId); assert.equal(deliveryMarker, marker);
+      signals.push(signal!);
+      return visibleMarkers.has(deliveryMarker);
+    }, onDeliveryEvent: event => events.push(event)
+  });
+  try {
+    await assert.rejects(bridge.deliver({ threadId, prompt: `本次投递 deliveryId：${marker}`,
+      cwd: process.cwd(), sandbox: "workspace-write" }), { name: "CodexDesktopDeliveryUnconfirmedError" });
+    await waitFor(() => signals.length > 1 && signals.every(signal => signal.aborted));
+    assert.equal(events.some(event => event.late), false);
+    assert.equal(codexDesktopLateStartAccepted(threadId, marker), false);
+    assert.equal(router.methods.filter(method => method.startsWith("thread-follower-")).length, 1);
+  } finally {
+    bridge.close();
+    await router.close();
+  }
+});
+
+test("late observation bounds a hanging reader and close discards its eventual result", async () => {
+  const marker = "11111111-aaaa-4bbb-8ccc-111111111174";
+  const threadId = "019f0000-0000-7000-8000-000000000174";
+  const events: CodexDesktopDeliveryEvent[] = [];
+  const signals: AbortSignal[] = [];
+  let reads = 0;
+  let resolveLate!: (value: boolean) => void;
+  const router = await createMockDesktopRouter(request => ({ type: "response", requestId: request.requestId,
+    resultType: "success", result: request.method === "initialize" ? { clientId: "rabi" } : {} }));
+  const bridge = new CodexDesktopBridge({
+    pipePaths: [router.pipePath], deliveryReceiptGraceMs: 0, lateStartReconcileMs: 40,
+    deliveryReceiptReader: (_id, _marker, signal) => {
+      signals.push(signal!);
+      if (++reads === 1) return false;
+      return new Promise<boolean>(resolve => { resolveLate = resolve; });
+    }, onDeliveryEvent: event => events.push(event)
+  });
+  try {
+    await assert.rejects(bridge.deliver({ threadId, prompt: `本次投递 deliveryId：${marker}`,
+      cwd: process.cwd(), sandbox: "workspace-write" }), { name: "CodexDesktopDeliveryUnconfirmedError" });
+    await waitFor(() => signals.length === 2 && signals[1].aborted);
+    bridge.close();
+    resolveLate(true);
+    await wait(10);
+    assert.equal(reads, 2);
+    assert.equal(events.some(event => event.late), false);
+    assert.equal(codexDesktopLateStartAccepted(threadId, marker), false);
+  } finally {
+    bridge.close();
+    await router.close();
+  }
+});
+
+test("close during receipt grace cannot recreate a background observer", async () => {
+  const marker = "11111111-aaaa-4bbb-8ccc-111111111175";
+  const threadId = "019f0000-0000-7000-8000-000000000175";
+  const events: CodexDesktopDeliveryEvent[] = [];
+  let reads = 0;
+  let observedSignal: AbortSignal | undefined;
+  const router = await createMockDesktopRouter(request => ({ type: "response", requestId: request.requestId,
+    resultType: "success", result: request.method === "initialize" ? { clientId: "rabi" } : {} }));
+  const bridge = new CodexDesktopBridge({
+    pipePaths: [router.pipePath], deliveryReceiptGraceMs: 1000, lateStartReconcileMs: 300,
+    deliveryReceiptReader: (_id, _marker, signal) => {
+      reads++; observedSignal = signal;
+      return new Promise<boolean>(() => {});
+    }, onDeliveryEvent: event => events.push(event)
+  });
+  try {
+    const pending = bridge.deliver({ threadId, prompt: `本次投递 deliveryId：${marker}`,
+      cwd: process.cwd(), sandbox: "workspace-write" });
+    const rejected = assert.rejects(pending, { name: "CodexDesktopDeliveryUnconfirmedError" });
+    await waitFor(() => reads === 1);
+    bridge.close();
+    await rejected;
+    await wait(10);
+    assert.equal(observedSignal?.aborted, true);
+    assert.equal(reads, 1);
+    assert.equal(events.some(event => event.late), false);
   } finally {
     bridge.close();
     await router.close();

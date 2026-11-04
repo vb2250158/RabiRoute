@@ -3,10 +3,14 @@ import { computed, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { pluginCatalogStore } from "../pluginCatalogStore";
 import { isWebPageRouteActive } from "../pluginPages";
+import { webPluginPageLoading } from "../pluginModuleBootstrap";
+import { useI18n } from "../i18n";
 
 const route = useRoute();
 const router = useRouter();
 const refreshing = ref(false);
+const { t } = useI18n();
+const loading = computed(() => refreshing.value || webPluginPageLoading(pluginCatalogStore.status.value));
 const requestedPath = computed(() => {
   const value = typeof route.query.from === "string" ? route.query.from : "";
   return value.startsWith("/") && !value.startsWith("/plugin-recovery") ? value : "/";
@@ -32,11 +36,17 @@ async function retry(): Promise<void> {
   <div class="page-shell">
     <v-card class="app-card glass-card section-card plugin-recovery-card">
       <div class="eyebrow">PLUGIN CATALOG</div>
-      <h1 class="page-title">插件页面暂不可用</h1>
-      <p class="page-subtitle">WebGUI 没有读取到可用的插件目录，只保留此恢复入口。</p>
-      <v-btn color="primary" prepend-icon="mdi-refresh" :loading="refreshing" @click="retry">
-        重新读取插件目录
-      </v-btn>
+      <div v-if="loading" role="status" aria-busy="true">
+        <v-progress-linear indeterminate color="primary" />
+        <h1 class="page-title">{{ t("页面已切换，正在加载内容") }}</h1>
+      </div>
+      <template v-else>
+        <h1 class="page-title">插件页面暂不可用</h1>
+        <p class="page-subtitle">WebGUI 没有读取到可用的插件目录，只保留此恢复入口。</p>
+        <v-btn color="primary" prepend-icon="mdi-refresh" :loading="refreshing" @click="retry">
+          重新读取插件目录
+        </v-btn>
+      </template>
     </v-card>
   </div>
 </template>

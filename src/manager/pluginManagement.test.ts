@@ -148,3 +148,22 @@ test("an invalid base profile reports its syntax failure without echoing source 
   assert.equal(body.includes(raw), false);
   assert.equal(await fs.readFile(f.profilePath, "utf8"), raw);
 });
+
+
+test("configured package upgrade reports the original running version until native replacement", async t => {
+  const f = await fixture(t);
+  const original = f.runtime.current().records[0]!;
+  const profile = JSON.parse(await fs.readFile(f.profilePath, "utf8"));
+  profile.instances[0].version = "2.0.0";
+  await fs.writeFile(f.profilePath, JSON.stringify(profile));
+  const management = createPluginManagement({ runtime: f.runtime, settings: f.settings,
+    manifest: async () => ({ ...original.manifest, version: "2.0.0" }), reconcile: async () => {} });
+  const result = await management.list({ assertCurrent() {} }) as {
+    instances: { version: string; runningVersion?: string; status: string }[]
+  };
+  assert.equal(result.instances[0]?.version, "2.0.0");
+  assert.equal(result.instances[0]?.runningVersion, original.identity.version);
+  assert.equal(result.instances[0]?.runningVersion, "1.0.0");
+  assert.equal(result.instances[0]?.status, "active");
+  assert.equal(f.runtime.current().records[0]?.identity.activationId, original.identity.activationId);
+});

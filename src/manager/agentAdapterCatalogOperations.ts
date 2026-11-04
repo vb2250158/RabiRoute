@@ -2,7 +2,7 @@ import type http from "node:http";
 import type { AgentAdapterCatalogService } from "./agentAdapterCatalog.js";
 import { AGENT_CATALOG_OPERATIONS, agentAdapterCatalogContract, agentCatalogScanOptions, type AgentCatalogOperationKey } from "./agentAdapterCatalogContract.js";
 import { AgentAdapterCatalogWorkerError } from "./agentAdapterCatalogWorkerPool.js";
-import { DshConnectionError } from "../dshConnectionStore.js";
+
 import type { ApiOperationDefinition, ApiOperationResult } from "./apiOperationContract.js";
 
 export function catalogResponseAbortSignal(request: http.IncomingMessage, response: http.ServerResponse): { signal: AbortSignal; dispose(): void } {
@@ -27,15 +27,15 @@ export async function runAgentAdapterCatalogOperation(key: AgentCatalogOperation
       ? await service.scanGrokBot(options, lifetime.signal) : await service.scanAll(options, lifetime.signal);
     return { status: 200, body: data };
   } catch (error) {
-    if (connection) return { status: error instanceof DshConnectionError ? error.status : 500,
-      body: { ok: false, message: error instanceof DshConnectionError ? error.message : "DSH connection operation failed; refresh before retrying." } };
+    if (connection) return { status: typeof (error as { status?: number })?.status === "number" ? (error as { status: number }).status : 500,
+      body: { ok: false, message: error instanceof Error ? error.message : "DSH connection operation failed; refresh before retrying." } };
     const status = error instanceof AgentAdapterCatalogWorkerError && error.code === "busy" ? 503 : 500;
     return { status, body: { ...(key === "hooks" ? { ok: false } : { code: -1 }), message: error instanceof Error ? error.message : String(error) } };
   } finally { lifetime?.dispose(); }
 }
 
 export function createAgentAdapterCatalogOperations(service: AgentAdapterCatalogService): readonly ApiOperationDefinition[] {
-  return AGENT_CATALOG_OPERATIONS.map(definition => ({ contract: agentAdapterCatalogContract(definition), handler: input =>
+  return AGENT_CATALOG_OPERATIONS.filter(definition => ["catalog", "all", "hooks"].includes(definition.key)).map(definition => ({ contract: agentAdapterCatalogContract(definition), handler: input =>
     runAgentAdapterCatalogOperation(definition.key, input.request, input.url, input.response, service,
       definition.key === "connect" || definition.key === "disconnect" ? { value: input.body, signal: input.signal } : undefined) }));
 }

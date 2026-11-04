@@ -1,0 +1,23 @@
+{
+  "type": "deviceAgent",
+  "capability": "agent.adapter.device-agent@1",
+  "manifest": {
+    "type": "deviceAgent",
+    "label": "设备 Agent（实验）",
+    "maturity": "experimental",
+    "transport": {
+      "protocol": "http",
+      "mode": "device-owner-mailbox"
+    },
+    "host": {
+      "name": "Device Agent runtime",
+      "required": true
+    },
+    "capabilities": {
+      "managedTasks": {
+        "agentThreads": true
+      }
+    }
+  },
+  "sessionBinding": {}
+}

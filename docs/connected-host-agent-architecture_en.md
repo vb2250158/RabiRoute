@@ -53,7 +53,7 @@ flowchart TB
   T --> AR["A: original Route / worker events and delivery state"]
   AR <--> P
   T --> AL["A: original AgentEndpointDelivery, sole formal delivery ledger"]
-  AL --> PROOF["A original task proof / prepared delivery / same-ID reconciliation"]
+  AL --> PROOF["A real connection attribution / prepared delivery / same-ID reconciliation"]
   PROOF <--> P
   R["RabiLink server: authentication / signalling / relay"] <--> P
   P <--> B["B Manager: existing admission and public APIs"]
@@ -66,7 +66,7 @@ flowchart TB
   OS --> RET["Original request results / output events / files"]
   AO --> RET
   RET --> P
-  P --> BACK["A: original execution receipt reconciliation / source-owner formal reply"]
+  P --> BACK["A: original execution receipt / source task or original Manager request result"]
   BACK --> AL
 ```
 
@@ -94,7 +94,7 @@ This change targets native Agents on full host B for formal cross-PC delivery. L
 
 Authenticated established connections can use public target APIs by default. Retain explicit user disable settings and normal business version, idempotency, file and permission conditions. Do not add per-feature grants or another management password. Existing trusted transports establish source identity; asynchronous work keeps its original request guard and never downgrades a revoked remote call to local access.
 
-The existing connection identifies the source PC; provider and full session ID locate its original task. An Agent on a connected PC can initiate a new message without a previous request. Formal replies return through the original ledger address. A uses B's `/api/agent/prepared-deliveries` and `/reconcile`; B retains execution receipts only. Ordinary application connections retain native-task resolution instead of being misclassified as exclusive device-task sources.
+The existing connection records the source PC. When a session exists, provider and full session ID describe its original task; otherwise the real connection is recorded without registering or inventing a task. An Agent on a connected PC can initiate a new message without a previous request. Formal replies return through the original ledger address to the source task, or are recorded on the original Manager request when no source task exists. A uses B's `/api/agent/prepared-deliveries` and `/reconcile`; B retains execution receipts only. Ordinary application connections retain native-task resolution instead of being misclassified as exclusive device-task sources.
 
 Ordinary Routes and workers use `/api/agent/route-deliveries` and `/reconcile`, preserving user/system sources. B supplies the source-A API prefix in the actual task context; personas, plans and channel replies remain owned by A. Historical receipt queries do not require an unarchived task. Proven not-sent deliveries can recover with the original ID; unknown outcomes only reconcile. See the [API contract](rabi-agent-interfaces_en.md#connected-host-native-delivery-source-connected).
 
@@ -109,7 +109,7 @@ This change extracts `managerPeerRuntime.ts`: candidate preparation, operation c
 | Order | Source implementation | Acceptance requirement |
 | --- | --- | --- |
 | 1 | Inject host/connector execution targets at the computer-operation boundary; mount shared TerminalService / ComputerService in the Manager lifecycle. Preserve operations, terminal events and file protocol. | An empty Agent list still allows terminals, file round trips and supported screenshots; stop releases children, subscriptions and temporary uploads. |
-| 2 | Add outer device references and source-PC original-task proof. A's original ledger uses existing `manager` transport for B's prepared execution/same-ID reconciliation and returns results to A's source owner. | Both hosts reach exact sessions with original workspace, owner and receipts; one source/deliveryId has one formal intent. Computer operations do not require a primary Agent/Route binding. |
+| 2 | Add outer device references and source-PC connection attribution and available task metadata. A's original ledger uses existing `manager` transport for B's prepared execution/same-ID reconciliation and returns results to A's source owner. | Both hosts reach exact sessions with original workspace, owner and receipts; one source/deliveryId has one formal intent. Computer operations do not require a primary Agent/Route binding. |
 | 3 | Let UI and context consume the unified target projection while preserving actual device, session and operation states. | Displayed target, execution computer and receipt agree. One unavailable target does not block others. |
 | 4 | Reuse native-resource build/installation contracts, then validate isolated running candidates and physical computers. | Real bidirectional execution after connecting through the RabiLink server, including disconnects, revocation, busy sessions and uncertain writes. Source tests/builds do not replace this. |
 
@@ -119,7 +119,7 @@ The implementation reuses existing platform services directly. Root optional dep
 
 - Peer composition cleanup: isolated preparation, publication/rollback, retiring an old candidate after replacement, and failure cleanup; reuse `src/peerTunnel/pluginRuntime.test.ts` and matching transport tests.
 - Host-service acceptance: terminal readiness/cursors, cancellation/exit, chunked file integrity, desktop/window PNG, helper cleanup and accurate unsupported-platform responses.
-- Delivery acceptance: A→B and B→A exact original tasks, trusted source proof, exact targets, one formal intent, idempotent duplicates, acceptance versus completion and formal replies. After B accepts and A disconnects, reconcile the original execution receipt without resending. Isolate per-target failures.
+- Delivery acceptance: A→B and B→A exact original tasks, real connection attribution, exact targets, one formal intent, idempotent duplicates, acceptance versus completion and formal replies. After B accepts and A disconnects, reconcile the original execution receipt without resending. Isolate per-target failures.
 - Full builds and local fixtures establish only their candidates; installed versions, real public-network/two-computer use and each OS need separate acceptance.
 
 History: `04f09b73` unified application service authentication; `880657cb` retained module isolation and candidate publication boundaries. These support reusing transport/lifecycle and do not prove local computer wiring exists. Unifying full hosts evolves the previous Manager-plus-separate-client design.

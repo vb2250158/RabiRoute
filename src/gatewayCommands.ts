@@ -1,5 +1,5 @@
 import { resolvePrimaryAgentTarget } from "./shared/routeAgentTargets.js";
-import { notifyInstanceAgent } from "./agentAdapters/lanAgentAdapter.js";
+import { mountGatewayAgentCommandRuntime } from "./runtime/gatewayAgentCommandRuntime.js";
 import { config, runtimeLayout } from "./config.js";
 import path from "node:path";
 import { messageEndpointCommandEnabled } from "./plugin-runtime-host/messageEndpointCommandSettings.js";
@@ -92,6 +92,11 @@ type XiaomiHomeEventCliPayload = {
 
 
 export async function runGatewayCommand(argv: readonly string[] = process.argv): Promise<void> {
+  const native = await mountGatewayAgentCommandRuntime();
+  try { await executeGatewayCommand(argv); } finally { await native.dispose(); }
+}
+
+async function executeGatewayCommand(argv: readonly string[]): Promise<void> {
   if (argv.includes("--xiaomi-home-event-stdin")) {
     try {
       const storageGenerationLease = planStorageGenerationLeaseFromEnvironment();
@@ -110,10 +115,10 @@ export async function runGatewayCommand(argv: readonly string[] = process.argv):
         reason: result.reason,
         adapterOutcomes: result.adapterOutcomes.map(outcome => ({ adapter: outcome.adapter, status: outcome.status }))
       })}`);
-      process.exit(result.status === "failed" ? 1 : 0);
+      { process.exitCode = result.status === "failed" ? 1 : 0; return; }
     } catch (error) {
       console.error(`RabiRoute Xiaomi Home event delivery failed: ${error instanceof Error ? error.message : String(error)}`);
-      process.exit(1);
+      { process.exitCode = 1; return; }
     }
   }
 
@@ -138,10 +143,10 @@ export async function runGatewayCommand(argv: readonly string[] = process.argv):
           status: outcome.status
         }))
       })}`);
-      process.exit(result.status === "failed" ? 1 : 0);
+      { process.exitCode = result.status === "failed" ? 1 : 0; return; }
     } catch (error) {
       console.error(`RabiRoute wearable alert delivery failed: ${error instanceof Error ? error.message : String(error)}`);
-      process.exit(1);
+      { process.exitCode = 1; return; }
     }
   }
 
@@ -169,13 +174,13 @@ export async function runGatewayCommand(argv: readonly string[] = process.argv):
       });
       if (!result.ok) {
         console.error(`RabiRoute delivery replay failed: ${result.error ?? result.result?.status ?? "unknown"}`);
-        process.exit(1);
+        { process.exitCode = 1; return; }
       }
       console.log(`RabiRoute delivery replay completed: mode=${result.mode} attempts=${result.replayedAttemptIds.length} status=${result.result?.status ?? "unknown"}`);
-      process.exit(0);
+      { process.exitCode = 0; return; }
     } catch (error) {
       console.error(`RabiRoute delivery replay failed: ${error instanceof Error ? error.message : String(error)}`);
-      process.exit(1);
+      { process.exitCode = 1; return; }
     }
   }
 
@@ -199,13 +204,13 @@ export async function runGatewayCommand(argv: readonly string[] = process.argv):
       const summary = deliverySummary(result);
       if (result.status === "failed") {
         console.error(`RabiRoute manual trigger failed: ${triggerId} ${summary}`);
-        process.exit(1);
+        { process.exitCode = 1; return; }
       }
       console.log(`RabiRoute manual trigger completed: ${triggerId} ${summary}`);
-      process.exit(0);
+      { process.exitCode = 0; return; }
     } catch (error) {
       console.error(`RabiRoute manual trigger failed: ${error instanceof Error ? error.message : String(error)}`);
-      process.exit(1);
+      { process.exitCode = 1; return; }
     }
   }
 
@@ -284,17 +289,17 @@ export async function runGatewayCommand(argv: readonly string[] = process.argv):
       const exitCode = rolePanelDeliveryExitCode(result.status);
       if (exitCode === 1) {
         console.error(`RabiRoute ${localMessageSpec.label} failed: ${messageId} ${summary}`);
-        process.exit(1);
+        { process.exitCode = 1; return; }
       }
       if (exitCode === 2) {
         console.error(`RabiRoute ${localMessageSpec.label} not delivered: ${messageId} ${summary}`);
-        process.exit(2);
+        { process.exitCode = 2; return; }
       }
       console.log(`RabiRoute ${localMessageSpec.label} delivered: ${messageId} ${summary}`);
-      process.exit(0);
+      { process.exitCode = 0; return; }
     } catch (error) {
       console.error(`RabiRoute ${localMessageSpec.label} failed: ${error instanceof Error ? error.message : String(error)}`);
-      process.exit(1);
+      { process.exitCode = 1; return; }
     }
   }
 
@@ -309,7 +314,7 @@ export async function runGatewayCommand(argv: readonly string[] = process.argv):
     const ingress = speechMessagesDir ? new SpeechIngressStore(speechMessagesDir).read(messageId) : undefined;
     if (!ingress) {
       console.error(`RabiRoute speech message failed: host speech ingress record not found (${messageId})`);
-      process.exit(1);
+      { process.exitCode = 1; return; }
     }
     const { routeKind, record } = createSpeechIngressForwarding(ingress, {
       gatewayId,
@@ -332,7 +337,7 @@ export async function runGatewayCommand(argv: readonly string[] = process.argv):
       });
       if (!enabled) {
         writeSpeechProcessResult({ status: "recorded", reason: "endpoint_plugin_disabled", detail: `Transcript remains in its original ingress store; endpoint ${adapterType} is disabled or unavailable.` });
-        process.exit(SPEECH_EXIT_RECORDED);
+        { process.exitCode = SPEECH_EXIT_RECORDED; return; }
       }
       appendVoiceTranscriptEventForAdapter(adapterType, record);
       const route = requestedRouteProfileId
@@ -349,7 +354,7 @@ export async function runGatewayCommand(argv: readonly string[] = process.argv):
         const outcome = speechQuarantinedProcessOutcome(quality.reason, `Quality gate: ${audit}`);
         console.log(`RabiRoute speech message quarantined: ${messageId} reason=${quality.reason}`);
         writeSpeechProcessResult(outcome.result);
-        process.exit(outcome.exitCode);
+        { process.exitCode = outcome.exitCode; return; }
       }
       if (routeKind === "rabilink") {
         const result = await forwardMessageAndWait(routeKind, record);
@@ -363,7 +368,7 @@ export async function runGatewayCommand(argv: readonly string[] = process.argv):
           console.warn(`RabiRoute mobile audio message not delivered: ${messageId} ${summary}`);
         }
         writeSpeechProcessResult(outcome.result);
-        process.exit(outcome.exitCode);
+        { process.exitCode = outcome.exitCode; return; }
       }
       const push = decideSpeechPush(text, route?.speechPushMode, route?.speechTriggerKeywords);
       if (!push.shouldNotifyAgent) {
@@ -371,7 +376,7 @@ export async function runGatewayCommand(argv: readonly string[] = process.argv):
         const outcome = speechRecordedProcessOutcome(recordedRoutes, push.reason);
         console.log(`RabiRoute speech message ${outcome.result.status}: ${messageId} mode=${push.mode} reason=${outcome.result.reason} routes=${recordedRoutes}`);
         writeSpeechProcessResult(outcome.result);
-        process.exit(outcome.exitCode);
+        { process.exitCode = outcome.exitCode; return; }
       }
       const result = await forwardMessageAndWait(routeKind, record, {
         speechPushMode: push.mode,
@@ -387,12 +392,12 @@ export async function runGatewayCommand(argv: readonly string[] = process.argv):
         console.warn(`RabiRoute speech message not delivered: ${messageId} ${summary}`);
       }
       writeSpeechProcessResult(outcome.result);
-      process.exit(outcome.exitCode);
+      { process.exitCode = outcome.exitCode; return; }
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
       console.error(`RabiRoute speech message failed: ${detail}`);
       writeSpeechProcessResult({ status: "failed", reason: "exception", detail });
-      process.exit(1);
+      { process.exitCode = 1; return; }
     }
   }
 
@@ -405,7 +410,7 @@ export async function runGatewayCommand(argv: readonly string[] = process.argv):
     const requestedAdapter = parseAgentAdapterType(adapterArg?.slice("--direct-agent-adapter=".length));
     if (adapterArg && !requestedAdapter) {
       console.error("RabiRoute direct agent message failed: invalid agent adapter");
-      process.exit(1);
+      { process.exitCode = 1; return; }
     }
     const targetArg = argv.find(arg => arg.startsWith("--direct-agent-target="));
     const requestedTargetId = targetArg ? decodeURIComponent(targetArg.slice("--direct-agent-target=".length)) : requestedAdapter ? `local:${requestedAdapter}` : config.primaryAgentTarget;
@@ -419,11 +424,10 @@ export async function runGatewayCommand(argv: readonly string[] = process.argv):
       : process.env.GATEWAY_ID?.trim() || "";
     if (!adapter) {
       console.error("RabiRoute direct agent message failed: no agent adapters configured");
-      process.exit(1);
+      { process.exitCode = 1; return; }
     }
     try {
-      if (target?.binding) await notifyInstanceAgent(adapter, target.binding, envelope);
-      else await (await createAgentAdapter(adapter, "local")).deliver(envelope);
+      await (await createAgentAdapter(adapter, target?.binding ? { binding: target.binding } : "local")).deliver(envelope);
       if (deliveryId) {
         console.log(serializeAgentDeliveryTestResult({
           deliveryId,
@@ -435,7 +439,7 @@ export async function runGatewayCommand(argv: readonly string[] = process.argv):
         }));
       }
       console.log("RabiRoute direct agent message completed");
-      process.exit(0);
+      { process.exitCode = 0; return; }
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
       if (deliveryId) {
@@ -450,7 +454,7 @@ export async function runGatewayCommand(argv: readonly string[] = process.argv):
         }));
       }
       console.error(`RabiRoute direct agent message failed: ${detail}`);
-      process.exit(1);
+      { process.exitCode = 1; return; }
     }
   }
   throw new Error("No one-shot Gateway command was selected.");

@@ -1,5 +1,6 @@
 export const agentThreadSourceTypes = ["primary_persona", "message_processing", "plan_secretary", "plan_agent", "agent"] as const;
-export type AgentThreadSourceType = typeof agentThreadSourceTypes[number];
+/** Descriptive source label; it does not grant or restrict delivery. */
+export type AgentThreadSourceType = string;
 
 export class AgentThreadContractError extends Error {
   constructor(message: string, readonly field: string, readonly stage: "validation" | "source_verification", readonly repair: string,
@@ -20,18 +21,8 @@ export function completeAgentSessionId(value: unknown, field: "sourceThreadId" |
   return value;
 }
 
-export function normalizeAgentThreadSourceType(value: unknown, required = false): AgentThreadSourceType {
-  if (value == null || value === "") {
-    if (!required) return "agent";
-    throw new AgentThreadContractError("Source Agent type is required.", "sourceAgentType", "source_verification",
-      "Supply the actual source role; use agent for an ordinary Agent session.", "AGENT_SOURCE_TYPE_REQUIRED");
-  }
-  const normalized = typeof value === "string" ? value.trim() : "";
-  if (!normalized || normalized.length > 40 || !(agentThreadSourceTypes as readonly string[]).includes(normalized)) {
-    throw new AgentThreadContractError("Invalid sourceAgentType. Expected primary_persona, message_processing, plan_secretary, plan_agent, or agent.",
-      "sourceAgentType", "source_verification", "Select one of the documented source roles.", "AGENT_SOURCE_TYPE_INVALID");
-  }
-  return normalized as AgentThreadSourceType;
+export function normalizeAgentThreadSourceType(value: unknown, _required = false): AgentThreadSourceType {
+  return typeof value === "string" ? value.replace(/[\r\n\u2028\u2029]/g, " ").trim().slice(0, 80) || "agent" : "agent";
 }
 
 export function callerAgentDeliveryId(value: unknown): string | undefined {

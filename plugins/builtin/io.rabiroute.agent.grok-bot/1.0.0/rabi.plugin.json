@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 2,
+  "id": "io.rabiroute.agent.grok-bot",
+  "version": "1.0.0",
+  "displayName": "Grok Bot",
+  "description": "将消息交给绑定的 Grok Bot Agent 与会话，按原请求确认回执。",
+  "icon": "mdi-robot-outline",
+  "entries": {
+    "manager": {
+      "execution": "in_process",
+      "module": "./manager.mjs"
+    },
+    "gateway": {
+      "execution": "in_process",
+      "module": "./gateway.mjs"
+    },
+    "web": {
+      "execution": "in_process",
+      "module": "./web/client.mjs"
+    }
+  },
+  "provides": [
+    "agent.adapter.grok-bot@1"
+  ],
+  "requires": [
+    "host.agent-adapters@1"
+  ],
+  "optional": [],
+  "permissions": []
+}

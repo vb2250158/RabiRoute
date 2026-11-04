@@ -24,6 +24,16 @@ test("headless instance lists sessions and dispatches an explicit target without
   const directory = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "rabi-instance-e2e-")));
   const sessions: string[] = [];
   const httpDiagnostic: string[] = [];
+  const fixtureStartedAt = performance.now();
+  let lastStage = "fixture.begin";
+  let observeWorker: (() => unknown) | undefined;
+  const stage = (name: string, detail: Record<string, unknown> = {}) => {
+    lastStage = name;
+    t.diagnostic(JSON.stringify({ stage: name, elapsedMs: performance.now() - fixtureStartedAt, ...detail }));
+  };
+  t.after(() => t.diagnostic(JSON.stringify({ stage: "test.after", lastStage,
+    elapsedMs: performance.now() - fixtureStartedAt, httpDiagnostic, worker: observeWorker?.() })));
+  stage("fixture.begin");
   const read = async <T>(request: http.IncomingMessage): Promise<T> => { let raw = ""; for await (const chunk of request) raw += chunk; return JSON.parse(raw || "{}"); };
   const dsh = http.createServer(async (request, response) => {
     const body = await read<{ rpcId: string; method: string; payload: { sessionId: string } }>(request);
@@ -32,7 +42,9 @@ test("headless instance lists sessions and dispatches an explicit target without
     response.setHeader("content-type", "application/json");
     response.end(JSON.stringify({ rpcId: body.rpcId, result: { ok: true, value } }));
   });
+  stage("dsh.listen.start");
   const dshUrl = await listen(dsh);
+  stage("dsh.listen.ready");
   const authority = new LanAgentAuthority({ statePath: path.join(directory, "authority.json") });
   const nodeId = "remote-fixture";
   const credential = authority.enroll(authority.issueBootstrapTicket().ticket, nodeId);
@@ -77,10 +89,13 @@ test("headless instance lists sessions and dispatches an explicit target without
   manager.on("upgrade", (request, socket, head) => {
     if (!api.handleUpgrade(request, new URL(request.url!, "http://localhost"), socket, head)) socket.destroy();
   });
+  stage("manager.listen.start");
   const managerUrl = await listen(manager);
+  stage("manager.listen.ready");
   const configPath = path.join(directory, "config.json");
   fs.writeFileSync(configPath, JSON.stringify({ schemaVersion: 1, managerUrl, nodeCredential: credential.token, nodeId, releasePublicKeySha256: "a".repeat(64), agents: [], defaultWorkspace: directory, allowedWorkspaces: [directory] }));
   // The test owns the actual connector through IPC, rather than observing only a launcher parent.
+  stage("connector.spawn.start");
   const worker = spawn(process.execPath, [path.resolve("apps/rabi-agent/rabi-agent.mjs"), "--run", "--config", configPath], {
     windowsHide: true, env: { ...process.env, RABI_AGENT_SUPERVISED: "1" }, stdio: ["ignore", "pipe", "pipe", "ipc"]
   });
@@ -93,22 +108,32 @@ test("headless instance lists sessions and dispatches an explicit target without
     worker.once("close", () => { workerEnded = true; resolve(); });
     worker.once("error", error => { workerEnded = true; workerDiagnostic = (workerDiagnostic + error.message).slice(-4096).replaceAll(credential.token, "<redacted>"); resolve(); });
   });
+  observeWorker = () => ({ pid: worker.pid, ended: workerEnded, exitCode: worker.exitCode,
+    signalCode: worker.signalCode, diagnostic: workerDiagnostic });
+  stage("connector.spawn.observed", { pid: worker.pid });
   const request = async (suffix: string, body: unknown) => {
+    stage("manager.request.start", { suffix });
     const response = await fetch(`${managerUrl}/api/lan-agent/instances/remote-fixture/agents${suffix}`, { method: "POST", headers: { authorization: "Bearer test-instance", "content-type": "application/json" }, body: JSON.stringify(body) });
-    return { response, body: await response.json() as any };
+    const result = { response, body: await response.json() as any };
+    stage("manager.request.complete", { suffix, status: response.status });
+    return result;
   };
   try {
+    stage("api.help.start");
     const help = await fetch(`${managerUrl}/api/agent/help`, { headers: { authorization: `Bearer ${credential.token}` } });
     assert.equal(help.status, 200);
     const published = (await help.json() as any).data;
     assert.equal(published.applicationGenerationId, identity.applicationGenerationId);
     assert.equal(published.managerInstanceId, identity.managerInstanceId);
     assert.equal(published.operations.find((entry: any) => entry.id === "manager.lan-agent.connect")?.contract.transport, "websocket");
+    stage("api.help.verified");
     const connectingAt = Date.now();
+    stage("connector.connection.wait");
     const deadline = Date.now() + 20_000;
     while (!registry.listNodes()[0]?.connected && !workerEnded && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 50));
     assert.equal(registry.listNodes()[0]?.connected, true, JSON.stringify({ workerDiagnostic, exitCode: worker.exitCode, signalCode: worker.signalCode, httpDiagnostic }));
     const connectorReadyMs = Date.now() - connectingAt;
+    stage("connector.connection.ready", { connectorReadyMs });
     const created = await request("", { provider: "dsh", dshBaseUrl: dshUrl, name: "Second Agent", workspace: directory });
     assert.equal(created.body.code, 0);
     const second = created.body.result.find((agent: any) => agent.name === "Second Agent");
@@ -120,6 +145,7 @@ test("headless instance lists sessions and dispatches an explicit target without
     assert.equal(sent.body.result.status, "progress");
     await request(`/${second.agentId}/tasks`, { message: "fixture message", provider: "dsh", threadId: "session-33333333-3333-4333-8333-333333333333", idempotencyKey: "delivery-1" });
     assert.deepEqual(sessions, ["session-33333333-3333-4333-8333-333333333333"]);
+    stage("legacy.missing-provider.start");
     const legacyTarget = await fetch(`${managerUrl}/api/lan-agent/nodes/${nodeId}/tasks`, { method: "POST",
       headers: { authorization: "Bearer test-instance", "content-type": "application/json" },
       body: JSON.stringify({ agentId: second.agentId, threadId: "session-33333333-3333-4333-8333-333333333333", message: "missing provider" }) });
@@ -143,18 +169,24 @@ test("headless instance lists sessions and dispatches an explicit target without
     const changed = await request(`/${second.agentId}/configure`, { enabled: false });
     assert.equal(changed.response.status, 200);
     assert.equal(authority.authenticate(credential.token)?.nodeId, nodeId, "backend settings never revoke public API access");
+    stage("retired.authorization.start");
     const retired = await fetch(`${managerUrl}/api/lan-agent/instances/${nodeId}/agents/${second.agentId}/authorization`, {method:"PUT",headers:{authorization:"Bearer test-instance"}});
     assert.equal(retired.status,404);
     assert.deepEqual(sessions,["session-33333333-3333-4333-8333-333333333333"]);
     t.diagnostic(JSON.stringify({ managerUrl, identity, connectorReadyMs, dispatchedSession: sessions[0], dispatchCount: sessions.length,
       configuredSession: JSON.parse(fs.readFileSync(configPath, "utf8")).agents.find((agent: any) => agent.agentId === second.agentId).sessionId ?? null }));
   } finally {
+    stage("cleanup.begin");
     if (worker.exitCode === null && worker.signalCode === null) worker.kill();
     await workerStopped;
+    stage("cleanup.connector.closed", { exitCode: worker.exitCode, signalCode: worker.signalCode });
     upgrades.stopAccepting();
     await operations.dispose(); await discovery.dispose(); await upgrades.dispose();
     registry.close();
+    stage("cleanup.registry.closed");
     await Promise.all([new Promise(resolve => manager.close(resolve)), new Promise(resolve => dsh.close(resolve))]);
+    stage("cleanup.servers.closed");
     fs.rmSync(directory, { recursive: true, force: true });
+    stage("fixture.complete");
   }
 });

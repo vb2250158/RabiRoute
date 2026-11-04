@@ -24,7 +24,8 @@ test("persona configuration splits dense content into accessible page tabs", () 
   assert.match(source, /<v-tab value="expression"[^>]*:disabled="!hasPersona"[^>]*>表达与语音<\/v-tab>/);
   assert.match(source, /<v-tab value="avatar"[^>]*:disabled="!hasPersona"[^>]*>虚拟形象<\/v-tab>/);
   assert.match(source, /<v-tab value="identity"[^>]*:disabled="!hasPersona"[^>]*>身份关系<\/v-tab>/);
-  assert.match(source, /<v-tab value="context"[^>]*>消息上下文<\/v-tab>/);
+  assert.doesNotMatch(source, /<v-tab value="(?:context|companion)"/);
+  assert.doesNotMatch(source, /<v-window-item value="(?:context|companion)"/);
   assert.match(source, /<v-tab value="automation"[^>]*>自动化<\/v-tab>/);
   assert.match(source, /watch\(hasPersona,[\s\S]*\["expression", "avatar", "identity"\][\s\S]*activePersonaPageTab\.value = "profile"/);
 });
@@ -33,9 +34,13 @@ test("each persona page tab owns one coherent group of existing cards", () => {
   assert.match(pageSection("profile", "expression"), /角色配置[\s\S]*persona\.md 摘要/);
   assert.match(pageSection("expression", "avatar"), /语言风格风控[\s\S]*角色语音[\s\S]*语音唤醒/);
   assert.match(pageSection("avatar", "identity"), /PersonaDesktopPetPanel/);
-  assert.match(pageSection("identity", "context"), /<PersonaIdentityRelationsCard[\s\S]*声纹识别工具/);
-  assert.match(pageSection("context", "automation"), /最近消息上下文/);
-  assert.doesNotMatch(pageSection("context", "automation"), /路由变量/);
+  assert.match(pageSection("avatar", "identity"), /<PersonaCompanionActivity[^>]*activePersonaPageTab === 'avatar'/);
+  assert.match(pageSection("identity", "automation"), /<PersonaIdentityRelationsCard[\s\S]*声纹识别工具/);
+  const automationDialog = source.slice(source.indexOf('<v-dialog v-model="automationDialog"'));
+  assert.match(automationDialog, /activeAutomation\.action\.type === 'deliver_agent'[\s\S]*activeAutomation\.trigger\.type === 'message'[\s\S]*label="携带最近消息"[\s\S]*label="最近消息条数"/);
+  assert.match(automationDialog, /setAutomationRecentMessageLimit\(value \? DEFAULT_RECENT_MESSAGE_LIMIT : 0\)/);
+  assert.match(automationDialog, /:model-value="automationRecentMessageLimit"[\s\S]*@update:model-value="setAutomationRecentMessageLimit"/);
+  assert.doesNotMatch(pageSection("automation"), /路由变量/);
   const routePage = fs.readFileSync(new URL("../src/pages/RouteConfigPage.vue", import.meta.url), "utf8");
   assert.doesNotMatch(routePage, /RouteVariablesEditor/);
   assert.match(pageSection("automation"), /默认消息规则[\s\S]*automationWorkspaceTab[\s\S]*可用模板变量/);

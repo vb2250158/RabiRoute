@@ -13,6 +13,10 @@ const chinese = {
   owner: "记录位置", deliveryId: "投递编号", intentId: "调用编号", observedAt: "读取时间",
   close: "关闭", detailLoading: "正在读取详情…", receipt: "接收证据", receiptNote: "仅展示服务保存的接收证据，不会重新发送消息。",
   receivedNote: "目标已接收表示消息已进入目标任务；实际处理结果请查看对应任务。",
+  reconcile: "核对原回执", cancelPending: "取消待确认",
+  cancelPendingStatus: "取消待核对", managerCancelPendingNote: "本机队列已停止，原 Manager 的取消结果仍待核对，目标仍可能执行。请核对原回执以继续确认。",
+  cancelNote: "取消不会撤回已经接收的消息。目标可能已接收或正在执行，请在原任务中确认处理结果；跨电脑取消以原 Manager 的核对结果为准。",
+  recoveryReadback: "已回读原记录，当前状态：", recoveryUncertain: "操作结果尚未确认，保留上次读取的状态。请刷新原记录核对；不会自动重试。",
   loadFailed: "投递记录读取失败。", records: "条记录", copyId: "复制投递编号", copied: "已复制", copyFailed: "复制失败，请手动选择编号。",
   refreshNote: "记录按读取时间显示；刷新可查看最新状态。", detailsTitle: "投递详情"
 };
@@ -31,6 +35,10 @@ const english: Copy = {
   owner: "Record owner", deliveryId: "Delivery ID", intentId: "Intent ID", observedAt: "Read at",
   close: "Close", detailLoading: "Loading details…", receipt: "Acceptance evidence", receiptNote: "Shows saved acceptance evidence. Viewing records never resends a message.",
   receivedNote: "Accepted means the message entered the target task. Check that task for its processing result.",
+  reconcile: "Check original receipt", cancelPending: "Cancel pending delivery",
+  cancelPendingStatus: "Cancellation awaiting confirmation", managerCancelPendingNote: "The local queue has stopped. Cancellation at the original Manager remains unconfirmed, and the target may still execute the message. Check the original receipt to continue reconciliation.",
+  cancelNote: "Cancellation does not withdraw an accepted message. The target may already have received or be executing it; check the original task for its result. Cross-computer cancellation requires confirmation from the original Manager.",
+  recoveryReadback: "Original record read back. Current status:", recoveryUncertain: "The operation result is unconfirmed. The previously read state is retained. Refresh the original record to check; no automatic retry will occur.",
   loadFailed: "Could not load delivery records.", records: "records", copyId: "Copy delivery ID", copied: "Copied", copyFailed: "Could not copy. Select the ID manually.",
   refreshNote: "Records reflect the displayed read time. Refresh to check for changes.", detailsTitle: "Delivery details"
 };
@@ -48,6 +56,10 @@ const japanese: Copy = {
   owner: "記録の保存先", deliveryId: "配信 ID", intentId: "呼び出し ID", observedAt: "読込日時",
   close: "閉じる", detailLoading: "詳細を読み込み中…", receipt: "受信証跡", receiptNote: "保存済みの受信証跡を表示します。記録の表示でメッセージが再送信されることはありません。",
   receivedNote: "受信済みは対象タスクへの到達を示します。処理結果は対象タスクで確認してください。",
+  reconcile: "元の受信証跡を確認", cancelPending: "確認待ちをキャンセル",
+  cancelPendingStatus: "キャンセル結果の確認待ち", managerCancelPendingNote: "ローカルキューは停止しました。元の Manager のキャンセル結果は未確認で、対象が引き続き実行する可能性があります。元の受信証跡を確認して照合を続けてください。",
+  cancelNote: "キャンセルしても受信済みのメッセージは撤回されません。対象がすでに受信または実行している可能性があるため、元のタスクで結果を確認してください。別端末からのキャンセルは元の Manager による確認が必要です。",
+  recoveryReadback: "元の記録を再取得しました。現在の状態：", recoveryUncertain: "操作結果は未確認です。前回取得した状態を保持しています。元の記録を更新して確認してください。自動再試行は行いません。",
   loadFailed: "配信記録を読み込めませんでした。", records: "件", copyId: "配信 ID をコピー", copied: "コピーしました", copyFailed: "コピーできませんでした。ID を手動で選択してください。",
   refreshNote: "記録は表示された読込日時の状態です。最新の状態は更新して確認してください。", detailsTitle: "配信の詳細"
 };

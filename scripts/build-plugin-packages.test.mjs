@@ -4,9 +4,9 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { pathToFileURL } from "node:url";
-import { buildPluginPackages } from "./build-plugin-packages.mjs";
-import { execFileSync } from "node:child_process";
+import { pathToFileURL, fileURLToPath } from "node:url";
+import { buildPluginPackages, finalizePluginBuildWebArtifacts } from "./build-plugin-packages.mjs";
+import { execFileSync, spawn } from "node:child_process";
 import { bundleMessageEndpointRuntime } from "./build-message-endpoint-runtime.mjs";
 
 test("endpoint dependencies follow emitted owner reads and preserve explicit bare initialization imports", async () => {
@@ -341,4 +341,124 @@ test("input evidence follows frozen bytes while editable sources change and retu
     assert.equal(evidence.inputs.files.find(file => file.path === relative).sha256, createHash("sha256").update(artifact).digest("hex"));
     assert.equal(await fs.readFile(source, "utf8"), "A");
   } finally { await fs.rm(root, { recursive: true, force: true }); }
+});
+
+import { webPatchInputHash } from "./lib/web-patch-inputs.mjs";
+import { inspectPluginBuild } from "./lib/developer-verification.mjs";
+
+const digest = bytes => createHash("sha256").update(bytes).digest("hex");
+const sourceScripts = path.dirname(fileURLToPath(import.meta.url));
+async function put(filename, text) { await fs.mkdir(path.dirname(filename), { recursive: true }); await fs.writeFile(filename, text); }
+async function fixture(t) {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "rabi-complete-web-evidence-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  for (const name of ["build-plugin-packages.mjs", "build-message-endpoint-runtime.mjs", "generate-plugin-api-types.mjs", "build-web-patch.mjs", "lib/web-patch-inputs.mjs"]) {
+    await put(path.join(root, "scripts", name), await fs.readFile(path.join(sourceScripts, name)));
+  }
+  await put(path.join(root, "scripts/sync-plugin-web-bundles.mjs"), "// fixture wrapper owner\n");
+  await put(path.join(root, "package.json"), '{"type":"module"}');
+  await put(path.join(root, "ribiwebgui/src/entry.ts"), "export const view = 'original';\n");
+  await put(path.join(root, "plugins/contracts/plugin-sdk/index.mjs"), "export const definePlugin = value => value;\n");
+  await put(path.join(root, "plugins/profiles/desktop.json"), JSON.stringify({ schemaVersion: 2, readyRequires: [], instances: [
+    { id: "feature", package: "io.test.feature", version: "1.2.3", enabled: true, config: {}, grants: [] }
+  ] }));
+  const native = path.join(root, "plugins/builtin/io.test.feature/1.2.3");
+  await put(path.join(native, "rabi.plugin.json"), JSON.stringify({ schemaVersion: 2, id: "io.test.feature", version: "1.2.3", entries: {
+    manager: { execution: "in_process", module: "./manager.mjs" }, web: { execution: "in_process", module: "./web/client.mjs" }
+  }, provides: [], requires: [], optional: [], permissions: [] }));
+  await put(path.join(native, "manager.mjs"), "export function activate() {}\n");
+  const built = await buildPluginPackages(root);
+  return { root, output: built.outputRoot, packageRoot: path.join(built.packagesRoot, "io.test.feature/1.2.3") };
+}
+async function webRevision(f, tag) {
+  const entry = `web/assets/plugin-${tag}.js`, asset = `export function activate() { return '${tag}'; }\n`;
+  const manifest = { schemaVersion: 1, backend: "a".repeat(64), files: [{ path: entry, size: Buffer.byteLength(asset), sha256: digest(asset) }],
+    modules: [{ pluginId: "io.test.feature", version: "1.2.3", entry }] };
+  const bytes = JSON.stringify(manifest), revision = digest(bytes), webRoot = path.join(f.root, "dist/web-patches", revision);
+  await put(path.join(webRoot, entry), asset); await put(path.join(webRoot, "manifest.json"), bytes);
+  await put(path.join(f.packageRoot, "web/client.mjs"), `export { activate } from "/assets/plugin-${tag}.js";\n`);
+  return { webRevision: revision, webPatchRoot: webRoot, webSourceInputHash: await webPatchInputHash(f.root) };
+}
+async function cli(argv, cwd) {
+  const child = spawn(process.execPath, argv, { cwd, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
+  let stdout = "", stderr = ""; child.stdout.on("data", b => { stdout += b; }); child.stderr.on("data", b => { stderr += b; });
+  const exitCode = await new Promise((resolve, reject) => { child.once("error", reject); child.once("close", resolve); });
+  return { exitCode, stdout, stderr };
+}
+
+test("full finalization covers generated wrappers and real CLI verification without weakening exact artifact inspection", async t => {
+  const f = await fixture(t), options = await webRevision(f, "one");
+  await assert.rejects(inspectPluginBuild(f.output), /contents differ from build evidence/);
+  const before = JSON.parse(await fs.readFile(path.join(f.output, "build-evidence.json"), "utf8"));
+  assert.ok(before.inputSelections.includes("plugins/contracts/plugin-sdk"));
+  assert.ok(before.inputSelections.includes("plugins/builtin/io.test.feature/1.2.3"));
+  const complete = await finalizePluginBuildWebArtifacts(f.root, options);
+  assert.equal(complete.artifacts.files.length, before.artifacts.files.length + 1);
+  assert.equal(complete.web.revision, options.webRevision); assert.equal(complete.web.sourceInputHash, options.webSourceInputHash);
+  assert.equal(complete.web.wrappers[0].path, "packages/io.test.feature/1.2.3/web/client.mjs");
+  assert.equal(complete.web.parentArtifactSha256, before.artifacts.sha256);
+  assert.equal((await inspectPluginBuild(f.output)).candidateSha256, complete.artifacts.sha256);
+  const testRoot = path.join(f.root, "behavior");
+  await put(path.join(testRoot, "check.test.mjs"), "import fs from 'node:fs';import path from 'node:path';import assert from 'node:assert/strict';const base=path.join(process.env.RABI_PLUGIN_CANDIDATE_ROOT,'packages/io.test.feature/1.2.3');assert.equal(JSON.parse(fs.readFileSync(path.join(base,'rabi.plugin.json'))).version,'1.2.3');assert.match(fs.readFileSync(path.join(base,'web/client.mjs'),'utf8'),/plugin-one/);");
+  const config = path.join(f.root, "verification.json");
+  await put(config, JSON.stringify({ sourceRoot: testRoot, candidateRoot: f.output, inputs: ["check.test.mjs"], tests: ["check.test.mjs"], deterministic: false, completeInputClosure: false }));
+  const result = await cli([path.join(sourceScripts, "verify-plugin-candidate.mjs"), "--config", config], f.root);
+  assert.equal(result.exitCode, 0, result.stderr + result.stdout);
+  assert.equal(JSON.parse(result.stdout).status, "passed");
+  const next = await webRevision(f, "two");
+  const updated = await finalizePluginBuildWebArtifacts(f.root, next);
+  assert.notEqual(updated.artifacts.sha256, complete.artifacts.sha256);
+  assert.equal((await inspectPluginBuild(f.output)).candidateSha256, updated.artifacts.sha256);
+  await put(path.join(f.packageRoot, "unexpected-extra.mjs"), "unverified");
+  await assert.rejects(inspectPluginBuild(f.output), /contents differ/);
+});
+
+test("finalization rejects unrelated additions, backend mutation, wrong module binding and changed source without replacing original evidence", async t => {
+  const f = await fixture(t), options = await webRevision(f, "one"), receipt = path.join(f.output, "build-evidence.json");
+  const originalReceipt = await fs.readFile(receipt);
+  const unchanged = async action => { await action(); assert.deepEqual(await fs.readFile(receipt), originalReceipt); };
+  const legacy = JSON.parse(originalReceipt); delete legacy.inputSelections;
+  await fs.writeFile(receipt, JSON.stringify(legacy));
+  const legacyBytes = await fs.readFile(receipt);
+  await assert.rejects(finalizePluginBuildWebArtifacts(f.root, options), /rebuild Native plugins/);
+  assert.deepEqual(await fs.readFile(receipt), legacyBytes); await fs.writeFile(receipt, originalReceipt);
+  // The original Web workflow remains independent when Native source membership changes.
+  await fs.symlink(path.resolve(sourceScripts, "../node_modules"), path.join(f.root, "node_modules"), "junction");
+  await put(path.join(f.root, "dist/manager/webPatchCatalog.js"), `import fs from 'node:fs/promises';import path from 'node:path';export const buildWebPatch=async()=> '${options.webRevision}';export async function writeWebPatchJson(file,value){await fs.mkdir(path.dirname(file),{recursive:true});await fs.writeFile(file,JSON.stringify(value));}`);
+  const marker = path.join(f.root, "dist/web-patches/latest.json");
+  const webCommand = path.join(f.root, "scripts/build-web-patch.mjs");
+  for (const relative of ["plugins/contracts/plugin-sdk/added-after-build.mjs", "plugins/builtin/io.test.feature/1.2.3/added-after-build.mjs"]) {
+    const added = path.join(f.root, relative); await put(added, "export const added = true;\n");
+    const independent = await cli([webCommand], f.root); assert.equal(independent.exitCode, 0, independent.stderr);
+    const oldMarker = await fs.readFile(marker);
+    const rejected = await cli([webCommand, "--finalize-plugin-build"], f.root);
+    assert.equal(rejected.exitCode, 1); assert.match(rejected.stderr, /backend inputs changed/);
+    assert.deepEqual(await fs.readFile(marker), oldMarker); assert.deepEqual(await fs.readFile(receipt), originalReceipt);
+    await fs.unlink(added);
+  }
+  const extra = path.join(f.packageRoot, "extra.mjs"); await put(extra, "unverified");
+  await unchanged(() => assert.rejects(finalizePluginBuildWebArtifacts(f.root, options), /Unrecorded plugin artifact/)); await fs.unlink(extra);
+  const backend = path.join(f.packageRoot, "manager.mjs"), backendBytes = await fs.readFile(backend); await fs.writeFile(backend, "mutated");
+  await unchanged(() => assert.rejects(finalizePluginBuildWebArtifacts(f.root, options), /backend artifact changed/)); await fs.writeFile(backend, backendBytes);
+  const wrapper = path.join(f.packageRoot, "web/client.mjs"), wrapperBytes = await fs.readFile(wrapper); await fs.writeFile(wrapper, 'export { activate } from "/assets/foreign.js";\n');
+  await unchanged(() => assert.rejects(finalizePluginBuildWebArtifacts(f.root, options), /differs from its verified Web module/)); await fs.writeFile(wrapper, wrapperBytes);
+  const source = path.join(f.root, "ribiwebgui/src/entry.ts"), sourceBytes = await fs.readFile(source); await fs.writeFile(source, "later source");
+  await unchanged(() => assert.rejects(finalizePluginBuildWebArtifacts(f.root, options), /Web sources changed/)); await fs.writeFile(source, sourceBytes);
+  await finalizePluginBuildWebArtifacts(f.root, options);
+  assert.ok((await inspectPluginBuild(f.output)).candidateSha256);
+});
+
+test("independent Web CLI does not require native evidence and full finalization failure preserves the original latest marker", async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "rabi-web-only-evidence-")); t.after(() => fs.rm(root, { recursive: true, force: true }));
+  await put(path.join(root, "package.json"), '{"type":"module"}');
+  for (const name of ["build-web-patch.mjs", "lib/web-patch-inputs.mjs"]) await put(path.join(root, "scripts", name), await fs.readFile(path.join(sourceScripts, name)));
+  await put(path.join(root, "dist/manager/webPatchCatalog.js"), `import fs from 'node:fs/promises';import path from 'node:path';export const buildWebPatch=async()=> '${"b".repeat(64)}';export async function writeWebPatchJson(file,value){await fs.mkdir(path.dirname(file),{recursive:true});await fs.writeFile(file,JSON.stringify(value));}`);
+  const command = path.join(root, "scripts/build-web-patch.mjs"), marker = path.join(root, "dist/web-patches/latest.json");
+  const webOnly = await cli([command], root); assert.equal(webOnly.exitCode, 0, webOnly.stderr);
+  const previous = await fs.readFile(marker); assert.equal(JSON.parse(previous).revision, "b".repeat(64));
+  const complete = await cli([command, "--finalize-plugin-build"], root);
+  assert.equal(complete.exitCode, 1); assert.deepEqual(await fs.readFile(marker), previous);
+  const packageScripts = JSON.parse(await fs.readFile(new URL("../package.json", import.meta.url), "utf8")).scripts;
+  assert.ok(packageScripts.build.endsWith("npm run webgui:build -- --finalize-plugin-build"));
+  assert.ok(!packageScripts["webgui:build"].includes("finalize-plugin-build"));
 });

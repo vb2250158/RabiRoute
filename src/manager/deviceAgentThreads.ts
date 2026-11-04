@@ -9,6 +9,19 @@ export type DeviceAgentThreadsOptions = {
 };
 const failure = (code: string, statusCode = 400) => Object.assign(new Error(code), { code, statusCode });
 
+/** Identify device metadata requests without taking an execution lease or probing another platform. */
+export function handlesDeviceAgentThreadRequest(request: AgentThreadRequest, options: DeviceAgentThreadsOptions): boolean {
+  if (request.action === "send" || request.action === "reconcile_delivery") return false;
+  if (request.agentAdapter) return request.agentAdapter === "deviceAgent";
+  if (!request.threadId && !request.instanceBinding) return false;
+  if (request.instanceBinding && request.instanceBinding.instanceId !== options.ownerInstanceId) return false;
+  const scope = options.scope();
+  const sessions = scope ? options.owner.sessions(scope) : [];
+  return request.instanceBinding
+    ? sessions.some(row => row.agentId === request.instanceBinding!.agentId)
+    : sessions.some(row => row.sessionId === request.threadId);
+}
+
 /** Only the registered device session is addressable here. No PC-side model or session creation. */
 export async function handleDeviceAgentThreadRequest(request: AgentThreadRequest, admission: Pick<AgentThreadRequestOptions, 'remoteSource'> & { requestAuthority?: () => void }, options: DeviceAgentThreadsOptions): Promise<AgentThreadRequestResult | undefined> {
   admission.requestAuthority?.();

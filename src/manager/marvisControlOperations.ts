@@ -2,9 +2,9 @@ import type { MarvisOpenRequest } from "../agentAdapters/managerApi.js";
 import type { ApiOperationDefinition, ApiOperationInput } from "./apiOperationContract.js";
 
 /** The existing host opener owns platform selection and launching; this contract never executes a prompt. */
-export function createMarvisControlOperations(open: (request: MarvisOpenRequest) => Record<string, unknown>): readonly ApiOperationDefinition[] {
-  const handler = (input: ApiOperationInput) => {
-    try { input.signal?.throwIfAborted(); return { status: 200, body: open(input.body as MarvisOpenRequest) }; }
+export function createMarvisControlOperations(open: (request: MarvisOpenRequest) => Record<string, unknown> | Promise<Record<string, unknown>>): readonly ApiOperationDefinition[] {
+  const handler = async (input: ApiOperationInput) => {
+    try { input.signal?.throwIfAborted(); return { status: 200, body: await open(input.body as MarvisOpenRequest) }; }
     catch (error) { return { status: 400, body: { ok: false, message: error instanceof Error ? error.message : String(error) } }; }
   };
   return [{ contract: {

@@ -13,6 +13,6 @@ test("device Agent declares only implemented experimental thread capability", ()
     assert.equal(agentAdapterSupportsManagedTaskFeature("deviceAgent", feature), false);
   }
   assert.equal(isPlanAssistantAgentType("deviceAgent"), false);
-  assert.throws(() => normalizePlanBindingAgentType("deviceAgent"), /Unsupported/);
+  assert.equal(normalizePlanBindingAgentType("deviceAgent"), "deviceAgent", "Deserializing a saved identity does not enable Plan assistant creation.");
   assert.deepEqual(normalizeAgentInstanceBindings({ deviceAgent: { instanceId: "pc-owner", agentId: "device-stable" } }), { deviceAgent: { instanceId: "pc-owner", agentId: "device-stable" } });
 });

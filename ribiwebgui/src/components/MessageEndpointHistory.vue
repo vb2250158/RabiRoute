@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, ref, watch, type VNodeRef } from 'vue';
+import { computed, nextTick, onActivated, onBeforeUnmount, onDeactivated, ref, watch, type VNodeRef } from 'vue';
+import HistoryEndpointMessage from './HistoryEndpointMessage.vue';
 import type { MessageContextRecord } from '../../../src/messageContextStore';
 import { usePersonaService } from '../persona/personaServiceClient';
 import { useI18n } from '../i18n';
@@ -12,6 +13,7 @@ import QqMessageContent from './QqMessageContent.vue';
 import QqReadNotice from './QqReadNotice.vue';
 import { qqTimeBreak, qqMessageTime } from '../qqChatLayout';
 import {qqNavigationRead} from '../qqPreviewQueue';
+import { historyPageForDisplay,mergeSavedHistoryWindow } from '../historyConversationPresentation';
 import { qqHistoryRecord,mergeQqHistoryWindow, type QqHistoryMessage as QqNativeHistoryMessage, type QqHistoryRecord, type QqSelection } from '../qqMessagePresentation';
 
 const props = defineProps<{ roleId: string; adapter: string; title: string; version: number; messageVersion?:number; active: boolean; conversationKey?: string; bubble?: boolean; senderNames?: Record<string,string>; senderAvatars?: Record<string,string>; ownQqId?: string; qqSelection?: QqSelection; qqLive?:boolean; memberCount?:number }>();
@@ -21,7 +23,8 @@ const { t,locale } = useI18n();
 const entries = ref<QqHistoryRecord[]>([]);
 const cursor = ref<string | null>(null);
 const loading = ref(false), error = ref(''), partial = ref(false);
-const connectionLost=ref(false);
+const connectionLost=ref(false),skippedCount=ref(0),unreadablePage=ref(false);
+const showEmptyHistory=computed(()=>!entries.value.length&&!loading.value&&!error.value&&!skippedCount.value);
 let nativeWindow=false,confirmedAccount=props.ownQqId;
 const expanded = ref(new Set<string>());
 const detailsRecord = ref<QqHistoryRecord>();
@@ -47,11 +50,13 @@ async function load(older = false,update=false) {
     const result = await response.json();
     if (!response.ok || result.code !== 0) throw new Error(result.message || t('消息记录读取失败'));
     if (controller.signal.aborted) return;
-    const page = (live?(result.data.entries as QqNativeHistoryMessage[]).map(row=>qqHistoryRecord(row,live,props.ownQqId)):(result.data.entries as MessageContextRecord[]).slice()).sort((a,b)=>props.bubble?a.time-b.time:b.time-a.time);
+    const page = historyPageForDisplay(live?(result.data.entries as QqNativeHistoryMessage[]).map(row=>qqHistoryRecord(row,live,props.ownQqId)):result.data.entries as MessageContextRecord[],Boolean(props.bubble),Boolean(live));
     const known = new Set(entries.value.map(key));
     if(update&&entries.value.length&&nativeWindow!==Boolean(live)){
       newerAvailable.value=true;if(props.bubble&&page.length)emit('latest',page.at(-1)!);return;
     }
+    skippedCount.value=live?result.data.skippedCount??0:0;
+    unreadablePage.value=Boolean(skippedCount.value&&!page.length);
     const anchor = [...(listElement.value?.querySelectorAll<HTMLElement>('.history-record') ?? [])].find(element => element.getBoundingClientRect().bottom > 0);
     const anchorId = anchor?.dataset.entryId, anchorTop = anchor?.getBoundingClientRect().top ?? 0;
     const atBottom=Boolean(listElement.value&&listElement.value.getBoundingClientRect().bottom<=window.innerHeight+80);
@@ -62,14 +67,15 @@ async function load(older = false,update=false) {
       entries.value=props.bubble?[...additions,...entries.value].slice(0,200):[...entries.value,...additions].slice(-200);
     }
     else if(incremental){
-      const first=entries.value[0]!,merged=mergeQqHistoryWindow(entries.value,page,atBottom);
+      const first=entries.value[0]!,merged=live?mergeQqHistoryWindow(entries.value,page,atBottom):mergeSavedHistoryWindow(entries.value,page,atBottom,key);
       const droppedHead=!merged.entries.some(row=>key(row)===key(first));
       entries.value=merged.entries;newerAvailable.value=merged.newerAvailable||(!atBottom&&newerAvailable.value);
       if(droppedHead){
         if(live)cursor.value=String(entries.value[0]!.messageId);
         else{entries.value=page;cursor.value=result.data.nextCursor;}
       }
-    }else {
+    }else if(!unreadablePage.value) {
+      // An unreadable live page preserves cached messages instead of claiming an empty history.
       // A refresh replaces the bounded window; it never silently bridges a missing page.
       entries.value = page; expanded.value.clear();
       newerAvailable.value=false;
@@ -81,7 +87,7 @@ async function load(older = false,update=false) {
     const ids = new Set(entries.value.map(key));
     for (const id of expanded.value) if (!ids.has(id)) expanded.value.delete(id);
     await nextTick();
-    if(props.bubble&&!older&&(!incremental||atBottom)) {
+    if(props.bubble&&!older&&!unreadablePage.value&&(!incremental||atBottom)) {
       const interrupt=()=>controller.abort();
       const events=['wheel','touchstart','pointerdown','keydown'] as const;
       for(const event of events)window.addEventListener(event,interrupt,{passive:true});
@@ -114,13 +120,14 @@ async function load(older = false,update=false) {
 }
 function applyConversation() {
   request?.abort(); request = undefined; pending = false; pendingUpdate=false;
-  appliedConversation.value = (conversation.value || '').trim(); entries.value = []; cursor.value = null; expanded.value.clear(); void load();
+  appliedConversation.value = (conversation.value || '').trim(); entries.value = []; cursor.value = null; skippedCount.value=0;unreadablePage.value=false;expanded.value.clear(); void load();
 }
 watch(() => props.version, () => { if (props.active && !entries.value.length) void load(); });
 watch(()=>props.messageVersion,()=>{if(props.active&&props.bubble)void load(false,true);});
 watch(()=>[props.qqLive,props.conversationKey] as const,([live,conversationKey],[previousLive])=>{
   if(live&&previousLive)return;
   request?.abort();request=undefined;pending=false;pendingUpdate=false;loading.value=false;appliedConversation.value=conversationKey??'';
+  skippedCount.value=0;unreadablePage.value=false;
   connectionLost.value=nativeWindow&&!live;
   if(props.active&&(!entries.value.length||(live&&!previousLive)))void load(false,entries.value.length>0);
 });
@@ -128,13 +135,15 @@ watch(()=>props.ownQqId,id=>{
   if(!id)return;
   const changed=confirmedAccount&&confirmedAccount!==id;confirmedAccount=id;
   if(!changed)return;
-  detailsRecord.value=undefined;
+  detailsRecord.value=undefined;skippedCount.value=0;unreadablePage.value=false;
   imagePreview.value=undefined;quotedMessage.value=undefined;
   request?.abort();request=undefined;pending=false;pendingUpdate=false;loading.value=false;entries.value=[];cursor.value=null;nativeWindow=false;connectionLost.value=false;
   if(props.active)void load();
 });
 watch(() => props.active, active => { if (active) { if(!entries.value.length)void load();else if(props.bubble)void load(false,true); } else { request?.abort(); pending = false; pendingUpdate=false;detailsRecord.value=undefined;imagePreview.value=undefined;quotedMessage.value=undefined; } }, { immediate: true });
 onBeforeUnmount(() => { pending = false; request?.abort(); });
+onDeactivated(()=>{pending=false;pendingUpdate=false;request?.abort();});
+onActivated(()=>{if(entries.value.length&&props.active)void load(false,true);});
 </script>
 
 <template>
@@ -153,14 +162,16 @@ onBeforeUnmount(() => { pending = false; request?.abort(); });
     <v-alert v-else-if="error" type="error" variant="tonal" class="mb-3">{{ error }}</v-alert>
     <v-alert v-if="partial" type="warning" variant="tonal" class="mb-3">{{ t('部分历史记录未覆盖，当前结果可能不完整。') }}</v-alert>
     <v-alert v-if="connectionLost" type="warning" variant="tonal" class="mb-3">{{ t('QQ 连接已断开，保留已加载的消息。') }}</v-alert>
+    <div v-if="skippedCount" class="d-flex align-center ga-2 my-2 text-caption text-medium-emphasis" role="status"><v-icon icon="mdi-information-outline" size="16" /><span>{{ t(unreadablePage?'本页消息无法读取，历史记录可能不完整。':'部分消息无法读取，其他消息仍可查看。') }}</span></div>
     <v-progress-linear v-if="loading" indeterminate :aria-label="t('正在读取消息记录')" />
     <v-btn v-if="bubble&&cursor!==null&&(!nativeWindow||qqLive)" variant="tonal" :disabled="loading" class="mb-3" @click="load(true)">{{ t('加载更早的消息') }}</v-btn>
-    <v-alert v-if="!entries.length && !loading && !error" type="info" variant="tonal">{{ t('此渠道暂无消息记录。') }}</v-alert>
+    <v-alert v-if="showEmptyHistory" type="info" variant="tonal">{{ t('此渠道暂无消息记录。') }}</v-alert>
     <div ref="listElement" class="endpoint-history-list" :class="{'qq-history':bubble}" :aria-busy="loading" aria-live="polite">
       <template v-if="bubble">
         <div v-for="item in entries" :key="key(item)" class="endpoint-history-item">
           <div v-if="timeBreaks.has(key(item))" class="qq-time-divider"><time :datetime="new Date(item.time*1000).toISOString()" :title="new Date(item.time*1000).toLocaleString(locale)">{{ qqMessageTime(item.time,undefined,locale) }}</time></div>
-          <QqHistoryMessage :record="item" :avatar-id="avatarId(item)" :sender-name="senderNames?.[item.sender??'']||item.qqSenderName||item.sender" :selection="qqSelection" :names="senderNames" :active="active" :expanded="expanded.has(key(item))" @expand="expanded.has(key(item))?expanded.delete(key(item)):expanded.add(key(item))" @details="detailsRecord=item" :readable="qqLive" @image="imagePreview=$event" @quote="quotedMessage=$event" />
+          <QqHistoryMessage v-if="adapter==='napcat'" :record="item" :avatar-id="avatarId(item)" :sender-name="senderNames?.[item.sender??'']||item.qqSenderName||item.sender" :selection="qqSelection" :names="senderNames" :active="active" :expanded="expanded.has(key(item))" @expand="expanded.has(key(item))?expanded.delete(key(item)):expanded.add(key(item))" @details="detailsRecord=item" :readable="qqLive" @image="imagePreview=$event" @quote="quotedMessage=$event" />
+          <HistoryEndpointMessage v-else :record="item" :expanded="expanded.has(key(item))" @expand="expanded.has(key(item))?expanded.delete(key(item)):expanded.add(key(item))" />
         </div>
       </template>
       <v-virtual-scroll v-else-if="entries.length" ref="virtualList" :items="entries" item-key="id" :renderless="true" :item-height="180">

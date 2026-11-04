@@ -1,0 +1,15 @@
+{
+  "type": "marvis",
+  "capability": "agent.adapter.marvis@1",
+  "manifest": {
+    "type": "marvis",
+    "label": "Marvis",
+    "maturity": "stub",
+    "transport": {
+      "protocol": "manual",
+      "mode": "open-or-copy"
+    },
+    "capabilities": {}
+  },
+  "sessionBinding": {}
+}

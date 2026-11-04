@@ -249,7 +249,7 @@ function mapTaskRow(row: Record<string, unknown>): WorkbuddyTaskRow {
 /** Read up to 10,000 desktop task rows after workspace selection, newest first. */
 export function readWorkbuddyTaskRows(
   databasePath = workbuddyDatabasePath(),
-  options: { workspace?: string; allowedWorkspaces?: readonly string[] } = {}
+  options: { workspace?: string; allowedWorkspaces?: readonly string[]; query?: string; includeArchived?: boolean; limit?: number; offset?: number } = {}
 ): WorkbuddyTaskRow[] {
   if (!fs.existsSync(databasePath)) return [];
   const workspace = normalizeWorkbuddyWorkspace(options.workspace);
@@ -267,12 +267,22 @@ export function readWorkbuddyTaskRows(
         return (!workspace || key === workspace) && (!allowed || allowed.has(key)) ? 1 : 0;
       });
     }
+    const query = options.query?.trim().toLocaleLowerCase() ?? "";
+    if (query) database.function("matches_query", { deterministic: true }, (title, customTitle) => {
+      const automatic = nonEmptyString(title).toLocaleLowerCase();
+      const name = (nonEmptyString(customTitle) || nonEmptyString(title)).toLocaleLowerCase();
+      return name.includes(query) || automatic.includes(query) ? 1 : 0;
+    });
+    const conditions = [scoped ? "matches_workspace(cwd) = 1" : "", query ? "matches_query(title, custom_title) = 1" : "",
+      options.includeArchived === false ? "COALESCE(deleted_at, 0) = 0" : ""].filter(Boolean);
+    const limit = Math.max(1, Math.min(10_000, Math.floor(options.limit ?? 10_000) || 10_000));
+    const offset = Math.max(0, Math.floor(options.offset ?? 0) || 0);
     const rows = database.prepare(`
       SELECT ${TASK_COLUMNS} FROM sessions
-      ${scoped ? "WHERE matches_workspace(cwd) = 1" : ""}
+      ${conditions.length ? `WHERE ${conditions.join(" AND ")}` : ""}
       ORDER BY COALESCE(NULLIF(last_activity_at, 0), NULLIF(updated_at, 0), created_at) DESC, id ASC
-      LIMIT 10000
-    `).all() as Record<string, unknown>[];
+      LIMIT ? OFFSET ?
+    `).all(limit, offset) as Record<string, unknown>[];
     return rows.map(mapTaskRow);
   } finally {
     database.close();
@@ -329,13 +339,8 @@ export function listWorkbuddyTasks(options: {
   const query = options.query?.trim().toLocaleLowerCase() ?? "";
   const limit = Math.max(1, Math.min(10_000, Math.floor(options.limit ?? 200) || 200));
   const offset = Math.max(0, Math.floor(options.offset ?? 0) || 0);
-  return readWorkbuddyTaskRows(options.databasePath, options)
-    .filter(row => options.includeArchived || !row.deletedAt)
-    .map(row => toWorkbuddyTask(row, descriptors))
-    .filter(task => !query
-      || task.name.toLocaleLowerCase().includes(query)
-      || task.autoTitle.toLocaleLowerCase().includes(query))
-    .slice(offset, offset + limit);
+  return readWorkbuddyTaskRows(options.databasePath, { ...options, includeArchived: options.includeArchived === true, limit, offset })
+    .map(row => toWorkbuddyTask(row, descriptors));
 }
 
 /** Exact identity reads must not depend on the bounded discovery inventory. */

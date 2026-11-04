@@ -40,7 +40,9 @@ test("sidebar renders only catalog navigation backed by activated pages", () => 
 });
 
 test("sidebar brand shows only the version and route picker has no count or explanatory label", () => {
-  assert.match(appSource, /<div class="section-note">v\{\{ store\.meta\.version \}\}<\/div>/);
+  const versionElement = appSource.match(/<div\b([^>]*)>\s*v\{\{\s*store\.meta\.version\s*\}\}\s*<\/div>/);
+  assert.ok(versionElement, "The sidebar displays the version supplied by the running Manager.");
+  assert.match(versionElement[1], /\bv-if="store\.meta\.version"/, "Unknown versions are not rendered as placeholder releases.");
   assert.match(appSource, /<RoleSourcePicker v-if="showRoleSwitcher"/);
   const picker = fs.readFileSync(new URL("../src/components/RoleSourcePicker.vue", import.meta.url), "utf8");
   assert.match(picker, /:aria-label="t\('选择角色'\)"/);

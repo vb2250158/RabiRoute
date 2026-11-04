@@ -28,6 +28,7 @@ export type AntigravityScanQuery = {
 };
 
 export type AntigravityScanContext = {
+  manifest?: import("@rabiroute/plugin-sdk").AgentAdapterDescriptor;
   /** Overrides for tests and for hosts with a relocated data directory. */
   antigravityDatabasePath?: string;
   antigravityAppDataDir?: string;
@@ -39,7 +40,7 @@ export function scanAntigravityAgentAdapter(
   ctx: AntigravityScanContext = {},
   options: AntigravityScanQuery = {}
 ): { agents: { antigravity: AgentScanResult }; cwdOptions: string[] } {
-  const manifest = agentAdapterManifest("antigravity");
+  const manifest = ctx.manifest ?? agentAdapterManifest("antigravity");
   const limit = Math.max(1, Math.min(500, Math.floor(options.antigravityLimit ?? 200)));
   const offset = Math.max(0, Math.floor(options.antigravityOffset ?? 0));
   const query = String(options.antigravityQuery || "").trim() || undefined;

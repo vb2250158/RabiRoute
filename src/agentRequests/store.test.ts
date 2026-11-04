@@ -33,12 +33,14 @@ test("required Agent messages create a tracked request only after delivery is co
   assert.equal(committed.request?.deliveryAction, "started");
 });
 
-test("the same complete endpoint cannot send to itself by changing its Agent role", async () => {
+test("a connected sender may address its own task without a source-role restriction", async () => {
   const store = new AgentRequestStore(new MemoryPersistence());
   const endpoint = { kind: "local" as const, managerInstanceId: "manager", agentId: "local:codex", provider: "codex", sessionId: "same-owner", authorizationIncarnation: "owner-epoch" };
   const source = { endpoint, threadId: endpoint.sessionId, agentAdapter: "codex" as const, agentType: "plan_agent" };
   const target = { ...source, agentType: "agent" };
-  await assert.rejects(async () => await store.prepare({ source, target, responsePolicy: "none" }), { field: "threadId" });
+  const preparation = await store.prepare({ source, target, responsePolicy: "none" });
+  assert.equal(preparation.source.threadId, endpoint.sessionId);
+  assert.equal(preparation.target.threadId, endpoint.sessionId);
   assert.equal(store.list().length, 0);
 });
 
@@ -127,7 +129,7 @@ test("ending a target turn schedules a reminder five minutes later and a deliver
   assert.equal(reminded.reminderCount, 1);
 });
 
-test("responses fail closed when source, target, or required fields do not match", async () => {
+test("responses retain their original target and required result fields without restricting the sender", async () => {
   const store = new AgentRequestStore(new MemoryPersistence());
   const prepared = await store.prepare({ ...parties(), responsePolicy: "required", responseInstruction: "请回复" });
   await store.commit(prepared);
@@ -138,7 +140,7 @@ test("responses fail closed when source, target, or required fields do not match
     result: "done",
     nextAction: "none",
     responsePolicy: "none"
-  }), /original target task back to the original source task/);
+  }), /back to the original source task/);
   await assert.rejects(async () => await store.prepare({
     source: parties().target,
     target: parties().source,
@@ -240,4 +242,17 @@ test("pending deliveries to detached Message Agents are cancelled instead of rep
 
   assert.equal(result.cancelled.length, 1);
   assert.equal(store.get(request.requestId || "")?.status, "cancelled");
+});
+
+
+test("a connected delegate can reply with its actual source attribution and unrelated source workspace", async () => {
+  const store = new AgentRequestStore(new MemoryPersistence());
+  const original = await store.prepare({ ...parties(), responsePolicy: "required", responseInstruction: "Return evidence" });
+  await store.commit(original);
+  const actualSender = { threadId: "connected-delegate", agentType: "custom_sender", workspace: "D:/separate-owner" };
+  assert.deepEqual(store.resolveReplyDestination(original.requestId!, actualSender, parties().source), { ...parties().source, threadName: undefined });
+  const response = await store.prepare({ source: actualSender, target: parties().source, responsePolicy: "none",
+    inReplyToRequestId: original.requestId, result: "Delegate result", nextAction: "Continue" });
+  await store.commit(response);
+  assert.deepEqual(store.get(original.requestId!)?.response?.by, { ...actualSender, threadName: undefined });
 });

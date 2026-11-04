@@ -1,7 +1,25 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createServer } from "node:http";
-import { buildCodexAgentScan, scanAgentAdapters, scanDshAgentAdapter } from "./managerApi.js";
+import { scanAgentAdapters } from "./managerApi.js";
+import { scanDshAgentAdapter } from "./dshManagerApi.js";
+import { scanCodexAgentAdapter } from "./codexManagerApi.js";
+import type { AgentManagerApiContext, AgentScanOptions } from "./managerTypes.js";
+import type { AgentManagerProvider } from "../manager/agentManagerProviders.js";
+
+// Explicit native owner fixtures replace the retired implicit all-platform scanner.
+async function scanRegisteredFixture(ctx: AgentManagerApiContext, options: AgentScanOptions = {}) {
+  const providers = agentAdapterTypes.map(type => ({
+    type, manifest: agentAdapterManifest(type),
+    async invoke(_operation: string, query: AgentScanOptions) {
+      if (type === "codex") return scanCodexAgentAdapter(ctx, query);
+      if (type === "dsh") return scanDshAgentAdapter(ctx, query);
+      return { agents: { [type]: { ...agentAdapterManifest(type), installed: false } }, cwdOptions: [] };
+    }
+  })) as AgentManagerProvider[];
+  return scanAgentAdapters({ ...ctx, providers }, options);
+}
+import { buildCodexAgentScan } from "./codexManagerApi.js";
 import {
   agentAdapterManifest,
   agentAdapterTypes
@@ -81,7 +99,7 @@ test("Codex scan exposes the project-local bootstrap runtime without changing de
 test("Codex settings scan uses the Desktop user-facing task catalog", async () => {
   const expectedId = "019f0000-0000-7000-8000-000000000059";
   let catalogCalls = 0;
-  const result = await scanAgentAdapters({
+  const result = await scanRegisteredFixture({
     rootDir: process.cwd(),
     runtimes: [],
     projects: [],
@@ -101,7 +119,7 @@ test("Codex settings scan uses the Desktop user-facing task catalog", async () =
         updatedAt: "2026-07-18T08:01:05.000Z"
       }];
     }
-  } as Parameters<typeof scanAgentAdapters>[0] & {
+  } as Parameters<typeof scanRegisteredFixture>[0] & {
     listCodexSessions: () => Promise<Array<{
       id: string;
       name: string;
@@ -150,7 +168,7 @@ test("Codex settings scan returns a bounded task page with a continuation offset
     projectPath: "C:/Projects/RabiRoute",
     updatedAt: `2026-08-18T00:00:0${index}.000Z`
   }));
-  const result = await scanAgentAdapters({
+  const result = await scanRegisteredFixture({
     rootDir: process.cwd(),
     runtimes: [],
     projects: [],
@@ -185,7 +203,7 @@ test("Codex settings scan returns a bounded task page with a continuation offset
 
 test("Codex settings scan stops a stalled task catalog and records the timed-out stage", async () => {
   const startedAt = performance.now();
-  const result = await scanAgentAdapters({
+  const result = await scanRegisteredFixture({
     rootDir: process.cwd(),
     runtimes: [],
     projects: [],
@@ -220,7 +238,7 @@ test("Codex settings scan stops a stalled task catalog and records the timed-out
 
 test("DSH settings scan exposes endpoint, projects, sessions, and local pagination", async () => {
   const requested: Array<{ baseUrl: string; limit: number; offset: number; query?: string }> = [];
-  const result = await scanAgentAdapters({
+  const result = await scanRegisteredFixture({
     rootDir: process.cwd(),
     runtimes: [{
       definition: {
@@ -453,4 +471,30 @@ test("DSH scan treats a local Home as installed and prefers a live launch-log or
   assert.equal(result.agents.dsh.endpoints?.find((endpoint) => endpoint.url === "http://127.0.0.1:3180")?.healthy, true);
   assert.match(result.agents.dsh.warnings?.join(" ") ?? "", /已保存的 DSH 地址 http:\/\/127\.0\.0\.1:3080 未响应/);
   assert.doesNotMatch(result.agents.dsh.warnings?.join(" ") ?? "", /没有发现可用安装/);
+});
+
+test("aggregate scans enter independent owners together and reject cross-owner rows locally", { timeout: 2000 }, async () => {
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const entered: string[] = [];
+  const providers = ["first", "broken", "last"].map(type => ({
+    type,
+    manifest: { type, label: type, maturity: "experimental", transport: { protocol: "fixture", mode: "owner" }, capabilities: {} },
+    async invoke() {
+      entered.push(type);
+      if (entered.length === 3) release();
+      await gate;
+      if (type === "broken") return { agents: { first: { type: "first", installed: false } }, cwdOptions: ["bad-owner"] };
+      return { agents: { [type]: { type, label: type, maturity: "experimental", installed: true, sessionPage: { total: 17, offset: 4, returned: 2 } } }, cwdOptions: [type] };
+    }
+  })) as unknown as AgentManagerProvider[];
+  const result = await scanAgentAdapters({ rootDir: process.cwd(), providers });
+  const agents = result.agents as Record<string, { installed: boolean; warnings?: string[]; sessionPage?: unknown }>;
+  assert.deepEqual(entered, ["first", "broken", "last"]);
+  assert.equal(agents.first!.installed, true);
+  assert.equal(agents.last!.installed, true);
+  assert.equal(agents.broken!.installed, false);
+  assert.match(agents.broken!.warnings!.join(" "), /own type/);
+  assert.deepEqual(agents.first!.sessionPage, { total: 17, offset: 4, returned: 2 });
+  assert.deepEqual(result.cwdOptions, ["first", "last"]);
 });

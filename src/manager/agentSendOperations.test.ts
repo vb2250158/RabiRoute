@@ -70,7 +70,7 @@ test("send executable schema accepts established channel examples and normalizat
   }
 });
 
-test("real send routes publish the executed schema, preserve remote source guards and retain durable duplicate receipts", async t => {
+test("real send routes publish the executed schema, preserve admitted connection attribution and retain durable duplicate receipts", async t => {
   const root = await mkdtemp(path.join(os.tmpdir(), "api-send-contract-"));
   let deliveries = 0;
   let ownerCalls = 0;
@@ -132,15 +132,33 @@ test("real send routes publish the executed schema, preserve remote source guard
   }
   assert.equal(deliveries, 1);
   const before = ownerCalls;
-  const invalidSource = await post({ ...body, sender: { agentType: "dsh", sessionId: " whitespace-session " } });
-  assert.equal(invalidSource.status, 400); assert.equal((await invalidSource.json()).errorCode, "API_REQUEST_SOURCE_INVALID");
-  const otherSource = await post({ ...body, sender: { agentType: "dsh", sessionId: "other-session" } });
-  assert.equal(otherSource.status, 400); assert.equal((await otherSource.json()).errorCode, "API_REQUEST_SOURCE_INVALID");
+  for (const sessionId of [" whitespace-session ", "other-session"]) {
+    const conflict = await post({ ...body, sender: { agentType: "dsh", sessionId } });
+    assert.equal(conflict.status, 409);
+    const evidence = await conflict.json();
+    assert.equal(evidence.idempotency.state, "conflict"); assert.equal(evidence.idempotency.deliveryId, body.deliveryId);
+    assert.equal(evidence.idempotency.duplicate, true);
+  }
+  assert.equal(ownerCalls, before + 2); assert.equal(deliveries, 1);
+  const original = await fetch(url + "/api/agent/send/receipts/" + body.deliveryId);
+  assert.equal(original.status, 202); const originalReceipt = await original.json();
+  assert.equal(originalReceipt.idempotency.state, "completed"); assert.equal(originalReceipt.sender.sessionId, base.sender.sessionId);
+  for (const [deliveryId, sessionId] of [["new-whitespace-attribution", " whitespace-session "], ["new-other-attribution", "other-session"]]) {
+    const fresh = { ...body, deliveryId, sender: { agentType: "dsh", sessionId } };
+    for (const duplicate of [false, true]) {
+      const response = await post(fresh), sent = await response.json();
+      assert.equal(response.status, 202, JSON.stringify(sent));
+      assert.equal(sent.idempotency.deliveryId, deliveryId); assert.equal(sent.idempotency.duplicate, duplicate);
+      assert.equal(sent.sender.sessionId, sessionId.trim());
+    }
+  }
+  assert.equal(ownerCalls, before + 6); assert.equal(deliveries, 3);
+  const beforeSchema = ownerCalls;
   const privateFile = await post({ ...base, channel: "napcat", params: { target: "private", userId: "example" }, payload: {
     type: "file", fileId: "12345678-1234-4234-8234-123456789012", fileSha256: "a".repeat(64)
   } });
   assert.equal(privateFile.status, 400); assert.equal((await privateFile.json()).errorCode, "API_REQUEST_SCHEMA_INVALID");
-  assert.equal(ownerCalls, before); assert.equal(deliveries, 1);
+  assert.equal(ownerCalls, beforeSchema); assert.equal(deliveries, 3);
   for (const operation of operations) compileApiOperation(operation);
 });
 

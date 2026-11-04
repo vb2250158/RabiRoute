@@ -3,9 +3,9 @@ import http from "node:http";
 import { Socket } from "node:net";
 import test from "node:test";
 import { AgentRequestStore } from "../agentRequests/store.js";
-import { executeEndpointAgentDelivery, type EndpointDeliveryOptions, type EndpointDeliveryReceipt } from "../agentRequests/endpointDelivery.js";
+import { executeEndpointAgentDelivery, reconcileEndpointDelivery, type EndpointDeliveryOptions, type EndpointDeliveryReceipt } from "../agentRequests/endpointDelivery.js";
 import { sourceScopedAgentDeliveryId, type AgentRequestEndpoint } from "../agentRequests/endpoint.js";
-import { listAgentDeliveryRecords, readAgentDeliveryRecord, readDeliveryRecords, createAgentDeliveryRecordOperations } from "./agentDeliveryRecords.js";
+import { listAgentDeliveryRecords, readAgentDeliveryRecord, readDeliveryRecords, controlDeliveryRecord, createAgentDeliveryRecordOperations } from "./agentDeliveryRecords.js";
 import { createAgentThreadControlOwner, type AgentThreadControlRoutesContext } from "./agentThreadControlRoutes.js";
 import { ManagerPluginRouteRegistry } from "./managerPluginRouteRegistry.js";
 import fs from "node:fs";
@@ -31,6 +31,133 @@ function fixture() {
     messageSource: { type: "agent", agentAdapter: "dsh", sessionId: "source-session", sessionName: "Source" } }, { ...options, ...extra });
   return { store, persistence, options, endpoint, send, writes: () => writes, fail: (value: boolean) => { fail = value; } };
 }
+
+test("orphan delivery cancellation persists, is idempotent, and retains the original reservation", async () => {
+  const f = fixture(); await f.send("orphan", { dispatch: async () => { throw new Error("ACK lost"); } });
+  assert.equal(f.store.list().length, 0);
+  const original = (await f.store.listEndpointDeliveries())[0]!;
+  const cancelled = await f.store.cancelEndpointDelivery(original.deliveryId);
+  assert.equal(cancelled.state, "cancelled"); assert.equal(cancelled.nextAttemptAt, undefined);
+  assert.match(cancelled.lastError?.message ?? "", /does not prove/);
+  const writes = f.writes(); await f.store.cancelEndpointDelivery(original.deliveryId); assert.equal(f.writes(), writes);
+  const restarted = new AgentRequestStore(f.persistence);
+  assert.equal((await restarted.readEndpointDelivery(original.deliveryId))?.state, "cancelled");
+  assert.equal(restarted.hasEndpointDeliveryReservation(original.deliveryId), true);
+  await assert.rejects(f.send("orphan"), /cancelled/);
+  const receipt: EndpointDeliveryReceipt = { ...original, endpoint: original.target, accepted: true, action: "late", transport: "fixture" };
+  await assert.rejects(restarted.commitEndpointReceipt(original.deliveryId, receipt), /cancelled/);
+});
+
+test("delivery cancellation rolls back on persistence failure and request cancellation retains accepted evidence", async () => {
+  const f = fixture(); await f.send("rollback", { dispatch: async () => { throw new Error("ACK lost"); } });
+  const original = (await f.store.listEndpointDeliveries())[0]!;
+  f.fail(true); await assert.rejects(f.store.cancelEndpointDelivery(original.deliveryId), /disk unavailable/);
+  assert.deepEqual(await f.store.readEndpointDelivery(original.deliveryId), original); f.fail(false);
+  await executeEndpointAgentDelivery({ action: "send", deliveryId: "tracked", sourceThreadId: "source-session", sourceAgentType: "agent",
+    threadId: "target-session", agentAdapter: "dsh", responsePolicy: "required", responseInstruction: "Return evidence", prompt: "fixture",
+    messageSource: { type: "agent", agentAdapter: "dsh", sessionId: "source-session", sessionName: "Source" } }, f.options);
+  const request = f.store.list()[0]!; const accepted = await f.store.readEndpointDelivery(request.deliveryId);
+  await f.store.cancel(request.id);
+  assert.equal(f.store.get(request.id)?.status, "cancelled");
+  assert.deepEqual(await f.store.readEndpointDelivery(request.deliveryId), accepted);
+  await assert.rejects(f.store.cancelEndpointDelivery(request.deliveryId), { code: "DELIVERY_ALREADY_RECEIVED" });
+});
+
+test("tracked and missing-request deliveries cancel through the real persistence worker and survive restart", async t => {
+  for (const orphan of [false, true]) {
+    const f = fixture();
+    await executeEndpointAgentDelivery({ action: "send", deliveryId: "tracked-worker", sourceThreadId: "source-session", sourceAgentType: "agent",
+      threadId: "target-session", agentAdapter: "dsh", responsePolicy: "required", responseInstruction: "Return evidence", prompt: "fixture",
+      messageSource: { type: "agent", agentAdapter: "dsh", sessionId: "source-session", sessionName: "Source" } },
+      { ...f.options, dispatch: async () => { throw new Error("ACK lost"); } });
+    const original = (await f.store.listEndpointDeliveries())[0]!, request = f.store.list()[0]!;
+    const raw = structuredClone(f.persistence.read()) as any;
+    if (orphan) delete raw.requests[request.id];
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabi-delivery-cancel-")), statePath = path.join(root, "requests.json");
+    fs.writeFileSync(statePath, JSON.stringify(raw));
+    const owner = new AgentRequestStore(statePath);
+    let restarted: AgentRequestStore | undefined;
+    t.after(async () => { await Promise.allSettled([owner.close(), restarted?.close()]); fs.rmSync(root, { recursive: true, force: true }); });
+    await owner.ready();
+    await assert.rejects(owner.cancelEndpointDelivery(original.deliveryId, () => { throw new Error("authority revoked while queued"); }), /authority revoked/);
+    assert.equal((await owner.readEndpointDelivery(original.deliveryId))?.state, "dispatching");
+    await owner.cancelEndpointDelivery(original.deliveryId);
+    if (!orphan) assert.equal(owner.get(request.id)?.status, "cancelled");
+    await owner.close();
+    restarted = new AgentRequestStore(statePath); await restarted.ready();
+    assert.equal((await restarted.readEndpointDelivery(original.deliveryId))?.state, "cancelled");
+    if (!orphan) assert.equal(restarted.get(request.id)?.status, "cancelled");
+  }
+});
+
+test("cancelled receipt check and damaged reservations cannot trigger reconciliation or release IDs", async () => {
+  const f = fixture(); await f.send("damaged", { dispatch: async () => { throw new Error("ACK lost"); } });
+  const original = (await f.store.listEndpointDeliveries())[0]!, url = new URL("http://fixture.invalid/api/agent/deliveries");
+  await f.store.cancelEndpointDelivery(original.deliveryId);
+  const context = { agentRequests: f.store, reconcileManagerDelivery: async () => { throw new Error("must not reconcile cancelled delivery"); } };
+  const result = await controlDeliveryRecord(context, url, original.deliveryId, "reconcile", () => {});
+  assert.equal(result.status, 200); assert.equal((result.body as any).data.state, "cancelled");
+  const raw = structuredClone(f.persistence.read()) as any; raw.deliveries[original.deliveryId].prompt = "corrupted";
+  context.agentRequests = new AgentRequestStore({ read: () => raw, write: () => { throw new Error("must not write damaged evidence"); } });
+  assert.equal((await controlDeliveryRecord(context, url, original.deliveryId, "cancel", () => {})).status, 503);
+  assert.equal(context.agentRequests.hasEndpointDeliveryReservation(original.deliveryId), true);
+  assert.equal((await controlDeliveryRecord(context, url, "missing", "cancel", () => {})).status, 404);
+});
+
+test("delivery control reads receipt-only results and never dispatches queued or unknown work", async () => {
+  const f = fixture(); let checks = 0;
+  await f.send("unknown", { dispatch: async () => { throw new Error("ACK lost"); } });
+  const original = (await f.store.listEndpointDeliveries())[0]!;
+  const url = new URL("http://fixture.invalid/api/agent/deliveries/" + original.deliveryId + "/reconcile");
+  const context = { agentRequests: f.store, reconcileManagerDelivery: async (id: string) => {
+    checks++; return reconcileEndpointDelivery(id, f.options);
+  } };
+  const unknown = await controlDeliveryRecord(context, url, original.deliveryId, "reconcile", () => {});
+  assert.equal(unknown.status, 200); assert.equal((unknown.body as any).data.state, "awaiting_confirmation");
+  assert.equal(checks, 1);
+  f.options.reconcile = async saved => ({ ...saved, endpoint: saved.target, accepted: true, action: "recovered", transport: "fixture" });
+  const confirmed = await controlDeliveryRecord(context, url, original.deliveryId, "reconcile", () => {});
+  assert.equal((confirmed.body as any).data.state, "received");
+  assert.equal((await controlDeliveryRecord(context, url, original.deliveryId, "cancel", () => {})).status, 409);
+  await controlDeliveryRecord(context, url, original.deliveryId, "reconcile", () => {}); assert.equal(checks, 2);
+  await f.send("queued", { refreshEndpoints: async (_delivery, phase) => { if (phase === "dispatch") throw new Error("offline"); } });
+  const queued = (await f.store.listEndpointDeliveries()).find(value => value.state === "prepared")!;
+  const read = await controlDeliveryRecord(context, url, queued.deliveryId, "reconcile", () => {});
+  assert.equal((read.body as any).data.state, "queued"); assert.equal(checks, 2);
+});
+
+test("delivery control HTTP refuses client receipts and uses original node owner and request authority", async t => {
+  const f = fixture(); await f.send("http-control", { dispatch: async () => { throw new Error("ACK lost"); } });
+  const original = (await f.store.listEndpointDeliveries())[0]!;
+  const registry = new ManagerPluginRouteRegistry();
+  const registration = registry.registerOperations("delivery-control-fixture", createAgentDeliveryRecordOperations({ agentRequests: f.store }));
+  const server = http.createServer((request, response) => { if (!registry.handle(request, new URL(request.url!, "http://fixture.invalid"), response)) response.writeHead(404).end(); });
+  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  t.after(async () => { server.closeAllConnections(); await registration.dispose(); await new Promise<void>(resolve => server.close(() => resolve())); });
+  const url = `http://127.0.0.1:${(server.address() as { port: number }).port}/api/agent/deliveries/${original.deliveryId}/cancel`;
+  const post = (body: unknown) => fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+  assert.equal((await post({ state: "received", receipt: { accepted: true } })).status, 400);
+  assert.equal(readAgentDeliveryRecord(f.store, original.deliveryId)?.state, "awaiting_confirmation");
+  const cancelled = await post({}); assert.equal(cancelled.status, 200); assert.equal(((await cancelled.json()) as any).data.state, "cancelled");
+  assert.equal((await post({})).status, 200);
+  assert.equal((await controlDeliveryRecord({ agentRequests: f.store }, new URL(url + "?nodeId=offline"), "original", "cancel", () => {})).status, 503);
+  let mutation = 0;
+  const fenced = await controlDeliveryRecord({ agentRequests: f.store, controlNodeDeliveryRecord: async () => { mutation++; return {}; } },
+    new URL(url + "?nodeId=offline"), "original", "cancel", () => { throw new Error("revoked"); });
+  assert.equal(fenced.status, 503); assert.equal(mutation, 0);
+});
+
+test("connection source records are searchable by real connection identity and transport without task metadata", async () => {
+  const f = fixture(); await f.send("connection-intent", { resolveSource: () => ({ threadId: "", agentType: "agent",
+    connection: { kind: "connection", managerInstanceId: "real-ledger", transport: "lan-agent", id: "real-node-one" } }) });
+  const writes = f.writes();
+  for (const query of ["real-node-one", "lan-agent", "real-ledger"]) {
+    const page = listAgentDeliveryRecords(f.store, new URL("http://fixture.invalid/api/agent/deliveries?query=" + query));
+    assert.equal(page.records.length, 1); assert.equal(page.records[0].source.kind, "connection");
+    assert.equal(page.records[0].source.connection?.id, "real-node-one"); assert.equal(page.records[0].source.sessionId, undefined);
+  }
+  assert.equal(f.writes(), writes);
+});
 
 test("delivery records show target receipts, retain missing legacy metadata, and exclude private content", async () => {
   const f = fixture(); await f.send("intent-first"); await f.send("intent-second");
@@ -99,7 +226,7 @@ test("caller lookup proves absence only for the exact source and retains dispatc
   assert.equal(readAgentDeliveryRecord(context.agentRequests, original.deliveryId)?.state, "blocked");
 });
 
-test("changing an authorization incarnation cannot turn an old reserved caller ID into safe absence", async () => {
+test("changing source attribution incarnation retains the old caller reservation without a second source grant", async () => {
   const f = fixture(); await f.send("intent-incarnation");
   const current = { ...f.endpoint("source"), authorizationIncarnation: "new-incarnation" };
   const options = { ...f.options, authorize: (endpoint: AgentRequestEndpoint) => {
@@ -109,7 +236,8 @@ test("changing an authorization incarnation cannot turn an old reserved caller I
     getTrustedRemoteSource: () => ({ nodeId: "source", agentId: "dsh", provider: "dsh", sessionId: "source-session", sessionName: "Source" }),
     readEndpointDeliveryOptions: () => ({ ...options, resolveSource: () => ({ endpoint: current, threadId: current.sessionId, agentType: "agent" }) }) } as unknown as AgentThreadControlRoutesContext;
   const owner = createAgentThreadControlOwner(context).prepare(new http.IncomingMessage(new Socket()));
-  await assert.rejects(owner.lookupCallerDelivery("intent-incarnation"), /Original source incarnation was revoked/);
+  const existing = await owner.lookupCallerDelivery("intent-incarnation");
+  assert.equal(existing.status, 200); assert.equal((existing.body.data as { canSubmitSameIntent: boolean }).canSubmitSameIntent, false);
 });
 
 test("an unreadable original owner cannot prove caller absence or appear as an empty successful GUI page", async () => {
@@ -139,7 +267,7 @@ test("the actual thread plugin caller API uses the factory read authority and th
           executionOptionsHash: value.executionOptionsHash, endpoint: value.target, accepted: true, action: "started", transport: "fixture" };
       } }, localOptions: () => ({ allowedWorkspaces: [] }), readLocal: async () => { throw new Error("No local source substitution"); }
   } as unknown as AgentEndpointDeliveryContext);
-  const source = { nodeId: "source", agentId: "dsh", provider: "dsh" as const, sessionId: "source-session", sessionName: "Source" };
+  const source = { nodeId: "source", agentId: "dsh", provider: "dsh" as const, sessionId: "source-session", sessionName: "Source", authorizationIncarnation: "captured-connection" };
   await executeEndpointAgentDelivery({ action: "send", deliveryId: "original-plugin-intent", sourceThreadId: source.sessionId,
     sourceAgentType: "agent", messageSource: { type: "agent", agentAdapter: "dsh", sessionId: source.sessionId, sessionName: "Source" },
     agentAdapter: "dsh", threadId: "target-session", instanceBinding: { instanceId: "target", agentId: "dsh" },
@@ -167,7 +295,7 @@ test("the actual thread plugin caller API uses the factory read authority and th
   assert.equal(original.status, 200); assert.equal(((await original.json()) as any).data.state, "committed");
   assert.equal(readAuthorityCalls, 1); assert.equal(sent, 1);
   const mismatch = await fetch(base + "?sourceThreadId=wrong-session&sourceAgentType=agent&agentAdapter=dsh");
-  assert.equal(mismatch.status, 400); assert.notEqual(((await mismatch.json()) as any).canSubmitSameIntent, true);
+  assert.equal(mismatch.status, 404); assert.equal(((await mismatch.json()) as any).errorCode, "DELIVERY_NOT_RESERVED");
   assert.equal(sent, 1);
 });
 

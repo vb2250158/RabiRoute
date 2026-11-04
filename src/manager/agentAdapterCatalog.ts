@@ -1,11 +1,11 @@
 import type http from "node:http";
-import { handleDshConnectionRequest } from "./dshConnectionRoutes.js";
+import { resolvePublishedAgentManagerProviders, type AgentManagerProvider } from "./agentManagerProviders.js";
+import type { PluginGeneration } from "../plugin-kernel/generationRuntime.js";
+import { scanAgentAdapters } from "../agentAdapters/managerApi.js";
 import { createAgentAdapterCatalogOperations, runAgentAdapterCatalogOperation } from "./agentAdapterCatalogOperations.js";
 import { AGENT_CATALOG_OPERATIONS } from "./agentAdapterCatalogContract.js";
 import type { ApiOperationDefinition, ApiOperationRegistration } from "./apiOperationContract.js";
 import { fileURLToPath } from "node:url";
-import { updateAgentHooks } from "../agentAdapters/hookInstallation.js";
-import { listRegisteredAgentAdapterManifests } from "../agentAdapters/agentAdapter.js";
 import type {
   AgentScanOptions,
   AgentScanPerformanceOperation,
@@ -15,15 +15,14 @@ import { recordPerformanceOperation } from "../performance/performanceInstrument
 import type { AgentAdapterManifest } from "../shared/agentAdapterCapabilities.js";
 import {
   AgentAdapterCatalogWorkerError,
-  AgentAdapterCatalogWorkerPool,
-  type AgentAdapterCatalogWorkerPoolStatus
 } from "./agentAdapterCatalogWorkerPool.js";
 
 export type AgentAdapterCatalogServiceOptions = {
   rootDir: string;
   getRuntimes(): Iterable<AgentScanRuntimeSnapshot>;
-  workerPool?: AgentAdapterCatalogWorkerPool;
   listManifests?: () => Promise<AgentAdapterManifest[]>;
+  getGeneration?: () => PluginGeneration | undefined;
+  getProviders?: () => readonly AgentManagerProvider[];
   recordOperation?: (operation: string, durationMs: number, error?: boolean) => void;
 };
 
@@ -74,8 +73,8 @@ function cloneManifest(manifest: AgentAdapterManifest): AgentAdapterCatalogSnaps
 export class AgentAdapterCatalogService {
   private readonly rootDir: string;
   private readonly getRuntimes: () => Iterable<AgentScanRuntimeSnapshot>;
-  private readonly workerPool: AgentAdapterCatalogWorkerPool;
-  private readonly listManifests: () => Promise<AgentAdapterManifest[]>;
+  private readonly listManifests?: () => Promise<AgentAdapterManifest[]>;
+  private readonly getProviders: () => readonly AgentManagerProvider[];
   private readonly recordOperation: (operation: string, durationMs: number, error?: boolean) => void;
   private state: "accepting" | "draining" | "stopped" = "accepting";
   private readonly active = new Set<Promise<unknown>>();
@@ -84,24 +83,25 @@ export class AgentAdapterCatalogService {
   constructor(options: AgentAdapterCatalogServiceOptions) {
     this.rootDir = options.rootDir;
     this.getRuntimes = options.getRuntimes;
-    this.workerPool = options.workerPool ?? new AgentAdapterCatalogWorkerPool();
-    this.listManifests = options.listManifests ?? listRegisteredAgentAdapterManifests;
+    this.listManifests = options.listManifests;
+    this.getProviders = options.getProviders ?? (() => resolvePublishedAgentManagerProviders(options.getGeneration?.()));
     this.recordOperation = options.recordOperation ?? recordPerformanceOperation;
   }
 
   async connectionOperation(request: http.IncomingMessage, url: URL, parsedBody?: Readonly<{ value: unknown; signal?: AbortSignal }>): Promise<unknown> {
     this.assertAccepting();
-    return this.track(this.runControlled(controller => handleDshConnectionRequest(request, url, undefined, controller.signal, parsedBody)));
+    return this.track(this.runControlled(controller => this.provider("dsh").invoke("connection", { method: request.method, pathname: url.pathname },
+      { request, url, parsedBody, signal: controller.signal })));
   }
 
   async updateHooks(adapter: string): Promise<{ message: string }> {
     this.assertAccepting();
-    return updateAgentHooks(fileURLToPath(new URL("../../", import.meta.url)), adapter);
+    return this.track(this.runControlled(controller => this.provider(adapter).invoke<{message:string}>("hooks.update", {}, { signal: controller.signal })));
   }
 
   async catalog(): Promise<AgentAdapterCatalogSnapshot> {
     this.assertAccepting();
-    const manifests = await this.track(this.listManifests());
+    const manifests = this.listManifests ? await this.track(this.listManifests()) : this.getProviders().map(provider => provider.manifest as AgentAdapterManifest);
     return {
       schemaVersion: 1,
       adapters: manifests.map(cloneManifest)
@@ -110,46 +110,24 @@ export class AgentAdapterCatalogService {
 
   scanAll(options: AgentScanOptions = {}, signal?: AbortSignal): Promise<Record<string, unknown>> {
     this.assertAccepting();
-    const operation = this.runControlled(
-      controller => this.workerPool.query<Record<string, unknown>>({
-        kind: "all",
-        rootDir: this.rootDir,
-        runtimes: this.runtimeSnapshots(),
-        options
-      }, { signal: controller.signal }),
-      signal
-    ).then(result => this.consumePerformanceOperations(result));
-    return this.track(operation);
+    return this.track(this.runControlled(controller => scanAgentAdapters({ rootDir:this.rootDir,
+      runtimes:this.runtimeSnapshots(),providers:this.getProviders(),scanSignal:controller.signal },options),signal).then(result=>this.consumePerformanceOperations(result)));
   }
 
-  scanDsh(
-    options: Pick<AgentScanOptions, "dshLimit" | "dshOffset" | "dshQuery" | "dshBaseUrl"> = {},
-    signal?: AbortSignal
-  ): Promise<Record<string, unknown>> {
+  scanDsh(options: AgentScanOptions = {}, signal?: AbortSignal): Promise<Record<string, unknown>> { return this.scanOne("dsh",options,signal); }
+
+  scanOne(type:string,options:AgentScanOptions={},signal?:AbortSignal):Promise<Record<string,unknown>> {
     this.assertAccepting();
-    return this.track(this.runControlled(
-      controller => this.workerPool.query<Record<string, unknown>>({
-        kind: "dsh",
-        rootDir: this.rootDir,
-        runtimes: this.runtimeSnapshots(),
-        options
-      }, { signal: controller.signal }),
-      signal
-    ));
+    return this.track(this.runControlled(controller=>this.provider(type).invoke<Record<string,unknown>>("scan",options,{signal:controller.signal}),signal));
   }
 
-  workerStatus(): AgentAdapterCatalogWorkerPoolStatus {
-    return this.workerPool.status();
+  private provider(type:string):AgentManagerProvider {
+    const provider=this.getProviders().find(value=>value.type===type);
+    if(!provider)throw Object.assign(new Error(`Agent plugin is unavailable: ${type}.`),{code:"AGENT_ADAPTER_UNAVAILABLE",statusCode:503});
+    return provider;
   }
 
-  scanGrokBot(options: AgentScanOptions = {}, signal?: AbortSignal): Promise<Record<string, unknown>> {
-    this.assertAccepting();
-    return this.track(this.runControlled(
-      controller => this.workerPool.query<Record<string, unknown>>({
-        kind: "grokBot", rootDir: this.rootDir, runtimes: this.runtimeSnapshots(), options
-      }, { signal: controller.signal }), signal
-    ));
-  }
+  scanGrokBot(options:AgentScanOptions={},signal?:AbortSignal):Promise<Record<string,unknown>> { return this.scanOne("grokBot",options,signal); }
 
   activeCount(): number {
     return this.active.size;
@@ -161,25 +139,21 @@ export class AgentAdapterCatalogService {
       return;
     }
     for (const controller of this.controllers) controller.abort(reason);
-    await this.workerPool.cancel(reason);
     await this.settleActive();
   }
 
   async drain(): Promise<void> {
     if (this.state === "accepting") this.state = "draining";
     await this.settleActive();
-    await this.workerPool.drain();
   }
 
   async stop(reason?: string): Promise<void> {
     if (this.state === "stopped") {
       await this.settleActive();
-      await this.workerPool.drain();
-      return;
+        return;
     }
     this.state = "stopped";
     for (const controller of this.controllers) controller.abort(reason);
-    await this.workerPool.stop(reason);
     await this.settleActive();
   }
 

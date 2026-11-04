@@ -12,7 +12,11 @@ Open **Delivery records** (`/deliveries`) in the WebGUI sidebar. The default own
 
 Queued means saved; awaiting confirmation means acceptance evidence is incomplete; received means the target owner accepted the content. None means business execution completed. Missing historical times or counts remain unrecorded.
 
-The host cannot inspect a disconnected computer's local queue. The page reports that it cannot read current records instead of implying an empty queue. Read it again after the original client reconnects. Opening details never resends a message.
+The host cannot inspect a disconnected computer's local queue. The page reports that it cannot read current records instead of implying an empty queue. Read it again after the original client reconnects. Opening lists or details never dispatches messages.
+
+Awaiting-confirmation details offer **Check original receipt** and **Cancel awaiting confirmation**. Checking reads evidence for the original ID and target; missing evidence preserves uncertainty without resending or requeueing. Cancellation is persisted by the selected computer's original ledger, including orphan records without a pending reply request. It stops that ledger's automatic recovery but cannot retract content that may already have reached the target, which may still execute it. Records already accepted by another computer must be checked with their own owner. Confirmed acceptance remains recorded. Each action is followed by an independent read of the same computer and ID; failures preserve the displayed record and explain how to check again.
+
+Authenticated callers can use `POST /api/agent/deliveries/:deliveryId/reconcile` or `/cancel` with an empty `{}` body and optional `nodeId` query parameter for the original computer; otherwise the Manager ledger is selected. These operations accept neither an asserted acceptance state nor a supplied receipt. Read errors, missing authority evidence and corrupt records never become success. Uncertain records do not expire by default: a timeout cannot prove failed delivery. Check original evidence or explicitly cancel tracking.
 
 ## The original client owns sending
 

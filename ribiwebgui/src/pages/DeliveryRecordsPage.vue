@@ -5,7 +5,7 @@ import type { AgentDeliveryRecord, AgentDeliveryRecordPage } from "@shared/agent
 import type { AgentInstance } from "@shared/agentInstance";
 import { useI18n } from "../i18n";
 import { userFacingError } from "../userFacingError";
-import { readDeliveryComputers, readDeliveryRecord, readDeliveryRecords } from "../deliveries/deliveryRecordClient";
+import { deliveryRecordOwnerId, readDeliveryComputers, readDeliveryRecord, readDeliveryRecords, recoverDeliveryRecord, type DeliveryRecoveryAction } from "../deliveries/deliveryRecordClient";
 import { deliveryRecordCopy, deliveryStateLabels } from "../deliveries/deliveryRecordCopy";
 import { deliveryComputerOptions, deliveryEndpointLabel, deliveryStatePresentation, deliveryTimeLabel } from "../deliveries/deliveryRecordPresentation";
 
@@ -26,6 +26,10 @@ const detailOpen = ref(false);
 const detailLoading = ref(false);
 const detailError = ref("");
 const copyStatus = ref("");
+const actionBusy = ref<DeliveryRecoveryAction | "">("");
+const actionNotice = ref("");
+let actionAbort: AbortController | undefined;
+let detailNodeId = "";
 const computers = ref<AgentInstance[]>([]);
 const computersLoading = ref(false);
 const computersError = ref("");
@@ -40,9 +44,50 @@ const stateOptions = computed(() => [
 const receipt = computed(() => detail.value?.receipt ? JSON.stringify(detail.value.receipt, null, 2) : "");
 const coverageText = computed(() => page.value?.coverage.message || (selectedNodeId.value ? copy.value.nodeCoverage : copy.value.coverage));
 const status = (value: string) => deliveryStatePresentation(value, locale.value);
+const recordStatus = (record: AgentDeliveryRecord) => record.managerCancelPending
+  ? { label: copy.value.cancelPendingStatus, color: "warning" } : status(record.state);
 const endpoint = (value: AgentDeliveryRecord["source"]) => deliveryEndpointLabel(value, locale.value);
 const time = (value?: string) => deliveryTimeLabel(value, locale.value);
 const computerOptions = computed(() => deliveryComputerOptions(computers.value, locale.value, selectedNodeId.value));
+const canCancel = computed(() => Boolean(detail.value && ["queued", "awaiting_confirmation", "blocked"].includes(detail.value.state)
+  && detail.value.errorCode !== "DELIVERY_EVIDENCE_UNAVAILABLE"));
+const canReconcile = computed(() => detail.value?.state === "awaiting_confirmation"
+  || Boolean(detail.value?.state === "cancelled" && detail.value.managerCancelPending));
+
+function stopDetailWork(): void {
+  detailAbort?.abort();
+  actionAbort?.abort();
+  actionAbort = undefined;
+  actionBusy.value = "";
+}
+
+async function recover(action: DeliveryRecoveryAction): Promise<void> {
+  if (!detail.value || detailLoading.value || actionBusy.value || !detailOpen.value || detailNodeId !== selectedNodeId.value) return;
+  if (action === "cancel" ? !canCancel.value : !canReconcile.value) return;
+  const ownerId = deliveryRecordOwnerId(detail.value);
+  const nodeId = detailNodeId;
+  const controller = new AbortController();
+  actionAbort = controller;
+  actionBusy.value = action;
+  actionNotice.value = "";
+  detailError.value = "";
+  const isCurrent = () => !controller.signal.aborted && actionAbort === controller && detailOpen.value
+    && selectedNodeId.value === nodeId && detail.value && deliveryRecordOwnerId(detail.value) === ownerId;
+  try {
+    const next = await recoverDeliveryRecord(ownerId, action, controller.signal, fetch, nodeId || undefined);
+    if (!isCurrent()) return;
+    // A list read admitted before the mutation must not overwrite this readback.
+    listAbort?.abort();
+    loading.value = false;
+    detail.value = next;
+    records.value = records.value.map(record => deliveryRecordOwnerId(record) === ownerId ? next : record);
+    actionNotice.value = `${copy.value.recoveryReadback} ${recordStatus(next).label}`;
+  } catch (cause) {
+    if (isCurrent()) detailError.value = `${userFacingError(cause)} ${copy.value.recoveryUncertain}`;
+  } finally {
+    if (actionAbort === controller) { actionBusy.value = ""; actionAbort = undefined; }
+  }
+}
 
 async function loadComputers(): Promise<void> {
   computersAbort?.abort();
@@ -87,18 +132,29 @@ async function load(more = false): Promise<void> {
   }
 }
 
-async function showDetails(record: AgentDeliveryRecord): Promise<void> {
-  detailAbort?.abort();
+async function showDetails(record: AgentDeliveryRecord, preserve = false): Promise<void> {
+  stopDetailWork();
+  detailNodeId = selectedNodeId.value;
+  const ownerId = deliveryRecordOwnerId(record);
+  const nodeId = detailNodeId;
   const controller = new AbortController();
   detailAbort = controller;
   detailOpen.value = true;
-  detail.value = undefined;
+  if (!preserve) detail.value = undefined;
   detailError.value = "";
   copyStatus.value = "";
+  actionNotice.value = "";
   detailLoading.value = true;
   try {
-    const next = await readDeliveryRecord(record.deliveryId, controller.signal, fetch, selectedNodeId.value || undefined);
-    if (!controller.signal.aborted) detail.value = next;
+    const next = await readDeliveryRecord(ownerId, controller.signal, fetch, nodeId || undefined);
+    if (!controller.signal.aborted) {
+      detail.value = next;
+      if (preserve) {
+        listAbort?.abort();
+        loading.value = false;
+        records.value = records.value.map(item => deliveryRecordOwnerId(item) === ownerId ? next : item);
+      }
+    }
   } catch (cause) {
     if (!controller.signal.aborted) detailError.value = userFacingError(cause);
   } finally {
@@ -113,14 +169,15 @@ async function copyId(): Promise<void> {
 }
 
 watch(selectedNodeId, () => {
-  detailAbort?.abort();
+  stopDetailWork();
   detailOpen.value = false;
   records.value = [];
   page.value = undefined;
   void load();
 }, { immediate: true });
+watch(detailOpen, open => { if (!open) stopDetailWork(); }, { flush: "sync" });
 onMounted(() => { void loadComputers(); });
-onBeforeUnmount(() => { listAbort?.abort(); detailAbort?.abort(); computersAbort?.abort(); });
+onBeforeUnmount(() => { listAbort?.abort(); stopDetailWork(); computersAbort?.abort(); });
 </script>
 
 <template>
@@ -148,7 +205,7 @@ onBeforeUnmount(() => { listAbort?.abort(); detailAbort?.abort(); computersAbort
       <ul v-if="records.length" class="delivery-list" :aria-label="copy.title">
         <li v-for="record in records" :key="record.id" class="delivery-item">
           <div class="delivery-item-top">
-            <v-chip :color="status(record.state).color" size="small" variant="tonal">{{ status(record.state).label }}</v-chip>
+            <v-chip :color="recordStatus(record).color" size="small" variant="tonal">{{ recordStatus(record).label }}</v-chip>
             <time>{{ time(record.updatedAt || record.createdAt) }}</time>
             <v-btn size="small" variant="text" @click="showDetails(record)">{{ copy.details }}</v-btn>
           </div>
@@ -169,8 +226,16 @@ onBeforeUnmount(() => { listAbort?.abort(); detailAbort?.abort(); computersAbort
           <p v-if="detailLoading" role="status">{{ copy.detailLoading }}</p>
           <v-alert v-if="detailError" type="error" variant="tonal" role="alert">{{ detailError }}</v-alert>
           <template v-if="detail">
-            <v-chip :color="status(detail.state).color" variant="tonal" class="mb-3">{{ status(detail.state).label }}</v-chip>
+            <v-chip :color="recordStatus(detail).color" variant="tonal" class="mb-3">{{ recordStatus(detail).label }}</v-chip>
+            <v-btn class="mb-3 ml-2" size="small" variant="text" prepend-icon="mdi-refresh" :loading="detailLoading" :disabled="Boolean(actionBusy) || detailLoading" @click="showDetails(detail, true)">{{ copy.refresh }}</v-btn>
             <v-alert v-if="detail.state === 'received'" type="success" variant="tonal" class="mb-3">{{ copy.receivedNote }}</v-alert>
+            <v-alert v-if="detail.managerCancelPending" type="warning" variant="tonal" class="mb-3">{{ copy.managerCancelPendingNote }}</v-alert>
+            <v-alert v-if="canCancel || detail.state === 'cancelled'" type="info" variant="tonal" class="mb-3">{{ copy.cancelNote }}</v-alert>
+            <div v-if="canCancel || canReconcile" class="d-flex flex-wrap ga-2 mb-3">
+              <v-btn v-if="canReconcile" variant="tonal" :loading="actionBusy === 'reconcile'" :disabled="Boolean(actionBusy) || detailLoading" @click="recover('reconcile')">{{ copy.reconcile }}</v-btn>
+              <v-btn v-if="canCancel" variant="outlined" :loading="actionBusy === 'cancel'" :disabled="Boolean(actionBusy) || detailLoading" @click="recover('cancel')">{{ copy.cancelPending }}</v-btn>
+            </div>
+            <p v-if="actionNotice" role="status">{{ actionNotice }}</p>
             <dl class="delivery-detail-fields">
               <dt>{{ copy.deliveryId }}</dt><dd data-no-i18n>{{ detail.deliveryId }} <v-btn size="x-small" variant="text" icon="mdi-content-copy" :aria-label="copy.copyId" @click="copyId" /></dd>
               <dt v-if="detail.intentId">{{ copy.intentId }}</dt><dd v-if="detail.intentId" data-no-i18n>{{ detail.intentId }}</dd>

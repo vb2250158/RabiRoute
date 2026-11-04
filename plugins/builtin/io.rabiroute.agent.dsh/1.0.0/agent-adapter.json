@@ -1,0 +1,31 @@
+{
+  "type": "dsh",
+  "capability": "agent.adapter.dsh@1",
+  "manifest": {
+    "type": "dsh",
+    "label": "DSH（DeepSeek Harness）",
+    "maturity": "experimental",
+    "transport": {
+      "protocol": "http",
+      "mode": "session.list/create/rename/prompt"
+    },
+    "host": {
+      "name": "DSH apiproxy",
+      "required": true
+    },
+    "capabilities": {
+      "managedTasks": {
+        "messageProcessingAgent": true,
+        "planAssistantSessions": true,
+        "memoryConsolidationAgent": true,
+        "hooks": true,
+        "agentThreads": true
+      }
+    }
+  },
+  "sessionBinding": {
+    "sessionId": "dshSessionId",
+    "sessionName": "dshSessionName",
+    "workspace": "dshCwd"
+  }
+}

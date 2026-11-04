@@ -1,0 +1,16 @@
+{
+  "exports": [
+    {
+      "source": "src/agentAdapters/pluginImplementations/astrbot.ts",
+      "name": "createAgentOperations"
+    }
+  ],
+  "ownedPrefixes": [
+    "src/agentAdapters/",
+    "src/manager/astrbot"
+  ],
+  "scopedEnvironment": true,
+  "hostSources": [
+    "src/agentAdapters/stateReporter.ts"
+  ]
+}

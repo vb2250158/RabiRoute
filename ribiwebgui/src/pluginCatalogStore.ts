@@ -6,6 +6,7 @@ import { resolveWebPageCatalog } from "./pluginPages";
 import { resolveWebSettingsCatalog, resolveWebStatusCatalog } from "./pluginRenderers";
 import { resolveWebThemeCatalog } from "./pluginThemes";
 import { gatewayEndpointTypesForWebCatalog } from "./messageEndpoints/messageEndpointCatalog";
+import { agentAdapterCatalog } from "./agentAdapters/agentAdapterCatalog";
 
 const catalog = ref<WebPluginCatalog | null>(null);
 const status = ref<WebPluginCatalogStatus>("idle");
@@ -16,6 +17,7 @@ const commands = computed(() => resolveWebCommandCatalog(contributions.value));
 const pages = computed(() => resolveWebPageCatalog(contributions.value, status.value));
 const settingsRenderers = computed(() => resolveWebSettingsCatalog(contributions.value));
 const gatewayEndpointTypes = computed(() => gatewayEndpointTypesForWebCatalog(catalog.value?.plugins ?? [], settingsRenderers.value));
+const agentAdapters = computed(() => agentAdapterCatalog(catalog.value?.plugins ?? [], catalog.value?.contributions ?? [], settingsRenderers.value));
 const statusRenderers = computed(() => resolveWebStatusCatalog(contributions.value));
 const themes = computed(() => resolveWebThemeCatalog(contributions.value));
 
@@ -37,6 +39,7 @@ export const pluginCatalogStore = {
   pages,
   settingsRenderers,
   gatewayEndpointTypes,
+  agentAdapters,
   statusRenderers,
   themes,
   refresh

@@ -99,7 +99,7 @@ const ruleDialog = ref(false);
 const automationDialog = ref(false);
 const automationWorkspaceTab = ref<"messages" | "hooks">("messages");
 const templateVariablesDialog = ref(false);
-type PersonaPageTab = "profile" | "messages" | "expression" | "avatar" | "identity" | "context" | "automation" | "all-day-recording" | "companion";
+type PersonaPageTab = "profile" | "messages" | "expression" | "avatar" | "identity" | "automation" | "all-day-recording";
 const activePersonaPageTab = ref<PersonaPageTab>("profile");
 watch(() => route.query.tab, tab => {
   if (tab === "messages") activePersonaPageTab.value = "messages";
@@ -148,8 +148,6 @@ let voiceIdentityRefreshQueued = false;
 let voiceIdentityRefreshObserveQueued = false;
 let personaMarkdownRequestVersion = 0;
 const PERSONA_SUMMARY_MAX_CHARACTERS = 420;
-
-const recentMessageEndpoints: RecentMessageEndpoint[] = RECENT_MESSAGE_ENDPOINTS.filter(endpoint => endpoint !== "heartbeat");
 
 const gateway = computed(() => store.sourceDeviceId === personaService.deviceId ? store.selectedGateway : null);
 const isRemotePersona = computed(() => Boolean(gateway.value?.agentRoleDeviceId));
@@ -997,17 +995,18 @@ function setAgentHooks(hooks: CodexHookSettings): void {
   store.touch();
 }
 
-function recentMessageLimitFor(endpoint: RecentMessageEndpoint): number {
-  return normalizeRecentMessageLimit(gateway.value?.recentMessageLimits?.[endpoint]);
-}
+const automationRecentMessageLimit = computed(() => {
+  const action = activeAutomation.value?.action;
+  if (action?.type !== "deliver_agent") return 0;
+  const endpoint = selectedEndpoint.value as RecentMessageEndpoint;
+  const legacy = RECENT_MESSAGE_ENDPOINTS.includes(endpoint)
+    ? gateway.value?.recentMessageLimits?.[endpoint] : undefined;
+  return normalizeRecentMessageLimit(action.recentMessageLimit,
+    normalizeRecentMessageLimit(legacy, normalizeRecentMessageLimit(gateway.value?.recentMessageLimit)));
+});
 
-function setRecentMessageLimit(endpoint: RecentMessageEndpoint, value: unknown): void {
-  if (!gateway.value) return;
-  gateway.value.recentMessageLimits = {
-    ...(gateway.value.recentMessageLimits || {}),
-    [endpoint]: normalizeRecentMessageLimit(value)
-  };
-  store.touch();
+function setAutomationRecentMessageLimit(value: unknown): void {
+  patchAutomationAction({ recentMessageLimit: normalizeRecentMessageLimit(value) });
 }
 
 async function refreshVoiceProfile(): Promise<void> {
@@ -1384,10 +1383,8 @@ onBeforeUnmount(() => {
           <v-tab value="expression" prepend-icon="mdi-account-voice" :disabled="!hasPersona">表达与语音</v-tab>
           <v-tab value="avatar" prepend-icon="mdi-account-box-outline" :disabled="!hasPersona">虚拟形象</v-tab>
           <v-tab value="identity" prepend-icon="mdi-account-group-outline" :disabled="!hasPersona">身份关系</v-tab>
-          <v-tab value="context" prepend-icon="mdi-message-text-clock-outline">消息上下文</v-tab>
           <v-tab value="automation" prepend-icon="mdi-robot-outline">自动化</v-tab>
           <v-tab value="all-day-recording" prepend-icon="mdi-timeline-clock-outline" :disabled="!hasPersona">{{ t('全天记录') }}</v-tab>
-          <v-tab value="companion" prepend-icon="mdi-account-heart-outline" :disabled="!hasPersona">共同活动</v-tab>
         </v-tabs>
       </v-card>
 
@@ -1395,11 +1392,6 @@ onBeforeUnmount(() => {
         <PersonaMessages />
       </div>
       <v-window v-model="activePersonaPageTab" class="persona-page-window" :touch="false">
-        <v-window-item value="companion">
-          <div class="persona-tab-panel">
-            <PersonaCompanionActivity v-if="hasPersona && activePersonaPageTab === 'companion'" :role-id="gateway.agentRoleId || ''" :gateway-id="gateway.id" />
-          </div>
-        </v-window-item>
         <v-window-item value="all-day-recording">
           <div class="persona-tab-panel">
             <PersonaAllDayRecording v-if="hasPersona && activePersonaPageTab === 'all-day-recording'" :role-id="gateway.agentRoleId || ''" />
@@ -1641,6 +1633,7 @@ onBeforeUnmount(() => {
 
         <v-window-item value="avatar">
           <div class="persona-tab-panel">
+            <PersonaCompanionActivity v-if="hasPersona && activePersonaPageTab === 'avatar'" :role-id="gateway.agentRoleId || ''" :gateway-id="gateway.id" />
             <PersonaDesktopPetPanel v-if="hasPersona" :persona-id="gateway.agentRoleId || ''" />
           </div>
         </v-window-item>
@@ -1751,43 +1744,6 @@ onBeforeUnmount(() => {
           </v-card-text>
         </v-card>
       </v-dialog>
-
-          </div>
-        </v-window-item>
-
-        <v-window-item value="context">
-          <div class="persona-tab-panel">
-
-      <v-card v-if="hasPersona" class="app-card glass-card section-card">
-        <div class="section-title-row">
-          <div>
-            <div class="section-title">最近消息上下文</div>
-            <div class="section-note">分别控制每个消息端自动注入给当前角色的最近消息数量。</div>
-          </div>
-          <v-chip color="secondary" variant="tonal">
-            默认 {{ DEFAULT_RECENT_MESSAGE_LIMIT }} · 上限 {{ MAX_RECENT_MESSAGE_LIMIT }}
-          </v-chip>
-        </div>
-        <v-alert type="info" variant="tonal" density="compact" class="mb-3">
-          设为 0 只停止把该消息端历史自动注入 Agent，不会删除已有消息记录或审计数据。
-        </v-alert>
-        <div class="rule-list">
-          <SpeechParameterSlider
-            v-for="endpoint in recentMessageEndpoints"
-            :key="endpoint"
-            :label="adapterLabel(endpoint)"
-            :min="0"
-            :max="MAX_RECENT_MESSAGE_LIMIT"
-            :step="1"
-            suffix="条"
-            :hint="`0 表示不注入 ${adapterLabel(endpoint)} 历史；未单独设置时使用 ${DEFAULT_RECENT_MESSAGE_LIMIT} 条。`"
-            :model-value="recentMessageLimitFor(endpoint)"
-            @update:model-value="value => setRecentMessageLimit(endpoint, value)"
-          />
-        </div>
-      </v-card>
-
-
 
           </div>
         </v-window-item>
@@ -2318,6 +2274,27 @@ onBeforeUnmount(() => {
                   <template v-if="activeAutomation.action.type === 'deliver_agent'">
                     <AutomationAgentTarget v-if="gateway" :gateway="gateway" :model-value="activeAutomation.action.target"
                       @update:model-value="target => patchAutomationAction({ target })" />
+                    <div v-if="activeAutomation.trigger.type === 'message'" class="mt-4">
+                      <v-switch
+                        :model-value="automationRecentMessageLimit > 0"
+                        label="携带最近消息"
+                        color="secondary"
+                        hide-details
+                        @update:model-value="value => setAutomationRecentMessageLimit(value ? DEFAULT_RECENT_MESSAGE_LIMIT : 0)"
+                      />
+                      <SpeechParameterSlider
+                        v-if="automationRecentMessageLimit > 0"
+                        label="最近消息条数"
+                        :min="1"
+                        :max="MAX_RECENT_MESSAGE_LIMIT"
+                        :step="1"
+                        suffix="条"
+                        hint="携带当前会话最近 N 条消息，最多 200 条。"
+                        :model-value="automationRecentMessageLimit"
+                        @update:model-value="setAutomationRecentMessageLimit"
+                      />
+                      <div class="section-note mt-2">仅影响本条规则交给 Agent 的历史消息，聊天记录仍会保留。</div>
+                    </div>
                     <v-textarea
                       v-if="activeAutomation.trigger.type === 'schedule'"
                       class="mt-4"

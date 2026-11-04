@@ -13,6 +13,7 @@ import { runPluginActivation } from "../plugin-kernel/pluginActivationContext.js
 import type { PluginCandidate } from "../plugin-kernel/types.js";
 import { ManagerPluginRouteRegistry } from "../manager/managerPluginRouteRegistry.js";
 import { fixtureApiContract } from "../manager/apiOperationContractFixtures.js";
+import { nativeHttpTestFetch } from "../manager/nativeHttpTestClient.js";
 import { buildManagerHealthSnapshot } from "../manager/managerHealth.js";
 import { BridgedIsolatedPluginExecutor, type RuntimeObservation } from "./bridge/executor.mjs";
 
@@ -104,14 +105,14 @@ async function fixture(t: TestContext) {
 
 test("late original ping reports degradation while its process, registration and exact request remain usable", { timeout: 60000 }, async t => {
   const f = await fixture(t), pid = f.child().pid, generation = f.runtime.current().id;
-  assert.equal((await fetch(f.url)).status, 200);
+  assert.equal((await nativeHttpTestFetch(f.url)).status, 200);
   f.hold(); const probe = f.executor.probe(f.identity);
   await until(() => f.hasHeld() && Boolean(f.observations.at(-1)?.probe));
   const delayed = f.observations.at(-1)!;
   assert.equal(delayed.probe?.state, "degraded"); assert.equal(delayed.firstFailure, undefined);
   assert.equal(f.child().exitCode, null); assert.equal(f.child().pid, pid);
   assert.equal(f.runtime.current().id, generation); assert.equal(f.runtime.current().records[0]?.status, "active");
-  assert.equal((await fetch(f.url)).status, 200, "The original route remains registered during observation delay.");
+  assert.equal((await nativeHttpTestFetch(f.url)).status, 200, "The original route remains registered during observation delay.");
   const service = f.runtime.current().services.services.get("fixture.control@1")!.value as { run(value: string): Promise<string> };
   assert.equal(await service.run("once"), "once");
   assert.equal(f.commands.filter(row => row.command === "ping").length, 1);
@@ -129,7 +130,7 @@ test("an actual isolated child exit still removes its original service and route
   assert.equal(f.child().kill("SIGTERM"), true);
   await until(() => f.runtime.current().records[0]?.status === "failed");
   assert.equal(f.runtime.current().services.services.has("fixture.control@1"), false);
-  assert.equal((await fetch(f.url)).status, 404); assert.equal(f.failures.length, 1);
+  assert.equal((await nativeHttpTestFetch(f.url)).status, 404); assert.equal(f.failures.length, 1);
 });
 
 test("seventy original invocations and host calls cross both bridge directions while one probe remains available", { timeout: 60000 }, async t => {
@@ -140,7 +141,7 @@ test("seventy original invocations and host calls cross both bridge directions w
   await until(() => f.hostCalls() === 70);
   await f.executor.probe(f.identity);
   assert.equal(f.child().pid, pid); assert.equal(f.child().exitCode, null); assert.equal(f.failures.length, 0);
-  assert.equal((await fetch(f.url)).status, 200);
+  assert.equal((await nativeHttpTestFetch(f.url)).status, 200);
   f.releaseHost();
   assert.deepEqual(await original, Array.from({ length: 70 }, (_, index) => `host:${index}`));
   assert.equal(f.commands.filter(row => row.command === "invoke").length, 70);

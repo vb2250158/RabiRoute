@@ -51,7 +51,11 @@ if(process.argv.includes('--delivery-submit')||process.argv.includes('--api')||p
  });
  process.on('SIGTERM',async()=>{await owner.close();process.exit(0)});
  process.on('disconnect',async()=>{await owner.close();process.exit(0)});
- owner.start();fs.writeFileSync(${JSON.stringify(marker)},String(process.pid));setInterval(()=>{},1000);
+ owner.start();
+ // Publish complete PID bytes before making the readiness path visible.
+ const readyMarker=${JSON.stringify(marker)},readyTemporary=readyMarker+'.'+process.pid+'.tmp';
+ fs.writeFileSync(readyTemporary,String(process.pid));fs.renameSync(readyTemporary,readyMarker);
+ setInterval(()=>{},1000);
 }`);
   __test.writeCurrentRelease(configPath, entry, "a".repeat(64));
   const launcher = __test.writeLauncher(configPath, { baseDelayMs: 50, maxDelayMs: 100, maxRestarts: 2, stableMs: 60000 });
@@ -68,6 +72,8 @@ if(process.argv.includes('--delivery-submit')||process.argv.includes('--api')||p
     await delay(100); fs.rmSync(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 });
   });
   const first = run(); await until(() => { if (first.child.exitCode !== null) throw new Error(first.errors()); return fs.existsSync(marker); }); const firstWorker = fs.readFileSync(marker, "utf8");
+  assert.match(firstWorker, /^[1-9]\d*$/, "initial worker identity must be complete before CLI submission");
+  t.diagnostic(`Initial delivery owner worker PID: ${firstWorker}`);
   const input = { intentId: "stable-fixture", agentType: "codex", sessionId: "source", request: { action: "send", deliveryId: "stable-fixture", sourceThreadId: "source", threadId: "target", prompt: "fixture" } };
   const cli = run(["--delivery-submit"], JSON.stringify(input));
   const accepted = await cli.closed; assert.equal(accepted.code, 0, accepted.errors);

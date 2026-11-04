@@ -1,0 +1,38 @@
+{
+  "endpointType": "agent:grokBot",
+  "agentType": "grokBot",
+  "capability": "agent.adapter.grok-bot@1",
+  "routeKeys": [
+    "grokBotAgentId",
+    "grokBotSessionId",
+    "grokBotSessionName"
+  ],
+  "runtimeFields": {
+    "grokBotAgentId": {
+      "paths": [
+        "grokBotAgentId"
+      ],
+      "default": "",
+      "trim": true
+    },
+    "grokBotSessionId": {
+      "paths": [
+        "grokBotSessionId"
+      ],
+      "default": "",
+      "trim": true
+    },
+    "grokBotSessionName": {
+      "paths": [
+        "grokBotSessionName"
+      ],
+      "default": "",
+      "trim": true
+    }
+  },
+  "environmentFields": {
+    "GROK_BOT_AGENT_ID": "grokBotAgentId",
+    "GROK_BOT_SESSION_ID": "grokBotSessionId",
+    "GROK_BOT_SESSION_NAME": "grokBotSessionName"
+  }
+}

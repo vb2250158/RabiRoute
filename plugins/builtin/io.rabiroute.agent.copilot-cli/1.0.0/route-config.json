@@ -1,0 +1,40 @@
+{
+  "endpointType": "agent:copilotCli",
+  "agentType": "copilotCli",
+  "capability": "agent.adapter.copilot-cli@1",
+  "routeKeys": [
+    "copilotThreadName",
+    "copilotCwd",
+    "copilotCliBin"
+  ],
+  "runtimeFields": {
+    "copilotThreadName": {
+      "paths": [
+        "copilotThreadName"
+      ],
+      "default": "Copilot CLI",
+      "trim": true
+    },
+    "copilotCwd": {
+      "paths": [
+        "copilotCwd"
+      ],
+      "default": "",
+      "trim": true,
+      "format": "workspace",
+      "defaultFrom": "stateRoot"
+    },
+    "copilotCliBin": {
+      "paths": [
+        "copilotCliBin"
+      ],
+      "default": "",
+      "trim": true
+    }
+  },
+  "environmentFields": {
+    "COPILOT_THREAD_NAME": "copilotThreadName",
+    "COPILOT_CWD": "copilotCwd",
+    "COPILOT_CLI_BIN": "copilotCliBin"
+  }
+}

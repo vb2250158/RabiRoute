@@ -5,7 +5,9 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import WebSocket from "ws";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import { once } from "node:events";
+import { configureTimeouts, readTimeoutOverrides, getTimeoutMs } from "../shared/timeoutSettings.js";
 import { LanAgentRegistry, LanAgentNodeNameConflictError, type LanAgentTask } from "./lanAgentRegistry.js";
 import { agentInstanceDisplayName } from "../shared/agentInstance.js";
 import { LanAgentAuthority } from "./lanAgentAuthority.js";
@@ -275,14 +277,14 @@ function closeServer(server: http.Server): Promise<void> {
   return new Promise(resolve => server.close(() => resolve()));
 }
 
-async function connectNode(port: number, token: string, nodeId: string, agents?: Array<Record<string, unknown>>, taskTargeting: string | null = "explicit-session-v1", hostname?: string, helloReply = "connected"): Promise<ConnectedClient> {
-  const socket = new WebSocket(`ws://127.0.0.1:${port}/api/lan-agent/connect`);
+async function connectNode(port: number, token: string, nodeId: string, agents?: Array<Record<string, unknown>>, taskTargeting: string | null = "explicit-session-v1", hostname?: string, helloReply = "connected", socketOptions: WebSocket.ClientOptions = {}): Promise<ConnectedClient> {
+  const socket = new WebSocket(`ws://127.0.0.1:${port}/api/lan-agent/connect`, socketOptions);
   const messages: Array<Record<string, unknown>> = [];
   const waiters = new Map<string, Array<(message: Record<string, unknown>) => void>>();
   const waitFor = (type: string): Promise<Record<string, unknown>> => new Promise((resolve, reject) => {
     const existing = messages.find(message => message.type === type);
     if (existing) return resolve(existing);
-    const timer = setTimeout(() => reject(new Error(`timed out waiting for ${type}`)), 2_000);
+    const timer = setTimeout(() => reject(new Error(`timed out waiting for ${type}`)), getTimeoutMs("agent.remote.authentication", 10_000));
     const queued = waiters.get(type) ?? [];
     queued.push(message => { clearTimeout(timer); resolve(message); });
     waiters.set(type, queued);
@@ -539,7 +541,8 @@ test(`retiring connection rejects ${action} without a frame or a false delivered
       await assert.rejects(pending, error => {
         assert.match((error as Error).message, /connection is retiring; frame was not sent/);
         assert.equal((error as Error).cause, reason);
-        assert.equal((error as { code?: string }).code, undefined);
+        assert.equal((error as { code?: string }).code, "LAN_AGENT_MANAGEMENT_NOT_SENT");
+        assert.equal((error as { deliveryFrameSent?: boolean }).deliveryFrameSent, false);
         return true;
       });
       setPending.mock.restore(); clearTimer.mock.restore();
@@ -650,4 +653,182 @@ test("missing legacy node fields remain valid while present malformed public fie
     const retained=JSON.parse(fs.readFileSync(statePath,"utf8"));
     for(const row of nodes.slice(1)) assert.deepEqual(retained.nodes.find((node:any)=>node.nodeId===row.nodeId),row);
   } finally {owner.close();fs.rmSync(path.dirname(statePath),{recursive:true,force:true});}
+});
+
+
+test("terminal unknown, disabled, disconnected and unsupported admissions leave no empty replay sessions", async t => {
+  const statePath = temporaryStatePath();
+  t.after(() => fs.rmSync(path.dirname(statePath), { recursive: true, force: true }));
+  fs.writeFileSync(statePath, JSON.stringify({ schemaVersion: 2, nodes: [
+    { nodeId: "disabled", connected: false, terminalShells: ["cmd"] },
+    { nodeId: "disconnected", connected: false, terminalShells: ["cmd"] },
+    { nodeId: "unsupported", connected: false, terminalShells: [] }
+  ], tasks: [] }));
+  const registry = new LanAgentRegistry({ statePath, nodeEnabled: nodeId => nodeId !== "disabled" });
+  t.after(() => registry.close());
+  for (let index = 0; index < 160; index++) {
+    for (const nodeId of ["unknown", "disabled", "disconnected", "unsupported"]) {
+      const terminalId = randomUUID();
+      await assert.rejects(registry.terminals.execute(nodeId, { action: "open", terminalId, shell: "cmd" }));
+      assert.throws(() => registry.terminals.subscribe(nodeId, terminalId, 0, () => {}), /not found/);
+    }
+  }
+});
+
+async function managementFixture(t: test.TestContext) {
+  const statePath = temporaryStatePath(), registry = new LanAgentRegistry({ statePath });
+  const server = http.createServer(); registry.attach(server, { enabled: () => true, getToken: () => "fixture" });
+  const port = await listen(server), clients: ConnectedClient[] = [];
+  t.after(async () => {
+    registry.close(); for (const client of clients) client.socket.close();
+    await closeServer(server); fs.rmSync(path.dirname(statePath), { recursive: true, force: true });
+  });
+  const connect = async (id: string, autoPong = true) => {
+    const client = await connectNode(port, "fixture", id, undefined, "explicit-session-v1", undefined, "connected", { autoPong });
+    clients.push(client); return client;
+  };
+  return { registry, port, connect, internals: registry as unknown as {
+    managementRequests: Map<string, unknown>;
+    lateManagementRequests: Map<string, { connection: unknown; operation: string; expiresAt: number }>;
+    connections: Map<string, { socket: WebSocket; livenessTimer?: NodeJS.Timeout; awaitingPong?: string }>;
+    protocolGuards: WeakMap<WebSocket, { signal: AbortSignal; validateOutgoing(payload: unknown, size: number): void }>;
+  } };
+}
+
+/** The server processes preceding data frames before acknowledging this control ping. */
+async function flushManagement(client: ConnectedClient): Promise<void> {
+  const acknowledged = once(client.socket, "pong"); client.socket.ping(); await acknowledged;
+}
+
+test("late mutation replies wake original reconciliation once without reviving the expired caller", async t => {
+  const f = await managementFixture(t), original = await f.connect("original"), other = await f.connect("other");
+  let changes = 0, authorized = true; f.registry.onDeliveryRecoveryEvent(() => changes++);
+  const pending = f.registry.manageAgent("original", "prepared_delivery", { delivery: { deliveryId: "original-id" } }, 20,
+    () => { if (!authorized) throw new Error("Expired caller cannot consume a result."); });
+  let requestId = "";
+  const expired = assert.rejects(pending, error => {
+    const value = error as Error & { code: string; requestId: string; commitState: string; deliveryFrameSent?: boolean };
+    requestId = value.requestId; assert.equal(value.code, "LAN_AGENT_MANAGEMENT_TIMEOUT"); assert.equal(value.commitState, "unknown");
+    assert.equal(value.deliveryFrameSent, undefined); return true;
+  });
+  const request = await original.waitFor("manageAgent"); await expired; authorized = false;
+  assert.equal(requestId, request.requestId); assert.equal(f.internals.managementRequests.size, 0);
+  assert.equal(f.internals.lateManagementRequests.size, 1);
+  assert.deepEqual(Object.keys(f.internals.lateManagementRequests.get(requestId)!).sort(), ["connection", "expiresAt", "operation"]);
+  other.socket.send(JSON.stringify({ type: "managementResult", requestId, result: { action: "started" } })); await flushManagement(other);
+  assert.equal(changes, 0); assert.equal(f.internals.lateManagementRequests.size, 1);
+  original.socket.send(JSON.stringify({ type: "managementResult", requestId, result: { action: "started" } })); await flushManagement(original);
+  assert.equal(changes, 1); assert.equal(f.internals.lateManagementRequests.size, 0);
+  original.socket.send(JSON.stringify({ type: "managementResult", requestId, result: { action: "started" } })); await flushManagement(original);
+  assert.equal(changes, 1); assert.equal(original.messages.filter(message => message.type === "manageAgent").length, 1, "the command is never resent");
+});
+
+test("late reads, reconciliation and positive no-frame replies do not create recovery loops", async t => {
+  const f = await managementFixture(t), client = await f.connect("original");
+  let changes = 0; f.registry.onDeliveryRecoveryEvent(() => changes++);
+  const cases: Array<[string, Record<string, unknown>]> = [["scan", {}], ["threads", { action: "list" }], ["threads", { action: "read" }],
+    ["threads", { action: "creation_status" }], ["reconcile_prepared_delivery", {}], ["delivery_records", {}], ["terminal", {}], ["computer", {}]];
+  for (const [operation, params] of cases) {
+    const before = client.messages.filter(message => message.type === "manageAgent").length;
+    const expired = assert.rejects(f.registry.manageAgent("original", operation, params, 10), /timed out/);
+    await expired; await flushManagement(client);
+    const request = client.messages.filter(message => message.type === "manageAgent")[before]!;
+    client.socket.send(JSON.stringify({ type: "managementResult", requestId: request.requestId, result: {} })); await flushManagement(client);
+  }
+  const expired = assert.rejects(f.registry.manageAgent("original", "prepared_delivery", {}, 10), /timed out/);
+  await expired; await flushManagement(client);
+  const request = client.messages.filter(message => message.type === "manageAgent").at(-1)!;
+  client.socket.send(JSON.stringify({ type: "managementResult", requestId: request.requestId, result: { status: "not_sent" } })); await flushManagement(client);
+  assert.equal(changes, 0); assert.equal(f.internals.lateManagementRequests.size, 0);
+});
+
+test("late reply correlation is bounded, expires and is discarded when its connection is replaced", async t => {
+  const f = await managementFixture(t), client = await f.connect("original");
+  const expired: Promise<void>[] = [];
+  for (let index = 0; index < 257; index++) expired.push(assert.rejects(f.registry.manageAgent("original", "prepared_delivery", {}, 10), /timed out/));
+  await Promise.all(expired); await flushManagement(client);
+  assert.equal(f.internals.lateManagementRequests.size, 256);
+  let changes = 0; f.registry.onDeliveryRecoveryEvent(() => changes++);
+  const [requestId] = [...f.internals.lateManagementRequests][0]!;
+  const expiry = Math.max(...[...f.internals.lateManagementRequests.values()].map(marker => marker.expiresAt));
+  const clock = t.mock.method(Date, "now", () => expiry + 1);
+  client.socket.send(JSON.stringify({ type: "managementResult", requestId, result: {} })); await flushManagement(client);
+  clock.mock.restore(); assert.equal(changes, 0);
+  const pending = assert.rejects(f.registry.manageAgent("original", "prepared_delivery", {}, 10), /timed out/); await pending;
+  assert.equal(f.internals.lateManagementRequests.size, 1);
+  const replacement = await f.connect("original");
+  assert.equal(f.internals.lateManagementRequests.size, 0);
+  assert.equal(f.registry.listNodes().find(node => node.nodeId === "original")?.connected, true);
+  await flushManagement(replacement);
+  assert.equal(changes, 1, "only the existing reconnect event wakes original recovery");
+});
+
+for (const failure of ["encoding", "protocol", "buffer", "send-attempt"] as const) {
+test(`management ${failure} failure identifies only proven pre-frame errors`, async t => {
+  const f = await managementFixture(t), client = await f.connect("original");
+  const socket = f.internals.connections.get("original")!.socket;
+  let params: Record<string, unknown> = {};
+  if (failure === "encoding") params.self = params;
+  if (failure === "protocol") f.internals.protocolGuards.set(socket, { signal: new AbortController().signal,
+    validateOutgoing: () => { throw new Error("Fixture protocol preflight rejected the frame."); } });
+  if (failure === "buffer") Object.defineProperty(socket, "bufferedAmount", { configurable: true, get: () => 300 * 1024 * 1024 });
+  if (failure === "send-attempt") t.mock.method(socket, "send", () => { throw new Error("Fixture write attempt has an uncertain outcome."); });
+  await assert.rejects(f.registry.manageAgent("original", "prepared_delivery", params), error => {
+    const value = error as { code?: string; deliveryFrameSent?: boolean };
+    assert.equal(value.code, failure === "send-attempt" ? undefined : "LAN_AGENT_MANAGEMENT_NOT_SENT");
+    assert.equal(value.deliveryFrameSent, failure === "send-attempt" ? undefined : false); return true;
+  });
+  assert.equal(f.internals.managementRequests.size, 0); assert.equal(f.internals.lateManagementRequests.size, 0);
+  assert.equal(client.messages.filter(message => message.type === "manageAgent").length, 0);
+  f.internals.protocolGuards.delete(socket);
+});
+}
+
+test("real WS probes retain healthy connections, retire a silent socket and permit original-node reconnect", { timeout: 15_000 }, async t => {
+  const timeouts = readTimeoutOverrides();
+  configureTimeouts({ ...timeouts, "agent.remote.connectionProbeInterval": 100, "agent.remote.connectionPongTimeout": 800 });
+  t.after(() => configureTimeouts(timeouts));
+  const f = await managementFixture(t), healthy = await f.connect("healthy"), silent = await f.connect("silent", false);
+  let pings = 0; healthy.socket.on("ping", () => pings++);
+  const oldConnection = f.internals.connections.get("silent")!;
+  const pending = assert.rejects(f.registry.manageAgent("silent", "prepared_delivery", {}, 5_000), error => {
+    assert.match((error as Error).message, /disconnected/); assert.equal((error as { deliveryFrameSent?: boolean }).deliveryFrameSent, undefined); return true;
+  });
+  await once(silent.socket, "close"); await pending;
+  assert.equal(f.registry.listNodes().find(node => node.nodeId === "silent")?.connected, false);
+  assert.equal(f.registry.listNodes().find(node => node.nodeId === "healthy")?.connected, true);
+  assert.ok(pings >= 2); assert.equal(oldConnection.livenessTimer, undefined); assert.equal(oldConnection.awaitingPong, undefined);
+  const replacement = await f.connect("silent"); await once(replacement.socket, "ping");
+  await flushManagement(replacement);
+  assert.equal(f.registry.listNodes().find(node => node.nodeId === "silent")?.connected, true);
+  const remaining = [...f.internals.connections.values()]; f.registry.close();
+  assert.ok(remaining.every(connection => connection.livenessTimer === undefined && connection.awaitingPong === undefined));
+  assert.equal(f.internals.managementRequests.size, 0); assert.equal(f.internals.lateManagementRequests.size, 0);
+});
+
+test("deliveryRecovery is only an authenticated wake-up hint and never creates a task or receipt", async t => {
+  const f = await managementFixture(t), client = await f.connect("original");
+  let changes = 0; f.registry.onDeliveryRecoveryEvent(() => changes++);
+  const anonymous = new WebSocket(`ws://127.0.0.1:${f.port}/api/lan-agent/connect`);
+  await once(anonymous, "open"); anonymous.send(JSON.stringify({ type: "deliveryRecovery", deliveryId: "original-id", generation: "original-generation" }));
+  await once(anonymous, "close"); assert.equal(changes, 0);
+  client.socket.send(JSON.stringify({ type: "deliveryRecovery", deliveryId: "original-id", generation: "original-generation" })); await flushManagement(client);
+  assert.equal(changes, 1); assert.deepEqual(f.registry.listTasks(), []);
+  client.socket.send(JSON.stringify({ type: "deliveryRecovery", deliveryId: "", generation: "original-generation" })); await flushManagement(client);
+  assert.equal(changes, 1); assert.deepEqual(f.registry.listTasks(), []);
+});
+
+test("management admission failures before transport dispatch also retain positive no-frame proof", async t => {
+  const f = await managementFixture(t), client = await f.connect("original");
+  for (const rejectAt of [1, 2]) {
+    let checks = 0;
+    await assert.rejects(Promise.resolve().then(() => f.registry.manageAgent("original", "prepared_delivery", {}, 1_000,
+      () => { if (++checks === rejectAt) throw new Error("Fixture original admission ended."); })), error => {
+      const value = error as { code?: string; deliveryFrameSent?: boolean };
+      assert.equal(value.code, "LAN_AGENT_MANAGEMENT_NOT_SENT"); assert.equal(value.deliveryFrameSent, false); return true;
+    });
+  }
+  await flushManagement(client);
+  assert.equal(client.messages.filter(message => message.type === "manageAgent").length, 0);
+  assert.equal(f.internals.managementRequests.size, 0); assert.equal(f.internals.lateManagementRequests.size, 0);
 });

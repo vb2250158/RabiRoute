@@ -1,4 +1,3 @@
-import { builtinAgentAdapterDefinitions } from "../agentAdapters/builtinAgentAdapters.js";
 import type { AgentAdapter, AgentAdapterDefinition } from "../agentAdapters/contracts.js";
 import type { AgentAdapterManifest, AgentAdapterType } from "../shared/agentAdapterCapabilities.js";
 import {
@@ -7,12 +6,21 @@ import {
   type RabiCordisPlugin
 } from "./cordisHost.js";
 import { getBuiltinGatewayCordisRoot, type GatewayCordisRoot } from "./gatewayCordisRoot.js";
+import { currentAgentAdapterGeneration, publishedAgentAdapterProviders, type AgentAdapterGeneration } from "./agentAdapterProviders.js";
+import type { AgentInstanceBinding } from "../shared/agentInstance.js";
 
 export const AGENT_ADAPTER_REGISTRY_SERVICE = "rabi.agentAdapters";
 export const BUILTIN_AGENT_ADAPTER_RUNTIME_KEY = "rabi.runtime.agentAdapters.builtin";
 
 export class AgentAdapterRegistry {
   private readonly definitions = new Map<AgentAdapterType, AgentAdapterDefinition>();
+  private generation = currentAgentAdapterGeneration;
+
+  bindGeneration(reader: () => AgentAdapterGeneration | undefined): () => void {
+    const previous = this.generation;
+    this.generation = reader;
+    return () => { if (this.generation === reader) this.generation = previous; };
+  }
 
   register(definition: AgentAdapterDefinition): () => void {
     const type = definition.manifest.type;
@@ -27,7 +35,11 @@ export class AgentAdapterRegistry {
     };
   }
 
-  create(type: AgentAdapterType): AgentAdapter {
+  create(type: AgentAdapterType, binding?: AgentInstanceBinding): AgentAdapter {
+    const provider = publishedAgentAdapterProviders(this.generation()).get(type);
+    if (provider) return { type, async deliver(envelope, options) {
+      await provider.invoke("deliver", { envelope, options, binding }, { snapshot: { type, binding } });
+    } };
     const definition = this.definitions.get(type);
     if (!definition) {
       throw new Error(`Unsupported agent adapter: ${type}`);
@@ -36,11 +48,13 @@ export class AgentAdapterRegistry {
   }
 
   manifest(type: AgentAdapterType): AgentAdapterManifest | undefined {
-    return this.definitions.get(type)?.manifest;
+    return publishedAgentAdapterProviders(this.generation()).get(type)?.manifest as AgentAdapterManifest | undefined
+      ?? this.definitions.get(type)?.manifest;
   }
 
   listManifests(): AgentAdapterManifest[] {
-    return [...this.definitions.values()].map((definition) => definition.manifest);
+    return [...publishedAgentAdapterProviders(this.generation()).values()].map(provider => provider.manifest as AgentAdapterManifest)
+      .concat([...this.definitions.values()].map(definition => definition.manifest));
   }
 }
 
@@ -88,7 +102,7 @@ async function disposeFibers(fibers: readonly RabiCordisFiber[]): Promise<void> 
 
 export async function mountAgentAdapterRuntime(
   host: RabiCordisHost,
-  definitions: AgentAdapterDefinition[] = builtinAgentAdapterDefinitions()
+  definitions: AgentAdapterDefinition[] = []
 ): Promise<AgentAdapterRuntimeMount> {
   const ownedFibers: RabiCordisFiber[] = [];
   try {
@@ -119,7 +133,7 @@ export async function mountAgentAdapterRuntime(
 }
 
 export async function createAgentAdapterRuntime(
-  definitions: AgentAdapterDefinition[] = builtinAgentAdapterDefinitions()
+  definitions: AgentAdapterDefinition[] = []
 ): Promise<AgentAdapterRuntime> {
   const host = new RabiCordisHost();
   try {

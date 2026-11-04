@@ -16,8 +16,31 @@ async function waitFor(check: () => boolean) { const end = Date.now() + 20000; w
 
 test("authenticated HTTP/WS terminal lifecycle streams a real Windows shell and denies an anonymous caller", { skip: process.platform !== "win32" }, async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabi-terminal-http-"));
+  const streamAbort = new AbortController();
+  let stopRuntime: (() => Promise<void>) | undefined;
+  let cleanupSocket: WebSocket | undefined;
+  let cleanupServer: http.Server | undefined;
+  let closeRegistry: (() => void) | undefined;
+  let detach: (() => void) | undefined;
+  t.after(async () => {
+    streamAbort.abort();
+    const failures: unknown[] = [];
+    try { await stopRuntime?.(); } catch (error) { failures.push(error); }
+    cleanupSocket?.terminate();
+    detach?.();
+    closeRegistry?.();
+    cleanupServer?.closeAllConnections();
+    try {
+      if (cleanupServer?.listening) {
+        await new Promise<void>((resolve, reject) => cleanupServer!.close(error => error ? reject(error) : resolve()));
+      }
+    } catch (error) { failures.push(error); }
+    try { fs.rmSync(root, { recursive: true, force: true }); } catch (error) { failures.push(error); }
+    if (failures.length) throw new AggregateError(failures, "Terminal fixture cleanup did not finish.");
+  });
   const token = "fixture-token";
   const registry = new LanAgentRegistry({ statePath: path.join(root, "registry.json") });
+  closeRegistry = () => registry.close();
   const server = http.createServer((request, response) => {
     // Test-only stand-in for an already verified host Agent ingress.
     if (request.headers["x-fixture-host-agent"] === "verified") markAuthenticatedConnectionRequest(request);
@@ -29,29 +52,30 @@ test("authenticated HTTP/WS terminal lifecycle streams a real Windows shell and 
     });
     if (!handled) { response.statusCode = 404; response.end(); }
   });
-  const detach = registry.attach(server, { getToken: () => token, enabled: () => true });
+  cleanupServer = server;
+  detach = registry.attach(server, { getToken: () => token, enabled: () => true });
   await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
   const address = server.address(); assert.ok(address && typeof address !== "string");
   const base = `http://127.0.0.1:${address.port}`;
   const module = await import(pathToFileURL(path.resolve("apps/rabi-agent/rabi-agent.mjs")).href);
+  const socket = new WebSocket(`${base.replace("http", "ws")}/api/lan-agent/connect`);
+  cleanupSocket = socket;
   const config = { nodeId: "fixture-node", nodeCredential: token, managerUrl: base, defaultWorkspace: root, agents: [], autoUpdate: false };
   const configPath = path.join(root,"client.json"); fs.writeFileSync(configPath,JSON.stringify(config));
-  const socket = new WebSocket(`${base.replace("http", "ws")}/api/lan-agent/connect`);
   const runtime = new module.__test.RabiAgentRuntime(config,configPath); runtime.socket = socket;
+  stopRuntime = () => runtime.stop();
   runtime.taskQueue = new Promise(() => undefined); // A blocked Agent queue cannot block computer I/O.
-  runtime.desktop.connect = () => { throw new Error("No Agent backend may start in this fixture."); };
+  let nativeAgentEntries = 0;
+  runtime.agentPluginContext = async () => {
+    nativeAgentEntries++;
+    throw new Error("No native Agent backend may start in this fixture.");
+  };
   let ready = false;
   socket.on("open", () => socket.send(JSON.stringify({ type: "authenticate", token })));
   socket.on("message", raw => {
     const message = JSON.parse(raw.toString());
     runtime.handleManagerMessage(raw.toString());
     if (message.type === "connected") ready = true;
-  });
-  const streamAbort = new AbortController();
-  t.after(async () => {
-    streamAbort.abort(); runtime.stop(); await runtime.terminals.stop(); socket.close(); detach();server.closeAllConnections();
-    await new Promise<void>(resolve => server.close(() => resolve()));
-    fs.rmSync(root, { recursive: true, force: true });
   });
   await waitFor(() => ready);
   const url = `${base}/api/lan-agent/instances/fixture-node/terminals`;
@@ -95,4 +119,5 @@ test("authenticated HTTP/WS terminal lifecycle streams a real Windows shell and 
   await post({ action: "close", terminalId }); await reading;
   assert.match(transcript, /"type":"exit"/);
   assert.equal((await post({ action: "get", terminalId })).state, "exited");
+  assert.equal(nativeAgentEntries, 0, "Terminal and computer operations must not enter any native Agent backend.");
 });

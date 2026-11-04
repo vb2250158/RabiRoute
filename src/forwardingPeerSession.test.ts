@@ -5,8 +5,12 @@ import vm from "node:vm";
 import ts from "typescript";
 import { isPlanAssistantAgentType } from "./shared/agentAdapterCapabilities.js";
 import { remoteAgentTargetKey, resolvePrimaryAgentTarget, peerRouteAgentSession } from "./shared/routeAgentTargets.js";
+import { dispatchToAgentAdapter } from "./forwarding.js";
+import { mountForwardingAgentFixture } from "./forwardingAgentPlugin.fixture.js";
+import { readAgentSessionBinding } from "./agentAdapters/agentPluginSessionBinding.js";
+import { parseAgentAdapterPackageDescriptor } from "@rabiroute/plugin-sdk";
 
-/** Execute the real selectors/dispatch body with a closed, injected delivery boundary. No source imports can reach a live owner. */
+/** Execute pure selectors with explicit metadata; transport tests use the actual dispatch export below. */
 function functions(file: string, names: string[], context: Record<string, unknown>) {
   const source = fs.readFileSync(new URL(file, import.meta.url), "utf8");
   const parsed = ts.createSourceFile(file, source, ts.ScriptTarget.ES2022, true, ts.ScriptKind.TS);
@@ -31,19 +35,23 @@ for (const provider of ["codex", "dsh"] as const) {
   test(`gateway ${provider} dispatch passes the selected peer session/workspace to its adapter`, async () => {
     const { config, target } = peerConfig(provider);
     const calls: Array<{ provider: string; target: unknown; options: { threadId?: string; workspace?: string } }> = [];
-    const methods = functions("./forwarding.ts", ["dispatchToAgentAdapter"], {
-      config, PERFORMANCE_OPERATIONS: { gatewayAgentDeliver: "fixture.deliver" },
-      measurePerformanceOperation: (_name: string, run: () => unknown) => run(),
-      createAgentAdapter: async (provider: string, selected: unknown) => ({ deliver: async (_envelope: unknown, options: { threadId?: string; workspace?: string }) => { calls.push({ provider, target: selected, options }); } })
-    });
-    await methods.dispatchToAgentAdapter(provider, { messageContent: "isolated fixture" }, [], resolvePrimaryAgentTarget(config));
-    assert.equal(calls.length, 1); assert.equal(calls[0].provider, provider);
-    assert.equal(calls[0].options.threadId, target.sessionId); assert.equal(calls[0].options.workspace, target.workspace);
-    assert.equal(JSON.stringify(calls[0].target), JSON.stringify({ binding: { instanceId: target.instanceId, agentId: target.agentId, ownerDeviceId: target.ownerDeviceId } }));
-    config.primaryAgentTarget = `local:${provider}`;
-    await methods.dispatchToAgentAdapter(provider, {}, [], resolvePrimaryAgentTarget(config));
-    assert.equal(calls[1].target, "local");
-    assert.equal(calls[1].options.threadId, provider === "codex" ? config.codexThreadId : config.dshSessionId);
+    const native = await mountForwardingAgentFixture([provider], config, { deliver(type, payload) {
+      calls.push({ provider: type, target: payload.binding, options: payload.options });
+    } });
+    const createAdapter: Parameters<typeof dispatchToAgentAdapter>[4] = async (type, selected) =>
+      native.registry.create(type, typeof selected === "object" ? selected.binding : undefined);
+    const envelope = { messageSource: { type: "system" as const, eventType: "fixture", eventName: "Fixture", eventId: "original" }, messageContent: "isolated fixture" };
+    try {
+      await dispatchToAgentAdapter(provider, envelope, [], resolvePrimaryAgentTarget(config), createAdapter);
+      assert.equal(calls.length, 1); assert.equal(calls[0].provider, provider);
+      assert.equal(calls[0].options.threadId, target.sessionId); assert.equal(calls[0].options.workspace, target.workspace);
+      assert.deepEqual(calls[0].target, { instanceId: target.instanceId, agentId: target.agentId, ownerDeviceId: target.ownerDeviceId });
+      config.primaryAgentTarget = `local:${provider}`;
+      await dispatchToAgentAdapter(provider, envelope, [], resolvePrimaryAgentTarget(config), createAdapter);
+      assert.equal(calls[1].target, undefined);
+      assert.equal(calls[1].options.threadId, undefined, "Local dispatch leaves the session to the published activation snapshot.");
+      assert.equal(calls[1].options.workspace, undefined);
+    } finally { await native.dispose(); }
   });
 
   test(`peer ${provider} worker uses its target reference and never borrows a missing session from local defaults`, async () => {
@@ -64,7 +72,10 @@ for (const provider of ["codex", "dsh"] as const) {
 
 test("local Agent catalog fields stay local while the primary peer uses its own session reference", () => {
   const { config } = peerConfig("codex");
-  const methods = functions("./manager/controlPlaneRoutes.ts", ["configuredLocalAgentSessionFields", "primaryAgentSessionFields"], { peerRouteAgentSession });
+  const descriptor = parseAgentAdapterPackageDescriptor(JSON.parse(fs.readFileSync(new URL("../plugins/builtin/io.rabiroute.agent.codex/1.0.0/agent-adapter.json", import.meta.url), "utf8")));
+  const methods = functions("./manager/controlPlaneRoutes.ts", ["configuredLocalAgentSessionFields", "primaryAgentSessionFields"], {
+    peerRouteAgentSession, readAgentSessionBinding, currentAgentSessionDescriptors: () => new Map([[descriptor.type, descriptor]])
+  });
   assert.equal(methods.configuredLocalAgentSessionFields(config, "codex").sessionId, "local-a-codex");
   assert.equal(methods.configuredLocalAgentSessionFields(config, "codex").workspace, "/local-a/codex");
   assert.equal(methods.primaryAgentSessionFields(config, "codex").sessionId, "peer-b-full-session");

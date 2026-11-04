@@ -314,3 +314,108 @@ test("Windows catalog restriction paths accept the same directory with different
   assert.equal(loaded.candidates.length, 1);
   await catalog.assertPackageExecutionAllowed({ ...loaded.packages[0]!.package, sourceRoot: loaded.packages[0]!.package.sourceRoot.toUpperCase() });
 });
+
+
+test("enable settings reuse healthy immutable siblings, while re-enabling prepares only the missing owner", async t => {
+  const input = controlledInput(t, ["one", "two"]), loads: string[] = [];
+  t.mock.method(input.packageCatalog, "loadPackage", async (id: string) => { loads.push(id); return controlledPackage(id); });
+  const previous = await loadPluginProfile(input);
+  loads.length = 0;
+  const disabled = parsePluginProfile({ ...input.profile, instances: input.profile.instances.map(instance =>
+    instance.id === "one" ? { ...instance, enabled: false } : instance) });
+  const next = await loadPluginProfile({ ...input, profile: disabled, previous, reuseUnchangedPackages: true });
+  assert.deepEqual(loads, []);
+  assert.deepEqual(next.candidates.map(candidate => candidate.instanceId), ["two"]);
+  assert.equal(next.packages[0]?.package, previous.packages[1]?.package);
+  const restored = await loadPluginProfile({ ...input, previous: next, reuseUnchangedPackages: true });
+  assert.deepEqual(loads, ["io.test.one"]);
+  assert.equal(restored.packages[1]?.package, previous.packages[1]?.package);
+  loads.length = 0;
+  await loadPluginProfile({ ...input, previous: restored });
+  assert.deepEqual(loads.sort(), ["io.test.one", "io.test.two"], "ordinary source/manual loading keeps full validation");
+});
+
+test("changed package identity, config, grants or policy cannot borrow an unchanged settings proof", async t => {
+  const input = controlledInput(t, ["one"]), loads: string[] = [];
+  t.mock.method(input.packageCatalog, "loadPackage", async (id: string) => { loads.push(id); return controlledPackage(id); });
+  const previous = await loadPluginProfile(input);
+  const original = input.profile.instances[0]!;
+  for (const change of [{ package: "io.test.changed" }, { version: "2.0.0" }, { config: { value: "new" } },
+    { grants: ["network.local"] }, { policy: { ...original.policy, resources: { ...original.policy.resources, maxChildProcesses: 3 } } }]) {
+    loads.length = 0;
+    const desired = parsePluginProfile({ ...input.profile, instances: [{ ...original, ...change }] });
+    await loadPluginProfile({ ...input, profile: desired, previous, reuseUnchangedPackages: true });
+    assert.equal(loads.length, 1, JSON.stringify(change));
+  }
+  const removed = await loadPluginProfile({ ...input, profile: { ...input.profile, instances: [] }, previous, reuseUnchangedPackages: true });
+  assert.deepEqual(removed.candidates, []);
+});
+
+test("a shared package/version group uses one consistent preparation when any instance changes", async t => {
+  const input = controlledInput(t, ["one"]), original = input.profile.instances[0]!;
+  input.profile = parsePluginProfile({ ...input.profile, instances: [original, { ...original, id: "second" }] });
+  let loads = 0;
+  t.mock.method(input.packageCatalog, "loadPackage", async (id: string) => { loads++; return controlledPackage(id); });
+  const previous = await loadPluginProfile(input);
+  assert.equal(loads, 1);
+  loads = 0;
+  const desired = parsePluginProfile({ ...input.profile, instances: [original, { ...original, id: "second", config: { changed: true } }] });
+  const next = await loadPluginProfile({ ...input, profile: desired, previous, reuseUnchangedPackages: true });
+  assert.equal(loads, 1);
+  assert.equal(next.packages[0]?.package, next.packages[1]?.package);
+});
+
+test("settings reuse rechecks execution admission once and never retains a revoked owner", async t => {
+  const input = controlledInput(t, ["one"]);
+  t.mock.method(input.packageCatalog, "loadPackage", async (id: string) => controlledPackage(id));
+  const previous = await loadPluginProfile(input);
+  let admissions = 0;
+  t.mock.method(input.packageCatalog, "loadPackage", async () => { assert.fail("unchanged settings do not prepare source again"); });
+  t.mock.method(input.packageCatalog, "assertPackageExecutionAllowed", async () => { admissions++; throw new Error("execution root revoked"); });
+  const next = await loadPluginProfile({ ...input, previous, reuseUnchangedPackages: true });
+  assert.equal(admissions, 1);
+  assert.deepEqual(next.candidates, []);
+  assert.match(next.loadFailures[0]?.error.message ?? "", /execution root revoked/);
+  assert.equal(next.loadFailures[0]?.retainedRevision, undefined);
+});
+
+test("cancellation joins reused owner admission and admits no later package or fallback", async t => {
+  const input = controlledInput(t, ["one", "two", "later"]);
+  t.mock.method(input.packageCatalog, "loadPackage", async (id: string) => controlledPackage(id));
+  const previous = await loadPluginProfile(input), first = cancellationGate(), second = cancellationGate();
+  t.after(() => { first.resolve(); second.resolve(); });
+  const entered: string[] = []; let stopped = false, settled = false;
+  t.mock.method(input.packageCatalog, "loadPackage", async () => { assert.fail("reuse must not enter source I/O"); });
+  t.mock.method(input.packageCatalog, "assertPackageExecutionAllowed", async (owner: LoadedPluginPackage) => {
+    entered.push(owner.manifest.id); assert.notEqual(owner.manifest.id, "io.test.later");
+    await (owner.manifest.id === "io.test.one" ? first.promise : second.promise);
+  });
+  const denied = new Error("original settings lifecycle stopped");
+  const loading = loadPluginProfile({ ...input, previous, reuseUnchangedPackages: true, assertCurrent() { if (stopped) throw denied; } });
+  void loading.then(() => { settled = true; }, () => { settled = true; });
+  const rejected = assert.rejects(loading, error => error === denied);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(entered, ["io.test.one", "io.test.two"]); stopped = true; first.resolve();
+  await new Promise(resolve => setImmediate(resolve)); assert.equal(settled, false);
+  second.resolve(); await rejected;
+  assert.deepEqual(entered, ["io.test.one", "io.test.two"]);
+});
+
+test("settings switches preserve published bytes; ordinary same-version source updates and bad-update recovery remain explicit", async t => {
+  const fixture = await createProfileFixture(t); t.after(() => fixture.input.packageCatalog.dispose());
+  const original = await loadPluginProfile(fixture.input), old = original.packages[0]!.package;
+  await fs.writeFile(path.join(fixture.packageRoot, "manager.mjs"), "export function activate(ctx) { ctx.services.provide('manager.core@1', { updated: true }); }\n");
+  const settings = await loadPluginProfile({ ...fixture.input, previous: original, reuseUnchangedPackages: true });
+  assert.equal(settings.packages[0]?.package, old);
+  const updated = await loadPluginProfile({ ...fixture.input, previous: settings });
+  assert.notEqual(updated.packages[0]?.package.revision, old.revision);
+  await fs.writeFile(path.join(fixture.packageRoot, "rabi.plugin.json"), "invalid replacement");
+  const desired = parsePluginProfile({ ...profile, instances: [{ ...profile.instances[0], config: { unaccepted: true }, grants: [] }] });
+  const retained = await loadPluginProfile({ ...fixture.input, profile: desired, previous: updated, reuseUnchangedPackages: true });
+  assert.equal(retained.packages[0]?.package, updated.packages[0]?.package);
+  assert.deepEqual(retained.candidates[0]?.config, {});
+  assert.deepEqual(retained.grants({ instanceId: "test:source" } as Parameters<typeof retained.grants>[0]), ["network.local"]);
+  const disabled = await loadPluginProfile({ ...fixture.input, profile: parsePluginProfile({ ...desired,
+    instances: desired.instances.map(instance => ({ ...instance, enabled: false })) }), previous: retained, reuseUnchangedPackages: true });
+  assert.deepEqual(disabled.candidates, []);
+});

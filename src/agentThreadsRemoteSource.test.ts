@@ -1,12 +1,11 @@
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
 import test from "node:test";
 import { handleAgentThreadRequest, type AgentThreadDriver, type AgentThreadRequest, type AgentThreadRemoteSource } from "./agentThreads.js";
 import { createAgentThreadControlOwner, type AgentThreadControlRoutesContext } from "./manager/agentThreadControlRoutes.js";
 import type http from "node:http";
 
 const sessionId = "019f0000-0000-7000-8000-000000000001";
-const remote: AgentThreadRemoteSource = { nodeId: "test-node", agentId: "test-agent", provider: "codex", sessionId, sessionName: "Approved remote session", workspace: "/remote/workspace" };
+const remote: AgentThreadRemoteSource = { nodeId: "test-node", agentId: "test-agent", provider: "codex", sessionId, sessionName: "Approved remote session", workspace: "/remote/workspace", authorizationIncarnation: "captured-connection-incarnation" };
 const request: AgentThreadRequest = {
   action: "send", threadId: sessionId, sourceThreadId: sessionId, sourceAgentType: "agent",
   prompt: "A remote handoff", responsePolicy: "none", cwd: process.cwd(),
@@ -23,97 +22,48 @@ function fixture() {
   return { reads, sends, driver };
 }
 
-test("trusted remote source bypasses local reads even with an identical local target ID", async () => {
-  const { reads, sends, driver } = fixture();
-  let history: AgentThreadRequest | undefined;
-  const result = await handleAgentThreadRequest(request, {
+test("connected source uses declared metadata and original session without local reads", async () => {
+  const { reads, sends, driver } = fixture(); let history: AgentThreadRequest | undefined;
+  const result = await handleAgentThreadRequest(request, { allowedWorkspaces: [process.cwd()], remoteSource: remote,
+    onChatHistoryDelivery: async value => { history = value; } }, driver);
+  assert.equal(result.data.status, "delivered"); assert.deepEqual(reads, []); assert.equal(sends.length, 1);
+  assert.deepEqual(result.data.source, { agentAdapter: "codex", agentType: "agent", agentLabel: "Agent", threadId: sessionId,
+    threadName: "Untrusted display name", workspace: remote.workspace, nodeId: remote.nodeId, agentId: remote.agentId });
+  assert.equal(history?.sourceThreadId, sessionId);
+  assert.equal(history?.messageSource?.type === "agent" && history.messageSource.sessionId, sessionId);
+});
+
+test("source endpoint uses captured ingress incarnation without a lease or owner lookup", async () => {
+  const { reads, sends, driver } = fixture(); let constructed = 0;
+  await assert.rejects(handleAgentThreadRequest({ ...request, responsePolicy: "required", responseInstruction: "Reply." }, {
     allowedWorkspaces: [process.cwd()], remoteSource: remote,
-    onChatHistoryDelivery: async value => { history = value; }
-  }, driver);
-  const namespace = `instance-${createHash("sha256").update(JSON.stringify([remote.nodeId, remote.agentId, sessionId])).digest("hex")}`;
-  assert.equal(result.data.status, "delivered");
-  assert.deepEqual(reads, []);
-  assert.equal(sends.length, 1);
-  assert.equal(result.data.threadId, sessionId);
-  assert.deepEqual(result.data.source, { agentAdapter: "codex", agentType: "agent", agentLabel: "Agent", threadId: namespace, threadName: remote.sessionName, workspace: remote.workspace, nodeId: remote.nodeId, agentId: remote.agentId });
-  assert.equal(history?.sourceThreadId, namespace);
-  assert.equal(history?.messageSource?.type === "agent" && history.messageSource.sessionId, namespace);
+    remoteEndpoint: (nodeId, agentId, id, provider, incarnation) => {
+      constructed++; assert.deepEqual([nodeId,agentId,id,provider,incarnation],
+        [remote.nodeId,remote.agentId,sessionId,"codex",remote.authorizationIncarnation]);
+      return { kind: "instance", managerInstanceId: "manager", instanceId: nodeId, nodeId, agentId, provider: provider!, sessionId: id,
+        authorizationIncarnation: incarnation! };
+    }
+  }, driver), /Agent request tracking is unavailable/);
+  assert.equal(constructed, 1); assert.deepEqual(reads, []); assert.deepEqual(sends, []);
 });
 
-test("an approved remote endpoint lets the remote source require a formal reply", async () => {
-  const { reads, sends, driver } = fixture();
-  const endpoint = {
-    kind: "instance" as const,
-    managerInstanceId: "manager-under-test",
-    instanceId: remote.nodeId,
-    nodeId: remote.nodeId,
-    agentId: remote.agentId,
-    provider: "codex" as const,
-    sessionId: remote.sessionId,
-    authorizationIncarnation: "incarnation-1"
-  };
-  let constructed = 0;
-  // Reaching the request-tracking requirement proves the lease-carrying endpoint replaced
-  // the flat "remote sources cannot ask for a reply" refusal.
-  await assert.rejects(
-    handleAgentThreadRequest({ ...request, responsePolicy: "required", responseInstruction: "Reply with the outcome." }, {
-      allowedWorkspaces: [process.cwd()],
-      remoteSource: remote,
-      remoteEndpoint: (nodeId, agentId, sessionId) => {
-        constructed += 1;
-        assert.equal(nodeId, remote.nodeId);
-        assert.equal(agentId, remote.agentId);
-        assert.equal(sessionId, remote.sessionId);
-        return endpoint;
-      }
-    }, driver),
-    /Agent request tracking is unavailable/
-  );
-  assert.equal(constructed, 1);
-  assert.deepEqual(reads, []);
-  assert.deepEqual(sends, []);
-});
-
-test("a revoked remote endpoint keeps refusing a formal reply", async () => {
-  const { reads, sends, driver } = fixture();
-  await assert.rejects(
-    handleAgentThreadRequest({ ...request, responsePolicy: "required" }, {
-      allowedWorkspaces: [process.cwd()],
-      remoteSource: remote,
-      // The Manager's constructor throws once the lease is revoked or unapproved.
-      remoteEndpoint: () => { throw new Error("Original remote endpoint is disabled, revoked or unapproved."); }
-    }, driver),
-    /disabled, revoked or unapproved/
-  );
-  assert.deepEqual(reads, []);
-  assert.deepEqual(sends, []);
-});
-
-test("remote source mismatches and unsupported reply contracts fail before local reads or delivery", async () => {
-  for (const patch of [
-    { sourceThreadId: "other-session" },
+test("connected calls do not require matching source declarations or Agent-only attribution", async () => {
+  for (const patch of [ { sourceThreadId: "other-session" },
     { messageSource: { ...request.messageSource, sessionId: "other-session" } },
     { messageSource: { ...request.messageSource, agentAdapter: "dsh" } },
-    { messageSource: { type: "system", eventType: "test", eventName: "test", eventId: "test-event" } },
-    { responsePolicy: "required" },
-    { responsePolicy: undefined },
-    { inReplyToRequestId: "request-id" }
-  ]) {
+    { messageSource: { type: "system", eventType: "test", eventName: "test", eventId: "event" } },
+    { responsePolicy: undefined } ]) {
     const { reads, sends, driver } = fixture();
-    await assert.rejects(handleAgentThreadRequest({ ...request, ...patch } as AgentThreadRequest, {
-      allowedWorkspaces: [process.cwd()], remoteSource: remote
-    }, driver), /trusted remote|Trusted remote/);
-    assert.deepEqual(reads, []);
-    assert.deepEqual(sends, []);
+    const result = await handleAgentThreadRequest({ ...request, ...patch } as AgentThreadRequest,
+      { allowedWorkspaces: [process.cwd()], remoteSource: remote }, driver);
+    assert.equal(result.data.status, "delivered"); assert.deepEqual(reads, []); assert.equal(sends.length, 1);
   }
 });
 
-test("without trusted options source verification still reads local owner", async () => {
-  const { reads, driver } = fixture();
-  await handleAgentThreadRequest({ ...request, threadId: "019f0000-0000-7000-8000-000000000002" }, {
-    allowedWorkspaces: [process.cwd()]
-  }, driver);
-  assert.deepEqual(reads, [sessionId]);
+test("local declared sources never read their owner", async () => {
+  const { reads, sends, driver } = fixture();
+  await handleAgentThreadRequest({ ...request, threadId: "019f0000-0000-7000-8000-000000000002" }, { allowedWorkspaces: [process.cwd()] }, driver);
+  assert.deepEqual(reads, []); assert.equal(sends.length, 1);
 });
 
 test("thread ingress takes connector authority from context and explicit session display metadata from the canonical source", async () => {
@@ -138,4 +88,17 @@ test("thread ingress takes connector authority from context and explicit session
     assert.equal(result.status, 200);
     assert.deepEqual(captured, trusted ? { ...trusted, sessionId: request.sourceThreadId, sessionName: request.messageSource?.type === "agent" ? request.messageSource.sessionName : trusted.sessionName } : undefined);
   }
+});
+
+
+test("legacy create and send accept SDK source coordinates without a display name or cwd",async()=>{
+  const {reads,sends,driver}=fixture();
+  const partial={...request,messageSource:{type:"agent",agentAdapter:"codex",sessionId}} as AgentThreadRequest;
+  const result=await handleAgentThreadRequest(partial,{allowedWorkspaces:[process.cwd()],remoteSource:{nodeId:"node-a"}},driver);
+  assert.equal(result.data.status,"delivered");assert.deepEqual(reads,[]);assert.equal(sends.length,1);
+  assert.equal((result.data.source as {threadName:string}).threadName,sessionId);
+  let creates=0;
+  const created=await handleAgentThreadRequest({...partial,action:"create",title:"SDK create"},{allowedWorkspaces:[process.cwd()],remoteSource:{nodeId:"node-a"}},
+    {...driver,create:async value=>{creates++;return {id:sessionId,title:value.title,updatedAt:"",source:"test",initialTurnStatus:"started"};}});
+  assert.equal(created.statusCode,201);assert.equal(creates,1);assert.deepEqual(reads,[]);
 });

@@ -7,7 +7,7 @@ import type { RabiLinkAgentPrincipal } from '../manager/rabiLinkAgentDevices.js'
 import { renderRabiDelivery, type RabiDeliveryEnvelope } from '../shared/rabiMessage.js';
 import type { InstanceAgent } from '../shared/agentInstance.js';
 import type { PreparedEndpointDelivery, EndpointDeliveryReceipt } from '../agentRequests/endpointDelivery.js';
-import { sameAgentEndpoint } from '../agentRequests/endpoint.js';
+import { sameAgentEndpoint, sameAgentDeliverySource } from '../agentRequests/endpoint.js';
 import { agentDeliveryPromptHash } from '../agentRequests/store.js';
 import { endpointExecutionOptionsHash } from '../agentRequests/executionOptions.js';
 import type { DeviceAgentPreparedInput, DeviceAgentPreparedPrincipal, DeviceAgentPreparedClaimEvidence } from '../manager/deviceAgentPreparedAuthority.js';
@@ -141,7 +141,9 @@ export function createDeviceAgentOwner(options: DeviceAgentOwnerOptions) {
     if(delivery.target.kind!=='device' || delivery.target.provider!=='deviceAgent' || delivery.target.agentId!==agentId || delivery.target.instanceId!==options.ownerInstanceId
       || delivery.state!=='dispatching' || delivery.promptHash!==agentDeliveryPromptHash(delivery.prompt) || delivery.executionOptionsHash!==endpointExecutionOptionsHash(delivery.executionOptions)) throw failure('DEVICE_AGENT_PREPARED_INVALID',409);
     const source=delivery.preparation.source;
-    const envelope:RabiDeliveryEnvelope={deliveryId:delivery.deliveryId,messageSource:{type:'agent',agentAdapter:source.agentAdapter!,sessionId:source.threadId,sessionName:source.threadName || delivery.source.agentId},messageContent:delivery.prompt};
+    const envelope:RabiDeliveryEnvelope={deliveryId:delivery.deliveryId,messageSource:delivery.source.kind==='connection'
+      ? {type:'system',eventType:'agent_connection',eventName:'Connected sender',eventId:delivery.source.id.slice(0,300),actorType:delivery.source.transport,actorId:delivery.source.id.slice(0,300)}
+      : {type:'agent',agentAdapter:source.agentAdapter!,sessionId:source.threadId,sessionName:source.threadName || delivery.source.agentId},messageContent:delivery.prompt};
     const prepared:PreparedTransport={generation:delivery.generation,source:delivery.source,target:delivery.target,promptHash:delivery.promptHash,executionOptionsHash:delivery.executionOptionsHash,
       ...(ledgerOwnerDeviceId ? {ledgerOwnerDeviceId:id(ledgerOwnerDeviceId)} : {})};
     return enqueueRecord(scope,agentId,envelope,delivery.prompt,hash([agentId,prepared]),async()=>assertAuthority(),prepared,assertAuthority,onWrite);
@@ -149,7 +151,7 @@ export function createDeviceAgentOwner(options: DeviceAgentOwnerOptions) {
   function readPreparedReceipt(scope: string, agentId: string, delivery: PreparedEndpointDelivery): EndpointDeliveryReceipt | undefined {
     const stored=resource.read(scope),row=readableAgent(stored,agentId)?.deliveries.find(row=>row.deliveryId===delivery.deliveryId);
     if(!row) return undefined;
-    if(!row.prepared || !sameAgentEndpoint(row.prepared.source,delivery.source) || !sameAgentEndpoint(row.prepared.target,delivery.target) || row.prepared.generation!==delivery.generation || row.prepared.promptHash!==delivery.promptHash
+    if(!row.prepared || !sameAgentDeliverySource(row.prepared.source,delivery.source) || !sameAgentEndpoint(row.prepared.target,delivery.target) || row.prepared.generation!==delivery.generation || row.prepared.promptHash!==delivery.promptHash
       || row.prepared.executionOptionsHash!==delivery.executionOptionsHash) throw failure('DEVICE_AGENT_PREPARED_CONFLICT',409);
     if(!receipt(row).ownerAccepted) return undefined;
     if(row.sessionId!==delivery.target.sessionId || !row.claimToken) throw failure('DEVICE_AGENT_CLAIM_MISMATCH',409);

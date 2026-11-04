@@ -7,10 +7,10 @@ import QqReadNotice from './QqReadNotice.vue';
 const props = defineProps<{ members:QqGroupMember[]; loading:boolean; error:string }>();
 defineEmits<{ refresh:[] }>();
 const {t}=useI18n();
-const search=ref(''),limit=ref(40);
+const search=ref<string|null>(''),limit=ref(40);
 const ranks:Record<string,number>={owner:0,admin:1};
 const visible=computed(()=>{
-  const query=search.value.trim().toLocaleLowerCase();
+  const query=(search.value??'').trim().toLocaleLowerCase();
   return props.members.filter(member=>!query||`${member.name} ${member.id}`.toLocaleLowerCase().includes(query)).slice().sort((a,b)=>(ranks[a.role??'']??2)-(ranks[b.role??'']??2));
 });
 </script>

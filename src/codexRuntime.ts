@@ -1,10 +1,10 @@
 import { getTimeoutMs } from "./shared/timeoutSettings.js";
-import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
+import { createRequire } from "node:module";
 import { currentEnvelopeDeliveryId, withoutLegacyTransportSuffix } from "./shared/deliveryIdentity.js";
 import fs from "node:fs";
 import path from "node:path";
-import { config } from "./config.js";
+import { config, runtimeLayout } from "./config.js";
 import { reportAgentState } from "./agentAdapters/stateReporter.js";
 import { appendAdapterLog } from "./history.js";
 import { CodexAppServerClient } from "./codexAppServerClient.js";
@@ -135,7 +135,15 @@ const desktopBridge = new CodexDesktopBridge({ onDeliveryEvent: logCodexDesktopD
 let memoryState: CodexState = {};
 let notificationQueue: Promise<unknown> = Promise.resolve();
 
-process.once("exit", () => desktopBridge.close());
+const closeDesktopBridge = () => desktopBridge.close();
+process.once("exit", closeDesktopBridge);
+
+/** Release only this package's IPC client after its original deliveries settle. */
+export async function disposeCodexAdapterTransport(): Promise<void> {
+  await notificationQueue.catch(() => undefined);
+  process.removeListener("exit", closeDesktopBridge);
+  desktopBridge.close();
+}
 
 function readState(): CodexState {
   return memoryState;
@@ -197,7 +205,7 @@ export function codexThreadDeliveryTargetIsStaleForTest(error: unknown): boolean
 function codexLaunchCommand(): { command: string; args: string[] } {
   return {
     command: process.execPath,
-    args: [fileURLToPath(new URL("../node_modules/@openai/codex/bin/codex.js", import.meta.url))]
+    args: [createRequire(path.join(runtimeLayout.packageRoot, "package.json")).resolve("@openai/codex/bin/codex.js")]
   };
 }
 

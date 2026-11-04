@@ -6,6 +6,15 @@ const root = process.cwd();
 const webDist = path.join(root, "ribiwebgui", "dist");
 const manifest = JSON.parse(await readFile(path.join(webDist, ".vite", "manifest.json"), "utf8"));
 const entries = [
+  ["src/bundles/agents/grok-bot.ts", "io.rabiroute.agent.grok-bot"],
+  ["src/bundles/agents/device-agent.ts", "io.rabiroute.agent.device-agent"],
+  ["src/bundles/agents/antigravity.ts", "io.rabiroute.agent.antigravity"],
+  ["src/bundles/agents/workbuddy.ts", "io.rabiroute.agent.workbuddy"],
+  ["src/bundles/agents/dsh.ts", "io.rabiroute.agent.dsh"],
+  ["src/bundles/agents/astrbot.ts", "io.rabiroute.agent.astrbot"],
+  ["src/bundles/agents/marvis.ts", "io.rabiroute.agent.marvis"],
+  ["src/bundles/agents/copilot-cli.ts", "io.rabiroute.agent.copilot-cli"],
+  ["src/bundles/agents/codex.ts", "io.rabiroute.agent.codex"],
   ["src/bundles/builtin/core.ts", "io.rabiroute.manager.core"],
   ["src/bundles/builtin/route-control.ts", "io.rabiroute.manager.route-control"],
   ["src/bundles/builtin/message-adapter-control.ts", "io.rabiroute.manager.message-adapter-control"],

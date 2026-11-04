@@ -36,6 +36,7 @@ export class DeliveryStore {
     if (this.db.prepare("SELECT version FROM delivery_meta").get().version !== 1) { this.db.close(); throw new Error("Unsupported delivery queue schema; existing records retained."); }
     const columns = this.db.prepare("PRAGMA table_info(deliveries)").all().map(column => column.name);
     for (const column of ["manager_guid", "manager_origin", "manager_hint", "target_key"]) if (!columns.includes(column)) this.db.exec(`ALTER TABLE deliveries ADD COLUMN ${column} TEXT`);
+    if (!columns.includes("manager_cancel_pending")) this.db.exec("ALTER TABLE deliveries ADD COLUMN manager_cancel_pending INTEGER NOT NULL DEFAULT 0");
     this.db.exec("CREATE INDEX IF NOT EXISTS delivery_target_order ON deliveries(target_key,seq,state)");
     // A crashed send is unknown, never reset to a fresh POST.
     this.db.prepare("UPDATE deliveries SET state='unknown',next_attempt=0 WHERE state='sending'").run();
@@ -64,7 +65,7 @@ export class DeliveryStore {
     return { intentId: row.id, kind: row.kind, state: row.state, payloadHash: row.hash, attempts: row.attempts,
       createdAt: new Date(row.created).toISOString(), updatedAt: new Date(row.updated).toISOString(),
       nextAttemptAt: row.next_attempt ? new Date(row.next_attempt).toISOString() : null,
-      error: row.last_error || null, ...(row.receipt ? { receipt: JSON.parse(row.receipt) } : {}) };
+      error: row.last_error || null, ...(row.manager_cancel_pending ? { managerCancelPending: true } : {}), ...(row.receipt ? { receipt: JSON.parse(row.receipt) } : {}) };
   }
   get(id) { return this.project(this.db.prepare("SELECT * FROM deliveries WHERE id=?").get(id)); }
   raw(id) { const row = this.db.prepare("SELECT * FROM deliveries WHERE id=?").get(id); return row && { ...row, payload: JSON.parse(row.payload) }; }
@@ -87,15 +88,15 @@ export class DeliveryStore {
     return { items: items.map(row => this.project(row)), nextCursor: rows.length > limit ? String(items.at(-1).seq) : null, counts };
   }
   due(limit = 32, { ordered = false, activeTargets = [], excludeIds = [], perTarget = limit } = {}) {
-    const earlier = ordered ? " AND NOT EXISTS(SELECT 1 FROM deliveries earlier WHERE coalesce(earlier.target_key,earlier.id)=coalesce(d.target_key,d.id) AND earlier.seq<d.seq AND earlier.state NOT IN ('delivered','cancelled'))" : "";
+    const earlier = ordered ? " AND (d.manager_cancel_pending=1 OR NOT EXISTS(SELECT 1 FROM deliveries earlier WHERE coalesce(earlier.target_key,earlier.id)=coalesce(d.target_key,d.id) AND earlier.seq<d.seq AND earlier.state NOT IN ('delivered','cancelled')))" : "";
     const excluded = excludeIds.length ? ` AND d.id NOT IN (${excludeIds.map(() => "?").join(",")})` : "";
     const slots = activeTargets.length ? `CASE target_key ${activeTargets.map(() => "WHEN ? THEN ?").join(" ")} ELSE ? END` : "?";
     const ids = this.db.prepare(`WITH ranked AS (
-      SELECT d.id,d.seq,d.next_attempt,coalesce(d.target_key,d.id) AS target_key,
-        row_number() OVER(PARTITION BY coalesce(d.target_key,d.id) ORDER BY d.seq) AS target_rank
-      FROM deliveries d WHERE (d.state NOT IN ('delivered','blocked','cancelled') OR (d.state='blocked' AND d.last_error IN ('DELIVERY_HTTP_401','DELIVERY_HTTP_403','DELIVERY_MANAGER_CHANGED','DELIVERY_MANAGER_IDENTITY_UNAVAILABLE')))
+      SELECT d.id,d.seq,d.next_attempt,d.manager_cancel_pending,coalesce(d.target_key,d.id) AS target_key,
+        row_number() OVER(PARTITION BY coalesce(d.target_key,d.id) ORDER BY d.manager_cancel_pending DESC,d.seq) AS target_rank
+      FROM deliveries d WHERE (d.state NOT IN ('delivered','blocked','cancelled') OR (d.state='cancelled' AND d.manager_cancel_pending=1) OR (d.state='blocked' AND d.last_error IN ('DELIVERY_HTTP_401','DELIVERY_HTTP_403','DELIVERY_MANAGER_CHANGED','DELIVERY_MANAGER_IDENTITY_UNAVAILABLE')))
         AND d.next_attempt<=?${earlier}${excluded})
-      SELECT id FROM ranked WHERE target_rank<=${slots} ORDER BY next_attempt,seq LIMIT ?`)
+      SELECT id FROM ranked WHERE target_rank<=${slots} ORDER BY manager_cancel_pending DESC,next_attempt,seq LIMIT ?`)
       .all(this.now(), ...excludeIds, ...activeTargets.flatMap(item => [item.targetKey, item.slots]), perTarget, limit);
     // Only scheduling identities enter the window; materialize immutable bodies
     // after SQL has selected at most the available global execution slots.
@@ -107,14 +108,33 @@ export class DeliveryStore {
     if (this.raw(id)?.manager_guid !== guid) throw new Error("Delivery Manager binding conflict; original record retained.");
   }
   update(id, state, { error = null, receipt, delayMs = 0, attempt = false } = {}) {
-    const old = this.raw(id); if (!old || old.state === "delivered") return this.get(id);
+    const old = this.raw(id); if (!old || old.state === "delivered" || old.state === "cancelled") return this.get(id);
     this.db.prepare("UPDATE deliveries SET state=?,updated=?,next_attempt=?,last_error=?,receipt=?,attempts=attempts+? WHERE id=?")
       .run(state, this.now(), this.now() + delayMs, error, receipt === undefined ? old.receipt : JSON.stringify(receipt), attempt ? 1 : 0, id);
     return this.get(id);
   }
+  cancel(id) {
+    const row = this.raw(id);
+    if (!row || row.state === "delivered" || row.state === "cancelled") return this.get(id);
+    const pending = row.kind === "agent-delivery" && (row.attempts > 0 || row.state !== "pending");
+    this.db.prepare("UPDATE deliveries SET state='cancelled',manager_cancel_pending=?,updated=?,next_attempt=0,last_error=? WHERE id=?")
+      .run(pending ? 1 : 0, this.now(), pending ? "已停止此电脑队列；Manager 取消待确认，原投递仍可能继续处理。"
+        : row.kind === "task-result" ? "已停止此电脑的结果回传重试；Manager 可能已收到原结果。" : "已停止此电脑队列，尚未向 Manager 投递。", id);
+    return this.get(id);
+  }
+  resolveCancellation(id, { pending = false, receipt, error, delayMs = 0 } = {}) {
+    const row = this.raw(id);
+    if (!row || row.state !== "cancelled" || !row.manager_cancel_pending) return this.get(id);
+    // Only an authoritative accepted receipt may change the cancellation
+    // projection to received. Ordinary send completions cannot erase tombstones.
+    this.db.prepare("UPDATE deliveries SET state=?,manager_cancel_pending=?,updated=?,next_attempt=?,last_error=?,receipt=? WHERE id=?")
+      .run(receipt?.accepted === true ? "delivered" : "cancelled", pending ? 1 : 0, this.now(), pending ? this.now() + delayMs : 0,
+        error || null, receipt === undefined ? row.receipt : JSON.stringify(receipt), id);
+    return this.get(id);
+  }
   acknowledgeEvent(id, taskId) {
     const row = this.raw(id);
-    if (!row || row.kind !== "task-result" || row.payload.taskId !== taskId) return false;
+    if (!row || row.state === "cancelled" || row.kind !== "task-result" || row.payload.taskId !== taskId) return false;
     this.update(id, "delivered", { receipt: { eventId: id, taskId, accepted: true } }); return true;
   }
   close() { this.db.close(); }

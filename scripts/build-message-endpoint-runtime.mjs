@@ -33,6 +33,7 @@ async function exportedValues(source, file, inputs, visited = new Set()) {
 
 /** Platforms own their implementation; the bundle imports only shared host owners as ports. */
 function platformSource(relative, specification) {
+  if (specification.hostSources?.includes(relative)) return false;
   return relative.startsWith("src/adapters/")
     || relative.startsWith("src/messageEndpoints/")
     || specification.ownedSources?.includes(relative)
@@ -52,7 +53,7 @@ export async function bundleMessageEndpointRuntime(root, specification, outputFi
     absWorkingDir: root,
     stdin: { contents: entry, resolveDir: root, sourcefile: "endpoint-entry.ts", loader: "ts" },
     bundle: true, write: false, platform: "node", format: "iife", globalName: "endpointImplementation", target: "node22", metafile: true,
-    define: { "import.meta.url": "__endpointModuleUrl" },
+    define: { "import.meta.url": "__endpointModuleUrl", ...(specification.scopedEnvironment ? { "process.env": "__endpointEnvironment" } : {}) },
     nodePaths: [path.join(options.dependencyRoot ?? root, "node_modules")],
     external: ["bufferutil", "utf-8-validate"],
     plugins: [{ name: "message-endpoint-host-owners", setup(builder) {
@@ -91,7 +92,7 @@ export async function bundleMessageEndpointRuntime(root, specification, outputFi
     const absolute = path.resolve(root, input);
     if (!absolute.includes(`${path.sep}node_modules${path.sep}`)) inputs.add(absolute);
   }
-  const contents = `// Generated from the endpoint-owned sources. Shared owners enter through host ports.\nimport { createRequire } from "node:module";\nconst require = createRequire(import.meta.url);\nexport const hostModules = ${JSON.stringify(hostModules)};\nexport function createImplementation(__endpointHostPorts) {\nconst __endpointModuleUrl = import.meta.url;\n${result.outputFiles[0].text}\nreturn endpointImplementation;\n}\n${specification.factory ? "export function createEndpoint(host) { return createImplementation(host).create(); }\n" : ""}`;
+  const contents = `// Generated from the endpoint-owned sources. Shared owners enter through host ports.\nimport { createRequire } from "node:module";\nconst require = createRequire(import.meta.url);\nexport const hostModules = ${JSON.stringify(hostModules)};\nexport function createImplementation(__endpointHostPorts) {\nconst __endpointModuleUrl = import.meta.url;\n${specification.scopedEnvironment ? "const __endpointEnvironment = Object.freeze({ ...process.env, ...__endpointHostPorts.environment });\n" : ""}${result.outputFiles[0].text}\nreturn endpointImplementation;\n}\n${specification.factory ? "export function createEndpoint(host) { return createImplementation(host).create(); }\n" : ""}`;
   if (outputFile) await fs.writeFile(outputFile, contents, "utf8");
   return { contents, hostModules, inputs: [...inputs].sort() };
 }

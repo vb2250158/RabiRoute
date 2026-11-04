@@ -9,6 +9,9 @@ import { GenerationRuntime } from "../plugin-kernel/generationRuntime.js";
 import { PluginPackageCatalog, loadPluginProfile, parsePluginProfile, type LoadedPluginProfile } from "../plugin-kernel/profile.js";
 import type { PluginCandidate, PluginModule } from "../plugin-kernel/types.js";
 import { ManagerRuntimeOwner, type ManagerRuntimeOwnerHooks } from "./managerRuntimeOwner.js";
+import { loadInstalledAgentManagerDescriptors } from "./agentManagerProviders.js";
+import { pluginProfilePackageResolution } from "./pluginProfilePackageResolution.js";
+import { installAgentAdapterManifestReader } from "../shared/agentAdapterCapabilities.js";
 
 const stopBudgetMs = 2_000;
 
@@ -63,11 +66,14 @@ function actualControlPlane(input: {
     assert.ok(node, `Missing actual composition resource: ${name}`);
     return node.getText(source);
   };
-  const earlyStop = variables.get("stopPluginPackagePreparation");
   const ownerDeclaration = variables.get("managerRuntimeOwner")!;
-  const earlyStopText = earlyStop && earlyStop.pos < ownerDeclaration.pos ? earlyStop.parent.parent.getText(source) : "";
+  const earlyStopText = ["stopPluginPackagePreparation", "stopAgentScanWorkers"].map(name => {
+    const declaration = variables.get(name);
+    assert.ok(declaration && declaration.pos < ownerDeclaration.pos, `Missing early lifecycle fence: ${name}`);
+    return declaration.parent.parent.getText(source);
+  }).join("\n");
   const body = `
-    const { ManagerRuntimeOwner, loadPluginProfile, path, rootDir, events } = deps;
+    const { ManagerRuntimeOwner, loadPluginProfile, loadInstalledAgentManagerDescriptors, pluginProfilePackageResolution, installAgentAdapterManifestReader, path, rootDir, events } = deps;
     let shuttingDown = false, activeStorageLifecycleGeneration;
     const activeServer = { removeAllListeners() {}, on() {}, removeListener() {} };
     const managerStoppingRequest = () => {}, closeManagerEventClients = () => {};
@@ -80,6 +86,9 @@ function actualControlPlane(input: {
     ${assignPreparationStop?.getText(source) ?? ""}
     ${registration("plugin_package_catalog")}
     ${registration("manager_plugin_kernel")}
+    let installedAgentDescriptors = new Map(), releaseAgentMetadataProjection;
+    const currentAgentSessionDescriptors = () => installedAgentDescriptors;
+    ${registration("agent_adapter_metadata_projection")}
     let managerPluginReconciliationTail = Promise.resolve(), loadedManagerPluginProfile = deps.previous, pendingManagerPluginProfile;
     let installedGatewayEndpointTypes, installedEndpointRouteDeclarations;
     const managerPluginSettings = { snapshot: async () => ({ profile: deps.profile }) }, managerPluginProfilePath = "fixture-profile";
@@ -93,7 +102,8 @@ function actualControlPlane(input: {
   `;
   const compiled = ts.transpileModule(body, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None } }).outputText;
   const instantiate = new Function("deps", compiled) as (dependencies: object) => ControlPlanePorts;
-  return instantiate({ ...input, rootDir: input.root, ManagerRuntimeOwner: FixtureRuntimeOwner, loadPluginProfile, path,
+  return instantiate({ ...input, rootDir: input.root, ManagerRuntimeOwner: FixtureRuntimeOwner, loadPluginProfile,
+    loadInstalledAgentManagerDescriptors, pluginProfilePackageResolution, installAgentAdapterManifestReader, path,
     profile: parsePluginProfile({ schemaVersion: 2, readyRequires: [], instances: [{ id: "pending", package: "io.test.pending",
       version: "1.0.0", enabled: true, config: {}, grants: [] }] }) });
 }
@@ -111,7 +121,8 @@ async function fixture(t: test.TestContext) {
     process.once("message", request => {
       const stage = path.join(request.task.runtimeRoot, ".staging", request.id);
       fs.mkdirSync(stage, { recursive: true }); fs.writeFileSync(path.join(stage, "partial"), "unpublished-fixture");
-      fs.writeFileSync(path.join(request.task.runtimeRoot, "started-" + request.task.packageId + ".json"), JSON.stringify({ stage, pid: process.pid }));
+      const started = path.join(request.task.runtimeRoot, "started-" + request.task.packageId + ".json");
+      fs.writeFileSync(started + ".tmp", JSON.stringify({ stage, pid: process.pid })); fs.renameSync(started + ".tmp", started);
       setInterval(() => {}, 1000);
     });`);
   const catalog = new PluginPackageCatalog([root], { loading: { maxConcurrency: 1, workerURL: pathToFileURL(worker) } });

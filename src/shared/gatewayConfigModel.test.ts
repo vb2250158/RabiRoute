@@ -327,7 +327,7 @@ test("Codex managed-task settings are removed when a route has no Codex adapter"
 
 test("retired outbound directory grants are discarded from every message endpoint", () => {
   for (const adapter of ["napcat", "rabilink", "weixin"] as const) {
-    const normalized = normalizeGatewayDefinition(gateway({ messageAdapterPolicies: {
+    const normalized = normalizeGatewayDefinition(gateway({ messageAdapters: [adapter], messageAdapterPolicies: {
       [adapter]: { supportedOutputs: ["text", "file"], allowedFileRoots: ["C:/Builds"] }
     } as any }));
     assert.equal("allowedFileRoots" in messageAdapterPolicyFor(normalized, adapter), false);

@@ -1,0 +1,16 @@
+{
+  "exports": [
+    {
+      "source": "src/agentAdapters/pluginImplementations/marvis.ts",
+      "name": "createAgentOperations"
+    }
+  ],
+  "ownedPrefixes": [
+    "src/agentAdapters/",
+    "src/marvis"
+  ],
+  "scopedEnvironment": true,
+  "hostSources": [
+    "src/agentAdapters/stateReporter.ts"
+  ]
+}

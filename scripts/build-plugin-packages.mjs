@@ -1,11 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { performance } from "node:perf_hooks";
 import ts from "typescript";
 import { generatePluginApiTypes } from "./generate-plugin-api-types.mjs";
 import { fileURLToPath } from "node:url";
+import { webPatchInputHash } from "./lib/web-patch-inputs.mjs";
 import { bundleMessageEndpointRuntime, bundleMessageEndpointWorker } from "./build-message-endpoint-runtime.mjs";
 
 async function pathExists(target) {
@@ -145,8 +146,10 @@ export async function buildPluginPackages(root = process.cwd(), options = {}) {
   const contractSource = path.join(root, "src/manager/apiOperationContract.ts");
   const inputPaths = [profilePath, path.join(sourceRoot, "contracts/plugin-sdk"), contractSource,
     path.join(root, "scripts/build-plugin-packages.mjs"), path.join(root, "scripts/build-message-endpoint-runtime.mjs"), path.join(root, "scripts/generate-plugin-api-types.mjs"),
+    path.join(root, "scripts/lib/web-patch-inputs.mjs"),
     ...endpointInputs,
     path.join(root, "package-lock.json"), ...unique.map(instance => path.join(sourceRoot, "builtin", encodeURIComponent(instance.package), instance.version))];
+  const inputSelections = inputPaths.map(input => path.relative(root, input).replaceAll("\\", "/"));
   await fs.mkdir(path.dirname(outputRoot), { recursive: true });
   const stageRoot = await fs.mkdtemp(path.join(path.dirname(outputRoot), ".plugin-build-"));
   const stagedPackagesRoot = path.join(stageRoot, "packages");
@@ -279,7 +282,7 @@ export async function buildPluginPackages(root = process.cwd(), options = {}) {
     const artifacts = await hashInputs(outputRoot, [...unique.map(instance => path.join(packagesRoot, encodeURIComponent(instance.package), instance.version)), contractsTarget, ...(!targets ? [profilesRoot] : [])]);
     const evidence = {
       schemaVersion: 1, kind: "plugin-build", scope: targets ? "selected-packages" : "profile",
-      copied, inputs, artifacts, toolchain: { node: process.version, platform: process.platform, arch: process.arch, typescript: ts.version, builderSha256: createHash("sha256").update(await fs.readFile(fileURLToPath(import.meta.url))).digest("hex"), generatorSha256: createHash("sha256").update(await fs.readFile(new URL("./generate-plugin-api-types.mjs", import.meta.url))).digest("hex") },
+      copied, inputSelections, inputs, artifacts, toolchain: { node: process.version, platform: process.platform, arch: process.arch, typescript: ts.version, builderSha256: createHash("sha256").update(await fs.readFile(fileURLToPath(import.meta.url))).digest("hex"), generatorSha256: createHash("sha256").update(await fs.readFile(new URL("./generate-plugin-api-types.mjs", import.meta.url))).digest("hex") },
       timing: { preparedMs, totalMs: performance.now() - started },
       verification: "build-only; no test-cache or runtime acceptance claim"
     };
@@ -294,6 +297,97 @@ export async function buildPluginPackages(root = process.cwd(), options = {}) {
   }
 
   return Object.freeze({ outputRoot, packagesRoot, profilesRoot, copied: Object.freeze(copied) });
+}
+
+export { hashInputs as fingerprintPluginBuildFiles };
+
+/** Complete the original package receipt only for an explicitly requested full build. */
+export async function finalizePluginBuildWebArtifacts(root = process.cwd(), options = {}) {
+  root = path.resolve(root);
+  const outputRoot = path.resolve(options.outputRoot ?? path.join(root, "dist/plugins"));
+  const evidencePath = path.join(outputRoot, "build-evidence.json");
+  const evidenceBytes = await fs.readFile(evidencePath);
+  const evidence = JSON.parse(evidenceBytes.toString("utf8"));
+  const digest = bytes => createHash("sha256").update(bytes).digest("hex");
+  const indexed = records => {
+    if (!Array.isArray(records)) throw new Error("Plugin build evidence is incomplete.");
+    const result = new Map();
+    for (const record of records) {
+      const name = record.path;
+      if (typeof name !== "string" || !name || name.includes("\\") || path.isAbsolute(name)
+        || name.split("/").some(part => !part || part === "." || part === "..")
+        || !/^[a-f0-9]{64}$/.test(record.sha256 ?? "") || result.has(name)) throw new Error("Plugin build evidence is invalid.");
+      result.set(name, record.sha256);
+    }
+    return result;
+  };
+  if (evidence.schemaVersion !== 1 || evidence.kind !== "plugin-build" || evidence.scope !== "profile")
+    throw new Error("Complete Web builds require original profile package evidence.");
+  const declared = indexed(evidence.artifacts?.files);
+  if (digest(JSON.stringify(evidence.artifacts.files)) !== evidence.artifacts.sha256) throw new Error("Plugin artifact evidence digest is invalid.");
+  indexed(evidence.inputs?.files);
+  if (!Array.isArray(evidence.inputSelections) || !evidence.inputSelections.length
+    || evidence.inputSelections.some(name => typeof name !== "string" || !name || name.includes("\\") || path.isAbsolute(name)
+      || name.split("/").some(part => !part || part === "." || part === "..")))
+    throw new Error("Native plugin evidence has no valid input selections; rebuild Native plugins before full Web finalization.");
+  if ((await hashInputs(root, evidence.inputSelections.map(name => path.join(root, name)))).sha256 !== evidence.inputs.sha256)
+    throw new Error("Plugin backend inputs changed before Web finalization.");
+  if (digest(await fs.readFile(path.join(root, "scripts/build-plugin-packages.mjs"))) !== evidence.toolchain.builderSha256
+    || digest(await fs.readFile(path.join(root, "scripts/generate-plugin-api-types.mjs"))) !== evidence.toolchain.generatorSha256)
+    throw new Error("Plugin build owners changed before Web finalization.");
+  const revision = options.webRevision;
+  if (!/^[a-f0-9]{64}$/.test(revision ?? "") || !/^[a-f0-9]{64}$/.test(options.webSourceInputHash ?? ""))
+    throw new Error("Original Web revision and source input hash are required.");
+  const webRoot = path.resolve(options.webPatchRoot ?? path.join(root, "dist/web-patches", revision));
+  const webBytes = await fs.readFile(path.join(webRoot, "manifest.json"));
+  if (digest(webBytes) !== revision) throw new Error("Web manifest differs from its verified revision.");
+  const web = JSON.parse(webBytes.toString("utf8"));
+  if (web.schemaVersion !== 1 || !Array.isArray(web.modules)) throw new Error("Verified Web manifest is invalid.");
+  const webModules = new Map();
+  for (const module of web.modules) {
+    const key = JSON.stringify([module.pluginId, module.version]);
+    if (webModules.has(key)) throw new Error("Web manifest has duplicate plugin modules.");
+    webModules.set(key, module);
+  }
+  const webFiles = indexed(web.files);
+  const roots = [...new Set([...declared.keys()].map(file => file.startsWith("packages/") ? file.split("/").slice(0, 3).join("/") : file.split("/")[0]))];
+  const artifacts = await hashInputs(outputRoot, roots.map(file => path.join(outputRoot, file)));
+  const actual = indexed(artifacts.files), wrappers = new Map();
+  for (const [name, sha256] of declared) {
+    if (!name.startsWith("packages/") || !name.endsWith("/rabi.plugin.json")) continue;
+    if (actual.get(name) !== sha256) throw new Error(`Plugin manifest changed before Web finalization: ${name}`);
+    const manifest = JSON.parse(await fs.readFile(path.join(outputRoot, name), "utf8"));
+    const entry = manifest.entries?.web?.module;
+    if (!entry) continue;
+    const module = webModules.get(JSON.stringify([manifest.id, manifest.version]));
+    if (!module || typeof module.entry !== "string" || !module.entry.startsWith("web/assets/") || !webFiles.has(module.entry))
+      throw new Error(`Web manifest does not cover the plugin module: ${manifest.id}`);
+    const packageRoot = path.dirname(path.join(outputRoot, name)), wrapper = path.resolve(packageRoot, entry);
+    if (!inside(packageRoot, wrapper)) throw new Error("Plugin Web wrapper escapes its package.");
+    const wrapperName = path.relative(outputRoot, wrapper).replaceAll("\\", "/");
+    const expected = `export { activate } from "/${module.entry.slice(4)}";\n`;
+    if (await fs.readFile(wrapper, "utf8") !== expected) throw new Error(`Plugin wrapper differs from its verified Web module: ${manifest.id}`);
+    wrappers.set(wrapperName, { path: wrapperName, sha256: actual.get(wrapperName), entry: module.entry, assetSha256: webFiles.get(module.entry) });
+  }
+  if (wrappers.size !== webModules.size) throw new Error("Web manifest includes an unrelated plugin module.");
+  for (const [name, sha256] of declared) if (!wrappers.has(name) && actual.get(name) !== sha256)
+    throw new Error(`Plugin backend artifact changed before Web finalization: ${name}`);
+  for (const name of actual.keys()) if (!declared.has(name) && !wrappers.has(name))
+    throw new Error(`Unrecorded plugin artifact before Web finalization: ${name}`);
+  if (await webPatchInputHash(root) !== options.webSourceInputHash) throw new Error("Web sources changed before plugin evidence finalization.");
+  if (!(await fs.readFile(evidencePath)).equals(evidenceBytes)) throw new Error("Plugin evidence changed during Web finalization.");
+  const finalized = { ...evidence, artifacts,
+    web: { revision, manifestSha256: digest(webBytes), sourceInputHash: options.webSourceInputHash,
+      parentArtifactSha256: evidence.artifacts.sha256, wrappers: [...wrappers.values()],
+      toolchain: { webBuilderSha256: digest(await fs.readFile(path.join(root, "scripts/build-web-patch.mjs"))),
+        syncSha256: digest(await fs.readFile(path.join(root, "scripts/sync-plugin-web-bundles.mjs"))),
+        inputHasherSha256: digest(await fs.readFile(path.join(root, "scripts/lib/web-patch-inputs.mjs"))) } } };
+  const staging = `${evidencePath}.${randomUUID()}.tmp`;
+  try {
+    await fs.writeFile(staging, JSON.stringify(finalized, null, 2) + "\n", { flag: "wx" });
+    await fs.rename(staging, evidencePath);
+  } finally { await fs.rm(staging, { force: true }); }
+  return finalized;
 }
 
 const entryPath = process.argv[1] ? path.resolve(process.argv[1]) : "";

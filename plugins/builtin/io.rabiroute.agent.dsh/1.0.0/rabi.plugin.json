@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 2,
+  "id": "io.rabiroute.agent.dsh",
+  "version": "1.0.0",
+  "displayName": "DSH（DeepSeek Harness）",
+  "description": "将消息交给绑定的 DSH 会话，沿用原任务继续处理。",
+  "icon": "mdi-robot-outline",
+  "entries": {
+    "manager": {
+      "execution": "in_process",
+      "module": "./manager.mjs"
+    },
+    "gateway": {
+      "execution": "in_process",
+      "module": "./gateway.mjs"
+    },
+    "web": {
+      "execution": "in_process",
+      "module": "./web/client.mjs"
+    }
+  },
+  "provides": [
+    "agent.adapter.dsh@1"
+  ],
+  "requires": [
+    "host.agent-adapters@1"
+  ],
+  "optional": [],
+  "permissions": []
+}

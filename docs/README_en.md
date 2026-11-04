@@ -14,6 +14,7 @@ Start with the user guide for everyday operation, use the API reference for inte
 - [Getting started](getting-started_en.md): install the application, start it, and open the console.
 - [Complete the first Route](user-guide/first-route_en.md): perform a real delivery and confirm that the target task receives it.
 - [Interface and status](user-guide/interface-and-status_en.md): understand connections, runtime status, and unsaved changes.
+- [Review message history](message-history_en.md): inspect incoming/outgoing task messages, task contacts and endpoint histories.
 - [Operations, logs, and troubleshooting](user-guide/operations-and-troubleshooting_en.md): locate the break when a message does not arrive.
 - [Safety, replies, and data](user-guide/safety-and-data_en.md): understand reply permissions and diagnostic-data privacy.
 - [Current capabilities and maturity](current-capabilities_en.md): check verified, experimental, and pending scope.

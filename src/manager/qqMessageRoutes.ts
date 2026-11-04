@@ -8,7 +8,7 @@ import { normalizeNapCatInstances, definitionUsesNapcat, type GatewayDefinition 
 import { getTrustedLanAgentSource, hasLanAgentBodyGuard } from "./lanAgentBodyAuthority.js";
 import { assertTrustedLanAgentPrincipal } from "./lanAgentRequestAccess.js";
 import { hasAuthenticatedConnectionRequest } from "./connectionRequestAccess.js";
-import { QqReadError, qqRead, qqMessageMatches, qqMessageMedia, qqMessageText, readQqMedia, type QqMessage } from "./qqMessageMedia.js";
+import { QqReadError, qqRead, qqMessageHasId, qqMessageMatches, qqPrivateMessageNeedsHistory, qqMessageMedia, qqMessageText, qqMessageTimestamp, readQqMedia, type QqMessage } from "./qqMessageMedia.js";
 import type { QqDirectoryContact, QqGroupMember } from '../shared/qqConversationHistory.js';
 import {qqPartsPreview,qqStructuredMessageParts} from '../shared/qqMessageParts.js';
 
@@ -42,18 +42,17 @@ export async function readExactQqMessage(input: {
     }, input.signal, input.transport);
     input.current();
     if (!Array.isArray(data.messages)) throw new QqReadError(503, "QQ_HISTORY_INVALID_RESPONSE");
-    if (data.messages.some(row => !qqMessageMatches(row, input.kind, input.target))) {
-      throw new QqReadError(409, "QQ_MESSAGE_TARGET_MISMATCH");
-    }
-    const found = (data.messages as QqMessage[]).find(item => String(item.message_id) === input.messageId);
+    const found = data.messages.find(item => qqMessageHasId(item, input.messageId));
     if (!found) throw new QqReadError(404, "QQ_MESSAGE_NOT_IN_PAGE");
+    if (!qqMessageMatches(found, input.kind, input.target, "history")) throw new QqReadError(409, "QQ_MESSAGE_TARGET_MISMATCH");
     return found;
   };
   input.current();
   try {
     const value = await qqRead(input.endpoint, "get_msg", { message_id: input.messageId }, input.signal, input.transport);
     input.current();
-    if (!qqMessageMatches(value, input.kind, input.target) || String(value.message_id) !== input.messageId) {
+    if (input.kind === "private" && qqPrivateMessageNeedsHistory(value) && qqMessageHasId(value, input.messageId)) return historyPage();
+    if (!qqMessageMatches(value, input.kind, input.target) || !qqMessageHasId(value, input.messageId)) {
       throw new QqReadError(409, "QQ_MESSAGE_TARGET_MISMATCH");
     }
     return value;
@@ -127,8 +126,8 @@ async function readQqMessageResult(request: http.IncomingMessage, url: URL,
       ...(anchor ? { message_seq: anchor } : {}), reverseOrder: true, disable_get_url: true, parse_mult_msg: false
     }, controller.signal, context.transport);
     if (!Array.isArray(data.messages)) throw new QqReadError(503, "QQ_HISTORY_INVALID_RESPONSE");
-    if (data.messages.some(row => !qqMessageMatches(row, kind, target))) throw new QqReadError(409, "QQ_MESSAGE_TARGET_MISMATCH");
-    return (data.messages as QqMessage[]).slice(0, count);
+    const rows = data.messages.filter((row): row is QqMessage => qqMessageMatches(row, kind, target, "history"));
+    return { rows: rows.slice(0, count), skippedCount: data.messages.length - rows.length };
   };
   const project = (row: QqMessage) => projectPublicQqMessage(row, { routeId, kind: kind as "group" | "private", target });
   try {
@@ -185,11 +184,12 @@ async function readQqMessageResult(request: http.IncomingMessage, url: URL,
       return ok({routeId,instanceId:instance.id,target,entries});
     }
     if (selected.kind === "history") {
-      const rows = await page(cursor, limit); current();
-      const oldest = rows.reduce<QqMessage | undefined>((a, b) => !a || Number(b.time) < Number(a.time) ? b : a, undefined);
+      const { rows, skippedCount } = await page(cursor, limit); current();
+      const oldest = rows.reduce<QqMessage | undefined>((a, b) => !a || Number(qqMessageTimestamp(b.time)) < Number(qqMessageTimestamp(a.time)) ? b : a, undefined);
       const next = oldest ? String(oldest.message_id) : null;
       return ok({ routeId, instanceId: instance.id, entries: rows.map(project), nextCursor: next === cursor ? null : next,
-        cursorStalled: next !== null && next === cursor, completenessUnknown: true });
+        cursorStalled: (next !== null && next === cursor) || (rows.length === 0 && skippedCount > 0), completenessUnknown: true,
+        ...(skippedCount > 0 ? { skippedCount } : {}) });
     }
     const messageId = selected.messageId;
     const row = await readExactQqMessage({ endpoint, kind: kind as "group" | "private", target, messageId,

@@ -1,4 +1,4 @@
-import { getTimeoutMs } from "../shared/timeoutSettings.js";
+import { getTimeoutMs, registerTimeoutCatalog } from "../shared/timeoutSettings.js";
 import { atomicWriteFileSync } from "../shared/filePersistence.js";
 import fs from "node:fs";
 import type http from "node:http";
@@ -13,7 +13,7 @@ import { normalizeInstanceAgents, type AgentInstance, type InstanceAgent } from 
 import { WebSocket, WebSocketServer } from "ws";
 import { webguiTokenMatches } from "./webguiLanAccess.js";
 import { recordDataMutationAudit } from "../observability/dataMutationAudit.js";
-import { LanAgentTerminals } from "./lanAgentTerminals.js";
+import { LanAgentTerminals, TerminalDispatchNotSentError } from "./lanAgentTerminals.js";
 import type { ManagerLocalComputer } from "./managerLocalComputer.js";
 
 export type LanAgentNodeHello = {
@@ -105,7 +105,20 @@ type Connection = {
   authenticatedNodeId?: string;
   authenticatedNodeIncarnation?: string;
   authenticationTimer: NodeJS.Timeout;
+  livenessTimer?: NodeJS.Timeout;
+  awaitingPong?: string;
 };
+
+type ManagementRequest = { connection: Connection; resolve: (value: unknown) => void; reject: (error: Error) => void;
+  timer: NodeJS.Timeout; operation: string; readOnly: boolean; assertAuthorized?: () => void };
+type LateManagementRequest = { connection: Connection; operation: string; expiresAt: number };
+const lateManagementCapacity = 256;
+function changesDeliveryState(operation: string, readOnly: boolean): boolean {
+  return !readOnly && !["reconcile_prepared_delivery", "delivery_records", "terminal", "computer"].includes(operation);
+}
+function isNoFrameResult(operation: string, result: unknown): boolean {
+  return operation === "prepared_delivery" && !!result && typeof result === "object" && (result as { status?: unknown }).status === "not_sent";
+}
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -310,8 +323,14 @@ export class LanAgentNodeNameConflictError extends Error {
 export class LanAgentRegistry {
   readonly terminals = new LanAgentTerminals((instanceId, body, assertAuthorized) => {
     if (instanceId === this.localInstanceId && this.localComputer) return this.localComputer.execute("terminal", body, assertAuthorized);
-    if (!this.requireNode(instanceId).terminalShells?.length) throw new Error("This connector does not support remote terminals. Update it first.");
-    return this.manageAgent(instanceId, "terminal", body, 45_000, assertAuthorized);
+    try {
+      if (!this.requireNode(instanceId).terminalShells?.length) throw new Error("This connector does not support remote terminals. Update it first.");
+      return this.manageAgent(instanceId, "terminal", body, 45_000, assertAuthorized);
+    } catch (cause) {
+      // These synchronous local checks precede manageAgent's Promise/dispatch.
+      // Async send failures, peer results and uncertain completion never enter here.
+      throw new TerminalDispatchNotSentError(cause);
+    }
   });
   private readonly connections = new Map<string, Connection>();
   private readonly nodes = new Map<string, LanAgentNodeStatus>();
@@ -335,7 +354,10 @@ export class LanAgentRegistry {
   private readonly statePath: string;
   readonly localInstanceId: string;
   readonly localComputer?: ManagerLocalComputer;
-  private readonly managementRequests = new Map<string, { connection: Connection; resolve: (value: unknown) => void; reject: (error: Error) => void; timer: NodeJS.Timeout; operation: string; readOnly: boolean; assertAuthorized?: () => void }>();
+  private readonly managementRequests = new Map<string, ManagementRequest>();
+  // Correlation only: no payloads, receipts or expired caller authority are retained.
+  private readonly lateManagementRequests = new Map<string, LateManagementRequest>();
+  private readonly releaseTimeoutCatalog: () => void;
   private detachUpgrade: (() => void) | undefined;
 
   constructor(private readonly options: {
@@ -367,6 +389,11 @@ export class LanAgentRegistry {
       if (receipt.eventId) this.resultEvents.set(receipt.eventId, receipt.taskId);
     }
     this.localComputer = options.createLocalComputer?.(this.localInstanceId, event => this.terminals.receive(this.localInstanceId, event));
+    this.releaseTimeoutCatalog = registerTimeoutCatalog([
+      { key: "agent.remote.lateManagementResultRetention", defaultMs: 300_000, label: "远端管理迟到回执关联保留", scope: "LAN Agent Manager", effect: "保留最近超时写请求的关联信息；不重发命令。" },
+      { key: "agent.remote.connectionProbeInterval", defaultMs: 30_000, label: "远端连接活性检查间隔", scope: "LAN Agent Manager", effect: "通过原 WebSocket ping/pong 判断连接是否仍可达。" },
+      { key: "agent.remote.connectionPongTimeout", defaultMs: 15_000, label: "远端连接 pong 等待期限", scope: "LAN Agent Manager", effect: "未响应时结束失效连接，沿原节点重连恢复；业务请求结果仍按未知处理。" }
+    ]);
   }
 
   private initializeUpgradeHooks(): void {
@@ -492,10 +519,12 @@ export class LanAgentRegistry {
     if (instanceId === this.localInstanceId && this.localComputer && (operation === "terminal" || operation === "computer")) {
       return this.localComputer.execute(operation, params as Record<string, unknown>, assertAuthorized);
     }
-    if (this.options.nodeEnabled?.(instanceId) === false) throw new Error("Remote instance is disabled.");
-    assertAuthorized?.();
     let connection: Connection;
-    try { connection = this.requireConnection(instanceId); }
+    try {
+      if (this.options.nodeEnabled?.(instanceId) === false) throw new Error("Remote instance is disabled.");
+      assertAuthorized?.();
+      connection = this.requireConnection(instanceId);
+    }
     catch (cause) {
       throw Object.assign(new Error(cause instanceof Error ? cause.message : String(cause), { cause }), {
         code: "LAN_AGENT_MANAGEMENT_NOT_SENT", deliveryFrameSent: false, instanceId, operation
@@ -504,12 +533,33 @@ export class LanAgentRegistry {
 
     const requestId = randomUUID();
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => { this.managementRequests.delete(requestId); reject(new Error("Instance management timed out; refresh before retrying a change.")); }, timeoutMs);
+      const timer = setTimeout(() => {
+        const pending = this.managementRequests.get(requestId);
+        if (!pending) return;
+        this.managementRequests.delete(requestId);
+        if (changesDeliveryState(pending.operation, pending.readOnly) && this.connections.get(instanceId) === connection) {
+          this.pruneLateManagementRequests();
+          while (this.lateManagementRequests.size >= lateManagementCapacity) this.lateManagementRequests.delete(this.lateManagementRequests.keys().next().value!);
+          this.lateManagementRequests.set(requestId, { connection, operation,
+            expiresAt: Date.now() + getTimeoutMs("agent.remote.lateManagementResultRetention", 300_000) });
+        }
+        reject(Object.assign(new Error("Instance management timed out; query the original operation before retrying a change."), {
+          code: "LAN_AGENT_MANAGEMENT_TIMEOUT", requestId, instanceId, operation, commitState: "unknown"
+        }));
+      }, timeoutMs);
       const action = params && typeof params === "object" ? (params as Record<string, unknown>).action : undefined;
       const readOnly = operation === "scan" || operation === "threads" && ["read", "list", "creation_status"].includes(String(action ?? "list"));
       this.managementRequests.set(requestId, { connection, resolve, reject, timer, operation, readOnly, assertAuthorized });
-      try { assertAuthorized?.(); this.send(connection.socket, { type: "manageAgent", requestId, operation, params }); }
-      catch (error) { clearTimeout(timer); this.managementRequests.delete(requestId); reject(error); }
+      let passedRequestGuard = false;
+      try { assertAuthorized?.(); passedRequestGuard = true; this.send(connection.socket, { type: "manageAgent", requestId, operation, params }); }
+      catch (error) {
+        clearTimeout(timer); this.managementRequests.delete(requestId);
+        const failure = error && typeof error === "object" ? error : new Error(String(error), { cause: error });
+        if (!passedRequestGuard || (failure as { deliveryFrameSent?: unknown }).deliveryFrameSent === false) {
+          Object.assign(failure, { code: "LAN_AGENT_MANAGEMENT_NOT_SENT", deliveryFrameSent: false, instanceId, operation });
+        }
+        reject(failure);
+      }
     });
   }
 
@@ -610,10 +660,13 @@ export class LanAgentRegistry {
   close(): void {
     for (const pending of this.managementRequests.values()) { clearTimeout(pending.timer); pending.reject(new Error("Manager is stopping.")); }
     this.managementRequests.clear();
+    this.lateManagementRequests.clear();
+    this.releaseTimeoutCatalog();
     this.detachUpgrade?.();
     for (const connection of this.connections.values()) {
       if (connection.nodeId) this.terminals.disconnect(connection.nodeId);
       clearTimeout(connection.authenticationTimer);
+      this.stopConnectionLiveness(connection);
       closeSocket(connection.socket, 1001, "Manager is stopping.");
     }
     for (const socket of this.wss.clients) closeSocket(socket, 1001, "Manager is stopping.");
@@ -645,6 +698,8 @@ export class LanAgentRegistry {
       }
     });
     socket.on("close", () => {
+      this.stopConnectionLiveness(connection!);
+      this.clearLateManagementRequests(connection!);
       for (const [id, pending] of this.managementRequests) {
         if (pending.connection === connection) { clearTimeout(pending.timer); pending.reject(new Error("Instance disconnected during management.")); this.managementRequests.delete(id); }
       }
@@ -661,6 +716,11 @@ export class LanAgentRegistry {
       }
     });
     socket.on("error", () => undefined);
+    socket.on("pong", data => {
+      if (!connection?.awaitingPong || data.toString() !== connection.awaitingPong) return;
+      this.stopConnectionLiveness(connection);
+      this.scheduleConnectionProbe(connection);
+    });
   }
 
   private handleMessage(connection: Connection, message: Record<string, unknown>, getToken: () => string, remoteAddress: string | undefined): void {
@@ -694,6 +754,8 @@ export class LanAgentRegistry {
       }
       const previous = this.connections.get(hello.nodeId);
       if (previous && previous.socket !== connection.socket) {
+        this.stopConnectionLiveness(previous);
+        this.clearLateManagementRequests(previous);
         this.terminals.disconnect(hello.nodeId);
         clearTimeout(previous.authenticationTimer);
         closeSocket(previous.socket, 4000, "A newer connection uses this nodeId.");
@@ -720,6 +782,7 @@ export class LanAgentRegistry {
       let release: Readonly<{ version: string; releaseDigest: string }> | undefined;
       try { release = this.options.currentRelease?.(hello.nodeId); } catch { /* Keep the connection available if release publication is unavailable. */ }
       this.send(connection.socket, { type: "connected", nodeId: hello.nodeId, managerTime: nowIso(), ...(release ? { release } : {}) });
+      this.scheduleConnectionProbe(connection);
       this.deliveryEvents.emit("change");
       return;
     }
@@ -730,18 +793,33 @@ export class LanAgentRegistry {
       return;
     }
     this.nodes.set(connection.nodeId, { ...node, connected: true, lastSeenAt: nowIso() });
+    if (type === "deliveryRecovery") {
+      if (typeof message.deliveryId !== "string" || !message.deliveryId.trim() || typeof message.generation !== "string" || !message.generation.trim()) {
+        throw new Error("Delivery recovery requires the original deliveryId and generation.");
+      }
+      // This is an authenticated wake-up hint, never an execution or received receipt.
+      this.deliveryEvents.emit("change");
+      return;
+    }
     if (type === "managementResult") {
       const id = typeof message.requestId === "string" ? message.requestId : "";
       const pending = this.managementRequests.get(id);
-      if (!pending || pending.connection !== connection) return;
+      if (!pending) {
+        this.pruneLateManagementRequests();
+        const late = this.lateManagementRequests.get(id);
+        if (late?.connection === connection) {
+          this.lateManagementRequests.delete(id);
+          if (!isNoFrameResult(late.operation, message.result)) this.deliveryEvents.emit("change");
+        }
+        return;
+      }
+      if (pending.connection !== connection) return;
       clearTimeout(pending.timer);
       this.managementRequests.delete(id);
       try { pending.assertAuthorized?.(); } catch (error) { pending.reject(error instanceof Error ? error : new Error(String(error))); return; }
       if (message.error) pending.reject(new Error(String(message.error).slice(0, 1024)));
       else pending.resolve(message.result);
-      const noFrameResult = pending.operation === "prepared_delivery" && message.result && typeof message.result === "object"
-        && (message.result as { status?: unknown }).status === "not_sent";
-      if (!noFrameResult && !pending.readOnly && !["reconcile_prepared_delivery", "delivery_records", "terminal", "computer"].includes(pending.operation)) this.deliveryEvents.emit("change");
+      if (!isNoFrameResult(pending.operation, message.result) && changesDeliveryState(pending.operation, pending.readOnly)) this.deliveryEvents.emit("change");
       return;
     }
     if (type === "agentCatalog") {
@@ -883,20 +961,57 @@ export class LanAgentRegistry {
   }
 
   private send(socket: WebSocket, payload: Record<string, unknown>): void {
-    if (socket.readyState !== WebSocket.OPEN) throw new Error("Rabi Agent WebSocket is not open.");
-    const connectionSignal = this.protocolGuards?.get(socket)?.signal;
-    if (connectionSignal?.aborted) {
-      closeSocket(socket, 1001, "Connection retiring.");
-      // A skipped frame is a failed send, not a successful request awaiting a reply.
-      throw new Error("LAN Agent connection is retiring; frame was not sent.", { cause: connectionSignal.reason });
+    let json: string;
+    try {
+      if (socket.readyState !== WebSocket.OPEN) throw new Error("Rabi Agent WebSocket is not open.");
+      const connectionSignal = this.protocolGuards?.get(socket)?.signal;
+      if (connectionSignal?.aborted) {
+        closeSocket(socket, 1001, "Connection retiring.");
+        throw new Error("LAN Agent connection is retiring; frame was not sent.", { cause: connectionSignal.reason });
+      }
+      json = JSON.stringify(payload);
+      const bytes = Buffer.byteLength(json);
+      this.protocolGuards?.get(socket)?.validateOutgoing(payload, bytes);
+      if (socket.bufferedAmount + bytes > LAN_AGENT_WEBSOCKET_LIMITS.maxBufferedBytes) {
+        socket.terminate(); throw new Error("LAN Agent connection buffered-byte capacity exceeded; inspect original task state before retrying.");
+      }
+    } catch (cause) {
+      const error = cause instanceof Error ? cause : new Error(String(cause));
+      throw Object.assign(error, { deliveryFrameSent: false });
     }
-    const json = JSON.stringify(payload);
-    const bytes = Buffer.byteLength(json);
-    this.protocolGuards?.get(socket)?.validateOutgoing(payload, bytes);
-    if (socket.bufferedAmount + bytes > LAN_AGENT_WEBSOCKET_LIMITS.maxBufferedBytes) {
-      socket.terminate(); throw new Error("LAN Agent connection buffered-byte capacity exceeded; inspect original task state before retrying.");
-    }
+    // From this boundary onward the transport may have written bytes; errors remain unknown.
     socket.send(json);
+  }
+
+  private pruneLateManagementRequests(): void {
+    const now = Date.now();
+    for (const [id, request] of this.lateManagementRequests) if (request.expiresAt <= now) this.lateManagementRequests.delete(id);
+  }
+
+  private clearLateManagementRequests(connection: Connection): void {
+    for (const [id, request] of this.lateManagementRequests) if (request.connection === connection) this.lateManagementRequests.delete(id);
+  }
+
+  private stopConnectionLiveness(connection: Connection): void {
+    clearTimeout(connection.livenessTimer);
+    connection.livenessTimer = undefined; connection.awaitingPong = undefined;
+  }
+
+  private scheduleConnectionProbe(connection: Connection): void {
+    this.stopConnectionLiveness(connection);
+    if (!connection.nodeId || this.connections.get(connection.nodeId) !== connection || connection.socket.readyState !== WebSocket.OPEN) return;
+    connection.livenessTimer = setTimeout(() => {
+      this.pruneLateManagementRequests();
+      if (!connection.nodeId || this.connections.get(connection.nodeId) !== connection || connection.socket.readyState !== WebSocket.OPEN) return;
+      const nonce = randomUUID(); connection.awaitingPong = nonce;
+      connection.livenessTimer = setTimeout(() => {
+        if (connection.awaitingPong === nonce) connection.socket.terminate();
+      }, getTimeoutMs("agent.remote.connectionPongTimeout", 15_000));
+      connection.livenessTimer.unref?.();
+      try { connection.socket.ping(nonce, false, error => { if (error) connection.socket.terminate(); }); }
+      catch { connection.socket.terminate(); }
+    }, getTimeoutMs("agent.remote.connectionProbeInterval", 30_000));
+    connection.livenessTimer.unref?.();
   }
 
   private persist(): void {

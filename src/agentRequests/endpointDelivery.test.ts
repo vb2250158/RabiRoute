@@ -9,7 +9,7 @@ import { executeEndpointAgentDelivery, EndpointDeliveryRecovery, EndpointVerific
 import { executePreparedEndpointDelivery } from "./endpointExecution.js";
 import { EndpointTransportReceipts } from "./endpointTransportReceipts.js";
 import { endpointExecutionOptionsHash, normalizeEndpointExecutionOptions, resolveEndpointExecutionOptions } from "./executionOptions.js";
-import { normalizeAgentRequestEndpoint } from "./endpoint.js";
+import { normalizeAgentRequestEndpoint, agentDeliveryCallerSourceIdentity, sameAgentPartyAddress, sameAgentEndpoint } from "./endpoint.js";
 import { agentReplyRequest } from "./replyParameters.js";
 import type { AgentThreadRequest } from "../agentThreads.js";
 import { createAgentEndpointDelivery, type AgentEndpointDeliveryContext } from "../manager/agentEndpointDelivery.js";
@@ -129,6 +129,109 @@ test("endpoint recovery stop joins the already entered delivery before its store
   assert.equal(f.store.getEndpointDelivery(metadata.deliveryId)?.state, "committed");
 });
 
+test("a reconnect during an active stale receipt read coalesces into one fresh original-ID reconciliation", async t => {
+  const f = fixture();
+  let accepted!: EndpointDeliveryReceipt;
+  await executeEndpointAgentDelivery(f.request, { ...f.options, dispatch: async (delivery, guard) => {
+    accepted = await f.options.dispatch(delivery, guard);
+    f.receipts.delete(delivery.deliveryId);
+    throw new Error("Original owner acknowledgement lost");
+  } });
+  const original = f.store.listEndpointDeliveryMetadata()[0]!;
+  let entered!: () => void, release!: () => void, reconciles = 0;
+  const reading = new Promise<void>(resolve => { entered = resolve; });
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const recovery = new EndpointDeliveryRecovery({ ...f.options, reconcile: async delivery => {
+    reconciles++;
+    const snapshot = f.receipts.get(delivery.deliveryId);
+    if (reconciles === 1) { entered(); await gate; }
+    return snapshot;
+  } });
+  t.after(() => recovery.stop()); await recovery.start();
+  const active = recovery.recover(original.deliveryId); await reading;
+  assert.equal(recovery.recover(original.deliveryId), active, "ordinary concurrent reads still share the active flight");
+  f.receipts.set(original.deliveryId, accepted);
+  const events = Array.from({ length: 20 }, () => recovery.onEvent(original.target));
+  await new Promise<void>(resolve => setImmediate(resolve));
+  release();
+  assert.equal(await active, true); await Promise.all(events);
+  assert.equal(reconciles, 2); assert.equal(f.dispatched(), 1);
+  assert.equal(f.store.getEndpointDelivery(original.deliveryId)?.state, "committed");
+});
+
+test("one failed receipt owner does not block a different target or loop on its own store failure event", async t => {
+  const f = fixture();
+  for (const id of ["b", "c"]) await executeEndpointAgentDelivery({ ...f.request, threadId: party(id).threadId,
+    deliveryId: `isolated-${id}`, responsePolicy: "none" }, { ...f.options, resolveTarget: () => party(id), dispatch: async (delivery, guard) => {
+    await f.options.dispatch(delivery, guard); throw new Error("Original response lost");
+  } });
+  let calls = 0, active = 0, maximumActive = 0;
+  const recovery = new EndpointDeliveryRecovery({ ...f.options, reconcile: async (delivery, guard) => {
+    calls++; active++; maximumActive = Math.max(maximumActive, active);
+    try {
+      if (delivery.target.sessionId === party("b").threadId) throw new Error("Only this owner is unavailable");
+      return await f.options.reconcile(delivery, guard);
+    } finally { active--; }
+  } }, { maximumBatchSize: 1 });
+  t.after(() => recovery.stop()); await recovery.start(); await recovery.onEvent();
+  await new Promise<void>(resolve => setImmediate(resolve));
+  assert.equal(calls, 2); assert.equal(maximumActive, 1); assert.equal(f.dispatched(), 2);
+  const records = f.store.listEndpointDeliveryMetadata();
+  assert.equal(records.find(value => value.target.sessionId === party("b").threadId)?.state, "dispatching");
+  assert.equal(records.find(value => value.target.sessionId === party("c").threadId)?.state, "committed");
+});
+
+test("a continuously signalled unknown target yields its slot so another target can commit", async t => {
+  const f = fixture();
+  for (const id of ["b", "c"]) await executeEndpointAgentDelivery({ ...f.request, threadId: party(id).threadId,
+    deliveryId: `hot-${id}`, responsePolicy: "none" }, { ...f.options, resolveTarget: () => party(id), dispatch: async (delivery, guard) => {
+    await f.options.dispatch(delivery, guard); throw new Error("Original response lost");
+  } });
+  let hotReads = 0, active = 0, maximumActive = 0;
+  const recovery = new EndpointDeliveryRecovery({ ...f.options, reconcile: async (delivery, guard) => {
+    active++; maximumActive = Math.max(maximumActive, active);
+    try {
+      if (delivery.target.sessionId === party("b").threadId) {
+        hotReads++;
+        void recovery.onEvent(delivery.target);
+        await new Promise<void>(resolve => setImmediate(resolve));
+        return undefined;
+      }
+      return await f.options.reconcile(delivery, guard);
+    } finally { active--; }
+  } }, { maximumBatchSize: 1 });
+  t.after(() => recovery.stop()); await recovery.start();
+  await recovery.onEvent();
+  assert.equal(f.store.listEndpointDeliveryMetadata().find(value => value.target.sessionId === party("c").threadId)?.state, "committed");
+  assert.ok(hotReads >= 2 && hotReads <= 4, "the hot target releases its flight after one coalesced follow-up");
+  assert.equal(maximumActive, 1); assert.equal(f.dispatched(), 2);
+  await recovery.stop();
+  const stoppedReads = hotReads;
+  await new Promise<void>(resolve => setImmediate(resolve));
+  assert.equal(hotReads, stoppedReads, "stop cancels event-driven requeues as well as joining entered reads");
+});
+
+test("stop joins an active receipt read and discards its coalesced event without another read or send", async () => {
+  const f = fixture();
+  await executeEndpointAgentDelivery(f.request, { ...f.options, dispatch: async () => { throw new Error("Unknown owner acceptance"); } });
+  const original = f.store.listEndpointDeliveryMetadata()[0]!;
+  let entered!: () => void, release!: () => void, reconciles = 0, stopped = false;
+  const reading = new Promise<void>(resolve => { entered = resolve; });
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const recovery = new EndpointDeliveryRecovery({ ...f.options, reconcile: async () => { reconciles++; entered(); await gate; return undefined; } });
+  await recovery.start();
+  const active = recovery.recover(original.deliveryId); await reading;
+  assert.equal(recovery.recover(original.deliveryId), active);
+  const event = recovery.onEvent(original.target);
+  await new Promise<void>(resolve => setImmediate(resolve));
+  const stop = recovery.stop().then(() => { stopped = true; });
+  assert.equal(stopped, false); release();
+  await Promise.all([active, event, stop]);
+  assert.equal(stopped, true); assert.equal(reconciles, 1); assert.equal(f.dispatched(), 0);
+  await recovery.onEvent(original.target);
+  assert.equal(await recovery.recover(original.deliveryId), false); assert.equal(reconciles, 1);
+});
+
 test("prepared local reservations resume on their persisted deadline without Desktop events, with bounded concurrency and stoppable ownership", async t => {
   const f = fixture();
   const target = { ...party("b"), endpoint: { kind: "local", managerInstanceId: "manager", agentId: "receiver", provider: "dsh", sessionId: party("b").threadId, authorizationIncarnation: "incarnation-1" } as AgentRequestEndpoint };
@@ -223,6 +326,55 @@ function fixture() {
     messageSource: { type: "agent" as const, agentAdapter: "dsh" as const, sessionName: "source", sessionId: party("a").threadId } };
   return { persistence, store, options, request, receipts, dispatched: () => dispatched };
 }
+
+test("connection sources keep real node namespaces and frozen receipts across restart without creating a source task", async () => {
+  const f = fixture();
+  const connection = (id: string) => ({ threadId: "", agentType: "agent", connection: { kind: "connection" as const, managerInstanceId: "manager", transport: "lan-agent" as const, id } });
+  const request = { ...f.request, deliveryId: "same-caller", responsePolicy: "none" as const };
+  const first = await executeEndpointAgentDelivery(request, { ...f.options, resolveSource: () => connection("node-a") });
+  const second = await executeEndpointAgentDelivery(request, { ...f.options, resolveSource: () => connection("node-b") });
+  const id = (first.data.delivery as { deliveryId: string }).deliveryId;
+  assert.notEqual(id, (second.data.delivery as { deliveryId: string }).deliveryId);
+  const restarted = new AgentRequestStore(f.persistence);
+  const retry = await executeEndpointAgentDelivery(request, { ...f.options, store: restarted, resolveSource: () => ({ ...connection("node-a"),
+    connection: { ...connection("node-a").connection, authorizationIncarnation: "reconnected", ledgerOwnerDeviceId: "pc-a" } }) });
+  assert.equal((retry.data.delivery as { deliveryId: string }).deliveryId, id); assert.equal(f.dispatched(), 2);
+  const stored = restarted.getEndpointDelivery(id)!;
+  assert.equal(stored.source.kind, "connection"); assert.equal(stored.preparation.source.threadId, "");
+  assert.equal(stored.preparation.source.endpoint, undefined); assert.equal(stored.preparation.source.agentAdapter, undefined);
+  await assert.rejects(executeEndpointAgentDelivery({ ...request, prompt: "different" }, { ...f.options, store: restarted, resolveSource: () => connection("node-a") }), /conflict/i);
+});
+
+test("connection required replies record actual senders on the original request without target resolution or native dispatch", async () => {
+  const f = fixture(), source = { threadId: "", agentType: "agent", connection: { kind: "connection" as const, managerInstanceId: "manager", transport: "local" as const, id: "host-a", ledgerOwnerDeviceId: "pc-a" } };
+  await executeEndpointAgentDelivery(f.request, { ...f.options, resolveSource: () => source });
+  const original = f.store.list()[0]!, parameters = agentReplyRequest({ source, target: party("b"), requestId: original.id });
+  assert.equal(parameters.threadId, undefined); assert.equal(parameters.instanceBinding, undefined); assert.equal(parameters.ledgerOwnerDeviceId, "pc-a");
+  const options = { ...f.options, resolveSource: () => party("delegate"), resolveTarget: () => { throw new Error("No task destination exists"); } };
+  const reply: AgentThreadRequest = { action: "send", inReplyToRequestId: original.id, deliveryId: "result-one", result: "done", nextAction: "read" };
+  for (const responsePolicy of ["required", "bogus"]) await assert.rejects(executeEndpointAgentDelivery({ ...reply, responsePolicy } as AgentThreadRequest, options), /record-only/i);
+  const recorded = await executeEndpointAgentDelivery(reply, options);
+  assert.equal(recorded.data.status, "response_recorded"); assert.equal(f.dispatched(), 1);
+  assert.equal(f.store.get(original.id)?.response?.by.threadId, party("delegate").threadId);
+  const restarted = new AgentRequestStore(f.persistence);
+  assert.equal((await executeEndpointAgentDelivery(reply, { ...options, store: restarted })).data.status, "response_recorded");
+  await assert.rejects(executeEndpointAgentDelivery({ ...reply, result: "changed" }, { ...options, store: restarted }), /conflict/i);
+  assert.equal(restarted.list().length, 1); assert.equal((await restarted.listEndpointDeliveries()).length, 1);
+});
+
+test("record-only responses cannot reuse another request or native reservation and leave pending slots intact", async () => {
+  const f = fixture(), source = { threadId: "", agentType: "agent", connection: { kind: "connection" as const, managerInstanceId: "manager", transport: "local" as const, id: "host" } };
+  const prepare = async () => { const p = await f.store.prepare({ source, target: party("b"), responsePolicy: "required", responseInstruction: "answer" }); await f.store.commit(p); return p; };
+  const a = await prepare(), b = await prepare();
+  await f.store.recordConnectionResponse(a.requestId!, party("delegate"), "same-response", "done", "read");
+  await assert.rejects(f.store.recordConnectionResponse(b.requestId!, party("delegate"), "same-response", "done", "read"), /reserved/i);
+  await assert.rejects(f.store.recordConnectionResponse(b.requestId!, party("delegate"), a.deliveryId, "done", "read"), /reserved/i);
+  assert.equal(f.store.get(b.requestId!)?.status, "awaiting_response");
+  const restarted = new AgentRequestStore(f.persistence);
+  assert.equal(restarted.get(a.requestId!)?.response?.deliveryId, "same-response");
+  await restarted.cancel(b.requestId!);
+  await assert.rejects(restarted.recordConnectionResponse(b.requestId!, party("delegate"), "new-response", "done", "read"), /state|cancel/i);
+});
 
 test("remote to remote request and authenticated formal reply survive restart with full opaque IDs", async () => {
   const f = fixture();
@@ -326,19 +478,21 @@ test("unknown new send acknowledgement only reconciles its original reservation"
   assert.equal(f.dispatched(), 1);
 });
 
-test("same caller key rejects content, target, role and explicit execution changes before another dispatch", async () => {
+test("same caller key rejects changed content, target and execution while source descriptions may drift before another dispatch", async () => {
   const f = fixture();
   const request = { ...f.request, deliveryId: "immutable-operation" };
   await executeEndpointAgentDelivery(request, f.options);
   for (const changed of [{ prompt: "different" }, { responsePolicy: "none" as const }, { cwd: "different" }, { model: "different" },
-    { reasoningEffort: "high" as const }, { contextBlocks: ["different"] }, { sourceAgentType: "plan_agent" as const }]) {
-    const options = changed.sourceAgentType ? { ...f.options, resolveSource: () => ({ ...party("a"), agentType: changed.sourceAgentType! }) } : f.options;
-    await assert.rejects(() => executeEndpointAgentDelivery({ ...request, ...changed }, options), { code: "AGENT_DELIVERY_ID_CONFLICT", field: "deliveryId" });
+    { reasoningEffort: "high" as const }, { contextBlocks: ["different"] }]) {
+    await assert.rejects(() => executeEndpointAgentDelivery({ ...request, ...changed }, f.options), { code: "AGENT_DELIVERY_ID_CONFLICT", field: "deliveryId" });
   }
   await assert.rejects(() => executeEndpointAgentDelivery({ ...request, threadId: party("c").threadId }, { ...f.options, resolveTarget: () => party("c") }),
     { code: "AGENT_DELIVERY_ID_CONFLICT" });
-  await assert.rejects(() => executeEndpointAgentDelivery(request, { ...f.options, resolveSource: () => ({ ...party("a"),
-    endpoint: { ...endpoint("a"), authorizationIncarnation: "rebound" } }) }), { code: "AGENT_DELIVERY_ID_CONFLICT" });
+  const resumed = await executeEndpointAgentDelivery({ ...request, sourceAgentType: "plan_agent" }, { ...f.options, resolveSource: () => ({ ...party("a"),
+    agentType: "plan_agent", threadName: "updated source description", endpoint: { ...endpoint("a"), authorizationIncarnation: "rebound" } }) });
+  assert.equal(resumed.statusCode, 200);
+  assert.equal(f.store.list()[0]!.source.agentType, "agent");
+  assert.equal(f.store.list()[0]!.source.endpoint?.authorizationIncarnation, "incarnation-1");
   assert.equal(f.dispatched(), 1);
 });
 
@@ -460,12 +614,12 @@ test("primary persona and plan roles receive formal service replies on the origi
       threadId: source.threadId, inReplyToRequestId: original.id, responsePolicy: "none" as const, result: "Verified", nextAction: "Continue",
       messageSource: { type: "agent" as const, agentAdapter: "grokBot" as const, sessionId: service.threadId, sessionName: service.threadName } };
     const options = { ...f.options, resolveSource: () => service, resolveTarget: () => ({ ...source, agentType: "agent" }) };
-    await assert.rejects(() => executeEndpointAgentDelivery({ ...reply, sourceAgentType: "plan_agent" },
-      { ...options, resolveSource: () => ({ ...service, agentType: "plan_agent" }) }), /original target task|exact authenticated endpoints/);
     const foreign = { ...source, threadId: "foreign-owner", endpoint: { ...source.endpoint, sessionId: "foreign-owner" } };
     await assert.rejects(() => executeEndpointAgentDelivery({ ...reply, threadId: foreign.threadId },
-      { ...options, resolveTarget: () => foreign }), /original target task|exact authenticated endpoints/);
-    const accepted = await executeEndpointAgentDelivery(reply, options);
+      { ...options, resolveTarget: () => foreign }), /original request target address|original source task/);
+    const accepted = await executeEndpointAgentDelivery({ ...reply, sourceAgentType: "plan_agent" },
+      { ...options, resolveSource: () => ({ ...service, agentType: "plan_agent" }) });
+    assert.equal(f.store.get(original.id)?.response?.by.agentType, "plan_agent");
     assert.equal(accepted.statusCode, 200);
     assert.equal(f.store.get(original.id)?.status, "responded");
     const delivery = (await f.store.readEndpointDelivery(((await f.store.listEndpointDeliveries()).at(-1)!)!.deliveryId))!;
@@ -495,17 +649,22 @@ test("unknown reply is reserved durably and event recovery does not redispatch",
   assert.equal(f.dispatched(), 2);
 });
 
-test("changed incarnation, spoofed source and cancelled reservations fail closed", async () => {
+test("connected senders may reply on behalf of another Agent while cancellation keeps the original reservation", async () => {
   const f = fixture();
-  await assert.rejects(executeEndpointAgentDelivery({ ...f.request, sourceThreadId: "forged" }, f.options), /source/);
-  await executeEndpointAgentDelivery(f.request, f.options);
-  const original = f.store.list()[0];
-  const changed = { ...party("b"), endpoint: { ...endpoint("b"), authorizationIncarnation: "incarnation-2" } };
-  await assert.rejects(executeEndpointAgentDelivery({ ...f.request, sourceThreadId: changed.threadId, threadId: party("a").threadId,
-    messageSource: { ...f.request.messageSource, sessionId: changed.threadId }, inReplyToRequestId: original.id, result: "ok", nextAction: "continue" },
-  { ...f.options, resolveSource: () => changed, resolveTarget: () => party("a") }), /original target/);
-  await f.store.cancel(original.id);
-  assert.throws(() => f.store.assertEndpointDeliveryActive(original.deliveryId), /cancel/);
+  await executeEndpointAgentDelivery({ ...f.request, sourceThreadId: "obsolete-description" }, f.options);
+  const original = f.store.list()[0]!;
+  const actualSender = { ...party("c"), agentType: "connected_delegate" };
+  const reply = await executeEndpointAgentDelivery({ ...f.request, sourceThreadId: actualSender.threadId, threadId: party("a").threadId,
+    inReplyToRequestId: original.id, result: "Verified by delegate", nextAction: "Continue", responsePolicy: "none" },
+    { ...f.options, resolveSource: () => actualSender, resolveTarget: () => party("a") });
+  assert.equal(reply.statusCode, 200);
+  assert.deepEqual(f.store.get(original.id)?.response?.by, { ...actualSender, threadName: undefined });
+  assert.equal(f.dispatched(), 2);
+  const cancelling = fixture();
+  await executeEndpointAgentDelivery(cancelling.request, cancelling.options);
+  const pending = cancelling.store.list()[0]!;
+  await cancelling.store.cancel(pending.id);
+  assert.throws(() => cancelling.store.assertEndpointDeliveryActive(pending.deliveryId), /cancel/);
 });
 
 test("prepare persistence failure rolls back reply reservation and new record", async () => {
@@ -710,14 +869,12 @@ test("formal endpoint replies keep original Agent types without treating directo
     result: "Verified", nextAction: "Continue", responsePolicy: "none" as const };
   const changedDirectories = { ...f.options, resolveSource: () => ({ ...party("b"), workspace: "updated-owner-directory" }),
     resolveTarget: () => ({ ...party("a"), workspace: undefined }) };
-  await assert.rejects(() => executeEndpointAgentDelivery({ ...reply, sourceAgentType: "plan_agent" }, {
+  const result = await executeEndpointAgentDelivery({ ...reply, sourceAgentType: "plan_agent" }, {
     ...changedDirectories, resolveSource: () => ({ ...party("b"), workspace: "updated-owner-directory", agentType: "plan_agent" })
-  }), /original target task|exact authenticated endpoints/);
-  assert.equal(f.store.get(original.id)?.status, "awaiting_response");
-  const result = await executeEndpointAgentDelivery(reply, changedDirectories);
+  });
   assert.equal(result.statusCode, 200);
   assert.equal(f.store.get(original.id)?.status, "responded");
-  assert.equal(f.store.get(original.id)?.response?.by.agentType, "agent");
+  assert.equal(f.store.get(original.id)?.response?.by.agentType, "plan_agent");
 });
 
 test("fresh endpoint proofs reject revocation before preparation and after owner IO without replacing original identity", async () => {
@@ -746,23 +903,20 @@ test("fresh endpoint proofs reject revocation before preparation and after owner
   assert.equal(after.dispatched(), 1);
 });
 
-test("source qualification is rechecked after target lookup while target loading is not an ingress requirement", async () => {
+test("source unloading after target lookup does not impose another admission check", async () => {
   const f = fixture();
-  let sourceLoaded = true;
   const roles: string[] = [];
   f.options.authorize = (_endpoint, role) => {
     roles.push(role || "missing");
-    if (role === "source" && !sourceLoaded) throw new Error("source owner is no longer loaded");
+    if (role === "source") throw new Error("Source owner must not be queried");
   };
-  f.options.resolveTarget = async () => { await Promise.resolve(); sourceLoaded = false; return party("b"); };
-  await assert.rejects(() => executeEndpointAgentDelivery(f.request, f.options), /source owner is no longer loaded/);
-  assert.equal(f.store.list().length, 0);
-  assert.equal(f.dispatched(), 0);
-  sourceLoaded = true;
-  f.options.resolveTarget = () => party("b");
-  const result = await executeEndpointAgentDelivery(f.request, f.options);
+  f.options.resolveTarget = async () => { await Promise.resolve(); return party("b"); };
+  const result = await executeEndpointAgentDelivery({ ...f.request, sourceThreadId: undefined, sourceAgentType: undefined,
+    messageSource: undefined }, f.options);
   assert.equal(result.statusCode, 200);
+  assert.equal(f.dispatched(), 1);
   assert.equal(roles.includes("target"), true);
+  assert.equal(roles.includes("source"), false);
   assert.equal(roles.includes("missing"), false);
 });
 
@@ -770,13 +924,13 @@ test("pre-send verification failure leaves the delivery prepared and the same de
   const f = fixture();
   let refreshes = 0;
   let failing = true;
-  f.options.refreshEndpoints = async () => { if (++refreshes === 2 && failing) throw new EndpointVerificationError("source", new Error("GROK_BOT_HTTP_FAILED:429 (GetGrokBotAgent)")); };
+  f.options.refreshEndpoints = async () => { if (++refreshes === 2 && failing) throw new EndpointVerificationError("target", new Error("Target transport is unavailable")); };
   const request = { ...f.request, deliveryId: "caller-verify-first" };
   const first = await executeEndpointAgentDelivery(request, f.options);
   assert.equal(first.statusCode, 503);
   assert.equal(f.dispatched(), 0);
   const error = first.data.error as { stage: string; retryable: boolean; message: string };
-  assert.equal(error.stage, "source_verification");
+  assert.equal(error.stage, "target_verification");
   assert.equal(error.retryable, true);
   assert.equal((first.data.delivery as { status: string; retryable: boolean }).retryable, true);
   const original = (await f.store.readEndpointDelivery(((await f.store.listEndpointDeliveries())[0])!.deliveryId))!;
@@ -968,6 +1122,23 @@ test("only positive no-frame proof restores a dispatch reservation to prepared f
   }
 });
 
+test("receipt-only reconciliation cannot requeue an unknown attempt after an owner no-frame report", async t => {
+  const f = fixture();
+  const unknown = { ...f.options, dispatch: async () => { throw new Error("Owner acknowledgement lost"); } };
+  await executeEndpointAgentDelivery(f.request, unknown);
+  const original = f.store.listEndpointDeliveryMetadata()[0]!;
+  const { reconcileEndpointDelivery } = await import("./endpointDelivery.js");
+  const options = { ...f.options, reconcile: async () => { throw new EndpointDeliveryNotSentError("Owner recorded no prompt frame"); } };
+  const recovery = new EndpointDeliveryRecovery(options, { minimumDelayMs: 10 });
+  t.after(() => recovery.stop());
+  await recovery.start();
+  await assert.rejects(reconcileEndpointDelivery(original.deliveryId, options, { receiptOnly: true }));
+  assert.equal(f.store.getEndpointDelivery(original.deliveryId)?.state, "dispatching");
+  await new Promise(resolve => setTimeout(resolve, 30));
+  assert.equal(f.dispatched(), 0);
+  assert.equal(f.store.getEndpointDelivery(original.deliveryId)?.state, "dispatching");
+});
+
 
 type PreparationCancellationBoundary = "resolver" | "caller-read" | "prepare-ack" | "bind-ack";
 async function verifyPreparationCancellationBoundary(boundary: PreparationCancellationBoundary) {
@@ -1073,4 +1244,239 @@ test("preparation fence reuses the original request authority without additional
     controller.abort(reason);
     assert.throws(() => options.assertRequestCurrent!(), error => error === reason);
   } finally { await f.store.close(); }
+});
+
+
+test("connected source metadata needs no Manager match, directory, name or caller identity repetition", async () => {
+  const f = fixture();
+  const source = { ...party("a"), workspace: undefined, threadName: undefined, agentType: "custom_connected_agent",
+    endpoint: { ...endpoint("a"), managerInstanceId: "original-source-manager" } };
+  const delivered = await executeEndpointAgentDelivery({ ...f.request, deliveryId: "metadata-only-source",
+    sourceThreadId: undefined, sourceAgentType: undefined,
+    messageSource: { type: "agent", agentAdapter: "codex", sessionId: "outdated-metadata", sessionName: "outdated-name" } }, {
+    ...f.options, resolveSource: () => source,
+    authorize: (_endpoint, role) => { assert.equal(role, "target"); }
+  });
+  assert.equal(delivered.statusCode, 200);
+  const stored = await f.store.readEndpointDelivery(f.store.listEndpointDeliveryMetadata()[0]!.deliveryId);
+  assert.equal(stored?.source.managerInstanceId, "original-source-manager");
+  assert.equal(stored?.preparation.source.workspace, undefined);
+  assert.match(stored!.prompt, /custom_connected_agent/);
+  assert.match(stored!.prompt, /处理端：dsh/);
+  assert.doesNotMatch(stored!.prompt, /outdated-metadata|outdated-name/);
+  assert.equal(f.dispatched(), 1);
+});
+
+test("public reconciliation uses only its original ID and never resolves the current sender or sends again", async () => {
+  const f = fixture();
+  const first = await executeEndpointAgentDelivery({ ...f.request, deliveryId: "original-only-reconcile" }, {
+    ...f.options, dispatch: async (delivery, guard) => {
+      await f.options.dispatch(delivery, guard); throw new Error("Original receipt response lost");
+    }
+  });
+  assert.equal(first.statusCode, 202);
+  const originalId = f.store.listEndpointDeliveryMetadata()[0]!.deliveryId;
+  const options: EndpointDeliveryOptions = { ...f.options,
+    resolveSource: () => { throw new Error("Reconciliation must not resolve a sender"); },
+    resolveTarget: () => { throw new Error("Reconciliation must use the saved target"); },
+    dispatch: async () => { throw new Error("Reconciliation must not resend"); },
+    authorize: (_endpoint, role) => { assert.equal(role, "target"); }
+  };
+  const reconciled = await executeEndpointAgentDelivery({ action: "reconcile_delivery", deliveryId: originalId }, options);
+  assert.equal(reconciled.statusCode, 200);
+  assert.equal((reconciled.data.delivery as { deliveryId: string }).deliveryId, originalId);
+  assert.equal(f.dispatched(), 1);
+  await assert.rejects(executeEndpointAgentDelivery({ action: "reconcile_delivery" }, options), /original delivery ID/);
+});
+
+
+test("reply address epoch tolerance does not weaken the exact native receipt tuple", async () => {
+  const f = fixture();
+  const response = await executeEndpointAgentDelivery(f.request, { ...f.options, dispatch: async (delivery, guard) => {
+    const receipt = await f.options.dispatch(delivery, guard);
+    return { ...receipt, endpoint: { ...receipt.endpoint, authorizationIncarnation: "source-attribution-is-not-target-proof" } };
+  } });
+  assert.equal(response.statusCode, 202);
+  assert.equal(f.store.listEndpointDeliveryMetadata()[0]!.state, "dispatching");
+  assert.equal(f.dispatched(), 1);
+});
+
+
+test("missing source names and non-string cwd metadata cannot reject an independently valid target", async () => {
+  const f = fixture();
+  const source = { ...party("a"), threadName: undefined, workspace: { unavailable: true } as unknown as string };
+  const response = await executeEndpointAgentDelivery({ ...f.request, sourceThreadId: undefined, sourceAgentType: undefined,
+    messageSource: undefined }, { ...f.options, resolveSource: () => source });
+  assert.equal(response.statusCode, 200);
+  assert.equal(f.store.list()[0]!.source.workspace, undefined);
+  assert.equal(f.dispatched(), 1);
+});
+
+
+test("a historical Peer instance source resumes its original lost-response delivery after becoming a local Peer address", async () => {
+  const f = fixture();
+  const oldEndpoint: AgentRequestEndpoint = { kind: "instance", managerInstanceId: "manager", ownerDeviceId: "pc-b", ledgerOwnerDeviceId: "pc-a",
+    instanceId: "pc-b-local-instance", nodeId: "pc-b-local-instance", agentId: "old-provider-alias", provider: "dsh", sessionId: "peer-session", authorizationIncarnation: "old-peer-scope" };
+  const oldSource = { endpoint: oldEndpoint, threadId: oldEndpoint.sessionId, agentAdapter: "dsh" as const, agentType: "agent" };
+  const request = { ...f.request, deliveryId: "old-peer-caller-key" };
+  const initial = await executeEndpointAgentDelivery(request, { ...f.options, resolveSource: () => oldSource,
+    dispatch: async (delivery, guard) => { await f.options.dispatch(delivery, guard); throw new Error("Original Peer response lost"); } });
+  assert.equal(initial.statusCode, 202);
+  const original = f.store.listEndpointDeliveryMetadata()[0]!;
+  const newEndpoint: AgentRequestEndpoint = { kind: "local", managerInstanceId: "manager", ownerDeviceId: "pc-b", ledgerOwnerDeviceId: "pc-a",
+    agentId: "local:dsh", provider: "dsh", sessionId: oldEndpoint.sessionId, authorizationIncarnation: "new-source-description" };
+  const newSource = { ...oldSource, endpoint: newEndpoint };
+  assert.equal(agentDeliveryCallerSourceIdentity(oldEndpoint), agentDeliveryCallerSourceIdentity(newEndpoint));
+  const restarted = new AgentRequestStore(f.persistence);
+  const options = { ...f.options, store: restarted, resolveSource: () => newSource };
+  const confirmed = await executeEndpointAgentDelivery(request, options);
+  assert.equal(confirmed.statusCode, 200);
+  assert.equal((confirmed.data.delivery as { deliveryId: string }).deliveryId, original.deliveryId);
+  assert.equal(f.dispatched(), 1);
+  assert.equal(restarted.listEndpointDeliveryMetadata().length, 1);
+  assert.equal(restarted.getEndpointDelivery(original.deliveryId)?.source.kind, "instance", "Historical facts and the actual ID are not rewritten");
+  await assert.rejects(executeEndpointAgentDelivery({ ...request, prompt: "Changed payload" }, options), { code: "AGENT_DELIVERY_ID_CONFLICT" });
+  assert.equal(f.dispatched(), 1);
+});
+
+test("new local Peer caller keys include their remote PC while same-PC local keys keep the old formula", () => {
+  const source: AgentRequestEndpoint = { kind: "local", managerInstanceId: "manager", ownerDeviceId: "pc-b", ledgerOwnerDeviceId: "pc-a",
+    agentId: "local:dsh", provider: "dsh", sessionId: "same-opaque-session", authorizationIncarnation: "attribution" };
+  assert.notEqual(sourceScopedAgentDeliveryId(source, "same-key"), sourceScopedAgentDeliveryId({ ...source, ownerDeviceId: "pc-c" }, "same-key"));
+  const local = { ...source, ownerDeviceId: "pc-a" };
+  assert.equal(sourceScopedAgentDeliveryId(local, "same-key"), sourceScopedAgentDeliveryId({ ...local, ownerDeviceId: undefined, ledgerOwnerDeviceId: undefined }, "same-key"));
+});
+
+
+test("a pre-normalization local Peer caller reservation without a body cannot create a replacement", async () => {
+  const f = fixture();
+  const source: AgentRequestEndpoint = { kind: "local", managerInstanceId: "manager", ownerDeviceId: "pc-b", ledgerOwnerDeviceId: "pc-a",
+    agentId: "local:dsh", provider: "dsh", sessionId: "peer-session", authorizationIncarnation: "metadata" };
+  const party = { endpoint: source, threadId: source.sessionId, agentAdapter: "dsh" as const, agentType: "agent" };
+  const callerId = "historical-local-peer-caller";
+  const originalId = sourceScopedAgentDeliveryId(source, callerId, true);
+  await f.store.prepare({ source: party, target: await f.options.resolveTarget(f.request),
+    responsePolicy: "required", responseInstruction: "Return evidence", deliveryId: originalId });
+  await assert.rejects(executeEndpointAgentDelivery({ ...f.request, deliveryId: callerId }, {
+    ...f.options, store: new AgentRequestStore(f.persistence), resolveSource: () => party
+  }), { code: "AGENT_DELIVERY_RESERVATION_EXISTS" });
+  assert.equal(f.dispatched(), 0);
+});
+
+
+test("a device reply keeps its physical device/session address across owner-host hints without weakening native receipts", () => {
+  const source: AgentRequestEndpoint = { kind: "device", managerInstanceId: "ledger-a", instanceId: "old-owner-hint-a",
+    agentId: "device-d", provider: "deviceAgent", sessionId: "device-session", authorizationIncarnation: "source-attribution" };
+  const actualTarget: AgentRequestEndpoint = { ...source, instanceId: "actual-native-owner-b", authorizationIncarnation: "real-owner-b-epoch" };
+  const party = (endpoint: AgentRequestEndpoint) => ({ endpoint, threadId: endpoint.sessionId, agentAdapter: "deviceAgent" as const, agentType: "agent" });
+  assert.equal(sameAgentPartyAddress(party(source), party(actualTarget)), true);
+  assert.equal(sameAgentEndpoint(source, actualTarget), false, "Prepared target and receipt equality still includes the real owner host and epoch");
+  assert.equal(sameAgentPartyAddress(party(source), party({ ...actualTarget, agentId: "another-device" })), false);
+  assert.equal(sameAgentPartyAddress(party(source), party({ ...actualTarget, sessionId: "another-session" })), false);
+});
+
+
+test("a connected endpoint send defaults an omitted response policy to none and retains explicit invalid-policy errors", async () => {
+  const f = fixture();
+  const delivered = await executeEndpointAgentDelivery({ ...f.request, deliveryId: "default-policy-intent", responsePolicy: undefined }, f.options);
+  assert.equal(delivered.statusCode, 200);
+  const retry = await executeEndpointAgentDelivery({ ...f.request, deliveryId: "default-policy-intent", responsePolicy: "none" }, f.options);
+  assert.ok(typeof retry.data.delivery === "object" && retry.data.delivery !== null && "deliveryId" in retry.data.delivery);
+  assert.ok(typeof delivered.data.delivery === "object" && delivered.data.delivery !== null && "deliveryId" in delivered.data.delivery);
+  assert.equal(retry.data.delivery.deliveryId, delivered.data.delivery.deliveryId);
+  assert.equal(f.dispatched(), 1);
+  assert.equal(f.store.list().length, 0);
+  const delivery = f.store.listEndpointDeliveryMetadata()[0]!;
+  assert.equal((await f.store.readEndpointDelivery(delivery.deliveryId))?.preparation.responsePolicy, "none");
+  assert.equal(f.dispatched(), 1);
+  await assert.rejects(executeEndpointAgentDelivery({ ...f.request, deliveryId: "invalid-policy", responsePolicy: "unsupported" as "none" }, f.options), /responsePolicy must be required or none/);
+  await assert.rejects(executeEndpointAgentDelivery({ ...f.request, deliveryId: "null-policy", responsePolicy: null as unknown as "none" }, f.options), /responsePolicy must be required or none/);
+  assert.equal(f.dispatched(), 1);
+});
+
+test("cancelling an unconfirmed delegate reply cancels its original linked request and preserves accepted evidence", async () => {
+  const f = fixture();
+  await executeEndpointAgentDelivery(f.request, f.options);
+  const original = f.store.list()[0]!;
+  const accepted = await f.store.readEndpointDelivery(original.deliveryId);
+  const sender = { ...party("c"), agentType: "connected_delegate" };
+  const reply = await executeEndpointAgentDelivery({ ...f.request, deliveryId: "delegate-cancel",
+    threadId: party("a").threadId, sourceThreadId: sender.threadId, inReplyToRequestId: original.id,
+    result: "Delegate result", nextAction: "Continue", responsePolicy: "none" }, {
+    ...f.options, resolveSource: () => sender, resolveTarget: () => party("a"), dispatch: async (delivery, guard) => {
+      await f.options.dispatch(delivery, guard); throw new Error("Original delegate receipt acknowledgement lost");
+    }
+  });
+  assert.equal(reply.statusCode, 202);
+  const id = f.store.get(original.id)!.pendingResponseDeliveryId!;
+  assert.ok(id);
+  assert.equal((await f.store.readEndpointDelivery(id))?.preparation.source.threadId, sender.threadId);
+  await f.store.cancelEndpointDelivery(id);
+  assert.equal(f.store.get(original.id)?.status, "cancelled");
+  assert.equal(f.store.get(original.id)?.pendingResponseDeliveryId, undefined);
+  assert.equal((await f.store.readEndpointDelivery(id))?.state, "cancelled");
+  assert.equal(f.store.hasEndpointDeliveryReservation(id), true);
+  assert.deepEqual(await f.store.readEndpointDelivery(original.deliveryId), accepted);
+  const restarted = new AgentRequestStore(f.persistence);
+  assert.equal(restarted.get(original.id)?.status, "cancelled");
+  assert.equal((await restarted.readEndpointDelivery(id))?.state, "cancelled");
+  await assert.rejects(restarted.commitEndpointReceipt(id, f.receipts.get(id)!), /cancelled/);
+  assert.equal(f.dispatched(), 2);
+});
+
+test("a queued record-only response rechecks its actual connection fence before persistence", async () => {
+  const f = fixture();
+  const source = { threadId: "", agentType: "agent", connection: { kind: "connection" as const,
+    managerInstanceId: "manager", transport: "lan-agent" as const, id: "actual-node" } };
+  await executeEndpointAgentDelivery(f.request, { ...f.options, resolveSource: () => source });
+  const original = f.store.list()[0]!, before = f.store.get(original.id);
+  let entered!: () => void, release!: () => void;
+  const enteredRead = new Promise<void>(resolve => { entered = resolve; });
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const ready = f.store.ready.bind(f.store);
+  let block = true, admitted = true;
+  f.store.ready = async () => { if (block) { block = false; entered(); await gate; } await ready(); };
+  const priorRead = f.store.readEndpointDelivery(original.deliveryId);
+  await enteredRead;
+  const revoked = new Error("Actual admitted connection revoked while queued");
+  const queued = f.store.recordConnectionResponse(original.id, party("delegate"), "queued-response", "done", "read",
+    () => { if (!admitted) throw revoked; });
+  const rejected = assert.rejects(queued, error => error === revoked);
+  admitted = false;
+  release();
+  await Promise.all([priorRead, rejected]);
+  assert.deepEqual(f.store.get(original.id), before);
+  assert.equal(f.store.get(original.id)?.status, "awaiting_response");
+  assert.equal(f.store.get(original.id)?.pendingResponseDeliveryId, undefined);
+  assert.equal(f.store.hasEndpointDeliveryReservation("queued-response"), false);
+  assert.equal(f.dispatched(), 1);
+});
+
+test("a persisted record-only reply reports lost post-write authority as uncertain and reads back the original response", async () => {
+  const f = fixture();
+  const source = { threadId: "", agentType: "agent", connection: { kind: "connection" as const,
+    managerInstanceId: "manager", transport: "lan-agent" as const, id: "requesting-node" } };
+  await executeEndpointAgentDelivery(f.request, { ...f.options, resolveSource: () => source });
+  const original = f.store.list()[0]!;
+  const reply: AgentThreadRequest = { action: "send", inReplyToRequestId: original.id, deliveryId: "post-write-response",
+    result: "done", nextAction: "read", responsePolicy: "none" };
+  let admitted = true;
+  const revoked = new Error("Actual connection revoked after response commit");
+  const record = f.store.recordConnectionResponse.bind(f.store);
+  f.store.recordConnectionResponse = async (...args) => {
+    const saved = await record(...args); admitted = false; return saved;
+  };
+  const options = { ...f.options, resolveSource: () => party("delegate"),
+    resolveTarget: () => { throw new Error("Record-only response cannot resolve a native target"); },
+    assertRequestCurrent: () => { if (!admitted) throw revoked; } };
+  await assert.rejects(executeEndpointAgentDelivery(reply, options), error => error === revoked && (error as Error & { uncertain?: boolean }).uncertain === true);
+  const saved = f.store.get(original.id)!;
+  assert.equal(saved.status, "responded"); assert.equal(saved.response?.result, "done");
+  assert.equal(saved.response?.by.threadId, party("delegate").threadId);
+  assert.equal(f.dispatched(), 1);
+  const restarted = new AgentRequestStore(f.persistence);
+  const retry = await executeEndpointAgentDelivery(reply, { ...options, store: restarted, assertRequestCurrent: () => {} });
+  assert.equal(retry.data.status, "response_recorded");
+  assert.equal(restarted.get(original.id)?.response?.deliveryId, saved.response?.deliveryId);
+  assert.equal(f.dispatched(), 1);
 });

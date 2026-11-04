@@ -1,0 +1,16 @@
+{
+  "exports": [
+    {
+      "source": "src/agentAdapters/pluginImplementations/codex.ts",
+      "name": "createAgentOperations"
+    }
+  ],
+  "ownedPrefixes": [
+    "src/agentAdapters/",
+    "src/codex"
+  ],
+  "scopedEnvironment": true,
+  "hostSources": [
+    "src/agentAdapters/stateReporter.ts"
+  ]
+}

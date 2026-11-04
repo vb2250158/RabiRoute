@@ -10,7 +10,7 @@ import { JsonFileAgentRequestPersistence, type AgentRequestPersistence } from ".
 import { AgentRequestPersistenceTransport } from "./persistenceTransport.js";
 import type { PreparedEndpointDelivery, EndpointDeliveryReceipt } from "./endpointDelivery.js";
 import type { EndpointDeliveryNoFrameProof } from "./deliveryFailure.js";
-import { sameAgentParty, type AgentRequestEndpoint } from "./endpoint.js";
+import { sameAgentParty, sameAgentPartyAddress, type AgentRequestEndpoint, type AgentDeliverySource } from "./endpoint.js";
 import { sameCodexWorkspace } from "../codexTaskIdentity.js";
 import { AgentReplyStateError } from "./replyError.js";
 import { AgentThreadContractError } from "./requestValidation.js";
@@ -288,7 +288,7 @@ export class AgentRequestStore {
       return reply.value as PreparedEndpointDelivery | undefined;
     });
   }
-  readCallerEndpointDelivery(source: AgentRequestEndpoint, callerDeliveryId: string): Promise<PreparedEndpointDelivery | undefined> {
+  readCallerEndpointDelivery(source: AgentDeliverySource, callerDeliveryId: string): Promise<PreparedEndpointDelivery | undefined> {
     const captured = structuredClone(source);
     return this.enqueue(async () => {
       await this.ready(); this.assertComplete();
@@ -360,8 +360,8 @@ export class AgentRequestStore {
     if (!delivery || delivery.state === "cancelled") throw new Error("Endpoint delivery is missing or cancelled.");
     const preparation = delivery.preparation, request = preparation.requestId ? this.requests.get(preparation.requestId) : undefined,
       original = preparation.inReplyToRequestId ? this.requests.get(preparation.inReplyToRequestId) : undefined;
-    if ((preparation.requestId && (!request || request.status === "cancelled" || request.deliveryId !== id || !sameAgentParty(request.source, preparation.source) || !sameAgentParty(request.target, preparation.target)))
-      || (preparation.inReplyToRequestId && (!original || original.status === "cancelled" || !sameAgentParty(original.target, preparation.source) || !sameAgentParty(original.source, preparation.target)
+    if ((preparation.requestId && (!request || request.status === "cancelled" || request.deliveryId !== id || !sameAgentParty(request.target, preparation.target)))
+      || (preparation.inReplyToRequestId && (!original || original.status === "cancelled" || !sameAgentPartyAddress(original.source, preparation.target)
         || (original.pendingResponseDeliveryId !== id && original.response?.deliveryId !== id)))) throw new Error("Endpoint request was cancelled or its exact reservation changed; execution and reconciliation are forbidden.");
   }
   resolveReplyDestination(requestId: string, responding: AgentRequestParty, requested: AgentRequestParty): AgentRequestParty | undefined {
@@ -383,6 +383,11 @@ export class AgentRequestStore {
     }])]);
   }
   prepare(value: PrepareAgentCommunicationInput): Promise<AgentCommunicationPreparation> { return this.mutate("prepare", [value]); }
+  recordConnectionResponse(requestId: string, actualSource: AgentRequestParty, responseDeliveryId: string, result: string, nextAction: string,
+    assertCurrent: () => void = () => {}): Promise<AgentRequestRecord> {
+    const captured = structuredClone([requestId, actualSource, responseDeliveryId, result, nextAction]);
+    return this.mutate("recordConnectionResponse", () => { assertCurrent(); return captured; });
+  }
   bindResponseEvidence(preparation: AgentCommunicationPreparation, prompt: string): Promise<void> { return this.mutate("bindResponseEvidence", [preparation, prompt]); }
   commit(preparation: AgentCommunicationPreparation, receipt: { action?: string; transport?: string } = {}): Promise<ReturnType<AgentRequestState["commit"]>> { return this.mutate("commit", [preparation, receipt]); }
   abort(preparation: AgentCommunicationPreparation): Promise<void> { return this.mutate("abort", [preparation]); }
@@ -390,4 +395,7 @@ export class AgentRequestStore {
   recordPendingResponseCheck(id: string, deliveryId: string, status: string): Promise<void> { return this.mutate("recordPendingResponseCheck", [id, deliveryId, status]); }
   recordReminderResult(id: string, delivered: boolean, error?: unknown): Promise<AgentRequestRecord> { return this.mutate("recordReminderResult", [id, delivered, error instanceof Error ? error.message : error]); }
   cancel(id: string, reason?: string): Promise<AgentRequestRecord> { return this.mutate("cancel", [id, reason]); }
+  cancelEndpointDelivery(id: string, assertCurrent: () => void = () => {}): Promise<PreparedEndpointDelivery> {
+    return this.mutate("cancelEndpointDelivery", () => { assertCurrent(); return [id]; });
+  }
 }

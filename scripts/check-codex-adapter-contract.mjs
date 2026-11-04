@@ -11,6 +11,7 @@ const sessionResolver = read("src", "codexSessionResolver.ts");
 const manager = read("src", "manager", "controlPlaneRoutes.ts");
 const overview = read("ribiwebgui", "src", "pages", "OverviewPage.vue");
 const routeConfig = read("ribiwebgui", "src", "pages", "RouteConfigPage.vue");
+const codexCard = read("ribiwebgui", "src", "agentAdapters", "CodexAgentCard.vue");
 const quickSetup = read("ribiwebgui", "src", "components", "QuickSetupDialog.vue");
 const gatewayStore = read("ribiwebgui", "src", "stores", "gatewayStore.ts");
 const sessionBinding = read("src", "shared", "codexSessionBinding.ts");
@@ -47,27 +48,31 @@ assert.match(runtime, /thread\/start/);
 assert.doesNotMatch(runtime, /turn\/start|turn\/steer/);
 assert.match(runtime, /codex_app_server_ws_url/);
 assert.doesNotMatch(manager, /ensureCodexSharedRuntime|stopOwnedCodexSharedRuntime/);
-for (const source of [overview, routeConfig, runtimeLog]) {
+for (const source of [overview, routeConfig, codexCard, runtimeLog]) {
   assert.doesNotMatch(source, /app-server-stdio|app-server stdio|共用同一个 Runtime/);
 }
-assert.match(routeConfig, /Desktop 未启动或目标任务无法加载时会明确失败，不会启动备用 Runtime/);
-assert.match(routeConfig, /createIfMissing:\s*false/);
+assert.match(codexCard, /Desktop 未启动或目标任务无法加载时会明确失败，不会启动备用 Runtime/);
+assert.match(codexCard, /createIfMissing:\s*false/);
 assert.match(routeConfig, /initialize(?:Codex)?PlanAssistants[\s\S]*createIfMissing:\s*true/);
-assert.doesNotMatch(routeConfig, /@blur="ensureCodexThreadBinding"/);
+assert.doesNotMatch(codexCard, /@blur="ensureCodexThreadBinding"/);
 assert.doesNotMatch(gatewayStore, /bindAgentSessionsForSave/,
   "Ordinary Route saves must not resolve or create a Desktop task; explicit initialization owns that side effect.");
 assert.match(sessionBinding, /createIfMissing:\s*true/);
-assert.match(routeConfig, /initializeAgentSessionForRoute/);
-assert.match(routeConfig, /\/api\/role-panel\/messages/);
-assert.match(routeConfig, /自动初始化会话/);
+assert.match(codexCard, /initializeAgentSessionForRoute/);
+assert.match(codexCard, /\/api\/role-panel\/messages/);
+assert.match(codexCard, /自动初始化会话/);
 assert.ok(sessionInitialization.indexOf("await params.save()") < sessionInitialization.indexOf("await params.deliver"),
   "Automatic persona initialization must persist the canonical binding before its first Desktop-owner delivery.");
 assert.match(sessionInitialization, /角色文件/);
 assert.match(sessionInitialization, /记忆与计划/);
 assert.match(sessionInitialization, /Desktop owner/);
-assert.match(routeConfig, /onMounted\(\(\) => \{ void runAgentScan\(\); \}\)/);
-assert.equal((routeConfig.match(/runAgentScan\(\)/g) ?? []).length, 2,
-  "Route settings may scan only in the function declaration and its one page-entry trigger; refresh buttons call it by reference.");
+assert.match(routeConfig, /onMounted\(\(\) => \{ scanAgentsOnEntry\(\);/);
+assert.equal((routeConfig.match(/scanAgentsOnEntry\(\)/g) ?? []).length, 2,
+  "Route settings enter the same scan owner once; card mounting must not start another scan.");
+assert.equal((codexCard.match(/runAgentScan\(\)/g) ?? []).length, 1,
+  "The native Codex card declares one explicit refresh action; mounting cannot invoke it.");
+assert.match(codexCard, /async function runAgentScan\(\)[\s\S]{0,40}props\.context\.refreshScan\(\)/);
+assert.doesNotMatch(codexCard, /onMounted\([^;]*runAgentScan|watch\([^;]*runAgentScan/);
 assert.equal((quickSetup.match(/runAgentScan\(\)/g) ?? []).length, 2,
   "Quick setup may scan only in the function declaration and when the dialog is entered.");
 assert.equal(packageJson.scripts["configure:codex-desktop"], undefined);

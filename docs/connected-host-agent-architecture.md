@@ -53,7 +53,7 @@ flowchart TB
   T --> AR["A：Route / worker 原事件与投递状态"]
   AR <--> P
   T --> AL["A：原 AgentEndpointDelivery 唯一正式投递账本"]
-  AL --> PROOF["A 原来源任务证明 / prepared delivery / 同 ID 对账"]
+  AL --> PROOF["A 真实连接归属 / prepared delivery / 同 ID 对账"]
   PROOF <--> P
   R["RabiLink 服务器：连接鉴权 / 信令 / 中转"] <--> P
   P <--> B["B Manager：既有请求接纳与公共接口"]
@@ -66,7 +66,7 @@ flowchart TB
   OS --> RET["原请求结果 / 输出事件 / 文件"]
   AO --> RET
   RET --> P
-  P --> BACK["A：原执行回执对账 / 原来源 owner 正式回复"]
+  P --> BACK["A：原执行回执 / 来源任务或原 Manager 请求结果"]
   BACK --> AL
 ```
 
@@ -94,7 +94,7 @@ A 和 B 对称。完整 Rabi 主机直接提供本机能力；轻量连接器继
 
 已建立并通过鉴权的连接默认可使用目标公共接口。保留用户明确配置的禁用项和业务本身的版本、幂等、文件及权限条件，不增加逐功能授权或第二个管理密码。来源身份由现有可信传输生成；异步操作继续使用原请求 guard，不把失效远端请求降级成本机请求。
 
-现有连接确定来源电脑，类型和完整会话 ID 定位原宿主任务；已连接电脑上的 Agent 可主动发起新消息，不需要先有一条历史请求。正式回复按原账本地址回到原任务。A 经既有 Peer 通道调用 B 的 `/api/agent/prepared-deliveries` 及 `/reconcile`，B 只保留执行回执。普通应用连接继续使用原生任务解析，不再被误当成排他的设备任务源。
+现有连接记录来源电脑；有会话时，类型和完整会话 ID 记录原宿主任务；无会话时记录真实连接，不注册或虚构任务；已连接电脑上的 Agent 可主动发起新消息，不需要先有一条历史请求。正式回复按原账本地址回到原任务；没有来源任务时，将结果写入原 Manager 请求记录。A 经既有 Peer 通道调用 B 的 `/api/agent/prepared-deliveries` 及 `/reconcile`，B 只保留执行回执。普通应用连接继续使用原生任务解析，不再被误当成排他的设备任务源。
 
 普通 Route 和后台 worker 使用 `/api/agent/route-deliveries` 及 `/reconcile`，原始用户或系统来源保持原样。B 在实际任务上下文中提供来源 A 的 API 前缀，角色、计划与渠道回传仍归 A。历史回执查询不要求任务当前未归档；明确未发送可以按原 ID 恢复，未知状态只对账。详见[接口合同](rabi-agent-interfaces.md#已连接主机的原生投递源码已接入)。
 
@@ -109,7 +109,7 @@ Route 对每个 Peer 目标分别保存原会话 ID、名称和工作目录；�
 | 顺序 | 本轮源码实施 | 验收要求 |
 | --- | --- | --- |
 | 1 | 在电脑操作边界注入本机/连接器执行目标，Manager 生命周期挂载共享 TerminalService / ComputerService。保留原 operation、终端事件和文件协议。 | 空 Agent 列表下仍可运行终端、文件往返和支持平台的截图；停止后所属子进程、订阅和临时上传均释放。 |
-| 2 | 增加外层设备引用和源 PC 原任务证明；A 原账本经现有 `manager` 通道调用 B 的 prepared-delivery 执行/同 ID reconcile，结果回到 A 原来源 owner。 | 两台已连接主机互投准确会话，保留 workspace、原任务 owner 和回执；同一来源、同一 deliveryId 仅一个正式意图。无主 Agent/Route 绑定不额外拒绝电脑操作。 |
+| 2 | 增加外层设备引用并记录源 PC 的真实连接及可用任务信息；A 原账本经现有 `manager` 通道调用 B 的 prepared-delivery 执行/同 ID reconcile，结果回到 A 原来源 owner。 | 两台已连接主机互投准确会话，保留 workspace、原任务 owner 和回执；同一来源、同一 deliveryId 仅一个正式意图。无主 Agent/Route 绑定不额外拒绝电脑操作。 |
 | 3 | 页面和上下文读取统一目标投影，保留设备在线、通道与操作的实际状态。 | 显示的目标、实际执行电脑与回执一致；一个离线目标不阻断其余目标。 |
 | 4 | 复用既有原生资源构建与安装合同，再进行隔离运行和真实双机验收。 | 实际经 RabiLink 服务器连接后双向执行，验证断线、撤销、忙碌会话和未知写入结果；不以源测试或构建代替。 |
 

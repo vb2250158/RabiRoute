@@ -61,6 +61,7 @@ export function createPluginManagement(options: {
         const error = failure && typeof failure === "object" && "message" in failure ? String(failure.message) : failure;
         return {
           instanceId: instance.id, pluginId: instance.package, version: instance.version, enabled: instance.enabled,
+          ...(active?.status === "active" && active.identity.pluginId === instance.package ? { runningVersion: active.identity.version } : {}),
           status: active?.status ?? (unconfirmed.has(instance.id) ? "retirement_unconfirmed" : settingErrors.has(instance.id) ? "settings_error" : !instance.enabled ? "disabled" : loaded.error ? "failed" : "inactive"),
           missingCapabilities: active?.missingCapabilities ?? [],
           ...(loaded.manifest ? { manifest: loaded.manifest } : {}), ...(error ? { error } : {})

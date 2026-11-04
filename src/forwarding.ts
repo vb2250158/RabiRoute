@@ -17,7 +17,7 @@ import {
   measureSyncPerformanceOperation
 } from "./performance/performanceInstrumentation.js";
 import { PERFORMANCE_OPERATIONS } from "./shared/performanceOperations.js";
-import { isCodexMonitorThreadActive } from "./codexRuntime.js";
+import { currentAgentAdapterGeneration, publishedAgentAdapterProviders } from "./runtime/agentAdapterProviders.js";
 import { config, rolePathsForRoute, type RouteProfile } from "./config.js";
 import {
   appendAgentPacketToDir,
@@ -176,39 +176,10 @@ function primaryManagedAgentBinding(): {
     } : undefined;
   }
   if (target?.binding) return undefined;
-  if (configuredPrimaryAgentAdapter() === "dsh" && config.dshSessionId && config.dshSessionName && config.dshCwd) {
-    return {
-      agentAdapter: "dsh",
-      sessionId: config.dshSessionId,
-      sessionName: config.dshSessionName,
-      workspace: config.dshCwd
-    };
-  }
-  if (configuredPrimaryAgentAdapter() === "antigravity"
-    && config.antigravityConversationId && config.antigravityConversationName && config.antigravityCwd) {
-    return {
-      agentAdapter: "antigravity",
-      sessionId: config.antigravityConversationId,
-      sessionName: config.antigravityConversationName,
-      workspace: config.antigravityCwd
-    };
-  }
-  if (configuredPrimaryAgentAdapter() === "workbuddy" && config.workbuddySessionId && config.workbuddyCwd) {
-    return {
-      agentAdapter: "workbuddy",
-      sessionId: config.workbuddySessionId,
-      sessionName: config.workbuddySessionName || "WorkBuddy 主角色",
-      workspace: config.workbuddyCwd
-    };
-  }
-  if (configuredPrimaryAgentAdapter() === "codex" && config.codexThreadId && config.codexThreadName && config.codexCwd) {
-    return {
-      agentAdapter: "codex",
-      sessionId: config.codexThreadId,
-      sessionName: config.codexThreadName,
-      workspace: config.codexCwd
-    };
-  }
+  const provider = target && publishedAgentAdapterProviders(currentAgentAdapterGeneration()).get(target.provider);
+  const port = provider?.serviceEndpoint as { configuredSession?(): {agentAdapter: string; sessionId: string; sessionName: string; workspace: string} | undefined } | undefined;
+  const binding = port?.configuredSession?.();
+  if (binding && isPlanAssistantAgentType(binding.agentAdapter)) return binding;
   return undefined;
 }
 
@@ -603,7 +574,9 @@ async function heartbeatShouldSkipForBusyAgent(routeKind: ForwardRouteKind): Pro
     return false;
   }
   try {
-    return await isCodexMonitorThreadActive();
+    const owner = publishedAgentAdapterProviders(currentAgentAdapterGeneration()).get("codex");
+    if (!owner) throw new Error("The Codex Agent plugin is unavailable.");
+    return await owner.invoke<boolean>("isBusy", {});
   } catch (error) {
     appendAdapterLogToDir("router", {
       event: "heartbeat_agent_busy_check_failed",
@@ -648,15 +621,15 @@ function logKindForRoute(routeKind: ForwardRouteKind): ForwardLogKind {
   return routeKind === "private" ? "private" : "group_mention";
 }
 
-async function dispatchToAgentAdapter(type: AgentAdapterType, envelope: RabiDeliveryEnvelope, imagePaths: string[] = [], target?: RouteAgentTarget): Promise<void> {
+export async function dispatchToAgentAdapter(type: AgentAdapterType, envelope: RabiDeliveryEnvelope, imagePaths: string[] = [], target?: RouteAgentTarget,
+  createAdapter: typeof createAgentAdapter = createAgentAdapter): Promise<void> {
   if (!target || target.provider !== type) throw new Error("Primary Agent target is missing or mismatched.");
-  const adapter = await createAgentAdapter(type, target.binding ? { binding: target.binding } : "local");
+  const adapter = await createAdapter(type, target.binding ? { binding: target.binding } : "local");
   const peer = target.binding?.ownerDeviceId ? target : undefined;
   return measurePerformanceOperation(
     `${PERFORMANCE_OPERATIONS.gatewayAgentDeliver}.${type}`,
     () => adapter.deliver(envelope, { imagePaths,
-      threadId: peer ? peer.sessionId : type === "dsh" ? config.dshSessionId : type === "codex" ? config.codexThreadId : undefined,
-      workspace: peer ? peer.workspace : type === "dsh" ? config.dshCwd : type === "codex" ? config.codexCwd : undefined })
+      ...(peer ? { threadId: peer.sessionId, workspace: peer.workspace } : {}) })
   );
 }
 

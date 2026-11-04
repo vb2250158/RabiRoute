@@ -5,7 +5,7 @@ import type { ApiOperationDefinition, ApiOperationInput } from "./apiOperationCo
 import type { AgentAdapterType } from "../agentAdapters/types.js";
 import type { EndpointDeliveryReceipt } from "../agentRequests/endpointDelivery.js";
 import type { NativeOwnerDelivery } from "../agentRequests/nativeOwnerDelivery.js";
-import { executeNativeOwnerDelivery } from "../agentRequests/endpointExecution.js";
+import { executeNativeOwnerDelivery, reconcileNativeOwnerDelivery } from "../agentRequests/endpointExecution.js";
 import { executeEndpointOnOwner, recoverEndpointOwnerReceipt } from "../agentRequests/ownerExecution.js";
 import { EndpointTransportReceipts } from "../agentRequests/endpointTransportReceipts.js";
 import { agentDeliveryPromptHash } from "../agentRequests/store.js";
@@ -41,8 +41,30 @@ export function createPeerRouteDeliveryOperations(options: Options): readonly Ap
         const receiptIdentity = { deliveryId: body.deliveryId, generation: digest([principal.sourceDeviceId, options.managerInstanceId, body.deliveryId]), target };
         if (reconcile && body.prompt === undefined) {
           const original = receipts.readReceiptByIdentity(receiptIdentity); guard();
-          return { status: 200, body: { code: 0, threadId: body.threadId, result: { taskId: body.deliveryId, status: original.receipt ? "delivered" : "awaiting_confirmation" },
-            delivery: { deliveryId: body.deliveryId, state: original.receipt ? "accepted" : original.notSent ? "missing" : original.found ? "uncertain" : "missing" }, ...(original.receipt ? { receipt: original.receipt } : {}) } };
+          let receipt = original.receipt;
+          if (!receipt && original.delivery && !original.notSent) {
+            try {
+              receipt = await reconcileNativeOwnerDelivery(original.delivery, {
+                assertAuthorized: guard,
+                readReceipt: value => receipts.readReceipt(value),
+                writeReceipt: (value, proof) => receipts.writeReceipt(value, proof),
+                beginAttempt: value => receipts.beginAttempt(value),
+                readNotSent: value => receipts.readNotSentProof(value),
+                recoverReceipt: options.recoverOwner ?? recoverEndpointOwnerReceipt
+              });
+            } catch (error) {
+              guard();
+              // A concurrent original no-frame result is read back below; all
+              // other failures retain uncertainty and never become a new send.
+              if (!(error instanceof EndpointDeliveryNotSentError && error.proof))
+                return { status: 202, body: { code: 0, uncertain: true, result: { taskId: body.deliveryId, status: "awaiting_confirmation" } } };
+            }
+          }
+          guard();
+          const current = receipts.readReceiptByIdentity(receiptIdentity);
+          receipt ??= current.receipt;
+          return { status: 200, body: { code: 0, threadId: body.threadId, result: { taskId: body.deliveryId, status: receipt ? "delivered" : "awaiting_confirmation" },
+            delivery: { deliveryId: body.deliveryId, state: receipt ? "accepted" : current.notSent ? "missing" : current.found ? "uncertain" : "missing" }, ...(receipt ? { receipt } : {}) } };
         }
         if (typeof body.prompt !== "string") throw new Error("Native Route delivery requires its original rendered prompt.");
         const sourceManager = `/api/rabilink/peer/http/${encodeURIComponent(principal.sourceDeviceId)}/manager`;

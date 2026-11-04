@@ -4,6 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import http from "node:http";
+import { nativeHttpTestFetch } from "./nativeHttpTestClient.js";
 import { execFileSync } from "node:child_process";
 import test from "node:test";
 import { AgentCompletionDeliveryService, completionProjectIdentity, completionTaskContextFromPlans, deliverCompletionToEndpoint, completionLocalFiles, completionMessagePayloads, planCompletionDeliveryRules, splitCompletionMessage, type CompletionRuleOwner } from "./agentCompletionDelivery.js";
@@ -259,7 +260,8 @@ test("completion reaches the selected group through Outbox and repeated events r
   }
 });
 
-test("endpoint selection delivers to private QQ or speech with independent parameters and receipts", async () => {
+test("endpoint selection delivers to private QQ or speech with independent parameters and receipts", async (t) => {
+  t.mock.method(globalThis, "fetch", nativeHttpTestFetch);
   const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabi-hook-endpoints-"));
   const received: Array<{ url?: string; body: Record<string, unknown> }> = [];
   let includePlaybackJob = true;
@@ -288,9 +290,9 @@ test("endpoint selection delivers to private QQ or speech with independent param
     deliver: ({ rule }, hook, id, context) => deliverCompletionToEndpoint(rule, hook, id, "route", withTestEndpointEgress(options), context) });
   try {
     const first = await create().handle(event);
-    assert.deepEqual(first.map(result => result.status), ["sent", "sent"], JSON.stringify(first));
+    assert.deepEqual(first.map(result => result.status), ["sent", "sent"], JSON.stringify({ port: address.port, results: first }));
     const repeated = await create().handle(event);
-    assert.deepEqual(repeated.map(result => result.status), ["sent", "sent"], JSON.stringify(repeated));
+    assert.deepEqual(repeated.map(result => result.status), ["sent", "sent"], JSON.stringify({ port: address.port, results: repeated }));
     assert.equal(received.length, 2);
     assert.equal(received[0].url, "/send_private_msg");
     assert.equal(received[0].body.user_id, 67890);

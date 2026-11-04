@@ -30,6 +30,11 @@ const revision = await buildWebPatch(root, output);
 if (process.env.RABIROUTE_WEB_PATCH_INPUT_HASH && await webPatchInputHash(root) !== process.env.RABIROUTE_WEB_PATCH_INPUT_HASH) {
   throw new Error("Web sources changed during the build; the obsolete candidate was not published.");
 }
+if (process.argv.includes("--finalize-plugin-build")) {
+  const { finalizePluginBuildWebArtifacts } = await import("./build-plugin-packages.mjs");
+  await finalizePluginBuildWebArtifacts(root, { webRevision: revision,
+    webPatchRoot: path.join(output, revision), webSourceInputHash: await webPatchInputHash(root) });
+}
 await writeWebPatchJson(path.join(output, "latest.json"), { revision, operationId: randomUUID() });
 console.log(`Web patch candidate ready: ${revision}`);
 } finally {

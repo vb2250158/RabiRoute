@@ -5,12 +5,23 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { noteCodexDesktopLateStartForTest } from "../codexDesktopBridge.js";
-import { assertEndpointOwnerDirectory, executeEndpointOnOwner, recoverEndpointOwnerReceipt } from "./ownerExecution.js";
+import { assertEndpointOwnerDirectory, executeEndpointOnOwner, recoverEndpointOwnerReceipt as recoverPublishedOwnerReceipt } from "./ownerExecution.js";
 import type { PreparedEndpointDelivery } from "./endpointDelivery.js";
 import { agentDeliveryPromptHash } from "./store.js";
 import { renderRabiDelivery } from "../shared/rabiMessage.js";
 import { manageInstanceAgent } from "../agentAdapters/instanceManagement.js";
 import { endpointExecutionOptionsHash } from "./executionOptions.js";
+
+import { recoverEndpointOwnerReceipt as recoverCodexOwnerReceipt } from "../agentAdapters/codexOwnerExecution.js";
+import { withAgentManagerInvocation, type AgentManagerOperationInvoker } from "../agentAdapters/managerInvocation.js";
+const invokeCodexFixture: AgentManagerOperationInvoker = async <T>(type: string, operation: string, _payload: unknown, invocation?: import("@rabiroute/plugin-sdk").AgentAdapterInvocation) => {
+  assert.equal(type, "codex");
+  assert.equal(operation, "endpoint.recover");
+  return await recoverCodexOwnerReceipt(...invocation!.nativeArgs as Parameters<typeof recoverCodexOwnerReceipt>) as T;
+};
+const recoverEndpointOwnerReceipt: typeof recoverPublishedOwnerReceipt = (delivery, guard) => withAgentManagerInvocation(
+  { invokeAgentOperation: invokeCodexFixture }, () => recoverPublishedOwnerReceipt(delivery, guard)
+);
 
 test("owner directory checks existence rather than configured workspace membership", async t => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "owner-directory-"));
@@ -23,9 +34,9 @@ test("owner directory checks existence rather than configured workspace membersh
   assert.throws(() => assertEndpointOwnerDirectory(path.join(directory, "missing")), /existing absolute/);
   const delivery = { target: { provider: "unimplemented" }, executionOptions: { cwd: directory } } as PreparedEndpointDelivery;
   let checks = 0;
-  await assert.rejects(executeEndpointOnOwner(delivery, { allowedWorkspaces: [] }, () => { checks++; }), /no exact owner execution capability/);
+  await assert.rejects(executeEndpointOnOwner(delivery, { allowedWorkspaces: [] }, () => { checks++; }), error => (error as { code?: string }).code === "AGENT_ADAPTER_UNAVAILABLE");
   assert.equal(checks, 1);
-  await assert.rejects(executeEndpointOnOwner(delivery, { allowedWorkspaces: [path.join(directory, "different")] }, () => {}), /no exact owner execution capability/);
+  await assert.rejects(executeEndpointOnOwner(delivery, { allowedWorkspaces: [path.join(directory, "different")] }, () => {}), error => (error as { code?: string }).code === "AGENT_ADAPTER_UNAVAILABLE");
 });
 
 test("exact owner recovery accepts a historical suffix only with the original scoped ID and reserved prompt hash", async t => {
@@ -110,7 +121,7 @@ test("exact owner recovery accepts a historical suffix only with the original sc
     let sends = 0, writes = 0, attempts = 0, productionChecks = 0;
     const prepared = { ...delivery, executionOptionsHash: endpointExecutionOptionsHash(delivery.executionOptions) };
     const recovered = await manageInstanceAgent("reconcile_prepared_delivery", { delivery: prepared }, {
-      rootDir: directory, defaultWorkspace: directory, allowedWorkspaces: [directory],
+      rootDir: directory, defaultWorkspace: directory, allowedWorkspaces: [directory], invokeAgentOperation: invokeCodexFixture,
       endpointExecution: { endpoint: target, assertAuthorized: async () => { productionChecks++; },
         readReceipt: async () => undefined, readNotSent: async () => undefined,
         beginAttempt: async () => { attempts++; return true; }, writeReceipt: async () => { writes++; } },
@@ -125,5 +136,7 @@ test("exact owner recovery accepts a historical suffix only with the original sc
   const archivedDb = new DatabaseSync(path.join(directory, "state_5.sqlite"));
   archivedDb.exec("UPDATE threads SET archived = 1");
   archivedDb.close();
-  assert.equal(await recoverEndpointOwnerReceipt(delivery, () => {}), undefined);
+  assert.equal((await recoverEndpointOwnerReceipt(delivery, () => {}))?.action, "receipt_recovered", "archiving a task does not erase its original accepted message");
+  assert.equal(await recoverEndpointOwnerReceipt({ ...delivery, promptHash: "wrong-original-hash" }, () => {}), undefined);
+  assert.equal(await recoverEndpointOwnerReceipt({ ...delivery, deliveryId: "different-original-id" }, () => {}), undefined);
 });

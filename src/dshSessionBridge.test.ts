@@ -282,3 +282,30 @@ test("owner rejection and missing acceptance never claim delivery or try old RPC
     } finally { stub.restore(); }
   }
 });
+
+test("DSH isolates invalid directory rows and optional timestamps without losing healthy exact IDs or paging", async () => {
+  const rows = [row(1), null, { ...row(2), updatedAt: 1e20 }, row(3)];
+  const original = JSON.stringify(rows);
+  const stub = installDshRpcStub(rows as unknown as SessionRow[]);
+  try {
+    const warnings: string[] = [];
+    const pages = [];
+    for (let offset = 0; offset < 4; offset++) pages.push(await listDshSessions({ baseUrl: fixtureBaseUrl, offset, limit: 1, onWarning: warning => warnings.push(warning) }));
+    assert.deepEqual(pages.map(page => page.map(item => item.id)), [[id(3)], [id(1)], [id(2)], []]);
+    assert.ok(warnings.some(warning => /item/.test(warning)));
+    assert.ok(warnings.some(warning => /timestamp/.test(warning)));
+    assert.equal((await readDshSession(id(3), fixtureBaseUrl)).id, id(3));
+    const invalidTime = await readDshSession(id(2), fixtureBaseUrl);
+    assert.equal(invalidTime.id, id(2));
+    assert.equal(invalidTime.updatedAt, undefined);
+    assert.ok(invalidTime.warnings?.length);
+    assert.equal(JSON.stringify(rows), original, "reading does not repair or rewrite the owner's raw records");
+    assert.ok(stub.requests.every(request => request.method !== "session/list" || JSON.stringify(request.payload.args) === '{"_request":{}}'), "this RPC returns the full catalog, so pagination advances over the normalized local directory, never a truncated remote page");
+  } finally { stub.restore(); }
+});
+
+test("DSH catalog RPC failure is not converted into a partial successful directory", async () => {
+  const stub = installDshRpcStub([row(1)], () => ({ ok: false, error: { code: "AUTH_REQUIRED", message: "Owner denied catalog access" } }));
+  try { await assert.rejects(listDshSessions({ baseUrl: fixtureBaseUrl }), /Owner denied catalog access/); }
+  finally { stub.restore(); }
+});

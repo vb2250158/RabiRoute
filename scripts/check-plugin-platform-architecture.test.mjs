@@ -14,6 +14,13 @@ const cleanup = `{ publish() {}, rollback() {}, retire() { return owner.stopAndJ
 const manifest = { exports: { "./publication": { types: "./publication.d.ts", import: "./publication.mjs", default: "./publication.mjs" } },
   files: ["publication.mjs", "publication.d.ts"] };
 
+test("a retired plugin without a context parameter has no resources to inspect", () => {
+  assert.equal(hasReleasablePluginScope(`export const activate = definePlugin({
+    activate() { throw new Error("Use the replacement Agent package."); }
+  }).activate;`), false);
+  assert.equal(hasReleasablePluginScope("export const activate = definePlugin({ activate() {} }).activate;"), false);
+});
+
 test("architecture checking compiles each packager runtime descriptor without creating missing outputs", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "endpoint-checker-generated-"));
   const packageRoot = path.join(root, "package");

@@ -8,8 +8,7 @@ import os from "node:os";
 import path from "node:path";
 import { installReleaseDependencies, ensureNativeTerminalDependencies } from "./lib/release-dependencies.mjs";
 import { fileURLToPath } from "node:url";
-import { CodexDesktopIpcClient } from "./lib/codex-desktop-ipc.mjs";
-import { normalizeDshBinding, sendDshTask } from "./lib/dsh.mjs";
+import { normalizeDshBinding } from "./lib/dsh.mjs";
 import { runManagerCommand } from "./lib/manager-cli.mjs";
 import { createManagerClient, createManagerTransport } from "./lib/manager-client.mjs";
 import { ManagementDiagnostics } from "./lib/management-diagnostics.mjs";
@@ -928,6 +927,7 @@ class RabiAgentRuntime {
     this.config = config;
     this.endpointSession = createEndpointSession({ config, configPath });
     this.configPath = configPath;
+    this.agentPluginAbort = new AbortController();
     this.stateStore = createAgentState(configPath);
     this.socket = null;
     this.connected = false;
@@ -946,6 +946,7 @@ class RabiAgentRuntime {
     this.preparedDeliveries = new Set();
     this.managementMutationQueue = Promise.resolve();
     this.receiptOperations = new Map();
+    this.latePreparedObservations = new Map();
     this.managementDiagnostics = new ManagementDiagnostics(path.join(path.dirname(configPath), "logs", "management-diagnostics.json"));
     this.pendingOperations = 0;
     this.taskByThread = new Map();
@@ -963,7 +964,6 @@ class RabiAgentRuntime {
         }
         this.send({ type: "terminalEvent", event });
       }, onChange: () => this.publishDesktop() });
-    this.desktop = new CodexDesktopIpcClient({ timeout, onBroadcast: event => this.handleDesktopBroadcast(event) });
   }
 
   start() {
@@ -996,7 +996,7 @@ class RabiAgentRuntime {
   }
 
   deliveryControl(operation, params) {
-    if (this.stopped || this.draining || this.candidatePending) throw new Error("DELIVERY_OWNER_UNAVAILABLE");
+    if (this.stopped || this.candidatePending || this.draining && (operation !== "query" || !this.deliveryOwner)) throw new Error("DELIVERY_OWNER_UNAVAILABLE");
     const owner = this.startDeliveryOwner();
     return operation === "submit" ? owner.submit(params) : { ok: true, ...owner.query(params) };
   }
@@ -1038,11 +1038,15 @@ class RabiAgentRuntime {
     });
   }
 
-  withReceiptOperation(deliveryId, operation) {
+  receiptOperationKey(deliveryId) {
     // The persisted ledger is keyed by deliveryId, not Manager generation.
     // Every prepared delivery and recovery shares this actual file owner.
     const receipt = path.resolve(path.dirname(this.configPath), "endpoint-transport-receipts", `${sha256(String(deliveryId ?? ""))}.json`);
-    const key = process.platform === "win32" ? receipt.toLowerCase() : receipt;
+    return process.platform === "win32" ? receipt.toLowerCase() : receipt;
+  }
+
+  withReceiptOperation(deliveryId, operation) {
+    const key = this.receiptOperationKey(deliveryId);
     const previous = this.receiptOperations.get(key) || Promise.resolve();
     const pending = previous.catch(() => undefined).then(operation).finally(() => {
       if (this.receiptOperations.get(key) === pending) this.receiptOperations.delete(key);
@@ -1066,6 +1070,7 @@ class RabiAgentRuntime {
       this.publishDesktop();
     });
     owners.add(pending);
+    return pending;
   }
 
   queueManagementWrite(operation, requestId, prepared = false) {
@@ -1086,16 +1091,71 @@ class RabiAgentRuntime {
     });
     owners.add(pending);
     if (!prepared) this.managementMutationQueue = pending;
+    return pending;
+  }
+
+  hintDeliveryRecovery(delivery, connection) {
+    if (!this.connected || this.stopped || this.candidatePending || !connection.managerGuid
+      || this.socketManagerGuid !== connection.managerGuid || this.config.nodeCredential !== connection.credential) return;
+    if (typeof delivery?.deliveryId === "string" && delivery.deliveryId && typeof delivery.generation === "string" && delivery.generation) {
+      this.send({ type: "deliveryRecovery", deliveryId: delivery.deliveryId, generation: delivery.generation });
+    }
+  }
+
+  observeLatePreparedReceipt(delivery, connection, subscribe, observationMs) {
+    const identity = { deliveryId: delivery.deliveryId, generation: delivery.generation };
+    const threadId = delivery.target.sessionId, key = this.receiptOperationKey(identity.deliveryId);
+    this.latePreparedObservations.get(key)?.dispose();
+    let active = true, settled = false, lateConfirmed = false, timer;
+    const dispose = () => {
+      if (!active) return;
+      active = false; clearTimeout(timer); unsubscribe();
+      if (this.latePreparedObservations.get(key) === observation) this.latePreparedObservations.delete(key);
+    };
+    const observation = { dispose, settle: () => {
+      if (!active) return;
+      settled = true;
+      // A confirmation before settlement is covered by the ordinary completion hint.
+      if (lateConfirmed) { dispose(); return; }
+      timer = setTimeout(dispose, observationMs);
+      timer.unref?.();
+    } };
+    const unsubscribe = subscribe(event => {
+      if (!active || event.stage !== "delivery_receipt_confirmed" || event.late !== true || event.outcome !== "confirmed"
+        || event.deliveryMarker !== identity.deliveryId || event.threadId !== threadId) return;
+      lateConfirmed = true;
+      if (settled) { this.hintDeliveryRecovery(identity, connection); dispose(); }
+    });
+    this.latePreparedObservations.set(key, observation);
+    return observation;
+  }
+
+  async agentPluginContext() {
+    if (this.stopped) throw new Error("Rabi Agent is stopping.");
+    this.agentPluginOwnerPromise ??= import("./runtime/management.mjs").then(({ mountRemoteAgentManager }) => mountRemoteAgentManager({
+      applicationRoot: path.dirname(fileURLToPath(import.meta.url)),
+      stateRoot: path.dirname(this.configPath),
+      getConfiguration: () => this.config,
+      publishManagerEvent: (type, data) => this.handleAgentPluginEvent(type, data),
+      signal: this.agentPluginAbort.signal
+    }));
+    const owner = await this.agentPluginOwnerPromise;
+    if (this.stopped) throw new Error("Rabi Agent is stopping.");
+    return owner.context();
   }
 
   stop() {
     if (this.stopPromise) return this.stopPromise;
     this.stopped = true;
+    this.agentPluginAbort.abort();
+    for (const observation of this.latePreparedObservations.values()) observation.dispose();
+    this.latePreparedObservations.clear();
     this.stopPromise = Promise.resolve().then(async () => {
       const results = await Promise.allSettled([
         Promise.resolve().then(() => this.terminals.stop()),
         Promise.resolve().then(() => this.computer.stop()),
-        Promise.resolve().then(() => this.deliveryOwner?.close())
+        Promise.resolve().then(() => this.deliveryOwner?.close()),
+        this.agentPluginOwnerPromise?.then(owner => owner.dispose())
       ]);
       const failures = results.filter(result => result.status === "rejected").map(result => result.reason);
       if (failures.length) throw new AggregateError(failures, "Rabi Agent resource cleanup failed; original history evidence was retained.");
@@ -1111,7 +1171,6 @@ class RabiAgentRuntime {
     clearInterval(this.heartbeatTimer);
     this.connectionAbort?.abort();
     this.socket?.close(1000, "Rabi Agent stopping");
-    this.desktop.close();
     return this.stopPromise;
   }
 
@@ -1192,6 +1251,15 @@ class RabiAgentRuntime {
     catch { this.socket.close(1000, "Transport unavailable"); return false; }
   }
 
+  captureManagementConnection() {
+    const socket = this.socket, credential = this.config.nodeCredential, managerGuid = this.socketManagerGuid;
+    const isCurrent = () => !this.stopped && !this.candidatePending && this.connected && this.socket === socket && this.config.nodeCredential === credential;
+    const assertCurrent = () => {
+      if (!isCurrent()) throw new Error("Original Manager connection changed before management completion.");
+    };
+    return { credential, managerGuid, isCurrent, assertCurrent };
+  }
+
   handleManagerMessage(raw) {
     let message;
     try { message = JSON.parse(String(raw)); } catch { return; }
@@ -1202,8 +1270,19 @@ class RabiAgentRuntime {
     }
     if (message.type === "manageAgent" && message.operation === "delivery_records") {
       if (!this.connected || this.candidatePending || this.stopped) return;
-      try { this.sendRaw({ type: "managementResult", requestId: message.requestId, result: this.deliveryControl("query", message.params || {}) }); }
-      catch { this.sendRaw({ type: "managementResult", requestId: message.requestId, error: "DELIVERY_OWNER_UNAVAILABLE" }); }
+      const connection = this.captureManagementConnection();
+      const params = message.params || {};
+      const mutation = params.action === "cancel" || params.action === "reconcile";
+      void Promise.resolve().then(() => {
+        connection.assertCurrent();
+        if (this.draining && mutation) throw new Error("Rabi Agent update handoff is in progress; control mutation was not accepted.");
+        return mutation ? this.startDeliveryOwner().control(params) : this.deliveryControl("query", params);
+      }).then(result => {
+        connection.assertCurrent();
+        this.sendRaw({ type: "managementResult", requestId: message.requestId, result });
+      }).catch(error => {
+        if (connection.isCurrent()) this.sendRaw({ type: "managementResult", requestId: message.requestId, error: boundedText(error.message || "DELIVERY_OWNER_UNAVAILABLE", 512) });
+      });
       return;
     }
     if (message.type === "manageAgent" && ["terminal", "computer"].includes(message.operation)) {
@@ -1259,7 +1338,8 @@ class RabiAgentRuntime {
     }
     // Keep the owner connection alive for queued work/results while draining,
     // but do not accept new execution or mutate bindings during handoff.
-    if ((this.draining || this.candidatePending) && ["assignTask", "manageAgent"].includes(message.type)) {
+    const drainingReceiptRead = this.draining && !this.candidatePending && message.type === "manageAgent" && message.operation === "reconcile_prepared_delivery";
+    if ((this.draining || this.candidatePending) && !drainingReceiptRead && ["assignTask", "manageAgent"].includes(message.type)) {
       if (message.type === "manageAgent") this.send({ type: "managementResult", requestId: message.requestId, error: "Rabi Agent update handoff is in progress; operation was not accepted." });
       else this.send({ type: "taskResult", taskId: message.task?.taskId, status: "failed", error: "Rabi Agent update handoff is in progress; task was not accepted." });
       return;
@@ -1269,12 +1349,17 @@ class RabiAgentRuntime {
       return;
     }
     if (message.type === "manageAgent") {
-      const originalSocket = this.socket;
-      const originalCredential = this.config.nodeCredential;
+      const { credential: originalCredential, managerGuid: originalManagerGuid,
+        isCurrent: ownsOriginalConnection, assertCurrent: assertOriginalConnection } = this.captureManagementConnection();
       const preparedOperation = ["prepared_delivery", "reconcile_prepared_delivery"].includes(message.operation);
+      let preparedMutationStarted = false;
+      let latePreparedObservation;
+      const recoveryConnection = { credential: originalCredential, managerGuid: originalManagerGuid };
+      const recoveryDelivery = { deliveryId: message.params?.delivery?.deliveryId, generation: message.params?.delivery?.generation };
       const trace = this.managementDiagnostics.begin({ requestId: message.requestId, operation: message.operation, deliveryId: message.params?.delivery?.deliveryId });
       // Independent reads and recovery must not wait behind another owner.
-      // Recovery never sends a prompt and shares the exact original receipt lock.
+      // A live receipt owner keeps all mutations serialized. Recovery may observe
+      // its durable snapshot without waiting for the native operation to settle.
       const independentRead = message.operation === "list" || message.operation === "reconcile_prepared_delivery" || message.operation === "threads"
         && ["list", "read", "creation_status"].includes(message.params?.action ?? "list");
       const dispatch = independentRead
@@ -1283,6 +1368,8 @@ class RabiAgentRuntime {
       const schedule = operation => dispatch(preparedOperation
         ? () => {
           trace.mark("queue_enter");
+          if (message.operation === "reconcile_prepared_delivery"
+            && (this.draining || this.receiptOperations.has(this.receiptOperationKey(message.params?.delivery?.deliveryId)))) return operation(true);
           trace.mark("receipt_wait");
           return this.withReceiptOperation(message.params?.delivery?.deliveryId, () => {
             trace.mark("receipt_enter");
@@ -1290,22 +1377,27 @@ class RabiAgentRuntime {
           });
         }
         : operation);
-      schedule(async () => {
+      const pending = schedule(async (snapshotOnly = false) => {
         try {
-          if (preparedOperation && (!this.connected || this.socket !== originalSocket || this.config.nodeCredential !== originalCredential)) throw new Error("Original Manager connection changed before queued delivery execution.");
+          assertOriginalConnection();
           let result;
           if (message.operation === "list") result = agentCatalog(this.config);
           else if (message.operation === "configure") {
-            const next = configureInstanceAgent(this.config, message.params);
+            const nativeContext = await this.agentPluginContext();
+            const next = configureInstanceAgent(this.config, message.params, nativeContext.getProviders());
             writePrivateJson(this.configPath, next);
             this.config = next;
             result = agentCatalog(next);
             this.send({ type: "agentCatalog", agents: result });
           } else {
-            const { manageInstanceAgent, EndpointTransportReceipts, sameAgentEndpoint } = await trace.run("module", () => import("./runtime/management.mjs"));
+            const { manageInstanceAgent, EndpointTransportReceipts, sameAgentEndpoint,
+              subscribeCodexDesktopDelivery, CODEX_DESKTOP_LATE_RECEIPT_WINDOW_MS } = await trace.run("module", () => import("./runtime/management.mjs"));
+            assertOriginalConnection();
             const requestedProvider = message.params?.agentAdapter || message.params?.provider || message.params?.delivery?.target?.provider;
             const provider = requestedProvider === "codex-desktop" ? "codex" : requestedProvider;
-            if (message.operation === "threads" && !["codex", "dsh"].includes(provider)) throw new Error("Explicit implemented agentAdapter is required.");
+            // Durable receipt snapshots do not depend on starting an execution plugin.
+            const nativeContext = snapshotOnly ? undefined : await this.agentPluginContext();
+            if (message.operation === "threads" && !nativeContext.getProviders().some(owner => owner.type === provider)) throw new Error("Explicit active Agent plugin is required.");
             const agent = instanceAgents(this.config).find(agent => (agent.provider === "codex-desktop" ? "codex" : agent.provider) === provider);
             const dsh = message.params?.dshBaseUrl ? { baseUrl: message.params.dshBaseUrl } : agent?.dsh || this.config.dsh;
             const params = { ...message.params, ...(provider ? { provider, agentAdapter: provider } : {}) };
@@ -1314,7 +1406,8 @@ class RabiAgentRuntime {
             if (preparedOperation) {
               const delivery = params.delivery;
               const assertAuthorized = () => trace.run("authority", async () => {
-                if (!this.connected || this.socket !== originalSocket || this.config.nodeCredential !== originalCredential || !this.config.nodeCredential) throw new Error("Authenticated Manager connection is required for prepared delivery.");
+                assertOriginalConnection();
+                if (!this.config.nodeCredential) throw new Error("Authenticated Manager connection is required for prepared delivery.");
                 const endpoint = delivery?.target;
                 if (endpoint?.kind !== "instance" || endpoint.nodeId !== this.config.nodeId
                   || endpoint.provider !== provider || !endpoint.sessionId) throw new Error("Prepared endpoint does not match this computer and explicit provider/session.");
@@ -1327,30 +1420,71 @@ class RabiAgentRuntime {
                 if (proof.authorized !== true || proof.deliveryId !== delivery.deliveryId || proof.generation !== delivery.generation
                   || proof.promptHash !== delivery.promptHash || proof.executionOptionsHash !== delivery.executionOptionsHash || !sameAgentEndpoint(proof.endpoint, endpoint)
                   || !["dispatching", "committed"].includes(proof.state)) throw new Error("Original delivery incarnation or reservation is no longer authorized.");
-                if (!this.connected || this.socket !== originalSocket || this.config.nodeCredential !== originalCredential) throw new Error("Original Manager connection changed during delivery authority verification.");
+                assertOriginalConnection();
               });
               await assertAuthorized();
               const receipts = new EndpointTransportReceipts(path.join(path.dirname(this.configPath), "endpoint-transport-receipts"));
               endpointExecution = { endpoint: delivery.target, assertAuthorized,
-                readReceipt: prepared => trace.run("receipt_read", () => receipts.readReceipt(prepared)),
-                readNotSent: prepared => trace.run("not_sent_read", () => receipts.readNotSentProof(prepared)),
-                writeNotSent: (prepared, proof) => trace.run("not_sent_write", () => receipts.writeNotSent(prepared, proof)),
+                readReceipt: async prepared => {
+                  const receipt = await trace.run("receipt_read", () => receipts.readReceipt(prepared));
+                  if (receipt) latePreparedObservation?.dispose();
+                  return receipt;
+                },
+                readNotSent: async prepared => {
+                  const proof = await trace.run("not_sent_read", () => receipts.readNotSentProof(prepared));
+                  if (proof) latePreparedObservation?.dispose();
+                  return proof;
+                },
+                writeNotSent: async (prepared, proof) => {
+                  await trace.run("not_sent_write", () => receipts.writeNotSent(prepared, proof));
+                  latePreparedObservation?.dispose();
+                },
                 beginAttempt: prepared => trace.run("attempt", () => receipts.beginAttempt(prepared)),
-                writeReceipt: (prepared, receipt) => trace.run("receipt_write", () => receipts.writeReceipt(prepared, receipt)) };
+                writeReceipt: async (prepared, receipt) => {
+                  await trace.run("receipt_write", () => receipts.writeReceipt(prepared, receipt));
+                  latePreparedObservation?.dispose();
+                } };
             }
-            result = await trace.run("execute", () => manageInstanceAgent(message.operation, params, { ...this.config, dsh, endpointExecution,
-              observeRecovery: operation => trace.run("receipt_recovery", operation), rootDir: path.dirname(fileURLToPath(import.meta.url)) }));
+            if (snapshotOnly) {
+              // No owner recovery, attempt allocation or write is permitted here.
+              // Missing evidence while the original owner is live never proves no-send.
+              const receipt = await endpointExecution.readReceipt(params.delivery);
+              assertOriginalConnection();
+              const proof = receipt ? undefined : await endpointExecution.readNotSent(params.delivery);
+              assertOriginalConnection();
+              result = receipt || (proof ? { status: "not_sent", proof }
+                : { status: "in_progress", deliveryId: params.delivery.deliveryId, generation: params.delivery.generation });
+            } else {
+              preparedMutationStarted = message.operation === "prepared_delivery";
+              if (preparedMutationStarted && provider === "codex") {
+                latePreparedObservation = this.observeLatePreparedReceipt(params.delivery, recoveryConnection,
+                  subscribeCodexDesktopDelivery, CODEX_DESKTOP_LATE_RECEIPT_WINDOW_MS);
+              }
+              result = await trace.run("execute", () => manageInstanceAgent(message.operation, params, { ...this.config, ...nativeContext, dsh, endpointExecution,
+                observeRecovery: operation => trace.run("receipt_recovery", operation), rootDir: path.dirname(fileURLToPath(import.meta.url)) }));
+              if (result?.accepted === true || result?.status === "not_sent") latePreparedObservation?.dispose();
+            }
 
           }
-          if (!preparedOperation || (this.connected && this.socket === originalSocket && this.config.nodeCredential === originalCredential)) {
+          if (ownsOriginalConnection()) {
             const sent = this.send({ type: "managementResult", requestId: message.requestId, result }); trace.mark("response", sent ? "sent" : "not_sent");
           } else trace.mark("response", "connection_changed");
         } catch (error) {
-          if (!preparedOperation || (this.connected && this.socket === originalSocket && this.config.nodeCredential === originalCredential)) {
+          if (ownsOriginalConnection()) {
             const sent = this.send({ type: "managementResult", requestId: message.requestId, error: boundedText(error instanceof Error ? error.message : String(error), 1024) }); trace.mark("response", sent ? "failed" : "not_sent");
           } else trace.mark("response", "connection_changed");
         }
       });
+      if (preparedOperation && message.operation === "prepared_delivery" && pending) {
+        const hintRecovery = () => {
+          // Run after the queue and receipt owner actually release, so a query
+          // triggered by this hint cannot miss their final completion again.
+          // Even the original socket may have outlived its bounded request correlation.
+          if (preparedMutationStarted) this.hintDeliveryRecovery(recoveryDelivery, recoveryConnection);
+          latePreparedObservation?.settle();
+        };
+        void pending.then(hintRecovery, hintRecovery);
+      }
       return;
     }
     if (message.type === "updateAvailable" && this.config.autoUpdate !== false && !this.candidatePending) {
@@ -1383,7 +1517,10 @@ class RabiAgentRuntime {
     this.send({ type: "ackTask", taskId });
     try {
       if (!this.connected || !managerGuid || this.socketManagerGuid !== managerGuid) throw new Error("Original Manager connection is unavailable; queued task execution was refused.");
-      const agent = resolveInstanceAgent(this.config, task);
+      const nativeContext = await this.agentPluginContext();
+      const agent = resolveInstanceAgent(this.config, task, nativeContext.getProviders());
+      const provider = agent.provider === "codex-desktop" ? "codex" : agent.provider;
+      if (!nativeContext.getProviders().some(owner => owner.type === provider)) throw new Error("The original Agent plugin is unavailable.");
       activeAgent = agent;
       const cwd = resolveTaskWorkspace(task.cwd || agent.workspace, { defaultWorkspace: this.config.defaultWorkspace, allowedWorkspaces: this.config.allowedWorkspaces });
       const prompt = String(task.message || "").trim();
@@ -1396,7 +1533,7 @@ class RabiAgentRuntime {
       if (!authority.ok || authority.uncertain || authority.identityChanged) throw new Error("Manager no longer authorizes this Agent task; host execution was refused.");
       if (!this.connected || this.socketManagerGuid !== managerGuid) throw new Error("Original Manager connection changed before host task execution.");
       if (agent.provider === "dsh") {
-        await sendDshTask({ ...agent.dsh, sessionId: task.threadId }, prompt);
+        await nativeContext.invokeAgentOperation(provider, "remote.task", { baseUrl: agent.dsh?.baseUrl, threadId: task.threadId, prompt }, { assertCurrent: () => { if (!this.connected || this.socketManagerGuid !== managerGuid) throw new Error("Original Manager connection changed before host task execution."); } });
         this.agentExecutionStatus.set(agent.agentId, "宿主已接收");
         this.send({ type: "progress", taskId, summary: "DSH accepted the message into the bound session queue. Read the response in that DSH session." });
         rememberTask(this.stateStore, taskId, { status: "progress" });
@@ -1404,13 +1541,13 @@ class RabiAgentRuntime {
       }
       if (this.taskByThread.has(task.threadId)) throw new Error("The selected Codex task is busy. Wait for its current task to finish before submitting another message.");
       this.taskByThread.set(task.threadId, taskId);
-      await this.desktop.startTurn({
+      await nativeContext.invokeAgentOperation(provider, "remote.task", {
         threadId: task.threadId,
         prompt,
         cwd,
         model: agent.model,
         reasoningEffort: agent.reasoningEffort
-      });
+      }, { timeout: this.timeout, assertCurrent: () => { if (!this.connected || this.socketManagerGuid !== managerGuid) throw new Error("Original Manager connection changed before host task execution."); } });
       this.agentExecutionStatus.set(agent.agentId, "宿主已接收");
       this.send({ type: "progress", taskId, summary: "Codex Desktop accepted the task. Rabi Agent is waiting for its task state." });
       rememberTask(this.stateStore, taskId, { status: "progress" });
@@ -1423,18 +1560,16 @@ class RabiAgentRuntime {
     }
   }
 
-  handleDesktopBroadcast(event) {
-    if (event?.method !== "thread-stream-state-changed") return;
-    const params = event.params && typeof event.params === "object" ? event.params : {};
-    const threadId = String(params.conversationId || params.threadId || "").trim();
+  handleAgentPluginEvent(type, event) {
+    if (type !== "agent.task-state" || !event || event.provider !== "codex") return;
+    const threadId = event.sessionId;
     const taskId = this.taskByThread.get(threadId);
     if (!taskId) return;
-    const state = JSON.stringify(params.change ?? params);
-    if (state.includes('"status":"completed"') || state.includes('"threadRuntimeStatus":{"type":"idle"')) {
+    if (event.status === "completed") {
       this.send({ type: "taskResult", taskId, status: "completed", summary: "Codex Desktop reported that the target task is complete. Open that task owner to read its response." });
       this.taskByThread.delete(threadId);
       rememberTask(this.stateStore, taskId, { status: "completed", summary: "Codex Desktop reported that the target task is complete. Open that task owner to read its response." });
-    } else if (state.includes('"status":"failed"') || state.includes('"status":"interrupted"')) {
+    } else if (event.status === "failed") {
       this.send({ type: "taskResult", taskId, status: "failed", error: "Codex Desktop reported that the target task did not complete." });
       this.taskByThread.delete(threadId);
       rememberTask(this.stateStore, taskId, { status: "failed", error: "Codex Desktop reported task failure." });
@@ -1454,8 +1589,7 @@ class RabiAgentRuntime {
     return this.updatePromise;
   }
 
-  async drainTasks() {
-    const deadline = Date.now() + this.timeout("agent.update.drain",30000);
+  async drainTasks(deadline = Date.now() + this.timeout("agent.update.drain",30000)) {
     while (true) {
       if (this.stopped) throw new Error("Rabi Agent update was stopped.");
       const queue = this.taskQueue;
@@ -1512,8 +1646,9 @@ class RabiAgentRuntime {
       const prepared = await candidate.wait("candidatePrepared");
       if (prepared.nodeId !== this.config.nodeId) throw new Error("Candidate node identity mismatch.");
       this.draining = true;
-      await this.deliveryOwner?.pause();
-      await this.drainTasks();
+      const deadline = Date.now() + this.timeout("agent.update.drain",30000);
+      await this.deliveryOwner?.pause({ deadline });
+      await this.drainTasks(deadline);
       await this.pauseConnection();
       if (this.stopped) throw new Error("Rabi Agent update was stopped.");
       await candidate.send("activateCandidate");

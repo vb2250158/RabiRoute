@@ -38,7 +38,7 @@
 这些目录项是发现与调用合同，不是逐功能授权。安装版、真实外部业务和双机效果的证据须单独核对，见 [实施记录](api-contract-discovery-implementation-progress.md)。
 
 
-远端连接器 0.2.6：电脑凭据认证整台实例，“是否启用Agent”控制整个实例，默认启用。启用后可直接使用主机全部公开接口，包括改名、计划、记忆、Skill、文件与任务；不要求浏览器登录、主控 Agent、会话登记、绑定或逐功能授权。每次 Agent 调用明确传入实际类型与完整会话 Id；目录和会话列表用于查询，不授予权限。
+远端连接器 0.2.6：电脑凭据认证整台实例，“是否启用Agent”控制整个实例，默认启用。启用后可直接使用主机全部公开接口，包括改名、计划、记忆、Skill、文件与任务；不要求浏览器登录、主控 Agent、会话登记、绑定或逐功能授权。已有会话的调用沿用其类型与完整会话 Id；没有会话信息的调用直接记录真实连接；目录和会话列表用于查询，不授予权限。
 
 ## 本机自动发现地址
 
@@ -50,7 +50,7 @@ Windows Host 在启动成功和生命周期变化时原子生成状态目录中�
 
 解析结果只用于当前请求批次；写入后的身份复核、幂等与不确定结果处理继续遵守下文合同。Host 缓存改动须随 Host 版本发布，Manager 源码热补丁无法替换运行中的 .NET Host。
 
-完成连接鉴权后即可使用已提供的接口，不再增加逐功能或逐角色授权。发送仍须遵守来源身份、目标、消息格式和幂等回执合同。详见[连接与接口使用](connection-access.md)。
+完成连接鉴权后即可使用已提供的接口，不再增加逐功能或逐角色授权。发送按实际目标、消息格式和幂等回执合同执行；来源信息只记归属。详见[连接与接口使用](connection-access.md)。
 
 本机 Agent、已鉴权 RabiLink 和已启用远端 Agent 共用配置接口权限。`POST/DELETE /api/agent-adapters/dsh/connection` 接受可信本机 Agent 不带浏览器 `Origin` 的请求；浏览器跨站请求、伪造连接标记和已撤销连接仍被拒绝。配置版本、参数和写后回读要求保持有效。
 
@@ -450,6 +450,9 @@ GET /api/roles/{roleId}/message-endpoint-history
 - `GET /api/roles/:roleId/message-endpoint-timeline?adapter=napcat&includeArchives=1&limit=50` 返回 `requestId` 和 `data.entries/count/coverage/nextCursor`。收发记录共享一个渠道；可用 `conversationKey` 等原筛选参数。记录保持原稳定写入顺序，响应正文为旧到新；界面按新到旧显示。
 - 将非空 `nextCursor` 原样编码到下一次 `cursor`，保持角色、渠道与筛选条件一致。游标绑定索引代、来源布局及物理位置，支持旧记录缺少 sequence；同代普通追加不使旧页漂移。索引重建、来源替换或过滤条件变化会返回 `409 + MESSAGE_HISTORY_CURSOR_EXPIRED`，应刷新当前渠道。字符预算不足时下一条留给下一页，不跳过；首次单条仍可超过预算。最后一个满页可能需要再读一次空页确认结束。
 - `chat-history` 增加可选 `category=agent|panel|replies|aiui`，在原字节游标读取中分类，保留有界扫描、坏记录计数和按 ID 读取正文。省略时沿用原合同。消息页不提供“全部”标签，分别保留各标签的分页、筛选和阅读位置。
+- 源码候选增加 `GET /api/roles/:roleId/chat-history/tasks`（同样支持 `/roles` 别名）：沿用角色读取鉴权，参数为 `category`、`query`（已记录任务名称）、`limit=1..100`（默认 50）、不透明 `cursor` 和 `peerOf`（任务 key）。返回 `data={items,nextCursor,invalidRecords}`；任务项包含 `key/sessionId/title/owner?/taskUrl?/receivedAt/preview`。`peerOf` 查询完整历史中与该任务有过收发的去重任务，不包含自身。游标绑定分类、搜索及 peerOf，参数变化后从首页开始；无效参数返回 400。该读取不投递消息、无需幂等键，不提供自动重试。
+- `chat-history` 的可选 `taskKey` 使用上述返回值，匹配该任务作为发送方或接收方的记录；保留 `category` 和原字节游标/按 ID 正文读取合同。索引由原账本重建，接收方独立进入目录，宿主不同的同名或同 ID 任务不合并。记录中的 `sourceTaskKey/targetTaskKey` 保留聚合时身份，后续名称补全不会改变显示方向。
+- `message-history-conversations` 增加可选 `adapter`（省略仍为 napcat），按原渠道索引分页返回其他消息端的会话。返回结构及 `nextConversationCursor` 沿用原合同，非 QQ 项可带 `title`，原有 QQ 群聊和私聊字段保持不变。
 - 原 `message-endpoint-history` 仍为有限上下文片段，继续拒绝 `cursor/offset`；浏览能力不改变其覆盖声明、超时、鉴权、查询池和取消责任。
 
 ## 上下文注入
@@ -1323,7 +1326,7 @@ node rabi-agent.mjs --api GET /api/agent/uploads/<UUID> --agent-type codex --id 
 - Manager 内部可信 resolver 每次请求重新核对授权、归属、完整性和 TTL，并持有 inflight lease 防止在途文件被清理；普通本地 `path` 发送仍核对文件存在、类型和可读性，不设目录白名单。
 - 渠道仍须允许发送并支持 `file`；发送者身份仍按投递合同核对。上传成功不是群发送成功，必须检查 `/api/agent/send` 的 Manager 与 NapCat 回执；发送不确定时查询原 `deliveryId` 回执。
 - NapCat 已接受群文件但随后 caption 失败时，仍保留 `status=sent`，只补发文本，不重发文件。当前 NapCat 接口读取 Manager 交给它的文件路径；异机 NapCat 必须能够通过共享目录读取该路径。本功能只解决远端 Agent 到 Manager 的上传，不解决任意跨机 NapCat 文件可读性。
-- 远端线程投递通过 Manager 持有的端点合同处理，支持 `responsePolicy: "none"`、`required`、`inReplyToRequestId` 正式回复以及远端到远端投递；来源必须来自原始认证 lease，目标必须是已启用的精确实例 Agent 会话，不接受请求正文自称的身份。旧连接、停用后重新启用、换会话或换 owner 均不能继承原授权。未支持精确 owner 执行的 Provider 失败关闭，不启动备用 Runtime。
+- 远端线程投递由 Manager 原账本处理，支持 `none`、`required`、`inReplyToRequestId` 正式回复和远端互投。接入沿用当前有效连接；来源节点及可用会话字段只记归属，变更描述或会话不构成重新授权。实际执行仍由指定目标的原 owner 处理，真实回执与原投递 ID 对应。
 
 当图片或文件已经作为计划附件存在时，可用 `payload.planAttachment` 按 ID 引用，不必先复制或重新填写本地路径：
 
@@ -1452,17 +1455,17 @@ Agent 可以主动向自己已经掌握的群号或企业微信群 chat id 发�
 
 ### 外部 Agent 的来源与稳定投递 ID
 
-`POST /api/agent/threads` 的 `action=send` 同时核对发送方和接收方。顶层 `agentAdapter/threadId` 是目标；`sourceThreadId` 和 `messageSource` 是调用方的真实来源，不能填成目标任务来补齐必填字段。
+`POST /api/agent/threads` 的 `action=send` 复用已有连接鉴权并投递到 `agentAdapter/threadId` 指定的目标。`sourceThreadId`、`messageSource` 和 `sourceAgentType` 仅记录已有会话上下文与职责，不构成来源资格或第二次许可。
 
-普通 Agent 来源至少提供 `messageSource={type:"agent",agentAdapter,sessionId,sessionName}`、`sourceThreadId`、`sourceAgentType` 和 `responsePolicy`。`sourceThreadId` 必须等于 `messageSource.sessionId`，来源 adapter 必须属于实际 owner；`plan.sourceAgent` 只有在该真实来源可核验时才成立。Owner 核对会话并提供当前名称；正文声明、显示名称和职责标签本身不证明归属。已鉴权连接有可信来源身份时，声明必须与原身份一致，不从正文中的 `remoteSource` 或 owner 字段建立认证。
+SDK 和入口复用已鉴权连接及既有来源元数据，不查询来源 owner 是否登记、归档或加载，不要求来源名称、工作目录、角色标签或重复字段相等。已有元数据用于记录及回复地址；`sourceAgentType` 缺省为 `agent`，也可保留调用方的职责描述。
 
-会话 ID是不透明字符串，必须原样保留完整值。`send` 的端点校验要求非空、无首尾空白、最多 4096 个 JavaScript 字符单元，且不含 NUL、换行或 Unicode 行分隔符；不要求特殊编码，也不从 ID格式推测 provider。来源缺失返回 HTTP 400，`error.code=AGENT_SESSION_ID_REQUIRED`、`error.field=sourceThreadId` 和具体 `repair`；目标错误对应 `threadId`。
+实际目标会话 ID 是不透明字符串，保留其完整值并按目标协议执行。来源会话信息用于记录，不据其 UUID 形状、目录、名称或当前可查询状态决定是否允许发送。
 
-`create` 与本机 `send` 对 Codex、DSH 来源仍按任务 ID 形状核对：Codex 为任务 UUID，DSH 为 `session-` 加 UUID，这类 `sourceThreadId` 最长 512 个字符。以 `grokBot:` 开头且能解码的规范会话 ID 是独立来源身份，不套用上述形状；Manager 向 Grok Bot owner 核对，owner 缺失、名称空或无法解码时失败关闭。这类 `sourceThreadId` 最长 4096 个字符，与端点 `send` 的不透明会话上限一致。`type=message_adapter` 的 `conversationId` 仍最长 300 个字符；更长的 Bot 会话必须使用 `type=agent`。
+`create`、本机、连接器、Peer 和设备 Agent 发送采用相同的来源归属语义。来源 owner 的目录读取、会话形状、归档、加载或 assignment 查询均不作为发送前置条件。目标采用其实际宿主和执行参数；原投递及回执保留原编号。
 
-`system` 是消息展示语义，不能作为公共 `send` 的免来源入口。只有 `eventType/eventName/eventId` 而没有可核验 Agent owner 的系统请求会失败；补上目标 Codex ID也不能建立来源。内部 Manager 系统事件沿用各自的受管事件合同。无来源会话的外部服务须接入自己的服务 owner，不伪造 Desktop 会话。Grok Bot 的配置、发现和传输边界见 [Grok Bot Agent 端接入](grok-bot-agent-adapter.md)。
+`system`、`message_adapter`、计划和 Agent 信息用于消息展示与归属记录。连接认证由入口负责，消息字段不增加另一层来源许可。查询原回执只需原返回的实际 `deliveryId`，无需声明原发送方或接收方：`{"action":"reconcile_delivery","deliveryId":"<original deliveryId>"}`。
 
-Bot → Codex 的来源示例如下。占位值须替换成各自 owner 确认的完整会话 ID；两者是不同端点：
+Bot → Codex 的示例如下；使用现有上下文中的来源会话信息和实际目标会话 ID，不再调用来源 owner 核对：
 
 ```json
 {
@@ -1483,7 +1486,7 @@ Bot → Codex 的来源示例如下。占位值须替换成各自 owner 确认�
 }
 ```
 
-Bot 创建 Codex 或 DSH 会话时使用同一个已核验来源。顶层 `agentAdapter` 是要创建的目标（`codex` 或 `dsh`），不是 `grokBot`。Grok Bot 自己的会话仍不能通过线程桥创建、重命名或打开。调用方复制扫描返回的完整 ID，不自行编码；提交的 `sessionName` 会被 owner 当前名称覆盖。
+Bot 创建 Codex 或 DSH 会话时沿用已有来源上下文。顶层 `agentAdapter` 指定要创建的目标；来源显示名称直接记入消息，不调用 owner 覆盖或核验。Grok Bot 会话的创建、重命名和打开由其实际服务提供。
 
 ```json
 {
@@ -1498,7 +1501,7 @@ Bot 创建 Codex 或 DSH 会话时使用同一个已核验来源。顶层 `agent
     "type": "agent",
     "agentAdapter": "grokBot",
     "sessionId": "<scan 返回的来源 Bot 完整会话 ID>",
-    "sessionName": "任意旧名称，会被 owner 名称覆盖"
+    "sessionName": "可选来源名称，仅用于归属展示"
   }
 }
 ```
@@ -1513,7 +1516,7 @@ DSH 目标把 `agentAdapter` 改为 `dsh`，来源字段保持不变。
 
 `send`、`required` 正式回复和远端到远端往返复用同一个 Manager 请求存储。目标使用 `instanceBinding={instanceId,agentId}`，并保留原始完整 `threadId`；正式回复参数由 Manager 放入目标消息，不要自行换目标或缩短会话 ID。权限按已启用的 Provider 通用校验，但执行能力单独检查；没有精确 owner 投递能力时拒绝，不创建替代 Runtime。
 
-Manager 先从原始认证 lease 解析来源和精确目标，再持久化准备结果、渲染一次信封、记录正在投递、交给目标 owner，最后核对回执并提交。完整身份包含 `managerInstanceId`、`instanceId`、`nodeId`、`agentId`、`provider`、原始会话 ID 和授权 incarnation；回执还须匹配原 `deliveryId`、generation 和 prompt hash。连接、Agent 启停、电脑凭据或实例启用代次变化后，不复用旧授权。
+Manager 记录已鉴权连接及可用来源描述，再解析实际目标、持久化准备结果、渲染信封并交给目标 owner，核对真实回执后提交。来源可以是会话端点，也可以是只有真实节点或本机 ID 的连接记录。目标执行端点仍包含其 Manager、实例、provider、会话和当前执行代次；回执匹配原 `deliveryId`、generation 与 prompt hash。连接凭据及停用由原接入边界处理，不重复用来源会话或 owner 查询做发送许可。
 
 稳定投递键和正文摘要使用 Manager、电脑实例、节点、provider 与完整会话身份；目录中的 `agentId` 别名变化不会产生一条新投递。查原调用键时同时识别既有旧键与回执，保留原 deliveryId；损坏或多义的原预约返回冲突，不能据此重新发送。
 
@@ -1619,13 +1622,13 @@ POST <managerBaseUrl>/api/agent/threads
 }
 ```
 
-所有带有非空 `prompt` 的 `create` 和 `send` 都必须提供 `messageSource`。字段 `type` 必填，消息信封可以展示四种来源；公共 Agent `send` 的 owner 核验仍按上节执行：
+消息有结构化来源时用 `messageSource.type` 选择展示格式；来源展示和记录不构成发送许可，也不要求读取来源 owner。下面列出四种展示结构：
 
 | `messageSource.type` | 必填身份 | 可选补充 |
 | --- | --- | --- |
 | `message_adapter` | `messageAdapter`、`conversationType`、`conversationId`、`messageId`，以及 `senderName` 或 `senderId` | `conversationName`、`messageGroupId`、消息路线名称/ID |
 | `agent` | `agentAdapter`、`sessionName`、完整 `sessionId` | `agentType`、`workspace` |
-| `plan` | `planName`、`planId` | 只有实际 Agent 发起且能核对时才附带 `sourceAgent` |
+| `plan` | `planName`、`planId` | 已有 `sourceAgent` 上下文（可选） |
 | `system` | `eventType`、`eventName`、`eventId` | `actorType`、`actorName`、`actorId`、消息路线名称/ID |
 
 RabiRoute 渲染后的正文固定从以下两段开始，相关上下文和回传参数只能放在它们之后：
@@ -1643,13 +1646,13 @@ RabiRoute 渲染后的正文固定从以下两段开始，相关上下文和回�
 
 新投递使用 `[回传参数]` 和完整 JSON 请求。发送前由请求记录保存结构化回复与实际正文校验值；`reconcile_delivery` 核对接收正文后从记录恢复结果，不依赖展示标题。旧格式仅用于尚未关闭的历史预留；详见[模板归属与退出条件](message-delivery-templates.md)。
 
-Agent 调用线程桥时通常使用 `type=agent`。`agentAdapter` 填实际 Agent 端，例如 `codex`、`dsh`、`copilotCli`、`marvis` 或 `astrbot`；`sessionName` 和完整 `sessionId` 都不能省略。Agent 间投递还必须提供自己的完整 `sourceThreadId`、`sourceAgentType` 和 `responsePolicy`，且 `messageSource.sessionId` 必须等于 `sourceThreadId`。`sourceAgentType` 可为 `primary_persona`、`message_processing`、`plan_secretary`、`plan_agent` 或通用的 `agent`；`responsePolicy` 只能是 `required` 或 `none`。选择 `required` 时还必须填写 `responseInstruction`，Manager 会生成 `requestId` 并把正式回复参数写进目标任务收到的内容。选择 `none` 表示本次投递不要求目标返回。
+Agent 调用线程桥时，已有会话上下文由 SDK 和入口自动记录。来源的类型、会话 ID、名称、目录和角色标签用于归属，不要求另外登记、查询 owner 或重复匹配来源字段。没有会话信息时直接记录真实节点或本机连接，不虚构 task/session。`sourceAgentType` 是可选描述标签，缺省为 `agent`。`responsePolicy` 缺省为 `none`，显式值为 `required` 或 `none`；选择 `required` 时填写 `responseInstruction`，Manager 保存原请求并提供正式回传参数。实际目标、正文和原投递 ID 由对应执行与账本合同处理。
 
-带正文的 `create` 与 `send` 使用同一来源核对规则。`type=agent` 时两者都必须提供 `sourceThreadId`；Manager 从实际 owner 读取来源会话名称并覆盖调用方提交的旧名称，包括 Codex Desktop、DSH 和 Grok Bot 服务 owner。Grok Bot 规范会话 ID 按 Bot owner 核对，不要求它符合 Codex UUID 或 DSH `session-` 形状；这类 `sourceThreadId` 最长 4096 个字符，Codex 与 DSH 来源仍最长 512。消息端来源的 `conversationId` 最长 300 个字符，超长 Bot 会话改用 `type=agent`。计划进展、审批和 QA 等 Manager 计划事件只显示计划名称和计划 ID；只有计划任务本人回传结果时才附带并核对 `sourceAgent`。
+带正文的 `create` 与 `send` 都直接使用已有连接和来源描述，不读取来源 owner 来审批发送或强制覆盖名称。Bot 的来源会话 ID 可以采用其原生形式；消息端来源仍使用其渠道字段。计划事件按计划信息展示，计划任务回传时记录已有 `sourceAgent`，不把它作为来源资格。
 
 `contextBlocks` 排在消息内容之后，`controlBlocks` 再排在上下文之后。回传参数与本次必要的发送要求放入控制块；通用协作段不再注入。两个字段都不能包含 `## 消息源`、`## 消息内容`、`[消息源]`、`[消息内容]` 或 `[投递源]`。旧 `[投递源]`、旧嵌套信封和旧 Agent 回复会自动迁移；旧重放记录无法还原来源时显示“历史投递记录”，不猜来源身份。
 
-正式回复仍使用同一个 `send` 动作。回复方必须把 `inReplyToRequestId`、`result` 和 `nextAction` 送回原请求任务，并再次填写 `responsePolicy`：如果新的下一步还要求原请求方处理后返回，使用 `required` 并填写新的 `responseInstruction`；如果本次往返到此结束，使用 `none`。回复中的 `messageSource.agentAdapter`、`messageSource.sessionId`、`sourceThreadId` 和 workspace 必须描述当前正在回复的接收会话；`inReplyToRequestId` 单独指向原请求，不能把原请求会话或回复目标写成回复来源。
+正式回复仍使用同一个 `send` 动作。回复方按原 `inReplyToRequestId` 提交 `result` 和 `nextAction`；有原任务地址时送回原任务，并按后续是否需要往返选择 `responsePolicy`：需要原请求方处理后返回时使用 `required` 并填写新的 `responseInstruction`，到此结束时使用 `none`。没有原任务地址时，仅将结果写入原 Manager 请求记录，使用 `none`；后续需要继续投递时，另行指定真实任务目标。回复方有既有会话上下文时，沿用当前回复会话的 `messageSource.agentAdapter`、完整 `messageSource.sessionId`、`sourceThreadId` 和 workspace；没有会话时记录真实连接，不虚构任务。`inReplyToRequestId` 单独指向原请求，不能把原请求会话或回复目标写成回复来源。
 
 ```json
 {
@@ -1680,29 +1683,13 @@ Desktop 偶尔会在消息已经写入目标任务后才返回启动或追加轮
 
 #### 核对原投递回执：`reconcile_delivery`
 
-当前 Manager 的公共线程桥使用统一端点恢复协议。调用 `POST /api/agent/threads`，保留原 `deliveryId`，并提供**当前调用会话的真实来源身份**。下面是本机 Codex 原端点发起核对的完整示例；先将示例会话 ID、名称及工作目录替换为实际值，将 `deliveryId` 替换为待核对的原投递 ID，不是请求 `requestId`：
+任何已接入并鉴权的 Agent 都可以查询原投递，无需切回原来源或接收会话。调用 `POST /api/agent/threads`：
 
 ```json
-{
-  "action": "reconcile_delivery",
-  "deliveryId": "019f0000-0000-7000-8000-000000000003",
-  "sourceThreadId": "019f0000-0000-7000-8000-000000000001",
-  "sourceAgentType": "agent",
-  "messageSource": {
-    "type": "agent",
-    "agentAdapter": "codex",
-    "sessionId": "019f0000-0000-7000-8000-000000000001",
-    "sessionName": "原投递端点会话",
-    "workspace": "C:\\Path\\To\\Your\\Project"
-  }
-}
+{"action":"reconcile_delivery","deliveryId":"<原返回的实际 deliveryId>"}
 ```
 
-- `sourceThreadId` 是**当前执行核对的完整会话 ID**，必须与 `messageSource.sessionId` 相同；`sourceAgentType` 沿用该端点原投递时的 Agent 类型。来源可以是原投递的发送端或接收端，但不是任意维护会话。正式回复方向与原请求相反：回复的接收端是原请求的来源，不能据此把回复目标填写成当前调用来源。
-- `messageSource.agentAdapter` 描述真实来源处理端，DSH 填 `dsh` 而不是 `codex`；名称和工作目录由真实 owner 核对，不授予权限。远端调用复用原已鉴权连接及端点绑定，不通过正文声明新授权。
-- 本分支先按 `deliveryId` 查持久投递记录，再核对当前来源。**不调用 `resolveTarget`**：目标、端点代际、正文 hash 和执行选项 hash 来自原记录；顶层 `threadId`、`agentAdapter`、`agentTargetId`、`instanceBinding` 不用于改选恢复目标，不能当作新请求的目标参数。无需 `prompt`、`result`、`nextAction`、`inReplyToRequestId` 或 `responsePolicy`，也不接受它们替换已留存的回复结果。
-- 已确认及重复核对均返回 HTTP `200`，响应 JSON 顶层为 `code=0`、`action="send"`、`ok=true`、`status="delivered"`、`delivery.status="accepted"`；顶层 `threadId` 是原投递目标，没有额外的 `data` 信封。尚无有效回执返回 HTTP `202`、`code=-1`、`status="delivery_unconfirmed"`、`delivery.status="unconfirmed"`、`delivery.retryable=false`。这些字段证明投递或回执状态，不证明业务工作完成。恢复正式回复后原请求才为 `responded`；若原投递同时要求后续回复，后续请求仅为 `awaiting_response`，应分别 GET 原请求核对。
-- 此动作只核对原 owner 留存回执／实际接收证据，不执行正文投递；原证据缺失、来源不匹配、绑定撤销、正文或代际不符时失败关闭，不重放、不重建、不换 `deliveryId`。普通工具输出、助手引用或孤立 ID 不能作为接收证据。
+系统从原持久记录取得目标、正文、执行参数及回执；不读取当前调用者的来源 owner，也不接受参数改选原目标。已有真实接收证据时返回 HTTP 200、`status=delivered`、`delivery.status=accepted`；尚无证据时返回 HTTP 202、`status=delivery_unconfirmed`。核对只读原执行证据，不重发正文、不创建另一条投递。
 
 **旧 reservation 兼容边界**：未装配 `endpointDelivery` 的旧本机 handler／历史恢复辅助入口仍按接收任务 `threadId` 读取回复 rollout，成功为 `receipt_recovered`、重复为 `already_recorded`；读取限定于开始时的文件长度与 30 秒期限。该状态不是当前公共统一端点分支的返回值，旧三字段例子不再作为公共调用示例。旧回复正文解析仅服务没有 `pendingResponseEvidence` 的既有预留；具有结构化证据的新记录不得失败后降级解析。含端点身份的记录经旧恢复辅助函数返回 `endpoint_receipt_required`，不能借旧分支绕过端点校验；当前公共分支也不因找不到端点投递记录而自动转旧恢复。旧预留只能按对应原版本的正式恢复入口核验证据或走正常取消，不直接改存储、不重发正文；全部受影响旧预留闭合并通过兼容回归后方可删除旧解析，见[历史兼容与退出条件](message-delivery-templates.md#历史兼容与退出条件)。
 
@@ -1710,13 +1697,13 @@ Desktop 偶尔会在消息已经写入目标任务后才返回启动或追加轮
 
 提醒触发前也执行上述核对。证据仍不完整时保留 reservation、写入 `lastReminderError` 并停止本次“未回复”提醒，不无限重试或要求重发；下一次任务结束或显式核对可重新检查。读取超时、身份/合同不符及旧版本已删除的 `404` 请求均不凭猜测重建，必须保留正式回传未记录的差异。
 
-Agent 间 `create` 与 `send` 投递时，Manager 按 `messageSource.agentAdapter + sourceThreadId` 向实际 owner 核对来源会话。Codex 读取 Desktop 任务状态和左侧聊天栏名称；DSH 通过 apiproxy `session.list` 读取会话名称、工作目录和运行状态。Grok Bot 来源先确认规范 `grokBot:` 会话 ID，再读取 Bot owner 名称；无法解码、owner 缺失或声明的 adapter 不是 `grokBot` 时失败关闭，不退回 Codex/DSH 形状检查放行。来源不存在、工作目录冲突或来源 ID 与 `messageSource.sessionId` 不一致时失败关闭。所有 RabiRoute 非空投递都先显示 `## 消息源`，再显示 `## 消息内容`。消息端来源显示消息端、会话、发送者和消息 ID；Agent 来源显示 Agent 端、会话名称和完整会话 ID；计划来源显示计划名称和计划 ID；系统来源显示事件类型、名称和 ID。提醒、初始化消息、RabiLink 复盘和重放也使用同一信封。
+Agent 间 `create` 与 `send` 直接复用当前连接。来源元数据只作消息展示、记录与回传定位；来源查询失败、归档、未加载、未登记、角色变化及旧双方身份不会产生发送或原回执查询许可。存在结构化来源时，信封展示 `## 消息源` 和 `## 消息内容`；已有平台和计划来源沿用各自显示字段。
 
 安全边界：
 
 - Codex / DSH 的 `create` / `send` 使用当前 RabiRoute 已配置的工作区，不能在任意路径启动会话。Grok Bot 服务会话不要求本地文件目录；不为它伪造 `cwd` 或启动本地 Runtime。
-- 所有带有非空 `prompt` 的 `create` / `send` 都必须提供完整 `messageSource`。`type=agent` 时，`agentAdapter`、`sessionName` 和完整 `sessionId` 都必填；Agent 互投还必须提供可核对的 `sourceThreadId`，并保证它与 `messageSource.sessionId` 相同。`sourceAgentType` 只声明发送方当前职责，任务名以对应 owner 查询结果为准。
-- Agent 互投允许正文引用 `[rabi:bind]`、消息源标题、消息处理 Agent 或计划秘书初始化等文字，不因匹配字符串拒绝整个请求。真实来源仍由结构化消息信封和 owner 核对，正文标题按原有渲染规则转义。来源与目标为同一任务仍按自投递错误处理；消息处理 Agent 的任务 ID如果与主角色 ID相同，消息池会拒绝初始化和投递。
+- SDK 和入口从既有上下文附带来源元数据；缺少来源目录、名称或职责标签不会要求人工核对身份。直接按目标和正文执行，结果记录原投递 ID 与真实回执。
+- Agent 互投允许正文引用 `[rabi:bind]`、消息源标题、消息处理 Agent 或计划秘书初始化等文字，沿已有渲染规则展示。来源与目标为同一任务也可正常发送，不另设自投递限制。
 - `sandbox` 字段仅为接口兼容参数，不能覆盖目标 Desktop 任务的模型、工具、沙箱或审批；这些能力以 Desktop owner 为唯一真源。
 - 创建线程使用固定的调查边界；没有明确实施授权时，只能调查、整理证据和输出方案。
 - `create` 的固定开发说明和所有 `send` 续投都会追加工作区交付约束；未经当前用户明确授权，不得新建额外工作副本、稀疏检出、复制工程或旁路目录；工作区 `AGENTS.md` 有更严格限制时以它为准。具体项目允许的工作副本、同步方向及历史指令的有效性由该工作区当前规则决定。只有改动已经进入用户实际运行或验收的目标工作区，并完成适用的资源关联、构建或编译及运行验证，才能称为“已修复”或“可验收”。
@@ -1725,7 +1712,7 @@ Agent 间 `create` 与 `send` 投递时，Manager 按 `messageSource.agentAdapte
 - `create` 返回 `initialTurnStatus`。若任务已经创建但初始 turn 启动失败，应记录返回的 `threadId` 并用 `send` 重试，不能重复创建同名任务。
 - 创建调用超时后，先用 `action=list + lookupMode=state_db + 原任务名` 从本地任务索引回读。这个模式不启动 app-server 元数据扫描，适合判断慢创建是否稍后产生了任务；完整任务列表仍使用默认 `lookupMode=complete`。
 - Agent 正式回复按双方任务 ID 校验来源与目标，不再因为工作目录不同而拒绝；工作目录只作为身份信息随请求记录。Windows 普通盘符路径、`\\?\` 扩展盘符路径、UNC 与扩展 UNC 的等价形式仍使用统一的路径规范化规则比较，避免同一个目录因为字符串写法不同而被判成两个工作区。该校验不参与 Codex 任务身份判定。
-- 当前 Route 开启“强制使用 RabiAgent 消息投递接口”后，Codex Hook 会拒绝绕过 Rabi 的持久任务工具；DSH `RabiRoute Agent` 插件会拒绝 Shell 直接调用 `/api/agent/threads`、`/api/agent/send` 或 `session.prompt`。两端都必须使用线程桥并填写 `sourceThreadId`、`sourceAgentType` 和 `responsePolicy`。临时子 Agent 的本地协作不属于这项限制；关闭开关只停止绕过检查，已有待回复请求仍继续检查和提醒。
+- 当前 Route 开启“强制使用 RabiAgent 消息投递接口”后，Codex Hook 会拒绝绕过 Rabi 的持久任务工具；DSH `RabiRoute Agent` 插件会拒绝 Shell 直接调用 `/api/agent/threads`、`/api/agent/send` 或 `session.prompt`。两端使用线程桥，已有会话时沿用 `sourceThreadId` 与来源标签；没有会话时由入口记录真实连接，不为使用线程桥注册或虚构来源任务。临时子 Agent 的本地协作不属于这项限制；关闭开关只停止绕过检查，已有待回复请求仍继续检查和提醒。
 - Manager 线程桥最终投给目标会话的同一个 owner：Codex 使用 Desktop IPC，DSH 使用该会话的 apiproxy owner。两者都不启动或改投备用 Runtime。
 - Codex Desktop 未启动、IPC 不可用或目标任务无法加载时返回失败；DSH Endpoint 不可用、会话不存在或工作目录冲突时也返回失败。两端都不得转给另一 Agent adapter 或备用 Runtime。
 
@@ -2344,7 +2331,7 @@ Manager 与目标连接器都需要对应实现。旧连接器缺少调用者创
 
 ### Agent Hook 消息来源
 
-自动Hook发起的Agent投递使用 `messageSource.type="agent_hook"`，统一显示为 `AgentHook`；普通Agent主动投递仍用 `agent`。两者共享真实来源处理端、完整会话ID与工作目录核验；`sourceAgentType`仍是原会话职责，不能填AgentHook代替角色。新类型经本机、已鉴权远端、端点持久投递和消息历史保留，不允许用它绕过来源或目标校验。旧记录继续按原类型展示，不追写历史。
+自动 Hook 发起的 Agent 投递使用 `messageSource.type="agent_hook"`，显示为 `AgentHook`；普通 Agent 投递沿用 `agent`。两者均复用已有来源上下文，仅记录归属；`sourceAgentType` 保留已有描述标签。来源名称、目录、类型或加载状态不增加发送许可，本机、连接器和 Peer 使用相同语义，原投递与实际回执保持原编号。
 
 
 ### 查无原计划或会话时的只读恢复提示
@@ -2354,3 +2341,7 @@ Manager 与目标连接器都需要对应实现。旧连接器缺少调用者创
 确定 `resolution=missing` 的线程 404 返回只读提示：在原实例与 Agent 绑定内 `POST /api/agent/threads`，使用 `action:list`、原 `agentAdapter`、`query`、`limit:20`、`offset:0` 按名称查询。`query` 留空列出可发现会话，核对返回的 `updatedAt` 判断最近活动，沿 `nextOffset` 翻页；不保证每个 Adapter 的天然排序一致。核对完整 `threadId`、名称和工作目录后读取原任务。原 `deliveryId/actual` 保留，不自动创建替代任务或重发未确认消息。
 
 此提示仅附加于确定的查无分支，不把线程读取的既有 400、管理超时、连接故障或未知回执改称 404，也不保证名称搜索能够修复底层存储或索引问题。
+
+### 无来源会话的正式回传
+
+已连接来源没有原生任务时，目标仍使用 `POST /api/agent/threads`，提交 `action: "send"`、原 `inReplyToRequestId`、`result`、`nextAction` 和 `responsePolicy: "none"`。入口记录实际回复来源，将结果原子写入原 Manager 请求记录，成功状态为 `response_recorded`；此操作不发送原生任务正文，也不生成任务地址。可用 `GET /api/agent/requests/:requestId` 读取原结果。跨主机沿回传参数中的 `ledgerOwnerDeviceId` 回到原 Manager。需要再发任务时指定真实目标另行发送。

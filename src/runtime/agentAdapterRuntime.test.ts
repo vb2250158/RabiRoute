@@ -3,7 +3,6 @@ import test from "node:test";
 import type { AgentAdapterDefinition } from "../agentAdapters/contracts.js";
 import {
   agentAdapterManifest,
-  listAgentAdapterManifests,
   type AgentAdapterType
 } from "../shared/agentAdapterCapabilities.js";
 import { createAgentAdapterRuntime } from "./agentAdapterRuntime.js";
@@ -44,10 +43,10 @@ test("duplicate Agent Adapter types fail registration", async () => {
   );
 });
 
-test("builtin runtime definitions match the shared manifest catalogue", async () => {
+test("the generic runtime contains no platform factories before native publication", async () => {
   const runtime = await createAgentAdapterRuntime();
   try {
-    assert.deepEqual(runtime.registry.listManifests(), listAgentAdapterManifests());
+    assert.deepEqual(runtime.registry.listManifests(), []);
   } finally {
     await runtime.dispose();
   }

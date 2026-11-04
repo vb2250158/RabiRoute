@@ -6,7 +6,7 @@ import type { AgentRequestParty } from "../agentRequests/store.js";
 import { sameAgentEndpoint, type AgentRequestEndpoint } from "../agentRequests/endpoint.js";
 import type { PreparedEndpointDelivery, EndpointDeliveryReceipt } from "../agentRequests/endpointDelivery.js";
 import { completeAgentSessionId, normalizeAgentThreadSourceType } from "../agentRequests/requestValidation.js";
-import { agentIdentityForMessageSource, normalizeRabiMessageSource } from "../shared/rabiMessage.js";
+import { agentIdentityForMessageSource } from "../shared/rabiMessage.js";
 import { normalizeEndpointExecutionOptions } from "../agentRequests/executionOptions.js";
 import type { AgentServiceEndpointBridge, AgentServiceSourcePrincipal } from "./agentEndpointDelivery.js";
 
@@ -101,17 +101,26 @@ export function createGrokBotEndpointBridge(options: { managerInstanceId: string
     agentType, threadId: owner.id, threadName: owner.bot.name });
   return {
     owns, authorize, refresh,
+    handlesSource: request => {
+      const identity = request.messageSource ? agentIdentityForMessageSource(request.messageSource) : undefined;
+      return identity?.agentAdapter === "grokBot";
+    },
+    handlesTarget: request => request.agentAdapter === "grokBot" && (!request.instanceBinding || request.instanceBinding.instanceId === options.managerInstanceId),
     resolveSource: async (request: AgentThreadRequest, principal?: AgentServiceSourcePrincipal) => {
-      const identity = request.messageSource ? agentIdentityForMessageSource(normalizeRabiMessageSource(request.messageSource)) : undefined;
-      if (identity?.agentAdapter !== "grokBot") return undefined;
-      const id = completeAgentSessionId(request.sourceThreadId, "sourceThreadId");
-      if (identity.sessionId !== id) throw new GrokBotError("GROK_BOT_SESSION_OWNER_MISMATCH");
-      const owner = await readOwner(id);
-      if (principal && (principal.provider !== "grokBot" || principal.agentId !== owner.agentId || principal.sessionId !== owner.id
-        || principal.authorizationIncarnation !== owner.authorizationIncarnation)) {
-        throw new GrokBotError("GROK_BOT_SESSION_OWNER_MISMATCH");
+      const identity = principal?.provider === "grokBot" ? undefined
+        : request.messageSource ? agentIdentityForMessageSource(request.messageSource) : undefined;
+      if (principal?.provider !== "grokBot" && identity?.agentAdapter !== "grokBot") return undefined;
+      const id = principal?.sessionId || identity?.sessionId || request.sourceThreadId!;
+      let agentId = principal?.agentId || id;
+      // Canonical ids retain their existing attribution key; opaque source labels
+      // remain labels and never require a native owner lookup.
+      if (!principal) {
+        try { agentId = decodeGrokBotSessionId(id).agentId; } catch { }
       }
-      return partyFor(owner, normalizeAgentThreadSourceType(request.sourceAgentType, true));
+      return { endpoint: { kind: "service", provider: "grokBot", managerInstanceId: options.managerInstanceId,
+        agentId, sessionId: id, authorizationIncarnation: principal?.authorizationIncarnation || hash([options.managerInstanceId, "grokBot-source", agentId, id]) },
+        agentAdapter: "grokBot", agentType: normalizeAgentThreadSourceType(request.sourceAgentType), threadId: id,
+        threadName: identity?.sessionName || id, workspace: identity?.workspace };
     },
     resolveTarget: async request => {
       if (request.agentAdapter !== "grokBot") return undefined;

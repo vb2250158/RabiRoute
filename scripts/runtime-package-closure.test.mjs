@@ -122,7 +122,9 @@ test('staged repo-layout Relay imports its shared contract and actually serves h
       await fs.mkdir(path.dirname(destination), { recursive: true });
       await fs.copyFile(path.join(root, relative), destination);
     }
-    await fs.cp(path.join(root, 'node_modules/ws'), path.join(directory, 'node_modules/ws'), { recursive: true });
+    await fs.mkdir(path.join(directory, 'node_modules'), { recursive: true });
+    await fs.symlink(await fs.realpath(path.join(root, 'node_modules/ws')), path.join(directory, 'node_modules/ws'),
+      process.platform === 'win32' ? 'junction' : 'dir');
     const listener = net.createServer(); listener.listen(0, '127.0.0.1'); await once(listener, 'listening');
     const port = listener.address().port; await new Promise(resolve => listener.close(resolve));
     let output = '';
