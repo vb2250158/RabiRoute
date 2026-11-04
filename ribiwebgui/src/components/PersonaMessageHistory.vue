@@ -12,7 +12,7 @@ import MessageEndpointHistory from './MessageEndpointHistory.vue';
 import PersonaChatHistory from './PersonaChatHistory.vue';
 import NapcatConversationHistory from './NapcatConversationHistory.vue';
 
-const props = defineProps<{ roleId: string; version: number }>();
+const props = defineProps<{ roleId: string; version: number; messageVersion?:number }>();
 const { fetch } = usePersonaService(), { t } = useI18n();
 const catalog = ref<MessageHistoryChannelCatalog>({ adapters: [], chatCategories: [] });
 const channels = computed(() => historyChannels(catalog.value,messageEndpointCatalog(pluginCatalogStore.settingsRenderers.value)));
@@ -69,7 +69,7 @@ onBeforeUnmount(() => { request?.abort(); layout?.abort(); });
     <template v-for="channel in channels" :key="channel.id">
       <div v-if="visited.has(channel.id)" v-show="selected === channel.id" :data-history-channel="channel.id" role="tabpanel" :aria-label="t(channel.label)">
         <PersonaChatHistory v-if="channel.category" :role-id="roleId" :version="version" :active="selected===channel.id" :category="channel.category" />
-        <NapcatConversationHistory v-else-if="channel.adapter==='napcat'" :role-id="roleId" :version="version" :active="selected===channel.id" :routes="catalog.qqRoutes??[]" />
+        <NapcatConversationHistory v-else-if="channel.adapter==='napcat'" :role-id="roleId" :version="version" :active="selected===channel.id" :routes="catalog.qqRoutes??[]" :message-version="messageVersion" />
         <MessageEndpointHistory v-else-if="channel.adapter" :role-id="roleId" :adapter="channel.adapter" :title="channel.label" :version="version" :active="selected === channel.id" />
       </div>
     </template>

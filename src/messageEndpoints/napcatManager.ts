@@ -1328,9 +1328,11 @@ async function readNapcatWebuiLoginInfo(
       )
     : quickAccounts.find((item) => item?.uin && item.isUserLogin === true)
       || quickAccounts.find((item) => item?.uin && item.isQuickLogin === true);
-  // A saved identity cannot override a current, successfully read security/QR stop.
-  const qrRequired = /二维码.*过期|扫码|重新登录|登录态.*失效/i.test(loginError);
-  if (quickResp.ok && quickBody.code === 0 && loggedInQuick?.uin && !qrRequired && !loginError) {
+  // An expired display QR does not invalidate an independently confirmed quick-login identity.
+  // Security challenges and actual login failures still require the existing user flow.
+  const expiredDisplayQr=/^二维码.*(?:已过期|过期了|已失效)[，,。\s]*(?:请刷新|请刷新二维码)?[。.!！\s]*$/.test(loginError.trim());
+  const qrRequired = !expiredDisplayQr && /二维码.*过期|扫码|重新登录|登录态.*失效/i.test(loginError);
+  if (quickResp.ok && quickBody.code === 0 && loggedInQuick?.uin && !qrRequired && (!loginError||expiredDisplayQr)) {
     return {
       userId: loggedInQuick.uin,
       nickname: loggedInQuick.nickName,
@@ -1339,7 +1341,7 @@ async function readNapcatWebuiLoginInfo(
       status: NapcatState.QuickLoginAvailable
     };
   }
-  if (qrRequired) {
+  if (qrRequired||expiredDisplayQr) {
     return {
       online: false,
       source: "webui",

@@ -408,7 +408,8 @@ export function searchMessageHistoryIndexResult(directory: string, query: Recent
         if(!record || record.adapter!=='napcat' || record.conversationKey!==key || typeof record.text!=='string' || !Number.isFinite(record.time))throw new Error('MESSAGE_HISTORY_INDEX_INTEGRITY: invalid_conversation');
         const match = key.match(/:(group|private):([1-9]\d*)$/);
         conversations.push({conversationKey:key,gatewayId:record.gatewayId,instanceId:record.instanceId,
-          kind:match ? match[1] as 'group'|'private' : 'unknown',target:match?.[2] ?? record.target ?? key,time:record.time,preview:record.text.slice(0,120)});
+          kind:match ? match[1] as 'group'|'private' : 'unknown',target:match?.[2] ?? record.target ?? key,time:record.time,
+          preview:qqPartsPreview(record.qqParts??qqMessageParts(record.text)).slice(0,120),previewFormat:'plain'});
       }
     }
     const finish = (entries: MessageContextRecord[]): MessageHistorySearchResult => ({ entries,
@@ -535,3 +536,4 @@ export function probeMessageHistoryIndex(directory: string, query: RecentMessage
     throw error;
   }
 }
+import { qqMessageParts, qqPartsPreview } from './shared/qqMessageParts.js';

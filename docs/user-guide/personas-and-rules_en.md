@@ -18,7 +18,11 @@ The QQ tab combines groups and private chats in one conversation list, ordered b
 
 Conversation rows, message bubbles and group members display QQ avatars, with initials or icons when an image or sender identity is unavailable. Outgoing messages use the account reported by the selected QQ connection.
 
-Mentions, quotes, emoji and forwarded messages show readable labels instead of raw CQ codes. Select an image, voice message, video or file to retrieve its attachment using the original account, conversation and message, then preview or download it. Historical conversations without a confirmed current connection or original message ID retain attachment labels. A failed attachment leaves other messages usable; select it again to retry. Quote and forwarded-message labels do not imply their full contents have been retrieved.
+Mentions, quotes, emoji and forwarded messages show readable content or labels. Available images load thumbnails as they enter view; select one to enlarge or download it. Voice messages, videos and files support preview or download. Quote cards show the original message summary and open the full message when selected. Reads use the original account, conversation and message. An unavailable connection or missing message ID leaves a placeholder; failed reads can be retried. Forwarded messages retain their label.
+
+If contacts or members cannot be updated, the current account retains loaded names, avatars and member snapshots. A compact notice offers Details and a retry button. Switching accounts reads information for the newly selected account.
+
+New messages incrementally update the current conversation and its list entry. Reading at the bottom follows new messages; reading earlier messages preserves the current position. Select Back to latest messages to return to the latest page.
 
 Open Message history in the sidebar. System messages, Agent deliveries, role-panel messages and task replies remain available. Each additional endpoint tab represents one message endpoint added to the selected role, using the same name and icon as its configuration card, with original capitalization. There is no All tab or tab for an endpoint that has not been added. Removing NapCat hides its tab; adding it again restores access to retained records. Plugin endpoints use their plugin metadata.
 

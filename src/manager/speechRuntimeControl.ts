@@ -229,6 +229,8 @@ export class SpeechRuntimeControl {
   releaseOwnedRuntime(): Promise<void> {
     return this.runExclusive(async () => {
       if (this.platform !== "win32") return;
+      // A scope that acquired no runtime owns no current external port to inspect or stop.
+      if (!this.launchChild && !this.launchServiceUrl) return;
       // A launch keeps its original address even if the user subsequently edits the service URL.
       const serviceUrl = this.launchServiceUrl ?? normalizeLocalSpeechServiceUrl(this.options.serviceUrl());
       const parsed = new URL(serviceUrl);

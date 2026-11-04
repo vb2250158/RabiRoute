@@ -14,6 +14,7 @@ import { createFullPluginExecutor } from "./executor.js";
 import { declareAsyncPluginService } from "./asyncServiceTransport.js";
 import { AsyncPluginOutcomeArchive, outcomeKey } from "./asyncOutcomeArchive.js";
 import { ApiContractError } from "../manager/apiOperationContract.js";
+import { BridgedIsolatedPluginExecutor } from "./bridge/executor.mjs";
 
 type Package = Readonly<{ id: string; source: string; requires?: readonly string[]; provides: readonly string[]; asyncProvides?: Readonly<Record<string, readonly string[]>> }>;
 async function fixture(t: TestContext, packages: readonly Package[], hostServices: readonly HostService[] = [], archiveOptions: ConstructorParameters<typeof AsyncPluginOutcomeArchive>[1] = {}, shutdownTimeoutMs = DEFAULT_PLUGIN_SHUTDOWN_TIMEOUT_MS, activationTimeoutMs = 1000) {
@@ -83,6 +84,55 @@ test("real factory and normal PackageCatalog wire two async providers and origin
 });
 
 const fixedRequestSource = (capability: string): string => `import crypto from 'node:crypto';import {syncBuiltinESMExports} from 'node:module';crypto.randomUUID=()=> 'fixture.shared-request';syncBuiltinESMExports();export async function activate(c){try{await c.services.require('host.fixture@1').run();}catch(e){c.services.provide(${JSON.stringify(capability)},{operationId:e.operationId,effectOutcome:e.effectOutcome});}}`;
+
+test("actual factory shutdown joins the same delayed ping without releasing or replaying its response", { timeout: 60000 }, async t => {
+  const f = await fixture(t, [{ id: "org.example.ping-retirement", provides: ["fixture.ping-retirement@1"], asyncProvides: {},
+    source: "export function activate(c){c.services.provide('fixture.ping-retirement@1',{pid:process.pid});}" }], [], {}, 5000, 15000);
+  const result = await f.runtime.switch(f.loaded.candidates);
+  assert.equal(result.generation.records[0].status, "active", JSON.stringify(result.generation.records));
+  const pid = (result.generation.services.services.get("fixture.ping-retirement@1")!.value as { pid: number }).pid;
+  const observed = f.observedChildren.find(row => row.child.pid === pid); assert.ok(observed);
+  const child = observed.child, send = child.send.bind(child), emit = child.emit.bind(child);
+  const commands: Array<{ command: string; requestId: string }> = [];
+  let held = false, probeSettled = false, originalFlight: Promise<void> | undefined;
+  const probe = BridgedIsolatedPluginExecutor.prototype.probe;
+  BridgedIsolatedPluginExecutor.prototype.probe = function(identity) {
+    const original = probe.call(this, identity); originalFlight = original;
+    void original.then(() => { probeSettled = true; }, () => { probeSettled = true; });
+    return original;
+  };
+  child.send = ((message: unknown, ...args: unknown[]) => {
+    const value = message as { type?: string; command?: string; requestId?: string };
+    if (value.type === "command") commands.push({ command: String(value.command), requestId: String(value.requestId) });
+    return Reflect.apply(send, child, [message, ...args]);
+  }) as ChildProcess["send"];
+  child.emit = ((event: string | symbol, ...args: unknown[]) => {
+    const value = args[0] as { type?: string; requestId?: string } | undefined;
+    if (event === "message" && value?.type === "result" && commands.some(row => row.command === "ping" && row.requestId === value.requestId)) {
+      held = true; return true; // Never release this original result, including during shutdown.
+    }
+    return Reflect.apply(emit, child, [event, ...args]);
+  }) as ChildProcess["emit"];
+  try {
+    const deadline = Date.now() + 20000;
+    while (!held || !f.asyncObservation()?.probe) {
+      assert.ok(Date.now() < deadline, "The original production five-second ping deadline must be observed.");
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+    assert.equal(probeSettled, false); assert.ok(originalFlight);
+    assert.equal(f.asyncObservation()!.probe!.requestId, commands.find(row => row.command === "ping")!.requestId);
+    await f.runtime.shutdown();
+    await Promise.allSettled([originalFlight]);
+    assert.equal(probeSettled, true, "Actual original-child close settles the same pending probe.");
+    assert.equal(observed.closeObserved, true); assert.equal(f.leases.list().length, 0);
+    assert.equal(commands.filter(row => row.command === "ping").length, 1);
+    assert.equal(commands.filter(row => row.command === "invoke").length, 0);
+    assert.equal(f.lifecycleFailures.length, 0);
+  } finally {
+    child.send = send; child.emit = emit;
+    BridgedIsolatedPluginExecutor.prototype.probe = probe;
+  }
+});
 
 test("real factory admits seventy concurrent reads and writes without a hidden default outcome quota", { timeout: 60000 }, async t => {
   let releaseRead!: () => void, releaseWrite!: () => void, reads = 0, writes = 0;

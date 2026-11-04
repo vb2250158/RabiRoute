@@ -152,7 +152,9 @@ async function readQqMessageResult(request: http.IncomingMessage, url: URL,
       }
       const login=results[2],userId=login?.status==='fulfilled'?String(login.value.user_id??''):'';
       const account=QQ_TARGET_ID_PATTERN.test(userId)?{userId,name:String(login?.status==='fulfilled'?login.value.nickname??userId:userId)}:undefined;
+      if(!account)warnings.push('QQ_LOGIN_INFO_UNAVAILABLE');
       const recent=results[3];
+      if(recent?.status!=='fulfilled')warnings.push('QQ_RECENT_CONTACT_UNAVAILABLE');
       if(recent?.status==='fulfilled'&&Array.isArray(recent.value))for(const value of recent.value) {
         if(!value||typeof value!=='object')continue;
         const row=value as Record<string,unknown>,kind=Number(row.chatType)===2?'group':Number(row.chatType)===1?'private':undefined;

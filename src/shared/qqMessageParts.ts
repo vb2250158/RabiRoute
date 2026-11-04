@@ -1,5 +1,19 @@
 export type QqMessagePart = {kind:'text';text:string}|{kind:'mention';target:string}|{kind:'reply';id:string}|{kind:'media';mediaKind:string;index:number;name:string}|{kind:'label';text:string};
-export const QQ_MESSAGE_LABELS:Record<string,string>={image:'图片',video:'视频',record:'语音',file:'文件',face:'表情',forward:'合并转发',json:'卡片消息',xml:'卡片消息',poke:'戳一戳',shake:'窗口抖动'};
+export const QQ_MESSAGE_LABELS:Record<string,string>={image:'图片',video:'视频',record:'语音',audio:'语音',file:'文件',face:'表情',forward:'合并转发',json:'卡片消息',xml:'卡片消息',poke:'戳一戳',shake:'窗口抖动'};
+/** A persisted display projection contains no provider URL, path or executable segment. */
+export function storedQqParts(value:unknown):QqMessagePart[]|undefined {
+  if(!Array.isArray(value))return;
+  return value.flatMap((part):QqMessagePart[]=>{
+    if(!part||typeof part!=='object')return [];
+    const p=part as Record<string,unknown>;
+    if(p.kind==='text'&&typeof p.text==='string')return [{kind:'text',text:p.text}];
+    if(p.kind==='mention'&&typeof p.target==='string')return [{kind:'mention',target:p.target}];
+    if(p.kind==='reply'&&typeof p.id==='string')return [{kind:'reply',id:p.id}];
+    if(p.kind==='label'&&typeof p.text==='string')return [{kind:'label',text:p.text}];
+    if(p.kind==='media'&&['image','video','record','audio','file'].includes(String(p.mediaKind))&&Number.isSafeInteger(p.index)&&Number(p.index)>=0)return [{kind:'media',mediaKind:String(p.mediaKind),index:Number(p.index),name:typeof p.name==='string'?p.name:QQ_MESSAGE_LABELS[String(p.mediaKind)]??'附件'}];
+    return [];
+  });
+}
 const decode=(value:string)=>value.replace(/&#91;/g,'[').replace(/&#93;/g,']').replace(/&#44;/g,',').replace(/&amp;/g,'&');
 /** Parse CQ structure before decoding entities; never turn escaped text into a command or URL. */
 export function qqMessageParts(text:string):QqMessagePart[] {

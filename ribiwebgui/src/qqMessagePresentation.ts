@@ -1,8 +1,10 @@
 import {qqMessageParts,qqPartsPreview,type QqMessagePart} from '../../src/shared/qqMessageParts';
 export {qqMessageParts} from '../../src/shared/qqMessageParts';
+export {qqPartsPreview} from '../../src/shared/qqMessageParts';
 export type {QqMessagePart} from '../../src/shared/qqMessageParts';
 import type { MessageContextRecord } from '../../src/messageContextStore';
 import type { QqConversation } from '../../src/shared/qqConversationHistory';
+import type { MessageContextAttachment } from '../../src/messageContextStore';
 export type QqSelection = { routeId:string; kind:'group'|'private'; target:string };
 export const qqConversationIdentity=(row:QqConversation)=>row.kind==='unknown'?row.conversationKey:JSON.stringify([row.gatewayId,row.instanceId??'',row.kind,row.target]);
 export function mergeQqConversations(preferred:QqConversation[],additional:QqConversation[]):QqConversation[] {
@@ -12,16 +14,37 @@ export function mergeQqConversations(preferred:QqConversation[],additional:QqCon
     if(index===undefined){indices.set(identity,rows.length);rows.push(row);continue;}
     const first=rows[index]!;
     const stored=first.conversationKey.startsWith('qq-live:')?(row.storedConversationKey||(!row.conversationKey.startsWith('qq-live:')?row.conversationKey:undefined)):undefined;
-    if(stored||row.time>first.time)rows[index]={...first,...(stored?{storedConversationKey:stored}:{}),...(row.time>first.time?{time:row.time,preview:row.preview}:{})};
+    if(stored||row.time>first.time)rows[index]={...first,...(stored?{storedConversationKey:stored}:{}),...(row.time>first.time?{time:row.time,preview:row.preview,previewFormat:row.previewFormat}:{})};
   }
   return rows;
 }
 export type QqHistoryMessage={messageId:string;time?:number;sender:string;senderName?:string;text:string;attachments?:{kind:string;name:string}[];parts?:QqMessagePart[]};
 export type QqHistoryRecord=MessageContextRecord&{qqSenderName?:string;qqParts?:QqMessagePart[]};
+export function mergeQqHistoryWindow(current:QqHistoryRecord[],page:QqHistoryRecord[],atBottom:boolean):{entries:QqHistoryRecord[];newerAvailable:boolean} {
+  const known=new Set(current.map(row=>row.id));
+  if(current.length&&page.length&&!page.some(row=>known.has(row.id)))return {entries:current,newerAvailable:true};
+  const merged=[...new Map([...current,...page].map(row=>[row.id,row])).values()].sort((a,b)=>a.time-b.time);
+  const entries=atBottom?merged.slice(-200):merged.slice(0,200);
+  return {entries,newerAvailable:!atBottom&&(entries.length<merged.length||page.some(row=>!known.has(row.id)))};
+}
+/** Historical ledgers once classified text/@/reply segments as attachments. */
+export function qqDisplayParts(text:string,structured:QqMessagePart[]|undefined,attachments:MessageContextAttachment[]=[]):QqMessagePart[] {
+  if(structured!==undefined)return structured.slice();
+  const parts=qqMessageParts(text);
+  if(parts.some(part=>part.kind==='media'))return parts;
+  const kinds=new Set(['image','video','record','audio','file']);
+  for(const attachment of attachments) {
+    if(attachment.kind&&!kinds.has(attachment.kind))continue;
+    if(!attachment.kind&&!attachment.name&&!attachment.mimeType)continue;
+    const index=parts.filter(part=>part.kind==='media').length;
+    parts.push({kind:'media',index,mediaKind:attachment.kind==='audio'?'record':attachment.kind??'file',name:attachment.name||({image:'图片',video:'视频',record:'语音',audio:'语音',file:'文件'}[attachment.kind??'file']??'文件')});
+  }
+  return parts;
+}
 export function qqHistoryRecord(row:QqHistoryMessage,selection:QqSelection,ownId?:string):QqHistoryRecord {
   return {id:JSON.stringify([selection.routeId,selection.kind,selection.target,row.messageId]),adapter:'napcat',gatewayId:selection.routeId,
     conversationKey:`qq-live:${JSON.stringify([selection.routeId,selection.kind,selection.target])}`,kind:selection.kind,target:selection.target,
-    time:row.time??0,messageId:row.messageId,sender:row.sender,qqSenderName:row.senderName,qqParts:row.parts,
+    time:row.time??0,messageId:row.messageId,sender:row.sender,qqSenderId:row.sender,qqSenderName:row.senderName,qqParts:row.parts,
     direction:ownId&&row.sender===ownId?'outbound':'inbound',text:row.text,attachments:row.attachments};
 }
 /** QQ's documented avatar endpoints take numeric IDs, never arbitrary record URLs. */

@@ -10,11 +10,18 @@ const { t } = useI18n();
 const roleId = String(route.params.roleId || "");
 const service = providePersonaService(String(route.query.source || ""));
 const version = ref(0);
+const messageVersion = ref(0);
 let events: EventSource | undefined;
 onMounted(() => {
   if (!roleId) return;
   events = service.events("/api/events");
-  events.addEventListener("ready", () => { version.value += 1; });
+  events.addEventListener("ready", () => { version.value += 1; messageVersion.value += 1; });
+  events.addEventListener("message_endpoint_history_changed", raw => {
+    try {
+      const data = JSON.parse((raw as MessageEvent).data);
+      if (data.roleId === roleId) messageVersion.value += 1;
+    } catch { /* Malformed invalidations do not alter the current conversation. */ }
+  });
   events.addEventListener("persona_chat_history_changed", raw => {
     try {
       const data = JSON.parse((raw as MessageEvent).data);
@@ -27,7 +34,7 @@ onBeforeUnmount(() => { events?.close(); });
 
 <template>
   <div class="page-shell">
-    <PersonaMessageHistory v-if="roleId" :key="roleId" :role-id="roleId" :version="version" />
+    <PersonaMessageHistory v-if="roleId" :key="roleId" :role-id="roleId" :version="version" :message-version="messageVersion" />
     <v-alert v-else type="info" variant="tonal">{{ t('请选择或新建角色。') }}</v-alert>
   </div>
 </template>

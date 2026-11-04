@@ -8,11 +8,12 @@ import { userFacingError } from '../userFacingError';
 import MessageEndpointHistory from './MessageEndpointHistory.vue';
 import QqAvatar from './QqAvatar.vue';
 import QqGroupMembers from './QqGroupMembers.vue';
+import QqReadNotice from './QqReadNotice.vue';
 import { qqConversationTime } from '../qqChatLayout';
 import { waitForChatHistoryFrame } from '../personaChatHistoryLayout';
-import { mergeQqConversations, qqConversationIdentity, qqMessagePreview } from '../qqMessagePresentation';
+import { mergeQqConversations, qqConversationIdentity, qqMessagePreview,qqPartsPreview,qqDisplayParts,type QqHistoryRecord } from '../qqMessagePresentation';
 
-const props = defineProps<{roleId:string;version:number;active:boolean;routes:HistoryQqRoute[]}>();
+const props = defineProps<{roleId:string;version:number;messageVersion?:number;active:boolean;routes:HistoryQqRoute[]}>();
 const {fetch} = usePersonaService(), {t,locale} = useI18n();
 const display = useDisplay();
 const narrow = computed(()=>display.width.value<=760);
@@ -22,6 +23,9 @@ const search = ref(''), cursor = ref<string|null>(null), loading = ref(false), e
 const contacts = ref(new Map<string,QqDirectoryContact>()), members = ref<QqGroupMember[]>([]), membersLoading = ref(false), memberError = ref('');
 const membersOpen=ref(false);
 const accountIds=ref(new Map<string,string>());
+const availableAccounts=ref(new Set<string>());
+const memberSnapshots=new Map<string,QqGroupMember[]>();
+let memberRequestKey='';
 const detailOpen = ref(false);
 let detailPosition:{key:string;y:number}|undefined, restorePosition:AbortController|undefined;
 const layout = ref<HTMLElement>(), layoutWidth=ref(1000), listWidth = ref(240), dragging = ref(false);
@@ -53,6 +57,7 @@ onMounted(()=>{
   try { const saved=Number(localStorage.getItem(widthKey));if(saved>=200)resizeList(saved); }catch { /* Optional layout preference. */ }
 });
 let request:AbortController|undefined, memberRequest:AbortController|undefined, directoryRequest:AbortController|undefined;
+let pendingRefresh=false;
 const selected = computed(()=>conversations.value.find(item=>item.conversationKey===selectedKey.value));
 watch(maxListWidth,()=>resizeList(listWidth.value));
 const senderNames = computed(()=>Object.fromEntries(members.value.map(member=>[member.id,member.name]).concat(selected.value?.kind==='private'?[[selected.value.target,nameFor(selected.value)]]:[])));
@@ -62,19 +67,27 @@ const senderAvatars=computed(()=>{
   return Object.fromEntries([...[...names].filter((entry):entry is [string,string]=>entry[1]!==null),...members.value.map(member=>[member.id,member.id])]);
 });
 const ownQqId=computed(()=>selected.value?accountIds.value.get(JSON.stringify([selected.value.gatewayId,selected.value.instanceId])):undefined);
+const qqLive=computed(()=>Boolean(selected.value&&availableAccounts.value.has(JSON.stringify([selected.value.gatewayId,selected.value.instanceId]))));
 const routeFor = (conversation:QqConversation) => props.routes.find(route=>route.routeId===conversation.gatewayId && (!conversation.instanceId || route.instanceId===conversation.instanceId));
 const contactKey = (routeId:string,instanceId:string|undefined,kind:string,target:string)=>JSON.stringify([routeId,instanceId??'',kind,target]);
-const nameFor = (conversation:QqConversation) => contacts.value.get(contactKey(conversation.gatewayId??'',conversation.instanceId,conversation.kind,conversation.target))?.name || `${t(conversation.kind==='group'?'群聊':conversation.kind==='private'?'私聊':'历史会话')} ${conversation.target}`;
+const groupNames=computed(()=>new Map([...contacts.value.values()].filter(row=>row.kind==='group').map(row=>[row.target,row.name])));
+const nameFor = (conversation:QqConversation) => contacts.value.get(contactKey(conversation.gatewayId??'',conversation.instanceId,conversation.kind,conversation.target))?.name || (conversation.kind==='group'?groupNames.value.get(conversation.target):undefined) || `${t(conversation.kind==='group'?'群聊':conversation.kind==='private'?'私聊':'历史会话')} ${conversation.target}`;
 const visible = computed(()=>conversations.value.filter(item=>!(search.value||'').trim() || (nameFor(item)+' '+item.target).toLowerCase().includes((search.value||'').trim().toLowerCase())).sort((a,b)=>b.time-a.time));
+function latestMessage(record:QqHistoryRecord){
+  const row=selected.value;if(!row||record.time<row.time)return;
+  const prefix=row.kind==='group'?(record.qqSenderName||senderNames.value[record.sender??'']||record.sender||''):'';
+  row.time=record.time;row.preview=(prefix?prefix+': ':'')+qqPartsPreview(qqDisplayParts(record.text,record.qqParts,record.attachments)).slice(0,120);row.previewFormat='plain';
+}
 async function json(url:string,signal:AbortSignal) {
   const response=await fetch(url,{signal}),result=await response.json();
   if(!response.ok||result.code!==0)throw new Error(result.message||result.errorCode||t('消息记录读取失败'));
   return result.data;
 }
 async function loadContacts() {
-  directoryRequest?.abort();const controller=new AbortController();directoryRequest=controller;
+  if(directoryRequest&&!directoryRequest.signal.aborted)return;
+  const controller=new AbortController();directoryRequest=controller;
   const collected=new Map(contacts.value);let failed=false;
-  const accounts=new Map<string,string>();
+  const accounts=new Map(accountIds.value),available=new Set<string>();
   // Keep account reads bounded while allowing an unavailable account to fail locally.
   for(let start=0;start<props.routes.length;start+=2) {
     const batch=props.routes.slice(start,start+2);
@@ -84,7 +97,16 @@ async function loadContacts() {
       if(result.status==='rejected'){failed=true;continue;}
       // Refresh successful directories while retaining already-read names for an offline directory.
       const route=batch[index]!,instance=result.value.instanceId;
-      if(result.value.account?.userId)accounts.set(JSON.stringify([route.routeId,instance]),result.value.account.userId);
+      const accountKey=JSON.stringify([route.routeId,instance]);
+      if(result.value.account?.userId){
+        const id=result.value.account.userId;
+        if(accounts.has(accountKey)&&accounts.get(accountKey)!==id){
+          const prefix=JSON.stringify([route.routeId,instance]).slice(0,-1)+',';
+          for(const key of collected.keys())if(key.startsWith(prefix))collected.delete(key);
+          for(const key of memberSnapshots.keys())if(key.startsWith(prefix))memberSnapshots.delete(key);
+        }
+        accounts.set(accountKey,id);available.add(accountKey);
+      }else{failed=true;continue;}
       const warnings:string[]=result.value.warnings??[];
       for(const kind of ['group','private']) {
         if(warnings.includes(kind==='group'?'QQ_GROUP_LIST_UNAVAILABLE':'QQ_FRIEND_LIST_UNAVAILABLE'))continue;
@@ -96,10 +118,11 @@ async function loadContacts() {
     }
   }
   if(!controller.signal.aborted){
-    contacts.value=collected;accountIds.value=accounts;directoryWarning.value=failed?t('部分 QQ 名称暂不可用，仍可查看消息记录。'):'';
+    contacts.value=collected;accountIds.value=accounts;availableAccounts.value=available;
+    directoryWarning.value=failed?t('QQ 联系人暂时无法更新，已有名称仍可查看。'):'';
     directoryConversations.value=[...collected].map(([key,contact])=>{
       const [gatewayId,instanceId]=JSON.parse(key) as [string,string];
-      return {conversationKey:`qq-live:${key}`,gatewayId,instanceId,kind:contact.kind,target:contact.target,time:contact.time??0,preview:contact.preview??''};
+      return {conversationKey:`qq-live:${key}`,gatewayId,instanceId,kind:contact.kind,target:contact.target,time:contact.time??0,preview:contact.preview??'',previewFormat:'plain' as const};
     });
     const retained=selected.value;
     conversations.value=mergeQqConversations(directoryConversations.value,conversations.value);
@@ -107,21 +130,22 @@ async function loadContacts() {
     if(same)selectedKey.value=same.conversationKey;
     else if(!selected.value&&visible.value[0])selectedKey.value=visible.value[0].conversationKey;
   }
+  if(directoryRequest===controller)directoryRequest=undefined;
 }
 async function load(older=false) {
-  if(request)return;
+  if(request){if(!older)pendingRefresh=true;return;}
   const controller=new AbortController();request=controller;loading.value=true;error.value='';
   try {
     const query=new URLSearchParams();if(older&&cursor.value)query.set('cursor',cursor.value);
     const data=await json(`/api/roles/${encodeURIComponent(props.roleId)}/message-history-conversations?${query}`,controller.signal);
     if(controller.signal.aborted)return;
     const retained=selected.value;
-    const incoming=(data.conversations as QqConversation[]).map(row=>({...row,preview:qqMessagePreview(row.preview)}));
+    const incoming=(data.conversations as QqConversation[]).map(row=>({...row,preview:row.previewFormat==='plain'?row.preview:qqMessagePreview(row.preview)}));
     conversations.value=older?mergeQqConversations(conversations.value,incoming):mergeQqConversations(retained?[retained]:[],mergeQqConversations(incoming,directoryConversations.value));
     cursor.value=data.nextConversationCursor;
     if(!selected.value&&conversations.value.length){const first=conversations.value.slice().sort((a,b)=>b.time-a.time)[0]!;selectedKey.value=first.conversationKey;}
   }catch(cause){if(!controller.signal.aborted)error.value=userFacingError(cause);}
-  finally{if(request===controller){request=undefined;loading.value=false;}}
+  finally{if(request===controller){request=undefined;loading.value=false;if(pendingRefresh&&props.active){pendingRefresh=false;void load();}}}
 }
 function showList(){restorePosition?.abort();detailPosition={key:selectedKey.value,y:window.scrollY};detailOpen.value=false;}
 async function choose(conversation:QqConversation){
@@ -136,22 +160,30 @@ async function choose(conversation:QqConversation){
   finally{for(const event of events)window.removeEventListener(event,interrupt);}
 }
 async function loadMembers() {
-  memberRequest?.abort();members.value=[];memberError.value='';membersLoading.value=false;
   const conversation=selected.value;
+  const cacheKey=JSON.stringify([conversation?.gatewayId,conversation?.instanceId,ownQqId.value,conversation?.target]);
+  if(memberRequest&&!memberRequest.signal.aborted&&memberRequestKey===cacheKey)return;
+  memberRequest?.abort();memberRequest=undefined;memberRequestKey=cacheKey;
+  members.value=memberSnapshots.get(cacheKey)??[];memberError.value='';membersLoading.value=false;
   if(!props.active||conversation?.kind!=='group')return;
   const route=routeFor(conversation);
   if(!route){memberError.value=t('此会话的 QQ 连接不可用，仍可浏览已有记录。');return;}
   const controller=new AbortController();memberRequest=controller;membersLoading.value=true;
   try {
     const data=await json(`/api/agent/qq/group-members?${new URLSearchParams({routeId:route.routeId,kind:'group',target:conversation.target})}`,controller.signal);
-    if(!controller.signal.aborted&&selectedKey.value===conversation.conversationKey)members.value=data.entries;
-  }catch(cause){if(!controller.signal.aborted)memberError.value=userFacingError(cause);}
-  finally{if(memberRequest===controller)membersLoading.value=false;}
+    if(!controller.signal.aborted&&memberRequestKey===cacheKey){
+      memberSnapshots.delete(cacheKey);memberSnapshots.set(cacheKey,data.entries);
+      while(memberSnapshots.size>8)memberSnapshots.delete(memberSnapshots.keys().next().value!);
+      members.value=data.entries;
+    }
+  }catch(cause){if(!controller.signal.aborted&&memberRequestKey===cacheKey)memberError.value=userFacingError(cause);}
+  finally{if(memberRequest===controller){membersLoading.value=false;memberRequest=undefined;}}
 }
-watch([selectedKey,()=>props.active],()=>{membersOpen.value=false;void loadMembers();});
-watch(()=>props.routes,()=>{if(props.active){void loadContacts();void loadMembers();}});
-watch(()=>props.active,active=>{if(active){if(!conversations.value.length)void load();void loadContacts();}else{restorePosition?.abort();request?.abort();memberRequest?.abort();directoryRequest?.abort();}},{immediate:true});
+watch([selectedKey,ownQqId,()=>props.active],()=>{membersOpen.value=false;void loadMembers();});
+watch(()=>props.routes,()=>{directoryRequest?.abort();directoryRequest=undefined;if(props.active){void loadContacts();void loadMembers();}});
+watch(()=>props.active,active=>{if(active){pendingRefresh=false;void load();void loadContacts();}else{restorePosition?.abort();request?.abort();memberRequest?.abort();directoryRequest?.abort();}},{immediate:true});
 watch(()=>props.version,()=>{if(props.active)void load();});
+watch(()=>props.messageVersion,()=>{if(props.active)void load();});
 onBeforeUnmount(()=>{restorePosition?.abort();stopDrag();layoutObserver?.disconnect();request?.abort();memberRequest?.abort();directoryRequest?.abort();});
 </script>
 
@@ -160,12 +192,12 @@ onBeforeUnmount(()=>{restorePosition?.abort();stopDrag();layoutObserver?.disconn
     <v-card class="qq-conversation-list app-card glass-card" :aria-label="t('QQ 会话')">
       <div class="qq-list-search"><v-text-field v-model="search" :placeholder="t('搜索会话')" :aria-label="t('搜索会话')" prepend-inner-icon="mdi-magnify" density="compact" variant="solo-filled" flat clearable hide-details /><v-btn icon="mdi-refresh" size="small" variant="text" :aria-label="t('刷新会话')" @click="load();loadContacts()" /></div>
       <v-progress-linear v-if="loading" indeterminate />
-      <v-alert v-if="error" :type="conversations.length?'warning':'error'" variant="tonal" class="mt-2">{{ error }}</v-alert>
-      <v-alert v-if="directoryWarning" type="warning" variant="tonal" class="mt-2">{{ directoryWarning }}</v-alert>
+      <QqReadNotice v-if="error" summary="会话暂时无法更新，已有记录仍可查看。" :detail="error" @retry="load()" />
+      <QqReadNotice v-if="directoryWarning" :summary="directoryWarning" @retry="loadContacts();loadMembers()" />
       <v-list class="qq-session-scroll" bg-color="transparent" aria-label="QQ conversations">
         <v-list-item v-for="conversation in visible" :key="conversation.conversationKey" :active="selectedKey===conversation.conversationKey" @click="choose(conversation)">
           <template #prepend><QqAvatar :id="conversation.kind==='unknown'?undefined:conversation.target" :kind="conversation.kind==='group'?'group':'private'" :name="nameFor(conversation)" :size="44" /></template>
-          <v-list-item-title class="qq-conversation-title" data-no-i18n><span :title="nameFor(conversation)">{{ nameFor(conversation) }}</span><time v-if="conversation.time" :title="new Date(conversation.time*1000).toLocaleString(locale)">{{ qqConversationTime(conversation.time,undefined,locale) }}</time></v-list-item-title>
+          <v-list-item-title class="qq-conversation-title" data-no-i18n><span :title="nameFor(conversation)">{{ nameFor(conversation) }}</span><small v-if="!routeFor(conversation)" class="qq-source-badge" :title="`${conversation.gatewayId??''} ${conversation.instanceId??''}`">{{ t('历史记录') }}</small><small v-else-if="routes.length>1" class="qq-source-badge" :title="routeFor(conversation)?.name">{{ routeFor(conversation)?.name }}</small><time v-if="conversation.time" :title="new Date(conversation.time*1000).toLocaleString(locale)">{{ qqConversationTime(conversation.time,undefined,locale) }}</time></v-list-item-title>
           <v-list-item-subtitle data-no-i18n>{{ conversation.preview }}</v-list-item-subtitle>
         </v-list-item>
       <div v-if="!visible.length&&!loading" class="text-body-2 text-medium-emphasis pa-3">{{ t('暂无匹配会话。') }}</div>
@@ -174,7 +206,7 @@ onBeforeUnmount(()=>{restorePosition?.abort();stopDrag();layoutObserver?.disconn
     </v-card>
     <div class="qq-splitter" role="separator" tabindex="0" aria-orientation="vertical" :aria-label="t('调整会话列表宽度')" :aria-valuenow="listWidth" :aria-valuemin="200" :aria-valuemax="maxListWidth" @pointerdown="startDrag" @pointermove="moveDrag" @pointerup="stopDrag" @pointercancel="stopDrag" @lostpointercapture="stopDrag" @keydown="resizeKey" @dblclick="resizeList(240);saveWidth()" />
     <div class="qq-conversation-detail">
-      <MessageEndpointHistory v-if="selected" :key="selected.conversationKey" :role-id="roleId" adapter="napcat" :title="nameFor(selected)" :conversation-key="selected.storedConversationKey??selected.conversationKey" :qq-selection="routeFor(selected)&&selected.kind!=='unknown'?{routeId:routeFor(selected)!.routeId,kind:selected.kind,target:selected.target}:undefined" :qq-live="Boolean(ownQqId)" :sender-names="senderNames" :sender-avatars="senderAvatars" :own-qq-id="ownQqId" :member-count="selected.kind==='group'&&!membersLoading&&!memberError?members.length:undefined" :version="version" :active="active&&(!narrow||detailOpen)" bubble>
+      <MessageEndpointHistory v-if="selected" :key="qqConversationIdentity(selected)" :role-id="roleId" adapter="napcat" :title="nameFor(selected)" :conversation-key="selected.storedConversationKey??selected.conversationKey" :qq-selection="routeFor(selected)&&selected.kind!=='unknown'?{routeId:routeFor(selected)!.routeId,kind:selected.kind,target:selected.target}:undefined" :qq-live="qqLive" :sender-names="senderNames" :sender-avatars="senderAvatars" :own-qq-id="ownQqId" :member-count="selected.kind==='group'&&!membersLoading&&!memberError?members.length:undefined" :version="version" :message-version="messageVersion" :active="active&&(!narrow||detailOpen)" @latest="latestMessage" bubble>
         <template #back><v-btn class="qq-back" icon="mdi-arrow-left" size="small" variant="text" :aria-label="t('返回会话')" @click="showList" /></template>
         <template #actions><v-btn v-if="selected.kind==='group'" class="qq-members-toggle" icon="mdi-account-group-outline" size="small" variant="text" :aria-label="t('群成员')" @click="membersOpen=true" /></template>
       </MessageEndpointHistory>
@@ -189,6 +221,7 @@ onBeforeUnmount(()=>{restorePosition?.abort();stopDrag();layoutObserver?.disconn
 .qq-conversation-title {display:flex;align-items:center;gap:8px;min-width:0;font-size:14px;line-height:22px;}
 .qq-conversation-title>span {min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .qq-conversation-title>time {flex-shrink:0;margin-left:auto;font-size:11px;opacity:.6;}
+.qq-source-badge {flex:none;max-width:48px;font-size:9px;line-height:16px;padding:0 3px;background:rgba(var(--v-theme-on-surface),.07);color:rgba(var(--v-theme-on-surface),.55);border-radius:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .qq-conversation-list :deep(.v-list-item-subtitle) {display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-height:20px;line-height:20px;}
 .qq-conversation-list :deep(.v-list-item) {min-height:72px;padding:8px 10px;border-radius:5px;margin:2px 4px;}
 .qq-conversation-list :deep(.v-list-item__prepend .v-list-item__spacer) {width:12px;}

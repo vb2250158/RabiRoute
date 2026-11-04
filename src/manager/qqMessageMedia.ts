@@ -45,11 +45,14 @@ export async function qqRead(endpoint: NapCatEndpoint, action: "get_msg" | "get_
     const response = await transport(new URL(action, origin), { method: "POST", redirect: "error", signal,
       headers: { "content-type": "application/json", ...(endpoint.accessToken ? { authorization: `Bearer ${endpoint.accessToken}` } : {}) },
       body: JSON.stringify(payload) });
+    if(!response.ok)throw new QqReadError(503,'QQ_UPSTREAM_UNAVAILABLE',`NapCat HTTP ${response.status}`);
     const envelope = JSON.parse((await boundedBytes(response, MAX_JSON_BYTES, "RABIROUTE_QQ_JSON_MAX_BYTES")).toString("utf8"));
-    if (envelope?.status !== "ok" || envelope.retcode !== 0 || !envelope.data || typeof envelope.data !== "object") throw new QqReadError(503, "QQ_UPSTREAM_UNAVAILABLE");
+    if (envelope?.status !== "ok" || envelope.retcode !== 0 || !envelope.data || typeof envelope.data !== "object") throw new QqReadError(503, "QQ_UPSTREAM_UNAVAILABLE",`NapCat retcode ${typeof envelope?.retcode==='number'?envelope.retcode:'invalid'}`);
     return envelope.data;
   } catch (error) {
     if (error instanceof QqReadError || error instanceof ReadSettingsError) throw error;
+    const code=(error as {cause?:{code?:unknown}})?.cause?.code;
+    if(typeof code==='string'&&['ECONNREFUSED','ECONNRESET','ETIMEDOUT','ENOTFOUND','UND_ERR_CONNECT_TIMEOUT'].includes(code))throw new QqReadError(503,'QQ_UPSTREAM_UNAVAILABLE',`NapCat transport ${code}`);
     throw new QqReadError(503, "QQ_UPSTREAM_UNAVAILABLE");
   }
 }

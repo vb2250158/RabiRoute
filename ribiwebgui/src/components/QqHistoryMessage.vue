@@ -1,11 +1,11 @@
 <script setup lang="ts">
 import { useI18n } from '../i18n';
-import type { QqHistoryRecord, QqSelection } from '../qqMessagePresentation';
+import type { QqHistoryRecord, QqSelection, QqHistoryMessage } from '../qqMessagePresentation';
 import QqAvatar from './QqAvatar.vue';
 import QqMessageContent from './QqMessageContent.vue';
 
-defineProps<{ record: QqHistoryRecord; avatarId?: string; senderName?: string; selection?: QqSelection; names?: Record<string, string>; active: boolean; expanded: boolean }>();
-defineEmits<{ expand: []; details: [] }>();
+defineProps<{ record: QqHistoryRecord; avatarId?: string; senderName?: string; selection?: QqSelection; names?: Record<string, string>; active: boolean; readable?:boolean; expanded: boolean }>();
+defineEmits<{ expand: []; details: []; image:[{blob:Blob;name:string}];quote:[QqHistoryMessage] }>();
 const { t } = useI18n();
 </script>
 
@@ -16,7 +16,7 @@ const { t } = useI18n();
       <div class="qq-sender" data-no-i18n>{{ senderName }}</div>
       <div class="qq-bubble-line">
         <article class="history-record qq-bubble" :class="{outgoing:record.direction==='outbound'}" :data-entry-id="record.id" @contextmenu.prevent="$emit('details')">
-          <QqMessageContent :class="{'qq-long-message':!expanded&&record.text.length>600}" :text="record.text" :structured-parts="record.qqParts" :message-id="record.messageId" :selection="selection" :names="names" :attachments="record.attachments" :active="active" />
+          <QqMessageContent :class="{'qq-long-message':!expanded&&record.text.length>600}" :text="record.text" :structured-parts="record.qqParts" :message-id="record.messageId" :reply-to-message-id="record.replyToMessageId" :selection="selection" :names="names" :attachments="record.attachments" :active="active" :readable="readable" @image="$emit('image',$event)" @quote="$emit('quote',$event)" />
           <button v-if="record.text.length>600" class="qq-expand" @click="$emit('expand')">{{ t(expanded?'收起':'展开全文') }}</button>
         </article>
         <v-btn class="qq-message-details" icon="mdi-dots-horizontal" size="x-small" variant="text" :aria-label="t('消息详情')" :title="t('消息详情')" @click="$emit('details')" />

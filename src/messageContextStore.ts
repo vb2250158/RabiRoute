@@ -11,6 +11,7 @@ import type { MessageContextArchiveReadCache } from "./messageContextArchiveRead
 import { acquireFileLockSync } from "./shared/filePersistence.js";
 import { publishMessageHistoryChange } from "./messageHistoryChanges.js";
 import { messageHistoryFileVersion, messageHistoryLayoutVersion } from "./messageHistorySourceVersion.js";
+import { qqStructuredMessageParts, storedQqParts, type QqMessagePart } from './shared/qqMessageParts.js';
 
 export const MESSAGE_CONTEXT_FILE = "message-context.jsonl";
 export const MESSAGE_CONTEXT_DIR = "conversation";
@@ -58,6 +59,8 @@ export type MessageContextRecord = {
   kind?: string;
   status?: string;
   sender?: string;
+  qqSenderId?: string;
+  qqParts?: QqMessagePart[];
   target?: string;
   text: string;
   messageId?: string | number;
@@ -234,6 +237,18 @@ function safeAttachments(value: unknown): MessageContextAttachment[] | undefined
   return result.length > 0 ? result : undefined;
 }
 
+function qqAttachments(value:unknown):MessageContextAttachment[]|undefined {
+  if(!Array.isArray(value))return;
+  const media=new Set(['image','video','record','audio','file']);
+  const rows=value.flatMap(entry=>{
+    const item=objectValue(entry),kind=optionalText(item.kind??item.type);
+    if(kind&&!media.has(kind))return [];
+    const data=objectValue(item.data);
+    return [{...item,kind,id:item.id??data.file_id,name:item.name??item.fileName??data.name??data.file_name}];
+  });
+  return safeAttachments(rows);
+}
+
 function safeSpeechSegments(value: unknown): MessageContextSpeechSegment[] | undefined {
   if (!Array.isArray(value)) return undefined;
   const result = value.slice(0, 10_000)
@@ -396,7 +411,7 @@ function stableRecordId(record: MessageContextRecord): string {
 }
 
 function normalizeRecord(record: MessageContextRecord, sequence?: number): MessageContextRecord | undefined {
-  const attachments = safeAttachments(record.attachments);
+  const attachments = record.adapter==='napcat'?qqAttachments(record.attachments):safeAttachments(record.attachments);
   const text = messageText(record.text) || attachmentOnlyText(attachments);
   if (!text) return undefined;
   const time = timestamp(record.time) || Math.floor(Date.now() / 1_000);
@@ -436,6 +451,7 @@ function normalizeRecord(record: MessageContextRecord, sequence?: number): Messa
     kind: optionalText(record.kind),
     status: optionalText(record.status) || (record.direction === "outbound" ? "sent" : record.direction === "system" ? "system" : "accepted"),
     sender: optionalText(record.sender),
+    ...(adapter==='napcat'?{qqSenderId:optionalText(record.qqSenderId),qqParts:storedQqParts(record.qqParts)}:{}),
     target,
     text,
     messageId: optionalId(record.messageId),
@@ -915,11 +931,16 @@ export function messageContextFromHistoryRecord(
     const adapter = optionalText(item.adapterType) || adapterOverride || "napcat";
     const group = historyKind === "group";
     const target = optionalText(group ? item.groupId : item.userId);
+    const attachments=adapter==='napcat'?qqAttachments(item.attachments??item.segments):safeAttachments(item.attachments??item.segments);
+    const originalSegments=Array.isArray(item.segments)&&item.segments.length?item.segments:item.originalRawMessage??item.rawMessage;
+    const qqParts=adapter==='napcat'?qqStructuredMessageParts(originalSegments,text,attachments?.map(a=>a.name??a.kind??'附件')):undefined;
+    if(qqParts&&!qqParts.some(part=>part.kind==='media'))for(const [index,attachment] of (attachments??[]).entries())qqParts.push({kind:'media',index,mediaKind:attachment.kind==='audio'?'record':attachment.kind??'file',name:attachment.name??attachment.kind??'附件'});
     return normalizeRecord({ time, direction: self ? "outbound" : "inbound", adapter, transport: transport || adapter,
       gatewayId, instanceId, channel: adapter,
       conversationKey: resolveMessageConversationKey({ adapter, gatewayId, instanceId, groupId: group ? item.groupId : undefined, userId: group ? undefined : item.userId, sessionId: item.sessionId }),
       kind: historyKind, status: self ? "sent" : "accepted", sender: optionalText(self ? item.botNickname ?? item.senderName : item.senderName ?? item.userId),
-      target, text, messageId, replyToMessageId, attachments: safeAttachments(item.attachments ?? item.segments) });
+      target, text, messageId, replyToMessageId, attachments,qqParts,
+      qqSenderId:adapter==='napcat'?optionalText(self?item.botUserId:item.userId):undefined });
   }
   if (historyKind === "wecom") {
     const target = optionalText(item.conversationId ?? item.chatId ?? item.groupId ?? item.userId);

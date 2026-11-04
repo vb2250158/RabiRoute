@@ -3,6 +3,7 @@ import { computed, ref } from 'vue';
 import type { QqGroupMember } from '@shared/qqConversationHistory';
 import { useI18n } from '../i18n';
 import QqAvatar from './QqAvatar.vue';
+import QqReadNotice from './QqReadNotice.vue';
 const props = defineProps<{ members:QqGroupMember[]; loading:boolean; error:string }>();
 defineEmits<{ refresh:[] }>();
 const {t}=useI18n();
@@ -17,7 +18,7 @@ const visible=computed(()=>{
   <section class="qq-group-members" :aria-label="t('群成员')">
     <header class="qq-member-header"><strong>{{ t('群成员') }}<span v-if="!loading&&!error"> {{ members.length }}</span></strong><v-btn icon="mdi-refresh" size="x-small" variant="text" :loading="loading" :aria-label="t('刷新群成员')" @click="$emit('refresh')" /></header>
     <v-text-field v-model="search" class="qq-member-search" :placeholder="t('搜索群成员')" :aria-label="t('搜索群成员')" prepend-inner-icon="mdi-magnify" density="compact" variant="plain" clearable hide-details @update:model-value="limit=40" />
-    <v-alert v-if="error" type="warning" variant="tonal" class="ma-2">{{ error }}</v-alert>
+    <QqReadNotice v-if="error" summary="群成员暂时无法更新，已有信息仍可查看。" :detail="error" @retry="$emit('refresh')" />
     <div class="qq-member-scroll">
       <ul class="qq-member-list">
         <li v-for="member in visible.slice(0,limit)" :key="member.id" class="qq-member-row" :title="`${member.name} · ${member.id}`" data-no-i18n>

@@ -6,6 +6,15 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.5.5 - 2026-11-04
+
+- Fix phantom QQ attachments, empty segments and legacy message parsing while preserving literal CQ text, real attachments and stable conversation/sender identities.
+- Retain loaded contacts and members on read failures with compact details; preview images and quotes on demand, and preserve reading position, cursors and selection across the bounded 200-message window, recovery and mobile layouts.
+- Publish cross-process refresh events after message persistence and reread the current window on reconnect or reactivation. Preserve original records and permission contracts; refresh is not durable event replay.
+- Remove expired-QR interference with quick login, and update Chinese, English and Japanese guidance and interface text.
+- Skip external-port inspection when a Speech activation acquired no runtime. Preserve identity checks and normal shutdown for genuinely managed original processes.
+- Remove the hidden 100-request cumulative Manager HTTP connection cap and use Node's unlimited native default. Keep request/header/idle budgets and byte backpressure unchanged.
+
 ## 0.5.4 - 2026-11-04
 
 - Keep the original plugin process and registered services when a read-only heartbeat is late; the same request resumes observation on its late response. Real exits and uncertain business-call outcomes retain their existing handling.

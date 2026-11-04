@@ -2,6 +2,7 @@ import { config, runtimeLayout } from "./config.js";
 import { readGatewayRouteBootSnapshot } from "./shared/gatewayRouteSnapshotBoot.js";
 import { mountGatewayRouteSnapshotRuntime } from "./runtime/gatewayRouteSnapshotReceiver.js";
 import { gatewayReadyLine, type GatewayEndpoint } from "./gatewayLifecycle.js";
+import { reportGatewayMessageHistory } from "./gatewayMessageHistory.js";
 import type { GatewayMessageAdapterType } from "./adapters/messageAdapter.js";
 import { startGatewayPerformanceReporter } from "./performance/gatewayPerformanceReporter.js";
 import { mountGatewayPerformanceReporter } from "./runtime/gatewayPerformanceRuntime.js";
@@ -69,6 +70,7 @@ async function initializeGatewayMain(
   let routeSnapshotUnavailableInstances: readonly string[] | undefined;
   let gatewayDisposePromise: Promise<void> | undefined;
   let routeSnapshotRuntime: Awaited<ReturnType<typeof mountGatewayRouteSnapshotRuntime>> | undefined;
+  let stopMessageHistoryReporter: (() => void) | undefined;
   const listeners = new Map<GatewayLifecycleEvent, GatewayLifecycleListener>();
 
   function removeLifecycleListeners(): void {
@@ -82,6 +84,7 @@ async function initializeGatewayMain(
     if (!gatewayDisposePromise) {
       gatewayDisposePromise = (async () => {
         removeLifecycleListeners();
+        stopMessageHistoryReporter?.();
         await routeSnapshotRuntime?.unmount();
         await root.dispose();
       })();
@@ -90,6 +93,9 @@ async function initializeGatewayMain(
   }
 
   try {
+    if (gatewayId && gatewayGenerationId) stopMessageHistoryReporter = reportGatewayMessageHistory({
+      identity: { gatewayId, gatewayGenerationId, pid: process.pid }, output: process.stdout
+    });
     const agentAdapters = await ensureAgentAdapterRuntime(root);
     const contributions = await root.ensure(
       GATEWAY_CONTRIBUTION_RUNTIME_KEY,
@@ -146,6 +152,7 @@ async function initializeGatewayMain(
       dispose: disposeGatewayRuntime
     };
   } catch (error) {
+    stopMessageHistoryReporter?.();
     removeLifecycleListeners();
     await routeSnapshotRuntime?.unmount();
     await root.dispose();

@@ -326,7 +326,7 @@ test('QQ directory partial failure retains available names and rejects an accoun
     entered();await wait;return envelope([{user_id:20002,nickname:'Member'}]);
   },{typed:true,route:()=>active});t.after(f.close);t.after(release);
   const contacts=await (await fetch(f.base+'/api/agent/qq/contacts?routeId=test-route')).json() as any;
-  assert.equal(contacts.data.entries.length,1);assert.deepEqual(contacts.data.warnings,['QQ_FRIEND_LIST_UNAVAILABLE']);
+  assert.equal(contacts.data.entries.length,1);assert.deepEqual(contacts.data.warnings,['QQ_FRIEND_LIST_UNAVAILABLE','QQ_LOGIN_INFO_UNAVAILABLE','QQ_RECENT_CONTACT_UNAVAILABLE']);
   const pending=fetch(f.base+'/api/agent/qq/group-members?routeId=test-route&kind=group&target=10001');
   await started;active={...active};release();const result=await pending;
   assert.equal(result.status,409);assert.equal((await result.json() as any).errorCode,'QQ_READ_ROUTE_CHANGED');

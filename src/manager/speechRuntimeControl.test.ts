@@ -32,7 +32,7 @@ const installed = () => true;
 test("Windows owner query parses the actual OS script and fails closed for ambiguous or damaged TCP tables", { skip: process.platform !== "win32" }, async () => {
   // Exercise the private helper's actual generated script without a product test hook.
   // Only the TCP-table producer and OS process objects are replaced by controlled data.
-  const source = fs.readFileSync(new URL("./speechRuntimeControl.ts", import.meta.url), "utf8");
+  const source = fs.readFileSync(path.resolve("src/manager/speechRuntimeControl.ts"), "utf8");
   const tree = ts.createSourceFile("speechRuntimeControl.ts", source, ts.ScriptTarget.Latest, true);
   const helper = tree.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === "inspectWindowsRuntimeOwner");
   assert.ok(helper);
@@ -546,41 +546,62 @@ test("speech runtime stop without dependencies still rejects an unrelated owner"
 });
 
 test("lifecycle release after dependency failure leaves a foreign runtime intact while explicit stop still rejects it", async () => {
-  let kills = 0;
+  let kills = 0, ownershipReads = 0;
   const control = new SpeechRuntimeControl({
     rootDir: "C:/RabiRoute", platform: "win32", serviceUrl: () => "http://127.0.0.1:8781",
     existsSync: () => false, inspect: async () => status("offline"),
     ensureDependencies: async () => { throw new Error("optional capture environment unavailable"); },
-    inspectOwner: async () => ({ pid: 999, owned: false }),
+    inspectOwner: async () => { ownershipReads++; return { pid: 999, owned: false }; },
     killProcessTree: async () => { kills++; }
   });
   await assert.rejects(control.start(), /optional capture environment unavailable/);
   await control.releaseOwnedRuntime();
   assert.equal(kills, 0);
+  assert.equal(ownershipReads, 0, "A failed dependency preparation acquired no native owner.");
   await assert.rejects(control.stop(), /拒绝停止/);
+  assert.equal(ownershipReads, 1, "An explicit stop still verifies its real target.");
+});
+
+test("lifecycle release with no acquired runtime never inspects an external fence or its ownership", async () => {
+  let urls = 0, inspections = 0;
+  const control = new SpeechRuntimeControl({
+    rootDir: "C:/RabiRoute", platform: "win32", serviceUrl: () => { urls++; return "http://127.0.0.1:54321"; },
+    existsSync: () => false,
+    inspectOwner: async () => { inspections++; throw new Error("External owner query must not run."); },
+    inspect: async () => { assert.fail("No native runtime was acquired."); },
+    killProcessTree: async () => { assert.fail("An external listener is not this activation's resource."); }
+  });
+  await control.releaseOwnedRuntime();
+  assert.equal(urls, 0); assert.equal(inspections, 0);
 });
 
 test("lifecycle release confirms only its owned PID, not the availability of a replacement external service", async () => {
-  let killed = false;
+  let killed = false, spawned = false, releasing = false;
+  const child = { pid: 456, exitCode: null as number | null, unref() {} };
   const control = new SpeechRuntimeControl({
     rootDir: "C:/RabiRoute", platform: "win32", serviceUrl: () => "http://127.0.0.1:8781",
-    existsSync: () => false, inspect: async () => { assert.fail("release must not claim external HTTP offline"); },
+    existsSync: installed, inspect: async () => { assert.equal(releasing, false, "release must not claim external HTTP offline"); return status(spawned ? "online" : "offline"); },
+    spawnRuntime: () => { spawned = true; return child; },
     inspectOwner: async () => killed ? { pid: 999, owned: false } : { pid: 456, owned: true },
-    killProcessTree: async pid => { assert.equal(pid, 456); killed = true; }
+    killProcessTree: async pid => { assert.equal(pid, 456); killed = true; child.exitCode = 0; }
   });
+  await control.start(); releasing = true;
   await control.releaseOwnedRuntime();
   assert.equal(killed, true);
 });
 
 test("lifecycle release preserves OS ownership, owned termination, and still-alive failures", async () => {
   for (const failure of ["query", "kill", "alive"] as const) {
-    let clock = 0;
+    let clock = 0, spawned = false;
+    const child = { pid: 456, exitCode: null as number | null, unref() {} };
     const control = new SpeechRuntimeControl({
       rootDir: "C:/RabiRoute", platform: "win32", serviceUrl: () => "http://127.0.0.1:8781",
-      existsSync: () => false, stopTimeoutMs: 1, now: () => clock, wait: async ms => { clock += ms; },
+      existsSync: installed, stopTimeoutMs: 1, now: () => clock, wait: async ms => { clock += ms; },
+      inspect: async () => status(spawned ? "online" : "offline"), spawnRuntime: () => { spawned = true; return child; },
       inspectOwner: async () => { if (failure === "query") throw new Error("OS ownership query failed"); return { pid: 456, owned: true }; },
-      killProcessTree: async () => { if (failure === "kill") throw new Error("owned termination failed"); }
+      killProcessTree: async () => { if (failure === "kill") throw new Error("owned termination failed"); child.exitCode = 0; }
     });
+    await control.start();
     await assert.rejects(control.releaseOwnedRuntime(), failure === "query" ? /OS ownership query failed/ : failure === "kill" ? /owned termination failed/ : /自有进程停止超时/);
   }
 });

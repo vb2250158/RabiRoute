@@ -466,6 +466,9 @@ import {
 import { publicRabiLinkRelayConfig } from "./rabiApi.js";
 import { createRabiControlOperations } from "./rabiApiOperations.js";
 import { parseGatewayReadyLine } from "../gatewayLifecycle.js";
+import { createGatewayOutputLineReader, GATEWAY_MESSAGE_HISTORY_PREFIX } from "../gatewayMessageHistory.js";
+import { gatewayMessageHistoryEvents, localMessageHistoryEvents } from "./gatewayMessageHistoryEvents.js";
+import { subscribeMessageHistoryChanges } from "../messageHistoryChanges.js";
 import { writeGatewayRouteBootSnapshot } from "../shared/gatewayRouteSnapshotBoot.js";
 import { createGatewayRouteActivationOwner } from "./gatewayRouteActivationOwner.js";
 import { mergeEndpointRouteDeclarations, readEndpointRouteDeclarations, readInstalledEndpointRouteDeclarations, type EndpointRouteConfigDeclaration } from "../plugin-runtime-host/messageEndpointRouteConfig.js";
@@ -1366,7 +1369,7 @@ const managerHttpLimits = {
   get requestTimeoutMs() { return getTimeoutMs("http.request", 30000); },
   get headersTimeoutMs() { return getTimeoutMs("http.headers", 10000); },
   get keepAliveTimeoutMs() { return getTimeoutMs("http.keepAlive", 5000); },
-  maxRequestsPerSocket: 100
+  maxRequestsPerSocket: 0
 } as const;
 const managerOperationalLog = createManagerOperationalLog({ rootDir });
 const gatewayDiagnosticsReadLog = managerOperationalLog.bind("gateway_diagnostics", "warn");
@@ -1438,9 +1441,20 @@ const configRepository = new ManagerConfigRepository({ rootDir, managerPort });
 const messageEndpointManagers = new MessageEndpointManagers();
 
 const managerEventHub = new ManagerEventHub({
-  subscribe: publish => subscribeKnowledgeChanges((roleDir, change) => {
-    if (change.kind === "plan") publish("plan_changed", { roleId: path.basename(roleDir), planId: change.item.id });
-  })
+  subscribe: publish => {
+    const stopKnowledge = subscribeKnowledgeChanges((roleDir, change) => {
+      if (change.kind === "plan") publish("plan_changed", { roleId: path.basename(roleDir), planId: change.item.id });
+    });
+    const stopMessages = subscribeMessageHistoryChanges(directory => {
+      for (const runtime of runtimes.values()) {
+        for (const event of localMessageHistoryEvents({
+          directory, definition: runtime.definition, rootDir, routeDataDir: dataDirFor(runtime.definition),
+          roleIdForDefinition, roleDirectory: roleDirForApi
+        })) publish("message_endpoint_history_changed", event);
+      }
+    });
+    return () => { stopKnowledge(); stopMessages(); };
+  }
 });
 
 export function closeManagerEventClients(): void { managerEventHub.closeAll(); }
@@ -3029,12 +3043,19 @@ function startGatewayRuntime(id: string): void {
     result: "started"
   });
 
-  let stdoutBuffer = "";
+  const stdoutLines = createGatewayOutputLineReader();
   child.stdout.on("data", (data) => {
-    stdoutBuffer += data.toString();
-    const lines = stdoutBuffer.split(/\r?\n/);
-    stdoutBuffer = lines.pop() ?? "";
-    for (const line of lines.filter(Boolean)) {
+    for (const line of stdoutLines(data)) {
+      if (line.startsWith(GATEWAY_MESSAGE_HISTORY_PREFIX)) {
+        const historyEvents = child.pid ? gatewayMessageHistoryEvents({
+          line, expected: { gatewayId: runtime.definition.id, gatewayGenerationId: agentStateGeneration, pid: child.pid },
+          currentChild: runtime.process === child && runtime.agentStateGeneration === agentStateGeneration,
+          definition: runtime.definition, rootDir, routeDataDir: dataDirFor(runtime.definition), roleIdForDefinition, roleDirectory: roleDirForApi
+        }) : [];
+        for (const event of historyEvents) publishManagerEvent("message_endpoint_history_changed", event);
+        // Stale or malformed private protocol frames are not user-facing Route logs.
+        continue;
+      }
       const ready = child.pid ? parseGatewayReadyLine(line, {
         gatewayId: runtime.definition.id,
         gatewayGenerationId: agentStateGeneration,
