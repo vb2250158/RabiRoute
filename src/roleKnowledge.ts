@@ -3,7 +3,7 @@ import { RoleStorageValidationError } from "./shared/roleStorageValidationError.
 import { normalizePlanStepResources } from "./shared/planStepResources.js";
 import { planActivationStatus, planState, planStateForWrite, planCanAutoAdvance } from "./planState.js";
 import { publishKnowledgeChange, type KnowledgeChange, type KnowledgeKind } from "./roleKnowledgeSearch.js";
-import { readPlanIdentity, readPlanIdentityAsync } from "./planIdentityReadCache.js";
+import { readPlanIdentityAsync } from "./planIdentityReadCache.js";
 import { loadPlanPageCheckpoint, savePlanPageCheckpoint } from "./planPageCatalogCheckpoint.js";
 import { invalidatePlanReads, type PlanReadFence } from "./planReadInvalidation.js";
 import { normalizePlanQuestions, type PlanQuestion } from "./shared/planQuestions.js";
@@ -54,6 +54,7 @@ import {
   assertPlanStorageIdentityAvailable,
   commitPlanLifecycleTransitionUnderLease,
   readCanonicalPlanStoragePackageUnderLease,
+  resolveCanonicalPlanStorageLocation,
   subscribePlanStorageBeforeMutation,
   withPlanStorageLease as withPlanStorageLock,
   type PlanStorageLease,
@@ -2283,23 +2284,10 @@ function planRecordFromFile(filePath: string, planId: string): PlanRecord | null
 }
 
 function findPlanRecord(roleDir: string, planId: string): PlanRecord | null {
-  const candidates = planCandidateFiles(roleDir, planId);
-  const records: PlanRecord[] = [];
-  for (const filePath of candidates) {
-    const record = planRecordFromFile(filePath, planId);
-    if (record) records.push(record);
-  }
-  const candidateSet = new Set(candidates.map((filePath) => path.resolve(filePath)));
-  for (const filePath of allPlanFiles(roleDir)) {
-    if (candidateSet.has(path.resolve(filePath))) continue;
-    if (readPlanIdentity(filePath) !== planId) continue;
-    const record = planRecordFromFile(filePath, planId);
-    if (record) records.push(record);
-  }
-  if (records.length > 1) {
-    throw new Error(`Plan storage conflict for ${planId}: the stable plan id exists in more than one storage bucket.`);
-  }
-  return records[0] ?? null;
+  // The repository owns canonical identity, bucket/case/NFC collisions and legacy admission.
+  // A point lookup must not read every other plan's JSON again under its mutation lease.
+  const location = resolveCanonicalPlanStorageLocation(roleDir, planId);
+  return location ? planRecordFromFile(location.planFile, planId) : null;
 }
 
 const publishedPlanPackageRecovery = new Map<string, PlanPackageRecoverySnapshot>();

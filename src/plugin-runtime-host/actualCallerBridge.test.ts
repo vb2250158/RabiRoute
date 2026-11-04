@@ -16,7 +16,7 @@ import { AsyncPluginOutcomeArchive, outcomeKey } from "./asyncOutcomeArchive.js"
 import { ApiContractError } from "../manager/apiOperationContract.js";
 
 type Package = Readonly<{ id: string; source: string; requires?: readonly string[]; provides: readonly string[]; asyncProvides?: Readonly<Record<string, readonly string[]>> }>;
-async function fixture(t: TestContext, packages: readonly Package[], hostServices: readonly HostService[] = [], archiveOptions: ConstructorParameters<typeof AsyncPluginOutcomeArchive>[1] = {}, shutdownTimeoutMs = DEFAULT_PLUGIN_SHUTDOWN_TIMEOUT_MS) {
+async function fixture(t: TestContext, packages: readonly Package[], hostServices: readonly HostService[] = [], archiveOptions: ConstructorParameters<typeof AsyncPluginOutcomeArchive>[1] = {}, shutdownTimeoutMs = DEFAULT_PLUGIN_SHUTDOWN_TIMEOUT_MS, activationTimeoutMs = 1000) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "isolated-real-caller-"));
   const packageRoot = path.join(root, "packages");
   for (const plugin of packages) {
@@ -41,7 +41,7 @@ async function fixture(t: TestContext, packages: readonly Package[], hostService
   let diagnosticFailure = false;
   const executor = createFullPluginExecutor(leases, archive, observation => { lastAsyncObservation = observation; if (diagnosticFailure) throw new Error("fixture-only diagnostic observer failure"); }), lifecycleFailures: unknown[] = [];
   const runtimes: GenerationRuntime[] = [];
-  const runtime = new GenerationRuntime({ host: "manager", executor, hostServices, activationTimeoutMs: 1000, applicationIdentity: { applicationGenerationId: "fixture-generation", managerInstanceId: "fixture-manager" }, onRuntimeFailure: failure => { lifecycleFailures.push(failure); } });
+  const runtime = new GenerationRuntime({ host: "manager", executor, hostServices, activationTimeoutMs, applicationIdentity: { applicationGenerationId: "fixture-generation", managerInstanceId: "fixture-manager" }, onRuntimeFailure: failure => { lifecycleFailures.push(failure); } });
   runtimes.push(runtime);
   t.after(async () => {
     const failures: unknown[] = [];
@@ -83,6 +83,55 @@ test("real factory and normal PackageCatalog wire two async providers and origin
 });
 
 const fixedRequestSource = (capability: string): string => `import crypto from 'node:crypto';import {syncBuiltinESMExports} from 'node:module';crypto.randomUUID=()=> 'fixture.shared-request';syncBuiltinESMExports();export async function activate(c){try{await c.services.require('host.fixture@1').run();}catch(e){c.services.provide(${JSON.stringify(capability)},{operationId:e.operationId,effectOutcome:e.effectOutcome});}}`;
+
+test("real factory admits seventy concurrent reads and writes without a hidden default outcome quota", { timeout: 60000 }, async t => {
+  let releaseRead!: () => void, releaseWrite!: () => void, reads = 0, writes = 0;
+  const readGate = new Promise<void>(resolve => { releaseRead = resolve; });
+  const writeGate = new Promise<void>(resolve => { releaseWrite = resolve; });
+  t.after(() => { releaseRead(); releaseWrite(); });
+  const service = declareAsyncPluginService({
+    async read(value: number) { reads++; await readGate; return value; },
+    async write(value: number) { writes++; await writeGate; return value; }
+  }, ["read", "write"], { read: "read", write: "mutation" });
+  const source = "export function activate(c){const host=c.services.require('host.fixture@1');c.services.provide('fixture.parallel@1',{async read(v){return await host.read(v);},async write(v){return await host.write(v);}});}";
+  const f = await fixture(t, [{ id: "org.example.parallel", requires: ["host.fixture@1"], provides: ["fixture.parallel@1"], asyncProvides: { "fixture.parallel@1": ["read", "write"] }, source }],
+    [{ capability: "host.fixture@1", value: service }], {}, DEFAULT_PLUGIN_SHUTDOWN_TIMEOUT_MS, 15000);
+  const result = await f.runtime.switch(f.loaded.candidates);
+  assert.equal(result.generation.records[0].status, "active");
+  const control = result.generation.services.services.get("fixture.parallel@1")?.value as { read(value: number): Promise<number>; write(value: number): Promise<number> };
+  const waitFor = async (condition: () => boolean) => { const deadline = Date.now() + 15000; while (!condition()) { assert.ok(Date.now() < deadline); await new Promise(resolve => setTimeout(resolve, 10)); } };
+  const reading = Promise.all(Array.from({ length: 70 }, (_, index) => control.read(index))); void reading.catch(() => {});
+  await waitFor(() => reads === 70);
+  assert.equal(f.archive.snapshot().readReservations, 70); releaseRead();
+  assert.deepEqual(await reading, Array.from({ length: 70 }, (_, index) => index));
+  const writing = Promise.all(Array.from({ length: 70 }, (_, index) => control.write(index))); void writing.catch(() => {});
+  await waitFor(() => writes === 70); releaseWrite();
+  assert.deepEqual(await writing, Array.from({ length: 70 }, (_, index) => index));
+  await waitFor(() => f.archive.snapshot().reservations === 0 && f.archive.snapshot().readReservations === 0);
+  assert.equal(reads, 70); assert.equal(writes, 70); assert.equal(f.archive.snapshot().writes, 0);
+  assert.equal(f.runtime.current().records[0].status, "active"); assert.equal(f.lifecycleFailures.length, 0);
+});
+
+test("real factory keeps every original durable unknown beyond sixty-four while only hot metadata is bounded", { timeout: 60000 }, async t => {
+  let calls = 0;
+  const service = declareAsyncPluginService({ async run(index: number) { calls++; throw new ApiContractError(500, "FIXTURE_NATIVE_UNKNOWN", "operation", `fixture.write.${index}`, true, "unknown"); } }, ["run"], { run: "mutation" });
+  const source = "export function activate(c){const host=c.services.require('host.fixture@1');c.services.provide('fixture.parallel-unknown@1',{async run(v){try{await host.run(v);}catch(e){return {effectOutcome:e.effectOutcome};}}});}";
+  const f = await fixture(t, [{ id: "org.example.parallel-unknown", requires: ["host.fixture@1"], provides: ["fixture.parallel-unknown@1"], asyncProvides: { "fixture.parallel-unknown@1": ["run"] }, source }],
+    [{ capability: "host.fixture@1", value: service }], { hotLimit: 2 }, DEFAULT_PLUGIN_SHUTDOWN_TIMEOUT_MS, 15000);
+  const result = await f.runtime.switch(f.loaded.candidates), identity = result.generation.records[0].identity;
+  assert.equal(result.generation.records[0].status, "active");
+  const control = result.generation.services.services.get("fixture.parallel-unknown@1")?.value as { run(value: number): Promise<{ effectOutcome: string }> };
+  const values = await Promise.all(Array.from({ length: 70 }, (_, index) => control.run(index)));
+  assert.ok(values.every(value => value.effectOutcome === "unknown"));
+  await f.archive.joinScope(identity);
+  const callsObserved = f.asyncObservation()!.calls as Array<{ requestId: string; capability: string; effectOutcome: string }>;
+  const ids = callsObserved.filter(value => value.capability === "host.fixture@1" && value.effectOutcome === "unknown").map(value => value.requestId);
+  assert.equal(new Set(ids).size, 70); assert.equal(calls, 70);
+  const receipts = await Promise.all(ids.map(id => f.executor.readAsyncOutcome(identity, id)));
+  assert.ok(receipts.every(value => value?.archive === "confirmed" && value.record.firstObservation.effectOutcome === "unknown"));
+  assert.equal(new Set(receipts.map(value => (value!.record.firstObservation.nativeOutcome as { operationId: string }).operationId)).size, 70);
+  assert.ok(f.archive.snapshot().hot <= 2); assert.equal(f.runtime.current().records[0].status, "active");
+});
 
 test("actual factory namespaces one requestId independently across two real child owners", { timeout: 15000 }, async t => {
   let calls = 0;

@@ -821,7 +821,7 @@ test("sync and async plan reads fail closed on duplicate physical records", asyn
     planDirectory(roleDir, created.id, "archive"),
     { recursive: true, errorOnExist: true }
   );
-  assert.throws(() => getPlan(roleDir, created.id), /storage conflict/i);
+  assert.throws(() => getPlan(roleDir, created.id), /storage bucket does not match plan status/i);
   await assert.rejects(getPlanAsync(roleDir, created.id), /storage conflict/i);
   await assert.rejects(listPlansAsync(roleDir), /storage conflict/i);
   const validation = validateRoleKnowledge(roleDir);
@@ -3098,4 +3098,47 @@ test("focus shape is unrestricted while explicit character budgets still apply i
   await assert.rejects(completeMemoryConsolidation(roleDir, request.run.id, [{ title: "ok", focus: "123456", content: "Stable", keywords: ["focus"] }]), /Consolidated memory focus exceeds 5/);
   const result = await completeMemoryConsolidation(roleDir, request.run.id, [{ title: "ok", focus: "a\nb", content: "Stable", keywords: ["focus"] }]);
   assert.equal(result.memories[0]!.focus, "a\nb");
+});
+
+
+test("canonical point reads and updates do not inspect unrelated plan JSON", t => {
+  const roleDir = makeRoleDir();
+  t.after(() => fs.rmSync(roleDir, { recursive: true, force: true }));
+  const plan = createPlan(roleDir, { id: "point-lookup", title: "Point lookup", status: "暂停", steps: [{ id: "one", title: "One" }], keywords: ["lookup"] });
+  const foreign = new Set<string>();
+  for (let i = 0; i < 48; i++) {
+    const otherId = `unrelated-${i}`, file = planJsonFile(roleDir, otherId, "active");
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, JSON.stringify({ ...plan, id: otherId, title: otherId }));
+    foreign.add(path.resolve(file));
+  }
+  let unrelatedExists = 0, unrelatedReads = 0;
+  const exists = fs.existsSync, read = fs.readFileSync;
+  t.mock.method(fs, "existsSync", (...args: Parameters<typeof exists>) => {
+    if (typeof args[0] === "string" && foreign.has(path.resolve(args[0]))) unrelatedExists++;
+    return exists(...args);
+  });
+  t.mock.method(fs, "readFileSync", (...args: Parameters<typeof read>) => {
+    if (typeof args[0] === "string" && foreign.has(path.resolve(args[0]))) unrelatedReads++;
+    return read(...args);
+  });
+  assert.equal(getPlan(roleDir, plan.id)?.id, plan.id);
+  const updated = updatePlan(roleDir, plan.id, { nextAction: "Only this plan changes" });
+  assert.equal(updated.nextAction, "Only this plan changes");
+  assert.equal(unrelatedExists, 0); assert.equal(unrelatedReads, 0);
+});
+
+test("canonical lookup preserves cross-bucket duplicate rejection and stale If-Match", t => {
+  const roleDir = makeRoleDir();
+  t.after(() => fs.rmSync(roleDir, { recursive: true, force: true }));
+  const plan = createPlan(roleDir, { id: "duplicate-point", title: "Duplicate fixture", status: "暂停", steps: [{ id: "one", title: "One" }], keywords: ["lookup"] });
+  const before = fs.readFileSync(planJsonFile(roleDir, plan.id, "active"));
+  assert.throws(() => updatePlan(roleDir, plan.id, { nextAction: "Must not write" }, "inventory-sha256:" + "0".repeat(64)), /REVISION_CONFLICT/);
+  assert.deepEqual(fs.readFileSync(planJsonFile(roleDir, plan.id, "active")), before);
+  const archive = planJsonFile(roleDir, plan.id, "archive");
+  fs.mkdirSync(path.dirname(archive), { recursive: true });
+  fs.writeFileSync(archive, JSON.stringify({ ...plan, activationStatus: "已归档", archiveStatus: "已归档", status: "已归档" }));
+  assert.throws(() => getPlan(roleDir, plan.id), /collision.*active\/archive/i);
+  assert.throws(() => updatePlan(roleDir, plan.id, { nextAction: "Must not write" }), /collision.*active\/archive/i);
+  assert.deepEqual(fs.readFileSync(planJsonFile(roleDir, plan.id, "active")), before);
 });

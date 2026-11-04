@@ -28,7 +28,7 @@ class RuntimeOwner {
     this.state = 'created'; this.firstFailure = undefined; this.stopping = undefined; this.observation = { exit: null, close: null };
   }
   evidence() {
-    return { identity: clone(this.identity, 'identity'), state: this.state, pid: this.child?.pid ?? null, firstFailure: this.firstFailure && errorData(this.firstFailure), firstUnknownObservation: this.firstUnknownObservation, observation: clone(this.observation, 'observation'), calls: [...this.hostCalls.values()].map(({ promise, releaseAdmission, archivePromise, ...item }) => ({ ...item })), pending: [...this.pending.keys()] };
+    return { identity: clone(this.identity, 'identity'), state: this.state, pid: this.child?.pid ?? null, firstFailure: this.firstFailure && errorData(this.firstFailure), firstUnknownObservation: this.firstUnknownObservation, observation: clone(this.observation, 'observation'), calls: [...this.hostCalls.values()].map(({ promise, releaseAdmission, archivePromise, ...item }) => ({ ...item })), pending: [...this.pending.keys()], ...(this.probeDelay ? { probe: clone(this.probeDelay, 'probe diagnostic') } : {}) };
   }
   recordEvidence() { try { Promise.resolve(this.record(this.evidence())).catch(error => { this.firstFailure ??= error; }); } catch (error) { this.firstFailure ??= error; } }
   fail(error) { this.firstFailure ??= error; this.recordEvidence(); }
@@ -75,10 +75,15 @@ class RuntimeOwner {
   }
   request(command, payload, milliseconds = this.requestMs, duringStop = false) {
     if (!this.child?.connected || this.observation.close || (this.stopping && !duringStop)) return Promise.reject(new TransportError('OWNER_REVOKED', 'Isolated owner is unavailable.'));
-    if (this.pending.size >= 64) return Promise.reject(new TransportError('RPC_CAPACITY', 'Isolated owner has 64 in-flight requests.'));
     const requestId = randomUUID(), sequence = ++this.sequence;
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
+        if (command === 'ping') {
+          // A missed read-only observation is not proof that its original owner failed.
+          // Keep this same request pending; its late response resumes the existing probe.
+          this.probeDelay = { state: 'degraded', requestId, deadlineMs: milliseconds, observedAt: Date.now() };
+          this.recordEvidence(); return;
+        }
         const error = new TransportError('PLUGIN_OPERATION_UNCONFIRMED', `Isolated ${command} exceeded its deadline; the original operation will not be replayed.`, { requestId, command });
         this.fail(error);
         if (this.state === 'committed') this.notifyFailure(error);
@@ -110,6 +115,7 @@ class RuntimeOwner {
       const item = this.pending.get(message.requestId);
       if (!item || item.sequence !== message.sequence) return;
       clearTimeout(item.timer); this.pending.delete(message.requestId);
+      if (item.command === 'ping' && this.probeDelay?.requestId === message.requestId) { delete this.probeDelay; this.recordEvidence(); }
       message.error ? item.reject(remoteError(message.error)) : item.resolve(message.value); return;
     }
     if (message.sequence <= this.incomingSequence) return;
@@ -118,13 +124,7 @@ class RuntimeOwner {
       const error = remoteError(message.error); this.fail(error); this.notifyFailure(error); void this.stop().catch(stopError => this.fail(stopError)); return;
     }
     if (message.type !== 'host-call' || this.stopping || this.hostCalls.has(message.requestId)) return;
-    // Terminal diagnostic history is bounded; accepted/unknown operations are
-    // never evicted or retried. At most 64 such operations may be admitted.
-    const running = [...this.hostCalls.values()].filter(item => !item.settled);
-    let declaredRead = false;
-    try { const contract = contractFor(this.contracts, message.capability); declaredRead = contract.kind === 'async-methods' && contract.methods.includes(message.method) && this.methodEffect(message.capability, message.method, contract.effects?.[message.method] ?? 'unknown') === 'read'; } catch { /* The ordinary pre-dispatch validation below reports the contract failure. */ }
-    const unknown = [...this.hostCalls.values()].filter(item => item.settled && item.effectOutcome === 'unknown');
-    if (running.length >= 64 || !declaredRead && unknown.length >= 64) { this.replyHost(message, { error: errorData(new TransportError('RPC_CAPACITY', 'This original owner has no free call slot.')) }); return; }
+    // Only settled diagnostic history is bounded; original pending/unknown calls stay owned.
     const terminal = [...this.hostCalls.values()].filter(item => item.settled && item.effectOutcome !== 'unknown' && (this.acknowledged(item) || !item.dispatchStarted));
     while (terminal.length >= 64) this.hostCalls.delete(terminal.shift().requestId);
     const receipt = { requestId: message.requestId, sequence: message.sequence, capability: message.capability, method: message.method, status: 'received', startedAt: Date.now(), dispatchStarted: false, settled: false, executionOutcome: 'not_started', effectOutcome: 'not_started', responseDelivery: 'pending', retryAllowed: false, uncertaintyObserved: false };

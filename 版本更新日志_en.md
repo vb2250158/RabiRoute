@@ -6,6 +6,12 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.5.4 - 2026-11-04
+
+- Keep the original plugin process and registered services when a read-only heartbeat is late; the same request resumes observation on its late response. Real exits and uncertain business-call outcomes retain their existing handling.
+- Remove hidden default 64-call admission limits on both plugin RPC directions and receipt archiving. Preserve explicit positive limits, byte backpressure, original requests and complete durable receipts.
+- Reuse the canonical repository identity resolver for single-plan reads and updates instead of rereading every other plan JSON after a match; retain collisions, revisions, leases and transactional recovery.
+
 ## 0.5.3 - 2026-11-04
 
 - Preflight remote Codex creation receipts before freezing a previously unused caller intent, so unsupported clients do not lock an unexecuted initial message; retain exact original-intent recovery after reservation or uncertain effects.

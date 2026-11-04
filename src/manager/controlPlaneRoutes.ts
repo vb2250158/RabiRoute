@@ -310,6 +310,7 @@ import { createPluginManagement, readPluginManagementManifest } from "./pluginMa
 import { createPluginManagementOperations } from "./pluginManagementOperations.js";
 import { registerManagerBootstrap, splitManagerBootstrapPublicOperations } from "./managerBootstrap.js";
 import { AsyncPluginOutcomeArchive } from "../plugin-runtime-host/asyncOutcomeArchive.js";
+import type { RuntimeObservation } from "../plugin-runtime-host/bridge/executor.mjs";
 import { withRouteControlAsyncRegistration } from "../plugin-runtime-host/routeControlAsyncRegistration.js";
 import { ProcessLeaseRegistry } from "../runtime/processLeaseRegistry.js";
 import { createWearableCompanionRuntimeIdentity } from "./wearableCompanionRuntimeIdentity.js";
@@ -1316,6 +1317,16 @@ let managerPort = managerPortPolicy.mode === "fixed" ? managerPortPolicy.port : 
 let managerBaseUrl = managerPort > 0 ? `http://127.0.0.1:${managerPort}` : "";
 let managerInstanceId = "";
 let managerSourcePatchStatus: (() => ReturnType<ManagerSourcePatchService["status"]>) | undefined;
+const managerPluginProbeDiagnostics = new Map<string, Readonly<{ instanceId: string; pid: number | null; requestId: string; deadlineMs: number; observedAt: number }>>();
+function capturePluginRuntimeObservation(observation: RuntimeObservation): void {
+  const key = observation.identity.activationId;
+  if (observation.probe && observation.state === "committed" && !observation.observation.close) {
+    managerPluginProbeDiagnostics.set(key, Object.freeze({ instanceId: observation.identity.instanceId, pid: observation.pid, ...observation.probe }));
+  } else managerPluginProbeDiagnostics.delete(key);
+}
+function pluginReadinessWithProbeObservations(readiness: Readonly<{ state: "ready" | "degraded"; missingCapabilities: readonly string[] }>): Readonly<{ state: "ready" | "degraded"; missingCapabilities: readonly string[] }> {
+  return managerPluginProbeDiagnostics.size ? Object.freeze({ ...readiness, state: "degraded" as const }) : readiness;
+}
 let managerPluginGenerationStatus: Readonly<{
   id: string;
   sequence: number;
@@ -7108,10 +7119,10 @@ function publicWebguiLanAccessPayload(request: http.IncomingMessage): Record<str
 function managerHealthPayload(): Record<string, unknown> {
   const sourcePatches = managerSourcePatchStatus?.();
   const pluginGeneration = managerPluginGenerationStatus;
-  const pluginReadiness = pluginGeneration?.readiness ?? {
+  const pluginReadiness = pluginReadinessWithProbeObservations(pluginGeneration?.readiness ?? {
     state: "degraded" as const,
     missingCapabilities: ["plugin-kernel-not-ready"]
-  };
+  });
   const requiredRoutes = runtimes.values().filter(runtime =>
     runtime.definition.enabled === true
     && (Boolean(runtime.process) || sharedGatewayMessageAdapterTypes(runtime.definition, installedGatewayEndpointTypes).length > 0)
@@ -7137,6 +7148,7 @@ function managerHealthPayload(): Record<string, unknown> {
     memoryConsolidation: memoryConsolidationScheduler?.failureSummary() ?? { backoff: 0, incidents: 0 },
     planFeedbackRecovery: planFeedbackRecoveryService?.failureSummary() ?? { backoff: 0, incidents: 0 },
     operationalLog,
+    isolatedPluginProbes: [...managerPluginProbeDiagnostics.values()],
     configWatch: publicManagerWatchBrokerStatus(configWatchLifecycle),
     pluginPackageWatch: publicManagerWatchBrokerStatus(pluginPackageWatchLifecycle)
   };
@@ -7149,7 +7161,8 @@ function managerHealthPayload(): Record<string, unknown> {
     + (routeCatalogStartup.state === "degraded" ? routeCatalogStartup.incidents : 0)
     + (operationalLog.state === "degraded" ? 1 : 0)
     + watchIncidentCount
-    + backgroundLifecycle.performance.incidents;
+    + backgroundLifecycle.performance.incidents
+    + backgroundLifecycle.isolatedPluginProbes.length;
   return {
     protocolVersion: 1,
     applicationGenerationId: managerHostIdentity?.applicationGenerationId ?? managerInstanceId,
@@ -8493,7 +8506,7 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
       applicationGenerationId: managerHostIdentity?.applicationGenerationId ?? managerInstanceId,
       managerInstanceId
     },
-    executor: createFullPluginExecutor(managerPluginProcessLeases, managerPluginOutcomeArchive),
+    executor: createFullPluginExecutor(managerPluginProcessLeases, managerPluginOutcomeArchive, capturePluginRuntimeObservation),
     onPublished: generation => {
       capturePluginGeneration(generation);
       managerPluginRoutes.refreshPublication();

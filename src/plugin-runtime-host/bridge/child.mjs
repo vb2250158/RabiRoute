@@ -13,7 +13,6 @@ function send(body, requestId, seq) {
 }
 function callHost(capability, method, args) {
   if (abort.signal.aborted) return Promise.reject(new TransportError('OWNER_REVOKED', 'Plugin owner is revoked.'));
-  if (pending.size >= 64) return Promise.reject(new TransportError('RPC_CAPACITY', 'Plugin has 64 in-flight host calls.'));
   const requestId = randomUUID(), seq = ++sequence;
   return new Promise((resolve, reject) => { pending.set(requestId, { resolve, reject, sequence: seq }); send({ type: 'host-call', capability, method, args }, requestId, seq); });
 }

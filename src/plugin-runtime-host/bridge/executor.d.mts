@@ -4,7 +4,7 @@ import type { AsyncMethodEffect, OutcomeObservation } from "../asyncOutcomeArchi
 export type ServiceTransport = Readonly<{ kind: "unsupported" }> | Readonly<{ kind: "data" }> | Readonly<{ kind: "async-methods"; methods: readonly string[]; effects?: Readonly<Record<string, AsyncMethodEffect>> }>;
 export type PackageProof = Readonly<{ root: string; files: readonly Readonly<{ relative: string; sha256: string }>[] }>;
 export type ChildObservation = Readonly<{ code: number | null; signal: NodeJS.Signals | null; observedAt: number }>;
-export type RuntimeObservation = Readonly<{ identity: PluginIdentity; state: string; pid: number | null; firstFailure?: unknown; firstUnknownObservation?: unknown; calls: readonly unknown[]; observation: { exit: ChildObservation | null; close: ChildObservation | null }; pending: readonly string[] }>;
+export type RuntimeObservation = Readonly<{ identity: PluginIdentity; state: string; pid: number | null; firstFailure?: unknown; firstUnknownObservation?: unknown; calls: readonly unknown[]; observation: { exit: ChildObservation | null; close: ChildObservation | null }; pending: readonly string[]; probe?: Readonly<{ state: "degraded"; requestId: string; deadlineMs: number; observedAt: number }> }>;
 export class BridgedIsolatedPluginExecutor {
   constructor(options: Readonly<{
     contracts: Readonly<Record<string, ServiceTransport>>;

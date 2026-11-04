@@ -73,15 +73,15 @@ export class AsyncPluginOutcomeArchive {
   #closing = false;
   #writes = 0;
   constructor(readonly root: string, private readonly options: ArchiveOptions = {}) {
-    this.#hotLimit = options.hotLimit ?? 64; this.#pendingLimit = options.pendingLimitPerPlugin ?? 64; this.#readLimit = options.readLimitPerPlugin ?? 64;
-    if (!Number.isSafeInteger(this.#hotLimit) || this.#hotLimit < 1 || !Number.isSafeInteger(this.#pendingLimit) || this.#pendingLimit < 1 || !Number.isSafeInteger(this.#readLimit) || this.#readLimit < 1) throw new Error("Invalid async outcome archive capacity.");
+    this.#hotLimit = options.hotLimit ?? 64; this.#pendingLimit = options.pendingLimitPerPlugin ?? 0; this.#readLimit = options.readLimitPerPlugin ?? 0;
+    if (!Number.isSafeInteger(this.#hotLimit) || this.#hotLimit < 1 || !Number.isSafeInteger(this.#pendingLimit) || this.#pendingLimit < 0 || !Number.isSafeInteger(this.#readLimit) || this.#readLimit < 0) throw new Error("Invalid async outcome archive capacity.");
   }
   reserve(identity: PluginIdentity, requestId: string, effect: AsyncMethodEffect): () => void {
     if (this.#closing) throw Object.assign(new Error("Outcome archive is closing; original call was not dispatched."), { code: "RPC_OUTCOME_ADMISSION_STOPPED", mutationOutcome: "not_started" });
     const read = effect === "read", pool = read ? this.#readReservations : this.#reservations;
     const owner = pluginKey(identity), key = outcomeKey(identity, requestId), tickets = pool.get(owner) ?? new Set<string>();
     const retained = read ? 0 : (this.#unreservedPending.get(owner)?.size ?? 0) + (this.#readUncertainty.get(owner)?.size ?? 0);
-    if (this.#ticketOwners.has(key) || tickets.size + retained >= (read ? this.#readLimit : this.#pendingLimit)) throw Object.assign(new Error(read ? "This plugin has no free read outcome slot; original call was not dispatched." : "This plugin cannot preserve another unknown result; original call was not dispatched."), { code: read ? "RPC_READ_CAPACITY" : "RPC_OUTCOME_CAPACITY", mutationOutcome: "not_started" });
+    if (this.#ticketOwners.has(key) || (read ? this.#readLimit : this.#pendingLimit) > 0 && tickets.size + retained >= (read ? this.#readLimit : this.#pendingLimit)) throw Object.assign(new Error(read ? "This plugin has no free read outcome slot; original call was not dispatched." : "This plugin cannot preserve another unknown result; original call was not dispatched."), { code: read ? "RPC_READ_CAPACITY" : "RPC_OUTCOME_CAPACITY", mutationOutcome: "not_started" });
     tickets.add(key); pool.set(owner, tickets); if (read) this.#readTickets.add(key); this.#ticketOwners.set(key, owner);
     let complete!: () => void; const promise = new Promise<void>(resolve => { complete = resolve; }); this.#ticketCompletion.set(key, { promise, complete });
     return () => this.#release(key);
