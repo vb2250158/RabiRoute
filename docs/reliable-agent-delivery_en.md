@@ -2,6 +2,13 @@ English | [简体中文](reliable-agent-delivery.md)
 
 # Reliable Agent delivery and records
 
+## Explicit Manager recovery
+
+Starting with `0.6.1`, Manager startup, Stop Hooks, node recovery and receipt events no longer automatically sweep historical reservations. Message-processing automation `1.0.1` does not start recurring reply reminders for old requests. Knowledge callback reminders and plan subscriptions remain available. Original records, normal sends and explicit original-ID receipt checks retain the contracts below. Accepted queues in managed clients retain their version-specific transport contracts.
+
+At turn completion, the Stop Hook checks this session's unanswered requests and attempts at most one in-hook prompt per original request. It continues the same turn without sending a chat message or scheduling a wakeup. Later Stops do not repeat the prompt; uncertain replies are checked by their original receipt. Configured completion delivery waits for the actual final result.
+
+
 Status: source-connected; isolated fault tests and installed-runtime acceptance are separate evidence. This page does not claim deployment to connected computers.
 
 Business Hooks or plugins choose when to send, content, target and reply policy. Rabi durably accepts explicit delivery intents, transmits in the background, recovers, and stores acceptance evidence. `responsePolicy=none` does not weaken the reliability of a submitted delivery.
@@ -64,7 +71,7 @@ These control capacity, exponential backoff and queue scheduling. By default, up
 
 ## Same IDs and acceptance evidence
 
-The same intentId and content returns its original record; changed content or target conflicts. Manager derives a formal deliveryId from authenticated source identity and freezes content, target and execution options. Pre-send verification failures stay prepared and resume that snapshot.
+The same intentId and content returns its original record; changed content or target conflicts. Manager derives a formal deliveryId from authenticated source identity and freezes content, target and execution options. Pre-send verification failures stay prepared; callers may explicitly continue the original ID and snapshot. Manager does not initiate background continuation.
 
 Dispatching records reconcile original evidence. Only positive transport-owner proof that no prompt frame was sent permits returning to prepared. The proof must be persisted first and bound to the original target, prompt and execution-option hashes, Manager dispatch attempt and remote transport attempt. Old proof cannot reset a newer attempt. A lost proof response is recovered by querying the original durable proof after reconnection. Timeout, disconnection or a missing receipt is not such proof. Committed returns the original receipt; cancellation cannot retract already accepted content.
 

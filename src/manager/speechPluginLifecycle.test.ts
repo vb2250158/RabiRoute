@@ -60,7 +60,7 @@ test("kernel speech shutdown confirms an uninstalled runtime without starting op
   f.nativeStops.playback = async () => { assert.fail("an absent optional runtime must not receive a playback stop request"); };
   await f.kernel.switch([f.candidate("uninstalled")]);
   await f.kernel.dispose();
-  assert.equal(ownerInspected, true);
+  assert.equal(ownerInspected, false, "a scope that never acquired Speech must not inspect an external runtime");
   assert.deepEqual(f.kernel.current().cleanupDiagnostics, []);
 });
 

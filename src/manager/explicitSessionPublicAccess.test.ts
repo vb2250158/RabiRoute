@@ -75,9 +75,14 @@ test("remote endpoints need only an authenticated computer and explicit provider
       registry: { localInstanceId: "manager" }, config: { getLanAgentDeliveryPolicy: () => ({ enabled: true, incarnation: "policy" }) },
       store: new AgentRequestStore({ read: () => undefined, write: () => {} }), receiptDirectory: root
     } as unknown as AgentEndpointDeliveryContext);
-    const endpoint = factory.remoteEndpoint("computer", "dsh", "explicit-unsaved-session", "dsh");
+    const lease = authority.getNodeAuthorization("computer")!;
+    const incarnation = createHash("sha256").update(JSON.stringify([lease.incarnation, "policy"])).digest("hex");
+    const endpoint = factory.remoteEndpoint("computer", "dsh", "explicit-unsaved-session", "dsh", incarnation);
     factory.authorize(endpoint);
     assert.equal(endpoint.sessionId, "explicit-unsaved-session");
+    assert.throws(() => factory.authorize({ ...endpoint, managerInstanceId: "different-manager" }), /another Manager/);
+    assert.throws(() => factory.authorize({ ...endpoint, authorizationIncarnation: "stale-target-incarnation" }), /revoked|rebound/);
+    assert.throws(() => factory.authorize({ ...endpoint, instanceId: "different-node" }), /revoked|rebound/);
     authority.revokeNode("computer");
     assert.throws(() => factory.authorize(endpoint), /disabled|revoked/);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }

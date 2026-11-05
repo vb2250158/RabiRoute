@@ -29,7 +29,7 @@ test("identity cache observes same-size replacement with restored mtime and dele
   assert.equal(await readPlanIdentityAsync(file), "third");
 });
 
-test("warm point reads avoid unrelated bodies and still reject a misplaced duplicate", async t => {
+test("warm point reads avoid unrelated bodies and still reject a canonical cross-bucket duplicate", async t => {
   const root = fixture(t);
   for (let index = 0; index < 500; index += 1) {
     const id = `plan-${String(index).padStart(4, "0")}`;
@@ -44,6 +44,8 @@ test("warm point reads avoid unrelated bodies and still reject a misplaced dupli
   const started = performance.now();
   assert.equal(getPlan(root, target)?.id, target);
   const coldMs = performance.now() - started;
+  // Each public read path has its own cold work; measure only subsequent warm reads.
+  assert.equal((await getPlanAsync(root, target))?.id, target);
   const originalSync = fs.readFileSync;
   const originalAsync = fs.promises.readFile;
   let unrelatedReads = 0;
@@ -66,12 +68,15 @@ test("warm point reads avoid unrelated bodies and still reject a misplaced dupli
     fs.readFileSync = originalSync;
     fs.promises.readFile = originalAsync;
   }
-  const duplicate = path.join(root, "plans", "archive", "arbitrary-physical-name");
+  const duplicate = path.join(root, "plans", "archive", target);
   fs.mkdirSync(duplicate, { recursive: true });
-  fs.copyFileSync(path.join(root, "plans", "active", target, "plan.json"), path.join(duplicate, "plan.json"));
-  assert.throws(() => getPlan(root, target), /storage conflict/);
+  const original = JSON.parse(fs.readFileSync(path.join(root, "plans", "active", target, "plan.json"), "utf8"));
+  fs.writeFileSync(path.join(duplicate, "plan.json"), JSON.stringify({ ...original,
+    activationStatus: "已归档", archiveStatus: "已归档", status: "已归档" }));
+  assert.throws(() => getPlan(root, target), /identity collision across active\/archive/);
   await assert.rejects(getPlanAsync(root, target), /storage conflict/);
   fs.unlinkSync(path.join(duplicate, "plan.json"));
+  fs.rmdirSync(duplicate);
   assert.equal(getPlan(root, target)?.id, target);
 });
 

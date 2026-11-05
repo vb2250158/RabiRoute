@@ -564,7 +564,9 @@ test("an explicitly attributed outcome persists through the native Board after e
   const response = await f.request("/api/message-processing/requirements/native-requirement/outcome", f.outcome);
   assert.equal(response.status, 200); assert.equal((await response.json()).data.status, "awaiting_send");
   assert.equal(new MessageProcessingBoardStore(f.boardPath, f.now).getRequirement("native-requirement")?.decision?.decidedByThreadId, "explicit-source-session");
-  const forged = await f.request("/api/message-processing/requirements/native-requirement/outcome", { ...f.outcome, decidedByThreadId: "other-session" }); assert.equal(forged.status, 400);
+  const attributed = await f.request("/api/message-processing/requirements/native-requirement/outcome", { ...f.outcome, decidedByThreadId: "other-session" });
+  assert.equal(attributed.status, 200);
+  assert.equal(new MessageProcessingBoardStore(f.boardPath, f.now).getRequirement("native-requirement")?.decision?.decidedByThreadId, "other-session");
 });
 
 test("source changes during original asynchronous evidence verification prevent a durable outcome commit", async t => {

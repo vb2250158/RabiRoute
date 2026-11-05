@@ -49,9 +49,12 @@ export type PlanTaskCompletionResult = {
 };
 
 export type AgentRequestStopResult = {
-  status: "ignored" | "scheduled" | "failed";
+  status: "ignored" | "scheduled" | "pending" | "failed";
   reason: string;
   requestIds?: string[];
+  /** Complete pending IDs for this exact session across all its workspaces. */
+  pendingSessionRequestIds?: string[];
+  snapshotComplete?: boolean;
   turnId?: string;
   error?: string;
 };
@@ -106,6 +109,10 @@ export type ProjectFileChangeState = {
 
 type CodexHookSessionStoreFile = {
   planFollowups?: Record<string, PlanFollowupReceipt>;
+  /** Presentation-only attempts; never Agent delivery or response receipts. */
+  agentRequestStopReminders?: Record<string, string[]>;
+  /** One current continuation barrier per native session, not a reply receipt. */
+  agentRequestStopFollowupTurns?: Record<string, string>;
   version: number;
   sessions: Record<string, CodexHookSessionBinding>;
   planTaskCompletions: Record<string, PlanTaskCompletionState>;
@@ -135,6 +142,8 @@ export type CodexHookContextResult = {
   timings?: { name: string; startMs: number; durationMs: number }[];
   followup?: { decision: "block"; reason: string };
   completionDeliveries?: import("./agentCompletionDelivery.js").CompletionDeliveryResult[];
+  /** Repeated initial Stop must not publish a preliminary final while this turn continues. */
+  completionDeferred?: boolean;
   action: "none" | "bind" | "status" | "refresh" | "off";
   binding: CodexHookSessionBinding | null;
   additionalContext: string;
@@ -562,9 +571,8 @@ export class CodexHookContextService {
     const enabled = !this.hookEnabled || this.hookEnabled(request);
     if (request.eventName === "Stop") {
       const followup = await measure("plan-followup", () => this.planFollowup(request, planRoleIds));
-      if (followup) return { action: "none", binding: this.getBinding(request.sessionId), additionalContext: "", followup };
-      const result = await this.handleStop(request, enabled, planRoleIds, measure);
-      if (!result.additionalContext.trim() && result.planTaskCompletion?.status !== "failed"
+      const result = await this.handleStop(request, enabled, planRoleIds, measure, followup);
+      if (!result.followup && !result.completionDeferred && !result.additionalContext.trim() && result.planTaskCompletion?.status !== "failed"
         && result.agentRequestStop?.status !== "failed" && result.projectFileChangeReminder?.status !== "failed"
         && this.deliverAgentCompletion) {
         result.completionDeliveries = await measure("completion-delivery", () => this.deliverAgentCompletion!(request, planRoleIds));
@@ -856,9 +864,28 @@ export class CodexHookContextService {
   }
 
   private async handleStop(request: CodexHookContextRequest, planCompletionEnabled: boolean, planRoleIds: readonly string[] | undefined,
-    measure: <T>(name: string, task: () => T | Promise<T>) => Promise<T>): Promise<CodexHookContextResult> {
+    measure: <T>(name: string, task: () => T | Promise<T>) => Promise<T>,
+    planFollowup?: CodexHookContextResult["followup"]): Promise<CodexHookContextResult> {
+    let agentRequestStop = await measure("agent-request-stop", () => this.recordAgentRequestStopResult(request));
+    let requestFollowup: CodexHookContextResult["followup"];
+    let requestCompletionDeferred = false;
+    try {
+      const reminder = this.agentRequestStopFollowup(request, agentRequestStop);
+      requestFollowup = reminder?.followup;
+      requestCompletionDeferred = reminder?.deferCompletion === true;
+    } catch (error) {
+      // A failed presentation checkpoint must not loop or manufacture a reply.
+      agentRequestStop = { ...agentRequestStop, status: "failed", reason: "agent_request_hook_checkpoint_failed",
+        error: error instanceof Error ? error.message : String(error) };
+    }
+    const reasons = [planFollowup?.reason, requestFollowup?.reason].filter(Boolean);
+    if (reasons.length || requestCompletionDeferred) {
+      return { action: "none", binding: this.getBinding(request.sessionId), additionalContext: "", completionDeferred: true,
+        ...(reasons.length ? { followup: { decision: "block" as const, reason: reasons.join("\n\n") } } : {}), agentRequestStop,
+        planTaskCompletion: { status: "ignored", reason: reasons.length ? "deferred_after_stop_followup" : "deferred_until_stop_continuation", turnId: request.turnId } };
+    }
+    // Only the final Stop may publish chat history or configured completion messages.
     await measure("chat-history", () => this.recordChatReply(request));
-    const agentRequestStop = await measure("agent-request-stop", () => this.recordAgentRequestStopResult(request));
     const projectFileChangeReminder = await measure("file-change-reminder", () => this.handleProjectFileChangeStop(request, planRoleIds));
     if (projectFileChangeReminder.result.status === "delivered") {
       if (planCompletionEnabled) void this.handlePlanStop(request, planRoleIds).catch(() => undefined);
@@ -979,6 +1006,46 @@ export class CodexHookContextService {
         .map((plan) => String(plan.taskBinding?.workspace || "").trim())
         .filter(Boolean);
     }))];
+  }
+
+  private agentRequestStopFollowup(request: CodexHookContextRequest, result: AgentRequestStopResult): { followup?: CodexHookContextResult["followup"]; deferCompletion: boolean } | undefined {
+    if (!request.turnId) return undefined;
+    const sessionId = this.requireSessionId(request.sessionId);
+    const store = this.readStore();
+    const deferCompletion = !request.stopHookActive && store.agentRequestStopFollowupTurns?.[sessionId] === request.turnId;
+    // A failed/partial current read cannot erase this turn's already-published continuation boundary.
+    if (result.turnId !== request.turnId || result.status === "failed") return { deferCompletion };
+    const complete = result.snapshotComplete === true && Array.isArray(result.pendingSessionRequestIds);
+    if (result.status !== "scheduled" && result.status !== "pending" && !complete) return { deferCompletion };
+    const requestIds = [...new Set(result.requestIds ?? [])];
+    const pending = new Set(complete ? result.pendingSessionRequestIds : requestIds);
+    const previous = store.agentRequestStopReminders?.[sessionId];
+    const oldIds: string[] = Array.isArray(previous) ? previous : [];
+    // Prune display facts only with a complete owner snapshot, never on a failed or partial read.
+    const retained = complete ? oldIds.filter(id => pending.has(id)) : oldIds;
+    const shown = new Set(retained);
+    const fresh = request.stopHookActive ? [] : requestIds.filter(id => !shown.has(id));
+    if (fresh.length || retained.length !== oldIds.length) {
+      const reminders = { ...store.agentRequestStopReminders };
+      const next = [...shown, ...fresh];
+      if (next.length) reminders[sessionId] = next;
+      else delete reminders[sessionId];
+      store.agentRequestStopReminders = reminders;
+      if (fresh.length) store.agentRequestStopFollowupTurns = { ...store.agentRequestStopFollowupTurns, [sessionId]: request.turnId };
+      // At-most-once presentation attempt, not evidence of delivery or response.
+      this.writeStore(store);
+    }
+    if (!fresh.length) return { deferCompletion: !request.stopHookActive
+      && store.agentRequestStopFollowupTurns?.[sessionId] === request.turnId };
+    const listed = fresh.slice(0, 8).map(id => "GET /api/agent/requests/" + encodeURIComponent(id));
+    return { deferCompletion: true, followup: { decision: "block", reason: [
+      "[Rabi 待回复请求检查]",
+      "当前会话有" + fresh.length + "个尚未正式回传的原请求；本次列出前" + listed.length + "项：",
+      ...listed,
+      "其余项仍在原待回复请求列表中，按当前完整会话 ID 筛选读取。",
+      "结束前核对原请求，按原回传参数报告实际结果和下一步。已回传但结果待确认时，只核对原回执，不重发正文或换编号。",
+      "本提示只在当前 Stop 钩子中对每个原请求出现一次，不发送提醒消息，不定时唤醒会话，也不代写已回复或已接收状态。"
+    ].join("\n") } };
   }
 
   private async recordAgentRequestStopResult(request: CodexHookContextRequest): Promise<AgentRequestStopResult> {
@@ -1242,6 +1309,8 @@ export class CodexHookContextService {
     return {
       version: STORE_VERSION,
       planFollowups: raw.planFollowups ?? {},
+      agentRequestStopReminders: raw.agentRequestStopReminders ?? {},
+      agentRequestStopFollowupTurns: raw.agentRequestStopFollowupTurns ?? {},
       sessions: raw.sessions && typeof raw.sessions === "object" ? raw.sessions : {},
       planTaskCompletions: raw.planTaskCompletions && typeof raw.planTaskCompletions === "object"
         ? raw.planTaskCompletions
@@ -1255,6 +1324,8 @@ export class CodexHookContextService {
     writeJsonAtomic(this.storePath, {
       version: STORE_VERSION,
       planFollowups: store.planFollowups ?? {},
+      agentRequestStopReminders: store.agentRequestStopReminders ?? {},
+      agentRequestStopFollowupTurns: store.agentRequestStopFollowupTurns ?? {},
       sessions: store.sessions,
       planTaskCompletions: store.planTaskCompletions,
       projectFileChanges: store.projectFileChanges,

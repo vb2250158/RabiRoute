@@ -8,8 +8,9 @@ import {
 
 class MemoryPersistence implements AgentRequestPersistence {
   value: unknown;
+  writes = 0;
   read(): unknown { return this.value; }
-  write(state: unknown): void { this.value = structuredClone(state); }
+  write(state: unknown): void { this.writes++; this.value = structuredClone(state); }
 }
 
 function parties() {
@@ -255,4 +256,42 @@ test("a connected delegate can reply with its actual source attribution and unre
     inReplyToRequestId: original.requestId, result: "Delegate result", nextAction: "Continue" });
   await store.commit(response);
   assert.deepEqual(store.get(original.requestId!)?.response?.by, { ...actualSender, threadName: undefined });
+});
+
+test("Stop reads exact target/workspace unanswered IDs without persisting or changing delivery state", async () => {
+  const persistence = new MemoryPersistence();
+  const store = new AgentRequestStore(persistence);
+  const accepted = await store.prepare({ ...parties(), responsePolicy: "required", responseInstruction: "Return exact result" });
+  await store.commit(accepted);
+  const outside = await store.prepare({ ...parties(), target: { ...parties().target, workspace: "C:/other" }, responsePolicy: "required", responseInstruction: "Other workspace" });
+  await store.commit(outside);
+  const pending = await store.prepare({ ...parties(), responsePolicy: "required", responseInstruction: "Not delivered" });
+  const terminal = await store.prepare({ ...parties(), responsePolicy: "required", responseInstruction: "Cancelled" });
+  await store.commit(terminal); await store.cancel(terminal.requestId!);
+  const before = JSON.stringify(persistence.value), writesBefore = persistence.writes;
+  assert.deepEqual(store.unansweredTargetRequestIds("target", "\\\\?\\C:\\repo"), [accepted.requestId]);
+  assert.deepEqual(store.unansweredTargetRequestIds("different-target", "C:/repo"), []);
+  assert.deepEqual(store.unansweredTargetRequestIds("target", "C:/other"), [outside.requestId]);
+  assert.equal(store.get(pending.requestId!)?.status, "pending_delivery");
+  assert.equal(JSON.stringify(persistence.value), before);
+  assert.equal(persistence.writes, writesBefore);
+});
+
+test("Stop metadata query avoids rewriting a representative 5400-request history", async () => {
+  const persistence = new MemoryPersistence();
+  const seed = new AgentRequestStore(persistence);
+  const prepared = await seed.prepare({ ...parties(), responsePolicy: "required", responseInstruction: "Return actual result" });
+  await seed.commit(prepared);
+  const raw = JSON.parse(JSON.stringify(persistence.value));
+  const example = raw.requests[prepared.requestId!];
+  raw.requests = {};
+  for (let i = 0; i < 5400; i++) raw.requests["request-scale-" + i] = { ...example, id: "request-scale-" + i,
+    deliveryId: "scale-delivery-" + i, target: { ...example.target, threadId: i === 2700 ? "exact-target" : "other-target" } };
+  const reader = new MemoryPersistence();reader.value = raw;
+  const store = new AgentRequestStore(reader);
+  const before = JSON.stringify(reader.value), writesBefore = reader.writes, started = performance.now();
+  assert.deepEqual(store.unansweredTargetRequestIds("exact-target", "C:/repo"), ["request-scale-2700"]);
+  console.log("Stop 5400 metadata-only query ms:", performance.now() - started);
+  assert.equal(JSON.stringify(reader.value), before);
+  assert.equal(reader.writes, writesBefore);
 });

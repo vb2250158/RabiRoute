@@ -6,6 +6,13 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.6.1 - 2026-11-05
+
+- Stop Manager startup, Stop Hooks, node recovery and receipt events from automatically sweeping historical deliveries. Keep normal sends, explicit original-ID receipt checks and caller-initiated continuation under their existing contracts.
+- Update message-processing automation to `1.0.1`: activation no longer starts recurring reply reminders for old requests. Knowledge callback reminders and plan subscriptions remain available.
+- Present unanswered requests once through the current session’s natural Stop hook, without sending reminder messages or starting another turn. Complete session snapshots support presentation deduplication and never replace formal response receipts.
+- Preserve original requests, reservations and acceptance evidence. Do not clear history, replay uncertain business deliveries or batch-update remote connectors.
+
 ## 0.6.0 - 2026-11-04
 
 - Read the host version from the running service and omit the old placeholder until that read completes.

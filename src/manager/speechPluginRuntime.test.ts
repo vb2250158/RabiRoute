@@ -15,7 +15,7 @@ import { SpeechRuntimeControlError as RuntimeError } from "./speechRuntimeContro
 import { SpeechModelSettingsError as SettingsError } from "./speechModelSettings.js";
 import { GenerationRuntime } from "../plugin-kernel/generationRuntime.js";
 import { parsePluginManifest } from "../plugin-kernel/manifest.js";
-import { SpeechRuntimeControl } from "./speechRuntimeControl.js";
+import { SpeechRuntimeControl, type SpeechRuntimeControlOptions } from "./speechRuntimeControl.js";
 import { configureTimeouts, readTimeoutOverrides } from "../plugin-kernel/runtimeTimeouts.js";
 
 async function fixture(t: test.TestContext) {
@@ -148,6 +148,23 @@ async function nativeSpeechServiceFixture(t: test.TestContext, onEffectsRetireme
   return { ...f, runtime, candidate };
 }
 
+type OwnedFixtureChild = { pid: number; exitCode: number | null; signalCode: NodeJS.Signals | null; unref(): void };
+async function acquireFixtureRuntime(root: string, controls: {
+  inspectOwner: NonNullable<SpeechRuntimeControlOptions["inspectOwner"]>;
+  killProcessTree(pid: number, child: OwnedFixtureChild): Promise<void>;
+}) {
+  const child: OwnedFixtureChild = { pid: 456, exitCode: null, signalCode: null, unref() {} };
+  let launched = false;
+  const control = new SpeechRuntimeControl({ rootDir: root, platform: "win32",
+    serviceUrl: () => "http://127.0.0.1:54321", existsSync: () => true,
+    inspect: async configuredUrl => ({ state: launched ? "online" : "offline", checkedAt: new Date().toISOString(),
+      configuredUrl, defaults: {}, providers: { tts: [], asr: [] } }),
+    spawnRuntime: () => { launched = true; return child; }, inspectOwner: controls.inspectOwner,
+    killProcessTree: pid => controls.killProcessTree(pid, child) });
+  assert.equal((await control.start()).action, "started");
+  return control;
+}
+
 test("native Speech service disable and application shutdown leave a real foreign listener running", { skip: process.platform !== "win32", timeout: 20000 }, async t => {
   const f = await nativeSpeechServiceFixture(t);
   const listener = net.createServer(socket => socket.destroy());
@@ -155,7 +172,9 @@ test("native Speech service disable and application shutdown leave a real foreig
   t.after(() => new Promise<void>((resolve, reject) => listener.close(error => error ? reject(error) : resolve())));
   const address = listener.address(); assert.ok(address && typeof address !== "string");
   f.service.resources.speechRuntimeControl = new SpeechRuntimeControl({ rootDir: f.root, packageRoot: f.root,
-    serviceUrl: () => `http://127.0.0.1:${address.port}`, ensureDependencies: async () => { throw new Error("capture environment absent"); } });
+    serviceUrl: () => `http://127.0.0.1:${address.port}`, ensureDependencies: async () => { throw new Error("capture environment absent"); },
+    inspectOwner: async () => ({ pid: process.pid, owned: false }),
+    killProcessTree: async () => { assert.fail("the real foreign listener is not owned by this scope"); } });
   await assert.rejects(f.service.resources.speechRuntimeControl.start(), /capture environment absent/);
   await assert.rejects(f.service.resources.speechRuntimeControl.stop(), /拒绝停止/);
   await f.runtime.switch([f.candidate]);
@@ -169,9 +188,9 @@ test("native Speech service disable and application shutdown leave a real foreig
 test("native Speech service retirement preserves a genuine owned termination failure through application shutdown", async t => {
   const f = await nativeSpeechServiceFixture(t);
   const failure = new Error("owned Speech process termination failed");
-  f.service.resources.speechRuntimeControl = new SpeechRuntimeControl({ rootDir: f.root, platform: "win32",
-    serviceUrl: () => "http://127.0.0.1:54321", existsSync: () => false,
-    inspectOwner: async () => ({ pid: 456, owned: true }), killProcessTree: async () => { throw failure; } });
+  f.service.resources.speechRuntimeControl = await acquireFixtureRuntime(f.root, {
+    inspectOwner: async () => ({ pid: 456, owned: true }),
+    killProcessTree: async pid => { assert.equal(pid, 456); throw failure; } });
   await f.runtime.switch([f.candidate]); await f.runtime.switch([]);
   assert.ok(f.runtime.current().cleanupDiagnostics.some(item => item.instanceId === "manager:speech" && item.message === failure.message));
   await assert.rejects(f.runtime.shutdown(), (error: unknown) => {
@@ -185,16 +204,41 @@ test("native Speech service retirement closes its OS-verified workspace process 
   const f = await nativeSpeechServiceFixture(t);
   const root = await fs.realpath(f.root);
   const expectedHost = path.join(root, "plugin-adapters/rabi-speech/scripts/windows_host.py");
-  const child = spawn(process.execPath, ["-e", "const net=require('node:net');const server=net.createServer();server.listen(0,'127.0.0.1',()=>process.send({port:server.address().port}));", expectedHost], {
-    windowsHide: true, stdio: ["ignore", "ignore", "ignore", "ipc"],
-    env: { SystemRoot: process.env.SystemRoot, PATH: path.dirname(process.execPath), HOME: root, USERPROFILE: root, APPDATA: root, LOCALAPPDATA: root }
+  const ownedExecutable = path.join(root, "plugin-adapters/rabi-speech/runtime/RabiSpeech.exe");
+  await fs.mkdir(path.dirname(ownedExecutable), { recursive: true });
+  await fs.copyFile(process.execPath, ownedExecutable);
+  const reservation = net.createServer();
+  await new Promise<void>(resolve => reservation.listen(0, "127.0.0.1", resolve));
+  const address = reservation.address(); assert.ok(address && typeof address !== "string");
+  const port = address.port; assert.notEqual(port, 8781);
+  await new Promise<void>(resolve => reservation.close(() => resolve()));
+  let child: ReturnType<typeof spawn> | undefined, closed: Promise<unknown> | undefined;
+  let ready!: () => void;
+  const launched = new Promise<void>(resolve => { ready = resolve; });
+  t.after(async () => {
+    if (child && child.exitCode === null && child.signalCode === null) child.kill();
+    await closed;
+    await fs.rm(root, { recursive: true, force: true });
   });
-  const closed = once(child, "close");
-  t.after(async () => { if (child.exitCode === null && child.signalCode === null) child.kill(); await closed; });
-  const [message] = await once(child, "message") as [{ port: number }];
-  assert.ok(message.port > 0); assert.notEqual(message.port, 8781);
-  f.service.resources.speechRuntimeControl = new SpeechRuntimeControl({ rootDir: root, packageRoot: root,
-    serviceUrl: () => `http://127.0.0.1:${message.port}` });
+  const control = new SpeechRuntimeControl({ rootDir: root, packageRoot: root, existsSync: () => true,
+    serviceUrl: () => `http://127.0.0.1:${port}`,
+    inspect: async configuredUrl => {
+      if (child) await launched;
+      return { state: child ? "online" : "offline", checkedAt: new Date().toISOString(), configuredUrl,
+        defaults: {}, providers: { tts: [], asr: [] } };
+    },
+    spawnRuntime: () => {
+      child = spawn(ownedExecutable, ["-e", `const net=require('node:net');const server=net.createServer();server.listen(${port},'127.0.0.1',()=>process.send({port:server.address().port}));`, expectedHost], {
+        windowsHide: true, stdio: ["ignore", "ignore", "ignore", "ipc"],
+        env: { SystemRoot: process.env.SystemRoot, PATH: path.dirname(process.execPath), HOME: root, USERPROFILE: root, APPDATA: root, LOCALAPPDATA: root }
+      });
+      closed = once(child, "close");
+      child.once("message", message => { assert.equal((message as { port: number }).port, port); ready(); });
+      return child;
+    } });
+  assert.equal((await control.start()).action, "started");
+  assert.ok(child);
+  f.service.resources.speechRuntimeControl = control;
   await f.runtime.switch([f.candidate]); await f.runtime.switch([]);
   await f.runtime.shutdown(); await closed;
   assert.ok(child.exitCode !== null || child.signalCode !== null);
@@ -221,11 +265,14 @@ test("ordinary timeout diagnostics are formally confirmed when the shared Speech
   const originalGate = new Promise<void>(resolve => { release = resolve; });
   t.after(release);
   const f = await nativeSpeechServiceFixture(t, nextDisposer);
+  // The real launched process owns live I/O handles. Preserve that liveness in
+  // this fake-child fixture while the original unref'ed disposal timer expires.
+  const childLiveness = setInterval(() => {}, 1000);
+  t.after(() => clearInterval(childLiveness));
   let ownedAlive = true, killEntered = false;
-  f.service.resources.speechRuntimeControl = new SpeechRuntimeControl({ rootDir: f.root, platform: "win32",
-    serviceUrl: () => "http://127.0.0.1:54321", existsSync: () => false,
+  f.service.resources.speechRuntimeControl = await acquireFixtureRuntime(f.root, {
     inspectOwner: async () => ownedAlive ? { pid: 456, owned: true } : null,
-    killProcessTree: async pid => { assert.equal(pid, 456); killEntered = true; await originalGate; ownedAlive = false; } });
+    killProcessTree: async (pid, child) => { assert.equal(pid, 456); killEntered = true; await originalGate; ownedAlive = false; child.exitCode = 0; } });
   await f.runtime.switch([f.candidate]);
   const retirement = f.runtime.switch([]);
   // EffectScope reaches this second disposer only after its first publication

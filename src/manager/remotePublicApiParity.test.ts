@@ -35,14 +35,16 @@ test('future public operations and their resource identifiers use the same authe
   const f=fixture(t);
   for(const method of ['GET','HEAD','OPTIONS','POST','PUT','PATCH','DELETE'])f.admit(method,'/api/after-client-release/resources/glasses:one?view=all&futureQuery=yes&pageToken=cursor-next&tokenCount=2&secretary=name');
 });
-test('ordinary management bodies are not source claims; actual source events remain fenced',t=>{
+test('management and Hook attribution do not add source qualification to an authenticated connection',t=>{
   const f=fixture(t);
   for(const body of [null,'plain text',[{value:1}],{sender:'display-name',worker:{sessionId:'target-session'},sourceThreadId:'configuration-value',messageSource:{type:'system'}}]) {
     const request=f.admit('PUT','/api/after-client-release/settings');
     assert.doesNotThrow(()=>validateLanAgentRequestBody(request,body));
   }
   const source=f.admit('POST','/api/codex-hook/context');
-  assert.throws(()=>validateLanAgentRequestBody(source,{session_id:'foreign',agentType:'codex'}),/does not match/);
+  assert.doesNotThrow(()=>validateLanAgentRequestBody(source,{session_id:'foreign',agentType:'codex'}));
+  f.authority.revokeNode('node-one');
+  assert.throws(()=>validateLanAgentRequestBody(source,{session_id:'foreign',agentType:'codex'}),/disabled, revoked or replaced/);
 });
 test('real HTTP admission accepts HEAD, OPTIONS and arbitrary future management schemas',async t=>{
   const f=fixture(t);

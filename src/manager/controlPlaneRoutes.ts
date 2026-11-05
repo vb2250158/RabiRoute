@@ -4732,23 +4732,11 @@ async function recordAgentRequestStop(request: CodexHookContextRequest): Promise
   if (managerReadOnly) return { status: "ignored", reason: "manager_read_only", turnId: request.turnId };
   const turnId = String(request.turnId || "").trim();
   if (!turnId) return { status: "ignored", reason: "missing_turn_id" };
-  void agentEndpointDelivery?.recovery.onEvent().catch(error => managerOperationalLog.record("warn", "agent_endpoint_recovery_failed", { error: managerOperationalError(error, rootDir) }));
-  const scheduled = await agentRequests.recordTargetTurnEnded(request.sessionId, request.cwd, turnId);
-  for (const item of scheduled) scheduleAgentRequestReminder(item);
-  if (!scheduled.length) {
-    return { status: "ignored", reason: "no_unanswered_agent_requests", turnId };
-  }
-  publishManagerEvent("agent_requests_changed", {
-    requestIds: scheduled.map((item) => item.id),
-    status: "awaiting_response",
-    nextReminderAt: scheduled[0]?.nextReminderAt
-  });
-  return {
-    status: "scheduled",
-    reason: "target_turn_ended_without_response",
-    requestIds: scheduled.map((item) => item.id),
-    turnId
-  };
+  await agentRequests.ready();
+  const pendingSessionRequestIds = agentRequests.unansweredTargetRequestIds(request.sessionId);
+  const requestIds = request.cwd ? agentRequests.unansweredTargetRequestIds(request.sessionId, request.cwd) : pendingSessionRequestIds;
+  return { status: requestIds.length ? "pending" : "ignored", reason: requestIds.length
+    ? "unanswered_agent_requests_at_stop" : "no_unanswered_agent_requests", requestIds, pendingSessionRequestIds, snapshotComplete: true, turnId };
 }
 
 
@@ -7588,15 +7576,9 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
     receiptDirectory: path.join(rootDir, "data", ".runtime", "endpoint-transport-receipts"),
     readLocal: readAgentEndpointSummary, localOptions: request => agentThreadRequestOptions(request) });
   const endpointRecovery = agentEndpointDelivery.recovery;
-  const recoverEndpointDeliveries = () => {
-    void endpointRecovery.onEvent().catch(error => managerOperationalLog.record("warn", "agent_endpoint_recovery_failed", { error: managerOperationalError(error, rootDir) }));
-  };
-  void endpointRecovery.start().catch(error => managerOperationalLog.record("error", "agent_endpoint_recovery_start_failed", { error: managerOperationalError(error, rootDir) }));
-  const releaseEndpointRecovery = lanAgentRegistry.onDeliveryRecoveryEvent(recoverEndpointDeliveries);
-  recoverEndpointDeliveries();
+  // Keep the original ledger and explicit same-ID reconciliation. Background events do not initiate delivery work.
   managerRuntimeOwner.register("lan_agent_registry", async () => {
     const recoveryStopped = endpointRecovery.stop();
-    releaseEndpointRecovery();
     rabiLinkBusinessOwners = undefined;
     agentEndpointDelivery = undefined;
     instanceThreadTransport = undefined;
@@ -7660,7 +7642,7 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
         readOnly: () => managerReadOnly,
         getRuntimes: () => runtimes.values(),
         publishManagerEvent,
-        deliveryReceiptChanged: recoverEndpointDeliveries,
+        deliveryReceiptChanged: () => {}, // Explicit same-ID reconciliation owns receipt recovery.
         deviceContext: () => deviceAgentHostContext(lanAgentRegistry.localInstanceId),
         managerInstanceId: () => lanAgentRegistry.localInstanceId,
         runScan: (task: AgentAdapterCatalogWorkerTask, invocation?: AgentAdapterInvocation) =>

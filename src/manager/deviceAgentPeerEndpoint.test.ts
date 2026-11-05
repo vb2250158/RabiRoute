@@ -24,7 +24,7 @@ async function pair(run:(a:any,b:any)=>Promise<void>,peerEnabled=true) {
   const nodes:any[]=[];
   for(const name of ['a','b']) {
     const nodeDir=path.join(directory,name),deviceId='pc-'+name,eyeId='eye-'+name;
-    const state={scope:'same-application',localDeviceId:deviceId,proofCode:'',authorityFailure:false,peerHook:async(_target:string,_path:string)=>{},assignmentHook:async()=>{}};
+    const state={scope:'same-application',localDeviceId:deviceId,proofCode:'',authorityFailure:false,sessionReads:0,peerHook:async(_target:string,_path:string)=>{},assignmentHook:async()=>{}};
     const principal=(request:http.IncomingMessage):RabiLinkAgentPrincipal|null=> ['eye-a','eye-b','pc-a','pc-b'].includes(String(request.headers.authorization))
       ? {scope:state.scope,sourceDeviceId:String(request.headers.authorization),deviceOwner:true} : null;
     const peerRequest=async(target:string,method:'GET'|'POST',url:string,body?:unknown)=>{
@@ -58,6 +58,7 @@ async function pair(run:(a:any,b:any)=>Promise<void>,peerEnabled=true) {
     } as unknown as CorePublicOperationsContext).filter(value=>value.contract.pathTemplate==='/api/agent/delivery-authority'));
     const server=http.createServer(async(request,response)=>{try {
       const url=new URL(request.url!,'http://fixture.invalid');
+      if(request.method==='GET' && url.pathname===`/api/device-agents/${eyeId}/session`)state.sessionReads++;
       if(url.pathname==='/api/agent/delivery-authority' && state.authorityFailure){response.writeHead(503,{'content-type':'application/json'});response.end(JSON.stringify({error:'Original ledger unavailable'}));return;}
       const admitted=principal(request);if(admitted)markAuthenticatedConnectionRequest(request,()=>{assert.deepEqual(principal(request),admitted);});
       if(!(state.proofCode && url.pathname===`/api/device-agents/${eyeId}/session` && request.method==='GET') && routes.handle(request,url,response))return;
@@ -90,9 +91,11 @@ async function pair(run:(a:any,b:any)=>Promise<void>,peerEnabled=true) {
 const crossRequest={action:'send',agentAdapter:'deviceAgent',sourceThreadId:'session-eye-a',sourceAgentType:'agent',threadId:'session-eye-b',instanceBinding:{instanceId:'guid-b',agentId:'eye-b'},
   messageSource:{type:'agent',agentAdapter:'deviceAgent',sessionId:'session-eye-a',sessionName:'eye-a'},prompt:'Cross Manager original request',responsePolicy:'required',responseInstruction:'Return to original ledger'};
 
-test('independent HTTP Managers require an available native owner proof instead of trusting the source body',async()=>pair(async(a,b)=>{
-  const result=await b.call('eye-a','POST','/api/agent/threads',crossRequest);
-  assert.equal(result.statusCode,409);assert.match(result.body.error,/DEVICE_AGENT_SESSION_NOT_FOUND/);
+test('an authenticated source needs no native owner lookup while the actual target still claims its delivery',async()=>pair(async(a,b)=>{
+  const notice=b.queued(),pending=b.call('eye-a','POST','/api/agent/threads',crossRequest);await notice;
+  const accepted=await claim(b),result=await pending;
+  assert.equal(result.statusCode,200);assert.equal(accepted.sessionId,'session-eye-b');
+  assert.equal(a.state.sessionReads,0);
   const proof=await a.call('pc-b','GET','/api/device-agents/eye-a/session');assert.equal(proof.statusCode,200);assert.equal(proof.body.data.session.sessionId,'session-eye-a');
   const denied=await a.call('pc-b','POST','/api/device-agents/eye-a/deliveries/claim',proof.body.data.session);
   assert.equal(denied.statusCode,403);assert.equal(fs.existsSync(a.requestPath),false);
@@ -103,12 +106,13 @@ async function claim(node:any) {
   const result=await node.call(node.eyeId,'POST','/api/device-agents/'+node.eyeId+'/deliveries/claim',{sessionId:session.sessionId,ownerEpoch:session.ownerEpoch});
   assert.equal(result.statusCode,200,JSON.stringify(result.body));return result.body.data.delivery;
 }
-test('independent Manager B verifies native A and returns its formal reply through A actual claim with one B ledger',async()=>pair(async(a,b)=>{
+test('Manager B records source attribution and resolves A as the actual reply target with one B ledger',async()=>pair(async(a,b)=>{
   const notice=b.queued(),pending=b.call('eye-a','POST','/api/agent/threads',crossRequest);await notice;
   const original=await claim(b);assert.equal(original.ledgerOwnerDeviceId,'pc-b');
   const sent=await pending;assert.equal(sent.statusCode,200,JSON.stringify(sent.body));
   const record=b.store.get(sent.body.communication.requestId);assert.equal(record.status,'awaiting_response');
-  assert.equal(record.source.endpoint.instanceId,'guid-a');assert.equal(record.source.endpoint.managerInstanceId,b.registry.localInstanceId);
+  assert.equal(record.source.endpoint.instanceId,'guid-b');assert.equal(record.source.endpoint.managerInstanceId,b.registry.localInstanceId);
+  assert.equal(record.source.endpoint.agentId,'eye-a');assert.equal(record.source.threadId,'session-eye-a');assert.equal(a.state.sessionReads,0);
   const reply={...crossRequest,sourceThreadId:'session-eye-b',threadId:'session-eye-a',instanceBinding:{instanceId:'guid-a',agentId:'eye-a'},
     messageSource:{type:'agent',agentAdapter:'deviceAgent',sessionId:'session-eye-b',sessionName:'eye-b'},inReplyToRequestId:record.id,prompt:'Reply from B',result:'Native B evidence',nextAction:'Continue original A task',responsePolicy:'none'};
   const incoming=a.queued(),replyPending=b.call('eye-b','POST','/api/agent/threads',reply);await incoming;
@@ -119,29 +123,28 @@ test('independent Manager B verifies native A and returns its formal reply throu
   assert.equal(reconciled.statusCode,200,JSON.stringify(reconciled.body));assert.equal(a.owner.readSession('same-application','eye-a','session-eye-a').deliveries.length,1);
 }));
 
-test('native cross-PC source proof checks business code and actual loaded session before creating a ledger',async()=>pair(async(a,b)=>{
+test('source proof response codes and source loaded metadata do not qualify an authenticated send',async()=>pair(async(a,b)=>{
   a.state.proofCode='OWNER_SCOPE_CHANGED';
-  assert.equal((await b.call('eye-a','POST','/api/agent/threads',crossRequest)).statusCode,409);assert.equal(fs.existsSync(b.requestPath),false);
+  const firstQueued=b.queued(),firstPending=b.call('eye-a','POST','/api/agent/threads',crossRequest);await firstQueued;const firstClaim=await claim(b);
+  assert.equal((await firstPending).statusCode,200);assert.equal(a.state.sessionReads,0);
+  assert.equal((await b.call('eye-b','POST','/api/device-agents/eye-b/deliveries/'+encodeURIComponent(firstClaim.deliveryId)+'/response',{
+    sessionId:firstClaim.sessionId,ownerEpoch:firstClaim.ownerEpoch,claimToken:firstClaim.claimToken,status:'completed',text:'Fixture completed'
+  })).statusCode,200);
   a.state.proofCode='';const session=a.owner.sessions('same-application')[0];
   await a.call('eye-a','PUT','/api/device-agents/eye-a/session',{...session,loaded:false,capabilities:['language-model']});
-  const rejected=await b.call('eye-a','POST','/api/agent/threads',crossRequest);assert.match(rejected.body.error,/NOT_LOADED/);assert.equal(fs.existsSync(b.requestPath),false);
+  const nextQueued=b.queued(),nextPending=b.call('eye-a','POST','/api/agent/threads',crossRequest);await nextQueued;await claim(b);
+  assert.equal((await nextPending).statusCode,200);assert.equal(a.state.sessionReads,0);assert.equal(b.store.list().length,2);
 }));
 
-test('source proof await cannot replace the original calling PC connection',async()=>pair(async(_a,b)=>{
-  b.state.peerHook=async()=>{b.state.localDeviceId='replaced-pc';};
+test('the original connection scope remains fenced across an actual target assignment await',async()=>pair(async(_a,b)=>{
+  b.state.assignmentHook=async()=>{b.state.scope='replaced-connection-scope';};
   const rejected=await b.call('eye-a','POST','/api/agent/threads',crossRequest);
   assert.match(rejected.body.error,/CONNECTION_CHANGED/);assert.equal(fs.existsSync(b.requestPath),false);
 }));
 
-test('source unloading during proof awaits fails closed while an unloaded target still queues its original delivery',async()=>pair(async(a,b)=>{
-  const sourceSession=a.owner.sessions('same-application')[0];let queries=0;
-  b.state.peerHook=async(_peer:string,url:string)=>{
-    if(url.includes('/eye-a/session') && ++queries===2)await a.call('eye-a','PUT','/api/device-agents/eye-a/session',{...sourceSession,loaded:false,capabilities:['language-model']});
-  };
-  const rejected=await b.call('eye-a','POST','/api/agent/threads',crossRequest);
-  assert.match(rejected.body.error,/NOT_LOADED/);assert.equal(fs.existsSync(b.requestPath),false);
-  b.state.peerHook=async()=>{};
-  await a.call('eye-a','PUT','/api/device-agents/eye-a/session',{...sourceSession,loaded:true,capabilities:['language-model']});
+test('an unloaded source does not qualify sends while an unloaded target keeps its original queued delivery',async()=>pair(async(a,b)=>{
+  const sourceSession=a.owner.sessions('same-application')[0];
+  await a.call('eye-a','PUT','/api/device-agents/eye-a/session',{...sourceSession,loaded:false,capabilities:['language-model']});
   const targetSession=b.owner.sessions('same-application')[0];
   await b.call('eye-b','PUT','/api/device-agents/eye-b/session',{...targetSession,loaded:false,capabilities:['language-model']});
   const notice=b.queued(),pending=b.call('eye-a','POST','/api/agent/threads',crossRequest);await notice;
@@ -150,6 +153,7 @@ test('source unloading during proof awaits fails closed while an unloaded target
   await b.call('eye-b','PUT','/api/device-agents/eye-b/session',{...targetSession,loaded:true,capabilities:['language-model']});
   assert.equal((await pending).statusCode,202);const received=await claim(b);assert.equal(received.deliveryId,row.deliveryId);
   const result=await b.call('eye-a','POST','/api/agent/threads',{...crossRequest,action:'reconcile_delivery',deliveryId:row.deliveryId});assert.equal(result.statusCode,200);
+  assert.equal(a.state.sessionReads,0);
 }));
 
 test('only an exact cancelled reservation retires the unclaimed transport row and allows the next native delivery',async()=>pair(async(a,b)=>{
@@ -174,11 +178,25 @@ test('only an exact cancelled reservation retires the unclaimed transport row an
   const next=await claim(a);assert.equal(next.deliveryId,rows[1].deliveryId);assert.match(next.prompt,/Next original request/);assert.equal((await nextPending).statusCode,200);
   assert.equal(b.store.get(record.id).status,'cancelled');assert.equal(fs.existsSync(a.requestPath),false);
 }));
-test('a remote source unload in the target proof await is rejected before any business preparation',async()=>pair(async(a,b)=>{
+test('source unload during a real target verification await does not veto the authenticated delivery',async()=>pair(async(a,b)=>{
   const session=a.owner.sessions('same-application')[0];let assignments=0;
   b.state.assignmentHook=async()=>{if(++assignments===2)await a.call('eye-a','PUT','/api/device-agents/eye-a/session',{...session,loaded:false,capabilities:['language-model']});};
+  const notice=b.queued(),pending=b.call('eye-a','POST','/api/agent/threads',crossRequest);await notice;await claim(b);
+  assert.equal((await pending).statusCode,200);assert.ok(assignments>=2);assert.equal(a.state.sessionReads,0);
+  assert.equal(a.owner.sessions('same-application')[0].loaded,false);
+}));
+
+test('a target owner epoch change during assignment still rejects the frozen target before preparation',async()=>pair(async(_a,b)=>{
+  let replaced=false;
+  b.state.assignmentHook=async()=>{
+    if(replaced)return;replaced=true;
+    const current=b.owner.sessions('same-application')[0];
+    assert.equal((await b.call('eye-b','PUT','/api/device-agents/eye-b/session',{...current,loaded:false,capabilities:['language-model']})).statusCode,200);
+    assert.equal((await b.call('eye-b','PUT','/api/device-agents/eye-b/session',{sessionId:current.sessionId,name:current.name,loaded:true,capabilities:['language-model']})).statusCode,200);
+    assert.notEqual(b.owner.sessions('same-application')[0].ownerEpoch,current.ownerEpoch);
+  };
   const rejected=await b.call('eye-a','POST','/api/agent/threads',crossRequest);
-  assert.equal(rejected.statusCode,409);assert.match(rejected.body.error,/NOT_LOADED/);assert.equal(fs.existsSync(b.requestPath),false);
+  assert.equal(rejected.statusCode,409);assert.match(rejected.body.error,/ENDPOINT_CHANGED/);assert.equal(fs.existsSync(b.requestPath),false);
 }));
 test('a signed peer cannot change the source or target of another reservation in a prepared body',async()=>pair(async(a,b)=>{
   const notice=b.queued(),pending=b.call('eye-a','POST','/api/agent/threads',crossRequest);await notice;

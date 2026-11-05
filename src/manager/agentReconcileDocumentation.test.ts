@@ -24,13 +24,10 @@ function documentedRequest(filename: string): AgentThreadRequest {
 for (const filename of ["rabi-agent-interfaces.md", "rabi-agent-interfaces_en.md"]) {
   test(`${filename}: documented reconciliation passes public handler and actual source resolver without resending`, async t => {
     const documented = documentedRequest(filename);
-    assert.equal(documented.sourceAgentType, "agent");
-    assert.equal(documented.messageSource?.type, "agent");
-    if (documented.messageSource?.type !== "agent") throw new Error("The example must describe its Agent source");
-    const sourceIdentity = documented.messageSource;
-    assert.equal(sourceIdentity.agentAdapter, "codex");
-    assert.equal(documented.messageSource?.sessionId, documented.sourceThreadId);
-    assert.ok(documented.messageSource?.sessionName);
+    assert.deepEqual(Object.keys(documented).sort(), ["action", "deliveryId"]);
+    const sourceId = "019f0000-0000-7000-8000-000000000001";
+    const sourceIdentity = { type: "agent" as const, agentAdapter: "codex" as const,
+      sessionId: sourceId, sessionName: "Fixture sender" };
     assert.ok(documented.deliveryId);
     assert.equal(documented.prompt, undefined);
     assert.equal(documented.result, undefined);
@@ -67,25 +64,22 @@ for (const filename of ["rabi-agent-interfaces.md", "rabi-agent-interfaces_en.md
         recoveries++; return receipts.get(delivery.deliveryId);
       }
     };
-    const sourceId = documented.sourceThreadId!;
     const targetId = "019f0000-0000-7000-8000-000000000002";
     const initial: AgentThreadRequest = { action: "send", sourceThreadId: sourceId, sourceAgentType: "agent",
-      messageSource: documented.messageSource, agentAdapter: "codex", threadId: targetId, cwd: directory,
+      messageSource: sourceIdentity, agentAdapter: "codex", threadId: targetId, cwd: directory,
       responsePolicy: "required", responseInstruction: "Return fixture evidence", prompt: "Fixture only" };
     await handleAgentThreadRequest(initial, { allowedWorkspaces: [directory], endpointDelivery: options });
     const original = store.list()[0];
     const reply = await handleAgentThreadRequest({ ...initial, sourceThreadId: targetId, threadId: sourceId,
-      messageSource: { ...documented.messageSource!, type: "agent", sessionId: targetId },
+      messageSource: { ...sourceIdentity, sessionId: targetId },
       inReplyToRequestId: original.id, responsePolicy: "none", result: "Fixture result", nextAction: "Fixture complete" },
     { allowedWorkspaces: [directory], endpointDelivery: options });
     assert.equal(reply.statusCode, 202);
     const deliveryId = (reply.data.delivery as { deliveryId: string }).deliveryId;
-    const request: AgentThreadRequest = { ...documented, deliveryId,
-      messageSource: { ...documented.messageSource!, type: "agent", workspace: directory } };
+    const request: AgentThreadRequest = { ...documented, deliveryId };
     options.resolveTarget = async () => { throw new Error("Reconciliation must use persisted target, not resolveTarget"); };
     const before = dispatches;
-    const oldExample: AgentThreadRequest = { action: "reconcile_delivery", threadId: sourceId, deliveryId };
-    await assert.rejects(handleAgentThreadRequest(oldExample, { allowedWorkspaces: [directory], endpointDelivery: options }), /Complete opaque session ID/);
+    const readsBeforeReconciliation = reads.length;
     const owner = createAgentThreadControlOwner({
       agentRequests: store,
       messageProcessingBoard: {
@@ -145,15 +139,20 @@ for (const filename of ["rabi-agent-interfaces.md", "rabi-agent-interfaces_en.md
     assert.equal(repeated.statusCode, 200);
     assert.equal(recoveries, 2);
     assert.equal(dispatches, before);
-    for (const invalid of [
+    for (const attributed of [
       { ...request, sourceAgentType: undefined },
       { ...request, messageSource: undefined },
       { ...request, messageSource: { ...sourceIdentity, type: "agent" as const, sessionId: "different-owner" } },
       { ...request, messageSource: { ...sourceIdentity, type: "agent" as const, agentAdapter: "dsh" as const } },
       { ...request, sourceThreadId: "unrelated-owner", messageSource: { ...sourceIdentity, type: "agent" as const, sessionId: "unrelated-owner" } }
-    ]) await assert.rejects(handleAgentThreadRequest(invalid, { allowedWorkspaces: [directory], endpointDelivery: options }));
+    ]) {
+      const outcome = await handleAgentThreadRequest(attributed, { allowedWorkspaces: [directory], endpointDelivery: options });
+      assert.equal(outcome.statusCode, 200);
+      assert.equal(outcome.data.delivery && (outcome.data.delivery as { deliveryId: string }).deliveryId, deliveryId);
+    }
     assert.equal(dispatches, before);
-    assert.ok(reads.includes(sourceId));
+    assert.ok(reads.includes(targetId));
+    assert.equal(reads.length, readsBeforeReconciliation);
     await assert.rejects(handleAgentThreadRequest({ ...request, deliveryId: "missing-original" }, { allowedWorkspaces: [directory], endpointDelivery: options }), /evidence is unavailable/);
   });
 }

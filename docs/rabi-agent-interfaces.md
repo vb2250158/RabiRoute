@@ -1521,7 +1521,7 @@ Manager 记录已鉴权连接及可用来源描述，再解析实际目标、持
 稳定投递键和正文摘要使用 Manager、电脑实例、节点、provider 与完整会话身份；目录中的 `agentId` 别名变化不会产生一条新投递。查原调用键时同时识别既有旧键与回执，保留原 deliveryId；损坏或多义的原预约返回冲突，不能据此重新发送。
 
 
-发送结果不确定时返回 HTTP 202、`delivery_unconfirmed`、`retryable=false`，保留原正式回复 reservation。不得换投递 ID重发正文。`reconcile_delivery` 只核对原目标的传输证据；启动、连接、catalog、回执和 turn 事件触发有去重的恢复，不换 owner、不自动重投。公共核对本身不轮询。打开新轮次的 Desktop IPC 若在调用方等待结束后才成功，或同一 owner 的 rollout 稍后才出现原投递标记，桥接会在默认 60 秒内保留这一次请求并补记回执；确认后按迟到回执提交原投递。追加已有轮次的超时仍只使用原有的短回执宽限。连接器只持有传输 attempt/receipt，不另建业务请求账本。Codex 可从同一个 Desktop owner 的原始用户消息恢复精确 hash；其它 Provider 缺少可读接受证据时继续待确认。
+发送结果不确定时返回 HTTP 202、`delivery_unconfirmed`、`retryable=false`，保留原正式回复 reservation。不得换投递 ID重发正文。`reconcile_delivery` 只核对原目标的传输证据；Manager 不因启动、连接、catalog、回执或 turn 事件自动扫描历史预留，调用方沿原实际 ID 显式核对，不换 owner、不自动重投。公共核对本身不轮询。打开新轮次的 Desktop IPC 若在调用方等待结束后才成功，或同一 owner 的 rollout 稍后才出现原投递标记，桥接会在默认 60 秒内保留这一次请求并补记回执；确认后按迟到回执提交原投递。追加已有轮次的超时仍只使用原有的短回执宽限。连接器只持有传输 attempt/receipt，不另建业务请求账本。Codex 可从同一个 Desktop owner 的原始用户消息恢复精确 hash；其它 Provider 缺少可读接受证据时继续待确认。
 
 该合同目前是源码实施与回归范围，不代表运行节点已经更新，更不代表两台真实电脑已通过端到端验收。
 

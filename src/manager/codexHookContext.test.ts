@@ -110,7 +110,7 @@ test("Hook diagnostics separate Stop checks and context reads without retaining 
   const { root, service } = fixture({ deliverAgentCompletion: async () => [] });
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const result = await service.handleHook({ sessionId: "timing-session", eventName: "Stop", turnId: "one", lastAssistantMessage: "private reply" });
-  assert.deepEqual(result.timings?.map(row => row.name), ["plan-followup", "chat-history", "agent-request-stop", "file-change-reminder", "plan-completion", "completion-delivery"]);
+  assert.deepEqual(result.timings?.map(row => row.name), ["plan-followup", "agent-request-stop", "chat-history", "file-change-reminder", "plan-completion", "completion-delivery"]);
   for (const [index, row] of (result.timings ?? []).entries()) {
     assert.ok(row.startMs >= 0 && row.durationMs >= 0);
     const previous = result.timings?.[index - 1];
@@ -127,7 +127,7 @@ function fixture(options: {
   deliverAgentCompletion?: CodexHookContextServiceOptions["deliverAgentCompletion"];
   hookEnabled?: (request: CodexHookContextRequest) => boolean;
   isManagedAgentSession?: (request: CodexHookContextRequest) => boolean;
-  recordAgentRequestStop?: (request: CodexHookContextRequest) => { status: "scheduled"; reason: string; requestIds: string[]; turnId?: string };
+  recordAgentRequestStop?: CodexHookContextServiceOptions["recordAgentRequestStop"];
   planStorageReady?: CodexHookContextServiceOptions["planStorageReady"];
   memoryConsolidationInputIds?: CodexHookContextServiceOptions["memoryConsolidationInputIds"];
 } = {}): { root: string; rolesRoot: string; roleDir: string; storePath: string; service: CodexHookContextService } {
@@ -950,7 +950,8 @@ test("Stop records unanswered Agent requests even when plan completion Hook deli
   assert.equal(stops.length, 1);
   assert.equal(result.agentRequestStop?.status, "scheduled");
   assert.deepEqual(result.agentRequestStop?.requestIds, ["agent-request-1"]);
-  assert.equal(result.planTaskCompletion?.reason, "hook_disabled_by_codex_endpoint");
+  assert.equal(result.planTaskCompletion?.reason, "deferred_after_stop_followup");
+  assert.match(result.followup!.reason, /agent-request-1/);
 });
 
 test("completed plans suppress completion reminders while retaining business binding history", async (t) => {
@@ -1107,4 +1108,173 @@ test("a missing roles root is an empty catalog, not a crash", async (t) => {
     lastAssistantMessage: "无角色根目录。"
   });
   assert.equal(result.planTaskCompletion?.reason, "no_enabled_plan_task_binding");
+});
+
+test("unanswered requests prompt only once per original ID, including later turns and Hook restarts", async t => {
+  let pending = ["request-original"];
+  const recordAgentRequestStop = (request: CodexHookContextRequest) => ({ status: "scheduled" as const,
+    reason: "target_turn_ended_without_response", requestIds: pending, turnId: request.turnId });
+  const { root, rolesRoot, storePath, service } = fixture({ hookEnabled: () => false, recordAgentRequestStop });
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const input: CodexHookContextRequest = { sessionId: "session-plan-worker", eventName: "Stop", cwd: root, turnId: "first" };
+  const first = await service.handleHook(input);
+  assert.equal(first.followup?.decision, "block");
+  assert.match(first.followup.reason, /request-original/);
+  assert.match(first.followup.reason, /不重发正文/);
+  assert.equal(first.planTaskCompletion?.reason, "deferred_after_stop_followup");
+  assert.equal((await service.handleHook(input)).followup, undefined);
+  assert.equal((await service.handleHook({ ...input, turnId: "later" })).followup, undefined);
+  const reloaded = new CodexHookContextService({ rolesRoot: () => rolesRoot, storePath, hookEnabled: () => false, recordAgentRequestStop });
+  assert.equal((await reloaded.handleHook({ ...input, turnId: "after-restart" })).followup, undefined);
+  pending = ["request-original", "request-new"];
+  const next = await reloaded.handleHook({ ...input, turnId: "new-request" });
+  assert.match(next.followup!.reason, /request-new/);
+  assert.doesNotMatch(next.followup!.reason, /GET \/api\/agent\/requests\/request-original/);
+  assert.deepEqual(JSON.parse(fs.readFileSync(storePath, "utf8")).agentRequestStopReminders["session-plan-worker"], pending);
+});
+
+test("Stop continuation is not blocked and does not consume a request's future first prompt", async t => {
+  const { root, service } = fixture({ hookEnabled: () => false, recordAgentRequestStop: request => ({ status: "scheduled",
+    reason: "target_turn_ended_without_response", requestIds: ["request-active"], turnId: request.turnId }) });
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const input: CodexHookContextRequest = { sessionId: "session-plan-worker", eventName: "Stop", cwd: root, turnId: "active" };
+  assert.equal((await service.handleHook({ ...input, stopHookActive: true })).followup, undefined);
+  assert.match((await service.handleHook({ ...input, turnId: "next-natural-stop" })).followup!.reason, /request-active/);
+});
+
+test("request prompt delays chat history and all configured completion until the actual final Stop", async t => {
+  const messages: string[] = [];
+  let planDeliveries = 0;
+  let snapshotMode: "ok" | "failed" | "mismatch" = "ok";
+  const { root, roleDir, service } = fixture({
+    recordAgentRequestStop: request => snapshotMode === "failed" ? { status: "failed", reason: "fixture snapshot unavailable", turnId: request.turnId }
+      : { status: "scheduled", reason: "target_turn_ended_without_response", requestIds: ["request-final"], turnId: snapshotMode === "mismatch" ? "different-turn" : request.turnId },
+    deliverPlanTaskCompletion: async () => { planDeliveries++; },
+    deliverAgentCompletion: async request => { messages.push(request.lastAssistantMessage!); return []; }
+  });
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  service.bindSession("session-plan-worker", "YeYu");
+  const input: CodexHookContextRequest = { sessionId: "session-plan-worker", eventName: "Stop", cwd: root, turnId: "final-turn", lastAssistantMessage: "preliminary" };
+  assert.equal((await service.handleHook(input)).followup?.decision, "block");
+  assert.equal(planDeliveries, 0);
+  assert.deepEqual(messages, []);
+  assert.deepEqual((await readPersonaChatHistory(roleDir)).entries, []);
+  const duplicates = await Promise.all([service.handleHook(input), service.handleHook(input)]);
+  assert.ok(duplicates.every(result => !result.followup && result.completionDeferred === true));
+  assert.equal(planDeliveries, 0);
+  assert.deepEqual(messages, []);
+  assert.deepEqual((await readPersonaChatHistory(roleDir)).entries, []);
+  for (const mode of ["failed", "mismatch"] as const) {
+    snapshotMode = mode;
+    const repeated = await service.handleHook(input);
+    assert.equal(repeated.followup, undefined);
+    assert.equal(repeated.completionDeferred, true);
+    assert.equal(planDeliveries, 0);
+    assert.deepEqual(messages, []);
+    assert.deepEqual((await readPersonaChatHistory(roleDir)).entries, []);
+  }
+  snapshotMode = "ok";
+  const completed = await service.handleHook({ ...input, stopHookActive: true, lastAssistantMessage: "actual final" });
+  assert.equal(completed.followup, undefined);
+  assert.equal(planDeliveries, 1);
+  assert.deepEqual(messages, ["actual final"]);
+  assert.equal((await readPersonaChatHistory(roleDir)).entries[0].text, "actual final");
+});
+
+test("request checks join a configured plan followup without losing either one-shot prompt", async t => {
+  let deliveries = 0;
+  const { root, roleDir, service } = fixture({ deliverPlanTaskCompletion: async () => { deliveries++; },
+    recordAgentRequestStop: request => ({ status: "scheduled", reason: "target_turn_ended_without_response", requestIds: ["request-with-plan"], turnId: request.turnId }) });
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const configPath = path.join(roleDir, "personaConfig.json");
+  const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+  fs.writeFileSync(configPath, JSON.stringify({ ...config, codexHooks: { ...config.codexHooks,
+    planFollowup: { enabled: true, cooldownSeconds: 0, rules: [{ id: "execution", enabled: true, statusKeys: ["执行中"], prompt: "Check approved plan work" }] } } }));
+  const input: CodexHookContextRequest = { sessionId: "session-plan-worker", eventName: "Stop", cwd: root, turnId: "both", lastAssistantMessage: "preliminary" };
+  const result = await service.handleHook(input);
+  assert.match(result.followup!.reason, /Check approved plan work/);
+  assert.match(result.followup!.reason, /request-with-plan/);
+  assert.equal(deliveries, 0);
+  assert.equal((await service.handleHook({ ...input, stopHookActive: true, lastAssistantMessage: "final" })).followup, undefined);
+  assert.equal(deliveries, 1);
+});
+
+test("many unanswered requests produce one bounded summary and do not create a reminder backlog", async t => {
+  const ids = Array.from({ length: 1200 }, (_, i) => "request-many-" + i);
+  const { root, service } = fixture({ hookEnabled: () => false, recordAgentRequestStop: request => ({ status: "scheduled",
+    reason: "target_turn_ended_without_response", requestIds: ids, turnId: request.turnId }) });
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const input: CodexHookContextRequest = { sessionId: "session-plan-worker", eventName: "Stop", cwd: root, turnId: "many" };
+  const result = await service.handleHook(input);
+  assert.match(result.followup!.reason, /1200/);
+  assert.equal((result.followup!.reason.match(/GET \/api\/agent\/requests\//g) ?? []).length, 8);
+  assert.ok(result.followup!.reason.length < 2000);
+  assert.equal((await service.handleHook({ ...input, turnId: "later-many" })).followup, undefined);
+});
+
+test("unavailable, duplicate and mismatched Stop results do not invent a blocking reply check", async t => {
+  for (const status of ["failed", "ignored", "scheduled"] as const) {
+    const { root, service } = fixture({ hookEnabled: () => false, recordAgentRequestStop: () => ({ status,
+      reason: "owner status", requestIds: ["request-outside-turn"], turnId: "different-turn" }) });
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    assert.equal((await service.handleHook({ sessionId: "session-plan-worker", eventName: "Stop", turnId: "real-turn", cwd: root })).followup, undefined);
+  }
+});
+
+test("a failed Hook checkpoint stays non-blocking and cannot fabricate reminder or reply success", async t => {
+  const { root, storePath, service } = fixture({ hookEnabled: () => false, recordAgentRequestStop: request => ({ status: "scheduled",
+    reason: "target_turn_ended_without_response", requestIds: ["request-write-failed"], turnId: request.turnId }) });
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  service.bindSession("session-plan-worker", "YeYu");
+  const before = fs.readFileSync(storePath, "utf8");
+  const rename = fs.renameSync;
+  t.mock.method(fs, "renameSync", (source: fs.PathLike, target: fs.PathLike) => {
+    if (String(target) === storePath) throw new Error("fixture checkpoint write unavailable");
+    return rename(source, target);
+  });
+  const result = await service.handleHook({ sessionId: "session-plan-worker", eventName: "Stop", turnId: "cannot-checkpoint", cwd: root });
+  assert.equal(result.followup, undefined);
+  assert.equal(result.agentRequestStop?.status, "failed");
+  assert.equal(result.agentRequestStop?.reason, "agent_request_hook_checkpoint_failed");
+  assert.equal(fs.readFileSync(storePath, "utf8"), before);
+});
+
+
+test("complete Stop snapshots prune closed display facts even on the continued final, without hiding new work", async t => {
+  let ids = ["request-current"];
+  const { root, storePath, service } = fixture({ hookEnabled: () => false, recordAgentRequestStop: request => ({
+    status: ids.length ? "pending" : "ignored", reason: "owner snapshot", requestIds: ids, pendingSessionRequestIds: ids, snapshotComplete: true, turnId: request.turnId }) });
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const input: CodexHookContextRequest = { sessionId: "session-plan-worker", eventName: "Stop", cwd: root, turnId: "snapshot-turn" };
+  assert.equal((await service.handleHook(input)).followup?.decision, "block");
+  ids = [];
+  assert.equal((await service.handleHook({ ...input, stopHookActive: true })).followup, undefined);
+  assert.equal(JSON.parse(fs.readFileSync(storePath, "utf8")).agentRequestStopReminders["session-plan-worker"], undefined);
+  ids = ["request-next"];
+  assert.match((await service.handleHook({ ...input, turnId: "next" })).followup!.reason, /request-next/);
+});
+
+test("a partial Stop result cannot discard another already-prompted request", async t => {
+  let ids = ["request-a", "request-b"];
+  const { root, service } = fixture({ hookEnabled: () => false, recordAgentRequestStop: request => ({
+    status: "scheduled", reason: "legacy partial", requestIds: ids, turnId: request.turnId }) });
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const input: CodexHookContextRequest = { sessionId: "session-plan-worker", eventName: "Stop", cwd: root, turnId: "first-partial" };
+  await service.handleHook(input);
+  ids = ["request-c"];
+  await service.handleHook({ ...input, turnId: "second-partial" });
+  ids = ["request-a", "request-b", "request-c"];
+  assert.equal((await service.handleHook({ ...input, turnId: "third-partial" })).followup, undefined);
+});
+
+
+test("workspace changes cannot prune another workspace's still-pending request prompt", async t => {
+  const { root, service } = fixture({ hookEnabled: () => false, recordAgentRequestStop: request => ({
+    status: "pending", reason: "scoped owner snapshot", requestIds: request.cwd === "C:/scope-a" ? ["request-scope-a"] : ["request-scope-b"],
+    pendingSessionRequestIds: ["request-scope-a", "request-scope-b"], snapshotComplete: true, turnId: request.turnId }) });
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const input: CodexHookContextRequest = { sessionId: "moving-session", eventName: "Stop", turnId: "scope-a-1", cwd: "C:/scope-a" };
+  assert.match((await service.handleHook(input)).followup!.reason, /request-scope-a/);
+  assert.match((await service.handleHook({ ...input, cwd: "C:/scope-b", turnId: "scope-b-1" })).followup!.reason, /request-scope-b/);
+  assert.equal((await service.handleHook({ ...input, turnId: "scope-a-2" })).followup, undefined);
 });

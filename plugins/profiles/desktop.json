@@ -122,7 +122,7 @@
     {
       "id": "manager:message-processing-automation",
       "package": "io.rabiroute.manager.message-processing-automation",
-      "version": "1.0.0",
+      "version": "1.0.1",
       "enabled": true,
       "config": {},
       "grants": []

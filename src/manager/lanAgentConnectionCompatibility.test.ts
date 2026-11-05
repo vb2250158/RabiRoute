@@ -98,7 +98,7 @@ test("real HTTP v2 bare credentials retain shared reads, writes and pinned asset
   assert.equal(writes, 1);
 });
 
-test("v2 explicit invocation source is frozen and binds business payloads without persisted session grants", t => {
+test("v2 invocation freezes connection identity while payload attribution needs no session grant", t => {
   const f = fixture(t); const request = { method: "POST", url: "/api/agent/send", headers: {
     authorization: `Bearer ${f.token}`, "x-rabiroute-agent-type": "codex", "x-rabiroute-session-id": "session-fixture" } } as unknown as IncomingMessage;
   const before = fs.readFileSync(f.statePath);
@@ -109,7 +109,7 @@ test("v2 explicit invocation source is frozen and binds business payloads withou
   assert.deepEqual({ provider: source?.provider, sessionId: source?.sessionId }, { provider: "codex", sessionId: "session-fixture" });
   const verified = { agentId: "codex", provider: "codex" as const, sessionId: "session-fixture" };
   assert.doesNotThrow(() => assertLanAgentBodyAuthority("/api/agent/send", { sender: { sessionId: "session-fixture" } }, verified));
-  assert.throws(() => assertLanAgentBodyAuthority("/api/agent/send", { sender: { sessionId: "foreign-fixture" } }, verified), /does not match this request's explicit ID/);
+  assert.doesNotThrow(() => assertLanAgentBodyAuthority("/api/agent/send", { sender: { sessionId: "foreign-fixture" } }, verified));
   request.headers["x-rabiroute-session-id"] = "foreign-fixture";
   assert.equal(evaluateLanAgentRequest(request, f.authority, true).kind, "denied");
   assert.throws(() => assertTrustedLanAgentPrincipal(request), /principal is unavailable/);
