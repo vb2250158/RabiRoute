@@ -128,12 +128,10 @@ export class EffectScope {
       if (this.#disposalFinished && !this.#unsettledDisposers.size && !this.#unsettledOperations.size) {
         throw new Error("Plugin retirement is unconfirmed: resource cleanup or publication rollback failed.", { cause: this.#retirementUnconfirmedReason });
       }
-      await new Promise<void>((resolve, reject) => {
+      await new Promise<void>(resolve => {
         const changed = () => { clearTimeout(timer); this.#retirementWaiters.delete(changed); resolve(); };
-        const timer = setTimeout(() => {
-          this.#retirementWaiters.delete(changed);
-          reject(new Error(`Plugin retirement confirmation timed out after ${timeoutMs}ms.`));
-        }, remaining);
+        // Native timers may wake early; only the absolute deadline above proves expiry.
+        const timer = setTimeout(changed, Math.max(1, Math.ceil(remaining)));
         this.#retirementWaiters.add(changed);
       });
     }

@@ -2,6 +2,34 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { EffectScope } from "./effectScope.js";
 
+test("an early native timer wake does not reject retirement before its deadline", async t => {
+  let release!: () => void;
+  const resource = new Promise<void>(resolve => { release = resolve; });
+  const scope = new EffectScope({ disposalTimeoutMs: 1 });
+  scope.add(async () => () => resource);
+  await scope.commit();
+  await assert.rejects(scope.dispose(), /timed out/);
+  const nativeTimer = globalThis.setTimeout;
+  let earlyWake = false;
+  const timer = ((callback: (...args: unknown[]) => void, delay?: number, ...args: unknown[]) => {
+    if (!earlyWake && Number(delay) > 100) { earlyWake = true; return nativeTimer(callback, 0, ...args); }
+    return nativeTimer(callback, delay, ...args);
+  }) as typeof setTimeout;
+  t.mock.method(globalThis, "setTimeout", timer);
+  let settled = false;
+  const joined = scope.waitForRetirement({ timeoutMs: 1000 }).then(
+    () => { settled = true; return undefined; },
+    (error: unknown) => { settled = true; return error; }
+  );
+  try {
+    await new Promise<void>(resolve => nativeTimer(resolve, 10));
+    assert.equal(earlyWake, true);
+    assert.equal(settled, false, "an early wake cannot certify a timeout or original-owner completion");
+  } finally { release(); }
+  assert.equal(await joined, undefined);
+  assert.equal(scope.retirementConfirmed(), true);
+});
+
 test("completed lifecycle phases yield to independent event-loop work", async () => {
   const scope = new EffectScope();
   let completed = 0;

@@ -4,6 +4,7 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { nativeHttpTestFetch as fetch } from "./nativeHttpTestClient.js";
 import { readPlanStoragePackage, resolveCanonicalPlanStorageLocation } from "../planStorageRepository.js";
 import { createPlan } from "../roleKnowledge.js";
 import { storageInventoryRevisionToken } from "../shared/storageRevision.js";

@@ -184,10 +184,11 @@ test("a summary read during hydration cannot remain cached after the history fin
 });
 
 for (const code of ["EACCES", "ENOENT"]) test(`one shard stat ${code} preserves readable history and partial disk statistics`, async t => {
+  t.mock.method(Date, "now", () => Date.UTC(2026, 0, 1, 12, 0, 10));
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabi-performance-shard-stat-"));
   const store = new PerformanceStore(root, { ...defaultPerformanceMonitoringConfig(), enabled: true });
   const item = seed(root, 1), directory = path.join(root, "data", ".runtime", "performance");
-  const name = `performance-${new Date(Date.now() - 3600000).toISOString().slice(0, 13).replace("T", "-")}.jsonl`;
+  const name = `performance-${new Date(Date.parse(item.time) - 3600000).toISOString().slice(0, 13).replace("T", "-")}.jsonl`;
   const badFile = path.join(directory, name), bytes = `${JSON.stringify({ ...item, sampleId: "metadata-unavailable" })}\n`;
   fs.writeFileSync(badFile, bytes);
   const stat = fs.promises.stat;
@@ -208,10 +209,11 @@ for (const code of ["EACCES", "ENOENT"]) test(`one shard stat ${code} preserves 
 });
 
 test("best-effort write drops stay counted and write recovery cannot erase an independent history warning", async t => {
+  t.mock.method(Date, "now", () => Date.UTC(2026, 0, 1, 12, 0, 10));
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabi-performance-best-effort-"));
   const store = new PerformanceStore(root, { ...defaultPerformanceMonitoringConfig(), enabled: true });
   const item = seed(root, 1), directory = path.join(root, "data", ".runtime", "performance");
-  const name = `performance-${new Date(Date.now() - 3600000).toISOString().slice(0, 13).replace("T", "-")}.jsonl`;
+  const name = `performance-${new Date(Date.parse(item.time) - 3600000).toISOString().slice(0, 13).replace("T", "-")}.jsonl`;
   const filename = path.join(directory, name), bytes = `${JSON.stringify({ ...item, sampleId: "later-restored-history" })}\n`;
   fs.writeFileSync(filename, bytes);
   let historyBroken = true, writeBroken = true;
@@ -248,10 +250,11 @@ test("best-effort write drops stay counted and write recovery cannot erase an in
 });
 
 for (const code of ["EACCES", "EBUSY"]) test(`a locked retention shard ${code} remains intact while other cleanup and collection proceed`, async t => {
+  t.mock.method(Date, "now", () => Date.UTC(2026, 0, 1, 12, 0, 10));
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabi-performance-locked-retention-"));
   const store = new PerformanceStore(root, { ...defaultPerformanceMonitoringConfig(), enabled: true });
   const item = seed(root, 1), directory = path.join(root, "data", ".runtime", "performance");
-  const name = (offset: number) => `performance-${new Date(Date.now() - offset * 3600000).toISOString().slice(0, 13).replace("T", "-")}.jsonl`;
+  const name = (offset: number) => `performance-${new Date(Date.parse(item.time) - offset * 3600000).toISOString().slice(0, 13).replace("T", "-")}.jsonl`;
   const locked = path.join(directory, name(1)), removable = path.join(directory, name(2));
   const bytes = `${JSON.stringify({ ...item, sampleId: "locked-original" })}\n`;
   fs.writeFileSync(locked, bytes); fs.writeFileSync(removable, `${JSON.stringify({ ...item, sampleId: "expired-removable" })}\n`);

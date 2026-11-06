@@ -90,7 +90,7 @@ function responseFor(key: ResourceApiKey): ApiResponseContract {
   if (key === "object.read") return { mediaType: "application/octet-stream", binary: { minBytes: 1, maxBytes: RESOURCE_OBJECT_MAX_BYTES } };
   if (key === "object.write") return json({ anyOf: [
     { type: "object", required: ["id", "bytes", "sha256", "durable"], properties: { id: resourceHashSchema, bytes: integer, sha256: resourceHashSchema, durable: { const: true, description: "Legacy persistence acknowledgement, not an archive receipt or phone-original eviction authority." } }, additionalProperties: false },
-    { type: "object", required: ["sha256", "bytes", "storageNamespaceId"], properties: { sha256: resourceHashSchema, bytes: integer, storageNamespaceId: resourceNamespaceSchema }, additionalProperties: false }
+    { type: "object", required: ["sha256", "bytes", "storageNamespaceId", "durable"], properties: { sha256: resourceHashSchema, bytes: integer, storageNamespaceId: resourceNamespaceSchema, durable: { const: true, description: "Object persistence acknowledgement, not an archive manifest receipt or phone-original eviction authority." } }, additionalProperties: false }
   ] });
   if (key === "archive.capabilities") return json({ type: "object", required: ["protocol", "storageNamespaceId", "workerId", "maxObjectBytes", "maxManifestBytes", "bindingRevision", "uploadAllowed"], properties: {
     protocol: { const: "record-archive-v1" }, storageNamespaceId: resourceNamespaceSchema, workerId: resourceIdentitySchema,

@@ -6,6 +6,13 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.6.4 - 2026-11-06
+
+- Keep the original Manager storage-configuration entry available when its previous directory is unreadable, then recapture through the existing serialized lifecycle. Preserve ordinary route-write admission and authentication instead of blocking recovery on the failed catalog.
+- Restore the compatible `durable` archive-object receipt. Missing audio chunks no longer discard mobile timeline events; playback reads available chunks from cache and archive under the original owner, preserving order, integrity checks and revocation fences, and reports entirely unavailable media.
+
+- Retirement confirmation checks its original absolute deadline after a native timer wakes. Early wakeups keep joining the original resource owner instead of reporting premature shutdown failure; real failures and unknown outcomes remain intact.
+
 ## 0.6.3 - 2026-11-06
 
 - Correct the strict completion-diagnostics response contract to declare the adapter and source-instance fields while rejecting unknown fields.

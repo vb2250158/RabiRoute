@@ -32,6 +32,12 @@ test("archive objects and segment hashes cross object boundaries; restart recove
   assert.deepEqual(await f.commit(), receipt);
   assert.deepEqual(await restarted.getManifest("phone-a", f.manifest.recordId), f.manifest);
 });
+test("object receipts keep the legacy fields phone event export validates", async t => {
+  const f = await fixture(t), object = f.manifest.objects[0]!;
+  const expected = { sha256: object.sha256, bytes: object.bytes, storageNamespaceId: f.target.storageNamespaceId, durable: true };
+  assert.deepEqual(await f.store.putObject("phone-a", object.sha256, f.bytes.subarray(0, object.bytes)), expected);
+  assert.deepEqual(await f.store.putObject("phone-a", object.sha256, f.bytes.subarray(0, object.bytes)), expected);
+});
 test("namespace never auto-provisions or recreates missing roots", async t => {
   const f = await fixture(t);
   await assert.rejects(f.store.provision({ ...f.target, storageNamespaceId: randomUUID() }), /namespace mismatch/);

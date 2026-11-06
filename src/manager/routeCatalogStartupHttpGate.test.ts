@@ -54,7 +54,6 @@ const SNAPSHOT_REQUESTS = Object.freeze([
 const MUTATION_REQUESTS = Object.freeze([
   ["POST", "/gateways"],
   ["POST", "/gateways/route-a/delete"],
-  ["POST", "/manager-config"],
   ["POST", "/open-config-file"],
   ["PATCH", "/api/rabi/instances/local/routes/route-a/message-processing"],
   ["POST", "/api/rabi/instances/local/routes/route-a/agent-binding"]
@@ -153,4 +152,17 @@ test("public rejection state proves readiness without leaking raw paths or error
     assert.equal(routeCatalogStartupUnavailable("POST", "/reload", snapshot(state)), null);
   }
   assert.equal(routeCatalogHttpDependency("POST", "/reload"), null);
+});
+
+test("storage configuration can recover an unreadable initial catalog without releasing route mutations", () => {
+  for (const state of [undefined, snapshot("idle"), snapshot("degraded")] as const) {
+    assert.equal(routeCatalogHttpDependency("POST", "/manager-config"), "mutation");
+    assert.equal(routeCatalogStartupUnavailable("POST", "/manager-config", state), null);
+    assert.equal(routeCatalogStartupUnavailable("POST", "/gateways", state)?.statusCode, 503);
+    assert.equal(routeCatalogStartupUnavailable("POST", "/gateways/route-a/delete", state)?.statusCode, 503);
+  }
+  for (const state of [snapshot("running"), snapshot("stopping"), installedSnapshot("running"), installedSnapshot("degraded")]) {
+    assert.equal(routeCatalogStartupUnavailable("POST", "/manager-config", state)?.statusCode, 503);
+  }
+  assert.equal(routeCatalogStartupUnavailable("POST", "/manager-config", installedSnapshot("ready")), null);
 });

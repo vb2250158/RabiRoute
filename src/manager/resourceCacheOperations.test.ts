@@ -90,7 +90,7 @@ test("all thirteen resources operations use discovery, the authenticated node an
   const bound = await f.bind(); assert.equal(bound.body.data.revision, 1);
   const headers = f.ownerHeaders();
   const uploaded = await f.success("object.write", { path: { objectHash: f.objectHash }, headers, bodyBytes: f.pcm });
-  assert.equal(uploaded.body.storageNamespaceId, namespace); assert.equal(uploaded.body.durable, undefined);
+  assert.equal(uploaded.body.storageNamespaceId, namespace); assert.equal(uploaded.body.durable, true);
   const capabilities = await f.success("archive.capabilities", { headers }); assert.equal(capabilities.body.bindingRevision, 1);
   const hash = recordingManifestHash(f.manifest);
   const committed = await f.success("archive.manifest.commit", { headers, path: { recordId: "record", manifestHash: hash }, body: f.manifest });

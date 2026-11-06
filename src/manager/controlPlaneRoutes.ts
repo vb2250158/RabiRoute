@@ -14,6 +14,7 @@ import { AgentRequestRouteReconciliation } from "./agentRequestRouteReconciliati
 import { parseAgentChatHistoryQuery, projectAgentChatHistory } from "./agentChatHistoryOperation.js";
 import type { ApiOperationDefinition } from "./apiOperationContract.js";
 import { ResourceCache, type ResourceCacheOptions } from "./resourceCache.js";
+import { readRecordingAudio, readRecordingObject } from "./recordingObjectReader.js";
 import { createResourceCacheOperations } from "./resourceCacheOperations.js";
 import { MOBILE_RECORDING_MAX_CHUNKS } from "./resourceCacheProtocol.js";
 import { authenticatedResourceOwner } from "./resourceApiRequest.js";
@@ -1071,15 +1072,7 @@ const allDayRecording = createAllDayRecording({
   hostId: os.hostname(),
   mobileRoot: path.join(rootDir, "data", "mobile-recording-events"),
   mobileAudio: async (owner, chunks, authorize) => {
-    const parts: Buffer[] = [];
-    for (const id of chunks) {
-      authorize?.();
-      const part = await resourceCache.read(owner, id);
-      authorize?.();
-      parts.push(part);
-    }
-    authorize?.();
-    return Buffer.concat(parts);
+    return readRecordingAudio(owner, chunks, recordingChunk, authorize);
   },
   speechUrl: () => speechServiceUrl(),
   ensureSpeech: async () => { await speechRuntimeControl.start(); },
@@ -1241,6 +1234,13 @@ const companionActivityContext: PersonaCompanionContext = {
   last: roleId => lastCompanionSummary(roleDirForApi(roleId))
 };
 const resourceCache = new ResourceCache(path.join(rootDir, "data"));
+/** Bound owners publish objects to the archive namespace; unbound owners keep the legacy cache. */
+const recordingChunk = (owner: string, id: string, authorize?: () => void) => readRecordingObject(
+  owner, id,
+  (objectOwner, objectId) => resourceCache.read(objectOwner, objectId),
+  (objectOwner, objectId) => recordingArchiveRuntime.store.readObject(objectOwner, objectId),
+  authorize
+);
 const resourceCacheOptions: ResourceCacheOptions = {
   local: request => isLocalMachineRemoteAddress(request.socket.remoteAddress, localIpv4AddressEntries().map(item => item.address)),
   tunnelKey: () => resourceCacheKey,
@@ -1249,7 +1249,7 @@ const resourceCacheOptions: ResourceCacheOptions = {
     authorize();
     const chunks = (body as { chunks?: unknown })?.chunks;
     if (!Array.isArray(chunks) || chunks.length > MOBILE_RECORDING_MAX_CHUNKS) throw new Error("Invalid recording chunks");
-    for (const id of chunks) { authorize(); await resourceCache.read(owner, String(id)); authorize(); }
+    // A missing segment degrades playback only; the timeline event still lands.
     await allDayRecording.store.receiveMobile(owner, body, authorize);
     authorize();
     publishManagerEvent("all_day_recording", { mobile: true });

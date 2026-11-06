@@ -82,6 +82,10 @@ export function routeCatalogStartupUnavailable(
   if (!dependency) return null;
 
   const snapshotInstalled = isRouteCatalogSnapshotInstalled(snapshot);
+  // A failed initial capture cannot supply the prerequisite for repairing its path.
+  // Active captures and writes retain their existing exclusion and original owner.
+  if (String(method).toUpperCase() === "POST" && pathname === "/manager-config"
+    && !snapshotInstalled && ["idle", "degraded"].includes(snapshot?.state ?? "idle")) return null;
   const snapshotUsable = snapshotInstalled && USABLE_SNAPSHOT_STATES.has(snapshot?.state ?? "idle");
   if (snapshotUsable && (dependency === "snapshot" || snapshot?.state === "ready")) return null;
 

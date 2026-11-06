@@ -6,6 +6,12 @@ English | <a href="./configuration.md">简体中文</a>
 
 # Configuration and Integrations
 
+## Recover a shared-directory address
+
+When a shared-storage address changes, read its existing references with `GET /manager-config`, then update the original `routeDir` and `rolesDir` using `POST /manager-config`. This configuration entry remains available when the initial route catalog cannot be read. The original lifecycle still serializes directory recapture; role and route data are not moved.
+
+Read the configuration back after updating, and verify the route catalog and affected features separately. If a request fails or its result is uncertain, read the original configuration before retrying. Ordinary route writes still require a complete catalog, and existing connection authentication is preserved.
+
 ## Timeout settings
 
 Open **Settings → Timeout settings** in the WebGUI, find an operation, enter integer milliseconds, and save. Leave a field empty to restore its original default. The page reads the saved result back; conflicting edits preserve the draft and request a reload.

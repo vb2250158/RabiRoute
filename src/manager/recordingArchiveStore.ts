@@ -108,7 +108,8 @@ export class RecordingArchiveStore {
     const retained = await this.readObject(owner, objectHash);
     authorize();
     if (!retained.equals(body)) throw new Error("Archive object conflict");
-    return { sha256: objectHash, bytes: body.length, storageNamespaceId: target.storageNamespaceId };
+    // Legacy phone export reads the same receipt fields as the resource cache.
+    return { sha256: objectHash, bytes: body.length, storageNamespaceId: target.storageNamespaceId, durable: true };
   }
   async readObject(owner: string, objectHash: string): Promise<Buffer> {
     hash(objectHash); const target = await this.resolve(owner);
