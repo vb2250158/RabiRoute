@@ -19,8 +19,12 @@ const knowledgeRuntimeFiles = Object.freeze([
   "apps/rabi-mcp/lib/knowledge-receipt.mjs"
 ]);
 const relayManifestPath = 'scripts/rabilink-relay-runtime-files.json';
+const relayRuntimePathRules = JSON.parse(fs.readFileSync(new URL('./lib/rabilink-relay-runtime-paths.json', import.meta.url), 'utf8'));
+const relayRuntimePath = new RegExp(relayRuntimePathRules.runtime, 'i');
 const retiredRelayFiles = Object.freeze(['scripts/rabilink-knowledge-grant.mjs', 'scripts/rabilink-knowledge-grant-ui.mjs']);
 const developerMaintenanceFiles = Object.freeze([
+  'scripts/lib/rabilink-relay-runtime-paths.ps1',
+  'scripts/lib/rabilink-relay-runtime-paths.json',
   'scripts/Invoke-RabiRouteDeveloperApply.ps1',
   'scripts/Publish-RabiRouteDeveloperCandidate.ps1',
   'src/plugins/io.rabiroute.manager.xiaomi-home/scripts/Install-HomeAssistantOs.ps1'
@@ -31,7 +35,7 @@ function readRelayRuntimeFiles(root) {
   if (!Array.isArray(files) || !files.length || new Set(files).size !== files.length
     || !files.includes('scripts/rabilink-relay-server.mjs')
     || files.some(relative => typeof relative !== 'string'
-      || !/^(scripts\/(lib\/)?[a-z0-9-]+|packages\/(rabi-knowledge-contract\/(schema|tools|receipt)|rabi-api-contract\/request|rabilink-agent-contract\/(profile|state|persona)))\.mjs$/.test(relative))) {
+      || !relayRuntimePath.test(relative))) {
     throw new Error('Invalid Relay runtime manifest.');
   }
   for (const relative of files) requireFile(root, relative);

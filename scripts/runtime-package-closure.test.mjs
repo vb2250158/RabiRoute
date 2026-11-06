@@ -8,16 +8,54 @@ import { once } from 'node:events';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-test('Windows PowerShell prepares the real runtime manifest as individual scalar paths', { skip: process.platform !== 'win32', timeout: 30000 }, async () => {
-  const script = path.join(root, 'scripts/deploy-rabilink-relay-windows.ps1').replaceAll("'", "''");
+const relayRuntimePathRules = JSON.parse(await fs.readFile(path.join(root, 'scripts/lib/rabilink-relay-runtime-paths.json'), 'utf8'));
+const relayRuntimePath = new RegExp(relayRuntimePathRules.runtime, 'i');
+async function layoutFunctions(source) {
+  const functions = source.match(/\$relayLayoutFunctions = @'\r?\n([\s\S]*?)\r?\n'@/)?.[1];
+  assert(functions, 'Actual deployment migration functions must be testable without SSH.');
+  const helper = await fs.readFile(path.join(root, 'scripts/lib/rabilink-relay-runtime-paths.ps1'), 'utf8');
+  return `$relayRuntimePathRules = ConvertFrom-Json '${JSON.stringify(relayRuntimePathRules).replaceAll("'", "''")}'\n${helper}\n${functions}`;
+}
+async function prepareFixture(t, full = false) {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'relay-prepare-'));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const files = JSON.parse(await fs.readFile(path.join(root, 'scripts/rabilink-relay-runtime-files.json'), 'utf8'));
+  for (const file of [...files, 'package.json', 'scripts/rabilink-relay-runtime-files.json', 'scripts/deploy-rabilink-relay-windows.ps1',
+    'scripts/lib/rabilink-relay-runtime-paths.ps1', 'scripts/lib/rabilink-relay-runtime-paths.json']) {
+    const target = path.join(directory, file); await fs.mkdir(path.dirname(target), { recursive: true });
+    await fs.copyFile(path.join(root, file), target);
+  }
+  await fs.mkdir(path.join(directory, 'node_modules'));
+  await fs.symlink(await fs.realpath(path.join(root, 'node_modules/ws')), path.join(directory, 'node_modules/ws'), process.platform === 'win32' ? 'junction' : 'dir');
+  if (full) {
+    await fs.mkdir(path.join(directory, 'ribiwebgui/dist'), { recursive: true });
+    await fs.writeFile(path.join(directory, 'ribiwebgui/dist/index.html'), '<!doctype html><title>Private proxy fixture</title>');
+    await fs.mkdir(path.join(directory, 'assets'));
+    for (const file of ['data/rabilink-relay/rokid-rabilink-plugin.CURRENT.openapi.json', 'data/rabilink-relay/rokid-rabilink-plugin.MANUAL_AUTH.openapi.json',
+      'data/rabilink-relay/rokid-rabilink-plugin.AGENT_TOKEN.openapi.json', 'examples/rabilink-relay/rabilink-speech-api.openapi.json']) {
+      const target = path.join(directory, file); await fs.mkdir(path.dirname(target), { recursive: true }); await fs.writeFile(target, '{}');
+    }
+  }
+  return directory;
+}
+test('Windows PowerShell prepares the real runtime manifest as individual scalar paths', { skip: process.platform !== 'win32', timeout: 30000 }, async t => {
+  const preparedRoot = await prepareFixture(t);
+  const script = path.join(preparedRoot, 'scripts/deploy-rabilink-relay-windows.ps1').replaceAll("'", "''");
   const command = `$prepared = & '${script}' -RuntimeOnly -PrepareOnly -ServerIp stage.invalid -Domain stage.invalid; $prepared | ConvertTo-Json -Compress`;
   const result = spawnSync('powershell.exe', ['-NoProfile', '-EncodedCommand', Buffer.from(command, 'utf16le').toString('base64')], { encoding: 'utf8', timeout: 25000, windowsHide: true });
   assert.equal(result.status, 0, result.stderr);
   const prepared = JSON.parse(result.stdout.trim());
+  t.after(async () => { await fs.rm(prepared.BundleRoot, { recursive: true, force: true }); await fs.rm(prepared.BundleZip, { force: true }); });
   assert.equal(prepared.Prepared, true); assert.equal(prepared.RuntimeOnly, true);
   const files = JSON.parse(await fs.readFile(path.join(prepared.BundleRoot, 'scripts/rabilink-relay-runtime-files.json'), 'utf8'));
   assert.deepEqual(files, JSON.parse(await fs.readFile(path.join(root, 'scripts/rabilink-relay-runtime-files.json'), 'utf8')));
-  for (const file of files) assert.equal((await fs.stat(path.join(prepared.BundleRoot, file))).isFile(), true);
+  for (const file of [...files, 'scripts/lib/rabilink-relay-runtime-paths.ps1', 'scripts/lib/rabilink-relay-runtime-paths.json']) {
+    assert.deepEqual(await fs.readFile(path.join(prepared.BundleRoot, file)), await fs.readFile(path.join(root, file)));
+  }
+  const rollback = await fs.readFile(path.join(prepared.BundleRoot, 'rollback-rabilink-relay.ps1'), 'utf8');
+  assert(rollback.includes('function Test-RelayRuntimePath'));
+  assert(rollback.includes('src/plugins/'));
+  await assert.rejects(fs.access(path.join(prepared.BundleRoot, 'data/config.json')), { code: 'ENOENT' });
 });
 async function closure(entry, available) {
   const visited = new Set();
@@ -25,9 +63,12 @@ async function closure(entry, available) {
     if (visited.has(file)) return;
     assert(available.has(file), `Missing runtime module: ${file}`);
     visited.add(file);
-    assert.match(file, /^(scripts\/(lib\/)?[a-z0-9-]+|packages\/(rabi-knowledge-contract\/(schema|tools|receipt)|rabi-api-contract\/request|rabilink-agent-contract\/(profile|state|persona)))\.mjs$/);
+    assert(relayRuntimePath.test(file), `Invalid runtime module path: ${file}`);
     const source = await fs.readFile(path.join(root, file), 'utf8');
-    for (const match of source.matchAll(/(?:from\s*|import\s*\()\s*['"](\.[^'"]+)['"]/g)) {
+    // File-URL viewer assets are runtime dependencies just like module imports.
+    const dependencies = [...source.matchAll(/(?:from\s*|import\s*\()\s*['"](\.[^'"]+)['"]/g),
+      ...source.matchAll(/new URL\(\s*['"](\.[^'"]+\.mjs)['"]\s*,\s*import\.meta\.url\s*\)/g)];
+    for (const match of dependencies) {
       const next = path.posix.normalize(path.posix.join(path.posix.dirname(file), match[1]));
       assert(!next.startsWith('../') && !path.posix.isAbsolute(next), 'Runtime dependency escapes repository');
       await visit(next);
@@ -46,6 +87,10 @@ test('Relay manifest includes imports and its actually served pairing client', a
   assert.deepEqual([...found].sort(), files.slice().sort());
   const missing = new Set(files); missing.delete('scripts/lib/rabilink-tunnel-broker.mjs');
   await assert.rejects(closure('scripts/rabilink-relay-server.mjs', missing), /Missing runtime module/);
+  for (const asset of files.filter(file => file.startsWith('src/plugins/') && file.includes('/assets/'))) {
+    const withoutAsset = new Set(files); withoutAsset.delete(asset);
+    await assert.rejects(closure('scripts/rabilink-relay-server.mjs', withoutAsset), /Missing runtime module/);
+  }
 });
 test('Windows release explicitly includes runtime schema outside tracked-tree enumeration', async () => {
   const script = await fs.readFile(path.join(root, 'scripts/build-windows-release.ps1'), 'utf8');
@@ -154,18 +199,18 @@ test('next Windows deploy backs up then retires the old flat runtime without rem
   const service = path.join(directory, 'service'), backup = path.join(service, 'backups/code-fixture');
   const quote = value => "'" + value.replaceAll("'", "''") + "'";
   const source = await fs.readFile(path.join(root, 'scripts/deploy-rabilink-relay-windows.ps1'), 'utf8');
-  const functions = source.match(/\$relayLayoutFunctions = @'\r?\n([\s\S]*?)\r?\n'@/)?.[1];
-  assert(functions, 'Actual deployment migration functions must be testable without SSH.');
+  const functions = await layoutFunctions(source);
   async function write(relative, content) { const target = path.join(service, relative); await fs.mkdir(path.dirname(target), { recursive: true }); await fs.writeFile(target, content); }
   try {
     await write('rabilink-relay-runtime-files.json', JSON.stringify(['rabilink-relay-server.mjs', 'rabilink-knowledge-grant.mjs', 'lib/rabilink-tunnel-broker.mjs']));
-    const oldModules = ['rabilink-relay-server.mjs', 'rabilink-knowledge-grant.mjs', 'rabilink-knowledge-grant-ui.mjs', 'lib/rabilink-tunnel-broker.mjs', 'scripts/rabilink-knowledge-grant.mjs', 'scripts/rabilink-knowledge-grant-ui.mjs'];
+    const oldOwned = ['src/plugins/io.rabiroute.fixture/relay/old-share.mjs', 'src/plugins/io.rabiroute.fixture/assets/old-viewer.mjs'];
+    const oldModules = [...oldOwned, 'rabilink-relay-server.mjs', 'rabilink-knowledge-grant.mjs', 'rabilink-knowledge-grant-ui.mjs', 'lib/rabilink-tunnel-broker.mjs', 'scripts/rabilink-knowledge-grant.mjs', 'scripts/rabilink-knowledge-grant-ui.mjs'];
     for (const relative of oldModules) await write(relative, 'old code');
     await write('scripts/rabilink-relay-server.mjs', 'new code');
-    await write('scripts/rabilink-relay-runtime-files.json', JSON.stringify(['scripts/rabilink-relay-server.mjs']));
+    await write('scripts/rabilink-relay-runtime-files.json', JSON.stringify(['scripts/rabilink-relay-server.mjs', ...oldOwned]));
     await write('data/apps.json', 'private data preserved');
     await write('scripts/local-maintenance.ps1', 'preserved');
-    const command = `$ErrorActionPreference='Stop'\n${functions}\n$root=${quote(service)}\n$backup=${quote(backup)}\n$runtime=@('scripts/rabilink-relay-server.mjs','scripts/lib/rabilink-tunnel-broker.mjs')\n$legacy=@(Get-LegacyRelayRuntimeFiles -Root $root -RuntimeFiles $runtime)\nBackup-RelayRuntimeLayout -Root $root -BackupRoot $backup -Files ($legacy+@('rabilink-relay-runtime-files.json','scripts/rabilink-knowledge-grant.mjs','scripts/rabilink-knowledge-grant-ui.mjs'))\n$removed=@(Remove-LegacyRelayRuntimeLayout -Root $root -LegacyFiles $legacy)\ntry { Remove-LegacyRelayRuntimeLayout -Root $root -LegacyFiles @('../outside.mjs'); throw 'escape allowed' } catch { if ($_.Exception.Message -eq 'escape allowed') { throw } }\n$again=@(Remove-LegacyRelayRuntimeLayout -Root $root -LegacyFiles $legacy)\nif ($removed.Count -ne 6 -or $again.Count -ne 0) { throw 'Migration is not complete or idempotent' }`;
+    const command = `$ErrorActionPreference='Stop'\n${functions}\n$root=${quote(service)}\n$backup=${quote(backup)}\n$runtime=@('scripts/rabilink-relay-server.mjs','scripts/lib/rabilink-tunnel-broker.mjs')\n$legacy=@(Get-LegacyRelayRuntimeFiles -Root $root -RuntimeFiles $runtime)\nBackup-RelayRuntimeLayout -Root $root -BackupRoot $backup -Files ($legacy+@('rabilink-relay-runtime-files.json','scripts/rabilink-knowledge-grant.mjs','scripts/rabilink-knowledge-grant-ui.mjs'))\n$removed=@(Remove-LegacyRelayRuntimeLayout -Root $root -LegacyFiles $legacy)\ntry { Remove-LegacyRelayRuntimeLayout -Root $root -LegacyFiles @('../outside.mjs'); throw 'escape allowed' } catch { if ($_.Exception.Message -eq 'escape allowed') { throw } }\n$again=@(Remove-LegacyRelayRuntimeLayout -Root $root -LegacyFiles $legacy)\nif ($removed.Count -ne 8 -or $again.Count -ne 0) { throw 'Migration is not complete or idempotent' }`;
     const result = spawnSync('powershell.exe', ['-NoProfile', '-EncodedCommand', Buffer.from(command, 'utf16le').toString('base64')], { encoding: 'utf8', timeout: 10000, windowsHide: true });
     assert.equal(result.status, 0, result.stderr || result.stdout);
     for (const relative of [...oldModules, 'rabilink-relay-runtime-files.json']) {
@@ -182,8 +227,7 @@ test('repo-layout retirement backs up its whole old closure and private bytes, t
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'relay-repo-retirement-'));
   const service = path.join(directory, 'service'), backup = path.join(service, 'backups/code-fixture');
   const source = await fs.readFile(path.join(root, 'scripts/deploy-rabilink-relay-windows.ps1'), 'utf8');
-  const functions = source.match(/\$relayLayoutFunctions = @'\r?\n([\s\S]*?)\r?\n'@/)?.[1];
-  assert(functions);
+  const functions = await layoutFunctions(source);
   const quote = value => "'" + value.replaceAll("'", "''") + "'";
   const retired = ['scripts/rabilink-agent-profile.mjs', 'scripts/rabilink-profile-mcp-editor.mjs', 'scripts/rabilink-knowledge-access.mjs', 'packages/rabilink-agent-contract/request-csrf.mjs', 'packages/rabi-knowledge-contract/tools.mjs', 'scripts/previous-extra-runtime.mjs'];
   const write = async (relative, content) => { const file = path.join(service, relative); await fs.mkdir(path.dirname(file), { recursive: true }); await fs.writeFile(file, content); };
@@ -207,4 +251,79 @@ test('repo-layout retirement backs up its whole old closure and private bytes, t
     assert.equal(await fs.readFile(path.join(backup, 'data/apps.json'), 'utf8'), '{"unknown":{"kept":true},"taskId":"original-id"}');
     assert.deepEqual(await fs.readFile(path.join(backup, 'data/arbitrary-extension/binary.dat')), Buffer.from([0, 255, 17, 13]));
   } finally { await fs.rm(directory, { recursive: true, force: true }); }
+});
+
+
+test('shared Relay path format accepts canonical resources and keeps traversal/private paths out', { skip: process.platform !== 'win32' }, async () => {
+  const valid = ['scripts/lib/custom.mjs', 'packages/another-contract/module.mjs',
+    'src/plugins/io.rabiroute.fixture/relay/server.mjs', 'src/plugins/other-plugin/assets/nested/viewer.mjs'];
+  const invalid = ['../outside.mjs', '/scripts/a.mjs', 'C:/scripts/a.mjs', 'scripts/a/../b.mjs', 'scripts//a.mjs',
+    'src/plugins/id/data/secret.mjs', 'src/plugins/id/auth/token.mjs', 'src/plugins/id/assets/viewer.json',
+    'src/plugins/id/assets/../relay/a.mjs', 'src/plugins/id/src/private.mjs', 'data/account.mjs'];
+  for (const file of valid) assert.equal(relayRuntimePath.test(file), true, file);
+  for (const file of invalid) assert.equal(relayRuntimePath.test(file), false, file);
+  const quote = value => "'" + value.replaceAll("'", "''") + "'";
+  const source = await fs.readFile(path.join(root, 'scripts/deploy-rabilink-relay-windows.ps1'), 'utf8');
+  const functions = await layoutFunctions(source);
+  const command = `$ErrorActionPreference='Stop'
+${functions}
+` +
+    valid.map(file => `if(-not (Test-RelayRuntimePath -Relative ${quote(file)} -Rules $relayRuntimePathRules)){throw 'valid path rejected'}`).join('\n') + '\n' +
+    invalid.map(file => `if(Test-RelayRuntimePath -Relative ${quote(file)} -Rules $relayRuntimePathRules){throw 'invalid path accepted'}`).join('\n') +
+    "\nif(Test-RelayRuntimePath -Relative 'lib/old.mjs' -Rules $relayRuntimePathRules){throw 'flat entered new runtime'}" +
+    "\nif(-not (Test-RelayRuntimePath -Relative 'lib/old.mjs' -Rules $relayRuntimePathRules -Legacy)){throw 'flat rollback lost'}";
+  const result = spawnSync('powershell.exe', ['-NoProfile', '-EncodedCommand', Buffer.from(command, 'utf16le').toString('base64')], { encoding: 'utf8', windowsHide: true });
+  assert.equal(result.status, 0, result.stderr);
+});
+
+test('actual Windows runtime-source copier includes the canonical Relay manifest resources', { skip: process.platform !== 'win32' }, async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'relay-source-copy-'));
+  const quote = value => "'" + value.replaceAll("'", "''") + "'";
+  try {
+    const files = JSON.parse(await fs.readFile(path.join(root, 'scripts/rabilink-relay-runtime-files.json'), 'utf8'));
+    const rows = [];
+    const { createHash } = await import('node:crypto');
+    for (const file of files) rows.push({ path: file, sha256: createHash('sha256').update(await fs.readFile(path.join(root, file))).digest('hex') });
+    const manifest = path.join(directory, 'tracked.json'); await fs.writeFile(manifest, JSON.stringify(rows));
+    const command = `$ErrorActionPreference='Stop'
+Import-Module (Join-Path $PSHOME 'Modules/Microsoft.PowerShell.Utility/Microsoft.PowerShell.Utility.psd1')
+$repo=${quote(root)}
+$payload=${quote(path.join(directory, 'payload'))}
+` +
+      `. (Join-Path $repo 'scripts/lib/release-tracked-manifest.ps1')
+. (Join-Path $repo 'scripts/lib/rabilink-relay-runtime-paths.ps1')
+` +
+      `$relayRuntimePathRules=Get-Content (Join-Path $repo 'scripts/lib/rabilink-relay-runtime-paths.json') -Raw|ConvertFrom-Json
+` +
+      `$tokens=$null;$errors=$null;$ast=[System.Management.Automation.Language.Parser]::ParseFile((Join-Path $repo 'scripts/build-windows-release.ps1'),[ref]$tokens,[ref]$errors);if($errors.Count){throw 'release parse error'}
+` +
+      `$requiredPortableRuntimeFiles=@();$assignment=$ast.EndBlock.Statements|Where-Object {$_ -is [System.Management.Automation.Language.AssignmentStatementAst] -and $_.Left.Extent.Text -eq '$relayRuntimeFiles'};Invoke-Expression $assignment.Extent.Text
+` +
+      `$selection=$ast.EndBlock.Statements|Where-Object {$_ -is [System.Management.Automation.Language.ForEachStatementAst] -and $_.Condition.Extent.Text -eq '$relayRuntimeFiles'};Invoke-Expression $selection.Extent.Text
+` +
+      `$trackedManifestEntries=Get-Content ${quote(manifest)} -Raw|ConvertFrom-Json;$excludedRuntimeFiles=New-Object 'System.Collections.Generic.HashSet[string]';$runtimeSourceExclusions=New-Object 'System.Collections.Generic.HashSet[string]'
+` +
+      `$copy=$ast.Find({param($node)$node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Copy-TrackedTree'},$true);Invoke-Expression $copy.Extent.Text
+` +
+      `foreach($tree in @('scripts','packages','src')){Copy-TrackedTree $tree};foreach($relative in $requiredPortableRuntimeFiles){if(-not(Test-Path (Join-Path $payload $relative) -PathType Leaf)){throw 'manifest resource missing'}}`;
+    const result = spawnSync('powershell.exe', ['-NoProfile', '-EncodedCommand', Buffer.from(command, 'utf16le').toString('base64')], { encoding: 'utf8', windowsHide: true });
+    assert.equal(result.status, 0, result.stderr);
+    for (const file of files) assert.deepEqual(await fs.readFile(path.join(directory, 'payload', file)), await fs.readFile(path.join(root, file)));
+  } finally { await fs.rm(directory, { recursive: true, force: true }); }
+});
+
+
+test('PrepareOnly generates HTML share proxy routes in all four Caddy sites without deploying', { skip: process.platform !== 'win32', timeout: 30000 }, async t => {
+  const directory = await prepareFixture(t, true);
+  const script = path.join(directory, 'scripts/deploy-rabilink-relay-windows.ps1').replaceAll("'", "''");
+  const command = `$prepared = & '${script}' -RuntimeOnly:$false -PrepareOnly -ServerIp stage.invalid -Domain stage.invalid -PublicHttpPort 18088; $prepared | ConvertTo-Json -Compress`;
+  const result = spawnSync('powershell.exe', ['-NoProfile', '-EncodedCommand', Buffer.from(command, 'utf16le').toString('base64')], { encoding: 'utf8', timeout: 25000, windowsHide: true });
+  assert.equal(result.status, 0, result.stderr);
+  const prepared = JSON.parse(result.stdout.trim());
+  t.after(async () => { await fs.rm(prepared.BundleRoot, { recursive: true, force: true }); await fs.rm(prepared.BundleZip, { force: true }); });
+  assert.equal(prepared.Prepared, true); assert.equal(prepared.RuntimeOnly, false);
+  const config = await fs.readFile(path.join(prepared.BundleRoot, 'Caddyfile'), 'utf8');
+  assert.equal([...config.matchAll(/handle \/share\/\*\s*\{\s*reverse_proxy 127\.0\.0\.1:8788\s*\}/g)].length, 4);
+  const runtimeSource = await fs.readFile(path.join(root, 'scripts/deploy-rabilink-relay-windows.ps1'), 'utf8');
+  assert(runtimeSource.includes("foreach ($file in @('Caddyfile', 'start-caddy.ps1'))"));
 });

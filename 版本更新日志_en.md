@@ -6,6 +6,10 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.8.1 - 2026-11-07
+
+- Fix legacy directory assumptions in Windows packaging and Relay deployment so plugin-owned Relay and viewer assets follow the declared manifest. Copy, backup and recovery retain the same relative-path contract, and reverse-proxy templates include the share routes. Plugin implementation versions, APIs and user configuration are unchanged.
+
 ## 0.8.0 - 2026-11-06
 
 - Add the independent HTML sharing plugin at `0.1.1`, owning its source, Relay/viewer assets, private storage and lifetime. The host adds only a generic transport extension; existing Relay capabilities and mandatory startup requirements retain their contracts.

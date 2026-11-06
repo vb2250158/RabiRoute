@@ -45,7 +45,7 @@ const knowledgeRuntimeFiles = [
   "apps/rabi-mcp/lib/knowledge-tools.mjs",
   "apps/rabi-mcp/lib/knowledge-receipt.mjs"
 ];
-const developerMaintenanceFiles = ['scripts/Invoke-RabiRouteDeveloperApply.ps1', 'scripts/Publish-RabiRouteDeveloperCandidate.ps1', 'src/plugins/io.rabiroute.manager.xiaomi-home/scripts/Install-HomeAssistantOs.ps1'];
+const developerMaintenanceFiles = ['scripts/lib/rabilink-relay-runtime-paths.ps1', 'scripts/lib/rabilink-relay-runtime-paths.json', 'scripts/Invoke-RabiRouteDeveloperApply.ps1', 'scripts/Publish-RabiRouteDeveloperCandidate.ps1', 'src/plugins/io.rabiroute.manager.xiaomi-home/scripts/Install-HomeAssistantOs.ps1'];
 function writeKnowledgeRuntime(build) {
   for (const relative of developerMaintenanceFiles) {
     write(build, relative, fs.readFileSync(new URL(`../${relative}`, import.meta.url), 'utf8'));
@@ -101,6 +101,8 @@ test("developer candidate overlays only built runtime layers and leaves the immu
     write(base, 'scripts/rabilink-knowledge-grant.mjs', 'retired grant owner\n');
     write(base, 'scripts/rabilink-knowledge-grant-ui.mjs', 'retired grant editor\n');
     write(base, 'scripts/local-maintenance.ps1', 'keep local maintenance\n');
+    write(base, 'scripts/lib/rabilink-relay-runtime-paths.ps1', 'obsolete path helper\n');
+    write(base, 'scripts/lib/rabilink-relay-runtime-paths.json', 'obsolete path rules\n');
     write(base, 'scripts/Invoke-RabiRouteDeveloperApply.ps1', 'obsolete activation budget\n');
     write(base, 'scripts/Publish-RabiRouteDeveloperCandidate.ps1', 'obsolete publisher budget\n');
     write(base, 'src/plugins/io.rabiroute.manager.xiaomi-home/scripts/Install-HomeAssistantOs.ps1', 'obsolete visible recovery launcher\n');

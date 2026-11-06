@@ -106,6 +106,8 @@ $requiredPortableRuntimeFiles = @(
     "scripts/lib/copy-installed-host.ps1",
     "scripts/lib/copy-agent-native-assets.ps1",
     "scripts/rabilink-relay-runtime-files.json",
+    "scripts/lib/rabilink-relay-runtime-paths.ps1",
+    "scripts/lib/rabilink-relay-runtime-paths.json",
     "docs/aiui-agent-profile-http.md",
     "docs/aiui-agent-profile-http_en.md",
     "docs/rabilink-knowledge-operation-receipts.md",
@@ -113,9 +115,11 @@ $requiredPortableRuntimeFiles = @(
     "docs/knowledge-grant-phone-ui.md",
     "docs/knowledge-grant-phone-ui_en.md"
 )
+. (Join-Path $scriptDir 'lib/rabilink-relay-runtime-paths.ps1')
+$relayRuntimePathRules = Get-Content -LiteralPath (Join-Path $scriptDir 'lib/rabilink-relay-runtime-paths.json') -Raw -Encoding UTF8 | ConvertFrom-Json
 $relayRuntimeFiles = Get-Content -LiteralPath (Join-Path $repo 'scripts/rabilink-relay-runtime-files.json') -Raw -Encoding UTF8 | ConvertFrom-Json
 foreach ($relative in $relayRuntimeFiles) {
-    if ($relative -notmatch '^(scripts/(lib/)?[a-z0-9-]+|packages/(rabi-knowledge-contract/(schema|tools|receipt)|rabi-api-contract/request|rabilink-agent-contract/(profile|state|persona)))\.mjs$') { throw 'Unsafe Relay runtime manifest path' }
+    if (-not (Test-RelayRuntimePath -Relative $relative -Rules $relayRuntimePathRules)) { throw 'Unsafe Relay runtime manifest path' }
     $requiredPortableRuntimeFiles += $relative
 }
 

@@ -13,6 +13,8 @@ param(
 $ErrorActionPreference = "Stop"
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
+. (Join-Path $PSScriptRoot 'lib/rabilink-relay-runtime-paths.ps1')
+$relayRuntimePathRules = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'lib/rabilink-relay-runtime-paths.json') -Raw -Encoding UTF8 | ConvertFrom-Json
 $configPath = Join-Path $repoRoot "data\rabilink-relay\config.json"
 $relayConfig = $null
 if (Test-Path -LiteralPath $configPath) {
@@ -131,12 +133,17 @@ $runtimeManifest = Join-Path $PSScriptRoot "rabilink-relay-runtime-files.json"
 $relayRuntimeFiles = [string[]](Get-Content -LiteralPath $runtimeManifest -Raw | ConvertFrom-Json)
 if ($relayRuntimeFiles.Count -eq 0) { throw "Relay runtime manifest is empty." }
 foreach ($relative in $relayRuntimeFiles) {
-    if ($relative -notmatch '^(scripts|packages)/[a-z0-9][a-z0-9/._-]*\.mjs$' -or @($relative.Split('/') | Where-Object { $_ -in @('.', '..', '') }).Count -gt 0) { throw "Invalid Relay runtime manifest entry." }
+    if (-not (Test-RelayRuntimePath -Relative $relative -Rules $relayRuntimePathRules)) { throw "Invalid Relay runtime manifest entry." }
     if (-not (Test-Path -LiteralPath (Join-Path $repoRoot $relative) -PathType Leaf)) { throw "Required Relay runtime module is missing: $relative" }
 }
 New-Item -ItemType Directory -Force -Path (Join-Path $bundleRoot "scripts") | Out-Null
 Copy-Item -LiteralPath $runtimeManifest -Destination (Join-Path $bundleRoot "scripts/rabilink-relay-runtime-files.json") -Force
 foreach ($relative in $relayRuntimeFiles) {
+    $destination = Join-Path $bundleRoot $relative
+    New-Item -ItemType Directory -Force -Path (Split-Path $destination) | Out-Null
+    Copy-Item -LiteralPath (Join-Path $repoRoot $relative) -Destination $destination -Force
+}
+foreach ($relative in @('scripts/lib/rabilink-relay-runtime-paths.ps1', 'scripts/lib/rabilink-relay-runtime-paths.json')) {
     $destination = Join-Path $bundleRoot $relative
     New-Item -ItemType Directory -Force -Path (Split-Path $destination) | Out-Null
     Copy-Item -LiteralPath (Join-Path $repoRoot $relative) -Destination $destination -Force
@@ -208,6 +215,10 @@ http://:$PublicHttpPort {
         reverse_proxy 127.0.0.1:8788
     }
 
+    handle /share/* {
+        reverse_proxy 127.0.0.1:8788
+    }
+
     handle /worker/* {
         reverse_proxy 127.0.0.1:8788
     }
@@ -248,6 +259,10 @@ http://$Domain {
         reverse_proxy 127.0.0.1:8788
     }
 
+    handle /share/* {
+        reverse_proxy 127.0.0.1:8788
+    }
+
     handle /worker/* {
         reverse_proxy 127.0.0.1:8788
     }
@@ -281,6 +296,10 @@ http://:80 {
         reverse_proxy 127.0.0.1:8788
     }
 
+    handle /share/* {
+        reverse_proxy 127.0.0.1:8788
+    }
+
     handle /worker/* {
         reverse_proxy 127.0.0.1:8788
     }
@@ -311,6 +330,10 @@ https://$Domain {
     }
 
     handle /openapi* {
+        reverse_proxy 127.0.0.1:8788
+    }
+
+    handle /share/* {
         reverse_proxy 127.0.0.1:8788
     }
 
@@ -394,14 +417,14 @@ function Get-LegacyRelayRuntimeFiles {
     $repoManifest = Resolve-RelayLayoutPath -Root $Root -Relative 'scripts/rabilink-relay-runtime-files.json'
     if (Test-Path -LiteralPath $repoManifest -PathType Leaf) {
         foreach ($relative in [string[]](Get-Content -LiteralPath $repoManifest -Raw | ConvertFrom-Json)) {
-            if ($relative -notmatch '^(scripts|packages)/[a-z0-9][a-z0-9/._-]*\.mjs$' -or @($relative.Split('/') | Where-Object { $_ -in @('.', '..', '') }).Count -gt 0) { throw "Invalid prior Relay runtime manifest entry." }
+            if (-not (Test-RelayRuntimePath -Relative $relative -Rules $relayRuntimePathRules)) { throw "Invalid prior Relay runtime manifest entry." }
             if ($relative -notin $RuntimeFiles) { $legacy += $relative }
         }
     }
     $oldManifest = Resolve-RelayLayoutPath -Root $Root -Relative 'rabilink-relay-runtime-files.json'
     if (Test-Path -LiteralPath $oldManifest -PathType Leaf) {
         foreach ($relative in [string[]](Get-Content -LiteralPath $oldManifest -Raw | ConvertFrom-Json)) {
-            if ($relative -notmatch '^(lib/)?[a-z0-9-]+\.mjs$') { throw "Invalid legacy Relay runtime manifest entry." }
+            if ($relative -notmatch $relayRuntimePathRules.legacy) { throw "Invalid legacy Relay runtime manifest entry." }
             $legacy += $relative
         }
     }
@@ -423,7 +446,7 @@ function Remove-LegacyRelayRuntimeLayout {
     param([string]$Root, [string[]]$LegacyFiles)
     $removed = @()
     foreach ($relative in @($LegacyFiles + @('scripts/rabilink-knowledge-grant.mjs', 'scripts/rabilink-knowledge-grant-ui.mjs'))) {
-        if ($relative -notmatch '^(lib/)?[a-z0-9-]+\.mjs$' -and $relative -notmatch '^(scripts|packages)/[a-z0-9][a-z0-9/._-]*\.mjs$') { throw "Invalid legacy Relay runtime manifest entry." }
+        if (-not (Test-RelayRuntimePath -Relative $relative -Rules $relayRuntimePathRules -Legacy)) { throw "Invalid legacy Relay runtime manifest entry." }
         $target = Resolve-RelayLayoutPath -Root $Root -Relative $relative
         if (Test-Path -LiteralPath $target -PathType Leaf) {
             Remove-Item -LiteralPath $target -Force
@@ -482,6 +505,9 @@ function Restore-RelayRuntimeLayout {
 '@
 
 
+# Embed the same format rules/functions so rollback does not depend on replaced live files.
+$relayRuntimeRulesLiteral = ($relayRuntimePathRules | ConvertTo-Json -Compress).Replace("'", "''")
+$relayLayoutFunctions = '$relayRuntimePathRules = ConvertFrom-Json ' + "'" + $relayRuntimeRulesLiteral + "'`r`n" + (Get-Content -LiteralPath (Join-Path $PSScriptRoot 'lib/rabilink-relay-runtime-paths.ps1') -Raw) + "`r`n" + $relayLayoutFunctions
 New-AsciiFile -Path (Join-Path $bundleRoot 'rollback-rabilink-relay.ps1') -Content @"
 param([Parameter(Mandatory=`$true)][string]`$Root, [Parameter(Mandatory=`$true)][string]`$BackupRoot)
 `$ErrorActionPreference = 'Stop'

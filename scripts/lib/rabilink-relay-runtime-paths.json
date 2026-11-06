@@ -1,0 +1,4 @@
+{
+  "runtime": "^(?!.*(?:^|/)\\.{1,2}/)(?!.*//)(?:(?:scripts|packages)/[a-z0-9][a-z0-9/._-]*|src/plugins/[a-z0-9][a-z0-9._-]*/(?:relay|assets)/(?:[a-z0-9][a-z0-9._-]*/)*[a-z0-9][a-z0-9._-]*)\\.mjs$",
+  "legacy": "^(lib/)?[a-z0-9-]+\\.mjs$"
+}
