@@ -12,7 +12,8 @@ import {
   roleStorageHttpError,
   type RoleStorageApplicationOptions
 } from "./roleStorageApplication.js";
-import { ManagerReadWorkerPool } from "./managerReadWorkerPool.js";
+import { ManagerReadWorkerPool, managerReadWorkerPool, managerKnowledgePageWorkerPool, startBuiltinManagerReadWorkerPools, stopBuiltinManagerReadWorkerPools } from "./managerReadWorkerPool.js";
+import { ensurePersonaPlanWorkflow } from "../personaPlanWorkflow.js";
 import { ManagerStorageMutationError } from "./managerStorageMutationPool.js";
 import { installDataMutationAuditSink, type RecordedDataMutationAudit } from "../observability/dataMutationAudit.js";
 
@@ -422,4 +423,29 @@ test("active-child failures expose an unknown commit state and same-key-only ret
       }
     );
   }
+});
+
+
+test("explicit prepared plan reads do not replace fresh post-commit create update and binding projections", { timeout: 60000 }, async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "role-warm-point-")), roleId = "Fixture", roleDir = path.join(root, roleId);
+  fs.mkdirSync(roleDir); ensurePersonaPlanWorkflow(roleDir); startBuiltinManagerReadWorkerPools();
+  const identity = { applicationGenerationId: "point-test-generation", managerInstanceId: "point-test-manager" };
+  const application = new RoleStorageApplication({ rolesRoot: root, ...identity, currentIdentity: () => identity });
+  t.after(async () => { await application.stop(); await stopBuiltinManagerReadWorkerPools(); fs.rmSync(root, { recursive: true, force: true }); });
+  let explicitReads = 0; const point = managerReadWorkerPool.queryRoleStoragePlanProjection;
+  t.mock.method(managerReadWorkerPool, "queryRoleStoragePlanProjection", function (...args: Parameters<typeof point>) {
+    explicitReads++; return Reflect.apply(point, managerReadWorkerPool, args);
+  } as typeof point);
+  const context = { authorize: () => {} };
+  const created = await application.commands.createPlan(roleId, { id: "point-plan", title: "Original", focus: "Synthetic point read", status: "分析中", currentStepId: "step", keywords: ["fixture"], steps: [{ id: "step", title: "Nested" }] }, { ...context, idempotencyKey: "point-create" });
+  assert.equal(created.projection.plan.title, "Original"); assert.equal(explicitReads, 0);
+  await managerKnowledgePageWorkerPool.queryRolePlanPage(roleDir, { cursor: "", limit: 1, query: "", sort: "updated", statuses: [], tags: [], includeFacets: false, summary: true });
+  const original = await application.queries.plan(roleId, "point-plan", { reusePrepared: true }); assert.ok(original); assert.equal(explicitReads, 1);
+  const updated = await application.commands.updatePlan(roleId, "point-plan", { title: "Updated" }, { ...context, idempotencyKey: "point-update", expectedRevision: original.revision });
+  assert.equal(updated.projection.plan.title, "Updated"); assert.equal(explicitReads, 1, "post-commit projection is the original fresh query");
+  assert.equal((await application.queries.plan(roleId, "point-plan", { reusePrepared: true }))?.plan.title, "Updated"); assert.equal(explicitReads, 2);
+  const binding = { agentType: "codex" as const, sessionId: "new-thread", sessionTitle: "New thread", workspace: root };
+  const rebound = await application.commands.updatePlanTaskBinding(roleId, "point-plan", binding, { ...context, idempotencyKey: "point-bind", expectedRevision: updated.projection.revision });
+  assert.equal(rebound.projection.plan.taskBinding?.sessionId, "new-thread"); assert.equal(explicitReads, 2);
+  assert.equal((await application.queries.plan(roleId, "point-plan", { reusePrepared: true }))?.plan.taskBinding?.sessionId, "new-thread"); assert.equal(explicitReads, 3);
 });

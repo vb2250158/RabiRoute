@@ -179,3 +179,24 @@ test("filter updates own a stable snapshot rather than mutable caller set aliase
     assert.equal(log.isEnabled("test", "info"), false);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
+
+
+test("HTTP completion logs retain optional connection peer and accept older events", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabi-http-peer-log-"));
+  try {
+    const log = createManagerOperationalLog({ rootDir: root, now: () => new Date("2026-11-07T01:00:00.000Z") });
+    log.record("warn", "http_request_completed", { method: "GET", pathname: "/api/roles/Fixture/plans/missing", statusCode: 404,
+      peer: { address: "127.0.0.1", port: 49152 } });
+    log.record("warn", "http_request_completed", { method: "GET", pathname: "/api/roles/Fixture/plans/missing", statusCode: 404 });
+    await log.flush();
+    const records = fs.readFileSync(path.join(log.logDirectory, "manager-operations-2026-11-07.jsonl"), "utf8").trim().split("\n").map(line => JSON.parse(line));
+    assert.deepEqual(records[0].peer, { address: "127.0.0.1", port: 49152 });
+    assert.equal(Object.hasOwn(records[1], "peer"), false);
+    assert.equal(records[0].schemaVersion, records[1].schemaVersion);
+    for (const record of records) {
+      assert.equal(Object.hasOwn(record, "headers"), false);
+      assert.equal(Object.hasOwn(record, "query"), false);
+      assert.equal(Object.hasOwn(record, "body"), false);
+    }
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});

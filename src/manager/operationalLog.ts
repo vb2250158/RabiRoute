@@ -28,6 +28,7 @@ export type ManagerOperationalEvent = {
   requestId?: string;
   method?: string;
   pathname?: string;
+  peer?: { address?: string; port?: number };
   statusCode?: number;
   durationMs?: number;
   hookProgress?: { sessionId: string; turnId?: string; stage: string; phase: "started" | "completed" | "failed"; startMs: number };

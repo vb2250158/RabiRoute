@@ -1395,6 +1395,8 @@ const managerRequestContexts = new WeakMap<http.ServerResponse, {
   pathname: () => string;
   startedAt: number;
   responseBytes?: number;
+  peerAddress?: string;
+  peerPort?: number;
   assertResponseAuthority?: () => void;
 }>();
 const managerReadOnly = managerReadOnlyEnabled();
@@ -8395,7 +8397,9 @@ createManagerEventOperationDefinition
       requestId,
       method,
       pathname: () => pathname,
-      startedAt: requestStartedAt
+      startedAt: requestStartedAt,
+      peerAddress: request.socket.remoteAddress,
+      peerPort: request.socket.remotePort
     });
     response.setHeader("x-rabiroute-request-id", requestId);
     observeManagerHttpAbort(response, () => managerOperationalLog.record("warn", "http_request_aborted", {
@@ -8421,6 +8425,8 @@ createManagerEventOperationDefinition
         pathname,
         statusCode: response.statusCode,
         durationMs,
+        ...(context?.peerAddress !== undefined || context?.peerPort !== undefined
+          ? { peer: { address: context?.peerAddress, port: context?.peerPort } } : {}),
         result: failed ? "failed" : "completed"
       });
     });

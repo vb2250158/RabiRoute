@@ -1,5 +1,5 @@
 import { getTimeoutMs, readTimeoutOverrides } from "../shared/timeoutSettings.js";
-import { attachNativeStorageWork, beginNativeStorageWork, nativeStorageWorkClosed, observeNativeStorageWork, withoutNativeStorageWork } from "./nativeStorageWork.js";
+import { attachNativeStorageWork, beginNativeStorageWork, captureNativeStorageWork, nativeStorageWorkClosed, observeNativeStorageWork, withoutNativeStorageWork } from "./nativeStorageWork.js";
 import { fork } from "node:child_process";
 import os from "node:os";
 import { PlanPageCatalogLifecycle } from "./planPageCatalogLifecycle.js";
@@ -94,6 +94,13 @@ export type RolePlanPageReadInput = {
   includeFacets: boolean;
   summary: boolean;
 };
+
+type ResidentPlanReadInput = RolePlanPageReadInput | {
+  type: "point-hint"; planId: string; fence: import("../planReadInvalidation.js").PlanReadFence;
+  token?: string; options: { signal?: AbortSignal; timeoutMs?: number }
+};
+type PlanPointHint = import("../roleKnowledge.js").PlanPointCandidateHint;
+type PlanPointProjectionReply<T> = { value: T; hintAccepted: boolean };
 
 type PendingRead = {
   task: ManagerReadWorkerTask;
@@ -362,6 +369,43 @@ export class ManagerReadWorkerPool {
       this.drain();
     });
     return attachNativeStorageWork(result, nativeWork.closed);
+  }
+
+  /** Explicit read-only point query. Internal post-commit projections retain run()'s fresh path. */
+  queryRoleStoragePlanProjection<T>(roleDir: string, planId: string,
+    options: { signal?: AbortSignal; timeoutMs?: number } = {}): Promise<T> {
+    const work = captureNativeStorageWork(async () => {
+      const fence = planReadFence(roleDir);
+      const sameFence = () => {
+        const current = planReadFence(roleDir);
+        return current.epoch === fence.epoch && current.revision === fence.revision;
+      };
+      const memoryQuery = async (token?: string): Promise<PlanPointHint | boolean | null | undefined> => {
+        try {
+          const prepared = residentPlanPageCatalogs.tryQueryPrepared(roleDir,
+            { type: "point-hint", planId, fence, token, options }, options.signal);
+          return prepared ? await prepared as PlanPointHint | boolean | null : undefined;
+        } catch {
+          if (options.signal?.aborted) throw new ManagerReadWorkerError("Manager read request was aborted.", "aborted");
+          // The optional memory owner cannot become a prerequisite for ordinary point access.
+          // Its pool already records worker/IPC/deadline failures; the actual point IO below still propagates errors.
+          return undefined;
+        }
+      };
+      const hint = await memoryQuery();
+      if (!hint || typeof hint === "boolean" || !sameFence()) {
+        // No ready/idle inventory is ordinary fresh access, not a readiness requirement.
+        return this.run<T>({ type: "role_storage_plan_projection", roleDir, planId }, options);
+      }
+      const reply = await this.run<PlanPointProjectionReply<T>>({
+        type: "role_storage_plan_projection", roleDir, planId, candidateFiles: hint.paths
+      }, options);
+      if (!reply.hintAccepted) return reply.value; // Getter already performed the one original fresh read.
+      if (await memoryQuery(hint.token) === true && sameFence()) return reply.value;
+      return this.run<T>({ type: "role_storage_plan_projection", roleDir, planId }, options);
+    });
+    observeNativeStorageWork(work.closed);
+    return attachNativeStorageWork(work.result, work.closed);
   }
 
   queryRoleKnowledgeCatalogSnapshot(
@@ -955,7 +999,7 @@ export class ManagerReadWorkerPool {
 
 /** One resident child per admitted role. Initialization is not an HTTP lease. */
 export function createPlanPageCatalogService() {
-  return new PlanPageCatalogLifecycle<RolePlanPageReadInput, unknown>({
+  return new PlanPageCatalogLifecycle<ResidentPlanReadInput, unknown>({
     maxRoles: 4,
     maxQueriesPerRole: 32,
     buildTimeoutMs: getTimeoutMs("backend.manager.managerReadWorkerPool.createPlanPageCatalogService.buildTimeoutMs", 5 * 60_000),
@@ -971,6 +1015,11 @@ export function createPlanPageCatalogService() {
         },
         query: async input => {
           const fence = planReadFence(roleDir);
+          if ("type" in input) {
+            // Only metadata messages enter the resident lane; all target/package IO stays in the default pool.
+            return pool.run({ type: "role_plan_point_hint", roleDir, planId: input.planId,
+              fence: input.fence, token: input.token }, input.options);
+          }
           const result = await pool.run({ type: "role_plan_page", roleDir, ...input, fence });
           const current = planReadFence(roleDir);
           if (current.epoch !== fence.epoch || current.revision !== fence.revision) {

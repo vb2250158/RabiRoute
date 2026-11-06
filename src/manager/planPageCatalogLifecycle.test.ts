@@ -271,3 +271,21 @@ test("stop settles a request whose preparation never returns", async () => {
   await lifecycle.stop();
   await rejected;
 });
+
+
+test("optional prepared queries never create a cold role or evict a busy owner", async () => {
+  let creates = 0, releases!: () => void;
+  const gate = new Promise<string>(resolve => { releases = () => resolve("settled"); });
+  const lifecycle = new PlanPageCatalogLifecycle<string, string>({ maxRoles: 1, maxQueriesPerRole: 32, buildTimeoutMs: 1000,
+    create: () => { creates++; return { prepare: async () => {}, query: async input => input === "held" ? gate : input, stop: async () => {} }; } });
+  try {
+    assert.equal(lifecycle.tryQueryPrepared("cold", "one"), undefined); assert.equal(creates, 0);
+    await lifecycle.prepare("warm");
+    const held = lifecycle.tryQueryPrepared("warm", "held"); assert.ok(held);
+    assert.equal(lifecycle.tryQueryPrepared("warm", "other"), undefined);
+    assert.equal(lifecycle.tryQueryPrepared("new-role", "other"), undefined); assert.equal(creates, 1);
+    releases(); assert.equal(await held, "settled");
+    assert.equal(await lifecycle.tryQueryPrepared("warm", "again"), "again");
+    await lifecycle.invalidate("warm"); assert.equal(lifecycle.tryQueryPrepared("warm", "after"), undefined); assert.equal(creates, 1);
+  } finally { releases(); await lifecycle.stop(); }
+});

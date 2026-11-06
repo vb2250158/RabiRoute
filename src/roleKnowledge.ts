@@ -8,7 +8,7 @@ import { readPlanIdentityAsync } from "./planIdentityReadCache.js";
 import { loadPlanPageCheckpoint, savePlanPageCheckpoint } from "./planPageCatalogCheckpoint.js";
 import { invalidatePlanReads, type PlanReadFence } from "./planReadInvalidation.js";
 import { normalizePlanQuestions, type PlanQuestion } from "./shared/planQuestions.js";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import { normalizePlanMessageChannels, validatePlanMessageChannels, type AgentHookDestination } from "./shared/agentHookAutomation.js";
 import path from "node:path";
@@ -2665,6 +2665,38 @@ async function readPlanRecordAsync(
   }
 }
 
+export type PlanPointCandidateHint = { token: string; paths: string[] };
+const planPointCandidates = new WeakMap<readonly PlanItem[], {
+  token: string; index: ReadonlyMap<string, readonly string[]>;
+}>();
+
+/** Memory-only evidence from this worker's complete, clean physical page inventory. */
+export function readPlanPointCandidateHint(roleDir: string, planId: string, fence: PlanReadFence): PlanPointCandidateHint | undefined {
+  const key = planListCacheKey(roleDir), state = planPageWorkerState.get(key);
+  const catalog = planListCache.get(key), files = planFileCache.get(key);
+  if (!state || state.epoch !== fence.epoch || state.revision !== fence.revision
+    || state.revision < fence.fullRevision || !catalog || !files
+    || !planListWatchers.get(key)?.has(plansDir(roleDir))
+    || planListDirtyFiles.has(key) || planListDirtyAt.has(key) || planPageStrongInvalidations.has(key)) return undefined;
+  let snapshot = planPointCandidates.get(catalog.plans);
+  if (!snapshot) {
+    const index = new Map<string, string[]>();
+    for (const [file, entry] of files) {
+      if (!entry.plan) continue;
+      const paths = index.get(entry.plan.id) ?? [];
+      paths.push(file);
+      index.set(entry.plan.id, paths);
+    }
+    snapshot = { token: randomUUID(), index };
+    planPointCandidates.set(catalog.plans, snapshot);
+  }
+  return { token: snapshot.token, paths: [...(snapshot.index.get(planId) ?? [])] };
+}
+
+export function validatePlanPointCandidateHint(roleDir: string, planId: string, fence: PlanReadFence, token: string): boolean {
+  return readPlanPointCandidateHint(roleDir, planId, fence)?.token === token;
+}
+
 /**
  * Reads one plan without synchronous filesystem work. Recovery workers use
  * this path so a slow UNC role root remains cancellable and cannot pin an
@@ -2673,21 +2705,37 @@ async function readPlanRecordAsync(
 export async function getPlanAsync(
   roleDir: string,
   planId: string,
-  options: { signal?: AbortSignal } = {}
+  options: { signal?: AbortSignal; candidateFiles?: readonly string[]; onHintRejected?: () => void } = {}
 ): Promise<PlanItem | null> {
   const canonicalPlanId = canonicalLogicalPlanId(planId);
   const { signal } = options;
   signal?.throwIfAborted();
   await awaitAbortable(assertPlanStoragePackageRecoveryReadyAsync(roleDir, canonicalPlanId, signal), signal);
-  const candidates = planCandidateFiles(roleDir, canonicalPlanId);
+  const hint = options.candidateFiles;
+  if (hint) {
+    // Only the advisory path yields; direct/transaction reads retain their original path.
+    await new Promise<void>(resolve => setImmediate(resolve));
+  }
+  const canonicalCandidates = planCandidateFiles(roleDir, canonicalPlanId);
+  const canonicalSet = new Set(canonicalCandidates.map(file => path.resolve(file)));
+  const candidates = hint ?? canonicalCandidates;
   const matches: PlanRecord[] = [];
   const candidateRecords = await Promise.all(
-    candidates.map((filePath) => readPlanRecordAsync(filePath, canonicalPlanId, signal))
+    candidates.map(async filePath => {
+      // Original noncanonical lookup accepts only a physical raw identity match.
+      if (hint && !canonicalSet.has(path.resolve(filePath))
+        && await readPlanIdentityAsync(filePath, signal) !== canonicalPlanId) return null;
+      return readPlanRecordAsync(filePath, canonicalPlanId, signal);
+    })
   );
   matches.push(...candidateRecords.filter((record): record is PlanRecord => record !== null));
 
+  if (hint && candidateRecords.some(record => record === null)) {
+    options.onHintRejected?.();
+    return getPlanAsync(roleDir, canonicalPlanId, { signal });
+  }
   const candidateSet = new Set(candidates.map(filePath => path.resolve(filePath)));
-  const fallbackFiles = (await allPlanFilesAsync(roleDir, signal))
+  const fallbackFiles = hint ? [] : (await allPlanFilesAsync(roleDir, signal))
     .filter(filePath => !candidateSet.has(path.resolve(filePath)));
   signal?.throwIfAborted();
   for (let offset = 0; offset < fallbackFiles.length; offset += PLAN_BY_ID_ASYNC_READ_CONCURRENCY) {

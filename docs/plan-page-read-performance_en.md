@@ -10,6 +10,12 @@ Plan JSON remains authoritative. Successful publications in the Manager process 
 
 A reader installs directory watches before creating its immutable catalog. Unchanged catalogs reuse presentation projections, also keyed by workflow content so that renamed statuses do not keep old labels. Existing filtering, sorting, totals, facets, archived views, and cursor algorithms remain unchanged. The experimental keyset interface does not replace the public cursor.
 
+## Reusing the index for point reads
+
+Ordinary plan details can borrow an already ready, idle catalog for the same role, passing only physical candidate paths and a derived revision. Recovery, original file-ID checks, content, attachment inventory and feedback remain on the original point-read worker, followed by catalog-revision validation. Internal post-write confirmation stays fresh.
+
+Unavailable, busy or invalidated indexes use the original asynchronous read without starting a catalog, waiting for page work, introducing errors or adding a timer. Slow target I/O does not occupy page execution. Original ID, archive, duplicate-target and error semantics remain; the cache contains neither plan bodies nor per-ID empty results. Unreported external changes retain the existing authoritative-refresh or restart reconciliation path.
+
 ## External changes and failures
 
 - Exact file events and plans named by managed invalidations are reread before replying. Dirtiness arriving during a read is consumed again. Repeated changes beyond the bounded retry budget fail explicitly instead of returning a known-stale snapshot.

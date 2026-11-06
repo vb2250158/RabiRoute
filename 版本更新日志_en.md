@@ -6,6 +6,14 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.8.4 - 2026-11-07
+
+- Ordinary point reads can reuse physical membership from an already loaded plan catalog, avoiding repeated enumeration and per-file stat calls. Actual plans, receipts, feedback and attachments stay on the original read worker. Busy, changed or unavailable catalogs retain normal asynchronous reads, without initialization waits, new query admission conditions or background polling.
+- Post-write projections stay fresh. Noncanonical file names retain original source-ID checks rather than treating page-derived IDs as stored identities. Slow plan reads remain separate from page execution, and optional index failure does not block normal reads.
+- Advance `io.rabiroute.manager.persona` to `0.1.4` and HostAPI declarations to `1.2.0`; the SDK implementation remains `1.1.1`. Existing calls remain compatible. Other plugins are handled independently only when their actual package bytes change.
+- Existing failed, slow and mutating request logs gain optional direct-peer address and port for high-frequency caller diagnosis. Headers, queries, bodies and credentials are not collected, and older logs remain readable.
+- Related plan-read regressions pass 181 tests; one existing case skips because this host cannot create its required link. Missing-plan savings apply only with an available complete catalog, without implying that every failing request or production CPU issue is resolved.
+
 ## 0.8.3 - 2026-11-07
 
 - The host updates its performance-shard byte index from successful writes and deletions, rebuilding it at startup, configuration updates and hourly cleanup. Remove full-directory recounts from every record batch while retaining sampling frequency, records and error reporting. No configuration or stored-data migration is needed.

@@ -392,9 +392,10 @@ export class RoleStorageQueries {
   private async run<T>(roleId: string, task: (roleDir: string) => ManagerReadWorkerTask, options: {
     signal?: AbortSignal;
     timeoutMs?: number;
-  } = {}): Promise<T> {
+  } = {}, read?: (roleDir: string) => Promise<T>): Promise<T> {
     this.assertCurrentGeneration();
-    const value = await this.readPool.run<T>(task(this.roleDir(roleId)), options).catch(error => {
+    const roleDir = this.roleDir(roleId);
+    const value = await (read ? read(roleDir) : this.readPool.run<T>(task(roleDir), options)).catch(error => {
       throw publicReadError(error);
     });
     this.assertCurrentGeneration();
@@ -414,9 +415,13 @@ export class RoleStorageQueries {
     return value;
   }
 
-  plan(roleId: string, planId: string, options: { signal?: AbortSignal; timeoutMs?: number } = {}): Promise<RoleStoragePlanProjection | null> {
+  plan(roleId: string, planId: string, options: { signal?: AbortSignal; timeoutMs?: number; reusePrepared?: boolean } = {}): Promise<RoleStoragePlanProjection | null> {
     const canonicalPlanId = canonicalStorageMutationPlanId(planId);
-    return this.run(roleId, roleDir => ({ type: "role_storage_plan_projection", roleDir, planId: canonicalPlanId }), options);
+    // Pure read optimization intent; omitted on internal post-commit projections.
+    const prepared = options.reusePrepared && this.readPool === managerReadWorkerPool
+      ? (roleDir: string) => managerReadWorkerPool.queryRoleStoragePlanProjection<RoleStoragePlanProjection | null>(roleDir, canonicalPlanId, options)
+      : undefined;
+    return this.run(roleId, roleDir => ({ type: "role_storage_plan_projection", roleDir, planId: canonicalPlanId }), options, prepared);
   }
 
   publishPlan(roleId: string, plan: PlanItem): Readonly<PlanItem> {

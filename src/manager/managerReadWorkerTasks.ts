@@ -11,6 +11,8 @@ import { readPersonaPlanWorkflow } from "../personaPlanWorkflow.js";
 import {
   getPlan,
   getPlanAsync,
+  readPlanPointCandidateHint,
+  validatePlanPointCandidateHint,
   getRoleSkill,
   listActiveRecentMemories,
   listArchivedMemories,
@@ -133,7 +135,10 @@ export type ManagerReadWorkerTask =
       type: "role_storage_plan_projection" | "role_storage_plan_feedback_projection";
       roleDir: string;
       planId: string;
+      /** Private physical candidates, never an HTTP input or cached PlanItem. */
+      candidateFiles?: string[];
     }
+  | { type: "role_plan_point_hint"; roleDir: string; planId: string; fence: PlanReadFence; token?: string }
   | {
       type: "role_knowledge_file_counts";
       roleDir: string;
@@ -372,20 +377,33 @@ export async function execute(task: Exclude<ManagerReadWorkerTask, { type: "mess
       const plan = getPlan(task.roleDir, task.planId);
       return plan ? { plan, approval: planFeedbackSummary(task.roleDir, plan.id) } : null;
     }
+    case "role_plan_point_hint": {
+      // Native watcher callbacks may invalidate the memory snapshot; this is not an OS flush guarantee.
+      await new Promise<void>(resolve => setImmediate(resolve));
+      return task.token === undefined
+        ? readPlanPointCandidateHint(task.roleDir, task.planId, task.fence) ?? null
+        : validatePlanPointCandidateHint(task.roleDir, task.planId, task.fence, task.token);
+    }
     case "role_storage_plan_projection": {
-      const plan = await getPlanAsync(task.roleDir, task.planId);
-      if (!plan) return null;
-      const storagePackage = readPlanStoragePackage(task.roleDir, plan.id,
-        plan.archiveStatus === "已归档" ? "archive" : "active");
-      const feedback = storagePackage.files.find(file => file.path === "feedback.jsonl");
-      const directory = path.dirname(path.join(task.roleDir, "plans", storagePackage.bucket,
-        storagePackage.storageId, "plan.json"));
-      const records = listPlanFeedbackFromSnapshot(feedback?.content.toString("utf8") ?? "", directory, plan.id);
-      return {
-        plan,
-        revision: storageInventoryRevisionToken(storagePackage.inventoryHash),
-        approval: { count: records.length, latest: records[0] }
-      };
+      let hintAccepted = task.candidateFiles !== undefined;
+      const plan = await getPlanAsync(task.roleDir, task.planId, {
+        candidateFiles: task.candidateFiles, onHintRejected: () => { hintAccepted = false; }
+      });
+      let value = null;
+      if (plan) {
+        const storagePackage = readPlanStoragePackage(task.roleDir, plan.id,
+          plan.archiveStatus === "已归档" ? "archive" : "active");
+        const feedback = storagePackage.files.find(file => file.path === "feedback.jsonl");
+        const directory = path.dirname(path.join(task.roleDir, "plans", storagePackage.bucket,
+          storagePackage.storageId, "plan.json"));
+        const records = listPlanFeedbackFromSnapshot(feedback?.content.toString("utf8") ?? "", directory, plan.id);
+        value = {
+          plan,
+          revision: storageInventoryRevisionToken(storagePackage.inventoryHash),
+          approval: { count: records.length, latest: records[0] }
+        };
+      }
+      return task.candidateFiles === undefined ? value : { value, hintAccepted };
     }
     case "role_plan_history": {
       const plan = getPlan(task.roleDir, task.planId);

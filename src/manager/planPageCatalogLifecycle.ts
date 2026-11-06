@@ -130,6 +130,21 @@ export class PlanPageCatalogLifecycle<Input, Output> {
   async query(roleDir: string, input: Input, signal?: AbortSignal, readyOnly = false): Promise<Output> {
     if (signal?.aborted) throw new Error("PLAN_CATALOG_REQUEST_ABORTED");
     const entry = await this.ensure(roleDir);
+    return this.queryEntry(entry, input, signal, readyOnly);
+  }
+
+  /** Optional reuse only: never creates, prepares, evicts or waits for a cold role. */
+  tryQueryPrepared(roleDir: string, input: Input, signal?: AbortSignal): Promise<Output> | undefined {
+    const entry = this.entries.get(path.resolve(roleDir));
+    if (this.stopped || signal?.aborted || !entry?.prepared || entry.invalidated
+      || entry.failure !== undefined || entry.stopFlight
+      || entry.subscribers !== 0 || entry.activeQueries !== 0) return undefined;
+    // Hold the exact entry synchronously; do not re-enter ensure after observing ready.
+    entry.subscribers++;
+    return this.queryEntry(entry, input, signal, true);
+  }
+
+  private async queryEntry(entry: Entry<Input, Output>, input: Input, signal: AbortSignal | undefined, readyOnly: boolean): Promise<Output> {
     try {
       if (entry.invalidated) throw new Error("PLAN_CATALOG_DIRTY");
       if (entry.failure !== undefined) throw entry.failure;

@@ -212,7 +212,7 @@ export class PersonaStorageOwner {
         return ok(presentPlans(data.plans, ensurePersonaPlanWorkflow(roleDir).workflow).map(plan => ({ ...plan, approval: data.approvalByPlanId[plan.id] })));
       }
       case "plan-read": {
-        const [projection, workflow] = await Promise.all([application.queries.plan(roleId, planId, readOptions), readPersonaPlanWorkflowAsync(roleDir)]); a.assertCurrent();
+        const [projection, workflow] = await Promise.all([application.queries.plan(roleId, planId, { ...readOptions, reusePrepared: true }), readPersonaPlanWorkflowAsync(roleDir)]); a.assertCurrent();
         if (!projection) return missing(`Plan not found: ${planId}`, roleId);
         if (!workflow) throw new Error("Persona plan workflow is not initialized.");
         const viewRevision = createHash("sha256").update(JSON.stringify([projection.revision, projection.approval, workflow.workflow])).digest("hex"), headers = { etag: `"${projection.revision}"`, "x-plan-view-revision": viewRevision };
