@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import test from "node:test";
-import { CodexDesktopIpcClient, codexDesktopIpcPaths } from "../lib/codex-desktop-ipc.mjs";
+import { CodexDesktopIpcClient, codexDesktopIpcPaths } from "../../../src/plugins/io.rabiroute.agent.codex/apps/rabi-agent/lib/codex-desktop-ipc.mjs";
 
 test("Desktop discovery keeps explicit paths, current Codex home and older per-user sockets", () => {
   const options = { platform: "darwin", env: {}, homeDir: "/home/fixture", tempDir: "/tmp/fixture", uid: 501 };

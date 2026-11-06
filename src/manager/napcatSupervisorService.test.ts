@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { NapcatSupervisorService } from "./napcatSupervisorService.js";
-import { napcatGuardianDepsFor } from "../messageEndpoints/napcatGuardian.js";
+import { napcatGuardianDepsFor } from "../plugins/io.rabiroute.endpoint.napcat/src/messageEndpoints/napcatGuardian.js";
 
 test("supervisor repeats completed health checks and stop cancels the shared wait", async () => {
   let checks = 0;

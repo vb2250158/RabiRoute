@@ -1,0 +1,24 @@
+{
+  "exports": [
+    {
+      "source": "src/plugins/io.rabiroute.agent.workbuddy/src/agentAdapters/workbuddyManagerProvider.ts",
+      "name": "createManager"
+    }
+  ],
+  "ownedPrefixes": [
+    "src/plugins/io.rabiroute.agent.workbuddy/"
+  ],
+  "scopedEnvironment": true,
+  "hostSources": [
+    "src/agentAdapters/stateReporter.ts"
+  ],
+  "ownedSources": [],
+  "workers": [
+    {
+      "source": "src/plugins/io.rabiroute.agent.workbuddy/src/agentAdapters/workbuddyManagerApi.ts",
+      "target": "workers/scan.mjs",
+      "mode": "host-factory"
+    }
+  ],
+  "packageId": "io.rabiroute.agent.workbuddy"
+}

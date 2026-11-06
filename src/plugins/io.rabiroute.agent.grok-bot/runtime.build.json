@@ -1,0 +1,22 @@
+{
+  "exports": [
+    {
+      "source": "src/plugins/io.rabiroute.agent.grok-bot/src/agentAdapters/pluginImplementations/grok-bot.ts",
+      "name": "createAgentOperations"
+    }
+  ],
+  "ownedPrefixes": [
+    "src/plugins/io.rabiroute.agent.grok-bot/"
+  ],
+  "scopedEnvironment": true,
+  "hostSources": [
+    "src/agentAdapters/stateReporter.ts"
+  ],
+  "resources": [
+    {
+      "source": "src/plugins/io.rabiroute.agent.grok-bot/scripts/grok-bot-native-profile.ps1",
+      "target": "resources/grok-bot-native-profile.ps1"
+    }
+  ],
+  "packageId": "io.rabiroute.agent.grok-bot"
+}

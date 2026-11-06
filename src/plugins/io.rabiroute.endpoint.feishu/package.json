@@ -1,0 +1,37 @@
+{
+  "name": "io.rabiroute.endpoint.feishu",
+  "version": "0.1.1",
+  "type": "module",
+  "license": "MIT",
+  "files": [
+    "rabi.plugin.json",
+    "agent-adapter.json",
+    "route-config.json",
+    "route-message-endpoint.json",
+    "config.schema.json",
+    "*.mjs",
+    "src",
+    "web",
+    "assets",
+    "docs",
+    "README.md",
+    "README_en.md",
+    "storage-migrations.json",
+    "contracts"
+  ],
+  "peerDependencies": {
+    "@rabiroute/plugin-sdk": "^1.1.0"
+  },
+  "rabi": {
+    "manifest": "rabi.plugin.json",
+    "sourceLayout": 1,
+    "webSource": "web/entry.ts"
+  },
+  "devDependencies": {
+    "@rabiroute/plugin-sdk": "^1.1.0",
+    "@rabiroute/host-api": "^1.0.0"
+  },
+  "scripts": {
+    "build": "rabi-plugin-build"
+  }
+}

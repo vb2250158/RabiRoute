@@ -8,13 +8,15 @@ import { PluginPackageCatalog, loadPluginProfile } from "../plugin-kernel/profil
 import { GenerationRuntime } from "../plugin-kernel/generationRuntime.js";
 import { ProcessLeaseRegistry } from "../runtime/processLeaseRegistry.js";
 import { ManagerPluginRouteRegistry } from "../manager/managerPluginRouteRegistry.js";
-import { fixtureApiContract } from "../manager/apiOperationContractFixtures.js";
 import { createFullPluginExecutor } from "./executor.js";
 import { AsyncPluginOutcomeArchive } from "./asyncOutcomeArchive.js";
-import { withRouteControlAsyncRegistration } from "./routeControlAsyncRegistration.js";
 import { currentPluginActivation } from "../plugin-kernel/pluginActivationContext.js";
+import { createAgentAdapterHostPorts } from "../runtime/agentAdapterHostPorts.js";
+import { canonicalPluginSourceFixture } from "../manager/canonicalPluginSource.fixture.js";
 
-test("normally packaged real Route control entry runs in its own process and parent registry owns registration", { timeout: 30000 }, async t => {
+test("normally packaged real Route control uses its native scoped owner and registry registration", { timeout: 30000 }, async t => {
+  const started = performance.now();
+  const stage = (name: string) => t.diagnostic(`${name}: ${Math.round(performance.now() - started)}ms`);
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "route-control-isolated-"));
   // Use the normal packager in an isolated output; stale/missing dist is not this runtime contract.
   // @ts-expect-error The production JavaScript builder is outside src.
@@ -23,6 +25,7 @@ test("normally packaged real Route control entry runs in its own process and par
   try {
     packageRoot = (await buildPluginPackages(process.cwd(), {packages: ["io.rabiroute.manager.route-control"], outputDirectory: path.join(root, "built")})).packagesRoot;
   } catch (error) { await fs.rm(root, {recursive: true, force: true}); throw error; }
+  stage("physical package built");
   const catalog = new PluginPackageCatalog([packageRoot]);
   const leases = new ProcessLeaseRegistry();
   const archive = new AsyncPluginOutcomeArchive(path.join(root, "outcomes"));
@@ -30,22 +33,22 @@ test("normally packaged real Route control entry runs in its own process and par
   let registrations = 0;
   let nativeOwner: string | undefined;
   class NativeDependency { marker() { return "parent-only"; } }
-  const native = Object.freeze({
-    managerPluginRoutes: registry,
-    createRabiControlOperations() {
-      registrations++;
-      nativeOwner = currentPluginActivation()?.instanceId;
-      return [{ contract: fixtureApiContract(), handler: () => ({ status: 200, body: { ok: true } }) }];
-    }
+  const shared = createAgentAdapterHostPorts();
+  const native = Object.freeze({ ...shared, rootDir: root, routeRoot: path.join(root, "routes"), rolesRoot: path.join(root, "roles"),
+    managerPort: 0, managerHost: "127.0.0.1", managerInstanceId: "fixture-manager", managerHostIdentity: { applicationGenerationId: "fixture-app" },
+    rabiRoutePackageVersion: "fixture", runtimes: new Map(), rabiGlobalConfig: { read: () => ({}) },
+    readManagerConfig: () => ({ routeDir: path.join(root, "routes"), rolesDir: path.join(root, "roles") }),
+    managerPluginRoutes: { async registerOperationsAsync(...args: Parameters<typeof registry.registerOperationsAsync>) {
+      registrations++; nativeOwner = currentPluginActivation()?.instanceId;
+      return registry.registerOperationsAsync(...args);
+    } }
   });
   const originalServices = [
-    { capability: "host.manager.route-control@1", value: native },
+    { capability: "host.manager.route-control@2", value: native },
     { capability: "manager.core@1", value: new NativeDependency() },
     { capability: "manager.gateway-runtime@1", value: new NativeDependency() }
   ];
-  const services = withRouteControlAsyncRegistration(originalServices);
-  assert.equal(services[0]!.value, native, "the existing native service is unchanged");
-  const runtime = new GenerationRuntime({ host: "manager", hostServices: services, executor: createFullPluginExecutor(leases, archive) });
+  const runtime = new GenerationRuntime({ host: "manager", hostServices: originalServices, executor: createFullPluginExecutor(leases, archive) });
   t.after(async () => {
     await runtime.shutdown();
     await archive.dispose();
@@ -56,17 +59,31 @@ test("normally packaged real Route control entry runs in its own process and par
     await fs.rm(root, { recursive: true });
   });
   const profilePath = path.join(root, "profile.json");
-  await fs.writeFile(profilePath, JSON.stringify({ schemaVersion: 2, readyRequires: [], instances: [{ id: "manager:route-control", package: "io.rabiroute.manager.route-control", version: "1.0.0", enabled: true, config: {}, grants: [] }] }));
+  const version = (await canonicalPluginSourceFixture("io.rabiroute.manager.route-control")).manifest.version;
+  await fs.writeFile(profilePath, JSON.stringify({ schemaVersion: 2, readyRequires: [], instances: [{ id: "manager:route-control", package: "io.rabiroute.manager.route-control", version, enabled: true, config: {}, grants: [] }] }));
   const loaded = await loadPluginProfile({ profilePath, packageCatalog: catalog, runtimeRoot: path.join(root, "immutable"), host: "manager" });
+  stage("immutable package prepared");
   assert.equal(loaded.loadFailures.length, 0, JSON.stringify(loaded.loadFailures));
-  assert.equal(loaded.candidates[0]!.entry.execution, "isolated");
+  assert.equal(loaded.candidates[0]!.entry.execution, "in_process");
+  const oldHost = new GenerationRuntime({ host: "manager", hostServices: originalServices.map(service => service.capability === "host.manager.route-control@2"
+    ? { ...service, capability: "host.manager.route-control@1" } : service) });
+  try {
+    const blocked = await oldHost.switch(loaded.candidates);
+    assert.equal(blocked.generation.records[0]?.status, "waiting_dependency");
+    assert.ok(blocked.generation.records[0]?.missingCapabilities.includes("host.manager.route-control@2"));
+    assert.equal(registrations, 0, "An old Host must block locally before the owned factory runs.");
+  } finally { await oldHost.shutdown(); }
+  stage("old Host blocked locally");
   const result = await runtime.switch(loaded.candidates);
+  stage("current owner activated");
   assert.equal(result.generation.records[0]!.status, "active", JSON.stringify(result.generation.records[0]!.error));
   assert.equal(registrations, 1);
   assert.equal(nativeOwner, "manager:route-control");
-  assert.equal(registry.catalogSnapshot().operations.length, 1);
-  assert.equal(leases.list().length, 1);
-  assert.ok(leases.list()[0]!.child.pid && leases.list()[0]!.child.pid !== process.pid);
+  const operations = registry.catalogSnapshot().operations;
+  assert.ok(operations.some(operation => operation.contract.pathTemplate === "/api/rabi/identity"));
+  assert.ok(operations.some(operation => operation.contract.pathTemplate === "/manager-config"));
+  assert.ok(operations.every(operation => operation.owner.instanceId === "manager:route-control"));
+  assert.equal(leases.list().length, 0, "Native dependencies stay in their actual process without a compatibility child.");
   assert.equal(archive.snapshot().writes, 0);
   assert.ok(result.generation.contributions.contributions.some(item => item.kind === "command" && item.id === "create-role"));
 });

@@ -7,7 +7,7 @@
   "plugins": [
     {
       "name": "rabi-workbuddy-context",
-      "source": "./plugins/rabi-workbuddy-context",
+      "source": "./src/plugins/rabi-workbuddy-context",
       "description": "Inject Rabi PC-managed persona context into WorkBuddy sessions and forward plan-bound turn completions.",
       "category": "Productivity"
     }

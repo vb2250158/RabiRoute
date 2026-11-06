@@ -10,7 +10,7 @@ import test from "node:test";
 import { handleAgentSend, type AgentSendRequest } from "../endpointEgress.fixture.js";
 import type { AgentReplyOptions } from "../outbox.js";
 import { executeIdempotentAgentSend } from "./agentSendIdempotency.js";
-import { createAgentUploadRoutes } from "./agentUploadRoutes.js";
+import { createAgentUploadRoutes } from "../plugins/io.rabiroute.manager.agent-communication/src/manager/agentUploadRoutes.js";
 import { AgentUploadStore, type AgentUploadDto } from "./agentUploadStore.js";
 import { LanAgentAuthority } from "./lanAgentAuthority.js";
 import { getTrustedLanAgentSource, setTrustedLanAgentSource, type TrustedLanAgentSource } from "./lanAgentBodyAuthority.js";

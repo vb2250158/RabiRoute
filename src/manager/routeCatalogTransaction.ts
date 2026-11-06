@@ -2,7 +2,7 @@ import { roleLifecyclePresentation } from "../roleLifecycle.js";
 import fs from "node:fs";
 import path from "node:path";
 import type { GatewayConfigFile, GatewayDefinition } from "../shared/gatewayConfigModel.js";
-import { readPersonaAvatar } from "../personaAvatar.js";
+import { readPersonaAvatar } from "../plugins/io.rabiroute.manager.persona/src/personaAvatar.js";
 import { ensurePersonaPlanWorkflow } from "../personaPlanWorkflow.js";
 import { routeRuntimeParts, sanitizeConfigName, sanitizeRoleId } from "../shared/routeIdentity.js";
 import { normalizePersonaFile, roleFilePath, roleFolderPath } from "../shared/routePaths.js";

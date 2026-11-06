@@ -34,34 +34,24 @@ persistent checkout credentials, and external actions that are not pinned to a
 full commit SHA in every changed GitHub Actions workflow. A local action is
 allowed by path; a Docker action must use a `sha256` digest.
 
-## Mandatory commit version and changelog contract
+## Host and plugin version contract
 
-RabiRoute uses one repository patch version per commit created by this workflow. This is an explicit project traceability rule, not a release-worthiness decision.
+The user's current plugin architecture decision replaces the former mandatory Host patch increment for every commit. Version the owner whose contract or implementation changed.
 
-For a `HEAD` version `X.Y.Z`, the candidate commit must use `X.Y.(Z+1)` exactly. The gate rejects:
-
-- an unchanged version;
-- a skipped patch;
-- a major or minor change in the ordinary submit workflow;
-- a version present only in the worktree but absent from the staged index;
-- two locally created commits sharing one version.
-
-Every commit must update these six files together:
-
-| File | Required state |
+| Owner/change | Version and metadata |
 |---|---|
-| `package.json` | exact next patch version |
-| `package-lock.json` | top-level and root-package versions match `package.json` |
-| `README.md` | version badge and current repository version match |
-| `README_zh.md` | version badge and current repository version match |
-| `版本更新日志.md` | dated section for the exact version with a concrete bullet derived from the staged diff |
-| `版本更新日志_en.md` | matching English version section and content |
+| Host framework or extension point | Advance Host SemVer according to impact; patch, minor and major transitions are accepted. This architecture migration uses `0.7.0`. Synchronize root package/lock and both README versions. |
+| Plugin source, web UI, resource, test or documentation | Advance that plugin’s authoritative version; a plugin-only change keeps the Host version. |
+| New native plugin | Initial version `0.1.1`. |
+| First legacy builtin source move | Accept exact old version → `0.1.1` only with the matching `package-migrations.json` declaration and original builtin identity. This exception is unavailable to an already canonical package or an external ecosystem. |
+| Existing external plugin | Continue its published version sequence; never reset it to the native baseline. |
+| Bilingual change record | Update both root change logs with concrete changes. Under an unchanged Host section, identify each changed plugin and its own new version. |
 
-The rule applies to code, documentation, tests, formatting, refactors, merge resolutions, and skill changes. `未发布` / `Unreleased` may retain work that is not entering the commit, but it cannot be the only record for the commit being created.
+`plugins/source-catalog.json` records each canonical source folder and authoritative `versionFile`. Compare that authority against `HEAD`, including its original manifest when the current change moves the source. Synchronize other versioned root/hidden manifests and plugin lock root metadata; do not substitute a secondary package version for the authority.
 
-The previous policy allowed ordinary commits to reuse a version and treated changelog updates as conditional. That produced three conflicting identities: source commits advanced while `package.json` stayed fixed, installed Manager builds kept an older version, and GitHub Releases moved only when tags were created. The mandatory per-commit contract prevents source commits from sharing a version; packaging, installation, tags, and GitHub Releases still require their own explicitly authorized workflows.
+The staged gate reads Git index objects for the catalog, version files, migration declarations and change records. Worktree-only version edits cannot repair an invalid staged plugin. A metadata mismatch, reused or lower published version, missing source owner, or Host framework change without a Host increase blocks submission. No override or skip switch is provided.
 
-After any rebase, merge, pull, or upstream movement, re-read `HEAD:package.json` and regenerate the candidate patch version. Never resolve a version conflict by keeping the same candidate number from before the history changed.
+After rebase, merge, pull or upstream movement, re-read the original owner versions and re-evaluate the candidate. Source, Git commits, release tags, packages and installed runtime remain separate evidence.
 
 ## Local Rabi context
 
@@ -112,6 +102,51 @@ Re-author safe examples; never mechanically copy private records.
 | cross-cutting/release | `npm test`; `npm run check:config`; `npm run build`; package/install verification when claiming runtime acceptance |
 
 Record commands actually run and distinguish failures, skipped checks, and unavailable environments.
+
+## Exact review receipts
+
+Use `Invoke-RabiSubmitPreflight.ps1 -Scope WorkingTree -ReviewReceipt <external-file.json> -Json` only after reviewing the actual input→sink boundary. Keep the receipt and its evidence outside the repository. Evidence paths are relative to the receipt directory, remain within that directory, and cannot traverse links. Evidence SHA256s are verified from actual files. Never place real secrets or source-line excerpts containing secrets in a receipt or public report.
+
+The read-only helper `scripts/RabiSecurityReviewReceipt.ps1` exports `Get-RabiSecurityReviewContext`. Given the repository, exact scope/FailOn, latest raw `security` report and its `changedFiles`, it returns current binding metadata and `reported` candidate descriptors. Review those descriptors; add facts individually. The helper does not generate approval, choose dispositions or write receipts. The preflight independently recomputes the context when consuming a receipt. Keep inputs frozen during review and validation. Receipt JSON is limited to 1 MiB and each candidate to 32 evidence files; evidence content is streamed for hashing.
+
+Receipt schema version 1:
+
+```json
+{
+  "schemaVersion": 1,
+  "repository": "<context.repository>",
+  "repositoryId": "<context.repositoryId>",
+  "baseHead": "<context.baseHead>",
+  "scope": "Staged",
+  "failOn": "High",
+  "scopeHash": "<context.scopeHash>",
+  "reviewer": "<review owner>",
+  "reviewedAt": "<ISO timestamp>",
+  "findings": [{
+    "severity": "High",
+    "rule": "<reported rule>",
+    "file": "<reported canonical relative path>",
+    "line": 1,
+    "hunkHash": "<reported hunkHash>",
+    "fileSha256": "<reported fileSha256>",
+    "blobId": "<reported Git blobId>",
+    "contentKind": "git-index-bytes-v1",
+    "status": "closed",
+    "disposition": "false_positive",
+    "realVulnerability": false,
+    "facts": { "input": "<actual source>", "sink": "<actual operation>", "boundary": "<verified trust boundary>", "verification": "<actual verification and limits>" },
+    "evidence": [{ "path": "evidence/review.md", "sha256": "<actual evidence SHA256>" }]
+  }]
+}
+```
+
+Copy binding fields from the current context, not from another scope or an older scan. `repositoryId` binds the absolute Git root and Git directory; `baseHead` binds the current base. `scopeHash` binds the sorted complete changed-path/content set, including index identity in WorkingTree mode. A change outside the finding file also invalidates the operation receipt. A finding hunk is a numbered, LF-normalized source window containing the finding and two adjacent lines on either side; its hash is independent of the complete scoped file hash and Git blob ID.
+
+`git-index-bytes-v1` reads `git show :path` as raw bytes and verifies the index blob ID. Unstaged bytes cannot repair or change a Staged decision. `worktree-bytes-v1` hashes all WorkingTree files as raw bytes and computes their corresponding Git blob IDs; it never claims to be index evidence. There is no text/binary extension guess or UTF-8-based file classification. Even a CRLF→LF change requires a new whole-file/scope binding, including legal UTF-8 binary files with or without NUL. Only the finding's display hunk decodes strict UTF-8 and normalizes CRLF for its separate context hash. Mixed staged/unstaged candidate byte snapshots require a separate Staged review rather than conflating them.
+
+Only `closed` + `false_positive` or `verified_trusted_contract` + boolean `realVulnerability=false` can resolve exact High candidates. Missing facts/evidence, unknown dispositions, risk acceptance, malformed/duplicate/unmatched entries and path escapes block. Critical candidates remain unresolved. Every newly reported High remains blocking unless independently reviewed and included with its own exact binding. This is a local review attestation, not a cryptographic proof that the reviewer's factual claim is true; the independent review remains mandatory.
+
+With a receipt, the additional `securityReview` object contains `reported`, `resolved`, `unresolved`, `rawPassed`, `effectivePassed`, `receiptValid`, the exact consumed `receiptSha256`, phase-only diagnostics and recomputed context. The original `security` object and FailOn are unchanged. The snapshot and receipt are rechecked after evidence validation. Invalid receipts fail closed even when the raw scan is clean; receipt processing cannot override path/workflow/version/diff gates. Never relabel a raw failed scan as passed. Refresh the receipt against the final index and rerun Staged immediately before an authorized commit. A successful effective check does not authorize Git operations or publication.
 
 ## Commit and handoff evidence
 

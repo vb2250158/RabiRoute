@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 2,
+  "id": "io.rabiroute.manager.desktop-pet",
+  "version": "0.1.1",
+  "displayName": "桌面伙伴",
+  "description": "管理角色形象、桌宠资源与桌面动作",
+  "icon": "mdi-cat",
+  "entries": {
+    "manager": {
+      "execution": "in_process",
+      "module": "./manager.mjs"
+    }
+  },
+  "provides": [
+    "manager.desktop-pet@1"
+  ],
+  "requires": [
+    "host.manager.desktop-pet@2",
+    "manager.desktop@1"
+  ],
+  "optional": [],
+  "permissions": []
+}

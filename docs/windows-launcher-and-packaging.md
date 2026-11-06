@@ -10,6 +10,43 @@ Windows 启动新增一次 UAC 注册的最高权限 Host 任务、拒绝后的�
 
 Windows 安装版只有一个应用生命周期入口：`RabiRouteHost.exe`。Manager 是业务与状态 owner，托盘/任务窗口是表现层；二者都是 Host 创建的同代子程序。托盘不是 Manager 的监督器，也不是另一套桌面应用。
 
+## 进程名称、图标与归属
+
+构建阶段为实际可执行文件写入产品名称和 `assets/rabiroute-icon.ico`，在发布清单生成前完成；不通过修改命令行标题代替程序标识。
+
+| 用途 | 任务管理器名称 | 运行文件 |
+| --- | --- | --- |
+| 应用生命周期 | RabiRoute Host | `RabiRouteHost.exe` |
+| Manager 与后台工作进程 | RabiRoute Runtime | `runtime/RabiRoute.Runtime.exe` |
+| 托盘和桌面窗口 | RabiRoute Desktop | `desktop-runtime/python/pythonw.exe` |
+| 本机语音服务 | RabiSpeech | `runtime/speech/RabiSpeech.exe` |
+| Windows 远端 Agent 主程序与工作进程 | Rabi Agent Runtime | 私有配置旁的 `runtime/windows-<arch>/RabiAgent.Runtime.exe` |
+| 远端 Agent 桌面面板 | Rabi Agent Tray | `dist/native/RabiAgent.Tray.exe` |
+| 远端 Agent 终端 | Rabi Agent Terminal | `dist/native/RabiAgent.Terminal.exe` |
+| 远端 Agent 电脑操作 | Rabi Agent Computer | `dist/native/RabiAgent.Computer.exe` |
+
+标准包的语音 Python 也写入相同品牌，不依赖可选语音模型包。修改过资源的解释器保留原引擎版本和版权，去掉不再有效的上游签名；品牌文件不冒充上游签名程序。首次从旧 `runtime/node.exe` 迁移会改变一次防火墙程序路径，之后保持稳定。第三方独立应用保留各自品牌。
+
+安装包的语音服务由 Manager 直接启动品牌程序；源模式缺少便携 Python 时保留 PowerShell 兼容入口。各层后代同样继承 Host 的 Windows Job。进程树可以有多层，但整代始终由一个 Host 管理。任务管理器分组和父 PID 只提供线索；核对脱管需查询当前 Job 的实际成员。Host 状态中的成员列表是发布时快照，不是实时全量列表。
+
+进程标识变更需要采用新可执行文件并通过 Host 切代；源码构建和隔离测试不表示安装版已经采用。
+
+### 模块停用与进程树
+
+Windows 共用进程租约在创建前先建立独立 Job。受信 Node 启动入口用自身原句柄入组后，才导入业务模块或启动 Python、PowerShell 等目标程序；原 Node IPC、参数和预载模块保持语义。根进程退出后仍持有后代租约，只有当前 Job 为空，且已持有的原成员句柄均确认退出后才释放。初始入组失败不执行业务；首次取消先停止尚未确认入组的原根进程，再清理 Job。
+
+内部调用使用结构化的 `fork` / `spawn` 创建描述，代替先执行任意回调再接管进程。`--import`、`--require` 和 `NODE_OPTIONS` 的模块预载延后到入组后；裸包名按原工作目录及 ESM/CJS 条件解析。无法等效迁移的 fork loader/eval/env-file/config-file 等启动方式在创建前给出错误与迁移方法，不静默删除参数。该新增内核树证明针对 Windows；Linux 保持原实现，不据此宣称具备 cgroup 级清理保证。
+
+- 模块拥有自己启动的进程、后代、在途任务和资源句柄。整代 Host 的退出兜底不能代替单独停用模块时的清理。
+- 热替换显式交接同一资源拥有者；准备失败沿用原资源。最终停用先关闭新入口，再结束在途操作，确认自有进程树退出后释放记录、配置和设备会话。
+- 停止失败、结果未知和身份不可读保留原记录与退役围栏，继续核对同一拥有者；不给未确认停止的资源创建替身。
+- 原生 Windows 进程树证明来自内核 Job 与原句柄。根进程的 `exit`、IPC 断开、发出终止请求或固定延时都不能单独证明后代已关闭。
+- 对接现有外部 QQ、用户独立应用或外部模型服务时只拥有本次连接；保留第三方名称、图标和独立生命周期。任务管理器应用分组与实际父子关系、Job 归属分别核对。
+
+回归覆盖正常关闭、超时/取消、进程崩溃、根进程先退出、模块停用、热替换、停止失败后重试，以及外部实例不被误停。摄像头与模型在终止失败时保留原进程；编译器和辅助程序在真实关闭后才报告完成。新增或修改进程入口同时核对构建、签名资产目录和最终安装包中的实际文件。
+
+远端 Windows 品牌运行包的构建、固定运行路径与自启入口见 [Rabi Agent](../apps/rabi-agent/README.md)。它显式采用已验证的同版本、同架构 Node 与 npm，不修改系统解释器，也不把架构专用二进制混入通用 Node 源码发行包。
+
 ## 启动按需加载
 
 打开应用时，Bootstrap 根据 `current.json` 定位本机版本和 Host Core，不读取发布清单、不扫描整包文件，也不逐文件计算哈希。清单缺失、损坏、过期，额外备份文件或不相关资源变化，都不会成为整个应用的启动阻断条件。
@@ -111,7 +148,7 @@ Manager 另持有按当前用户与产品安装身份派生的操作系统命名
 
 每次启动 generation 时，Host 创建新的 Windows Job。Manager 与托盘都以 `CREATE_SUSPENDED` 创建，先加入 Job，再恢复执行；因此 Host 退出或 Job 被关闭时，本代子程序不能变成孤儿。Manager 先启动，Host 只接受带匹配 `applicationGenerationId`、Manager PID、`managerInstanceId` 与回环 `baseUrl` 的结构化 READY；验证通过后才启动托盘。
 
-发布包继续在 `versions/<releaseId>/node.exe` 保存经过清单校验的 Node.js。Host 启动 Manager 前会把该文件校验并同步到安装根目录固定的 `runtime/node.exe`，所有 Manager、Route 和工作进程都从这个固定路径启动。升级只切换版本内容，不再改变 Windows 看到的网络程序路径，因此启用局域网 WebGUI 或 RabiLink 局域网远端访问后，防火墙不会随每个 `releaseId` 重复询问。`runtime/node.exe` 与当前发布副本不一致时由 Host 修复；卸载只在哈希匹配时删除它，其他文件保持不动。
+发布包继续在 `versions/<releaseId>/node.exe` 保存经过清单校验的 Node.js。Host 启动 Manager 前会把该文件校验并同步到安装根目录固定的 `runtime/RabiRoute.Runtime.exe`，所有 Manager、Route 和工作进程都从这个固定路径启动。升级只切换版本内容，不再改变 Windows 看到的网络程序路径，因此启用局域网 WebGUI 或 RabiLink 局域网远端访问后，防火墙不会随每个 `releaseId` 重复询问。`runtime/RabiRoute.Runtime.exe` 与当前发布副本不一致时由 Host 修复；卸载只在哈希匹配时删除它，其他文件保持不动。
 
 Host 同时向 Manager 与 Desktop 提供只读的发布目录（`RABIROUTE_PACKAGE_ROOT`）和稳定的运行数据目录（`RABIROUTE_STATE_ROOT`）。Desktop 从发布目录读取程序和图标，但截图图片、框选历史、贴图状态、滑词设置和 COM 生成缓存等可写内容只进入安装根目录。`versions/<releaseId>` 不接收运行数据；发布清单用于构建和安装工具，不在正常启动或状态读取时扫描整个版本。
 
@@ -239,7 +276,7 @@ GitHub Actions 通过 `RABIROUTE_RELEASE_OUTPUT` 显式指定 Runner 本机输�
 发布包包含：
 
 - 单文件、自包含的 .NET 9 `RabiRouteHost.exe`；
-- `dist/` Manager、RibiWebGUI 与 29 个内置插件包；
+- `dist/` Manager、RibiWebGUI 与 42 个内置插件包；
 - 本机 Node.js runtime 与生产依赖；
 - `desktop-runtime/` 中作为纯表现子程序的 PySide6/Qt Desktop；
 - 默认配置和公开资源。
@@ -265,4 +302,4 @@ Desktop 的每次启动仍保存自己的崩溃证据包；Manager、插件与 R
 5. 退出后 Host、Manager、托盘与受租约管理的插件进程都消失，且不会复活；
 6. `--command status --json` 与 Manager `/meta` 的 generation、instance 和 URL 一致；
 7. 退役生命周期入口、固定端口默认值和 Manager HTTP 应用启停路由不在正式调用链与发布包中。
-8. Manager 与其 Node.js 子进程的可执行文件路径固定为 `<install-root>/runtime/node.exe`，升级后不会回到 `versions/<releaseId>/node.exe`。
+8. Manager 与其 Node.js 子进程的可执行文件路径固定为 `<install-root>/runtime/RabiRoute.Runtime.exe`，升级后不会回到 `versions/<releaseId>/node.exe`。

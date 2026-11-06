@@ -10,12 +10,12 @@ import { WebSocket } from "ws";
 import { createManagerClient } from "../../apps/rabi-agent/lib/manager-client.mjs";
 import { LanAgentAuthority } from "./lanAgentAuthority.js";
 import { LanAgentRegistry } from "./lanAgentRegistry.js";
-import { createLanAgentManagementOperations, type LanAgentRoutesContext } from "./lanAgentRoutes.js";
+import { createLanAgentManagementOperations, type LanAgentRoutesContext } from "../plugins/io.rabiroute.manager.core/src/manager/lanAgentRoutes.js";
 import { ManagerPluginRouteRegistry } from "./managerPluginRouteRegistry.js";
-import { createApiDiscoveryOperations } from "./apiDiscoveryRoutes.js";
+import { createApiDiscoveryOperations } from "../plugins/io.rabiroute.manager.agent-communication/src/manager/apiDiscoveryRoutes.js";
 import { evaluateLanAgentRequest, assertTrustedLanAgentPrincipal } from "./lanAgentRequestAccess.js";
 import { markAuthenticatedConnectionRequest } from "./connectionRequestAccess.js";
-import { registerLanAgentBodyGuard, assertLanAgentBodyAuthority } from "./lanAgentBodyAuthority.js";
+import { registerLanAgentBodyGuard } from "./lanAgentBodyAuthority.js";
 import { LanAgentReleaseStore } from "./lanAgentReleaseStore.js";
 
 test("existing targeted update selects one signed release with CAS and leaves other nodes on the common release", { timeout: 15000 }, async t => {
@@ -98,7 +98,7 @@ async function fixture(t: import("node:test").TestContext) {
     if (request.headers.authorization === "Bearer fixture-link") markAuthenticatedConnectionRequest(request);
     if (request.url === "/meta") { response.setHeader("content-type", "application/json"); response.end(JSON.stringify(meta)); return; }
     const url = new URL(request.url!, "http://localhost");
-    registerLanAgentBodyGuard(request, body => assertLanAgentBodyAuthority(url.pathname, body, assertTrustedLanAgentPrincipal(request)?.source));
+    registerLanAgentBodyGuard(request, () => {});
     if (!api.handle(request, url, response)) response.writeHead(404).end();
   });
   const detach = nodes.attach(server, { getToken: () => "", enabled: () => true });
@@ -128,6 +128,20 @@ async function fixture(t: import("node:test").TestContext) {
   return { root, authority, caller, worker, nodes, api, registration, socket, base, client, context, calls, reply, invoke, auth,
     intercept: (callback: typeof intercept) => { intercept = callback; } };
 }
+
+test('remote lookup transport failure is distinct from invalid adapter parameters', { timeout: 15000 }, async t => {
+  const f = await fixture(t);
+  const path = { instanceId: 'absent-fixture-node', agentId: 'fixture-agent' };
+  const invalid = await f.invoke('agents.threads', { path, body: { action: 'read', threadId: 'existing-task' } });
+  assert.equal(invalid.statusCode, 400);
+  const invalidBody = JSON.parse(String(invalid.body)); assert.equal(invalidBody.field, 'body.agentAdapter');
+  assert.match(invalidBody.repair, /\/api\/agent\/help/);
+  const failed = await f.invoke('agents.threads', { path, body: { action: 'read', threadId: 'existing-task', agentAdapter: 'codex' } });
+  assert.equal(failed.statusCode, 503, String(failed.body));
+  const failure = JSON.parse(String(failed.body)); assert.equal(failure.errorCode, 'LAN_AGENT_MANAGEMENT_NOT_SENT');
+  assert.equal(failure.reason, 'remote_query_failed'); assert.equal(failure.uncertain, undefined);
+  assert.match(failure.repair, /\/api\/lan-agent\/instances/); assert.equal(f.calls.length, 0);
+});
 
 test("management discovery contains all fifteen real routes, optional ignored bodies and no issued secrets", { timeout: 15000 }, async t => {
   const f = await fixture(t);

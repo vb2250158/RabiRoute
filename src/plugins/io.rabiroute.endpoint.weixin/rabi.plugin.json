@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 2,
+  "id": "io.rabiroute.endpoint.weixin",
+  "version": "0.1.1",
+  "entries": {
+    "manager": {
+      "execution": "in_process",
+      "module": "./manager.mjs"
+    },
+    "gateway": {
+      "execution": "in_process",
+      "module": "./gateway.mjs"
+    },
+    "web": {
+      "execution": "in_process",
+      "module": "./web/client.mjs"
+    }
+  },
+  "provides": [
+    "endpoint.weixin@1",
+    "endpoint.weixin.egress@1"
+  ],
+  "requires": [
+    "host.message-endpoints@1"
+  ],
+  "optional": [],
+  "permissions": [],
+  "displayName": "个人微信",
+  "description": "连接个人微信消息",
+  "icon": "mdi-wechat"
+}

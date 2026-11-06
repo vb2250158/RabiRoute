@@ -1,5 +1,5 @@
 import { getTimeoutMs } from "./timeoutSettingsClient";
-import { remotePersonaServicePath } from "./persona/remotePersonaReference";
+import { remotePersonaServicePath } from "../../src/plugins/io.rabiroute.manager.persona/web/persona/remotePersonaReference";
 import { browserUuid } from "./browserUuid";
 
 export type RoleRequestFailure = {

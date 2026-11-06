@@ -4,10 +4,9 @@ English | [简体中文](reliable-agent-delivery.md)
 
 ## Explicit Manager recovery
 
-Starting with `0.6.1`, Manager startup, Stop Hooks, node recovery and receipt events no longer automatically sweep historical reservations. Message-processing automation `1.0.1` does not start recurring reply reminders for old requests. Knowledge callback reminders and plan subscriptions remain available. Original records, normal sends and explicit original-ID receipt checks retain the contracts below. Accepted queues in managed clients retain their version-specific transport contracts.
+Host `0.7.0` and automation plugin `0.1.1` retain the explicit recovery contract introduced in `0.6.1`: Manager startup, Stop Hooks, node recovery and receipt events no longer automatically sweep historical reservations. The automation plugin does not start recurring reply reminders for old requests. Knowledge callback reminders and plan subscriptions remain available. Original records, normal sends and explicit original-ID receipt checks retain the contracts below. Accepted queues in managed clients retain their version-specific transport contracts.
 
 At turn completion, the Stop Hook checks this session's unanswered requests and attempts at most one in-hook prompt per original request. It continues the same turn without sending a chat message or scheduling a wakeup. Later Stops do not repeat the prompt; uncertain replies are checked by their original receipt. Configured completion delivery waits for the actual final result.
-
 
 Status: source-connected; isolated fault tests and installed-runtime acceptance are separate evidence. This page does not claim deployment to connected computers.
 
@@ -29,7 +28,7 @@ Authenticated callers can use `POST /api/agent/deliveries/:deliveryId/reconcile`
 
 The stable launcher remains the only main program. A short-lived CLI submits through its existing authenticated local control channel to the original worker. The worker acknowledges local acceptance only after committing the configuration-adjacent `delivery-<config-hash>.sqlite` transaction with SQLite FULL synchronization. CLI exit preserves it.
 
-Worker startup loads unfinished records; reconnect and backoff expiry resume them. Existing managed startup must start the original client after reboot. Sending cannot run while the computer or client is off. The queue lives outside release directories and must survive updates. Uncommitted candidates do not take queue ownership; handoff pauses the original sender.
+The worker attempts only newly submitted, unattempted sends from its current run. Old pending/sending entries become awaiting confirmation on startup. Restart, reconnect, backoff, ledger scans, repeated submissions and explicit reconcile never send old content. At turn completion, the Stop Hook checks this session's unanswered requests and attempts at most one in-hook prompt per original request. It continues the same turn without sending a chat message or scheduling a wakeup. Later Stops do not repeat the prompt; uncertain replies are checked by their original receipt. Configured completion delivery waits for the actual final result. Historical requests are not supplemented; original IDs and receipts remain outside release directories.
 
 Each attempt reloads current configuration and uses EndpointSession to discover and verify the original Manager. Acceptance pins the original Manager GUID; pairing with another Manager does not transfer old records. Callers manage no ports, URLs or generations. Do not scan ports, rebind targets or downgrade HTTPS.
 
@@ -71,7 +70,7 @@ These control capacity, exponential backoff and queue scheduling. By default, up
 
 ## Same IDs and acceptance evidence
 
-The same intentId and content returns its original record; changed content or target conflicts. Manager derives a formal deliveryId from authenticated source identity and freezes content, target and execution options. Pre-send verification failures stay prepared; callers may explicitly continue the original ID and snapshot. Manager does not initiate background continuation.
+The same intentId and content returns its original record; changed content or target conflicts. Manager derives a formal deliveryId from authenticated source identity and freezes content, target and execution options. Pre-send verification failures stay prepared; only explicit recovery continues the original ID and frozen snapshot.
 
 Dispatching records reconcile original evidence. Only positive transport-owner proof that no prompt frame was sent permits returning to prepared. The proof must be persisted first and bound to the original target, prompt and execution-option hashes, Manager dispatch attempt and remote transport attempt. Old proof cannot reset a newer attempt. A lost proof response is recovered by querying the original durable proof after reconnection. Timeout, disconnection or a missing receipt is not such proof. Committed returns the original receipt; cancellation cannot retract already accepted content.
 

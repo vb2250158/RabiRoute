@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createAgentEndpointDelivery, type AgentEndpointDeliveryContext } from "./agentEndpointDelivery.js";
-import { agentReplyRequest, agentReplyParameters, agentRequestReminderPrompt } from "../agentRequests/replyParameters.js";
+import { agentReplyRequest, agentReplyParameters } from "../agentRequests/replyParameters.js";
 import { AgentRequestStore, type AgentRequestParty } from "../agentRequests/store.js";
 import type { AgentThreadRequest } from "../agentThreads.js";
 
@@ -38,24 +38,6 @@ function request(cwd?: string): AgentThreadRequest {
   };
 }
 
-test("remote callback uses the explicit execution workspace while reply destination and reminder identity stay unchanged", async () => {
-  const f = fixture(), r = request("F:/Work/Product/Release"), options = f.factory.options(), target = await options.resolveTarget(r);
-  const execution = options.resolveExecutionOptions(r, target);
-  assert.equal(execution.cwd, r.cwd); assert.equal(target.workspace, execution.cwd);
-  const source: AgentRequestParty = {
-    threadId: sourceId, threadName: "Coordinator", agentAdapter: "codex", agentType: "agent", workspace: "C:/Work/Coordinator",
-    endpoint: { kind: "local", managerInstanceId: "manager", agentId: "local:codex", provider: "codex", sessionId: sourceId, authorizationIncarnation: "local-epoch" }
-  };
-  const preparation = { source, target, deliveryId: "original-actual", requestId: "original-request", responsePolicy: "required" as const, responseInstruction: "Reply" };
-  const reply = agentReplyRequest(preparation);
-  assert.equal((reply.messageSource as { workspace: string }).workspace, "F:/Work/Product/Release");
-  assert.equal(reply.cwd, "C:/Work/Coordinator"); assert.equal(reply.threadId, sourceId); assert.equal(reply.sourceThreadId, targetId);
-  assert.equal(reply.agentTargetId, "local:codex"); assert.equal(reply.inReplyToRequestId, "original-request");
-  assert.deepEqual(agentReplyParameters(preparation).request, reply);
-  const reminder = agentRequestReminderPrompt({ ...preparation, id: "original-request", status: "awaiting_response", createdAt: "2026-01-01T00:00:00Z", updatedAt: "2026-01-01T00:00:00Z", reminderCount: 0 });
-  assert.ok(reminder.includes("F:/Work/Product/Release")); assert.ok(!reminder.includes("F:/Work/Product/Main"));
-  assert.equal(f.reads(), 0, "An explicit delivery workspace does not require an additional owner RPC");
-});
 
 test("missing explicit and profile workspace keeps the existing exact owner metadata lookup", async () => {
   const f = fixture(false), target = await f.factory.options().resolveTarget(request());

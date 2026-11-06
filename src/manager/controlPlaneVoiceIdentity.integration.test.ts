@@ -117,7 +117,7 @@ test("Manager persona-domain HTTP route accepts voice identity PUT and publishes
   assert.equal(invalidParticipantTypeResponse.status, 400);
   const invalidType = await invalidParticipantTypeResponse.json() as Record<string, unknown>;
   assert.equal(invalidType.errorCode, "API_REQUEST_SCHEMA_INVALID");
-  assert.equal(invalidType.field, "body");
+  assert.equal(invalidType.field, "body.participantId");
 
   let putStatus = 0;
   let putBody: Record<string, any> = {};

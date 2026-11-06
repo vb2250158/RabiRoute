@@ -20,7 +20,6 @@ export type EndpointDeliveryMetadata = Pick<PreparedEndpointDelivery,
   | "lastAttemptAt" | "nextAttemptAt" | "attemptCount" | "lastError" | "blockedReason">;
 
 export const AGENT_REQUEST_SCHEMA_VERSION = 1;
-export const AGENT_REQUEST_REMINDER_MS = 5 * 60 * 1_000;
 
 export function agentDeliveryPromptHash(prompt: string): string {
   return createHash("sha256").update(prompt.replace(/\r\n/g, "\n")).digest("hex");
@@ -28,6 +27,7 @@ export function agentDeliveryPromptHash(prompt: string): string {
 
 export type AgentResponsePolicy = "required" | "none";
 export type AgentRequestStatus = "pending_delivery" | "awaiting_response" | "responded" | "cancelled";
+export type AgentRequestSnapshotMetadata = { unscoped: boolean; incompleteThreadIds: string[] };
 
 export type AgentRequestParty = {
   endpoint?: AgentRequestEndpoint;
@@ -65,12 +65,6 @@ export type AgentRequestRecord = {
   pendingResponseDeliveryId?: string;
   pendingResponseEvidence?: { promptHash: string; preparation: AgentCommunicationPreparation };
   response?: AgentRequestResponse;
-  lastTargetTurnId?: string;
-  lastTargetTurnEndedAt?: string;
-  nextReminderAt?: string;
-  reminderCount: number;
-  lastReminderAt?: string;
-  lastReminderError?: string;
   cancelledAt?: string;
   cancelReason?: string;
   updatedAt: string;
@@ -189,7 +183,6 @@ function parseRecord(value: unknown): AgentRequestRecord | undefined {
       messageProcessingRequirementId: cleanText(record.messageProcessingRequirementId, 300) || undefined,
       planId: cleanText(record.planId, 300) || undefined,
       createdAt: cleanText(record.createdAt, 100) || new Date(0).toISOString(),
-      reminderCount: Math.max(0, Math.floor(Number(record.reminderCount) || 0)),
       updatedAt: cleanText(record.updatedAt, 100) || cleanText(record.createdAt, 100) || new Date(0).toISOString()
     } as AgentRequestRecord;
   } catch {
@@ -291,15 +284,22 @@ export class AgentRequestState {
   }
 
   readModel() {
+    const incompleteThreadIds = new Set<string>();
+    let unscoped = false;
+    for (const value of this.quarantinedRequests.values()) {
+      try { incompleteThreadIds.add(normalizedParty((value as AgentRequestRecord).target).threadId); }
+      catch { unscoped = true; }
+    }
     return {
       requests: [...this.requests.values()],
       deliveries: [...this.deliveries.values()].map(({ prompt: _prompt, ...metadata }) => metadata),
       unavailableDeliveryIds: [...this.unavailableDeliveryIds],
-      evidence: this.getEndpointDeliveryEvidenceStatus()
+      evidence: this.getEndpointDeliveryEvidenceStatus(),
+      requestSnapshot: { unscoped, incompleteThreadIds: [...incompleteThreadIds] } satisfies AgentRequestSnapshotMetadata
     };
   }
 
-  /** A failed write cannot expose tentative fields, including the reminder paths. */
+  /** A failed write cannot expose tentative fields, including cancellation fields. */
   transaction<T>(operation: () => T) {
     const requests = this.requests, deliveries = this.deliveries;
     const draftRequests = new AgentRequestDraftMap(requests);
@@ -599,7 +599,6 @@ export class AgentRequestState {
         record.status = "cancelled";
         record.cancelledAt = timestamp;
         record.cancelReason = "Message Agent pool changed before this tracked delivery completed; the stale task binding was cancelled.";
-        record.nextReminderAt = undefined;
         record.pendingResponseDeliveryId = undefined;
         record.pendingResponseEvidence = undefined;
         record.updatedAt = timestamp;
@@ -615,8 +614,6 @@ export class AgentRequestState {
       if (target && target.threadId !== record.target.threadId) {
         record.targetHistory = appendPartyHistory(record.targetHistory, record.target);
         record.target = normalizedParty(target);
-        record.nextReminderAt = timestamp;
-        record.lastReminderError = undefined;
         changed = true;
       }
       if (!changed) continue;
@@ -709,7 +706,6 @@ export class AgentRequestState {
         messageProcessingRequirementId,
         planId,
         createdAt: timestamp,
-        reminderCount: 0,
         updatedAt: timestamp
       });
     }
@@ -770,8 +766,6 @@ export class AgentRequestState {
     const before = structuredClone(record), timestamp = nowIso(this.now);
     record.status = "responded";
     record.response = { deliveryId, by: source, result: responseResult, nextAction: responseNext, respondedAt: timestamp };
-    record.nextReminderAt = undefined;
-    record.lastReminderError = undefined;
     record.updatedAt = timestamp;
     try { this.persistMutations([{ action: "responded", requestId: record.id, beforeStatus: "awaiting_response", afterStatus: "responded" }]); }
     catch (error) { this.requests.set(record.id, before); throw error; }
@@ -831,8 +825,6 @@ export class AgentRequestState {
         nextAction: preparation.nextAction || "",
         respondedAt: timestamp
       };
-      current.nextReminderAt = undefined;
-      current.lastReminderError = undefined;
       current.updatedAt = timestamp;
       repliedRequest = current;
     }
@@ -918,85 +910,6 @@ export class AgentRequestState {
     }
   }
 
-  recordTargetTurnEnded(threadId: string, workspace: string | undefined, turnId: string, endedAt = this.now()): AgentRequestRecord[] {
-    const id = cleanText(threadId, 4096);
-    const normalizedTurnId = cleanText(turnId, 200);
-    if (!id || !normalizedTurnId) return [];
-    const timestamp = endedAt.toISOString();
-    const nextReminderAt = new Date(endedAt.getTime() + AGENT_REQUEST_REMINDER_MS).toISOString();
-    const changed: AgentRequestRecord[] = [];
-    for (const record of this.requests.values()) {
-      if (record.status !== "awaiting_response" || record.target.threadId !== id) continue;
-      if (!workspaceMatches(record.target.workspace, workspace)) continue;
-      if (record.lastTargetTurnId === normalizedTurnId) continue;
-      record.lastTargetTurnId = normalizedTurnId;
-      record.lastTargetTurnEndedAt = timestamp;
-      record.nextReminderAt = nextReminderAt;
-      record.updatedAt = timestamp;
-      changed.push(structuredClone(record));
-    }
-    if (changed.length) {
-      this.persistMutations(changed.map(record => ({
-        action: "target_turn_ended",
-        requestId: record.id,
-        afterStatus: record.status,
-        changes: [
-          { field: "lastTargetTurnId" },
-          { field: "nextReminderAt" }
-        ]
-      })));
-    }
-    return changed;
-  }
-
-  dueReminders(at = this.now()): AgentRequestRecord[] {
-    const nowMs = at.getTime();
-    return [...this.requests.values()]
-      .filter((record) => record.status === "awaiting_response"
-        && Boolean(record.nextReminderAt)
-        && (Date.parse(record.nextReminderAt || "") || Number.POSITIVE_INFINITY) <= nowMs)
-      .sort((left, right) => Date.parse(left.nextReminderAt || "") - Date.parse(right.nextReminderAt || ""))
-      .map((record) => structuredClone(record));
-  }
-
-  recordPendingResponseCheck(requestId: string, deliveryId: string, status: string): void {
-    const record = this.requests.get(requestId);
-    if (record?.status !== "awaiting_response" || record.pendingResponseDeliveryId !== deliveryId) return;
-    record.nextReminderAt = undefined;
-    record.lastReminderError = `Response receipt needs reconciliation: ${cleanText(status, 100)}`;
-    record.updatedAt = nowIso(this.now);
-    this.persistMutations([{
-      action: "response_receipt_pending", requestId, afterStatus: record.status,
-      changes: [{ field: "nextReminderAt" }, { field: "lastReminderError" }]
-    }]);
-  }
-
-  recordReminderResult(requestId: string, delivered: boolean, error?: unknown): AgentRequestRecord {
-    const record = this.requests.get(cleanText(requestId, 100));
-    if (!record) throw new Error(`Agent request not found: ${requestId}`);
-    if (record.status !== "awaiting_response") return structuredClone(record);
-    const timestamp = nowIso(this.now);
-    record.reminderCount += 1;
-    record.lastReminderAt = timestamp;
-    record.lastReminderError = delivered
-      ? undefined
-      : cleanText(error instanceof Error ? error.message : error, 4_000) || "Agent request reminder delivery failed.";
-    record.nextReminderAt = delivered
-      ? undefined
-      : new Date(this.now().getTime() + AGENT_REQUEST_REMINDER_MS).toISOString();
-    record.updatedAt = timestamp;
-    this.persistMutations([{
-      action: delivered ? "reminder_delivered" : "reminder_failed",
-      requestId: record.id,
-      afterStatus: record.status,
-      changes: [
-        { field: "reminderCount", to: record.reminderCount },
-        { field: "nextReminderAt" }
-      ]
-    }]);
-    return structuredClone(record);
-  }
-
   /** Stop this reservation without asserting that its target never received the prompt. */
   cancelEndpointDelivery(deliveryId: string): PreparedEndpointDelivery {
     const delivery = this.deliveries.get(deliveryId);
@@ -1046,7 +959,6 @@ export class AgentRequestState {
     record.status = "cancelled";
     record.cancelledAt = timestamp;
     record.cancelReason = cleanText(reason, 2_000) || undefined;
-    record.nextReminderAt = undefined;
     record.pendingResponseDeliveryId = undefined;
     record.pendingResponseEvidence = undefined;
     record.updatedAt = timestamp;

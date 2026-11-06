@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import { parse, compileScript, compileTemplate } from '@vue/compiler-sfc';
 
 test('skill browser compiles and renders untrusted bodies as text with no mutation controls', () => {
-  const file = new URL('../src/components/RoleSkillBrowser.vue', import.meta.url);
+  const file = new URL('../../src/plugins/io.rabiroute.manager.persona/web/components/RoleSkillBrowser.vue', import.meta.url);
   const source = fs.readFileSync(file, 'utf8');
   const { descriptor, errors } = parse(source);
   assert.deepEqual(errors, []);

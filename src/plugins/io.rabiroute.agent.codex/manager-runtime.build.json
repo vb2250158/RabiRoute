@@ -1,0 +1,26 @@
+{
+  "exports": [
+    {
+      "source": "src/plugins/io.rabiroute.agent.codex/src/agentAdapters/codexManagerProvider.ts",
+      "name": "createManager"
+    }
+  ],
+  "ownedPrefixes": [
+    "src/plugins/io.rabiroute.agent.codex/"
+  ],
+  "scopedEnvironment": true,
+  "hostSources": [
+    "src/agentAdapters/stateReporter.ts"
+  ],
+  "ownedSources": [
+    "src/plugins/io.rabiroute.agent.codex/src/manager/completionImages.ts"
+  ],
+  "workers": [
+    {
+      "source": "src/plugins/io.rabiroute.agent.codex/src/agentAdapters/codexManagerApi.ts",
+      "target": "workers/scan.mjs",
+      "mode": "host-factory"
+    }
+  ],
+  "packageId": "io.rabiroute.agent.codex"
+}

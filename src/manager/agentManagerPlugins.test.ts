@@ -10,6 +10,7 @@ import { resolvePublishedAgentManagerProviders } from "./agentManagerProviders.j
 import { ManagerPluginRouteRegistry } from "./managerPluginRouteRegistry.js";
 import type { AgentManagerHostPorts } from "./agentManagerHostPorts.js";
 import { pluginPackagesCandidateForTests } from "./diagnosticsCandidate.fixture.js";
+import { canonicalPluginSourceFixture } from "./canonicalPluginSource.fixture.js";
 
 const slugs = ["codex", "copilot-cli", "marvis", "astrbot", "dsh", "workbuddy", "antigravity", "device-agent", "grok-bot"];
 
@@ -29,7 +30,7 @@ test("actual Manager Agent packages publish independent APIs, preserve foreign b
   let scans = 0;
   const host: AgentManagerHostPorts = {
     rootDir: root, packageRoot: process.cwd(), readOnly: () => false, managerInstanceId: () => "fixture-manager",
-    getRuntimes: () => [], publishManagerEvent() {}, deliveryReceiptChanged() {},
+    getRuntimes: () => [], publishManagerEvent() {},
     registerOperations: (instance, definitions, signal) => routes.registerOperationsAsync(instance, definitions, signal),
     async runScan(task, invocation) {
       invocation?.signal?.throwIfAborted();
@@ -42,9 +43,9 @@ test("actual Manager Agent packages publish independent APIs, preserve foreign b
   };
   const hostPorts = createAgentAdapterHostPorts({ manager: host });
   const kernel = ownedKernel = new GenerationRuntime({ host: "manager", hostServices: [{ capability: "host.agent-adapters@1", value: hostPorts }] });
-  const profile = parsePluginProfile({ schemaVersion: 2, readyRequires: [], instances: slugs.map(slug => ({
-    id: `agent:${slug}`, package: `io.rabiroute.agent.${slug}`, version: "1.0.0", enabled: true, config: {}, grants: []
-  })) });
+  const instances = await Promise.all(slugs.map(async slug => ({ id: `agent:${slug}`, package: `io.rabiroute.agent.${slug}`,
+    version: (await canonicalPluginSourceFixture(`io.rabiroute.agent.${slug}`)).manifest.version, enabled: true, config: {}, grants: [] })));
+  const profile = parsePluginProfile({ schemaVersion: 2, readyRequires: [], instances });
   const loaded = await loadPluginProfile({ profilePath: path.join(root, "profile.json"), profile, packageCatalog: catalog, runtimeRoot: path.join(root, "runtime"), host: "manager" });
   assert.equal(loaded.loadFailures.length, 0);
   await kernel.switch(loaded.candidates);

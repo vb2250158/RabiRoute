@@ -3,15 +3,15 @@ import fs from "node:fs";
 import test from "node:test";
 
 const personaPage = fs.readFileSync(
-  new URL("../src/pages/PersonaTemplatePage.vue", import.meta.url),
+  new URL("../../src/plugins/io.rabiroute.manager.persona/web/pages/PersonaTemplatePage.vue", import.meta.url),
   "utf8"
 );
 const panel = fs.readFileSync(
-  new URL("../src/components/PersonaDesktopPetPanel.vue", import.meta.url),
+  new URL("../../src/plugins/io.rabiroute.manager.persona/web/components/PersonaDesktopPetPanel.vue", import.meta.url),
   "utf8"
 );
 const desktopSettings = fs.readFileSync(
-  new URL("../src/components/renderers/DesktopSettingsRenderer.vue", import.meta.url),
+  new URL("../../src/plugins/io.rabiroute.manager.desktop/web/components/renderers/DesktopSettingsRenderer.vue", import.meta.url),
   "utf8"
 );
 

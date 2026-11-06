@@ -8,5 +8,8 @@ const resources = ["grok-bot-native-profile.ps1", "resolve-manager.mjs", "lib/di
 for (const name of resources) {
   const destination = path.join(root, "dist", "scripts", name);
   fs.mkdirSync(path.dirname(destination), { recursive: true });
-  fs.copyFileSync(path.join(root, "scripts", name), destination);
+  const source = name === "grok-bot-native-profile.ps1"
+    ? path.join(root, "src/plugins/io.rabiroute.agent.grok-bot/scripts", name)
+    : path.join(root, "scripts", name);
+  fs.copyFileSync(source, destination);
 }

@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createServer } from "node:http";
 import { scanAgentAdapters } from "./managerApi.js";
-import { scanDshAgentAdapter } from "./dshManagerApi.js";
-import { scanCodexAgentAdapter } from "./codexManagerApi.js";
+import { scanDshAgentAdapter } from "../plugins/io.rabiroute.agent.dsh/src/agentAdapters/dshManagerApi.js";
+import { scanCodexAgentAdapter } from "../plugins/io.rabiroute.agent.codex/src/agentAdapters/codexManagerApi.js";
 import type { AgentManagerApiContext, AgentScanOptions } from "./managerTypes.js";
 import type { AgentManagerProvider } from "../manager/agentManagerProviders.js";
 
@@ -19,7 +19,7 @@ async function scanRegisteredFixture(ctx: AgentManagerApiContext, options: Agent
   })) as AgentManagerProvider[];
   return scanAgentAdapters({ ...ctx, providers }, options);
 }
-import { buildCodexAgentScan } from "./codexManagerApi.js";
+import { buildCodexAgentScan } from "../plugins/io.rabiroute.agent.codex/src/agentAdapters/codexManagerApi.js";
 import {
   agentAdapterManifest,
   agentAdapterTypes

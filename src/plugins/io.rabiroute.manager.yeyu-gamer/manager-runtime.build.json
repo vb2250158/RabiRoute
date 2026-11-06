@@ -1,0 +1,15 @@
+{
+  "exports": [
+    {
+      "source": "src/plugins/io.rabiroute.manager.yeyu-gamer/hostRuntime.mjs",
+      "name": "createOwnedRuntime"
+    }
+  ],
+  "ownedPrefixes": [
+    "src/plugins/io.rabiroute.manager.yeyu-gamer/"
+  ],
+  "ownedSources": [
+    "src/plugins/io.rabiroute.manager.yeyu-gamer/src/integrations/yeyuGamer/managerRoutes.ts"
+  ],
+  "packageId": "io.rabiroute.manager.yeyu-gamer"
+}

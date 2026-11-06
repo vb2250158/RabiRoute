@@ -22,7 +22,7 @@ let releaseOwner = () => {};
 const stopAudit = installDataMutationAuditSink(record => currentAudit.push(record));
 const methods = new Set(["bindEndpointDelivery", "markEndpointDispatching", "noteEndpointDeliveryFailure", "markEndpointNotSent",
   "commitEndpointReceipt", "reconcileOpenParties", "recordConnectionResponse", "prepare", "bindResponseEvidence", "commit", "abort",
-  "recordTargetTurnEnded", "recordPendingResponseCheck", "recordReminderResult", "cancel", "cancelEndpointDelivery"]);
+  "cancel", "cancelEndpointDelivery"]);
 function failure(error: unknown) {
   if (!(error instanceof Error)) return { thrown: error };
   return { name: error.name, message: error.message, stack: error.stack, properties: Object.fromEntries(Object.entries(error).filter(([key]) => key !== "cause")) };
@@ -60,7 +60,6 @@ async function command(id: string, value: unknown) {
         const resolutions = new Map(request.args[0] as Array<[string, { source: unknown; target: unknown }]>);
         return state.reconcileOpenParties((_party, record, role) => resolutions.get(record.id)?.[role] as any);
       }
-      if (request.method === "recordTargetTurnEnded" && request.args[3] !== undefined) request.args[3] = new Date(request.args[3]);
       if (request.method === "noteEndpointDeliveryFailure" && request.args[1]?.__error) {
         request.args[1] = Object.assign(new Error(request.args[1].message), request.args[1].properties);
       }

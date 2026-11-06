@@ -1,4 +1,7 @@
+import { SYSTEM_EVENT_STDIN_FLAG } from "./shared/systemEventIngress.js";
+
 export type GatewayCommandInvocation =
+  | "system-event-stdin"
   | "wearable-health-alert-stdin"
   | "delivery-replay"
   | "manual-trigger"
@@ -8,6 +11,7 @@ export type GatewayCommandInvocation =
   | "gateway-main";
 
 export function resolveGatewayCommandInvocation(argv: readonly string[]): GatewayCommandInvocation {
+  if (argv.includes(SYSTEM_EVENT_STDIN_FLAG)) return "system-event-stdin";
   if (argv.includes("--wearable-health-alert-stdin")) return "wearable-health-alert-stdin";
   if (argv.some((arg) => arg.startsWith("--delivery-replay=") || arg.startsWith("--delivery-replay-message="))) {
     return "delivery-replay";

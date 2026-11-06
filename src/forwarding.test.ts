@@ -5,10 +5,14 @@ import os from "node:os";
 import path from "node:path";
 import test, { after, mock } from "node:test";
 import type { AgentAdapterType } from "./agentAdapters/types.js";
-import { config, type RouteProfile } from "./config.js";
-import { deliverPacketToPrimaryAgentAdapter, forwardMessage, forwardMessageAndWait, resetMessageProcessingRuntime, routeKindUsesAutomaticMessageGrouping, shouldSkipHeartbeatDelivery } from "./forwarding.js";
+import { config, rolePathsForRoute, type RouteProfile } from "./config.js";
+import { deliverPacketToPrimaryAgentAdapter, forwardMessage, forwardMessageAndWait, recordMessageContextOnly, resetMessageProcessingRuntime, routeKindUsesAutomaticMessageGrouping, scheduledAutomationBusyPolicy, shouldSkipHeartbeatDelivery } from "./forwarding.js";
+import { DesktopPetOwner } from "./plugins/io.rabiroute.manager.desktop-pet/src/manager/desktopPetRoutes.js";
+import { createDesktopPetOperations } from "./plugins/io.rabiroute.manager.desktop-pet/src/manager/desktopPetOperations.js";
+import { ManagerPluginRouteRegistry } from "./manager/managerPluginRouteRegistry.js";
+import { conversationMessageWindow } from "./messageContextStore.js";
 import type { GroupMessageRecord, HeartbeatEventRecord, PlanFeedbackMessageRecord, VoiceTranscriptEventRecord } from "./history.js";
-import { ManagerSpeechControl } from "./manager/speechControl.js";
+import { ManagerSpeechControl } from "./plugins/io.rabiroute.manager.speech/src/manager/speechControl.js";
 import { handleAgentReply } from "./endpointEgress.fixture.js";
 import { resolvePipeline } from "./pipelines.js";
 import { appendDeliveryReplayAttempt, readDeliveryReplayAttempts } from "./deliveryReplayLedger.js";
@@ -34,7 +38,16 @@ mock.method(adapterRegistry, "create", (type: AgentAdapterType): never => {
 const isolatedEnvironmentKeys = ["PRIMARY_AGENT_TARGET", "REMOTE_AGENT_TARGETS", "AGENT_INSTANCE_BINDINGS", "GATEWAY_MANAGER_URL"] as const;
 for (const key of isolatedEnvironmentKeys) delete process.env[key];
 const unexpectedManagerRequests: string[] = [];
+const petOwner = new DesktopPetOwner({ resolveRoleDir: roleId => {
+  const route = config.routeProfiles.find(item => item.agentRoleId === roleId);
+  if (!route) throw new Error("The controlled persona is unavailable.");
+  return rolePathsForRoute(route).personaDataDir;
+} });
+const petRegistry = new ManagerPluginRouteRegistry();
+const petRegistration = petRegistry.registerOperations("desktop-pet-forwarding-fixture", createDesktopPetOperations(petOwner));
 const isolatedManager = http.createServer((request, response) => {
+  if (request.method === "POST" && request.url?.endsWith("/transcripts")
+    && petRegistry.handle(request, new URL(request.url, "http://fixture"), response)) return;
   unexpectedManagerRequests.push(`${request.method} ${request.url}`);
   response.writeHead(503, { "content-type": "application/json" });
   response.end(JSON.stringify({ code: -1, message: "Test isolation: no Manager fixture installed for this request." }));
@@ -47,6 +60,7 @@ const isolatedAddress = isolatedManager.address();
 assert.ok(isolatedAddress && typeof isolatedAddress === "object");
 process.env.GATEWAY_MANAGER_URL = `http://127.0.0.1:${isolatedAddress.port}`;
 after(async () => {
+  await petRegistration.dispose(); await petOwner.stop();
   resetMessageProcessingRuntime();
   await new Promise<void>(resolve => isolatedManager.close(() => resolve()));
   for (const key of isolatedEnvironmentKeys) delete process.env[key];
@@ -118,6 +132,45 @@ function routeProfile(root: string, patch: Partial<RouteProfile> = {}): RoutePro
     ...patch
   };
 }
+
+test("ASR projection preserves every persona raw record when one pet owner fails, the plugin is disabled or Manager is absent", async t => {
+  const root = tempDir(), first = routeProfile(root, { id: "one", agentRoleId: "One" }), second = routeProfile(root, { id: "two", agentRoleId: "Two" });
+  const secondDir = rolePathsForRoute(second).personaDataDir;
+  const owner = new DesktopPetOwner({ resolveRoleDir: roleId => path.join(root, "roles", roleId), cacheRoot: path.join(root, "cache") });
+  const registry = new ManagerPluginRouteRegistry(), registration = registry.registerOperations("pet-asr-fixture", createDesktopPetOperations(owner));
+  const server = http.createServer((request, response) => {
+    assert.equal(fs.existsSync(path.join(secondDir, "voice-transcripts.jsonl")), true, "All raw records precede the first optional projection request.");
+    if (request.url?.includes("/One/")) { response.writeHead(503, { "content-type": "application/json" }).end('{"code":-1}'); return; }
+    if (!registry.handle(request, new URL(request.url!, "http://fixture"), response)) response.writeHead(404).end();
+  });
+  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  const originalUrl = process.env.GATEWAY_MANAGER_URL;
+  process.env.GATEWAY_MANAGER_URL = `http://127.0.0.1:${(server.address() as import("node:net").AddressInfo).port}`;
+  t.after(async () => { process.env.GATEWAY_MANAGER_URL = originalUrl; await registration.dispose(); await owner.stop(); server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); fs.rmSync(root, { recursive: true, force: true }); });
+  await withForwardingConfig({ dataDir: path.join(root, "gateway"), memoryDataDir: path.join(root, "host"), routeProfiles: [first, second], agentAdapters: [] }, async () => {
+    const record: VoiceTranscriptEventRecord = { time: 1710000000, rawMessage: "Original ASR event.", messageId: "original-asr", source: "speech", adapterType: "speech" };
+    assert.equal(await recordMessageContextOnly("voice_transcript", record), 2);
+    const projectedRoot = path.join(secondDir, "desktop-pet/transcripts/asr");
+    const files = fs.readdirSync(projectedRoot, { recursive: true }).map(String).filter(file => file.endsWith(".json"));
+    assert.equal(files.length, 1);
+    const stored = JSON.parse(fs.readFileSync(path.join(projectedRoot, files[0]!), "utf8"));
+    assert.equal(stored.personaId, "Two"); assert.equal(stored.id, record.messageId); assert.equal(stored.source, "speech");
+    await recordMessageContextOnly("voice_transcript", record);
+    assert.equal(fs.readdirSync(projectedRoot, { recursive: true }).map(String).filter(file => file.endsWith(".json")).length, 1, "Original projection identity is idempotent.");
+    await registration.dispose();
+    assert.equal(await recordMessageContextOnly("voice_transcript", { ...record, messageId: "plugin-disabled" }), 2);
+    delete process.env.GATEWAY_MANAGER_URL;
+    assert.equal(await recordMessageContextOnly("voice_transcript", { ...record, messageId: "manager-absent" }), 2);
+    for (const route of [first, second]) {
+      const directory = rolePathsForRoute(route).personaDataDir;
+      const raw = fs.readFileSync(path.join(directory, "voice-transcripts.jsonl"), "utf8");
+      assert.match(raw, /plugin-disabled/); assert.match(raw, /manager-absent/);
+      const context = JSON.stringify(conversationMessageWindow(directory, { matches: () => true, limit: 10 }).entries);
+      assert.match(context, /plugin-disabled/); assert.match(context, /manager-absent/);
+    }
+    assert.match(fs.readFileSync(path.join(root, "gateway/router-adapter.log.jsonl"), "utf8"), /desktop_pet_asr_projection_unavailable/);
+  });
+});
 
 test("heartbeat busy guard only skips active Codex heartbeat delivery", () => {
   assert.equal(shouldSkipHeartbeatDelivery("heartbeat", true, ["codex"], true), true);
@@ -1340,4 +1393,19 @@ test("replayDeliveryAttempts can backfill a stored message by route kind and mes
     const attempts = readDeliveryReplayAttempts(dataDir);
     assert.equal(attempts.at(-1)?.replayOfAttemptId, "stored:private:old-1");
   });
+});
+
+
+test("scheduled and manual runs resolve busy policy from the selected rule owner", () => {
+  const route: Pick<RouteProfile, "automationRules"> = { automationRules: [
+    { id: "normal", trigger: { type: "schedule", schedule: { id: "s1", type: "interval", skipWhenAgentBusy: false } }, action: { type: "deliver_agent" } },
+    { id: "skip", trigger: { type: "schedule", schedule: { id: "s2", type: "daily_time", skipWhenAgentBusy: true } }, action: { type: "deliver_agent" } },
+    { id: "inherit", trigger: { type: "schedule", schedule: { id: "s3", type: "once_at" } }, action: { type: "deliver_agent" } }
+  ] };
+  assert.equal(scheduledAutomationBusyPolicy(route, "normal", true), false);
+  assert.equal(scheduledAutomationBusyPolicy(route, "skip", false), true);
+  assert.equal(scheduledAutomationBusyPolicy(route, "inherit", true), true);
+  assert.equal(scheduledAutomationBusyPolicy(route, "inherit", false), false);
+  assert.equal(scheduledAutomationBusyPolicy(route, undefined, true), true);
+  assert.equal(scheduledAutomationBusyPolicy(route, "missing", false), false);
 });

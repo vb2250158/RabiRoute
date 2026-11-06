@@ -1,11 +1,15 @@
+import { registerSourcePluginTranslations } from "./plugin-translation-test-host";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import test from "node:test";
 import ts from "typescript";
 import { translateText, setLocale } from "../src/i18n/index";
 
-const pageSource = fs.readFileSync(new URL("../src/messageEndpoints/NapcatEndpointCard.vue", import.meta.url), "utf8");
+const pageSource = fs.readFileSync(new URL("../../src/plugins/io.rabiroute.endpoint.napcat/web/messageEndpoints/NapcatEndpointCard.vue", import.meta.url), "utf8");
 const quickSetupSource = fs.readFileSync(new URL("../src/components/QuickSetupDialog.vue", import.meta.url), "utf8");
+
+const disposePluginTranslations = await registerSourcePluginTranslations();
+test.after(disposePluginTranslations);
 
 test("NapCat login copy switches languages without changing account identities or endpoints", () => {
   const cases = [

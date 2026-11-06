@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createPersonaService } from "../src/persona/personaServiceClient";
-import { createPersonaAvatarClient } from "../src/persona/personaAvatarClient";
-import { createPersonaVoiceIdentityClient } from "../src/persona/personaVoiceIdentityClient";
-import { createPersonaIdentityRelationClient } from "../src/persona/personaIdentityRelationClient";
+import { createPersonaService } from "../../src/plugins/io.rabiroute.manager.persona/web/persona/personaServiceClient";
+import { createPersonaAvatarClient } from "../../src/plugins/io.rabiroute.manager.persona/web/persona/personaAvatarClient";
+import { createPersonaVoiceIdentityClient } from "../../src/plugins/io.rabiroute.manager.persona/web/persona/personaVoiceIdentityClient";
+import { createPersonaIdentityRelationClient } from "../../src/plugins/io.rabiroute.manager.persona/web/persona/personaIdentityRelationClient";
 import { createDesktopPetClient } from "../src/desktopPetClient";
 
 test("persona reads and every write method use the selected PC's full Manager transport", async () => {

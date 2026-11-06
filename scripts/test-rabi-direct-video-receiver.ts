@@ -1,6 +1,6 @@
 import http from "node:http";
 import path from "node:path";
-import { RabiDirectVideo } from "../src/manager/rabiDirectVideo.js";
+import { RabiDirectVideo } from "../src/plugins/io.rabiroute.manager.rabilink-relay/src/manager/rabiDirectVideo.js";
 
 // Isolated acceptance receiver. USB reverse carries SDP only; ICE media uses the network.
 const directory = path.resolve(process.argv[2] || "apps/rabi-mobile-android/out/direct-video");

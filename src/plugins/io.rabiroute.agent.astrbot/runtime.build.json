@@ -1,0 +1,16 @@
+{
+  "exports": [
+    {
+      "source": "src/plugins/io.rabiroute.agent.astrbot/src/agentAdapters/pluginImplementations/astrbot.ts",
+      "name": "createAgentOperations"
+    }
+  ],
+  "ownedPrefixes": [
+    "src/plugins/io.rabiroute.agent.astrbot/"
+  ],
+  "scopedEnvironment": true,
+  "hostSources": [
+    "src/agentAdapters/stateReporter.ts"
+  ],
+  "packageId": "io.rabiroute.agent.astrbot"
+}

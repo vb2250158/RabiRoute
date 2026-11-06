@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 2,
+  "id": "io.rabiroute.endpoint.napcat",
+  "version": "0.1.1",
+  "entries": {
+    "manager": {
+      "execution": "in_process",
+      "module": "./manager.mjs"
+    },
+    "gateway": {
+      "execution": "in_process",
+      "module": "./gateway.mjs"
+    },
+    "web": {
+      "execution": "in_process",
+      "module": "./web/client.mjs"
+    }
+  },
+  "provides": [
+    "endpoint.napcat@1",
+    "endpoint.napcat.egress@1"
+  ],
+  "requires": [
+    "host.message-endpoints@1",
+    "host.message-endpoints@2"
+  ],
+  "optional": [],
+  "permissions": [],
+  "displayName": "NapCat / OneBot",
+  "description": "连接 QQ 群聊和私聊",
+  "icon": "mdi-qqchat"
+}

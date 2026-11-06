@@ -15,7 +15,7 @@ description: 安全拉取 RabiRoute 更新，并根据项目更新日志和公�
 - `examples/data/`：公开的当前配置模板。
 - `data/`：本地运行期配置和角色数据，默认是私有数据。
 - `.env`：本机密钥和机器相关设置，绝不能用示例文件覆盖。
-- `src/adapters/`、`src/forwarding.ts`、`src/manager.ts`：路由、adapter 和配置模型变更的常见位置。
+- `src/adapters/`、`src/plugins/io.rabiroute.endpoint.rabilink/src/forwarding.ts`、`src/manager.ts`：路由、adapter 和配置模型变更的常见位置。
 - `docs/`：更新日志链接到的更详细迁移说明。
 
 ## 拉取流程

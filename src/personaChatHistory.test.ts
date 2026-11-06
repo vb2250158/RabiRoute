@@ -60,7 +60,11 @@ test("history rejects invalid cursors, reports damaged rows and preserves valid 
   const partial = await readPersonaChatHistory(roleDir);
   assert.equal(partial.entries.length, 1);
   assert.equal(partial.invalidRecords, 1);
-  await assert.rejects(appendPersonaChatReply(roleDir, { sessionId: "task", turnId: "next", text: "reply" }));
+  const appended = await appendPersonaChatReply(roleDir, { sessionId: "task", turnId: "next", text: "independent reply" });
+  assert.ok(appended);
+  const updated = await readPersonaChatHistory(roleDir);
+  assert.deepEqual(updated.entries.map(row => row.text), ["independent reply", "reply"]);
+  assert.equal(updated.invalidRecords, 1);
 });
 
 test("Stop records bound final replies even when plan notifications are disabled; other events do not", async t => {
@@ -117,30 +121,42 @@ test("summary and forward recovery page without building the complete identity p
 });
 
 
-test("incomplete final row leaves complete replies readable and writes uncertain", async t => {
+test("an incomplete final row is retained while independent replies remain writable", async t => {
   const { roleDir } = await fixture(t);
   await appendPersonaChatReply(roleDir, { sessionId: 'task', turnId: 'complete', text: 'retained' });
   const file = path.join(roleDir, 'chat-history', 'final-replies.jsonl');
   await fs.appendFile(file, '{"id":"unfinished');
   const page = await readPersonaChatHistory(roleDir, undefined, 50, { summary: true });
   assert.equal(page.entries[0].text, 'retained'); assert.equal(page.invalidRecords, 1); assert.equal(page.newerCursor, null);
-  await assert.rejects(appendPersonaChatReply(roleDir, { sessionId: 'task', turnId: 'next', text: 'not safely deduplicated' }), /unknown identity/);
+  const original = await fs.readFile(file);
+  const input = { sessionId: 'task', turnId: 'next', text: 'independent new reply' };
+  const appended = await appendPersonaChatReply(roleDir, input);
+  assert.ok(appended);
+  assert.equal(await appendPersonaChatReply(roleDir, input), null);
+  const after = await fs.readFile(file);
+  assert.ok(after.subarray(0, original.length).equals(original), 'the original partial bytes are not changed');
+  assert.equal(after[original.length], 10, 'a new separator isolates the old fragment');
+  const fresh = await readPersonaChatHistory(roleDir, undefined, 50, { summary: true });
+  assert.deepEqual(fresh.entries.map(row => row.text), ['independent new reply', 'retained']);
+  assert.equal(fresh.invalidRecords, 1);
 });
 
 
-test("oversized damaged row and failed writer do not hide unrelated replies", async t => {
+test("an oversized damaged row remains local while new replies can be written and replayed", async t => {
   const { roleDir } = await fixture(t);
-  await appendPersonaChatReply(roleDir, { sessionId: 'task', turnId: 'valid', text: 'retained' });
+  const retained = await appendPersonaChatReply(roleDir, { sessionId: 'task', turnId: 'valid', text: 'retained' });
   const file = path.join(roleDir, 'chat-history', 'final-replies.jsonl');
   await fs.appendFile(file, 'x'.repeat(3 * 1024 * 1024) + '\n');
-  const failingWrite = appendPersonaChatReply(roleDir, { sessionId: 'task', turnId: 'next', text: 'unverified' });
-  const read = readPersonaChatHistory(roleDir, undefined, 50, { summary: true });
-  await assert.rejects(failingWrite, /unknown identity/);
-  const page = await read; assert.equal(page.entries.length, 0); assert.equal(page.invalidRecords, 1);
-  const continuation = await readPersonaChatHistory(roleDir, page.nextCursor!, 50, { summary: true });
-  assert.equal(continuation.entries[0].text, 'retained');
-  const forward = await readPersonaChatHistory(roleDir, 0, 50, { summary: true, direction: 'newer' });
-  assert.equal(forward.entries[0].text, 'retained'); assert.equal(forward.invalidRecords, 1);
+  const original = await fs.readFile(file);
+  const input = { sessionId: 'task', turnId: 'next', text: 'accepted independent reply' };
+  const appended = await appendPersonaChatReply(roleDir, input);
+  assert.ok(appended);
+  assert.equal(await appendPersonaChatReply(roleDir, input), null);
+  assert.ok((await fs.readFile(file)).subarray(0, original.length).equals(original));
+  const retainedPage = await readPersonaChatHistory(roleDir, 0, 1, { direction: 'newer', id: retained!.id });
+  assert.equal(retainedPage.entries[0].text, 'retained');
+  const appendedPage = await readPersonaChatHistory(roleDir, original.length, 1, { direction: 'newer', id: appended!.id });
+  assert.equal(appendedPage.entries[0].text, input.text);
 });
 
 
@@ -203,4 +219,18 @@ test('category filtering pages through other channels without losing earlier mat
   assert.deepEqual((await readPersonaChatHistory(f.roleDir,0,100,{direction:'newer',category:'agent'})).entries.map(row=>row.text),['Agent message']);
   assert.deepEqual((await readPersonaChatHistoryCategories(f.roleDir)).sort(),['agent','panel','replies']);
   await assert.rejects(readPersonaChatHistory(f.roleDir,undefined,1,{category:'invalid' as any}),/Invalid chat history category/);
+});
+
+test("a complete old record missing only its newline is recovered before replay deduplication", async t => {
+  const { roleDir } = await fixture(t);
+  const input = { sessionId: 'task', turnId: 'recovered', text: 'original complete reply' };
+  await appendPersonaChatReply(roleDir, input);
+  const file = path.join(roleDir, 'chat-history', 'final-replies.jsonl');
+  const complete = await fs.readFile(file);
+  await fs.truncate(file, complete.length - 1);
+  assert.equal(await appendPersonaChatReply(roleDir, input), null);
+  assert.deepEqual(await fs.readFile(file), complete, 'only the missing separator is restored');
+  const page = await readPersonaChatHistory(roleDir, undefined, 50, { summary: true });
+  assert.equal(page.entries.length, 1);
+  assert.equal(page.entries[0].text, input.text);
 });

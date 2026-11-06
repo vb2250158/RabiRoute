@@ -3,8 +3,8 @@ import http from "node:http";
 import fs from "node:fs";
 import type { AddressInfo } from "node:net";
 import test, { type TestContext } from "node:test";
-import type { RabiApiContext } from "./rabiApi.js";
-import { createRabiControlOperations } from "./rabiApiOperations.js";
+import type { RabiApiContext } from "../plugins/io.rabiroute.manager.route-control/src/manager/rabiApi.js";
+import { createRabiControlOperations } from "../plugins/io.rabiroute.manager.route-control/src/manager/rabiApiOperations.js";
 import { ManagerPluginRouteRegistry } from "./managerPluginRouteRegistry.js";
 import { markAuthenticatedConnectionRequest } from "./connectionRequestAccess.js";
 import { readRabiLinkHome, RabiLinkHomeError } from "./rabiLinkHome.js";
@@ -12,12 +12,13 @@ import type { RabiLinkRelayGlobalConfig } from "./globalConfig.js";
 
 
 test("route-control installs link home from the same executable operation definitions", () => {
-  const plugin = fs.readFileSync(new URL("../../plugins/builtin/io.rabiroute.manager.route-control/1.0.0/manager.mjs", import.meta.url), "utf8");
-  assert.match(plugin, /host\.manager\.route-control-registration@1/);
-  assert.match(plugin, /runtime\.prepareRegistration\(\)/);
-  const registration = fs.readFileSync(new URL("../plugin-runtime-host/routeControlAsyncRegistration.ts", import.meta.url), "utf8");
-  assert.match(registration, /registerOperationsAsync/);
-  assert.match(registration, /original\.createRabiControlOperations\(\)/);
+  const plugin = fs.readFileSync(new URL("../plugins/io.rabiroute.manager.route-control/manager.mjs", import.meta.url), "utf8");
+  assert.match(plugin, /host\.manager\.route-control@2/);
+  assert.match(plugin, /await shared\.prepareModules\(hostModules\)/);
+  assert.match(plugin, /createImplementation\(shared\)\.createOwnedRuntime\(shared\)/);
+  assert.match(plugin, /await runtime\.managerPluginRoutes\.registerOperationsAsync\(context\.identity\.instanceId, runtime\.createRabiControlOperations\(\), context\.lifecycle\.signal\)/);
+  const owned = fs.readFileSync(new URL("../plugins/io.rabiroute.manager.route-control/hostRuntime.mjs", import.meta.url), "utf8");
+  assert.match(owned, /createRabiControlOperations:\s*\(\) => createRabiControlOperations\(/);
   assert.doesNotMatch(plugin, /handleRabiApi|pathPrefix:|routeId:/);
 });
 

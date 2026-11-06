@@ -1,0 +1,13 @@
+{
+  "exports": [
+    {
+      "name": "requestLocalSpeech",
+      "hostModule": "speech/localSpeechClient"
+    }
+  ],
+  "ownedSources": [],
+  "packageId": "io.rabiroute.endpoint.speech",
+  "ownedPrefixes": [
+    "src/plugins/io.rabiroute.endpoint.speech/"
+  ]
+}

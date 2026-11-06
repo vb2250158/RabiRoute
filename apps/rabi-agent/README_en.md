@@ -6,6 +6,30 @@
 
 # Rabi Agent
 
+## Windows process identities and runtime bundle
+
+The formal Windows entry uses `RabiAgent.Runtime.exe` for the main program and connector. The tray, terminal host and computer helper use `RabiAgent.Tray.exe`, `RabiAgent.Terminal.exe` and `RabiAgent.Computer.exe`, each with the Rabi icon and a purpose-specific product name. One main program still owns these processes; independently launched Codex/DSH applications retain their own lifecycles.
+
+The explicit Windows bundle contains the selected Node version/architecture and npm. Developers run the full build first, then:
+
+```powershell
+node scripts/build-agent-windows-runtime.mjs --node-root "<official-node-directory>" --expected-node-version 22.17.1 --expected-node-architecture x64 --output-root "<new-local-candidate>"
+```
+
+Start an existing connection with:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File "<windows-bundle>\desktop\start-windows.ps1" -Config "<private-data>\config.json"
+```
+
+For first enrollment, add `-Bootstrap` after configuring the ticket and environment from the original installation prompt. Existing identity and credential recovery rules still apply. The interpreter is prepared beside the configuration at the stable `runtime/windows-<arch>` path, with npm in its adjacent `node_modules/npm`; login startup uses that same branded interpreter directly. The startup script exits after handing over, without a persistent PowerShell parent or alternate owner. Repeated starts reuse the existing main program.
+
+The runtime provides a neighboring `node.exe` compatibility filename for npm package scripts, sharing the branded interpreter's bytes, version, icon and Windows display name. Package scripts therefore do not fall back to another system Node version.
+
+Runtime replacement prepares a complete candidate before an atomic switch. An active original main program or an image still mapped by Windows leaves the prior runtime intact; stop through its original owner before adopting the new bundle. Ordinary connector-code updates retain their existing contract and do not silently change Node versions or batch-upgrade computers. Windows-specific runtime binaries are excluded from the generic `node` source release; macOS/Linux retain their original entry.
+
+Older signed releases without native EXEs retain their existing PowerShell hosts until the minimum supported release requires native assets. Build, isolated execution and adoption by an enrolled computer require separate acceptance; these source changes do not mean all existing nodes have switched.
+
 The connector reads timeout settings from identity-verified `/meta.timeoutOverrides`. Its existing endpoint configuration owner persists `timeoutOverridesCache`. WebGUI settings control ordinary requests, sends, uploads, downloads, discovery, and local delivery-control waits. Ordinary requests adopt the settings after verification; uploads/downloads freeze their budget at operation start. The first operation without a cache uses defaults and the next operation uses the verified cache. Explicit per-call `timeoutMs` and cancellation signals still bound that operation. This cache supports offline startup; it is not a separate configuration source. Restoring defaults removes cached overrides.
 
 Connector 0.2.11 refreshes the stable launcher from the committed successor before reporting update success. Preparation and connection leave the old launcher intact. A post-commit write failure exits abnormally for recovery by the existing owner, retaining identity, credentials and tasks instead of leaving old control code until a manual restart.

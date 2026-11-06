@@ -46,4 +46,4 @@ Agent 的 `send` 与 `reconcile_delivery` 进入 `createAgentEndpointDelivery` �
 
 如果关联的原待回复请求已取消，此接口同样返回 HTTP 200 和 `authorized: false`，但 `state` 保留真实投递状态：原投递已是 `committed` 时继续为 `committed`，原账本中的接收回执保持不变，不能改写为 `cancelled` 或“未接收”。该响应只供查询和核对终止证据，不授权新的派发，也不新增回执实体或正文。尚未确认接收而已取消的投递仍按上述 `cancelled` 分支处理。
 
-实现入口：`src/manager/agentEndpointDelivery.ts`、`src/agentRequests/endpointDelivery.ts`、`src/agentRequests/ownerExecution.ts` 与 `src/manager/deviceAgentEndpointBridge.ts`。设备接入见 [原生设备 Agent](device-agent-adapter.md)。
+实现入口：`src/manager/agentEndpointDelivery.ts`、`src/agentRequests/endpointDelivery.ts`、`src/agentRequests/ownerExecution.ts` 与 `src/plugins/io.rabiroute.agent.device-agent/src/manager/deviceAgentEndpointBridge.ts`。设备接入见 [原生设备 Agent](device-agent-adapter.md)。

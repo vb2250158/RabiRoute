@@ -7,11 +7,11 @@ const mainSource = fs.readFileSync(new URL("../src/main.ts", import.meta.url), "
 const pluginNavigationSource = fs.readFileSync(new URL("../src/pluginNavigation.ts", import.meta.url), "utf8");
 const pluginCatalogStoreSource = fs.readFileSync(new URL("../src/pluginCatalogStore.ts", import.meta.url), "utf8");
 const pluginPagesSource = fs.readFileSync(new URL("../src/pluginPages.ts", import.meta.url), "utf8");
-const personaSource = fs.readFileSync(new URL("../src/pages/PersonaTemplatePage.vue", import.meta.url), "utf8");
-const overviewSource = fs.readFileSync(new URL("../src/pages/OverviewPage.vue", import.meta.url), "utf8");
-const settingsSource = fs.readFileSync(new URL("../src/pages/SettingsPage.vue", import.meta.url), "utf8");
-const speechSource = fs.readFileSync(new URL("../src/pages/SpeechServicePage.vue", import.meta.url), "utf8");
-const desktopSettingsRendererSource = fs.readFileSync(new URL("../src/components/renderers/DesktopSettingsRenderer.vue", import.meta.url), "utf8");
+const personaSource = fs.readFileSync(new URL("../../src/plugins/io.rabiroute.manager.persona/web/pages/PersonaTemplatePage.vue", import.meta.url), "utf8");
+const overviewSource = fs.readFileSync(new URL("../../src/plugins/io.rabiroute.manager.core/web/pages/OverviewPage.vue", import.meta.url), "utf8");
+const settingsSource = fs.readFileSync(new URL("../../src/plugins/io.rabiroute.manager.core/web/pages/SettingsPage.vue", import.meta.url), "utf8");
+const speechSource = fs.readFileSync(new URL("../../src/plugins/io.rabiroute.manager.speech/web/pages/SpeechServicePage.vue", import.meta.url), "utf8");
+const desktopSettingsRendererSource = fs.readFileSync(new URL("../../src/plugins/io.rabiroute.manager.desktop/web/components/renderers/DesktopSettingsRenderer.vue", import.meta.url), "utf8");
 
 test("sidebar renders only catalog navigation backed by activated pages", () => {
   const primaryIndex = appSource.indexOf("const navItems = computed");

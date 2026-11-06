@@ -4,11 +4,11 @@ import test from 'node:test';
 
 const implementations = [
   'scripts/lib/timeout-settings.mjs',
-  'plugin-adapters/remote-agent-rabiroute/timeout-settings.mjs',
-  'plugins/rabi-codex-context/scripts/lib/timeout-settings.mjs',
-  'plugins/rabi-antigravity-context/scripts/lib/timeout-settings.mjs',
-  'plugins/rabi-workbuddy-context/scripts/lib/timeout-settings.mjs',
-  'plugins/rabi-dsh-context/timeout-settings.mjs'
+  'src/plugins/remote-agent-rabiroute/timeout-settings.mjs',
+  'src/plugins/rabi-codex-context/scripts/lib/timeout-settings.mjs',
+  'src/plugins/rabi-antigravity-context/scripts/lib/timeout-settings.mjs',
+  'src/plugins/rabi-workbuddy-context/scripts/lib/timeout-settings.mjs',
+  'src/plugins/rabi-dsh-context/timeout-settings.mjs'
 ];
 for (const filename of implementations) test(`${filename}: malformed preferences retain independent valid timeouts`, async t => {
   const warnings = [];

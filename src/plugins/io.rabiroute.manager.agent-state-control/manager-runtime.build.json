@@ -1,0 +1,15 @@
+{
+  "exports": [
+    {
+      "source": "src/plugins/io.rabiroute.manager.agent-state-control/hostRuntime.mjs",
+      "name": "createOwnedRuntime"
+    }
+  ],
+  "ownedPrefixes": [
+    "src/plugins/io.rabiroute.manager.agent-state-control/"
+  ],
+  "ownedSources": [
+    "src/plugins/io.rabiroute.manager.agent-state-control/src/manager/agentStateReportOperations.ts"
+  ],
+  "packageId": "io.rabiroute.manager.agent-state-control"
+}

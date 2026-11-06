@@ -50,4 +50,4 @@ artifact 内容使用原 descriptor、文件边界、读取审计和单段 HTTP 
 
 专属测试使用真实合同注册器、临时持久文件、真实空 Node 登记、受控 HA HTTP 与 MP4 sidecar。验证原凭据连接、设备/资源目录、dry-run 动作及原键回执读回、Range 字节与头、HTML nonce、SSE 退役、pending read 撤权、上游打开前后取消和原生订阅等待。测试不调用真实 HA、云账号、家居设备、进程安装或 Agent 消息投递。
 
-这些证据不证明真实摄像头可用、地图定位实时、设备已经执行动作或正式安装版已更新。功能成熟度与实际使用见[插件说明](../plugins/builtin/io.rabiroute.manager.xiaomi-home/1.0.0/README.md)；整体迁移见[目标架构](api-contract-discovery-target-architecture.md)。
+这些证据不证明真实摄像头可用、地图定位实时、设备已经执行动作或正式安装版已更新。功能成熟度与实际使用见[插件说明](../src/plugins/io.rabiroute.manager.xiaomi-home/README.md)；整体迁移见[目标架构](api-contract-discovery-target-architecture.md)。

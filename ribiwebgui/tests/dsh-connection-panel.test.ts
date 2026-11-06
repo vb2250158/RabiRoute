@@ -47,13 +47,13 @@ test("remote pages cannot present local authorization as their own computer", ()
   assert.throws(() => cleanDshOrigin("http://localhost:3333/?token=fixture"));
 });
 test("panel clears secrets, loads once, has no timers and never changes session binding", () => {
-  const component = fs.readFileSync(new URL("../src/components/DshConnectionPanel.vue", import.meta.url), "utf8");
+  const component = fs.readFileSync(new URL("../../src/plugins/io.rabiroute.agent.dsh/web/components/DshConnectionPanel.vue", import.meta.url), "utf8");
   assert.match(component, /type="password"/);
   assert.match(component, /onMounted\(refresh\)/);
   assert.match(component, /finally \{ launchUrl.value = ""/);
   assert.doesNotMatch(component, /localStorage|sessionStorage|console\.|setInterval|setTimeout|sessionId|session\/prompt/);
   assert.match(component, /不会删除 DSH 会话/);
-  const page = fs.readFileSync(new URL("../src/agentAdapters/DshAgentCard.vue", import.meta.url), "utf8");
+  const page = fs.readFileSync(new URL("../../src/plugins/io.rabiroute.agent.dsh/web/agentAdapters/DshAgentCard.vue", import.meta.url), "utf8");
   assert.match(page, /<DshConnectionPanel/);
   assert.doesNotMatch(page, /DSH 扫描会读取 <code>RabiRoute Agent/);
 });

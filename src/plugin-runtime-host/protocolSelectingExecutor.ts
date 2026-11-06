@@ -1,4 +1,4 @@
-import { fork, type ChildProcess } from "node:child_process";
+import { type ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -95,9 +95,9 @@ export class ProtocolSelectingIsolatedExecutor implements PluginExecutor {
         },
         runWithIdentity: runPluginActivation,
         launch: (entry, originalIdentity) => {
-          const lease = this.leases.launch(originalIdentity, "isolated-plugin-runtime-v2", () => fork(entry, [], {
+          const lease = this.leases.launch(originalIdentity, "isolated-plugin-runtime-v2", { kind: "fork", entry, options: {
             ...{ windowsHide: true }, serialization: "advanced", stdio: ["ignore", "ignore", "ignore", "ipc"], execArgv: [], env: {}
-          }), { maxChildProcesses: candidate.policy?.resources.maxChildProcesses ?? 2 });
+          } }, { maxChildProcesses: candidate.policy?.resources.maxChildProcesses ?? 2 });
           leasesByChild.set(lease.child, lease); return lease.child;
         },
         terminate: async child => { const lease = leasesByChild.get(child); if (!lease) throw new Error("Original child has no process lease."); await this.leases.terminate(lease); },

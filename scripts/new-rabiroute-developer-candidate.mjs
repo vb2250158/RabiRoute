@@ -23,7 +23,7 @@ const retiredRelayFiles = Object.freeze(['scripts/rabilink-knowledge-grant.mjs',
 const developerMaintenanceFiles = Object.freeze([
   'scripts/Invoke-RabiRouteDeveloperApply.ps1',
   'scripts/Publish-RabiRouteDeveloperCandidate.ps1',
-  'scripts/Install-HomeAssistantOs.ps1'
+  'src/plugins/io.rabiroute.manager.xiaomi-home/scripts/Install-HomeAssistantOs.ps1'
 ]);
 
 function readRelayRuntimeFiles(root) {
@@ -146,7 +146,7 @@ function createDeveloperCandidate(options) {
       fs.mkdirSync(path.dirname(destination), { recursive: true });
       fs.copyFileSync(requireFile(buildRoot, relative), destination);
     }
-    const speechRelative = "plugin-adapters/rabi-speech";
+    const speechRelative = "src/plugins/rabi-speech";
     if (fs.existsSync(path.join(baseRoot, speechRelative, "rabispeech"))) {
       const baseRequirements = fs.readFileSync(requireFile(baseRoot, `${speechRelative}/requirements.txt`));
       const nextRequirements = fs.readFileSync(requireFile(buildRoot, `${speechRelative}/requirements.txt`));

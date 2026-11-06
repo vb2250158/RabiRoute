@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import type http from "node:http";
 import test from "node:test";
-import { createAgentCommunicationRoutes, type AgentCommunicationRoutesContext } from "./agentCommunicationRoutes.js";
+import { createAgentCommunicationRoutes, type AgentCommunicationRoutesContext } from "../plugins/io.rabiroute.manager.agent-communication/src/manager/agentCommunicationRoutes.js";
 import { registerLanAgentBodyGuard, setTrustedLanAgentSource, type TrustedLanAgentSource } from "./lanAgentBodyAuthority.js";
 import { listAgentApiOperations } from "./agentApiPolicy.js";
 

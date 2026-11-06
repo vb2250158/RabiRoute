@@ -8,7 +8,7 @@ import { compileApiOperation } from "./apiOperationContract.js";
 import { fixtureApiContract } from "./apiOperationContractFixtures.js";
 import { ManagerPluginRouteRegistry } from "./managerPluginRouteRegistry.js";
 import { apiCatalogOpenApi } from "./apiOperationCatalog.js";
-import { createApiDiscoveryOperations } from "./apiDiscoveryRoutes.js";
+import { createApiDiscoveryOperations } from "../plugins/io.rabiroute.manager.agent-communication/src/manager/apiDiscoveryRoutes.js";
 
 const template = "/api/files/:version/:assetPath";
 const tails = ["assetPath"];

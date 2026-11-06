@@ -25,7 +25,12 @@ type Publication = { publish(): void; retire(): Promise<void>; afterPublish(inpu
 const deferred = () => { let resolve!: () => void; const promise = new Promise<void>(done => { resolve = done; }); return { promise, resolve }; };
 const turn = () => new Promise<void>(resolve => setImmediate(resolve));
 async function activateBackground(kind: "memory-consolidation" | "plan-feedback-delivery", readOnly = false) {
-  const plugin = await import(pathToFileURL(path.join(repositoryRoot, "plugins/builtin/io.rabiroute.manager." + kind + "/1.0.0/manager.mjs")).href);
+  const entry = path.join(repositoryRoot, "src/plugins/io.rabiroute.manager." + kind + "/manager.mjs");
+  const sdk = pathToFileURL(path.join(repositoryRoot, "plugins/contracts/plugin-sdk/index.mjs")).href;
+  const source = fs.readFileSync(entry, "utf8")
+    .replace('import { createImplementation, hostModules } from "./manager-runtime.mjs";', 'const hostModules = []; const createImplementation = shared => ({ createOwnedRuntime: () => shared.fixtureRuntime });')
+    .replace('from "@rabiroute/plugin-sdk"', `from ${JSON.stringify(sdk)}`);
+  const plugin = await import("data:text/javascript;base64," + Buffer.from(source).toString("base64"));
   const publications: Publication[] = [], effects: Array<() => unknown> = [];
   const lifecycle = new AbortController(); let constructions = 0, starts = 0, activations = 0, manualStops = 0;
   const runtime: any = {
@@ -45,15 +50,15 @@ async function activateBackground(kind: "memory-consolidation" | "plan-feedback-
   };
   Object.defineProperty(runtime, "managerListenerReady", { get() { throw new Error("Listener readiness must not start background work."); } });
   await plugin.activate({ identity: { instanceId: "controlled-background" }, lifecycle: { signal: lifecycle.signal, fail(error: unknown) { throw error; } },
-    services: { require: () => runtime, provide: () => {} }, effects: { add: (starter: () => unknown) => effects.push(starter) },
+    services: { require: () => ({ prepareModules: async () => {}, fixtureRuntime: runtime }), provide: () => {} }, effects: { add: (starter: () => unknown) => effects.push(starter) },
     publication: { add: (owner: Publication) => publications.push(owner) } });
   for (const effect of effects) assert.equal(typeof await effect(), "function");
   return { runtime, publications, lifecycle, counts: () => ({ constructions, starts, activations, manualStops }) };
 }
 
 test("background plugins register services but never start from listener readiness", async () => {
-  const memory = read("plugins/builtin/io.rabiroute.manager.memory-consolidation/1.0.0/manager.mjs");
-  const feedback = read("plugins/builtin/io.rabiroute.manager.plan-feedback-delivery/1.0.0/manager.mjs");
+  const memory = read("src/plugins/io.rabiroute.manager.memory-consolidation/manager.mjs");
+  const feedback = read("src/plugins/io.rabiroute.manager.plan-feedback-delivery/manager.mjs");
   assert.doesNotMatch(memory, /managerListenerReady|scheduler\.start\s*\(/);
   assert.doesNotMatch(feedback, /managerListenerReady|manager plugin activation/);
   assert.match(feedback, /recovery\.start\("plan and route readiness"\)/);
@@ -135,6 +140,7 @@ test("Manager gives every child one dynamic READY identity tuple", () => {
 
 test("plan-storage commands validate the active generation without blocking the Gateway runtime", () => {
   const gatewayCommands = read("src/gatewayCommands.ts");
+  assert.doesNotMatch(gatewayCommands, /buildXiaomiHomeEventRecord|xiaomiHomeEventTemplateValues|plugins\/io\.rabiroute\.manager\.xiaomi-home/);
   assert.match(gatewayCommands, /\.\/runtime\/planStorageGenerationFence\.js/);
   assert.doesNotMatch(gatewayCommands, /\.\/manager\/planStorageGenerationFence\.js/);
   assert.match(gatewayCommands, /planStorageGenerationLeaseFromEnvironment\(\)/);
@@ -154,17 +160,17 @@ test("plan-storage commands validate the active generation without blocking the 
   assert.match(read("src/manager/storageStartupChild.ts"), /migrateRolePlanLayoutAtStartup/);
 });
 
-test("Xiaomi Home event children verify the READY generation before reading or delivering an event", () => {
+test("system event children verify the READY generation before reading or delivering an event", () => {
   const gatewayCommands = read("src/gatewayCommands.ts");
-  const start = gatewayCommands.indexOf('if (argv.includes("--xiaomi-home-event-stdin"))');
+  const start = gatewayCommands.indexOf('if (argv.includes(SYSTEM_EVENT_STDIN_FLAG))');
   const end = gatewayCommands.indexOf('if (argv.includes("--wearable-health-alert-stdin"))', start);
-  assert.ok(start >= 0 && end > start, "Xiaomi Home stdin command block is missing");
+  assert.ok(start >= 0 && end > start, "System event stdin command block is missing");
   const command = gatewayCommands.slice(start, end);
   const lease = command.indexOf("planStorageGenerationLeaseFromEnvironment()");
   const verification = command.indexOf("await verifyPlanStorageGenerationLease(storageGenerationLease)");
-  const stdinRead = command.indexOf("await readStandardInputJson<XiaomiHomeEventCliPayload>()");
-  const delivery = command.search(/await forwardMessageAndWait\(\s*"xiaomi_home_event"/);
-  assert.ok(lease >= 0 && verification > lease, "Xiaomi Home child does not verify its Manager generation lease");
-  assert.ok(stdinRead > verification, "Xiaomi Home child reads work before its generation is verified");
-  assert.ok(delivery > stdinRead, "Xiaomi Home child delivery is not fenced behind generation verification");
+  const stdinRead = command.indexOf("await readStandardInputJson<SystemEventIngress>()");
+  const delivery = command.search(/await forwardMessageAndWait\(\s*payload.routeKind/);
+  assert.ok(lease >= 0 && verification > lease, "System event child does not verify its Manager generation lease");
+  assert.ok(stdinRead > verification, "System event child reads work before its generation is verified");
+  assert.ok(delivery > stdinRead, "System event child delivery is not fenced behind generation verification");
 });

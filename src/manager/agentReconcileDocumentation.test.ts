@@ -4,8 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import http from "node:http";
-import { createAgentThreadControlOwner, type AgentThreadControlRoutesContext } from "./agentThreadControlRoutes.js";
-import { createAgentThreadControlOperations } from "./agentThreadControlOperations.js";
+import { createAgentThreadControlOwner, type AgentThreadControlRoutesContext } from "../plugins/io.rabiroute.manager.agent-thread-control/src/manager/agentThreadControlRoutes.js";
+import { createAgentThreadControlOperations } from "../plugins/io.rabiroute.manager.agent-thread-control/src/manager/agentThreadControlOperations.js";
 import { ManagerPluginRouteRegistry } from "./managerPluginRouteRegistry.js";
 import { handleAgentThreadRequest, type AgentThreadRequest } from "../agentThreads.js";
 import { AgentRequestStore } from "../agentRequests/store.js";
@@ -91,7 +91,7 @@ for (const filename of ["rabi-agent-interfaces.md", "rabi-agent-interfaces_en.md
       handleAgentThreadRequest,
       agentThreadRequestFailureData: error => ({ error: String(error) }),
       setMessageProcessingPlanBaseline: () => {},
-      refreshAgentRequestReminderTimers: () => {}, publishManagerEvent: () => {},
+      publishManagerEvent: () => {},
       operationalLog: { record: () => null }, operationalError: () => undefined
     } as AgentThreadControlRoutesContext);
     const routes = new ManagerPluginRouteRegistry(), registration = routes.registerOperations("fixture-reconcile-doc", createAgentThreadControlOperations(owner));

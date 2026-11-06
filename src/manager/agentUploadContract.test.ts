@@ -9,7 +9,7 @@ import path from "node:path";
 import { getAgentUploadContract } from "./agentUploadContract.js";
 import { listAgentApiOperations } from "./agentApiPolicy.js";
 import { AgentUploadStore } from "./agentUploadStore.js";
-import { createAgentUploadRoutes } from "./agentUploadRoutes.js";
+import { createAgentUploadRoutes } from "../plugins/io.rabiroute.manager.agent-communication/src/manager/agentUploadRoutes.js";
 import { setTrustedLanAgentSource } from "./lanAgentBodyAuthority.js";
 import { ManagerPluginRouteRegistry } from "./managerPluginRouteRegistry.js";
 

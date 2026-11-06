@@ -263,8 +263,10 @@ export type SpeechAudioStreamStatus = {
   enabled: boolean;
   listening: boolean;
   port: number;
-  source: "local" | "remote";
+  source: "local" | "remote" | "unavailable";
   selectedClientId: string | null;
+  selectionStorageError?: string | null;
+  selectionRecovery?: { id: string; sha256: string } | null;
   selectedOnline: boolean;
   captureEnabled: boolean;
   clients: SpeechAudioStreamClient[];

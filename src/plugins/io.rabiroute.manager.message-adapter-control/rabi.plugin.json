@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 2,
+  "id": "io.rabiroute.manager.message-adapter-control",
+  "version": "0.1.1",
+  "displayName": "消息端发现",
+  "description": "扫描已安装消息端与可用连接",
+  "icon": "mdi-connection",
+  "entries": {
+    "manager": {
+      "execution": "in_process",
+      "module": "./manager.mjs"
+    },
+    "web": {
+      "execution": "in_process",
+      "module": "./web/client.mjs"
+    }
+  },
+  "provides": [
+    "manager.message-adapter-control@1"
+  ],
+  "requires": [
+    "host.manager.message-adapter-control@2",
+    "manager.core@1",
+    "manager.gateway-runtime@1"
+  ],
+  "optional": [],
+  "permissions": []
+}

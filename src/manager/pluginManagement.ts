@@ -55,6 +55,8 @@ export function createPluginManagement(options: {
       applicationGenerationId: generation.applicationGenerationId,
       managerInstanceId: generation.managerInstanceId,
       revision: snapshot.revision,
+      profileMigrations: snapshot.profile.migrations ?? [],
+      profileDiagnostics: snapshot.profile.diagnostics ?? [],
       instances: snapshot.profile.instances.map((instance, index) => {
         const active = records.get(instance.id), loaded = metadata[index]!;
         const failure = settingErrors.get(instance.id) ?? active?.error ?? unconfirmed.get(instance.id) ?? loaded.error;

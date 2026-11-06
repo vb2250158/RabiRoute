@@ -5,7 +5,7 @@ import test from "node:test";
 
 test("history displays actor before action/date and separates navigation from disclosure", () => {
   const root = path.resolve(import.meta.dirname, "..");
-  const page = fs.readFileSync(path.join(root, "src/pages/RoleKnowledgePage.vue"), "utf8");
+  const page = fs.readFileSync(path.join(root, "../src/plugins/io.rabiroute.manager.persona/web/pages/RoleKnowledgePage.vue"), "utf8");
   const history = page.slice(page.indexOf('<details v-for="record in planHistoryRecords'));
   assert.ok(history.indexOf("historyActorLabel(record)") < history.indexOf("planHistoryLabel(record)"));
   assert.ok(history.indexOf("planHistoryLabel(record)") < history.indexOf("formatDate(record.recordedAt)"));

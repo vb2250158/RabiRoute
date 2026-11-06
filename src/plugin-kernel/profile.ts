@@ -35,6 +35,22 @@ export type PluginProfile = Readonly<{
   schemaVersion: 2;
   readyRequires: readonly string[];
   instances: readonly PluginProfileEntry[];
+  diagnostics?: readonly PluginProfileDiagnostic[];
+  migrations?: readonly PluginProfileMigration[];
+}>;
+export type PluginProfileDiagnostic = Readonly<{
+  source: "profile" | "package-migrations";
+  rowIndex: number;
+  instanceId?: string;
+  packageId?: string;
+  version?: string;
+  message: string;
+}>;
+export type PluginProfileMigration = Readonly<{
+  instanceId: string;
+  packageId: string;
+  fromVersion: string;
+  toVersion: string;
 }>;
 
 const DEFAULT_RESTART_POLICY: PluginRestartPolicy = Object.freeze({
@@ -126,30 +142,97 @@ export function parsePluginProfile(value: unknown): PluginProfile {
   if (unknown.length) throw new Error(`Plugin profile contains unsupported fields: ${unknown.sort().join(", ")}.`);
   if (raw.schemaVersion !== 2) throw new Error(`Unsupported plugin profile schema: ${String(raw.schemaVersion)}.`);
   if (!Array.isArray(raw.instances)) throw new Error("Plugin profile instances must be an array.");
-  const seen = new Set<string>();
-  const instances = raw.instances.map((value, index) => {
-    const item = record(value, `Plugin profile instances[${index}]`);
-    const unsupported = Object.keys(item).filter(key => !["id", "package", "version", "enabled", "config", "grants", "policy"].includes(key));
-    if (unsupported.length) throw new Error(`Plugin profile instances[${index}] contains unsupported fields: ${unsupported.join(", ")}.`);
-    const instanceId = id(item.id, `Plugin profile instances[${index}].id`);
-    if (seen.has(instanceId)) throw new Error(`Duplicate plugin profile instance: ${instanceId}.`);
-    seen.add(instanceId);
-    if (item.enabled !== undefined && typeof item.enabled !== "boolean") throw new Error(`Plugin profile instances[${index}].enabled must be a boolean.`);
-    return Object.freeze({
-      id: instanceId,
-      package: id(item.package, `Plugin profile instances[${index}].package`),
-      version: version(item.version, `Plugin profile instances[${index}].version`),
-      enabled: item.enabled !== false,
-      config: json(item.config),
-      grants: grants(item.grants, `Plugin profile instances[${index}].grants`),
-      policy: policy(item.policy, `Plugin profile instances[${index}].policy`)
-    });
+  const rows = raw.instances;
+  const identities = rows.map(value => {
+    try { return id(record(value, "Plugin profile instance").id, "Plugin profile instance.id"); }
+    catch { return undefined; }
   });
-  return Object.freeze({ schemaVersion: 2, readyRequires: readyRequires(raw.readyRequires), instances: Object.freeze(instances) });
+  const counts = new Map<string, number>();
+  for (const identity of identities) if (identity) counts.set(identity, (counts.get(identity) ?? 0) + 1);
+  const diagnostics: PluginProfileDiagnostic[] = [];
+  const instances: PluginProfileEntry[] = [];
+  rows.forEach((value, index) => {
+    try {
+      const item = record(value, `Plugin profile instances[${index}]`);
+      const unsupported = Object.keys(item).filter(key => !["id", "package", "version", "enabled", "config", "grants", "policy"].includes(key));
+      if (unsupported.length) throw new Error(`Plugin profile instances[${index}] contains unsupported fields: ${unsupported.join(", ")}.`);
+      const instanceId = id(item.id, `Plugin profile instances[${index}].id`);
+      if (counts.get(instanceId)! > 1) throw new Error(`Duplicate plugin profile instance: ${instanceId}.`);
+      if (item.enabled !== undefined && typeof item.enabled !== "boolean") throw new Error(`Plugin profile instances[${index}].enabled must be a boolean.`);
+      instances.push(Object.freeze({
+        id: instanceId,
+        package: id(item.package, `Plugin profile instances[${index}].package`),
+        version: version(item.version, `Plugin profile instances[${index}].version`),
+        enabled: item.enabled !== false,
+        config: json(item.config),
+        grants: grants(item.grants, `Plugin profile instances[${index}].grants`),
+        policy: policy(item.policy, `Plugin profile instances[${index}].policy`)
+      }));
+    } catch (error) {
+      // A row's position is a diagnostic locator, never a fabricated instance identity.
+      const item = value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+      diagnostics.push(Object.freeze({ source: "profile", rowIndex: index,
+        ...(identities[index] ? { instanceId: identities[index] } : {}),
+        ...(typeof item.package === "string" ? { packageId: item.package } : {}),
+        ...(typeof item.version === "string" ? { version: item.version } : {}),
+        message: error instanceof Error ? error.message : String(error) }));
+    }
+  });
+  return Object.freeze({ schemaVersion: 2, readyRequires: readyRequires(raw.readyRequires), instances: Object.freeze(instances),
+    ...(diagnostics.length ? { diagnostics: Object.freeze(diagnostics) } : {}) });
 }
 
-export async function readPluginProfile(profilePath: string): Promise<PluginProfile> {
-  return parsePluginProfile(JSON.parse(await fs.readFile(profilePath, "utf8")) as unknown);
+export async function readPluginProfile(profilePath: string, options: Readonly<{ migrationsPath?: string }> = {}): Promise<PluginProfile> {
+  const profileValue: unknown = JSON.parse(await fs.readFile(profilePath, "utf8"));
+  const profile = parsePluginProfile(profileValue);
+  const migrationsPath = options.migrationsPath ?? path.join(path.dirname(profilePath), "package-migrations.json");
+  let migrationText: string;
+  try { migrationText = await fs.readFile(migrationsPath, "utf8"); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return profile; throw error; }
+  let migrationValue: unknown;
+  try { migrationValue = JSON.parse(migrationText); }
+  catch (error) { if (error instanceof SyntaxError) throw new Error("Plugin package migrations contain invalid JSON."); throw error; }
+  const raw = record(migrationValue, "Plugin package migrations");
+  if (raw.schemaVersion !== 1 || !Array.isArray(raw.packages)) throw new Error("Unsupported plugin package migrations schema.");
+  const diagnostics: PluginProfileDiagnostic[] = [...(profile.diagnostics ?? [])];
+  const mappings = new Map<string, Set<string>>();
+  raw.packages.forEach((value, rowIndex) => {
+    try {
+      const rule = record(value, `Plugin package migrations packages[${rowIndex}]`);
+      const packageId = id(rule.packageId, "Plugin package migration packageId");
+      const toVersion = version(rule.toVersion, "Plugin package migration toVersion");
+      if (!Array.isArray(rule.fromVersions) || !rule.fromVersions.length) throw new Error("Plugin package migration fromVersions must be a nonempty array.");
+      const fromVersions = rule.fromVersions.map(value => version(value, "Plugin package migration fromVersion"));
+      for (const fromVersion of fromVersions) {
+        const key = JSON.stringify([packageId, fromVersion]);
+        const targets = mappings.get(key) ?? new Set<string>();
+        targets.add(toVersion); mappings.set(key, targets);
+      }
+    } catch (error) {
+      diagnostics.push(Object.freeze({ source: "package-migrations", rowIndex,
+        message: error instanceof Error ? error.message : String(error) }));
+    }
+  });
+  const migrations: PluginProfileMigration[] = [];
+  const instances = profile.instances.flatMap(instance => {
+    const targets = mappings.get(JSON.stringify([instance.package, instance.version]));
+    if (!targets) return [instance];
+    if (targets.size > 1) {
+      const rowIndex = (profileValue as { instances: Record<string, unknown>[] }).instances
+        .findIndex(row => typeof row?.id === "string" && row.id.trim() === instance.id);
+      diagnostics.push(Object.freeze({ source: "profile", rowIndex, instanceId: instance.id, packageId: instance.package,
+        version: instance.version, message: `Conflicting package migrations for ${instance.package}@${instance.version}.` }));
+      return [];
+    }
+    const toVersion = [...targets][0]!;
+    if (toVersion === instance.version) return [instance];
+    migrations.push(Object.freeze({ instanceId: instance.id, packageId: instance.package, fromVersion: instance.version, toVersion }));
+    return [Object.freeze({ ...instance, version: toVersion })];
+  });
+  // Effective package references change only in memory. The profile owner retains its original file and business state.
+  return Object.freeze({ ...profile, instances: Object.freeze(instances),
+    ...(diagnostics.length ? { diagnostics: Object.freeze(diagnostics) } : {}),
+    ...(migrations.length ? { migrations: Object.freeze(migrations) } : {}) });
 }
 
 export class PluginPackageCatalog {
@@ -230,17 +313,21 @@ export type LoadedPluginProfile = Readonly<{
 }>;
 
 export type PluginProfileLoadFailure = Readonly<{
-  instanceId: string;
-  packageId: string;
-  version: string;
+  instanceId?: string;
+  packageId?: string;
+  version?: string;
+  rowIndex?: number;
+  source?: PluginProfileDiagnostic["source"];
   retainedRevision?: string;
-  error: Readonly<{ code: "package_load_failed"; message: string }>;
+  error: Readonly<{ code: "package_load_failed" | "profile_instance_invalid"; message: string }>;
 }>;
 
 export async function loadPluginProfile(input: Readonly<{
   profilePath: string;
   packageCatalog: PluginPackageCatalog;
   runtimeRoot: string;
+  /** A host preparation failure retires this package/instance instead of retaining its previous candidate. */
+  preparationFailure?: (packageId: string, instanceId?: string) => Error | undefined;
   host: PluginHost;
   /** Only successfully loaded immutable packages from the preceding reconciliation. */
   previous?: LoadedPluginProfile;
@@ -288,6 +375,11 @@ export async function loadPluginProfile(input: Readonly<{
   }
   const reuseAdmissions = new Map<string, PromiseSettledResult<void>>();
   const packageResults = new Map<string, PromiseSettledResult<LoadedPluginPackage>>();
+  const packagePreparationFailures = new Map<string, Error>();
+  const preparationFailure = (packageId: string, instanceId?: string): Error | undefined => {
+    try { return input.preparationFailure?.(packageId, instanceId); }
+    catch (error) { return error instanceof Error ? error : new Error(String(error)); }
+  };
   let next = 0;
   // Backpressure belongs to this batch producer. A large valid Profile must not
   // flood the catalog queue or give duplicate failing packages both producer lanes.
@@ -298,6 +390,8 @@ export async function loadPluginProfile(input: Readonly<{
       let result: PromiseSettledResult<LoadedPluginPackage>;
       const current = reusable.get(key);
       try {
+        const failure = preparationFailure(instance.package);
+        if (failure) { packagePreparationFailures.set(key, failure); throw failure; }
         if (current) {
           try {
             await input.packageCatalog.assertPackageExecutionAllowed(current);
@@ -319,10 +413,15 @@ export async function loadPluginProfile(input: Readonly<{
   if (failedLane?.status === "rejected") throw failedLane.reason;
   assertCurrent();
   const loaded: Array<Readonly<{ instance: PluginProfileEntry; package: LoadedPluginPackage; candidate: PluginCandidate }>> = [];
-  const loadFailures: PluginProfileLoadFailure[] = [];
+  const loadFailures: PluginProfileLoadFailure[] = (profile.diagnostics ?? []).map(({ message, ...diagnostic }) => Object.freeze({
+    ...diagnostic, error: Object.freeze({ code: "profile_instance_invalid" as const, message })
+  }));
   for (const instance of enabled) {
     assertCurrent();
-    const result = packageResults.get(JSON.stringify([instance.package, instance.version]))!;
+    const packageKey = JSON.stringify([instance.package, instance.version]);
+    const preparationError = packagePreparationFailures.get(packageKey) ?? preparationFailure(instance.package, instance.id);
+    const result: PromiseSettledResult<LoadedPluginPackage> = preparationError ? { status: "rejected", reason: preparationError }
+      : packageResults.get(packageKey)!;
     if (result.status === "fulfilled") {
       const plugin = result.value;
       const candidate: PluginCandidate = Object.freeze({
@@ -339,7 +438,7 @@ export async function loadPluginProfile(input: Readonly<{
     // failed revision's config, policy or grants to that old implementation.
     let retained = false;
     let failure = result.reason instanceof Error ? result.reason.message : String(result.reason);
-    if (previousCandidate && previousPackage) {
+    if (!preparationError && previousCandidate && previousPackage) {
       assertCurrent();
       let admission = reuseAdmissions.get(JSON.stringify([instance.package, instance.version]));
       if (!admission) {

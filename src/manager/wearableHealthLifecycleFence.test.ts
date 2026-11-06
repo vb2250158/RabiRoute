@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import type { AddressInfo } from "node:net";
-import { createPersonaHealthOperations } from "./personaHealthOperations.js";
+import { createPersonaHealthOperations } from "../plugins/io.rabiroute.manager.persona/src/manager/personaHealthOperations.js";
 import { ManagerPluginRouteRegistry } from "./managerPluginRouteRegistry.js";
 
 const applicationGenerationId = "application-generation-current";

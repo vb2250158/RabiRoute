@@ -1,0 +1,16 @@
+{
+  "exports": [
+    {
+      "source": "src/plugins/io.rabiroute.agent.workbuddy/src/agentAdapters/pluginImplementations/workbuddy.ts",
+      "name": "createAgentOperations"
+    }
+  ],
+  "ownedPrefixes": [
+    "src/plugins/io.rabiroute.agent.workbuddy/"
+  ],
+  "scopedEnvironment": true,
+  "hostSources": [
+    "src/agentAdapters/stateReporter.ts"
+  ],
+  "packageId": "io.rabiroute.agent.workbuddy"
+}

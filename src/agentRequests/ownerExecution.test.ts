@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { noteCodexDesktopLateStartForTest } from "../codexDesktopBridge.js";
+import { noteCodexDesktopLateStartForTest } from "../plugins/io.rabiroute.agent.codex/src/codexDesktopBridge.js";
 import { assertEndpointOwnerDirectory, executeEndpointOnOwner, recoverEndpointOwnerReceipt as recoverPublishedOwnerReceipt } from "./ownerExecution.js";
 import type { PreparedEndpointDelivery } from "./endpointDelivery.js";
 import { agentDeliveryPromptHash } from "./store.js";
@@ -12,7 +12,7 @@ import { renderRabiDelivery } from "../shared/rabiMessage.js";
 import { manageInstanceAgent } from "../agentAdapters/instanceManagement.js";
 import { endpointExecutionOptionsHash } from "./executionOptions.js";
 
-import { recoverEndpointOwnerReceipt as recoverCodexOwnerReceipt } from "../agentAdapters/codexOwnerExecution.js";
+import { recoverEndpointOwnerReceipt as recoverCodexOwnerReceipt } from "../plugins/io.rabiroute.agent.codex/src/agentAdapters/codexOwnerExecution.js";
 import { withAgentManagerInvocation, type AgentManagerOperationInvoker } from "../agentAdapters/managerInvocation.js";
 const invokeCodexFixture: AgentManagerOperationInvoker = async <T>(type: string, operation: string, _payload: unknown, invocation?: import("@rabiroute/plugin-sdk").AgentAdapterInvocation) => {
   assert.equal(type, "codex");

@@ -1,0 +1,8 @@
+{
+  "source": "src/plugins/io.rabiroute.endpoint.rabilink/src/adapters/rabilinkAdapter.ts",
+  "factory": "createRabiLinkAdapter",
+  "packageId": "io.rabiroute.endpoint.rabilink",
+  "ownedPrefixes": [
+    "src/plugins/io.rabiroute.endpoint.rabilink/"
+  ]
+}

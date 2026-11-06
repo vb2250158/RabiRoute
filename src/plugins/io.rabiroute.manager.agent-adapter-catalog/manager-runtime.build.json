@@ -1,0 +1,15 @@
+{
+  "exports": [
+    {
+      "source": "src/plugins/io.rabiroute.manager.agent-adapter-catalog/hostRuntime.mjs",
+      "name": "createOwnedRuntime"
+    }
+  ],
+  "ownedPrefixes": [
+    "src/plugins/io.rabiroute.manager.agent-adapter-catalog/"
+  ],
+  "ownedSources": [
+    "src/plugins/io.rabiroute.manager.agent-adapter-catalog/src/manager/agentAdapterCatalog.ts"
+  ],
+  "packageId": "io.rabiroute.manager.agent-adapter-catalog"
+}

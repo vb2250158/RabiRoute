@@ -17,7 +17,7 @@ function fixture() {
     stop: async () => {calls.push("stop");return ready;},
     exit: async () => {calls.push("exit");return {...ready,state:"stopped"};}
   };
-  const source = fs.readFileSync(new URL("../src/components/renderers/VacuumRemoteControl.vue",import.meta.url),"utf8");
+  const source = fs.readFileSync(new URL("../../src/plugins/io.rabiroute.manager.xiaomi-home/web/components/renderers/VacuumRemoteControl.vue",import.meta.url),"utf8");
   const script = compileScript(parse(source).descriptor,{id:"remote-focus-test"}).content;
   const compiled = transformSync(script,{loader:"ts",format:"cjs"}).code;
   const module = {exports:{} as any};

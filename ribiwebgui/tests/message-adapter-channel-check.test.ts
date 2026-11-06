@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import test from "node:test";
 
-const pageSource = fs.readFileSync(new URL("../src/pages/RouteConfigPage.vue", import.meta.url), "utf8");
+const pageSource = fs.readFileSync(new URL("../../src/plugins/io.rabiroute.manager.message-adapter-control/web/pages/RouteConfigPage.vue", import.meta.url), "utf8");
 const styleSource = fs.readFileSync(new URL("../src/styles.css", import.meta.url), "utf8");
 
 test("message configuration exposes channel status and real Agent delivery tests", () => {

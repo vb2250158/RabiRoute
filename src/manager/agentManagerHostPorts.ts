@@ -2,8 +2,8 @@ import type { AgentAdapterDescriptor, AgentAdapterInvocation } from "@rabiroute/
 import type { ApiOperationDefinition, ApiOperationRegistration } from "./apiOperationContract.js";
 import type { AgentScanRuntimeSnapshot } from "../agentAdapters/managerTypes.js";
 import type { AgentAdapterCatalogWorkerTask } from "./agentAdapterCatalogWorker.js";
-import type { DeviceAgentOwnerOptions } from "../agentAdapters/deviceAgentOwner.js";
-import type { DeviceAgentEndpointBridgeOptions } from "./deviceAgentEndpointBridge.js";
+import type { DeviceAgentOwnerOptions } from "../plugins/io.rabiroute.agent.device-agent/src/agentAdapters/deviceAgentOwner.js";
+import type { DeviceAgentEndpointBridgeOptions } from "../plugins/io.rabiroute.agent.device-agent/src/manager/deviceAgentEndpointBridge.js";
 
 export type AgentManagerHostPorts = Readonly<{
   rootDir: string;
@@ -12,7 +12,6 @@ export type AgentManagerHostPorts = Readonly<{
   managerInstanceId(): string;
   getRuntimes(): Iterable<AgentScanRuntimeSnapshot>;
   publishManagerEvent(type: string, data: unknown): void;
-  deliveryReceiptChanged(): void;
   registerOperations(instanceId: string, definitions: readonly ApiOperationDefinition[], signal: AbortSignal): Promise<ApiOperationRegistration>;
   runScan(task: AgentAdapterCatalogWorkerTask, invocation?: AgentAdapterInvocation): Promise<Record<string, unknown>>;
   deviceContext?(): {

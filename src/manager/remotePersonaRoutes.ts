@@ -15,7 +15,7 @@ import { personaConfigFragmentFromValue } from "./configMigration.js";
 import { ROLE_CONTEXT_ROUTE_HEADER, ROLE_CONTEXT_CAPABILITY_HEADER, ROLE_CONTEXT_GENERATION_HEADER, ROLE_CONTEXT_MANAGER_HEADER } from "./roleContextProjection.js";
 import type { ApiOperationDefinition, ApiOperationResult } from "./apiOperationContract.js";
 import { hasAuthenticatedConnectionRequest } from "./connectionRequestAccess.js";
-import { preparePersonaResourceAdmission } from "./personaResourceAdmission.js";
+import { preparePersonaResourceAdmission } from "../plugins/io.rabiroute.manager.persona/src/manager/personaResourceAdmission.js";
 
 type Identity = { applicationGenerationId: string; managerInstanceId: string };
 export type RemotePersonaReadContext = {

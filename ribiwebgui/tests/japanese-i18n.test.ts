@@ -3,9 +3,9 @@ import fs from "node:fs";
 import test from "node:test";
 import { englishCatalog, englishPatterns } from "../src/i18n/catalog";
 import { japaneseCatalog, japanesePatterns } from "../src/i18n/japanese";
-import { LOCALE_STORAGE_KEY, resolveLocale, setLocale, translateText, useI18n } from "../src/i18n";
+import { LOCALE_STORAGE_KEY, resolveLocale, setLocale, translateText, useI18n } from "../src/i18n/index";
 import { guideKey, guideLocale, guideSection } from "../src/docs/guideLocale";
-import { formatSpeechEpochSeconds } from "../src/speech/speechRecordPresentation";
+import { formatSpeechEpochSeconds } from "../../src/plugins/io.rabiroute.manager.speech/web/speech/speechRecordPresentation";
 
 test("Japanese locale detection respects the saved browser preference", () => {
   assert.equal(resolveLocale(null, "ja-JP"), "ja");

@@ -6,6 +6,7 @@ import type { PluginCandidate, PluginModule } from "../plugin-kernel/types.js";
 import { invokeAgentManagerOperation, resolvePublishedAgentManagerProviders, createPublishedAgentServiceEndpointBridge, createPublishedAgentDeviceEndpointBridge } from "../manager/agentManagerProviders.js";
 import { bridgeOperations } from "./managerNativeOperations.js";
 import { withAgentManagerInvocation, invokeScopedAgentManagerOperation } from "./managerInvocation.js";
+import { installAgentAdapterGenerationReader } from "../runtime/agentAdapterProviders.js";
 
 function gate() {
   let resolve!: () => void;
@@ -47,6 +48,20 @@ function fixture() {
   }
   return { kernel, candidate, events, nextPublication() { published = gate(); return published.promise; } };
 }
+
+test("background native calls use the published process owner while explicit scopes stay isolated", async () => {
+  const f = fixture();
+  await f.kernel.switch([f.candidate("A")]);
+  const restore = installAgentAdapterGenerationReader(() => f.kernel.current());
+  try {
+    assert.equal(await invokeScopedAgentManagerOperation("fixture", "read", {}), "original-session");
+    assert.equal(resolvePublishedAgentManagerProviders(f.kernel.current())[0]!.inspect().activeLeases, 0);
+    await assert.rejects(withAgentManagerInvocation({ getProviders: () => [] }, async () =>
+      invokeScopedAgentManagerOperation("fixture", "read", {})), /unavailable/);
+    await assert.rejects(withAgentManagerInvocation({ invokeAgentOperation: async () => { throw new Error("isolated original invoker"); } }, async () =>
+      invokeScopedAgentManagerOperation("fixture", "read", {})), /isolated original invoker/);
+  } finally { restore(); await f.kernel.shutdown(); }
+});
 
 for (const mode of ["replace", "disable"] as const) {
   test(`one host request retains its original native provider through ${mode} and its ledger tail`, async () => {

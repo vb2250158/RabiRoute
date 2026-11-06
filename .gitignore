@@ -110,3 +110,10 @@ assets/reference-cache/
 
 # Local recovery snapshots may contain private plans, attachments and runtime data.
 /_sideline/
+# Rebuilt host API declarations and input index; canonical sources stay tracked.
+/plugins/contracts/host-api/types/
+/plugins/contracts/host-api/modules.json
+/plugins/contracts/host-api/requested-modules.json
+
+# Windows PowerShell may create this local runtime cache during isolated tooling.
+/Microsoft/Windows/PowerShell/ModuleAnalysisCache

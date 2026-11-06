@@ -1,0 +1,8 @@
+{
+  "source": "src/plugins/io.rabiroute.endpoint.wecom/src/adapters/wecomAdapter.ts",
+  "factory": "createWeComAdapter",
+  "packageId": "io.rabiroute.endpoint.wecom",
+  "ownedPrefixes": [
+    "src/plugins/io.rabiroute.endpoint.wecom/"
+  ]
+}

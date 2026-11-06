@@ -26,6 +26,9 @@ import { createPeerProxyUpgradeOperation } from '../peerTunnel/apiProxyUpgradeOp
 const controlFile = new URL(import.meta.url.endsWith('.ts') ? './controlPlaneRoutes.ts' : './controlPlaneRoutes.js', import.meta.url);
 const source = fs.readFileSync(controlFile, 'utf8');
 const ast = ts.createSourceFile(controlFile.pathname, source, ts.ScriptTarget.Latest, true);
+const peerFile = new URL('../plugins/io.rabiroute.manager.rabilink-relay/hostRuntime.mjs', import.meta.url);
+const peerSource = fs.readFileSync(peerFile, 'utf8');
+const peerAst = ts.createSourceFile(peerFile.pathname, peerSource, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
 function find(root: ts.Node, predicate: (node: ts.Node) => boolean): ts.Node {
   if (predicate(root)) return root;
   let found: ts.Node | undefined;
@@ -34,12 +37,12 @@ function find(root: ts.Node, predicate: (node: ts.Node) => boolean): ts.Node {
   return found;
 }
 const webguiFunction = find(ast, n => ts.isFunctionDeclaration(n) && n.name?.text === 'webguiLanRequestAllowed');
-const peerFactory = find(ast, n => ts.isFunctionDeclaration(n) && n.name?.text === 'createManagerPeerRuntime');
-const control = find(peerFactory, n => ts.isPropertyAssignment(n) && n.name.getText(ast) === 'allowControl') as ts.PropertyAssignment;
+const peerFactory = find(peerAst, n => ts.isFunctionDeclaration(n) && n.name?.text === 'createManagerPeerRuntime');
+const control = find(peerFactory, n => ts.isPropertyAssignment(n) && n.name.getText(peerAst) === 'allowControl') as ts.PropertyAssignment;
 const upgrade = find(ast, n => ts.isFunctionDeclaration(n) && n.name?.text === 'admitPeerProxyUpgrade');
 const callbackCode = ts.transpileModule(webguiFunction.getText(ast)
   + '\n' + upgrade.getText(ast)
-  + '\nglobalThis.peerControl = ' + control.initializer.getText(ast)
+  + '\nglobalThis.peerControl = ' + control.initializer.getText(peerAst)
   + ';\nglobalThis.peerUpgradeAdmission = (request, url) => admitPeerProxyUpgrade(request, url, lanAgentAuthority);',
 { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
 
@@ -60,6 +63,7 @@ async function fixture(t: test.TestContext) {
     remoteRequestUsesIndependentAuthorization: () => false,
     rabiGlobalConfig: { read: () => ({ webguiLan: { enabled: true, accessToken: 'synthetic-webgui-not-provided' } }),
       getLanAgentAdmissionPolicy: () => ({ ...admission }) }, URL });
+  vm.runInContext('globalThis.ports = globalThis;', context);
   vm.runInContext(callbackCode, context);
   const tunnel = new PeerTunnelRuntime({ dataDir: directory, deviceId: config.deviceId, generation: 'fixture-generation',
     discover: async () => { discoveries++; return []; }, signal: async () => { throw new Error('No remote fixture.'); },

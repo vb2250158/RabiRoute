@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { ManagerSpeechControl } from "./speechControl.js";
+import { ManagerSpeechControl } from "../plugins/io.rabiroute.manager.speech/src/manager/speechControl.js";
 
 test("transcribe streams save host ingress without Agent or persona writes, including forged upgrades", async () => {
   let deliveries = 0;

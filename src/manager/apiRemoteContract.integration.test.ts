@@ -4,7 +4,7 @@ import test from "node:test";
 import { once } from "node:events";
 import { createManagerClient } from "../../apps/rabi-agent/lib/manager-client.mjs";
 import { ManagerPluginRouteRegistry } from "./managerPluginRouteRegistry.js";
-import { createApiDiscoveryOperations } from "./apiDiscoveryRoutes.js";
+import { createApiDiscoveryOperations } from "../plugins/io.rabiroute.manager.agent-communication/src/manager/apiDiscoveryRoutes.js";
 import { fixtureApiContract } from "./apiOperationContractFixtures.js";
 import fs from "node:fs";
 import os from "node:os";
@@ -12,7 +12,7 @@ import path from "node:path";
 import { LanAgentAuthority } from "./lanAgentAuthority.js";
 import { evaluateLanAgentRequest, assertTrustedLanAgentPrincipal } from "./lanAgentRequestAccess.js";
 import { markAuthenticatedConnectionRequest } from "./connectionRequestAccess.js";
-import { registerLanAgentBodyGuard, assertLanAgentBodyAuthority } from "./lanAgentBodyAuthority.js";
+import { registerLanAgentBodyGuard } from "./lanAgentBodyAuthority.js";
 import { createManagerEventsOperation, ManagerEventHub } from "./managerEvents.js";
 
 test("the real connector discovers and calls a newly registered plugin without client endpoint mappings", async t => {
@@ -37,7 +37,7 @@ test("the real connector discovers and calls a newly registered plugin without c
     assert.equal(request.headers["x-rabiroute-session-id"], "original-source");
     assert.equal(evaluateLanAgentRequest(request, authority, true).kind, "agent");
     markAuthenticatedConnectionRequest(request, () => { assertTrustedLanAgentPrincipal(request); });
-    registerLanAgentBodyGuard(request, body => assertLanAgentBodyAuthority(new URL(request.url!, "http://localhost").pathname, body, undefined));
+    registerLanAgentBodyGuard(request, () => {});
     if (!registry.handle(request, new URL(request.url!, "http://localhost"), response)) { response.statusCode = 404; response.end(); }
   });
   server.listen(0, "127.0.0.1"); await once(server, "listening");

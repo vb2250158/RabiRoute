@@ -18,7 +18,7 @@ export async function mountForwardingAgentFixture(types: readonly string[], conf
   const modules = new WeakMap<PluginCandidate, PluginModule>();
   const candidates: PluginCandidate[] = [];
   for (const instance of profile.instances) {
-    const directory = path.resolve("plugins/builtin", instance.package, instance.version);
+    const directory = path.resolve("src/plugins", instance.package);
     let raw: string;
     try { raw = await fs.readFile(path.join(directory, "agent-adapter.json"), "utf8"); }
     catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") continue; throw error; }

@@ -34,7 +34,7 @@ try {
   for (const name of ["orchestration.test.mjs", "http-sdk.test.mjs", "restart-replay.mjs"]) fs.copyFileSync(path.join(fixtureSource, name), path.join(fixtureRoot, name));
   const childEnvironment = { ...process.env, RABI_REMOTE_CREATE_SOURCE_ROOT: repositoryRoot, RABI_REMOTE_CREATE_FIXTURE_ROOT: fixtureRoot };
   delete childEnvironment.NODE_TEST_CONTEXT;
-  const result = spawnSync(process.execPath, ["--test-reporter=tap", "--import", pathToFileURL(path.join(repositoryRoot, "scripts/test-manager-runtime-env.mjs")).href, "--experimental-test-module-mocks", "--unhandled-rejections=strict", "--test-concurrency=1", "--test", "orchestration.test.mjs", "http-sdk.test.mjs"], {
+  const result = spawnSync(process.execPath, ["--test-reporter=tap", "--import", pathToFileURL(path.join(repositoryRoot, "scripts/test-manager-runtime-env.mjs")).href, "--unhandled-rejections=strict", "--test-concurrency=1", "--test", "orchestration.test.mjs", "http-sdk.test.mjs"], {
     cwd: fixtureRoot, windowsHide: true, stdio: ["ignore", "pipe", "pipe"], encoding: "utf8", maxBuffer: 8 * 1024 * 1024, timeout: 120_000,
     env: childEnvironment
   });

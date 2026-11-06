@@ -213,7 +213,7 @@ A plan describes one focused objective. Common fields:
         "reason": "This changes the public Plan schema and both user interfaces.",
         "files": [
           { "path": "src/roleKnowledge.ts", "action": "modify", "change": "Add approval-contract schema, normalization, and write validation." },
-          { "path": "ribiwebgui/src/pages/RoleKnowledgePage.vue", "action": "modify", "change": "Render the contract and missing-field guidance while still accepting user approval feedback." }
+          { "path": "src/plugins/io.rabiroute.manager.persona/web/pages/RoleKnowledgePage.vue", "action": "modify", "change": "Render the contract and missing-field guidance while still accepting user approval feedback." }
         ],
         "commands": [
           { "command": "npm run build:backend", "purpose": "Compile and validate the Manager backend.", "expectedEffect": "Produces local dist build output only." }

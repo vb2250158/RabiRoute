@@ -1,0 +1,8 @@
+{
+  "source": "src/plugins/io.rabiroute.endpoint.weixin/src/adapters/weixinAdapter.ts",
+  "factory": "createWeixinAdapter",
+  "packageId": "io.rabiroute.endpoint.weixin",
+  "ownedPrefixes": [
+    "src/plugins/io.rabiroute.endpoint.weixin/"
+  ]
+}

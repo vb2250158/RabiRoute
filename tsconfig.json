@@ -8,8 +8,10 @@
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
     "baseUrl": ".",
+    "paths": { "@rabiroute/host-api/*": ["src/*.ts"] },
     "rootDir": "src",
     "outDir": "dist"
   },
-  "include": ["src/**/*.ts"]
+  "include": ["src/**/*.ts"],
+  "exclude": ["src/plugins/*/web/**", "src/plugins/rabi-antigravity-context/**", "src/plugins/rabi-codex-context/**", "src/plugins/rabi-dsh-context/**", "src/plugins/rabi-workbuddy-context/**", "src/plugins/napcat-stickers/**", "src/plugins/napcat-rabiroute/**", "src/plugins/rabi-speech/**", "src/plugins/remote-agent-rabiroute/**", "src/plugins/xiaoai-rabiroute/**"]
 }

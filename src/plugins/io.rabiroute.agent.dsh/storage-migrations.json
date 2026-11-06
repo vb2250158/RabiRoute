@@ -1,0 +1,8 @@
+{
+  "schemaVersion": 1,
+  "scope": "plugin",
+  "migrations": [
+    { "id": "connections-layout-0.7", "kind": "directory", "source": { "root": "state", "path": "data/dsh-connections" }, "target": "credentials" },
+    { "id": "auth-layout-0.7", "kind": "file", "source": { "root": "state", "path": "data/dsh-auth.json" }, "target": "auth.json", "unlessEnvironment": "RABI_DSH_AUTH_FILE" }
+  ]
+}

@@ -514,3 +514,16 @@ test("AgentPacket never injects conversation history into heartbeat events", () 
   assert.match(packet.message, /current heartbeat task/);
   assert.match(packet.message, /recent=;limit=0/);
 });
+
+
+test("QQ private target matches stable sender IDs, leaves defaults open and does not filter group or voice", () => {
+  const rule = { id: "selected-peer", name: "Selected peer", enabled: true, routeKinds: [] as any[], targetUserId: "20001", regex: "", template: "original" };
+  const selected = routeProfile({ notificationRules: [rule] });
+  const message = { time: 1710000000, userId: 20001, senderName: "Changed nickname", rawMessage: "hello", adapterType: "napcat" };
+  assert.ok(createRouteDecision(selected, "private", message, {}));
+  assert.equal(createRouteDecision(selected, "private", { ...message, userId: 20002, senderName: "Same nickname" }, {}), null);
+  assert.ok(createRouteDecision(routeProfile({ notificationRules: [{ ...rule, targetUserId: "" }] }), "private", { ...message, userId: 20002 }, {}));
+  assert.ok(createRouteDecision(routeProfile({ notificationRules: [{ ...rule, targetUserId: undefined }] }), "private", { ...message, userId: 20002 }, {}));
+  assert.ok(createRouteDecision(selected, "group_message", groupMessage({ userId: 20002 }), {}));
+  assert.ok(createRouteDecision(selected, "voice_transcript", voiceTranscript(), {}));
+});

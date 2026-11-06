@@ -1,8 +1,11 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import test, { after } from "node:test";
 import { currentEnvelopeDeliveryId, deliveryIdFromPrompt, withoutLegacyTransportSuffix, deliveryUserMessagesFromRollout } from "./deliveryIdentity.js";
 import { renderRabiDelivery } from "./rabiMessage.js";
-import { ensureCodexDesktopDeliveryMarkerForTest } from "../codexRuntime.js";
+import { createCodexRuntime } from "../plugins/io.rabiroute.agent.codex/src/codexRuntime.js";
+const runtime = createCodexRuntime();
+const { ensureCodexDesktopDeliveryMarkerForTest } = runtime;
+after(() => runtime.disposeCodexAdapterTransport());
 
 const id = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
 const other = "12345678-1234-4567-8123-123456789abc";

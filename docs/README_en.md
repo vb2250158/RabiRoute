@@ -49,6 +49,8 @@ Start with the user guide for everyday operation, use the API reference for inte
 
 ## Developer: routing, roles, and Agent interfaces
 
+- [API errors and parameter recovery](api-error-recovery_en.md): workspace mismatch, valid parameter discovery, error examples and coverage by API family.
+
 - [API reference and discovery](api-reference_en.md): browse running operations in the documentation page, search contracts, inspect parameters and responses, copy request templates, and download OpenAPI.
 - [Connections and API access](connection-access_en.md): reuse connection authentication and understand explicit disabled features and API conditions.
 - [Workspace plan query](workspace-plan-query_en.md): paginated search scoped to host sessions and workspace.
@@ -81,6 +83,8 @@ Start with the user guide for everyday operation, use the API reference for inte
 
 
 ## Maintainer: architecture, builds, and diagnostics
+
+- [Plugin source, versions, and public configuration](plugin-source-layout_en.md)
 
 - [Camera events and HA recovery](home-camera-events_en.md): explicit persona binding, clip storage, elevated startup, bounded recovery and migration acceptance.
 

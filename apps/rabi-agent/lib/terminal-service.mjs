@@ -123,8 +123,12 @@ export class TerminalService {
   start(item) {
     const windows = process.platform === "win32";
     const script = fileURLToPath(new URL(windows ? "../terminal/host.ps1" : "../terminal/posix-host.mjs", import.meta.url));
-    const executable = windows ? path.join(process.env.SystemRoot || "C:\\Windows", "System32/WindowsPowerShell/v1.0/powershell.exe") : process.execPath;
-    const child = spawn(executable, windows ? ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", script] : [script], {
+    const native = fileURLToPath(new URL("../dist/native/RabiAgent.Terminal.exe", import.meta.url));
+    const nativeAvailable = windows && fs.existsSync(native);
+    // Old signed releases use their existing PS host until the enrollment
+    // minimum signed release requires native executable assets.
+    const executable = nativeAvailable ? native : windows ? path.join(process.env.SystemRoot || "C:\\Windows", "System32/WindowsPowerShell/v1.0/powershell.exe") : process.execPath;
+    const child = spawn(executable, nativeAvailable ? [] : windows ? ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", script] : [script], {
       windowsHide: true, stdio: ["pipe", "pipe", "pipe"],
       env: { ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^(RABI_|RABIROUTE_|CODEX_)/i.test(key))), RABI_TERMINAL_FORCE_CLOSE_MS: String(this.timeout("agent.terminal.forceClose",500)), RABI_TERMINAL_PROCESS_SCAN_MS: String(this.timeout("agent.terminal.processScan",2000)), RABI_TERMINAL_NATIVE_STOP_MS: String(this.timeout("agent.terminal.nativeStop",5000)) }
     });

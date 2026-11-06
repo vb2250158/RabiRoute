@@ -7,7 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import http from "node:http";
 import { readPersonaReferenceSnapshot, resolveRemotePersonaSnapshot, validateRemotePersonaLanguageStyle, createPersonaBootstrapOperation, handleRemotePersonaResolutionApi } from "./remotePersonaRoutes.js";
-import { createPersonaResourceOperations } from "./personaResourceOperations.js";
+import { createPersonaResourceOperations } from "../plugins/io.rabiroute.manager.persona/src/manager/personaResourceOperations.js";
 import { ManagerPluginRouteRegistry } from "./managerPluginRouteRegistry.js";
 import { TunnelDenied } from "../peerTunnel/security.js";
 import { ROLE_CONTEXT_ROUTE_HEADER, ROLE_CONTEXT_CAPABILITY_HEADER, ROLE_CONTEXT_GENERATION_HEADER, ROLE_CONTEXT_MANAGER_HEADER } from "./roleContextProjection.js";

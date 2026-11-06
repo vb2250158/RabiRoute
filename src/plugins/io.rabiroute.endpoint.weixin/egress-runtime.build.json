@@ -1,0 +1,27 @@
+{
+  "exports": [
+    {
+      "source": "src/plugins/io.rabiroute.endpoint.weixin/src/weixinLoginRequest.ts",
+      "name": "requestWeixinLogin"
+    },
+    {
+      "source": "src/plugins/io.rabiroute.endpoint.weixin/src/weixinOpenClaw.ts",
+      "name": "sendWeixinText"
+    },
+    {
+      "source": "src/plugins/io.rabiroute.endpoint.weixin/src/weixinOpenClaw.ts",
+      "name": "sendWeixinFile"
+    },
+    {
+      "source": "src/plugins/io.rabiroute.endpoint.weixin/src/weixinOpenClaw.ts",
+      "name": "sendWeixinImage"
+    }
+  ],
+  "ownedSources": [
+    "src/plugins/io.rabiroute.endpoint.weixin/src/weixinOpenClaw.ts"
+  ],
+  "packageId": "io.rabiroute.endpoint.weixin",
+  "ownedPrefixes": [
+    "src/plugins/io.rabiroute.endpoint.weixin/"
+  ]
+}

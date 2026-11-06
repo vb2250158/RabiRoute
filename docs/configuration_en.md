@@ -35,7 +35,7 @@ Device ownership has changed: configure watches, bands, and glasses in mobile re
 
 User-configured package roots can use the execution mode declared by a plugin (`in_process`, `isolated`, or `declarative`) by default, without an extra built-in/external permission distinction. To restrict in-process execution, set `RABIROUTE_PLUGIN_IN_PROCESS_ROOTS` in the Manager startup environment to a JSON array of package-root paths already present in the catalog. `[]` disables all in-process entries; an explicit list permits only those roots. Clear or remove the variable to restore access for all configured roots on the next startup. Rejections identify the actual root, configured value, and setting location. Embedded callers use the equivalent `PluginPackageCatalog` option `trustedInProcessRoots`.
 
-The default Profile is `dist/plugins/profiles/desktop.json`; the default package root is `dist/plugins/packages/`. Source builds generate them from `plugins/profiles/desktop.json` and `plugins/builtin/`.
+The default Profile is `dist/plugins/profiles/desktop.json`; the default package root is `dist/plugins/packages/`. Source builds generate them from `plugins/profiles/desktop.json` and `src/plugins/`.
 
 Out-of-tree plugins select one Profile with `RABIROUTE_PLUGIN_PROFILE` and add package roots with `RABIROUTE_PLUGIN_PACKAGE_ROOTS`. Manifest and Profile are schema v2 only. Profile contains `readyRequires` plus `instances` with stable `id`, package, version, enablement, JSON configuration, permission `grants`, and bounded restart/resource `policy`. Any non-v2 schema and Patch stay outside the runtime path.
 
@@ -110,8 +110,7 @@ On a clean start, the Manager copies the public `examples/data` package when ava
 {
   "enabled": true,
   "messageAdapters": [
-    "napcat",
-    "heartbeat"
+    "napcat"
   ],
   "messageAdapterPolicies": {
     "napcat": {
@@ -142,8 +141,7 @@ On a clean start, the Manager copies the public `examples/data` package when ava
   "codexHooks": {
     "sessionContextEnabled": true,
     "reasoningContextEnabled": true,
-    "planTaskCompletionEnabled": true,
-    "agentCommunicationEnforcementEnabled": true
+    "planTaskCompletionEnabled": true
   },
   "agentModel": "gpt-5.6-terra",
   "agentReasoningEffort": "high",
@@ -173,7 +171,8 @@ On a clean start, the Manager copies the public `examples/data` package when ava
 
 ## Core fields
 
-- `messageAdapters`: configurable input types. Current IDs include `napcat`, `remoteAgent`, `heartbeat`, `speech`, `webhook`, `fennenote`, `xiaoai`, `rabilink`, `wearable`, `wecom`, `weixin`, and `feishu`. Legacy `rolePanel` entries remain compatible, but WebGUI no longer presents them as configurable because Manager provides role-panel messaging by default.
+- `messageAdapters`: configurable input types. Current IDs include `napcat`, `remoteAgent`, `speech`, `webhook`, `fennenote`, `xiaoai`, `rabilink`, `wearable`, `wecom`, `weixin`, and `feishu`. Legacy `rolePanel` entries remain compatible, but WebGUI no longer presents them as configurable because Manager provides role-panel messaging by default.
+- Scheduled rules under Automation drive the internal scheduler directly; no `heartbeat` message connector is needed. The internal ID remains for execution and history. Migration preserves previous connector switches through each rule's enabled state and source Route scope.
 
 - `messageAdapterPolicies`: `inputEnabled`, `outputEnabled`, `supportedOutputs`, and adapter-specific restrictions. QQ, Weixin, Feishu, WeCom, role-panel, and RabiLink text chats use message groups automatically without an off switch. `messageGrouping` exposes only ordinary settle, unfinished-fragment settle, and maximum wait values, defaulting to `6 / 12 / 20` seconds. ASR/voice transcripts, heartbeat, commands, approvals, health alerts, and structured events continue direct delivery without this wait. Chat dispatch changes only when Codex Message Agent mode is also enabled; otherwise delivery remains per-message. Legacy allow-group/user and output-mode fields are no longer active fine-grained filters.
 - `supportedOutputs`: outbound payload kinds. NapCat supports `text`, `image`, `voice`, and `file` in the current policy model.
@@ -200,11 +199,10 @@ On a clean start, the Manager copies the public `examples/data` package when ava
 - `codexHooks.sessionContextEnabled`: defaults to `true`. Controls `SessionStart` / `UserPromptSubmit`, triggered when a Codex task starts, resumes, clears, or compacts and when the user submits a new message.
 - `codexHooks.reasoningContextEnabled`: defaults to `true`. Controls `PreToolUse` / `PostToolUse`, triggered before and after tool calls and returning only newly matched plan, memory, or skill context for the turn.
 - `codexHooks.planTaskCompletionEnabled`: defaults to `true`. Controls `Stop` completion reminders after a plan-bound execution task outputs its final answer for the turn. With Plan Secretary enabled and a valid secretary task available, Manager delivers directly to the plan's `secretaryBinding`, does not write the Primary Persona role-panel timeline, and does not wake the Primary Persona by default. It falls back to the original Primary Persona path only when no usable secretary is enabled. Turning the switch off only makes Manager ignore or reject the Hook; it does not unregister or rewrite the Codex plugin Hook.
-- `codexHooks.agentCommunicationEnforcementEnabled`: shown in WebGUI as **Require the RabiAgent message delivery API**, defaults to `true`, and is stored per Route. When enabled, that Route's Primary Persona, Plan Agents, Plan Secretaries, and Message Agents cannot bypass `/api/agent/threads` with persistent Codex task tools. `PreToolUse` denies the call before execution and explains the required `sourceThreadId`, `sourceAgentType`, and `responsePolicy`; `required` also needs `responseInstruction`. If the target ends a turn without a formal Rabi response, Manager reminds it five minutes after that turn ends. Turning the switch off disables only the bypass check; already tracked requests continue to be followed up.
 
 - `copilotThreadName` / `copilotCwd`: independent Copilot CLI session configuration.
 - `agentModel` / `agentReasoningEffort`: the model and reasoning effort Manager applies to new Codex Desktop turns for the Route's Primary Persona. Empty values preserve the target Desktop task's current settings. When Desktop is available, WebGUI uses a short-lived app-server `model/list` request to load models visible to the current account and their reasoning efforts; the model remains manually editable if discovery fails. Accepted values are `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, and `ultra`, while the selected model's catalog remains the authoritative availability source. These fields affect only the Primary Persona and do not override Message Agents, Plan Secretaries, or independently bound Plan Agents.
-- `heartbeatSkipWhenAgentBusy`: applies only while Codex Message Agent mode is off. With Message Agent mode on, heartbeat goes immediately to an independent Message Agent and is not skipped because the Primary task is active. Other message kinds are unaffected.
+- `automationRules[].trigger.schedule.skipWhenAgentBusy`: per-task busy policy. `true` skips while the local Primary Codex task is busy (remote and other providers deliver normally); `false` delivers normally. An absent value inherits the legacy Route `heartbeatSkipWhenAgentBusy` value. Script actions do not use this Agent policy.
 - `speechPushMode`: Route-owned speech delivery mode. `hot` delivers every completed ASR segment immediately. `keyword` records every segment but wakes the Agent only after a persona-keyword match. WebGUI's **Hot delivery** switch maps On to `hot` and Off to `keyword`.
 - `speechTriggerKeywords`: persona-owned names, common addresses, and wake phrases in `personaConfig.json`. When the list is empty and Hot delivery is off, ASR remains recorded and never silently falls back to `hot`.
 - `automationRules`: persona-owned rules in `personaConfig.json`. Each rule chooses a `message` or `schedule` trigger, then a `deliver_agent` or `run_script` action. Legacy `notificationRules` and nested heartbeat `schedules` migrate on read; later saves write only the new structure.

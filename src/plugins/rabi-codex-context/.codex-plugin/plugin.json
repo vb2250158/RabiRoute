@@ -1,0 +1,32 @@
+{
+  "name": "rabi-codex-context",
+  "version": "0.4.1",
+  "description": "Inject Rabi PC-managed context and forward plan-bound Codex turn completions through thin lifecycle hooks.",
+  "author": {
+    "name": "RabiRoute contributors",
+    "url": "https://github.com/vb2250158/RabiRoute"
+  },
+  "repository": "https://github.com/vb2250158/RabiRoute",
+  "license": "MIT",
+  "keywords": [
+    "Rabi",
+    "Codex",
+    "persona",
+    "context",
+    "memory",
+    "plans"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Rabi Codex Context",
+    "shortDescription": "Use Rabi PC context in one Codex session.",
+    "longDescription": "Forward Codex session, prompt, tool-loop, and Stop lifecycle events to Rabi PC Manager; inject bounded persona context and let Manager route plan-task completion reminders without duplicating Rabi management logic in the plugin.",
+    "developerName": "RabiRoute",
+    "category": "Productivity",
+    "capabilities": [
+      "Context",
+      "Hooks"
+    ],
+    "defaultPrompt": "Bind this Codex session to my Rabi PC persona and report the Manager-owned context."
+  }
+}

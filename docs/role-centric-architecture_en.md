@@ -27,9 +27,9 @@ The core implementation includes independent role configuration, archival, resto
 | --- | --- | --- |
 | `ribiwebgui/src/App.vue` | `routeOptions` comes from `store.gateways`; the apparent role selector selects a Route | Separate role and Route selection |
 | `ribiwebgui/src/routeScopedNavigation.ts` | Role and knowledge pages live below `/routes/:id/…` | Introduce canonical role-scoped pages |
-| `ribiwebgui/src/pages/PersonaTemplatePage.vue` | Role configuration derives from `store.selectedGateway` | Read and save by role identity |
-| `ribiwebgui/src/pages/RoleKnowledgePage.vue` | `roleId` derives from the selected Route | Select knowledge independently of Routes |
-| `src/manager/personaCatalog.ts` | Enumerates role directories and caches summaries; entries have no archival field | Reuse discovery and add lifecycle-aware invalidation |
+| `src/plugins/io.rabiroute.manager.persona/web/pages/PersonaTemplatePage.vue` | Role configuration derives from `store.selectedGateway` | Read and save by role identity |
+| `src/plugins/io.rabiroute.manager.persona/web/pages/RoleKnowledgePage.vue` | `roleId` derives from the selected Route | Select knowledge independently of Routes |
+| `src/plugins/io.rabiroute.manager.persona/src/manager/personaCatalog.ts` | Enumerates role directories and caches summaries; entries have no archival field | Reuse discovery and add lifecycle-aware invalidation |
 | `src/manager/configRepository.ts` | Separate adapter and role files are composed into a Route view | Keep storage ownership; separate editing and writes |
 | `bundles/builtinWebContributions.ts` and `pluginNavigation.ts` | Plugins register pages and navigation | Update contributions and registrations through the existing mechanism |
 

@@ -9,11 +9,12 @@ import { spawn } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createPluginTestHarness } from "@rabiroute/plugin-sdk";
 import { ManagerPluginRouteRegistry } from "../../manager/managerPluginRouteRegistry.js";
-import { MessageAdapterScanProviderRegistry } from "../../manager/messageAdapterControl.js";
+import { MessageAdapterScanProviderRegistry } from "../../plugins/io.rabiroute.manager.message-adapter-control/src/manager/messageAdapterControl.js";
 import { installDataMutationAuditSink } from "../../observability/dataMutationAudit.js";
 
 const repo = fileURLToPath(new URL("../../../", import.meta.url));
 const packageId = "io.rabiroute.manager.xiaomi-home";
+const version = JSON.parse(fs.readFileSync(path.join(repo, "src/plugins", packageId, "rabi.plugin.json"), "utf8")).version as string;
 
 test("shipped Xiaomi profile does not bind a private persona by default", () => {
   const profile = JSON.parse(fs.readFileSync(path.join(repo, "plugins/profiles/desktop.json"), "utf8"));
@@ -28,7 +29,7 @@ test("packaged Xiaomi owns its real runtime, native routes, settings and resourc
   const { buildPluginPackages } = await import(pathToFileURL(path.join(repo, "scripts/build-plugin-packages.mjs")).href);
   const output = path.join(root, "packages-output");
   await buildPluginPackages(repo, { packages: [packageId], outputDirectory: output });
-  const packageRoot = path.join(output, "packages", packageId, "1.0.0");
+  const packageRoot = path.join(output, "packages", packageId, version);
   const { activate } = await import(pathToFileURL(path.join(packageRoot, "manager.mjs")).href);
   const { hostModules } = await import(pathToFileURL(path.join(packageRoot, "manager-runtime.mjs")).href);
   assert.ok(hostModules.includes("manager/connectionRequestAccess"));
@@ -72,7 +73,7 @@ test("packaged Xiaomi owns its real runtime, native routes, settings and resourc
   const baseUrl = `http://127.0.0.1:${(server.address() as import("node:net").AddressInfo).port}/api/agent/xiaomi-home`;
   const createHarness = () => createPluginTestHarness({
     config: { runtimeDir, baseUrl: "http://127.0.0.1:1", eventMonitorEnabled: false, requestTimeoutMs: 250 },
-    identity: { instanceId: "manager:xiaomi-home", pluginId: packageId, version: "1.0.0", revision: "test", host: "manager" },
+    identity: { instanceId: "manager:xiaomi-home", pluginId: packageId, version, revision: "test", host: "manager" },
     services: [["host.message-endpoints@1", sharedHost]]
   });
   const first = createHarness();

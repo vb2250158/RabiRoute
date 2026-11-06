@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { loadPersonaDocument } from "../src/persona/personaDocumentClient";
-import { remotePersonaClient } from "../src/persona/remotePersonaReference";
+import { loadPersonaDocument } from "../../src/plugins/io.rabiroute.manager.persona/web/persona/personaDocumentClient";
+import { remotePersonaClient } from "../../src/plugins/io.rabiroute.manager.persona/web/persona/remotePersonaReference";
 
 test("persona browser clients preserve documents above old quotas and show server quota errors", async t => {
   const document = "x".repeat(5 * 1024 * 1024);

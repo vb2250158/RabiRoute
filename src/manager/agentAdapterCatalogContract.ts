@@ -54,6 +54,8 @@ const scan = { type: "object", required: ["agents", "cwdOptions"], properties: {
   copilotSessions: { type: "array", items: { type: "object", properties: { name: text, cwd: text, userNamed: bool }, additionalProperties: true } }, legacy: { type: "object" } }, additionalProperties: true };
 const connection = { type: "object", required: ["baseUrl", "state"], properties: { baseUrl: text,
   state: { enum: ["connected", "saved", "disconnected", "not_connected", "expired"] }, updatedAt: text, expiresAt: integer, revision: integer }, additionalProperties: false };
+const connectionDiagnostics = { type: "array", maxItems: 100, items: { type: "object", required: ["rowIndex", "code", "message"],
+  properties: { rowIndex: { type: "integer", minimum: 0, maximum: 99 }, baseUrl: text, code: { const: "invalid_connection" }, message: text }, additionalProperties: false } };
 const ownerError = { mediaType: "application/json", schema: { type: "object", required: ["ok", "message"], properties: { ok: { const: false }, message: text }, additionalProperties: false } };
 const readError = { mediaType: "application/json", schema: { type: "object", required: ["code", "message"], properties: { code: { const: -1 }, message: text }, additionalProperties: false } };
 const envelope = (data: ApiSchema) => ({ type: "object", required: ["code", "data"], properties: { code: { const: 0 }, data }, additionalProperties: false });
@@ -68,7 +70,7 @@ export function agentAdapterCatalogContract(definition: typeof AGENT_CATALOG_OPE
   const data: ApiSchema = key === "catalog" ? envelope({ type: "object", required: ["schemaVersion", "adapters"], properties: { schemaVersion: { const: 1 }, adapters: { type: "array", items: manifest } }, additionalProperties: false })
     : scanKind ? scan : key === "hooks" ? { type: "object", required: ["ok", "message"], properties: { ok: { const: true }, message: text }, additionalProperties: false }
     : { type: "object", required: ["ok", "revision", ...(key === "connections" ? ["endpoints"] : key === "disconnect" ? [] : ["connection"])],
-      properties: { ok: { const: true }, revision: integer, ...(key === "connections" ? { endpoints: { type: "array", maxItems: 100, items: connection } }
+      properties: { ok: { const: true }, revision: integer, ...(key === "connection" || key === "connections" ? { partial: bool, diagnostics: connectionDiagnostics } : {}), ...(key === "connections" ? { endpoints: { type: "array", maxItems: 100, items: connection } }
         : key === "disconnect" ? {} : { connection }) }, additionalProperties: false };
   const mutation = key === "connect" || key === "disconnect";
   return { operationId: `agent.adapters.${key}.${method.toLowerCase()}`, ...(key === "catalog" ? { aliases: [`agent:${method}:${pathTemplate}`] } : {}), contractVersion: "1.0.0", method, pathTemplate,

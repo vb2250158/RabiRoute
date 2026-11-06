@@ -98,7 +98,7 @@ test("all page-owned directory reads receive the same cancellation signal and ca
 });
 
 test("Route diagnostic presentation stays in target cards or the accessible Add Agent discovery menu", () => {
-  const { descriptor } = parse(fs.readFileSync(new URL("../src/pages/RouteConfigPage.vue", import.meta.url), "utf8"));
+  const { descriptor } = parse(fs.readFileSync(new URL("../../src/plugins/io.rabiroute.manager.message-adapter-control/web/pages/RouteConfigPage.vue", import.meta.url), "utf8"));
   const root = baseParse(descriptor.template!.content);
   const elements: Array<{ node: ElementNode; ancestors: ElementNode[] }> = [];
   function walk(children: TemplateChildNode[], ancestors: ElementNode[] = []) {

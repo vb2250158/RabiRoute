@@ -34,7 +34,7 @@ NapCat leases cover actual socket closure and accepted frame/profile promises, i
 ## Controlled validation
 
 ```powershell
-node --test-concurrency=2 --import ./scripts/test-manager-runtime-env.mjs --import tsx --test src/adapters/feishuAdapter.test.ts src/adapters/napcatAdapter.test.ts src/adapters/platformNativeOwners.test.ts src/adapters/platformNativeGateway.test.ts
+node --test-concurrency=2 --import ./scripts/test-manager-runtime-env.mjs --import tsx --test src/plugins/io.rabiroute.endpoint.feishu/src/adapters/feishuAdapter.test.ts src/plugins/io.rabiroute.endpoint.napcat/src/adapters/napcatAdapter.test.ts src/adapters/platformNativeOwners.test.ts src/adapters/platformNativeGateway.test.ts
 ```
 
 Temporary directories, random local ports, simulated signatures and injected callbacks cover exact paths, raw signatures, challenges, errors, byte limits, deduplication, withdrawal, arbitrary WS paths, text/binary frames, original handshake errors, instance identity, callbacks after disconnect, startup cleanup and port remount. No platform login or real messages are performed.

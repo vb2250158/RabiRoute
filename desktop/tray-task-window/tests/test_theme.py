@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import unittest
 
-from PySide6.QtWidgets import QApplication, QMenu
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QImage, QPainter, QPalette
+from PySide6.QtWidgets import QApplication, QMenu, QScrollBar, QStyle, QStyleOptionSlider
 
-from rabiroute_tray.theme import apply_rabi_application_theme, apply_rabi_menu_theme, rabi_menu_stylesheet, theme_stylesheet
+from rabiroute_tray.theme import apply_rabi_application_theme, apply_rabi_menu_theme, rabi_menu_stylesheet, rabi_scrollbar_stylesheet, theme_stylesheet
 from rabiroute_tray.themes import has_theme, register_custom_theme, theme_definition
 
 
@@ -77,3 +79,57 @@ class ThemeTest(unittest.TestCase):
 
         self.assertIsNone(register_custom_theme(None))
         self.assertFalse(has_theme(second_id))
+
+
+    def test_native_scrollbars_share_six_pixel_geometry_transparent_tracks_and_no_buttons(self) -> None:
+        original_palette, original_stylesheet = self.app.palette(), self.app.styleSheet()
+        self.addCleanup(self.app.setPalette, original_palette)
+        self.addCleanup(self.app.setStyleSheet, original_stylesheet)
+        apply_rabi_application_theme(self.app, "light")
+        for orientation in (Qt.Orientation.Vertical, Qt.Orientation.Horizontal):
+            bar = QScrollBar(orientation)
+            self.addCleanup(bar.deleteLater)
+            bar.setRange(0, 100)
+            bar.setPageStep(20)
+            bar.setValue(50)
+            bar.resize(6, 180) if orientation == Qt.Orientation.Vertical else bar.resize(180, 6)
+            bar.ensurePolished()
+            option = QStyleOptionSlider()
+            option.initFrom(bar)
+            option.orientation = orientation
+            option.minimum, option.maximum, option.pageStep = 0, 100, 20
+            option.sliderPosition = option.sliderValue = 50
+            option.singleStep = 1
+            option.subControls = QStyle.SubControl.SC_All
+            style = bar.style()
+            extent = bar.sizeHint().width() if orientation == Qt.Orientation.Vertical else bar.sizeHint().height()
+            self.assertEqual(extent, 6)
+            slider = style.subControlRect(QStyle.ComplexControl.CC_ScrollBar, option, QStyle.SubControl.SC_ScrollBarSlider, bar)
+            self.assertEqual(slider.width() if orientation == Qt.Orientation.Vertical else slider.height(), 6)
+            self.assertGreaterEqual(slider.height() if orientation == Qt.Orientation.Vertical else slider.width(), 28)
+            for control in (QStyle.SubControl.SC_ScrollBarAddLine, QStyle.SubControl.SC_ScrollBarSubLine):
+                button = style.subControlRect(QStyle.ComplexControl.CC_ScrollBar, option, control, bar)
+                self.assertEqual(button.width() * button.height(), 0)
+            image = QImage(bar.size(), QImage.Format.Format_ARGB32_Premultiplied)
+            image.fill(Qt.GlobalColor.transparent)
+            painter = QPainter(image)
+            style.drawComplexControl(QStyle.ComplexControl.CC_ScrollBar, option, painter, bar)
+            painter.end()
+            track = image.pixelColor(3, 5) if orientation == Qt.Orientation.Vertical else image.pixelColor(5, 3)
+            self.assertEqual(track.alpha(), 0)
+            self.assertGreater(image.pixelColor(slider.center()).alpha(), 0)
+
+    def test_native_scrollbar_palette_updates_for_light_dark_and_registered_custom_theme(self) -> None:
+        original_palette, original_stylesheet = self.app.palette(), self.app.styleSheet()
+        self.addCleanup(self.app.setPalette, original_palette)
+        self.addCleanup(self.app.setStyleSheet, original_stylesheet)
+        light = rabi_scrollbar_stylesheet("light")
+        dark = rabi_scrollbar_stylesheet("dark")
+        self.assertIn("rgba(17, 32, 51, 122)", light)
+        self.assertIn("rgba(233, 242, 247, 122)", dark)
+        custom = register_custom_theme({"id": "custom:scrollbar-test", "colors": {"text": "#345678"}})
+        for theme, expected in (("light", light), ("dark", dark), (custom, rabi_scrollbar_stylesheet(custom))):
+            apply_rabi_application_theme(self.app, theme)
+            self.assertEqual(self.app.styleSheet(), expected)
+        self.assertIn("rgba(52, 86, 120, 122)", self.app.styleSheet())
+        self.assertIn("rgba(52, 86, 120, 163)", self.app.styleSheet())

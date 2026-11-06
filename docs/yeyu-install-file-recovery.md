@@ -6,7 +6,7 @@
 
 ## API 文件
 
-原来的 `src/agentAdapters/yeyuGamerManagerApi.ts` 已迁移到 `src/integrations/yeyuGamer/managerApi.ts`。恢复的旧路径仅重新导出唯一实现，供安装目录中尚未迁移的导入使用；不重新注册路由，不恢复旧的客户端 enabled 开关。启用状态仍归插件 Profile，现有请求授权和超时处理保持不变。待这些外部导入全部迁移后可删除兼容路径；仓库运行入口仍直接使用 integrations 实现。
+原来的 `src/agentAdapters/yeyuGamerManagerApi.ts` 已迁移到 `src/plugins/io.rabiroute.manager.yeyu-gamer/src/integrations/yeyuGamer/managerApi.ts`。恢复的旧路径仅重新导出唯一实现，供安装目录中尚未迁移的导入使用；不重新注册路由，不恢复旧的客户端 enabled 开关。启用状态仍归插件 Profile，现有请求授权和超时处理保持不变。待这些外部导入全部迁移后可删除兼容路径；仓库运行入口仍直接使用 integrations 实现。
 
 旧测试中的有效合同已由新位置的测试覆盖。恢复路径的测试验证导出身份一致，不复制旧 Schema 和旧配置断言。
 

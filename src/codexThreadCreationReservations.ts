@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import type { CodexThreadCreateResult } from "./codexRuntime.js";
+import type { CodexThreadCreateResult } from "./agentAdapters/codexContracts.js";
 import { canonicalCodexWorkspacePath } from "./codexTaskIdentity.js";
 import { atomicWriteFileSync } from "./shared/filePersistence.js";
 import { projectDirectoryLayout } from "./shared/projectDirectoryLayout.js";

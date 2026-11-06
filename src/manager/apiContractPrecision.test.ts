@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { apiContractPrecision, apiSchemaPrecision } from "./apiContractPrecision.js";
-import { projectApiHelp } from "./apiDiscoveryRoutes.js";
+import { projectApiHelp } from "../plugins/io.rabiroute.manager.agent-communication/src/manager/apiDiscoveryRoutes.js";
 import { compileApiContract } from "./apiOperationContract.js";
 import { fixtureApiContract } from "./apiOperationContractFixtures.js";
 

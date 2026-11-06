@@ -1,4 +1,0 @@
-{
-  "source": "src/adapters/wecomAdapter.ts",
-  "factory": "createWeComAdapter"
-}

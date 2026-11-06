@@ -1,4 +1,0 @@
-{
-  "source": "src/adapters/webhookAdapter.ts",
-  "factory": "createWebhookAdapter"
-}

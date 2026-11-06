@@ -8,8 +8,8 @@ import path from "node:path";
 import { AgentRequestStore, type AgentRequestPersistence } from "./store.js";
 import { executeEndpointAgentDelivery, type EndpointDeliveryOptions, type EndpointDeliveryReceipt, type PreparedEndpointDelivery } from "./endpointDelivery.js";
 import { executePreparedEndpointDelivery } from "./endpointExecution.js";
-import { createDeviceAgentOwner } from "../agentAdapters/deviceAgentOwner.js";
-import { createDeviceAgentOperations } from "../agentAdapters/deviceAgentOperations.js";
+import { createDeviceAgentOwner } from "../plugins/io.rabiroute.agent.device-agent/src/agentAdapters/deviceAgentOwner.js";
+import { createDeviceAgentOperations } from "../plugins/io.rabiroute.agent.device-agent/src/agentAdapters/deviceAgentOperations.js";
 import { ManagerPluginRouteRegistry } from "../manager/managerPluginRouteRegistry.js";
 import { assertDeviceAgentPreparedAuthority, assertDeviceAgentPreparedClaimAuthority } from "../manager/deviceAgentPreparedAuthority.js";
 

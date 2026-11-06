@@ -4,11 +4,13 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { createRequire } from "node:module";
 import { buildIsolatedWebUpdate, removeIsolatedWebWorkspace, captureAutomaticWebInputs } from "./lib/automatic-web-build.mjs";
 
 async function fixture(context) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "automatic-web-"));
-  context.after(() => fs.rm(root, { recursive: true, force: true }));
+  const cleanup = [];
+  context.after(async () => { for (const retire of cleanup.toReversed()) await retire(); await fs.rm(root, { recursive: true, force: true }); });
   for (const directory of ["src/shared", "dist/manager", "dist/plugins/packages", "docs", "assets", "ribiwebgui", "node_modules", "scripts"]) {
     await fs.mkdir(path.join(root, directory), { recursive: true });
   }
@@ -22,7 +24,7 @@ async function fixture(context) {
     await fs.writeFile(path.join(destination, "ribiwebgui/dist/index.html"), '<html><script src="./assets/app.js"></script></html>');
     await fs.writeFile(path.join(destination, "ribiwebgui/dist/assets/app.js"), "export const built=true;");
   };
-  return { sourceRoot: root, packageRoot: root, workRoot: path.join(root, "work"), run };
+  return { sourceRoot: root, packageRoot: root, workRoot: path.join(root, "work"), run, cleanup };
 }
 
 test("isolated Web candidates never write source dist and keep the installed backend fingerprint", async context => {
@@ -63,6 +65,122 @@ test("failed and cancelled builds produce no completion marker or persistent tem
   controller.abort(new Error("fixture abort"));
   await assert.rejects(buildIsolatedWebUpdate({ ...options, signal: controller.signal }), /fixture abort/);
   await assert.rejects(removeIsolatedWebWorkspace(options.workRoot, options.sourceRoot), /outside/);
+});
+
+async function nativeWebFixture(context) {
+  const options = await fixture(context);
+  await fs.mkdir(path.join(options.packageRoot, "dist/runtime"), { recursive: true });
+  // Copy the real production launch/admission/Job closure, never a fake helper.
+  for (const name of ["protectedProcessLauncher.mjs", "protectedProcessBootstrap.mjs", "windowsJobObject.mjs"]) {
+    await fs.copyFile(new URL(`../src/runtime/${name}`, import.meta.url), path.join(options.packageRoot, "dist/runtime", name));
+  }
+  if (process.platform === "win32") {
+    const require = createRequire(import.meta.url);
+    for (const name of ["koffi", `@koromix/koffi-win32-${process.arch}`]) {
+      const directory = path.dirname(require.resolve(name));
+      assert.equal(JSON.parse(await fs.readFile(path.join(directory, "package.json"), "utf8")).name, name);
+      // The controller loads the real native binding too. Keep its mapped DLL
+      // in the test dependency owner, outside this disposable source fixture.
+      const link = path.join(options.sourceRoot, "node_modules", name);
+      await fs.mkdir(path.dirname(link), { recursive: true });
+      await fs.symlink(directory, link, "junction");
+      options.cleanup.push(async () => { assert.equal((await fs.lstat(link)).isSymbolicLink(), true); await fs.unlink(link); });
+    }
+  }
+  return options;
+}
+function originalWebProcess() {
+  const koffi = createRequire(import.meta.url)("koffi"), kernel = koffi.load("kernel32.dll");
+  const open = kernel.func("void* __stdcall OpenProcess(uint32_t access, int inherit, uint32_t pid)");
+  const wait = kernel.func("uint32_t __stdcall WaitForSingleObject(void* handle, uint32_t milliseconds)");
+  const terminate = kernel.func("int __stdcall TerminateProcess(void* handle, uint32_t code)");
+  const close = kernel.func("int __stdcall CloseHandle(void* handle)");
+  let handle;
+  return { capture(pid) { handle = open(0x100001, 0, pid); assert.ok(handle); },
+    wait: () => wait(handle, 0), dispose() { if (handle) { if (wait(handle, 0) === 258) { terminate(handle, 1); assert.equal(wait(handle, 5000), 0); } close(handle); } } };
+}
+async function startNativeWebFixture(options, context) {
+  const ready = path.join(options.sourceRoot, "leaf-ready");
+  const program = path.join(options.sourceRoot, "node_modules/vue-tsc/bin/vue-tsc.js");
+  await fs.mkdir(path.dirname(program), { recursive: true });
+  const grandchild = `require('node:fs').writeFileSync(${JSON.stringify(ready)},String(process.pid));setInterval(()=>{},1000)`;
+  await fs.writeFile(program, `const {spawn}=require('node:child_process');
+    const child=spawn(process.execPath,['-e',${JSON.stringify(grandchild)}],{windowsHide:true,stdio:'ignore',detached:true});
+    child.unref();setInterval(()=>{},1000);`);
+  const controller = new AbortController();
+  const built = buildIsolatedWebUpdate({ ...options, run: undefined, signal: controller.signal });
+  // Observe rejection immediately while the actual child starts.
+  void built.catch(() => {});
+  options.cleanup.push(async () => {
+    context.mock.restoreAll(); controller.abort();
+    try { await built; } catch (error) { if (error.retryCleanup) await error.retryCleanup(); }
+  });
+  const deadline = Date.now() + 5000;
+  while (!await fs.access(ready).then(() => true, () => false)) {
+    if (Date.now() > deadline) throw new Error("Fixture Web compiler did not start");
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }
+  const original = originalWebProcess(); original.capture(Number(await fs.readFile(ready, "utf8")));
+  options.cleanup.push(() => original.dispose());
+  return { built, controller, original };
+}
+
+test("aborted native Web builds join original stdio-independent descendant HANDLE exit before deleting the workspace", { skip: process.platform !== "win32", timeout: 15_000 }, async context => {
+  const options = await nativeWebFixture(context);
+  const { built, controller, original } = await startNativeWebFixture(options, context);
+  // The old natural 'done after1.5s' marker only proved inherited stream
+  // closure. The owned Job must retire even a child with independent stdio.
+  controller.abort();
+  await assert.rejects(built, /abort/i);
+  assert.equal(original.wait(), 0, "the held original descendant HANDLE must be signalled at return");
+  assert.deepEqual(await fs.readdir(options.workRoot), []);
+});
+
+test("unconfirmed native Web retirement preserves its workspace and retries only the original owner cleanup", { skip: process.platform !== "win32", timeout: 15_000 }, async context => {
+  const options = await nativeWebFixture(context);
+  let fail = true, unconfirmed;
+  // Fault-inject the real Job method before the production launcher binds it.
+  // This intercepts only the fixture's existing workspace setup boundary.
+  const symlink = fs.symlink.bind(fs);
+  context.mock.method(fs, "symlink", async (...args) => {
+    const result = await symlink(...args);
+    const { WindowsJobTree } = await import(pathToFileURL(path.join(path.dirname(args[1]), "dist/runtime/windowsJobObject.mjs")));
+    const terminate = WindowsJobTree.prototype.terminate;
+    context.mock.method(WindowsJobTree.prototype, "terminate", function() {
+      if (fail) { fail = false; throw new Error("fixture original Job termination failed"); }
+      return terminate.call(this);
+    });
+    return result;
+  });
+  const { built, controller, original } = await startNativeWebFixture(options, context);
+  const workspace = path.join(options.workRoot, (await fs.readdir(options.workRoot))[0]);
+  const snapshot = await fs.readFile(path.join(workspace, "package/package.json"));
+  controller.abort();
+  await assert.rejects(built, error => { unconfirmed = error; return error.code === "RABI_WEB_BUILD_RETIREMENT_UNCONFIRMED"; });
+  assert.equal(original.wait(), 258);
+  assert.equal(unconfirmed.workspace, workspace);
+  assert.deepEqual(await fs.readFile(path.join(workspace, "package/package.json")), snapshot);
+  context.mock.restoreAll();
+  await unconfirmed.retryCleanup();
+  assert.equal(original.wait(), 0);
+  assert.deepEqual(await fs.readdir(options.workRoot), []);
+  await unconfirmed.retryCleanup();
+});
+
+test("normal native Web commands still produce a verified isolated candidate", { skip: process.platform !== "win32", timeout: 20_000 }, async context => {
+  const options = await nativeWebFixture(context);
+  for (const [relative, program] of [
+    ["vue-tsc/bin/vue-tsc.js", "process.exitCode=0;"],
+    ["vite/bin/vite.js", "const fs=require('node:fs');fs.mkdirSync('ribiwebgui/dist/assets',{recursive:true});fs.writeFileSync('ribiwebgui/dist/index.html','<html><script src=\"./assets/app.js\"></script></html>');fs.writeFileSync('ribiwebgui/dist/assets/app.js','export const built=true;');"]
+  ]) {
+    const destination = path.join(options.sourceRoot, "node_modules", relative);
+    await fs.mkdir(path.dirname(destination), { recursive: true }); await fs.writeFile(destination, program);
+  }
+  const result = await buildIsolatedWebUpdate({ ...options, run: undefined });
+  assert.equal(result.state, "prepared");
+  assert.match(result.revision, /^[a-f0-9]{64}$/);
+  await removeIsolatedWebWorkspace(options.workRoot, result.workspace);
+  assert.deepEqual(await fs.readdir(options.workRoot), []);
 });
 
 test("Web dependency discovery includes both Vue script blocks after line comments", async context => {

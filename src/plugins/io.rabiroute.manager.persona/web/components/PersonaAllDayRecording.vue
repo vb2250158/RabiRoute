@@ -1,0 +1,801 @@
+<script setup lang="ts">
+import { getTimeoutMs } from "../../../../../ribiwebgui/src/timeoutSettingsClient";
+import { computed, nextTick, onBeforeUnmount, ref, shallowRef, toRaw, watch } from "vue";
+import { useI18n } from "../../../../../ribiwebgui/src/i18n/index";
+import { usePersonaService } from "../persona/personaServiceClient";
+import { readAllDayResource as readRecordingResource, recordingPreview as cachedRecordingPreview, restoreRecordingPreview as restoreCachedRecording, rememberRecordingPreview as rememberCachedRecording } from "../../../../../ribiwebgui/src/allDayRecordingClient";
+import { reviewIndex, reviewWindow, latestReviewEvent, adjacentLoadedEvent, mergeReviewEvents } from "../../../../../ribiwebgui/src/allDayReviewModel";
+import { ALL_DAY_SOURCES, DEFAULT_ALL_DAY_SETTINGS, allDayRecordingHealth, matchesReviewType, type AllDayEvent, type AllDaySettings, type AllDaySnapshot, type AllDayCatalog } from "@shared/allDayRecording";
+
+const props = defineProps<{ roleId: string }>();
+const personaService = usePersonaService();
+const managerEventSource = personaService.events;
+const recordingPreview = (roleId: string) => cachedRecordingPreview(personaService.cacheKey(roleId));
+const restoreRecordingPreview = (roleId: string) => restoreCachedRecording(personaService.cacheKey(roleId));
+const rememberRecordingPreview = (roleId: string, events: AllDayEvent[]) => rememberCachedRecording(personaService.cacheKey(roleId), events);
+function readAllDayResource<T>(url: string, read: (response: Response) => Promise<T>, init: RequestInit = {}, signal?: AbortSignal, timeoutMs = getTimeoutMs("webgui.recording.read", 12000)): Promise<T> {
+  return readRecordingResource(url, read, init, signal, timeoutMs, personaService.fetch);
+}
+const { isEnglish } = useI18n();
+const label = (zh: string, en: string) => isEnglish.value ? en : zh;
+const failureMessage = (failure: unknown) => failure instanceof Error && failure.name === "TimeoutError"
+  ? label("读取超时，请重试", "Request timed out. Please retry.") : failure instanceof Error ? failure.message : String(failure);
+const sources = computed(() => [
+  { id: "systemAudio", name: label("电脑播放", "System playback"), icon: "mdi-volume-high", color: "#a4cf80" },
+  { id: "microphone", name: label("麦克风", "Microphone"), icon: "mdi-microphone", color: "#62d4a0" },
+  { id: "screen", name: label("屏幕", "Screen"), icon: "mdi-monitor", color: "#65cde4" },
+  { id: "window", name: label("前台窗口", "Foreground window"), icon: "mdi-application-outline", color: "#dfba70" },
+  { id: "camera", name: label("摄像头", "Camera"), icon: "mdi-camera-outline", color: "#ba9deb" },
+  { id: "homeAssistant", name: "Home Assistant", icon: "mdi-home-assistant", color: "#18b5dc" },
+  { id: "mobile", name: label("手机", "Mobile"), icon: "mdi-cellphone", color: "#e69caa" },
+  { id: "session", name: label("采集状态", "Capture status"), icon: "mdi-record-circle-outline", color: "#95a5ad" }
+]);
+const sourceInfo = (id: string) => sources.value.find(source => source.id === id)!;
+function recordingState(event: AllDayEvent) {
+  const state = event.transcriptionState ?? (event.text ? "ready" : "empty");
+  if (state === "pending" || state === "processing") return label('转写中', 'Transcribing');
+  if (state === "error") return label('转写失败，录音已保存', 'Transcription failed; audio saved');
+  if (state === "empty") return label('未识别到文字', 'No speech recognized');
+  return label('已转写', 'Transcribed');
+}
+function eventTitle(event: AllDayEvent) {
+  return event.kind === "audio" ? label('ASR 事件 · ', 'ASR event · ') + (event.source === "mobile" ? label('手机', 'Mobile') : label('电脑', 'Computer')) : sourceInfo(event.source).name;
+}
+const localDate = (date: Date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+const date = computed(() => localDate(new Date(cursor.value)));
+const cursor = ref(Date.now());
+const minSpan = 3_000;
+const maxSpan = 86_400_000;
+const span = ref(30 * 60_000);
+const viewStart = computed(() => Math.max(0, cursor.value - span.value / 2));
+const viewEnd = computed(() => cursor.value + span.value / 2);
+const live = ref(true);
+let loadedRange = { start: 0, end: 0 };
+let completeRange = false;
+let navigationController: AbortController | undefined;
+let requestedRange: { start: number; end: number } | undefined;
+let rangeTimer: ReturnType<typeof setTimeout> | undefined;
+let inertia = 0;
+let velocity = 0;
+let lastMove = 0;
+let lastX = 0;
+const events = shallowRef<AllDayEvent[]>([]);
+const timelineMarkers = shallowRef<Array<{event: AllDayEvent;count: number}>>([]);
+let markerEventIds = new Set<string>();
+let recentEvents: AllDayEvent[] = [];
+let catalogController: AbortController | undefined;
+let catalogComplete = false;
+let catalogReceived = false;
+let catalogQueued = false;
+let pendingNavigation: { direction: "older" | "newer"; role: string; selected: string; source: string; type: string } | undefined;
+const catalogDays = new Set<string>();
+const validatedCatalogDays = new Set<string>();
+const pendingIndexDays = new Set<string>();
+const readyIndexDays = new Set<string>();
+let indexController: AbortController | undefined;
+const historyMessage = ref("");
+const historyError = ref("");
+const fetching = ref(false);
+const hasLoaded = ref(false);
+const cachedPreview = ref(false);
+let recentController: AbortController | undefined;
+let refreshQueued = false;
+let disposed = false;
+const rowStride = 90;
+const listScrollTop = ref(0);
+const virtualStart = computed(() => Math.max(0, Math.floor(listScrollTop.value / rowStride) - 6));
+const state = ref<(AllDaySnapshot & { devices?: { id: string; lastReceivedAt: number }[] }) | null>(null);
+const settings = ref<AllDaySettings>(structuredClone(DEFAULT_ALL_DAY_SETTINGS));
+const settingsOpen = ref(false);
+const selectedId = ref("");
+const filter = ref("all");
+const eventType = ref("all");
+const matchesFilter = (event: AllDayEvent) => matchesReviewType(event,eventType.value) && (filter.value === "all" || event.source === filter.value);
+const busy = ref(false);
+const error = ref("");
+const stateError = ref("");
+const captureHealth = computed(() => {
+  void cursor.value; // Reuse the visible timeline clock; no status polling.
+  return state.value ? allDayRecordingHealth(state.value, Date.now()) : "waiting";
+});
+const captureStatus = computed(() => {
+  if (stateError.value) return { text: label("状态读取失败", "Status unavailable"), color: "error" };
+  if (!state.value) return { text: label("正在加载", "Loading"), color: undefined };
+  if (state.value.activeRoleId && state.value.activeRoleId !== props.roleId) return { text: label("其他角色记录中", "Another persona is recording"), color: undefined };
+  const statuses = {
+    off: ["已关闭", "Off", undefined], waiting: ["等待记录", "Waiting for events", undefined],
+    preparing: ["正在准备采集环境", "Preparing capture environment", "info"], starting: ["等待首次采集", "Waiting for first capture", "info"],
+    recording: ["正在记录", "Recording", "success"], degraded: ["部分来源不可用", "Some sources unavailable", "warning"],
+    failed: ["采集失败", "Capture failed", "error"], stale: ["采集未更新", "Capture not updating", "warning"]
+  } as const;
+  const [zh, en, color] = statuses[captureHealth.value];
+  return { text: label(zh, en), color };
+});
+const ruler = ref<HTMLElement>();
+const eventList = ref<HTMLElement>();
+let listDriving = false;
+let expectedScrollTop: number | undefined;
+let listFrame = 0;
+const loadingMore = ref(false);
+const navigatingEvent = ref(false);
+const navigationMessage = ref("");
+const reachedOlder = ref(false);
+const reachedNewer = ref(false);
+let pageController: AbortController | undefined;
+let lastEdgeLoad = 0;
+let drag: { x: number; time: number; span: number; width: number; moved: boolean } | undefined;
+let controller: AbortController | undefined;
+let statusController: AbortController | undefined;
+let eventSource: EventSource | null = null;
+let refreshTimer: ReturnType<typeof setTimeout> | undefined;
+const api = computed(() => `/api/roles/${encodeURIComponent(props.roleId)}/all-day-recording`);
+const indexedEvents = computed(() => reviewIndex(events.value));
+const visible = computed(() => reviewWindow(indexedEvents.value,viewStart.value,viewEnd.value).filter(matchesFilter));
+// Keep the buffered list stable while its scrolling drives the timeline viewport.
+const listEvents = computed(() => events.value.filter(matchesFilter).slice().sort((a,b) => b.startedAt-a.startedAt || b.id.localeCompare(a.id)));
+const listIndices = computed(() => new Map(listEvents.value.map((event,index) => [event.id,index])));
+const renderedEvents = computed(() => listEvents.value.slice(virtualStart.value, virtualStart.value + 24));
+// Co-located events share a marker at wide zoom; zooming reveals individual events.
+const markerGroups = computed(() => {
+  const lanes = new Map<string, Map<number, { event: AllDayEvent; count: number }>>();
+  const markers=timelineMarkers.value.filter(marker=>marker.event.startedAt<viewEnd.value&&marker.event.endedAt>=viewStart.value&&matchesFilter(marker.event));
+  const markerIds=new Set(markers.map(marker=>marker.event.id));
+  for (const {event,count} of [...markers,...visible.value.filter(event=>!markerIds.has(event.id)).map(event=>({event,count:markerEventIds.has(event.id)?0:1}))]) {
+    let lane = lanes.get(event.source); if (!lane) { lane = new Map(); lanes.set(event.source, lane); }
+    const bucket = Math.floor(percent(event.startedAt) * 2);
+    const current = lane.get(bucket);
+    if (current) { current.count+=count; if (event.id === selectedId.value) current.event = event; }
+    else lane.set(bucket, { event, count });
+  }
+  return lanes;
+});
+function selectMarker(group: { event: AllDayEvent; count: number }) {
+  select(group.event);
+  if (group.count > 1) span.value = Math.max(minSpan, span.value / 4);
+}
+const selected = computed(() => indexedEvents.value.byId.get(selectedId.value));
+const ticks = computed(() => {
+  const count = span.value < 6_000 ? 4 : 7;
+  return Array.from({ length: count }, (_, i) => viewStart.value + (viewEnd.value - viewStart.value) * i / (count - 1));
+});
+const formatTime = (time: number) => new Date(time).toLocaleTimeString(isEnglish.value ? "en-GB" : "zh-CN", { hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" });
+const percent = (time: number) => Math.max(0, Math.min(100, (time - viewStart.value) / (viewEnd.value - viewStart.value) * 100));
+const mediaUrl = computed(() => selected.value?.kind === 'image' && selected.value.media ? `${api.value}/${selected.value.media}` : "");
+const audioUrl = computed(() => selected.value?.kind === 'audio' ? selected.value.media ? `${api.value}/${selected.value.media}` : `${api.value}/audio?${new URLSearchParams({ id: selected.value.id, since: String(selected.value.startedAt), until: String(Math.max(selected.value.startedAt + 1, selected.value.endedAt + 1)) })}` : "");
+const displayedImage = ref("");
+const displayedImageTime = ref<number | null>(null);
+const previewTime = computed(() => mediaUrl.value && displayedImage.value ? displayedImageTime.value : selected.value?.startedAt ?? null);
+const imageLoading = ref(false);
+const imageError = ref("");
+const expandedText = ref(false);
+const imageCache = new Map<string,{ url: string; bytes: number }>();
+let imageRequest: AbortController | undefined;
+let imageTimer: ReturnType<typeof setTimeout> | undefined;
+let cacheTimer: ReturnType<typeof setTimeout> | undefined;
+let lastNavigation = 0;
+let imageSequence = 0;
+function clearImages() {
+  ++imageSequence; clearTimeout(imageTimer); imageRequest?.abort(); displayedImage.value = ""; displayedImageTime.value = null;
+  for(const image of imageCache.values()) URL.revokeObjectURL(image.url);
+  imageCache.clear(); imageLoading.value = false; imageError.value = "";
+}
+async function showImage(url: string, sequence: number, capturedAt: number | null) {
+  const cached = imageCache.get(url);
+  if(cached) {
+    imageCache.delete(url); imageCache.set(url,cached);
+    displayedImage.value = cached.url; displayedImageTime.value = capturedAt; imageLoading.value = false; return;
+  }
+  const pending = new AbortController(); imageRequest = pending;
+  let objectUrl = "";
+  try {
+    const blob = await readAllDayResource(url, response => {
+      if(!response.ok) throw new Error(`HTTP ${response.status}`);
+      return response.blob();
+    }, {}, pending.signal);
+    if(blob.size > 16 * 1024 * 1024) throw new Error(label("画面过大，无法预览", "Image exceeds preview limit"));
+    objectUrl = URL.createObjectURL(blob);
+    const decoded = new Image(); decoded.decoding = "async"; decoded.src = objectUrl;
+    await decoded.decode();
+    if(sequence !== imageSequence || pending.signal.aborted) return;
+    imageCache.set(url,{url:objectUrl,bytes:blob.size}); displayedImage.value = objectUrl; displayedImageTime.value = capturedAt; objectUrl = "";
+    await nextTick();
+    let bytes = [...imageCache.values()].reduce((sum,image) => sum + image.bytes,0);
+    while(imageCache.size > 4 || (bytes > 16 * 1024 * 1024 && imageCache.size > 1)) {
+      const key = imageCache.keys().next().value!; const old = imageCache.get(key)!;
+      bytes -= old.bytes; URL.revokeObjectURL(old.url); imageCache.delete(key);
+    }
+  } catch(failure) {
+    if(sequence === imageSequence && !pending.signal.aborted) imageError.value = failure instanceof Error && failure.name === "TimeoutError"
+      ? label("画面读取超时，点击重试", "Image request timed out. Retry.") : label("画面读取失败，点击重试", "Could not load image. Retry.");
+  } finally {
+    if(objectUrl) URL.revokeObjectURL(objectUrl);
+    if(sequence === imageSequence) imageLoading.value = false;
+  }
+}
+function requestImage() {
+  const sequence = ++imageSequence; clearTimeout(imageTimer); imageRequest?.abort(); imageError.value = "";
+  if(!mediaUrl.value) { imageLoading.value = false; return; }
+  imageLoading.value = true;
+  const url = mediaUrl.value;
+  const capturedAt = selected.value?.startedAt ?? null;
+  imageTimer = setTimeout(() => void showImage(url,sequence,capturedAt),performance.now() - lastNavigation < 180 ? 150 : 0);
+}
+watch(mediaUrl, requestImage);
+watch(selectedId, () => { expandedText.value = false; });
+watch([events,filter,eventType], () => {
+  if(live.value) selectedId.value = latestReviewEvent(events.value.filter(matchesFilter),filter.value)?.id ?? "";
+});
+
+async function data<T>(suffix: string, init: RequestInit = {}, signal?: AbortSignal): Promise<T> {
+  return readAllDayResource(api.value + suffix, async response => {
+    const result = await response.json();
+    if (!response.ok || result.code !== 0) throw new Error(result.message || `HTTP ${response.status}`);
+    return result.data;
+  }, init, signal, init.method ? getTimeoutMs("webgui.recording.mutation", 45000) : /^\/(catalog|events)(?:\?|$)/.test(suffix) ? getTimeoutMs("webgui.recording.history", 60000) : getTimeoutMs("webgui.recording.read", 12000));
+}
+async function loadRange() {
+  pageController?.abort(); pageController = undefined; loadingMore.value = false;
+  reachedOlder.value = false; reachedNewer.value = false;
+  const margin = Math.max(15 * 60_000, span.value / 4);
+  const start = Math.max(0, viewStart.value - margin);
+  const end = viewEnd.value + margin;
+  controller?.abort();
+  const pending = new AbortController(); controller = pending;
+  requestedRange = { start, end }; fetching.value = true;
+  try {
+    const timeline = await (async () => {
+        const rows: AllDayEvent[] = [];
+        let loading = false;
+        let readError: string | undefined;
+        // Keep each storage query bounded while the viewport crosses arbitrary dates.
+        for (let since = start; since < end; since += 86400_000) {
+          const page = await data<{ events: AllDayEvent[]; loading?: boolean; pendingDays?: string[]; readError?: string }>(`/events?since=${since}&until=${Math.min(end, since + 86400_000)}`, {}, pending.signal);
+          readError ||= page.readError;
+          loading ||= !!page.loading || !!page.pendingDays?.length;
+          for(const day of page.pendingDays??[]) {pendingIndexDays.add(day);readyIndexDays.add(day);}
+          rows.push(...page.events);
+        }
+        return { loading, readError, events: [...new Map(rows.map(event => [event.id, event])).values()].sort((a, b) => a.startedAt - b.startedAt) };
+      })();
+    if (pending.signal.aborted) return;
+    const anchor = listDriving ? listAnchor() : undefined;
+    loadedRange = { start, end }; completeRange = !timeline.loading && !timeline.readError;
+    // Retain coverage at wide zoom without retaining every row in the list buffer.
+    const markers=new Map<string,{event:AllDayEvent;count:number}>();
+    for(const event of timeline.events) {
+      if(event.startedAt>=viewEnd.value||event.endedAt<viewStart.value) continue;
+      const key=`${event.source}:${Math.floor(percent(event.startedAt)*2)}`,group=markers.get(key);
+      if(group) {group.count++;if(event.id===selectedId.value) group.event=event;}
+      else markers.set(key,{event,count:1});
+    }
+    markerEventIds=new Set(timeline.events.map(event=>event.id));timelineMarkers.value=[...markers.values()];
+    if(timeline.loading) {historyMessage.value=label("历史正在读取，已显示事件可直接查看", "Loading history; displayed events remain available");void loadReadyIndexes();}
+    events.value = bufferEvents(mergeReviewEvents(events.value, mergeReviewEvents(timeline.events, recentEvents)));
+    error.value = ""; hasLoaded.value = true;
+    if(timeline.readError) historyError.value=timeline.readError;
+    cacheRecords();
+    await nextTick();
+    if (pending.signal.aborted) return;
+    if (anchor && listDriving) {
+      const index = listEvents.value.findIndex(item => item.id === anchor.id);
+      if (index >= 0) scrollListTo(index * rowStride - anchor.offset);
+    } else if (!listDriving) syncListToCursor();
+  } catch (failure) {
+    if (!pending.signal.aborted) error.value = failureMessage(failure);
+  } finally {
+    if (controller === pending) {
+      requestedRange = undefined; controller = undefined; fetching.value = false;
+      if (refreshQueued && !disposed) {
+        refreshQueued = false; clearTimeout(refreshTimer);
+        refreshTimer = setTimeout(() => void refreshOverview(), 1000);
+      }
+    }
+  }
+}
+function loadStatus() {
+  if (statusController || disposed) return;
+  const statusPending = new AbortController(); statusController = statusPending;
+  void data<NonNullable<typeof state.value>>("", {}, statusPending.signal).then(snapshot => {
+    if(statusPending.signal.aborted || disposed) return;
+    state.value = snapshot; stateError.value = "";
+    if(!settingsOpen.value) settings.value = structuredClone(snapshot.settings);
+    if(snapshot.devices?.length && (!snapshot.settings.mobileDeviceIds || snapshot.settings.mobileDeviceIds.length === 0)) {
+      const autoDeviceIds = snapshot.devices.map(d => d.id);
+      snapshot.settings.mobileDeviceIds = autoDeviceIds;
+      if(!settingsOpen.value) settings.value.mobileDeviceIds = autoDeviceIds;
+      void data("/settings", {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(snapshot.settings)
+      }).catch(() => {});
+    }
+  }).catch(failure => {
+    if(!statusPending.signal.aborted && !disposed) stateError.value = failureMessage(failure);
+  }).finally(() => { if (statusController === statusPending) statusController = undefined; drainOverview(); });
+}
+function drainOverview() {
+  if (!refreshQueued || disposed || document.hidden || statusController || recentController || navigatingEvent.value) return;
+  refreshQueued = false; clearTimeout(refreshTimer);
+  refreshTimer = setTimeout(() => refreshOverview(),500);
+}
+function preserveList(anchor: ReturnType<typeof listAnchor>) {
+  if (!anchor || live.value) return;
+  const index = listEvents.value.findIndex(row => row.id === anchor.id);
+  if (index >= 0) scrollListTo(index * rowStride - anchor.offset);
+}
+function bufferEvents(rows: AllDayEvent[]): AllDayEvent[] {
+  if(rows.length<=2000) return rows;
+  completeRange=false;reachedOlder.value=reachedNewer.value=false;
+  let pivot=rows.findIndex(row=>row.id===selectedId.value);
+  if(pivot<0) {let low=0,high=rows.length;while(low<high) {const mid=(low+high)>>>1;if(rows[mid].startedAt<cursor.value) low=mid+1;else high=mid;}pivot=low;}
+  const start=live.value ? rows.length-2000 : Math.max(0,Math.min(rows.length-2000,pivot-1000));
+  return rows.slice(start,start+2000);
+}
+function cacheRecords() {
+  if (cachedPreview.value) return;
+  clearTimeout(cacheTimer);
+  const role = props.roleId, rows = events.value;
+  cacheTimer = setTimeout(() => rememberRecordingPreview(role, rows), 1000);
+}
+function trackHistoryPage(day: string, page: AllDayCatalog, signal?: AbortSignal) {
+  if(page.readError) throw new Error(page.readError);
+  if(page.loading) {pendingIndexDays.add(day);return;}
+  if(page.incompleteDays.length) {
+    pendingIndexDays.add(day);
+    void data(`/index-repair/${day}`,{method:"POST",headers:{"content-type":"application/json"},body:"{}"},signal)
+      .catch(failure=>{if(!signal?.aborted&&!disposed) historyError.value=failureMessage(failure);});
+  } else {pendingIndexDays.delete(day);validatedCatalogDays.add(day);}
+}
+async function loadCatalog(force = false) {
+  catalogController?.abort();
+  if(force) {indexController?.abort();controller?.abort();readyIndexDays.clear();validatedCatalogDays.clear();pendingIndexDays.clear();}
+  const pending = new AbortController(); catalogController = pending;
+  fetching.value = true; historyMessage.value = ""; historyError.value = "";
+  try {
+    const catalog = await data<AllDayCatalog>(force ? "/catalog?refresh=1" : "/catalog", {}, pending.signal);
+    if (pending.signal.aborted || disposed) return;
+    if(catalog.readError) throw new Error(catalog.readError);
+    if(catalog.loading) {
+      historyMessage.value=label("历史目录读取中，已显示事件可直接查看", "Loading history catalog; displayed events remain available");
+      catalogComplete=completeRange=false;return;
+    }
+    catalogReceived=true;catalogDays.clear();
+    for(const day of catalog.days) catalogDays.add(day);
+    const anchor=listAnchor();
+    events.value=bufferEvents(mergeReviewEvents(events.value,mergeReviewEvents(catalog.events,recentEvents)));
+    hasLoaded.value=true;cachedPreview.value=false;catalogComplete=false;
+    await nextTick();preserveList(anchor);cacheRecords();
+  } catch(failure) {
+    if(!pending.signal.aborted&&!disposed) {
+      historyError.value=failureMessage(failure);
+      historyMessage.value=label("历史更新失败，已显示事件仍可查看；点击刷新重试", "History update failed; displayed events remain available. Refresh to retry.");
+    }
+  } finally {
+    if(catalogController===pending) {
+      catalogController=undefined;fetching.value=false;
+      if(catalogQueued) {catalogQueued=false;void loadCatalog();}
+      else if(catalogReceived&&!historyError.value) {void loadRange();void loadReadyIndexes();retryNavigation();}
+    }
+  }
+}
+async function loadReadyIndexes() {
+  if (disposed || catalogController || indexController || document.hidden || !readyIndexDays.size) return;
+  const pending = new AbortController(); indexController = pending;
+  let completedDay = false;
+  try {
+    while(readyIndexDays.size && !pending.signal.aborted && !disposed) {
+      const day = readyIndexDays.values().next().value!; readyIndexDays.delete(day);
+      const page = await data<AllDayCatalog>(`/catalog?day=${day}&summary=1`,{},pending.signal);
+      if(pending.signal.aborted || disposed) return;
+      trackHistoryPage(day,page,pending.signal);
+      completedDay ||= !page.loading && !page.incompleteDays.length;
+      if(!page.loading && !page.incompleteDays.length && day>=new Date(viewStart.value).toISOString().slice(0,10) && day<=new Date(viewEnd.value).toISOString().slice(0,10)) await loadRange();
+    }
+    if(!pendingIndexDays.size) {historyMessage.value="";historyError.value="";}
+  } catch(failure) { if(!pending.signal.aborted && !disposed) historyError.value = failureMessage(failure); }
+  finally { if(indexController === pending) indexController = undefined; if(completedDay) retryNavigation(); }
+}
+function retryNavigation() {
+  const queued=pendingNavigation;
+  if(!queued || navigatingEvent.value || disposed) return;
+  pendingNavigation=undefined;
+  if(queued.role===props.roleId && queued.selected===selectedId.value && queued.source===filter.value && queued.type===eventType.value) void adjacentEvent(queued.direction);
+}
+function refreshOverview() { loadStatus(); void loadRecent(); }
+function refreshRecords(force = false) { error.value="";refreshOverview(); void loadCatalog(force); }
+
+async function loadRecent() {
+  if (recentController || disposed) return;
+  const pending = new AbortController(); recentController = pending;
+  const role = props.roleId;
+  try {
+    const result = await data<{ events: AllDayEvent[] }>("/recent", {}, pending.signal);
+    if (pending.signal.aborted || disposed || role !== props.roleId) return;
+    const anchor = listAnchor();
+    recentEvents = result.events;
+    events.value = bufferEvents(mergeReviewEvents(events.value, recentEvents));
+    if (events.value.length) hasLoaded.value = true;
+    await nextTick(); preserveList(anchor); cacheRecords();
+  } catch { /* Catalog failures are visible; recent refresh never erases cached history. */ }
+  finally { if (recentController === pending) recentController = undefined; drainOverview(); }
+}
+async function action(name: "start" | "stop" | "settings") {
+  if (name === "start" && state.value && !ALL_DAY_SOURCES.some(source => state.value!.settings.sources[source])) { openSettings(); return; }
+  busy.value = true; error.value = "";
+  try {
+    await data(`/${name}`, { method: name === "settings" ? "PUT" : "POST", headers: { "content-type": "application/json" }, ...(name === "settings" ? { body: JSON.stringify(settings.value) } : {}) });
+    if (name === "settings") settingsOpen.value = false;
+    refreshRecords();
+  } catch (failure) { error.value = failureMessage(failure); }
+  finally { busy.value = false; }
+}
+function stopMotion() { cancelAnimationFrame(inertia); inertia = 0; }
+function listAnchor() {
+  const top = eventList.value?.scrollTop ?? 0;
+  const index = Math.min(listEvents.value.length - 1, Math.floor(top / rowStride));
+  const item = listEvents.value[index];
+  return item ? { id: item.id, offset: index * rowStride - top } : undefined;
+}
+function scrollListTo(top: number) {
+  const list = eventList.value;
+  if (!list) return;
+  expectedScrollTop = Math.max(0, Math.min(top, list.scrollHeight - list.clientHeight));
+  listScrollTop.value = expectedScrollTop;
+  list.scrollTop = expectedScrollTop;
+}
+function syncListToCursor() {
+  if (listDriving || !listEvents.value.length) return;
+  let index = listIndices.value.get(selectedId.value) ?? -1;
+  if (index < 0) {
+    let lo = 0, hi = listEvents.value.length;
+    while (lo < hi) { const mid = (lo + hi) >>> 1; if (listEvents.value[mid].startedAt > cursor.value) lo = mid + 1; else hi = mid; }
+    index = Math.min(lo, listEvents.value.length - 1);
+    if (index > 0 && Math.abs(listEvents.value[index - 1].startedAt - cursor.value) <= Math.abs(listEvents.value[index].startedAt - cursor.value)) index--;
+  }
+  scrollListTo(index * rowStride);
+}
+function takeListControl() { stopMotion(); live.value = false; listDriving = true; expectedScrollTop = undefined; }
+async function browseList(event: WheelEvent) {
+  takeListControl();
+  const list = eventList.value;
+  if (!list || !listEvents.value.length || loadingMore.value || performance.now() - lastEdgeLoad < 500) return;
+  if (event.deltaY < 0 && list.scrollTop < rowStride * 2) void loadPage("newer");
+  if (event.deltaY > 0 && list.scrollTop + list.clientHeight >= listEvents.value.length * rowStride - rowStride * 2) void loadPage("older");
+}
+async function loadPage(direction: "older" | "newer") {
+  if (loadingMore.value || disposed || (direction === "older" ? reachedOlder.value : reachedNewer.value)) return;
+  const boundary = direction === "older" ? listEvents.value.at(-1) : listEvents.value[0];
+  const query = new URLSearchParams({ direction, time: String(boundary?.startedAt ?? Date.now()), id: boundary?.id ?? "\uffff", source: filter.value, type: eventType.value });
+  const pending = new AbortController(); pageController = pending; loadingMore.value = true;
+  controller?.abort(); clearTimeout(rangeTimer); lastEdgeLoad = performance.now();
+  try {
+    const page = await data<{events: AllDayEvent[]; hasMore: boolean; loading?: boolean; pendingDays?: string[]; readError?: string}>(`/page?${query}`, {}, pending.signal);
+    if (pending.signal.aborted || disposed) return;
+    if(page.readError) throw new Error(page.readError);
+    if(page.loading) {historyMessage.value=label("历史正在读取，已显示事件可直接查看", "Loading history; displayed events remain available");for(const day of page.pendingDays??[]) {pendingIndexDays.add(day);readyIndexDays.add(day);}void loadReadyIndexes();}
+    error.value = ""; hasLoaded.value = true;
+    const anchor = listAnchor();
+    const merged = [...new Map([...events.value, ...page.events].map(row => [row.id,row])).values()].sort((a,b) => a.startedAt-b.startedAt || a.id.localeCompare(b.id));
+    completeRange = false;
+    events.value = bufferEvents(merged);
+    if (direction === "older") { reachedOlder.value = !page.hasMore; if (merged.length > 2000) reachedNewer.value = false; }
+    else { reachedNewer.value = !page.hasMore; if (merged.length > 2000) reachedOlder.value = false; }
+    await nextTick();
+    if (anchor) { const index = listEvents.value.findIndex(row => row.id === anchor.id); if (index >= 0) scrollListTo(index * rowStride-anchor.offset); }
+  } catch (failure) { if (!pending.signal.aborted) error.value = failureMessage(failure); }
+  finally { if (pageController === pending) { pageController = undefined; loadingMore.value = false; } }
+}
+function scrollEvents() {
+  lastNavigation = performance.now();
+  const list = eventList.value;
+  const previousTop = listScrollTop.value;
+  listScrollTop.value = list?.scrollTop ?? 0;
+  if (!list || (expectedScrollTop !== undefined && Math.abs(list.scrollTop - expectedScrollTop) < 1)) return;
+  takeListControl();
+  if (list.scrollTop > previousTop && list.scrollTop + list.clientHeight >= listEvents.value.length * rowStride - rowStride * 2) void loadPage("older");
+  if (list.scrollTop < previousTop && list.scrollTop < rowStride * 2) void loadPage("newer");
+  cancelAnimationFrame(listFrame);
+  listFrame = requestAnimationFrame(() => {
+    const anchor = listAnchor();
+    const item = anchor ? indexedEvents.value.byId.get(anchor.id) : undefined;
+    if (!item) return;
+    live.value = false; cursor.value = item.startedAt; selectedId.value = item.id;
+  });
+}
+function takeTimelineControl() { listDriving = false; cancelAnimationFrame(listFrame); }
+function position(time: number) {
+  lastNavigation = performance.now();
+  takeTimelineControl();
+  cursor.value = Math.max(0, Math.min(Date.now(), time));
+  live.value = cursor.value >= Date.now() - 1000;
+  const nearby = reviewWindow(indexedEvents.value,cursor.value - Math.max(15000,settings.value.intervalSeconds * 2500),cursor.value);
+  const match = latestReviewEvent(nearby.filter(item => item.kind !== "status" && matchesFilter(item)),filter.value);
+  selectedId.value = match?.id ?? "";
+}
+function select(event: AllDayEvent) { lastNavigation = 0; stopMotion(); takeTimelineControl(); live.value = false; cursor.value = event.startedAt; selectedId.value = event.id; events.value=bufferEvents(mergeReviewEvents(events.value,[event]));void nextTick(syncListToCursor); }
+async function adjacentEvent(direction: "older" | "newer") {
+  if (navigatingEvent.value || disposed) return;
+  navigatingEvent.value = true;
+  stopMotion(); takeTimelineControl(); live.value = false; navigationMessage.value = "";
+  const role = props.roleId, source = filter.value, type = eventType.value, selected = selectedId.value;
+  const current = indexedEvents.value.byId.get(selected);
+  const anchor = { time: current?.startedAt ?? cursor.value, id: current?.id ?? (direction === "older" ? "\uffff" : "") };
+  const cached = adjacentLoadedEvent(events.value.filter(matchesFilter),anchor,direction,loadedRange,completeRange);
+  if (cached) { select(cached); navigatingEvent.value = false; return; }
+  controller?.abort(); recentController?.abort(); pageController?.abort(); clearTimeout(rangeTimer);
+  const pending = new AbortController(); navigationController = pending;
+  const timeout = setTimeout(() => pending.abort(),getTimeoutMs("webgui.recording.preview", 15000));
+  const query = new URLSearchParams({ direction, time: String(anchor.time), id: anchor.id, source, type });
+  try {
+    // Query the adjacent page so sparse loaded windows cannot skip unseen events.
+    const page = await data<{ events: AllDayEvent[]; loading?: boolean; pendingDays?: string[]; readError?: string }>(`/page?${query}`,{},pending.signal);
+    if (disposed || role !== props.roleId || source !== filter.value || type !== eventType.value || selected !== selectedId.value) return;
+    if(page.readError) throw new Error(page.readError);
+    if(page.loading && !page.events.length) {
+      navigationMessage.value=label('历史正在读取，读取完成后继续定位', 'Loading history; navigation will resume when ready');
+      pendingNavigation={direction,role,source,type,selected};
+      for(const day of page.pendingDays??[]) {pendingIndexDays.add(day);readyIndexDays.add(day);}
+      void loadReadyIndexes();return;
+    }
+    const next = direction === "older" ? page.events.at(-1) : page.events[0];
+    if (!next) { navigationMessage.value = direction === "older" ? label('已到最早事件', 'First event reached') : label('已到最新事件', 'Latest event reached'); return; }
+    events.value = bufferEvents([...new Map([...events.value, ...page.events].map(row => [row.id,row])).values()]
+      .sort((a,b) => a.startedAt-b.startedAt || a.id.localeCompare(b.id)));
+    completeRange = false;
+    error.value = "";
+    select(next);
+  } catch (failure) { if (!disposed && role === props.roleId) error.value = failureMessage(failure); }
+  finally { clearTimeout(timeout); if(navigationController === pending) navigationController = undefined; navigatingEvent.value = false; }
+}
+function jumpDate(value: string) {
+  const time = new Date(`${value}T12:00:00`).getTime();
+  if (!Number.isFinite(time)) return;
+  stopMotion(); span.value = 86400_000; position(time);
+}
+function now() { stopMotion(); live.value = true; position(Date.now()); selectedId.value = latestReviewEvent(events.value.filter(matchesFilter),filter.value)?.id ?? ""; refreshRecords(true); }
+function zoom(factor: number) { takeTimelineControl(); span.value = Math.max(minSpan, Math.min(maxSpan, span.value * factor)); }
+function beginDrag(event: PointerEvent) {
+  if (!ruler.value || event.button !== 0 || (event.target as HTMLElement).closest('button, input, audio')) return;
+  stopMotion(); takeTimelineControl(); velocity = 0; lastX = event.clientX; lastMove = performance.now();
+  drag = { x: event.clientX, time: cursor.value, span: span.value, width: ruler.value.clientWidth, moved: false };
+}
+function moveDrag(event: PointerEvent) {
+  if (!drag) return;
+  if (!drag.moved && Math.abs(event.clientX - drag.x) < 5) return;
+  drag.moved = true; live.value = false;
+  ruler.value?.setPointerCapture(event.pointerId);
+  const time = performance.now();
+  velocity = (event.clientX - lastX) / Math.max(1, time - lastMove);
+  lastX = event.clientX; lastMove = time;
+  position(drag.time - (event.clientX - drag.x) / drag.width * drag.span);
+}
+function leaveDrag() { if (drag && !drag.moved) drag = undefined; }
+function endDrag(event: PointerEvent) {
+  if (!drag) return;
+  if (ruler.value?.hasPointerCapture(event.pointerId)) ruler.value.releasePointerCapture(event.pointerId);
+  if (!drag.moved) { drag = undefined; return; }
+  const scale = drag.span / drag.width; drag = undefined;
+  if (performance.now() - lastMove > 100) velocity = 0;
+  let previous = performance.now();
+  const coast = (time: number) => {
+    const elapsed = Math.min(32, time - previous); previous = time;
+    position(cursor.value - velocity * elapsed * scale);
+    velocity *= Math.exp(-elapsed / 180);
+    if (Math.abs(velocity) > .015 && cursor.value > 0 && !live.value) inertia = requestAnimationFrame(coast);
+  };
+  inertia = requestAnimationFrame(coast);
+}
+function wheel(event: WheelEvent) {
+  stopMotion();
+  if (event.ctrlKey || event.metaKey) zoom(Math.exp(event.deltaY / 300));
+  else position(cursor.value + (event.deltaX || event.deltaY) * span.value / Math.max(1, ruler.value?.clientWidth ?? 800));
+}
+let liveFrame = 0;
+let lastClockSecond = 0;
+// Visual clock only: event data is refreshed by owner SSE or viewport changes.
+function animateClock() {
+  const time = Date.now();
+  if (live.value && !drag && Math.floor(time / 1000) !== lastClockSecond) {
+    lastClockSecond = Math.floor(time / 1000); cursor.value = time;
+  }
+  liveFrame = requestAnimationFrame(animateClock);
+}
+liveFrame = requestAnimationFrame(animateClock);
+watch([cursor, selectedId, filter, eventType], () => { navigationMessage.value = ""; if (!listDriving) void nextTick(syncListToCursor); });
+watch([filter,eventType], () => { pageController?.abort(); pageController = undefined; loadingMore.value = false; reachedOlder.value = false; reachedNewer.value = false; });
+watch([viewStart, viewEnd], () => {
+  if (live.value || catalogController || listDriving || navigatingEvent.value || catalogComplete) return;
+  if (pendingIndexDays.has(new Date(cursor.value).toISOString().slice(0,10))) return;
+  const range = requestedRange ?? loadedRange;
+  if (viewStart.value >= range.start && viewEnd.value <= range.end) return;
+  clearTimeout(rangeTimer); rangeTimer = setTimeout(() => void loadRange(), 120);
+});
+function openSettings() { if (state.value) settings.value = structuredClone(toRaw(state.value.settings)); settingsOpen.value = true; }
+watch(() => props.roleId, () => {
+  pageController?.abort(); pageController = undefined; loadingMore.value = false; reachedOlder.value = false; reachedNewer.value = false;
+  recentController?.abort(); recentController = undefined; cachedPreview.value = false;
+  catalogController?.abort(); catalogController = undefined; catalogComplete = false; catalogReceived = false; historyMessage.value = ""; historyError.value = ""; fetching.value = false;
+  indexController?.abort(); indexController = undefined; pendingIndexDays.clear(); readyIndexDays.clear();catalogQueued=false;pendingNavigation=undefined;
+  catalogDays.clear(); validatedCatalogDays.clear();
+  recentEvents = [];markerEventIds.clear();timelineMarkers.value=[];
+  clearImages(); clearTimeout(cacheTimer); live.value = true;
+  statusController?.abort(); stateError.value = "";
+  controller?.abort(); controller = undefined; refreshQueued = false; listScrollTop.value = 0; eventSource?.close(); clearTimeout(refreshTimer);
+  stopMotion(); loadedRange = { start: 0, end: 0 }; completeRange = false; navigationController?.abort(); state.value = null; events.value = []; selectedId.value = ""; settingsOpen.value = false;
+  hasLoaded.value = false;
+  events.value = bufferEvents(recordingPreview(props.roleId));
+  cachedPreview.value = events.value.length > 0;
+  const role = props.roleId;
+  void restoreRecordingPreview(role).then(rows => {
+    if (disposed || role !== props.roleId || catalogComplete || !rows.length) return;
+    const provisional = rows.filter(row => {
+      const day = new Date(row.startedAt).toISOString().slice(0, 10);
+      return !validatedCatalogDays.has(day) && (!catalogReceived || catalogDays.has(day));
+    });
+    events.value = bufferEvents(mergeReviewEvents(mergeReviewEvents(provisional, events.value), recentEvents)); cachedPreview.value = true; hasLoaded.value = true;
+  });
+  takeTimelineControl(); expectedScrollTop = undefined;
+  refreshRecords();
+  eventSource = managerEventSource("/api/events");
+  eventSource.addEventListener("open", () => {
+    // Reconnection can have missed a repair completion while the owner kept working.
+    for(const day of pendingIndexDays) readyIndexDays.add(day);
+    void loadReadyIndexes();
+    if(!catalogReceived) {if(catalogController) catalogQueued=true;else void loadCatalog();}
+  });
+  eventSource.addEventListener("all_day_recording", raw => {
+    try {
+      const event = JSON.parse((raw as MessageEvent).data);
+      if (!event.mobile && event.roleId !== props.roleId) return;
+      if(event.catalogReady) {if(catalogController) catalogQueued=true;else void loadCatalog();}
+      if(typeof event.readDay==="string" && /^\d{4}-\d{2}-\d{2}$/.test(event.readDay)) {readyIndexDays.add(event.readDay);void loadReadyIndexes();}
+      if(typeof event.indexDay === "string" && /^\d{4}-\d{2}-\d{2}$/.test(event.indexDay)) {
+        if(event.indexFailed) {
+          historyError.value = label("历史补齐失败，请刷新重试", "History reconstruction failed. Refresh to retry.");
+          historyMessage.value = label("历史更新失败，已显示事件仍可查看；点击刷新重试", "History update failed; displayed events remain available. Refresh to retry.");
+        }
+        else { readyIndexDays.add(event.indexDay); void loadReadyIndexes(); }
+      }
+    } catch { return; }
+    if (document.hidden) { refreshQueued = true; return; }
+    if (navigatingEvent.value) { refreshQueued = true; return; }
+    if (recentController || statusController) { refreshQueued = true; return; }
+    clearTimeout(refreshTimer); refreshTimer = setTimeout(() => void refreshOverview(), 500);
+  });
+}, { immediate: true });
+
+function resumeVisible() { if (!document.hidden) { void loadReadyIndexes(); if(refreshQueued) { refreshQueued = false; refreshOverview(); } } }
+document.addEventListener("visibilitychange", resumeVisible);
+onBeforeUnmount(() => recentController?.abort());
+onBeforeUnmount(() => pageController?.abort());
+onBeforeUnmount(() => { disposed = true; indexController?.abort(); catalogController?.abort(); navigationController?.abort(); clearImages(); clearTimeout(cacheTimer); statusController?.abort(); document.removeEventListener("visibilitychange", resumeVisible); stopMotion(); cancelAnimationFrame(listFrame); cancelAnimationFrame(liveFrame); clearTimeout(rangeTimer); controller?.abort(); eventSource?.close(); clearTimeout(refreshTimer); });
+</script>
+
+<template>
+  <section class="all-day" data-testid="persona-all-day-recording">
+    <div class="recording-toolbar">
+      <div><h2>{{ label('全天记录', 'All-day recording') }}</h2><span class="muted">{{ label('电脑、手机与家庭设备 · 时间轴和事件', 'Computer, mobile and home devices · Timeline and events') }}</span></div>
+    <div class="event-heading"><h3>{{ label('事件', 'Events') }} <span class="muted">{{ listEvents.length }}</span></h3><span v-if="loadingMore || (fetching && !listEvents.length)" role="status" class="muted">{{ label('正在加载…', 'Loading…') }}</span><v-select v-model="eventType" :items="[{id: 'all', name: label('全部类型','All types')}, {id: 'asr', name: label('ASR 事件','ASR events')}, {id: 'image', name: label('画面','Images')}, {id: 'window', name: label('窗口','Windows')}, {id: 'status', name: label('采集状态','Capture status')}, {id: 'device', name: label('设备事件','Device events')}]" item-title="name" item-value="id" density="compact" hide-details variant="outlined" :aria-label="label('筛选事件类型','Filter event types')" /><v-select v-model="filter" :items="[{ id: 'all', name: label('全部来源', 'All sources') }, ...sources]" item-title="name" item-value="id" density="compact" hide-details variant="outlined" :aria-label="label('筛选来源', 'Filter sources')" /><v-btn icon="mdi-refresh" variant="text" :aria-label="label('刷新记录', 'Refresh records')" @click="refreshRecords(true)" /></div>
+      <div class="toolbar-buttons">
+        <v-chip :color="captureStatus.color" size="small" variant="tonal">{{ captureStatus.text }}</v-chip>
+        <v-switch :model-value="state?.enabled ?? state?.running ?? false" :disabled="busy || !state || !!(state.activeRoleId && state.activeRoleId !== roleId)" :loading="busy" color="secondary" hide-details inset :label="label('开启记录', 'Enable recording')" @update:model-value="action($event ? 'start' : 'stop')" />
+        <v-btn icon="mdi-cog-outline" variant="text" :aria-label="label('记录设置', 'Recording settings')" :disabled="!state" @click="openSettings" />
+      </div>
+    </div>
+    <v-alert v-if="error || stateError || historyError || state?.error" type="error" variant="tonal">{{ error || stateError || historyError || state?.error }}</v-alert>
+    <v-alert v-if="state?.activeRoleId && state.activeRoleId !== roleId" type="info" variant="tonal">{{ label('这台电脑正在为另一个角色记录：', 'This computer is recording for another persona: ') }}{{ state.activeRoleId }}</v-alert>
+    <div class="recording-status-line"><span v-if="historyMessage" class="muted" role="status">{{ historyMessage }}</span><span v-else-if="cachedPreview" class="muted" role="status">{{ fetching ? label('已显示上次记录，正在更新…', 'Showing cached records. Updating…') : label('已显示上次记录', 'Showing cached records') }}</span></div>
+    <div class="recording-workspace">
+    <div class="review-column">
+    <v-card class="app-card glass-card review-card">
+      <div class="recording-preview">
+        <img v-if="mediaUrl && displayedImage" :src="displayedImage" decoding="async" :alt="sourceInfo(selected!.source).name" />
+        <div v-else-if="mediaUrl" class="preview-empty"><v-progress-circular v-if="imageLoading" indeterminate size="30" /><p>{{ imageError ? label('画面暂不可用', 'Image unavailable') : label('正在读取画面…', 'Loading image…') }}</p></div>
+        <div v-else-if="selected" class="event-preview">
+          <v-icon :icon="sourceInfo(selected.source).icon" size="38" :color="sourceInfo(selected.source).color" />
+          <p>{{ selected.text ? expandedText ? selected.text : selected.text.slice(0,600) : selected.kind === 'audio' ? recordingState(selected) : label('暂无转写', 'No transcript') }}</p>
+          <v-btn v-if="(selected.text?.length || 0) > 600" size="small" variant="text" @click="expandedText = !expandedText">{{ expandedText ? label('收起', 'Collapse') : label('展开全文', 'Read more') }}</v-btn>
+          <audio v-if="audioUrl" :key="audioUrl" controls preload="none" :src="audioUrl" />
+        </div>
+        <div v-else class="preview-empty"><v-icon icon="mdi-timeline-clock-outline" size="42" /><p>{{ label('选择时间轴上的事件回看', 'Select a timeline event to review') }}</p><span>{{ label('空白时段没有已保存记录', 'Blank periods have no saved records') }}</span></div>
+        <time v-if="previewTime !== null" class="preview-time">{{ localDate(new Date(previewTime)) }} · {{ live && mediaUrl ? label("最近画面", "Latest frame") + " · " : "" }}{{ formatTime(previewTime) }}</time>
+        <span v-if="imageLoading && displayedImage" class="preview-progress" role="status">{{ label('更新画面…', 'Updating image…') }}</span>
+        <v-btn v-if="imageError" class="preview-progress" size="small" @click="requestImage">{{ imageError }}</v-btn>
+      </div>
+    </v-card>
+    <div class="timeline-dock">
+      <div class="date-toolbar">
+        <input :value="date" :max="localDate(new Date())" type="date" :aria-label="label('跳转日期', 'Jump to date')" @change="jumpDate(($event.target as HTMLInputElement).value)" />
+        <v-spacer />
+        <v-btn variant="text" prepend-icon="mdi-chevron-left" :loading="navigatingEvent" :disabled="navigatingEvent" @click="adjacentEvent('older')">{{ label('上一个事件', 'Previous event') }}</v-btn>
+        <v-btn variant="text" append-icon="mdi-chevron-right" :loading="navigatingEvent" :disabled="navigatingEvent" @click="adjacentEvent('newer')">{{ label('下一个事件', 'Next event') }}</v-btn>
+        <v-btn variant="text" @click="now">{{ label('回到实时', 'Live') }}</v-btn>
+        <v-btn icon="mdi-minus" variant="text" :disabled="span >= maxSpan" :aria-label="label('缩小时间轴', 'Zoom out')" @click="zoom(2)" />
+        <v-btn icon="mdi-plus" variant="text" :disabled="span <= minSpan" :aria-label="label('放大时间轴', 'Zoom in')" @click="zoom(.5)" />
+      </div>
+      <div v-if="navigationMessage" class="navigation-message" role="status">{{ navigationMessage }}</div>
+      <div ref="ruler" class="time-ruler" tabindex="0" role="group" :aria-label="label('记录时间尺，左右方向键切换事件，滚动回看', 'Recording timeline, arrow keys select adjacent events, scroll to browse')" @pointerdown="beginDrag" @pointermove="moveDrag" @pointerup="endDrag" @pointercancel="drag = undefined" @pointerleave="leaveDrag" @wheel.prevent="wheel" @keydown.left.prevent="adjacentEvent('older')" @keydown.right.prevent="adjacentEvent('newer')">
+        <div class="time-ticks"><time v-for="tick in ticks" :key="tick">{{ span >= 86400_000 ? localDate(new Date(tick)).slice(5) + " " : "" }}{{ formatTime(tick).slice(0, span < 300000 ? 8 : 5) }}</time></div>
+        <div v-for="source in sources" :key="source.id" class="source-lane">
+          <span class="lane-name">{{ source.name }}</span>
+          <button v-for="group in markerGroups.get(source.id)?.values()" :key="group.event.id" class="timeline-event" :class="{ selected: selectedId === group.event.id, failed: group.event.state === 'error' }" :style="{ left: `${percent(group.event.startedAt)}%`, width: `${Math.max(.3, percent(group.event.endedAt) - percent(group.event.startedAt))}%`, '--event-color': source.color }" :title="`${formatTime(group.event.startedAt)} · ${source.name}`" :aria-label="`${source.name} ${formatTime(group.event.startedAt)}${group.count > 1 ? ` · ${group.count}` : ''}`" @pointerdown.stop="stopMotion" @click.stop="selectMarker(group)" />
+        </div>
+        <div class="timeline-cursor" style="left: 50%" />
+      </div>
+
+    </div>
+    </div>
+    <div class="events-column">
+    <div ref="eventList" class="events-scroller" tabindex="0" role="region" :aria-label="label('事件列表，滚动同步时间轴', 'Events, scrolling synchronizes the timeline')" @scroll.passive="scrollEvents" @wheel.passive="browseList" @touchstart.passive="takeListControl" @pointerdown="takeListControl" @keydown="takeListControl">
+    <div v-if="!listEvents.length" class="no-events">{{ !hasLoaded ? error ? label('记录读取失败，请重试', 'Could not load records. Please retry.') : label('正在读取最近记录…', 'Loading recent records…') : label('这个时间范围内没有已保存事件', 'No saved events in this time range') }}<v-btn variant="text" @click="takeListControl(); loadPage('older')">{{ label('查找更早记录', 'Find earlier records') }}</v-btn></div>
+    <div v-if="listEvents.length" class="virtual-events" :style="{ height: `${listEvents.length * rowStride}px` }">
+    <button v-for="(event, offset) in renderedEvents" :style="{ top: `${(virtualStart + offset) * rowStride}px` }" :key="event.id" :data-event-id="event.id" class="recording-event-row" :class="{ active: selectedId === event.id }" :aria-pressed="selectedId === event.id" @click="select(event)">
+      <time>{{ localDate(new Date(event.startedAt)) }}<br />{{ formatTime(event.startedAt) }}</time><v-icon :icon="sourceInfo(event.source).icon" :color="sourceInfo(event.source).color" /><div><b>{{ eventTitle(event) }}</b><p>{{ event.kind === 'audio' ? `${Math.max(0,(event.endedAt-event.startedAt)/1000).toFixed(1)} ${label('秒','s')} · ${recordingState(event)} · ` : '' }}{{ event.text?.slice(0,200) || (event.kind === 'audio' ? '' : label('已保存画面', 'Saved frame')) }}</p></div><v-chip v-if="event.state === 'error'" size="small" color="error">{{ label('采集失败', 'Capture failed') }}</v-chip>
+    </button>
+    </div>
+    <span v-if="reachedOlder" class="muted">{{ label('已到最早记录', 'Beginning of records') }}</span>
+    </div>
+    </div>
+    </div>
+    <v-dialog v-model="settingsOpen" max-width="560">
+      <v-card class="section-card"><v-card-title>{{ label('记录设置', 'Recording settings') }}</v-card-title><v-card-text>
+        <p>{{ label('屏幕和摄像头按间隔保存画面；麦克风复用语音服务的监听，暂停记录不会停止原有监听。', 'Screen and camera save periodic frames. Microphone uses the Speech service recording and transcription settings.') }}</p>
+        <v-switch v-for="source in ALL_DAY_SOURCES" :key="source" v-model="settings.sources[source]" :label="sourceInfo(source).name" color="secondary" :disabled="busy" hide-details />
+        <p v-if="settings.sources.homeAssistant" class="muted">{{ label('将 Home Assistant 活动页的事件汇入当前角色，包括普通状态和进度变化。请先在米家设置中连接 Home Assistant；开启记录先同步当天已有活动，再实时接收；暂停时停止接收。', 'Add Home Assistant Activity events to this persona, including ordinary states and progress changes. Connect Home Assistant in Xiaomi Home settings. Recording imports today’s existing activity, then receives live events; pausing stops reception.') }}</p>
+        <p v-for="(message, source) in state?.sourceErrors" :key="source" class="muted">{{ sourceInfo(source).name }}：{{ message }}</p>
+        <v-text-field v-model.number="settings.intervalSeconds" type="number" :min="10" :max="3600" :label="label('画面采样间隔（秒）', 'Frame interval (seconds)')" :disabled="busy" class="mt-4" />
+        <v-text-field v-if="settings.sources.camera" v-model.number="settings.cameraIndex" type="number" :min="0" :max="16" :label="label('摄像头编号（默认 0）', 'Camera index (default 0)')" :disabled="busy" />
+        <v-select v-model="settings.mobileDeviceIds" :items="state?.devices || []" :item-title="device => `${label('手机', 'Mobile')} ${device.id.slice(0, 8)}`" item-value="id" multiple chips :label="label('汇总这些手机的事件', 'Include events from these phones')" :disabled="state?.running" />
+        <p v-if="!state?.devices?.length" class="muted">{{ label('尚未收到手机事件。更新手机端并完成一次转写后，再选择设备。', 'No mobile events received. Update the phone app and complete a transcription, then select the device.') }}</p>
+        <p class="muted">{{ label('总开关开启后，下次启动软件自动恢复记录。运行中保存设备设置立即生效；设备不可用时继续记录其他来源。', 'When enabled, recording resumes on application startup. Save source changes while running; unavailable devices do not stop other sources.') }}</p>
+      </v-card-text><v-card-actions><v-spacer /><v-btn @click="settingsOpen = false">{{ label('取消', 'Cancel') }}</v-btn><v-btn color="secondary" :loading="busy" :disabled="busy" @click="action('settings')">{{ label('保存设置', 'Save settings') }}</v-btn></v-card-actions></v-card>
+    </v-dialog>
+  </section>
+</template>
+
+<style scoped>
+.recording-workspace,.review-column,.events-column { display: grid; gap: 18px; min-width: 0; align-content: start; }
+@media(min-width: 1000px) {
+  .recording-workspace { grid-template-columns: minmax(0,3fr) minmax(320px,2fr); align-items: start; }
+  .review-column,.events-column { position: sticky; top: calc(var(--v-layout-top,64px) + 12px); }
+  .review-column .recording-preview { height: clamp(180px, calc(100dvh - var(--v-layout-top,64px) - 300px), 330px); }
+  .recording-toolbar .event-heading { flex: 1 1 360px; max-width: 550px; margin-left: auto; }
+  .events-column { contain: size; align-self: stretch; grid-template-rows: minmax(0,1fr); align-content: normal; min-height: 0; --event-list-height: 100%; }
+  .events-column .events-scroller { min-height: 0; }
+}
+@media(max-width: 999px) { .review-card { position: sticky; top: calc(var(--v-layout-top,64px) + 8px); z-index: 5; } }
+.all-day { display: grid; gap: 18px; --event-list-height: clamp(180px, calc(100dvh - var(--v-layout-top, 64px) - 400px), 520px); }
+.recording-toolbar,.toolbar-buttons,.date-toolbar,.event-heading { display: flex; align-items: center; gap: 12px; }
+.recording-toolbar { justify-content: space-between; flex-wrap: wrap; }
+.recording-status-line { min-height: 20px; }
+h2 { font-size: 22px; } .muted { color: rgb(var(--v-theme-on-surface)); opacity: .6; font-size: 13px; }
+.review-card { overflow: hidden; background: rgb(var(--v-theme-surface)) !important; color: rgb(var(--v-theme-on-surface)); }
+.timeline-dock { background: rgb(var(--v-theme-surface)); border: 1px solid #829aaa33; border-radius: 12px; box-shadow: 0 6px 18px #0003; }
+.recording-preview { height: 330px; position: relative; background: #0b131b; display: grid; place-items: center; color: #d7e4ec; }
+.recording-preview img { position: absolute; inset: 0; display: block; width: 100%; height: 100%; min-width: 0; min-height: 0; object-fit: contain; object-position: center; }
+.preview-empty { text-align: center; color: #8b9daa; } .preview-empty p { margin-top: 16px; } .preview-empty span { font-size: 12px; }
+.event-preview { text-align: center; padding: 28px; max-height: 290px; overflow: auto; max-width: 800px; display: grid; gap: 16px; justify-items: center; }
+.preview-time { position: absolute; left: 20px; top: 16px; font-variant-numeric: tabular-nums; padding: 4px 9px; background: #111c26cc; border-radius: 6px; }
+.preview-progress { position: absolute; bottom: 14px; right: 14px; padding: 5px 10px; border-radius: 6px; background: #111c26dd; font-size: 12px; }
+.date-toolbar { padding: 8px 14px; flex-wrap: wrap; } .date-toolbar input { color: inherit; color-scheme: dark; padding: 8px; border-radius: 6px; }
+.navigation-message { padding: 0 14px 8px; font-size: 12px; opacity: .7; }
+.time-ruler { position: relative; margin: 0 28px 0 110px; padding: 30px 0 12px; touch-action: pan-y; cursor: grab; user-select: none; }
+.time-ticks { position: absolute; top: 0; left: 0; right: 0; display: flex; justify-content: space-between; font-size: 11px; opacity: .65; pointer-events: none; }
+.source-lane { height: 22px; position: relative; border-bottom: 1px solid #8197a215; }
+.lane-name { position: absolute; right: calc(100% + 14px); white-space: nowrap; font-size: 11px; opacity: .65; }
+.timeline-event { position: absolute; top: 0; height: 22px; min-width: 12px; cursor: pointer; touch-action: pan-y; background: transparent; }
+.timeline-event::before { content: ''; position: absolute; inset: 6px 0; border-radius: 2px; background: var(--event-color); opacity: .8; }
+.timeline-event.selected { z-index: 2; } .timeline-event.selected::before,.timeline-event:focus-visible::before { outline: 2px solid white; opacity: 1; } .timeline-event.failed::before { background: #e67979; }
+.timeline-cursor { position: absolute; top: 20px; bottom: 4px; width: 1px; background: #fff9; pointer-events: none; }
+.events-scroller { position: relative; height: var(--event-list-height); overflow-y: auto; overflow-anchor: none; scrollbar-gutter: stable; display: flex; flex-direction: column; gap: 10px; }
+.events-scroller::after { content: ''; flex: 0 0 calc(var(--event-list-height) - 80px); }
+.virtual-events { position: relative; flex: 0 0 auto; }
+.recording-event-row { position: absolute; height: 80px; overflow: hidden; cursor: pointer; }
+.event-heading { min-width: 0; flex-wrap: wrap; } .event-heading h3 { flex: 1; white-space: nowrap; } .event-heading .v-select { max-width: 200px; }
+.recording-event-row { display: flex; align-items: center; gap: 18px; width: 100%; padding: 14px 18px; border: 1px solid #829aaa22; border-radius: 12px; text-align: left; }
+.recording-event-row.active { background: #65cde412; border-color: #65cde470; }
+.recording-event-row time { font-size: 12px; opacity: .65; font-variant-numeric: tabular-nums; }
+.recording-event-row div { flex: 1; min-width: 0; } .recording-event-row p { opacity: .7; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; margin-top: 4px; }
+.no-events { text-align: center; padding: 32px; opacity: .55; }
+@media(max-width: 650px) { .recording-preview { height: 240px; } .date-toolbar { gap: 0; padding: 4px; flex-wrap: wrap; } .recording-event-row { gap: 10px; padding: 12px; } }
+</style>

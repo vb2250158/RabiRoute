@@ -5,12 +5,13 @@ import type { Component } from "vue";
 import type { TrustedWebPageRegistration } from "../pluginPages";
 import type { TrustedWebSettingsRendererRegistration, TrustedWebStatusRendererRegistration } from "../pluginRenderers";
 import type { TrustedWebThemeResourceRegistration } from "../pluginThemes";
-import { activate as activateCore } from "./builtin/core";
-import { activate as activatePersona } from "./builtin/persona";
-import { activate as activateDesktop } from "./builtin/desktop";
-import { activate as activateXiaomiHome } from "./builtin/xiaomi-home";
-import { activate as activateRouteControl } from "./builtin/route-control";
+import { activate as activateCore } from "../../../src/plugins/io.rabiroute.manager.core/web/entry";
+import { activate as activatePersona } from "../../../src/plugins/io.rabiroute.manager.persona/web/entry";
+import { activate as activateDesktop } from "../../../src/plugins/io.rabiroute.manager.desktop/web/entry";
+import { activate as activateXiaomiHome } from "../../../src/plugins/io.rabiroute.manager.xiaomi-home/web/entry";
+import { activate as activateRouteControl } from "../../../src/plugins/io.rabiroute.manager.route-control/web/entry";
 import type { TrustedWebCommandRegistration } from "../pluginCommands";
+import { registerPluginTranslations, type PluginTranslationCatalogs } from "../i18n/translationRegistry";
 
 type Registration = {
   kind: string;
@@ -50,7 +51,7 @@ function moduleApi(instanceId: string, registrations: Registration[]) {
     registerStatusRenderer: input => register("status", input), registerTheme: input => register("theme", input),
     registerCommand: input => register("command", input)
   };
-  return { instanceIds: [instanceId], forInstance: () => api };
+  return { instanceIds: [instanceId], forInstance: () => api, registerTranslations: (catalogs: PluginTranslationCatalogs) => registerPluginTranslations(api.pluginId, catalogs) };
 }
 test("independent Web plugin entries register only their own contributions", () => {
   const registrations: Registration[] = [];

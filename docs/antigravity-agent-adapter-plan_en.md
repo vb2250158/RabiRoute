@@ -188,17 +188,17 @@ Maturity is `experimental` rather than `verified` for exactly one reason: delive
 | # | Concern | Files |
 |---|---|---|
 | 1 | Capability declaration | `src/shared/agentAdapterCapabilities.ts` |
-| 2 | Configuration model | `src/shared/gatewayConfigModel.ts`, `src/config.ts` |
-| 3 | Conversation discovery | `src/antigravitySessionStore.ts` |
-| 4 | Delivery transport | `src/antigravityBridge.ts` |
-| 5 | Runtime | `src/antigravityRuntime.ts` |
-| 6 | Receipt recovery | `src/antigravityReceipt.ts` |
-| 7 | Adapter registration and scan | `src/agentAdapters/builtinAgentAdapters.ts`, `src/agentAdapters/antigravityManagerApi.ts`, `src/agentAdapters/managerApi.ts` |
+| 2 | Configuration model | `src/shared/gatewayConfigModel.ts`, `src/plugins/io.rabiroute.agent.codex/src/config.ts` |
+| 3 | Conversation discovery | `src/plugins/io.rabiroute.agent.antigravity/src/antigravitySessionStore.ts` |
+| 4 | Delivery transport | `src/plugins/io.rabiroute.agent.antigravity/src/antigravityBridge.ts` |
+| 5 | Runtime | `src/plugins/io.rabiroute.agent.antigravity/src/antigravityRuntime.ts` |
+| 6 | Receipt recovery | `src/plugins/io.rabiroute.agent.antigravity/src/antigravityReceipt.ts` |
+| 7 | Adapter registration and scan | `src/agentAdapters/builtinAgentAdapters.ts`, `src/plugins/io.rabiroute.agent.antigravity/src/agentAdapters/antigravityManagerApi.ts`, `src/agentAdapters/managerApi.ts` |
 | 8 | Hook package and installer | `plugins/rabi-antigravity-context/`, `src/agentAdapters/hookInstallation.ts` |
 | 9 | Binding validation | `src/shared/agentInstance.ts` |
-| 10 | Plan and thread generalization | `src/roleKnowledge.ts`, `src/manager/planAgentStatus.ts`, `src/manager/planTaskBindingDelivery.ts`, `src/manager/controlPlaneRoutes.ts`, `src/agentThreads.ts`, `src/forwarding.ts` |
+| 10 | Plan and thread generalization | `src/roleKnowledge.ts`, `src/manager/planAgentStatus.ts`, `src/manager/planTaskBindingDelivery.ts`, `src/manager/controlPlaneRoutes.ts`, `src/agentThreads.ts`, `src/plugins/io.rabiroute.endpoint.rabilink/src/forwarding.ts` |
 | 11 | Removing adapter-name literals | `src/shared/codexPlanAssistantSessions.ts`, `src/shared/agentHookAutomation.ts`, `src/shared/codexSessionInitialization.ts`, and others |
-| 12 | WebGUI | `ribiwebgui/src/pages/RouteConfigPage.vue`, `ribiwebgui/src/components/QuickSetupDialog.vue`, `ribiwebgui/src/stores/gatewayStore.ts`, `ribiwebgui/src/i18n/catalog.ts` |
+| 12 | WebGUI | `src/plugins/io.rabiroute.manager.message-adapter-control/web/pages/RouteConfigPage.vue`, `ribiwebgui/src/components/QuickSetupDialog.vue`, `ribiwebgui/src/stores/gatewayStore.ts`, `ribiwebgui/src/i18n/catalog.ts` |
 | 13 | Documentation | this file and its Chinese counterpart |
 
 ### 9.1 On removing adapter-name literals
@@ -227,11 +227,11 @@ Automated tests (53 in `src/antigravity*.test.ts` plus 17 in the hook package, a
 
 | File | Count | Coverage |
 |---|---|---|
-| `src/antigravityBridge.test.ts` | 19 | CLI path precedence, CSRF reads the last entry, port discovery excludes the UI port and foreign PIDs, non-Windows rejection, the environment triple, arguments and env for both delivery paths, empty prompt and missing conversation id rejection, **parsing stdout despite a non-zero exit** |
-| `src/antigravityReceipt.test.ts` | 15 | Path derivation, field parsing, skipping malformed lines, receipt match, **`initialNumSteps` blocking a match against an earlier identical delivery**, a reply that predates the prompt not counting |
-| `src/antigravityRuntime.test.ts` | 8 | accepted→delivered, unconfigured runs new-conversation, failure recorded before it is thrown, **a receipt read failure not invalidating a completed delivery**, serialized concurrency, log cap |
-| `src/antigravitySessionStore.test.ts` | 11 | Index path, ordering, empty-conversation filtering, owner filtering, search and paging, Windows path casing, workspace de-duplication and URI decoding, legacy format support |
-| `plugins/rabi-antigravity-context/hooks.test.mjs` | 17 | Event mapping, conversationId→sessionId, workspacePaths→cwd, reading the prompt from the transcript, injection shape being `injectSteps`, **PreToolUse allowing by returning `{}`**, **a Manager outage not blocking tools**, Stop composing a follow-up reason, failing closed without a conversation id |
+| `src/plugins/io.rabiroute.agent.antigravity/src/antigravityBridge.test.ts` | 19 | CLI path precedence, CSRF reads the last entry, port discovery excludes the UI port and foreign PIDs, non-Windows rejection, the environment triple, arguments and env for both delivery paths, empty prompt and missing conversation id rejection, **parsing stdout despite a non-zero exit** |
+| `src/plugins/io.rabiroute.agent.antigravity/src/antigravityReceipt.test.ts` | 15 | Path derivation, field parsing, skipping malformed lines, receipt match, **`initialNumSteps` blocking a match against an earlier identical delivery**, a reply that predates the prompt not counting |
+| `src/plugins/io.rabiroute.agent.antigravity/src/antigravityRuntime.test.ts` | 8 | accepted→delivered, unconfigured runs new-conversation, failure recorded before it is thrown, **a receipt read failure not invalidating a completed delivery**, serialized concurrency, log cap |
+| `src/plugins/io.rabiroute.agent.antigravity/src/antigravitySessionStore.test.ts` | 11 | Index path, ordering, empty-conversation filtering, owner filtering, search and paging, Windows path casing, workspace de-duplication and URI decoding, legacy format support |
+| `src/plugins/rabi-antigravity-context/hooks.test.mjs` | 17 | Event mapping, conversationId→sessionId, workspacePaths→cwd, reading the prompt from the transcript, injection shape being `injectSteps`, **PreToolUse allowing by returning `{}`**, **a Manager outage not blocking tools**, Stop composing a follow-up reason, failing closed without a conversation id |
 
 Live acceptance (requires Antigravity to be running):
 

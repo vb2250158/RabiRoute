@@ -3,7 +3,7 @@ import fs from "node:fs";
 import test from "node:test";
 
 const controlPlane = new URL("./controlPlaneRoutes.ts", import.meta.url);
-const plugin = new URL("../../plugins/builtin/io.rabiroute.manager.persona/1.0.0/manager.mjs", import.meta.url);
+const plugin = new URL("../plugins/io.rabiroute.manager.persona/manager.mjs", import.meta.url);
 
 test("persona plugin keeps persona and knowledge surfaces without synchronization APIs or lifecycle", () => {
   const source = fs.readFileSync(plugin, "utf8");
@@ -25,5 +25,5 @@ test("control plane has no synchronization owner or retired peer permission file
   assert.match(source, /peerHandler:.*activePeerRuntime\?\.handler/);
   assert.match(source, /peerUpgrade:.*activePeerTunnel\?\.upgrade/);
   assert.match(source, /activePeerTunnel\?\.startLanDiscovery/);
-  assert.match(source, /peerLanServer,/);
+  assert.match(source, /get peerLanServer\(\)\s*\{\s*return peerLanServer;\s*\}/);
 });

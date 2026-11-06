@@ -4,12 +4,12 @@ import test from "node:test";
 import { markdownPreviewExcerpt } from "../src/markdownPreview";
 
 const personaPageSource = fs.readFileSync(
-  new URL("../src/pages/PersonaTemplatePage.vue", import.meta.url),
+  new URL("../../src/plugins/io.rabiroute.manager.persona/web/pages/PersonaTemplatePage.vue", import.meta.url),
   "utf8"
 );
 
 const documentPageSource = fs.readFileSync(
-  new URL("../src/pages/PersonaDocumentPage.vue", import.meta.url),
+  new URL("../../src/plugins/io.rabiroute.manager.persona/web/pages/PersonaDocumentPage.vue", import.meta.url),
   "utf8"
 );
 

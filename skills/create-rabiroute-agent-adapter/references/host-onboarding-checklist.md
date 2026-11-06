@@ -25,7 +25,7 @@
 ## 3. 实现落点
 
 1. `src/shared/agentAdapterCapabilities.ts`：声明类型、manifest、成熟度和已验证能力；一次 HTTP 成功不是 `deliveryReceiptRecovery` 的充分证据。
-2. `src/shared/gatewayConfigModel.ts`、`src/config.ts`：定义绑定字段、归一化和环境配置；端点接受范围遵守现行信任合同。
+2. `src/shared/gatewayConfigModel.ts`、`src/plugins/io.rabiroute.agent.codex/src/config.ts`：定义绑定字段、归一化和环境配置；端点接受范围遵守现行信任合同。
 3. `src/<agent>SessionStore.ts`：读取宿主真源；Windows 路径按平台语义比较，过滤必须在分页前。
 4. `src/<agent>SessionBridge.ts`：唯一真实投递路径；区分明确拒绝、未送达与结果未知。
 5. `src/agentAdapters/builtinAgentAdapters.ts`、`<agent>ManagerApi.ts`：注册扫描和诊断，分别展示安装、凭据、端点、项目、会话状态。

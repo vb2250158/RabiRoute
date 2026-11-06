@@ -190,9 +190,9 @@ Manager プラグインは schema/profile v2 で `in_process`、`isolated`、`de
 - マネージャーAPI: `src/manager/controlPlaneRoutes.ts`
 - メッセージアダプタの成熟度スキャン: `src/messageEndpoints/*`, `src/manager/controlPlaneRoutes.ts`
 - エージェント成熟度スキャン: `src/agentAdapters/managerApi.ts`
-- ルーティングとコンテキスト: `src/forwarding.ts`, `src/routing/*`
+- ルーティングとコンテキスト: `src/plugins/io.rabiroute.endpoint.rabilink/src/forwarding.ts`, `src/routing/*`
 - 返信: `src/outbox.ts`
-- Codex Desktop 所有者: `src/codexDesktopBridge.ts`, `src/codexRuntime.ts`;空のタスクのメタデータ: `src/codexAppServerClient.ts`
+- Codex Desktop 所有者: `src/plugins/io.rabiroute.agent.codex/src/codexDesktopBridge.ts`, `src/plugins/io.rabiroute.agent.codex/src/codexRuntime.ts`;空のタスクのメタデータ: `src/plugins/io.rabiroute.agent.codex/src/codexAppServerClient.ts`
 - ウェブGUI: `ribiwebgui/src/pages/*`
 - 自動化された契約: `src/**/*.test.ts`
 

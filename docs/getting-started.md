@@ -178,6 +178,6 @@ npm run manager
 - `src/manager.ts`：读取 `data/route` 和 `data/roles`、启动/停止路由进程、提供 RibiWebGUI API。
 - `src/index.ts`：单个 gateway 入口。
 - `src/adapters/`：消息适配端。
-- `src/forwarding.ts`：路由规则匹配、模板渲染、投递处理端。
-- `src/config.ts`：环境变量和默认配置。
+- `src/plugins/io.rabiroute.endpoint.rabilink/src/forwarding.ts`：路由规则匹配、模板渲染、投递处理端。
+- `src/plugins/io.rabiroute.agent.codex/src/config.ts`：环境变量和默认配置。
 - `src/history.ts`：JSONL 记录。

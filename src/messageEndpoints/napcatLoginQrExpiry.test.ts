@@ -4,7 +4,7 @@ import os from 'node:os';
 import fs from 'node:fs';
 import path from 'node:path';
 import test from 'node:test';
-import {testNapcatHealth} from './napcatManager.js';
+import {testNapcatHealth} from '../plugins/io.rabiroute.endpoint.napcat/src/messageEndpoints/napcatManager.js';
 import {NapcatState} from '../shared/napcatStateContract.js';
 
 for(const [error,expected] of [['二维码已过期，请刷新',NapcatState.QuickLoginAvailable],['请扫码登录',NapcatState.QrLoginRequired]] as const)test(`bound quick-login identity and current login signal: ${error}`,async t=>{

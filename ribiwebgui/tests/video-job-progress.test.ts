@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { videoProgressPresentation } from "../src/pages/videoJobProgress.ts";
+import { videoProgressPresentation } from "../../src/plugins/io.rabiroute.manager.video/web/pages/videoJobProgress.ts";
 const createdAt = "2026-01-01T00:00:00Z";
 const now = Date.parse("2026-01-01T00:02:05Z");
 test("progress is explicitly per stage and elapsed generation time excludes queue time", () => {

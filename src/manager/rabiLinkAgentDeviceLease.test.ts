@@ -7,11 +7,11 @@ import http from 'node:http';
 import { once } from 'node:events';
 import { LanAgentAuthority } from './lanAgentAuthority.js';
 import { evaluateLanAgentRequest } from './lanAgentRequestAccess.js';
-import { setTrustedLanAgentSource, registerLanAgentBodyGuard, assertLanAgentBodyAuthority } from './lanAgentBodyAuthority.js';
+import { setTrustedLanAgentSource, registerLanAgentBodyGuard } from './lanAgentBodyAuthority.js';
 import { markAuthenticatedConnectionRequest } from './connectionRequestAccess.js';
 import { rabiLinkAgentDevicePrincipal } from './rabiLinkAgentDeviceConnection.js';
 import { createRabiLinkAgentDevices } from './rabiLinkAgentDevices.js';
-import { createRabiLinkAgentDeviceOperations } from './rabiLinkAgentDeviceOperations.js';
+import { createRabiLinkAgentDeviceOperations } from '../plugins/io.rabiroute.manager.rabilink-relay/src/manager/rabiLinkAgentDeviceOperations.js';
 import { ManagerPluginRouteRegistry } from './managerPluginRouteRegistry.js';
 
 test('marked ingress cannot save a profile after its Agent lease is revoked during a persona read', { timeout: 10000 }, async t => {
@@ -32,7 +32,7 @@ test('marked ingress cannot save a profile after its Agent lease is revoked duri
     if (evaluateLanAgentRequest(request, authority, true).kind !== 'agent') { response.writeHead(403).end(); return; }
     setTrustedLanAgentSource(request, { nodeId: 'fixture-node', agentId: 'worker', provider: 'dsh', sessionId: 'fixture-session', sessionName: 'Fixture' });
     markAuthenticatedConnectionRequest(request);
-    registerLanAgentBodyGuard(request, body => assertLanAgentBodyAuthority(new URL(request.url!, 'http://fixture.invalid').pathname, body, undefined));
+    registerLanAgentBodyGuard(request, () => {});
     if (!registry.handle(request, new URL(request.url!, 'http://fixture.invalid'), response)) response.writeHead(404).end();
   });
   server.listen(0, '127.0.0.1'); await once(server, 'listening');

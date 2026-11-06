@@ -1,3 +1,4 @@
+import { canonicalManagerPluginFixture } from "./canonicalManagerPlugin.fixture.js";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import http from "node:http";
@@ -12,8 +13,8 @@ import { normalizePerformanceMonitoringConfig } from "../shared/performanceContr
 import { RabiGlobalConfigStore } from "./globalConfig.js";
 import { ManagerPluginRouteRegistry } from "./managerPluginRouteRegistry.js";
 import { PerformanceMonitoringService } from "./performanceMonitoring.js";
-import { PerformanceApi } from "./performanceRoutes.js";
-import { createPerformanceOperations } from "./performanceOperations.js";
+import { PerformanceApi } from "../plugins/io.rabiroute.manager.performance/src/manager/performanceRoutes.js";
+import { createPerformanceOperations } from "../plugins/io.rabiroute.manager.performance/src/manager/performanceOperations.js";
 import { markAuthenticatedConnectionRequest } from "./connectionRequestAccess.js";
 
 function deferred() {
@@ -24,8 +25,7 @@ function deferred() {
 
 async function fixture(t: test.TestContext) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "performance-lifecycle-"));
-  const entry = path.resolve("plugins/builtin/io.rabiroute.manager.performance/1.0.0/manager.mjs");
-  const plugin: PluginModule = await import(pathToFileURL(entry).href);
+  const entry = path.resolve("src/plugins/io.rabiroute.manager.performance/manager.mjs");
   const manifest: PluginManifest = JSON.parse(fs.readFileSync(path.join(path.dirname(entry), "rabi.plugin.json"), "utf8"));
   const counts = { starts: 0, stops: 0, requests: 0, operations: 0, storeStarts: 0, storeStops: 0 };
   const releaseControlledWork: Array<() => void> = [];
@@ -51,10 +51,11 @@ async function fixture(t: test.TestContext) {
     get recordManagerHttpRequest() { return hook; },
     set recordManagerHttpRequest(value: typeof hook) { hook = value; hooks.push(value); }
   };
+  const { module: plugin, ports } = await canonicalManagerPluginFixture("performance", host);
   let nextEffect: (() => Promise<() => void>) | undefined;
   let publicationFailure = false;
   generation = new GenerationRuntime({ host: "manager", onRuntimeFailure: () => { failure.resolve(); },
-    hostServices: [{ capability: "host.manager.performance@1", value: host }, { capability: "manager.core@1", value: {} }],
+    hostServices: [{ capability: "host.manager.performance@2", value: ports }, { capability: "manager.core@1", value: {} }],
     executor: { async prepare() {
       const effect = nextEffect; nextEffect = undefined;
       const failPublication = publicationFailure; publicationFailure = false;

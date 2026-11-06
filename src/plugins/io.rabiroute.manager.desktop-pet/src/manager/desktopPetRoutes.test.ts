@@ -1,0 +1,402 @@
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import http from "node:http";
+import os from "node:os";
+import path from "node:path";
+import test, { after } from "node:test";
+import { ManagerPluginRouteRegistry } from "../../../../manager/managerPluginRouteRegistry.js";
+import { createDesktopPetOperations } from "./desktopPetOperations.js";
+import type { DesktopPetSettingsAccess, DesktopPetEventPublisher } from "./desktopPetRoutes.js";
+import {
+  DesktopPetOwner,
+  listDesktopPetPacks,
+  type DesktopPetPackCatalog
+} from "./desktopPetRoutes.js";
+import { DesktopSettingsStore } from "../../../../manager/desktopSettings.js";
+
+
+const controlledRegistrations = new Map<string, { owner: DesktopPetOwner; registry: ManagerPluginRouteRegistry; registration: ReturnType<ManagerPluginRouteRegistry["registerOperations"]> }>();
+after(async () => { await Promise.all([...controlledRegistrations.values()].map(async value => { const retired = value.registration.dispose(); await Promise.all([retired, value.owner.stop()]); })); });
+function removeFixture(target: fs.PathLike, options?: fs.RmOptions): void {
+  const resolved = path.resolve(String(target)); const parent = path.resolve(os.tmpdir());
+  const relative = path.relative(parent, resolved); assert.ok(relative && !relative.startsWith("..") && !path.isAbsolute(relative));
+  fs.rmSync(target, options);
+}
+function dispatchDesktopPet(request: http.IncomingMessage, url: URL, response: http.ServerResponse, resolveRoleDir: (roleId: string) => string, settings?: DesktopPetSettingsAccess, cacheRoot?: string, publishEvent?: DesktopPetEventPublisher): boolean {
+  const key = resolveRoleDir("") + "\n" + cacheRoot;
+  let fixture = controlledRegistrations.get(key);
+  if (!fixture) {
+    const owner = new DesktopPetOwner({ resolveRoleDir, settings, cacheRoot, publishEvent });
+    const registry = new ManagerPluginRouteRegistry();
+    fixture = { owner, registry, registration: registry.registerOperations("pet-fixture", createDesktopPetOperations(owner)) }; controlledRegistrations.set(key, fixture);
+  }
+  return fixture.registry.handle(request, url, response);
+}
+
+function roleFixture(): string {
+  return fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-desktop-pet-"));
+}
+
+function writePack(roleDir: string, personaId = "YeYu", packId = "yeyu-library-default"): void {
+  const packDir = path.join(roleDir, "desktop-pet", "packs", packId);
+  fs.mkdirSync(path.join(packDir, "frames", "thinking"), { recursive: true });
+  fs.writeFileSync(path.join(packDir, "idle.gif"), Buffer.from("GIF89a"));
+  fs.writeFileSync(path.join(packDir, "frames", "thinking", "thinking_10.png"), Buffer.from("png10"));
+  fs.writeFileSync(path.join(packDir, "frames", "thinking", "thinking_2.png"), Buffer.from("png2"));
+  fs.writeFileSync(path.join(packDir, "pet-pack.json"), JSON.stringify({
+    schemaVersion: 1,
+    id: packId,
+    name: "夜雨 · 图书馆日常",
+    personaId,
+    canvas: { width: 512, height: 512, anchorX: 0.5, anchorY: 0.96 },
+    defaults: { fps: 12, scale: 0.5, loop: true },
+    idleBehavior: {
+      randomIntervalSeconds: { min: 75, max: 180 },
+      randomStates: ["idle-reading", "thinking", "missing"],
+      sleepAfterSeconds: 900,
+      sleepState: "sleep"
+    },
+    states: {
+      idle: { type: "gif", source: "idle.gif" },
+      thinking: { type: "png-sequence", source: "frames/thinking", pattern: "thinking_*.png" },
+      "idle-reading": {
+        type: "png-sequence",
+        source: "frames/thinking",
+        pattern: "thinking_*.png",
+        loop: false,
+        next: "idle"
+      },
+      sleep: { type: "png-sequence", source: "frames/thinking", pattern: "thinking_*.png", loop: true }
+    }
+  }), "utf8");
+}
+
+test("companion mapping keeps only existing looping actions", () => {
+  const roleDir = roleFixture(), cacheRoot = roleFixture();
+  try {
+    writePack(roleDir);
+    const manifestPath = path.join(roleDir, "desktop-pet", "packs", "yeyu-library-default", "pet-pack.json");
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    manifest.companionStates = { watch: "thinking", play: "idle-reading", other: "missing", "bad key": "sleep" };
+    fs.writeFileSync(manifestPath, JSON.stringify(manifest));
+    assert.deepEqual(listDesktopPetPacks("YeYu", roleDir, cacheRoot).packs[0].companionStates, { watch: "thinking" });
+  } finally { removeFixture(roleDir, { recursive: true }); removeFixture(cacheRoot, { recursive: true }); }
+});
+
+test("mode animation sets expose their own normalized pools without replacing legacy scene mappings", () => {
+  const roleDir = roleFixture(), cacheRoot = roleFixture();
+  try {
+    writePack(roleDir, "sample");
+    const manifestPath = path.join(roleDir, "desktop-pet", "packs", "yeyu-library-default", "pet-pack.json");
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    manifest.states["focus-read"] = { ...manifest.states["idle-reading"], next: "thinking" };
+    manifest.companionStates = { watch: "sleep" };
+    manifest.modeAnimationSets = { focus: { idleState: "thinking", randomIntervalSeconds: { min: 45, max: 120 },
+      randomStates: ["focus-read"], clickStates: ["focus-read"] } };
+    fs.writeFileSync(manifestPath, JSON.stringify(manifest));
+    const pack = listDesktopPetPacks("sample", roleDir, cacheRoot).packs[0];
+    assert.deepEqual(pack.modeAnimationSets, { focus: { idleState: "thinking", randomMinSeconds: 45,
+      randomMaxSeconds: 120, randomStates: ["focus-read"], clickStates: ["focus-read"] } });
+    assert.deepEqual(pack.companionStates, { watch: "sleep" });
+    assert.deepEqual(pack.idleBehavior?.randomStates, ["idle-reading"]);
+  } finally { removeFixture(roleDir, { recursive: true }); removeFixture(cacheRoot, { recursive: true }); }
+});
+
+test("catalog reports a malformed mode group instead of silently playing a different pose", () => {
+  const roleDir = roleFixture(), cacheRoot = roleFixture();
+  try {
+    writePack(roleDir, "sample");
+    const manifestPath = path.join(roleDir, "desktop-pet", "packs", "yeyu-library-default", "pet-pack.json");
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    manifest.modeAnimationSets = { focus: { idleState: "thinking", clickStates: ["idle-reading"] } };
+    fs.writeFileSync(manifestPath, JSON.stringify(manifest));
+    const catalog = listDesktopPetPacks("sample", roleDir, cacheRoot);
+    assert.equal(catalog.packs.length, 0);
+    assert.match(catalog.diagnostics[0].message, /returning to thinking/);
+  } finally { removeFixture(roleDir, { recursive: true }); removeFixture(cacheRoot, { recursive: true }); }
+});
+
+test("desktop pet catalog binds packs to the role and naturally sorts PNG frames", () => {
+  const roleDir = roleFixture();
+  const cacheRoot = roleFixture();
+  writePack(roleDir);
+
+  const catalog = listDesktopPetPacks("YeYu", roleDir, cacheRoot);
+
+  assert.equal(catalog.packs.length, 1);
+  assert.equal(catalog.packs[0].personaId, "YeYu");
+  assert.equal(catalog.packs[0].sourceFacing, "right");
+  assert.deepEqual(catalog.packs[0].idleBehavior, {
+    randomMinSeconds: 75,
+    randomMaxSeconds: 180,
+    randomStates: ["idle-reading"],
+    sleepAfterSeconds: 900,
+    sleepState: "sleep"
+  });
+  assert.deepEqual(
+    catalog.packs[0].states.thinking.assets.map(asset => asset.split("/").at(-1)),
+    ["thinking_2.png", "thinking_10.png"]
+  );
+  assert.equal(catalog.diagnostics.length, 0);
+});
+
+test("desktop pet catalog rejects a manifest owned by another persona", () => {
+  const roleDir = roleFixture();
+  const cacheRoot = roleFixture();
+  writePack(roleDir, "OtherRole");
+
+  const catalog = listDesktopPetPacks("YeYu", roleDir, cacheRoot);
+
+  assert.equal(catalog.packs.length, 0);
+  assert.match(catalog.diagnostics[0].message, /personaId/);
+});
+
+test("desktop pet catalog preserves authored left-facing art and normalizes invalid facing", () => {
+  const roleDir = roleFixture();
+  const cacheRoot = roleFixture();
+  writePack(roleDir);
+  const manifestPath = path.join(roleDir, "desktop-pet", "packs", "yeyu-library-default", "pet-pack.json");
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+  for (const [value, expected] of [["left", "left"], ["up", "right"]]) {
+    fs.writeFileSync(manifestPath, JSON.stringify({ ...manifest, sourceFacing: value }));
+    assert.equal(listDesktopPetPacks("YeYu", roleDir, cacheRoot).packs[0].sourceFacing, expected);
+  }
+});
+
+test("desktop pet catalog ignores template-only pack skeletons", () => {
+  const roleDir = roleFixture();
+  const cacheRoot = roleFixture();
+  const packDir = path.join(roleDir, "desktop-pet", "packs", "draft-pack");
+  fs.mkdirSync(packDir, { recursive: true });
+  fs.writeFileSync(path.join(packDir, "pet-pack.template.json"), "{}", "utf8");
+
+  const catalog = listDesktopPetPacks("YeYu", roleDir, cacheRoot);
+
+  assert.deepEqual(catalog.packs, []);
+  assert.deepEqual(catalog.diagnostics, []);
+});
+
+test("desktop pet catalog uses a local immutable-pack cache before the shared role tree", () => {
+  const roleDir = roleFixture();
+  const cacheRoot = roleFixture();
+  writePack(path.join(cacheRoot, "YeYu"));
+
+  const catalog = listDesktopPetPacks("YeYu", roleDir, cacheRoot);
+
+  assert.equal(catalog.packs.length, 1);
+  assert.equal(catalog.packs[0].id, "yeyu-library-default");
+  assert.equal(catalog.packs[0].states.idle.assets[0].endsWith("/idle.gif"), true);
+});
+
+test("desktop pet API serves cached assets without opening the shared pack", async t => {
+  const roleDir = roleFixture();
+  const cacheRoot = roleFixture();
+  writePack(path.join(cacheRoot, "YeYu"));
+  const server = http.createServer((request, response) => {
+    const requestUrl = new URL(request.url || "/", "http://127.0.0.1");
+    if (!dispatchDesktopPet(request, requestUrl, response, () => roleDir, undefined, cacheRoot)) {
+      response.writeHead(404).end();
+    }
+  });
+  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => server.close());
+  const address = server.address();
+  assert.ok(address && typeof address === "object");
+  const baseUrl = `http://127.0.0.1:${address.port}`;
+  const catalog = await (await fetch(`${baseUrl}/api/desktop-pet/roles/YeYu/packs`)).json() as {
+    data: DesktopPetPackCatalog;
+  };
+
+  const assetResponse = await fetch(`${baseUrl}${catalog.data.packs[0].states.idle.assets[0]}`);
+
+  assert.equal(assetResponse.status, 200);
+  assert.equal(Buffer.from(await assetResponse.arrayBuffer()).toString("ascii"), "GIF89a");
+});
+
+test("desktop pet runtime catalog does not scan or return shared-source packs", async t => {
+  const roleDir = roleFixture();
+  const cacheRoot = roleFixture();
+  writePack(path.join(cacheRoot, "YeYu"));
+  writePack(roleDir, "YeYu", "shared-only-pack");
+  const server = http.createServer((request, response) => {
+    const requestUrl = new URL(request.url || "/", "http://127.0.0.1");
+    if (!dispatchDesktopPet(request, requestUrl, response, () => roleDir, undefined, cacheRoot)) {
+      response.writeHead(404).end();
+    }
+  });
+  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => server.close());
+  const address = server.address();
+  assert.ok(address && typeof address === "object");
+
+  const { statusCode, catalog } = await new Promise<{
+    statusCode: number | undefined;
+    catalog: { data: DesktopPetPackCatalog };
+  }>((resolve, reject) => {
+    http.get(
+      `http://127.0.0.1:${address.port}/api/desktop-pet/roles/YeYu/packs?scope=runtime`,
+      response => {
+        const chunks: Buffer[] = [];
+        response.on("data", chunk => chunks.push(Buffer.from(chunk)));
+        response.on("end", () => resolve({
+          statusCode: response.statusCode,
+          catalog: JSON.parse(Buffer.concat(chunks).toString("utf8")) as { data: DesktopPetPackCatalog }
+        }));
+      }
+    ).once("error", reject);
+  });
+
+  assert.equal(statusCode, 200);
+  assert.deepEqual(catalog.data.packs.map(pack => pack.id), ["yeyu-library-default"]);
+});
+
+test("desktop pet API promotes a validated shared-source pack into the runtime cache", async t => {
+  const roleDir = roleFixture();
+  const cacheRoot = roleFixture();
+  const publishedEvents: Array<{ eventType: string; data: unknown }> = [];
+  writePack(roleDir, "YeYu", "shared-cache-pack");
+  const server = http.createServer((request, response) => {
+    const requestUrl = new URL(request.url || "/", "http://127.0.0.1");
+    if (!dispatchDesktopPet(request, requestUrl, response, () => roleDir, undefined, cacheRoot, (eventType, data) => publishedEvents.push({ eventType, data }))) {
+      response.writeHead(404).end();
+    }
+  });
+  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => server.close());
+  const address = server.address();
+  assert.ok(address && typeof address === "object");
+  const baseUrl = `http://127.0.0.1:${address.port}`;
+
+  const cacheResponse = await fetch(`${baseUrl}/api/desktop-pet/roles/YeYu/packs/shared-cache-pack/cache`, { method: "POST" });
+  assert.equal(cacheResponse.status, 201);
+  const runtimeCatalog = await (await fetch(`${baseUrl}/api/desktop-pet/roles/YeYu/packs?scope=runtime`)).json() as { data: DesktopPetPackCatalog };
+  assert.deepEqual(runtimeCatalog.data.packs.map(pack => pack.id), ["shared-cache-pack"]);
+  assert.deepEqual(publishedEvents, [{
+    eventType: "desktop_pet_catalog_changed",
+    data: { personaId: "YeYu", packId: "shared-cache-pack" }
+  }]);
+});
+
+test("slow pet image metadata does not block independent health requests", async t => {
+  const roleDir = roleFixture(), cacheRoot = roleFixture();
+  writePack(roleDir);
+  // Install/compile before timing request latency, as the real plugin activation does.
+  const owner = new DesktopPetOwner({ resolveRoleDir: () => roleDir, cacheRoot });
+  const registry = new ManagerPluginRouteRegistry();
+  controlledRegistrations.set(roleDir + "\n" + cacheRoot, { owner, registry, registration: registry.registerOperations("pet-fixture", createDesktopPetOperations(owner)) });
+  const syncRealpath = fs.realpathSync;
+  const asyncRealpath = fs.promises.realpath;
+  let entered!: () => void;
+  const reading = new Promise<void>(resolve => { entered = resolve; });
+  t.mock.method(fs, "realpathSync", ((file: fs.PathLike, ...args: unknown[]) => {
+    if (String(file).startsWith(roleDir)) {
+      entered(); Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 200);
+    }
+    return (syncRealpath as (...values: unknown[]) => unknown)(file, ...args);
+  }) as typeof fs.realpathSync);
+  t.mock.method(fs.promises, "realpath", (async (file: fs.PathLike, ...args: unknown[]) => {
+    if (String(file).startsWith(roleDir)) { entered(); await new Promise(resolve => setTimeout(resolve, 200)); }
+    return (asyncRealpath as (...values: unknown[]) => unknown)(file, ...args);
+  }) as typeof fs.promises.realpath);
+  const server = http.createServer((request, response) => {
+    const url = new URL(request.url || "/", "http://127.0.0.1");
+    if (url.pathname === "/health") { response.end("healthy"); return; }
+    dispatchDesktopPet(request, url, response, () => roleDir, undefined, cacheRoot);
+  });
+  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => server.close());
+  const address = server.address() as import("node:net").AddressInfo;
+  const base = `http://127.0.0.1:${address.port}`, started = performance.now();
+  const asset = fetch(`${base}/api/desktop-pet/roles/YeYu/packs/yeyu-library-default/assets/idle.gif`);
+  await reading;
+  assert.equal((await fetch(base + "/health")).status, 200);
+  const healthMs = performance.now() - started;
+  assert.equal((await asset).status, 200);
+  assert.ok(healthMs < 150, `health was blocked for ${healthMs}ms by image metadata`);
+});
+
+test("desktop pet API serves role-scoped catalog and image assets", async t => {
+  const roleDir = roleFixture();
+  const cacheRoot = roleFixture();
+  const publishedEvents: Array<{ eventType: string; data: unknown }> = [];
+  writePack(roleDir);
+  const settings = new DesktopSettingsStore(path.join(roleDir, "host-settings.json"));
+  const server = http.createServer((request, response) => {
+    const requestUrl = new URL(request.url || "/", "http://127.0.0.1");
+    if (!dispatchDesktopPet(
+      request,
+      requestUrl,
+      response,
+      () => roleDir,
+      settings,
+      cacheRoot,
+      (eventType, data) => publishedEvents.push({ eventType, data })
+    )) {
+      response.writeHead(404).end();
+    }
+  });
+  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => server.close());
+  const address = server.address();
+  assert.ok(address && typeof address === "object");
+  const baseUrl = `http://127.0.0.1:${address.port}`;
+
+  const catalogResponse = await fetch(`${baseUrl}/api/desktop-pet/roles/YeYu/packs`);
+  const catalog = await catalogResponse.json() as { data: DesktopPetPackCatalog };
+  assert.equal(catalogResponse.status, 200);
+  assert.equal(catalog.data.packs[0].personaId, "YeYu");
+
+  const idleUrl = catalog.data.packs[0].states.idle.assets[0];
+  const assetResponse = await fetch(`${baseUrl}${idleUrl}`);
+  assert.equal(assetResponse.status, 200);
+  assert.equal(assetResponse.headers.get("content-type"), "image/gif");
+  assert.equal(Buffer.from(await assetResponse.arrayBuffer()).toString("ascii"), "GIF89a");
+
+  const originalReadFile = fs.promises.readFile;
+  fs.promises.readFile = (async (filePath: fs.PathLike, ...args: unknown[]) => {
+    if (String(filePath).endsWith("idle.gif")) {
+      throw Object.assign(new Error("too many open files"), { code: "EMFILE" });
+    }
+    return (originalReadFile as unknown as (...values: unknown[]) => unknown)(filePath, ...args);
+  }) as typeof fs.promises.readFile;
+  try {
+    const exhaustedAssetResponse = await fetch(`${baseUrl}${idleUrl}`);
+    assert.equal(exhaustedAssetResponse.status, 503);
+  } finally {
+    fs.promises.readFile = originalReadFile;
+  }
+
+  const bindingResponse = await fetch(`${baseUrl}/api/desktop-pet/roles/YeYu`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ personaId: "YeYu", enabled: true, packId: "yeyu-library-default", scale: 0.75 })
+  });
+  assert.equal(bindingResponse.status, 200);
+  const bindingPayload = await bindingResponse.json() as { data: { binding: { enabled: boolean; packId: string; scale: number } } };
+  assert.equal(bindingPayload.data.binding.enabled, true);
+  assert.equal(bindingPayload.data.binding.packId, "yeyu-library-default");
+  assert.equal(bindingPayload.data.binding.scale, 0.75);
+  assert.deepEqual(publishedEvents[0], {
+    eventType: "desktop_settings_changed",
+    data: { scope: "desktop-pet", personaId: "YeYu" }
+  });
+
+  const crossPersonaResponse = await fetch(`${baseUrl}/api/desktop-pet/roles/YeYu`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ personaId: "OtherRole", enabled: true })
+  });
+  assert.equal(crossPersonaResponse.status, 400);
+
+  const importResponse = await fetch(
+    `${baseUrl}/api/desktop-pet/roles/YeYu/packs/import?fileName=idle.gif&packId=yeyu-second&state=idle&name=${encodeURIComponent("夜雨第二套")}`,
+    { method: "POST", headers: { "content-type": "image/gif" }, body: Buffer.from("GIF89a") }
+  );
+  assert.equal(importResponse.status, 201);
+  assert.deepEqual(publishedEvents[1], {
+    eventType: "desktop_pet_catalog_changed",
+    data: { personaId: "YeYu", packId: "yeyu-second" }
+  });
+  const refreshedCatalog = await (await fetch(`${baseUrl}/api/desktop-pet/roles/YeYu/packs`)).json() as { data: DesktopPetPackCatalog };
+  assert.equal(refreshedCatalog.data.packs.some(pack => pack.id === "yeyu-second"), true);
+});

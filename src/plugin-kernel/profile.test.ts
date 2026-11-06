@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test, { type TestContext } from "node:test";
-import { loadPluginProfile, parsePluginProfile, PluginPackageCatalog } from "./profile.js";
+import { loadPluginProfile, parsePluginProfile, readPluginProfile, PluginPackageCatalog } from "./profile.js";
 import { GenerationRuntime, RequiredPluginCapabilitiesUnavailableError } from "./generationRuntime.js";
 import type { LoadedPluginPackage } from "./packageLoader.js";
 
@@ -39,6 +39,44 @@ test("a cancelled profile producer enters no package I/O", async t => {
   const input = controlledInput(t, ["one"]), denied = new Error("original lifecycle stopped before metadata");
   t.mock.method(input.packageCatalog, "loadPackage", async () => { assert.fail("cancelled producer cannot begin metadata"); });
   await assert.rejects(loadPluginProfile({ ...input, assertCurrent() { throw denied; } }), error => error === denied);
+});
+
+test("host preparation failures retire package-wide or individual old candidates without blocking healthy owners", async t => {
+  const input = controlledInput(t, ["one", "two", "independent"]);
+  input.profile = parsePluginProfile({ ...input.profile, instances: input.profile.instances.map(row => ({ ...row,
+    package: row.id === "independent" ? "io.test.independent" : "io.test.shared" })) });
+  t.mock.method(input.packageCatalog, "loadPackage", async (id: string) => controlledPackage(id));
+  const previous = await loadPluginProfile(input);
+  assert.equal(previous.candidates.length, 3);
+  for (const throwing of [false, true]) {
+    const next = await loadPluginProfile({ ...input, previous, reuseUnchangedPackages: true,
+      preparationFailure(packageId, instanceId) {
+        if (packageId !== "io.test.shared" || instanceId !== undefined) return;
+        const failure = new Error("shared owner preparation failed");
+        if (throwing) throw failure;
+        return failure;
+      } });
+    assert.deepEqual(next.candidates.map(row => row.instanceId), ["independent"]);
+    assert.deepEqual(next.loadFailures.map(row => row.instanceId), ["one", "two"]);
+    assert.ok(next.loadFailures.every(row => row.retainedRevision === undefined && /shared owner/.test(row.error.message)));
+  }
+  const next = await loadPluginProfile({ ...input, previous, reuseUnchangedPackages: true,
+    preparationFailure: (_packageId, instanceId) => instanceId === "one" ? new Error("one instance preparation failed") : undefined });
+  assert.deepEqual(next.candidates.map(row => row.instanceId), ["two", "independent"]);
+  assert.equal(next.loadFailures[0]?.instanceId, "one");
+  assert.equal(next.loadFailures[0]?.retainedRevision, undefined);
+  assert.equal(next.packages.find(row => row.instance.id === "two")?.package, previous.packages.find(row => row.instance.id === "two")?.package);
+});
+
+test("profile reads use adjacent migration declarations without an application layout", async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "kernel-profile-adjacent-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const profilePath = path.join(root, "profile.json"), original = JSON.stringify(profile);
+  await fs.writeFile(profilePath, original);
+  await fs.writeFile(path.join(root, "package-migrations.json"), JSON.stringify({ schemaVersion: 1,
+    packages: [{ packageId: "io.test.source", fromVersions: ["1.0.0"], toVersion: "0.1.1" }] }));
+  assert.equal((await readPluginProfile(profilePath)).instances[0]?.version, "0.1.1");
+  assert.equal(await fs.readFile(profilePath, "utf8"), original);
 });
 
 test("profile cancellation stops future scheduling and fallback but joins both entered metadata lanes before rejecting", async t => {
@@ -122,14 +160,71 @@ test("parsePluginProfile validates restart and resource policy", () => {
   assert.equal(parsed.instances[0]?.policy.restart.maxAttempts, 4);
   assert.equal(parsed.instances[0]?.policy.resources.shutdownTimeoutMs, 2_000);
   assert.throws(() => parsePluginProfile({ ...profile, readyRequires: ["manager.core"] }), /name@major/);
-  assert.throws(() => parsePluginProfile({
+  assert.match(parsePluginProfile({
     ...profile,
     instances: [{ ...profile.instances[0], policy: { restart: { mode: "never", maxAttempts: 1 } } }]
-  }), /must be 0/);
-  assert.throws(() => parsePluginProfile({
+  }).diagnostics?.[0]?.message ?? "", /must be 0/);
+  assert.match(parsePluginProfile({
     ...profile,
     instances: [{ ...profile.instances[0], policy: { resources: { memoryMb: 256 } } }]
-  }), /unsupported fields: memoryMb/);
+  }).diagnostics?.[0]?.message ?? "", /unsupported fields: memoryMb/);
+});
+
+test("malformed profile rows preserve healthy neighbors and report real identities without inventing missing IDs", () => {
+  const parsed = parsePluginProfile({ ...profile, instances: [profile.instances[0], null,
+    { ...profile.instances[0], id: "optional:bad", enabled: "yes" },
+    { ...profile.instances[0], id: "healthy:other" }] });
+  assert.deepEqual(parsed.instances.map(row => row.id), ["test:source", "healthy:other"]);
+  assert.deepEqual(parsed.diagnostics?.map(row => [row.rowIndex, row.instanceId]), [[1, undefined], [2, "optional:bad"]]);
+  assert.throws(() => parsePluginProfile({ ...profile, instances: {} }), /instances must be an array/);
+  assert.throws(() => parsePluginProfile({ ...profile, readyRequires: ["invalid"] }), /name@major/);
+});
+
+test("duplicate profile identity rejects every ambiguous row while independent instances remain available", () => {
+  const parsed = parsePluginProfile({ ...profile, instances: [profile.instances[0],
+    { ...profile.instances[0], enabled: false }, { ...profile.instances[0], id: "healthy:other" }] });
+  assert.deepEqual(parsed.instances.map(row => row.id), ["healthy:other"]);
+  assert.equal(parsed.diagnostics?.length, 2);
+  assert.ok(parsed.diagnostics?.every(row => /Duplicate/.test(row.message)));
+});
+
+test("readPluginProfile applies only declared exact package migrations in memory and keeps original data", async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "rabi-profile-migrations-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const profilePath = path.join(root, "custom.json"), migrationsPath = path.join(root, "package-migrations.json");
+  const original = JSON.stringify({ ...profile, instances: [profile.instances[0],
+    { ...profile.instances[0], id: "unknown:version", version: "5.0.0" },
+    { ...profile.instances[0], id: "other:package", package: "io.test.other" }] });
+  await fs.writeFile(profilePath, original);
+  await fs.writeFile(migrationsPath, JSON.stringify({ schemaVersion: 1, packages: [
+    { packageId: "io.test.source", fromVersions: ["1.0.0"], toVersion: "0.1.1" }
+  ] }));
+  const first = await readPluginProfile(profilePath, { migrationsPath });
+  assert.deepEqual(first.instances.map(row => row.version), ["0.1.1", "5.0.0", "1.0.0"]);
+  assert.deepEqual(first.instances[0], { ...parsePluginProfile(profile).instances[0], version: "0.1.1" });
+  assert.deepEqual(first.migrations, [{ instanceId: "test:source", packageId: "io.test.source", fromVersion: "1.0.0", toVersion: "0.1.1" }]);
+  assert.deepEqual(await readPluginProfile(profilePath, { migrationsPath }), first, "reopening is idempotent");
+  assert.equal(await fs.readFile(profilePath, "utf8"), original);
+  await fs.writeFile(profilePath, JSON.stringify({ ...profile, instances: [{ ...profile.instances[0], version: "0.1.1" }] }));
+  assert.equal((await readPluginProfile(profilePath, { migrationsPath })).migrations, undefined);
+});
+
+test("invalid migration rows and conflicting mappings remain local", async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "rabi-profile-migration-isolation-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const profilePath = path.join(root, "profile.json"), migrationsPath = path.join(root, "migrations.json");
+  await fs.writeFile(profilePath, JSON.stringify({ ...profile, instances: [profile.instances[0],
+    { ...profile.instances[0], id: "other:healthy", package: "io.test.other" }] }));
+  await fs.writeFile(migrationsPath, JSON.stringify({ schemaVersion: 1, packages: [null,
+    { packageId: "io.test.source", fromVersions: ["1.0.0"], toVersion: "0.1.1" },
+    { packageId: "io.test.source", fromVersions: ["1.0.0"], toVersion: "2.0.0" }] }));
+  const parsed = await readPluginProfile(profilePath, { migrationsPath });
+  assert.deepEqual(parsed.instances.map(row => row.id), ["other:healthy"]);
+  assert.equal(parsed.diagnostics?.length, 2);
+  assert.equal(parsed.diagnostics?.[0]?.source, "package-migrations");
+  assert.match(parsed.diagnostics?.[1]?.message ?? "", /Conflicting/);
+  await fs.writeFile(profilePath, "{broken");
+  await assert.rejects(readPluginProfile(profilePath, { migrationsPath }), SyntaxError);
 });
 
 test("loadPluginProfile resolves packages without a central package enum", async t => {
@@ -198,6 +293,26 @@ test("a missing required package still rejects publication with the original req
     error => error instanceof RequiredPluginCapabilitiesUnavailableError && error.missingCapabilities.includes("manager.core@1"));
   assert.equal(loaded.loadFailures.length, 1);
   assert.deepEqual(runtime.current().records, []);
+});
+
+test("profile row isolation reaches package loading and preserves strict required readiness", async t => {
+  const fixture = await createProfileFixture(t);
+  t.after(() => fixture.input.packageCatalog.dispose());
+  await fs.writeFile(fixture.profilePath, JSON.stringify({ ...profile, instances: [null, profile.instances[0],
+    { ...profile.instances[0], id: "optional:bad", grants: "invalid" }] }));
+  const loaded = await loadPluginProfile(fixture.input);
+  assert.deepEqual(loaded.candidates.map(candidate => candidate.instanceId), ["test:source"]);
+  assert.deepEqual(loaded.loadFailures.map(row => [row.rowIndex, row.instanceId, row.error.code]), [
+    [0, undefined, "profile_instance_invalid"], [2, "optional:bad", "profile_instance_invalid"]
+  ]);
+  const runtime = new GenerationRuntime({ host: "manager" });
+  t.after(() => runtime.dispose());
+  const result = await runtime.switch(loaded.candidates, { readyRequires: loaded.profile.readyRequires });
+  assert.equal(result.generation.services.services.has("manager.core@1"), true);
+  await fs.writeFile(fixture.profilePath, JSON.stringify({ ...profile, instances: [{ ...profile.instances[0], enabled: "invalid" }] }));
+  const missingRequired = await loadPluginProfile(fixture.input);
+  await assert.rejects(runtime.switch(missingRequired.candidates, { readyRequires: missingRequired.profile.readyRequires }),
+    error => error instanceof RequiredPluginCapabilitiesUnavailableError && error.missingCapabilities.includes("manager.core@1"));
 });
 
 test("a failed package update retains its previous immutable bytes, config and policy until repaired", async t => {

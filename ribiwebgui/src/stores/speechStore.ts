@@ -30,7 +30,7 @@ import {
   type SpeechRecordsQuery,
   type SpeechSynthesisResult,
   type SpeechTranscriptionResult
-} from "../speech/speechControlClient";
+} from "../../../src/plugins/io.rabiroute.manager.speech/web/speech/speechControlClient";
 
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);

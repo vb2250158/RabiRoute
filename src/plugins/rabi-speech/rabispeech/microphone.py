@@ -1,0 +1,1021 @@
+from __future__ import annotations
+
+import asyncio
+import json
+import math
+import tempfile
+import time
+import wave
+from collections import deque
+from dataclasses import asdict, dataclass, replace
+from pathlib import Path
+from typing import Any, Awaitable, Callable
+
+import numpy as np
+
+from .contracts import TranscriptionResult
+
+
+@dataclass(frozen=True)
+class MicrophoneConfig:
+    enabled: bool = False
+    streaming_enabled: bool = False
+    device: int | str | None = None
+    sample_rate: int = 16_000
+    chunk_ms: int = 100
+    pre_roll_ms: int = 1_500
+    record_threshold: float = 0.01
+    transcribe_threshold: float = 0.015
+    adaptive_threshold: bool = True
+    adaptive_multiplier: float = 2.5
+    adaptive_margin: float = 0.004
+    silence_ms: int = 500
+    min_utterance_ms: int = 300
+    max_utterance_ms: int = 8_000
+    input_gain: float = 1.0
+    asr_model: str = "faster-whisper/small"
+    language: str | None = "zh"
+    prompt: str | None = None
+    auto_submit: bool = True
+    route_id: str | None = None
+    session_id: str = "rabispeech-microphone"
+    suppress_during_playback: bool = True
+    barge_in_mode: str = "off"
+    barge_in_confirm_ms: int = 200
+
+    @classmethod
+    def from_mapping(cls, value: object, fallback: "MicrophoneConfig | None" = None) -> "MicrophoneConfig":
+        current = fallback or cls()
+        data = value if isinstance(value, dict) else {}
+        device = data.get("device", current.device)
+        if isinstance(device, bool):
+            device = None
+        elif isinstance(device, str):
+            device = device.strip() or None
+            if isinstance(device, str) and device.isdigit():
+                device = int(device)
+        legacy_route_id = _optional_text(data.get("route_id"), 200)
+        session_id = _text(data.get("session_id"), current.session_id, 200) or current.session_id
+        if legacy_route_id and session_id == f"speech-{legacy_route_id}":
+            session_id = cls().session_id
+        config = cls(
+            enabled=_boolean(data.get("enabled"), current.enabled),
+            streaming_enabled=_boolean(
+                data.get("streaming_enabled"),
+                _boolean(data.get("enabled"), current.streaming_enabled),
+            ),
+            device=device if isinstance(device, (int, str)) else None,
+            sample_rate=_integer(data.get("sample_rate"), current.sample_rate, 8_000, 48_000),
+            chunk_ms=_integer(data.get("chunk_ms"), current.chunk_ms, 20, 1_000),
+            pre_roll_ms=_integer(data.get("pre_roll_ms"), current.pre_roll_ms, 0, 5_000),
+            record_threshold=_number(data.get("record_threshold"), current.record_threshold, 0.0001, 1.0),
+            transcribe_threshold=_number(data.get("transcribe_threshold"), current.transcribe_threshold, 0.0001, 1.0),
+            adaptive_threshold=_boolean(data.get("adaptive_threshold"), current.adaptive_threshold),
+            adaptive_multiplier=_number(data.get("adaptive_multiplier"), current.adaptive_multiplier, 1.0, 10.0),
+            adaptive_margin=_number(data.get("adaptive_margin"), current.adaptive_margin, 0.0, 0.5),
+            silence_ms=_integer(data.get("silence_ms"), current.silence_ms, 100, 10_000),
+            min_utterance_ms=_integer(data.get("min_utterance_ms"), current.min_utterance_ms, 50, 10_000),
+            max_utterance_ms=_integer(data.get("max_utterance_ms"), current.max_utterance_ms, 1_000, 300_000),
+            input_gain=_number(data.get("input_gain"), current.input_gain, 0.1, 10.0),
+            asr_model=_text(data.get("asr_model"), current.asr_model, 200) or current.asr_model,
+            language=_optional_text(data.get("language", current.language), 40),
+            prompt=_optional_text(data.get("prompt", current.prompt), 2_000),
+            # Resident transcripts always enter Manager's broadcast endpoint.
+            # Keep these fields only for backward-compatible status payloads.
+            auto_submit=True,
+            route_id=None,
+            session_id=session_id,
+            suppress_during_playback=_boolean(data.get("suppress_during_playback"), current.suppress_during_playback),
+            barge_in_mode=_barge_in_mode(data.get("barge_in_mode"), current.barge_in_mode),
+            barge_in_confirm_ms=_integer(data.get("barge_in_confirm_ms"), current.barge_in_confirm_ms, 20, 1_000),
+        )
+        if config.transcribe_threshold < config.record_threshold:
+            config = replace(config, transcribe_threshold=config.record_threshold)
+        if config.max_utterance_ms <= config.min_utterance_ms:
+            config = replace(config, max_utterance_ms=max(1_000, config.min_utterance_ms + 500))
+        return config
+
+    def public(self) -> dict[str, object]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class SpeechInputSource:
+    source: str
+    transport: str
+    channel_type: str
+    message_adapter_type: str
+    route_profile_id: str | None = None
+    processing_policy: str = "agent"
+    capture_id: str = ""
+    session_id: str | None = None
+    device_id: str | None = None
+    device_name: str | None = None
+    device_kind: str | None = None
+    stream_id: str | None = None
+    audio_format: str | None = None
+    channels: int = 1
+    sample_rate: int = 16_000
+
+
+@dataclass(frozen=True)
+class SpeechUtteranceMetadata:
+    started_at: float
+    completed_at: float
+    duration: float
+    peak: float
+    rms: float
+
+
+Transcriber = Callable[[Path, MicrophoneConfig], Awaitable[TranscriptionResult]]
+Submitter = Callable[[TranscriptionResult, str, SpeechUtteranceMetadata, SpeechInputSource], Awaitable[dict[str, object]]]
+StreamFactory = Callable[[MicrophoneConfig, Callable[..., None]], Any]
+RecordTranscription = Callable[[TranscriptionResult, MicrophoneConfig, float, Path, SpeechInputSource], None]
+PlaybackStopper = Callable[[], object]
+
+
+class RemoteAudioController:
+    selected_client_id: str | None
+    selected_client_name: str | None
+    selected_client_kind: str | None
+    selected_source_device_id: str | None
+    selected_message_adapter_type: str | None
+    selected_route_profile_id: str | None
+    selected_session_id: str | None
+
+    async def start_capture(self, sample_rate: int, chunk_ms: int) -> None: ...
+
+    async def stop_capture(self) -> None: ...
+
+
+class MicrophoneService:
+    """Host-resident microphone segmentation and ASR owned by RabiSpeech.
+
+    PortAudio's callback only copies samples and schedules them on the service event loop.
+    Segmentation, ASR, persistence, and one Manager broadcast submission stay serialized there.
+    """
+
+    def __init__(
+        self,
+        *,
+        state_path: Path,
+        temp_dir: Path,
+        transcriber: Transcriber,
+        submitter: Submitter,
+        playback_active: Callable[[], bool],
+        stop_playback: PlaybackStopper | None = None,
+        record_transcription: RecordTranscription | None = None,
+        record_audio_state: Callable[[MicrophoneConfig, float, Path, SpeechInputSource, str], None] | None = None,
+        stream_factory: StreamFactory | None = None,
+        remote_audio: RemoteAudioController | None = None,
+        event_sink: Callable[[str, object], None] | None = None,
+    ) -> None:
+        self.state_path = state_path.expanduser().resolve()
+        self.temp_dir = temp_dir.expanduser().resolve()
+        self._transcriber = transcriber
+        self._submitter = submitter
+        self._playback_active = playback_active
+        self._stop_playback = stop_playback
+        self._record_transcription = record_transcription
+        self._record_audio_state = record_audio_state
+        self._stream_factory = stream_factory or _sounddevice_stream
+        self._remote_audio = remote_audio
+        self._event_sink = event_sink
+        self.config = self._read_config()
+        self._lock = asyncio.Lock()
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._stream: Any = None
+        self._delivery_consumer: asyncio.Task[None] | None = None
+        self._deliveries: asyncio.Queue = asyncio.Queue(maxsize=32)
+        self._consumer: asyncio.Task[None] | None = None
+        self._phrases: asyncio.Queue[tuple[np.ndarray, float, float, SpeechInputSource]] = asyncio.Queue(maxsize=8)
+        self._running = False
+        self._state = "stopped"
+        self._error = ""
+        self._last_submit_error = ""
+        self._level = 0.0
+        self._display_level = 0.0
+        self._level_history: deque[float] = deque(maxlen=120)
+        self._noise_floor = max(0.0005, self.config.record_threshold / 3.0)
+        self._dynamic_threshold = self.config.record_threshold
+        self._utterance_active = False
+        self._pre_chunks: deque[np.ndarray] = deque()
+        self._pre_samples = 0
+        self._utterance_chunks: list[np.ndarray] = []
+        self._utterance_samples = 0
+        self._voiced_samples = 0
+        self._silence_samples = 0
+        self._peak = 0.0
+        self._started_at = 0.0
+        self._utterance_source: SpeechInputSource | None = None
+        self._barge_in_failed = False
+        self._barge_in_triggered = False
+        self._barge_in_voiced_samples = 0
+        self._history: deque[dict[str, object]] = deque(maxlen=50)
+        self._events: deque[dict[str, object]] = deque(maxlen=100)
+        self._event_sequence = 0
+        self._last_level_event_at = 0.0
+        self._captured = 0
+        self._recognized = 0
+        self._empty = 0
+        self._delivered = 0
+        self._recorded = 0
+        self._delivery_failed = 0
+        self._submitted = 0
+        self._submit_failed = 0
+        self._dropped = 0
+
+    async def restore(self) -> None:
+        if not self.config.enabled or not self.config.streaming_enabled:
+            return
+        try:
+            await self.start({}, persist=False)
+        except Exception as exc:
+            self._state = "error"
+            self._error = f"{type(exc).__name__}: {exc}"
+
+    async def start(self, updates: object = None, *, persist: bool = True) -> dict[str, object]:
+        async with self._lock:
+            if self._running:
+                if updates:
+                    raise RuntimeError("Stop the resident microphone before changing its configuration.")
+                return self.snapshot()
+            self.config = replace(
+                MicrophoneConfig.from_mapping(updates, self.config),
+                enabled=True,
+                streaming_enabled=True,
+            )
+            self._reset_segment()
+            self._display_level = 0.0
+            self._level_history.clear()
+            self._noise_floor = max(0.0005, self.config.record_threshold / 3.0)
+            self._dynamic_threshold = self.config.record_threshold
+            self._barge_in_failed = False
+            self._loop = asyncio.get_running_loop()
+            self._state = "starting"
+            self._error = ""
+            try:
+                if self._remote_audio is not None:
+                    self._remote_audio.assert_selection_available()
+                if self._remote_audio is not None and self._remote_audio.selected_client_id:
+                    await self._remote_audio.start_capture(self.config.sample_rate, self.config.chunk_ms)
+                else:
+                    self._stream = self._stream_factory(self.config, self._audio_callback)
+                    self._stream.start()
+            except Exception as exc:
+                self._stream = None
+                self._state = "error"
+                self._error = f"{type(exc).__name__}: {exc}"
+                self._emit_event("microphone", "microphone_start_failed", "麦克风启动失败", level="error", error=self._error)
+                raise RuntimeError(f"Microphone start failed: {exc}") from exc
+            self._running = True
+            self._state = "listening"
+            self._consumer = asyncio.create_task(self._consume(), name="rabispeech-microphone-asr")
+            self._delivery_consumer = asyncio.create_task(self._deliver())
+            if persist:
+                self._write_config()
+            self._emit_event(
+                "microphone",
+                "microphone_started",
+                "麦克风常驻监听已启动",
+                device=self.config.device,
+                audio_source="remote" if self._remote_audio is not None and self._remote_audio.selected_client_id else "local",
+                remote_client_id=self._remote_audio.selected_client_id if self._remote_audio is not None else None,
+                asr_model=self.config.asr_model,
+                broadcast=True,
+            )
+            return self.snapshot()
+
+    async def update_settings(self, updates: object = None) -> dict[str, object]:
+        was_running = self._running
+        next_config = replace(MicrophoneConfig.from_mapping(updates, self.config), enabled=False)
+        if was_running:
+            await self.stop(persist=False)
+        if was_running and next_config.streaming_enabled:
+            await self.start(next_config.public(), persist=True)
+        else:
+            async with self._lock:
+                self.config = next_config
+                self._write_config()
+        self._emit_event(
+            "microphone",
+            "microphone_settings_updated",
+            "主机语音设置已更新",
+            running=self._running,
+            asr_model=self.config.asr_model,
+            streaming_enabled=self.config.streaming_enabled,
+        )
+        return self.snapshot()
+
+    async def stop(self, *, persist: bool = True) -> dict[str, object]:
+        async with self._lock:
+            self._running = False
+            stream, self._stream = self._stream, None
+            if stream is not None:
+                try:
+                    stream.stop()
+                finally:
+                    stream.close()
+            if self._remote_audio is not None:
+                await self._remote_audio.stop_capture()
+            consumer, self._consumer = self._consumer, None
+            if consumer is not None:
+                consumer.cancel()
+                try:
+                    await consumer
+                except asyncio.CancelledError:
+                    pass
+            delivery, self._delivery_consumer = self._delivery_consumer, None
+            if delivery is not None:
+                delivery.cancel()
+                try:
+                    await delivery
+                except asyncio.CancelledError:
+                    pass
+            while not self._deliveries.empty():
+                try:
+                    queued = self._deliveries.get_nowait()
+                    queued[-1]["delivery_status"] = "cancelled"
+                    self._deliveries.task_done()
+                except asyncio.QueueEmpty:
+                    break
+            while not self._phrases.empty():
+                try:
+                    self._phrases.get_nowait()
+                    self._phrases.task_done()
+                except asyncio.QueueEmpty:
+                    break
+            self._reset_segment()
+            self._level = 0.0
+            self._state = "stopped"
+            self._error = ""
+            self.config = replace(self.config, enabled=False)
+            if persist:
+                self._write_config()
+            self._emit_event("microphone", "microphone_stopped", "麦克风常驻监听已停止")
+            return self.snapshot()
+
+    def snapshot(self) -> dict[str, object]:
+        return {
+            "ok": True,
+            "mode": "host_resident",
+            "audio_stream": {
+                "source": "remote" if self._remote_audio is not None and self._remote_audio.selected_client_id else "local",
+                "client_id": self._remote_audio.selected_client_id if self._remote_audio is not None else None,
+            },
+            "running": self._running,
+            "stream_active": bool(self._stream is not None and getattr(self._stream, "active", self._running)),
+            "state": self._state,
+            "error": self._error,
+            "last_submit_error": self._last_submit_error,
+            "level": round(self._level, 6),
+            "level_history": list(self._level_history),
+            "noise_floor": round(self._noise_floor, 6),
+            "dynamic_threshold": round(self._dynamic_threshold, 6),
+            "utterance_active": self._utterance_active,
+            "pending": self._phrases.qsize(),
+            "dropped": self._dropped,
+            "stats": {
+                "captured": self._captured,
+                "recognized": self._recognized,
+                "empty": self._empty,
+                "delivered": self._delivered,
+                "recorded": self._recorded,
+                "delivery_failed": self._delivery_failed,
+                "submitted": self._submitted,
+                "submit_failed": self._submit_failed,
+                "dropped": self._dropped,
+            },
+            "config": self.config.public(),
+            "history": list(self._history),
+            "events": list(self._events),
+        }
+
+    def _emit_event(self, stage: str, kind: str, message: str, *, level: str = "info", **details: object) -> None:
+        self._event_sequence += 1
+        event = {
+            "sequence": self._event_sequence,
+            "time": time.time(),
+            "stage": stage,
+            "kind": kind,
+            "level": level,
+            "message": message,
+            "details": {key: value for key, value in details.items() if value is not None},
+        }
+        self._events.appendleft(event)
+        if self._event_sink is not None:
+            self._event_sink("microphone_event", event)
+
+    @staticmethod
+    def devices() -> list[dict[str, object]]:
+        try:
+            import sounddevice as sd
+        except ImportError as exc:
+            raise RuntimeError("sounddevice is not installed. Run scripts/install.ps1.") from exc
+        default_input = None
+        try:
+            default_input = int(sd.default.device[0])
+        except (TypeError, ValueError, IndexError):
+            pass
+        rows: list[dict[str, object]] = []
+        for index, raw in enumerate(sd.query_devices()):
+            detail = dict(raw)
+            channels = int(detail.get("max_input_channels") or 0)
+            if channels <= 0:
+                continue
+            rows.append(
+                {
+                    "index": index,
+                    "name": str(detail.get("name") or f"Input {index}"),
+                    "channels": channels,
+                    "default_sample_rate": int(float(detail.get("default_samplerate") or 0)),
+                    "default": index == default_input,
+                }
+            )
+        return rows
+
+    def feed_for_test(self, samples: np.ndarray) -> None:
+        """Deterministic segmentation hook; production audio enters through PortAudio."""
+        self._ingest(np.asarray(samples, dtype=np.float32).reshape(-1))
+
+    def feed_remote(self, client_id: str, samples: np.ndarray) -> None:
+        if self._remote_audio is None or client_id != self._remote_audio.selected_client_id:
+            return
+        source = self._input_source()
+        if self._utterance_source is not None and self._utterance_source != source:
+            self._finish_segment()
+            self._reset_segment()
+        elif getattr(self, "_last_remote_source", None) != source:
+            self._reset_segment()
+        self._last_remote_source = source
+        self._ingest(np.asarray(samples, dtype=np.float32).reshape(-1))
+
+    def _audio_callback(self, indata: Any, _frames: int, _time_info: Any, status: Any) -> None:
+        loop = self._loop
+        if loop is None or loop.is_closed() or not self._running:
+            return
+        chunk = np.asarray(indata, dtype=np.float32)
+        if chunk.ndim > 1:
+            chunk = chunk[:, 0]
+        copied = chunk.copy()
+        try:
+            loop.call_soon_threadsafe(self._ingest, copied, str(status or ""))
+        except RuntimeError:
+            return
+
+    def _ingest(self, chunk: np.ndarray, status: str = "") -> None:
+        if not self._running or chunk.size == 0:
+            return
+        if status:
+            self._error = f"Audio warning: {status}"[:500]
+        if self.config.input_gain != 1.0:
+            chunk = np.clip(chunk * self.config.input_gain, -1.0, 1.0)
+        level = _rms(chunk)
+        self._level = level
+        self._display_level = self._display_level * 0.75 + level * 0.25
+        self._level_history.append(round(self._display_level, 6))
+        now = time.monotonic()
+        if self._event_sink is not None and now - self._last_level_event_at >= 0.2:
+            self._last_level_event_at = now
+            self._event_sink("microphone_level", {
+                "level": round(self._display_level, 6),
+                "noise_floor": round(self._noise_floor, 6),
+                "dynamic_threshold": round(self._dynamic_threshold, 6),
+                "state": self._state,
+                "utterance_active": self._utterance_active,
+            })
+        playback_active = self._playback_active()
+        barge_in_ready = (
+            self.config.barge_in_mode == "echo_protected"
+            and self._stop_playback is not None
+            and not self._barge_in_failed
+        )
+        if self.config.suppress_during_playback and playback_active and not barge_in_ready:
+            if self._state != "playback_suppressed":
+                self._emit_event("microphone", "playback_suppressed", "检测到主机播放，暂时抑制麦克风触发")
+            self._reset_segment()
+            self._state = "playback_suppressed"
+            return
+        if not playback_active:
+            self._barge_in_failed = False
+            if not self._barge_in_triggered:
+                self._barge_in_voiced_samples = 0
+        if self._state == "playback_suppressed":
+            self._state = "listening"
+            if playback_active:
+                self._emit_event("barge_in", "barge_in_armed", "主机仍在播放，已切换为受回声保护的打断监听")
+            else:
+                self._emit_event("microphone", "playback_resumed", "主机播放结束，恢复麦克风监听")
+
+        if not self._utterance_active:
+            self._append_pre_roll(chunk)
+            self._dynamic_threshold = (
+                max(self.config.record_threshold, self._noise_floor * self.config.adaptive_multiplier + self.config.adaptive_margin)
+                if self.config.adaptive_threshold
+                else self.config.record_threshold
+            )
+            if level < self._dynamic_threshold:
+                if self.config.adaptive_threshold:
+                    self._noise_floor = self._noise_floor * 0.95 + level * 0.05
+                return
+            self._utterance_active = True
+            self._utterance_chunks = list(self._pre_chunks)
+            self._utterance_samples = self._pre_samples
+            if not self._utterance_chunks:
+                self._utterance_chunks.append(chunk.copy())
+                self._utterance_samples = chunk.size
+            self._pre_chunks.clear()
+            self._pre_samples = 0
+            self._started_at = time.time() - self._utterance_samples / self.config.sample_rate
+            self._utterance_source = self._input_source()
+            self._peak = level
+            self._voiced_samples = chunk.size
+            self._silence_samples = 0
+            self._state = "recording"
+            self._emit_event(
+                "vad",
+                "utterance_started",
+                "声音超过触发阈值，开始收音",
+                level_value=round(level, 6),
+                threshold=round(self._dynamic_threshold, 6),
+            )
+            self._barge_in_voiced_samples = chunk.size if playback_active and barge_in_ready else 0
+            if self._try_barge_in(playback_active, barge_in_ready):
+                return
+            return
+
+        self._utterance_chunks.append(chunk.copy())
+        self._utterance_samples += chunk.size
+        self._peak = max(self._peak, level)
+        if level >= self._dynamic_threshold:
+            self._voiced_samples += chunk.size
+            if playback_active and barge_in_ready and not self._barge_in_triggered:
+                self._barge_in_voiced_samples += chunk.size
+            elif not self._barge_in_triggered:
+                self._barge_in_voiced_samples = 0
+        elif not self._barge_in_triggered:
+            self._barge_in_voiced_samples = 0
+        if self._try_barge_in(playback_active, barge_in_ready):
+            return
+        # A chunk accepted as speech must not also advance the silence timer.
+        if level >= self._dynamic_threshold:
+            self._silence_samples = 0
+        else:
+            self._silence_samples += chunk.size
+
+        sample_rate = self.config.sample_rate
+        min_samples = round(sample_rate * self.config.min_utterance_ms / 1000)
+        silence_samples = round(sample_rate * self.config.silence_ms / 1000)
+        max_samples = round(sample_rate * self.config.max_utterance_ms / 1000)
+        phrase_done = self._silence_samples >= silence_samples
+        if phrase_done or self._utterance_samples >= max_samples:
+            self._finish_segment(min_voiced_samples=min_samples)
+
+    def _try_barge_in(self, playback_active: bool, barge_in_ready: bool) -> bool:
+        confirm_samples = round(self.config.sample_rate * self.config.barge_in_confirm_ms / 1000)
+        if (
+            not playback_active
+            or not barge_in_ready
+            or self._barge_in_triggered
+            or self._barge_in_voiced_samples < confirm_samples
+        ):
+            return False
+        try:
+            assert self._stop_playback is not None
+            self._stop_playback()
+        except Exception as exc:
+            self._barge_in_failed = True
+            self._reset_segment()
+            self._state = "playback_suppressed"
+            self._emit_event(
+                "barge_in",
+                "barge_in_failed",
+                "语音起点已确认，但停止播放失败；已恢复防回流抑制",
+                level="error",
+                error=f"{type(exc).__name__}: {exc}"[:500],
+            )
+            return True
+        self._barge_in_triggered = True
+        self._emit_event(
+            "barge_in",
+            "barge_in_triggered",
+            "检测到受回声保护的语音起点，已停止当前播放并清空旧队列",
+            protection="echo_protected",
+            queue_cleared=True,
+            confirmation_ms=self.config.barge_in_confirm_ms,
+        )
+        return False
+
+    def _append_pre_roll(self, chunk: np.ndarray) -> None:
+        limit = round(self.config.sample_rate * self.config.pre_roll_ms / 1000)
+        if limit <= 0:
+            return
+        self._pre_chunks.append(chunk.copy())
+        self._pre_samples += chunk.size
+        while self._pre_samples > limit and len(self._pre_chunks) > 1:
+            self._pre_samples -= self._pre_chunks.popleft().size
+
+    def _finish_segment(self, *, min_voiced_samples: int = 0) -> None:
+        audio = np.concatenate(self._utterance_chunks).astype(np.float32) if self._utterance_chunks else np.array([], dtype=np.float32)
+        peak = self._peak
+        voiced_samples = self._voiced_samples
+        started_at = self._started_at or time.time()
+        input_source = self._utterance_source or self._input_source()
+        duration = round(audio.size / self.config.sample_rate, 3) if self.config.sample_rate else 0.0
+        voiced_duration = round(voiced_samples / self.config.sample_rate, 3) if self.config.sample_rate else 0.0
+        self._reset_segment()
+        self._state = "listening"
+        if audio.size == 0 or peak < self.config.transcribe_threshold or voiced_samples < min_voiced_samples:
+            self._emit_event(
+                "vad",
+                "segment_discarded",
+                "片段未达到最短有效语音或转写阈值，已丢弃",
+                level="warning",
+                duration=duration,
+                voiced_duration=voiced_duration,
+                peak=round(peak, 6),
+            )
+            return
+        try:
+            self._phrases.put_nowait((audio, started_at, peak, input_source))
+            self._captured += 1
+            self._emit_event(
+                "vad",
+                "segment_queued",
+                "语音片段已进入识别队列",
+                duration=duration,
+                peak=round(peak, 6),
+                pending=self._phrases.qsize(),
+            )
+        except asyncio.QueueFull:
+            self._dropped += 1
+            self._emit_event("vad", "segment_dropped", "识别队列已满，语音片段被丢弃", level="error", duration=duration)
+
+    def _reset_segment(self) -> None:
+        self._utterance_active = False
+        self._pre_chunks.clear()
+        self._pre_samples = 0
+        self._utterance_chunks = []
+        self._utterance_samples = 0
+        self._voiced_samples = 0
+        self._silence_samples = 0
+        self._peak = 0.0
+        self._started_at = 0.0
+        self._utterance_source = None
+        self._barge_in_triggered = False
+        self._barge_in_voiced_samples = 0
+
+    def _input_source(self) -> SpeechInputSource:
+        remote_id = self._remote_audio.selected_client_id if self._remote_audio is not None else None
+        if remote_id:
+            adapter_type = self._remote_audio.selected_message_adapter_type or "speech"
+            return SpeechInputSource(
+                source="mobile_audio_stream" if adapter_type == "rabilink" else "remote_audio_stream",
+                transport="rabispeech_remote_audio",
+                channel_type="rabilink.mobile_audio" if adapter_type == "rabilink" else "speech.remote_audio_stream",
+                message_adapter_type=adapter_type,
+                route_profile_id=self._remote_audio.selected_route_profile_id,
+                processing_policy=getattr(self._remote_audio, "selected_processing_policy", "agent"),
+                capture_id=getattr(self._remote_audio, "selected_capture_id", ""),
+                session_id=self._remote_audio.selected_session_id,
+                device_id=self._remote_audio.selected_source_device_id or remote_id,
+                device_name=self._remote_audio.selected_client_name,
+                device_kind=self._remote_audio.selected_client_kind or "remote_audio_client",
+                stream_id=remote_id,
+                audio_format="pcm_s16le",
+                channels=1,
+                sample_rate=self.config.sample_rate,
+            )
+        device = str(self.config.device).strip() if self.config.device is not None else "system-default"
+        return SpeechInputSource(
+            source="pc_microphone",
+            transport="rabispeech_local_audio",
+            channel_type="speech.pc_microphone",
+            message_adapter_type="speech",
+            device_id=device,
+            device_name=device,
+            device_kind="pc_microphone",
+            audio_format="pcm_f32le",
+            channels=1,
+            sample_rate=self.config.sample_rate,
+        )
+
+    async def _consume(self) -> None:
+        while True:
+            audio, started_at, peak, input_source = await self._phrases.get()
+            target: Path | None = None
+            pending_record = False
+            try:
+                self._state = "transcribing"
+                duration = round(audio.size / self.config.sample_rate, 3)
+                self._emit_event(
+                    "asr",
+                    "transcription_started",
+                    "开始语音识别",
+                    duration=duration,
+                    model=self.config.asr_model,
+                )
+                target = _write_wav(self.temp_dir, audio, self.config.sample_rate)
+                if self._record_audio_state is not None:
+                    self._record_audio_state(self.config, started_at, target, input_source, "processing")
+                    pending_record = True
+                result = await self._transcriber(target, self.config)
+                text = result.text.strip()
+                if not text:
+                    if self._record_audio_state is not None:
+                        self._record_audio_state(self.config, started_at, target, input_source, "empty")
+                    pending_record = False
+                    self._empty += 1
+                    self._emit_event("asr", "transcription_empty", "识别完成，但没有得到有效文字", level="warning", duration=duration)
+                    self._state = "listening"
+                    continue
+                self._recognized += 1
+                self._emit_event(
+                    "asr",
+                    "transcription_succeeded",
+                    "语音识别完成",
+                    provider=result.provider,
+                    model=result.model,
+                    duration=duration,
+                    text_length=len(text),
+                )
+                completed_at = time.time()
+                utterance = SpeechUtteranceMetadata(
+                    started_at=started_at,
+                    completed_at=completed_at,
+                    duration=round(audio.size / self.config.sample_rate, 3),
+                    peak=round(peak, 6),
+                    rms=round(_rms(audio), 6),
+                )
+                item: dict[str, object] = {
+                    "record_id": result.record_id,
+                    "time": completed_at,
+                    "started_at": utterance.started_at,
+                    "completed_at": utterance.completed_at,
+                    "duration": utterance.duration,
+                    "peak": utterance.peak,
+                    "rms": utterance.rms,
+                    "text": text,
+                    "provider": result.provider,
+                    "model": result.model,
+                    "segments": [asdict(segment) for segment in result.segments],
+                    **result.recognition_metadata(),
+                    "source": input_source.source,
+                    "transport": input_source.transport,
+                    "channel_type": input_source.channel_type,
+                    "message_adapter_type": input_source.message_adapter_type,
+                    "source_device_id": input_source.device_id,
+                    "source_device_name": input_source.device_name,
+                    "source_device_kind": input_source.device_kind,
+                    "source_stream_id": input_source.stream_id,
+                    "processing_policy": input_source.processing_policy,
+                    "captureId": input_source.capture_id,
+                    "audio_format": input_source.audio_format,
+                    "channels": input_source.channels,
+                    "sample_rate": input_source.sample_rate,
+                    "submitted": False,
+                }
+                if self._record_transcription is not None:
+                    try:
+                        if target is None:
+                            raise RuntimeError("ASR source audio was not available for record persistence.")
+                        self._record_transcription(result, self.config, started_at, target, input_source)
+                        pending_record = False
+                    except Exception as exc:
+                        self._emit_event(
+                            "storage",
+                            "record_persistence_failed",
+                            "语音记录写入失败，本次转写将保持记录态并继续尝试安全投递",
+                            level="error",
+                            session_id=self.config.session_id,
+                            error=f"{type(exc).__name__}: {exc}"[:500],
+                        )
+                if self.config.auto_submit:
+                    try:
+                        self._deliveries.put_nowait((result, input_source.session_id or self.config.session_id, utterance, input_source, item))
+                    except asyncio.QueueFull:
+                        item["delivery_status"] = "failed"
+                        item["submit_error"] = "Speech delivery queue is full; transcription remains saved"
+                        self._submit_failed += 1
+                        self._delivery_failed += 1
+                        self._emit_event("route", "route_submission_failed", "消息投递队列已满，转写已保留", level="error")
+                self._history.appendleft(item)
+                self._error = ""
+                self._state = "listening"
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                self._state = "error"
+                self._error = f"{type(exc).__name__}: {exc}"[:500]
+                self._emit_event("asr", "transcription_failed", "语音识别失败", level="error", error=self._error)
+            finally:
+                if pending_record and target is not None and self._record_audio_state is not None:
+                    try:
+                        self._record_audio_state(self.config, started_at, target, input_source, "error")
+                    except Exception as exc:
+                        self._emit_event("storage", "record_persistence_failed", "录音状态保存失败", level="error", error=str(exc)[:500])
+                if target is not None:
+                    target.unlink(missing_ok=True)
+                self._phrases.task_done()
+
+    async def _deliver(self) -> None:
+        """Broadcast in order without holding ASR or re-recording a saved utterance."""
+        while True:
+            result, session_id, utterance, input_source, item = await self._deliveries.get()
+            try:
+                self._emit_event(
+                    "route",
+                    "route_submission_started",
+                    "保存主机转写，不投递角色" if input_source.processing_policy == "transcribe" else "开始广播到已启用的语音消息端",
+                    session_id=session_id,
+                )
+                try:
+                    receipt = await self._submitter(
+                        result,
+                        input_source.session_id or session_id,
+                        utterance,
+                        input_source,
+                    )
+                    if not isinstance(receipt, dict):
+                        raise RuntimeError("Manager returned no terminal broadcast receipt.")
+                    delivery_status = str(receipt.get("status") or "").strip()
+                    if delivery_status not in {"delivered", "recorded"}:
+                        raise RuntimeError("Manager returned no delivered/recorded broadcast receipt.")
+                    message_id = str(receipt.get("message_id") or receipt.get("messageId") or "").strip()
+                    delivery_reason = str(receipt.get("reason") or "").strip()
+                    deliveries = receipt.get("deliveries") if isinstance(receipt.get("deliveries"), list) else []
+                    item["submitted"] = True
+                    item["delivery_status"] = delivery_status
+                    item["deliveries"] = deliveries
+                    if message_id:
+                        item["message_id"] = message_id
+                    if delivery_reason:
+                        item["delivery_reason"] = delivery_reason
+                    self._submitted += 1
+                    self._last_submit_error = ""
+                    if deliveries:
+                        for delivery in deliveries:
+                            if not isinstance(delivery, dict):
+                                continue
+                            route_id = str(delivery.get("routeId") or delivery.get("route_id") or "").strip()
+                            route_status = str(delivery.get("status") or "").strip()
+                            route_message_id = str(delivery.get("messageId") or delivery.get("message_id") or "").strip()
+                            route_reason = str(delivery.get("reason") or "").strip()
+                            route_detail = str(delivery.get("detail") or "").strip()
+                            if route_status == "delivered":
+                                self._delivered += 1
+                                self._emit_event(
+                                    "route",
+                                    "route_delivery_succeeded",
+                                    "Desktop 目标任务已接收语音消息",
+                                    route_id=route_id,
+                                    session_id=session_id,
+                                    message_id=route_message_id,
+                                )
+                            elif route_status == "recorded":
+                                self._recorded += 1
+                                self._emit_event(
+                                    "route",
+                                    "route_recorded_only",
+                                    "语音已记录，未唤醒 Agent",
+                                    route_id=route_id,
+                                    session_id=session_id,
+                                    message_id=route_message_id,
+                                    reason=route_reason,
+                                )
+                            elif route_status == "failed":
+                                self._delivery_failed += 1
+                                self._emit_event(
+                                    "route",
+                                    "route_submission_failed",
+                                    "Route 投递失败",
+                                    level="error",
+                                    route_id=route_id,
+                                    error=route_detail or route_reason or "Unknown Route delivery failure.",
+                                )
+                    else:
+                        self._recorded += 1
+                        self._emit_event(
+                            "route",
+                            "route_recorded_only",
+                            "语音已记录，当前没有启用的语音消息端",
+                            session_id=session_id,
+                            message_id=message_id,
+                            reason=delivery_reason,
+                        )
+                except asyncio.CancelledError:
+                    item["delivery_status"] = "cancelled"
+                    raise
+                except Exception as exc:
+                    self._delivery_failed += 1
+                    self._submit_failed += 1
+                    self._last_submit_error = f"{type(exc).__name__}: {exc}"[:500]
+                    item["delivery_status"] = "failed"
+                    item["submit_error"] = self._last_submit_error
+                    self._emit_event(
+                        "route",
+                        "route_submission_failed",
+                        "语音广播失败",
+                        level="error",
+                        error=self._last_submit_error,
+                    )
+            finally:
+                self._deliveries.task_done()
+
+    def _read_config(self) -> MicrophoneConfig:
+        if not self.state_path.is_file():
+            return MicrophoneConfig()
+        try:
+            return MicrophoneConfig.from_mapping(json.loads(self.state_path.read_text(encoding="utf-8")))
+        except (OSError, ValueError, json.JSONDecodeError):
+            return MicrophoneConfig()
+
+    def _write_config(self) -> None:
+        self.state_path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = self.state_path.with_suffix(self.state_path.suffix + ".tmp")
+        temporary.write_text(json.dumps(self.config.public(), ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        temporary.replace(self.state_path)
+
+
+def _sounddevice_stream(config: MicrophoneConfig, callback: Callable[..., None]) -> Any:
+    try:
+        import sounddevice as sd
+    except ImportError as exc:
+        raise RuntimeError("sounddevice is not installed. Run scripts/install.ps1.") from exc
+    blocksize = max(1, round(config.sample_rate * config.chunk_ms / 1000))
+    return sd.InputStream(
+        device=config.device,
+        channels=1,
+        samplerate=config.sample_rate,
+        blocksize=blocksize,
+        dtype="float32",
+        callback=callback,
+    )
+
+
+def _write_wav(temp_dir: Path, audio: np.ndarray, sample_rate: int) -> Path:
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    handle = tempfile.NamedTemporaryFile(prefix="rabispeech-mic-", suffix=".wav", dir=temp_dir, delete=False)
+    target = Path(handle.name)
+    handle.close()
+    pcm = (np.clip(audio, -1.0, 1.0) * 32_767).astype("<i2").tobytes()
+    try:
+        with wave.open(str(target), "wb") as output:
+            output.setnchannels(1)
+            output.setsampwidth(2)
+            output.setframerate(sample_rate)
+            output.writeframes(pcm)
+    except Exception:
+        target.unlink(missing_ok=True)
+        raise
+    return target
+
+
+def _rms(samples: np.ndarray) -> float:
+    if samples.size == 0:
+        return 0.0
+    return float(math.sqrt(float(np.mean(np.square(samples, dtype=np.float32)))))
+
+
+def _boolean(value: object, fallback: bool) -> bool:
+    if isinstance(value, bool):
+        return value
+    text = str(value or "").strip().lower()
+    return fallback if not text else text in {"1", "true", "yes", "on", "enabled"}
+
+
+def _integer(value: object, fallback: int, minimum: int, maximum: int) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        parsed = fallback
+    return min(maximum, max(minimum, parsed))
+
+
+def _number(value: object, fallback: float, minimum: float, maximum: float) -> float:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        parsed = fallback
+    if not math.isfinite(parsed):
+        parsed = fallback
+    return min(maximum, max(minimum, parsed))
+
+
+def _text(value: object, fallback: str, limit: int) -> str:
+    text = str(value if value is not None else fallback).strip()
+    return text[:limit]
+
+
+def _optional_text(value: object, limit: int) -> str | None:
+    text = str(value or "").strip()
+    return text[:limit] or None
+
+
+def _barge_in_mode(value: object, fallback: str) -> str:
+    if value is None:
+        return fallback if fallback in {"off", "echo_protected"} else "off"
+    normalized = str(value or "").strip().lower()
+    if normalized in {"off", "echo_protected"}:
+        return normalized
+    return "off"

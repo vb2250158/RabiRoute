@@ -1,7 +1,7 @@
 # Both Git and explicit snapshot entries use the same path and reparse-point checks.
 function Resolve-ReleaseTrackedSourcePath([string]$RelativePath, [string]$SourceRoot) {
     $relative = $RelativePath
-    $allowedSourcePath = $relative -match '^(assets|docs|skills|examples/data|apps/rabi-agent|plugin-adapters|plugins|scripts)/' -or $relative -match '^packages/(rabi-knowledge-contract/(schema|tools|receipt)|rabi-api-contract/request|rabilink-agent-contract/(profile|state|persona))\.mjs$' -or $relative -match '^apps/rabi-mcp/lib/knowledge-(tools|receipt)\.mjs$'
+    $allowedSourcePath = $relative -match '^(assets|docs|skills|examples/data|apps/rabi-agent|src/plugins|plugins|scripts)/' -or $relative -match '^packages/(rabi-knowledge-contract/(schema|tools|receipt)|rabi-api-contract/request|rabilink-agent-contract/(profile|state|persona))\.mjs$' -or $relative -match '^apps/rabi-mcp/lib/knowledge-(tools|receipt)\.mjs$'
     if (!$allowedSourcePath -or $relative -match '[\\:\x00-\x1f\x7f]' -or $relative -match '(^|/)\.env[^/]*($|/)' -or ($relative -match '(^|/)data(/|$)' -and !$relative.StartsWith('examples/data/')) -or $relative -match '(^|/)(\.|\.\.|\.git|node_modules|logs|recordings|transcripts|\.env)(/|$)' -or $relative -match '(^|/)[^/]+[. ](/|$)' -or $relative.Contains('//')) { throw 'Unsafe or duplicate tracked path' }
     $cursor = [IO.Path]::GetFullPath($SourceRoot).TrimEnd('\', '/')
     if ((Get-Item -LiteralPath $cursor -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Source root is a reparse point' }

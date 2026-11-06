@@ -53,11 +53,12 @@ internal static class ManagerReadiness
 internal static class StableNodeRuntime
 {
     internal const string RuntimeDirectoryName = "runtime";
-    internal const string RuntimeFileName = "node.exe";
+    internal const string RuntimeFileName = "RabiRoute.Runtime.exe";
 
     internal static string Resolve(string packageRoot, string stateRoot)
     {
-        var packaged = Path.GetFullPath(Path.Combine(packageRoot, RuntimeFileName));
+        // The sealed payload retains node.exe for release/developer tooling.
+        var packaged = Path.GetFullPath(Path.Combine(packageRoot, "node.exe"));
         RequireRegularFile(packaged, "versioned Node.js runtime");
 
         var stableRoot = Path.GetFullPath(Path.Combine(stateRoot, RuntimeDirectoryName));

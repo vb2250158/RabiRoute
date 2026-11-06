@@ -15,8 +15,9 @@
     "baseUrl": ".",
     "paths": {
       "@/*": ["src/*"],
-      "@shared/*": ["../src/shared/*"]
+      "@shared/*": ["../src/shared/*"],
+      "@rabiroute/host-api/*": ["../src/*"]
     }
   },
-  "include": ["src/**/*.ts", "src/**/*.vue", "../src/shared/gatewayConfigModel.ts", "../src/shared/speechControlContract.ts", "../src/shared/speechModelManagement.ts", "../src/shared/planSortContract.ts", "../src/plugin-kernel/capabilityReference.ts"]
+  "include": ["src/**/*.ts", "src/**/*.vue", "../src/plugins/*/web/**/*.ts", "../src/plugins/*/web/**/*.vue", "../src/shared/gatewayConfigModel.ts", "../src/shared/speechControlContract.ts", "../src/shared/speechModelManagement.ts", "../src/shared/planSortContract.ts", "../src/plugin-kernel/capabilityReference.ts"]
 }

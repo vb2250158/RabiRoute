@@ -1,6 +1,6 @@
 {
   "name": "rabiroute",
-  "version": "0.6.4",
+  "version": "0.7.0",
   "license": "MIT",
   "private": true,
   "type": "module",
@@ -8,7 +8,7 @@
     "dev": "node --import tsx src/index.ts",
     "manager": "node --import tsx src/manager.ts",
     "manager:dev:isolated": "node node_modules/tsx/dist/cli.mjs watch src/manager.ts",
-    "speech:dev": "powershell -NoProfile -ExecutionPolicy Bypass -File plugin-adapters/rabi-speech/scripts/start.ps1 -Reload",
+    "speech:dev": "powershell -NoProfile -ExecutionPolicy Bypass -File src/plugins/rabi-speech/scripts/start.ps1 -Reload",
     "dev:hot": "node scripts/start-hot-reload.mjs",
     "dev:hot:speech": "node scripts/start-hot-reload.mjs --speech",
     "test:hot-patches": "node --import tsx --test scripts/hot-patch-compiler.test.mjs scripts/hot-patch-http.test.mjs scripts/hot-patch-process.test.mjs scripts/hot-patch-candidate-store.test.mjs scripts/hot-patch-manager-api.test.mjs src/plugin-kernel/hotPatchRuntime.test.ts scripts/hot-patch-bundle.test.mjs scripts/hot-patch-process-bundle.test.mjs scripts/hot-patch-bundle-api.test.mjs scripts/source-patch-watcher.test.mjs scripts/hot-patch-resource-store.test.mjs scripts/hot-patch-resource-revision.test.mjs",
@@ -19,8 +19,9 @@
     "build:windows-host": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-windows-host.ps1",
     "test:windows-host": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-windows-host.ps1",
     "build": "npm run build:backend && npm run build:plugins && npm run webgui:build -- --finalize-plugin-build",
-    "build:backend": "node scripts/generate-agent-plugin-metadata.mjs && node scripts/clean-backend-dist.mjs && tsc -p tsconfig.json && node scripts/copy-plugin-runtime-host-assets.mjs && node scripts/copy-markdown-renderer.mjs && node scripts/copy-agent-adapter-resources.mjs && node scripts/instrument-automatic-code.mjs && node scripts/build-source-patches.mjs && npm run check:codex-contract && npm run check:event-driven && npm run check:plugin-architecture",
-    "test": "node --test-concurrency=2 --import ./scripts/test-manager-runtime-env.mjs --import tsx --test \"src/**/*.test.ts\" && node --import ./scripts/test-manager-runtime-env.mjs --test scripts/automatic-delivery-producers.test.mjs scripts/data-mutation-audit-coverage.test.mjs scripts/build-plugin-packages.test.mjs scripts/work-cycle-send-contract.test.mjs scripts/work-cycle-agent-send-recovery.test.mjs scripts/start-hot-reload.test.mjs scripts/rabilink-event-hub.test.mjs scripts/rabilink-relay-mobile-workers.test.mjs scripts/rabilink-relay-peers.test.mjs scripts/rabilink-relay-speech-messages.test.mjs scripts/test-rabispeech-tts-loop.test.mjs scripts/test-built-manager-readonly.test.mjs scripts/check-active-intelligence-physical-acceptance.test.mjs scripts/record-active-intelligence-physical-observation.test.mjs scripts/export-speech-transcript.test.mjs scripts/windows-release-optional-speech.test.mjs scripts/windows-desktop-contract.test.mjs scripts/developer-channel.test.mjs scripts/manager-storage-parent-boundary.test.mjs scripts/create-windows-release-manifest.test.mjs scripts/windows-release-transaction.test.mjs scripts/legacy-wearable-task-migration.test.mjs scripts/dynamic-manager-active-truth.test.mjs scripts/android-sdk-dynamic-manager-contract.test.mjs apps/rabi-mobile-android/scripts/wearable-companion-lifecycle.test.mjs && npm run check:skills",
+    "build:backend": "node scripts/generate-plugin-source-catalog.mjs && node scripts/generate-agent-plugin-metadata.mjs && node scripts/clean-backend-dist.mjs && tsc -p tsconfig.json --declaration --declarationDir dist/host-api-types && node scripts/rewrite-built-host-api-imports.mjs && node scripts/collect-plugin-host-api.mjs && node scripts/generate-plugin-host-api.mjs && node scripts/copy-plugin-runtime-host-assets.mjs && node scripts/copy-markdown-renderer.mjs && node scripts/copy-agent-adapter-resources.mjs && node scripts/instrument-automatic-code.mjs && node scripts/build-source-patches.mjs && npm run check:codex-contract && npm run check:event-driven && npm run check:plugin-architecture",
+    "test": "node --test-concurrency=2 --import ./scripts/test-manager-runtime-env.mjs --import tsx --test \"src/**/*.test.ts\" && node --import ./scripts/test-manager-runtime-env.mjs --test scripts/automatic-delivery-producers.test.mjs scripts/data-mutation-audit-coverage.test.mjs scripts/build-plugin-packages.test.mjs scripts/generate-plugin-host-api.test.mjs plugins/contracts/plugin-sdk/builder.test.mjs scripts/work-cycle-send-contract.test.mjs scripts/work-cycle-agent-send-recovery.test.mjs scripts/start-hot-reload.test.mjs scripts/rabilink-event-hub.test.mjs scripts/rabilink-relay-mobile-workers.test.mjs scripts/rabilink-relay-peers.test.mjs scripts/rabilink-relay-speech-messages.test.mjs scripts/test-rabispeech-tts-loop.test.mjs scripts/test-built-manager-readonly.test.mjs scripts/check-active-intelligence-physical-acceptance.test.mjs scripts/record-active-intelligence-physical-observation.test.mjs scripts/export-speech-transcript.test.mjs scripts/windows-release-optional-speech.test.mjs scripts/windows-desktop-contract.test.mjs scripts/windows-process-identity.test.mjs scripts/copy-agent-native-assets.test.mjs scripts/developer-channel.test.mjs scripts/manager-storage-parent-boundary.test.mjs scripts/create-windows-release-manifest.test.mjs scripts/windows-release-transaction.test.mjs scripts/legacy-wearable-task-migration.test.mjs scripts/dynamic-manager-active-truth.test.mjs scripts/android-sdk-dynamic-manager-contract.test.mjs apps/rabi-mobile-android/scripts/wearable-companion-lifecycle.test.mjs && npm run check:skills && npm run test:plugins",
+    "test:plugins": "node --test-concurrency=2 --import ./scripts/test-manager-runtime-env.mjs --import tsx --test \"src/plugins/**/*.test.mjs\"",
     "check:codex-contract": "node scripts/check-codex-adapter-contract.mjs",
     "check:event-driven": "node scripts/check-event-driven-architecture.mjs",
     "check:active-intelligence:physical": "node scripts/check-active-intelligence-physical-acceptance.mjs",
@@ -58,9 +59,14 @@
     "start:linux": "node scripts/linux-host.mjs",
     "status:linux": "node scripts/linux-host.mjs --command status",
     "stop:linux": "node scripts/linux-host.mjs --command quit",
-    "test:linux-host": "node --test scripts/linux-host.test.mjs && node --import tsx --test src/linuxProcessLease.test.ts src/managerInstanceLock.test.ts src/linuxHostParent.test.ts src/peerTunnel/runtimeReadOnly.test.ts"
+    "test:linux-host": "node --test scripts/linux-host.test.mjs && node --import tsx --test src/linuxProcessLease.test.ts src/managerInstanceLock.test.ts src/linuxHostParent.test.ts src/peerTunnel/runtimeReadOnly.test.ts",
+    "build:host-api": "node scripts/collect-plugin-host-api.mjs && tsc -p tsconfig.json --declaration --emitDeclarationOnly --outDir dist/host-api-types && node scripts/generate-plugin-host-api.mjs",
+    "plugin:build": "node scripts/build-plugin-packages.mjs",
+    "plugin:export": "node scripts/export-plugin-source.mjs",
+    "plugin:version": "node scripts/bump-plugin-version.mjs"
   },
   "dependencies": {
+    "esbuild": "0.28.1",
     "@modelcontextprotocol/sdk": "1.32.1",
     "@openai/codex": "0.144.1",
     "@rabiroute/plugin-sdk": "file:plugins/contracts/plugin-sdk",
@@ -75,7 +81,9 @@
     "typescript": "^5.7.3",
     "werift": "0.24.4",
     "ws": "^8.18.0",
-    "yazl": "3.3.1"
+    "yazl": "3.3.1",
+    "@rabiroute/host-api": "file:plugins/contracts/host-api",
+    "koffi": "3.3.7"
   },
   "devDependencies": {
     "@mdi/font": "^7.4.47",

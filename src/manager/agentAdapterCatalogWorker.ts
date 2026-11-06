@@ -3,6 +3,7 @@ import { pathToFileURL } from "node:url";
 import path from "node:path";
 import type { AgentScanOptions, AgentScanRuntimeSnapshot } from "../agentAdapters/managerTypes.js";
 import type { AgentAdapterDescriptor } from "@rabiroute/plugin-sdk";
+import { createAgentAdapterHostPorts } from "../runtime/agentAdapterHostPorts.js";
 
 export type AgentAdapterCatalogWorkerTask = {
   kind: "provider";
@@ -23,7 +24,14 @@ export type AgentAdapterCatalogWorkerResponse = (
 
 export async function executeAgentAdapterCatalogWorkerTask(task: AgentAdapterCatalogWorkerTask): Promise<unknown> {
   if (!task.entry || !path.isAbsolute(task.entry)) throw new Error("An active Agent package must supply its owned scanner entry.");
-  const implementation = await import(pathToFileURL(task.entry).href) as Record<string, unknown>;
+  let implementation = await import(pathToFileURL(task.entry).href) as Record<string, unknown>;
+  // A package exports only owned scan code. The dedicated worker supplies its
+  // own shared namespaces; main-process state and ports never cross IPC.
+  if (typeof implementation.createImplementation === "function" && Array.isArray(implementation.hostModules)) {
+    const host = createAgentAdapterHostPorts({ layout: task.runtimeLayout });
+    await host.prepareModules(implementation.hostModules);
+    implementation = implementation.createImplementation(host) as Record<string, unknown>;
+  }
   const scan = implementation[task.exportName ?? "scan"];
   if (typeof scan !== "function") throw new Error("The Agent package scanner export is unavailable.");
   return scan({ rootDir: task.rootDir, runtimes: task.runtimes, manifest: task.manifest, cwdOptions: task.cwdOptions }, task.options);

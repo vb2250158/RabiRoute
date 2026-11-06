@@ -2,14 +2,15 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import test from "node:test";
 import { createPinia, setActivePinia } from "pinia";
-import { activate as activateRouteControl } from "../src/bundles/builtin/route-control";
+import { activate as activateRouteControl } from "../../src/plugins/io.rabiroute.manager.route-control/web/entry";
 import { registerTrustedWebCommand, resolveWebCommandCatalog, webCommandsInSlot } from "../src/pluginCommands";
 import { availableWebContributions } from "../src/pluginContributions";
+import { registerPluginTranslations } from "../src/i18n/translationRegistry";
 import type { WebPluginCatalog } from "../src/pluginCatalogClient";
 
 test("the real route-control package exposes its create command with no routes and releases it with its Web entry", async () => {
   const owner = { instanceId: "manager:route-control", pluginId: "io.rabiroute.manager.route-control" };
-  const root = new URL("../../plugins/builtin/io.rabiroute.manager.route-control/1.0.0/", import.meta.url);
+  const root = new URL("../../src/plugins/io.rabiroute.manager.route-control/", import.meta.url);
   const manifest = JSON.parse(fs.readFileSync(new URL("rabi.plugin.json", root), "utf8"));
   const manager = fs.readFileSync(new URL("manager.mjs", root), "utf8");
   const declared = manager.match(/for \(const contribution of (\[[\s\S]*?\])\)\s*context\.contributions\.register/);
@@ -21,7 +22,7 @@ test("the real route-control package exposes its create command with no routes a
     contributions
   };
   assert.deepEqual(manifest.entries.web, { execution: "in_process", module: "./web/client.mjs" });
-  const dispose = activateRouteControl({ instanceIds: [owner.instanceId], forInstance: () => ({
+  const dispose = activateRouteControl({ registerTranslations: catalogs => registerPluginTranslations(owner.pluginId, catalogs), instanceIds: [owner.instanceId], forInstance: () => ({
     registerCommand: input => registerTrustedWebCommand({ ...input, ...owner })
   }) });
   try {
@@ -60,8 +61,10 @@ test("route-control is built and synchronized as an independent Web entry", () =
   const vite = fs.readFileSync(new URL("../vite.config.ts", import.meta.url), "utf8");
   const sync = fs.readFileSync(new URL("../../scripts/sync-plugin-web-bundles.mjs", import.meta.url), "utf8");
   const app = fs.readFileSync(new URL("../src/App.vue", import.meta.url), "utf8");
-  assert.match(vite, /managerRouteControlPlugin:[^\n]*builtin\/route-control\.ts/);
-  assert.match(sync, /\["src\/bundles\/builtin\/route-control\.ts", "io.rabiroute.manager.route-control"\]/);
+  assert.match(vite, /metadata\.rabi\?\.webSource/);
+  const pkg = JSON.parse(fs.readFileSync(new URL("../../src/plugins/io.rabiroute.manager.route-control/package.json", import.meta.url), "utf8"));
+  assert.equal(pkg.rabi.webSource, "web/entry.ts");
+  assert.match(sync, /metadata\.rabi\?\.webSource/);
   assert.match(app, /topbarCommands = computed\(\(\) => webCommandsInSlot\(pluginCatalogStore.commands.value, "topbar-primary"\)\.filter/);
   assert.match(app, /command.handlerId !== "web.add-route" \|\| route.path.startsWith\("\/routes"\)/);
   assert.match(app, /v-for="command in topbarCommands"/);

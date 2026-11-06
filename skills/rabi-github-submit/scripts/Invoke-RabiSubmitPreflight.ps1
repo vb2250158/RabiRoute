@@ -6,7 +6,9 @@ param(
     [ValidateSet("Info", "Low", "Medium", "High", "Critical")]
     [string]$FailOn = "High",
 
-    [switch]$Json
+    [switch]$Json,
+
+    [string]$ReviewReceipt
 )
 
 $ErrorActionPreference = "Stop"
@@ -91,11 +93,11 @@ if (-not $repoRoot) {
 }
 
 $packagePath = Join-Path $repoRoot "package.json"
-if (-not (Test-Path -LiteralPath $packagePath)) {
+if ($Scope -eq "WorkingTree" -and -not (Test-Path -LiteralPath $packagePath)) {
     throw "The repository has no package.json and is not recognized as RabiRoute."
 }
 
-$package = Get-Content -LiteralPath $packagePath -Raw -Encoding UTF8 | ConvertFrom-Json
+$package = (Get-ScopedFileText -RelativePath "package.json") | ConvertFrom-Json
 if ($package.name -ne "rabiroute") {
     throw "Expected package name 'rabiroute', found '$($package.name)'."
 }
@@ -235,6 +237,13 @@ try {
     throw "The AI code security scanner did not return valid JSON."
 }
 $securityBlocked = -not [bool]$securityReport.passed
+$securityReview = $null
+if ($ReviewReceipt) {
+    . (Join-Path $PSScriptRoot "RabiSecurityReviewReceipt.ps1")
+    $securityReview = Resolve-RabiSecurityReviewReceipt -Repository $repoRoot -Scope $Scope -FailOn $FailOn `
+        -SecurityReport $securityReport -ChangedFiles @($changedFiles) -ReceiptPath $ReviewReceipt
+    $securityBlocked = -not $securityReview.effectivePassed
+}
 
 $diffCheckArguments = if ($Scope -eq "Staged") {
     @("diff", "--cached", "--check")
@@ -267,7 +276,6 @@ $remotes = @(
 $versionFindings = [System.Collections.Generic.List[object]]::new()
 $headVersion = $null
 $candidateVersion = $null
-$expectedVersion = $null
 $versionGateApplicable = $changed.Count -gt 0
 
 function Add-VersionFinding {
@@ -285,78 +293,115 @@ function Add-VersionFinding {
     })
 }
 
+function Read-VersionJson {
+    param([string]$File, [switch]$Head, [switch]$OptionalHistorical)
+    $text = if ($Head) { Get-GitObjectText -ObjectPath "HEAD:$File" } else { Get-ScopedFileText -RelativePath $File }
+    if (-not $text) { return $null }
+    try { return $text | ConvertFrom-Json -AsHashtable } catch { if (-not $OptionalHistorical) { Add-VersionFinding -Rule "version-metadata-invalid" -File $File -Message "Version metadata must be valid JSON." }; return $null }
+}
+function Test-StrictVersion {
+    param([string]$Version)
+    return $Version -match '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$'
+}
+$pluginVersions = [System.Collections.Generic.List[object]]::new()
+$hostVersionRequired = $false
 if ($versionGateApplicable) {
-    $requiredVersionFiles = @(
-        "package.json",
-        "package-lock.json",
-        "README.md",
-        "README_zh.md",
-        "版本更新日志.md",
-        "版本更新日志_en.md"
-    )
+    $headPackage = Read-VersionJson -File "package.json" -Head
+    $candidatePackage = Read-VersionJson -File "package.json"
+    $headVersion = [string]$headPackage.version
+    $candidateVersion = [string]$candidatePackage.version
+    if (-not (Test-StrictVersion $headVersion)) { Add-VersionFinding "commit-head-version-semver" "package.json" "HEAD must have a strict major.minor.patch Host version." }
+    if (-not (Test-StrictVersion $candidateVersion)) { Add-VersionFinding "commit-version-semver" "package.json" "Candidate must have a strict major.minor.patch Host version." }
+
+    $catalog = Read-VersionJson -File "plugins/source-catalog.json"
+    $headCatalog = Read-VersionJson -File "plugins/source-catalog.json" -Head
+    $pluginDirectories = [System.Collections.Generic.List[string]]::new()
+    $legacyManifests = $null
+    foreach ($source in @($catalog.plugins)) {
+        if (-not $source) { continue }
+        $id = [string]$source.sourceId; $directory = [string]$source.directory; $authority = [string]$source.versionFile
+        if ($directory -ne "src/plugins/$id" -or $id -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]*$' -or $authority -notin @("rabi.plugin.json", "rabi-plugin.json", "package.json", ".codex-plugin/plugin.json", ".codebuddy-plugin/plugin.json", "plugin.json")) {
+            Add-VersionFinding "plugin-version-authority-invalid" "plugins/source-catalog.json" "Each source needs its canonical folder and explicit authoritative versionFile."
+            continue
+        }
+        $pluginDirectories.Add($directory)
+        if (@($changed | Where-Object { $_ -eq $directory -or $_.StartsWith("$directory/", [StringComparison]::Ordinal) }).Count -eq 0) { continue }
+        $versionPath = "$directory/$authority"
+        $metadata = Read-VersionJson -File $versionPath
+        $current = [string]$metadata.version
+        if (-not (Test-StrictVersion $current)) { Add-VersionFinding "plugin-version-invalid" $versionPath "Changed plugin $id needs a strict authoritative version."; continue }
+        if ($source.ecosystem -eq "rabiroute" -and [string]$metadata.id -ne $id) { Add-VersionFinding "plugin-identity-mismatch" $versionPath "Native manifest id must match its source-catalog identity." }
+        foreach ($name in @("rabi.plugin.json", "rabi-plugin.json", "package.json", ".codex-plugin/plugin.json", ".codebuddy-plugin/plugin.json", "plugin.json", "package-lock.json")) {
+            $file = "$directory/$name"; $copy = Read-VersionJson -File $file
+            if (-not $copy) { continue }
+            if ($copy.ContainsKey("version") -and [string]$copy.version -ne $current) { Add-VersionFinding "plugin-version-metadata-mismatch" $file "Plugin version metadata must match authoritative $authority ($current)." }
+            if ($name -eq "package-lock.json" -and $copy.packages -and $copy.packages.ContainsKey("") -and [string]$copy.packages[""].version -ne $current) {
+                Add-VersionFinding "plugin-version-metadata-mismatch" $file "The plugin lockfile root must match its authoritative version."
+            }
+        }
+        $previousSource = @($headCatalog.plugins | Where-Object sourceId -eq $id | Select-Object -First 1)
+        $previous = $null; $previousFile = $null; $nativeBaseline = $false
+        if ($previousSource.Count -gt 0) {
+            $old = $previousSource[0]; $previousFile = "$($old.directory)/$($old.versionFile)"
+            $oldMetadata = Read-VersionJson -File $previousFile -Head; $previous = [string]$oldMetadata.version
+            if (-not (Test-StrictVersion $previous)) { Add-VersionFinding "plugin-head-version-invalid" $previousFile "The previous catalog authority must contain a valid plugin version." }
+        } else {
+            # A source-only move compares the original published package, not the newly added pathname.
+            if ($null -eq $legacyManifests) {
+                $legacyManifests = [System.Collections.Generic.List[object]]::new()
+                foreach ($file in @(Invoke-GitText -Arguments @("ls-tree", "-r", "--name-only", "HEAD", "--", "plugins", "plugin-adapters", "src/plugins"))) {
+                    if ($file -notmatch '(?:^|/)(?:rabi[.]plugin[.]json|rabi-plugin[.]json|package[.]json|plugin[.]json)$' -or $file -match '/(?:node_modules|dist|tests?|fixtures?)/') { continue }
+                    $oldMetadata = Read-VersionJson -File $file -Head -OptionalHistorical
+                    if ($oldMetadata -and (Test-StrictVersion ([string]$oldMetadata.version))) { $legacyManifests.Add(@{ file = $file; data = $oldMetadata }) }
+                }
+            }
+            $matching = @($legacyManifests | Where-Object { [string]$_.data.id -eq $id -or [string]$_.data.name -eq [string]$source.publicationName } | Sort-Object { [version]$_.data.version } -Descending)
+            if ($matching.Count -gt 0) { $previous = [string]$matching[0].data.version; $previousFile = [string]$matching[0].file; $nativeBaseline = $previousFile.StartsWith("plugins/builtin/", [StringComparison]::Ordinal) -and $source.ecosystem -eq "rabiroute" }
+        }
+        $migrationAccepted = $false
+        if ($previous -and (Test-StrictVersion $previous)) {
+            if ($nativeBaseline -and $current -eq "0.1.1") {
+                $migrations = Read-VersionJson -File "plugins/profiles/package-migrations.json"
+                $migrationAccepted = @($migrations.packages | Where-Object { $_.packageId -eq $id -and $_.toVersion -eq "0.1.1" -and $_.fromVersions -contains $previous }).Count -eq 1
+            }
+            if (-not $migrationAccepted -and [version]$current -le [version]$previous) { Add-VersionFinding "plugin-version-increase-required" $versionPath "Changed plugin $id must advance its own version from $previous; published versions cannot be reused or downgraded." }
+        } elseif ($previous) { Add-VersionFinding "plugin-head-version-invalid" $previousFile "The previous authoritative plugin version must be valid." }
+        elseif ($source.ecosystem -eq "rabiroute" -and $current -ne "0.1.1") { Add-VersionFinding "plugin-initial-version-required" $versionPath "A new native plugin starts at 0.1.1." }
+        $pluginVersions.Add([pscustomobject]@{ sourceId = $id; versionFile = $versionPath; headVersion = $previous; candidateVersion = $current; initialSourceMigration = $migrationAccepted })
+    }
+    foreach ($file in $changed) {
+        $owned = @($pluginDirectories | Where-Object { $file.StartsWith("$_/", [StringComparison]::Ordinal) }).Count -gt 0
+        if ($file.StartsWith("src/plugins/", [StringComparison]::Ordinal) -and -not $owned) { Add-VersionFinding "plugin-source-unindexed" $file "Changed plugin source must have a source-catalog owner and authoritative versionFile." }
+        if (-not $owned -and $file -match '^(?:src/|scripts/|apps/|packages/|ribiwebgui/|plugins/contracts/)') { $hostVersionRequired = $true }
+    }
+    $hostAdvanced = $false
+    if ((Test-StrictVersion $headVersion) -and (Test-StrictVersion $candidateVersion)) {
+        $hostAdvanced = [version]$candidateVersion -gt [version]$headVersion
+        if ([version]$candidateVersion -lt [version]$headVersion) { Add-VersionFinding "commit-host-version-downgrade" "package.json" "The Host version cannot move backwards." }
+        if ($hostVersionRequired -and -not $hostAdvanced) { Add-VersionFinding "commit-host-version-required" "package.json" "Host architecture or extension-point changes require a newer Host version; SemVer minor and major upgrades are allowed." }
+    }
+    $requiredVersionFiles = @("版本更新日志.md", "版本更新日志_en.md")
+    if ($hostAdvanced) { $requiredVersionFiles += @("package.json", "package-lock.json", "README.md", "README_zh.md") }
     foreach ($requiredFile in $requiredVersionFiles) {
-        if ($changed -notcontains $requiredFile) {
-            Add-VersionFinding -Rule "commit-version-file-missing" -File $requiredFile -Message "Every RabiRoute commit must update this version surface."
-        }
+        if ($changed -notcontains $requiredFile) { Add-VersionFinding "commit-version-file-missing" $requiredFile "Stage the applicable version metadata and bilingual change record together." }
     }
-
-    $headPackageText = Get-GitObjectText -ObjectPath "HEAD:package.json"
-    $candidatePackageText = Get-ScopedFileText -RelativePath "package.json"
-    try {
-        $headPackage = $headPackageText | ConvertFrom-Json
-        $headVersion = [string]$headPackage.version
-    } catch {
-        Add-VersionFinding -Rule "commit-head-version-invalid" -File "package.json" -Message "HEAD package.json must contain a readable semantic version."
-    }
-    try {
-        $candidatePackage = $candidatePackageText | ConvertFrom-Json
-        $candidateVersion = [string]$candidatePackage.version
-    } catch {
-        Add-VersionFinding -Rule "commit-version-invalid" -File "package.json" -Message "The candidate package.json must contain a readable semantic version."
-    }
-
-    $headMatch = if ($headVersion) { [regex]::Match($headVersion, '^(\d+)\.(\d+)\.(\d+)$') } else { $null }
-    $candidateMatch = if ($candidateVersion) { [regex]::Match($candidateVersion, '^(\d+)\.(\d+)\.(\d+)$') } else { $null }
-    if (-not $headMatch -or -not $headMatch.Success) {
-        Add-VersionFinding -Rule "commit-head-version-semver" -File "package.json" -Message "HEAD version '$headVersion' is not strict major.minor.patch SemVer."
-    } else {
-        $expectedVersion = "{0}.{1}.{2}" -f $headMatch.Groups[1].Value,$headMatch.Groups[2].Value,([int64]$headMatch.Groups[3].Value + 1)
-    }
-    if (-not $candidateMatch -or -not $candidateMatch.Success) {
-        Add-VersionFinding -Rule "commit-version-semver" -File "package.json" -Message "Candidate version '$candidateVersion' is not strict major.minor.patch SemVer."
-    } elseif ($expectedVersion -and $candidateVersion -ne $expectedVersion) {
-        Add-VersionFinding -Rule "commit-patch-version-required" -File "package.json" -Message "Every commit must increment the HEAD patch version exactly once: expected $expectedVersion, found $candidateVersion."
-    }
-
-    $lockText = Get-ScopedFileText -RelativePath "package-lock.json"
-    try {
-        $lock = $lockText | ConvertFrom-Json -AsHashtable
-        $lockRoot = $lock["packages"][""]
-        if (-not $lockRoot) {
-            throw "Root package entry is missing."
-        }
-        if ([string]$lock["version"] -ne $candidateVersion -or [string]$lockRoot["version"] -ne $candidateVersion) {
-            Add-VersionFinding -Rule "commit-lock-version-mismatch" -File "package-lock.json" -Message "package-lock.json root versions must both equal $candidateVersion."
-        }
-    } catch {
-        Add-VersionFinding -Rule "commit-lock-version-invalid" -File "package-lock.json" -Message "package-lock.json must be readable and contain synchronized root versions."
-    }
-
+    $lock = Read-VersionJson -File "package-lock.json"
+    if (-not $lock -or -not $lock.packages -or -not $lock.packages.ContainsKey("")) { Add-VersionFinding "commit-lock-version-invalid" "package-lock.json" "Root lock metadata must be readable." }
+    elseif ([string]$lock.version -ne $candidateVersion -or [string]$lock.packages[""].version -ne $candidateVersion) { Add-VersionFinding "commit-lock-version-mismatch" "package-lock.json" "Both root lock versions must match the Host version." }
     if ($candidateVersion) {
         $escapedCandidate = [regex]::Escape($candidateVersion)
-        $readme = Get-ScopedFileText -RelativePath "README.md"
-        $readmeZh = Get-ScopedFileText -RelativePath "README_zh.md"
-        if (-not $readme -or $readme -notmatch "version-$escapedCandidate" -or $readme -notmatch "(?i)repository version is\s+.*$escapedCandidate") {
-            Add-VersionFinding -Rule "commit-readme-version-mismatch" -File "README.md" -Message "The English README badge and repository-version statement must show $candidateVersion."
+        foreach ($item in @(@{file="README.md"; statement="(?i)repository version is\s+.*$escapedCandidate"}, @{file="README_zh.md"; statement="仓库当前版本为\s+.*$escapedCandidate"})) {
+            $content = Get-ScopedFileText $item.file
+            if (-not $content -or $content -notmatch "version-$escapedCandidate" -or $content -notmatch $item.statement) { Add-VersionFinding "commit-readme-version-mismatch" $item.file "README badge and current Host version must remain synchronized." }
         }
-        if (-not $readmeZh -or $readmeZh -notmatch "version-$escapedCandidate" -or $readmeZh -notmatch "仓库当前版本为\s+.*$escapedCandidate") {
-            Add-VersionFinding -Rule "commit-readme-version-mismatch" -File "README_zh.md" -Message "The Chinese README badge and repository-version statement must show $candidateVersion."
-        }
-
-        foreach ($changelogPath in @("版本更新日志.md", "版本更新日志_en.md")) {
-            $changelog = Get-ScopedFileText -RelativePath $changelogPath
-            if (-not (Test-VersionSectionHasEntry -Content $changelog -Version $candidateVersion)) {
-                Add-VersionFinding -Rule "commit-changelog-entry-required" -File $changelogPath -Message "Every commit must add a dated $candidateVersion section with at least one bullet describing that commit."
+        foreach ($file in @("版本更新日志.md", "版本更新日志_en.md")) {
+            $content = Get-ScopedFileText $file
+            if (-not (Test-VersionSectionHasEntry -Content $content -Version $candidateVersion)) { Add-VersionFinding "commit-changelog-entry-required" $file "Maintain a dated Host-version section with a concrete entry for the Host or independently versioned plugin changes." }
+            if (-not $hostAdvanced) {
+                $section = [regex]::Match([string]$content, "(?ms)^##\s+$escapedCandidate\s+-\s+\d{4}-\d{2}-\d{2}\s*\r?\n(?<body>.*?)(?=^##\s+|\z)").Groups["body"].Value
+                foreach ($plugin in $pluginVersions) {
+                    if (-not $section.Contains($plugin.sourceId) -or $section -notmatch [regex]::Escape($plugin.candidateVersion)) { Add-VersionFinding "plugin-changelog-entry-required" $file "The plugin-only record must identify $($plugin.sourceId) and its new version $($plugin.candidateVersion)." }
+                }
             }
         }
     }
@@ -366,8 +411,10 @@ $versionGate = [pscustomobject]@{
     applicable = $versionGateApplicable
     passed = $versionFindings.Count -eq 0
     headVersion = $headVersion
-    expectedVersion = $expectedVersion
+    policy = "independent-host-and-plugin-semver"
     candidateVersion = $candidateVersion
+    hostVersionRequired = $hostVersionRequired
+    plugins = @($pluginVersions)
     findings = @($versionFindings)
 }
 
@@ -399,6 +446,8 @@ $report = [pscustomobject]@{
     note = "Read-only preflight. Passing it does not authorize staging, commit, push, PR, tag, release, or artifact publication."
 }
 
+if ($null -ne $securityReview) { $report | Add-Member -NotePropertyName securityReview -NotePropertyValue $securityReview }
+
 if ($Json) {
     $report | ConvertTo-Json -Depth 8
 } else {
@@ -417,10 +466,13 @@ if ($Json) {
         Write-Output "[$($finding.severity)] $($finding.rule) $($finding.file):$($finding.line) - $($finding.message)"
     }
     Write-Output "Security findings: Critical=$($securityReport.counts.Critical) High=$($securityReport.counts.High) Medium=$($securityReport.counts.Medium)"
+    if ($null -ne $securityReview) {
+        Write-Output "Security adjudication: rawPassed=$($securityReview.rawPassed); resolved=$($securityReview.resolved.Count); unresolved=$($securityReview.unresolved.Count); effectivePassed=$($securityReview.effectivePassed); receiptValid=$($securityReview.receiptValid)"
+    }
     Write-Output "Diff check: $(if ($diffCheckExitCode -eq 0) { 'passed' } else { 'failed' })"
     Write-Output "Version gate: $(if ($versionGate.passed) { 'passed' } else { 'failed' })"
     if ($versionGate.applicable) {
-        Write-Output "Version transition: $($versionGate.headVersion) -> $($versionGate.candidateVersion) (expected $($versionGate.expectedVersion))"
+        Write-Output "Version transition: $($versionGate.headVersion) -> $($versionGate.candidateVersion) (Host architecture change: $($versionGate.hostVersionRequired))"
     }
     foreach ($finding in $versionFindings) {
         Write-Output "[$($finding.severity)] $($finding.rule) $($finding.file) - $($finding.message)"

@@ -7,7 +7,7 @@ import {compileScript,parse} from "@vue/compiler-sfc";
 import {transformSync} from "esbuild";
 
 test("opening another project stops the remaining audio fragments before they reach its compute PC",async()=>{
-  const component=new URL("../src/pages/VideoPage.vue",import.meta.url);
+  const component=new URL("../../src/plugins/io.rabiroute.manager.video/web/pages/VideoPage.vue",import.meta.url);
   const require=createRequire(component),vue=require("vue");
   const client=require("./mediaServiceClient.ts");
   const calls:string[]=[];let model:any;

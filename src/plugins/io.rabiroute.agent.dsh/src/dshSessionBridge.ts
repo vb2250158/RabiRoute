@@ -1,0 +1,758 @@
+import {isDshSessionId} from "@rabiroute/host-api/shared/dshSessionIdentity";
+export {isDshSessionId} from "@rabiroute/host-api/shared/dshSessionIdentity";
+/**
+ * DSH (DeepSeek Harness) session bridge — the DSH-side counterpart of the
+ * Codex Desktop bridge. A route can bind its primary persona
+ * (主角色) to a local DSH session; incoming RabiRoute deliveries are then
+ * injected into that live session through the DSH apiproxy HTTP API
+ * (`POST /api/session/prompt`, `POST /api/session/list`).
+ *
+ * The DSH binding lives in the route's adapterConfig.json (dshSessionId +
+ * dshSessionName + dshCwd + dshBaseUrl). RabiRoute owns these bindings;
+ * basic session operations use the DSH owner API and do not require a
+ * separate Rabi tool or UI extension inside DSH.
+ */
+
+import { randomUUID } from "node:crypto";
+import { spawn } from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
+import { applicationRuntimeLayout } from "@rabiroute/host-api/shared/runtimeLayout";
+import { dshAuthenticatedFetch } from "./dshHttpAuth.js";
+import { DEFAULT_DSH_BASE_URL, resolveDshBaseUrl } from "./dshDiscovery.js";
+
+export { DEFAULT_DSH_BASE_URL };
+export const DEFAULT_DSH_SESSION_NAME = "Rabi Agent";
+export const DSH_IMAGE_MAX_BYTES = 5 * 1024 * 1024;
+
+
+
+
+
+export type DshModelSelection = {
+  provider: string;
+  model: string;
+  reasoningEffort?: string;
+};
+
+export type DshModelCatalogEntry = {
+  provider: string;
+  providerName: string;
+  id: string;
+  name: string;
+  description?: string;
+  defaultReasoningEffort?: string;
+  reasoningEfforts: Array<{ id: string; description?: string }>;
+};
+
+export type DshPrimaryBinding = {
+  sessionId: string;
+  sessionName: string;
+  cwd: string;
+  baseUrl: string;
+  modelSelection?: DshModelSelection;
+  agentPreset?: string;
+};
+
+export function dshRouteConfigPath(): string {
+  return process.env.RABI_DSH_ROUTE_CONFIG_PATH
+    || path.join(applicationRuntimeLayout(process.env).stateRoot, "data", "route", "main", "adapterConfig.json");
+}
+
+/**
+ * Read the DSH primary binding from the route adapterConfig.json. Returns null
+ * when the route has no complete DSH primary binding (pure Codex deployment).
+ */
+export function readDshPrimaryBinding(routeConfigPath: string = dshRouteConfigPath()): DshPrimaryBinding | null {
+  try {
+    return parseDshPrimaryBinding(JSON.parse(fs.readFileSync(routeConfigPath, "utf8")) as Record<string, unknown>);
+  } catch { return null; }
+}
+
+/** Shared configuration reads must not block the Manager event loop. */
+export async function readDshPrimaryBindingAsync(routeConfigPath: string = dshRouteConfigPath()): Promise<DshPrimaryBinding | null> {
+  let content: string;
+  try { content = await fs.promises.readFile(routeConfigPath, "utf8"); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw new Error("Agent binding configuration is temporarily unreadable.");
+  }
+  try { return parseDshPrimaryBinding(JSON.parse(content) as Record<string, unknown>); }
+  catch { throw new Error("Agent binding configuration is invalid."); }
+}
+
+function parseDshPrimaryBinding(parsed: Record<string, unknown>): DshPrimaryBinding | null {
+    const sessionId = typeof parsed.dshSessionId === "string" ? parsed.dshSessionId.trim() : "";
+    const cwd = typeof parsed.dshCwd === "string" ? parsed.dshCwd.trim() : "";
+    if (!sessionId || !isDshSessionId(sessionId) || !cwd) return null;
+    const baseUrl = resolveDshBaseUrl(
+      process.env.RABI_DSH_LOCAL_OWNER_URL?.trim() || (typeof parsed.dshBaseUrl === "string" ? parsed.dshBaseUrl : undefined)
+    );
+    const sessionName = typeof parsed.dshSessionName === "string" && parsed.dshSessionName.trim()
+      ? parsed.dshSessionName.trim()
+      : DEFAULT_DSH_SESSION_NAME;
+    const modelProvider = (typeof parsed.dshModelProvider === "string" ? parsed.dshModelProvider.trim() : "")
+      || process.env.DSH_MODEL_PROVIDER?.trim()
+      || "";
+    const model = (typeof parsed.dshModel === "string" ? parsed.dshModel.trim() : "")
+      || process.env.DSH_MODEL?.trim()
+      || "";
+    const reasoningEffort = (typeof parsed.dshReasoningEffort === "string" && parsed.dshReasoningEffort.trim()
+      ? parsed.dshReasoningEffort.trim()
+      : undefined)
+      || process.env.DSH_REASONING_EFFORT?.trim()
+      || undefined;
+    return {
+      sessionId,
+      sessionName,
+      cwd,
+      baseUrl,
+      ...(typeof parsed.dshAgentPreset === "string" && parsed.dshAgentPreset.trim() ? { agentPreset: parsed.dshAgentPreset.trim() } : {}),
+      ...(modelProvider && model ? {
+        modelSelection: {
+          provider: modelProvider,
+          model,
+          ...(reasoningEffort ? { reasoningEffort } : {})
+        }
+      } : {})
+    };
+}
+
+type DshRpcOk<T> = { ok: true; value: T };
+type DshRpcError = { ok: false; error: { code?: string; message?: string } };
+
+export type DshAgentPreset = { id: string; name?: string; description?: string; broken?: string; isDefault?: boolean };
+
+export async function listDshAgentPresets(baseUrl?: string, assertAuthorized?: () => void | Promise<void>): Promise<DshAgentPreset[]> {
+  const result = await dshRpc<{ presets: DshAgentPreset[] }>(resolveDshBaseUrl(baseUrl), "agentPresets/list", {}, assertAuthorized);
+  if (!result.ok) throw new Error(`DSH mode catalog unavailable: ${result.error.message}`);
+  if (!Array.isArray(result.value.presets)) throw new Error("Invalid DSH mode catalog.");
+  return result.value.presets.filter(row => typeof row.id === "string" && row.id.trim());
+}
+
+/** DSH owns preset selection. Never replace a locked session or silently fall back. */
+export async function ensureDshSessionPreset(baseUrl: string, session: DshSessionSummary, preset?: string, assertAuthorized?: () => void | Promise<void>): Promise<void> {
+  await assertAuthorized?.();
+  const wanted = preset?.trim();
+  if (!wanted || session.agentPreset === wanted) return;
+  const selected = await dshRpc<string>(baseUrl, "agentPresets/select", { agentId: session.id, agentPreset: wanted }, assertAuthorized);
+  if (!selected.ok) throw new Error(`无法应用 DSH 会话模式 ${wanted}：${selected.error.message}。已开始对话的会话请明确选择新会话。`);
+  if (selected.value !== wanted) throw new Error("DSH returned an unexpected session mode.");
+  const current = await readDshSessionCatalog(baseUrl, assertAuthorized);
+  if (current.find(row => row.id === session.id)?.agentPreset !== wanted) throw new Error("DSH mode selection could not be verified.");
+  await assertAuthorized?.();
+  session.agentPreset = wanted;
+}
+
+async function dshRpc<T>(baseUrl: string, method: string, payload: unknown, assertAuthorized?: () => void | Promise<void>, signal?: AbortSignal): Promise<DshRpcOk<T> | DshRpcError> {
+  const rpcId = randomUUID();
+  const response = await dshAuthenticatedFetch(baseUrl, method,
+    JSON.stringify({ type: "client-request", rpcId, method, payload: { args: payload } }), assertAuthorized, signal);
+  if (!response.ok) {
+    throw new Error(`DSH ${method} transport failed with HTTP ${response.status}.`);
+  }
+  let full: {
+    rpcId?: unknown;
+    result?: { ok?: boolean; value?: unknown; error?: unknown };
+  };
+  try { full = await response.json(); }
+  catch (error) { await assertAuthorized?.(); throw error; }
+  await assertAuthorized?.();
+  if (full.rpcId !== rpcId) {
+    throw new Error(`DSH ${method} rpcId mismatch (possible cross-talk).`);
+  }
+  const result = full.result;
+  if (!result || result.ok !== true) {
+    const error = result?.error && typeof result.error === "object"
+      ? result.error as Record<string, unknown>
+      : {};
+    return {
+      ok: false,
+      error: {
+        code: typeof error.code === "string" ? error.code : undefined,
+        message: typeof error.message === "string" ? error.message : JSON.stringify(error)
+      }
+    };
+  }
+  return { ok: true, value: result.value as T };
+}
+
+type DshModelCatalogResponse = {
+  groups?: unknown;
+  failures?: unknown;
+};
+
+export function normalizeDshModelCatalogForTest(value: unknown): {
+  models: DshModelCatalogEntry[];
+  warnings: string[];
+} {
+  const response = value && typeof value === "object" ? value as DshModelCatalogResponse : {};
+  const models = Array.isArray(response.groups)
+    ? response.groups.flatMap((group): DshModelCatalogEntry[] => {
+        if (!group || typeof group !== "object") return [];
+        const provider = group as Record<string, unknown>;
+        const providerId = typeof provider.id === "string" ? provider.id.trim() : "";
+        if (!providerId || !Array.isArray(provider.models)) return [];
+        const providerName = typeof provider.name === "string" && provider.name.trim()
+          ? provider.name.trim()
+          : providerId;
+        return provider.models.flatMap((model): DshModelCatalogEntry[] => {
+          if (!model || typeof model !== "object") return [];
+          const raw = model as Record<string, unknown>;
+          const id = typeof raw.id === "string" ? raw.id.trim() : "";
+          if (!id) return [];
+          const reasoning = raw.reasoning && typeof raw.reasoning === "object"
+            ? raw.reasoning as Record<string, unknown>
+            : {};
+          const reasoningEfforts = Array.isArray(reasoning.efforts)
+            ? reasoning.efforts.flatMap((effort): Array<{ id: string; description?: string }> => {
+                if (!effort || typeof effort !== "object") return [];
+                const option = effort as Record<string, unknown>;
+                const effortId = typeof option.id === "string" ? option.id.trim() : "";
+                if (!effortId) return [];
+                const description = typeof option.description === "string" && option.description.trim()
+                  ? option.description.trim()
+                  : undefined;
+                return [{ id: effortId, ...(description ? { description } : {}) }];
+              })
+            : [];
+          const description = typeof raw.description === "string" && raw.description.trim()
+            ? raw.description.trim()
+            : undefined;
+          const defaultReasoningEffort = typeof reasoning.defaultEffort === "string" && reasoning.defaultEffort.trim()
+            ? reasoning.defaultEffort.trim()
+            : undefined;
+          return [{
+            provider: providerId,
+            providerName,
+            id,
+            name: typeof raw.name === "string" && raw.name.trim() ? raw.name.trim() : id,
+            ...(description ? { description } : {}),
+            ...(defaultReasoningEffort ? { defaultReasoningEffort } : {}),
+            reasoningEfforts
+          }];
+        });
+      })
+    : [];
+  const warnings = Array.isArray(response.failures)
+    ? response.failures.flatMap((failure): string[] => {
+        if (!failure || typeof failure !== "object") return [];
+        const raw = failure as Record<string, unknown>;
+        const name = typeof raw.name === "string" && raw.name.trim()
+          ? raw.name.trim()
+          : typeof raw.id === "string"
+            ? raw.id.trim()
+            : "DSH provider";
+        const message = typeof raw.message === "string" && raw.message.trim() ? raw.message.trim() : "模型目录读取失败";
+        return [`${name}：${message}`];
+      })
+    : [];
+  return { models, warnings };
+}
+
+export async function listDshModels(baseUrl?: string): Promise<{
+  models: DshModelCatalogEntry[];
+  warnings: string[];
+}> {
+  const result = await dshRpc<DshModelCatalogResponse>(normalizedDshBaseUrl(baseUrl), "session/modelCatalog", {});
+  if (!result.ok) {
+    throw new Error(`DSH session/modelCatalog failed: ${result.error.message || result.error.code || "unknown error"}`);
+  }
+  return normalizeDshModelCatalogForTest(result.value);
+}
+
+async function applyDshSessionModel(
+  baseUrl: string,
+  sessionId: string,
+  selection: DshModelSelection | undefined,
+  assertAuthorized?: () => void | Promise<void>
+): Promise<void> {
+  if (!selection) return;
+  const current = (await readDshSessionRows(baseUrl, assertAuthorized)).find((item) => item.sessionId === sessionId);
+  await assertAuthorized?.();
+  if (!current) throw new Error(`DSH session was not found: ${sessionId}`);
+  // The owner projects next (including its lastUsed fallback); session/models no longer exists.
+  const active = current.projections?.values?.modelSelection?.next;
+  const modelMatches = active?.provider === selection.provider && active?.model === selection.model;
+  const reasoningMatches = !selection.reasoningEffort || active?.reasoningEffort === selection.reasoningEffort;
+  if (modelMatches && reasoningMatches) return;
+  // Owner also persists this as its deployment default; only invoke for an explicit binding change.
+  const selected = await dshRpc<{ selected?: DshModelSelection }>(baseUrl, "session/selectModel", { request: {
+    sessionId,
+    provider: selection.provider,
+    model: selection.model,
+    ...(selection.reasoningEffort ? { reasoningEffort: selection.reasoningEffort } : {})
+  } }, assertAuthorized);
+  await assertAuthorized?.();
+  if (!selected.ok) {
+    throw new Error(`DSH session.selectModel failed: ${selected.error.message || selected.error.code || "unknown error"}`);
+  }
+}
+
+type DshSessionListItem = {
+  sessionId?: string;
+  updatedAt?: number;
+  running?: boolean;
+  blank?: boolean;
+  cwd?: string;
+  agentPreset?: string;
+  projections?: { values?: { title?: string; agentPreset?: string; modelSelection?: { next: DshModelSelection | null; lastUsed: DshModelSelection | null } } };
+};
+
+export type DshSessionSummary = {
+  id: string;
+  title: string;
+  updatedAt?: string;
+  warnings?: string[];
+  cwd?: string;
+  archived: false;
+  active: boolean;
+  status: { type: "active" | "idle" };
+  source: "DSH session (apiproxy)";
+  agentPreset?: string;
+};
+
+export type DshSessionResolution =
+  | { kind: "id" | "name" | "created"; thread: DshSessionSummary }
+  | { kind: "missing" }
+  | { kind: "ambiguous"; candidates: DshSessionSummary[] }
+  | { kind: "workspace-mismatch"; thread: DshSessionSummary };
+
+const recentDshCreationTtlMs = 60_000;
+const dshCreations = new Map<string, { promise: Promise<DshSessionSummary>; settledAt?: number }>();
+
+function normalizedDshBaseUrl(value: string | undefined): string {
+  return resolveDshBaseUrl(value);
+}
+
+function canonicalDshWorkspace(value: string): string {
+  let normalized = String(value || "").trim();
+  if (!normalized) return "";
+  normalized = normalized.replace(/^\\\\\?\\UNC\\/i, "//").replace(/^\\\\\?\\/i, "");
+  normalized = normalized.replace(/\\/g, "/").replace(/\/+$/, "");
+  if (/^[a-z]:\//i.test(normalized) || normalized.startsWith("//")) {
+    return normalized.toLocaleLowerCase();
+  }
+  return path.resolve(normalized).replace(/\\/g, "/").replace(/\/+$/, "");
+}
+
+function sameDshWorkspace(left: string | undefined, right: string | undefined): boolean {
+  const leftKey = canonicalDshWorkspace(left || "");
+  const rightKey = canonicalDshWorkspace(right || "");
+  return Boolean(leftKey && rightKey && leftKey === rightKey);
+}
+
+function dshSessionSummary(item: DshSessionListItem, onWarning?: (warning: string) => void): DshSessionSummary | null {
+  if (!item || typeof item !== "object") return null;
+  const id = typeof item.sessionId === "string" ? item.sessionId.trim() : "";
+  if (!isDshSessionId(id)) return null;
+  const validTime = typeof item.updatedAt === "number" && Number.isFinite(item.updatedAt) && item.updatedAt >= 0 && item.updatedAt <= 8.64e15;
+  const updatedAt = validTime ? new Date(item.updatedAt!).toISOString() : undefined;
+  const warnings = !validTime && item.updatedAt !== undefined ? ["DSH session timestamp is invalid; the original session is retained without a timestamp."] : [];
+  for (const warning of warnings) onWarning?.(warning);
+  const title = typeof item.projections?.values?.title === "string" && item.projections.values.title.trim()
+    ? item.projections.values.title.trim()
+    : id;
+  const cwd = typeof item.cwd === "string" && item.cwd.trim() ? item.cwd.trim() : undefined;
+  const active = item.running === true;
+  return {
+    id,
+    title,
+    ...(item.projections?.values?.agentPreset || item.agentPreset ? { agentPreset: item.projections?.values?.agentPreset || item.agentPreset } : {}),
+    ...(updatedAt ? { updatedAt } : {}),
+    ...(warnings.length ? { warnings } : {}),
+    cwd,
+    archived: false,
+    active,
+    status: { type: active ? "active" : "idle" },
+    source: "DSH session (apiproxy)"
+  };
+}
+
+async function readDshSessionRows(baseUrl: string, assertAuthorized?: () => void | Promise<void>, signal?: AbortSignal, onWarning?: (warning: string) => void): Promise<DshSessionListItem[]> {
+  // Current owner list ignores cursor and returns ALL visible rows (no continuation).
+  // Never cap this read: ID resolution and workspace/query filtering need the full catalog.
+  const result = await dshRpc<{ items: DshSessionListItem[] }>(normalizedDshBaseUrl(baseUrl), "session/list", { _request: {} }, assertAuthorized, signal);
+  if (!result.ok) {
+    throw new Error(`DSH session list failed: ${result.error.message || result.error.code || "unknown error"}`);
+  }
+  if (!Array.isArray(result.value?.items)) throw new Error("DSH session list returned an invalid catalog.");
+  return result.value.items.flatMap((item: unknown, index) => {
+    if (item && typeof item === "object" && !Array.isArray(item)
+      && typeof (item as DshSessionListItem).sessionId === "string" && isDshSessionId(String((item as DshSessionListItem).sessionId))) {
+      return [item as DshSessionListItem];
+    }
+    onWarning?.(`DSH session list skipped an invalid item at index ${index}.`);
+    return [];
+  });
+}
+
+async function readDshSessionCatalog(baseUrl: string, assertAuthorized?: () => void | Promise<void>, signal?: AbortSignal, onWarning?: (warning: string) => void): Promise<DshSessionSummary[]> {
+  return (await readDshSessionRows(baseUrl, assertAuthorized, signal, onWarning))
+    .map(item => dshSessionSummary(item, onWarning))
+    .filter((item): item is DshSessionSummary => item !== null);
+}
+
+export async function listDshSessions(options: {
+  baseUrl?: string;
+  query?: string;
+  limit?: number;
+  offset?: number;
+  allowedWorkspaces?: string[];
+  assertAuthorized?: () => void | Promise<void>;
+  signal?: AbortSignal;
+  onWarning?: (warning: string) => void;
+} = {}): Promise<DshSessionSummary[]> {
+  await options.assertAuthorized?.();
+  const query = String(options.query || "").trim().toLocaleLowerCase();
+  const workspaceKeys = new Set(
+    (options.allowedWorkspaces || []).map(canonicalDshWorkspace).filter(Boolean)
+  );
+  const offset = Math.max(0, Math.trunc(options.offset ?? 0));
+  const limit = Math.max(0, Math.trunc(options.limit ?? 100));
+  const rows = await readDshSessionCatalog(normalizedDshBaseUrl(options.baseUrl), options.assertAuthorized, options.signal, options.onWarning);
+  await options.assertAuthorized?.();
+  return rows
+    .filter((item) => workspaceKeys.size === 0 || (item.cwd && workspaceKeys.has(canonicalDshWorkspace(item.cwd))))
+    .filter((item) => !query || `${item.title}\n${item.id}\n${item.cwd || ""}`.toLocaleLowerCase().includes(query))
+    .sort((left, right) => (Date.parse(right.updatedAt ?? "") || 0) - (Date.parse(left.updatedAt ?? "") || 0) || left.id.localeCompare(right.id))
+    .slice(offset, offset + limit);
+}
+
+export async function renameDshSession(params: {
+  sessionId: string;
+  title: string;
+  cwd: string;
+  baseUrl?: string;
+}): Promise<DshSessionSummary> {
+  const sessionId = params.sessionId.trim();
+  const title = params.title.trim();
+  const cwd = params.cwd.trim();
+  if (!isDshSessionId(sessionId)) throw new Error(`Invalid DSH session id: ${params.sessionId}`);
+  if (!title) throw new Error("DSH session title is required.");
+  if (!cwd) throw new Error("DSH session workspace is required.");
+  const baseUrl = normalizedDshBaseUrl(params.baseUrl);
+  const existing = (await readDshSessionCatalog(baseUrl)).find((item) => item.id === sessionId);
+  if (!existing) throw new Error(`DSH session was not found: ${sessionId}`);
+  if (!existing.cwd || !sameDshWorkspace(existing.cwd, cwd)) {
+    throw new Error(`DSH session workspace different from requested workspace: ${existing.cwd || "unknown"} != ${cwd}`);
+  }
+  const renamed = await dshRpc<{ title?: string }>(baseUrl, "session/rename", { request: { sessionId, title } });
+  if (!renamed.ok) {
+    throw new Error(`DSH session rename failed: ${renamed.error.message || renamed.error.code || "unknown error"}`);
+  }
+  return { ...existing, title, updatedAt: new Date().toISOString() };
+}
+
+export async function createDshSession(params: {
+  title: string;
+  cwd: string;
+  baseUrl?: string;
+  agentPreset?: string;
+  sessionId?: string;
+}): Promise<DshSessionSummary> {
+  const title = params.title.trim();
+  const cwd = params.cwd.trim();
+  const baseUrl = normalizedDshBaseUrl(params.baseUrl);
+  if (!title) throw new Error("DSH session title is required.");
+  if (!cwd) throw new Error("DSH session workspace is required.");
+  if (params.sessionId && !isDshSessionId(params.sessionId)) {
+    throw new Error(`Invalid DSH session id: ${params.sessionId}`);
+  }
+  const registered = await dshRpc<{ workspace?: { workspaceId?: string; path?: string } }>(
+    baseUrl,
+    "workspace/create",
+    { request: { path: cwd } }
+  );
+  if (!registered.ok) {
+    throw new Error(`DSH workspace registration failed: ${registered.error.message || registered.error.code || "unknown error"}`);
+  }
+  const workspaceId = typeof registered.value.workspace?.workspaceId === "string"
+    ? registered.value.workspace.workspaceId.trim()
+    : "";
+  const workspacePath = typeof registered.value.workspace?.path === "string"
+    ? registered.value.workspace.path.trim()
+    : "";
+  if (!workspaceId || !workspacePath || !sameDshWorkspace(workspacePath, cwd)) {
+    throw new Error(`DSH workspace registration returned an invalid workspace for requested path: ${workspacePath || "unknown"} != ${cwd}`);
+  }
+  const payload: Record<string, string> = { workspaceId };
+  if (params.agentPreset?.trim()) payload.agentPreset = params.agentPreset.trim();
+  if (params.sessionId?.trim()) payload.sessionId = params.sessionId.trim();
+  const created = await dshRpc<{ sessionId?: string }>(baseUrl, "session/create", { request: payload });
+  if (!created.ok) {
+    throw new Error(`DSH session creation failed: ${created.error.message || created.error.code || "unknown error"}`);
+  }
+  const sessionId = typeof created.value.sessionId === "string" ? created.value.sessionId.trim() : "";
+  if (!isDshSessionId(sessionId)) throw new Error("DSH session creation returned an invalid sessionId.");
+  const renamed = await dshRpc<{ title?: string }>(baseUrl, "session/rename", { request: { sessionId, title } });
+  if (!renamed.ok) {
+    throw new Error(`DSH session was created but rename failed: ${renamed.error.message || renamed.error.code || "unknown error"}`);
+  }
+  const listed = (await readDshSessionCatalog(baseUrl)).find((item) => item.id === sessionId);
+  if (!listed) throw new Error(`DSH session was created but is missing from the owner catalog: ${sessionId}`);
+  if (!listed.cwd || !sameDshWorkspace(listed.cwd, cwd)) {
+    throw new Error(`DSH session creation returned a workspace different from requested workspace: ${listed.cwd || "unknown"} != ${cwd}`);
+  }
+  return { ...listed, title };
+}
+
+function uniquelyLatestDshSession(matches: DshSessionSummary[]): DshSessionSummary | null {
+  if (matches.length === 0) return null;
+  const latestTime = Math.max(...matches.map((item) => (Date.parse(item.updatedAt ?? "") || 0)));
+  const latest = matches.filter((item) => (Date.parse(item.updatedAt ?? "") || 0) === latestTime);
+  return latest.length === 1 ? latest[0]! : null;
+}
+
+async function createDshSessionIdempotently(params: {
+  title: string;
+  cwd: string;
+  baseUrl: string;
+  agentPreset?: string;
+}): Promise<DshSessionSummary> {
+  const key = JSON.stringify([
+    normalizedDshBaseUrl(params.baseUrl),
+    canonicalDshWorkspace(params.cwd),
+    params.title.trim(),
+    params.agentPreset?.trim() || ""
+  ]);
+  const existing = dshCreations.get(key);
+  if (existing && (existing.settledAt === undefined || Date.now() - existing.settledAt <= recentDshCreationTtlMs)) {
+    return existing.promise;
+  }
+  if (existing) dshCreations.delete(key);
+  const entry = { promise: createDshSession(params), settledAt: undefined as number | undefined };
+  dshCreations.set(key, entry);
+  entry.promise.then(
+    () => { entry.settledAt = Date.now(); },
+    () => { if (dshCreations.get(key) === entry) dshCreations.delete(key); }
+  );
+  return entry.promise;
+}
+
+export async function resolveDshSession(params: {
+  sessionId?: string;
+  title: string;
+  cwd: string;
+  createIfMissing: boolean;
+  baseUrl?: string;
+  agentPreset?: string;
+}): Promise<DshSessionResolution> {
+  const title = params.title.trim();
+  const cwd = params.cwd.trim();
+  const baseUrl = normalizedDshBaseUrl(params.baseUrl);
+  if (!title) throw new Error("DSH session title is required.");
+  if (!cwd) throw new Error("DSH session workspace is required.");
+  const rows = await readDshSessionCatalog(baseUrl);
+  const sessionId = params.sessionId?.trim() || "";
+  if (isDshSessionId(sessionId)) {
+    const exact = rows.find((item) => item.id === sessionId);
+    if (exact) {
+      if (!exact.cwd || !sameDshWorkspace(exact.cwd, cwd)) {
+        return { kind: "workspace-mismatch", thread: exact };
+      }
+      await ensureDshSessionPreset(baseUrl, exact, params.agentPreset);
+      return { kind: "id", thread: exact };
+    }
+  }
+  const matches = rows
+    .filter((item) => item.title === title)
+    .filter((item) => item.cwd && sameDshWorkspace(item.cwd, cwd));
+  if (matches.length > 1) {
+    const latest = uniquelyLatestDshSession(matches);
+    if (!latest) return { kind: "ambiguous", candidates: matches };
+    await ensureDshSessionPreset(baseUrl, latest, params.agentPreset);
+    return { kind: "name", thread: latest };
+  }
+  if (matches[0]) {
+    await ensureDshSessionPreset(baseUrl, matches[0], params.agentPreset);
+    return { kind: "name", thread: matches[0] };
+  }
+  if (!params.createIfMissing) return { kind: "missing" };
+  return {
+    kind: "created",
+    thread: await createDshSessionIdempotently({ title, cwd, baseUrl, agentPreset: params.agentPreset })
+  };
+}
+
+/**
+ * Read one DSH session through the apiproxy. The result shape mirrors
+ * Codex thread reads so existing consumers (agentThreads read, thread
+ * summaries, agent-to-agent source verification) work unchanged.
+ */
+export async function readDshSession(
+  sessionId: string,
+  baseUrl?: string,
+  assertAuthorized?: () => void | Promise<void>
+): Promise<DshSessionSummary> {
+  const item = (await readDshSessionRows(normalizedDshBaseUrl(baseUrl), assertAuthorized)).find(candidate => candidate.sessionId === sessionId);
+  const summary = item ? dshSessionSummary(item) : null;
+  if (!summary) throw new Error(`DSH session was not found: ${sessionId}`);
+  return { ...summary, cwd: typeof item!.cwd === "string" && item!.cwd.trim() ? item!.cwd : undefined };
+}
+
+/** URL understood by DSH Web to select one exact session without sending it a prompt. */
+export function dshSessionFocusUrl(sessionId: string, baseUrl?: string): string {
+  const id = sessionId.trim();
+  if (!isDshSessionId(id)) throw new Error(`Invalid DSH session id: ${sessionId}`);
+  const url = new URL(normalizedDshBaseUrl(baseUrl));
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new Error(`DSH session focus requires an HTTP(S) base URL: ${baseUrl}`);
+  }
+  url.searchParams.set("rabiSessionId", id);
+  return url.toString();
+}
+
+/** Open the DSH Web owner with an exact session-selection request. */
+export async function openDshSession(sessionId: string, baseUrl?: string): Promise<void> {
+  const target = dshSessionFocusUrl(sessionId, baseUrl);
+  const command = process.platform === "win32" ? "explorer.exe" : process.platform === "darwin" ? "open" : "xdg-open";
+  const child = spawn(command, [target], { detached: true, windowsHide: true, stdio: "ignore" });
+  child.unref();
+}
+
+function imageContentPart(imagePath: string): { type: "image"; mediaType: string; data: string; name: string } {
+  const stat = fs.statSync(imagePath, { throwIfNoEntry: false });
+  if (!stat?.isFile()) throw new Error(`DSH delivery image does not exist: ${imagePath}`);
+  if (stat.size > DSH_IMAGE_MAX_BYTES) {
+    throw new Error(`DSH delivery image exceeds 5 MiB: ${imagePath}`);
+  }
+  const ext = path.extname(imagePath).toLowerCase();
+  const mediaType = ext === ".png" ? "image/png"
+    : ext === ".jpg" || ext === ".jpeg" ? "image/jpeg"
+      : ext === ".gif" ? "image/gif"
+        : ext === ".webp" ? "image/webp"
+          : ext === ".bmp" ? "image/bmp"
+            : undefined;
+  if (!mediaType) throw new Error(`Unsupported DSH delivery image type: ${imagePath}`);
+  return {
+    type: "image",
+    mediaType,
+    data: fs.readFileSync(imagePath).toString("base64"),
+    name: path.basename(imagePath)
+  };
+}
+
+export type DshSessionDelivery = {
+  threadId: string;
+  action: "started";
+  openedThread: false;
+  transport: "http";
+  warning?: string;
+};
+
+/**
+ * Deliver one prompt into a live DSH session through `session.prompt`
+ * (mode=queue: the host appends a user message and the agent loop picks it up).
+ *
+ * Image handling: images are first attached as image content parts. When the
+ * session's model rejects image input (e.g. DeepSeek V4 Flash is text-only),
+ * the delivery degrades to a text part carrying the local image paths plus an
+ * explicit instruction to inspect them with the `analyze_image` tool — the
+ * DSH session runs on the same machine and can read those files.
+ */
+export async function sendDshSessionMessage(params: {
+  assertAuthorized?: () => void | Promise<void>;
+  sessionId: string;
+  prompt: string;
+  cwd: string;
+  baseUrl?: string;
+  agentPreset?: string;
+  imagePaths?: string[];
+  modelSelection?: DshModelSelection;
+  /** Automatic plan advancement queues behind a turn that starts after its idle check. */
+  mode?: "queue" | "steer";
+  /** Reuse across retries of the same delivery; persisted by the owner on the user message. */
+  requestId?: string;
+}): Promise<DshSessionDelivery> {
+  const baseUrl = resolveDshBaseUrl(params.baseUrl);
+  await params.assertAuthorized?.();
+  if (params.agentPreset?.trim()) {
+    const session = (await readDshSessionCatalog(baseUrl, params.assertAuthorized)).find(row => row.id === params.sessionId);
+    if (!session) throw new Error("The configured DSH session no longer exists.");
+    await ensureDshSessionPreset(baseUrl, session, params.agentPreset, params.assertAuthorized);
+  }
+  await applyDshSessionModel(baseUrl, params.sessionId, params.modelSelection, params.assertAuthorized);
+  const imagePaths = params.imagePaths || [];
+  const content: Array<{ type: "text"; text: string } | { type: "image"; mediaType: string; data: string; name: string }> = [
+    { type: "text", text: params.prompt }
+  ];
+  for (const imagePath of imagePaths) {
+    content.push(imageContentPart(imagePath));
+  }
+  const requestId = params.requestId ?? randomUUID();
+  const result = await dshRpc<{ accepted?: boolean }>(baseUrl, "session/prompt", { request: {
+    requestId,
+    sessionId: params.sessionId,
+    // Steer, not queue: DSH injects the message at the running turn's nearest
+    // step boundary and opens a turn itself when the session is idle, so a
+    // delivery never waits for the current turn to finish. This matches the
+    // Codex desktop path, which steers first and only starts a turn when the
+    // target has no active turn.
+    mode: params.mode ?? "steer",
+    content
+  } }, params.assertAuthorized);
+  if (result.ok && result.value?.accepted !== true) throw new Error("DSH session delivery returned no acceptance receipt.");
+  if (result.ok) {
+    return {
+      threadId: params.sessionId,
+      action: "started",
+      openedThread: false,
+      transport: "http"
+    };
+  }
+  const rejection = `${result.error.message || result.error.code || ""}`;
+  if (imagePaths.length > 0 && /image input|image.*not support|not support.*image|image.*unsupported|unsupported.*image/i.test(rejection)) {
+    const degraded = buildImagePathDegradedPrompt(params.prompt, imagePaths);
+    const retried = await dshRpc<{ accepted?: boolean }>(baseUrl, "session/prompt", { request: {
+      requestId,
+      sessionId: params.sessionId,
+      mode: params.mode ?? "steer",
+      content: [{ type: "text", text: degraded }]
+    } }, params.assertAuthorized);
+    if (retried.ok && retried.value?.accepted !== true) throw new Error("DSH session delivery returned no acceptance receipt.");
+    if (retried.ok) {
+      return {
+        threadId: params.sessionId,
+        action: "started",
+        openedThread: false,
+        transport: "http",
+        warning: `DSH 会话模型不支持图片输入，已降级为文本投递并附 ${imagePaths.length} 张图片的本地路径（可用 analyze_image 查看）。`
+      };
+    }
+    throw new Error(
+      `DSH session delivery rejected: ${retried.error.message || retried.error.code || "unknown error"}`
+    );
+  }
+  throw new Error(`DSH session delivery rejected: ${rejection}`);
+}
+
+function buildImagePathDegradedPrompt(prompt: string, imagePaths: string[]): string {
+  const lines = imagePaths.map((imagePath, index) => `${index + 1}. ${imagePath}`);
+  return [
+    prompt,
+    "",
+    `[图片附件（共 ${imagePaths.length} 张）]`,
+    "本会话模型不支持图片输入，图片未随消息上传；图片位于本机，请按需使用 analyze_image 工具（或直接读取文件）查看后再判断。",
+    ...lines
+  ].join("\n");
+}
+
+/**
+ * Deliver a plain message to the route's bound DSH primary session. Used by
+ * the agent-adapter fallback path (`createAgentAdapter("dsh").deliver`).
+ */
+export async function notifyDshSession(message: string, imagePaths: string[] = [], configuration?: Record<string, unknown>): Promise<{ sessionId: string }> {
+  const binding = configuration ? parseDshPrimaryBinding(configuration) : readDshPrimaryBinding();
+  if (!binding) throw new Error("The configured route has no DSH primary binding.");
+  await sendDshSessionMessage({
+    sessionId: binding.sessionId,
+    prompt: message,
+    cwd: binding.cwd,
+    baseUrl: binding.baseUrl,
+    agentPreset: binding.agentPreset,
+    imagePaths,
+    modelSelection: binding.modelSelection
+  });
+  return { sessionId: binding.sessionId };
+}

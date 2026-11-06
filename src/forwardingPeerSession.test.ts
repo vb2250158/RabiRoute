@@ -72,7 +72,7 @@ for (const provider of ["codex", "dsh"] as const) {
 
 test("local Agent catalog fields stay local while the primary peer uses its own session reference", () => {
   const { config } = peerConfig("codex");
-  const descriptor = parseAgentAdapterPackageDescriptor(JSON.parse(fs.readFileSync(new URL("../plugins/builtin/io.rabiroute.agent.codex/1.0.0/agent-adapter.json", import.meta.url), "utf8")));
+  const descriptor = parseAgentAdapterPackageDescriptor(JSON.parse(fs.readFileSync(new URL("./plugins/io.rabiroute.agent.codex/agent-adapter.json", import.meta.url), "utf8")));
   const methods = functions("./manager/controlPlaneRoutes.ts", ["configuredLocalAgentSessionFields", "primaryAgentSessionFields"], {
     peerRouteAgentSession, readAgentSessionBinding, currentAgentSessionDescriptors: () => new Map([[descriptor.type, descriptor]])
   });

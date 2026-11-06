@@ -1,3 +1,4 @@
+import { canonicalManagerPluginFixture } from "./canonicalManagerPlugin.fixture.js";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
@@ -9,10 +10,10 @@ import test from "node:test";
 import { WebSocket } from "ws";
 import { GenerationRuntime } from "../plugin-kernel/generationRuntime.js";
 import type { PluginCandidate, PluginManifest } from "../plugin-kernel/types.js";
-import { RemoteAgentHub, type RemoteAgentHubOptions } from "../messageEndpoints/remoteAgentManager.js";
-import { mountAgentAdapterCatalogPlugin, type AgentAdapterCatalogService } from "./agentAdapterCatalog.js";
+import { RemoteAgentHub, type RemoteAgentHubOptions } from "../plugins/io.rabiroute.manager.remote-agent/src/messageEndpoints/remoteAgentManager.js";
+import { mountAgentAdapterCatalogPlugin, type AgentAdapterCatalogService } from "../plugins/io.rabiroute.manager.agent-adapter-catalog/src/manager/agentAdapterCatalog.js";
 import { ManagerPluginRouteRegistry } from "./managerPluginRouteRegistry.js";
-import { createRemoteAgentOperations } from "./remoteAgentRoutes.js";
+import { createRemoteAgentOperations } from "../plugins/io.rabiroute.manager.remote-agent/src/manager/remoteAgentRoutes.js";
 import type { ApiOperationDefinition } from "./apiOperationContract.js";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
@@ -22,7 +23,7 @@ type Kind = "agent-adapter-catalog" | "remote-agent";
 type Owner = { value: AgentAdapterCatalogService | RemoteAgentHub; stops: number; registrations: number; work?: ReturnType<typeof gate> };
 
 async function fixture(kind: Kind) {
-  const directory = path.join(root, "plugins/builtin", `io.rabiroute.manager.${kind}`, "1.0.0");
+  const directory = path.join(root, "src/plugins", `io.rabiroute.manager.${kind}`);
   const manifest = JSON.parse(fs.readFileSync(path.join(directory, "rabi.plugin.json"), "utf8")) as PluginManifest;
   const owners: Owner[] = [];
   const rootDir = path.join(os.tmpdir(), `rabi-l4-uncreated-${randomUUID()}`);
@@ -77,10 +78,10 @@ async function fixture(kind: Kind) {
       nextPublication = undefined;
     }
   });
+  const { module, ports } = await canonicalManagerPluginFixture(kind, host);
   runtime = new GenerationRuntime({ host: "manager", hostServices: [
-    { capability: "manager.core@1", value: {} }, { capability: `host.manager.${kind}@1`, value: host }
+    { capability: "manager.core@1", value: {} }, { capability: `host.manager.${kind}@2`, value: ports }
   ], executor: { async prepare(candidate) {
-    const module = await import(new URL(`../../plugins/builtin/io.rabiroute.manager.${kind}/1.0.0/manager.mjs`, import.meta.url).href);
     return { async activate(context) {
       await module.activate(context);
       const barrier = preparation;

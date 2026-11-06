@@ -24,7 +24,7 @@
 
 目录设置可从本机 WebGUI、已鉴权的远端连接或已认证且启用的远程 Agent 入口读取和修改，保存在安装状态目录的 `data/speech/model-directory-settings.json`，不进入发布包。正在执行安装或下载时禁止切换；多窗口修改冲突时先刷新，不自动覆盖。网络目录、磁盘根目录、程序安装目录和源码工作树不能作为自定义模型目录。
 
-页面和命令行共用 `plugin-adapters/rabi-speech/model-catalog.json` 中的允许清单。下载操作不能提交任意仓库或 URL；总目录只能通过单独校验的设置入口修改。命令行仍使用显式 `--root` 参数；需要授权的 ONNX-VITS 模型包仍只能手动导入。
+页面和命令行共用 `src/plugins/rabi-speech/model-catalog.json` 中的允许清单。下载操作不能提交任意仓库或 URL；总目录只能通过单独校验的设置入口修改。命令行仍使用显式 `--root` 参数；需要授权的 ONNX-VITS 模型包仍只能手动导入。
 
 ## 复用已有 worker 与测试结果
 

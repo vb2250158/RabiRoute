@@ -1,5 +1,4 @@
 import {invokeScopedAgentManagerOperation} from "../agentAdapters/managerInvocation.js";
-import { readCodexDesktopThread } from "../codexDesktopBridge.js";
 import { sameCodexWorkspace } from "../codexTaskIdentity.js";
 import { AgentRequestStore, agentDeliveryPromptHash, type AgentCommunicationPreparation } from "./store.js";
 import { readAgentResponseContent } from "./responseContent.js";

@@ -1,18 +1,18 @@
 <script setup lang="ts">
-import { translateText } from "./i18n";
+import { translateText } from "./i18n/index";
 import { userFacingError } from "./userFacingError";
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useTheme } from "vuetify";
 import { useRoute, useRouter } from "vue-router";
 import { findFirstAvailableRole, useRoleStore } from "./stores/roleStore";
 import { isRolePage, roleConfigPath, roleMessageHistoryPath } from "./roleScopedNavigation";
-import { personaMessagesLocation } from "./persona/personaMessageRoutes";
+import { personaMessagesLocation } from "../../src/plugins/io.rabiroute.manager.persona/web/persona/personaMessageRoutes";
 import LocaleSwitcher from "./components/LocaleSwitcher.vue";
 import PluginPageHost from "./components/PluginPageHost.vue";
 import QuickSetupDialog from "./components/QuickSetupDialog.vue";
 import RoleSourcePicker from "./components/RoleSourcePicker.vue";
 import RoleManagementActions from "./components/RoleManagementActions.vue";
-import { useI18n } from "./i18n";
+import { useI18n } from "./i18n/index";
 import { routeScopedPathForCurrentPage, routeKeyFromWebguiHash, showsRouteSwitcher } from "./routeScopedNavigation";
 import { pluginCatalogStore } from "./pluginCatalogStore";
 import { buildWebNavigation } from "./pluginNavigation";

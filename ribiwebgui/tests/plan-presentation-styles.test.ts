@@ -173,8 +173,8 @@ test("approval submission turns browser fetch failures into an actionable retry 
 
 test("knowledge page avoids full-list refresh after feedback and keeps details animation-free", () => {
   const root = path.resolve(import.meta.dirname, "..");
-  const page = fs.readFileSync(path.join(root, "src", "pages", "RoleKnowledgePage.vue"), "utf8");
-  const composer = fs.readFileSync(path.join(root, "src", "components", "PlanFeedbackComposer.vue"), "utf8");
+  const page = fs.readFileSync(path.join(root, "../src/plugins/io.rabiroute.manager.persona/web/pages/RoleKnowledgePage.vue"), "utf8");
+  const composer = fs.readFileSync(path.join(root, "../src/plugins/io.rabiroute.manager.persona/web/components/PlanFeedbackComposer.vue"), "utf8");
   const styles = fs.readFileSync(path.join(root, "src", "styles.css"), "utf8");
   const client = fs.readFileSync(path.join(root, "src", "roleKnowledgeClient.ts"), "utf8");
   const submitBody = page.match(/async function sendApprovalSuggestion[\s\S]*?\n}\n<\/script>/)?.[0] || "";
@@ -276,8 +276,8 @@ test("knowledge page avoids full-list refresh after feedback and keeps details a
 
 test("plan guidance and approval reuse one feedback composer", () => {
   const root = path.resolve(import.meta.dirname, "..");
-  const page = fs.readFileSync(path.join(root, "src", "pages", "RoleKnowledgePage.vue"), "utf8");
-  const composer = fs.readFileSync(path.join(root, "src", "components", "PlanFeedbackComposer.vue"), "utf8");
+  const page = fs.readFileSync(path.join(root, "../src/plugins/io.rabiroute.manager.persona/web/pages/RoleKnowledgePage.vue"), "utf8");
+  const composer = fs.readFileSync(path.join(root, "../src/plugins/io.rabiroute.manager.persona/web/components/PlanFeedbackComposer.vue"), "utf8");
 
   assert.equal((page.match(/<PlanFeedbackComposer\b/g) || []).length, 2);
   assert.match(page, /<PlanFeedbackComposer[\s\S]*?:composer-id="`guidance-\$\{plan\.id\}`"/);
@@ -293,7 +293,7 @@ test("plan guidance and approval reuse one feedback composer", () => {
 
 test("plan views expose a floating directory outside the plan browser", () => {
   const root = path.resolve(import.meta.dirname, "..");
-  const page = fs.readFileSync(path.join(root, "src", "pages", "RoleKnowledgePage.vue"), "utf8");
+  const page = fs.readFileSync(path.join(root, "../src/plugins/io.rabiroute.manager.persona/web/pages/RoleKnowledgePage.vue"), "utf8");
   const styles = fs.readFileSync(path.join(root, "src", "styles.css"), "utf8");
 
   assert.match(page, /class="knowledge-browser-layout"/);
@@ -379,7 +379,7 @@ test("plan views expose a floating directory outside the plan browser", () => {
 
 test("plan cards use isolated work-item framing and a three-level execution hierarchy", () => {
   const root = path.resolve(import.meta.dirname, "..");
-  const page = fs.readFileSync(path.join(root, "src", "pages", "RoleKnowledgePage.vue"), "utf8");
+  const page = fs.readFileSync(path.join(root, "../src/plugins/io.rabiroute.manager.persona/web/pages/RoleKnowledgePage.vue"), "utf8");
   const styles = fs.readFileSync(path.join(root, "src", "styles.css"), "utf8");
 
   assert.match(page, /v-for="plan in renderedPlansForView"/);
@@ -407,11 +407,11 @@ test("plan cards use isolated work-item framing and a three-level execution hier
 
 test("plan cards render managed attachments and preview 16:9 image and video media", () => {
   const root = path.resolve(import.meta.dirname, "..");
-  const page = fs.readFileSync(path.join(root, "src", "pages", "RoleKnowledgePage.vue"), "utf8") + fs.readFileSync(path.join(root, "src/components/PlanAttachmentGallery.vue"), "utf8");
+  const page = fs.readFileSync(path.join(root, "../src/plugins/io.rabiroute.manager.persona/web/pages/RoleKnowledgePage.vue"), "utf8") + fs.readFileSync(path.join(root, "../src/plugins/io.rabiroute.manager.persona/web/components/PlanAttachmentGallery.vue"), "utf8");
   const styles = fs.readFileSync(path.join(root, "src", "styles.css"), "utf8");
 
   assert.match(page, /v-if="planDetailsLoaded\[plan\.id\] && plan\.attachments\.length" class="knowledge-plan-attachments"/);
-  assert.match(page, /import \{ managerEventSource, managerResourceUrl \} from "\.\.\/managerApi"/);
+  assert.match(page, /import \{ managerEventSource, managerResourceUrl \} from "\.\.\/\.\.\/\.\.\/\.\.\/\.\.\/ribiwebgui\/src\/managerApi"/);
   assert.match(page, /function planAttachmentUrl[\s\S]*?return managerResourceUrl\(/);
   assert.match(page, /planAttachmentUrl\(plan\.id, attachment\.id\)/);
   assert.match(page, /loading="lazy"/);
@@ -461,7 +461,7 @@ test("plan cards render managed attachments and preview 16:9 image and video med
 
 test("step blocker styling follows the structured approval contract", () => {
   const root = path.resolve(import.meta.dirname, "..");
-  const page = fs.readFileSync(path.join(root, "src", "pages", "RoleKnowledgePage.vue"), "utf8");
+  const page = fs.readFileSync(path.join(root, "../src/plugins/io.rabiroute.manager.persona/web/pages/RoleKnowledgePage.vue"), "utf8");
 
   assert.match(page, /function stepIsBlocked[\s\S]*?plan\.presentation\.approval\.state === "ready"/);
   assert.match(page, /blocked: stepIsBlocked\(plan, step\)/);
@@ -474,7 +474,7 @@ test("step blocker styling follows the structured approval contract", () => {
 
 test("plan steps derive current and completed presentation without a stored status", () => {
   const root = path.resolve(import.meta.dirname, "..");
-  const page = fs.readFileSync(path.join(root, "src", "pages", "RoleKnowledgePage.vue"), "utf8");
+  const page = fs.readFileSync(path.join(root, "../src/plugins/io.rabiroute.manager.persona/web/pages/RoleKnowledgePage.vue"), "utf8");
 
   assert.match(page, /step\.id === plan\.currentStepId && step\.startedAt[\s\S]*?开始时间[\s\S]*?formatDate\(step\.startedAt\)/);
   assert.match(page, /v-else-if="step\.completedAt"[\s\S]*?完成时间[\s\S]*?formatDate\(step\.completedAt\)/);
@@ -484,7 +484,7 @@ test("plan steps derive current and completed presentation without a stored stat
 
 test("feedback actions keep both submit buttons in one compact group", () => {
   const root = path.resolve(import.meta.dirname, "..");
-  const composer = fs.readFileSync(path.join(root, "src/components/PlanFeedbackComposer.vue"), "utf8");
+  const composer = fs.readFileSync(path.join(root, "../src/plugins/io.rabiroute.manager.persona/web/components/PlanFeedbackComposer.vue"), "utf8");
   const styles = fs.readFileSync(path.join(root, "src/styles.css"), "utf8");
   const group = composer.match(/<div class="knowledge-approval-action-buttons">([\s\S]*?)<\/div>/)?.[1] ?? "";
   assert.equal((group.match(/<v-btn/g) ?? []).length, 2);
@@ -497,7 +497,7 @@ test("feedback actions keep both submit buttons in one compact group", () => {
 
 test("approval review prioritizes decisions and shared previews without hiding validation guards", () => {
   const root = path.resolve(import.meta.dirname, "..");
-  const page = fs.readFileSync(path.join(root, "src/pages/RoleKnowledgePage.vue"), "utf8");
+  const page = fs.readFileSync(path.join(root, "../src/plugins/io.rabiroute.manager.persona/web/pages/RoleKnowledgePage.vue"), "utf8");
   const styles = fs.readFileSync(path.join(root, "src/styles.css"), "utf8");
   const app = fs.readFileSync(path.join(root, "src/App.vue"), "utf8");
   assert.equal((page.match(/<PlanAttachmentGallery/g) ?? []).length, 2);
@@ -515,7 +515,7 @@ test("approval review prioritizes decisions and shared previews without hiding v
 
  test("plan filters use compact rows with accessible wrapping options and bounded tag expansion", () => {
   const root = path.resolve(import.meta.dirname, "..");
-  const page = fs.readFileSync(path.join(root, "src", "pages", "RoleKnowledgePage.vue"), "utf8");
+  const page = fs.readFileSync(path.join(root, "../src/plugins/io.rabiroute.manager.persona/web/pages/RoleKnowledgePage.vue"), "utf8");
   const styles = fs.readFileSync(path.join(root, "src", "styles.css"), "utf8");
   assert.match(styles, /\.knowledge-plan-list-panel\s*\{[^}]*grid-template-columns: 84px minmax\(0, 1fr\)/);
   assert.match(styles, /\.knowledge-plan-list-filter-options\s*\{[^}]*display: flex;[^}]*flex-wrap: wrap/);

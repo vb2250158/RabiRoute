@@ -11,42 +11,42 @@ import { PluginProfilePublication } from "./pluginProfilePublication.js";
 import { pluginProfilePackageResolution } from "./pluginProfilePackageResolution.js";
 import { preparedApiJson } from "./apiPreparedJson.js";
 import { AgentRequestRouteReconciliation } from "./agentRequestRouteReconciliation.js";
-import { parseAgentChatHistoryQuery, projectAgentChatHistory } from "./agentChatHistoryOperation.js";
+import { parseAgentChatHistoryQuery, projectAgentChatHistory } from "../shared/agentChatHistory.js";
 import type { ApiOperationDefinition } from "./apiOperationContract.js";
 import { ResourceCache, type ResourceCacheOptions } from "./resourceCache.js";
 import { readRecordingAudio, readRecordingObject } from "./recordingObjectReader.js";
-import { createResourceCacheOperations } from "./resourceCacheOperations.js";
+import { createResourceCacheOperations } from "../plugins/io.rabiroute.manager.core/src/manager/resourceCacheOperations.js";
 import { MOBILE_RECORDING_MAX_CHUNKS } from "./resourceCacheProtocol.js";
 import { authenticatedResourceOwner } from "./resourceApiRequest.js";
 import { queryMessageHistory } from "./messageHistorySearchService.js";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { RecordingArchiveRuntime } from "./recordingArchiveRuntime.js";
 import { RecordingArchiveAsrRuntime } from "./recordingArchiveAsrRuntime.js";
-import type { RecordingArchiveAdminOptions } from "./recordingArchiveAdminOperation.js";
+import type { RecordingArchiveAdminOptions } from "../plugins/io.rabiroute.manager.core/src/manager/recordingArchiveAdminOperation.js";
 import { hasAuthenticatedConnectionRequest, markAuthenticatedConnectionRequest, markConsumedConnectionQueryParameters } from "./connectionRequestAccess.js";
 import { createRabiLinkAgentDevices, type RabiLinkAgentPrincipal } from "./rabiLinkAgentDevices.js";
-import { createRabiLinkAgentDeviceOperations } from "./rabiLinkAgentDeviceOperations.js";
-import { createAgentStateReportOwner, createAgentStateReportOperations } from "./agentStateReportOperations.js";
+import { createRabiLinkAgentDeviceOperations } from "../plugins/io.rabiroute.manager.rabilink-relay/src/manager/rabiLinkAgentDeviceOperations.js";
+import { createAgentStateReportOwner, createAgentStateReportOperations } from "../plugins/io.rabiroute.manager.agent-state-control/src/manager/agentStateReportOperations.js";
 import { createGatewayListenerPublicationHost } from "./gatewayListenerPublication.js";
 import { currentPluginActivation } from "../plugin-kernel/pluginActivationContext.js";
-import { createPerformanceOperations } from "./performanceOperations.js";
-import { createBilibiliHistoryOperations } from "./bilibiliHistoryOperations.js";
-import type { DeviceAgentOwnerOptions } from "../agentAdapters/deviceAgentOwner.js";
+import { createPerformanceOperations } from "../plugins/io.rabiroute.manager.performance/src/manager/performanceOperations.js";
+import { createBilibiliHistoryOperations } from "../plugins/io.rabiroute.manager.bilibili-history/src/manager/bilibiliHistoryOperations.js";
+import type { DeviceAgentOwnerOptions } from "../plugins/io.rabiroute.agent.device-agent/src/agentAdapters/deviceAgentOwner.js";
 import { deviceAgentDeliveryPrincipal } from "./deviceAgentDeliveryAccess.js";
 import { createDeviceAgentPeerAuthority } from "./deviceAgentPeerAuthority.js";
-import { createRabiLinkMobileOwner } from "./rabiLinkMobileOwner.js";
-import { createRabiLinkMobileOperations } from "./rabiLinkMobileOperations.js";
+import { createRabiLinkMobileOwner } from "../plugins/io.rabiroute.endpoint.rabilink/src/manager/rabiLinkMobileOwner.js";
+import { createRabiLinkMobileOperations } from "../plugins/io.rabiroute.endpoint.rabilink/src/manager/rabiLinkMobileOperations.js";
 import { RabiLinkDeviceConnections } from "./rabiLinkDeviceConnections.js";
 import { rabiLinkAgentDevicePrincipal, rabiLinkAgentTaskSource, rabiLinkConnectionScope, rabiLinkTrustedTransport, rabiLinkTransportAssertionPresent } from "./rabiLinkAgentDeviceConnection.js";
 import { recordingManifestHash } from "./recordingArchiveContract.js";
 import { createAllDayRecording } from "./allDayRecordingRoutes.js";
-import { createPersonaRecordingOperations } from "./personaRecordingOperations.js";
+import { createPersonaRecordingOperations } from "../plugins/io.rabiroute.manager.persona/src/manager/personaRecordingOperations.js";
 import { CompanionActivity, companionSpeechScope, readCompanionPresets, recordCompanionInteraction, saveCompanionSummary, lastCompanionSummary } from "./companionActivity.js";
 import { readCompanionContext } from "./companionContextReader.js";
 import { CompanionWindowTypes } from "./companionWindowTypes.js";
 import { readCompanionSceneRules } from "./companionScene.js";
-import type { PersonaCompanionContext } from "./companionActivityRoutes.js";
-import { createPersonaCompanionOperations } from "./personaCompanionOperations.js";
+import type { PersonaCompanionContext } from "../plugins/io.rabiroute.manager.persona/src/manager/companionActivityRoutes.js";
+import { createPersonaCompanionOperations } from "../plugins/io.rabiroute.manager.persona/src/manager/personaCompanionOperations.js";
 import { CompanionContinuationStore } from "./companionContinuation.js";
 import { requestLocalSpeech, requestLocalSpeechJson } from "../speech/localSpeechClient.js";
 import { normalizeRouteAgentTargets, resolvePrimaryAgentTarget, primaryAgentInstanceBindings, peerRouteAgentSession } from "../shared/routeAgentTargets.js";
@@ -55,22 +55,21 @@ import { createManagerPeerRuntime as prepareManagerPeerRuntime } from "./manager
 
 import { errorResponsePresentation } from "../shared/errorPresentation.js";
 import { KnowledgeSearchService } from "./knowledgeSearchService.js";
-import { createPersonaKnowledgeOperations } from "./personaKnowledgeOperations.js";
-import { createPersonaIdentityOperations } from "./personaIdentityOperations.js";
-import { PersonaStorageOwner, createPersonaStorageOperations, type PersonaStorageOperationsContext } from "./personaStorageOperations.js";
-import { createPersonaHealthOperations } from "./personaHealthOperations.js";
-import { createPersonaHistoryOperations } from "./personaHistoryOperations.js";
-import { createPersonaSkillOperations } from "./personaSkillOperations.js";
-import type { RoleSkillArchiveReply } from "./roleSkillDownloadRoutes.js";
+import { createPersonaKnowledgeOperations } from "../plugins/io.rabiroute.manager.persona/src/manager/personaKnowledgeOperations.js";
+import { createPersonaIdentityOperations } from "../plugins/io.rabiroute.manager.persona/src/manager/personaIdentityOperations.js";
+import { PersonaStorageOwner, createPersonaStorageOperations, type PersonaStorageOperationsContext } from "../plugins/io.rabiroute.manager.persona/src/manager/personaStorageOperations.js";
+import { createPersonaHealthOperations } from "../plugins/io.rabiroute.manager.persona/src/manager/personaHealthOperations.js";
+import { createPersonaHistoryOperations } from "../plugins/io.rabiroute.manager.persona/src/manager/personaHistoryOperations.js";
+import { createPersonaSkillOperations } from "../plugins/io.rabiroute.manager.persona/src/manager/personaSkillOperations.js";
+import type { RoleSkillArchiveReply } from "../plugins/io.rabiroute.manager.persona/src/manager/roleSkillDownloadRoutes.js";
 import { authorizeLanAgentRoleSkillRequest } from "./lanAgentRoleSkillAccess.js";
 import type { AgentInstanceBinding } from "../shared/agentInstance.js";
 import { manageInstanceAgent } from "../agentAdapters/instanceManagement.js";
-import { agentRequestReminderPrompt } from "../agentRequests/replyParameters.js";
 import fs from "node:fs";
-import { createVideoRuntime } from "./videoRuntime.js";
+import { createVideoRuntime } from "../plugins/io.rabiroute.manager.video/src/manager/videoRuntime.js";
 import { NativeWebguiStaticOwner } from "./nativeWebguiStaticOwner.js";
 import { createWebguiStaticOperations } from "./webguiStaticOperations.js";
-import { createVideoOperations } from "./videoOperations.js";
+import { createVideoOperations } from "../plugins/io.rabiroute.manager.video/src/manager/videoOperations.js";
 import { createRabiPeerRuntime } from "./rabiPeerRoutes.js";
 import { discoverRabiPeers } from "../rabiPeerDiscovery.js";
 import http from "node:http";
@@ -98,7 +97,7 @@ import { recordPersonaUserDelivery } from "./personaUserDeliveryHistory.js";
 import { recordPersonaAgentDelivery } from "./personaAgentDeliveryHistory.js";
 import { readChatDeliveryParties } from "./personaChatDeliveryLookup.js";
 import { agentIdentityForMessageSource, type RabiAgentMessageSource, type RabiDeliveryEnvelope, type RabiMessageSource } from "../shared/rabiMessage.js";
-import { AgentRequestStore, type AgentRequestRecord, type AgentRequestParty } from "../agentRequests/store.js";
+import { AgentRequestStore, type AgentRequestParty } from "../agentRequests/store.js";
 import { planBindingMatchesSource, planBindingTargetKey, type PlanBindingSource } from "../shared/planBindingOwner.js";
 import { agentRequestStatePath } from "../agentRequests/persistence.js";
 import { projectDirectoryLayout } from "../shared/projectDirectoryLayout.js";
@@ -123,17 +122,17 @@ import {
   resolveMessageProcessingDeliveryTarget,
   type MessageProcessingDeliveryTarget
 } from "./messageProcessingDeliveryTarget.js";
-import { listDeliveryReplayAttempts } from "../deliveryReplayLedger.js";
+import { listDeliveryReplayAttemptSnapshot } from "../deliveryReplayLedger.js";
 import type { DeliveryReplayRequest } from "../deliveryReplay.js";
 
 
-import { RemoteAgentHub, type RemoteAgentTask, type RemoteAgentTaskEvent, type RemoteAgentTaskRequest } from "../messageEndpoints/remoteAgentManager.js";
+import { RemoteAgentHub, type RemoteAgentTask, type RemoteAgentTaskEvent, type RemoteAgentTaskRequest } from "../plugins/io.rabiroute.manager.remote-agent/src/messageEndpoints/remoteAgentManager.js";
 import { appendMessageContextToDir } from "../messageContextStore.js";
 
 import { managerRuntimeDiagnosticsSummary } from "../managerRuntimeDiagnostics.js";
 import { createManagerOperationalLog, installOperationalMutationAuditSink, managerOperationalError } from "./operationalLog.js";
 import { PerformanceMonitoringService } from "./performanceMonitoring.js";
-import { PerformanceApi } from "./performanceRoutes.js";
+import { PerformanceApi } from "../plugins/io.rabiroute.manager.performance/src/manager/performanceRoutes.js";
 import { measureSyncPerformanceOperation } from "../performance/performanceInstrumentation.js";
 import { PERFORMANCE_OPERATIONS } from "../shared/performanceOperations.js";
 import {
@@ -142,11 +141,9 @@ import {
   runWithOperationContext
 } from "../observability/dataMutationAudit.js";
 import { readJsonlTail } from "./jsonlTail.js";
-import { requestWeixinLogin } from "../weixinLoginRequest.js";
 
 
 import { AgentCompletionDeliveryService, completionTaskContextFromPlans, deliverCompletionToEndpoint, planCompletionDeliveryRules } from "./agentCompletionDelivery.js";
-import { createPlanAgentStatusService } from "./planAgentStatus.js";
 import { inspectOriginalPlanFeedbackReceipt } from "./planFeedbackReceipt.js";
 import { remoteAgentTargetKey } from "../shared/routeAgentTargets.js";
 import { resolvePlanHistoryRequestActor } from "./planHistoryRequestActor.js";
@@ -165,7 +162,7 @@ import type {
   AgentPlanFeedbackSubmitResult
 } from "../outbox.js";
 import { agentReplyHistorySource, agentReplyCurrentQqBinding } from "../outbox.js";
-import { getLoginInfo } from "../napcat.js";
+import { installAgentAdapterGenerationReader } from "../runtime/agentAdapterProviders.js";
 import { verifyQqFileCurrentPresence } from "./agentDeliveryVerification.js";
 import { inspectOriginalAgentSendHistory } from "./agentSendHistoryVerification.js";
 import { createAgentSendVerificationEvidenceVerifier } from "./agentSendVerificationEvidence.js";
@@ -257,7 +254,7 @@ import {
 } from "./managerWatchBroker.js";
 import { resolveCodexRuntimeState } from "./codexRuntimeState.js";
 import { createPluginServicePort } from "../runtime/pluginServicePort.js";
-import type { SpeechPluginPorts } from "./speechPluginRuntime.js";
+import type { SpeechPluginPorts } from "../plugins/io.rabiroute.manager.speech/src/manager/speechPluginRuntime.js";
 
 import {
   CodexHookContextService,
@@ -265,12 +262,11 @@ import {
   type CodexHookContextRequest,
   type PlanTaskCompletionDelivery,
 } from "./codexHookContext.js";
-import { createCodexHookOperations } from "./codexHookRoutes.js";
 import { observeManagerHttpAbort } from "./managerHttpAbort.js";
 import { createStopStageObserver } from "./hookProgressDiagnostics.js";
 import { memoryConsolidationHookScope } from "./memoryConsolidationHookScope.js";
-import { createLanguageStyleOperations } from "./languageStyleRoutes.js";
-import { createRolePanelOperations } from "./rolePanelOperations.js";
+import { createLanguageStyleOperations } from "../plugins/io.rabiroute.manager.persona/src/manager/languageStyleRoutes.js";
+import { createRolePanelOperations } from "../plugins/io.rabiroute.manager.persona/src/manager/rolePanelOperations.js";
 import { notifyRolePanelMessage } from "./rolePanelNotification.js";
 import { runLocalAgentMessageProcess } from "./localAgentMessageProcess.js";
 import { spawnGatewayCommandProcess } from "./gatewayCommandProcess.js";
@@ -296,15 +292,13 @@ import {
 } from "../plugin-kernel/index.js";
 import { createFullPluginExecutor } from "../plugin-runtime-host/executor.js";
 import { PluginProfileSettings } from "../plugin-runtime-host/profileSettings.js";
+import { pluginStorageMigrationFailure } from "../shared/pluginStorage.js";
 import { createPluginManagement, readPluginManagementManifest } from "./pluginManagement.js";
 import { createPluginManagementOperations } from "./pluginManagementOperations.js";
 import { registerManagerBootstrap, splitManagerBootstrapPublicOperations } from "./managerBootstrap.js";
 import { AsyncPluginOutcomeArchive } from "../plugin-runtime-host/asyncOutcomeArchive.js";
 import type { RuntimeObservation } from "../plugin-runtime-host/bridge/executor.mjs";
-import { withRouteControlAsyncRegistration } from "../plugin-runtime-host/routeControlAsyncRegistration.js";
 import { ProcessLeaseRegistry } from "../runtime/processLeaseRegistry.js";
-import { createWearableCompanionRuntimeIdentity } from "./wearableCompanionRuntimeIdentity.js";
-import { WearableCompanionWorkerService } from "./wearableCompanionWorkerService.js";
 import { WebPluginModuleRegistry } from "./webPluginModules.js";
 import {
   ManagerPluginRouteRegistry,
@@ -313,10 +307,9 @@ import {
 } from "./managerPluginRouteRegistry.js";
 import { isManagerControlRequestPath } from "./managerHttpRequestClassification.js";
 import { ManagerPluginRequestTracker } from "./managerPluginRequestTracker.js";
-import { createDesktopControlOperations, desktopConfigFilePayload } from "./desktopControlRoutes.js";
-import { DesktopPetOwner } from "./desktopPetRoutes.js";
-import { createDesktopPetOperations } from "./desktopPetOperations.js";
-import { createYeYuGamerManagerOperations } from "../integrations/yeyuGamer/managerRoutes.js";
+import { DesktopPetOwner } from "../plugins/io.rabiroute.manager.desktop-pet/src/manager/desktopPetRoutes.js";
+import { createDesktopPetOperations } from "../plugins/io.rabiroute.manager.desktop-pet/src/manager/desktopPetOperations.js";
+import { createYeYuGamerManagerOperations } from "../plugins/io.rabiroute.manager.yeyu-gamer/src/integrations/yeyuGamer/managerRoutes.js";
 
 
 
@@ -326,19 +319,19 @@ import { createYeYuGamerManagerOperations } from "../integrations/yeyuGamer/mana
 
 
 
-import { createGatewayControlOperations } from "./gatewayControlOperations.js";
-import { createRemoteAgentOperations, type RemoteAgentOperationsContext } from "./remoteAgentRoutes.js";
-import { createAgentThreadControlOwner } from "./agentThreadControlRoutes.js";
-import { createAgentThreadControlOperations } from "./agentThreadControlOperations.js";
+import { createGatewayControlOperations } from "../plugins/io.rabiroute.manager.gateway-runtime/src/manager/gatewayControlOperations.js";
+import { createRemoteAgentOperations, type RemoteAgentOperationsContext } from "../plugins/io.rabiroute.manager.remote-agent/src/manager/remoteAgentRoutes.js";
+import { createAgentThreadControlOwner } from "../plugins/io.rabiroute.manager.agent-thread-control/src/manager/agentThreadControlRoutes.js";
+import { createAgentThreadControlOperations } from "../plugins/io.rabiroute.manager.agent-thread-control/src/manager/agentThreadControlOperations.js";
 import { createPeerAgentEndpointBridge } from "./peerAgentEndpointBridge.js";
-import { createPeerAgentOperations } from "./peerAgentOperations.js";
-import { createPeerRouteDeliveryOperations } from "./peerRouteDeliveryOperations.js";
-import { createAgentCommunicationRoutes, type AgentCommunicationHttpResponse } from "./agentCommunicationRoutes.js";
-import { createApiDiscoveryOperations } from "./apiDiscoveryRoutes.js";
+import { createPeerAgentOperations } from "../plugins/io.rabiroute.manager.agent-thread-control/src/manager/peerAgentOperations.js";
+import { createPeerRouteDeliveryOperations } from "../plugins/io.rabiroute.manager.agent-thread-control/src/manager/peerRouteDeliveryOperations.js";
+import { createAgentCommunicationRoutes, type AgentCommunicationHttpResponse } from "../plugins/io.rabiroute.manager.agent-communication/src/manager/agentCommunicationRoutes.js";
+import { createApiDiscoveryOperations } from "../plugins/io.rabiroute.manager.agent-communication/src/manager/apiDiscoveryRoutes.js";
 import { AgentUploadStore } from "./agentUploadStore.js";
-import { createAgentUploadRoutes } from "./agentUploadRoutes.js";
+import { createAgentUploadRoutes } from "../plugins/io.rabiroute.manager.agent-communication/src/manager/agentUploadRoutes.js";
 import { guardRequestBodyDeadline } from "./agentUploadDeadline.js";
-import { AgentAdapterCatalogService, mountAgentAdapterCatalogPlugin } from "./agentAdapterCatalog.js";
+import { AgentAdapterCatalogService, mountAgentAdapterCatalogPlugin } from "../plugins/io.rabiroute.manager.agent-adapter-catalog/src/manager/agentAdapterCatalog.js";
 import { AgentAdapterCatalogWorkerPool } from "./agentAdapterCatalogWorkerPool.js";
 import type { AgentAdapterCatalogWorkerTask } from "./agentAdapterCatalogWorker.js";
 import { invokeAgentManagerOperation, resolvePublishedAgentManagerProviders, resolvePublishedAgentManagerProvider, loadInstalledAgentManagerDescriptors,
@@ -346,23 +339,18 @@ import { invokeAgentManagerOperation, resolvePublishedAgentManagerProviders, res
 import { mergeAgentSessionDescriptors, readAgentSessionBinding } from "../agentAdapters/agentPluginSessionBinding.js";
 import type { AgentAdapterInvocation } from "@rabiroute/plugin-sdk";
 
-import {
-  MessageAdapterControlService,
-  MessageAdapterScanProviderRegistry,
-  createMessageAdapterControlOperations,
-  registerBuiltinMessageAdapterScanProviders,
-  type MessageAdapterEndpoint,
-  type MessageAdapterScanResult as PluginMessageAdapterScanResult
-} from "./messageAdapterControl.js";
-import { type NapcatLaunchRequest } from "./napcatControlRoutes.js";
-import { createMessageProcessingOperations } from "./messageProcessingOperations.js";
+import { MessageAdapterScanProviderRegistry } from "../shared/messageAdapterScanRegistry.js";
+import type {
+  MessageAdapterEndpoint,
+  MessageAdapterScanResult as PluginMessageAdapterScanResult
+} from "../plugins/io.rabiroute.manager.message-adapter-control/src/manager/messageAdapterControl.js";
+import { type NapcatLaunchRequest } from "../plugins/io.rabiroute.endpoint.napcat/src/manager/napcatControlRoutes.js";
 import { ManagerGatewayRuntimeService } from "./managerGatewayRuntimeService.js";
 import { GenerationHandoffLease } from "./generationHandoffLease.js";
 
 
-import { MessageProcessingAutomationService } from "./messageProcessingAutomationService.js";
-import { KnowledgeCallbackReminderService } from "./knowledgeCallbackReminderService.js";
-import { PlanFeedbackRecoveryService } from "./planFeedbackRecoveryService.js";
+import { KnowledgeCallbackReminderService } from "../plugins/io.rabiroute.manager.message-processing-automation/src/manager/knowledgeCallbackReminderService.js";
+import { PlanFeedbackRecoveryService } from "../plugins/io.rabiroute.manager.plan-feedback-delivery/src/manager/planFeedbackRecoveryService.js";
 import { runWindowsTaskkill, stopChildProcessTree } from "../runtime/windowsProcessTree.js";
 import { getBuiltinManagerCordisRoot } from "../runtime/managerCordisRoot.js";
 import {
@@ -402,7 +390,7 @@ import {
   MemoryConsolidationScheduler,
   type DueMemoryConsolidationRun,
   type MemoryConsolidationScheduleTarget
-} from "./memoryConsolidationScheduler.js";
+} from "../plugins/io.rabiroute.manager.memory-consolidation/src/manager/memoryConsolidationScheduler.js";
 import { memoryConsolidationFailureDiagnostic } from "./memoryConsolidationDiagnostics.js";
 import { evaluateMemoryConsolidationSchedule } from "./memoryConsolidationScheduleWorkerClient.js";
 import { canonicalLogicalPlanId } from "../planStorageIdentity.js";
@@ -427,7 +415,6 @@ import {
   type PlanQaStoragePort,
   type PlanQaTaskRequest
 } from "./planQaFeedback.js";
-import { createPersonaPlanOperations } from "./personaPlanOperations.js";
 
 
 import { RabiGlobalConfigStore, type RabiLinkRelayGlobalConfig } from "./globalConfig.js";
@@ -435,16 +422,16 @@ import { DeviceIdentityOwner } from "./deviceIdentity.js";
 import { LanAgentRegistry } from "./lanAgentRegistry.js";
 import { ManagerLocalComputer } from "./managerLocalComputer.js";
 import { LanAgentReleaseStore } from "./lanAgentReleaseStore.js";
-import { createLanAgentManagementOperations, type LanAgentRoutesContext } from "./lanAgentRoutes.js";
-import { createLanAgentConnectionOperation } from "./lanAgentConnectionOperation.js";
-import { createLanAgentTerminalOperations } from "./lanAgentTerminalRoutes.js";
-import { createLanAgentComputerOperations } from "./lanAgentComputerRoutes.js";
-import type { InteractiveContext } from "./lanAgentInteractiveContract.js";
-import { createLanAgentReadOperations, type LanAgentReadContext } from "./lanAgentReadOperations.js";
+import { createLanAgentManagementOperations, type LanAgentRoutesContext } from "../plugins/io.rabiroute.manager.core/src/manager/lanAgentRoutes.js";
+import { createLanAgentConnectionOperation } from "../plugins/io.rabiroute.manager.core/src/manager/lanAgentConnectionOperation.js";
+import { createLanAgentTerminalOperations } from "../plugins/io.rabiroute.manager.core/src/manager/lanAgentTerminalRoutes.js";
+import { createLanAgentComputerOperations } from "../plugins/io.rabiroute.manager.core/src/manager/lanAgentComputerRoutes.js";
+import type { InteractiveContext } from "../plugins/io.rabiroute.manager.core/src/manager/lanAgentInteractiveContract.js";
+import { createLanAgentReadOperations, type LanAgentReadContext } from "../plugins/io.rabiroute.manager.core/src/manager/lanAgentReadOperations.js";
 import { createWebguiAccessOperations } from "./webguiAccessOperations.js";
 import { LanAgentAuthority } from "./lanAgentAuthority.js";
 import { evaluateLanAgentRequest, isLanNodeMetadataRequest, assertTrustedLanAgentPrincipal } from "./lanAgentRequestAccess.js";
-import { AgentResourceCatalog } from "./agentResourceCatalog.js";
+import { AgentResourceCatalog } from "../plugins/io.rabiroute.manager.core/src/manager/agentResourceCatalog.js";
 import { validateLanAgentRequestBody, captureTrustedLanAgentSource, getTrustedLanAgentSource, type TrustedLanAgentSource } from "./lanAgentBodyAuthority.js";
 import { migrateLanAgentSharedCredential } from "./lanAgentCredentialMigration.js";
 import {
@@ -458,8 +445,8 @@ import {
   lanAddressPriority,
   managerListensOnLan
 } from "./webguiLanAccess.js";
-import { publicRabiLinkRelayConfig } from "./rabiApi.js";
-import { createRabiControlOperations } from "./rabiApiOperations.js";
+import { publicRabiLinkRelayConfig } from "../shared/rabiLinkRelayPublicConfig.js";
+import { createRabiControlOperations } from "../plugins/io.rabiroute.manager.route-control/src/manager/rabiApiOperations.js";
 import { parseGatewayReadyLine } from "../gatewayLifecycle.js";
 import { createGatewayOutputLineReader, GATEWAY_MESSAGE_HISTORY_PREFIX } from "../gatewayMessageHistory.js";
 import { gatewayMessageHistoryEvents, localMessageHistoryEvents } from "./gatewayMessageHistoryEvents.js";
@@ -485,13 +472,13 @@ import {
   routeMessageAdapterEnvironment,
   type MessageAdapterEnvironment
 } from "./gatewayMessageAdapterEnvironment.js";
-import { BilibiliHistoryBridge } from "./bilibiliHistoryBridge.js";
-import { createPersonaResourceOperations } from "./personaResourceOperations.js";
+import { BilibiliHistoryBridge } from "../plugins/io.rabiroute.manager.bilibili-history/src/manager/bilibiliHistoryBridge.js";
+import { createPersonaResourceOperations } from "../plugins/io.rabiroute.manager.persona/src/manager/personaResourceOperations.js";
 import { roleInfoPayload } from "./roleInfoPayload.js";
 import type { ScanDiagnostic } from "./scanController.js";
 import { PeerLanServer } from "./peerLanServer.js";
-import { RabiDirectVideo } from "./rabiDirectVideo.js";
-import { createDirectVideoOperations } from "./rabiDirectVideoRoutes.js";
+import { RabiDirectVideo } from "../plugins/io.rabiroute.manager.rabilink-relay/src/manager/rabiDirectVideo.js";
+import { createDirectVideoOperations } from "../plugins/io.rabiroute.manager.rabilink-relay/src/manager/rabiDirectVideoRoutes.js";
 import {
   ManagerReadWorkerError,
   managerCatalogWorkerPool,
@@ -517,13 +504,14 @@ import { DeveloperCandidateAdmission } from "./developerCandidateAdmission.js";
 import { readGatewayDiagnosticsStatuses } from "./gatewayDiagnosticsRead.js";
 import { buildIsolatedGatewayDiagnosticsSnapshot } from "./gatewayDiagnosticsSnapshotWorker.js";
 import { GatewayStatusSnapshotService, readGatewayStatusInWorker } from "./gatewayStatusSnapshot.js";
-import { createPersonaDirectoryOperation, createPersonaMessagingOperations } from "./personaMessagingRoutes.js";
+import { createPersonaDirectoryOperation, createPersonaMessagingOperations } from "../plugins/io.rabiroute.manager.persona/src/manager/personaMessagingRoutes.js";
 import { loadPersonaMessageAuthority, type PersonaMessageAuthority } from "./personaMessageAuthority.js";
 import { handleRoleContextProjectionRequest } from "./roleContextProjection.js";
 import { resolveInProcessRoots } from "../plugin-kernel/pluginExecutionSettings.js";
 
 import { hostOwnedSpeechMessageCommand } from "./speechMessageIngress.js";
-import { SpeechControlError, type ManagerSpeechDeliveryOutcome } from "./speechControl.js";
+import type { ManagerSpeechDeliveryOutcome } from "../plugins/io.rabiroute.manager.speech/src/manager/speechControl.js";
+import { SpeechControlError } from "../shared/speechErrors.js";
 
 import {
   DesktopSettingsStore,
@@ -533,7 +521,7 @@ import {
 
 
 import { localModelSettingsRequestAllowed } from "./speechModelSettingsAccess.js";
-import { stickySpeechAuthority } from "./speechRequestAuthority.js";
+import { stickySpeechAuthority } from "../shared/speechRequestAuthority.js";
 import {
   parseSpeechProcessResult,
   SPEECH_EXIT_DELIVERED,
@@ -544,7 +532,7 @@ import type {
   SpeechIngressRecord,
 } from "../shared/speechControlContract.js";
 import { standaloneGatewayPayload as buildStandaloneGatewayPayload } from "./statusPayload.js";
-import { createRoleConfigurationOperations } from "./roleConfigurationRoutes.js";
+import { createRoleConfigurationOperations } from "../plugins/io.rabiroute.manager.persona/src/manager/roleConfigurationRoutes.js";
 import { RoleLifecycleError, assertRoleAcceptsWork, checkedRoleDirectory, withRoleLock } from "../roleLifecycle.js";
 import { handleRemotePersonaResolutionApi, resolveRemotePersonaSnapshot, validateRemotePersonaLanguageStyle, type RemotePersonaReadContext } from "./remotePersonaRoutes.js";
 import { assertLocalPersonaOwner, localPersonaMessageDirectories, localPersonaRoleForAgentTask, localPersonaRuntimeForDelivery, routeOwnsLocalPersona } from "./localPersonaOwner.js";
@@ -759,6 +747,7 @@ type NotificationRuleDefinition = {
   enabled?: boolean;
   routeKinds?: string[];
   targetGroupId?: string;
+  targetUserId?: string;
   allowedSpeakerNames?: string[];
   regex?: string;
   schedules?: NotificationScheduleDefinition[];
@@ -926,7 +915,7 @@ async function handleAgentThreadRequest(request: AgentThreadRequest, options: Ag
     ? deviceEndpoint.handlesThreadRequest(request)
     : Boolean(deviceProvider && request.agentAdapter === deviceProvider.type && request.action !== "send" && request.action !== "reconcile_delivery");
   if (deviceProvider && handlesDeviceMetadata) {
-    const result = await deviceProvider.invoke<Awaited<ReturnType<typeof import("./deviceAgentThreads.js").handleDeviceAgentThreadRequest>>>(
+    const result = await deviceProvider.invoke<Awaited<ReturnType<typeof import("../plugins/io.rabiroute.agent.device-agent/src/manager/deviceAgentThreads.js").handleDeviceAgentThreadRequest>>>(
       "threads.request", { request }, { nativeArgs: [request, options], assertCurrent: options.requestAuthority });
     if (result) return result;
   }
@@ -1399,7 +1388,6 @@ const agentRequestRouteReconciliation = new AgentRequestRouteReconciliation({
     error: managerOperationalError(error, rootDir)
   })
 });
-let messageProcessingAutomationService: MessageProcessingAutomationService | undefined;
 let knowledgeCallbackReminderService: KnowledgeCallbackReminderService<MessageProcessingRequirement> | undefined;
 const managerRequestContexts = new WeakMap<http.ServerResponse, {
   requestId: string;
@@ -1650,7 +1638,7 @@ const agentCompletionDelivery = new AgentCompletionDeliveryService({
         });
       };
       try {
-        context.images = await invokePublishedAgentOperation<Awaited<ReturnType<typeof import("./completionImages.js").readCodexTurnImages>>>(
+        context.images = await invokePublishedAgentOperation<Awaited<ReturnType<typeof import("../plugins/io.rabiroute.agent.codex/src/manager/completionImages.js").readCodexTurnImages>>>(
           "codex", "readCompletionImages", { sessionId: request.sessionId, turnId: request.turnId }, { onError: imageError });
       } catch (error) { imageError(error); }
     }
@@ -1693,7 +1681,6 @@ const codexHookContextService = new CodexHookContextService({
   storePath: path.join(rootDir, "data", "codex-hook", "sessions.json"),
   deliverPlanTaskCompletion,
   hookEnabled: codexHookEnabled,
-  isManagedAgentSession,
   memoryConsolidationInputIds: (request, roleId, runId) => memoryConsolidationHookScope(
     request, roleId, runId,
     routeCatalogConfig.gateways.map((definition) => ({
@@ -1703,18 +1690,12 @@ const codexHookContextService = new CodexHookContextService({
     }))
   ),
   recordAgentRequestStop,
-  assertSessionPersonaOwner: (sessionId, _cwd, sourceInstance) => {
-    if (sourceInstance) return;
-    configuredPersonaDefinitionsForSession(sessionId)
-      .forEach(definition => assertLocalPersonaOwner(definition, "Persona Hooks"));
-  },
   chatHistoryRoleIds: request => [...gatewayIdsForManagedSession(request.sessionId, request.cwd, request)]
     .map(id => runtimes.get(id)?.definition)
     .filter((definition): definition is GatewayDefinition => Boolean(definition && routeOwnsLocalPersona(definition)))
     .map(definition => sanitizeRoleId(definition.agentRoleId))
     .filter((roleId): roleId is string => Boolean(roleId)),
   onChatHistoryChanged: roleId => publishManagerEvent("persona_chat_history_changed", { roleId }),
-  planStorageReady: roleIds => planStorageReadyForRoles(planStorageStartupStatus(), roleIds)
 });
 const languageStyleValidator = new LanguageStyleValidator();
 const messageLengthGuard = new AgentSendMessageLengthGuard();
@@ -1743,8 +1724,15 @@ const planTaskCompletionDelivery = createPlanTaskCompletionDelivery<GatewayRunti
   sendToSecretary: sendPlanTaskCompletionToSecretary,
   publishEvent: publishManagerEvent
 });
-type PublishedSpeechService = ReturnType<typeof import("./speechPluginRuntime.js").createSpeechPluginRuntime>;
+type PublishedSpeechService = ReturnType<typeof import("../plugins/io.rabiroute.manager.speech/src/manager/speechPluginRuntime.js").createSpeechPluginRuntime>;
 let resolvePublishedPluginService: (capability: string) => unknown = () => undefined;
+async function requestWeixinLogin(dataDir: string): Promise<void> {
+  const provider = resolvePublishedPluginService("endpoint.weixin.egress@1") as import("@rabiroute/plugin-sdk").MessageEndpointEgressProvider | undefined;
+  if (!provider) throw new Error("Weixin endpoint plugin is unavailable.");
+  const lease = provider.acquire({ dataDir });
+  try { await lease.call("requestWeixinLogin", [dataDir]); }
+  finally { lease.release(); }
+}
 let publishedPluginGeneration: () => PluginGeneration | undefined = () => undefined;
 let installedAgentDescriptors: ReadonlyMap<string, AgentManagerDescriptor> = new Map();
 function invokePublishedAgentOperation<T = unknown>(type: string, operation: string, payload: unknown, invocation?: AgentAdapterInvocation): Promise<T> {
@@ -1792,48 +1780,6 @@ function admitPeerProxyUpgrade(request: http.IncomingMessage, url: URL, lanAgent
     }
   });
   return true;
-}
-async function createManagerPeerRuntime(lanAgentAuthority: LanAgentAuthority, managerPluginRoutes: ManagerPluginRouteRegistry) {
-  const identity = currentPluginActivation();
-  if (!identity) throw new Error("Peer runtime requires its original plugin activation.");
-  return prepareManagerPeerRuntime({
-    peer: {
-      identity: () => ({ deviceId: rabiLinkRelayConfigForMeta().deviceId,
-        generation: managerHostIdentity?.applicationGenerationId ?? managerInstanceId, instanceId: managerInstanceId }),
-      token: () => rabiLinkRelayConfigForMeta().token,
-      enabled: () => rabiLinkRelayConfigForMeta().enabled,
-      peers: () => discoverRabiPeers(peerRelayConfig()), relay: () => peerRelayConfig(),
-      readJson: readJsonBody, json: jsonResponse,
-      onResult: event => publishManagerEvent("peer_rpc_completed", event)
-    },
-    tunnel: {
-      readOnly: managerReadOnly,
-      allowApplicationConnection: () => rabiLinkRelayConfigForMeta().enabled,
-      allowControl: (request, url) => request.socket.localPort === managerPort && (hasAuthenticatedConnectionRequest(request) || webguiLanRequestAllowed(request, url)),
-      dataDir: path.join(rootDir, "data", "rabilink"),
-      deviceId: rabiLinkRelayConfigForMeta().deviceId,
-      generation: managerHostIdentity?.applicationGenerationId ?? managerInstanceId,
-      discover: () => discoverRabiPeers(peerRelayConfig()), relay: () => peerRelayConfig(),
-      services: () => ({ manager: { baseUrl: managerBaseUrl, headers: { "x-rabilink-tunnel-local": managerHostIdentity?.applicationGenerationId ?? managerInstanceId } }, speech: { baseUrl: speechServiceUrl(), headers: { "x-rabilink-tunnel-local": managerHostIdentity?.applicationGenerationId ?? managerInstanceId } }, resources: { baseUrl: managerBaseUrl, pathPrefix: "/api/resource-cache/data", headers: { "x-rabilink-resource-key": resourceCacheKey, "x-rabilink-tunnel-local": managerHostIdentity?.applicationGenerationId ?? managerInstanceId } } }),
-      onStatus: value => publishManagerEvent("peer_tunnel_status", value)
-    },
-    metadata: { identity, server: peerLanServer, operations: createManagerApiOperationsService(managerPluginRoutes),
-      refresh: () => managerPluginRoutes.refreshPublication() },
-    bootstrap: {
-      current: () => {
-        const config = rabiLinkRelayConfigForMeta();
-        return { scope: rabiLinkConnectionScope(config),
-          generation: managerHostIdentity?.applicationGenerationId ?? managerInstanceId, deviceId: config.deviceId };
-      },
-      allowed: (request, url) => request.socket.localPort === managerPort && (hasAuthenticatedConnectionRequest(request) || webguiLanRequestAllowed(request, url)),
-      identity: () => ({ applicationGenerationId: managerHostIdentity?.applicationGenerationId ?? managerInstanceId, managerInstanceId })
-    },
-    publication: {
-      current: () => ({ tunnel: activePeerTunnel, runtime: activePeerRuntime }),
-      set: value => { activePeerTunnel = value.tunnel; activePeerRuntime = value.runtime; }
-    },
-    admitUpgrade: (request, url) => admitPeerProxyUpgrade(request, url, lanAgentAuthority)
-  });
 }
 const peerLanServer = new PeerLanServer({
   peerHandler: (request, url, response) => activePeerRuntime?.handler(request, url, response) ?? false,
@@ -4416,13 +4362,16 @@ function listGatewayDeliveryReplayAttempts(id: string, limit: number, status: st
     throw new Error(`Gateway not found: ${id}`);
   }
   const dataDir = routeDataDirForDefinition(runtime.definition);
+  const snapshot = listDeliveryReplayAttemptSnapshot(dataDir, {
+    status: status === "failed" || status === "delivered" || status === "missed" || status === "routed" || status === "skipped" ? status : undefined,
+    limit
+  });
   return {
     gatewayId: id,
     dataDir: path.relative(rootDir, dataDir).replace(/\\/g, "/"),
-    attempts: listDeliveryReplayAttempts(dataDir, {
-      status: status === "failed" || status === "delivered" || status === "missed" || status === "routed" || status === "skipped" ? status : undefined,
-      limit
-    }).map((attempt) => ({
+    partial: snapshot.partial,
+    diagnostics: snapshot.diagnostics,
+    attempts: snapshot.attempts.map((attempt) => ({
       attemptId: attempt.attemptId,
       time: attempt.time,
       routeKind: attempt.routeKind,
@@ -4565,64 +4514,6 @@ function deliverAutomaticMemoryConsolidation(
   });
 }
 
-function createMemoryConsolidationScheduler(): MemoryConsolidationScheduler {
-  const failureStateRoot = path.join(projectDirectoryLayout(rootDir).runtimeStateRoot, "background-failure-circuits");
-  return new MemoryConsolidationScheduler({
-    listTargets: memoryConsolidationScheduleTargets,
-    evaluate: (target, signal) => evaluateMemoryConsolidationSchedule(target.roleDir, { signal, timeoutMs: getTimeoutMs("backend.manager.controlPlaneRoutes.evaluate.evaluateMemoryConsolidationSchedule.timeoutMs", 30_000) }),
-    requestDueRun: async (target, dueOperationIdentity) => {
-      if (!dueOperationIdentity) return null;
-      const committed = await currentRoleStorageApplication().commands.requestMemoryConsolidation(
-        target.roleId,
-        { triggerSource: "auto" },
-        {
-          idempotencyKey: roleStorageOperationKey(
-            "memory-consolidation-auto",
-            target.roleId,
-            dueOperationIdentity
-          ),
-          timeoutMs: getTimeoutMs("backend.manager.controlPlaneRoutes.requestDueRun.currentRoleStorageApplication__.commands.requestMemoryConsolidation.timeoutMs", 30_000)
-        }
-      );
-      const projection = committed.projection;
-      return projection
-        ? {
-            runId: projection.run.id,
-            delivered: Boolean(projection.run.deliveredAt),
-            revision: projection.revision
-          }
-        : null;
-    },
-    deliver: deliverAutomaticMemoryConsolidation,
-    persistencePath: path.join(failureStateRoot, "memory-consolidation.json"),
-    onPersistenceError: (error) => {
-      managerOperationalLog.record("warn", "background_failure_state_persist_failed", {
-        action: "memory-consolidation",
-        error: managerOperationalError(error, rootDir)
-      });
-    },
-    onError: (target, error, circuit) => {
-      const runtime = runtimes.get(target.gatewayId);
-      const diagnostic = memoryConsolidationFailureDiagnostic(error);
-      if (runtime) {
-        appendLog(runtime, `automatic memory consolidation failed; phase=${circuit.snapshot.phase}; failures=${circuit.snapshot.consecutiveFailures}; retryAt=${new Date(circuit.snapshot.retryAt).toISOString()}; ${diagnostic.runtimeLogSuffix}`);
-      }
-      managerOperationalLog.record("error", "memory_consolidation_auto_failed", {
-        result: `gatewayId=${target.gatewayId}; phase=${circuit.snapshot.phase}; failures=${circuit.snapshot.consecutiveFailures}; signature=${circuit.snapshot.signature}; retryAt=${new Date(circuit.snapshot.retryAt).toISOString()}; ${diagnostic.runtimeLogSuffix}`,
-        error: diagnostic.operationalError
-      });
-    },
-    onIncident: (target, error, circuit) => {
-      const diagnostic = memoryConsolidationFailureDiagnostic(error);
-      managerOperationalLog.record("error", "memory_consolidation_incident_opened", {
-        action: `gatewayId=${target.gatewayId}`,
-        result: `incidentId=${circuit.snapshot.incidentId}; signature=${circuit.snapshot.signature}; failures=${circuit.snapshot.consecutiveFailures}; retryAt=${new Date(circuit.snapshot.retryAt).toISOString()}; ${diagnostic.runtimeLogSuffix}`,
-        error: diagnostic.operationalError
-      });
-    }
-  });
-}
-
 function roleIdForDefinition(definition: GatewayDefinition): string {
   return sanitizeRoleId(definition.agentRoleId) || routeRuntimeParts(definition.id).roleId || "Rabi";
 }
@@ -4707,7 +4598,6 @@ function codexHookSettingsForSession(sessionId: string, cwd?: string, agentType 
     sessionContextEnabled: settings.every((item) => item.sessionContextEnabled),
     reasoningContextEnabled: settings.every((item) => item.reasoningContextEnabled),
     planTaskCompletionEnabled: settings.every((item) => item.planTaskCompletionEnabled),
-    agentCommunicationEnforcementEnabled: settings.every((item) => item.agentCommunicationEnforcementEnabled),
     onlyPrimaryPersonaCanSendMessages: false
   };
 }
@@ -4728,15 +4618,6 @@ function hookWorkspaceMatches(expected: string | undefined, actual: string | und
   return normalizePathForComparison(expected) === normalizePathForComparison(actual);
 }
 
-function isManagedAgentSession(request: CodexHookContextRequest): boolean {
-  const sessionId = String(request.sessionId || "").trim();
-  if (!sessionId) return false;
-  const managed = agentRequests.hasManagedSession(sessionId, request.cwd, party => hookRequestMatchesParty(request, party))
-    || gatewayIdsForManagedSession(sessionId, request.cwd, request).size > 0;
-  if (!managed) return false;
-  return codexHookSettingsForSession(sessionId, request.cwd, request.agentType, request.sourceInstance).agentCommunicationEnforcementEnabled;
-}
-
 function hookRequestMatchesParty(request: CodexHookContextRequest, party: AgentRequestParty): boolean {
   const endpoint = party.endpoint;
   if (endpoint && endpoint.kind !== "local" && endpoint.kind !== "instance") return false;
@@ -4750,107 +4631,11 @@ async function recordAgentRequestStop(request: CodexHookContextRequest): Promise
   if (!turnId) return { status: "ignored", reason: "missing_turn_id" };
   await agentRequests.ready();
   const matches = (party: AgentRequestParty) => hookRequestMatchesParty(request, party);
-  const pendingSessionRequestIds = agentRequests.unansweredTargetRequestIds(request.sessionId, undefined, matches);
-  const requestIds = request.cwd ? agentRequests.unansweredTargetRequestIds(request.sessionId, request.cwd, matches) : pendingSessionRequestIds;
+  const sessionSnapshot = agentRequests.unansweredTargetRequestSnapshot(request.sessionId, undefined, matches);
+  const pendingSessionRequestIds = sessionSnapshot.requestIds;
+  const requestIds = request.cwd ? agentRequests.unansweredTargetRequestSnapshot(request.sessionId, request.cwd, matches).requestIds : pendingSessionRequestIds;
   return { status: requestIds.length ? "pending" : "ignored", reason: requestIds.length
-    ? "unanswered_agent_requests_at_stop" : "no_unanswered_agent_requests", requestIds, pendingSessionRequestIds, snapshotComplete: true, turnId };
-}
-
-
-function scheduleAgentRequestReminder(request: AgentRequestRecord): void {
-  messageProcessingAutomationService?.schedule(request);
-}
-
-async function deliverAgentRequestReminder(request: AgentRequestRecord): Promise<void> {
-  await agentRequests.ready();
-  const current = agentRequests.get(request.id);
-  if (!current || current.status !== "awaiting_response") return;
-  if (current.pendingResponseDeliveryId) {
-    const recovery = await invokePublishedAgentOperation<Awaited<ReturnType<typeof import("../agentRequests/deliveryRecovery.js").recoverAgentResponseDeliveryFromRollout>>>(
-      "codex", "recoverResponseDelivery", { sourceThreadId: current.source.threadId, pendingDeliveryId: current.pendingResponseDeliveryId },
-      { store: agentRequests });
-    await agentRequests.recordPendingResponseCheck(current.id, current.pendingResponseDeliveryId, recovery.status);
-    if (recovery.status === "receipt_recovered" && current.messageProcessingRequirementId) {
-      messageProcessingBoard.recordHandoffReturned(current.messageProcessingRequirementId, current.target.threadId);
-    }
-    managerOperationalLog.record("info", "agent_response_receipt_reconciled", {
-      result: recovery.status, requestId: current.id
-    });
-    publishManagerEvent("agent_requests_changed", recovery);
-    return;
-  }
-  const requestId = request.id;
-  const messageProcessingTarget = currentMessageProcessingTargetByThreadId(request.target.threadId)
-    ?? ((request.target.agentType === "message_processing" || request.target.agentType === "primary_persona")
-      && request.target.threadName
-      && request.target.workspace
-      ? {
-          agentType: request.target.agentType,
-          worker: {
-            threadId: request.target.threadId,
-            threadName: request.target.threadName,
-            workspace: request.target.workspace
-          }
-        } as MessageProcessingDeliveryTarget
-      : undefined);
-  const target = messageProcessingTarget?.worker ?? request.target;
-  const reminderRequest: AgentThreadRequest = {
-    action: "send",
-    agentAdapter: target.agentAdapter ?? (isDshSessionId(target.threadId) ? "dsh" : "codex"),
-    threadId: target.threadId,
-    ...(target.threadName ? { title: target.threadName, createIfMissing: true } : {}),
-    cwd: target.workspace,
-    messageSource: {
-      type: "system",
-      eventType: "agent_request_reminder",
-      eventName: "Agent 回复提醒",
-      eventId: request.id
-    },
-    prompt: agentRequestReminderPrompt(request)
-  };
-  const result = await handleAgentThreadRequest(
-    reminderRequest,
-    agentThreadRequestOptions(reminderRequest, { agentRequests })
-  );
-  if (result.data.status !== "delivered") {
-    throw new Error(String(result.data.warning || result.data.message || "Agent request reminder was not accepted."));
-  }
-  if (messageProcessingTarget) {
-    await persistResolvedMessageProcessingTarget(
-      messageProcessingTarget,
-      result.data,
-      runtimeForMessageProcessingTarget(messageProcessingTarget)
-    );
-  } else {
-    await persistResolvedAgentRequestTarget(target, result.data);
-  }
-  const updated = await agentRequests.recordReminderResult(requestId, true);
-  publishManagerEvent("agent_requests_changed", {
-    requestId,
-    status: updated.status,
-    reminderCount: updated.reminderCount,
-    lastReminderAt: updated.lastReminderAt
-  });
-}
-
-async function recordAgentRequestReminderFailure(request: AgentRequestRecord, error: unknown): Promise<void> {
-  const updated = await agentRequests.recordReminderResult(request.id, false, error);
-  managerOperationalLog.record("warn", "agent_request_reminder_failed", {
-    result: "failed",
-    requestId: request.id,
-    error: managerOperationalError(error, rootDir)
-  });
-  publishManagerEvent("agent_requests_changed", {
-    requestId: request.id,
-    status: updated.status,
-    reminderCount: updated.reminderCount,
-    lastReminderError: updated.lastReminderError,
-    nextReminderAt: updated.nextReminderAt
-  });
-}
-
-function refreshAgentRequestReminderTimers(): void {
-  messageProcessingAutomationService?.refresh();
+    ? "unanswered_agent_requests_at_stop" : "no_unanswered_agent_requests", requestIds, pendingSessionRequestIds, snapshotComplete: sessionSnapshot.complete, turnId };
 }
 
 function agentThreadAllowedWorkspaces(): string[] {
@@ -4931,6 +4716,7 @@ async function maintainAgentSendReceipt(
       });
     },
     verifyCurrentPresence: original => verifyQqFileCurrentPresence(original, {
+      endpointEgress: capability => resolvePublishedPluginService(capability) as import("@rabiroute/plugin-sdk").MessageEndpointEgressProvider | undefined,
       readCurrentBinding: expected => {
         options.requestAuthority?.();
         const current = agentReplyCurrentQqBinding({ routeProfileId: expected.routeId,
@@ -4940,7 +4726,12 @@ async function maintainAgentSendReceipt(
       readAccountIdentity: async (current, signal) => {
         signal.throwIfAborted();
         options.requestAuthority?.();
-        const login = await getLoginInfo(current.endpoint, { timeoutMs: getTimeoutMs("backend.manager.controlPlaneRoutes.readAccountIdentity.getLoginInfo.timeoutMs", 2_000) });
+        const provider = resolvePublishedPluginService("endpoint.napcat.egress@1") as import("@rabiroute/plugin-sdk").MessageEndpointEgressProvider | undefined;
+        if (!provider) throw new Error("NapCat endpoint plugin is unavailable.");
+        const lease = provider.acquire({ ...current, endpoint: { ...current.endpoint } });
+        let login: { userId?: string | number };
+        try { login = await lease.call("getLoginInfo", [current.endpoint, { timeoutMs: getTimeoutMs("backend.manager.controlPlaneRoutes.readAccountIdentity.getLoginInfo.timeoutMs", 2_000) }]); }
+        finally { lease.release(); }
         signal.throwIfAborted();
         options.requestAuthority?.();
         return login.userId === undefined ? undefined : { selfId: String(login.userId) };
@@ -5330,23 +5121,6 @@ async function replaceOpenAgentRequestParties(
     threadId: worker.threadId,
     reassignedRequestIds: result.reassigned.map((request) => request.id),
     cancelledRequestIds: result.cancelled.map((request) => request.id)
-  });
-}
-
-async function persistResolvedAgentRequestTarget(
-  target: { threadId: string; threadName?: string; workspace?: string },
-  result: Record<string, unknown>
-): Promise<void> {
-  const previousThreadId = String(result.previousThreadId || "").trim();
-  const thread = result.thread && typeof result.thread === "object"
-    ? result.thread as { id?: unknown; title?: unknown; cwd?: unknown }
-    : undefined;
-  const threadId = String(thread?.id || result.threadId || "").trim();
-  if (!previousThreadId || previousThreadId !== target.threadId || !threadId || threadId === previousThreadId) return;
-  await replaceOpenAgentRequestParties(previousThreadId, target.workspace, {
-    threadId,
-    threadName: String(thread?.title || target.threadName || threadId),
-    workspace: String(thread?.cwd || target.workspace || rootDir)
   });
 }
 
@@ -5832,7 +5606,6 @@ async function sendPlanTaskCompletionToSecretary(
     target,
     `completion:${delivery.sourceSessionId}:${delivery.sourceTurnId}`
   );
-  if (delivery.sourceInstance && !delivery.trustedRemoteSource) throw new Error("Original remote completion source authority is unavailable.");
   const result = await (delivery.trustedRemoteSource || resolvePrimaryAgentTarget(runtime.definition)?.binding ? handleAgentThreadRequest : handleLocalAgentThreadRequest)({
     action: "send",
     instanceBinding: resolvePrimaryAgentTarget(runtime.definition)?.binding,
@@ -7564,7 +7337,7 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
   const assertUploadAuthorized = (source: TrustedLanAgentSource): void => {
     if (!lanAgentAuthority.getNodeAuthorization(source.nodeId)) throw new Error("Remote computer credential was revoked.");
   };
-  const lanAgentReleaseStore = new LanAgentReleaseStore({ rootDir, agentRoot: path.join(packageRoot, "apps", "rabi-agent") });
+  const lanAgentReleaseStore = new LanAgentReleaseStore({ rootDir, agentRoot: path.join(packageRoot, "apps", "rabi-agent"), pluginSourceRoot: packageRoot });
   const lanAgentRegistry = new LanAgentRegistry({
     statePath: path.join(rootDir, "data", ".runtime", "lan-agent-tasks.json"),
     createLocalComputer: (_instanceId, emit) => new ManagerLocalComputer({
@@ -7604,7 +7377,7 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
     receiptDirectory: path.join(rootDir, "data", ".runtime", "endpoint-transport-receipts"),
     readLocal: readAgentEndpointSummary, localOptions: request => agentThreadRequestOptions(request) });
   const endpointRecovery = agentEndpointDelivery.recovery;
-  // Keep the original ledger and explicit same-ID reconciliation. Background events do not initiate delivery work.
+  // Preserve the original ledger; only explicit same-ID reconciliation initiates recovery.
   managerRuntimeOwner.register("lan_agent_registry", async () => {
     const recoveryStopped = endpointRecovery.stop();
     rabiLinkBusinessOwners = undefined;
@@ -7615,20 +7388,6 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
   });
   managerRuntimeOwner.register("local_computer", () => lanAgentRegistry.stopLocalComputer());
   const webPluginModules = new WebPluginModuleRegistry();
-  const wearableCompanionRuntimeIdentity = createWearableCompanionRuntimeIdentity({
-    hostOwned: Boolean(managerHostIdentity),
-    managerBaseUrl,
-    applicationGenerationId: managerHostIdentity?.applicationGenerationId ?? managerInstanceId,
-    managerInstanceId,
-    runtimeRoot: rootDir,
-    explicitPwshPath: process.env.RABIROUTE_PWSH_PATH,
-    environment: process.env
-  });
-  const wearableCompanionWorkerService = new WearableCompanionWorkerService(
-    wearableCompanionRuntimeIdentity,
-    managerPluginProcessLeases,
-    { startupReady: wearableCompanionStartupReady }
-  );
   const messageEndpointScanProviders = new MessageAdapterScanProviderRegistry();
   const managerCorePublicOperations = () => createCorePublicOperations({
         identity: () => ({ applicationGenerationId: managerHostIdentity?.applicationGenerationId ?? managerInstanceId, managerInstanceId }),
@@ -7662,7 +7421,8 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
     releaseAgentMetadataProjection = undefined;
   });
   const nativePluginHostPorts = await createMessageEndpointHostPorts();
-  const managerPluginHostServices: readonly HostService[] = withRouteControlAsyncRegistration(Object.freeze([
+  const managerFeatureHostPorts = createAgentAdapterHostPorts();
+  const managerPluginHostServices: readonly HostService[] = Object.freeze([
     Object.freeze({ capability: "host.agent-adapters@1", value: createAgentAdapterHostPorts({
       manager: Object.freeze({
         rootDir,
@@ -7670,7 +7430,6 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
         readOnly: () => managerReadOnly,
         getRuntimes: () => runtimes.values(),
         publishManagerEvent,
-        deliveryReceiptChanged: () => {}, // Explicit same-ID reconciliation owns receipt recovery.
         deviceContext: () => deviceAgentHostContext(lanAgentRegistry.localInstanceId),
         managerInstanceId: () => lanAgentRegistry.localInstanceId,
         runScan: (task: AgentAdapterCatalogWorkerTask, invocation?: AgentAdapterInvocation) =>
@@ -7690,6 +7449,11 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
         readRuntimes: () => [...runtimes.values()].map(runtime => ({ definition: structuredClone(runtime.definition), running: Boolean(runtime.process), status: structuredClone(readGatewayStatus(runtime.definition)) })),
         appendRouteLog: (id: string, line: string) => { const runtime = runtimes.get(id); if (runtime) appendLog(runtime, line); },
         readGatewayStatus, normalizeDefinition,
+        readRoute: (routeId: string) => runtimes.get(routeId)?.definition,
+        routeRunning: (routeId: string) => Boolean(runtimes.get(routeId)?.process && runtimes.get(routeId)?.readiness === "ready"),
+        routeStartedAt: (routeId: string) => runtimes.get(routeId)?.startedAt ?? undefined,
+        requestIsLoopback: (request: http.IncomingMessage) => isLoopbackRemoteAddress(request.socket.remoteAddress),
+        jsonResponse,
         readRoutes: () => structuredClone(readConfig().gateways),
         writeRoutes: (routes: GatewayDefinition[], revision: string, operationId: string) => writeConfig({gateways: routes}, revision, operationId),
         saveRoute: writeAdapterConfigFile,
@@ -7753,21 +7517,26 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
       }))
     }) }),
     Object.freeze({ capability: "host.manager.operations@1", value: createManagerApiOperationsService(managerPluginRoutes) }),
-    Object.freeze({ capability: "host.manager.video@1", value: Object.freeze({
-      createOperations: createVideoOperations,
-      createRuntime: (identity: Parameters<typeof createVideoRuntime>[1]) => createVideoRuntime(rootDir, identity, managerPluginProcessLeases, managerReadOnly, async (deviceId, pathname, init) => {
-        if (!activePeerTunnel) throw new Error("Peer tunnel is not ready.");
-        await activePeerTunnel.ensureApplicationConnection(deviceId);
-        return activePeerTunnel.fetch(deviceId, "manager", pathname, init);
-      })
-    }) }),
+    Object.freeze({ capability: "host.manager.video@2", value: Object.freeze({ ...managerFeatureHostPorts, get rootDir() { return rootDir; },
+get managerPluginProcessLeases() { return managerPluginProcessLeases; },
+get managerReadOnly() { return managerReadOnly; },
+get activePeerTunnel() { return activePeerTunnel; },
+set activePeerTunnel(value) { activePeerTunnel = value; } }) }),
     Object.freeze({
       capability: "host.manager.wearable-companion-runtime@1",
-      value: wearableCompanionRuntimeIdentity
+      value: Object.freeze({ ...managerFeatureHostPorts, input: Object.freeze({
+    hostOwned: Boolean(managerHostIdentity),
+    managerBaseUrl,
+    applicationGenerationId: managerHostIdentity?.applicationGenerationId ?? managerInstanceId,
+    managerInstanceId,
+    runtimeRoot: rootDir,
+    explicitPwshPath: process.env.RABIROUTE_PWSH_PATH,
+    environment: process.env
+  }) })
     }),
     Object.freeze({
-      capability: "host.manager.wearable-companion@1",
-      value: wearableCompanionWorkerService
+      capability: "host.manager.wearable-companion@2",
+      value: Object.freeze({ leases: managerPluginProcessLeases, startupReady: wearableCompanionStartupReady })
     }),
     Object.freeze({ capability: "host.manager.http@1", value: Object.freeze({
       ManagerPluginRequestTracker,
@@ -7779,599 +7548,386 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
       }
     }) }),
     createSourcePatchHostService(() => managerSourcePatches),
-    Object.freeze({ capability: "host.manager.core@1", value: Object.freeze({
-      ManagerPluginRequestTracker,
-      createLanAgentManagementOperations: (context: LanAgentRoutesContext) => createLanAgentManagementOperations(context),
-      createLanAgentConnectionOperation: () => createLanAgentConnectionOperation(lanAgentRegistry, {
-        getToken: () => rabiGlobalConfig.read().webguiLan.accessToken, enabled: () => rabiGlobalConfig.read().webguiLan.enabled
-      }),
-      createLanAgentTerminalOperations: (context: InteractiveContext) => createLanAgentTerminalOperations(context),
-      createLanAgentComputerOperations: (context: InteractiveContext) => createLanAgentComputerOperations(context),
-      createLanAgentReadOperations: (context: LanAgentReadContext) => createLanAgentReadOperations(context),
-      lanAgentAuthority,
-      agentResourceCatalog: new AgentResourceCatalog({ rootDir: packageRoot }),
-      lanAgentManagerIdentity: () => ({
-        guid: rabiGlobalConfig.read().rabiGuid,
-        applicationGenerationId: managerHostIdentity?.applicationGenerationId ?? managerInstanceId,
-        managerInstanceId,
-        health: managerHealthPayload().health
-      }),
-      createWebguiAccessOperations: () => createWebguiAccessOperations({
-        readPayload: publicWebguiLanAccessPayload,
-        readConfig: () => rabiGlobalConfig.read().webguiLan,
-        saveConfig: webguiLan => { rabiGlobalConfig.patch({ webguiLan }); },
-        generateToken: generateWebguiAccessToken,
-        canManage: request => hasAuthenticatedConnectionRequest(request)
-          || isLocalMachineRemoteAddress(request.socket.remoteAddress, localIpv4AddressEntries().map(item => item.address))
-      }),
-      createResourceCacheOperations: () => createResourceCacheOperations({ cache: resourceCache, cacheOptions: resourceCacheOptions,
-        archive: recordingArchiveRuntime, admin: recordingArchiveAdminOptions }),
-      createWebguiStaticOperations: () => createWebguiStaticOperations(new NativeWebguiStaticOwner({
-        packageRoot, webuiDistPath,
-        patches: {
-          candidates: managerWebPatches.candidates,
-          status: () => managerWebPatches.status(),
-          staticManifest: revision => managerWebPatches.staticManifest(revision)
-        },
-        isControlPath: isManagerControlRequestPath
-      })),
-      createCorePublicOperations: () => splitManagerBootstrapPublicOperations(managerCorePublicOperations()).business,
-      createPluginCatalogOperations: () => createPluginCatalogOperations({
-        runtime: managerPluginKernel!,
-        root: () => packageRoot,
-        renderCatalog: async (input, host, invocation) => {
-          invocation?.assertCurrent();
-          const value = await managerSourcePatches.invoke("manager.plugin-catalog", "renderPluginCatalog", [input, host]);
-          invocation?.assertCurrent(); return value;
-        },
-        reconciliation: {
-          diagnostics: () => managerPluginDiagnostics,
-          readiness: generation => managerPluginGenerationStatus?.id === generation.id
-            ? managerPluginGenerationStatus.readiness : generation.readiness,
-          reconcile: async invocation => {
-            await reconcileManagerPlugins("manual API request", { invocation });
-            invocation.assertCurrent(); return managerPluginKernel!.current();
-          }
-        },
-        webModules: {
-          list: async (webRelease, invocation) => {
-            invocation?.assertCurrent(); const value = await managerWebPatches.modules(webPluginModules.list(), webRelease);
-            invocation?.assertCurrent(); return value;
-          },
-          read: async (id, rev, relativePath, invocation) => {
-            invocation?.assertCurrent();
-            const value = await managerWebPatches.module(webPluginModules.list(), id, rev, relativePath)
-              ?? await webPluginModules.read(id, rev, relativePath);
-            invocation?.assertCurrent(); return value;
-          }
-        }
-      }, managerReadOnly),
-      createManagerEventOperationDefinition,
-      jsonResponse,
-      lanAgentRegistry,
-      lanAgentReleaseStore,
-      manageLocalAgent: async (agentId: string, operation: string, body: Record<string, unknown>, assertAuthorized?: () => void) => {
-        assertAuthorized?.();
-        const definition = routeCatalogConfig.gateways.find(definition => configuredAgentProviderTypes(definition).some(provider => `${definition.id}:${provider}` === agentId));
-        if (!definition) throw new Error("Local Agent was not found.");
-        const provider = agentId.slice(definition.id.length + 1) as AgentAdapterType;
-        if (operation === "configure") {
-          const updated = await invokePublishedAgentOperation<GatewayDefinition>(provider, "binding.configure", {
-            definition, body
-          }, { assertCurrent: assertAuthorized });
-          assertAuthorized?.();
-          await writeGatewayConfig(definition.id, updated, String(body.configRevision || ""), randomUUID());
-          assertAuthorized?.();
-          syncRunningGateways();
-          return { saved: true };
-        }
-        assertAuthorized?.();
-        const workspace = configuredLocalAgentSessionFields(definition, provider).workspace || rootDir;
-        const result = await manageInstanceAgent(operation, { ...body, provider, agentAdapter: provider }, {
-          rootDir, defaultWorkspace: workspace, allowedWorkspaces: [workspace],
-          getProviders: () => resolvePublishedAgentManagerProviders(managerPluginKernel?.current()),
-          invokeAgentOperation: invokePublishedAgentOperation,
-          dsh: definition.dshBaseUrl ? { baseUrl: definition.dshBaseUrl } : undefined
-        });
-        assertAuthorized?.();
-        return result;
-      },
-      localInstanceAgents: () => routeCatalogConfig.gateways.flatMap(definition => configuredAgentProviderTypes(definition).map(provider => {
-        const fields = configuredLocalAgentSessionFields(definition, provider);
-        return {
-          agentId: `${definition.id}:${provider}`,
-          name: fields.sessionName || definition.routeName || definition.id,
-          provider: provider === "codex" ? "codex-desktop" : provider,
-          enabled: (definition.agentAdapters ?? ["codex"]).includes(provider),
-          routeId: definition.id,
-          configRevision: routeCatalogVersion().routeConfigHash,
-          workspace: fields.workspace,
-          sessionId: fields.sessionId,
-          model: provider === "dsh" ? definition.dshModel : provider === "codex" ? definition.agentModel : undefined,
-          reasoningEffort: provider === "dsh" ? definition.dshReasoningEffort : provider === "codex" ? definition.agentReasoningEffort : undefined,
-          dshBaseUrl: provider === "dsh" ? definition.dshBaseUrl : undefined
-        };
-      })),
-      managerPluginRoutes,
-      rabiGlobalConfig,
-      readJsonBody,
-      registerManagerPluginHandlerRoutes,
-      webguiTokenMatches,
-    }) }),
-    Object.freeze({ capability: "host.manager.persona@1", value: Object.freeze({
-      ManagerPluginRequestTracker,
-      roleConfigurationOperations: createRoleConfigurationOperations({
-        rolesRoot: () => rolesRoot,
-        identity: () => ({ applicationGenerationId: managerHostIdentity?.applicationGenerationId ?? managerInstanceId, managerInstanceId }),
-        routes: () => readConfig().gateways,
-        isReadOnly: () => managerReadOnly,
-        presentation: roleId => routeCatalogPersonas().find(role => role.roleId === roleId && path.resolve(role.rolesRoot) === path.resolve(rolesRoot)),
-        assertCatalogReady: () => {
-          if (requireRouteCatalogLifecycle().snapshot().state !== "ready") {
-            throw new RoleLifecycleError("ROLE_REFERENCES_UNAVAILABLE", "路由目录尚未完整加载，请稍后重试。", 503);
-          }
-        },
-        changed: async (roleId, assertCurrent) => {
-          assertCurrent();
-          await ensureDataDirs();
-          assertCurrent();
-          publishManagerEvent("role_catalog_changed", { roleId });
-          assertCurrent();
-        }
-      }),
-      personaResourceOperations: createPersonaResourceOperations({
-        get rolesRoot() { return rolesRoot; },
-        roleDirectory: roleDirForApi,
-        identity: () => ({ applicationGenerationId: managerHostIdentity?.applicationGenerationId ?? managerInstanceId, managerInstanceId }),
-        validate: input => languageStyleValidator.validate(input),
-        onAvatarChanged: change => publishManagerEvent("persona_avatar_changed", change)
-      }),
-      personaPlanOperations: createPersonaPlanOperations({
-        roleDir: roleDirForApi,
-        service: createPlanAgentStatusService({
-          readInstanceThread: async request => {
-            const body = { action: "read" as const, ...request };
-            const result = await handleAgentThreadRequest(body, agentThreadRequestOptions(body));
-            if (result.statusCode < 200 || result.statusCode >= 300 || !result.data.thread) {
-              throw new Error(String(result.data.message || "Original remote plan task could not be read."));
-            }
-            return result.data.thread;
-          },
-          openInstanceThread: async request => {
-            const body = { action: "open" as const, ...request };
-            const result = await handleAgentThreadRequest(body, agentThreadRequestOptions(body));
-            if (result.statusCode < 200 || result.statusCode >= 300) {
-              throw new Error(String(result.data.message || "Original remote plan task could not be opened."));
-            }
-          }
-        }),
-        identity: () => ({ applicationGenerationId: managerHostIdentity?.applicationGenerationId ?? managerInstanceId, managerInstanceId }),
-        send: body => handleAgentThreadRequest(body, agentThreadRequestOptions(body))
-      }),
-      personaHistoryOperations: createPersonaHistoryOperations({
-        roleDir: roleDirForApi,
-        configuredHistoryAdapters: roleId => [...new Set(routeCatalogConfig.gateways
-          .filter(route => route.agentRoleId === roleId && !route.agentRoleDeviceId)
-          .flatMap(route => (route.messageAdapters?.length?route.messageAdapters:[route.messageAdapterType||'napcat']).filter(type=>!['disabled','rolePanel','remoteAgent','wearable'].includes(type))))],
-        historyQqRoutes: roleId => routeCatalogConfig.gateways
-          .filter(route => route.agentRoleId === roleId && !route.agentRoleDeviceId && sharedGatewayAdapterTypes(route).includes('napcat'))
-          .map(route => ({routeId:route.id,name:route.name || route.id,instanceId:sharedNormalizeNapCatInstances(route)[0]?.id})),
-        readDeliveryParties: ids => readChatDeliveryParties(agentRequests, ids),
-        nodeName: nodeId => {
-          const node = lanAgentRegistry.listInstances().find(instance => instance.instanceId === nodeId);
-          return node?.name || node?.hostname;
-        },
-        readRemoteTask: async (owner, sessionId) => {
-          const instance = lanAgentRegistry.listInstances().find(item => item.instanceId === owner.nodeId);
-          if (!instance?.connected || instance.enabled === false) return undefined;
-          const result = await lanAgentRegistry.manageAgent(instance.instanceId, "threads", {
-            action: "read", agentId: owner.agentId, agentAdapter: owner.provider, threadId: sessionId
-          }, 1500) as { statusCode?: number; data?: { thread?: { id?: string; title?: string } } };
-          const thread = result.data?.thread;
-          return result.statusCode === 200 && thread?.id === sessionId && typeof thread.title === "string"
-            ? { id: thread.id, title: thread.title } : undefined;
-        },
-        identity: () => ({ applicationGenerationId: managerHostIdentity?.applicationGenerationId ?? managerInstanceId, managerInstanceId }),
-        queryHistory: queryMessageHistory
-      }),
-      PersonaStorageOwner,
-      createPersonaStorageOperations,
-      personaStorageContext: Object.freeze(createPersonaStorageOperationsContext()),
-      personaRecordingOperations: createPersonaRecordingOperations({
-        get runtime() { return allDayRecording; },
-        roleDirectory: roleDirForApi,
-        identity: () => ({ applicationGenerationId: managerHostIdentity?.applicationGenerationId ?? managerInstanceId, managerInstanceId }),
-        local: request => isLocalMachineRemoteAddress(request.socket.remoteAddress, []),
-        readOnly: () => managerReadOnly
-      }),
-      personaCompanionOperations: createPersonaCompanionOperations(companionActivityContext),
-      personaHealthOperations: createPersonaHealthOperations({
-        roleDirectory: roleDirForApi,
-        identity: () => ({ applicationGenerationId: managerHostIdentity?.applicationGenerationId ?? managerInstanceId, managerInstanceId }),
-        get lifecycleFence() { return managerHostIdentity ? { applicationGenerationId: managerHostIdentity.applicationGenerationId, managerInstanceId } : null; },
-        get managerPort() { return managerPort; },
-        deliverAlert: deliverWearableAlert
-      }),
-      personaIdentityOperations: createPersonaIdentityOperations({
-        roleDirectory: roleDirForApi,
-        identity: () => ({ applicationGenerationId: managerHostIdentity?.applicationGenerationId ?? managerInstanceId, managerInstanceId }),
-        onEvent: (name, payload) => publishManagerEvent(name, payload)
-      }),
-      personaKnowledgeOperations: createPersonaKnowledgeOperations({
-        get service() { return knowledgeSearchService; },
-        roleDirectory: roleDirForApi,
-        identity: () => ({ applicationGenerationId: managerHostIdentity?.applicationGenerationId ?? managerInstanceId, managerInstanceId }),
-        requestCatalogRefresh: requestRoleKnowledgeCatalogRefresh
-      }),
-      personaSkillOperations: createPersonaSkillOperations({
-        roleDirectory: roleDirForApi,
-        identity: () => ({ applicationGenerationId: managerHostIdentity?.applicationGenerationId ?? managerInstanceId, managerInstanceId }),
-        querySkills: (directory, skillId, options) => managerKnowledgePageWorkerPool.run({
-          type: "role_skill_catalog", roleDir: directory, ...(skillId ? { skillId } : {})
-        }, options),
-        archive: (directory, skillId, outputPath, options) => managerKnowledgePageWorkerPool.run<RoleSkillArchiveReply>({
-          type: "role_skill_archive", roleDir: directory, skillId, outputPath
-        }, options),
-        reportCleanupError: () => console.error("[role-skill-download] Private archive cleanup failed.")
-      }),
-      personaMessagingOperations: createPersonaMessagingOperations(() => {
-        let appendTimeline: typeof appendRolePanelTimeline;
-        try { const application = currentRoleStorageApplication(); appendTimeline = (roleId, message) => appendRolePanelTimeline(roleId, message, application); }
-        catch (error) { appendTimeline = async () => { throw error; }; }
-        return { rootDir, rolesRoot, personaPresentations: routeCatalogPersonas, runtimes: () => [...runtimes.values()],
-          authorizeSource: (routeId, personaId, capability) => currentPersonaMessageAuthority().verify(routeId, personaId, capability), deliver: triggerGatewayRolePanelMessage, appendTimeline };
-      }),
-      personaDirectoryOperation: createPersonaDirectoryOperation(() => ({ rolesRoot, runtimes: () => [...runtimes.values()], personaPresentations: routeCatalogPersonas })),
-      languageStyleOperations: createLanguageStyleOperations(languageStyleValidator),
-      rolePanelOperations: createRolePanelOperations({ runtimes: () => runtimes,
-        roleId: runtime => roleIdForDefinition(runtime.definition),
-        assertLocalOwner: runtime => assertLocalPersonaOwner(runtime.definition, "Role panel messages"),
-        deliver: triggerGatewayRolePanelMessage,
-        timelineAppender: () => { const application = currentRoleStorageApplication(); return (roleId, message) => appendRolePanelTimeline(roleId, message, application); },
-        readMessages: (roleId, limit, signal) => managerReadWorkerPool.queryRolePanelTimeline(rolesRoot, roleId, limit, { signal }) }),
-      languageStyleValidator,
-      managerPluginRoutes,
-      registerManagerPluginHandlerRoutes,
-    }) }),
-    Object.freeze({ capability: "host.manager.performance@1", value: Object.freeze({
-      createPerformanceOperations,
-      PerformanceApi,
-      managerPluginRoutes,
-      managerReadOnly,
-      performanceMonitoring,
-      rabiGlobalConfig,
-      runtimes,
-      get recordManagerHttpRequest() { return recordManagerHttpRequest; },
-      set recordManagerHttpRequest(value) { recordManagerHttpRequest = value; },
-    }) }),
-    Object.freeze({ capability: "host.manager.bilibili-history@1", value: Object.freeze({
-      createBilibiliHistoryOperations,
-      BilibiliHistoryBridge,
-      configRepository,
-      managerPluginRoutes,
-      managerReadOnly,
-      path,
-      rootDir,
-    }) }),
-    Object.freeze({ capability: "host.manager.route-control@1", value: Object.freeze({
-      managerPluginRoutes,
-      createRabiControlOperations: () => createRabiControlOperations({
-        rootDir, get routeRoot() { return routeRoot; }, get managerPort() { return managerPort; }, get managerHost() { return managerHost; },
-        applicationGenerationId: managerHostIdentity?.applicationGenerationId ?? managerInstanceId,
-        managerInstanceId, version: rabiRoutePackageVersion, globalConfig: rabiGlobalConfig,
-        runtimes: () => runtimes.values(), runtimeStatus, readConfig, writeConfig, loadRuntimes,
-        routeCatalogVersion, routeCatalogPersonas, syncRunningGateways,
-        syncRabiLinkRelay: () => syncActiveRabiLinkRelay(),
-        routeDataDir: definition => dataDirFor(definition),
-        scanAgentAdapters: () => {
-          if (!agentAdapterCatalogService) throw Object.assign(new Error("Agent adapter catalog plugin is inactive."), { statusCode: 503 });
-          return agentAdapterCatalogService.scanAll();
-        }
-      }, {
-        rootDir, get routeRoot() { return routeRoot; }, get rolesRoot() { return rolesRoot; },
-        readManagerConfig, writeManagerConfig, ensureDataDirs
-      }),
-    }) }),
-    Object.freeze({ capability: "host.manager.agent-state-control@1", value: Object.freeze({
-      managerPluginRoutes,
-      createAgentStateReportOperations: () => createAgentStateReportOperations(createAgentStateReportOwner({
-        runtime: gatewayId => runtimes.get(gatewayId), states: agentStateByGateway, writeAdapterConfigFile, publishManagerEvent,
-      })),
-    }) }),
-    Object.freeze({ capability: "host.manager.gateway-runtime@1", value: Object.freeze({
-      managerPluginRoutes,
-      managerReadOnly,
-      manualTriggerProcesses,
-      stopAllGatewaysAndWait,
-      syncRunningGateways,
-      acquireGatewayRuntimePluginLease: () => gatewayRuntimePluginLease.acquire(),
-      createGatewayListenerProjection: () => listenerPublicationHost.project(),
-      get managerServicesReady() { return managerServicesReady; },
-      set managerServicesReady(value) { managerServicesReady = value; },
-      createGatewayControlOperations: () => createGatewayControlOperations({
-        gatewayPayload: options => standaloneGatewayPayload(options?.includeDiagnostics ?? true, options?.includeConfigDefinitions ?? (options?.includeDiagnostics ?? true)),
-        writeConfig, writeGatewayConfig, resolveRouteMutation, loadRuntimes, syncRunningGateways, routeMutationActivation,
-        runtimeStatuses: () => [...runtimes.values()].map(runtimeStatus), networkOptionsPayload,
-        startGateway, stopGateway, restartGateway, removeGatewayConfig, routeCatalogVersion,
-        weixinLoginTarget: id => {
-          const runtime = runtimes.get(id);
-          return runtime ? { enabled: sharedGatewayAdapterTypes(runtime.definition).includes("weixin"), dataDir: dataDirFor(runtime.definition) } : undefined;
-        },
-        requestWeixinLogin,
-        triggerManualRule: (id, request) => triggerGatewayManualRule(id, request, {}, "manager:gateway-runtime"),
-        testAgentDelivery: testGatewayAgentDelivery,
-        listDeliveryReplayAttempts: listGatewayDeliveryReplayAttempts,
-        replayDelivery: replayGatewayDelivery
-      }, managerReadOnly),
-    }) }),
-    Object.freeze({ capability: "host.manager.rabilink-relay@1", value: Object.freeze({
-      connection: Object.freeze({
-        snapshot: () => { const relay = rabiLinkRelayConfigForMeta(); return { deviceId: relay.deviceId, deviceGuid: rabiGlobalConfig.read().rabiGuid, scope: rabiLinkConnectionScope(relay), generation: managerHostIdentity?.applicationGenerationId ?? managerInstanceId }; },
-        authorize: (request: http.IncomingMessage) => rabiLinkAgentDevicePrincipal(request, rabiLinkRelayConfigForMeta(), managerHostIdentity?.applicationGenerationId ?? managerInstanceId),
-        applicationOwnerTarget: () => rabiLinkDeviceConnections.applicationTarget(),
-        peers: () => discoverRabiPeers(peerRelayConfig())
-      }),
-      createPeerRuntime: () => createManagerPeerRuntime(lanAgentAuthority, managerPluginRoutes),
-      createDirectVideoReceiver: () => new RabiDirectVideo(path.join(rootDir, "data", "rabilink", "video")),
-      createDirectVideoOperations: (receiver: RabiDirectVideo) => createDirectVideoOperations(receiver, managerReadOnly),
-      createRabiLinkAgentDeviceOperations: () => createRabiLinkAgentDeviceOperations(() => currentRabiLinkBusinessOwners().agents),
-      managerPluginRoutes,
-      peerLanServer,
-      rabiLinkRelayRuntime,
-      syncRabiLinkRelayRuntime,
-      get managerListenerReady() { return managerListenerReady; },
-      set managerListenerReady(value) { managerListenerReady = value; },
-      get syncActiveRabiLinkRelay() { return syncActiveRabiLinkRelay; },
-      set syncActiveRabiLinkRelay(value) { syncActiveRabiLinkRelay = value; },
-    }) }),
-    Object.freeze({ capability: "host.manager.memory-consolidation@1", value: Object.freeze({
-      createMemoryConsolidationScheduler,
-      managerReadOnly,
-      manualTriggerProcesses,
-      get managerListenerReady() { return managerListenerReady; },
-      set managerListenerReady(value) { managerListenerReady = value; },
-      get memoryConsolidationScheduler() { return memoryConsolidationScheduler; },
-      set memoryConsolidationScheduler(value) { memoryConsolidationScheduler = value; },
-    }) }),
-    Object.freeze({ capability: "host.manager.message-processing-control@1", value: Object.freeze({
-      managerPluginRoutes,
-      createMessageProcessingOperations: () => createMessageProcessingOperations({
-        boardPayload: messageProcessingBoardPayload,
-        board: messageProcessingBoard,
-        sendContextReview: messageProcessingSendContextReview,
-        operationalLog: managerOperationalLog,
-        recallKnowledge: recalledKnowledgeForMessage,
-        verifyCriticalFactRecord: ({ roleId, requirement, disposition }) => verifyCriticalProjectFactRecord({
-          workspaceRoot: rootDir,
-          roleDir: roleId ? roleDirForApi(roleId) : undefined,
-          requirement,
-          disposition
-        }),
-        setPlanBaseline: setMessageProcessingPlanBaseline,
-        scheduleKnowledgeCallbackReminder,
-        publishEvent: publishManagerEvent
-      }),
-    }) }),
-    Object.freeze({ capability: "host.manager.message-processing-automation@1", value: Object.freeze({
-      KnowledgeCallbackReminderService,
-      MessageProcessingAutomationService,
-      agentRequests,
-      deliverAgentRequestReminder,
-      deliverKnowledgeCallbackReminder,
-      handleMessageProcessingPlanUpdate,
-      managerOperationalError,
-      managerOperationalLog,
-      managerReadOnly,
-      messageProcessingBoard,
-      recordAgentRequestReminderFailure,
-      rootDir,
-      subscribePlanUpdates,
-      get knowledgeCallbackReminderService() { return knowledgeCallbackReminderService; },
-      set knowledgeCallbackReminderService(value) { knowledgeCallbackReminderService = value; },
-      get messageProcessingAutomationService() { return messageProcessingAutomationService; },
-      set messageProcessingAutomationService(value) { messageProcessingAutomationService = value; },
-    }) }),
-    Object.freeze({ capability: "host.manager.plan-feedback-delivery@1", value: Object.freeze({
-      ManagerReadWorkerError,
-      PlanFeedbackRecoveryService,
-      activePlanFeedbackDeliveryFlights,
-      inspectPlanFeedbackDelivery,
-      managerOperationalError,
-      managerOperationalLog,
-      managerReadOnly,
-      managerReadWorkerPool,
-      planFeedbackFailureStatePath: path.join(
-        projectDirectoryLayout(rootDir).runtimeStateRoot,
-        "background-failure-circuits",
-        "plan-feedback-recovery.json"
-      ),
-      publishManagerEvent,
-      recoverPlanFeedbackCandidate,
-      rootDir,
-      scheduleAndWaitForPlanFeedbackDelivery,
-      get managerListenerReady() { return managerListenerReady; },
-      set managerListenerReady(value) { managerListenerReady = value; },
-      get planFeedbackDeliveryActive() { return planFeedbackDeliveryActive; },
-      set planFeedbackDeliveryActive(value) { planFeedbackDeliveryActive = value; },
-      get planFeedbackRecoveryService() { return planFeedbackRecoveryService; },
-      set planFeedbackRecoveryService(value) { planFeedbackRecoveryService = value; },
-      get rolesRoot() { return rolesRoot; },
-      set rolesRoot(value) { rolesRoot = value; },
-      get startActivePlanFeedbackRecovery() { return startActivePlanFeedbackRecovery; },
-      set startActivePlanFeedbackRecovery(value) { startActivePlanFeedbackRecovery = value; },
-    }) }),
-    Object.freeze({ capability: "host.manager.message-adapter-control@1", value: Object.freeze({
-      messageEndpointScanProviders,
-      MessageAdapterControlService,
-      MessageAdapterScanProviderRegistry,
-      adapterRuntimes,
-      checkHttpEndpoint,
-      createMessageAdapterControlOperations,
-      managerPluginRoutes,
-      inspectEndpoint: (type: string, trackProbe: <T>(probe: Promise<T>) => Promise<T>) => messageEndpointManagers.inspect(type, trackProbe),
-      readGatewayStatus,
-      registerBuiltinMessageAdapterScanProviders,
-      remoteAgentMessageAdapterScanResult,
-      rootDir,
-      routeCallbackEndpoint,
-      routeHasRecentMessages,
-      speechControl,
-
-      standaloneGatewayPayload,
-    }) }),
-    Object.freeze({ capability: "host.manager.agent-adapter-catalog@1", value: Object.freeze({
-      managerPluginRoutes,
-      mountAgentAdapterCatalogPlugin,
-      getGeneration: () => managerPluginKernel?.current(),
-      rootDir,
-      runtimes,
-      get agentAdapterCatalogService() { return agentAdapterCatalogService; },
-      set agentAdapterCatalogService(value) { agentAdapterCatalogService = value; },
-    }) }),
-    Object.freeze({ capability: "host.manager.agent-communication@1", value: Object.freeze({
-      agentRequests,
-      reconcileManagerDelivery: (deliveryId: string, assertCurrent: () => void) => {
-        if (!agentEndpointDelivery) throw new Error("The original delivery owner is unavailable.");
-        return agentEndpointDelivery.reconcileRecord(deliveryId, assertCurrent);
-      },
-      controlNodeDeliveryRecord: async (nodeId: string, input: { action: "cancel" | "reconcile"; intentId: string }, assertCurrent: () => void) => {
-        assertCurrent();
-        const response = await lanAgentRegistry.manageAgent(nodeId, "delivery_records", input, getTimeoutMs("agent.remote.management", 10_000), assertCurrent);
-        assertCurrent();
-        if (!response || typeof response !== "object") throw new Error("The original computer did not return a delivery record.");
-        const value = response as Record<string, unknown>;
-        const record = value.record ?? value.item ?? (value.id ? value : undefined);
-        if (!record) throw new Error("Delivery record not found on the original computer.");
-        return record;
-      },
-      readNodeDeliveryRecords: async (nodeId: string, query: { action: "list" | "get"; intentId?: string; cursor?: string; limit?: number; state?: string; query?: string }) => {
-        const response = await lanAgentRegistry.manageAgent(nodeId, "delivery_records", query, 10_000);
-        if (!response || typeof response !== "object") throw new Error("The original computer did not return delivery records.");
-        const value = response as Record<string, unknown>;
-        if (query.action === "get") {
-          const record = value.record ?? value.item ?? (value.id ? value : undefined);
-          if (!record) throw new Error("Delivery record not found on the original computer.");
-          return record;
-        }
-        const records = value.records ?? value.items;
-        if (!Array.isArray(records)) throw new Error("The original computer does not support durable delivery records yet.");
-        return { records, ...(value.nextCursor ? { nextCursor: value.nextCursor } : {}),
-          observedAt: typeof value.observedAt === "string" ? value.observedAt : new Date().toISOString(),
-          coverage: { scope: "node", nodeId, connected: true, includesDisconnectedNodeQueues: false } };
-      },
-      agentSendReceiptResponse,
-      maintenance: Object.freeze({
-        verify: (deliveryId: string, request: AgentSendRequest, options: { requestAuthority?: () => void }) =>
-          maintainAgentSendReceipt(deliveryId, request, options, false),
-        settle: (deliveryId: string, request: AgentSendRequest, options: { requestAuthority?: () => void }) =>
-          maintainAgentSendReceipt(deliveryId, request, options, true)
-      }),
-      codexHookContextService,
-      createAgentCommunicationRoutes,
-      createApiDiscoveryOperations,
-      readAgentChatHistory,
-      createAgentUploadRoutes: (context: Parameters<typeof createAgentUploadRoutes>[0]) => createAgentUploadRoutes({
-        ...context,
-        assertConnectionAuthorized: request => {
-          assertTrustedLanAgentPrincipal(request);
-          if (!hasAuthenticatedConnectionRequest(request)
-            && !webguiLanRequestAllowed(request, new URL(request.url ?? "/", managerBaseUrl))) {
-            throw new Error("Authenticated Manager connection is required.");
-          }
-        }
-      }),
-      agentUploadStore,
-      assertUploadAuthorized,
-      findAgentSendTraces,
-      createCodexHookOperations,
-      jsonResponse,
-      managerPluginRoutes,
-      qqDiagnostics: {
-        route: (routeId: string) => runtimes.get(routeId)?.definition,
-        readStatus: (definition: GatewayDefinition) => readGatewayStatus(definition),
-        routeRunning: (routeId: string) => Boolean(runtimes.get(routeId)?.process && runtimes.get(routeId)?.readiness === "ready"),
-        routeStartedAt: (routeId: string) => runtimes.get(routeId)?.startedAt ?? undefined,
-        jsonResponse
-      },
-      groupFiles: {
-        route: (routeId: string) => runtimes.get(routeId)?.definition,
-        jsonResponse
-      },
-      qqMessages: {
-        local: (request: http.IncomingMessage) => isLoopbackRemoteAddress(request.socket.remoteAddress),
-        route: (routeId: string) => runtimes.get(routeId)?.definition,
-        json: jsonResponse
-      },
-      performAgentSend: (request: AgentSendRequest, options: { remoteSource?: TrustedLanAgentSource; requestAuthority?: () => void } = {}) => {
-        const source = options.remoteSource;
-        return performAgentSend(request, {
-          remoteSource: source,
-          requestAuthority: options.requestAuthority,
-          withManagedGroupFile: (fileId: string, expectedSha256: string, send: (file: { path: string; fileName: string }) => Promise<import("../outbox.js").AgentReplyResult>) => {
-            options.requestAuthority?.();
-            return agentUploadStore.withSharedFile(fileId, async file => {
-              options.requestAuthority?.();
-              if (file.sha256 !== expectedSha256) throw new Error("Managed file content does not match the upload receipt.");
-              return send(file);
-            });
-          }
-        });
-      },
-      publishManagerEvent,
-      readJsonBody,
-      refreshAgentRequestReminderTimers,
-      rootDir,
-    }) }),
-    Object.freeze({ capability: "host.manager.agent-thread-control@1", value: Object.freeze({
-      agentRequests,
-      agentThreadRequestFailureData,
-      agentThreadRequestOptions,
-      getTrustedLanAgentSource,
-      getTrustedDeviceSource: (request: http.IncomingMessage) => rabiLinkAgentTaskSource(request, rabiLinkRelayConfigForMeta(), managerHostIdentity?.applicationGenerationId ?? managerInstanceId),
-      applyManagedAgentThreadDefaults,
-      createAgentThreadControlOwner: (context: Parameters<typeof createAgentThreadControlOwner>[0]) => createAgentThreadControlOwner({
-        ...context, forwardPeerReply: (request, guard) => peerAgentBridge.forwardReply(request, guard),
-        forwardPeerCallerLookup: (callerId, source, guard) => peerAgentBridge.forwardCallerLookup(callerId, source, guard)
-      }),
-      createAgentThreadControlOperations: (owner: Parameters<typeof createAgentThreadControlOperations>[0]) => [
-        ...createAgentThreadControlOperations(owner), ...createPeerAgentOperations(peerAgentBridge),
-        ...createPeerRouteDeliveryOperations({ ...peerAgentOptions,
-          receiptDirectory: path.join(rootDir, "data", ".runtime", "peer-route-transport-receipts") })
-      ],
-      readEndpointDeliveryOptions: (remoteSource: AgentThreadRemoteSource | undefined, requestAuthority: () => void, deviceSource?: RabiLinkAgentPrincipal) =>
-        agentEndpointDelivery?.options(remoteSource, requestAuthority, deviceSource),
-      handleAgentThreadRequest,
-      managerOperationalError,
-      managerOperationalLog,
-      managerPluginRoutes,
-      messageProcessingBoard,
-      publishManagerEvent,
-      refreshAgentRequestReminderTimers,
-      rootDir,
-      setMessageProcessingPlanBaseline,
-    }) }),
-    Object.freeze({ capability: "host.manager.remote-agent@1", value: Object.freeze({
-      ManagerPluginRequestTracker,
-      RemoteAgentHub,
-      appendLog,
-      appendMessageContextToDir,
-      createRemoteAgentOperations: (context: RemoteAgentOperationsContext) => createRemoteAgentOperations(context),
-      handleRemoteAgentTaskEvent,
-      jsonResponse,
-      managerHost,
-      managerPluginRoutes,
-      managerPort,
-      path,
-      readJsonBody,
-      registerManagerPluginHandlerRoutes,
-      remoteAgentPublicHost,
-      remoteAgentTaskWithGatewayDefaults,
-      roleDirForDefinition,
-      rootDir,
-      runtimes,
-      get remoteAgentHub() { return remoteAgentHub; },
-      set remoteAgentHub(value) { remoteAgentHub = value; },
-    }) }),
+    Object.freeze({ capability: "host.manager.core@2", value: Object.freeze({ ...managerFeatureHostPorts, get managerCorePublicOperations() { return managerCorePublicOperations; }, get ManagerPluginRequestTracker() { return ManagerPluginRequestTracker; },
+get lanAgentRegistry() { return lanAgentRegistry; },
+get rabiGlobalConfig() { return rabiGlobalConfig; },
+get lanAgentAuthority() { return lanAgentAuthority; },
+get packageRoot() { return packageRoot; },
+get managerHostIdentity() { return managerHostIdentity; },
+get managerInstanceId() { return managerInstanceId; },
+set managerInstanceId(value) { managerInstanceId = value; },
+get managerHealthPayload() { return managerHealthPayload; },
+get publicWebguiLanAccessPayload() { return publicWebguiLanAccessPayload; },
+get generateWebguiAccessToken() { return generateWebguiAccessToken; },
+get hasAuthenticatedConnectionRequest() { return hasAuthenticatedConnectionRequest; },
+get isLocalMachineRemoteAddress() { return isLocalMachineRemoteAddress; },
+get localIpv4AddressEntries() { return localIpv4AddressEntries; },
+get resourceCache() { return resourceCache; },
+get resourceCacheOptions() { return resourceCacheOptions; },
+get recordingArchiveRuntime() { return recordingArchiveRuntime; },
+get recordingArchiveAdminOptions() { return recordingArchiveAdminOptions; },
+get webuiDistPath() { return webuiDistPath; },
+get managerWebPatches() { return managerWebPatches; },
+get isManagerControlRequestPath() { return isManagerControlRequestPath; },
+get splitManagerBootstrapPublicOperations() { return splitManagerBootstrapPublicOperations; },
+get managerPluginKernel() { return managerPluginKernel; },
+set managerPluginKernel(value) { managerPluginKernel = value; },
+get managerSourcePatches() { return managerSourcePatches; },
+get managerPluginDiagnostics() { return managerPluginDiagnostics; },
+set managerPluginDiagnostics(value) { managerPluginDiagnostics = value; },
+get managerPluginGenerationStatus() { return managerPluginGenerationStatus; },
+set managerPluginGenerationStatus(value) { managerPluginGenerationStatus = value; },
+get reconcileManagerPlugins() { return reconcileManagerPlugins; },
+get webPluginModules() { return webPluginModules; },
+get managerReadOnly() { return managerReadOnly; },
+get createManagerEventOperationDefinition() { return createManagerEventOperationDefinition; },
+get jsonResponse() { return jsonResponse; },
+get lanAgentReleaseStore() { return lanAgentReleaseStore; },
+get routeCatalogConfig() { return routeCatalogConfig; },
+set routeCatalogConfig(value) { routeCatalogConfig = value; },
+get configuredAgentProviderTypes() { return configuredAgentProviderTypes; },
+get invokePublishedAgentOperation() { return invokePublishedAgentOperation; },
+get writeGatewayConfig() { return writeGatewayConfig; },
+get randomUUID() { return randomUUID; },
+get syncRunningGateways() { return syncRunningGateways; },
+get configuredLocalAgentSessionFields() { return configuredLocalAgentSessionFields; },
+get rootDir() { return rootDir; },
+get manageInstanceAgent() { return manageInstanceAgent; },
+get resolvePublishedAgentManagerProviders() { return resolvePublishedAgentManagerProviders; },
+get routeCatalogVersion() { return routeCatalogVersion; },
+get managerPluginRoutes() { return managerPluginRoutes; },
+get readJsonBody() { return readJsonBody; },
+get registerManagerPluginHandlerRoutes() { return registerManagerPluginHandlerRoutes; },
+get webguiTokenMatches() { return webguiTokenMatches; },
+get measureSyncPerformanceOperation() { return measureSyncPerformanceOperation; },
+get PERFORMANCE_OPERATIONS() { return PERFORMANCE_OPERATIONS; },
+get metaPayload() { return metaPayload; },
+get automaticCodeService() { return automaticCodeService; },
+get agentRequests() { return agentRequests; },
+get agentEndpointDelivery() { return agentEndpointDelivery; },
+set agentEndpointDelivery(value) { agentEndpointDelivery = value; },
+get instanceIdentityReset() { return instanceIdentityReset; } }) }),
+    Object.freeze({ capability: "host.manager.persona@2", value: Object.freeze({ ...managerFeatureHostPorts, get ManagerPluginRequestTracker() { return ManagerPluginRequestTracker; },
+get rolesRoot() { return rolesRoot; },
+set rolesRoot(value) { rolesRoot = value; },
+get managerHostIdentity() { return managerHostIdentity; },
+get managerInstanceId() { return managerInstanceId; },
+set managerInstanceId(value) { managerInstanceId = value; },
+get readConfig() { return readConfig; },
+get managerReadOnly() { return managerReadOnly; },
+get routeCatalogPersonas() { return routeCatalogPersonas; },
+get path() { return path; },
+get requireRouteCatalogLifecycle() { return requireRouteCatalogLifecycle; },
+get RoleLifecycleError() { return RoleLifecycleError; },
+get ensureDataDirs() { return ensureDataDirs; },
+get publishManagerEvent() { return publishManagerEvent; },
+get roleDirForApi() { return roleDirForApi; },
+get languageStyleValidator() { return languageStyleValidator; },
+get handleAgentThreadRequest() { return handleAgentThreadRequest; },
+get agentThreadRequestOptions() { return agentThreadRequestOptions; },
+get routeCatalogConfig() { return routeCatalogConfig; },
+set routeCatalogConfig(value) { routeCatalogConfig = value; },
+get sharedGatewayAdapterTypes() { return sharedGatewayAdapterTypes; },
+get sharedNormalizeNapCatInstances() { return sharedNormalizeNapCatInstances; },
+get readChatDeliveryParties() { return readChatDeliveryParties; },
+get agentRequests() { return agentRequests; },
+get lanAgentRegistry() { return lanAgentRegistry; },
+get queryMessageHistory() { return queryMessageHistory; },
+get createPersonaStorageOperationsContext() { return createPersonaStorageOperationsContext; },
+get allDayRecording() { return allDayRecording; },
+get isLocalMachineRemoteAddress() { return isLocalMachineRemoteAddress; },
+get companionActivityContext() { return companionActivityContext; },
+get managerPort() { return managerPort; },
+set managerPort(value) { managerPort = value; },
+get deliverWearableAlert() { return deliverWearableAlert; },
+get knowledgeSearchService() { return knowledgeSearchService; },
+set knowledgeSearchService(value) { knowledgeSearchService = value; },
+get requestRoleKnowledgeCatalogRefresh() { return requestRoleKnowledgeCatalogRefresh; },
+get managerKnowledgePageWorkerPool() { return managerKnowledgePageWorkerPool; },
+get appendRolePanelTimeline() { return appendRolePanelTimeline; },
+get currentRoleStorageApplication() { return currentRoleStorageApplication; },
+get rootDir() { return rootDir; },
+get runtimes() { return runtimes; },
+get currentPersonaMessageAuthority() { return currentPersonaMessageAuthority; },
+get triggerGatewayRolePanelMessage() { return triggerGatewayRolePanelMessage; },
+get roleIdForDefinition() { return roleIdForDefinition; },
+get assertLocalPersonaOwner() { return assertLocalPersonaOwner; },
+get managerReadWorkerPool() { return managerReadWorkerPool; },
+get managerPluginRoutes() { return managerPluginRoutes; },
+get registerManagerPluginHandlerRoutes() { return registerManagerPluginHandlerRoutes; } }) }),
+    Object.freeze({ capability: "host.manager.performance@2", value: Object.freeze({ ...managerFeatureHostPorts, get managerPluginRoutes() { return managerPluginRoutes; },
+get managerReadOnly() { return managerReadOnly; },
+get performanceMonitoring() { return performanceMonitoring; },
+get rabiGlobalConfig() { return rabiGlobalConfig; },
+get runtimes() { return runtimes; },
+get recordManagerHttpRequest() { return recordManagerHttpRequest; },
+set recordManagerHttpRequest(value) { recordManagerHttpRequest = value; } }) }),
+    Object.freeze({ capability: "host.manager.bilibili-history@2", value: Object.freeze({ ...managerFeatureHostPorts, get configRepository() { return configRepository; },
+get managerPluginRoutes() { return managerPluginRoutes; },
+get managerReadOnly() { return managerReadOnly; },
+get path() { return path; },
+get rootDir() { return rootDir; } }) }),
+    Object.freeze({ capability: "host.manager.route-control@2", value: Object.freeze({ ...managerFeatureHostPorts, get managerPluginRoutes() { return managerPluginRoutes; },
+get rootDir() { return rootDir; },
+get routeRoot() { return routeRoot; },
+set routeRoot(value) { routeRoot = value; },
+get managerPort() { return managerPort; },
+set managerPort(value) { managerPort = value; },
+get managerHost() { return managerHost; },
+get managerHostIdentity() { return managerHostIdentity; },
+get managerInstanceId() { return managerInstanceId; },
+set managerInstanceId(value) { managerInstanceId = value; },
+get rabiRoutePackageVersion() { return rabiRoutePackageVersion; },
+get rabiGlobalConfig() { return rabiGlobalConfig; },
+get runtimes() { return runtimes; },
+get runtimeStatus() { return runtimeStatus; },
+get readConfig() { return readConfig; },
+get writeConfig() { return writeConfig; },
+get loadRuntimes() { return loadRuntimes; },
+get routeCatalogVersion() { return routeCatalogVersion; },
+get routeCatalogPersonas() { return routeCatalogPersonas; },
+get syncRunningGateways() { return syncRunningGateways; },
+get syncActiveRabiLinkRelay() { return syncActiveRabiLinkRelay; },
+set syncActiveRabiLinkRelay(value) { syncActiveRabiLinkRelay = value; },
+get dataDirFor() { return dataDirFor; },
+get agentAdapterCatalogService() { return agentAdapterCatalogService; },
+set agentAdapterCatalogService(value) { agentAdapterCatalogService = value; },
+get rolesRoot() { return rolesRoot; },
+set rolesRoot(value) { rolesRoot = value; },
+get readManagerConfig() { return readManagerConfig; },
+get writeManagerConfig() { return writeManagerConfig; },
+get ensureDataDirs() { return ensureDataDirs; } }) }),
+    Object.freeze({ capability: "host.manager.agent-state-control@2", value: Object.freeze({ ...managerFeatureHostPorts, get managerPluginRoutes() { return managerPluginRoutes; },
+get runtimes() { return runtimes; },
+get agentStateByGateway() { return agentStateByGateway; },
+get writeAdapterConfigFile() { return writeAdapterConfigFile; },
+get publishManagerEvent() { return publishManagerEvent; } }) }),
+    Object.freeze({ capability: "host.manager.gateway-runtime@2", value: Object.freeze({ ...managerFeatureHostPorts, get managerPluginRoutes() { return managerPluginRoutes; },
+get managerReadOnly() { return managerReadOnly; },
+get manualTriggerProcesses() { return manualTriggerProcesses; },
+get stopAllGatewaysAndWait() { return stopAllGatewaysAndWait; },
+get syncRunningGateways() { return syncRunningGateways; },
+get gatewayRuntimePluginLease() { return gatewayRuntimePluginLease; },
+get listenerPublicationHost() { return listenerPublicationHost; },
+get managerServicesReady() { return managerServicesReady; },
+set managerServicesReady(value) { managerServicesReady = value; },
+get standaloneGatewayPayload() { return standaloneGatewayPayload; },
+get writeConfig() { return writeConfig; },
+get writeGatewayConfig() { return writeGatewayConfig; },
+get resolveRouteMutation() { return resolveRouteMutation; },
+get loadRuntimes() { return loadRuntimes; },
+get routeMutationActivation() { return routeMutationActivation; },
+get runtimes() { return runtimes; },
+get runtimeStatus() { return runtimeStatus; },
+get networkOptionsPayload() { return networkOptionsPayload; },
+get startGateway() { return startGateway; },
+get stopGateway() { return stopGateway; },
+get restartGateway() { return restartGateway; },
+get removeGatewayConfig() { return removeGatewayConfig; },
+get routeCatalogVersion() { return routeCatalogVersion; },
+get sharedGatewayAdapterTypes() { return sharedGatewayAdapterTypes; },
+get dataDirFor() { return dataDirFor; },
+get requestWeixinLogin() { return requestWeixinLogin; },
+get triggerGatewayManualRule() { return triggerGatewayManualRule; },
+get testGatewayAgentDelivery() { return testGatewayAgentDelivery; },
+get listGatewayDeliveryReplayAttempts() { return listGatewayDeliveryReplayAttempts; },
+get replayGatewayDelivery() { return replayGatewayDelivery; } }) }),
+    Object.freeze({ capability: "host.manager.rabilink-relay@2", value: Object.freeze({ ...managerFeatureHostPorts, get rabiLinkRelayConfigForMeta() { return rabiLinkRelayConfigForMeta; },
+get rabiGlobalConfig() { return rabiGlobalConfig; },
+get rabiLinkConnectionScope() { return rabiLinkConnectionScope; },
+get managerHostIdentity() { return managerHostIdentity; },
+get managerInstanceId() { return managerInstanceId; },
+set managerInstanceId(value) { managerInstanceId = value; },
+get rabiLinkAgentDevicePrincipal() { return rabiLinkAgentDevicePrincipal; },
+get rabiLinkDeviceConnections() { return rabiLinkDeviceConnections; },
+get discoverRabiPeers() { return discoverRabiPeers; },
+get peerRelayConfig() { return peerRelayConfig; },
+get lanAgentAuthority() { return lanAgentAuthority; },
+get managerPluginRoutes() { return managerPluginRoutes; },
+get path() { return path; },
+get rootDir() { return rootDir; },
+get managerReadOnly() { return managerReadOnly; },
+get currentRabiLinkBusinessOwners() { return currentRabiLinkBusinessOwners; },
+get peerLanServer() { return peerLanServer; },
+get rabiLinkRelayRuntime() { return rabiLinkRelayRuntime; },
+get syncRabiLinkRelayRuntime() { return syncRabiLinkRelayRuntime; },
+get managerListenerReady() { return managerListenerReady; },
+set managerListenerReady(value) { managerListenerReady = value; },
+get syncActiveRabiLinkRelay() { return syncActiveRabiLinkRelay; },
+set syncActiveRabiLinkRelay(value) { syncActiveRabiLinkRelay = value; },
+get currentPluginActivation() { return currentPluginActivation; },
+get prepareManagerPeerRuntime() { return prepareManagerPeerRuntime; },
+get readJsonBody() { return readJsonBody; },
+get jsonResponse() { return jsonResponse; },
+get publishManagerEvent() { return publishManagerEvent; },
+get managerPort() { return managerPort; },
+set managerPort(value) { managerPort = value; },
+get hasAuthenticatedConnectionRequest() { return hasAuthenticatedConnectionRequest; },
+get webguiLanRequestAllowed() { return webguiLanRequestAllowed; },
+get managerBaseUrl() { return managerBaseUrl; },
+set managerBaseUrl(value) { managerBaseUrl = value; },
+get speechServiceUrl() { return speechServiceUrl; },
+get resourceCacheKey() { return resourceCacheKey; },
+get createManagerApiOperationsService() { return createManagerApiOperationsService; },
+get activePeerTunnel() { return activePeerTunnel; },
+set activePeerTunnel(value) { activePeerTunnel = value; },
+get activePeerRuntime() { return activePeerRuntime; },
+set activePeerRuntime(value) { activePeerRuntime = value; },
+get admitPeerProxyUpgrade() { return admitPeerProxyUpgrade; } }) }),
+    Object.freeze({ capability: "host.manager.memory-consolidation@2", value: Object.freeze({ ...managerFeatureHostPorts, get managerReadOnly() { return managerReadOnly; },
+get manualTriggerProcesses() { return manualTriggerProcesses; },
+get managerListenerReady() { return managerListenerReady; },
+set managerListenerReady(value) { managerListenerReady = value; },
+get memoryConsolidationScheduler() { return memoryConsolidationScheduler; },
+set memoryConsolidationScheduler(value) { memoryConsolidationScheduler = value; },
+get path() { return path; },
+get projectDirectoryLayout() { return projectDirectoryLayout; },
+get rootDir() { return rootDir; },
+get memoryConsolidationScheduleTargets() { return memoryConsolidationScheduleTargets; },
+get evaluateMemoryConsolidationSchedule() { return evaluateMemoryConsolidationSchedule; },
+get getTimeoutMs() { return getTimeoutMs; },
+get currentRoleStorageApplication() { return currentRoleStorageApplication; },
+get roleStorageOperationKey() { return roleStorageOperationKey; },
+get deliverAutomaticMemoryConsolidation() { return deliverAutomaticMemoryConsolidation; },
+get managerOperationalLog() { return managerOperationalLog; },
+get managerOperationalError() { return managerOperationalError; },
+get runtimes() { return runtimes; },
+get memoryConsolidationFailureDiagnostic() { return memoryConsolidationFailureDiagnostic; },
+get appendLog() { return appendLog; } }) }),
+    Object.freeze({ capability: "host.manager.message-processing-control@2", value: Object.freeze({ ...managerFeatureHostPorts, get managerPluginRoutes() { return managerPluginRoutes; },
+get messageProcessingBoardPayload() { return messageProcessingBoardPayload; },
+get messageProcessingBoard() { return messageProcessingBoard; },
+get messageProcessingSendContextReview() { return messageProcessingSendContextReview; },
+get managerOperationalLog() { return managerOperationalLog; },
+get recalledKnowledgeForMessage() { return recalledKnowledgeForMessage; },
+get verifyCriticalProjectFactRecord() { return verifyCriticalProjectFactRecord; },
+get rootDir() { return rootDir; },
+get roleDirForApi() { return roleDirForApi; },
+get setMessageProcessingPlanBaseline() { return setMessageProcessingPlanBaseline; },
+get scheduleKnowledgeCallbackReminder() { return scheduleKnowledgeCallbackReminder; },
+get publishManagerEvent() { return publishManagerEvent; } }) }),
+    Object.freeze({ capability: "host.manager.message-processing-automation@2", value: Object.freeze({ ...managerFeatureHostPorts,
+get deliverKnowledgeCallbackReminder() { return deliverKnowledgeCallbackReminder; },
+get handleMessageProcessingPlanUpdate() { return handleMessageProcessingPlanUpdate; },
+get managerOperationalError() { return managerOperationalError; },
+get managerOperationalLog() { return managerOperationalLog; },
+get managerReadOnly() { return managerReadOnly; },
+get messageProcessingBoard() { return messageProcessingBoard; },
+get rootDir() { return rootDir; },
+get subscribePlanUpdates() { return subscribePlanUpdates; },
+get knowledgeCallbackReminderService() { return knowledgeCallbackReminderService; },
+set knowledgeCallbackReminderService(value) { knowledgeCallbackReminderService = value; },
+}) }),
+    Object.freeze({ capability: "host.manager.plan-feedback-delivery@2", value: Object.freeze({ ...managerFeatureHostPorts, get ManagerReadWorkerError() { return ManagerReadWorkerError; },
+get activePlanFeedbackDeliveryFlights() { return activePlanFeedbackDeliveryFlights; },
+get inspectPlanFeedbackDelivery() { return inspectPlanFeedbackDelivery; },
+get managerOperationalError() { return managerOperationalError; },
+get managerOperationalLog() { return managerOperationalLog; },
+get managerReadOnly() { return managerReadOnly; },
+get managerReadWorkerPool() { return managerReadWorkerPool; },
+get path() { return path; },
+get projectDirectoryLayout() { return projectDirectoryLayout; },
+get rootDir() { return rootDir; },
+get publishManagerEvent() { return publishManagerEvent; },
+get recoverPlanFeedbackCandidate() { return recoverPlanFeedbackCandidate; },
+get scheduleAndWaitForPlanFeedbackDelivery() { return scheduleAndWaitForPlanFeedbackDelivery; },
+get managerListenerReady() { return managerListenerReady; },
+set managerListenerReady(value) { managerListenerReady = value; },
+get planFeedbackDeliveryActive() { return planFeedbackDeliveryActive; },
+set planFeedbackDeliveryActive(value) { planFeedbackDeliveryActive = value; },
+get planFeedbackRecoveryService() { return planFeedbackRecoveryService; },
+set planFeedbackRecoveryService(value) { planFeedbackRecoveryService = value; },
+get rolesRoot() { return rolesRoot; },
+set rolesRoot(value) { rolesRoot = value; },
+get startActivePlanFeedbackRecovery() { return startActivePlanFeedbackRecovery; },
+set startActivePlanFeedbackRecovery(value) { startActivePlanFeedbackRecovery = value; } }) }),
+    Object.freeze({ capability: "host.manager.message-adapter-control@2", value: Object.freeze({ ...managerFeatureHostPorts, get messageEndpointScanProviders() { return messageEndpointScanProviders; },
+get adapterRuntimes() { return adapterRuntimes; },
+get checkHttpEndpoint() { return checkHttpEndpoint; },
+get managerPluginRoutes() { return managerPluginRoutes; },
+get messageEndpointManagers() { return messageEndpointManagers; },
+get readGatewayStatus() { return readGatewayStatus; },
+get remoteAgentMessageAdapterScanResult() { return remoteAgentMessageAdapterScanResult; },
+get rootDir() { return rootDir; },
+get routeCallbackEndpoint() { return routeCallbackEndpoint; },
+get routeHasRecentMessages() { return routeHasRecentMessages; },
+get speechControl() { return speechControl; },
+get standaloneGatewayPayload() { return standaloneGatewayPayload; } }) }),
+    Object.freeze({ capability: "host.manager.agent-adapter-catalog@2", value: Object.freeze({ ...managerFeatureHostPorts, get managerPluginRoutes() { return managerPluginRoutes; },
+get managerPluginKernel() { return managerPluginKernel; },
+set managerPluginKernel(value) { managerPluginKernel = value; },
+get rootDir() { return rootDir; },
+get runtimes() { return runtimes; },
+get agentAdapterCatalogService() { return agentAdapterCatalogService; },
+set agentAdapterCatalogService(value) { agentAdapterCatalogService = value; } }) }),
+    Object.freeze({ capability: "host.manager.agent-communication@2", value: Object.freeze({ ...managerFeatureHostPorts, get agentRequests() { return agentRequests; },
+get agentEndpointDelivery() { return agentEndpointDelivery; },
+set agentEndpointDelivery(value) { agentEndpointDelivery = value; },
+get lanAgentRegistry() { return lanAgentRegistry; },
+get getTimeoutMs() { return getTimeoutMs; },
+get agentSendReceiptResponse() { return agentSendReceiptResponse; },
+get maintainAgentSendReceipt() { return maintainAgentSendReceipt; },
+get codexHookContextService() { return codexHookContextService; },
+get readAgentChatHistory() { return readAgentChatHistory; },
+get assertTrustedLanAgentPrincipal() { return assertTrustedLanAgentPrincipal; },
+get hasAuthenticatedConnectionRequest() { return hasAuthenticatedConnectionRequest; },
+get webguiLanRequestAllowed() { return webguiLanRequestAllowed; },
+get managerBaseUrl() { return managerBaseUrl; },
+set managerBaseUrl(value) { managerBaseUrl = value; },
+get agentUploadStore() { return agentUploadStore; },
+get assertUploadAuthorized() { return assertUploadAuthorized; },
+get findAgentSendTraces() { return findAgentSendTraces; },
+get jsonResponse() { return jsonResponse; },
+get managerPluginRoutes() { return managerPluginRoutes; },
+get runtimes() { return runtimes; },
+get readGatewayStatus() { return readGatewayStatus; },
+get isLoopbackRemoteAddress() { return isLoopbackRemoteAddress; },
+get performAgentSend() { return performAgentSend; },
+get publishManagerEvent() { return publishManagerEvent; },
+get readJsonBody() { return readJsonBody; },
+get rootDir() { return rootDir; } }) }),
+    Object.freeze({ capability: "host.manager.agent-thread-control@2", value: Object.freeze({ ...managerFeatureHostPorts, get agentRequests() { return agentRequests; },
+get agentThreadRequestFailureData() { return agentThreadRequestFailureData; },
+get agentThreadRequestOptions() { return agentThreadRequestOptions; },
+get getTrustedLanAgentSource() { return getTrustedLanAgentSource; },
+get rabiLinkAgentTaskSource() { return rabiLinkAgentTaskSource; },
+get rabiLinkRelayConfigForMeta() { return rabiLinkRelayConfigForMeta; },
+get managerHostIdentity() { return managerHostIdentity; },
+get managerInstanceId() { return managerInstanceId; },
+set managerInstanceId(value) { managerInstanceId = value; },
+get applyManagedAgentThreadDefaults() { return applyManagedAgentThreadDefaults; },
+get peerAgentBridge() { return peerAgentBridge; },
+get peerAgentOptions() { return peerAgentOptions; },
+get path() { return path; },
+get rootDir() { return rootDir; },
+get agentEndpointDelivery() { return agentEndpointDelivery; },
+set agentEndpointDelivery(value) { agentEndpointDelivery = value; },
+get handleAgentThreadRequest() { return handleAgentThreadRequest; },
+get managerOperationalError() { return managerOperationalError; },
+get managerOperationalLog() { return managerOperationalLog; },
+get managerPluginRoutes() { return managerPluginRoutes; },
+get messageProcessingBoard() { return messageProcessingBoard; },
+get publishManagerEvent() { return publishManagerEvent; },
+get setMessageProcessingPlanBaseline() { return setMessageProcessingPlanBaseline; } }) }),
+    Object.freeze({ capability: "host.manager.remote-agent@2", value: Object.freeze({ ...managerFeatureHostPorts, get ManagerPluginRequestTracker() { return ManagerPluginRequestTracker; },
+get appendLog() { return appendLog; },
+get appendMessageContextToDir() { return appendMessageContextToDir; },
+get handleRemoteAgentTaskEvent() { return handleRemoteAgentTaskEvent; },
+get jsonResponse() { return jsonResponse; },
+get managerHost() { return managerHost; },
+get managerPluginRoutes() { return managerPluginRoutes; },
+get managerPort() { return managerPort; },
+set managerPort(value) { managerPort = value; },
+get path() { return path; },
+get readJsonBody() { return readJsonBody; },
+get registerManagerPluginHandlerRoutes() { return registerManagerPluginHandlerRoutes; },
+get remoteAgentPublicHost() { return remoteAgentPublicHost; },
+get remoteAgentTaskWithGatewayDefaults() { return remoteAgentTaskWithGatewayDefaults; },
+get roleDirForDefinition() { return roleDirForDefinition; },
+get rootDir() { return rootDir; },
+get runtimes() { return runtimes; },
+get remoteAgentHub() { return remoteAgentHub; },
+set remoteAgentHub(value) { remoteAgentHub = value; } }) }),
     Object.freeze({ capability: "host.manager.gateway-status@1", value: Object.freeze({
       readStatuses: () => measureSyncPerformanceOperation(PERFORMANCE_OPERATIONS.managerGatewaysBuildDiagnostics, () => {
         return readGatewayDiagnosticsStatuses(rootDir, runtimes.keys().map(id => [id, runtimes.get(id)!] as const), activeGatewayDiagnosticsSnapshotService(), failure => {
@@ -8382,46 +7938,36 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
         });
       }),
     }) }),
-    Object.freeze({ capability: "host.manager.desktop@1", value: Object.freeze({
-      adapterConfigPath,
-      createDesktopControlOperations,
-      desktopSettings,
-      managerReadOnly,
-      publishManagerEvent,
-      desktopConfigFilePayload,
-      ensureDataDirs,
-      ensurePersonaConfigFile,
-      ensureRoleFile,
-      ensureRoleFolder,
-      managerPluginRoutes,
-      rootDir,
-      runtimes,
-      writeAdapterConfigFile,
-      get rolesRoot() { return rolesRoot; },
-      set rolesRoot(value) { rolesRoot = value; },
-      get routeRoot() { return routeRoot; },
-      set routeRoot(value) { routeRoot = value; },
-    }) }),
-    Object.freeze({ capability: "host.manager.desktop-pet@1", value: Object.freeze({
-      DesktopPetOwner,
-      createDesktopPetOperations,
-      desktopSettings,
-      managerPluginRoutes,
-      publishManagerEvent,
-      resolveRoleDir: roleDirForApi,
-    }) }),
-    Object.freeze({ capability: "host.manager.yeyu-gamer@1", value: Object.freeze({
-      managerPluginRoutes,
-      createYeYuGamerManagerOperations,
-    }) }),
-  ]));
+    Object.freeze({ capability: "host.manager.desktop@2", value: Object.freeze({ ...managerFeatureHostPorts, get adapterConfigPath() { return adapterConfigPath; },
+get desktopSettings() { return desktopSettings; },
+get managerReadOnly() { return managerReadOnly; },
+get publishManagerEvent() { return publishManagerEvent; },
+get ensureDataDirs() { return ensureDataDirs; },
+get ensurePersonaConfigFile() { return ensurePersonaConfigFile; },
+get ensureRoleFile() { return ensureRoleFile; },
+get ensureRoleFolder() { return ensureRoleFolder; },
+get managerPluginRoutes() { return managerPluginRoutes; },
+get rootDir() { return rootDir; },
+get runtimes() { return runtimes; },
+get writeAdapterConfigFile() { return writeAdapterConfigFile; },
+get rolesRoot() { return rolesRoot; },
+set rolesRoot(value) { rolesRoot = value; },
+get routeRoot() { return routeRoot; },
+set routeRoot(value) { routeRoot = value; } }) }),
+    Object.freeze({ capability: "host.manager.desktop-pet@2", value: Object.freeze({ ...managerFeatureHostPorts, get desktopSettings() { return desktopSettings; },
+get managerPluginRoutes() { return managerPluginRoutes; },
+get publishManagerEvent() { return publishManagerEvent; },
+get roleDirForApi() { return roleDirForApi; } }) }),
+    Object.freeze({ capability: "host.manager.yeyu-gamer@2", value: Object.freeze({ ...managerFeatureHostPorts, get managerPluginRoutes() { return managerPluginRoutes; } }) }),
+  ]);
   const configuredPluginProfile = process.env.RABIROUTE_PLUGIN_PROFILE?.trim();
   const managerPluginProfilePath = configuredPluginProfile
     ? path.resolve(configuredPluginProfile)
     : path.join(packageRoot, "dist", "plugins", "profiles", "desktop.json");
   const managerPluginSettings = new PluginProfileSettings({
     profilePath: managerPluginProfilePath,
-    settingsRoot: path.join(rootDir, "data", "plugins", "settings")
+    settingsRoot: path.join(rootDir, "data", "plugins", "settings"),
+    migrationsPath: path.join(packageRoot, "dist", "plugins", "profiles", "package-migrations.json")
   });
   const configuredPackageRoots = (process.env.RABIROUTE_PLUGIN_PACKAGE_ROOTS ?? "")
     .split(path.delimiter)
@@ -8450,7 +7996,8 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
   try {
   managerPluginKernel = new GenerationRuntime({
     host: "manager",
-    hostServices: managerPluginHostServices,
+    hostServices: [...managerPluginHostServices, Object.freeze({ capability: "host.message-endpoints@2",
+      value: managerPluginHostServices.find(service => service.capability === "host.message-endpoints@1")!.value })],
     applicationIdentity: {
       applicationGenerationId: managerHostIdentity?.applicationGenerationId ?? managerInstanceId,
       managerInstanceId
@@ -8488,9 +8035,11 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
       });
     }
   });
-  managerRuntimeOwner.registerWithBudget("manager_plugin_kernel", budget => managerPluginKernel?.shutdown({
-    timeoutMs: Math.max(1, Math.floor(budget.deadlineAt - performance.now()))
-  }) ?? Promise.resolve());
+  const releaseAgentGenerationReader = installAgentAdapterGenerationReader(() => managerPluginKernel?.current());
+  managerRuntimeOwner.registerWithBudget("manager_plugin_kernel", async budget => {
+    try { await managerPluginKernel?.shutdown({ timeoutMs: Math.max(1, Math.floor(budget.deadlineAt - performance.now())) }); }
+    finally { releaseAgentGenerationReader(); }
+  });
   } catch (error) {
     await failManagerStartup("manager_plugin_kernel_construction", error);
   }
@@ -8575,6 +8124,7 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
         profile: desiredProfile,
         packageCatalog: managerPluginPackageCatalog,
         runtimeRoot: path.join(rootDir, "data", "plugins", ".runtime"),
+        preparationFailure: (packageId, instanceId) => pluginStorageMigrationFailure(packageId, rootDir, instanceId),
         host: "manager",
         previous: previousProfile,
         reuseUnchangedPackages: options.reuseUnchangedPackages,
@@ -8673,12 +8223,56 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
   };
 
   managerRuntimeOwner.register("manager_plugin_reconciliation", () => managerPluginReconciliationTail);
-  const bootstrapCore = managerPluginHostServices.find(service => service.capability === "host.manager.core@1")!.value as {
-    createPluginCatalogOperations(): readonly ApiOperationDefinition[];
-    createWebguiAccessOperations(): readonly ApiOperationDefinition[];
-    createManagerEventOperationDefinition(): ApiOperationDefinition;
-    createWebguiStaticOperations(): ReturnType<typeof createWebguiStaticOperations>;
-  };
+  const bootstrapCore = Object.freeze({
+createWebguiAccessOperations: () => createWebguiAccessOperations({
+        readPayload: publicWebguiLanAccessPayload,
+        readConfig: () => rabiGlobalConfig.read().webguiLan,
+        saveConfig: webguiLan => { rabiGlobalConfig.patch({ webguiLan }); },
+        generateToken: generateWebguiAccessToken,
+        canManage: request => hasAuthenticatedConnectionRequest(request)
+          || isLocalMachineRemoteAddress(request.socket.remoteAddress, localIpv4AddressEntries().map(item => item.address))
+      }),
+createWebguiStaticOperations: () => createWebguiStaticOperations(new NativeWebguiStaticOwner({
+        packageRoot, webuiDistPath,
+        patches: {
+          candidates: managerWebPatches.candidates,
+          status: () => managerWebPatches.status(),
+          staticManifest: revision => managerWebPatches.staticManifest(revision)
+        },
+        isControlPath: isManagerControlRequestPath
+      })),
+createPluginCatalogOperations: () => createPluginCatalogOperations({
+        runtime: managerPluginKernel!,
+        root: () => packageRoot,
+        renderCatalog: async (input, host, invocation) => {
+          invocation?.assertCurrent();
+          const value = await managerSourcePatches.invoke("manager.plugin-catalog", "renderPluginCatalog", [input, host]);
+          invocation?.assertCurrent(); return value;
+        },
+        reconciliation: {
+          diagnostics: () => managerPluginDiagnostics,
+          readiness: generation => managerPluginGenerationStatus?.id === generation.id
+            ? managerPluginGenerationStatus.readiness : generation.readiness,
+          reconcile: async invocation => {
+            await reconcileManagerPlugins("manual API request", { invocation });
+            invocation.assertCurrent(); return managerPluginKernel!.current();
+          }
+        },
+        webModules: {
+          list: async (webRelease, invocation) => {
+            invocation?.assertCurrent(); const value = await managerWebPatches.modules(webPluginModules.list(), webRelease);
+            invocation?.assertCurrent(); return value;
+          },
+          read: async (id, rev, relativePath, invocation) => {
+            invocation?.assertCurrent();
+            const value = await managerWebPatches.module(webPluginModules.list(), id, rev, relativePath)
+              ?? await webPluginModules.read(id, rev, relativePath);
+            invocation?.assertCurrent(); return value;
+          }
+        }
+      }, managerReadOnly),
+createManagerEventOperationDefinition
+  });
   const managerBootstrapAbort = new AbortController();
   const managerBootstrap = await registerManagerBootstrap({
     registry: managerPluginRoutes,

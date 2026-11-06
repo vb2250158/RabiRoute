@@ -4,8 +4,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
-import { dshAuthenticatedFetch } from './dshHttpAuth.js';
-import { DshConnectionStore } from './dshConnectionStore.js';
+import { dshAuthenticatedFetch } from './plugins/io.rabiroute.agent.dsh/src/dshHttpAuth.js';
+import { DshConnectionStore } from './plugins/io.rabiroute.agent.dsh/src/dshConnectionStore.js';
 
 async function fixture(run: (f: { origin: string; store: DshConnectionStore; log: string; cookie: string }) => Promise<void>) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-auto-connect-'));
@@ -21,7 +21,7 @@ async function fixture(run: (f: { origin: string; store: DshConnectionStore; log
   fs.mkdirSync(path.dirname(log), { recursive: true });
   fs.writeFileSync(log, `dsh web: ${origin}/?token=fixture-current\n`);
   const cookie = `dsh-auth-${createHash('sha256').update(new URL(origin).host).digest('base64url')}=v1.current.sig`;
-  const store = new DshConnectionStore(path.join(root, 'data', 'dsh-connections', 'connections.json'));
+  const store = new DshConnectionStore();
   try { await run({ origin, store, log, cookie }); }
   finally {
     globalThis.fetch = priorFetch;

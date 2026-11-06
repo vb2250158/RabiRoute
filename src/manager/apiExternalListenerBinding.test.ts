@@ -4,7 +4,7 @@ import http from "node:http";
 import { once } from "node:events";
 import { WebSocketServer } from "ws";
 import { ManagerPluginRouteRegistry } from "./managerPluginRouteRegistry.js";
-import { createApiDiscoveryOperations } from "./apiDiscoveryRoutes.js";
+import { createApiDiscoveryOperations } from "../plugins/io.rabiroute.manager.agent-communication/src/manager/apiDiscoveryRoutes.js";
 import { apiCatalogOpenApi } from "./apiOperationCatalog.js";
 import { fixtureApiContract } from "./apiOperationContractFixtures.js";
 import { createManagerClient } from "../../apps/rabi-agent/lib/manager-client.mjs";

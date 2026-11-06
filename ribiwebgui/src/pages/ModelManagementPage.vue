@@ -9,8 +9,8 @@ import type {
   SpeechModelDirectorySettings
 } from "@shared/speechModelManagement";
 import { managerEventSource } from "../managerApi";
-import { useI18n } from "../i18n";
-import { speechModelManagementClient, SpeechModelManagementRequestError } from "../speech/speechModelManagementClient";
+import { useI18n } from "../i18n/index";
+import { speechModelManagementClient, SpeechModelManagementRequestError } from "../../../src/plugins/io.rabiroute.manager.speech/web/speech/speechModelManagementClient";
 
 type CapabilityFilter = SpeechManagedModelCapability;
 

@@ -1,4 +1,0 @@
-{
-  "source": "src/adapters/feishuAdapter.ts",
-  "factory": "createFeishuAdapter"
-}

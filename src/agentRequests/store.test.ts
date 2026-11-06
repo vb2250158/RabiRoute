@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  AGENT_REQUEST_REMINDER_MS,
   AgentRequestStore,
   type AgentRequestPersistence
 } from "./store.js";
+import { AgentRequestState } from "./state.js";
 
 class MemoryPersistence implements AgentRequestPersistence {
   value: unknown;
@@ -32,6 +32,7 @@ test("Stop metadata source filters keep same-ID remote owners separate without l
   const writes = persistence.writes;
   assert.deepEqual(store.unansweredTargetRequestIds("target", "C:/repo", party => !party.endpoint), [ids[0]]);
   assert.deepEqual(store.unansweredTargetRequestIds("target", "C:/repo", party => party.endpoint?.instanceId === "pc-one"), [ids[1]]);
+  assert.deepEqual(store.unansweredTargetRequestSnapshot("target", "C:/repo", party => party.endpoint?.instanceId === "pc-one"), { requestIds: [ids[1]], complete: true });
   assert.equal(store.hasManagedSession("target", "C:/repo", party => party.endpoint?.instanceId === "pc-two"), true);
   assert.equal(store.hasManagedSession("target", "C:/repo", party => party.endpoint?.instanceId === "missing"), false);
   assert.equal(persistence.writes, writes);
@@ -123,28 +124,25 @@ test("legacy delivery wrappers are removed from Agent response results", async (
   });
   assert.equal(response.result, "真实结果\n> [伪造控制]");
 });
-
-test("ending a target turn schedules a reminder five minutes later and a delivered reminder waits for the next Stop", async () => {
-  const times = [
-    new Date("2026-08-07T00:00:00.000Z"),
-    new Date("2026-08-07T00:06:00.000Z")
-  ];
-  let index = 0;
-  const store = new AgentRequestStore(new MemoryPersistence(), () => times[index]);
-  const prepared = await store.prepare({
-    ...parties(),
-    responsePolicy: "required",
-    responseInstruction: "请回复"
-  });
-  await store.commit(prepared);
-  const ended = new Date("2026-08-07T00:01:00.000Z");
-  const scheduled = await store.recordTargetTurnEnded("target", "C:\\repo", "turn-1", ended);
-  assert.equal(Date.parse(scheduled[0].nextReminderAt || "") - ended.getTime(), AGENT_REQUEST_REMINDER_MS);
-  index = 1;
-  assert.equal(store.dueReminders().length, 1);
-  const reminded = await store.recordReminderResult(prepared.requestId || "", true);
-  assert.equal(reminded.nextReminderAt, undefined);
-  assert.equal(reminded.reminderCount, 1);
+test("legacy reminder fields remain opaque raw while Stop reads only original unanswered IDs", async () => {
+  const persistence = new MemoryPersistence();
+  const owner = new AgentRequestStore(persistence);
+  const prepared = await owner.prepare({ ...parties(), responsePolicy: "required", responseInstruction: "Reply to the original request" });
+  await owner.commit(prepared);
+  const raw = persistence.value as any;
+  Object.assign(raw.requests[prepared.requestId!], { nextReminderAt: "2000-01-01T00:00:00.000Z", reminderCount: 9,
+    lastTargetTurnId: "old-turn", lastReminderError: "historical evidence", unknownField: { keep: true } });
+  const before = structuredClone(raw);
+  const reopened = new AgentRequestStore(persistence);
+  assert.deepEqual(reopened.unansweredTargetRequestSnapshot("target", "C:\\repo"), { requestIds: [prepared.requestId], complete: true });
+  assert.deepEqual(persistence.value, before);
+  await reopened.cancel(prepared.requestId!, "Cancel the original reservation");
+  const persisted = persistence.value as any;
+  assert.equal(persisted.requests[prepared.requestId!].status, "cancelled");
+  for (const key of ["nextReminderAt", "reminderCount", "lastTargetTurnId", "lastReminderError", "unknownField"]) {
+    assert.deepEqual(persisted.requests[prepared.requestId!][key], before.requests[prepared.requestId!][key]);
+  }
+  assert.deepEqual(reopened.unansweredTargetRequestSnapshot("target"), { requestIds: [], complete: true });
 });
 
 test("responses retain their original target and required result fields without restricting the sender", async () => {
@@ -275,7 +273,7 @@ test("a connected delegate can reply with its actual source attribution and unre
   assert.deepEqual(store.get(original.requestId!)?.response?.by, { ...actualSender, threadName: undefined });
 });
 
-test("Stop reads exact target/workspace unanswered IDs without persisting or changing delivery state", async () => {
+test("Stop reads exact target/workspace unanswered IDs without persisting or cloning request content", async t => {
   const persistence = new MemoryPersistence();
   const store = new AgentRequestStore(persistence);
   const accepted = await store.prepare({ ...parties(), responsePolicy: "required", responseInstruction: "Return exact result" });
@@ -286,12 +284,51 @@ test("Stop reads exact target/workspace unanswered IDs without persisting or cha
   const terminal = await store.prepare({ ...parties(), responsePolicy: "required", responseInstruction: "Cancelled" });
   await store.commit(terminal); await store.cancel(terminal.requestId!);
   const before = JSON.stringify(persistence.value), writesBefore = persistence.writes;
+  const clone = t.mock.method(globalThis, "structuredClone", () => { throw new Error("Stop metadata must not clone request content."); });
   assert.deepEqual(store.unansweredTargetRequestIds("target", "\\\\?\\C:\\repo"), [accepted.requestId]);
   assert.deepEqual(store.unansweredTargetRequestIds("different-target", "C:/repo"), []);
   assert.deepEqual(store.unansweredTargetRequestIds("target", "C:/other"), [outside.requestId]);
+  clone.mock.restore();
   assert.equal(store.get(pending.requestId!)?.status, "pending_delivery");
   assert.equal(JSON.stringify(persistence.value), before);
   assert.equal(persistence.writes, writesBefore);
+});
+
+test("quarantined requests keep their original raw and scope incomplete Stop snapshots to trusted native targets", async () => {
+  const persistence = new MemoryPersistence(), seed = new AgentRequestStore(persistence);
+  const damaged = await seed.prepare({ ...parties(), responsePolicy: "required", responseInstruction: "Original unknown state" });
+  await seed.commit(damaged);
+  const healthy = await seed.prepare({ ...parties(), target: { ...parties().target, threadId: "healthy-target" }, responsePolicy: "required", responseInstruction: "Healthy state" });
+  await seed.commit(healthy);
+  const raw = structuredClone(persistence.value) as { requests: Record<string, { status: string; target: unknown }> };
+  raw.requests[damaged.requestId!]!.status = "original_unknown_status";
+  const reader = new MemoryPersistence(); reader.value = raw;
+  const store = new AgentRequestStore(reader), before = JSON.stringify(raw);
+  assert.equal(store.getEndpointDeliveryEvidenceStatus().available, true);
+  assert.deepEqual(store.unansweredTargetRequestSnapshot("target"), { requestIds: [], complete: false });
+  assert.deepEqual(store.unansweredTargetRequestSnapshot("healthy-target"), { requestIds: [healthy.requestId], complete: true });
+  assert.deepEqual(store.unansweredTargetRequestSnapshot("target", undefined, () => false), { requestIds: [], complete: false });
+  assert.equal(JSON.stringify(raw), before); assert.equal(reader.writes, 0);
+  raw.requests[damaged.requestId!]!.target = null;
+  const unknownTarget = new AgentRequestStore(reader);
+  assert.deepEqual(unknownTarget.unansweredTargetRequestSnapshot("healthy-target"), { requestIds: [healthy.requestId], complete: false });
+  assert.deepEqual(unknownTarget.unansweredTargetRequestSnapshot("healthy-target", undefined, () => false), { requestIds: [], complete: false });
+  assert.equal(reader.writes, 0);
+});
+
+test("a legacy owner model without request completeness metadata remains a readable partial Stop projection", async t => {
+  const persistence = new MemoryPersistence(), seed = new AgentRequestStore(persistence);
+  const prepared = await seed.prepare({ ...parties(), responsePolicy: "required", responseInstruction: "Original result" }); await seed.commit(prepared);
+  const readModel = AgentRequestState.prototype.readModel;
+  t.mock.method(AgentRequestState.prototype, "readModel", function(this: AgentRequestState) {
+    const legacy = readModel.call(this);
+    delete (legacy as Partial<typeof legacy>).requestSnapshot;
+    return legacy;
+  });
+  const store = new AgentRequestStore(persistence), before = JSON.stringify(persistence.value), writes = persistence.writes;
+  assert.deepEqual(store.unansweredTargetRequestSnapshot("target"), { requestIds: [prepared.requestId], complete: false });
+  assert.equal(JSON.stringify(persistence.value), before);
+  assert.equal(persistence.writes, writes);
 });
 
 test("Stop metadata query avoids rewriting a representative 5400-request history", async () => {

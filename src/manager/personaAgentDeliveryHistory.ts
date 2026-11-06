@@ -1,6 +1,7 @@
 import type { AgentThreadRequest, AgentThreadRequestResult } from "../agentThreads.js";
 import { appendPersonaChatReply } from "../personaChatHistory.js";
-import { chatTaskOwner, type PersonaChatTaskMetadataContext } from "./personaChatTaskMetadata.js";
+import { chatTaskOwner } from "../shared/personaChatHistory.js";
+import type { PersonaChatTaskMetadataContext } from "../plugins/io.rabiroute.manager.persona/src/manager/personaChatTaskMetadata.js";
 
 export async function recordPersonaAgentDelivery(
   request: AgentThreadRequest,

@@ -159,6 +159,10 @@ export function notificationRuleMatches(
     }
   }
 
+  if (routeKind === "private" && rule.targetUserId?.trim()) {
+    if (!("userId" in record) || String(record.userId) !== rule.targetUserId.trim()) return false;
+  }
+
   if (rule.allowedSpeakerNames?.length) {
     if (!isVoiceTranscriptRecord(record)) {
       return false;

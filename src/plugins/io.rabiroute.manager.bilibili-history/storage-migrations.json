@@ -1,0 +1,7 @@
+{
+  "schemaVersion": 1,
+  "scope": "instance",
+  "migrations": [
+    { "id": "bridge-layout-0.7", "kind": "file", "source": { "root": "state", "path": "data/runtime/bilibili-history-bridge.json" }, "target": "bridge.json" }
+  ]
+}

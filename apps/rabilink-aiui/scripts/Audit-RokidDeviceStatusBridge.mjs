@@ -20,7 +20,7 @@ const mainActivity = read("apps/rabi-mobile-android/app/src/main/java/com/rabi/l
 const sdk = read("packages/android-sdk/rabiroute-sdk/src/main/java/com/rabiroute/sdk/RabiRouteSdk.kt");
 const aiui = read("apps/rabilink-aiui/pages/home/index.ink");
 const relay = read("scripts/rabilink-relay-server.mjs");
-const pcOwner = read("src/manager/rabiLinkMobileOwner.ts");
+const pcOwner = read("src/plugins/io.rabiroute.endpoint.rabilink/src/manager/rabiLinkMobileOwner.ts");
 const api = read("apps/rabilink-aiui/utils/rabilink-api.js");
 
 const statusOnlyStart = controller.indexOf("boolean connectStatusOnly(String token)");

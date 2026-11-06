@@ -4,7 +4,7 @@
 
 # RabiLink 手机状态接口合同
 
-本文面向 Manager 和远端客户端接入开发者。接口定义位于 `src/manager/rabiLinkMobileOperations.ts`，业务和持久化由 `src/manager/rabiLinkMobileOwner.ts` 拥有；同一份可执行定义同时安装路由和发布发现目录。
+本文面向 Manager 和远端客户端接入开发者。接口定义位于 `src/plugins/io.rabiroute.endpoint.rabilink/src/manager/rabiLinkMobileOperations.ts`，业务和持久化由 `src/plugins/io.rabiroute.endpoint.rabilink/src/manager/rabiLinkMobileOwner.ts` 拥有；同一份可执行定义同时安装路由和发布发现目录。
 
 ## 接口
 

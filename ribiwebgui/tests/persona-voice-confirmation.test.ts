@@ -6,8 +6,8 @@ import {
   isPersonaVoiceConfirmationCandidate,
   observePersonaVoiceConfirmation,
   orderPersonaVoiceConfirmationCandidates
-} from "../src/persona/personaVoiceConfirmation";
-import type { PersonaVoiceUnresolvedVoiceprint } from "../src/persona/personaVoiceIdentityClient";
+} from "../../src/plugins/io.rabiroute.manager.persona/web/persona/personaVoiceConfirmation";
+import type { PersonaVoiceUnresolvedVoiceprint } from "../../src/plugins/io.rabiroute.manager.persona/web/persona/personaVoiceIdentityClient";
 
 function unresolved(
   voiceprintId: string,

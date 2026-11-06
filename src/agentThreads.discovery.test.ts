@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { handleAgentThreadRequest } from "./agentThreads.js";
-import { listDshSessions, readDshSession, readDshPrimaryBindingAsync } from "./dshSessionBridge.js";
+import { listDshSessions, readDshSession, readDshPrimaryBindingAsync } from "./plugins/io.rabiroute.agent.dsh/src/dshSessionBridge.js";
 import { nativeOperations } from "./agentAdapters/managerNativeOperations.js";
 import type { AgentManagerOperationInvoker } from "./agentAdapters/managerInvocation.js";
 

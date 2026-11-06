@@ -139,7 +139,7 @@ export type ManagerApiOperationsService = Readonly<{
 
 export class ApiContractError extends Error {
   constructor(readonly status: number, readonly code: string, readonly field: string, readonly operationId: string, readonly uncertain = false,
-    readonly mutationOutcome?: "not_started" | "unknown") {
+    readonly mutationOutcome?: "not_started" | "unknown", readonly reason?: string) {
     super(`${code}: ${field}`);
   }
 }
@@ -156,10 +156,16 @@ const frameworkErrorSchema = {
 export function apiContractFailure(operation: CompiledApiContract, error: unknown): ApiOperationResult {
   const failure = error instanceof ApiContractError ? error : new ApiContractError(500, "API_OPERATION_FAILED", "operation", operation.contract.operationId);
   const uncertain = failure.uncertain || failure.status >= 500;
+  const discovery = `Read GET /api/agent/help?operationId=${encodeURIComponent(operation.contract.operationId)}`;
+  const repair = failure.status === 403
+    ? "The original connection cannot access this operation. Restore its access without changing the target or request. "
+      + (uncertain ? "Inspect the original operation receipt before retrying any write. " : "") + discovery + " after access is restored."
+    : uncertain ? "Inspect the original operation receipt before retrying any write."
+      : `${failure.reason ? `${failure.reason}. ` : ""}${discovery}; use data.operations[].contract.request to correct ${failure.field}. `
+        + "If discovery returns 401/403, restore the existing connection's access; if discovery fails, report the lookup failure without treating it as a missing parameter value. Keep the original write intent and receipt; do not automatically replay it.";
   return { status: failure.status, body: { code: -1, errorCode: failure.code, field: failure.field,
     operationId: operation.contract.operationId, contractDigest: operation.digest,
-    repair: uncertain ? "Inspect the original operation receipt before retrying any write."
-      : "Read the current operation contract and correct the indicated field.", retryable: false,
+    repair, retryable: false,
     ...(failure.mutationOutcome ? { mutationOutcome: failure.mutationOutcome, uncertain } : uncertain ? { uncertain: true } : {}) } };
 }
 
@@ -430,7 +436,18 @@ export function compileApiOperation(definition: ApiOperationDefinition): Compile
 }
 
 function assertValid(operation: CompiledApiContract, validator: ValidateFunction, value: unknown, field: string): void {
-  if (!validator(value)) throw new ApiContractError(400, "API_REQUEST_SCHEMA_INVALID", field, operation.contract.operationId);
+  if (!validator(value)) {
+    const issue = validator.errors?.[0];
+    // Ajv messages/params can contain submitted keys and values. Expose the rule,
+    // and only schema-owned property names; never echo request data or headers.
+    const schema = validator.schema;
+    const properties = schema && typeof schema === "object" ? (schema as { properties?: Record<string, unknown> }).properties : undefined;
+    const name = issue?.keyword === "required" && !issue.instancePath ? issue.params.missingProperty as string
+      : issue?.instancePath?.split("/")[1]?.replace(/~1/g, "/").replace(/~0/g, "~");
+    const known = name && properties && Object.hasOwn(properties, name) ? name : undefined;
+    throw new ApiContractError(400, "API_REQUEST_SCHEMA_INVALID", known ? `${field}.${known}` : field,
+      operation.contract.operationId, false, undefined, `Parameter violates schema rule ${issue?.keyword ?? "validation"}`);
+  }
 }
 
 export function apiPathParameters(operation: CompiledApiContract, pathname: string): Readonly<Record<string, string>> | undefined {

@@ -25,5 +25,5 @@ for (const [endpoint, methods] of [
 ['/api/rabilink/agent-devices/self/profile/receipt',['POST']],
 ['/api/roles/:param/chat-history/aiui',['POST']]
 ]) add(endpoint, methods, 'pc-helper', 'PC', 'generic-manager-http', 'apps/rabilink-aiui/scripts/Smoke-GenericManagerTransport.mjs');
-add('/api/device-agents', ['GET'], 'pc-helper', 'PC', 'device-agent-catalog', 'src/agentAdapters/deviceAgentOwner.test.ts');
+add('/api/device-agents', ['GET'], 'pc-helper', 'PC', 'device-agent-catalog', 'src/plugins/io.rabiroute.agent.device-agent/src/agentAdapters/deviceAgentOwner.test.ts');
 export const contracts = Object.freeze(rows);

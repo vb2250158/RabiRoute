@@ -107,7 +107,7 @@ test('an old task moving into the latest page cannot prove the unseen interval i
 
 /** Execute only the fixed repository SFC's actual load body against private in-memory API state. */
 function actualCatalogLoader(component:'PersonaTaskHistory'|'EndpointConversationHistory',bindings:Record<string,unknown>):(more?:boolean)=>Promise<void> {
-  const file=new URL(`../src/components/${component}.vue`,import.meta.url);
+  const file=new URL(`../../src/plugins/io.rabiroute.manager.persona/web/components/${component}.vue`,import.meta.url);
   const {descriptor,errors}=parse(readFileSync(file,'utf8'),{filename:file.pathname});
   assert.deepEqual(errors,[]);assert.ok(descriptor.scriptSetup);
   const source=ts.createSourceFile(component+'.ts',descriptor.scriptSetup.content,ts.ScriptTarget.Latest,true,ts.ScriptKind.TS);

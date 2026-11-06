@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import fs from "node:fs/promises";
 import { mergeAgentSessionDescriptors, readAgentSessionBinding } from "./agentPluginSessionBinding.js";
+import path from "node:path";
+import { canonicalPluginSourceFixture, canonicalPluginSourcesFixture } from "../manager/canonicalPluginSource.fixture.js";
 
 test("a provider reads only its declared task fields", () => {
   const definition = {
@@ -35,12 +37,11 @@ test("disabled-package metadata preserves opaque IDs and workspace without norma
 });
 
 test("all shipped Agent packages preserve their own saved binding fields", async () => {
-  const packages = new URL("../../plugins/builtin/", import.meta.url);
-  const names = (await fs.readdir(packages)).filter(name => name.startsWith("io.rabiroute.agent."));
-  assert.equal(names.length, 9);
+  const packages = (await canonicalPluginSourcesFixture()).filter(source => source.manifest.id.startsWith("io.rabiroute.agent."));
+  assert.equal(packages.length, 9);
   const types = new Set<string>();
-  for (const name of names) {
-    const descriptor = JSON.parse(await fs.readFile(new URL(`${name}/1.0.0/agent-adapter.json`, packages), "utf8"));
+  for (const source of packages) {
+    const descriptor = JSON.parse(await fs.readFile(path.join(source.directory, "agent-adapter.json"), "utf8"));
     types.add(descriptor.type);
     const definition: Record<string, string> = { codexThreadId: "unrelated-codex-task" };
     const expected: Record<string, string> = {};
@@ -54,7 +55,7 @@ test("all shipped Agent packages preserve their own saved binding fields", async
     if (!expected.sessionName && descriptor.sessionBinding.defaultName) expected.sessionName = descriptor.sessionBinding.defaultName;
     assert.deepEqual(readAgentSessionBinding(descriptor, definition), expected, descriptor.type);
   }
-  assert.equal(types.size, names.length);
+  assert.equal(types.size, packages.length);
 });
 
 test("primary and secretary workspace checks can keep three distinct provider projects", async () => {
@@ -63,8 +64,9 @@ test("primary and secretary workspace checks can keep three distinct provider pr
   };
   const projects: string[] = [];
   for (const slug of ["codex", "dsh", "antigravity"]) {
+    const source = await canonicalPluginSourceFixture(`io.rabiroute.agent.${slug}`);
     const descriptor = JSON.parse(await fs.readFile(
-      new URL(`../../plugins/builtin/io.rabiroute.agent.${slug}/1.0.0/agent-adapter.json`, import.meta.url), "utf8"));
+      path.join(source.directory, "agent-adapter.json"), "utf8"));
     projects.push(readAgentSessionBinding(descriptor, definition).workspace!);
   }
   assert.deepEqual(projects, ["/codex-project", "/dsh-project", "/antigravity-project"]);

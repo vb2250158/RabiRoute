@@ -8,7 +8,7 @@ import { HostInstanceIdentityReset, IdentityResetAuthorizationError } from "./id
 import { createCorePublicOperations, type CorePublicOperationsContext } from "./corePublicOperations.js";
 import type { ApiOperationInput } from "./apiOperationContract.js";
 import { ManagerPluginRouteRegistry } from "./managerPluginRouteRegistry.js";
-import { registerLanAgentBodyGuard, assertLanAgentBodyAuthority } from "./lanAgentBodyAuthority.js";
+import { registerLanAgentBodyGuard } from "./lanAgentBodyAuthority.js";
 import { LanAgentAuthority } from "./lanAgentAuthority.js";
 import { evaluateLanAgentRequest } from "./lanAgentRequestAccess.js";
 import { RabiGlobalConfigStore } from "./globalConfig.js";
@@ -82,7 +82,7 @@ async function fixture(t: TestContext) {
       Object.defineProperty(request.socket, "remoteAddress", { value: "192.0.2.10", configurable: true });
     }
     hooks.beforeRoute?.(request);
-    registerLanAgentBodyGuard(request, body => assertLanAgentBodyAuthority(new URL(request.url!, "http://localhost").pathname, body, undefined));
+    registerLanAgentBodyGuard(request, () => {});
     // The registry owns one response publication; no private business headers precede its authority fence.
     if (!registry.handle(request, new URL(request.url!, "http://localhost"), response)) response.writeHead(404).end();
     // Do not alter the transport's address for the next keep-alive request.

@@ -10,7 +10,7 @@ import { installDataMutationAuditSink, type RecordedDataMutationAudit } from "..
 import { markAuthenticatedConnectionRequest } from "./connectionRequestAccess.js";
 import { assertTrustedLanAgentPrincipal } from "./lanAgentRequestAccess.js";
 import { ManagerPluginRouteRegistry } from "./managerPluginRouteRegistry.js";
-import { createRoleConfigurationOperations } from "./roleConfigurationOperations.js";
+import { createRoleConfigurationOperations } from "../plugins/io.rabiroute.manager.persona/src/manager/roleConfigurationOperations.js";
 
 async function fixture(t: test.TestContext) {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "role-atomic-fence-test-"));

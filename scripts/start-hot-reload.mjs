@@ -40,7 +40,7 @@ if (process.argv.includes("--speech")) {
       "-ExecutionPolicy",
       "Bypass",
       "-File",
-      "plugin-adapters/rabi-speech/scripts/start.ps1",
+      "src/plugins/rabi-speech/scripts/start.ps1",
       "-Reload"
     ]
   });

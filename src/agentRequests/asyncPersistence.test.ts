@@ -128,7 +128,7 @@ test("file owner loads asynchronously, commits before success and remains old-re
   assert.deepEqual(JSON.parse(JSON.stringify(restarted.get(prepared.requestId!))), JSON.parse(JSON.stringify(store.get(prepared.requestId!))));
 });
 
-test("pending durable commit publishes no tentative reminder fields, events or success", { timeout: 15_000 }, async t => {
+test("pending durable commit publishes no tentative cancellation fields, events or success", { timeout: 15_000 }, async t => {
   const f = await fixture(t), store = f.store(undefined, { workerURL: await controlledWorker(f.root) });
   t.after(() => store.close());
   const prepared = await store.prepare(preparation());
@@ -137,30 +137,29 @@ test("pending durable commit publishes no tentative reminder fields, events or s
   await fs.writeFile(path.join(f.root, "hold"), "1");
   let complete = false, events = 0;
   store.onEndpointDeliveryChange(() => { events++; });
-  const pending = store.recordReminderResult(prepared.requestId!, false, new Error("fixture target unavailable")).finally(() => { complete = true; });
+  const pending = store.cancel(prepared.requestId!, "Fixture durable cancellation.").finally(() => { complete = true; });
   try {
     await until(() => fs.access(path.join(f.root, "entered")).then(() => true, () => false));
-    assert.equal(store.get(prepared.requestId!)?.reminderCount, 0);
-    assert.equal(JSON.parse(await fs.readFile(f.statePath, "utf8")).requests[prepared.requestId!].reminderCount, 0);
+    assert.equal(store.get(prepared.requestId!)?.status, "awaiting_response");
+    assert.equal(JSON.parse(await fs.readFile(f.statePath, "utf8")).requests[prepared.requestId!].status, "awaiting_response");
     assert.equal(events, 0); assert.equal(complete, false);
   } finally { await fs.rm(path.join(f.root, "hold"), { force: true }); await pending; }
   assert.equal(events, 1);
-  assert.equal(store.get(prepared.requestId!)?.reminderCount, 1);
+  assert.equal(store.get(prepared.requestId!)?.status, "cancelled");
 });
 
-test("failed durable reminder write discards its draft and a later mutation uses committed fields", { timeout: 15_000 }, async t => {
+test("failed durable cancellation write discards its draft and a later mutation uses committed fields", { timeout: 15_000 }, async t => {
   const f = await fixture(t), store = f.store(undefined, { workerURL: await controlledWorker(f.root) });
   t.after(() => store.close());
   const prepared = await store.prepare(preparation()); await store.commit(prepared);
   const before = store.get(prepared.requestId!), original = await fs.readFile(f.statePath);
   await fs.writeFile(path.join(f.root, "fail"), "1");
-  await assert.rejects(store.recordReminderResult(prepared.requestId!, false, "fixture failure"), /durable replacement failed/);
+  await assert.rejects(store.cancel(prepared.requestId!, "Fixture durable cancellation."), /durable replacement failed/);
   assert.deepEqual(store.get(prepared.requestId!), before);
   assert.deepEqual(await fs.readFile(f.statePath), original);
   await fs.rm(path.join(f.root, "fail"));
-  const committed = await store.recordReminderResult(prepared.requestId!, true);
-  assert.equal(committed.reminderCount, 1);
-  assert.equal(committed.lastReminderError, undefined);
+  const committed = await store.cancel(prepared.requestId!, "Fixture durable cancellation.");
+  assert.equal(committed.status, "cancelled");
 });
 
 test("worker loss after durable replacement fences the unknown result and close waits real child exit", { timeout: 15_000 }, async t => {
@@ -168,8 +167,8 @@ test("worker loss after durable replacement fences the unknown result and close 
   t.after(() => store.close().catch(() => {}));
   const prepared = await store.prepare(preparation()); await store.commit(prepared);
   await fs.writeFile(path.join(f.root, "die"), "1");
-  await assert.rejects(store.recordReminderResult(prepared.requestId!, true), (error: any) => error.code === "AGENT_REQUEST_COMMIT_UNKNOWN" && error.commitState === "unknown");
-  assert.equal(JSON.parse(await fs.readFile(f.statePath, "utf8")).requests[prepared.requestId!].reminderCount, 1);
+  await assert.rejects(store.cancel(prepared.requestId!, "Fixture durable cancellation."), (error: any) => error.code === "AGENT_REQUEST_COMMIT_UNKNOWN" && error.commitState === "unknown");
+  assert.equal(JSON.parse(await fs.readFile(f.statePath, "utf8")).requests[prepared.requestId!].status, "cancelled");
   assert.throws(() => store.get(prepared.requestId!), AgentRequestStoreUnavailableError);
   await assert.rejects(store.cancel(prepared.requestId!), AgentRequestStoreUnavailableError);
   await assert.rejects(store.close(), AgentRequestStoreUnavailableError);
@@ -180,15 +179,15 @@ test("close drains an accepted commit and excludes subsequent mutations", { time
   t.after(() => store.close());
   const prepared = await store.prepare(preparation()); await store.commit(prepared);
   await fs.rm(path.join(f.root, "entered"), { force: true }); await fs.writeFile(path.join(f.root, "hold"), "1");
-  const mutation = store.recordReminderResult(prepared.requestId!, true);
+  const mutation = store.cancel(prepared.requestId!, "Fixture durable cancellation.");
   await until(() => fs.access(path.join(f.root, "entered")).then(() => true, () => false));
-  const queued = store.recordReminderResult(prepared.requestId!, false, "This mutation must never be dispatched.");
+  const queued = store.cancel(prepared.requestId!, "Fixture durable cancellation.");
   const rejectedQueued = assert.rejects(queued, (error: any) => error.statusCode === 503 && error.commitState === "not_started");
   let closed = false;
   const closing = store.close().then(() => { closed = true; });
   try { await rejectedQueued; await delay(30); assert.equal(closed, false); await assert.rejects(store.cancel(prepared.requestId!), /closing/); }
   finally { await fs.rm(path.join(f.root, "hold"), { force: true }); await mutation; await closing; }
-  assert.equal(JSON.parse(await fs.readFile(f.statePath, "utf8")).requests[prepared.requestId!].reminderCount, 1);
+  assert.equal(JSON.parse(await fs.readFile(f.statePath, "utf8")).requests[prepared.requestId!].status, "cancelled");
 });
 
 test("corrupt file is local unavailable evidence and close still retires its worker", { timeout: 15_000 }, async t => {
@@ -207,8 +206,8 @@ test("injected memory owner initializes synchronously but all mutations settle a
   const prepared = await store.prepare(preparation()); await store.commit(prepared);
   fail = true;
   let rejected = false;
-  await store.recordReminderResult(prepared.requestId!, true).then(() => assert.fail("Expected rejection"), error => { rejected = true; assert.equal(error, undefined); });
-  assert.equal(rejected, true); assert.equal(store.get(prepared.requestId!)?.reminderCount, 0);
+  await store.cancel(prepared.requestId!, "Fixture durable cancellation.").then(() => assert.fail("Expected rejection"), error => { rejected = true; assert.equal(error, undefined); });
+  assert.equal(rejected, true); assert.equal(store.get(prepared.requestId!)?.status, "awaiting_response");
   await store.close();
 });
 
@@ -268,8 +267,8 @@ test("injected persistence acknowledgement loss has the same unknown fence as a 
   } });
   const prepared = await store.prepare(preparation()); await store.commit(prepared);
   unknown = true;
-  await assert.rejects(store.recordReminderResult(prepared.requestId!, true), (error: any) => error.code === "AGENT_REQUEST_COMMIT_UNKNOWN");
-  assert.equal(persisted.requests[prepared.requestId!].reminderCount, 1);
+  await assert.rejects(store.cancel(prepared.requestId!, "Fixture durable cancellation."), (error: any) => error.code === "AGENT_REQUEST_COMMIT_UNKNOWN");
+  assert.equal(persisted.requests[prepared.requestId!].status, "cancelled");
   assert.throws(() => store.get(prepared.requestId!), AgentRequestStoreUnavailableError);
   await assert.rejects(store.cancel(prepared.requestId!), AgentRequestStoreUnavailableError);
   await assert.rejects(store.close(), AgentRequestStoreUnavailableError);
@@ -296,8 +295,8 @@ test("an unused file owner closes without starting an initialization child", { t
 
 test("queued worker commits preserve each caller audit and all AsyncLocalStorage contexts", { timeout: 15_000 }, async t => {
   const f = await fixture(t), store = f.store(undefined, { workerURL: await controlledWorker(f.root) });
-  const first = await store.prepare(preparation()), second = await store.prepare(preparation());
-  await store.commit(first); await store.commit(second);
+  const first = await store.prepare(preparation()), second = await store.prepare(preparation()), third = await store.prepare(preparation());
+  await store.commit(first); await store.commit(second); await store.commit(third);
   await fs.rm(path.join(f.root, "entered"), { force: true }); await fs.writeFile(path.join(f.root, "hold"), "1");
   const local = new AsyncLocalStorage<string>();
   const audits: Array<{ target: string; actor?: string; requestId?: string; local?: string }> = [];
@@ -306,15 +305,15 @@ test("queued worker commits preserve each caller audit and all AsyncLocalStorage
   });
   t.after(remove);
   const context = (number: number) => createOperationContext({ source: "http", actor: { kind: "agent", id: `fixture-caller-${number}` }, requestId: `fixture-http-${number}` });
-  const active = local.run("fixture-local-one", () => runWithOperationContext(context(1), () => store.recordReminderResult(first.requestId!, true)));
+  const active = local.run("fixture-local-one", () => runWithOperationContext(context(1), () => store.cancel(first.requestId!, "Fixture durable cancellation.")));
   await until(() => fs.access(path.join(f.root, "entered")).then(() => true, () => false));
   const queued = local.run("fixture-local-two", () => runWithOperationContext(context(2), () => store.cancel(second.requestId!, "Fixture cancellation.")));
-  const withoutContext = store.recordReminderResult(first.requestId!, false, "Fixture later retry.");
+  const withoutContext = store.cancel(third.requestId!, "Fixture durable cancellation.");
   try { assert.equal(audits.length, 0); }
   finally { await fs.rm(path.join(f.root, "hold"), { force: true }); await Promise.all([active, queued, withoutContext]); }
   assert.deepEqual(audits, [
     { target: first.requestId, actor: "fixture-caller-1", requestId: "fixture-http-1", local: "fixture-local-one" },
     { target: second.requestId, actor: "fixture-caller-2", requestId: "fixture-http-2", local: "fixture-local-two" },
-    { target: first.requestId, actor: undefined, requestId: undefined, local: undefined }
+    { target: third.requestId, actor: undefined, requestId: undefined, local: undefined }
   ]);
 });

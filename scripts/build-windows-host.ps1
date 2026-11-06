@@ -6,6 +6,8 @@ param(
 $ErrorActionPreference = "Stop"
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $repo = [System.IO.Path]::GetFullPath((Join-Path $scriptDir ".."))
+$packageManifest = Get-Content -LiteralPath (Join-Path $repo "package.json") -Raw -Encoding UTF8 | ConvertFrom-Json
+$hostVersion = [string]$packageManifest.version
 if (-not $OutputRoot) {
     $OutputRoot = Join-Path $env:LOCALAPPDATA "RabiRoute\build\windows-host"
 }
@@ -49,6 +51,7 @@ try {
     Write-Host "[windows-host] Publishing stable .NET 9 single-file win-x64 bootstrap"
     & dotnet publish $bootstrapProject `
         -c Release `
+        -p:Version=$hostVersion `
         -r win-x64 `
         --self-contained true `
         --artifacts-path $artifacts `
@@ -61,6 +64,7 @@ try {
     Write-Host "[windows-host] Publishing loadable version Host core"
     & dotnet publish $coreProject `
         -c Release `
+        -p:Version=$hostVersion `
         -r win-x64 `
         --self-contained false `
         --artifacts-path $artifacts `

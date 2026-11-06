@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { getTimeoutMs } from "./shared/timeoutSettings.js";
-import { parseNapCatGroupFiles, readNapCatGroupFiles } from "./napcat.js";
+import { parseNapCatGroupFiles, readNapCatGroupFiles } from "./plugins/io.rabiroute.endpoint.napcat/src/napcat.js";
 
 const file = { file_id: "file_1", file_name: "sample.txt", file_size: 12, upload_time: 100, uploader: 123, busid: 102 };
 const folder = { folder_id: "folder_1", folder_name: "Folder", total_file_count: 7 };

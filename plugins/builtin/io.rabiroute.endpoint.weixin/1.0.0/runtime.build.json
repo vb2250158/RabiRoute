@@ -1,4 +1,0 @@
-{
-  "source": "src/adapters/weixinAdapter.ts",
-  "factory": "createWeixinAdapter"
-}

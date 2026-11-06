@@ -34,7 +34,7 @@
     },
     {
       "name": "use-rabi-codex-context",
-      "source": "plugins/rabi-codex-context/skills/use-rabi-codex-context",
+      "source": "src/plugins/rabi-codex-context/skills/use-rabi-codex-context",
       "audience": "codex",
       "hosts": [
         "codex"

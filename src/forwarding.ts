@@ -1,6 +1,6 @@
 import path from "node:path";
 import { beginRoleWork, RoleLifecycleError } from "./roleLifecycle.js";
-import { appendDesktopPetTranscript } from "./desktopPetTranscript.js";
+import { getTimeoutMs } from "./shared/timeoutSettings.js";
 import { executeAgentDelivery } from "./automation/agentDelivery.js";
 import { deliverSessionOnce } from "./automation/sessionDelivery.js";
 import { resolveAgentDeliveryExecutor, type AgentSessionDestination } from "./shared/agentDeliveryTarget.js";
@@ -559,14 +559,25 @@ export function shouldSkipHeartbeatDelivery(
     && codexThreadActive;
 }
 
-async function heartbeatShouldSkipForBusyAgent(routeKind: ForwardRouteKind): Promise<boolean> {
+export function scheduledAutomationBusyPolicy(
+  route: Pick<RouteProfile, "automationRules">,
+  automationRuleId: unknown,
+  legacyPolicy: boolean
+): boolean {
+  const rule = route.automationRules?.find(item => item.id === automationRuleId);
+  return rule?.trigger.type === "schedule"
+    ? rule.trigger.schedule.skipWhenAgentBusy ?? legacyPolicy
+    : legacyPolicy;
+}
+
+async function heartbeatShouldSkipForBusyAgent(routeKind: ForwardRouteKind, skipWhenAgentBusy = config.heartbeatSkipWhenAgentBusy): Promise<boolean> {
   // A remote task owner cannot be inferred from this computer's Desktop state.
   if (resolvePrimaryAgentTarget(config)?.binding) return false;
   const primary = configuredPrimaryAgentAdapter();
   const adapters = primary ? [primary] : [];
   if (!shouldSkipHeartbeatDelivery(
     routeKind,
-    config.heartbeatSkipWhenAgentBusy,
+    skipWhenAgentBusy,
     adapters,
     true,
     false
@@ -891,18 +902,45 @@ function appendRecordToPersonaConversation(route: RouteProfile, routeKind: Forwa
   }
 }
 
+async function projectDesktopPetAsr(routeId: string, personaId: string, record: ForwardRecord): Promise<void> {
+  if (!isVoiceTranscriptRecord(record)) return;
+  let reason = "manager-unavailable";
+  try {
+    const base = process.env.GATEWAY_MANAGER_URL?.trim();
+    if (!base) throw new Error(reason);
+    const response = await fetch(new URL(`/api/desktop-pet/roles/${encodeURIComponent(personaId)}/transcripts`, base), {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ personaId, kind: "asr", id: String(record.messageId), text: record.rawMessage,
+        time: record.time, source: record.adapterType ?? "voice" }),
+      signal: AbortSignal.timeout(getTimeoutMs("backend.forwarding.desktopPetTranscript.timeoutMs", 5000))
+    });
+    reason = `http-${response.status}`;
+    const receipt = await response.json() as { code?: number; data?: { appended?: boolean } };
+    if (!response.ok || receipt.code !== 0 || typeof receipt.data?.appended !== "boolean") throw new Error(reason);
+    return;
+  } catch {
+    // The raw event and canonical context are already durable. This optional view has one plugin owner.
+    try {
+      appendAdapterLogToDir("router", { event: "desktop_pet_asr_projection_unavailable", level: "warning",
+        message: "Desktop pet ASR display is unavailable; original raw history and conversation context are retained.",
+        data: { routeId, personaId, messageId: record.messageId, reason } }, config.dataDir);
+    } catch { console.warn("Desktop pet ASR display unavailable; original raw history is retained."); }
+  }
+}
+
 function recordInboundForRoutes(
   routes: RouteProfile[],
   routeKind: ForwardRouteKind,
   record: ForwardRecord,
   options: ForwardMessageOptions
-): number {
+): Promise<number> {
   // Plan feedback already has a dedicated JSONL audit record. Do not duplicate
   // it into chat history or the persona conversation ledger.
-  if (routeKind === "plan_feedback") return 0;
+  if (routeKind === "plan_feedback") return Promise.resolve(0);
   const recordedRawDirs = new Set<string>();
   const recordedConversationDirs = new Set<string>();
   let conversationRecordCount = 0;
+  const projections: Array<{ routeId: string; personaId: string }> = [];
   for (const route of routes) {
     const roleContext = rolePathsForRoute(route);
     const resolvedDataDir = path.resolve(roleContext.personaDataDir);
@@ -918,23 +956,21 @@ function recordInboundForRoutes(
       && !recordedRawDirs.has(resolvedDataDir)) {
       appendRecordToRoleDataDir(record, roleContext.personaDataDir);
       if (isVoiceTranscriptRecord(record) && roleContext.roleId && roleContext.roleDir) {
-        appendDesktopPetTranscript(roleContext.roleId, roleContext.personaDataDir, {
-          kind: "asr", id: String(record.messageId), text: record.rawMessage, time: record.time,
-          source: record.adapterType ?? "voice"
-        });
+        projections.push({ routeId: route.id, personaId: roleContext.roleId });
       }
       recordedRawDirs.add(resolvedDataDir);
     }
   }
-  return conversationRecordCount;
+  // Save every selected persona before any optional Manager request can yield or fail.
+  return Promise.all(projections.map(item => projectDesktopPetAsr(item.routeId, item.personaId, record))).then(() => conversationRecordCount);
 }
 
 /** Record an endpoint message in persona-scoped raw history and the canonical conversation ledger without notifying an Agent. */
-export function recordMessageContextOnly(
+export async function recordMessageContextOnly(
   routeKind: ForwardRouteKind,
   record: ForwardRecord,
   options: ForwardMessageOptions = {}
-): number {
+): Promise<number> {
   const routes = routeProfilesForRecord(record);
   return recordInboundForRoutes(routes, routeKind, record, options);
 }
@@ -1053,7 +1089,8 @@ async function forwardMessageToRouteInternal(
     try { return rule.agentTarget && resolveAgentDeliveryExecutor(rule.agentTarget, config.agentRecipients) === "primary"; }
     catch { return false; }
   });
-  if (onlyPrimaryTargets && await heartbeatShouldSkipForBusyAgent(routeKind)) {
+  const scheduledBusyPolicy = scheduledAutomationBusyPolicy(route, extraValues.automationRuleId, config.heartbeatSkipWhenAgentBusy);
+  if (onlyPrimaryTargets && await heartbeatShouldSkipForBusyAgent(routeKind, scheduledBusyPolicy)) {
     appendAdapterLogToDir("router", {
       event: "heartbeat_skipped_agent_busy",
       level: "info",
@@ -1279,11 +1316,13 @@ async function forwardMessageAndWaitInternal(
       }
     }
   }
-  if (options.recordInbound !== false) recordInboundForRoutes(routes, routeKind, record, options);
+  const inboundRecording = options.recordInbound !== false ? recordInboundForRoutes(routes, routeKind, record, options) : undefined;
   const results: ForwardRouteDeliveryResult[] = [];
-  for (const route of routes) {
-    results.push(await forwardMessageToRoute(route, routeKind, record, extraValues, options, packets));
-  }
+  try {
+    for (const route of routes) {
+      results.push(await forwardMessageToRoute(route, routeKind, record, extraValues, options, packets));
+    }
+  } finally { await inboundRecording; }
   const result = summarizeDeliveryResult(routeKind, record, results);
   logDeliveryResult(result);
   if (options.logReplayAttempt !== false) {
@@ -1345,7 +1384,7 @@ export function forwardMessage(
       process.env.GATEWAY_ID
     );
     if (input) {
-      recordMessageContextOnly(routeKind, record);
+      void recordMessageContextOnly(routeKind, record).then(() => {
       const queued = activeMessageGroupingQueue().enqueue(input);
       appendAdapterLogToDir("router", {
         event: queued.accepted ? "message_group_queued" : "message_group_duplicate",
@@ -1362,6 +1401,11 @@ export function forwardMessage(
           conversationKey: input.conversationKey
         }
       }, config.dataDir);
+      }).catch(error => {
+        appendAdapterLogToDir("router", { event: "message_group_record_failed", level: "error",
+          message: "Failed to record the grouped message before enqueueing.",
+          data: { routeKind, messageId: recordId(record), error: error instanceof Error ? error.message : String(error) } }, config.dataDir);
+      });
       return;
     }
   }

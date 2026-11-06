@@ -34,7 +34,7 @@ NapCat 租约覆盖真实 socket 关闭、已接受帧与资料刷新 Promise（
 ## 受控验证
 
 ```powershell
-node --test-concurrency=2 --import ./scripts/test-manager-runtime-env.mjs --import tsx --test src/adapters/feishuAdapter.test.ts src/adapters/napcatAdapter.test.ts src/adapters/platformNativeOwners.test.ts src/adapters/platformNativeGateway.test.ts
+node --test-concurrency=2 --import ./scripts/test-manager-runtime-env.mjs --import tsx --test src/plugins/io.rabiroute.endpoint.feishu/src/adapters/feishuAdapter.test.ts src/plugins/io.rabiroute.endpoint.napcat/src/adapters/napcatAdapter.test.ts src/adapters/platformNativeOwners.test.ts src/adapters/platformNativeGateway.test.ts
 ```
 
 临时目录、随机本机端口、模拟签名和注入回调覆盖精确路径、raw signature、challenge、错误、字节上限、去重、绑定撤回、任意 WS path、文本／二进制帧、原握手错误、实例归属、断连后的在途回调、启动回收和端口重挂。不登录平台，不发送真实消息。

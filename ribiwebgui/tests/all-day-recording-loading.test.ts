@@ -5,12 +5,13 @@ import { createRequire } from "node:module";
 import vm from "node:vm";
 import { compileScript, parse } from "@vue/compiler-sfc";
 import { transformSync } from "esbuild";
+import * as allDayContract from "../../src/shared/allDayRecording";
 import { DEFAULT_ALL_DAY_SETTINGS, type AllDayEvent } from "../../src/shared/allDayRecording";
 
 const row = (id: string, time: number): AllDayEvent => ({ id, startedAt: time, endedAt: time, deviceId: "fixture", source: "window", kind: "window", text: id, state: "saved" });
 function fixture(t: import("node:test").TestContext, fail = false, blockStatus = false, options: { days?: string[]; blockDay?: string; failDay?: string; incompleteDay?: string; emptyCache?: boolean; loadingDay?: string; pageLoading?: boolean; count?: number } = {}) {
   t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: options.days?.length ? Date.parse(options.days[1]??options.days[0])+300000 : 2000000000000 });
-  const component = new URL("../src/components/PersonaAllDayRecording.vue", import.meta.url);
+  const component = new URL("../../src/plugins/io.rabiroute.manager.persona/web/components/PersonaAllDayRecording.vue", import.meta.url);
   const require = createRequire(component), vue = require("vue");
   const unmount: (() => void)[] = [], calls: string[] = [], handlers = new Map<string, (event: unknown) => void>();
   const deadlines = new Map<string,number>();
@@ -46,7 +47,7 @@ function fixture(t: import("node:test").TestContext, fail = false, blockStatus =
         const pendingDay=options.loadingDay || (!dayReleased ? options.blockDay : undefined);
         const data = url.includes("/page?") ? {events:[],hasMore:true,loading:options.pageLoading,pendingDays:pendingDay?[pendingDay]:[]} : day ? {events:[],days:[day],incompleteDays:day === options.incompleteDay || day===pendingDay ? [day] : [],loading:day===pendingDay} : url.includes("/catalog") ? { events: options.days?.length ? [] : rows, incompleteDays: [], days: options.days ?? [] } : url.endsWith("/recent") ? { events: [rows.at(-1)] } : url.includes("/events?") ? { events:rows.filter(row=>{const date=new Date(row.startedAt).toISOString().slice(0,10);return date!==pendingDay&&date!==options.failDay;}),loading:!!pendingDay,pendingDays:[pendingDay,options.failDay,options.incompleteDay].filter(Boolean),readError:options.failDay?"Failed day read":undefined } : { settings: DEFAULT_ALL_DAY_SETTINGS, enabled: false, running: false, activeRoleId: null, error: "" };
         return read(new Response(JSON.stringify({ code: 0, data })));
-      } } : name.startsWith("@shared/") ? require("../../../src/shared/allDayRecording.ts") : require(name)
+      } } : name.startsWith("@shared/") ? allDayContract : require(name)
   });
   const scope = vue.effectScope();
   const model = scope.run(() => module.exports.default.setup({ roleId: "fixture" }, { expose() {} }));

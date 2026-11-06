@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { AsyncResource } from "node:async_hooks";
 import { AgentRequestState, resolveAgentRequestReplyDestination, type AgentRequestRecord, type AgentRequestParty, type PrepareAgentCommunicationInput,
-  type AgentCommunicationPreparation, type EndpointDeliveryMetadata } from "./state.js";
+  type AgentCommunicationPreparation, type EndpointDeliveryMetadata, type AgentRequestSnapshotMetadata } from "./state.js";
 import { JsonFileAgentRequestPersistence, type AgentRequestPersistence } from "./persistence.js";
 import { AgentRequestPersistenceTransport } from "./persistenceTransport.js";
 import type { PreparedEndpointDelivery, EndpointDeliveryReceipt } from "./endpointDelivery.js";
@@ -16,13 +16,13 @@ import { AgentReplyStateError } from "./replyError.js";
 import { AgentThreadContractError } from "./requestValidation.js";
 import { currentOperationContext, recordDataMutationAudit, type RecordedDataMutationAudit } from "../observability/dataMutationAudit.js";
 
-export { AGENT_REQUEST_SCHEMA_VERSION, AGENT_REQUEST_REMINDER_MS, agentDeliveryPromptHash } from "./state.js";
+export { AGENT_REQUEST_SCHEMA_VERSION, agentDeliveryPromptHash } from "./state.js";
 export type { AgentResponsePolicy, AgentRequestStatus, AgentRequestParty, AgentRequestResponse, AgentRequestRecord,
   AgentCommunicationPreparation, PrepareAgentCommunicationInput, EndpointDeliveryMetadata } from "./state.js";
 export type { AgentRequestPersistence } from "./persistence.js";
 export type EndpointDeliverySnapshot = Omit<PreparedEndpointDelivery, "prompt">;
 type Model = { requests: AgentRequestRecord[]; deliveries: EndpointDeliverySnapshot[]; unavailableDeliveryIds: string[];
-  evidence: { available: boolean; reason?: string } };
+  evidence: { available: boolean; reason?: string }; requestSnapshot?: AgentRequestSnapshotMetadata };
 type Delta = { requests: AgentRequestRecord[]; removedRequests: string[]; deliveries: EndpointDeliverySnapshot[]; removedDeliveries: string[] };
 type Reply = { ok: boolean; revision: number; value?: unknown; delta?: Delta; error?: any; audit?: RecordedDataMutationAudit[] };
 type StoreOptions = { workerURL?: URL; timeoutMs?: number; maxQueue?: number };
@@ -59,6 +59,7 @@ export class AgentRequestStore {
   private readonly unavailableDeliveryIds = new Set<string>();
   private readonly listeners = new Set<() => void>();
   private evidence: Model["evidence"] = { available: false, reason: "Agent request evidence is still loading." };
+  private requestSnapshot?: AgentRequestSnapshotMetadata;
   private loaded = false;
   private revision = 0;
   private readonly waiting: QueuedOperation[] = [];
@@ -127,6 +128,7 @@ export class AgentRequestStore {
     for (const delivery of model.deliveries) this.deliveries.set(delivery.deliveryId, delivery);
     for (const id of model.unavailableDeliveryIds) this.unavailableDeliveryIds.add(id);
     this.evidence = model.evidence;
+    this.requestSnapshot = model.requestSnapshot;
     this.loaded = true;
     if (model.evidence.available) this.resolveReady();
     else this.rejectReady(new AgentRequestStoreUnavailableError(model.evidence.reason ?? "Original Agent request evidence is unavailable."));
@@ -222,7 +224,6 @@ export class AgentRequestStore {
       const values = typeof captured === "function" ? structuredClone(captured()) : captured;
       if (this.closing) throw new AgentRequestStoreUnavailableError("Agent request mutation was not dispatched before owner close.");
       if (this.local) {
-        if (method === "recordTargetTurnEnded" && values[3] !== undefined) values[3] = new Date(values[3] as string);
         if (method === "noteEndpointDeliveryFailure" && (values[1] as any)?.__error) {
           const error = values[1] as any; values[1] = Object.assign(new Error(error.message), error.properties);
         }
@@ -337,24 +338,22 @@ export class AgentRequestStore {
       return reply.value as AgentRequestRecord[];
     });
   }
-  dueReminders(at = this.now()): AgentRequestRecord[] {
-    this.assertComplete();
-    return [...this.requests.values()].filter(value => value.status === "awaiting_response" && Boolean(value.nextReminderAt)
-      && (Date.parse(value.nextReminderAt!) || Infinity) <= at.getTime()).sort((a, b) => Date.parse(a.nextReminderAt!) - Date.parse(b.nextReminderAt!))
-      .map(value => structuredClone(value));
-  }
   /** Read only this target's open IDs; never clone prompt bodies, mutate or replay the ledger. */
   unansweredTargetRequestIds(threadId: string, workspace?: string, matches?: (party: AgentRequestParty) => boolean): string[] {
+    return this.unansweredTargetRequestSnapshot(threadId, workspace, matches).requestIds;
+  }
+  unansweredTargetRequestSnapshot(threadId: string, workspace?: string, matches?: (party: AgentRequestParty) => boolean): { requestIds: string[]; complete: boolean } {
     this.assertComplete();
     const id = threadId.trim().slice(0, 4096);
-    if (!id) return [];
+    const complete = this.requestSnapshot !== undefined && !this.requestSnapshot.unscoped && !this.requestSnapshot.incompleteThreadIds.includes(id);
+    if (!id) return { requestIds: [], complete };
     const ids: string[] = [];
     for (const record of this.requests.values()) {
       if (record.status === "awaiting_response" && record.target.threadId === id
         && (!matches || matches(record.target))
         && (!record.target.workspace || !workspace || sameCodexWorkspace(record.target.workspace, workspace))) ids.push(record.id);
     }
-    return ids;
+    return { requestIds: ids, complete };
   }
 
   hasManagedSession(threadId: string, workspace?: string, matches?: (party: AgentRequestParty) => boolean): boolean {
@@ -406,9 +405,6 @@ export class AgentRequestStore {
   bindResponseEvidence(preparation: AgentCommunicationPreparation, prompt: string): Promise<void> { return this.mutate("bindResponseEvidence", [preparation, prompt]); }
   commit(preparation: AgentCommunicationPreparation, receipt: { action?: string; transport?: string } = {}): Promise<ReturnType<AgentRequestState["commit"]>> { return this.mutate("commit", [preparation, receipt]); }
   abort(preparation: AgentCommunicationPreparation): Promise<void> { return this.mutate("abort", [preparation]); }
-  recordTargetTurnEnded(threadId: string, workspace: string | undefined, turnId: string, endedAt = this.now()): Promise<AgentRequestRecord[]> { return this.mutate("recordTargetTurnEnded", [threadId, workspace, turnId, endedAt.toISOString()]); }
-  recordPendingResponseCheck(id: string, deliveryId: string, status: string): Promise<void> { return this.mutate("recordPendingResponseCheck", [id, deliveryId, status]); }
-  recordReminderResult(id: string, delivered: boolean, error?: unknown): Promise<AgentRequestRecord> { return this.mutate("recordReminderResult", [id, delivered, error instanceof Error ? error.message : error]); }
   cancel(id: string, reason?: string): Promise<AgentRequestRecord> { return this.mutate("cancel", [id, reason]); }
   cancelEndpointDelivery(id: string, assertCurrent: () => void = () => {}): Promise<PreparedEndpointDelivery> {
     return this.mutate("cancelEndpointDelivery", () => { assertCurrent(); return [id]; });

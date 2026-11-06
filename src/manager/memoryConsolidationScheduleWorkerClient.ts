@@ -1,7 +1,7 @@
 import { getTimeoutMs } from "../shared/timeoutSettings.js";
 import { fork } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import type { MemoryConsolidationScheduleEvaluation } from "./memoryConsolidationScheduler.js";
+import type { MemoryConsolidationScheduleEvaluation } from "../plugins/io.rabiroute.manager.memory-consolidation/src/manager/memoryConsolidationScheduler.js";
 
 type ChildResult =
   | { ok: true; evaluation: MemoryConsolidationScheduleEvaluation }

@@ -51,8 +51,8 @@ test("WebGUI build skill uses Host READY identity instead of a port owner", () =
 
 test("RabiSpeech active documentation points to the fenced dynamic Manager URL", () => {
   for (const relative of [
-    "../plugin-adapters/rabi-speech/README.md",
-    "../plugin-adapters/rabi-speech/README_en.md",
+    "../src/plugins/rabi-speech/README.md",
+    "../src/plugins/rabi-speech/README_en.md",
     "../docs/rabispeech-plugin.md",
     "../docs/rabispeech-plugin_en.md"
   ]) {

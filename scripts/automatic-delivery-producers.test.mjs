@@ -13,7 +13,7 @@ const sourceRoot = await hasRepositorySource(scriptRoot) ? scriptRoot : process.
 assert.ok(await hasRepositorySource(sourceRoot), 'Run this test from the repository root.');
 const importBuilt = relative => import(pathToFileURL(path.join(sourceRoot, 'dist', relative)).href);
 const { EndpointDeliveryRecovery, reconcileEndpointDelivery } = await importBuilt('agentRequests/endpointDelivery.js');
-const { MessageProcessingAutomationService } = await importBuilt('manager/messageProcessingAutomationService.js');
+const { KnowledgeCallbackReminderService } = await importBuilt('plugins/io.rabiroute.manager.message-processing-automation/src/manager/knowledgeCallbackReminderService.js');
 const ts = (await import(pathToFileURL(path.join(sourceRoot, 'node_modules/typescript/lib/typescript.js')).href)).default;
 const controlText = await fs.readFile(path.join(sourceRoot, 'src/manager/controlPlaneRoutes.ts'), 'utf8');
 const controlAst = ts.createSourceFile('controlPlaneRoutes.ts', controlText, ts.ScriptTarget.Latest, true);
@@ -77,8 +77,7 @@ async function exerciseStartup(fixture) {
   assert.ok(start >= 0 && end > start, 'Capture the production recovery registration and retirement block.');
   vm.runInContext(controlText.slice(start, end), context);
   registryEvent?.();
-  const receiptProperty = findNode(node => ts.isPropertyAssignment(node) && node.name.getText(controlAst) === 'deliveryReceiptChanged');
-  vm.runInContext(`(${receiptProperty.initializer.getText(controlAst)})()`, context);
+  assert.doesNotMatch(controlText, /\bdeliveryReceiptChanged\b/, 'The retired receipt-scan callback has no compatibility shell.');
   await tick();
   assert.equal(typeof cleanup, 'function');
   await cleanup();
@@ -94,7 +93,7 @@ test('startup, registry and receipt callbacks do not scan or dispatch 5400 unkno
 });
 
 test('the production Stop hook projects scoped pending IDs without ledger writes or delivery recovery', async () => {
-  const fixture = storm(), calls = { recovery: 0, turn: 0, ready: 0, projection: 0 };
+  const fixture = storm(), calls = { recovery: 0, ready: 0, projection: 0 };
   const hook = findNode(node => ts.isFunctionDeclaration(node) && node.name?.text === 'recordAgentRequestStop');
   const compiled = ts.transpileModule(hook.getText(controlAst), { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext } }).outputText;
   const context = vm.createContext({
@@ -102,13 +101,12 @@ test('the production Stop hook projects scoped pending IDs without ledger writes
     agentEndpointDelivery: { recovery: { onEvent: async () => { calls.recovery++; } } },
     agentRequests: {
       ready: async () => { calls.ready++; },
-      unansweredTargetRequestIds: (sessionId, workspace) => {
+      unansweredTargetRequestSnapshot: (sessionId, workspace) => {
         calls.projection++;
         assert.equal(sessionId, 'fixture-source');
         if (workspace) assert.equal(workspace, 'fixture-workspace');
-        return workspace ? ['fixture-request-current'] : ['fixture-request-current', 'fixture-request-other-workspace'];
-      },
-      recordTargetTurnEnded: async () => { calls.turn++; throw new Error('Stop must not write the request ledger'); }
+        return { requestIds: workspace ? ['fixture-request-current'] : ['fixture-request-current', 'fixture-request-other-workspace'], complete: true };
+      }
     },
     managerOperationalLog: { record: () => {} }, managerOperationalError: () => {}, rootDir: 'fixture-root'
   });
@@ -120,7 +118,7 @@ test('the production Stop hook projects scoped pending IDs without ledger writes
   assert.deepEqual(Array.from(result.pendingSessionRequestIds), ['fixture-request-current', 'fixture-request-other-workspace']);
   assert.equal(result.snapshotComplete, true);
   assert.equal(result.turnId, 'fixture-turn');
-  assert.deepEqual(calls, { recovery: 0, turn: 0, ready: 1, projection: 2 });
+  assert.deepEqual(calls, { recovery: 0, ready: 1, projection: 2 });
   assert.equal(fixture.stats.dispatches, 0);
 });
 
@@ -159,58 +157,65 @@ async function exerciseProfilePlugin() {
   const profile = JSON.parse(await fs.readFile(path.join(sourceRoot, 'plugins/profiles/desktop.json'), 'utf8'));
   const selected = profile.instances.find(instance => instance.package === 'io.rabiroute.manager.message-processing-automation');
   assert.ok(selected?.enabled, 'The existing automation plugin remains enabled in the desktop profile.');
-  const packageRoot = path.join(sourceRoot, 'plugins/builtin', selected.package, selected.version);
+  const packageRoot = path.join(sourceRoot, 'src/plugins', selected.package);
   const manifest = JSON.parse(await fs.readFile(path.join(packageRoot, 'rabi.plugin.json'), 'utf8'));
   assert.equal(manifest.id, selected.package); assert.equal(manifest.version, selected.version);
   const managerEntry = path.resolve(packageRoot, manifest.entries.manager.module);
-  assert.ok(managerEntry.startsWith(packageRoot + path.sep), 'The manager entry remains inside its selected package.');
+  assert.ok(managerEntry.startsWith(packageRoot + path.sep));
   const pluginText = await fs.readFile(managerEntry, 'utf8');
-  const stats = { reminders: 0, knowledgeStarts: 0, knowledgeStops: 0, plans: 0 };
-  const timers = new Map(); let timerSequence = 0, plan, publication;
-  const requests = Array.from({ length: 413 }, (_, index) => ({ id: `fixture-request-${index}`, status: 'awaiting_response', nextReminderAt: '2000-01-01T00:00:00Z', reminderCount: index === 0 ? 413 : 1, updatedAt: '2000-01-01T00:00:00Z' }));
-  class Automation extends MessageProcessingAutomationService {
-    constructor(options) { super({ ...options, now: () => 1_700_000_000_000,
-      scheduleTimer: callback => { const id = { id: ++timerSequence, unref() {} }; timers.set(id, () => { timers.delete(id); callback(); }); return id; },
-      clearTimer: id => timers.delete(id) }); }
+  const factoryText = await fs.readFile(path.join(packageRoot, 'hostRuntime.mjs'), 'utf8');
+  assert.doesNotMatch(pluginText + factoryText, /MessageProcessingAutomationService|deliverAgentRequestReminder|messageProcessingAutomationService/);
+  const stats = { knowledgeStarts: 0, knowledgeStops: 0, plans: 0, historicalReads: 0 };
+  const timers = new Map(); let sequence = 0, plan, publication;
+  const historical = Array.from({ length: 413 }, (_, index) => ({ id: `fixture-request-${index}`, status: 'awaiting_response',
+    nextReminderAt: '2000-01-01T00:00:00Z', reminderCount: index === 0 ? 413 : 1, unknownField: { keep: index } }));
+  const before = JSON.stringify(historical);
+  class Knowledge extends KnowledgeCallbackReminderService {
+    constructor(options) { super({ ...options,
+      scheduleTimer: callback => { const timer = { id: ++sequence, unref() {} }; timers.set(timer, callback); return timer; },
+      clearTimer: timer => timers.delete(timer) }); }
+    async start() { stats.knowledgeStarts++; await super.start(); }
+    async stop() { stats.knowledgeStops++; await super.stop(); }
   }
-  class Knowledge { async start() { stats.knowledgeStarts++; } async stop() { stats.knowledgeStops++; } }
-  const runtime = {
-    MessageProcessingAutomationService: Automation, KnowledgeCallbackReminderService: Knowledge,
-    agentRequests: { ready: async () => {}, list: () => requests, get: id => requests.find(row => row.id === id) },
+  const ports = {
+    prepareModules: async () => {}, managerReadOnly: false,
+    get agentRequests() { stats.historicalReads++; throw new Error('Activation must not open historical reply requests.'); },
     messageProcessingBoard: { list: () => [], getRequirement: () => undefined, pendingKnowledgeMatches: () => [], recordKnowledgeReminder: () => {} },
-    deliverAgentRequestReminder: async () => { stats.reminders++; }, deliverKnowledgeCallbackReminder: async () => {}, recordAgentRequestReminderFailure: () => {},
-    managerOperationalLog: { record: () => {} }, managerOperationalError: () => {},
+    deliverKnowledgeCallbackReminder: async () => {}, managerOperationalLog: { record: () => {} }, managerOperationalError: () => {},
     handleMessageProcessingPlanUpdate: () => { stats.plans++; }, subscribePlanUpdates: callback => { plan = callback; return () => { plan = undefined; }; }
   };
-  // Execute this package's real factory against synthetic host services. Only the
-  // SDK definePlugin identity wrapper is substituted; no native transport exists.
-  const context = vm.createContext({ definePlugin: value => value, Promise, Set, Error });
-  vm.runInContext(pluginText.replace(/^import .*?;\s*/, '').replace('export const activate =', 'globalThis.activate ='), context);
-  context.activate({ identity: { instanceId: 'fixture-plugin' }, services: { require: () => runtime, provide: () => {} },
+  // Execute both canonical owner factory and activation. Substitute only generated
+  // bundle glue and the SDK identity wrapper; the real knowledge service is used.
+  const context = vm.createContext({ definePlugin: value => value, KnowledgeCallbackReminderService: Knowledge,
+    hostModules: [], Promise, Set, Error,
+    createImplementation: () => ({ createOwnedRuntime: value => context.createOwnedRuntime(value) }) });
+  vm.runInContext(factoryText.replace(/^import .*?;\s*/gm, '').replace('export function createOwnedRuntime', 'globalThis.createOwnedRuntime = function'), context);
+  vm.runInContext(pluginText.replace(/^import .*?;\s*/gm, '').replace('export const activate =', 'globalThis.activate ='), context);
+  await context.activate({ identity: { instanceId: 'fixture-plugin' }, services: { require: () => ports, provide: () => {} },
     effects: { add: () => {} }, publication: { add: value => { publication = value; } }, lifecycle: { fail: error => { throw error; } } });
   publication.publish();
   publication.afterPublish({ previousRetirement: Promise.resolve(), signal: new AbortController().signal });
   await tick(); await tick();
   const timersAtStart = timers.size;
-  runtime.messageProcessingAutomationService.schedule(requests[0]);
-  runtime.messageProcessingAutomationService.refresh();
-  plan?.({ roleDir: 'fixture-role', after: {} });
-  await tick();
-  const timersAfterHookAndRefresh = timers.size;
+  assert.equal('messageProcessingAutomationService' in ports, false, 'The retired service is absent, rather than a dormant schedule/refresh shell.');
+  plan?.({ roleDir: 'fixture-role', after: {} }); await tick();
+  const timersAfterPlan = timers.size;
   await publication.retire();
-  return { ...stats, timersAtStart, timersAfterHookAndRefresh, timersAfterRetire: timers.size };
+  assert.equal(JSON.stringify(historical), before, 'Unknown historical raw fields and original IDs are preserved.');
+  assert.equal(ports.knowledgeCallbackReminderService, undefined);
+  return { ...stats, timersAtStart, timersAfterPlan, timersAfterRetire: timers.size };
 }
 
-test('profile-selected plugin never wakes historical reply requests on activation or later schedule/refresh', async () => {
+test('profile-selected plugin never opens historical reply requests on activation or plan update', async () => {
   const result = await exerciseProfilePlugin();
-  assert.equal(result.timersAtStart, 0); assert.equal(result.timersAfterHookAndRefresh, 0);
-  assert.equal(result.reminders, 0); assert.equal(result.timersAfterRetire, 0);
+  assert.equal(result.timersAtStart, 0); assert.equal(result.timersAfterPlan, 0);
+  assert.equal(result.historicalReads, 0); assert.equal(result.timersAfterRetire, 0);
 });
 
 test('profile-selected plugin retains knowledge reminders and plan subscriptions after clean reactivation', async () => {
   for (let activation = 0; activation < 2; activation++) {
     const result = await exerciseProfilePlugin();
     assert.equal(result.knowledgeStarts, 1); assert.equal(result.knowledgeStops, 1); assert.equal(result.plans, 1);
-    assert.equal(result.reminders, 0); assert.equal(result.timersAtStart, 0);
+    assert.equal(result.historicalReads, 0); assert.equal(result.timersAtStart, 0);
   }
 });

@@ -1,0 +1,713 @@
+{
+  "name": "@rabiroute/host-api",
+  "version": "1.0.0",
+  "type": "module",
+  "license": "MIT",
+  "description": "Public declarations and export signatures for RabiRoute shared host owners.",
+  "exports": {
+    "./modules.json": "./modules.json",
+    "./adapters/messageAdapter": {
+      "types": "./types/src/adapters/messageAdapter.d.ts"
+    },
+    "./adapters/platformNativeOperations": {
+      "types": "./types/src/adapters/platformNativeOperations.d.ts"
+    },
+    "./adapters/webhookAdapter": {
+      "types": "./types/src/adapters/webhookAdapter.d.ts"
+    },
+    "./agentAdapters/codexContracts": {
+      "types": "./types/src/agentAdapters/codexContracts.d.ts"
+    },
+    "./agentAdapters/contracts": {
+      "types": "./types/src/agentAdapters/contracts.d.ts"
+    },
+    "./agentAdapters/hookInstallationShared": {
+      "types": "./types/src/agentAdapters/hookInstallationShared.d.ts"
+    },
+    "./agentAdapters/lanAgentAdapter": {
+      "types": "./types/src/agentAdapters/lanAgentAdapter.d.ts"
+    },
+    "./agentAdapters/managerApi": {
+      "types": "./types/src/agentAdapters/managerApi.d.ts"
+    },
+    "./agentAdapters/managerInvocation": {
+      "types": "./types/src/agentAdapters/managerInvocation.d.ts"
+    },
+    "./agentAdapters/managerNativeOperations": {
+      "types": "./types/src/agentAdapters/managerNativeOperations.d.ts"
+    },
+    "./agentAdapters/managerScanShared": {
+      "types": "./types/src/agentAdapters/managerScanShared.d.ts"
+    },
+    "./agentAdapters/managerTypes": {
+      "types": "./types/src/agentAdapters/managerTypes.d.ts"
+    },
+    "./agentAdapters/stateReportOrder": {
+      "types": "./types/src/agentAdapters/stateReportOrder.d.ts"
+    },
+    "./agentAdapters/stateReporter": {
+      "types": "./types/src/agentAdapters/stateReporter.d.ts"
+    },
+    "./agentAdapters/types": {
+      "types": "./types/src/agentAdapters/types.d.ts"
+    },
+    "./agentDeliveryTest": {
+      "types": "./types/src/agentDeliveryTest.d.ts"
+    },
+    "./agentRequests/deliveryFailure": {
+      "types": "./types/src/agentRequests/deliveryFailure.d.ts"
+    },
+    "./agentRequests/deliveryRecovery": {
+      "types": "./types/src/agentRequests/deliveryRecovery.d.ts"
+    },
+    "./agentRequests/endpoint": {
+      "types": "./types/src/agentRequests/endpoint.d.ts"
+    },
+    "./agentRequests/endpointDelivery": {
+      "types": "./types/src/agentRequests/endpointDelivery.d.ts"
+    },
+    "./agentRequests/endpointExecution": {
+      "types": "./types/src/agentRequests/endpointExecution.d.ts"
+    },
+    "./agentRequests/endpointTransportReceipts": {
+      "types": "./types/src/agentRequests/endpointTransportReceipts.d.ts"
+    },
+    "./agentRequests/executionOptions": {
+      "types": "./types/src/agentRequests/executionOptions.d.ts"
+    },
+    "./agentRequests/nativeOwnerDelivery": {
+      "types": "./types/src/agentRequests/nativeOwnerDelivery.d.ts"
+    },
+    "./agentRequests/ownerExecution": {
+      "types": "./types/src/agentRequests/ownerExecution.d.ts"
+    },
+    "./agentRequests/requestValidation": {
+      "types": "./types/src/agentRequests/requestValidation.d.ts"
+    },
+    "./agentRequests/store": {
+      "types": "./types/src/agentRequests/store.d.ts"
+    },
+    "./agentSend": {
+      "types": "./types/src/agentSend.d.ts"
+    },
+    "./agentSendContracts": {
+      "types": "./types/src/agentSendContracts.d.ts"
+    },
+    "./agentThreads": {
+      "types": "./types/src/agentThreads.d.ts"
+    },
+    "./automation/personaAutomationRuntime": {
+      "types": "./types/src/automation/personaAutomationRuntime.d.ts"
+    },
+    "./codexTaskIdentity": {
+      "types": "./types/src/codexTaskIdentity.d.ts"
+    },
+    "./commands": {
+      "types": "./types/src/commands.d.ts"
+    },
+    "./config": {
+      "types": "./types/src/config.d.ts"
+    },
+    "./conversationSituationStore": {
+      "types": "./types/src/conversationSituationStore.d.ts"
+    },
+    "./deliveryReplay": {
+      "types": "./types/src/deliveryReplay.d.ts"
+    },
+    "./forwarding": {
+      "types": "./types/src/forwarding.d.ts"
+    },
+    "./history": {
+      "types": "./types/src/history.d.ts"
+    },
+    "./identityRelations": {
+      "types": "./types/src/identityRelations.d.ts"
+    },
+    "./languageStyleValidation": {
+      "types": "./types/src/languageStyleValidation.d.ts"
+    },
+    "./manager/agentAdapterCatalogContract": {
+      "types": "./types/src/manager/agentAdapterCatalogContract.d.ts"
+    },
+    "./manager/agentAdapterCatalogWorkerPool": {
+      "types": "./types/src/manager/agentAdapterCatalogWorkerPool.d.ts"
+    },
+    "./manager/agentApiPolicy": {
+      "types": "./types/src/manager/agentApiPolicy.d.ts"
+    },
+    "./manager/agentDeliveryRecords": {
+      "types": "./types/src/manager/agentDeliveryRecords.d.ts"
+    },
+    "./manager/agentEndpointDelivery": {
+      "types": "./types/src/manager/agentEndpointDelivery.d.ts"
+    },
+    "./manager/agentManagerHostPorts": {
+      "types": "./types/src/manager/agentManagerHostPorts.d.ts"
+    },
+    "./manager/agentManagerProviders": {
+      "types": "./types/src/manager/agentManagerProviders.d.ts"
+    },
+    "./manager/agentSendIdempotency": {
+      "types": "./types/src/manager/agentSendIdempotency.d.ts"
+    },
+    "./manager/agentUploadContract": {
+      "types": "./types/src/manager/agentUploadContract.d.ts"
+    },
+    "./manager/agentUploadStore": {
+      "types": "./types/src/manager/agentUploadStore.d.ts"
+    },
+    "./manager/allDayRecording": {
+      "types": "./types/src/manager/allDayRecording.d.ts"
+    },
+    "./manager/allDayRecordingRoutes": {
+      "types": "./types/src/manager/allDayRecordingRoutes.d.ts"
+    },
+    "./manager/apiContractPrecision": {
+      "types": "./types/src/manager/apiContractPrecision.d.ts"
+    },
+    "./manager/apiExternalListenerBinding": {
+      "types": "./types/src/manager/apiExternalListenerBinding.d.ts"
+    },
+    "./manager/apiOperationCatalog": {
+      "types": "./types/src/manager/apiOperationCatalog.d.ts"
+    },
+    "./manager/apiOperationContract": {
+      "types": "./types/src/manager/apiOperationContract.d.ts"
+    },
+    "./manager/apiPreparedJson": {
+      "types": "./types/src/manager/apiPreparedJson.d.ts"
+    },
+    "./manager/codexBindingUpdate": {
+      "types": "./types/src/manager/codexBindingUpdate.d.ts"
+    },
+    "./manager/codexHookContext": {
+      "types": "./types/src/manager/codexHookContext.d.ts"
+    },
+    "./manager/codexHookContract": {
+      "types": "./types/src/manager/codexHookContract.d.ts"
+    },
+    "./manager/companionActivity": {
+      "types": "./types/src/manager/companionActivity.d.ts"
+    },
+    "./manager/companionContinuation": {
+      "types": "./types/src/manager/companionContinuation.d.ts"
+    },
+    "./manager/configRepository": {
+      "types": "./types/src/manager/configRepository.d.ts"
+    },
+    "./manager/connectionRequestAccess": {
+      "types": "./types/src/manager/connectionRequestAccess.d.ts"
+    },
+    "./manager/desktopSettings": {
+      "types": "./types/src/manager/desktopSettings.d.ts"
+    },
+    "./manager/deviceAgentPreparedAuthority": {
+      "types": "./types/src/manager/deviceAgentPreparedAuthority.d.ts"
+    },
+    "./manager/durableDeliveryIdempotency": {
+      "types": "./types/src/manager/durableDeliveryIdempotency.d.ts"
+    },
+    "./manager/gatewayRouteActivationOwner": {
+      "types": "./types/src/manager/gatewayRouteActivationOwner.d.ts"
+    },
+    "./manager/globalConfig": {
+      "types": "./types/src/manager/globalConfig.d.ts"
+    },
+    "./manager/identityResetRoutes": {
+      "types": "./types/src/manager/identityResetRoutes.d.ts"
+    },
+    "./manager/knowledgeSearchService": {
+      "types": "./types/src/manager/knowledgeSearchService.d.ts"
+    },
+    "./manager/lanAgentAuthority": {
+      "types": "./types/src/manager/lanAgentAuthority.d.ts"
+    },
+    "./manager/lanAgentBodyAuthority": {
+      "types": "./types/src/manager/lanAgentBodyAuthority.d.ts"
+    },
+    "./manager/lanAgentManagementContract": {
+      "types": "./types/src/manager/lanAgentManagementContract.d.ts"
+    },
+    "./manager/lanAgentRegistry": {
+      "types": "./types/src/manager/lanAgentRegistry.d.ts"
+    },
+    "./manager/lanAgentReleaseStore": {
+      "types": "./types/src/manager/lanAgentReleaseStore.d.ts"
+    },
+    "./manager/lanAgentRequestAccess": {
+      "types": "./types/src/manager/lanAgentRequestAccess.d.ts"
+    },
+    "./manager/lanAgentTerminals": {
+      "types": "./types/src/manager/lanAgentTerminals.d.ts"
+    },
+    "./manager/localAgentMessageProcess": {
+      "types": "./types/src/manager/localAgentMessageProcess.d.ts"
+    },
+    "./manager/managerLanDiscoveryConsumer": {
+      "types": "./types/src/manager/managerLanDiscoveryConsumer.d.ts"
+    },
+    "./manager/managerPluginRequestTracker": {
+      "types": "./types/src/manager/managerPluginRequestTracker.d.ts"
+    },
+    "./manager/managerPluginRouteRegistry": {
+      "types": "./types/src/manager/managerPluginRouteRegistry.d.ts"
+    },
+    "./manager/managerReadWorkerPool": {
+      "types": "./types/src/manager/managerReadWorkerPool.d.ts"
+    },
+    "./manager/manualTriggerProcess": {
+      "types": "./types/src/manager/manualTriggerProcess.d.ts"
+    },
+    "./manager/messageAdapterHealth": {
+      "types": "./types/src/manager/messageAdapterHealth.d.ts"
+    },
+    "./manager/messageHistorySearchTelemetry": {
+      "types": "./types/src/manager/messageHistorySearchTelemetry.d.ts"
+    },
+    "./manager/napcatSupervisorService": {
+      "types": "./types/src/manager/napcatSupervisorService.d.ts"
+    },
+    "./manager/nativeStorageWork": {
+      "types": "./types/src/manager/nativeStorageWork.d.ts"
+    },
+    "./manager/operationalLog": {
+      "types": "./types/src/manager/operationalLog.d.ts"
+    },
+    "./manager/peerAgentEndpointBridge": {
+      "types": "./types/src/manager/peerAgentEndpointBridge.d.ts"
+    },
+    "./manager/performanceMonitoring": {
+      "types": "./types/src/manager/performanceMonitoring.d.ts"
+    },
+    "./manager/planAdvancePolicy": {
+      "types": "./types/src/manager/planAdvancePolicy.d.ts"
+    },
+    "./manager/planAgentStatus": {
+      "types": "./types/src/manager/planAgentStatus.d.ts"
+    },
+    "./manager/planFeedbackRecovery": {
+      "types": "./types/src/manager/planFeedbackRecovery.d.ts"
+    },
+    "./manager/planPageCatalogLifecycle": {
+      "types": "./types/src/manager/planPageCatalogLifecycle.d.ts"
+    },
+    "./manager/rabiLinkAgentDevices": {
+      "types": "./types/src/manager/rabiLinkAgentDevices.d.ts"
+    },
+    "./manager/rabiLinkHome": {
+      "types": "./types/src/manager/rabiLinkHome.d.ts"
+    },
+    "./manager/rabiLinkOwnerStore": {
+      "types": "./types/src/manager/rabiLinkOwnerStore.d.ts"
+    },
+    "./manager/recordingArchiveBindings": {
+      "types": "./types/src/manager/recordingArchiveBindings.d.ts"
+    },
+    "./manager/recordingArchiveRuntime": {
+      "types": "./types/src/manager/recordingArchiveRuntime.d.ts"
+    },
+    "./manager/remoteAgentContract": {
+      "types": "./types/src/manager/remoteAgentContract.d.ts"
+    },
+    "./manager/remotePersonaRoutes": {
+      "types": "./types/src/manager/remotePersonaRoutes.d.ts"
+    },
+    "./manager/resourceApiContract": {
+      "types": "./types/src/manager/resourceApiContract.d.ts"
+    },
+    "./manager/resourceApiRequest": {
+      "types": "./types/src/manager/resourceApiRequest.d.ts"
+    },
+    "./manager/resourceCache": {
+      "types": "./types/src/manager/resourceCache.d.ts"
+    },
+    "./manager/resourceCacheProtocol": {
+      "types": "./types/src/manager/resourceCacheProtocol.d.ts"
+    },
+    "./manager/roleStorageApplication": {
+      "types": "./types/src/manager/roleStorageApplication.d.ts"
+    },
+    "./manager/routeCatalogTransaction": {
+      "types": "./types/src/manager/routeCatalogTransaction.d.ts"
+    },
+    "./manager/runtimeRegistry": {
+      "types": "./types/src/manager/runtimeRegistry.d.ts"
+    },
+    "./manager/scanController": {
+      "types": "./types/src/manager/scanController.d.ts"
+    },
+    "./manager/speechApiContext": {
+      "types": "./types/src/manager/speechApiContext.d.ts"
+    },
+    "./manager/speechModelSettingsAccess": {
+      "types": "./types/src/manager/speechModelSettingsAccess.d.ts"
+    },
+    "./manager/webguiLanAccess": {
+      "types": "./types/src/manager/webguiLanAccess.d.ts"
+    },
+    "./messageContextStore": {
+      "types": "./types/src/messageContextStore.d.ts"
+    },
+    "./messageEndpoints/remoteAgentProtocol": {
+      "types": "./types/src/messageEndpoints/remoteAgentProtocol.d.ts"
+    },
+    "./messageEndpoints/webhookLikeScans": {
+      "types": "./types/src/messageEndpoints/webhookLikeScans.d.ts"
+    },
+    "./messageEndpoints/wecomManager": {
+      "types": "./types/src/messageEndpoints/wecomManager.d.ts"
+    },
+    "./messageHistorySearchIndex": {
+      "types": "./types/src/messageHistorySearchIndex.d.ts"
+    },
+    "./messageProcessing/board": {
+      "types": "./types/src/messageProcessing/board.d.ts"
+    },
+    "./messageProcessing/sendContextReview": {
+      "types": "./types/src/messageProcessing/sendContextReview.d.ts"
+    },
+    "./observability/dataMutationAudit": {
+      "types": "./types/src/observability/dataMutationAudit.d.ts"
+    },
+    "./packageInfo": {
+      "types": "./types/src/packageInfo.d.ts"
+    },
+    "./peerTunnel/http": {
+      "types": "./types/src/peerTunnel/http.d.ts"
+    },
+    "./peerTunnel/runtime": {
+      "types": "./types/src/peerTunnel/runtime.d.ts"
+    },
+    "./peerTunnel/session": {
+      "types": "./types/src/peerTunnel/session.d.ts"
+    },
+    "./performance/performanceInstrumentation": {
+      "types": "./types/src/performance/performanceInstrumentation.d.ts"
+    },
+    "./personaChatHistory": {
+      "types": "./types/src/personaChatHistory.d.ts"
+    },
+    "./personaPlanWorkflow": {
+      "types": "./types/src/personaPlanWorkflow.d.ts"
+    },
+    "./personaVoiceIdentities": {
+      "types": "./types/src/personaVoiceIdentities.d.ts"
+    },
+    "./planAttachments": {
+      "types": "./types/src/planAttachments.d.ts"
+    },
+    "./planFeedback": {
+      "types": "./types/src/planFeedback.d.ts"
+    },
+    "./planFeedbackStore": {
+      "types": "./types/src/planFeedbackStore.d.ts"
+    },
+    "./planState": {
+      "types": "./types/src/planState.d.ts"
+    },
+    "./planStorageIdentity": {
+      "types": "./types/src/planStorageIdentity.d.ts"
+    },
+    "./planWorkspaceQuery": {
+      "types": "./types/src/planWorkspaceQuery.d.ts"
+    },
+    "./plugin-kernel/generationRuntime": {
+      "types": "./types/src/plugin-kernel/generationRuntime.d.ts"
+    },
+    "./plugin-kernel/index": {
+      "types": "./types/src/plugin-kernel/index.d.ts"
+    },
+    "./plugin-kernel/synchronousExecution": {
+      "types": "./types/src/plugin-kernel/synchronousExecution.d.ts"
+    },
+    "./plugin-kernel/types": {
+      "types": "./types/src/plugin-kernel/types.d.ts"
+    },
+    "./rabilinkConversationLedger": {
+      "types": "./types/src/rabilinkConversationLedger.d.ts"
+    },
+    "./rabilinkConversationReviewer": {
+      "types": "./types/src/rabilinkConversationReviewer.d.ts"
+    },
+    "./roleKnowledge": {
+      "types": "./types/src/roleKnowledge.d.ts"
+    },
+    "./roleKnowledgePagination": {
+      "types": "./types/src/roleKnowledgePagination.d.ts"
+    },
+    "./roleKnowledgePresentation": {
+      "types": "./types/src/roleKnowledgePresentation.d.ts"
+    },
+    "./roleKnowledgeSearch": {
+      "types": "./types/src/roleKnowledgeSearch.d.ts"
+    },
+    "./roleLifecycle": {
+      "types": "./types/src/roleLifecycle.d.ts"
+    },
+    "./rolePanelTimeline": {
+      "types": "./types/src/rolePanelTimeline.d.ts"
+    },
+    "./routing/identityContext": {
+      "types": "./types/src/routing/identityContext.d.ts"
+    },
+    "./routing/types": {
+      "types": "./types/src/routing/types.d.ts"
+    },
+    "./runtime/agentAdapterProviders": {
+      "types": "./types/src/runtime/agentAdapterProviders.d.ts"
+    },
+    "./runtime/contributionRegistry": {
+      "types": "./types/src/runtime/contributionRegistry.d.ts"
+    },
+    "./runtime/failureCircuit": {
+      "types": "./types/src/runtime/failureCircuit.d.ts"
+    },
+    "./runtime/gatewayListenerRuntime": {
+      "types": "./types/src/runtime/gatewayListenerRuntime.d.ts"
+    },
+    "./runtime/pluginServicePort": {
+      "types": "./types/src/runtime/pluginServicePort.d.ts"
+    },
+    "./runtime/processLeaseRegistry": {
+      "types": "./types/src/runtime/processLeaseRegistry.d.ts"
+    },
+    "./runtime/protectedProcessLauncher": {
+      "types": "./types/src/runtime/protectedProcessLauncher.d.ts"
+    },
+    "./runtime/windowsProcessTree": {
+      "types": "./types/src/runtime/windowsProcessTree.d.ts"
+    },
+    "./scheduling/heartbeatSchedules": {
+      "types": "./types/src/scheduling/heartbeatSchedules.d.ts"
+    },
+    "./shared/agentAdapterCapabilities": {
+      "types": "./types/src/shared/agentAdapterCapabilities.d.ts"
+    },
+    "./shared/agentChatHistory": {
+      "types": "./types/src/shared/agentChatHistory.d.ts"
+    },
+    "./shared/agentDeliveryTarget": {
+      "types": "./types/src/shared/agentDeliveryTarget.d.ts"
+    },
+    "./shared/agentInstance": {
+      "types": "./types/src/shared/agentInstance.d.ts"
+    },
+    "./shared/agentInteractiveProtocol": {
+      "types": "./types/src/shared/agentInteractiveProtocol.d.ts"
+    },
+    "./shared/agentProviderControlContract": {
+      "types": "./types/src/shared/agentProviderControlContract.d.ts"
+    },
+    "./shared/codexThreadTitle": {
+      "types": "./types/src/shared/codexThreadTitle.d.ts"
+    },
+    "./shared/deliveryIdentity": {
+      "types": "./types/src/shared/deliveryIdentity.d.ts"
+    },
+    "./shared/desktopPetModeAnimationSets": {
+      "types": "./types/src/shared/desktopPetModeAnimationSets.d.ts"
+    },
+    "./shared/desktopSettingsContract": {
+      "types": "./types/src/shared/desktopSettingsContract.d.ts"
+    },
+    "./shared/dshConnectionLimits": {
+      "types": "./types/src/shared/dshConnectionLimits.d.ts"
+    },
+    "./shared/dshSessionIdentity": {
+      "types": "./types/src/shared/dshSessionIdentity.d.ts"
+    },
+    "./shared/errorPresentation": {
+      "types": "./types/src/shared/errorPresentation.d.ts"
+    },
+    "./shared/filePersistence": {
+      "types": "./types/src/shared/filePersistence.d.ts"
+    },
+    "./shared/gatewayConfigModel": {
+      "types": "./types/src/shared/gatewayConfigModel.d.ts"
+    },
+    "./shared/homeAssistantActivity": {
+      "types": "./types/src/shared/homeAssistantActivity.d.ts"
+    },
+    "./shared/homeAssistantDeploymentContract": {
+      "types": "./types/src/shared/homeAssistantDeploymentContract.d.ts"
+    },
+    "./shared/homeDeviceDirectoryContract": {
+      "types": "./types/src/shared/homeDeviceDirectoryContract.d.ts"
+    },
+    "./shared/homeDeviceQueryContract": {
+      "types": "./types/src/shared/homeDeviceQueryContract.d.ts"
+    },
+    "./shared/homeMediaContract": {
+      "types": "./types/src/shared/homeMediaContract.d.ts"
+    },
+    "./shared/keyedAsyncLock": {
+      "types": "./types/src/shared/keyedAsyncLock.d.ts"
+    },
+    "./shared/localModelDirectory": {
+      "types": "./types/src/shared/localModelDirectory.d.ts"
+    },
+    "./shared/localSecretProtection": {
+      "types": "./types/src/shared/localSecretProtection.d.ts"
+    },
+    "./shared/messageAdapterScanRegistry": {
+      "types": "./types/src/shared/messageAdapterScanRegistry.d.ts"
+    },
+    "./shared/messageEndpointHealth": {
+      "types": "./types/src/shared/messageEndpointHealth.d.ts"
+    },
+    "./shared/messageEndpointTypes": {
+      "types": "./types/src/shared/messageEndpointTypes.d.ts"
+    },
+    "./shared/mobileVoiceCall": {
+      "types": "./types/src/shared/mobileVoiceCall.d.ts"
+    },
+    "./shared/napcatDeliveryError": {
+      "types": "./types/src/shared/napcatDeliveryError.d.ts"
+    },
+    "./shared/napcatStateContract": {
+      "types": "./types/src/shared/napcatStateContract.d.ts"
+    },
+    "./shared/npmCli": {
+      "types": "./types/src/shared/npmCli.d.ts"
+    },
+    "./shared/performanceContract": {
+      "types": "./types/src/shared/performanceContract.d.ts"
+    },
+    "./shared/performanceOperations": {
+      "types": "./types/src/shared/performanceOperations.d.ts"
+    },
+    "./shared/personaAvatarContract": {
+      "types": "./types/src/shared/personaAvatarContract.d.ts"
+    },
+    "./shared/personaChatHistory": {
+      "types": "./types/src/shared/personaChatHistory.d.ts"
+    },
+    "./shared/personaHistoryChannels": {
+      "types": "./types/src/shared/personaHistoryChannels.d.ts"
+    },
+    "./shared/personaReadSettings": {
+      "types": "./types/src/shared/personaReadSettings.d.ts"
+    },
+    "./shared/planAttachmentContract": {
+      "types": "./types/src/shared/planAttachmentContract.d.ts"
+    },
+    "./shared/planBindingOwner": {
+      "types": "./types/src/shared/planBindingOwner.d.ts"
+    },
+    "./shared/planFeedbackContract": {
+      "types": "./types/src/shared/planFeedbackContract.d.ts"
+    },
+    "./shared/pluginStorage": {
+      "types": "./types/src/shared/pluginStorage.d.ts"
+    },
+    "./shared/projectPaths": {
+      "types": "./types/src/shared/projectPaths.d.ts"
+    },
+    "./shared/qqConversationHistory": {
+      "types": "./types/src/shared/qqConversationHistory.d.ts"
+    },
+    "./shared/qqMessageParts": {
+      "types": "./types/src/shared/qqMessageParts.d.ts"
+    },
+    "./shared/qqReadSettings": {
+      "types": "./types/src/shared/qqReadSettings.d.ts"
+    },
+    "./shared/qqStickerContract": {
+      "types": "./types/src/shared/qqStickerContract.d.ts"
+    },
+    "./shared/rabiLinkAgentProfileContract": {
+      "types": "./types/src/shared/rabiLinkAgentProfileContract.d.ts"
+    },
+    "./shared/rabiLinkRelayPublicConfig": {
+      "types": "./types/src/shared/rabiLinkRelayPublicConfig.d.ts"
+    },
+    "./shared/rabiMessage": {
+      "types": "./types/src/shared/rabiMessage.d.ts"
+    },
+    "./shared/readSettingsError": {
+      "types": "./types/src/shared/readSettingsError.d.ts"
+    },
+    "./shared/roleConfiguration": {
+      "types": "./types/src/shared/roleConfiguration.d.ts"
+    },
+    "./shared/rolePanelMessage": {
+      "types": "./types/src/shared/rolePanelMessage.d.ts"
+    },
+    "./shared/routeAgentTargets": {
+      "types": "./types/src/shared/routeAgentTargets.d.ts"
+    },
+    "./shared/routeIdentity": {
+      "types": "./types/src/shared/routeIdentity.d.ts"
+    },
+    "./shared/routePaths": {
+      "types": "./types/src/shared/routePaths.d.ts"
+    },
+    "./shared/runtimeLayout": {
+      "types": "./types/src/shared/runtimeLayout.d.ts"
+    },
+    "./shared/selectionSpeechContract": {
+      "types": "./types/src/shared/selectionSpeechContract.d.ts"
+    },
+    "./shared/skillArchivePath": {
+      "types": "./types/src/shared/skillArchivePath.d.ts"
+    },
+    "./shared/speechControlContract": {
+      "types": "./types/src/shared/speechControlContract.d.ts"
+    },
+    "./shared/speechErrors": {
+      "types": "./types/src/shared/speechErrors.d.ts"
+    },
+    "./shared/speechModelManagement": {
+      "types": "./types/src/shared/speechModelManagement.d.ts"
+    },
+    "./shared/speechRecognitionMetadata": {
+      "types": "./types/src/shared/speechRecognitionMetadata.d.ts"
+    },
+    "./shared/speechRequestAuthority": {
+      "types": "./types/src/shared/speechRequestAuthority.d.ts"
+    },
+    "./shared/speechTranscript": {
+      "types": "./types/src/shared/speechTranscript.d.ts"
+    },
+    "./shared/systemEventIngress": {
+      "types": "./types/src/shared/systemEventIngress.d.ts"
+    },
+    "./shared/timeoutCatalog": {
+      "types": "./types/src/shared/timeoutCatalog.d.ts"
+    },
+    "./shared/timeoutSettings": {
+      "types": "./types/src/shared/timeoutSettings.d.ts"
+    },
+    "./shared/xiaomiHomeAuthContract": {
+      "types": "./types/src/shared/xiaomiHomeAuthContract.d.ts"
+    },
+    "./shared/xiaomiHomeSettingsContract": {
+      "types": "./types/src/shared/xiaomiHomeSettingsContract.d.ts"
+    },
+    "./speech/localSpeechClient": {
+      "types": "./types/src/speech/localSpeechClient.d.ts"
+    },
+    "./speechIngressStore": {
+      "types": "./types/src/speechIngressStore.d.ts"
+    },
+    "./wearableHealth": {
+      "types": "./types/src/wearableHealth.d.ts"
+    },
+    "./wearableHealthAlertDelivery": {
+      "types": "./types/src/wearableHealthAlertDelivery.d.ts"
+    }
+  },
+  "files": [
+    "modules.json",
+    "types",
+    "README.md",
+    "README_en.md"
+  ],
+  "dependencies": {
+    "@types/node": "^22.10.7",
+    "ajv": "^8.20.0"
+  },
+  "peerDependencies": {
+    "@rabiroute/plugin-sdk": "^1.0.0"
+  }
+}

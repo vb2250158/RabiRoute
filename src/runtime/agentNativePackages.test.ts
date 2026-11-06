@@ -12,6 +12,7 @@ import { PluginProfileSettings } from "../plugin-runtime-host/profileSettings.js
 import { dispatchToAgentAdapter } from "../forwarding.js";
 import { nativeHttpTestFetch } from "../manager/nativeHttpTestClient.js";
 import { classifyRouteChange, readEndpointRouteDeclarations } from "../plugin-runtime-host/messageEndpointRouteConfig.js";
+import { canonicalPluginSourceFixture } from "../manager/canonicalPluginSource.fixture.js";
 function gate() { let resolve!: () => void; const promise = new Promise<void>(done => { resolve = done; }); return { promise, resolve }; }
 async function until(check: () => boolean) {
     const end = Date.now() + 20000;
@@ -77,7 +78,8 @@ test("physical Agent packages retain one Gateway and unrelated in-flight work ac
         const { buildPluginPackages } = await import("../../scripts/build-plugin-packages.mjs");
         const built = await buildPluginPackages(process.cwd(), { packages: ["io.rabiroute.agent.astrbot", "io.rabiroute.agent.device-agent"], outputDirectory: path.join(temporary, "built") });
         const profilePath = path.join(temporary, "profile.json"), settingsRoot = path.join(temporary, "settings");
-        const instance = (slug: string) => ({ id: `agent:${slug}`, package: `io.rabiroute.agent.${slug}`, version: "1.0.0", enabled: true, config: {}, grants: [] });
+        const versions = new Map(await Promise.all(["astrbot", "device-agent"].map(async slug => [slug, (await canonicalPluginSourceFixture(`io.rabiroute.agent.${slug}`)).manifest.version] as const)));
+        const instance = (slug: string) => ({ id: `agent:${slug}`, package: `io.rabiroute.agent.${slug}`, version: versions.get(slug)!, enabled: true, config: {}, grants: [] });
         await fs.writeFile(profilePath, JSON.stringify({ schemaVersion: 2, readyRequires: [], instances: [instance("astrbot"), instance("device-agent")] }));
         const settings = new PluginProfileSettings({ profilePath, settingsRoot });
         const boot = { id: "native-agent-route", enabled: true, gatewayPort: 8789, messageAdapters: [], agentAdapters: ["astrbot", "deviceAgent"], astrbotUrl: origin, astrbotUsername: "fixture-user", astrbotPassword: "fixture-original", astrbotSessionId: "original-session" };
@@ -129,13 +131,13 @@ test("physical Agent packages retain one Gateway and unrelated in-flight work ac
         await registry.create("astrbot").deliver(envelope);
         assert.equal(requests.filter(request => request.url === "/api/chat/send").at(-1)?.body.session_id, "disabled-owner-new-session");
         const beforeUpdate = activation("astrbot");
-        const gatewayFile = path.join(built.packagesRoot, "io.rabiroute.agent.astrbot/1.0.0/gateway.mjs");
+        const gatewayFile = path.join(built.packagesRoot, "io.rabiroute.agent.astrbot", versions.get("astrbot")!, "gateway.mjs");
         await fs.appendFile(gatewayFile, "\n// independently updated Agent package\n");
         await runtime.reconcile();
         assert.notEqual(activation("astrbot"), beforeUpdate);
         assert.equal(activation("device-agent"), deviceActivation);
         const lastGood = activation("astrbot");
-        const descriptorFile = path.join(built.packagesRoot, "io.rabiroute.agent.astrbot/1.0.0/agent-adapter.json");
+        const descriptorFile = path.join(built.packagesRoot, "io.rabiroute.agent.astrbot", versions.get("astrbot")!, "agent-adapter.json");
         const descriptorBytes = await fs.readFile(descriptorFile);
         await fs.writeFile(descriptorFile, "{}");
         await runtime.reconcile();
@@ -218,8 +220,9 @@ test("formal dispatch uses the current DSH activation binding while the original
         // @ts-expect-error JavaScript package builder is outside src.
         const { buildPluginPackages } = await import("../../scripts/build-plugin-packages.mjs");
         const built = await buildPluginPackages(process.cwd(), { packages: ["io.rabiroute.agent.dsh"], outputDirectory: path.join(temporary, "built") });
+        const version = (await canonicalPluginSourceFixture("io.rabiroute.agent.dsh")).manifest.version;
         const profilePath = path.join(temporary, "profile.json");
-        await fs.writeFile(profilePath, JSON.stringify({ schemaVersion: 2, readyRequires: [], instances: [{ id: "agent:dsh", package: "io.rabiroute.agent.dsh", version: "1.0.0", enabled: true, config: {}, grants: [] }] }));
+        await fs.writeFile(profilePath, JSON.stringify({ schemaVersion: 2, readyRequires: [], instances: [{ id: "agent:dsh", package: "io.rabiroute.agent.dsh", version, enabled: true, config: {}, grants: [] }] }));
         const boot = { id: "dsh-route", gatewayPort: 8789, enabled: true, messageAdapters: [], agentAdapters: ["dsh"], dshSessionId: oldId, dshSessionName: "Original owner", dshCwd: temporary, dshBaseUrl: origin };
         const runtime = await mountGatewayEndpointPlugins(host, { profilePath, settingsRoot: path.join(temporary, "settings"), packageRoots: [built.packagesRoot], runtimeRoot: path.join(temporary, "runtime"), adapterTypes: [], agentRegistry: registry, initialRouteDefinition: boot, watch: false,
             agentHostPorts: createAgentAdapterHostPorts({ layout: { packageRoot: process.cwd(), stateRoot: temporary }, loaders: { "agentAdapters/stateReporter": async () => ({ reportAgentState() { } }) } }) });
@@ -241,7 +244,7 @@ test("formal dispatch uses the current DSH activation binding while the original
         assert.deepEqual(requests.map(request => request.sessionId), [oldId, newId]);
         assert.ok(optionsSeen.every(options => !("threadId" in (options as object)) && !("workspace" in (options as object))), "Local dispatch must not overwrite native bindings with boot config.");
         const endpoint = runtime.current().records[0];
-        const source = { instance: { id: endpoint.identity.instanceId }, package: { runtimeRoot: path.join(built.packagesRoot, "io.rabiroute.agent.dsh/1.0.0"), manifest: endpoint.manifest } };
+        const source = { instance: { id: endpoint.identity.instanceId }, package: { runtimeRoot: path.join(built.packagesRoot, "io.rabiroute.agent.dsh", version), manifest: endpoint.manifest } };
         const declarations = (await readEndpointRouteDeclarations([source])).declarations;
         assert.equal(classifyRouteChange(boot, changed, declarations).sharedChanged, false);
         assert.equal(classifyRouteChange({ ...boot, messageProcessingAgents: { dsh: { enabled: true } } }, { ...changed, messageProcessingAgents: { dsh: { enabled: true } } }, declarations).sharedChanged, true);

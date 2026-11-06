@@ -3,8 +3,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { XiaomiHomeManagerApiClient, mapXiaomiHomeAction, normalizeHomeAssistantState, xiaomiHomeActionSatisfied } from "./managerApi.js";
-import { normalizeXiaomiHomeRuntimeSettings } from "./settingsRuntime.js";
+import { XiaomiHomeManagerApiClient, mapXiaomiHomeAction, normalizeHomeAssistantState, xiaomiHomeActionSatisfied } from "../../plugins/io.rabiroute.manager.xiaomi-home/src/integrations/xiaomiHome/managerApi.js";
+import { normalizeXiaomiHomeRuntimeSettings } from "../../plugins/io.rabiroute.manager.xiaomi-home/src/integrations/xiaomiHome/settingsRuntime.js";
 
 const binding = { mediaPlayerEntityId: "media_player.speaker", notifyEntityId: "notify.speaker_text", encoding: "json-array" as const };
 const state = (entityId: string, features = 16384 | 1 | 4 | 8 | 32) => ({
@@ -111,15 +111,15 @@ test("lost speech POST response is uncertain across restart; state cannot prove 
 
 test("Agent entry catalog exposes media capabilities, public settings and bounded native receipt lookup", { timeout: 15000 }, async t => {
   const { createServer } = await import("node:http");
-  const { createXiaomiHomeManagerOperations } = await import("./managerOperations.js");
-  const { XiaomiHomeRuntimeController, XiaomiHomeSettingsStore } = await import("./settingsRuntime.js");
-  const { XiaomiHomeArtifactStore } = await import("./artifactStore.js");
-  const { XiaomiHomeCredentialStore } = await import("./credentials.js");
+  const { createXiaomiHomeManagerOperations } = await import("../../plugins/io.rabiroute.manager.xiaomi-home/src/integrations/xiaomiHome/managerOperations.js");
+  const { XiaomiHomeRuntimeController, XiaomiHomeSettingsStore } = await import("../../plugins/io.rabiroute.manager.xiaomi-home/src/integrations/xiaomiHome/settingsRuntime.js");
+  const { XiaomiHomeArtifactStore } = await import("../../plugins/io.rabiroute.manager.xiaomi-home/src/integrations/xiaomiHome/artifactStore.js");
+  const { XiaomiHomeCredentialStore } = await import("../../plugins/io.rabiroute.manager.xiaomi-home/src/integrations/xiaomiHome/credentials.js");
   const { ManagerPluginRouteRegistry } = await import("../../manager/managerPluginRouteRegistry.js");
   const { LanAgentAuthority } = await import("../../manager/lanAgentAuthority.js");
   const { evaluateLanAgentRequest, assertTrustedLanAgentPrincipal } = await import("../../manager/lanAgentRequestAccess.js");
   const { markAuthenticatedConnectionRequest } = await import("../../manager/connectionRequestAccess.js");
-  const { registerLanAgentBodyGuard, assertLanAgentBodyAuthority } = await import("../../manager/lanAgentBodyAuthority.js");
+  const { registerLanAgentBodyGuard } = await import("../../manager/lanAgentBodyAuthority.js");
   const runtimeDir = fs.mkdtempSync(path.join(os.tmpdir(), "xiaomi-catalog-"));
   const cleanup: Array<() => Promise<unknown>> = [];
   t.after(async () => {
@@ -154,7 +154,7 @@ test("Agent entry catalog exposes media capabilities, public settings and bounde
   const server = createServer((request, response) => {
     if (evaluateLanAgentRequest(request, authority, true).kind !== "agent") { response.writeHead(401).end(); return; }
     markAuthenticatedConnectionRequest(request, () => { assertTrustedLanAgentPrincipal(request); });
-    registerLanAgentBodyGuard(request, body => assertLanAgentBodyAuthority(new URL(request.url!, "http://fixture").pathname, body, undefined));
+    registerLanAgentBodyGuard(request, () => {});
     if (!registry.handle(request, new URL(request.url!, "http://fixture"), response)) response.writeHead(404).end();
   });
   await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));

@@ -3,9 +3,9 @@ import { defineStore } from "pinia";
 import type { GatewayDefinition, RuntimeStatus } from "../types";
 import { roleConfigurationOf, type RoleConfiguration } from "@shared/roleConfiguration";
 import { automationRulesForGateway } from "../utils/gatewayHelpers";
-import { createRoleEditorActions } from "../persona/roleEditorActions";
+import { createRoleEditorActions } from "../../../src/plugins/io.rabiroute.manager.persona/web/persona/roleEditorActions";
 import { useGatewayStore } from "./gatewayStore";
-import { remotePersonaServicePath, bootstrapRemotePersonaService } from "../persona/remotePersonaReference";
+import { remotePersonaServicePath, bootstrapRemotePersonaService } from "../../../src/plugins/io.rabiroute.manager.persona/web/persona/remotePersonaReference";
 
 export type RoleSummary = { roleId: string; title: string; archivedAt: string | null; avatarUrl?: string; avatarConfigured?: boolean; error?: string };
 export type RoleDetail = { roleId: string; archivedAt: string | null; revision: string; roleDir: string; rolePath: string;

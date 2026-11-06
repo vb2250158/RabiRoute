@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { recordDataMutationAudit } from "../observability/dataMutationAudit.js";
 import { atomicWriteFileSync, withFileLockSync } from "../shared/filePersistence.js";
+import { collectReleaseAssetPaths, readReleaseAsset, normalizeReleaseAssetPath as normalizeAssetPath } from "../../apps/rabi-agent/lib/release-assets.mjs";
 
 export type LanAgentReleaseFile = {
   path: string;
@@ -50,14 +51,6 @@ export function lanAgentReleasePublicKeySha256(publicKey: string): string {
 function requiredString(value: unknown, field: string): string {
   const normalized = typeof value === "string" ? value.trim() : "";
   if (!normalized) throw new Error(`${field} is required.`);
-  return normalized;
-}
-
-function normalizeAssetPath(value: string): string {
-  const normalized = value.replace(/\\/g, "/").replace(/^\/+/, "");
-  if (!normalized || normalized.split("/").some(part => !part || part === "." || part === "..")) {
-    throw new Error(`Invalid LAN Agent release asset path: ${value}`);
-  }
   return normalized;
 }
 
@@ -130,20 +123,6 @@ function readSigningKeys(filePath: string): SigningKeyRecord {
   return record;
 }
 
-function collectReleaseAssetPaths(root: string, relative = ""): string[] {
-  const directory = path.join(root, relative);
-  return fs.readdirSync(directory, { withFileTypes: true }).flatMap(entry => {
-    const child = relative ? `${relative}/${entry.name}` : entry.name;
-    if (entry.isDirectory()) {
-      if (child === "node_modules" || child === "test") return [];
-      return collectReleaseAssetPaths(root, child);
-    }
-    if (!entry.isFile()) return [];
-    if (entry.name === "package.json" || entry.name.endsWith(".mjs") || ["desktop/tray.ps1", "desktop/rabi-agent.ico", "desktop/computer.ps1", "terminal/host.ps1"].includes(child) || /^dist\/native\/(terminal|computer|tray)-[a-f0-9]{64}\.dll$/.test(child) || (child.startsWith("dist/agent-hooks/") && /\.(json|md)$/.test(entry.name))) return [normalizeAssetPath(child)];
-    return [];
-  });
-}
-
 export function verifyLanAgentReleaseManifest(manifest: LanAgentReleaseManifest, expectedPublicKeySha256: string): boolean {
   try {
     const actualPublicKeySha256 = lanAgentReleasePublicKeySha256(manifest.publicKey);
@@ -161,10 +140,12 @@ export class LanAgentReleaseStore {
   private readonly rootDir: string;
   private readonly agentRoot: string;
   private readonly signingKeyPath: string;
+  private readonly pluginSourceRoot?: string;
 
-  constructor(options: { rootDir: string; agentRoot?: string; signingKeyPath?: string }) {
+  constructor(options: { rootDir: string; agentRoot?: string; signingKeyPath?: string; pluginSourceRoot?: string }) {
     this.rootDir = path.resolve(options.rootDir);
     this.agentRoot = path.resolve(options.agentRoot ?? path.join(this.rootDir, "apps", "rabi-agent"));
+    this.pluginSourceRoot = options.pluginSourceRoot ? path.resolve(options.pluginSourceRoot) : undefined;
     this.signingKeyPath = path.resolve(options.signingKeyPath ?? path.join(this.rootDir, "data", "lan-agent-release-signing-key.json"));
   }
 
@@ -181,10 +162,10 @@ export class LanAgentReleaseStore {
     }
     const packageJson = readJson(packageJsonPath);
     const version = requiredString(packageJson.version, "Rabi Agent package version");
-    const files = collectReleaseAssetPaths(this.agentRoot)
+    const files = collectReleaseAssetPaths(this.agentRoot, "", { pluginSourceRoot: this.pluginSourceRoot })
       .sort((left, right) => left.localeCompare(right))
       .map(assetPath => {
-        const file = fs.readFileSync(this.resolveAssetPath(assetPath));
+        const file = this.readPackagedAsset(assetPath);
         return {
           path: assetPath,
           sha256: sha256(file),
@@ -239,7 +220,8 @@ export class LanAgentReleaseStore {
       throw new Error(`Rabi Agent release asset is not available: ${normalizedPath}`);
     }
     const archiveRoot = archived?.root;
-    const bytes = fs.readFileSync(archiveRoot ? path.join(archiveRoot, "assets", ...normalizedPath.split("/")) : this.resolveAssetPath(normalizedPath, common?.agentRoot));
+    const bytes = archiveRoot ? fs.readFileSync(path.join(archiveRoot, "assets", ...normalizedPath.split("/")))
+      : this.readPackagedAsset(normalizedPath, common?.agentRoot, manifest);
     if (bytes.length !== entry.size || sha256(bytes) !== entry.sha256) throw new Error("LAN Agent release asset integrity mismatch.");
     return bytes;
   }
@@ -269,15 +251,15 @@ export class LanAgentReleaseStore {
   }
 
   /** Local trusted publication owner only. HTTP never accepts a source directory. */
-  importRelease(agentRoot: string): Readonly<{ version: string; releaseDigest: string }> {
+  importRelease(agentRoot: string, options: { pluginSourceRoot?: string } = {}): Readonly<{ version: string; releaseDigest: string }> {
     const source = path.resolve(agentRoot);
     const staging = path.join(this.archiveRoot(), `.prepare-${randomUUID()}`);
     fs.mkdirSync(path.join(staging, "assets"), { recursive: true });
     try {
-      for (const asset of collectReleaseAssetPaths(source)) {
+      for (const asset of collectReleaseAssetPaths(source, "", options)) {
         const destination = path.join(staging, "assets", ...asset.split("/"));
         fs.mkdirSync(path.dirname(destination), { recursive: true });
-        fs.copyFileSync(path.join(source, ...asset.split("/")), destination);
+        fs.writeFileSync(destination, readReleaseAsset(source, asset, options));
       }
       const frozen = new LanAgentReleaseStore({ rootDir: this.rootDir, agentRoot: path.join(staging, "assets"), signingKeyPath: this.signingKeyPath });
       const original = frozen.packagedManifest();
@@ -348,7 +330,7 @@ export class LanAgentReleaseStore {
 
   private verifyCommonAssets(selection: CommonReleaseSelection): void {
     for (const file of selection.manifest.files) {
-      const bytes = fs.readFileSync(this.resolveAssetPath(file.path, selection.agentRoot));
+      const bytes = this.readPackagedAsset(file.path, selection.agentRoot, selection.manifest);
       if (bytes.length !== file.size || sha256(bytes) !== file.sha256) throw new Error("LAN Agent common release asset integrity mismatch.");
     }
   }
@@ -377,13 +359,12 @@ export class LanAgentReleaseStore {
     return { manifest, root };
   }
 
-  private resolveAssetPath(assetPath: string, agentRoot = this.agentRoot): string {
-    const normalizedPath = normalizeAssetPath(assetPath);
-    const resolved = path.resolve(agentRoot, ...normalizedPath.split("/"));
-    const relative = path.relative(agentRoot, resolved);
-    if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
-      throw new Error(`Rabi Agent release asset escapes its package root: ${assetPath}`);
-    }
-    return resolved;
+  private readPackagedAsset(assetPath: string, agentRoot = this.agentRoot, manifest?: LanAgentReleaseManifest): Buffer {
+    // Existing selected releases are bound to their original signed bytes.
+    // Only a newly projected manifest advertises the plugin-owned artifact.
+    const pluginSourceRoot = manifest
+      ? manifest.files.some(file => file.path === "lib/plugin-owners/io.rabiroute.agent.dsh/dsh.mjs") ? path.resolve(agentRoot, "../..") : undefined
+      : this.pluginSourceRoot;
+    return readReleaseAsset(agentRoot, assetPath, { pluginSourceRoot });
   }
 }

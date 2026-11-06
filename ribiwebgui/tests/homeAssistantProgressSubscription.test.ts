@@ -10,7 +10,7 @@ function fixture(state="ready") {
   const require=createRequire(import.meta.url), vue=require("vue");
   const mounted:Array<()=>Promise<void>>=[],unmounted:Array<()=>void>=[],connections:Array<{closed:boolean;close():void;addEventListener():void}>=[];
   const snapshot={state,installation:"installed",configured:true,config:{mode:"haos",containerName:"homeassistant",autoStart:true}};
-  const source=fs.readFileSync(new URL("../src/components/renderers/HomeAssistantDeploymentPanel.vue",import.meta.url),"utf8");
+  const source=fs.readFileSync(new URL("../../src/plugins/io.rabiroute.manager.xiaomi-home/web/components/renderers/HomeAssistantDeploymentPanel.vue",import.meta.url),"utf8");
   const code=transformSync(compileScript(parse(source).descriptor,{id:"deployment-subscription-test"}).content,{loader:"ts",format:"cjs"}).code;
   const module={exports:{} as any};
   vm.runInNewContext(code,{module,exports:module.exports,require:(name:string)=>

@@ -132,6 +132,7 @@ function messageTriggerRule(rule: PersonaAutomationRuleDefinition): Notification
     enabled: rule.enabled !== false,
     routeKinds: (rule.trigger.routeKinds ?? []) as NotificationRule["routeKinds"],
     targetGroupId: rule.trigger.targetGroupId,
+    targetUserId: rule.trigger.targetUserId,
     allowedSpeakerNames: rule.trigger.allowedSpeakerNames,
     regex: rule.trigger.regex,
     sourceRouteIds: rule.sourceRouteIds,

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import http from "node:http";
 import test from "node:test";
-import { normalizeDshBinding, sendDshTask } from "../lib/dsh.mjs";
+import { normalizeDshBinding, sendDshTask } from "../../../src/plugins/io.rabiroute.agent.dsh/apps/rabi-agent/lib/dsh.mjs";
 
 test("DSH binds one exact local session and steers both messages without creation", async t => {
   const requests = [];

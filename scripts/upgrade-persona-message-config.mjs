@@ -3,7 +3,7 @@ import { upgradePersonaMessageConfig, restorePersonaMessageConfig } from "../dis
 
 const args = process.argv.slice(2);
 const flags = new Set(["--apply", "--offline", "--help"]);
-const values = new Set(["--root", "--route-root", "--roles-root", "--backup-dir", "--restore"]);
+const values = new Set(["--root", "--route-root", "--roles-root", "--backup-dir", "--restore", "--mode"]);
 const parsed = new Map();
 for (let index = 0; index < args.length; index++) {
   const flag = args[index];
@@ -12,7 +12,7 @@ for (let index = 0; index < args.length; index++) {
   parsed.set(flag, args[++index]);
 }
 if (args.includes("--help")) {
-  console.log("node scripts/upgrade-persona-message-config.mjs --root <application-root> [--route-root <routes>] [--roles-root <roles>] [--apply --offline] [--backup-dir <private-directory>]\nRestore: --restore <snapshot-directory> --apply --offline\nDefault: preview only; configuration contents are never printed.");
+  console.log("node scripts/upgrade-persona-message-config.mjs --root <application-root> [--route-root <routes>] [--roles-root <roles>] [--mode full|scheduled_automation] [--apply --offline] [--backup-dir <private-directory>]\nRestore: --restore <snapshot-directory> --apply --offline\nDefault: preview only; configuration contents are never printed.");
 } else if (parsed.has("--restore")) {
   if (!args.includes("--apply")) throw new Error("Restoring requires --apply --offline.");
   console.log(JSON.stringify(restorePersonaMessageConfig(parsed.get("--restore"), args.includes("--offline"))));
@@ -20,6 +20,6 @@ if (args.includes("--help")) {
   if (!parsed.has("--root")) throw new Error("Specify --root <application-root>; use --help for usage.");
   console.log(JSON.stringify(upgradePersonaMessageConfig({
     root: path.resolve(parsed.get("--root")), routeRoot: parsed.get("--route-root"), rolesRoot: parsed.get("--roles-root"),
-    backupDir: parsed.get("--backup-dir"), apply: args.includes("--apply"), offline: args.includes("--offline")
+    mode: parsed.get("--mode"), backupDir: parsed.get("--backup-dir"), apply: args.includes("--apply"), offline: args.includes("--offline")
   })));
 }

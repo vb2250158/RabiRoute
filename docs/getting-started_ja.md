@@ -163,5 +163,5 @@ npm run manager
 - `src/manager.ts`: 設定、ルートプロセスのライフサイクル、および RibiWebGUI API。
 - `src/index.ts`: 1 つのゲートウェイ サブプロセス。
 - `src/adapters/`:メッセージプロトコルアダプタ。
-- `src/forwarding.ts`: ルールの評価、パケットの構築、およびハンドラーの配信。
+- `src/plugins/io.rabiroute.endpoint.rabilink/src/forwarding.ts`: ルールの評価、パケットの構築、およびハンドラーの配信。
 - `src/history.ts`: JSONL レコード。

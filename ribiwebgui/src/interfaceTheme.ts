@@ -29,7 +29,7 @@ const CUSTOM_THEME_PROPERTIES = [
 
 export type VuetifyInterfaceThemeBridge = Readonly<{
   themes: { value: Record<string, unknown> };
-  global: { name: { value: string } };
+  change: (themeName: string) => void;
 }>;
 
 export function applyVuetifyInterfaceTheme(
@@ -44,7 +44,7 @@ export function applyVuetifyInterfaceTheme(
       RabiCustom: customVuetifyTheme(customTheme)
     };
   }
-  vuetifyTheme.global.name.value = themeName;
+  vuetifyTheme.change(themeName);
   return themeName;
 }
 

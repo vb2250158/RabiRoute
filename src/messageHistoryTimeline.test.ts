@@ -5,7 +5,7 @@ import path from 'node:path';
 import http from 'node:http';
 import test from 'node:test';
 import { refreshMessageHistoryIndex, searchMessageHistoryIndexResult } from './messageHistorySearchIndex.js';
-import { createPersonaHistoryOperations } from './manager/personaHistoryOperations.js';
+import { createPersonaHistoryOperations } from './plugins/io.rabiroute.manager.persona/src/manager/personaHistoryOperations.js';
 import { ManagerPluginRouteRegistry } from './manager/managerPluginRouteRegistry.js';
 import type { MessageContextRecord, RecentMessageContextQuery } from './messageContextStore.js';
 import { nativeHttpTestFetch as fetch } from './manager/nativeHttpTestClient.js';

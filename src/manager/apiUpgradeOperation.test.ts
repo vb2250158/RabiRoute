@@ -7,12 +7,12 @@ import test from "node:test";
 import { once } from "node:events";
 import { WebSocket, type WebSocketServer } from "ws";
 import { ManagerPluginRouteRegistry } from "./managerPluginRouteRegistry.js";
-import { createApiDiscoveryOperations } from "./apiDiscoveryRoutes.js";
-import { createLanAgentConnectionOperation, LAN_AGENT_WEBSOCKET_LIMITS } from "./lanAgentConnectionOperation.js";
+import { createApiDiscoveryOperations } from "../plugins/io.rabiroute.manager.agent-communication/src/manager/apiDiscoveryRoutes.js";
+import { createLanAgentConnectionOperation, LAN_AGENT_WEBSOCKET_LIMITS } from "../plugins/io.rabiroute.manager.core/src/manager/lanAgentConnectionOperation.js";
 import { LanAgentRegistry } from "./lanAgentRegistry.js";
 import { LanAgentAuthority } from "./lanAgentAuthority.js";
-import { evaluateLanAgentRequest, assertTrustedLanAgentPrincipal } from "./lanAgentRequestAccess.js";
-import { registerLanAgentBodyGuard, assertLanAgentBodyAuthority } from "./lanAgentBodyAuthority.js";
+import { evaluateLanAgentRequest } from "./lanAgentRequestAccess.js";
+import { registerLanAgentBodyGuard } from "./lanAgentBodyAuthority.js";
 import { createManagerClient } from "../../apps/rabi-agent/lib/manager-client.mjs";
 import { apiCatalogOpenApi } from "./apiOperationCatalog.js";
 import { fixtureApiContract } from "./apiOperationContractFixtures.js";
@@ -39,7 +39,7 @@ async function fixture(t: import("node:test").TestContext, publication?: { read(
     if (access.kind !== "agent") { response.writeHead(401).end(); return; }
     if (request.url === "/meta") { response.setHeader("content-type", "application/json"); response.end(JSON.stringify(meta)); return; }
     const url = new URL(request.url!, "http://fixture.invalid");
-    registerLanAgentBodyGuard(request, body => assertLanAgentBodyAuthority(url.pathname, body, assertTrustedLanAgentPrincipal(request)?.source));
+    registerLanAgentBodyGuard(request, () => {});
     if (!api.handle(request, url, response)) response.writeHead(404).end();
   });
   server.on("upgrade", (request, socket, head) => { if (!api.handleUpgrade(request, new URL(request.url!, "http://fixture.invalid"), socket, head)) socket.destroy(); });

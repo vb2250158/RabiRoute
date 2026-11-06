@@ -1,8 +1,9 @@
 import { execFileSync } from "node:child_process";
 import path from "node:path";
 import fs from "node:fs";
+import { fileURLToPath } from "node:url";
 if (process.platform === "win32") {
-  const root = fs.realpathSync.native(process.cwd());
+  const root = fs.realpathSync.native(fileURLToPath(new URL("..", import.meta.url)));
   execFileSync(path.join(process.env.SystemRoot || "C:\\Windows", "System32/WindowsPowerShell/v1.0/powershell.exe"),
     ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", path.join(root,"scripts/build-agent-native-assets.ps1"), "-AgentRoot", path.join(root,"apps/rabi-agent")],
     {windowsHide:true,stdio:"inherit"});

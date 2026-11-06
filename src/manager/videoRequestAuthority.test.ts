@@ -8,18 +8,18 @@ import { listenManagerEndpoint } from "../managerEndpointPolicy.js";
 import { LanAgentAuthority } from "./lanAgentAuthority.js";
 import { RabiGlobalConfigStore } from "./globalConfig.js";
 import { evaluateLanAgentRequest } from "./lanAgentRequestAccess.js";
-import { createVideoRuntime, createVideoRequestAccess } from "./videoRuntime.js";
+import { createVideoRuntime, createVideoRequestAccess } from "../plugins/io.rabiroute.manager.video/src/manager/videoRuntime.js";
 import type { ProcessLeaseRegistry } from "../runtime/processLeaseRegistry.js";
 // @ts-ignore Plugin modules are tested through their published JavaScript interface.
-import { presentVideoError } from "../../plugins/builtin/io.rabiroute.manager.video/1.0.0/apiOwner.mjs";
+import { presentVideoError } from "../plugins/io.rabiroute.manager.video/apiOwner.mjs";
 // @ts-ignore Plugin modules are tested through their published JavaScript interface.
-import { VideoService } from "../../plugins/builtin/io.rabiroute.manager.video/1.0.0/service.mjs";
+import { VideoService } from "../plugins/io.rabiroute.manager.video/service.mjs";
 // @ts-ignore Plugin modules are tested through their published JavaScript interface.
-import { VideoModels } from "../../plugins/builtin/io.rabiroute.manager.video/1.0.0/models.mjs";
+import { VideoModels } from "../plugins/io.rabiroute.manager.video/models.mjs";
 // @ts-ignore Plugin modules are tested through their published JavaScript interface.
-import { checkedReadBody } from "../../plugins/builtin/io.rabiroute.manager.video/1.0.0/requestAccess.mjs";
+import { checkedReadBody } from "../plugins/io.rabiroute.manager.video/requestAccess.mjs";
 // @ts-ignore Plugin modules are tested through their published JavaScript interface.
-import { openMedia } from "../../plugins/builtin/io.rabiroute.manager.video/1.0.0/media.mjs";
+import { openMedia } from "../plugins/io.rabiroute.manager.video/media.mjs";
 
 function deferred() { let resolve!: () => void; const promise = new Promise<void>(done => { resolve = done; }); return { promise, resolve }; }
 const jsonResponse = (response: http.ServerResponse, status: number, body: unknown) => { response.writeHead(status, { "content-type": "application/json" }); response.end(JSON.stringify(body)); };
@@ -137,7 +137,7 @@ test("video model browser exemptions remain socket Host Origin and forwarding co
 
 test("accepted generation dispatch continues without capturing the initiating authorization",{timeout:10000},async t=>{
   const entered=deferred(),gate=deferred();let service:any,dispatches=0;t.after(gate.resolve);
-  const catalog=JSON.parse(await fs.readFile(new URL("../../plugins/builtin/io.rabiroute.manager.video/1.0.0/catalog.json",import.meta.url),"utf8"));
+  const catalog=JSON.parse(await fs.readFile(new URL("../plugins/io.rabiroute.manager.video/catalog.json",import.meta.url),"utf8"));
   const f=await fixture(t,(request,response)=>dispatchVideoRequest({requestAccess:createVideoRequestAccess},{jsonResponse},request,response,async(access: ReturnType<typeof createVideoRequestAccess>)=>{
     service=new VideoService({stateRoot:f.root,alive:()=>true,stop:async()=>{}},catalog,()=>{});await service.initialize();service.online=true;
     service.runQueue=async()=>{entered.resolve();await gate.promise;await service.request("/prompt",{method:"POST"});};

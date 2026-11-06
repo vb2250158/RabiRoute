@@ -9,7 +9,7 @@ import { compileApiContract, apiPathParameters, type ApiHttpProxyDefinition } fr
 import { fixtureApiContract } from "./apiOperationContractFixtures.js";
 import { ManagerPluginRouteRegistry } from "./managerPluginRouteRegistry.js";
 import { apiCatalogOpenApi } from "./apiOperationCatalog.js";
-import { createApiDiscoveryOperations } from "./apiDiscoveryRoutes.js";
+import { createApiDiscoveryOperations } from "../plugins/io.rabiroute.manager.agent-communication/src/manager/apiDiscoveryRoutes.js";
 import { markAuthenticatedConnectionRequest } from "./connectionRequestAccess.js";
 import { LanAgentAuthority } from "./lanAgentAuthority.js";
 import { evaluateLanAgentRequest, assertTrustedLanAgentPrincipal } from "./lanAgentRequestAccess.js";

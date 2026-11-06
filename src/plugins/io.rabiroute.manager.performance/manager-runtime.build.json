@@ -1,0 +1,16 @@
+{
+  "exports": [
+    {
+      "source": "src/plugins/io.rabiroute.manager.performance/hostRuntime.mjs",
+      "name": "createOwnedRuntime"
+    }
+  ],
+  "ownedPrefixes": [
+    "src/plugins/io.rabiroute.manager.performance/"
+  ],
+  "ownedSources": [
+    "src/plugins/io.rabiroute.manager.performance/src/manager/performanceOperations.ts",
+    "src/plugins/io.rabiroute.manager.performance/src/manager/performanceRoutes.ts"
+  ],
+  "packageId": "io.rabiroute.manager.performance"
+}

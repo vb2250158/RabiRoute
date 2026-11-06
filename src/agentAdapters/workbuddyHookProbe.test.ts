@@ -4,9 +4,9 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { probeWorkbuddyHook } from "./hookInstallation.js";
-import { workbuddyHomeDir } from "../workbuddyHome.js";
-import { workbuddyHomeDir as storeHome } from "../workbuddySessionStore.js";
+import { probeWorkbuddyHook } from "../plugins/io.rabiroute.agent.workbuddy/src/agentAdapters/workbuddyHookInstallation.js";
+import { workbuddyHomeDir } from "../plugins/io.rabiroute.agent.workbuddy/src/workbuddyHome.js";
+import { workbuddyHomeDir as storeHome } from "../plugins/io.rabiroute.agent.workbuddy/src/workbuddySessionStore.js";
 
 function fixture(t: test.TestContext, source: string) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "hook-probe-"));

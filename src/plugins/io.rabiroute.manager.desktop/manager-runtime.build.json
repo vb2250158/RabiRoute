@@ -1,0 +1,15 @@
+{
+  "exports": [
+    {
+      "source": "src/plugins/io.rabiroute.manager.desktop/hostRuntime.mjs",
+      "name": "createOwnedRuntime"
+    }
+  ],
+  "ownedPrefixes": [
+    "src/plugins/io.rabiroute.manager.desktop/"
+  ],
+  "ownedSources": [
+    "src/plugins/io.rabiroute.manager.desktop/src/manager/desktopControlRoutes.ts"
+  ],
+  "packageId": "io.rabiroute.manager.desktop"
+}

@@ -35,12 +35,7 @@ import {
 import type { WearableHealthAlert } from "./wearableHealth.js";
 import type { RabiDeliveryEnvelope } from "./shared/rabiMessage.js";
 import { serializeAgentDeliveryTestResult } from "./agentDeliveryTest.js";
-import {
-  buildXiaomiHomeEventRecord,
-  xiaomiHomeEventTemplateValues,
-  type XiaomiHomeEvent,
-  type XiaomiHomeEventDeliveryContext
-} from "./xiaomiHomeEventDelivery.js";
+import { SYSTEM_EVENT_STDIN_FLAG, SYSTEM_EVENT_RESULT_PREFIX, type SystemEventIngress } from "./shared/systemEventIngress.js";
 import {
   planStorageGenerationLeaseFromEnvironment,
   verifyPlanStorageGenerationLease
@@ -85,30 +80,28 @@ type WearableHealthAlertCliPayload = {
   context: WearableHealthAlertDeliveryContext;
 };
 
-type XiaomiHomeEventCliPayload = {
-  event: XiaomiHomeEvent;
-  context: XiaomiHomeEventDeliveryContext;
-};
-
-
 export async function runGatewayCommand(argv: readonly string[] = process.argv): Promise<void> {
   const native = await mountGatewayAgentCommandRuntime();
   try { await executeGatewayCommand(argv); } finally { await native.dispose(); }
 }
 
 async function executeGatewayCommand(argv: readonly string[]): Promise<void> {
-  if (argv.includes("--xiaomi-home-event-stdin")) {
+  if (argv.includes(SYSTEM_EVENT_STDIN_FLAG)) {
     try {
       const storageGenerationLease = planStorageGenerationLeaseFromEnvironment();
       await verifyPlanStorageGenerationLease(storageGenerationLease);
-      const payload = await readStandardInputJson<XiaomiHomeEventCliPayload>();
-      if (!payload?.event?.id || !payload?.context?.agentRoleId) throw new Error("Xiaomi Home event payload is incomplete.");
+      const payload = await readStandardInputJson<SystemEventIngress>();
+      if (!payload?.routeKind || !payload.record?.messageId || !Number.isFinite(payload.record.time)
+        || typeof payload.record.rawMessage !== "string" || !payload.record.rawMessage.trim()
+        || !payload.templateValues || typeof payload.templateValues !== "object" || Array.isArray(payload.templateValues)) {
+        throw new Error("System event ingress payload is incomplete.");
+      }
       const result = await forwardMessageAndWait(
-        "xiaomi_home_event",
-        buildXiaomiHomeEventRecord(payload.event),
-        xiaomiHomeEventTemplateValues(payload.event)
+        payload.routeKind,
+        payload.record,
+        payload.templateValues
       );
-      console.log(`RABIROUTE_XIAOMI_HOME_DELIVERY_RESULT:${JSON.stringify({
+      console.log(`${SYSTEM_EVENT_RESULT_PREFIX}${JSON.stringify({
         status: result.status,
         matchedRuleCount: result.matchedRuleCount,
         sentPacketCount: result.sentPacketCount,
@@ -117,7 +110,7 @@ async function executeGatewayCommand(argv: readonly string[]): Promise<void> {
       })}`);
       { process.exitCode = result.status === "failed" ? 1 : 0; return; }
     } catch (error) {
-      console.error(`RabiRoute Xiaomi Home event delivery failed: ${error instanceof Error ? error.message : String(error)}`);
+      console.error(`RabiRoute system event delivery failed: ${error instanceof Error ? error.message : String(error)}`);
       { process.exitCode = 1; return; }
     }
   }
@@ -372,7 +365,7 @@ async function executeGatewayCommand(argv: readonly string[]): Promise<void> {
       }
       const push = decideSpeechPush(text, route?.speechPushMode, route?.speechTriggerKeywords);
       if (!push.shouldNotifyAgent) {
-        const recordedRoutes = recordMessageContextOnly(routeKind, record);
+        const recordedRoutes = await recordMessageContextOnly(routeKind, record);
         const outcome = speechRecordedProcessOutcome(recordedRoutes, push.reason);
         console.log(`RabiRoute speech message ${outcome.result.status}: ${messageId} mode=${push.mode} reason=${outcome.result.reason} routes=${recordedRoutes}`);
         writeSpeechProcessResult(outcome.result);

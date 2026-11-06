@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { createRequire } from "node:module";
 import ts from "typescript";
+import { transformPluginSourceUrls } from "../plugins/contracts/plugin-sdk/builder.mjs";
 
 const require = createRequire(import.meta.url);
 const { build } = require("esbuild");
@@ -35,6 +36,7 @@ async function exportedValues(source, file, inputs, visited = new Set()) {
 function platformSource(relative, specification) {
   if (specification.hostSources?.includes(relative)) return false;
   return relative.startsWith("src/adapters/")
+    || specification.packageId && relative.startsWith(`src/plugins/${specification.packageId}/`)
     || relative.startsWith("src/messageEndpoints/")
     || specification.ownedSources?.includes(relative)
     || specification.ownedPrefixes?.some(prefix => relative.startsWith(prefix))
@@ -47,7 +49,7 @@ export async function bundleMessageEndpointRuntime(root, specification, outputFi
   const inputs = new Set();
   const initializationImports = new Map();
   const entry = specification.exports
-    ? specification.exports.map(item => `export { ${item.exportName ?? item.name} as ${item.name} } from ${JSON.stringify(path.join(root, item.source))};`).join("\n")
+    ? specification.exports.map(item => `export { ${item.exportName ?? item.name} as ${item.name} } from ${JSON.stringify(item.hostModule ? "@rabiroute/host-api/" + item.hostModule : path.join(root, item.source))};`).join("\n")
     : `export { ${specification.factory} as create } from ${JSON.stringify(path.join(root, specification.source))};`;
   const result = await build({
     absWorkingDir: root,
@@ -56,7 +58,25 @@ export async function bundleMessageEndpointRuntime(root, specification, outputFi
     define: { "import.meta.url": "__endpointModuleUrl", ...(specification.scopedEnvironment ? { "process.env": "__endpointEnvironment" } : {}) },
     nodePaths: [path.join(options.dependencyRoot ?? root, "node_modules")],
     external: ["bufferutil", "utf-8-validate"],
-    plugins: [{ name: "message-endpoint-host-owners", setup(builder) {
+    plugins: [{ name: "plugin-owned-resource-urls", setup(builder) {
+      if (!specification.packageId) return;
+      const pluginRoot = path.join(root, "src/plugins", specification.packageId);
+      builder.onLoad({ filter: /\.(?:[cm]?js|[jt]sx?)$/, namespace: "file" }, async args => {
+        const relative = path.relative(pluginRoot, args.path);
+        if (relative.startsWith("..") || path.isAbsolute(relative)) return;
+        const source = await fs.readFile(args.path, "utf8");
+        const contents = transformPluginSourceUrls(source, { file: args.path, pluginRoot, packageId: specification.packageId,
+          workers: specification.workers, resources: specification.resources, outputModule: path.basename(outputFile ?? "manager-runtime.mjs"),
+          runtimeFactory: true, runtimeModuleUrlIdentifier: "__endpointModuleUrl" });
+        return { contents, loader: args.path.endsWith(".ts") ? "ts" : "js", resolveDir: path.dirname(args.path) };
+      });
+    } }, { name: "message-endpoint-host-owners", setup(builder) {
+      builder.onResolve({ filter: /^@rabiroute\/host-api\// }, args => {
+        const moduleId = args.path.slice("@rabiroute/host-api/".length);
+        const relative = `src/${moduleId}.ts`;
+        modules.add(moduleId);
+        return { path: relative, namespace: "endpoint-host-owner", sideEffects: true };
+      });
       builder.onResolve({ filter: /^\./ }, async args => {
         if (!args.importer || args.namespace === "endpoint-host-owner") return;
         const candidate = path.resolve(args.resolveDir, args.path).replace(/\.js$/, ".ts");
@@ -99,6 +119,15 @@ export async function bundleMessageEndpointRuntime(root, specification, outputFi
 
 /** A dedicated worker owns its whole process, so it bundles its own dependencies rather than host singletons. */
 export async function bundleMessageEndpointWorker(root, specification, outputFile, options = {}) {
+  if (specification.mode === "host-factory") {
+    const source = path.resolve(root, specification.source), inputs = new Set();
+    const names = await exportedValues(await fs.readFile(source, "utf8"), source, inputs);
+    const packageId = specification.packageId ?? specification.source.replaceAll("\\", "/").match(/^src\/plugins\/([^/]+)\//)?.[1];
+    if (!packageId) throw new Error("A process-local worker factory needs its owning package identity.");
+    const bundle = await bundleMessageEndpointRuntime(root, { packageId, scopedEnvironment: true,
+      ownedPrefixes: [`src/plugins/${packageId}/`], exports: names.map(name => ({ source: specification.source, name })) }, outputFile, options);
+    return { ...bundle, inputs: [...new Set([...bundle.inputs, ...inputs])].sort() };
+  }
   const result = await build({ absWorkingDir: root, entryPoints: [path.join(root, specification.source)], bundle: true, write: false,
     platform: "node", format: "esm", target: "node22", metafile: true, nodePaths: [path.join(options.dependencyRoot ?? root, "node_modules")],
     external: ["bufferutil", "utf-8-validate"], banner: { js: 'import { createRequire as __endpointWorkerRequire } from "node:module"; const require = __endpointWorkerRequire(import.meta.url);' } });

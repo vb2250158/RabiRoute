@@ -10,7 +10,7 @@ import { managerReadWorkerOperation } from "../shared/performanceOperations.js";
 import type {
   PersonaVoiceTranscriptQuery,
   PersonaVoiceTranscriptQueryResult
-} from "../personaVoiceTranscriptView.js";
+} from "../plugins/io.rabiroute.manager.persona/src/personaVoiceTranscriptView.js";
 import {
   publishRoleKnowledgeCatalogSnapshotAsync,
   publishRolePlanPackageRecoverySnapshot,
@@ -541,9 +541,9 @@ export class ManagerReadWorkerPool {
 
   queryDesktopPetCatalog(
     roleId: string, roleDir: string, cacheRoot: string,
-    catalogOptions: import("./desktopPetRoutes.js").DesktopPetPackCatalogOptions = {},
+    catalogOptions: import("../plugins/io.rabiroute.manager.desktop-pet/src/manager/desktopPetRoutes.js").DesktopPetPackCatalogOptions = {},
     options: { signal?: AbortSignal; timeoutMs?: number } = {}
-  ): Promise<import("./desktopPetRoutes.js").DesktopPetPackCatalog> {
+  ): Promise<import("../plugins/io.rabiroute.manager.desktop-pet/src/manager/desktopPetRoutes.js").DesktopPetPackCatalog> {
     return this.run({ type: "desktop_pet_catalog", roleId, roleDir, cacheRoot, options: catalogOptions }, options);
   }
 

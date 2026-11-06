@@ -18,10 +18,10 @@ async function fixture(t: any) {
   for (const file of ["scripts/verify-plugin-candidate.mjs", "scripts/lib/developer-verification.mjs"]) await fs.copyFile(path.join(repository, file), path.join(sourceRoot, file));
   await fs.symlink(path.join(repository, "node_modules"), path.join(sourceRoot, "node_modules"), "junction");
   const tests = path.join(root, "tests"); await fs.mkdir(tests);
-  await fs.writeFile(path.join(tests, "check.test.mjs"), `import fs from 'node:fs'; import path from 'node:path'; import assert from 'node:assert/strict'; const manifest=JSON.parse(fs.readFileSync(path.join(process.env.RABI_PLUGIN_CANDIDATE_ROOT,'packages/io.rabiroute.manager.diagnostics/1.0.0/rabi.plugin.json'))); assert.equal(manifest.id,'io.rabiroute.manager.diagnostics');`);
+  await fs.writeFile(path.join(tests, "check.test.mjs"), `import fs from 'node:fs'; import path from 'node:path'; import assert from 'node:assert/strict'; const manifest=JSON.parse(fs.readFileSync(path.join(process.env.RABI_PLUGIN_CANDIDATE_ROOT,'packages/io.rabiroute.manager.diagnostics/0.1.1/rabi.plugin.json'))); assert.equal(manifest.id,'io.rabiroute.manager.diagnostics');`);
   await fs.writeFile(path.join(sourceRoot, "verify.json"), JSON.stringify({ sourceRoot: tests, inputs: ["check.test.mjs"], tests: ["check.test.mjs"], deterministic: false, completeInputClosure: false }));
   await fs.writeFile(path.join(sourceRoot, "developer-verification.json"), JSON.stringify({ schemaVersion: 1, plugins: [{ packageId: "io.rabiroute.manager.diagnostics", candidateRoot, verificationConfig: "verify.json" }] }));
-  const profilePath = path.join(root, "profile.json"); await fs.writeFile(profilePath, JSON.stringify({ schemaVersion: 2, readyRequires: [], instances: [{ id: "diagnostics", package: "io.rabiroute.manager.diagnostics", version: "1.0.0", enabled: true, config: {}, grants: [] }] }));
+  const profilePath = path.join(root, "profile.json"); await fs.writeFile(profilePath, JSON.stringify({ schemaVersion: 2, readyRequires: [], instances: [{ id: "diagnostics", package: "io.rabiroute.manager.diagnostics", version: "0.1.1", enabled: true, config: {}, grants: [] }] }));
   const catalog = new PluginPackageCatalog([path.join(candidateRoot, "packages")]); t.after(() => catalog.dispose());
   const loaded = await loadPluginProfile({ profilePath, packageCatalog: catalog, runtimeRoot: path.join(root, "runtime"), host: "manager" });
   const candidate = loaded.candidates[0]; assert.ok(candidate);
@@ -53,7 +53,7 @@ test("a rejected development candidate keeps its original instance while a tree-
   const f = await fixture(t);
   const externalRoot = path.join(f.root, "external"); await fs.cp(f.candidateRoot, externalRoot, { recursive: true });
   const externalProfile = path.join(f.root, "external-profile.json");
-  await fs.writeFile(externalProfile, JSON.stringify({ schemaVersion: 2, readyRequires: [], instances: [{ id: "external-diagnostics", package: "io.rabiroute.manager.diagnostics", version: "1.0.0", enabled: true, config: {}, grants: [] }] }));
+  await fs.writeFile(externalProfile, JSON.stringify({ schemaVersion: 2, readyRequires: [], instances: [{ id: "external-diagnostics", package: "io.rabiroute.manager.diagnostics", version: "0.1.1", enabled: true, config: {}, grants: [] }] }));
   const catalog = new PluginPackageCatalog([path.join(externalRoot, "packages")]); t.after(() => catalog.dispose());
   const loaded = await loadPluginProfile({ profilePath: externalProfile, packageCatalog: catalog, runtimeRoot: path.join(f.root, "external-runtime"), host: "manager" });
   const external = loaded.candidates[0]; assert.ok(external);

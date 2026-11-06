@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import type { AgentThreadRequest, AgentThreadRequestOptions } from "../agentThreads.js";
-import type { CodexDesktopReasoningEffort } from "../codexDesktopBridge.js";
-import type { CodexTurnSandbox } from "../codexRuntime.js";
+import type { CodexDesktopReasoningEffort } from "../agentAdapters/codexContracts.js";
+import type { CodexTurnSandbox } from "../agentAdapters/codexContracts.js";
 
 /** Immutable per-delivery snapshot; owner identity and live permissions are separate. */
 export type EndpointExecutionOptions = {

@@ -1,0 +1,19 @@
+{
+  "exports": [
+    {
+      "source": "src/plugins/io.rabiroute.endpoint.rabilink/src/adapters/rabilinkRelayWorker.ts",
+      "name": "publishRabiLinkRelayMessage"
+    },
+    {
+      "source": "src/plugins/io.rabiroute.endpoint.rabilink/src/adapters/rabilinkRelayWorker.ts",
+      "name": "uploadRabiLinkRelayAttachment"
+    }
+  ],
+  "ownedSources": [
+    "src/plugins/io.rabiroute.endpoint.rabilink/src/adapters/rabilinkRelayWorker.ts"
+  ],
+  "packageId": "io.rabiroute.endpoint.rabilink",
+  "ownedPrefixes": [
+    "src/plugins/io.rabiroute.endpoint.rabilink/"
+  ]
+}

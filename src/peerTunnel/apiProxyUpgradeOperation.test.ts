@@ -13,7 +13,7 @@ import { establishTunnel, TUNNEL_STREAM_LIMITS } from "./session.js";
 import { loadTunnelIdentity } from "./security.js";
 import type { TunnelChannel } from "./channel.js";
 import { ManagerPluginRouteRegistry } from "../manager/managerPluginRouteRegistry.js";
-import { createApiDiscoveryOperations } from "../manager/apiDiscoveryRoutes.js";
+import { createApiDiscoveryOperations } from "../plugins/io.rabiroute.manager.agent-communication/src/manager/apiDiscoveryRoutes.js";
 import { apiCatalogOpenApi } from "../manager/apiOperationCatalog.js";
 import { compileApiContract, type ApiOperationContract } from "../manager/apiOperationContract.js";
 import { LanAgentAuthority } from "../manager/lanAgentAuthority.js";

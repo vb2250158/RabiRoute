@@ -96,7 +96,7 @@ export function getAgentUploadContract(method: string, pathTemplate: string): Ag
 /** Executable structural contracts; the upload owner retains authorization, lease and byte-integrity validation. */
 export function agentUploadOperationContract(method: "GET" | "PUT", maxBytes: number): ApiOperationContract {
   const error = { type: "object", required: ["code", "errorCode", "help", "repair", "retryable"], properties: {
-    code: { type: "string" }, errorCode: { type: "string" }, help: { type: "object" }, repair: { type: "string" },
+    code: { type: "string" }, errorCode: { type: "string" }, field: { type: "string" }, help: { type: "object" }, repair: { type: "string" },
     retryable: { const: false }, uncertain: { type: "boolean" }
   }, additionalProperties: false } as const;
   const response = { mediaType: "application/json", schema: error } as const;

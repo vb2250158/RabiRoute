@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { speechModelManagementClient, SpeechModelManagementRequestError } from "../src/speech/speechModelManagementClient";
+import { speechModelManagementClient, SpeechModelManagementRequestError } from "../../src/plugins/io.rabiroute.manager.speech/web/speech/speechModelManagementClient";
 
 const settings = { revision: 2, configuredModelRoot: null, effectiveModelRoot: "default-root", defaultModelRoot: "default-root", source: "default" as const };
 const ok = (data: unknown) => new Response(JSON.stringify({ code: 0, data }), { status: 200 });

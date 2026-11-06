@@ -13,8 +13,8 @@ import { RabiLinkRelayRuntime, type RabiLinkRelayRuntimeConfig } from "./rabiLin
 import { rabiLinkAgentDevicePrincipal, rabiLinkConnectionScope } from "./rabiLinkAgentDeviceConnection.js";
 import { markAuthenticatedConnectionRequest } from "./connectionRequestAccess.js";
 import { validateInternalManagerHop, type InternalManagerHopClaims } from "../shared/internalManagerHop.js";
-import { createDeviceAgentOwner } from "../agentAdapters/deviceAgentOwner.js";
-import { createDeviceAgentOperations } from "../agentAdapters/deviceAgentOperations.js";
+import { createDeviceAgentOwner } from "../plugins/io.rabiroute.agent.device-agent/src/agentAdapters/deviceAgentOwner.js";
+import { createDeviceAgentOperations } from "../plugins/io.rabiroute.agent.device-agent/src/agentAdapters/deviceAgentOperations.js";
 import { PeerTunnelRuntime, DEVICE_DELEGATION_DOMAIN, APPLICATION_BOOTSTRAP_DOMAIN } from "../peerTunnel/runtime.js";
 import { loadTunnelIdentity, type TunnelIdentity } from "../peerTunnel/security.js";
 import { connectWebsocket } from "../peerTunnel/channel.js";

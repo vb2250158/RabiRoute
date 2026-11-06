@@ -1,11 +1,11 @@
 import type http from "node:http";
-import type { ManagerSpeechControl } from "./speechControl.js";
-import type { SpeechRuntimeControl } from "./speechRuntimeControl.js";
-import type { SpeechModelManager } from "./speechModelManager.js";
-import type { SelectionSpeechSettingsStore } from "./selectionSpeechSettings.js";
+import type { ManagerSpeechControl } from "../plugins/io.rabiroute.manager.speech/src/manager/speechControl.js";
+import type { SpeechRuntimeControl } from "../plugins/io.rabiroute.manager.speech/src/manager/speechRuntimeControl.js";
+import type { SpeechModelManager } from "../plugins/io.rabiroute.manager.speech/src/manager/speechModelManager.js";
+import type { SelectionSpeechSettingsStore } from "../plugins/io.rabiroute.manager.speech/src/manager/selectionSpeechSettings.js";
 import type { SpeechIngressStore } from "../speechIngressStore.js";
 import type { SpeechMessageCommand } from "../shared/speechControlContract.js";
-import type { SpeechAuthorityGuard } from "./speechRequestAuthority.js";
+import type { SpeechAuthorityGuard } from "../shared/speechRequestAuthority.js";
 import type { PeerTunnelRuntime } from "../peerTunnel/runtime.js";
 
 export type SpeechApiAdmission = Readonly<{

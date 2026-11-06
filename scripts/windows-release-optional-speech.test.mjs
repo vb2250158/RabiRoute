@@ -67,7 +67,7 @@ test("Windows release explicitly includes required discovery and Agent transport
       "scripts/lib/windows-host-discovery.mjs",
       "apps/rabi-agent/lib/manager-client.mjs",
       "apps/rabi-agent/lib/manager-cli.mjs",
-      "plugin-adapters/xiaoai-rabiroute/bridge-endpoint.mjs",
+      "src/plugins/xiaoai-rabiroute/bridge-endpoint.mjs",
       "packages/rabi-knowledge-contract/schema.mjs",
       "packages/rabi-knowledge-contract/tools.mjs",
       "packages/rabi-knowledge-contract/receipt.mjs",
@@ -188,4 +188,26 @@ test("Windows PowerShell 5.1 removes a payload junction without deleting its tar
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
+});
+
+test("Windows PowerShell 5.1 copies runtime sources with zero, one and multiple development exclusions", { skip: process.platform !== "win32" }, () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "runtime-source-ps5-regression-"));
+  try {
+    const write = (relative, contents) => { const file = path.join(root, relative); fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, contents); };
+    write("plugins/contracts/plugin-sdk/public-source.mjs", fs.readFileSync(new URL("../plugins/contracts/plugin-sdk/public-source.mjs", import.meta.url)));
+    const blocked = ["src/plugins/io.fixture/src/relay.test.ts", "plugins/contracts/plugin-sdk/builder.test.mjs", "src/plugins/io.fixture/tests/证据.ts"];
+    const preserved = ["src/plugins/io.fixture/src/auth/authorize.ts", "src/plugins/io.fixture/catalog.json", "scripts/test-rabispeech-tts-loop.mjs"];
+    for (const relative of [...blocked, ...preserved]) write(relative, "public fixture " + relative);
+    for (const count of [0, 1, 3]) write("manifest-" + count + ".json", JSON.stringify({ version: 1, files: [...blocked.slice(0, count), ...preserved].map(relative => ({ path: relative, sha256: createHash("sha256").update(fs.readFileSync(path.join(root, relative))).digest("hex") })) }));
+    const program = "param([string]$Release,[string]$Helper,[string]$Fixture,[string]$Result)\n$ErrorActionPreference='Stop'\n. $Helper\n$text=Get-Content -LiteralPath $Release -Raw -Encoding UTF8\n$start=$text.IndexOf('# Runtime selection is owned')\n$end=$text.IndexOf('function Copy-TrackedTree')\nif($start -lt 0 -or $end -le $start){throw 'Actual runtime selection block missing'}\n$selection=$text.Substring($start,$end-$start)\n$tokens=$null;$errors=$null\n$ast=[Management.Automation.Language.Parser]::ParseFile($Release,[ref]$tokens,[ref]$errors)\nif($errors.Count){throw ($errors|Out-String)}\n$copy=$ast.Find({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Copy-TrackedTree'},$true)\n$counts=@()\nforeach($count in @(0,1,3)){\n  $repo=$Fixture\n  $TrackedFilesManifest=Join-Path $Fixture ('manifest-'+$count+'.json')\n  $trackedManifestEntries=Read-ReleaseTrackedManifest $TrackedFilesManifest $repo\n  $payload=Join-Path $Fixture ('payload-'+$count)\n  $null=New-Item -ItemType Directory -Path $payload\n  $excludedRuntimeFiles=[Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)\n  . ([ScriptBlock]::Create($selection))\n  . ([ScriptBlock]::Create($copy.Extent.Text))\n  foreach($tree in @('src/plugins','plugins','scripts')){Copy-TrackedTree $tree}\n  if($runtimeSourceExclusions.Count -ne $count){throw ('Wrong exclusion array count: '+$count)}\n  foreach($entry in $trackedManifestEntries){\n    $destination=Join-Path $payload $entry.path\n    if($entry.path -match '\\.test\\.ts$|builder\\.test\\.mjs$|/tests/'){\n      if(Test-Path -LiteralPath $destination){throw ('Development test entered runtime payload: '+$entry.path)}\n    }else{\n      if(!(Test-Path -LiteralPath $destination -PathType Leaf)){throw ('Public runtime source disappeared: '+$entry.path)}\n      if((Get-FileHash -LiteralPath $destination -Algorithm SHA256).Hash -ne $entry.sha256){throw 'Public runtime source bytes changed'}\n    }\n  }\n  $counts+=$runtimeSourceExclusions.Count\n}\n[IO.File]::WriteAllText($Result,(($counts|ConvertTo-Json)+[Environment]::NewLine),[Text.UTF8Encoding]::new($false))\n";
+    const probe = path.join(root, "copy.ps1"), resultFile = path.join(root, "copy-result.json");
+    fs.writeFileSync(probe, program, "utf8");
+    const shell = path.join(process.env.SystemRoot, "System32/WindowsPowerShell/v1.0/powershell.exe");
+    const result = spawnSync(shell, ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", probe,
+      "-Release", fileURLToPath(new URL("./build-windows-release.ps1", import.meta.url)),
+      "-Helper", fileURLToPath(new URL("./lib/release-tracked-manifest.ps1", import.meta.url)), "-Fixture", root, "-Result", resultFile],
+    { encoding: "utf8", windowsHide: true, env: { ...process.env, PATH: path.dirname(process.execPath) + path.delimiter + process.env.PATH } });
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    assert.deepEqual(JSON.parse(fs.readFileSync(resultFile, "utf8")), [0, 1, 3]);
+  } finally { assert.equal(path.dirname(root), path.resolve(os.tmpdir())); fs.rmSync(root, { recursive: true, force: true }); }
 });

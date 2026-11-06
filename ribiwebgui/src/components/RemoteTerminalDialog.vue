@@ -16,8 +16,21 @@ const shell = ref("cmd"); const cwd = ref("");
 const current = ref<RemoteTerminal>(); const error = ref(""); const busy = ref(false); const blocked = ref(true);
 const container = ref<HTMLElement>();
 let terminal: Terminal | undefined; let fit: FitAddon | undefined; let observer: ResizeObserver | undefined;
+let themeObserver: MutationObserver | undefined;
 let stream: AbortController | undefined; let revision = 0; let disposed = false; let inputQueue = Promise.resolve(); let pendingBytes = 0;
 const activeCount = computed(() => sessions.value.filter(item => ["starting", "running"].includes(item.state)).length);
+
+function syncTerminalTheme() {
+  if (!terminal || disposed) return;
+  const style = getComputedStyle(document.documentElement);
+  const background = style.getPropertyValue("--rr-canvas").trim() || "#101820";
+  const foreground = style.getPropertyValue("--rr-text").trim() || "#dbe7ef";
+  terminal.options.theme = {
+    background, foreground, cursor: foreground, cursorAccent: background,
+    selectionBackground: style.getPropertyValue("--rr-accent-strong").trim() || foreground,
+    selectionForeground: style.getPropertyValue("--rr-on-accent-strong").trim() || background
+  };
+}
 
 async function query() {
   const result = await client.request<{ shells: string[]; sessions: RemoteTerminal[] }>();
@@ -40,7 +53,8 @@ async function initialize() {
   if (terminal) return;
   const [{ Terminal: NativeTerminal }, { FitAddon: NativeFit }] = await Promise.all([import("@xterm/xterm"), import("@xterm/addon-fit")]);
   await nextTick(); if (disposed || !container.value) return;
-  terminal = new NativeTerminal({ cursorBlink: true, scrollback: 2000, fontSize: 14, theme: { background: "#101820", foreground: "#dbe7ef" } });
+  terminal = new NativeTerminal({ cursorBlink: true, scrollback: 2000, fontSize: 14 });
+  syncTerminalTheme();
   fit = new NativeFit(); terminal.loadAddon(fit); terminal.open(container.value); fit.fit();
   terminal.onData(data => {
     const selected = current.value; const generation = revision;
@@ -101,8 +115,12 @@ async function exitTerminal(session: RemoteTerminal) {
   try { await client.request({ action: "close", terminalId: session.terminalId }); await query(); if (current.value?.terminalId === session.terminalId) blocked.value = true; }
   catch (reason) { error.value = userFacingError(reason); } finally { busy.value = false; }
 }
-onMounted(() => { void refresh(); });
-onBeforeUnmount(() => { disposed = true; revision++; stream?.abort(); observer?.disconnect(); terminal?.dispose(); });
+onMounted(() => {
+  themeObserver = new MutationObserver(syncTerminalTheme);
+  themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ["style", "data-rabiroute-theme", "data-rabiroute-theme-resource"] });
+  void refresh();
+});
+onBeforeUnmount(() => { disposed = true; revision++; stream?.abort(); observer?.disconnect(); themeObserver?.disconnect(); terminal?.dispose(); });
 </script>
 
 <template>
@@ -136,6 +154,6 @@ onBeforeUnmount(() => { disposed = true; revision++; stream?.abort(); observer?.
 <style scoped>
 .terminal-layout { display: grid; grid-template-columns: 260px minmax(0,1fr); gap: 16px; }
 .terminal-sessions { max-height: 500px; overflow: auto; }
-.remote-terminal { height: 460px; padding: 12px; background: #101820; border-radius: 8px; overflow: hidden; }
+.remote-terminal { height: 460px; padding: 12px; background: var(--rr-canvas); border-radius: 8px; overflow: hidden; }
 @media(max-width:800px) { .terminal-layout { grid-template-columns: minmax(0,1fr); } .terminal-sessions { max-height: 160px; } }
 </style>

@@ -45,7 +45,7 @@ test("restores only matching structured feedback, never guesses legacy choices",
   assert.equal(matchingApprovalFeedback(plan, []), undefined);
 });
 test("page compiles with full-panel disclosure, authoritative reload and structured submission", () => {
-  const source = fs.readFileSync(new URL("../src/pages/RoleKnowledgePage.vue", import.meta.url), "utf8");
+  const source = fs.readFileSync(new URL("../../src/plugins/io.rabiroute.manager.persona/web/pages/RoleKnowledgePage.vue", import.meta.url), "utf8");
   const { descriptor, errors } = parse(source);
   assert.deepEqual(errors, []);
   assert.doesNotThrow(() => compileScript(descriptor, { id: "approval-page", inlineTemplate: true }));
@@ -59,7 +59,7 @@ test("page compiles with full-panel disclosure, authoritative reload and structu
 
 import ts from "typescript";
 test("approval attachment picker accepts nine small files and retains byte limits",()=>{
- const source=fs.readFileSync(new URL("../src/pages/RoleKnowledgePage.vue",import.meta.url),"utf8"),parsed=parse(source).descriptor.scriptSetup!;
+ const source=fs.readFileSync(new URL("../../src/plugins/io.rabiroute.manager.persona/web/pages/RoleKnowledgePage.vue",import.meta.url),"utf8"),parsed=parse(source).descriptor.scriptSetup!;
  const ast=ts.createSourceFile("picker.ts",parsed.content,ts.ScriptTarget.Latest,true),fn=ast.statements.find((s):s is ts.FunctionDeclaration=>ts.isFunctionDeclaration(s)&&s.name?.text==="addApprovalFiles");assert(fn);
  const emitted=ts.transpileModule(fn.getText(ast),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ES2022}}).outputText;
  const drafts:Record<string,Array<{size:number}>>={},errors:string[]=[];let nextId=0;

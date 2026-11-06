@@ -49,7 +49,7 @@ if (process.argv.includes(workerArgument)) {
       path.join(packageRoot, "assets"), path.join(packageRoot, "docs"), path.join(root, "state")]) fs.mkdirSync(directory, { recursive: true });
     fs.writeFileSync(path.join(packageRoot, "ribiwebgui/dist/index.html"), "<!doctype html><title>Isolation fixture</title>");
     fs.writeFileSync(path.join(packageRoot, "dist/automatic-code/catalog.json"), JSON.stringify({ modules: [], webInputDigest: "0".repeat(64) }));
-    for (const relative of ["plugin-adapters/rabi-speech/model-catalog.json", "packages/rabi-companion/presets.json",
+    for (const relative of ["src/plugins/rabi-speech/model-catalog.json", "packages/rabi-companion/presets.json",
       "packages/rabi-companion/scene-rules.json", "packages/rabi-companion/observation.json"]) {
       const target = path.join(packageRoot, relative); fs.mkdirSync(path.dirname(target), { recursive: true });
       fs.copyFileSync(path.join(repository, relative), target);
@@ -59,10 +59,13 @@ if (process.argv.includes(workerArgument)) {
     const writeContract = fixtureApiContract({ operationId: "fixture.isolation.write", pathTemplate: "/api/isolation/write", request: noBody });
     const failContract = fixtureApiContract({ operationId: "fixture.isolation.fail", pathTemplate: "/api/isolation/fail", request: noBody });
     const definitions = [
-      { name: "diagnostics", provides: "fixture.diagnostics@1", requires: ["host.manager.operations@1", "host.manager.core@1"], source: `
-export function activate(context) {
+      { name: "diagnostics", provides: "fixture.diagnostics@1", requires: ["host.manager.operations@1", "host.manager.core@2"], source: `
+import { createImplementation, hostModules } from ${JSON.stringify(new URL("../../dist/plugins/packages/io.rabiroute.manager.core/0.1.1/manager-runtime.mjs", import.meta.url).href)};
+export async function activate(context) {
   const host = context.services.require('host.manager.operations@1');
-  const core = context.services.require('host.manager.core@1');
+  const shared = context.services.require('host.manager.core@2');
+  await shared.prepareModules(hostModules);
+  const core = createImplementation(shared).createOwnedRuntime(shared);
   context.services.provide('fixture.diagnostics@1', {});
   context.effects.add(() => {
     const self = core.createLanAgentManagementOperations({

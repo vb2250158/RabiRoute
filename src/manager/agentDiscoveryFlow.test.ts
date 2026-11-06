@@ -9,7 +9,7 @@ import { LanAgentAuthority } from "./lanAgentAuthority.js";
 import { LanAgentRegistry } from "./lanAgentRegistry.js";
 import { evaluateLanAgentRequest } from "./lanAgentRequestAccess.js";
 import { handleLanAgentApiFixture as handleLanAgentApi } from "./lanAgentRouteTestSupport.js";
-import { AgentResourceCatalog } from "./agentResourceCatalog.js";
+import { AgentResourceCatalog } from "../plugins/io.rabiroute.manager.core/src/manager/agentResourceCatalog.js";
 import type { LanAgentReleaseStore } from "./lanAgentReleaseStore.js";
 
 const hookModuleUrl = new URL("../../apps/rabi-agent/lib/instance-hook.mjs", import.meta.url).href;

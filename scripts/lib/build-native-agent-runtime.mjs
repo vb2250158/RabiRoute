@@ -1,6 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import ts from "typescript";
+import { copyPluginPublicSource, isPluginRuntimeInput } from "../../plugins/contracts/plugin-sdk/public-source.mjs";
+import { rewriteHostApiImports } from "../rewrite-built-host-api-imports.mjs";
 const inside = (root, file) => { const relative = path.relative(root, file); return relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative); };
 async function exists(file) { try {
     await fs.access(file);
@@ -35,7 +37,17 @@ export async function buildInstanceAgentRuntime(root = process.cwd(), options = 
         if (manifest.id !== instance.package || manifest.version !== instance.version || !manifest.entries?.manager || !manifest.provides.includes(descriptor.capability) || descriptor.manifest?.type !== descriptor.type)
             throw new Error(`Invalid remote Agent package: ${instance.package}.`);
         selected.push(instance);
-        for (const name of ["runtime.mjs", "manager-runtime.mjs"]) {
+        const runtimeEntries = ["runtime.mjs", "manager-runtime.mjs"];
+        const buildSpec = path.join(source, "manager-runtime.build.json");
+        if (await exists(buildSpec)) {
+            for (const worker of JSON.parse(await fs.readFile(buildSpec, "utf8")).workers ?? []) {
+                if (worker.mode === "host-factory") {
+                    if (typeof worker.target !== "string" || !inside(source, path.resolve(source, worker.target))) throw new Error("Worker entry escapes its package.");
+                    runtimeEntries.push(worker.target);
+                }
+            }
+        }
+        for (const name of runtimeEntries) {
             const file = path.join(source, name);
             if (!await exists(file))
                 continue;
@@ -65,16 +77,21 @@ export async function buildInstanceAgentRuntime(root = process.cwd(), options = 
             return;
         }
         const original = await fs.readFile(file, "utf8");
-        const contents = file.endsWith(".ts") ? ts.transpileModule(original, { fileName: file, compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext } }).outputText : original;
+        const transpiled = file.endsWith(".ts") ? ts.transpileModule(original, { fileName: file, compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext } }).outputText : original;
+        const contents = rewriteHostApiImports(transpiled, destination, path.join(backend, "src"));
         await fs.mkdir(path.dirname(destination), { recursive: true });
         await fs.writeFile(destination, contents);
-        const parsed = ts.createSourceFile(file, contents, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS), imports = new Set(), resourceCandidates = new Set();
+        const parsed = ts.createSourceFile(file, contents, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS), imports = new Set(), moduleImports = new Set(), resourceCandidates = new Set();
+        const addModule = specifier => { imports.add(specifier); moduleImports.add(specifier); };
         const inspect = node => {
             if ((ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) && node.moduleSpecifier && ts.isStringLiteral(node.moduleSpecifier))
-                imports.add(node.moduleSpecifier.text);
+                addModule(node.moduleSpecifier.text);
             if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword && ts.isStringLiteral(node.arguments[0]))
-                imports.add(node.arguments[0].text);
-            if (ts.isNewExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === "URL" && node.arguments?.[0]) {
+                addModule(node.arguments[0].text);
+            const base = ts.isNewExpression(node) && node.arguments?.[1];
+            const ownModuleUrl = base && ts.isPropertyAccessExpression(base) && base.name.text === "url" && ts.isMetaProperty(base.expression)
+                && base.expression.keywordToken === ts.SyntaxKind.ImportKeyword && base.expression.name.text === "meta";
+            if (ts.isNewExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === "URL" && ownModuleUrl) {
                 const literal = value => { if (ts.isStringLiteral(value) && value.text.startsWith(".")) {
                     imports.add(value.text);
                     resourceCandidates.add(value.text);
@@ -91,12 +108,18 @@ export async function buildInstanceAgentRuntime(root = process.cwd(), options = 
         for (const specifier of imports) {
             if (specifier.startsWith(".")) {
                 let target = path.resolve(path.dirname(file), specifier);
+                if (target !== root && !inside(root, target)) throw new Error(`Remote source escapes workspace: ${target}`);
+                const resourceOnly = resourceCandidates.has(specifier) && !moduleImports.has(specifier);
                 if (target.endsWith(".js") && await exists(target.slice(0, -3) + ".ts"))
                     target = target.slice(0, -3) + ".ts";
                 if (!await exists(target)) {
-                    if (resourceCandidates.has(specifier))
+                    if (resourceOnly)
                         continue;
                     throw new Error(`Missing remote dependency: ${relative} -> ${specifier}`);
+                }
+                if ((await fs.stat(target)).isDirectory()) {
+                    if (resourceOnly) continue;
+                    throw new Error(`Remote module dependency is a directory: ${relative} -> ${specifier}`);
                 }
                 await visit(target);
             }
@@ -117,7 +140,7 @@ export async function buildInstanceAgentRuntime(root = process.cwd(), options = 
         await fs.writeFile(path.join(backend, "package.json"), JSON.stringify({ name: "rabiroute-agent-native-runtime", version: packageJson.version, type: "module" }, null, 2) + "\n");
         const sdk = path.join(backend, "node_modules/@rabiroute/plugin-sdk");
         await fs.mkdir(path.dirname(sdk), { recursive: true });
-        await fs.cp(path.join(root, "plugins/contracts/plugin-sdk"), sdk, { recursive: true });
+        await copyPluginPublicSource(path.join(root, "plugins/contracts/plugin-sdk"), sdk, { replace: true, runtime: true });
         dependencies.delete("@rabiroute/plugin-sdk");
         const appPackage = JSON.parse(await fs.readFile(path.join(root, "apps/rabi-agent/package.json"), "utf8"));
         const missing = [...dependencies].filter(name => !appPackage.dependencies?.[name] && !appPackage.optionalDependencies?.[name]);
@@ -127,7 +150,10 @@ export async function buildInstanceAgentRuntime(root = process.cwd(), options = 
         await fs.mkdir(nativePackages, { recursive: true });
         for (const instance of selected)
             await fs.cp(path.join(packagesRoot, encodeURIComponent(instance.package), instance.version), path.join(nativePackages, encodeURIComponent(instance.package), instance.version), { recursive: true });
-        await fs.cp(path.join(root, "plugins/contracts"), path.join(stage, "plugins/contracts"), { recursive: true });
+        await fs.cp(path.join(root, "plugins/contracts"), path.join(stage, "plugins/contracts"), { recursive: true,
+            filter: file => isPluginRuntimeInput(path.relative(root, file)) });
+        await fs.mkdir(path.join(stage, "plugins/profiles"), { recursive: true });
+        await fs.copyFile(path.join(root, "plugins/profiles/package-migrations.json"), path.join(stage, "plugins/profiles/package-migrations.json"));
         await fs.writeFile(path.join(stage, "agent-profile.json"), JSON.stringify({ ...profile, readyRequires: [], instances: selected }, null, 2) + "\n");
         await fs.writeFile(path.join(stage, "management.mjs"), [
             'export * from "./backend/src/agentAdapters/instanceManagement.js";',

@@ -52,7 +52,7 @@ test("directory jumps render a bounded forward window instead of inserting old c
 
 test("directory jump waits for its virtualized target card to paint before scrolling", () => {
   const root = path.resolve(import.meta.dirname, "..");
-  const page = fs.readFileSync(path.join(root, "src", "pages", "RoleKnowledgePage.vue"), "utf8");
+  const page = fs.readFileSync(path.join(root, "../src/plugins/io.rabiroute.manager.persona/web/pages/RoleKnowledgePage.vue"), "utf8");
   const jump = page.slice(
     page.indexOf("function jumpToPlan(event: MouseEvent, plan: RolePlan): void"),
     page.indexOf("function isApprovalStep", page.indexOf("function jumpToPlan(event: MouseEvent, plan: RolePlan): void"))
@@ -79,7 +79,7 @@ test("knowledge navigation reuses the session cache until the user explicitly re
   const root = path.resolve(import.meta.dirname, "..");
   const app = fs.readFileSync(path.join(root, "src", "App.vue"), "utf8");
   const router = fs.readFileSync(path.join(root, "src", "router.ts"), "utf8");
-  const page = fs.readFileSync(path.join(root, "src", "pages", "RoleKnowledgePage.vue"), "utf8");
+  const page = fs.readFileSync(path.join(root, "../src/plugins/io.rabiroute.manager.persona/web/pages/RoleKnowledgePage.vue"), "utf8");
   const visibilityHandler = page.slice(
     page.indexOf("function handleKnowledgeVisibilityChange(): void"),
     page.indexOf("onMounted(() =>", page.indexOf("function handleKnowledgeVisibilityChange(): void"))
@@ -100,7 +100,7 @@ test("knowledge navigation reuses the session cache until the user explicitly re
 
 test("plan list controls paint before deferred bounded filters and reuse their session view", () => {
   const root = path.resolve(import.meta.dirname, "..");
-  const page = fs.readFileSync(path.join(root, "src", "pages", "RoleKnowledgePage.vue"), "utf8");
+  const page = fs.readFileSync(path.join(root, "../src/plugins/io.rabiroute.manager.persona/web/pages/RoleKnowledgePage.vue"), "utf8");
   const styles = fs.readFileSync(path.join(root, "src", "styles.css"), "utf8");
   const openDialog = page.slice(
     page.indexOf("function openPlanListDialog(): void"),
@@ -170,7 +170,7 @@ test("background knowledge loading stops after a route change or a cursor cannot
 
 test("knowledge page requests bounded plan pages and progressively renders plans and memory", () => {
   const root = path.resolve(import.meta.dirname, "..");
-  const page = fs.readFileSync(path.join(root, "src", "pages", "RoleKnowledgePage.vue"), "utf8");
+  const page = fs.readFileSync(path.join(root, "../src/plugins/io.rabiroute.manager.persona/web/pages/RoleKnowledgePage.vue"), "utf8");
   const client = fs.readFileSync(path.join(root, "src", "roleKnowledgeClient.ts"), "utf8");
   const styles = fs.readFileSync(path.join(root, "src", "styles.css"), "utf8");
   const controlPlaneRoutes = fs.readFileSync(path.join(root, "..", "src", "manager", "controlPlaneRoutes.ts"), "utf8");

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import type http from "node:http";
 import test from "node:test";
 import { invokeFixtureXiaomiOperation, type XiaomiHomeOperationFixtureContext } from "./managerOperations.fixture.js";
-import type { XiaomiHomeRuntimeController } from "./settingsRuntime.js";
+import type { XiaomiHomeRuntimeController } from "../../plugins/io.rabiroute.manager.xiaomi-home/src/integrations/xiaomiHome/settingsRuntime.js";
 
 test("directory HTTP reads validate before discovery and forward filters, pages and exact device IDs", async () => {
   const calls: unknown[] = [];

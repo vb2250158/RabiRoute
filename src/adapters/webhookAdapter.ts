@@ -116,7 +116,7 @@ export type WebhookAdapterOptions = {
   operationId?(name: string): string;
   publishListener?(publication: ApiExternalListenerPublication | undefined): void;
   readReplies?(url: URL): Record<string, unknown>;
-  acceptPayload?(profile: WebhookAdapterProfile, webhookPath: string, payload: WebhookPayload, bodyBytes: number): VoiceTranscriptEventRecord;
+  acceptPayload?(profile: WebhookAdapterProfile, webhookPath: string, payload: WebhookPayload, bodyBytes: number): VoiceTranscriptEventRecord | Promise<VoiceTranscriptEventRecord>;
   acceptedResponse?(record: VoiceTranscriptEventRecord, payload: WebhookPayload): WebhookHttpReply;
   onListening?(context: WebhookAdapterListeningContext): void | MessageAdapterDispose | Promise<void | MessageAdapterDispose>;
 };
@@ -324,13 +324,13 @@ function recordFromPayload(payload: WebhookPayload, profile: WebhookAdapterProfi
   };
 }
 
-export function acceptWebhookPayload(
+export async function acceptWebhookPayload(
   profile: WebhookAdapterProfile,
   webhookPath: string,
   payload: WebhookPayload,
   bodyBytes: number,
   options: { forward?: boolean; recordFirst?: boolean; trustedSenderIdentity?: boolean; trustedVoiceIdentity?: boolean } = {}
-): VoiceTranscriptEventRecord {
+): Promise<VoiceTranscriptEventRecord> {
   const eventType = payload.type ?? "voice_transcript";
   appendAdapterLog(profile.type, {
     event: "inbound_request",
@@ -388,7 +388,7 @@ export function acceptWebhookPayload(
       configurationRequested: record.configurationRequested ? "true" : undefined
     });
   } else {
-    recordMessageContextOnly(profile.routeKind, record);
+    await recordMessageContextOnly(profile.routeKind, record);
   }
   appendAdapterLog(profile.type, {
     event: "accepted",
@@ -406,21 +406,7 @@ export function acceptWebhookPayload(
   return record;
 }
 
-function defaultWebhookProfile(): WebhookAdapterProfile {
-  return {
-    type: "webhook",
-    label: "通用 Webhook",
-    source: "webhook",
-    path: config.webhookPath,
-    port: config.webhookPort,
-    acceptedTypes: ["voice_transcript", "webhook.text"],
-    routeKind: "voice_transcript",
-    missingTextMessage: "Webhook payload has no text/message/content"
-  };
-}
-
-
-export function createWebhookAdapter(profile = defaultWebhookProfile(), options: WebhookAdapterOptions = {}): MessageAdapter {
+export function createWebhookAdapter(profile: WebhookAdapterProfile, options: WebhookAdapterOptions = {}): MessageAdapter {
   return {
     type: profile.type,
     start(): Promise<MessageAdapterDispose> {

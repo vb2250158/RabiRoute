@@ -7,21 +7,21 @@ export { executeEndpointOnOwner } from "./agentRequests/ownerExecution.js";
 import { AgentReplyStateError } from "./agentRequests/replyError.js";
 import { AgentThreadContractError, callerAgentDeliveryId, normalizeAgentThreadSourceType, type AgentThreadSourceType } from "./agentRequests/requestValidation.js";
 export type { AgentThreadSourceType } from "./agentRequests/requestValidation.js";
-import { promptConfirmsDelivery } from "./agentRequests/rolloutReceipt.js";
+import { promptConfirmsDelivery } from "./shared/deliveryIdentity.js";
 import type { AgentInstanceBinding } from "./shared/agentInstance.js";
 import { randomUUID } from "node:crypto";
 import { recoverAgentResponseDeliveryFromRollout } from "./agentRequests/deliveryRecovery.js";
 import { renderAgentResponseContent } from "./agentRequests/responseContent.js";
 import fs from "node:fs";
 import path from "node:path";
-import {type CodexThreadCreateResult,type CodexTurnSandbox} from "./codexRuntime.js";
+import {type CodexThreadCreateResult,type CodexTurnSandbox} from "./agentAdapters/codexContracts.js";
 import { isCodexTaskId } from "./codexTaskIdentity.js";
 import type { AgentRequestEndpoint } from "./agentRequests/endpoint.js";
 
 import {
   resolveCodexSession,
   type CodexSessionResolution
-} from "./codexSessionResolver.js";
+} from "./agentAdapters/codexNative.js";
 
 import {
   CodexThreadCreationBlockedError,
@@ -53,24 +53,24 @@ import {
   type AgentResponsePolicy
 } from "./agentRequests/store.js";
 
-const createCodexThread=agentNativeFunction<typeof import("./codexRuntime.js")["createCodexThread"]>("codex","createCodexThread");
-const listCodexThreads=agentNativeFunction<typeof import("./codexRuntime.js")["listCodexThreads"]>("codex","listCodexThreads");
-const readCodexThread=agentNativeFunction<typeof import("./codexRuntime.js")["readCodexThread"]>("codex","readCodexThread");
-const renameCodexThread=agentNativeFunction<typeof import("./codexRuntime.js")["renameCodexThread"]>("codex","renameCodexThread");
-const sendCodexThreadMessage=agentNativeFunction<typeof import("./codexRuntime.js")["sendCodexThreadMessage"]>("codex","sendCodexThreadMessage");
-const codexDesktopDeliveryReceiptConfirmed=agentNativeFunction<typeof import("./codexDesktopBridge.js")["codexDesktopDeliveryReceiptConfirmed"]>("codex","codexDesktopDeliveryReceiptConfirmed");
-const openCodexDesktopThread=agentNativeFunction<typeof import("./codexDesktopBridge.js")["openCodexDesktopThread"]>("codex","openCodexDesktopThread");
-const listDshSessions=agentNativeFunction<typeof import("./dshSessionBridge.js")["listDshSessions"]>("dsh","listDshSessions");
-const readDshPrimaryBindingAsync=agentNativeFunction<typeof import("./dshSessionBridge.js")["readDshPrimaryBindingAsync"]>("dsh","readDshPrimaryBindingAsync");
-const openDshSession=agentNativeFunction<typeof import("./dshSessionBridge.js")["openDshSession"]>("dsh","openDshSession");
-const readDshSession=agentNativeFunction<typeof import("./dshSessionBridge.js")["readDshSession"]>("dsh","readDshSession");
-const renameDshSession=agentNativeFunction<typeof import("./dshSessionBridge.js")["renameDshSession"]>("dsh","renameDshSession");
-const resolveDshSession=agentNativeFunction<typeof import("./dshSessionBridge.js")["resolveDshSession"]>("dsh","resolveDshSession");
-const sendDshSessionMessage=agentNativeFunction<typeof import("./dshSessionBridge.js")["sendDshSessionMessage"]>("dsh","sendDshSessionMessage");
-const readAntigravitySession=agentNativeFunction<typeof import("./antigravitySessionStore.js")["readAntigravitySession"]>("antigravity","readAntigravitySession");
-const listWorkbuddyThreads=agentNativeFunction<typeof import("./workbuddyThreads.js")["listWorkbuddyThreads"]>("workbuddy","listWorkbuddyThreads");
-const readWorkbuddyThread=agentNativeFunction<typeof import("./workbuddyThreads.js")["readWorkbuddyThread"]>("workbuddy","readWorkbuddyThread");
-const sendWorkbuddyThreadMessage=agentNativeFunction<typeof import("./workbuddyThreads.js")["sendWorkbuddyThreadMessage"]>("workbuddy","sendWorkbuddyThreadMessage");
+const createCodexThread=agentNativeFunction<import("./agentAdapters/codexContracts.js").CodexNativeOperations["createCodexThread"]>("codex","createCodexThread");
+const listCodexThreads=agentNativeFunction<import("./agentAdapters/codexContracts.js").CodexNativeOperations["listCodexThreads"]>("codex","listCodexThreads");
+const readCodexThread=agentNativeFunction<import("./agentAdapters/codexContracts.js").CodexNativeOperations["readCodexThread"]>("codex","readCodexThread");
+const renameCodexThread=agentNativeFunction<import("./agentAdapters/codexContracts.js").CodexNativeOperations["renameCodexThread"]>("codex","renameCodexThread");
+const sendCodexThreadMessage=agentNativeFunction<import("./agentAdapters/codexContracts.js").CodexNativeOperations["sendCodexThreadMessage"]>("codex","sendCodexThreadMessage");
+const codexDesktopDeliveryReceiptConfirmed=agentNativeFunction<import("./agentAdapters/codexContracts.js").CodexNativeOperations["codexDesktopDeliveryReceiptConfirmed"]>("codex","codexDesktopDeliveryReceiptConfirmed");
+const openCodexDesktopThread=agentNativeFunction<import("./agentAdapters/codexContracts.js").CodexNativeOperations["openCodexDesktopThread"]>("codex","openCodexDesktopThread");
+const listDshSessions=agentNativeFunction<typeof import("./plugins/io.rabiroute.agent.dsh/src/dshSessionBridge.js")["listDshSessions"]>("dsh","listDshSessions");
+const readDshPrimaryBindingAsync=agentNativeFunction<typeof import("./plugins/io.rabiroute.agent.dsh/src/dshSessionBridge.js")["readDshPrimaryBindingAsync"]>("dsh","readDshPrimaryBindingAsync");
+const openDshSession=agentNativeFunction<typeof import("./plugins/io.rabiroute.agent.dsh/src/dshSessionBridge.js")["openDshSession"]>("dsh","openDshSession");
+const readDshSession=agentNativeFunction<typeof import("./plugins/io.rabiroute.agent.dsh/src/dshSessionBridge.js")["readDshSession"]>("dsh","readDshSession");
+const renameDshSession=agentNativeFunction<typeof import("./plugins/io.rabiroute.agent.dsh/src/dshSessionBridge.js")["renameDshSession"]>("dsh","renameDshSession");
+const resolveDshSession=agentNativeFunction<typeof import("./plugins/io.rabiroute.agent.dsh/src/dshSessionBridge.js")["resolveDshSession"]>("dsh","resolveDshSession");
+const sendDshSessionMessage=agentNativeFunction<typeof import("./plugins/io.rabiroute.agent.dsh/src/dshSessionBridge.js")["sendDshSessionMessage"]>("dsh","sendDshSessionMessage");
+const readAntigravitySession=agentNativeFunction<typeof import("./plugins/io.rabiroute.agent.antigravity/src/antigravitySessionStore.js")["readAntigravitySession"]>("antigravity","readAntigravitySession");
+const listWorkbuddyThreads=agentNativeFunction<typeof import("./plugins/io.rabiroute.agent.workbuddy/src/workbuddyThreads.js")["listWorkbuddyThreads"]>("workbuddy","listWorkbuddyThreads");
+const readWorkbuddyThread=agentNativeFunction<typeof import("./plugins/io.rabiroute.agent.workbuddy/src/workbuddyThreads.js")["readWorkbuddyThread"]>("workbuddy","readWorkbuddyThread");
+const sendWorkbuddyThreadMessage=agentNativeFunction<typeof import("./plugins/io.rabiroute.agent.workbuddy/src/workbuddyThreads.js")["sendWorkbuddyThreadMessage"]>("workbuddy","sendWorkbuddyThreadMessage");
 
 const maxThreadIdLength = 512;
 const maxQueryLength = 240;
@@ -277,7 +277,7 @@ function agentThreadRequestFailureDataWithoutCaller(
         nextAction: "Read the original request or delivery by its existing ID after the owner is restored; do not create a replacement intent." } };
   }
   if (error instanceof AgentThreadContractError) {
-    return { action: request.action ?? null, status: "failed", message: error.message,
+    return { action: request.action ?? null, status: "failed", message: error.message, errorCode: error.code, field: error.field, repair: error.repair,
       error: { stage: error.stage, field: error.field, code: error.code, message: error.message, repair: error.repair, retryable: false } };
   }
   const originalMessage = error instanceof Error ? error.message : String(error);

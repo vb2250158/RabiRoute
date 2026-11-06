@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import http from "node:http";
 import test from "node:test";
 import { findReferencedAgentSenders } from "./managerClient.js";
+import { listenManagerEndpoint } from "../managerEndpointPolicy.js";
 
 test("referenced Agent sender lookup uses the exact channel, platform message id, and Route", async (t) => {
   let requestedPath = "";
@@ -26,12 +27,13 @@ test("referenced Agent sender lookup uses the exact channel, platform message id
       }
     }));
   });
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const endpoint = await listenManagerEndpoint({ server, host: "127.0.0.1", policy: { mode: "auto" } });
   t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
   const address = server.address();
   assert.ok(address && typeof address === "object");
 
-  const senders = await findReferencedAgentSenders(`http://127.0.0.1:${address.port}`, {
+  assert.equal(endpoint.port, address.port);
+  const senders = await findReferencedAgentSenders(endpoint.baseUrl, {
     channel: "napcat",
     sentMessageId: "qq-outbound-7788",
     routeId: "route-main"

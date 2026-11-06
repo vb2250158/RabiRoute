@@ -9,15 +9,15 @@ import { randomUUID, createHash } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import { LanAgentAuthority } from "./lanAgentAuthority.js";
 import { LanAgentRegistry } from "./lanAgentRegistry.js";
-import { createLanAgentManagementOperations, type LanAgentRoutesContext } from "./lanAgentRoutes.js";
-import { createLanAgentReadOperations } from "./lanAgentReadOperations.js";
-import { createLanAgentTerminalOperations } from "./lanAgentTerminalRoutes.js";
-import { createLanAgentComputerOperations } from "./lanAgentComputerRoutes.js";
-import { createLanAgentConnectionOperation } from "./lanAgentConnectionOperation.js";
+import { createLanAgentManagementOperations, type LanAgentRoutesContext } from "../plugins/io.rabiroute.manager.core/src/manager/lanAgentRoutes.js";
+import { createLanAgentReadOperations } from "../plugins/io.rabiroute.manager.core/src/manager/lanAgentReadOperations.js";
+import { createLanAgentTerminalOperations } from "../plugins/io.rabiroute.manager.core/src/manager/lanAgentTerminalRoutes.js";
+import { createLanAgentComputerOperations } from "../plugins/io.rabiroute.manager.core/src/manager/lanAgentComputerRoutes.js";
+import { createLanAgentConnectionOperation } from "../plugins/io.rabiroute.manager.core/src/manager/lanAgentConnectionOperation.js";
 import { ManagerPluginRouteRegistry } from "./managerPluginRouteRegistry.js";
-import { createApiDiscoveryOperations } from "./apiDiscoveryRoutes.js";
-import { evaluateLanAgentRequest, assertTrustedLanAgentPrincipal } from "./lanAgentRequestAccess.js";
-import { registerLanAgentBodyGuard, assertLanAgentBodyAuthority } from "./lanAgentBodyAuthority.js";
+import { createApiDiscoveryOperations } from "../plugins/io.rabiroute.manager.agent-communication/src/manager/apiDiscoveryRoutes.js";
+import { evaluateLanAgentRequest } from "./lanAgentRequestAccess.js";
+import { registerLanAgentBodyGuard } from "./lanAgentBodyAuthority.js";
 
 test("first enrollment and real CLI worker provide computer I/O with no Agent binding", {skip:process.platform!=="win32",timeout:90000}, async t => {
   const root=fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(),"rabi-client-entry-")));
@@ -41,7 +41,7 @@ test("first enrollment and real CLI worker provide computer I/O with no Agent bi
     if(url.pathname==="/meta"||url.pathname==="/.well-known/rabiroute-manager"){json(response,200,{code:0,data:{...identity(),protocolVersion:"1"}});return;}
     const access=evaluateLanAgentRequest(request,authority,true);
     if(access.kind==="denied"){json(response,access.status,{code:-1,error:access.error});return;}
-    registerLanAgentBodyGuard(request,body=>assertLanAgentBodyAuthority(url.pathname,body,assertTrustedLanAgentPrincipal(request)?.source));
+    registerLanAgentBodyGuard(request,() => {});
     if(!api.handle(request,url,response))json(response,404,{code:-1});
   });
   server.on("upgrade",(request,socket,head)=>{if(!api.handleUpgrade(request,new URL(request.url!,"http://fixture.invalid"),socket,head))socket.destroy();});

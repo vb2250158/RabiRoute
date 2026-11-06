@@ -1,6 +1,6 @@
 {
   "name": "@rabiroute/plugin-sdk",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "type": "module",
   "license": "MIT",
   "types": "./index.d.ts",
@@ -14,7 +14,37 @@
       "types": "./publication.d.ts",
       "import": "./publication.mjs",
       "default": "./publication.mjs"
+    },
+    "./builder": {
+      "import": "./builder.mjs",
+      "types": "./builder.d.ts",
+      "default": "./builder.mjs"
     }
   },
-  "files": ["index.mjs", "index.d.ts", "api-operation-contract.d.ts", "publication.mjs", "publication.d.ts", "README.md", "README_en.md"]
+  "files": [
+    "index.mjs",
+    "index.d.ts",
+    "api-operation-contract.d.ts",
+    "publication.mjs",
+    "publication.d.ts",
+    "README.md",
+    "README_en.md",
+    "builder.mjs",
+    "builder.d.ts",
+    "builder.test.mjs",
+    "public-source.mjs"
+  ],
+  "bin": {
+    "rabi-plugin-build": "./builder.mjs"
+  },
+  "dependencies": {
+    "esbuild": "0.28.1",
+    "typescript": "^5.7.3"
+  },
+  "peerDependencies": {
+    "@rabiroute/host-api": "^1.0.0"
+  },
+  "scripts": {
+    "test": "node --test builder.test.mjs"
+  }
 }

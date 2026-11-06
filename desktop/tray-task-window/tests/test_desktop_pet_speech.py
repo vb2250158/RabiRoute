@@ -42,6 +42,41 @@ class PetSpeechTest(unittest.TestCase):
         self.assertEqual(changed.count(), 0)
         speech.close()
 
+
+    def test_bubble_scrollbar_keeps_custom_text_skin_opacity_and_tracks_style_updates(self):
+        from rabiroute_tray.desktop_pet_bubble import DesktopPetBubble
+        from rabiroute_tray.theme import apply_rabi_application_theme
+        from PySide6.QtGui import QPalette
+        bubble = DesktopPetBubble(Qt.WindowType.Tool)
+        original_palette, original_stylesheet = self.app.palette(), self.app.styleSheet()
+        try:
+            bubble.apply_style(dict(skin="plain", maxWidth=320, textColor="#123456", backgroundColor="#abcdef", borderColor="#654321", opacity=.7))
+            bubble.set_content("Long bubble content. " * 160)
+            bubble.show()
+            self.app.processEvents()
+            vertical = bubble._scroll.verticalScrollBar()
+            self.assertTrue(vertical.isVisible())
+            self.assertEqual(vertical.width(), 6)
+            self.assertEqual(bubble._scroll.horizontalScrollBarPolicy(), Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+            for theme in ("light", "dark"):
+                apply_rabi_application_theme(self.app, theme)
+                self.app.processEvents()
+                self.assertEqual(vertical.width(), 6)
+                self.assertEqual(bubble._text.palette().color(QPalette.ColorRole.WindowText).name(), "#123456")
+                self.assertIn("rgba(18, 52, 86, 122)", bubble._scroll.styleSheet())
+                self.assertEqual(bubble._style["skin"], "plain")
+                self.assertEqual(bubble._style["backgroundColor"], "#abcdef")
+                self.assertEqual(bubble._style["borderColor"], "#654321")
+                self.assertAlmostEqual(bubble.windowOpacity(), .7, delta=.01)
+            bubble.apply_style(dict(textColor="#abcdef", opacity=.8))
+            self.assertIn("rgba(171, 205, 239, 122)", bubble._scroll.styleSheet())
+            self.assertEqual(bubble._text.palette().color(QPalette.ColorRole.WindowText).name(), "#abcdef")
+        finally:
+            bubble.close()
+            bubble.deleteLater()
+            self.app.setPalette(original_palette)
+            self.app.setStyleSheet(original_stylesheet)
+
     def test_bubble_long_plain_text_lifetime_and_click_through(self):
         window = DesktopPetWindow()
         try:

@@ -3,6 +3,7 @@ import type { PreparedEndpointDelivery } from "../agentRequests/endpointDelivery
 import type { AgentDeliveryRecord, AgentDeliveryRecordPage, AgentDeliveryRecordParty } from "../shared/agentDeliveryRecord.js";
 import type { ApiOperationDefinition, ApiOperationResult, ApiSchema } from "./apiOperationContract.js";
 import { hasAuthenticatedConnectionRequest } from "./connectionRequestAccess.js";
+import { agentWorkspaceMismatch } from "../agentRequests/requestValidation.js";
 
 export type DeliveryRecordsContext = {
   agentRequests: AgentRequestStore;
@@ -17,6 +18,7 @@ function party(value: PreparedEndpointDelivery["source"]): AgentDeliveryRecordPa
 }
 
 export function projectAgentDelivery(value: EndpointDeliveryMetadata): AgentDeliveryRecord {
+  const mismatch = value.state !== "committed" && value.lastError?.code === "AGENT_WORKSPACE_MISMATCH" ? agentWorkspaceMismatch(value.target) : undefined;
   return {
     id: value.deliveryId, deliveryId: value.deliveryId, intentId: value.callerDeliveryId,
     state: value.state === "committed" ? "received" : value.state === "cancelled" ? "cancelled"
@@ -25,6 +27,7 @@ export function projectAgentDelivery(value: EndpointDeliveryMetadata): AgentDeli
     createdAt: value.createdAt, updatedAt: value.updatedAt, lastAttemptAt: value.lastAttemptAt,
     nextAttemptAt: value.nextAttemptAt, attemptCount: value.attemptCount,
     reason: value.blockedReason ?? value.lastError?.message, errorCode: value.lastError?.code,
+    ...(mismatch ? { field: mismatch.field, repair: mismatch.repair } : {}),
     receipt: value.receipt ? { deliveryId: value.receipt.deliveryId, accepted: value.receipt.accepted,
       action: value.receipt.action, transport: value.receipt.transport, endpoint: party(value.receipt.endpoint) } : undefined
   };
@@ -131,7 +134,7 @@ export function createAgentDeliveryRecordOperations(context: DeliveryRecordsCont
   const record: ApiSchema = { type: "object", required: ["id", "deliveryId", "state", "source", "target", "ownerScope"], properties: {
     id: text, deliveryId: text, intentId: text, state: { enum: ["queued", "sending", "awaiting_confirmation", "received", "blocked", "failed", "cancelled"] },
     source: endpoint, target: endpoint, ownerScope: { enum: ["manager", "node"] }, createdAt: text, updatedAt: text,
-    lastAttemptAt: text, nextAttemptAt: text, attemptCount: { type: "integer", minimum: 0 }, reason: text, errorCode: text,
+    lastAttemptAt: text, nextAttemptAt: text, attemptCount: { type: "integer", minimum: 0 }, reason: text, errorCode: text, field: text, repair: text,
     receipt: { type: "object" }, targetAcceptedAt: text, managerCancelPending: { type: "boolean" }
   }, additionalProperties: false };
   const page: ApiSchema = { type: "object", required: ["records", "coverage", "observedAt"], properties: {

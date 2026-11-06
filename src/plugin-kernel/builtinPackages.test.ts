@@ -4,26 +4,28 @@ import path from "node:path";
 import test from "node:test";
 import { parsePluginManifest } from "./manifest.js";
 import { parsePluginProfile } from "./profile.js";
+import { canonicalPluginSourcesFixture } from "../manager/canonicalPluginSource.fixture.js";
 
 test("built-in Manager capabilities are independent SDK packages", async () => {
   const root = path.resolve("plugins");
   const profile = parsePluginProfile(JSON.parse(await fs.readFile(path.join(root, "profiles", "desktop.json"), "utf8")) as unknown);
   assert.deepEqual(profile.readyRequires, ["manager.core@1", "manager.diagnostics@1"],
     "default application readiness covers the control plane; business plugin failure must not reject every healthy client operation");
-  const packageDirectories = (await fs.readdir(path.join(root, "builtin"), { withFileTypes: true })).filter(entry => entry.isDirectory());
-  const available = new Set(packageDirectories.map(entry => entry.name));
-  for (const instance of profile.instances) assert.ok(available.has(encodeURIComponent(instance.package)), `Profile package is installed: ${instance.package}`);
+  const sources = await canonicalPluginSourcesFixture();
+  const available = new Map(sources.map(source => [source.manifest.id, source]));
+  for (const instance of profile.instances) assert.ok(available.has(instance.package), `Profile package has canonical source: ${instance.package}`);
   assert.equal(new Set(profile.instances.map(instance => instance.id)).size, profile.instances.length);
   assert.equal(
     profile.instances.some(instance => instance.package === "io.rabiroute.manager.wearable-companion"),
     true
   );
   for (const instance of profile.instances) {
-    const packageRoot = path.join(root, "builtin", encodeURIComponent(instance.package), instance.version);
+    const packageRoot = available.get(instance.package)!.directory;
     const manifest = parsePluginManifest(JSON.parse(await fs.readFile(path.join(packageRoot, "rabi.plugin.json"), "utf8")) as unknown);
     const source = await fs.readFile(path.join(packageRoot, "manager.mjs"), "utf8");
     assert.equal(manifest.id, instance.package);
-    assert.deepEqual(manifest.entries.manager, { execution: instance.package === "io.rabiroute.manager.route-control" ? "isolated" : "in_process", module: "./manager.mjs" });
+    assert.equal(manifest.version, instance.version);
+    assert.deepEqual(manifest.entries.manager, { execution: "in_process", module: "./manager.mjs" });
     if (manifest.entries.web) {
       assert.deepEqual(manifest.entries.web, { execution: "in_process", module: "./web/client.mjs" },
         "the Web release builder consumes the generated asset wrapper directly");
@@ -40,7 +42,7 @@ test("built-in Manager capabilities are independent SDK packages", async () => {
     assert.doesNotMatch(source, /\b(?:map|filter|find)\(\s*runtime\s*=>/);
     if (manifest.id === "io.rabiroute.manager.gateway-runtime") {
       assert.match(source, /acquireGatewayRuntimePluginLease/);
-      assert.ok(manifest.requires.includes("host.manager.gateway-runtime@1"));
+      assert.ok(manifest.requires.includes("host.manager.gateway-runtime@2"));
       assert.ok(manifest.requires.includes("manager.core@1"));
       assert.match(source, /await runtime\.managerPluginRoutes\.registerOperationsAsync\(context\.identity\.instanceId,\s*runtime\.createGatewayControlOperations\(\), context\.lifecycle\.signal\)/);
       assert.doesNotMatch(source, /testAgentDelivery:\s*runtime\.testAgentDelivery/);

@@ -1,13 +1,27 @@
 import { createHash } from "node:crypto";
 import { open, mkdir } from "node:fs/promises";
 import path from "node:path";
-import { withPersonaHistoryIndex } from "./personaChatHistoryIndex.js";
+import { withPersonaHistoryIndex, type PersonaHistoryIndex } from "./personaChatHistoryIndex.js";
 import { recordDataMutationAudit } from "./observability/dataMutationAudit.js";
 import type { PersonaChatReply, PersonaChatHistoryPage } from "./shared/personaChatHistory.js";
 import { chatHistoryCategory, CHAT_HISTORY_CATEGORIES, type ChatHistoryCategory } from './shared/personaHistoryChannels.js';
 
 const HISTORY_PATH = "chat-history/final-replies.jsonl";
 const writes = new Map<string, Promise<unknown>>();
+
+// Only complete the physical line boundary; retain every original byte and
+// let the existing projection recognize a complete old record before deduping.
+async function finishHistoryRow(file: string, index: PersonaHistoryIndex, beforeAppend?: () => void): Promise<void> {
+  if (!index.appendSeparator) return;
+  beforeAppend?.();
+  const handle = await open(file, 'a');
+  try {
+    beforeAppend?.();
+    await handle.writeFile(index.appendSeparator, 'utf8');
+    await handle.sync();
+  } finally { await handle.close(); }
+  await index.prepare();
+}
 function parseReply(line: string): PersonaChatReply {
   const value = JSON.parse(line) as PersonaChatReply;
   const identity = (value?.kind === "agent_delivery" || value?.kind === "user_delivery") ? [value.deliveryId, value.targetSessionId] : [value?.turnId];
@@ -37,10 +51,10 @@ export async function appendPersonaChatReply(
   // One append transaction per persona. Replayed hooks do not create a second row.
   const previous = writes.get(file) ?? Promise.resolve();
   const write = previous.catch(() => undefined).then(() => withPersonaHistoryIndex(file, parseReply, async index => {
+    await finishHistoryRow(file, index);
     const existing = index.find(record.id);
     if (existing && !existing.valid) throw new Error('The recorded reply with this identity is damaged; repair that record before replaying it.');
     if (existing) return null;
-    index.assertIdentityComplete();
     const start = index.size;
     await mkdir(path.dirname(file), { recursive: true });
     const handle = await open(file, "a");
@@ -73,13 +87,13 @@ export async function appendPersonaAiuiExchange(roleDir: string, input: { sessio
   for (const row of rows) row.id = createHash('sha256').update(JSON.stringify(['aiui', row.sessionId, row.turnId])).digest('hex');
   const previous = writes.get(file) ?? Promise.resolve();
   const write = previous.catch(() => undefined).then(() => withPersonaHistoryIndex(file, parseReply, async index => {
+    await finishHistoryRow(file, index, beforeAppend);
     beforeAppend?.();
     for (const row of rows) {
       const existing = index.find(row.id);
       if (existing && (await index.read(existing)).text !== row.text) throw new Error('AIUI_TURN_CONFLICT');
     }
     const pending = rows.filter(row => !index.find(row.id));
-    if (pending.length) index.assertIdentityComplete();
     const start = index.size;
     if (pending.length) {
       beforeAppend?.();

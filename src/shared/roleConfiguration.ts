@@ -2,7 +2,7 @@ import type { GatewayDefinition } from "./gatewayConfigModel.js";
 
 // Only role-owned fields cross the independent role editor boundary.
 export const ROLE_CONFIGURATION_KEYS = [
-  "automationRules", "notificationRules", "recentMessageLimit", "recentMessageLimits",
+  "automationScheduleSchemaVersion", "automationRules", "notificationRules", "recentMessageLimit", "recentMessageLimits",
   "speechTriggerKeywords", "languageStyle", "codexHooks"
 ] as const;
 export type RoleConfiguration = Pick<GatewayDefinition, typeof ROLE_CONFIGURATION_KEYS[number]>;

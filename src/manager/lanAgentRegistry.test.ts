@@ -700,6 +700,19 @@ async function flushManagement(client: ConnectedClient): Promise<void> {
   const acknowledged = once(client.socket, "pong"); client.socket.ping(); await acknowledged;
 }
 
+test('workspace error code survives the original authenticated management response without remote guidance', async t => {
+  const f = await managementFixture(t), original = await f.connect('original');
+  const pending = f.registry.manageAgent('original', 'prepared_delivery', {}, 5_000);
+  const checked = assert.rejects(pending, (error: any) => {
+    assert.equal(error.code, 'AGENT_WORKSPACE_MISMATCH');
+    assert.equal(error.repair, undefined); assert.equal(error.privateDirectory, undefined); return true;
+  });
+  const request = await original.waitFor('manageAgent');
+  original.socket.send(JSON.stringify({ type: 'managementResult', requestId: request.requestId, error: 'Workspace conflict',
+    errorCode: 'AGENT_WORKSPACE_MISMATCH', repair: '/private/remote', privateDirectory: '/private/remote' }));
+  await checked;
+});
+
 test("late mutation replies wake original reconciliation once without reviving the expired caller", async t => {
   const f = await managementFixture(t), original = await f.connect("original"), other = await f.connect("other");
   let changes = 0, authorized = true; f.registry.onDeliveryRecoveryEvent(() => changes++);

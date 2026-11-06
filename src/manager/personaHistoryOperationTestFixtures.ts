@@ -1,9 +1,9 @@
 import type http from 'node:http';
 import { ManagerPluginRouteRegistry } from './managerPluginRouteRegistry.js';
-import { createPersonaHistoryOperations, type PersonaHistoryContext } from './personaHistoryOperations.js';
-import type { PersonaChatHistoryContext } from './personaChatHistoryRoutes.js';
-import type { PersonaVoiceTranscriptRouteContext } from './personaVoiceTranscriptRoutes.js';
-import type { MessageEndpointHistoryContext } from './messageEndpointHistoryRoutes.js';
+import { createPersonaHistoryOperations, type PersonaHistoryContext } from '../plugins/io.rabiroute.manager.persona/src/manager/personaHistoryOperations.js';
+import type { PersonaChatHistoryContext } from '../plugins/io.rabiroute.manager.persona/src/manager/personaChatHistoryRoutes.js';
+import type { PersonaVoiceTranscriptRouteContext } from '../plugins/io.rabiroute.manager.persona/src/manager/personaVoiceTranscriptRoutes.js';
+import type { MessageEndpointHistoryContext } from '../plugins/io.rabiroute.manager.persona/src/manager/messageEndpointHistoryRoutes.js';
 
 /** Test-only HTTP adapter: dispatch through the actual executable registry and retire its request lease on close. */
 function dispatch(request:http.IncomingMessage,url:URL,response:http.ServerResponse,context:PersonaHistoryContext) {

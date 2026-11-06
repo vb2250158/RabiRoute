@@ -49,6 +49,8 @@
 
 ## 接入开发：路由、角色与 Agent 接口
 
+- [接口错误与参数恢复](api-error-recovery.md)：工作区不匹配、合法参数发现、错误样例与各接口族覆盖范围。
+
 - [接口参考与自动发现](api-reference.md)：在文档页浏览当前运行接口，搜索合同、查看参数与响应、复制请求模板并下载 OpenAPI。
 - [连接与接口使用](connection-access.md)：复用一次连接鉴权，了解明确禁用项与接口条件。
 - [工作区计划查询](workspace-plan-query.md)：按宿主会话与工作区过滤的分页搜索接口。
@@ -81,6 +83,8 @@
 - [角色数据同步退役说明](persona-data-sync.md) — **已退役**。不再提供自动/手动同步或同步 API；改用现有 RabiLink 远端角色、Agent 与数据访问，不复制数据，保留历史资料。
 
 ## 维护开发：架构、构建与诊断
+
+- [插件源码、版本与公开配置](plugin-source-layout.md)
 
 - [已连接主机的远端 Agent 架构](connected-host-agent-architecture.md)：现状与目标图、连接/执行/投递拥有者、已完成的代码整理和待实施接线。
 

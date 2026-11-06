@@ -186,7 +186,7 @@ WorkBuddy 的会话桥支持列出、读取和向既有任务投递。创建、�
 
 ### 为什么这里需要凭据，而 Codex 端不需要
 
-Codex 端“直连投递”不是因为它免鉴权，而是因为**信任由传输层建立**：`src/codexDesktopBridge.ts` 连的是 Windows 命名管道 `\\.\pipe\codex-ipc`（POSIX 上是 `$TMPDIR/codex-ipc/ipc-<uid>.sock`），裸 `net.Socket`，全文件没有任何 token、Authorization 或握手代码——只有同机同用户的进程能打开该管道，内核 ACL 就是凭据。
+Codex 端“直连投递”不是因为它免鉴权，而是因为**信任由传输层建立**：`src/plugins/io.rabiroute.agent.codex/src/codexDesktopBridge.ts` 连的是 Windows 命名管道 `\\.\pipe\codex-ipc`（POSIX 上是 `$TMPDIR/codex-ipc/ipc-<uid>.sock`），裸 `net.Socket`，全文件没有任何 token、Authorization 或握手代码——只有同机同用户的进程能打开该管道，内核 ACL 就是凭据。
 
 WorkBuddy 每个会话对外只有 loopback HTTP，操作系统不区分调用者，任何本机进程都能连；因此网关必须在应用层自己鉴权，否则本机任意脚本都能驱动用户的会话。这不是多加一道手续，而是传输方式决定的：
 
@@ -194,7 +194,7 @@ WorkBuddy 每个会话对外只有 loopback HTTP，操作系统不区分调用�
 - 进程与端口印证同一结论：会话进程（如 `sessions/62288.json` 对应 `127.0.0.1:1204`）以 TCP 监听方式对外提供服务。
 - 实测 `GET /api/v1/sessions` 从 loopback 发出仍返回 `401 AUTH_REQUIRED`；`/api/v1/auth/status` 是唯一公开端点，且不提供任何可用信息。
 
-本项目对 HTTP 型 Agent 端要凭据早有先例：`src/dshHttpAuth.ts` 整个模块就是为了获取 DSH 的令牌（从启动日志中取 `dsh web: ...?token=`，换成 HttpOnly cookie 后缓存在内存）；AstrBot 同样需要明确的会话 ID 与凭据。所以真正的待办不是“要不要凭据”，而是“独立进程如何获取一次”，且凭据只进本地忽略文件与内存缓存，不入仓库。
+本项目对 HTTP 型 Agent 端要凭据早有先例：`src/plugins/io.rabiroute.agent.dsh/src/dshHttpAuth.ts` 整个模块就是为了获取 DSH 的令牌（从启动日志中取 `dsh web: ...?token=`，换成 HttpOnly cookie 后缓存在内存）；AstrBot 同样需要明确的会话 ID 与凭据。所以真正的待办不是“要不要凭据”，而是“独立进程如何获取一次”，且凭据只进本地忽略文件与内存缓存，不入仓库。
 
 明确排除的替代方案：把 WorkBuddy 的 `gateway.auth` 改成 `none` 来免鉴权。这是安全降级（同机任意进程均可驱动该会话），且属于修改宿主配置，RabiRoute 不得实施；只有用户自行评估并接受风险后才可作为最后手段。
 
@@ -202,10 +202,10 @@ WorkBuddy 每个会话对外只有 loopback HTTP，操作系统不区分调用�
 
 已落地并测试通过：
 
-- `src/workbuddySessionStore.ts`：会话进程描述读取（含 `prewarm` 池的命名管道只作元数据）、任务库读取、工作目录规范化比较、标准 resolver。`deliverable` 判定要求**进程存活 + 心跳未过期 + 已发布网关地址 + 非 prewarm/teammate 类型**四条同时成立。
-- `src/workbuddyHttpAuth.ts`：网关凭据读取与缓存。多来源按序解析（环境变量 → 本地忽略文件）；只允许回环地址；凭据只驻内存与本地文件，不入仓库、不入日志；5 分钟 TTL + 401 立即失效。
-- `src/workbuddySessionBridge.ts`：**唯一真实消息路径**。绑定读取、投递前 owner/目录再校验、`POST /api/v1/runs` 投递、`GET /runs/{runId}` 结算轮询。四种失败结局可区分：`unreachable`（可安全重试）/ `rejected`（未生效）/ `unauthorized`（未生效且不重放）/ `unknown`（可能已生效，必须先核对）。
-- `src/agentAdapters/workbuddyManagerApi.ts`：Manager 侧扫描/状态（`installed`、`auth`、`endpoints`、`projects`、`sessions` + 分页、`warnings`），并报告本地凭据是否已配置。
+- `src/plugins/io.rabiroute.agent.workbuddy/src/workbuddySessionStore.ts`：会话进程描述读取（含 `prewarm` 池的命名管道只作元数据）、任务库读取、工作目录规范化比较、标准 resolver。`deliverable` 判定要求**进程存活 + 心跳未过期 + 已发布网关地址 + 非 prewarm/teammate 类型**四条同时成立。
+- `src/plugins/io.rabiroute.agent.workbuddy/src/workbuddyHttpAuth.ts`：网关凭据读取与缓存。多来源按序解析（环境变量 → 本地忽略文件）；只允许回环地址；凭据只驻内存与本地文件，不入仓库、不入日志；5 分钟 TTL + 401 立即失效。
+- `src/plugins/io.rabiroute.agent.workbuddy/src/workbuddySessionBridge.ts`：**唯一真实消息路径**。绑定读取、投递前 owner/目录再校验、`POST /api/v1/runs` 投递、`GET /runs/{runId}` 结算轮询。四种失败结局可区分：`unreachable`（可安全重试）/ `rejected`（未生效）/ `unauthorized`（未生效且不重放）/ `unknown`（可能已生效，必须先核对）。
+- `src/plugins/io.rabiroute.agent.workbuddy/src/agentAdapters/workbuddyManagerApi.ts`：Manager 侧扫描/状态（`installed`、`auth`、`endpoints`、`projects`、`sessions` + 分页、`warnings`），并报告本地凭据是否已配置。
 - `workbuddy` 已注册进 `agentAdapterTypes` 与 manifest，`maturity: experimental`、`transport: http/session-gateway`、`host: WorkBuddy Desktop(required)`，并声明 `managedTasks.messageProcessingAgent`（投递已可用）与 `managedTasks.hooks`（生命周期 Hook 已可用）；**未**声明计划秘书与记忆整理（这两条路径走 Codex/DSH 线程驱动，尚未适配），也**未**声明 `deliveryReceiptRecovery`——网关只返回一次性受理回执，不保留可读的入站日志。
 - Route 绑定与 DSH 同形：`adapterConfig.json` 只保存 `workbuddySessionId` / `workbuddySessionName` / `workbuddyCwd` / `workbuddyEndpoint`（末项仅作展示与兜底，投递始终优先用会话描述文件里的实时地址），凭据不写入路由配置。
 - WebGUI：Agent 列表新增 WorkBuddy 卡片、任务下拉（带在线状态）、工作目录与可选网关地址字段。
@@ -330,11 +330,11 @@ workbuddy: {
 | --- | --- |
 | `src/shared/agentAdapterCapabilities.ts` | 新增 `workbuddy` 到 `agentAdapterTypes` 与 `manifestsByAgentType` |
 | `src/agentAdapters/types.ts` | 无需额外分支，走统一 `parseAgentAdapterType` |
-| `src/workbuddySessionBridge.ts`（新） | 会话发现、resolver、投递、结果读取；结构对齐 `src/dshSessionBridge.ts` |
-| `src/workbuddyHttpAuth.ts`（新） | 凭据获取与缓存；结构对齐 `src/dshHttpAuth.ts`（只存端点与来源路径，不存凭据） |
+| `src/plugins/io.rabiroute.agent.workbuddy/src/workbuddySessionBridge.ts`（新） | 会话发现、resolver、投递、结果读取；结构对齐 `src/plugins/io.rabiroute.agent.dsh/src/dshSessionBridge.ts` |
+| `src/plugins/io.rabiroute.agent.workbuddy/src/workbuddyHttpAuth.ts`（新） | 凭据获取与缓存；结构对齐 `src/plugins/io.rabiroute.agent.dsh/src/dshHttpAuth.ts`（只存端点与来源路径，不存凭据） |
 | `src/workbuddyWorkspaces.ts`（新） | 工作目录收集与规范化比较 |
 | `src/agentAdapters/workbuddyAdapter.ts`（新） | 接口化 adapter，注册到 `builtinAgentAdapters.ts` |
-| `src/agentAdapters/workbuddyManagerApi.ts`（新） | `scanWorkbuddyAgent` / `getWorkbuddyStatus` / `openWorkbuddy` 等，由 `managerApi.ts` 聚合 |
+| `src/plugins/io.rabiroute.agent.workbuddy/src/agentAdapters/workbuddyManagerApi.ts`（新） | `scanWorkbuddyAgent` / `getWorkbuddyStatus` / `openWorkbuddy` 等，由 `managerApi.ts` 聚合 |
 | `src/agentAdapters/managerApi.ts` | 聚合新端，接入 `/api/scan/agents` 的 `agents.workbuddy` |
 | `src/manager.ts` | 只做通用接线，不放 WorkBuddy 专属逻辑 |
 | `ribiwebgui/src/types.ts`、`pages/RouteConfigPage.vue`、`components/QuickSetupDialog.vue` | Agent 卡片、参数面板、状态与动作按钮 |
@@ -344,21 +344,21 @@ workbuddy: {
 
 本次已落地（打勾）/ 待落地：
 
-- [x] `src/workbuddySessionStore.ts`（新）— 描述文件 + 任务库 + 规范化 + resolver
-- [x] `src/workbuddySessionStore.test.ts`（新）— 8 个用例，含真实数据形态的回归
-- [x] `src/workbuddyHttpAuth.ts`（新）— 凭据读取与缓存、回环限制、TTL 与失效
-- [x] `src/workbuddySessionBridge.ts`（新）— 绑定解析、投递前校验、投递、结算轮询
-- [x] `src/workbuddySessionBridge.test.ts`（新）— 12 个用例：报文格式、路由键、401/不可达/无 runId/空正文、超时、绑定与失败关闭
-- [x] `src/agentAdapters/workbuddyManagerApi.ts`（新）— `scanWorkbuddyAgentAdapter`，含凭据配置状态
-- [x] `src/agentAdapters/workbuddyManagerApi.test.ts`（新）— 3 个用例：真实形态列会话、分页与筛选、干净机器上的可行动空结果
+- [x] `src/plugins/io.rabiroute.agent.workbuddy/src/workbuddySessionStore.ts`（新）— 描述文件 + 任务库 + 规范化 + resolver
+- [x] `src/plugins/io.rabiroute.agent.workbuddy/src/workbuddySessionStore.test.ts`（新）— 8 个用例，含真实数据形态的回归
+- [x] `src/plugins/io.rabiroute.agent.workbuddy/src/workbuddyHttpAuth.ts`（新）— 凭据读取与缓存、回环限制、TTL 与失效
+- [x] `src/plugins/io.rabiroute.agent.workbuddy/src/workbuddySessionBridge.ts`（新）— 绑定解析、投递前校验、投递、结算轮询
+- [x] `src/plugins/io.rabiroute.agent.workbuddy/src/workbuddySessionBridge.test.ts`（新）— 12 个用例：报文格式、路由键、401/不可达/无 runId/空正文、超时、绑定与失败关闭
+- [x] `src/plugins/io.rabiroute.agent.workbuddy/src/agentAdapters/workbuddyManagerApi.ts`（新）— `scanWorkbuddyAgentAdapter`，含凭据配置状态
+- [x] `src/plugins/io.rabiroute.agent.workbuddy/src/agentAdapters/workbuddyManagerApi.test.ts`（新）— 3 个用例：真实形态列会话、分页与筛选、干净机器上的可行动空结果
 - [x] `src/shared/agentAdapterCapabilities.ts` — 类型与 manifest（声明 `managedTasks.messageProcessingAgent` 与 `hooks`，不声明计划秘书、记忆整理与 `deliveryReceiptRecovery`）
 - [x] `plugins/rabi-workbuddy-context/` — WorkBuddy Hook 插件包（`.codebuddy-plugin/plugin.json` + `hooks/hooks.json` + `scripts/`），与 `rabi-codex-context` 同构
 - [x] `src/agentAdapters/hookInstallation.ts` — WorkBuddy 安装分支（复制到稳定路径 + 合并进 `~/.workbuddy/settings.json`，幂等、保留用户 hooks、拒绝覆盖非法 JSON）
 - [x] `.codebuddy-plugin/marketplace.json` + `scripts/build-agent-hook-packages.mjs` — 插件 marketplace 随包分发
 - [x] `src/agentAdapters/managerApi.ts` — 聚合到 `agents.workbuddy`、选项与 types 导出
 - [x] `src/agentAdapters/builtinAgentAdapters.ts` — 接入 `notifyWorkbuddySession`
-- [x] `src/manager/messageProcessingDeliveryTarget.ts`、`src/forwarding.ts` — 主人格投递目标支持 `workbuddy`
-- [x] `src/shared/gatewayConfigModel.ts`、`src/config.ts` — 绑定字段、规范化与回环校验
+- [x] `src/manager/messageProcessingDeliveryTarget.ts`、`src/plugins/io.rabiroute.endpoint.rabilink/src/forwarding.ts` — 主人格投递目标支持 `workbuddy`
+- [x] `src/shared/gatewayConfigModel.ts`、`src/plugins/io.rabiroute.agent.codex/src/config.ts` — 绑定字段、规范化与回环校验
 - [x] `src/shared/agentInstance.ts` — 实例绑定白名单补齐 `workbuddy`
 - [x] `ribiwebgui/` — Agent 卡片、任务下拉（带在线状态）、工作目录与网关地址字段
 - [x] `README.md`、`docs/README.md`、`docs/current-capabilities.md`、`版本更新日志.md` 的本轮口径同步

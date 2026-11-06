@@ -39,7 +39,7 @@ import {
 
 const pluginProfile = JSON.parse(await fs.readFile(path.resolve("plugins/profiles/desktop.json"), "utf8")) as {instances: Array<{package: string; version: string}>};
 const declaredGatewayTypes = gatewayEndpointTypesFromManifests(await Promise.all(pluginProfile.instances.map(async instance =>
-  parsePluginManifest(JSON.parse(await fs.readFile(path.resolve("plugins/builtin", instance.package, instance.version, "rabi.plugin.json"), "utf8"))))));
+  parsePluginManifest(JSON.parse(await fs.readFile(path.resolve("src/plugins", instance.package, "rabi.plugin.json"), "utf8"))))));
 
 function localUrl(port: number, pathname = ""): string {
   return `http://127.0.0.1:${port}${pathname}`;
@@ -310,7 +310,6 @@ test("Codex managed-task settings are removed when a route has no Codex adapter"
       sessionContextEnabled: true,
       reasoningContextEnabled: true,
       planTaskCompletionEnabled: true,
-      agentCommunicationEnforcementEnabled: true,
       onlyPrimaryPersonaCanSendMessages: false
     }
   }));
@@ -449,7 +448,6 @@ test("Codex Hook settings preserve feature opt-outs and ignore retired primary-o
     sessionContextEnabled: true,
     reasoningContextEnabled: true,
     planTaskCompletionEnabled: true,
-    agentCommunicationEnforcementEnabled: true,
     onlyPrimaryPersonaCanSendMessages: false,
     completionDeliveries: [],
     planFollowup: { enabled: false, cooldownSeconds: 300, rules: [] }
@@ -459,7 +457,6 @@ test("Codex Hook settings preserve feature opt-outs and ignore retired primary-o
       sessionContextEnabled: false,
       reasoningContextEnabled: true,
       planTaskCompletionEnabled: false,
-      agentCommunicationEnforcementEnabled: false,
       onlyPrimaryPersonaCanSendMessages: true
     }
   }));
@@ -467,7 +464,6 @@ test("Codex Hook settings preserve feature opt-outs and ignore retired primary-o
     sessionContextEnabled: false,
     reasoningContextEnabled: true,
     planTaskCompletionEnabled: false,
-    agentCommunicationEnforcementEnabled: false,
     onlyPrimaryPersonaCanSendMessages: false,
     completionDeliveries: [],
     planFollowup: { enabled: false, cooldownSeconds: 300, rules: [] }
@@ -1060,6 +1056,7 @@ test("legacy role panel persona rules are canonicalized", () => {
     enabled: true,
     routeKinds: ["role_panel_message"],
     targetGroupId: "",
+    targetUserId: "",
     allowedSpeakerNames: [],
     regex: "",
     schedules: undefined,

@@ -1,4 +1,4 @@
-import { translateText, useI18n } from "./i18n";
+import { translateText, useI18n } from "./i18n/index";
 import { presentError, type ErrorDetails } from "../../src/shared/errorPresentation";
 /** Read locale at the display boundary, preserving structured diagnostics. */
 export function userFacingError(error: unknown): string {

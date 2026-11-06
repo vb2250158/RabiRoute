@@ -8,7 +8,7 @@ import type { AgentThreadRequest } from "../agentThreads.js";
 import { ensurePersonaPlanWorkflow } from "../personaPlanWorkflow.js";
 import { RoleStorageApplication } from "./roleStorageApplication.js";
 import { ManagerReadWorkerPool } from "./managerReadWorkerPool.js";
-import { PersonaStorageOwner, createPersonaStorageOperations, type PersonaStorageOperationsContext } from "./personaStorageOperations.js";
+import { PersonaStorageOwner, createPersonaStorageOperations, type PersonaStorageOperationsContext } from "../plugins/io.rabiroute.manager.persona/src/manager/personaStorageOperations.js";
 import { ManagerPluginRouteRegistry } from "./managerPluginRouteRegistry.js";
 import { LanAgentAuthority } from "./lanAgentAuthority.js";
 import { evaluateLanAgentRequest, assertTrustedLanAgentPrincipal } from "./lanAgentRequestAccess.js";

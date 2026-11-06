@@ -1,0 +1,17 @@
+{
+  "exports": [
+    {
+      "name": "createSpeechPluginRuntime",
+      "source": "src/plugins/io.rabiroute.manager.speech/src/manager/speechPluginRuntime.ts"
+    }
+  ],
+  "ownedSources": [
+    "src/plugins/io.rabiroute.manager.speech/src/speechIngressStore.ts",
+    "src/plugins/io.rabiroute.manager.speech/src/manager/selectionSpeechSettings.ts",
+    "src/plugins/io.rabiroute.manager.speech/src/peerTunnel/speechAdapter.ts"
+  ],
+  "ownedPrefixes": [
+    "src/plugins/io.rabiroute.manager.speech/"
+  ],
+  "packageId": "io.rabiroute.manager.speech"
+}

@@ -122,7 +122,7 @@ if (process.argv.includes(WORKER_ARGUMENT)) {
     fs.writeFileSync(path.join(fixturePackageRoot, "dist/automatic-code/catalog.json"), JSON.stringify({ modules: [], webInputDigest: "0".repeat(64) }));
     const speechFixtureRoot = path.join(fixturePackageRoot, "plugin-adapters/rabi-speech");
     fs.mkdirSync(speechFixtureRoot, { recursive: true });
-    fs.copyFileSync(path.join(packageRoot, "plugin-adapters/rabi-speech/model-catalog.json"), path.join(speechFixtureRoot, "model-catalog.json"));
+    fs.copyFileSync(path.join(packageRoot, "src/plugins/rabi-speech/model-catalog.json"), path.join(speechFixtureRoot, "model-catalog.json"));
     const companionFixtureRoot = path.join(fixturePackageRoot, "packages/rabi-companion");
     fs.mkdirSync(companionFixtureRoot, { recursive: true });
     for (const file of ["presets.json", "scene-rules.json", "observation.json"]) {
@@ -146,7 +146,7 @@ if (process.argv.includes(WORKER_ARGUMENT)) {
       readyRequires: ["manager.persona@1"],
       instances: pluginNames.map(name => ({
         id: `manager:${name}`, package: `io.rabiroute.manager.${name}`,
-        version: "1.0.0", enabled: true, config: {}, grants: []
+        version: "0.1.1", enabled: true, config: {}, grants: []
       }))
     }, null, 2)}\n`, "utf8");
 

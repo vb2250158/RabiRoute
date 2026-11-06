@@ -35,7 +35,7 @@
 
 用户配置的包目录默认可以使用插件声明的 `in_process`、`isolated` 或 `declarative` 执行方式，不再按内置/树外来源增加许可。如果需要限制进程内执行，在 Manager 启动环境设置 `RABIROUTE_PLUGIN_IN_PROCESS_ROOTS`，值为包根目录路径的 JSON 数组；目录必须已在包目录中配置。`[]` 禁用全部进程内入口，显式列表只允许其中目录；清空或移除变量恢复所有已配置目录可用，下次启动时生效。拦截信息会列出实际目录、设置值与修改入口。嵌入式调用使用同一含义的 `PluginPackageCatalog` 选项 `trustedInProcessRoots`。
 
-默认 Profile 位于 `dist/plugins/profiles/desktop.json`，默认包根目录是 `dist/plugins/packages/`。源码构建通过 `plugins/profiles/desktop.json` 和 `plugins/builtin/` 生成这两个目录。
+默认 Profile 位于 `dist/plugins/profiles/desktop.json`，默认包根目录是 `dist/plugins/packages/`。源码构建通过 `plugins/profiles/desktop.json` 和 `src/plugins/` 生成这两个目录。
 
 树外插件通过 `RABIROUTE_PLUGIN_PROFILE` 指定唯一 Profile，通过 `RABIROUTE_PLUGIN_PACKAGE_ROOTS` 增加包根目录。Manifest 与 Profile 都必须是 schema v2；Profile 使用 `readyRequires` 和 `instances`，实例包含稳定 `id`、包名、版本、启用状态、JSON 配置、权限 `grants` 及有界的 restart/resource `policy`。任何非 v2 Schema 与 Patch 都不进入运行链。
 
@@ -106,8 +106,7 @@ Codex 已并入新的 ChatGPT desktop，但 Codex 仍是 Agent 和 runtime 的�
 {
   "enabled": true,
   "messageAdapters": [
-    "napcat",
-    "heartbeat"
+    "napcat"
   ],
   "messageAdapterPolicies": {
     "napcat": {
@@ -138,8 +137,7 @@ Codex 已并入新的 ChatGPT desktop，但 Codex 仍是 Agent 和 runtime 的�
   "codexHooks": {
     "sessionContextEnabled": true,
     "reasoningContextEnabled": true,
-    "planTaskCompletionEnabled": true,
-    "agentCommunicationEnforcementEnabled": true
+    "planTaskCompletionEnabled": true
   },
   "agentModel": "gpt-5.6-terra",
   "agentReasoningEffort": "high",
@@ -169,7 +167,8 @@ Codex 已并入新的 ChatGPT desktop，但 Codex 仍是 Agent 和 runtime 的�
 
 ## 核心字段
 
-- `messageAdapters`：可配置消息入口列表。支持 `napcat`、`remoteAgent`、`heartbeat`、`speech`、`webhook`、`fennenote`、`xiaoai`、`rabilink`、`wearable`、`wecom`、`weixin`、`feishu`；旧配置中的 `rolePanel` 仍兼容，但 WebGUI 不再把它显示为可配置消息端，因为角色面板消息由 Manager 默认提供，Gateway 子进程不另开 listener。
+- `messageAdapters`：可配置消息入口列表。支持 `napcat`、`remoteAgent`、`speech`、`webhook`、`fennenote`、`xiaoai`、`rabilink`、`wearable`、`wecom`、`weixin`、`feishu`；旧配置中的 `rolePanel` 仍兼容，但 WebGUI 不再把它显示为可配置消息端，因为角色面板消息由 Manager 默认提供，Gateway 子进程不另开 listener。
+- 定时任务由“自动化”中的规则直接驱动，不需要 `heartbeat` 消息连接器。该内部标识仍用于调度与历史记录，旧连接器开关会迁移到原任务的启用状态和来源路由范围。
 
 - `messageAdapterPolicies`：每个消息端的管道级权限。`inputEnabled` 控制是否接收，`outputEnabled` 控制是否允许出站。QQ、微信、飞书、企业微信、角色面板和 RabiLink 文字聊天默认使用消息组，不提供关闭开关；可用 `messageGrouping` 的三个秒数调整普通停顿、疑似半句话停顿和最长等待，默认 `6 / 12 / 20` 秒。ASR / 语音转写、heartbeat、命令、审批、健康告警和结构化事件照常直接投递，不进入这段等待。只有 Codex Agent 同时开启消息处理模式时，聊天消息才交给消息处理 Agent；否则保持原有逐条路由。
 - `supportedOutputs`：这个消息端允许发送的消息类型。NapCat/OneBot 当前支持 `text`、`image`、`voice`、`file`；旧的纯文本 `text/message/content` 请求仍兼容。QQ 群本地文件使用 `upload_group_file`，不是把大文件伪装成普通文本或普通消息段。
@@ -209,12 +208,11 @@ Codex 已并入新的 ChatGPT desktop，但 Codex 仍是 Agent 和 runtime 的�
 - `codexHooks.sessionContextEnabled`：默认 `true`。控制 `SessionStart` / `UserPromptSubmit`；打开、恢复、清空或压缩 Codex 任务，以及用户提交新消息时触发。
 - `codexHooks.reasoningContextEnabled`：默认 `true`。控制 `PreToolUse` / `PostToolUse`；Codex 调用工具前后触发，只返回本轮新命中的计划、记忆或技能上下文。
 - `codexHooks.planTaskCompletionEnabled`：默认 `true`。控制 `Stop` 完成提醒；绑定计划的执行任务输出本轮最终回答后触发。启用计划秘书且存在有效秘书任务时，Manager 直接投递给计划 `secretaryBinding` 指向的负责秘书，不写入主角色角色面板，也不默认唤醒主角色；未启用或没有可用秘书时才回退到原主角色链路。关闭只让 Manager 忽略或拒绝对应 Hook，不卸载或改写 Codex 插件 Hook。
-- `codexHooks.agentCommunicationEnforcementEnabled`：WebGUI 显示为“强制使用 RabiAgent 消息投递接口”，默认 `true`，按 Route 保存。开启后，该 Route 的主角色、计划 Agent、计划秘书和消息处理 Agent 不能用 Codex 持久任务工具绕过 `/api/agent/threads`；`PreToolUse` 会在执行前拒绝并提示必须填写 `sourceThreadId`、`sourceAgentType` 和 `responsePolicy`。使用 `required` 时还要填写 `responseInstruction`；目标任务每轮结束仍未通过 Rabi 正式回复时，Manager 从该轮结束起五分钟后提醒。关闭只停止绕过检查，已经建立的待回复请求仍继续跟进。
 
 - `copilotThreadName`：Copilot CLI 独立会话名。它不再复用 `codexThreadName`；旧的 Copilot-only 配置会在读取边界迁移一次并以新字段保存。
 - `copilotCwd`：Copilot CLI 独立工作目录，不与 `codexCwd` 共享真源。
 - `agentModel` / `agentReasoningEffort`：Manager 统一应用到当前 Route 主角色的 Codex Desktop 新轮次。模型留空时沿用目标 Desktop 任务当前设置；推理强度留空时也不覆盖 Desktop 设置。支持的推理强度为 `low`、`medium`、`high`、`xhigh`、`max`。这两个字段只控制主角色，不覆盖消息处理 Agent、计划秘书或独立计划执行 Agent 的设置。
-- `heartbeatSkipWhenAgentBusy`：可选，默认 `false`。只在未启用 Codex 消息处理 Agent 模式时生效；启用消息处理 Agent 后，`heartbeat` 会立即交给独立消息处理任务，不因主角色任务忙碌而跳过。未启用消息处理 Agent 时，如果当前 Codex 固定任务仍处于 active / in-progress 状态，本次 `heartbeat` 会记录为 `skipped` 且原因是 `agent_busy`。群聊、私聊和其他消息类型不受影响。
+- `automationRules[].trigger.schedule.skipWhenAgentBusy`：每条定时任务的忙时策略。`true` 在本机主 Codex 忙时跳过（远端与其他处理端正常投递），`false` 正常投递；省略时保留旧路由的 `heartbeatSkipWhenAgentBusy` 策略。脚本动作不使用 Agent 忙时策略。
 - `speechPushMode`：Route 拥有的语音投递模式。`hot` 表示每段 ASR 完成后立即投递；`keyword` 表示转写仍全部记录，只在命中角色关键词时唤醒 Agent。WebGUI 中“热投递”开关的开对应 `hot`，关对应 `keyword`。
 - `speechTriggerKeywords`：归角色 `personaConfig.json`，用于角色名、常用称呼和唤醒词。列表为空且 Route 关闭热投递时，ASR 只记录、永不暗中回退 `hot`。
 - `automationRules`：归角色 `personaConfig.json`。每条规则先选择 `message` 或 `schedule` 触发，再选择 `deliver_agent` 或 `run_script` 动作。旧 `notificationRules` 和 heartbeat 内嵌 `schedules` 会在读取时转换，后续保存只写新结构。
@@ -389,7 +387,6 @@ Codex adapter 的默认安全边界：
   "sessionContextEnabled": true,
   "reasoningContextEnabled": true,
   "planTaskCompletionEnabled": true,
-  "agentCommunicationEnforcementEnabled": true,
   "onlyPrimaryPersonaCanSendMessages": false
 }
 ```

@@ -1,6 +1,6 @@
 import { getTimeoutMs, readTimeoutOverrides } from "../shared/timeoutSettings.js";
 import type { RuntimeObservation } from "./bridge/executor.mjs";
-import { fork, type ChildProcess } from "node:child_process";
+import { type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
@@ -233,7 +233,7 @@ export class IsolatedPluginExecutor implements PluginExecutor {
     });
     const launch = async (): Promise<ActiveIsolatedHost> => {
       const nonce = randomUUID();
-      const lease = this.leases.launch(processOwner, "isolated-plugin-host", () => fork(hostEntryPath(), [], {
+      const lease = this.leases.launch(processOwner, "isolated-plugin-host", { kind: "fork", entry: hostEntryPath(), options: {
         execArgv: import.meta.url.endsWith(".ts") ? ["--import", "tsx"] : [],
         serialization: "advanced",
         stdio: ["ignore", "ignore", "ignore", "ipc"],
@@ -249,7 +249,7 @@ export class IsolatedPluginExecutor implements PluginExecutor {
           RABIROUTE_PLUGIN_HOST: identity.host,
           RABIROUTE_PLUGIN_REVISION: identity.revision
         }
-      }), { maxChildProcesses });
+      } }, { maxChildProcesses });
       const client = new IsolatedClient(lease.child, nonce, identity);
       try {
         const prepared = await client.request("prepare", {

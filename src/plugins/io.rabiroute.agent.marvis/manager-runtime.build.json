@@ -1,0 +1,26 @@
+{
+  "exports": [
+    {
+      "source": "src/plugins/io.rabiroute.agent.marvis/src/agentAdapters/marvisManagerProvider.ts",
+      "name": "createManager"
+    }
+  ],
+  "ownedPrefixes": [
+    "src/plugins/io.rabiroute.agent.marvis/"
+  ],
+  "scopedEnvironment": true,
+  "hostSources": [
+    "src/agentAdapters/stateReporter.ts"
+  ],
+  "ownedSources": [
+    "src/plugins/io.rabiroute.agent.marvis/src/manager/marvisControlOperations.ts"
+  ],
+  "workers": [
+    {
+      "source": "src/plugins/io.rabiroute.agent.marvis/src/agentAdapters/marvisManagerApi.ts",
+      "target": "workers/scan.mjs",
+      "mode": "host-factory"
+    }
+  ],
+  "packageId": "io.rabiroute.agent.marvis"
+}

@@ -8,11 +8,11 @@ import os from "node:os";
 import path from "node:path";
 import test, { type TestContext } from "node:test";
 import { WebSocket, WebSocketServer } from "ws";
-import { createFeishuAdapter as createNativeFeishuAdapter, type FeishuAdapterSettings, type FeishuAdapterDependencies } from "./feishuAdapter.js";
-import { createNapCatAdapter as createNativeNapCatAdapter, type NapCatAdapterDependencies } from "./napcatAdapter.js";
+import { createFeishuAdapter as createNativeFeishuAdapter, type FeishuAdapterSettings, type FeishuAdapterDependencies } from "../plugins/io.rabiroute.endpoint.feishu/src/adapters/feishuAdapter.js";
+import { createNapCatAdapter as createNativeNapCatAdapter, type NapCatAdapterDependencies } from "../plugins/io.rabiroute.endpoint.napcat/src/adapters/napcatAdapter.js";
 import type { MessageAdapterDispose } from "./messageAdapter.js";
 import { ManagerPluginRouteRegistry } from "../manager/managerPluginRouteRegistry.js";
-import { startNapCatWsOwner } from "./napcatWsOwner.js";
+import { startNapCatWsOwner } from "../plugins/io.rabiroute.endpoint.napcat/src/adapters/napcatWsOwner.js";
 import { apiCatalogOpenApi } from "../manager/apiOperationCatalog.js";
 import type { ApiExternalListenerDefinition, ApiExternalListenerPublication } from "../manager/apiExternalListenerBinding.js";
 

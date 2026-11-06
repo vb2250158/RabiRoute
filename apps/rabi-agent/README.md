@@ -6,6 +6,30 @@
 
 # Rabi Agent
 
+## Windows 进程名称与独立运行包
+
+Windows 正式运行入口使用 `RabiAgent.Runtime.exe` 作为主程序与连接器解释器；托盘、终端宿主和电脑辅助程序分别为 `RabiAgent.Tray.exe`、`RabiAgent.Terminal.exe`、`RabiAgent.Computer.exe`，都包含 Rabi 图标与用途名称。它们仍由同一主程序管理；用户启动的 Codex、DSH 等独立应用保留各自生命周期。
+
+Windows 运行包使用明确选择的 Node 版本与架构，随包携带 npm。开发者先执行完整构建，再运行：
+
+```powershell
+node scripts/build-agent-windows-runtime.mjs --node-root "<official-node-directory>" --expected-node-version 22.17.1 --expected-node-architecture x64 --output-root "<new-local-candidate>"
+```
+
+已有连接配置使用包内入口：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File "<windows-bundle>\desktop\start-windows.ps1" -Config "<private-data>\config.json"
+```
+
+首次接入在原安装提示配置好票据与环境后追加 `-Bootstrap`，沿原节点注册与凭据恢复流程。运行时准备到配置旁的固定 `runtime/windows-<arch>`，npm 位于同一运行时的 `node_modules/npm`；登录启动直接使用该品牌解释器。启动脚本完成移交后退出，不增加常驻 PowerShell 或备用 owner。重复启动复用原主程序。
+
+运行时为 npm 包脚本提供同目录的 `node.exe` 兼容文件名，与品牌解释器使用相同文件内容、版本、图标和 Windows 显示名称，避免脚本回落到另一版本的系统 Node。
+
+运行时更换先准备完整候选，再原子切换；原主程序仍在运行或可执行文件仍被 Windows 映射时保留旧运行时，先通过原 owner 正常退出后再采用新包。普通连接器代码更新继续沿原更新合同，不自动更换 Node 版本或批量升级电脑。Windows 二进制不进入通用 `node` 源码发布，Mac/Linux 保留原入口。
+
+旧签名发布缺少原生 EXE 时保留原 PowerShell 宿主兼容；最低受支持发布要求原生资产后退役。构建、隔离运行与实际节点采用分别验收，本文不表示所有已接入节点已经切换。
+
 连接器从经身份核验的 `/meta.timeoutOverrides` 获取超时设置，并由现有端点配置拥有者保存 `timeoutOverridesCache`。WebGUI 的超时设置可调整普通请求、发送、上传、下载、发现和本机投递控制等待；普通请求在核验后采用新值，上传/下载从操作开始固定预算，首次无缓存时使用默认值，下一次操作采用已验证缓存。显式调用 `timeoutMs` 和调用方取消信号仍控制该次操作。缓存只用于离线启动，不是独立配置真源；恢复默认会清除缓存中的覆盖值。
 
 连接器 0.2.11 在升级提交后，由新版本生成并替换稳定启动器，再报告更新成功。准备／连接阶段不改旧启动器；提交后写入失败会异常退出并由原 owner 恢复，保留身份、凭据和任务，不会把旧控制代码留到下次手动重启。

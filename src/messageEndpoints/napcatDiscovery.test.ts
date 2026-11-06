@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test, { type TestContext } from "node:test";
-import { launchNapcatInstance, testNapcatHealth } from "./napcatManager.js";
+import { launchNapcatInstance, testNapcatHealth } from "../plugins/io.rabiroute.endpoint.napcat/src/messageEndpoints/napcatManager.js";
 
 function fixture(t: TestContext) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabi-napcat-discovery-"));

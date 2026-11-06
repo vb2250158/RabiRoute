@@ -1,8 +1,8 @@
 import type {AgentAdapterType} from './types.js';
 import type {AgentAdapterMaturity} from '../shared/agentAdapterCapabilities.js';
-import type {CodexModelCatalogEntry} from '../codexRuntime.js';
-import type {DshModelCatalogEntry,listDshAgentPresets} from '../dshSessionBridge.js';
-import type { DshLocalDiscovery } from "../dshDiscovery.js";
+import type {CodexModelCatalogEntry} from './codexContracts.js';
+import type {DshModelCatalogEntry,listDshAgentPresets} from '../plugins/io.rabiroute.agent.dsh/src/dshSessionBridge.js';
+import type { DshLocalDiscovery } from "../plugins/io.rabiroute.agent.dsh/src/dshDiscovery.js";
 import type { AgentAdapterDescriptor } from "@rabiroute/plugin-sdk";
 import type { AgentManagerProvider } from "../manager/agentManagerProviders.js";
 export type AgentMaturity = AgentAdapterMaturity;

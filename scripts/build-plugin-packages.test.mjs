@@ -39,7 +39,7 @@ test("endpoint dependencies follow emitted owner reads and preserve explicit bar
 test("endpoint bundles own frozen implementation, module URL, resources and standalone worker bytes", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "endpoint-bundle-build-"));
   try {
-    const plugin = path.join(root, "plugins/builtin/io.test.endpoint/1.0.0");
+    const plugin = path.join(root, "src/plugins/io.test.endpoint");
     await fs.mkdir(plugin, { recursive: true });
     await fs.mkdir(path.join(root, "src/shared"), { recursive: true });
     await fs.mkdir(path.join(root, "resources"), { recursive: true });
@@ -69,18 +69,34 @@ test("route-control package includes the Manager and independently generated Web
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "rabiroute-route-control-build-"));
   try {
     const pluginId = "io.rabiroute.manager.route-control";
-    const source = path.resolve(import.meta.dirname, "../plugins/builtin", pluginId, "1.0.0");
-    const packageRoot = path.join(root, "plugins", "builtin", pluginId, "1.0.0");
+    const source = path.resolve(import.meta.dirname, "../src/plugins", pluginId);
+    const packageRoot = path.join(root, "src", "plugins", pluginId);
     await fs.cp(source, packageRoot, { recursive: true });
+    // The real owned runtime imports public Host declarations; preserve those inputs
+    // in this isolated tree so the bundler can classify its external owner reads.
+    const hostInputs = new Set();
+    for (const relative of await fs.readdir(source, { recursive: true })) {
+      if (!/\.(?:ts|mjs)$/.test(relative) || /\.test\./.test(relative)) continue;
+      const content = await fs.readFile(path.join(source, relative), "utf8");
+      for (const match of content.matchAll(/["']@rabiroute\/host-api\/([^"']+)["']/g)) hostInputs.add(match[1]);
+    }
+    // shared/timeoutSettings re-exports the Host-owned timeout defaults.
+    hostInputs.add("plugin-kernel/runtimeTimeouts");
+    for (const moduleId of hostInputs) {
+      const relative = `src/${moduleId}.ts`;
+      const target = path.join(root, relative);
+      await fs.mkdir(path.dirname(target), { recursive: true });
+      await fs.copyFile(path.resolve(import.meta.dirname, "..", relative), target);
+    }
     await fs.mkdir(path.join(packageRoot, "web"), { recursive: true });
     await fs.writeFile(path.join(packageRoot, "web", "client.mjs"), "export function activate(api) { return () => {}; }\n");
     await fs.cp(path.resolve(import.meta.dirname, "../plugins/contracts/plugin-sdk"), path.join(root, "plugins", "contracts", "plugin-sdk"), { recursive: true });
     await writeJson(path.join(root, "plugins", "profiles", "desktop.json"), {
       schemaVersion: 2, readyRequires: [],
-      instances: [{ id: "manager:route-control", package: pluginId, version: "1.0.0", enabled: true, config: {}, grants: [] }]
+      instances: [{ id: "manager:route-control", package: pluginId, version: "0.1.1", enabled: true, config: {}, grants: [] }]
     });
     const built = await buildPluginPackages(root);
-    const output = path.join(built.packagesRoot, pluginId, "1.0.0");
+    const output = path.join(built.packagesRoot, pluginId, "0.1.1");
     const manifest = JSON.parse(await fs.readFile(path.join(output, "rabi.plugin.json"), "utf8"));
     assert.deepEqual(Object.keys(manifest.entries), ["manager", "web"]);
     assert.deepEqual(manifest.entries.web, { execution: "in_process", module: "./web/client.mjs" });
@@ -97,7 +113,7 @@ async function writeJson(target, value) {
 test("plugin package builds preserve watched roots and remove stale packages", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "rabiroute-plugin-build-"));
   try {
-    const packageRoot = path.join(root, "plugins", "builtin", "io.test.plugin", "1.0.0");
+    const packageRoot = path.join(root, "src", "plugins", "io.test.plugin");
     await writeJson(path.join(root, "plugins", "profiles", "desktop.json"), {
       schemaVersion: 2,
       readyRequires: [],
@@ -151,7 +167,7 @@ test("plugin package builds preserve watched roots and remove stale packages", a
 test("plugin package publication restores the complete previous tree after a mid-commit failure", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "rabiroute-plugin-build-rollback-"));
   try {
-    const packageRoot = path.join(root, "plugins", "builtin", "io.test.plugin", "1.0.0");
+    const packageRoot = path.join(root, "src", "plugins", "io.test.plugin");
     await writeJson(path.join(root, "plugins", "profiles", "desktop.json"), {
       schemaVersion: 2,
       readyRequires: [],
@@ -210,7 +226,7 @@ async function createSelectionFixture(root) {
     instances: ["one", "two"].map(id => ({ id, package: `io.test.${id}`, version: "1.0.0", enabled: true, config: {}, grants: [] }))
   });
   for (const id of ["one", "two"]) {
-    const directory = path.join(root, "plugins/builtin", `io.test.${id}`, "1.0.0");
+    const directory = path.join(root, "src/plugins", `io.test.${id}`);
     await writeJson(path.join(directory, "rabi.plugin.json"), {
       schemaVersion: 2, id: `io.test.${id}`, version: "1.0.0",
       entries: { manager: { execution: "in_process", module: "./manager.mjs" } }, provides: [], requires: [], optional: [], permissions: []
@@ -250,7 +266,7 @@ test("selected builds track changed and removed package files and SDK inputs", a
   try {
     await createSelectionFixture(root);
     const options = { packages: ["io.test.one"], outputDirectory: path.join(root, "candidate") };
-    const source = path.join(root, "plugins/builtin/io.test.one/1.0.0/resource.txt");
+    const source = path.join(root, "src/plugins/io.test.one/resource.txt");
     async function hash() {
       await buildPluginPackages(root, options);
       return JSON.parse(await fs.readFile(path.join(options.outputDirectory, "build-evidence.json"))).inputs.sha256;
@@ -297,6 +313,7 @@ test("API type generation writes staged SDK without changing source files", asyn
     assert.match(await fs.readFile(path.join(built.outputRoot, "contracts/plugin-sdk/api-operation-contract.d.ts"), "utf8"), /export type ApiMethod/);
     const evidence = JSON.parse(await fs.readFile(path.join(built.outputRoot, "build-evidence.json")));
     assert.ok(evidence.inputs.files.some(file => file.path === "src/manager/apiOperationContract.ts"));
+    assert.equal(new Set(evidence.inputs.files.map(file => file.path)).size, evidence.inputs.files.length);
   } finally { await fs.rm(root, { recursive: true, force: true }); }
 });
 
@@ -305,7 +322,7 @@ test("linked output ancestors cannot redirect a build into source inputs", async
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "rabi-build-links-"));
   try {
     await createSelectionFixture(root);
-    await fs.mkdir(path.join(root, "src"));
+    await fs.mkdir(path.join(root, "src"), { recursive: true });
     await fs.writeFile(path.join(root, "src/keep.txt"), "source");
     await fs.symlink(path.join(root, "src"), path.join(root, "source-link"), "junction");
     await assert.rejects(buildPluginPackages(root, { packages: ["io.test.one"], outputDirectory: "source-link/nested/output" }), /source inputs/);
@@ -327,7 +344,7 @@ test("input evidence follows frozen bytes while editable sources change and retu
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "rabi-build-frozen-"));
   try {
     await createSelectionFixture(root);
-    const relative = "plugins/builtin/io.test.one/1.0.0/resource.txt";
+    const relative = "src/plugins/io.test.one/resource.txt";
     const source = path.join(root, relative);
     await fs.writeFile(source, "A");
     const built = await buildPluginPackages(root, {
@@ -352,9 +369,11 @@ async function put(filename, text) { await fs.mkdir(path.dirname(filename), { re
 async function fixture(t) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "rabi-complete-web-evidence-"));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
-  for (const name of ["build-plugin-packages.mjs", "build-message-endpoint-runtime.mjs", "generate-plugin-api-types.mjs", "build-web-patch.mjs", "lib/web-patch-inputs.mjs"]) {
+  for (const name of ["build-plugin-packages.mjs", "build-message-endpoint-runtime.mjs", "generate-plugin-api-types.mjs", "build-web-patch.mjs", "lib/web-patch-inputs.mjs", "lib/plugin-source-layout.mjs"]) {
     await put(path.join(root, "scripts", name), await fs.readFile(path.join(sourceScripts, name)));
   }
+  for (const name of ["public-source.mjs", "builder.mjs"]) await put(path.join(root, "plugins/contracts/plugin-sdk", name),
+    await fs.readFile(path.join(sourceScripts, "../plugins/contracts/plugin-sdk", name)));
   await put(path.join(root, "scripts/sync-plugin-web-bundles.mjs"), "// fixture wrapper owner\n");
   await put(path.join(root, "package.json"), '{"type":"module"}');
   await put(path.join(root, "ribiwebgui/src/entry.ts"), "export const view = 'original';\n");
@@ -362,7 +381,7 @@ async function fixture(t) {
   await put(path.join(root, "plugins/profiles/desktop.json"), JSON.stringify({ schemaVersion: 2, readyRequires: [], instances: [
     { id: "feature", package: "io.test.feature", version: "1.2.3", enabled: true, config: {}, grants: [] }
   ] }));
-  const native = path.join(root, "plugins/builtin/io.test.feature/1.2.3");
+  const native = path.join(root, "src/plugins/io.test.feature");
   await put(path.join(native, "rabi.plugin.json"), JSON.stringify({ schemaVersion: 2, id: "io.test.feature", version: "1.2.3", entries: {
     manager: { execution: "in_process", module: "./manager.mjs" }, web: { execution: "in_process", module: "./web/client.mjs" }
   }, provides: [], requires: [], optional: [], permissions: [] }));
@@ -391,7 +410,7 @@ test("full finalization covers generated wrappers and real CLI verification with
   await assert.rejects(inspectPluginBuild(f.output), /contents differ from build evidence/);
   const before = JSON.parse(await fs.readFile(path.join(f.output, "build-evidence.json"), "utf8"));
   assert.ok(before.inputSelections.includes("plugins/contracts/plugin-sdk"));
-  assert.ok(before.inputSelections.includes("plugins/builtin/io.test.feature/1.2.3"));
+  assert.ok(before.inputSelections.includes("src/plugins/io.test.feature"));
   const complete = await finalizePluginBuildWebArtifacts(f.root, options);
   assert.equal(complete.artifacts.files.length, before.artifacts.files.length + 1);
   assert.equal(complete.web.revision, options.webRevision); assert.equal(complete.web.sourceInputHash, options.webSourceInputHash);
@@ -427,7 +446,7 @@ test("finalization rejects unrelated additions, backend mutation, wrong module b
   await put(path.join(f.root, "dist/manager/webPatchCatalog.js"), `import fs from 'node:fs/promises';import path from 'node:path';export const buildWebPatch=async()=> '${options.webRevision}';export async function writeWebPatchJson(file,value){await fs.mkdir(path.dirname(file),{recursive:true});await fs.writeFile(file,JSON.stringify(value));}`);
   const marker = path.join(f.root, "dist/web-patches/latest.json");
   const webCommand = path.join(f.root, "scripts/build-web-patch.mjs");
-  for (const relative of ["plugins/contracts/plugin-sdk/added-after-build.mjs", "plugins/builtin/io.test.feature/1.2.3/added-after-build.mjs"]) {
+  for (const relative of ["plugins/contracts/plugin-sdk/added-after-build.mjs", "src/plugins/io.test.feature/added-after-build.mjs"]) {
     const added = path.join(f.root, relative); await put(added, "export const added = true;\n");
     const independent = await cli([webCommand], f.root); assert.equal(independent.exitCode, 0, independent.stderr);
     const oldMarker = await fs.readFile(marker);
@@ -451,7 +470,7 @@ test("finalization rejects unrelated additions, backend mutation, wrong module b
 test("independent Web CLI does not require native evidence and full finalization failure preserves the original latest marker", async t => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "rabi-web-only-evidence-")); t.after(() => fs.rm(root, { recursive: true, force: true }));
   await put(path.join(root, "package.json"), '{"type":"module"}');
-  for (const name of ["build-web-patch.mjs", "lib/web-patch-inputs.mjs"]) await put(path.join(root, "scripts", name), await fs.readFile(path.join(sourceScripts, name)));
+  for (const name of ["build-web-patch.mjs", "lib/web-patch-inputs.mjs", "lib/plugin-source-layout.mjs"]) await put(path.join(root, "scripts", name), await fs.readFile(path.join(sourceScripts, name)));
   await put(path.join(root, "dist/manager/webPatchCatalog.js"), `import fs from 'node:fs/promises';import path from 'node:path';export const buildWebPatch=async()=> '${"b".repeat(64)}';export async function writeWebPatchJson(file,value){await fs.mkdir(path.dirname(file),{recursive:true});await fs.writeFile(file,JSON.stringify(value));}`);
   const command = path.join(root, "scripts/build-web-patch.mjs"), marker = path.join(root, "dist/web-patches/latest.json");
   const webOnly = await cli([command], root); assert.equal(webOnly.exitCode, 0, webOnly.stderr);
@@ -461,4 +480,36 @@ test("independent Web CLI does not require native evidence and full finalization
   const packageScripts = JSON.parse(await fs.readFile(new URL("../package.json", import.meta.url), "utf8")).scripts;
   assert.ok(packageScripts.build.endsWith("npm run webgui:build -- --finalize-plugin-build"));
   assert.ok(!packageScripts["webgui:build"].includes("finalize-plugin-build"));
+});
+
+test("runtime packages omit development tests while repository exports retain source tests and public resources", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "runtime-source-boundary-"));
+  const exported = root + "-exported";
+  try {
+    await createSelectionFixture(root);
+    await fs.writeFile(path.join(root, "LICENSE"), "public fixture license");
+    const source = path.join(root, "src/plugins/io.test.one");
+    const blocked = ["src/adapters/rabilinkRelayWorker.test.ts", "src/feature.spec.mjs", "entry.fixture.mjs", "src/__tests__/helper.ts", "src/__tests__/证据.ts", "test/helper.mjs", "tests/helper.ts", "__fixtures__/helper.mjs", "test_media.py", "helpers_test.py", "conftest.py", "Invoke-Plugin.Tests.ps1"];
+    const publicFiles = ["src/auth/authorize.ts", "src/auth/catalog.ts", "src/test-policy.ts", "assets/fixtures/catalog.json", "catalog.json", "config.schema.json"];
+    for (const name of [...blocked, ...publicFiles]) { const file = path.join(source, name); await fs.mkdir(path.dirname(file), { recursive: true }); await fs.writeFile(file, name); }
+    await fs.writeFile(path.join(root, "plugins/contracts/plugin-sdk/builder.test.mjs"), "development SDK test");
+    const built = await buildPluginPackages(root, { packages: ["io.test.one"], outputDirectory: "candidate" });
+    const runtime = path.join(built.packagesRoot, "io.test.one/1.0.0");
+    for (const name of blocked) await assert.rejects(fs.access(path.join(runtime, name)), { code: "ENOENT" }, name);
+    for (const name of publicFiles) assert.equal(await fs.readFile(path.join(runtime, name), "utf8"), name);
+    await assert.rejects(fs.access(path.join(runtime, ".rabi-deps/plugin-sdk/builder.test.mjs")), { code: "ENOENT" });
+    assert.equal(typeof (await import(pathToFileURL(path.join(runtime, "manager.mjs")).href)).activate, "function");
+    await assert.rejects(fs.access(path.join(built.outputRoot, "contracts/plugin-sdk/builder.test.mjs")), { code: "ENOENT" });
+    const snapshot = path.join(root, "tracked-runtime.json");
+    const pluginPaths = [...blocked, ...publicFiles].map(name => "src/plugins/io.test.one/" + name);
+    const sdkTestPath = "plugins/contracts/plugin-sdk/builder.test.mjs";
+    await fs.writeFile(snapshot, JSON.stringify({ version: 1, files: [...pluginPaths, sdkTestPath].map(name => ({ path: name })) }));
+    const exclusions = JSON.parse(execFileSync(process.execPath, [fileURLToPath(new URL("../plugins/contracts/plugin-sdk/public-source.mjs", import.meta.url)), "--runtime-exclusions", root, snapshot], { encoding: "utf8", windowsHide: true }));
+    assert.deepEqual(exclusions.sort(), [...blocked.map(name => "src/plugins/io.test.one/" + name), sdkTestPath].sort());
+
+    const { exportPluginSource } = await import("./export-plugin-source.mjs");
+    await exportPluginSource(root, "io.test.one", exported);
+    for (const name of [...blocked, ...publicFiles]) assert.equal(await fs.readFile(path.join(exported, name), "utf8"), name);
+    assert.equal(await fs.readFile(path.join(exported, "LICENSE"), "utf8"), "public fixture license");
+  } finally { await fs.rm(root, { recursive: true, force: true }); await fs.rm(exported, { recursive: true, force: true }); }
 });

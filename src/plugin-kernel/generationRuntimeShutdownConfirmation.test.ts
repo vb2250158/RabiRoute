@@ -83,7 +83,17 @@ test("shutdown never confirms an original owner whose completion remains unknown
   const { runtime, candidate } = fixture(t, async () => gate);
   try {
     await runtime.switch([candidate]); await runtime.switch([]);
-    await assert.rejects(runtime.shutdown({ timeoutMs: 30 }), /timed out/);
+    await assert.rejects(runtime.shutdown({ timeoutMs: 30 }), (error: unknown) => {
+      // The scope join may time out just before the outer shutdown timer.
+      // Require the actual timeout cause even when shutdown preserves it in an aggregate.
+      const failures: unknown[] = error instanceof AggregateError ? error.errors : [error];
+      assert.ok(failures.length > 0);
+      for (const failure of failures) {
+        assert.ok(failure instanceof Error);
+        assert.match(failure.message, /timed out/);
+      }
+      return true;
+    });
     assert.ok(runtime.current().cleanupDiagnostics.length > 0);
     assert.ok(runtime.current().cleanupDiagnostics.every(item => item.lateConfirmed === undefined));
   } finally { release(); }

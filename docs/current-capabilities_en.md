@@ -189,9 +189,9 @@ The following APIs, scripts, and automatic reconciliation descriptions apply onl
 - Manager APIs: `src/manager/controlPlaneRoutes.ts`
 - Message-adapter maturity scans: `src/messageEndpoints/*`, `src/manager/controlPlaneRoutes.ts`
 - Agent maturity scans: `src/agentAdapters/managerApi.ts`
-- Routing and context: `src/forwarding.ts`, `src/routing/*`
+- Routing and context: `src/plugins/io.rabiroute.endpoint.rabilink/src/forwarding.ts`, `src/routing/*`
 - Replies: `src/outbox.ts`
-- Codex Desktop owner: `src/codexDesktopBridge.ts`, `src/codexRuntime.ts`; empty-task metadata: `src/codexAppServerClient.ts`
+- Codex Desktop owner: `src/plugins/io.rabiroute.agent.codex/src/codexDesktopBridge.ts`, `src/plugins/io.rabiroute.agent.codex/src/codexRuntime.ts`; empty-task metadata: `src/plugins/io.rabiroute.agent.codex/src/codexAppServerClient.ts`
 - WebGUI: `ribiwebgui/src/pages/*`
 - Automated contracts: `src/**/*.test.ts`
 

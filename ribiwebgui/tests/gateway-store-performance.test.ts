@@ -7,7 +7,7 @@ const storeSource = fs.readFileSync(
   "utf8"
 );
 const personaPageSource = fs.readFileSync(
-  new URL("../src/pages/PersonaTemplatePage.vue", import.meta.url),
+  new URL("../../src/plugins/io.rabiroute.manager.persona/web/pages/PersonaTemplatePage.vue", import.meta.url),
   "utf8"
 );
 
@@ -21,10 +21,10 @@ test("persona sync UI sources and requests have been removed", () => {
   for (const source of ["components/PersonaSyncCard.vue", "pages/PersonaSyncPage.vue", "persona/personaSyncClient.ts"]) {
     assert.equal(fs.existsSync(new URL(`../src/${source}`, import.meta.url)), false);
   }
-  const contributions = fs.readFileSync(new URL("../src/bundles/builtinWebContributions.ts", import.meta.url), "utf8");
+  const contributions = fs.readFileSync(new URL("../../src/plugins/io.rabiroute.manager.persona/web/contributions.ts", import.meta.url), "utf8");
   assert.doesNotMatch(contributions, /PersonaSync|persona-sync|persona\/sync/);
   assert.doesNotMatch(personaPageSource, /PersonaSync|persona_sync|persona-sync/);
-  const historyPageSource = fs.readFileSync(new URL("../src/pages/RoleMessageHistoryPage.vue", import.meta.url), "utf8");
+  const historyPageSource = fs.readFileSync(new URL("../../src/plugins/io.rabiroute.manager.persona/web/pages/RoleMessageHistoryPage.vue", import.meta.url), "utf8");
   assert.match(historyPageSource, /persona_chat_history_changed/);
   assert.match(personaPageSource, /identity_relation_changed/);
 });

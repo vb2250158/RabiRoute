@@ -7,13 +7,13 @@ import http from "node:http";
 import { spawn } from "node:child_process";
 import { LanAgentRegistry } from "./lanAgentRegistry.js";
 import { LanAgentAuthority } from "./lanAgentAuthority.js";
-import { evaluateLanAgentRequest, assertTrustedLanAgentPrincipal } from "./lanAgentRequestAccess.js";
-import { createLanAgentManagementOperations, type LanAgentRoutesContext } from "./lanAgentRoutes.js";
-import { createLanAgentReadOperations } from "./lanAgentReadOperations.js";
-import { createLanAgentConnectionOperation } from "./lanAgentConnectionOperation.js";
+import { evaluateLanAgentRequest } from "./lanAgentRequestAccess.js";
+import { createLanAgentManagementOperations, type LanAgentRoutesContext } from "../plugins/io.rabiroute.manager.core/src/manager/lanAgentRoutes.js";
+import { createLanAgentReadOperations } from "../plugins/io.rabiroute.manager.core/src/manager/lanAgentReadOperations.js";
+import { createLanAgentConnectionOperation } from "../plugins/io.rabiroute.manager.core/src/manager/lanAgentConnectionOperation.js";
 import { ManagerPluginRouteRegistry } from "./managerPluginRouteRegistry.js";
-import { createApiDiscoveryOperations } from "./apiDiscoveryRoutes.js";
-import { registerLanAgentBodyGuard, assertLanAgentBodyAuthority } from "./lanAgentBodyAuthority.js";
+import { createApiDiscoveryOperations } from "../plugins/io.rabiroute.manager.agent-communication/src/manager/apiDiscoveryRoutes.js";
+import { registerLanAgentBodyGuard } from "./lanAgentBodyAuthority.js";
 import type { LanAgentReleaseStore } from "./lanAgentReleaseStore.js";
 
 async function listen(server: http.Server) {
@@ -83,7 +83,7 @@ test("headless instance lists sessions and dispatches an explicit target without
     const access = evaluateLanAgentRequest(request, authority, true);
     if (access.kind === "denied") { response.writeHead(access.status).end(); return; }
     const url = new URL(request.url!, "http://localhost");
-    registerLanAgentBodyGuard(request, body => assertLanAgentBodyAuthority(url.pathname, body, assertTrustedLanAgentPrincipal(request)?.source));
+    registerLanAgentBodyGuard(request, () => {});
     if (!api.handle(request, url, response)) response.writeHead(404).end();
   });
   manager.on("upgrade", (request, socket, head) => {

@@ -7,15 +7,15 @@ import ts from "typescript";
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const sourceRoot = path.join(repositoryRoot, "src");
-const reviewedTestFixtures = ["src/manager/pluginCatalogOperations.fixture.ts", "src/manager/diagnosticsCandidate.fixture.ts", "src/manager/napcatEndpointPlugin.fixture.ts"];
+const reviewedTestFixtures = ["src/manager/pluginCatalogOperations.fixture.ts", "src/manager/diagnosticsCandidate.fixture.ts", "src/manager/napcatEndpointPlugin.fixture.ts", "src/runtime/agentOwnedRuntime.fixture.ts"];
 
 const mutationPattern = /\bfs(?:\.promises)?\.(?:writeFile|appendFile|rename|unlink|rm|copyFile|writeFileSync|appendFileSync|renameSync|unlinkSync|rmSync|copyFileSync|futimesSync|utimesSync|createWriteStream)\s*\(/;
 const auditPattern = /\bauditRecordingArchiveMutation\s*\(|\brecordDataMutationAudit\s*\(|\batomicWriteFileSync\s*\(|\bappendAdapterLog\s*\(/;
 
 const infrastructureExclusions = new Map([
   ...reviewedTestFixtures.map(file => [file, "test-only helper creates/removes private os.tmpdir() plugin packages and fixture resources; no production business data; test-only imports are enforced below"]),
-  ["src/agentAdapters/antigravityHookInstallation.ts", "external Agent Hook payload/configuration write primitives extracted unchanged from the audited hookInstallation owner; native hooks.update and the compatibility entry call updateHooks through hookInstallationShared.runHookInstallation, which records agent_hooks_updated/agent_hooks_update_failed once for this original installation operation; preserves unrelated plugin settings"],
-  ["src/agentAdapters/workbuddyHookInstallation.ts", "external Agent Hook payload/settings write primitives extracted unchanged from the audited hookInstallation owner; native hooks.update and the compatibility entry call updateHooks through hookInstallationShared.runHookInstallation, which records agent_hooks_updated/agent_hooks_update_failed once for this original installation operation; preserves unrelated user hook groups and settings"],
+  ["src/plugins/io.rabiroute.agent.antigravity/src/agentAdapters/antigravityHookInstallation.ts", "external Agent Hook payload/configuration write primitives extracted unchanged from the audited hookInstallation owner; native hooks.update and the compatibility entry call updateHooks through hookInstallationShared.runHookInstallation, which records agent_hooks_updated/agent_hooks_update_failed once for this original installation operation; preserves unrelated plugin settings"],
+  ["src/plugins/io.rabiroute.agent.workbuddy/src/agentAdapters/workbuddyHookInstallation.ts", "external Agent Hook payload/settings write primitives extracted unchanged from the audited hookInstallation owner; native hooks.update and the compatibility entry call updateHooks through hookInstallationShared.runHookInstallation, which records agent_hooks_updated/agent_hooks_update_failed once for this original installation operation; preserves unrelated user hook groups and settings"],
   ["src/shared/gatewayRouteSnapshotBoot.ts", "generation-owned immutable transport copy of Route configuration from the audited catalog CAS owner; exclusive wx/0600 creation in the Route private runtime directory, hash-bound read-only consumption, cleanup on READY/error/close and failed spawn preparation; authoritative Route mutations remain audited by routeCatalogStartupLifecycle"],
   ["src/manager/developerCandidateProvenance.ts", "hash-bound local build-origin metadata in the existing candidate store; source/Web publication commits and failures retain their owning service audit callbacks; no persona or business records"],
   ["src/personaChatHistoryIndex.ts", "rebuildable SQLite projection of the authoritative chat ledger; only deletes its derived index on corruption; original ledger mutations remain audited by personaChatHistory"],
@@ -25,18 +25,18 @@ const infrastructureExclusions = new Map([
   ["src/manager/companionFrameDelivery.ts", "generation-owned temporary reduced-frame attachment leases; exclusive creation, bounded size and lifetime; no persistent persona or message state"],
   ["src/linuxProcessLease.ts", "kernel ownership lease descriptor and atomic temporary file; no persona, message or business state"],
   ["src/markdownImage.ts", "isolated temporary browser profile cleanup after bounded image rendering; send receipts remain owned and audited by the send pipeline"],
-  ["src/integrations/xiaomiHome/vacuumVideoWorker.ts", "IPC-owned native transport supervisor removes its temporary environment-reference config; session lifecycle is recorded by the owning vacuum video service"],
+  ["src/plugins/io.rabiroute.manager.xiaomi-home/src/integrations/xiaomiHome/vacuumVideoWorker.ts", "IPC-owned native transport supervisor removes its temporary environment-reference config; session lifecycle is recorded by the owning vacuum video service"],
   ["src/planPageCatalogCheckpoint.ts", "disposable plan projection cache; source JSON remains authoritative and is reconciled on restore; atomic temporary publication does not mutate business records"],
   ["src/manager/sourcePatchService.ts", "source patch publication journals and recovery fences; publication events use the injected audit callback"],
   ["src/manager/webPatchService.ts", "immutable Web bundle cache; committed state emits web_patch_committed through the injected audit callback"],
   ["src/manager/webPatchCatalog.ts", "content-addressed Web artifacts and atomic patch-state writer owned by WebPatchService"],
-  ["src/manager/speechStableExecutable.ts", "rebuildable installed speech executable with stable firewall identity; fsync and atomic rename, no persona or message state"],
-  ["src/manager/roleSkillDownloadRoutes.ts", "private temporary ZIP leases only, no persona or message state; unconfirmed worker exit retains quarantine until confirmed release; failed cleanup retains admission"],
+  ["src/plugins/io.rabiroute.manager.speech/src/manager/speechStableExecutable.ts", "rebuildable installed speech executable with stable firewall identity; fsync and atomic rename, no persona or message state"],
+  ["src/plugins/io.rabiroute.manager.persona/src/manager/roleSkillDownloadRoutes.ts", "private temporary ZIP leases only, no persona or message state; unconfirmed worker exit retains quarantine until confirmed release; failed cleanup retains admission"],
   ["src/plugin-kernel/hotPatchBundleJournal.ts", "dependency-free hot patch transaction journal with fsync and exclusive recovery locks"],
-  ["src/codexAppServerClient.ts", "app-server stderr log sink"],
+  ["src/plugins/io.rabiroute.agent.codex/src/codexAppServerClient.ts", "app-server stderr log sink"],
   ["src/managerInstanceLock.ts", "Manager ownership lock and lease files"],
   ["src/managerRuntimeDiagnostics.ts", "runtime diagnostic log sink"],
-  ["src/marvis.ts", "temporary prompt file removed after process execution"],
+  ["src/plugins/io.rabiroute.agent.marvis/src/marvis.ts", "temporary prompt file removed after process execution"],
   ["src/plan-storage/internal/lease.ts", "plan storage coordination locks and lease heartbeats"],
   ["src/manager/operationalLog.ts", "unified operational log sink and retention"],
   ["src/manager/performanceStore.ts", "performance telemetry log sink and retention"],
@@ -110,8 +110,8 @@ test("reviewed temporary fixtures are consumed only by TypeScript tests", t => {
 });
 
 test("reviewed fixture import guard rejects production imports and re-exports without excluding other fixtures", () => {
-  const filename = path.join(sourceRoot, "manager", "fixtureImportProbe.ts");
   for (const fixture of reviewedTestFixtures) {
+  const filename = path.join(repositoryRoot, path.dirname(fixture), "fixtureImportProbe.ts");
   const specifier = `./${path.basename(fixture, ".ts")}.js`;
   for (const source of [
     `import { deferred } from "${specifier}";`,
@@ -124,7 +124,7 @@ test("reviewed fixture import guard rejects production imports and re-exports wi
     `import { deferred } from "${fixture.replace(/\.ts$/, "")}";`
   ]) {
     const consumers = fixtureImportConsumers([{ filename, source }]);
-    assert.deepEqual(consumers, ["src/manager/fixtureImportProbe.ts"], source);
+    assert.deepEqual(consumers, [relativePath(filename)], source);
     assert.throws(() => assertOnlyTestConsumers(consumers), /cannot be imported by production code/, source);
   }
   const testConsumer = fixtureImportConsumers([{ filename: filename.replace(".ts", ".test.ts"), source: `import "${specifier}";` }]);

@@ -1,0 +1,156 @@
+{
+  "schemaVersion": 2,
+  "id": "io.rabiroute.manager.xiaomi-home",
+  "version": "0.1.1",
+  "entries": {
+    "manager": {
+      "execution": "in_process",
+      "module": "./manager.mjs"
+    },
+    "web": {
+      "execution": "in_process",
+      "module": "./web/client.mjs"
+    }
+  },
+  "provides": [
+    "manager.xiaomi-home@1"
+  ],
+  "requires": [
+    "manager.core@1",
+    "host.message-endpoints@1"
+  ],
+  "optional": [],
+  "permissions": [],
+  "configSchema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "baseUrl": {
+        "type": "string",
+        "default": "http://127.0.0.1:8123"
+      },
+      "requestTimeoutMs": {
+        "type": "integer",
+        "minimum": 250,
+        "maximum": 30000,
+        "default": 5000
+      },
+      "speechBindings": {
+        "type": "array",
+        "maxItems": 64,
+        "default": [],
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "mediaPlayerEntityId",
+            "notifyEntityId",
+            "encoding"
+          ],
+          "properties": {
+            "mediaPlayerEntityId": {
+              "type": "string",
+              "pattern": "^media_player\\.[a-z0-9_]+$"
+            },
+            "notifyEntityId": {
+              "type": "string",
+              "pattern": "^notify\\.[a-z0-9_]+$"
+            },
+            "encoding": {
+              "type": "string",
+              "enum": [
+                "text",
+                "json-array"
+              ]
+            }
+          }
+        }
+      },
+      "allowPublicBaseUrl": {
+        "type": "boolean",
+        "description": "Allow configured hostnames or public addresses by default. Set false to restrict every request and redirect to literal loopback/private IP addresses.",
+        "default": true
+      },
+      "allowInsecurePrivateHttp": {
+        "type": "boolean",
+        "description": "Allow configured HTTP endpoints by default. Set false to require HTTPS away from loopback, including redirects.",
+        "default": true
+      },
+      "runtimeDir": {
+        "type": "string",
+        "minLength": 3,
+        "description": "Optional absolute runtime directory, including user-configured network shares."
+      },
+      "agentRoleId": {
+        "type": "string",
+        "minLength": 1,
+        "description": "Explicit persona binding. Events remain disabled until configured."
+      },
+      "eventMonitorEnabled": {
+        "type": "boolean",
+        "default": true
+      },
+      "eventDeliveryMode": {
+        "type": "string",
+        "enum": [
+          "significant",
+          "all"
+        ],
+        "default": "significant"
+      },
+      "cameraMotionEntityIds": {
+        "type": "array",
+        "items": {
+          "type": "string",
+          "minLength": 3
+        },
+        "uniqueItems": true,
+        "default": []
+      },
+      "cameraClipCaptureEnabled": {
+        "type": "boolean",
+        "default": false
+      },
+      "cameraClipAllowedHosts": {
+        "type": "array",
+        "items": {
+          "type": "string",
+          "pattern": "^(\\*\\.)?[A-Za-z0-9.-]+$"
+        },
+        "uniqueItems": true,
+        "default": [],
+        "description": "Optional media host restriction. Empty means unrestricted; explicit entries also apply to redirects, playlist segments and encryption keys."
+      },
+      "ffmpegPath": {
+        "type": "string",
+        "default": "ffmpeg"
+      },
+      "ffprobePath": {
+        "type": "string",
+        "default": "ffprobe"
+      },
+      "cameraClipRequestTimeoutMs": {
+        "type": "integer",
+        "minimum": 1000,
+        "maximum": 30000,
+        "default": 10000
+      },
+      "cameraClipMaxSegments": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 500,
+        "default": 120
+      },
+      "cameraClipMaxSegmentBytes": {
+        "type": "integer",
+        "minimum": 1024,
+        "maximum": 134217728,
+        "default": 33554432
+      }
+    }
+  },
+  "displayName": "米家 / Xiaomi Home",
+  "description": "连接家庭设备、状态与事件",
+  "icon": "mdi-home-automation"
+}

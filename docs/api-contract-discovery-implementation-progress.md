@@ -154,11 +154,11 @@ JSON 的零字节上限明确保留原读取器未设置应用层字节上限的
 | `src/manager/managerPluginRouteRegistry.ts` | 按 activation 注册旧路由及可执行 operation，保持请求内合同快照 | 旧 exact/prefix/dynamic 声明及未纳管控制面仍待迁移 |
 | `src/plugin-kernel/generationRuntime.ts` | generation 提交时通知目录发布，候选校验失败保留旧实现 | 安装版切换、全部流式生命周期与跨机验收未完成 |
 | `src/manager/agentApiPolicy.ts` | 手工维护 Agent operation 与帮助摘要 | 与真实路由存在第二份声明，容易漏项或漂移 |
-| `src/manager/agentCommunicationRoutes.ts`、`lanAgentRoutes.ts` | 输出 help、发送能力与远端能力目录 | 新发现来自活动快照；手工目录和兼容分支仍待清理 |
+| `src/plugins/io.rabiroute.manager.agent-communication/src/manager/agentCommunicationRoutes.ts`、`lanAgentRoutes.ts` | 输出 help、发送能力与远端能力目录 | 新发现来自活动快照；手工目录和兼容分支仍待清理 |
 | `apps/rabi-agent/lib/manager-client.mjs` | 通用传输及 operation 调用；目录缓存、条件读取和事件失效 | CLI/模块源码已接入，安装更新与实机验收未完成 |
 | `scripts/agent-api-route-inventory.mjs` | AST 静态路由调查 | 只能辅助找缺口，无法证明工厂、动态路由与实际活动实例的完整覆盖 |
 
-本轮调查还确认：上传文件的 `fileId` 在 `src/agentSend.ts` 中限定为 NapCat 群文件，`src/napcat.ts` 提供群文件上传，私聊发送分支尚未接入对应文件上传。该缺口属于业务实现；能力目录应准确表达这一限制，不能因为父接口支持私聊就推导私聊支持全部 payload。
+本轮调查还确认：上传文件的 `fileId` 在 `src/agentSend.ts` 中限定为 NapCat 群文件，`src/plugins/io.rabiroute.endpoint.napcat/src/napcat.ts` 提供群文件上传，私聊发送分支尚未接入对应文件上传。该缺口属于业务实现；能力目录应准确表达这一限制，不能因为父接口支持私聊就推导私聊支持全部 payload。
 
 静态 AST 调查用于定位现有入口；运行时合同负责声明 HTTP 方法、条件必填、对象归属、外部副作用与回执语义。反射及装饰器的采用边界见第 1.1 节。
 

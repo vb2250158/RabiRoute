@@ -6,7 +6,15 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { EffectScope } from "@rabiroute/plugin-sdk";
 import { PublicationScope } from "@rabiroute/plugin-sdk/publication";
-import { activate } from "../../../plugins/builtin/io.rabiroute.manager.wearable-companion/1.0.0/manager.mjs";
+import { register } from "tsx/esm/api";
+
+const unregisterTypeScript = register();
+let canonicalManagerPluginFixture;
+try {
+  ({ canonicalManagerPluginFixture } = await import("../../../src/manager/canonicalManagerPlugin.fixture.ts"));
+} finally {
+  await unregisterTypeScript();
+}
 
 const here = new URL("./", import.meta.url);
 const root = new URL("../../../", here);
@@ -28,7 +36,7 @@ test("wearable sync scripts keep their UTF-8 identity under Windows PowerShell 5
   ].join("; ");
   for (const relative of [
     "apps/rabi-mobile-android/scripts/Sync-MiHealthWearableToRabiLink.ps1",
-    "plugins/builtin/io.rabiroute.manager.wearable-companion/1.0.0/resources/Sync-MiHealthWearableToRabiLink.ps1"
+    "src/plugins/io.rabiroute.manager.wearable-companion/resources/Sync-MiHealthWearableToRabiLink.ps1"
   ]) {
     const scriptUrl = new URL(relative, root);
     const bytes = await fs.readFile(scriptUrl);
@@ -47,10 +55,10 @@ test("legacy apps entry points cannot create a second lifecycle", async () => {
     read("apps/rabi-mobile-android/scripts/Start-RabiLinkWearableCompanion.ps1"),
     read("apps/rabi-mobile-android/scripts/Resolve-RabiRouteHostManagerUrl.ps1"),
     read("apps/rabi-mobile-android/scripts/Sync-MiHealthWearableToRabiLink.ps1"),
-    read("plugins/builtin/io.rabiroute.manager.wearable-companion/1.0.0/rabi.plugin.json"),
-    read("plugins/builtin/io.rabiroute.manager.wearable-companion/1.0.0/manager.mjs"),
-    read("src/manager/wearableCompanionWorkerService.ts"),
-    read("plugins/builtin/io.rabiroute.manager.wearable-companion/1.0.0/resources/Start-RabiLinkWearableCompanion.ps1"),
+    read("src/plugins/io.rabiroute.manager.wearable-companion/rabi.plugin.json"),
+    read("src/plugins/io.rabiroute.manager.wearable-companion/manager.mjs"),
+    read("src/plugins/io.rabiroute.manager.wearable-companion/src/manager/wearableCompanionWorkerService.ts"),
+    read("src/plugins/io.rabiroute.manager.wearable-companion/resources/Start-RabiLinkWearableCompanion.ps1"),
     read("src/manager/controlPlaneRoutes.ts")
   ]);
   const production = [install, start, resolve, sync, manager, workerService, packageStart].join("\n");
@@ -74,7 +82,7 @@ test("legacy apps entry points cannot create a second lifecycle", async () => {
 
   const manifest = JSON.parse(manifestText);
   assert.equal(manifest.entries.manager.execution, "in_process");
-  assert.ok(manifest.requires.includes("host.manager.wearable-companion@1"));
+  assert.ok(manifest.requires.includes("host.manager.wearable-companion@2"));
   assert.doesNotMatch(manager, /node:child_process|\bspawn\s*\(/);
   assert.doesNotMatch(manager, /from ["']node:/);
   assert.match(workerService, /this\.leases\.launch\(/);
@@ -89,11 +97,29 @@ test("legacy apps entry points cannot create a second lifecycle", async () => {
   assert.ok(workerReleasedAt > readyPublishedAt, "wearable worker must be released only after Host READY publication");
 });
 
-function pluginContext(workerService) {
+async function pluginContext(workerService) {
   let failed;
   const effects = new EffectScope();
   const publication = new PublicationScope(effects);
   const provided = new Map();
+  const runtimeIdentity = Object.freeze({
+    managerBaseUrl: "http://127.0.0.1:13486",
+    applicationGenerationId: "app-generation-7", managerInstanceId: "manager-instance-4",
+    runtimeRoot: "C:\\RabiRoute", stateRoot: "C:\\RabiRoute\\data\\wearable-companion",
+    logRoot: "C:\\RabiRoute\\logs\\wearable-companion", pwshPath: "C:\\Program Files\\PowerShell\\7\\pwsh.exe"
+  });
+  const startupReady = Promise.resolve();
+  // This lifecycle unit exercises the actual entry while controlling its owned worker runtime.
+  // The shared Host service supplies ports, not an implementation factory.
+  const fixture = await canonicalManagerPluginFixture("wearable-companion", undefined, {
+    createWearableCompanionRuntimeIdentity(input) { assert.equal(input, runtimeIdentity); return input; },
+    WearableCompanionWorkerService: class {
+      constructor(runtime, leases, options) {
+        assert.equal(runtime, runtimeIdentity); assert.equal(leases, workerService); assert.equal(options.startupReady, startupReady);
+        return workerService;
+      }
+    }
+  });
   const context = {
     identity: Object.freeze({
       applicationGenerationId: "app-generation-7",
@@ -101,23 +127,15 @@ function pluginContext(workerService) {
       activationId: "activation-3",
       instanceId: "manager:wearable-companion",
       pluginId: "io.rabiroute.manager.wearable-companion",
-      version: "1.0.0",
+      version: fixture.manifest.version,
       revision: "revision-2",
       host: "manager"
     }),
     config: { enabled: true, roleId: "YeYu", serial: "" },
     services: {
       require(capability) {
-        if (capability === "host.manager.wearable-companion-runtime@1") return Object.freeze({
-          managerBaseUrl: "http://127.0.0.1:13486",
-          applicationGenerationId: "app-generation-7",
-          managerInstanceId: "manager-instance-4",
-          runtimeRoot: "C:\\RabiRoute",
-          stateRoot: "C:\\RabiRoute\\data\\wearable-companion",
-          logRoot: "C:\\RabiRoute\\logs\\wearable-companion",
-          pwshPath: "C:\\Program Files\\PowerShell\\7\\pwsh.exe"
-        });
-        if (capability === "host.manager.wearable-companion@1") return workerService;
+        if (capability === "host.manager.wearable-companion-runtime@1") return Object.freeze({ ...fixture.ports, input: runtimeIdentity });
+        if (capability === "host.manager.wearable-companion@2") return Object.freeze({ leases: workerService, startupReady });
         throw new Error(`unexpected capability ${capability}`);
       },
       provide(capability, service) { provided.set(capability, service); }
@@ -126,7 +144,7 @@ function pluginContext(workerService) {
     effects,
     publication
   };
-  return { context, effects, publication, provided, failed: () => failed };
+  return { context, effects, publication, provided, activate: fixture.module.activate, failed: () => failed };
 }
 
 test("plugin effect adopts disposer and forwards worker failure", async () => {
@@ -139,7 +157,7 @@ test("plugin effect adopts disposer and forwards worker failure", async () => {
   const previousRetirement = new Promise(resolve => { releasePrevious = resolve; });
   const closed = new Promise(resolve => { finishDisposal = resolve; });
   const failure = new Promise(resolve => { failWorker = resolve; });
-  const observed = pluginContext({
+  const observed = await pluginContext({
     launch(identity, resourceRoot, config) {
       launches++;
       assert.equal(identity, observed.context.identity);
@@ -156,7 +174,7 @@ test("plugin effect adopts disposer and forwards worker failure", async () => {
   });
   let starting;
   try {
-    await activate(observed.context);
+    await observed.activate(observed.context);
     await observed.effects.commit();
     assert.equal(launches, 0, "candidate preparation must not start a worker");
     assert.deepEqual(observed.provided.get("manager.wearable-companion@1"), {

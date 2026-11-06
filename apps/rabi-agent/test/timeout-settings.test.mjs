@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { createTimeoutSettings } from "../lib/timeout-settings.mjs";
 import { createManagerClient } from "../lib/manager-client.mjs";
 import { createEndpointSession } from "../lib/endpoint-session.mjs";
-import { CodexDesktopIpcClient } from "../lib/codex-desktop-ipc.mjs";
+import { CodexDesktopIpcClient } from "../../../src/plugins/io.rabiroute.agent.codex/apps/rabi-agent/lib/codex-desktop-ipc.mjs";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";

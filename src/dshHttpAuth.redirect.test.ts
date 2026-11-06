@@ -4,8 +4,8 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
-import { connectDshOwner, dshAuthenticatedFetch } from "./dshHttpAuth.js";
-import { DshConnectionStore } from "./dshConnectionStore.js";
+import { connectDshOwner, dshAuthenticatedFetch } from "./plugins/io.rabiroute.agent.dsh/src/dshHttpAuth.js";
+import { DshConnectionStore } from "./plugins/io.rabiroute.agent.dsh/src/dshConnectionStore.js";
 
 test("current DSH relative root redirect connects, foreign or token redirects never do", async () => {
   const root = mkdtempSync(path.join(tmpdir(), "dsh-root-redirect-"));

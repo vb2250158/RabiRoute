@@ -39,7 +39,7 @@ test("drag can cross the collapse threshold and return in the same gesture", () 
 });
 
 test("directory uses a captured accessible separator and a single-row header without a gutter", () => {
-  const page = fs.readFileSync("ribiwebgui/src/pages/RoleKnowledgePage.vue", "utf8");
+  const page = fs.readFileSync("src/plugins/io.rabiroute.manager.persona/web/pages/RoleKnowledgePage.vue", "utf8");
   const css = fs.readFileSync("ribiwebgui/src/styles.css", "utf8");
   const resize = fs.readFileSync("ribiwebgui/src/planDirectoryResize.ts", "utf8");
   assert.doesNotMatch(page, /点击计划快速跳转/);

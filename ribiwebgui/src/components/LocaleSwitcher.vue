@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { useI18n, localeOptions } from "../i18n";
+import { useI18n, localeOptions } from "../i18n/index";
 
 const { locale, setLocale } = useI18n();
 

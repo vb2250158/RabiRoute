@@ -7,6 +7,7 @@ import { ManagerPluginRouteRegistry } from "../manager/managerPluginRouteRegistr
 import { AgentAdapterCatalogWorkerPool } from "../manager/agentAdapterCatalogWorkerPool.js";
 import type { AgentManagerHostPorts } from "../manager/agentManagerHostPorts.js";
 import type { InstanceManagementContext } from "./instanceManagement.js";
+import { prepareApplicationPluginStorage, type PluginStorageLegacySource } from "../shared/pluginStorage.js";
 
 type RemoteConfiguration = {
   nodeId?: string;
@@ -18,11 +19,15 @@ type RemoteConfiguration = {
 export async function mountRemoteAgentManager(options: {
   applicationRoot: string;
   stateRoot: string;
+  /** Exact original owner root from an accepted previous-runtime handoff, never a cache scan. */
+  legacyStateRoot?: string;
+  legacySources?: readonly PluginStorageLegacySource[];
   getConfiguration(): RemoteConfiguration;
   signal?: AbortSignal;
   publishManagerEvent?(type: string, data: unknown): void;
 }): Promise<{
   context(): Pick<InstanceManagementContext, "getProviders" | "invokeAgentOperation">;
+  diagnostics(): readonly Readonly<{ instanceId?: string; message: string; rowIndex?: number }>[];
   dispose(): Promise<void>;
 }> {
   const runtimeDirectory = path.join(options.applicationRoot, "runtime");
@@ -35,20 +40,30 @@ export async function mountRemoteAgentManager(options: {
     managerInstanceId: () => options.getConfiguration().nodeId ?? "remote-node",
     getRuntimes: () => [],
     publishManagerEvent: (type, data) => options.publishManagerEvent?.(type, data),
-    deliveryReceiptChanged() {},
     runScan: (task, invocation) => pool.query({ ...task, cwdOptions: options.getConfiguration().allowedWorkspaces }, { signal: invocation?.signal }) as Promise<Record<string, unknown>>,
     registerOperations: (instanceId, definitions, signal) => routes.registerOperationsAsync(instanceId, definitions, signal)
   };
   const hostPorts = createAgentAdapterHostPorts({ manager, layout: {
     packageRoot: path.join(runtimeDirectory, "backend"), stateRoot: options.stateRoot
   } });
+  const profilePath = path.join(runtimeDirectory, "agent-profile.json"), settingsRoot = path.join(options.stateRoot, "agent-plugin-settings");
+  const packageRoots = [path.join(runtimeDirectory, "plugins", "packages")];
+  const migrationsPath = path.join(runtimeDirectory, "plugins", "profiles", "package-migrations.json");
   let runtime: Awaited<ReturnType<typeof mountAgentPluginRuntime>>;
   try {
+    // The node lifecycle retires the preceding runtime before mounting this owner.
+    // Migrate only this published Agent subgraph and preserve explicit launcher paths.
+    const storageResults = await prepareApplicationPluginStorage({ phase: "owners-retired", layout: {
+      packageRoot: path.join(runtimeDirectory, "backend"), stateRoot: options.stateRoot
+    }, profilePath, settingsRoot, packageRoots, migrationsPath, legacyStateRoot: options.legacyStateRoot, legacySources: options.legacySources,
+      environment: { ...process.env, ...hostPorts.environment } });
+    for (const failure of storageResults.filter(result => result.status === "failed")) {
+      console.error("Remote Agent plugin storage migration failed", failure);
+    }
     runtime = await mountAgentPluginRuntime({
       host: "manager",
-      profilePath: path.join(runtimeDirectory, "agent-profile.json"),
-      settingsRoot: path.join(options.stateRoot, "agent-plugin-settings"),
-      packageRoots: [path.join(runtimeDirectory, "plugins", "packages")],
+      profilePath, settingsRoot, packageRoots, migrationsPath,
+      stateRoot: options.stateRoot,
       runtimeRoot: path.join(options.stateRoot, "agent-plugin-runtime"),
       hostPorts,
       signal: options.signal
@@ -69,6 +84,7 @@ export async function mountRemoteAgentManager(options: {
       invokeAgentOperation: <T = unknown>(type: string, operation: string, payload: unknown, invocation?: AgentAdapterInvocation) =>
         invokeAgentManagerOperation<T>(runtime.current(), type, operation, payload, invocation)
     }),
+    diagnostics: () => runtime.diagnostics(),
     dispose
   };
 }

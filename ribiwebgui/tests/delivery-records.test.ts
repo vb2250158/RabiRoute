@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { deliveryRecordOwnerId, readDeliveryComputers, readDeliveryRecord, readDeliveryRecords, recoverDeliveryRecord } from "../src/deliveries/deliveryRecordClient";
-import { deliveryRecordCopy, deliveryStateLabels } from "../src/deliveries/deliveryRecordCopy";
-import { deliveryComputerOptions, deliveryEndpointLabel, deliveryStatePresentation, deliveryTimeLabel } from "../src/deliveries/deliveryRecordPresentation";
-import * as presentation from "../src/deliveries/deliveryRecordPresentation";
+import { deliveryRecordOwnerId, readDeliveryComputers, readDeliveryRecord, readDeliveryRecords, recoverDeliveryRecord } from "../../src/plugins/io.rabiroute.manager.diagnostics/web/deliveries/deliveryRecordClient";
+import { deliveryRecordCopy, deliveryStateLabels } from "../../src/plugins/io.rabiroute.manager.diagnostics/web/deliveries/deliveryRecordCopy";
+import { deliveryComputerOptions, deliveryEndpointLabel, deliveryStatePresentation, deliveryTimeLabel } from "../../src/plugins/io.rabiroute.manager.diagnostics/web/deliveries/deliveryRecordPresentation";
+import * as presentation from "../../src/plugins/io.rabiroute.manager.diagnostics/web/deliveries/deliveryRecordPresentation";
 import fs from "node:fs";
 import vm from "node:vm";
 import { compileScript, parse } from "@vue/compiler-sfc";
@@ -48,7 +48,7 @@ test("recovery errors and readback failures never retry the mutation", async () 
 });
 
 function recoveryPage(recover: (...args: any[]) => Promise<any>, read?: (...args: any[]) => Promise<any>) {
-  const source = fs.readFileSync(new URL("../src/pages/DeliveryRecordsPage.vue", import.meta.url), "utf8");
+  const source = fs.readFileSync(new URL("../../src/plugins/io.rabiroute.manager.diagnostics/web/pages/DeliveryRecordsPage.vue", import.meta.url), "utf8");
   const script = compileScript(parse(source).descriptor, { id: "delivery-recovery" });
   const compiled = ts.transpileModule(script.content, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } });
   const output = { exports: {} as any };
@@ -58,8 +58,8 @@ function recoveryPage(recover: (...args: any[]) => Promise<any>, read?: (...args
     require(name: string) {
       if (name === "vue") return { ...vue, onMounted() {}, onBeforeUnmount() {} };
       if (name === "vue-router") return { useRoute: () => route, useRouter: () => ({ replace() {} }) };
-      if (name === "../i18n") return { useI18n: () => ({ locale: vue.ref("zh-CN") }) };
-      if (name === "../userFacingError") return { userFacingError: (error: Error) => error.message };
+      if (name === "../../../../../ribiwebgui/src/i18n/index") return { useI18n: () => ({ locale: vue.ref("zh-CN") }) };
+      if (name === "../../../../../ribiwebgui/src/userFacingError") return { userFacingError: (error: Error) => error.message };
       if (name === "../deliveries/deliveryRecordCopy") return { deliveryRecordCopy, deliveryStateLabels };
       if (name === "../deliveries/deliveryRecordPresentation") return presentation;
       if (name === "../deliveries/deliveryRecordClient") return {

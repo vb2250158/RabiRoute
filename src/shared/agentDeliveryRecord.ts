@@ -24,6 +24,8 @@ export type AgentDeliveryRecord = {
   attemptCount?: number;
   reason?: string;
   errorCode?: string;
+  field?: string;
+  repair?: string;
   receipt?: Record<string, unknown>;
   targetAcceptedAt?: string;
   /** The computer stopped its queue; the original Manager reservation still needs cancellation. */

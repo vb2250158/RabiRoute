@@ -9,7 +9,7 @@ import http from 'node:http';
 import { LanAgentAuthority } from './lanAgentAuthority.js';
 import { evaluateLanAgentRequest, assertTrustedLanAgentPrincipal } from './lanAgentRequestAccess.js';
 import { listAgentApiOperations } from './agentApiPolicy.js';
-import { assertLanAgentBodyAuthority, registerLanAgentBodyGuard, validateLanAgentRequestBody } from './lanAgentBodyAuthority.js';
+import { registerLanAgentBodyGuard, validateLanAgentRequestBody } from './lanAgentBodyAuthority.js';
 function fixture(t: TestContext) {
   const directory=fs.mkdtempSync(path.join(os.tmpdir(),'remote-public-api-'));
   t.after(()=>fs.rmSync(directory,{recursive:true,force:true}));
@@ -21,8 +21,8 @@ function fixture(t: TestContext) {
     request.headers={authorization:'Bearer '+credential.token,'x-rabiroute-agent-type':'dsh','x-rabiroute-session-id':'this-invocation'};
     const access=evaluateLanAgentRequest(request,authority,true);
     assert.equal(access.kind,'agent',method+' '+target+': '+JSON.stringify(access));
-    const binding=assertTrustedLanAgentPrincipal(request)!.source;
-    registerLanAgentBodyGuard(request,body=>assertLanAgentBodyAuthority(target.split('?')[0],body,binding));
+    assertTrustedLanAgentPrincipal(request);
+    registerLanAgentBodyGuard(request,() => {});
     return request;
   }
   return {admit,authority,credential};
@@ -52,7 +52,7 @@ test('real HTTP admission accepts HEAD, OPTIONS and arbitrary future management 
     try {
       const access=evaluateLanAgentRequest(request,f.authority,true);
       assert.equal(access.kind,'agent');
-      registerLanAgentBodyGuard(request,body=>assertLanAgentBodyAuthority(new URL(request.url!,'http://fixture.invalid').pathname,body,assertTrustedLanAgentPrincipal(request)?.source));
+      registerLanAgentBodyGuard(request,() => {});
       const chunks:Buffer[]=[];for await(const part of request)chunks.push(Buffer.from(part));
       const body=chunks.length ? JSON.parse(Buffer.concat(chunks).toString()) : undefined;
       validateLanAgentRequestBody(request,body);

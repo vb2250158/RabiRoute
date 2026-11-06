@@ -205,37 +205,18 @@ RabiRoute Agent 端适配烟测消息 #2。请在同一个会话里回复：Rabi
 
 不要用“看起来应该可以”代替真实探测。接口不清楚时，先写临时探测脚本，成功后再把逻辑迁入 Manager scan/status API 和正式 adapter。
 
-## 代码入口
+## 插件源码与宿主边界
 
-新增一个 Agent 类型通常要改这些位置：
+每个 Agent 端在 `src/plugins/<稳定包ID>/` 拥有完整源码，参考 `src/plugins/io.rabiroute.agent.codex/` 与 `src/plugins/io.rabiroute.agent.dsh/`。源码不按版本复制；版本只进入发布产物目录。
 
-- `src/agentAdapters/types.ts`：扩展 `AgentAdapterType`、`parseAgentAdapterType`。
-- `src/agentAdapters/agentAdapter.ts`：把 type 映射到 `deliver(message)`。
-- `src/agentAdapters/<name>Adapter.ts`：优先新增接口化 adapter；旧式模块只作为兼容。
-- `src/agentAdapters/managerApi.ts` 或同目录按端拆分的 manager-facing 模块：实现扫描、状态、安装、登录、部署、打开外部应用等 Agent 专属逻辑。
-- `src/manager.ts`：只扩展通用 `GatewayDefinition` 字段、env 注入、运行态 state 读取和 HTTP 路由接线；不要把 Agent 专属扫描/安装/登录/部署实现写进 manager。
-- `ribiwebgui/src/types.ts`：同步 gateway 字段和扫描结果类型。
-- `ribiwebgui/src/pages/RouteConfigPage.vue`：添加 Agent 卡片、参数面板、自动扫描、状态和动作按钮。
-- `ribiwebgui/src/components/QuickSetupDialog.vue`：如果该 Agent 适合首次配置，也同步快速配置。
-- `README.md`、`docs/configuration.md` 或示例：只补公开、安全、可复制的说明。
+- `rabi.plugin.json` 声明稳定身份、版本、Manager/Gateway/Web 入口、能力与依赖；`agent-adapter.json` 声明发现与配置元数据。新增类型采用数据与原生 provider 注册，不扩展宿主枚举或分发 switch。
+- `src/` 保存该 Agent 的适配器、管理操作、安装/登录、会话发现及本地测试。包入口构造真实业务实现，宿主只提供共享服务和原生注册能力。
+- `web/entry.ts`、卡片、翻译和专属资源归本插件。通用页面读取注册目录，不在 RouteConfigPage 追加一个平台分支。
+- `runtime.build.json`、`manager-runtime.build.json` 按实际拥有权声明实现与 worker。共享宿主依赖显式引用 `@rabiroute/host-api/<moduleId>`；不能把另一插件实现伪装成 host API，或复制共享账本。
+- 共享身份、路由、配置和持久化保持原 owner。私有存档使用稳定 namespace；远端明确传入对应 layout/environment，不依赖插件文件的相对目录推导应用根。
+- 新插件从 `0.1.1` 起步；功能变化递增插件版本。架构/扩展点变化才递增宿主。更新后审查入口、真实消费者、状态迁移与资源释放并运行匹配测试/官方构建。
 
-如果新增的是消息入口，不要用本 skill；消息入口走 `src/adapters/`。
-
-## Manager 模块化边界
-
-`src/manager.ts` 是 Agent 端编排层，不是某个 Agent 的实现层。新增或改造 Agent 端时，遵守这个边界：
-
-- Agent 专属逻辑放在 `src/agentAdapters/`：安装/登录检测、Dashboard/API 探测、项目/会话扫描、受支持的外部安装动作、打开外部 app、scan payload 组装。不要保留已经删除的部署协议或兼容回退。
-- `manager.ts` 只构造上下文 `ctx` 并接 HTTP API：`rootDir`、runtime 读取器、通用 HTTP 检查、通用安装路径 helper。会话发现优先使用 owner 的稳定协议；Codex Desktop 的状态数据库只允许只读，不能直接写或代替 owner 接受投递。
-- 通用 runtime 管理、配置 normalize、env 注入和状态文件读取可以暂留 `manager.ts`；不要为了新增一个 Agent 把专属逻辑塞进 manager。
-- 新模块不能 import `src/manager.ts`，也不能依赖 `ribiwebgui`、浏览器 `window/document` 或前端状态。
-- `/api/scan/agents` 应调用 `scanAgentAdapters(ctx)` 或各 Agent scan 函数组合；旧平铺字段只作为兼容输出。
-
-当前参考模块：
-
-- `src/agentAdapters/managerApi.ts`：Codex/Copilot/Marvis/AstrBot 的 manager-facing scan、status、login、open 等受支持动作。AstrBot 不再提供 adapter deploy 动作。
-
-如果某个 Agent 后续变复杂，优先新增 `src/agentAdapters/<type>ManagerApi.ts` 并由 `managerApi.ts` 聚合，不要继续扩大 `src/manager.ts`。
+源码、公开配置和构建步骤见 `../../docs/plugin-source-layout.md`；数据归属和升级见 `../../docs/plugin-storage.md`。需要消息入口时使用 `create-rabiroute-message-adapter`。
 
 ## UX 合同
 
@@ -278,7 +259,7 @@ POST /api/agents/<type>/login
 POST /api/agents/<type>/deploy-plugin
 ```
 
-实现时优先让 `src/agentAdapters/managerApi.ts` 或 `src/agentAdapters/<type>ManagerApi.ts` 暴露这些函数，再由 `manager.ts` 接线：
+由本插件的 `src/` 模块提供适用操作，再经插件入口注册到原生 Manager 目录；宿主不构造该平台工厂：
 
 ```ts
 scanAgentAdapters(ctx)

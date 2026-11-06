@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { resolveTaskWorkspace } from "./cwd-policy.mjs";
-import { normalizeDshBinding } from "./dsh.mjs";
+import { normalizeDshBinding } from "../../../src/plugins/io.rabiroute.agent.dsh/apps/rabi-agent/lib/dsh.mjs";
 
 const isProfileRecord = value => value !== null && typeof value === "object" && !Array.isArray(value);
 

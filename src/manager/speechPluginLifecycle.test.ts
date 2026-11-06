@@ -9,13 +9,13 @@ import { GenerationRuntime } from "../plugin-kernel/generationRuntime.js";
 import type { PluginCandidate, PluginContext, PluginManifest, PluginModule, PluginPublication } from "../plugin-kernel/types.js";
 import { fixtureApiContract } from "./apiOperationContractFixtures.js";
 import { ManagerPluginRouteRegistry } from "./managerPluginRouteRegistry.js";
-import { SpeechEventStreamOwner } from "./speechEventOperation.js";
+import { SpeechEventStreamOwner } from "../plugins/io.rabiroute.manager.speech/src/manager/speechEventOperation.js";
 import type { ApiOperationDefinition, ApiOperationRegistration } from "./apiOperationContract.js";
-import { SpeechModelManager } from "./speechModelManager.js";
-import { SpeechRuntimeControl } from "./speechRuntimeControl.js";
-import { createSpeechPluginRuntime, type SpeechPluginPorts, type SpeechPluginResources } from "./speechPluginRuntime.js";
+import { SpeechModelManager } from "../plugins/io.rabiroute.manager.speech/src/manager/speechModelManager.js";
+import { SpeechRuntimeControl } from "../plugins/io.rabiroute.manager.speech/src/manager/speechRuntimeControl.js";
+import { createSpeechPluginRuntime, type SpeechPluginPorts, type SpeechPluginResources } from "../plugins/io.rabiroute.manager.speech/src/manager/speechPluginRuntime.js";
 
-const lifecycleModule = await import(new URL("../../plugins/builtin/io.rabiroute.manager.speech/1.0.0/lifecycle.mjs", import.meta.url).href);
+const lifecycleModule = await import(new URL("../plugins/io.rabiroute.manager.speech/lifecycle.mjs", import.meta.url).href);
 function deferred() {
   let resolve!: () => void;
   const promise = new Promise<void>(done => { resolve = done; });
@@ -60,7 +60,7 @@ test("kernel speech shutdown confirms an uninstalled runtime without starting op
   f.nativeStops.playback = async () => { assert.fail("an absent optional runtime must not receive a playback stop request"); };
   await f.kernel.switch([f.candidate("uninstalled")]);
   await f.kernel.dispose();
-  assert.equal(ownerInspected, false, "a scope that never acquired Speech must not inspect an external runtime");
+  assert.equal(ownerInspected, false, "An activation that never launched speech owns no external runtime to inspect.");
   assert.deepEqual(f.kernel.current().cleanupDiagnostics, []);
 });
 
@@ -271,7 +271,7 @@ test("published retirement joins native installer close despite another cleanup 
     assert.equal(path.dirname(path.resolve(root)), path.resolve(os.tmpdir()));
     await fs.rm(root, { recursive: true, force: true });
   });
-  const pluginRoot = path.join(root, "plugin-adapters", "rabi-speech");
+  const pluginRoot = path.join(root, "src", "plugins", "rabi-speech");
   await fs.mkdir(path.join(pluginRoot, "scripts"), { recursive: true });
   await fs.writeFile(path.join(pluginRoot, "scripts", "install.ps1"), "# controlled fixture\n");
   await fs.writeFile(path.join(pluginRoot, "model-catalog.json"), JSON.stringify({ schema_version: 1,

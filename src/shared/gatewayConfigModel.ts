@@ -100,7 +100,6 @@ export type CodexHookSettings = {
   sessionContextEnabled: boolean;
   reasoningContextEnabled: boolean;
   planTaskCompletionEnabled: boolean;
-  agentCommunicationEnforcementEnabled: boolean;
   /** @deprecated Ignored since 0.3.22, normalized to false; remove in 0.4.0. */
   onlyPrimaryPersonaCanSendMessages?: boolean;
   completionDeliveries?: AgentCompletionDeliveryRule[];
@@ -109,7 +108,6 @@ export const DEFAULT_CODEX_HOOK_SETTINGS: CodexHookSettings = {
   sessionContextEnabled: true,
   reasoningContextEnabled: true,
   planTaskCompletionEnabled: true,
-  agentCommunicationEnforcementEnabled: true,
   onlyPrimaryPersonaCanSendMessages: false
 };
 export type RecentMessageEndpoint = MessageEndpointType;
@@ -189,7 +187,6 @@ export function normalizeCodexHookSettings(value: unknown): CodexHookSettings {
     sessionContextEnabled: raw.sessionContextEnabled !== false,
     reasoningContextEnabled: raw.reasoningContextEnabled !== false,
     planTaskCompletionEnabled: raw.planTaskCompletionEnabled !== false,
-    agentCommunicationEnforcementEnabled: raw.agentCommunicationEnforcementEnabled !== false,
     onlyPrimaryPersonaCanSendMessages: false,
     completionDeliveries: normalizeAgentCompletionDeliveries(raw.completionDeliveries),
     planFollowup: normalizePlanFollowup(raw.planFollowup)
@@ -229,6 +226,8 @@ export type NotificationRuleDefinition = {
   enabled?: boolean;
   routeKinds?: string[];
   targetGroupId?: string;
+  /** Optional exact QQ user ID for private messages; empty values match every private sender. */
+  targetUserId?: string;
   allowedSpeakerNames?: string[];
   regex?: string;
   schedules?: NotificationScheduleDefinition[];
@@ -247,6 +246,8 @@ export type NotificationScheduleDefinition = {
   windowEndTime?: string;
   timeOfDay?: string;
   onceAt?: string;
+  /** Skip this scheduled delivery while its primary Agent is busy; absent values inherit legacy Route settings. */
+  skipWhenAgentBusy?: boolean;
 };
 
 export type PersonaAutomationTriggerDefinition =
@@ -255,6 +256,7 @@ export type PersonaAutomationTriggerDefinition =
     triggerIds?: string[];
     routeKinds?: string[];
     targetGroupId?: string;
+    targetUserId?: string;
     allowedSpeakerNames?: string[];
     regex?: string;
   }
@@ -305,6 +307,7 @@ export type RouteProfileDefinition = {
   rolesDir?: string;
   dataDir?: string;
   routeVariables?: Record<string, string>;
+  automationScheduleSchemaVersion?: 1;
   automationRules?: PersonaAutomationRuleDefinition[];
   personaAutomationScriptsEnabled?: boolean;
   notificationRules?: NotificationRuleDefinition[];
@@ -471,6 +474,7 @@ export type GatewayDefinition = {
   speechPushMode?: SpeechPushMode;
   speechTriggerKeywords?: string[];
   languageStyle?: LanguageStyleBinding;
+  automationScheduleSchemaVersion?: 1;
   automationRules?: PersonaAutomationRuleDefinition[];
   notificationRules?: NotificationRuleDefinition[];
   roleNotificationRules?: Record<string, NotificationRuleDefinition[]>;
@@ -653,6 +657,17 @@ export function normalizeOptionalTemplate(value: unknown): string | undefined {
   return typeof value === "string" ? normalizeTemplateText(value) : undefined;
 }
 
+function notificationRuleExtensions(raw: Partial<NotificationRuleDefinition>) {
+  const {
+    id: _id, recentMessageLimit: _recentMessageLimit, agentTarget: _agentTarget, sourceRouteIds: _sourceRouteIds,
+    triggerIds: _triggerIds, name: _name, enabled: _enabled, routeKinds: _routeKinds,
+    targetGroupId: _targetGroupId, targetUserId: _targetUserId, allowedSpeakerNames: _allowedSpeakerNames, regex: _regex,
+    schedules: _schedules, template: _template,
+    ...extensions
+  } = raw;
+  return extensions;
+}
+
 export function normalizeRuleDefinitions(rules: unknown): NotificationRuleDefinition[] | undefined {
   if (!Array.isArray(rules)) {
     return undefined;
@@ -661,6 +676,7 @@ export function normalizeRuleDefinitions(rules: unknown): NotificationRuleDefini
   return rules.map((rule, index) => {
     const raw = rule && typeof rule === "object" ? rule as Partial<NotificationRuleDefinition> : {};
     return {
+      ...notificationRuleExtensions(raw),
       id: typeof raw.id === "string" && raw.id.trim() ? raw.id : `rule-${index + 1}`,
       ...(raw.recentMessageLimit == null ? {} : { recentMessageLimit: normalizeRecentMessageLimit(raw.recentMessageLimit) }),
       ...(raw.agentTarget === undefined ? {} : { agentTarget: normalizeAgentDeliveryTarget(raw.agentTarget) }),
@@ -670,6 +686,7 @@ export function normalizeRuleDefinitions(rules: unknown): NotificationRuleDefini
       enabled: raw.enabled !== false,
       routeKinds: Array.isArray(raw.routeKinds) ? raw.routeKinds.map(String) : [],
       targetGroupId: typeof raw.targetGroupId === "string" ? raw.targetGroupId : "",
+      targetUserId: typeof raw.targetUserId === "string" ? raw.targetUserId.trim() : "",
       allowedSpeakerNames: Array.isArray(raw.allowedSpeakerNames)
         ? raw.allowedSpeakerNames.map((item) => String(item).trim()).filter(Boolean)
         : [],
@@ -787,7 +804,14 @@ export function normalizeScheduleDefinitions(schedules: unknown): NotificationSc
   return schedules.map((schedule, index) => {
     const raw = schedule && typeof schedule === "object" ? schedule as Partial<NotificationScheduleDefinition> : {};
     const type = normalizeScheduleType(raw.type);
+    const {
+      id: _id, name: _name, enabled: _enabled, type: _type,
+      intervalSeconds: _intervalSeconds, windowStartTime: _windowStartTime, windowEndTime: _windowEndTime, timeOfDay: _timeOfDay,
+      onceAt: _onceAt, skipWhenAgentBusy: _skipWhenAgentBusy,
+      ...extensions
+    } = raw;
     return {
+      ...extensions,
       id: typeof raw.id === "string" && raw.id.trim() ? raw.id.trim() : `schedule-${index + 1}`,
       name: typeof raw.name === "string" ? raw.name : undefined,
       enabled: raw.enabled !== false,
@@ -796,7 +820,8 @@ export function normalizeScheduleDefinitions(schedules: unknown): NotificationSc
       windowStartTime: type === "interval" ? normalizeOptionalTimeString(raw.windowStartTime) : undefined,
       windowEndTime: type === "interval" ? normalizeOptionalTimeString(raw.windowEndTime) : undefined,
       timeOfDay: type === "daily_time" ? normalizeOptionalTimeString(raw.timeOfDay) : undefined,
-      onceAt: type === "once_at" ? normalizeOptionalTimeString(raw.onceAt) : undefined
+      onceAt: type === "once_at" ? normalizeOptionalTimeString(raw.onceAt) : undefined,
+      ...(typeof raw.skipWhenAgentBusy === "boolean" ? { skipWhenAgentBusy: raw.skipWhenAgentBusy } : {})
     };
   });
 }
@@ -805,8 +830,14 @@ function normalizeAutomationAction(value: unknown): PersonaAutomationActionDefin
   const raw = value && typeof value === "object"
     ? value as Partial<PersonaAutomationActionDefinition> & Record<string, unknown>
     : {};
+  const {
+    type: _type, scriptPath: _scriptPath, arguments: _arguments, timeoutSeconds: _timeoutSeconds,
+    target: _target, recentMessageLimit: _recentMessageLimit, message: _message, template: _template,
+    ...extensions
+  } = raw;
   if (raw.type === "run_script") {
     return {
+      ...extensions,
       type: "run_script",
       scriptPath: typeof raw.scriptPath === "string" ? raw.scriptPath.trim() : "",
       arguments: Array.isArray(raw.arguments) ? raw.arguments.map(String) : [],
@@ -814,6 +845,7 @@ function normalizeAutomationAction(value: unknown): PersonaAutomationActionDefin
     };
   }
   return {
+    ...extensions,
     type: "deliver_agent",
     target: raw.target === undefined ? undefined : normalizeAgentDeliveryTarget(raw.target),
     ...(raw.recentMessageLimit == null ? {} : { recentMessageLimit: normalizeRecentMessageLimit(raw.recentMessageLimit) }),
@@ -826,9 +858,15 @@ function normalizeAutomationTrigger(value: unknown, index: number): PersonaAutom
   const raw = value && typeof value === "object"
     ? value as Record<string, unknown>
     : {};
+  const {
+    type: _type, schedule: _schedule, triggerIds: _triggerIds, routeKinds: _routeKinds,
+    targetGroupId: _targetGroupId, targetUserId: _targetUserId, allowedSpeakerNames: _allowedSpeakerNames, regex: _regex,
+    ...extensions
+  } = raw;
   if (raw.type === "schedule") {
     const schedule = normalizeScheduleDefinitions([raw.schedule])?.[0];
     return {
+      ...extensions,
       type: "schedule",
       schedule: schedule ?? {
         id: `schedule-${index + 1}`,
@@ -839,15 +877,26 @@ function normalizeAutomationTrigger(value: unknown, index: number): PersonaAutom
     };
   }
   return {
+    ...extensions,
     type: "message",
     ...(Array.isArray(raw.triggerIds) ? { triggerIds: raw.triggerIds.map(String) } : {}),
     routeKinds: Array.isArray(raw.routeKinds) ? raw.routeKinds.map(String) : [],
     targetGroupId: typeof raw.targetGroupId === "string" ? raw.targetGroupId : "",
+    targetUserId: typeof raw.targetUserId === "string" ? raw.targetUserId.trim() : "",
     allowedSpeakerNames: Array.isArray(raw.allowedSpeakerNames)
       ? raw.allowedSpeakerNames.map((item) => String(item).trim()).filter(Boolean)
       : [],
     regex: typeof raw.regex === "string" ? raw.regex : ""
   };
+}
+
+function personaAutomationRuleExtensions(raw: Partial<PersonaAutomationRuleDefinition>) {
+  const {
+    id: _id, sourceRouteIds: _sourceRouteIds, name: _name, enabled: _enabled,
+    trigger: _trigger, action: _action,
+    ...extensions
+  } = raw;
+  return extensions;
 }
 
 export function normalizePersonaAutomationRules(value: unknown): PersonaAutomationRuleDefinition[] {
@@ -857,6 +906,7 @@ export function normalizePersonaAutomationRules(value: unknown): PersonaAutomati
       ? item as Partial<PersonaAutomationRuleDefinition>
       : {};
     return {
+      ...personaAutomationRuleExtensions(raw),
       id: typeof raw.id === "string" && raw.id.trim() ? raw.id.trim() : `automation-${index + 1}`,
       ...(raw.sourceRouteIds ? { sourceRouteIds: raw.sourceRouteIds.map(String) } : {}),
       name: typeof raw.name === "string" ? raw.name : undefined,
@@ -884,14 +934,17 @@ export function mergePersonaAutomationRules(
 
 function notificationRuleAutomation(rule: NotificationRuleDefinition): PersonaAutomationRuleDefinition {
   return {
+    ...notificationRuleExtensions(rule),
     id: rule.id,
     name: rule.name,
     enabled: rule.enabled !== false,
+    ...(rule.sourceRouteIds ? { sourceRouteIds: [...rule.sourceRouteIds] } : {}),
     trigger: {
       type: "message",
       triggerIds: rule.triggerIds,
       routeKinds: rule.routeKinds ?? [],
       targetGroupId: rule.targetGroupId ?? "",
+      targetUserId: rule.targetUserId ?? "",
       allowedSpeakerNames: rule.allowedSpeakerNames ?? [],
       regex: rule.regex ?? ""
     },
@@ -928,6 +981,7 @@ export function personaAutomationRulesFromNotificationRules(
       automations.push({
         id: `scheduled-${rule.id}-${schedule.id}`,
         name: schedule.name || rule.name || rule.id,
+        ...(rule.sourceRouteIds ? { sourceRouteIds: [...rule.sourceRouteIds] } : {}),
         enabled: schedule.enabled !== false,
         trigger: { type: "schedule", schedule },
         action: {
@@ -949,11 +1003,13 @@ export function notificationRulesFromPersonaAutomations(
   for (const automation of normalizePersonaAutomationRules(automations)) {
     if (automation.trigger.type !== "message" || automation.action.type !== "deliver_agent") continue;
     rules.push({
+      ...personaAutomationRuleExtensions(automation),
       id: automation.id,
       name: automation.name,
       enabled: automation.enabled !== false,
       routeKinds: automation.trigger.routeKinds ?? [],
       targetGroupId: automation.trigger.targetGroupId ?? "",
+      targetUserId: automation.trigger.targetUserId ?? "",
       allowedSpeakerNames: automation.trigger.allowedSpeakerNames ?? [],
       regex: automation.trigger.regex ?? "",
       triggerIds: automation.trigger.triggerIds,
@@ -1097,8 +1153,21 @@ export function gatewayAdapterTypes(gateway: GatewayDefinition): MessageEndpoint
     .filter((type) => !disabled.has(type) && messageAdapterPolicyFor(gateway, type).inputEnabled);
 }
 
+/** Scheduled automation is an internal Gateway worker, independent of message connector membership. */
+export function gatewayRuntimeAdapterTypes(gateway: GatewayDefinition): MessageEndpointType[] {
+  const adapters = gatewayAdapterTypes(gateway).filter(type => type !== "heartbeat");
+  const profiles = Array.isArray(gateway.routeProfiles) ? gateway.routeProfiles : [gateway];
+  const schedulingMigrated = gateway.automationScheduleSchemaVersion === 1;
+  const legacyEnabled = gatewayAdapterTypes(gateway).includes("heartbeat");
+  const scheduled = (schedulingMigrated || legacyEnabled) && profiles.some(profile => profile.enabled !== false && !profile.agentRoleDeviceId
+    && (profile.automationRules ?? gateway.automationRules ?? []).some(rule => rule.enabled !== false
+      && rule.trigger.type === "schedule" && rule.trigger.schedule.enabled !== false
+      && (!rule.sourceRouteIds?.length || rule.sourceRouteIds.includes(gateway.id))));
+  return scheduled ? [...adapters, "heartbeat"] : adapters;
+}
+
 export function gatewayMessageAdapterTypes(gateway: GatewayDefinition, declaredGatewayTypes: ReadonlySet<string>): GatewayMessageAdapterType[] {
-  return selectGatewayMessageAdapterTypes(gatewayAdapterTypes(gateway), declaredGatewayTypes);
+  return selectGatewayMessageAdapterTypes(gatewayRuntimeAdapterTypes(gateway), declaredGatewayTypes);
 }
 
 export function setGatewayAdapters(gateway: GatewayDefinition, adapters: MessageAdapterType[]): void {

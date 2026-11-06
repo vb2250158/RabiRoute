@@ -7,7 +7,7 @@ import test from 'node:test';
 import {randomUUID} from 'node:crypto';
 import {appendMessageContextToDir,messageContextFromHistoryRecord} from './messageContextStore.js';
 import {refreshMessageHistoryIndex,searchMessageHistoryIndexResult} from './messageHistorySearchIndex.js';
-import {handleQqMessageRoutes,type QqMessageRoutesContext} from './manager/qqMessageRoutes.js';
+import {handleQqMessageRoutes,type QqMessageRoutesContext} from './plugins/io.rabiroute.endpoint.napcat/src/manager/qqMessageRoutes.js';
 import type {GatewayDefinition} from './shared/gatewayConfigModel.js';
 
 test('real index refresh and query redact long CQ transport fields for both structured and legacy QQ records',t=>{

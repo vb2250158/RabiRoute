@@ -59,15 +59,15 @@ test("settings deadline includes response body and route mutations retain caller
 
 test("settings component retains invalid and conflicting drafts and supports restoring defaults", async () => {
   let copied = "";
-  const source = fs.readFileSync(new URL("../src/components/TimeoutSettings.vue", import.meta.url), "utf8");
+  const source = fs.readFileSync(new URL("../../src/plugins/io.rabiroute.manager.core/web/components/TimeoutSettings.vue", import.meta.url), "utf8");
   const script = compileScript(parse(source).descriptor, { id: "timeout-settings-test" });
   const compiled = ts.transpileModule(script.content, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } });
   const output = { exports: {} as any };
   vm.runInNewContext(compiled.outputText, { module: output, exports: output.exports,
     require(name: string) {
       if (name === "vue") return { ...vue, onMounted() {} };
-      if (name === "../clipboard") return { copyTextToClipboard: async (text: string) => { copied = text; } };
-      if (name === "../timeoutSettingsClient") return {
+      if (name === "../../../../../ribiwebgui/src/clipboard") return { copyTextToClipboard: async (text: string) => { copied = text; } };
+      if (name === "../../../../../ribiwebgui/src/timeoutSettingsClient") return {
         loadTimeoutSettings: async () => ({ overrides: { request: 500 }, catalog: [{ key: "request", defaultMs: 100, label: "Request", scope: "webgui", effect: "new-request" }] }),
         saveTimeoutSettings: async () => { throw new Error("conflict"); }
       };

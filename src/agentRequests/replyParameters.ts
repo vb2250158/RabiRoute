@@ -1,4 +1,4 @@
-import type { AgentCommunicationPreparation, AgentRequestRecord } from "./store.js";
+import type { AgentCommunicationPreparation } from "./store.js";
 
 export function agentReplyRequest({ source, target, requestId }: Pick<AgentCommunicationPreparation,
   "source" | "target" | "requestId">): Record<string, unknown> {
@@ -25,20 +25,6 @@ export function agentReplyRequest({ source, target, requestId }: Pick<AgentCommu
   };
 }
 
-export function agentRequestReminderPrompt(request: AgentRequestRecord): string {
-  return [
-    "[Rabi Agent 请求回复提醒]",
-    `原请求时间：${request.createdAt}`,
-    `需要回答：${request.responseInstruction}`,
-    "尚未记录正式回传；普通任务最终文字不替代接口回执。",
-    "[回传参数]",
-    JSON.stringify(request.source.connection ? { ...connectionRecordParameters(request.source, request.id, request.target),
-      endpoint: "POST /api/agent/threads", request: agentReplyRequest({ source: request.source, target: request.target, requestId: request.id }) }
-      : { requestId: request.id, endpoint: "POST /api/agent/threads", request: agentReplyRequest({ source: request.source, target: request.target, requestId: request.id }) }, null, 2),
-    request.source.connection ? "需要继续投递时选择实际任务目标，连接回执仅记录原请求结果。" : "需要继续往返时填写 responsePolicy=required 和 responseInstruction。"
-  ].join("\n");
-}
-
 function connectionRecordParameters(source: AgentCommunicationPreparation["source"], requestId: string, target: AgentCommunicationPreparation["target"]): Record<string, unknown> {
   const ledgerOwnerDeviceId = source.connection!.ledgerOwnerDeviceId;
   const crossPeer = ledgerOwnerDeviceId && target.endpoint?.ownerDeviceId && ledgerOwnerDeviceId !== target.endpoint.ownerDeviceId;
@@ -49,7 +35,7 @@ function connectionRecordParameters(source: AgentCommunicationPreparation["sourc
     continuation: "来源是连接而非任务。保留原 requestId，在原 Manager 请求记录中查看处理结果；通过 /api/agent/threads 提交原 requestId 的结果，仅记录回执，不投递原生任务。" };
 }
 
-/** Delivery and reminders share one reply request schema; recovery uses durable evidence. */
+/** Delivery uses one reply request schema; recovery uses durable evidence. */
 export function agentReplyParameters(preparation: AgentCommunicationPreparation): Record<string, unknown> {
   return {
     deliveryId: preparation.deliveryId,

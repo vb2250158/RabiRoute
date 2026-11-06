@@ -1,11 +1,15 @@
+import { registerSourcePluginTranslations } from "./plugin-translation-test-host";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import test from "node:test";
 import { readRabiLinkHome, rabiLinkDeviceVersionLabel, rabiLinkDeviceKind } from "../src/rabiLinkHomeClient";
-import { personaSourceOptions, personaSourceKey } from "../src/persona/personaSourcePresentation";
-import { englishCatalog } from "../src/i18n/catalog";
+import { personaSourceOptions, personaSourceKey } from "../../src/plugins/io.rabiroute.manager.persona/web/persona/personaSourcePresentation";
+import { translateText } from "../src/i18n/index";
 
 const identity = { id: "example-pc", guid: "example-guid", name: "Example PC", online: true, capabilities: [] };
+
+const disposePluginTranslations = await registerSourcePluginTranslations();
+test.after(disposePluginTranslations);
 
 test("home reads each PC's version and local marker from its own Manager DTO", async () => {
   const advertised = [
@@ -56,7 +60,7 @@ test("persona source options identify the local PC while preserving local and re
 });
 
 test("source labels translate UI text without translating names or fabricating missing versions", () => {
-  const translate = (text: string) => englishCatalog[text] || text;
+  const translate = (text: string) => translateText(text, "en");
   const options = personaSourceOptions({ rabiName: "", computerName: "Example Host", version: "0.3.19" }, [], "saved-owner", translate);
   assert.equal(options[0].title, "Local PC · Example Host");
   assert.equal(options[1].value, "saved-owner");
@@ -65,7 +69,7 @@ test("source labels translate UI text without translating names or fabricating m
 });
 
 test("both pages consume the version presentation without turning the local PC into a remote owner", () => {
-  const home = fs.readFileSync(new URL("../src/pages/RabiLinkPage.vue", import.meta.url), "utf8");
+  const home = fs.readFileSync(new URL("../../src/plugins/io.rabiroute.manager.core/web/pages/RabiLinkPage.vue", import.meta.url), "utf8");
   const persona = fs.readFileSync(new URL("../src/components/RoleSourcePicker.vue", import.meta.url), "utf8");
   assert.match(home, /v-if="device\.isLocal"/);
   assert.match(home, /rabiLinkDeviceVersionLabel\(device, t\)/);

@@ -4,9 +4,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
-import { connectDshOwner, migrateDshOwner, dshAuthenticatedFetch } from "./dshHttpAuth.js";
-import { DshConnectionStore } from "./dshConnectionStore.js";
-import { createLocalSecretProtector } from "./shared/localSecretProtection.js";
+import { connectDshOwner, migrateDshOwner, dshAuthenticatedFetch } from "./plugins/io.rabiroute.agent.dsh/src/dshHttpAuth.js";
+import { DshConnectionStore } from "./plugins/io.rabiroute.agent.dsh/src/dshConnectionStore.js";
 
 test("disconnect during a legacy login exchange prevents the pending task RPC", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "dsh-disconnect-race-"));
@@ -20,7 +19,7 @@ test("disconnect during a legacy login exchange prevents the pending task RPC", 
   process.env.RABI_DSH_AUTH_FILE = config;
   fs.writeFileSync(config, JSON.stringify({ endpoints: [{ baseUrl: origin, launchLogPath: log }] }));
   fs.writeFileSync(log, `dsh web: ${origin}/?token=fixture-token\n`);
-  const store = new DshConnectionStore(path.join(root, "data", "dsh-connections", "connections.json"));
+  const store = new DshConnectionStore();
   let calls = 0;
   try {
     globalThis.fetch = async () => {
@@ -55,8 +54,7 @@ test("saved authorization survives independent store reads and 401 never replays
   const priorFetch = globalThis.fetch;
   process.env.RABIROUTE_STATE_ROOT = root;
   const origin = "http://127.0.0.1:39275";
-  const dir = path.join(root, "data", "dsh-connections");
-  const store = new DshConnectionStore(path.join(dir, "connections.json"), createLocalSecretProtector(dir));
+  const store = new DshConnectionStore();
   let calls = 0;
   try {
     store.connect(origin, { cookie: "dsh-auth-fixture=v1.fixture.signature", expiresAt: Date.now() + 60_000 }, 0);
@@ -250,6 +248,6 @@ test("DSH verification sends object args and reports DSH's error without credent
 });
 
 test("DSH connection request budget exceeds the verification timeout", async () => {
-  const { DSH_CONNECTION_REQUEST_TIMEOUT_MS } = await import("./manager/dshConnectionRoutes.js");
+  const { DSH_CONNECTION_REQUEST_TIMEOUT_MS } = await import("./plugins/io.rabiroute.agent.dsh/src/manager/dshConnectionRoutes.js");
   assert.ok(DSH_CONNECTION_REQUEST_TIMEOUT_MS > 60_000);
 });

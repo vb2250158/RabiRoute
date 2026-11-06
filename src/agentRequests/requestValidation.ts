@@ -10,6 +10,30 @@ export class AgentThreadContractError extends Error {
   }
 }
 
+/** Discovery describes the same target; it never changes a frozen execution intent. */
+export function agentWorkspaceMismatch(target: { provider: string; sessionId: string; instanceId?: string; agentId?: string; ownerDeviceId?: string }): AgentThreadContractError {
+  const binding = target.instanceId && target.agentId ? { instanceBinding: { instanceId: target.instanceId, agentId: target.agentId,
+    ...(target.ownerDeviceId ? { ownerDeviceId: target.ownerDeviceId } : {}) } } : {};
+  const read = { action: "read", agentAdapter: target.provider, threadId: target.sessionId, ...binding };
+  const list = { action: "list", agentAdapter: target.provider, query: "", limit: 20, offset: 0, ...binding };
+  return new AgentThreadContractError(
+    "Frozen execution cwd does not match the target session's registered workspace.", "cwd", "validation",
+    `Query the registered session workspace: POST /api/agent/threads ${JSON.stringify(read)}; read thread.cwd (omit cwd on this read). `
+    + `List sessions on the same target: POST /api/agent/threads ${JSON.stringify(list)}; follow nextOffset. `
+    + "Query instance/Agent bindings: GET /api/lan-agent/instances; match instances[].instanceId and agents[].agentId. "
+    + "Read the current contract with GET /api/agent/help?operationId=manager.agent.threads.action. "
+    + "Keep the original request, deliveryId, receipt and frozen cwd. Discovery does not authorize changing cwd or resending the prompt. "
+    + "A failed lookup does not prove the session is missing; 401/403 means the connection lacks access, while a transport/service error means the lookup failed.",
+    "AGENT_WORKSPACE_MISMATCH");
+}
+
+/** Only this owner-created error is projected; arbitrary causes/remote properties are not exposed. */
+export function agentThreadContractFailure(error: unknown): { code: string; field: string; message: string; repair: string; retryable: false } | undefined {
+  for (let depth = 0; depth < 4 && error instanceof Error; depth++, error = error.cause) {
+    if (error instanceof AgentThreadContractError) return { code: error.code, field: error.field, message: error.message, repair: error.repair, retryable: false };
+  }
+}
+
 /** Owner IDs are opaque: preserve their complete bytes instead of guessing a provider from their shape. */
 export function completeAgentSessionId(value: unknown, field: "sourceThreadId" | "threadId"): string {
   if (typeof value !== "string" || !value || value !== value.trim() || value.length > 4096 || /[\0\r\n\u2028\u2029]/.test(value)) {

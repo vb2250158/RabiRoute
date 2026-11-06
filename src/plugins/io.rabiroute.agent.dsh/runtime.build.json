@@ -1,0 +1,16 @@
+{
+  "exports": [
+    {
+      "source": "src/plugins/io.rabiroute.agent.dsh/src/agentAdapters/pluginImplementations/dsh.ts",
+      "name": "createAgentOperations"
+    }
+  ],
+  "ownedPrefixes": [
+    "src/plugins/io.rabiroute.agent.dsh/"
+  ],
+  "scopedEnvironment": true,
+  "hostSources": [
+    "src/agentAdapters/stateReporter.ts"
+  ],
+  "packageId": "io.rabiroute.agent.dsh"
+}

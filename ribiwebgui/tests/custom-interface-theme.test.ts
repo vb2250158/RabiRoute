@@ -41,14 +41,15 @@ test("custom themes replace and select the RabiCustom Vuetify palette", () => {
     ...base,
     colors: { ...base.colors, accent: "#22c55e", accentStrong: "#16a34a" }
   };
+  const selectedNames: string[] = [];
   const theme = {
     themes: { value: { RabiCustom: { dark: false, colors: {}, variables: {} } } },
-    global: { name: { value: "RabiLight" } }
+    change: (name: string) => { selectedNames.push(name); }
   };
 
   applyVuetifyInterfaceTheme(theme, "dark", custom);
 
-  assert.equal(theme.global.name.value, "RabiCustom");
+  assert.deepEqual(selectedNames, ["RabiCustom"]);
   assert.equal(theme.themes.value.RabiCustom.dark, true);
   assert.equal(theme.themes.value.RabiCustom.colors.secondary, "#22c55e");
   assert.equal(theme.themes.value.RabiCustom.colors.accent, "#16a34a");
@@ -60,15 +61,16 @@ test("custom themes replace and select the RabiCustom Vuetify palette", () => {
 });
 
 test("built-in themes keep the fixed Vuetify palette names", () => {
+  const selectedNames: string[] = [];
   const theme = {
     themes: { value: { RabiCustom: { dark: false, colors: {}, variables: {} } } },
-    global: { name: { value: "RabiCustom" } }
+    change: (name: string) => { selectedNames.push(name); }
   };
 
   applyVuetifyInterfaceTheme(theme, "light");
-  assert.equal(theme.global.name.value, "RabiLight");
+  assert.deepEqual(selectedNames, ["RabiLight"]);
   applyVuetifyInterfaceTheme(theme, "dark");
-  assert.equal(theme.global.name.value, "RabiDark");
+  assert.deepEqual(selectedNames, ["RabiLight", "RabiDark"]);
 });
 
 

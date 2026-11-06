@@ -119,6 +119,8 @@ Manager 会扫描 `data/roles/*/personaConfig.json`。当前格式以文件根�
 
 `template` 不建议手写成一整条 JSON 字符串。先在 WebUI 或文本块里写真实换行模板，再保存到 `personaConfig.json`。
 
+消息规则的 `trigger.targetUserId` 可限定 QQ 私聊发送者的 QQ 号；留空表示不限联系人。此条件仅用于私聊，不匹配昵称，也不改变群聊规则。
+
 ## 路由类型 route kind
 
 - `direct_at`：群聊直接 @ 机器人。

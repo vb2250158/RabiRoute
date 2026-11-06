@@ -5,7 +5,7 @@ import { rabiLinkDraftFromMeta, rabiLinkIdentityPatch, rabiLinkManagementUrl, ra
 import type { MetaPayload } from "../src/types";
 import { createRabiLinkRefreshFence } from "../src/rabiLinkRefreshFence";
 
-const source = (file: string) => fs.readFileSync(new URL(`../src/${file}`, import.meta.url), "utf8");
+const source = (file: string) => fs.readFileSync(new URL(`../../src/plugins/io.rabiroute.manager.core/web/${file}`, import.meta.url), "utf8");
 test("deferred pre-save read cannot replace the successful identity snapshot", async () => {
   const fence = createRabiLinkRefreshFence();
   let snapshot = "initial";
@@ -82,8 +82,8 @@ test("Settings retires identity editing; RabiLink has one persistent draft and l
   assert.match(source("components/RabiLinkSettings.vue"), /registerPageSaveAction/);
   assert.match(source("components/RabiLinkSettings.vue"), /onBeforeRouteLeave/);
   assert.doesNotMatch(source("components/RabiLinkSettings.vue"), /store\.load|replaceDirtyConfig/);
-  assert.match(source("router.ts"), /path: "\/lan-agents", redirect:.*path: "\/rabilink".*tab: "agents"/);
-  assert.match(source("bundles/builtinWebContributions.ts"), /pages\/RabiLinkPage\.vue/);
+  assert.match(fs.readFileSync(new URL("../src/router.ts", import.meta.url), "utf8"), /path: "\/lan-agents", redirect:.*path: "\/rabilink".*tab: "agents"/);
+  assert.match(source("contributions.ts"), /pages\/RabiLinkPage\.vue/);
 });
 test("native home replaces frames and keeps administration an independent login", () => {
   const page = source("pages/RabiLinkPage.vue");
@@ -93,5 +93,5 @@ test("native home replaces frames and keeps administration an independent login"
   assert.match(page, /homeLoader\.dispose\(\)/);
   assert.match(page, /homeLoader\.invalidate\(\)/);
   assert.doesNotMatch(page, /iframe|frameAllowed|frameLoaded|setInterval|token=|authenticated\s*=/i);
-  assert.doesNotMatch(source("rabiLinkPresentation.ts"), /rabiLinkFrameAllowed/);
+  assert.doesNotMatch(fs.readFileSync(new URL("../src/rabiLinkPresentation.ts", import.meta.url), "utf8"), /rabiLinkFrameAllowed/);
 });

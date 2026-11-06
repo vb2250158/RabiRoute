@@ -1,0 +1,36 @@
+from __future__ import annotations
+
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+
+def test_speaker_model_probe_bootstraps_runtime_outside_plugin_directory(tmp_path: Path) -> None:
+    script = Path(__file__).resolve().parents[1] / "scripts" / "speaker_model_probe.py"
+    dependency_root = Path(os.environ.get("RABISPEECH_DEPS_ROOT") or script.parent.parent / ".deps").expanduser().resolve()
+    code = (
+        "import importlib.util; from pathlib import Path; "
+        f"spec = importlib.util.spec_from_file_location('speaker_model_probe_isolated', {str(script)!r}); "
+        "module = importlib.util.module_from_spec(spec); "
+        "spec.loader.exec_module(module); "
+        f"assert module.DEPENDENCY_ROOT == Path({str(dependency_root)!r}); "
+        "import rabispeech.config; "
+        "print(module.PLUGIN_ROOT)"
+    )
+    env = dict(os.environ)
+    env["PYTHONPATH"] = ""
+    completed = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        # Importing the private dependency tree from a mapped NAS workspace can
+        # take close to a minute even though the probe itself is non-blocking.
+        timeout=120,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.strip() == str(script.parent.parent)

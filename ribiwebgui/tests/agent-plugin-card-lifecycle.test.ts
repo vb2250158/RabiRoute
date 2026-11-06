@@ -7,7 +7,7 @@ import ts from "typescript";
 import * as vue from "vue";
 
 function card(fetcher: typeof fetch) {
-  const source = fs.readFileSync(new URL("../src/agentAdapters/CopilotCliAgentCard.vue", import.meta.url), "utf8");
+  const source = fs.readFileSync(new URL("../../src/plugins/io.rabiroute.agent.copilot-cli/web/agentAdapters/CopilotCliAgentCard.vue", import.meta.url), "utf8");
   const script = compileScript(parse(source).descriptor, { id: "copilot-card-lifecycle" });
   const code = ts.transpileModule(script.content, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;
   type Model = { startCopilotLogin(): Promise<void>; copilotLoginState: vue.Ref<{ code: string | null }> };
@@ -18,9 +18,9 @@ function card(fetcher: typeof fetch) {
     module, exports: module.exports, fetch: fetcher,
     require(name: string) {
       if (name === "vue") return { ...vue, onMounted() {}, onBeforeUnmount(dispose: () => void) { cleanup.push(dispose); } };
-      if (name === "../stores/gatewayStore") return { useGatewayStore: () => ({ selectedGateway: { id: "route", copilotCwd: "D:/Work" } }) };
+      if (name === "../../../../../ribiwebgui/src/stores/gatewayStore") return { useGatewayStore: () => ({ selectedGateway: { id: "route", copilotCwd: "D:/Work" } }) };
       if (name === "@shared/routeAgentTargets") return { resolvePrimaryAgentTarget: () => ({ id: "local:copilotCli", provider: "copilotCli" }) };
-      if (name === "../managerApi") return { managerEventSource() { opened++; return { addEventListener() {}, close() { closed++; } }; } };
+      if (name === "../../../../../ribiwebgui/src/managerApi") return { managerEventSource() { opened++; return { addEventListener() {}, close() { closed++; } }; } };
       throw new Error(`Unexpected Copilot card dependency: ${name}`);
     }
   });

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import test from 'node:test';
 import { configureTimeouts } from '../shared/timeoutSettings.js';
-import { QQ_READ_LIMITS } from './qqReadContract.js';
+import { QQ_READ_LIMITS } from '../plugins/io.rabiroute.endpoint.napcat/src/manager/qqReadContract.js';
 import { qqReadSettings } from '../shared/qqReadSettings.js';
 import { requestLocalSpeech } from '../speech/localSpeechClient.js';
 

@@ -1,8 +1,8 @@
 import type http from 'node:http';
 import { ManagerPluginRouteRegistry } from './managerPluginRouteRegistry.js';
-import { createPersonaSkillOperations } from './personaSkillOperations.js';
-import type { RoleSkillReadContext } from './roleSkillReadRoutes.js';
-import type { RoleSkillDownloadContext } from './roleSkillDownloadRoutes.js';
+import { createPersonaSkillOperations } from '../plugins/io.rabiroute.manager.persona/src/manager/personaSkillOperations.js';
+import type { RoleSkillReadContext } from '../plugins/io.rabiroute.manager.persona/src/manager/roleSkillReadRoutes.js';
+import type { RoleSkillDownloadContext } from '../plugins/io.rabiroute.manager.persona/src/manager/roleSkillDownloadRoutes.js';
 
 export function dispatchSkillDownloadFixture(request:http.IncomingMessage,pathname:string,response:http.ServerResponse,context:RoleSkillDownloadContext&{json?:(response:http.ServerResponse,status:number,body:unknown)=>void}) {
   const registry=new ManagerPluginRouteRegistry(),registration=registry.registerOperations('skill-download-fixture',createPersonaSkillOperations({...context,querySkills:async()=>{throw new Error('Catalog is outside this fixture.');}}));

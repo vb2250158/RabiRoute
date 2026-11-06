@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 2,
+  "id": "io.rabiroute.endpoint.webhook",
+  "version": "0.1.1",
+  "entries": {
+    "manager": {
+      "execution": "in_process",
+      "module": "./manager.mjs"
+    },
+    "gateway": {
+      "execution": "in_process",
+      "module": "./gateway.mjs"
+    },
+    "web": {
+      "execution": "in_process",
+      "module": "./web/client.mjs"
+    }
+  },
+  "provides": [
+    "endpoint.webhook@1"
+  ],
+  "requires": [
+    "host.message-endpoints@1"
+  ],
+  "optional": [],
+  "permissions": [],
+  "displayName": "通用 Webhook",
+  "description": "通过 HTTP 接入自定义消息",
+  "icon": "mdi-webhook"
+}

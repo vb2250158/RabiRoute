@@ -60,3 +60,15 @@ export function deliveryUserMessagesFromRollout(text: string): string[] {
     } catch { return []; }
   });
 }
+
+export function promptConfirmsDelivery(prompt: string, deliveryId: string): boolean {
+  if (!deliveryId) return false;
+  if (deliveryIdFromPrompt(prompt) === deliveryId) return true;
+  // Historical plan feedback used a feedback ID in its Manager-generated body.
+  // Keep this exact envelope/field check until those pending records are closed.
+  const normalized = prompt.replace(/\r\n/g, "\n");
+  if (!normalized.startsWith("[消息源]\n")) return false;
+  const body = normalized.split("\n\n[消息内容]\n")[1];
+  return Boolean(body && /^(\[计划引导：|\[计划审批：|\[QA失败回传：)/.test(body)
+    && body.split("\n")[3] === `反馈 ID：${deliveryId}`);
+}

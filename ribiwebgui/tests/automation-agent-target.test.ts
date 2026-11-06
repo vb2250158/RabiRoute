@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
 import { compileScript, compileTemplate, parse } from "@vue/compiler-sfc";
-import { changeDeliveryType, changeSendMode, chooseDeliverySession, chooseSenderIdentity, deliverySessions, isGroupSession, senderIdentities, type DeliverySession, type SessionTarget } from "../src/components/automationAgentTargetModel";
+import { changeDeliveryType, changeSendMode, chooseDeliverySession, chooseSenderIdentity, deliverySessions, isGroupSession, senderIdentities, type DeliverySession, type SessionTarget } from "../../src/plugins/io.rabiroute.manager.persona/web/components/automationAgentTargetModel";
 
 const room = { id: "grokBot:full-room-session-id", name: "Example group", kind: "GROK_BOT_AGENT_KIND_ROOM", memberAgentIds: ["member-a"] };
 const member: DeliverySession = { id: "member-session", name: "Member", kind: "AGENT", nativeAgentId: "member-a" };
@@ -90,7 +90,7 @@ test("native roster kinds, title-only rows and complete IDs survive selection", 
 });
 
 test("component compiles, orders Grok controls, and uses the existing list client only", () => {
-  const source = readFileSync(new URL("../src/components/AutomationAgentTarget.vue", import.meta.url), "utf8");
+  const source = readFileSync(new URL("../../src/plugins/io.rabiroute.manager.persona/web/components/AutomationAgentTarget.vue", import.meta.url), "utf8");
   const { descriptor, errors } = parse(source);
   assert.deepEqual(errors, []);
   const script = compileScript(descriptor, { id: "automation-agent-target" });

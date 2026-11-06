@@ -3,7 +3,7 @@ import fs from "node:fs";
 import test from "node:test";
 
 const source = fs.readFileSync(
-  new URL("../src/pages/PersonaTemplatePage.vue", import.meta.url),
+  new URL("../../src/plugins/io.rabiroute.manager.persona/web/pages/PersonaTemplatePage.vue", import.meta.url),
   "utf8"
 );
 
@@ -41,7 +41,7 @@ test("each persona page tab owns one coherent group of existing cards", () => {
   assert.match(automationDialog, /setAutomationRecentMessageLimit\(value \? DEFAULT_RECENT_MESSAGE_LIMIT : 0\)/);
   assert.match(automationDialog, /:model-value="automationRecentMessageLimit"[\s\S]*@update:model-value="setAutomationRecentMessageLimit"/);
   assert.doesNotMatch(pageSection("automation"), /路由变量/);
-  const routePage = fs.readFileSync(new URL("../src/pages/RouteConfigPage.vue", import.meta.url), "utf8");
+  const routePage = fs.readFileSync(new URL("../../src/plugins/io.rabiroute.manager.message-adapter-control/web/pages/RouteConfigPage.vue", import.meta.url), "utf8");
   assert.doesNotMatch(routePage, /RouteVariablesEditor/);
   assert.match(pageSection("automation"), /默认消息规则[\s\S]*automationWorkspaceTab[\s\S]*可用模板变量/);
 });

@@ -139,11 +139,13 @@ type MessageAdapterCapability = {
 
 ## 代码入口
 
-每个消息端提供自己的插件包，参考 `plugins/builtin/io.rabiroute.endpoint.webhook/1.0.0/`。按实际宿主声明入口与依赖：
+新插件从 `0.1.1` 开始，功能更新递增插件版本；宿主只在架构/扩展点变化时升版。公开 schema/default/example 与私有存档分开，状态按稳定 ID 保存且不含包版本。先读 `../../docs/plugin-source-layout.md` 与 `../../docs/plugin-storage.md`。
+
+每个消息端提供自己的插件包，参考 `src/plugins/io.rabiroute.endpoint.webhook/`。按实际宿主声明入口与依赖：
 
 - `rabi.plugin.json`：声明稳定包 ID、版本、Manager/Gateway/Web 入口、提供能力与依赖。消息端类型使用可扩展的共享字符串合同；具体能力引用以包声明为准。
 - `src/adapters/messageAdapter.ts`：复用共享类型合同，不在 Adapter 层维护另一份字符串联合。
-- `src/adapters/<name>Adapter.ts`：由该包构建并激活，实现接收、规范化、落盘和路由；内置包也通过原生插件内核加载。
+- 包内 `src/<name>Adapter.ts`：由该包构建并激活，实现接收、规范化、落盘和路由；内置包也通过原生插件内核加载。
 - 包内 `runtime.build.json`、`manager-runtime.build.json` 与 `egress-runtime.build.json`：按需要打包真实协议、管理与出站实现，共享 owner 通过稳定端口访问；资源和 worker 随包交付。
 - 包内 `route-config.json`：声明现有 Route 中归本端的字段、运行映射与回退依赖。新增设置由插件 config/schema 持有；共用配置仍复用原拥有者。用真实配置解析对照验证空值、回退与清空凭据。
 - `src/messageEndpoints/<name>Manager.ts` 或同目录聚合模块：实现该消息端的扫描、健康检查、启动、打开管理页、实例发现和修复建议。
@@ -155,7 +157,7 @@ type MessageAdapterCapability = {
 - WebGUI 消息端贡献入口：提供本端的名称、用途、分组、图标、独立卡片 renderer 与动作。`RouteConfigPage` 从当前插件贡献生成列表与添加菜单，承载通用布局；失效条目保留原配置并显示不可用。
 - 原生出站能力：提供可扩展操作合同。同一回复的上传、附言、凭据与回执保持原请求租约；停用后拒绝新工作，原已受理工作等待实际结束。
 - `ribiwebgui/src/components/QuickSetupDialog.vue`：如果适合首次配置，提供精简但不误导的入口。
-- `ribiwebgui/src/pages/RuntimeLogPage.vue`：显示运行态、实例态、最近错误和日志。
+- `src/plugins/io.rabiroute.manager.diagnostics/web/pages/RuntimeLogPage.vue`：显示运行态、实例态、最近错误和日志。
 - `README.md`、`docs/configuration.md` 或示例：只补公开、安全、可复制的说明。
 
 如果新增的是 Agent 处理端，不要用本 skill；Agent 端走 `create-rabiroute-agent-adapter`。
@@ -164,7 +166,7 @@ type MessageAdapterCapability = {
 
 Manager 控制面编排共享拥有者，平台实现由各插件包拥有：
 
-- 消息端源代码可放在 `src/messageEndpoints/`、`src/adapters/` 或对应 integrations 目录；由本端包声明构建输入、管理进程、凭据、实例和扫描。宿主不构造平台类再注入插件。
+- 消息端实现、配置定义、界面、翻译、测试和资源统一放 `src/plugins/<稳定包ID>/`；由本端包声明构建输入、管理进程、凭据、实例和扫描。源码只保留一份，宿主不构造平台类再注入插件。
 - 宿主提供稳定共享端口与原生 API 注册能力，接口保留原来源身份、Schema、权限和请求回执。扫描由各端注册到通用目录，单端失败只返回本端诊断。
 - 通用 normalize、运行、日志和端口声明复用现有 owner。保存沿原 CAS 队列写入；只改端自有字段时经常驻 Gateway 精确 ACK，公共依赖变更继续走真实生命周期。
 - 新模块不能 import `src/manager.ts`，也不能依赖 `ribiwebgui`、浏览器 `window/document` 或前端状态。
@@ -172,9 +174,9 @@ Manager 控制面编排共享拥有者，平台实现由各插件包拥有：
 
 当前参考模块：
 
-- `plugins/builtin/io.rabiroute.endpoint.napcat/1.0.0/`：NapCat 协议、进程、管理与扫描的实际归属。
-- `plugins/builtin/io.rabiroute.endpoint.webhook/1.0.0/`：常驻监听、配置投影、Web 卡片和扫描贡献。
-- `plugins/builtin/io.rabiroute.endpoint.speech/1.0.0/`：语音消息入口与共享语音服务分离。
+- `src/plugins/io.rabiroute.endpoint.napcat/`：NapCat 协议、进程、管理与扫描的实际归属。
+- `src/plugins/io.rabiroute.endpoint.webhook/`：常驻监听、配置投影、Web 卡片和扫描贡献。
+- `src/plugins/io.rabiroute.endpoint.speech/`：语音消息入口与共享语音服务分离。
 
 运行与用户操作见 `docs/code-architecture.md` 和 `docs/user-guide/plugins.md`。接口、资源与配置改变时同步包内中英文说明及匹配行为验证。
 

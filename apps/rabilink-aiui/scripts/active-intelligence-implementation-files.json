@@ -1,6 +1,6 @@
 [
   "scripts/rabilink-relay-server.mjs",
-  "src/adapters/rabilinkRelayWorker.ts",
+  "src/plugins/io.rabiroute.endpoint.rabilink/src/adapters/rabilinkRelayWorker.ts",
   "src/adapters/webhookAdapter.ts",
   "src/outbox.ts",
   "src/rabilinkConversationLedger.ts",

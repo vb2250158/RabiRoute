@@ -32,6 +32,6 @@
 
 已有记录上传授权照常冻结。通话事件先完成同一 ASR actor 的最终转写回执，再进入既有可靠归档上传，避免归档清理与读取 PCM 冲突。网络故障不删除录音；语音输入的实时截止时间与记录的可靠保存、归档是不同合同。
 
-SDK 的 `getMobileRoutes` 返回真实可选手机路线；`getMobileRouteCatalog` 仍保留完整配置目录用于管理，不能将它直接当成聊天选择列表。手机缓存保留路线所属电脑、电脑名、角色来源电脑及通话协议版本。PC 路线摘要由 `src/manager/rabiApi.ts` 提供，输入围栏由 `src/shared/mobileVoiceCall.ts` 与 RabiLink adapter 实施，不修改处理端 Runtime，也不创建备用执行链路。
+SDK 的 `getMobileRoutes` 返回真实可选手机路线；`getMobileRouteCatalog` 仍保留完整配置目录用于管理，不能将它直接当成聊天选择列表。手机缓存保留路线所属电脑、电脑名、角色来源电脑及通话协议版本。PC 路线摘要由 `src/plugins/io.rabiroute.manager.route-control/src/manager/rabiApi.ts` 提供，输入围栏由 `src/shared/mobileVoiceCall.ts` 与 RabiLink adapter 实施，不修改处理端 Runtime，也不创建备用执行链路。
 
 验收必须覆盖同角色多路线、正确电脑与路线、至少两轮实际语音、最终转写投递、手机播报、静音、播放中挂断、旧回复到达、新通话与旧回复隔离、原记录恢复、断网与过期输入，以及权限或 PC 能力不足。分别记录逻辑测试、构建、安装、实际设备和听感证据，不相互替代。

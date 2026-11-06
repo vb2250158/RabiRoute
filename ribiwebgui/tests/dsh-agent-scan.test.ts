@@ -2,10 +2,10 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import test from "node:test";
 
-const pageSource = fs.readFileSync(new URL("../src/pages/RouteConfigPage.vue", import.meta.url), "utf8");
-const cardSource = fs.readFileSync(new URL("../src/agentAdapters/DshAgentCard.vue", import.meta.url), "utf8");
+const pageSource = fs.readFileSync(new URL("../../src/plugins/io.rabiroute.manager.message-adapter-control/web/pages/RouteConfigPage.vue", import.meta.url), "utf8");
+const cardSource = fs.readFileSync(new URL("../../src/plugins/io.rabiroute.agent.dsh/web/agentAdapters/DshAgentCard.vue", import.meta.url), "utf8");
 const scanSource = fs.readFileSync(new URL("../src/agentAdapters/routeAgentScanController.ts", import.meta.url), "utf8");
-const bundleSource = fs.readFileSync(new URL("../src/bundles/agents/dsh.ts", import.meta.url), "utf8");
+const bundleSource = fs.readFileSync(new URL("../../src/plugins/io.rabiroute.agent.dsh/web/entry.ts", import.meta.url), "utf8");
 const workerPoolSource = fs.readFileSync(new URL("../../src/manager/agentAdapterCatalogWorkerPool.ts", import.meta.url), "utf8");
 const workerSource = fs.readFileSync(new URL("../../src/manager/agentAdapterCatalogWorker.ts", import.meta.url), "utf8");
 
@@ -27,18 +27,18 @@ test("dedicated DSH scan only merges DSH state", () => {
 });
 
 test("the DSH package owns its canonical scan and compatibility alias", () => {
-  const provider = fs.readFileSync(new URL("../../src/agentAdapters/dshManagerProvider.ts", import.meta.url), "utf8");
+  const provider = fs.readFileSync(new URL("../../src/plugins/io.rabiroute.agent.dsh/src/agentAdapters/dshManagerProvider.ts", import.meta.url), "utf8");
   const operations = fs.readFileSync(new URL("../../src/agentAdapters/managerNativeOperations.ts", import.meta.url), "utf8");
-  const spec = JSON.parse(fs.readFileSync(new URL("../../plugins/builtin/io.rabiroute.agent.dsh/1.0.0/manager-runtime.build.json", import.meta.url), "utf8"));
+  const spec = JSON.parse(fs.readFileSync(new URL("../../src/plugins/io.rabiroute.agent.dsh/manager-runtime.build.json", import.meta.url), "utf8"));
   assert.match(provider, /createAgentScanOperations\(descriptor\.type/);
   assert.match(provider, /['"]\/api\/scan\/agents\/dsh['"]/);
   assert.match(operations, /\/api\/agent-adapters\/scan\/\$\{type\}/);
-  assert.deepEqual(spec.workers, [{ source: "src/agentAdapters/dshManagerApi.ts", target: "workers/scan.mjs" }]);
+  assert.deepEqual(spec.workers, [{ source: "src/plugins/io.rabiroute.agent.dsh/src/agentAdapters/dshManagerApi.ts", target: "workers/scan.mjs", mode: "host-factory" }]);
 });
 
 test("DSH scans resolve their published provider and execute only its owned worker entry", () => {
   const operations = fs.readFileSync(new URL("../../src/agentAdapters/managerNativeOperations.ts", import.meta.url), "utf8");
-  const manager = fs.readFileSync(new URL("../../plugins/builtin/io.rabiroute.agent.dsh/1.0.0/manager.mjs", import.meta.url), "utf8");
+  const manager = fs.readFileSync(new URL("../../src/plugins/io.rabiroute.agent.dsh/manager.mjs", import.meta.url), "utf8");
   assert.match(operations, /invoke\("scan",\s*payload,\s*\{ signal: input\.signal/);
   assert.match(manager, /new URL\(["']\.\/workers\/scan\.mjs["']/);
   assert.match(manager, /scannerExport: ["']scanDshAgentAdapter["']/);

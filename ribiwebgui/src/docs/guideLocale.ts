@@ -1,4 +1,4 @@
-import type { AppLocale } from "../i18n";
+import type { AppLocale } from "../i18n/index";
 
 export function guideLocale(path: string): AppLocale {
   if (path.endsWith("_ja.md")) return "ja";

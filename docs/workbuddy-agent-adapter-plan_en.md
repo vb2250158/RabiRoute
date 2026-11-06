@@ -167,7 +167,7 @@ What did not pass: a smoke message on a temporary conversation key returned `202
 
 ### Why this side needs a credential while Codex does not
 
-Codex delivery is not unauthenticated; its **trust is established by the transport**. `src/codexDesktopBridge.ts` connects to the Windows named pipe `\\.\pipe\codex-ipc` (on POSIX, `$TMPDIR/codex-ipc/ipc-<uid>.sock`) over a bare `net.Socket`, and the file contains no token, no Authorization header and no handshake — only processes of the same user on the same machine can open that pipe, so the kernel ACL is the credential.
+Codex delivery is not unauthenticated; its **trust is established by the transport**. `src/plugins/io.rabiroute.agent.codex/src/codexDesktopBridge.ts` connects to the Windows named pipe `\\.\pipe\codex-ipc` (on POSIX, `$TMPDIR/codex-ipc/ipc-<uid>.sock`) over a bare `net.Socket`, and the file contains no token, no Authorization header and no handshake — only processes of the same user on the same machine can open that pipe, so the kernel ACL is the credential.
 
 Each WorkBuddy session exposes loopback HTTP only. The operating system does not distinguish callers, so any local process can connect, and the gateway must therefore authenticate at the application layer; otherwise any local script could drive the user's sessions. This is not an extra step bolted on, it is what the transport dictates:
 
@@ -175,7 +175,7 @@ Each WorkBuddy session exposes loopback HTTP only. The operating system does not
 - Processes and ports agree: a session process (for example `sessions/62288.json` serving `127.0.0.1:1204`) listens on TCP.
 - In practice `GET /api/v1/sessions` returns `401 AUTH_REQUIRED` even from loopback; `/api/v1/auth/status` is the only public endpoint and exposes nothing usable.
 
-Requiring credentials for HTTP-based agent endpoints is already established in this project: the whole `src/dshHttpAuth.ts` module exists to obtain a DSH token (reading `dsh web: ...?token=` from the launch log and exchanging it for an HttpOnly cookie kept in memory), and AstrBot likewise needs an explicit session ID and credential. So the real open item is not "credential or not" but "how does a separate process obtain it once", with the credential confined to a local ignored file and an in-memory cache, never the repository.
+Requiring credentials for HTTP-based agent endpoints is already established in this project: the whole `src/plugins/io.rabiroute.agent.dsh/src/dshHttpAuth.ts` module exists to obtain a DSH token (reading `dsh web: ...?token=` from the launch log and exchanging it for an HttpOnly cookie kept in memory), and AstrBot likewise needs an explicit session ID and credential. So the real open item is not "credential or not" but "how does a separate process obtain it once", with the credential confined to a local ignored file and an in-memory cache, never the repository.
 
 Explicitly rejected alternative: setting WorkBuddy's `gateway.auth` to `none` to skip authentication. That is a security downgrade (any process on the machine could drive the session) and a host-configuration write, which RabiRoute must never perform; it is available only as a last resort if the user personally accepts the risk.
 
@@ -204,10 +204,10 @@ When neither exists, delivery fails closed: it never sends an unauthenticated re
 
 Landed and tested:
 
-- `src/workbuddySessionStore.ts`: session descriptor reading (the `prewarm` pool's named pipe is metadata only), task-database reading, workspace normalization, and the standard resolver. `deliverable` requires all four of: process alive, heartbeat fresh, gateway address published, and kind not `prewarm`/`teammate`.
-- `src/workbuddyHttpAuth.ts`: gateway credential reading and caching. Ordered multi-source resolution (environment → local ignored file); loopback-only; the credential stays in memory and a local file, never the repository or logs; 5-minute TTL plus immediate invalidation on 401.
-- `src/workbuddySessionBridge.ts`: the **single real message path**. Binding read, pre-delivery owner/workspace revalidation, `POST /api/v1/runs` delivery, and `GET /runs/{runId}` settlement polling. Four outcomes are distinguishable: `unreachable` (safe to retry), `rejected` (not applied), `unauthorized` (not applied, never replayed), and `unknown` (may have applied — check the receipt first).
-- `src/agentAdapters/workbuddyManagerApi.ts`: Manager-side scan/status (`installed`, `auth`, `endpoints`, `projects`, paginated `sessions`, `warnings`), including whether the local credential is configured.
+- `src/plugins/io.rabiroute.agent.workbuddy/src/workbuddySessionStore.ts`: session descriptor reading (the `prewarm` pool's named pipe is metadata only), task-database reading, workspace normalization, and the standard resolver. `deliverable` requires all four of: process alive, heartbeat fresh, gateway address published, and kind not `prewarm`/`teammate`.
+- `src/plugins/io.rabiroute.agent.workbuddy/src/workbuddyHttpAuth.ts`: gateway credential reading and caching. Ordered multi-source resolution (environment → local ignored file); loopback-only; the credential stays in memory and a local file, never the repository or logs; 5-minute TTL plus immediate invalidation on 401.
+- `src/plugins/io.rabiroute.agent.workbuddy/src/workbuddySessionBridge.ts`: the **single real message path**. Binding read, pre-delivery owner/workspace revalidation, `POST /api/v1/runs` delivery, and `GET /runs/{runId}` settlement polling. Four outcomes are distinguishable: `unreachable` (safe to retry), `rejected` (not applied), `unauthorized` (not applied, never replayed), and `unknown` (may have applied — check the receipt first).
+- `src/plugins/io.rabiroute.agent.workbuddy/src/agentAdapters/workbuddyManagerApi.ts`: Manager-side scan/status (`installed`, `auth`, `endpoints`, `projects`, paginated `sessions`, `warnings`), including whether the local credential is configured.
 - `workbuddy` is registered in `agentAdapterTypes` and the manifest with `maturity: experimental`, `transport: http/session-gateway`, `host: WorkBuddy Desktop (required)`, and declares `managedTasks.messageProcessingAgent` (delivery works) plus `managedTasks.hooks` (lifecycle hooks work). It does **not** declare plan assistants or memory consolidation — those paths go through the Codex/DSH thread driver — nor `deliveryReceiptRecovery`: the gateway returns a one-shot acceptance receipt and keeps no readable inbound log.
 - Route binding mirrors DSH: `adapterConfig.json` stores only `workbuddySessionId` / `workbuddySessionName` / `workbuddyCwd` / `workbuddyEndpoint` (the last for display and fallback only — delivery always prefers the live address from the session descriptor). The credential is never written into route config.
 - WebGUI: a WorkBuddy card in the agent list, a task dropdown with liveness, and workspace plus optional gateway-address fields.
@@ -331,11 +331,11 @@ When it is missing, the scan reports an actionable note and delivery fails close
 | --- | --- |
 | `src/shared/agentAdapterCapabilities.ts` | Add `workbuddy` to `agentAdapterTypes` and `manifestsByAgentType` |
 | `src/agentAdapters/types.ts` | No extra branch; the shared `parseAgentAdapterType` covers it |
-| `src/workbuddySessionBridge.ts` (new) | Discovery, resolver, delivery, result reading; mirrors `src/dshSessionBridge.ts` |
-| `src/workbuddyHttpAuth.ts` (new) | Credential acquisition and caching; mirrors `src/dshHttpAuth.ts` (stores endpoints and source paths, never credentials) |
+| `src/plugins/io.rabiroute.agent.workbuddy/src/workbuddySessionBridge.ts` (new) | Discovery, resolver, delivery, result reading; mirrors `src/plugins/io.rabiroute.agent.dsh/src/dshSessionBridge.ts` |
+| `src/plugins/io.rabiroute.agent.workbuddy/src/workbuddyHttpAuth.ts` (new) | Credential acquisition and caching; mirrors `src/plugins/io.rabiroute.agent.dsh/src/dshHttpAuth.ts` (stores endpoints and source paths, never credentials) |
 | `src/workbuddyWorkspaces.ts` (new) | Working-directory collection and normalized comparison |
 | `src/agentAdapters/workbuddyAdapter.ts` (new) | Interface-based adapter, registered in `builtinAgentAdapters.ts` |
-| `src/agentAdapters/workbuddyManagerApi.ts` (new) | `scanWorkbuddyAgent` / `getWorkbuddyStatus` / `openWorkbuddy`, aggregated by `managerApi.ts` |
+| `src/plugins/io.rabiroute.agent.workbuddy/src/agentAdapters/workbuddyManagerApi.ts` (new) | `scanWorkbuddyAgent` / `getWorkbuddyStatus` / `openWorkbuddy`, aggregated by `managerApi.ts` |
 | `src/agentAdapters/managerApi.ts` | Aggregate the new endpoint into `/api/scan/agents` as `agents.workbuddy` |
 | `src/manager.ts` | Wiring only; no WorkBuddy-specific logic |
 | `ribiwebgui/src/types.ts`, `pages/RouteConfigPage.vue`, `components/QuickSetupDialog.vue` | Agent card, parameter panel, status and action buttons |
@@ -345,21 +345,21 @@ Delivery binding follows the DSH shape: the route's `adapterConfig.json` holds `
 
 Landed (checked) versus pending:
 
-- [x] `src/workbuddySessionStore.ts` (new) — descriptors + task database + normalization + resolver
-- [x] `src/workbuddySessionStore.test.ts` (new) — 8 cases, including regressions for the real data shapes
-- [x] `src/workbuddyHttpAuth.ts` (new) — credential reading and caching, loopback restriction, TTL and invalidation
-- [x] `src/workbuddySessionBridge.ts` (new) — binding resolution, pre-delivery validation, delivery, settlement polling
-- [x] `src/workbuddySessionBridge.test.ts` (new) — 12 cases: body shape, routing key, 401/unreachable/no-runId/empty-body, timeout, binding and fail-closed
-- [x] `src/agentAdapters/workbuddyManagerApi.ts` (new) — `scanWorkbuddyAgentAdapter`, including credential-configured status
-- [x] `src/agentAdapters/workbuddyManagerApi.test.ts` (new) — 3 cases: listing sessions in the real shapes, paging and filtering, and an actionable empty result on a clean machine
+- [x] `src/plugins/io.rabiroute.agent.workbuddy/src/workbuddySessionStore.ts` (new) — descriptors + task database + normalization + resolver
+- [x] `src/plugins/io.rabiroute.agent.workbuddy/src/workbuddySessionStore.test.ts` (new) — 8 cases, including regressions for the real data shapes
+- [x] `src/plugins/io.rabiroute.agent.workbuddy/src/workbuddyHttpAuth.ts` (new) — credential reading and caching, loopback restriction, TTL and invalidation
+- [x] `src/plugins/io.rabiroute.agent.workbuddy/src/workbuddySessionBridge.ts` (new) — binding resolution, pre-delivery validation, delivery, settlement polling
+- [x] `src/plugins/io.rabiroute.agent.workbuddy/src/workbuddySessionBridge.test.ts` (new) — 12 cases: body shape, routing key, 401/unreachable/no-runId/empty-body, timeout, binding and fail-closed
+- [x] `src/plugins/io.rabiroute.agent.workbuddy/src/agentAdapters/workbuddyManagerApi.ts` (new) — `scanWorkbuddyAgentAdapter`, including credential-configured status
+- [x] `src/plugins/io.rabiroute.agent.workbuddy/src/agentAdapters/workbuddyManagerApi.test.ts` (new) — 3 cases: listing sessions in the real shapes, paging and filtering, and an actionable empty result on a clean machine
 - [x] `src/shared/agentAdapterCapabilities.ts` — type and manifest (declares `managedTasks.messageProcessingAgent` and `hooks`, not plan assistants, memory consolidation or `deliveryReceiptRecovery`)
 - [x] `plugins/rabi-workbuddy-context/` — the WorkBuddy hook package (`.codebuddy-plugin/plugin.json` + `hooks/hooks.json` + `scripts/`), isomorphic to `rabi-codex-context`
 - [x] `src/agentAdapters/hookInstallation.ts` — WorkBuddy install branch (copy to a stable path + merge into `~/.workbuddy/settings.json`; idempotent, preserves user hooks, refuses to overwrite invalid JSON)
 - [x] `.codebuddy-plugin/marketplace.json` + `scripts/build-agent-hook-packages.mjs` — the plugin marketplace ships with the release
 - [x] `src/agentAdapters/managerApi.ts` — aggregated into `agents.workbuddy`, options and type exports
 - [x] `src/agentAdapters/builtinAgentAdapters.ts` — wired to `notifyWorkbuddySession`
-- [x] `src/manager/messageProcessingDeliveryTarget.ts`, `src/forwarding.ts` — primary-persona delivery target supports `workbuddy`
-- [x] `src/shared/gatewayConfigModel.ts`, `src/config.ts` — binding fields, normalization and loopback validation
+- [x] `src/manager/messageProcessingDeliveryTarget.ts`, `src/plugins/io.rabiroute.endpoint.rabilink/src/forwarding.ts` — primary-persona delivery target supports `workbuddy`
+- [x] `src/shared/gatewayConfigModel.ts`, `src/plugins/io.rabiroute.agent.codex/src/config.ts` — binding fields, normalization and loopback validation
 - [x] `src/shared/agentInstance.ts` — instance-binding allowlist now includes `workbuddy`
 - [x] `ribiwebgui/` — agent card, task dropdown with liveness, workspace and gateway-address fields
 - [x] Rounded out this change's wording in `README.md`, `docs/README.md`, `docs/current-capabilities.md`, `版本更新日志.md`

@@ -1,0 +1,22 @@
+{
+  "exports": [
+    {
+      "name": "createMobilePluginOwner",
+      "source": "src/plugins/io.rabiroute.endpoint.rabilink/src/integrations/rabilink/mobilePluginOwner.ts"
+    },
+    {
+      "name": "createRabiLinkMobileOperations",
+      "source": "src/plugins/io.rabiroute.endpoint.rabilink/src/manager/rabiLinkMobileOperations.ts"
+    }
+  ],
+  "ownedPrefixes": [
+    "src/plugins/io.rabiroute.endpoint.rabilink/"
+  ],
+  "ownedSources": [
+    "src/plugins/io.rabiroute.endpoint.rabilink/src/manager/rabiLinkMobileOwner.ts",
+    "src/plugins/io.rabiroute.endpoint.rabilink/src/manager/rabiLinkMobileOperations.ts",
+    "src/plugins/io.rabiroute.endpoint.rabilink/src/manager/rabiLinkMobileContract.ts",
+    "src/plugins/io.rabiroute.endpoint.rabilink/src/manager/rabiLinkOwnerStore.ts"
+  ],
+  "packageId": "io.rabiroute.endpoint.rabilink"
+}

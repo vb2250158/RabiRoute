@@ -53,7 +53,7 @@ function lateSubscriptionFixture(t, f, observationMs) {
   const listeners = new Set(), observe = f.runtime.observeLatePreparedReceipt;
   const subscribe = listener => { listeners.add(listener); return () => listeners.delete(listener); };
   t.mock.method(f.runtime, "observeLatePreparedReceipt", function (delivery, connection, nativeSubscribe, nativeWindow) {
-    assert.equal(typeof nativeSubscribe, "function", "the official management bundle must export its original IPC subscriber");
+    assert.equal(nativeSubscribe, undefined, "native receipt events arrive from the original plugin event port");
     assert.equal(nativeWindow, 60_000, "connector observation shares the producer's existing default window");
     return observe.call(this, delivery, connection, subscribe, observationMs ?? nativeWindow);
   });
@@ -61,6 +61,18 @@ function lateSubscriptionFixture(t, f, observationMs) {
     event: method => ({ stage: "delivery_receipt_confirmed", outcome: "confirmed", late: true,
       deliveryMarker: f.delivery.deliveryId, threadId: f.delivery.target.sessionId, method }) };
 }
+
+test('workspace errors retain their code without serializing remote directories or guidance', async t => {
+  const f = fixture(t);
+  t.mock.method(f.runtime, 'agentPluginContext', async () => { throw Object.assign(new Error('Workspace conflict'), {
+    code: 'AGENT_WORKSPACE_MISMATCH', repair: '/private/remote', actualWorkspace: '/private/remote' }); });
+  f.runtime.handleManagerMessage(f.message('prepared_delivery'));
+  await Promise.all([...f.runtime.preparedDeliveries]);
+  const response = f.replies.find(value => value.type === 'managementResult');
+  assert.equal(response.errorCode, 'AGENT_WORKSPACE_MISMATCH');
+  assert.equal(response.repair, undefined); assert.equal(response.actualWorkspace, undefined);
+  assert.equal(f.replies.filter(value => value.type === 'managementResult').length, 1);
+});
 
 async function finishUnconfirmedFixtureCall(t, f) {
   // Simulate an original attempted frame with no receipt. This boundary cannot
@@ -282,6 +294,26 @@ test("late associations are replaced per original receipt owner and expire from 
   assert.equal(listeners.size, 1, "an unsettled native operation has not started its observation deadline");
   second.settle(); await new Promise(resolve => setTimeout(resolve, 35));
   assert.equal(listeners.size, 0); assert.equal(f.runtime.latePreparedObservations.size, 0);
+});
+
+test("the owned Codex plugin event wakes only the original observation and never creates a receipt or task", async t => {
+  const f = fixture(t);
+  const connection = { managerGuid: f.runtime.socketManagerGuid, credential: f.runtime.config.nodeCredential };
+  const observation = f.runtime.observeLatePreparedReceipt(f.delivery, connection, undefined, 60_000);
+  observation.settle();
+  const event = { provider: "codex", stage: "delivery_receipt_confirmed", outcome: "confirmed", late: true,
+    deliveryMarker: f.delivery.deliveryId, threadId: f.delivery.target.sessionId };
+  for (const wrong of [{ ...event, provider: "another" }, { ...event, deliveryMarker: "other" }, { ...event, threadId: "other" }]) {
+    f.runtime.handleAgentPluginEvent("agent.delivery-receipt", wrong);
+  }
+  assert.equal(f.replies.length, 0);
+  f.runtime.handleAgentPluginEvent("agent.delivery-receipt", event);
+  assert.deepEqual(f.replies, [{ type: "deliveryRecovery", deliveryId: f.delivery.deliveryId, generation: f.delivery.generation }]);
+  assert.equal(f.runtime.latePreparedObservations.size, 0);
+  f.runtime.handleAgentPluginEvent("agent.delivery-receipt", event);
+  assert.equal(f.replies.length, 1);
+  assert.equal(f.runtime.taskByThread.size, 0);
+  assert.equal(await f.receipts.readReceipt(f.delivery), undefined);
 });
 
 for (const evidence of ["accepted", "not_sent"]) test(`durable ${evidence} evidence immediately removes its native late listener`, async t => {

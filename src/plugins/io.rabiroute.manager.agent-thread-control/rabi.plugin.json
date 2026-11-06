@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 2,
+  "id": "io.rabiroute.manager.agent-thread-control",
+  "version": "0.1.1",
+  "displayName": "Agent 会话管理",
+  "description": "管理会话、任务请求与提醒",
+  "icon": "mdi-chat-processing",
+  "entries": {
+    "manager": {
+      "execution": "in_process",
+      "module": "./manager.mjs"
+    }
+  },
+  "provides": [
+    "manager.agent-thread-control@1"
+  ],
+  "requires": [
+    "host.manager.agent-thread-control@2",
+    "manager.core@1",
+    "manager.agent-adapter-catalog@1"
+  ],
+  "optional": [],
+  "permissions": []
+}

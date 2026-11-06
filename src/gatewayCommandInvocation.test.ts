@@ -3,6 +3,7 @@ import test from "node:test";
 import { resolveGatewayCommandInvocation } from "./gatewayCommandInvocation.js";
 
 test("gateway command invocation recognizes every one-shot entry", () => {
+  assert.equal(resolveGatewayCommandInvocation(["node", "index", "--system-event-stdin"]), "system-event-stdin");
   assert.equal(resolveGatewayCommandInvocation(["node", "index", "--wearable-health-alert-stdin"]), "wearable-health-alert-stdin");
   assert.equal(resolveGatewayCommandInvocation(["node", "index", "--delivery-replay=attempt-one"]), "delivery-replay");
   assert.equal(resolveGatewayCommandInvocation(["node", "index", "--delivery-replay-message=message-one"]), "delivery-replay");

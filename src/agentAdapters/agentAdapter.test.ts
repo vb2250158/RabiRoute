@@ -48,7 +48,7 @@ test("Agent adapter facade follows a rebuilt Gateway root", async () => {
 });
 
 test("device factory dispatches original binding into the device mailbox rather than generic PC delivery", async () => {
-  const { createDeviceAgentAdapter } = await import("./deviceAgentAdapter.js");
+  const { createDeviceAgentAdapter } = await import("../plugins/io.rabiroute.agent.device-agent/src/agentAdapters/deviceAgentAdapter.js");
   const binding = { instanceId: "pc-owner", agentId: "device-stable" };
   const calls: Array<{ binding: unknown; method: string; path: string; body: any }> = [];
   const adapter = createDeviceAgentAdapter(binding, { request: async (selected, method, path, body) => {
@@ -64,7 +64,7 @@ test("device factory dispatches original binding into the device mailbox rather 
 });
 
 test("unbound local device factory fails closed even when an isolated request is supplied", async () => {
-  const { createDeviceAgentAdapter } = await import("./deviceAgentAdapter.js");
+  const { createDeviceAgentAdapter } = await import("../plugins/io.rabiroute.agent.device-agent/src/agentAdapters/deviceAgentAdapter.js");
   let called = false;
   const adapter = createDeviceAgentAdapter(undefined, { request: async () => { called = true; throw new Error("unexpected request"); } });
   await assert.rejects(adapter.deliver({ deliveryId: "original-delivery", messageSource: { type: "system", eventType: "fixture", eventName: "Fixture", eventId: "event" }, messageContent: "fixture" }), /BINDING_REQUIRED/);

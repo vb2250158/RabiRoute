@@ -87,8 +87,24 @@ export async function prepareAutomaticUpdate(options) {
 
 if (parentPort) {
   const controller = new AbortController();
-  parentPort.on("message", message => { if (message === "cancel") controller.abort(new Error("Automatic build cancelled.")); });
-  try { parentPort.postMessage(await prepareAutomaticUpdate({ ...workerData, signal: controller.signal })); }
+  const pendingRuns = new Map();
+  let nextRun = 0;
+  parentPort.on("message", message => {
+    if (message === "cancel") controller.abort(new Error("Automatic build cancelled."));
+    if (message?.type === "run-node-result") {
+      const pending = pendingRuns.get(message.id);
+      if (!pending) return;
+      pendingRuns.delete(message.id);
+      message.error ? pending.reject(new Error(message.error)) : pending.resolve();
+    }
+  });
+  const run = (root, arguments_) => new Promise((resolve, reject) => {
+    controller.signal.throwIfAborted();
+    const id = ++nextRun;
+    pendingRuns.set(id, { resolve, reject });
+    parentPort.postMessage({ type: "run-node", id, root, arguments: arguments_ });
+  });
+  try { parentPort.postMessage(await prepareAutomaticUpdate({ ...workerData, run, signal: controller.signal })); }
   catch (error) { parentPort.postMessage({ state: "failed", reasons: [{ reason: error instanceof Error ? error.message : String(error) }] }); }
   finally { parentPort.close(); }
 }

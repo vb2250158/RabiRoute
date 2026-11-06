@@ -728,7 +728,7 @@ test("uninstall removes only a fully validated active version and preserves fore
   const fixture = makeFixture();
   try {
     assert.equal(run(fixture).status, 0);
-    const stableRuntime = path.join(fixture.install, "runtime", "node.exe");
+    const stableRuntime = path.join(fixture.install, "runtime", "RabiRoute.Runtime.exe");
     fs.mkdirSync(path.dirname(stableRuntime), { recursive: true });
     fs.copyFileSync(path.join(fixture.install, "versions", fixture.releaseId, "node.exe"), stableRuntime);
     fs.mkdirSync(path.join(fixture.install, "data"), { recursive: true });
@@ -989,4 +989,116 @@ test("installer embeds the exact portable ZIP and has no flat overwrite or unfen
   assert.match(uninstallContract, /Remove-StableNodeRuntime/);
   assert.match(uninstallContract, /Manifest content mismatch/);
   assert.match(uninstallContract, /Active release file set does not match its manifest/);
+});
+
+function seedOwnedLegacyStableRuntime(fixture) {
+  const staging = path.join(fixture.install, "versions", "old-stable-build");
+  for (const relative of ["RabiRouteHost.Core.dll", "node.exe", "dist/manager.js", "ribiwebgui/dist/index.html", "desktop-runtime/main.py", "desktop-runtime/python/python.exe"]) {
+    const file = path.join(staging, ...relative.split("/"));
+    fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, `previous-before-branding:${relative}`);
+  }
+  const manifest = writeManifest(staging, "8.8.8"), version = path.join(fixture.install, "versions", manifest.releaseId);
+  fs.renameSync(staging, version);
+  fixture.previousReleaseId = manifest.releaseId;
+  fixture.previousPointer = `${JSON.stringify({ schemaVersion: 1, appId: "io.rabiroute.windows", releaseId: manifest.releaseId,
+    versionPath: `versions/${manifest.releaseId}`, payloadSha256: manifest.payloadSha256 })}\n`;
+  fs.writeFileSync(path.join(fixture.install, "current.json"), fixture.previousPointer);
+  const stable = path.join(fixture.install, "runtime", "node.exe");
+  fs.mkdirSync(path.dirname(stable), { recursive: true }); fs.copyFileSync(path.join(version, "node.exe"), stable);
+  return { stable, version, bytes: fs.readFileSync(stable) };
+}
+
+test("legacy stable runtime migration quarantines only the previous manifest-owned copy before branded uninstall", { skip: process.platform !== "win32" }, () => {
+  const fixture = makeFixture(), legacy = seedOwnedLegacyStableRuntime(fixture);
+  try {
+    fs.writeFileSync(path.join(fixture.install, "runtime", "foreign.keep"), "private foreign runtime data");
+    const installed = run(fixture); assert.equal(installed.status, 0, installed.stderr || installed.stdout);
+    assert.equal(fs.existsSync(legacy.stable), false);
+    const quarantine = path.join(fixture.install, ".rabiroute-quarantine");
+    const retired = fs.readdirSync(quarantine, { recursive: true }).map(String).filter(relative => relative.endsWith(path.join("runtime", "node.exe.retired")));
+    assert.equal(retired.length, 1); assert.deepEqual(fs.readFileSync(path.join(quarantine, retired[0])), legacy.bytes);
+    assert.deepEqual(fs.readFileSync(path.join(legacy.version, "node.exe")), legacy.bytes, "immutable rollback release remains unchanged");
+    const branded = path.join(fixture.install, "runtime", "RabiRoute.Runtime.exe");
+    fs.copyFileSync(path.join(fixture.install, "versions", fixture.releaseId, "node.exe"), branded);
+    const removed = runUninstall(fixture, false); assert.equal(removed.status, 0, removed.stderr || removed.stdout);
+    assert.equal(fs.existsSync(branded), false); assert.equal(fs.existsSync(legacy.stable), false);
+    assert.equal(fs.readFileSync(path.join(fixture.install, "runtime", "foreign.keep"), "utf8"), "private foreign runtime data");
+    assert.deepEqual(fs.readFileSync(path.join(quarantine, retired[0])), legacy.bytes, "existing inert retired evidence is retained");
+  } finally { cleanupFixture(fixture); }
+});
+
+for (const fault of ["after-pointer", "after-version-move-before-journal"]) {
+  test(`legacy stable runtime rollback restores original bytes and pointer after ${fault}`, { skip: process.platform !== "win32" }, () => {
+    const fixture = makeFixture(), legacy = seedOwnedLegacyStableRuntime(fixture);
+    try {
+      const before = fs.readFileSync(path.join(fixture.install, "current.json"));
+      const failed = run(fixture, fault); assert.notEqual(failed.status, 0);
+      if (fault === "after-version-move-before-journal") {
+        assert.equal(failed.status, 97); assert.equal(fs.existsSync(legacy.stable), false);
+        const recovered = run(fixture, "", { recoverOnly: true }); assert.equal(recovered.status, 0, recovered.stderr || recovered.stdout);
+      }
+      assert.deepEqual(fs.readFileSync(legacy.stable), legacy.bytes);
+      assert.deepEqual(fs.readFileSync(path.join(fixture.install, "current.json")), before);
+      assert.deepEqual(fs.readFileSync(path.join(legacy.version, "node.exe")), legacy.bytes);
+      assert.equal(fs.existsSync(path.join(fixture.install, "versions", fixture.releaseId)), false);
+    } finally { cleanupFixture(fixture); }
+  });
+}
+
+for (const kind of ["foreign-bytes", "unknown-pointer", "tampered-previous-payload", "reparse-runtime", "reparse-stable-entry", "reparse-stable-file"]) {
+  test(`legacy stable runtime preserves ${kind} without adding an activation gate`, { skip: process.platform !== "win32" }, context => {
+    const fixture = makeFixture(), legacy = seedOwnedLegacyStableRuntime(fixture);
+    let external;
+    try {
+      if (kind === "foreign-bytes") fs.writeFileSync(legacy.stable, Buffer.alloc(legacy.bytes.length, 120));
+      if (kind === "unknown-pointer") fs.writeFileSync(path.join(fixture.install, "current.json"), '{"schemaVersion":1,"appId":"io.rabiroute.windows","releaseId":"unknown","versionPath":"versions/unknown","payloadSha256":"unproven"}');
+      if (kind === "tampered-previous-payload") fs.appendFileSync(path.join(legacy.version, "node.exe"), "tampered");
+      if (kind === "reparse-runtime") {
+        external = path.join(fixture.root, "explicit-external-runtime");
+        fs.renameSync(path.dirname(legacy.stable), external); fs.symlinkSync(external, path.dirname(legacy.stable), "junction");
+      }
+      if (kind === "reparse-stable-entry") {
+        // Directory junctions require no Windows file-symlink privilege. Keep
+        // a real reparse entry at the exact retired path and preserve its target.
+        external = path.join(fixture.root, "external-stable-entry"); fs.mkdirSync(external);
+        fs.renameSync(legacy.stable, path.join(external, "node.exe")); fs.symlinkSync(external, legacy.stable, "junction");
+      }
+      if (kind === "reparse-stable-file") {
+        external = path.join(fixture.root, "external-node.exe"); fs.renameSync(legacy.stable, external);
+        try { fs.symlinkSync(external, legacy.stable, "file"); }
+        catch (error) {
+          if (error.code !== "EPERM") throw error;
+          fs.renameSync(external, legacy.stable);
+          context.skip("Windows denied file-symlink creation (EPERM); file-symlink guard was not dynamically exercised. Original failing evidence is retained separately.");
+          return;
+        }
+      }
+      const retained = kind === "reparse-stable-entry" ? path.join(legacy.stable, "node.exe") : legacy.stable;
+      const before = fs.readFileSync(retained);
+      const installed = run(fixture); assert.equal(installed.status, 0, installed.stderr || installed.stdout);
+      assert.deepEqual(fs.readFileSync(retained), before);
+      assert.equal(fs.existsSync(path.join(fixture.install, ".rabiroute-quarantine")), false);
+      if (external) assert.equal(fs.lstatSync(kind === "reparse-runtime" ? path.dirname(legacy.stable) : legacy.stable).isSymbolicLink(), true);
+      const branded = path.join(fixture.install, "runtime", "RabiRoute.Runtime.exe");
+      fs.copyFileSync(path.join(fixture.install, "versions", fixture.releaseId, "node.exe"), branded);
+      const brandedBytes = fs.readFileSync(branded);
+      const removed = runUninstall(fixture, false); assert.equal(removed.status, 0, removed.stderr || removed.stdout);
+      assert.deepEqual(fs.readFileSync(retained), before, "unknown or foreign stable path remains outside uninstall ownership");
+      if (kind === "reparse-runtime") assert.deepEqual(fs.readFileSync(branded), brandedBytes, "do not traverse or clean the external runtime target");
+      else assert.equal(fs.existsSync(branded), false);
+    } finally { cleanupFixture(fixture); }
+  });
+}
+
+test("legacy stable runtime uninstall removes both proven active names and preserves unrelated files", { skip: process.platform !== "win32" }, () => {
+  const fixture = makeFixture();
+  try {
+    const installed = run(fixture); assert.equal(installed.status, 0, installed.stderr || installed.stdout);
+    const runtime = path.join(fixture.install, "runtime"); fs.mkdirSync(runtime);
+    for (const name of ["node.exe", "RabiRoute.Runtime.exe"]) fs.copyFileSync(path.join(fixture.install, "versions", fixture.releaseId, "node.exe"), path.join(runtime, name));
+    fs.writeFileSync(path.join(runtime, "foreign.keep"), "foreign");
+    const removed = runUninstall(fixture, false); assert.equal(removed.status, 0, removed.stderr || removed.stdout);
+    for (const name of ["node.exe", "RabiRoute.Runtime.exe"]) assert.equal(fs.existsSync(path.join(runtime, name)), false);
+    assert.equal(fs.readFileSync(path.join(runtime, "foreign.keep"), "utf8"), "foreign");
+  } finally { cleanupFixture(fixture); }
 });

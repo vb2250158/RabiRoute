@@ -6,6 +6,7 @@ import test from "node:test";
 import { ManagerConfigRepository } from "./configRepository.js";
 import {
   DEFAULT_RECENT_MESSAGE_LIMIT,
+  gatewayRuntimeAdapterTypes,
   normalizeCodexHookSettings,
   type GatewayDefinition
 } from "../shared/gatewayConfigModel.js";
@@ -586,4 +587,26 @@ test("repository removes deleted route config files but preserves route history"
   assert.equal(fs.existsSync(keepConfigPath), true);
   assert.equal(fs.existsSync(removedConfigPath), false);
   assert.equal(fs.existsSync(removedHistoryPath), true);
+});
+
+
+test("ordinary repository persona saves retain the stored schedule migration boundary", () => {
+  const rootDir = makeTempRoot();
+  try {
+    const repo = new ManagerConfigRepository({ rootDir, managerPort: 31337 });
+    const rules = [{ id: "original-task", enabled: true,
+      trigger: { type: "schedule", schedule: { id: "clock", type: "interval", intervalSeconds: 60 } },
+      action: { type: "deliver_agent", target: { kind: "recipient", recipientId: "primary" }, message: "keep" } }];
+    writeJson(repo.adapterConfigPath("main"), { agentRoleId: "Example", gatewayPort: 23001, enabled: true,
+      messageAdapters: ["heartbeat"], messageAdaptersDisabled: ["heartbeat"] });
+    for (const migrated of [false, true]) {
+      writeJson(repo.personaConfigPath("Example"), { automationRules: rules, ...(migrated ? { automationScheduleSchemaVersion: 1 } : {}) });
+      repo.writePersonaConfig("Example", { languageStyle: { styleSkillUrl: "changed-style" } });
+      const saved = JSON.parse(fs.readFileSync(repo.personaConfigPath("Example"), "utf8"));
+      assert.equal(saved.automationScheduleSchemaVersion, migrated ? 1 : undefined);
+      const gateway = repo.readConfig().gateways.find(route => route.id === "main")!;
+      assert.equal(gateway.automationRules!.find(rule => rule.id === "original-task")!.enabled, true);
+      assert.equal(gatewayRuntimeAdapterTypes(gateway).includes("heartbeat"), migrated);
+    }
+  } finally { fs.rmSync(rootDir, { recursive: true, force: true }); }
 });

@@ -161,6 +161,18 @@ test("launcher control returns long Unicode status without losing the existing o
   await f.stopped(); assert.equal(await launcher.closed, 0);
 });
 
+test("Windows owner death also closes a worker whose event loop cannot process IPC", { skip: process.platform !== "win32" }, async t => {
+  const f = fixture(t);
+  fs.appendFileSync(path.join(f.root, "worker.mjs"), "\nAtomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0);\n");
+  const owner = f.run();
+  await f.ready();
+  const pid = f.started()[0].pid;
+  owner.child.kill("SIGKILL");
+  await owner.closed;
+  await waitFor(() => !alive(pid), "blocked worker closed with Windows owner");
+  assert.equal(alive(pid), false);
+});
+
 test("launcher preserves abnormal-exit backoff and finite restart budget", async t => {
   const f = fixture(t, process.platform, "crash"); const launcher = f.run();
   await waitFor(() => launcher.done, "restart budget exhausted"); assert.equal(await launcher.closed, 1);

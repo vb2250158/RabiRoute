@@ -3,7 +3,7 @@ import { scanAgentAdapters } from "./managerApi.js";
 import { handleAgentThreadRequest, type AgentThreadRequest } from "../agentThreads.js";
 export { EndpointTransportReceipts } from "../agentRequests/endpointTransportReceipts.js";
 export { sameAgentEndpoint } from "../agentRequests/endpoint.js";
-export { subscribeCodexDesktopDelivery, CODEX_DESKTOP_LATE_RECEIPT_WINDOW_MS } from "../codexDesktopBridge.js";
+export { CODEX_DESKTOP_LATE_RECEIPT_WINDOW_MS } from "./codexContracts.js";
 import { executePreparedEndpointDelivery, type EndpointExecutionContext } from "../agentRequests/endpointExecution.js";
 import type { PreparedEndpointDelivery } from "../agentRequests/endpointDelivery.js";
 import { executeEndpointOnOwner, recoverEndpointOwnerReceipt } from "../agentRequests/ownerExecution.js";

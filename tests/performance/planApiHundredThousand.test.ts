@@ -86,7 +86,7 @@ if (process.argv.includes(workerArgument)) {
       fs.writeFileSync(profile, JSON.stringify({ schemaVersion: 2,
         readyRequires: pluginNames.map(name => `manager.${name}@1`),
         instances: pluginNames.map(name => ({ id: `manager:${name}`, package: `io.rabiroute.manager.${name}`, version: "1.0.0", enabled: true, config: {}, grants: [] })) }));
-      const { ensurePersonaPlanWorkflow } = await import(pathToFileURL(path.join(packageRoot, "dist/personaPlanWorkflow.js")).href);
+      const { ensurePersonaPlanWorkflow } = await import(pathToFileURL(path.join(packageRoot, "dist/plugins/io.rabiroute.manager.persona/src/personaPlanWorkflow.js")).href);
       const workflow = ensurePersonaPlanWorkflow(roleRoot).workflow;
       const statuses = [workflow.roles.analysis, workflow.roles.execution, workflow.roles.waitingQa];
       assert.ok(statuses.every(item => typeof item === "string"), JSON.stringify(workflow.roles));

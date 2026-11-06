@@ -33,7 +33,7 @@ In **Role configuration**, open the second tab, **Message adapters**, and choose
 
 ## Step 2: add a message input
 
-In the message-input card, choose **Add message input**, then **Heartbeat**. This internal source requires no QQ login. Configure scheduled rules later under the role's automation and message rules.
+Configure scheduled tasks directly under **Automation → Scheduled tasks**. No message connector or QQ login is required. Add a message connector only when a chat platform should trigger the role.
 
 ![Earlier interface showing message inputs and Codex parameters](../../assets/screenshots/webgui-adapters-en.png)
 

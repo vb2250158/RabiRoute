@@ -8,6 +8,8 @@ import { generatePluginApiTypes } from "./generate-plugin-api-types.mjs";
 import { fileURLToPath } from "node:url";
 import { webPatchInputHash } from "./lib/web-patch-inputs.mjs";
 import { bundleMessageEndpointRuntime, bundleMessageEndpointWorker } from "./build-message-endpoint-runtime.mjs";
+import { pluginSourceDirectory } from "./lib/plugin-source-layout.mjs";
+import { copyPluginPublicSource, isPublicPluginInput } from "../plugins/contracts/plugin-sdk/public-source.mjs";
 
 async function pathExists(target) {
   try { await fs.access(target); return true; } catch { return false; }
@@ -40,7 +42,7 @@ async function bundlePluginSdk(packageRoot, manifest, sdkSource) {
       await fs.writeFile(entryPath, bundled, "utf8");
     }
   }
-  if (sdkRequired) await fs.cp(sdkSource, sdkTarget, { recursive: true, force: true });
+  if (sdkRequired) await copyPluginPublicSource(sdkSource, sdkTarget, { replace: true, runtime: true });
 }
 
 async function physicalPath(target) {
@@ -81,7 +83,12 @@ async function validateOutputLocation(root, outputRoot, targets) {
 
 async function hashInputs(root, inputs) {
   const files = [];
+  const visited = new Set();
   async function walk(file) {
+    file = path.resolve(file);
+    if (visited.has(file)) return;
+    visited.add(file);
+    if (!isPublicPluginInput(root, file)) return;
     const stat = await fs.lstat(file);
     if (stat.isSymbolicLink()) throw new Error(`Build input must be materialized before packaging: ${file}`);
     if (stat.isDirectory()) {
@@ -132,7 +139,7 @@ export async function buildPluginPackages(root = process.cwd(), options = {}) {
   const endpointInputs = new Set();
   for (const instance of unique) {
     for (const name of ["runtime.build.json", "manager-runtime.build.json", "egress-runtime.build.json"]) {
-      const specificationPath = path.join(sourceRoot, "builtin", encodeURIComponent(instance.package), instance.version, name);
+      const specificationPath = path.join(pluginSourceDirectory(root, instance.package), name);
       if (!await pathExists(specificationPath)) continue;
       const specification = JSON.parse(await fs.readFile(specificationPath, "utf8"));
       const bundle = await bundleMessageEndpointRuntime(root, specification);
@@ -144,11 +151,11 @@ export async function buildPluginPackages(root = process.cwd(), options = {}) {
     }
   }
   const contractSource = path.join(root, "src/manager/apiOperationContract.ts");
-  const inputPaths = [profilePath, path.join(sourceRoot, "contracts/plugin-sdk"), contractSource,
+  const inputPaths = [profilePath, path.join(sourceRoot, "profiles/package-migrations.json"), path.join(sourceRoot, "contracts/plugin-sdk"), path.join(sourceRoot, "contracts/host-api"), contractSource,
     path.join(root, "scripts/build-plugin-packages.mjs"), path.join(root, "scripts/build-message-endpoint-runtime.mjs"), path.join(root, "scripts/generate-plugin-api-types.mjs"),
     path.join(root, "scripts/lib/web-patch-inputs.mjs"),
     ...endpointInputs,
-    path.join(root, "package-lock.json"), ...unique.map(instance => path.join(sourceRoot, "builtin", encodeURIComponent(instance.package), instance.version))];
+    path.join(root, "package-lock.json"), ...unique.map(instance => pluginSourceDirectory(root, instance.package))];
   const inputSelections = inputPaths.map(input => path.relative(root, input).replaceAll("\\", "/"));
   await fs.mkdir(path.dirname(outputRoot), { recursive: true });
   const stageRoot = await fs.mkdtemp(path.join(path.dirname(outputRoot), ".plugin-build-"));
@@ -168,14 +175,19 @@ export async function buildPluginPackages(root = process.cwd(), options = {}) {
       const destination = path.join(rawRoot, path.relative(root, input));
       await fs.mkdir(path.dirname(destination), { recursive: true });
       if (input === profilePath) await fs.writeFile(destination, profileBytes);
-      else await fs.cp(input, destination, { recursive: true, verbatimSymlinks: true });
+      else await fs.cp(input, destination, { recursive: true, verbatimSymlinks: true,
+        filter: file => isPublicPluginInput(root, file) });
     }
     const rawPaths = inputPaths.map(input => path.join(rawRoot, path.relative(root, input)));
     const inputs = await hashInputs(rawRoot, rawPaths);
     if ((await hashInputs(root, inputPaths)).sha256 !== inputs.sha256) throw new Error("Plugin build inputs changed while freezing; prepare a new candidate.");
     await options.afterInputSnapshot?.();
     await fs.mkdir(stagedProfilesRoot, { recursive: true });
-    if (!targets) await fs.copyFile(path.join(rawRoot, "plugins/profiles/desktop.json"), path.join(stagedProfilesRoot, "desktop.json"));
+    if (!targets) {
+      await fs.copyFile(path.join(rawRoot, "plugins/profiles/desktop.json"), path.join(stagedProfilesRoot, "desktop.json"));
+      const migrations = path.join(rawRoot, "plugins/profiles/package-migrations.json");
+      if (await pathExists(migrations)) await fs.copyFile(migrations, path.join(stagedProfilesRoot, "package-migrations.json"));
+    }
     await fs.cp(path.join(rawRoot, "plugins/contracts/plugin-sdk"), sdkSource, { recursive: true });
     const rawContract = path.join(rawRoot, "src/manager/apiOperationContract.ts");
     if (await pathExists(rawContract)) {
@@ -187,7 +199,7 @@ export async function buildPluginPackages(root = process.cwd(), options = {}) {
     for (const instance of unique) {
       if (!instance || typeof instance.package !== "string" || typeof instance.version !== "string") throw new Error("Plugin profile entry is invalid.");
       const encodedPackage = encodeURIComponent(instance.package);
-      const source = path.join(rawRoot, "plugins/builtin", encodedPackage, instance.version);
+      const source = pluginSourceDirectory(rawRoot, instance.package);
       const stagedTarget = path.join(stagedPackagesRoot, encodedPackage, instance.version);
       const manifest = JSON.parse(await fs.readFile(path.join(source, "rabi.plugin.json"), "utf8"));
       if (manifest.id !== instance.package || manifest.version !== instance.version || manifest.schemaVersion !== 2) {
@@ -197,7 +209,7 @@ export async function buildPluginPackages(root = process.cwd(), options = {}) {
         throw new Error(`Plugin package uses a removed manifest shape: ${instance.id}.`);
       }
       await fs.mkdir(path.dirname(stagedTarget), { recursive: true });
-      await fs.cp(source, stagedTarget, { recursive: true, force: true });
+      await copyPluginPublicSource(source, stagedTarget, { replace: true, runtime: true });
       for (const name of ["runtime.build.json", "manager-runtime.build.json", "egress-runtime.build.json"]) {
         const endpointBuild = path.join(source, name);
         if (await pathExists(endpointBuild)) {
@@ -224,7 +236,9 @@ export async function buildPluginPackages(root = process.cwd(), options = {}) {
       copied.push(`${instance.package}@${instance.version}`);
     }
 
-    await fs.cp(sdkSource, path.join(stageRoot, "contracts", "plugin-sdk"), { recursive: true, force: true });
+    await copyPluginPublicSource(sdkSource, path.join(stageRoot, "contracts", "plugin-sdk"), { replace: true, runtime: true });
+    const hostApiSource = path.join(rawRoot, "plugins/contracts/host-api");
+    if (await pathExists(hostApiSource)) await fs.cp(hostApiSource, path.join(stageRoot, "contracts", "host-api"), { recursive: true });
 
     const preparedMs = performance.now() - started;
     const outputExisted = await pathExists(outputRoot);
@@ -272,6 +286,11 @@ export async function buildPluginPackages(root = process.cwd(), options = {}) {
     await beforePublishStep("profile:desktop.json");
     await fs.rm(outputProfilePath, { force: true });
     await fs.rename(path.join(stagedProfilesRoot, "desktop.json"), outputProfilePath);
+    const stagedMigrations = path.join(stagedProfilesRoot, "package-migrations.json");
+    if (await pathExists(stagedMigrations)) {
+      await fs.rm(path.join(profilesRoot, "package-migrations.json"), { force: true });
+      await fs.rename(stagedMigrations, path.join(profilesRoot, "package-migrations.json"));
+    }
 
     }
 

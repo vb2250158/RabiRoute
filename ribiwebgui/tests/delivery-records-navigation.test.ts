@@ -1,9 +1,13 @@
+import { registerSourcePluginTranslations } from "./plugin-translation-test-host";
 import assert from "node:assert/strict";
 import test from "node:test";
-import { activateDiagnostics } from "../src/bundles/builtinWebContributions";
+import { activateDiagnostics } from "../../src/plugins/io.rabiroute.manager.diagnostics/web/contributions";
 import { buildWebNavigation } from "../src/pluginNavigation";
 import { activateWebPluginForTest } from "./web-plugin-test-host";
-import { translateText } from "../src/i18n";
+import { translateText } from "../src/i18n/index";
+
+const disposePluginTranslations = await registerSourcePluginTranslations();
+test.after(disposePluginTranslations);
 
 test("delivery navigation has Chinese, English and Japanese titles", () => {
   assert.equal(translateText("投递记录", "zh-CN"), "投递记录");
@@ -14,7 +18,7 @@ test("delivery navigation has Chinese, English and Japanese titles", () => {
 test("the actual diagnostics plugin exposes delivery records through its owned utility navigation", async () => {
   const owner = { instanceId: "manager:diagnostics", pluginId: "io.rabiroute.manager.diagnostics" };
   const contributions: unknown[] = [];
-  const { activate } = await import("../../plugins/builtin/io.rabiroute.manager.diagnostics/1.0.0/manager.mjs");
+  const { activate } = await import("../../src/plugins/io.rabiroute.manager.diagnostics/manager.mjs");
   // Register actual contributions without starting the plugin's Manager effects.
   await activate({
     identity: owner,

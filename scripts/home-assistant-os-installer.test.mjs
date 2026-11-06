@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 
 test("HA OS discovery selects a responding 80 or 8123 endpoint and ignores unready addresses", { skip: process.platform !== "win32" }, () => {
-  const source = fileURLToPath(new URL("./Install-HomeAssistantOs.ps1", import.meta.url));
+  const source = fileURLToPath(new URL("../src/plugins/io.rabiroute.manager.xiaomi-home/scripts/Install-HomeAssistantOs.ps1", import.meta.url));
   const script = `
 $ErrorActionPreference='Stop'; $tokens=$null; $errors=$null
 $ast=[System.Management.Automation.Language.Parser]::ParseFile('${source.replaceAll("'", "''")}',[ref]$tokens,[ref]$errors)
@@ -30,7 +30,7 @@ test("read-only observation verifies VM ownership and never starts or mutates th
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   fs.writeFileSync(path.join(root, "image.json"), "{}", "utf8");
   fs.writeFileSync(path.join(root, "status.json"), "unchanged", "utf8");
-  const source = fileURLToPath(new URL("./Install-HomeAssistantOs.ps1", import.meta.url));
+  const source = fileURLToPath(new URL("../src/plugins/io.rabiroute.manager.xiaomi-home/scripts/Install-HomeAssistantOs.ps1", import.meta.url));
   const literal = value => `'${value.replaceAll("'", "''")}'`;
   const script = `
 $ErrorActionPreference='Stop'; $tokens=$null; $errors=$null
@@ -64,7 +64,7 @@ if(-not $rejected -or $script:probes -ne $before){throw 'Foreign VM was accepted
 });
 
 test("read-only VM ownership rejects a reparse-point disk in its chain", { skip: process.platform !== "win32" }, () => {
-  const source = fileURLToPath(new URL("./Install-HomeAssistantOs.ps1", import.meta.url));
+  const source = fileURLToPath(new URL("../src/plugins/io.rabiroute.manager.xiaomi-home/scripts/Install-HomeAssistantOs.ps1", import.meta.url));
   const literal = value => `'${value.replaceAll("'", "''")}'`;
   const script = `
 $tokens=$null; $errors=$null
@@ -88,7 +88,7 @@ test("HA readiness requires an HA response and never follows redirects", { skip:
   });
   await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
   t.after(() => server.close());
-  const source = fileURLToPath(new URL("./Install-HomeAssistantOs.ps1", import.meta.url));
+  const source = fileURLToPath(new URL("../src/plugins/io.rabiroute.manager.xiaomi-home/scripts/Install-HomeAssistantOs.ps1", import.meta.url));
   const script = `
 $tokens=$null; $errors=$null
 $ast=[System.Management.Automation.Language.Parser]::ParseFile('${source.replaceAll("'", "''")}',[ref]$tokens,[ref]$errors)
@@ -105,7 +105,7 @@ if(Test-HomeAssistantCore '127.0.0.1' ${server.address().port}) { 'ready' } else
 test("legacy credential migration requires the matching VM receipt and current OS mapping", { skip: process.platform !== "win32" }, t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "haos-legacy-binding-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  const source = fileURLToPath(new URL("./Install-HomeAssistantOs.ps1", import.meta.url));
+  const source = fileURLToPath(new URL("../src/plugins/io.rabiroute.manager.xiaomi-home/scripts/Install-HomeAssistantOs.ps1", import.meta.url));
   fs.writeFileSync(path.join(root, "loopback-proxy.json"), JSON.stringify({ address: "192.0.2.1", port: 80, vmId: "test-vm" }));
   const script = `
 $ErrorActionPreference='Stop'; $tokens=$null; $errors=$null
@@ -128,7 +128,7 @@ if(Test-OwnedLegacyLoopback @{Id='test-vm'}){throw 'Changed mapping accepted'}
 });
 
 test("Core recovery uses one graceful owned-VM restart and refuses a failed shutdown", { skip: process.platform !== "win32" }, () => {
-  const source = fileURLToPath(new URL("./Install-HomeAssistantOs.ps1", import.meta.url));
+  const source = fileURLToPath(new URL("../src/plugins/io.rabiroute.manager.xiaomi-home/scripts/Install-HomeAssistantOs.ps1", import.meta.url));
   const script = `
 $ErrorActionPreference='Stop'; $tokens=$null; $errors=$null
 $ast=[System.Management.Automation.Language.Parser]::ParseFile('${source.replaceAll("'", "''")}',[ref]$tokens,[ref]$errors)
@@ -161,14 +161,14 @@ test("unapproved background recovery fails without changing status or requesting
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const status = JSON.stringify({ state: "installed", message: "test-only-existing-state" });
   fs.writeFileSync(path.join(root, "status.json"), status);
-  const source = fileURLToPath(new URL("./Install-HomeAssistantOs.ps1", import.meta.url));
+  const source = fileURLToPath(new URL("../src/plugins/io.rabiroute.manager.xiaomi-home/scripts/Install-HomeAssistantOs.ps1", import.meta.url));
   await assert.rejects(promisify(execFile)("powershell.exe", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", source,
     "-Operation", "Recover", "-Root", root, "-AutoStart", "yes"], { windowsHide: true, timeout: 15000, cwd: process.env.SystemRoot }), /Administrator approval is required at Rabi Host startup/);
   assert.equal(fs.readFileSync(path.join(root, "status.json"), "utf8"), status);
 });
 
 test("HA OS ownership accepts its checkpoint chain and rejects foreign or cyclic disks", { skip: process.platform !== "win32" }, () => {
-  const source = fileURLToPath(new URL("./Install-HomeAssistantOs.ps1", import.meta.url));
+  const source = fileURLToPath(new URL("../src/plugins/io.rabiroute.manager.xiaomi-home/scripts/Install-HomeAssistantOs.ps1", import.meta.url));
   const script = `
 $ErrorActionPreference = 'Stop'
 $tokens=$null; $errors=$null
@@ -193,7 +193,7 @@ test("Windows PowerShell can atomically replace HA OS progress more than once", 
     assert.equal(path.dirname(root), fs.realpathSync(os.tmpdir()));
     fs.rmSync(root, { recursive: true, force: true });
   });
-  const source = fileURLToPath(new URL("./Install-HomeAssistantOs.ps1", import.meta.url));
+  const source = fileURLToPath(new URL("../src/plugins/io.rabiroute.manager.xiaomi-home/scripts/Install-HomeAssistantOs.ps1", import.meta.url));
   const literal = value => `'${value.replaceAll("'", "''")}'`;
   const script = `
 $ErrorActionPreference = 'Stop'
@@ -228,7 +228,7 @@ test("HA OS download reports actual bytes and rejects truncated responses", { sk
   });
   await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
   t.after(() => server.close());
-  const source = fileURLToPath(new URL("./Install-HomeAssistantOs.ps1", import.meta.url));
+  const source = fileURLToPath(new URL("../src/plugins/io.rabiroute.manager.xiaomi-home/scripts/Install-HomeAssistantOs.ps1", import.meta.url));
   const literal = value => `'${value.replaceAll("'", "''")}'`;
   const script = `
 $ErrorActionPreference='Stop'

@@ -1,5 +1,5 @@
 import { getTimeoutMs } from "../shared/timeoutSettings.js";
-import { TERMINAL_LIMITS } from "../../apps/rabi-agent/lib/interactive-protocol.mjs";
+import { TERMINAL_LIMITS } from "../shared/agentInteractiveProtocol.js";
 export type RemoteTerminalEvent = { sequence: number; type: string; data?: string; exitCode?: number | null };
 type Session = { events: RemoteTerminalEvent[]; bytes: number; sequence: number; ended: boolean; listeners: Set<(event: RemoteTerminalEvent) => void> };
 
@@ -50,7 +50,7 @@ export class LanAgentTerminals {
     assertAuthorized();
     const key = this.key(instanceId, terminalId);
     const session = this.sessions.get(key);
-    if (!session) throw new Error("Terminal stream not found. Open the session on this connection first.");
+    if (!session) throw Object.assign(new Error("Terminal stream not found. Open the session on this connection first."), { code: "TERMINAL_STREAM_NOT_FOUND" });
     if (!Number.isSafeInteger(after) || after < 0 || after > session.sequence) throw new Error("Invalid terminal output cursor.");
     if (!Number.isInteger(waitMs) || waitMs < 0 || waitMs > getTimeoutMs("agent.terminalWait", TERMINAL_LIMITS.waitMs)) throw new Error(`waitMs must be between 0 and ${getTimeoutMs("agent.terminalWait", TERMINAL_LIMITS.waitMs)}.`);
     if (waitMs && after === session.sequence && !session.ended) {
@@ -86,7 +86,7 @@ export class LanAgentTerminals {
   }
   subscribe(instanceId: string, terminalId: string, after: number, listener: (event: RemoteTerminalEvent) => void): () => void {
     const session = this.sessions.get(this.key(instanceId, terminalId));
-    if (!session) throw new Error("Terminal stream not found. Query or open the session first.");
+    if (!session) throw Object.assign(new Error("Terminal stream not found. Query or open the session first."), { code: "TERMINAL_STREAM_NOT_FOUND" });
     if (!Number.isSafeInteger(after) || after < 0 || after > session.sequence) throw new Error("Invalid terminal output cursor.");
     const oldest = session.events[0]?.sequence ?? 1;
     if (after < oldest - 1) listener({ type: "gap", sequence: oldest - 1, data: "Earlier terminal output was discarded from the bounded buffer." });

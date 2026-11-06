@@ -10,7 +10,7 @@ import { recordingArchiveAdminFixtureHandler as recordingArchiveAdminHandler } f
 import { LanAgentAuthority } from "./lanAgentAuthority.js";
 import { evaluateLanAgentRequest } from "./lanAgentRequestAccess.js";
 import { RabiGlobalConfigStore } from "./globalConfig.js";
-import { assertLanAgentBodyAuthority, registerLanAgentBodyGuard } from "./lanAgentBodyAuthority.js";
+import { registerLanAgentBodyGuard } from "./lanAgentBodyAuthority.js";
 
 const input = { owner: "phone", roleId: "role", storageNamespaceId: "11111111-2222-3333-4444-555555555555", provision: true, enabled: true, expectedRevision: 0 };
 function deferred() {
@@ -34,9 +34,7 @@ async function fixture(t: TestContext) {
   const server = http.createServer((req, res) => {
     if (req.headers["x-rabiroute-agent-id"] !== undefined) {
       assert.equal(evaluateLanAgentRequest(req, authority, true, () => global.getLanAgentAdmissionPolicy()).kind, "agent");
-      registerLanAgentBodyGuard(req, body => assertLanAgentBodyAuthority(
-        new URL(req.url!, "http://localhost").pathname, body, { provider: "custom-provider" }
-      ));
+      registerLanAgentBodyGuard(req, () => {});
       admitted.resolve();
     }
     handler(req, new URL(req.url!, "http://localhost"), res);

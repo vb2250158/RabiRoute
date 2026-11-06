@@ -4,10 +4,10 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { DesktopPetOwner, listDesktopPetPacks } from "./desktopPetRoutes.js";
-import { createDesktopPetOperations } from "./desktopPetOperations.js";
+import { DesktopPetOwner, listDesktopPetPacks } from "../plugins/io.rabiroute.manager.desktop-pet/src/manager/desktopPetRoutes.js";
+import { createDesktopPetOperations } from "../plugins/io.rabiroute.manager.desktop-pet/src/manager/desktopPetOperations.js";
 import { ManagerPluginRouteRegistry } from "./managerPluginRouteRegistry.js";
-import { copyDesktopPetPackDirectoryAsync } from "./desktopPetPackImport.js";
+import { copyDesktopPetPackDirectoryAsync } from "../plugins/io.rabiroute.manager.desktop-pet/src/manager/desktopPetPackImport.js";
 import { managerReadWorkerPool } from "./managerReadWorkerPool.js";
 
 function fixture() {

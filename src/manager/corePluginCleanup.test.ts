@@ -1,3 +1,4 @@
+import { canonicalManagerPluginFixture } from "./canonicalManagerPlugin.fixture.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createPluginTestHarness } from "@rabiroute/plugin-sdk";
@@ -24,8 +25,8 @@ test("core operation cleanup failure still starts and joins its upgrade owner", 
   for (const factory of ["createCorePublicOperations", "createPluginCatalogOperations", "createWebguiAccessOperations", "createResourceCacheOperations",
     "createLanAgentReadOperations", "createLanAgentTerminalOperations", "createLanAgentComputerOperations", "createLanAgentManagementOperations"])
     host[factory] = () => [];
-  const harness = createPluginTestHarness({ services: [["host.manager.core@1", host]] });
-  const module = await import(new URL("../../plugins/builtin/io.rabiroute.manager.core/1.0.0/manager.mjs", import.meta.url).href);
+  const { module, ports } = await canonicalManagerPluginFixture("core", host);
+  const harness = createPluginTestHarness({ services: [["host.manager.core@2", ports]] });
   await harness.activate(module);
   const disposal = harness.dispose().then(() => { settled = true; throw new Error("cleanup must reject"); }, error => {
     settled = true; assert.equal(error, failure);

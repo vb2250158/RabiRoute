@@ -1,0 +1,20 @@
+{
+  "exports": [
+    {
+      "source": "src/plugins/io.rabiroute.manager.wearable-companion/src/manager/wearableCompanionWorkerService.ts",
+      "name": "WearableCompanionWorkerService"
+    },
+    {
+      "source": "src/plugins/io.rabiroute.manager.wearable-companion/src/manager/wearableCompanionRuntimeIdentity.ts",
+      "name": "createWearableCompanionRuntimeIdentity"
+    }
+  ],
+  "ownedSources": [
+    "src/plugins/io.rabiroute.manager.wearable-companion/src/manager/wearableCompanionWorkerService.ts",
+    "src/plugins/io.rabiroute.manager.wearable-companion/src/manager/wearableCompanionRuntimeIdentity.ts"
+  ],
+  "ownedPrefixes": [
+    "src/plugins/io.rabiroute.manager.wearable-companion/"
+  ],
+  "packageId": "io.rabiroute.manager.wearable-companion"
+}

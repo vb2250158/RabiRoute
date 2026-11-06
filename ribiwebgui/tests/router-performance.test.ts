@@ -4,7 +4,7 @@ import test from "node:test";
 
 const routerSource = fs.readFileSync(new URL("../src/router.ts", import.meta.url), "utf8");
 const pluginPagesSource = fs.readFileSync(new URL("../src/pluginPages.ts", import.meta.url), "utf8");
-const builtinWebContributionsSource = fs.readFileSync(new URL("../src/bundles/builtinWebContributions.ts", import.meta.url), "utf8");
+const builtinWebContributionsSource = ["core", "message-adapter-control", "persona", "speech", "performance", "diagnostics"].map(owner => fs.readFileSync(new URL(`../../src/plugins/io.rabiroute.manager.${owner}/web/contributions.ts`, import.meta.url), "utf8")).join("\n");
 
 test("WebGUI route pages use the trusted renderer registry and asynchronous page chunks", () => {
   assert.match(routerSource, /createImmediateRouteComponent/);
@@ -28,7 +28,7 @@ test("WebGUI route pages use the trusted renderer registry and asynchronous page
     "SpeechServicePage",
     "SettingsPage"
   ]) {
-    assert.equal(builtinWebContributionsSource.includes(`import("../pages/${page}.vue")`), true);
+    assert.equal(builtinWebContributionsSource.includes(`import("./pages/${page}.vue")`), true);
   }
   assert.doesNotMatch(pluginPagesSource, /import\("\.\/pages\//);
   assert.match(pluginPagesSource, /registerTrustedWebPage/);

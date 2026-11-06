@@ -1,0 +1,363 @@
+{
+  "schemaVersion": 1,
+  "generatedBy": "scripts/generate-plugin-source-catalog.mjs",
+  "plugins": [
+    {
+      "sourceId": "io.rabiroute.agent.antigravity",
+      "directory": "src/plugins/io.rabiroute.agent.antigravity",
+      "ecosystem": "rabiroute",
+      "publicationName": "io.rabiroute.agent.antigravity",
+      "versionFile": "rabi.plugin.json"
+    },
+    {
+      "sourceId": "io.rabiroute.agent.astrbot",
+      "directory": "src/plugins/io.rabiroute.agent.astrbot",
+      "ecosystem": "rabiroute",
+      "publicationName": "io.rabiroute.agent.astrbot",
+      "versionFile": "rabi.plugin.json"
+    },
+    {
+      "sourceId": "io.rabiroute.agent.codex",
+      "directory": "src/plugins/io.rabiroute.agent.codex",
+      "ecosystem": "rabiroute",
+      "publicationName": "io.rabiroute.agent.codex",
+      "versionFile": "rabi.plugin.json"
+    },
+    {
+      "sourceId": "io.rabiroute.agent.copilot-cli",
+      "directory": "src/plugins/io.rabiroute.agent.copilot-cli",
+      "ecosystem": "rabiroute",
+      "publicationName": "io.rabiroute.agent.copilot-cli",
+      "versionFile": "rabi.plugin.json"
+    },
+    {
+      "sourceId": "io.rabiroute.agent.device-agent",
+      "directory": "src/plugins/io.rabiroute.agent.device-agent",
+      "ecosystem": "rabiroute",
+      "publicationName": "io.rabiroute.agent.device-agent",
+      "versionFile": "rabi.plugin.json"
+    },
+    {
+      "sourceId": "io.rabiroute.agent.dsh",
+      "directory": "src/plugins/io.rabiroute.agent.dsh",
+      "ecosystem": "rabiroute",
+      "publicationName": "io.rabiroute.agent.dsh",
+      "versionFile": "rabi.plugin.json"
+    },
+    {
+      "sourceId": "io.rabiroute.agent.grok-bot",
+      "directory": "src/plugins/io.rabiroute.agent.grok-bot",
+      "ecosystem": "rabiroute",
+      "publicationName": "io.rabiroute.agent.grok-bot",
+      "versionFile": "rabi.plugin.json"
+    },
+    {
+      "sourceId": "io.rabiroute.agent.marvis",
+      "directory": "src/plugins/io.rabiroute.agent.marvis",
+      "ecosystem": "rabiroute",
+      "publicationName": "io.rabiroute.agent.marvis",
+      "versionFile": "rabi.plugin.json"
+    },
+    {
+      "sourceId": "io.rabiroute.agent.workbuddy",
+      "directory": "src/plugins/io.rabiroute.agent.workbuddy",
+      "ecosystem": "rabiroute",
+      "publicationName": "io.rabiroute.agent.workbuddy",
+      "versionFile": "rabi.plugin.json"
+    },
+    {
+      "sourceId": "io.rabiroute.endpoint.feishu",
+      "directory": "src/plugins/io.rabiroute.endpoint.feishu",
+      "ecosystem": "rabiroute",
+      "publicationName": "io.rabiroute.endpoint.feishu",
+      "versionFile": "rabi.plugin.json"
+    },
+    {
+      "sourceId": "io.rabiroute.endpoint.heartbeat",
+      "directory": "src/plugins/io.rabiroute.endpoint.heartbeat",
+      "ecosystem": "rabiroute",
+      "publicationName": "io.rabiroute.endpoint.heartbeat",
+      "versionFile": "rabi.plugin.json"
+    },
+    {
+      "sourceId": "io.rabiroute.endpoint.napcat",
+      "directory": "src/plugins/io.rabiroute.endpoint.napcat",
+      "ecosystem": "rabiroute",
+      "publicationName": "io.rabiroute.endpoint.napcat",
+      "versionFile": "rabi.plugin.json"
+    },
+    {
+      "sourceId": "io.rabiroute.endpoint.rabilink",
+      "directory": "src/plugins/io.rabiroute.endpoint.rabilink",
+      "ecosystem": "rabiroute",
+      "publicationName": "io.rabiroute.endpoint.rabilink",
+      "versionFile": "rabi.plugin.json"
+    },
+    {
+      "sourceId": "io.rabiroute.endpoint.speech",
+      "directory": "src/plugins/io.rabiroute.endpoint.speech",
+      "ecosystem": "rabiroute",
+      "publicationName": "io.rabiroute.endpoint.speech",
+      "versionFile": "rabi.plugin.json"
+    },
+    {
+      "sourceId": "io.rabiroute.endpoint.webhook",
+      "directory": "src/plugins/io.rabiroute.endpoint.webhook",
+      "ecosystem": "rabiroute",
+      "publicationName": "io.rabiroute.endpoint.webhook",
+      "versionFile": "rabi.plugin.json"
+    },
+    {
+      "sourceId": "io.rabiroute.endpoint.wecom",
+      "directory": "src/plugins/io.rabiroute.endpoint.wecom",
+      "ecosystem": "rabiroute",
+      "publicationName": "io.rabiroute.endpoint.wecom",
+      "versionFile": "rabi.plugin.json"
+    },
+    {
+      "sourceId": "io.rabiroute.endpoint.weixin",
+      "directory": "src/plugins/io.rabiroute.endpoint.weixin",
+      "ecosystem": "rabiroute",
+      "publicationName": "io.rabiroute.endpoint.weixin",
+      "versionFile": "rabi.plugin.json"
+    },
+    {
+      "sourceId": "io.rabiroute.manager.agent-adapter-catalog",
+      "directory": "src/plugins/io.rabiroute.manager.agent-adapter-catalog",
+      "ecosystem": "rabiroute",
+      "publicationName": "io.rabiroute.manager.agent-adapter-catalog",
+      "versionFile": "rabi.plugin.json"
+    },
+    {
+      "sourceId": "io.rabiroute.manager.agent-communication",
+      "directory": "src/plugins/io.rabiroute.manager.agent-communication",
+      "ecosystem": "rabiroute",
+      "publicationName": "io.rabiroute.manager.agent-communication",
+      "versionFile": "rabi.plugin.json"
+    },
+    {
+      "sourceId": "io.rabiroute.manager.agent-state-control",
+      "directory": "src/plugins/io.rabiroute.manager.agent-state-control",
+      "ecosystem": "rabiroute",
+      "publicationName": "io.rabiroute.manager.agent-state-control",
+      "versionFile": "rabi.plugin.json"
+    },
+    {
+      "sourceId": "io.rabiroute.manager.agent-thread-control",
+      "directory": "src/plugins/io.rabiroute.manager.agent-thread-control",
+      "ecosystem": "rabiroute",
+      "publicationName": "io.rabiroute.manager.agent-thread-control",
+      "versionFile": "rabi.plugin.json"
+    },
+    {
+      "sourceId": "io.rabiroute.manager.bilibili-history",
+      "directory": "src/plugins/io.rabiroute.manager.bilibili-history",
+      "ecosystem": "rabiroute",
+      "publicationName": "io.rabiroute.manager.bilibili-history",
+      "versionFile": "rabi.plugin.json"
+    },
+    {
+      "sourceId": "io.rabiroute.manager.core",
+      "directory": "src/plugins/io.rabiroute.manager.core",
+      "ecosystem": "rabiroute",
+      "publicationName": "io.rabiroute.manager.core",
+      "versionFile": "rabi.plugin.json"
+    },
+    {
+      "sourceId": "io.rabiroute.manager.desktop",
+      "directory": "src/plugins/io.rabiroute.manager.desktop",
+      "ecosystem": "rabiroute",
+      "publicationName": "io.rabiroute.manager.desktop",
+      "versionFile": "rabi.plugin.json"
+    },
+    {
+      "sourceId": "io.rabiroute.manager.desktop-pet",
+      "directory": "src/plugins/io.rabiroute.manager.desktop-pet",
+      "ecosystem": "rabiroute",
+      "publicationName": "io.rabiroute.manager.desktop-pet",
+      "versionFile": "rabi.plugin.json"
+    },
+    {
+      "sourceId": "io.rabiroute.manager.diagnostics",
+      "directory": "src/plugins/io.rabiroute.manager.diagnostics",
+      "ecosystem": "rabiroute",
+      "publicationName": "io.rabiroute.manager.diagnostics",
+      "versionFile": "rabi.plugin.json"
+    },
+    {
+      "sourceId": "io.rabiroute.manager.gateway-runtime",
+      "directory": "src/plugins/io.rabiroute.manager.gateway-runtime",
+      "ecosystem": "rabiroute",
+      "publicationName": "io.rabiroute.manager.gateway-runtime",
+      "versionFile": "rabi.plugin.json"
+    },
+    {
+      "sourceId": "io.rabiroute.manager.memory-consolidation",
+      "directory": "src/plugins/io.rabiroute.manager.memory-consolidation",
+      "ecosystem": "rabiroute",
+      "publicationName": "io.rabiroute.manager.memory-consolidation",
+      "versionFile": "rabi.plugin.json"
+    },
+    {
+      "sourceId": "io.rabiroute.manager.message-adapter-control",
+      "directory": "src/plugins/io.rabiroute.manager.message-adapter-control",
+      "ecosystem": "rabiroute",
+      "publicationName": "io.rabiroute.manager.message-adapter-control",
+      "versionFile": "rabi.plugin.json"
+    },
+    {
+      "sourceId": "io.rabiroute.manager.message-processing-automation",
+      "directory": "src/plugins/io.rabiroute.manager.message-processing-automation",
+      "ecosystem": "rabiroute",
+      "publicationName": "io.rabiroute.manager.message-processing-automation",
+      "versionFile": "rabi.plugin.json"
+    },
+    {
+      "sourceId": "io.rabiroute.manager.message-processing-control",
+      "directory": "src/plugins/io.rabiroute.manager.message-processing-control",
+      "ecosystem": "rabiroute",
+      "publicationName": "io.rabiroute.manager.message-processing-control",
+      "versionFile": "rabi.plugin.json"
+    },
+    {
+      "sourceId": "io.rabiroute.manager.performance",
+      "directory": "src/plugins/io.rabiroute.manager.performance",
+      "ecosystem": "rabiroute",
+      "publicationName": "io.rabiroute.manager.performance",
+      "versionFile": "rabi.plugin.json"
+    },
+    {
+      "sourceId": "io.rabiroute.manager.persona",
+      "directory": "src/plugins/io.rabiroute.manager.persona",
+      "ecosystem": "rabiroute",
+      "publicationName": "io.rabiroute.manager.persona",
+      "versionFile": "rabi.plugin.json"
+    },
+    {
+      "sourceId": "io.rabiroute.manager.plan-feedback-delivery",
+      "directory": "src/plugins/io.rabiroute.manager.plan-feedback-delivery",
+      "ecosystem": "rabiroute",
+      "publicationName": "io.rabiroute.manager.plan-feedback-delivery",
+      "versionFile": "rabi.plugin.json"
+    },
+    {
+      "sourceId": "io.rabiroute.manager.rabilink-relay",
+      "directory": "src/plugins/io.rabiroute.manager.rabilink-relay",
+      "ecosystem": "rabiroute",
+      "publicationName": "io.rabiroute.manager.rabilink-relay",
+      "versionFile": "rabi.plugin.json"
+    },
+    {
+      "sourceId": "io.rabiroute.manager.remote-agent",
+      "directory": "src/plugins/io.rabiroute.manager.remote-agent",
+      "ecosystem": "rabiroute",
+      "publicationName": "io.rabiroute.manager.remote-agent",
+      "versionFile": "rabi.plugin.json"
+    },
+    {
+      "sourceId": "io.rabiroute.manager.route-control",
+      "directory": "src/plugins/io.rabiroute.manager.route-control",
+      "ecosystem": "rabiroute",
+      "publicationName": "io.rabiroute.manager.route-control",
+      "versionFile": "rabi.plugin.json"
+    },
+    {
+      "sourceId": "io.rabiroute.manager.speech",
+      "directory": "src/plugins/io.rabiroute.manager.speech",
+      "ecosystem": "rabiroute",
+      "publicationName": "io.rabiroute.manager.speech",
+      "versionFile": "rabi.plugin.json"
+    },
+    {
+      "sourceId": "io.rabiroute.manager.video",
+      "directory": "src/plugins/io.rabiroute.manager.video",
+      "ecosystem": "rabiroute",
+      "publicationName": "io.rabiroute.manager.video",
+      "versionFile": "rabi.plugin.json"
+    },
+    {
+      "sourceId": "io.rabiroute.manager.wearable-companion",
+      "directory": "src/plugins/io.rabiroute.manager.wearable-companion",
+      "ecosystem": "rabiroute",
+      "publicationName": "io.rabiroute.manager.wearable-companion",
+      "versionFile": "rabi.plugin.json"
+    },
+    {
+      "sourceId": "io.rabiroute.manager.xiaomi-home",
+      "directory": "src/plugins/io.rabiroute.manager.xiaomi-home",
+      "ecosystem": "rabiroute",
+      "publicationName": "io.rabiroute.manager.xiaomi-home",
+      "versionFile": "rabi.plugin.json"
+    },
+    {
+      "sourceId": "io.rabiroute.manager.yeyu-gamer",
+      "directory": "src/plugins/io.rabiroute.manager.yeyu-gamer",
+      "ecosystem": "rabiroute",
+      "publicationName": "io.rabiroute.manager.yeyu-gamer",
+      "versionFile": "rabi.plugin.json"
+    },
+    {
+      "sourceId": "napcat-rabiroute",
+      "directory": "src/plugins/napcat-rabiroute",
+      "ecosystem": "napcat",
+      "publicationName": "napcat-plugin-rabiroute",
+      "versionFile": "package.json"
+    },
+    {
+      "sourceId": "napcat-stickers",
+      "directory": "src/plugins/napcat-stickers",
+      "ecosystem": "napcat",
+      "publicationName": "napcat-plugin-rabi-stickers",
+      "versionFile": "package.json"
+    },
+    {
+      "sourceId": "rabi-antigravity-context",
+      "directory": "src/plugins/rabi-antigravity-context",
+      "ecosystem": "integration",
+      "publicationName": "rabi-antigravity-context",
+      "versionFile": "plugin.json"
+    },
+    {
+      "sourceId": "rabi-codex-context",
+      "directory": "src/plugins/rabi-codex-context",
+      "ecosystem": "codex",
+      "publicationName": "rabi-codex-context",
+      "versionFile": ".codex-plugin/plugin.json"
+    },
+    {
+      "sourceId": "rabi-dsh-context",
+      "directory": "src/plugins/rabi-dsh-context",
+      "ecosystem": "dsh",
+      "publicationName": "rabi-dsh-context",
+      "versionFile": "package.json"
+    },
+    {
+      "sourceId": "rabi-speech",
+      "directory": "src/plugins/rabi-speech",
+      "ecosystem": "local-service",
+      "publicationName": "rabi-speech",
+      "versionFile": "rabi-plugin.json"
+    },
+    {
+      "sourceId": "rabi-workbuddy-context",
+      "directory": "src/plugins/rabi-workbuddy-context",
+      "ecosystem": "codebuddy",
+      "publicationName": "rabi-workbuddy-context",
+      "versionFile": ".codebuddy-plugin/plugin.json"
+    },
+    {
+      "sourceId": "remote-agent-rabiroute",
+      "directory": "src/plugins/remote-agent-rabiroute",
+      "ecosystem": "integration",
+      "publicationName": "remote-agent-rabiroute-bridge",
+      "versionFile": "package.json"
+    },
+    {
+      "sourceId": "xiaoai-rabiroute",
+      "directory": "src/plugins/xiaoai-rabiroute",
+      "ecosystem": "integration",
+      "publicationName": "xiaoai-rabiroute-adapter",
+      "versionFile": "package.json"
+    }
+  ]
+}

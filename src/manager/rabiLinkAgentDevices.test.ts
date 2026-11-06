@@ -7,7 +7,7 @@ import path from 'node:path';
 import http from 'node:http';
 import { once } from 'node:events';
 import { createRabiLinkAgentDevices } from './rabiLinkAgentDevices.js';
-import { createRabiLinkAgentDeviceOperations } from './rabiLinkAgentDeviceOperations.js';
+import { createRabiLinkAgentDeviceOperations } from '../plugins/io.rabiroute.manager.rabilink-relay/src/manager/rabiLinkAgentDeviceOperations.js';
 import { ManagerPluginRouteRegistry } from './managerPluginRouteRegistry.js';
 
 test('PC owns scoped profile CAS, signed self receipts, source validation and restart-safe operations', async t => {

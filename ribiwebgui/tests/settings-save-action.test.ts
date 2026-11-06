@@ -8,9 +8,9 @@ import { pageSaveAction, registerPageSaveAction } from "../src/pageSaveAction";
 
 const appSource = fs.readFileSync(new URL("../src/App.vue", import.meta.url), "utf8");
 const commandSource = fs.readFileSync(new URL("../src/pluginCommands.ts", import.meta.url), "utf8");
-const settingsSource = fs.readFileSync(new URL("../src/pages/SettingsPage.vue", import.meta.url), "utf8");
-const performanceSource = fs.readFileSync(new URL("../src/pages/PerformancePage.vue", import.meta.url), "utf8");
-const desktopRendererSource = fs.readFileSync(new URL("../src/components/renderers/DesktopSettingsRenderer.vue", import.meta.url), "utf8");
+const settingsSource = fs.readFileSync(new URL("../../src/plugins/io.rabiroute.manager.core/web/pages/SettingsPage.vue", import.meta.url), "utf8");
+const performanceSource = fs.readFileSync(new URL("../../src/plugins/io.rabiroute.manager.performance/web/pages/PerformancePage.vue", import.meta.url), "utf8");
+const desktopRendererSource = fs.readFileSync(new URL("../../src/plugins/io.rabiroute.manager.desktop/web/components/renderers/DesktopSettingsRenderer.vue", import.meta.url), "utf8");
 const pageSaveActionSource = fs.readFileSync(new URL("../src/pageSaveAction.ts", import.meta.url), "utf8");
 
 test("page save command delegates to every active page save participant", async () => {

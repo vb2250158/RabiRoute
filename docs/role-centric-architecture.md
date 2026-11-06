@@ -27,9 +27,9 @@
 | --- | --- | --- |
 | `ribiwebgui/src/App.vue` 的 `routeOptions` 来自 `store.gateways` | 顶栏看起来在选角色，实际选择路由 | 角色选择与路由选择分离 |
 | `ribiwebgui/src/routeScopedNavigation.ts` 将角色页、知识页放在 `/routes/:id/…` 下 | 两页依赖路由地址 | 增加按角色寻址的正式页面 |
-| `ribiwebgui/src/pages/PersonaTemplatePage.vue` 从 `store.selectedGateway` 获取角色和编辑对象 | 角色配置依附路由草稿 | 直接按角色读取和保存 |
-| `ribiwebgui/src/pages/RoleKnowledgePage.vue` 从当前路由取得 `roleId` | 无路由角色缺少独立知识入口 | 计划与记忆直接使用选中的角色 |
-| `src/manager/personaCatalog.ts` 枚举角色目录，并缓存目录摘要 | 已有独立目录发现能力；该条目类型没有归档字段 | 复用目录发现，补生命周期与缓存失效 |
+| `src/plugins/io.rabiroute.manager.persona/web/pages/PersonaTemplatePage.vue` 从 `store.selectedGateway` 获取角色和编辑对象 | 角色配置依附路由草稿 | 直接按角色读取和保存 |
+| `src/plugins/io.rabiroute.manager.persona/web/pages/RoleKnowledgePage.vue` 从当前路由取得 `roleId` | 无路由角色缺少独立知识入口 | 计划与记忆直接使用选中的角色 |
+| `src/plugins/io.rabiroute.manager.persona/src/manager/personaCatalog.ts` 枚举角色目录，并缓存目录摘要 | 已有独立目录发现能力；该条目类型没有归档字段 | 复用目录发现，补生命周期与缓存失效 |
 | `src/manager/configRepository.ts` 分别读取 `adapterConfig.json` 和 `personaConfig.json` | 文件归属已分开，但会合成为路由视图 | 保留文件归属，拆开编辑和写入合同 |
 | `ribiwebgui/src/bundles/builtinWebContributions.ts`、`pluginNavigation.ts` | 页面和导航经插件注册 | 同步贡献声明与页面注册，沿用现有插件机制 |
 

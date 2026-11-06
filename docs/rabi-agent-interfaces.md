@@ -6,6 +6,8 @@
 
 # Agent 需要关注的 Rabi 接口
 
+参数错误后的只读发现、工作区不匹配示例与分批覆盖范围见[接口错误与参数恢复](api-error-recovery.md)。保留原意图与回执，按错误提供的当前 operation 合同取得合法参数。
+
 ## 远端新会话的创建预检
 
 首次创建先读取目标 SDK 的创建回执；旧客户端不支持或只读预检失败时，不冻结新的 caller 创建意图，也不创建会话或投递正文。已有创建意图仍按原来源、目标、caller ID 和初始正文恢复。普通投递查询的 `DELIVERY_NOT_RESERVED` 仅说明正文投递尚未预留，不代表创建意图不存在；`canSubmitSameIntent` 不授权改写已经冻结的意图。结果待确认时查原回执，不换键重发。
@@ -21,14 +23,14 @@
 
 - `manager.bilibili-history.*`：八项业务入口与通用 OPTIONS，使用原浏览器生产者身份与人格私有日期分卷，详见 [历史桥合同](bilibili-history-bridge.md)。Manager 不直接读取真实网站账号。
 - `manager.agent.copilot.install/login/status` 与 `manager.agent.astrbot.login-test`：复用原安装、设备码登录、状态和 Dashboard 验证拥有者。安装/登录不自动重试；设备码返回后仍由原服务拥有进程，退出等待真实 close。
-- YeYu 五项公开计划接口见 [集成说明](../plugins/builtin/io.rabiroute.manager.yeyu-gamer/1.0.0/README.md)。提交固定为计划，带原状态版本与幂等键；接收回执不表示游戏已执行。
+- YeYu 五项公开计划接口见 [集成说明](../src/plugins/io.rabiroute.manager.yeyu-gamer/README.md)。提交固定为计划，带原状态版本与幂等键；接收回执不表示游戏已执行。
 - 手机状态与能力七项见 [手机拥有者接口](rabilink-mobile-owner-api.md)，保留来源 PC、设备归属与原幂等回执；不代表启动设备 Agent。
 - `manager.napcat.*` 十项使用原 NapCat 健康、登录、配置与进程拥有者，成功响应的含义按各操作原合同判断；无本地幂等回执，不自动重放不确定动作。
 - Route、实例身份与 Manager 配置十四项见 [Route 控制合同](route-control-api-contract.md)，继续使用原强 ETag、幂等键及运行时持久化边界。
 - 设备 Agent 十三项见 [设备执行合同](device-agent-api-contracts.md)，保留原加载会话、claim、唤醒 nonce、prepared ledger 与回执；排队不表示模型已接收。
 - 网关十五项见 [网关控制合同](gateway-control-api-contract.md)。配置持久化、运行时激活、手动触发和消息重放分别按原拥有者结果判断。
-- 适配器扫描与桌面设置分别见 [扫描插件](../plugins/builtin/io.rabiroute.manager.message-adapter-control/1.0.0/README.md)、[桌面插件](../plugins/builtin/io.rabiroute.manager.desktop/1.0.0/README.md)；扫描超时不证明离线，打开配置返回不证明窗口已显示。
-- 会话两项、消息处理七项、桌宠十二项的源码合同见 [会话](agent-thread-api-contracts.md)、[消息处理](message-processing-api-contract.md)、[桌宠](../plugins/builtin/io.rabiroute.manager.desktop-pet/1.0.0/README.md)；各自的完整构建与运行验收进度见实施记录。
+- 适配器扫描与桌面设置分别见 [扫描插件](../src/plugins/io.rabiroute.manager.message-adapter-control/README.md)、[桌面插件](../src/plugins/io.rabiroute.manager.desktop/README.md)；扫描超时不证明离线，打开配置返回不证明窗口已显示。
+- 会话两项、消息处理七项、桌宠十二项的源码合同见 [会话](agent-thread-api-contracts.md)、[消息处理](message-processing-api-contract.md)、[桌宠](../src/plugins/io.rabiroute.manager.desktop-pet/README.md)；各自的完整构建与运行验收进度见实施记录。
 
 - 语音 39 项、家居 53 项与视频 35 项从所属插件注册，保留原拥有者及旧发现 ID 别名。视频动态模型代理由通用客户端显式传入原生 HTTP 方法（`options.method` 或 CLI `--operation <ID> --method PROPFIND`）；按方法搜索目录可匹配 wildcard，CONNECT/TRACE 等仍遵守原生传输限制，详见[目标架构](api-contract-discovery-target-architecture.md)。
 - 人格资源、历史、计划控制和 Skill 合同分别见[资源](persona-resource-api-contracts.md)、[历史](persona-history-api-contracts.md)、[计划控制](persona-plan-api-contracts.md)及 [Skill](persona-skill-api-contracts.md)；[知识](persona-knowledge-api-contracts.md)、[身份](persona-identity-api-contracts.md)和[健康](persona-health-api-contracts.md)保留原索引、记录和生命周期围栏。存储双路径共 58 项继续使用原 CAS、稳定幂等键与反馈队列，编译版验收状态以实施记录为准。
@@ -786,7 +788,7 @@ QQ 群文本示例：
 
 ### QQ 表情
 
-QQ 系统小表情可在文字中使用 `[CQ:face,id=<QQ 表情 ID>]`。收藏表情先调用 `GET /api/agent/qq/stickers?routeId=<Route ID>&instanceId=<实例 ID>&count=1000`；`instanceId` 在该 Route 只有一个启用账号时可省略，`count` 范围为 1–1000。返回当前账号的 `items { id, name, description, previewUrl }`，`name` 来自 QQ 原生收藏描述，不含原始媒体地址或凭据。`previewUrl` 是同一 Manager 的只读图片接口。旧 NapCat 可安装[名字兼容插件](../plugins/napcat-stickers/README.md)；没有该插件或收藏本身未命名时，名字为空，选择前查看预览。数量上限和 `completenessUnknown` 不证明收藏列表完整。
+QQ 系统小表情可在文字中使用 `[CQ:face,id=<QQ 表情 ID>]`。收藏表情先调用 `GET /api/agent/qq/stickers?routeId=<Route ID>&instanceId=<实例 ID>&count=1000`；`instanceId` 在该 Route 只有一个启用账号时可省略，`count` 范围为 1–1000。返回当前账号的 `items { id, name, description, previewUrl }`，`name` 来自 QQ 原生收藏描述，不含原始媒体地址或凭据。`previewUrl` 是同一 Manager 的只读图片接口。旧 NapCat 可安装[名字兼容插件](../src/plugins/napcat-stickers/README.md)；没有该插件或收藏本身未命名时，名字为空，选择前查看预览。数量上限和 `completenessUnknown` 不证明收藏列表完整。
 
 发送沿用 `POST /api/agent/send`、原来源和稳定 `deliveryId`，使用 `"payload":{"type":"sticker","stickerId":"<列表中的 id>","text":"可选说明"}`，`channel=napcat`，`params` 与普通群聊/私聊一致。发送时重新从所选账号的收藏列表解析 ID，保留表情图片子类型；表情被移除时返回失败，不跨账号寻找替代品。表情属于现有 `image` 输出能力，沿用 Route 显式设置、引用、文字长度、文风、幂等与回执检查。不能同时提供 `path`、`url` 或 `segments`。QQ 内添加或删除收藏后，下一次查询直接读取当前内容；代码没有预置角色、固定图册或日常随机发送计划。
 
@@ -1675,7 +1677,7 @@ Agent 调用线程桥时，已有会话上下文由 SDK 和入口自动记录。
 }
 ```
 
-普通 Codex 最终回答不算正式回复。目标 Agent 每轮结束时，`Stop` Hook 会检查待回复请求；仍未回复时，从该轮结束起五分钟后向同一个精确任务投递提醒。提醒触发的新一轮结束后仍未回复，会再从该轮结束起等待五分钟。请求状态可通过 `GET /api/agent/requests` 或 `GET /api/agent/requests/:requestId` 查询；维护者可用 `POST /api/agent/requests/:requestId/cancel` 取消不再需要的请求。
+普通 Codex 最终回答不算正式回复。目标 Agent 每轮结束时，`Stop` Hook 读取该会话的待回复请求，在当前任务内按原请求 ID 提示一次；后续轮次和 Hook 重启不重复提示同一请求。提示本身不写正式回复、不创建投递，也不启动五分钟计时或后台提醒。请求状态可通过 `GET /api/agent/requests` 或 `GET /api/agent/requests/:requestId` 查询；维护者可用 `POST /api/agent/requests/:requestId/cancel` 取消不再需要的请求。
 
 Desktop 偶尔会在消息已经写入目标任务后才返回启动或追加轮次超时。启动超时后，同一请求还会在有界窗口内接受迟到的 Desktop 受理，或在 rollout 出现原投递标记时补记回执。Manager 会用正文中的唯一 `deliveryId` 回读目标任务最近的 rollout：确认标记后提交请求/回复状态；有界等待后仍未确认时返回 HTTP `202`、`code=-1`、`status=delivery_unconfirmed` 和 `error.retryable=false`，保留原 `deliveryId`、`requestId` 及 `pending_delivery` 请求，不删除记录、不再次发送。调用方先查询原请求和目标任务，不把 HTTP `202` 当成送达成功。连接中途关闭时同样保留原载荷与 ID，等待这次补核对或显式 `reconcile_delivery`，不换键重发。
 
@@ -1695,7 +1697,7 @@ Desktop 偶尔会在消息已经写入目标任务后才返回启动或追加轮
 
 收件日志能力按回复实际进入的原来源任务（`original.source`）核对。发送回复的处理端没有收件日志时，仅允许使用已持久化的结构化 SHA-256 证据恢复；正文必须精确匹配，双方 Adapter、任务 ID、工作目录、原请求及后续请求方向均须一致。缺少结构化证据的旧回复继续失败关闭，返回 `adapter_has_no_receipt_log`。
 
-提醒触发前也执行上述核对。证据仍不完整时保留 reservation、写入 `lastReminderError` 并停止本次“未回复”提醒，不无限重试或要求重发；下一次任务结束或显式核对可重新检查。读取超时、身份/合同不符及旧版本已删除的 `404` 请求均不凭猜测重建，必须保留正式回传未记录的差异。
+显式核对仍遵守上述证据要求。证据不完整时保留原 reservation，由调用方沿原 ID 继续核对，不启动后台重试或要求重发。读取超时、身份/合同不符及旧版本已删除的 `404` 请求均不凭猜测重建，必须保留正式回传未记录的差异。
 
 Agent 间 `create` 与 `send` 直接复用当前连接。来源元数据只作消息展示、记录与回传定位；来源查询失败、归档、未加载、未登记、角色变化及旧双方身份不会产生发送或原回执查询许可。存在结构化来源时，信封展示 `## 消息源` 和 `## 消息内容`；已有平台和计划来源沿用各自显示字段。
 

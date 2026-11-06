@@ -1,6 +1,14 @@
-import * as ownedDshRuntime from "./dshSessionBridge.js";
+import * as ownedDshRuntime from "./plugins/io.rabiroute.agent.dsh/src/dshSessionBridge.js";
 import { nativeOperations } from "./agentAdapters/managerNativeOperations.js";
 import type { AgentManagerOperationInvoker } from "./agentAdapters/managerInvocation.js";
+import { resolveCodexSession } from "./plugins/io.rabiroute.agent.codex/src/codexSessionResolver.js";
+const codexNativeOperations = nativeOperations({ resolveCodexSession });
+const invokeCodexFixture: AgentManagerOperationInvoker = async <T>(type: string, operation: string, payload: unknown, invocation?: import("@rabiroute/plugin-sdk").AgentAdapterInvocation) => {
+  assert.equal(type, "codex");
+  const handler = codexNativeOperations[operation];
+  assert.ok(handler, operation);
+  return await handler(payload, invocation) as T;
+};
 const dshNativeOperations = nativeOperations({
   readDshPrimaryBindingAsync: ownedDshRuntime.readDshPrimaryBindingAsync,
   listDshSessions: ownedDshRuntime.listDshSessions, readDshSession: ownedDshRuntime.readDshSession,
@@ -21,11 +29,15 @@ import test from "node:test";
 import {
   agentThreadDeliveryStateForTest,
   agentThreadRequestFailureData,
-  handleAgentThreadRequest,
+  handleAgentThreadRequest as invokeAgentThreadRequest,
   listAgentThreadsFromIndexForTest,
   type AgentThreadDriver
 } from "./agentThreads.js";
-import { listCodexDesktopThreadsFromRowsForTest } from "./codexDesktopBridge.js";
+// These isolated driver fixtures supply the one owned resolver and retain their original callback scope.
+function handleAgentThreadRequest(...[request, options, driver]: Parameters<typeof invokeAgentThreadRequest>) {
+  return invokeAgentThreadRequest(request, { ...options, invokeAgentOperation: options.invokeAgentOperation ?? invokeCodexFixture }, driver);
+}
+import { listCodexDesktopThreadsFromRowsForTest } from "./plugins/io.rabiroute.agent.codex/src/codexDesktopBridge.js";
 import { proactiveCommunicationPolicyLines } from "./shared/agentCommunicationPolicy.js";
 import { errorResponsePresentation } from "./shared/errorPresentation.js";
 

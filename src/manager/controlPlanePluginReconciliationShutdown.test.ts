@@ -4,6 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import test from "node:test";
+import { inspect } from "node:util";
+import { installAgentAdapterGenerationReader } from "../runtime/agentAdapterProviders.js";
 import ts from "typescript";
 import { GenerationRuntime } from "../plugin-kernel/generationRuntime.js";
 import { PluginPackageCatalog, loadPluginProfile, parsePluginProfile, type LoadedPluginProfile } from "../plugin-kernel/profile.js";
@@ -11,6 +13,7 @@ import type { PluginCandidate, PluginModule } from "../plugin-kernel/types.js";
 import { ManagerRuntimeOwner, type ManagerRuntimeOwnerHooks } from "./managerRuntimeOwner.js";
 import { loadInstalledAgentManagerDescriptors } from "./agentManagerProviders.js";
 import { pluginProfilePackageResolution } from "./pluginProfilePackageResolution.js";
+import { pluginStorageMigrationFailure } from "../shared/pluginStorage.js";
 import { installAgentAdapterManifestReader } from "../shared/agentAdapterCapabilities.js";
 
 const stopBudgetMs = 2_000;
@@ -73,7 +76,7 @@ function actualControlPlane(input: {
     return declaration.parent.parent.getText(source);
   }).join("\n");
   const body = `
-    const { ManagerRuntimeOwner, loadPluginProfile, loadInstalledAgentManagerDescriptors, pluginProfilePackageResolution, installAgentAdapterManifestReader, path, rootDir, events } = deps;
+    const { ManagerRuntimeOwner, loadPluginProfile, loadInstalledAgentManagerDescriptors, pluginProfilePackageResolution, installAgentAdapterManifestReader, pluginStorageMigrationFailure, installAgentAdapterGenerationReader, path, rootDir, events } = deps;
     let shuttingDown = false, activeStorageLifecycleGeneration;
     const activeServer = { removeAllListeners() {}, on() {}, removeListener() {} };
     const managerStoppingRequest = () => {}, closeManagerEventClients = () => {};
@@ -85,6 +88,7 @@ function actualControlPlane(input: {
     const managerPluginPackageCatalog = deps.catalog, managerPluginKernel = deps.kernel;
     ${assignPreparationStop?.getText(source) ?? ""}
     ${registration("plugin_package_catalog")}
+    ${declaration("releaseAgentGenerationReader")}
     ${registration("manager_plugin_kernel")}
     let installedAgentDescriptors = new Map(), releaseAgentMetadataProjection;
     const currentAgentSessionDescriptors = () => installedAgentDescriptors;
@@ -95,6 +99,10 @@ function actualControlPlane(input: {
     const readPluginManagementManifest = () => {}, readInstalledGatewayEndpointTypes = async () => ({ types: new Set(), diagnostics: [] });
     const readInstalledEndpointRouteDeclarations = async () => ({ declarations: [], diagnostics: [] });
     const managerPluginHostServices = [], managerServicesReady = false, managerReadOnly = true;
+    const developerCandidateAdmission = { async prepareSelection(candidates) {
+      return { candidates, diagnostics: [], failures: [], assertCurrent() {} };
+    } };
+    const capturePluginGeneration = () => {}, publishManagerEvent = () => {}, managerPluginDiagnostics = [];
     ${declaration("reconcileManagerPlugins")}
     ${registration("manager_plugin_reconciliation")}
     return { owner: managerRuntimeOwner, reconcile: reconcileManagerPlugins, tail: () => managerPluginReconciliationTail,
@@ -103,7 +111,7 @@ function actualControlPlane(input: {
   const compiled = ts.transpileModule(body, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None } }).outputText;
   const instantiate = new Function("deps", compiled) as (dependencies: object) => ControlPlanePorts;
   return instantiate({ ...input, rootDir: input.root, ManagerRuntimeOwner: FixtureRuntimeOwner, loadPluginProfile,
-    loadInstalledAgentManagerDescriptors, pluginProfilePackageResolution, installAgentAdapterManifestReader, path,
+    loadInstalledAgentManagerDescriptors, pluginProfilePackageResolution, installAgentAdapterManifestReader, pluginStorageMigrationFailure, installAgentAdapterGenerationReader, path,
     profile: parsePluginProfile({ schemaVersion: 2, readyRequires: [], instances: [{ id: "pending", package: "io.test.pending",
       version: "1.0.0", enabled: true, config: {}, grants: [] }] }) });
 }
@@ -175,7 +183,7 @@ async function fixture(t: test.TestContext) {
 test("global shutdown cancels original package preparation before a mid-PATCH resource joins reconciliation", { timeout: 15_000 }, async t => {
   const f = await fixture(t);
   f.app.owner.register("fixture_mid_patch", async () => { f.events.push("request-drain"); await f.app.tail(); });
-  await f.app.owner.teardown("fixture signal");
+  try { await f.app.owner.teardown("fixture signal"); } catch (error) { t.diagnostic(inspect(error, { depth: null })); throw error; }
   await Promise.all([f.reconciliationStopped, f.queuedStopped]);
   assert.ok(f.events.indexOf("cancel-package-preparation") < f.events.indexOf("request-drain"));
   assert.equal(f.app.profile(), f.previous);

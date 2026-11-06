@@ -12,7 +12,7 @@ export type WebhookHttpOwnerContext = Readonly<{
   profile: WebhookAdapterProfile;
   webhookPath: string;
   accepting(): boolean;
-  acceptPayload(payload: WebhookPayload, bodyBytes: number): VoiceTranscriptEventRecord;
+  acceptPayload(payload: WebhookPayload, bodyBytes: number): VoiceTranscriptEventRecord | Promise<VoiceTranscriptEventRecord>;
   acceptedResponse?(record: VoiceTranscriptEventRecord, payload: WebhookPayload): WebhookHttpReply;
   readReplies?(url: URL): Record<string, unknown>;
   reportError(message: string): void;
@@ -58,7 +58,7 @@ export function createWebhookHttpOwner(context: WebhookHttpOwnerContext) {
         const body = await readNativeWebhookBody(request);
         if (!context.accepting()) return stopping();
         const payload = JSON.parse(body || "{}") as WebhookPayload;
-        const record = context.acceptPayload(payload, Buffer.byteLength(body));
+        const record = await context.acceptPayload(payload, Buffer.byteLength(body));
         return context.acceptedResponse?.(record, payload) ?? { statusCode: 204 };
       } catch (error) {
         if (!context.accepting()) return stopping();

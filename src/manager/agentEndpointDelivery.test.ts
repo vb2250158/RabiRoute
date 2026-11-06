@@ -125,7 +125,7 @@ test("refresh reads only the target and never a Grok source proof", async () => 
   await assert.rejects(() => factory.refreshEndpoints({ source: target, target: grok }), (error: { role?: string }) => error.role === "target");
 });
 
-function remoteDeliveryFixture(initial: "offline" | "disconnect-before-frame" | "timeout-after-frame" | "unproven-not-sent" | "accepted-before-disconnect") {
+function remoteDeliveryFixture(initial: "offline" | "disconnect-before-frame" | "timeout-after-frame" | "unproven-not-sent" | "accepted-before-disconnect" | "workspace-mismatch") {
   let connected = initial !== "offline";
   let failure: string | undefined = initial === "offline" ? undefined : initial;
   let persisted: unknown;
@@ -147,6 +147,7 @@ function remoteDeliveryFixture(initial: "offline" | "disconnect-before-frame" | 
         ? { status: "in_progress", deliveryId: delivery.deliveryId, generation: delivery.generation }
         : ownerReceipts.get(delivery.deliveryId);
       assert.equal(operation, "prepared_delivery");
+      if (failure === 'workspace-mismatch') throw Object.assign(new Error('Untrusted remote directory /private-owner/path'), { code: 'AGENT_WORKSPACE_MISMATCH' });
       if (failure === "disconnect-before-frame") {
         connected = false;
         throw Object.assign(new Error("Original connection disappeared before management send"), { code: "LAN_AGENT_MANAGEMENT_NOT_SENT", deliveryFrameSent: false });
@@ -175,6 +176,25 @@ function remoteDeliveryFixture(initial: "offline" | "disconnect-before-frame" | 
     reconnect: async () => { connected = true; failure = undefined; await Promise.all(connectionListeners.map(listener => listener())); },
     notifyConnection: async () => { await Promise.all(connectionListeners.map(listener => listener())); } };
 }
+
+test('remote workspace mismatch preserves the frozen intent and unconfirmed state with same-target discovery', async () => {
+  const f = remoteDeliveryFixture('workspace-mismatch');
+  const outcome = await executeEndpointAgentDelivery(f.request, f.options);
+  assert.equal(outcome.statusCode, 202); assert.equal(outcome.data.status, 'delivery_unconfirmed');
+  assert.equal(outcome.data.errorCode, 'AGENT_WORKSPACE_MISMATCH'); assert.equal(outcome.data.field, 'cwd');
+  assert.match(String(outcome.data.repair), /target-node/); assert.match(String(outcome.data.repair), /target-backend/);
+  assert.doesNotMatch(JSON.stringify(outcome.data), /private-owner/);
+  const original = (await f.store.listEndpointDeliveries())[0];
+  assert.equal(original.state, 'dispatching'); assert.equal(original.executionOptions.cwd, 'C:/fixture');
+  assert.equal(original.lastError?.code, 'AGENT_WORKSPACE_MISMATCH');
+  assert.equal((outcome.data.delivery as { retryable: boolean }).retryable, false);
+  const again = await executeEndpointAgentDelivery(f.request, f.options);
+  assert.equal(again.data.errorCode, 'AGENT_WORKSPACE_MISMATCH');
+  assert.equal(f.calls.filter(call => call.operation === 'prepared_delivery').length, 1);
+  const unchanged = (await f.store.listEndpointDeliveries())[0];
+  assert.equal(unchanged.deliveryId, original.deliveryId); assert.equal(unchanged.promptHash, original.promptHash);
+  assert.equal(unchanged.executionOptionsHash, original.executionOptionsHash); assert.equal(unchanged.generation, original.generation);
+});
 
 test("an initially offline remote target is durably prepared through the factory without invoking management transport", async () => {
   const f = remoteDeliveryFixture("offline");

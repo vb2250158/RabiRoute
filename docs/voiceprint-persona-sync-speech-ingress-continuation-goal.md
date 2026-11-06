@@ -49,20 +49,20 @@
 
 | 能力 | 当前应核对的主要拥有者 |
 | --- | --- |
-| 本机声纹 embedding、聚类、验证门禁 | `plugin-adapters/rabi-speech/rabispeech/speaker_recognition.py` |
-| ASR/TTS 文本记录 | `plugin-adapters/rabi-speech/rabispeech/speech_records.py` |
-| 主机级语音原始消息 | `src/speechIngressStore.ts` |
+| 本机声纹 embedding、聚类、验证门禁 | `src/plugins/rabi-speech/rabispeech/speaker_recognition.py` |
+| ASR/TTS 文本记录 | `src/plugins/rabi-speech/rabispeech/speech_records.py` |
+| 主机级语音原始消息 | `src/plugins/io.rabiroute.manager.speech/src/speechIngressStore.ts` |
 | Python/HTTP/人格账本共用转写规范化 | `src/shared/speechTranscript.ts` |
 | 语音事实到 Route 事件的字段映射 | `src/routing/speechIngressForwarding.ts` |
 | Manager 接收完成 ASR | `src/manager/speechMessageIngress.ts` |
 | 人格自己的声纹关系解释 | `src/personaVoiceIdentities.ts` |
-| 人格语音历史只读联结 | `src/personaVoiceTranscriptView.ts` |
+| 人格语音历史只读联结 | `src/plugins/io.rabiroute.manager.persona/src/personaVoiceTranscriptView.ts` |
 | 人格文件读取、归档、合并、冲突 | `src/personaSync.ts` |
 | peer 发现、LAN/Relay 传输编排 | `src/personaSyncCoordinator.ts` |
 | 人格同步派生索引 | `src/personaSyncManifestIndex.ts` |
 | 独立局域网数据面 | `src/manager/personaSyncLanServer.ts` |
 | Android 连续 PCM 采集与待确认缓冲 | `RabiPhoneAudioCapture`、`RabiPcmUploadBuffer` 及共享协议 |
-| 每条 Route 的人格对应与 Agent 投递 | `src/forwarding.ts` |
+| 每条 Route 的人格对应与 Agent 投递 | `src/plugins/io.rabiroute.endpoint.rabilink/src/forwarding.ts` |
 | 下行可靠队列、回执和安全门 | RabiLink Relay Outbox、RabiRoute Outbox / Action Gate |
 
 如果文档与真实构建产物不一致，以真实调用链和测试为证据：先修正中文事实源和成熟度，再维护英文版。
@@ -288,7 +288,7 @@ ASR 成功后先写一次主机通用消息，再广播给订阅该消息端的 
 
 1. Manager 对每条完成 ASR 只接收和保存一次，再按消息端类型广播给全部订阅 Route。
 2. 每条 Route 独立决定热投递、关键词唤醒、record-first observation、人格对应、回复自动播放和是否允许通过 RabiRoute 回传。
-3. `src/forwarding.ts` 继续是路由模板、人格上下文和处理端投递的核心；不要让 RabiSpeech、Android 或 Relay 反向定义 RouteDecision。
+3. `src/plugins/io.rabiroute.endpoint.rabilink/src/forwarding.ts` 继续是路由模板、人格上下文和处理端投递的核心；不要让 RabiSpeech、Android 或 Relay 反向定义 RouteDecision。
 4. AgentPacket 必须包含来源消息端、稳定设备、处理主机、记录 ID、时间、分段声纹证据和安全的 reply context。
 5. 手机语音默认回复原 `sourceDeviceId`；PC 麦克风默认留在 PC/Agent 或按 Route 配置播放。目标不明确或 policy 禁止时返回 blocked/draft，不猜测外发目标。
 6. 人格是否回应“其他人说的话”属于人格与 Route 的决策，不属于主机声纹层。声纹层只提供证据和当前人格关系视图。

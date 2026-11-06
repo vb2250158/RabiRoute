@@ -15,7 +15,7 @@ export async function notifyInstanceAgent(type: AgentAdapterType, binding: Agent
   const token = process.env.LAN_AGENT_ACCESS_TOKEN?.trim();
   const state = { monitorThreadSource: nodeId, agentAdapterType: type, instanceId: nodeId, agentId: binding.agentId, ...(binding.ownerDeviceId ? { ownerDeviceId: binding.ownerDeviceId } : {}) };
   try {
-    if (!nodeId) throw new Error("请在消息适配器中选择已接入的远端 Agent 节点。");
+    if (!nodeId) throw new Error("请在消息连接器中选择已接入的远端 Agent 节点。");
     if (!baseUrl || !token && !binding.ownerDeviceId) throw new Error("Manager 局域网连接未就绪；请检查局域网访问设置并重新启动此消息路线。");
     if (options?.imagePaths?.length) throw new Error("远端 Agent 尚不支持传送本机图片文件，请使用远端可访问的附件链接。");
     if (!options?.threadId || options.threadId !== options.threadId.trim()) throw new Error("Explicit full target session ID is required for remote delivery.");

@@ -142,6 +142,21 @@ class TaskWindowLayoutTest(unittest.TestCase):
         self.assertIn("#19bfc1", STYLESHEET)
         self.assertNotIn("background: #1b1e1e", STYLESHEET)
 
+
+    def test_task_window_uses_shared_six_pixel_scrollbars_for_both_axes_and_theme_changes(self) -> None:
+        from rabiroute_tray.theme import rabi_scrollbar_stylesheet
+        self.window.content_body.setMinimumSize(1400, 1400)
+        for theme in ("light", "dark"):
+            self.window.apply_theme(theme)
+            self.app.processEvents()
+            vertical = self.window.content.verticalScrollBar()
+            horizontal = self.window.content.horizontalScrollBar()
+            self.assertTrue(vertical.isVisible())
+            self.assertTrue(horizontal.isVisible())
+            self.assertEqual(vertical.width(), 6)
+            self.assertEqual(horizontal.height(), 6)
+            self.assertIn(rabi_scrollbar_stylesheet(theme), self.window.styleSheet())
+
     def test_menu_theme_matches_webgui_light_palette(self) -> None:
         self.assertIn("background: #ffffff", RABI_MENU_STYLESHEET)
         self.assertIn("background: #eaf8f9", RABI_MENU_STYLESHEET)

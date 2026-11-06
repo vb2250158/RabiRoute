@@ -1,7 +1,7 @@
 /// <reference types="node" />
 import assert from "node:assert/strict";
 import test from "node:test";
-import { activateCore } from "./bundles/builtinWebContributions";
+import { activateCore } from "../../src/plugins/io.rabiroute.manager.core/web/contributions";
 import { pluginCatalogStore } from "./pluginCatalogStore";
 import { activateWebPluginForTest } from "../tests/web-plugin-test-host";
 

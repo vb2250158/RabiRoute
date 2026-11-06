@@ -1,16 +1,16 @@
 import type http from 'node:http';
 import type { createAllDayRecording } from './allDayRecordingRoutes.js';
-import { createPersonaRecordingOperations } from './personaRecordingOperations.js';
-import { createPersonaRecordingOwner,type PersonaRecordingAction } from './personaRecordingOwner.js';
+import { createPersonaRecordingOperations } from '../plugins/io.rabiroute.manager.persona/src/manager/personaRecordingOperations.js';
+import { createPersonaRecordingOwner,type PersonaRecordingAction } from '../plugins/io.rabiroute.manager.persona/src/manager/personaRecordingOwner.js';
 import { ManagerPluginRouteRegistry } from './managerPluginRouteRegistry.js';
-import { registerLanAgentBodyGuard,assertLanAgentBodyAuthority } from './lanAgentBodyAuthority.js';
+import { registerLanAgentBodyGuard } from './lanAgentBodyAuthority.js';
 
 /** Existing authority fixtures use controlled fake requests; real HTTP always uses the executable registry. */
 export function recordingOperationFixture(runtime:ReturnType<typeof createAllDayRecording>,options:{local(request:http.IncomingMessage):boolean;readOnly():boolean;readBody(request:http.IncomingMessage):Promise<unknown>}){
   const context={runtime,roleDirectory:runtime.store.roleDirectory,...options},owner=createPersonaRecordingOwner(context),registry=new ManagerPluginRouteRegistry();
   registry.registerOperations('recording-regression-fixture',createPersonaRecordingOperations(context));
   return (request:http.IncomingMessage,url:URL,response:http.ServerResponse)=>{
-    registerLanAgentBodyGuard(request,body=>assertLanAgentBodyAuthority(url.pathname,body,undefined));
+    registerLanAgentBodyGuard(request,() => {});
     if(typeof request[Symbol.asyncIterator]==='function')return registry.handle(request,url,response);
     const match=/^\/(?:api\/)?roles\/([^/]+)\/all-day-recording(?:\/(.*))?$/.exec(url.pathname);if(!match)return false;
     const action=(match[2]||'snapshot').split('/')[0],name=action==='index-repair'?'repair':action;

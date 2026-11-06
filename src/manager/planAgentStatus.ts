@@ -1,8 +1,7 @@
 import { getTimeoutMs } from "../shared/timeoutSettings.js";
-import { openCodexDesktopThread } from "../codexDesktopBridge.js";
-import { readCodexThread } from "../codexRuntime.js";
-import { listDshSessions, openDshSession, readDshSession } from "../dshSessionBridge.js";
-import { openAntigravitySession, readAntigravitySession } from "../antigravitySessionStore.js";
+import { openCodexDesktopThread, readCodexThread } from "../agentAdapters/codexNative.js";
+import { listDshSessions, openDshSession, readDshSession } from "../plugins/io.rabiroute.agent.dsh/src/dshSessionBridge.js";
+import { openAntigravitySession, readAntigravitySession } from "../plugins/io.rabiroute.agent.antigravity/src/antigravitySessionStore.js";
 import {
   agentAdapterManifest,
   type PlanAssistantAgentType

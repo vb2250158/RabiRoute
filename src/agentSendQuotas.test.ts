@@ -8,7 +8,7 @@ const fixture = String.raw`
   import { prepareAgentSendRequest } from "./src/agentSend.ts";
   import { agentSendQuotaSettings, AGENT_SEND_REQUEST_CONTRACT } from "./src/agentSendContracts.ts";
   import { markdownImageSettings } from "./src/markdownImage.ts";
-  import { agentSendOperationContract } from "./src/manager/agentSendOperations.ts";
+  import { agentSendOperationContract } from "./src/plugins/io.rabiroute.manager.agent-communication/src/manager/agentSendOperations.ts";
   import { compileApiOperation, readApiOperationInput } from "./src/manager/apiOperationContract.ts";
   const operation = compileApiOperation({ contract: agentSendOperationContract, handler: () => ({ status: 200 }) });
   const request = payload => ({ deliveryId: "quota-test", sender: { agentType: "codex", sessionId: "quota-session" }, routeId: "fixture", channel: "napcat", params: { target: "private", userId: "fixture-user" }, payload });

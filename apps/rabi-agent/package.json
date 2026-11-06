@@ -1,6 +1,6 @@
 {
   "name": "rabi-agent",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "private": true,
   "type": "module",
   "description": "Enrolled computer connector with explicit Agent type and session targeting",
@@ -11,9 +11,10 @@
     "@openai/codex": "0.144.1",
     "ajv": "^8.20.0",
     "ajv-formats": "^3.0.1",
-    "ws": "^8.18.0",
     "bonjour-service": "1.4.4",
-    "dotenv": "^16.4.7"
+    "dotenv": "^16.4.7",
+    "koffi": "3.3.7",
+    "ws": "^8.18.0"
   },
   "optionalDependencies": {
     "node-pty": "1.1.0"
@@ -21,6 +22,6 @@
   "scripts": {
     "start": "node rabi-agent.mjs --run",
     "bootstrap": "node rabi-agent.mjs --bootstrap",
-    "check": "node --check rabi-agent.mjs && node --check lib/codex-desktop-ipc.mjs && node --check lib/cwd-policy.mjs && node --test test/*.test.mjs"
+    "check": "node --check rabi-agent.mjs && node --check runtime/management.mjs && node --check lib/cwd-policy.mjs && node --test test/*.test.mjs"
   }
 }

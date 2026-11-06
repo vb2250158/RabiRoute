@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import {computed,onMounted,ref,watch} from "vue";
-import {speechControlClient} from "../speech/speechControlClient";
+import {speechControlClient} from "../../../src/plugins/io.rabiroute.manager.speech/web/speech/speechControlClient";
 import type {SpeechModel,SpeechPersona} from "@shared/speechControlContract";
-import {ttsCapabilities,ttsSystemVoices,normalizeTtsParameters,ttsEmotions,type TtsParameters} from "../speech/ttsParameters";
+import {ttsCapabilities,ttsSystemVoices,normalizeTtsParameters,ttsEmotions,type TtsParameters} from "../../../src/plugins/io.rabiroute.manager.speech/web/speech/ttsParameters";
 const props=defineProps<{model?:SpeechModel;modelValue:TtsParameters;disabled?:boolean}>();
 const emit=defineEmits<{"update:modelValue":[value:TtsParameters]}>();
 const systemSearch=ref("");

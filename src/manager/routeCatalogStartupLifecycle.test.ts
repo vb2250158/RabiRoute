@@ -412,20 +412,20 @@ test("startup capture and concurrent mutations are strictly serialized and each 
 
 test("Manager publishes fenced READY before route catalog recovery and gates HTTP until a snapshot is installed", () => {
   const source = fs.readFileSync(fileURLToPath(new URL("./controlPlaneRoutes.ts", import.meta.url)), "utf8");
-  const desktopSource = fs.readFileSync(fileURLToPath(new URL("./desktopControlRoutes.ts", import.meta.url)), "utf8");
+  const desktopSource = fs.readFileSync(fileURLToPath(new URL("../plugins/io.rabiroute.manager.desktop/src/manager/desktopControlRoutes.ts", import.meta.url)), "utf8");
   const desktopPluginSource = fs.readFileSync(fileURLToPath(new URL(
-    "../../plugins/builtin/io.rabiroute.manager.desktop/1.0.0/manager.mjs",
+    "../plugins/io.rabiroute.manager.desktop/manager.mjs",
     import.meta.url
   )), "utf8");
   const routeControlPluginSource = fs.readFileSync(fileURLToPath(new URL(
-    "../../plugins/builtin/io.rabiroute.manager.route-control/1.0.0/manager.mjs",
+    "../plugins/io.rabiroute.manager.route-control/manager.mjs",
     import.meta.url
   )), "utf8");
-  const routeControlOperationsSource = fs.readFileSync(fileURLToPath(new URL("./rabiApiOperations.ts", import.meta.url)), "utf8");
-  const managerConfigurationSource = fs.readFileSync(fileURLToPath(new URL("./rabiApi.ts", import.meta.url)), "utf8");
+  const routeControlOperationsSource = fs.readFileSync(fileURLToPath(new URL("../plugins/io.rabiroute.manager.route-control/src/manager/rabiApiOperations.ts", import.meta.url)), "utf8");
+  const managerConfigurationSource = fs.readFileSync(fileURLToPath(new URL("../plugins/io.rabiroute.manager.route-control/src/manager/rabiApi.ts", import.meta.url)), "utf8");
   const roleInfoSource = fs.readFileSync(fileURLToPath(new URL("./roleInfoPayload.ts", import.meta.url)), "utf8");
-  const personaMessagingSource = fs.readFileSync(fileURLToPath(new URL("./personaMessagingRoutes.ts", import.meta.url)), "utf8");
-  const speechSource = fs.readFileSync(fileURLToPath(new URL("./speechControl.ts", import.meta.url)), "utf8");
+  const personaMessagingSource = fs.readFileSync(fileURLToPath(new URL("../plugins/io.rabiroute.manager.persona/src/manager/personaMessagingRoutes.ts", import.meta.url)), "utf8");
+  const speechSource = fs.readFileSync(fileURLToPath(new URL("../plugins/io.rabiroute.manager.speech/src/manager/speechControl.ts", import.meta.url)), "utf8");
   const transactionSource = fs.readFileSync(fileURLToPath(new URL("./routeCatalogTransaction.ts", import.meta.url)), "utf8");
   const startManagerSource = source.slice(source.indexOf("export async function startManager"));
   const readyIndex = startManagerSource.indexOf("console.log(managerReadyLine({");
@@ -472,10 +472,12 @@ test("Manager publishes fenced READY before route catalog recovery and gates HTT
   assert.match(desktopSource, /await context\.ensurePersonaConfigFile\(safeRoleId\)/);
   assert.match(desktopSource, /await context\.writeAdapterConfigFile\(route\)/);
   assert.match(desktopPluginSource, /ensureRoleFile: runtime\.ensureRoleFile/);
-  assert.match(routeControlPluginSource, /await runtime\.prepareRegistration\(\)/);
-  const registrationSource = fs.readFileSync(new URL("../plugin-runtime-host/routeControlAsyncRegistration.ts", import.meta.url), "utf8");
-  assert.match(registrationSource, /registerOperationsAsync\(context\.identity\.instanceId,\s*original\.createRabiControlOperations\(\), context\.lifecycle\.signal\)/);
-  assert.match(source, /createRabiControlOperations:\s*\(\) => createRabiControlOperations\([\s\S]*?readManagerConfig, writeManagerConfig, ensureDataDirs/);
+  assert.match(routeControlPluginSource, /await shared\.prepareModules\(hostModules\)/);
+  assert.match(routeControlPluginSource, /createImplementation\(shared\)\.createOwnedRuntime\(shared\)/);
+  assert.match(routeControlPluginSource, /registerOperationsAsync\(context\.identity\.instanceId,\s*runtime\.createRabiControlOperations\(\), context\.lifecycle\.signal\)/);
+  const routeControlRuntimeSource = fs.readFileSync(new URL("../plugins/io.rabiroute.manager.route-control/hostRuntime.mjs", import.meta.url), "utf8");
+  assert.match(routeControlRuntimeSource, /createRabiControlOperations:\s*\(\) => createRabiControlOperations\([\s\S]*?readManagerConfig: ports\.readManagerConfig,[\s\S]*?writeManagerConfig: ports\.writeManagerConfig,[\s\S]*?ensureDataDirs: ports\.ensureDataDirs/);
+  for (const name of ["readManagerConfig", "writeManagerConfig", "ensureDataDirs"]) assert.ok(source.includes(`get ${name}() { return ${name}; }`), `${name} retains its original host owner`);
   assert.match(routeControlOperationsSource, /createManagerConfigurationOwner\(managerConfig\)/);
   assert.match(routeControlOperationsSource, /await configuration\.update\(input\.body as any, guard\)/);
   const managerConfigurationOwnerSource = managerConfigurationSource.slice(managerConfigurationSource.indexOf("export function createManagerConfigurationOwner"));

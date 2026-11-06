@@ -1,4 +1,5 @@
 import path from "node:path";
+import dotenv from "dotenv";
 import { fileURLToPath } from "node:url";
 import {
   acquireManagerInstanceLock,
@@ -64,16 +65,26 @@ async function acquireMachineInstanceLock() {
 const runtimeDiagnostics = installManagerRuntimeDiagnostics({ rootDir: managerRuntimeLayout.stateRoot });
 
 void (async () => {
+let instanceLock: Awaited<ReturnType<typeof acquireMachineInstanceLock>> | undefined;
 try {
   // Host owns the Windows application generation, while this lock owns the
   // single state-writing Manager process. Both hosted and source-mode starts
   // must contend for it so an old/manual Manager cannot become a second owner.
-  const instanceLock = await acquireMachineInstanceLock();
-  process.once("exit", () => { void instanceLock.release(); });
+  instanceLock = await acquireMachineInstanceLock();
+  const ownedInstanceLock = instanceLock;
+  process.once("exit", () => { void ownedInstanceLock.release(); });
+  // Storage adoption runs under the application's exclusive owner before any
+  // plugin opens its stores. Explicit settings retain precedence over .env.
+  dotenv.config({ path: path.join(managerRuntimeLayout.stateRoot, ".env") });
+  const { prepareApplicationPluginStorage } = await import("./shared/pluginStorage.js");
+  await prepareApplicationPluginStorage({ phase: "owners-retired", layout: managerRuntimeLayout,
+    readOnly: process.env.RABIROUTE_MANAGER_READ_ONLY === "1" });
   void import("./manager/controlPlaneRoutes.js")
-    .then(({ startManager }) => startManager({ instanceLock }))
+    .then(({ startManager }) => startManager({ instanceLock: ownedInstanceLock }))
     .catch(async (error) => {
-      await instanceLock.release();
+      await ownedInstanceLock.release().catch((cleanupError) => {
+        runtimeDiagnostics.record("startup_failure", { error: cleanupError });
+      });
       runtimeDiagnostics.record("startup_failure", { error });
       console.error(error);
       // A plugin may already have created child processes or other live handles.
@@ -81,6 +92,9 @@ try {
       process.exit(1);
     });
 } catch (error) {
+  await instanceLock?.release().catch((cleanupError) => {
+    runtimeDiagnostics.record("startup_failure", { error: cleanupError });
+  });
   runtimeDiagnostics.record("startup_failure", { error });
   if (error instanceof ManagerInstanceAlreadyRunningError) {
     console.error(`RabiRoute Manager single-instance guard refused a duplicate start: pid=${error.owner.pid}.`);

@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { defineComponent } from "vue";
-import { activateCore, activateMessageAdapterControl, activatePersona, activateSpeech } from "../src/bundles/builtinWebContributions";
+import { activateCore } from "../../src/plugins/io.rabiroute.manager.core/web/contributions";
+import { activateMessageAdapterControl } from "../../src/plugins/io.rabiroute.manager.message-adapter-control/web/contributions";
+import { activatePersona } from "../../src/plugins/io.rabiroute.manager.persona/web/contributions";
+import { activateSpeech } from "../../src/plugins/io.rabiroute.manager.speech/web/contributions";
 import { buildWebNavigation } from "../src/pluginNavigation";
 import { registerTrustedWebPage } from "../src/pluginPages";
 import { activateWebPluginForTest } from "./web-plugin-test-host";

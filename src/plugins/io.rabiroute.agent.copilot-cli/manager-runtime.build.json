@@ -1,0 +1,26 @@
+{
+  "exports": [
+    {
+      "source": "src/plugins/io.rabiroute.agent.copilot-cli/src/agentAdapters/copilotManagerProvider.ts",
+      "name": "createManager"
+    }
+  ],
+  "ownedPrefixes": [
+    "src/plugins/io.rabiroute.agent.copilot-cli/"
+  ],
+  "scopedEnvironment": true,
+  "hostSources": [
+    "src/agentAdapters/stateReporter.ts"
+  ],
+  "ownedSources": [
+    "src/plugins/io.rabiroute.agent.copilot-cli/src/manager/agentProviderControlService.ts"
+  ],
+  "workers": [
+    {
+      "source": "src/plugins/io.rabiroute.agent.copilot-cli/src/agentAdapters/copilotManagerApi.ts",
+      "target": "workers/scan.mjs",
+      "mode": "host-factory"
+    }
+  ],
+  "packageId": "io.rabiroute.agent.copilot-cli"
+}

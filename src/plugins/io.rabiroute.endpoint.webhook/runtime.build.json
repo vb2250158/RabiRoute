@@ -1,0 +1,8 @@
+{
+  "source": "src/plugins/io.rabiroute.endpoint.webhook/src/adapters/webhookEndpoint.ts",
+  "factory": "createWebhookEndpoint",
+  "packageId": "io.rabiroute.endpoint.webhook",
+  "ownedPrefixes": [
+    "src/plugins/io.rabiroute.endpoint.webhook/"
+  ]
+}

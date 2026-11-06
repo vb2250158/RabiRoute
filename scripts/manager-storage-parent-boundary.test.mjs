@@ -9,25 +9,25 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".."
 
 const FORMAL_PARENT_MODULES = Object.freeze([
   "src/manager/controlPlaneRoutes.ts",
-  "src/manager/personaIdentityOwner.ts",
-  "src/manager/wearableHealthRoute.ts",
+  "src/plugins/io.rabiroute.manager.persona/src/manager/personaIdentityOwner.ts",
+  "src/plugins/io.rabiroute.manager.persona/src/manager/wearableHealthRoute.ts",
   "src/outbox.ts",
   "src/manager/planQaFeedback.ts",
   "src/manager/planFeedbackRecovery.ts",
   "src/manager/memoryConsolidationScheduleWorker.ts",
-  "src/manager/personaAvatarRoutes.ts",
-  "src/manager/personaDocumentRoutes.ts",
-  "src/manager/planAttachmentRoutes.ts",
-  "src/manager/rolePanelDelivery.ts",
+  "src/plugins/io.rabiroute.manager.persona/src/manager/personaAvatarRoutes.ts",
+  "src/plugins/io.rabiroute.manager.persona/src/manager/personaDocumentRoutes.ts",
+  "src/plugins/io.rabiroute.manager.persona/src/manager/planAttachmentRoutes.ts",
+  "src/plugins/io.rabiroute.manager.persona/src/manager/rolePanelDelivery.ts",
   "src/manager/planTaskCompletionDelivery.ts"
 ]);
 
 // TODO(manager-storage-parent-boundary): these modules remain outside the P0 gate
 // only until their local storage seams are moved behind bounded read/mutation ports.
 const PENDING_PARENT_MODULES = Object.freeze([
-  "src/manager/desktopPetRoutes.ts",
-  "src/manager/bilibiliHistoryBridge.ts",
-  "src/manager/codexHookRoutes.ts"
+  "src/plugins/io.rabiroute.manager.desktop-pet/src/manager/desktopPetRoutes.ts",
+  "src/plugins/io.rabiroute.manager.bilibili-history/src/manager/bilibiliHistoryBridge.ts",
+  "src/plugins/io.rabiroute.manager.agent-communication/src/manager/codexHookRoutes.ts"
 ]);
 
 const FORBIDDEN_STORAGE_IMPLEMENTATION_IMPORT = /(?:^|\/)managerStorageMutation(?:Pool|Protocol|Child)(?:\.[cm]?[jt]s)?$/i;
@@ -124,28 +124,28 @@ const HARD_OWNER_MODULES = new Set(
 const EXPECTED_PENDING_PARENT_VIOLATION_COUNTS = Object.freeze([
   ["src/manager/controlPlaneRoutes.ts|domain-storage-owner-import|messageContextStore.appendMessageContextToDir", 1],
   ["src/manager/controlPlaneRoutes.ts|role-storage-fs-access|fs.readdirSync", 1],
-  ["src/manager/personaAvatarRoutes.ts|domain-storage-owner-call|personaAvatar.removePersonaAvatar", 1],
-  ["src/manager/personaAvatarRoutes.ts|domain-storage-owner-call|personaAvatar.savePersonaAvatar", 1],
-  ["src/manager/personaAvatarRoutes.ts|domain-storage-owner-import|personaAvatar.removePersonaAvatar", 1],
-  ["src/manager/personaAvatarRoutes.ts|domain-storage-owner-import|personaAvatar.savePersonaAvatar", 1],
-  ["src/manager/personaAvatarRoutes.ts|role-storage-fs-access|fs.createReadStream", 1],
-  ["src/manager/personaAvatarRoutes.ts|role-storage-fs-access|fs.openSync", 1],
-  ["src/manager/personaDocumentRoutes.ts|role-storage-fs-access|fs.existsSync", 1],
-  ["src/manager/personaDocumentRoutes.ts|role-storage-fs-access|fs.readFileSync", 1],
-  ["src/manager/personaDocumentRoutes.ts|role-storage-fs-access|fs.realpathSync", 2],
-  ["src/manager/personaDocumentRoutes.ts|role-storage-fs-access|fs.statSync", 1],
+  ["src/plugins/io.rabiroute.manager.persona/src/manager/personaAvatarRoutes.ts|domain-storage-owner-call|personaAvatar.removePersonaAvatar", 1],
+  ["src/plugins/io.rabiroute.manager.persona/src/manager/personaAvatarRoutes.ts|domain-storage-owner-call|personaAvatar.savePersonaAvatar", 1],
+  ["src/plugins/io.rabiroute.manager.persona/src/manager/personaAvatarRoutes.ts|domain-storage-owner-import|personaAvatar.removePersonaAvatar", 1],
+  ["src/plugins/io.rabiroute.manager.persona/src/manager/personaAvatarRoutes.ts|domain-storage-owner-import|personaAvatar.savePersonaAvatar", 1],
+  ["src/plugins/io.rabiroute.manager.persona/src/manager/personaAvatarRoutes.ts|role-storage-fs-access|fs.createReadStream", 1],
+  ["src/plugins/io.rabiroute.manager.persona/src/manager/personaAvatarRoutes.ts|role-storage-fs-access|fs.openSync", 1],
+  ["src/plugins/io.rabiroute.manager.persona/src/manager/personaDocumentRoutes.ts|role-storage-fs-access|fs.existsSync", 1],
+  ["src/plugins/io.rabiroute.manager.persona/src/manager/personaDocumentRoutes.ts|role-storage-fs-access|fs.readFileSync", 1],
+  ["src/plugins/io.rabiroute.manager.persona/src/manager/personaDocumentRoutes.ts|role-storage-fs-access|fs.realpathSync", 2],
+  ["src/plugins/io.rabiroute.manager.persona/src/manager/personaDocumentRoutes.ts|role-storage-fs-access|fs.statSync", 1],
   // Identity and health seams moved from controlPlaneRoutes into native owners.
   // Their original ledger writes still run in the parent; relocation is not retirement.
-  ["src/manager/personaIdentityOwner.ts|domain-storage-owner-call|identityRelations.recordIdentityCandidateObservation", 1],
-  ["src/manager/personaIdentityOwner.ts|domain-storage-owner-call|identityRelations.updateIdentityRelation", 2],
-  ["src/manager/personaIdentityOwner.ts|domain-storage-owner-call|personaVoiceIdentities.updatePersonaVoiceIdentity", 1],
-  ["src/manager/personaIdentityOwner.ts|domain-storage-owner-import|identityRelations.recordIdentityCandidateObservation", 1],
-  ["src/manager/personaIdentityOwner.ts|domain-storage-owner-import|identityRelations.updateIdentityRelation", 1],
-  ["src/manager/personaIdentityOwner.ts|domain-storage-owner-import|personaVoiceIdentities.updatePersonaVoiceIdentity", 1],
-  ["src/manager/planAttachmentRoutes.ts|role-storage-fs-access|fs.readFileSync", 1],
-  ["src/manager/wearableHealthRoute.ts|domain-storage-owner-call|wearableHealth.updateWearableHealthConfig", 1],
-  ["src/manager/wearableHealthRoute.ts|domain-storage-owner-import|wearableHealth.ingestWearableHealthObservation", 1],
-  ["src/manager/wearableHealthRoute.ts|domain-storage-owner-import|wearableHealth.updateWearableHealthConfig", 1],
+  ["src/plugins/io.rabiroute.manager.persona/src/manager/personaIdentityOwner.ts|domain-storage-owner-call|identityRelations.recordIdentityCandidateObservation", 1],
+  ["src/plugins/io.rabiroute.manager.persona/src/manager/personaIdentityOwner.ts|domain-storage-owner-call|identityRelations.updateIdentityRelation", 2],
+  ["src/plugins/io.rabiroute.manager.persona/src/manager/personaIdentityOwner.ts|domain-storage-owner-call|personaVoiceIdentities.updatePersonaVoiceIdentity", 1],
+  ["src/plugins/io.rabiroute.manager.persona/src/manager/personaIdentityOwner.ts|domain-storage-owner-import|identityRelations.recordIdentityCandidateObservation", 1],
+  ["src/plugins/io.rabiroute.manager.persona/src/manager/personaIdentityOwner.ts|domain-storage-owner-import|identityRelations.updateIdentityRelation", 1],
+  ["src/plugins/io.rabiroute.manager.persona/src/manager/personaIdentityOwner.ts|domain-storage-owner-import|personaVoiceIdentities.updatePersonaVoiceIdentity", 1],
+  ["src/plugins/io.rabiroute.manager.persona/src/manager/planAttachmentRoutes.ts|role-storage-fs-access|fs.readFileSync", 1],
+  ["src/plugins/io.rabiroute.manager.persona/src/manager/wearableHealthRoute.ts|domain-storage-owner-call|wearableHealth.updateWearableHealthConfig", 1],
+  ["src/plugins/io.rabiroute.manager.persona/src/manager/wearableHealthRoute.ts|domain-storage-owner-import|wearableHealth.ingestWearableHealthObservation", 1],
+  ["src/plugins/io.rabiroute.manager.persona/src/manager/wearableHealthRoute.ts|domain-storage-owner-import|wearableHealth.updateWearableHealthConfig", 1],
   ["src/outbox.ts|domain-storage-owner-call|messageContextStore.appendMessageContextToDir", 1],
   ["src/outbox.ts|domain-storage-owner-call|rabilinkConversationLedger.appendRabiLinkConversationEntry", 1],
   ["src/outbox.ts|domain-storage-owner-import|messageContextStore.appendMessageContextToDir", 1],
@@ -156,7 +156,7 @@ const EXPECTED_PENDING_PARENT_VIOLATION_COUNTS = Object.freeze([
   ["src/outbox.ts|role-storage-fs-access|fs.readFile", 1],
   // The retired FenneNote persona-name reader was removed; readJsonl still owns one synchronous read.
   ["src/outbox.ts|role-storage-fs-access|fs.readFileSync", 1]
-]);
+].sort(([left], [right]) => left.localeCompare(right)));
 
 const FORBIDDEN_OWNER_EXPORTS = new Map(
   Object.values(OWNER_EXPORT_GROUPS).map((group) => [group.module, new Set(group.exports)])
@@ -750,7 +750,7 @@ test("formal Manager parents cannot call promised plan, memory, feedback, or rol
 });
 
 test("native identity and health owners remain inside the same hard storage boundary", () => {
-  for (const ownerPath of ["src/manager/personaIdentityOwner.ts", "src/manager/wearableHealthRoute.ts"]) {
+  for (const ownerPath of ["src/plugins/io.rabiroute.manager.persona/src/manager/personaIdentityOwner.ts", "src/plugins/io.rabiroute.manager.persona/src/manager/wearableHealthRoute.ts"]) {
     assert.ok(FORMAL_PARENT_MODULES.includes(ownerPath), ownerPath);
     for (const key of HARD_OWNER_GROUP_KEYS) {
       const group = OWNER_EXPORT_GROUPS[key];
@@ -759,8 +759,8 @@ test("native identity and health owners remain inside the same hard storage boun
       assert.deepEqual(violations.filter(isHardParentViolation).map(({ code }) => code), ["domain-storage-owner-import", "domain-storage-owner-call"]);
     }
   }
-  assert.deepEqual(productionModuleImporters("personaIdentityOwner"), ["src/manager/personaIdentityOperations.ts"]);
-  assert.deepEqual(productionModuleImporters("wearableHealthRoute"), ["src/manager/personaHealthOperations.ts"]);
+  assert.deepEqual(productionModuleImporters("personaIdentityOwner"), ["src/plugins/io.rabiroute.manager.persona/src/manager/personaIdentityOperations.ts"]);
+  assert.deepEqual(productionModuleImporters("wearableHealthRoute"), ["src/plugins/io.rabiroute.manager.persona/src/manager/personaHealthOperations.ts"]);
 });
 
 test("storage analyzer keeps descriptor-based avatar reads visible without flagging local runtime files", () => {

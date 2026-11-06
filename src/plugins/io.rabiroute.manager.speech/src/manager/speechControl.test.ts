@@ -1,0 +1,1242 @@
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import test from "node:test";
+import type { SpeechRuntimeStatus } from "../../../../shared/speechControlContract.js";
+import type { LocalSpeechResponse } from "../../../../speech/localSpeechClient.js";
+import { SpeechIngressStore } from "../../../../speechIngressStore.js";
+import {
+  ManagerSpeechControl,
+  SpeechControlError,
+  type ManagerSpeechLocalAdapter
+} from "./speechControl.js";
+
+const onlineStatus: SpeechRuntimeStatus = {
+  state: "online",
+  checkedAt: "2026-07-18T00:00:00.000Z",
+  configuredUrl: "http://127.0.0.1:8781",
+  defaults: { tts: "local-tts", asr: "faster-whisper" },
+  providers: { tts: [], asr: [] }
+};
+
+test("Manager preserves unavailable selection diagnostics and private recovery identity through the existing choice API", async () => {
+  const raw = { enabled: true, source: "unavailable", selected_client_id: null, selected_online: false,
+    selection_storage_error: "音频设备选择存档损坏或版本不受支持。重新选择设备会保留原始恢复副本，并使用本版本的设备选择格式。",
+    selection_recovery: null as { id: string; sha256: string } | null, clients: [], events: [] };
+  const requests: Array<{ path: string; body?: unknown }> = [];
+  const control = new ManagerSpeechControl({ serviceUrl: () => "http://127.0.0.1:1", personas: () => [], route: () => undefined, routes: () => [],
+    deliverTranscript: async () => ({ status: "delivered" }), appendRouteLog: () => {}, localSpeech: {
+      inspect: async () => onlineStatus, requestBinary: async () => binaryResponse(),
+      requestJson: async (_url, path, init) => {
+        requests.push({ path, body: init?.body ? JSON.parse(String(init.body)) : undefined });
+        if (init?.method === "PUT") return { status: 200, data: { ...raw, source: "local", selected_online: true,
+          selection_storage_error: null, selection_recovery: { id: "fixture.raw", sha256: "a".repeat(64) } } };
+        return { status: 200, data: raw };
+      }
+    } });
+  const unavailable = await control.audioStreams();
+  assert.equal(unavailable.source, "unavailable");
+  assert.equal(unavailable.selectionStorageError, raw.selection_storage_error);
+  assert.equal(unavailable.selectionRecovery, null);
+  assert.equal(unavailable.selectedOnline, false);
+  const recovered = await control.selectAudioStream({ source: "local" });
+  assert.deepEqual(requests[1], { path: "/v1/audio-streams/selection", body: { source: "local", client_id: null } });
+  assert.equal(recovered.source, "local");
+  assert.equal(recovered.selectionStorageError, null);
+  assert.deepEqual(recovered.selectionRecovery, { id: "fixture.raw", sha256: "a".repeat(64) });
+  assert.equal(JSON.stringify(recovered).includes("selection_storage_error"), false);
+});
+
+test("Manager preserves recognition observations in history, records and the manual ASR response", async () => {
+  const observations = { text: "你好", emotion: "NEUTRAL", emotion_labels: ["NEUTRAL"], audio_events: ["Speech"],
+    raw_tags: ["<|zh|>", "<|NEUTRAL|>"], confidence: 0.97,
+    segments: [{ id: 0, start: 0.1, end: 0.8, text: "你好", words: [{ word: "你", start: 0.1, end: 0.4 }, { word: "好", start: 0.4, end: 0.8 }] }] };
+  const control = new ManagerSpeechControl({
+    serviceUrl: () => "http://127.0.0.1:8781", personas: () => [], route: () => undefined, routes: () => [],
+    deliverTranscript: async () => ({ status: "delivered" }), appendRouteLog: () => {},
+    localSpeech: {
+      inspect: async () => onlineStatus,
+      requestBinary: async () => ({ status: 200, contentType: "application/json", headers: {}, body: Buffer.from(JSON.stringify(observations)) }),
+      requestJson: async (_url, pathname) => ({ status: 200, data: pathname === "/v1/microphone/status"
+        ? { history: [{ time: 1, provider: "fixture", model: "fixture", duration: 1, ...observations }] }
+        : { data: [{ id: "fixture", kind: "asr", ...observations }] } })
+    }
+  });
+  const history = (await control.microphoneStatus()).history[0]!;
+  const record = (await control.records({}))[0]!;
+  for (const result of [history, record]) {
+    assert.equal(result.text, "你好");
+    assert.equal(result.emotion, "NEUTRAL");
+    assert.deepEqual(result.emotionLabels, ["NEUTRAL"]);
+    assert.deepEqual(result.audioEvents, ["Speech"]);
+    assert.deepEqual(result.rawTags, ["<|zh|>", "<|NEUTRAL|>"]);
+    assert.equal(result.confidence, 0.97);
+    assert.equal(result.segments[0]?.words?.[0]?.word, "你");
+    assert.equal(result.segments[0]?.words?.[0]?.probability, undefined);
+    assert.equal(JSON.stringify(result).includes("raw_tags"), false);
+  }
+  const response = await control.transcribe("multipart/form-data; boundary=fixture", Buffer.from("fixture"));
+  assert.deepEqual(JSON.parse(response.body.toString()), observations);
+});
+
+test("speech personas consume immutable route catalog voice and avatar metadata", () => {
+  const control = new ManagerSpeechControl({
+    serviceUrl: () => "http://127.0.0.1:8781",
+    personas: () => [{
+      rolesRoot: "Z:\\roles",
+      roleId: "YeYu",
+      isPersona: true,
+      displayName: "夜雨",
+      avatarConfigured: true,
+      avatarVersion: "10-20",
+      files: [],
+      speech: {
+        voiceReady: true,
+        defaultModel: "local-tts",
+        language: "zh",
+        speed: 1.1,
+        voiceStyleSummary: "calm"
+      }
+    }],
+    route: () => undefined,
+    routes: () => [],
+    deliverTranscript: async () => ({ status: "delivered" }),
+    appendRouteLog: () => {}
+  });
+
+  assert.deepEqual(control.personas(), [{
+    id: "YeYu",
+    voiceReady: true,
+    avatarUrl: "/api/roles/YeYu/avatar?v=10-20",
+    defaultModel: "local-tts",
+    language: "zh",
+    instructions: undefined,
+    speed: 1.1,
+    voiceStyleSummary: "calm"
+  }]);
+  const source = fs.readFileSync(new URL("./speechControl.ts", import.meta.url), "utf8");
+  const personaSource = source.slice(source.indexOf("  personas("), source.indexOf("  async playbackStatus"));
+  assert.doesNotMatch(personaSource, /fs\.|path\.|readdirSync|readFileSync|existsSync/);
+});
+
+function binaryResponse(): LocalSpeechResponse {
+  return {
+    status: 200,
+    contentType: "audio/wav",
+    headers: {},
+    body: Buffer.from([1, 2, 3])
+  };
+}
+
+test("Manager speech control shares concurrent runtime status probes", async () => {
+  let inspectCalls = 0;
+  let releaseFirstInspection = () => {};
+  const firstInspection = new Promise<SpeechRuntimeStatus>(resolve => {
+    releaseFirstInspection = () => resolve(onlineStatus);
+  });
+  const localSpeech: ManagerSpeechLocalAdapter = {
+    inspect: async () => {
+      inspectCalls += 1;
+      return inspectCalls === 1 ? firstInspection : onlineStatus;
+    },
+    requestBinary: async () => binaryResponse(),
+    requestJson: async () => ({ status: 200, data: {} })
+  };
+  const control = new ManagerSpeechControl({
+    serviceUrl: () => "http://127.0.0.1:8781",
+    personas: () => [],
+    route: () => undefined,
+    routes: () => [],
+    deliverTranscript: async () => ({ status: "delivered" }),
+    appendRouteLog: () => {},
+    localSpeech,
+    statusCacheTtlMs: 5
+  });
+
+  const concurrent = Array.from({ length: 6 }, () => control.status());
+  await new Promise(resolve => setImmediate(resolve));
+  const callsBeforeRelease = inspectCalls;
+  releaseFirstInspection();
+  await Promise.all(concurrent);
+
+  assert.equal(callsBeforeRelease, 1);
+  await control.status();
+  assert.equal(inspectCalls, 1);
+  await new Promise(resolve => setTimeout(resolve, 10));
+  await control.status();
+  assert.equal(inspectCalls, 2);
+});
+
+test("Manager speech control owns camelCase microphone and model contracts", async () => {
+  const localSpeech: ManagerSpeechLocalAdapter = {
+    inspect: async () => onlineStatus,
+    requestBinary: async () => binaryResponse(),
+    requestJson: async (_serviceUrl, pathname) => {
+      if (pathname === "/v1/models") {
+        return {
+          status: 200,
+          data: {
+            data: [{
+              id: "faster-whisper/small",
+              capability: "asr",
+              provider: "faster-whisper",
+              model: "small",
+              name: "small",
+              family: "Whisper",
+              installed: true,
+              enabled: true,
+              loaded: true,
+              available: true,
+              default: true,
+              languages: ["zh"],
+              features: ["timestamps"]
+            }]
+          }
+        };
+      }
+      return {
+        status: 200,
+        data: {
+          running: true,
+          state: "listening",
+          level: 0.02,
+          level_history: [0.01, 0.02],
+          noise_floor: 0.003,
+          dynamic_threshold: 0.011,
+          utterance_active: false,
+          pending: 0,
+          stats: { captured: 2, recognized: 1, delivered: 1, recorded: 0, delivery_failed: 0, submitted: 1, submit_failed: 0 },
+          config: {
+            enabled: true,
+            asr_model: "faster-whisper/small",
+            record_threshold: 0.01,
+            transcribe_threshold: 0.015,
+            route_id: "Ilias",
+            session_id: "speech-Ilias"
+          },
+          history: [{ time: 1, text: "勇者", provider: "faster-whisper", model: "small", duration: 0.4, submitted: true, message_id: "speech-one", delivery_status: "delivered" }],
+          events: [{ sequence: 1, time: 1, stage: "route", kind: "route_delivery_succeeded", level: "info", message: "Desktop 目标任务已接收", details: { route_id: "Ilias" } }]
+        }
+      };
+    }
+  };
+  const control = new ManagerSpeechControl({
+    serviceUrl: () => "http://127.0.0.1:8781",
+    personas: () => [],
+    route: () => undefined,
+    routes: () => [],
+    deliverTranscript: async () => ({ status: "delivered" }),
+    appendRouteLog: () => {},
+    localSpeech
+  });
+
+  const models = await control.models();
+  assert.equal(models[0]?.isDefault, true);
+  assert.equal(models[0]?.capability, "asr");
+
+  const microphone = await control.microphoneStatus();
+  assert.equal(microphone.config.asrModel, "faster-whisper/small");
+  assert.equal(microphone.config.routeId, "Ilias");
+  assert.deepEqual(microphone.levelHistory, [0.01, 0.02]);
+  assert.equal(microphone.stats.delivered, 1);
+  assert.equal(microphone.history[0]?.deliveryStatus, "delivered");
+  assert.equal(microphone.history[0]?.messageId, "speech-one");
+  assert.equal(microphone.events[0]?.details.routeId, "Ilias");
+  assert.equal(JSON.stringify(microphone).includes("route_id"), false);
+  assert.equal(JSON.stringify(microphone).includes("asr_model"), false);
+});
+
+test("Manager speech control normalizes and updates the host playback volume", async () => {
+  const requests: Array<{ pathname: string; init: RequestInit }> = [];
+  const localSpeech: ManagerSpeechLocalAdapter = {
+    inspect: async () => onlineStatus,
+    requestBinary: async () => binaryResponse(),
+    requestJson: async (_serviceUrl, pathname, init = {}) => {
+      requests.push({ pathname, init });
+      const requestedVolume = pathname === "/v1/playback/settings"
+        ? Number((JSON.parse(String(init.body || "{}")) as { volume?: unknown }).volume)
+        : 42;
+      return {
+        status: 200,
+        data: {
+          mode: "host_fifo",
+          volume: requestedVolume,
+          current: null,
+          queued: 0,
+          jobs: []
+        }
+      };
+    }
+  };
+  const control = new ManagerSpeechControl({
+    serviceUrl: () => "http://127.0.0.1:8781",
+    personas: () => [],
+    route: () => undefined,
+    routes: () => [],
+    deliverTranscript: async () => ({ status: "delivered" }),
+    appendRouteLog: () => {},
+    localSpeech
+  });
+
+  assert.equal((await control.playbackStatus()).volume, 42);
+  assert.equal((await control.setPlaybackVolume({ volume: 73 })).volume, 73);
+  assert.equal(requests[1]?.pathname, "/v1/playback/settings");
+  assert.equal(requests[1]?.init.method, "PUT");
+  assert.deepEqual(JSON.parse(String(requests[1]?.init.body)), { volume: 73 });
+  await assert.rejects(() => control.setPlaybackVolume({ volume: 101 }), /between 0 and 100/);
+  await assert.rejects(() => control.setPlaybackVolume({ volume: 10.5 }), /integer/);
+  await assert.rejects(
+    () => control.setPlaybackVolume({ volume: true as unknown as number }),
+    /integer/
+  );
+});
+
+test("Manager speech control preserves remote device models, counters, and transport logs", async () => {
+  const requestedPaths: string[] = [];
+  const localSpeech: ManagerSpeechLocalAdapter = {
+    inspect: async () => onlineStatus,
+    requestBinary: async () => binaryResponse(),
+    requestJson: async (_serviceUrl, pathname) => {
+      requestedPaths.push(pathname);
+      return ({
+      status: 200,
+      data: {
+        enabled: true,
+        listening: true,
+        source: "remote",
+        selected_client_id: "phone-one-audio",
+        selected_online: true,
+        capture_enabled: true,
+        checked_at: 10,
+        clients: [{
+          id: "phone-one-audio",
+          name: "Rabi Android · HBP-AL00 · abc123",
+          kind: "mobile",
+          device_model: "HBP-AL00",
+          source_device_id: "phone-one-stable",
+          message_adapter_type: "rabilink",
+          sample_rate: 16_000,
+          chunk_ms: 100,
+          connected_at: 1,
+          last_audio_at: 9,
+          last_sequence: 42,
+          received_bytes: 320_000,
+          accepted_chunks: 100,
+          selected: true,
+          online: true
+        }],
+        events: [{
+          id: "audio-stream-event-7",
+          sequence: 7,
+          time: 9,
+          direction: "pipeline",
+          stage: "asr",
+          level: "warning",
+          kind: "transcription_empty",
+          message: "识别完成，但没有得到有效文字",
+          client_id: "phone-one-audio",
+          source_device_id: "phone-one-stable",
+          device_model: "HBP-AL00",
+          bytes: 3_200,
+          total_bytes: 320_000,
+          stream_sequence: 42,
+          details: { duration: 1.5 }
+        }]
+      }
+    });
+    }
+  };
+  const control = new ManagerSpeechControl({
+    serviceUrl: () => "http://127.0.0.1:8781",
+    personas: () => [],
+    route: () => undefined,
+    routes: () => [],
+    deliverTranscript: async () => ({ status: "delivered" }),
+    appendRouteLog: () => {},
+    localSpeech
+  });
+
+  const audio = await control.audioStreams();
+  assert.equal(audio.clients[0]?.deviceModel, "HBP-AL00");
+  assert.equal(audio.clients[0]?.sourceDeviceId, "phone-one-stable");
+  assert.equal(audio.clients[0]?.lastSequence, 42);
+  assert.equal(audio.clients[0]?.receivedBytes, 320_000);
+  assert.equal(audio.events[0]?.direction, "pipeline");
+  assert.equal(audio.events[0]?.stage, "asr");
+  assert.equal(audio.events[0]?.sourceDeviceId, "phone-one-stable");
+  assert.equal(audio.events[0]?.streamSequence, 42);
+  const history = await control.audioStreamEvents({ sourceDeviceId: "phone-one-stable", beforeSequence: 7 });
+  assert.equal(history[0]?.kind, "transcription_empty");
+  assert.match(requestedPaths[1] || "", /source_device_id=phone-one-stable/);
+  assert.match(requestedPaths[1] || "", /before_sequence=7/);
+  assert.equal(JSON.stringify(audio).includes("device_model"), false);
+});
+
+test("Manager speech control maps resident microphone settings to broadcast mode", async () => {
+  let upstreamBody: Record<string, unknown> = {};
+  const localSpeech: ManagerSpeechLocalAdapter = {
+    inspect: async () => onlineStatus,
+    requestBinary: async () => binaryResponse(),
+    requestJson: async (_serviceUrl, _pathname, init) => {
+      upstreamBody = JSON.parse(String(init?.body || "{}")) as Record<string, unknown>;
+      return {
+        status: 200,
+        data: { running: true, state: "listening", config: upstreamBody }
+      };
+    }
+  };
+  const control = new ManagerSpeechControl({
+    serviceUrl: () => "http://127.0.0.1:8781",
+    personas: () => [],
+    route: routeId => routeId === "Ilias" ? { id: routeId, speechEnabled: true } : undefined,
+    routes: () => [{ id: "Ilias", speechEnabled: true }],
+    deliverTranscript: async () => ({ status: "delivered" }),
+    appendRouteLog: () => {},
+    localSpeech
+  });
+
+  const status = await control.startMicrophone({
+    device: null,
+    sampleRate: 16_000,
+    chunkMs: 100,
+    preRollMs: 1_500,
+    recordThreshold: 0.01,
+    transcribeThreshold: 0.015,
+    adaptiveThreshold: true,
+    adaptiveMultiplier: 2.5,
+    adaptiveMargin: 0.004,
+    silenceMs: 500,
+    minUtteranceMs: 1_000,
+    maxUtteranceMs: 60_000,
+    inputGain: 1,
+    asrModel: "faster-whisper/small",
+    language: "zh",
+    prompt: null,
+    suppressDuringPlayback: true,
+    bargeInMode: "echo_protected",
+    bargeInConfirmMs: 200
+  });
+
+  assert.equal(upstreamBody.route_id, null);
+  assert.equal(upstreamBody.auto_submit, true);
+  assert.equal(upstreamBody.record_threshold, 0.01);
+  assert.equal(upstreamBody.barge_in_mode, "echo_protected");
+  assert.equal(upstreamBody.barge_in_confirm_ms, 200);
+  assert.equal(upstreamBody.streaming_enabled, true);
+  assert.equal("routeId" in upstreamBody, false);
+  assert.equal(status.config.routeId, null);
+  assert.equal(status.config.bargeInMode, "echo_protected");
+  assert.equal(status.config.streamingEnabled, true);
+});
+
+test("Manager speech reconciliation keeps capture independent from Route subscriptions", async () => {
+  let subscribedRoutes = [
+    { id: "Xinghai", speechEnabled: true },
+    { id: "Rabi", speechEnabled: true }
+  ];
+  let running = true;
+  const requests: Array<{ pathname: string; method: string }> = [];
+  const localSpeech: ManagerSpeechLocalAdapter = {
+    inspect: async () => onlineStatus,
+    requestBinary: async () => binaryResponse(),
+    requestJson: async (_serviceUrl, pathname, init = {}) => {
+      requests.push({ pathname, method: init.method || "GET" });
+      return {
+        status: 200,
+        data: {
+          running: pathname === "/v1/microphone/start" ? true : running,
+          state: pathname === "/v1/microphone/start" || running ? "listening" : "stopped",
+          config: {
+            enabled: pathname === "/v1/microphone/start" || running,
+            streaming_enabled: true,
+            auto_submit: true,
+            route_id: null,
+            session_id: "rabispeech-microphone"
+          }
+        }
+      };
+    }
+  };
+  const control = new ManagerSpeechControl({
+    serviceUrl: () => "http://127.0.0.1:8781",
+    personas: () => [],
+    route: routeId => subscribedRoutes.find(route => route.id === routeId),
+    routes: () => subscribedRoutes,
+    deliverTranscript: async () => ({ status: "delivered" }),
+    appendRouteLog: () => {},
+    localSpeech
+  });
+
+  await control.reconcileMicrophone();
+  subscribedRoutes = [{ id: "Rabi", speechEnabled: true }];
+  await control.reconcileMicrophone();
+  subscribedRoutes = [];
+  await control.reconcileMicrophone();
+  running = false;
+  await control.reconcileMicrophone();
+
+  assert.deepEqual(requests, [
+    { pathname: "/v1/microphone/status", method: "GET" },
+    { pathname: "/v1/microphone/status", method: "GET" },
+    { pathname: "/v1/microphone/status", method: "GET" },
+    { pathname: "/v1/microphone/status", method: "GET" },
+    { pathname: "/v1/microphone/start", method: "POST" }
+  ]);
+});
+
+test("Manager speech reconciliation respects the host ASR streaming switch", async () => {
+  let running = true;
+  let streamingEnabled = false;
+  const requests: Array<{ pathname: string; method: string; body: Record<string, unknown> }> = [];
+  const localSpeech: ManagerSpeechLocalAdapter = {
+    inspect: async () => onlineStatus,
+    requestBinary: async () => binaryResponse(),
+    requestJson: async (_serviceUrl, pathname, init = {}) => {
+      const body = init.body ? JSON.parse(String(init.body)) as Record<string, unknown> : {};
+      requests.push({ pathname, method: init.method || "GET", body });
+      if (pathname === "/v1/microphone/stop") running = false;
+      if (pathname === "/v1/microphone/settings") {
+        streamingEnabled = body.streaming_enabled === true;
+        running = false;
+      }
+      if (pathname === "/v1/microphone/start") {
+        streamingEnabled = body.streaming_enabled === true;
+        running = true;
+      }
+      return {
+        status: 200,
+        data: {
+          running,
+          state: running ? "listening" : "stopped",
+          config: {
+            enabled: running,
+            streaming_enabled: streamingEnabled,
+            auto_submit: true,
+            route_id: null,
+            session_id: "rabispeech-microphone",
+            ...body
+          }
+        }
+      };
+    }
+  };
+  const control = new ManagerSpeechControl({
+    serviceUrl: () => "http://127.0.0.1:8781",
+    personas: () => [],
+    route: () => undefined,
+    routes: () => [],
+    deliverTranscript: async () => ({ status: "delivered" }),
+    appendRouteLog: () => {},
+    localSpeech
+  });
+
+  const stopped = await control.reconcileMicrophone();
+  assert.equal(stopped.running, false);
+  assert.equal(stopped.config.streamingEnabled, false);
+
+  const restarted = await control.updateMicrophoneSettings({
+    device: null,
+    sampleRate: 16_000,
+    chunkMs: 100,
+    preRollMs: 1_500,
+    recordThreshold: 0.01,
+    transcribeThreshold: 0.015,
+    adaptiveThreshold: true,
+    adaptiveMultiplier: 2.5,
+    adaptiveMargin: 0.004,
+    silenceMs: 500,
+    minUtteranceMs: 1_000,
+    maxUtteranceMs: 60_000,
+    inputGain: 1,
+    asrModel: "faster-whisper/small",
+    language: "zh",
+    prompt: null,
+    suppressDuringPlayback: true,
+    streamingEnabled: true
+  });
+
+  assert.equal(restarted.running, true);
+  assert.equal(restarted.config.streamingEnabled, true);
+  assert.deepEqual(requests.map(item => [item.pathname, item.method]), [
+    ["/v1/microphone/status", "GET"],
+    ["/v1/microphone/stop", "POST"],
+    ["/v1/microphone/settings", "PUT"],
+    ["/v1/microphone/start", "POST"]
+  ]);
+});
+
+test("Manager speech reconciliation migrates a legacy Route-bound microphone to broadcast mode", async () => {
+  const requests: Array<{ pathname: string; body: Record<string, unknown> }> = [];
+  const localSpeech: ManagerSpeechLocalAdapter = {
+    inspect: async () => onlineStatus,
+    requestBinary: async () => binaryResponse(),
+    requestJson: async (_serviceUrl, pathname, init = {}) => {
+      requests.push({
+        pathname,
+        body: init.body ? JSON.parse(String(init.body)) as Record<string, unknown> : {}
+      });
+      if (pathname === "/v1/microphone/status") {
+        return {
+          status: 200,
+          data: {
+            running: true,
+            state: "listening",
+            config: {
+              enabled: true,
+              auto_submit: false,
+              route_id: "Xinghai",
+              session_id: "legacy-session",
+              asr_model: "faster-whisper/small"
+            }
+          }
+        };
+      }
+      return {
+        status: 200,
+        data: {
+          running: true,
+          state: "listening",
+          config: { ...requests[1]?.body, enabled: true }
+        }
+      };
+    }
+  };
+  const control = new ManagerSpeechControl({
+    serviceUrl: () => "http://127.0.0.1:8781",
+    personas: () => [],
+    route: routeId => ({ id: routeId, speechEnabled: true }),
+    routes: () => [{ id: "Xinghai", speechEnabled: true }],
+    deliverTranscript: async () => ({ status: "delivered" }),
+    appendRouteLog: () => {},
+    localSpeech
+  });
+
+  const result = await control.reconcileMicrophone();
+
+  assert.equal(requests[1]?.pathname, "/v1/microphone/settings");
+  assert.equal(requests[1]?.body.route_id, null);
+  assert.equal(requests[1]?.body.auto_submit, true);
+  assert.equal("session_id" in (requests[1]?.body || {}), false);
+  assert.equal(result.config.routeId, null);
+  assert.equal(result.config.autoSubmit, true);
+});
+
+test("Manager speech control waits for the Desktop owner terminal receipt", async () => {
+  let resolveDelivery: ((value: { status: "delivered"; detail: string }) => void) | undefined;
+  const logs: string[] = [];
+  const control = new ManagerSpeechControl({
+    serviceUrl: () => "http://127.0.0.1:8781",
+    personas: () => [],
+    route: routeId => ({ id: routeId, speechEnabled: true }),
+    routes: () => [{ id: "Ilias", speechEnabled: true }],
+    deliverTranscript: () => new Promise((resolve) => { resolveDelivery = resolve; }),
+    appendRouteLog: (_routeId, message) => logs.push(message),
+    createMessageId: () => "speech-user-test"
+  });
+
+  let settled = false;
+  const pending = control.acceptMessage({ routeId: "Ilias", text: "勇者，我在。", sessionId: "speech-Ilias" })
+    .finally(() => { settled = true; });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(settled, false);
+  resolveDelivery?.({ status: "delivered", detail: "Desktop owner accepted start" });
+  const delivered = await pending;
+  assert.deepEqual(delivered, {
+    routeId: "Ilias",
+    messageId: "speech-user-test",
+    sessionId: "speech-Ilias",
+    status: "delivered",
+    detail: "Desktop owner accepted start",
+    deliveries: [{
+      routeId: "Ilias",
+      messageId: "speech-user-test",
+      status: "delivered",
+      detail: "Desktop owner accepted start"
+    }]
+  });
+  assert.match(logs[0] || "", /speech message delivered: speech-user-test/);
+});
+
+test("Manager speech control returns recorded and propagates real delivery failures", async () => {
+  const logs: string[] = [];
+  let delivery: "recorded" | "failed" = "recorded";
+  const control = new ManagerSpeechControl({
+    serviceUrl: () => "http://127.0.0.1:8781",
+    personas: () => [],
+    route: routeId => ({ id: routeId, speechEnabled: true }),
+    routes: () => [{ id: "Ilias", speechEnabled: true }],
+    deliverTranscript: async () => {
+      if (delivery === "failed") throw new SpeechControlError("Desktop unavailable", 502);
+      return { status: "recorded", reason: "keyword_not_matched" };
+    },
+    appendRouteLog: (_routeId, message) => logs.push(message),
+    createMessageId: () => "speech-user-test"
+  });
+
+  assert.equal((await control.acceptMessage({ routeId: "Ilias", text: "继续讨论", sessionId: "speech-Ilias" })).status, "recorded");
+  delivery = "failed";
+  await assert.rejects(
+    () => control.acceptMessage({ routeId: "Ilias", text: "星海，看看", sessionId: "speech-Ilias" }),
+    /Desktop unavailable/
+  );
+  assert.match(logs.at(-1) || "", /speech message failed: speech-user-test; Desktop unavailable/);
+});
+
+test("Manager speech control broadcasts one transcript to every enabled speech Route", async () => {
+  const deliveredRoutes: string[] = [];
+  let sequence = 0;
+  const control = new ManagerSpeechControl({
+    serviceUrl: () => "http://127.0.0.1:8781",
+    personas: () => [],
+    route: routeId => ({ id: routeId, speechEnabled: routeId !== "disabled" }),
+    routes: () => [
+      { id: "Xinghai", speechEnabled: true },
+      { id: "Rabi", speechEnabled: true },
+      { id: "disabled", speechEnabled: false }
+    ],
+    deliverTranscript: async ({ routeId }) => {
+      deliveredRoutes.push(routeId || "");
+      return routeId === "Rabi"
+        ? { status: "recorded", reason: "keyword_not_matched" }
+        : { status: "delivered", detail: "Desktop accepted" };
+    },
+    appendRouteLog: () => {},
+    createMessageId: () => `speech-${++sequence}`
+  });
+
+  const result = await control.acceptMessage({ text: "大家继续。", sessionId: "meeting-one" });
+  assert.deepEqual(deliveredRoutes, ["Xinghai", "Rabi"]);
+  assert.equal(result.routeId, null);
+  assert.equal(result.status, "delivered");
+  assert.equal(result.deliveries?.length, 2);
+  assert.deepEqual(result.deliveries?.map(item => [item.routeId, item.status]), [
+    ["Xinghai", "delivered"],
+    ["Rabi", "recorded"]
+  ]);
+  assert.match(result.detail || "", /1 delivered, 1 recorded, 0 failed/);
+});
+
+test("Manager speech control stores one raw ingress record before Route fan-out", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-manager-speech-ingress-"));
+  const speechIngressStore = new SpeechIngressStore(root);
+  const delivered: Array<{ routeId: string; recordId: string; voiceprintId?: string; speakerId?: string; speakerName?: string }> = [];
+  const control = new ManagerSpeechControl({
+    serviceUrl: () => "http://127.0.0.1:8781",
+    personas: () => [],
+    route: routeId => ({ id: routeId, speechEnabled: true }),
+    routes: () => [{ id: "Rabi", speechEnabled: true }, { id: "Work", speechEnabled: true }],
+    deliverTranscript: async ({ routeId, record }) => {
+      delivered.push({
+        routeId,
+        recordId: record.id,
+        voiceprintId: record.segments[0]?.voiceprintId,
+        speakerId: record.segments[0]?.speakerId,
+        speakerName: record.segments[0]?.speakerName
+      });
+      return { status: "recorded" };
+    },
+    appendRouteLog: () => {},
+    createMessageId: () => "fallback-speech-id",
+    speechIngressStore
+  });
+
+  const result = await control.acceptMessage({
+    recordId: "speech-source-one",
+    text: "这是一段语音",
+    sessionId: "day-one",
+    provider: "dashscope",
+    model: "paraformer-v2",
+    segments: [{
+      id: 0,
+      start: 0,
+      end: 1,
+      text: "这是一段语音",
+      speakerClusterId: "voiceprint-a",
+      speakerId: "host-profile-a",
+      speakerSuggestionId: "host-candidate-a",
+      speakerName: "用户",
+      speakerDecision: "voiceprint_auto_match"
+    }]
+  });
+
+  assert.equal(result.messageId, "speech-source-one");
+  assert.deepEqual(delivered, [
+    { routeId: "Rabi", recordId: "speech-source-one", voiceprintId: "voiceprint-a", speakerId: undefined, speakerName: undefined },
+    { routeId: "Work", recordId: "speech-source-one", voiceprintId: "voiceprint-a", speakerId: undefined, speakerName: undefined }
+  ]);
+  assert.equal(speechIngressStore.list().length, 1);
+});
+
+test("Manager speech control reuses terminal Route receipts for retried and concurrent ASR submissions", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-manager-speech-receipts-"));
+  const speechIngressStore = new SpeechIngressStore(path.join(root, "messages"));
+  let deliveries = 0;
+  const control = new ManagerSpeechControl({
+    serviceUrl: () => "http://127.0.0.1:8781",
+    personas: () => [],
+    route: routeId => ({ id: routeId, speechEnabled: true }),
+    routes: () => [{ id: "Rabi", speechEnabled: true }],
+    deliverTranscript: async () => {
+      deliveries += 1;
+      await new Promise(resolve => setTimeout(resolve, 10));
+      return { status: "delivered", reason: "desktop_owner_accepted" };
+    },
+    appendRouteLog: () => {},
+    speechIngressStore
+  });
+  const command = { recordId: "stable-asr-one", text: "不要重复唤醒", sessionId: "day-one" };
+
+  const concurrent = await Promise.all([control.acceptMessage(command), control.acceptMessage(command)]);
+  const retried = await control.acceptMessage(command);
+
+  assert.equal(deliveries, 1);
+  assert.deepEqual(concurrent.map(item => item.status), ["delivered", "delivered"]);
+  assert.equal(retried.status, "delivered");
+  assert.equal(speechIngressStore.readDeliveryReceipt("stable-asr-one", "Rabi")?.reason, "desktop_owner_accepted");
+});
+
+test("Manager speech control binds mobile trust to an exact persisted ASR record", async () => {
+  const delivered: Array<{
+    routeId: string;
+    adapterType: string;
+    channelType: string;
+    sourceDeviceId?: string;
+    sourceStreamId?: string;
+    sourceDeviceTrust?: string;
+  }> = [];
+  const routes = [
+    { id: "Voice", speechEnabled: true, rabiLinkEnabled: false, routeProfileIds: ["voice-main"] },
+    { id: "Mobile", speechEnabled: false, rabiLinkEnabled: true, routeProfileIds: ["mobile-main"] },
+    { id: "OtherMobile", speechEnabled: false, rabiLinkEnabled: true, routeProfileIds: ["mobile-other"] }
+  ];
+  const control = new ManagerSpeechControl({
+    serviceUrl: () => "http://127.0.0.1:8781",
+    personas: () => [],
+    route: routeId => routes.find(route => route.id === routeId),
+    routes: () => routes,
+    deliverTranscript: async ({ routeId, record }) => {
+      delivered.push({
+        routeId,
+        adapterType: record.messageAdapterType,
+        channelType: record.channelType,
+        sourceDeviceId: record.sourceDeviceId,
+        sourceStreamId: record.sourceStreamId,
+        sourceDeviceTrust: record.sourceDeviceTrust
+      });
+      return { status: "delivered" };
+    },
+    appendRouteLog: () => {},
+    localSpeech: {
+      inspect: async () => onlineStatus,
+      requestBinary: async () => binaryResponse(),
+      requestJson: async (_serviceUrl, pathname) => ({
+        status: 200,
+        data: pathname.startsWith("/v1/records?") ? {
+          object: "list",
+          data: [{
+            id: "mobile-one",
+            kind: "asr",
+            source: "microphone",
+            time: 1_786_000_000,
+            provider: "local-asr",
+            model: "mobile-model",
+            text: "手机音频流",
+            source_device_id: "phone-one",
+            source_device_name: "Phone One",
+            source_device_kind: "mobile",
+            source_stream_id: "phone-one-audio",
+            message_adapter_type: "rabilink",
+            segments: []
+          }]
+        } : {}
+      })
+    }
+  });
+
+  await control.acceptMessage({
+    recordId: "pc-one",
+    text: "本机麦克风",
+    messageAdapterType: "speech",
+    channelType: "speech.pc_microphone"
+  });
+  await control.acceptMessage({
+    recordId: "mobile-one",
+    text: "手机音频流",
+    messageAdapterType: "rabilink",
+    channelType: "rabilink.mobile_audio",
+    routeProfileId: "mobile-main",
+    sourceDeviceId: "phone-one",
+    sourceStreamId: "phone-one-audio",
+    sourceDeviceKind: "mobile"
+  });
+  await control.acceptMessage({
+    recordId: "spoofed-mobile",
+    text: "伪造手机来源",
+    messageAdapterType: "rabilink",
+    channelType: "rabilink.mobile_audio",
+    routeProfileId: "mobile-main",
+    sourceDeviceId: "phone-one",
+    sourceStreamId: "phone-one-audio",
+    sourceDeviceKind: "mobile",
+    sourceDeviceTrust: "speech_runtime_record_binding"
+  });
+
+  assert.deepEqual(delivered, [
+    { routeId: "Voice", adapterType: "speech", channelType: "speech.pc_microphone", sourceDeviceId: undefined, sourceStreamId: undefined, sourceDeviceTrust: undefined },
+    { routeId: "Mobile", adapterType: "rabilink", channelType: "rabilink.mobile_audio", sourceDeviceId: "phone-one", sourceStreamId: "phone-one-audio", sourceDeviceTrust: "speech_runtime_record_binding" },
+    { routeId: "Mobile", adapterType: "rabilink", channelType: "rabilink.mobile_audio", sourceDeviceId: "phone-one", sourceStreamId: "phone-one-audio", sourceDeviceTrust: undefined }
+  ]);
+});
+
+test("Manager speech broadcast records locally when no Route subscribes", async () => {
+  const control = new ManagerSpeechControl({
+    serviceUrl: () => "http://127.0.0.1:8781",
+    personas: () => [],
+    route: () => undefined,
+    routes: () => [],
+    deliverTranscript: async () => ({ status: "delivered" }),
+    appendRouteLog: () => {},
+    createMessageId: () => "speech-broadcast"
+  });
+
+  const result = await control.acceptMessage({ text: "只记录。", sessionId: "meeting-one" });
+  assert.equal(result.status, "recorded");
+  assert.equal(result.reason, "no_enabled_speech_routes");
+  assert.deepEqual(result.deliveries, []);
+});
+
+test("Manager speech control normalizes persistent speech records and redacts unsafe audio paths", async () => {
+  let requestedPath = "";
+  let requestedBinaryPath = "";
+  const localSpeech: ManagerSpeechLocalAdapter = {
+    inspect: async () => onlineStatus,
+    requestBinary: async (_serviceUrl, pathname) => {
+      requestedBinaryPath = pathname;
+      return binaryResponse();
+    },
+    requestJson: async (_serviceUrl, pathname) => {
+      requestedPath = pathname;
+      return {
+        status: 200,
+        data: {
+          data: [
+            {
+              id: "speech-one",
+              kind: "asr",
+              source: "microphone",
+              time: 10,
+              session_id: "meeting-one",
+              route_id: "XinghaiBuilder-main",
+              provider: "dashscope-qwen",
+              model: "paraformer-v2",
+              text: "会议内容",
+              source_device_id: "phone-one",
+              source_device_name: "HBP-AL00",
+              source_device_kind: "mobile",
+              source_stream_id: "phone-one-audio",
+              message_adapter_type: "rabilink",
+              audio_file: "output/asr-audio/source.wav",
+              audio_expires_at: 86_410,
+              segments: [{ id: 0, start: 0, end: 1, text: "会议内容", speaker: "Speaker 1" }]
+            },
+            {
+              id: "speech-safe-cache",
+              kind: "tts",
+              source: "api",
+              time: 11,
+              provider: "dashscope-qwen",
+              model: "qwen3-tts-vc",
+              voice: "XinghaiBuilder",
+              text: "安全相对路径",
+              audio_file: "XinghaiBuilder/voice/cache/tts-audio/speech.wav",
+              audio_expires_at: 86_411,
+              segments: []
+            },
+            {
+              id: "speech-legacy-cache",
+              kind: "tts",
+              source: "api",
+              time: 12,
+              provider: "fake",
+              model: "fake",
+              voice: "XinghaiBuilder",
+              text: "旧记录",
+              audio_file: "legacy.wav",
+              audio_expires_at: 86_412,
+              segments: []
+            },
+            {
+              id: "speech-windows-absolute",
+              kind: "tts",
+              source: "api",
+              time: 13,
+              provider: "fake",
+              model: "fake",
+              text: "绝对路径",
+              audio_file: "C:\\Users\\ExampleUser\\private.wav",
+              segments: []
+            },
+            {
+              id: "speech-parent-traversal",
+              kind: "tts",
+              source: "api",
+              time: 14,
+              provider: "fake",
+              model: "fake",
+              text: "父级越界",
+              audio_file: "../private.wav",
+              segments: []
+            },
+            {
+              id: "speech-file-uri",
+              kind: "tts",
+              source: "api",
+              time: 15,
+              provider: "fake",
+              model: "fake",
+              text: "伪相对 URI",
+              audio_file: "file:C:/private.wav",
+              segments: []
+            },
+            {
+              id: "speech-encoded-drive",
+              kind: "tts",
+              source: "api",
+              time: 16,
+              provider: "fake",
+              model: "fake",
+              text: "编码盘符",
+              audio_file: "C%3A/private.wav",
+              segments: []
+            },
+            {
+              id: "speech-backslash-traversal",
+              kind: "tts",
+              source: "api",
+              time: 17,
+              provider: "fake",
+              model: "fake",
+              text: "反斜杠越界",
+              audio_file: "voice\\cache\\..\\private.wav",
+              segments: []
+            },
+            {
+              id: "speech-control-character",
+              kind: "tts",
+              source: "api",
+              time: 18,
+              provider: "fake",
+              model: "fake",
+              text: "控制字符",
+              audio_file: "safe\npath.wav",
+              segments: []
+            }
+          ]
+        }
+      };
+    }
+  };
+  const control = new ManagerSpeechControl({
+    serviceUrl: () => "http://127.0.0.1:8781",
+    personas: () => [],
+    route: () => undefined,
+    routes: () => [],
+    deliverTranscript: async () => ({ status: "delivered" }),
+    appendRouteLog: () => {},
+    localSpeech
+  });
+
+  const records = await control.records({ routeId: "XinghaiBuilder-main" });
+  assert.match(requestedPath, /route_id=XinghaiBuilder-main/);
+  assert.equal(records[0]?.routeId, "XinghaiBuilder-main");
+  assert.equal(records[0]?.segments[0]?.speaker, "Speaker 1");
+  assert.equal(records[0]?.sourceDeviceId, "phone-one");
+  assert.equal(records[0]?.sourceStreamId, "phone-one-audio");
+  assert.equal(records[0]?.messageAdapterType, "rabilink");
+  assert.equal(records[0]?.audioFile, "output/asr-audio/source.wav");
+  assert.equal(records[1]?.audioFile, "XinghaiBuilder/voice/cache/tts-audio/speech.wav");
+  assert.equal(records[1]?.audioExpiresAt, 86_411);
+  assert.equal(records[2]?.audioFile, "legacy.wav");
+  assert.equal(records[3]?.audioFile, undefined);
+  assert.equal(records[4]?.audioFile, undefined);
+  assert.equal(records[5]?.audioFile, undefined);
+  assert.equal(records[6]?.audioFile, undefined);
+  assert.equal(records[7]?.audioFile, undefined);
+  assert.equal(records[8]?.audioFile, undefined);
+  assert.equal(JSON.stringify(records).includes("route_id"), false);
+  assert.doesNotMatch(JSON.stringify(records), /C:\\\\Users|\.\.\/|file:C:|C%3A|voice\\\\cache/);
+  await control.recordAudio("speech-one");
+  assert.equal(requestedBinaryPath, "/v1/records/speech-one/audio");
+});
+
+test("Manager speech control exposes manual speaker profiles without claiming voiceprint support", async () => {
+  const requests: Array<{ pathname: string; method: string; body?: Record<string, unknown> }> = [];
+  const profileId = "speaker-0123456789abcdef0123456789abcdef";
+  const localSpeech: ManagerSpeechLocalAdapter = {
+    inspect: async () => onlineStatus,
+    requestBinary: async () => binaryResponse(),
+    requestJson: async (_serviceUrl, pathname, init = {}) => {
+      const body = init.body ? JSON.parse(String(init.body)) as Record<string, unknown> : undefined;
+      requests.push({ pathname, method: init.method || "GET", body });
+      if (pathname.startsWith("/v1/speaker-profiles?")) {
+        return {
+          status: 200,
+          data: {
+            profiles: [{ id: profileId, display_name: "秋雨", aliases: ["Qiu Yu"], created_at: 1, updated_at: 2 }],
+            bindings: [{
+              session_id: "meeting-one",
+              record_id: "speech-one",
+              speaker_label: "Speaker 1",
+              speaker_id: profileId,
+              speaker_name: "秋雨",
+              decision: "manual_record_binding",
+              created_at: 2,
+              updated_at: 2
+            }],
+            capability: {
+              scope: "loopback-only",
+              mode: "manual_record_label_binding",
+              manual_binding: true,
+              binding_scope: "record_speaker_label",
+              aliases_are_metadata_only: true,
+              diarization_labels_are_biometric_identity: false,
+              stores_raw_enrollment_audio: false,
+              voiceprint: { supported: false, experimental: false, reason: "No validated matcher." }
+            }
+          }
+        };
+      }
+      if (pathname === "/v1/speaker-profiles" && init.method === "POST") {
+        return { status: 200, data: { id: profileId, display_name: body?.display_name, aliases: body?.aliases, created_at: 1, updated_at: 1 } };
+      }
+      if (pathname === "/v1/speaker-bindings" && init.method === "PUT") {
+        return {
+          status: 200,
+          data: {
+            ...body,
+            speaker_name: "秋雨",
+            decision: "manual_record_binding",
+            created_at: 2,
+            updated_at: 2
+          }
+        };
+      }
+      if (pathname === "/v1/speaker-identities" && init.method === "PUT") {
+        return {
+          status: 200,
+          data: {
+            created: false,
+            reused: true,
+            profile_updated: true,
+            binding_changed: false,
+            matched_by: "display_name_or_alias",
+            profile: {
+              id: profileId,
+              display_name: "秋雨",
+              aliases: ["Qiu Yu", "秋雨老师"],
+              created_at: 1,
+              updated_at: 3
+            },
+            binding: {
+              session_id: "meeting-one",
+              record_id: "speech-one",
+              speaker_label: "Speaker 1",
+              speaker_id: profileId,
+              speaker_name: "秋雨",
+              decision: "manual_record_binding",
+              created_at: 2,
+              updated_at: 2
+            }
+          }
+        };
+      }
+      if (pathname === `/v1/speaker-profiles/${profileId}` && init.method === "PATCH") {
+        return {
+          status: 200,
+          data: { id: profileId, display_name: body?.display_name, aliases: [], created_at: 1, updated_at: 3 }
+        };
+      }
+      if (pathname.startsWith("/v1/speaker-bindings?") && init.method === "DELETE") {
+        return {
+          status: 200,
+          data: {
+            session_id: "meeting-one",
+            record_id: "speech-one",
+            speaker_label: "Speaker 1",
+            speaker_id: profileId,
+            speaker_name: "秋雨（QA）",
+            decision: "manual_record_binding",
+            created_at: 2,
+            updated_at: 2
+          }
+        };
+      }
+      if (pathname === `/v1/speaker-profiles/${profileId}` && init.method === "DELETE") {
+        return {
+          status: 200,
+          data: {
+            deleted: { id: profileId, display_name: "秋雨（QA）", aliases: [], created_at: 1, updated_at: 3 },
+            removed_bindings: 0
+          }
+        };
+      }
+      throw new Error(`Unexpected path: ${pathname}`);
+    }
+  };
+  const control = new ManagerSpeechControl({
+    serviceUrl: () => "http://127.0.0.1:8781",
+    personas: () => [],
+    route: () => undefined,
+    routes: () => [],
+    deliverTranscript: async () => ({ status: "delivered" }),
+    appendRouteLog: () => {},
+    localSpeech
+  });
+
+  const registry = await control.speakerRegistry("meeting-one");
+  assert.equal(registry.profiles[0]?.displayName, "秋雨");
+  assert.equal(registry.bindings[0]?.speakerLabel, "Speaker 1");
+  assert.equal(registry.bindings[0]?.recordId, "speech-one");
+  assert.equal(registry.capability.voiceprint.supported, false);
+  assert.equal(registry.capability.diarizationLabelsAreBiometricIdentity, false);
+  assert.equal(registry.capability.storesRawEnrollmentAudio, false);
+
+  await control.createSpeakerProfile({ displayName: "秋雨", aliases: ["Qiu Yu"] });
+  await control.bindSpeaker({ sessionId: "meeting-one", recordId: "speech-one", speakerLabel: "Speaker 1", speakerId: profileId });
+  const identified = await control.identifySpeaker({
+    sessionId: "meeting-one",
+    recordId: "speech-one",
+    speakerLabel: "Speaker 1",
+    displayName: "qiu yu",
+    aliases: ["秋雨老师"]
+  });
+  const updated = await control.updateSpeakerProfile(profileId, { displayName: "秋雨（QA）" });
+  const unbound = await control.unbindSpeaker("meeting-one", "speech-one", "Speaker 1");
+  const deleted = await control.deleteSpeakerProfile(profileId);
+  assert.equal(updated.displayName, "秋雨（QA）");
+  assert.equal(identified.reused, true);
+  assert.equal(identified.profileUpdated, true);
+  assert.equal(identified.profile.aliases[1], "秋雨老师");
+  assert.equal(unbound.speakerName, "秋雨（QA）");
+  assert.equal(deleted.deleted.id, profileId);
+  assert.match(requests[0]?.pathname || "", /session_id=meeting-one/);
+  assert.deepEqual(requests[1]?.body, { display_name: "秋雨", aliases: ["Qiu Yu"] });
+  assert.deepEqual(requests[2]?.body, {
+    session_id: "meeting-one",
+    record_id: "speech-one",
+    speaker_label: "Speaker 1",
+    speaker_id: profileId
+  });
+  assert.deepEqual(requests[3]?.body, {
+    session_id: "meeting-one",
+    record_id: "speech-one",
+    speaker_label: "Speaker 1",
+    speaker_id: null,
+    display_name: "qiu yu",
+    aliases: ["秋雨老师"]
+  });
+  assert.deepEqual(requests[4]?.body, { display_name: "秋雨（QA）" });
+  assert.match(requests[5]?.pathname || "", /speaker_label=Speaker\+1/);
+  assert.equal(requests[6]?.method, "DELETE");
+});

@@ -1,4 +1,4 @@
-import { translateText, useI18n } from "./i18n";
+import { translateText, useI18n } from "./i18n/index";
 import { errorResponsePresentation } from "../../src/shared/errorPresentation";
 import { appendWebguiTokenQuery, captureWebguiTokenFromHref } from "./webguiAccessToken";
 

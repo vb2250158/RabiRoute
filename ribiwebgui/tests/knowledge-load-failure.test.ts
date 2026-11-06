@@ -4,7 +4,7 @@ import test from "node:test";
 import vm from "node:vm";
 import ts from "typescript";
 import { drainKnowledgePages } from "../src/knowledgePagination";
-const page = fs.readFileSync(new URL("../src/pages/RoleKnowledgePage.vue", import.meta.url), "utf8");
+const page = fs.readFileSync(new URL("../../src/plugins/io.rabiroute.manager.persona/web/pages/RoleKnowledgePage.vue", import.meta.url), "utf8");
 
 test("failed first page cannot show successful empty state or start background requests", async () => {
   const refresh = page.slice(page.indexOf("async function refreshPlanKnowledge"), page.indexOf("async function refreshMemoryKnowledge"));

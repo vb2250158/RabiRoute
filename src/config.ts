@@ -68,6 +68,7 @@ export type NotificationRule = {
   enabled: boolean;
   routeKinds: NotificationRouteKind[];
   targetGroupId?: string;
+  targetUserId?: string;
   allowedSpeakerNames?: string[];
   regex?: string;
   schedules?: NotificationScheduleDefinition[];
@@ -362,6 +363,7 @@ function normalizeNotificationRule(item: unknown, index: number): NotificationRu
     enabled: raw.enabled !== false,
     routeKinds,
     targetGroupId: typeof raw.targetGroupId === "string" ? raw.targetGroupId.trim() : "",
+    targetUserId: typeof raw.targetUserId === "string" ? raw.targetUserId.trim() : "",
     allowedSpeakerNames,
     regex: typeof raw.regex === "string" ? raw.regex : "",
     schedules: normalizeScheduleDefinitions(raw.schedules),

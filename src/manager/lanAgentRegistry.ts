@@ -5,7 +5,7 @@ import type http from "node:http";
 import type { Duplex } from "node:stream";
 import type { ApiUpgradeInput } from "./apiOperationContract.js";
 import { ManagerPluginRouteRegistry } from "./managerPluginRouteRegistry.js";
-import { createLanAgentConnectionOperation, LAN_AGENT_WEBSOCKET_LIMITS, type LanAgentConnectionOptions } from "./lanAgentConnectionOperation.js";
+import { createLanAgentConnectionOperation, LAN_AGENT_WEBSOCKET_LIMITS, type LanAgentConnectionOptions } from "../plugins/io.rabiroute.manager.core/src/manager/lanAgentConnectionOperation.js";
 import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
@@ -817,7 +817,8 @@ export class LanAgentRegistry {
       clearTimeout(pending.timer);
       this.managementRequests.delete(id);
       try { pending.assertAuthorized?.(); } catch (error) { pending.reject(error instanceof Error ? error : new Error(String(error))); return; }
-      if (message.error) pending.reject(new Error(String(message.error).slice(0, 1024)));
+      if (message.error) pending.reject(Object.assign(new Error(String(message.error).slice(0, 1024)),
+        message.errorCode === "AGENT_WORKSPACE_MISMATCH" ? { code: message.errorCode } : {}));
       else pending.resolve(message.result);
       if (!isNoFrameResult(pending.operation, message.result) && changesDeliveryState(pending.operation, pending.readOnly)) this.deliveryEvents.emit("change");
       return;

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
 import { useRoute } from "vue-router";
-import { useI18n } from "../i18n";
+import { useI18n } from "../i18n/index";
 import { retryRouteLoad } from "../routeLoadRetry";
 
 const route = useRoute();

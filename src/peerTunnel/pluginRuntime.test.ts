@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import http from "node:http";
 import { GenerationRuntime } from "../plugin-kernel/generationRuntime.js";
-import type { PluginCandidate, PluginModule } from "../plugin-kernel/types.js";
+import type { PluginCandidate } from "../plugin-kernel/types.js";
 import { createPeerRuntimeOwner } from "./pluginRuntime.js";
 import { TunnelSession, establishTunnel } from "./session.js";
 import { loadTunnelIdentity } from "./security.js";
@@ -14,6 +14,7 @@ import type { TunnelChannel } from "./channel.js";
 import { serveTunnel, proxyTunnel } from "./http.js";
 import { PeerConnections } from "./connections.js";
 import { TunnelRtc } from "./rtc.js";
+import { canonicalManagerPluginFixture } from "../manager/canonicalManagerPlugin.fixture.js";
 
 function gate() {
   let release!: () => void;
@@ -21,8 +22,6 @@ function gate() {
 }
 
 test("one Manager keeps old Peer on failed candidate and publishes replacement before old drain", async t => {
-  const pluginPath = new URL("../../plugins/builtin/io.rabiroute.manager.rabilink-relay/1.0.0/manager.mjs", import.meta.url);
-  const plugin = await import(pluginPath.href) as PluginModule;
   const oldDrain = gate();
   let active: number | undefined, created = 0, failing = false, failPublication = false, sharedStops = 0, publications = 0, initialSync: unknown;
   const peers: { id: number; stopped: boolean; closed: boolean; publish(): void; stopAccepting(): void; stop(): Promise<void>; operations: []; httpOperations: []; upgradeOperation: {} }[] = [];
@@ -60,15 +59,17 @@ test("one Manager keeps old Peer on failed candidate and publishes replacement b
       registerHttpProxies: () => ({ dispose: async () => {} })
     }
   };
+  const fixture = await canonicalManagerPluginFixture("rabilink-relay", host);
+  const plugin = fixture.module;
   const kernel = new GenerationRuntime({ host: "manager", readyRequires: ["manager.rabilink-relay@1"],
-    hostServices: [{ capability: "host.manager.rabilink-relay@1", value: host }],
+    hostServices: [{ capability: "host.manager.rabilink-relay@2", value: fixture.ports },
+      { capability: "manager.core@1", value: {} }, { capability: "manager.persona@1", value: {} }],
     executor: { prepare: async () => plugin }
   });
   t.after(() => { oldDrain.release(); return kernel.dispose(); });
   const candidate = (revision: string): PluginCandidate => ({ instanceId: "fixture:peer", revision, config: {},
-    manifest: { schemaVersion: 2, id: "io.fixture.peer", version: "1.0.0", entries: { manager: { execution: "in_process", module: "manager.mjs" } },
-      provides: ["manager.rabilink-relay@1"], requires: ["host.manager.rabilink-relay@1"], optional: [], permissions: [] },
-    entry: { execution: "in_process", path: pluginPath.pathname }
+    manifest: fixture.manifest,
+    entry: { execution: "in_process", path: fixture.entry }
   });
   await kernel.switch([candidate("one")]);
   assert.equal(active, 1); initialSync = host.syncActiveRabiLinkRelay;

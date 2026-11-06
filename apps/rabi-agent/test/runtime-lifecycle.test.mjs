@@ -43,6 +43,42 @@ function fixture() {
   return { root, configPath, config, runtime };
 }
 
+test("connector stop reports completion only after its resource owners close", async () => {
+  const f = fixture();
+  const summaries = [];
+  const publish = f.runtime.publishDesktop.bind(f.runtime);
+  f.runtime.publishDesktop = summary => { summaries.push(summary); return publish(summary); };
+  let release;
+  f.runtime.computer.stop = () => new Promise(resolve => { release = resolve; });
+  try {
+    const stopping = f.runtime.stop();
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(summaries.at(-1), "正在停止连接器");
+    assert.equal(summaries.includes("连接器已停止"), false);
+    release();
+    await stopping;
+    assert.equal(summaries.at(-1), "连接器已停止");
+  } finally {
+    release?.(); await f.runtime.stop();
+    fs.rmSync(f.root, { recursive: true, force: true });
+  }
+});
+
+test("connector stop keeps cleanup failure visible without declaring success", async () => {
+  const f = fixture();
+  const previousExitCode = process.exitCode;
+  const summaries = [];
+  f.runtime.publishDesktop = summary => { summaries.push(summary); };
+  f.runtime.computer.stop = async () => { throw new Error("fixture close unconfirmed"); };
+  try {
+    await assert.rejects(f.runtime.stop(), /resource cleanup failed/);
+    assert.deepEqual(summaries, ["正在停止连接器", "连接器停止未确认"]);
+  } finally {
+    process.exitCode = previousExitCode;
+    fs.rmSync(f.root, { recursive: true, force: true });
+  }
+});
+
 test("handoff pause deadline rejects a hung observer and restores the original owner", { timeout: 15000 }, async () => {
   const f = fixture(), c = candidate(f.root);
   const oldEntry = path.join(f.root, "old.mjs"); fs.writeFileSync(oldEntry, "");

@@ -7,7 +7,7 @@ import path from "node:path";
 import test from "node:test";
 import { LanAgentAuthority } from "./lanAgentAuthority.js";
 import { evaluateLanAgentRequest, assertTrustedLanAgentPrincipal } from "./lanAgentRequestAccess.js";
-import { assertLanAgentBodyAuthority } from "./lanAgentBodyAuthority.js";
+import { validateLanAgentRequestBody } from "./lanAgentBodyAuthority.js";
 
 function fixture(t: { after: (cleanup: () => void) => void }, enabled?: boolean) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabi-connection-compat-"));
@@ -107,9 +107,8 @@ test("v2 invocation freezes connection identity while payload attribution needs 
   const projected = principal as { binding?: { provider: string; sessionId?: string }; source?: { provider: string; sessionId: string } };
   const source = projected.binding ?? projected.source;
   assert.deepEqual({ provider: source?.provider, sessionId: source?.sessionId }, { provider: "codex", sessionId: "session-fixture" });
-  const verified = { agentId: "codex", provider: "codex" as const, sessionId: "session-fixture" };
-  assert.doesNotThrow(() => assertLanAgentBodyAuthority("/api/agent/send", { sender: { sessionId: "session-fixture" } }, verified));
-  assert.doesNotThrow(() => assertLanAgentBodyAuthority("/api/agent/send", { sender: { sessionId: "foreign-fixture" } }, verified));
+  assert.doesNotThrow(() => validateLanAgentRequestBody(request, { sender: { sessionId: "session-fixture" } }));
+  assert.doesNotThrow(() => validateLanAgentRequestBody(request, { sender: { sessionId: "foreign-fixture" } }));
   request.headers["x-rabiroute-session-id"] = "foreign-fixture";
   assert.equal(evaluateLanAgentRequest(request, f.authority, true).kind, "denied");
   assert.throws(() => assertTrustedLanAgentPrincipal(request), /principal is unavailable/);

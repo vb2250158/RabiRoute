@@ -12,7 +12,7 @@ description: 运行或更新 RabiSpeech 本机语音模型闭环基准。用于�
 - 只测试已安装、已缓存的本地模型；不启用、恢复或调用云 API。
 - RabiSpeech 可以支持用户显式启用的 HTTPS API Provider，但该能力只做独立烟测和运行时验收；不能与本地模型结果混排、冒充本机耗时或本机显存数据。需要验证 API Provider 时改用 `rabiroute-voice-workstation`。
 - 按 `TTS -> WAV -> ASR` 顺序执行。每个 ASR 必须识别每个 TTS 的同一批音频。
-- 复用 `plugin-adapters/rabi-speech/benchmarks/cases.zh-CN.json`；除非测试目标就是语料版本升级，不为某个模型临时换题。
+- 复用 `src/plugins/rabi-speech/benchmarks/cases.zh-CN.json`；除非测试目标就是语料版本升级，不为某个模型临时换题。
 - 原始 WAV、worker 日志和 JSON 放在插件 `output/benchmarks/<date>-<name>/`，不要提交。
 - 公开 HTML 不写 token、参考音路径、角色私有资料、模型缓存路径或运行期绝对路径。
 

@@ -126,7 +126,7 @@ Manager `/api/events` emits `plugin_event` messages named `video.changed` and `v
 Run from a local source directory:
 
 ```powershell
-node --test plugins/builtin/io.rabiroute.manager.video/1.0.0/service.test.mjs
+node --test src/plugins/io.rabiroute.manager.video/service.test.mjs
 npm run build
 npm run check:config
 ```

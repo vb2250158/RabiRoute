@@ -7,7 +7,7 @@ import http from "node:http";
 import { once } from "node:events";
 import { createHash, randomUUID } from "node:crypto";
 import { AgentUploadStore } from "./agentUploadStore.js";
-import { createAgentUploadRoutes } from "./agentUploadRoutes.js";
+import { createAgentUploadRoutes } from "../plugins/io.rabiroute.manager.agent-communication/src/manager/agentUploadRoutes.js";
 import { hasAuthenticatedConnectionRequest, markAuthenticatedConnectionRequest } from "./connectionRequestAccess.js";
 import { createAgentEndpointDelivery, type AgentEndpointDeliveryContext } from "./agentEndpointDelivery.js";
 import { LanAgentAuthority } from "./lanAgentAuthority.js";

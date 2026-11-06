@@ -1,0 +1,15 @@
+{
+  "exports": [
+    {
+      "source": "src/plugins/io.rabiroute.manager.message-adapter-control/hostRuntime.mjs",
+      "name": "createOwnedRuntime"
+    }
+  ],
+  "ownedPrefixes": [
+    "src/plugins/io.rabiroute.manager.message-adapter-control/"
+  ],
+  "ownedSources": [
+    "src/plugins/io.rabiroute.manager.message-adapter-control/src/manager/messageAdapterControl.ts"
+  ],
+  "packageId": "io.rabiroute.manager.message-adapter-control"
+}

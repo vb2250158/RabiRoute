@@ -1,0 +1,18 @@
+{
+  "exports": [
+    {
+      "source": "src/plugins/io.rabiroute.manager.agent-thread-control/hostRuntime.mjs",
+      "name": "createOwnedRuntime"
+    }
+  ],
+  "ownedPrefixes": [
+    "src/plugins/io.rabiroute.manager.agent-thread-control/"
+  ],
+  "ownedSources": [
+    "src/plugins/io.rabiroute.manager.agent-thread-control/src/manager/agentThreadControlRoutes.ts",
+    "src/plugins/io.rabiroute.manager.agent-thread-control/src/manager/agentThreadControlOperations.ts",
+    "src/plugins/io.rabiroute.manager.agent-thread-control/src/manager/peerAgentOperations.ts",
+    "src/plugins/io.rabiroute.manager.agent-thread-control/src/manager/peerRouteDeliveryOperations.ts"
+  ],
+  "packageId": "io.rabiroute.manager.agent-thread-control"
+}

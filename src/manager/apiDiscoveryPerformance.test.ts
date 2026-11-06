@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import http from "node:http";
 import { once } from "node:events";
 import test from "node:test";
-import { createApiDiscoveryOperations, projectApiHelp } from "./apiDiscoveryRoutes.js";
+import { createApiDiscoveryOperations, projectApiHelp } from "../plugins/io.rabiroute.manager.agent-communication/src/manager/apiDiscoveryRoutes.js";
 import { apiCatalogOpenApi, createApiCatalogSnapshot } from "./apiOperationCatalog.js";
 import { fixtureApiContract } from "./apiOperationContractFixtures.js";
 import { ManagerPluginRouteRegistry } from "./managerPluginRouteRegistry.js";

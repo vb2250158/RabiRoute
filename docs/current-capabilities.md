@@ -189,9 +189,9 @@ Manager 插件使用 schema/profile v2，明确选择 `in_process`、`isolated` 
 - Manager API：`src/manager/controlPlaneRoutes.ts`
 - 消息端成熟度扫描：`src/messageEndpoints/*`、`src/manager/controlPlaneRoutes.ts`
 - Agent 成熟度扫描：`src/agentAdapters/managerApi.ts`
-- 路由与上下文：`src/forwarding.ts`、`src/routing/*`
+- 路由与上下文：`src/plugins/io.rabiroute.endpoint.rabilink/src/forwarding.ts`、`src/routing/*`
 - 回传：`src/outbox.ts`
-- Codex Desktop owner：`src/codexDesktopBridge.ts`、`src/codexRuntime.ts`；空任务元数据：`src/codexAppServerClient.ts`
+- Codex Desktop owner：`src/plugins/io.rabiroute.agent.codex/src/codexDesktopBridge.ts`、`src/plugins/io.rabiroute.agent.codex/src/codexRuntime.ts`；空任务元数据：`src/plugins/io.rabiroute.agent.codex/src/codexAppServerClient.ts`
 - WebGUI：`ribiwebgui/src/pages/*`
 - 自动化契约：`src/**/*.test.ts`
 

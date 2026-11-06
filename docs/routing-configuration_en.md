@@ -69,6 +69,8 @@ A representative shape:
 
 Each rule combines one trigger (`message` or `schedule`) and one action (`deliver_agent` or `run_script`). Rules stay inside the active Route profile and cannot select an arbitrary persona. Script actions reuse connection authentication and remain inside the bound role's `scripts/` directory.
 
+Set `trigger.targetUserId` to a QQ number to restrict a private-message rule to that sender. Leave it empty to accept any private contact. This condition uses the stable QQ number, applies only to private messages, and does not change group rules.
+
 ## Route kinds
 
 Current kinds include:

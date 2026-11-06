@@ -2,6 +2,17 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { bindCodexSessionForSave, bindDshSessionForSave } from "./shared/codexSessionBinding.js";
 import { handleAgentThreadRequest, type AgentThreadDriver } from "./agentThreads.js";
+import { nativeOperations } from "./agentAdapters/managerNativeOperations.js";
+import type { AgentManagerOperationInvoker } from "./agentAdapters/managerInvocation.js";
+import { resolveCodexSession } from "./plugins/io.rabiroute.agent.codex/src/codexSessionResolver.js";
+
+const ownedOperations = nativeOperations({ resolveCodexSession });
+const invokeCodexFixture: AgentManagerOperationInvoker = async <T>(type: string, operation: string, payload: unknown, invocation?: import("@rabiroute/plugin-sdk").AgentAdapterInvocation) => {
+  assert.equal(type, "codex");
+  const handler = ownedOperations[operation];
+  assert.ok(handler, operation);
+  return await handler(payload, invocation) as T;
+};
 
 test("restored local cards without explicit session selection do not create tasks on save", async () => {
   const gateway = { id: "example", name: "Example", agentAdapters: ["codex", "dsh"] };
@@ -82,7 +93,7 @@ test("saving a new Rabi task creates once, persists its id, and reuses it on the
     codexCwd: process.cwd()
   };
   const resolve = (request: Parameters<typeof handleAgentThreadRequest>[0]) =>
-    handleAgentThreadRequest(request, { allowedWorkspaces: [process.cwd()] }, driver);
+    handleAgentThreadRequest(request, { allowedWorkspaces: [process.cwd()], invokeAgentOperation: invokeCodexFixture }, driver);
 
   await bindCodexSessionForSave(gateway, resolve);
   await bindCodexSessionForSave(gateway, resolve);
@@ -128,7 +139,7 @@ test("saving an explicitly typed Rabi name with its old id cleared creates the n
 
   await bindCodexSessionForSave(
     gateway,
-    (request) => handleAgentThreadRequest(request, { allowedWorkspaces: [process.cwd()] }, driver)
+    (request) => handleAgentThreadRequest(request, { allowedWorkspaces: [process.cwd()], invokeAgentOperation: invokeCodexFixture }, driver)
   );
 
   assert.equal(createCount, 1);

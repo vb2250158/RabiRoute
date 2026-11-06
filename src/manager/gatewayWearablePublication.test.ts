@@ -1,3 +1,4 @@
+import { canonicalManagerPluginFixture } from "./canonicalManagerPlugin.fixture.js";
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import type { ChildProcess } from "node:child_process";
@@ -16,8 +17,8 @@ import { createGatewayListenerPublicationHost } from "./gatewayListenerPublicati
 import { createGatewayListenerRuntime, GATEWAY_LISTENER_PUBLICATION_PREFIX } from "../runtime/gatewayListenerRuntime.js";
 import { fixtureApiContract } from "./apiOperationContractFixtures.js";
 import { PassThrough } from "node:stream";
-import { WearableCompanionWorkerService } from "./wearableCompanionWorkerService.js";
-import type { WearableCompanionRuntimeIdentity } from "./wearableCompanionRuntimeIdentity.js";
+import { WearableCompanionWorkerService } from "../plugins/io.rabiroute.manager.wearable-companion/src/manager/wearableCompanionWorkerService.js";
+import type { WearableCompanionRuntimeIdentity } from "../plugins/io.rabiroute.manager.wearable-companion/src/manager/wearableCompanionRuntimeIdentity.js";
 
 function gate() {
   let release!: () => void;
@@ -28,9 +29,16 @@ type ControlledGatewayDefinition = { id: string };
 type ControlledGatewayRuntime = { definition: ControlledGatewayDefinition; needsRestart: boolean };
 
 async function kernelFixture(t: test.TestContext, name: string, services: HostService[]) {
-  const entry = path.resolve(`plugins/builtin/io.rabiroute.manager.${name}/1.0.0/manager.mjs`);
-  const module: PluginModule = await import(pathToFileURL(entry).href);
-  const manifest: PluginManifest = JSON.parse(fs.readFileSync(path.join(path.dirname(entry), "rabi.plugin.json"), "utf8"));
+  const runtime = services.find(service => service.capability === `host.manager.${name}@1`)!.value;
+  const runtimeIdentity = services.find(service => service.capability === "host.manager.wearable-companion-runtime@1")?.value;
+  const implementation = name === "wearable-companion" ? {
+    createWearableCompanionRuntimeIdentity: () => runtimeIdentity,
+    WearableCompanionWorkerService: class { constructor() { return runtime as object; } }
+  } : undefined;
+  const { module, manifest, entry, ports } = await canonicalManagerPluginFixture(name, runtime, implementation);
+  services = services.map(service => service.capability === `host.manager.${name}@1`
+    ? { capability: `host.manager.${name}@2`, value: ports }
+    : service.capability === "host.manager.wearable-companion-runtime@1" ? { ...service, value: ports } : service);
   let extra: ((context: PluginContext) => void) | undefined;
   let expectedShutdownFailure: RegExp | undefined;
   const releases: Array<() => void> = [];

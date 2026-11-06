@@ -91,7 +91,7 @@ test("semantic backgrounds receive the more readable black or white foreground",
 });
 
 test("theme settings UI and switches do not own ad-hoc presentation colors", () => {
-  const renderer = fs.readFileSync(new URL("../../ribiwebgui/src/components/renderers/DesktopSettingsRenderer.vue", import.meta.url), "utf8");
+  const renderer = fs.readFileSync(new URL("../plugins/io.rabiroute.manager.desktop/web/components/renderers/DesktopSettingsRenderer.vue", import.meta.url), "utf8");
   assert.doesNotMatch(renderer, /#[0-9a-f]{3,8}\b|rgba?\(\s*\d/i);
 
   const stylesheet = fs.readFileSync(new URL("../../ribiwebgui/src/styles.css", import.meta.url), "utf8");

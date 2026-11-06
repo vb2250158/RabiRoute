@@ -6,6 +6,14 @@
 
 # RabiRoute 代码架构
 
+页面资源的校验由 `WebPatchService` 按版本统一拥有。同一版本的并发请求复用正在进行的校验，完成后复用原缓存；失败仅清除该次校验，后续请求可重新尝试。
+
+聊天记录 JSONL 是正式数据，`personaChatHistoryIndex.ts` 的 SQLite 检查点、任务摘要和往来任务关系均为可重建投影。原追加拥有者串行写入；同一文件增长时只读取检查点后的完整行，替换、截短或已记录边界变化时重建。分页沿物理写入位置而非消息时间排序；历史标题搜索保留原语义。局部坏行不阻断其他记录，已知同 ID 的坏记录只影响该次重放。
+
+完成 Hook 的文件状态缓存归 `CodexHookContextService`，以文件版本失效，读取投影不允许外部修改共享快照；修改后先完成原子写入，再发布新缓存。它不拥有第二份正式状态，也不新增轮询。
+
+源码及资源归属见[插件源码目录](plugin-source-layout.md)，稳定存档与升级见[插件存档](plugin-storage.md)。
+
 消息端的运行实现、管理操作、配置卡片和扫描由各自插件包拥有。`plugins/profiles/desktop.json` 声明默认实例；`PluginProfileSettings` 在独立的实例文件中持久化用户覆盖，不改安装包的默认 Profile。坏实例设置只影响该实例，正常插件仍可列出和使用。QQ 的配置、进程控制和守护已合并进 NapCat 消息端插件；米家与语音服务的实现也随自己的包构建，不由控制面注入平台类。语音消息端和共享语音服务分别启停，移动消息端与共享连接传输分别拥有生命周期。
 
 消息端包在 `route-config.json` 声明自己负责的 Route 字段、运行字段映射与回退依赖。只改这些字段时，原目录 CAS 队列将不可变快照交给常驻 Gateway，原生插件 owner 准备新实例、发布并排空旧实例，其他消息端保持运行。主 Agent 选择、成员列表、远端目标、共用模型、计划助手配置、公共管道及未声明字段仍按真实依赖闭包重启 Gateway。Agent 包的连接、密码和普通直接投递绑定可局部更新；当前本机主 Agent 已启用消息处理或记忆整理 worker 时，其会话 ID、名称和工作目录变化仍进入共享 worker 闭包，按原生命周期更新。启动快照在 Route 私有运行目录按进程代际保存，环境变量只传路径和摘要；Gateway 一次读取并冻结，后续更新复用原进程标准管道。
@@ -38,7 +46,7 @@ Linux 源码 Host 由 `scripts/linux-host.mjs` 和 `scripts/lib/linux-host-runti
 
 完成连接鉴权后即可使用已提供的接口，不再增加逐功能或逐角色授权。发送按实际目标、消息格式和幂等回执合同执行；来源信息只记归属。详见[连接与接口使用](connection-access.md)。
 
-家庭设备简化参数合同在 `src/shared/homeMediaContract.ts`；`src/integrations/xiaomiHome/entityActions.ts` 从实时 HA 服务、目标 feature 与实体参数派生通用动作目录、revision 和 Schema，并校验调用。设备客户端与持久回执由同目录 `managerApi.ts` 唯一持有；通用动作与简化动作共用执行和回执链，不新增旁路或逐设备权限。音箱便捷播报仍显式绑定到通知实体。WebGUI 不持有 HA 凭据，Agent 使用[设备接口](home-device-agent-api.md)。
+家庭设备简化参数合同在 `src/shared/homeMediaContract.ts`；`src/plugins/io.rabiroute.manager.xiaomi-home/src/integrations/xiaomiHome/entityActions.ts` 从实时 HA 服务、目标 feature 与实体参数派生通用动作目录、revision 和 Schema，并校验调用。设备客户端与持久回执由同目录 `managerApi.ts` 唯一持有；通用动作与简化动作共用执行和回执链，不新增旁路或逐设备权限。音箱便捷播报仍显式绑定到通知实体。WebGUI 不持有 HA 凭据，Agent 使用[设备接口](home-device-agent-api.md)。
 
 0.3.22 连接合同：同一 RabiLink 应用已鉴权设备默认使用 PC 实际提供的全部服务。设备固定公钥与应用作用域继续复核；知识读写复用 Manager 接口，无额外 MCP 密钥或知识 grant。旧逐服务权限字段和知识表单已退役。实现与迁移见[通用连接](rabilink-peer-tunnel.md)及[知识运行合同](rabilink-knowledge-runtime.md)。
 
@@ -58,7 +66,7 @@ Manager 内部 HTTP 转发由 `src/shared/internalManagerHop.ts` 证明来源；
 
 公网服务器的目标边界是连接、鉴权和中转；角色、Skill、聊天记录及接口执行归目标 PC 的现有业务 owner，AIUI 的模型由乐奇配置。新增 Manager API 和公开业务 header 通过通用隧道透传，无需向服务器新增逐业务分发表；服务器不拥有 PC 角色副本或以角色绑定决定权限。私有认证和代理身份 header 由传输 owner 重建，第三 PC 转发有界，写入结果未知时不自动重放。本轮传输核心和本机多端夹具已验证这些合同；历史服务器专用路由的迁移、全项目构建及实际运行版本仍需分别核对，不能据此宣称整个服务器或真机链路已完成迁移。
 
-实验视频直连由 `RabiDirectVideoSender.kt` 与 `src/manager/rabiDirectVideo.ts` 承担两端传输。RabiLink Manager 插件拥有接收器生命周期和本机文件；`rabiDirectVideoRoutes.ts` 仅接收有界 SDP，Relay 不接收视频字节。SDK 取流留在眼镜适配器。见 [能力与验收限制](rabilink-direct-video.md)。
+实验视频直连由 `RabiDirectVideoSender.kt` 与 `src/plugins/io.rabiroute.manager.rabilink-relay/src/manager/rabiDirectVideo.ts` 承担两端传输。RabiLink Manager 插件拥有接收器生命周期和本机文件；`rabiDirectVideoRoutes.ts` 仅接收有界 SDP，Relay 不接收视频字节。SDK 取流留在眼镜适配器。见 [能力与验收限制](rabilink-direct-video.md)。
 
 > 状态：当前代码地图。默认 [desktop Profile](../plugins/profiles/desktop.json) 声明内置实例，对应独立插件包；具体启用与运行结果以当前实例列表为准。
 
@@ -147,7 +155,7 @@ skills/
 
 多 Gateway 场景由 manager 启动多个 `index.ts` 子进程完成。
 
-### `src/config.ts`
+### `src/plugins/io.rabiroute.agent.codex/src/config.ts`
 
 `config.ts` 是 Gateway 子进程的环境变量配置入口。manager 会把每条 Route 的 `adapterConfig.json` 转成环境变量，再启动 `index.ts`。
 
@@ -212,7 +220,7 @@ data/roles/<RoleId>/conversation/archive/index.json
 - 查询必须同时匹配当前角色、逻辑消息端和会话；入站和出站合计占用同一条数额度。
 - 附件只保留类型、文件名、MIME、大小等安全元数据，不存私有绝对路径。
 
-### `src/forwarding.ts`
+### `src/plugins/io.rabiroute.endpoint.rabilink/src/forwarding.ts`
 
 `forwarding.ts` 现在是消息主链路的编排器。
 
@@ -369,7 +377,7 @@ AgentPacket
 - Heartbeat 判断目标任务是否仍在工作时，只读取任务记录末尾附近的数据，不得同步读取或拆分整个 JSONL 文件。文件正在追加时忽略末尾未写完的一行；超大的无关记录会跳过，避免任务长期运行后拖住 Manager 或 Route 子进程。
 - Codex 活跃状态按时间合并两类证据：Desktop IPC 只提供当前连接内的临时活跃标记，rollout 的最近 turn/terminal 事件提供可持久查证的生命周期。较新的 terminal 会清除较旧的 IPC 活跃标记；若新一轮 IPC 活跃时间晚于已写入的旧 terminal，则在 rollout 追上前仍保持活跃。IPC 断开时清空连接内标记，不能让旧连接把已完成任务长期显示为运行中。
 - `src/messageAgentPool.ts` 不拥有 Codex 任务运行状态。`/api/agent/threads` 的精确读取把 Desktop 是否在线、当前连接的活跃事件和 Codex rollout 终态归一为 `active / idle / notLoaded / unavailable`；消息池只在一次分配期间用内存 reservation 防止并发抢占，不把这些状态写入文件。`agents.json` 只保存消息处理任务的完整 ID、左侧聊天栏名称、workspace、序号和初始化信息；`routing-affinity.json` 只保存消息组与消息端/会话/说话人的恢复线索。Desktop 离线或状态不可读时，消息组仍留在 `pending.json`，恢复后继续原任务，不能依据本地快照扩容。
-- `src/forwarding.ts` 在 NapCat 消息组带 `replyToMessageId` 时，通过 `src/messageProcessing/managerClient.ts` 按 `channel + sentMessageId + routeId` 查询 Agent 发送记录。匹配当前消息处理任务完整 ID 的发送会话会在 `src/messageAgentPool.ts` 获得可叠加的 `6000` 分；原消息组、消息端、会话和说话人熟悉度继续计分并按总分排序。查询完成会写 `message_processing_reply_sender_lookup_completed`，查询错误写 `message_processing_reply_sender_lookup_failed` 并取消这项加分；找到发送者后还会写不含正文的 `message_processing_reply_sender_weight_applied`，记录候选会话、最终任务及是否命中。
+- `src/plugins/io.rabiroute.endpoint.rabilink/src/forwarding.ts` 在 NapCat 消息组带 `replyToMessageId` 时，通过 `src/messageProcessing/managerClient.ts` 按 `channel + sentMessageId + routeId` 查询 Agent 发送记录。匹配当前消息处理任务完整 ID 的发送会话会在 `src/messageAgentPool.ts` 获得可叠加的 `6000` 分；原消息组、消息端、会话和说话人熟悉度继续计分并按总分排序。查询完成会写 `message_processing_reply_sender_lookup_completed`，查询错误写 `message_processing_reply_sender_lookup_failed` 并取消这项加分；找到发送者后还会写不含正文的 `message_processing_reply_sender_weight_applied`，记录候选会话、最终任务及是否命中。
 - 消息处理看板也不保存任务忙闲。每次读取看板时，Manager 按任务 ID 向 Codex 获取当前名称和 `active / idle / notLoaded / unavailable`，只在本次响应中显示；读取失败时显示“当前无法确认”，不沿用上一次空闲或繁忙。
 - Route 的 `codexPlanAssistantSessions` 保存 1–8 个持久 Desktop 计划管理秘书槽，只负责任务身份和初始化记录；统一模型由 Manager 的 `codexPlanAssistantModel` 拥有，WebGUI 不在秘书条目中复制模型状态。秘书槽不写入计划 `taskBinding`；`taskBinding` 始终绑定独立业务任务。秘书负责计划/记忆维护、任务查重与绑定、状态核对、结果消费和续投，禁止执行调查、实现、测试或业务文件修改。控制面写入按 `planId` keyed lease 隔离：同计划单 writer、不同计划并行，共享 JSON 采用锁内最新值合并与原子替换。锁通过完整候选文件和原子 hard-link 发布，stale/损坏锁在热路径失败关闭，只能在 quiescent 维护窗口显式修复；同 key 的认领/澄清 lease 覆盖 reservation、外发、验证和终态回执，结果不明确时禁止自动重发。全局 audit 使用前后 ledger 快照，只把身份稳定的错误判为 invalid；plan-scoped strict audit 才是单计划收口门，reconcile 只跳过 active 计划。该层目前仍是实验能力，不能因为代码或 mock 通过就宣称真实 Desktop 多任务已验收。
 `codexDesktopBridge.ts` 必须保持 transport-only：它不读取 route rule、不拼 AgentPacket、不决定业务外发。`codexAppServerClient.ts` 只保留“创建空任务、恢复用户名称”的元数据能力，不得接收真实 prompt 或执行 turn；元数据操作完成后立即退出。
@@ -380,7 +388,7 @@ Desktop 任务审批与 `src/outbox.ts` 的 Action Gate 是两道不同边界：
 
 `src/messageProcessing/board.ts` 是 Manager 拥有的消息处理状态机，`src/messageProcessing/persistence.ts` 负责把状态保存到运行期 `data/.runtime/message-processing-board.json`。业务规则不直接决定文件位置。Manager 启动时同步读取现有快照；运行期间把连续变更合并为最新待写快照，由 Worker 使用紧凑 JSON 和原子替换保存，避免大型状态文件的序列化、`fsync` 和重命名阻塞 HTTP 主线程。`/meta.messageProcessingPersistence` 报告待写、写入、重试、最近耗时和错误。Gateway 在消息组进入 Codex 消息处理任务前登记需求，投递成功后记录精确 Desktop 任务；消息处理 Agent 通过结果接口提交回复、不回复或结构化转交，Outbox 再用 `replyContext.messageProcessingRequirementId` 回写真实发送结果。直接 @、直接回复、私聊和计划进展是必须处理项；普通群讨论仍由 Agent 判断是否参与。
 
-`src/napcatMedia.ts` 在 NapCat 消息进入时把图片 URL 立即转成受限大小的本地运行文件，并把成功或失败写进消息附件记录；`src/messageProcessing/sourceEvidence.ts` 再从当前消息组和可追溯引用链生成消息 ID、附件清单和可投递图片路径。`src/messageProcessing/managedAttachmentDelivery.ts` 按 `requirementId + attachmentId + contentHash` 把可读图片复制到目标 Agent 工作区内的附件缓存，拒绝缓存路径中的符号链接，并按每批最多八张生成稳定批次身份。正文只进入第一批；后续批次只说明批次位置。附件复制失败时仍投递一次正文并列出不可用附件，要求处理端等待附件恢复或转交，不能推断图片内容。`messageAgentPool.ts` 使用持久批次回执复用已经成功的批次，避免同一 requirement 重试时重复投递。`src/agentThreads.ts` 继续只接受目标工作区内、实际存在的受支持图片路径，`src/codexDesktopBridge.ts` 把它们转换成 Desktop `localImage` 输入。`board.ts` 保留聚合需求的全部来源证据，并单独保存 Agent 已核对的 `sourceEvidenceReview`。回复 outcome 可以先进入 `awaiting_send`；发送审批再按 `proposedSend.params.replyToMessageId` 解析本次主消息、明确回复链和正文实际引用的附件。只有这个精确子集中的附件不可读才阻止回复；静默关闭仍必须覆盖整个聚合需求。`AgentPacket` 先给出宽泛最近消息，再给出当前消息；当前消息前五分钟内最接近的讨论片段和引用证据位于最近消息之后；已经完整显示的同 ID 消息只保留指向最近消息的引用，供处理端结合已经读过的历史解释纠正和短追问。
+`src/plugins/io.rabiroute.endpoint.napcat/src/napcatMedia.ts` 在 NapCat 消息进入时把图片 URL 立即转成受限大小的本地运行文件，并把成功或失败写进消息附件记录；`src/messageProcessing/sourceEvidence.ts` 再从当前消息组和可追溯引用链生成消息 ID、附件清单和可投递图片路径。`src/messageProcessing/managedAttachmentDelivery.ts` 按 `requirementId + attachmentId + contentHash` 把可读图片复制到目标 Agent 工作区内的附件缓存，拒绝缓存路径中的符号链接，并按每批最多八张生成稳定批次身份。正文只进入第一批；后续批次只说明批次位置。附件复制失败时仍投递一次正文并列出不可用附件，要求处理端等待附件恢复或转交，不能推断图片内容。`messageAgentPool.ts` 使用持久批次回执复用已经成功的批次，避免同一 requirement 重试时重复投递。`src/agentThreads.ts` 继续只接受目标工作区内、实际存在的受支持图片路径，`src/plugins/io.rabiroute.agent.codex/src/codexDesktopBridge.ts` 把它们转换成 Desktop `localImage` 输入。`board.ts` 保留聚合需求的全部来源证据，并单独保存 Agent 已核对的 `sourceEvidenceReview`。回复 outcome 可以先进入 `awaiting_send`；发送审批再按 `proposedSend.params.replyToMessageId` 解析本次主消息、明确回复链和正文实际引用的附件。只有这个精确子集中的附件不可读才阻止回复；静默关闭仍必须覆盖整个聚合需求。`AgentPacket` 先给出宽泛最近消息，再给出当前消息；当前消息前五分钟内最接近的讨论片段和引用证据位于最近消息之后；已经完整显示的同 ID 消息只保留指向最近消息的引用，供处理端结合已经读过的历史解释纠正和短追问。
 
 `src/replyImageDescriptions.ts` 在 NapCat 群聊引用发送进入幂等 reservation 前，按精确 Route、群、实例和 `replyToMessageId` 读取来源消息。受跟踪发送已经通过 send-context 审批时，图片检查只使用该需求的精确来源消息和已审核正式记录；历史 `conversationKey` 不能改写正式群号，同 ID 的其它历史副本也不能替代该证据。正式群、Route、实例或目标不一致，记录不唯一，或图片附件未审核时失败关闭；没有受跟踪审批的普通发送不使用这项回退。来源含图片时，`params.replyImageDescriptions` 必须与图片数量和原顺序一一对应；来源找不到、图片不可读、描述缺失或空泛都会阻止发送。真实平台发送成功后，每张 `napcat-media` 图片旁会创建或追加图片同名 `.md`，记录来源消息、图片序号、发送 Agent 类型与完整会话、`deliveryId`、QQ 回执和本次理解。幂等回执只保存说明文件映射，不把描述正文复制进按平台消息 ID 查询的运维结果；Manager 另写不含正文和图片路径的 `agent_reply_image_descriptions_archived` 事件。
 
@@ -402,7 +410,7 @@ Agent 任务间的回复责任由 `src/agentRequests/` 单独保存到 `data/.ru
 - 找原始 source message。
 - 检查 pipeline 是否允许自动回复。
 - NapCat 群聊在 `replyToSource=true` 且存在源 `messageId` 时，由 Outbox 统一补 OneBot reply 段；角色和处理端不需要手写 CQ reply，并会避免重复添加。
-- NapCat 本地群文件由 Outbox 核对真实路径、文件存在性、普通文件类型和可读性后调用 `src/napcat.ts` 的 `upload_group_file` 封装；可选说明文本在上传成功后单独发送，避免文本失败导致重复上传大文件。
+- NapCat 本地群文件由 Outbox 核对真实路径、文件存在性、普通文件类型和可读性后调用 `src/plugins/io.rabiroute.endpoint.napcat/src/napcat.ts` 的 `upload_group_file` 封装；可选说明文本在上传成功后单独发送，避免文本失败导致重复上传大文件。
 - 允许时调用对应消息端发送封装，例如 NapCat HTTP 或企业微信智能机器人 SDK。
 - 不允许时返回 `blocked` 并附带 draft 数据；发送失败时返回 `failed` 并保留 draft 数据；未选择外部输出时可以返回 `draft` 或把结果保留在 Agent 会话。
 
@@ -443,7 +451,7 @@ startManager();
 
 正式 Manager 只通过 `startManager()` 初始化。`src/plugin-kernel/` 负责 Manifest 校验、包 revision 隔离、单一 Profile、能力图、权限、generation 和 effect 释放。默认构建从 `dist/plugins/profiles/desktop.json` 与 `dist/plugins/packages/` 加载；树外插件可通过 `RABIROUTE_PLUGIN_PROFILE` 和 `RABIROUTE_PLUGIN_PACKAGE_ROOTS` 选择独立 Profile 与额外包根目录。运行时不读取旧配置格式，也不从源码插件目录加载。
 
-`plugins/builtin/` 中的内置插件各自拥有独立包 ID、Manifest、Manager 入口和中英文说明。它们与树外插件都通过 `@rabiroute/plugin-sdk` 使用 `services`、`contributions`、`permissions` 和 `effects`。宿主提供版本化原语能力；插件通过 `provides`、`requires` 和 `optional` 组合，不通过中央包枚举互相调用。
+`src/plugins/` 中的内置插件各自拥有独立包 ID、Manifest、Manager 入口和中英文说明。它们与树外插件都通过 `@rabiroute/plugin-sdk` 使用 `services`、`contributions`、`permissions` 和 `effects`。宿主提供版本化原语能力；插件通过 `provides`、`requires` 和 `optional` 组合，不通过中央包枚举互相调用。
 
 `GenerationRuntime` 按真实依赖组件切换。revision、配置、权限和依赖 revision 不变时复用现有实例；变化只重载受影响组件。缺少必需能力的实例进入 `waiting_dependency`。候选激活或 effect 发布失败时，旧组件继续服务；不相关组件照常更新。成功发布后释放旧 effect scope。Manager API 从 generation 的不可变 service 与 contribution 快照生成 Plugin Catalog；Web 模块按包 ID、版本和 SHA-256 revision 发布不可变资源。
 
@@ -451,7 +459,7 @@ startManager();
 
 ```text
 plugins/contracts/plugin-sdk/
-plugins/builtin/<package-id>/1.0.0/
+src/plugins/<package-id>/
 plugins/profiles/desktop.json
 src/plugin-kernel/
 dist/plugins/
@@ -591,9 +599,9 @@ Gateway 配置的事实源 Module。
 - role skills
 - Agent 上下文快照
 
-`src/personaPlanWorkflow.ts` 读取并校验每个角色 `personaConfig.json.planWorkflow`，它是状态 key、名称、说明、颜色、顺序、视图和生命周期规则的唯一真源。`src/roleKnowledge.ts` 只把 `plan.status` 当作配置 key，并通过 workflow role 与状态属性校验分析、信息不足、审批、执行、完成和归档，不包含十态枚举。v1/v2/v3/v4 配置第一次读取时由同一模块迁移为 v5：在审批标记后复用匹配的启用“已审批”定义或新增默认定义，并绑定 `roles.approved`；匹配定义未启用时拒绝迁移。其它自定义状态、说明和相对顺序保持不变。v1 仍先补齐 `roles.informationNeeded`，v2/v3 只更新未自定义的旧默认说明。v5 目录读取不自动恢复被移除的状态。`archiveStatus=未归档 | 已归档` 是独立归档变量；只有配置为 `terminal` 且 `archiveEligible` 的状态可以在 `archiveAfterHours` 后归档，归档时保留原 key。`src/roleKnowledgePresentation.ts` 返回配置中的 label、description、palette、order 与 views；`src/roleKnowledgePagination.ts` 动态生成状态筛选和 `byStatus` 计数。状态配置 revision 参与展示缓存。已归档计划在普通列表和关键词召回前被排除，只能通过明确计划 ID 或归档视图读取。状态移除采用 `enabled → retiring → retired`，当前计划先迁移，旧定义继续解释归档计划和追加式历史。
+`src/plugins/io.rabiroute.manager.persona/src/personaPlanWorkflow.ts` 读取并校验每个角色 `personaConfig.json.planWorkflow`，它是状态 key、名称、说明、颜色、顺序、视图和生命周期规则的唯一真源。`src/roleKnowledge.ts` 只把 `plan.status` 当作配置 key，并通过 workflow role 与状态属性校验分析、信息不足、审批、执行、完成和归档，不包含十态枚举。v1/v2/v3/v4 配置第一次读取时由同一模块迁移为 v5：在审批标记后复用匹配的启用“已审批”定义或新增默认定义，并绑定 `roles.approved`；匹配定义未启用时拒绝迁移。其它自定义状态、说明和相对顺序保持不变。v1 仍先补齐 `roles.informationNeeded`，v2/v3 只更新未自定义的旧默认说明。v5 目录读取不自动恢复被移除的状态。`archiveStatus=未归档 | 已归档` 是独立归档变量；只有配置为 `terminal` 且 `archiveEligible` 的状态可以在 `archiveAfterHours` 后归档，归档时保留原 key。`src/roleKnowledgePresentation.ts` 返回配置中的 label、description、palette、order 与 views；`src/roleKnowledgePagination.ts` 动态生成状态筛选和 `byStatus` 计数。状态配置 revision 参与展示缓存。已归档计划在普通列表和关键词召回前被排除，只能通过明确计划 ID 或归档视图读取。状态移除采用 `enabled → retiring → retired`，当前计划先迁移，旧定义继续解释归档计划和追加式历史。
 
-计划目录的物理写入只有一个边界：`src/planStorageRepository.ts`。它拥有跨进程 lease、完整终态快照、publish/receipt 恢复、active/archive 迁移和旧布局冲突隔离；`src/roleKnowledge.ts` 只组装业务终态并调用 Repository，不直接创建、改写或移动计划目录。Manager 在可终止的 one-shot child 中依次执行 lifecycle recovery、旧布局迁移、feedback WAL recovery 和 `planStoragePackageRecovery.ts` 的 `recoverStoredPlanPackages()` 旧事务恢复（不得接受新同步），以建立计划存储的读取/变更资格。该资格生命周期不阻塞 Manager READY；`running` 或 `degraded` 时计划变更失败关闭，降级进入 `/health`，Host 与 Tray 保持当前 application generation。`src/planAttachments.ts` 只负责附件数量/大小限制、本机路径或 Base64 读取、图片/视频签名校验、哈希及待提交字节准备，不能自行落盘；附件和 `plan.json` 必须随同一次 Repository transaction 原子发布。`src/manager/planAttachmentRoutes.ts` 只按 `roleId + planId + attachmentId` 提供受控读取，在响应前同时校验词法路径和 realpath 都没有离开该计划目录；图片/视频以内联响应返回，视频支持单段字节范围读取，公开计划 DTO 去掉本机 `path`。WebGUI 只消费该 HTTP 边界来绘制固定宽度的 16:9 图片、视频和 Markdown 简短预览卡片、普通文件卡片及页内完整预览；Markdown 卡片只流式读取正文开头并转成截断纯文本，不在卡片中执行 Markdown HTML、链接或图片。局域网资源统一通过 `managerResourceUrl` 附加当前会话认证；WebGUI 不拥有计划编辑器或任意路径读取能力。
+计划目录的物理写入只有一个边界：`src/planStorageRepository.ts`。它拥有跨进程 lease、完整终态快照、publish/receipt 恢复、active/archive 迁移和旧布局冲突隔离；`src/roleKnowledge.ts` 只组装业务终态并调用 Repository，不直接创建、改写或移动计划目录。Manager 在可终止的 one-shot child 中依次执行 lifecycle recovery、旧布局迁移、feedback WAL recovery 和 `planStoragePackageRecovery.ts` 的 `recoverStoredPlanPackages()` 旧事务恢复（不得接受新同步），以建立计划存储的读取/变更资格。该资格生命周期不阻塞 Manager READY；`running` 或 `degraded` 时计划变更失败关闭，降级进入 `/health`，Host 与 Tray 保持当前 application generation。`src/planAttachments.ts` 只负责附件数量/大小限制、本机路径或 Base64 读取、图片/视频签名校验、哈希及待提交字节准备，不能自行落盘；附件和 `plan.json` 必须随同一次 Repository transaction 原子发布。`src/plugins/io.rabiroute.manager.persona/src/manager/planAttachmentRoutes.ts` 只按 `roleId + planId + attachmentId` 提供受控读取，在响应前同时校验词法路径和 realpath 都没有离开该计划目录；图片/视频以内联响应返回，视频支持单段字节范围读取，公开计划 DTO 去掉本机 `path`。WebGUI 只消费该 HTTP 边界来绘制固定宽度的 16:9 图片、视频和 Markdown 简短预览卡片、普通文件卡片及页内完整预览；Markdown 卡片只流式读取正文开头并转成截断纯文本，不在卡片中执行 Markdown HTML、链接或图片。局域网资源统一通过 `managerResourceUrl` 附加当前会话认证；WebGUI 不拥有计划编辑器或任意路径读取能力。
 
 `src/manager/managerStorageMutationAdmission.ts` 定义工作进程的单次不可逆提交准入，不是可续期授权 lease。HTTP 的原始请求授权只留在父进程，由 `roleStorageApplication.ts` 与 `managerStorageMutationPool.ts` 在异步读取、入队、派发和准入时复验。IPC v2 的完整 fence、稳定 requestId、本次派发随机 nonce、固定阶段与序号须精确匹配；nonce 不进入持久 payload、摘要或审计。准入发生在回执查询、回执预留、事务恢复及业务访问之前，不能把异步握手放在同步文件锁回调里。允许后可完成整个操作；撤销只拒绝尚未准入的操作，不保证撤销返回后零发布。已派发拒绝和中断保守保留 unknown，原幂等键可能已有历史写入，须先权威回读。更强的撤销屏障需要跨进程共享的授权、提交与恢复协调边界，目前尚未实现。源码回归不代表 Host 部署或双机验收。
 
@@ -623,7 +631,7 @@ Gateway 配置的事实源 Module。
 - `src/components/PlanAttachmentGallery.vue`：描述区与审批区共用图片、视频和 Markdown 预览卡片；附件 URL、加载状态、摘要缓存与预览弹窗仍由计划页拥有，不新增查询或存储真源。
 - `src/components/PlanFeedbackComposer.vue`：计划引导与审批意见共用的输入组件。`@` 引用、Enter/Shift+Enter、文件选择、剪贴板粘贴、附件预览和删除只在此处实现；页面只传入两类反馈各自的可编辑条件、提交条件和文案。
 - 计划详情展开时，通过 `manager/planAgentStatusRoutes.ts` 按需读取该计划 `taskBinding` 与可选 `secretaryBinding` 的真实会话状态；页面刷新后只补查仍保持展开的计划，不在目录摘要加载完成后扫描全部绑定。`manager/planAgentStatus.ts` 按绑定的 `agentType` 分派：Codex 读取 Desktop 任务，DSH 通过 apiproxy 读取 DSH 会话；它负责 2.8 秒有界读取、同绑定请求去重、workspace 校验以及 Agent 工作状态与会话状态的分离。Windows 普通路径与 `\\?\\` 扩展路径先归一化再比较。WebGUI 的 3 秒请求预算只决定何时显示未知。打开动作只定位已核对的精确绑定：Codex 调用 `openCodexDesktopThread()`，DSH 打开带 `rabiSessionId` 的 DSH Web 页面；两者都不发送 prompt、不创建任务或会话，也不走备用 Runtime。
-- `src/roleKnowledge.ts` 为近期记忆列表生成并缓存沉淀投影。投影用 `updatedAt` / `recalledAt` 计算每条记忆的 24 小时候选时间和 72 小时触发时间，返回 `triggersNextConsolidation` 与 `willEnterNextConsolidation`；记忆目录写入或外部文件变化时与目录缓存一起失效。`src/manager/memoryConsolidationScheduler.ts` 读取最早截止时间并设置一次性任务，到点后重新核对活跃时间、创建 run 并投递 Manager 内置事件。最不活跃记忆到达 72 小时时，`recentMemoryConsolidationCohort()` 固定 `triggerAt` 与 `candidateCutoffAt`，列表投影和真实整理 request 共用该结果，避免晚执行时扩大候选范围。新记忆写入 `.md`，结构化字段保存在元数据区，正文保留标准 Markdown；旧 `.json` 继续读取，同 ID 时 `.md` 优先。`RoleKnowledgePage.vue` 只消费 Manager 结果，不在浏览器复制沉淀候选算法。
+- `src/roleKnowledge.ts` 为近期记忆列表生成并缓存沉淀投影。投影用 `updatedAt` / `recalledAt` 计算每条记忆的 24 小时候选时间和 72 小时触发时间，返回 `triggersNextConsolidation` 与 `willEnterNextConsolidation`；记忆目录写入或外部文件变化时与目录缓存一起失效。`src/plugins/io.rabiroute.manager.memory-consolidation/src/manager/memoryConsolidationScheduler.ts` 读取最早截止时间并设置一次性任务，到点后重新核对活跃时间、创建 run 并投递 Manager 内置事件。最不活跃记忆到达 72 小时时，`recentMemoryConsolidationCohort()` 固定 `triggerAt` 与 `candidateCutoffAt`，列表投影和真实整理 request 共用该结果，避免晚执行时扩大候选范围。新记忆写入 `.md`，结构化字段保存在元数据区，正文保留标准 Markdown；旧 `.json` 继续读取，同 ID 时 `.md` 优先。`RoleKnowledgePage.vue` 只消费 Manager 结果，不在浏览器复制沉淀候选算法。
 - `src/memoryConsolidationAgent.ts` 只负责 Codex 独立记忆整理任务的精确 owner、持久绑定和 Desktop IPC 投递。配置开启时，`forwarding.ts` 只把 `manual_trigger + memory-consolidation` 投给“`<主角色任务名> 记忆整理`”；首次投递前确认主角色 Desktop 任务可读，默认模型为 `gpt-5.6-terra`。失败不回退给主角色或备用 Runtime。
 - `GET /api/roles/:roleId/memory?counts=1` 只返回近期、沉淀、已归档来源和整理 run 的数量。`RoleKnowledgePage.vue` 在任何顶层标签首次进入时都让该请求与计划首屏并行，避免默认停留在“当前计划”时记忆标签长期显示 0；记忆正文仍只按当前可见分类分页读取。
 - 记忆卡片直接渲染安全 Markdown，卡片最高 512px 且裁剪溢出，完整内容通过详情打开。`markdownPreview.ts` 只允许 HTTP(S) 图片，禁止本机绝对路径、`data:` 和脚本协议。
@@ -636,7 +644,7 @@ Gateway 配置的事实源 Module。
 - `src/utils/gatewayHelpers.ts`：前端配置辅助函数。
 - `src/speech/speechControlClient.ts`：浏览器语音 HTTP Adapter；唯一知道 `/api/speech/*` 路径和 `{ code, data }` envelope 的前端 Module。
 - `src/stores/speechStore.ts`：语音控制 read model、命令和共享事件流生命周期；RabiSpeech `/v1/events` 经 Manager `/api/speech/events` 推送麦克风、播放、音频流和记录落盘变化。每类事件只刷新自己的 read model，SSE 重连才做一次快照补漏，ASR 主机监视器与其他语音卡片不再周期请求后端。
-- `src/manager/speechModelManager.ts`：主机级语音环境和模型权重安装边界。它只读取 `plugin-adapters/rabi-speech/model-catalog.json` 的固定别名，串行启动仓库内安装脚本，不接受浏览器提供仓库、URL 或路径，也不向响应暴露私有绝对路径。
+- `src/plugins/io.rabiroute.manager.speech/src/manager/speechModelManager.ts`：主机级语音环境和模型权重安装边界。它只读取 `src/plugins/rabi-speech/model-catalog.json` 的固定别名，串行启动仓库内安装脚本，不接受浏览器提供仓库、URL 或路径，也不向响应暴露私有绝对路径。
 - `src/shared/speechModelManagement.ts`、`src/pages/ModelManagementPage.vue` 与 `src/speech/speechModelManagementClient.ts`：模型管理 read model、弹窗内容和浏览器 Adapter。“语音服务”右上角按需加载该弹窗；即使 RabiSpeech 未运行，也能列出和下载权重。任务变化通过 Manager `/api/events` 的 `speech_model_management_changed` 推送，SSE 重连只补一次快照，不轮询安装状态。旧 `/#/models` 地址只兼容跳回语音服务，不再作为侧栏页面。
 - `src/lazyRouteRecovery.ts`：处理 WebGUI 重新构建后，长时间未刷新的浏览器标签页仍请求旧页面文件的情况。Vue Router 确认是动态导入或 chunk 加载失败后，保留用户刚才点击的目标页面和现有 `webgui_token`，只自动重新加载一次；会话级标记阻止连续失败形成刷新循环，其他页面错误不触发恢复。
 - `src/i18n/index.ts`：唯一 locale 状态、浏览器偏好持久化、`<html lang>` 和切换事件。
@@ -651,7 +659,7 @@ Gateway 配置的事实源 Module。
 
 RabiLink 远程 WebGUI 也保持前端与本机 Manager 的所有权边界：Relay 的 `/manage/<账号>/<RabiGUID>/` 只拥有账号会话、目标 PC 选择、静态构建和受限代理。普通 HTTP 请求进入 `webguiRequests`，PC 侧 `rabiLinkRelayRuntime.ts` 只把允许的请求头转发到回环 Manager，并回填状态、响应头和 Base64 body；`Range` / `If-Range` 与 `206` 响应用于媒体字节读取。Manager `/api/events` 不进入一次性队列，Runtime 维持一条本机 SSE，解析事件后通过 `/worker/webgui-events` 推给 Relay 的 `webguiEventHub`，再按账号应用和 PC 身份定向发布。Relay 登录 Cookie、PC 应用 token 和局域网 `webgui_token` 不相互转发或复用；请求/响应 Base64 与事件 JSON 都有独立大小门禁。
 
-角色头像的文件读写、类型校验、内容寻址与原子配置切换集中在 `src/personaAvatar.ts`；`src/manager/personaAvatarRoutes.ts` 负责 `/api/roles/:roleId/avatar` 和表现 DTO，`controlPlaneRoutes.ts` 只注册路由。WebGUI 和 Qt 都通过 Manager HTTP 读取头像；Qt 不再通过本地 `RoleContextRepository` 读取角色目录。头像是角色展示元数据，不进入 AgentPacket，也不改变路由匹配或处理端投递。
+角色头像的文件读写、类型校验、内容寻址与原子配置切换集中在 `src/plugins/io.rabiroute.manager.persona/src/personaAvatar.ts`；`src/plugins/io.rabiroute.manager.persona/src/manager/personaAvatarRoutes.ts` 负责 `/api/roles/:roleId/avatar` 和表现 DTO，`controlPlaneRoutes.ts` 只注册路由。WebGUI 和 Qt 都通过 Manager HTTP 读取头像；Qt 不再通过本地 `RoleContextRepository` 读取角色目录。头像是角色展示元数据，不进入 AgentPacket，也不改变路由匹配或处理端投递。
 
 语音控制链路采用明确的前后端分离：
 
@@ -665,11 +673,11 @@ SpeechServicePage / SpeechHostMonitor
   -> RabiSpeech Python implementation
 ```
 
-`src/shared/speechControlContract.ts` 是 Manager 与 WebGUI 之间的稳定 camelCase Interface，也拥有 Route 语音默认值。`src/manager/speechControl.ts` 负责 Route policy、RabiSpeech payload 映射和 read model 正规化。`POST /api/speech/messages` 会等待 Gateway 子任务返回真实终态：Desktop owner `start/steer` 成功才是 `delivered`，关键词模式未命中则是 `recorded`，失败为 4xx/5xx；它不等 Agent 回答、Outbox 或 TTS 播放结束。Python 的 snake_case、模型进程状态和回环地址不能泄漏回 Vue 页面；RabiSpeech 仍是独立的回环 Provider Runtime，不合并进 Manager。本地 Provider 默认启用；外部 API Provider 必须在本机配置显式启用、从环境变量取密钥，并通过 capability 的 `local_only` / `relay_safe` 暴露边界。
+`src/shared/speechControlContract.ts` 是 Manager 与 WebGUI 之间的稳定 camelCase Interface，也拥有 Route 语音默认值。`src/plugins/io.rabiroute.manager.speech/src/manager/speechControl.ts` 负责 Route policy、RabiSpeech payload 映射和 read model 正规化。`POST /api/speech/messages` 会等待 Gateway 子任务返回真实终态：Desktop owner `start/steer` 成功才是 `delivered`，关键词模式未命中则是 `recorded`，失败为 4xx/5xx；它不等 Agent 回答、Outbox 或 TTS 播放结束。Python 的 snake_case、模型进程状态和回环地址不能泄漏回 Vue 页面；RabiSpeech 仍是独立的回环 Provider Runtime，不合并进 Manager。本地 Provider 默认启用；外部 API Provider 必须在本机配置显式启用、从环境变量取密钥，并通过 capability 的 `local_only` / `relay_safe` 暴露边界。
 
-模型管理是独立的主机控制面，不属于某条 Route。`GET /api/speech/model-management` 返回环境、目录和任务状态；两个 POST 入口分别安装核心环境和单个允许清单模型，不接受任意下载仓库、地址或路径；设置入口复用连接鉴权并校验模型总目录覆盖值，目录路径只返回给已鉴权连接。Manager 同一时间只允许一个任务，并继续受只读模式的全局写操作门禁约束。`src/manager/speechModelFiles.ts` 核对管理目录及已配置模型路径中的代表文件，下载状态不再只取决于安装清单；文件存在不等于校验和或推理就绪。弹窗使用紧凑环境栏、筛选搜索和表格，仅在存在当前或最近任务时显示任务行，说明默认折叠。模型清单中的 `runtime=core|isolated` 只说明运行环境要求，不代表已检测到环境缺失；“模型已下载”不能被展示为推理、波形或真实设备已经验收。
+模型管理是独立的主机控制面，不属于某条 Route。`GET /api/speech/model-management` 返回环境、目录和任务状态；两个 POST 入口分别安装核心环境和单个允许清单模型，不接受任意下载仓库、地址或路径；设置入口复用连接鉴权并校验模型总目录覆盖值，目录路径只返回给已鉴权连接。Manager 同一时间只允许一个任务，并继续受只读模式的全局写操作门禁约束。`src/plugins/io.rabiroute.manager.speech/src/manager/speechModelFiles.ts` 核对管理目录及已配置模型路径中的代表文件，下载状态不再只取决于安装清单；文件存在不等于校验和或推理就绪。弹窗使用紧凑环境栏、筛选搜索和表格，仅在存在当前或最近任务时显示任务行，说明默认折叠。模型清单中的 `runtime=core|isolated` 只说明运行环境要求，不代表已检测到环境缺失；“模型已下载”不能被展示为推理、波形或真实设备已经验收。
 
-`src/manager/speechEventOperation.ts` 的 `SpeechEventStreamOwner` 单独拥有 Manager SSE 客户端与 RabiSpeech 上游流的一对一生命周期。浏览器或验收客户端断开时只中止对应的上游 fetch；由此产生的 `AbortError` 是正常终态，必须在代理层消费，不能变成未处理 Node stream error 或拖垮 Manager。上游不是 `text/event-stream` 时在写入 SSE 响应头之前失败关闭，不把旧 Manager/WebGUI HTML 冒充事件流。
+`src/plugins/io.rabiroute.manager.speech/src/manager/speechEventOperation.ts` 的 `SpeechEventStreamOwner` 单独拥有 Manager SSE 客户端与 RabiSpeech 上游流的一对一生命周期。浏览器或验收客户端断开时只中止对应的上游 fetch；由此产生的 `AbortError` 是正常终态，必须在代理层消费，不能变成未处理 Node stream error 或拖垮 Manager。上游不是 `text/event-stream` 时在写入 SSE 响应头之前失败关闭，不把旧 Manager/WebGUI HTML 冒充事件流。
 
 Route 的 `speechPushMode` 是语音投递策略真源：`hot` 在每段 ASR 完成后立即进入普通 `start/steer` 链；`keyword` 仍写入 ASR 账本，仅命中角色 `speechTriggerKeywords` 时唤醒。空关键词不会回退热投递。
 
@@ -718,7 +726,7 @@ RabiSpeech 的 `AudioTranscoder` 是所有 Provider、角色 TTS 与直接 HTTP 
 
 RabiSpeech 的模型基准仍归插件自身：`scripts/benchmark_models.py` 按 TTS → WAV → ASR 顺序采集原始数据，`benchmarks/` 保存公开语料、功能元数据和无外部依赖的 HTML 模板，`skills/benchmark-rabispeech-models/` 固定操作与验收顺序。生成后的公开报告进入 `ribiwebgui/public/reports/`，由 Vite 复制到 WebGUI 静态产物；本机 Manager 和 RabiLink Relay 分别在本机根路径与已认证的远端 PC 前缀下提供 `reports/`。运行期 WAV、JSON、CSV 和日志不进入前端或仓库。
 
-实时能力页归控制面：`src/manager/speechServiceStatus.ts` 只允许探测回环 RabiSpeech，并删去配置路径、模型目录等私有字段；`src/manager/speechRuntimeControl.ts` 拥有 WebGUI 页级启停命令、同一时刻单次 transition、启动后的真实健康等待和停止前的 Windows 进程归属核验；`src/manager/speechControl.ts` 再把模型、麦克风、播放、音频流选择、持久化语音记录和消息命令统一映射到 `speechControlContract`。`GET /api/speech/status` 把规范化结果交给 frontend speech store，`POST /api/speech/runtime/start|stop` 只控制当前工作区本机运行时。WebGUI 顶部滑轨直接投影真实在线状态；关闭时除标题、状态、错误和滑轨外不渲染其余运行参数。音频流默认使用本机声卡；启用局域网 `remote_audio` 后，`remote_audio.py` 通过独立鉴权 WebSocket 把远端客户端当成纯麦克风/喇叭，客户端不拥有 VAD、切句或模型，断线也不自动回退。主机播放音量由 RabiSpeech 持久化并通过播放状态返回，WebGUI 的全局播放队列卡只经 Manager 更新该 `0–100` 值；每条音频开始播放时冻结当时的音量，因此调整会从下一条开始播放的音频生效，不属于 Route 或角色。主机麦克风、ASR 模型、VAD 和切句参数同样只归 RabiSpeech，语音服务页经 Manager 统一维护；ASR 页的持久串流开关独立决定是否持续录音和识别，Route 页的语音消息端总开关只决定分发订阅。Manager 对每段主机 ASR 只接收一次，然后广播给全部已订阅 Route；没有订阅时仍保存主机记录，各 Route 独立执行热投递/角色关键词与回复播放策略。关闭或新增 Route 不改变录音状态。角色目录下的 `voice/voice-profile.json` 是 TTS 模型、声线、语言、语速和表达指令的唯一真源，旧 Route TTS 字段只作兼容读取。因此左侧“语音服务”显示当前电脑事实，项目文档和静态 HTML 则保留某次目标测试机基准，两者不能混成同一数据源。
+实时能力页归控制面：`src/plugins/io.rabiroute.manager.speech/src/manager/speechServiceStatus.ts` 只允许探测回环 RabiSpeech，并删去配置路径、模型目录等私有字段；`src/plugins/io.rabiroute.manager.speech/src/manager/speechRuntimeControl.ts` 拥有 WebGUI 页级启停命令、同一时刻单次 transition、启动后的真实健康等待和停止前的 Windows 进程归属核验；`src/plugins/io.rabiroute.manager.speech/src/manager/speechControl.ts` 再把模型、麦克风、播放、音频流选择、持久化语音记录和消息命令统一映射到 `speechControlContract`。`GET /api/speech/status` 把规范化结果交给 frontend speech store，`POST /api/speech/runtime/start|stop` 只控制当前工作区本机运行时。WebGUI 顶部滑轨直接投影真实在线状态；关闭时除标题、状态、错误和滑轨外不渲染其余运行参数。音频流默认使用本机声卡；启用局域网 `remote_audio` 后，`remote_audio.py` 通过独立鉴权 WebSocket 把远端客户端当成纯麦克风/喇叭，客户端不拥有 VAD、切句或模型，断线也不自动回退。主机播放音量由 RabiSpeech 持久化并通过播放状态返回，WebGUI 的全局播放队列卡只经 Manager 更新该 `0–100` 值；每条音频开始播放时冻结当时的音量，因此调整会从下一条开始播放的音频生效，不属于 Route 或角色。主机麦克风、ASR 模型、VAD 和切句参数同样只归 RabiSpeech，语音服务页经 Manager 统一维护；ASR 页的持久串流开关独立决定是否持续录音和识别，Route 页的语音消息端总开关只决定分发订阅。Manager 对每段主机 ASR 只接收一次，然后广播给全部已订阅 Route；没有订阅时仍保存主机记录，各 Route 独立执行热投递/角色关键词与回复播放策略。关闭或新增 Route 不改变录音状态。角色目录下的 `voice/voice-profile.json` 是 TTS 模型、声线、语言、语速和表达指令的唯一真源，旧 Route TTS 字段只作兼容读取。因此左侧“语音服务”显示当前电脑事实，项目文档和静态 HTML 则保留某次目标测试机基准，两者不能混成同一数据源。
 
 Windows 系统级滑词菜单由托盘拥有。`system_selection.py` 用低级鼠标与键盘钩子识别鼠标拖选结束和 `Shift` 扩选结束，再通过 Windows UI Automation 读取当前焦点控件的文字及真实选区矩形。悬浮条优先按该矩形横向居中；鼠标向上拖选时放在上方，向下或同一行拖选时放在下方。键盘扩选合并扩选前后的系统插入符矩形；Unity 没有系统插入符时，使用同一前台窗口最近一次点击位置。普通软件不模拟 `Ctrl+C`；Unity 编辑器没有 TextPattern 时才发送带标记的临时复制输入，最多等待 900 ms，并恢复原剪贴板的完整 MIME 数据。密码控件、空选区和仍无法读取的文字直接忽略。无焦点 Qt 悬浮条显示“投递至”，并在 `readAloudEnabled` 为 true 时显示“朗读”：朗读经 Manager 查询当前 TTS 模型并调用 `/api/speech/tts` 进入 RabiSpeech 主机 FIFO；光标移到“投递至”时，托盘从当前 Manager 快照筛出已启用且运行中的角色，显示悬停菜单，点击具体角色后复用 `/api/role-panel/messages` 投递到对应 Route。划选本身不触发网络或语音动作。`selectionSpeechSettings.ts` 把 `enabled`、`readAloudEnabled`、高级选项和固定模型保存到 `data/speech/selection-reader-settings.json`，WebGUI“设置”页通过 `/api/speech/selection-reader/settings` 修改同一主机设置，浏览器不再拥有选区监听或本地设置副本。
 
@@ -734,21 +742,21 @@ RabiSpeech 的 `speech_records.py` 是 ASR/TTS 文本记录唯一真源，参考
 
 `speaker_profiles.py` 拥有主机共用的人物资料与 `recordId + speakerLabel` 人工绑定；`speaker_recognition.py` 独立拥有本地神经 embedding、已确认多原型和未知聚类。供应商的 `0/1` 绝不沿常驻麦克风 `sessionId` 继承，也不再拥有声纹采样分组解释权：同一 Provider 标签跨多个不连续时间 turn 时，原始值保留在 `speaker`，声纹层生成逐 turn `speakerLabel`、分别提取 embedding，再由不透明 cluster 判断这些 turn 是同一声音还是不同声音。这样错误标签不会把不同人的音频拼成一个样本，而真正同一声音仍会收敛到同一 voiceprint。WebGUI 下拉只修正当前录音 turn，但会把该 turn embedding 标为已确认原型；后续匹配同时要求有效语音时长、最高相似度和第一/第二名差距，低置信度保持 unknown。原始注册音频不复制，向量只写入 Git 忽略的 `output/speaker-embeddings.json` 且不进入公开 API。模型存在但本机阈值尚未验证时只开放聚类和候选提示；正式自动绑定同时要求 `validated=true`、`real_person_private` 数据集资格、完整 dataset/policy/model SHA-256 和通过的目标引擎门禁，任何缺失或不一致都会失败关闭并让 `voiceprint.supported=false`。模型由 `scripts/speaker_model_probe.py` 在独立进程先做真实推理；正式提取使用 ONNX Runtime + kaldi-native-fbank 的 16 kHz / 80-bin / global-mean 后端，避开 Windows sherpa native 对官方模型的格式误判。embedding 仓库分别限制人工确认原型和未确认样本，并拒绝低 RMS 或明显跨说话人重叠片段。
 
-`src/speechIngressStore.ts` 是 RabiRoute 主机级语音原始消息真源。RabiSpeech 把一次 ASR 的稳定 record ID、采集开始/完成/接收时间、Provider、模型、语言、时长、峰值、采样率、声道、音频格式、通道、稳定来源设备、临时音频流 ID、完整说话人分段和可用的逐词时间/置信度一次性交给 Manager；`src/shared/speechTranscript.ts` 是 Python snake_case、HTTP 返回和角色账本共用的可移植分段/逐词规范化入口，`src/routing/speechIngressForwarding.ts` 则是主机原始记录转成 `speech/rabilink` Route 事件的唯一字段映射入口。Manager 会删除主机人物名称、资料 ID、候选资料 ID 和已验证人物标志，只保留不透明声纹/聚类 ID、分段标签、分数、判定证据和逐词时间，再追加 `data/speech/messages/YYYY-MM-DD.jsonl`；相同清洗会在写入和读取角色 `conversation/current.jsonl` 时再次执行，旧记录也不能把主机人物判断重新注入角色上下文。`recordId` 检查与原始消息追加共用跨进程锁，Route receipt 日文件也串行追加，保证并发补交不产生重复或交错 JSONL。ASR 处理链与消息端类型分离：本机麦克风或普通 Rabi 语音客户端生成 `messageAdapterType=speech`，Android 手机/眼镜通过 Relay 持续传有序 PCM，在主机完成 VAD/切句/ASR/声纹后生成 `messageAdapterType=rabilink`；Android 不保存第二套 ASR/VAD 真源。`sourceDeviceId` 是稳定回复目标，`sourceStreamId` 只表示本次 PCM 连接，不能参与下行设备寻址。流序号必须从 1 连续递增；Android 只在 PC 确认后推进序号，待确认块的稳定 `chunkId` 在临时流重建后仍不变。RabiSpeech 按每个稳定 `sourceDeviceId` 保留最后一个已接收 chunk 的 `chunkId + PCM SHA-256`，只保存标识与哈希；ACK 丢失后的跨流重发不会再次进入 VAD/ASR，后续新 chunk 则按新流序号继续推进。Android 的系统网络回调与既有 RabiLink SSE `ready` 事件会立即唤醒待确认 PCM，只有服务端暂时不可用时使用一次性退避；有界最新音频缓冲会丢弃长断网期间的过旧 PCM，使恢复后追上实时流而不是永久滞后。`start` 和每个成功 chunk 都重置一次性 15 秒到期事件，到期后才回收虚拟客户端并恢复之前的音频输入，不做固定间隔扫描。Manager 只投给启用了对应消息端的 Route。`routeProfileId` 是通用 Route 选择器，不是来源类型；来源身份由 `routeKind/adapterType` 决定，手机语音不能因带 `routeProfileId` 被解释成角色面板。`forwarding.ts` 继续负责每个 Route 的角色对应关系，因此不同角色分别写 `voice-transcripts.jsonl` 和 `conversation/current.jsonl`，同一角色目录不会因多 Route 重复记录；首次写入时先初始化/追加统一会话账本，再写兼容原始历史，避免当前事件被旧历史迁移重复导入。手机流以 `routeKind=rabilink` 进入 Agent，回复 API 默认按 `sourceDeviceId` 回原设备；声纹对应谁、谁是用户以及是否需要响应，都由各角色结合自己的关系和上下文解释。
+`src/plugins/io.rabiroute.manager.speech/src/speechIngressStore.ts` 是 RabiRoute 主机级语音原始消息真源。RabiSpeech 把一次 ASR 的稳定 record ID、采集开始/完成/接收时间、Provider、模型、语言、时长、峰值、采样率、声道、音频格式、通道、稳定来源设备、临时音频流 ID、完整说话人分段和可用的逐词时间/置信度一次性交给 Manager；`src/shared/speechTranscript.ts` 是 Python snake_case、HTTP 返回和角色账本共用的可移植分段/逐词规范化入口，`src/routing/speechIngressForwarding.ts` 则是主机原始记录转成 `speech/rabilink` Route 事件的唯一字段映射入口。Manager 会删除主机人物名称、资料 ID、候选资料 ID 和已验证人物标志，只保留不透明声纹/聚类 ID、分段标签、分数、判定证据和逐词时间，再追加 `data/speech/messages/YYYY-MM-DD.jsonl`；相同清洗会在写入和读取角色 `conversation/current.jsonl` 时再次执行，旧记录也不能把主机人物判断重新注入角色上下文。`recordId` 检查与原始消息追加共用跨进程锁，Route receipt 日文件也串行追加，保证并发补交不产生重复或交错 JSONL。ASR 处理链与消息端类型分离：本机麦克风或普通 Rabi 语音客户端生成 `messageAdapterType=speech`，Android 手机/眼镜通过 Relay 持续传有序 PCM，在主机完成 VAD/切句/ASR/声纹后生成 `messageAdapterType=rabilink`；Android 不保存第二套 ASR/VAD 真源。`sourceDeviceId` 是稳定回复目标，`sourceStreamId` 只表示本次 PCM 连接，不能参与下行设备寻址。流序号必须从 1 连续递增；Android 只在 PC 确认后推进序号，待确认块的稳定 `chunkId` 在临时流重建后仍不变。RabiSpeech 按每个稳定 `sourceDeviceId` 保留最后一个已接收 chunk 的 `chunkId + PCM SHA-256`，只保存标识与哈希；ACK 丢失后的跨流重发不会再次进入 VAD/ASR，后续新 chunk 则按新流序号继续推进。Android 的系统网络回调与既有 RabiLink SSE `ready` 事件会立即唤醒待确认 PCM，只有服务端暂时不可用时使用一次性退避；有界最新音频缓冲会丢弃长断网期间的过旧 PCM，使恢复后追上实时流而不是永久滞后。`start` 和每个成功 chunk 都重置一次性 15 秒到期事件，到期后才回收虚拟客户端并恢复之前的音频输入，不做固定间隔扫描。Manager 只投给启用了对应消息端的 Route。`routeProfileId` 是通用 Route 选择器，不是来源类型；来源身份由 `routeKind/adapterType` 决定，手机语音不能因带 `routeProfileId` 被解释成角色面板。`forwarding.ts` 继续负责每个 Route 的角色对应关系，因此不同角色分别写 `voice-transcripts.jsonl` 和 `conversation/current.jsonl`，同一角色目录不会因多 Route 重复记录；首次写入时先初始化/追加统一会话账本，再写兼容原始历史，避免当前事件被旧历史迁移重复导入。手机流以 `routeKind=rabilink` 进入 Agent，回复 API 默认按 `sourceDeviceId` 回原设备；声纹对应谁、谁是用户以及是否需要响应，都由各角色结合自己的关系和上下文解释。
 
 移动端下行的事实拥有权同样分层：Relay 拥有消息、明确目标和设备回执；手机拥有 cursor、可靠队列、本机播放编排、“消息连接是否应在重启后恢复”的持久意图，以及用户请求的 `PAUSED / PHONE / GLASSES` 单一模式真源；前台 Service 拥有实际运行模式、采集和连接状态；眼镜只拥有自身外设状态与扬声器播放完成事实。切换模式时 Service 先释放旧采集端，眼镜连接事件到达前或断线后保持暂停，绝不静默启用双路麦克风。Activity 通过 `RUNTIME_UPDATED` 广播重建运行卡片，不轮询业务状态。明确主动性偏好作为 `rabilink.preference` observation 和来源元数据可靠传输；App 与 Relay 不拥有介入规则。手机私有文字、控制、媒体、回执和下行队列统一使用 fsync 后原子替换，启动清理临时文件并把坏 JSON、缺失二进制和孤立附件隔离为可见错误，单个毒化项不能阻塞后续队列。`/api/rabilink/events` 的 `outbox_available` 只作事件唤醒，Android 随后用持久 cursor 查询一次增量补漏。Android 已知断网时，SSE 连接和可靠队列发送阻塞在由系统 Connectivity callback 驱动的事件门，不再固定间隔重连；仅为防止厂商漏发已注册回调，前台服务在已知离线期间每五分钟只检查一次 OS 当前网络，恢复后立即停止并回到 SSE `ready → cursor` 单次补漏，不查询 Relay 业务状态。仅网络可用但服务端失败时使用一次性 1–30 秒退避。Relay 每 15 秒发送 SSE keepalive；Android 45 秒收不到任何 SSE 字节时触发传输层停滞 deadline，重建半开连接并回到同一单次 cursor 补漏，不增加业务轮询。消息连接恢复意图与持续聆听分离：已启动的文字/媒体/下行服务会在进程或设备重启后恢复 cursor 和可靠队列，明确停止才清除恢复意图。明确 `targetDeviceIds` 的 Outbox 消息在所有目标回 `delivered` 前不按 TTL 清理；广播和仅按设备类型的消息继续受有限 TTL 约束。`delivered` 不代表 `played`：手机和眼镜分别只在自己的 `AudioTrack` marker 到达后产生 `played`，回执先落手机私有磁盘队列再补传，Relay 只持久化和发布 `outbox_receipt`。眼镜的 BEGIN、PCM 与 END 共用有序 Classic BT，避免结束控制越过音频；播放线程会等主线程确认采集暂停后才接受 PCM，Activity 销毁时未完成播放回 `playback_failed`。旧无帧协议 PCM 可兼容播放，但不得生成成功回执。
 
 `src/acceptance/speechIngressSeparation.ts` 与 `scripts/test-speech-ingress-separation.mjs` 把上述边界组合成构建产物隔离验收。工具在临时数据根中向同一个主机原始库写入一条 PC 麦克风记录和一条手机记录，再分别调用真实 `dist/index.js --speech-message` 子进程；它要求主机库恰好保留两个逻辑消息端、两个不同角色各写一次语音历史与统一会话、PC 上下文不出现手机目标、手机回复只使用稳定 `sourceDeviceId` 而不使用临时 `sourceStreamId`，并验证主机人物猜测没有进入角色文件。子进程只使用不打开窗口/剪贴板的隔离 Agent adapter，不连接真实 Manager、Desktop、QQ 或 Relay；完成后删除临时目录，只留下脱敏数量、哈希和终态证据。
 
-`src/identityRelations.ts` 拥有角色级通用身份关系事件，分别记录消息端账号、参与者与带会话/项目范围的关系卡。`src/routing/identityContext.ts` 只从适配器已经核实的真实发送者字段提取 `platform + endpointIdentityNamespace + senderStableId`；实际命中的 Route 第一次投递稳定陌生账号时才创建确定性的“待认识”候选。没有稳定发送者标识、身份自报只存在于转发/引用/附件内容、AgentPacket 预览、读取接口和未命中 Route 都不自动创建或合并身份。这条失败关闭边界保证不可信上下文中的“我是某人”不会变成账号映射；同一稳定发送者在本轮明确自报的称呼仍只能由下述观察接口保存为候选证据。
+`src/plugins/io.rabiroute.endpoint.rabilink/src/identityRelations.ts` 拥有角色级通用身份关系事件，分别记录消息端账号、参与者与带会话/项目范围的关系卡。`src/plugins/io.rabiroute.endpoint.rabilink/src/routing/identityContext.ts` 只从适配器已经核实的真实发送者字段提取 `platform + endpointIdentityNamespace + senderStableId`；实际命中的 Route 第一次投递稳定陌生账号时才创建确定性的“待认识”候选。没有稳定发送者标识、身份自报只存在于转发/引用/附件内容、AgentPacket 预览、读取接口和未命中 Route 都不自动创建或合并身份。这条失败关闭边界保证不可信上下文中的“我是某人”不会变成账号映射；同一稳定发送者在本轮明确自报的称呼仍只能由下述观察接口保存为候选证据。
 
 候选观察接口只追加新出现且带消息证据的自述、称呼或关系线索，不确认身份、不授予权限；账号已经存在确认映射后会拒绝继续修改旧候选。词汇、句式、回复节奏和长期话题等说话习惯一致性可以写成最小化辅助证据，但不能成为身份键，也不能单独把候选提升为确认。`participantLinks` 允许共用账号保留多个候选，解析层在没有唯一确认或纠正映射时保持歧义，不按置信度自动挑人。历史多 PC 同步留下的自动候选昵称、别名和观察证据仍属于非权威线索，参与者类型、确认状态、账号映射或关系卡内容的分歧仍显式保留为冲突。
 
-`ribiwebgui/src/components/PersonaIdentityRelationsCard.vue` 负责身份定位的界面投影和受控编辑入口，但不负责推断身份。“已识别身份”按确认或纠正后的参与者聚合消息端账号；一个账号如果以多个候选链接指向多个已识别人物，就作为“共用”账号出现在每个相关人物中，但不会产生唯一人物结论。人物卡整卡打开同一个身份工作区，在其中分别维护参与者资料与说话习惯、消息端账号和关系；三类记录仍按现有 Manager API 分别追加事件，界面不会把它们伪装成一次原子保存。“未识别身份”继续按 QQ、微信、声纹等消息端分组人物仍未知、候选尚未指向已识别人物或存在冲突的账号。浏览器不复制身份判断算法，也不保留第二份人物真源。
+`src/plugins/io.rabiroute.manager.persona/web/components/PersonaIdentityRelationsCard.vue` 负责身份定位的界面投影和受控编辑入口，但不负责推断身份。“已识别身份”按确认或纠正后的参与者聚合消息端账号；一个账号如果以多个候选链接指向多个已识别人物，就作为“共用”账号出现在每个相关人物中，但不会产生唯一人物结论。人物卡整卡打开同一个身份工作区，在其中分别维护参与者资料与说话习惯、消息端账号和关系；三类记录仍按现有 Manager API 分别追加事件，界面不会把它们伪装成一次原子保存。“未识别身份”继续按 QQ、微信、声纹等消息端分组人物仍未知、候选尚未指向已识别人物或存在冲突的账号。浏览器不复制身份判断算法，也不保留第二份人物真源。
 
 `src/personaVoiceIdentities.ts` 拥有语音消息端账号的兼容归类事件。主机语音消息与 AgentPacket 只提供 `sourceHostId/sourceHostName` 和不透明声纹证据；角色通过 `/api/roles/:roleId/voice-identities` 把自己的 `participantId/displayName/relationship/isUser/aliases/notes` 追加到 `voice/voice-identities.jsonl`。`participantId` 只显式引用通用身份关系中已经确认或纠正的人物，不根据名字猜测归属；界面用它把声纹放入对应的“已识别身份”卡，也允许清除引用后回到按消息端分类的“未识别身份”。账号键由处理主机与声纹 ID 共同构成，避免多 PC 本地 cluster 碰撞。相同更新不重复追加，修正与删除使用新事件/tombstone，不产生 Manager 侧人物真源。新事件通过 `supersedes` 记录它收敛的当前事件头；旧同步留下的多 PC 并发分支仍同时存在，读取层派生冲突字段，后续角色 PUT 再显式收敛全部头，因此不会退化为文件顺序决定身份。数据尚未机械迁入通用身份关系：一段录音可能含多个声纹，而 `isUser=false` 只表示“不是当前角色”，不能安全指向某个具体参与者。
 
-`src/personaVoiceTranscriptView.ts` 是语音账号兼容归类的只读联结层，`src/manager/personaVoiceTranscriptRoutes.ts` 只负责稳定 HTTP 边界。`GET /api/roles/:roleId/voice-transcripts` 在查询时把会话记录的原始声纹证据与当前角色归类合成 `user/other/unknown/conflict` 分段视图；它支持时间、归档和说话人筛选，并从完整筛选集合派生分类时长、覆盖率和未解决声纹汇总，明细 `limit` 不截断 `matchedCount` 或 summary。该层不回写任何派生名称、`isUser` 或统计，因此原始消息与角色解释继续保持各自唯一真源。
+`src/plugins/io.rabiroute.manager.persona/src/personaVoiceTranscriptView.ts` 是语音账号兼容归类的只读联结层，`src/plugins/io.rabiroute.manager.persona/src/manager/personaVoiceTranscriptRoutes.ts` 只负责稳定 HTTP 边界。`GET /api/roles/:roleId/voice-transcripts` 在查询时把会话记录的原始声纹证据与当前角色归类合成 `user/other/unknown/conflict` 分段视图；它支持时间、归档和说话人筛选，并从完整筛选集合派生分类时长、覆盖率和未解决声纹汇总，明细 `limit` 不截断 `matchedCount` 或 summary。该层不回写任何派生名称、`isUser` 或统计，因此原始消息与角色解释继续保持各自唯一真源。
 
 RibiWebGUI 通过 `personaVoiceIdentityClient.ts` 复用这两个 API，不新增浏览器声纹仓库。角色页的最近 24 小时面板使用 `includeDetails=false`，只接收 summary 和独立关系列表，不接收转写正文；加载、按钮忙碌、错误和提示属于短暂表现状态。`personaVoiceConfirmation.ts` 只维护一次用户主动确认会话的开始时间、开始时未解决声纹的 `lastSeenAt` 基线、等待/找到状态和候选复合键；候选来自下一次语音记录事件后相对基线新出现或再次出现、且有稳定主机标识的未解决声纹，只改变排序与标记，不产生或保存身份结论。页面进入、角色切换和人工操作后查询一次，并监听 RabiSpeech `records_changed`、Manager `persona_voice_identity_changed` 事件。SSE 重连只补查一次，不运行覆盖率轮询。
 
@@ -850,7 +858,7 @@ docs/rabi-agent-interfaces.md
 
 ```text
 ribiwebgui/src/stores/gatewayStore.ts
-ribiwebgui/src/pages/RouteConfigPage.vue
+src/plugins/io.rabiroute.manager.message-adapter-control/web/pages/RouteConfigPage.vue
 ribiwebgui/src/types.ts
 src/shared/gatewayConfigModel.ts
 ```
@@ -943,4 +951,4 @@ LanAgentRegistry 在既有已鉴权 WebSocket 上转发 terminal 管理命令，
 
 ## 角色配置与生命周期
 
-角色是独立对象：角色配置和计划与记忆按角色 ID 寻址，路由配置仅保存消息端、Agent 与角色引用。独立配置接口和归档命令由 `src/manager/roleConfigurationRoutes.ts` 拥有，`src/roleLifecycle.ts` 统一工作准入；客户端的 `roleStore.ts` 与路由草稿分开。详见[角色配置架构](role-centric-architecture.md)。
+角色是独立对象：角色配置和计划与记忆按角色 ID 寻址，路由配置仅保存消息端、Agent 与角色引用。独立配置接口和归档命令由 `src/plugins/io.rabiroute.manager.persona/src/manager/roleConfigurationRoutes.ts` 拥有，`src/roleLifecycle.ts` 统一工作准入；客户端的 `roleStore.ts` 与路由草稿分开。详见[角色配置架构](role-centric-architecture.md)。

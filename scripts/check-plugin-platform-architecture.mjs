@@ -5,6 +5,7 @@ import { pathToFileURL } from "node:url";
 import { bundleMessageEndpointRuntime } from "./build-message-endpoint-runtime.mjs";
 import { skipArchitectureDirectory } from "./lib/architecture-scan-boundary.mjs";
 import { hasReleasablePluginScope, kernelImportViolations, publicationPackageViolations, relativeModuleSpecifiers } from "./lib/plugin-platform-contract.mjs";
+import { readPluginSources } from "./lib/plugin-source-layout.mjs";
 
 const root = process.cwd();
 const activeRoots = ["src", "scripts", "plugins", "ribiwebgui", "desktop"];
@@ -148,20 +149,16 @@ violations.push(...publicationPackageViolations(
   await fs.readFile(path.join(sdkRoot, "publication.d.ts"), "utf8")
 ));
 
-const builtinRoot = path.join(root, "plugins", "builtin");
-const packageDirectories = (await fs.readdir(builtinRoot, { withFileTypes: true })).filter(entry => entry.isDirectory());
+const builtinRoot = path.join(root, "src", "plugins");
 const profilePath = path.join(root, "plugins", "profiles", "desktop.json");
 const profile = JSON.parse(await fs.readFile(profilePath, "utf8"));
-const installedVersions = (await Promise.all(packageDirectories.map(async entry => {
-  const versions = await fs.readdir(path.join(builtinRoot, entry.name), { withFileTypes: true });
-  return versions.filter(version => version.isDirectory()).map(version => ({ name: entry.name, version: version.name }));
-}))).flat();
+const installedVersions = (await readPluginSources(root)).map(({ manifest }) => ({ name: manifest.id, version: manifest.version }));
 const installedVersionKeys = new Set(installedVersions.map(entry => JSON.stringify([entry.name, entry.version])));
 const allowedManifestFields = new Set(["schemaVersion", "id", "version", "displayName", "description", "icon", "entries", "provides", "requires", "optional", "permissions", "configSchema", "stateSchemaVersion"]);
 // Installed compatibility packages can be omitted from the default profile.
 // Their source contracts still receive the same validation as selected packages.
 for (const packageEntry of installedVersions) {
-  const versionRoot = path.join(builtinRoot, packageEntry.name, packageEntry.version);
+  const versionRoot = path.join(builtinRoot, packageEntry.name);
   const manifestPath = path.join(versionRoot, "rabi.plugin.json");
   const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
   if (manifest.schemaVersion !== 2) violations.push(`${relative(manifestPath)} must use plugin manifest schema 2`);
@@ -243,7 +240,7 @@ for (const target of [
 for (const file of await filesRecursively("src")) {
   if (!/[.]ts$/.test(file) || file.endsWith(".test.ts")) continue;
   const source = await fs.readFile(file, "utf8");
-  if (source.includes("io.rabiroute.manager.")) violations.push(`${relative(file)} branches on a concrete built-in package ID`);
+  if (!relative(file).startsWith("src/plugins/") && /(?:===?|!==?)\s*["']io[.]rabiroute[.]manager[.]/.test(source)) violations.push(`${relative(file)} branches on a concrete built-in package ID`);
 }
 
 // Local source inspection cannot prove the absence of a parent-owned resource.
@@ -253,6 +250,6 @@ if (violations.length) {
   console.error(violations.map(value => `- ${value}`).join("\n"));
   process.exitCode = 1;
 } else {
-  console.log(`Plugin platform architecture check passed for ${packageDirectories.length} built-in packages.`);
+  console.log(`Plugin platform architecture check passed for ${installedVersions.length} built-in packages.`);
 }
 }

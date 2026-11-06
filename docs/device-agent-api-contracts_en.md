@@ -4,7 +4,7 @@
 
 # Device Agent mailbox API contracts
 
-This page is for Manager and device-host developers. `src/agentAdapters/deviceAgentOperations.ts` installs 13 HTTP operations and publishes discovery from the same executable definitions. `deviceAgentOwner.ts` owns native business rules and the PC journal. Exact contracts replace the previous directory/prefix declarations.
+This page is for Manager and device-host developers. `src/plugins/io.rabiroute.agent.device-agent/src/agentAdapters/deviceAgentOperations.ts` installs 13 HTTP operations and publishes discovery from the same executable definitions. `deviceAgentOwner.ts` owns native business rules and the PC journal. Exact contracts replace the previous directory/prefix declarations.
 
 ## Ownership and observable contract
 

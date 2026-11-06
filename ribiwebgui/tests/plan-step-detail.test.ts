@@ -47,8 +47,8 @@ test("ordinary detail keeps its original line breaks as fallback text", () => {
 
 test("plan detail renderer is wired to summaries and expanded steps without horizontal overflow", () => {
   const root = path.resolve(import.meta.dirname, "..");
-  const page = fs.readFileSync(path.join(root, "src", "pages", "RoleKnowledgePage.vue"), "utf8");
-  const component = fs.readFileSync(path.join(root, "src", "components", "PlanStepDetail.vue"), "utf8");
+  const page = fs.readFileSync(path.join(root, "../src/plugins/io.rabiroute.manager.persona/web/pages/RoleKnowledgePage.vue"), "utf8");
+  const component = fs.readFileSync(path.join(root, "../src/plugins/io.rabiroute.manager.persona/web/components/PlanStepDetail.vue"), "utf8");
 
   assert.equal((page.match(/<PlanStepDetail /g) || []).length, 2);
   assert.match(page, /<details class="knowledge-step-disclosure">\s*<summary class="knowledge-step-header">/);

@@ -1,23 +1,6 @@
 import type { AgentScanOptions, AgentManagerApiContext, AgentScanResult } from "./managerTypes.js";
 export type * from "./managerTypes.js";
 
-/** Transitional source compatibility for tests; production API uses published provider operations. */
-export async function scanDshAgentAdapter(ctx: AgentManagerApiContext, options: AgentScanOptions = {}) {
-  return (await import("./dshManagerApi.js")).scanDshAgentAdapter(ctx, options);
-}
-export async function scanGrokBotAgentAdapter(ctx: AgentManagerApiContext, options: AgentScanOptions = {}) {
-  return (await import("./grokBotManagerApi.js")).scanGrokBotAgentAdapter(ctx, options);
-}
-export async function getCopilotStatus(ctx: AgentManagerApiContext) {
-  return (await import("./copilotManagerApi.js")).getCopilotStatus(ctx);
-}
-export async function testAstrbotLogin(request: import("./managerTypes.js").AstrbotLoginTestRequest) {
-  return (await import("./astrbotManagerApi.js")).testAstrbotLogin(request);
-}
-export async function openMarvis(ctx: AgentManagerApiContext, request: import("./managerTypes.js").MarvisOpenRequest) {
-  return (await import("./marvisManagerApi.js")).openMarvis(ctx, request);
-}
-
 function object(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }

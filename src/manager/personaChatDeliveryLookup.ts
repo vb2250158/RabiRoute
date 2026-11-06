@@ -1,5 +1,5 @@
 import type { AgentRequestStore } from "../agentRequests/store.js";
-import type { ChatDeliveryParties } from "./personaChatTaskMetadata.js";
+import type { ChatDeliveryParties } from "../plugins/io.rabiroute.manager.persona/src/manager/personaChatTaskMetadata.js";
 
 /** Read only committed metadata; never load prompt bodies or scan remote nodes. */
 export function readChatDeliveryParties(store: Pick<AgentRequestStore, "getEndpointDelivery" | "list">, ids: string[]): Map<string, ChatDeliveryParties> {

@@ -11,10 +11,10 @@ import { RabiGlobalConfigStore } from "./globalConfig.js";
 import { evaluateLanAgentRequest } from "./lanAgentRequestAccess.js";
 import { setTrustedLanAgentSource } from "./lanAgentBodyAuthority.js";
 import { dispatchVoiceTranscriptFixture } from "./personaHistoryOperationTestFixtures.js";
-import { queryPersonaVoiceTranscriptViews } from "../personaVoiceTranscriptView.js";
-import { type RoleSkillArchiveReply } from "./roleSkillDownloadRoutes.js";
+import { queryPersonaVoiceTranscriptViews } from "../plugins/io.rabiroute.manager.persona/src/personaVoiceTranscriptView.js";
+import { type RoleSkillArchiveReply } from "../plugins/io.rabiroute.manager.persona/src/manager/roleSkillDownloadRoutes.js";
 import { dispatchSkillDownloadFixture } from "./personaSkillOperationTestFixtures.js";
-import { createAgentUploadRoutes } from "./agentUploadRoutes.js";
+import { createAgentUploadRoutes } from "../plugins/io.rabiroute.manager.agent-communication/src/manager/agentUploadRoutes.js";
 import { AgentUploadStore, AgentUploadStoreError } from "./agentUploadStore.js";
 
 function deferred() {

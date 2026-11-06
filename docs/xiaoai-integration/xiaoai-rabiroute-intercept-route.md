@@ -658,8 +658,8 @@ RabiRoute 当前设计理念是“多入口消息网关 + 消息分诊台 + 策�
 
 1. `src/adapters/webhookAdapter.ts`：已经能接收 HTTP webhook。
 2. `src/history.ts`：已有 `VoiceTranscriptEventRecord` 和 `voice-transcripts.jsonl`。
-3. `src/forwarding.ts`：已有 `voice_transcript` route kind。
-4. `src/pipelines.ts`：已有 `voice_chat` pipeline preset。
+3. `src/plugins/io.rabiroute.endpoint.rabilink/src/forwarding.ts`：已有 `voice_transcript` route kind。
+4. `src/plugins/io.rabiroute.agent.codex/src/pipelines.ts`：已有 `voice_chat` pipeline preset。
 5. `examples/data/route/voice-chat/adapterConfig.json`：已有 webhook + TTS 语音管道示例。
 6. `personaConfig.json`：已有 `voice-chat` 配置，能把语音转写投给 Agent。
 

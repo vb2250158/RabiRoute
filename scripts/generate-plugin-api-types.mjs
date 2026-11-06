@@ -11,7 +11,8 @@ export function generatePluginApiTypes(root, { check = false } = {}) {
   const definitions = source.statements.filter(statement => ts.isTypeAliasDeclaration(statement) && exported.has(statement.name.text));
   if (definitions.length !== exported.size) throw new Error("Public API operation type definitions are incomplete.");
   const generated = "// Generated from src/manager/apiOperationContract.ts. Do not edit; run scripts/generate-plugin-api-types.mjs.\n"
-    + 'import type { IncomingMessage, ServerResponse } from "node:http";\nimport type { Duplex } from "node:stream";\n\n'
+    + 'import type { IncomingMessage, ServerResponse } from "node:http";\nimport type { Duplex } from "node:stream";\n'
+    + 'import type { ApiExternalListenerDefinition, ApiExternalListenerRegistration } from "@rabiroute/host-api/manager/apiExternalListenerBinding";\n\n'
     + definitions.map(statement => statement.getText(source)).join("\n\n") + "\n";
   if (check) {
     if (!fs.existsSync(outputPath) || fs.readFileSync(outputPath, "utf8").replaceAll("\r\n", "\n") !== generated.replaceAll("\r\n", "\n")) {

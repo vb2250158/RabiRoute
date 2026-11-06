@@ -25,7 +25,7 @@ This is a maintainer checklist, not evidence that the current host release has p
 ## 3. Implementation touchpoints
 
 1. `src/shared/agentAdapterCapabilities.ts`: declare types, manifests, maturity, and verified capabilities. One successful HTTP response is insufficient evidence for `deliveryReceiptRecovery`.
-2. `src/shared/gatewayConfigModel.ts` and `src/config.ts`: binding fields, normalization, and environment configuration; accepted endpoints follow the existing trust contract.
+2. `src/shared/gatewayConfigModel.ts` and `src/plugins/io.rabiroute.agent.codex/src/config.ts`: binding fields, normalization, and environment configuration; accepted endpoints follow the existing trust contract.
 3. `src/<agent>SessionStore.ts`: read host truth, compare Windows paths using platform semantics, and filter before pagination.
 4. `src/<agent>SessionBridge.ts`: the sole real-message transport; distinguish explicit rejection, non-delivery, and unknown outcome.
 5. `src/agentAdapters/builtinAgentAdapters.ts` and `<agent>ManagerApi.ts`: discovery and diagnostics that separately expose installation, credentials, endpoint, project, and session status.

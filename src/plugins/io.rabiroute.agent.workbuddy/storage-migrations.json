@@ -1,0 +1,7 @@
+{
+  "schemaVersion": 1,
+  "scope": "plugin",
+  "migrations": [
+    { "id": "auth-layout-0.7", "kind": "file", "source": { "root": "state", "path": "data/workbuddy-auth.json" }, "target": "auth.json", "unlessEnvironment": "RABI_WORKBUDDY_AUTH_FILE" }
+  ]
+}

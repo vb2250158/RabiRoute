@@ -8,6 +8,8 @@ import { isWebPatchInput, webPatchInputHash } from "./lib/web-patch-inputs.mjs";
 test("Web build watch includes new source modules and resources but excludes output and its own lock", async context => {
   for (const name of ["ribiwebgui/src/new/module.ts", "docs/user-guide/page.md", "assets/image.svg", "src/shared/contract.ts"]) assert.equal(isWebPatchInput(name), true);
   for (const name of ["ribiwebgui/dist/index.html", "ribiwebgui/.web-patch-build.lock", "node_modules/file.js", "src/manager.ts"]) assert.equal(isWebPatchInput(name), false);
+  for (const name of ["src/plugins/io.test.endpoint/web/entry.ts", "src/plugins/io.test.endpoint/web/components/Card.vue", "src/plugins/io.test.endpoint/package.json"]) assert.equal(isWebPatchInput(name), true);
+  for (const name of ["src/plugins/io.test.endpoint/data/secret.json", "src/plugins/io.test.endpoint/src/backend.ts", "src/plugins/external/local/cache.sqlite"]) assert.equal(isWebPatchInput(name), false);
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "web-inputs-"));
   context.after(() => fs.rm(root, { recursive: true, force: true }));
   await fs.mkdir(path.join(root, "ribiwebgui/src"), { recursive: true });

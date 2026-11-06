@@ -1,7 +1,7 @@
 import { createVuetify } from "vuetify";
 import { watch } from "vue";
 import { en, ja, zhHans } from "vuetify/locale";
-import { useI18n } from "../i18n";
+import { useI18n } from "../i18n/index";
 import * as components from "vuetify/components";
 import * as directives from "vuetify/directives";
 import { aliases, mdi } from "vuetify/iconsets/mdi";

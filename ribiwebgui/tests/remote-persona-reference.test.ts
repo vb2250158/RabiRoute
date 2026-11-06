@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import fs from "node:fs";
-import { loadPersonaDocument } from "../src/persona/personaDocumentClient";
+import { loadPersonaDocument } from "../../src/plugins/io.rabiroute.manager.persona/web/persona/personaDocumentClient";
 import { personaPeerRequestAllowed } from "../../src/shared/personaPeerService";
 import {
   RemotePersonaReadError,
@@ -11,7 +11,7 @@ import {
   remotePersonaClient,
   remotePersonaServicePath,
   type RemotePersonaReference
-} from "../src/persona/remotePersonaReference";
+} from "../../src/plugins/io.rabiroute.manager.persona/web/persona/remotePersonaReference";
 
 function reference(roleId: string, document: string): RemotePersonaReference {
   return { schemaVersion: 1, roleId, file: "persona.md", document, personaConfig: {}, revision: "a".repeat(64), applicationGenerationId: "generation", managerInstanceId: "manager" };
@@ -259,7 +259,7 @@ test("an offline saved PC remains the owner and is not queried as a local person
 });
 
 test("local and remote persona editors share all tabs and write to the explicit source PC", () => {
-  const page = fs.readFileSync(new URL("../src/pages/PersonaTemplatePage.vue", import.meta.url), "utf8");
+  const page = fs.readFileSync(new URL("../../src/plugins/io.rabiroute.manager.persona/web/pages/PersonaTemplatePage.vue", import.meta.url), "utf8");
   const store = fs.readFileSync(new URL("../src/stores/roleStore.ts", import.meta.url), "utf8");
   assert.match(page, /providePersonaService/);
   assert.doesNotMatch(page, /v-if="!isRemotePersona"|hasPersona && !isRemotePersona|远端角色配置为只读/);

@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { createHash } from "node:crypto";
-import { PersonaStorageOwner, createPersonaStorageOperations, type PersonaStorageOperationsContext } from "./personaStorageOperations.js";
+import { PersonaStorageOwner, createPersonaStorageOperations, type PersonaStorageOperationsContext } from "../plugins/io.rabiroute.manager.persona/src/manager/personaStorageOperations.js";
 import { RoleStorageApplication } from "./roleStorageApplication.js";
 import { ManagerStorageMutationPool } from "./managerStorageMutationPool.js";
 import { ManagerReadWorkerPool } from "./managerReadWorkerPool.js";

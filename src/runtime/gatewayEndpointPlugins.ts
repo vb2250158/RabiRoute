@@ -3,9 +3,9 @@ import { watch, type FSWatcher } from "node:fs";
 import path from "node:path";
 import type { MessageEndpointHostPorts, AgentAdapterHostPorts } from "@rabiroute/plugin-sdk";
 import { GenerationRuntime, PluginPackageCatalog, loadPluginProfile, type LoadedPluginProfile, type PluginGeneration, type PluginProfile } from "../plugin-kernel/index.js";
-import { PluginProfileSettings } from "../plugin-runtime-host/profileSettings.js";
+import { PluginProfileSettings, type PluginProfileSettingsSnapshot } from "../plugin-runtime-host/profileSettings.js";
 import { createMessageEndpointHostPorts, scopeMessageEndpointHostPorts } from "./messageEndpointHostPorts.js";
-import { gatewayAdapterTypes, type GatewayDefinition } from "../shared/gatewayConfigModel.js";
+import { gatewayAdapterTypes, gatewayRuntimeAdapterTypes, type GatewayDefinition } from "../shared/gatewayConfigModel.js";
 import { classifyRouteChange, endpointRouteInputs, endpointRouteProjection, inheritedEndpointFields, mergeEndpointRouteDeclarations, readEndpointRouteDeclarations, readInstalledEndpointRouteDeclarations, routeSnapshotRevision, routeDeclarationCapability } from "../plugin-runtime-host/messageEndpointRouteConfig.js";
 import { readPluginManagementManifest } from "../manager/pluginManagement.js";
 import { GatewayRouteSnapshotApplyRejected } from "../shared/gatewayRouteSnapshot.js";
@@ -18,12 +18,16 @@ import { installAgentAdapterGenerationReader, publishedAgentAdapterProviders, re
 import { installAgentAdapterManifestReader, type AgentAdapterManifest } from "../shared/agentAdapterCapabilities.js";
 import { loadInstalledAgentManagerDescriptors } from "../manager/agentManagerProviders.js";
 import type { RabiCordisHost, RabiCordisFiber } from "./cordisHost.js";
+import { pluginStorageMigrationFailure } from "../shared/pluginStorage.js";
+import { applicationRuntimeLayout } from "../shared/runtimeLayout.js";
 
 export type GatewayEndpointPluginOptions = {
   profilePath: string;
   settingsRoot: string;
   packageRoots: readonly string[];
   runtimeRoot: string;
+  stateRoot?: string;
+  migrationsPath?: string;
   adapterTypes: readonly string[];
   hostPorts?: MessageEndpointHostPorts;
   agentHostPorts?: AgentAdapterHostPorts;
@@ -38,26 +42,28 @@ export type GatewayEndpointPluginRuntime = {
   unmount(): Promise<void>;
   reconcile(): Promise<void>;
   current(): PluginGeneration;
-  diagnostics(): readonly { instanceId: string; message: string }[];
+  diagnostics(): PluginProfileSettingsSnapshot["diagnostics"];
   applyRouteSnapshot(definition: Readonly<GatewayDefinition>, revision: string): Promise<void>;
   routeRevision(): string | undefined;
 };
 
 /** A shared profile controls individual package activations; a broken endpoint cannot dispose the Gateway. */
 export async function mountGatewayEndpointPlugins(host: RabiCordisHost, options: GatewayEndpointPluginOptions): Promise<GatewayEndpointPluginRuntime> {
-  const settings = new PluginProfileSettings({ profilePath: options.profilePath, settingsRoot: options.settingsRoot });
+  const settings = new PluginProfileSettings({ profilePath: options.profilePath, settingsRoot: options.settingsRoot, migrationsPath: options.migrationsPath });
   const catalog = new PluginPackageCatalog(options.packageRoots);
   const ports = options.hostPorts ?? await createMessageEndpointHostPorts();
+  const stateRoot = options.stateRoot ?? applicationRuntimeLayout().stateRoot;
   const registry = new MessageAdapterRegistry();
   const projections: Array<() => void> = [];
   // The original full Route survives a filtered boot environment and later package enablement.
-  const activeTypes = new Set(options.initialRouteDefinition ? gatewayAdapterTypes(options.initialRouteDefinition) : options.adapterTypes);
+  const activeTypes = new Set(options.initialRouteDefinition ? gatewayRuntimeAdapterTypes(options.initialRouteDefinition) : options.adapterTypes);
   const scopedPorts = Object.freeze({ ...ports, forActivation(configuration: unknown) {
     const settings = configuration as { __routeTransport?: Readonly<Record<string, unknown>>; __routeInheritedFields?: readonly string[] } | undefined;
     return settings?.__routeTransport ? scopeMessageEndpointHostPorts(ports, settings.__routeTransport, settings.__routeInheritedFields) : ports;
   } });
   const agentPorts = options.agentHostPorts ?? createAgentAdapterHostPorts();
   const kernel = new GenerationRuntime({ host: "gateway", hostServices: [{ capability: "host.message-endpoints@1", value: scopedPorts },
+    { capability: "host.message-endpoints@2", value: scopedPorts },
     { capability: "host.agent-adapters@1", value: agentPorts }],
     applicationIdentity: { applicationGenerationId: process.env.RABIROUTE_GATEWAY_GENERATION_ID || "embedded-gateway", managerInstanceId: process.env.GATEWAY_ID || "embedded-gateway" } });
   const releaseAgentProjection = options.agentRegistry?.bindGeneration(() => kernel.current());
@@ -73,7 +79,7 @@ export async function mountGatewayEndpointPlugins(host: RabiCordisHost, options:
   const bootRoute = options.initialRouteDefinition ? structuredClone(options.initialRouteDefinition) : undefined;
   let appliedRoute = bootRoute;
   let appliedRevision = options.initialRouteRevision ?? (appliedRoute ? routeSnapshotRevision(appliedRoute) : undefined);
-  let diagnostics: Array<{ instanceId: string; message: string }> = [];
+  let diagnostics: Array<PluginProfileSettingsSnapshot["diagnostics"][number]> = [];
   let disposed = false;
   let queue = Promise.resolve();
   const watchers: FSWatcher[] = [];
@@ -122,6 +128,7 @@ export async function mountGatewayEndpointPlugins(host: RabiCordisHost, options:
     diagnostics = [...snapshot.diagnostics, ...installed.diagnostics, ...installedAgents.diagnostics];
     const profile = await selectedProfile(snapshot.profile);
     const next = await loadPluginProfile({ profilePath: options.profilePath, profile, packageCatalog: catalog, runtimeRoot: options.runtimeRoot, host: "gateway", previous: loaded,
+      preparationFailure: (packageId, instanceId) => pluginStorageMigrationFailure(packageId, stateRoot, instanceId),
       assertCurrent() { if (disposed) throw new Error("Gateway plugin preparation stopped during shutdown."); } });
     const routeCatalog = await readEndpointRouteDeclarations(next.packages);
     const declarations = mergeEndpointRouteDeclarations(routeCatalog.declarations, installed.declarations);
@@ -154,7 +161,9 @@ export async function mountGatewayEndpointPlugins(host: RabiCordisHost, options:
     });
     await kernel.switch(candidates, { readyRequires: [] });
     loaded = publication.capture(next, kernel.current()).profile;
-    for (const failure of next.loadFailures) diagnostics.push({ instanceId: failure.instanceId, message: failure.error.message });
+    for (const failure of next.loadFailures) if (failure.error.code === "package_load_failed") {
+      diagnostics.push({ instanceId: failure.instanceId, message: failure.error.message });
+    }
     for (const release of projections.splice(0)) release();
     for (const record of kernel.current().records) {
       if (record.status !== "active") continue;
@@ -171,7 +180,7 @@ export async function mountGatewayEndpointPlugins(host: RabiCordisHost, options:
       const affectedIds = new Set([...next.candidates, ...before.records.map(record => ({ instanceId: record.identity.instanceId, manifest: record.manifest }))]
         .filter(candidate => affectedCapabilities.some(capability => candidate.manifest.provides.includes(capability))).map(candidate => candidate.instanceId));
       const missing = [...affectedIds].some(id => !affected.some(record => record.identity.instanceId === id));
-      const loadFailed = next.loadFailures.some(failure => affectedIds.has(failure.instanceId));
+      const loadFailed = next.loadFailures.some(failure => failure.instanceId !== undefined && affectedIds.has(failure.instanceId));
       const failures = affected.filter(record => record.status !== "active" || record.error);
       const retiring = kernel.current().cleanupDiagnostics.filter(item => !item.lateConfirmed && affected.some(record => record.identity.instanceId === item.instanceId));
       if (missing || loadFailed || failures.length || retiring.length) {

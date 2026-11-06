@@ -68,7 +68,7 @@ if (fs.existsSync(guideDir)) {
 const requiredChecks = [
   ["docs/user-guide/speech-api.md", ["/api/rabilink/speech/v1/audio/speech", "/api/rabilink/speech/v1/audio/transcriptions"]],
   ["docs/user-guide/speech-api_en.md", ["/api/rabilink/speech/v1/audio/speech", "/api/rabilink/speech/v1/audio/transcriptions"]],
-  ["ribiwebgui/src/pages/ProjectDocsPage.vue", ['"speech-api"']],
+  ["src/plugins/io.rabiroute.manager.core/web/pages/ProjectDocsPage.vue", ['"speech-api"']],
   ["scripts/rabilink-relay-server.mjs", ['match.restPath.startsWith("/reports/")']]
 ];
 

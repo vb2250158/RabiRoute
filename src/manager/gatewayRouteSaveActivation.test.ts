@@ -5,7 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { createGatewayControlOwner, type GatewayControlRoutesContext } from "./gatewayControlRoutes.js";
+import { createGatewayControlOwner, type GatewayControlRoutesContext } from "../plugins/io.rabiroute.manager.gateway-runtime/src/manager/gatewayControlRoutes.js";
 import { RouteCatalogStartupLifecycle } from "./routeCatalogStartupLifecycle.js";
 import { executeRouteCatalogTransaction, type RouteCatalogSnapshot } from "./routeCatalogTransaction.js";
 import { ManagerGatewayRuntimeService } from "./managerGatewayRuntimeService.js";

@@ -1,3 +1,4 @@
+import { registerSourcePluginTranslations } from "./plugin-translation-test-host";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import vm from "node:vm";
@@ -5,7 +6,7 @@ import test from "node:test";
 import ts from "typescript";
 import { createPinia, setActivePinia } from "pinia";
 import { InstanceIdentityResetClient, INSTANCE_IDENTITY_RESET_WAIT_MS, readResetIdentity } from "../src/instanceIdentityResetClient";
-import { englishCatalog } from "../src/i18n/catalog";
+import { translateText } from "../src/i18n/index";
 
 const operationId = "00000000-0000-4000-8000-000000000001";
 const oldGuid = "00000000-0000-4000-8000-000000000002";
@@ -17,6 +18,9 @@ const identity = (guid = newGuid) => Response.json({ code: 0, data: { guid, canR
 function client(request: typeof fetch, extra = {}) {
   return new InstanceIdentityResetClient({ request, operationId: () => operationId, ...extra });
 }
+
+const disposePluginTranslations = await registerSourcePluginTranslations();
+test.after(disposePluginTranslations);
 
 test("identity support comes from the managed identity DTO, including older unsupported Hosts", async () => {
   const request: typeof fetch = async (path, init) => {
@@ -263,7 +267,7 @@ test("stopping a wait leaves the Host operation pending and discards its late co
 });
 
 test("the actual confirmation handler updates only the GUID and preserves a dirty Route draft", async () => {
-  Object.assign(globalThis, { window: { location: { pathname: "/", hash: "" } } });
+  Object.assign(globalThis, { window: { location: { pathname: "/", hash: "" }, dispatchEvent() { return true; } } });
   const { useGatewayStore } = await import("../src/stores/gatewayStore");
   setActivePinia(createPinia());
   const store = useGatewayStore();
@@ -274,7 +278,7 @@ test("the actual confirmation handler updates only the GUID and preserves a dirt
   const selected = store.selectedGatewayId;
   const reset = client(async path => path === endpoint ? queued() : path === "/api/rabi/identity" ? identity() : status("committed", { newGuid }));
   reset.open(oldGuid);
-  const source = fs.readFileSync(new URL("../src/components/RabiLinkSettings.vue", import.meta.url), "utf8").split('<script setup lang="ts">')[1].split("</script>")[0];
+  const source = fs.readFileSync(new URL("../../src/plugins/io.rabiroute.manager.core/web/components/RabiLinkSettings.vue", import.meta.url), "utf8").split('<script setup lang="ts">')[1].split("</script>")[0];
   const parsed = ts.createSourceFile("settings.ts", source, ts.ScriptTarget.ESNext, true);
   const handler = parsed.statements.find(statement => ts.isFunctionDeclaration(statement) && statement.name?.text === "confirmReset")!;
   const emitted: boolean[] = [];
@@ -292,12 +296,12 @@ test("the actual confirmation handler updates only the GUID and preserves a dirt
 });
 
 test("the UI has explicit confirmation, Host support and bilingual reset guidance", () => {
-  const source = fs.readFileSync(new URL("../src/components/RabiLinkSettings.vue", import.meta.url), "utf8");
+  const source = fs.readFileSync(new URL("../../src/plugins/io.rabiroute.manager.core/web/components/RabiLinkSettings.vue", import.meta.url), "utf8");
   assert.match(source, /reset\.open\(store\.meta\.rabiGuid/);
   assert.match(source, /:disabled="!resetSupported/);
   assert.match(source, /@click="reset\.cancel\(\)"/);
   assert.match(source, /@click="reset\.stopWaiting\(\)"/);
   assert.match(source, /旧连接可能需要重新建立/);
   assert.doesNotMatch(source, /store\.load|replaceDirtyConfig/);
-  for (const message of ["重置实例 ID", "停止等待", "此操作会生成新的实例 ID 和连接密钥，保留实例名称、角色、记录及连接配置。旧连接可能需要重新建立。", "实例 ID 重置结果仍待确认。页面连接可能已切换，请从托盘重新打开 RabiLink 配置查看结果。", "当前 Host 不支持从页面重置实例 ID。", "重置未完成，请检查 Host 日志与备份。", "重置失败，已恢复原身份。"]) assert.ok(englishCatalog[message]);
+  for (const message of ["重置实例 ID", "停止等待", "此操作会生成新的实例 ID 和连接密钥，保留实例名称、角色、记录及连接配置。旧连接可能需要重新建立。", "实例 ID 重置结果仍待确认。页面连接可能已切换，请从托盘重新打开 RabiLink 配置查看结果。", "当前 Host 不支持从页面重置实例 ID。", "重置未完成，请检查 Host 日志与备份。", "重置失败，已恢复原身份。"]) assert.notEqual(translateText(message, "en"), message);
 });

@@ -6,7 +6,7 @@ import ts from "typescript";
 import http from "node:http";
 import { Socket } from "node:net";
 import os from "node:os";
-import { PersonaStorageOwner, createPersonaStorageOperations, type PersonaStorageOperationsContext } from "./manager/personaStorageOperations.js";
+import { PersonaStorageOwner, createPersonaStorageOperations, type PersonaStorageOperationsContext } from "./plugins/io.rabiroute.manager.persona/src/manager/personaStorageOperations.js";
 import type { RoleStorageApplication, RoleStorageCommandContext } from "./manager/roleStorageApplication.js";
 import { apiPathParameters, compileApiOperation } from "./manager/apiOperationContract.js";
 import { fileURLToPath } from "node:url";
@@ -49,9 +49,11 @@ test("legacy layout knowledge remains inside the startup migration boundary", ()
 });
 
 test("HTTP routes submit feedback through the application service", async t => {
-  const routes = source(path.join("manager", "controlPlaneRoutes.ts")), storage = source(path.join("manager", "personaStorageOperations.ts"));
+  const routes = source(path.join("manager", "controlPlaneRoutes.ts")), storage = source(path.join("plugins", "io.rabiroute.manager.persona", "src", "manager", "personaStorageOperations.ts"));
   assert.match(routes, /application: currentRoleStorageApplication/);
-  assert.match(routes, /personaStorageContext: Object\.freeze\(createPersonaStorageOperationsContext\(\)\)/);
+  const ownedRuntime = source(path.join("plugins", "io.rabiroute.manager.persona", "hostRuntime.mjs"));
+  assert.match(routes, /get createPersonaStorageOperationsContext\(\)\s*\{\s*return createPersonaStorageOperationsContext;/);
+  assert.match(ownedRuntime, /personaStorageContext: Object\.freeze\(ports\.createPersonaStorageOperationsContext\(\)\)/);
   for (const text of [routes, storage]) { assert.doesNotMatch(text, /commitPlanFeedback\(/); assert.doesNotMatch(text, /createPlanFeedbackRecord\(/); }
   assert.match(storage, /canonicalLogicalPlanId\(value\)/);
   assert.match(storage, /const id = feedbackPlanId\(planId\), actor = await this\.context\.planHistoryContext[\s\S]*a\.assertCurrent\(\);[\s\S]*application\.commands\.submitPlanFeedback\(roleId, id, value, \{ \.\.\.actor, authorize: a\.assertCurrent \}\)/);

@@ -1,0 +1,7 @@
+{
+  "schemaVersion": 1,
+  "scope": "plugin",
+  "migrations": [
+    { "id": "runtime-layout-0.7", "kind": "external-reference", "source": { "root": "localAppData", "path": "RabiRoute/XiaomiHome" }, "target": "resources.json", "resource": "runtime", "unlessConfig": "runtimeDir" }
+  ]
+}

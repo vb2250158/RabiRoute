@@ -2,12 +2,12 @@ import { getTimeoutMs } from "./shared/timeoutSettings.js";
 import fs from "node:fs";
 import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
-import type { NapCatEndpoint, OneBotMessage } from "./napcat.js";
+import type { NapCatEndpoint, OneBotMessage } from "./plugins/io.rabiroute.endpoint.napcat/src/napcat.js";
 import { NapCatRequestError } from "./shared/napcatDeliveryError.js";
 import type { MessageEndpointEgressProvider, MessageEndpointEgressLease } from "@rabiroute/plugin-sdk";
 import { normalizePipelineDefinition, resolvePipeline, type PipelineDefinition, type ResolvedPipeline } from "./pipelines.js";
-import type { WeComEndpoint } from "./wecom.js";
-import type { FeishuEndpoint } from "./feishu.js";
+import type { WeComEndpoint } from "./plugins/io.rabiroute.endpoint.wecom/src/wecom.js";
+import type { FeishuEndpoint } from "./plugins/io.rabiroute.endpoint.feishu/src/feishu.js";
 import {
   normalizeRolePanelAttachments,
   type RolePanelAttachment,
@@ -33,7 +33,7 @@ import {
 } from "./messageContextStore.js";
 import { recordDataMutationAudit } from "./observability/dataMutationAudit.js";
 import { renderMarkdownToPngPages, mermaidDiagramSource, markdownImageSettings, checkMarkdownQuota } from "./markdownImage.js";
-import { napcatStickerMessage, QQ_STICKER_ID } from "./napcatStickers.js";
+import { QQ_STICKER_ID } from "./shared/qqStickerContract.js";
 
 export type AgentReplyRequest = {
   text?: unknown;
@@ -1063,7 +1063,7 @@ export function agentReplyCurrentQqBinding(request: AgentReplyRequest, options: 
 async function observeQqUploadOwner(
   expected: AgentReplyCurrentQqBinding | undefined,
   options: AgentReplyOptions,
-  getLoginInfo: typeof import("./napcat.js").getLoginInfo
+  getLoginInfo: typeof import("./plugins/io.rabiroute.endpoint.napcat/src/napcat.js").getLoginInfo
 ): Promise<{ selfId: string; bindingRevision: string } | undefined> {
   if (!expected) return undefined;
   const request = { routeProfileId: expected.routeId, instanceId: expected.instanceId, groupId: expected.groupId };
@@ -1737,18 +1737,19 @@ function normalizeWeComError(error: unknown): string {
 
 async function handleAgentReplyWithEgress(request: AgentReplyRequest, options: AgentReplyOptions, currentOptions: AgentReplyOptions,
   bind: <T extends (...args: any[]) => any>(type: string, operation: string) => T): Promise<AgentReplyResult> {
-  const getLoginInfo = bind<typeof import("./napcat.js").getLoginInfo>("napcat", "getLoginInfo");
-  const sendGroupMessage = bind<typeof import("./napcat.js").sendGroupMessage>("napcat", "sendGroupMessage");
-  const sendPrivateMessage = bind<typeof import("./napcat.js").sendPrivateMessage>("napcat", "sendPrivateMessage");
-  const uploadGroupFile = bind<typeof import("./napcat.js").uploadGroupFile>("napcat", "uploadGroupFile");
-  const uploadPrivateFile = bind<typeof import("./napcat.js").uploadPrivateFile>("napcat", "uploadPrivateFile");
-  const sendWeComMessage = bind<typeof import("./wecom.js").sendWeComMessage>("wecom", "sendWeComMessage");
-  const sendFeishuText = bind<typeof import("./feishu.js").sendFeishuText>("feishu", "sendFeishuText");
-  const sendWeixinText = bind<typeof import("./weixinOpenClaw.js").sendWeixinText>("weixin", "sendWeixinText");
-  const sendWeixinFile = bind<typeof import("./weixinOpenClaw.js").sendWeixinFile>("weixin", "sendWeixinFile");
-  const sendWeixinImage = bind<typeof import("./weixinOpenClaw.js").sendWeixinImage>("weixin", "sendWeixinImage");
-  const publishRabiLinkRelayMessage = bind<typeof import("./adapters/rabilinkRelayWorker.js").publishRabiLinkRelayMessage>("rabilink", "publishRabiLinkRelayMessage");
-  const uploadRabiLinkRelayAttachment = bind<typeof import("./adapters/rabilinkRelayWorker.js").uploadRabiLinkRelayAttachment>("rabilink", "uploadRabiLinkRelayAttachment");
+  const getLoginInfo = bind<typeof import("./plugins/io.rabiroute.endpoint.napcat/src/napcat.js").getLoginInfo>("napcat", "getLoginInfo");
+  const sendGroupMessage = bind<typeof import("./plugins/io.rabiroute.endpoint.napcat/src/napcat.js").sendGroupMessage>("napcat", "sendGroupMessage");
+  const sendPrivateMessage = bind<typeof import("./plugins/io.rabiroute.endpoint.napcat/src/napcat.js").sendPrivateMessage>("napcat", "sendPrivateMessage");
+  const uploadGroupFile = bind<typeof import("./plugins/io.rabiroute.endpoint.napcat/src/napcat.js").uploadGroupFile>("napcat", "uploadGroupFile");
+  const uploadPrivateFile = bind<typeof import("./plugins/io.rabiroute.endpoint.napcat/src/napcat.js").uploadPrivateFile>("napcat", "uploadPrivateFile");
+  const napcatStickerMessage = bind<typeof import("./plugins/io.rabiroute.endpoint.napcat/src/napcatStickers.js").napcatStickerMessage>("napcat", "napcatStickerMessage");
+  const sendWeComMessage = bind<typeof import("./plugins/io.rabiroute.endpoint.wecom/src/wecom.js").sendWeComMessage>("wecom", "sendWeComMessage");
+  const sendFeishuText = bind<typeof import("./plugins/io.rabiroute.endpoint.feishu/src/feishu.js").sendFeishuText>("feishu", "sendFeishuText");
+  const sendWeixinText = bind<typeof import("./plugins/io.rabiroute.endpoint.weixin/src/weixinOpenClaw.js").sendWeixinText>("weixin", "sendWeixinText");
+  const sendWeixinFile = bind<typeof import("./plugins/io.rabiroute.endpoint.weixin/src/weixinOpenClaw.js").sendWeixinFile>("weixin", "sendWeixinFile");
+  const sendWeixinImage = bind<typeof import("./plugins/io.rabiroute.endpoint.weixin/src/weixinOpenClaw.js").sendWeixinImage>("weixin", "sendWeixinImage");
+  const publishRabiLinkRelayMessage = bind<typeof import("./plugins/io.rabiroute.endpoint.rabilink/src/adapters/rabilinkRelayWorker.js").publishRabiLinkRelayMessage>("rabilink", "publishRabiLinkRelayMessage");
+  const uploadRabiLinkRelayAttachment = bind<typeof import("./plugins/io.rabiroute.endpoint.rabilink/src/adapters/rabilinkRelayWorker.js").uploadRabiLinkRelayAttachment>("rabilink", "uploadRabiLinkRelayAttachment");
   const requestLocalSpeech = bind<typeof import("./speech/localSpeechClient.js").requestLocalSpeech>("speech", "requestLocalSpeech");
   const content = requestContent(request);
   const text = content.text;

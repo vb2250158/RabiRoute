@@ -14,7 +14,7 @@ import { gatewayRuntimeStartDecision, gatewayRuntimeSyncAction } from "./manager
 
 const profile = JSON.parse(await fs.readFile(path.resolve("plugins/profiles/desktop.json"), "utf8")) as {instances: Array<{package: string; version: string}>};
 const declaredGatewayTypes = gatewayEndpointTypesFromManifests(await Promise.all(profile.instances.map(async instance =>
-  parsePluginManifest(JSON.parse(await fs.readFile(path.resolve("plugins/builtin", instance.package, instance.version, "rabi.plugin.json"), "utf8"))))));
+  parsePluginManifest(JSON.parse(await fs.readFile(path.resolve("src/plugins", instance.package, "rabi.plugin.json"), "utf8"))))));
 
 function route(messageAdapters: GatewayDefinition["messageAdapters"]): GatewayDefinition {
   return {

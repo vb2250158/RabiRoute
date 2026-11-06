@@ -1,0 +1,16 @@
+{
+  "exports": [
+    {
+      "source": "src/plugins/io.rabiroute.manager.video/hostRuntime.mjs",
+      "name": "createOwnedRuntime"
+    }
+  ],
+  "ownedPrefixes": [
+    "src/plugins/io.rabiroute.manager.video/"
+  ],
+  "ownedSources": [
+    "src/plugins/io.rabiroute.manager.video/src/manager/videoOperations.ts",
+    "src/plugins/io.rabiroute.manager.video/src/manager/videoRuntime.ts"
+  ],
+  "packageId": "io.rabiroute.manager.video"
+}

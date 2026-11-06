@@ -106,6 +106,8 @@ async function initializeGatewayMain(
       (host) => mountGatewayEndpointPlugins(host, {
         profilePath: process.env.RABIROUTE_PLUGIN_PROFILE?.trim() || path.join(runtimeLayout.packageRoot, "dist/plugins/profiles/desktop.json"),
         settingsRoot: path.join(runtimeLayout.stateRoot, "data/plugins/settings"),
+        stateRoot: runtimeLayout.stateRoot,
+        migrationsPath: path.join(runtimeLayout.packageRoot, "dist/plugins/profiles/package-migrations.json"),
         packageRoots: process.env.RABIROUTE_PLUGIN_PACKAGE_ROOTS?.split(path.delimiter).filter(Boolean) || [path.join(runtimeLayout.packageRoot, "dist/plugins/packages")],
         runtimeRoot: path.join(config.dataDir, ".rabi-runtime", "endpoint-plugins"),
         adapterTypes,
@@ -118,7 +120,7 @@ async function initializeGatewayMain(
     if (initialRouteDefinition) {
       if (!gatewayGenerationId || messageAdapters.routeRevision() !== bootRevision) throw new Error("Gateway Route boot revision is not active.");
       const unavailableInstances = () => Object.freeze([...new Set([
-        ...messageAdapters.diagnostics().map(item => item.instanceId),
+        ...messageAdapters.diagnostics().flatMap(item => item.instanceId ? [item.instanceId] : []),
         ...messageAdapters.current().records.filter(record => record.status !== "active" || record.error).map(record => record.identity.instanceId)
       ])]);
       routeSnapshotRuntime = await root.ensure("rabi.runtime.routeSnapshot.gateway", host => mountGatewayRouteSnapshotRuntime(host, {

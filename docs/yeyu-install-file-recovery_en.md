@@ -6,7 +6,7 @@ This PR recovers manual installation-directory edits only. It does not install, 
 
 ## API files
 
-The old `src/agentAdapters/yeyuGamerManagerApi.ts` implementation already moved to `src/integrations/yeyuGamer/managerApi.ts`. The recovered path only re-exports that single implementation for external installation-directory imports that have not migrated. It registers no routes and does not restore the old client enabled flag. Enablement remains owned by the plugin Profile; current request authorization and timeout handling remain unchanged. Remove this compatibility path once all external imports migrate. Repository runtime entry points continue to use integrations directly.
+The old `src/agentAdapters/yeyuGamerManagerApi.ts` implementation already moved to `src/plugins/io.rabiroute.manager.yeyu-gamer/src/integrations/yeyuGamer/managerApi.ts`. The recovered path only re-exports that single implementation for external installation-directory imports that have not migrated. It registers no routes and does not restore the old client enabled flag. Enablement remains owned by the plugin Profile; current request authorization and timeout handling remain unchanged. Remove this compatibility path once all external imports migrate. Repository runtime entry points continue to use integrations directly.
 
 The canonical tests already cover the valid legacy contracts. The recovered-path test checks export identity rather than copying outdated schema and configuration assertions.
 

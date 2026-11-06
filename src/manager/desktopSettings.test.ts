@@ -9,7 +9,7 @@ import {
   DEFAULT_SCREENSHOT_SHORTCUT,
   normalizeDesktopSettings
 } from "../shared/desktopSettingsContract.js";
-import { DesktopSettingsStore } from "./desktopSettings.js";
+import { DesktopSettingsStore, DesktopSettingsStorageError } from "./desktopSettings.js";
 
 test("bubble appearance is safe, persona-scoped and survives Manager storage", () => {
   const normalized = normalizeDesktopPetBubbleStyle({ skin: "unknown", fontSize: Infinity, maxWidth: 9999,
@@ -155,14 +155,14 @@ test("pet wandering settings survive storage, bound waiting and preserve explici
   }
 });
 
-test("autostart configuration remains tri-state for missing or corrupt settings", () => {
+test("autostart configuration distinguishes missing settings from unreadable saved settings", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-desktop-autostart-state-"));
   const filePath = path.join(root, "settings.json");
   try {
     const store = new DesktopSettingsStore(filePath);
     assert.equal(store.autostartConfigured(), false);
     fs.writeFileSync(filePath, "{broken", "utf8");
-    assert.equal(store.autostartConfigured(), false);
+    assert.throws(() => store.autostartConfigured(), DesktopSettingsStorageError);
     fs.writeFileSync(filePath, JSON.stringify({ theme: "dark" }), "utf8");
     assert.equal(store.autostartConfigured(), false);
     store.write({ autostart: false });
@@ -170,6 +170,24 @@ test("autostart configuration remains tri-state for missing or corrupt settings"
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
+});
+
+test("corrupt or unreadable desktop settings cannot be replaced by a default save", t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "desktop-settings-corrupt-")), file = path.join(root, "settings.json");
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const store = new DesktopSettingsStore(file);
+  for (const raw of ["{broken", "null", "[]"]) {
+    fs.writeFileSync(file, raw);
+    assert.throws(() => store.read(), DesktopSettingsStorageError);
+    assert.throws(() => store.write({ theme: "light" }), DesktopSettingsStorageError);
+    assert.equal(fs.readFileSync(file, "utf8"), raw);
+  }
+  fs.writeFileSync(file, '{"theme":"dark"}');
+  const denied = t.mock.method(fs, "readFileSync", () => { throw Object.assign(new Error("denied"), { code: "EACCES" }); });
+  assert.throws(() => store.read(), DesktopSettingsStorageError);
+  assert.throws(() => store.write({ theme: "light" }), DesktopSettingsStorageError);
+  denied.mock.restore();
+  assert.equal(fs.readFileSync(file, "utf8"), '{"theme":"dark"}');
 });
 
 

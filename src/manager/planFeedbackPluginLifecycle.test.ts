@@ -1,3 +1,4 @@
+import { canonicalManagerPluginFixture } from "./canonicalManagerPlugin.fixture.js";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
@@ -7,7 +8,7 @@ import { pathToFileURL } from "node:url";
 import { GenerationRuntime } from "../plugin-kernel/generationRuntime.js";
 import type { PluginCandidate, PluginManifest, PluginModule } from "../plugin-kernel/types.js";
 import { FailureCircuitRegistry } from "../runtime/failureCircuit.js";
-import { PlanFeedbackRecoveryService, type PlanFeedbackRecoveryServiceOptions } from "./planFeedbackRecoveryService.js";
+import { PlanFeedbackRecoveryService, type PlanFeedbackRecoveryServiceOptions } from "../plugins/io.rabiroute.manager.plan-feedback-delivery/src/manager/planFeedbackRecoveryService.js";
 import type { PlanFeedbackRecoveryCandidate, PlanFeedbackRecoveryOutcome } from "./planFeedbackRecovery.js";
 import { attachNativeStorageWork, beginNativeStorageWork } from "./nativeStorageWork.js";
 
@@ -20,8 +21,7 @@ const tick = () => new Promise<void>(resolve => setImmediate(resolve));
 
 async function fixture(t: test.TestContext) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "plan-feedback-publication-"));
-  const entry = path.resolve("plugins/builtin/io.rabiroute.manager.plan-feedback-delivery/1.0.0/manager.mjs");
-  const plugin: PluginModule = await import(pathToFileURL(entry).href);
+  const entry = path.resolve("src/plugins/io.rabiroute.manager.plan-feedback-delivery/manager.mjs");
   const manifest: PluginManifest = JSON.parse(fs.readFileSync(path.join(path.dirname(entry), "rabi.plugin.json"), "utf8"));
   const instances: PlanFeedbackRecoveryService[] = [];
   const restores: ReturnType<PlanFeedbackRecoveryService["failureSummary"]>[] = [];
@@ -54,12 +54,13 @@ async function fixture(t: test.TestContext) {
     async scheduleAndWaitForPlanFeedbackDelivery() { counts.schedules++; },
     publishManagerEvent() { counts.events++; }
   };
+  const { module: plugin, ports } = await canonicalManagerPluginFixture("plan-feedback-delivery", host);
   let effect: (() => Promise<() => void>) | undefined;
   let failPublication = false;
   let published: (() => void) | undefined;
   const retirements: Array<() => void | Promise<void>> = [];
   const generation = new GenerationRuntime({ host: "manager", hostServices: [
-    { capability: "host.manager.plan-feedback-delivery@1", value: host },
+    { capability: "host.manager.plan-feedback-delivery@2", value: ports },
     { capability: "manager.core@1", value: {} }, { capability: "manager.message-processing-control@1", value: {} }
   ], executor: { async prepare() {
     const stagedEffect = effect; effect = undefined;

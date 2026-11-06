@@ -11,9 +11,9 @@ import { RabiGlobalConfigStore } from "./globalConfig.js";
 import { LanAgentAuthority } from "./lanAgentAuthority.js";
 import { assertTrustedLanAgentPrincipal, evaluateLanAgentRequest } from "./lanAgentRequestAccess.js";
 import { hasAuthenticatedConnectionRequest, markAuthenticatedConnectionRequest } from "./connectionRequestAccess.js";
-import { assertLanAgentBodyAuthority, registerLanAgentBodyGuard } from "./lanAgentBodyAuthority.js";
+import { registerLanAgentBodyGuard } from "./lanAgentBodyAuthority.js";
 import { ManagerPluginRouteRegistry } from "./managerPluginRouteRegistry.js";
-import { createApiDiscoveryOperations } from "./apiDiscoveryRoutes.js";
+import { createApiDiscoveryOperations } from "../plugins/io.rabiroute.manager.agent-communication/src/manager/apiDiscoveryRoutes.js";
 import { createManagerMetadataOperation } from "./corePublicOperations.js";
 
 test("authenticated node calls WebGUI settings through discovery and original config persistence without a persona grant", async t => {
@@ -43,7 +43,7 @@ test("authenticated node calls WebGUI settings through discovery and original co
     if (evaluateLanAgentRequest(request, authority, config.read().webguiLan.enabled).kind !== "agent") { response.writeHead(403).end(); return; }
     markAuthenticatedConnectionRequest(request, () => { assertTrustedLanAgentPrincipal(request); });
     const url = new URL(request.url!, "http://localhost");
-    registerLanAgentBodyGuard(request, body => assertLanAgentBodyAuthority(url.pathname, body, assertTrustedLanAgentPrincipal(request)?.source));
+    registerLanAgentBodyGuard(request, () => {});
     if (!registry.handle(request, url, response)) response.writeHead(404).end();
   });
   server.listen(0, "127.0.0.1"); await once(server, "listening");

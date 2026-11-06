@@ -1,0 +1,16 @@
+{
+  "exports": [
+    {
+      "source": "src/plugins/io.rabiroute.manager.desktop-pet/hostRuntime.mjs",
+      "name": "createOwnedRuntime"
+    }
+  ],
+  "ownedPrefixes": [
+    "src/plugins/io.rabiroute.manager.desktop-pet/"
+  ],
+  "ownedSources": [
+    "src/plugins/io.rabiroute.manager.desktop-pet/src/manager/desktopPetRoutes.ts",
+    "src/plugins/io.rabiroute.manager.desktop-pet/src/manager/desktopPetOperations.ts"
+  ],
+  "packageId": "io.rabiroute.manager.desktop-pet"
+}

@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import http from "node:http";
+import { listenManagerEndpoint } from "../managerEndpointPolicy.js";
 import test from "node:test";
 import type { RouteProfile } from "../config.js";
 import { resolvePipeline } from "../pipelines.js";
@@ -76,14 +78,18 @@ test("remote persona identity changes, denied access and unavailable target fail
   await assert.rejects(fetchRemotePersonaSnapshot({ ...request, fetchImpl: async () => { throw new Error("offline"); } }), /offline/);
 });
 
-test("remote persona resolution observes cancellation and requires a complete owning identity", async () => {
+test("remote persona resolution observes cancellation and requires a complete owning identity", async t => {
   await assert.rejects(fetchRemotePersonaSnapshot({ ...request, capability: "", fetchImpl: async () => { throw new Error("must not request"); } }),
     (error: unknown) => error instanceof RemotePersonaUnavailableError && error.code === "REMOTE_PERSONA_IDENTITY_REQUIRED");
-  await assert.rejects(fetchRemotePersonaSnapshot({ ...request, timeoutMs: 5, fetchImpl: async (_url, init) => {
-    return await new Promise<Response>((_resolve, reject) => {
-      init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), { once: true });
-    });
-  } }), /timed out/);
+  // A real request owns a socket while the production deadline is unref'ed.
+  // An unresolved mock Promise owns no event-loop resource and cannot model that lifecycle.
+  const server = http.createServer(() => {});
+  const endpoint = await listenManagerEndpoint({ server, host: "127.0.0.1", policy: { mode: "auto" } });
+  t.after(async () => {
+    server.closeAllConnections();
+    await new Promise<void>(resolve => server.close(() => resolve()));
+  });
+  await assert.rejects(fetchRemotePersonaSnapshot({ ...request, managerBaseUrl: endpoint.baseUrl, timeoutMs: 5 }), /timed out/);
 });
 
 test("remote rules replace stale local rules without carrying remote scripts or schedules", () => {

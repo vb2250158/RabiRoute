@@ -352,7 +352,6 @@ test("plan task completion respects the source Agent end's Hook switch", async (
     sessionContextEnabled: true,
     reasoningContextEnabled: true,
     planTaskCompletionEnabled: false,
-    agentCommunicationEnforcementEnabled: true,
     onlyPrimaryPersonaCanSendMessages: false
   };
   let handoffCount = 0;

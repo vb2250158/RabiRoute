@@ -4,13 +4,15 @@ import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { createAstrbotControlOperations, createCopilotControlOperations, type CopilotControlOperationsContext, type CopilotLoginResult } from "./agentProviderControlRoutes.js";
-import { testAstrbotLogin } from "../agentAdapters/managerApi.js";
+import { createAstrbotControlOperations } from "../plugins/io.rabiroute.agent.astrbot/src/manager/astrbotControlOperations.js";
+import { createCopilotControlOperations } from "../plugins/io.rabiroute.agent.copilot-cli/src/manager/copilotControlOperations.js";
+import type { CopilotControlOperationsContext, CopilotLoginResult } from "../shared/agentProviderControlContract.js";
+import { testAstrbotLogin } from "../plugins/io.rabiroute.agent.astrbot/src/agentAdapters/astrbotManagerApi.js";
 import { ManagerPluginRouteRegistry } from "./managerPluginRouteRegistry.js";
 import { markAuthenticatedConnectionRequest } from "./connectionRequestAccess.js";
 import { LanAgentAuthority } from "./lanAgentAuthority.js";
 import { evaluateLanAgentRequest, assertTrustedLanAgentPrincipal } from "./lanAgentRequestAccess.js";
-import { registerLanAgentBodyGuard, assertLanAgentBodyAuthority } from "./lanAgentBodyAuthority.js";
+import { registerLanAgentBodyGuard } from "./lanAgentBodyAuthority.js";
 
 async function fixture(t: test.TestContext, overrides: Partial<CopilotControlOperationsContext> = {}, astrbot = testAstrbotLogin) {
   const root = await mkdtemp(path.join(os.tmpdir(), "provider-operations-"));
@@ -26,7 +28,7 @@ async function fixture(t: test.TestContext, overrides: Partial<CopilotControlOpe
   const server = http.createServer((request, response) => {
     if (evaluateLanAgentRequest(request, authority, true).kind !== "agent") { response.writeHead(401).end(); return; }
     markAuthenticatedConnectionRequest(request, () => { assertTrustedLanAgentPrincipal(request); });
-    registerLanAgentBodyGuard(request, body => assertLanAgentBodyAuthority(new URL(request.url!, "http://fixture").pathname, body, undefined));
+    registerLanAgentBodyGuard(request, () => {});
     if (!registry.handle(request, new URL(request.url!, "http://fixture"), response)) response.writeHead(404).end();
   });
   t.after(async () => { server.closeAllConnections(); await registration.dispose(); await new Promise<void>(resolve => server.close(() => resolve()));

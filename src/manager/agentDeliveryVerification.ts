@@ -1,5 +1,6 @@
 import { getTimeoutMs } from "../shared/timeoutSettings.js";
-import { readNapCatGroupFiles, type GroupFilesPage, type NapCatEndpoint } from "../napcat.js";
+import type { GroupFilesPage, NapCatEndpoint } from "../plugins/io.rabiroute.endpoint.napcat/src/napcat.js";
+import type { MessageEndpointEgressLease, MessageEndpointEgressProvider } from "@rabiroute/plugin-sdk";
 
 /** Immutable evidence from the original delivery; names cannot identify a file. */
 export type OriginalQqFileBinding = Readonly<{
@@ -27,6 +28,7 @@ export type QqFileVerificationDependencies = Readonly<{
   readCurrentBinding: (original: OriginalQqFileBinding) => CurrentQqFileBinding | undefined | Promise<CurrentQqFileBinding | undefined>;
   readAccountIdentity: (binding: CurrentQqFileBinding, signal: AbortSignal) => Promise<Readonly<{ selfId: string }> | undefined>;
   readFiles?: (endpoint: NapCatEndpoint, groupId: string, folderId?: string) => Promise<GroupFilesPage>;
+  endpointEgress?: (capability: string) => MessageEndpointEgressProvider | undefined;
 }>;
 
 export type QqFileVerificationResult = Readonly<{
@@ -74,6 +76,7 @@ export async function verifyQqFileCurrentPresence(original: OriginalQqFileBindin
       || typeof dependencies.readAccountIdentity !== "function") return result("unknown", "invalid_evidence");
 
     const controller = new AbortController();
+    let lease: MessageEndpointEgressLease | undefined;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const timeout = new Promise<never>((_, reject) => {
       timer = setTimeout(() => { controller.abort(); reject(new Error("Verification deadline")); }, getTimeoutMs("deadline.manager.agentDeliveryVerification.verifyQqFileCurrentPresence", 3000));
@@ -89,7 +92,16 @@ export async function verifyQqFileCurrentPresence(original: OriginalQqFileBindin
       if (account.selfId !== expected.selfId) return result("conflict", "account_changed");
       const preRead = checkBinding(expected, await bounded(Promise.resolve(dependencies.readCurrentBinding(expected))), before);
       if (preRead) return preRead;
-      const page = await bounded((dependencies.readFiles ?? readNapCatGroupFiles)({ ...before.endpoint }, expected.groupId, expected.folderId));
+      let page: GroupFilesPage;
+      if (dependencies.readFiles) {
+        page = await bounded(dependencies.readFiles({ ...before.endpoint }, expected.groupId, expected.folderId));
+      } else {
+        const provider = dependencies.endpointEgress?.("endpoint.napcat.egress@1");
+        if (!provider) return result("unknown", "read_failed");
+        lease = provider.acquire({ routeId: expected.routeId, instanceId: expected.instanceId, bindingRevision: expected.bindingRevision,
+          groupId: expected.groupId, folderId: expected.folderId, selfId: expected.selfId });
+        page = await bounded(lease.call<GroupFilesPage>("readNapCatGroupFiles", [{ ...before.endpoint }, expected.groupId, expected.folderId]));
+      }
       const afterAccount = await bounded(dependencies.readAccountIdentity(before, controller.signal));
       const postRead = checkBinding(expected, await bounded(Promise.resolve(dependencies.readCurrentBinding(expected))), before);
       if (postRead) return postRead;
@@ -105,6 +117,7 @@ export async function verifyQqFileCurrentPresence(original: OriginalQqFileBindin
     } finally {
       clearTimeout(timer);
       controller.abort();
+      lease?.release();
     }
   } catch {
     // Never expose callback errors, URLs, tokens, names, account data or platform bodies.

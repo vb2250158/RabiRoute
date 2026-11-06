@@ -19,6 +19,7 @@ import {
   type TrustedWebStatusRendererRegistration
 } from "./pluginRenderers";
 import { registerTrustedWebCommand, type TrustedWebCommandRegistration } from "./pluginCommands";
+import { registerPluginTranslations, type PluginTranslationCatalogs } from "./i18n/translationRegistry";
 
 type WebPluginModuleInstanceDescriptor = Readonly<{
   instanceId: string;
@@ -53,6 +54,7 @@ type WebPluginModuleRegistrationApi = Readonly<{
   instanceIds: readonly string[];
   h: typeof h;
   forInstance(instanceId: string): WebPluginInstanceRegistrationApi;
+  registerTranslations(catalogs: PluginTranslationCatalogs): () => void;
 }>;
 
 type WebPluginModule = Readonly<{
@@ -172,6 +174,7 @@ function registrationApi(descriptor: WebPluginModuleDescriptor, track: (cleanup:
     version: descriptor.version,
     instanceIds,
     h,
+    registerTranslations: (catalogs: PluginTranslationCatalogs) => track(registerPluginTranslations(descriptor.pluginId, catalogs)),
     forInstance(instanceId: string): WebPluginInstanceRegistrationApi {
       const api = instances.get(instanceId);
       if (!api) throw new Error(`Web Bundle does not own Manager instance: ${instanceId}.`);

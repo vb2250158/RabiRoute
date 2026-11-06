@@ -7,7 +7,7 @@ import { configureTimeouts, readTimeoutOverrides } from "../shared/timeoutSettin
 import type { TunnelChannel } from "./channel.js";
 import { proxyTunnel, serveTunnel, tunnelFetch, tunnelHeaders } from "./http.js";
 import { TunnelSession, type TunnelStream } from "./session.js";
-import { SpeechApiOwner, createSpeechApiOperations } from "../manager/speechApiOperations.js";
+import { SpeechApiOwner, createSpeechApiOperations } from "../plugins/io.rabiroute.manager.speech/src/manager/speechApiOperations.js";
 import type { SpeechApiContext } from "../manager/speechApiContext.js";
 import { ManagerPluginRouteRegistry } from "../manager/managerPluginRouteRegistry.js";
 import { issueInternalManagerHopHeaders, validateInternalManagerHop } from "../shared/internalManagerHop.js";

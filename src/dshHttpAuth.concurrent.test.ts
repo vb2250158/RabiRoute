@@ -3,7 +3,7 @@ import test from 'node:test';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { dshAuthenticatedFetch } from './dshHttpAuth.js';
+import { dshAuthenticatedFetch } from './plugins/io.rabiroute.agent.dsh/src/dshHttpAuth.js';
 
 test('concurrent authenticated reads share exchange; transport secrets never escape errors', async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-auth-concurrent-'));

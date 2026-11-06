@@ -10,6 +10,43 @@ Windows startup adds a highest-privilege Host task registered through one UAC ap
 
 The Windows package has one application-lifecycle entry: `RabiRouteHost.exe`. Manager owns business state and the tray/task window is presentation; both are same-generation children created by Host. The tray is neither a lifecycle owner nor a second desktop application.
 
+## Process names, icons, and ownership
+
+The build writes product metadata and `assets/rabiroute-icon.ico` into the actual executables before manifest hashing. A command-line title does not replace executable identity.
+
+| Purpose | Task Manager name | Executable |
+| --- | --- | --- |
+| Application lifecycle | RabiRoute Host | `RabiRouteHost.exe` |
+| Manager and background workers | RabiRoute Runtime | `runtime/RabiRoute.Runtime.exe` |
+| Tray and desktop windows | RabiRoute Desktop | `desktop-runtime/python/pythonw.exe` |
+| Local speech service | RabiSpeech | `runtime/speech/RabiSpeech.exe` |
+| Windows remote Agent main process and workers | Rabi Agent Runtime | `runtime/windows-<arch>/RabiAgent.Runtime.exe` beside the private configuration |
+| Remote Agent desktop panel | Rabi Agent Tray | `dist/native/RabiAgent.Tray.exe` |
+| Remote Agent terminal | Rabi Agent Terminal | `dist/native/RabiAgent.Terminal.exe` |
+| Remote Agent computer operations | Rabi Agent Computer | `dist/native/RabiAgent.Computer.exe` |
+
+The standard speech Python receives the same branding without requiring optional speech models. Modified interpreters retain engine versions and copyright while removing the upstream signature that no longer applies; branded files do not claim upstream signing. The first migration from `runtime/node.exe` changes the firewall executable path once; subsequent releases keep it stable. Independent third-party applications retain their own identity.
+
+Manager directly starts the branded speech executable in packaged mode; source mode without portable Python retains its PowerShell entry. Descendants inherit the same Windows Job owned by Host. The process tree may have several levels while one Host owns the whole generation. Task Manager grouping and parent PIDs are diagnostic clues; check live Job membership before calling a process orphaned. Host status contains a publication-time member snapshot rather than a live complete list.
+
+Adopting new executable identities requires a Host-managed generation switch. A source build or isolated test does not mean the installed application has adopted them.
+
+### Module shutdown and process trees
+
+Shared Windows process leases create a separate Job before launch. A trusted Node entry joins using its own original handle before importing business code or starting a Python, PowerShell or other target. Node IPC, arguments and module preloads preserve their semantics. A root exit does not release descendant leases; the current Job must be empty and all acquired original member handles must signal exit. Failed admission never executes the business entry. Initial cancellation stops the unadmitted root before terminating the Job.
+
+Internal callers use structured `fork` / `spawn` descriptors rather than executing arbitrary factories before acquiring ownership. `--import`, `--require` and `NODE_OPTIONS` preloads run after admission, with package resolution retaining the original working directory and ESM/CJS conditions. Fork loader/eval/env-file/config-file startup modes that cannot be migrated equivalently fail before creation with migration guidance instead of silently dropping arguments. This new kernel-tree proof targets Windows; Linux keeps its existing implementation without claiming cgroup-level cleanup.
+
+- A module owns the processes, descendants, in-flight work and resource handles it creates. Host's generation-wide exit guarantee does not replace cleanup when an individual module is disabled.
+- Hot replacement explicitly transfers the same resource owner; failed preparation retains existing resources. Final shutdown closes admission, finishes accepted work and confirms that the owned tree has exited before releasing records, configuration or device sessions.
+- Failed or uncertain termination and unreadable identity retain the original record and retirement fence. Reconcile that owner before creating a replacement.
+- Windows tree ownership is proven by kernel Jobs and original handles. Root-process exit, IPC disconnection, sending a termination request or a fixed delay alone does not prove descendant cleanup.
+- An existing external QQ, independently started application or external model service retains its identity and lifecycle; the module owns only its connection. Check Task Manager grouping separately from parent relationships and Job membership.
+
+Regression checks cover normal shutdown, deadlines/cancellation, crashes, root exit before descendants, module disable, hot replacement, retry after failed cleanup and preservation of external instances. Camera and model owners retain processes after termination failure; compilers and helpers report completion only after actual closure. Process-entry changes also verify build outputs, signed asset catalogs and the actual installed files.
+
+See [Rabi Agent](../apps/rabi-agent/README_en.md) for the Windows branded bundle, fixed runtime path and startup entry. It explicitly adopts a verified matching Node/npm version and architecture, without editing the system interpreter or adding architecture-specific binaries to the generic Node source release.
+
 ## Load on demand at startup
 
 When opening the application, Bootstrap uses `current.json` to locate the local version and Host Core. It does not read the release manifest, enumerate the complete package, or hash every file. A missing, malformed or stale manifest, an extra backup file, or changes to unrelated resources do not block the whole application from starting.
@@ -111,7 +148,7 @@ Manager also holds an operating-system named-pipe lease derived from the current
 
 For every application generation, Host creates a new Windows Job. Manager and tray are created with `CREATE_SUSPENDED`, assigned to the Job, and then resumed, so closing Host or the Job cannot leave orphan children. Manager starts first. Host accepts only a structured READY carrying the expected `applicationGenerationId`, Manager PID, `managerInstanceId`, and loopback `baseUrl`; the tray starts only after that validation succeeds.
 
-Each release still stores its manifest-validated Node.js copy at `versions/<releaseId>/node.exe`. Before Manager starts, Host verifies and synchronizes that file to the fixed install-root path `runtime/node.exe`; Manager, Routes, and workers all start through that path. An upgrade changes release content without changing the network-program path seen by Windows, so enabling LAN WebGUI or RabiLink LAN remote access no longer causes a new firewall prompt for every `releaseId`. Host repairs `runtime/node.exe` when it differs from the active release copy. Uninstall removes it only when the hashes match and preserves every other file.
+Each release still stores its manifest-validated Node.js copy at `versions/<releaseId>/node.exe`. Before Manager starts, Host verifies and synchronizes that file to the fixed install-root path `runtime/RabiRoute.Runtime.exe`; Manager, Routes, and workers all start through that path. An upgrade changes release content without changing the network-program path seen by Windows, so enabling LAN WebGUI or RabiLink LAN remote access no longer causes a new firewall prompt for every `releaseId`. Host repairs `runtime/RabiRoute.Runtime.exe` when it differs from the active release copy. Uninstall removes it only when the hashes match and preserves every other file.
 
 Host also provides Manager and Desktop with a read-only package root (`RABIROUTE_PACKAGE_ROOT`) and a stable writable state root (`RABIROUTE_STATE_ROOT`). Desktop loads code and icons from the package root, while screenshot images, region history, pin state, selected-text settings, and generated COM caches are written only under the installation root. Runtime data does not enter `versions/<releaseId>`. Release manifests serve build and installation tools; normal startup and status reads do not scan the entire version.
 
@@ -239,7 +276,7 @@ GitHub Actions explicitly sets a local Runner output directory through `RABIROUT
 The release contains:
 
 - a self-contained, single-file .NET 9 `RabiRouteHost.exe`;
-- the `dist/` Manager, RibiWebGUI, and 29 built-in plugin packages;
+- the `dist/` Manager, RibiWebGUI, and 42 built-in plugin packages;
 - a local Node.js runtime and production dependencies;
 - the presentation-only PySide6/Qt Desktop under `desktop-runtime/`;
 - default configuration and public assets.
@@ -265,4 +302,4 @@ Desktop keeps one crash-evidence bundle per launch; Manager, plugins, and Routes
 5. quit leaves no Host, Manager, tray, or leased plugin process, and nothing resurrects;
 6. `--command status --json` matches Manager `/meta` generation, instance, and URL;
 7. retired lifecycle entries, fixed-port defaults, and Manager HTTP application-start/stop routes are absent from the production path and package.
-8. Manager and its Node.js children execute through `<install-root>/runtime/node.exe`; an upgrade does not fall back to `versions/<releaseId>/node.exe`.
+8. Manager and its Node.js children execute through `<install-root>/runtime/RabiRoute.Runtime.exe`; an upgrade does not fall back to `versions/<releaseId>/node.exe`.

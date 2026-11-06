@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { readDshPrimaryBinding, readDshPrimaryBindingAsync } from "./dshSessionBridge.js";
+import { readDshPrimaryBinding, readDshPrimaryBindingAsync } from "./plugins/io.rabiroute.agent.dsh/src/dshSessionBridge.js";
 
 const settings = { dshSessionId: "session-00000000-0000-0000-0000-000000000001", dshSessionName: "existing",
   dshCwd: "/workspace", dshBaseUrl: "http://127.0.0.1:12345" };

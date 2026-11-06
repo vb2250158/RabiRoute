@@ -8,6 +8,7 @@ import { classifyRouteChange, endpointRouteInputs, endpointRouteProjection, inhe
 import { parsePluginProfile } from "../plugin-kernel/profile.js";
 import { parsePluginManifest } from "../plugin-kernel/manifest.js";
 import { scopeMessageEndpointHostPorts } from "../runtime/messageEndpointHostPorts.js";
+import { canonicalPluginSourceFixture } from "../manager/canonicalPluginSource.fixture.js";
 
 const types = ["napcat", "heartbeat", "wecom", "weixin", "feishu", "webhook", "rabilink"];
 const environment: Record<string, string> = {
@@ -56,10 +57,13 @@ test("disabled field ownership is read as metadata and an active immutable owner
 });
 
 test("seven package projections preserve actual config parser facts and scope future empty/false/zero changes", async () => {
-  const declarations = await Promise.all(types.map(async type => JSON.parse(await fs.readFile(path.resolve(`plugins/builtin/io.rabiroute.endpoint.${type}/1.0.0/route-config.json`), "utf8")) as EndpointRouteConfigDeclaration));
+  const declarations = await Promise.all(types.map(async type => {
+    const source = await canonicalPluginSourceFixture(`io.rabiroute.endpoint.${type}`);
+    return JSON.parse(await fs.readFile(path.join(source.directory, "route-config.json"), "utf8")) as EndpointRouteConfigDeclaration;
+  }));
   const original = Object.fromEntries(Object.values(environment).map(key => [key, process.env[key]]));
   // @ts-expect-error The endpoint owns this pure JavaScript projection artifact.
-  const napcatProject = (await import("../../plugins/builtin/io.rabiroute.endpoint.napcat/1.0.0/route-config.mjs")).projectRouteTransport;
+  const napcatProject = (await import("../plugins/io.rabiroute.endpoint.napcat/route-config.mjs")).projectRouteTransport;
   const rows: Record<string, unknown>[] = [
     {gatewayPort: 9010},
     {gatewayPort: 9010, napcatInstances: [], napcatAccessToken: "", webhookPort: 0, webhookPath: "", rabiLinkWebhookHost: " ", rabiLinkWebhookPort: 0, rabiLinkWebhookPath: "", heartbeatIntervalSeconds: 0, heartbeatMessage: "", heartbeatSkipWhenAgentBusy: false, feishuWebhookPath: " ", feishuWebhookPort: 0, feishuEventSubscriptionEnabled: false, weixinBaseUrl: " ", weixinBotType: "", wecomBotSecret: ""},

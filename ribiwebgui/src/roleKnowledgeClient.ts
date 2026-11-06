@@ -69,6 +69,7 @@ export type PlanAgentBindingStatus = {
   threadId: string;
   threadTitle: string;
   workspace: string;
+  instanceBinding?: import("@shared/agentInstance").AgentInstanceBinding;
   working: boolean;
   agentStatus: PlanAgentWorkStatus;
   sessionStatus: PlanAgentSessionStatus;
@@ -171,7 +172,7 @@ type ManagerLifecycleIdentity = {
 };
 
 type FocusedPlanSnapshot = { roleId: string; planId: string; revision: string; plan: RolePlan };
-import { remotePersonaServicePath } from "./persona/remotePersonaReference";
+import { remotePersonaServicePath } from "../../src/plugins/io.rabiroute.manager.persona/web/persona/remotePersonaReference";
 
 export function createRoleKnowledgeClient(sourceDeviceId = "") {
 
@@ -590,7 +591,7 @@ async function loadPlanAgentStatuses(
   };
 }
 
-async function openPlanHistoryAgent(roleId: string, planId: string, historyId: string): Promise<{ opened: true }> {
+async function openPlanHistoryAgent(roleId: string, planId: string, historyId: string): Promise<{ opened: true; instanceBinding?: import("@shared/agentInstance").AgentInstanceBinding }> {
   return managerData(`/api/roles/${encodeURIComponent(roleId)}/plan-agents/${encodeURIComponent(planId)}/open`, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -602,7 +603,7 @@ async function openPlanAgentTask(
   roleId: string,
   planId: string,
   role: PlanAgentRole
-): Promise<{ opened: true; agentType: "codex" | "dsh"; threadId: string; threadTitle: string; workspace: string }> {
+): Promise<{ opened: true; agentType: "codex" | "dsh"; threadId: string; threadTitle: string; workspace: string; instanceBinding?: import("@shared/agentInstance").AgentInstanceBinding }> {
   return managerData(
     `/api/roles/${encodeURIComponent(roleId)}/plan-agents/${encodeURIComponent(planId)}/open`,
     {

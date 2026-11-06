@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { readNapCatGroupFiles, type GroupFilesPage } from "../napcat.js";
+import { readNapCatGroupFiles, type GroupFilesPage } from "../plugins/io.rabiroute.endpoint.napcat/src/napcat.js";
 import { verifyQqFileCurrentPresence, type CurrentQqFileBinding, type OriginalQqFileBinding, type QqFileVerificationDependencies } from "./agentDeliveryVerification.js";
+import type { MessageEndpointEgressProvider } from "@rabiroute/plugin-sdk";
 
 const original: OriginalQqFileBinding = { routeId: "route-test", instanceId: "instance-test", groupId: "10001", platformFileId: "file-test", selfId: "20001", bindingRevision: "revision-1" };
 function fixture() {
@@ -39,6 +40,40 @@ async function verify(dependencies: QqFileVerificationDependencies, expected = o
   assert.ok(!("absence" in result));
   return result;
 }
+
+test("owned read failure releases its exact lease and never falls back to the static platform implementation", async () => {
+  const f = fixture();
+  let releases = 0;
+  const dependencies: QqFileVerificationDependencies = { ...f.dependencies, readFiles: undefined,
+    endpointEgress: capability => {
+      assert.equal(capability, "endpoint.napcat.egress@1");
+      const provider: MessageEndpointEgressProvider = {
+        identity: { applicationGenerationId: "test-generation", managerInstanceId: "test-manager", activationId: "test-activation",
+          instanceId: original.instanceId, pluginId: "io.rabiroute.endpoint.napcat", version: "0.1.1", revision: "test", host: "manager" },
+        async runAcceptedWork(operation) { return await operation(); },
+        inspect() { return { accepting: true, activeLeases: 0 }; },
+        acquire(snapshot) {
+        assert.equal(snapshot.instanceId, original.instanceId);
+        assert.equal(snapshot.bindingRevision, original.bindingRevision);
+        assert.equal(Object.hasOwn(snapshot, "endpoint"), false);
+        return { snapshot, async call(operation: string) {
+          assert.equal(operation, "readNapCatGroupFiles");
+          throw new Error("fake-private-platform-error");
+        }, release() { releases++; } };
+        }
+      };
+      return provider;
+    }
+  };
+  const failure = await verify(dependencies);
+  assert.equal(failure.reason, "read_failed");
+  assert.equal(JSON.stringify(failure).includes("fake-private"), false);
+  assert.equal(releases, 1);
+  assert.equal(f.calls(), 0);
+  assert.equal((await verify({ ...dependencies, endpointEgress: () => undefined })).reason, "read_failed");
+  assert.equal(releases, 1);
+  assert.equal(f.calls(), 0);
+});
 
 test("精确 ID 命中仅证明当前存在，假 transport 只执行只读动作", async () => {
   const f = fixture();

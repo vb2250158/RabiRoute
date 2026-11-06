@@ -35,10 +35,14 @@ RabiRoute 是消息网关和 Policy Router，负责消息接入、事件记录�
 ## 开发、构建与运行
 
 - Agent 适配器改动先读 `skills/create-rabiroute-agent-adapter/SKILL.md`；Rokid/CXR 改动先读 `skills/rokid-development/SKILL.md`，采用项目当前 CXR 技术路线。
-- 新平台适配放 src/adapters；路由、模板和投递在 src/forwarding.ts；管理 API 与生命周期在 src/manager.ts。router 与处理端通过稳定接口协作。
+- 插件业务实现、配置定义、界面、翻译、测试和资源放 `src/plugins/<稳定插件ID>/`；源码只保留一份，不按版本复制。共享路由、配置、身份与账本通过原 owner 和公开 SDK 协作，宿主不再注入平台业务工厂。
+- 插件更新递增自己的版本；新插件从 `0.1.1` 起步，已有公开扩展继续原版本序列。宿主只在架构、扩展点及启动合同变化时升版；发布版本的字节保持不可变。
+- 公开 schema、默认值与占位示例随插件提交；实际配置、凭据和存档归私有 owner。存档使用稳定插件/实例身份，不含包版本；迁移保留原始数据、身份与恢复证据，单项异常在对应 owner 或实例内隔离。目录与流程见 [插件源码](docs/plugin-source-layout.md)及[插件存档](docs/plugin-storage.md)。
 - 公共实现采用通用配置、契约与插件。私有业务、凭据和运行数据保存在经 git check-ignore 与跟踪状态确认的本地私有位置；公开代码、示例、日志和产物使用通用标识与脱敏值。
 - 功能改动运行匹配测试与 `npm run build`。Manager、WebGUI、插件及启动链先读 `skills/source-hot-patch-development/SKILL.md`，按支持矩阵使用原生热补丁；需要生命周期切换时交给 Host。
 - 回读健康与目标行为。热补丁核对同一 Manager/PID 的代码版本和候选 hash，切换核对新 generation；页面核对根 HTML 及实际资源 hash。
+- 为自有常驻进程设置产品名称和图标；Windows 本机子孙进程纳入 Host 同代 Job，远端 Agent 由其稳定启动器拥有。模块停用、取消和失败时等待真实退出，未确认释放的资源保留原拥有者与围栏；热替换显式交接。外部独立应用保留各自身份与归属。
+- 进程改动验收名称、图标、正常退出、拥有者异常退出和局部停用后的实际残留。根据真实进程/内核拥有关系判断归属；任务管理器分组、父 PID、发出 kill 或超时本身不构成清理成功证据。详见 [Windows 进程归属](docs/windows-launcher-and-packaging.md#进程名称图标与归属)。
 - 清理本次调用链的过期代码、配置、路由和资源。确需兼容时记录用户、迁移路径、退出条件及验证。
 
 ## 目录与交付

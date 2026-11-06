@@ -5,7 +5,7 @@ import vm from "node:vm";
 import ts from "typescript";
 import { postRouteAgentThreadAction } from "../src/routeAgentThreadClient";
 
-const source = fs.readFileSync(new URL("../src/components/PeerRouteAgentSettings.vue", import.meta.url), "utf8");
+const source = fs.readFileSync(new URL("../../src/plugins/io.rabiroute.manager.message-adapter-control/web/components/PeerRouteAgentSettings.vue", import.meta.url), "utf8");
 function fixture(responses: Array<Response | Promise<Response>>) {
   const calls: Array<{ url: string; body: Record<string, unknown> }> = [], selected: unknown[] = [];
   let unmount = () => {};

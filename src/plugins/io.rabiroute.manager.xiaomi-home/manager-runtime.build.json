@@ -1,0 +1,47 @@
+{
+  "exports": [
+    {
+      "source": "src/plugins/io.rabiroute.manager.xiaomi-home/src/integrations/xiaomiHome/artifactStore.ts",
+      "name": "XiaomiHomeArtifactStore"
+    },
+    {
+      "source": "src/plugins/io.rabiroute.manager.xiaomi-home/src/integrations/xiaomiHome/settingsRuntime.ts",
+      "name": "XiaomiHomeSettingsStore"
+    },
+    {
+      "source": "src/plugins/io.rabiroute.manager.xiaomi-home/src/integrations/xiaomiHome/settingsRuntime.ts",
+      "name": "XiaomiHomeRuntimeController"
+    },
+    {
+      "source": "src/plugins/io.rabiroute.manager.xiaomi-home/src/integrations/xiaomiHome/managerOperations.ts",
+      "name": "createXiaomiHomeManagerOperations"
+    },
+    {
+      "source": "src/plugins/io.rabiroute.manager.xiaomi-home/src/integrations/xiaomiHome/gatewayDelivery.ts",
+      "name": "createXiaomiHomeGatewayDelivery"
+    },
+    {
+      "source": "src/plugins/io.rabiroute.manager.xiaomi-home/src/integrations/xiaomiHome/pluginResources.ts",
+      "name": "configureXiaomiHomePluginResources"
+    }
+  ],
+  "ownedPrefixes": [
+    "src/plugins/io.rabiroute.manager.xiaomi-home/"
+  ],
+  "ownedSources": [
+    "src/plugins/io.rabiroute.manager.xiaomi-home/src/xiaomiHomeEventDelivery.ts"
+  ],
+  "resources": [
+    {
+      "source": "src/plugins/io.rabiroute.manager.xiaomi-home/scripts/Install-HomeAssistantOs.ps1",
+      "target": "resources/Install-HomeAssistantOs.ps1"
+    }
+  ],
+  "workers": [
+    {
+      "source": "src/plugins/io.rabiroute.manager.xiaomi-home/src/integrations/xiaomiHome/vacuumVideoWorker.ts",
+      "target": "workers/vacuumVideoWorker.mjs"
+    }
+  ],
+  "packageId": "io.rabiroute.manager.xiaomi-home"
+}

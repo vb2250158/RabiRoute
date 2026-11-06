@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 2,
+  "id": "io.rabiroute.endpoint.heartbeat",
+  "version": "0.1.1",
+  "entries": {
+    "manager": {
+      "execution": "in_process",
+      "module": "./manager.mjs"
+    },
+    "gateway": {
+      "execution": "in_process",
+      "module": "./gateway.mjs"
+    }
+  },
+  "provides": [
+    "endpoint.heartbeat@1"
+  ],
+  "requires": [
+    "host.message-endpoints@1"
+  ],
+  "optional": [],
+  "permissions": [],
+  "displayName": "自动化调度",
+  "description": "执行自动化中的定时任务；无需添加消息连接器",
+  "icon": "mdi-timer-outline"
+}

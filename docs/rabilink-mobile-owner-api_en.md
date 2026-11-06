@@ -4,7 +4,7 @@
 
 # RabiLink mobile state API contracts
 
-This page is for Manager and remote client developers. `src/manager/rabiLinkMobileOperations.ts` owns the executable definitions; `src/manager/rabiLinkMobileOwner.ts` owns business behavior and persistence. The same definitions install routes and publish discovery records.
+This page is for Manager and remote client developers. `src/plugins/io.rabiroute.endpoint.rabilink/src/manager/rabiLinkMobileOperations.ts` owns the executable definitions; `src/plugins/io.rabiroute.endpoint.rabilink/src/manager/rabiLinkMobileOwner.ts` owns business behavior and persistence. The same definitions install routes and publish discovery records.
 
 ## Operations
 

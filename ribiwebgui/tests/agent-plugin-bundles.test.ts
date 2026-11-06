@@ -4,6 +4,7 @@ import test from "node:test";
 import { registeredWebSettingsRenderers, registerTrustedWebSettingsRenderer } from "../src/pluginRenderers";
 import type { AgentWebModuleApi } from "../src/agentAdapters/registerAgentAdapterRenderer";
 import type { GatewayDefinition } from "../src/types";
+import { registerPluginTranslations, type WebTranslationModuleApi } from "../src/i18n/translationRegistry";
 
 const packages = [
   ["codex", "codex", "Codex"], ["copilotCli", "copilot-cli", "CopilotCli"], ["marvis", "marvis", "Marvis"],
@@ -16,21 +17,21 @@ test("all nine Agent Web entries register and retire only their own real lazy ca
   t.after(() => { for (const dispose of disposers.reverse()) dispose(); });
   for (const [type, slug, card] of packages) {
     const instanceId = `agent:${slug}`, pluginId = `io.rabiroute.agent.${slug}`;
-    const packageRoot = new URL(`../../plugins/builtin/${pluginId}/1.0.0/`, import.meta.url);
+    const packageRoot = new URL(`../../src/plugins/${pluginId}/`, import.meta.url);
     const manifest = JSON.parse(fs.readFileSync(new URL("rabi.plugin.json", packageRoot), "utf8"));
     assert.deepEqual(manifest.entries.web, { execution: "in_process", module: "./web/client.mjs" },
       "the published Web entry must point directly at the generated asset wrapper");
     assert.equal(fs.existsSync(new URL("web.mjs", packageRoot)), false, "no redundant Web entry forwarding layer");
-    const api: AgentWebModuleApi = { instanceIds: [instanceId], forInstance: () => ({ registerSettingsRenderer: input =>
+    const api: AgentWebModuleApi & WebTranslationModuleApi = { registerTranslations: catalogs => registerPluginTranslations(pluginId, catalogs), instanceIds: [instanceId], forInstance: () => ({ registerSettingsRenderer: input =>
       registerTrustedWebSettingsRenderer({ ...input, instanceId, pluginId }) }) };
-    const module = await import(`../src/bundles/agents/${slug}`);
+    const module = await import(`../../src/plugins/io.rabiroute.agent.${slug}/web/entry`);
     disposers.push(module.activate(api));
     const registration = registeredWebSettingsRenderers().find(item => item.instanceId === instanceId)!;
     assert.equal(registration.rendererId, `agent.${type}.card.v1`);
     assert.equal(registration.contributionKind, "agent-adapter-settings");
     assert.deepEqual(registration.allowedSlots, [type]);
-    const source = fs.readFileSync(new URL(`../src/bundles/agents/${slug}.ts`, import.meta.url), "utf8");
-    assert.ok(source.includes(`import("../../agentAdapters/${card}AgentCard.vue")`));
+    const source = fs.readFileSync(new URL(`../../src/plugins/io.rabiroute.agent.${slug}/web/entry.ts`, import.meta.url), "utf8");
+    assert.ok(source.includes(`import("./agentAdapters/${card}AgentCard.vue")`));
     assert.equal(typeof registration.component, "object");
   }
   assert.equal(registeredWebSettingsRenderers().length, 9);
@@ -55,7 +56,7 @@ test("all nine Agent Web entries register and retire only their own real lazy ca
 });
 
 test("Route renders contributed cards and retains the original target and primary owners", () => {
-  const page = fs.readFileSync(new URL("../src/pages/RouteConfigPage.vue", import.meta.url), "utf8");
+  const page = fs.readFileSync(new URL("../../src/plugins/io.rabiroute.manager.message-adapter-control/web/pages/RouteConfigPage.vue", import.meta.url), "utf8");
   assert.match(page, /configuredAgentRows\(agentDefs\.value, agentTypes\.value\)/);
   assert.match(page, /<AgentAdapterCardHost :renderer="agent\.renderer" :context="agentCardContext\(agent\.type\)"/);
   assert.doesNotMatch(page, /v-model="gateway\.(?:astrbotPassword|copilotCliBin|marvisAppId|dshSessionId|workbuddyEndpoint|antigravityConversationId)"/);
@@ -79,7 +80,7 @@ test("each card retains its original saved fields and session selection handlers
     Antigravity: ["antigravityConversationId", "antigravityConversationName", "antigravityCwd", "selectAntigravitySession"]
   };
   for (const [card, names] of Object.entries(fields)) {
-    const source = fs.readFileSync(new URL(`../src/agentAdapters/${card}AgentCard.vue`, import.meta.url), "utf8");
+    const source = fs.readFileSync(new URL(`../../src/plugins/io.rabiroute.agent.${packages.find(item => item[2] === card)![1]}/web/agentAdapters/${card}AgentCard.vue`, import.meta.url), "utf8");
     for (const name of names) assert.ok(source.includes(name), `${card} lost ${name}`);
     assert.match(source, /store\.selectedGateway\?\.id === props\.context\.routeId/);
   }

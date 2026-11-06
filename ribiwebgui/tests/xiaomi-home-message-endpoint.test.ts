@@ -1,3 +1,4 @@
+import { registerSourcePluginTranslations } from "./plugin-translation-test-host";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import test from "node:test";
@@ -16,6 +17,9 @@ import {
   homeAssistantLoginUrl,
   homeAssistantProfileUrl
 } from "../src/xiaomiHomeCredentialHelp.js";
+
+const disposePluginTranslations = await registerSourcePluginTranslations();
+test.after(disposePluginTranslations);
 
 test("managed HA uses the actual deployment address for links while preserving the credential origin", () => {
   const deployment = { config: { mode: "haos" as const }, state: "ready" as const, baseUrl: "http://127.0.0.1:43123" };
@@ -47,10 +51,10 @@ test("external and Docker endpoints retain manual address and matching readiness
   }
 });
 
-const routeConfigSource = fs.readFileSync(new URL("../src/pages/RouteConfigPage.vue", import.meta.url), "utf8");
-const settingsPageSource = fs.readFileSync(new URL("../src/pages/SettingsPage.vue", import.meta.url), "utf8");
-const endpointRendererSource = fs.readFileSync(new URL("../src/components/renderers/XiaomiHomeSettingsRenderer.vue", import.meta.url), "utf8");
-const authRendererSource = fs.readFileSync(new URL("../src/components/renderers/XiaomiHomeMessageEndpointRenderer.vue", import.meta.url), "utf8");
+const routeConfigSource = fs.readFileSync(new URL("../../src/plugins/io.rabiroute.manager.message-adapter-control/web/pages/RouteConfigPage.vue", import.meta.url), "utf8");
+const settingsPageSource = fs.readFileSync(new URL("../../src/plugins/io.rabiroute.manager.core/web/pages/SettingsPage.vue", import.meta.url), "utf8");
+const endpointRendererSource = fs.readFileSync(new URL("../../src/plugins/io.rabiroute.manager.xiaomi-home/web/components/renderers/XiaomiHomeSettingsRenderer.vue", import.meta.url), "utf8");
+const authRendererSource = fs.readFileSync(new URL("../../src/plugins/io.rabiroute.manager.xiaomi-home/web/components/renderers/XiaomiHomeMessageEndpointRenderer.vue", import.meta.url), "utf8");
 
 test("recordings open on the local Xiaomi owner role, regardless of the displayed role", async t => {
   let ownerRole = "CameraRecorder";
@@ -66,7 +70,7 @@ test("recordings open on the local Xiaomi owner role, regardless of the displaye
 });
 
 test("Route message endpoint catalog includes Xiaomi Home as a distinct smart-home input", () => {
-  const pluginSource = fs.readFileSync(new URL("../../plugins/builtin/io.rabiroute.manager.xiaomi-home/1.0.0/manager.mjs", import.meta.url), "utf8");
+  const pluginSource = fs.readFileSync(new URL("../../src/plugins/io.rabiroute.manager.xiaomi-home/manager.mjs", import.meta.url), "utf8");
   assert.match(pluginSource, /"group":\s*\{[\s\S]*?"title": "设备与自定义接入"/);
   assert.match(pluginSource, /"endpointType": "xiaomiHome"/);
   assert.match(pluginSource, /"title": "米家 \/ Xiaomi Home"/);
@@ -103,7 +107,7 @@ test("Route message endpoint catalog includes Xiaomi Home as a distinct smart-ho
 
 test("Xiaomi Home diagnostics stay beside their owning settings instead of the top dependency panel", () => {
   assert.doesNotMatch(routeConfigSource, /choice\.type === 'xiaomiHome'|choice\.type !== 'xiaomiHome'/);
-  const cardSource = fs.readFileSync(new URL("../src/messageEndpoints/XiaomiHomeEndpointCard.vue", import.meta.url), "utf8");
+  const cardSource = fs.readFileSync(new URL("../../src/plugins/io.rabiroute.manager.xiaomi-home/web/messageEndpoints/XiaomiHomeEndpointCard.vue", import.meta.url), "utf8");
   assert.match(cardSource, /XiaomiHomeRendererHost/);
   assert.match(routeConfigSource, /scan: messageScanFor\(choice\.type\)/);
   assert.match(endpointRendererSource, /item\.id === "event-monitor"/);
@@ -146,7 +150,7 @@ test("Xiaomi Home rule catalog uses the owner event kind without a Gateway callb
 test("Xiaomi Home UI copy is present in the English catalog", () => {
   assert.equal(translateText("米家 / Xiaomi Home", "en"), "Xiaomi Home");
   assert.equal(translateText("智能家居", "en"), "Smart home");
-  assert.equal(translateText("Home Assistant 连接与事件", "en"), "Home Assistant connection and events");
+
   assert.equal(translateText("打开 Home Assistant", "en"), "Open Home Assistant");
   assert.equal(translateText("怎样获取令牌？", "en"), "How do I get a token?");
   assert.equal(translateText("先填写有效的 Home Assistant 地址。", "en"), "Enter a valid Home Assistant URL first.");

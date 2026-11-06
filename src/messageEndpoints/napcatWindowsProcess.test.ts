@@ -24,7 +24,7 @@ test("NapCat scanning hides its PowerShell probe and preserves the discovered pr
     syncBuiltinESMExports();
     fs.rmSync(root, { recursive: true, force: true });
   });
-  const { scanNapcatEndpoint } = await import("./napcatManager.js");
+  const { scanNapcatEndpoint } = await import("../plugins/io.rabiroute.endpoint.napcat/src/messageEndpoints/napcatManager.js");
   const result = await scanNapcatEndpoint({
     rootDir: root,
     getRuntimes: () => [],

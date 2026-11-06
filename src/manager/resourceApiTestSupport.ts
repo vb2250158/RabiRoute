@@ -2,7 +2,7 @@ import type http from "node:http";
 import type { ApiOperationResult } from "./apiOperationContract.js";
 import { runResourceCacheOperation, type ResourceCache, type ResourceCacheOptions } from "./resourceCache.js";
 import { runRecordingArchiveOperation, type RecordingArchiveRouteOptions } from "./recordingArchiveRoutes.js";
-import { runRecordingArchiveAdminOperation, type RecordingArchiveAdminOptions } from "./recordingArchiveAdminOperation.js";
+import { runRecordingArchiveAdminOperation, type RecordingArchiveAdminOptions } from "../plugins/io.rabiroute.manager.core/src/manager/recordingArchiveAdminOperation.js";
 import type { RecordingArchiveRuntime } from "./recordingArchiveRuntime.js";
 import { selectResourceApiTarget } from "./resourceApiContract.js";
 import { readResourceBytes } from "./resourceApiRequest.js";

@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 2,
+  "id": "io.rabiroute.manager.bilibili-history",
+  "version": "0.1.1",
+  "displayName": "哔哩哔哩历史",
+  "description": "同步观看记录并管理历史整理任务",
+  "icon": "mdi-history",
+  "entries": {
+    "manager": {
+      "execution": "in_process",
+      "module": "./manager.mjs"
+    }
+  },
+  "provides": [
+    "manager.bilibili-history@1"
+  ],
+  "requires": [
+    "host.manager.bilibili-history@2",
+    "manager.core@1",
+    "manager.persona@1"
+  ],
+  "optional": [],
+  "permissions": []
+}

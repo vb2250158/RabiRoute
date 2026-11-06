@@ -21,7 +21,7 @@ export async function executeEndpointOnOwner(
   delivery: NativeOwnerDelivery,
   options: Pick<AgentThreadRequestOptions, "dshBaseUrl" | "invokeAgentOperation" | "getProviders"> & { allowedWorkspaces?: string[] },
   assertAuthorized: () => void | Promise<void>,
-  transport?: { sendCodex: typeof import("../codexRuntime.js").sendCodexThreadMessage }
+  transport?: { sendCodex: import("../agentAdapters/codexContracts.js").CodexNativeOperations["sendCodexThreadMessage"] }
 ): Promise<{ threadId: string; action: string; transport: string }> {
   await assertAuthorized();
   assertEndpointOwnerDirectory(delivery.executionOptions.cwd);

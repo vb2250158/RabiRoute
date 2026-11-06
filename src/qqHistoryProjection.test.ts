@@ -5,7 +5,7 @@ import path from 'node:path';
 import test from 'node:test';
 import {messageContextFromHistoryRecord,appendMessageContextToDir,recentMessageContextItems} from './messageContextStore.js';
 import {storedQqParts} from './shared/qqMessageParts.js';
-import {projectPublicQqMessage} from './manager/qqReadContract.js';
+import {projectPublicQqMessage} from './plugins/io.rabiroute.endpoint.napcat/src/manager/qqReadContract.js';
 
 const base={time:1760000000,groupId:10001,userId:20002,senderName:'30003',messageId:'-7',rawMessage:'晚一点',gatewayId:'route',instanceId:'one'};
 test('QQ text, mentions and replies never become files; media indices stay continuous',()=>{

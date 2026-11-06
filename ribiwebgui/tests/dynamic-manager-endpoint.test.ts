@@ -3,13 +3,13 @@ import fs from "node:fs";
 import test from "node:test";
 
 const gatewayStoreSource = fs.readFileSync(new URL("../src/stores/gatewayStore.ts", import.meta.url), "utf8");
-const routeConfigSource = fs.readFileSync(new URL("../src/pages/RouteConfigPage.vue", import.meta.url), "utf8");
-const settingsSource = fs.readFileSync(new URL("../src/pages/SettingsPage.vue", import.meta.url), "utf8");
-const catalogSource = fs.readFileSync(new URL("../src/i18n/catalog.ts", import.meta.url), "utf8");
+const routeConfigSource = fs.readFileSync(new URL("../../src/plugins/io.rabiroute.manager.message-adapter-control/web/pages/RouteConfigPage.vue", import.meta.url), "utf8");
+const settingsSource = fs.readFileSync(new URL("../../src/plugins/io.rabiroute.manager.core/web/pages/SettingsPage.vue", import.meta.url), "utf8");
+const catalogSource = fs.readFileSync(new URL("../../src/plugins/io.rabiroute.manager.core/web/translations.ts", import.meta.url), "utf8");
 const sharedGatewayModelSource = fs.readFileSync(new URL("../../src/shared/gatewayConfigModel.ts", import.meta.url), "utf8");
 const functionMapSource = fs.readFileSync(new URL("../../docs/project-function-map.md", import.meta.url), "utf8");
 const functionMapEnglishSource = fs.readFileSync(new URL("../../docs/project-function-map_en.md", import.meta.url), "utf8");
-const projectDocsPageSource = fs.readFileSync(new URL("../src/pages/ProjectDocsPage.vue", import.meta.url), "utf8");
+const projectDocsPageSource = fs.readFileSync(new URL("../../src/plugins/io.rabiroute.manager.core/web/pages/ProjectDocsPage.vue", import.meta.url), "utf8");
 const speechBenchmarkReportSource = fs.readFileSync(new URL("../public/reports/rabispeech-model-benchmark.html", import.meta.url), "utf8");
 
 test("WebGUI does not invent a fixed Manager endpoint before Host READY", () => {

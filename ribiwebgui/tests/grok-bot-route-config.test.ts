@@ -3,7 +3,7 @@ import test from "node:test";
 import { reactive } from "vue";
 import { cloneGatewayValue, mergeGatewayDraft } from "../src/gatewayDraft";
 import { createGrokBotRouteScan, grokBotSessionPickerItems, maxGrokBotSessionItems,
-  mergeGrokBotSessionPage, selectGrokBotRouteSession, selectGrokBotRoutePersona, grokBotPersonaPickerItems } from "../src/grokBotRouteConfig";
+  mergeGrokBotSessionPage, selectGrokBotRouteSession, selectGrokBotRoutePersona, grokBotPersonaPickerItems } from "../../src/plugins/io.rabiroute.agent.grok-bot/web/grokBotRouteConfig";
 import type { AgentScanResult, AgentScanSession, GatewayDefinition } from "../src/types";
 
 const sessionId = "grokBot:WyJleGFtcGxlLW93bmVyIiwiZXhhbXBsZS1zZXNzaW9uIl0";

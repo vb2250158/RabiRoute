@@ -119,3 +119,13 @@ test("Windows persona automation runs an approved cmd script and captures output
   assert.equal(result.exitCode, 0);
   assert.match(result.stdout || "", /automation-ok/);
 });
+
+
+test("private sender filtering also governs message-triggered scripts without running a script", () => {
+  const selected = route("data/roles", { automationRules: [{ id: "private-script", enabled: true,
+    trigger: { type: "message", routeKinds: ["private"], targetUserId: "20001" },
+    action: { type: "run_script", scriptPath: "original-script.js" } }] });
+  const record = { time: 1, userId: 20001, rawMessage: "hello", senderName: "Changed nickname", adapterType: "napcat" };
+  assert.equal(matchingMessageScriptAutomations(selected, "private", record, {}).length, 1);
+  assert.equal(matchingMessageScriptAutomations(selected, "private", { ...record, userId: 20002 }, {}).length, 0);
+});

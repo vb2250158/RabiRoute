@@ -1,6 +1,7 @@
 import { computed, readonly, ref } from "vue";
 import { englishCatalog, englishPatterns } from "./catalog";
 import { japaneseCatalog, japanesePatterns } from "./japanese";
+import { onPluginTranslationsChanged, pluginTranslation } from "./translationRegistry";
 
 export type AppLocale = "zh-CN" | "en" | "ja";
 
@@ -30,6 +31,11 @@ function browserLocale(): AppLocale {
 }
 
 const activeLocale = ref<AppLocale>(browserLocale());
+const translationRevision = ref(0);
+onPluginTranslationsChanged(() => {
+  translationRevision.value++;
+  announceLocale(activeLocale.value);
+});
 
 function persistLocale(locale: AppLocale): void {
   if (typeof window === "undefined") return;
@@ -54,13 +60,14 @@ export function setLocale(locale: AppLocale): void {
 }
 
 export function translateText(source: string, locale: AppLocale = activeLocale.value): string {
+  void translationRevision.value;
   if (locale === "zh-CN" || !source) return source;
   const leading = source.match(/^\s*/)?.[0] || "";
   const trailing = source.match(/\s*$/)?.[0] || "";
   const text = source.slice(leading.length, source.length - trailing.length || undefined);
   const catalog = locale === "ja" ? japaneseCatalog : englishCatalog;
   const patterns = locale === "ja" ? japanesePatterns : englishPatterns;
-  const exact = catalog[text];
+  const exact = catalog[text] ?? pluginTranslation(locale, text);
   if (exact) return `${leading}${exact}${trailing}`;
   for (const [pattern, replacer] of patterns) {
     const match = text.match(pattern);

@@ -9,7 +9,6 @@ import { ensurePersonaPlanWorkflow, planStatusDefinition } from "../personaPlanW
 import { buildRoleKnowledgeContextView } from "../routing/roleKnowledgeContext.js";
 import { sanitizeRoleId } from "../shared/routeIdentity.js";
 import { roleFolderPath } from "../shared/routePaths.js";
-import { agentCommunicationToolDenial } from "./agentCommunicationHookPolicy.js";
 import { recordDataMutationAudit } from "../observability/dataMutationAudit.js";
 import { appendPersonaChatReply } from "../personaChatHistory.js";
 import { readPersonaConfigFragment } from "./configMigration.js";
@@ -54,7 +53,7 @@ export type PlanTaskCompletionResult = {
 };
 
 export type AgentRequestStopResult = {
-  status: "ignored" | "scheduled" | "pending" | "failed";
+  status: "ignored" | "recorded" | "pending" | "failed";
   reason: string;
   requestIds?: string[];
   /** Complete pending IDs for this exact session across all its workspaces. */
@@ -172,16 +171,6 @@ export type CodexHookControl =
   | { action: "bind"; roleId: string }
   | { action: "status" | "refresh" | "off" };
 
-export class CodexHookPlanStorageUnavailableError extends Error {
-  readonly code = "PLAN_STORAGE_STARTUP_UNAVAILABLE";
-  readonly statusCode = 503;
-
-  constructor() {
-    super("Plan storage recovery is not ready. Retry after the current startup recovery attempt completes.");
-    this.name = "CodexHookPlanStorageUnavailableError";
-  }
-}
-
 export type CodexHookContextServiceOptions = {
   /** Reports Stop progress before awaiting each stage, including failed stages. Observers cannot change Hook results. */
   onHookStage?: (request: CodexHookContextRequest, stage: {
@@ -193,11 +182,7 @@ export type CodexHookContextServiceOptions = {
   storePath: string;
   deliverPlanTaskCompletion?: (delivery: PlanTaskCompletionDelivery) => Promise<void>;
   hookEnabled?: (request: CodexHookContextRequest) => boolean;
-  isManagedAgentSession?: (request: CodexHookContextRequest) => boolean;
   recordAgentRequestStop?: (request: CodexHookContextRequest) => Promise<AgentRequestStopResult> | AgentRequestStopResult;
-  /** Undefined role IDs require global recovery; explicit IDs scope all Stop plan reads. */
-  planStorageReady?: (roleIds?: readonly string[]) => boolean;
-  assertSessionPersonaOwner?: (sessionId: string, cwd?: string, sourceInstance?: PlanBindingSourceInstance) => void;
   chatHistoryRoleIds?: (request: CodexHookContextRequest) => readonly string[];
   /** Undefined means an ordinary session; an empty input list means dedicated but not yet verified. */
   memoryConsolidationInputIds?: (
@@ -421,7 +406,7 @@ export function parseCodexHookControl(prompt: string): CodexHookControl | null {
 
 /** Upgrade storage coordinates in memory only; the existing write boundary owns publication. */
 function migrateHookSessionKeys(store: CodexHookSessionStoreFile): CodexHookSessionStoreFile {
-  if (store.version === STORE_VERSION) return store;
+  if (store.version >= STORE_VERSION) return store;
   const localIds = new Set<string>(), remoteKeys = new Set<string>();
   const noteOwner = (value: unknown) => {
     if (!value || typeof value !== "object" || typeof (value as CodexHookSessionBinding).sessionId !== "string") return;
@@ -477,18 +462,29 @@ function migrateHookSessionKeys(store: CodexHookSessionStoreFile): CodexHookSess
   return migrated;
 }
 
+/** Same file-revision identity used by the existing plan read cache, scoped to this owner. */
+function hookStoreRevision(stat: fs.Stats): string {
+  return `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`;
+}
+
+function freezeHookStore<T>(value: T): T {
+  if (value && typeof value === "object" && !Object.isFrozen(value)) {
+    for (const child of Object.values(value)) freezeHookStore(child);
+    Object.freeze(value);
+  }
+  return value;
+}
+
 export class CodexHookContextService {
   private readonly onHookStage?: CodexHookContextServiceOptions["onHookStage"];
   private readonly readContext?: CodexHookContextServiceOptions["readContext"];
   private readonly contextQueues = new Map<string, { tail: Promise<void>; pending: number }>();
+  private storeSnapshot?: { revision: string; value: CodexHookSessionStoreFile; legacyRaw?: Buffer };
   private readonly rolesRoot: () => string;
   private readonly storePath: string;
   private readonly deliverPlanTaskCompletion?: (delivery: PlanTaskCompletionDelivery) => Promise<void>;
   private readonly hookEnabled?: (request: CodexHookContextRequest) => boolean;
-  private readonly isManagedAgentSession?: (request: CodexHookContextRequest) => boolean;
   private readonly recordAgentRequestStop?: (request: CodexHookContextRequest) => Promise<AgentRequestStopResult> | AgentRequestStopResult;
-  private readonly planStorageReady?: CodexHookContextServiceOptions["planStorageReady"];
-  private readonly assertSessionPersonaOwner?: CodexHookContextServiceOptions["assertSessionPersonaOwner"];
   private readonly chatHistoryRoleIds?: CodexHookContextServiceOptions["chatHistoryRoleIds"];
   private readonly memoryConsolidationInputIds?: CodexHookContextServiceOptions["memoryConsolidationInputIds"];
   private readonly onChatHistoryChanged?: CodexHookContextServiceOptions["onChatHistoryChanged"];
@@ -503,10 +499,7 @@ export class CodexHookContextService {
     this.storePath = path.resolve(options.storePath);
     this.deliverPlanTaskCompletion = options.deliverPlanTaskCompletion;
     this.hookEnabled = options.hookEnabled;
-    this.isManagedAgentSession = options.isManagedAgentSession;
     this.recordAgentRequestStop = options.recordAgentRequestStop;
-    this.planStorageReady = options.planStorageReady;
-    this.assertSessionPersonaOwner = options.assertSessionPersonaOwner;
     this.chatHistoryRoleIds = options.chatHistoryRoleIds;
     this.memoryConsolidationInputIds = options.memoryConsolidationInputIds;
     this.onChatHistoryChanged = options.onChatHistoryChanged;
@@ -549,14 +542,14 @@ export class CodexHookContextService {
   }
 
   listBindings(): CodexHookSessionBinding[] {
-    return Object.values(this.readStore().sessions)
+    return Object.values(this.readStore().sessions).map(binding => structuredClone(binding))
       .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
   }
 
   getBinding(sessionId: string, sourceInstance?: PlanBindingSourceInstance, agentType?: string): CodexHookSessionBinding | null {
     const id = this.requireSessionId(sessionId);
     const sessions = this.readStore().sessions, key = planBindingSourceKey({ sessionId: id, agentType, sourceInstance });
-    return Object.hasOwn(sessions, key) ? sessions[key]! : null;
+    return Object.hasOwn(sessions, key) ? structuredClone(sessions[key]!) : null;
   }
 
   private sessionPlanRoleIds(sessionId: string, sourceInstance?: PlanBindingSourceInstance, agentType?: string): readonly string[] | undefined {
@@ -566,7 +559,6 @@ export class CodexHookContextService {
   }
 
   bindSession(sessionId: string, roleId: string, sourceInstance?: PlanBindingSourceInstance, agentType?: string): CodexHookSessionBinding {
-    this.assertSessionPersonaOwner?.(sessionId, undefined, sourceInstance);
     const id = this.requireSessionId(sessionId);
     const role = this.requireRole(roleId);
     return this.bindValidatedSession(id, role.roleId, sourceInstance, agentType);
@@ -586,7 +578,7 @@ export class CodexHookContextService {
     };
     store.sessions = { ...store.sessions, [key]: binding };
     this.writeStore(store);
-    return binding;
+    return structuredClone(binding);
   }
 
   unbindSession(sessionId: string, sourceInstance?: PlanBindingSourceInstance, agentType?: string): CodexHookSessionBinding | null {
@@ -595,10 +587,11 @@ export class CodexHookContextService {
     const store = this.readStore();
     const previous = store.sessions[key] ?? null;
     if (previous) {
+      store.sessions = { ...store.sessions };
       delete store.sessions[key];
       this.writeStore(store);
     }
-    return previous;
+    return previous ? structuredClone(previous) : null;
   }
 
   async handleHook(request: CodexHookContextRequest): Promise<CodexHookContextResult> {
@@ -629,24 +622,7 @@ export class CodexHookContextService {
     request: CodexHookContextRequest,
     measure: <T>(name: string, task: () => T | Promise<T>) => Promise<T>
   ): Promise<CodexHookContextResult> {
-    this.assertSessionPersonaOwner?.(request.sessionId, request.cwd, request.sourceInstance);
     const planRoleIds = request.eventName === "Stop" ? this.sessionPlanRoleIds(request.sessionId, request.sourceInstance, request.agentType) : undefined;
-    // A bound Stop owns only that persona's plans. Unbound sessions still need
-    // the full catalog to discover task bindings without omitting other roles.
-    if (request.eventName === "Stop" && this.planStorageReady?.(planRoleIds) === false) {
-      throw new CodexHookPlanStorageUnavailableError();
-    }
-    const toolDecision = request.eventName === "PreToolUse"
-      ? agentCommunicationToolDenial(request, this.isManagedAgentSession?.(request) === true)
-      : undefined;
-    if (toolDecision) {
-      return {
-        action: "none",
-        binding: this.getBinding(request.sessionId, request.sourceInstance, request.agentType),
-        additionalContext: "",
-        toolDecision
-      };
-    }
     const enabled = !this.hookEnabled || this.hookEnabled(request);
     if (request.eventName === "Stop") {
       const followup = await measure("plan-followup", () => this.planFollowup(request, planRoleIds));
@@ -698,7 +674,6 @@ export class CodexHookContextService {
     while (!step.done) {
       const bindingBefore = JSON.stringify(this.getBinding(request.sessionId, request.sourceInstance, request.agentType));
       const reply = await this.readContext!(step.value);
-      this.assertSessionPersonaOwner?.(request.sessionId, request.cwd, request.sourceInstance);
       if (JSON.stringify(this.getBinding(request.sessionId, request.sourceInstance, request.agentType)) !== bindingBefore) {
         throw new Error("Codex hook binding changed while context was loading; retry.");
       }
@@ -714,7 +689,6 @@ export class CodexHookContextService {
   }
 
   private *contextSteps(request: CodexHookContextRequest): Generator<CodexHookContextReadRequest, CodexHookContextResult, CodexHookContextReadReply> {
-    this.assertSessionPersonaOwner?.(request.sessionId, request.cwd, request.sourceInstance);
     const sessionId = this.requireSessionId(request.sessionId);
     if (!["SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse"].includes(request.eventName)) {
       throw new Error(`Unsupported Codex hook event: ${request.eventName}`);
@@ -936,7 +910,7 @@ export class CodexHookContextService {
     this.replaceBinding(nextBinding);
     return {
       action,
-      binding: nextBinding,
+      binding: structuredClone(nextBinding),
       additionalContext: shouldRender
         ? excerpt(blocks.filter(Boolean).join("\n\n"), MAX_CONTEXT_CHARS, 1400)
         : ""
@@ -1034,10 +1008,10 @@ export class CodexHookContextService {
     const workspaceSet = new Set(current?.workspaces ?? []);
     files.forEach((file) => changed.add(file));
     changedWorkspaces.forEach((workspace) => workspaceSet.add(workspace));
-    store.projectFileChanges[sessionKey] = retainNewest({
+    store.projectFileChanges = { ...store.projectFileChanges, [sessionKey]: retainNewest({
       ...store.projectFileChanges[sessionKey],
       [turnId]: { files: [...changed].sort((left, right) => left.localeCompare(right)), workspaces: [...workspaceSet].sort((left, right) => left.localeCompare(right)) }
-    }, 64);
+    }, 64) };
     this.writeStore(store);
   }
 
@@ -1047,7 +1021,7 @@ export class CodexHookContextService {
     const store = this.readStore();
     const sessionKey = planBindingSourceKey(request);
     const state = turnId ? store.projectFileChanges[sessionKey]?.[turnId] : undefined;
-    const files = state?.files ?? [];
+    const files = [...(state?.files ?? [])];
     const changedWorkspaces = state?.workspaces ?? [];
     if (!turnId) return { result: { status: "failed", reason: "missing_turn_id", error: "Project file changes cannot be associated with a Stop turn." }, message: "" };
     if (store.projectFileChangeReminders[sessionKey]?.[turnId]) {
@@ -1064,10 +1038,10 @@ export class CodexHookContextService {
     if (matches.length === 0) return { result: { status: "ignored", reason: "no_matching_plan_task_binding", turnId, files }, message: "" };
     const plans = matches.map((match) => match.plan);
     const reminders = retainNewest({ ...store.projectFileChangeReminders[sessionKey], [turnId]: nowIso() }, 64);
-    store.projectFileChangeReminders[sessionKey] = reminders;
+    store.projectFileChangeReminders = { ...store.projectFileChangeReminders, [sessionKey]: reminders };
     const remainingChanges = { ...store.projectFileChanges[sessionKey] };
     delete remainingChanges[turnId];
-    store.projectFileChanges[sessionKey] = remainingChanges;
+    store.projectFileChanges = { ...store.projectFileChanges, [sessionKey]: remainingChanges };
     this.writeStore(store);
     return {
       result: { status: "delivered", reason: "project_file_changes_detected", planId: plans[0]?.id, planIds: plans.map((plan) => plan.id), turnId, files },
@@ -1099,7 +1073,7 @@ export class CodexHookContextService {
     // A failed/partial current read cannot erase this turn's already-published continuation boundary.
     if (result.turnId !== request.turnId || result.status === "failed") return { deferCompletion };
     const complete = result.snapshotComplete === true && Array.isArray(result.pendingSessionRequestIds);
-    if (result.status !== "scheduled" && result.status !== "pending" && !complete) return { deferCompletion };
+    if (result.status !== "recorded" && result.status !== "pending" && !complete) return { deferCompletion };
     const requestIds = [...new Set(result.requestIds ?? [])];
     const pending = new Set(complete ? result.pendingSessionRequestIds : requestIds);
     const previous = store.agentRequestStopReminders?.[sessionId];
@@ -1342,7 +1316,7 @@ export class CodexHookContextService {
       : null;
     if (nextBinding) store.sessions = { ...store.sessions, [planBindingSourceKey(nextBinding)]: nextBinding };
     const completionKey = planTaskCompletionKey(planBindingDeliveryIdentity(request), result.planId, result.turnId);
-    store.planTaskCompletions[completionKey] = {
+    store.planTaskCompletions = { ...store.planTaskCompletions, [completionKey]: {
       sessionId,
       ...(request.sourceInstance ? { sourceInstance: request.sourceInstance, agentType: request.agentType || "codex" } : {}),
       roleId,
@@ -1352,9 +1326,9 @@ export class CodexHookContextService {
       status: result.status,
       gatewayId: result.gatewayId,
       error: result.error
-    };
+    } };
     this.writeStore(store);
-    return { action: "none", binding: nextBinding, additionalContext: "", planTaskCompletion: result };
+    return { action: "none", binding: nextBinding ? structuredClone(nextBinding) : null, additionalContext: "", planTaskCompletion: result };
   }
 
   doctor(): Record<string, unknown> {
@@ -1366,7 +1340,7 @@ export class CodexHookContextService {
       roleIds: fs.existsSync(rolesRoot) ? this.listRoles() : [],
       storePath: this.storePath,
       bindings: this.listBindings().map(({ sessionId, roleId, updatedAt }) => ({ sessionId, roleId, updatedAt })),
-      planTaskCompletions: Object.values(this.readStore().planTaskCompletions)
+      planTaskCompletions: Object.values(this.readStore().planTaskCompletions).map(state => structuredClone(state))
         .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
     };
   }
@@ -1388,33 +1362,45 @@ export class CodexHookContextService {
   }
 
   private readStore(): CodexHookSessionStoreFile {
-    if (!fs.existsSync(this.storePath)) {
+    let revision: string;
+    try { revision = hookStoreRevision(fs.statSync(this.storePath)); }
+    catch (error) {
+      this.storeSnapshot = undefined;
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
       const empty: CodexHookSessionStoreFile = { version: STORE_VERSION, sessions: {}, planTaskCompletions: {}, projectFileChanges: {}, projectFileChangeReminders: {} };
       this.writeStore(empty);
-      return empty;
+      return { ...empty };
     }
-    const raw = JSON.parse(fs.readFileSync(this.storePath, "utf8")) as Partial<CodexHookSessionStoreFile>;
+    if (this.storeSnapshot?.revision === revision) return { ...this.storeSnapshot.value };
+    this.storeSnapshot = undefined;
+    const original = fs.readFileSync(this.storePath);
+    const raw = JSON.parse(original.toString("utf8")) as Partial<CodexHookSessionStoreFile>;
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error("Hook state is not an object; the original file is preserved.");
-    return migrateHookSessionKeys({
+    const value = migrateHookSessionKeys({
       ...raw,
       version: Number.isInteger(raw.version) ? raw.version! : 8,
       planFollowups: raw.planFollowups ?? {},
       agentRequestStopReminders: raw.agentRequestStopReminders ?? {},
       agentRequestStopFollowupTurns: raw.agentRequestStopFollowupTurns ?? {},
       sessions: raw.sessions && typeof raw.sessions === "object" ? raw.sessions : {},
-      planTaskCompletions: raw.planTaskCompletions && typeof raw.planTaskCompletions === "object"
-        ? raw.planTaskCompletions
-        : {},
+      planTaskCompletions: raw.planTaskCompletions && typeof raw.planTaskCompletions === "object" ? raw.planTaskCompletions : {},
       projectFileChanges: raw.projectFileChanges && typeof raw.projectFileChanges === "object" ? raw.projectFileChanges : {},
       projectFileChangeReminders: raw.projectFileChangeReminders && typeof raw.projectFileChangeReminders === "object" ? raw.projectFileChangeReminders : {}
     });
+    if (hookStoreRevision(fs.statSync(this.storePath)) === revision) {
+      freezeHookStore(value);
+      this.storeSnapshot = { revision, value, ...(!Number.isInteger(raw.version) || raw.version! < STORE_VERSION ? { legacyRaw: original } : {}) };
+    }
+    return { ...value };
   }
 
   private writeStore(store: CodexHookSessionStoreFile): void {
     if (fs.existsSync(this.storePath)) {
-      const original = fs.readFileSync(this.storePath);
-      const version = (JSON.parse(original.toString("utf8")) as { version?: unknown }).version;
-      if (!Number.isInteger(version) || Number(version) < STORE_VERSION) {
+      const revision = hookStoreRevision(fs.statSync(this.storePath));
+      // A draft never becomes the cache before the existing atomic publication succeeds.
+      if (this.storeSnapshot?.revision !== revision) this.readStore();
+      const original = this.storeSnapshot?.legacyRaw;
+      if (original) {
         const directory = this.storePath + ".recovery";
         fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
         const hash = crypto.createHash("sha256").update(original).digest("hex");
@@ -1428,7 +1414,7 @@ export class CodexHookContextService {
         } finally { if (fs.existsSync(staging)) fs.unlinkSync(staging); }
       }
     }
-    writeJsonAtomic(this.storePath, {
+    const published = {
       ...store,
       version: Math.max(store.version || STORE_VERSION, STORE_VERSION),
       planFollowups: store.planFollowups ?? {},
@@ -1438,7 +1424,15 @@ export class CodexHookContextService {
       planTaskCompletions: store.planTaskCompletions,
       projectFileChanges: store.projectFileChanges,
       projectFileChangeReminders: store.projectFileChangeReminders
-    });
+    };
+    try {
+      writeJsonAtomic(this.storePath, published);
+      freezeHookStore(published);
+      this.storeSnapshot = { revision: hookStoreRevision(fs.statSync(this.storePath)), value: published };
+    } catch (error) {
+      this.storeSnapshot = undefined;
+      throw error;
+    }
   }
 
   private replaceBinding(binding: CodexHookSessionBinding): void {

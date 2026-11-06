@@ -137,8 +137,8 @@ test("message-endpoint settings resolve only through their Route adapter surface
   }
 });
 test("system selection settings are owned by the Desktop settings renderer", () => {
-  const settingsPage = readFileSync(new URL("./pages/SettingsPage.vue", import.meta.url), "utf8");
-  const desktopRenderer = readFileSync(new URL("./components/renderers/DesktopSettingsRenderer.vue", import.meta.url), "utf8");
+  const settingsPage = readFileSync(new URL("../../src/plugins/io.rabiroute.manager.core/web/pages/SettingsPage.vue", import.meta.url), "utf8");
+  const desktopRenderer = readFileSync(new URL("../../src/plugins/io.rabiroute.manager.desktop/web/components/renderers/DesktopSettingsRenderer.vue", import.meta.url), "utf8");
   assert.doesNotMatch(settingsPage, /desktopSettingsClient|publishInterfaceTheme|selectionReaderSettings|updateSelectionReaderSettings|selectionSpeechEnabled|desktopScreenshotEnabled/);
   assert.match(settingsPage, /TrustedWebRendererHost/);
   assert.match(settingsPage, /pluginCatalogStore\.settingsRenderers/);

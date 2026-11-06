@@ -37,7 +37,7 @@ from .plugin_catalog import (
 )
 from .plan_feedback_ledger import PlanFeedbackLedger, PlanFeedbackLedgerError
 from .qt_async import QtAsyncTask, start_qt_task
-from .theme import apply_rabi_menu_theme, normalize_theme, theme_stylesheet
+from .theme import apply_rabi_menu_theme, normalize_theme, rabi_scrollbar_stylesheet, theme_stylesheet
 
 
 VIEW_LABELS = (
@@ -1213,7 +1213,7 @@ class TaskWindow(QWidget):
 
     def apply_theme(self, theme: object) -> None:
         self.theme = normalize_theme(theme)
-        self.setStyleSheet(theme_stylesheet(STYLESHEET, self.theme))
+        self.setStyleSheet(theme_stylesheet(STYLESHEET, self.theme) + rabi_scrollbar_stylesheet(self.theme))
         apply_rabi_menu_theme(self.more_menu, theme=self.theme)
         if self.manager is not None:
             self._render_active_view()
@@ -2478,25 +2478,5 @@ QPushButton#primaryButton:hover {
 }
 QPushButton#primaryButton:focus {
     border: 2px solid #19bfc1;
-}
-QScrollBar:vertical {
-    background: #f2f7f9;
-    width: 10px;
-    margin: 2px;
-    border-radius: 5px;
-}
-QScrollBar::handle:vertical {
-    background: #b9cbd3;
-    min-height: 28px;
-    border-radius: 4px;
-}
-QScrollBar::handle:vertical:hover {
-    background: #87bfc2;
-}
-QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
-    height: 0;
-}
-QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
-    background: transparent;
 }
 """

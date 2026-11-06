@@ -8,12 +8,13 @@ import { parsePluginManifest } from "../plugin-kernel/manifest.js";
 import { MessageEndpointManagers } from "../plugin-runtime-host/messageEndpointManagers.js";
 import { createMessageEndpointHostPorts } from "../runtime/messageEndpointHostPorts.js";
 import { ManagerPluginRouteRegistry } from "./managerPluginRouteRegistry.js";
-import { MessageAdapterScanProviderRegistry } from "./messageAdapterControl.js";
+import { MessageAdapterScanProviderRegistry } from "../plugins/io.rabiroute.manager.message-adapter-control/src/manager/messageAdapterControl.js";
+import type { GatewayDefinition } from "../shared/gatewayConfigModel.js";
 
 let compiled: Promise<{ runtime: string; egress: string; manager: string; manifest: unknown }> | undefined;
 async function template() {
   return compiled ??= (async () => {
-    const source = path.resolve("plugins/builtin/io.rabiroute.endpoint.napcat/1.0.0");
+    const source = path.resolve("src/plugins/io.rabiroute.endpoint.napcat");
     // @ts-expect-error Production JavaScript builder is outside the src compilation root.
     const { bundleMessageEndpointRuntime } = await import("../../scripts/build-message-endpoint-runtime.mjs");
     const spec = JSON.parse(await fs.readFile(path.join(source, "manager-runtime.build.json"), "utf8"));
@@ -36,6 +37,7 @@ export async function napcatEndpointFixture() {
   const operations = new ManagerPluginRouteRegistry();
   const ports = await createMessageEndpointHostPorts();
   let disposalGate: Promise<void> | undefined;
+  let routes: GatewayDefinition[] = [];
   const host = { ...ports, managers, scanProviders,
     operations: { async registerOperationsAsync(...args: Parameters<ManagerPluginRouteRegistry["registerOperationsAsync"]>) {
       const registration = await operations.registerOperationsAsync(...args);
@@ -44,11 +46,12 @@ export async function napcatEndpointFixture() {
     } },
     manager: { rootDir: root, managerPort: 0, readOnly: false, shouldAutostart: false, ready: true,
       readRuntimes: () => [], appendRouteLog() {}, checkHttpEndpoint: async () => false,
-      normalizeDefinition: (value: unknown) => value, readRoutes: () => [], writeRoutes: async () => {}, saveRoute: async () => {},
+      normalizeDefinition: (value: unknown) => value, readRoutes: () => routes, writeRoutes: async () => {}, saveRoute: async () => {},
+      readRoute: () => undefined, readGatewayStatus: () => ({}), routeRunning: () => false, routeStartedAt: () => undefined, requestIsLoopback: () => true, jsonResponse() {},
       routeVersion: () => "test", syncRoutes() {}, gatewayPayload: () => ({}), log() {} }
   };
   const modules = new Map<PluginCandidate, PluginModule>();
-  const kernel = new GenerationRuntime({ host: "manager", hostServices: [{ capability: "host.message-endpoints@1", value: host }],
+  const kernel = new GenerationRuntime({ host: "manager", hostServices: [{ capability: "host.message-endpoints@1", value: host }, { capability: "host.message-endpoints@2", value: host }],
     executor: { async prepare(candidate) { return modules.get(candidate)!; } } });
   const candidate = (revision: string, extra?: PluginModule): PluginCandidate => {
     const candidate: PluginCandidate = { instanceId: "endpoint:napcat", revision, manifest: parsePluginManifest(source.manifest), config: {}, entry: { execution: "in_process", path: path.join(root, "manager.mjs") } };
@@ -56,6 +59,7 @@ export async function napcatEndpointFixture() {
     return candidate;
   };
   return { root, managers, scanProviders, operations, kernel, candidate,
+    setRoutes: (next: GatewayDefinition[]) => { routes = next; },
     setDisposalGate: (gate?: Promise<void>) => { disposalGate = gate; },
     async dispose() { await kernel.dispose(); await fs.rm(root, { recursive: true, force: true }); } };
 }

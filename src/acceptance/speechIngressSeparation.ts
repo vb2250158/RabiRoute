@@ -184,11 +184,11 @@ async function startRoleContextFixture(
     managerInstanceId: "speech-acceptance-manager"
   };
   const capability = "speech-acceptance-capability";
-  const packageDirectory = path.join(REPO_ROOT, import.meta.url.endsWith(".ts") ? "plugins/builtin" : "dist/plugins/packages");
+  const packageDirectory = path.join(REPO_ROOT, import.meta.url.endsWith(".ts") ? "src/plugins" : "dist/plugins");
   const instances = ["speech", "rabilink"].map(type => {
     const pluginId = `io.rabiroute.endpoint.${type}`;
-    const manifest = parsePluginManifest(JSON.parse(fs.readFileSync(path.join(packageDirectory, pluginId, "1.0.0", "rabi.plugin.json"), "utf8")));
-    if (manifest.id !== pluginId || manifest.version !== "1.0.0" || !manifest.entries.manager || !manifest.provides.includes(`endpoint.${type}@1`)) {
+    const manifest = parsePluginManifest(JSON.parse(fs.readFileSync(path.join(packageDirectory, pluginId, "rabi.plugin.json"), "utf8")));
+    if (manifest.id !== pluginId || !manifest.entries.manager || !manifest.provides.includes(`endpoint.${type}@1`)) {
       throw new Error(`Isolated speech acceptance endpoint manifest does not match its fixture: ${type}.`);
     }
     // These are explicitly active test publications; no real Manager or plugin lifecycle is consulted.

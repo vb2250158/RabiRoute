@@ -19,8 +19,8 @@ import {
   type CodexHookContextServiceOptions,
   type PlanTaskCompletionDelivery
 } from "./codexHookContext.js";
-import { assertLocalPersonaOwner } from "./localPersonaOwner.js";
 import { readPersonaChatHistory } from "../personaChatHistory.js";
+import { AgentRequestStore, type AgentRequestPersistence } from "../agentRequests/store.js";
 
 function publishFixtureRoleKnowledge(roleDir: string): void {
   publishRoleKnowledgeCatalogSnapshot(roleDir, readRoleKnowledgeCatalogSnapshot(roleDir));
@@ -48,7 +48,7 @@ test("local and remote same-ID Hooks keep persona bindings, completion targets a
     const trustedRemoteSource = sourceInstance ? { nodeId: sourceInstance.instanceId, agentId: "codex", provider: "codex" as const,
       sessionId, authorizationIncarnation: "ephemeral-authority-only" } : undefined;
     const result = await service.handleHook({ ...request, sourceInstance, trustedRemoteSource });
-    assert.equal(result.planTaskCompletion?.status, "delivered", JSON.stringify(result));
+    assert.equal(result.planTaskCompletion?.status, "delivered");
   }
   assert.deepEqual(delivered.map(value => value.plan.id), ["plan-hook", "plan-pc-one", "plan-pc-two"]);
   assert.deepEqual(delivered.map(value => value.sourceInstance?.instanceId), [undefined, "pc-one", "pc-two"]);
@@ -163,9 +163,7 @@ function fixture(options: {
   deliverPlanTaskCompletion?: (delivery: PlanTaskCompletionDelivery) => Promise<void>;
   deliverAgentCompletion?: CodexHookContextServiceOptions["deliverAgentCompletion"];
   hookEnabled?: (request: CodexHookContextRequest) => boolean;
-  isManagedAgentSession?: (request: CodexHookContextRequest) => boolean;
   recordAgentRequestStop?: CodexHookContextServiceOptions["recordAgentRequestStop"];
-  planStorageReady?: CodexHookContextServiceOptions["planStorageReady"];
   memoryConsolidationInputIds?: CodexHookContextServiceOptions["memoryConsolidationInputIds"];
 } = {}): { root: string; rolesRoot: string; roleDir: string; storePath: string; service: CodexHookContextService } {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-codex-hook-"));
@@ -218,9 +216,7 @@ function fixture(options: {
       deliverPlanTaskCompletion: options.deliverPlanTaskCompletion,
       deliverAgentCompletion: options.deliverAgentCompletion,
       hookEnabled: options.hookEnabled,
-      isManagedAgentSession: options.isManagedAgentSession,
       recordAgentRequestStop: options.recordAgentRequestStop,
-      planStorageReady: options.planStorageReady,
       memoryConsolidationInputIds: options.memoryConsolidationInputIds,
       readContext: options.readContext
     })
@@ -310,69 +306,6 @@ test("unverified or ambiguous run markers cannot inject remembered candidates", 
   }
 });
 
-test("Stop completion is rejected before internal plan reads or mutations while recovery is not ready", async (t) => {
-  let deliveries = 0;
-  const { root, storePath, service } = fixture({
-    planStorageReady: () => false,
-    deliverPlanTaskCompletion: async () => { deliveries += 1; }
-  });
-  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-
-  await assert.rejects(
-    service.handleHook({
-      sessionId: "session-plan-worker",
-      eventName: "Stop",
-      turnId: "turn-gated",
-      cwd: root,
-      lastAssistantMessage: "done"
-    }),
-    (error: unknown) => (error as { code?: string }).code === "PLAN_STORAGE_STARTUP_UNAVAILABLE"
-  );
-  assert.equal(deliveries, 0);
-  assert.equal(fs.existsSync(storePath), false);
-});
-
-test("a recovered bound persona can finish without reading an unrelated persona's plans", async t => {
-  let deliveries = 0;
-  const scopes: Array<readonly string[] | undefined> = [];
-  const completionScopes: Array<readonly string[] | undefined> = [];
-  const { root, rolesRoot, service } = fixture({
-    planStorageReady: roleIds => { scopes.push(roleIds); return roleIds?.every(id => id === "YeYu") === true; },
-    deliverAgentCompletion: async (_request, roleIds) => { completionScopes.push(roleIds); return []; },
-    deliverPlanTaskCompletion: async () => { deliveries++; }
-  });
-  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  service.bindSession("session-plan-worker", "YeYu");
-  const unrelated = path.join(rolesRoot, "UnrecoveredRole");
-  fs.mkdirSync(unrelated);
-  fs.writeFileSync(path.join(unrelated, "persona.md"), "# Unrecovered persona");
-  service.listRoles = () => { throw new Error("Global plan traversal reached an unrecovered persona"); };
-  const result = await service.handleHook({ sessionId: "session-plan-worker", eventName: "Stop",
-    turnId: "recovered-turn", cwd: root, lastAssistantMessage: "Done" });
-  assert.equal(result.planTaskCompletion?.status, "delivered");
-  assert.equal(deliveries, 1);
-  assert.deepEqual(scopes, [["YeYu"]]);
-  assert.deepEqual(completionScopes, [["YeYu"]]);
-  assert.deepEqual(fs.readdirSync(unrelated), ["persona.md"]);
-  service.handleContext({ sessionId: "session-plan-worker", eventName: "PostToolUse", turnId: "changed-turn",
-    managerBaseUrl: "http://127.0.0.1:8790", cwd: root, toolName: "apply_patch", toolInput: "*** Begin Patch\n*** Update File: src/example.ts\n*** End Patch", toolResponse: "Done!" });
-  const changed = await service.handleHook({ sessionId: "session-plan-worker", eventName: "Stop",
-    turnId: "changed-turn", cwd: root });
-  assert.equal(changed.projectFileChangeReminder?.status, "delivered");
-  assert.deepEqual(changed.projectFileChangeReminder?.files, ["src/example.ts"]);
-});
-
-test("an unrecovered bound persona cannot record a reply or complete its plan", async t => {
-  const { root, roleDir, storePath, service } = fixture({ planStorageReady: () => false });
-  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  service.bindSession("session-plan-worker", "YeYu");
-  const before = fs.readFileSync(storePath, "utf8");
-  await assert.rejects(service.handleHook({ sessionId: "session-plan-worker", eventName: "Stop",
-    turnId: "unrecovered-turn", lastAssistantMessage: "Done" }), /Plan storage recovery is not ready/);
-  assert.equal(fs.readFileSync(storePath, "utf8"), before);
-  assert.deepEqual((await readPersonaChatHistory(roleDir)).entries, []);
-});
-
 test("an unrelated Stop leaves invalid persona workflows untouched while matching completion uses its owner", async t => {
   let deliveries = 0;
   const { root, roleDir, service } = fixture({ deliverPlanTaskCompletion: async () => { deliveries++; } });
@@ -391,49 +324,6 @@ test("an unrelated Stop leaves invalid persona workflows untouched while matchin
   assert.equal(matched.planTaskCompletion?.status, "delivered");
   assert.equal(fs.existsSync(configPath), true);
   assert.equal(deliveries, 1);
-});
-
-test("an unbound Stop still requires global recovery before searching plan task bindings", async t => {
-  const scopes: Array<readonly string[] | undefined> = [];
-  const { root, storePath, service } = fixture({ planStorageReady: roleIds => { scopes.push(roleIds); return false; } });
-  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  await assert.rejects(service.handleHook({ sessionId: "unbound", eventName: "Stop", turnId: "global-turn" }),
-    /Plan storage recovery is not ready/);
-  assert.deepEqual(scopes, [undefined]);
-  assert.equal(fs.existsSync(storePath), false);
-});
-
-test("remote and mixed-owner Hooks reject an existing local namesake binding before context or Stop writes", async (t) => {
-  const { root, roleDir, rolesRoot, storePath, service: oldService } = fixture();
-  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  oldService.bindSession("reused-session", "YeYu");
-  const originalStore = fs.readFileSync(storePath, "utf8");
-  const originalPlan = fs.readFileSync(planJsonFile(roleDir, "plan-hook", "active"), "utf8");
-  const local = { agentRoleId: "YeYu" };
-  const remote = { ...local, agentRoleDeviceId: "source-pc" };
-  let definitions: Array<{ agentRoleId: string; agentRoleDeviceId?: string }> = [remote];
-  let readyChecks = 0;
-  const service = new CodexHookContextService({
-    rolesRoot: () => rolesRoot, storePath,
-    assertSessionPersonaOwner: () => definitions.forEach(definition => assertLocalPersonaOwner(definition, "Persona Hooks")),
-    hookEnabled: () => false,
-    chatHistoryRoleIds: () => ["YeYu"],
-    planStorageReady: () => { readyChecks++; return true; }
-  });
-  for (const owners of [[remote], [local, remote]]) {
-    definitions = owners;
-    assert.throws(() => service.bindSession("reused-session", "YeYu"), /REMOTE_PERSONA_OWNER_REQUIRED/);
-    assert.throws(() => service.handleContext({ sessionId: "reused-session", eventName: "UserPromptSubmit", prompt: "[rabi:refresh]" }), /REMOTE_PERSONA_OWNER_REQUIRED/);
-    await assert.rejects(service.handleHook({ sessionId: "reused-session", eventName: "SessionStart" }), /REMOTE_PERSONA_OWNER_REQUIRED/);
-    await assert.rejects(service.handleHook({ sessionId: "reused-session", eventName: "Stop", turnId: "remote-turn", lastAssistantMessage: "Remote reply" }), /REMOTE_PERSONA_OWNER_REQUIRED/);
-  }
-  assert.equal(readyChecks, 0, "Remote ownership must be rejected before plan recovery or Stop processing");
-  assert.equal(fs.readFileSync(storePath, "utf8"), originalStore);
-  assert.equal(fs.readFileSync(planJsonFile(roleDir, "plan-hook", "active"), "utf8"), originalPlan);
-  assert.deepEqual((await readPersonaChatHistory(roleDir)).entries, []);
-  definitions = [local];
-  await service.handleHook({ sessionId: "reused-session", eventName: "Stop", turnId: "local-turn", lastAssistantMessage: "Local reply" });
-  assert.equal((await readPersonaChatHistory(roleDir)).entries[0].text, "Local reply");
 });
 
 test("persona followup reads saved config, deduplicates and delays completion delivery", async (t) => {
@@ -935,52 +825,13 @@ test("paused plans do not deliver bound task completion reminders", async (t) =>
   assert.equal(deliveryCount, 0);
 });
 
-test("only PreToolUse queries managed-task policy while every Hook retains owner and Stop recovery checks", async t => {
-  const { root, rolesRoot, storePath } = fixture();
-  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  let managedChecks = 0, recoveryChecks = 0;
-  const ownerChecks = new Set<string>();
-  const service = new CodexHookContextService({ rolesRoot: () => rolesRoot, storePath,
-    isManagedAgentSession: () => { managedChecks++; return true; },
-    assertSessionPersonaOwner: sessionId => { ownerChecks.add(sessionId); },
-    planStorageReady: () => { recoveryChecks++; return true; } });
-  for (const eventName of ["SessionStart", "UserPromptSubmit", "PostToolUse", "Stop"] as const) {
-    await service.handleHook({ sessionId: `ordinary-${eventName}`, eventName, turnId: "ordinary-turn",
-      managerBaseUrl: "http://127.0.0.1:8790" });
-  }
-  assert.equal(managedChecks, 0);
-  assert.deepEqual([...ownerChecks], ["ordinary-SessionStart", "ordinary-UserPromptSubmit", "ordinary-PostToolUse", "ordinary-Stop"]);
-  assert.equal(recoveryChecks, 1);
-  const blocked = await service.handleHook({ sessionId: "ordinary-unbound", eventName: "PreToolUse",
-    toolName: "send_message_to_thread", toolInput: { threadId: "other-task", message: "Result" } });
-  assert.equal(blocked.toolDecision?.permissionDecision, "deny");
-  assert.equal(managedChecks, 1);
-  assert.equal(ownerChecks.has("ordinary-unbound"), true);
-  assert.equal(recoveryChecks, 1);
-});
-
-test("managed Codex tasks cannot bypass the Rabi Agent bridge for persistent task delivery", async (t) => {
-  const { root, service } = fixture({ isManagedAgentSession: () => true });
-  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  const result = await service.handleHook({
-    sessionId: "session-plan-worker",
-    eventName: "PreToolUse",
-    toolName: "send_message_to_thread",
-    toolInput: { threadId: "other-task", message: "结果" },
-    cwd: root
-  });
-  assert.equal(result.toolDecision?.permissionDecision, "deny");
-  assert.match(result.toolDecision?.reason || "", /responsePolicy/);
-  assert.match(result.toolDecision?.reason || "", /inReplyToRequestId/);
-});
-
 test("Stop records unanswered Agent requests even when plan completion Hook delivery is disabled", async (t) => {
   const stops: CodexHookContextRequest[] = [];
   const { root, service } = fixture({
     hookEnabled: () => false,
     recordAgentRequestStop: (request) => {
       stops.push(request);
-      return { status: "scheduled", reason: "target_turn_ended_without_response", requestIds: ["agent-request-1"], turnId: request.turnId };
+      return { status: "pending", reason: "target_turn_ended_without_response", requestIds: ["agent-request-1"], turnId: request.turnId };
     }
   });
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -992,7 +843,7 @@ test("Stop records unanswered Agent requests even when plan completion Hook deli
     lastAssistantMessage: "调查完成。"
   });
   assert.equal(stops.length, 1);
-  assert.equal(result.agentRequestStop?.status, "scheduled");
+  assert.equal(result.agentRequestStop?.status, "pending");
   assert.deepEqual(result.agentRequestStop?.requestIds, ["agent-request-1"]);
   assert.equal(result.planTaskCompletion?.reason, "deferred_after_stop_followup");
   assert.match(result.followup!.reason, /agent-request-1/);
@@ -1156,7 +1007,7 @@ test("a missing roles root is an empty catalog, not a crash", async (t) => {
 
 test("unanswered requests prompt only once per original ID, including later turns and Hook restarts", async t => {
   let pending = ["request-original"];
-  const recordAgentRequestStop = (request: CodexHookContextRequest) => ({ status: "scheduled" as const,
+  const recordAgentRequestStop = (request: CodexHookContextRequest) => ({ status: "recorded" as const,
     reason: "target_turn_ended_without_response", requestIds: pending, turnId: request.turnId });
   const { root, rolesRoot, storePath, service } = fixture({ hookEnabled: () => false, recordAgentRequestStop });
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -1178,7 +1029,7 @@ test("unanswered requests prompt only once per original ID, including later turn
 });
 
 test("Stop continuation is not blocked and does not consume a request's future first prompt", async t => {
-  const { root, service } = fixture({ hookEnabled: () => false, recordAgentRequestStop: request => ({ status: "scheduled",
+  const { root, service } = fixture({ hookEnabled: () => false, recordAgentRequestStop: request => ({ status: "recorded",
     reason: "target_turn_ended_without_response", requestIds: ["request-active"], turnId: request.turnId }) });
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const input: CodexHookContextRequest = { sessionId: "session-plan-worker", eventName: "Stop", cwd: root, turnId: "active" };
@@ -1192,7 +1043,7 @@ test("request prompt delays chat history and all configured completion until the
   let snapshotMode: "ok" | "failed" | "mismatch" = "ok";
   const { root, roleDir, service } = fixture({
     recordAgentRequestStop: request => snapshotMode === "failed" ? { status: "failed", reason: "fixture snapshot unavailable", turnId: request.turnId }
-      : { status: "scheduled", reason: "target_turn_ended_without_response", requestIds: ["request-final"], turnId: snapshotMode === "mismatch" ? "different-turn" : request.turnId },
+      : { status: "recorded", reason: "target_turn_ended_without_response", requestIds: ["request-final"], turnId: snapshotMode === "mismatch" ? "different-turn" : request.turnId },
     deliverPlanTaskCompletion: async () => { planDeliveries++; },
     deliverAgentCompletion: async request => { messages.push(request.lastAssistantMessage!); return []; }
   });
@@ -1228,7 +1079,7 @@ test("request prompt delays chat history and all configured completion until the
 test("request checks join a configured plan followup without losing either one-shot prompt", async t => {
   let deliveries = 0;
   const { root, roleDir, service } = fixture({ deliverPlanTaskCompletion: async () => { deliveries++; },
-    recordAgentRequestStop: request => ({ status: "scheduled", reason: "target_turn_ended_without_response", requestIds: ["request-with-plan"], turnId: request.turnId }) });
+    recordAgentRequestStop: request => ({ status: "recorded", reason: "target_turn_ended_without_response", requestIds: ["request-with-plan"], turnId: request.turnId }) });
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const configPath = path.join(roleDir, "personaConfig.json");
   const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
@@ -1245,7 +1096,7 @@ test("request checks join a configured plan followup without losing either one-s
 
 test("many unanswered requests produce one bounded summary and do not create a reminder backlog", async t => {
   const ids = Array.from({ length: 1200 }, (_, i) => "request-many-" + i);
-  const { root, service } = fixture({ hookEnabled: () => false, recordAgentRequestStop: request => ({ status: "scheduled",
+  const { root, service } = fixture({ hookEnabled: () => false, recordAgentRequestStop: request => ({ status: "recorded",
     reason: "target_turn_ended_without_response", requestIds: ids, turnId: request.turnId }) });
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const input: CodexHookContextRequest = { sessionId: "session-plan-worker", eventName: "Stop", cwd: root, turnId: "many" };
@@ -1257,7 +1108,7 @@ test("many unanswered requests produce one bounded summary and do not create a r
 });
 
 test("unavailable, duplicate and mismatched Stop results do not invent a blocking reply check", async t => {
-  for (const status of ["failed", "ignored", "scheduled"] as const) {
+  for (const status of ["failed", "ignored", "recorded"] as const) {
     const { root, service } = fixture({ hookEnabled: () => false, recordAgentRequestStop: () => ({ status,
       reason: "owner status", requestIds: ["request-outside-turn"], turnId: "different-turn" }) });
     t.after(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -1266,7 +1117,7 @@ test("unavailable, duplicate and mismatched Stop results do not invent a blockin
 });
 
 test("a failed Hook checkpoint stays non-blocking and cannot fabricate reminder or reply success", async t => {
-  const { root, storePath, service } = fixture({ hookEnabled: () => false, recordAgentRequestStop: request => ({ status: "scheduled",
+  const { root, storePath, service } = fixture({ hookEnabled: () => false, recordAgentRequestStop: request => ({ status: "recorded",
     reason: "target_turn_ended_without_response", requestIds: ["request-write-failed"], turnId: request.turnId }) });
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   service.bindSession("session-plan-worker", "YeYu");
@@ -1301,7 +1152,7 @@ test("complete Stop snapshots prune closed display facts even on the continued f
 test("a partial Stop result cannot discard another already-prompted request", async t => {
   let ids = ["request-a", "request-b"];
   const { root, service } = fixture({ hookEnabled: () => false, recordAgentRequestStop: request => ({
-    status: "scheduled", reason: "legacy partial", requestIds: ids, turnId: request.turnId }) });
+    status: "recorded", reason: "legacy partial", requestIds: ids, turnId: request.turnId }) });
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const input: CodexHookContextRequest = { sessionId: "session-plan-worker", eventName: "Stop", cwd: root, turnId: "first-partial" };
   await service.handleHook(input);
@@ -1322,6 +1173,38 @@ test("workspace changes cannot prune another workspace's still-pending request p
   assert.match((await service.handleHook({ ...input, cwd: "C:/scope-b", turnId: "scope-b-1" })).followup!.reason, /request-scope-b/);
   assert.equal((await service.handleHook({ ...input, turnId: "scope-a-2" })).followup, undefined);
 });
+
+test("a real partial request projection preserves prior Hook display facts and healthy prompts across repair of the original ID", async t => {
+  let owner!: AgentRequestStore;
+  const { root, storePath, service } = fixture({ hookEnabled: () => false, recordAgentRequestStop: request => {
+    const session = owner.unansweredTargetRequestSnapshot(request.sessionId);
+    const requestIds = request.cwd ? owner.unansweredTargetRequestSnapshot(request.sessionId, request.cwd).requestIds : session.requestIds;
+    return { status: requestIds.length ? "pending" : "ignored", reason: "owner snapshot", requestIds,
+      pendingSessionRequestIds: session.requestIds, snapshotComplete: session.complete, turnId: request.turnId };
+  } });
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const persistence: AgentRequestPersistence & { value?: unknown } = { read() { return this.value; }, write(value) { this.value = structuredClone(value); } };
+  const seed = owner = new AgentRequestStore(persistence);
+  const parties = { source: { threadId: "original-source", agentType: "codex" }, target: { threadId: "session-plan-worker", agentType: "codex", workspace: root } };
+  const original = await seed.prepare({ ...parties, responsePolicy: "required", responseInstruction: "Original result" }); await seed.commit(original);
+  const input: CodexHookContextRequest = { sessionId: "session-plan-worker", eventName: "Stop", cwd: root, turnId: "original-stop" };
+  assert.match((await service.handleHook(input)).followup!.reason, new RegExp(original.requestId!));
+  const healthy = await seed.prepare({ ...parties, responsePolicy: "required", responseInstruction: "New healthy result" }); await seed.commit(healthy);
+  const raw = persistence.value as { requests: Record<string, { status: string }> };
+  raw.requests[original.requestId!]!.status = "original_unknown_status";
+  owner = new AgentRequestStore({ read: () => raw, write() { throw new Error("Stop must not rewrite original request state."); } });
+  const before = JSON.stringify(raw), partial = await service.handleHook({ ...input, turnId: "partial-stop" });
+  assert.equal(partial.agentRequestStop?.snapshotComplete, false);
+  assert.match(partial.followup!.reason, new RegExp(healthy.requestId!));
+  assert.deepEqual(JSON.parse(fs.readFileSync(storePath, "utf8")).agentRequestStopReminders[input.sessionId], [original.requestId, healthy.requestId]);
+  assert.equal(JSON.stringify(raw), before);
+  raw.requests[original.requestId!]!.status = "awaiting_response";
+  owner = new AgentRequestStore({ read: () => raw, write() { throw new Error("Stop must not rewrite repaired request state."); } });
+  const repaired = await service.handleHook({ ...input, turnId: "repaired-stop" });
+  assert.equal(repaired.agentRequestStop?.snapshotComplete, true);
+  assert.equal(repaired.followup, undefined, "Repairing the original ID must not produce a second reminder attempt.");
+});
+
 
 test("schema9 escapes legacy JSON-shaped local storage keys without changing raw receipts or Stop barriers", async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabi-hook-layout9-"));
@@ -1395,4 +1278,81 @@ test("schema9 preserves an original failed completion for a bracket-prefixed loc
   const result = await service.handleHook({ sessionId, eventName: "Stop", turnId: "original-turn", cwd: root, lastAssistantMessage: "Original result" });
   assert.equal(result.planTaskCompletion?.status, "duplicate"); assert.equal(sends, 0);
   assert.equal(JSON.parse(fs.readFileSync(storePath, "utf8")).planTaskCompletions["original-unknown-receipt"].error, "Delivery acceptance uncertain");
+});
+
+test("Hooks do not require managed-task eligibility or deny direct interface tools", async t => {
+  const { root, service } = fixture(); t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  for (const toolName of ["mcp__codex_app__send_message_to_thread", "create_thread", "ordinary_tool"]) {
+    const result = await service.handleHook({ sessionId: "unregistered-but-valid", eventName: "PreToolUse", toolName });
+    assert.equal(result.toolDecision, undefined);
+  }
+});
+
+
+function revisionCacheFixture(t: test.TestContext, version = 9) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "hook-owner-revision-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const rolesRoot = path.join(root, "roles"), storePath = path.join(root, "sessions.json");
+  for (const roleId of ["RoleAA", "RoleBB"]) { fs.mkdirSync(path.join(rolesRoot, roleId), { recursive: true }); fs.writeFileSync(path.join(rolesRoot, roleId, "persona.md"), roleId); }
+  const timestamp = "2026-11-06T00:00:00.000Z";
+  const state = { version, sessions: { original: { sessionId: "original", roleId: "RoleAA", createdAt: timestamp, updatedAt: timestamp, turnContextKeys: ["original-context"] } },
+    planTaskCompletions: { "original-uncertain-key": { sessionId: "original", planId: "original-plan", turnId: "original-turn", updatedAt: timestamp, status: "failed", error: "Original unknown delivery receipt" } },
+    projectFileChanges: {}, projectFileChangeReminders: {}, agentRequestStopReminders: { original: ["original-request"] },
+    agentRequestStopFollowupTurns: { original: "original-turn" }, vendorExtension: { preserve: ["unknown"] } };
+  fs.writeFileSync(storePath, JSON.stringify(state, null, 2));
+  const create = () => new CodexHookContextService({ rolesRoot: () => rolesRoot, storePath });
+  return { root, rolesRoot, storePath, state, service: create(), create };
+}
+
+test("Hook owner revision cache observes same-size atomic replacement with restored mtime and damaged-file repair", t => {
+  const { storePath, service, state } = revisionCacheFixture(t);
+  assert.equal(service.getBinding("original")?.roleId, "RoleAA");
+  const stat = fs.statSync(storePath), external = { ...state, sessions: { original: { ...state.sessions.original, roleId: "RoleBB" } } };
+  const replacement = storePath + ".external"; fs.writeFileSync(replacement, JSON.stringify(external, null, 2));
+  assert.equal(fs.statSync(replacement).size, stat.size); fs.utimesSync(replacement, stat.atime, stat.mtime); fs.renameSync(replacement, storePath);
+  assert.equal(service.getBinding("original")?.roleId, "RoleBB");
+  const corrupt = Buffer.from("{original bad JSON"); fs.writeFileSync(storePath, corrupt);
+  assert.throws(() => service.getBinding("original"), SyntaxError);
+  assert.throws(() => service.bindSession("original", "RoleAA"), SyntaxError);
+  assert.ok(fs.readFileSync(storePath).equals(corrupt), "cache invalidation must not turn damaged data into empty writable state");
+  fs.writeFileSync(storePath, JSON.stringify(external, null, 2));
+  assert.equal(service.getBinding("original")?.roleId, "RoleBB");
+});
+
+test("Hook owner cached snapshots never share mutable bindings, arrays or doctor records with callers", t => {
+  const { service, storePath } = revisionCacheFixture(t); const originalBytes = fs.readFileSync(storePath);
+  const binding = service.getBinding("original")!; binding.roleId = "caller-only"; binding.turnContextKeys!.push("caller-only");
+  const listed = service.listBindings(); listed[0].roleId = "caller-only"; listed[0].turnContextKeys!.push("caller-list");
+  const doctor = service.doctor() as { planTaskCompletions: Array<{ error?: string }> }; doctor.planTaskCompletions[0].error = "caller-only";
+  assert.equal(service.getBinding("original")?.roleId, "RoleAA"); assert.deepEqual(service.getBinding("original")?.turnContextKeys, ["original-context"]);
+  assert.ok(fs.readFileSync(storePath).equals(originalBytes));
+  const returned = service.bindSession("new-session", "RoleAA"); returned.roleId = "caller-only";
+  assert.equal(service.getBinding("new-session")?.roleId, "RoleAA");
+});
+
+test("Hook owner failed atomic write preserves disk and last committed binding without draft leakage", t => {
+  const { service, storePath } = revisionCacheFixture(t); service.getBinding("original"); const original = fs.readFileSync(storePath);
+  const rename = fs.renameSync;
+  fs.renameSync = ((source, target) => { if (path.resolve(String(target)) === storePath) throw Object.assign(new Error("fixture atomic publication denied"), { code: "EACCES" }); return rename(source, target); }) as typeof fs.renameSync;
+  try {
+    assert.throws(() => service.bindSession("original", "RoleBB"), /publication denied/);
+    assert.equal(service.getBinding("original")?.roleId, "RoleAA");
+    assert.throws(() => service.unbindSession("original"), /publication denied/);
+    assert.equal(service.getBinding("original")?.roleId, "RoleAA");
+    assert.ok(fs.readFileSync(storePath).equals(original));
+  } finally { fs.renameSync = rename; }
+  service.bindSession("original", "RoleBB"); assert.equal(service.getBinding("original")?.roleId, "RoleBB");
+  const saved = JSON.parse(fs.readFileSync(storePath, "utf8")); assert.deepEqual(saved.planTaskCompletions, JSON.parse(original.toString("utf8")).planTaskCompletions);
+  assert.deepEqual(saved.vendorExtension, { preserve: ["unknown"] });
+});
+
+test("Hook owner migration backup failure leaves legacy raw and cache readable for an ordinary retry", t => {
+  const { service, storePath } = revisionCacheFixture(t, 8); const original = fs.readFileSync(storePath); service.getBinding("original");
+  const open = fs.openSync;
+  fs.openSync = (...args: Parameters<typeof fs.openSync>) => { if (String(args[0]).startsWith(storePath + ".recovery")) throw Object.assign(new Error("fixture backup write denied"), { code: "EACCES" }); return open(...args); };
+  try { assert.throws(() => service.bindSession("original", "RoleBB"), /backup write denied/); assert.equal(service.getBinding("original")?.roleId, "RoleAA"); assert.ok(fs.readFileSync(storePath).equals(original)); }
+  finally { fs.openSync = open; }
+  service.bindSession("original", "RoleBB"); assert.equal(service.getBinding("original")?.roleId, "RoleBB");
+  const snapshots = fs.readdirSync(storePath + ".recovery").filter(name => name.endsWith(".raw")); assert.equal(snapshots.length, 1);
+  assert.ok(fs.readFileSync(path.join(storePath + ".recovery", snapshots[0])).equals(original));
 });

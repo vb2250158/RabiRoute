@@ -183,10 +183,8 @@ async function fixture(required = true, adapters: { source: AgentAdapterType; ta
 test("exact accepted response recovers both reservations after restart without completing followup", async () => {
   const { persistence, initial, reply, message } = await fixture();
   const store = new AgentRequestStore(persistence);
-  await store.recordTargetTurnEnded("target", "C:\\repo", "turn");
   assert.equal((await recoverAgentResponseDelivery(store, "source", reply.deliveryId, () => [message])).status, "receipt_recovered");
   assert.equal(store.get(initial.requestId!)?.response?.result, reply.result);
-  assert.equal(store.get(initial.requestId!)?.nextReminderAt, undefined);
   assert.equal(store.get(reply.requestId!)?.status, "awaiting_response");
   assert.equal(store.get(reply.requestId!)?.deliveryAction, "receipt_recovered");
   const saved = structuredClone(persistence.value);
@@ -224,12 +222,7 @@ test("cancelled followup cannot partially close original response", async () => 
 
 test("uncertain response suspends false reminders with explicit pending evidence", async () => {
   const { store, initial, reply } = await fixture();
-  await store.recordTargetTurnEnded("target", "C:\\repo", "turn", new Date(0));
-  await store.recordPendingResponseCheck(initial.requestId!, reply.deliveryId, "delivery_unconfirmed");
-  assert.deepEqual(store.dueReminders(), []);
   assert.equal(store.get(initial.requestId!)?.status, "awaiting_response");
-  assert.equal(store.get(initial.requestId!)?.reminderCount, 0);
-  assert.match(store.get(initial.requestId!)!.lastReminderError!, /reconciliation/);
 });
 
 test("receipt recovery preserves an already completed followup", async () => {

@@ -11,8 +11,6 @@ const runtimeRoots = [
   "apps/rabilink-aiui/utils",
   "desktop/rabi-voice-client",
   "desktop/tray-task-window",
-  "plugin-adapters/rabi-speech/rabispeech",
-  "plugin-adapters/remote-agent-rabiroute",
   "scripts/rabilink-event-hub.mjs",
   "scripts/rabilink-proxy-request-queue.mjs",
   "scripts/rabilink-relay-server.mjs"
@@ -40,12 +38,12 @@ const checks = [
     message: "Active-intelligence review must wake from ledger/timer events, not scan on an interval."
   },
   {
-    files: ["src/adapters/rabilinkRelayWorker.ts"],
+    files: ["src/plugins/io.rabiroute.endpoint.rabilink/src/adapters/rabilinkRelayWorker.ts"],
     pattern: /rememberAcceptedRelayTask\(taskId\);\s*startDefaultRabiLinkConversationReviewer\(\)\?\.wake\(\)/,
     message: "Direct RabiLink messages already enter the Agent delivery path and must not trigger a redundant ledger review read."
   },
   {
-    files: ["src/adapters/rabilinkRelayWorker.ts", "src/manager/rabiLinkRelayRuntime.ts"],
+    files: ["src/plugins/io.rabiroute.endpoint.rabilink/src/adapters/rabilinkRelayWorker.ts", "src/manager/rabiLinkRelayRuntime.ts"],
     pattern: /claim(?:RelayTask|WebguiRequests|SpeechRequests)\([^)]*(?:claimWaitMs|60000)|恢复轮询|long.?poll/i,
     message: "Relay consumers must subscribe to /api/rabilink/events and claim immediately."
   },
@@ -60,7 +58,7 @@ const checks = [
     message: "Wearable health reads must be triggered by explicit platform/user/startup events."
   },
   {
-    files: ["plugin-adapters/rabi-speech/rabispeech/app.py"],
+    files: ["src/plugins/rabi-speech/rabispeech/app.py"],
     pattern: /_watch_rabilink_audio_streams|RABILINK_AUDIO_WATCHDOG_INTERVAL/,
     message: "RabiLink PCM expiry must rearm from start/chunk events instead of polling stream age."
   }
@@ -127,7 +125,7 @@ const controlledPollingExceptions = [
     reason: "Some Android vendors may miss a registered default-network callback. Only while already known offline, the foreground service checks OS connectivity every five minutes; it never queries Relay or business state and stops immediately after recovery."
   },
   {
-    file: "plugin-adapters/rabi-speech/rabispeech/providers/dashscope.py",
+    file: "src/plugins/rabi-speech/rabispeech/providers/dashscope.py",
     pattern: /DashScope meeting ASR poll[\s\S]*await asyncio\.sleep\(2\.0\)/,
     reason: "DashScope meeting transcription exposes a remote asynchronous job without a callback/webhook in this provider contract; polling is bounded by the request deadline."
   },

@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { LanAgentRegistry } from "./lanAgentRegistry.js";
-import { createLanAgentTerminalOperations } from "./lanAgentTerminalRoutes.js";
+import { createLanAgentTerminalOperations } from "../plugins/io.rabiroute.manager.core/src/manager/lanAgentTerminalRoutes.js";
 import { ManagerPluginRouteRegistry } from "./managerPluginRouteRegistry.js";
 import { markAuthenticatedConnectionRequest } from "./connectionRequestAccess.js";
 import { nativeHttpTestFetch } from "./nativeHttpTestClient.js";

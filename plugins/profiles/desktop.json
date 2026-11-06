@@ -8,7 +8,7 @@
     {
       "id": "manager:video",
       "package": "io.rabiroute.manager.video",
-      "version": "1.0.0",
+      "version": "0.1.1",
       "enabled": true,
       "config": {},
       "grants": [],
@@ -22,7 +22,7 @@
     {
       "id": "manager:core",
       "package": "io.rabiroute.manager.core",
-      "version": "1.0.0",
+      "version": "0.1.1",
       "enabled": true,
       "config": {},
       "grants": []
@@ -30,7 +30,7 @@
     {
       "id": "manager:persona",
       "package": "io.rabiroute.manager.persona",
-      "version": "1.0.0",
+      "version": "0.1.1",
       "enabled": true,
       "config": {},
       "grants": []
@@ -38,7 +38,7 @@
     {
       "id": "manager:speech",
       "package": "io.rabiroute.manager.speech",
-      "version": "1.0.0",
+      "version": "0.1.1",
       "enabled": true,
       "config": {},
       "grants": []
@@ -46,7 +46,7 @@
     {
       "id": "manager:performance",
       "package": "io.rabiroute.manager.performance",
-      "version": "1.0.0",
+      "version": "0.1.1",
       "enabled": true,
       "config": {},
       "grants": []
@@ -54,7 +54,7 @@
     {
       "id": "manager:bilibili-history",
       "package": "io.rabiroute.manager.bilibili-history",
-      "version": "1.0.0",
+      "version": "0.1.1",
       "enabled": true,
       "config": {},
       "grants": []
@@ -62,7 +62,7 @@
     {
       "id": "manager:route-control",
       "package": "io.rabiroute.manager.route-control",
-      "version": "1.0.0",
+      "version": "0.1.1",
       "enabled": true,
       "config": {},
       "grants": []
@@ -70,7 +70,7 @@
     {
       "id": "manager:agent-state-control",
       "package": "io.rabiroute.manager.agent-state-control",
-      "version": "1.0.0",
+      "version": "0.1.1",
       "enabled": true,
       "config": {},
       "grants": []
@@ -78,7 +78,7 @@
     {
       "id": "manager:gateway-runtime",
       "package": "io.rabiroute.manager.gateway-runtime",
-      "version": "1.0.0",
+      "version": "0.1.1",
       "enabled": true,
       "config": {},
       "grants": []
@@ -86,7 +86,7 @@
     {
       "id": "manager:rabilink-relay",
       "package": "io.rabiroute.manager.rabilink-relay",
-      "version": "2.0.0",
+      "version": "0.1.1",
       "enabled": true,
       "config": {},
       "grants": []
@@ -94,7 +94,7 @@
     {
       "id": "manager:wearable-companion",
       "package": "io.rabiroute.manager.wearable-companion",
-      "version": "1.0.0",
+      "version": "0.1.1",
       "enabled": true,
       "config": {
         "enabled": true,
@@ -106,7 +106,7 @@
     {
       "id": "manager:memory-consolidation",
       "package": "io.rabiroute.manager.memory-consolidation",
-      "version": "1.0.0",
+      "version": "0.1.1",
       "enabled": true,
       "config": {},
       "grants": []
@@ -114,7 +114,7 @@
     {
       "id": "manager:message-processing-control",
       "package": "io.rabiroute.manager.message-processing-control",
-      "version": "1.0.0",
+      "version": "0.1.1",
       "enabled": true,
       "config": {},
       "grants": []
@@ -122,7 +122,7 @@
     {
       "id": "manager:message-processing-automation",
       "package": "io.rabiroute.manager.message-processing-automation",
-      "version": "1.0.1",
+      "version": "0.1.1",
       "enabled": true,
       "config": {},
       "grants": []
@@ -130,7 +130,7 @@
     {
       "id": "manager:plan-feedback-delivery",
       "package": "io.rabiroute.manager.plan-feedback-delivery",
-      "version": "1.0.0",
+      "version": "0.1.1",
       "enabled": true,
       "config": {},
       "grants": []
@@ -138,7 +138,7 @@
     {
       "id": "manager:message-adapter-control",
       "package": "io.rabiroute.manager.message-adapter-control",
-      "version": "1.0.0",
+      "version": "0.1.1",
       "enabled": true,
       "config": {},
       "grants": []
@@ -146,7 +146,7 @@
     {
       "id": "manager:agent-adapter-catalog",
       "package": "io.rabiroute.manager.agent-adapter-catalog",
-      "version": "1.1.0",
+      "version": "0.1.1",
       "enabled": true,
       "config": {},
       "grants": []
@@ -154,7 +154,7 @@
     {
       "id": "manager:agent-communication",
       "package": "io.rabiroute.manager.agent-communication",
-      "version": "1.1.0",
+      "version": "0.1.1",
       "enabled": true,
       "config": {},
       "grants": []
@@ -162,7 +162,7 @@
     {
       "id": "manager:agent-thread-control",
       "package": "io.rabiroute.manager.agent-thread-control",
-      "version": "1.0.0",
+      "version": "0.1.1",
       "enabled": true,
       "config": {},
       "grants": []
@@ -170,7 +170,7 @@
     {
       "id": "manager:remote-agent",
       "package": "io.rabiroute.manager.remote-agent",
-      "version": "1.0.0",
+      "version": "0.1.1",
       "enabled": true,
       "config": {},
       "grants": []
@@ -178,7 +178,7 @@
     {
       "id": "manager:diagnostics",
       "package": "io.rabiroute.manager.diagnostics",
-      "version": "1.0.0",
+      "version": "0.1.1",
       "enabled": true,
       "config": {},
       "grants": []
@@ -186,7 +186,7 @@
     {
       "id": "manager:desktop",
       "package": "io.rabiroute.manager.desktop",
-      "version": "1.0.0",
+      "version": "0.1.1",
       "enabled": true,
       "config": {},
       "grants": []
@@ -194,7 +194,7 @@
     {
       "id": "manager:desktop-pet",
       "package": "io.rabiroute.manager.desktop-pet",
-      "version": "1.0.0",
+      "version": "0.1.1",
       "enabled": true,
       "config": {},
       "grants": []
@@ -202,7 +202,7 @@
     {
       "id": "manager:yeyu-gamer",
       "package": "io.rabiroute.manager.yeyu-gamer",
-      "version": "1.0.0",
+      "version": "0.1.1",
       "enabled": false,
       "config": {
         "baseUrl": "http://127.0.0.1:8877/api/v1",
@@ -213,7 +213,7 @@
     {
       "id": "manager:xiaomi-home",
       "package": "io.rabiroute.manager.xiaomi-home",
-      "version": "1.0.0",
+      "version": "0.1.1",
       "enabled": true,
       "config": {
         "baseUrl": "http://127.0.0.1:8123",
@@ -233,7 +233,7 @@
     {
       "id": "endpoint:napcat",
       "package": "io.rabiroute.endpoint.napcat",
-      "version": "1.0.0",
+      "version": "0.1.1",
       "enabled": true,
       "config": {},
       "grants": []
@@ -241,7 +241,7 @@
     {
       "id": "endpoint:heartbeat",
       "package": "io.rabiroute.endpoint.heartbeat",
-      "version": "1.0.0",
+      "version": "0.1.1",
       "enabled": true,
       "config": {},
       "grants": []
@@ -249,7 +249,7 @@
     {
       "id": "endpoint:wecom",
       "package": "io.rabiroute.endpoint.wecom",
-      "version": "1.0.0",
+      "version": "0.1.1",
       "enabled": true,
       "config": {},
       "grants": []
@@ -257,7 +257,7 @@
     {
       "id": "endpoint:weixin",
       "package": "io.rabiroute.endpoint.weixin",
-      "version": "1.0.0",
+      "version": "0.1.1",
       "enabled": true,
       "config": {},
       "grants": []
@@ -265,7 +265,7 @@
     {
       "id": "endpoint:feishu",
       "package": "io.rabiroute.endpoint.feishu",
-      "version": "1.0.0",
+      "version": "0.1.1",
       "enabled": true,
       "config": {},
       "grants": []
@@ -273,7 +273,7 @@
     {
       "id": "endpoint:webhook",
       "package": "io.rabiroute.endpoint.webhook",
-      "version": "1.0.0",
+      "version": "0.1.1",
       "enabled": true,
       "config": {},
       "grants": []
@@ -281,7 +281,7 @@
     {
       "id": "endpoint:speech",
       "package": "io.rabiroute.endpoint.speech",
-      "version": "1.0.0",
+      "version": "0.1.1",
       "enabled": true,
       "config": {},
       "grants": []
@@ -289,7 +289,7 @@
     {
       "id": "endpoint:rabilink",
       "package": "io.rabiroute.endpoint.rabilink",
-      "version": "1.0.0",
+      "version": "0.1.1",
       "enabled": true,
       "config": {},
       "grants": []
@@ -297,7 +297,7 @@
     {
       "id": "agent:codex",
       "package": "io.rabiroute.agent.codex",
-      "version": "1.0.0",
+      "version": "0.1.1",
       "enabled": true,
       "config": {},
       "grants": []
@@ -305,7 +305,7 @@
     {
       "id": "agent:copilot-cli",
       "package": "io.rabiroute.agent.copilot-cli",
-      "version": "1.0.0",
+      "version": "0.1.1",
       "enabled": true,
       "config": {},
       "grants": []
@@ -313,7 +313,7 @@
     {
       "id": "agent:marvis",
       "package": "io.rabiroute.agent.marvis",
-      "version": "1.0.0",
+      "version": "0.1.1",
       "enabled": true,
       "config": {},
       "grants": []
@@ -321,7 +321,7 @@
     {
       "id": "agent:astrbot",
       "package": "io.rabiroute.agent.astrbot",
-      "version": "1.0.0",
+      "version": "0.1.1",
       "enabled": true,
       "config": {},
       "grants": []
@@ -329,7 +329,7 @@
     {
       "id": "agent:dsh",
       "package": "io.rabiroute.agent.dsh",
-      "version": "1.0.0",
+      "version": "0.1.1",
       "enabled": true,
       "config": {},
       "grants": []
@@ -337,7 +337,7 @@
     {
       "id": "agent:workbuddy",
       "package": "io.rabiroute.agent.workbuddy",
-      "version": "1.0.0",
+      "version": "0.1.1",
       "enabled": true,
       "config": {},
       "grants": []
@@ -345,7 +345,7 @@
     {
       "id": "agent:antigravity",
       "package": "io.rabiroute.agent.antigravity",
-      "version": "1.0.0",
+      "version": "0.1.1",
       "enabled": true,
       "config": {},
       "grants": []
@@ -353,7 +353,7 @@
     {
       "id": "agent:device-agent",
       "package": "io.rabiroute.agent.device-agent",
-      "version": "1.0.0",
+      "version": "0.1.1",
       "enabled": true,
       "config": {},
       "grants": []
@@ -361,7 +361,7 @@
     {
       "id": "agent:grok-bot",
       "package": "io.rabiroute.agent.grok-bot",
-      "version": "1.0.0",
+      "version": "0.1.1",
       "enabled": true,
       "config": {},
       "grants": []

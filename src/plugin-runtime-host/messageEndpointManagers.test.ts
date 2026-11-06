@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { GenerationRuntime } from "../plugin-kernel/generationRuntime.js";
 import type { PluginCandidate, PluginModule } from "../plugin-kernel/types.js";
-import { createNapcatManagerOwner, type NapcatManagerHostPorts } from "../integrations/napcat/managerOwner.js";
+import { createNapcatManagerOwner, type NapcatManagerHostPorts } from "../plugins/io.rabiroute.endpoint.napcat/src/integrations/napcat/managerOwner.js";
 import type { GatewayDefinition } from "../shared/gatewayConfigModel.js";
 import { MessageEndpointManagers } from "./messageEndpointManagers.js";
 
@@ -55,4 +55,17 @@ test("unchanged invalid legacy QQ data cannot block an unrelated Webhook save; c
   assert.doesNotThrow(() => managers.validateRoutes([structuredClone(old), webhook], [old]));
   assert.throws(() => managers.validateRoutes([{ ...old, gatewayPort: 8799 }, webhook], [old]), /QQ|NapCat|路由/);
   assert.throws(() => managers.validateRoutes([old]), /QQ|NapCat|路由/, "An explicit full validation still enforces the transaction invariant.");
+});
+
+test("current owner lookup follows publication and rollback without changing shared resource ownership", () => {
+  const managers = new MessageEndpointManagers();
+  const resources = {};
+  const first = { resources }, second = { resources };
+  const old = managers.prepare("napcat", first, () => {}), next = managers.prepare("napcat", second, () => {});
+  assert.equal(managers.current("napcat"), undefined);
+  old.publication.publish(); assert.equal(managers.current("napcat"), first);
+  next.publication.publish(); assert.equal(managers.current("napcat"), second);
+  next.publication.rollback(); assert.equal(managers.current("napcat"), first);
+  next.dispose(); assert.equal(managers.current("napcat"), first);
+  old.dispose(); assert.equal(managers.current("napcat"), undefined);
 });

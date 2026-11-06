@@ -6,13 +6,15 @@ import { AgentRequestStore } from "../agentRequests/store.js";
 import { executeEndpointAgentDelivery, reconcileEndpointDelivery, type EndpointDeliveryOptions, type EndpointDeliveryReceipt } from "../agentRequests/endpointDelivery.js";
 import { sourceScopedAgentDeliveryId, type AgentRequestEndpoint } from "../agentRequests/endpoint.js";
 import { listAgentDeliveryRecords, readAgentDeliveryRecord, readDeliveryRecords, controlDeliveryRecord, createAgentDeliveryRecordOperations } from "./agentDeliveryRecords.js";
-import { createAgentThreadControlOwner, type AgentThreadControlRoutesContext } from "./agentThreadControlRoutes.js";
+import { createAgentThreadControlOwner, type AgentThreadControlRoutesContext } from "../plugins/io.rabiroute.manager.agent-thread-control/src/manager/agentThreadControlRoutes.js";
 import { ManagerPluginRouteRegistry } from "./managerPluginRouteRegistry.js";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { createAgentEndpointDelivery, type AgentEndpointDeliveryContext } from "./agentEndpointDelivery.js";
-import { assertLanAgentBodyAuthority, registerLanAgentBodyGuard } from "./lanAgentBodyAuthority.js";
+import { registerLanAgentBodyGuard } from "./lanAgentBodyAuthority.js";
+import { agentWorkspaceMismatch } from "../agentRequests/requestValidation.js";
 
 function fixture() {
   let persisted: unknown, writes = 0, fail = false;
@@ -31,6 +33,20 @@ function fixture() {
     messageSource: { type: "agent", agentAdapter: "dsh", sessionId: "source-session", sessionName: "Source" } }, { ...options, ...extra });
   return { store, persistence, options, endpoint, send, writes: () => writes, fail: (value: boolean) => { fail = value; } };
 }
+
+test('read-only delivery receipts reconstruct workspace guidance without resubmitting the unknown prompt', async () => {
+  const f = fixture(); let dispatches = 0;
+  await f.send('workspace-intent', { dispatch: async delivery => { dispatches++; throw agentWorkspaceMismatch(delivery.target); } });
+  const original = (await f.store.listEndpointDeliveries())[0], writes = f.writes();
+  const response = await readDeliveryRecords({ agentRequests: f.store }, new URL('http://fixture.invalid/api/agent/deliveries/' + original.deliveryId), original.deliveryId);
+  assert.equal(response.status, 200);
+  const detail = (response.body as any).data;
+  assert.equal(detail.errorCode, 'AGENT_WORKSPACE_MISMATCH'); assert.equal(detail.field, 'cwd');
+  assert.match(detail.repair, /target-session/); assert.match(detail.repair, /\/api\/agent\/threads/);
+  assert.equal(detail.state, 'awaiting_confirmation'); assert.equal(f.writes(), writes); assert.equal(dispatches, 1);
+  assert.doesNotMatch(JSON.stringify(detail), /private fixture content|fixture-workspace|authorizationIncarnation/);
+  assert.deepEqual(await f.store.readEndpointDelivery(original.deliveryId), original);
+});
 
 test("orphan delivery cancellation persists, is idempotent, and retains the original reservation", async () => {
   const f = fixture(); await f.send("orphan", { dispatch: async () => { throw new Error("ACK lost"); } });
@@ -195,8 +211,8 @@ test("offline node queue is explicitly unobservable and never represented by an 
   assert.equal(filtered.status, 400);
 });
 
-test("executable delivery list/detail contracts serve the original store without writes", async t => {
-  const f = fixture(); await f.send("intent-http"); const before = f.writes();
+for (const workspaceMismatch of [false, true]) test(`executable delivery list/detail contracts serve ${workspaceMismatch ? 'workspace conflict' : 'accepted receipts'} without writes`, async t => {
+  const f = fixture(); await f.send("intent-http", workspaceMismatch ? { dispatch: async delivery => { throw agentWorkspaceMismatch(delivery.target); } } : {}); const before = f.writes();
   const registry = new ManagerPluginRouteRegistry(); const registration = registry.registerOperations("delivery-fixture", createAgentDeliveryRecordOperations({ agentRequests: f.store }));
   const server = http.createServer((request, response) => { if (!registry.handle(request, new URL(request.url!, "http://fixture.invalid"), response)) response.writeHead(404).end(); });
   await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
@@ -204,7 +220,14 @@ test("executable delivery list/detail contracts serve the original store without
   const base = `http://127.0.0.1:${(server.address() as { port: number }).port}/api/agent/deliveries`;
   const list = await fetch(base); assert.equal(list.status, 200); const page = await list.json() as any;
   const detail = await fetch(base + "/" + page.data.records[0].id); assert.equal(detail.status, 200);
-  assert.equal(((await detail.json()) as any).data.receipt.accepted, true); assert.equal(f.writes(), before);
+  const record = ((await detail.json()) as any).data;
+  if (workspaceMismatch) {
+    assert.equal(record.state, 'awaiting_confirmation'); assert.equal(record.field, 'cwd'); assert.match(record.repair, /\/api\/agent\/threads/);
+  } else {
+    assert.equal(record.state, 'received'); assert.equal(record.receipt.accepted, true);
+    assert.equal(record.field, undefined); assert.equal(record.repair, undefined);
+  }
+  assert.equal(f.writes(), before);
 });
 
 test("caller lookup proves absence only for the exact source and retains dispatching or corrupt reservations", async () => {
@@ -215,6 +238,7 @@ test("caller lookup proves absence only for the exact source and retains dispatc
   const absent = await read(); assert.equal(absent.status, 404); assert.equal(absent.body.errorCode, "DELIVERY_NOT_RESERVED");
   await f.send("intent-original", { dispatch: async () => { throw new Error("connection closed after send"); } });
   const pending = await read(); assert.equal(pending.status, 200); assert.equal((pending.body.data as any).state, "dispatching"); assert.equal((pending.body.data as any).canSubmitSameIntent, false);
+  assert.match((pending.body.data as any).detailPath, /^\/api\/agent\/deliveries\//);
   const original = (await f.store.listEndpointDeliveries())[0];
   const receipt: EndpointDeliveryReceipt = { deliveryId: original.deliveryId, generation: original.generation, promptHash: original.promptHash,
     executionOptionsHash: original.executionOptionsHash, endpoint: original.target, accepted: true, action: "receipt_recovered", transport: "fixture" };
@@ -274,18 +298,29 @@ test("the actual thread plugin caller API uses the factory read authority and th
     prompt: "Generic fixture", responsePolicy: "none" }, factory.options(source, () => {}));
   assert.equal(sent, 1);
   const registry = new ManagerPluginRouteRegistry(), starters: Array<() => Promise<() => Promise<void>>> = [];
-  const runtime = { agentRequests: store, createAgentThreadControlOwner,
-    createAgentThreadControlOperations: (await import("./agentThreadControlOperations.js")).createAgentThreadControlOperations,
+  const runtime = { agentRequests: store, path, rootDir: directory,
+    rabiLinkAgentTaskSource: () => undefined, rabiLinkRelayConfigForMeta: () => ({}),
+    peerAgentBridge: { forwardCallerLookup: async () => undefined }, peerAgentOptions: {},
     getTrustedLanAgentSource: () => ({ ...source, sessionId: "stale-saved-session" }),
-    readEndpointDeliveryOptions: (...args: Parameters<typeof factory.options>) => { readAuthorityCalls++; return factory.options(...args); },
+    agentEndpointDelivery: { options: (...args: Parameters<typeof factory.options>) => { readAuthorityCalls++; return factory.options(...args); } },
     managerPluginRoutes: registry };
-  const pluginUrl = new URL("../../plugins/builtin/io.rabiroute.manager.agent-thread-control/1.0.0/manager.mjs", import.meta.url);
-  const { activate } = await import(pluginUrl.href);
+  // Exercise the current @2 package ABI using a fresh isolated native bundle.
+  const root = process.cwd(), plugin = 'src/plugins/io.rabiroute.manager.agent-thread-control';
+  const { bundleMessageEndpointRuntime } = await import(pathToFileURL(path.join(root, 'scripts/build-message-endpoint-runtime.mjs')).href);
+  const specification = JSON.parse(fs.readFileSync(path.join(root, plugin, 'manager-runtime.build.json'), 'utf8'));
+  const bundled = await bundleMessageEndpointRuntime(root, specification, path.join(directory, 'manager-runtime.mjs'));
+  const modules = new Map(await Promise.all(bundled.hostModules.map(async (id: string) =>
+    [id, await import(pathToFileURL(path.join(root, 'src', id + '.ts')).href)] as const)));
+  Object.assign(runtime, { prepareModules: async () => {}, module: (id: string) => modules.get(id) });
+  const entry = fs.readFileSync(path.join(root, plugin, 'manager.mjs'), 'utf8').replace('from "@rabiroute/plugin-sdk"',
+    'from ' + JSON.stringify(pathToFileURL(path.join(root, 'plugins/contracts/plugin-sdk/index.mjs')).href));
+  fs.writeFileSync(path.join(directory, 'manager.mjs'), entry);
+  const { activate } = await import(pathToFileURL(path.join(directory, 'manager.mjs')).href);
   await activate({ identity: { instanceId: "thread-fixture" }, lifecycle: { signal: new AbortController().signal }, services: { require: () => runtime, provide: () => {} },
     contributions: { register: () => {} }, effects: { add: (starter: () => Promise<() => Promise<void>>) => starters.push(starter) } });
   const disposers = await Promise.all(starters.map(start => start()));
   const server = http.createServer((request, response) => {
-    registerLanAgentBodyGuard(request, body => assertLanAgentBodyAuthority("/api/agent/threads", body, { provider: "dsh", sessionId: source.sessionId }));
+    registerLanAgentBodyGuard(request, () => {});
     if (!registry.handle(request, new URL(request.url!, "http://fixture.invalid"), response)) response.writeHead(404).end();
   });
   await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));

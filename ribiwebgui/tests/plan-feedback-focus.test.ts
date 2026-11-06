@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import fs from "node:fs";
 import { parse, compileScript } from "@vue/compiler-sfc";
-const source = fs.readFileSync(new URL("../src/pages/RoleKnowledgePage.vue", import.meta.url), "utf8");
+const source = fs.readFileSync(new URL("../../src/plugins/io.rabiroute.manager.persona/web/pages/RoleKnowledgePage.vue", import.meta.url), "utf8");
 
 test("focus is a same-page layout over the existing filtered directory selection", () => {
   assert.doesNotMatch(source, /feedbackQueueCache|feedbackFocusQuery|feedbackInjectedPlanIds|pendingFeedbackKind|fullscreen eager|feedback-focus-shell/);
@@ -49,7 +49,7 @@ test("focus reserves independent reading and approval columns within the visible
 });
 test("page and shared questions compile", () => {
   for (const path of ["pages/RoleKnowledgePage.vue", "components/PlanQuestionFields.vue"]) {
-    const { descriptor, errors } = parse(fs.readFileSync(new URL(`../src/${path}`, import.meta.url), "utf8"));
+    const { descriptor, errors } = parse(fs.readFileSync(new URL(`../../src/plugins/io.rabiroute.manager.persona/web/${path}`, import.meta.url), "utf8"));
     assert.deepEqual(errors, []);
     assert.doesNotThrow(() => compileScript(descriptor, { id: path, inlineTemplate: true }));
   }

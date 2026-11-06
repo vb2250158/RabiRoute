@@ -1,0 +1,28 @@
+{
+  "exports": [
+    {
+      "source": "src/plugins/io.rabiroute.manager.persona/hostRuntime.mjs",
+      "name": "createOwnedRuntime"
+    }
+  ],
+  "ownedPrefixes": [
+    "src/plugins/io.rabiroute.manager.persona/"
+  ],
+  "ownedSources": [
+    "src/plugins/io.rabiroute.manager.persona/src/manager/roleConfigurationRoutes.ts",
+    "src/plugins/io.rabiroute.manager.persona/src/manager/personaResourceOperations.ts",
+    "src/plugins/io.rabiroute.manager.persona/src/manager/personaPlanOperations.ts",
+    "src/plugins/io.rabiroute.manager.persona/src/manager/personaHistoryOperations.ts",
+    "src/plugins/io.rabiroute.manager.persona/src/manager/personaStorageOperations.ts",
+    "src/plugins/io.rabiroute.manager.persona/src/manager/personaRecordingOperations.ts",
+    "src/plugins/io.rabiroute.manager.persona/src/manager/personaCompanionOperations.ts",
+    "src/plugins/io.rabiroute.manager.persona/src/manager/personaHealthOperations.ts",
+    "src/plugins/io.rabiroute.manager.persona/src/manager/personaIdentityOperations.ts",
+    "src/plugins/io.rabiroute.manager.persona/src/manager/personaKnowledgeOperations.ts",
+    "src/plugins/io.rabiroute.manager.persona/src/manager/personaSkillOperations.ts",
+    "src/plugins/io.rabiroute.manager.persona/src/manager/personaMessagingRoutes.ts",
+    "src/plugins/io.rabiroute.manager.persona/src/manager/languageStyleRoutes.ts",
+    "src/plugins/io.rabiroute.manager.persona/src/manager/rolePanelOperations.ts"
+  ],
+  "packageId": "io.rabiroute.manager.persona"
+}

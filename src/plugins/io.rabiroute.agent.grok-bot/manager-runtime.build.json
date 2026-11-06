@@ -1,0 +1,34 @@
+{
+  "exports": [
+    {
+      "source": "src/plugins/io.rabiroute.agent.grok-bot/src/agentAdapters/grokBotManagerProvider.ts",
+      "name": "createManager"
+    }
+  ],
+  "ownedPrefixes": [
+    "src/plugins/io.rabiroute.agent.grok-bot/"
+  ],
+  "scopedEnvironment": true,
+  "hostSources": [
+    "src/agentAdapters/stateReporter.ts"
+  ],
+  "ownedSources": [
+    "src/plugins/io.rabiroute.agent.grok-bot/src/manager/grokBotEndpointBridge.ts",
+    "src/plugins/io.rabiroute.agent.grok-bot/src/manager/grokBotConfiguration.ts",
+    "src/plugins/io.rabiroute.agent.grok-bot/src/manager/grokBotThreads.ts"
+  ],
+  "workers": [
+    {
+      "source": "src/plugins/io.rabiroute.agent.grok-bot/src/agentAdapters/grokBotManagerApi.ts",
+      "target": "workers/scan.mjs",
+      "mode": "host-factory"
+    }
+  ],
+  "resources": [
+    {
+      "source": "src/plugins/io.rabiroute.agent.grok-bot/scripts/grok-bot-native-profile.ps1",
+      "target": "resources/grok-bot-native-profile.ps1"
+    }
+  ],
+  "packageId": "io.rabiroute.agent.grok-bot"
+}

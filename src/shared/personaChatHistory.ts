@@ -7,6 +7,18 @@ export type PersonaChatTaskOwner = {
   nodeName?: string;
 };
 
+/** Display-only projection; never copy credentials or authorization incarnations from an execution endpoint. */
+export function chatTaskOwner(
+  party: { endpoint?: Pick<PersonaChatTaskOwner, "kind" | "provider" | "agentId"> & { nodeId?: string; instanceId?: string } } | undefined,
+  nodeName?: (nodeId: string) => string | undefined
+): PersonaChatTaskOwner | undefined {
+  const endpoint = party?.endpoint;
+  if (!endpoint) return undefined;
+  const nodeId = endpoint.nodeId || endpoint.instanceId;
+  return { kind: endpoint.kind, provider: endpoint.provider, agentId: endpoint.agentId,
+    ...(nodeId ? { nodeId, nodeName: nodeName?.(nodeId) } : {}) };
+}
+
 /** Persona messages: Hook final replies and managed Agent-to-Agent deliveries. */
 export type PersonaChatReply = {
   id: string;

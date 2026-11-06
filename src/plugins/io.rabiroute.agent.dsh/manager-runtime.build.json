@@ -1,0 +1,27 @@
+{
+  "exports": [
+    {
+      "source": "src/plugins/io.rabiroute.agent.dsh/src/agentAdapters/dshManagerProvider.ts",
+      "name": "createManager"
+    }
+  ],
+  "ownedPrefixes": [
+    "src/plugins/io.rabiroute.agent.dsh/"
+  ],
+  "scopedEnvironment": true,
+  "hostSources": [
+    "src/agentAdapters/stateReporter.ts"
+  ],
+  "ownedSources": [
+    "src/plugins/io.rabiroute.agent.dsh/src/manager/dshConnectionRoutes.ts",
+    "src/plugins/io.rabiroute.agent.dsh/src/manager/dshConnectionOperations.ts"
+  ],
+  "workers": [
+    {
+      "source": "src/plugins/io.rabiroute.agent.dsh/src/agentAdapters/dshManagerApi.ts",
+      "target": "workers/scan.mjs",
+      "mode": "host-factory"
+    }
+  ],
+  "packageId": "io.rabiroute.agent.dsh"
+}

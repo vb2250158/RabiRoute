@@ -1,4 +1,5 @@
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 export type RuntimeLayout = Readonly<{
   packageRoot: string;
@@ -37,4 +38,9 @@ export function resolveRuntimeLayout(
   const stateRoot = explicitAbsoluteRoot(environment.RABIROUTE_STATE_ROOT, "RABIROUTE_STATE_ROOT")
     ?? packageRoot;
   return Object.freeze({ packageRoot, stateRoot });
+}
+
+/** Plugins locate application state through this Host module, independent of their source or package directory. */
+export function applicationRuntimeLayout(environment: RuntimeLayoutEnvironment = process.env): RuntimeLayout {
+  return resolveRuntimeLayout(fileURLToPath(new URL("../../", import.meta.url)), environment);
 }

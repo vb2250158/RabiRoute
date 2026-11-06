@@ -10,7 +10,7 @@ import type { PlanItem } from "../roleKnowledge.js";
 import type { AgentThreadRequest, AgentThreadRequestResult } from "../agentThreads.js";
 import type { AgentInstanceBinding } from "../shared/agentInstance.js";
 import type { RolePlanPageReadInput } from "./managerReadWorkerPool.js";
-import { createPlanAdvanceOwner, type PlanAdvanceContext } from "./planAdvanceRoutes.js";
+import { createPlanAdvanceOwner, type PlanAdvanceContext } from "../plugins/io.rabiroute.manager.persona/src/manager/planAdvanceRoutes.js";
 import { emptyAdvancePolicy, PlanAdvanceStore, type AdvanceRule } from "./planAdvancePolicy.js";
 
 const sessionId = "same-session-on-each-owner";

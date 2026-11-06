@@ -603,3 +603,41 @@ test("capacity: current-backend quota counts manifest records even when existing
   } finally { stats.mock.restore(); }
   assert.equal(sample.service.status().state, "ready");
 });
+
+
+test("one cold manifest verification serves parallel readers while completed results and other revisions remain independent", async context => {
+  const sample = await fixture(context), first = await sample.candidate("shared-first"); await sample.service.importCandidate(first.source, first.revision);
+  const second = await sample.candidate("shared-second"); await sample.service.importCandidate(second.source, second.revision);
+  const originalRead = fs.readFile.bind(fs), counts = new Map<string, number>();
+  const mock = context.mock.method(fs, "readFile", (async (...args: Parameters<typeof fs.readFile>) => {
+    const filename = String(args[0]);
+    for (const revision of [first.revision, second.revision]) if (filename === path.join(sample.service.candidates, revision, "manifest.json")) counts.set(revision, (counts.get(revision) ?? 0) + 1);
+    return originalRead(...args);
+  }) as typeof fs.readFile);
+  try {
+    const firstValues = await Promise.all(Array.from({ length: 16 }, () => sample.service.staticManifest(first.revision)));
+    assert.equal(counts.get(first.revision), 1);
+    assert.ok(firstValues.every(value => value.backend === sample.service.status().backend));
+    (firstValues[0].files as Array<{ path: string }>)[0].path = "caller-only";
+    assert.notEqual((await sample.service.staticManifest(first.revision)).files[0].path, "caller-only");
+    assert.equal(counts.get(first.revision), 1, "the completed manifest retains its original cache");
+    const results = await Promise.all([sample.service.staticManifest(first.revision), sample.service.staticManifest(second.revision)]);
+    assert.equal(counts.get(second.revision), 1); assert.notDeepEqual(results[0].files, results[1].files);
+    assert.equal(sample.service.status().revision, 0, "reads do not publish or advance the original release receipt");
+  } finally { mock.mock.restore(); }
+});
+
+test("failed shared verification leaves no failed cache entry and the original revision can be repaired and read", async context => {
+  const sample = await fixture(context), next = await sample.candidate("repair-shared"); await sample.service.importCandidate(next.source, next.revision);
+  const directory = path.join(sample.service.candidates, next.revision), file = path.join(directory, "docs/guide.md"), original = await fs.readFile(file);
+  await fs.writeFile(file, "bad"); let reads = 0; const read = fs.readFile.bind(fs);
+  const mock = context.mock.method(fs, "readFile", (async (...args: Parameters<typeof fs.readFile>) => { if (String(args[0]) === path.join(directory, "manifest.json")) reads++; return read(...args); }) as typeof fs.readFile);
+  try {
+    const failed = await Promise.allSettled(Array.from({ length: 16 }, () => sample.service.staticManifest(next.revision)));
+    assert.ok(failed.every(value => value.status === "rejected")); assert.equal(reads, 1);
+    await fs.writeFile(file, original);
+    const recovered = await sample.service.staticManifest(next.revision); assert.equal(recovered.backend, sample.service.status().backend); assert.equal(reads, 2);
+    assert.equal(sample.service.status().state, "ready"); assert.equal(sample.service.status().revision, 0);
+    assert.equal((await sample.service.staticManifest(next.revision)).backend, recovered.backend); assert.equal(reads, 2);
+  } finally { mock.mock.restore(); }
+});

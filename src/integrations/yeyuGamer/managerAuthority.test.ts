@@ -8,10 +8,10 @@ import test, { type TestContext } from "node:test";
 import { LanAgentAuthority } from "../../manager/lanAgentAuthority.js";
 import { RabiGlobalConfigStore } from "../../manager/globalConfig.js";
 import { evaluateLanAgentRequest } from "../../manager/lanAgentRequestAccess.js";
-import { YeYuGamerManagerApiClient } from "./managerApi.js";
-import { createYeYuGamerManagerOperations } from "./managerRoutes.js";
+import { YeYuGamerManagerApiClient } from "../../plugins/io.rabiroute.manager.yeyu-gamer/src/integrations/yeyuGamer/managerApi.js";
+import { createYeYuGamerManagerOperations } from "../../plugins/io.rabiroute.manager.yeyu-gamer/src/integrations/yeyuGamer/managerRoutes.js";
 import { ManagerPluginRouteRegistry } from "../../manager/managerPluginRouteRegistry.js";
-import { registerLanAgentBodyGuard, assertLanAgentBodyAuthority } from "../../manager/lanAgentBodyAuthority.js";
+import { registerLanAgentBodyGuard } from "../../manager/lanAgentBodyAuthority.js";
 
 const health = { status: "ok", manager: "ok", storage: "ok", eventStream: "ok", checkedAt: "2026-08-27T00:00:00.000Z", checks: {} };
 const snapshot = { stateVersion: 7777777, generatedAt: "2026-08-27T00:00:00.000Z", eventCursor: "sensitive-cursor", manager: {}, health: {}, gameDay: "2026-08-27", activeBatch: null, recentBatches: [], games: [], counters: {} };
@@ -73,7 +73,7 @@ async function fixture(t: TestContext, stage?: Stage, mutation = false) {
   const server = http.createServer((request, response) => {
     const access = evaluateLanAgentRequest(request, authority, true, () => config.getLanAgentAdmissionPolicy());
     if (access.kind !== "agent") { response.writeHead(403); response.end("denied"); return; }
-    registerLanAgentBodyGuard(request, body => assertLanAgentBodyAuthority(new URL(request.url!, "http://fixture").pathname, body, undefined));
+    registerLanAgentBodyGuard(request, () => {});
     if (!registry.handle(request, new URL(request.url!, "http://fixture.invalid"), response)) response.writeHead(404).end();
   });
   server.listen(0, "127.0.0.1"); await once(server, "listening");

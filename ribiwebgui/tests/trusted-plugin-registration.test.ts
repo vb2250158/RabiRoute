@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { defineComponent } from "vue";
-import { activateCore } from "../src/bundles/builtinWebContributions";
+import { activateCore } from "../../src/plugins/io.rabiroute.manager.core/web/contributions";
 import {
   onTrustedWebPageRegistrationChange,
   parseWebPageContribution,

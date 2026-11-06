@@ -1,0 +1,101 @@
+{
+  "exports": [
+    {
+      "name": "createNapcatManagerOwner",
+      "source": "src/plugins/io.rabiroute.endpoint.napcat/src/integrations/napcat/managerOwner.ts"
+    },
+    {
+      "name": "createNapcatControlOperations",
+      "source": "src/plugins/io.rabiroute.endpoint.napcat/src/manager/napcatControlRoutes.ts"
+    },
+    {
+      "name": "NapcatSupervisorService",
+      "hostModule": "manager/napcatSupervisorService"
+    },
+    {
+      "name": "autoLoginNapcatInstancesOnRabiStart",
+      "source": "src/plugins/io.rabiroute.endpoint.napcat/src/messageEndpoints/napcatManager.ts"
+    },
+    {
+      "name": "configureNapcatOneBot",
+      "source": "src/plugins/io.rabiroute.endpoint.napcat/src/messageEndpoints/napcatManager.ts"
+    },
+    {
+      "name": "ensureNapcatInstanceReady",
+      "source": "src/plugins/io.rabiroute.endpoint.napcat/src/messageEndpoints/napcatManager.ts"
+    },
+    {
+      "name": "testNapcatHealth",
+      "source": "src/plugins/io.rabiroute.endpoint.napcat/src/messageEndpoints/napcatManager.ts"
+    },
+    {
+      "name": "readNapcatLoginPanel",
+      "source": "src/plugins/io.rabiroute.endpoint.napcat/src/messageEndpoints/napcatManager.ts"
+    },
+    {
+      "name": "runNapcatLoginAction",
+      "source": "src/plugins/io.rabiroute.endpoint.napcat/src/messageEndpoints/napcatManager.ts"
+    },
+    {
+      "name": "launchNapcatInstance",
+      "source": "src/plugins/io.rabiroute.endpoint.napcat/src/messageEndpoints/napcatManager.ts"
+    },
+    {
+      "name": "restartNapcatInstance",
+      "source": "src/plugins/io.rabiroute.endpoint.napcat/src/messageEndpoints/napcatManager.ts"
+    },
+    {
+      "name": "napcatGuardianInstances",
+      "source": "src/plugins/io.rabiroute.endpoint.napcat/src/messageEndpoints/napcatManager.ts"
+    },
+    {
+      "name": "observeNapcatGuardianInstance",
+      "source": "src/plugins/io.rabiroute.endpoint.napcat/src/messageEndpoints/napcatManager.ts"
+    },
+    {
+      "name": "relaunchNapcatGuardianInstance",
+      "source": "src/plugins/io.rabiroute.endpoint.napcat/src/messageEndpoints/napcatManager.ts"
+    },
+    {
+      "name": "runNapcatGuardianLoop",
+      "source": "src/plugins/io.rabiroute.endpoint.napcat/src/messageEndpoints/napcatGuardian.ts"
+    },
+    {
+      "name": "napcatGuardianDepsFor",
+      "source": "src/plugins/io.rabiroute.endpoint.napcat/src/messageEndpoints/napcatGuardian.ts"
+    },
+    {
+      "name": "createAgentGroupFilesOperation",
+      "source": "src/plugins/io.rabiroute.endpoint.napcat/src/manager/agentGroupFiles.ts"
+    },
+    {
+      "name": "createAgentQqDiagnosticsOperation",
+      "source": "src/plugins/io.rabiroute.endpoint.napcat/src/manager/agentQqDiagnostics.ts"
+    },
+    {
+      "name": "createQqMessageOperations",
+      "source": "src/plugins/io.rabiroute.endpoint.napcat/src/manager/qqMessageRoutes.ts"
+    },
+    {
+      "name": "createQqStickerOperations",
+      "source": "src/plugins/io.rabiroute.endpoint.napcat/src/manager/qqStickerRoutes.ts"
+    }
+  ],
+  "ownedPrefixes": [
+    "src/plugins/io.rabiroute.endpoint.napcat/"
+  ],
+  "ownedSources": [
+    "src/plugins/io.rabiroute.endpoint.napcat/src/manager/napcatControlRoutes.ts",
+    "src/plugins/io.rabiroute.endpoint.napcat/src/manager/napcatLifecycleOwner.ts",
+    "src/plugins/io.rabiroute.endpoint.napcat/src/manager/napcatProcessDriver.ts",
+    "src/plugins/io.rabiroute.endpoint.napcat/src/manager/agentGroupFiles.ts",
+    "src/plugins/io.rabiroute.endpoint.napcat/src/manager/agentQqDiagnostics.ts",
+    "src/plugins/io.rabiroute.endpoint.napcat/src/manager/qqMessageRoutes.ts",
+    "src/plugins/io.rabiroute.endpoint.napcat/src/manager/qqStickerRoutes.ts",
+    "src/plugins/io.rabiroute.endpoint.napcat/src/manager/qqMessageMedia.ts",
+    "src/plugins/io.rabiroute.endpoint.napcat/src/manager/qqReadContract.ts",
+    "src/plugins/io.rabiroute.endpoint.napcat/src/manager/qqStickerContract.ts",
+    "src/plugins/io.rabiroute.endpoint.napcat/src/napcatStickers.ts"
+  ],
+  "packageId": "io.rabiroute.endpoint.napcat"
+}

@@ -8,7 +8,6 @@ import os from "node:os";
 import path from "node:path";
 import { installReleaseDependencies, ensureNativeTerminalDependencies } from "./lib/release-dependencies.mjs";
 import { fileURLToPath } from "node:url";
-import { normalizeDshBinding } from "./lib/dsh.mjs";
 import { runManagerCommand } from "./lib/manager-cli.mjs";
 import { createManagerClient, createManagerTransport } from "./lib/manager-client.mjs";
 import { ManagementDiagnostics } from "./lib/management-diagnostics.mjs";
@@ -1120,12 +1119,14 @@ class RabiAgentRuntime {
       timer = setTimeout(dispose, observationMs);
       timer.unref?.();
     } };
-    const unsubscribe = subscribe(event => {
+    const onReceipt = event => {
       if (!active || event.stage !== "delivery_receipt_confirmed" || event.late !== true || event.outcome !== "confirmed"
         || event.deliveryMarker !== identity.deliveryId || event.threadId !== threadId) return;
       lateConfirmed = true;
       if (settled) { this.hintDeliveryRecovery(identity, connection); dispose(); }
-    });
+    };
+    observation.onReceipt = onReceipt;
+    const unsubscribe = subscribe?.(onReceipt) ?? (() => {});
     this.latePreparedObservations.set(key, observation);
     return observation;
   }
@@ -1159,14 +1160,16 @@ class RabiAgentRuntime {
       ]);
       const failures = results.filter(result => result.status === "rejected").map(result => result.reason);
       if (failures.length) throw new AggregateError(failures, "Rabi Agent resource cleanup failed; original history evidence was retained.");
+      this.publishDesktop("连接器已停止");
     });
     // Observe failure even when the supervisor has already disconnected. The
     // original owner promise remains rejected for callers that join shutdown.
     this.stopPromise.catch(error => {
+      this.publishDesktop("连接器停止未确认");
       process.stderr.write("Rabi Agent cleanup failed: " + boundedText(error instanceof Error ? error.message : String(error), 1024) + "\n");
       process.exitCode = 1;
     });
-    this.publishDesktop("连接器已停止");
+    this.publishDesktop("正在停止连接器");
     clearTimeout(this.retryTimer);
     clearInterval(this.heartbeatTimer);
     this.connectionAbort?.abort();
@@ -1391,7 +1394,7 @@ class RabiAgentRuntime {
             this.send({ type: "agentCatalog", agents: result });
           } else {
             const { manageInstanceAgent, EndpointTransportReceipts, sameAgentEndpoint,
-              subscribeCodexDesktopDelivery, CODEX_DESKTOP_LATE_RECEIPT_WINDOW_MS } = await trace.run("module", () => import("./runtime/management.mjs"));
+              CODEX_DESKTOP_LATE_RECEIPT_WINDOW_MS } = await trace.run("module", () => import("./runtime/management.mjs"));
             assertOriginalConnection();
             const requestedProvider = message.params?.agentAdapter || message.params?.provider || message.params?.delivery?.target?.provider;
             const provider = requestedProvider === "codex-desktop" ? "codex" : requestedProvider;
@@ -1458,7 +1461,7 @@ class RabiAgentRuntime {
               preparedMutationStarted = message.operation === "prepared_delivery";
               if (preparedMutationStarted && provider === "codex") {
                 latePreparedObservation = this.observeLatePreparedReceipt(params.delivery, recoveryConnection,
-                  subscribeCodexDesktopDelivery, CODEX_DESKTOP_LATE_RECEIPT_WINDOW_MS);
+                  undefined, CODEX_DESKTOP_LATE_RECEIPT_WINDOW_MS);
               }
               result = await trace.run("execute", () => manageInstanceAgent(message.operation, params, { ...this.config, ...nativeContext, dsh, endpointExecution,
                 observeRecovery: operation => trace.run("receipt_recovery", operation), rootDir: path.dirname(fileURLToPath(import.meta.url)) }));
@@ -1471,7 +1474,8 @@ class RabiAgentRuntime {
           } else trace.mark("response", "connection_changed");
         } catch (error) {
           if (ownsOriginalConnection()) {
-            const sent = this.send({ type: "managementResult", requestId: message.requestId, error: boundedText(error instanceof Error ? error.message : String(error), 1024) }); trace.mark("response", sent ? "failed" : "not_sent");
+            const sent = this.send({ type: "managementResult", requestId: message.requestId, error: boundedText(error instanceof Error ? error.message : String(error), 1024),
+              ...(error?.code === "AGENT_WORKSPACE_MISMATCH" ? { errorCode: error.code } : {}) }); trace.mark("response", sent ? "failed" : "not_sent");
           } else trace.mark("response", "connection_changed");
         }
       });
@@ -1561,6 +1565,10 @@ class RabiAgentRuntime {
   }
 
   handleAgentPluginEvent(type, event) {
+    if (type === "agent.delivery-receipt" && event?.provider === "codex") {
+      for (const observation of this.latePreparedObservations.values()) observation.onReceipt?.(event);
+      return;
+    }
     if (type !== "agent.task-state" || !event || event.provider !== "codex") return;
     const threadId = event.sessionId;
     const taskId = this.taskByThread.get(threadId);

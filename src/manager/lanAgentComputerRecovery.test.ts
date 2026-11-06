@@ -2,8 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { IncomingMessage, ServerResponse } from "node:http";
 import { Socket } from "node:net";
-import { createLanAgentComputerOperations } from "./lanAgentComputerRoutes.js";
-import type { InteractiveContext } from "./lanAgentInteractiveContract.js";
+import { createLanAgentComputerOperations } from "../plugins/io.rabiroute.manager.core/src/manager/lanAgentComputerRoutes.js";
+import type { InteractiveContext } from "../plugins/io.rabiroute.manager.core/src/manager/lanAgentInteractiveContract.js";
 const id = "12345678-1234-4234-8234-123456789abc";
 function fixture(message: string, authorized = true) {
   const request = new IncomingMessage(new Socket()); request.headers = {};

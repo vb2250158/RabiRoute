@@ -177,7 +177,10 @@ export class ComputerService {
     if (process.platform !== "win32") throw new Error("Window queries and screenshots require Windows.");
     return new Promise((resolve, reject) => {
       const executable = path.join(process.env.SystemRoot || "C:\\Windows", "System32/WindowsPowerShell/v1.0/powershell.exe");
-      const child = spawn(executable, ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", fileURLToPath(new URL("../desktop/computer.ps1", import.meta.url))], {
+      const native = fileURLToPath(new URL("../dist/native/RabiAgent.Computer.exe", import.meta.url));
+      const nativeAvailable = fs.existsSync(native);
+      // Retain old signed release support until enrollment requires the native assets.
+      const child = spawn(nativeAvailable ? native : executable, nativeAvailable ? [] : ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", fileURLToPath(new URL("../desktop/computer.ps1", import.meta.url))], {
         windowsHide: true, stdio: ["pipe", "pipe", "pipe"],
         env: Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^(RABI_|RABIROUTE_|CODEX_)/i.test(key)))
       });
@@ -201,14 +204,31 @@ export class ComputerService {
   stop() {
     if (this.stopOwner) return this.stopOwner;
     this.stopped = true;
-    for (const child of this.children) child.kill();
     const failures = [];
+    const closingChildren = [...this.children].map(child => new Promise((resolve, reject) => {
+      // Register before signalling: kill() acceptance and process exit alone do
+      // not prove that the helper and its redirected handles have closed.
+      let killFailure;
+      const closed = () => { clearTimeout(deadline); resolve(); };
+      const deadline = setTimeout(() => {
+        child.removeListener("close", closed);
+        reject(new Error("Desktop helper process close remains unconfirmed.", { cause: killFailure }));
+      }, this.timeout("agent.computer.process", 30000));
+      child.once("close", closed);
+      try { child.kill(); } catch (error) { killFailure = error; }
+    }));
     for (const item of this.uploads.values()) if (item.state === "uploading") {
       item.intent = "aborted";
       try { this.closeUpload(item, "aborted"); } catch (error) { failures.push(error); }
     }
     // The upload cleanup owner retains pending cold I/O; stopping is not proof that any fd closed.
-    this.stopOwner = Promise.allSettled([...this.uploadQueues.values()]).then(async () => {
+    const uploadOperations = [...this.uploadQueues.values()];
+    this.stopOwner = Promise.allSettled([...uploadOperations, ...closingChildren]).then(async results => {
+      // Upload callers retain their business failures; only unfinished cleanup
+      // and helper closure failures affect the stop outcome.
+      for (const result of results.slice(uploadOperations.length)) {
+        if (result.status === "rejected") failures.push(result.reason);
+      }
       for (const item of this.uploads.values()) {
         if (this.terminalClosed(item)) {
           try { await this.persistTerminal(item); } catch (error) { failures.push(error); }

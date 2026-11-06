@@ -22,7 +22,7 @@ test("QQ quotas are optional, resource scheduling settings remain explicit and m
 test("explicit attachment quota rejects streamed bytes and removing it restores the same read", () => {
   const program = `
     import assert from 'node:assert/strict';
-    import { readQqMedia } from './src/manager/qqMessageMedia.ts';
+    import { readQqMedia } from './src/plugins/io.rabiroute.endpoint.napcat/src/manager/qqMessageMedia.ts';
     let calls=0;
     const result=readQqMedia({httpUrl:'http://localhost:1234',accessToken:''},{kind:'video',name:'video',file:'id'},AbortSignal.timeout(1000),async()=>++calls===1?Response.json({status:'ok',retcode:0,data:{url:'https://cdn.example/video'}}):new Response('sixteen bytes!!!'));
     if(process.env.RABIROUTE_QQ_MEDIA_MAX_BYTES==='4') await assert.rejects(result,/RABIROUTE_QQ_MEDIA_MAX_BYTES/);
@@ -39,7 +39,7 @@ test("explicit attachment quota rejects streamed bytes and removing it restores 
 test("preview byte quota and deadline expose the configured cause; clearing quota restores the preview", () => {
   const program = `
     import assert from 'node:assert/strict';
-    import {createQqStickerOperations} from './src/manager/qqStickerRoutes.ts';
+    import {createQqStickerOperations} from './src/plugins/io.rabiroute.endpoint.napcat/src/manager/qqStickerRoutes.ts';
     const id='0123456789abcdef0123456789abcdef';
     const definition={id:'test',enabled:true,messageAdapters:['napcat'],napcatInstances:[{id:'selected',enabled:true,httpUrl:'http://localhost:1234'}]};
     const [list,preview]=createQqStickerOperations({local:()=>true,route:()=>definition,json:()=>{},transport:async(url,init)=>{
@@ -65,7 +65,7 @@ test("preview byte quota and deadline expose the configured cause; clearing quot
 test("upstream JSON quota defaults to no hidden 1 MiB cap and explicit quota reports its setting", () => {
   const program = [
     "import assert from 'node:assert/strict';",
-    "import {readNapCatStickers} from './src/napcatStickers.ts';",
+    "import {readNapCatStickers} from './src/plugins/io.rabiroute.endpoint.napcat/src/napcatStickers.ts';",
     "const desc='x'.repeat(1100000);",
     "const result=readNapCatStickers({httpUrl:'http://localhost:1234'},1,async()=>Response.json({status:'ok',retcode:0,data:[{md5:'0123456789abcdef0123456789abcdef',url:'https://cdn.example/image',desc}]}));",
     "if(process.env.RABIROUTE_QQ_JSON_MAX_BYTES==='4')await assert.rejects(result,/RABIROUTE_QQ_JSON_MAX_BYTES/);else assert.equal((await result)[0].description.length,desc.length);"

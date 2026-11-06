@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
+import { createHash, sign } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -20,6 +20,33 @@ function writeAgent(root: string): void {
   fs.copyFileSync(new URL("../../apps/rabi-agent/desktop/rabi-agent.ico", import.meta.url), path.join(root, "desktop", "rabi-agent.ico"));
   fs.writeFileSync(path.join(root, "desktop", "unpublished.ico"), "not a release asset");
 }
+
+test("signed Agent releases include the three branded native hosts but exclude build caches", () => {
+  const root = temporaryDirectory("rabi-native-release-");
+  try {
+    const agentRoot = path.join(root, "agent"); writeAgent(agentRoot);
+    const native = path.join(agentRoot, "dist/native"); fs.mkdirSync(native, { recursive: true });
+    const names = ["RabiAgent.Terminal.exe", "RabiAgent.Computer.exe", "RabiAgent.Tray.exe"];
+    for (const name of [...names, "unpublished.exe", `tray-${"a".repeat(64)}.exe`]) fs.writeFileSync(path.join(native, name), `fixture:${name}`);
+    fs.writeFileSync(path.join(agentRoot, "package-lock.json"), '{"lockfileVersion":3}');
+    fs.writeFileSync(path.join(agentRoot, "desktop/start-windows.ps1"), "# Windows source entry");
+    fs.mkdirSync(path.join(agentRoot, "windows-runtime"));
+    fs.writeFileSync(path.join(agentRoot, "windows-runtime/architecture-specific.mjs"), "must not enter the generic release");
+    fs.mkdirSync(path.join(agentRoot, "runtime/backend/src"), { recursive: true });
+    fs.writeFileSync(path.join(agentRoot, "runtime/backend/src/worker.js"), "export const generated = true;");
+    fs.writeFileSync(path.join(agentRoot, "runtime/agent-profile.json"), '{"instances":[]}');
+    const store = new LanAgentReleaseStore({ rootDir: root, agentRoot });
+    const manifest = store.manifest();
+    assert.deepEqual(manifest.files.filter(file => file.path.endsWith(".exe")).map(file => file.path).sort(), names.map(name => `dist/native/${name}`).sort());
+    assert.equal(verifyLanAgentReleaseManifest(manifest, manifest.publicKeySha256), true);
+    assert.equal(manifest.files.some(file => file.path.startsWith("windows-runtime/")), false);
+    assert.equal(manifest.files.some(file => file.path === "desktop/start-windows.ps1"), true);
+    assert.equal(manifest.files.some(file => file.path === "package-lock.json"), true);
+    assert.equal(manifest.files.some(file => file.path === "runtime/backend/src/worker.js"), true);
+    assert.equal(manifest.files.some(file => file.path === "runtime/agent-profile.json"), true);
+    for (const name of names) assert.equal(store.readAsset(manifest.version, "node", `dist/native/${name}`).toString(), `fixture:${name}`);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
 
 test("an explicit common publication preserves original signed URLs and survives a different Manager package", () => {
   const root = temporaryDirectory("rabi-common-publication-");
@@ -264,5 +291,84 @@ test("failed release registration or signing leaves node selections and common p
     assert.deepEqual(fs.readFileSync(path.join(root, "data/lan-agent-releases/selections.json")), pointer);
     assert.deepEqual(store.publication("node-other"), original);
     assert.equal(fs.readdirSync(path.join(root, "data/lan-agent-releases")).some(name => name.startsWith(".prepare-")), false);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+
+test("new source releases sign the same projected owner bytes for live, common and immutable assets", () => {
+  const root = temporaryDirectory("rabi-plugin-owner-release-");
+  try {
+    const sourceRoot = path.join(root, "source"), agentRoot = path.join(sourceRoot, "apps/rabi-agent"); writeAgent(agentRoot);
+    const source = path.join(sourceRoot, "src/plugins/io.rabiroute.agent.dsh/apps/rabi-agent/lib/dsh.mjs");
+    fs.mkdirSync(path.dirname(source), { recursive: true });
+    const ownerBytes = Buffer.from("export function normalizeDshBinding(value) { return value; }\n"); fs.writeFileSync(source, ownerBytes);
+    const original = 'import { normalizeDshBinding } from "../../../src/plugins/io.rabiroute.agent.dsh/apps/rabi-agent/lib/dsh.mjs";\nexport { normalizeDshBinding };\n';
+    fs.writeFileSync(path.join(agentRoot, "lib/instance-agents.mjs"), original);
+    const store = new LanAgentReleaseStore({ rootDir: root, agentRoot, pluginSourceRoot: sourceRoot }), manifest = store.manifest();
+    const artifact = "lib/plugin-owners/io.rabiroute.agent.dsh/dsh.mjs";
+    assert.equal(manifest.files.filter(file => file.path === artifact).length, 1);
+    assert.equal(verifyLanAgentReleaseManifest(manifest, manifest.publicKeySha256), true);
+    assert.equal(JSON.stringify(manifest).includes(sourceRoot), false);
+    for (const file of manifest.files) {
+      const bytes = store.readAsset(manifest.version, "node", file.path);
+      assert.equal(createHash("sha256").update(bytes).digest("hex"), file.sha256);
+      assert.equal(bytes.length, file.size);
+    }
+    const digest = lanAgentReleaseManifestDigest(manifest); store.publishCommonRelease(digest);
+    assert.deepEqual(store.readAsset(manifest.version, "node", artifact), ownerBytes);
+    const projected = store.readAsset(manifest.version, "node", "lib/instance-agents.mjs");
+    assert.match(projected.toString(), /\.\/plugin-owners\/io\.rabiroute\.agent\.dsh\/dsh\.mjs/);
+    const archived = store.importRelease(agentRoot, { pluginSourceRoot: sourceRoot }); store.assignRelease("fixture-owner-node", archived.releaseDigest, digest);
+    fs.renameSync(sourceRoot, path.join(root, "source-retired"));
+    assert.deepEqual(store.readAsset(manifest.version, "node", artifact, "fixture-owner-node"), ownerBytes);
+    assert.deepEqual(store.readAsset(manifest.version, "node", "lib/instance-agents.mjs", "fixture-owner-node"), projected);
+    assert.equal(fs.readFileSync(path.join(root, "source-retired/apps/rabi-agent/lib/instance-agents.mjs"), "utf8"), original);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("an already signed common release keeps original bytes before explicit source publication", () => {
+  const root = temporaryDirectory("rabi-legacy-common-owner-");
+  try {
+    const sourceRoot = path.join(root, "source"), agentRoot = path.join(sourceRoot, "apps/rabi-agent"); writeAgent(agentRoot);
+    const relative = "lib/instance-agents.mjs"; fs.writeFileSync(path.join(agentRoot, relative), "export const original = true;\n");
+    const store = new LanAgentReleaseStore({ rootDir: root, agentRoot, pluginSourceRoot: sourceRoot }), manifest = store.manifest();
+    const source = path.join(sourceRoot, "src/plugins/io.rabiroute.agent.dsh/apps/rabi-agent/lib/dsh.mjs");
+    fs.mkdirSync(path.dirname(source), { recursive: true }); fs.writeFileSync(source, "export function normalizeDshBinding(value) { return value; }\n");
+    const oldBytes = Buffer.from('import { normalizeDshBinding } from "../../../src/plugins/io.rabiroute.agent.dsh/apps/rabi-agent/lib/dsh.mjs";\n');
+    // This archived format predates owner projection; its signed bytes are the contract.
+    fs.writeFileSync(path.join(agentRoot, relative), oldBytes);
+    const entry = manifest.files.find(file => file.path === relative)!;
+    entry.sha256 = createHash("sha256").update(oldBytes).digest("hex"); entry.size = oldBytes.length;
+    const keys = JSON.parse(fs.readFileSync(path.join(root, "data/lan-agent-release-signing-key.json"), "utf8"));
+    manifest.signature = sign(null, Buffer.from(JSON.stringify({ version: manifest.version, platform: manifest.platform, minNodeVersion: manifest.minNodeVersion, files: manifest.files })), keys.privateKey).toString("base64");
+    assert.equal(verifyLanAgentReleaseManifest(manifest, manifest.publicKeySha256), true);
+    const digest = lanAgentReleaseManifestDigest(manifest), common = path.join(root, "data/lan-agent-releases/common.json");
+    fs.mkdirSync(path.dirname(common), { recursive: true });
+    fs.writeFileSync(common, JSON.stringify({ schemaVersion: 1, releaseDigest: digest, agentRoot: fs.realpathSync(agentRoot), manifest }));
+    const before = fs.readFileSync(common);
+    assert.deepEqual(store.manifest(), manifest);
+    assert.deepEqual(store.readAsset(manifest.version, "node", relative), oldBytes);
+    assert.deepEqual(fs.readFileSync(common), before);
+    // The integrity check for an explicit update must also read original bytes.
+    assert.doesNotThrow(() => store.publishCommonRelease(digest));
+    assert.equal(store.manifest().files.some(file => file.path === "lib/plugin-owners/io.rabiroute.agent.dsh/dsh.mjs"), true);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+
+test("importing a materialized legacy package signs its original bytes without source projection", () => {
+  const root = temporaryDirectory("rabi-legacy-materialized-import-");
+  try {
+    const agentRoot = path.join(root, "materialized"); writeAgent(agentRoot);
+    const relative = "lib/instance-agents.mjs", bytes = Buffer.from('import { normalizeDshBinding } from "../../../src/plugins/io.rabiroute.agent.dsh/apps/rabi-agent/lib/dsh.mjs";\n');
+    fs.writeFileSync(path.join(agentRoot, relative), bytes);
+    const store = new LanAgentReleaseStore({ rootDir: root, agentRoot }), manifest = store.manifest();
+    assert.equal(manifest.files.some(file => file.path.includes("plugin-owners")), false);
+    assert.deepEqual(store.readAsset(manifest.version, "node", relative), bytes);
+    const digest = lanAgentReleaseManifestDigest(manifest), archive = store.importRelease(agentRoot);
+    store.assignRelease("legacy-materialized-node", archive.releaseDigest, digest);
+    fs.renameSync(agentRoot, path.join(root, "materialized-retired"));
+    assert.deepEqual(store.readAsset(manifest.version, "node", relative, "legacy-materialized-node"), bytes);
+    assert.equal(store.manifest("legacy-materialized-node").files.some(file => file.path.includes("plugin-owners")), false);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });

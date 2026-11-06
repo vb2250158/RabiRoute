@@ -87,7 +87,7 @@ async function startBuiltManager(t, readOnly = true, bridgeFixture, peerFixture,
   await fs.mkdir(path.dirname(profilePath)); await fs.writeFile(profilePath, JSON.stringify(profile));
   // Only discovery is simulated. The compiled native Hub still owns the actual
   // HMAC handshake, socket dispatch, task state, file storage and callback lifetime.
-  let prelude = bridgeFixture ? `const {RemoteAgentHub}=await import(${JSON.stringify(pathToFileURL(path.join(packageRoot, "dist/messageEndpoints/remoteAgentManager.js")).href)}); RemoteAgentHub.prototype.discoverRemoteAgents=async()=>[${JSON.stringify(bridgeFixture)}];` : "";
+  let prelude = bridgeFixture ? `const {RemoteAgentHub}=await import(${JSON.stringify(pathToFileURL(path.join(packageRoot, "dist/plugins/io.rabiroute.manager.remote-agent/src/messageEndpoints/remoteAgentManager.js")).href)}); RemoteAgentHub.prototype.discoverRemoteAgents=async()=>[${JSON.stringify(bridgeFixture)}];` : "";
   if (nativeFixture) {
     const { ManagerConfigRepository } = await import(pathToFileURL(path.join(packageRoot, "dist/manager/configRepository.js")).href);
     await fs.mkdir(path.join(root, "roles", "CompiledNativeRole"), { recursive: true });
@@ -621,7 +621,7 @@ test("compiled peer plugin publishes seven fixed HTTP proxies, native fallback a
   assert.equal(help.operations.filter(value => value.id.startsWith('manager.personas.skills.')).length, 6);
   const resourceRole = path.join(root, 'roles/CompiledResourceRole'); await fs.mkdir(resourceRole, { recursive: true });
   await fs.writeFile(path.join(resourceRole, 'persona.md'), '# Compiled resource\n');
-  const { ensurePersonaPlanWorkflow } = await import(pathToFileURL(path.join(packageRoot, 'dist/personaPlanWorkflow.js')).href);
+  const { ensurePersonaPlanWorkflow } = await import(pathToFileURL(path.join(packageRoot, 'dist/plugins/io.rabiroute.manager.persona/src/personaPlanWorkflow.js')).href);
   ensurePersonaPlanWorkflow(resourceRole);
   const resourceDocument = await client.invokeOperation('manager.personas.resources.document.read', { path: { roleId: 'CompiledResourceRole' } }); assert.equal(resourceDocument.statusCode, 200); assert.equal(resourceDocument.body, '# Compiled resource\n');
   const nativeChatHistory = await client.invokeOperation('manager.personas.history.chat.read', { path: { roleId: 'CompiledResourceRole' } }); assert.equal(nativeChatHistory.statusCode, 200); assert.deepEqual(JSON.parse(nativeChatHistory.body).data.entries, []);

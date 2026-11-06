@@ -19,6 +19,10 @@ Choose one option on the WebGUI **Settings** page:
 
 Built-in choices are persisted by the page save action. A custom theme is persisted directly by **Save and apply**. The current WebGUI changes immediately. The tray changes on its next settings refresh, usually within ten seconds, and also reads the saved choice on restart.
 
+## Scrollbars
+
+Internal WebGUI sidebars, chat lists, documents, plans and memory, popup menus, and remote terminals share transparent tracks and thin, borderless thumbs. Desktop Chromium uses a 6px style, with stronger hover/focus visibility. Colors follow light, dark, and custom themes. Remote terminal canvas, cursor, and selection colors update with the theme too. The outer browser page scrollbar retains browser settings. The native tray task window and dialogue bubble also use 6px transparent tracks without arrow buttons. Native colors follow the selected theme; a bubble keeps its configured text color, skin, and opacity.
+
 ## Single source of truth
 
 The theme is a host-level desktop setting stored in `data/desktop/settings.json`:

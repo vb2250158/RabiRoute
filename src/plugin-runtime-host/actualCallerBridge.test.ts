@@ -17,7 +17,7 @@ import { ApiContractError } from "../manager/apiOperationContract.js";
 import { BridgedIsolatedPluginExecutor } from "./bridge/executor.mjs";
 
 type Package = Readonly<{ id: string; source: string; requires?: readonly string[]; provides: readonly string[]; asyncProvides?: Readonly<Record<string, readonly string[]>> }>;
-async function fixture(t: TestContext, packages: readonly Package[], hostServices: readonly HostService[] = [], archiveOptions: ConstructorParameters<typeof AsyncPluginOutcomeArchive>[1] = {}, shutdownTimeoutMs = DEFAULT_PLUGIN_SHUTDOWN_TIMEOUT_MS, activationTimeoutMs = 1000) {
+async function fixture(t: TestContext, packages: readonly Package[], hostServices: readonly HostService[] = [], archiveOptions: ConstructorParameters<typeof AsyncPluginOutcomeArchive>[1] = {}, shutdownTimeoutMs = DEFAULT_PLUGIN_SHUTDOWN_TIMEOUT_MS, activationTimeoutMs: number | null = 1000) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "isolated-real-caller-"));
   const packageRoot = path.join(root, "packages");
   for (const plugin of packages) {
@@ -42,7 +42,7 @@ async function fixture(t: TestContext, packages: readonly Package[], hostService
   let diagnosticFailure = false;
   const executor = createFullPluginExecutor(leases, archive, observation => { lastAsyncObservation = observation; if (diagnosticFailure) throw new Error("fixture-only diagnostic observer failure"); }), lifecycleFailures: unknown[] = [];
   const runtimes: GenerationRuntime[] = [];
-  const runtime = new GenerationRuntime({ host: "manager", executor, hostServices, activationTimeoutMs, applicationIdentity: { applicationGenerationId: "fixture-generation", managerInstanceId: "fixture-manager" }, onRuntimeFailure: failure => { lifecycleFailures.push(failure); } });
+  const runtime = new GenerationRuntime({ host: "manager", executor, hostServices, activationTimeoutMs: activationTimeoutMs ?? undefined, applicationIdentity: { applicationGenerationId: "fixture-generation", managerInstanceId: "fixture-manager" }, onRuntimeFailure: failure => { lifecycleFailures.push(failure); } });
   runtimes.push(runtime);
   t.after(async () => {
     const failures: unknown[] = [];
@@ -63,7 +63,7 @@ async function fixture(t: TestContext, packages: readonly Package[], hostService
     observedChildren: observed,
     asyncObservation: () => lastAsyncObservation,
     failDiagnostic: () => { diagnosticFailure = true; },
-    anotherRuntime() { const owner = new GenerationRuntime({ host: "manager", executor, hostServices, activationTimeoutMs: 1000, applicationIdentity: { applicationGenerationId: "fixture-generation", managerInstanceId: "fixture-manager" }, onRuntimeFailure: failure => { lifecycleFailures.push(failure); } }); runtimes.push(owner); return owner; },
+    anotherRuntime() { const owner = new GenerationRuntime({ host: "manager", executor, hostServices, activationTimeoutMs: activationTimeoutMs ?? undefined, applicationIdentity: { applicationGenerationId: "fixture-generation", managerInstanceId: "fixture-manager" }, onRuntimeFailure: failure => { lifecycleFailures.push(failure); } }); runtimes.push(owner); return owner; },
     async reload() { loaded = await loadPluginProfile({ profilePath, packageCatalog: catalog, runtimeRoot: path.join(root, "immutable"), host: "manager", previous: loaded }); return loaded; }
   };
 }
@@ -74,7 +74,7 @@ test("real factory and normal PackageCatalog wire two async providers and origin
   const f = await fixture(t, [
     { id: "org.example.provider", requires: ["host.fixture@1"], provides: ["fixture.provider@1"], asyncProvides: { "fixture.provider@1": ["run"] }, source: `export function activate(c){c.services.provide('fixture.provider@1',{async run(value){return (await c.services.require('host.fixture@1').run(value))+':provider';}});}` },
     { id: "org.example.consumer", requires: ["fixture.provider@1"], provides: ["fixture.consumer@1"], asyncProvides: { "fixture.consumer@1": ["run"] }, source: `export function activate(c){c.services.provide('fixture.consumer@1',{async run(value){return (await c.services.require('fixture.provider@1').run(value))+':consumer';}});}` }
-  ], [{ capability: "host.fixture@1", value: service }]);
+  ], [{ capability: "host.fixture@1", value: service }], {}, DEFAULT_PLUGIN_SHUTDOWN_TIMEOUT_MS, null);
   const result = await f.runtime.switch(f.loaded.candidates);
   assert.deepEqual(result.generation.records.map(row => row.status), ["active", "active"], JSON.stringify(result.generation.records.map(row => ({ status: row.status, error: row.error }))));
   const consumer = result.generation.services.services.get("fixture.consumer@1")?.value as { run(value: string): Promise<string> };
@@ -285,7 +285,7 @@ test("real factory child import blocking fails locally while unrelated plugin an
   const f = await fixture(t, [
     { id: "org.example.blocked", provides: [], asyncProvides: {}, source: "while(true){};export function activate(){}" },
     { id: "org.example.usable", provides: ["fixture.usable@1"], asyncProvides: {}, source: "export function activate(c){c.services.provide('fixture.usable@1',{ready:true});}" }
-  ]);
+  ], [], {}, DEFAULT_PLUGIN_SHUTDOWN_TIMEOUT_MS, 1000);
   let ticks = 0; const timer = setInterval(() => ticks++, 5); t.after(() => clearInterval(timer));
   const result = await f.runtime.switch(f.loaded.candidates);
   assert.equal(result.generation.records.find(row => row.identity.instanceId === "org.example.blocked")?.status, "failed");

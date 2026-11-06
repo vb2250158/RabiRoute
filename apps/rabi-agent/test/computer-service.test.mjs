@@ -5,9 +5,47 @@ import os from "node:os";
 import path from "node:path";
 import { randomUUID, createHash } from "node:crypto";
 import { spawn } from "node:child_process";
+import { EventEmitter } from "node:events";
 import { ComputerService } from "../lib/computer-service.mjs";
 import { computerRequestSchema } from "../lib/interactive-protocol.mjs";
 const sha = value => createHash("sha256").update(value).digest("hex");
+
+test("computer stop joins the actual helper close before confirming cleanup", async t => {
+  const child = spawn(process.execPath, ["-e", "console.log('ready');setInterval(()=>{},1000)"], { windowsHide: true, stdio: ["ignore", "pipe", "ignore"] });
+  let closed = false;
+  const exited = new Promise(resolve => child.once("close", () => { closed = true; resolve(); }));
+  t.after(async () => { if (!closed) child.kill("SIGKILL"); await exited; });
+  await new Promise((resolve, reject) => { child.stdout.once("data", resolve); child.once("error", reject); });
+  const service = new ComputerService();
+  service.children.add(child);
+  const stopping = service.stop();
+  assert.equal(service.stop(), stopping, "repeated stop joins the same owner");
+  await stopping;
+  assert.equal(closed, true, "kill acceptance is insufficient; close must be observed");
+});
+
+test("computer stop retains a delayed helper until close and reports an unconfirmed kill", async () => {
+  const child = new EventEmitter();
+  child.kill = () => false;
+  const service = new ComputerService({ timeout: () => 1000 });
+  service.children.add(child);
+  let settled = false;
+  const stopping = service.stop().finally(() => { settled = true; });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(settled, false);
+  child.emit("close", 0);
+  await stopping;
+
+  const failed = new EventEmitter();
+  failed.kill = () => { throw new Error("fixture kill denied"); };
+  const blocked = new ComputerService({ timeout: () => 20 });
+  blocked.children.add(failed);
+  await assert.rejects(blocked.stop(), error => error instanceof AggregateError
+    && error.errors.some(item => /helper process close remains unconfirmed/.test(item.message)
+      && item.cause?.message === "fixture kill denied"));
+  assert.equal(blocked.children.has(failed), true, "unconfirmed closure retains ownership");
+  failed.emit("close", 0);
+});
 function removePrivateFixture(root) {
   const absolute = path.resolve(root);
   assert.ok(absolute.startsWith(path.resolve(os.tmpdir()) + path.sep));

@@ -7,7 +7,7 @@ const selfFile = "scripts/check-rabilink-legacy.mjs";
 
 const checks = [
   {
-    file: "src/config.ts",
+    file: "src/plugins/io.rabiroute.agent.codex/src/config.ts",
     forbidden: [
       [/process\.env\.RABILINK_RELAY_TOKEN/, "runtime config must read RABILINK_RELAY_APP_TOKEN, not the legacy relay token name."],
       [/rabiLinkRelayToken:/, "runtime config property should be named rabiLinkRelayAppToken."],
@@ -136,7 +136,7 @@ const checks = [
     ],
   },
   {
-    file: "ribiwebgui/src/pages/ProjectDocsPage.vue",
+    file: "src/plugins/io.rabiroute.manager.core/web/pages/ProjectDocsPage.vue",
     forbidden: [
       [/docs: \["docs\/mobile-app-webhook-integration\.md", "docs\/rabilink-relay-server\.md"\]/, "RabiLink docs page should not prioritize the old mobile webhook document."],
     ],

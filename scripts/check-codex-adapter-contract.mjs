@@ -5,18 +5,18 @@ import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const read = (...parts) => fs.readFileSync(path.join(root, ...parts), "utf8");
-const bridge = read("src", "codexDesktopBridge.ts");
-const runtime = read("src", "codexRuntime.ts");
-const sessionResolver = read("src", "codexSessionResolver.ts");
+const bridge = read("src", "plugins", "io.rabiroute.agent.codex", "src", "codexDesktopBridge.ts");
+const runtime = read("src", "plugins", "io.rabiroute.agent.codex", "src", "codexRuntime.ts");
+const sessionResolver = read("src", "plugins", "io.rabiroute.agent.codex", "src", "codexSessionResolver.ts");
 const manager = read("src", "manager", "controlPlaneRoutes.ts");
-const overview = read("ribiwebgui", "src", "pages", "OverviewPage.vue");
-const routeConfig = read("ribiwebgui", "src", "pages", "RouteConfigPage.vue");
-const codexCard = read("ribiwebgui", "src", "agentAdapters", "CodexAgentCard.vue");
+const overview = read("src", "plugins", "io.rabiroute.manager.core", "web", "pages", "OverviewPage.vue");
+const routeConfig = read("src", "plugins", "io.rabiroute.manager.message-adapter-control", "web", "pages", "RouteConfigPage.vue");
+const codexCard = read("src", "plugins", "io.rabiroute.agent.codex", "web", "agentAdapters", "CodexAgentCard.vue");
 const quickSetup = read("ribiwebgui", "src", "components", "QuickSetupDialog.vue");
 const gatewayStore = read("ribiwebgui", "src", "stores", "gatewayStore.ts");
 const sessionBinding = read("src", "shared", "codexSessionBinding.ts");
 const sessionInitialization = read("src", "shared", "codexSessionInitialization.ts");
-const runtimeLog = read("ribiwebgui", "src", "pages", "RuntimeLogPage.vue");
+const runtimeLog = read("src", "plugins", "io.rabiroute.manager.diagnostics", "web", "pages", "RuntimeLogPage.vue");
 const adapterSkill = read("skills", "create-rabiroute-agent-adapter", "SKILL.md");
 const ownerFirstGate = read("skills", "create-rabiroute-agent-adapter", "references", "owner-first-design-gate.md");
 const packageJson = JSON.parse(read("package.json"));
@@ -86,8 +86,8 @@ assert.match(ownerFirstGate, /同一 session ID ≠ 同一 live task owner/);
 assert.match(ownerFirstGate, /RabiRoute event -> adapter -> transport -> exact session\/task owner -> turn -> observable result/);
 assert.equal(fs.existsSync(nestedDist), false, "Backend build must not leave a shadow dist/src runtime tree.");
 if (fs.existsSync(builtAgentThreadsPath)) {
-  assert.match(fs.readFileSync(builtAgentThreadsPath, "utf8"), /codexSessionResolver/,
-    "The runnable dist/agentThreads.js must contain the canonical resolver.");
+  assert.match(fs.readFileSync(builtAgentThreadsPath, "utf8"), /codexNative/,
+    "The runnable host must call the published Codex owner rather than importing private resolver state.");
 }
 
 console.log("Codex adapter contract OK: Desktop IPC is the only real-message owner; full task ID identifies an existing task while each delivery supplies its workspace; archived bindings create and persist a new task without same-name reuse.");

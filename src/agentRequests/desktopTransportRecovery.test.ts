@@ -8,7 +8,7 @@ import http from "node:http";
 import WebSocket from "ws";
 import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
-import { CodexDesktopBridge, CodexDesktopPromptNotSentError } from "../codexDesktopBridge.js";
+import { CodexDesktopBridge, CodexDesktopPromptNotSentError } from "../plugins/io.rabiroute.agent.codex/src/codexDesktopBridge.js";
 import { executeEndpointOnOwner } from "./ownerExecution.js";
 import { EndpointTransportReceipts } from "./endpointTransportReceipts.js";
 import { executePreparedEndpointDelivery } from "./endpointExecution.js";
@@ -18,7 +18,7 @@ import { executeEndpointAgentDelivery, reconcileEndpointDelivery, EndpointDelive
 import { LanAgentRegistry } from "../manager/lanAgentRegistry.js";
 import { createAgentEndpointDelivery, type AgentEndpointDeliveryContext } from "../manager/agentEndpointDelivery.js";
 import { manageInstanceAgent } from "../agentAdapters/instanceManagement.js";
-import * as codexOwner from "../agentAdapters/codexOwnerExecution.js";
+import * as codexOwner from "../plugins/io.rabiroute.agent.codex/src/agentAdapters/codexOwnerExecution.js";
 import type { AgentManagerOperationInvoker } from "../agentAdapters/managerInvocation.js";
 
 // Inject the real package-owned native boundary; the IPC and durable stores below remain real fixtures.

@@ -48,11 +48,11 @@ test("selection speech uses the default model until advanced selection is enable
 });
 
 test("WebGUI stores trusted system selection settings through Manager and does not inspect browser selections", () => {
-  const page = fs.readFileSync(new URL("../src/pages/SettingsPage.vue", import.meta.url), "utf8");
-  const renderer = fs.readFileSync(new URL("../src/components/renderers/DesktopSettingsRenderer.vue", import.meta.url), "utf8");
+  const page = fs.readFileSync(new URL("../../src/plugins/io.rabiroute.manager.core/web/pages/SettingsPage.vue", import.meta.url), "utf8");
+  const renderer = fs.readFileSync(new URL("../../src/plugins/io.rabiroute.manager.desktop/web/components/renderers/DesktopSettingsRenderer.vue", import.meta.url), "utf8");
   const app = fs.readFileSync(new URL("../src/App.vue", import.meta.url), "utf8");
-  const client = fs.readFileSync(new URL("../src/speech/speechControlClient.ts", import.meta.url), "utf8");
-  const routes = fs.readFileSync(new URL("../../src/manager/speechApiOperations.ts", import.meta.url), "utf8");
+  const client = fs.readFileSync(new URL("../../src/plugins/io.rabiroute.manager.speech/web/speech/speechControlClient.ts", import.meta.url), "utf8");
+  const routes = fs.readFileSync(new URL("../../src/plugins/io.rabiroute.manager.speech/src/manager/speechApiOperations.ts", import.meta.url), "utf8");
   assert.match(page, /TrustedWebRendererHost/);
   assert.doesNotMatch(page, /selectionSpeechEnabled|selectionSpeechAdvanced|selectionSpeechModel/);
   assert.match(renderer, /开启滑词菜单/);

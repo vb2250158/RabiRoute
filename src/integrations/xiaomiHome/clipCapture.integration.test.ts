@@ -4,8 +4,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { XiaomiHomeArtifactStore } from "./artifactStore.js";
-import { XiaomiHomeClipCaptureWorker } from "./clipCapture.js";
+import { XiaomiHomeArtifactStore } from "../../plugins/io.rabiroute.manager.xiaomi-home/src/integrations/xiaomiHome/artifactStore.js";
+import { XiaomiHomeClipCaptureWorker } from "../../plugins/io.rabiroute.manager.xiaomi-home/src/integrations/xiaomiHome/clipCapture.js";
 
 const ffmpegPath = process.env.XIAOMI_TEST_FFMPEG;
 const ffprobePath = process.env.XIAOMI_TEST_FFPROBE;

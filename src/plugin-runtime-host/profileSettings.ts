@@ -2,13 +2,14 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import { acquireFileLockSync, atomicWriteFileSync } from "../shared/filePersistence.js";
-import { readPluginProfile, type PluginProfile } from "../plugin-kernel/profile.js";
+import { applicationRuntimeLayout } from "../shared/runtimeLayout.js";
+import { readPluginProfile, type PluginProfile, type PluginProfileDiagnostic } from "../plugin-kernel/profile.js";
 
 type Override = { enabled?: boolean; config?: Record<string, unknown> };
 export type PluginProfileSettingsSnapshot = Readonly<{
   revision: string;
   profile: PluginProfile;
-  diagnostics: readonly Readonly<{ instanceId: string; message: string }>[];
+  diagnostics: readonly Readonly<{ instanceId?: string; message: string; rowIndex?: number; source?: PluginProfileDiagnostic["source"] }>[];
 }>;
 export type PluginInstanceSettingsUpdate = Override & { expectedRevision: string };
 
@@ -19,7 +20,7 @@ export class PluginSettingsConflict extends Error {
 
 /** User settings overlay immutable package defaults; each instance owns its file. */
 export class PluginProfileSettings {
-  constructor(readonly options: Readonly<{ profilePath: string; settingsRoot: string }>) {}
+  constructor(readonly options: Readonly<{ profilePath: string; settingsRoot: string; migrationsPath?: string }>) {}
 
   private settingsPath(instanceId: string): string {
     return path.join(this.options.settingsRoot, createHash("sha256").update(instanceId).digest("hex") + ".json");
@@ -27,12 +28,13 @@ export class PluginProfileSettings {
 
   async snapshot(): Promise<PluginProfileSettingsSnapshot> {
     let base: PluginProfile;
-    try { base = await readPluginProfile(this.options.profilePath); }
+    try { base = await readPluginProfile(this.options.profilePath, { migrationsPath: this.options.migrationsPath
+      ?? path.join(applicationRuntimeLayout().packageRoot, "dist", "plugins", "profiles", "package-migrations.json") }); }
     catch (error) {
       if (error instanceof SyntaxError) throw new Error("Plugin profile is invalid JSON.");
       throw error;
     }
-    const diagnostics: { instanceId: string; message: string }[] = [];
+    const diagnostics: Array<PluginProfileSettingsSnapshot["diagnostics"][number]> = [...(base.diagnostics ?? [])];
     const hash = createHash("sha256").update(JSON.stringify(base));
     const rows = await Promise.all(base.instances.map(async instance => {
       let raw: string | undefined;

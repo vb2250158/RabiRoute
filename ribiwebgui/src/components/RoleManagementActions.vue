@@ -4,7 +4,7 @@ import { useRouter } from "vue-router";
 import { useRoleStore, mutateRole, roleRequest, type RoleDetail } from "../stores/roleStore";
 import { roleConfigPath } from "../roleScopedNavigation";
 import { browserUuid } from "../browserUuid";
-import { remotePersonaServicePath } from "../persona/remotePersonaReference";
+import { remotePersonaServicePath } from "../../../src/plugins/io.rabiroute.manager.persona/web/persona/remotePersonaReference";
 const roles = useRoleStore();
 defineProps<{ createOnly?: boolean; hideCreate?: boolean }>();
 const router = useRouter();

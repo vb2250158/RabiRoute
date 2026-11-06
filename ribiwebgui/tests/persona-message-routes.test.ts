@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { GatewayDefinition } from "../src/types";
-import { personaMessagesLocation, routesForPersona } from "../src/persona/personaMessageRoutes";
+import { personaMessagesLocation, routesForPersona } from "../../src/plugins/io.rabiroute.manager.persona/web/persona/personaMessageRoutes";
 
 const route = (id: string, agentRoleId?: string, agentRoleDeviceId?: string) => ({ id, agentRoleId, agentRoleDeviceId }) as GatewayDefinition;
 

@@ -7,8 +7,8 @@ import test from "node:test";
 import { AgentRequestStore } from "../agentRequests/store.js";
 import { executeEndpointAgentDelivery, reconcileEndpointDelivery, type EndpointDeliveryOptions } from "../agentRequests/endpointDelivery.js";
 import type { AgentRequestEndpoint } from "../agentRequests/endpoint.js";
-import { createAgentThreadControlOwner, type AgentThreadControlRoutesContext } from "./agentThreadControlRoutes.js";
-import { createAgentThreadControlOperations } from "./agentThreadControlOperations.js";
+import { createAgentThreadControlOwner, type AgentThreadControlRoutesContext } from "../plugins/io.rabiroute.manager.agent-thread-control/src/manager/agentThreadControlRoutes.js";
+import { createAgentThreadControlOperations } from "../plugins/io.rabiroute.manager.agent-thread-control/src/manager/agentThreadControlOperations.js";
 import { createAgentDeliveryRecordOperations } from "./agentDeliveryRecords.js";
 import { ManagerPluginRouteRegistry } from "./managerPluginRouteRegistry.js";
 import { markAuthenticatedConnectionRequest } from "./connectionRequestAccess.js";
@@ -43,7 +43,7 @@ async function fixture(t: test.TestContext) {
     readEndpointDeliveryOptions: () => options(),
     handleAgentThreadRequest: (request: Parameters<typeof executeEndpointAgentDelivery>[0]) => executeEndpointAgentDelivery(request, options()),
     agentThreadRequestFailureData: (error: unknown) => ({ ok: false, message: error instanceof Error ? error.message : "fixture failure" }),
-    refreshAgentRequestReminderTimers: () => {}, publishManagerEvent: () => {}, operationalLog: { record: () => {} }, operationalError: () => ({ message: "fixture" })
+    publishManagerEvent: () => {}, operationalLog: { record: () => {} }, operationalError: () => ({ message: "fixture" })
   } as unknown as AgentThreadControlRoutesContext;
   const registrations: { dispose(): Promise<void> | void }[] = [], servers: http.Server[] = [], responses: unknown[] = [];
   async function listen() {

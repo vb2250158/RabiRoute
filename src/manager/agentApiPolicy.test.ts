@@ -1,14 +1,14 @@
 import { LAN_AGENT_MANAGEMENT_ROUTES } from "./lanAgentManagementContract.js";
-import { LAN_AGENT_READ_ROUTES } from "./lanAgentReadOperations.js";
-import { LAN_AGENT_INTERACTIVE_ROUTES } from "./lanAgentInteractiveContract.js";
+import { LAN_AGENT_READ_ROUTES } from "../plugins/io.rabiroute.manager.core/src/manager/lanAgentReadOperations.js";
+import { LAN_AGENT_INTERACTIVE_ROUTES } from "../plugins/io.rabiroute.manager.core/src/manager/lanAgentInteractiveContract.js";
 import { REMOTE_AGENT_ROUTES } from "./remoteAgentContract.js";
 import { CODEX_HOOK_OPERATIONS, codexHookOperationContract } from "./codexHookContract.js";
-import { qqReadOperationContract } from "./qqReadContract.js";
-import { qqStickerOperationContract } from "./qqStickerContract.js";
-import { createAgentReceiptMaintenanceOperations } from "./agentSendReceiptOperations.js";
+import { qqReadOperationContract } from "../plugins/io.rabiroute.endpoint.napcat/src/manager/qqReadContract.js";
+import { qqStickerOperationContract } from "../plugins/io.rabiroute.endpoint.napcat/src/manager/qqStickerContract.js";
+import { createAgentReceiptMaintenanceOperations } from "../plugins/io.rabiroute.manager.agent-communication/src/manager/agentSendReceiptOperations.js";
 import { agentUploadOperationContract } from "./agentUploadContract.js";
 import { createAgentDeliveryRecordOperations } from "./agentDeliveryRecords.js";
-import { createAgentThreadControlOperations } from "./agentThreadControlOperations.js";
+import { createAgentThreadControlOperations } from "../plugins/io.rabiroute.manager.agent-thread-control/src/manager/agentThreadControlOperations.js";
 import { AgentRequestStore } from "../agentRequests/store.js";
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -82,7 +82,7 @@ test("discovery exposes immutable contracts without enforcing a second feature p
 });
 
 test("legacy discovery entries retain declaration or executable-owner source evidence, not runtime coverage", () => {
-  const root = new URL("../../plugins/builtin/", import.meta.url);
+  const root = new URL("../plugins/", import.meta.url);
   const declarations: { kind: string; path: string; methods?: string[] }[] = [];
   let managerFiles = 0;
   for (const entry of fs.readdirSync(root, { recursive: true, encoding: "utf8" })) {
@@ -122,11 +122,18 @@ test("legacy discovery entries retain declaration or executable-owner source evi
     ...(["GET", "PUT"] as const).map(method => agentUploadOperationContract(method, Number.MAX_SAFE_INTEGER))];
   // Compatibility inventory only. Real dispatch/ownership is exercised by executable HTTP
   // and compiled-Manager tests; source presence cannot prove full-project coverage.
-  const executableOwnerSources = ["apiDiscoveryRoutes", "corePublicOperations", "agentSendOperations", "agentSendReceiptOperations",
-    "agentCommunicationRecordOperations", "agentChatHistoryOperation", "codexHookContract", "agentAdapterCatalogContract",
-    "agentUploadRoutes", "agentQqDiagnostics", "agentGroupFiles", "resourceApiContract", "webguiAccessOperations"]
-    .map(name => fs.readFileSync(new URL(`./${name}.ts`, import.meta.url), "utf8"));
-  executableOwnerSources.push(fs.readFileSync(new URL("../../plugins/builtin/io.rabiroute.manager.diagnostics/1.0.0/operations.mjs", import.meta.url), "utf8"));
+  const executableOwnerSources = [
+    "../plugins/io.rabiroute.manager.agent-communication/src/manager/apiDiscoveryRoutes.ts", "./corePublicOperations.ts",
+    "../plugins/io.rabiroute.manager.agent-communication/src/manager/agentSendOperations.ts",
+    "../plugins/io.rabiroute.manager.agent-communication/src/manager/agentSendReceiptOperations.ts",
+    "../plugins/io.rabiroute.manager.agent-communication/src/manager/agentCommunicationRecordOperations.ts",
+    "../plugins/io.rabiroute.manager.agent-communication/src/manager/agentChatHistoryOperation.ts",
+    "./codexHookContract.ts", "./agentAdapterCatalogContract.ts",
+    "../plugins/io.rabiroute.manager.agent-communication/src/manager/agentUploadRoutes.ts",
+    "../plugins/io.rabiroute.endpoint.napcat/src/manager/agentQqDiagnostics.ts",
+    "../plugins/io.rabiroute.endpoint.napcat/src/manager/agentGroupFiles.ts", "./resourceApiContract.ts", "./webguiAccessOperations.ts"]
+    .map(owner => fs.readFileSync(new URL(owner, import.meta.url), "utf8"));
+  executableOwnerSources.push(fs.readFileSync(new URL("../plugins/io.rabiroute.manager.diagnostics/operations.mjs", import.meta.url), "utf8"));
   const missingSources: string[] = [];
   for (const operation of listAgentApiOperations()) {
     const path = sample(operation.pathTemplate);

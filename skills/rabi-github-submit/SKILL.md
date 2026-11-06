@@ -1,6 +1,6 @@
 ---
 name: rabi-github-submit
-description: Prepares, reviews, commits, and publishes RabiRoute changes with a mandatory per-commit patch-version bump, bilingual version log, Rabi context, privacy, security, validation, and exact-commit evidence. Use when the user asks to prepare, commit, push, publish, release, or open a PR for RabiRoute.
+description: Prepares, reviews, commits, and publishes RabiRoute changes with a independent Host and plugin versioning, bilingual version log, Rabi context, privacy, security, validation, and exact-commit evidence. Use when the user asks to prepare, commit, push, publish, release, or open a PR for RabiRoute.
 ---
 
 # RabiRoute GitHub Submit
@@ -17,13 +17,17 @@ When a finding concerns existing behavior rather than a merge regression, report
 
 ## Quick start
 
-Run from any directory inside the RabiRoute repository:
+Run from any directory inside the RabiRoute repository using PowerShell 7 (the version gate uses `ConvertFrom-Json -AsHashtable`):
 
 ```powershell
 & "<skill-root>\scripts\Invoke-RabiSubmitPreflight.ps1" -Scope WorkingTree
 ```
 
-Run again with `-Scope Staged` after staging and before committing. `Critical` or `High` findings, a missing exact patch bump, or an incomplete bilingual version entry block commit and publication.
+Run again with `-Scope Staged` after staging and before committing. Unresolved `Critical` or `High` findings, an invalid Host/plugin version transition, or an incomplete bilingual version entry block commit and publication.
+
+After independent source-to-sink review, an explicit external `-ReviewReceipt <file.json>` may close only exact `High` candidates classified as `false_positive` or `verified_trusted_contract`, with `status=closed`, `realVulnerability=false`, review facts and hash-verified evidence. It cannot accept a real vulnerability or resolve Critical findings. The receipt binds repository identity, base HEAD, scope, the complete scoped change set and each finding's rule/path/line/hunk/full scoped blob. Staged evidence comes only from the index. WorkingTree identities bind raw bytes for every file, including text and binary; only the finding's display hunk normalizes CRLF to LF. WorkingTree evidence cannot substitute for Staged. See [exact review receipts](REFERENCE.md#exact-review-receipts).
+
+Keep the scanner's `security` report unchanged. Report `securityReview.rawPassed` separately from `effectivePassed`; effective resolution never means the raw scan is green. New or changed findings, files, HEAD, scope or evidence invalidate the receipt. Without the explicit parameter, the command retains its original behavior. Receipts are per-operation external evidence, not repository ignore lists or permission to stage, commit or publish.
 
 After changing the preflight or its scanner, run the bundled regression suite:
 
@@ -47,31 +51,24 @@ Run the bundled preflight before editing changelogs or Rabi context. Review ever
 
 Do not proceed with unresolved private/runtime paths, real credentials, private messages, transcripts, reference audio, logs, caches, build outputs, or machine-specific data.
 
-### 3. Apply the mandatory per-commit version gate
+### 3. Version the owner that changed
 
-Every commit created for RabiRoute must own a new repository patch version. There are no documentation-only, test-only, formatting-only, merge-resolution, internal-refactor, or skill-only exceptions.
+The current user-directed plugin architecture supersedes the previous per-commit Host patch rule. Host versions describe framework and extension-point changes; plugin versions describe each plugin's implementation and resources. A plugin-only commit keeps the Host version when its architecture is unchanged.
 
-1. Immediately before preparing a commit, read the strict `major.minor.patch` version from `HEAD:package.json`.
-2. Set the candidate version to the same major and minor with patch incremented by exactly one. Do not skip a patch, reuse an earlier version, or choose a major/minor bump in this workflow.
-3. Update all six required surfaces in the same commit:
-   - `package.json`;
-   - the root version and root-package version in `package-lock.json`;
-   - the version badge and current-version statement in `README.md`;
-   - the version badge and current-version statement in `README_zh.md`;
-   - a new `## <version> - YYYY-MM-DD` section with at least one concrete bullet in `版本更新日志.md`;
-   - the matching English section in `版本更新日志_en.md`.
-4. Describe the actual staged diff in that version section. Do not leave the current commit only under `未发布` / `Unreleased`, and do not use a generic placeholder such as “update files.”
-5. If one operation creates multiple commits, repeat the patch bump and bilingual version entry for every commit. One version cannot cover two commits.
-6. Re-read `HEAD` after a rebase, merge, pull, or concurrent branch update and recompute the next patch before committing.
+1. Compare `HEAD` and the candidate scope. In `Staged` mode, read the index for every manifest, catalog, migration and changelog; unstaged edits are not commit evidence.
+2. Advance the Host SemVer for framework or extension-point changes. Choose patch, minor or major from the changed contract; this architecture migration uses Host `0.7.0`. Synchronize `package.json`, both root lock versions, and both README version statements when the Host version changes.
+3. For each changed plugin, read its canonical source owner and authoritative `versionFile` from `plugins/source-catalog.json`. Advance that plugin's own version and synchronize its other versioned manifests and lock metadata. Do not infer an external plugin's version from the Host or from a package.json that is not its authority.
+4. New native plugins start at `0.1.1`. The first move from legacy builtin source/version folders to canonical source accepts that baseline only for the exact package/version transition in `plugins/profiles/package-migrations.json`. Published external plugins retain their own version sequence; a source move does not authorize a downgrade or reused release number.
+5. Maintain concrete Chinese and English change records in `版本更新日志.md` and `版本更新日志_en.md`. Plugin-only records state the affected plugin and its version under the current Host section; they do not require a new Host version. Re-read `HEAD` after history changes and compare each affected owner again.
 
-This rule identifies commits; it does not authorize or automatically create a Git tag, GitHub Release, installer, deployment, or local installation. Those remain separate actions.
+Version checks do not authorize tags, releases, installers, deployment or installation. Those remain separate actions.
 
 ### 4. Maintain Rabi context when warranted
 
 - Inspect local `data/roles/Rabi/` only when the change affects Rabi’s durable project knowledge, boundaries, capabilities, plans, or recovery information.
 - Use the Manager API for local Rabi plan/memory lifecycle writes. If Manager is unavailable, perform read-only inspection and report the missing update; do not imitate a successful write by editing runtime JSON directly.
 - Inspect `examples/data/roles/Rabi/` when the public example contract or durable public-safe Rabi knowledge changed. Sanitize and rewrite lessons; never copy private runtime records.
-- Avoid persona, plan, or memory churn when the post-change state is already accurate. Version and bilingual version-log updates are mandatory and are not optional churn.
+- Avoid persona, plan, or memory churn when the post-change state is already accurate. Applicable owner versions and bilingual change records remain required.
 
 See [REFERENCE.md](REFERENCE.md) for the decision matrix and public/private boundaries.
 
@@ -92,7 +89,7 @@ Do not claim final runtime acceptance from a NAS development process.
 1. Stage only explicit reviewed paths.
 2. Run the preflight with `-Scope Staged`.
 3. Review `git diff --cached --stat` and the complete staged diff.
-4. Confirm that the staged version gate reports `HEAD -> exact patch + 1`, both changelogs contain the new version section, and all six version surfaces are staged.
+4. Confirm the staged gate reports the Host transition and each changed plugin’s authoritative version transition. Stage applicable metadata and both change records; retain an unchanged Host version for plugin-only work.
 5. Confirm public example sanitization and validation evidence.
 6. Compose a specific subject and body from the staged diff, not from intention or chat history. Name the new version in the commit body.
 

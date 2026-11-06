@@ -12,10 +12,14 @@ export function createDesktopPresentation({ currentEntry, snapshot, command, onF
   const start = () => {
     if (!enabled || closing) return;
     const script = path.join(path.dirname(currentEntry()), "desktop", "tray.ps1");
+    const native = path.join(path.dirname(currentEntry()), "dist", "native", "RabiAgent.Tray.exe");
     // Older signed releases remain headless until upgraded. No alternate owner.
-    if (!fs.existsSync(script)) return;
+    if (!fs.existsSync(native) && !fs.existsSync(script)) return;
     const executable = path.join(process.env.SystemRoot || "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
-    child = spawn(executable, ["-NoProfile", "-NonInteractive", "-STA", "-ExecutionPolicy", "Bypass", "-File", script], {
+    // Older signed releases lack native hosts. Retire this compatibility path
+    // when the enrollment minimum signed release requires those assets.
+    const nativeAvailable = fs.existsSync(native);
+    child = spawn(nativeAvailable ? native : executable, nativeAvailable ? [] : ["-NoProfile", "-NonInteractive", "-STA", "-ExecutionPolicy", "Bypass", "-File", script], {
       windowsHide: true, stdio: ["pipe", "pipe", "pipe"],
       env: Object.fromEntries(Object.entries(process.env).filter(([key]) => /^(systemroot|windir|temp|tmp|userprofile|appdata|localappdata|path|psmodulepath)$/i.test(key)))
     });

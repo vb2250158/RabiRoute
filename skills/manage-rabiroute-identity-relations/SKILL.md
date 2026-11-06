@@ -25,7 +25,7 @@ GET /api/roles/:roleId/identity-relations?platform=:platform&endpointIdentityNam
 
 不带查询参数返回 `endpointAccounts`、`participants`、`relationCards` 三份当前视图；带完整账号键返回该账号的解析上下文。
 
-账号键必须同时提供 `platform`、`endpointIdentityNamespace`、`senderStableId`。三者缺一就报错，不要用 Route ID、昵称、群号或显示名替代其中任何一项。常用取值来自 `src/routing/identityContext.ts`：
+账号键必须同时提供 `platform`、`endpointIdentityNamespace`、`senderStableId`。三者缺一就报错，不要用 Route ID、昵称、群号或显示名替代其中任何一项。常用取值来自 `src/plugins/io.rabiroute.endpoint.rabilink/src/routing/identityContext.ts`：
 
 | 消息端 | platform | endpointIdentityNamespace | senderStableId |
 | --- | --- | --- | --- |

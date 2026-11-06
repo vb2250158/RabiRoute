@@ -8,17 +8,17 @@ import path from "node:path";
 import test from "node:test";
 import { WebSocket } from "ws";
 import { createManagerClient, type ManagerOperationOptions } from "../../apps/rabi-agent/lib/manager-client.mjs";
-import { createLanAgentTerminalOperations } from "./lanAgentTerminalRoutes.js";
-import { createLanAgentComputerOperations } from "./lanAgentComputerRoutes.js";
+import { createLanAgentTerminalOperations } from "../plugins/io.rabiroute.manager.core/src/manager/lanAgentTerminalRoutes.js";
+import { createLanAgentComputerOperations } from "../plugins/io.rabiroute.manager.core/src/manager/lanAgentComputerRoutes.js";
 import { LanAgentRegistry } from "./lanAgentRegistry.js";
 import { LanAgentAuthority } from "./lanAgentAuthority.js";
 import { evaluateLanAgentRequest, assertTrustedLanAgentPrincipal } from "./lanAgentRequestAccess.js";
 import { markAuthenticatedConnectionRequest } from "./connectionRequestAccess.js";
-import { registerLanAgentBodyGuard, assertLanAgentBodyAuthority } from "./lanAgentBodyAuthority.js";
+import { registerLanAgentBodyGuard } from "./lanAgentBodyAuthority.js";
 import { ManagerPluginRouteRegistry } from "./managerPluginRouteRegistry.js";
-import { createApiDiscoveryOperations } from "./apiDiscoveryRoutes.js";
+import { createApiDiscoveryOperations } from "../plugins/io.rabiroute.manager.agent-communication/src/manager/apiDiscoveryRoutes.js";
 import { LanAgentTerminals } from "./lanAgentTerminals.js";
-import { openTerminalEventStream } from "./lanAgentTerminalStream.js";
+import { openTerminalEventStream } from "../plugins/io.rabiroute.manager.core/src/manager/lanAgentTerminalStream.js";
 import { TERMINAL_LIMITS } from "../../apps/rabi-agent/lib/interactive-protocol.mjs";
 
 async function fixture(t: import("node:test").TestContext) {
@@ -39,7 +39,7 @@ async function fixture(t: import("node:test").TestContext) {
     if (request.headers.authorization === "Bearer fixture-link") markAuthenticatedConnectionRequest(request);
     if (request.url === "/meta") { response.setHeader("content-type", "application/json"); response.end(JSON.stringify(meta)); return; }
     const url = new URL(request.url!, "http://localhost");
-    registerLanAgentBodyGuard(request, body => assertLanAgentBodyAuthority(url.pathname, body, assertTrustedLanAgentPrincipal(request)?.source));
+    registerLanAgentBodyGuard(request, () => {});
     if (!api.handle(request, url, response)) response.writeHead(404).end();
   });
   const detach = computers.attach(server, { getToken: () => "", enabled: () => true });
@@ -81,6 +81,27 @@ async function fixture(t: import("node:test").TestContext) {
   return { root, authority, credential, computers, api, registration, socket, base, client, instanceId, terminalId, target, calls, reply, sessions, execute,
     intercept: (value: typeof intercept) => { intercept = value; } };
 }
+
+test('remote file lookup transport failure is not a parameter or missing-file result', { timeout: 15000 }, async t => {
+  const f = await fixture(t);
+  t.mock.method(f.computers, 'manageAgent', () => Promise.reject(Object.assign(new Error('Fixture remote transport failed'), { code: 'LAN_AGENT_MANAGEMENT_NOT_SENT' })));
+  const failed = await f.client.invokeOperation('manager.lan-agent.computer.execute', {
+    path: { instanceId: f.instanceId }, body: { action: 'file.stat', path: 'fixture-path' } });
+  assert.equal(failed.statusCode, 503, String(failed.body));
+  const body = JSON.parse(String(failed.body)); assert.equal(body.errorCode, 'LAN_AGENT_MANAGEMENT_NOT_SENT');
+  assert.equal(body.reason, 'remote_query_failed'); assert.equal(body.uncertain, undefined); assert.equal(f.calls.length, 0);
+});
+
+test('an unopened terminal read returns exact same-instance discovery without opening or replaying input', { timeout: 15000 }, async t => {
+  const f = await fixture(t);
+  const response = await f.client.invokeOperation('manager.lan-agent.terminals.read', { path: f.target, query: { after: 0, waitMs: 0 } });
+  assert.equal(response.statusCode, 400, String(response.body));
+  const body = JSON.parse(String(response.body)); assert.equal(body.errorCode, 'TERMINAL_STREAM_NOT_FOUND');
+  assert.equal(body.field, 'path.terminalId'); assert.equal(body.reason, 'terminal_stream_not_open');
+  assert.deepEqual(body.help, { method: 'GET', path: `/api/lan-agent/instances/${f.instanceId}/terminals` });
+  assert.match(body.repair, /data.shells/); assert.match(body.repair, /"action":"open"/); assert.ok(body.repair.includes(f.terminalId));
+  assert.equal(body.retryable, false); assert.equal(f.calls.length, 0); assert.equal(f.sessions.size, 0);
+});
 
 test("five discovered operations use the original authenticated node, ordered terminal events and computer transport", { timeout: 15000 }, async t => {
   const f = await fixture(t);

@@ -21,7 +21,7 @@ test("FenneNote webhook can be recorded for idle review without direct Agent for
   };
 
   const { acceptWebhookPayload } = await import("./webhookAdapter.js");
-  const record = acceptWebhookPayload({
+  const record = await acceptWebhookPayload({
     type: "fennenote",
     label: "FenneNote / 芬妮笔记",
     source: "fennenote",
@@ -55,7 +55,7 @@ test("FenneNote webhook can be recorded for idle review without direct Agent for
     text: "这段没有显式消息 ID，但生产端时间戳可以稳定标识重试。",
     time: Date.parse("2026-07-14T10:01:00.000Z") / 1000
   };
-  const firstRetryRecord = acceptWebhookPayload({
+  const firstRetryRecord = await acceptWebhookPayload({
     type: "fennenote",
     label: "FenneNote / 芬妮笔记",
     source: "fennenote",
@@ -65,7 +65,7 @@ test("FenneNote webhook can be recorded for idle review without direct Agent for
     routeKind: "voice_transcript",
     missingTextMessage: "missing text"
   }, "/fennenote", retryWithoutId, 128);
-  acceptWebhookPayload({
+  await acceptWebhookPayload({
     type: "fennenote",
     label: "FenneNote / 芬妮笔记",
     source: "fennenote",

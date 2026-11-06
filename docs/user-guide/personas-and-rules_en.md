@@ -220,6 +220,12 @@ requirement|error|build failed|reminder|please record
 
 Regex decides whether the rule matches, not whether the Agent must reply. The role guidance should still distinguish new facts, tasks, risks, acknowledgements, and polite responses.
 
+## Conversation avatars and history
+
+QQ rules offer a group picker with avatars and search by name or number. You can also enter a group number directly; clearing it accepts any group. A rule restricted to one group shows that group's avatar and name. A private-message rule can select a contact, match their QQ number, and show their avatar. An empty selection accepts any private contact. Rules covering both groups and private chats keep the channel icon. Unavailable contact details also keep the icon without changing the rule. Contacts come only from QQ connections configured for the current role.
+
+History channels share a two-line conversation list. Drag either separator to resize the conversation list or the task/group-member rail; each remembers its width. Focus a separator to use arrow keys, or double-click to reset it. Narrow windows preserve wider preferences. Conversations with recent activity appear first; messages retain conversation order, with the latest at the bottom. Long messages collapse according to their displayed height and can be expanded. Source, delivery status, and identifiers remain available in message details.
+
 ## Scheduled tasks
 
 Schedule triggers support:
@@ -228,7 +234,7 @@ Schedule triggers support:
 - a daily time;
 - a one-off date and time.
 
-A scheduled task requires the Route's Scheduled Tasks input. Agent actions carry the current task, persona/plan/memory indexes, and required paths without automatic chat history. Script actions go directly to the local script executor instead of passing through the Agent.
+Configure and enable a rule under **Automation → Scheduled tasks**; no timed-trigger message connector is required. Each task has its own interval, daily time or one-time date, optional interval time window, action, destination, and **Skip this run while the Agent is busy** setting. Migration preserves previous disabled states and source Route scopes. Agent actions carry the current task, persona/plan/memory indexes, and required paths without automatic chat history. Script actions go directly to the local script executor instead of passing through the Agent.
 
 ## Script restrictions
 

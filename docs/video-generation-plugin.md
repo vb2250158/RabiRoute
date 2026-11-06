@@ -126,7 +126,7 @@ Manager `/api/events` 的 `plugin_event` 发布 `video.changed` 和 `video.progr
 在本机源码目录执行：
 
 ```powershell
-node --test plugins/builtin/io.rabiroute.manager.video/1.0.0/service.test.mjs
+node --test src/plugins/io.rabiroute.manager.video/service.test.mjs
 npm run build
 npm run check:config
 ```

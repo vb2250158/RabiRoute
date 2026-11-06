@@ -104,28 +104,28 @@ export const timeoutCatalog: readonly TimeoutCatalogEntry[] = [
     "key": "agent.codex.ipc",
     "defaultMs": 30000,
     "label": "Codex Desktop IPC 请求",
-    "scope": "src/codexDesktopBridge.ts",
+    "scope": "src/plugins/io.rabiroute.agent.codex/src/codexDesktopBridge.ts",
     "effect": "next-request"
   },
   {
     "key": "agent.codex.metadataMutation",
     "defaultMs": 180000,
     "label": "Codex 元数据写入",
-    "scope": "src/codexAppServerClient.ts",
+    "scope": "src/plugins/io.rabiroute.agent.codex/src/codexAppServerClient.ts",
     "effect": "next-request"
   },
   {
     "key": "agent.codex.metadataRead",
     "defaultMs": 60000,
     "label": "Codex 元数据读取",
-    "scope": "src/codexAppServerClient.ts",
+    "scope": "src/plugins/io.rabiroute.agent.codex/src/codexAppServerClient.ts",
     "effect": "next-request"
   },
   {
     "key": "agent.codex.models",
     "defaultMs": 8000,
     "label": "Codex 模型目录请求",
-    "scope": "src/codexRuntime.ts",
+    "scope": "src/plugins/io.rabiroute.agent.codex/src/codexRuntime.ts",
     "effect": "next-request"
   },
   {
@@ -146,7 +146,7 @@ export const timeoutCatalog: readonly TimeoutCatalogEntry[] = [
     "key": "agent.copilot.command",
     "defaultMs": 600000,
     "label": "Copilot 命令执行",
-    "scope": "src/copilotCli.ts",
+    "scope": "src/plugins/io.rabiroute.agent.copilot-cli/src/copilotCli.ts",
     "effect": "next-request"
   },
   {
@@ -181,21 +181,21 @@ export const timeoutCatalog: readonly TimeoutCatalogEntry[] = [
     "key": "agent.deviceWait",
     "defaultMs": 12000,
     "label": "设备 Agent 等待结果",
-    "scope": "src/agentAdapters/deviceAgentOwner.ts",
+    "scope": "src/plugins/io.rabiroute.agent.device-agent/src/agentAdapters/deviceAgentOwner.ts",
     "effect": "next-request"
   },
   {
     "key": "agent.dsh.connection",
     "defaultMs": 90000,
     "label": "DSH 连接管理请求",
-    "scope": "src/manager/dshConnectionRoutes.ts",
+    "scope": "src/plugins/io.rabiroute.agent.dsh/src/manager/dshConnectionRoutes.ts",
     "effect": "next-request"
   },
   {
     "key": "agent.dsh.launch",
     "defaultMs": 10000,
     "label": "DSH 登录入口请求",
-    "scope": "src/dshHttpAuth.ts",
+    "scope": "src/plugins/io.rabiroute.agent.dsh/src/dshHttpAuth.ts",
     "effect": "next-request"
   },
   {
@@ -209,35 +209,35 @@ export const timeoutCatalog: readonly TimeoutCatalogEntry[] = [
     "key": "agent.dsh.recoveryConnect",
     "defaultMs": 12000,
     "label": "DSH 恢复连接",
-    "scope": "src/dshOwnerRecovery.ts",
+    "scope": "src/plugins/io.rabiroute.agent.dsh/src/dshOwnerRecovery.ts",
     "effect": "next-request"
   },
   {
     "key": "agent.dsh.recoveryProbe",
     "defaultMs": 2000,
     "label": "DSH 恢复探测",
-    "scope": "src/dshOwnerRecovery.ts",
+    "scope": "src/plugins/io.rabiroute.agent.dsh/src/dshOwnerRecovery.ts",
     "effect": "next-request"
   },
   {
     "key": "agent.dsh.recoverySessions",
     "defaultMs": 5000,
     "label": "DSH 恢复会话查询",
-    "scope": "src/dshOwnerRecovery.ts",
+    "scope": "src/plugins/io.rabiroute.agent.dsh/src/dshOwnerRecovery.ts",
     "effect": "next-request"
   },
   {
     "key": "agent.dsh.request",
     "defaultMs": 30000,
     "label": "DSH 认证请求",
-    "scope": "src/dshHttpAuth.ts",
+    "scope": "src/plugins/io.rabiroute.agent.dsh/src/dshHttpAuth.ts",
     "effect": "next-request"
   },
   {
     "key": "agent.dsh.verify",
     "defaultMs": 60000,
     "label": "DSH 凭据核验",
-    "scope": "src/dshHttpAuth.ts",
+    "scope": "src/plugins/io.rabiroute.agent.dsh/src/dshHttpAuth.ts",
     "effect": "next-request"
   },
   {
@@ -251,14 +251,14 @@ export const timeoutCatalog: readonly TimeoutCatalogEntry[] = [
     "key": "agent.grok.profile",
     "defaultMs": 30000,
     "label": "Grok 登录资料读取",
-    "scope": "src/agentAdapters/grokBotClient.ts",
+    "scope": "src/plugins/io.rabiroute.agent.grok-bot/src/agentAdapters/grokBotClient.ts",
     "effect": "next-operation-or-owner-initialization"
   },
   {
     "key": "agent.grok.request",
     "defaultMs": 20000,
     "label": "Grok 接口请求",
-    "scope": "src/agentAdapters/grokBotClient.ts",
+    "scope": "src/plugins/io.rabiroute.agent.grok-bot/src/agentAdapters/grokBotClient.ts",
     "effect": "next-operation-or-owner-initialization"
   },
   {
@@ -314,7 +314,7 @@ export const timeoutCatalog: readonly TimeoutCatalogEntry[] = [
     "key": "agent.providerLogin",
     "defaultMs": 15000,
     "label": "处理端登录等待",
-    "scope": "src/manager/agentProviderControlService.ts",
+    "scope": "src/plugins/io.rabiroute.agent.copilot-cli/src/manager/agentProviderControlService.ts",
     "effect": "next-request"
   },
   {
@@ -335,14 +335,14 @@ export const timeoutCatalog: readonly TimeoutCatalogEntry[] = [
     "key": "agent.remote.authentication",
     "defaultMs": 10000,
     "label": "远端 Agent WebSocket 鉴权",
-    "scope": "src/manager/lanAgentConnectionOperation.ts",
+    "scope": "src/plugins/io.rabiroute.manager.core/src/manager/lanAgentConnectionOperation.ts",
     "effect": "next-connection"
   },
   {
     "key": "agent.remote.closeGrace",
     "defaultMs": 2000,
     "label": "远端 Agent WebSocket 关闭宽限",
-    "scope": "src/manager/lanAgentConnectionOperation.ts",
+    "scope": "src/plugins/io.rabiroute.manager.core/src/manager/lanAgentConnectionOperation.ts",
     "effect": "next-close"
   },
   {
@@ -412,7 +412,7 @@ export const timeoutCatalog: readonly TimeoutCatalogEntry[] = [
     "key": "agent.terminalWait",
     "defaultMs": 25000,
     "label": "远端终端长等待上限",
-    "scope": "src/manager/lanAgentTerminals.ts",
+    "scope": "src/plugins/io.rabiroute.manager.core/src/manager/lanAgentTerminals.ts",
     "effect": "next-request"
   },
   {
@@ -461,7 +461,7 @@ export const timeoutCatalog: readonly TimeoutCatalogEntry[] = [
     "key": "agent.upload",
     "defaultMs": 1800000,
     "label": "Agent 文件上传",
-    "scope": "src/manager/agentUploadRoutes.ts",
+    "scope": "src/plugins/io.rabiroute.manager.agent-communication/src/manager/agentUploadRoutes.ts",
     "effect": "next-request"
   },
   {
@@ -874,14 +874,14 @@ export const timeoutCatalog: readonly TimeoutCatalogEntry[] = [
     "key": "backend.adapters.rabilinkRelayWorker.RELAY_WRITE_TIMEOUT_MS",
     "defaultMs": 5000,
     "label": "服务运行 · fetchRelayJsonReliably / RELAY_WRITE_TIMEOUT_MS",
-    "scope": "src/adapters/rabilinkRelayWorker.ts",
+    "scope": "src/plugins/io.rabiroute.endpoint.rabilink/src/adapters/rabilinkRelayWorker.ts",
     "effect": "next-operation-or-owner-initialization"
   },
   {
     "key": "backend.agentAdapters.deviceAgentAdapter.createDeviceAgentAdapter.AbortSignal.timeout.request",
     "defaultMs": 15000,
     "label": "Agent 接口 · createDeviceAgentAdapter / request",
-    "scope": "src/agentAdapters/deviceAgentAdapter.ts",
+    "scope": "src/plugins/io.rabiroute.agent.device-agent/src/agentAdapters/deviceAgentAdapter.ts",
     "effect": "next-operation-or-owner-initialization"
   },
   {
@@ -930,7 +930,7 @@ export const timeoutCatalog: readonly TimeoutCatalogEntry[] = [
     "key": "backend.agentRequests.rolloutReceipt.readRolloutUserMessages.AbortSignal.timeout.request",
     "defaultMs": 30000,
     "label": "Agent 接口 · readRolloutUserMessages / request",
-    "scope": "src/agentRequests/rolloutReceipt.ts",
+    "scope": "src/plugins/io.rabiroute.agent.codex/src/agentRequests/rolloutReceipt.ts",
     "effect": "next-operation-or-owner-initialization"
   },
   {
@@ -944,147 +944,147 @@ export const timeoutCatalog: readonly TimeoutCatalogEntry[] = [
     "key": "backend.antigravityBridge.DEFAULT_CONFIG_TIMEOUT_MS",
     "defaultMs": 15000,
     "label": "Agent 接口 · discoverAntigravityLsAddress / DEFAULT_CONFIG_TIMEOUT_MS",
-    "scope": "src/antigravityBridge.ts",
+    "scope": "src/plugins/io.rabiroute.agent.antigravity/src/antigravityBridge.ts",
     "effect": "next-operation-or-owner-initialization"
   },
   {
     "key": "backend.antigravityBridge.DEFAULT_DELIVERY_TIMEOUT_MS",
     "defaultMs": 90000,
     "label": "Agent 接口 · runAgentApi / DEFAULT_DELIVERY_TIMEOUT_MS",
-    "scope": "src/antigravityBridge.ts",
+    "scope": "src/plugins/io.rabiroute.agent.antigravity/src/antigravityBridge.ts",
     "effect": "next-operation-or-owner-initialization"
   },
   {
     "key": "backend.antigravityReceipt.DEFAULT_TIMEOUT_MS",
     "defaultMs": 8000,
     "label": "Agent 接口 · readAntigravityReceipt / DEFAULT_TIMEOUT_MS",
-    "scope": "src/antigravityReceipt.ts",
+    "scope": "src/plugins/io.rabiroute.agent.antigravity/src/antigravityReceipt.ts",
     "effect": "next-operation-or-owner-initialization"
   },
   {
     "key": "backend.antigravitySessionStore.probeHostViaProcessTable.execFileSync.timeout",
     "defaultMs": 5000,
     "label": "Agent 接口 · probeHostViaProcessTable / timeout",
-    "scope": "src/antigravitySessionStore.ts",
+    "scope": "src/plugins/io.rabiroute.agent.antigravity/src/antigravitySessionStore.ts",
     "effect": "next-operation-or-owner-initialization"
   },
   {
     "key": "backend.antigravitySessionStore.READ_TIMEOUT_MS",
     "defaultMs": 10000,
     "label": "Agent 接口 · readAntigravitySessions / READ_TIMEOUT_MS",
-    "scope": "src/antigravitySessionStore.ts",
+    "scope": "src/plugins/io.rabiroute.agent.antigravity/src/antigravitySessionStore.ts",
     "effect": "next-operation-or-owner-initialization"
   },
   {
     "key": "backend.codexDesktopBridge.owner.requestTimeoutMs",
     "defaultMs": 30000,
     "label": "Agent 接口 · owner / requestTimeoutMs",
-    "scope": "src/codexDesktopBridge.ts",
+    "scope": "src/plugins/io.rabiroute.agent.codex/src/codexDesktopBridge.ts",
     "effect": "next-operation-or-owner-initialization"
   },
   {
     "key": "backend.feishu.sendFeishuText.AbortSignal.timeout.request",
     "defaultMs": 10000,
     "label": "消息平台 · sendFeishuText / request",
-    "scope": "src/feishu.ts",
+    "scope": "src/plugins/io.rabiroute.endpoint.feishu/src/feishu.ts",
     "effect": "next-operation-or-owner-initialization"
   },
   {
     "key": "backend.integrations.xiaomiHome.clipCapture.owner.Number.cameraClipRequestTimeoutMs",
     "defaultMs": 10000,
     "label": "家庭设备 · owner / cameraClipRequestTimeoutMs",
-    "scope": "src/integrations/xiaomiHome/clipCapture.ts",
+    "scope": "src/plugins/io.rabiroute.manager.xiaomi-home/src/integrations/xiaomiHome/clipCapture.ts",
     "effect": "next-operation-or-owner-initialization"
   },
   {
     "key": "backend.integrations.xiaomiHome.homeAssistantDeployment.ready.AbortSignal.timeout.request",
     "defaultMs": 3000,
     "label": "家庭设备 · ready / request",
-    "scope": "src/integrations/xiaomiHome/homeAssistantDeployment.ts",
+    "scope": "src/plugins/io.rabiroute.manager.xiaomi-home/src/integrations/xiaomiHome/homeAssistantDeployment.ts",
     "effect": "next-operation-or-owner-initialization"
   },
   {
     "key": "backend.integrations.xiaomiHome.homeAssistantDeployment.run.runFile.timeout",
     "defaultMs": 30000,
     "label": "家庭设备 · run / timeout",
-    "scope": "src/integrations/xiaomiHome/homeAssistantDeployment.ts",
+    "scope": "src/plugins/io.rabiroute.manager.xiaomi-home/src/integrations/xiaomiHome/homeAssistantDeployment.ts",
     "effect": "next-operation-or-owner-initialization"
   },
   {
     "key": "backend.integrations.xiaomiHome.homeAssistantOs.run.execute.timeout",
     "defaultMs": 1800000,
     "label": "家庭设备 · run / timeout",
-    "scope": "src/integrations/xiaomiHome/homeAssistantOs.ts",
+    "scope": "src/plugins/io.rabiroute.manager.xiaomi-home/src/integrations/xiaomiHome/homeAssistantOs.ts",
     "effect": "next-operation-or-owner-initialization"
   },
   {
     "key": "backend.integrations.xiaomiHome.managerApi.resolveXiaomiHomeManagerConfig.Number.requestTimeoutMs",
     "defaultMs": 5000,
     "label": "家庭设备 · resolveXiaomiHomeManagerConfig / requestTimeoutMs",
-    "scope": "src/integrations/xiaomiHome/managerApi.ts",
+    "scope": "src/plugins/io.rabiroute.manager.xiaomi-home/src/integrations/xiaomiHome/managerApi.ts",
     "effect": "next-operation-or-owner-initialization"
   },
   {
     "key": "backend.integrations.xiaomiHome.vacuumCloud.accountRequest.timeoutMs",
     "defaultMs": 12000,
     "label": "家庭设备 · accountRequest / timeoutMs",
-    "scope": "src/integrations/xiaomiHome/vacuumCloud.ts",
+    "scope": "src/plugins/io.rabiroute.manager.xiaomi-home/src/integrations/xiaomiHome/vacuumCloud.ts",
     "effect": "next-operation-or-owner-initialization"
   },
   {
     "key": "backend.integrations.xiaomiHome.vacuumCloud.call.AbortSignal.timeout.request",
     "defaultMs": 12000,
     "label": "家庭设备 · call / request",
-    "scope": "src/integrations/xiaomiHome/vacuumCloud.ts",
+    "scope": "src/plugins/io.rabiroute.manager.xiaomi-home/src/integrations/xiaomiHome/vacuumCloud.ts",
     "effect": "next-operation-or-owner-initialization"
   },
   {
     "key": "backend.integrations.xiaomiHome.vacuumCloud.pluginPackage.AbortSignal.timeout.request",
     "defaultMs": 30000,
     "label": "家庭设备 · pluginPackage / request",
-    "scope": "src/integrations/xiaomiHome/vacuumCloud.ts",
+    "scope": "src/plugins/io.rabiroute.manager.xiaomi-home/src/integrations/xiaomiHome/vacuumCloud.ts",
     "effect": "next-operation-or-owner-initialization"
   },
   {
     "key": "backend.integrations.xiaomiHome.vacuumCloud.readMap.AbortSignal.timeout.request",
     "defaultMs": 15000,
     "label": "家庭设备 · readMap / request",
-    "scope": "src/integrations/xiaomiHome/vacuumCloud.ts",
+    "scope": "src/plugins/io.rabiroute.manager.xiaomi-home/src/integrations/xiaomiHome/vacuumCloud.ts",
     "effect": "next-operation-or-owner-initialization"
   },
   {
     "key": "backend.integrations.xiaomiHome.vacuumCs2Relay.connect.timeoutMs",
     "defaultMs": 30000,
     "label": "家庭设备 · connect / timeoutMs",
-    "scope": "src/integrations/xiaomiHome/vacuumCs2Relay.ts",
+    "scope": "src/plugins/io.rabiroute.manager.xiaomi-home/src/integrations/xiaomiHome/vacuumCs2Relay.ts",
     "effect": "next-operation-or-owner-initialization"
   },
   {
     "key": "backend.integrations.xiaomiHome.vacuumCs2Relay.connectLocal.timeoutMs",
     "defaultMs": 3000,
     "label": "家庭设备 · connectLocal / timeoutMs",
-    "scope": "src/integrations/xiaomiHome/vacuumCs2Relay.ts",
+    "scope": "src/plugins/io.rabiroute.manager.xiaomi-home/src/integrations/xiaomiHome/vacuumCs2Relay.ts",
     "effect": "next-operation-or-owner-initialization"
   },
   {
     "key": "backend.integrations.xiaomiHome.vacuumVideo.connect.AbortSignal.timeout.request",
     "defaultMs": 1000,
     "label": "家庭设备 · connect / request",
-    "scope": "src/integrations/xiaomiHome/vacuumVideo.ts",
+    "scope": "src/plugins/io.rabiroute.manager.xiaomi-home/src/integrations/xiaomiHome/vacuumVideo.ts",
     "effect": "next-operation-or-owner-initialization"
   },
   {
     "key": "backend.integrations.xiaomiHome.vacuumVideo.openStream.AbortSignal.timeout.request",
     "defaultMs": 25000,
     "label": "家庭设备 · openStream / request",
-    "scope": "src/integrations/xiaomiHome/vacuumVideo.ts",
+    "scope": "src/plugins/io.rabiroute.manager.xiaomi-home/src/integrations/xiaomiHome/vacuumVideo.ts",
     "effect": "next-operation-or-owner-initialization"
   },
   {
     "key": "backend.integrations.yeyuGamer.managerApi.normalizeYeYuGamerManagerConfig.requestTimeoutMs",
     "defaultMs": 3000,
     "label": "服务运行 · normalizeYeYuGamerManagerConfig / requestTimeoutMs",
-    "scope": "src/integrations/yeyuGamer/managerApi.ts",
+    "scope": "src/plugins/io.rabiroute.manager.yeyu-gamer/src/integrations/yeyuGamer/managerApi.ts",
     "effect": "next-operation-or-owner-initialization"
   },
   {
@@ -1098,7 +1098,7 @@ export const timeoutCatalog: readonly TimeoutCatalogEntry[] = [
     "key": "backend.manager.agentAdapterCatalogWorkerPool.owner.Math.floor.timeoutMs",
     "defaultMs": 300000,
     "label": "Agent 接口 · owner / timeoutMs",
-    "scope": "src/manager/agentAdapterCatalogWorkerPool.ts",
+    "scope": "src/plugins/io.rabiroute.manager.agent-adapter-catalog/src/manager/agentAdapterCatalogWorkerPool.ts",
     "effect": "next-operation-or-owner-initialization"
   },
   {
@@ -1119,14 +1119,14 @@ export const timeoutCatalog: readonly TimeoutCatalogEntry[] = [
     "key": "backend.manager.agentProviderControlService.install.execFile.timeout",
     "defaultMs": 120000,
     "label": "Agent 接口 · install / timeout",
-    "scope": "src/manager/agentProviderControlService.ts",
+    "scope": "src/plugins/io.rabiroute.agent.copilot-cli/src/manager/agentProviderControlService.ts",
     "effect": "next-operation-or-owner-initialization"
   },
   {
     "key": "backend.manager.agentProviderControlService.locateCopilot.execFileAsync.timeout",
     "defaultMs": 2000,
     "label": "Agent 接口 · locateCopilot / timeout",
-    "scope": "src/manager/agentProviderControlService.ts",
+    "scope": "src/plugins/io.rabiroute.agent.copilot-cli/src/manager/agentProviderControlService.ts",
     "effect": "next-operation-or-owner-initialization"
   },
   {
@@ -1497,21 +1497,21 @@ export const timeoutCatalog: readonly TimeoutCatalogEntry[] = [
     "key": "backend.manager.messageAdapterControl.MESSAGE_ADAPTER_SCAN_DEADLINE_MS",
     "defaultMs": 6000,
     "label": "服务运行 · owner / MESSAGE_ADAPTER_SCAN_DEADLINE_MS",
-    "scope": "src/manager/messageAdapterControl.ts",
+    "scope": "src/plugins/io.rabiroute.manager.message-adapter-control/src/manager/messageAdapterControl.ts",
     "effect": "next-operation-or-owner-initialization"
   },
   {
     "key": "backend.manager.napcatProcessDriver.napcatProcessSnapshot.execute.timeout",
     "defaultMs": 60000,
     "label": "消息平台 · napcatProcessSnapshot / timeout",
-    "scope": "src/manager/napcatProcessDriver.ts",
+    "scope": "src/plugins/io.rabiroute.endpoint.napcat/src/manager/napcatProcessDriver.ts",
     "effect": "next-operation-or-owner-initialization"
   },
   {
     "key": "backend.manager.napcatProcessDriver.requestExit.execute.timeout",
     "defaultMs": 5000,
     "label": "消息平台 · requestExit / timeout",
-    "scope": "src/manager/napcatProcessDriver.ts",
+    "scope": "src/plugins/io.rabiroute.endpoint.napcat/src/manager/napcatProcessDriver.ts",
     "effect": "next-operation-or-owner-initialization"
   },
   {
@@ -1539,7 +1539,7 @@ export const timeoutCatalog: readonly TimeoutCatalogEntry[] = [
     "key": "backend.manager.planFeedbackRecoveryService.owner.Math.max.attemptTimeoutMs",
     "defaultMs": 300000,
     "label": "服务运行 · owner / attemptTimeoutMs",
-    "scope": "src/manager/planFeedbackRecoveryService.ts",
+    "scope": "src/plugins/io.rabiroute.manager.plan-feedback-delivery/src/manager/planFeedbackRecoveryService.ts",
     "effect": "next-operation-or-owner-initialization"
   },
   {
@@ -1637,35 +1637,35 @@ export const timeoutCatalog: readonly TimeoutCatalogEntry[] = [
     "key": "backend.manager.speechModelSettings.validateModelRoot.execFileSync.timeout",
     "defaultMs": 5000,
     "label": "语音服务 · validateModelRoot / timeout",
-    "scope": "src/manager/speechModelSettings.ts",
+    "scope": "src/plugins/io.rabiroute.manager.speech/src/manager/speechModelSettings.ts",
     "effect": "next-operation-or-owner-initialization"
   },
   {
     "key": "backend.manager.speechRuntimeControl.inspectWindowsRuntimeOwner.execFileAsync.timeout",
     "defaultMs": 8000,
     "label": "语音服务 · inspectWindowsRuntimeOwner / timeout",
-    "scope": "src/manager/speechRuntimeControl.ts",
+    "scope": "src/plugins/io.rabiroute.manager.speech/src/manager/speechRuntimeControl.ts",
     "effect": "next-operation-or-owner-initialization"
   },
   {
     "key": "backend.manager.speechRuntimeControl.killWindowsProcessTree.execFileAsync.timeout",
     "defaultMs": 8000,
     "label": "语音服务 · killWindowsProcessTree / timeout",
-    "scope": "src/manager/speechRuntimeControl.ts",
+    "scope": "src/plugins/io.rabiroute.manager.speech/src/manager/speechRuntimeControl.ts",
     "effect": "next-operation-or-owner-initialization"
   },
   {
     "key": "backend.manager.speechRuntimeControl.owner.startTimeoutMs",
     "defaultMs": 120000,
     "label": "语音服务 · owner / startTimeoutMs",
-    "scope": "src/manager/speechRuntimeControl.ts",
+    "scope": "src/plugins/io.rabiroute.manager.speech/src/manager/speechRuntimeControl.ts",
     "effect": "next-operation-or-owner-initialization"
   },
   {
     "key": "backend.manager.speechRuntimeControl.owner.stopTimeoutMs",
     "defaultMs": 15000,
     "label": "语音服务 · owner / stopTimeoutMs",
-    "scope": "src/manager/speechRuntimeControl.ts",
+    "scope": "src/plugins/io.rabiroute.manager.speech/src/manager/speechRuntimeControl.ts",
     "effect": "next-operation-or-owner-initialization"
   },
   {
@@ -1679,14 +1679,14 @@ export const timeoutCatalog: readonly TimeoutCatalogEntry[] = [
     "key": "backend.manager.videoRuntime.validateLocalModelRoot.promisify_execFile_.timeout",
     "defaultMs": 5000,
     "label": "服务运行 · validateLocalModelRoot / timeout",
-    "scope": "src/manager/videoRuntime.ts",
+    "scope": "src/plugins/io.rabiroute.manager.video/src/manager/videoRuntime.ts",
     "effect": "next-operation-or-owner-initialization"
   },
   {
     "key": "backend.manager.wearableCompanionWorkerService.DEFAULT_HANDOFF_TIMEOUT_MS",
     "defaultMs": 15000,
     "label": "服务运行 · owner / DEFAULT_HANDOFF_TIMEOUT_MS",
-    "scope": "src/manager/wearableCompanionWorkerService.ts",
+    "scope": "src/plugins/io.rabiroute.manager.wearable-companion/src/manager/wearableCompanionWorkerService.ts",
     "effect": "next-operation-or-owner-initialization"
   },
   {
@@ -1714,112 +1714,112 @@ export const timeoutCatalog: readonly TimeoutCatalogEntry[] = [
     "key": "backend.messageEndpoints.napcatManager.detectNapcatProcesses.execFileAsync.timeout",
     "defaultMs": 3000,
     "label": "消息平台 · detectNapcatProcesses / timeout",
-    "scope": "src/messageEndpoints/napcatManager.ts",
+    "scope": "src/plugins/io.rabiroute.endpoint.napcat/src/messageEndpoints/napcatManager.ts",
     "effect": "next-operation-or-owner-initialization"
   },
   {
     "key": "backend.messageEndpoints.napcatManager.fetchNapcatOneBotAction.timeoutMs",
     "defaultMs": 1500,
     "label": "消息平台 · fetchNapcatOneBotAction / timeoutMs",
-    "scope": "src/messageEndpoints/napcatManager.ts",
+    "scope": "src/plugins/io.rabiroute.endpoint.napcat/src/messageEndpoints/napcatManager.ts",
     "effect": "next-operation-or-owner-initialization"
   },
   {
     "key": "backend.messageEndpoints.napcatManager.listeningPidsForPorts.execFileAsync.timeout",
     "defaultMs": 3000,
     "label": "消息平台 · listeningPidsForPorts / timeout",
-    "scope": "src/messageEndpoints/napcatManager.ts",
+    "scope": "src/plugins/io.rabiroute.endpoint.napcat/src/messageEndpoints/napcatManager.ts",
     "effect": "next-operation-or-owner-initialization"
   },
   {
     "key": "backend.messageEndpoints.napcatManager.napcatHttpOk.timeoutMs",
     "defaultMs": 4000,
     "label": "消息平台 · napcatHttpOk / timeoutMs",
-    "scope": "src/messageEndpoints/napcatManager.ts",
+    "scope": "src/plugins/io.rabiroute.endpoint.napcat/src/messageEndpoints/napcatManager.ts",
     "effect": "next-operation-or-owner-initialization"
   },
   {
     "key": "backend.messageEndpoints.napcatManager.napcatStatusEndpointOk.timeoutMs",
     "defaultMs": 3000,
     "label": "消息平台 · napcatStatusEndpointOk / timeoutMs",
-    "scope": "src/messageEndpoints/napcatManager.ts",
+    "scope": "src/plugins/io.rabiroute.endpoint.napcat/src/messageEndpoints/napcatManager.ts",
     "effect": "next-operation-or-owner-initialization"
   },
   {
     "key": "backend.messageEndpoints.napcatManager.recheckNapcatUntilReady.timeoutMs",
     "defaultMs": 30000,
     "label": "消息平台 · recheckNapcatUntilReady / timeoutMs",
-    "scope": "src/messageEndpoints/napcatManager.ts",
+    "scope": "src/plugins/io.rabiroute.endpoint.napcat/src/messageEndpoints/napcatManager.ts",
     "effect": "next-operation-or-owner-initialization"
   },
   {
     "key": "backend.messageEndpoints.napcatManager.requestNapcatBotExit.AbortSignal.timeout.request",
     "defaultMs": 2500,
     "label": "消息平台 · requestNapcatBotExit / request",
-    "scope": "src/messageEndpoints/napcatManager.ts",
+    "scope": "src/plugins/io.rabiroute.endpoint.napcat/src/messageEndpoints/napcatManager.ts",
     "effect": "next-operation-or-owner-initialization"
   },
   {
     "key": "backend.messageEndpoints.napcatManager.waitForNapcatReady.timeoutMs",
     "defaultMs": 35000,
     "label": "消息平台 · waitForNapcatReady / timeoutMs",
-    "scope": "src/messageEndpoints/napcatManager.ts",
+    "scope": "src/plugins/io.rabiroute.endpoint.napcat/src/messageEndpoints/napcatManager.ts",
     "effect": "next-operation-or-owner-initialization"
   },
   {
     "key": "backend.messageEndpoints.napcatManager.waitForPortsReleased.timeoutMs",
     "defaultMs": 3000,
     "label": "消息平台 · waitForPortsReleased / timeoutMs",
-    "scope": "src/messageEndpoints/napcatManager.ts",
+    "scope": "src/plugins/io.rabiroute.endpoint.napcat/src/messageEndpoints/napcatManager.ts",
     "effect": "next-operation-or-owner-initialization"
   },
   {
     "key": "backend.messageEndpoints.napcatManager.windowsNapcatParentPids.execFileAsync.timeout",
     "defaultMs": 5000,
     "label": "消息平台 · windowsNapcatParentPids / timeout",
-    "scope": "src/messageEndpoints/napcatManager.ts",
+    "scope": "src/plugins/io.rabiroute.endpoint.napcat/src/messageEndpoints/napcatManager.ts",
     "effect": "next-operation-or-owner-initialization"
   },
   {
     "key": "backend.messageEndpoints.napcatManager.windowsNapcatPidsForBotUserId.execFileAsync.timeout",
     "defaultMs": 5000,
     "label": "消息平台 · windowsNapcatPidsForBotUserId / timeout",
-    "scope": "src/messageEndpoints/napcatManager.ts",
+    "scope": "src/plugins/io.rabiroute.endpoint.napcat/src/messageEndpoints/napcatManager.ts",
     "effect": "next-operation-or-owner-initialization"
   },
   {
     "key": "backend.messageEndpoints.napcatManager.windowsPidsForCommandLineNeedle.execFileAsync.timeout",
     "defaultMs": 5000,
     "label": "消息平台 · windowsPidsForCommandLineNeedle / timeout",
-    "scope": "src/messageEndpoints/napcatManager.ts",
+    "scope": "src/plugins/io.rabiroute.endpoint.napcat/src/messageEndpoints/napcatManager.ts",
     "effect": "next-operation-or-owner-initialization"
   },
   {
     "key": "backend.messageEndpoints.napcatWebuiSession.authorize.AbortSignal.timeout.request",
     "defaultMs": 5000,
     "label": "消息平台 · authorize / request",
-    "scope": "src/messageEndpoints/napcatWebuiSession.ts",
+    "scope": "src/plugins/io.rabiroute.endpoint.napcat/src/messageEndpoints/napcatWebuiSession.ts",
     "effect": "next-operation-or-owner-initialization"
   },
   {
     "key": "backend.messageEndpoints.napcatWebuiSession.request.AbortSignal.timeout.request",
     "defaultMs": 5000,
     "label": "消息平台 · request / request",
-    "scope": "src/messageEndpoints/napcatWebuiSession.ts",
+    "scope": "src/plugins/io.rabiroute.endpoint.napcat/src/messageEndpoints/napcatWebuiSession.ts",
     "effect": "next-operation-or-owner-initialization"
   },
   {
     "key": "backend.messageEndpoints.remoteAgentManager.connectDevice.setTimeout.connectionTimeoutMs",
     "defaultMs": 6000,
     "label": "Agent 接口 · connectDevice / connectionTimeoutMs",
-    "scope": "src/messageEndpoints/remoteAgentManager.ts",
+    "scope": "src/plugins/io.rabiroute.manager.remote-agent/src/messageEndpoints/remoteAgentManager.ts",
     "effect": "next-operation-or-owner-initialization"
   },
   {
     "key": "backend.messageEndpoints.remoteAgentManager.scanLan.timeoutMs",
     "defaultMs": 1400,
     "label": "Agent 接口 · scanLan / timeoutMs",
-    "scope": "src/messageEndpoints/remoteAgentManager.ts",
+    "scope": "src/plugins/io.rabiroute.manager.remote-agent/src/messageEndpoints/remoteAgentManager.ts",
     "effect": "next-operation-or-owner-initialization"
   },
   {
@@ -1861,21 +1861,21 @@ export const timeoutCatalog: readonly TimeoutCatalogEntry[] = [
     "key": "backend.napcat.getMessage.callNapCat.timeoutMs",
     "defaultMs": 3000,
     "label": "消息平台 · getMessage / timeoutMs",
-    "scope": "src/napcat.ts",
+    "scope": "src/plugins/io.rabiroute.endpoint.napcat/src/napcat.ts",
     "effect": "next-operation-or-owner-initialization"
   },
   {
     "key": "backend.napcat.readNapCatGroupFiles.AbortSignal.timeout.request",
     "defaultMs": 3000,
     "label": "消息平台 · readNapCatGroupFiles / request",
-    "scope": "src/napcat.ts",
+    "scope": "src/plugins/io.rabiroute.endpoint.napcat/src/napcat.ts",
     "effect": "next-operation-or-owner-initialization"
   },
   {
     "key": "backend.napcatMedia.NAPCAT_MEDIA_TIMEOUT_MS",
     "defaultMs": 12000,
     "label": "消息平台 · download / NAPCAT_MEDIA_TIMEOUT_MS",
-    "scope": "src/napcatMedia.ts",
+    "scope": "src/plugins/io.rabiroute.endpoint.napcat/src/napcatMedia.ts",
     "effect": "next-operation-or-owner-initialization"
   },
   {
@@ -1903,14 +1903,14 @@ export const timeoutCatalog: readonly TimeoutCatalogEntry[] = [
     "key": "backend.peerTunnel.speechAdapter.binary.requestLocalSpeech.timeoutMs",
     "defaultMs": 15000,
     "label": "设备连接 · binary / timeoutMs",
-    "scope": "src/peerTunnel/speechAdapter.ts",
+    "scope": "src/plugins/io.rabiroute.manager.speech/src/peerTunnel/speechAdapter.ts",
     "effect": "next-operation-or-owner-initialization"
   },
   {
     "key": "backend.peerTunnel.speechAdapter.binary.timeoutMs",
     "defaultMs": 190000,
     "label": "设备连接 · binary / timeoutMs",
-    "scope": "src/peerTunnel/speechAdapter.ts",
+    "scope": "src/plugins/io.rabiroute.manager.speech/src/peerTunnel/speechAdapter.ts",
     "effect": "next-operation-or-owner-initialization"
   },
   {
@@ -2064,49 +2064,49 @@ export const timeoutCatalog: readonly TimeoutCatalogEntry[] = [
     "key": "backend.weixinOpenClaw.pollWeixinQrSession.requestJson.timeoutMs",
     "defaultMs": 35000,
     "label": "消息平台 · pollWeixinQrSession / timeoutMs",
-    "scope": "src/weixinOpenClaw.ts",
+    "scope": "src/plugins/io.rabiroute.endpoint.weixin/src/weixinOpenClaw.ts",
     "effect": "next-operation-or-owner-initialization"
   },
   {
     "key": "backend.weixinOpenClaw.pollWeixinUpdates.requestJson.timeoutMs",
     "defaultMs": 35000,
     "label": "消息平台 · pollWeixinUpdates / timeoutMs",
-    "scope": "src/weixinOpenClaw.ts",
+    "scope": "src/plugins/io.rabiroute.endpoint.weixin/src/weixinOpenClaw.ts",
     "effect": "next-operation-or-owner-initialization"
   },
   {
     "key": "backend.weixinOpenClaw.requestJson.setTimeout.timeoutMs",
     "defaultMs": 35000,
     "label": "消息平台 · requestJson / timeoutMs",
-    "scope": "src/weixinOpenClaw.ts",
+    "scope": "src/plugins/io.rabiroute.endpoint.weixin/src/weixinOpenClaw.ts",
     "effect": "next-operation-or-owner-initialization"
   },
   {
     "key": "backend.weixinOpenClaw.requestWeixinQrSession.requestJson.timeoutMs",
     "defaultMs": 15000,
     "label": "消息平台 · requestWeixinQrSession / timeoutMs",
-    "scope": "src/weixinOpenClaw.ts",
+    "scope": "src/plugins/io.rabiroute.endpoint.weixin/src/weixinOpenClaw.ts",
     "effect": "next-operation-or-owner-initialization"
   },
   {
     "key": "backend.weixinOpenClaw.sendWeixinMedia.requestJson.timeoutMs",
     "defaultMs": 15000,
     "label": "消息平台 · sendWeixinMedia / timeoutMs",
-    "scope": "src/weixinOpenClaw.ts",
+    "scope": "src/plugins/io.rabiroute.endpoint.weixin/src/weixinOpenClaw.ts",
     "effect": "next-operation-or-owner-initialization"
   },
   {
     "key": "backend.workbuddySessionBridge.DEFAULT_SETTLE_TIMEOUT_MS",
     "defaultMs": 120000,
     "label": "Agent 接口 · waitForWorkbuddyTurn / DEFAULT_SETTLE_TIMEOUT_MS",
-    "scope": "src/workbuddySessionBridge.ts",
+    "scope": "src/plugins/io.rabiroute.agent.workbuddy/src/workbuddySessionBridge.ts",
     "effect": "next-operation-or-owner-initialization"
   },
   {
     "key": "backend.workbuddySessionBridge.REQUEST_TIMEOUT_MS",
     "defaultMs": 30000,
     "label": "Agent 接口 · waitForWorkbuddyTurn / REQUEST_TIMEOUT_MS",
-    "scope": "src/workbuddySessionBridge.ts",
+    "scope": "src/plugins/io.rabiroute.agent.workbuddy/src/workbuddySessionBridge.ts",
     "effect": "next-operation-or-owner-initialization"
   },
   {
@@ -2134,28 +2134,28 @@ export const timeoutCatalog: readonly TimeoutCatalogEntry[] = [
     "key": "deadline.dshOwnerRecovery.localDshRecoveryPorts",
     "defaultMs": 90000,
     "label": "执行等待 · localDshRecoveryPorts",
-    "scope": "src/dshOwnerRecovery.ts",
+    "scope": "src/plugins/io.rabiroute.agent.dsh/src/dshOwnerRecovery.ts",
     "effect": "next-operation"
   },
   {
     "key": "deadline.integrations.xiaomiHome.clipCapture.probeDuration",
     "defaultMs": 10000,
     "label": "执行等待 · probeDuration",
-    "scope": "src/integrations/xiaomiHome/clipCapture.ts",
+    "scope": "src/plugins/io.rabiroute.manager.xiaomi-home/src/integrations/xiaomiHome/clipCapture.ts",
     "effect": "next-operation"
   },
   {
     "key": "deadline.integrations.xiaomiHome.vacuumVideo.connect",
     "defaultMs": 25000,
     "label": "执行等待 · connect",
-    "scope": "src/integrations/xiaomiHome/vacuumVideo.ts",
+    "scope": "src/plugins/io.rabiroute.manager.xiaomi-home/src/integrations/xiaomiHome/vacuumVideo.ts",
     "effect": "next-operation"
   },
   {
     "key": "deadline.integrations.xiaomiHome.vacuumVideoWorker.close",
     "defaultMs": 1000,
     "label": "执行等待 · close",
-    "scope": "src/integrations/xiaomiHome/vacuumVideoWorker.ts",
+    "scope": "src/plugins/io.rabiroute.manager.xiaomi-home/src/integrations/xiaomiHome/vacuumVideoWorker.ts",
     "effect": "next-operation"
   },
   {
@@ -2260,7 +2260,7 @@ export const timeoutCatalog: readonly TimeoutCatalogEntry[] = [
     "key": "deadline.manager.videoRuntime.inspectAsset",
     "defaultMs": 20000,
     "label": "执行等待 · inspectAsset",
-    "scope": "src/manager/videoRuntime.ts",
+    "scope": "src/plugins/io.rabiroute.manager.video/src/manager/videoRuntime.ts",
     "effect": "next-operation"
   },
   {
@@ -2274,21 +2274,21 @@ export const timeoutCatalog: readonly TimeoutCatalogEntry[] = [
     "key": "deadline.messageEndpoints.napcatManager.testNapcatHealth",
     "defaultMs": 5000,
     "label": "执行等待 · testNapcatHealth",
-    "scope": "src/messageEndpoints/napcatManager.ts",
+    "scope": "src/plugins/io.rabiroute.endpoint.napcat/src/messageEndpoints/napcatManager.ts",
     "effect": "next-operation"
   },
   {
     "key": "deadline.messageEndpoints.remoteAgentManager.closeWebSocketAndWait",
     "defaultMs": 2000,
     "label": "执行等待 · closeWebSocketAndWait",
-    "scope": "src/messageEndpoints/remoteAgentManager.ts",
+    "scope": "src/plugins/io.rabiroute.manager.remote-agent/src/messageEndpoints/remoteAgentManager.ts",
     "effect": "next-operation"
   },
   {
     "key": "deadline.weixinOpenClaw.downloadWeixinImages",
     "defaultMs": 20000,
     "label": "执行等待 · downloadWeixinImages",
-    "scope": "src/weixinOpenClaw.ts",
+    "scope": "src/plugins/io.rabiroute.endpoint.weixin/src/weixinOpenClaw.ts",
     "effect": "next-operation"
   },
   {
@@ -2498,28 +2498,28 @@ export const timeoutCatalog: readonly TimeoutCatalogEntry[] = [
     "key": "home.cloudPage",
     "defaultMs": 40000,
     "label": "家庭设备云连接页面请求",
-    "scope": "src/integrations/xiaomiHome/vacuumCloudPage.ts",
+    "scope": "src/plugins/io.rabiroute.manager.xiaomi-home/src/integrations/xiaomiHome/vacuumCloudPage.ts",
     "effect": "next-page-load"
   },
   {
     "key": "home.deploymentReady",
     "defaultMs": 60000,
     "label": "家庭设备服务部署就绪",
-    "scope": "src/integrations/xiaomiHome/homeAssistantDeployment.ts",
+    "scope": "src/plugins/io.rabiroute.manager.xiaomi-home/src/integrations/xiaomiHome/homeAssistantDeployment.ts",
     "effect": "next-operation"
   },
   {
     "key": "home.videoLocalReady",
     "defaultMs": 10000,
     "label": "摄像头本地就绪",
-    "scope": "src/integrations/xiaomiHome/vacuumVideo.ts",
+    "scope": "src/plugins/io.rabiroute.manager.xiaomi-home/src/integrations/xiaomiHome/vacuumVideo.ts",
     "effect": "next-operation"
   },
   {
     "key": "home.videoRelayReady",
     "defaultMs": 45000,
     "label": "摄像头中转就绪",
-    "scope": "src/integrations/xiaomiHome/vacuumVideo.ts",
+    "scope": "src/plugins/io.rabiroute.manager.xiaomi-home/src/integrations/xiaomiHome/vacuumVideo.ts",
     "effect": "next-operation"
   },
   {
@@ -2883,7 +2883,7 @@ export const timeoutCatalog: readonly TimeoutCatalogEntry[] = [
     "key": "napcat.existingOwnerReady",
     "defaultMs": 5000,
     "label": "QQ已有进程就绪等待",
-    "scope": "src/messageEndpoints/napcatManager.ts",
+    "scope": "src/plugins/io.rabiroute.endpoint.napcat/src/messageEndpoints/napcatManager.ts",
     "effect": "next-operation"
   },
   {
@@ -3009,7 +3009,7 @@ export const timeoutCatalog: readonly TimeoutCatalogEntry[] = [
     "key": "persona.taskMetadata",
     "defaultMs": 3000,
     "label": "人格聊天任务元数据",
-    "scope": "src/manager/personaChatTaskMetadata.ts",
+    "scope": "src/plugins/io.rabiroute.manager.persona/src/manager/personaChatTaskMetadata.ts",
     "effect": "next-operation-or-owner-initialization"
   },
   {
@@ -3324,7 +3324,7 @@ export const timeoutCatalog: readonly TimeoutCatalogEntry[] = [
     "key": "speech.health",
     "defaultMs": 5000,
     "label": "语音健康检查",
-    "scope": "src/manager/speechServiceStatus.ts",
+    "scope": "src/plugins/io.rabiroute.manager.speech/src/manager/speechServiceStatus.ts",
     "effect": "next-request"
   },
   {
@@ -3450,14 +3450,14 @@ export const timeoutCatalog: readonly TimeoutCatalogEntry[] = [
     "key": "speech.start",
     "defaultMs": 120000,
     "label": "语音服务启动等待",
-    "scope": "src/manager/speechRuntimeControl.ts",
+    "scope": "src/plugins/io.rabiroute.manager.speech/src/manager/speechRuntimeControl.ts",
     "effect": "next-request"
   },
   {
     "key": "speech.stop",
     "defaultMs": 15000,
     "label": "语音服务停止等待",
-    "scope": "src/manager/speechRuntimeControl.ts",
+    "scope": "src/plugins/io.rabiroute.manager.speech/src/manager/speechRuntimeControl.ts",
     "effect": "next-request"
   },
   {
@@ -3611,14 +3611,14 @@ export const timeoutCatalog: readonly TimeoutCatalogEntry[] = [
     "key": "video.directConnect",
     "defaultMs": 45000,
     "label": "视频直连建立",
-    "scope": "src/manager/rabiDirectVideo.ts",
+    "scope": "src/plugins/io.rabiroute.manager.rabilink-relay/src/manager/rabiDirectVideo.ts",
     "effect": "next-request"
   },
   {
     "key": "video.directIdle",
     "defaultMs": 15000,
     "label": "视频直连空闲",
-    "scope": "src/manager/rabiDirectVideo.ts",
+    "scope": "src/plugins/io.rabiroute.manager.rabilink-relay/src/manager/rabiDirectVideo.ts",
     "effect": "next-idle-period"
   },
   {
@@ -3856,7 +3856,7 @@ export const timeoutCatalog: readonly TimeoutCatalogEntry[] = [
     "key": "worker.agentCatalog",
     "defaultMs": 300000,
     "label": "Agent 目录扫描工作线程",
-    "scope": "src/manager/agentAdapterCatalogWorkerPool.ts",
+    "scope": "src/plugins/io.rabiroute.manager.agent-adapter-catalog/src/manager/agentAdapterCatalogWorkerPool.ts",
     "effect": "next-request"
   },
   {
@@ -3933,21 +3933,21 @@ export const timeoutCatalog: readonly TimeoutCatalogEntry[] = [
     "key": "xiaoai.ssh.auth",
     "defaultMs": 10000,
     "label": "小爱反向隧道 SSH 认证",
-    "scope": "plugin-adapters/xiaoai-rabiroute/reverse-tunnel.py",
+    "scope": "src/plugins/xiaoai-rabiroute/reverse-tunnel.py",
     "effect": "next-process-start"
   },
   {
     "key": "xiaoai.ssh.banner",
     "defaultMs": 10000,
     "label": "小爱反向隧道 SSH 协议握手",
-    "scope": "plugin-adapters/xiaoai-rabiroute/reverse-tunnel.py",
+    "scope": "src/plugins/xiaoai-rabiroute/reverse-tunnel.py",
     "effect": "next-process-start"
   },
   {
     "key": "xiaoai.ssh.connect",
     "defaultMs": 10000,
     "label": "小爱反向隧道 SSH 连接",
-    "scope": "plugin-adapters/xiaoai-rabiroute/reverse-tunnel.py",
+    "scope": "src/plugins/xiaoai-rabiroute/reverse-tunnel.py",
     "effect": "next-process-start"
   }
 ];

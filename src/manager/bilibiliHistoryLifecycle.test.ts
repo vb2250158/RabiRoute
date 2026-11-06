@@ -1,14 +1,15 @@
+import { canonicalManagerPluginFixture } from "./canonicalManagerPlugin.fixture.js";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { BilibiliHistoryBridge, type BilibiliHistoryJob } from "./bilibiliHistoryBridge.js";
+import { BilibiliHistoryBridge, type BilibiliHistoryJob } from "../plugins/io.rabiroute.manager.bilibili-history/src/manager/bilibiliHistoryBridge.js";
 import { GenerationRuntime } from "../plugin-kernel/generationRuntime.js";
 import { InProcessPluginExecutor } from "../plugin-kernel/pluginExecutor.js";
 import type { PluginCandidate } from "../plugin-kernel/types.js";
-import { createBilibiliHistoryOperations } from "./bilibiliHistoryOperations.js";
+import { createBilibiliHistoryOperations } from "../plugins/io.rabiroute.manager.bilibili-history/src/manager/bilibiliHistoryOperations.js";
 import { ManagerPluginRouteRegistry } from "./managerPluginRouteRegistry.js";
 
 function historyJob(id: string, status: BilibiliHistoryJob["status"], roleId?: string): BilibiliHistoryJob {
@@ -109,9 +110,10 @@ async function pluginFixture(t: import("node:test").TestContext) {
   let kernel!: GenerationRuntime;
   const routes = new ManagerPluginRouteRegistry(() => new Set(kernel.current().records
     .filter(record => record.status === "active").map(record => record.identity.activationId)));
-  const entry = path.resolve("plugins/builtin/io.rabiroute.manager.bilibili-history/1.0.0/manager.mjs");
+  const entry = path.resolve("src/plugins/io.rabiroute.manager.bilibili-history/manager.mjs");
   const manifest = JSON.parse(fs.readFileSync(path.join(path.dirname(entry), "rabi.plugin.json"), "utf8"));
   class TrackedBridge extends BilibiliHistoryBridge {
+    static override defaultStatePath(instanceId: string) { assert.equal(instanceId, "manager:bilibili-history"); return fixture.statePath; }
     constructor(...args: ConstructorParameters<typeof BilibiliHistoryBridge>) {
       super(...args);
       owners.push(this);
@@ -126,19 +128,21 @@ async function pluginFixture(t: import("node:test").TestContext) {
     }
     override close(): void { events.push(`close:${owners.indexOf(this)}`); super.close(); }
   }
-  const executor = new InProcessPluginExecutor();
-  kernel = new GenerationRuntime({ host: "manager", readyRequires: ["manager.bilibili-history@1"],
-    hostServices: [{ capability: "manager.core@1", value: {} }, { capability: "manager.persona@1", value: {} },
-      { capability: "host.manager.bilibili-history@1", value: {
+
+  const ownedRuntime = {
         BilibiliHistoryBridge: TrackedBridge, path, rootDir: fixture.dir, configRepository: { rolesRoot: fixture.rolesRoot },
         managerReadOnly: false, managerPluginRoutes: routes,
         createBilibiliHistoryOperations(owner: BilibiliHistoryBridge) {
           if (failOperations) { failOperations = false; throw new Error("controlled operations failure"); }
           return createBilibiliHistoryOperations(owner);
         }
-      } }],
+
+  };
+  const { module, ports } = await canonicalManagerPluginFixture("bilibili-history", ownedRuntime);
+  kernel = new GenerationRuntime({ host: "manager", readyRequires: ["manager.bilibili-history@1"],
+    hostServices: [{ capability: "manager.core@1", value: {} }, { capability: "manager.persona@1", value: {} },
+      { capability: "host.manager.bilibili-history@2", value: ports }],
     executor: { async prepare(candidate, identity) {
-      const module = await executor.prepare(candidate, identity);
       return { async activate(context) {
         await module.activate(context);
         if (failPublication) {

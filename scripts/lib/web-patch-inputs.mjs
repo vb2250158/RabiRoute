@@ -2,11 +2,18 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 
-export const webPatchInputs = ["ribiwebgui", "assets", "docs", "src/shared", "package.json", "package-lock.json", "scripts/sync-plugin-web-bundles.mjs"];
+export const webPatchInputs = ["ribiwebgui", "assets", "docs", "src/shared", "src/plugins", "package.json", "package-lock.json", "scripts/sync-plugin-web-bundles.mjs"];
 
 export function isWebPatchInput(relative) {
   const normalized = relative.replaceAll("\\", "/");
   if (normalized.split("/").some(part => ["dist", "node_modules", ".git", ".web-patch-build.lock"].includes(part))) return false;
+  // Native plugin UI is source input. Backend implementations and external
+  // integrations may contain local runtimes/data and are not Vite dependencies.
+  if (normalized === "src/plugins") return true;
+  if (normalized.startsWith("src/plugins/")) {
+    const parts = normalized.split("/");
+    return parts.length === 3 || parts[3] === "web" || (parts.length === 4 && parts[3] === "package.json");
+  }
   return webPatchInputs.some(input => normalized === input || normalized.startsWith(`${input}/`));
 }
 

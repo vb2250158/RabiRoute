@@ -10,10 +10,10 @@ const bootstrap = `
   import path from 'node:path';
   import http from 'node:http';
   import {Socket} from 'node:net';
-  import {createQqMessageOperations} from './src/manager/qqMessageRoutes.ts';
-  import {createQqStickerOperations} from './src/manager/qqStickerRoutes.ts';
-  import {createAgentQqDiagnosticsOperation} from './src/manager/agentQqDiagnostics.ts';
-  import {createPersonaResourceOperations} from './src/manager/personaResourceOperations.ts';
+  import {createQqMessageOperations} from './src/plugins/io.rabiroute.endpoint.napcat/src/manager/qqMessageRoutes.ts';
+  import {createQqStickerOperations} from './src/plugins/io.rabiroute.endpoint.napcat/src/manager/qqStickerRoutes.ts';
+  import {createAgentQqDiagnosticsOperation} from './src/plugins/io.rabiroute.endpoint.napcat/src/manager/agentQqDiagnostics.ts';
+  import {createPersonaResourceOperations} from './src/plugins/io.rabiroute.manager.persona/src/manager/personaResourceOperations.ts';
   import {qqReadSettings} from './src/shared/qqReadSettings.ts';
   import {personaReadSettings} from './src/shared/personaReadSettings.ts';
   import {ReadSettingsError} from './src/shared/readSettingsError.ts';

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { callNapCat, NapCatRequestError } from "./napcat.js";
+import { callNapCat, NapCatRequestError } from "./plugins/io.rabiroute.endpoint.napcat/src/napcat.js";
 
 test("NapCat failures preserve safe protocol diagnostics without treating a broken response as success", async t => {
   const original = globalThis.fetch; t.after(() => { globalThis.fetch = original; });

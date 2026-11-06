@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 2,
+  "id": "io.rabiroute.agent.copilot-cli",
+  "version": "0.1.1",
+  "displayName": "Copilot CLI",
+  "description": "将消息交给本机 Copilot CLI，按所选会话和工作目录处理任务。",
+  "icon": "mdi-robot-outline",
+  "entries": {
+    "manager": {
+      "execution": "in_process",
+      "module": "./manager.mjs"
+    },
+    "gateway": {
+      "execution": "in_process",
+      "module": "./gateway.mjs"
+    },
+    "web": {
+      "execution": "in_process",
+      "module": "./web/client.mjs"
+    }
+  },
+  "provides": [
+    "agent.adapter.copilot-cli@1"
+  ],
+  "requires": [
+    "host.agent-adapters@1"
+  ],
+  "optional": [],
+  "permissions": []
+}

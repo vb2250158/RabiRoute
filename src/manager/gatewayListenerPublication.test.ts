@@ -5,7 +5,7 @@ import { once } from "node:events";
 import http from "node:http";
 import { createGatewayListenerPublicationHost } from "./gatewayListenerPublication.js";
 import { ManagerPluginRouteRegistry } from "./managerPluginRouteRegistry.js";
-import { createApiDiscoveryOperations } from "./apiDiscoveryRoutes.js";
+import { createApiDiscoveryOperations } from "../plugins/io.rabiroute.manager.agent-communication/src/manager/apiDiscoveryRoutes.js";
 import { createManagerClient } from "../../apps/rabi-agent/lib/manager-client.mjs";
 import { GenerationRuntime } from "../plugin-kernel/generationRuntime.js";
 import { currentPluginActivation } from "../plugin-kernel/pluginActivationContext.js";

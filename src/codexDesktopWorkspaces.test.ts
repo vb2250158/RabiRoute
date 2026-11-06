@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
-import { listCodexDesktopWorkspaces } from "./codexDesktopBridge.js";
+import { listCodexDesktopWorkspaces } from "./plugins/io.rabiroute.agent.codex/src/codexDesktopBridge.js";
 
 test("workspace discovery needs no task bodies or sidebar index and preserves active scope", context => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabi-workspace-query-"));

@@ -45,9 +45,10 @@ const knowledgeRuntimeFiles = [
   "apps/rabi-mcp/lib/knowledge-tools.mjs",
   "apps/rabi-mcp/lib/knowledge-receipt.mjs"
 ];
+const developerMaintenanceFiles = ['scripts/Invoke-RabiRouteDeveloperApply.ps1', 'scripts/Publish-RabiRouteDeveloperCandidate.ps1', 'src/plugins/io.rabiroute.manager.xiaomi-home/scripts/Install-HomeAssistantOs.ps1'];
 function writeKnowledgeRuntime(build) {
-  for (const name of ['Invoke-RabiRouteDeveloperApply.ps1', 'Publish-RabiRouteDeveloperCandidate.ps1', 'Install-HomeAssistantOs.ps1']) {
-    write(build, `scripts/${name}`, fs.readFileSync(new URL(`./${name}`, import.meta.url), 'utf8'));
+  for (const relative of developerMaintenanceFiles) {
+    write(build, relative, fs.readFileSync(new URL(`../${relative}`, import.meta.url), 'utf8'));
   }
   write(build, "packages/rabi-companion/presets.json", '{"version":1,"presets":[]}');
   write(build, "packages/rabi-companion/scene-rules.json", '{"schemaVersion":1,"rules":[]}');
@@ -81,11 +82,11 @@ test("developer candidate overlays only built runtime layers and leaves the immu
     write(base, "skills/retired/SKILL.md", "retired skill\n");
     write(base, "source-patches/retired.json", "retired catalog\n");
     write(base, "node.exe", "node\n");
-    write(base, "plugin-adapters/rabi-speech/requirements.txt", "same dependencies\n");
-    write(build, "plugin-adapters/rabi-speech/requirements.txt", "same dependencies\n");
-    write(base, "plugin-adapters/rabi-speech/rabispeech/all_day_capture.py", "old capture\n");
-    write(build, "plugin-adapters/rabi-speech/rabispeech/all_day_capture.py", "new capture\n");
-    write(build, "plugin-adapters/rabi-speech/scripts/start.ps1", "new launcher\n");
+    write(base, "src/plugins/rabi-speech/requirements.txt", "same dependencies\n");
+    write(build, "src/plugins/rabi-speech/requirements.txt", "same dependencies\n");
+    write(base, "src/plugins/rabi-speech/rabispeech/all_day_capture.py", "old capture\n");
+    write(build, "src/plugins/rabi-speech/rabispeech/all_day_capture.py", "new capture\n");
+    write(build, "src/plugins/rabi-speech/scripts/start.ps1", "new launcher\n");
     write(build, "plugin-adapters/rabi-speech/config.json", "private excluded\n");
     write(base, "package.json", '{"scripts":{"build":"old"}}');
     write(build, "package.json", '{"scripts":{"build":"current"}}');
@@ -102,7 +103,7 @@ test("developer candidate overlays only built runtime layers and leaves the immu
     write(base, 'scripts/local-maintenance.ps1', 'keep local maintenance\n');
     write(base, 'scripts/Invoke-RabiRouteDeveloperApply.ps1', 'obsolete activation budget\n');
     write(base, 'scripts/Publish-RabiRouteDeveloperCandidate.ps1', 'obsolete publisher budget\n');
-    write(base, 'scripts/Install-HomeAssistantOs.ps1', 'obsolete visible recovery launcher\n');
+    write(base, 'src/plugins/io.rabiroute.manager.xiaomi-home/scripts/Install-HomeAssistantOs.ps1', 'obsolete visible recovery launcher\n');
     const wsSource = new URL('../node_modules/ws', import.meta.url);
     const wsTarget = path.join(base, 'node_modules/ws');
     fs.cpSync(wsSource, wsTarget, { recursive: true, dereference: true });
@@ -166,8 +167,7 @@ test("developer candidate overlays only built runtime layers and leaves the immu
       assert.equal(fs.existsSync(path.join(base, 'scripts', name)), true);
     }
     assert.equal(fs.readFileSync(path.join(result.packageRoot, 'scripts/local-maintenance.ps1'), 'utf8'), 'keep local maintenance\n');
-    for (const name of ['Invoke-RabiRouteDeveloperApply.ps1', 'Publish-RabiRouteDeveloperCandidate.ps1', 'Install-HomeAssistantOs.ps1']) {
-      const relative = `scripts/${name}`;
+    for (const relative of developerMaintenanceFiles) {
       assert.equal(fs.readFileSync(path.join(result.packageRoot, relative), 'utf8'), fs.readFileSync(path.join(build, relative), 'utf8'));
       assert.ok(result.manifest.files.some(entry => entry.path === relative));
       assert.match(fs.readFileSync(path.join(base, relative), 'utf8'), /obsolete/);
@@ -191,7 +191,7 @@ test("developer candidate overlays only built runtime layers and leaves the immu
     assert.throws(() => createDeveloperCandidate({ baseRoot: base, buildRoot: build, traySourceRoot: tray, hostCoreRoot: host, versionsRoot: versions, packageVersion: "0.2.2-dev.missing-knowledge" }), /packages\/rabi-knowledge-contract\/receipt\.mjs/);
     fs.writeFileSync(receiptFile, receiptSource);
     assert.equal(fs.readdirSync(versions).some(name => name.startsWith(".developer-staging-")), false);
-    assert.equal(fs.readFileSync(path.join(result.packageRoot,"plugin-adapters/rabi-speech/rabispeech/all_day_capture.py"),"utf8"),"new capture\n");
+    assert.equal(fs.readFileSync(path.join(result.packageRoot,"src/plugins/rabi-speech/rabispeech/all_day_capture.py"),"utf8"),"new capture\n");
     assert.equal(fs.existsSync(path.join(result.packageRoot,"plugin-adapters/rabi-speech/config.json")),false);
     assert.equal(fs.existsSync(path.join(result.packageRoot, "apps/rabi-agent/lib/client.mjs")), true);
     assert.equal(fs.readFileSync(path.join(base, "dist", "manager.js"), "utf8"), "old manager\n");

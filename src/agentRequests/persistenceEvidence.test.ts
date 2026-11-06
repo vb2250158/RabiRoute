@@ -153,7 +153,7 @@ test("an unreadable persistence implementation remains unavailable rather than b
 test("mismatched persisted request identities cannot overwrite healthy neighbors or release original reservations", async () => {
   for (const brokenFirst of [false, true]) {
     const row = (deliveryId: string) => ({ id: "same-request", deliveryId, status: "awaiting_response",
-      ...preparation(), createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z", reminderCount: 0 });
+      ...preparation(), createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z" });
     const healthy = row("first-original-send"), broken = row("second-original-send");
     const entries = [["same-request", healthy], ["different-key", broken]] as const;
     let persisted: any = { version: 1, requests: Object.fromEntries(brokenFirst ? [...entries].reverse() : entries) };
@@ -174,7 +174,7 @@ test("mismatched persisted request identities cannot overwrite healthy neighbors
 
 test("persisted request and delivery identities are never trimmed or truncated into valid identities", async () => {
   const original = { id: "request", deliveryId: "original-delivery", status: "awaiting_response",
-    ...preparation(), createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z", reminderCount: 0 };
+    ...preparation(), createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z" };
   for (const id of [" request ", "x".repeat(101)]) {
     const broken = { ...original, id };
     let persisted: any = { version: 1, requests: { [id]: broken } };

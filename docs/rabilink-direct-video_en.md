@@ -44,7 +44,7 @@ The SDK request specifies 15 fps and 2 Mbit/s. A 1 MiB sender buffer limit termi
 
 ## Verification
 
-Run `node --import tsx --test src/manager/rabiDirectVideo.test.ts`, `src/manager/rabiLinkRelayRuntime.test.ts` and `scripts/rabilink-relay-speech-messages.test.mjs`. Tests cover ordered byte integrity, cleanup, duplicate sessions, signalling restrictions, authentication and TURN rejection.
+Run `node --import tsx --test src/plugins/io.rabiroute.manager.rabilink-relay/src/manager/rabiDirectVideo.test.ts`, `src/manager/rabiLinkRelayRuntime.test.ts` and `scripts/rabilink-relay-speech-messages.test.mjs`. Tests cover ordered byte integrity, cleanup, duplicate sessions, signalling restrictions, authentication and TURN rejection.
 
 Build `:app:assembleDebug` and `:app:assembleDebugAndroidTest` with `-PmobileSlim -PvideoAcceptance` for the isolated `com.rabi.link.videoacceptance` package. It does not replace the user's application. Start `node --import tsx scripts/test-rabi-direct-video-receiver.ts`, read the actual port from READY, and use `adb reverse` for that TCP signalling port only. Pass it as the instrumentation `signalPort` argument. `camera=false` sends synthetic bytes; `camera=true` runs a roughly 40-second camera test. Record these results separately. ICE video packets use the network, not the USB TCP forwarding channel.
 

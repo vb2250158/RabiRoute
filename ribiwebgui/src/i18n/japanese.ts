@@ -1,4 +1,5 @@
 import { japaneseCatalog } from "./japaneseCatalog";
+import { pluginTranslation } from "./translationRegistry";
 export { japaneseCatalog };
 
 const inlineCatalog: Record<string, string> = {
@@ -8,7 +9,7 @@ const inlineCatalog: Record<string, string> = {
   "FenneNote / 芬妮笔记": "FenneNote", "RabiLink / Relay 直连": "RabiLink / Relay",
   "眼镜端（经 RabiLink）": "グラス（RabiLink 経由）", "智能手表/手环": "スマートウォッチ / バンド"
 };
-function term(value: string): string { return japaneseCatalog[value] || inlineCatalog[value] || value; }
+function term(value: string): string { return japaneseCatalog[value] || pluginTranslation("ja", value) || inlineCatalog[value] || value; }
 function inline(value: string): string { return value.split(" + ").map(term).join(" + "); }
 const adapterLabel = "(?:NapCat / OneBot|定时触发|角色面板|远端 Agent|语音消息端|通用 Webhook|企业微信 / WeCom|小米音箱 / 小爱|米家 / Xiaomi Home|FenneNote / 芬妮笔记|RabiLink / Relay 直连|眼镜端（经 RabiLink）|智能手表/手环|已禁用)";
 
@@ -101,7 +102,6 @@ export const japanesePatterns: Array<[RegExp, (...matches: string[]) => string]>
   [/^(.+) 消息文件$/, (_, label) => `${term(label)} のメッセージファイル`],
   [/^(.+) · 已禁用 · (.+)$/, (_, name, adapters) => `${name} · 無効 · ${inline(adapters)}`],
   [/^RabiRoute 根目录 \/ (.+)$/, (_, task) => `RabiRoute ルートディレクトリ / ${task}`],
-  [/^星海消息分诊台 · v(.+)$/, (_, version) => `メッセージルーティング · v${version}`],
   [/^Manager (已连接|未连接)$/, (_, state) => `Manager ${state === "已连接" ? "接続済み" : "未接続"}`],
   [/^RabiLink Relay 连接失败：(.+)$/, (_, error) => `RabiLink Relay に接続できませんでした：${error}`],
   [/^已触发「(.+)」，请在最近日志和通知数里确认投递结果。$/, (_, rule) => `「${rule}」を実行しました。最近のログと配信数で結果を確認してください。`],

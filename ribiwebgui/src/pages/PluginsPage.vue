@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
-import { useI18n } from "../i18n";
+import { useI18n } from "../i18n/index";
 import { userFacingError } from "../userFacingError";
 import { filterManagedPlugins, pluginDisplayName, readPluginManagementCatalog, updateManagedPlugin, type ManagedPlugin } from "../pluginManagementClient";
 import { pluginCatalogStore } from "../pluginCatalogStore";

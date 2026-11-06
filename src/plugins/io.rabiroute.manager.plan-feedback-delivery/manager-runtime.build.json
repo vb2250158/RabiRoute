@@ -1,0 +1,15 @@
+{
+  "exports": [
+    {
+      "source": "src/plugins/io.rabiroute.manager.plan-feedback-delivery/hostRuntime.mjs",
+      "name": "createOwnedRuntime"
+    }
+  ],
+  "ownedPrefixes": [
+    "src/plugins/io.rabiroute.manager.plan-feedback-delivery/"
+  ],
+  "ownedSources": [
+    "src/plugins/io.rabiroute.manager.plan-feedback-delivery/src/manager/planFeedbackRecoveryService.ts"
+  ],
+  "packageId": "io.rabiroute.manager.plan-feedback-delivery"
+}

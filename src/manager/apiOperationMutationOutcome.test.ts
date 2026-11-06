@@ -9,7 +9,7 @@ import { ManagerPluginRouteRegistry } from './managerPluginRouteRegistry.js';
 import { LanAgentAuthority } from './lanAgentAuthority.js';
 import { evaluateLanAgentRequest } from './lanAgentRequestAccess.js';
 import { markAuthenticatedConnectionRequest } from './connectionRequestAccess.js';
-import { registerLanAgentBodyGuard, assertLanAgentBodyAuthority } from './lanAgentBodyAuthority.js';
+import { registerLanAgentBodyGuard } from './lanAgentBodyAuthority.js';
 import type { ApiOperationResult } from './apiOperationContract.js';
 
 for (const phase of ['prepare-not-started', 'handler-not-started', 'handler-unknown', 'no-owner-evidence', 'invalid-owner-evidence', 'normal-result'] as const) {
@@ -32,7 +32,7 @@ for (const phase of ['prepare-not-started', 'handler-not-started', 'handler-unkn
     const server = http.createServer((request, response) => {
       if (evaluateLanAgentRequest(request, authority, true).kind !== 'agent') { response.writeHead(401).end(); return; }
       markAuthenticatedConnectionRequest(request);
-      registerLanAgentBodyGuard(request, body => assertLanAgentBodyAuthority(new URL(request.url!, 'http://fixture').pathname, body, undefined));
+      registerLanAgentBodyGuard(request, () => {});
       if (!registry.handle(request, new URL(request.url!, 'http://fixture'), response)) response.writeHead(404).end();
     });
     await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));

@@ -5,6 +5,10 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <AssemblyName>RabiRouteHost</AssemblyName>
+    <ApplicationIcon>..\..\assets\rabiroute-icon.ico</ApplicationIcon>
+    <Product>RabiRoute</Product>
+    <AssemblyTitle>RabiRoute Host</AssemblyTitle>
+    <Description>RabiRoute Host</Description>
     <RootNamespace>RabiRoute.WindowsBootstrap</RootNamespace>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <SelfContained>true</SelfContained>

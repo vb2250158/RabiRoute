@@ -410,8 +410,8 @@ Adapter 需要分别报告：
 ## 相关实现与文档
 
 - `src/agentAdapters/`：各 Agent adapter 与 Manager 扫描入口。
-- `src/codexDesktopBridge.ts`：Desktop 任务发现、IPC、deeplink 唤醒与 fail-closed 投递。
-- `src/codexAppServerClient.ts`：仅用于新名称创建空任务的 bootstrap 客户端。
+- `src/plugins/io.rabiroute.agent.codex/src/codexDesktopBridge.ts`：Desktop 任务发现、IPC、deeplink 唤醒与 fail-closed 投递。
+- `src/plugins/io.rabiroute.agent.codex/src/codexAppServerClient.ts`：仅用于新名称创建空任务的 bootstrap 客户端。
 - `src/agentThreads.ts`：正式的 Agent thread 桥接 API。
 - `docs/rabi-agent-interfaces.md`：RabiRoute 暴露给 Agent 的接口和工具边界。
 - `docs/code-architecture.md`：模块所有权和 Codex runtime 边界。

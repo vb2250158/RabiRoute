@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { AgentAdapterInvocation, AgentAdapterProvider } from "@rabiroute/plugin-sdk";
+import { currentAgentAdapterGeneration, publishedAgentAdapterProviders } from "../runtime/agentAdapterProviders.js";
 
 export type AgentManagerOperationInvoker = <T = unknown>(
   type: string, operation: string, payload: unknown, invocation?: AgentAdapterInvocation
@@ -78,6 +79,8 @@ export function invokeScopedAgentManagerOperation<T = unknown>(
   }
   // Explicit isolated callers can supply their original invoker without creating a platform fallback.
   if (current?.context.invokeAgentOperation) return current.context.invokeAgentOperation<T>(type, operation, payload, authority);
+  if (!current) return withAgentManagerInvocation({ getProviders: () => [...publishedAgentAdapterProviders(currentAgentAdapterGeneration()).values()] },
+    () => invokeScopedAgentManagerOperation<T>(type, operation, payload, authority));
   throw Object.assign(new Error(`Agent plugin operation is unavailable: ${type}/${operation}.`), { code: "AGENT_ADAPTER_UNAVAILABLE", statusCode: 503 });
 }
 

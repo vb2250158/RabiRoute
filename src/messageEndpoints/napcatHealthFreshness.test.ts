@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import test from "node:test";
 import { GatewayStatusSnapshotService } from "../manager/gatewayStatusSnapshot.js";
-import { testNapcatHealth, type NapcatManagerContext } from "./napcatManager.js";
+import { testNapcatHealth, type NapcatManagerContext } from "../plugins/io.rabiroute.endpoint.napcat/src/messageEndpoints/napcatManager.js";
 
 const settled = () => new Promise<void>(resolve => setImmediate(resolve));
 

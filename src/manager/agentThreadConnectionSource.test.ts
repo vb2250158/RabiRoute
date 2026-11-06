@@ -10,8 +10,8 @@ import type { AgentRequestEndpoint } from "../agentRequests/endpoint.js";
 import { agentDeliverySourceForParty } from "../agentRequests/endpoint.js";
 import { handleAgentThreadRequest, agentThreadRequestFailureData, type AgentThreadRequest } from "../agentThreads.js";
 import { createAgentEndpointDelivery, type AgentEndpointDeliveryContext } from "./agentEndpointDelivery.js";
-import { createAgentThreadControlOwner, type AgentThreadControlRoutesContext } from "./agentThreadControlRoutes.js";
-import { createAgentThreadControlOperations } from "./agentThreadControlOperations.js";
+import { createAgentThreadControlOwner, type AgentThreadControlRoutesContext } from "../plugins/io.rabiroute.manager.agent-thread-control/src/manager/agentThreadControlRoutes.js";
+import { createAgentThreadControlOperations } from "../plugins/io.rabiroute.manager.agent-thread-control/src/manager/agentThreadControlOperations.js";
 import { ManagerPluginRouteRegistry } from "./managerPluginRouteRegistry.js";
 import { LanAgentAuthority } from "./lanAgentAuthority.js";
 import { evaluateLanAgentRequest } from "./lanAgentRequestAccess.js";
@@ -59,7 +59,7 @@ async function connectionFixture(t: test.TestContext) {
       endpointDelivery: currentFactory.options(extra?.remoteSource, extra?.requestAuthority) }),
     readEndpointDeliveryOptions: (source, guard) => currentFactory.options(source, guard),
     handleAgentThreadRequest: (request, options) => handleAgentThreadRequest(request, options), agentThreadRequestFailureData,
-    setMessageProcessingPlanBaseline: () => {}, refreshAgentRequestReminderTimers: () => {}, publishManagerEvent: () => {},
+    setMessageProcessingPlanBaseline: () => {}, publishManagerEvent: () => {},
     operationalLog: { record: () => null }, operationalError: () => undefined
   };
   const registry = new ManagerPluginRouteRegistry();

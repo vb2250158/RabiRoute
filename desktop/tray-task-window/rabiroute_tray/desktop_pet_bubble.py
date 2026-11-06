@@ -8,6 +8,9 @@ from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPen, QPixmap
 from PySide6.QtWidgets import QLabel, QScrollArea, QVBoxLayout, QWidget
 
 
+from .theme import rabi_scrollbar_stylesheet
+
+
 DEFAULT_BUBBLE_STYLE = dict(skin="cat-paw", fontFamily="", fontSize=14, textColor="#504650",
                            backgroundColor="#fffaf3", borderColor="#a58b98", maxWidth=320,
                            opacity=1.0, displaySeconds=8)
@@ -113,8 +116,11 @@ class DesktopPetBubble(QWidget):
         palette = self._text.palette()
         palette.setColor(self._text.foregroundRole(), QColor(self._style["textColor"]))
         self._text.setPalette(palette)
-        self._text.setStyleSheet("background: transparent;")
-        self._scroll.setStyleSheet("QScrollArea, QScrollArea > QWidget > QWidget {background: transparent;}")
+        self._text.setStyleSheet(f"background: transparent; color: {self._style['textColor']};")
+        self._scroll.setStyleSheet(
+            "QScrollArea, QScrollArea > QWidget > QWidget {background: transparent;}"
+            + rabi_scrollbar_stylesheet(foreground=self._style["textColor"])
+        )
         self._scroll.viewport().setAutoFillBackground(False)
         self.setWindowOpacity(float(self._style["opacity"]))
         self._update_margins()

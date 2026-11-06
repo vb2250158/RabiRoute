@@ -2,6 +2,7 @@ import { getTimeoutMs } from "../shared/timeoutSettings.js";
 import type { ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { stopChildProcessTree } from "./windowsProcessTree.js";
+import { launchProtectedProcess, type ProtectedProcessLaunch, type ProtectedProcessTree } from "./protectedProcessLauncher.mjs";
 
 export type ProcessLeaseOwner = Readonly<{
   applicationGenerationId: string;
@@ -17,6 +18,7 @@ export type ProcessLease = Readonly<{
   owner: ProcessLeaseOwner;
   child: ChildProcess;
   settled: Promise<void>;
+  tree?: ProtectedProcessTree;
 }>;
 
 type LeaseState = {
@@ -46,18 +48,22 @@ export class ProcessLeaseRegistry {
   readonly #quiescingOwners = new Set<string>();
   #stoppingAll = false;
   readonly #terminationTimeoutMs: number;
+  readonly #allowsInjectedChild: boolean;
+  private readonly stopProcess: (child: ChildProcess) => Promise<void>;
 
   constructor(
-    private readonly stopProcess: (child: ChildProcess) => Promise<void> = child => stopChildProcessTree(child),
+    stopProcess?: (child: ChildProcess) => Promise<void>,
     options: Readonly<{ terminationTimeoutMs?: number }> = {}
   ) {
+    this.#allowsInjectedChild = stopProcess !== undefined;
+    this.stopProcess = stopProcess ?? (child => stopChildProcessTree(child));
     this.#terminationTimeoutMs = Math.max(1, Math.floor(options.terminationTimeoutMs ?? getTimeoutMs("backend.runtime.processLeaseRegistry.owner.Math.floor.terminationTimeoutMs", 5_000)));
   }
 
   launch(
     owner: ProcessLeaseOwner,
     key: string,
-    start: () => ChildProcess,
+    start: ProtectedProcessLaunch | (() => ChildProcess),
     options: Readonly<{ maxChildProcesses?: number; exclusiveAcrossOwners?: boolean }> = {}
   ): ProcessLease {
     const ownerKey = processLeaseOwnerKey(owner);
@@ -71,20 +77,21 @@ export class ProcessLeaseRegistry {
       throw new Error(`Process lease owner reached its child-process limit: ${owner.instanceId}.`);
     }
     if (options.exclusiveAcrossOwners && [...this.#leases.values()].some(state => (
-      state.lease.key === processKey && state.lease.child.exitCode === null
+      state.lease.key === processKey
     ))) {
       throw new Error(`Exclusive process lease is already owned: ${processKey}.`);
     }
     const registryKey = `${ownerKey}\0${processKey}`;
     const current = this.#leases.get(registryKey);
-    if (current?.lease.child.exitCode === null) throw new Error(`Process lease already exists: ${processKey}.`);
-    if (current) this.#complete(registryKey, current);
+    if (current) throw new Error(`Process lease already exists: ${processKey}.`);
+    if (process.platform === "win32" && typeof start === "function" && !this.#allowsInjectedChild)
+      throw new Error("Windows process leases require a protected fork/spawn descriptor before execution.");
 
-    const child = start();
+    const { child, tree } = typeof start === "function" ? { child: start(), tree: undefined } : launchProtectedProcess(start);
     let state: LeaseState | undefined;
     let complete = (): void => {};
     child.on("error", () => {
-      if (state && child.exitCode !== null) complete();
+      if (state && !tree && child.exitCode !== null) complete();
     });
     if (!child.pid) {
       try { child.kill(); } catch { /* the observer above owns a later asynchronous spawn error */ }
@@ -92,14 +99,17 @@ export class ProcessLeaseRegistry {
     }
     let settle = (): void => {};
     const settled = new Promise<void>(resolve => { settle = resolve; });
-    const lease = Object.freeze({ id: randomUUID(), key: processKey, owner: Object.freeze({ ...owner }), child, settled });
+    const lease = Object.freeze({ id: randomUUID(), key: processKey, owner: Object.freeze({ ...owner }), child, settled, ...(tree ? { tree } : {}) });
     const activeState: LeaseState = { lease, settle };
     state = activeState;
     this.#leases.set(registryKey, activeState);
     complete = (): void => this.#complete(registryKey, activeState);
-    child.once("exit", complete);
-    child.once("close", complete);
-    if (child.exitCode !== null) complete();
+    if (tree) void tree.settled.then(complete);
+    else {
+      child.once("exit", complete);
+      child.once("close", complete);
+      if (child.exitCode !== null) complete();
+    }
     return lease;
   }
 
@@ -165,6 +175,12 @@ export class ProcessLeaseRegistry {
     if (state.stopPromise) return state.stopPromise;
     const attempt = (async () => {
       const deadline = Date.now() + this.#terminationTimeoutMs;
+      if (state.lease.tree) {
+        state.lease.tree.terminate();
+        const empty = await this.#withinDeadline(state.lease.settled.then(() => true), deadline, false);
+        if (!empty) throw new Error(`Process tree lease did not confirm exit within ${this.#terminationTimeoutMs}ms: ${state.lease.key}.${state.lease.tree.failure ? ` ${state.lease.tree.failure.message}` : ""}`);
+        return;
+      }
       if (state.lease.child.exitCode === null) {
         const gracefulDeadline = Date.now() + Math.max(1, Math.floor(this.#terminationTimeoutMs / 2));
         await this.#withinDeadline(

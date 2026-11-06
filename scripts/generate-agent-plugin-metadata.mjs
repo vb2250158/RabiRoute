@@ -3,14 +3,14 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 /** Compatibility metadata only; native activation remains the availability authority. */
 export async function generateAgentPluginMetadata(root, { check = false } = {}) {
-    const builtin = path.join(root, "plugins/builtin");
+    const builtin = path.join(root, "src/plugins");
     const descriptors = [];
     const profile = JSON.parse(await fs.readFile(path.join(root, "plugins/profiles/desktop.json"), "utf8"));
     const selected = [...new Map(profile.instances.map(instance => [`${instance.package}@${instance.version}`, instance])).values()];
     for (const instance of selected) {
         const directory = encodeURIComponent(instance.package), version = instance.version;
         {
-            const source = path.join(builtin, directory, version);
+            const source = path.join(builtin, directory);
             let bytes;
             try {
                 bytes = await fs.readFile(path.join(source, "agent-adapter.json"), "utf8");

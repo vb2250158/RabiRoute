@@ -1,4 +1,4 @@
-import type { CodexThreadCreateResult } from "./codexRuntime.js";
+import type { CodexThreadCreateResult } from "./agentAdapters/codexContracts.js";
 import { createCodexThreadWithReservation, readCallerCodexCreation } from "./codexThreadCreationReservations.js";
 
 export type CallerCreationMetadataStatus = {

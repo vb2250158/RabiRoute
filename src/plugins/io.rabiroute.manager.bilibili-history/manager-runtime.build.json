@@ -1,0 +1,16 @@
+{
+  "exports": [
+    {
+      "source": "src/plugins/io.rabiroute.manager.bilibili-history/hostRuntime.mjs",
+      "name": "createOwnedRuntime"
+    }
+  ],
+  "ownedPrefixes": [
+    "src/plugins/io.rabiroute.manager.bilibili-history/"
+  ],
+  "ownedSources": [
+    "src/plugins/io.rabiroute.manager.bilibili-history/src/manager/bilibiliHistoryOperations.ts",
+    "src/plugins/io.rabiroute.manager.bilibili-history/src/manager/bilibiliHistoryBridge.ts"
+  ],
+  "packageId": "io.rabiroute.manager.bilibili-history"
+}

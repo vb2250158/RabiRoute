@@ -24,7 +24,7 @@ Expand **Model directory** to configure one root. Saving an empty value restores
 
 Directory settings are accessible through the local WebGUI, an authenticated remote connection, or an authenticated, enabled remote Agent entrypoint and persist in `data/speech/model-directory-settings.json` under the installation state root, outside release payloads. Changes are rejected during install/download jobs; concurrent edits require refresh rather than silent overwrite. Network paths, drive roots, installation trees, and source worktrees are not accepted as custom roots.
 
-The page and command line share the allowlist in `plugin-adapters/rabi-speech/model-catalog.json`. Downloads cannot supply arbitrary repositories or URLs; the root is changed only through the separately validated settings endpoint. CLI calls still use an explicit `--root`. Licensed ONNX-VITS packages remain manual imports.
+The page and command line share the allowlist in `src/plugins/rabi-speech/model-catalog.json`. Downloads cannot supply arbitrary repositories or URLs; the root is changed only through the separately validated settings endpoint. CLI calls still use an explicit `--root`. Licensed ONNX-VITS packages remain manual imports.
 
 ## Reusing existing workers and reading test results
 

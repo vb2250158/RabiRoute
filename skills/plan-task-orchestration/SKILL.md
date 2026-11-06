@@ -40,7 +40,7 @@ On an enrolled remote Agent computer, use the installed `rabi-agent-launcher.mjs
 - Use the existing plan to record scope, progress and results. Registration is coordination, not permission; continue authorized investigation and implementation if synchronization is unavailable.
 - Give each plan one single-line `focus`, one coherent outcome, explicit acceptance criteria, and ordered `steps`.
 - Bind exactly one independent business execution task to one plan. Do not bind a coordinator, reminder, or persona chat task.
-- Keep `taskBinding.sessionId` as the stable task identity and `taskBinding.workspace` as the execution directory for each delivery. Treat `sessionTitle` and the task's saved default cwd as mutable metadata.
+- Keep the original `taskBinding.agentType` and full `taskBinding.sessionId`. When the binding already contains `instanceBinding`, preserve that exact computer and Agent on every read and delivery. Use `taskBinding.workspace` as the execution directory; treat `sessionTitle` and the task's saved default cwd as mutable metadata.
 - Treat the plan as the status truth, the bound task as the execution-history truth, and optional memory as recovery context. Never let one substitute for another.
 - Allow only one control-plane writer per `planId`. Reread before PATCH and verify the returned plan after writing.
 - Do not bulk-create tasks for old plans. Repair a binding only when that plan becomes active, relevant, or explicitly audited.
@@ -197,16 +197,16 @@ Every Agent end bound to a plan moves it to its next stage on real evidence; a p
 
 ### 4. Resolve the unique task binding
 
-1. If `taskBinding` exists, read the exact task by its full `sessionId`.
-2. Accept the binding when the exact task exists and is not archived. Ignore title and saved-cwd drift; the full task ID identifies the task, while `taskBinding.workspace` supplies the execution directory for each plan delivery.
+1. If `taskBinding` exists, read its full `sessionId` through its original `agentType` and any existing `instanceBinding`.
+2. Accept the binding when that exact owner's task exists and is not archived. Preserve any existing `instanceBinding` even when another computer reports the same session ID. Ignore title and saved-cwd drift; `taskBinding.workspace` supplies the execution directory for each plan delivery.
 3. If the binding is missing, search Desktop tasks by project, outcome, deliverable, and acceptance criteria. Read plausible task histories from the initial request through the latest result.
 4. Reuse a task only when its full history confirms the same plan scope. Stop for the smallest necessary clarification when multiple candidates remain genuinely ambiguous.
 5. Create one task in the plan's project workspace only when no matching task exists. Put the plan ID, scope, current step, acceptance criteria, evidence, and authority boundaries in the initial prompt.
-6. Persist the returned full task ID and canonical workspace in `taskBinding` immediately. If task creation succeeded but its initial turn failed, retry with `send` to that same ID; never create another task.
+6. Persist the returned full task ID and canonical workspace in `taskBinding`, retaining any original remote `instanceBinding`. If task creation succeeded but its initial turn failed, retry with `send` to that same owner and ID; never create another task.
 
 #### Bind a session that already exists
 
-Adopting a session that already exists — the usual case when each plan owns one Codex task or one DSH session — is a plan write, never a thread-bridge call:
+Adopting a session that already exists — the usual case when each plan owns one Codex task or one DSH session — is a plan write, never a thread-bridge call. The example below adopts an existing local DSH session. A binding that already names a remote owner keeps its exact `instanceBinding` in the plan and in later `/api/agent/threads` read/send requests:
 
 ```http
 PATCH /api/roles/<roleId>/plans/<planId>
@@ -219,9 +219,9 @@ Idempotency-Key: <stable ASCII key for this intended change>
                    "workspace": "C:\\Path\\To\\Project", "baseUrl": "http://127.0.0.1:3080" } }
 ```
 
-- `agentType` is `codex` or `dsh` and decides which host owns the session. `sessionId` is the full ID and the only identity; `sessionTitle` only labels it.
+- `agentType` names the supported provider. Its full `sessionId` and any existing `instanceBinding` identify the original task; `sessionTitle` only labels it. Omitting `instanceBinding` retains the existing local meaning.
 - `workspace` is the execution directory of every later delivery. It does not have to equal the task's saved default cwd, but a `dsh` session is still checked against its own workspace ownership.
-- A `dsh` binding carries the apiproxy `baseUrl` used to read and open that session; omit it to use the local default.
+- A local `dsh` binding may carry the apiproxy `baseUrl` used to read and open that session; omit it to use the local default. Remote operations use the original `instanceBinding` endpoint instead of falling back to the Manager computer.
 - Keep `If-Match` and `Idempotency-Key` ASCII-only. A non-ASCII header value is refused by the HTTP client before the request ever reaches Manager, so a Chinese idempotency key fails without a Manager-side record.
 - Reread the plan and confirm `agentType`, `sessionId`, and `workspace`. Rewriting a binding that is still valid is a controlled migration, not cleanup; see [Recover or migrate a binding](#recover-or-migrate-a-binding).
 

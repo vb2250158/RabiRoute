@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { personaVoiceIdentityClient } from "../src/persona/personaVoiceIdentityClient";
+import { personaVoiceIdentityClient } from "../../src/plugins/io.rabiroute.manager.persona/web/persona/personaVoiceIdentityClient";
 
 test("persona voice UI requests summary-only evidence and sends explicit persona decisions", async () => {
   const requests: Array<{ url: string; init: RequestInit }> = [];

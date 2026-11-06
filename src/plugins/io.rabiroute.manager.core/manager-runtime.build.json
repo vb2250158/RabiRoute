@@ -1,0 +1,21 @@
+{
+  "exports": [
+    {
+      "source": "src/plugins/io.rabiroute.manager.core/hostRuntime.mjs",
+      "name": "createOwnedRuntime"
+    }
+  ],
+  "ownedPrefixes": [
+    "src/plugins/io.rabiroute.manager.core/"
+  ],
+  "ownedSources": [
+    "src/plugins/io.rabiroute.manager.core/src/manager/lanAgentRoutes.ts",
+    "src/plugins/io.rabiroute.manager.core/src/manager/lanAgentConnectionOperation.ts",
+    "src/plugins/io.rabiroute.manager.core/src/manager/lanAgentTerminalRoutes.ts",
+    "src/plugins/io.rabiroute.manager.core/src/manager/lanAgentComputerRoutes.ts",
+    "src/plugins/io.rabiroute.manager.core/src/manager/lanAgentReadOperations.ts",
+    "src/plugins/io.rabiroute.manager.core/src/manager/agentResourceCatalog.ts",
+    "src/plugins/io.rabiroute.manager.core/src/manager/resourceCacheOperations.ts"
+  ],
+  "packageId": "io.rabiroute.manager.core"
+}

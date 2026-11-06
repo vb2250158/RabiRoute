@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtemp, mkdir, copyFile, readdir, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, copyFile, readdir, readFile, writeFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -13,11 +13,11 @@ function powershell(command) {
     { encoding: "utf8", windowsHide: true, timeout: 60000 });
 }
 
-test("release copies only source-matched native assemblies and rejects a missing one", { skip: process.platform !== "win32", timeout: 90000 }, async () => {
+test("release copies source-matched assemblies and all branded native hosts with exact bytes", { skip: process.platform !== "win32", timeout: 90000 }, async () => {
   const temp = await mkdtemp(path.join(os.tmpdir(), "rabi-native-release-"));
   const agent = path.join(temp, "agent"), payload = path.join(temp, "payload");
   try {
-    for (const relative of ["terminal/host.ps1", "desktop/computer.ps1", "desktop/tray.ps1"]) {
+    for (const relative of ["terminal/host.ps1", "desktop/computer.ps1", "desktop/tray.ps1", "desktop/rabi-agent.ico", "package.json"]) {
       await mkdir(path.dirname(path.join(agent, relative)), { recursive: true });
       await copyFile(path.join(root, "apps/rabi-agent", relative), path.join(agent, relative));
     }
@@ -25,12 +25,34 @@ test("release copies only source-matched native assemblies and rejects a missing
     const helper = path.join(root, "scripts/lib/copy-agent-native-assets.ps1");
     const result = powershell(`$ErrorActionPreference='Stop'; & ${quote(builder)} -AgentRoot ${quote(agent)}; . ${quote(helper)}; Copy-AgentNativeAssets -AgentRoot ${quote(agent)} -PayloadRoot ${quote(payload)}`);
     assert.equal(result.status, 0, result.stderr || result.stdout);
-    const built = (await readdir(path.join(agent, "dist/native"))).sort();
+    const native = path.join(agent, "dist/native");
+    const requiredHosts = ["RabiAgent.Computer.exe", "RabiAgent.Terminal.exe", "RabiAgent.Tray.exe"];
+    const built = (await readdir(native)).filter(name => /^(terminal|computer|tray)-[a-f0-9]{64}\.dll$/.test(name) || requiredHosts.includes(name)).sort();
     const copied = (await readdir(path.join(payload, "apps/rabi-agent/dist/native"))).sort();
-    assert.equal(built.length, 3);
+    assert.equal(built.length, 6);
     assert.deepEqual(copied, built);
-    await rm(path.join(agent, "dist/native", built[0]));
-    const failure = powershell(`$ErrorActionPreference='Stop'; . ${quote(helper)}; Copy-AgentNativeAssets -AgentRoot ${quote(agent)} -PayloadRoot ${quote(path.join(temp, "missing"))}`);
+    for (const name of built) {
+      assert.deepEqual(await readFile(path.join(payload, "apps/rabi-agent/dist/native", name)), await readFile(path.join(native, name)), name);
+    }
+    assert.equal((await readdir(native)).filter(name => /^(terminal|computer|tray)-[a-f0-9]{64}\.exe$/.test(name)).length, 3, "the builder cache must not enter the payload");
+    for (const name of requiredHosts) {
+      const bytes = await readFile(path.join(native, name));
+      await rm(path.join(native, name));
+      const failure = powershell(`$ErrorActionPreference='Stop'; . ${quote(helper)}; Copy-AgentNativeAssets -AgentRoot ${quote(agent)} -PayloadRoot ${quote(path.join(temp, "missing-" + name))}`);
+      assert.notEqual(failure.status, 0, name);
+      assert.ok(failure.stderr.includes(`Native release asset missing: ${name}`), failure.stderr || failure.stdout);
+      await writeFile(path.join(native, name), bytes);
+    }
+    const invalidHost = path.join(native, requiredHosts[0]);
+    const originalHost = await readFile(invalidHost);
+    await writeFile(invalidHost, "not a managed native host");
+    const invalid = powershell(`$ErrorActionPreference='Stop'; . ${quote(helper)}; Copy-AgentNativeAssets -AgentRoot ${quote(agent)} -PayloadRoot ${quote(path.join(temp, "invalid"))}`);
+    assert.notEqual(invalid.status, 0, "an invalid executable must fail the existing assembly contract");
+    assert.match(invalid.stderr, /GetAssemblyName|BadImageFormat|assembly manifest/i);
+    await writeFile(invalidHost, originalHost);
+    const sourceMatchedDll = built.find(name => name.endsWith(".dll"));
+    await rm(path.join(native, sourceMatchedDll));
+    const failure = powershell(`$ErrorActionPreference='Stop'; . ${quote(helper)}; Copy-AgentNativeAssets -AgentRoot ${quote(agent)} -PayloadRoot ${quote(path.join(temp, "missing-dll"))}`);
     assert.notEqual(failure.status, 0);
     assert.match(failure.stderr, /Native release asset missing/);
   } finally {

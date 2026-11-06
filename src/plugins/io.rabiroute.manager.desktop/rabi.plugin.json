@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 2,
+  "id": "io.rabiroute.manager.desktop",
+  "version": "0.1.1",
+  "displayName": "桌面与启动设置",
+  "description": "管理桌面偏好、自启动和配置目录",
+  "icon": "mdi-monitor",
+  "entries": {
+    "manager": {
+      "execution": "in_process",
+      "module": "./manager.mjs"
+    },
+    "web": {
+      "execution": "in_process",
+      "module": "./web/client.mjs"
+    }
+  },
+  "provides": [
+    "manager.desktop@1"
+  ],
+  "requires": [
+    "host.manager.desktop@2",
+    "manager.core@1"
+  ],
+  "optional": [],
+  "permissions": []
+}

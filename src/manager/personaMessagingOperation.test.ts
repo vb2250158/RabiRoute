@@ -4,12 +4,12 @@ import os from "node:os";
 import path from "node:path";
 import http from "node:http";
 import test from "node:test";
-import { createPersonaDirectoryOperation, createPersonaMessagingOperations, PERSONA_MESSAGE_LIMITS } from "./personaMessagingRoutes.js";
+import { createPersonaDirectoryOperation, createPersonaMessagingOperations, PERSONA_MESSAGE_LIMITS } from "../plugins/io.rabiroute.manager.persona/src/manager/personaMessagingRoutes.js";
 import { RuntimeRegistry } from "./runtimeRegistry.js";
 import { ManagerPluginRouteRegistry } from "./managerPluginRouteRegistry.js";
 import { LanAgentAuthority } from "./lanAgentAuthority.js";
 import { evaluateLanAgentRequest, assertTrustedLanAgentPrincipal } from "./lanAgentRequestAccess.js";
-import { registerLanAgentBodyGuard, assertLanAgentBodyAuthority } from "./lanAgentBodyAuthority.js";
+import { registerLanAgentBodyGuard } from "./lanAgentBodyAuthority.js";
 import { markAuthenticatedConnectionRequest } from "./connectionRequestAccess.js";
 import { appendRolePanelTimelineMessageIfAbsent, readRolePanelTimeline } from "../rolePanelTimeline.js";
 import { executeDurableDelivery, readDurableDeliveryReceipt } from "./durableDeliveryIdempotency.js";
@@ -39,7 +39,7 @@ async function fixture(t: test.TestContext) {
   const server = http.createServer((request, response) => {
     if (evaluateLanAgentRequest(request, authority, true).kind !== "agent") { response.writeHead(401).end(); return; }
     markAuthenticatedConnectionRequest(request, () => { assertTrustedLanAgentPrincipal(request); });
-    registerLanAgentBodyGuard(request, body => assertLanAgentBodyAuthority(new URL(request.url!, "http://fixture").pathname, body, undefined));
+    registerLanAgentBodyGuard(request, () => {});
     if (!registry.handle(request, new URL(request.url!, "http://fixture"), response)) response.writeHead(404).end();
   });
   await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));

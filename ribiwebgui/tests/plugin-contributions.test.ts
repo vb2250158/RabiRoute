@@ -4,7 +4,7 @@ import test from "node:test";
 import type { WebPluginCatalog, WebPluginCatalogPlugin } from "../src/pluginCatalogClient";
 import { availableWebContributions } from "../src/pluginContributions";
 import { resolveWebCommandCatalog } from "../src/pluginCommands";
-import { activateRouteControl } from "../src/bundles/builtinWebContributions";
+import { activateRouteControl } from "../../src/plugins/io.rabiroute.manager.route-control/web/contributions";
 import { activateWebPluginForTest } from "./web-plugin-test-host";
 
 const disposeRouteControl = activateWebPluginForTest({ instanceId: "manager:route-control", pluginId: "io.rabiroute.manager.route-control" }, activateRouteControl);
@@ -88,7 +88,7 @@ test("command entry disappears when its owner is revoked", () => {
 
 test("App keeps only refresh, connection state, and recovery as fixed host controls", () => {
   const source = fs.readFileSync(new URL("../src/App.vue", import.meta.url), "utf8");
-  const overview = fs.readFileSync(new URL("../src/pages/OverviewPage.vue", import.meta.url), "utf8");
+  const overview = fs.readFileSync(new URL("../../src/plugins/io.rabiroute.manager.core/web/pages/OverviewPage.vue", import.meta.url), "utf8");
   assert.match(source, /webCommandsInSlot/);
   assert.match(source, /webCommandForHandler/);
   assert.doesNotMatch(source, /@click="store\.openQuickSetup"/);

@@ -1,0 +1,8 @@
+{
+  "source": "src/plugins/io.rabiroute.endpoint.feishu/src/adapters/feishuAdapter.ts",
+  "factory": "createFeishuAdapter",
+  "packageId": "io.rabiroute.endpoint.feishu",
+  "ownedPrefixes": [
+    "src/plugins/io.rabiroute.endpoint.feishu/"
+  ]
+}

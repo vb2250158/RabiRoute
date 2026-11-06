@@ -17,6 +17,7 @@ for(const shell of ["cmd","powershell"]) test(`${shell}: native session, Unicode
   t.after(()=>service.stop());
   const terminalId=randomUUID();
   const session=await service.execute({action:"open",terminalId,shell});
+  assert.match(service.sessions.get(terminalId).child.spawnfile,/RabiAgent\.Terminal\.exe$/,"the formal Windows entry uses the branded native host");
   assert.equal(session.state,"running");assert.equal(alive(session.pid),true);
   const openedAgain=await service.execute({action:"open",terminalId,shell});
   assert.equal(openedAgain.pid,session.pid);

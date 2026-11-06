@@ -1,8 +1,19 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { handleAgentThreadRequest, type AgentThreadDriver, type AgentThreadRequest, type AgentThreadRemoteSource } from "./agentThreads.js";
-import { createAgentThreadControlOwner, type AgentThreadControlRoutesContext } from "./manager/agentThreadControlRoutes.js";
+import { createAgentThreadControlOwner, type AgentThreadControlRoutesContext } from "./plugins/io.rabiroute.manager.agent-thread-control/src/manager/agentThreadControlRoutes.js";
 import type http from "node:http";
+import { nativeOperations } from "./agentAdapters/managerNativeOperations.js";
+import type { AgentManagerOperationInvoker } from "./agentAdapters/managerInvocation.js";
+import { resolveCodexSession } from "./plugins/io.rabiroute.agent.codex/src/codexSessionResolver.js";
+
+const ownedOperations = nativeOperations({ resolveCodexSession });
+const invokeCodexFixture: AgentManagerOperationInvoker = async <T>(type: string, operation: string, payload: unknown, invocation?: import("@rabiroute/plugin-sdk").AgentAdapterInvocation) => {
+  assert.equal(type, "codex");
+  const handler = ownedOperations[operation];
+  assert.ok(handler, operation);
+  return await handler(payload, invocation) as T;
+};
 
 const sessionId = "019f0000-0000-7000-8000-000000000001";
 const remote: AgentThreadRemoteSource = { nodeId: "test-node", agentId: "test-agent", provider: "codex", sessionId, sessionName: "Approved remote session", workspace: "/remote/workspace", authorizationIncarnation: "captured-connection-incarnation" };
@@ -81,7 +92,7 @@ test("thread ingress takes connector authority from context and explicit session
       handleAgentThreadRequest: async (_body: unknown, options: { remoteSource?: unknown }) => {
         captured = options.remoteSource; return { statusCode: 200, data: {} };
       },
-      refreshAgentRequestReminderTimers: () => {},
+
       agentThreadRequestFailureData: (error: unknown) => { throw error; }
     } as unknown as AgentThreadControlRoutesContext;
     const result = await createAgentThreadControlOwner(context).prepare(incoming).execute({ ...request, ...{ remoteSource: remote } });
@@ -98,7 +109,7 @@ test("legacy create and send accept SDK source coordinates without a display nam
   assert.equal(result.data.status,"delivered");assert.deepEqual(reads,[]);assert.equal(sends.length,1);
   assert.equal((result.data.source as {threadName:string}).threadName,sessionId);
   let creates=0;
-  const created=await handleAgentThreadRequest({...partial,action:"create",title:"SDK create"},{allowedWorkspaces:[process.cwd()],remoteSource:{nodeId:"node-a"}},
+  const created=await handleAgentThreadRequest({...partial,action:"create",title:"SDK create"},{allowedWorkspaces:[process.cwd()],remoteSource:{nodeId:"node-a"},invokeAgentOperation:invokeCodexFixture},
     {...driver,create:async value=>{creates++;return {id:sessionId,title:value.title,updatedAt:"",source:"test",initialTurnStatus:"started"};}});
   assert.equal(created.statusCode,201);assert.equal(creates,1);assert.deepEqual(reads,[]);
 });

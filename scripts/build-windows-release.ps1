@@ -90,7 +90,7 @@ $requiredPortableRuntimeFiles = @(
     "scripts/lib/windows-host-discovery.mjs",
     "apps/rabi-agent/lib/manager-client.mjs",
     "apps/rabi-agent/lib/manager-cli.mjs",
-    "plugin-adapters/xiaoai-rabiroute/bridge-endpoint.mjs",
+    "src/plugins/xiaoai-rabiroute/bridge-endpoint.mjs",
     # MCP knowledge tools reuse these canonical contracts independently of Relay.
     "packages/rabi-knowledge-contract/schema.mjs",
     "packages/rabi-knowledge-contract/tools.mjs",
@@ -125,6 +125,14 @@ if ($TrackedFilesManifest) {
     $trackedManifestEntries = Read-ReleaseTrackedManifest $TrackedFilesManifest $repo
 }
 
+# Runtime selection is owned by the same plugin copier as native/standalone packages.
+# Repository source exports retain tests; Windows runtime payloads use its explicit runtime rule.
+$runtimeExclusionsJson = & node.exe (Join-Path $repo 'plugins/contracts/plugin-sdk/public-source.mjs') --runtime-exclusions $repo $TrackedFilesManifest
+if ($LASTEXITCODE -ne 0) { throw 'Plugin runtime source selection failed.' }
+$runtimeSourceExclusions = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+$runtimeExclusionPaths = $runtimeExclusionsJson | ConvertFrom-Json
+foreach ($relative in $runtimeExclusionPaths) { [void]$runtimeSourceExclusions.Add([string]$relative) }
+
 function Copy-TrackedTree([string]$RelativeRoot) {
     $prefix = ($RelativeRoot.TrimEnd("\", "/") -replace "\\", "/") + "/"
     if ($null -ne $trackedManifestEntries) {
@@ -135,7 +143,7 @@ function Copy-TrackedTree([string]$RelativeRoot) {
     }
     foreach ($relative in $files) {
         if (-not $relative.StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase)) { continue }
-        if ($excludedRuntimeFiles.Contains($relative)) { continue }
+        if ($excludedRuntimeFiles.Contains($relative) -or $runtimeSourceExclusions.Contains($relative)) { continue }
         $source = Resolve-ReleaseTrackedSourcePath $relative $repo
         if ($null -ne $trackedManifestEntries) {
             $expectedHash = ($trackedManifestEntries | Where-Object path -EQ $relative).sha256
@@ -320,7 +328,7 @@ if ($ReuseInstalledHostRoot) {
 
 if ($IncludeSpeech -and -not $SkipBuild) {
     Write-Step "Building the RabiSpeech Windows process host"
-    & (Join-Path $repo "plugin-adapters\rabi-speech\scripts\build-windows-host.ps1")
+    & (Join-Path $repo "src\plugins\rabi-speech\scripts\build-windows-host.ps1") -ApplicationRoot $repo
     if ($LASTEXITCODE -ne 0) { throw "RabiSpeech Windows host build failed." }
 } elseif (-not $IncludeSpeech) {
     Write-Step "Skipping optional RabiSpeech runtime; use -IncludeSpeech to add it"
@@ -335,7 +343,7 @@ $required = @(
     "RabiRouteHost.exe",
     "RabiRouteHost.Core.dll"
 )
-$speechHostRelative = "plugin-adapters\rabi-speech\runtime\RabiSpeech.exe"
+$speechHostRelative = "src\plugins\rabi-speech\runtime\RabiSpeech.exe"
 if ($IncludeSpeech) { $required += $speechHostRelative }
 foreach ($relative in $required) {
     $requiredPath = if ($relative -eq "RabiRouteHost.exe") {
@@ -412,7 +420,7 @@ foreach ($tree in @(
     "skills",
     "examples\data",
     "apps\rabi-agent",
-    "plugin-adapters",
+    "src\plugins",
     "plugins",
     "scripts"
 )) {
@@ -481,7 +489,24 @@ if (-not (Test-Path -LiteralPath $nodeArchive)) {
     Invoke-WebRequest -UseBasicParsing -Uri "https://nodejs.org/dist/v$NodeVersion/node-v$NodeVersion-win-x64.zip" -OutFile $nodeArchive
 }
 Expand-Archive -LiteralPath $nodeArchive -DestinationPath $nodeExtract -Force
-Copy-Item -LiteralPath (Join-Path $nodeExtract "node-v$NodeVersion-win-x64\node.exe") -Destination (Join-Path $payload "node.exe") -Force
+& (Join-Path $scriptDir "Set-WindowsExecutableIdentity.ps1") `
+    -Source (Join-Path $nodeExtract "node-v$NodeVersion-win-x64\node.exe") `
+    -Destination (Join-Path $payload "node.exe") -Description "RabiRoute Runtime" -OriginalFilename "RabiRoute.Runtime.exe"
+
+# The standard speech path uses the portable Python even without optional models.
+# Brand both interpreters before manifest hashing, including reused desktop builds.
+foreach ($identity in @(
+    @{ File = "python.exe"; Description = "RabiSpeech" },
+    @{ File = "pythonw.exe"; Description = "RabiRoute Desktop" }
+)) {
+    $interpreter = Join-Path $payload ("desktop-runtime\python\" + $identity.File)
+    $branded = $interpreter + ".identity.exe"
+    try {
+        & (Join-Path $scriptDir "Set-WindowsExecutableIdentity.ps1") `
+            -Source $interpreter -Destination $branded -Description $identity.Description -OriginalFilename $identity.File
+        Move-Item -LiteralPath $branded -Destination $interpreter -Force
+    } finally { if (Test-Path -LiteralPath $branded) { Remove-Item -LiteralPath $branded -Force } }
+}
 
 $retiredLifecyclePayloadPaths = @(
     "RabiRoute-Desktop.exe",
@@ -521,7 +546,7 @@ if ($rg) {
         (Join-Path $payload "docs"),
         (Join-Path $payload "skills"),
         (Join-Path $payload "examples"),
-        (Join-Path $payload "plugin-adapters"),
+        (Join-Path $payload "src\plugins"),
         (Join-Path $payload "scripts"),
         (Join-Path $payload "desktop-runtime")
     ) | Where-Object { Test-Path -LiteralPath $_ }

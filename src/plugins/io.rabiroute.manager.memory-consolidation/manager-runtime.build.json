@@ -1,0 +1,15 @@
+{
+  "exports": [
+    {
+      "source": "src/plugins/io.rabiroute.manager.memory-consolidation/hostRuntime.mjs",
+      "name": "createOwnedRuntime"
+    }
+  ],
+  "ownedPrefixes": [
+    "src/plugins/io.rabiroute.manager.memory-consolidation/"
+  ],
+  "ownedSources": [
+    "src/plugins/io.rabiroute.manager.memory-consolidation/src/manager/memoryConsolidationScheduler.ts"
+  ],
+  "packageId": "io.rabiroute.manager.memory-consolidation"
+}

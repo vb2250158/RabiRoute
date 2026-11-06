@@ -11,7 +11,7 @@ import { establishTunnel } from "../peerTunnel/session.js";
 import { serveTunnel, tunnelFetch } from "../peerTunnel/http.js";
 import { ManagerPluginRouteRegistry } from "./managerPluginRouteRegistry.js";
 import { fixtureApiContract } from "./apiOperationContractFixtures.js";
-import { createApiDiscoveryOperations } from "./apiDiscoveryRoutes.js";
+import { createApiDiscoveryOperations } from "../plugins/io.rabiroute.manager.agent-communication/src/manager/apiDiscoveryRoutes.js";
 import { createManagerClient } from "../../apps/rabi-agent/lib/manager-client.mjs";
 
 test("generic external native HTTP crosses an established encrypted Manager tunnel without native-port access or credential leakage", { timeout: 10000 }, async t => {

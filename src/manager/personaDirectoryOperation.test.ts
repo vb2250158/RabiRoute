@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import http from "node:http";
 import test from "node:test";
-import { createPersonaDirectoryOperation } from "./personaMessagingRoutes.js";
+import { createPersonaDirectoryOperation } from "../plugins/io.rabiroute.manager.persona/src/manager/personaMessagingRoutes.js";
 import { RuntimeRegistry } from "./runtimeRegistry.js";
 import { ManagerPluginRouteRegistry } from "./managerPluginRouteRegistry.js";
 import { LanAgentAuthority } from "./lanAgentAuthority.js";

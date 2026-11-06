@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createPinia, setActivePinia } from "pinia";
 import { useSpeechStore } from "../src/stores/speechStore";
-import { speechControlClient } from "../src/speech/speechControlClient";
+import { speechControlClient } from "../../src/plugins/io.rabiroute.manager.speech/web/speech/speechControlClient";
 
 test("switching servers discards pending records and speaker responses", async t => {
   setActivePinia(createPinia());

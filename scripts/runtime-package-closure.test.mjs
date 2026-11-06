@@ -71,7 +71,7 @@ test('PC owner contracts have an independent portable closure and load without R
   const script = await fs.readFile(path.join(root, 'scripts/build-windows-release.ps1'), 'utf8');
   const required = new Set([...script.match(/\$requiredPortableRuntimeFiles = @\(([\s\S]*?)\r?\n\)/)[1].matchAll(/"([^"]+)"/g)].map(match => match[1]));
   const contracts = new Set();
-  for (const owner of ['src/manager/rabiLinkAgentDevices.ts', 'src/manager/rabiLinkMobileOwner.ts', 'src/peerTunnel/http.ts']) {
+  for (const owner of ['src/manager/rabiLinkAgentDevices.ts', 'src/plugins/io.rabiroute.endpoint.rabilink/src/manager/rabiLinkMobileOwner.ts', 'src/peerTunnel/http.ts']) {
     const source = await fs.readFile(path.join(root, owner), 'utf8');
     for (const match of source.matchAll(/from\s*['"](\.\.\/\.\.\/(?:packages|scripts)\/[^'"]+\.mjs)['"]/g)) {
       const contract = path.posix.normalize(path.posix.join(path.posix.dirname(owner), match[1]));

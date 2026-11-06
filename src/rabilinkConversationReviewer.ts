@@ -8,7 +8,7 @@ import {
   type CodexIdleNotificationResult,
   type CodexNotificationTurnOptions,
   type CodexMonitorThread
-} from "./codexRuntime.js";
+} from "./agentAdapters/codexNative.js";
 import { appendAdapterLog } from "./history.js";
 import {
   readRabiLinkConversationTimeline,

@@ -1,4 +1,4 @@
-import { createRoleEditorActions } from "../persona/roleEditorActions";
+import { createRoleEditorActions } from "../../../src/plugins/io.rabiroute.manager.persona/web/persona/roleEditorActions";
 import { defineStore } from "pinia";
 import { computed, ref } from "vue";
 import type { AgentAdapterType, AgentDeliveryTestResult, GatewayDefinition, GatewayPayload, MessageAdapterType, MetaPayload, NetworkOptions, NotificationRule, PersonaAutomationRuleDefinition, RouteCatalogVersion, RuntimeStatus } from "../types";

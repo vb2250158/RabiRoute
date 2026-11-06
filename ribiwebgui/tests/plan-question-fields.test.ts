@@ -5,8 +5,8 @@ import test from "node:test";
 import { parse, compileScript } from "@vue/compiler-sfc";
 
 const root = path.resolve(import.meta.dirname, "..");
-const fields = fs.readFileSync(path.join(root, "src/components/PlanQuestionFields.vue"), "utf8");
-const details = fs.readFileSync(path.join(root, "src/components/PlanImplementationDetails.vue"), "utf8");
+const fields = fs.readFileSync(path.join(root, "../src/plugins/io.rabiroute.manager.persona/web/components/PlanQuestionFields.vue"), "utf8");
+const details = fs.readFileSync(path.join(root, "../src/plugins/io.rabiroute.manager.persona/web/components/PlanImplementationDetails.vue"), "utf8");
 
 test("每题和每个方案复用实施明细组件，展开控件不嵌入选择标签", () => {
   assert.match(fields, /q\.implementation/);

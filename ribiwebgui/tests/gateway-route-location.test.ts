@@ -103,8 +103,8 @@ test("App owns URL selection; startup and page watchers cannot overwrite explici
   assert.match(app, /selectedRouteKey.value && !routeKeyFromWebguiHash/);
   assert.match(app, /router.push\(\{ path: scopedPath, query: route.query, hash: route.hash \}\)/);
   assert.match(main, /await router.isReady\(\);\s*app.mount/);
-  for (const page of ["RouteConfigPage", "PersonaTemplatePage"]) {
-    const source = fs.readFileSync(new URL(`../src/pages/${page}.vue`, import.meta.url), "utf8");
+  for (const [owner, page] of [["message-adapter-control", "RouteConfigPage"], ["persona", "PersonaTemplatePage"]]) {
+    const source = fs.readFileSync(new URL(`../../src/plugins/io.rabiroute.manager.${owner}/web/pages/${page}.vue`, import.meta.url), "utf8");
     assert.doesNotMatch(source, /watch\(\(\) => store.selectedGatewayId/);
     assert.doesNotMatch(source, /store.selectGateway\(/);
   }

@@ -4,10 +4,10 @@ import http from 'node:http';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { createDeviceAgentOwner } from '../agentAdapters/deviceAgentOwner.js';
-import { createDeviceAgentOperations } from '../agentAdapters/deviceAgentOperations.js';
+import { createDeviceAgentOwner } from '../plugins/io.rabiroute.agent.device-agent/src/agentAdapters/deviceAgentOwner.js';
+import { createDeviceAgentOperations } from '../plugins/io.rabiroute.agent.device-agent/src/agentAdapters/deviceAgentOperations.js';
 import { ManagerPluginRouteRegistry } from './managerPluginRouteRegistry.js';
-import { createDeviceAgentEndpointBridge } from './deviceAgentEndpointBridge.js';
+import { createDeviceAgentEndpointBridge } from '../plugins/io.rabiroute.agent.device-agent/src/manager/deviceAgentEndpointBridge.js';
 import { createAgentEndpointDelivery } from './agentEndpointDelivery.js';
 import { AgentRequestStore } from '../agentRequests/store.js';
 import { executeEndpointAgentDelivery } from '../agentRequests/endpointDelivery.js';
@@ -81,8 +81,14 @@ async function pair(run:(a:any,b:any)=>Promise<void>,peerEnabled=true) {
         .then(async response=>({statusCode:response.status,body:await response.json()}));
       pendingCalls.add(pending);void pending.then(()=>pendingCalls.delete(pending),()=>pendingCalls.delete(pending));return pending;
     };
-    const queued=()=>new Promise<void>((resolve,reject)=>{const timer=setTimeout(()=>{release();reject(new Error('Original queue event missing'));},15000);
-      const release=owner.onChange(()=>{if(owner.readSession('same-application',eyeId,'session-'+eyeId)?.deliveries.some(row=>row.status==='queued')){clearTimeout(timer);release();resolve();}});});
+    const queued=async()=>{
+      const deadline=Date.now()+15_000;
+      const existing=new Set(owner.readSession('same-application',eyeId,'session-'+eyeId)?.deliveries.map(row=>row.deliveryId));
+      while(!owner.readSession('same-application',eyeId,'session-'+eyeId)?.deliveries.some(row=>row.status==='queued'&&!existing.has(row.deliveryId))) {
+        if(Date.now()>=deadline)throw new Error('Original delivery was not queued.');
+        await new Promise<void>(resolve=>setTimeout(resolve,10));
+      }
+    };
     nodes.push({deviceId,eyeId,owner,registration,proofRegistration,bridge,store,pipeline,registry,server,call,state,queued,pendingCalls,requestPath:path.join(nodeDir,'requests.json')});
     assert.equal((await call(eyeId,'PUT','/api/device-agents/'+eyeId+'/session',{sessionId:'session-'+eyeId,name:eyeId,loaded:true,capabilities:['language-model']})).statusCode,200);
   }

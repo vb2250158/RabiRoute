@@ -1,0 +1,17 @@
+{
+  "exports": [
+    {
+      "source": "src/plugins/io.rabiroute.manager.rabilink-relay/hostRuntime.mjs",
+      "name": "createOwnedRuntime"
+    }
+  ],
+  "ownedPrefixes": [
+    "src/plugins/io.rabiroute.manager.rabilink-relay/"
+  ],
+  "ownedSources": [
+    "src/plugins/io.rabiroute.manager.rabilink-relay/src/manager/rabiDirectVideo.ts",
+    "src/plugins/io.rabiroute.manager.rabilink-relay/src/manager/rabiDirectVideoRoutes.ts",
+    "src/plugins/io.rabiroute.manager.rabilink-relay/src/manager/rabiLinkAgentDeviceOperations.ts"
+  ],
+  "packageId": "io.rabiroute.manager.rabilink-relay"
+}

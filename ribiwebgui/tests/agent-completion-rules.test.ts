@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createAgentCompletionRule, createTtsCompletionRule } from "../src/persona/agentCompletionRules";
+import { createAgentCompletionRule, createTtsCompletionRule } from "../../src/plugins/io.rabiroute.manager.persona/web/persona/agentCompletionRules";
 import { agentHookRuleErrors, normalizeAgentCompletionDeliveries } from "../../src/shared/agentHookAutomation";
 
 test("completion rule creation works with LAN HTTP crypto and starts disabled", () => {

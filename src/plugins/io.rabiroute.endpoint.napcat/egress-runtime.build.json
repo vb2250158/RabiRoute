@@ -1,0 +1,40 @@
+{
+  "exports": [
+    {
+      "source": "src/plugins/io.rabiroute.endpoint.napcat/src/napcat.ts",
+      "name": "getLoginInfo"
+    },
+    {
+      "source": "src/plugins/io.rabiroute.endpoint.napcat/src/napcat.ts",
+      "name": "sendGroupMessage"
+    },
+    {
+      "source": "src/plugins/io.rabiroute.endpoint.napcat/src/napcat.ts",
+      "name": "sendPrivateMessage"
+    },
+    {
+      "source": "src/plugins/io.rabiroute.endpoint.napcat/src/napcat.ts",
+      "name": "uploadGroupFile"
+    },
+    {
+      "source": "src/plugins/io.rabiroute.endpoint.napcat/src/napcat.ts",
+      "name": "uploadPrivateFile"
+    },
+    {
+      "source": "src/plugins/io.rabiroute.endpoint.napcat/src/napcat.ts",
+      "name": "readNapCatGroupFiles"
+    },
+    {
+      "source": "src/plugins/io.rabiroute.endpoint.napcat/src/napcatStickers.ts",
+      "name": "napcatStickerMessage"
+    }
+  ],
+  "ownedSources": [
+    "src/plugins/io.rabiroute.endpoint.napcat/src/napcat.ts",
+    "src/plugins/io.rabiroute.endpoint.napcat/src/napcatStickers.ts"
+  ],
+  "packageId": "io.rabiroute.endpoint.napcat",
+  "ownedPrefixes": [
+    "src/plugins/io.rabiroute.endpoint.napcat/"
+  ]
+}

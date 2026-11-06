@@ -4,7 +4,7 @@ import fs from "node:fs";
 import vm from "node:vm";
 import ts from "typescript";
 
-const source = fs.readFileSync(new URL("../src/pages/RoleKnowledgePage.vue", import.meta.url), "utf8");
+const source = fs.readFileSync(new URL("../../src/plugins/io.rabiroute.manager.persona/web/pages/RoleKnowledgePage.vue", import.meta.url), "utf8");
 const start = source.indexOf("async function refreshPlansFromEvent(");
 const end = source.indexOf("function connectManagerEvents", start);
 assert.ok(start >= 0 && end > start, "event refresh implementation must exist");

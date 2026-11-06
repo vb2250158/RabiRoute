@@ -57,7 +57,7 @@ test("caller abort reaches fetch and does not cancel another page request", asyn
 });
 
 test("actual visibility callback closes SSE and aborts before returning; visible callback only resumes bounded pending work", () => {
-  const page = fs.readFileSync(new URL("../src/pages/RoleKnowledgePage.vue", import.meta.url), "utf8");
+  const page = fs.readFileSync(new URL("../../src/plugins/io.rabiroute.manager.persona/web/pages/RoleKnowledgePage.vue", import.meta.url), "utf8");
   const source = page.slice(page.indexOf("function disconnectManagerEvents"), page.indexOf("function scheduleMemoryClockDeadline"))
     + page.slice(page.indexOf("function handleKnowledgeVisibilityChange"), page.indexOf("function activateKnowledgePage"));
   const controller = new AbortController();
@@ -76,7 +76,7 @@ test("actual visibility callback closes SSE and aborts before returning; visible
 });
 
 test("component uses one bounded event page and fences role/filter/abort; client forwards cancellation", () => {
-  const page = fs.readFileSync(new URL("../src/pages/RoleKnowledgePage.vue", import.meta.url), "utf8");
+  const page = fs.readFileSync(new URL("../../src/plugins/io.rabiroute.manager.persona/web/pages/RoleKnowledgePage.vue", import.meta.url), "utf8");
   const client = fs.readFileSync(new URL("../src/roleKnowledgeClient.ts", import.meta.url), "utf8");
   const event = page.slice(page.indexOf("async function refreshPlansFromEvent"), page.indexOf("function connectManagerEvents"));
   assert.equal((event.match(/await loadRolePlanPage/g) || []).length, 1);

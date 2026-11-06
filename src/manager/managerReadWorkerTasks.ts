@@ -1,12 +1,12 @@
 
-import { buildRoleSkillArchive, RoleSkillArchiveError } from "./roleSkillArchive.js";
+import { buildRoleSkillArchive, RoleSkillArchiveError } from "../plugins/io.rabiroute.manager.persona/src/manager/roleSkillArchive.js";
 import type { KnowledgeInventory } from "./knowledgeSearchStorage.js";
 import fs from "node:fs";
 import path from "node:path";
 import {
   queryPersonaVoiceTranscriptViews,
   type PersonaVoiceTranscriptQuery
-} from "../personaVoiceTranscriptView.js";
+} from "../plugins/io.rabiroute.manager.persona/src/personaVoiceTranscriptView.js";
 import { readPersonaPlanWorkflow } from "../personaPlanWorkflow.js";
 import {
   getPlan,
@@ -64,7 +64,7 @@ export type ManagerReadWorkerTask =
   | { type: "critical_fact_record_verify"; input: CriticalProjectFactRecordVerificationInput }
   | { type: "all_day_recording_read"; input: import("./allDayRecordingReadStorage.js").AllDayReadJob }
   | { type: "gateway_status_snapshot"; statusPath: string }
-  | { type: "desktop_pet_catalog"; roleId: string; roleDir: string; cacheRoot: string; options: import("./desktopPetRoutes.js").DesktopPetPackCatalogOptions }
+  | { type: "desktop_pet_catalog"; roleId: string; roleDir: string; cacheRoot: string; options: import("../plugins/io.rabiroute.manager.desktop-pet/src/manager/desktopPetRoutes.js").DesktopPetPackCatalogOptions }
   | { type: "message_history_search"; roleDir: string; query: RecentMessageContextQuery; indexPath?: string;
     target?: import("../messageHistorySearchIndex.js").MessageHistorySearchTarget;
     proof?: import("../messageHistorySourceVersion.js").MessageHistoryAppendProof; visibilityDeadlineAt?: number;
@@ -292,7 +292,7 @@ export async function execute(task: Exclude<ManagerReadWorkerTask, { type: "mess
     case "gateway_status_snapshot":
       return readGatewayStatusInWorker(task.statusPath);
     case "desktop_pet_catalog": {
-      const { listDesktopPetPacks } = await import("./desktopPetRoutes.js");
+      const { listDesktopPetPacks } = await import("../plugins/io.rabiroute.manager.desktop-pet/src/manager/desktopPetRoutes.js");
       return listDesktopPetPacks(task.roleId, task.roleDir, task.cacheRoot, task.options);
     }
     case "gateway_diagnostics_snapshot": {

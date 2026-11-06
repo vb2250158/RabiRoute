@@ -66,3 +66,25 @@ test("resident Gateway requirements follow actual active manifest hosts and trus
     assert.deepEqual(configured, ["third-party-chat", "third-party-device", "unknown-retired", "disabled-chat"]);
   } finally { cleanup.forEach(dispose => dispose()); }
 });
+
+
+test("the retired timer is neither an add choice nor an unavailable connector card", () => {
+  const cleanup = [register("napcat"), register("heartbeat")];
+  try {
+    const renderers = resolveWebSettingsCatalog([contribution("napcat"), contribution("heartbeat")]);
+    const entries = messageEndpointCatalog(renderers);
+    assert.deepEqual(entries.map(item => item.type), ["napcat"]);
+    const configured = ["napcat", "heartbeat", "unknown-chat"];
+    const groups = messageEndpointGroups(entries, configured);
+    assert.deepEqual(groups.flatMap(item => item.choices).map(item => item.type), ["napcat", "unknown-chat"]);
+    assert.deepEqual(configured, ["napcat", "heartbeat", "unknown-chat"], "historical configuration is not deleted by rendering");
+  } finally { cleanup.forEach(dispose => dispose()); }
+});
+
+
+test("scheduled automation requires only its active native worker, never a connector card", () => {
+  const worker = { ...plugin("heartbeat"), manifest: { id: "io.test.heartbeat", hosts: ["manager", "gateway"], capabilities: ["endpoint.heartbeat@1"] } } as unknown as WebPluginCatalog["plugins"][number];
+  assert.deepEqual([...gatewayEndpointTypesForWebCatalog([worker], [])], ["heartbeat"]);
+  assert.deepEqual([...gatewayEndpointTypesForWebCatalog([{ ...worker, status: "inactive" }], [])], []);
+  assert.deepEqual(messageEndpointCatalog([]), []);
+});

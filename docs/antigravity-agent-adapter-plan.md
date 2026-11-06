@@ -188,17 +188,17 @@ RabiRoute 侧的身份映射：
 | # | 落点 | 文件 |
 |---|---|---|
 | 1 | 能力声明 | `src/shared/agentAdapterCapabilities.ts` |
-| 2 | 配置模型 | `src/shared/gatewayConfigModel.ts`、`src/config.ts` |
-| 3 | 会话发现 | `src/antigravitySessionStore.ts` |
-| 4 | 投递通道 | `src/antigravityBridge.ts` |
-| 5 | 运行时 | `src/antigravityRuntime.ts` |
-| 6 | 回执恢复 | `src/antigravityReceipt.ts` |
-| 7 | 适配器注册与扫描 | `src/agentAdapters/builtinAgentAdapters.ts`、`src/agentAdapters/antigravityManagerApi.ts`、`src/agentAdapters/managerApi.ts` |
+| 2 | 配置模型 | `src/shared/gatewayConfigModel.ts`、`src/plugins/io.rabiroute.agent.codex/src/config.ts` |
+| 3 | 会话发现 | `src/plugins/io.rabiroute.agent.antigravity/src/antigravitySessionStore.ts` |
+| 4 | 投递通道 | `src/plugins/io.rabiroute.agent.antigravity/src/antigravityBridge.ts` |
+| 5 | 运行时 | `src/plugins/io.rabiroute.agent.antigravity/src/antigravityRuntime.ts` |
+| 6 | 回执恢复 | `src/plugins/io.rabiroute.agent.antigravity/src/antigravityReceipt.ts` |
+| 7 | 适配器注册与扫描 | `src/agentAdapters/builtinAgentAdapters.ts`、`src/plugins/io.rabiroute.agent.antigravity/src/agentAdapters/antigravityManagerApi.ts`、`src/agentAdapters/managerApi.ts` |
 | 8 | Hook 包与安装器 | `plugins/rabi-antigravity-context/`、`src/agentAdapters/hookInstallation.ts` |
 | 9 | 绑定校验 | `src/shared/agentInstance.ts` |
-| 10 | 计划与线程链路泛化 | `src/roleKnowledge.ts`、`src/manager/planAgentStatus.ts`、`src/manager/planTaskBindingDelivery.ts`、`src/manager/controlPlaneRoutes.ts`、`src/agentThreads.ts`、`src/forwarding.ts` |
+| 10 | 计划与线程链路泛化 | `src/roleKnowledge.ts`、`src/manager/planAgentStatus.ts`、`src/manager/planTaskBindingDelivery.ts`、`src/manager/controlPlaneRoutes.ts`、`src/agentThreads.ts`、`src/plugins/io.rabiroute.endpoint.rabilink/src/forwarding.ts` |
 | 11 | 能力消费点去字面量 | `src/shared/codexPlanAssistantSessions.ts`、`src/shared/agentHookAutomation.ts`、`src/shared/codexSessionInitialization.ts` 等 |
-| 12 | WebGUI | `ribiwebgui/src/pages/RouteConfigPage.vue`、`ribiwebgui/src/components/QuickSetupDialog.vue`、`ribiwebgui/src/stores/gatewayStore.ts`、`ribiwebgui/src/i18n/catalog.ts` |
+| 12 | WebGUI | `src/plugins/io.rabiroute.manager.message-adapter-control/web/pages/RouteConfigPage.vue`、`ribiwebgui/src/components/QuickSetupDialog.vue`、`ribiwebgui/src/stores/gatewayStore.ts`、`ribiwebgui/src/i18n/catalog.ts` |
 | 13 | 文档 | 本文件及其英文版 |
 
 ### 9.1 关于「能力消费点去字面量」
@@ -227,11 +227,11 @@ export type PlanAssistantAgentType = typeof agentAdapterTypes[number];
 
 | 文件 | 项数 | 覆盖 |
 |---|---|---|
-| `src/antigravityBridge.test.ts` | 19 | CLI 路径优先级、CSRF 取最后一条、端口发现排除 UI 端口与非本进程端口、非 Windows 拒绝、环境三件套、两条投递路径的参数与 env、空 prompt 与缺会话 ID 拒绝、**非零退出仍解析 stdout** |
-| `src/antigravityReceipt.test.ts` | 15 | 路径推导、字段解析、畸形行跳过、回执命中、**`initialNumSteps` 阻止匹配到同文本的历史投递**、回复早于 prompt 不算回答 |
-| `src/antigravityRuntime.test.ts` | 8 | accepted→delivered、未配置走 new-conversation、失败先记账再抛、**回执读失败不影响已完成的投递**、并发串行化、日志上限 |
-| `src/antigravitySessionStore.test.ts` | 11 | 索引路径、排序、空会话过滤、归属过滤、搜索与分页、Window 路径大小写、工作区去重与 URI 解码、老格式兼容 |
-| `plugins/rabi-antigravity-context/hooks.test.mjs` | 17 | 事件映射、conversationId→sessionId、workspacePaths→cwd、从 transcript 读 prompt、注入形状是 `injectSteps`、**PreToolUse 放行返回 `{}`**、**Manager 故障时不阻断工具**、Stop 合成跟进原因、无会话 ID 时 fail closed |
+| `src/plugins/io.rabiroute.agent.antigravity/src/antigravityBridge.test.ts` | 19 | CLI 路径优先级、CSRF 取最后一条、端口发现排除 UI 端口与非本进程端口、非 Windows 拒绝、环境三件套、两条投递路径的参数与 env、空 prompt 与缺会话 ID 拒绝、**非零退出仍解析 stdout** |
+| `src/plugins/io.rabiroute.agent.antigravity/src/antigravityReceipt.test.ts` | 15 | 路径推导、字段解析、畸形行跳过、回执命中、**`initialNumSteps` 阻止匹配到同文本的历史投递**、回复早于 prompt 不算回答 |
+| `src/plugins/io.rabiroute.agent.antigravity/src/antigravityRuntime.test.ts` | 8 | accepted→delivered、未配置走 new-conversation、失败先记账再抛、**回执读失败不影响已完成的投递**、并发串行化、日志上限 |
+| `src/plugins/io.rabiroute.agent.antigravity/src/antigravitySessionStore.test.ts` | 11 | 索引路径、排序、空会话过滤、归属过滤、搜索与分页、Window 路径大小写、工作区去重与 URI 解码、老格式兼容 |
+| `src/plugins/rabi-antigravity-context/hooks.test.mjs` | 17 | 事件映射、conversationId→sessionId、workspacePaths→cwd、从 transcript 读 prompt、注入形状是 `injectSteps`、**PreToolUse 放行返回 `{}`**、**Manager 故障时不阻断工具**、Stop 合成跟进原因、无会话 ID 时 fail closed |
 
 真机验收（需要在 Antigravity 运行时执行）：
 

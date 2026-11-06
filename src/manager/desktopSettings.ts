@@ -12,26 +12,35 @@ export function desktopSettingsPath(rootDir: string): string {
   return path.join(rootDir, "data", "desktop", "settings.json");
 }
 
+export class DesktopSettingsStorageError extends Error {
+  readonly code = "desktop_settings_unreadable";
+  readonly statusCode = 503;
+  constructor(cause: unknown) {
+    super("Desktop settings could not be read; restore data/desktop/settings.json before saving changes.", { cause });
+  }
+}
+
 export class DesktopSettingsStore {
   constructor(private readonly filePath: string) {}
 
-  autostartConfigured(): boolean {
-    if (!fs.existsSync(this.filePath)) return false;
+  private readPersisted(): Record<string, unknown> | undefined {
     try {
       const value = JSON.parse(fs.readFileSync(this.filePath, "utf8").replace(/^\uFEFF/, ""));
-      return Boolean(value && typeof value === "object" && !Array.isArray(value) && typeof value.autostart === "boolean");
-    } catch {
-      return false;
+      if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Desktop settings must be an object.");
+      return value;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+      throw new DesktopSettingsStorageError(error);
     }
   }
 
+  autostartConfigured(): boolean {
+    return typeof this.readPersisted()?.autostart === "boolean";
+  }
+
   read(): DesktopSettings {
-    if (!fs.existsSync(this.filePath)) return structuredClone(DEFAULT_DESKTOP_SETTINGS);
-    try {
-      return normalizeDesktopSettings(JSON.parse(fs.readFileSync(this.filePath, "utf8").replace(/^\uFEFF/, "")));
-    } catch {
-      return structuredClone(DEFAULT_DESKTOP_SETTINGS);
-    }
+    const value = this.readPersisted();
+    return value === undefined ? structuredClone(DEFAULT_DESKTOP_SETTINGS) : normalizeDesktopSettings(value);
   }
 
   write(value: unknown): DesktopSettings {

@@ -1,17 +1,12 @@
 import assert from "node:assert/strict";
-import fs from "node:fs/promises";
-import path from "node:path";
-import { pathToFileURL } from "node:url";
 import test from "node:test";
 import { GenerationRuntime } from "./generationRuntime.js";
 import type { PluginCandidate } from "./types.js";
+import { canonicalManagerPluginFixture } from "../manager/canonicalManagerPlugin.fixture.js";
 
 const gate = () => { let resolve!: () => void; const promise = new Promise<void>(done => { resolve = done; }); return { promise, resolve }; };
 const tick = () => new Promise<void>(resolve => setImmediate(resolve));
 async function fixture(options: { failedStop?: boolean; lateFactory?: ReturnType<typeof gate>; lateClose?: ReturnType<typeof gate>; closeEntered?: ReturnType<typeof gate> } = {}) {
-  const entry = path.resolve("plugins/builtin/io.rabiroute.manager.rabilink-relay/1.0.0/manager.mjs");
-  const module = await import(pathToFileURL(entry).href);
-  const manifest = JSON.parse(await fs.readFile(path.join(path.dirname(entry), "rabi.plugin.json"), "utf8"));
   const counts = { video: 0, videoStopped: 0, peer: 0, peerStopped: 0, registered: 0 };
   let registrationFails = options.failedStop;
   const host = {
@@ -34,10 +29,11 @@ async function fixture(options: { failedStop?: boolean; lateFactory?: ReturnType
       }, registerUpgrades: () => ({ stopAccepting() {}, async dispose() {} }), registerHttpProxies: () => ({ async dispose() {} })
     }
   };
+  const { module, manifest, entry, ports } = await canonicalManagerPluginFixture("rabilink-relay", host);
   const kernel = new GenerationRuntime({ host: "manager", activationTimeoutMs: 150,
     executor: { async prepare() { return module; } }, hostServices: [
       { capability: "manager.core@1", value: {} }, { capability: "manager.persona@1", value: {} },
-      { capability: "host.manager.rabilink-relay@1", value: host }
+      { capability: "host.manager.rabilink-relay@2", value: ports }
     ] });
   const candidate = (revision: string): PluginCandidate => ({ instanceId: "manager:rabilink-relay", revision, config: {}, manifest,
     entry: { execution: "in_process", path: entry }, policy: { resources: { maxChildProcesses: 0, shutdownTimeoutMs: 20 },

@@ -11,7 +11,7 @@ import { ManagerPluginRouteRegistry } from "../manager/managerPluginRouteRegistr
 import { LanAgentAuthority } from "../manager/lanAgentAuthority.js";
 import { evaluateLanAgentRequest, assertTrustedLanAgentPrincipal } from "../manager/lanAgentRequestAccess.js";
 import { markAuthenticatedConnectionRequest, hasAuthenticatedConnectionRequest } from "../manager/connectionRequestAccess.js";
-import { registerLanAgentBodyGuard, assertLanAgentBodyAuthority } from "../manager/lanAgentBodyAuthority.js";
+import { registerLanAgentBodyGuard } from "../manager/lanAgentBodyAuthority.js";
 
 async function fixture(t: test.TestContext) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "peer-api-control-"));
@@ -29,7 +29,7 @@ async function fixture(t: test.TestContext) {
   const server = http.createServer((request, response) => {
     if (evaluateLanAgentRequest(request, authority, true).kind !== "agent") { response.writeHead(401).end(); return; }
     markAuthenticatedConnectionRequest(request, () => { assertTrustedLanAgentPrincipal(request); });
-    registerLanAgentBodyGuard(request, body => assertLanAgentBodyAuthority(new URL(request.url!, "http://fixture.invalid").pathname, body, undefined));
+    registerLanAgentBodyGuard(request, () => {});
     if (!registry.handle(request, new URL(request.url!, "http://fixture.invalid"), response)) response.writeHead(404).end();
   });
   server.listen(0, "127.0.0.1"); await once(server, "listening");

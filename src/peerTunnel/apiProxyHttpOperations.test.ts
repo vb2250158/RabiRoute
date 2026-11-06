@@ -13,7 +13,7 @@ import { loadTunnelIdentity } from "./security.js";
 import { serveTunnel, PEER_PROXY_CONTRACT_HEADER, PEER_PROXY_TARGET_HEADERS } from "./http.js";
 import type { TunnelChannel } from "./channel.js";
 import { ManagerPluginRouteRegistry } from "../manager/managerPluginRouteRegistry.js";
-import { createApiDiscoveryOperations } from "../manager/apiDiscoveryRoutes.js";
+import { createApiDiscoveryOperations } from "../plugins/io.rabiroute.manager.agent-communication/src/manager/apiDiscoveryRoutes.js";
 import { apiCatalogOpenApi } from "../manager/apiOperationCatalog.js";
 import { LanAgentAuthority } from "../manager/lanAgentAuthority.js";
 import { evaluateLanAgentRequest, assertTrustedLanAgentPrincipal } from "../manager/lanAgentRequestAccess.js";

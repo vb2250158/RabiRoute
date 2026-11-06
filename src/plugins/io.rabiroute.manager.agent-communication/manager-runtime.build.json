@@ -1,0 +1,18 @@
+{
+  "exports": [
+    {
+      "source": "src/plugins/io.rabiroute.manager.agent-communication/hostRuntime.mjs",
+      "name": "createOwnedRuntime"
+    }
+  ],
+  "ownedPrefixes": [
+    "src/plugins/io.rabiroute.manager.agent-communication/"
+  ],
+  "ownedSources": [
+    "src/plugins/io.rabiroute.manager.agent-communication/src/manager/agentCommunicationRoutes.ts",
+    "src/plugins/io.rabiroute.manager.agent-communication/src/manager/apiDiscoveryRoutes.ts",
+    "src/plugins/io.rabiroute.manager.agent-communication/src/manager/agentUploadRoutes.ts",
+    "src/plugins/io.rabiroute.manager.agent-communication/src/manager/codexHookRoutes.ts"
+  ],
+  "packageId": "io.rabiroute.manager.agent-communication"
+}

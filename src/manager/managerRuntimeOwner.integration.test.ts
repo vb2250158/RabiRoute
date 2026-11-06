@@ -53,7 +53,7 @@ test("Manager resources are registered in acquisition order and reverse teardown
     cursor = next;
   }
   assert.match(control, /activeServer\.on\("upgrade", managedUpgrade\);\s*managerRuntimeOwner\.register\("manager_plugin_upgrade", \(\) => \{ activeServer\.removeListener\("upgrade", managedUpgrade\);/);
-  const core = fs.readFileSync(path.join(root, "plugins/builtin/io.rabiroute.manager.core/1.0.0/manager.mjs"), "utf8");
+  const core = fs.readFileSync(path.join(root, "src/plugins/io.rabiroute.manager.core/manager.mjs"), "utf8");
   assert.match(core, /registerUpgrades\(context\.identity\.instanceId, \[runtime\.createLanAgentConnectionOperation\(\)\]\)/);
   const fenceAt = core.indexOf("upgrades.stopAccepting();");
   const httpDrainAt = core.indexOf("await registration.dispose();", fenceAt);
@@ -88,12 +88,14 @@ test("Runtime owner integration retains the storage CAS application boundary", (
   assert.match(feedback, /const application = currentRoleStorageApplication\(\);[\s\S]*application\.queries\.planFeedback[\s\S]*application\.commands\.submitPlanFeedback/);
   assert.match(feedback, /expectedRevision: projection\.planRevision/);
   assert.match(feedback, /idempotencyKey: roleStorageOperationKey\("agent-plan-feedback-reply", input\.deliveryId\)/);
-  const storage = fs.readFileSync(path.join(root, "src/manager/personaStorageOperations.ts"), "utf8");
+  const storage = fs.readFileSync(path.join(root, "src/plugins/io.rabiroute.manager.persona/src/manager/personaStorageOperations.ts"), "utf8");
   assert.match(storage, /application = this\.context\.application\(\)/);
   assert.match(storage, /this\.context\.application\(\) !== application/);
   assert.match(storage, /expectedRevision: singleHeader\(input\.request, "if-match"\) \?\? singleHeader\(input\.request, "x-rabiroute-expected-revision"\), authorize: admission\.assertCurrent/);
-  assert.match(control, /personaStorageContext: Object\.freeze\(createPersonaStorageOperationsContext\(\)\)/);
-  const persona = fs.readFileSync(path.join(root, "plugins/builtin/io.rabiroute.manager.persona/1.0.0/manager.mjs"), "utf8");
+  assert.match(control, /get createPersonaStorageOperationsContext\(\)\s*\{\s*return createPersonaStorageOperationsContext;\s*\}/);
+  const personaRuntime = fs.readFileSync(path.join(root, "src/plugins/io.rabiroute.manager.persona/hostRuntime.mjs"), "utf8");
+  assert.match(personaRuntime, /personaStorageContext: Object\.freeze\(ports\.createPersonaStorageOperationsContext\(\)\)/);
+  const persona = fs.readFileSync(path.join(root, "src/plugins/io.rabiroute.manager.persona/manager.mjs"), "utf8");
   assert.match(persona, /new runtime\.PersonaStorageOwner\(runtime\.personaStorageContext\)/);
   assert.match(persona, /await runtime\.managerPluginRoutes\.registerOperationsAsync\(context\.identity\.instanceId, runtime\.createPersonaStorageOperations\(owner\), context\.lifecycle\.signal\)/);
   assert.match(persona, /try \{ await registration\.dispose\(\); \} catch \(error\) \{ failures\.push\(error\); \}\s*try \{ await owner\.stop\(\); \} catch \(error\) \{ failures\.push\(error\); \}/);
@@ -114,7 +116,7 @@ test("disposable acquisitions register with RuntimeOwner at their acquisition si
   assert.match(control, /getBuiltinManagerCordisRoot\(\);\s*managerRuntimeOwner\.register\("cordis_root"/);
   assert.match(control, /http\.createServer\(managerStartingRequest\);\s*managerRuntimeOwner\.register\("http_server"/);
   assert.match(control, /new RoleStorageApplication\([\s\S]*?\);\s*managerRuntimeOwner\.register\("role_storage"/);
-  assert.match(control, /new GenerationRuntime\([\s\S]*?\);\s*managerRuntimeOwner\.registerWithBudget\("manager_plugin_kernel", budget => managerPluginKernel\?\.shutdown\(\{\s*timeoutMs: Math\.max\(1, Math\.floor\(budget\.deadlineAt - performance\.now\(\)\)\)/);
+  assert.match(control, /new GenerationRuntime\([\s\S]*?\);\s*const releaseAgentGenerationReader = installAgentAdapterGenerationReader\(\(\) => managerPluginKernel\?\.current\(\)\);\s*managerRuntimeOwner\.registerWithBudget\("manager_plugin_kernel", async budget => \{\s*try \{ await managerPluginKernel\?\.shutdown\(\{\s*timeoutMs: Math\.max\(1, Math\.floor\(budget\.deadlineAt - performance\.now\(\)\)\) \}\); \}\s*finally \{ releaseAgentGenerationReader\(\); \}/);
   assert.match(control, /managerRuntimeOwner\.register\("manager_lan_discovery", async \(\) => \{[\s\S]*?managerLanDiscoveryFlight\?\.catch[\s\S]*?const startLanDiscovery/);
   assert.match(control, /startConfigWatcher\([\s\S]*?managerRuntimeOwner\.register\("config_watcher"/);
   assert.match(control, /startPluginPackageWatcher\([\s\S]*?managerRuntimeOwner\.register\("plugin_package_watcher"/);

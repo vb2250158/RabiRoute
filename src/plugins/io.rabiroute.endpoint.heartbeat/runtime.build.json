@@ -1,0 +1,8 @@
+{
+  "source": "src/plugins/io.rabiroute.endpoint.heartbeat/src/adapters/heartbeatAdapter.ts",
+  "factory": "createHeartbeatAdapter",
+  "packageId": "io.rabiroute.endpoint.heartbeat",
+  "ownedPrefixes": [
+    "src/plugins/io.rabiroute.endpoint.heartbeat/"
+  ]
+}

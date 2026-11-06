@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 2,
+  "id": "io.rabiroute.manager.message-processing-control",
+  "version": "0.1.1",
+  "displayName": "待办消息管理",
+  "description": "登记消息处理要求、核对上下文并记录回复进度",
+  "icon": "mdi-clipboard-text",
+  "entries": {
+    "manager": {
+      "execution": "in_process",
+      "module": "./manager.mjs"
+    }
+  },
+  "provides": [
+    "manager.message-processing-control@1"
+  ],
+  "requires": [
+    "host.manager.message-processing-control@2",
+    "manager.core@1"
+  ],
+  "optional": [],
+  "permissions": []
+}

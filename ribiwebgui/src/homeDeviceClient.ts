@@ -1,6 +1,6 @@
 import { getTimeoutMs } from "./timeoutSettingsClient";
 import type { HomeDeviceDirectory } from "@shared/homeDeviceDirectoryContract";
-import type { HomeEntityAction } from "../../src/integrations/xiaomiHome/entityActions";
+import type { HomeEntityAction } from "../../src/plugins/io.rabiroute.manager.xiaomi-home/src/integrations/xiaomiHome/entityActions";
 import type { XiaomiHomeResource } from "./xiaomiHomeSettingsClient";
 import { readHomeDirectory } from "./homeDirectoryClient";
 

@@ -65,7 +65,7 @@ test('configured QQ sources remain exact; missing route and old instance do not 
 
 /** Only this fixed repository SFC is evaluated; API/message values remain private data. */
 function actualEndpointHistory(pages:unknown[]) {
-  const file=new URL('../src/components/MessageEndpointHistory.vue',import.meta.url);
+  const file=new URL('../../src/plugins/io.rabiroute.manager.persona/web/components/MessageEndpointHistory.vue',import.meta.url);
   const {descriptor,errors}=parse(readFileSync(file,'utf8'));
   assert.deepEqual(errors,[]);assert.ok(descriptor.scriptSetup);
   const source=ts.createSourceFile('endpoint.ts',descriptor.scriptSetup.content,ts.ScriptTarget.Latest,true,ts.ScriptKind.TS);

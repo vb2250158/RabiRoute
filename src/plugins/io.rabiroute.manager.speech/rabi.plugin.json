@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 2,
+  "id": "io.rabiroute.manager.speech",
+  "version": "0.1.1",
+  "entries": {
+    "manager": {
+      "execution": "in_process",
+      "module": "./manager.mjs"
+    },
+    "web": {
+      "execution": "in_process",
+      "module": "./web/client.mjs"
+    }
+  },
+  "provides": [
+    "manager.speech@1"
+  ],
+  "requires": [
+    "manager.core@1",
+    "host.message-endpoints@1"
+  ],
+  "optional": [],
+  "permissions": [],
+  "displayName": "语音服务",
+  "description": "管理共享的语音识别、合成、播放与模型服务",
+  "icon": "mdi-waveform"
+}

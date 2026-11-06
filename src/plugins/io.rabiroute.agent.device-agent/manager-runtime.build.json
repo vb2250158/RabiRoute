@@ -1,0 +1,17 @@
+{
+  "exports": [
+    {
+      "source": "src/plugins/io.rabiroute.agent.device-agent/src/agentAdapters/deviceAgentManagerProvider.ts",
+      "name": "createManager"
+    }
+  ],
+  "ownedPrefixes": [
+    "src/plugins/io.rabiroute.agent.device-agent/"
+  ],
+  "scopedEnvironment": true,
+  "hostSources": [
+    "src/agentAdapters/stateReporter.ts"
+  ],
+  "ownedSources": [],
+  "packageId": "io.rabiroute.agent.device-agent"
+}

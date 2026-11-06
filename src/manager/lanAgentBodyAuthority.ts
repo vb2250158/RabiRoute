@@ -30,8 +30,3 @@ export function validateLanAgentRequestBody(request: IncomingMessage, body: unkn
 
   guard?.(body);
 }
-
-/** Compatibility hook for callers; connected invocations have no per-source authority check.
- * Each operation's body schema owns its target and payload contract. */
-export function assertLanAgentBodyAuthority(_target: string, _body: unknown,
-  _agent: { provider?: string; sessionId?: string } | undefined): void {}

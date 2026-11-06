@@ -3,7 +3,7 @@ import fs from "node:fs";
 import test from "node:test";
 
 const pageSource = fs.readFileSync(
-  new URL("../src/pages/SpeechServicePage.vue", import.meta.url),
+  new URL("../../src/plugins/io.rabiroute.manager.speech/web/pages/SpeechServicePage.vue", import.meta.url),
   "utf8"
 );
 

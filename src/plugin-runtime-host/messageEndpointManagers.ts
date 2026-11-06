@@ -2,6 +2,8 @@ import type { PluginPublication } from "@rabiroute/plugin-sdk/publication";
 import type { GatewayDefinition } from "../shared/gatewayConfigModel.js";
 
 export type MessageEndpointManagerOwner = Readonly<{
+  /** Stable platform resources may be handed to a replacement activation. */
+  resources?: unknown;
   /** Only this endpoint's relevant binding/configuration fields, including shared uniqueness keys. */
   configurationKey?(routes: readonly GatewayDefinition[]): string;
   validateRoutes?(routes: readonly GatewayDefinition[]): void;
@@ -15,6 +17,7 @@ export class MessageEndpointManagers {
   private readonly owners = new Map<string, MessageEndpointManagerOwner>();
   private readonly failures = new Map<string, { type: string; stage: string; message: string }>();
   private readonly reporters = new Map<MessageEndpointManagerOwner, (error: unknown) => void>();
+  current(type: string): MessageEndpointManagerOwner | undefined { return this.owners.get(type); }
   prepare(type: string, owner: MessageEndpointManagerOwner, fail: (error: unknown) => void): { publication: PluginPublication; dispose(): void } {
     let previous: MessageEndpointManagerOwner | undefined;
     return {

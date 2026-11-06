@@ -41,10 +41,10 @@ route 配置固定指向 agentRoleId
 | 规则命中 | `src/routing/routeDecision.ts#createRouteDecision` 在给定 route profile 内过滤 rules | 不做跨人格选择 |
 | AgentPacket | `src/routing/agentPacket.ts#buildAgentPacket` 使用 `rolePathsForRoute(route)` 解析已绑定角色路径 | 命中 rule 后才注入人格路径、记忆、计划、技能 |
 | 真实投递 | `src/forwarding.ts#forwardMessageAndWait` 遍历当前进程 active routeProfiles，写事件日志、写投递日志、记录 replay ledger 并投递 Agent | 预览不能直接调用真实投递 |
-| QQ route kind | `src/adapters/napcatAdapter.ts` 把 QQ 事件归为 `direct_at`、`direct_reply`、`indirect_reply`、`group_message`、`private` | QQ 不是只选“渠道”，还要模拟事件形态 |
+| QQ route kind | `src/plugins/io.rabiroute.endpoint.napcat/src/adapters/napcatAdapter.ts` 把 QQ 事件归为 `direct_at`、`direct_reply`、`indirect_reply`、`group_message`、`private` | QQ 不是只选“渠道”，还要模拟事件形态 |
 | RabiLink route kind | `src/adapters/webhookAdapter.ts#createRabiLinkAdapter` 使用 `rabilink` route kind | RabiLink 是专用 route kind |
-| WeCom route kind | `src/adapters/wecomAdapter.ts` 使用 `wecom_message` | 企业微信是专用 route kind |
-| heartbeat | `src/adapters/heartbeatAdapter.ts` 按 rule schedule 触发 `heartbeat` | 计划触发也仍然命中同一套 rules |
+| WeCom route kind | `src/plugins/io.rabiroute.endpoint.wecom/src/adapters/wecomAdapter.ts` 使用 `wecom_message` | 企业微信是专用 route kind |
+| heartbeat | `src/plugins/io.rabiroute.endpoint.heartbeat/src/adapters/heartbeatAdapter.ts` 按 rule schedule 触发 `heartbeat` | 计划触发也仍然命中同一套 rules |
 
 ## 背景
 

@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from "vue";
 import { useRoleStore, roleRequest, type RoleSummary } from "../stores/roleStore";
-import { useI18n } from "../i18n";
-import { RemotePersonaReferenceBrowser, bootstrapRemotePersonaService, remotePersonaServicePath } from "../persona/remotePersonaReference";
-import { personaSourceOptions as buildPersonaSourceOptions, personaSourceKey } from "../persona/personaSourcePresentation";
+import { useI18n } from "../i18n/index";
+import { RemotePersonaReferenceBrowser, bootstrapRemotePersonaService, remotePersonaServicePath } from "../../../src/plugins/io.rabiroute.manager.persona/web/persona/remotePersonaReference";
+import { personaSourceOptions as buildPersonaSourceOptions, personaSourceKey } from "../../../src/plugins/io.rabiroute.manager.persona/web/persona/personaSourcePresentation";
 import { userFacingError } from "../userFacingError";
 
 const emit = defineEmits<{ select: [roleId: string, source: string] }>();

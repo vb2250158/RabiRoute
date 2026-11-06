@@ -8,14 +8,14 @@ import { createHmac, randomBytes } from "node:crypto";
 import test from "node:test";
 import { WebSocket, WebSocketServer } from "ws";
 import { createManagerClient } from "../../apps/rabi-agent/lib/manager-client.mjs";
-import { RemoteAgentHub, type RemoteAgentTaskEvent } from "../messageEndpoints/remoteAgentManager.js";
-import { createRemoteAgentOperations } from "./remoteAgentRoutes.js";
+import { RemoteAgentHub, type RemoteAgentTaskEvent } from "../plugins/io.rabiroute.manager.remote-agent/src/messageEndpoints/remoteAgentManager.js";
+import { createRemoteAgentOperations } from "../plugins/io.rabiroute.manager.remote-agent/src/manager/remoteAgentRoutes.js";
 import { LanAgentAuthority } from "./lanAgentAuthority.js";
 import { ManagerPluginRouteRegistry } from "./managerPluginRouteRegistry.js";
-import { createApiDiscoveryOperations } from "./apiDiscoveryRoutes.js";
+import { createApiDiscoveryOperations } from "../plugins/io.rabiroute.manager.agent-communication/src/manager/apiDiscoveryRoutes.js";
 import { evaluateLanAgentRequest, assertTrustedLanAgentPrincipal } from "./lanAgentRequestAccess.js";
 import { markAuthenticatedConnectionRequest } from "./connectionRequestAccess.js";
-import { registerLanAgentBodyGuard, assertLanAgentBodyAuthority } from "./lanAgentBodyAuthority.js";
+import { registerLanAgentBodyGuard } from "./lanAgentBodyAuthority.js";
 
 const deferred = <T>() => { let resolve!: (value: T) => void; const promise = new Promise<T>(r => { resolve = r; }); return { promise, resolve }; };
 
@@ -73,7 +73,7 @@ async function fixture(t: import("node:test").TestContext) {
     else { response.writeHead(401).end(); return; }
     if (request.url === "/meta") { response.setHeader("content-type", "application/json"); response.end(JSON.stringify(meta)); return; }
     const url = new URL(request.url!, "http://localhost");
-    registerLanAgentBodyGuard(request, body => assertLanAgentBodyAuthority(url.pathname, body, assertTrustedLanAgentPrincipal(request)?.source));
+    registerLanAgentBodyGuard(request, () => {});
     if (!api.handle(request, url, response)) response.writeHead(404).end();
   });
   server.listen(0, "127.0.0.1"); await once(server, "listening"); const address = server.address(); assert.ok(address && typeof address !== "string");

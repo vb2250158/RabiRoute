@@ -1,6 +1,7 @@
 // Generated from src/manager/apiOperationContract.ts. Do not edit; run scripts/generate-plugin-api-types.mjs.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
+import type { ApiExternalListenerDefinition, ApiExternalListenerRegistration } from "@rabiroute/host-api/manager/apiExternalListenerBinding";
 
 export type ApiMethod = "GET" | "HEAD" | "OPTIONS" | "POST" | "PUT" | "PATCH" | "DELETE" | "*";
 

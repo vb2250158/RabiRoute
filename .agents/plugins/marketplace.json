@@ -8,7 +8,7 @@
       "name": "rabi-codex-context",
       "source": {
         "source": "local",
-        "path": "./plugins/rabi-codex-context"
+        "path": "./src/plugins/rabi-codex-context"
       },
       "policy": {
         "installation": "AVAILABLE",

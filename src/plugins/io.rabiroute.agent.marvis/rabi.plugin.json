@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 2,
+  "id": "io.rabiroute.agent.marvis",
+  "version": "0.1.1",
+  "displayName": "Marvis",
+  "description": "为 Marvis 准备消息，由你手动接力处理。",
+  "icon": "mdi-robot-outline",
+  "entries": {
+    "manager": {
+      "execution": "in_process",
+      "module": "./manager.mjs"
+    },
+    "gateway": {
+      "execution": "in_process",
+      "module": "./gateway.mjs"
+    },
+    "web": {
+      "execution": "in_process",
+      "module": "./web/client.mjs"
+    }
+  },
+  "provides": [
+    "agent.adapter.marvis@1"
+  ],
+  "requires": [
+    "host.agent-adapters@1"
+  ],
+  "optional": [],
+  "permissions": []
+}

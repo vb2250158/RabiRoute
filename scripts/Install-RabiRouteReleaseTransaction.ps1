@@ -317,7 +317,7 @@ function Assert-QuarantineJournal([object[]]$Moves, [string]$Install, [string]$Q
     $expectedRoot = Full (Join-Path $Install (".rabiroute-quarantine\" + $transactionId + "\legacy-runtime"))
     if ((Full $QuarantineRoot) -ne $expectedRoot) { throw "Transaction journal references an unsafe quarantine root." }
     $allowed = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
-    foreach ($relative in @((Get-RetiredLifecyclePaths) + @("node.exe"))) { [void]$allowed.Add($relative.Replace('\','/')) }
+    foreach ($relative in @((Get-RetiredLifecyclePaths) + @("node.exe", "runtime/node.exe"))) { [void]$allowed.Add($relative.Replace('\','/')) }
     foreach ($move in @($Moves)) {
         $relative = ([string]$move.relative).Replace('\','/')
         if (-not $allowed.Contains($relative)) { throw "Transaction journal references a non-retired quarantine entry: $relative" }
@@ -346,6 +346,59 @@ function Restore-Quarantined([object[]]$Moves, [string]$Install, [string]$Quaran
         Remove-Item -LiteralPath $QuarantineRoot -Recurse -Force
     }
 }
+function Test-OwnedLegacyStableNode([string]$Install) {
+    # Optional retirement proof, never a new activation requirement. The old
+    # stable copy belongs to the previous release, not the newly branded Node.
+    try {
+        $runtime = Join-Path $Install "runtime"
+        $stable = Join-Path $runtime "node.exe"
+        $pointerPath = Join-Path $Install "current.json"
+        $versions = Join-Path $Install "versions"
+        foreach ($path in @($Install, $runtime, $versions, $stable, $pointerPath)) {
+            $item = Get-Item -LiteralPath $path -Force -ErrorAction Stop
+            if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { return $false }
+        }
+        if (-not (Test-Path -LiteralPath $stable -PathType Leaf)) { return $false }
+        $pointer = Get-Content -LiteralPath $pointerPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        $releaseId = [string]$pointer.releaseId
+        if ($pointer.schemaVersion -ne 1 -or [string]$pointer.appId -cne $AppId `
+            -or -not $releaseId -or $releaseId -match '[\\/:]' -or $releaseId -in @('.', '..') `
+            -or [string]$pointer.versionPath -cne "versions/$releaseId" `
+            -or [string]$pointer.payloadSha256 -notmatch '^[a-fA-F0-9]{64}$') { return $false }
+        $version = Join-Path $versions $releaseId
+        $manifestPath = Join-Path $version "release-manifest.json"
+        $node = Join-Path $version "node.exe"
+        foreach ($path in @($version, $manifestPath, $node)) {
+            $item = Get-Item -LiteralPath $path -Force -ErrorAction Stop
+            if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { return $false }
+        }
+        $manifest = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        if ($manifest.schemaVersion -ne 1 -or [string]$manifest.appId -cne $AppId `
+            -or [string]$manifest.releaseId -cne $releaseId `
+            -or [string]$manifest.payloadSha256 -ine [string]$pointer.payloadSha256) { return $false }
+        $seen = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+        $canonical = [Text.StringBuilder]::new()
+        $nodeEntry = $null
+        foreach ($entry in @($manifest.files)) {
+            $relative = [string]$entry.path
+            if (-not $relative -or $relative.Contains('\') -or $relative.StartsWith('/') `
+                -or $relative.Split('/') -contains '..' -or -not $seen.Add($relative) `
+                -or [string]$entry.sha256 -notmatch '^[a-fA-F0-9]{64}$' -or [long]$entry.size -lt 0) { return $false }
+            [void]$canonical.Append($relative + "`0" + ([long]$entry.size) + "`0" + ([string]$entry.sha256).ToLowerInvariant() + "`n")
+            if ($relative -ceq "node.exe") { $nodeEntry = $entry }
+        }
+        if ($null -eq $nodeEntry) { return $false }
+        $sha = [Security.Cryptography.SHA256]::Create()
+        try { $payload = ([BitConverter]::ToString($sha.ComputeHash([Text.UTF8Encoding]::new($false).GetBytes($canonical.ToString())))).Replace('-','').ToLowerInvariant() }
+        finally { $sha.Dispose() }
+        if ($payload -ine [string]$pointer.payloadSha256 `
+            -or "$([string]$manifest.packageVersion)-$($payload.Substring(0,12))" -cne $releaseId) { return $false }
+        return ((Get-Item -LiteralPath $node).Length -eq [long]$nodeEntry.size `
+            -and (Get-Sha256File $node) -ieq [string]$nodeEntry.sha256 `
+            -and (Get-Item -LiteralPath $stable).Length -eq [long]$nodeEntry.size `
+            -and (Get-Sha256File $stable) -ieq [string]$nodeEntry.sha256)
+    } catch { return $false }
+}
 function Get-LegacyQuarantinePlan([string]$Install, [string]$Version, [string]$QuarantineRoot) {
     $retired = @(Get-RetiredLifecyclePaths)
     $plan = [Collections.Generic.List[object]]::new()
@@ -368,6 +421,9 @@ function Get-LegacyQuarantinePlan([string]$Install, [string]$Version, [string]$Q
             throw "Root node.exe is not provably the old RabiRoute Manager runtime; refusing to quarantine it."
         }
         $plan.Add([pscustomobject]@{ relative="node.exe"; source=(Full $rootNode); destination=(Full (Join-Path $QuarantineRoot "node.exe.retired")); status="planned" })
+    }
+    if (Test-OwnedLegacyStableNode $Install) {
+        $plan.Add([pscustomobject]@{ relative="runtime/node.exe"; source=(Full (Join-Path $Install "runtime\node.exe")); destination=(Full (Join-Path $QuarantineRoot "runtime\node.exe.retired")); status="planned" })
     }
     foreach ($move in $plan) {
         if (Test-Path -LiteralPath $move.destination) { throw "Quarantine destination already exists: $($move.destination)" }

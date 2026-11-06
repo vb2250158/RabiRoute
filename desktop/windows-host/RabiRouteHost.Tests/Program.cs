@@ -8,6 +8,8 @@ using System.Text;
 using System.Text.Json;
 using System.Threading.Channels;
 
+if (args.Length > 0 && args[0].StartsWith("--tree-")) return await ProcessTreeTests.FixtureAsync(args);
+
 var failures = new List<string>();
 var assertionCount = 0;
 
@@ -23,6 +25,7 @@ await IdentityResetTests.RunAsync(Check);
 EnvironmentBlockTests.Run(Check);
 ManagerEndpointCacheTests.Run(Check);
 TimeoutSettingsTests.Run(Check);
+await ProcessTreeTests.RunAsync(Check);
 
 // The ACL must name the account, never an elevated token's Administrators owner.
 using (var identity = WindowsIdentity.GetCurrent())

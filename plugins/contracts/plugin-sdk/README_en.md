@@ -57,3 +57,17 @@ export const activate = definePlugin({ async activate(context) {
 `invoke(operation, payload, invocation?)` holds an accepted-work lease until real completion. Multi-step work can use `acquire(snapshot)`, `lease.call()`, and `lease.release()` in `finally`; `runAcceptedWork()` covers original-owner children, receipts, or composite operations. Disabling rejects new work while admitted requests retain their original snapshots and leases. A replacement waits for confirmed retirement before admitting work. It must not replay requests or stop an external Agent.
 
 Run `node scripts/generate-agent-plugin-metadata.mjs` to derive the synchronous compatibility projection from `agent-adapter.json`. This supports legacy synchronous declarations and wire compatibility, and implies neither enabled nor ready status. Running applications resolve the original profile, native services, and declaration metadata. Remove this generated projection and its compatibility exports after all synchronous consumers use declaration ports and historical binding regressions pass. See the [Agent integration requirements](../../../docs/agent-adapter-standard-requirements_en.md) and [publication lifecycle](../../../docs/plugin-publication-lifecycle_en.md) for configuration switching and real shared-worker dependencies.
+
+## Build from an independent plugin repository
+
+Install `@rabiroute/plugin-sdk` and `@rabiroute/host-api`, then run `rabi-plugin-build --root . --output ./dist`. `runtime.build.json`, `manager-runtime.build.json`, and `egress-runtime.build.json` select the plugin’s real implementation entry points. Source imports stay inside the plugin folder; shared host dependencies use `@rabiroute/host-api/<moduleId>`. The builder reads published export signatures without reading host TypeScript source. An existing output with this plugin’s build receipt can be rebuilt; failed compilation preserves the previous output, and unknown directories are never replaced.
+
+The host prepares the emitted `hostModules`; `createImplementation(host)` uses the original shared owners for configuration, routing, storage, and receipts. Workers run in independent processes and cannot directly call main-process host ports. Provide a process-local worker contract before building such a worker. Web entries continue to use their declared frontend build tool and shared UI dependencies.
+
+Scanner workers declare `mode: "host-factory"` in their descriptor and export `hostModules` plus `createImplementation(host)`. The generic host worker prepares its own public ports inside the child process, then calls the scan export named by the task. Main-process ports are never passed across processes. Direct workers bundle their own code and resources and cannot import main-process host ports.
+
+## Test entry
+
+In the Host workspace, run `npm run build` followed by `npm run test:plugins` to collect native-plugin and existing-integration MJS suites. The root `npm test` includes this entry; TypeScript suites remain in its main source phase.
+
+Use `createPluginTestHarness()` for independent plugin contract tests. Integration fixtures that verify actual Host owners, including video fixtures, require the current Host workspace, built output and development dependencies. They do not claim that an independent plugin repository installs or runs the Host.

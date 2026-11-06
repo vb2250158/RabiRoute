@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { useI18n } from "../../i18n";
+import { useI18n } from "../../i18n/index";
 import { userFacingError } from "../../userFacingError";
 import { API_REFERENCE_CHANGED, apiRequestTemplate, readApiReference, type ApiReferenceCatalog } from "../../docs/apiReferenceClient";
 

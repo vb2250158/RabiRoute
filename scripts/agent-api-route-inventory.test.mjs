@@ -7,7 +7,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const script = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "agent-api-route-inventory.mjs");
-const root = path.resolve(path.dirname(script), "../plugins/builtin");
+const root = path.resolve(path.dirname(script), "../src/plugins");
 const inventoryAt = directory => JSON.parse(execFileSync(process.execPath, [script, directory], { encoding: "utf8" }));
 test("repository inventory statistics remain consistent as plugins grow", () => {
   const inventory = inventoryAt(root);

@@ -1,8 +1,9 @@
-import * as napcat from "./napcat.js";
-import * as wecom from "./wecom.js";
-import * as feishu from "./feishu.js";
-import * as weixin from "./weixinOpenClaw.js";
-import * as rabilink from "./adapters/rabilinkRelayWorker.js";
+import * as napcat from "./plugins/io.rabiroute.endpoint.napcat/src/napcat.js";
+import * as napcatStickers from "./plugins/io.rabiroute.endpoint.napcat/src/napcatStickers.js";
+import * as wecom from "./plugins/io.rabiroute.endpoint.wecom/src/wecom.js";
+import * as feishu from "./plugins/io.rabiroute.endpoint.feishu/src/feishu.js";
+import * as weixin from "./plugins/io.rabiroute.endpoint.weixin/src/weixinOpenClaw.js";
+import * as rabilink from "./plugins/io.rabiroute.endpoint.rabilink/src/adapters/rabilinkRelayWorker.js";
 import * as speech from "./speech/localSpeechClient.js";
 import { handleAgentReply as reply, type AgentReplyOptions } from "./outbox.js";
 import { handleAgentSend as send } from "./agentSend.js";
@@ -11,7 +12,7 @@ export * from "./outbox.js";
 export * from "./agentSend.js";
 /** Explicit unit protocol fixture. Production always resolves a native published provider. */
 export function withTestEndpointEgress(options: AgentReplyOptions): AgentReplyOptions {
-  const protocols: Record<string, object> = {napcat,wecom,feishu,weixin,rabilink,speech};
+  const protocols: Record<string, object> = {napcat: {...napcat, ...napcatStickers},wecom,feishu,weixin,rabilink,speech};
   return {...options, endpointEgress: capability => {
     const type = /^endpoint\.(.+)\.egress@1$/.exec(capability)?.[1];
     const owner = type && protocols[type];

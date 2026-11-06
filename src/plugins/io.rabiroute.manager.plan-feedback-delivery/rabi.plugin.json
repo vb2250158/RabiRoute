@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 2,
+  "id": "io.rabiroute.manager.plan-feedback-delivery",
+  "version": "0.1.1",
+  "displayName": "计划进度反馈",
+  "description": "投递计划进展并恢复待确认的反馈消息",
+  "icon": "mdi-progress-check",
+  "entries": {
+    "manager": {
+      "execution": "in_process",
+      "module": "./manager.mjs"
+    }
+  },
+  "provides": [
+    "manager.plan-feedback-delivery@1"
+  ],
+  "requires": [
+    "host.manager.plan-feedback-delivery@2",
+    "manager.core@1",
+    "manager.message-processing-control@1"
+  ],
+  "optional": [],
+  "permissions": []
+}

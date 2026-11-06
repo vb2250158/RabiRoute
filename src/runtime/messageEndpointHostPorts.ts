@@ -2,31 +2,51 @@ import type { MessageEndpointHostPorts } from '@rabiroute/plugin-sdk';
 
 /** Only shared owners live here. Platform implementations are bundled inside endpoint packages. */
 const owners = {
+  "adapters/platformNativeOperations": () => import("../adapters/platformNativeOperations.js"),
+  "adapters/webhookAdapter": () => import("../adapters/webhookAdapter.js"),
+  "speech/localSpeechClient": () => import("../speech/localSpeechClient.js"),
+  "manager/napcatSupervisorService": () => import("../manager/napcatSupervisorService.js"),
+  "manager/rabiLinkOwnerStore": () => import("../manager/rabiLinkOwnerStore.js"),
+  "rabilinkConversationLedger": () => import("../rabilinkConversationLedger.js"),
+  "rabilinkConversationReviewer": () => import("../rabilinkConversationReviewer.js"),
+  "wearableHealth": () => import("../wearableHealth.js"),
+  "wearableHealthAlertDelivery": () => import("../wearableHealthAlertDelivery.js"),
+  "shared/systemEventIngress": () => import("../shared/systemEventIngress.js"),
+  "shared/qqStickerContract": () => import("../shared/qqStickerContract.js"),
+  "manager/apiOperationContract": () => import("../manager/apiOperationContract.js"),
+  "manager/lanAgentBodyAuthority": () => import("../manager/lanAgentBodyAuthority.js"),
+  "shared/qqMessageParts": () => import("../shared/qqMessageParts.js"),
+  "shared/qqReadSettings": () => import("../shared/qqReadSettings.js"),
+  "shared/readSettingsError": () => import("../shared/readSettingsError.js"),
   "shared/napcatDeliveryError": () => import("../shared/napcatDeliveryError.js"),
+  "shared/localModelDirectory": () => import("../shared/localModelDirectory.js"),
+  "shared/speechRequestAuthority": () => import("../shared/speechRequestAuthority.js"),
+  "speechIngressStore": () => import("../speechIngressStore.js"),
   "shared/speechErrors": () => import("../shared/speechErrors.js"),
   "shared/speechTranscript": () => import("../shared/speechTranscript.js"),
   "shared/speechRecognitionMetadata": () => import("../shared/speechRecognitionMetadata.js"),
   "shared/speechControlContract": () => import("../shared/speechControlContract.js"),
   "shared/selectionSpeechContract": () => import("../shared/selectionSpeechContract.js"),
   "shared/performanceOperations": () => import("../shared/performanceOperations.js"),
-  "runtime/pluginServicePort": () => import("../runtime/pluginServicePort.js"),
+  "runtime/pluginServicePort": () => import("./pluginServicePort.js"),
   "performance/performanceInstrumentation": () => import("../performance/performanceInstrumentation.js"),
   "peerTunnel/session": () => import("../peerTunnel/session.js"),
   "peerTunnel/http": () => import("../peerTunnel/http.js"),
   "manager/roleStorageApplication": () => import("../manager/roleStorageApplication.js"),
   "manager/scanController": () => import("../manager/scanController.js"),
-  "runtime/windowsProcessTree": () => import("../runtime/windowsProcessTree.js"),
+  "runtime/protectedProcessLauncher": () => import("./protectedProcessLauncher.js"),
+  "runtime/windowsProcessTree": () => import("./windowsProcessTree.js"),
   "shared/routeIdentity": () => import("../shared/routeIdentity.js"),
   "shared/napcatStateContract": () => import("../shared/napcatStateContract.js"),
   "shared/keyedAsyncLock": () => import("../shared/keyedAsyncLock.js"),
   "shared/homeMediaContract": () => import("../shared/homeMediaContract.js"),
+  "shared/pluginStorage": () => import("../shared/pluginStorage.js"),
   "shared/filePersistence": () => import("../shared/filePersistence.js"),
   "manager/speechModelSettingsAccess": () => import("../manager/speechModelSettingsAccess.js"),
   "manager/lanAgentRequestAccess": () => import("../manager/lanAgentRequestAccess.js"),
   "manager/durableDeliveryIdempotency": () => import("../manager/durableDeliveryIdempotency.js"),
   "manager/connectionRequestAccess": () => import("../manager/connectionRequestAccess.js"),
   "automation/personaAutomationRuntime": () => import("../automation/personaAutomationRuntime.js"),
-  "codexRuntime": () => import("../codexRuntime.js"),
   "commands": () => import("../commands.js"),
   "config": () => import("../config.js"),
   "forwarding": () => import("../forwarding.js"),
@@ -35,7 +55,7 @@ const owners = {
   "manager/managerPluginRouteRegistry": () => import("../manager/managerPluginRouteRegistry.js"),
   "observability/dataMutationAudit": () => import("../observability/dataMutationAudit.js"),
   "routing/identityContext": () => import("../routing/identityContext.js"),
-  "runtime/gatewayListenerRuntime": () => import("../runtime/gatewayListenerRuntime.js"),
+  "runtime/gatewayListenerRuntime": () => import("./gatewayListenerRuntime.js"),
   "scheduling/heartbeatSchedules": () => import("../scheduling/heartbeatSchedules.js"),
   "shared/gatewayConfigModel": () => import("../shared/gatewayConfigModel.js"),
   "shared/localSecretProtection": () => import("../shared/localSecretProtection.js"),
@@ -52,7 +72,7 @@ export async function createMessageEndpointHostPorts(options: { loaders?: Readon
     async prepareModules(ids: readonly string[]): Promise<void> {
       await Promise.all(ids.map(id => {
         if (loaded.has(id)) return;
-        const load = loaders[id];
+        const load = Object.hasOwn(loaders, id) ? loaders[id] : undefined;
         if (!load) throw new Error('Shared endpoint owner is unavailable: ' + id);
         let preparing = pending.get(id);
         if (!preparing) {

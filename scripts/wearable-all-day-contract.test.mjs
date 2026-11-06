@@ -16,7 +16,7 @@ test('settings delegates health requests to sole owner', () => {
  assert.doesNotMatch(s, /WearableHealthSyncService\./);
  assert.doesNotMatch(s, /enabled = startAfterSave && problem/);
 });
-for (const p of ['apps/rabi-mobile-android/scripts/Sync-MiHealthWearableToRabiLink.ps1','plugins/builtin/io.rabiroute.manager.wearable-companion/1.0.0/resources/Sync-MiHealthWearableToRabiLink.ps1']) {
+for (const p of ['apps/rabi-mobile-android/scripts/Sync-MiHealthWearableToRabiLink.ps1','src/plugins/io.rabiroute.manager.wearable-companion/resources/Sync-MiHealthWearableToRabiLink.ps1']) {
  test(`companion enforces persistent current window: ${p}`, () => {
  const s = read(p);
  assert.match(s, /shared_prefs\/rabi_all_day_recording.xml/);

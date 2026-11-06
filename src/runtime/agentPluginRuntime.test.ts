@@ -22,12 +22,14 @@ test("a missing descriptor or removed host in a bad Agent update retains the exa
             instances.push({ id: name, package: packageId, version: "1.0.0", enabled: true, config: {}, grants: [] });
         }
         const profilePath = path.join(root, "profile.json");
-        await fs.writeFile(profilePath, JSON.stringify({ schemaVersion: 2, readyRequires: [], instances }));
+        await fs.writeFile(profilePath, JSON.stringify({ schemaVersion: 2, readyRequires: [], instances: [null, ...instances] }));
         runtime = await mountAgentPluginRuntime({ host: "manager", profilePath, settingsRoot: path.join(root, "settings"), packageRoots: [path.join(root, "packages")], runtimeRoot: path.join(root, "runtime"), hostPorts: createAgentAdapterHostPorts(), watch: false });
         const read = () => publishedAgentAdapterProviders(runtime!.current());
         const first = read().get("first")!, second = read().get("second")!;
         assert.ok(first);
         assert.ok(second);
+        assert.equal(runtime.diagnostics().filter(item => item.rowIndex === 0 && item.instanceId === undefined).length, 1,
+            "A bad profile row is visible once without a fabricated instance ID or blocking either healthy owner.");
         await fs.rm(path.join(root, "packages/io.fixture.first/1.0.0/agent-adapter.json"));
         await runtime.reconcile();
         assert.equal(read().get("first")!.identity.activationId, first.identity.activationId);

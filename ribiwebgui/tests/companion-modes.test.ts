@@ -25,7 +25,7 @@ function component(client: {
   companionRequest: (roleId: string, action?: string, body?: any) => Promise<CompanionSnapshot>;
   setCompanionMode: (roleId: string, current: CompanionSession, presetId: string) => Promise<CompanionSnapshot>;
 }) {
-  const source = fs.readFileSync(new URL("../src/components/PersonaCompanionActivity.vue", import.meta.url), "utf8");
+  const source = fs.readFileSync(new URL("../../src/plugins/io.rabiroute.manager.persona/web/components/PersonaCompanionActivity.vue", import.meta.url), "utf8");
   const { descriptor } = parse(source);
   const script = compileScript(descriptor, { id: "companion-mode-test" });
   const compiled = ts.transpileModule(script.content, {
@@ -35,14 +35,14 @@ function component(client: {
   vm.runInNewContext(compiled.outputText, {
     module: output, exports: output.exports,
     require(name: string) {
-      if (name === "../timeoutSettingsClient") return { getTimeoutMs };
+      if (name === "../../../../../ribiwebgui/src/timeoutSettingsClient") return { getTimeoutMs };
       if (name === "vue") return { ...vue, onMounted() {}, onBeforeUnmount() {} };
-      if (name === "../companionActivityClient") return client;
+      if (name === "../../../../../ribiwebgui/src/companionActivityClient") return client;
       if (name === "../managerApi") return { managerEventSource() {} };
       if (name === "../persona/personaServiceClient") return { usePersonaService: () => ({ fetch: globalThis.fetch, events() {} }) };
-      if (name === "../speech/speechControlClient") return { createSpeechControlClient: () => ({}) };
-      if (name === "../browserUuid") return { browserUuid: () => "start-request" };
-      if (name === "../userFacingError") return { userFacingError: (error: Error) => error.message };
+      if (name === "../../../io.rabiroute.manager.speech/web/speech/speechControlClient") return { createSpeechControlClient: () => ({}) };
+      if (name === "../../../../../ribiwebgui/src/browserUuid") return { browserUuid: () => "start-request" };
+      if (name === "../../../../../ribiwebgui/src/userFacingError") return { userFacingError: (error: Error) => error.message };
       throw new Error(`Unexpected component import: ${name}`);
     },
     document: { createElement: () => ({}) }, crypto: { randomUUID: () => "start-request" },

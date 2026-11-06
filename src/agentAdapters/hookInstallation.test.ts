@@ -3,26 +3,27 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { updateAgentHooks, workbuddyHookPaths } from "./hookInstallation.js";
+import { updateHooks as updateCodexHooks } from "../plugins/io.rabiroute.agent.codex/src/agentAdapters/codexHookInstallation.js";
+import { updateHooks as updateDshHooks } from "../plugins/io.rabiroute.agent.dsh/src/agentAdapters/dshHookInstallation.js";
+import { updateHooks as updateWorkbuddyHooks, workbuddyHookPaths } from "../plugins/io.rabiroute.agent.workbuddy/src/agentAdapters/workbuddyHookInstallation.js";
 
 test("Codex installation is serialized and never removes other plugins", async () => {
   const calls: string[][] = [];
   const run = async (args: string[]) => { calls.push(args); };
-  const first = updateAgentHooks("test-codex", "codex", run);
-  const duplicate = updateAgentHooks("test-codex", "codex", run);
+  const first = updateCodexHooks("test-codex", run);
+  const duplicate = updateCodexHooks("test-codex", run);
   assert.equal(first, duplicate);
   await first;
   assert.deepEqual(calls.map(args => args.slice(0, 3)), [["plugin", "marketplace", "add"], ["plugin", "add", "rabi-codex-context@rabiroute-local"]]);
 });
 
 test("failed installation can be retried and DSH uses its own plugin manager", async () => {
-  await assert.rejects(updateAgentHooks("test-failure", "codex", async () => { throw new Error("installer failed"); }), /installer failed/);
-  await updateAgentHooks("test-failure", "codex", async () => {});
+  await assert.rejects(updateCodexHooks("test-failure", async () => { throw new Error("installer failed"); }), /installer failed/);
+  await updateCodexHooks("test-failure", async () => {});
   const calls: string[][] = [];
-  await updateAgentHooks("test-dsh", "dsh", async args => { calls.push(args); });
+  await updateDshHooks("test-dsh", async args => { calls.push(args); });
   assert.deepEqual(calls[0].slice(0, 4), ["plugin", "--profile", "web", "add"]);
   assert.match(calls[0][4], /rabi-dsh-context$/);
-  await assert.rejects(updateAgentHooks("test-invalid", "unknown"), /安装包/);
 });
 
 /** Build the smallest shipped hook package the installer needs to read. */
@@ -96,7 +97,7 @@ test("WorkBuddy hooks land in the user settings file without dropping the user's
     hooks: { Stop: [{ hooks: [{ type: "command", command: "bash my-own-hook.sh" }] }] }
   }, null, 2));
 
-  const first = await updateAgentHooks(root, "workbuddy");
+  const first = await updateWorkbuddyHooks(root);
   assert.match(first.message, /WorkBuddy/);
 
   const settings = JSON.parse(fs.readFileSync(settingsFile, "utf8"));
@@ -119,9 +120,9 @@ test("re-running the WorkBuddy installer replaces its own hooks instead of stack
   const restore = withWorkbuddyPaths(root);
   t.after(restore);
 
-  await updateAgentHooks(root, "workbuddy");
+  await updateWorkbuddyHooks(root);
   const afterFirst = JSON.parse(fs.readFileSync(process.env.RABI_WORKBUDDY_SETTINGS_FILE as string, "utf8"));
-  await updateAgentHooks(root, "workbuddy");
+  await updateWorkbuddyHooks(root);
   const afterSecond = JSON.parse(fs.readFileSync(process.env.RABI_WORKBUDDY_SETTINGS_FILE as string, "utf8"));
 
   assert.equal(ownCommands(afterSecond).length, ownCommands(afterFirst).length);
@@ -135,7 +136,7 @@ test("the WorkBuddy installer refuses to overwrite a settings file it cannot par
   t.after(restore);
   fs.writeFileSync(process.env.RABI_WORKBUDDY_SETTINGS_FILE as string, "{ not json");
 
-  await assert.rejects(updateAgentHooks(root, "workbuddy"), /不是有效的 JSON/);
+  await assert.rejects(updateWorkbuddyHooks(root), /不是有效的 JSON/);
 });
 
 /**
@@ -163,7 +164,7 @@ test("the WorkBuddy home follows the config dir the desktop app actually injects
     if (previousAlias !== undefined) process.env.WORKBUDDY_CONFIG_DIR = previousAlias;
   });
 
-  await updateAgentHooks(root, "workbuddy");
+  await updateWorkbuddyHooks(root);
 
   const written = path.join(home, "settings.json");
   assert.ok(fs.existsSync(written), `settings must land in CODEBUDDY_CONFIG_DIR: ${written}`);
@@ -185,7 +186,7 @@ test("an explicit WorkBuddy home override wins over the injected config dir", as
     delete process.env.CODEBUDDY_CONFIG_DIR;
   });
 
-  await updateAgentHooks(root, "workbuddy");
+  await updateWorkbuddyHooks(root);
 
   assert.ok(fs.existsSync(path.join(explicit, "settings.json")), "explicit home is used");
   assert.ok(!fs.existsSync(path.join(root, "ignored-home", "settings.json")), "the injected dir is not used");
@@ -201,7 +202,7 @@ test("the WorkBuddy installer self-checks the hook it just installed", async (t)
   const restore = withWorkbuddyPaths(root);
   t.after(restore);
 
-  const result = await updateAgentHooks(root, "workbuddy");
+  const result = await updateWorkbuddyHooks(root);
 
   // The fixture's stub entrypoint is a valid, runnable Node file, so the probe
   // reaches the "connected" verdict and must say so explicitly.
@@ -232,7 +233,7 @@ test("the installer names the running WorkBuddy tasks that still need a restart"
     lastHeartbeat: Date.now()
   }));
 
-  const result = await updateAgentHooks(root, "workbuddy");
+  const result = await updateWorkbuddyHooks(root);
 
   assert.match(result.message, /1 个运行中的工作区/);
   assert.match(result.message, /C:\\Data\\LiveProject/, "the stale task's workspace is named");
@@ -244,7 +245,7 @@ test("the installer says so when no task needs a restart", async (t) => {
   const restore = withWorkbuddyPaths(root);
   t.after(restore);
 
-  const result = await updateAgentHooks(root, "workbuddy");
+  const result = await updateWorkbuddyHooks(root);
 
   assert.match(result.message, /没有正在运行的 WorkBuddy 任务/);
 });
@@ -267,7 +268,7 @@ test("internal CLI host sessions are never offered as tasks to restart", async (
   fs.writeFileSync(path.join(sessionsDir, "2.json"), descriptor("warm", "C:\\Program Files\\WorkBuddy", "prewarm"));
   fs.writeFileSync(path.join(sessionsDir, "3.json"), descriptor("real", "C:\\Data\\RealProject", "interactive"));
 
-  const result = await updateAgentHooks(root, "workbuddy");
+  const result = await updateWorkbuddyHooks(root);
 
   assert.match(result.message, /1 个运行中的工作区/, "only the real task is counted");
   assert.match(result.message, /C:\\Data\\RealProject/);
@@ -285,14 +286,14 @@ test("the WorkBuddy installer reports a failed self-check when the entry script 
   const restore = withWorkbuddyPaths(root);
   t.after(restore);
 
-  const result = await updateAgentHooks(root, "workbuddy");
+  const result = await updateWorkbuddyHooks(root);
 
   // Remove the copied entrypoint, then re-run: the declaration stays valid while
   // the thing it points at is gone.
   const { installRoot } = workbuddyHookPaths();
   fs.rmSync(path.join(installRoot, "scripts", "rabi-workbuddy-hook.mjs"), { force: true });
 
-  const second = await updateAgentHooks(root, "workbuddy");
+  const second = await updateWorkbuddyHooks(root);
   // Re-installing restores the script, so this run passes again — proving the
   // probe reflects the on-disk state rather than a cached verdict.
   assert.match(second.message, /自检通过/);

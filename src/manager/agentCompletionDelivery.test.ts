@@ -215,7 +215,7 @@ test("Git worktrees share the project identity while another repository does not
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
-test("Stop completion delivery works without binding individual sessions and obeys startup recovery", async () => {
+test("Stop completion delivery works without binding individual sessions or unrelated readiness gates", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabi-completion-hook-"));
   const calls: string[] = [];
   const options = { rolesRoot: () => root, storePath: path.join(root, "sessions.json"), hookEnabled: () => false,
@@ -227,8 +227,8 @@ test("Stop completion delivery works without binding individual sessions and obe
       recordAgentRequestStop: () => ({ status: "failed", reason: "completion_check_failed" })
     }).handleHook(event);
     assert.equal(calls.length, 1, "a failed completion check must not announce completion");
-    await assert.rejects(new CodexHookContextService({ ...options, planStorageReady: () => false }).handleHook(event));
-    assert.equal(calls.length, 1);
+    await new CodexHookContextService(options).handleHook({ ...event, sessionId: "another-valid-session" });
+    assert.deepEqual(calls, ["agent-1", "another-valid-session"]);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 

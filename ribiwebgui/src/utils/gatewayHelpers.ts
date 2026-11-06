@@ -19,7 +19,7 @@ import {
 } from "@shared/gatewayConfigModel";
 import { isGatewayMessageAdapterType, isMessageEndpointType } from "@shared/messageEndpointTypes";
 import { applySpeechRouteVariableDefaults } from "@shared/speechControlContract";
-import { SPEECH_ROUTE_AUTO_SUBMIT } from "../speech/speechDeliveryMode";
+import { SPEECH_ROUTE_AUTO_SUBMIT } from "../../../src/plugins/io.rabiroute.manager.speech/web/speech/speechDeliveryMode";
 import { pluginCatalogStore } from "../pluginCatalogStore";
 
 /** Device setup belongs to mobile recording; remote execution belongs to Agent targets. Legacy keys remain readable
@@ -404,7 +404,8 @@ export function defaultHeartbeatSchedule(gateway: GatewayDefinition, name = "定
     name,
     enabled: true,
     type: "interval",
-    intervalSeconds: Number(gateway.heartbeatIntervalSeconds || 900)
+    intervalSeconds: Number(gateway.heartbeatIntervalSeconds || 900),
+    skipWhenAgentBusy: false
   };
 }
 

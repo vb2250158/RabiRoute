@@ -193,7 +193,7 @@ test("one immutable contract validates input and exports the same schema", async
   const parsed = await readApiOperationInput(op, input('{"value":2}'), new URL("http://localhost/api/example/records/one"), {} as ServerResponse);
   assert.deepEqual(parsed.body, { value: 2 });
   assert.equal(parsed.path.recordId, "one");
-  await assert.rejects(readApiOperationInput(op, input('{"value":-1}'), parsed.url, parsed.response), { code: "API_REQUEST_SCHEMA_INVALID", field: "body" });
+  await assert.rejects(readApiOperationInput(op, input('{"value":-1}'), parsed.url, parsed.response), { code: "API_REQUEST_SCHEMA_INVALID", field: "body.value" });
   await assert.rejects(readApiOperationInput(op, input('{"value":1,"extra":"secret"}'), parsed.url, parsed.response), error => {
     assert.ok(error instanceof Error); assert.equal(error.message.includes("secret"), false); return true;
   });
@@ -264,6 +264,32 @@ test("framework errors are exported without dropping the owner's binary response
   const failure = apiContractFailure(operation, new ApiContractError(413, "API_REQUEST_TOO_LARGE", "body", contract.operationId));
   assert.equal(validateApiOperationResult(operation, failure).mediaType, "application/json");
   assert.ok(operation.contract.responses["400"]?.alternatives?.some(value => value.mediaType === "application/json"));
+});
+
+test("parameter failures name a schema-owned field and give actionable current discovery without echoing secrets", async () => {
+  const operation = compileApiOperation({ contract: fixtureApiContract(), handler: () => ({ status: 200, body: {} }) });
+  for (const [body, field, rule] of [['{}', 'body.value', 'required'], ['{"value":-1}', 'body.value', 'minimum'],
+    ['{"value":1,"private-token":"secret-credential"}', 'body', 'additionalProperties']] as const) {
+    let failure: ReturnType<typeof apiContractFailure> | undefined;
+    try { await readApiOperationInput(operation, input(body), new URL('http://localhost/api/example/records/one'), {} as ServerResponse); }
+    catch (error) { failure = apiContractFailure(operation, error); }
+    assert.ok(failure); assert.equal(failure.status, 400);
+    const result = failure.body as { field: string; repair: string; errorCode: string; retryable: boolean };
+    assert.equal(result.errorCode, 'API_REQUEST_SCHEMA_INVALID'); assert.equal(result.field, field);
+    assert.ok(result.repair.includes(`schema rule ${rule}`));
+    assert.ok(result.repair.includes(`/api/agent/help?operationId=${encodeURIComponent(operation.contract.operationId)}`));
+    assert.match(result.repair, /401\/403/); assert.match(result.repair, /lookup failure/);
+    assert.equal(result.retryable, false);
+    assert.doesNotMatch(JSON.stringify(failure), /secret-credential|private-token/);
+    assert.equal(validateApiOperationResult(operation, failure).mediaType, 'application/json');
+  }
+  const unknown = apiContractFailure(operation, new Error('secret internal path'));
+  assert.equal((unknown.body as { uncertain: boolean }).uncertain, true);
+  assert.match((unknown.body as { repair: string }).repair, /original operation receipt/);
+  assert.doesNotMatch(JSON.stringify(unknown), /secret internal path/);
+  const denied = apiContractFailure(operation, new ApiContractError(403, 'API_REQUEST_AUTHORITY_REVOKED', 'authorization', operation.contract.operationId, true));
+  assert.equal((denied.body as any).uncertain, true); assert.match((denied.body as any).repair, /Restore its access/);
+  assert.match((denied.body as any).repair, /original operation receipt/); assert.doesNotMatch((denied.body as any).repair, /correct authorization/);
 });
 
 test("valid operation aliases have no unrelated count quota and still reject ambiguous IDs",()=>{

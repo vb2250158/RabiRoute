@@ -8,7 +8,7 @@ import { renderAgentResponseContent } from "./responseContent.js";
 import { agentDeliveryPromptHash, type AgentRequestStore, type AgentRequestParty, type AgentCommunicationPreparation } from "./store.js";
 import { normalizeAgentRequestEndpoint, normalizeAgentDeliverySource, agentDeliverySourceForParty, stableAgentEndpointIdentity, agentDeliverySourceIdentity, agentDeliveryCallerSourceIdentity, sourceScopedAgentDeliveryId, sameAgentEndpoint, sameAgentParty, sameAgentPartyAddress, type AgentRequestEndpoint, type AgentDeliverySource } from "./endpoint.js";
 export { sourceScopedAgentDeliveryId } from "./endpoint.js";
-import { AgentThreadContractError, callerAgentDeliveryId, completeAgentSessionId, normalizeAgentThreadSourceType } from "./requestValidation.js";
+import { AgentThreadContractError, agentThreadContractFailure, agentWorkspaceMismatch, callerAgentDeliveryId, completeAgentSessionId, normalizeAgentThreadSourceType } from "./requestValidation.js";
 import { EndpointDeliveryNotSentError, type EndpointDeliveryNoFrameProof } from "./deliveryFailure.js";
 
 export type PreparedEndpointDelivery = {
@@ -118,6 +118,8 @@ function notSentResult(delivery: PreparedEndpointDelivery, error: unknown): Agen
 }
 
 function result(delivery: Omit<PreparedEndpointDelivery, "prompt">, confirmed: boolean, error?: unknown): AgentThreadRequestResult {
+  error ??= !confirmed && delivery.lastError?.code === "AGENT_WORKSPACE_MISMATCH" ? agentWorkspaceMismatch(delivery.target) : undefined;
+  const failure = agentThreadContractFailure(error);
   return { statusCode: confirmed ? 200 : 202, data: {
     action: "send", ok: confirmed, status: confirmed ? "delivered" : "delivery_unconfirmed",
     threadId: delivery.target.sessionId,
@@ -125,7 +127,8 @@ function result(delivery: Omit<PreparedEndpointDelivery, "prompt">, confirmed: b
       status: confirmed ? "accepted" : "unconfirmed", targetThreadId: delivery.target.sessionId, retryable: false },
     communication: { deliveryId: delivery.deliveryId, requestId: delivery.preparation.requestId,
       inReplyToRequestId: delivery.preparation.inReplyToRequestId, responsePolicy: delivery.preparation.responsePolicy },
-    ...(error ? { error: { stage: "target_delivery", message: error instanceof Error ? error.message : String(error), retryable: false } } : {})
+    ...(failure ? { errorCode: failure.code, field: failure.field, repair: failure.repair } : {}),
+    ...(error ? { error: { stage: "target_delivery", message: error instanceof Error ? error.message : String(error), retryable: false, ...failure } } : {})
   } };
 }
 

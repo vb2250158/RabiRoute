@@ -2,7 +2,7 @@ import { getTimeoutMs } from "../shared/timeoutSettings.js";
 import { EventEmitter } from "node:events";
 import { Duplex } from "node:stream";
 import { randomUUID } from "node:crypto";
-import type { TunnelChannel } from "./channel.js";
+import type { TunnelChannel } from "./channelContract.js";
 import { createTunnelHandshake, type TunnelGrant, type TunnelHello, type TunnelIdentity } from "./security.js";
 
 export type TunnelRequest = { service: string; method: string; path: string; headers: Record<string, string | string[]>; upgrade?: boolean };

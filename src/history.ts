@@ -4,7 +4,7 @@ import { config } from "./config.js";
 import { measureSyncPerformanceOperation } from "./performance/performanceInstrumentation.js";
 import { withFileLockSync } from "./shared/filePersistence.js";
 import { PERFORMANCE_OPERATIONS } from "./shared/performanceOperations.js";
-import type { ResolvedForwardMessage } from "./napcatForwardMessages.js";
+import type { ResolvedForwardMessage } from "./plugins/io.rabiroute.endpoint.napcat/src/napcatForwardMessages.js";
 import type { SpeechTranscriptSegment } from "./shared/speechControlContract.js";
 import { recordDataMutationAudit } from "./observability/dataMutationAudit.js";
 

@@ -4,7 +4,7 @@ import { useRoute, useRouter } from "vue-router";
 import { pluginCatalogStore } from "../pluginCatalogStore";
 import { isWebPageRouteActive } from "../pluginPages";
 import { webPluginPageLoading } from "../pluginModuleBootstrap";
-import { useI18n } from "../i18n";
+import { useI18n } from "../i18n/index";
 
 const route = useRoute();
 const router = useRouter();

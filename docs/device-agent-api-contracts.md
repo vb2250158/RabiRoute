@@ -4,7 +4,7 @@
 
 # 设备 Agent 邮箱接口合同
 
-本文面向 Manager 和设备宿主接入开发者。`src/agentAdapters/deviceAgentOperations.ts` 用同一份可执行合同安装 13 个 HTTP 操作并发布发现目录；`deviceAgentOwner.ts` 拥有原生业务规则和 PC 持久邮箱。原有两个目录/前缀路由声明由上述精确合同替代。
+本文面向 Manager 和设备宿主接入开发者。`src/plugins/io.rabiroute.agent.device-agent/src/agentAdapters/deviceAgentOperations.ts` 用同一份可执行合同安装 13 个 HTTP 操作并发布发现目录；`deviceAgentOwner.ts` 拥有原生业务规则和 PC 持久邮箱。原有两个目录/前缀路由声明由上述精确合同替代。
 
 ## 所有权和可观察合同
 

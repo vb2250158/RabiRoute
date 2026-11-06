@@ -1,6 +1,10 @@
+import { registerSourcePluginTranslations } from "./plugin-translation-test-host";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { translateText } from "../src/i18n/index";
+
+const disposePluginTranslations = await registerSourcePluginTranslations();
+test.after(disposePluginTranslations);
 
 test("translates performance monitoring copy and dynamic counters", () => {
   assert.equal(translateText("性能监控", "en"), "Performance monitor");

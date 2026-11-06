@@ -7,11 +7,11 @@ import test from "node:test";
 import { config } from "../config.js";
 import type { VoiceTranscriptEventRecord } from "../history.js";
 import { acceptWebhookPayload, createWebhookAdapter, type WebhookAdapterOptions, type WebhookAdapterProfile } from "./webhookAdapter.js";
-import { rabiLinkWebhookOptions } from "./rabilinkAdapter.js";
+import { rabiLinkWebhookOptions } from "../plugins/io.rabiroute.endpoint.rabilink/src/adapters/rabilinkAdapter.js";
 import { createWebhookRequestProducer } from "./webhookHttpOwner.js";
 import { ManagerPluginRouteRegistry } from "../manager/managerPluginRouteRegistry.js";
 import { apiCatalogOpenApi } from "../manager/apiOperationCatalog.js";
-import { createApiDiscoveryOperations } from "../manager/apiDiscoveryRoutes.js";
+import { createApiDiscoveryOperations } from "../plugins/io.rabiroute.manager.agent-communication/src/manager/apiDiscoveryRoutes.js";
 import { createGatewayListenerRuntime, type GatewayListenerPublication } from "../runtime/gatewayListenerRuntime.js";
 // @ts-ignore Source client is exercised against controlled native HTTP listeners.
 import { createManagerClient } from "../../apps/rabi-agent/lib/manager-client.mjs";

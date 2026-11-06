@@ -1,6 +1,6 @@
 import type http from "node:http";
-import type { XiaomiHomeManagerRoutesContext } from "./managerRoutes.js";
-import { createXiaomiHomeManagerOperations } from "./managerOperations.js";
+import type { XiaomiHomeManagerRoutesContext } from "../../plugins/io.rabiroute.manager.xiaomi-home/src/integrations/xiaomiHome/managerRoutes.js";
+import { createXiaomiHomeManagerOperations } from "../../plugins/io.rabiroute.manager.xiaomi-home/src/integrations/xiaomiHome/managerOperations.js";
 import { compileApiOperation, apiPathParameters, type ApiOperationDefinition, type ApiOperationInput, type ApiOperationResult } from "../../manager/apiOperationContract.js";
 
 export type XiaomiHomeOperationFixtureContext = XiaomiHomeManagerRoutesContext & {

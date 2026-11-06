@@ -1,0 +1,8 @@
+{
+  "source": "src/plugins/io.rabiroute.endpoint.napcat/src/adapters/napcatAdapter.ts",
+  "factory": "createNapCatAdapter",
+  "packageId": "io.rabiroute.endpoint.napcat",
+  "ownedPrefixes": [
+    "src/plugins/io.rabiroute.endpoint.napcat/"
+  ]
+}

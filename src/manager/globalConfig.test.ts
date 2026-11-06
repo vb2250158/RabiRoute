@@ -6,7 +6,7 @@ import path from "node:path";
 import test from "node:test";
 import { RabiGlobalConfigStore } from "./globalConfig.js";
 import { DeviceIdentityOwner, deviceIdentityConfigField } from "./deviceIdentity.js";
-import { publicRabiLinkRelayConfig } from "./rabiApi.js";
+import { publicRabiLinkRelayConfig } from "../plugins/io.rabiroute.manager.route-control/src/manager/rabiApi.js";
 
 function tempRoot(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-global-config-"));

@@ -9,7 +9,7 @@ import { LanAgentAuthority } from "./lanAgentAuthority.js";
 import { LanAgentRegistry } from "./lanAgentRegistry.js";
 import { handleLanAgentApiFixture as handleLanAgentApi } from "./lanAgentRouteTestSupport.js";
 import type { LanAgentReleaseStore } from "./lanAgentReleaseStore.js";
-import { AgentResourceCatalog } from "./agentResourceCatalog.js";
+import { AgentResourceCatalog } from "../plugins/io.rabiroute.manager.core/src/manager/agentResourceCatalog.js";
 
 test("HTTP enrollment and credential recovery expose public resources without any Agent registration", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabi-access-http-"));

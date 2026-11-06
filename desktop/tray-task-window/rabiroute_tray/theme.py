@@ -56,10 +56,31 @@ def apply_rabi_menu_theme(*menus: QMenu, theme: object = "light") -> None:
             menu.setStyleSheet(stylesheet)
 
 
+def rabi_scrollbar_stylesheet(theme: object = "light", *, foreground: str | None = None) -> str:
+    """One native scrollbar style; a custom surface may retain its own text color."""
+    color = QColor(foreground or theme_definition(normalize_theme(theme))["application_palette"][QPalette.ColorRole.Text])
+    thumb = f"rgba({color.red()}, {color.green()}, {color.blue()}, 122)"
+    hover = f"rgba({color.red()}, {color.green()}, {color.blue()}, 163)"
+    return f"""
+QScrollBar:vertical {{ background: transparent; border: none; width: 6px; margin: 0; }}
+QScrollBar:horizontal {{ background: transparent; border: none; height: 6px; margin: 0; }}
+QScrollBar::handle:vertical {{ background: {thumb}; border: none; min-height: 28px; border-radius: 3px; }}
+QScrollBar::handle:horizontal {{ background: {thumb}; border: none; min-width: 28px; border-radius: 3px; }}
+QScrollBar::handle:vertical:hover, QScrollBar::handle:horizontal:hover {{ background: {hover}; }}
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical,
+QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{ background: transparent; border: none; width: 0; height: 0; }}
+QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical,
+QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {{ background: transparent; border: none; }}
+"""
+
+
 def apply_rabi_application_theme(app: QApplication, theme: object) -> str:
     resolved = resolve_theme(theme, app)
     palette = QPalette(app.palette())
     for role, color in theme_definition(resolved)["application_palette"].items():
         palette.setColor(role, QColor(color))
     app.setPalette(palette)
+    stylesheet = rabi_scrollbar_stylesheet(resolved)
+    if app.styleSheet() != stylesheet:
+        app.setStyleSheet(stylesheet)
     return resolved

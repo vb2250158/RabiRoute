@@ -1,9 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { spawn } from "node:child_process";
 import { pathToFileURL } from "node:url";
 import { createHash } from "node:crypto";
 import ts from "typescript";
+import { getTimeoutMs } from "./timeout-settings.mjs";
 import { captureAutomaticInputs, automaticInputsUnchanged, writeAutomaticSnapshot } from "./automatic-update-inputs.mjs";
 import { webPatchInputs, isWebPatchInput } from "./web-patch-inputs.mjs";
 
@@ -58,14 +58,53 @@ export async function captureAutomaticWebInputs(root) {
 }
 
 async function runNode(root, arguments_, signal) {
+  signal?.throwIfAborted();
+  const { launchProtectedProcess } = await import(pathToFileURL(path.join(root, "dist/runtime/protectedProcessLauncher.mjs")).href);
+  signal?.throwIfAborted();
+  const { child, tree } = launchProtectedProcess({ kind: "spawn", command: process.execPath, args: arguments_,
+    options: { cwd: root, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] } });
+  let output = "", failure, code, reason, close;
+  const closed = new Promise(resolve => { close = resolve; });
+  let retiring;
+  const retire = () => {
+    if (retiring) return retiring;
+    const attempt = (async () => {
+      if (tree) { tree.terminate(); tree.refresh(); }
+      else if (child.exitCode === null && child.signalCode === null) child.kill("SIGTERM");
+      let timer;
+      try { await Promise.race([Promise.all([closed, tree?.settled]), new Promise((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error("Isolated Web compiler tree exit remains unconfirmed.")), getTimeoutMs("worker.terminate", 5000));
+      })]); } finally { if (timer) clearTimeout(timer); }
+    })();
+    retiring = attempt;
+    void attempt.then(() => {}, () => { if (retiring === attempt) retiring = undefined; });
+    return attempt;
+  };
   await new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, arguments_, { cwd: root, windowsHide: true, signal, stdio: ["ignore", "pipe", "pipe"] });
-    let output = "";
+    let completing = false;
+    const complete = () => {
+      if (completing) return;
+      completing = true;
+      void retire().then(() => {
+        signal?.removeEventListener("abort", complete);
+        if (signal?.aborted) reject(signal.reason ?? new Error("Isolated Web build aborted."));
+        else if (failure) reject(failure);
+        else if (code === 0 && !reason) resolve();
+        else reject(new Error(`Isolated Web build failed (${code ?? reason}): ${output}`));
+      }, cause => {
+        signal?.removeEventListener("abort", complete);
+        // The caller retains the original tree and may retry only its cleanup;
+        // the surrounding workspace must not be retired on this error.
+        reject(Object.assign(new Error("Isolated Web compiler retirement remains unconfirmed; its original owner and workspace were retained.", { cause }),
+          { code: "RABI_WEB_BUILD_RETIREMENT_UNCONFIRMED", retryCleanup: retire }));
+      });
+    };
     const append = bytes => { output = (output + bytes.toString()).slice(-32768); };
-    child.stdout.on("data", append);
-    child.stderr.on("data", append);
-    child.once("error", reject);
-    child.once("exit", (code, reason) => code === 0 && !reason ? resolve() : reject(new Error(`Isolated Web build failed (${code ?? reason}): ${output}`)));
+    child.stdout?.on("data", append); child.stderr?.on("data", append);
+    child.once("error", error => { failure = error; });
+    child.once("close", (exitCode, signalName) => { code = exitCode; reason = signalName; close(); complete(); });
+    signal?.addEventListener("abort", complete, { once: true });
+    if (signal?.aborted) complete();
   });
 }
 
@@ -85,7 +124,7 @@ export async function buildIsolatedWebUpdate({ sourceRoot, packageRoot, workRoot
   if ((await fs.readdir(workRoot)).filter(name => name.startsWith("web-build-")).length >= 8) throw new Error("Isolated Web workspace retention limit reached; active code was not changed.");
   const workspace = await fs.mkdtemp(path.join(workRoot, "web-build-"));
   const root = path.join(workspace, "package");
-  let success = false;
+  let success = false, retirementUnconfirmed = false;
   try {
     await writeAutomaticSnapshot(root, snapshot);
     await fs.cp(path.join(packageRoot, "dist"), path.join(root, "dist"), {
@@ -114,8 +153,23 @@ export async function buildIsolatedWebUpdate({ sourceRoot, packageRoot, workRoot
     if (!await automaticInputsUnchanged(sourceRoot, snapshot)) return { state: "superseded" };
     success = true;
     return { state: "prepared", workspace, directory, revision, inputDigest: snapshot.webDigest, sourceDigest: snapshot.digest };
+  } catch (error) {
+    if (error?.code === "RABI_WEB_BUILD_RETIREMENT_UNCONFIRMED") {
+      retirementUnconfirmed = true;
+      const retry = error.retryCleanup;
+      let recovery;
+      error.workspace = workspace;
+      error.retryCleanup = () => {
+        if (recovery) return recovery;
+        const attempt = (async () => { await retry(); await removeIsolatedWebWorkspace(workRoot, workspace); })();
+        recovery = attempt;
+        void attempt.then(() => {}, () => { if (recovery === attempt) recovery = undefined; });
+        return attempt;
+      };
+    }
+    throw error;
   } finally {
-    if (!success) await removeIsolatedWebWorkspace(workRoot, workspace);
+    if (!success && !retirementUnconfirmed) await removeIsolatedWebWorkspace(workRoot, workspace);
   }
 }
 

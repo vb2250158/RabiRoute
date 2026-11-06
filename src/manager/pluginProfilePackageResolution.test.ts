@@ -9,6 +9,7 @@ import { readInstalledEndpointRouteDeclarations } from "../plugin-runtime-host/m
 import { loadInstalledAgentManagerDescriptors } from "./agentManagerProviders.js";
 import { readPluginManagementManifest } from "./pluginManagement.js";
 import { pluginProfilePackageResolution } from "./pluginProfilePackageResolution.js";
+import { canonicalPluginSourceFixture } from "./canonicalPluginSource.fixture.js";
 
 test("three metadata readers follow selected immutable bytes while disabled declarations stay discoverable", async t => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "rabi-profile-metadata-"));
@@ -24,8 +25,9 @@ test("three metadata readers follow selected immutable bytes while disabled decl
       provides, requires: [], optional: [], permissions: [] }));
     await fs.writeFile(path.join(directory, "manager.mjs"), "export function activate() {}\n");
   }
-  const template = path.resolve("plugins/builtin/io.rabiroute.agent.dsh/1.0.0");
-  for (const name of ["agent-adapter.json", "route-config.json"]) await fs.copyFile(path.join(template, name), path.join(current, name));
+  const { directory: template } = await canonicalPluginSourceFixture("io.rabiroute.agent.dsh");
+  await fs.copyFile(path.join(template, "agent-adapter.json"), path.join(current, "agent-adapter.json"));
+  await fs.copyFile(path.join(template, "route-config.json"), path.join(current, "route-config.json"));
   const desired = parsePluginProfile({ schemaVersion: 2, readyRequires: [], instances: [
     { id: "current", package: "io.test.current", version: "1.0.0", enabled: true },
     { id: "disabled", package: "io.test.disabled", version: "1.0.0", enabled: false }

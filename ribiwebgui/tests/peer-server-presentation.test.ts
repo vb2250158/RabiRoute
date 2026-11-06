@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { peerServerDetail, speechServerOptions } from "../src/speech/peerServerPresentation";
+import { peerServerDetail, speechServerOptions } from "../../src/plugins/io.rabiroute.manager.speech/web/speech/peerServerPresentation";
 import type { PeerConnectionStatus } from "../../src/shared/peerTunnelContract";
 const peer: PeerConnectionStatus = { deviceId:"b",name:"B",online:true,supported:true,trusted:true,state:"connected",transport:"lan",latencyMs:3.2,measuredAt:1000 };
 test("dropdown shows measured channel RTT, never a guessed or stale zero",()=>{

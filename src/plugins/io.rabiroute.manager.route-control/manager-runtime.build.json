@@ -1,0 +1,15 @@
+{
+  "exports": [
+    {
+      "source": "src/plugins/io.rabiroute.manager.route-control/hostRuntime.mjs",
+      "name": "createOwnedRuntime"
+    }
+  ],
+  "ownedPrefixes": [
+    "src/plugins/io.rabiroute.manager.route-control/"
+  ],
+  "ownedSources": [
+    "src/plugins/io.rabiroute.manager.route-control/src/manager/rabiApiOperations.ts"
+  ],
+  "packageId": "io.rabiroute.manager.route-control"
+}

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createDiagnosticsRoutes } from "../../plugins/builtin/io.rabiroute.manager.diagnostics/1.0.0/operations.mjs";
+import { createDiagnosticsRoutes } from "../plugins/io.rabiroute.manager.diagnostics/operations.mjs";
 
 test("plugin query preserves owner payloads, provider fields and extensible lifecycle states", async () => {
   let calls = 0;
@@ -31,7 +31,7 @@ test("reads owner on each request, awaits it, and does not turn failures into em
 });
 
 import { createPluginTestHarness } from "../../plugins/contracts/plugin-sdk/index.mjs";
-import { activate } from "../../plugins/builtin/io.rabiroute.manager.diagnostics/1.0.0/manager.mjs";
+import { activate } from "../plugins/io.rabiroute.manager.diagnostics/manager.mjs";
 
 test("SDK activation uses scoped registration and releases only its own operations", async () => {
   let active = 0, disposed = 0;

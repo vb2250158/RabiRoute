@@ -1,0 +1,75 @@
+/* Internal application surfaces only: html/body retain the browser scrollbar. */
+:where(.v-application, .v-overlay-container) {
+  --rr-scrollbar-size: 6px;
+  --rr-scrollbar-thumb: color-mix(in srgb, var(--rr-muted) 48%, transparent);
+  --rr-scrollbar-thumb-hover: color-mix(in srgb, var(--rr-text) 64%, transparent);
+}
+:where(.v-application, .v-overlay-container) :where(*) {
+  scrollbar-width: thin;
+  scrollbar-color: var(--rr-scrollbar-thumb) transparent;
+}
+:where(.v-application, .v-overlay-container) :where(*:hover, *:focus-within) {
+  scrollbar-color: var(--rr-scrollbar-thumb-hover) transparent;
+}
+@supports selector(::-webkit-scrollbar) {
+  /* Chromium gives non-auto standard properties precedence over its pseudo-elements. */
+  :where(.v-application, .v-overlay-container) :where(*) {
+    scrollbar-width: auto;
+    scrollbar-color: auto;
+  }
+  :where(.v-application, .v-overlay-container) :where(*)::-webkit-scrollbar {
+    width: var(--rr-scrollbar-size);
+    height: var(--rr-scrollbar-size);
+    background: transparent;
+  }
+  :where(.v-application, .v-overlay-container) :where(*)::-webkit-scrollbar-track,
+  :where(.v-application, .v-overlay-container) :where(*)::-webkit-scrollbar-corner {
+    background: transparent;
+    border: 0;
+    box-shadow: none;
+  }
+  :where(.v-application, .v-overlay-container) :where(*)::-webkit-scrollbar-thumb {
+    background: var(--rr-scrollbar-thumb);
+    border: 0;
+    border-radius: 999px;
+    min-height: 28px;
+  }
+  :where(.v-application, .v-overlay-container) :where(*:hover, *:focus-within)::-webkit-scrollbar-thumb {
+    background: var(--rr-scrollbar-thumb-hover);
+  }
+  :where(.v-application, .v-overlay-container) :where(*)::-webkit-scrollbar-button {
+    display: none;
+    width: 0;
+    height: 0;
+  }
+}
+/* xterm owns slider geometry and pointer handling; only the painted thumb changes. */
+:where(.v-application, .v-overlay-container) .xterm .xterm-scrollable-element > .scrollbar > .slider {
+  background: transparent !important;
+}
+:where(.v-application, .v-overlay-container) .xterm .xterm-scrollable-element > .scrollbar > .slider::before {
+  content: "";
+  position: absolute;
+  pointer-events: none;
+  border-radius: 999px;
+  background: var(--rr-scrollbar-thumb);
+}
+:where(.v-application, .v-overlay-container) .xterm .scrollbar.vertical > .slider::before {
+  inset: 0 0 0 auto;
+  width: var(--rr-scrollbar-size);
+}
+:where(.v-application, .v-overlay-container) .xterm .scrollbar.horizontal > .slider::before {
+  inset: auto 0 0;
+  height: var(--rr-scrollbar-size);
+}
+:where(.v-application, .v-overlay-container) .xterm .xterm-scrollable-element > .scrollbar > .slider:hover::before,
+:where(.v-application, .v-overlay-container) .xterm .xterm-scrollable-element > .scrollbar > .slider.active::before {
+  background: var(--rr-scrollbar-thumb-hover);
+}
+@media (forced-colors: active) {
+  :where(.v-application, .v-overlay-container) {
+    --rr-scrollbar-thumb: ButtonText;
+    --rr-scrollbar-thumb-hover: Highlight;
+  }
+  :where(.v-application, .v-overlay-container) :where(*) { scrollbar-color: auto; }
+}

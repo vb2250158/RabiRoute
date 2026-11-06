@@ -9,7 +9,7 @@ import { createCorePublicOperations, type CorePublicOperationsContext } from "./
 import { ManagerPluginRouteRegistry } from "./managerPluginRouteRegistry.js";
 import { markAuthenticatedConnectionRequest } from "./connectionRequestAccess.js";
 import { evaluateLanAgentRequest, assertTrustedLanAgentPrincipal } from "./lanAgentRequestAccess.js";
-import { registerLanAgentBodyGuard, assertLanAgentBodyAuthority } from "./lanAgentBodyAuthority.js";
+import { registerLanAgentBodyGuard } from "./lanAgentBodyAuthority.js";
 import { LanAgentAuthority } from "./lanAgentAuthority.js";
 import { HostInstanceIdentityReset } from "./identityResetRoutes.js";
 import { AgentRequestStore } from "../agentRequests/store.js";
@@ -81,7 +81,7 @@ async function fixture(t: test.TestContext, overrides: Partial<CorePublicOperati
     if (!nonLan && evaluateLanAgentRequest(request, authority, true).kind !== "agent") { response.writeHead(401).end(); return; }
     if (nonLan) Object.defineProperty(request.socket, "remoteAddress", { value: "192.0.2.25", configurable: true });
     markAuthenticatedConnectionRequest(request, () => { if (!connectionEnabled) throw new Error("Original fixture connection revoked."); assertTrustedLanAgentPrincipal(request); });
-    registerLanAgentBodyGuard(request, body => assertLanAgentBodyAuthority(new URL(request.url!, "http://fixture").pathname, body, undefined));
+    registerLanAgentBodyGuard(request, () => {});
     if (!registry.handle(request, new URL(request.url!, "http://fixture"), response)) response.writeHead(404).end();
   });
   await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));

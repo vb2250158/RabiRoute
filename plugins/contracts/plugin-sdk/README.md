@@ -59,3 +59,17 @@ export const activate = definePlugin({ async activate(context) {
 `invoke(operation, payload, invocation?)` 持有一次受理租约直到操作真正结束。多步工作可使用 `acquire(snapshot)` / `lease.call()` / `lease.release()`，并在 `finally` 释放；`runAcceptedWork()` 适合原 owner 子进程、回执或复合操作。停用后拒绝新工作，已受理请求保留原快照和租约；替换 activation 等待原 owner 完整退役后开放受理，不能自动重发或停止外部 Agent。
 
 `agent-adapter.json` 的同步兼容投影由 `node scripts/generate-agent-plugin-metadata.mjs` 生成。它仅服务旧同步描述及 wire 兼容调用，不代表启用或就绪；运行中通过原 profile、原生服务和声明元数据解析。待这些同步消费者全部迁到声明读取端口并完成历史绑定回归后，删除生成投影及兼容导出。配置增量及共享 worker 的实际依赖边界见 [Agent 接入规范](../../../docs/agent-adapter-standard-requirements.md) 和 [publication 生命周期](../../../docs/plugin-publication-lifecycle.md)。
+
+## 在独立插件仓库构建
+
+安装 `@rabiroute/plugin-sdk` 与 `@rabiroute/host-api`，在包中运行 `rabi-plugin-build --root . --output ./dist`。`runtime.build.json`、`manager-runtime.build.json` 和 `egress-runtime.build.json` 描述本插件真实源码入口。源码在自己的目录内相互引用；共享宿主能力使用 `@rabiroute/host-api/<moduleId>`。builder 只读已发布的导出签名，不读取宿主 TypeScript 源码。已有输出带有本插件构建回执时可重复构建；编译失败保留上一份可用输出，未知目录不会被覆盖。
+
+构建产生的 `hostModules` 由宿主预加载；`createImplementation(host)` 使用原共享拥有者，保持配置、路由、存储和回执的单一状态。worker 是独立进程，不能直接使用主进程宿主端口；给 worker 提供进程内契约后再构建。前端入口仍使用已声明的 Web 构建工具与共享 UI 依赖。
+
+扫描 worker 在 descriptor 中声明 `mode: "host-factory"`，产物导出 `hostModules` 与 `createImplementation(host)`。通用宿主 worker 在子进程中创建并准备自己的公共端口，再调用任务指定的扫描导出；主进程端口不会跨进程传递。普通独立 worker 直接打包自己的代码和资源，不能导入主进程宿主端口。
+
+## 测试入口
+
+在宿主工作区先运行 `npm run build`，再运行 `npm run test:plugins`，收集原生插件和既有集成的 MJS 测试；根 `npm test` 也包含此入口，TypeScript 测试保留在主测试阶段。
+
+独立插件的合同测试使用 `createPluginTestHarness()`。视频等验证真实宿主拥有者的集成 fixture 需要当前宿主工作区、构建产物及其开发依赖，按集成测试运行；它们不代表一个独立插件仓库已经安装或运行了宿主。

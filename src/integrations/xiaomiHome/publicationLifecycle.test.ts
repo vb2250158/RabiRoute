@@ -10,20 +10,20 @@ import { createPluginTestHarness,PublicationScope } from '@rabiroute/plugin-sdk'
 import { GenerationRuntime } from '../../plugin-kernel/generationRuntime.js';
 import type { PluginCandidate } from '../../plugin-kernel/types.js';
 import { ManagerPluginRouteRegistry } from '../../manager/managerPluginRouteRegistry.js';
-import { XiaomiHomeArtifactStore } from './artifactStore.js';
-import { XiaomiHomeSettingsStore,XiaomiHomeRuntimeController } from './settingsRuntime.js';
-import { XiaomiHomeEventMonitor } from './eventMonitor.js';
-import { HomeAssistantActivityMonitor } from './activityMonitor.js';
-import { XiaomiHomeClipCaptureWorker } from './clipCapture.js';
+import { XiaomiHomeArtifactStore } from '../../plugins/io.rabiroute.manager.xiaomi-home/src/integrations/xiaomiHome/artifactStore.js';
+import { XiaomiHomeSettingsStore,XiaomiHomeRuntimeController } from '../../plugins/io.rabiroute.manager.xiaomi-home/src/integrations/xiaomiHome/settingsRuntime.js';
+import { XiaomiHomeEventMonitor } from '../../plugins/io.rabiroute.manager.xiaomi-home/src/integrations/xiaomiHome/eventMonitor.js';
+import { HomeAssistantActivityMonitor } from '../../plugins/io.rabiroute.manager.xiaomi-home/src/integrations/xiaomiHome/activityMonitor.js';
+import { XiaomiHomeClipCaptureWorker } from '../../plugins/io.rabiroute.manager.xiaomi-home/src/integrations/xiaomiHome/clipCapture.js';
 import { markAuthenticatedConnectionRequest } from '../../manager/connectionRequestAccess.js';
-import { createXiaomiHomeManagerOperations } from './managerOperations.js';
-import type { XiaomiHomeManagerRoutesContext } from './managerRoutes.js';
-import { MessageAdapterScanProviderRegistry } from '../../manager/messageAdapterControl.js';
-import { createXiaomiHomeGatewayDelivery } from './gatewayDelivery.js';
+import { createXiaomiHomeManagerOperations } from '../../plugins/io.rabiroute.manager.xiaomi-home/src/integrations/xiaomiHome/managerOperations.js';
+import type { XiaomiHomeManagerRoutesContext } from '../../plugins/io.rabiroute.manager.xiaomi-home/src/integrations/xiaomiHome/managerRoutes.js';
+import { MessageAdapterScanProviderRegistry } from '../../plugins/io.rabiroute.manager.message-adapter-control/src/manager/messageAdapterControl.js';
+import { createXiaomiHomeGatewayDelivery } from '../../plugins/io.rabiroute.manager.xiaomi-home/src/integrations/xiaomiHome/gatewayDelivery.js';
 
 // Controlled handoff tests link the real entry to source implementations so native
 // retirement can be gated. pluginContract.test separately executes the real built package.
-const entryUrl = new URL('../../../plugins/builtin/io.rabiroute.manager.xiaomi-home/1.0.0/manager.mjs', import.meta.url);
+const entryUrl = new URL('../../plugins/io.rabiroute.manager.xiaomi-home/manager.mjs', import.meta.url);
 const sdkUrl = new URL('../../../plugins/contracts/plugin-sdk/index.mjs', import.meta.url);
 const source = fs.readFileSync(entryUrl, 'utf8')
   .replace('from "@rabiroute/plugin-sdk"', `from ${JSON.stringify(sdkUrl.href)}`)

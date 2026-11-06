@@ -7,10 +7,10 @@ import test from "node:test";
 import { AgentRequestStore, agentDeliveryPromptHash, type AgentRequestRecord } from "./store.js";
 import { endpointExecutionOptionsHash } from "./executionOptions.js";
 import { ManagerPluginRouteRegistry } from "../manager/managerPluginRouteRegistry.js";
-import { createAgentCommunicationRecordOperations } from "../manager/agentCommunicationRecordOperations.js";
+import { createAgentCommunicationRecordOperations } from "../plugins/io.rabiroute.manager.agent-communication/src/manager/agentCommunicationRecordOperations.js";
 
 /** Entirely synthetic history: no runtime file, endpoint, credential or route is reused. */
-export function syntheticAgentRequestState(deliveryCount = 370, reminderCount = 8) {
+export function syntheticAgentRequestState(deliveryCount = 370, pendingCount = 8) {
   const prompt = "Synthetic persisted delivery body. ".repeat(2048).slice(0, 65_536);
   const promptHash = agentDeliveryPromptHash(prompt), executionOptionsHash = endpointExecutionOptionsHash({});
   const endpoint = (sessionId: string) => ({ kind: "local" as const, managerInstanceId: "fixture-manager", agentId: "local:dsh",
@@ -25,17 +25,17 @@ export function syntheticAgentRequestState(deliveryCount = 370, reminderCount = 
       receipt: { deliveryId, generation, promptHash, executionOptionsHash, endpoint: target, accepted: true, action: "started", transport: "fixture" },
       createdAt: timestamp, updatedAt: timestamp, attemptCount: 1 }];
   }));
-  const requests: Record<string, AgentRequestRecord> = Object.fromEntries(Array.from({ length: reminderCount }, (_, index) => {
+  const requests: Record<string, AgentRequestRecord> = Object.fromEntries(Array.from({ length: pendingCount }, (_, index) => {
     const id = `fixture-request-${index}`;
     return [id, { id, deliveryId: `fixture-request-delivery-${index}`, status: "awaiting_response" as const,
       source: { threadId: "fixture-source", agentType: "agent" }, target: { threadId: "fixture-target", agentType: "agent" },
       responseInstruction: "Return the synthetic result.", createdAt: timestamp, updatedAt: timestamp,
-      reminderCount: 0, nextReminderAt: timestamp }];
+       }];
   }));
   return { version: 1, requests, deliveries };
 }
 
-for (const history of ["delivery prompts", "responded request results"] as const) test(`25MB ${history} initialization and overdue reminder burst keep independent HTTP health responsive`, { timeout: 45_000 }, async t => {
+for (const history of ["delivery prompts", "responded request results"] as const) test(`25MB ${history} initialization and cancellation burst keep independent HTTP health responsive`, { timeout: 45_000 }, async t => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "rabi-agent-request-scale-"));
   t.after(() => fs.rm(directory, { recursive: true, force: true }));
   const file = path.join(directory, "agent-requests.json"), raw = syntheticAgentRequestState(history === "delivery prompts" ? 370 : 0);
@@ -43,7 +43,7 @@ for (const history of ["delivery prompts", "responded request results"] as const
     const result = "Synthetic closed response. ".repeat(500).slice(0, 11_999) + ".";
     for (let index = 0; index < 2200; index++) {
       const id = `fixture-closed-request-${index}`, original = raw.requests["fixture-request-0"]!;
-      raw.requests[id] = { ...original, id, deliveryId: `fixture-closed-delivery-${index}`, status: "responded", nextReminderAt: undefined,
+      raw.requests[id] = { ...original, id, deliveryId: `fixture-closed-delivery-${index}`, status: "responded",
         response: { deliveryId: `fixture-closed-response-${index}`, by: original.target, result, nextAction: "No further action.", respondedAt: original.updatedAt } };
     }
   }
@@ -79,10 +79,10 @@ for (const history of ["delivery prompts", "responded request results"] as const
     stage = "load"; const loading = performance.now(); await store.ready(); loadMs = performance.now() - loading;
     stage = "sync-list"; const listing = performance.now(), records = store.list(); fullRequestListMs = performance.now() - listing;
     assert.equal(records.length, history === "delivery prompts" ? 8 : 2208);
-    const due = store.dueReminders(); assert.equal(due.length, 8);
-    stage = "single-write"; const first = performance.now(); await store.recordReminderResult(due[0]!.id, false, "Synthetic target unavailable."); singleCommitMs = performance.now() - first;
+    const due = store.unansweredTargetRequestIds("fixture-target").map(id => store.get(id)!); assert.equal(due.length, 8);
+    stage = "single-write"; const first = performance.now(); await store.cancel(due[0]!.id, "Synthetic original cancellation."); singleCommitMs = performance.now() - first;
     stage = "burst"; const burst = performance.now();
-    await Promise.all(due.slice(1).map(record => store.recordReminderResult(record.id, false, "Synthetic target unavailable.")));
+    await Promise.all(due.slice(1).map(record => store.cancel(record.id, "Synthetic original cancellation.")));
     burstMs = performance.now() - burst;
     if (history === "delivery prompts") {
       assert.equal(Object.hasOwn(store.getEndpointDelivery("fixture-delivery-0")!, "prompt"), false);
@@ -90,14 +90,14 @@ for (const history of ["delivery prompts", "responded request results"] as const
     } else assert.equal(store.get("fixture-closed-request-2199")!.response!.result, raw.requests["fixture-closed-request-2199"]!.response!.result);
     if (history === "responded request results") {
       stage = "registration"; registration = await registry.registerOperationsAsync("fixture-agent-requests", createAgentCommunicationRecordOperations({
-        agentRequests: store, refreshAgentRequestReminderTimers() {}, publishManagerEvent() {}, findSendTraces: () => []
+        agentRequests: store, publishManagerEvent() {}, findSendTraces: () => []
       }), new AbortController().signal);
       // Use the real public definition and its ordinary 100ms synchronous guard.
       stage = "registry-read"; const reading = performance.now();
       const response = await fetch(base + "/api/agent/requests", { signal: AbortSignal.timeout(30_000) });
       apiText = await response.text(); registryReadMs = performance.now() - reading;
       assert.equal(response.status, 200, `Actual Registry request failed: ${apiText.slice(0, 300)}`);
-      const filtered = await fetch(base + "/api/agent/requests?status=awaiting_response", { signal: AbortSignal.timeout(30_000) });
+      const filtered = await fetch(base + "/api/agent/requests?status=cancelled", { signal: AbortSignal.timeout(30_000) });
       assert.equal(filtered.status, 200);
       assert.equal((await filtered.json()).data.requests.length, 8);
     }
@@ -115,10 +115,9 @@ for (const history of ["delivery prompts", "responded request results"] as const
     const persisted = JSON.parse(await fs.readFile(file, "utf8"));
     assert.equal(Object.keys(persisted.deliveries).length, history === "delivery prompts" ? 370 : 0);
     assert.deepEqual(persisted.deliveries, raw.deliveries);
-    for (const record of Object.values(persisted.requests) as Array<{ status: string; reminderCount: number; lastReminderError: string; nextReminderAt: string }>) {
+    for (const record of Object.values(persisted.requests) as Array<{ status: string; cancelReason: string }>) {
       if (record.status === "responded") continue;
-      assert.equal(record.reminderCount, 1); assert.equal(record.lastReminderError, "Synthetic target unavailable.");
-      assert.ok(Date.parse(record.nextReminderAt) > Date.now() - 1000);
+      assert.equal(record.status, "cancelled"); assert.equal(record.cancelReason, "Synthetic original cancellation.");
     }
     t.diagnostic(JSON.stringify({ history, errors, slowTicks, loadMs, fullRequestListMs, singleCommitMs, burstMs, registryReadMs })); assert.equal(errors.length, 0, JSON.stringify(errors)); assert.ok(latencies.length >= 5);
     assert.ok(Math.max(...latencies) < 500, `Independent health latency exceeded 500ms: ${Math.max(...latencies)}`);
@@ -132,7 +131,7 @@ for (const history of ["delivery prompts", "responded request results"] as const
       assert.equal(received.length, 2208);
       for (const record of received) assert.deepEqual(record, persisted.requests[record.id]);
     }
-    t.diagnostic(JSON.stringify({ history, fixtureBytes: bytes, deliveries: Object.keys(raw.deliveries).length, reminderCommits: 8, loadMs, fullRequestListMs, singleCommitMs, burstMs,
+    t.diagnostic(JSON.stringify({ history, fixtureBytes: bytes, deliveries: Object.keys(raw.deliveries).length, cancellationCommits: 8, loadMs, fullRequestListMs, singleCommitMs, burstMs,
       registryReadMs, apiResponseBytes: apiText === undefined ? 0 : Buffer.byteLength(apiText),
       healthSamples: latencies.length, healthMaximumMs: Math.max(...latencies), loopMaximumDriftMs: Math.max(...drifts) }));
   } finally { await fs.rm(directory, { recursive: true, force: true }); }

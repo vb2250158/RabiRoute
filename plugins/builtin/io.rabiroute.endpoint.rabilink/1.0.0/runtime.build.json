@@ -1,4 +1,0 @@
-{
-  "source": "src/adapters/rabilinkAdapter.ts",
-  "factory": "createRabiLinkAdapter"
-}

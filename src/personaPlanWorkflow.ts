@@ -97,10 +97,7 @@ const STATUS_STATES = new Set<PersonaPlanStatusState>(["enabled", "retiring", "r
 const CURRENT_STEP_POLICIES = new Set<PersonaPlanCurrentStepPolicy>(["required", "optional", "forbidden"]);
 const PLAN_VIEWS = new Set<PersonaPlanView>(["current", "plans"]);
 const HEX_COLOR = /^#[0-9a-f]{6}$/i;
-const DEFAULT_WORKFLOW_PATH = path.resolve(
-  path.dirname(fileURLToPath(import.meta.url)),
-  "../assets/default-persona-plan-workflow.json"
-);
+const DEFAULT_WORKFLOW_PATH = fileURLToPath(new URL("../assets/default-persona-plan-workflow.json", import.meta.url));
 const LEGACY_INFORMATION_NEEDED_DESCRIPTION = "分析已完成，但目标、范围、验收标准或实施依据仍不足，正在等待补充信息。";
 const LEGACY_INFORMATION_NEEDED_DESCRIPTION_EN = "Analysis is complete, but the goal, scope, acceptance criteria, or implementation evidence is still insufficient and requires more information.";
 

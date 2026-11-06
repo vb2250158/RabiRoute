@@ -249,7 +249,7 @@ Manager 只通过计划存储 Repository 新建、更新和归档此目录。旧
         "reason": "该变更会修改公开 Plan Schema 和双端用户界面。",
         "files": [
           { "path": "src/roleKnowledge.ts", "action": "modify", "change": "新增审批合同 Schema、规范化和写入校验。" },
-          { "path": "ribiwebgui/src/pages/RoleKnowledgePage.vue", "action": "modify", "change": "展示完整合同与缺失提示；资料不完整时禁用审批提交。" }
+          { "path": "src/plugins/io.rabiroute.manager.persona/web/pages/RoleKnowledgePage.vue", "action": "modify", "change": "展示完整合同与缺失提示；资料不完整时禁用审批提交。" }
         ],
         "commands": [
           { "command": "npm run build:backend", "purpose": "编译并验证 Manager 后端。", "expectedEffect": "只生成本地 dist 构建产物。" }

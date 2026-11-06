@@ -1,3 +1,4 @@
+import { canonicalManagerPluginFixture } from "./canonicalManagerPlugin.fixture.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createPluginTestHarness } from "@rabiroute/plugin-sdk";
@@ -26,8 +27,8 @@ test("performance retirement joins its collector after API and registration fail
     createPerformanceOperations: () => [],
     managerPluginRoutes: { registerOperationsAsync: async () => ({ async dispose() { throw operationError; } }) }
   };
-  const harness = createPluginTestHarness({ services: [["host.manager.performance@1", host]] });
-  const module = await import(new URL("../../plugins/builtin/io.rabiroute.manager.performance/1.0.0/manager.mjs", import.meta.url).href);
+  const { module, ports } = await canonicalManagerPluginFixture("performance", host);
+  const harness = createPluginTestHarness({ services: [["host.manager.performance@2", ports]] });
   await harness.activate(module);
   const publishedHook = host.recordManagerHttpRequest;
   assert.notEqual(publishedHook, originalHook);
@@ -56,8 +57,8 @@ test("persona operation retirement failure still joins and reports storage clean
       if (definitions === storageOperations) throw operationError;
     } }) }
   };
-  const harness = createPluginTestHarness({ services: [["host.manager.persona@1", host]] });
-  const module = await import(new URL("../../plugins/builtin/io.rabiroute.manager.persona/1.0.0/manager.mjs", import.meta.url).href);
+  const { module, ports } = await canonicalManagerPluginFixture("persona", host);
+  const harness = createPluginTestHarness({ services: [["host.manager.persona@2", ports]] });
   await harness.activate(module);
   const disposal = harness.dispose().then(() => { settled = true; throw new Error("cleanup must reject"); }, error => {
     settled = true;

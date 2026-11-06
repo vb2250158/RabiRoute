@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { SpeechControlRequestError, speechControlClient } from "../src/speech/speechControlClient";
+import { SpeechControlRequestError, speechControlClient } from "../../src/plugins/io.rabiroute.manager.speech/web/speech/speechControlClient";
 
 test("manual ASR requests words and returns separate provider observations", async () => {
   const originalFetch = globalThis.fetch;

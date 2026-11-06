@@ -83,7 +83,7 @@ test("each WebGUI theme keeps its CSS tokens and Vuetify colors in its own folde
 });
 
 test("desktop settings expose cloning and a bounded custom theme editor", () => {
-  const source = fs.readFileSync(path.join(root, "src", "components", "renderers", "DesktopSettingsRenderer.vue"), "utf8");
+  const source = fs.readFileSync(path.join(root, "../src/plugins/io.rabiroute.manager.desktop/web/components/renderers/DesktopSettingsRenderer.vue"), "utf8");
   assert.match(source, /添加自定义主题/);
   assert.match(source, /保存并应用/);
   assert.match(source, /INTERFACE_THEME_COLOR_KEYS/);
@@ -94,8 +94,8 @@ test("desktop settings expose cloning and a bounded custom theme editor", () => 
 
 test("theme-bound text and knowledge surfaces use semantic tokens", () => {
   const styles = fs.readFileSync(path.join(root, "src", "styles.css"), "utf8");
-  const performance = fs.readFileSync(path.join(root, "src", "components", "renderers", "PerformanceStatusRenderer.vue"), "utf8");
-  const speech = fs.readFileSync(path.join(root, "src", "components", "renderers", "SpeechStatusRenderer.vue"), "utf8");
+  const performance = fs.readFileSync(path.join(root, "../src/plugins/io.rabiroute.manager.performance/web/components/renderers/PerformanceStatusRenderer.vue"), "utf8");
+  const speech = fs.readFileSync(path.join(root, "../src/plugins/io.rabiroute.manager.speech/web/components/renderers/SpeechStatusRenderer.vue"), "utf8");
 
   for (const legacy of ["--surface-card", "--shadow-card", "--text-muted", "--rr-danger"]) {
     assert.doesNotMatch(`${styles}\n${performance}\n${speech}`, new RegExp(legacy));
@@ -157,7 +157,7 @@ test("Vuetify labels and subtitles keep full opacity", () => {
 });
 
 test("performance slow-request metadata uses readable secondary text", () => {
-  const source = fs.readFileSync(path.join(root, "src", "pages", "PerformancePage.vue"), "utf8");
+  const source = fs.readFileSync(path.join(root, "../src/plugins/io.rabiroute.manager.performance/web/pages/PerformancePage.vue"), "utf8");
   assert.match(source, /\.performance-slow-list span\s*\{[^}]*color:\s*var\(--rr-muted\)/s);
   assert.doesNotMatch(source, /\.performance-slow-list span\s*\{[^}]*color:\s*var\(--rr-muted-faint\)/s);
 });
@@ -266,7 +266,7 @@ test("theme-sensitive controls keep readable colors without fading whole cards",
 
 test("theme-sensitive tabs and deferred knowledge states use shared surface tokens", () => {
   const styles = fs.readFileSync(path.join(root, "src", "styles.css"), "utf8");
-  const persona = fs.readFileSync(path.join(root, "src", "pages", "PersonaTemplatePage.vue"), "utf8");
+  const persona = fs.readFileSync(path.join(root, "../src/plugins/io.rabiroute.manager.persona/web/pages/PersonaTemplatePage.vue"), "utf8");
 
   assert.match(persona, /\.persona-page-tabs\s*\{[^}]*background:\s*var\(--rr-subtle\)/s);
   assert.match(styles, /\.automation-tabs\s*\{[^}]*background:\s*var\(--rr-subtle\)/s);
@@ -286,7 +286,7 @@ test("theme-sensitive tabs and deferred knowledge states use shared surface toke
 
 test("dark identity cards and disabled controls keep readable theme colors", () => {
   const styles = fs.readFileSync(path.join(root, "src", "styles.css"), "utf8");
-  const performance = fs.readFileSync(path.join(root, "src", "pages", "PerformancePage.vue"), "utf8");
+  const performance = fs.readFileSync(path.join(root, "../src/plugins/io.rabiroute.manager.performance/web/pages/PerformancePage.vue"), "utf8");
 
   assert.match(styles, /html\[data-rabiroute-theme="dark"\] :is\([\s\S]*\.identity-habit-card/);
   assert.match(styles, /html\[data-rabiroute-theme\] :is\([\s\S]*\.v-selection-control--disabled,[\s\S]*opacity:\s*1\s*!important/);

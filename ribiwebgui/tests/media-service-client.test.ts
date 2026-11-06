@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createMediaServiceClient, MediaServiceChangedError } from "../src/pages/mediaServiceClient";
-import { createSpeechControlClient } from "../src/speech/speechControlClient";
+import { createMediaServiceClient, MediaServiceChangedError } from "../../src/plugins/io.rabiroute.manager.video/web/pages/mediaServiceClient";
+import { createSpeechControlClient } from "../../src/plugins/io.rabiroute.manager.speech/web/speech/speechControlClient";
 
 test("workspace requests, resources and events remain local while only compute carries the selected PC", async () => {
   const calls: { url: string; init?: RequestInit }[] = [];

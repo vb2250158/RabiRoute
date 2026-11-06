@@ -31,7 +31,7 @@ const legacyWearableTaskMigration = read("./Migrate-LegacyWearableHealthTask.ps1
 const installer = read("../installer/RabiRoute.iss");
 const autostartConfigurator = fileURLToPath(new URL("./Configure-WindowsAutostart.ps1", import.meta.url));
 const autostartConfiguratorSource = read("./Configure-WindowsAutostart.ps1");
-const speechServiceInstaller = read("../plugin-adapters/rabi-speech/scripts/install-service.ps1");
+const speechServiceInstaller = read("../src/plugins/rabi-speech/scripts/install-service.ps1");
 const speechPluginDocs = read("../docs/rabispeech-plugin.md");
 const speechPluginDocsEn = read("../docs/rabispeech-plugin_en.md");
 

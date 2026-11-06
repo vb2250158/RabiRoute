@@ -16,7 +16,7 @@ import type { AgentAdapterType } from "../agentAdapters/types.js";
 import { agentIdentityForMessageSource } from "../shared/rabiMessage.js";
 import type { RabiLinkAgentPrincipal } from "./rabiLinkAgentDevices.js";
 import { parseAgentAdapterType } from "../agentAdapters/types.js";
-import { completeAgentSessionId, normalizeAgentThreadSourceType } from "../agentRequests/requestValidation.js";
+import { agentWorkspaceMismatch, completeAgentSessionId, normalizeAgentThreadSourceType } from "../agentRequests/requestValidation.js";
 import { EndpointDeliveryNotSentError, validateEndpointDeliveryNoFrameProof } from "../agentRequests/deliveryFailure.js";
 import type { PeerAgentEndpointBridge } from "./peerAgentEndpointBridge.js";
 
@@ -172,6 +172,8 @@ export function createAgentEndpointDelivery(context: AgentEndpointDeliveryContex
         receipt = await context.registry.manageAgent(delivery.target.instanceId!, reconcile ? "reconcile_prepared_delivery" : "prepared_delivery",
           { agentId: delivery.target.agentId, agentAdapter: delivery.target.provider, delivery }, 30_000, assertAuthorized);
       } catch (error) {
+        // Rebuild guidance from the admitted original target, never from remote paths or arbitrary error properties.
+        if ((error as { code?: unknown })?.code === "AGENT_WORKSPACE_MISMATCH") throw agentWorkspaceMismatch(delivery.target);
         if (!reconcile && error && typeof error === "object"
           && (error as { code?: unknown }).code === "LAN_AGENT_MANAGEMENT_NOT_SENT"
           && (error as { deliveryFrameSent?: unknown }).deliveryFrameSent === false) throw new EndpointDeliveryNotSentError(error);

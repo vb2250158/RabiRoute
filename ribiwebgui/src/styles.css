@@ -1,5 +1,6 @@
 @import "./themes/light/tokens.css";
 @import "./themes/dark/tokens.css";
+@import "./scrollbars.css";
 
 * {
   box-sizing: border-box;
@@ -4549,7 +4550,6 @@ button.channel-topology-node:focus-visible {
   max-height: 204px;
   overflow-y: auto;
   padding: 3px;
-  scrollbar-width: thin;
 }
 
 .knowledge-plan-list-more-tags { color: var(--rr-accent-text); }
@@ -4629,7 +4629,6 @@ button.channel-topology-node:focus-visible {
   overflow-x: hidden;
   overflow-y: auto;
   padding-right: 2px;
-  scrollbar-width: thin;
   overscroll-behavior: contain;
 }
 

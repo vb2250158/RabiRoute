@@ -1,0 +1,15 @@
+{
+  "exports": [
+    {
+      "source": "src/plugins/io.rabiroute.endpoint.feishu/src/feishu.ts",
+      "name": "sendFeishuText"
+    }
+  ],
+  "ownedSources": [
+    "src/plugins/io.rabiroute.endpoint.feishu/src/feishu.ts"
+  ],
+  "packageId": "io.rabiroute.endpoint.feishu",
+  "ownedPrefixes": [
+    "src/plugins/io.rabiroute.endpoint.feishu/"
+  ]
+}

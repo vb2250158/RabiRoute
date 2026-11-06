@@ -6,8 +6,8 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { AgentProviderProcessScope, CopilotControlService, resolveCopilotInstallNpmCli } from "./agentProviderControlService.js";
-import { createCopilotControlOperations } from "./agentProviderControlRoutes.js";
+import { AgentProviderProcessScope, CopilotControlService, resolveCopilotInstallNpmCli } from "../plugins/io.rabiroute.agent.copilot-cli/src/manager/agentProviderControlService.js";
+import { createCopilotControlOperations } from "../plugins/io.rabiroute.agent.copilot-cli/src/manager/copilotControlOperations.js";
 import { ManagerPluginRouteRegistry } from "./managerPluginRouteRegistry.js";
 import { markAuthenticatedConnectionRequest } from "./connectionRequestAccess.js";
 

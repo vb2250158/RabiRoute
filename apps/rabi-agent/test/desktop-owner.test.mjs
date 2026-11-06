@@ -52,8 +52,9 @@ test("a child mode without the main-program IPC cannot start an independent conn
 });
 
 test("native tray renders owner snapshots and exits when its owner pipe closes", { skip: process.platform !== "win32" }, async t => {
-  const script = path.join(packageRoot, "desktop", "tray.ps1");
-  const ui = launch("powershell.exe", ["-NoProfile", "-NonInteractive", "-STA", "-ExecutionPolicy", "Bypass", "-File", script]);
+  const executable = path.join(packageRoot, "dist", "native", "RabiAgent.Tray.exe");
+  assert.equal(fs.existsSync(executable), true, "build native assets before Windows acceptance");
+  const ui = launch(executable, []);
   t.after(() => { if (alive(ui.child.pid)) ui.child.kill(); });
   await waitFor(() => ui.output().includes('"type":"ready"'));
   ui.child.stdin.write(`${JSON.stringify({ type: "snapshot", summary: "已连接主机", running: true, busy: false, startup: true, details: "无凭据状态记录" })}\n`);
@@ -79,6 +80,11 @@ setInterval(()=>{},1000);
     fs.mkdirSync(path.join(root, "desktop"));
     fs.copyFileSync(path.join(packageRoot, "desktop", "tray.ps1"), path.join(root, "desktop", "tray.ps1"));
     fs.copyFileSync(path.join(packageRoot, "desktop", "rabi-agent.ico"), path.join(root, "desktop", "rabi-agent.ico"));
+    const native = path.join(packageRoot, "dist", "native", "RabiAgent.Tray.exe");
+    if (fs.existsSync(native)) {
+      fs.mkdirSync(path.join(root, "dist", "native"), { recursive: true });
+      fs.copyFileSync(native, path.join(root, "dist", "native", "RabiAgent.Tray.exe"));
+    }
   }
   __test.writeCurrentRelease(config, entry, "a".repeat(64));
   const pointerBytes = fs.readFileSync(path.join(root, "current-release.json"));
@@ -102,7 +108,7 @@ setInterval(()=>{},1000);
     await waitFor(() => [...children].every(pid => !alive(pid)));
     assert.equal(fs.readFileSync(config, "utf8"), configBytes);
     assert.deepEqual(fs.readFileSync(path.join(root, "current-release.json")), pointerBytes);
-    fs.rmSync(root, { recursive: true, force: true });
+    await fs.promises.rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
   });
   let state;
   await waitFor(async () => { try { state = await command("status"); return state.summary === "已连接主机"; } catch { return false; } });

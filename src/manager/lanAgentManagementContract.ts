@@ -1,4 +1,4 @@
-import type { ApiOperationContract, ApiSchema } from "./apiOperationContract.js";
+import type { ApiOperationContract, ApiOperationResult, ApiSchema } from "./apiOperationContract.js";
 
 const text = { type: "string" }, strings = { type: "array", items: text }, flag = { type: "boolean" };
 const object = (properties: Record<string, ApiSchema>, required = Object.keys(properties), additionalProperties = false): ApiSchema =>
@@ -21,7 +21,21 @@ const json = (schema: ApiSchema) => ({ mediaType: "application/json", schema });
 const credentialDiagnostics = { type: "array", items: object({ index: { type: "integer", minimum: 0 }, nodeId: text,
   reason: { enum: ["invalid_record", "duplicate_identity"] } }, ["index", "reason"]) };
 const envelope = (name: string, schema: ApiSchema) => json(object({ code: { const: 0 }, [name]: schema }));
-const failure = json(object({ code: { const: -1 }, error: text, message: text, uncertain: flag, taskId: text }, ["code"]));
+const failure = json(object({ code: { const: -1 }, error: text, message: text, uncertain: flag, taskId: text,
+  errorCode: text, field: text, reason: text, repair: text, retryable: { const: false } }, ["code"]));
+
+/** The registry owns these transport codes; do not infer parameter failures from arbitrary messages. */
+export function lanAgentManagementTransportFailure(error: unknown, operationId: string, readOnly: boolean): ApiOperationResult | undefined {
+  const code = (error as { code?: unknown })?.code;
+  if (code !== "LAN_AGENT_MANAGEMENT_TIMEOUT" && code !== "LAN_AGENT_MANAGEMENT_NOT_SENT") return;
+  return { status: 503, headers: { "cache-control": "no-store" }, body: { code: -1, errorCode: code, field: "operation",
+    reason: readOnly ? "remote_query_failed" : "remote_operation_failed",
+    message: readOnly ? "The remote lookup could not be completed; no parameter values were discovered."
+      : "The remote operation could not be confirmed. Keep its original intent and receipt.",
+    repair: `Read GET /api/lan-agent/instances to check the same instance/Agent binding and connection. Read GET /api/agent/help?operationId=${encodeURIComponent(operationId)} for the current contract. `
+      + "A failed lookup does not mean the session or file is absent. 401/403 is an access failure; restore the existing connection's access. Keep the original IDs and request; do not automatically replay a write.",
+    retryable: false, ...(!readOnly && code === "LAN_AGENT_MANAGEMENT_TIMEOUT" ? { uncertain: true } : {}) } };
+}
 const nativeBody = (properties: Record<string, ApiSchema> = {}, required: string[] = []): ApiSchema => object(properties, required, true);
 const nativeConversion = { description: "Preserves the original owner conversion/default; named native validation determines admissible values." };
 const taskInput = { provider: text, targetAgent: text, agentId: text, threadId: text, message: nativeConversion,

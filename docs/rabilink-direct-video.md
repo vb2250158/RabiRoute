@@ -44,7 +44,7 @@ SDK 请求为 15 fps、2 Mbit/s。发送缓冲最多 1 MiB，超限立即结束�
 
 ## 验证
 
-代码验证：`node --import tsx --test src/manager/rabiDirectVideo.test.ts`，并运行 `src/manager/rabiLinkRelayRuntime.test.ts` 与 `scripts/rabilink-relay-speech-messages.test.mjs`。覆盖直连字节完整性、会话释放、重复会话拒绝、信令限界、认证以及拒绝 TURN 配置。
+代码验证：`node --import tsx --test src/plugins/io.rabiroute.manager.rabilink-relay/src/manager/rabiDirectVideo.test.ts`，并运行 `src/manager/rabiLinkRelayRuntime.test.ts` 与 `scripts/rabilink-relay-speech-messages.test.mjs`。覆盖直连字节完整性、会话释放、重复会话拒绝、信令限界、认证以及拒绝 TURN 配置。
 
 隔离手机测试使用 `-PmobileSlim -PvideoAcceptance` 构建 `:app:assembleDebug` 和 `:app:assembleDebugAndroidTest`，生成独立的 `com.rabi.link.videoacceptance` 包，不覆盖用户应用。启动 `node --import tsx scripts/test-rabi-direct-video-receiver.ts`，从它的 READY 输出读取实际端口，再用 `adb reverse` 只转发此 TCP 协商端口。通过 instrumentation 参数 `signalPort` 指定该端口；`camera=false` 测试合成数据，`camera=true` 进行约 40 秒摄像头测试。二者必须分开记录。ICE 视频数据仍走网络，不走这条 USB TCP 转发。
 

@@ -1,5 +1,5 @@
 import { getTimeoutMs } from "./timeoutSettingsClient";
-import type { VacuumRemoteSnapshot } from "../../src/integrations/xiaomiHome/vacuumRemote";
+import type { VacuumRemoteSnapshot } from "../../src/plugins/io.rabiroute.manager.xiaomi-home/src/integrations/xiaomiHome/vacuumRemote";
 export type RemoteSession = VacuumRemoteSnapshot;
 export type RemoteCapabilities = {available:boolean;reason?:string;resourceId?:string;expectedStateVersion?:string;protocolRevision?:string;directions:string[];pauseBeforeEnter?:boolean;activeSession?:RemoteSession};
 const root="/api/agent/xiaomi-home/vacuum-remote";

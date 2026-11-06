@@ -24,4 +24,4 @@ PC 保存唯一的消息队列与回执。每次投递保留原始 `deliveryId`�
 
 传输复用 [通用接口客户端](generic-api-transport.md)。未配对手机时使用有限 HTTP 中转；配对后手机使用眼镜独立身份的加密 Manager Tunnel，按 LAN → P2P → Relay 连接，并提供流与 WebSocket 升级。正式 session、claim 和 response 沿同一眼镜源身份传输。协议源码已验证，实际眼镜访问手机、HTTPS 地址与线路选择仍需真机验收。新增 PC API 不需要增加 Relay 业务适配器。
 
-开发验证入口：`src/agentAdapters/deviceAgentOwner.test.ts` 使用真实 HTTP 与 PC 状态存储验证原消息投递；`src/manager/deviceAgentEndpointBridge.test.ts` 验证通用投递工厂的正式往返回复；`src/manager/deviceAgentPeerEndpoint.test.ts` 验证两台独立 HTTP Manager 的会话证明、唯一账本与实际领取回执；`scripts/Smoke-DeviceAgentPage.mjs` 验证既有推理循环、语音引导和不确定结果。它们不替代真实 ASR、TTS、按键唤醒或眼镜模型验收。
+开发验证入口：`src/plugins/io.rabiroute.agent.device-agent/src/agentAdapters/deviceAgentOwner.test.ts` 使用真实 HTTP 与 PC 状态存储验证原消息投递；`src/plugins/io.rabiroute.agent.device-agent/src/manager/deviceAgentEndpointBridge.test.ts` 验证通用投递工厂的正式往返回复；`src/manager/deviceAgentPeerEndpoint.test.ts` 验证两台独立 HTTP Manager 的会话证明、唯一账本与实际领取回执；`scripts/Smoke-DeviceAgentPage.mjs` 验证既有推理循环、语音引导和不确定结果。它们不替代真实 ASR、TTS、按键唤醒或眼镜模型验收。

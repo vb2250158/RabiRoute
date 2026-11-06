@@ -7,7 +7,7 @@ import ts from 'typescript';
 import type { QqGroupMember } from '../../src/shared/qqConversationHistory';
 
 test('clearing member search restores every healthy member without losing roles or identities',()=>{
-  const source=fs.readFileSync(new URL('../src/components/QqGroupMembers.vue',import.meta.url),'utf8');
+  const source=fs.readFileSync(new URL('../../src/plugins/io.rabiroute.manager.persona/web/components/QqGroupMembers.vue',import.meta.url),'utf8');
   const setup=parse(source).descriptor.scriptSetup!;
   const ast=ts.createSourceFile('members.ts',setup.content,ts.ScriptTarget.Latest,true,ts.ScriptKind.TS);
   const body=ast.statements.filter(node=>!ts.isImportDeclaration(node)).map(node=>node.getFullText(ast)).join('\n');

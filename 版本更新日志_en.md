@@ -6,6 +6,40 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.7.0 - 2026-11-06
+
+- Coalesce concurrent page-resource verification by revision, retaining the existing successful cache and allowing retries after failure instead of repeatedly reading the same files in parallel.
+- Include shared-directory configuration recovery, compatible archive acknowledgements and partial-media playback while preserving event/object IDs. Confirm plugin retirement against its existing absolute deadline instead of reporting early timer wakes as timeouts.
+
+- Incrementally index newly completed lines in the same append-only history file and page task/peer lists through indexed summaries. Rebuild after replacement or truncation. Preserve damaged rows with local diagnostics while allowing healthy new messages and original-ID replay deduplication.
+- Cache Hook state within its original owner, invalidating by file revision and publishing only after atomic writes. Reduce repeated full-file parsing and allocations. Remove the duplicate Hook HTTP entry and default tool-denial logic so normal interfaces remain callable.
+
+- Include cross-instance plan bindings through persistence, status, navigation, completion Hooks and original receipts, preserving distinct local and remote owners with the same session ID.
+- Correct strict completion diagnostics and separate local/remote session state keys while retaining original records and receipts. Invalid bindings isolate only the affected plan and preserve its file and diagnostic identity.
+
+- Preserve damaged audio-source settings and show a diagnostic with recovery through the existing source selector. Keep current state until saving succeeds; browser playback and uploaded-audio recognition remain independently available.
+
+- Add independent drag/keyboard resizing and saved widths for task/group-member rails. Theme internal WebGUI and native Qt scrollbars with transparent tracks and thin thumbs, including popups and custom terminal sliders; retain the browser page scrollbar. Retain custom bubble colors, skin and opacity.
+
+- Brand Windows Host, Runtime, Desktop, Speech and remote Agent processes with product names and icons. Retain interpreter copyright and versions; modified PE resources are explicitly unsigned. Track each owned process tree through a Windows Job until its final descendant exits, preserving owners after unconfirmed cleanup. Rebuild the Host/bootstrap/runtime and verify the final unified candidate before installed adoption.
+- Fix malformed JSON handling in XiaoAI connector `0.1.1`: fail the request while the same process accepts the next original-ID message. Preserve unknown rule extensions and legacy source scopes during configuration saves without reviving inactive known fields.
+
+- Add an avatar group picker to QQ automation rules, with group name/number search and manual group numbers. Retain the configured number while directory details load.
+
+- Unify Agent and QQ history with two-line conversation rows, shared column preferences, time separators, and message details. Collapse long messages by displayed height. QQ automation rules can show a specified group or private contact avatar and name, with exact QQ-number matching for private rules. Preserve healthy directory sections when another QQ read fails. Source candidate only; unified release and visual acceptance remain pending.
+
+- Parameter errors identify fields, causes and current operation contracts. Frozen workspace mismatches provide a stable code and same-target read-only discovery while preserving original delivery state, prompt, IDs and receipts. Uploads identify fields; known remote transport failures are separate from parameter errors. See API error recovery for coverage. This is a source candidate; installation acceptance remains with the original publisher.
+
+- Consolidate 51 plugin source folders: 42 native plugins and nine existing integrations each own their implementation, UI, translations, assets, tests and documentation. Source folders no longer contain release-version copies; artifacts remain isolated by package ID and version.
+- Set the new native source baseline to `0.1.1`, while published integrations continue their own version sequences. Update the Host architecture and extension points to `0.7.0`, the plugin SDK to `1.1.0`, and remote client source to `0.3.1`. Plugin releases no longer require a Host version bump.
+- Construct and retire plugin resources within their activation owner, sharing public state through explicit Host interfaces. Missing dependencies affect only their consumers. Remove retired controllers, unused compatibility entry points and duplicate implementations.
+- Unify storage namespaces by plugin and actual instance. Adopt exact declared legacy sources while preserving original data and migration receipts. Correct packaged authentication defaults; retain external bindings for existing Xiaomi runtimes without copying active virtual machines or media.
+- Isolate damaged configuration, history and storage rows so healthy entries remain usable. Preserve original data on read failures instead of overwriting it with an empty result.
+- Remove Agent-request reminder timers, obsolete mutation methods and refresh ports. Show unanswered requests through the current session's natural Stop hook while retaining original request and response receipts. Knowledge callbacks retain their own owner.
+- Add independent builds, public source export and per-plugin version tools. Check each plugin's direct dependencies and share public-source filtering across export and packaging. Keep authentication implementation, schemas and examples; exclude real credentials, stores, caches and private keys.
+- Save derived ASR transcripts through the pet plugin's existing interface after raw history is durable; local projection failures do not block message handling. Normalize Xiaomi events inside their plugin before generic command ingress, preserving event IDs, routes and storage-generation fencing.
+- Bundle software avatars locally with their Agent plugin and source attribution. Task lists, related tasks and message senders share one avatar component; user messages retain their user avatar.
+
 ## 0.6.4 - 2026-11-06
 
 - Keep the original Manager storage-configuration entry available when its previous directory is unreadable, then recapture through the existing serialized lifecycle. Preserve ordinary route-write admission and authentication instead of blocking recovery on the failed catalog.
@@ -2605,7 +2639,7 @@ This update adds the Enterprise WeChat/WeCom intelligent robot message terminal,
 ### Enterprise WeChat messaging terminal
 
 - Added `wecom` message adapter, `wecom_chat` pipeline preset and `wecom_message` route kind; enterprise WeChat messages will be written to `wecom-messages.jsonl`, and then enter forwarding, RouteDecision and AgentPacket.
-- Added `src/wecom.ts` SDK packaging to centrally handle enterprise WeChat intelligent robot connection, text/Markdown sending, media uploading and sending, and error normalization.
+- Added `src/plugins/io.rabiroute.endpoint.wecom/src/wecom.ts` SDK packaging to centrally handle enterprise WeChat intelligent robot connection, text/Markdown sending, media uploading and sending, and error normalization.
 - `/api/agent/replies` supports postback to enterprise WeChat group chat according to `replyContextJson` or explicit `adapterType: "wecom"`, and adheres to the output switch and payload type restrictions of `messageAdapterPolicies.wecom`.
 - Manager and RabiWebGUI add new enterprise WeChat configuration, status scanning, message log and adapter log views; WeCom does not declare the local ingress port.
 - Added `docs/wecom-integration.md` and `examples/data/route/wecom/adapterConfig.json`, public examples only use placeholder Bot ID, secret and local path.

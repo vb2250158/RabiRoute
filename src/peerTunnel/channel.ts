@@ -2,6 +2,8 @@ import { getTimeoutMs } from "../shared/timeoutSettings.js";
 import { EventEmitter } from "node:events";
 import WebSocket from "ws";
 import type { RTCDataChannel } from "werift";
+import type { TunnelChannel } from "./channelContract.js";
+export type { TunnelChannel } from "./channelContract.js";
 
 class BufferedChannel extends EventEmitter implements TunnelChannel {
   send!: (bytes: Buffer) => Promise<void>;
@@ -26,7 +28,6 @@ class BufferedChannel extends EventEmitter implements TunnelChannel {
     return this;
   }
 }
-export interface TunnelChannel extends EventEmitter { send(bytes: Buffer): Promise<void>; close(): void | Promise<void>; }
 export function websocketChannel(socket: WebSocket): TunnelChannel {
   const result = new BufferedChannel() as TunnelChannel;
   socket.on("message", bytes => result.emit("data", Buffer.from(bytes as Buffer)));

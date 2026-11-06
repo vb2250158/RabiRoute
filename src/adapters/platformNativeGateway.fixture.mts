@@ -1,6 +1,6 @@
 import path from "node:path";
-import { createFeishuAdapter } from "./feishuAdapter.js";
-import { createNapCatAdapter } from "./napcatAdapter.js";
+import { createFeishuAdapter } from "../plugins/io.rabiroute.endpoint.feishu/src/adapters/feishuAdapter.js";
+import { createNapCatAdapter } from "../plugins/io.rabiroute.endpoint.napcat/src/adapters/napcatAdapter.js";
 import type { MessageAdapterDispose } from "./messageAdapter.js";
 
 // Controlled child fixture intentionally leaves apiOperations/publishListener absent:

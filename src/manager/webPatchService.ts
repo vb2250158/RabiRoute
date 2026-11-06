@@ -55,7 +55,7 @@ export class WebPatchService {
   private tail: Promise<unknown> = Promise.resolve();
   private importTail: Promise<unknown> = Promise.resolve();
   private pending?: State;
-  private readonly manifests = new Map<string, WebPatchManifest>();
+  private readonly manifests = new Map<string, WebPatchManifest | Promise<WebPatchManifest>>();
   private prepareCode?: (revision: string) => Promise<() => void>;
 
   registerCodePublication(prepare: (revision: string) => Promise<() => void>): void {
@@ -126,10 +126,18 @@ export class WebPatchService {
     if (!WEB_PATCH_HASH.test(revision)) throw new Error("Invalid Web release revision.");
     const cached = this.manifests.get(revision);
     if (cached) return cached;
-    const result = await verifyWebPatch(path.join(this.candidates, revision), revision, signal);
-    if (this.manifests.size >= 8) this.manifests.delete(this.manifests.keys().next().value!);
-    this.manifests.set(revision, result);
-    return result;
+    const verification = verifyWebPatch(path.join(this.candidates, revision), revision, signal);
+    this.manifests.set(revision, verification);
+    try {
+      const result = await verification;
+      if (this.manifests.get(revision) === verification) this.manifests.delete(revision);
+      if (this.manifests.size >= 8) this.manifests.delete(this.manifests.keys().next().value!);
+      this.manifests.set(revision, result);
+      return result;
+    } catch (error) {
+      if (this.manifests.get(revision) === verification) this.manifests.delete(revision);
+      throw error;
+    }
   }
 
   private async compatible(revision: string, signal?: AbortSignal): Promise<WebPatchManifest> {

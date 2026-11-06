@@ -3,21 +3,27 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { Worker } from "node:worker_threads";
+import type { ChildProcess } from "node:child_process";
+import { launchProtectedProcess, type ProtectedProcessTree } from "../runtime/protectedProcessLauncher.mjs";
 import { createHash, randomUUID } from "node:crypto";
 import { automaticCodeRuntime, type AutomaticCodeDefinition } from "../plugin-kernel/automaticCodeRuntime.js";
 import { AutomaticUpdateQueue } from "./automaticUpdateQueue.js";
 import { writeWebPatchJson, WEB_PATCH_HASH } from "./webPatchCatalog.js";
 import type { WebPatchService } from "./webPatchService.js";
+import { stopChildProcessTree } from "../runtime/windowsProcessTree.js";
 
 type WebCandidate = { workspace: string; directory: string; revision: string };
 type Prepared = { state: string; definitions?: AutomaticCodeDefinition[]; digest?: string; webInputDigest?: string; web?: WebCandidate; changedFiles?: string[]; reasons?: unknown[] };
 type Candidate = { schemaVersion: 1; baseline: string; digest: string; webInputDigest: string; definitions: AutomaticCodeDefinition[] };
+type CompileCommand = { type: "run-node"; id: number; root: string; arguments: string[] };
 
 const hash = (bytes: string | Buffer) => createHash("sha256").update(bytes).digest("hex");
 
 export class AutomaticCodeService {
   private watcher?: fs.FSWatcher;
   private worker?: Worker;
+  private cancelCompilation?: () => Promise<void>;
+  private retryCompilationRetirement?: () => Promise<void>;
   private readonly queue: AutomaticUpdateQueue;
   private readonly baselineReady: Promise<void>;
   private baseline = "";
@@ -140,34 +146,123 @@ export class AutomaticCodeService {
     };
   }
 
-  private compile(): Promise<Prepared> {
+  private async compile(): Promise<Prepared> {
+    if (this.stopped) throw new Error("The automatic source owner has stopped.");
+    if (this.worker) {
+      if (!this.retryCompilationRetirement) throw new Error("The previous automatic compiler still owns active work.");
+      // Only a new actual compilation request retries the failed original
+      // retirement. Never cancel legitimate in-flight compilation or start a
+      // successor until the previous process tree is confirmed gone.
+      await this.retryCompilationRetirement();
+    }
+    if (this.stopped) throw new Error("The automatic source owner has stopped.");
+    if (this.worker) throw new Error("The previous automatic compiler still owns active work.");
     return new Promise((resolve, reject) => {
       const worker = new Worker(path.join(this.options.packageRoot, "scripts/automatic-update-worker.mjs"), {
         workerData: { sourceRoot: this.sourceRoot ?? this.options.sourceRoot, packageRoot: this.options.packageRoot, webInputDigest: this.webInputDigest,
           workRoot: path.join(this.options.stateRoot, "builds") }, execArgv: []
       });
       this.worker = worker;
-      let settled = false;
-      let cancellation: NodeJS.Timeout | undefined;
-      const finish = (error?: unknown, result?: Prepared) => {
+      let settled = false, workerExited = false, cancelled = false;
+      let acknowledgeWorker!: () => void;
+      const workerCompleted = new Promise<void>(resolve => { acknowledgeWorker = resolve; });
+      type Owned = { child: ChildProcess; tree?: ProtectedProcessTree; closed: Promise<void>; closing?: Promise<void> };
+      const children = new Set<Owned>();
+      const bounded = async <T>(operation: Promise<T>, message: string): Promise<T> => {
+        let timer: NodeJS.Timeout | undefined;
+        try { return await Promise.race([operation, new Promise<never>((_resolve, reject) => {
+          timer = setTimeout(() => reject(new Error(message)), getTimeoutMs("worker.terminate", 5000));
+        })]); } finally { if (timer) clearTimeout(timer); }
+      };
+      const closeChild = (owned: Owned): Promise<void> => {
+        if (owned.closing) return owned.closing;
+        const attempt = (async () => {
+          if (owned.tree) { owned.tree.terminate(); owned.tree.refresh(); }
+          else if (owned.child.exitCode === null && owned.child.signalCode === null) await stopChildProcessTree(owned.child);
+          await bounded(Promise.all([owned.closed, owned.tree?.settled]), "Automatic compiler process tree retirement remains unconfirmed.");
+          children.delete(owned);
+        })();
+        owned.closing = attempt;
+        void attempt.then(() => {}, () => { if (owned.closing === attempt) owned.closing = undefined; });
+        return attempt;
+      };
+      let closing: Promise<void> | undefined;
+      const closeCompiler = (knownChildFailure?: unknown): Promise<void> => {
+        if (closing) return closing;
+        const attempt = (async () => {
+          const errors = knownChildFailure === undefined
+            ? (await Promise.allSettled([...children].map(closeChild))).flatMap(result => result.status === "rejected" ? [result.reason] : [])
+            : [knownChildFailure];
+          if (cancelled && !errors.length && !workerExited) {
+            // Let the cancelled worker discard its workspace only after its
+            // actual command trees have closed; then retain the hard-stop bound.
+            await bounded(workerCompleted, "Automatic compiler cancellation acknowledgement timed out.").catch(() => {});
+          }
+          try { await bounded(worker.terminate(), "Automatic compiler worker exit remains unconfirmed."); }
+          catch (error) { errors.push(error); }
+          if (errors.length) throw new AggregateError(errors, "Automatic compiler retirement remains unconfirmed; original owners and workspace were retained.");
+          if (this.worker === worker) { this.worker = undefined; this.cancelCompilation = undefined; this.retryCompilationRetirement = undefined; }
+        })();
+        closing = attempt;
+        void attempt.then(() => {}, () => {
+          if (closing === attempt) closing = undefined;
+          if (this.worker === worker) this.retryCompilationRetirement = () => closeCompiler();
+        });
+        return attempt;
+      };
+      let finishCleanup: Promise<void>;
+      const finish = (error?: unknown, result?: Prepared, cancel = Boolean(error), knownChildFailure?: unknown) => {
         if (settled) return;
-        settled = true;
+        settled = true; cancelled = cancel;
         clearTimeout(timeout);
-        if (cancellation) clearTimeout(cancellation);
-        void worker.terminate().then(() => {
-          if (this.worker === worker) this.worker = undefined;
-          if (error) reject(error); else resolve(result!);
-        }, reject);
+        if (cancel && !workerExited) { try { worker.postMessage("cancel"); } catch { /* terminate still owns this worker */ } }
+        finishCleanup = closeCompiler(knownChildFailure);
+        void finishCleanup.then(() => { if (error) reject(error); else resolve(result!); }, cleanupError => {
+          reject(error ? new AggregateError([error, cleanupError], String(error instanceof Error ? error.message : error) + "; compiler cleanup remains unconfirmed.") : cleanupError);
+        });
+      };
+      const post = (message: unknown) => {
+        if (workerExited) return;
+        try { worker.postMessage(message); } catch (error) { finish(error, undefined, true); }
+      };
+      this.cancelCompilation = () => {
+        if (!settled) { finish(new Error("Automatic build cancelled."), undefined, true); return finishCleanup; }
+        return closeCompiler();
       };
       const timeout = setTimeout(() => {
-        void worker.terminate().finally(() => finish(new Error("Automatic compilation exceeded its deadline; the old version remains active.")));
+        finish(new Error("Automatic compilation exceeded its deadline; the old version remains active."), undefined, true);
       }, getTimeoutMs("deadline.manager.automaticCodeService.compile", 120000));
-      worker.once("message", (result: Prepared) => {
-        if (!result || typeof result.state !== "string") finish(new Error("Automatic compiler returned an invalid receipt."));
+      worker.on("message", (result: Prepared | CompileCommand) => {
+        if (result && typeof result === "object" && "type" in result && result.type === "run-node") {
+          if (settled) { post({ type: "run-node-result", id: result.id, error: "Automatic build cancelled." }); return; }
+          let launched: ReturnType<typeof launchProtectedProcess>;
+          try { launched = launchProtectedProcess({ kind: "spawn", command: process.execPath, args: result.arguments,
+            options: { cwd: result.root, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] } }); }
+          catch (error) { finish(error); return; }
+          const { child, tree } = launched;
+          let close!: () => void;
+          const owned: Owned = { child, tree, closed: new Promise<void>(resolve => { close = resolve; }) };
+          children.add(owned);
+          let output = "", failure: Error | undefined;
+          const append = (bytes: Buffer) => { output = (output + bytes.toString()).slice(-32768); };
+          child.stdout?.on("data", append); child.stderr?.on("data", append);
+          child.once("error", error => { failure = error; });
+          child.once("close", (code, signal) => {
+            close();
+            // Root/stream close never retires a still-live descendant tree.
+            void closeChild(owned).then(() => post({ type: "run-node-result", id: result.id,
+              ...(code === 0 && !signal && !failure && !settled ? {} : { error: failure?.message ?? `Isolated Web build failed (${code ?? signal}): ${output}` }) }),
+            error => finish(error, undefined, true, error));
+          });
+          return;
+        }
+        acknowledgeWorker();
+        if (settled) return;
+        if (!result || typeof result !== "object" || !("state" in result) || typeof result.state !== "string") finish(new Error("Automatic compiler returned an invalid receipt."));
         else finish(undefined, result);
       });
-      worker.once("error", error => finish(error));
-      worker.once("exit", code => finish(new Error(`Automatic compiler exited without a result (${code}).`)));
+      worker.once("error", error => { acknowledgeWorker(); finish(error); });
+      worker.once("exit", code => { workerExited = true; acknowledgeWorker(); finish(new Error(`Automatic compiler exited without a result (${code}).`)); });
     });
   }
 
@@ -221,8 +316,10 @@ export class AutomaticCodeService {
   async stop(): Promise<void> {
     this.stopped = true;
     this.watcher?.close();
-    this.worker?.postMessage("cancel");
-    await this.queue.stop();
+    const retirement = this.cancelCompilation?.();
+    const results = await Promise.allSettled([this.queue.stop(), ...(retirement ? [retirement] : [])]);
+    const failures = results.flatMap(result => result.status === "rejected" ? [result.reason] : []);
+    if (failures.length) throw new AggregateError(failures, "Automatic compiler stop remains unconfirmed; its original owner was retained.");
   }
 }
 

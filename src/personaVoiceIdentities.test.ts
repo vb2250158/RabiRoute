@@ -11,7 +11,7 @@ import {
   resolvePersonaVoiceIdentities,
   updatePersonaVoiceIdentity
 } from "./personaVoiceIdentities.js";
-import { listPersonaVoiceTranscriptViews } from "./personaVoiceTranscriptView.js";
+import { listPersonaVoiceTranscriptViews } from "./plugins/io.rabiroute.manager.persona/src/personaVoiceTranscriptView.js";
 
 test("persona voice identities are scoped by processing host and remain merge-friendly JSONL", () => {
   const roleDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-voice-identities-"));

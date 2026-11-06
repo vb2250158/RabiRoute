@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { managerEventSource } from "../managerApi";
-import { speechServerOptions } from "../speech/peerServerPresentation";
+import { speechServerOptions } from "../../../src/plugins/io.rabiroute.manager.speech/web/speech/peerServerPresentation";
 import type { PeerConnectionStatus, SpeechServerDirectory } from "@shared/peerTunnelContract";
 const props = withDefaults(defineProps<{ modelValue?: string; persistSelection?: boolean; label?: string; disabled?: boolean }>(), {
   modelValue: "", persistSelection: false, label: "模型服务电脑", disabled: false
