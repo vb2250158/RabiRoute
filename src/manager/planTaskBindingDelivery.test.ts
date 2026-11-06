@@ -22,6 +22,13 @@ function plan(taskBinding: PlanItem["taskBinding"]): PlanItem {
   };
 }
 
+test("remote task delivery and replacement keep the exact computer owner", () => {
+  const binding = { agentType: "codex" as const, sessionId: "remote-task", workspace: "F:/work/game", instanceBinding: { instanceId: "test-pc", agentId: "native-owner", ownerDeviceId: "peer-owner" } };
+  const source = plan(binding);
+  assert.deepEqual(planTaskDeliveryTarget(source)?.instanceBinding, binding.instanceBinding);
+  assert.deepEqual(replacementPlanTaskBinding(source, { id: "next-remote-task", cwd: binding.workspace })?.instanceBinding, binding.instanceBinding);
+});
+
 test("plan task delivery prefers the binding title and creates when the bound task is unavailable", () => {
   const target = planTaskDeliveryTarget(plan({
     agentType: "codex",

@@ -97,7 +97,8 @@ import { recordPersonaUserDelivery } from "./personaUserDeliveryHistory.js";
 import { recordPersonaAgentDelivery } from "./personaAgentDeliveryHistory.js";
 import { readChatDeliveryParties } from "./personaChatDeliveryLookup.js";
 import { agentIdentityForMessageSource, type RabiAgentMessageSource, type RabiDeliveryEnvelope, type RabiMessageSource } from "../shared/rabiMessage.js";
-import { AgentRequestStore, type AgentRequestRecord } from "../agentRequests/store.js";
+import { AgentRequestStore, type AgentRequestRecord, type AgentRequestParty } from "../agentRequests/store.js";
+import { planBindingMatchesSource, planBindingTargetKey, type PlanBindingSource } from "../shared/planBindingOwner.js";
 import { agentRequestStatePath } from "../agentRequests/persistence.js";
 import { projectDirectoryLayout } from "../shared/projectDirectoryLayout.js";
 import { resolveRuntimeLayout } from "../shared/runtimeLayout.js";
@@ -144,6 +145,10 @@ import { requestWeixinLogin } from "../weixinLoginRequest.js";
 
 
 import { AgentCompletionDeliveryService, completionTaskContextFromPlans, deliverCompletionToEndpoint, planCompletionDeliveryRules } from "./agentCompletionDelivery.js";
+import { createPlanAgentStatusService } from "./planAgentStatus.js";
+import { inspectOriginalPlanFeedbackReceipt } from "./planFeedbackReceipt.js";
+import { remoteAgentTargetKey } from "../shared/routeAgentTargets.js";
+import { resolvePlanHistoryRequestActor } from "./planHistoryRequestActor.js";
 import type { ReviewedReplySourceEvidence } from "../replyImageDescriptions.js";
 import {
   handleAgentSend,
@@ -875,15 +880,16 @@ function primaryAgentSessionId(definition: GatewayDefinition): string | undefine
   return adapter ? primaryAgentSessionFields(definition, adapter).sessionId : undefined;
 }
 
-function runtimeOwnsAgentSession(runtime: GatewayRuntime, sessionId: string): boolean {
+function runtimeOwnsAgentSession(runtime: GatewayRuntime, sessionId: string, request?: AgentThreadRequest): boolean {
   const id = sessionId.trim();
   if (!id) return false;
-  if (String(runtime.definition.codexThreadId || "").trim() === id) return true;
-  if (String(runtime.definition.dshSessionId || "").trim() === id) return true;
-  if (String(runtime.definition.grokBotSessionId || "").trim() === id) return true;
-  if ((runtime.definition.codexPlanAssistantSessions ?? []).some((session) => session.threadId === id)) return true;
+  const remote = id === request?.threadId ? request.instanceBinding : undefined;
+  if (!remote && String(runtime.definition.codexThreadId || "").trim() === id) return true;
+  if (!remote && String(runtime.definition.dshSessionId || "").trim() === id) return true;
+  if (!remote && String(runtime.definition.grokBotSessionId || "").trim() === id) return true;
+  if (!remote && (runtime.definition.codexPlanAssistantSessions ?? []).some((session) => session.threadId === id)) return true;
   const target = currentMessageProcessingTargetByThreadId(id);
-  if (target && runtimeForMessageProcessingTarget(target)?.definition.id === runtime.definition.id) return true;
+  if (!remote && target && runtimeForMessageProcessingTarget(target)?.definition.id === runtime.definition.id) return true;
   if (!routeOwnsLocalPersona(runtime.definition)) return false;
   const roleId = roleIdForDefinition(runtime.definition);
   if (!roleId) return false;
@@ -893,7 +899,9 @@ function runtimeOwnsAgentSession(runtime: GatewayRuntime, sessionId: string): bo
     requestRoleKnowledgeCatalogRefresh(roleDir);
     return false;
   }
-  return plans.some((plan) => plan.taskBinding?.sessionId === id || plan.secretaryBinding?.sessionId === id);
+  return plans.some(plan => remote
+    ? planBindingTargetKey(plan.taskBinding ?? {}) === planBindingTargetKey({ agentType: request?.agentAdapter, sessionId: id, instanceBinding: remote })
+    : (plan.taskBinding?.sessionId === id && !plan.taskBinding.instanceBinding) || plan.secretaryBinding?.sessionId === id);
 }
 
 let instanceThreadTransport: InstanceThreadTransport | undefined;
@@ -972,7 +980,7 @@ function runtimeForAgentThreadRequest(request: AgentThreadRequest): GatewayRunti
     workspace: request.cwd
   }, runtimeList.map((runtime) => ({
     id: runtime.definition.id,
-    ownedSessionIds: requestSessionIds.filter((id) => runtimeOwnsAgentSession(runtime, id)),
+    ownedSessionIds: requestSessionIds.filter((id) => runtimeOwnsAgentSession(runtime, id, request)),
     supportsDsh: normalizeAgentAdapters(runtime.definition.agentAdapters).includes("dsh"),
     dshWorkspaces: [
       runtime.definition.dshCwd,
@@ -1620,21 +1628,21 @@ const agentCompletionDelivery = new AgentCompletionDeliveryService({
       roles.add(roleId);
       return [
         ...(agentHookSettingsFor(runtime.definition.codexHooks, request.agentType).completionDeliveries ?? []).map(rule => ({ roleId, rule })),
-        ...planCompletionDeliveryRules(roleId, listPlans(roleDirForApi(roleId)), request.sessionId)
+        ...planCompletionDeliveryRules(roleId, listPlans(roleDirForApi(roleId)), request.sessionId, request)
       ];
     });
   },
   taskContext: async ({ roleId, rule }, request) => {
     const plans = listPlans(roleDirForApi(roleId));
     let taskName: string | undefined;
-    try { taskName = (await invokePublishedAgentOperation<{ title?: string } | undefined>("codex", "readCodexDesktopThread", { sessionId: request.sessionId }))?.title?.trim(); }
+    try { if (!request.sourceInstance) taskName = (await invokePublishedAgentOperation<{ title?: string } | undefined>("codex", "readCodexDesktopThread", { sessionId: request.sessionId }))?.title?.trim(); }
     catch (error) {
       managerOperationalLog.record("warn", "completion_task_title_unavailable", {
         action: request.sessionId, error: managerOperationalError(error, rootDir)
       });
     }
-    const context = completionTaskContextFromPlans(request.sessionId, plans, taskName);
-    if (rule.destination.channel === "napcat" && request.agentType === "codex" && request.turnId) {
+    const context = completionTaskContextFromPlans(request.sessionId, plans, taskName, request);
+    if (!request.sourceInstance && rule.destination.channel === "napcat" && request.agentType === "codex" && request.turnId) {
       const imageError = (error: unknown) => {
         context.imageReadError = true;
         managerOperationalLog.record("warn", "completion_images_unavailable", {
@@ -1695,11 +1703,12 @@ const codexHookContextService = new CodexHookContextService({
     }))
   ),
   recordAgentRequestStop,
-  assertSessionPersonaOwner: sessionId => {
+  assertSessionPersonaOwner: (sessionId, _cwd, sourceInstance) => {
+    if (sourceInstance) return;
     configuredPersonaDefinitionsForSession(sessionId)
       .forEach(definition => assertLocalPersonaOwner(definition, "Persona Hooks"));
   },
-  chatHistoryRoleIds: request => [...gatewayIdsForManagedSession(request.sessionId, request.cwd)]
+  chatHistoryRoleIds: request => [...gatewayIdsForManagedSession(request.sessionId, request.cwd, request)]
     .map(id => runtimes.get(id)?.definition)
     .filter((definition): definition is GatewayDefinition => Boolean(definition && routeOwnsLocalPersona(definition)))
     .map(definition => sanitizeRoleId(definition.agentRoleId))
@@ -4179,20 +4188,18 @@ async function planHistoryRequestContext(
   body: Record<string, unknown>,
   context: RoleStorageCommandContext
 ): Promise<RoleStorageCommandContext> {
-  const { resolvePlanHistoryActor } = await import("../shared/planHistoryActor.js");
   const origin = singleRequestHeader(request, "origin");
   let sameOrigin = false;
   try { sameOrigin = Boolean(origin && new URL(origin).host === request.headers.host); } catch { /* Invalid Origin is not a user entry. */ }
   try {
-    const actor = await resolvePlanHistoryActor(body.messageSource, {
-      verifiedUserEntry: sameOrigin && request.headers["sec-fetch-site"] === "same-origin" && !getTrustedLanAgentSource(request),
-      readAgent: async identity => {
-        const query: AgentThreadRequest = { action: "read", agentAdapter: identity.agentAdapter, threadId: identity.sessionId, cwd: identity.workspace };
+    const actor = await resolvePlanHistoryRequestActor(request, body.messageSource, {
+      verifiedUserEntry: sameOrigin && request.headers["sec-fetch-site"] === "same-origin",
+      readThread: async query => {
         const options = agentThreadRequestOptions(query);
         const result = await handleAgentThreadRequest(query, options);
         const thread = result.data.thread as { id: string; title: string; cwd?: string; archived?: boolean } | undefined;
         if (result.statusCode !== 200 || !thread) throw new Error("Plan history messageSource owner could not be read.");
-        return { ...thread, ...(identity.agentAdapter === "dsh" && options.dshBaseUrl ? { baseUrl: options.dshBaseUrl } : {}) };
+        return { ...thread, ...(query.agentAdapter === "dsh" && options.dshBaseUrl ? { baseUrl: options.dshBaseUrl } : {}) };
       }
     });
     return { ...context, actor };
@@ -4620,7 +4627,7 @@ function roleIdForDefinition(definition: GatewayDefinition): string {
   return sanitizeRoleId(definition.agentRoleId) || routeRuntimeParts(definition.id).roleId || "Rabi";
 }
 
-function roleIdsForPlanBoundSession(sessionId: string, cwd?: string): Set<string> {
+function roleIdsForPlanBoundSession(sessionId: string, cwd?: string, source?: PlanBindingSource): Set<string> {
   const roleIds = new Set<string>();
   const candidateRoleIds = new Set(
     [...runtimes.values()].filter(runtime => !runtime.definition.agentRoleDeviceId).map(runtime => roleIdForDefinition(runtime.definition))
@@ -4634,7 +4641,8 @@ function roleIdsForPlanBoundSession(sessionId: string, cwd?: string): Set<string
     }
     for (const plan of plans) {
       const bindings = [plan.taskBinding, plan.secretaryBinding];
-      if (bindings.some((binding) => binding?.sessionId === sessionId && hookWorkspaceMatches(binding.workspace, cwd))) {
+      if (bindings.some((binding) => (source ? planBindingMatchesSource(binding, source)
+        : binding?.sessionId === sessionId && !("instanceBinding" in binding && binding.instanceBinding)) && hookWorkspaceMatches(binding?.workspace, cwd))) {
         roleIds.add(roleId);
         break;
       }
@@ -4644,9 +4652,10 @@ function roleIdsForPlanBoundSession(sessionId: string, cwd?: string): Set<string
 }
 
 /** Ownership checks must not consult local persona plans before rejecting a remote Route. */
-function gatewayIdsForConfiguredSession(sessionId: string, cwd?: string): Set<string> {
+function gatewayIdsForConfiguredSession(sessionId: string, cwd?: string, source?: PlanBindingSource): Set<string> {
   const exactSessionId = String(sessionId || "").trim();
   const gatewayIds = new Set<string>();
+  if (source?.sourceInstance) return gatewayIds;
   for (const runtime of runtimes.values()) {
     if (
       (String(runtime.definition.codexThreadId || "").trim() === exactSessionId
@@ -4674,10 +4683,10 @@ function configuredPersonaDefinitionsForSession(sessionId: string, cwd?: string)
     .filter((definition): definition is GatewayDefinition => Boolean(definition));
 }
 
-function gatewayIdsForManagedSession(sessionId: string, cwd?: string): Set<string> {
+function gatewayIdsForManagedSession(sessionId: string, cwd?: string, source?: PlanBindingSource): Set<string> {
   const exactSessionId = String(sessionId || "").trim();
-  const gatewayIds = gatewayIdsForConfiguredSession(exactSessionId, cwd);
-  const roleIds = roleIdsForPlanBoundSession(exactSessionId, cwd);
+  const gatewayIds = gatewayIdsForConfiguredSession(exactSessionId, cwd, source);
+  const roleIds = roleIdsForPlanBoundSession(exactSessionId, cwd, source);
   if (roleIds.size > 0) {
     for (const runtime of runtimes.values()) {
       if (routeOwnsLocalPersona(runtime.definition) && roleIds.has(roleIdForDefinition(runtime.definition))) gatewayIds.add(runtime.definition.id);
@@ -4686,9 +4695,9 @@ function gatewayIdsForManagedSession(sessionId: string, cwd?: string): Set<strin
   return gatewayIds;
 }
 
-function codexHookSettingsForSession(sessionId: string, cwd?: string, agentType = "codex"): CodexHookSettings {
+function codexHookSettingsForSession(sessionId: string, cwd?: string, agentType = "codex", sourceInstance?: PlanBindingSource["sourceInstance"]): CodexHookSettings {
   const exactSessionId = String(sessionId || "").trim();
-  const managedGatewayIds = gatewayIdsForManagedSession(exactSessionId, cwd);
+  const managedGatewayIds = gatewayIdsForManagedSession(exactSessionId, cwd, { sessionId, agentType, sourceInstance });
   const matches = [...runtimes.values()].filter((runtime) => (
     managedGatewayIds.has(runtime.definition.id)
   ));
@@ -4704,7 +4713,7 @@ function codexHookSettingsForSession(sessionId: string, cwd?: string, agentType 
 }
 
 function codexHookEnabled(request: CodexHookContextRequest): boolean {
-  const settings = codexHookSettingsForSession(request.sessionId, request.cwd, request.agentType);
+  const settings = codexHookSettingsForSession(request.sessionId, request.cwd, request.agentType, request.sourceInstance);
   if (request.eventName === "SessionStart" || request.eventName === "UserPromptSubmit") {
     return settings.sessionContextEnabled;
   }
@@ -4722,10 +4731,17 @@ function hookWorkspaceMatches(expected: string | undefined, actual: string | und
 function isManagedAgentSession(request: CodexHookContextRequest): boolean {
   const sessionId = String(request.sessionId || "").trim();
   if (!sessionId) return false;
-  const managed = agentRequests.hasManagedSession(sessionId, request.cwd)
-    || gatewayIdsForManagedSession(sessionId, request.cwd).size > 0;
+  const managed = agentRequests.hasManagedSession(sessionId, request.cwd, party => hookRequestMatchesParty(request, party))
+    || gatewayIdsForManagedSession(sessionId, request.cwd, request).size > 0;
   if (!managed) return false;
-  return codexHookSettingsForSession(sessionId, request.cwd, request.agentType).agentCommunicationEnforcementEnabled;
+  return codexHookSettingsForSession(sessionId, request.cwd, request.agentType, request.sourceInstance).agentCommunicationEnforcementEnabled;
+}
+
+function hookRequestMatchesParty(request: CodexHookContextRequest, party: AgentRequestParty): boolean {
+  const endpoint = party.endpoint;
+  if (endpoint && endpoint.kind !== "local" && endpoint.kind !== "instance") return false;
+  return planBindingMatchesSource({ agentType: party.agentAdapter || "codex", sessionId: party.threadId,
+    ...(endpoint?.kind === "instance" ? { instanceBinding: { instanceId: endpoint.instanceId!, agentId: endpoint.agentId, ...(endpoint.ownerDeviceId ? { ownerDeviceId: endpoint.ownerDeviceId } : {}) } } : {}) }, request);
 }
 
 async function recordAgentRequestStop(request: CodexHookContextRequest): Promise<AgentRequestStopResult> {
@@ -4733,8 +4749,9 @@ async function recordAgentRequestStop(request: CodexHookContextRequest): Promise
   const turnId = String(request.turnId || "").trim();
   if (!turnId) return { status: "ignored", reason: "missing_turn_id" };
   await agentRequests.ready();
-  const pendingSessionRequestIds = agentRequests.unansweredTargetRequestIds(request.sessionId);
-  const requestIds = request.cwd ? agentRequests.unansweredTargetRequestIds(request.sessionId, request.cwd) : pendingSessionRequestIds;
+  const matches = (party: AgentRequestParty) => hookRequestMatchesParty(request, party);
+  const pendingSessionRequestIds = agentRequests.unansweredTargetRequestIds(request.sessionId, undefined, matches);
+  const requestIds = request.cwd ? agentRequests.unansweredTargetRequestIds(request.sessionId, request.cwd, matches) : pendingSessionRequestIds;
   return { status: requestIds.length ? "pending" : "ignored", reason: requestIds.length
     ? "unanswered_agent_requests_at_stop" : "no_unanswered_agent_requests", requestIds, pendingSessionRequestIds, snapshotComplete: true, turnId };
 }
@@ -4847,15 +4864,15 @@ const speechModelManager = createPluginServicePort(() => currentSpeechService().
 function applyManagedAgentThreadDefaults(request: AgentThreadRequest): AgentThreadRequest {
   if (request.action !== "send") return request;
   if (request.model?.trim()) return request;
-  const targetRuntime = request.threadId ? runtimeForAgentThreadRequest({ threadId: request.threadId, agentAdapter: "codex" }) : undefined;
+  const targetRuntime = request.threadId ? runtimeForAgentThreadRequest(request) : undefined;
   const roleId = targetRuntime && !targetRuntime.definition.agentRoleDeviceId ? roleIdForDefinition(targetRuntime.definition) : "";
   const plans = roleId ? publishedRolePlans(roleDirForApi(roleId)) : undefined;
-  const bindingModel = plans?.find(plan => plan.taskBinding?.sessionId === request.threadId)?.taskBinding?.modelSnapshot?.trim();
+  const bindingModel = plans?.find(plan => planBindingTargetKey(plan.taskBinding ?? {}) === planBindingTargetKey({ agentType: request.agentAdapter, sessionId: request.threadId, instanceBinding: request.instanceBinding }))?.taskBinding?.modelSnapshot?.trim();
   if (bindingModel) return { ...request, model: bindingModel };
   const model = resolveCodexPlanAssistantTurnModel(
     [...runtimes.values()].flatMap((runtime) => !runtime.definition.agentRoleDeviceId && runtime.definition.codexPlanAssistantEnabled === true
       ? (runtime.definition.codexPlanAssistantSessions ?? []).map((session) => ({ ...session, model: normalizeCodexPlanAssistantModel(runtime.definition.codexPlanAssistantModel) }))
-      : []), request.threadId, request.model, request.instanceBinding ? `remote:${encodeURIComponent(request.instanceBinding.instanceId)}:${encodeURIComponent(request.instanceBinding.agentId)}` : `local:${request.agentAdapter || "codex"}`
+      : []), request.threadId, request.model, request.instanceBinding ? remoteAgentTargetKey(request.instanceBinding) : `local:${request.agentAdapter || "codex"}`
   );
   return model ? { ...request, model } : request;
 }
@@ -5696,6 +5713,7 @@ async function sendPlanFeedbackToTask(
   const result = await handleAgentThreadRequest({
     action: "send",
     agentAdapter: request.agentAdapter,
+    ...(request.instanceBinding ? { instanceBinding: request.instanceBinding } : {}),
     threadId: request.threadId,
     title: request.title,
     createIfMissing: request.createIfMissing,
@@ -5727,6 +5745,8 @@ async function sendPlanFeedbackToTask(
     planId,
     deliveryId: String(deliveryId || "").trim(),
     oldSessionId: request.threadId,
+    oldInstanceBinding: request.instanceBinding,
+    oldAgentType: request.agentAdapter,
     resolved
   });
   const warning = typeof result.data.warning === "string" ? result.data.warning.trim() : "";
@@ -5812,7 +5832,8 @@ async function sendPlanTaskCompletionToSecretary(
     target,
     `completion:${delivery.sourceSessionId}:${delivery.sourceTurnId}`
   );
-  const result = await (resolvePrimaryAgentTarget(runtime.definition)?.binding ? handleAgentThreadRequest : handleLocalAgentThreadRequest)({
+  if (delivery.sourceInstance && !delivery.trustedRemoteSource) throw new Error("Original remote completion source authority is unavailable.");
+  const result = await (delivery.trustedRemoteSource || resolvePrimaryAgentTarget(runtime.definition)?.binding ? handleAgentThreadRequest : handleLocalAgentThreadRequest)({
     action: "send",
     instanceBinding: resolvePrimaryAgentTarget(runtime.definition)?.binding,
     agentAdapter: resolved.target.agentAdapter,
@@ -5843,6 +5864,7 @@ async function sendPlanTaskCompletionToSecretary(
     allowedWorkspaces: agentThreadAllowedWorkspaces(),
     defaultWorkspace: rootDir,
     dshBaseUrl: runtime.definition.dshBaseUrl,
+    ...(delivery.trustedRemoteSource ? { remoteSource: delivery.trustedRemoteSource } : {}),
     agentRequests
   });
   requireConfirmedPlanDelivery(result);
@@ -6797,8 +6819,14 @@ function speechServiceUrl(): string {
 async function inspectPlanFeedbackDelivery(
   request: PlanFeedbackRecoveryTaskRequest
 ): Promise<"accepted" | "in_progress" | "missing"> {
+  if (!agentEndpointDelivery) throw new Error("Original plan feedback receipt owner is unavailable.");
+  const original = await inspectOriginalPlanFeedbackReceipt(agentRequests, agentEndpointDelivery.options().managerInstanceId, request.deliveryId);
+  if (original) return original;
+  if (request.instanceBinding) throw new Error("Original remote plan feedback reservation is unavailable; current-session readback cannot prove the old delivery was not received.");
   const result = await handleAgentThreadRequest({
     action: "read",
+    agentAdapter: request.agentAdapter,
+    ...(request.instanceBinding ? { instanceBinding: request.instanceBinding } : {}),
     threadId: request.threadId,
     cwd: request.cwd,
     deliveryId: request.deliveryId
@@ -7900,6 +7928,23 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
       }),
       personaPlanOperations: createPersonaPlanOperations({
         roleDir: roleDirForApi,
+        service: createPlanAgentStatusService({
+          readInstanceThread: async request => {
+            const body = { action: "read" as const, ...request };
+            const result = await handleAgentThreadRequest(body, agentThreadRequestOptions(body));
+            if (result.statusCode < 200 || result.statusCode >= 300 || !result.data.thread) {
+              throw new Error(String(result.data.message || "Original remote plan task could not be read."));
+            }
+            return result.data.thread;
+          },
+          openInstanceThread: async request => {
+            const body = { action: "open" as const, ...request };
+            const result = await handleAgentThreadRequest(body, agentThreadRequestOptions(body));
+            if (result.statusCode < 200 || result.statusCode >= 300) {
+              throw new Error(String(result.data.message || "Original remote plan task could not be opened."));
+            }
+          }
+        }),
         identity: () => ({ applicationGenerationId: managerHostIdentity?.applicationGenerationId ?? managerInstanceId, managerInstanceId }),
         send: body => handleAgentThreadRequest(body, agentThreadRequestOptions(body))
       }),

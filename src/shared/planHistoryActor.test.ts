@@ -10,6 +10,13 @@ import { storageInventoryRevisionToken } from "./storageRevision.js";
 import { ManagerStorageMutationPool } from "../manager/managerStorageMutationPool.js";
 
 const source = { type: "agent", agentAdapter: "dsh", agentType: "业务Agent", sessionId: "session-full-identity-123456789", sessionName: "declared name" };
+
+test("history records retain only their own explicit remote endpoint", async () => {
+  const instanceBinding = { instanceId: "old-pc", agentId: "old-owner", ownerDeviceId: "peer" };
+  assert.deepEqual(normalizePlanHistoryActor({ kind: "agent", agentType: "codex", sessionId: "same-id", instanceBinding })?.instanceBinding, instanceBinding);
+  const resolved = await resolvePlanHistoryActor(source, { readAgent: async () => ({ id: source.sessionId, title: "Remote owner", cwd: "F:/game", instanceBinding }) });
+  assert.deepEqual(resolved.instanceBinding, instanceBinding);
+});
 test("history source resolves host, full identity and owner name without trusting declarations", async () => {
   const actor = await resolvePlanHistoryActor(source, { readAgent: async identity => {
     assert.equal(identity.sessionId, source.sessionId);

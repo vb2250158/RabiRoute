@@ -344,22 +344,24 @@ export class AgentRequestStore {
       .map(value => structuredClone(value));
   }
   /** Read only this target's open IDs; never clone prompt bodies, mutate or replay the ledger. */
-  unansweredTargetRequestIds(threadId: string, workspace?: string): string[] {
+  unansweredTargetRequestIds(threadId: string, workspace?: string, matches?: (party: AgentRequestParty) => boolean): string[] {
     this.assertComplete();
     const id = threadId.trim().slice(0, 4096);
     if (!id) return [];
     const ids: string[] = [];
     for (const record of this.requests.values()) {
       if (record.status === "awaiting_response" && record.target.threadId === id
+        && (!matches || matches(record.target))
         && (!record.target.workspace || !workspace || sameCodexWorkspace(record.target.workspace, workspace))) ids.push(record.id);
     }
     return ids;
   }
 
-  hasManagedSession(threadId: string, workspace?: string): boolean {
+  hasManagedSession(threadId: string, workspace?: string, matches?: (party: AgentRequestParty) => boolean): boolean {
     this.assertComplete();
     const id = threadId.trim().slice(0, 4096);
     for (const value of this.requests.values()) if ([value.source, value.target].some(party => party.threadId === id
+      && (!matches || matches(party))
       && (!party.workspace || !workspace || sameCodexWorkspace(party.workspace, workspace)))) return true;
     return false;
   }

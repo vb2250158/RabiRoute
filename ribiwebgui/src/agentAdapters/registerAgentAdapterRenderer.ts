@@ -9,10 +9,10 @@ type AgentWebApi = Readonly<{
 export type AgentWebModuleApi = Readonly<{ instanceIds: readonly string[]; forInstance(instanceId: string): AgentWebApi }>;
 
 export function registerAgentAdapterRenderer(api: AgentWebApi, type: string, loader: AsyncComponentLoader,
-  agentScanQuery?: (route: GatewayDefinition, options: AgentCardScanOptions) => URLSearchParams, agentRoute?: AgentRoutePresentation): () => void {
+  agentScanQuery?: (route: GatewayDefinition, options: AgentCardScanOptions) => URLSearchParams, agentRoute?: AgentRoutePresentation, agentAvatarUrl?: string): () => void {
   return api.registerSettingsRenderer({
     rendererId: `agent.${type}.card.v1`, placementId: "route.adapters.agent-settings", allowedSlots: [type],
     contributionKind: "agent-adapter-settings", contributionSurface: "route.adapters",
-    schemaId: `agent.${type}.route.v1`, readCommandId: `agent.${type}.route.read`, writeCommandId: `agent.${type}.route.write`, loader, agentScanQuery, agentRoute
+    schemaId: `agent.${type}.route.v1`, readCommandId: `agent.${type}.route.read`, writeCommandId: `agent.${type}.route.write`, loader, agentScanQuery, agentRoute, agentAvatarUrl
   });
 }

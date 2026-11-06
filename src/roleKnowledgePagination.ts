@@ -1,4 +1,6 @@
 import { planWorkspaceIdentity, type PlanBindingScope } from "./planWorkspaceQuery.js";
+import { planBindingTargetKey } from "./shared/planBindingOwner.js";
+import type { AgentInstanceBinding } from "./shared/agentInstance.js";
 
 export type RolePlanPageCounts = {
   total: number;
@@ -62,8 +64,8 @@ export type RolePlanSummary = ReturnType<typeof summarizeRolePlan>;
 export type RolePlanPreview = ReturnType<typeof previewRolePlan>;
 
 type PresentedPlanLike = {
-  taskBinding?: { agentType?: string; sessionId?: string; workspace?: string };
-  secretaryBinding?: { agentType?: string; sessionId?: string; workspace?: string };
+  taskBinding?: { agentType?: string; sessionId?: string; workspace?: string; instanceBinding?: AgentInstanceBinding };
+  secretaryBinding?: { agentType?: string; sessionId?: string; workspace?: string; instanceBinding?: AgentInstanceBinding };
   status: string;
   updatedAt: string;
   dueAt?: string;
@@ -169,6 +171,7 @@ export function paginateRolePlans<T extends PresentedPlanLike>(
     const workspace = planWorkspaceIdentity(scope.workspace);
     plans = plans.filter(plan => [plan.taskBinding, plan.secretaryBinding].some(binding =>
       binding?.agentType === scope.agentType && !!binding.sessionId && ids.has(binding.sessionId)
+      && planBindingTargetKey({ instanceBinding: binding.instanceBinding }) === planBindingTargetKey({ instanceBinding: scope.instanceBinding })
       && !!binding.workspace && !!workspace && planWorkspaceIdentity(binding.workspace) === workspace));
   }
   const offset = cursorOffset(cursor);

@@ -15,12 +15,14 @@ import { AGENT_HOOK_EVENTS, agentHookRuleErrors } from "../shared/agentHookAutom
 import { agentAdapterManifest, isAgentAdapterType, agentAdapterSupportsLifecycleHooks as supportsHooks } from "../shared/agentAdapterCapabilities.js";
 
 import { mermaidDiagramSource } from "../markdownImage.js";
+import { planBindingMatchesSource, planBindingSourceKey, type PlanBindingSource } from "../shared/planBindingOwner.js";
 
 const execute = promisify(execFile);
 export type CompletionDeliveryResult = { ruleId: string; status: "sent" | "failed"; reason?: string };
 export type CompletionRuleOwner = { roleId: string; rule: AgentCompletionDeliveryRule };
-export function planCompletionDeliveryRules(roleId: string, plans: readonly Pick<PlanItem, "id" | "taskBinding" | "messageChannels">[], sessionId: string): CompletionRuleOwner[] {
-  return plans.filter(plan => plan.taskBinding?.sessionId === sessionId)
+export function planCompletionDeliveryRules(roleId: string, plans: readonly Pick<PlanItem, "id" | "taskBinding" | "messageChannels">[], sessionId: string, source?: PlanBindingSource): CompletionRuleOwner[] {
+  return plans.filter(plan => source ? planBindingMatchesSource(plan.taskBinding, source)
+    : plan.taskBinding?.sessionId === sessionId && !plan.taskBinding.instanceBinding)
     .flatMap(plan => (plan.messageChannels ?? []).map((destination, index) => ({ roleId, rule: {
       id: `plan-${plan.id}-${index}`, enabled: true, event: "task_completed", conditions: [{ type: "bound_plan" }], destination
     } })));
@@ -52,8 +54,9 @@ export function splitCompletionMessage(text: string, maxChars = 3000): string[] 
 }
 
 export function completionTaskContextFromPlans(sessionId: string,
-  plans: readonly Pick<PlanItem, "id" | "title" | "taskBinding">[], currentTitle?: string): CompletionTaskContext {
-  const bound = plans.filter(plan => plan.taskBinding?.sessionId === sessionId);
+  plans: readonly Pick<PlanItem, "id" | "title" | "taskBinding">[], currentTitle?: string, source?: PlanBindingSource): CompletionTaskContext {
+  const bound = plans.filter(plan => source ? planBindingMatchesSource(plan.taskBinding, source)
+    : plan.taskBinding?.sessionId === sessionId && !plan.taskBinding.instanceBinding);
   return {
     taskName: currentTitle?.trim() || undefined,
     plans: bound.map(plan => ({ id: plan.id, title: plan.title }))
@@ -233,7 +236,7 @@ export class AgentCompletionDeliveryService {
     const notification = completionNotification(request.lastAssistantMessage);
     if (!notification.text.trim()) return Promise.resolve([]);
     request = { ...request, lastAssistantMessage: notification.text };
-    const key = JSON.stringify([request.sessionId, request.turnId]);
+    const key = JSON.stringify([planBindingSourceKey(request), request.turnId]);
     const pending = this.pending.get(key);
     if (pending) return pending;
     const operation = this.deliverMatches(request, roleIds, notification.heartbeat).finally(() => this.pending.delete(key));
@@ -261,6 +264,9 @@ export class AgentCompletionDeliveryService {
         const projectCondition = rule.conditions.find(condition => condition.type === "project");
         if (projectCondition) {
           if (!request.cwd?.trim()) continue;
+          if (request.sourceInstance && !this.options.projectIdentity) {
+            throw new Error("Remote project identity cannot be read on the Manager computer; use the bound plan or configure a remote-aware project identity reader.");
+          }
           project ??= await identify(request.cwd);
           if (await identify(projectCondition.path!) !== project) continue;
         }
@@ -274,7 +280,7 @@ export class AgentCompletionDeliveryService {
         if (targets.has(target)) continue;
         targets.add(target);
         const deliveryId = `agent-completion-${createHash("sha256").update(JSON.stringify([
-          request.sessionId, request.turnId, target
+          planBindingSourceKey(request), request.turnId, target
         ])).digest("hex")}`;
         await this.options.deliver(owner, request, deliveryId, context);
         results.push({ ruleId: rule.id, status: "sent" });

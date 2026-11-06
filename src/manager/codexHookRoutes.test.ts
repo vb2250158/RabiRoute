@@ -12,7 +12,7 @@ import { ManagerPluginRouteRegistry } from "./managerPluginRouteRegistry.js";
 import { apiCatalogOpenApi } from "./apiOperationCatalog.js";
 import { LanAgentAuthority } from "./lanAgentAuthority.js";
 import { evaluateLanAgentRequest, assertTrustedLanAgentPrincipal } from "./lanAgentRequestAccess.js";
-import { assertLanAgentBodyAuthority, registerLanAgentBodyGuard } from "./lanAgentBodyAuthority.js";
+import { assertLanAgentBodyAuthority, captureTrustedLanAgentSource, registerLanAgentBodyGuard } from "./lanAgentBodyAuthority.js";
 
 async function fixture(planStorageReady: NonNullable<CodexHookContextServiceOptions["planStorageReady"]> = () => true,
   beforeRequest?: (request: http.IncomingMessage, response: http.ServerResponse) => boolean, typed = false) {
@@ -54,6 +54,7 @@ for (const typed of [false, true]) test(`authenticated remote Hook management ne
   const app = await fixture(() => true, (request, response) => {
     const access = evaluateLanAgentRequest(request, authority, true);
     if (access.kind !== "agent") { response.writeHead(403).end(); return false; }
+    captureTrustedLanAgentSource(request, "test-admission");
     registerLanAgentBodyGuard(request, body => assertLanAgentBodyAuthority(new URL(request.url!, "http://fixture.invalid").pathname,
       body, assertTrustedLanAgentPrincipal(request)?.source));
     observed?.();
@@ -63,10 +64,29 @@ for (const typed of [false, true]) test(`authenticated remote Hook management ne
   const headers = { authorization: `Bearer ${credential.token}`, "x-rabiroute-agent-type": "dsh", "x-rabiroute-session-id": "own-session", "content-type": "application/json" };
   const managed = await fetch(`${app.baseUrl}/api/codex-hook/sessions/another-target`, { method: "PUT", headers, body: JSON.stringify({ roleId: "YeYu" }) });
   assert.equal(managed.status, 200);
+  assert.equal(app.service.getBinding("another-target"), null, "remote management must not overwrite local session coordinates");
+  assert.equal(app.service.getBinding("another-target", { instanceId: "remote-node" }, "dsh")?.roleId, "YeYu");
+  app.service.bindSession("own-session", "YeYu");
+  let captured: Parameters<CodexHookContextService["handleHook"]>[0] | undefined;
+  const actualHook = app.service.handleHook.bind(app.service);
+  app.service.handleHook = async value => { captured = value; return actualHook(value); };
   const hookBody = { hook_event_name: "SessionStart", session_id: "own-session", agentType: "dsh" };
-  assert.equal((await fetch(`${app.baseUrl}/api/codex-hook/context`, { method: "POST", headers, body: JSON.stringify(hookBody) })).status, 200);
-  assert.equal((await fetch(`${app.baseUrl}/api/codex-hook/context`, { method: "POST", headers, body: JSON.stringify({ ...hookBody, session_id: "foreign" }) })).status, 400);
-  assert.equal((await fetch(`${app.baseUrl}/api/codex-hook/context`, { method: "POST", headers, body: JSON.stringify({ ...hookBody, agentType: "codex" }) })).status, 400);
+  const remoteContext = await fetch(`${app.baseUrl}/api/codex-hook/context`, { method: "POST", headers, body: JSON.stringify({ ...hookBody,
+    instanceBinding: { instanceId: "forged", agentId: "forged" }, sourceInstance: { instanceId: "forged" },
+    trustedRemoteSource: { nodeId: "forged", authorizationIncarnation: "forged" } }) });
+  assert.equal(remoteContext.status, 200);
+  assert.equal((await remoteContext.json()).data.binding, null, "body coordinates cannot select a local or forged persona binding");
+  assert.deepEqual(captured?.sourceInstance, { instanceId: "remote-node" });
+  assert.equal(captured?.trustedRemoteSource?.nodeId, "remote-node");
+  assert.equal(captured?.trustedRemoteSource?.provider, "dsh");
+  assert.equal(captured?.trustedRemoteSource?.sessionId, "own-session");
+  assert.notEqual(captured?.trustedRemoteSource?.authorizationIncarnation, "forged");
+  assert.ok(app.service.getBinding("own-session"), "local binding is retained");
+  for (const body of [{ ...hookBody, session_id: "foreign" }, { ...hookBody, agentType: "codex" }]) {
+    const result = await fetch(`${app.baseUrl}/api/codex-hook/context`, { method: "POST", headers, body: JSON.stringify(body) });
+    assert.equal(result.status, 200, "retired source-description eligibility checks are not restored");
+    assert.equal((await result.json()).data.binding, null, "trusted producer coordinates still prevent binding impersonation");
+  }
 
   const started = new Promise<void>(resolve => { observed = resolve; });
   let writer!: http.ClientRequest;

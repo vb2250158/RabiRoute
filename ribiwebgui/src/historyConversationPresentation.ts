@@ -1,7 +1,7 @@
 import type { PersonaChatReply } from '@shared/personaChatHistory';
 import { personaHistoryTaskKey } from '@shared/personaChatHistory';
 
-export type HistoryConversationItem = { key:string; title:string; preview:string; time:string; subtitle?:string };
+export type HistoryConversationItem = { key:string; title:string; preview:string; time:string; subtitle?:string; agentProvider?:string };
 export function taskHistoryOutgoing(record:PersonaChatReply,taskKey?:string):boolean {
   return taskKey?record.kind!=='user_delivery'&&(record.sourceTaskKey||personaHistoryTaskKey(record.sessionId,record.sourceTaskOwner))===taskKey:record.kind==='user_delivery';
 }

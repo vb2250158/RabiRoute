@@ -1,11 +1,13 @@
 import type { PlanItem, PlanTaskBinding } from "../roleKnowledge.js";
 import type { PlanAssistantAgentType } from "../shared/agentAdapterCapabilities.js";
+import type { AgentInstanceBinding } from "../shared/agentInstance.js";
 
 export type PlanTaskDeliveryTarget = {
   agentAdapter: PlanAssistantAgentType;
   threadId: string;
   title: string;
   cwd: string;
+  instanceBinding?: AgentInstanceBinding;
   createIfMissing: true;
 };
 
@@ -28,6 +30,7 @@ export function planTaskDeliveryTarget(plan: PlanItem): PlanTaskDeliveryTarget |
     threadId,
     title: binding?.sessionTitle?.trim() || plan.title,
     cwd,
+    ...(binding.instanceBinding ? { instanceBinding: binding.instanceBinding } : {}),
     createIfMissing: true
   };
 }

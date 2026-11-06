@@ -13,7 +13,7 @@ export function activate(api: AgentWebModuleApi): () => void {
         warnings.push(`当前会话属于 ${selected.projectPath}，和工作目录不一致。`);
       }
       return [...new Set(warnings)];
-    } }
+    } }, new URL("../../assets/agents/copilot.svg", import.meta.url).href
   ));
   return () => { for (const dispose of disposers.reverse()) dispose(); };
 }

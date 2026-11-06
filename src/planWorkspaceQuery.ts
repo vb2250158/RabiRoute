@@ -1,8 +1,9 @@
 import path from "node:path";
 import type { RolePlanPageReadInput } from "./manager/managerReadWorkerPool.js";
+import { normalizeAgentInstanceBinding, type AgentInstanceBinding } from "./shared/agentInstance.js";
 
 /** Session identities supplied by the owning Agent host, never inferred from a title. */
-export type PlanBindingScope = { agentType: string; workspace: string; sessionIds: string[] };
+export type PlanBindingScope = { agentType: string; workspace: string; sessionIds: string[]; instanceBinding?: AgentInstanceBinding };
 
 /** Canonical absolute workspace identity across Windows and POSIX hosts. */
 export function planWorkspaceIdentity(value: string): string {
@@ -22,6 +23,7 @@ export function parseWorkspacePlanQuery(value: unknown): RolePlanPageReadInput {
   const input = value as Record<string, unknown>;
   const scope = input.bindingScope as Partial<PlanBindingScope> | undefined;
   if (!scope || typeof scope.agentType !== "string" || !scope.agentType.trim() || typeof scope.workspace !== "string" || !planWorkspaceIdentity(scope.workspace) || !Array.isArray(scope.sessionIds) || scope.sessionIds.some(id => typeof id !== "string" || !id.trim())) throw new Error("Invalid plan binding scope.");
+  const instanceBinding = normalizeAgentInstanceBinding(scope.instanceBinding);
   const strings = (key: string): string[] => {
     const list = input[key] ?? [];
     if (!Array.isArray(list) || list.some(item => typeof item !== "string")) throw new Error("Invalid " + key);
@@ -37,5 +39,5 @@ export function parseWorkspacePlanQuery(value: unknown): RolePlanPageReadInput {
   if (input.query !== undefined && typeof input.query !== "string") throw new Error("Invalid plan query text.");
   return { cursor: String(input.cursor ?? ""), limit: Number(limit), query: String(input.query ?? ""),
     sort: sort as RolePlanPageReadInput["sort"], view: view as RolePlanPageReadInput["view"], statuses: strings("statuses"), tags: strings("tags"), summary: true, includeFacets: true,
-    bindingScope: { agentType: scope.agentType, workspace: planWorkspaceIdentity(scope.workspace), sessionIds: [...new Set(scope.sessionIds)] } };
+    bindingScope: { agentType: scope.agentType, workspace: planWorkspaceIdentity(scope.workspace), sessionIds: [...new Set(scope.sessionIds)], ...(instanceBinding ? { instanceBinding } : {}) } };
 }

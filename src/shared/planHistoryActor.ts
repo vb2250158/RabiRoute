@@ -1,11 +1,13 @@
 import type { AgentAdapterType } from "./agentAdapterCapabilities.js";
 import { agentIdentityForMessageSource, normalizeRabiMessageSource } from "./rabiMessage.js";
+import { normalizeAgentInstanceBinding, type AgentInstanceBinding } from "./agentInstance.js";
 
 /** Historical attribution only; never an authentication or authorization grant. */
 export type PlanHistoryActor = {
   kind: "agent" | "user" | "system" | "unknown";
   agentType?: string;
   sessionId?: string;
+  instanceBinding?: AgentInstanceBinding;
   displayName?: string;
   channel?: string;
   workspace?: string;
@@ -23,6 +25,7 @@ export function normalizePlanHistoryActor(value: unknown): PlanHistoryActor | un
     if (text && text.length <= 2000 && !/[\r\n\u2028\u2029]/.test(text)) actor[key] = text;
   }
   if (actor.kind === "agent" && (!actor.agentType || !actor.sessionId)) return undefined;
+  if (raw.instanceBinding != null) actor.instanceBinding = normalizeAgentInstanceBinding(raw.instanceBinding);
   return actor;
 }
 
@@ -32,7 +35,7 @@ export async function resolvePlanHistoryActor(
   options: {
     verifiedUserEntry?: boolean;
     readAgent: (identity: { agentAdapter: AgentAdapterType; sessionId: string; workspace?: string }) => Promise<{
-      id: string; title: string; cwd?: string; archived?: boolean; baseUrl?: string;
+      id: string; title: string; cwd?: string; archived?: boolean; baseUrl?: string; instanceBinding?: AgentInstanceBinding;
     }>;
   }
 ): Promise<PlanHistoryActor> {
@@ -54,6 +57,7 @@ export async function resolvePlanHistoryActor(
     displayName: owner.title,
     channel: identity.agentAdapter,
     ...(owner.cwd ? { workspace: owner.cwd } : {}),
-    ...(owner.baseUrl ? { baseUrl: owner.baseUrl } : {})
+    ...(owner.baseUrl ? { baseUrl: owner.baseUrl } : {}),
+    ...(owner.instanceBinding ? { instanceBinding: owner.instanceBinding } : {})
   };
 }

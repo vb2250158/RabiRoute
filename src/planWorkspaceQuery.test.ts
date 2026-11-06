@@ -5,6 +5,17 @@ import { parseWorkspacePlanQuery, planWorkspaceIdentity } from './planWorkspaceQ
 const presentation = { status: 'active', label: 'Active', labelEn: 'Active', description: '', descriptionEn: '', tone: 'active', statusLevel: 0, views: ['current'], roles: [], palette: { accent: '#00a', background: '#fff', foreground: '#000' }, importance: { level: 1 }, urgency: { level: 1 }, approval: { state: 'none' as const } };
 const binding = { agentType: 'dsh', workspace: 'C:\\Project\\Game', sessionId: 'a' };
 const item = (id: string) => ({ id, title: 'Needle ' + id, currentStep: 'test', status: 'active', updatedAt: '2026-01-01', keywords: ['keyword'], presentation, taskBinding: binding });
+
+test('same session/workspace inventories remain separated by exact computer owner', () => {
+  const one = { instanceId: 'pc-one', agentId: 'native', ownerDeviceId: 'peer' };
+  const two = { instanceId: 'pc-two', agentId: 'native', ownerDeviceId: 'peer' };
+  const plans = [item('local'), { ...item('remote-one'), taskBinding: { ...binding, instanceBinding: one } }, { ...item('remote-two'), taskBinding: { ...binding, instanceBinding: two } }];
+  const filter = { bindingScope: { agentType: 'dsh', workspace: binding.workspace, sessionIds: [binding.sessionId] } };
+  assert.deepEqual(paginateRolePlans(plans, '', 20, filter).items.map(x => x.id), ['local']);
+  const remote = parseWorkspacePlanQuery({ ...filter, bindingScope: { ...filter.bindingScope, instanceBinding: one } });
+  assert.deepEqual(paginateRolePlans(plans, '', 20, remote).items.map(x => x.id), ['remote-one']);
+  assert.throws(() => parseWorkspacePlanQuery({ bindingScope: { ...filter.bindingScope, instanceBinding: {} } }), /binding/);
+});
 test('workspace and real session scope apply before totals, facets and pagination', () => {
   const plans = [item('one'), { ...item('wrong-agent'), taskBinding: { ...binding, agentType: 'codex' } }, { ...item('wrong-workspace'), taskBinding: { ...binding, workspace: 'C:/Project/Other' } }, { ...item('missing-session'), taskBinding: { ...binding, sessionId: 'deleted' } }, { ...item('two'), secretaryBinding: binding }];
   const filter = { bindingScope: { agentType: 'dsh', workspace: 'c:/project/game/', sessionIds: ['a'] }, query: 'keyword' };

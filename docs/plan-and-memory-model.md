@@ -6,6 +6,14 @@
 
 # 计划和记忆机制
 
+## 跨电脑执行任务绑定
+
+`taskBinding.instanceBinding` 可选，复用 Agent 接口的 `{instanceId, agentId, ownerDeviceId?}`。省略表示原本机任务；明确保存远端坐标时，状态、打开、反馈、QA 续投与原投递回执都使用这组坐标，不按标题或会话 ID 猜机器。使用 `GET /api/lan-agent/instances` 取得实例和 Agent，再通过带 `instanceBinding` 的 `POST /api/agent/threads`、`action=read` 核对原完整会话 ID 和工作区。计划 PATCH 使用最新 ETag、稳定 `Idempotency-Key` 并读回，不新建替代任务。只改其它字段不清除坐标，历史定位只使用历史 actor 自己记录的坐标；步骤、附件及原 CAS/幂等合同不变。
+
+完成 Hook 从已鉴权连接取得来源节点，正文不能自报另一台电脑。连接器只证明节点、provider 和完整会话时，不把 provider 别名错当配置 Agent ID；远端事件不会匹配同 ID 的本机或其它节点计划。旧本机去重键保持原值，远端按真实来源隔离。秘书完成提示携带原业务绑定，续投显式传 `instanceBinding`，不自动改计划或重发旧业务。
+
+工作区清单 `bindingScope` 和 DSH 自动推进请求也接受相同可选坐标；省略时只匹配本机绑定。推进按精确 owner 分组、预留和发送，不增加权限或自动启用规则。LAN 连接器 Hook 与跨 Manager peer Hook 的现场验收分别记录。
+
 ## 记忆召回的查看时间
 
 召回已存在的 Markdown 记忆时，只重新读取并核验目标文件的逻辑 ID，再更新 `viewedAt`、`recalledAt` 和存储版本。这样保留文件里较新的正文，也避免在 NAS 上仅更新时间就重新读取整份记忆目录。缺少规范文件的旧 JSON 记忆仍通过原有目录冲突检查迁移；创建、改名和正式内容修改的完整校验不变。

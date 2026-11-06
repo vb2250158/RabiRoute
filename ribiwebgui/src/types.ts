@@ -346,6 +346,7 @@ export type RolePlan = {
   taskBinding?: {
     agentType: "codex" | "dsh";
     sessionId: string;
+    instanceBinding?: import("@shared/agentInstance").AgentInstanceBinding;
     sessionTitle?: string;
     workspace?: string;
     baseUrl?: string;

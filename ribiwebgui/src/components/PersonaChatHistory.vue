@@ -2,6 +2,8 @@
 import { userFacingError } from "../userFacingError";
 import { computed, nextTick, onActivated, onBeforeUnmount, onDeactivated, ref, watch, type VNodeRef } from "vue";
 import { taskHistoryOutgoing } from '../historyConversationPresentation';
+import { historyMessageAgentProvider } from '../agentAdapters/agentAvatarPresentation';
+import AgentAvatar from './AgentAvatar.vue';
 import type { PersonaChatHistoryPage, PersonaChatReply } from "@shared/personaChatHistory";
 import type { ChatHistoryCategory } from '@shared/personaHistoryChannels';
 import { mergeChatHistoryBatch, readChatHistoryAddition, retainChatHistoryWindow } from "../personaChatHistoryUpdates";
@@ -220,7 +222,8 @@ onActivated(()=>{if(entries.value.length&&props.active)void load();});
     <div ref="listElement" class="chat-history-list" aria-live="polite" :aria-busy="loading">
       <v-virtual-scroll v-if="entries.length" ref="virtualList" :items="displayedEntries" item-key="id" :renderless="true" :item-height="180">
       <template #default="{ item: entry, itemRef }: { item: PersonaChatReply; itemRef?: VNodeRef }">
-      <div :ref="itemRef" class="chat-history-item">
+      <div :ref="itemRef" class="chat-history-item" :class="{'conversation-message-row':conversation,'conversation-row-outgoing':conversation&&taskHistoryOutgoing(entry,taskKey)}">
+      <AgentAvatar v-if="conversation" :provider="historyMessageAgentProvider(entry)" :kind="entry.kind==='user_delivery'||entry.kind==='aiui_user'?'user':'agent'" />
       <article :key="entry.id" :data-entry-id="entry.id" class="chat-reply" :class="{'conversation-outgoing':conversation&&taskHistoryOutgoing(entry,taskKey)}">
         <div class="text-caption text-medium-emphasis mb-2">
           <template v-if="conversation">
@@ -283,6 +286,9 @@ onActivated(()=>{if(entries.value.length&&props.active)void load();});
 .conversation-header{position:sticky;top:112px;z-index:4;min-height:58px;background:rgb(var(--v-theme-background));padding:8px 0;border-bottom:1px solid rgba(var(--v-theme-on-surface),.08);}
 .conversation-surface .chat-reply{width:fit-content;max-width:88%;border:0;border-radius:10px;background:rgba(var(--v-theme-on-surface),.075);padding:10px 13px;}
 .conversation-surface .conversation-outgoing{margin-left:auto;background:rgba(var(--v-theme-secondary),.14);}
+.conversation-message-row{display:flex;align-items:flex-start;gap:10px;min-width:0;}
+.conversation-message-row.conversation-row-outgoing{flex-direction:row-reverse;}
+.conversation-message-row>.chat-reply{margin-left:0;margin-right:0;max-width:calc(88% - 46px);}
 .conversation-surface .chat-task-row{display:block;}
 .conversation-surface .chat-task-source,.conversation-surface .chat-task-target{flex:initial;text-align:left;}
 .conversation-surface .chat-task-node{display:inline;margin-left:6px;}

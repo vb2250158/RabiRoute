@@ -4,9 +4,11 @@ import { planStepIsCompleted, type PlanItem, type PlanStep } from "../roleKnowle
 import { roleStorageOperationKey } from "./roleStorageApplication.js";
 import type { PlanAssistantAgentType } from "../shared/agentAdapterCapabilities.js";
 import { planTaskDeliveryTarget } from "./planTaskBindingDelivery.js";
+import type { AgentInstanceBinding } from "../shared/agentInstance.js";
 import { planStatusKeyForRole, type PersonaPlanWorkflow } from "../personaPlanWorkflow.js";
 
 export type PlanQaTaskRequest = {
+  instanceBinding?: AgentInstanceBinding;
   agentAdapter: PlanAssistantAgentType;
   threadId: string;
   title: string;
@@ -17,6 +19,8 @@ export type PlanQaTaskRequest = {
 };
 
 export type PlanQaTaskDeliveryReadRequest = {
+  agentAdapter?: PlanAssistantAgentType;
+  instanceBinding?: AgentInstanceBinding;
   threadId: string;
   cwd: string;
   deliveryId: string;
@@ -496,6 +500,8 @@ export async function consumePlanQaFeedback(
       throw new Error(`QA feedback ${latest.id} requires authoritative delivery readback before retry.`);
     }
     const readback = await options.readTaskDelivery({
+      agentAdapter: taskTarget.agentAdapter,
+      ...(taskTarget.instanceBinding ? { instanceBinding: taskTarget.instanceBinding } : {}),
       threadId: taskTarget.threadId,
       cwd: taskTarget.cwd,
       deliveryId: latest.id
@@ -532,6 +538,8 @@ export async function consumePlanQaFeedback(
     if (options.readTaskDelivery) {
       try {
         const readback = await options.readTaskDelivery({
+          agentAdapter: taskTarget.agentAdapter,
+          ...(taskTarget.instanceBinding ? { instanceBinding: taskTarget.instanceBinding } : {}),
           threadId: taskTarget.threadId,
           cwd: taskTarget.cwd,
           deliveryId: latest.id

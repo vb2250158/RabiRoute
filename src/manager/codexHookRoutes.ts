@@ -1,6 +1,6 @@
 import { errorResponsePresentation } from "../shared/errorPresentation.js";
 import http from "node:http";
-import { validateLanAgentRequestBody } from "./lanAgentBodyAuthority.js";
+import { getTrustedLanAgentSource, validateLanAgentRequestBody } from "./lanAgentBodyAuthority.js";
 import { assertTrustedLanAgentPrincipal } from "./lanAgentRequestAccess.js";
 import { CODEX_HOOK_BODY_MAX_BYTES, CODEX_HOOK_OPERATIONS, codexHookOperationContract, type CodexHookOperationKey } from "./codexHookContract.js";
 import type { ApiOperationDefinition, ApiOperationResult } from "./apiOperationContract.js";
@@ -49,11 +49,16 @@ function managerBaseUrl(request: http.IncomingMessage): string {
 }
 
 export function hookContextRequest(body: Record<string, unknown>, request: http.IncomingMessage) {
+  const principal = assertTrustedLanAgentPrincipal(request);
+  const trustedRemoteSource = getTrustedLanAgentSource(request);
   return {
     // Older Codex hook packages predate adapter tagging and omit `agentType`.
     // Codex is the only untagged producer, so an absent value means Codex.
-    agentType: typeof body.agentType === "string" && body.agentType.trim() ? body.agentType : "codex",
-    sessionId: String(body.session_id || body.sessionId || ""),
+    agentType: principal?.source?.provider ?? (typeof body.agentType === "string" && body.agentType.trim() ? body.agentType : "codex"),
+    sessionId: principal?.source?.sessionId ?? String(body.session_id || body.sessionId || ""),
+    // CLI ingress proves node/provider/session, not a configured connector Agent ID.
+    ...(principal ? { sourceInstance: { instanceId: principal.nodeId } } : {}),
+    ...(trustedRemoteSource ? { trustedRemoteSource: Object.freeze({ ...trustedRemoteSource }) } : {}),
     eventName: String(body.hook_event_name || body.eventName || "") as CodexHookEventName,
     prompt: typeof body.prompt === "string" ? body.prompt : undefined,
     source: typeof body.source === "string" ? body.source : undefined,
@@ -86,14 +91,17 @@ async function runCodexHookOperation(key: CodexHookOperationKey, request: http.I
   try {
     let data: unknown;
     if (key === "context" || key === "bind") validateLanAgentRequestBody(request, body);
+    const principal = assertTrustedLanAgentPrincipal(request);
+    const sourceInstance = principal ? { instanceId: principal.nodeId } : undefined;
+    const sourceAgentType = principal?.source?.provider;
     switch (key) {
       case "context": data = await service.handleHook(hookContextRequest(body as Record<string, unknown>, request)); break;
       case "roles": data = { roleIds: service.listRoles() }; break;
       case "doctor": data = service.doctor(); break;
       case "sessions": data = { sessions: service.listBindings() }; break;
-      case "session": data = service.getBinding(sessionId!); break;
-      case "bind": data = service.bindSession(sessionId!, String((body as Record<string, unknown>).roleId || "")); break;
-      case "unbind": assertTrustedLanAgentPrincipal(request); data = { removed: service.unbindSession(sessionId!) }; break;
+      case "session": data = service.getBinding(sessionId!, sourceInstance, sourceAgentType); break;
+      case "bind": data = service.bindSession(sessionId!, String((body as Record<string, unknown>).roleId || ""), sourceInstance, sourceAgentType); break;
+      case "unbind": data = { removed: service.unbindSession(sessionId!, sourceInstance, sourceAgentType) }; break;
     }
     return { status: 200, body: { code: 0, data } };
   } catch (error) { return hookFailure(error); }

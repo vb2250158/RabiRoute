@@ -160,7 +160,7 @@ function gatewayRuntimeColor(gateway: any): string {
             icon="mdi-arrow-right"
             size="small"
             variant="text"
-            title="打开消息适配器配置"
+            title="打开消息连接器配置"
             @click.stop="goToRoute(gw.id)"
           />
           <v-btn

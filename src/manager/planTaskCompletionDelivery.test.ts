@@ -9,6 +9,7 @@ import {
   type RolePanelTimelineMessage
 } from "../rolePanelTimeline.js";
 import type { PlanItem } from "../roleKnowledge.js";
+import { remoteAgentTargetKey } from "../shared/routeAgentTargets.js";
 import {
   createPlanTaskCompletionDelivery,
   planTaskCompletionAgentText,
@@ -66,6 +67,74 @@ function appendTimelineTo(roleDir: string) {
   return async (_roleId: string, message: RolePanelTimelineMessage) =>
     appendRolePanelTimelineMessageIfAbsent(roleDir, message);
 }
+
+test("completion loop checks compare actual source and target owners, not just equal session text", async t => {
+  const roleDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabi-plan-owner-loop-"));
+  t.after(() => fs.rmSync(roleDir, { recursive: true, force: true }));
+  const cases = [
+    { name: "local self-loop", source: undefined, target: undefined, blocked: true },
+    { name: "remote source to local same-ID secretary", source: { instanceId: "pc-one" }, target: undefined, blocked: false },
+    { name: "same remote owner", source: { instanceId: "pc-one" }, target: { instanceId: "pc-one", agentId: "agent-a" }, blocked: true },
+    { name: "different remote owner", source: { instanceId: "pc-one" }, target: { instanceId: "pc-two", agentId: "agent-a" }, blocked: false },
+    { name: "known distinct remote Agent", source: { instanceId: "pc-one", agentId: "agent-b" }, target: { instanceId: "pc-one", agentId: "agent-a" }, blocked: false }
+  ];
+  for (const input of cases) for (const secretary of [false, true]) {
+    const selected = runtime("owner-loop", "YeYu", "source-session");
+    if (input.target) {
+      const id = remoteAgentTargetKey(input.target);
+      selected.definition.remoteAgentTargets = [{ ...input.target, id, provider: "codex", sessionId: "source-session" }];
+      selected.definition.primaryAgentTarget = id;
+    }
+    selected.definition.codexPlanAssistantEnabled = secretary;
+    let handedOff = 0;
+    const deliver = createPlanTaskCompletionDelivery({ getRuntime: () => selected, listRuntimes: () => [selected],
+      roleIdForDefinition: definition => definition.agentRoleId || "",
+      appendTimeline: async () => { throw new Error("fixture timeline not required"); },
+      triggerRolePanelMessage: async () => { handedOff++; },
+      assignSecretary: async () => ({ agentAdapter: "codex", threadId: "source-session", threadName: "Secretary", workspace: "F:/Project", index: 1 }),
+      sendToSecretary: async () => { handedOff++; } });
+    const completed = { ...delivery(roleDir, selected.definition.id), sourceInstance: input.source };
+    if (input.blocked) await assert.rejects(deliver(completed), /must differ from the completed task session/, `${input.name}/${secretary}`);
+    else await deliver(completed);
+    assert.equal(handedOff, input.blocked ? 0 : 1, `${input.name}/${secretary}`);
+  }
+});
+
+test("same-ID local fallback distinguishes providers and retains a true DSH self-loop guard", async t => {
+  const roleDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabi-plan-provider-loop-"));
+  t.after(() => fs.rmSync(roleDir, { recursive: true, force: true }));
+  const selected = runtime("provider-loop", "YeYu", "source-session");
+  selected.definition.agentAdapters = ["dsh"];
+  selected.definition.dshSessionId = "source-session";
+  let handedOff = 0;
+  const deliver = createPlanTaskCompletionDelivery({ getRuntime: () => selected, listRuntimes: () => [selected],
+    roleIdForDefinition: definition => definition.agentRoleId || "", appendTimeline: async () => { throw new Error("fixture timeline not required"); },
+    triggerRolePanelMessage: async () => { handedOff++; } });
+  await deliver({ ...delivery(roleDir, selected.definition.id), sourceAgentType: "codex" });
+  assert.equal(handedOff, 1);
+  await assert.rejects(deliver({ ...delivery(roleDir, selected.definition.id), sourceAgentType: "dsh" }), /must differ from the completed task session/);
+  assert.equal(handedOff, 1);
+});
+
+test("remote completion carries exact continuation coordinates and distinct source receipt identity", async t => {
+  const roleDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabi-plan-remote-delivery-"));
+  t.after(() => fs.rmSync(roleDir, { recursive: true, force: true }));
+  const selected = runtime("remote-reminder", "YeYu");
+  const messages: Array<{ id: string; text: string }> = [];
+  const deliver = createPlanTaskCompletionDelivery({ getRuntime: () => selected, listRuntimes: () => [selected],
+    roleIdForDefinition: definition => definition.agentRoleId || "", appendTimeline: appendTimelineTo(roleDir),
+    triggerRolePanelMessage: async (_runtime, id, text) => { messages.push({ id, text }); } });
+  for (const instanceId of ["pc-one", "pc-two"]) {
+    const input = delivery(roleDir, selected.definition.id);
+    input.plan.taskBinding = { ...input.plan.taskBinding!, instanceBinding: { instanceId, agentId: "configured-agent" } };
+    const request = { ...input, sourceInstance: { instanceId } };
+    const text = planTaskCompletionAgentText(request);
+    assert.ok(text.includes(`instanceBinding={"instanceId":"${instanceId}","agentId":"configured-agent"}`));
+    await deliver(request);
+  }
+  assert.equal(messages.length, 2);
+  assert.notEqual(messages[0].id, messages[1].id);
+});
 
 test("plan task completion writes the RolePanel timeline and invokes the selected route handoff", async (t) => {
   const roleDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabi-plan-delivery-"));

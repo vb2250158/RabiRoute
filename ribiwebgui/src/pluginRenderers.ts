@@ -23,6 +23,8 @@ export type TrustedWebSettingsRendererRegistration = TrustedWebRendererBase & Re
   /** Pure query projection supplied by the owning Agent Web bundle. */
   agentScanQuery?: (route: GatewayDefinition, options: AgentCardScanOptions) => URLSearchParams;
   agentRoute?: AgentRoutePresentation;
+  /** Software artwork supplied by the owning, trusted Agent Web bundle. */
+  agentAvatarUrl?: string;
 }>;
 
 export type TrustedWebStatusRendererRegistration = TrustedWebRendererBase & Readonly<{
@@ -55,6 +57,7 @@ export type AgentRoutePresentation = Readonly<{
 
 export type AgentAdapterCatalogMetadata = Readonly<{
   title: string; note: string; icon: string; order: number;
+  avatarUrl?: string;
   location: "local" | "cloud" | "device";
   hasCwd: boolean; hasThread: boolean;
 }>;
@@ -156,6 +159,7 @@ export function registerTrustedWebSettingsRenderer(input: TrustedWebSettingsRend
     writeCommandId: controlledSymbol(input.writeCommandId),
     agentScanQuery: input.agentScanQuery,
     agentRoute: input.agentRoute,
+    ...(input.agentAvatarUrl ? {agentAvatarUrl:input.agentAvatarUrl} : {}),
     component: rendererComponent(input.loader)
   });
   if (
@@ -274,7 +278,7 @@ function parseSettingsRenderer(value: unknown): WebRendererContribution | undefi
     if (!title || !note || !icon || order === undefined || !["local", "cloud", "device"].includes(String(location))
       || typeof metadata.hasCwd !== "boolean" || typeof metadata.hasThread !== "boolean") return undefined;
     return { ...identity, component: registration.component, agentType, agentCapability, agentScanQuery: registration.agentScanQuery, agentRoute: registration.agentRoute,
-      agentCatalog: { title, note, icon, order, location: location as AgentAdapterCatalogMetadata["location"], hasCwd: metadata.hasCwd, hasThread: metadata.hasThread } };
+      agentCatalog: { title, note, icon, order, ...(registration.agentAvatarUrl?{avatarUrl:registration.agentAvatarUrl}:{}), location: location as AgentAdapterCatalogMetadata["location"], hasCwd: metadata.hasCwd, hasThread: metadata.hasThread } };
   }
   if (value.endpointType === undefined && value.catalog === undefined) return { ...identity, component: registration.component };
   const endpointType = controlledSymbol(value.endpointType, 80);

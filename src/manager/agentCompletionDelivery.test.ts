@@ -15,6 +15,36 @@ const owner: CompletionRuleOwner = { roleId: "test", rule: { id: "rule", enabled
   destination: { channel: "napcat", gatewayId: "route", params: { target: "group", instanceId: "qq", targetId: "12345" } } } };
 const event = { eventName: "Stop" as const, sessionId: "agent-1", turnId: "turn-1", cwd: "/project", lastAssistantMessage: "Done" };
 
+test("plan completion discovery and pending sends separate same-ID local and remote owners", async () => {
+  const base = { agentType: "codex" as const, sessionId: event.sessionId };
+  const plans = [{ id: "local", title: "Local", taskBinding: base, messageChannels: [owner.rule.destination] },
+    ...["pc-one", "pc-two"].map(instanceId => ({ id: instanceId, title: instanceId,
+      taskBinding: { ...base, instanceBinding: { instanceId, agentId: "configured-agent" } }, messageChannels: [owner.rule.destination] }))];
+  const remote = { ...event, sourceInstance: { instanceId: "pc-one" } };
+  assert.deepEqual(planCompletionDeliveryRules("test", plans, event.sessionId).map(row => row.rule.id), ["plan-local-0"]);
+  assert.deepEqual(planCompletionDeliveryRules("test", plans, event.sessionId, remote).map(row => row.rule.id), ["plan-pc-one-0"]);
+  assert.deepEqual(completionTaskContextFromPlans(event.sessionId, plans, undefined, remote).plans, [{ id: "pc-one", title: "pc-one" }]);
+  const ids: string[] = []; const releases: Array<() => void> = [];
+  let allStarted!: () => void;
+  const started = new Promise<void>(resolve => { allStarted = resolve; });
+  const service = new AgentCompletionDeliveryService({ rules: request => planCompletionDeliveryRules("test", plans, request.sessionId, request),
+    taskContext: (_owner, request) => completionTaskContextFromPlans(request.sessionId, plans, undefined, request),
+    deliver: async (_owner, _request, id) => { ids.push(id); await new Promise<void>(resolve => { releases.push(resolve); if (releases.length === 3) allStarted(); }); } });
+  const pending = [service.handle(event), service.handle(remote), service.handle({ ...remote, sourceInstance: { instanceId: "pc-two" } })];
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try { await Promise.race([started, new Promise<never>((_resolve, reject) => { timeout = setTimeout(() => reject(new Error("Owner-scoped deliveries did not start independently")), 5000); })]); }
+  finally { if (timeout) clearTimeout(timeout); releases.forEach(release => release()); }
+  assert.equal(new Set(ids).size, 3, "same session/turn/destination on different owners needs separate durable send identities");
+  assert.deepEqual((await Promise.all(pending)).map(rows => rows[0].status), ["sent", "sent", "sent"]);
+});
+
+test("remote project conditions do not inspect a same-named Manager filesystem path", async () => {
+  const service = new AgentCompletionDeliveryService({ rules: () => [owner], deliver: async () => { assert.fail("unverified remote project must not send"); } });
+  const result = await service.handle({ ...event, sourceInstance: { instanceId: "remote-node" } });
+  assert.equal(result[0].status, "failed");
+  assert.match(result[0].reason!, /Remote project identity cannot be read on the Manager computer/);
+});
+
 test("heartbeat completion honors silence and sends only notification text without mutating hook evidence", async () => {
   const sent: string[] = [];
   let discoveries = 0;

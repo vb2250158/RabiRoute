@@ -8,6 +8,7 @@ import { userFacingError } from '../userFacingError';
 import HistoryConversationLayout from './HistoryConversationLayout.vue';
 import PersonaChatHistory from './PersonaChatHistory.vue';
 import QqReadNotice from './QqReadNotice.vue';
+import AgentAvatar from './AgentAvatar.vue';
 import { mergeHistoryTaskPage } from '../historyConversationPresentation';
 const props=defineProps<{roleId:string;category:ChatHistoryCategory;version:number;active:boolean}>();
 const {fetch}=usePersonaService(),{t}=useI18n();
@@ -15,7 +16,7 @@ const tasks=ref<PersonaHistoryTask[]>([]),peers=ref<PersonaHistoryTask[]>([]),se
 const cursor=ref<string|null>(null),peerCursor=ref<string|null>(null),loading=ref(false),peerLoading=ref(false),error=ref(''),peerError=ref('');
 const selected=computed(()=>tasks.value.find(task=>task.key===selectedKey.value));
 const subtitle=(task:PersonaHistoryTask)=>(task.owner?.nodeName||task.owner?.nodeId||t('本机'))+' · '+task.sessionId.slice(0,8);
-const items=computed(()=>tasks.value.map(task=>({key:task.key,title:task.title,preview:task.preview,time:task.receivedAt,subtitle:subtitle(task)})));
+const items=computed(()=>tasks.value.map(task=>({key:task.key,title:task.title,preview:task.preview,time:task.receivedAt,subtitle:subtitle(task),agentProvider:task.owner?.provider??'codex'})));
 const positions=new Map<string,number>();
 let request:AbortController|undefined,peerRequest:AbortController|undefined,timer:ReturnType<typeof setTimeout>|undefined,catalogQuery='';
 let catalogPages:PersonaHistoryTask[]=[];
@@ -74,7 +75,7 @@ onBeforeUnmount(()=>{clearTimeout(timer);request?.abort();peerRequest?.abort();}
         <div class="text-subtitle-2 mb-3">{{t('往来任务')}}</div>
         <QqReadNotice v-if="peerError" summary="往来任务暂时无法更新，已有记录仍可查看。" :detail="peerError" @retry="loadPeers()" />
         <v-progress-linear v-if="peerLoading" indeterminate />
-        <v-list bg-color="transparent" density="compact"><v-list-item v-for="task in peers" :key="task.key" @click="choosePeer(task)" :title="task.title" :subtitle="subtitle(task)" prepend-icon="mdi-console-line" /></v-list>
+        <v-list bg-color="transparent" density="compact"><v-list-item v-for="task in peers" :key="task.key" @click="choosePeer(task)" :title="task.title" :subtitle="subtitle(task)"><template #prepend><AgentAvatar class="task-peer-avatar" :provider="task.owner?.provider??'codex'" :size="32" /></template></v-list-item></v-list>
         <div v-if="!peers.length&&!peerLoading&&!peerError" class="text-caption text-medium-emphasis">{{t('暂无往来任务。')}}</div>
         <v-btn v-if="peerCursor" variant="text" :disabled="peerLoading" @click="loadPeers(true)">{{t('更多任务')}}</v-btn>
       </template>
@@ -84,4 +85,5 @@ onBeforeUnmount(()=>{clearTimeout(timer);request?.abort();peerRequest?.abort();}
 </template>
 <style scoped>
 .task-description,details{overflow-wrap:anywhere;}
+.task-peer-avatar{margin-right:12px;}
 </style>

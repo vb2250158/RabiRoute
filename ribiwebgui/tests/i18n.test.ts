@@ -125,7 +125,7 @@ test("translates primary Agent selection copy", () => {
 
 test("translates Quick setup copy across all three steps", () => {
   const copy = new Map<string, string>([
-    ["可以组合多个入口；单个入口可在消息适配器页继续停用或调整权限。", "You can combine multiple inputs. Disable an individual input or adjust its permissions later on the Message adapters page."],
+    ["可以组合多个入口；单个入口可在消息连接器页继续停用或调整权限。", "You can combine multiple inputs. Disable an individual input or adjust its permissions later on the Message connectors page."],
     ["QQ 群聊、私聊实时入口", "Real-time QQ group and private messages"],
     ["企业微信群聊双向入口", "Two-way WeCom group messages"],
     ["下游 Agent 设备入口，支持局域网发现和任务投递", "Downstream Agent device input with LAN discovery and task delivery"],
@@ -133,7 +133,7 @@ test("translates Quick setup copy across all three steps", () => {
     ["小爱音箱语音转写入口", "XiaoAI speaker transcription input"],
     ["眼镜是消息来源；系统内置 RabiLink 负责转接", "Glasses are the message source; the built-in RabiLink service handles forwarding"],
     ["保存后可在运行日志里手动触发一次，用来验证 Agent 端是否能收到心跳。", "After saving, trigger one heartbeat from Runtime logs to verify that the Agent receives it."],
-    ["远端 Agent 是下游 Agent 设备入口；远端设备只运行独立 bridge，无人值守等待 RabiGUI 扫描。保存后在“消息适配器”页扫描局域网，选择设备并输入密码连接。", "Remote Agent is an input for downstream Agent devices. The remote device runs only the standalone bridge and waits unattended for RabiGUI discovery. After saving, scan the LAN on Message adapters, select the device, and enter its password."],
+    ["远端 Agent 是下游 Agent 设备入口；远端设备只运行独立 bridge，无人值守等待 RabiGUI 扫描。保存后在“消息连接器”页扫描局域网，选择设备并输入密码连接。", "Remote Agent is an input for downstream Agent devices. The remote device runs only the standalone bridge and waits unattended for RabiGUI discovery. After saving, scan the LAN on Message connectors, select the device, and enter its password."],
     ["快速配置只绑定一个 Agent；先确定处理端和项目目录，再选择会话。", "Quick setup binds one Agent. Choose the handler and project directory first, then select a task."],
     ["Codex/ChatGPT Desktop 是真实消息的唯一 owner。RabiRoute 读取 Desktop 可见任务目录并通过 Desktop IPC 投递；Codex CLI 是独立 Runtime，不作为 Desktop 投递的备用路径。", "Codex/ChatGPT Desktop is the sole owner of real messages. RabiRoute reads Desktop-visible tasks and delivers through Desktop IPC. Codex CLI is a separate runtime and is not a fallback for Desktop delivery."],
     ["角色可选与配置确认", "Optional role and configuration review"],

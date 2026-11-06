@@ -8,7 +8,7 @@ export function activate(api: AgentWebModuleApi): () => void {
       if (options.limit != null) params.set("grokBotLimit", String(options.limit));
       if (route.grokBotAgentId) params.set("grokBotAgentId", route.grokBotAgentId);
       return params;
-    }
+    }, undefined, new URL("../../assets/agents/grok.jpg", import.meta.url).href
   ));
   return () => { for (const dispose of disposers.reverse()) dispose(); };
 }

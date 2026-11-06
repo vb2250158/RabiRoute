@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, ref, watch, type VNodeRef } from 'vue';
 import type { HistoryConversationItem } from '../historyConversationPresentation';
 import { useI18n } from '../i18n';
+import AgentAvatar from './AgentAvatar.vue';
 const props=defineProps<{items:HistoryConversationItem[];selected:string;search:string;loading?:boolean;detailsTitle?:string;hasDetails?:boolean}>();
 const emit=defineEmits<{select:[string];'update:search':[string]}>();
 const {t,locale}=useI18n();
@@ -26,7 +27,7 @@ onBeforeUnmount(stop);
       <v-list class="history-session-scroll" bg-color="transparent">
         <v-virtual-scroll :items="items" :item-height="72" :renderless="true"><template #default="{item,itemRef}: {item:HistoryConversationItem;itemRef?:VNodeRef}">
         <v-list-item :ref="itemRef" :key="item.key" :active="item.key===selected" @click="choose(item.key)">
-          <template #prepend><span class="history-avatar" aria-hidden="true">{{ item.title.slice(0,1) }}</span></template>
+          <template #prepend><AgentAvatar v-if="item.agentProvider" :provider="item.agentProvider" :size="44" /><span v-else class="history-avatar" aria-hidden="true">{{ item.title.slice(0,1) }}</span></template>
           <v-list-item-title class="history-row-title"><span :title="item.title" data-no-i18n>{{item.title}}</span><time :datetime="item.time" :title="date(item.time)">{{date(item.time)}}</time></v-list-item-title>
           <v-list-item-subtitle v-if="item.subtitle" data-no-i18n>{{item.subtitle}}</v-list-item-subtitle>
           <v-list-item-subtitle data-no-i18n>{{item.preview}}</v-list-item-subtitle>
@@ -59,6 +60,7 @@ onBeforeUnmount(stop);
 .history-row-title>span{min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .history-row-title>time{font-size:10px;opacity:.6;flex-shrink:0;max-width:74px;overflow:hidden;text-overflow:ellipsis;}
 .history-avatar{display:grid;place-items:center;width:36px;height:36px;border-radius:50%;margin-right:10px;background:rgba(var(--v-theme-on-surface),.08);font-size:14px;}
+.history-list :deep(.agent-avatar){margin-right:12px;}
 .history-splitter{align-self:stretch;min-height:240px;cursor:col-resize;touch-action:none;position:relative;}
 .history-splitter::after{content:'';position:absolute;top:0;bottom:0;left:5px;width:2px;background:rgba(var(--v-theme-on-surface),.12);}
 .history-splitter:hover::after,.history-splitter:focus-visible::after{background:rgb(var(--v-theme-secondary));}

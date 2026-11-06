@@ -1,4 +1,5 @@
 import { normalizePlanHistoryActor, type PlanHistoryActor } from "./shared/planHistoryActor.js";
+import { normalizeAgentInstanceBinding, type AgentInstanceBinding } from "./shared/agentInstance.js";
 import { RoleStorageValidationError } from "./shared/roleStorageValidationError.js";
 import { normalizePlanStepResources } from "./shared/planStepResources.js";
 import { planActivationStatus, planState, planStateForWrite, planCanAutoAdvance } from "./planState.js";
@@ -167,6 +168,8 @@ export type PlanTaskCompletionHook = {
 export type PlanTaskBinding = {
   agentType: PlanAssistantAgentType;
   sessionId: string;
+  /** Exact computer/Agent owner; omitted for an existing local task. */
+  instanceBinding?: AgentInstanceBinding;
   sessionTitle?: string;
   /** Last model confirmed for this business task; not a permanent owner setting. */
   modelSnapshot?: string;
@@ -1045,6 +1048,9 @@ function planTextTotal(plan: PlanItem): number {
     plan.secretaryBinding?.assignedAt,
     plan.taskBinding?.agentType,
     plan.taskBinding?.sessionId,
+    plan.taskBinding?.instanceBinding?.instanceId,
+    plan.taskBinding?.instanceBinding?.agentId,
+    plan.taskBinding?.instanceBinding?.ownerDeviceId,
     plan.taskBinding?.sessionTitle,
     plan.taskBinding?.modelSnapshot,
     plan.taskBinding?.workspace,
@@ -1488,6 +1494,11 @@ function validatePlanTaskBindingInput(value: unknown): void {
     throw new Error(`Unsupported plan taskBinding agentType: ${String(raw.agentType)}`);
   }
   if (!String(raw.sessionId || "").trim()) throw new Error("Plan taskBinding.sessionId is required.");
+  try {
+    normalizeAgentInstanceBinding(raw.instanceBinding);
+  } catch (error) {
+    throw new RoleStorageValidationError(`Plan taskBinding.instanceBinding: ${error instanceof Error ? error.message : String(error)} Discover the exact instanceId/agentId with GET /api/lan-agent/instances; read the original session through POST /api/agent/threads with action=read and that instanceBinding.`);
+  }
   validatePlanBindingBaseUrl(raw.baseUrl, "Plan taskBinding");
   if (raw.completionHook != null) {
     const hook = recordValue(raw.completionHook);
@@ -1531,9 +1542,11 @@ function normalizePlanTaskBinding(value: unknown): PlanTaskBinding | undefined {
   const sessionId = String(raw.sessionId || "").trim();
   if (!sessionId) return undefined;
   const hook = recordValue(raw.completionHook);
+  const instanceBinding = normalizeAgentInstanceBinding(raw.instanceBinding);
   return {
     agentType: normalizePlanBindingAgentType(raw.agentType),
     sessionId,
+    ...(instanceBinding ? { instanceBinding } : {}),
     sessionTitle: typeof raw.sessionTitle === "string" ? raw.sessionTitle.trim() || undefined : undefined,
     ...(typeof raw.modelSnapshot === "string" && raw.modelSnapshot.trim() ? { modelSnapshot: raw.modelSnapshot.trim() } : {}),
     workspace: typeof raw.workspace === "string" ? raw.workspace.trim() || undefined : undefined,

@@ -20,6 +20,23 @@ function parties() {
   };
 }
 
+test("Stop metadata source filters keep same-ID remote owners separate without ledger writes", async () => {
+  const persistence = new MemoryPersistence(), store = new AgentRequestStore(persistence);
+  const ids: string[] = [];
+  for (const instanceId of [undefined, "pc-one", "pc-two"]) {
+    const prepared = await store.prepare({ ...parties(), target: { ...parties().target,
+      ...(instanceId ? { endpoint: { kind: "instance" as const, managerInstanceId: "manager", instanceId, nodeId: instanceId, agentId: "native", provider: "codex", sessionId: "target", authorizationIncarnation: "epoch" } } : {}) },
+      responsePolicy: "required", responseInstruction: "Return actual evidence" });
+    await store.commit(prepared); ids.push(prepared.requestId!);
+  }
+  const writes = persistence.writes;
+  assert.deepEqual(store.unansweredTargetRequestIds("target", "C:/repo", party => !party.endpoint), [ids[0]]);
+  assert.deepEqual(store.unansweredTargetRequestIds("target", "C:/repo", party => party.endpoint?.instanceId === "pc-one"), [ids[1]]);
+  assert.equal(store.hasManagedSession("target", "C:/repo", party => party.endpoint?.instanceId === "pc-two"), true);
+  assert.equal(store.hasManagedSession("target", "C:/repo", party => party.endpoint?.instanceId === "missing"), false);
+  assert.equal(persistence.writes, writes);
+});
+
 test("required Agent messages create a tracked request only after delivery is committed", async () => {
   const persistence = new MemoryPersistence();
   const store = new AgentRequestStore(persistence, () => new Date("2026-08-07T00:00:00.000Z"));

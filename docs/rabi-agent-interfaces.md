@@ -1826,9 +1826,11 @@ GET /api/roles/:roleId/plans/:planId/attachments/:attachmentId
 
 请求审批前，Agent 应 PATCH 当前步骤的完整 `approvalRequest`。Manager 的完整性判断不阻止计划保存，但缺项时返回 `presentation.approval.state=incomplete`、`enabled=false` 和 `missing[]`；计划卡列出缺项，并禁用审批输入、附件与提交。Agent 必须在同一计划补齐审批人、决定、推荐与备选、reason、真实路径、完整命令、外部目标、验证、回退、排除范围、请求来源与回执后，才允许正式审批。
 
-`taskBinding` 可在 POST 或 PATCH 中写入，用于精确绑定一个 Codex 执行会话。当前只接受 `agentType=codex` 和非空完整 `sessionId`；`completionHook.enabled` 必须是布尔值。启用后，Codex `Stop` Hook 把官方 `last_assistant_message` 交给 Manager，Manager 再经同角色的角色面板 / Forwarding / AgentPacket 链提醒目标处理会话。`gatewayId` 在同角色有多个 Route 时必填。提醒按 `sessionId + turnId` 去重，不会自动 PATCH 计划、推进步骤或写记忆。
+`taskBinding` 可在 POST 或 PATCH 中写入，用于精确绑定原执行会话。`agentType` 使用计划合同支持的处理端，`sessionId` 保留完整原 ID；远端任务同时保存可选的 `instanceBinding={instanceId,agentId,ownerDeviceId?}` 与原 `workspace`。省略 `instanceBinding` 保持本机语义，不会扫描远端或猜测同名任务。先用 `GET /api/lan-agent/instances` 取得真实节点和 Agent，再通过 `POST /api/agent/threads` 的 `action=read`、完整会话 ID 和同一 `instanceBinding` 核对目录；参数错误需按该发现链修正，不能删掉坐标改投本机。更新原计划使用当前 ETag 与稳定幂等键，并回读绑定、步骤及附件。
 
-完成提醒来自计划独立业务任务。主角色必须在同一轮安排计划管理秘书消费结果、更新计划与记忆，并在计划仍可推进时使用 `/api/agent/threads` 的 `send` 动作向计划自身 `taskBinding.sessionId + workspace` 精确续投业务任务。秘书 ID 不得写入 `taskBinding`，秘书轮转或计划暂停也不得清空业务绑定。主角色检查全部未终态计划、秘书槽与业务任务，结束前满足“可推进但无人管理的计划数 = 0”以及“可推进但空闲的业务任务数 = 0”；这些决策与写入属于 Agent，不由 Stop Hook 或 Manager 自动执行。
+`completionHook.enabled` 必须是布尔值。启用后，Codex `Stop` Hook 把官方 `last_assistant_message` 交给 Manager；来源节点由已鉴权连接提供，不能由正文自报。完成、反馈、状态及打开任务沿原绑定端点处理，去重与忙闲按完整节点和会话身份区分；本机旧键保持兼容。`gatewayId` 在同角色有多个 Route 时必填。完成通知不会自动 PATCH 计划、推进步骤或写记忆。跨 Manager 的 Hook 来源归属仍需对应连接实际提供可信主机身份，不能仅凭计划字段声称该链已验收。
+
+完成提醒来自计划独立业务任务。主角色必须在同一轮安排计划管理秘书消费结果、更新计划与记忆，并在计划仍可推进时使用 `/api/agent/threads` 的 `send` 动作向计划自身 `taskBinding.sessionId + workspace + instanceBinding` 精确续投业务任务。秘书 ID 不得写入 `taskBinding`，秘书轮转或计划暂停也不得清空业务绑定。主角色检查全部未终态计划、秘书槽与业务任务，结束前满足“可推进但无人管理的计划数 = 0”以及“可推进但空闲的业务任务数 = 0”；这些决策与写入属于 Agent，不由 Stop Hook 或 Manager 自动执行。
 
 完成提醒失败不会阻断源 Codex 最终回答，但会记录失败并返回非阻塞系统警告。workspace、角色、gateway 或源/目标任务冲突均失败关闭；未完成双真实 Desktop 任务验收前，该接口能力为实验状态。
 

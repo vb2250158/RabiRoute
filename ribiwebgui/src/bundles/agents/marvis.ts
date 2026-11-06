@@ -5,7 +5,7 @@ export function activate(api: AgentWebModuleApi): () => void {
     api.forInstance(instanceId), "marvis", () => import("../../agentAdapters/MarvisAgentCard.vue"), (route, options) => {
       const params = new URLSearchParams();
       return params;
-    }
+    }, undefined, new URL("../../assets/agents/marvis.ico", import.meta.url).href
   ));
   return () => { for (const dispose of disposers.reverse()) dispose(); };
 }

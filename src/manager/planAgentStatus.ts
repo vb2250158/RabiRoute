@@ -9,6 +9,7 @@ import {
 } from "../shared/agentAdapterCapabilities.js";
 import type { PlanHistoryRecord, PlanItem, PlanSecretaryBinding, PlanTaskBinding } from "../roleKnowledge.js";
 import { normalizePathForComparison } from "../shared/pathPolicy.js";
+import type { AgentInstanceBinding } from "../shared/agentInstance.js";
 
 export const PLAN_AGENT_STATUS_TIMEOUT_MS = 2_800;
 export const PLAN_DSH_AGENT_STATUS_TIMEOUT_MS = 10_000;
@@ -33,6 +34,7 @@ export type PlanAgentBindingStatus = {
   threadId: string;
   threadTitle: string;
   workspace: string;
+  instanceBinding?: AgentInstanceBinding;
   working: boolean;
   agentStatus: PlanAgentWorkStatus;
   sessionStatus: PlanAgentSessionStatus;
@@ -48,7 +50,13 @@ export type PlanAgentStatus = {
   secretaryAgent?: PlanAgentBindingStatus;
 };
 
-type PlanAgentBinding = PlanTaskBinding | PlanSecretaryBinding;
+type PlanAgentBinding = (PlanTaskBinding | PlanSecretaryBinding) & { instanceBinding?: AgentInstanceBinding };
+
+export type PlanAgentInstanceRequest = {
+  agentAdapter: PlanAssistantAgentType;
+  threadId: string;
+  instanceBinding: AgentInstanceBinding;
+};
 
 type AgentSessionReadModel = {
   id: string;
@@ -60,7 +68,7 @@ type AgentSessionReadModel = {
 
 export type PlanAgentStatusService = {
   inspectPlans(plans: PlanItem[]): Promise<PlanAgentStatus[]>;
-  openHistoryActor?(record: PlanHistoryRecord): Promise<{ opened: true; agentType: string; threadId: string; threadTitle: string; workspace: string }>;
+  openHistoryActor?(record: PlanHistoryRecord): Promise<{ opened: true; agentType: string; threadId: string; threadTitle: string; workspace: string; instanceBinding?: AgentInstanceBinding }>;
   openPlanAgent(plan: PlanItem, role: PlanAgentRole): Promise<{
     planId: string;
     role: PlanAgentRole;
@@ -68,11 +76,15 @@ export type PlanAgentStatusService = {
     threadId: string;
     threadTitle: string;
     workspace: string;
+    instanceBinding?: AgentInstanceBinding;
     opened: true;
   }>;
 };
 
 export type PlanAgentStatusDependencies = {
+  /** Manager's existing formal remote thread read/open paths, already scoped to this owner. */
+  readInstanceThread?: (request: PlanAgentInstanceRequest) => Promise<unknown>;
+  openInstanceThread?: (request: PlanAgentInstanceRequest) => Promise<void>;
   /** Legacy Codex seam retained for existing callers and tests. */
   readThread?: (threadId: string) => Promise<unknown>;
   /** Legacy Codex seam retained for existing callers and tests. */
@@ -163,7 +175,7 @@ function bindingIdentity(
   role: PlanAgentRole,
   binding: PlanAgentBinding,
   checkedAt: string
-): Pick<PlanAgentBindingStatus, "role" | "configured" | "agentType" | "threadId" | "threadTitle" | "workspace" | "checkedAt"> {
+): Pick<PlanAgentBindingStatus, "role" | "configured" | "agentType" | "threadId" | "threadTitle" | "workspace" | "instanceBinding" | "checkedAt"> {
   return {
     role,
     configured: true,
@@ -171,6 +183,7 @@ function bindingIdentity(
     threadId: String(binding.sessionId || "").trim(),
     threadTitle: String(binding.sessionTitle || "").trim(),
     workspace: String(binding.workspace || "").trim(),
+    ...(binding.instanceBinding ? { instanceBinding: binding.instanceBinding } : {}),
     checkedAt
   };
 }
@@ -264,6 +277,9 @@ function bindingKey(binding: PlanAgentBinding): string {
     binding.agentType,
     String(binding.sessionId || "").trim(),
     normalizePathForComparison(String(binding.workspace || "")),
+    binding.instanceBinding?.ownerDeviceId || "",
+    binding.instanceBinding?.instanceId || "",
+    binding.instanceBinding?.agentId || "",
     binding.agentType === "dsh" ? String(binding.baseUrl || "").trim().toLowerCase() : ""
   ].join("\u001f");
 }
@@ -287,12 +303,20 @@ export function createPlanAgentStatusService(
   // An unrecognized adapter is a hard error rather than a Codex fallback: reading
   // the wrong owner's session would report a false status.
   const readBinding = (binding: PlanAgentBinding): Promise<unknown> => {
+    if (binding.instanceBinding) {
+      if (!dependencies.readInstanceThread) return Promise.reject(new Error("Remote plan Agent status reader is unavailable."));
+      return dependencies.readInstanceThread({ agentAdapter: binding.agentType, threadId: binding.sessionId, instanceBinding: binding.instanceBinding });
+    }
     if (binding.agentType === "dsh") return readDsh(binding.sessionId, binding.baseUrl);
     if (binding.agentType === "antigravity") return readAntigravity(binding.sessionId);
     if (binding.agentType === "codex") return readCodex(binding.sessionId);
     return Promise.reject(new Error(`Plan binding names an unsupported agentType: ${binding.agentType}`));
   };
   const openBinding = (binding: PlanAgentBinding, sessionId: string): Promise<void> => {
+    if (binding.instanceBinding) {
+      if (!dependencies.openInstanceThread) return Promise.reject(new Error("Remote plan Agent navigation is unavailable."));
+      return dependencies.openInstanceThread({ agentAdapter: binding.agentType, threadId: sessionId, instanceBinding: binding.instanceBinding });
+    }
     if (binding.agentType === "dsh") return openDsh(sessionId, binding.baseUrl);
     if (binding.agentType === "antigravity") return openAntigravity(sessionId);
     if (binding.agentType === "codex") return openCodex(sessionId);
@@ -309,6 +333,7 @@ export function createPlanAgentStatusService(
       const value = await withTimeout(read(), timeoutMs(binding));
       const session = normalizeSession(value);
       if (!session) throw new Error(`${agentLabel(binding.agentType)} session status response is invalid.`);
+      if (session.id !== binding.sessionId) throw new Error("Original Agent session identity does not match the plan binding.");
       return statusFromSession(role, binding, session, checkedAt);
     } catch (error) {
       return failedBindingStatus(role, binding, checkedAt, error);
@@ -327,13 +352,15 @@ export function createPlanAgentStatusService(
         sessionId: actor.sessionId,
         sessionTitle: actor.displayName || actor.sessionId,
         workspace: actor.workspace || "",
-        ...(actor.baseUrl ? { baseUrl: actor.baseUrl } : {})
+        ...(actor.baseUrl ? { baseUrl: actor.baseUrl } : {}),
+        ...(actor.instanceBinding ? { instanceBinding: actor.instanceBinding } : {})
       };
       const session = normalizeSession(await withTimeout(readBinding(binding), timeoutMs(binding)));
       if (!session || session.id !== actor.sessionId) throw new Error("Original Agent session was not found.");
       if (session.archived) throw new Error("Original Agent session is archived.");
       await openBinding(binding, actor.sessionId);
-      return { opened: true, agentType: actor.agentType, threadId: actor.sessionId, threadTitle: session.title || binding.sessionTitle || actor.sessionId, workspace: session.cwd };
+      return { opened: true, agentType: actor.agentType, threadId: actor.sessionId, threadTitle: session.title || binding.sessionTitle || actor.sessionId, workspace: session.cwd,
+        ...(binding.instanceBinding ? { instanceBinding: binding.instanceBinding } : {}) };
     },
     async inspectPlans(plans) {
       const checkedAt = now().toISOString();
@@ -359,7 +386,7 @@ export function createPlanAgentStatusService(
         const key = bindingKey(binding);
         const existing = shared.get(key);
         if (existing) return existing.then((status) => ({ ...status, role }));
-        const read = binding.agentType === "dsh" && (!dependencies.readDshSession || dependencies.listDshSessions)
+        const read = !binding.instanceBinding && binding.agentType === "dsh" && (!dependencies.readDshSession || dependencies.listDshSessions)
           ? () => readDshFromCatalog(binding)
           : () => readBinding(binding);
         const request = inspectBinding(role, binding, checkedAt, read);
@@ -375,12 +402,13 @@ export function createPlanAgentStatusService(
     },
 
     async openPlanAgent(plan, role) {
-      const binding = role === "secretary" ? plan.secretaryBinding : plan.taskBinding;
+      const binding: PlanAgentBinding | undefined = role === "secretary" ? plan.secretaryBinding : plan.taskBinding;
       if (!binding) throw new Error(role === "secretary" ? "Plan secretary Agent is not configured." : "Plan task Agent is not configured.");
       const value = await withTimeout(readBinding(binding), timeoutMs(binding));
       const session = normalizeSession(value);
       const label = agentLabel(binding.agentType);
       if (!session) throw new Error(`${label} session status response is invalid.`);
+      if (session.id !== binding.sessionId) throw new Error("Original Agent session identity does not match the plan binding.");
       if (!workspaceMatches(String(binding.workspace || "").trim(), session.cwd)) {
         throw new Error(`Bound workspace does not match the ${label} session: ${binding.workspace || ""} != ${session.cwd}`);
       }
@@ -393,6 +421,7 @@ export function createPlanAgentStatusService(
         threadId: session.id,
         threadTitle: session.title || String(binding.sessionTitle || "").trim(),
         workspace: String(binding.workspace || "").trim() || session.cwd,
+        ...(binding.instanceBinding ? { instanceBinding: binding.instanceBinding } : {}),
         opened: true
       };
     }

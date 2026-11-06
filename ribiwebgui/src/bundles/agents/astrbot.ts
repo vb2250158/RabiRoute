@@ -15,7 +15,7 @@ export function activate(api: AgentWebModuleApi): () => void {
         if (hasLocalPassword && pluginReady && endpointReady && warning.includes("尚未验证列会话")) return false;
         return true;
       }))];
-    } }
+    } }, new URL("../../assets/agents/astrbot.svg", import.meta.url).href
   ));
   return () => { for (const dispose of disposers.reverse()) dispose(); };
 }

@@ -26,6 +26,43 @@ function publishFixtureRoleKnowledge(roleDir: string): void {
   publishRoleKnowledgeCatalogSnapshot(roleDir, readRoleKnowledgeCatalogSnapshot(roleDir));
 }
 
+test("local and remote same-ID Hooks keep persona bindings, completion targets and durable receipts separate", async t => {
+  const delivered: PlanTaskCompletionDelivery[] = [];
+  const { root, rolesRoot, roleDir, storePath, service } = fixture({ deliverPlanTaskCompletion: async value => { delivered.push(value); } });
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const local = JSON.parse(fs.readFileSync(planJsonFile(roleDir, "plan-hook", "active"), "utf8"));
+  for (const instanceId of ["pc-one", "pc-two"]) {
+    const id = `plan-${instanceId}`;
+    const file = planJsonFile(roleDir, id, "active"); fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, JSON.stringify({ ...local, id, taskBinding: { ...local.taskBinding, instanceBinding: { instanceId, agentId: "configured-agent" } } }));
+  }
+  publishFixtureRoleKnowledge(roleDir);
+  const sessionId = "session-plan-worker";
+  service.bindSession(sessionId, "YeYu");
+  service.bindSession(sessionId, "YeYu", { instanceId: "pc-one" });
+  assert.equal(service.getBinding(sessionId)?.sourceInstance, undefined);
+  assert.equal(service.getBinding(sessionId, { instanceId: "pc-one" })?.sourceInstance?.instanceId, "pc-one");
+  assert.equal(service.getBinding(sessionId, { instanceId: "pc-two" }), null);
+  const request: CodexHookContextRequest = { eventName: "Stop", sessionId, turnId: "same-turn", cwd: root, lastAssistantMessage: "Finished" };
+  for (const sourceInstance of [undefined, { instanceId: "pc-one" }, { instanceId: "pc-two" }]) {
+    const trustedRemoteSource = sourceInstance ? { nodeId: sourceInstance.instanceId, agentId: "codex", provider: "codex" as const,
+      sessionId, authorizationIncarnation: "ephemeral-authority-only" } : undefined;
+    const result = await service.handleHook({ ...request, sourceInstance, trustedRemoteSource });
+    assert.equal(result.planTaskCompletion?.status, "delivered");
+  }
+  assert.deepEqual(delivered.map(value => value.plan.id), ["plan-hook", "plan-pc-one", "plan-pc-two"]);
+  assert.deepEqual(delivered.map(value => value.sourceInstance?.instanceId), [undefined, "pc-one", "pc-two"]);
+  assert.equal(delivered[1].trustedRemoteSource?.authorizationIncarnation, "ephemeral-authority-only");
+  assert.doesNotMatch(fs.readFileSync(storePath, "utf8"), /ephemeral-authority-only|trustedRemoteSource/);
+  const reopened = new CodexHookContextService({ rolesRoot: () => rolesRoot, storePath,
+    deliverPlanTaskCompletion: async () => { assert.fail("durable same-owner completion must not send twice"); } });
+  assert.equal((await reopened.handleHook({ ...request, sourceInstance: { instanceId: "pc-one" } })).planTaskCompletion?.status, "duplicate");
+  const remoteOff = service.handleContext({ eventName: "UserPromptSubmit", sessionId, sourceInstance: { instanceId: "pc-one" }, prompt: "[rabi:off]" });
+  assert.equal(remoteOff.binding, null);
+  assert.ok(service.getBinding(sessionId));
+  assert.equal(service.getBinding(sessionId, { instanceId: "pc-one" }), null);
+});
+
 test("async hook reads keep HTTP health responsive through both physical read phases", async t => {
   let release: (() => void) | undefined;
   let arrived: (() => void) | undefined;
@@ -433,6 +470,13 @@ test("followup uses the event producer's saved settings instead of another Agent
   } }));
   const request: CodexHookContextRequest = { sessionId: "session-plan-worker", eventName: "Stop", cwd: root, lastAssistantMessage: "Result" };
   assert.equal((await service.handleHook({ ...request, agentType: "codex", turnId: "codex-turn" })).followup, undefined);
+  assert.equal((await service.handleHook({ ...request, agentType: "dsh", turnId: "wrong-provider" })).followup, undefined,
+    "another adapter cannot consume a Codex-bound plan merely by sharing its session ID");
+  const file = planJsonFile(roleDir, "plan-hook", "active");
+  const actualPlan = JSON.parse(fs.readFileSync(file, "utf8"));
+  actualPlan.taskBinding.agentType = "dsh";
+  fs.writeFileSync(file, JSON.stringify(actualPlan));
+  publishFixtureRoleKnowledge(roleDir);
   assert.match((await service.handleHook({ ...request, agentType: "dsh", turnId: "dsh-turn" })).followup!.reason, /approved DSH work/);
 });
 

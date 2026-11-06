@@ -6,6 +6,12 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.6.2 - 2026-11-06
+
+- Persist optional computer and Agent coordinates on plan bindings through status, navigation, feedback, QA continuation and original-receipt reads, preserving existing local plans.
+- Scope completion Hooks, secretary continuation, workspace inventories and DSH advancement to their actual source and target, without scanning, guessing owners or replaying old business content.
+- Reject malformed explicit bindings with discovery guidance while retaining plan content, attachments and existing ETag/idempotency conflict semantics.
+
 ## 0.6.1 - 2026-11-05
 
 - Stop Manager startup, Stop Hooks, node recovery and receipt events from automatically sweeping historical deliveries. Keep normal sends, explicit original-ID receipt checks and caller-initiated continuation under their existing contracts.

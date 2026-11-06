@@ -16,7 +16,8 @@ const json = (data: unknown): ApiResponseContract => ({ mediaType: 'application/
 const errors = Object.fromEntries([400,403,404,409,413,500].map(status => [String(status), failure]));
 const array = (items: unknown = true) => ({ type: 'array', items });
 const binding = { type: 'object', required: ['role','configured','agentType','threadId','threadTitle','workspace','working','agentStatus','sessionStatus','canOpen','checkedAt'], properties: {
-  role: { enum: ['task','secretary'] }, configured: { type: 'boolean' }, agentType: { type: 'string' }, threadId: { type: 'string' }, threadTitle: { type: 'string' }, workspace: { type: 'string' }, working: { type: 'boolean' }, agentStatus: { enum: ['working','idle','unknown'] }, sessionStatus: { type: 'string' }, canOpen: { type: 'boolean' }, checkedAt: { type: 'string' }, message: { type: 'string' }
+  role: { enum: ['task','secretary'] }, configured: { type: 'boolean' }, agentType: { type: 'string' }, threadId: { type: 'string' }, threadTitle: { type: 'string' }, workspace: { type: 'string' }, working: { type: 'boolean' }, agentStatus: { enum: ['working','idle','unknown'] }, sessionStatus: { type: 'string' }, canOpen: { type: 'boolean' }, checkedAt: { type: 'string' }, message: { type: 'string' },
+  instanceBinding: { type: 'object', required: ['instanceId','agentId'], additionalProperties: false, properties: { instanceId: { type: 'string' }, agentId: { type: 'string' }, ownerDeviceId: { type: 'string' } } }
 } };
 const statusData = { type: 'object', required: ['items','missingPlanIds'], properties: {
   items: array({ type: 'object', required: ['planId','checkedAt','taskAgent'], properties: { planId: { type: 'string' }, checkedAt: { type: 'string' }, taskAgent: binding, secretaryAgent: binding } }), missingPlanIds: array({ type: 'string' })

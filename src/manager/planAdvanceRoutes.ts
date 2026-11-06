@@ -8,6 +8,8 @@ import { planAgentStatusService } from "./planAgentStatus.js";
 import { managerKnowledgePageWorkerPool } from "./managerReadWorkerPool.js";
 import { evaluateAdvance, parseAdvancePolicy, PlanAdvanceStore, type AdvanceTrigger } from "./planAdvancePolicy.js";
 import type { AgentThreadRequest, AgentThreadRequestResult } from "../agentThreads.js";
+import { planBindingTargetKey } from "../shared/planBindingOwner.js";
+import { normalizeAgentInstanceBinding } from "../shared/agentInstance.js";
 
 import { preparePersonaResourceAdmission, type PersonaResourceIdentity } from "./personaResourceAdmission.js";
 import type { PlanAgentStatusService } from "./planAgentStatus.js";
@@ -42,6 +44,7 @@ export function createPlanAdvanceOwner(context: PlanAdvanceContext) {
             assertCurrent();
             if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error("Invalid request.");
             const body = raw as Record<string, unknown>;
+            const instanceBinding = normalizeAgentInstanceBinding(body.instanceBinding);
             const workspace = planWorkspaceIdentity(String(body.workspace ?? queryWorkspace ?? ""));
             if (!workspace) throw new Error("Absolute workspace required.");
             // Startup migration owns workflow materialization; request handlers only read
@@ -72,7 +75,7 @@ export function createPlanAdvanceOwner(context: PlanAdvanceContext) {
             } else {
               const page = await worker.queryRolePlanPage<{ items: Array<{ id: string }>; total: number; nextCursor?: string }>(dir, parseWorkspacePlanQuery({
                 cursor: body.cursor ?? "", limit: 20, statuses: Object.entries(policy.rules).filter(([, rule]) => rule.enabled).map(([key]) => key),
-                bindingScope: { agentType: "dsh", workspace, sessionIds }
+                bindingScope: { agentType: "dsh", workspace, sessionIds, ...(instanceBinding ? { instanceBinding } : {}) }
               }));
               assertCurrent();
               ids = page.items.map(item => item.id); total = page.total; nextCursor = page.nextCursor || "";
@@ -82,7 +85,8 @@ export function createPlanAdvanceOwner(context: PlanAdvanceContext) {
             assertCurrent();
             const evaluated = await Promise.all(plans.map(async plan => {
               const item = evaluateAdvance({ plan, workflow, policy, workspace, trigger, now: Date.now(), feedback: await (context.listFeedback ?? listPlanFeedbackAsync)(dir, plan.id), receipt: doc.receipts[store.receiptKey(workspace, plan.id)] });
-              if (!sessionIds.includes(plan.taskBinding?.sessionId)) { item.eligible = false; item.reason = "binding_mismatch"; }
+              if (!sessionIds.includes(plan.taskBinding?.sessionId)
+                || planBindingTargetKey({ instanceBinding: plan.taskBinding?.instanceBinding }) !== planBindingTargetKey({ instanceBinding })) { item.eligible = false; item.reason = "binding_mismatch"; }
               return item;
             }));
             assertCurrent();
@@ -99,19 +103,22 @@ export function createPlanAdvanceOwner(context: PlanAdvanceContext) {
             const groups = new Map<string, typeof evaluated>();
             for (const item of evaluated) {
               if (!item.eligible || (expected as Record<string, unknown>)[item.planId] !== item.fingerprint) { results.push({ planId: item.planId, state: "skipped", reason: item.reason || "changed_since_check" }); continue; }
-              const group = groups.get(item.sessionId!) || []; group.push(item); groups.set(item.sessionId!, group);
+              const plan = plans.find(plan => plan.id === item.planId)!;
+              const ownerKey = planBindingTargetKey(plan.taskBinding!);
+              const group = groups.get(ownerKey) || []; group.push(item); groups.set(ownerKey, group);
             }
             const currentPlans = [...groups.values()].map(group => plans.find(plan => plan.id === group[0]!.planId)!);
             const currentStatuses = await service.inspectPlans(currentPlans);
             assertCurrent();
-            const currentBySession = new Map(currentStatuses.map(status => [status.taskAgent.threadId, status.taskAgent]));
+            const currentByPlan = new Map(currentStatuses.map(status => [status.planId, status.taskAgent]));
             // Each host session receives one combined work package; multiple windows share the reservation.
-            for (const [sessionId, group] of groups) {
+            for (const [ownerKey, group] of groups) {
+              const sessionId = group[0]!.sessionId!;
               assertCurrent();
-              if (busySessions.has(sessionId)) { for (const item of group) results.push({ planId: item.planId, state: "skipped", reason: "session_reserved" }); continue; }
-              const current = currentBySession.get(sessionId);
+              if (busySessions.has(ownerKey)) { for (const item of group) results.push({ planId: item.planId, state: "skipped", reason: "session_reserved" }); continue; }
+              const current = currentByPlan.get(group[0]!.planId);
               if (current?.sessionStatus !== "idle") { for (const item of group) results.push({ planId: item.planId, state: "skipped", reason: current?.working ? "session_running" : "session_unavailable" }); continue; }
-              busySessions.add(sessionId);
+              busySessions.add(ownerKey);
               const reserved: Array<{ planId: string; id: string }> = [];
               let deliveryAttempted = false;
               try {
@@ -123,6 +130,7 @@ export function createPlanAdvanceOwner(context: PlanAdvanceContext) {
                 }
                 const plan = plans.find(row => row.id === group[0]!.planId)!;
                 const request: AgentThreadRequest = { action: "send", agentAdapter: "dsh", dshDeliveryMode: "queue", threadId: sessionId, cwd: workspace, dshBaseUrl: plan.taskBinding?.baseUrl,
+                  ...(plan.taskBinding?.instanceBinding ? { instanceBinding: plan.taskBinding.instanceBinding } : {}),
                   deliveryId: reserved[0]!.id, createIfMissing: false, prompt: group.map(item => `GET /api/roles/${encodeURIComponent(roleId)}/plans/${encodeURIComponent(item.planId)}\n${item.prompt}`).join("\n\n---\n\n"),
                   messageSource: { type: "system", eventType: "plan_advance", eventName: "Rabi plan advance", eventId: reserved[0]!.id }, responsePolicy: "none" };
                 assertCurrent();
@@ -138,7 +146,7 @@ export function createPlanAdvanceOwner(context: PlanAdvanceContext) {
                   else store.cancelUnsent(workspace, receipt.planId, receipt.id);
                 }
                 for (const item of group) results.push({ planId: item.planId, state: deliveryAttempted ? "uncertain" : "skipped", reason });
-              } finally { busySessions.delete(sessionId); }
+              } finally { busySessions.delete(ownerKey); }
             }
             assertCurrent(); return { items: results };
           } catch (error) {

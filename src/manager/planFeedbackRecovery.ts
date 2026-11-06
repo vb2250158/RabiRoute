@@ -4,6 +4,8 @@ import {
   type PlanFeedbackRecord
 } from "../planFeedback.js";
 import type { PlanItem } from "../roleKnowledge.js";
+import type { AgentInstanceBinding } from "../shared/agentInstance.js";
+import type { PlanAssistantAgentType } from "../shared/agentAdapterCapabilities.js";
 
 export type PlanFeedbackRecoveryCandidate = {
   roleDir: string;
@@ -15,6 +17,8 @@ export type PlanFeedbackRecoveryCandidate = {
 export type PlanFeedbackDeliveryInspection = "accepted" | "in_progress" | "missing";
 
 export type PlanFeedbackRecoveryTaskRequest = {
+  agentAdapter?: PlanAssistantAgentType;
+  instanceBinding?: AgentInstanceBinding;
   threadId: string;
   cwd: string;
   deliveryId: string;
@@ -138,6 +142,8 @@ export async function recoverPlanFeedbackCandidate(
   let state: PlanFeedbackDeliveryInspection;
   try {
     state = await options.inspect({
+      agentAdapter: binding.agentType,
+      ...(binding.instanceBinding ? { instanceBinding: binding.instanceBinding } : {}),
       threadId: binding.sessionId.trim(),
       cwd: binding.workspace.trim(),
       deliveryId: latestCandidate.id

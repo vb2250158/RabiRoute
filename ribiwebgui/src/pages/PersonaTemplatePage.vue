@@ -1379,7 +1379,7 @@ onBeforeUnmount(() => {
           :aria-label="t('角色配置分区')"
         >
           <v-tab value="profile" prepend-icon="mdi-account-card-outline">基础资料</v-tab>
-          <v-tab value="messages" prepend-icon="mdi-message-outline" :disabled="!hasPersona">消息适配器</v-tab>
+          <v-tab value="messages" prepend-icon="mdi-message-outline" :disabled="!hasPersona">消息连接器</v-tab>
           <v-tab value="expression" prepend-icon="mdi-account-voice" :disabled="!hasPersona">表达与语音</v-tab>
           <v-tab value="avatar" prepend-icon="mdi-account-box-outline" :disabled="!hasPersona">虚拟形象</v-tab>
           <v-tab value="identity" prepend-icon="mdi-account-group-outline" :disabled="!hasPersona">身份关系</v-tab>

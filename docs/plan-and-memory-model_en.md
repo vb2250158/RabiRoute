@@ -6,6 +6,14 @@ English | <a href="./plan-and-memory-model.md">简体中文</a>
 
 # Plans and Memory Model
 
+## Bind execution tasks on another computer
+
+Optional `taskBinding.instanceBinding` reuses `{instanceId, agentId, ownerDeviceId?}` from the Agent contract. Omission preserves a local task. Explicit remote coordinates survive persistence and address status, navigation, feedback, QA continuation and original-delivery readback. Discover coordinates with `GET /api/lan-agent/instances`, then verify the original full session ID and workspace using `POST /api/agent/threads`, `action=read`, with that binding. PATCH the original plan with its latest ETag and a stable `Idempotency-Key`, then read it back; do not create a replacement task. Unrelated updates retain coordinates, and history navigation uses only its recorded actor. Existing steps, attachments, CAS and idempotency contracts remain unchanged.
+
+Completion Hooks obtain their source node from the authenticated connection, never from body-supplied coordinates. A provider alias is not treated as a configured Agent ID when ingress proves only node, provider and full session. Remote events cannot match same-ID local or other-node plans. Legacy local deduplication keys remain unchanged; remote records are scoped to the actual source. Secretary completion prompts carry the original business binding for explicit continuation, without updating plans or replaying old work.
+
+Workspace inventory `bindingScope` and DSH advancement accept the same optional coordinates, otherwise matching local bindings only. Advancement groups, reserves and sends by exact owner, without granting permissions or enabling rules. Physical acceptance of LAN connector Hooks and cross-Manager peer Hooks is reported separately.
+
 ## Memory recall view timestamps
 
 Recalling an existing Markdown memory rereads and verifies only the target file’s logical ID before updating `viewedAt`, `recalledAt` and its storage revision. This preserves newer file content and avoids rereading the entire memory directory for a timestamp update on NAS storage. Legacy JSON memories without a canonical file still migrate through the existing catalog collision checks. Full validation for creation, renaming and explicit content edits remains unchanged.

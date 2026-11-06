@@ -153,6 +153,20 @@ test("QA post-commit confirms an uncertain send by deliveryId and never replays 
   assert.equal(readbacks, 1);
 });
 
+test("remote QA send and authoritative readback address the same original owner", async t => {
+  const { roleDir, planId } = fixture(t);
+  const before = storageProjection(roleDir, planId)!;
+  const instanceBinding = { instanceId: "pc-remote", agentId: "native", ownerDeviceId: "peer-owner" };
+  updateStoredPlan(roleDir, planId, { taskBinding: { ...before.plan.taskBinding!, instanceBinding } });
+  const feedback = appendPlanFeedback(roleDir, createPlanFeedbackRecord({ id: "qa-remote", roleId: "Rabi", planId, planTitle: "QA post-commit", stepId: "verify-post-commit", stepTitle: "QA 验收", text: "问题仍存在。复现步骤：重新执行操作。修复前结果不正确，修复后实际结果仍不正确。", author: "user", source: "webgui", notifyAgent: true }));
+  let sends = 0, reads = 0;
+  const consume = () => consumePlanQaFeedback({ roleId: "Rabi", workflow: loadDefaultPersonaPlanWorkflow(), storage: storagePort(roleDir), feedback,
+    sendToTask: async request => { sends++; assert.deepEqual(request.instanceBinding, instanceBinding); throw new Error("accepted before response was lost"); },
+    readTaskDelivery: async request => { reads++; assert.equal(request.agentAdapter, "codex"); assert.deepEqual(request.instanceBinding, instanceBinding); assert.equal(request.deliveryId, feedback.id); return "accepted"; }
+  });
+  assert.equal((await consume()).status, "dispatched"); assert.equal((await consume()).status, "dispatched"); assert.equal(sends, 1); assert.equal(reads, 1);
+});
+
 test("QA post-commit reads back persisted dispatching before any replay", async (t) => {
   const { roleDir, planId } = fixture(t);
   const created = appendPlanFeedback(roleDir, createPlanFeedbackRecord({

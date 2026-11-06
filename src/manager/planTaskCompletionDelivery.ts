@@ -11,6 +11,7 @@ import {
 import type { PlanTaskCompletionDelivery } from "./codexHookContext.js";
 import { resolvePlanSecretaryAssignment, type PlanSecretaryTarget } from "./planSecretaryAssignment.js";
 import { localPersonaRuntimeForDelivery } from "./localPersonaOwner.js";
+import { planBindingMatchesSource, planBindingSourceKey } from "../shared/planBindingOwner.js";
 
 export type PlanTaskCompletionRuntime = {
   definition: RouteAgentTargetsDefinition & {
@@ -20,6 +21,7 @@ export type PlanTaskCompletionRuntime = {
     agentAdapters?: AgentAdapterType[];
     primaryAgentAdapter?: AgentAdapterType;
     codexThreadId?: string;
+    dshSessionId?: string;
     codexPlanAssistantEnabled?: boolean;
     codexPlanAssistantModel?: string;
     codexPlanAssistantSessions?: CodexPlanAssistantSession[];
@@ -72,12 +74,14 @@ function planTaskCompletionContentLines(delivery: PlanTaskCompletionDelivery): s
 export function planTaskCompletionAgentText(delivery: PlanTaskCompletionDelivery): string {
   const boundWorkspace = String(delivery.plan.taskBinding?.workspace || delivery.sourceCwd || "").trim();
   const sourceAgentAdapter = String(delivery.plan.taskBinding?.agentType || "codex").trim() || "codex";
+  const instanceBinding = delivery.plan.taskBinding?.instanceBinding;
   return [
     ...planTaskCompletionContentLines(delivery),
     "结果已直达计划秘书。本轮完成以下事项：",
     "1. 读取计划、步骤、记忆和业务任务状态，消费本次结果；单轮结束不等于计划完成。",
     "2. 更新状态、nextAction、waitingFor、必要的 approvalRequest 和记忆。isBlocked 只由 Manager 派生。",
     `3. 计划仍可推进时，通过 POST /api/agent/threads 续投原业务任务 ${delivery.sourceSessionId}${boundWorkspace ? `（${boundWorkspace}）` : ""}；填写 messageSource={"type":"agent","agentAdapter":"${sourceAgentAdapter}","sessionId":"当前秘书会话 ID","sessionName":"当前秘书会话名称"}、sourceThreadId=当前秘书会话 ID、sourceAgentType=plan_secretary、responsePolicy=required，并给出可验证的下一步。`,
+    ...(instanceBinding ? [`远端业务目标必须保留 instanceBinding=${JSON.stringify(instanceBinding)}；原会话 ID 和工作区不变，不退回本机定位。`] : []),
     "4. 仅把决定、批准、授权、缺少输入或计划最终复核升级给主角色。",
     "5. taskBinding 只指向业务任务；秘书只维护控制面，不执行调查、代码、构建、发布或外部操作。",
     "6. 外部编辑器占用、依赖或工具不可用、共享测试排队都不构成全局等待；不得停止他人进程或取消他人测试，原任务继续实现、资产与序列化合同、非交互 runner、CLI 与范围收窄的工作，剩余运行交互转人工或后续验收。",
@@ -128,10 +132,13 @@ export function createPlanTaskCompletionDelivery<TRuntime extends PlanTaskComple
     }
 
     const eventKey = createHash("sha256")
-      .update(`${delivery.roleId}\0${delivery.plan.id}\0${delivery.sourceSessionId}\0${delivery.sourceTurnId}`)
+      .update(`${delivery.roleId}\0${delivery.plan.id}\0${planBindingSourceKey({ sessionId: delivery.sourceSessionId, agentType: delivery.sourceAgentType, sourceInstance: delivery.sourceInstance })}\0${delivery.sourceTurnId}`)
       .digest("hex")
       .slice(0, 24);
     const messageId = `plan-task-completed-${eventKey}`;
+    const target = resolvePrimaryAgentTarget(runtime.definition);
+    const source = { sessionId: delivery.sourceSessionId,
+      agentType: delivery.sourceAgentType || delivery.plan.taskBinding?.agentType || "codex", sourceInstance: delivery.sourceInstance };
     const secretary = runtime.definition.codexPlanAssistantEnabled === true
       ? options.assignSecretary
         ? await options.assignSecretary(runtime, delivery)
@@ -139,7 +146,8 @@ export function createPlanTaskCompletionDelivery<TRuntime extends PlanTaskComple
       : undefined;
     if (secretary) {
       if (!options.sendToSecretary) throw new Error("Plan secretary completion delivery is configured without a secretary sender.");
-      if (secretary.threadId === delivery.sourceSessionId) {
+      if (planBindingMatchesSource({ agentType: secretary.agentAdapter, sessionId: secretary.threadId,
+        ...(target?.binding ? { instanceBinding: target.binding } : {}) }, source)) {
         throw new Error("Plan completion secretary target must differ from the completed task session to prevent a Stop-hook delivery loop.");
       }
       await options.sendToSecretary(runtime, secretary, delivery, planTaskCompletionAgentText(delivery));
@@ -156,14 +164,16 @@ export function createPlanTaskCompletionDelivery<TRuntime extends PlanTaskComple
       return;
     }
 
-    const target = resolvePrimaryAgentTarget(runtime.definition);
     if (!target) throw new Error("Primary Agent target is not configured.");
     const targetUsesCodex = target.provider === "codex" && !target.binding;
-    const targetSessionId = target.binding ? "" : String(runtime.definition.codexThreadId || "").trim();
+    const targetSessionId = String(target.binding ? target.sessionId || ""
+      : target.provider === "codex" ? runtime.definition.codexThreadId || ""
+      : target.provider === "dsh" ? runtime.definition.dshSessionId || "" : "").trim();
     if (targetUsesCodex && !targetSessionId) {
       throw new Error(`Gateway ${runtime.definition.id} has no bound Codex Desktop task.`);
     }
-    if (targetSessionId && targetSessionId === delivery.sourceSessionId) {
+    if (targetSessionId && planBindingMatchesSource({ agentType: target.provider, sessionId: targetSessionId,
+      ...(target.binding ? { instanceBinding: target.binding } : {}) }, source)) {
       throw new Error("Plan completion reminder target must differ from the completed task session to prevent a Stop-hook delivery loop.");
     }
 
@@ -191,6 +201,7 @@ export function createPlanTaskCompletionDelivery<TRuntime extends PlanTaskComple
           roleId: delivery.roleId,
           planId: delivery.plan.id,
           sourceSessionId: delivery.sourceSessionId,
+          ...(delivery.sourceInstance ? { sourceInstance: delivery.sourceInstance } : {}),
           sourceTurnId: delivery.sourceTurnId
         }
       };

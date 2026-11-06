@@ -1,6 +1,9 @@
 import { getTimeoutMs } from "../shared/timeoutSettings.js";
 import type { PlanItem, PlanSecretaryBinding, PlanTaskBinding } from "../roleKnowledge.js";
 import type { CodexPlanAssistantSession } from "../shared/codexPlanAssistantSessions.js";
+import type { AgentInstanceBinding } from "../shared/agentInstance.js";
+import type { PlanAssistantAgentType } from "../shared/agentAdapterCapabilities.js";
+import { planBindingTargetKey } from "../shared/planBindingOwner.js";
 import { replacementPlanTaskBinding, type ResolvedPlanTask } from "./planTaskBindingDelivery.js";
 import { resolvePlanSecretaryAssignment, type PlanSecretaryTarget } from "./planSecretaryAssignment.js";
 import {
@@ -60,6 +63,8 @@ export async function replacePlanTaskBindingForDelivery(
     planId: string;
     deliveryId: string;
     oldSessionId: string;
+    oldInstanceBinding?: AgentInstanceBinding;
+    oldAgentType?: PlanAssistantAgentType;
     resolved: ResolvedPlanTask;
   }>
 ): Promise<PlanItem> {
@@ -68,13 +73,17 @@ export async function replacePlanTaskBindingForDelivery(
     input.deliveryId,
     input.oldSessionId,
     input.resolved.id,
-    input.planId
+    input.planId,
+    ...(input.oldInstanceBinding ? [planBindingTargetKey({ agentType: input.oldAgentType, sessionId: input.oldSessionId, instanceBinding: input.oldInstanceBinding })] : [])
   );
   let desiredBinding: PlanTaskBinding | null = null;
   let lastConflict: unknown;
   for (let attempt = 0; attempt < MAX_CAS_ATTEMPTS; attempt += 1) {
     const projection = await exactPlan(storage, input.roleId, input.planId);
     const currentSessionId = String(projection.plan.taskBinding?.sessionId || "");
+    if (input.oldAgentType && projection.plan.taskBinding?.agentType !== input.oldAgentType) return projection.plan;
+    if (planBindingTargetKey({ sessionId: input.oldSessionId, instanceBinding: projection.plan.taskBinding?.instanceBinding })
+      !== planBindingTargetKey({ sessionId: input.oldSessionId, instanceBinding: input.oldInstanceBinding })) return projection.plan;
     if (currentSessionId === input.resolved.id) return projection.plan;
     if (currentSessionId !== input.oldSessionId) return projection.plan;
     desiredBinding ??= replacementPlanTaskBinding(projection.plan, input.resolved);

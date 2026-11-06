@@ -452,7 +452,7 @@ export function routeKindDefinitionsForGateway(_gateway?: GatewayDefinition) {
     {
       adapter: "napcat",
       title: "NapCat / OneBot",
-      note: "QQ 实时消息；可先配置规则，再回到消息适配器启用入口。",
+      note: "QQ 实时消息；可先配置规则，再回到消息连接器启用入口。",
       groups: [
         { title: "群聊事件", routeKinds: ["direct_at", "direct_reply", "indirect_reply", "group_message"] },
         { title: "私聊事件", routeKinds: ["private"] }

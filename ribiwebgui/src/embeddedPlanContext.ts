@@ -12,11 +12,11 @@ export function embeddedPlanHost(framed: boolean, agent: unknown, session: unkno
 
 /** 只列出实际绑定，按处理端和完整会话 ID 排除宿主自身。 */
 export function visiblePlanAgentRoles(plan: {
-  taskBinding?: { agentType?: string; sessionId?: string };
+  taskBinding?: { agentType?: string; sessionId?: string; instanceBinding?: unknown };
   secretaryBinding?: { agentType?: string; sessionId?: string };
 }, host?: EmbeddedPlanHost): Array<"task" | "secretary"> {
   return (["task", "secretary"] as const).filter(role => {
     const binding = role === "task" ? plan.taskBinding : plan.secretaryBinding;
-    return Boolean(binding?.sessionId) && !(host && binding?.agentType === host.agentType && binding.sessionId === host.sessionId);
+    return Boolean(binding?.sessionId) && !(host && !("instanceBinding" in binding! && binding.instanceBinding) && binding?.agentType === host.agentType && binding.sessionId === host.sessionId);
   });
 }

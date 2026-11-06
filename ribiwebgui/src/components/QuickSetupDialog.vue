@@ -945,7 +945,7 @@ async function apply() {
                 <div class="section-title-row">
                   <div>
                     <div class="section-title">选择消息入口</div>
-                    <div class="section-note">可以组合多个入口；单个入口可在消息适配器页继续停用或调整权限。</div>
+                    <div class="section-note">可以组合多个入口；单个入口可在消息连接器页继续停用或调整权限。</div>
                   </div>
                 </div>
 

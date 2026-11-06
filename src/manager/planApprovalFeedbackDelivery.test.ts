@@ -54,6 +54,19 @@ const guidance: PlanFeedbackRecord = {
   text: "先确认整体入口体验，再调整后续步骤。"
 };
 
+test("remote feedback and its lost-response readback retain the same endpoint", async () => {
+  const instanceBinding = { instanceId: "remote-pc", agentId: "remote-codex", ownerDeviceId: "peer" };
+  let sends = 0, reads = 0;
+  const result = await deliverPlanApprovalFeedback({
+    roleId: "Planner", managerBaseUrl: "http://localhost", feedback,
+    plan: plan({ agentType: "codex", sessionId: "same-id", workspace: "F:/game", instanceBinding }),
+    sendToTask: async request => { sends++; assert.deepEqual(request.instanceBinding, instanceBinding); throw new PlanFeedbackDeliveryPendingError("response lost"); },
+    readTaskDelivery: async request => { reads++; assert.equal(request.agentAdapter, "codex"); assert.deepEqual(request.instanceBinding, instanceBinding); assert.equal(request.threadId, "same-id"); assert.equal(request.deliveryId, feedback.id); return "accepted"; },
+    sendToPersona: async () => {}
+  });
+  assert.equal(result.mode, "bound_task"); assert.equal(sends, 1); assert.equal(reads, 1);
+});
+
 test("HTTP 202 without a delivery receipt stays pending and never announces success", async () => {
   let sends = 0;
   const notices: string[] = [];

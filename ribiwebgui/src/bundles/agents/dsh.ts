@@ -8,7 +8,7 @@ export function activate(api: AgentWebModuleApi): () => void {
       if (options.limit != null) params.set("dshLimit", String(options.limit));
       if (route.dshBaseUrl?.trim()) params.set("dshBaseUrl", route.dshBaseUrl.trim());
       return params;
-    }, { session: route => ({ sessionId: String(route.dshSessionId || "").trim(), sessionName: String(route.dshSessionName || "").trim(), workspace: String(route.dshCwd || "").trim(), dshBaseUrl: String(route.dshBaseUrl || "").trim() || undefined }) }
+    }, { session: route => ({ sessionId: String(route.dshSessionId || "").trim(), sessionName: String(route.dshSessionName || "").trim(), workspace: String(route.dshCwd || "").trim(), dshBaseUrl: String(route.dshBaseUrl || "").trim() || undefined }) }, new URL("../../assets/agents/dsh.png", import.meta.url).href
   ));
   return () => { for (const dispose of disposers.reverse()) dispose(); };
 }

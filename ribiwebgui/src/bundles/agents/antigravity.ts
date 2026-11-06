@@ -7,7 +7,7 @@ export function activate(api: AgentWebModuleApi): () => void {
       if (options.offset != null) params.set("antigravityOffset", String(options.offset));
       if (options.limit != null) params.set("antigravityLimit", String(options.limit));
       return params;
-    }, { session: route => ({ sessionId: String(route.antigravityConversationId || "").trim(), sessionName: String(route.antigravityConversationName || "").trim(), workspace: String(route.antigravityCwd || "").trim() }) }
+    }, { session: route => ({ sessionId: String(route.antigravityConversationId || "").trim(), sessionName: String(route.antigravityConversationName || "").trim(), workspace: String(route.antigravityCwd || "").trim() }) }, new URL("../../assets/agents/antigravity.png", import.meta.url).href
   ));
   return () => { for (const dispose of disposers.reverse()) dispose(); };
 }

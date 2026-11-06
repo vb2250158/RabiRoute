@@ -3,8 +3,10 @@ import type { PlanAssistantAgentType } from "../shared/agentAdapterCapabilities.
 import type { PlanItem } from "../roleKnowledge.js";
 import { planFeedbackResponseMutationInstruction } from "../shared/roleStorageMutationContract.js";
 import { planTaskDeliveryTarget } from "./planTaskBindingDelivery.js";
+import type { AgentInstanceBinding } from "../shared/agentInstance.js";
 
 export type PlanApprovalFeedbackTaskRequest = {
+  instanceBinding?: AgentInstanceBinding;
   agentAdapter: PlanAssistantAgentType;
   threadId: string;
   title: string;
@@ -14,6 +16,8 @@ export type PlanApprovalFeedbackTaskRequest = {
 };
 
 export type PlanApprovalFeedbackTaskDeliveryReadRequest = {
+  agentAdapter?: PlanAssistantAgentType;
+  instanceBinding?: AgentInstanceBinding;
   threadId: string;
   cwd: string;
   deliveryId: string;
@@ -178,6 +182,8 @@ async function readTaskDeliveryAfterError(
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     try {
       lastState = await options.readTaskDelivery({
+        agentAdapter: taskRequest.agentAdapter,
+        ...(taskRequest.instanceBinding ? { instanceBinding: taskRequest.instanceBinding } : {}),
         threadId: taskRequest.threadId,
         cwd: taskRequest.cwd,
         deliveryId: options.feedback.id

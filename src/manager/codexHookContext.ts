@@ -15,6 +15,8 @@ import { appendPersonaChatReply } from "../personaChatHistory.js";
 import { readPersonaConfigFragment } from "./configMigration.js";
 import { decidePlanFollowup, type PlanFollowupReceipt } from "./planFollowup.js";
 import { agentHookSettingsFor } from "../shared/gatewayConfigModel.js";
+import { planBindingMatchesSource, planBindingSourceKey, type PlanBindingSourceInstance } from "../shared/planBindingOwner.js";
+import type { AgentThreadRemoteSource } from "../agentThreads.js";
 
 const STORE_VERSION = 8;
 const MAX_CONTEXT_CHARS = 6200;
@@ -33,6 +35,9 @@ export type PlanTaskCompletionDelivery = {
   plan: PlanItem;
   sourceSessionId: string;
   sourceAgentType?: string;
+  sourceInstance?: PlanBindingSourceInstance;
+  /** Current ingress attribution for this callback only; never persisted in Hook state. */
+  trustedRemoteSource?: AgentThreadRemoteSource;
   sourceTurnId: string;
   sourceCwd?: string;
   finalMessage: string;
@@ -71,6 +76,8 @@ export type ProjectFileChangeReminderResult = {
 
 export type CodexHookSessionBinding = {
   sessionId: string;
+  agentType?: string;
+  sourceInstance?: PlanBindingSourceInstance;
   roleId: string;
   createdAt: string;
   updatedAt: string;
@@ -93,6 +100,8 @@ export type CodexHookSessionBinding = {
 
 export type PlanTaskCompletionState = {
   sessionId: string;
+  agentType?: string;
+  sourceInstance?: PlanBindingSourceInstance;
   roleId?: string;
   planId?: string;
   turnId?: string;
@@ -122,6 +131,10 @@ type CodexHookSessionStoreFile = {
 
 export type CodexHookContextRequest = {
   agentType?: string;
+  /** Assigned by authenticated ingress, not accepted from the request body. */
+  sourceInstance?: PlanBindingSourceInstance;
+  /** Current authenticated ingress attribution; never accepted from request JSON. */
+  trustedRemoteSource?: AgentThreadRemoteSource;
   sessionId: string;
   eventName: CodexHookEventName;
   prompt?: string;
@@ -182,7 +195,7 @@ export type CodexHookContextServiceOptions = {
   recordAgentRequestStop?: (request: CodexHookContextRequest) => Promise<AgentRequestStopResult> | AgentRequestStopResult;
   /** Undefined role IDs require global recovery; explicit IDs scope all Stop plan reads. */
   planStorageReady?: (roleIds?: readonly string[]) => boolean;
-  assertSessionPersonaOwner?: (sessionId: string, cwd?: string) => void;
+  assertSessionPersonaOwner?: (sessionId: string, cwd?: string, sourceInstance?: PlanBindingSourceInstance) => void;
   chatHistoryRoleIds?: (request: CodexHookContextRequest) => readonly string[];
   /** Undefined means an ordinary session; an empty input list means dedicated but not yet verified. */
   memoryConsolidationInputIds?: (
@@ -478,45 +491,48 @@ export class CodexHookContextService {
       .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
   }
 
-  getBinding(sessionId: string): CodexHookSessionBinding | null {
+  getBinding(sessionId: string, sourceInstance?: PlanBindingSourceInstance, agentType?: string): CodexHookSessionBinding | null {
     const id = this.requireSessionId(sessionId);
-    return this.readStore().sessions[id] ?? null;
+    return this.readStore().sessions[planBindingSourceKey({ sessionId: id, agentType, sourceInstance })] ?? null;
   }
 
-  private sessionPlanRoleIds(sessionId: string): readonly string[] | undefined {
+  private sessionPlanRoleIds(sessionId: string, sourceInstance?: PlanBindingSourceInstance, agentType?: string): readonly string[] | undefined {
     // Looking up an absent store must not create it before the recovery check.
-    const binding = fs.existsSync(this.storePath) ? this.getBinding(sessionId) : null;
+    const binding = fs.existsSync(this.storePath) ? this.getBinding(sessionId, sourceInstance, agentType) : null;
     return binding ? [binding.roleId] : undefined;
   }
 
-  bindSession(sessionId: string, roleId: string): CodexHookSessionBinding {
-    this.assertSessionPersonaOwner?.(sessionId);
+  bindSession(sessionId: string, roleId: string, sourceInstance?: PlanBindingSourceInstance, agentType?: string): CodexHookSessionBinding {
+    this.assertSessionPersonaOwner?.(sessionId, undefined, sourceInstance);
     const id = this.requireSessionId(sessionId);
     const role = this.requireRole(roleId);
-    return this.bindValidatedSession(id, role.roleId);
+    return this.bindValidatedSession(id, role.roleId, sourceInstance, agentType);
   }
 
-  private bindValidatedSession(id: string, roleId: string): CodexHookSessionBinding {
+  private bindValidatedSession(id: string, roleId: string, sourceInstance?: PlanBindingSourceInstance, agentType?: string): CodexHookSessionBinding {
     const store = this.readStore();
-    const previous = store.sessions[id];
+    const key = planBindingSourceKey({ sessionId: id, agentType, sourceInstance });
+    const previous = store.sessions[key];
     const timestamp = nowIso();
     const binding: CodexHookSessionBinding = {
       sessionId: id,
+      ...(sourceInstance ? { sourceInstance, agentType: agentType || "codex" } : {}),
       roleId,
       createdAt: previous?.createdAt ?? timestamp,
       updatedAt: timestamp
     };
-    store.sessions[id] = binding;
+    store.sessions[key] = binding;
     this.writeStore(store);
     return binding;
   }
 
-  unbindSession(sessionId: string): CodexHookSessionBinding | null {
+  unbindSession(sessionId: string, sourceInstance?: PlanBindingSourceInstance, agentType?: string): CodexHookSessionBinding | null {
     const id = this.requireSessionId(sessionId);
+    const key = planBindingSourceKey({ sessionId: id, agentType, sourceInstance });
     const store = this.readStore();
-    const previous = store.sessions[id] ?? null;
+    const previous = store.sessions[key] ?? null;
     if (previous) {
-      delete store.sessions[id];
+      delete store.sessions[key];
       this.writeStore(store);
     }
     return previous;
@@ -550,8 +566,8 @@ export class CodexHookContextService {
     request: CodexHookContextRequest,
     measure: <T>(name: string, task: () => T | Promise<T>) => Promise<T>
   ): Promise<CodexHookContextResult> {
-    this.assertSessionPersonaOwner?.(request.sessionId, request.cwd);
-    const planRoleIds = request.eventName === "Stop" ? this.sessionPlanRoleIds(request.sessionId) : undefined;
+    this.assertSessionPersonaOwner?.(request.sessionId, request.cwd, request.sourceInstance);
+    const planRoleIds = request.eventName === "Stop" ? this.sessionPlanRoleIds(request.sessionId, request.sourceInstance, request.agentType) : undefined;
     // A bound Stop owns only that persona's plans. Unbound sessions still need
     // the full catalog to discover task bindings without omitting other roles.
     if (request.eventName === "Stop" && this.planStorageReady?.(planRoleIds) === false) {
@@ -563,7 +579,7 @@ export class CodexHookContextService {
     if (toolDecision) {
       return {
         action: "none",
-        binding: this.getBinding(request.sessionId),
+        binding: this.getBinding(request.sessionId, request.sourceInstance, request.agentType),
         additionalContext: "",
         toolDecision
       };
@@ -580,7 +596,7 @@ export class CodexHookContextService {
       return result;
     }
     if (!enabled) {
-      const binding = this.getBinding(request.sessionId);
+      const binding = this.getBinding(request.sessionId, request.sourceInstance, request.agentType);
       return {
         action: "none",
         binding,
@@ -598,7 +614,8 @@ export class CodexHookContextService {
   }
 
   private queueContext(request: CodexHookContextRequest): Promise<CodexHookContextResult> {
-    const sessionId = this.requireSessionId(request.sessionId);
+    const sessionId = planBindingSourceKey(request);
+    this.requireSessionId(request.sessionId);
     const queue = this.contextQueues.get(sessionId) ?? { tail: Promise.resolve(), pending: 0 };
     if (queue.pending >= 8 || (!queue.pending && this.contextQueues.size >= 32)) {
       return Promise.reject(new Error("Codex hook context queue is full; retry."));
@@ -616,10 +633,10 @@ export class CodexHookContextService {
     const steps = this.contextSteps(request);
     let step = steps.next();
     while (!step.done) {
-      const bindingBefore = JSON.stringify(this.getBinding(request.sessionId));
+      const bindingBefore = JSON.stringify(this.getBinding(request.sessionId, request.sourceInstance, request.agentType));
       const reply = await this.readContext!(step.value);
-      this.assertSessionPersonaOwner?.(request.sessionId, request.cwd);
-      if (JSON.stringify(this.getBinding(request.sessionId)) !== bindingBefore) {
+      this.assertSessionPersonaOwner?.(request.sessionId, request.cwd, request.sourceInstance);
+      if (JSON.stringify(this.getBinding(request.sessionId, request.sourceInstance, request.agentType)) !== bindingBefore) {
         throw new Error("Codex hook binding changed while context was loading; retry.");
       }
       step = steps.next(reply);
@@ -634,20 +651,20 @@ export class CodexHookContextService {
   }
 
   private *contextSteps(request: CodexHookContextRequest): Generator<CodexHookContextReadRequest, CodexHookContextResult, CodexHookContextReadReply> {
-    this.assertSessionPersonaOwner?.(request.sessionId, request.cwd);
+    this.assertSessionPersonaOwner?.(request.sessionId, request.cwd, request.sourceInstance);
     const sessionId = this.requireSessionId(request.sessionId);
     if (!["SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse"].includes(request.eventName)) {
       throw new Error(`Unsupported Codex hook event: ${request.eventName}`);
     }
     const prompt = request.eventName === "UserPromptSubmit" ? String(request.prompt || "") : "";
     const control = request.eventName === "UserPromptSubmit" ? parseCodexHookControl(prompt) : null;
-    let binding = this.getBinding(sessionId);
+    let binding = this.getBinding(sessionId, request.sourceInstance, request.agentType);
     let action: CodexHookContextResult["action"] = control?.action ?? "none";
     let forceBase = request.eventName === "SessionStart";
     let roleSource: CodexHookRoleSource | undefined;
 
     if (control?.action === "off") {
-      this.unbindSession(sessionId);
+      this.unbindSession(sessionId, request.sourceInstance, request.agentType);
       return {
         action,
         binding: null,
@@ -657,7 +674,7 @@ export class CodexHookContextService {
 
     if (control?.action === "bind") {
       roleSource = yield* this.readRoleContext(control.roleId);
-      binding = this.bindValidatedSession(sessionId, roleSource.roleId);
+      binding = this.bindValidatedSession(sessionId, roleSource.roleId, request.sourceInstance, request.agentType);
       forceBase = true;
     }
 
@@ -880,7 +897,7 @@ export class CodexHookContextService {
     }
     const reasons = [planFollowup?.reason, requestFollowup?.reason].filter(Boolean);
     if (reasons.length || requestCompletionDeferred) {
-      return { action: "none", binding: this.getBinding(request.sessionId), additionalContext: "", completionDeferred: true,
+      return { action: "none", binding: this.getBinding(request.sessionId, request.sourceInstance, request.agentType), additionalContext: "", completionDeferred: true,
         ...(reasons.length ? { followup: { decision: "block" as const, reason: reasons.join("\n\n") } } : {}), agentRequestStop,
         planTaskCompletion: { status: "ignored", reason: reasons.length ? "deferred_after_stop_followup" : "deferred_until_stop_continuation", turnId: request.turnId } };
     }
@@ -891,7 +908,7 @@ export class CodexHookContextService {
       if (planCompletionEnabled) void this.handlePlanStop(request, planRoleIds).catch(() => undefined);
       return {
         action: "none",
-        binding: this.getBinding(request.sessionId),
+        binding: this.getBinding(request.sessionId, request.sourceInstance, request.agentType),
         additionalContext: projectFileChangeReminder.message,
         planTaskCompletion: {
           status: "ignored",
@@ -906,7 +923,7 @@ export class CodexHookContextService {
       ? await measure("plan-completion", () => this.handlePlanStop(request, planRoleIds))
       : {
           action: "none" as const,
-          binding: this.getBinding(request.sessionId),
+          binding: this.getBinding(request.sessionId, request.sourceInstance, request.agentType),
           additionalContext: "",
           planTaskCompletion: {
             status: "ignored" as const,
@@ -926,7 +943,7 @@ export class CodexHookContextService {
   private async recordChatReply(request: CodexHookContextRequest): Promise<void> {
     if (!request.turnId?.trim() || !request.lastAssistantMessage?.trim()) return;
     const sessionId = this.requireSessionId(request.sessionId);
-    const binding = this.getBinding(sessionId);
+    const binding = this.getBinding(sessionId, request.sourceInstance, request.agentType);
     if (binding?.cwd && request.cwd && normalizedWorkspace(binding.cwd) !== normalizedWorkspace(request.cwd)) return;
     const roleIds = new Set(this.chatHistoryRoleIds?.(request) ?? []);
     if (binding) roleIds.add(binding.roleId);
@@ -943,18 +960,19 @@ export class CodexHookContextService {
     const turnId = String(request.turnId || "").trim();
     const candidates = filePathsFromToolInput(request.toolName, request.toolInput);
     if (!turnId || candidates.length === 0 || !successfulWriteResponse(request.toolResponse)) return;
-    const workspaces = this.taskBindingWorkspaces(sessionId);
+    const workspaces = this.taskBindingWorkspaces(request);
     const files = projectRelativePaths(workspaces, request.cwd, candidates);
     const changedWorkspaces = files.length > 0 ? matchedProjectWorkspaces(workspaces, request.cwd, candidates) : [];
     if (files.length === 0) return;
     const store = this.readStore();
-    const current = store.projectFileChanges[sessionId]?.[turnId];
+    const sessionKey = planBindingSourceKey(request);
+    const current = store.projectFileChanges[sessionKey]?.[turnId];
     const changed = new Set(current?.files ?? []);
     const workspaceSet = new Set(current?.workspaces ?? []);
     files.forEach((file) => changed.add(file));
     changedWorkspaces.forEach((workspace) => workspaceSet.add(workspace));
-    store.projectFileChanges[sessionId] = retainNewest({
-      ...store.projectFileChanges[sessionId],
+    store.projectFileChanges[sessionKey] = retainNewest({
+      ...store.projectFileChanges[sessionKey],
       [turnId]: { files: [...changed].sort((left, right) => left.localeCompare(right)), workspaces: [...workspaceSet].sort((left, right) => left.localeCompare(right)) }
     }, 64);
     this.writeStore(store);
@@ -964,28 +982,29 @@ export class CodexHookContextService {
     const sessionId = this.requireSessionId(request.sessionId);
     const turnId = String(request.turnId || "").trim();
     const store = this.readStore();
-    const state = turnId ? store.projectFileChanges[sessionId]?.[turnId] : undefined;
+    const sessionKey = planBindingSourceKey(request);
+    const state = turnId ? store.projectFileChanges[sessionKey]?.[turnId] : undefined;
     const files = state?.files ?? [];
     const changedWorkspaces = state?.workspaces ?? [];
     if (!turnId) return { result: { status: "failed", reason: "missing_turn_id", error: "Project file changes cannot be associated with a Stop turn." }, message: "" };
-    if (store.projectFileChangeReminders[sessionId]?.[turnId]) {
+    if (store.projectFileChangeReminders[sessionKey]?.[turnId]) {
       return { result: { status: "ignored", reason: "turn_already_reminded", turnId, files }, message: "" };
     }
     if (files.length === 0) return { result: { status: "ignored", reason: "no_confirmed_project_file_change", turnId }, message: "" };
     const matches = (planRoleIds ?? this.listRoles()).flatMap((roleId) => {
       const role = this.requireRole(roleId);
       return this.listPlansOrCold(role.roleDir)
-        .filter((plan) => plan.taskBinding?.sessionId === sessionId
-          && changedWorkspaces.includes(normalizedWorkspace(plan.taskBinding.workspace)))
+        .filter((plan) => planBindingMatchesSource(plan.taskBinding, request)
+          && changedWorkspaces.includes(normalizedWorkspace(plan.taskBinding?.workspace)))
         .map((plan) => ({ ...role, plan }));
     });
     if (matches.length === 0) return { result: { status: "ignored", reason: "no_matching_plan_task_binding", turnId, files }, message: "" };
     const plans = matches.map((match) => match.plan);
-    const reminders = retainNewest({ ...store.projectFileChangeReminders[sessionId], [turnId]: nowIso() }, 64);
-    store.projectFileChangeReminders[sessionId] = reminders;
-    const remainingChanges = { ...store.projectFileChanges[sessionId] };
+    const reminders = retainNewest({ ...store.projectFileChangeReminders[sessionKey], [turnId]: nowIso() }, 64);
+    store.projectFileChangeReminders[sessionKey] = reminders;
+    const remainingChanges = { ...store.projectFileChanges[sessionKey] };
     delete remainingChanges[turnId];
-    store.projectFileChanges[sessionId] = remainingChanges;
+    store.projectFileChanges[sessionKey] = remainingChanges;
     this.writeStore(store);
     return {
       result: { status: "delivered", reason: "project_file_changes_detected", planId: plans[0]?.id, planIds: plans.map((plan) => plan.id), turnId, files },
@@ -998,11 +1017,11 @@ export class CodexHookContextService {
     };
   }
 
-  private taskBindingWorkspaces(sessionId: string): string[] {
-    return [...new Set((this.sessionPlanRoleIds(sessionId) ?? this.listRoles()).flatMap((roleId) => {
+  private taskBindingWorkspaces(request: CodexHookContextRequest): string[] {
+    return [...new Set((this.sessionPlanRoleIds(request.sessionId, request.sourceInstance, request.agentType) ?? this.listRoles()).flatMap((roleId) => {
       const role = this.requireRole(roleId);
       return this.listPlansOrCold(role.roleDir)
-        .filter((plan) => plan.taskBinding?.sessionId === sessionId)
+        .filter((plan) => planBindingMatchesSource(plan.taskBinding, request))
         .map((plan) => String(plan.taskBinding?.workspace || "").trim())
         .filter(Boolean);
     }))];
@@ -1010,7 +1029,8 @@ export class CodexHookContextService {
 
   private agentRequestStopFollowup(request: CodexHookContextRequest, result: AgentRequestStopResult): { followup?: CodexHookContextResult["followup"]; deferCompletion: boolean } | undefined {
     if (!request.turnId) return undefined;
-    const sessionId = this.requireSessionId(request.sessionId);
+    this.requireSessionId(request.sessionId);
+    const sessionId = planBindingSourceKey(request);
     const store = this.readStore();
     const deferCompletion = !request.stopHookActive && store.agentRequestStopFollowupTurns?.[sessionId] === request.turnId;
     // A failed/partial current read cannot erase this turn's already-published continuation boundary.
@@ -1068,7 +1088,7 @@ export class CodexHookContextService {
     if (request.stopHookActive || !request.turnId) return undefined;
     const matches = (planRoleIds ?? this.listRoles()).flatMap(roleId => {
       const role = this.requireRole(roleId);
-      return this.listPlansOrCold(role.roleDir).filter(plan => plan.taskBinding?.sessionId === request.sessionId
+      return this.listPlansOrCold(role.roleDir).filter(plan => planBindingMatchesSource(plan.taskBinding, request)
         && plan.archiveStatus !== "已归档")
         .map(plan => ({ ...role, plan }));
     });
@@ -1078,7 +1098,7 @@ export class CodexHookContextService {
     if (!config?.enabled) return undefined;
     const workflow = ensurePersonaPlanWorkflow(roleDir).workflow;
     const store = this.readStore();
-    const key = fingerprint([roleId, plan.id, request.sessionId]);
+    const key = fingerprint([roleId, plan.id, planBindingSourceKey(request)]);
     const result = decidePlanFollowup({ config, workflow, plan, sessionId: request.sessionId,
       turnId: request.turnId, stopHookActive: request.stopHookActive,
       previous: store.planFollowups?.[key], now: Date.now() });
@@ -1090,11 +1110,11 @@ export class CodexHookContextService {
 
   private async handlePlanStop(request: CodexHookContextRequest, planRoleIds?: readonly string[]): Promise<CodexHookContextResult> {
     const sessionId = this.requireSessionId(request.sessionId);
-    const binding = this.getBinding(sessionId);
+    const binding = this.getBinding(sessionId, request.sourceInstance, request.agentType);
     const matches = (planRoleIds ?? this.listRoles()).flatMap((roleId) => {
       const role = this.requireRole(roleId);
       const plans = this.listPlansOrCold(role.roleDir).filter(plan => (
-        plan.taskBinding?.sessionId === sessionId && plan.taskBinding.completionHook?.enabled === true
+        planBindingMatchesSource(plan.taskBinding, request) && plan.taskBinding?.completionHook?.enabled === true
       ));
       if (plans.length === 0) return [];
       const workflow = ensurePersonaPlanWorkflow(role.roleDir).workflow;
@@ -1147,7 +1167,7 @@ export class CodexHookContextService {
     }
     const completionState = Object.values(this.readStore().planTaskCompletions)
       .find((state) => (
-        state.sessionId === sessionId
+        planBindingSourceKey(state) === planBindingSourceKey(request)
         && state.planId === plan.id
         && state.turnId === turnId
         && state.status !== "ignored"
@@ -1206,6 +1226,8 @@ export class CodexHookContextService {
         plan,
         sourceSessionId: sessionId,
         sourceAgentType: request.agentType,
+        ...(request.sourceInstance ? { sourceInstance: request.sourceInstance } : {}),
+        ...(request.trustedRemoteSource ? { trustedRemoteSource: request.trustedRemoteSource } : {}),
         sourceTurnId: turnId,
         sourceCwd: request.cwd,
         finalMessage: excerpt(finalMessage, 12_000, 4_000),
@@ -1253,10 +1275,11 @@ export class CodexHookContextService {
           lastPlanCompletionError: result.error
         }
       : null;
-    if (nextBinding) store.sessions[nextBinding.sessionId] = nextBinding;
-    const completionKey = planTaskCompletionKey(sessionId, result.planId, result.turnId);
+    if (nextBinding) store.sessions[planBindingSourceKey(nextBinding)] = nextBinding;
+    const completionKey = planTaskCompletionKey(planBindingSourceKey(request), result.planId, result.turnId);
     store.planTaskCompletions[completionKey] = {
       sessionId,
+      ...(request.sourceInstance ? { sourceInstance: request.sourceInstance, agentType: request.agentType || "codex" } : {}),
       roleId,
       planId: result.planId,
       turnId: result.turnId,
@@ -1335,7 +1358,7 @@ export class CodexHookContextService {
 
   private replaceBinding(binding: CodexHookSessionBinding): void {
     const store = this.readStore();
-    store.sessions[binding.sessionId] = binding;
+    store.sessions[planBindingSourceKey(binding)] = binding;
     this.writeStore(store);
   }
 }

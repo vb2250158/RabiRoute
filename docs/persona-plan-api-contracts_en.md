@@ -2,6 +2,8 @@ English | [简体中文](persona-plan-api-contracts.md)
 
 # Executable contracts for persona plan support APIs
 
+Plans retain optional `taskBinding.instanceBinding={instanceId,agentId,ownerDeviceId?}`. Omission preserves legacy local bindings. Status and navigation echo and use the recorded coordinates; an explicit remote target never falls back to a same-ID local session. Workspace advancement and inventories accept the same optional coordinates. Existing ETags, idempotency keys, steps, attachments and uncertain receipts remain unchanged. See the [binding model](plan-and-memory-model_en.md#bind-execution-tasks-on-another-computer).
+
 These contracts cover bound-Agent status/navigation, workspace advancement policy and attachment reads. Native plan storage, status services, advancement stores and attachment resolvers continue to own business state. Executable definitions provide HTTP dispatch and remote discovery.
 
 | Operation ID suffix | Method | Path under `/api/roles/:roleId/` |

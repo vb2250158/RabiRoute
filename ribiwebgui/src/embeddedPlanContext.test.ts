@@ -16,3 +16,8 @@ test("独立页面和不完整上下文不会隐藏已绑定会话", () => {
     assert.deepEqual(visiblePlanAgentRoles({ taskBinding: { agentType: "dsh", sessionId: "session-self" } }, host), ["task"]);
   }
 });
+
+test("同ID的远端绑定不是当前嵌入宿主", () => {
+  const host = embeddedPlanHost(true, "dsh", "same-id");
+  assert.deepEqual(visiblePlanAgentRoles({ taskBinding: { agentType: "dsh", sessionId: "same-id", instanceBinding: { instanceId: "other-pc", agentId: "dsh" } } }, host), ["task"]);
+});

@@ -63,6 +63,13 @@ function storageHarness(initial: PlanItem) {
   };
 }
 
+test("late task resolution cannot replace a same-ID binding moved to another computer", async () => {
+  const current = { agentType: "codex" as const, sessionId: "same-id", workspace: "F:/work", instanceBinding: { instanceId: "pc-new", agentId: "native" } };
+  const harness = storageHarness(planWithBinding(current));
+  await replacePlanTaskBindingForDelivery(harness.storage, { roleId: "Test", planId: "plan-one", deliveryId: "old-owner-receipt", oldSessionId: current.sessionId, oldAgentType: "codex", oldInstanceBinding: { instanceId: "pc-old", agentId: "native" }, resolved: { id: "replacement-id", cwd: current.workspace } });
+  assert.equal(harness.calls.length, 0); assert.deepEqual(harness.projection().plan.taskBinding, current);
+});
+
 test("task binding CAS uses exact revisions and distinct A-to-B-to-A business keys", async () => {
   const a: PlanTaskBinding = { agentType: "codex", sessionId: "session-a", sessionTitle: "A", workspace: "C:\\work" };
   const harness = storageHarness(planWithBinding(a));
