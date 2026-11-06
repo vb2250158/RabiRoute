@@ -19,6 +19,8 @@ Recording is disabled by default. Disabling it stops new samples; existing files
 
 Performance pages read bounded Manager memory directly: recent raw records are capped at 1,000 rows and 16 MB total, while 10-second, 1-minute, and 5-minute incremental summaries cover at most 48 hours. Samples not yet flushed to JSONL appear immediately. A 720-hour retention setting affects disk files only; Manager does not restore or keep every raw sample resident.
 
+File counts and disk bytes use an in-memory index. Startup, configuration updates and hourly retention cleanup scan the directory; regular writes apply the actual appended UTF-8 byte count, and successful deletions remove their entries. A failed write checks only the affected file instead of recounting every shard for each batch. The index is rebuildable from disk. Sampling intervals, record formats and retention settings stay unchanged; external edits are recounted during those scans.
+
 ## Plugin updates and shutdown
 
 A performance plugin candidate only prepares its operations and resources. A failed candidate or rollback before publication does not replace the HTTP recording hook or start or stop the current collector. The kernel's `context.publication` transaction switches the hook, then starts the shared collector. Successful updates and revision rollbacks retain the same collector and operation sink without reinitialization.

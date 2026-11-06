@@ -104,6 +104,128 @@ test("Desktop tasks without a sidebar Name do not fall back to SQLite title", ()
   assert.equal(result[0]?.stateTitle, "SQLite 原始 title");
 });
 
+
+
+function sidebarCacheFixture(t: { after(action: () => void): void }) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabi-sidebar-cache-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const databasePath = path.join(root, "state.sqlite"), indexPath = path.join(root, "session_index.jsonl");
+  const db = new DatabaseSync(databasePath);
+  db.exec(`CREATE TABLE threads (id TEXT PRIMARY KEY, title TEXT, cwd TEXT, rollout_path TEXT,
+    updated_at INTEGER, updated_at_ms INTEGER, recency_at INTEGER, recency_at_ms INTEGER,
+    archived INTEGER, first_user_message TEXT)`);
+  db.prepare("INSERT INTO threads VALUES ('task','internal prompt','/old','','1',1000,1,1000,0,'')").run();
+  db.close();
+  const row = (title: string, updatedAt = "2026-09-08T02:00:00Z") => JSON.stringify({ id: "task", thread_name: title, updated_at: updatedAt });
+  const read = (file = indexPath) => readCodexDesktopThreadsByIds(["task"], databasePath, file)[0]!;
+  return { root, databasePath, indexPath, row, read };
+}
+
+test("sidebar cache: stable revision reads once while SQLite and returned records stay fresh", t => {
+  const value = sidebarCacheFixture(t); fs.writeFileSync(value.indexPath, value.row("Sidebar"));
+  const original = fs.readFileSync.bind(fs); let reads = 0;
+  const reading = t.mock.method(fs, "readFileSync", ((...args: Parameters<typeof fs.readFileSync>) => {
+    if (typeof args[0] === "number" || String(args[0]) === value.indexPath) reads++;
+    return original(...args);
+  }) as typeof fs.readFileSync);
+  try {
+    const first = value.read(); assert.equal(first.title, "Sidebar");
+    first.title = "Caller edit"; first.stateTitle = "Caller state"; first.cwd = "/caller";
+    const db = new DatabaseSync(value.databasePath); db.exec("UPDATE threads SET title='fresh state',cwd='/fresh',archived=1"); db.close();
+    const next = value.read(); assert.equal(next.title, "Sidebar"); assert.equal(next.stateTitle, "fresh state");
+    assert.equal(next.cwd, "/fresh"); assert.equal(next.archived, true);
+    assert.equal(value.read().title, "Sidebar");
+    assert.equal(reads, 1);
+  } finally { reading.mock.restore(); }
+});
+
+test("sidebar cache: append, partial completion, atomic replacement, truncation and recreation invalidate names", t => {
+  const value = sidebarCacheFixture(t); fs.writeFileSync(value.indexPath, value.row("First"));
+  assert.equal(value.read().title, "First");
+  fs.appendFileSync(value.indexPath, "\n" + value.row("Older", "2026-09-08T01:00:00Z") + "\n");
+  assert.equal(value.read().title, "First");
+  fs.appendFileSync(value.indexPath, '{"id":"task","thread_name":"Completed');
+  assert.equal(value.read().title, "First");
+  fs.appendFileSync(value.indexPath, ' append","updated_at":"2026-09-08T03:00:00Z"}\n');
+  assert.equal(value.read().title, "Completed append");
+  const temporary = value.indexPath + ".replacement"; fs.writeFileSync(temporary, value.row("Replaced")); fs.renameSync(temporary, value.indexPath);
+  assert.equal(value.read().title, "Replaced");
+  fs.truncateSync(value.indexPath, 0); assert.equal(value.read().title, ""); assert.equal(value.read().stateTitle, "internal prompt");
+  fs.unlinkSync(value.indexPath); assert.equal(value.read().title, "");
+  fs.writeFileSync(value.indexPath, value.row("Recreated")); assert.equal(value.read().title, "Recreated");
+});
+
+test("sidebar cache: same-size rewrite with restored mtime still invalidates and malformed rows stay local", t => {
+  const value = sidebarCacheFixture(t); fs.writeFileSync(value.indexPath, value.row("Alpha"));
+  assert.equal(value.read().title, "Alpha"); const original = fs.statSync(value.indexPath);
+  fs.writeFileSync(value.indexPath, value.row("Bravo")); fs.utimesSync(value.indexPath, original.atime, original.mtime);
+  assert.equal(value.read().title, "Bravo");
+  fs.writeFileSync(value.indexPath, [value.row("Invalid initial", "invalid"), value.row("Valid"), value.row("Ignored", "invalid"),
+    value.row("Equal time wins"), '{"id":"task","thread_name":null}', "{partial"].join("\n"));
+  assert.equal(value.read().title, "Equal time wins"); assert.equal(value.read().title, "Equal time wins");
+});
+
+test("sidebar cache: configured home switches use separate index paths", t => {
+  const value = sidebarCacheFixture(t), previous = process.env.CODEX_HOME;
+  t.after(() => { if (previous === undefined) delete process.env.CODEX_HOME; else process.env.CODEX_HOME = previous; });
+  const homes = [path.join(value.root, "home-a"), path.join(value.root, "home-b")];
+  for (const [i, home] of homes.entries()) { fs.mkdirSync(home); fs.writeFileSync(path.join(home, "session_index.jsonl"), value.row(i ? "Home B" : "Home A")); }
+  process.env.CODEX_HOME = homes[0]; assert.equal(readCodexDesktopThreadsByIds(["task"], value.databasePath)[0]?.title, "Home A");
+  process.env.CODEX_HOME = homes[1]; assert.equal(readCodexDesktopThreadsByIds(["task"], value.databasePath)[0]?.title, "Home B");
+  process.env.CODEX_HOME = homes[0]; assert.equal(readCodexDesktopThreadsByIds(["task"], value.databasePath)[0]?.title, "Home A");
+});
+
+test("sidebar cache: read and hot-open failures preserve original errors and later recovery", t => {
+  const value = sidebarCacheFixture(t); fs.writeFileSync(value.indexPath, value.row("Stored"));
+  const failure = Object.assign(new Error("synthetic read denied"), { code: "EACCES" });
+  const originalRead = fs.readFileSync.bind(fs);
+  const reading = t.mock.method(fs, "readFileSync", ((...args: Parameters<typeof fs.readFileSync>) => {
+    if (typeof args[0] === "number" || String(args[0]) === value.indexPath) throw failure;
+    return originalRead(...args);
+  }) as typeof fs.readFileSync);
+  try { assert.throws(() => value.read(), error => error === failure); }
+  finally { reading.mock.restore(); }
+  assert.equal(value.read().title, "Stored");
+  const originalOpen = fs.openSync.bind(fs);
+  const opening = t.mock.method(fs, "openSync", ((...args: Parameters<typeof fs.openSync>) => {
+    if (String(args[0]) === value.indexPath) throw failure;
+    return originalOpen(...args);
+  }) as typeof fs.openSync);
+  try { assert.throws(() => value.read(), error => error === failure); }
+  finally { opening.mock.restore(); }
+  assert.equal(value.read().title, "Stored");
+});
+
+for (const change of ["append", "replace"] as const) test(`sidebar cache: ${change} during the read does not publish a stale snapshot`, t => {
+  const value = sidebarCacheFixture(t); fs.writeFileSync(value.indexPath, value.row("Before"));
+  const original = fs.readFileSync.bind(fs); let reads = 0;
+  const reading = t.mock.method(fs, "readFileSync", ((...args: Parameters<typeof fs.readFileSync>) => {
+    const content = original(...args);
+    if ((typeof args[0] === "number" || String(args[0]) === value.indexPath) && ++reads === 1) {
+      if (change === "append") fs.appendFileSync(value.indexPath, "\n" + value.row("After", "2026-09-08T03:00:00Z"));
+      else { const temporary = value.indexPath + ".replacement"; fs.writeFileSync(temporary, value.row("After")); fs.renameSync(temporary, value.indexPath); }
+    }
+    return content;
+  }) as typeof fs.readFileSync);
+  try {
+    assert.equal(value.read().title, "Before"); assert.equal(value.read().title, "After");
+    assert.equal(value.read().title, "After"); assert.equal(reads, 2);
+  } finally { reading.mock.restore(); }
+});
+
+test("sidebar cache: failed post-read observation keeps the successful read usable without caching it", t => {
+  const value = sidebarCacheFixture(t); fs.writeFileSync(value.indexPath, value.row("Visible"));
+  const originalRead = fs.readFileSync.bind(fs), originalStat = fs.statSync.bind(fs); let reads = 0;
+  const reading = t.mock.method(fs, "readFileSync", ((...args: Parameters<typeof fs.readFileSync>) => { reads++; return originalRead(...args); }) as typeof fs.readFileSync);
+  const checking = t.mock.method(fs, "statSync", ((...args: Parameters<typeof fs.statSync>) => {
+    if (String(args[0]) === value.indexPath) throw Object.assign(new Error("synthetic path changed"), { code: "ENOENT" });
+    return originalStat(...args);
+  }) as typeof fs.statSync);
+  try { assert.equal(value.read().title, "Visible"); assert.equal(value.read().title, "Visible"); assert.equal(reads, 2); }
+  finally { checking.mock.restore(); reading.mock.restore(); }
+  assert.equal(value.read().title, "Visible");
+});
+
 type IpcRequest = {
   type?: string;
   requestId?: string;

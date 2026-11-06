@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import http from "node:http";
+import { Socket } from "node:net";
 import { fork } from "node:child_process";
 import { EventEmitter } from "node:events";
 import test from "node:test";
@@ -258,4 +259,32 @@ test("default persona reads finish while the real background catalog lane remain
   assert.ok(responses[1]!.body.data.records.length > 0);
   assert.equal(managerCatalogWorkerPool.status().active, 1, "foreground completion must not release or complete background diagnostics");
   assert.equal(managerCatalogWorkerPool.status().queued, 0, "foreground requests never enter the background queue");
+});
+
+
+test("repeated storage admission checks use memory while native storage retains file ownership", async t => {
+  const f = await fixture(t), socket = new Socket(), request = new http.IncomingMessage(socket);
+  t.after(() => { socket.destroy(); });
+  request.method = "GET"; request.url = "/api/roles/Fixture/counts";
+  request.headers = { authorization: "Bearer " + f.credential.token };
+  assert.equal(evaluateLanAgentRequest(request, f.authority, true).kind, "agent");
+  markAuthenticatedConnectionRequest(request, () => { assertTrustedLanAgentPrincipal(request); });
+  const input: ApiOperationInput = { request, response: new http.ServerResponse(request), url: new URL("http://fixture" + request.url), path: { roleId: "Fixture" }, query: {}, body: undefined };
+  const spec = { id: "counts.read", method: "GET", suffix: "counts", action: "counts", failure: "worker" } as const;
+  let nativeRealpaths = 0;
+  const original = fs.realpathSync.native;
+  t.mock.method(fs.realpathSync, "native", (...args: Parameters<typeof original>) => { nativeRealpaths++; return Reflect.apply(original, fs.realpathSync, args); });
+  for (let index = 0; index < 500; index++) {
+    const admitted = f.owner.capture(input, spec);
+    admitted.assertCurrent(); admitted.assertCurrent();
+    assert.equal(admitted.roleDir, f.roleDir); assert.equal(admitted.application, f.application);
+  }
+  assert.equal(nativeRealpaths, 0, "HTTP admission never resolves a physical path");
+});
+
+test("native storage file errors retain the original local HTTP mapping", async t => {
+  const f = await fixture(t);
+  t.mock.method(f.context.pools!.knowledge, "queryRoleFileCounts", async () => { throw Object.assign(new Error("Synthetic native EACCES"), { code: "EACCES" }); });
+  const result = await f.send("counts");
+  assert.equal(result.status, 500); assert.equal(result.body.message, "Synthetic native EACCES");
 });

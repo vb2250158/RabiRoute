@@ -173,16 +173,16 @@ function codexDesktopSessionIndexPath(): string {
   return path.join(codexHome, "session_index.jsonl");
 }
 
-/**
- * Applies the task names shown by Codex Desktop's left sidebar. SQLite
- * `threads.title` is only owner state metadata and may contain the first
- * prompt, so it must never overwrite the sidebar name exposed to callers.
- */
-export function applyCodexSidebarTaskNamesForTest(
-  threads: CodexDesktopThread[],
-  sessionIndexContent: string
-): CodexDesktopThread[] {
-  const latestById = new Map<string, { title: string; updatedAt: string }>();
+type CodexSidebarTaskName = Readonly<{ title: string; updatedAt: string }>;
+type CodexSidebarNameIndex = ReadonlyMap<string, CodexSidebarTaskName>;
+const codexSidebarNameSnapshots = new Map<string, { revision: string; names: CodexSidebarNameIndex }>();
+
+function codexSidebarIndexRevision(stat: fs.BigIntStats): string {
+  return `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`;
+}
+
+function parseCodexSidebarTaskNames(sessionIndexContent: string): CodexSidebarNameIndex {
+  const latestById = new Map<string, CodexSidebarTaskName>();
   for (const line of sessionIndexContent.split(/\r?\n/)) {
     if (!line.trim()) continue;
     try {
@@ -203,6 +203,10 @@ export function applyCodexSidebarTaskNamesForTest(
       // Ignore incomplete records while Desktop is appending the index.
     }
   }
+  return latestById;
+}
+
+function projectCodexSidebarTaskNames(threads: CodexDesktopThread[], latestById: CodexSidebarNameIndex): CodexDesktopThread[] {
   return threads.map((thread) => {
     const sidebar = latestById.get(thread.id);
     return {
@@ -214,12 +218,47 @@ export function applyCodexSidebarTaskNamesForTest(
   });
 }
 
+/**
+ * Applies the task names shown by Codex Desktop's left sidebar. SQLite
+ * `threads.title` is only owner state metadata and may contain the first
+ * prompt, so it must never overwrite the sidebar name exposed to callers.
+ */
+export function applyCodexSidebarTaskNamesForTest(
+  threads: CodexDesktopThread[],
+  sessionIndexContent: string
+): CodexDesktopThread[] {
+  return projectCodexSidebarTaskNames(threads, parseCodexSidebarTaskNames(sessionIndexContent));
+}
+
 function applyCodexSidebarTaskNames(
   threads: CodexDesktopThread[],
   sessionIndexPath = codexDesktopSessionIndexPath()
 ): CodexDesktopThread[] {
-  if (!fs.existsSync(sessionIndexPath)) return applyCodexSidebarTaskNamesForTest(threads, "");
-  return applyCodexSidebarTaskNamesForTest(threads, fs.readFileSync(sessionIndexPath, "utf8"));
+  const indexPath = path.resolve(sessionIndexPath);
+  if (!fs.existsSync(indexPath)) {
+    codexSidebarNameSnapshots.delete(indexPath);
+    return projectCodexSidebarTaskNames(threads, new Map());
+  }
+  // Retain the original per-read file access/error contract even on a cache hit.
+  const handle = fs.openSync(indexPath, "r");
+  let revision: string;
+  try {
+    revision = codexSidebarIndexRevision(fs.fstatSync(handle, { bigint: true }));
+  } finally {
+    fs.closeSync(handle);
+  }
+  const cached = codexSidebarNameSnapshots.get(indexPath);
+  if (cached?.revision === revision) return projectCodexSidebarTaskNames(threads, cached.names);
+  codexSidebarNameSnapshots.delete(indexPath);
+  const names = parseCodexSidebarTaskNames(fs.readFileSync(indexPath, "utf8"));
+  try {
+    if (codexSidebarIndexRevision(fs.statSync(indexPath, { bigint: true })) === revision) {
+      codexSidebarNameSnapshots.set(indexPath, { revision, names });
+    }
+  } catch {
+    // The read succeeded; a changed/unavailable path simply cannot publish a reusable snapshot.
+  }
+  return projectCodexSidebarTaskNames(threads, names);
 }
 
 export function listCodexDesktopThreadsFromRowsForTest(

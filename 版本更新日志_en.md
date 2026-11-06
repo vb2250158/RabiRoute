@@ -6,6 +6,13 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.8.3 - 2026-11-07
+
+- The host updates its performance-shard byte index from successful writes and deletions, rebuilding it at startup, configuration updates and hourly cleanup. Remove full-directory recounts from every record batch while retaining sampling frequency, records and error reporting. No configuration or stored-data migration is needed.
+- Advance `io.rabiroute.agent.codex` to `0.1.4`: reuse the derived sidebar task-name Map by source path and file revision, rebuild when the source changes, and continue reading SQLite state fresh.
+- Advance `io.rabiroute.manager.persona` to `0.1.3`: remove repeated physical-directory resolution from HTTP storage wrappers while retaining generation, logical-directory, native storage-lease, concurrency and receipt contracts.
+- The combined six-file regression passes 114/114. Controlled benchmarks reduce sidebar full parsing from 32 to 1 for 32 queries and realpath calls from 2000 to 0 for 500 storage wrappers; ordinary performance-log appends no longer recount all shards. These prove local cost reductions; runtime CPU changes are measured separately.
+
 ## 0.8.2 - 2026-11-07
 
 - Fix the Web plugin catalog failing the whole page when an independently updated plugin is absent from the selected Web release. Matching plugins retain that release's fixed assets; other loaded plugins retain their native revision and entry, served through the existing plugin resource reader. Package and page revisions own their respective resources, without new APIs or usage restrictions.

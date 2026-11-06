@@ -282,6 +282,9 @@ export class PerformanceStore {
   private droppedRecords = 0;
   private fileCount = 0;
   private diskBytes = 0;
+  // Derived disk inventory: refresh on startup/config/hourly retention, then apply this owner's append/delete deltas.
+  private diskShards = new Map<string, number | undefined>();
+  private diskTransition: Promise<void> = Promise.resolve();
   private sampleVersion = 0;
   private summaryCache = new Map<number, { version: number; expiresAt: number; summary: PerformanceSummary }>();
   private summaryCacheHits = 0;
@@ -447,6 +450,7 @@ export class PerformanceStore {
     this.flushTimer = undefined;
     this.cleanupTimer = undefined;
     await this.flush();
+    await this.diskTransition;
   }
 
   private remember(sample: PerformanceSample, serializedBytes = Buffer.byteLength(JSON.stringify(sample))): void {
@@ -524,15 +528,26 @@ export class PerformanceStore {
     this.pendingRecordCount = 0;
     this.pendingBytes = 0;
     const startedAt = performance.now();
-    this.activeFlush = (async () => {
+    this.activeFlush = this.mutateDisk(async () => {
       await fs.promises.mkdir(this.logDirectory, { recursive: true });
       for (const [shard, lines] of batch) {
-        await fs.promises.appendFile(path.join(this.logDirectory, shard), lines.join(""), "utf8");
+        const bytes = lines.join("");
+        let previousSize = this.diskShards.get(shard);
+        if (previousSize === undefined) previousSize = await this.readDiskShard(shard);
+        try {
+          await fs.promises.appendFile(path.join(this.logDirectory, shard), bytes, "utf8");
+        } catch (error) {
+          // appendFile can write a prefix before failing. Keep actual disk accounting,
+          // while the original batch/drop owner retains the failed write outcome.
+          await this.readDiskShard(shard);
+          throw error;
+        }
+        if (previousSize === undefined) await this.readDiskShard(shard);
+        else this.setDiskShard(shard, previousSize + Buffer.byteLength(bytes));
       }
       this.lastPersistedAt = new Date().toISOString();
       this.lastError = undefined;
-      await this.refreshDiskStatus();
-    })().catch((error) => {
+    }).catch((error) => {
       this.lastError = error instanceof Error ? error.message : String(error);
       this.droppedRecords += [...batch.values()].reduce((sum, lines) => sum + lines.length, 0);
     }).finally(() => {
@@ -599,7 +614,7 @@ export class PerformanceStore {
       this.loaded = true;
       this.sampleVersion++;
       this.summaryCache.clear();
-      await this.refreshDiskStatus();
+      await this.mutateDisk(() => this.refreshDiskStatus());
     }
   }
 
@@ -613,34 +628,42 @@ export class PerformanceStore {
 
   private async cleanup(): Promise<void> {
     const startedAt = performance.now();
-    await fs.promises.mkdir(this.logDirectory, { recursive: true });
-    const entries = await fs.promises.readdir(this.logDirectory, { withFileTypes: true });
-    const cutoff = Date.now() - this.config.retentionHours * 60 * 60 * 1_000;
-    const files = (await Promise.all(entries
-      .filter(entry => entry.isFile() && /^performance-.*\.jsonl$/.test(entry.name))
-      .map(async entry => {
-        const filePath = path.join(this.logDirectory, entry.name);
+    await this.mutateDisk(async () => {
+      await fs.promises.mkdir(this.logDirectory, { recursive: true });
+      const entries = await fs.promises.readdir(this.logDirectory, { withFileTypes: true });
+      const diskShards = new Map<string, number | undefined>();
+      for (const entry of entries) {
+        if (entry.isFile() && /^performance-.*\.jsonl$/.test(entry.name)) diskShards.set(entry.name, undefined);
+      }
+      const cutoff = Date.now() - this.config.retentionHours * 60 * 60 * 1_000;
+      const files = (await Promise.all(entries
+        .filter(entry => entry.isFile() && /^performance-.*\.jsonl$/.test(entry.name))
+        .map(async entry => {
+          const filePath = path.join(this.logDirectory, entry.name);
+          try {
+            const stat = await fs.promises.stat(filePath);
+            diskShards.set(entry.name, stat.size);
+            return { filePath, name: entry.name, mtimeMs: stat.mtimeMs, size: stat.size };
+          } catch (error) { this.historyIssue(entry.name, error); return undefined; }
+        }))).filter((item): item is NonNullable<typeof item> => Boolean(item)).sort((left, right) => left.mtimeMs - right.mtimeMs);
+      this.replaceDiskShards(diskShards);
+      let retainedExpiredBytes = 0;
+      for (const file of files.filter(item => item.mtimeMs < cutoff)) {
+        try { await fs.promises.rm(file.filePath, { force: true }); this.removeDiskShard(file.name); }
+        catch (error) { retainedExpiredBytes += file.size; this.historyIssue(file.name, error); }
+      }
+      const remaining = files.filter(item => item.mtimeMs >= cutoff);
+      const maximumBytes = this.config.maxDiskMb * 1024 * 1024;
+      let totalBytes = retainedExpiredBytes + remaining.reduce((sum, item) => sum + item.size, 0);
+      for (const file of remaining) {
+        if (totalBytes <= maximumBytes) break;
         try {
-          const stat = await fs.promises.stat(filePath);
-          return { filePath, name: entry.name, mtimeMs: stat.mtimeMs, size: stat.size };
-        } catch (error) { this.historyIssue(entry.name, error); return undefined; }
-      }))).filter((item): item is NonNullable<typeof item> => Boolean(item)).sort((left, right) => left.mtimeMs - right.mtimeMs);
-    let retainedExpiredBytes = 0;
-    for (const file of files.filter(item => item.mtimeMs < cutoff)) {
-      try { await fs.promises.rm(file.filePath, { force: true }); }
-      catch (error) { retainedExpiredBytes += file.size; this.historyIssue(file.name, error); }
-    }
-    const remaining = files.filter(item => item.mtimeMs >= cutoff);
-    const maximumBytes = this.config.maxDiskMb * 1024 * 1024;
-    let totalBytes = retainedExpiredBytes + remaining.reduce((sum, item) => sum + item.size, 0);
-    for (const file of remaining) {
-      if (totalBytes <= maximumBytes) break;
-      try {
-        await fs.promises.rm(file.filePath, { force: true });
-        totalBytes -= file.size;
-      } catch (error) { this.historyIssue(file.name, error); }
-    }
-    await this.refreshDiskStatus();
+          await fs.promises.rm(file.filePath, { force: true });
+          this.removeDiskShard(file.name);
+          totalBytes -= file.size;
+        } catch (error) { this.historyIssue(file.name, error); }
+      }
+    });
     this.lastCleanupDurationMs = Math.round((performance.now() - startedAt) * 10) / 10;
   }
 
@@ -648,14 +671,54 @@ export class PerformanceStore {
     try {
       const entries = await fs.promises.readdir(this.logDirectory, { withFileTypes: true });
       const files = entries.filter(entry => entry.isFile() && /^performance-.*\.jsonl$/.test(entry.name));
-      const stats = await Promise.all(files.map(async entry => {
-        try { return await fs.promises.stat(path.join(this.logDirectory, entry.name)); }
-        catch (error) { this.historyIssue(entry.name, error); return undefined; }
+      const sizes = await Promise.all(files.map(async entry => {
+        try { return [entry.name, (await fs.promises.stat(path.join(this.logDirectory, entry.name))).size] as const; }
+        catch (error) { this.historyIssue(entry.name, error); return [entry.name, undefined] as const; }
       }));
-      this.fileCount = files.length;
-      this.diskBytes = stats.reduce((sum, stat) => sum + (stat?.size ?? 0), 0);
+      this.replaceDiskShards(new Map(sizes));
     } catch (error) {
       this.historyFailure = error instanceof Error ? error.message : String(error);
+    }
+  }
+
+  /** Serialize this owner's disk mutations so a metadata snapshot cannot overwrite an append delta. */
+  private mutateDisk(action: () => Promise<void>): Promise<void> {
+    const result = this.diskTransition.then(action);
+    this.diskTransition = result.catch(() => {});
+    return result;
+  }
+
+  private replaceDiskShards(shards: Map<string, number | undefined>): void {
+    this.diskShards = shards;
+    this.fileCount = shards.size;
+    this.diskBytes = [...shards.values()].reduce<number>((sum, size) => sum + (size ?? 0), 0);
+  }
+
+  private setDiskShard(shard: string, size: number | undefined): void {
+    this.diskBytes += (size ?? 0) - (this.diskShards.get(shard) ?? 0);
+    this.diskShards.set(shard, size);
+    this.fileCount = this.diskShards.size;
+  }
+
+  private removeDiskShard(shard: string): void {
+    this.diskBytes -= this.diskShards.get(shard) ?? 0;
+    this.diskShards.delete(shard);
+    this.fileCount = this.diskShards.size;
+  }
+
+  private async readDiskShard(shard: string): Promise<number | undefined> {
+    try {
+      const size = (await fs.promises.stat(path.join(this.logDirectory, shard))).size;
+      this.setDiskShard(shard, size);
+      return size;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        this.removeDiskShard(shard);
+        return 0;
+      }
+      this.setDiskShard(shard, undefined);
+      this.historyIssue(shard, error);
+      return undefined;
     }
   }
 

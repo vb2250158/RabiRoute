@@ -1,5 +1,3 @@
-import fs from "node:fs";
-import path from "node:path";
 import { createHash } from "node:crypto";
 import type http from "node:http";
 import { sanitizeRoleId } from "@rabiroute/host-api/shared/routeIdentity";
@@ -88,10 +86,6 @@ function singleHeader(request: http.IncomingMessage, name: string): string | und
   }
   return typeof raw === "string" && raw.trim() ? raw.trim() : undefined;
 }
-function directoryIdentity(directory: string): string {
-  try { return fs.realpathSync.native(directory); }
-  catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; return path.resolve(directory); }
-}
 const ok = (data: unknown, headers?: Record<string, string>): ApiOperationResult => ({ status: 200, body: { code: 0, data }, ...(headers ? { headers } : {}) });
 const missing = (message: string, roleId?: string): ApiOperationResult => ({ status: 404, body: { code: -1, message,
   ...(roleId ? { nextAction: "仅在当前角色范围未找到该计划。可按名称查询 GET /api/roles/" + encodeURIComponent(roleId) + "/plans?limit=20&query=<URL编码的名称>&sort=updated；或省略 query 列最近更新计划，沿 nextCursor 分页。核对原角色、标题、planId 和 taskBinding；保留原计划与投递编号，不自动新建替代计划或重发消息。" } : {}) } });
@@ -119,12 +113,13 @@ export class PersonaStorageOwner {
     const assertConnection = preparePersonaResourceAdmission(input.request, input.signal, this.context.identity);
     const roleId = spec.action === "plan-history" || spec.action.startsWith("feedback-") ? sanitizeRoleId(input.path.roleId) : input.path.roleId;
     if (!roleId) invalid("Missing role id.");
-    const roleDir = this.context.roleDirectory(roleId), realDirectory = directoryIdentity(roleDir), application = this.context.application();
+    // The storage owner validates actual files; admission binds its current application and logical role mapping.
+    const roleDir = this.context.roleDirectory(roleId), application = this.context.application();
     const admission: Admission = { roleId, roleDir, application, command: {}, assertCurrent: () => {} };
     admission.assertCurrent = () => {
       try {
         assertConnection();
-        if (this.context.application() !== application || this.context.roleDirectory(roleId) !== roleDir || directoryIdentity(roleDir) !== realDirectory) {
+        if (this.context.application() !== application || this.context.roleDirectory(roleId) !== roleDir) {
           throw new RoleStorageApplicationError("Original persona storage owner or directory changed; inspect the original operation.", "generation_mismatch", 409);
         }
       } catch (error) {
