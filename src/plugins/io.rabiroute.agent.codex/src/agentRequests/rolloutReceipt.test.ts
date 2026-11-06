@@ -128,3 +128,52 @@ test("point lookup does not turn abort or identity failure into absent receipt",
   await assert.rejects(findRolloutDeliveryReceipt(file + ".zst", deliveryId, "another-task"),
     (error: NodeJS.ErrnoException) => error.code === "CODEX_ROLLOUT_IDENTITY_MISMATCH");
 });
+
+
+test("receipt lookup continues past large unrelated tool and image records to the same delivery ID", async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabi-large-record-receipt-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const file = path.join(root, "rollout.jsonl");
+  const large = "x".repeat(8 * 1024 * 1024 + 257);
+  const tool = JSON.stringify({ type: "response_item", payload: { type: "function_call_output", call_id: "synthetic-tool", output: large } });
+  const image = JSON.stringify({ type: "response_item", payload: { type: "message", role: "assistant", content: [{ type: "input_image", image_url: "data:image/png;base64," + large }] } });
+  fs.writeFileSync(file, tool + "\n" + image + "\n" + row("user", prompt));
+  assert.equal(await findRolloutDeliveryReceipt(file, deliveryId), true);
+  assert.equal(await findRolloutDeliveryReceipt(file, deliveryId + "-other"), false);
+});
+
+test("receipt readers preserve a complete large user record including UTF-8 across chunks", async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabi-large-user-receipt-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const file = path.join(root, "rollout.jsonl");
+  const content = prompt + "\n" + "x".repeat(8 * 1024 * 1024 + 257) + "\u4e2d\ud83d\ude80".repeat(32768);
+  fs.writeFileSync(file, row("user", content));
+  const messages = [];
+  for await (const message of readRolloutUserMessages(file)) messages.push(message);
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0], content);
+  assert.equal(await findRolloutDeliveryReceipt(file, deliveryId), true);
+});
+
+test("compressed receipt lookup accepts full large identity metadata and still proves the exact task", async t => {
+  assert.ok(zstdCompressSync, "This regression requires the Node Zstandard runtime used by RabiRoute.");
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabi-large-identity-receipt-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const file = path.join(root, "rollout.jsonl");
+  const identity = JSON.stringify({ type: "session_meta", payload: { id: "exact-task", instructions: "i".repeat(96 * 1024) } });
+  const tool = JSON.stringify({ type: "response_item", payload: { type: "function_call_output", call_id: "synthetic-tool", output: "x".repeat(8 * 1024 * 1024 + 257) } });
+  fs.writeFileSync(file + ".zst", zstdCompressSync(Buffer.from(identity + "\n" + tool + "\n" + row("user", prompt))));
+  assert.equal(await findRolloutDeliveryReceipt(file, deliveryId, "exact-task"), true);
+  await assert.rejects(findRolloutDeliveryReceipt(file, deliveryId, "different-task"),
+    (error: NodeJS.ErrnoException) => error.code === "CODEX_ROLLOUT_IDENTITY_MISMATCH");
+});
+
+
+test("large unterminated user records remain incomplete receipt evidence", async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabi-large-partial-receipt-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const file = path.join(root, "rollout.jsonl");
+  fs.writeFileSync(file, row("user", prompt + "\n" + "x".repeat(8 * 1024 * 1024 + 257)).trimEnd());
+  await assert.rejects(findRolloutDeliveryReceipt(file, deliveryId),
+    (error: NodeJS.ErrnoException) => error.code === "CODEX_ROLLOUT_INCOMPLETE_RECORD");
+});

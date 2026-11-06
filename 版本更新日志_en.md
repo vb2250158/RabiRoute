@@ -8,6 +8,13 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 ## 0.8.1 - 2026-11-07
 
+### io.rabiroute.agent.codex 0.1.3
+
+- Remove fixed size limits on complete Codex rollout records so a large tool or image record cannot block a later valid receipt lookup. Retain streaming, complete-line checks, task matching, cancellation and the existing lookup time budget; no new setting or message resend is introduced.
+- Increment only `io.rabiroute.agent.codex` to `0.1.3`; the host remains `0.8.1`. Plugin selection and installed adoption are verified separately; a source update is not evidence of production activation.
+
+### Packaging fixes
+
 - Fix legacy directory assumptions in Windows packaging and Relay deployment so plugin-owned Relay and viewer assets follow the declared manifest. Copy, backup and recovery retain the same relative-path contract, and reverse-proxy templates include the share routes. Plugin implementation versions, APIs and user configuration are unchanged.
 
 ## 0.8.0 - 2026-11-06

@@ -13,7 +13,7 @@ Native plugins keep `rabi.plugin.json`, `package.json`, owned `src/`, `web/`, `a
 Host architecture, extension-point, and startup contract changes update the host version. Plugin behavior, configuration, and asset changes update that plugin's version. New native plugins start at `0.1.1`; existing published ecosystem extensions continue their own release sequences. Capability major versions and package versions are separate contracts.
 
 ```sh
-npm run plugin:version -- io.rabiroute.agent.codex 0.1.2
+npm run plugin:version -- io.rabiroute.agent.codex 0.1.3
 npm run plugin:build -- --package io.rabiroute.agent.codex --output-directory ../codex-plugin-candidate
 npm run plugin:export -- io.rabiroute.agent.codex ../codex-plugin-source
 ```

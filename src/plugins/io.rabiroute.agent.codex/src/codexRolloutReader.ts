@@ -1,8 +1,6 @@
 import fs from "node:fs";
 import * as zlib from "node:zlib";
 
-const MAX_IDENTITY_BYTES = 64 * 1024;
-const MAX_RECORD_BYTES = 8 * 1024 * 1024;
 const DEFAULT_SCAN_TIMEOUT_MS = 30_000;
 
 export type CodexRolloutSource = {
@@ -127,10 +125,6 @@ export async function* readCodexRolloutLines(
   let pendingParts: Buffer<ArrayBufferLike>[] = [];
   let pendingBytes = 0;
   const accept = (lineBytes: Buffer): string => {
-    const limit = (fallback || options.verifyIdentity) && first ? MAX_IDENTITY_BYTES : MAX_RECORD_BYTES;
-    if (lineBytes.length > limit) {
-      throw sourceError(`Codex rollout record exceeds ${limit} bytes.`, "CODEX_ROLLOUT_RECORD_TOO_LARGE");
-    }
     const normalized = lineBytes.at(-1) === 13 ? lineBytes.subarray(0, -1) : lineBytes;
     const line = normalized.toString("utf8");
     if (first) {
@@ -151,10 +145,6 @@ export async function* readCodexRolloutLines(
         signal.throwIfAborted();
         const tail = bytes.subarray(start, newline);
         const lineLength = pendingBytes + tail.length;
-        const limit = (fallback || options.verifyIdentity) && first ? MAX_IDENTITY_BYTES : MAX_RECORD_BYTES;
-        if (lineLength > limit) {
-          throw sourceError(`Codex rollout record exceeds ${limit} bytes.`, "CODEX_ROLLOUT_RECORD_TOO_LARGE");
-        }
         const lineBytes = pendingParts.length
           ? Buffer.concat([...pendingParts, tail], lineLength)
           : tail;
@@ -167,10 +157,6 @@ export async function* readCodexRolloutLines(
         const tail = bytes.subarray(start);
         pendingParts.push(tail);
         pendingBytes += tail.length;
-      }
-      const limit = (fallback || options.verifyIdentity) && first ? MAX_IDENTITY_BYTES : MAX_RECORD_BYTES;
-      if (pendingBytes > limit) {
-        throw sourceError(`Codex rollout record exceeds ${limit} bytes.`, "CODEX_ROLLOUT_RECORD_TOO_LARGE");
       }
     }
     signal.throwIfAborted();

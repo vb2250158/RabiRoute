@@ -23,7 +23,7 @@ Codex、CodeBuddy、DSH、NapCat 与本地服务保留各自正式 manifest 格�
 
 ```sh
 # 仅递增指定插件，同时更新自己的正式 manifest、npm 元数据和精确装配引用
-npm run plugin:version -- io.rabiroute.agent.codex 0.1.2
+npm run plugin:version -- io.rabiroute.agent.codex 0.1.3
 
 # 仅构建指定包到独立候选，不覆盖完整应用产物
 npm run plugin:build -- --package io.rabiroute.agent.codex --output-directory ../codex-plugin-candidate
