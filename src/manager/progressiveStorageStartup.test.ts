@@ -7,7 +7,7 @@ import { ProgressivePlanStorageStartup, type StartupProcessFactory } from "./pro
 import { ProgressiveRouteCatalogStartup } from "./progressiveRouteCatalogStartup.js";
 import { createStorageStartupProcess, type StorageStartupTask } from "./storageStartupProcess.js";
 import { PlanStorageStartupLifecycle } from "./planStorageStartupLifecycle.js";
-import { planStorageStartupUnavailable } from "./planStorageStartupHttpGate.js";
+import { publicPlanStorageStartupSnapshot } from "./planStorageStartupSnapshot.js";
 import { RouteCatalogStartupLifecycle } from "./routeCatalogStartupLifecycle.js";
 import { routeCatalogStartupUnavailable } from "./routeCatalogStartupHttpGate.js";
 import type { PlanStorageStartupGateSummary } from "./planStorageStartupGate.js";
@@ -122,15 +122,16 @@ test("plan startup publishes recovered roles, retries only failed roles, and ret
   assert.equal(second.migrated, 2);
 });
 
-test("partial plan roles are writable during recovery but other roles and stopping states remain gated", () => {
+test("partial plan recovery reports progress without publishing plan mutation eligibility", () => {
   const snapshot = {
     state: "degraded" as const, attempt: 1, incidents: 1, lastTransitionAt: new Date().toISOString(),
     summary: { ...success, readyRoleIds: ["ready role"] }
   };
-  assert.equal(planStorageStartupUnavailable("POST", "/api/roles/ready%20role/plans", snapshot), null);
-  assert.equal(planStorageStartupUnavailable("POST", "/api/roles/other/plans", snapshot)?.statusCode, 503);
-  assert.equal(planStorageStartupUnavailable("POST", "/api/roles/%GG/plans", snapshot)?.statusCode, 503);
-  assert.equal(planStorageStartupUnavailable("POST", "/api/roles/ready%20role/plans", { ...snapshot, state: "stopping" })?.statusCode, 503);
+  const published = publicPlanStorageStartupSnapshot(snapshot);
+  assert.equal(published.state, "degraded");
+  assert.equal((published.summary as Record<string, unknown>).readyRoles, 1);
+  assert.equal(Object.hasOwn(published, "readyRoleIds"), false);
+  assert.equal(Object.hasOwn(published, "writableRoles"), false);
 });
 
 test("plan lifecycle ignores late progress from a timed-out attempt and protects readiness snapshots", async () => {

@@ -156,13 +156,15 @@ internal sealed class WindowsHostElevationDriver : IHostElevationDriver, IDispos
     {
         var state = InspectTask();
         if (state == ElevatedTaskState.Missing) return;
-        if (!IsElevated || state != ElevatedTaskState.Ready) throw new UnauthorizedAccessException("Cannot update an unverified or non-owned Host task.");
+        if (state != ElevatedTaskState.Ready) throw new UnauthorizedAccessException("Cannot update an unverified or non-owned Host task.");
         dynamic task = folder.GetTask(taskName);
         try
         {
             dynamic definition = task.Definition;
             if (definition.Triggers.Count != 1 || definition.Triggers.Item(1).Type != 9)
                 throw new InvalidOperationException("Unexpected Host task trigger.");
+            if ((bool)definition.Triggers.Item(1).Enabled == enabled) return;
+            if (!IsElevated) throw new UnauthorizedAccessException("Cannot update an unverified or non-owned Host task.");
             definition.Triggers.Item(1).Enabled = enabled;
             dynamic registered = folder.RegisterTaskDefinition(taskName, definition, 6, sid, null, 3, null);
             Marshal.FinalReleaseComObject(registered);

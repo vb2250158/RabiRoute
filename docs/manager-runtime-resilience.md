@@ -31,7 +31,7 @@ readyAt
 
 Host 验证 generation、PID、Manager 实例和回环 URL，随后才启动托盘。端口打开不等于 ready，旧端点能响应也不等于当前 generation。
 
-计划存储恢复不属于 application READY 门。Manager 端点与身份、完整必需插件集和 handler READY 建立后即可发布 READY，不等待 NAS 上的计划恢复。计划存储恢复由可终止的 one-shot child 在后台执行。当前 HTTP 入口仍按目标人格的恢复就绪状态检查计划变更及打开计划 Agent 的请求，未就绪时返回 `503 PLAN_STORAGE_STARTUP_UNAVAILABLE`；已就绪人格的请求继续处理，不要求所有人格同时完成恢复。该门不阻断计划读取，目标计划的事务或目录冲突仍在其 Repository 内处理；`/health` 报告恢复状态，Host 与 Tray 保持当前 application generation。
+计划存储恢复不属于 application READY 门。Manager 端点与身份、完整必需插件集和 handler READY 建立后即可发布 READY，不等待 NAS 上的计划恢复。计划存储恢复由可终止的 one-shot child 在后台执行。后台恢复状态仅用于诊断，不授予或拒绝计划读取、变更、反馈及打开已绑定计划 Agent 的资格；这些请求继续由原目标 owner 处理，目标计划的事务或目录冲突仍在其 Repository 内处理；`/health` 报告恢复状态，Host 与 Tray 保持当前 application generation。
 
 核心请求层直接提供 `/health`，不依赖 diagnostics 插件。它同时返回当前 `applicationGenerationId`、`managerInstanceId`、`managerBaseUrl` 和三项分层判断：`live` 表示 event loop 能响应，`requiredReady` 表示 Profile 的 `readyRequires` 仍完整，`businessReady` 表示计划存储恢复状态和已启用的 Route 入口都已 ready。Host 将身份不符、`live != true` 或无效健康数据视为整代故障；`requiredReady=false` 且状态为 `healthy`/`degraded` 时仅标记降级并保留当前代。计划存储恢复状态降级会把 `businessReady` 置为 `false`，但不改写 application READY，也不触发整代重启。可选插件、外部 Route 或后台任务降级仍可见，同样不会触发无意义的整代重启。
 

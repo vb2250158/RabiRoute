@@ -405,11 +405,7 @@ import {
 } from "./routeCatalogStartupLifecycle.js";
 import { isRouteCatalogSnapshotInstalled, routeCatalogStartupUnavailable } from "./routeCatalogStartupHttpGate.js";
 import type { RouteCatalogPersonaPresentation, RouteCatalogSnapshot } from "./routeCatalogTransaction.js";
-import {
-  planStorageReadyForRoles,
-  planStorageStartupUnavailable,
-  publicPlanStorageStartupSnapshot
-} from "./planStorageStartupHttpGate.js";
+import { publicPlanStorageStartupSnapshot } from "./planStorageStartupSnapshot.js";
 import {
   consumePlanQaFeedback,
   type PlanQaStoragePort,
@@ -4832,7 +4828,6 @@ async function performConversationAgentSend(
     withManagedPlanAttachment: resolveSendManagedPlanAttachment,
     speechServiceUrl: speechServiceUrl(),
     publishEvent: publishManagerEvent,
-    planStorageReady: (roleIds?: readonly string[]) => planStorageReadyForRoles(planStorageStartupStatus(), roleIds),
     appendRolePanelTimeline,
     submitPlanFeedback: submitAgentPlanFeedback,
     remoteLanguageStyle: async () => {
@@ -8578,16 +8573,6 @@ createManagerEventOperationDefinition
         response.setHeader("cache-control", "no-store");
         response.setHeader("retry-after", String(routeCatalogRejection.retryAfterSeconds));
         jsonResponse(response, routeCatalogRejection.statusCode, routeCatalogRejection.body);
-        return;
-      }
-      const planStorageRejection = planStorageStartupUnavailable(
-        request.method,
-        requestUrl.pathname,
-        planStorageStartupLifecycle.snapshot()
-      );
-      if (planStorageRejection) {
-        response.setHeader("retry-after", String(planStorageRejection.retryAfterSeconds));
-        jsonResponse(response, planStorageRejection.statusCode, planStorageRejection.body);
         return;
       }
       // Generation publication removes the failed owner and its actual dependents.

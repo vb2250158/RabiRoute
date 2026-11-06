@@ -119,3 +119,92 @@ test("configuration migration persists its unified audit facts without configura
   assert.equal(records.at(-1)?.result, "restored");
   assert.doesNotMatch(JSON.stringify(records), /private error content/);
 });
+
+
+function roleStorageMetadata(root: string): Map<string, Buffer> {
+  const files = new Map<string, Buffer>();
+  for (const [relative, content] of [
+    ["personaConfig.json", '{"planWorkflow":{"preserved":true}}\n'],
+    ["locks/Example/owner.json", '{"operation":"fixture"}\n'],
+    ["operations/example.json", '{"state":"prepared"}\n'],
+    ["work/Example/lease.json", '{"pid":123,"startedAt":"fixture"}\n']
+  ]) {
+    const file = path.join(root, "data/roles/.role-state", relative!);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    const bytes = Buffer.from(content!); fs.writeFileSync(file, bytes); files.set(file, bytes);
+  }
+  return files;
+}
+function assertUnchanged(files: Map<string, Buffer>) {
+  for (const [file, bytes] of files) assert.deepEqual(fs.readFileSync(file), bytes, file);
+}
+
+test("role storage metadata stays outside full preview, apply and exact restore", t => {
+  const f = fixture(t), metadata = roleStorageMetadata(f.root);
+  const preview = upgradePersonaMessageConfig({ root: f.root });
+  assert.ok(preview.changedFiles >= 2); assertUnchanged(metadata);
+  const applied = upgradePersonaMessageConfig({ root: f.root, apply: true, offline: true });
+  assert.ok(applied.snapshot); assertUnchanged(metadata);
+  const receipt = JSON.parse(fs.readFileSync(path.join(applied.snapshot!, "manifest.json"), "utf8"));
+  assert.ok(receipt.entries.every((entry: {file: string}) => !entry.file.includes(".role-state")));
+  restorePersonaMessageConfig(applied.snapshot!, true); assertUnchanged(metadata);
+  [f.persona, f.route, f.legacy].forEach((file, index) => assert.deepEqual(fs.readFileSync(file), f.originals[index]));
+});
+
+test("scheduled automation preview, apply, repeat and restore leave role storage metadata raw", t => {
+  const f = fixture(t), metadata = roleStorageMetadata(f.root);
+  const route = JSON.parse(fs.readFileSync(f.route, "utf8"));
+  route.messageAdapters.push("heartbeat"); route.heartbeatSkipWhenAgentBusy = true;
+  fs.writeFileSync(f.route, JSON.stringify(route));
+  const originals = new Map([f.persona, f.route, f.legacy].map(file => [file, fs.readFileSync(file)]));
+  const options = { root: f.root, mode: "scheduled_automation" as const };
+  const preview = upgradePersonaMessageConfig(options);
+  assert.ok(preview.changedFiles >= 2); assert.equal(preview.applied, false);
+  assertUnchanged(originals); assertUnchanged(metadata);
+  const applied = upgradePersonaMessageConfig({ ...options, apply: true, offline: true });
+  assert.ok(applied.snapshot); assertUnchanged(metadata);
+  assert.equal(JSON.parse(fs.readFileSync(f.persona, "utf8")).automationScheduleSchemaVersion, 1);
+  assert.deepEqual(JSON.parse(fs.readFileSync(f.route, "utf8")).messageAdapters, ["webhook"]);
+  assert.equal(upgradePersonaMessageConfig(options).changedFiles, 0);
+  restorePersonaMessageConfig(applied.snapshot!, true); assertUnchanged(originals); assertUnchanged(metadata);
+});
+
+test("other invalid persona names and the same reserved name under Routes still require review", t => {
+  for (const [kind, directory, filename] of [
+    ["roles", ".business-role", "personaConfig.json"],
+    ["roles", ".role-state-copy", "personaConfig.json"],
+    ["route", ".role-state", "adapterConfig.json"]
+  ]) {
+    const f = fixture(t), metadata = roleStorageMetadata(f.root);
+    const file = path.join(f.root, "data", kind!, directory!, filename!);
+    fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, '{"automationRules":[]}');
+    assert.throws(() => upgradePersonaMessageConfig({ root: f.root, mode: "scheduled_automation" }),
+      error => error instanceof Error && error.message === `Configuration directory name requires review: ${directory}`);
+    assertUnchanged(metadata);
+    [f.persona, f.route, f.legacy].forEach((name, index) => assert.deepEqual(fs.readFileSync(name), f.originals[index]));
+  }
+});
+
+
+test("reserved metadata junction is not followed while actual linked persona candidates still require review", t => {
+  const f = fixture(t);
+  const target = path.join(f.root, "unrelated-metadata-target");
+  fs.mkdirSync(target); const file = path.join(target, "personaConfig.json");
+  fs.writeFileSync(file, "{not role configuration");
+  const reserved = path.join(f.root, "data/roles/.role-state");
+  fs.symlinkSync(target, reserved, process.platform === "win32" ? "junction" : "dir");
+  assert.ok(upgradePersonaMessageConfig({ root: f.root }).changedFiles >= 2);
+  assert.equal(fs.readFileSync(file, "utf8"), "{not role configuration");
+  const linkedRole = path.join(f.root, "data/roles/LinkedPersona");
+  fs.symlinkSync(target, linkedRole, process.platform === "win32" ? "junction" : "dir");
+  assert.throws(() => upgradePersonaMessageConfig({ root: f.root }), /Linked configuration directory requires review: LinkedPersona/);
+});
+
+test("reserved metadata case follows the host filesystem platform without skipping similarly named roles", t => {
+  const f = fixture(t);
+  const file = path.join(f.root, "data/roles/.ROLE-STATE/personaConfig.json");
+  fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, "{not role configuration");
+  if (process.platform === "win32") assert.ok(upgradePersonaMessageConfig({ root: f.root }).changedFiles >= 2);
+  else assert.throws(() => upgradePersonaMessageConfig({ root: f.root }), /Configuration directory name requires review: .ROLE-STATE/);
+  assert.equal(fs.readFileSync(file, "utf8"), "{not role configuration");
+});

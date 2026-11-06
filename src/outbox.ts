@@ -174,7 +174,6 @@ export type AgentReplyOptions = {
   fenneNoteReplyToken?: string;
   speechServiceUrl?: string;
   publishEvent?: (eventType: string, data: Record<string, unknown>) => void;
-  planStorageReady?: (roleIds?: readonly string[]) => boolean;
   appendRolePanelTimeline?: (
     roleId: string,
     message: RolePanelTimelineMessage
@@ -1569,16 +1568,6 @@ async function appendPlanFeedbackReply(
       ok: false,
       status: "blocked",
       reason: "Plan feedback reply requires roleId and planId in replyContext.",
-      routeProfileId: route.profile?.id ?? route.runtime.id,
-      messageId: target.messageId,
-      targetType: "plan_feedback"
-    };
-  }
-  if (options.planStorageReady?.([roleId]) === false) {
-    return {
-      ok: false,
-      status: "blocked",
-      reason: "PLAN_STORAGE_STARTUP_UNAVAILABLE: plan feedback is blocked until startup recovery completes.",
       routeProfileId: route.profile?.id ?? route.runtime.id,
       messageId: target.messageId,
       targetType: "plan_feedback"

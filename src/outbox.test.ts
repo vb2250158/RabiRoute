@@ -264,38 +264,47 @@ test("plan feedback replies are written to the plan audit record and published t
   assert.equal(submitRequests[1].deliveryId, "delivery-response-guidance-1");
 });
 
-test("plan feedback outbox delivery is fail-closed until plan storage startup is ready", async () => {
-  const checkedScopes: Array<readonly string[] | undefined> = [];
-  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-outbox-plan-startup-gate-"));
+test("plan feedback uses its original owner despite unrelated legacy data in the same or another role", async t => {
+  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-outbox-plan-local-recovery-"));
+  t.after(() => fs.rmSync(rootDir, { recursive: true, force: true }));
   const rolesRoot = path.join(rootDir, "data", "roles");
-  const result = await handleAgentReply({
-    text: "must not be written",
-    replyContext: {
-      runtimeRouteId: "main",
-      routeProfileId: "main",
-      targetType: "plan_feedback",
-      adapterType: "rolePanel",
-      messageId: "plan-feedback-blocked",
-      roleId: "Rabi",
-      planId: "plan-1"
-    }
-  }, {
-    rootDir,
-    routeRoot: path.join(rootDir, "data", "route"),
-    rolesRoot,
-    runtimes: [{
-      id: "main",
-      agentRoleId: "Rabi",
-      pipeline: { outputAdapter: "agent", outputPipeline: "agent" }
-    }],
-    planStorageReady: roleIds => { checkedScopes.push(roleIds); return false; }
-  });
-
-  assert.equal(result.ok, false);
-  assert.equal(result.status, "blocked");
-  assert.match(result.reason || "", /PLAN_STORAGE_STARTUP_UNAVAILABLE/);
-  assert.deepEqual(checkedScopes, [["Rabi"]]);
-  assert.equal(fs.existsSync(rolesRoot), false);
+  const legacy = path.join(rolesRoot, "ExistingRole", "plans", "items", "active", "broken.json");
+  fs.mkdirSync(path.dirname(legacy), { recursive: true });
+  const brokenRaw = Buffer.from("{incomplete legacy plan");
+  fs.writeFileSync(legacy, brokenRaw);
+  const submitted: string[] = [];
+  for (const roleId of ["ExistingRole", "NewRole"]) {
+    const roleDir = path.join(rolesRoot, roleId);
+    const planDir = path.join(roleDir, "plans", "active", "plan-1");
+    fs.mkdirSync(planDir, { recursive: true });
+    fs.writeFileSync(path.join(planDir, "plan.json"), JSON.stringify({
+      id: "plan-1", title: "Original plan", focus: "Original scope", status: "待审批",
+      currentStepId: "approval", steps: [{ id: "approval", title: "Approval", status: "进行中" }],
+      createdAt: "2026-11-06T00:00:00.000Z", updatedAt: "2026-11-06T00:00:00.000Z", keywords: ["fixture"]
+    }));
+    const result = await handleAgentReply({
+      deliveryId: `original-delivery-${roleId}`, text: "Original response",
+      replyContext: { runtimeRouteId: "main", routeProfileId: "main", targetType: "plan_feedback", adapterType: "rolePanel",
+        messageId: `source-${roleId}`, roleId, planId: "plan-1", planStepId: "approval", planFeedbackResponseId: `response-${roleId}` }
+    }, {
+      rootDir, routeRoot: path.join(rootDir, "route"), rolesRoot,
+      runtimes: [{ id: "main", agentRoleId: roleId, pipeline: { outputAdapter: "agent", outputPipeline: "agent" } }],
+      submitPlanFeedback: async input => {
+        submitted.push(input.roleId);
+        return submitPlanFeedbackDirectFixture({roleDir, roleId: input.roleId, planId: input.planId, feedbackId: input.feedbackId,
+          stepId: input.stepId, gatewayId: input.gatewayId, kind: input.kind, author: "agent", source: "agent", text: input.text, notifyAgent: false});
+      }
+    });
+    assert.equal(result.ok, true, result.reason);
+    assert.equal(result.status, "sent");
+    assert.equal(result.sentMessageId, `response-${roleId}`);
+    const saved = fs.readFileSync(path.join(planDir, "feedback.jsonl"), "utf8").trim().split(/\r?\n/).map(line => JSON.parse(line));
+    assert.equal(saved.length, 1);
+    assert.equal(saved[0].id, `response-${roleId}`);
+    assert.equal(saved[0].text, "Original response");
+    assert.deepEqual(fs.readFileSync(legacy), brokenRaw);
+  }
+  assert.deepEqual(submitted, ["ExistingRole", "NewRole"]);
 });
 
 test("plan feedback outbox delivery fails closed when its submit port is missing", async () => {

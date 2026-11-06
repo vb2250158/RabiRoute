@@ -6,6 +6,13 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.7.2 - 2026-11-06
+
+- Remove whole-persona recovery gates from plan HTTP and feedback paths. A damaged legacy plan no longer blocks healthy plan updates, opening, creation, or feedback; health diagnostics continue to expose actual recovery progress.
+- Preserve real legacy flat-record identities during creation under the existing per-plan transaction. Unrelated damaged rows retain their original files with local diagnostics; target validation and read failures remain scoped to that operation.
+- Fix persona configuration migration discovery treating the `.role-state` storage metadata directory as a persona. Preview, offline apply, and snapshot restore retain the same utility contract.
+- Preserve the verified logon task when its autostart value is unchanged, avoiding redundant registration and elevation. Actual changes retain the original Windows boundary; install commit and restore share the same owner.
+
 ## 0.7.1 - 2026-11-06
 
 - Reuse the plugin packages prepared before READY during post-ready activation instead of copying and verifying the same batch again. Configuration and source updates retain their existing loading paths; prepared optional plugins are not exposed as active before publication.

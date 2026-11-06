@@ -29,6 +29,8 @@ function configurationFiles(root: string, kind: "roles" | "routes"): Map<string,
   const files = new Map<string, Buffer>();
   if (!fs.existsSync(root)) return files;
   for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
+    // roleLifecycle.roleStateRoot owns this reserved storage metadata entry, not a persona.
+    if (kind === "roles" && (process.platform === "win32" ? entry.name.toLowerCase() : entry.name) === ".role-state") continue;
     if (entry.isSymbolicLink()) throw new Error(`Linked configuration directory requires review: ${entry.name}`);
     if (!entry.isDirectory()) continue;
     for (const name of kind === "roles" ? ["personaConfig.json", "roleMessageConfig.json", "routes.json"] : ["adapterConfig.json"]) {

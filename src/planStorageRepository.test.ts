@@ -6,6 +6,7 @@ import path from "node:path";
 import test from "node:test";
 import {
   commitPlanLifecycleTransitionUnderLease,
+  assertPlanStorageIdentityAvailable,
   readCanonicalPlanStoragePackageUnderLease,
   readPlanStorageInventoryHash,
   readPlanStoragePackage,
@@ -341,4 +342,114 @@ test("lifecycle recovery still commits an interrupted transition whose source sn
   assert.equal(recovery.results[0]?.inventoryHash, interrupted.inventoryHash);
   const current = withPlanStorageLease(roleDir, planId, lease => readCanonicalPlanStoragePackageUnderLease(lease));
   assert.equal(current.inventoryHash, interrupted.inventoryHash);
+});
+
+
+test("legacy identity reservation covers both flat buckets and historical UTF16 names while isolating invalid rows", t => {
+  const roleDir = fs.mkdtempSync(path.join(os.tmpdir(), "plan-legacy-id-"));
+  t.after(() => fs.rmSync(roleDir, { recursive: true, force: true }));
+  const historicalId = "a".repeat(70) + "𐐀".repeat(20);
+  const values = [
+    { id: "original-active", directory: "items/active", name: "original-active" },
+    { id: "original-archive", directory: "archive", name: "original-archive" },
+    { id: historicalId, directory: "items/active", name: "a".repeat(70) + "𐐀".repeat(15) }
+  ];
+  for (const {id,directory,name} of values) {
+    const file = path.join(roleDir,"plans",directory,name+".json");
+    fs.mkdirSync(path.dirname(file),{recursive:true});
+    const raw = Buffer.from(JSON.stringify({id,title:"Original legacy data",vendor:{keep:true}})+"\n");
+    fs.writeFileSync(file,raw);
+    withPlanStorageLease(roleDir,id,()=>assert.throws(()=>assertPlanStorageIdentityAvailable(roleDir,id),/already exists in legacy storage/));
+    assert.deepEqual(fs.readFileSync(file),raw);
+  }
+  const badOther = path.join(roleDir,"plans/items/active/unrelated-bad.json");
+  fs.writeFileSync(badOther,"invalid-json");
+  withPlanStorageLease(roleDir,"healthy-new-id",()=>assert.doesNotThrow(()=>assertPlanStorageIdentityAvailable(roleDir,"healthy-new-id")));
+  assert.equal(fs.readFileSync(badOther,"utf8"),"invalid-json");
+});
+
+test("an undecodable legacy row stays raw while a distinct historical truncation owner does not reserve a new ID", t => {
+  const roleDir=fs.mkdtempSync(path.join(os.tmpdir(),"plan-legacy-local-"));
+  t.after(()=>fs.rmSync(roleDir,{recursive:true,force:true}));
+  const directory=path.join(roleDir,"plans/items/active");fs.mkdirSync(directory,{recursive:true});
+  const file=path.join(directory,"bad-target.json");fs.writeFileSync(file,"invalid-original-raw");
+  withPlanStorageLease(roleDir,"bad-target",()=>assert.throws(()=>assertPlanStorageIdentityAvailable(roleDir,"bad-target"),/Invalid legacy plan storage identity/));
+  withPlanStorageLease(roleDir,"healthy",()=>assert.doesNotThrow(()=>assertPlanStorageIdentityAvailable(roleDir,"healthy")));
+  assert.equal(fs.readFileSync(file,"utf8"),"invalid-original-raw");
+  const prefix="a".repeat(100),otherId=prefix+"-other",targetId=prefix+"-new";
+  // These IDs share their canonical key too, so both correctly remain occupied.
+  const collision=path.join(directory,prefix+".json");fs.writeFileSync(collision,JSON.stringify({id:otherId}));
+  withPlanStorageLease(roleDir,targetId,()=>assert.throws(()=>assertPlanStorageIdentityAvailable(roleDir,targetId),/already exists in legacy storage/));
+  fs.unlinkSync(collision);
+  const supplementary="a".repeat(70)+"𐐀".repeat(15),owner=supplementary+"-old",target=supplementary+"-new";
+  const sharedHistorical=path.join(directory,supplementary+".json");fs.writeFileSync(sharedHistorical,JSON.stringify({id:owner}));
+  withPlanStorageLease(roleDir,target,()=>assert.doesNotThrow(()=>assertPlanStorageIdentityAvailable(roleDir,target)));
+});
+
+
+test("legacy filename metadata resolves supplementary-case aliases before the actual canonical namespace claim", t => {
+  const roleDir=fs.mkdtempSync(path.join(os.tmpdir(),"plan-legacy-alias-"));
+  t.after(()=>fs.rmSync(roleDir,{recursive:true,force:true}));
+  const directory=path.join(roleDir,"plans/items/active");fs.mkdirSync(directory,{recursive:true});
+  const file=path.join(directory,"alias-𐐀.json"),raw=Buffer.from(JSON.stringify({id:"alias-𐐀",title:"Original case identity"})+"\n");fs.writeFileSync(file,raw);
+  withPlanStorageLease(roleDir,"alias-𐐨",()=>assert.throws(()=>assertPlanStorageIdentityAvailable(roleDir,"alias-𐐨"),/already exists in legacy storage/));
+  assert.deepEqual(fs.readFileSync(file),raw);
+  withPlanStorageLease(roleDir,"unrelated-new",()=>assert.doesNotThrow(()=>assertPlanStorageIdentityAvailable(roleDir,"unrelated-new")));
+});
+
+
+test("a historical split surrogate filename reserves its actual disk identity and migration fallback stays exact", t => {
+  const roleDir=fs.mkdtempSync(path.join(os.tmpdir(),"plan-legacy-roundtrip-"));
+  t.after(()=>fs.rmSync(roleDir,{recursive:true,force:true}));
+  const directory=path.join(roleDir,"plans/items/active");fs.mkdirSync(directory,{recursive:true});
+  const id="a".repeat(69)+"𐐀".repeat(20),name=("a".repeat(69)+"𐐀".repeat(20)).slice(0,100);
+  const file=path.join(directory,name+".json"),raw=Buffer.from(JSON.stringify({id,title:"Original split identity"})+"\n");fs.writeFileSync(file,raw);
+  withPlanStorageLease(roleDir,id,()=>assert.throws(()=>assertPlanStorageIdentityAvailable(roleDir,id),/already exists in legacy storage/));
+  assert.deepEqual(fs.readFileSync(file),raw);
+  const fallback=path.join(directory,"fallback.JSON");fs.writeFileSync(fallback,JSON.stringify({title:"Migration uses fallback.JSON as its logical ID"}));
+  withPlanStorageLease(roleDir,"fallback",()=>assert.doesNotThrow(()=>assertPlanStorageIdentityAvailable(roleDir,"fallback")));
+});
+
+
+test("legacy raw identity is reserved independently of arbitrary filenames in both containers", t => {
+  const roleDir=fs.mkdtempSync(path.join(os.tmpdir(),"plan-legacy-decoded-"));
+  t.after(()=>fs.rmSync(roleDir,{recursive:true,force:true}));
+  for(const [directory,id] of [["items/active","original-active-id"],["archive","original-archived-id"]]){
+    const file=path.join(roleDir,"plans",directory!,"arbitrary-import-name.json");fs.mkdirSync(path.dirname(file),{recursive:true});
+    const raw=Buffer.from(JSON.stringify({id,title:"Existing reader-accepted plan",vendor:{retained:true}})+"\n");fs.writeFileSync(file,raw);
+    withPlanStorageLease(roleDir,id!,()=>assert.throws(()=>assertPlanStorageIdentityAvailable(roleDir,id!),/already exists in legacy storage/));
+    assert.deepEqual(fs.readFileSync(file),raw);
+  }
+  withPlanStorageLease(roleDir,"healthy-new-id",()=>assert.doesNotThrow(()=>assertPlanStorageIdentityAvailable(roleDir,"healthy-new-id")));
+});
+
+
+test("unrelated row I/O stays diagnostic while known target I/O remains local and namespace errors stay real", t => {
+  const roleDir=fs.mkdtempSync(path.join(os.tmpdir(),"plan-legacy-io-"));t.after(()=>fs.rmSync(roleDir,{recursive:true,force:true}));
+  const directory=path.join(roleDir,"plans/items/active");fs.mkdirSync(directory,{recursive:true});
+  const other=path.join(directory,"unrelated.json"),target=path.join(directory,"known-target.json");fs.writeFileSync(other,JSON.stringify({id:"other",title:"Other"}));fs.writeFileSync(target,JSON.stringify({id:"known-target",title:"Target"}));
+  const raw=fs.readFileSync(other),original=fs.readFileSync,warnings:unknown[][]=[];const denied=Object.assign(new Error("Synthetic row read denied"),{code:"EACCES"});
+  t.mock.method(console,"warn",(...args:unknown[])=>warnings.push(args));
+  t.mock.method(fs,"readFileSync",((file:unknown,...args:unknown[])=>{if(String(file)===other||String(file)===target)throw denied;return Reflect.apply(original,fs,[file,...args]);}) as typeof fs.readFileSync);
+  withPlanStorageLease(roleDir,"healthy-new-id",()=>assert.doesNotThrow(()=>assertPlanStorageIdentityAvailable(roleDir,"healthy-new-id")));
+  assert.equal(warnings.length,1);assert.equal((warnings[0]![1] as {rows:number}).rows,2);
+  withPlanStorageLease(roleDir,"known-target",()=>assert.throws(()=>assertPlanStorageIdentityAvailable(roleDir,"known-target"),error=>error===denied));
+  t.mock.restoreAll();assert.deepEqual(fs.readFileSync(other),raw);
+  const brokenRole=path.join(roleDir,"namespace-case"),broken=path.join(brokenRole,"plans/items/active");fs.mkdirSync(path.dirname(broken),{recursive:true});fs.writeFileSync(broken,"original namespace error");
+  let namespaceCode: unknown;try{fs.opendirSync(broken);}catch(error){namespaceCode=(error as NodeJS.ErrnoException).code;}
+  assert.ok(namespaceCode);
+  withPlanStorageLease(brokenRole,"new-id",()=>assert.throws(()=>assertPlanStorageIdentityAvailable(brokenRole,"new-id"),error=>(error as NodeJS.ErrnoException).code===namespaceCode));
+  assert.equal(fs.readFileSync(broken,"utf8"),"original namespace error");
+});
+
+
+test("known malformed legacy logical ID preserves its decode cause and uses deterministic validation rejection", t => {
+  const roleDir=fs.mkdtempSync(path.join(os.tmpdir(),"plan-legacy-decode-"));t.after(()=>fs.rmSync(roleDir,{recursive:true,force:true}));
+  const file=path.join(roleDir,"plans/items/active/known-target.json");fs.mkdirSync(path.dirname(file),{recursive:true});
+  const raw=Buffer.from(JSON.stringify({id:" known-target ",title:"Original malformed logical ID"})+"\n");fs.writeFileSync(file,raw);
+  withPlanStorageLease(roleDir,"known-target",()=>assert.throws(()=>assertPlanStorageIdentityAvailable(roleDir,"known-target"),error=>{
+    assert.ok(error instanceof Error);assert.match(error.message,/^Invalid legacy plan storage identity/);
+    assert.ok(error.cause instanceof Error);assert.match(error.cause.message,/trimmed and Unicode NFC-normalized/);return true;
+  }));
+  assert.deepEqual(fs.readFileSync(file),raw);
 });

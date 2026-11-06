@@ -8,6 +8,8 @@ English | <a href="./windows-launcher-and-packaging.md">简体中文</a>
 
 Windows startup adds a highest-privilege Host task registered through one UAC approval, limited-mode fallback and synchronized logon autostart. See [camera events and HA recovery](home-camera-events_en.md) for privilege scope, managed HA children, legacy-task migration and installed acceptance. Source editing does not upgrade the stable Host or trigger UAC.
 
+After the existing task-ownership check, Host returns immediately when logon autostart already has the requested value. It does not re-register the task or require an elevated token for an unchanged value. Actual changes retain the original Windows permission boundary; install commit and snapshot restore use the same owner. Adjacent native regression: `dotnet run --project desktop/windows-bootstrap-autostart-tests/RabiRouteAutostartOwner.Tests.csproj -c Release`. These checks use a controlled OS adapter for the original owner and do not prove actual logon behavior.
+
 The Windows package has one application-lifecycle entry: `RabiRouteHost.exe`. Manager owns business state and the tray/task window is presentation; both are same-generation children created by Host. The tray is neither a lifecycle owner nor a second desktop application.
 
 ## Process names, icons, and ownership

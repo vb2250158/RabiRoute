@@ -10,12 +10,16 @@ function fingerprint(stat: fs.Stats): string {
   return `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`;
 }
 
-function identity(text: string): string | null {
+/** Decode identity without retaining data; a legacy caller may supply its original filename fallback. */
+export function decodePlanIdentity(text: string, fallbackId?: string, options: { requireTitle?: boolean } = {}): string | null {
   let raw: Record<string, unknown>;
   try { raw = JSON.parse(text) as Record<string, unknown>; }
   catch (error) { if (error instanceof SyntaxError) return null; throw error; }
-  if (!raw || !String(raw.title || "").trim() || !raw.id) return null;
-  return canonicalLogicalPlanId(raw.id);
+  if (!raw) return null;
+  const hasTitle = Boolean(String(raw.title || "").trim());
+  const id = raw.id || (hasTitle ? fallbackId : undefined);
+  if ((options.requireTitle !== false && !hasTitle) || !id) return null;
+  return canonicalLogicalPlanId(id);
 }
 
 function remember(file: string, entry: IdentityEntry): string | null {
@@ -33,7 +37,7 @@ export function readPlanIdentity(filePath: string): string | null {
       const before = fingerprint(fs.statSync(file));
       const cached = entries.get(file);
       if (cached?.fingerprint === before) return cached.id;
-      const id = identity(fs.readFileSync(file, "utf8"));
+      const id = decodePlanIdentity(fs.readFileSync(file, "utf8"));
       if (fingerprint(fs.statSync(file)) === before) return remember(file, { fingerprint: before, id });
     }
     throw new Error("Plan identity file changed during verification.");
@@ -62,7 +66,7 @@ export async function readPlanIdentityAsync(filePath: string, signal?: AbortSign
       const before = fingerprint(await abortable(fs.promises.stat(file), signal));
       const cached = entries.get(file);
       if (cached?.fingerprint === before) return cached.id;
-      const id = identity(await fs.promises.readFile(file, { encoding: "utf8", signal }));
+      const id = decodePlanIdentity(await fs.promises.readFile(file, { encoding: "utf8", signal }));
       const after = fingerprint(await abortable(fs.promises.stat(file), signal));
       signal?.throwIfAborted();
       if (after === before) return remember(file, { fingerprint: before, id });

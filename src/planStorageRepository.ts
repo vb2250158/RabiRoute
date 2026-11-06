@@ -3,12 +3,14 @@ import fs from "node:fs";
 import path from "node:path";
 import { atomicWriteFileSync } from "./shared/filePersistence.js";
 import { orderedPlanHistoryPaths, PLAN_HISTORY_FILE } from "./planHistoryShards.js";
+import { decodePlanIdentity } from "./planIdentityReadCache.js";
 import { assertPlanStoragePackageRecoveryReady, capturePlanStoragePackageRecoveryConflicts, readPlanPackageRecoveryIdentity, PlanStoragePackageRecoveryPendingError } from "./planStoragePackageFence.js";
 import {
   canonicalHistoricalPlanStorageCollisionKey,
   canonicalLogicalPlanId,
   canonicalPlanStorageCollisionKey,
   canonicalPlanStorageKey,
+  safePlanStorageSegment,
   windowsPlanStoragePathCollisionKey
 } from "./planStorageIdentity.js";
 import {
@@ -500,6 +502,55 @@ export function resolveCanonicalPlanStorageLocation(
 export function assertPlanStorageIdentityAvailable(roleDir: string, planId: string): void {
   const location = resolveCanonicalPlanStorageLocation(roleDir, planId);
   if (location) throw new Error(`Plan storage identity is already occupied: ${location.directory}`);
+  const collisionId = canonicalPlanStorageCollisionKey(planId);
+  const hintedNames = new Set([canonicalPlanStorageKey(planId), safePlanStorageSegment(planId).slice(0, 100) || "plan"]
+    .map(name => windowsPlanStoragePathCollisionKey(Buffer.from(name, "utf8").toString("utf8"))));
+  let skippedRows = 0;
+  let firstSkippedFile: string | undefined;
+  const skipped = (file: string) => { skippedRows++; firstSkippedFile ??= path.relative(plansRoot(roleDir), file); };
+  // Migration admits raw.id independently of its old filename. Walk only these
+  // containers, retaining one row at a time and stopping on this identity.
+  try {
+    for (const directory of [path.join(plansRoot(roleDir), "items", "active"), path.join(plansRoot(roleDir), "archive")]) {
+      let entries: fs.Dir;
+      try { entries = fs.opendirSync(directory); }
+      catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") continue; throw error; }
+      try {
+        let entry: fs.Dirent | null;
+        while ((entry = entries.readSync())) {
+          if (!entry.isFile() || !entry.name.toLocaleLowerCase("en-US").endsWith(".json")) continue;
+          const file = path.join(directory, entry.name);
+          const hintedTarget = hintedNames.has(windowsPlanStoragePathCollisionKey(entry.name.slice(0, -5)));
+          let text: string;
+          try { text = fs.readFileSync(file, "utf8"); }
+          catch (error) {
+            if (hintedTarget) throw error;
+            skipped(file); continue;
+          }
+          let owner: string | null;
+          try {
+            owner = decodePlanIdentity(text, path.basename(entry.name, ".json"), { requireTitle: false });
+          } catch (error) {
+            // A decoded validation failure is not an uncertain write or a read
+            // failure. Preserve its cause while using the existing rejection contract.
+            if (hintedTarget) throw new Error(`Invalid legacy plan storage identity for ${planId}: ${file}`, { cause: error });
+            skipped(file); continue;
+          }
+          if (!owner) {
+            if (hintedTarget) throw new Error(`Invalid legacy plan storage identity for ${planId}: ${file}`);
+            skipped(file); continue;
+          }
+          if (canonicalPlanStorageCollisionKey(owner) === collisionId) {
+            throw new Error(`Plan already exists in legacy storage: ${owner} (${file})`);
+          }
+        }
+      } finally { entries.closeSync(); }
+    }
+  } finally {
+    if (skippedRows) console.warn("[rabi] Legacy plan identity rows remain unavailable; original files are retained.", {
+      rows: skippedRows, firstFile: firstSkippedFile
+    });
+  }
 }
 
 function canonicalRelativePath(value: unknown): string {

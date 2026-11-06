@@ -1,3 +1,4 @@
+import { decodePlanIdentity } from "./planIdentityReadCache.js";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
@@ -90,4 +91,15 @@ test("async identity metadata waits are cancellable", async t => {
     controller.abort(new DOMException("cancel identity stat", "AbortError"));
     await assert.rejects(pending, (error: unknown) => error instanceof Error && error.name === "AbortError");
   } finally { fs.promises.stat = originalStat; }
+});
+
+
+test("uncached identity decoding keeps legacy raw id and exact filename fallback semantics", () => {
+  assert.equal(decodePlanIdentity(JSON.stringify({title:"Original",id:"raw-id"}),"arbitrary-name"),"raw-id");
+  assert.equal(decodePlanIdentity(JSON.stringify({title:"Fallback"}),"fallback.JSON"),"fallback.JSON");
+  assert.equal(decodePlanIdentity(JSON.stringify({title:"No fallback"})),null);
+  assert.equal(decodePlanIdentity("invalid-json","unknown"),null);
+  assert.equal(decodePlanIdentity(JSON.stringify({id:"incomplete"}),"unknown"),null);
+  assert.equal(decodePlanIdentity(JSON.stringify({id:"incomplete"}),"unknown",{requireTitle:false}),"incomplete");
+  assert.equal(decodePlanIdentity(JSON.stringify({vendor:true}),"unknown",{requireTitle:false}),null);
 });
