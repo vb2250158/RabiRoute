@@ -2,7 +2,7 @@ import { getTimeoutMs } from "./runtimeTimeouts.js";
 import { randomUUID } from "node:crypto";
 import { PublicationScope } from "@rabiroute/plugin-sdk/publication";
 import { runPluginActivation } from "./pluginActivationContext.js";
-import type { CapabilityGraphPlan } from "./capabilityGraph.js";
+import { selectRequiredCapabilityProviders, type CapabilityGraphPlan } from "./capabilityGraph.js";
 import { isolateCapabilityGraph, sharedWebResourceKey } from "./capabilityGraphIsolation.js";
 import { ContributionRegistryDraft, type ContributionRegistrySnapshot, type RegisteredPluginContribution } from "./contributionRegistry.js";
 import { EffectScope } from "./effectScope.js";
@@ -123,20 +123,7 @@ export function selectReadyPluginCandidates(
 ): readonly PluginCandidate[] {
   const hostCapabilitySet = new Set(hostCapabilities.map(capability => capability.trim()).filter(Boolean));
   const isolated = isolateCapabilityGraph(candidates, hostCapabilitySet);
-  const plan = isolated.plan;
-  const byId = new Map(isolated.candidates.map(candidate => [candidate.instanceId.trim(), candidate]));
-  const selected = new Set<string>();
-  const pending = readyRequires.map(capability => capability.trim()).filter(Boolean);
-  while (pending.length) {
-    const capability = pending.pop()!;
-    if (hostCapabilitySet.has(capability)) continue;
-    const providerId = plan.providers.get(capability);
-    if (!providerId || selected.has(providerId)) continue;
-    selected.add(providerId);
-    const provider = byId.get(providerId);
-    if (provider) pending.push(...provider.manifest.requires);
-  }
-  return Object.freeze(candidates.filter(candidate => selected.has(candidate.instanceId.trim())));
+  return selectRequiredCapabilityProviders(candidates, isolated.plan, readyRequires, hostCapabilitySet);
 }
 
 type ActivePluginState = Readonly<{

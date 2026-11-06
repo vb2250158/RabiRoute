@@ -494,20 +494,20 @@ test("settings reuse rechecks execution admission once and never retains a revok
   assert.equal(next.loadFailures[0]?.retainedRevision, undefined);
 });
 
-test("prepared admission failure does not borrow that result for a different published revision", async t => {
+test("new revision admission failure does not borrow that result for a different published revision", async t => {
   const input = controlledInput(t, ["one"]);
   const original = controlledPackage("io.test.one"), updated = { ...original, revision: "updated-same-version" };
-  let current = original;
-  t.mock.method(input.packageCatalog, "loadPackage", async () => current);
+  t.mock.method(input.packageCatalog, "loadPackage", async () => original);
   const previous = await loadPluginProfile(input);
-  current = updated;
-  const prepared = await loadPluginProfile(input);
   const admitted: string[] = [];
   t.mock.method(input.packageCatalog, "assertPackageExecutionAllowed", async (owner: LoadedPluginPackage) => {
     admitted.push(owner.revision);
-    if (owner === updated) throw new Error("prepared revision is unavailable");
+    if (owner === updated) throw new Error("new revision is unavailable");
   });
-  const next = await loadPluginProfile({ ...input, previous, prepared, reuseUnchangedPackages: true });
+  t.mock.method(input.packageCatalog, "loadPackage", async () => {
+    await input.packageCatalog.assertPackageExecutionAllowed(updated); return updated;
+  });
+  const next = await loadPluginProfile({ ...input, previous });
   assert.deepEqual(admitted, [updated.revision, original.revision]);
   assert.equal(next.packages[0]?.package, original);
   assert.equal(next.loadFailures[0]?.retainedRevision, original.revision);
@@ -552,4 +552,88 @@ test("settings switches preserve published bytes; ordinary same-version source u
   const disabled = await loadPluginProfile({ ...fixture.input, profile: parsePluginProfile({ ...desired,
     instances: desired.instances.map(instance => ({ ...instance, enabled: false })) }), previous: retained, reuseUnchangedPackages: true });
   assert.deepEqual(disabled.candidates, []);
+});
+
+
+function requiredFixturePackage(name: string, requires: string[] = [], optional: string[] = []): LoadedPluginPackage {
+  const value = controlledPackage(`io.test.${name}`);
+  return { ...value, manifest: { ...value.manifest, provides: [name === "core" ? "manager.core@1" : `fixture.${name}@1`], requires, optional } };
+}
+
+test("required-first does not enter slow or broken optional preparation before required services publish", async t => {
+  const input = controlledInput(t, ["core", "dependency", "slow", "bad"]);
+  input.profile = parsePluginProfile({ ...input.profile, readyRequires: ["manager.core@1"] });
+  const owners = new Map([
+    ["io.test.core", requiredFixturePackage("core", ["fixture.dependency@1", "host.shared@1"], ["fixture.slow@1"])],
+    ["io.test.dependency", requiredFixturePackage("dependency")],
+    ["io.test.slow", requiredFixturePackage("slow", ["manager.core@1"])]
+  ]);
+  const release = cancellationGate(), entered = cancellationGate();
+  const loads: string[] = [];
+  t.mock.method(input.packageCatalog, "loadPackage", async (id: string) => {
+    loads.push(id);
+    if (id === "io.test.slow") { entered.resolve(); await release.promise; }
+    if (id === "io.test.bad") throw new Error("broken optional package");
+    return owners.get(id)!;
+  });
+  const readyOnly = { hostCapabilities: ["host.shared@1"], readManifest: async (id: string) => {
+    if (id === "io.test.bad") throw new Error("broken optional manifest");
+    return owners.get(id)!.manifest;
+  } };
+  const loading = loadPluginProfile({ ...input, readyOnly });
+  const runtime = new GenerationRuntime({ host: "manager", hostServices: [{ capability: "host.shared@1", value: true }], executor: {
+    prepare: async candidate => ({ activate(ctx) { for (const capability of candidate.manifest.provides) ctx.services.provide(capability, true); } })
+  } });
+  t.after(async () => { release.resolve(); await Promise.allSettled([loading]); await runtime.dispose(); });
+  const required = await Promise.race([loading, entered.promise.then(() => { throw new Error("optional preparation entered before required READY"); })]);
+  assert.deepEqual(loads.sort(), ["io.test.core", "io.test.dependency"]);
+  assert.deepEqual(required.profile.instances.map(row => row.id), ["core", "dependency"]);
+  assert.deepEqual(input.profile.instances.map(row => row.id), ["core", "dependency", "slow", "bad"], "full desired settings remain authoritative");
+  assert.equal(required.loadFailures[0]?.instanceId, "bad");
+  const ready = await runtime.switch(required.candidates, { readyRequires: required.profile.readyRequires });
+  assert.deepEqual(ready.generation.readiness.missingCapabilities, []);
+  assert.equal(ready.generation.services.services.get("manager.core@1")?.value, true);
+  const completeLoading = loadPluginProfile({ ...input, previous: required, reuseUnchangedPackages: true });
+  await entered.promise;
+  assert.equal(runtime.current().services.services.get("manager.core@1")?.value, true, "required API remains live while optional is pending");
+  release.resolve(); const complete = await completeLoading;
+  assert.equal(loads.filter(id => id === "io.test.slow").length, 1);
+  assert.equal(loads.filter(id => id === "io.test.core").length, 1);
+  assert.equal(loads.filter(id => id === "io.test.bad").length, 1);
+  await runtime.switch(complete.candidates, { readyRequires: complete.profile.readyRequires });
+  assert.equal(runtime.current().services.services.get("fixture.slow@1")?.value, true);
+});
+
+test("required-first missing metadata and changed prepared manifests retain original readiness errors", async t => {
+  for (const changed of [false, true]) {
+    const input = controlledInput(t, ["core", "unrelated"]);
+    input.profile = parsePluginProfile({ ...input.profile, readyRequires: ["manager.core@1"] });
+    const core = requiredFixturePackage("core");
+    t.mock.method(input.packageCatalog, "loadPackage", async () => ({ ...core, manifest: { ...core.manifest, requires: ["missing.real.dependency@1"] } }));
+    const loaded = await loadPluginProfile({ ...input, readyOnly: { hostCapabilities: [], readManifest: async id => {
+      if (!changed || id !== "io.test.core") throw new Error("manifest unavailable");
+      return core.manifest;
+    } } });
+    const runtime = new GenerationRuntime({ host: "manager", executor: { prepare: async () => ({ activate() { assert.fail("missing dependencies cannot activate"); } }) } });
+    t.after(() => runtime.dispose());
+    await assert.rejects(runtime.switch(loaded.candidates, { readyRequires: loaded.profile.readyRequires }), error =>
+      error instanceof RequiredPluginCapabilitiesUnavailableError && error.missingCapabilities.includes("manager.core@1"));
+  }
+});
+
+test("required-first cancellation joins entered metadata and never schedules package preparation", async t => {
+  const input = controlledInput(t, ["one", "two", "later"]), first = cancellationGate(), second = cancellationGate();
+  const entered: string[] = []; let stopped = false, settled = false;
+  const denied = new Error("original startup lifecycle stopped");
+  t.mock.method(input.packageCatalog, "loadPackage", async () => { assert.fail("cancelled metadata cannot prepare executable packages"); });
+  const loading = loadPluginProfile({ ...input, assertCurrent() { if (stopped) throw denied; }, readyOnly: { hostCapabilities: [], readManifest: async id => {
+    entered.push(id); await (id === "io.test.one" ? first.promise : second.promise); return requiredFixturePackage("one").manifest;
+  } } });
+  void loading.then(() => { settled = true; }, () => { settled = true; });
+  const rejected = assert.rejects(loading, error => error === denied);
+  t.after(() => { first.resolve(); second.resolve(); });
+  await new Promise(resolve => setImmediate(resolve)); assert.deepEqual(entered, ["io.test.one", "io.test.two"]);
+  stopped = true; first.resolve(); await new Promise(resolve => setImmediate(resolve)); assert.equal(settled, false);
+  second.resolve(); await rejected;
+  assert.deepEqual(entered, ["io.test.one", "io.test.two"]);
 });

@@ -5,10 +5,11 @@ import path from "node:path";
 import test, { type TestContext } from "node:test";
 import { GenerationRuntime, selectReadyPluginCandidates } from "../plugin-kernel/generationRuntime.js";
 import { loadPluginProfile, PluginPackageCatalog, type LoadedPluginProfile } from "../plugin-kernel/profile.js";
+import { readPluginManagementManifest } from "./pluginManagement.js";
 import { PluginProfilePublication } from "./pluginProfilePublication.js";
 import { WebPluginModuleRegistry } from "./webPluginModules.js";
 
-test("post-ready preparation reuses the first batch without publishing its optional owners early", async t => {
+test("required-first publishes only required owners and prepares optional exactly once after READY", async t => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "plugin-startup-prepared-"));
   const packages = path.join(root, "packages"), runtimeRoot = path.join(root, "runtime");
   const profile = { schemaVersion: 2, readyRequires: ["fixture.core@1"], instances: ["core", "optional"].map(id => ({
@@ -35,22 +36,23 @@ test("post-ready preparation reuses the first batch without publishing its optio
     return originalLoad(...args);
   });
   const input = { profilePath, packageCatalog: catalog, runtimeRoot, host: "manager" as const };
-  const prepared = await loadPluginProfile(input);
-  assert.equal(loads, 2);
+  const prepared = await loadPluginProfile({ ...input, readyOnly: { hostCapabilities: [],
+    readManifest: (id, version) => readPluginManagementManifest(catalog, id, version) } });
+  assert.equal(loads, 1);
   await runtime.switch(selectReadyPluginCandidates(prepared.candidates, prepared.profile.readyRequires), {
     readyRequires: prepared.profile.readyRequires
   });
   const publication = new PluginProfilePublication();
   const published = publication.capture(prepared, runtime.current()).profile!;
   assert.deepEqual(published.candidates.map(row => row.instanceId), ["core"]);
-  const complete = await loadPluginProfile({ ...input, previous: published, prepared, reuseUnchangedPackages: true });
-  assert.equal(loads, 2, "the optional package was already prepared before READY");
+  const complete = await loadPluginProfile({ ...input, previous: published, reuseUnchangedPackages: true });
+  assert.equal(loads, 2, "required owner is reused and optional is prepared only after READY");
   assert.deepEqual(complete.candidates.map(row => row.instanceId), ["core", "optional"]);
   assert.deepEqual(published.candidates.map(row => row.instanceId), ["core"], "prepared bytes are not published metadata");
   failOptional = true;
-  const changed = { ...prepared.profile, instances: prepared.profile.instances.map(row => row.id === "optional"
+  const changed = { ...complete.profile, instances: complete.profile.instances.map(row => row.id === "optional"
     ? { ...row, config: { changed: true } } : row) };
-  const rejected = await loadPluginProfile({ ...input, profile: changed, previous: published, prepared, reuseUnchangedPackages: true });
+  const rejected = await loadPluginProfile({ ...input, profile: changed, previous: published, reuseUnchangedPackages: true });
   assert.equal(loads, 3, "changed configuration follows ordinary package preparation");
   assert.deepEqual(rejected.candidates.map(row => row.instanceId), ["core"]);
   assert.equal(rejected.loadFailures[0]?.retainedRevision, undefined, "an unactivated prepared owner is never a fallback");

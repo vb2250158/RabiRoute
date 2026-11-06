@@ -17,7 +17,7 @@ English | <a href="./README_zh.md">简体中文</a> | <a href="./README_ja.md">�
   <a href="https://github.com/vb2250158/RabiRoute/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/vb2250158/RabiRoute?style=flat&color=ff7eae"></a>
   <a href="./LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-f2c744"></a>
   <img alt="Node.js 22.13 or newer" src="https://img.shields.io/badge/Node.js-22.13%2B-3c873a">
-  <img alt="Current version: 0.7.2" src="https://img.shields.io/badge/version-0.7.2-3178c6">
+  <img alt="Current version: 0.7.3" src="https://img.shields.io/badge/version-0.7.3-3178c6">
   <img alt="Status: active development" src="https://img.shields.io/badge/status-active%20development-19bfc1">
   <a href="#community"><img alt="QQ community: 1130935416" src="https://img.shields.io/badge/QQ-1130935416-12b9bf?logo=qq&amp;logoColor=white"></a>
 </p>
@@ -123,7 +123,7 @@ Open the address returned by Host. Linux Host is experimental and provides no Wi
 
 ## Integration status
 
-The repository version is `0.7.2`.
+The repository version is `0.7.3`.
 
 | Area | Current scope |
 | --- | --- |

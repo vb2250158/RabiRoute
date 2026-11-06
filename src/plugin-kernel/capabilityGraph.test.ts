@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { planCapabilityGraph } from "./capabilityGraph.js";
+import { isolateCapabilityMetadata } from "./capabilityGraphIsolation.js";
+import { planCapabilityGraph, selectRequiredCapabilityProviders } from "./capabilityGraph.js";
 import type { PluginCandidate, PluginManifest } from "./types.js";
 
 function candidate(instanceId: string, provides: string[], requires: string[]): PluginCandidate {
@@ -46,4 +47,21 @@ test("multiple required capabilities from one provider count as one activation d
     candidate("provider", ["route.query@1", "route.write@1"], [])
   ], new Set());
   assert.deepEqual(plan.activationOrder, ["provider", "consumer"]);
+});
+
+
+test("manifest-only required closure shares conflict and cycle isolation without candidate proof", () => {
+  const nodes = [
+    { instanceId: "core", manifest: { provides: ["core@1"], requires: ["dependency@1", "host@1"], optional: ["optional@1"] } },
+    { instanceId: "dependency", manifest: { provides: ["dependency@1"], requires: [], optional: [] } },
+    { instanceId: "optional", manifest: { provides: ["optional@1"], requires: ["core@1"], optional: [] } }
+  ];
+  const host = new Set(["host@1"]), graph = isolateCapabilityMetadata(nodes, host);
+  assert.deepEqual(selectRequiredCapabilityProviders(nodes, graph.plan, ["core@1"], host).map(row => row.instanceId), ["core", "dependency"]);
+  assert.ok(nodes.every(node => !Object.hasOwn(node, "revision") && !Object.hasOwn(node, "entry")));
+  const conflict = isolateCapabilityMetadata([...nodes, { ...nodes[0]!, instanceId: "duplicate" }], host);
+  assert.equal(conflict.plan.providers.has("core@1"), false);
+  assert.ok(conflict.diagnostics.has("core"));
+  const cycle = isolateCapabilityMetadata(nodes.slice(0, 2).map(node => ({ ...node, manifest: { ...node.manifest, requires: node.instanceId === "core" ? ["dependency@1"] : ["core@1"] } })), host);
+  assert.equal(cycle.plan.providers.has("core@1"), false);
 });

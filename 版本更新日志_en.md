@@ -6,6 +6,11 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.7.3 - 2026-11-06
+
+- Compute the mandatory READY dependency closure from existing capability declarations, then fully prepare and activate those plugins first. Other enabled plugins continue after READY instead of holding up initial startup. Optional plugins do not become required; the actual prepared dependency graph remains the readiness authority.
+- Remove the transitional full prepared-batch handoff. Post-ready activation reuses only published required plugins from the same generation. Full configuration and disabled instances retain their original settings owner; ordinary configuration and source updates retain their loading paths.
+
 ## 0.7.2 - 2026-11-06
 
 - Remove whole-persona recovery gates from plan HTTP and feedback paths. A damaged legacy plan no longer blocks healthy plan updates, opening, creation, or feedback; health diagnostics continue to expose actual recovery progress.

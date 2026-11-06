@@ -7274,7 +7274,7 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
   managerRuntimeOwner.register("manager_plugin_process_leases", () => managerPluginProcessLeases.disposeAll());
   let loadedManagerPluginProfile: LoadedPluginProfile | undefined;
   let pendingManagerPluginProfile: LoadedPluginProfile | undefined;
-  let startupPreparedProfile: Readonly<{ profile: LoadedPluginProfile; generationId: string }> | undefined;
+  let startupRequiredGenerationId: string | undefined;
   const managerPluginProfilePublication = new PluginProfilePublication();
   let managerPluginDiagnostics: readonly unknown[] = [];
   const capturePluginGeneration = (generation: PluginGeneration): void => {
@@ -8112,12 +8112,10 @@ get roleDirForApi() { return roleDirForApi; } }) }),
     };
     const reconciliation = managerPluginReconciliationTail.then(async () => {
       assertReconciliationOpen();
-      const startupPrepared = startupPreparedProfile;
-      startupPreparedProfile = undefined;
       const previousProfile = loadedManagerPluginProfile;
       const previousGenerationId = managerPluginKernel!.current().id;
-      const prepared = options.startupContinuation && startupPrepared?.generationId === previousGenerationId
-        ? startupPrepared.profile : undefined;
+      const reuseStartupRequired = options.startupContinuation && startupRequiredGenerationId === previousGenerationId;
+      startupRequiredGenerationId = undefined;
       const desiredProfile = (await managerPluginSettings.snapshot()).profile;
       const loaded = await loadPluginProfile({
         profilePath: managerPluginProfilePath,
@@ -8127,12 +8125,15 @@ get roleDirForApi() { return roleDirForApi; } }) }),
         preparationFailure: (packageId, instanceId) => pluginStorageMigrationFailure(packageId, rootDir, instanceId),
         host: "manager",
         previous: previousProfile,
-        prepared,
-        reuseUnchangedPackages: prepared ? true : options.reuseUnchangedPackages,
+        readyOnly: options.readyOnly ? {
+          hostCapabilities: managerPluginHostServices.map(service => service.capability),
+          readManifest: (packageId, version) => readPluginManagementManifest(managerPluginPackageCatalog, packageId, version)
+        } : undefined,
+        reuseUnchangedPackages: reuseStartupRequired ? true : options.reuseUnchangedPackages,
         assertCurrent: assertReconciliationOpen
       });
       assertReconciliationOpen();
-      const metadata = pluginProfilePackageResolution(desiredProfile, loaded, managerPluginPackageCatalog);
+      const metadata = pluginProfilePackageResolution(options.readyOnly ? loaded.profile : desiredProfile, loaded, managerPluginPackageCatalog);
       const manifestReads = new Map<string, ReturnType<typeof readPluginManagementManifest>>();
       const readInstalledManifest = (packageId: string, version: string) => {
         const key = JSON.stringify([packageId, version]);
@@ -8199,7 +8200,7 @@ get roleDirForApi() { return roleDirForApi; } }) }),
         // Complete committed-generation bookkeeping even if the caller expires after publication.
         // The original invocation is rechecked before returning or disclosing its result.
         capturePluginGeneration(result.generation);
-        if (options.readyOnly) startupPreparedProfile = { profile: loaded, generationId: result.generation.id };
+        if (options.readyOnly) startupRequiredGenerationId = result.generation.id;
         if (managerServicesReady && !managerReadOnly) syncRunningGateways();
         const active = result.generation.records.filter(record => record.status === "active").map(record => record.identity.instanceId);
         const waiting = result.generation.records.filter(record => record.status === "waiting_dependency").map(record => record.identity.instanceId);
@@ -8225,7 +8226,7 @@ get roleDirForApi() { return roleDirForApi; } }) }),
   };
 
   managerRuntimeOwner.register("manager_plugin_reconciliation", () => {
-    startupPreparedProfile = undefined;
+    startupRequiredGenerationId = undefined;
     return managerPluginReconciliationTail;
   });
   const bootstrapCore = Object.freeze({
@@ -8772,7 +8773,7 @@ createManagerEventOperationDefinition
       result: "Required Manager control plane remains live",
       error: managerOperationalError(error, rootDir)
     });
-  }).finally(() => { startupPreparedProfile = undefined; });
+  }).finally(() => { startupRequiredGenerationId = undefined; });
   // Publish the fenced control plane before any NAS recovery worker can start.
   setImmediate(() => {
     if (managerRuntimeOwner.isTearingDown()) return;

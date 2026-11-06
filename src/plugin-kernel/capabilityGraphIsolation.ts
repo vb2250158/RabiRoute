@@ -1,7 +1,7 @@
-import { planCapabilityGraph, type CapabilityGraphPlan } from "./capabilityGraph.js";
+import { planCapabilityGraph, type CapabilityGraphPlan, type CapabilityGraphNode } from "./capabilityGraph.js";
 import type { PluginCandidate } from "./types.js";
 
-export type PluginGraphDiagnostic = Readonly<{ candidate: PluginCandidate; error: Error; rejected: boolean }>;
+export type PluginGraphDiagnostic<T extends CapabilityGraphNode = PluginCandidate> = Readonly<{ candidate: T; error: Error; rejected: boolean }>;
 
 export function sharedWebResourceKey(candidate: PluginCandidate): string | undefined {
   return candidate.manifest.entries.web ? JSON.stringify([candidate.manifest.id, candidate.manifest.version]) : undefined;
@@ -25,7 +25,7 @@ function conflictingWebResources(candidates: ReadonlyMap<string, PluginCandidate
   return invalid;
 }
 
-function providers(candidates: readonly PluginCandidate[]): Map<string, string[]> {
+function providers(candidates: readonly CapabilityGraphNode[]): Map<string, string[]> {
   const result = new Map<string, string[]>();
   for (const candidate of candidates) for (const capability of candidate.manifest.provides) {
     result.set(capability, [...(result.get(capability) ?? []), candidate.instanceId]);
@@ -33,7 +33,7 @@ function providers(candidates: readonly PluginCandidate[]): Map<string, string[]
   return result;
 }
 
-function requiredCycles(candidates: ReadonlyMap<string, PluginCandidate>, supplied: ReadonlyMap<string, string[]>, host: ReadonlySet<string>): Set<string> {
+function requiredCycles(candidates: ReadonlyMap<string, CapabilityGraphNode>, supplied: ReadonlyMap<string, string[]>, host: ReadonlySet<string>): Set<string> {
   const unavailable = new Set<string>();
   let changed = true;
   while (changed) {
@@ -67,25 +67,26 @@ function requiredCycles(candidates: ReadonlyMap<string, PluginCandidate>, suppli
 }
 
 /** Keep malformed feature declarations outside the strict graph planner. */
-export function isolateCapabilityGraph(
-  candidates: readonly PluginCandidate[],
+function isolateGraph<T extends CapabilityGraphNode>(
+  candidates: readonly T[],
   hostCapabilities: ReadonlySet<string>,
-  previous: ReadonlyMap<string, PluginCandidate> = new Map()
-): Readonly<{ candidates: readonly PluginCandidate[]; diagnostics: ReadonlyMap<string, PluginGraphDiagnostic>; plan: CapabilityGraphPlan }> {
-  const effective = new Map<string, PluginCandidate>();
+  previous: ReadonlyMap<string, T>,
+  resourceConflicts: (current: ReadonlyMap<string, T>, previous: ReadonlyMap<string, T>) => Map<string, Error>
+): Readonly<{ candidates: readonly T[]; diagnostics: ReadonlyMap<string, PluginGraphDiagnostic<T>>; plan: CapabilityGraphPlan }> {
+  const effective = new Map<string, T>();
   for (const candidate of candidates) {
     const id = candidate.instanceId.trim();
     if (!id || effective.has(id)) throw new Error(`Plugin instanceId is empty or duplicated: ${id}.`);
     effective.set(id, candidate);
   }
-  const diagnostics = new Map<string, PluginGraphDiagnostic>();
+  const diagnostics = new Map<string, PluginGraphDiagnostic<T>>();
   const confirmedProviders = new Map<string, string>();
   for (const candidate of previous.values()) for (const capability of candidate.manifest.provides) confirmedProviders.set(capability, candidate.instanceId);
   let changed = true;
   while (changed) {
     changed = false;
     const supplied = providers([...effective.values()]);
-    const invalid = conflictingWebResources(effective, previous);
+    const invalid = resourceConflicts(effective, previous);
     for (const [capability, ids] of supplied) {
       if (hostCapabilities.has(capability)) {
         for (const id of ids) invalid.set(id, new Error(`Plugin capability conflicts with host capability: ${capability}.`));
@@ -144,4 +145,14 @@ export function isolateCapabilityGraph(
     return { ...candidate, manifest: { ...candidate.manifest, optional } };
   });
   return Object.freeze({ candidates: Object.freeze(valid), diagnostics, plan: planCapabilityGraph(planning, hostCapabilities) });
+}
+
+/** Executable graph retains its original immutable Web-resource revision checks. */
+export function isolateCapabilityGraph(
+  candidates: readonly PluginCandidate[], hostCapabilities: ReadonlySet<string>, previous: ReadonlyMap<string, PluginCandidate> = new Map()
+) { return isolateGraph(candidates, hostCapabilities, previous, conflictingWebResources); }
+
+/** Parsed manifest declarations carry no executable candidate or immutable revision proof. */
+export function isolateCapabilityMetadata(nodes: readonly CapabilityGraphNode[], hostCapabilities: ReadonlySet<string>) {
+  return isolateGraph(nodes, hostCapabilities, new Map(), () => new Map());
 }

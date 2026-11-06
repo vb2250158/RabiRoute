@@ -767,7 +767,7 @@ RibiWebGUI 通过 `personaVoiceIdentityClient.ts` 复用这两个 API，不新�
 
 这些目录可以有自己的运行脚本和 README，但不要把真实 token、QQ 号、Cookie、本机路径写进公开示例。
 
-启动只为 post-ready 激活保留一次已准备的插件包。未变化实例沿现有执行准入复用不可变包，实际发布元数据与失败回退仍独立；其它 fresh reconcile、代际变化、消费或退出都会使这次交接失效，不建立长期缓存。
+启动先读取启用插件的 manifest 声明，沿共享 capability 图选出 `readyRequires` 及其必需依赖；READY 前只准备并激活该闭包，不等待其它插件的整包准备。READY 后由原 reconcile 加载可选插件，并恢复完整配置与声明投影；此时可选实例仍可能处于准备或激活中。仅紧接启动且代际未变的一次续接可复用已发布的必需包，普通 fresh/source 更新仍走原加载流程。完整 settings 不因必需子集筛选而重写，发布元数据、失败回退和执行准入仍以真实已发布 owner 为准。
 
 ## 测试结构
 

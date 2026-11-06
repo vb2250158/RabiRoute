@@ -4,10 +4,13 @@ import { isDeepStrictEqual } from "node:util";
 import type { PluginExecutionConfigurationDiagnostic } from "./pluginExecutionSettings.js";
 import type { LoadedPluginPackage } from "./packageLoader.js";
 import { PluginPackageLoader, type PluginPackageLoadingOptions } from "./pluginPackageLoader.js";
+import { selectRequiredCapabilityProviders, type CapabilityGraphNode } from "./capabilityGraph.js";
+import { isolateCapabilityMetadata } from "./capabilityGraphIsolation.js";
 import { isPluginCapabilityReference } from "./capabilityReference.js";
 import type {
   PluginCandidate,
   PluginHost,
+  PluginManifest,
   PluginIdentity,
   PluginInstancePolicy,
   PluginRestartPolicy,
@@ -331,8 +334,11 @@ export async function loadPluginProfile(input: Readonly<{
   host: PluginHost;
   /** Only successfully loaded immutable packages from the preceding reconciliation. */
   previous?: LoadedPluginProfile;
-  /** One startup batch already prepared before READY; reuse only, never failed-update retention. */
-  prepared?: LoadedPluginProfile;
+  /** Startup selection reads declarations only; every selected package still uses its original complete preparation. */
+  readyOnly?: Readonly<{
+    hostCapabilities: readonly string[];
+    readManifest(packageId: string, version: string): Promise<PluginManifest>;
+  }>;
   /** Enable settings act on published immutable owners; source updates use ordinary loading. */
   reuseUnchangedPackages?: boolean;
   /** Effective profile from the single settings owner; avoids a second disk/config truth. */
@@ -347,9 +353,48 @@ export async function loadPluginProfile(input: Readonly<{
     catch (error) { cancellation = { error }; throw error; }
   };
   assertCurrent();
-  const profile = input.profile ?? await input.packageCatalog.loadProfile(input.profilePath);
+  let profile = input.profile ?? await input.packageCatalog.loadProfile(input.profilePath);
   assertCurrent();
-  const enabled = profile.instances.filter(instance => instance.enabled);
+  let enabled = profile.instances.filter(instance => instance.enabled);
+  const metadataFailures: PluginProfileLoadFailure[] = [];
+  if (input.readyOnly) {
+    const unique = new Map(enabled.map(instance => [JSON.stringify([instance.package, instance.version]), instance]));
+    const rows = [...unique];
+    const manifests = new Map<string, PromiseSettledResult<PluginManifest>>();
+    let nextManifest = 0;
+    const lanes = await Promise.allSettled(Array.from({ length: Math.min(rows.length, input.packageCatalog.snapshot().maxConcurrency) }, async () => {
+      while (nextManifest < rows.length) {
+        assertCurrent();
+        const [key, instance] = rows[nextManifest++]!;
+        let result: PromiseSettledResult<PluginManifest>;
+        try { result = { status: "fulfilled", value: await input.readyOnly!.readManifest(instance.package, instance.version) }; }
+        catch (reason) { result = { status: "rejected", reason }; }
+        assertCurrent();
+        manifests.set(key, result);
+      }
+    }));
+    const failedLane = lanes.find(result => result.status === "rejected");
+    if (failedLane?.status === "rejected") throw failedLane.reason;
+    assertCurrent();
+    const nodes: CapabilityGraphNode[] = [];
+    for (const instance of enabled) {
+      const result = manifests.get(JSON.stringify([instance.package, instance.version]))!;
+      if (result.status === "fulfilled") nodes.push({ instanceId: instance.id, manifest: result.value });
+      else metadataFailures.push(Object.freeze({ instanceId: instance.id, packageId: instance.package, version: instance.version,
+        error: Object.freeze({ code: "package_load_failed", message: result.reason instanceof Error ? result.reason.message : String(result.reason) }) }));
+    }
+    const host = new Set(input.readyOnly.hostCapabilities.map(capability => capability.trim()).filter(Boolean));
+    const graph = isolateCapabilityMetadata(nodes, host);
+    for (const [instanceId, diagnostic] of graph.diagnostics) if (diagnostic.rejected) {
+      const instance = enabled.find(row => row.id === instanceId)!;
+      metadataFailures.push(Object.freeze({ instanceId, packageId: instance.package, version: instance.version,
+        error: Object.freeze({ code: "package_load_failed", message: diagnostic.error.message }) }));
+    }
+    const selected = new Set(selectRequiredCapabilityProviders(nodes, graph.plan, profile.readyRequires, host).map(node => node.instanceId));
+    enabled = enabled.filter(instance => selected.has(instance.id));
+    // This is only the prepared scope; the settings owner retains the full desired profile.
+    profile = Object.freeze({ ...profile, instances: Object.freeze(enabled) });
+  }
   const instancesByPackage = new Map<string, PluginProfileEntry[]>();
   for (const instance of enabled) {
     const key = JSON.stringify([instance.package, instance.version]);
@@ -358,10 +403,9 @@ export async function loadPluginProfile(input: Readonly<{
   }
   const packages = [...instancesByPackage].map(([key, instances]) => [key, instances[0]!] as const);
   const reusable = new Map<string, LoadedPluginPackage>();
-  const prepared = input.prepared ?? input.previous;
-  if (input.reuseUnchangedPackages && prepared) {
-    const previousEntries = new Map(prepared.packages.map(entry => [entry.instance.id, entry]));
-    const previousCandidates = new Map(prepared.candidates.map(candidate => [candidate.instanceId, candidate]));
+  if (input.reuseUnchangedPackages && input.previous) {
+    const previousEntries = new Map(input.previous.packages.map(entry => [entry.instance.id, entry]));
+    const previousCandidates = new Map(input.previous.candidates.map(candidate => [candidate.instanceId, candidate]));
     for (const [key, instances] of instancesByPackage) {
       let selected: LoadedPluginPackage | undefined;
       for (const instance of instances) {
@@ -419,6 +463,7 @@ export async function loadPluginProfile(input: Readonly<{
   const loadFailures: PluginProfileLoadFailure[] = (profile.diagnostics ?? []).map(({ message, ...diagnostic }) => Object.freeze({
     ...diagnostic, error: Object.freeze({ code: "profile_instance_invalid" as const, message })
   }));
+  loadFailures.push(...metadataFailures);
   for (const instance of enabled) {
     assertCurrent();
     const packageKey = JSON.stringify([instance.package, instance.version]);
