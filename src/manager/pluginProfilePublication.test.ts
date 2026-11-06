@@ -3,10 +3,60 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test, { type TestContext } from "node:test";
-import { GenerationRuntime } from "../plugin-kernel/generationRuntime.js";
+import { GenerationRuntime, selectReadyPluginCandidates } from "../plugin-kernel/generationRuntime.js";
 import { loadPluginProfile, PluginPackageCatalog, type LoadedPluginProfile } from "../plugin-kernel/profile.js";
 import { PluginProfilePublication } from "./pluginProfilePublication.js";
 import { WebPluginModuleRegistry } from "./webPluginModules.js";
+
+test("post-ready preparation reuses the first batch without publishing its optional owners early", async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "plugin-startup-prepared-"));
+  const packages = path.join(root, "packages"), runtimeRoot = path.join(root, "runtime");
+  const profile = { schemaVersion: 2, readyRequires: ["fixture.core@1"], instances: ["core", "optional"].map(id => ({
+    id, package: `io.fixture.${id}`, version: "1.0.0", enabled: true, config: {}, grants: []
+  })) };
+  for (const id of ["core", "optional"]) {
+    const directory = path.join(packages, `io.fixture.${id}`, "1.0.0");
+    await fs.mkdir(directory, { recursive: true });
+    await fs.writeFile(path.join(directory, "rabi.plugin.json"), JSON.stringify({ schemaVersion: 2,
+      id: `io.fixture.${id}`, version: "1.0.0", entries: { manager: { execution: "in_process", module: "./manager.mjs" } },
+      provides: [`fixture.${id}@1`], requires: id === "core" ? [] : ["fixture.core@1"], optional: [], permissions: [] }));
+    await fs.writeFile(path.join(directory, "manager.mjs"), `export function activate(ctx) { ctx.services.provide('fixture.${id}@1', true); }\n`);
+  }
+  const catalog = new PluginPackageCatalog([packages], { trustedInProcessRoots: [packages] });
+  const runtime = new GenerationRuntime({ host: "manager" });
+  t.after(async () => { await runtime.dispose(); await catalog.dispose(); await fs.rm(root, { recursive: true, force: true }); });
+  const profilePath = path.join(root, "profile.json");
+  await fs.writeFile(profilePath, JSON.stringify(profile));
+  let loads = 0, failOptional = false;
+  const originalLoad = catalog.loadPackage.bind(catalog);
+  t.mock.method(catalog, "loadPackage", async (...args: Parameters<typeof originalLoad>) => {
+    loads++;
+    if (failOptional && args[0] === "io.fixture.optional") throw new Error("changed optional source unavailable");
+    return originalLoad(...args);
+  });
+  const input = { profilePath, packageCatalog: catalog, runtimeRoot, host: "manager" as const };
+  const prepared = await loadPluginProfile(input);
+  assert.equal(loads, 2);
+  await runtime.switch(selectReadyPluginCandidates(prepared.candidates, prepared.profile.readyRequires), {
+    readyRequires: prepared.profile.readyRequires
+  });
+  const publication = new PluginProfilePublication();
+  const published = publication.capture(prepared, runtime.current()).profile!;
+  assert.deepEqual(published.candidates.map(row => row.instanceId), ["core"]);
+  const complete = await loadPluginProfile({ ...input, previous: published, prepared, reuseUnchangedPackages: true });
+  assert.equal(loads, 2, "the optional package was already prepared before READY");
+  assert.deepEqual(complete.candidates.map(row => row.instanceId), ["core", "optional"]);
+  assert.deepEqual(published.candidates.map(row => row.instanceId), ["core"], "prepared bytes are not published metadata");
+  failOptional = true;
+  const changed = { ...prepared.profile, instances: prepared.profile.instances.map(row => row.id === "optional"
+    ? { ...row, config: { changed: true } } : row) };
+  const rejected = await loadPluginProfile({ ...input, profile: changed, previous: published, prepared, reuseUnchangedPackages: true });
+  assert.equal(loads, 3, "changed configuration follows ordinary package preparation");
+  assert.deepEqual(rejected.candidates.map(row => row.instanceId), ["core"]);
+  assert.equal(rejected.loadFailures[0]?.retainedRevision, undefined, "an unactivated prepared owner is never a fallback");
+  await runtime.switch(complete.candidates, { readyRequires: complete.profile.readyRequires });
+  assert.deepEqual(publication.capture(complete, runtime.current()).profile!.candidates.map(row => row.instanceId), ["core", "optional"]);
+});
 
 async function fixture(t: TestContext, throwAfterCapture = false) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "plugin-profile-publication-"));

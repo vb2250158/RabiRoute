@@ -7279,6 +7279,7 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
   managerRuntimeOwner.register("manager_plugin_process_leases", () => managerPluginProcessLeases.disposeAll());
   let loadedManagerPluginProfile: LoadedPluginProfile | undefined;
   let pendingManagerPluginProfile: LoadedPluginProfile | undefined;
+  let startupPreparedProfile: Readonly<{ profile: LoadedPluginProfile; generationId: string }> | undefined;
   const managerPluginProfilePublication = new PluginProfilePublication();
   let managerPluginDiagnostics: readonly unknown[] = [];
   const capturePluginGeneration = (generation: PluginGeneration): void => {
@@ -8108,7 +8109,7 @@ get roleDirForApi() { return roleDirForApi; } }) }),
   }
   const reconcileManagerPlugins = (
     reason: string,
-    options: Readonly<{ readyOnly?: boolean; invocation?: PluginCatalogInvocation; reuseUnchangedPackages?: boolean }> = {}
+    options: Readonly<{ readyOnly?: boolean; invocation?: PluginCatalogInvocation; reuseUnchangedPackages?: boolean; startupContinuation?: boolean }> = {}
   ): Promise<void> => {
     const assertReconciliationOpen = (): void => {
       if (shuttingDown) throw new Error("Manager plugin reconciliation stopped during shutdown.");
@@ -8116,8 +8117,12 @@ get roleDirForApi() { return roleDirForApi; } }) }),
     };
     const reconciliation = managerPluginReconciliationTail.then(async () => {
       assertReconciliationOpen();
+      const startupPrepared = startupPreparedProfile;
+      startupPreparedProfile = undefined;
       const previousProfile = loadedManagerPluginProfile;
       const previousGenerationId = managerPluginKernel!.current().id;
+      const prepared = options.startupContinuation && startupPrepared?.generationId === previousGenerationId
+        ? startupPrepared.profile : undefined;
       const desiredProfile = (await managerPluginSettings.snapshot()).profile;
       const loaded = await loadPluginProfile({
         profilePath: managerPluginProfilePath,
@@ -8127,7 +8132,8 @@ get roleDirForApi() { return roleDirForApi; } }) }),
         preparationFailure: (packageId, instanceId) => pluginStorageMigrationFailure(packageId, rootDir, instanceId),
         host: "manager",
         previous: previousProfile,
-        reuseUnchangedPackages: options.reuseUnchangedPackages,
+        prepared,
+        reuseUnchangedPackages: prepared ? true : options.reuseUnchangedPackages,
         assertCurrent: assertReconciliationOpen
       });
       assertReconciliationOpen();
@@ -8198,6 +8204,7 @@ get roleDirForApi() { return roleDirForApi; } }) }),
         // Complete committed-generation bookkeeping even if the caller expires after publication.
         // The original invocation is rechecked before returning or disclosing its result.
         capturePluginGeneration(result.generation);
+        if (options.readyOnly) startupPreparedProfile = { profile: loaded, generationId: result.generation.id };
         if (managerServicesReady && !managerReadOnly) syncRunningGateways();
         const active = result.generation.records.filter(record => record.status === "active").map(record => record.identity.instanceId);
         const waiting = result.generation.records.filter(record => record.status === "waiting_dependency").map(record => record.identity.instanceId);
@@ -8222,7 +8229,10 @@ get roleDirForApi() { return roleDirForApi; } }) }),
     return reconciliation;
   };
 
-  managerRuntimeOwner.register("manager_plugin_reconciliation", () => managerPluginReconciliationTail);
+  managerRuntimeOwner.register("manager_plugin_reconciliation", () => {
+    startupPreparedProfile = undefined;
+    return managerPluginReconciliationTail;
+  });
   const bootstrapCore = Object.freeze({
 createWebguiAccessOperations: () => createWebguiAccessOperations({
         readPayload: publicWebguiLanAccessPayload,
@@ -8772,12 +8782,12 @@ createManagerEventOperationDefinition
     }));
     resolveWearableCompanionStartup();
   }
-  void reconcileManagerPlugins("post-ready optional activation").catch(error => {
+  void reconcileManagerPlugins("post-ready optional activation", { startupContinuation: true }).catch(error => {
     managerOperationalLog.record("warn", "plugin_post_ready_activation_failed", {
       result: "Required Manager control plane remains live",
       error: managerOperationalError(error, rootDir)
     });
-  });
+  }).finally(() => { startupPreparedProfile = undefined; });
   // Publish the fenced control plane before any NAS recovery worker can start.
   setImmediate(() => {
     if (managerRuntimeOwner.isTearingDown()) return;

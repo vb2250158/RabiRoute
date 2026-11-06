@@ -6,6 +6,11 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.7.1 - 2026-11-06
+
+- Reuse the plugin packages prepared before READY during post-ready activation instead of copying and verifying the same batch again. Configuration and source updates retain their existing loading paths; prepared optional plugins are not exposed as active before publication.
+- Remove obsolete implementation notes for retired role synchronization and clarify recovery scope: existing startup checks apply to the target persona’s plan mutations and plan-agent open requests. Ready personas need not wait for others, plan reads are not blocked by this gate, and the target plan Repository still handles transaction conflicts.
+
 ## 0.7.0 - 2026-11-06
 
 - Coalesce concurrent page-resource verification by revision, retaining the existing successful cache and allowing retries after failure instead of repeatedly reading the same files in parallel.

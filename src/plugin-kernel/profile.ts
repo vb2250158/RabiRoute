@@ -331,6 +331,8 @@ export async function loadPluginProfile(input: Readonly<{
   host: PluginHost;
   /** Only successfully loaded immutable packages from the preceding reconciliation. */
   previous?: LoadedPluginProfile;
+  /** One startup batch already prepared before READY; reuse only, never failed-update retention. */
+  prepared?: LoadedPluginProfile;
   /** Enable settings act on published immutable owners; source updates use ordinary loading. */
   reuseUnchangedPackages?: boolean;
   /** Effective profile from the single settings owner; avoids a second disk/config truth. */
@@ -356,9 +358,10 @@ export async function loadPluginProfile(input: Readonly<{
   }
   const packages = [...instancesByPackage].map(([key, instances]) => [key, instances[0]!] as const);
   const reusable = new Map<string, LoadedPluginPackage>();
-  if (input.reuseUnchangedPackages && input.previous) {
-    const previousEntries = new Map(input.previous.packages.map(entry => [entry.instance.id, entry]));
-    const previousCandidates = new Map(input.previous.candidates.map(candidate => [candidate.instanceId, candidate]));
+  const prepared = input.prepared ?? input.previous;
+  if (input.reuseUnchangedPackages && prepared) {
+    const previousEntries = new Map(prepared.packages.map(entry => [entry.instance.id, entry]));
+    const previousCandidates = new Map(prepared.candidates.map(candidate => [candidate.instanceId, candidate]));
     for (const [key, instances] of instancesByPackage) {
       let selected: LoadedPluginPackage | undefined;
       for (const instance of instances) {
@@ -373,7 +376,7 @@ export async function loadPluginProfile(input: Readonly<{
       if (selected) reusable.set(key, selected);
     }
   }
-  const reuseAdmissions = new Map<string, PromiseSettledResult<void>>();
+  const reuseAdmissions = new Map<LoadedPluginPackage, PromiseSettledResult<void>>();
   const packageResults = new Map<string, PromiseSettledResult<LoadedPluginPackage>>();
   const packagePreparationFailures = new Map<string, Error>();
   const preparationFailure = (packageId: string, instanceId?: string): Error | undefined => {
@@ -395,9 +398,9 @@ export async function loadPluginProfile(input: Readonly<{
         if (current) {
           try {
             await input.packageCatalog.assertPackageExecutionAllowed(current);
-            reuseAdmissions.set(key, { status: "fulfilled", value: undefined });
+            reuseAdmissions.set(current, { status: "fulfilled", value: undefined });
           } catch (reason) {
-            reuseAdmissions.set(key, { status: "rejected", reason }); throw reason;
+            reuseAdmissions.set(current, { status: "rejected", reason }); throw reason;
           }
         }
         result = { status: "fulfilled", value: current
@@ -440,7 +443,7 @@ export async function loadPluginProfile(input: Readonly<{
     let failure = result.reason instanceof Error ? result.reason.message : String(result.reason);
     if (!preparationError && previousCandidate && previousPackage) {
       assertCurrent();
-      let admission = reuseAdmissions.get(JSON.stringify([instance.package, instance.version]));
+      let admission = reuseAdmissions.get(previousPackage.package);
       if (!admission) {
         try {
           await input.packageCatalog.assertPackageExecutionAllowed(previousPackage.package);

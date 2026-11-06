@@ -186,7 +186,7 @@ data/roles/<RoleId>/plans/
 
 `plan.json` 是当前业务状态的唯一真源。计划状态与归档状态彼此独立：`status` 使用当前角色配置中的 key；`archiveStatus` 只允许 `未归档` 或 `已归档`。`active/` 放 `archiveStatus=未归档` 的计划，`archive/` 只放 `archiveStatus=已归档` 的计划。已归档计划不参加关键词召回，只能通过明确 ID 或归档视图读取。
 
-Manager 只通过计划存储 Repository 新建、更新和归档此目录。旧布局迁移、未完成事务恢复和规范目录核对共同决定计划存储的读取/变更资格，每次尝试都在可终止的 one-shot child 中执行。Manager 端点与身份、完整必需插件集和 handler READY 不等待 NAS 恢复，Host 与 Tray 因此保持当前 application generation。资格状态为 `running` 或 `degraded` 时，现有只读端点仍可响应，计划变更请求失败关闭，`/health` 明确报告降级；资格就绪后，运行模块只使用已恢复的规范布局，不再扫描或读取旧布局。迁移不会读取附件正文；旧数据与规范目录内容相同时，以带清单和回执的事务退役重复副本，内容分歧时保存证据并失败关闭，禁止带着半迁移状态继续变更计划。计划从 `active/` 进入 `archive/` 同样是 Repository 持有 lease 的完整生命周期事务，不是裸 `rename`，也不是后台迁移。
+Manager 只通过计划存储 Repository 新建、更新和归档此目录。旧布局迁移、未完成事务恢复和规范目录核对在可终止的 one-shot child 中执行。Manager READY 不等待后台恢复。当前 HTTP 入口仍按目标人格的恢复就绪状态检查计划变更及打开计划 Agent 的请求，未就绪时返回 `503 PLAN_STORAGE_STARTUP_UNAVAILABLE`；已就绪人格的请求继续处理，不要求所有人格同时完成恢复。该门不阻断计划读取；每个目标计划的 Repository 仍处理自己的事务与目录冲突，保留原文件和回执；`/health` 显示后台恢复状态，Host 与 Tray 保持当前 application generation。运行模块使用规范布局，旧事务由恢复 owner 处理。迁移不会读取附件正文；旧数据与规范目录内容相同时，以带清单和回执的事务退役重复副本，内容分歧时保留该计划的冲突证据与原文件，由该计划的事务 owner 处理。计划从 `active/` 进入 `archive/` 同样是 Repository 持有 lease 的完整生命周期事务，不是裸 `rename`，也不是后台迁移。
 
 启动恢复先核对已提交存储包回执与原事务的身份及内容摘要。有效的已提交回执记录历史成功，后续正常修改、归档或已消费的暂存载荷不要求当前计划继续等于历史包，也不会重放旧数据。未提交事务仍校验载荷；回执不匹配与真实冲突仍保留证据并报告恢复失败。
 

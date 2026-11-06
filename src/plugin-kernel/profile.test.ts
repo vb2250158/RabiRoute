@@ -494,6 +494,25 @@ test("settings reuse rechecks execution admission once and never retains a revok
   assert.equal(next.loadFailures[0]?.retainedRevision, undefined);
 });
 
+test("prepared admission failure does not borrow that result for a different published revision", async t => {
+  const input = controlledInput(t, ["one"]);
+  const original = controlledPackage("io.test.one"), updated = { ...original, revision: "updated-same-version" };
+  let current = original;
+  t.mock.method(input.packageCatalog, "loadPackage", async () => current);
+  const previous = await loadPluginProfile(input);
+  current = updated;
+  const prepared = await loadPluginProfile(input);
+  const admitted: string[] = [];
+  t.mock.method(input.packageCatalog, "assertPackageExecutionAllowed", async (owner: LoadedPluginPackage) => {
+    admitted.push(owner.revision);
+    if (owner === updated) throw new Error("prepared revision is unavailable");
+  });
+  const next = await loadPluginProfile({ ...input, previous, prepared, reuseUnchangedPackages: true });
+  assert.deepEqual(admitted, [updated.revision, original.revision]);
+  assert.equal(next.packages[0]?.package, original);
+  assert.equal(next.loadFailures[0]?.retainedRevision, original.revision);
+});
+
 test("cancellation joins reused owner admission and admits no later package or fallback", async t => {
   const input = controlledInput(t, ["one", "two", "later"]);
   t.mock.method(input.packageCatalog, "loadPackage", async (id: string) => controlledPackage(id));

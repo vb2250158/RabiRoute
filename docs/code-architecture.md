@@ -601,7 +601,7 @@ Gateway 配置的事实源 Module。
 
 `src/plugins/io.rabiroute.manager.persona/src/personaPlanWorkflow.ts` 读取并校验每个角色 `personaConfig.json.planWorkflow`，它是状态 key、名称、说明、颜色、顺序、视图和生命周期规则的唯一真源。`src/roleKnowledge.ts` 只把 `plan.status` 当作配置 key，并通过 workflow role 与状态属性校验分析、信息不足、审批、执行、完成和归档，不包含十态枚举。v1/v2/v3/v4 配置第一次读取时由同一模块迁移为 v5：在审批标记后复用匹配的启用“已审批”定义或新增默认定义，并绑定 `roles.approved`；匹配定义未启用时拒绝迁移。其它自定义状态、说明和相对顺序保持不变。v1 仍先补齐 `roles.informationNeeded`，v2/v3 只更新未自定义的旧默认说明。v5 目录读取不自动恢复被移除的状态。`archiveStatus=未归档 | 已归档` 是独立归档变量；只有配置为 `terminal` 且 `archiveEligible` 的状态可以在 `archiveAfterHours` 后归档，归档时保留原 key。`src/roleKnowledgePresentation.ts` 返回配置中的 label、description、palette、order 与 views；`src/roleKnowledgePagination.ts` 动态生成状态筛选和 `byStatus` 计数。状态配置 revision 参与展示缓存。已归档计划在普通列表和关键词召回前被排除，只能通过明确计划 ID 或归档视图读取。状态移除采用 `enabled → retiring → retired`，当前计划先迁移，旧定义继续解释归档计划和追加式历史。
 
-计划目录的物理写入只有一个边界：`src/planStorageRepository.ts`。它拥有跨进程 lease、完整终态快照、publish/receipt 恢复、active/archive 迁移和旧布局冲突隔离；`src/roleKnowledge.ts` 只组装业务终态并调用 Repository，不直接创建、改写或移动计划目录。Manager 在可终止的 one-shot child 中依次执行 lifecycle recovery、旧布局迁移、feedback WAL recovery 和 `planStoragePackageRecovery.ts` 的 `recoverStoredPlanPackages()` 旧事务恢复（不得接受新同步），以建立计划存储的读取/变更资格。该资格生命周期不阻塞 Manager READY；`running` 或 `degraded` 时计划变更失败关闭，降级进入 `/health`，Host 与 Tray 保持当前 application generation。`src/planAttachments.ts` 只负责附件数量/大小限制、本机路径或 Base64 读取、图片/视频签名校验、哈希及待提交字节准备，不能自行落盘；附件和 `plan.json` 必须随同一次 Repository transaction 原子发布。`src/plugins/io.rabiroute.manager.persona/src/manager/planAttachmentRoutes.ts` 只按 `roleId + planId + attachmentId` 提供受控读取，在响应前同时校验词法路径和 realpath 都没有离开该计划目录；图片/视频以内联响应返回，视频支持单段字节范围读取，公开计划 DTO 去掉本机 `path`。WebGUI 只消费该 HTTP 边界来绘制固定宽度的 16:9 图片、视频和 Markdown 简短预览卡片、普通文件卡片及页内完整预览；Markdown 卡片只流式读取正文开头并转成截断纯文本，不在卡片中执行 Markdown HTML、链接或图片。局域网资源统一通过 `managerResourceUrl` 附加当前会话认证；WebGUI 不拥有计划编辑器或任意路径读取能力。
+计划目录的物理写入只有一个边界：`src/planStorageRepository.ts`。它拥有跨进程 lease、完整终态快照、publish/receipt 恢复、active/archive 迁移和旧布局冲突隔离；`src/roleKnowledge.ts` 只组装业务终态并调用 Repository，不直接创建、改写或移动计划目录。Manager 在可终止的 one-shot child 中依次执行 lifecycle recovery、旧布局迁移、feedback WAL recovery 和 `planStoragePackageRecovery.ts` 的 `recoverStoredPlanPackages()` 旧事务恢复（不得接受新同步）。后台恢复不阻塞 Manager READY。当前 HTTP 入口仍按目标人格的恢复就绪状态检查计划变更及打开计划 Agent 的请求，未就绪时返回 `503 PLAN_STORAGE_STARTUP_UNAVAILABLE`；已就绪人格的请求继续处理，不要求所有人格同时完成恢复。该门不阻断计划读取；目标计划仍由 Repository 处理自己的事务和冲突。恢复状态在 `/health` 中可见，Host 与 Tray 保持当前 application generation。`src/planAttachments.ts` 只负责附件数量/大小限制、本机路径或 Base64 读取、图片/视频签名校验、哈希及待提交字节准备，不能自行落盘；附件和 `plan.json` 必须随同一次 Repository transaction 原子发布。`src/plugins/io.rabiroute.manager.persona/src/manager/planAttachmentRoutes.ts` 只按 `roleId + planId + attachmentId` 提供受控读取，在响应前同时校验词法路径和 realpath 都没有离开该计划目录；图片/视频以内联响应返回，视频支持单段字节范围读取，公开计划 DTO 去掉本机 `path`。WebGUI 只消费该 HTTP 边界来绘制固定宽度的 16:9 图片、视频和 Markdown 简短预览卡片、普通文件卡片及页内完整预览；Markdown 卡片只流式读取正文开头并转成截断纯文本，不在卡片中执行 Markdown HTML、链接或图片。局域网资源统一通过 `managerResourceUrl` 附加当前会话认证；WebGUI 不拥有计划编辑器或任意路径读取能力。
 
 `src/manager/managerStorageMutationAdmission.ts` 定义工作进程的单次不可逆提交准入，不是可续期授权 lease。HTTP 的原始请求授权只留在父进程，由 `roleStorageApplication.ts` 与 `managerStorageMutationPool.ts` 在异步读取、入队、派发和准入时复验。IPC v2 的完整 fence、稳定 requestId、本次派发随机 nonce、固定阶段与序号须精确匹配；nonce 不进入持久 payload、摘要或审计。准入发生在回执查询、回执预留、事务恢复及业务访问之前，不能把异步握手放在同步文件锁回调里。允许后可完成整个操作；撤销只拒绝尚未准入的操作，不保证撤销返回后零发布。已派发拒绝和中断保守保留 unknown，原幂等键可能已有历史写入，须先权威回读。更强的撤销屏障需要跨进程共享的授权、提交与恢复协调边界，目前尚未实现。源码回归不代表 Host 部署或双机验收。
 
@@ -764,22 +764,10 @@ RibiWebGUI 通过 `personaVoiceIdentityClient.ts` 复用这两个 API，不新�
 
 角色数据同步是删除功能，不是运行时开关。自动对账、同步工作台、`/api/persona-sync/*` 和 Relay 同步代理不再是当前合同。RabiLink 远端角色和计划访问通过通用 `manager` 隧道调用目标 PC 的业务 owner；旧独立 RPC 清单模块已删除，保留的 RPC 只承担连接信令，不创建同步副本。`src/planStoragePackageRecovery.ts` 的 `recoverStoredPlanPackages()` 仅恢复已准备的旧计划存储事务，保留 staging、回执及冲突证据，不接受新同步或导入命令。已有全部用户数据保留；实现接线与运行验收仍需分别核对，不能据此宣称部署完成。见[同步退役说明](persona-data-sync.md)。
 
-<details>
-<summary>旧版本架构与测试事实（历史参考，不可继续执行）</summary>
-
-以下记录仅说明退役前的实现；其中的接口、命令、组件与现在时表述均不再代表当前可用能力。
-
-退役前，`src/personaSync.ts` 只负责本地角色文件读取、归档、合并与显式冲突解决；`src/personaSyncManifestIndex.ts` 拥有可重建的持久化 manifest 索引和父进程内不可变发布快照。启动和后续刷新都由 one-shot child 完成目录遍历、SHA-256、计划包锁定与完整校验；父进程只接收结构化结果，深冻结后原子发布带单调 revision、`refreshedAt`、`refreshStartedAt` 和 `stale` 的快照。本机根只使用原生文件事件唤醒一次 child 刷新；UNC 根在任何 probe/watch 前关闭本地 watcher，使用可终止的 `worker_poll`。`GET /api/persona-sync/manifest` 只读已发布快照，不触发 `readdir/stat`、哈希、计划锁或校准；尚无快照时明确返回 503，刷新超时或失败时保留上一份并标记 stale/degraded。新 revision 经 Manager SSE 发出 `persona_sync_manifest_changed`。`src/personaSyncCoordinator.ts` 负责 peer 发现、传输编排和已解决版本发布；`src/personaSyncAutoReconciler.ts` 只拥有事件调度和 `auto-sync-state.json` 待对账标记，不复制任何合并规则。它把本机文件变化、Relay `ready` 和 `persona_sync_peer_changed` 当作唤醒信号，短时间事件合并后调用 Coordinator 做一次全量或单角色 manifest 对账；peer 离线时等待下一事件，在线临时失败时只做有界一次性退避。`src/manager/personaSyncRoutes.ts` 维护受控 HTTP 合同，并通过仅回环 `index-status/auto-status` 暴露不含正文的诊断；`src/manager/personaSyncLanServer.ts` 是默认绑定私有 IPv4 的独立数据面 listener，只允许远端访问 manifest、file 和 merge，不暴露完整 Manager/WebGUI。同步器优先访问 Relay 登记的这个专用 LAN URL，失败后调用 Relay 的 `/api/rabilink/persona-sync/proxy`，复用全局 worker 把受限请求送到目标 PC 回环 Manager。Relay 不保存主角色。JSONL 使用集合合并，普通文件使用按应用 token 哈希作用域与稳定 peer GUID 分域的共同哈希做快进；已有共同基线的单边缺失作为删除双向传播并先归档旧文件，删除与编辑并发则携带 `remoteDeleted`、peer 和基线哈希进入 `data/persona-sync/conflicts/`。同一角色、路径、peer、远端哈希、删除状态和基线哈希直接映射到固定 `evidence-<sha256>` 文件；自动对账通过一次文件定位复用证据，不再同步遍历旧冲突目录，任一身份或哈希不同仍保留独立证据。冲突列表按指定角色缩小目录范围，旧时间戳副本先按路径、peer 和内容证据归组，只读取每组代表项；首次目录整理使用异步目录迭代并缓存结果。列表、证据读取与 `keep_local/use_remote/use_merged` 解决 API 只允许回环访问；解决时校验当前本地哈希，`use_remote` 对删除冲突表示确认删除，同组旧证据与元数据一起进入 `resolved-conflicts/` 并留下审计记录。随后 Coordinator 以冲突远端哈希为新发布基线，把解决结果经 LAN/Relay 发回来源 peer；远端或本地已变化时返回 `not_published`，保留新的待对账标记而不声称收敛。同 peer/角色并发同步 single-flight，文件与基线状态锁定后原子写。`conversation/` 合并复用消息上下文锁，语音记录和角色声纹关系复用各自文件锁，避免同步覆盖与在线追加交错。读取和 merge 检查完整父路径链并拒绝符号链接/Windows junction。锁、manifest 索引、临时文件和可再生 TTS 缓存不参与同步。
-
-本机 watcher 只负责把明确路径变化合并为后台刷新请求，不在 Manager 主线程读取目录；child 构建的新快照必须同时识别删除并保留未变化范围。UNC 的 `worker_poll` 是正常运行模式，不记为 watcher fallback；只有 child 超时、异常退出或无法确认终止时才进入 stale/degraded，且 GET 仍不得回退为同步扫描。
-
-`ribiwebgui/src/components/PersonaSyncCard.vue` 只维护页面加载、预览、按钮忙碌、提示等可重建表现状态。它通过 `personaSyncClient.ts` 读取 peer、索引、自动状态与冲突，并提交显式同步或基础解决命令；同步、删除、冲突、重试和最终收敛含义仍全部由后端拥有。页面监听 `persona_sync_manifest_changed`、`persona_sync_auto_status`、Relay/LAN 状态事件后各补查一次，不设置业务轮询。
-
-`src/acceptance/personaSyncDualNode.ts` 与 `scripts/test-persona-sync-dual-node.mjs` 使用两个临时角色根、真实 Relay Server、真实目标 worker/Manager 数据面和专用 LAN listener 验收该编排。它先证明 LAN-first 的 JSONL/普通文件/删除/声纹语义冲突与解决发布，再只撤掉可达的 peer URL 以强制真实 Relay fallback；报告不保存 token、端口、角色或正文。Relay stdout 与 worker SSE 状态事件拥有就绪时序，不用轮询服务状态。
-
-</details>
 
 这些目录可以有自己的运行脚本和 README，但不要把真实 token、QQ 号、Cookie、本机路径写进公开示例。
+
+启动只为 post-ready 激活保留一次已准备的插件包。未变化实例沿现有执行准入复用不可变包，实际发布元数据与失败回退仍独立；其它 fresh reconcile、代际变化、消费或退出都会使这次交接失效，不建立长期缓存。
 
 ## 测试结构
 
