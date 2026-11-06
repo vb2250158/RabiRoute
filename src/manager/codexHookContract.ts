@@ -20,7 +20,9 @@ const binding = { type: "object", required: ["sessionId", "roleId", "createdAt",
 const nullableBinding = { anyOf: [binding, { type: "null" }] };
 const resultStatus = { type: "object", required: ["status", "reason"], properties: { status: text, reason: text }, additionalProperties: true };
 const completion = { type: "object", required: ["sessionId", "updatedAt", "status"],
-  properties: textFields("sessionId roleId planId turnId updatedAt status gatewayId error"), additionalProperties: false };
+  properties: { ...textFields("sessionId roleId planId turnId updatedAt status gatewayId error agentType"),
+    sourceInstance: { type: "object", required: ["instanceId"], additionalProperties: false,
+      properties: textFields("instanceId ownerDeviceId agentId") } }, additionalProperties: false };
 const contextResult = { type: "object", required: ["action", "binding", "additionalContext"], additionalProperties: true,
   properties: { action: { enum: ["none", "bind", "status", "refresh", "off"] }, binding: nullableBinding, additionalContext: text,
     followup: { type: "object", required: ["decision", "reason"], properties: { decision: { const: "block" }, reason: text }, additionalProperties: false },

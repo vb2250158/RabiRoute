@@ -15,10 +15,10 @@ import { appendPersonaChatReply } from "../personaChatHistory.js";
 import { readPersonaConfigFragment } from "./configMigration.js";
 import { decidePlanFollowup, type PlanFollowupReceipt } from "./planFollowup.js";
 import { agentHookSettingsFor } from "../shared/gatewayConfigModel.js";
-import { planBindingMatchesSource, planBindingSourceKey, type PlanBindingSourceInstance } from "../shared/planBindingOwner.js";
+import { planBindingDeliveryIdentity, planBindingMatchesSource, planBindingSourceKey, type PlanBindingSourceInstance } from "../shared/planBindingOwner.js";
 import type { AgentThreadRemoteSource } from "../agentThreads.js";
 
-const STORE_VERSION = 8;
+const STORE_VERSION = 9;
 const MAX_CONTEXT_CHARS = 6200;
 const CONTROL_PATTERN = /\[rabi:(use|bind)\s+([^\]\r\n]{1,80})\]|\[rabi:(status|refresh|off)\]/i;
 // Only the delivery's explicit runId line may select a consolidation run.
@@ -118,6 +118,8 @@ export type ProjectFileChangeState = {
 
 type CodexHookSessionStoreFile = {
   planFollowups?: Record<string, PlanFollowupReceipt>;
+  /** Original entries whose old key lacks enough recorded owner metadata; never a replay source. */
+  unattributedSessionState?: Record<string, Record<string, unknown>>;
   /** Presentation-only attempts; never Agent delivery or response receipts. */
   agentRequestStopReminders?: Record<string, string[]>;
   /** One current continuation barrier per native session, not a reply receipt. */
@@ -284,8 +286,10 @@ function fingerprint(values: string[]): string {
   return crypto.createHash("sha256").update(values.join("\0")).digest("hex");
 }
 
-function planTaskCompletionKey(sessionId: string, planId: string | undefined, turnId: string | undefined): string {
-  return fingerprint(["plan_task_completion", sessionId, planId || "", turnId || ""]);
+function planTaskCompletionKey(sourceIdentity: string | readonly string[], planId: string | undefined, turnId: string | undefined): string {
+  return typeof sourceIdentity === "string"
+    ? fingerprint(["plan_task_completion", sourceIdentity, planId || "", turnId || ""])
+    : crypto.createHash("sha256").update(JSON.stringify(["plan_task_completion", sourceIdentity, planId || "", turnId || ""])).digest("hex");
 }
 
 function boundedJson(value: unknown, limit: number): string {
@@ -415,6 +419,64 @@ export function parseCodexHookControl(prompt: string): CodexHookControl | null {
   return { action: match[3].toLowerCase() as "status" | "refresh" | "off" };
 }
 
+/** Upgrade storage coordinates in memory only; the existing write boundary owns publication. */
+function migrateHookSessionKeys(store: CodexHookSessionStoreFile): CodexHookSessionStoreFile {
+  if (store.version === STORE_VERSION) return store;
+  const localIds = new Set<string>(), remoteKeys = new Set<string>();
+  const noteOwner = (value: unknown) => {
+    if (!value || typeof value !== "object" || typeof (value as CodexHookSessionBinding).sessionId !== "string") return;
+    const row = value as CodexHookSessionBinding;
+    if (!row.sourceInstance) localIds.add(row.sessionId);
+    else if (typeof row.sourceInstance.instanceId === "string") remoteKeys.add(planBindingSourceKey(row));
+  };
+  Object.values(store.sessions).forEach(noteOwner);
+  Object.values(store.planTaskCompletions).forEach(noteOwner);
+  const unattributed = { ...store.unattributedSessionState };
+  const retainUnattributed = (key: string, field: string, value: unknown) => {
+    unattributed[key] = { ...unattributed[key], [field]: value };
+  };
+  const looksRemote = (key: string): boolean => {
+    try {
+      const tuple: unknown = JSON.parse(key);
+      return Array.isArray(tuple) && (tuple.length === 5 || tuple.length === 6)
+        && tuple[0] === "remote" && tuple.every(value => typeof value === "string");
+    } catch { return false; }
+  };
+  const move = (field: string, source: Record<string, unknown>, identityRows = false): Record<string, unknown> => {
+    const output: Record<string, unknown> = Object.create(null);
+    const origin = new Map<string, string>(), collisions = new Set<string>();
+    for (const [key, value] of Object.entries(source)) {
+      let target = key;
+      if (identityRows) {
+        const row = value as CodexHookSessionBinding | undefined;
+        if (!row || typeof row !== "object" || typeof row.sessionId !== "string") {
+          retainUnattributed(key, field, value); continue;
+        }
+        target = planBindingSourceKey(row);
+      } else if (key.startsWith("[")) {
+        const local = localIds.has(key), remote = remoteKeys.has(key);
+        if ((local && remote) || (!local && !remote && looksRemote(key))) {
+          retainUnattributed(key, field, value); continue;
+        }
+        if (!remote) target = planBindingSourceKey({ sessionId: key });
+      }
+      if (collisions.has(target)) { retainUnattributed(key, field, value); continue; }
+      if (Object.hasOwn(output, target)) {
+        retainUnattributed(origin.get(target)!, field, output[target]);
+        retainUnattributed(key, field, value); delete output[target]; collisions.add(target);
+      } else { output[target] = value; origin.set(target, key); }
+    }
+    return output;
+  };
+  const migrated = { ...store, version: STORE_VERSION,
+    sessions: move("sessions", store.sessions, true) as Record<string, CodexHookSessionBinding> };
+  for (const field of ["projectFileChanges", "projectFileChangeReminders", "agentRequestStopReminders", "agentRequestStopFollowupTurns"] as const) {
+    if (store[field]) Object.assign(migrated, { [field]: move(field, store[field]!) });
+  }
+  if (Object.keys(unattributed).length) migrated.unattributedSessionState = unattributed;
+  return migrated;
+}
+
 export class CodexHookContextService {
   private readonly onHookStage?: CodexHookContextServiceOptions["onHookStage"];
   private readonly readContext?: CodexHookContextServiceOptions["readContext"];
@@ -493,7 +555,8 @@ export class CodexHookContextService {
 
   getBinding(sessionId: string, sourceInstance?: PlanBindingSourceInstance, agentType?: string): CodexHookSessionBinding | null {
     const id = this.requireSessionId(sessionId);
-    return this.readStore().sessions[planBindingSourceKey({ sessionId: id, agentType, sourceInstance })] ?? null;
+    const sessions = this.readStore().sessions, key = planBindingSourceKey({ sessionId: id, agentType, sourceInstance });
+    return Object.hasOwn(sessions, key) ? sessions[key]! : null;
   }
 
   private sessionPlanRoleIds(sessionId: string, sourceInstance?: PlanBindingSourceInstance, agentType?: string): readonly string[] | undefined {
@@ -521,7 +584,7 @@ export class CodexHookContextService {
       createdAt: previous?.createdAt ?? timestamp,
       updatedAt: timestamp
     };
-    store.sessions[key] = binding;
+    store.sessions = { ...store.sessions, [key]: binding };
     this.writeStore(store);
     return binding;
   }
@@ -1098,7 +1161,9 @@ export class CodexHookContextService {
     if (!config?.enabled) return undefined;
     const workflow = ensurePersonaPlanWorkflow(roleDir).workflow;
     const store = this.readStore();
-    const key = fingerprint([roleId, plan.id, planBindingSourceKey(request)]);
+    const sourceIdentity = planBindingDeliveryIdentity(request);
+    const key = typeof sourceIdentity === "string" ? fingerprint([roleId, plan.id, sourceIdentity])
+      : crypto.createHash("sha256").update(JSON.stringify([roleId, plan.id, sourceIdentity])).digest("hex");
     const result = decidePlanFollowup({ config, workflow, plan, sessionId: request.sessionId,
       turnId: request.turnId, stopHookActive: request.stopHookActive,
       previous: store.planFollowups?.[key], now: Date.now() });
@@ -1275,8 +1340,8 @@ export class CodexHookContextService {
           lastPlanCompletionError: result.error
         }
       : null;
-    if (nextBinding) store.sessions[planBindingSourceKey(nextBinding)] = nextBinding;
-    const completionKey = planTaskCompletionKey(planBindingSourceKey(request), result.planId, result.turnId);
+    if (nextBinding) store.sessions = { ...store.sessions, [planBindingSourceKey(nextBinding)]: nextBinding };
+    const completionKey = planTaskCompletionKey(planBindingDeliveryIdentity(request), result.planId, result.turnId);
     store.planTaskCompletions[completionKey] = {
       sessionId,
       ...(request.sourceInstance ? { sourceInstance: request.sourceInstance, agentType: request.agentType || "codex" } : {}),
@@ -1329,8 +1394,10 @@ export class CodexHookContextService {
       return empty;
     }
     const raw = JSON.parse(fs.readFileSync(this.storePath, "utf8")) as Partial<CodexHookSessionStoreFile>;
-    return {
-      version: STORE_VERSION,
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error("Hook state is not an object; the original file is preserved.");
+    return migrateHookSessionKeys({
+      ...raw,
+      version: Number.isInteger(raw.version) ? raw.version! : 8,
       planFollowups: raw.planFollowups ?? {},
       agentRequestStopReminders: raw.agentRequestStopReminders ?? {},
       agentRequestStopFollowupTurns: raw.agentRequestStopFollowupTurns ?? {},
@@ -1340,12 +1407,30 @@ export class CodexHookContextService {
         : {},
       projectFileChanges: raw.projectFileChanges && typeof raw.projectFileChanges === "object" ? raw.projectFileChanges : {},
       projectFileChangeReminders: raw.projectFileChangeReminders && typeof raw.projectFileChangeReminders === "object" ? raw.projectFileChangeReminders : {}
-    };
+    });
   }
 
   private writeStore(store: CodexHookSessionStoreFile): void {
+    if (fs.existsSync(this.storePath)) {
+      const original = fs.readFileSync(this.storePath);
+      const version = (JSON.parse(original.toString("utf8")) as { version?: unknown }).version;
+      if (!Number.isInteger(version) || Number(version) < STORE_VERSION) {
+        const directory = this.storePath + ".recovery";
+        fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+        const hash = crypto.createHash("sha256").update(original).digest("hex");
+        const destination = path.join(directory, `layout-9-${hash}-${crypto.randomUUID()}.raw`);
+        const staging = destination + ".tmp";
+        try {
+          const fd = fs.openSync(staging, "wx", 0o600);
+          try { fs.writeFileSync(fd, original); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+          if (!fs.readFileSync(staging).equals(original)) throw new Error("Hook migration recovery snapshot verification failed.");
+          fs.renameSync(staging, destination);
+        } finally { if (fs.existsSync(staging)) fs.unlinkSync(staging); }
+      }
+    }
     writeJsonAtomic(this.storePath, {
-      version: STORE_VERSION,
+      ...store,
+      version: Math.max(store.version || STORE_VERSION, STORE_VERSION),
       planFollowups: store.planFollowups ?? {},
       agentRequestStopReminders: store.agentRequestStopReminders ?? {},
       agentRequestStopFollowupTurns: store.agentRequestStopFollowupTurns ?? {},
@@ -1358,7 +1443,7 @@ export class CodexHookContextService {
 
   private replaceBinding(binding: CodexHookSessionBinding): void {
     const store = this.readStore();
-    store.sessions[planBindingSourceKey(binding)] = binding;
+    store.sessions = { ...store.sessions, [planBindingSourceKey(binding)]: binding };
     this.writeStore(store);
   }
 }

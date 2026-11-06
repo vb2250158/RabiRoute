@@ -48,7 +48,7 @@ test("local and remote same-ID Hooks keep persona bindings, completion targets a
     const trustedRemoteSource = sourceInstance ? { nodeId: sourceInstance.instanceId, agentId: "codex", provider: "codex" as const,
       sessionId, authorizationIncarnation: "ephemeral-authority-only" } : undefined;
     const result = await service.handleHook({ ...request, sourceInstance, trustedRemoteSource });
-    assert.equal(result.planTaskCompletion?.status, "delivered");
+    assert.equal(result.planTaskCompletion?.status, "delivered", JSON.stringify(result));
   }
   assert.deepEqual(delivered.map(value => value.plan.id), ["plan-hook", "plan-pc-one", "plan-pc-two"]);
   assert.deepEqual(delivered.map(value => value.sourceInstance?.instanceId), [undefined, "pc-one", "pc-two"]);
@@ -1321,4 +1321,78 @@ test("workspace changes cannot prune another workspace's still-pending request p
   assert.match((await service.handleHook(input)).followup!.reason, /request-scope-a/);
   assert.match((await service.handleHook({ ...input, cwd: "C:/scope-b", turnId: "scope-b-1" })).followup!.reason, /request-scope-b/);
   assert.equal((await service.handleHook({ ...input, turnId: "scope-a-2" })).followup, undefined);
+});
+
+test("schema9 escapes legacy JSON-shaped local storage keys without changing raw receipts or Stop barriers", async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabi-hook-layout9-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const rolesRoot = path.join(root, "roles"), storePath = path.join(root, "hook.json");
+  for (const role of ["LocalRole", "RemoteRole"]) { fs.mkdirSync(path.join(rolesRoot, role), { recursive: true }); fs.writeFileSync(path.join(rolesRoot, role, "persona.md"), role); }
+  const localId = JSON.stringify(["remote", "", "remote-node", "codex", "business-session"]);
+  const escaped = JSON.stringify(["local", localId]), timestamp = "2026-11-06T00:00:00.000Z";
+  const original = { version: 8, sessions: { [localId]: { sessionId: localId, roleId: "LocalRole", createdAt: timestamp, updatedAt: timestamp } },
+    planTaskCompletions: { "original-completion-hash": { sessionId: localId, planId: "original-plan", turnId: "old-turn", status: "failed", updatedAt: timestamp } },
+    projectFileChanges: { [localId]: { turn: { files: ["original.txt"], workspaces: [root] } } },
+    projectFileChangeReminders: { [localId]: { old: timestamp } }, agentRequestStopReminders: { [localId]: ["original-request"] },
+    agentRequestStopFollowupTurns: { [localId]: "same-turn" }, planFollowups: { "original-followup-hash": { fingerprint: "original", turnId: "old", at: 12 } }, vendorField: { keep: true } };
+  const originalBytes = Buffer.from(JSON.stringify(original, null, 2).replace(/\n/g, "\r\n") + "\r\n"); fs.writeFileSync(storePath, originalBytes);
+  const service = new CodexHookContextService({ rolesRoot: () => rolesRoot, storePath,
+    recordAgentRequestStop: request => ({ status: "pending", reason: "original owner snapshot", requestIds: ["original-request"], pendingSessionRequestIds: ["original-request"], snapshotComplete: true, turnId: request.turnId }),
+    deliverAgentCompletion: async () => { assert.fail("an existing same-turn continuation barrier must not publish completion"); } });
+  assert.equal(service.getBinding(localId)?.roleId, "LocalRole");
+  assert.ok(fs.readFileSync(storePath).equals(originalBytes), "queries only migrate an in-memory view");
+  service.bindSession("business-session", "RemoteRole", { instanceId: "remote-node" });
+  assert.equal(service.getBinding(localId)?.roleId, "LocalRole");
+  assert.equal(service.getBinding("business-session", { instanceId: "remote-node" })?.roleId, "RemoteRole");
+  const stored = JSON.parse(fs.readFileSync(storePath, "utf8")); assert.equal(stored.version, 9);
+  for (const field of ["projectFileChanges", "projectFileChangeReminders", "agentRequestStopReminders", "agentRequestStopFollowupTurns"]) {
+    const oldValues = (original as Record<string, unknown>)[field] as Record<string, unknown>;
+    assert.deepEqual(stored[field][escaped], oldValues[localId]);
+  }
+  assert.deepEqual(stored.planTaskCompletions, original.planTaskCompletions);
+  assert.deepEqual(stored.planFollowups, original.planFollowups); assert.deepEqual(stored.vendorField, original.vendorField);
+  const backups = fs.readdirSync(storePath + ".recovery").filter(name => name.endsWith(".raw")); assert.equal(backups.length, 1);
+  assert.ok(fs.readFileSync(path.join(storePath + ".recovery", backups[0])).equals(originalBytes));
+  const reopened = new CodexHookContextService({ rolesRoot: () => rolesRoot, storePath,
+    recordAgentRequestStop: request => ({ status: "pending", reason: "original owner snapshot", requestIds: ["original-request"], pendingSessionRequestIds: ["original-request"], snapshotComplete: true, turnId: request.turnId }),
+    deliverAgentCompletion: async () => { assert.fail("reopening cannot replay original completion"); } });
+  const stop = await reopened.handleHook({ eventName: "Stop", sessionId: localId, turnId: "same-turn", lastAssistantMessage: "Original result" });
+  assert.equal(stop.completionDeferred, true); assert.equal(stop.followup, undefined);
+  assert.deepEqual(JSON.parse(fs.readFileSync(storePath, "utf8")).agentRequestStopReminders[escaped], ["original-request"]);
+});
+
+test("schema9 preserves ambiguous legacy rows while every Stop remains callable", async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabi-hook-orphan9-")); t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const rolesRoot = path.join(root, "roles"), storePath = path.join(root, "hook.json");
+  fs.mkdirSync(path.join(rolesRoot, "Role"), { recursive: true }); fs.writeFileSync(path.join(rolesRoot, "Role", "persona.md"), "Role");
+  const oldKey = JSON.stringify(["remote", "", "remote-node", "codex", "business-session"]);
+  const originalBytes = Buffer.from(JSON.stringify({ version: 8, sessions: {}, planTaskCompletions: {}, projectFileChanges: {}, projectFileChangeReminders: {},
+    agentRequestStopReminders: { [oldKey]: ["original-uncertain-request"] }, agentRequestStopFollowupTurns: { [oldKey]: "old-turn" } })); fs.writeFileSync(storePath, originalBytes);
+  let snapshots = 0, completions = 0;
+  const service = new CodexHookContextService({ rolesRoot: () => rolesRoot, storePath, hookEnabled: () => false,
+    recordAgentRequestStop: request => { snapshots++; return { status: "ignored", reason: "healthy owner snapshot", turnId: request.turnId, snapshotComplete: true, pendingSessionRequestIds: [] }; },
+    deliverAgentCompletion: async () => { completions++; return []; } });
+  for (const source of [{ sessionId: oldKey }, { sessionId: "business-session", sourceInstance: { instanceId: "remote-node" } }]) {
+    const result = await service.handleHook({ ...source, eventName: "Stop", turnId: "old-turn" });
+    assert.equal(result.agentRequestStop?.snapshotComplete, true); assert.equal(result.agentRequestStop?.reason, "healthy owner snapshot"); assert.notEqual(result.completionDeferred, true);
+  }
+  assert.equal(snapshots, 2); assert.equal(completions, 2);
+  const healthy = await service.handleHook({ sessionId: "healthy-original", eventName: "Stop", turnId: "healthy-turn" });
+  assert.equal(healthy.agentRequestStop?.status, "ignored"); assert.equal(snapshots, 3); assert.equal(completions, 3);
+  service.bindSession("healthy-original", "Role"); const stored = JSON.parse(fs.readFileSync(storePath, "utf8"));
+  assert.deepEqual(stored.unattributedSessionState[oldKey].agentRequestStopReminders, ["original-uncertain-request"]);
+  assert.equal(stored.agentRequestStopReminders[oldKey], undefined);
+});
+
+test("schema9 preserves an original failed completion for a bracket-prefixed local session", async t => {
+  let sends = 0; const { root, roleDir, rolesRoot, storePath } = fixture(); t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const sessionId = "[original-local-task]", timestamp = "2026-11-06T00:00:00.000Z", file = planJsonFile(roleDir, "plan-hook", "active");
+  const plan = JSON.parse(fs.readFileSync(file, "utf8")); plan.taskBinding.sessionId = sessionId; fs.writeFileSync(file, JSON.stringify(plan)); publishFixtureRoleKnowledge(roleDir);
+  fs.mkdirSync(path.dirname(storePath), { recursive: true });
+  fs.writeFileSync(storePath, JSON.stringify({ version: 8, sessions: { [sessionId]: { sessionId, roleId: "YeYu", createdAt: timestamp, updatedAt: timestamp } },
+    planTaskCompletions: { "original-unknown-receipt": { sessionId, planId: "plan-hook", turnId: "original-turn", status: "failed", error: "Delivery acceptance uncertain", updatedAt: timestamp } }, projectFileChanges: {}, projectFileChangeReminders: {} }));
+  const service = new CodexHookContextService({ rolesRoot: () => rolesRoot, storePath, deliverPlanTaskCompletion: async () => { sends++; } });
+  const result = await service.handleHook({ sessionId, eventName: "Stop", turnId: "original-turn", cwd: root, lastAssistantMessage: "Original result" });
+  assert.equal(result.planTaskCompletion?.status, "duplicate"); assert.equal(sends, 0);
+  assert.equal(JSON.parse(fs.readFileSync(storePath, "utf8")).planTaskCompletions["original-unknown-receipt"].error, "Delivery acceptance uncertain");
 });

@@ -583,3 +583,5 @@ See [knowledge search](knowledge-search_en.md) for summary search and automatic 
 ### Current-step status labels
 
 The current step displays the plan’s actual status. Steps awaiting approval or information, and steps under analysis, are not labeled as executing. Approval waits are not labeled as technical blocks. Completed steps remain marked as completed.
+
+Cross-instance Hook state uses disjoint local and remote identity keys while preserving original local delivery-ID inputs. The original write boundary retains a raw backup before upgrading legacy storage to version 9. Unattributed legacy entries remain preserved and diagnosed individually without blocking normal Stop or completion handling. Verify actual format before rollback: old writers cannot safely process new remote/escaped keys and retained buckets; never replace subsequent writes with a whole pre-cut store snapshot.

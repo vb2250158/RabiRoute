@@ -15,7 +15,7 @@ import { AGENT_HOOK_EVENTS, agentHookRuleErrors } from "../shared/agentHookAutom
 import { agentAdapterManifest, isAgentAdapterType, agentAdapterSupportsLifecycleHooks as supportsHooks } from "../shared/agentAdapterCapabilities.js";
 
 import { mermaidDiagramSource } from "../markdownImage.js";
-import { planBindingMatchesSource, planBindingSourceKey, type PlanBindingSource } from "../shared/planBindingOwner.js";
+import { planBindingDeliveryIdentity, planBindingMatchesSource, planBindingSourceKey, type PlanBindingSource } from "../shared/planBindingOwner.js";
 
 const execute = promisify(execFile);
 export type CompletionDeliveryResult = { ruleId: string; status: "sent" | "failed"; reason?: string };
@@ -280,7 +280,7 @@ export class AgentCompletionDeliveryService {
         if (targets.has(target)) continue;
         targets.add(target);
         const deliveryId = `agent-completion-${createHash("sha256").update(JSON.stringify([
-          planBindingSourceKey(request), request.turnId, target
+          planBindingDeliveryIdentity(request), request.turnId, target
         ])).digest("hex")}`;
         await this.options.deliver(owner, request, deliveryId, context);
         results.push({ ruleId: rule.id, status: "sent" });

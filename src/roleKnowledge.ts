@@ -1564,6 +1564,16 @@ function validatePlanStatusInput(workflow: PersonaPlanWorkflow, value: unknown):
 }
 
 function normalizePlan(raw: Partial<PlanItem> & Record<string, unknown>, fallbackId?: string): PlanItem | null {
+  let taskBinding: PlanTaskBinding | undefined;
+  try { taskBinding = normalizePlanTaskBinding(raw.taskBinding); }
+  catch (error) {
+    // Stored plan projections isolate invalid bindings to this record. The
+    // mutation owner validates explicit bindings before writing any bytes.
+    console.warn("[rabi] Stored plan has an invalid task binding; its original file is retained.", {
+      planId: raw.id || fallbackId, error: error instanceof Error ? error.message : String(error)
+    });
+    return null;
+  }
   const title = String(raw.title || "").trim();
   if (!title) return null;
   const updatedAt = typeof raw.updatedAt === "string" && raw.updatedAt ? raw.updatedAt : nowIso();
@@ -1603,7 +1613,7 @@ function normalizePlan(raw: Partial<PlanItem> & Record<string, unknown>, fallbac
     project: raw.project && typeof raw.project === "object" && !Array.isArray(raw.project) ? raw.project as PlanItem["project"] : undefined,
     source: raw.source && typeof raw.source === "object" && !Array.isArray(raw.source) ? raw.source as KnowledgeSource : undefined,
     secretaryBinding: normalizePlanSecretaryBinding(raw.secretaryBinding),
-    taskBinding: normalizePlanTaskBinding(raw.taskBinding),
+    taskBinding,
     messageChannels: raw.messageChannels === undefined ? undefined : normalizePlanMessageChannels(raw.messageChannels),
     dueAt: typeof raw.dueAt === "string" ? raw.dueAt : undefined,
     completedAt: typeof raw.completedAt === "string" ? raw.completedAt : undefined,

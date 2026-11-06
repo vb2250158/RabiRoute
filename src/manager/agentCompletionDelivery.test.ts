@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { withTestEndpointEgress } from "../endpointEgress.fixture.js";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -538,4 +539,19 @@ test("Desktop slash-prefixed Windows links resolve to actual drive paths", () =>
   assert.deepEqual(completionLocalFiles("[报告](</C:/Reports/报告.md>)"), [path.normalize("C:/Reports/报告.md")]);
   const [payload] = completionMessagePayloads("![截图](</C:/Reports/截图.png>)", false);
   assert.deepEqual(payload.segments, [{type:"image",path:path.normalize("C:/Reports/截图.png")}]);
+});
+
+
+test("receipt identity keeps every legacy local completion ID and separates JSON-shaped local and remote owners", async () => {
+  const source = { ...event, sessionId: "business-session", sourceInstance: { instanceId: "remote-node" } };
+  const oldRemoteKey = JSON.stringify(["remote", "", "remote-node", "codex", source.sessionId]);
+  const target = JSON.stringify(["route", "qq", "12345"]), ids: string[] = [];
+  const service = new AgentCompletionDeliveryService({ rules: () => [owner], projectIdentity: async value => value,
+    deliver: async (_owner, _request, id) => { ids.push(id); } });
+  for (const sessionId of ["ordinary-original", oldRemoteKey]) {
+    await service.handle({ ...event, sessionId });
+    const original = "agent-completion-" + createHash("sha256").update(JSON.stringify([sessionId, event.turnId, target])).digest("hex");
+    assert.equal(ids.at(-1), original, "old local uncertain/accepted delivery lookup must keep its original ID");
+  }
+  await service.handle(source); assert.notEqual(ids[1], ids[2], "remote tuple is an array element, not an equal local string");
 });

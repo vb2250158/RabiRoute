@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { planBindingMatchesSource, planBindingSourceKey, planBindingTargetKey } from "./planBindingOwner.js";
+import { planBindingDeliveryIdentity, planBindingMatchesSource, planBindingSourceKey, planBindingTargetKey } from "./planBindingOwner.js";
 
 test("plan owner matches exact instance and provider without requiring an unadvertised Agent ID", () => {
   const local = { agentType: "codex", sessionId: "same-session" };
@@ -52,4 +52,19 @@ test("target owner key retains remote coordinates and treats cwd as execution me
   assert.notEqual(planBindingTargetKey(binding), planBindingTargetKey({ ...binding, instanceBinding: undefined }));
   assert.notEqual(planBindingTargetKey({ agentType: "dsh", sessionId: "task", baseUrl: "http://one" }),
     planBindingTargetKey({ agentType: "dsh", sessionId: "task", baseUrl: "http://two" }));
+});
+
+
+test("local JSON-shaped session IDs cannot collide with typed remote storage or receipt identities", () => {
+  const remote = { agentType: "codex", sessionId: "business-session", sourceInstance: { instanceId: "remote-node" } };
+  const oldRemoteKey = JSON.stringify(["remote", "", "remote-node", "codex", "business-session"]);
+  const local = { sessionId: oldRemoteKey };
+  assert.notEqual(planBindingSourceKey(local), planBindingSourceKey(remote));
+  assert.notEqual(planBindingSourceKey(local), planBindingSourceKey({ sessionId: planBindingSourceKey(local) }));
+  for (const sessionId of ["ordinary", "[opaque]", oldRemoteKey, "[\"local\",\"nested\"]"]) {
+    assert.equal(planBindingDeliveryIdentity({ sessionId }), sessionId, "all original local receipt/hash input strings remain exact");
+  }
+  assert.equal(typeof planBindingDeliveryIdentity(local), "string");
+  assert.ok(Array.isArray(planBindingDeliveryIdentity(remote)));
+  assert.notEqual(JSON.stringify([planBindingDeliveryIdentity(local), "turn"]), JSON.stringify([planBindingDeliveryIdentity(remote), "turn"]));
 });

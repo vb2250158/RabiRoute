@@ -32,12 +32,19 @@ export function planBindingMatchesSource(binding: BindingOwner | undefined, sour
     && (!actual.agentId || expected.agentId === actual.agentId);
 }
 
-/** Preserve legacy local receipt keys while fencing each trusted remote session. */
-export function planBindingSourceKey(source: PlanBindingSource): string {
+/** Stable receipt/hash identity: existing local IDs remain strings, remote owners are typed tuples. */
+export function planBindingDeliveryIdentity(source: PlanBindingSource): string | readonly string[] {
   if (!source.sourceInstance) return source.sessionId;
-  return JSON.stringify(["remote", source.sourceInstance.ownerDeviceId || "",
+  return ["remote", source.sourceInstance.ownerDeviceId || "",
     source.sourceInstance.instanceId, source.agentType || "codex", source.sessionId,
-    ...(source.sourceInstance.agentId ? [source.sourceInstance.agentId] : [])]);
+    ...(source.sourceInstance.agentId ? [source.sourceInstance.agentId] : [])];
+}
+
+/** Storage/pending identity. Escape bracket-prefixed locals so they cannot equal a remote JSON tuple. */
+export function planBindingSourceKey(source: PlanBindingSource): string {
+  const identity = planBindingDeliveryIdentity(source);
+  if (typeof identity !== "string") return JSON.stringify(identity);
+  return identity.startsWith("[") ? JSON.stringify(["local", identity]) : identity;
 }
 
 /** Comparison/grouping identity only; transport ownership remains at the endpoint. */

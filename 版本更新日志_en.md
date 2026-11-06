@@ -6,6 +6,12 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.6.3 - 2026-11-06
+
+- Correct the strict completion-diagnostics response contract to declare the adapter and source-instance fields while rejecting unknown fields.
+- Separate local and remote source-state identity domains so valid session IDs cannot collide with encoded remote keys; retain existing local state and original receipts.
+- Isolate a damaged stored explicit binding to its original plan, preserving bytes and object diagnostics; healthy local and remote plans remain usable and mutations still validate bindings strictly.
+
 ## 0.6.2 - 2026-11-06
 
 - Persist optional computer and Agent coordinates on plan bindings through status, navigation, feedback, QA continuation and original-receipt reads, preserving existing local plans.

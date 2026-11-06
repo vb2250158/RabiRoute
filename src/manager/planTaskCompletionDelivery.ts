@@ -11,7 +11,7 @@ import {
 import type { PlanTaskCompletionDelivery } from "./codexHookContext.js";
 import { resolvePlanSecretaryAssignment, type PlanSecretaryTarget } from "./planSecretaryAssignment.js";
 import { localPersonaRuntimeForDelivery } from "./localPersonaOwner.js";
-import { planBindingMatchesSource, planBindingSourceKey } from "../shared/planBindingOwner.js";
+import { planBindingDeliveryIdentity, planBindingMatchesSource } from "../shared/planBindingOwner.js";
 
 export type PlanTaskCompletionRuntime = {
   definition: RouteAgentTargetsDefinition & {
@@ -131,8 +131,12 @@ export function createPlanTaskCompletionDelivery<TRuntime extends PlanTaskComple
       throw new Error(`Gateway ${runtime.definition.id} has disabled plan task completion notifications.`);
     }
 
+    const sourceIdentity = planBindingDeliveryIdentity({ sessionId: delivery.sourceSessionId,
+      agentType: delivery.sourceAgentType, sourceInstance: delivery.sourceInstance });
     const eventKey = createHash("sha256")
-      .update(`${delivery.roleId}\0${delivery.plan.id}\0${planBindingSourceKey({ sessionId: delivery.sourceSessionId, agentType: delivery.sourceAgentType, sourceInstance: delivery.sourceInstance })}\0${delivery.sourceTurnId}`)
+      .update(typeof sourceIdentity === "string"
+        ? `${delivery.roleId}\0${delivery.plan.id}\0${sourceIdentity}\0${delivery.sourceTurnId}`
+        : JSON.stringify([delivery.roleId, delivery.plan.id, sourceIdentity, delivery.sourceTurnId]))
       .digest("hex")
       .slice(0, 24);
     const messageId = `plan-task-completed-${eventKey}`;

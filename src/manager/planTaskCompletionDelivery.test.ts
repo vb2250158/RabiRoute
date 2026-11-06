@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
@@ -372,4 +373,20 @@ test("plan task completion respects the source Agent end's Hook switch", async (
   selected.definition.codexHooks.byAgent = { dsh: { ...selected.definition.codexHooks, planTaskCompletionEnabled: true } };
   await deliver({ ...delivery(roleDir, selected.definition.id), sourceAgentType: "dsh" });
   assert.equal(handoffCount, 1);
+});
+
+
+test("receipt identity preserves all original local plan completion IDs and separates remote tuples", async t => {
+  const roleDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabi-plan-receipt9-")); t.after(() => fs.rmSync(roleDir, { recursive: true, force: true }));
+  const selected = runtime("identity-target", "YeYu"), messages: string[] = [];
+  const deliver = createPlanTaskCompletionDelivery({ getRuntime: () => selected, listRuntimes: () => [selected], roleIdForDefinition: definition => definition.agentRoleId || "",
+    appendTimeline: appendTimelineTo(roleDir), triggerRolePanelMessage: async (_runtime, id) => { messages.push(id); } });
+  const remoteId = "business-session", oldRemoteKey = JSON.stringify(["remote", "", "remote-node", "codex", remoteId]);
+  for (const sourceSessionId of ["ordinary-original", oldRemoteKey]) {
+    const input = { ...delivery(roleDir, selected.definition.id), sourceSessionId };
+    await deliver(input);
+    assert.equal(messages.at(-1), "plan-task-completed-" + createHash("sha256").update(`${input.roleId}\0${input.plan.id}\0${sourceSessionId}\0${input.sourceTurnId}`).digest("hex").slice(0, 24));
+  }
+  await deliver({ ...delivery(roleDir, selected.definition.id), sourceSessionId: remoteId, sourceInstance: { instanceId: "remote-node" } });
+  assert.notEqual(messages[1], messages[2]);
 });
