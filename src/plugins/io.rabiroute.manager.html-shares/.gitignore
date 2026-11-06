@@ -1,0 +1,9 @@
+node_modules/
+dist/
+manager-runtime.mjs
+manager-runtime.build-evidence.json
+.env
+.env.*
+!.env.example
+data/
+logs/

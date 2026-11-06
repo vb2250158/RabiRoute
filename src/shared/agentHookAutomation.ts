@@ -55,10 +55,13 @@ export function normalizeAgentCompletionDeliveries(value: unknown): AgentComplet
     const destination = object(raw.destination);
     const params = object(destination.params);
     const channel = text(destination.channel);
+    const fileConversions = Object.fromEntries(["markdownFilesAsImages", "imageFilesAsImages", "htmlFilesAsLinks"].filter(key => params[key] !== undefined)
+      .map(key => [key, params[key] === "false" || params[key] === false ? "false" : "true"]));
     const normalizedParams: Record<string, string> = channel === "napcat"
       ? { target: text(params.target), targetId: text(params.targetId), instanceId: text(params.instanceId), ...(params.renderTables !== undefined ? { renderTables: params.renderTables === "false" || params.renderTables === false ? "false" : "true" } : {}), ...(params.renderDiagrams !== undefined ? { renderDiagrams: params.renderDiagrams === "false" || params.renderDiagrams === false ? "false" : "true" } : {}), ...(params.includeFiles !== undefined ? { includeFiles: params.includeFiles === "false" || params.includeFiles === false ? "false" : "true" } : {}) }
       : channel === "speech" ? (text(params.sessionId) ? { sessionId: text(params.sessionId) } : {})
       : Object.fromEntries(Object.entries(params).map(([key, value]) => [key, text(value)]));
+    if (channel === "napcat") Object.assign(normalizedParams, fileConversions);
     const conditions: AgentHookCondition[] = legacy
       ? [{ type: "project", path: text(raw.projectPath) }, ...(raw.requireBoundPlan === true ? [{ type: "bound_plan" }] : [])]
       : Array.isArray(raw.conditions) ? raw.conditions.map(item => {

@@ -192,6 +192,13 @@
       "versionFile": "rabi.plugin.json"
     },
     {
+      "sourceId": "io.rabiroute.manager.html-shares",
+      "directory": "src/plugins/io.rabiroute.manager.html-shares",
+      "ecosystem": "rabiroute",
+      "publicationName": "io.rabiroute.manager.html-shares",
+      "versionFile": "rabi.plugin.json"
+    },
+    {
       "sourceId": "io.rabiroute.manager.memory-consolidation",
       "directory": "src/plugins/io.rabiroute.manager.memory-consolidation",
       "ecosystem": "rabiroute",

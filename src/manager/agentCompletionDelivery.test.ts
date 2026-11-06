@@ -387,7 +387,7 @@ test("QQ completion attachments use group/private uploads, isolate missing files
   const lastAssistantMessage = `[报告](<${a}>) [丢失](<${missing}>) [详情](<${b}>) [重复](<${a}>)`;
   try {
     for (const target of ["group", "private"]) {
-      const rule = { ...owner.rule, destination: { ...owner.rule.destination, params: { ...owner.rule.destination.params, target } } };
+      const rule = { ...owner.rule, destination: { ...owner.rule.destination, params: { ...owner.rule.destination.params, target, markdownFilesAsImages: "false", imageFilesAsImages: "false", htmlFilesAsLinks: "false" } } };
       const hook = { ...event, lastAssistantMessage };
       const id = "attachment-" + target;
       await assert.rejects(deliverCompletionToEndpoint(rule, hook, id, "route", withTestEndpointEgress(options)), /部分附件未确认/);
@@ -554,4 +554,50 @@ test("receipt identity keeps every legacy local completion ID and separates JSON
     assert.equal(ids.at(-1), original, "old local uncertain/accepted delivery lookup must keep its original ID");
   }
   await service.handle(source); assert.notEqual(ids[1], ids[2], "remote tuple is an array element, not an equal local string");
+});
+
+
+test("confirmed original attachment receipts survive corrupt derived cache; changed frozen payload remains uncertain", async t => {
+  t.mock.method(globalThis, "fetch", nativeHttpTestFetch);
+  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "completion-cache-receipt-"));
+  const calls: string[] = [];
+  const server = http.createServer((request, response) => {
+    request.resume(); request.once("end", () => {
+      calls.push(request.url || "");
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ status: "ok", retcode: 0, data: { message_id: 733, file_id: "fixture-file" } }));
+    });
+  });
+  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  const bound = server.address(); assert.ok(bound && typeof bound === "object");
+  let published = 0;
+  const options = withTestEndpointEgress({ rootDir, routeRoot: path.join(rootDir, "route"), rolesRoot: path.join(rootDir, "roles"),
+    publishHtmlAttachment: async () => { published++; return "https://fixture.invalid/share/original#original-key"; },
+    runtimes: [{ id: "route", enabled: true, napcatInstances: [{ id: "qq", enabled: true, httpUrl: `http://127.0.0.1:${bound.port}`, accessToken: "" }] }] });
+  const payloadPath = (id: string, file: string) => {
+    const fileId = `${id}-file-${createHash("sha256").update(process.platform === "win32" ? file.toLowerCase() : file).digest("hex")}`;
+    return path.join(rootDir, "data/completion-attachments", createHash("sha256").update(fileId).digest("hex") + ".json");
+  };
+  try {
+    const text = path.join(rootDir, "original.txt"); fs.writeFileSync(text, "original file");
+    const firstHook = { ...event, lastAssistantMessage: `[original](<${text}>)` };
+    await deliverCompletionToEndpoint(owner.rule, firstHook, "confirmed-before-cache", "route", options);
+    const firstCalls = calls.length; assert.deepEqual(calls, ["/send_group_msg", "/get_login_info", "/upload_group_file"]);
+    const cache = payloadPath("confirmed-before-cache", text); fs.writeFileSync(cache, "{corrupt-cache"); fs.unlinkSync(text);
+    await deliverCompletionToEndpoint(owner.rule, firstHook, "confirmed-before-cache", "route", options);
+    assert.equal(calls.length, firstCalls, "a confirmed original receipt must not require cache repair or another send");
+    assert.equal(fs.readFileSync(cache, "utf8"), "{corrupt-cache", "readback leaves damaged derived bytes untouched");
+    const html = path.join(rootDir, "converted.html"); fs.writeFileSync(html, "<h1>original</h1>");
+    const htmlHook = { ...event, lastAssistantMessage: `[converted](<${html}>)` };
+    await deliverCompletionToEndpoint(owner.rule, htmlHook, "converted-original", "route", options);
+    const afterConverted = calls.length; assert.equal(afterConverted, firstCalls + 2); assert.equal(published, 1);
+    const changed = JSON.stringify({ type: "text", text: "another payload cannot claim this receipt" });
+    fs.writeFileSync(payloadPath("converted-original", html), changed); fs.unlinkSync(html);
+    await assert.rejects(deliverCompletionToEndpoint(owner.rule, htmlHook, "converted-original", "route", options), /部分附件未确认/);
+    assert.equal(calls.length, afterConverted, "uncertain/mismatching original payload must never be resent");
+    assert.equal(published, 1, "a mismatch must not mint a new share");
+  } finally {
+    await new Promise<void>(resolve => server.close(() => resolve()));
+    fs.rmSync(rootDir, { recursive: true, force: true });
+  }
 });

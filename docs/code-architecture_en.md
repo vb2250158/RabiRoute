@@ -581,3 +581,5 @@ Roles are independent objects. Configuration and knowledge use role identities; 
 ## Interactive reads and background diagnostics
 
 Full plan lists, plan history and memory-consolidation records use the bounded interactive `managerKnowledgePageWorkerPool`. Background diagnostics retain `managerCatalogWorkerPool`; a blocked task or unconfirmed process exit affects that lane. Paginated plans retain their existing resident catalog owner.
+
+The independent `src/plugins/io.rabiroute.manager.html-shares/` plugin owns snapshots, API registration and connection retirement. The host supplies existing RTC/channel implementations through `host.peer-transports@1`; the plugin publishes `manager.html-shares@1`. The existing Relay service and capability contract remain unchanged. A missing new extension point leaves only HTML sharing waiting for its dependency; ordinary messages, images and cross-device connections continue. Snapshots use stable private plugin storage, while original delivery receipts retain their existing owner.

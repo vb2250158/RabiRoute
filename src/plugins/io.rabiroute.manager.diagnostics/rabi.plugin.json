@@ -1,7 +1,7 @@
 {
   "schemaVersion": 2,
   "id": "io.rabiroute.manager.diagnostics",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "displayName": "运行诊断",
   "description": "查看路由与消息网关的运行状态",
   "icon": "mdi-stethoscope",

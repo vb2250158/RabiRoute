@@ -1,7 +1,7 @@
 {
   "schemaVersion": 2,
   "id": "io.rabiroute.manager.agent-state-control",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "displayName": "Agent 运行状态",
   "description": "跟踪 Agent 运行状态与当前会话绑定",
   "icon": "mdi-pulse",

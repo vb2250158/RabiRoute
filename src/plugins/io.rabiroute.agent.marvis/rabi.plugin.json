@@ -1,7 +1,7 @@
 {
   "schemaVersion": 2,
   "id": "io.rabiroute.agent.marvis",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "displayName": "Marvis",
   "description": "为 Marvis 准备消息，由你手动接力处理。",
   "icon": "mdi-robot-outline",

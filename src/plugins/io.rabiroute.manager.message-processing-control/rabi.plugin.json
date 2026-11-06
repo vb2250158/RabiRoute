@@ -1,7 +1,7 @@
 {
   "schemaVersion": 2,
   "id": "io.rabiroute.manager.message-processing-control",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "displayName": "待办消息管理",
   "description": "登记消息处理要求、核对上下文并记录回复进度",
   "icon": "mdi-clipboard-text",

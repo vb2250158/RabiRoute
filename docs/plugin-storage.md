@@ -48,3 +48,5 @@ legacySources: [
 旧 profile 的包版本仅通过发布的 `package-migrations.json` 中精确的 packageId/fromVersion 声明转换。查询返回 effective migration，不改写原 profile、overlay、实例 ID 或业务存档。
 
 坏行在对应 owner 内隔离，查询明确返回 `partial` 和实际位置诊断；健康记录仍可查询。根文件 JSON、schema 或 I/O 错误保留原文件并提供恢复错误。需要完整证据的批量重放不能把缺失坏行视作完整账本。
+
+HTML 分享的快照、内容密钥和 GUID 复用记录由 `io.rabiroute.manager.html-shares` 的稳定插件私有目录保存，不随包版本换目录。Relay 仅保存路由元数据和转发密文；正常重启与原设备重连复用持久目录和原设备身份，旧链接可重新打开。当前没有自动 TTL 或撤销控制，不把活跃连接描述成离线托管。准备后的附件 payload 属于原投递事务，不能当可任意丢弃的临时文件。

@@ -1,7 +1,7 @@
 {
   "schemaVersion": 2,
   "id": "io.rabiroute.manager.yeyu-gamer",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "displayName": "YeYu Gamer 连接",
   "description": "查看本机游戏助手状态并提交游戏计划",
   "icon": "mdi-gamepad-variant",

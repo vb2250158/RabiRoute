@@ -1,6 +1,7 @@
 import { getTimeoutMs } from "../shared/timeoutSettings.js";
 import { EventEmitter } from "node:events";
 import type { PeerConnectionStatus, TunnelTransport } from "../shared/peerTunnelContract.js";
+import { PEER_TRANSPORT_PRIORITY } from "../shared/peerTunnelContract.js";
 import { TunnelDenied } from "./security.js";
 import type { TunnelSession } from "./session.js";
 export type TunnelCandidate = { id: string; name: string; online: boolean; supported: boolean; trusted: boolean; peerUrls: string[] };
@@ -82,7 +83,7 @@ export class PeerConnections extends EventEmitter {
     this.active++;
     Object.assign(entry.status, { state: "connecting", latencyMs: null, measuredAt: null, transport: null, error: undefined }); this.publish(entry.status);
     try {
-      for (const transport of ["lan", "p2p", "relay"] as const) {
+      for (const transport of PEER_TRANSPORT_PRIORITY) {
         this.controller.signal.throwIfAborted();
         if (transport === "lan" && !peer.peerUrls.length) continue;
         const timeout = transport === "lan" ? getTimeoutMs("peer.lanConnect", 2000) : transport === "p2p" ? getTimeoutMs("peer.p2pConnect", 10000) : getTimeoutMs("peer.relayConnect", 5000);

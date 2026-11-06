@@ -247,7 +247,7 @@ export async function buildPluginPackage({ pluginRoot = process.cwd(), outputDir
       if (!await exists(file)) continue;
       const source = await fs.readFile(file, "utf8");
       let relative = path.relative(path.dirname(file), path.join(sdkTarget, "index.mjs")).replaceAll("\\", "/");
-      if (!relative.startsWith(".")) relative = "./" + relative;
+      if (!relative.startsWith("./") && !relative.startsWith("../")) relative = "./" + relative;
       const changed = source.replace(/(["'])@rabiroute\/plugin-sdk\1/g, (_, quote) => `${quote}${relative}${quote}`);
       if (changed !== source) { sdkUsed = true; await fs.writeFile(file, changed); }
     }

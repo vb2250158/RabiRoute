@@ -1,7 +1,7 @@
 {
   "schemaVersion": 2,
   "id": "io.rabiroute.manager.remote-agent",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "displayName": "远程 Agent",
   "description": "连接远程电脑并管理 Agent 任务",
   "icon": "mdi-lan-connect",

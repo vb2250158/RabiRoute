@@ -63,9 +63,21 @@ Unit and integration tests cover selection, concurrency, receipt recovery, migra
 
 ## Agent completion files
 
+**Include files in automatic delivery** offers three independent options, all enabled by default:
+
+- **Render Markdown attachments as images** renders local `.md` and `.markdown` links into images.
+- **Send image attachments as images** displays PNG, JPEG, GIF, WebP, BMP and AVIF files inline.
+- **Convert HTML to a link** uses the local HTML share plugin (`io.rabiroute.manager.html-shares`) to snapshot `.html` and `.htm` in its stable private plugin storage and sends a RabiLink GUID URL. Referenced local images, stylesheets and scripts are embedded; network resources retain their original URLs. Disabling an option uploads that type as its original file.
+
+Rule parameters are `markdownFilesAsImages`, `imageFilesAsImages` and `htmlFilesAsLinks`: omitted or `"true"` enables conversion, `"false"` disables it. The parent `includeFiles="false"` disables all attachment processing.
+
+Browsers follow the existing **LAN → P2P → Relay** priority. A reachable LAN path wins; transparent encrypted relay is used when direct connections fail. The HTML share plugin owns the snapshot, original GUID and content key in its private storage on the PC. The server only stores GUID-to-PC routing metadata and never caches HTML. The key is in the URL fragment (`#`), which HTTP handshakes do not send. Anyone holding the complete link can view it. The PC must remain online; blocked LAN WebSockets or unavailable P2P cause the next transport to be attempted. Shares currently have no expiry or revocation control.
+
+Both PC and Relay need the sharing protocol update. An outdated Relay, missing connection or conversion failure reports the affected attachment and continues with the others, without silently uploading its original file. Prepared conversions are frozen under the original delivery ID and reuse their original payload and receipt even after the source changes or disappears. Installation and real WAN acceptance remain separate from source verification.
+
 In Role → Automation → Agent Hooks → Event delivery, NapCat (QQ) rules provide **Include files in automatic delivery**, checked by default. Existing rules without `destination.params.includeFiles` also include files; the string `"false"` opts out and `"true"` enables it explicitly. This setting is saved with the role's Hook rules for each Agent.
 
-After sending the full reply, the Hook uploads files referenced by local Markdown links to the same QQ group or private chat. Absolute paths and `file://` links are supported, including URL encoding, angle-bracket paths with spaces, source line suffixes and anchors. Web links and links in code examples are excluded. Each normalized local path is uploaded once per completion target and turn. The existing Route file policy still applies.
+After sending the full reply, the Hook sends attachments referenced by local Markdown links to the same QQ group or private chat according to the conversion options: Markdown and images can be sent as images, and HTML as a share link. Turning off the corresponding conversion, or using another file type, uploads the original file. Absolute paths and `file://` links are supported, including URL encoding, angle-bracket paths with spaces, source line suffixes and anchors. Web links and links in code examples are excluded. Each normalized local path is processed once per completion target and turn. The resulting text, image or file still follows the Route policy for that output kind.
 
 Text parts and files keep independent delivery IDs and persistent receipts. A missing or blocked file does not stop the other files; the Hook reports partial failure. Uncertain or failed receipts remain available for diagnosis and are not blindly resent. The file must be accessible on the Manager computer; a path from another computer does not transfer its contents automatically.
 

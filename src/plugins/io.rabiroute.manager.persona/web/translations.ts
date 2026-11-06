@@ -1,5 +1,10 @@
 export const pluginTranslations = {
   "en": {
+    "投递回复中链接的本地文件；按下方选项处理，同一文件只投递一次。": "Deliver local files linked in the reply using the options below; each file is delivered once.",
+    "MD附件自动转换为图片": "Render Markdown attachments as images",
+    "图片附件转换为图片": "Send image attachments as images",
+    "HTML转换为链接": "Convert HTML to a link",
+    "HTML 保存在此电脑。浏览器通过 RabiLink 获取连接信息，再依次尝试局域网、P2P 和 Relay。服务器不缓存 HTML；持有完整链接的人可查看，电脑需保持在线。关闭对应选项时发送原文件。": "HTML stays on this PC. The browser gets connection details through RabiLink, then tries LAN, P2P and Relay in order. The server does not cache the HTML. Anyone with the complete link can view it while this PC is online. Turning off an option sends the original file.",
     "只限这个 QQ 私聊对象（可选）": "Only this QQ private contact (optional)",
     "选择联系人会限定为该 QQ 号的私聊；清空表示不限私聊对象。": "Selecting a contact restricts this rule to private messages from that QQ ID. Clear it to match any private contact.",
     "连接与标识": "Connection and identifiers",
@@ -556,6 +561,11 @@ export const pluginTranslations = {
     "等待 QA 验收": "Awaiting QA acceptance"
   },
   "ja": {
+    "投递回复中链接的本地文件；按下方选项处理，同一文件只投递一次。": "返信内のローカルリンク先ファイルを下の設定で送信します。同じファイルは一度だけ送信されます。",
+    "MD附件自动转换为图片": "Markdown 添付を画像に変換",
+    "图片附件转换为图片": "画像添付を画像として送信",
+    "HTML转换为链接": "HTML をリンクに変換",
+    "HTML 保存在此电脑。浏览器通过 RabiLink 获取连接信息，再依次尝试局域网、P2P 和 Relay。服务器不缓存 HTML；持有完整链接的人可查看，电脑需保持在线。关闭对应选项时发送原文件。": "HTML はこの PC に保存されます。ブラウザーは RabiLink から接続情報を取得し、LAN、P2P、Relay の順に接続を試します。サーバーは HTML を保存しません。PC がオンラインの間は、完全なリンクを持つ人が閲覧できます。各変換を無効にすると元のファイルを送信します。",
     "只限这个 QQ 私聊对象（可选）": "この QQ 個人チャット相手のみ（任意）",
     "选择联系人会限定为该 QQ 号的私聊；清空表示不限私聊对象。": "連絡先を選ぶと、その QQ ID からの個人メッセージのみが対象になります。空欄なら相手を限定しません。",
     "连接与标识": "接続と識別子",

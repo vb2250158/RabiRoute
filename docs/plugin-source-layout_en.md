@@ -2,7 +2,7 @@
 
 [简体中文](plugin-source-layout.md)
 
-Each plugin has one canonical source folder: `src/plugins/<stable-plugin-id>/`. The current tree contains 42 native Rabi plugins and nine extensions for other hosts. Implementation, configuration definitions, UI, translations, tests, documentation, and assets belong to that folder. Shared configuration, routing, identity, and ledgers continue to use their original owners.
+Each plugin has one canonical source folder: `src/plugins/<stable-plugin-id>/`. The current tree contains 43 native Rabi plugins and nine extensions for other hosts. Implementation, configuration definitions, UI, translations, tests, documentation, and assets belong to that folder. Shared configuration, routing, identity, and ledgers continue to use their original owners.
 
 Native plugins keep `rabi.plugin.json`, `package.json`, owned `src/`, `web/`, `assets/`, adjacent tests, optional `storage-migrations.json`, and bilingual documentation together. Codex, CodeBuddy, DSH, NapCat, and local services retain their ecosystem manifest formats. `plugins/source-catalog.json` references authoritative version files without copying their version values.
 
@@ -69,6 +69,7 @@ The following index points to authoritative manifests. Read their current values
 | `io.rabiroute.manager.desktop-pet` | [source](https://github.com/vb2250158/RabiRoute/tree/main/src/plugins/io.rabiroute.manager.desktop-pet) | [rabi.plugin.json](https://github.com/vb2250158/RabiRoute/blob/main/src/plugins/io.rabiroute.manager.desktop-pet/rabi.plugin.json) |
 | `io.rabiroute.manager.diagnostics` | [source](https://github.com/vb2250158/RabiRoute/tree/main/src/plugins/io.rabiroute.manager.diagnostics) | [rabi.plugin.json](https://github.com/vb2250158/RabiRoute/blob/main/src/plugins/io.rabiroute.manager.diagnostics/rabi.plugin.json) |
 | `io.rabiroute.manager.gateway-runtime` | [source](https://github.com/vb2250158/RabiRoute/tree/main/src/plugins/io.rabiroute.manager.gateway-runtime) | [rabi.plugin.json](https://github.com/vb2250158/RabiRoute/blob/main/src/plugins/io.rabiroute.manager.gateway-runtime/rabi.plugin.json) |
+| `io.rabiroute.manager.html-shares` | [source](https://github.com/vb2250158/RabiRoute/tree/main/src/plugins/io.rabiroute.manager.html-shares) | [rabi.plugin.json](https://github.com/vb2250158/RabiRoute/blob/main/src/plugins/io.rabiroute.manager.html-shares/rabi.plugin.json) |
 | `io.rabiroute.manager.memory-consolidation` | [source](https://github.com/vb2250158/RabiRoute/tree/main/src/plugins/io.rabiroute.manager.memory-consolidation) | [rabi.plugin.json](https://github.com/vb2250158/RabiRoute/blob/main/src/plugins/io.rabiroute.manager.memory-consolidation/rabi.plugin.json) |
 | `io.rabiroute.manager.message-adapter-control` | [source](https://github.com/vb2250158/RabiRoute/tree/main/src/plugins/io.rabiroute.manager.message-adapter-control) | [rabi.plugin.json](https://github.com/vb2250158/RabiRoute/blob/main/src/plugins/io.rabiroute.manager.message-adapter-control/rabi.plugin.json) |
 | `io.rabiroute.manager.message-processing-automation` | [source](https://github.com/vb2250158/RabiRoute/tree/main/src/plugins/io.rabiroute.manager.message-processing-automation) | [rabi.plugin.json](https://github.com/vb2250158/RabiRoute/blob/main/src/plugins/io.rabiroute.manager.message-processing-automation/rabi.plugin.json) |

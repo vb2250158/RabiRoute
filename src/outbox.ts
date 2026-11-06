@@ -162,6 +162,8 @@ export type AgentPlanFeedbackSubmitPort = (
 ) => Promise<AgentPlanFeedbackSubmitResult>;
 
 export type AgentReplyOptions = {
+  /** Published HTML feature owner; ordinary replies have no dependency on it. */
+  publishHtmlAttachment?: (file: string, deliveryId: string) => Promise<string>;
   /** Trusted native service owner; never accepted from request JSON. */
   endpointEgress?: (capability: string) => MessageEndpointEgressProvider | undefined;
   rootDir: string;

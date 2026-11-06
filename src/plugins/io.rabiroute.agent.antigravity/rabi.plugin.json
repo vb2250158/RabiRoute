@@ -1,7 +1,7 @@
 {
   "schemaVersion": 2,
   "id": "io.rabiroute.agent.antigravity",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "displayName": "Antigravity（Google 的 Agent 开发环境）",
   "description": "将消息交给 Antigravity，通过其原有任务入口处理。",
   "icon": "mdi-robot-outline",

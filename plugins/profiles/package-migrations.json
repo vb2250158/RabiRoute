@@ -4,300 +4,342 @@
     {
       "packageId": "io.rabiroute.agent.antigravity",
       "fromVersions": [
-        "1.0.0"
+        "1.0.0",
+        "0.1.1"
       ],
-      "toVersion": "0.1.1"
+      "toVersion": "0.1.2"
     },
     {
       "packageId": "io.rabiroute.agent.astrbot",
       "fromVersions": [
-        "1.0.0"
+        "1.0.0",
+        "0.1.1"
       ],
-      "toVersion": "0.1.1"
+      "toVersion": "0.1.2"
     },
     {
       "packageId": "io.rabiroute.agent.codex",
       "fromVersions": [
-        "1.0.0"
+        "1.0.0",
+        "0.1.1"
       ],
-      "toVersion": "0.1.1"
+      "toVersion": "0.1.2"
     },
     {
       "packageId": "io.rabiroute.agent.copilot-cli",
       "fromVersions": [
-        "1.0.0"
+        "1.0.0",
+        "0.1.1"
       ],
-      "toVersion": "0.1.1"
+      "toVersion": "0.1.2"
     },
     {
       "packageId": "io.rabiroute.agent.device-agent",
       "fromVersions": [
-        "1.0.0"
+        "1.0.0",
+        "0.1.1"
       ],
-      "toVersion": "0.1.1"
+      "toVersion": "0.1.2"
     },
     {
       "packageId": "io.rabiroute.agent.dsh",
       "fromVersions": [
-        "1.0.0"
+        "1.0.0",
+        "0.1.1"
       ],
-      "toVersion": "0.1.1"
+      "toVersion": "0.1.2"
     },
     {
       "packageId": "io.rabiroute.agent.grok-bot",
       "fromVersions": [
-        "1.0.0"
+        "1.0.0",
+        "0.1.1"
       ],
-      "toVersion": "0.1.1"
+      "toVersion": "0.1.2"
     },
     {
       "packageId": "io.rabiroute.agent.marvis",
       "fromVersions": [
-        "1.0.0"
+        "1.0.0",
+        "0.1.1"
       ],
-      "toVersion": "0.1.1"
+      "toVersion": "0.1.2"
     },
     {
       "packageId": "io.rabiroute.agent.workbuddy",
       "fromVersions": [
-        "1.0.0"
+        "1.0.0",
+        "0.1.1"
       ],
-      "toVersion": "0.1.1"
+      "toVersion": "0.1.2"
     },
     {
       "packageId": "io.rabiroute.endpoint.feishu",
       "fromVersions": [
-        "1.0.0"
+        "1.0.0",
+        "0.1.1"
       ],
-      "toVersion": "0.1.1"
+      "toVersion": "0.1.2"
     },
     {
       "packageId": "io.rabiroute.endpoint.heartbeat",
       "fromVersions": [
-        "1.0.0"
+        "1.0.0",
+        "0.1.1"
       ],
-      "toVersion": "0.1.1"
+      "toVersion": "0.1.2"
     },
     {
       "packageId": "io.rabiroute.endpoint.napcat",
       "fromVersions": [
-        "1.0.0"
+        "1.0.0",
+        "0.1.1"
       ],
-      "toVersion": "0.1.1"
+      "toVersion": "0.1.2"
     },
     {
       "packageId": "io.rabiroute.endpoint.rabilink",
       "fromVersions": [
-        "1.0.0"
+        "1.0.0",
+        "0.1.1"
       ],
-      "toVersion": "0.1.1"
+      "toVersion": "0.1.2"
     },
     {
       "packageId": "io.rabiroute.endpoint.speech",
       "fromVersions": [
-        "1.0.0"
+        "1.0.0",
+        "0.1.1"
       ],
-      "toVersion": "0.1.1"
+      "toVersion": "0.1.2"
     },
     {
       "packageId": "io.rabiroute.endpoint.webhook",
       "fromVersions": [
-        "1.0.0"
+        "1.0.0",
+        "0.1.1"
       ],
-      "toVersion": "0.1.1"
+      "toVersion": "0.1.2"
     },
     {
       "packageId": "io.rabiroute.endpoint.wecom",
       "fromVersions": [
-        "1.0.0"
+        "1.0.0",
+        "0.1.1"
       ],
-      "toVersion": "0.1.1"
+      "toVersion": "0.1.2"
     },
     {
       "packageId": "io.rabiroute.endpoint.weixin",
       "fromVersions": [
-        "1.0.0"
+        "1.0.0",
+        "0.1.1"
       ],
-      "toVersion": "0.1.1"
+      "toVersion": "0.1.2"
     },
     {
       "packageId": "io.rabiroute.manager.agent-adapter-catalog",
       "fromVersions": [
         "1.0.0",
-        "1.1.0"
+        "1.1.0",
+        "0.1.1"
       ],
-      "toVersion": "0.1.1"
+      "toVersion": "0.1.2"
     },
     {
       "packageId": "io.rabiroute.manager.agent-communication",
       "fromVersions": [
         "1.0.0",
-        "1.1.0"
+        "1.1.0",
+        "0.1.1"
       ],
-      "toVersion": "0.1.1"
+      "toVersion": "0.1.2"
     },
     {
       "packageId": "io.rabiroute.manager.agent-state-control",
       "fromVersions": [
-        "1.0.0"
+        "1.0.0",
+        "0.1.1"
       ],
-      "toVersion": "0.1.1"
+      "toVersion": "0.1.2"
     },
     {
       "packageId": "io.rabiroute.manager.agent-thread-control",
       "fromVersions": [
-        "1.0.0"
+        "1.0.0",
+        "0.1.1"
       ],
-      "toVersion": "0.1.1"
+      "toVersion": "0.1.2"
     },
     {
       "packageId": "io.rabiroute.manager.bilibili-history",
       "fromVersions": [
-        "1.0.0"
+        "1.0.0",
+        "0.1.1"
       ],
-      "toVersion": "0.1.1"
+      "toVersion": "0.1.2"
     },
     {
       "packageId": "io.rabiroute.manager.core",
       "fromVersions": [
-        "1.0.0"
+        "1.0.0",
+        "0.1.1"
       ],
-      "toVersion": "0.1.1"
+      "toVersion": "0.1.2"
     },
     {
       "packageId": "io.rabiroute.manager.desktop",
       "fromVersions": [
-        "1.0.0"
+        "1.0.0",
+        "0.1.1"
       ],
-      "toVersion": "0.1.1"
+      "toVersion": "0.1.2"
     },
     {
       "packageId": "io.rabiroute.manager.desktop-pet",
       "fromVersions": [
-        "1.0.0"
+        "1.0.0",
+        "0.1.1"
       ],
-      "toVersion": "0.1.1"
+      "toVersion": "0.1.2"
     },
     {
       "packageId": "io.rabiroute.manager.diagnostics",
       "fromVersions": [
-        "1.0.0"
+        "1.0.0",
+        "0.1.1"
       ],
-      "toVersion": "0.1.1"
+      "toVersion": "0.1.2"
     },
     {
       "packageId": "io.rabiroute.manager.gateway-runtime",
       "fromVersions": [
-        "1.0.0"
+        "1.0.0",
+        "0.1.1"
       ],
-      "toVersion": "0.1.1"
+      "toVersion": "0.1.2"
     },
     {
       "packageId": "io.rabiroute.manager.memory-consolidation",
       "fromVersions": [
-        "1.0.0"
+        "1.0.0",
+        "0.1.1"
       ],
-      "toVersion": "0.1.1"
+      "toVersion": "0.1.2"
     },
     {
       "packageId": "io.rabiroute.manager.message-adapter-control",
       "fromVersions": [
-        "1.0.0"
+        "1.0.0",
+        "0.1.1"
       ],
-      "toVersion": "0.1.1"
+      "toVersion": "0.1.2"
     },
     {
       "packageId": "io.rabiroute.manager.message-processing-automation",
       "fromVersions": [
         "1.0.0",
-        "1.0.1"
+        "1.0.1",
+        "0.1.1"
       ],
-      "toVersion": "0.1.1"
+      "toVersion": "0.1.2"
     },
     {
       "packageId": "io.rabiroute.manager.message-processing-control",
       "fromVersions": [
-        "1.0.0"
+        "1.0.0",
+        "0.1.1"
       ],
-      "toVersion": "0.1.1"
+      "toVersion": "0.1.2"
     },
     {
       "packageId": "io.rabiroute.manager.performance",
       "fromVersions": [
-        "1.0.0"
+        "1.0.0",
+        "0.1.1"
       ],
-      "toVersion": "0.1.1"
+      "toVersion": "0.1.2"
     },
     {
       "packageId": "io.rabiroute.manager.persona",
       "fromVersions": [
-        "1.0.0"
+        "1.0.0",
+        "0.1.1"
       ],
-      "toVersion": "0.1.1"
+      "toVersion": "0.1.2"
     },
     {
       "packageId": "io.rabiroute.manager.plan-feedback-delivery",
       "fromVersions": [
-        "1.0.0"
+        "1.0.0",
+        "0.1.1"
       ],
-      "toVersion": "0.1.1"
+      "toVersion": "0.1.2"
     },
     {
       "packageId": "io.rabiroute.manager.rabilink-relay",
       "fromVersions": [
         "1.0.0",
-        "2.0.0"
+        "2.0.0",
+        "0.1.1"
       ],
-      "toVersion": "0.1.1"
+      "toVersion": "0.1.2"
     },
     {
       "packageId": "io.rabiroute.manager.remote-agent",
       "fromVersions": [
-        "1.0.0"
+        "1.0.0",
+        "0.1.1"
       ],
-      "toVersion": "0.1.1"
+      "toVersion": "0.1.2"
     },
     {
       "packageId": "io.rabiroute.manager.route-control",
       "fromVersions": [
-        "1.0.0"
+        "1.0.0",
+        "0.1.1"
       ],
-      "toVersion": "0.1.1"
+      "toVersion": "0.1.2"
     },
     {
       "packageId": "io.rabiroute.manager.speech",
       "fromVersions": [
-        "1.0.0"
+        "1.0.0",
+        "0.1.1"
       ],
-      "toVersion": "0.1.1"
+      "toVersion": "0.1.2"
     },
     {
       "packageId": "io.rabiroute.manager.video",
       "fromVersions": [
-        "1.0.0"
+        "1.0.0",
+        "0.1.1"
       ],
-      "toVersion": "0.1.1"
+      "toVersion": "0.1.2"
     },
     {
       "packageId": "io.rabiroute.manager.wearable-companion",
       "fromVersions": [
-        "1.0.0"
+        "1.0.0",
+        "0.1.1"
       ],
-      "toVersion": "0.1.1"
+      "toVersion": "0.1.2"
     },
     {
       "packageId": "io.rabiroute.manager.xiaomi-home",
       "fromVersions": [
-        "1.0.0"
+        "1.0.0",
+        "0.1.1"
       ],
-      "toVersion": "0.1.1"
+      "toVersion": "0.1.2"
     },
     {
       "packageId": "io.rabiroute.manager.yeyu-gamer",
       "fromVersions": [
-        "1.0.0"
+        "1.0.0",
+        "0.1.1"
       ],
-      "toVersion": "0.1.1"
+      "toVersion": "0.1.2"
     }
   ]
 }

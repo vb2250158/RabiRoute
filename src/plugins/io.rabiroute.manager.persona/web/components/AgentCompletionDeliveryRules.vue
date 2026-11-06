@@ -156,7 +156,7 @@ async function scanProjects() {
         <div class="hook-rule-label">投递至消息端</div>
         <div class="hook-destination-grid">
           <v-select :model-value="rule.destination.channel" :items="AGENT_HOOK_DESTINATIONS" label="消息端类型" hide-details
-            @update:model-value="value => destination(rule, { channel: value || '', params: value === 'napcat' ? { target: 'group', targetId: '', instanceId: '', includeFiles: 'true', renderDiagrams: 'true', renderTables: 'true' } : {} })" />
+            @update:model-value="value => destination(rule, { channel: value || '', params: value === 'napcat' ? { target: 'group', targetId: '', instanceId: '', includeFiles: 'true', markdownFilesAsImages: 'true', imageFilesAsImages: 'true', htmlFilesAsLinks: 'true', renderDiagrams: 'true', renderTables: 'true' } : {} })" />
           <v-select :model-value="rule.destination.gatewayId" :items="routes" label="消息路线" hide-details
             @update:model-value="value => destination(rule, { gatewayId: value || '', params: { ...rule.destination.params, instanceId: '' } })" />
           <template v-if="rule.destination.channel === 'napcat'">
@@ -179,7 +179,16 @@ async function scanProjects() {
         <v-checkbox v-if="rule.destination.channel === 'napcat'"
           :model-value="rule.destination.params.includeFiles !== 'false'" label="自动投递包括文件" hide-details
           @update:model-value="value => params(rule, { includeFiles: value ? 'true' : 'false' })" />
-        <p v-if="rule.destination.channel === 'napcat'" class="section-note">将回复中本地链接指向的文件作为 QQ 附件发送；同一文件只发送一次。</p>
+        <p v-if="rule.destination.channel === 'napcat'" class="section-note">投递回复中链接的本地文件；按下方选项处理，同一文件只投递一次。</p>
+        <div v-if="rule.destination.channel === 'napcat' && rule.destination.params.includeFiles !== 'false'" class="ms-6">
+          <v-checkbox :model-value="rule.destination.params.markdownFilesAsImages !== 'false'" label="MD附件自动转换为图片" hide-details
+            @update:model-value="value => params(rule, { markdownFilesAsImages: value ? 'true' : 'false' })" />
+          <v-checkbox :model-value="rule.destination.params.imageFilesAsImages !== 'false'" label="图片附件转换为图片" hide-details
+            @update:model-value="value => params(rule, { imageFilesAsImages: value ? 'true' : 'false' })" />
+          <v-checkbox :model-value="rule.destination.params.htmlFilesAsLinks !== 'false'" label="HTML转换为链接" hide-details
+            @update:model-value="value => params(rule, { htmlFilesAsLinks: value ? 'true' : 'false' })" />
+          <p class="section-note">HTML 保存在此电脑。浏览器通过 RabiLink 获取连接信息，再依次尝试局域网、P2P 和 Relay。服务器不缓存 HTML；持有完整链接的人可查看，电脑需保持在线。关闭对应选项时发送原文件。</p>
+        </div>
         <p v-if="rule.destination.channel === 'speech'" class="section-note mt-3">任务完成后，使用所选消息路线的角色声线、语音合成与自动播放设置播报结果。启用规则并保存后生效。</p>
       </div>
       </div>

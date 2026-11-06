@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { attachTunnelBroker } from "./lib/rabilink-tunnel-broker.mjs";
+import { createHtmlShareRelay } from "../src/plugins/io.rabiroute.manager.html-shares/relay/rabilink-html-shares.mjs";
 import { createPcPairingService, findPcCredential, assertPcPairingCsrf } from './rabilink-pc-pairing.mjs';
 import { pcPairingPanelHtml, pcPairingBrowserScript } from './rabilink-pc-pairing-ui.mjs';
 import { API_METHODS, apiRequestHeaderAllowed, apiRequestTimingPolicy, apiRequestDiagnosticPath, validateApiRequest } from '../packages/rabi-api-contract/request.mjs';
@@ -5332,9 +5333,26 @@ async function handleAdminApi(req, url, res) {
   return sendJson(res, 404, { code: -1, ok: false, message: "Not found" });
 }
 
+const htmlShareRelay = createHtmlShareRelay({
+  directory: dataDir,
+  authorize: authorizeRabiLinkRequest,
+  target: (appId, deviceId) => {
+    const store = readAppStore();
+    const app = store.apps.find(item => item.id === appId && item.enabled !== false);
+    const worker = store.workers.find(item => item.appId === appId && (item.id === deviceId || item.guid === deviceId));
+    return app && worker && workerOnline(worker) ? { app, worker } : undefined;
+  },
+  signal: async (req, target, id, offer) => {
+    const request = createWebguiRequest(req, target, `/api/html-shares/${id}/offer`, Buffer.from(JSON.stringify(offer)));
+    const finished = await waitForWebguiRequest(request, Math.max(1, request.expiresAt - Date.now()));
+    if (finished.status !== "done" || !finished.response || finished.response.statusCode !== 200) throw new Error("HTML share PC handshake failed.");
+    return JSON.parse(Buffer.from(finished.response.bodyBase64, "base64").toString("utf8"));
+  }
+});
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
   try {
+    if (await htmlShareRelay.handle(req, url, res)) return;
     if (req.method === "OPTIONS") return sendJson(res, 204, {});
     if (url.pathname.startsWith("/manage/") && manageWebguiMatch(url)) {
       return await handleManageWebgui(req, url, res);
@@ -5577,6 +5595,8 @@ const tunnelBroker = attachTunnelBroker(server, (req, url) => {
   return auth.ok && !auth.deviceBinding ? String(auth.app.id) : null;
 });
 server.on("close", () => tunnelBroker.close());
+server.on("upgrade", (req, socket, head) => { htmlShareRelay.upgrade(req, socket, head); });
+server.on("close", () => htmlShareRelay.stop());
 
 server.requestTimeout = relayTimeout("http.request", 300000);
 server.headersTimeout = Math.min(server.requestTimeout, relayTimeout("http.headers", 60000));

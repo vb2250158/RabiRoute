@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 2,
+  "id": "io.rabiroute.manager.html-shares",
+  "version": "0.1.1",
+  "entries": {
+    "manager": {
+      "execution": "in_process",
+      "module": "./manager.mjs"
+    }
+  },
+  "provides": [
+    "manager.html-shares@1"
+  ],
+  "requires": [
+    "host.manager.rabilink-relay@2",
+    "host.manager.operations@1",
+    "manager.rabilink-relay@1",
+    "host.peer-transports@1"
+  ],
+  "optional": [],
+  "permissions": [],
+  "displayName": "HTML分享",
+  "description": "由独立插件保存PC快照并提供局域网/P2P/加密Relay查看；停用不影响原跨设备连接",
+  "icon": "mdi-file-document-outline"
+}

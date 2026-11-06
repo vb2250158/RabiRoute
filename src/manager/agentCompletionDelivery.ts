@@ -14,7 +14,7 @@ import type { PlanItem } from "../roleKnowledge.js";
 import { AGENT_HOOK_EVENTS, agentHookRuleErrors } from "../shared/agentHookAutomation.js";
 import { agentAdapterManifest, isAgentAdapterType, agentAdapterSupportsLifecycleHooks as supportsHooks } from "../shared/agentAdapterCapabilities.js";
 
-import { mermaidDiagramSource } from "../markdownImage.js";
+import { mermaidDiagramSource, renderMarkdownFileToPngPages } from "../markdownImage.js";
 import { planBindingDeliveryIdentity, planBindingMatchesSource, planBindingSourceKey, type PlanBindingSource } from "../shared/planBindingOwner.js";
 
 const execute = promisify(execFile);
@@ -169,6 +169,9 @@ export async function deliverCompletionToEndpoint(rule: AgentCompletionDeliveryR
     images = images.filter(image => !embedded.has(image));
   }
   const payloads = channel === "napcat" ? completionMessagePayloads(text, params.renderDiagrams !== "false", hook.cwd, images, params.renderTables !== "false") : [{ type: "text", text }];
+  const displayedImageFiles = new Set(payloads.flatMap(payload => Array.isArray(payload.segments) ? payload.segments : [])
+    .filter((segment): segment is { type: "image"; path: string } => segment.type === "image" && typeof segment.path === "string")
+    .map(segment => canonicalPath(segment.path)));
   for (const [index, payload] of payloads.entries()) {
     const part: AgentSendRequest = { ...request,
       deliveryId: index === 0 ? deliveryId : `${deliveryId}-part-${index + 1}`,
@@ -187,9 +190,48 @@ export async function deliverCompletionToEndpoint(rule: AgentCompletionDeliveryR
         payload: { type: "file", path: file, fileName: path.basename(file) }
       };
       try {
-        const inspection = await inspectAgentSendDelivery(part, options);
+        const originalInspection = await inspectAgentSendDelivery(part, options);
+        if (originalInspection.state === "completed") {
+          const result = originalInspection.result;
+          if (result.status !== "sent" || !(result.sentFileId || result.sentMessageId)) failures.push(`${path.basename(file)}: ${result.reason || "Attachment receipt was not confirmed."}`);
+          continue;
+        }
+        const preparedPath = path.join(options.rootDir, "data", "completion-attachments", createHash("sha256").update(String(part.deliveryId)).digest("hex") + ".json");
+        let prepared = false;
+        try { part.payload = JSON.parse(await fs.promises.readFile(preparedPath, "utf8")); prepared = true; }
+        catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+        const inspection = prepared ? await inspectAgentSendDelivery(part, options) : originalInspection;
         if (inspection.state === "uncertain") { failures.push(inspection.reason); continue; }
-        const result = inspection.state === "completed" ? inspection.result : await handleAgentSend(part, options);
+        // Inspect before reading or transforming: a confirmed attachment must keep its original receipt.
+        let result = inspection.state === "completed" ? inspection.result : undefined;
+        if (!result && !prepared) {
+          const extension = path.extname(file).toLowerCase();
+          if ([".md", ".markdown"].includes(extension) && params.markdownFilesAsImages !== "false") {
+            const pages = await renderMarkdownFileToPngPages(file);
+            part.payload = { type: "image", segments: [
+              { type: "text", text: path.basename(file) + "\n" },
+              ...pages.map(page => ({ type: "image", url: `base64://${page.toString("base64")}` }))
+            ] };
+          } else if ([".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".avif"].includes(extension) && params.imageFilesAsImages !== "false") {
+            if (displayedImageFiles.has(canonicalPath(file))) continue;
+            if (!(await fs.promises.stat(file)).isFile()) throw new Error("图片附件不是普通文件。");
+            const bytes = await fs.promises.readFile(file);
+            if (images.includes(`base64://${bytes.toString("base64")}`)) continue;
+            const snapshot = preparedPath.replace(/\.json$/, extension);
+            await fs.promises.mkdir(path.dirname(snapshot), { recursive: true });
+            await fs.promises.writeFile(snapshot, bytes);
+            part.payload = { type: "image", path: snapshot };
+          } else if ([".html", ".htm"].includes(extension) && params.htmlFilesAsLinks !== "false") {
+            if (!options.publishHtmlAttachment) throw new Error("HTML 分享服务尚未就绪；请检查 RabiLink 连接或关闭“HTML转换为链接”后发送原文件。");
+            const url = await options.publishHtmlAttachment(file, String(part.deliveryId));
+            part.payload = { type: "text", text: `${path.basename(file)}\n${url}` };
+          }
+          await fs.promises.mkdir(path.dirname(preparedPath), { recursive: true });
+          const tempPath = preparedPath + "." + process.pid + ".tmp";
+          await fs.promises.writeFile(tempPath, JSON.stringify(part.payload));
+          await fs.promises.rename(tempPath, preparedPath);
+        }
+        result ??= await handleAgentSend(part, options);
         if (result.status !== "sent" || !(result.sentFileId || result.sentMessageId)) {
           failures.push(`${path.basename(file)}: ${result.reason || "文件未取得发送回执。"}`);
         }

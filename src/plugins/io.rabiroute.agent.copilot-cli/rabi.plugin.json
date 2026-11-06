@@ -1,7 +1,7 @@
 {
   "schemaVersion": 2,
   "id": "io.rabiroute.agent.copilot-cli",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "displayName": "Copilot CLI",
   "description": "将消息交给本机 Copilot CLI，按所选会话和工作目录处理任务。",
   "icon": "mdi-robot-outline",

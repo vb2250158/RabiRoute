@@ -5,6 +5,7 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { Marked } from "./vendor/marked.esm.js";
 import WebSocket from "ws";
 
@@ -44,7 +45,7 @@ function escapeHtml(value: string): string {
   })[character] || character);
 }
 
-const markdownRenderer = new Marked({
+function createMarkdownRenderer(images?: ReadonlyMap<string, string>, diagrams?: Array<{ id: string; source: string }>) { return new Marked({
   gfm: true,
   breaks: false,
   renderer: {
@@ -54,16 +55,26 @@ const markdownRenderer = new Marked({
     link({ tokens }) {
       return `<span class="link">${this.parser.parseInline(tokens)}</span>`;
     },
-    image({ text }) {
+    image({ text, href }) {
+      const source = images?.get(href);
+      if (source) return `<img src="${escapeHtml(source)}" alt="${escapeHtml(text || "")}" style="max-width:100%;height:auto">`;
       return `<span class="image-placeholder">图片：${escapeHtml(String(text || "未提供说明"))}</span>`;
+    },
+    code(token) {
+      if (diagrams && token.lang?.trim().toLowerCase() === "mermaid") {
+        const id = `attachment-diagram-${diagrams.length}`; diagrams.push({ id, source: token.text });
+        return `<div class="attachment-diagram" id="${id}"></div>`;
+      }
+      return false;
     }
   }
-});
+}); }
+const markdownRenderer = createMarkdownRenderer();
 
-export function markdownImageHtml(markdown: string): string {
-  const content = markdownRenderer.parse(markdown, { async: false });
+export function markdownImageHtml(markdown: string, document?: { images: ReadonlyMap<string, string>; diagrams: Array<{ id: string; source: string }> }): string {
+  const content = (document ? createMarkdownRenderer(document.images, document.diagrams) : markdownRenderer).parse(markdown, { async: false });
   return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src 'none'; font-src 'none'; script-src 'none'; connect-src 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src ${document ? "data:" : "'none'"}; font-src 'none'; script-src 'none'; connect-src 'none'">
 <style>
 *{box-sizing:border-box}html,body{margin:0;width:${IMAGE_WIDTH}px;background:#f4f7fb;color:#172333}
 body{padding:28px;font-family:"Microsoft YaHei","Noto Sans CJK SC","PingFang SC",sans-serif}
@@ -324,14 +335,14 @@ async function captureHtmlPagesOnSocket(socket: WebSocket, html: string, timeout
     if (prepareScript) {
       const rendered = await send("Runtime.evaluate", { expression: prepareScript, awaitPromise: true, returnByValue: true });
       if (rendered.exceptionDetails) throw new Error("Mermaid diagram could not be rendered.");
-      const layout = (rendered.result as { value?: { width?: number; labels?: DiagramLabelBounds[]; flowchart?: boolean } } | undefined)?.value;
+      const layout = (rendered.result as { value?: { width?: number; labels?: DiagramLabelBounds[]; flowchart?: boolean; document?: boolean } } | undefined)?.value;
       const diagramWidth = layout?.width;
       if (typeof diagramWidth === "number") {
         width = Math.ceil(diagramWidth);
         if (!Number.isSafeInteger(width) || width < 1 || width > IMAGE_WIDTH) throw new Error("Invalid diagram viewport width.");
         await send("Emulation.setDeviceMetricsOverride", { width, height: 100, deviceScaleFactor: 1, mobile: false });
         labelBounds = layout?.labels ?? [];
-        paginateFlowchart = paginate && layout?.flowchart === true;
+        paginateFlowchart = paginate && (layout?.flowchart === true || layout?.document === true);
       }
     }
     const metrics = await send("Page.getLayoutMetrics");
@@ -389,14 +400,39 @@ export function renderMarkdownToPngPages(markdown: string): Promise<Buffer[]> {
   return renderMarkdownImages(markdown, true);
 }
 
-async function renderMarkdownImages(markdown: string, paginate: boolean): Promise<Buffer[]> {
+/** File attachments resolve images relative to their own directory, without granting browser network access. */
+export async function renderMarkdownFileToPngPages(file: string): Promise<Buffer[]> {
+  const markdown = await fs.promises.readFile(file, "utf8");
   validateMarkdownSource(markdown);
+  const images = new Map<string, string>();
+  const references = new Set<string>();
+  const parser = new Marked(); parser.walkTokens(parser.lexer(markdown), token => { if (token.type === "image") references.add(token.href); });
+  await Promise.all([...references].map(async reference => {
+    if (/^data:image\//i.test(reference)) { images.set(reference, reference); return; }
+    let bytes: Buffer, mime: string;
+    if (/^https?:\/\//i.test(reference)) {
+      const response = await fetch(reference, { signal: AbortSignal.timeout(markdownImageSettings.timeoutMs) });
+      if (!response.ok) throw new Error(`Markdown 图片加载失败 (${response.status})`);
+      bytes = Buffer.from(await response.arrayBuffer()); mime = response.headers.get("content-type") || "image/png";
+    } else {
+      const resolved = /^file:/i.test(reference) ? fileURLToPath(reference) : path.resolve(path.dirname(file), decodeURIComponent(reference).replace(/^\/([a-z]:[\\/])/i, "$1"));
+      bytes = await fs.promises.readFile(resolved);
+      mime = ({ ".svg": "image/svg+xml", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp", ".avif": "image/avif", ".bmp": "image/bmp" } as Record<string, string>)[path.extname(resolved).toLowerCase()] || "image/png";
+    }
+    images.set(reference, `data:${mime};base64,${bytes.toString("base64")}`);
+  }));
+  return renderMarkdownImages(markdown, true, { images, diagrams: [] });
+}
+
+async function renderMarkdownImages(markdown: string, paginate: boolean, document?: { images: ReadonlyMap<string, string>; diagrams: Array<{ id: string; source: string }> }): Promise<Buffer[]> {
+  // File documents already validate before reading their image resources.
+  if (!document) validateMarkdownSource(markdown);
   const tempRoot = path.resolve(os.tmpdir());
   const profileDir = fs.mkdtempSync(path.join(tempRoot, "rabiroute-markdown-browser-"));
   let browser: ChildProcessWithoutNullStreams | undefined;
   try {
     const diagram = mermaidDiagramSource(markdown);
-    const launched = await launchBrowser(profileDir, diagram !== undefined);
+    const launched = await launchBrowser(profileDir, diagram !== undefined || document !== undefined);
     browser = launched.process;
     if (diagram !== undefined) {
       const bundlePath = path.join(path.dirname(createRequire(import.meta.url).resolve("mermaid")), "mermaid.min.js");
@@ -420,6 +456,19 @@ async function renderMarkdownImages(markdown: string, paginate: boolean): Promis
           return { top: rect.top, bottom: rect.bottom };
         });
         return { width: contentWidth + 32, labels, flowchart: svg.getAttribute("aria-roledescription")?.startsWith("flowchart") === true };
+      })()`;
+      return await captureHtml(launched.port, html, script, paginate);
+    }
+    if (document) {
+      const html = markdownImageHtml(markdown, document);
+      const bundle = document.diagrams.length ? await fs.promises.readFile(path.join(path.dirname(createRequire(import.meta.url).resolve("mermaid")), "mermaid.min.js"), "utf8") : "";
+      const script = bundle + `; (async () => {
+        const diagrams = ${JSON.stringify(document.diagrams)};
+        if (diagrams.length) mermaid.initialize({startOnLoad:false,securityLevel:"strict",theme:"default",fontFamily:"Microsoft YaHei, sans-serif",flowchart:{htmlLabels:false,wrappingWidth:360,useMaxWidth:false}});
+        for (const item of diagrams) { const result = await mermaid.render(item.id + '-svg', item.source); document.getElementById(item.id).innerHTML = result.svg; }
+        await document.fonts.ready;
+        await Promise.all([...document.images].map(image => image.decode()));
+        return {width:${IMAGE_WIDTH},document:true,labels:[...document.querySelectorAll('article > :not(.attachment-diagram), .node, .edgeLabel')].map(element=>{const rect=element.getBoundingClientRect();return {top:rect.top,bottom:rect.bottom};})};
       })()`;
       return await captureHtml(launched.port, html, script, paginate);
     }

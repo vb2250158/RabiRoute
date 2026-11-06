@@ -1,7 +1,7 @@
 {
   "schemaVersion": 2,
   "id": "io.rabiroute.manager.agent-adapter-catalog",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "displayName": "Agent 发现",
   "description": "查找可连接的 Agent 与现有会话",
   "icon": "mdi-account-search",

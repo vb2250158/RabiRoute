@@ -6,6 +6,13 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.8.0 - 2026-11-06
+
+- Add the independent HTML sharing plugin at `0.1.1`, owning its source, Relay/viewer assets, private storage and lifetime. The host adds only a generic transport extension; existing Relay capabilities and mandatory startup requirements retain their contracts.
+- Automatic file delivery can convert Markdown to images, send original image bytes and publish HTML as encrypted links. The three options default on while retaining explicit existing false values. Attachment failures remain local; original receipts are inspected before derived caches.
+- Apply existing connection budgets to stalled handshakes and check the existing Markdown source quota before image I/O; zero remains unlimited.
+- Fix hidden-directory relative imports in independent plugin builds, releasing SDK tooling `1.1.1`. The additive optional HTML publisher parameter advances HostAPI to `1.1.0`. The 42 existing native packages each advance to `0.1.2` because their embedded SDK dependency bytes change, preserving prior same-version publications. The Windows Agent source package independently advances to `0.3.2`.
+
 ## 0.7.3 - 2026-11-06
 
 - Compute the mandatory READY dependency closure from existing capability declarations, then fully prepare and activate those plugins first. Other enabled plugins continue after READY instead of holding up initial startup. Optional plugins do not become required; the actual prepared dependency graph remains the readiness authority.

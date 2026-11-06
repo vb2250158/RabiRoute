@@ -1,3 +1,7 @@
+import { WebSocketServer } from "ws";
+import { TunnelRtc } from "../peerTunnel/rtc.js";
+import { websocketChannel, connectWebsocket } from "../peerTunnel/channel.js";
+import { PEER_TRANSPORT_PRIORITY } from "../shared/peerTunnelContract.js";
 import { joinChildProcess } from "../runtime/joinedChildProcess.js";
 import { MessageEndpointManagers } from "../plugin-runtime-host/messageEndpointManagers.js";
 import { createMessageEndpointHostPorts } from "../runtime/messageEndpointHostPorts.js";
@@ -1648,6 +1652,11 @@ const agentCompletionDelivery = new AgentCompletionDeliveryService({
     if (rule.destination.channel === "napcat" && !instance) throw new Error("目标 QQ 账号未启用或已被移除。");
     const options = {
       endpointEgress: (capability: string) => resolvePublishedPluginService(capability) as import("@rabiroute/plugin-sdk").MessageEndpointEgressProvider | undefined,
+      publishHtmlAttachment: (file: string, id: string) => {
+        const shares = resolvePublishedPluginService("manager.html-shares@1") as { publish(file: string, id: string): Promise<string> } | undefined;
+        if (!shares) throw new Error("HTML share plugin is unavailable; enable its dependencies or disable HTML-to-link conversion to send the original file.");
+        return shares.publish(file, id);
+      },
       rootDir, routeRoot, rolesRoot, publishEvent: publishManagerEvent, speechServiceUrl: speechServiceUrl(),
       runtimes: [{ ...runtime.definition, napcatInstances: instances.map(item => ({ ...item, accessToken: item.accessToken ?? "" })) }]
     };
@@ -1779,7 +1788,10 @@ function admitPeerProxyUpgrade(request: http.IncomingMessage, url: URL, lanAgent
 }
 const peerLanServer = new PeerLanServer({
   peerHandler: (request, url, response) => activePeerRuntime?.handler(request, url, response) ?? false,
-  peerUpgrade: (request, socket, head) => activePeerTunnel?.upgrade(request, socket, head) ?? false,
+  peerUpgrade: (request, socket, head) => {
+    const shares = resolvePublishedPluginService("manager.html-shares@1") as { upgrade(request: http.IncomingMessage, socket: import("node:stream").Duplex, head: Buffer): boolean } | undefined;
+    return shares?.upgrade(request, socket, head) || (activePeerTunnel?.upgrade(request, socket, head) ?? false);
+  },
   port: Number(process.env.RABILINK_PEER_LAN_PORT ?? 0),
   onStatus: status => {
     publishManagerEvent("peer_lan_status", status);
@@ -7419,6 +7431,12 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
   const nativePluginHostPorts = await createMessageEndpointHostPorts();
   const managerFeatureHostPorts = createAgentAdapterHostPorts();
   const managerPluginHostServices: readonly HostService[] = Object.freeze([
+    Object.freeze({ capability: "host.peer-transports@1", value: Object.freeze({
+      priority: PEER_TRANSPORT_PRIORITY,
+      createRtc: () => new TunnelRtc(),
+      createWebSocketServer: (options: Readonly<{ maxPayload: number }>) => new WebSocketServer({ noServer: true, maxPayload: options.maxPayload }),
+      websocketChannel, connectWebsocket
+    }) }),
     Object.freeze({ capability: "host.agent-adapters@1", value: createAgentAdapterHostPorts({
       manager: Object.freeze({
         rootDir,

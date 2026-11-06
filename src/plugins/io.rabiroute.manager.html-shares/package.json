@@ -1,0 +1,42 @@
+{
+  "name": "io.rabiroute.manager.html-shares",
+  "version": "0.1.1",
+  "type": "module",
+  "license": "MIT",
+  "files": [
+    "rabi.plugin.json",
+    "manager.mjs",
+    "hostRuntime.mjs",
+    "manager-runtime.mjs",
+    "manager-runtime.build.json",
+    "src",
+    "relay",
+    "assets",
+    "README.md",
+    "README_en.md",
+    "tests"
+  ],
+  "exports": {
+    "./relay": {
+      "types": "./relay/rabilink-html-shares.d.mts",
+      "import": "./relay/rabilink-html-shares.mjs"
+    }
+  },
+  "peerDependencies": {
+    "@rabiroute/plugin-sdk": "^1.1.0"
+  },
+  "devDependencies": {
+    "@rabiroute/plugin-sdk": "^1.1.1",
+    "@rabiroute/host-api": "^1.1.0"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "scripts": {
+    "build": "rabi-plugin-build"
+  },
+  "rabi": {
+    "manifest": "rabi.plugin.json",
+    "sourceLayout": 1
+  }
+}

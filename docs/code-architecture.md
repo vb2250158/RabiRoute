@@ -638,7 +638,7 @@ Gateway 配置的事实源 Module。
 - `src/pages/OverviewPage.vue`：总览和运行状态。
 - `src/pages/RouteConfigPage.vue`：Route 配置编辑。
 - `src/pages/RuntimeLogPage.vue`：运行日志。
-- `src/pages/PersonaTemplatePage.vue`：角色和模板相关页面；`persona.md` 只在首屏显示最多 420 字的纯文本摘要。
+- `src/plugins/io.rabiroute.manager.persona/web/pages/PersonaTemplatePage.vue`：角色和模板相关页面；`persona.md` 只在首屏显示最多 420 字的纯文本摘要。
 - `src/pages/PersonaDocumentPage.vue`：独立的完整角色 Markdown 阅读页。摘要页和正文页都通过受 WebGUI 访问控制保护的 `/api/roles/:roleId/persona-document` 读取当前角色文件；服务端只允许角色目录根部的单个 Markdown 文件，并限制为 2 MiB。安全 Markdown 渲染复用 `markdownPreview.ts`，链接协议受限、原始 HTML 转义、图片只显示占位。
 - `src/components/PersonaAvatar.vue`：WebGUI 统一头像展示与首字回退；上传和文件安全由 Manager 负责。
 - `src/utils/gatewayHelpers.ts`：前端配置辅助函数。
@@ -940,3 +940,5 @@ LanAgentRegistry 在既有已鉴权 WebSocket 上转发 terminal 管理命令，
 ## 角色配置与生命周期
 
 角色是独立对象：角色配置和计划与记忆按角色 ID 寻址，路由配置仅保存消息端、Agent 与角色引用。独立配置接口和归档命令由 `src/plugins/io.rabiroute.manager.persona/src/manager/roleConfigurationRoutes.ts` 拥有，`src/roleLifecycle.ts` 统一工作准入；客户端的 `roleStore.ts` 与路由草稿分开。详见[角色配置架构](role-centric-architecture.md)。
+
+HTML 分享由 `src/plugins/io.rabiroute.manager.html-shares/` 独立保存快照、登记 API 并管理连接生命周期。宿主通过 `host.peer-transports@1` 提供已有 RTC/channel 实现，业务通过 `manager.html-shares@1` 发布；原 Relay 服务与其能力合同不变。缺少新扩展点仅使 HTML 插件等待依赖，普通消息、图片和原跨设备连接继续使用。正式快照位于插件稳定私有命名空间，原投递回执仍归原 owner。

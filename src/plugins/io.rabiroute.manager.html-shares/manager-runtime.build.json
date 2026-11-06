@@ -1,0 +1,6 @@
+{
+  "exports": [{ "source": "src/plugins/io.rabiroute.manager.html-shares/hostRuntime.mjs", "name": "createOwnedRuntime" }],
+  "ownedPrefixes": ["src/plugins/io.rabiroute.manager.html-shares/"],
+  "ownedSources": ["src/plugins/io.rabiroute.manager.html-shares/src/manager/completionHtmlShares.ts", "src/plugins/io.rabiroute.manager.html-shares/src/manager/shareTransports.ts"],
+  "packageId": "io.rabiroute.manager.html-shares"
+}

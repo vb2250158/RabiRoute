@@ -231,3 +231,21 @@ test("standalone runtime copying excludes development tests without changing pub
   await copyPluginPublicSource(f.source, exported);
   for (const name of [...blocked, ...publicFiles]) assert.equal(await fs.readFile(path.join(exported, name), "utf8"), name);
 });
+
+
+test("runtime entries load the embedded SDK from root and nested entry folders", async t => {
+  const f = await fixture(t);
+  const manifest = JSON.parse(await fs.readFile(path.join(f.source, "rabi.plugin.json"), "utf8"));
+  manifest.entries.gateway = { execution: "in_process", module: "./nested/gateway.mjs" };
+  await fs.mkdir(path.join(f.source, "nested"));
+  const entry = 'import { definePlugin } from "@rabiroute/plugin-sdk"; export const activate = definePlugin({ activate() { return "embedded SDK loaded"; } }).activate;\n';
+  await fs.writeFile(path.join(f.source, "manager.mjs"), entry);
+  await fs.writeFile(path.join(f.source, "nested/gateway.mjs"), entry);
+  await fs.writeFile(path.join(f.source, "rabi.plugin.json"), JSON.stringify(manifest));
+  await buildPluginPackage({ pluginRoot: f.source, outputDirectory: f.output, hostApiPath: f.hostApiPath });
+  for (const name of ["manager.mjs", "nested/gateway.mjs"]) {
+    const module = await import(pathToFileURL(path.join(f.output, name)).href);
+    assert.equal(module.activate(), "embedded SDK loaded");
+  }
+  assert.match(await fs.readFile(path.join(f.output, "manager.mjs"), "utf8"), /["']\.\/\.rabi-deps\/plugin-sdk\/index\.mjs["']/);
+});

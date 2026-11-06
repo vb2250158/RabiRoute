@@ -2,7 +2,7 @@
 
 [English](plugin-source-layout_en.md)
 
-每个插件只有一个源码目录：`src/plugins/<稳定插件 ID>/`。当前包含 42 个 Rabi 原生插件和 9 个其他宿主的扩展。插件实现、配置定义、界面、翻译、测试、文档和资源归该目录；共享配置、路由、身份和账本沿原拥有者复用，不复制到插件里。
+每个插件只有一个源码目录：`src/plugins/<稳定插件 ID>/`。当前包含 43 个 Rabi 原生插件和 9 个其他宿主的扩展。插件实现、配置定义、界面、翻译、测试、文档和资源归该目录；共享配置、路由、身份和账本沿原拥有者复用，不复制到插件里。
 
 ```text
 src/plugins/<id>/
@@ -19,7 +19,7 @@ Codex、CodeBuddy、DSH、NapCat 与本地服务保留各自正式 manifest 格�
 
 ## 版本与构建
 
-宿主在架构、扩展点或启动合同变化时升级。插件功能、配置和资源变化递增自己的版本；本轮新原生插件基线为 `0.1.1`。已有公开扩展继续各自版本序列，不覆盖旧版同号内容。能力合同的主版本与包版本分别维护。
+宿主在架构、扩展点或启动合同变化时升级。插件功能、配置和资源变化递增自己的版本；新原生插件从 `0.1.1` 开始，后续按各自版本递增。已有公开扩展继续各自版本序列，不覆盖旧版同号内容。能力合同的主版本与包版本分别维护。
 
 ```sh
 # 仅递增指定插件，同时更新自己的正式 manifest、npm 元数据和精确装配引用
@@ -81,6 +81,7 @@ Web 入口由插件的 `package.json.rabi.webSource` 声明，工作区 Vite 构
 | `io.rabiroute.manager.desktop-pet` | [source](https://github.com/vb2250158/RabiRoute/tree/main/src/plugins/io.rabiroute.manager.desktop-pet) | [rabi.plugin.json](https://github.com/vb2250158/RabiRoute/blob/main/src/plugins/io.rabiroute.manager.desktop-pet/rabi.plugin.json) |
 | `io.rabiroute.manager.diagnostics` | [source](https://github.com/vb2250158/RabiRoute/tree/main/src/plugins/io.rabiroute.manager.diagnostics) | [rabi.plugin.json](https://github.com/vb2250158/RabiRoute/blob/main/src/plugins/io.rabiroute.manager.diagnostics/rabi.plugin.json) |
 | `io.rabiroute.manager.gateway-runtime` | [source](https://github.com/vb2250158/RabiRoute/tree/main/src/plugins/io.rabiroute.manager.gateway-runtime) | [rabi.plugin.json](https://github.com/vb2250158/RabiRoute/blob/main/src/plugins/io.rabiroute.manager.gateway-runtime/rabi.plugin.json) |
+| `io.rabiroute.manager.html-shares` | [source](https://github.com/vb2250158/RabiRoute/tree/main/src/plugins/io.rabiroute.manager.html-shares) | [rabi.plugin.json](https://github.com/vb2250158/RabiRoute/blob/main/src/plugins/io.rabiroute.manager.html-shares/rabi.plugin.json) |
 | `io.rabiroute.manager.memory-consolidation` | [source](https://github.com/vb2250158/RabiRoute/tree/main/src/plugins/io.rabiroute.manager.memory-consolidation) | [rabi.plugin.json](https://github.com/vb2250158/RabiRoute/blob/main/src/plugins/io.rabiroute.manager.memory-consolidation/rabi.plugin.json) |
 | `io.rabiroute.manager.message-adapter-control` | [source](https://github.com/vb2250158/RabiRoute/tree/main/src/plugins/io.rabiroute.manager.message-adapter-control) | [rabi.plugin.json](https://github.com/vb2250158/RabiRoute/blob/main/src/plugins/io.rabiroute.manager.message-adapter-control/rabi.plugin.json) |
 | `io.rabiroute.manager.message-processing-automation` | [source](https://github.com/vb2250158/RabiRoute/tree/main/src/plugins/io.rabiroute.manager.message-processing-automation) | [rabi.plugin.json](https://github.com/vb2250158/RabiRoute/blob/main/src/plugins/io.rabiroute.manager.message-processing-automation/rabi.plugin.json) |
