@@ -11,6 +11,8 @@ import { LanAgentAuthority } from "./lanAgentAuthority.js";
 import { RabiGlobalConfigStore } from "./globalConfig.js";
 import { createManagerClient } from "../../apps/rabi-agent/lib/manager-client.mjs";
 
+import { pluginSourceVersionForTests } from "./diagnosticsCandidate.fixture.js";
+
 const workerArgument = "--capability-isolation-fixture";
 const readyPrefix = "RABIROUTE_MANAGER_READY:";
 
@@ -60,7 +62,7 @@ if (process.argv.includes(workerArgument)) {
     const failContract = fixtureApiContract({ operationId: "fixture.isolation.fail", pathTemplate: "/api/isolation/fail", request: noBody });
     const definitions = [
       { name: "diagnostics", provides: "fixture.diagnostics@1", requires: ["host.manager.operations@1", "host.manager.core@2"], source: `
-import { createImplementation, hostModules } from ${JSON.stringify(new URL("../../dist/plugins/packages/io.rabiroute.manager.core/0.1.1/manager-runtime.mjs", import.meta.url).href)};
+import { createImplementation, hostModules } from ${JSON.stringify(new URL(`../../dist/plugins/packages/io.rabiroute.manager.core/${pluginSourceVersionForTests("io.rabiroute.manager.core")}/manager-runtime.mjs`, import.meta.url).href)};
 export async function activate(context) {
   const host = context.services.require('host.manager.operations@1');
   const shared = context.services.require('host.manager.core@2');

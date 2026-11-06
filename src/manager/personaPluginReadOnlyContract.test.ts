@@ -23,7 +23,7 @@ test("control plane has no synchronization owner or retired peer permission file
   assert.doesNotMatch(source, /persona[-_]?sync/i);
   assert.doesNotMatch(source, /readRabiPeerAccess|peer-access\.json/);
   assert.match(source, /peerHandler:.*activePeerRuntime\?\.handler/);
-  assert.match(source, /peerUpgrade:.*activePeerTunnel\?\.upgrade/);
+  assert.match(source, /peerUpgrade:\s*\([^)]*\)\s*=>\s*\{[\s\S]*?return shares\?\.upgrade\(request, socket, head\) \|\| \(activePeerTunnel\?\.upgrade\(request, socket, head\) \?\? false\)/);
   assert.match(source, /activePeerTunnel\?\.startLanDiscovery/);
   assert.match(source, /get peerLanServer\(\)\s*\{\s*return peerLanServer;\s*\}/);
 });

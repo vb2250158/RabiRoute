@@ -1,3 +1,4 @@
+import { recordDataMutationAudit } from "../observability/dataMutationAudit.js";
 import { getTimeoutMs } from "../shared/timeoutSettings.js";
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -230,6 +231,7 @@ export async function deliverCompletionToEndpoint(rule: AgentCompletionDeliveryR
           const tempPath = preparedPath + "." + process.pid + ".tmp";
           await fs.promises.writeFile(tempPath, JSON.stringify(part.payload));
           await fs.promises.rename(tempPath, preparedPath);
+          recordDataMutationAudit({ group: "agent.completion", event: "completion_attachment_prepared", owner: "agentCompletionDelivery", action: "write", target: { type: "completion-attachment", id: String(part.deliveryId) }, dataSource: { kind: "file", id: preparedPath }, outcome: "committed" });
         }
         result ??= await handleAgentSend(part, options);
         if (result.status !== "sent" || !(result.sentFileId || result.sentMessageId)) {

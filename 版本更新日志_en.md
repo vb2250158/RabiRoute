@@ -6,6 +6,13 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.8.5 - 2026-11-07
+
+- Record native mutation metadata after attachment snapshots and HTML share intents commit, excluding content, share keys and tokens; independently advance HTML sharing to `0.1.2`. Align package/release fixtures with selected versions, required resources and the Windows PowerShell module environment.
+- Bind test candidates to each plugin manifest version instead of retired 0.1.1 paths; retain activation, failure isolation, identity, unload and real CLI verification assertions.
+- Validate the per-plan isolation shipped in 0.7.2: valid idempotent creation and reads remain available while background role recovery hangs, with READY ordering, health and normal shutdown still checked.
+- Check the existing WebSocket upgrade order from HTML sharing to the computer-connection fallback without changing runtime permissions, connection configuration or user data.
+
 ## 0.8.4 - 2026-11-07
 
 - Ordinary point reads can reuse physical membership from an already loaded plan catalog, avoiding repeated enumeration and per-file stat calls. Actual plans, receipts, feedback and attachments stay on the original read worker. Busy, changed or unavailable catalogs retain normal asynchronous reads, without initialization waits, new query admission conditions or background polling.

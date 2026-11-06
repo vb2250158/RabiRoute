@@ -70,6 +70,7 @@ test("route-control package includes the Manager and independently generated Web
   try {
     const pluginId = "io.rabiroute.manager.route-control";
     const source = path.resolve(import.meta.dirname, "../src/plugins", pluginId);
+    const version = JSON.parse(await fs.readFile(path.join(source, "rabi.plugin.json"), "utf8")).version;
     const packageRoot = path.join(root, "src", "plugins", pluginId);
     await fs.cp(source, packageRoot, { recursive: true });
     // The real owned runtime imports public Host declarations; preserve those inputs
@@ -93,10 +94,10 @@ test("route-control package includes the Manager and independently generated Web
     await fs.cp(path.resolve(import.meta.dirname, "../plugins/contracts/plugin-sdk"), path.join(root, "plugins", "contracts", "plugin-sdk"), { recursive: true });
     await writeJson(path.join(root, "plugins", "profiles", "desktop.json"), {
       schemaVersion: 2, readyRequires: [],
-      instances: [{ id: "manager:route-control", package: pluginId, version: "0.1.1", enabled: true, config: {}, grants: [] }]
+      instances: [{ id: "manager:route-control", package: pluginId, version, enabled: true, config: {}, grants: [] }]
     });
     const built = await buildPluginPackages(root);
-    const output = path.join(built.packagesRoot, pluginId, "0.1.1");
+    const output = path.join(built.packagesRoot, pluginId, version);
     const manifest = JSON.parse(await fs.readFile(path.join(output, "rabi.plugin.json"), "utf8"));
     assert.deepEqual(Object.keys(manifest.entries), ["manager", "web"]);
     assert.deepEqual(manifest.entries.web, { execution: "in_process", module: "./web/client.mjs" });

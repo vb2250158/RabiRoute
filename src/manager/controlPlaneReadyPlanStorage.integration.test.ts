@@ -7,7 +7,7 @@ import path from "node:path";
 import test, { before } from "node:test";
 import { fileURLToPath } from "node:url";
 // Register this owner's cleanup on the test file, rather than inside its before-hook.
-import { pluginPackagesCandidateForTests } from "./diagnosticsCandidate.fixture.js";
+import { pluginPackagesCandidateForTests, pluginSourceVersionForTests } from "./diagnosticsCandidate.fixture.js";
 import type { PlanStorageStartupGateSummary } from "./planStorageStartupGate.js";
 
 const WORKER_ARGUMENT = "--rabiroute-hung-plan-storage-worker";
@@ -108,7 +108,7 @@ if (process.argv.includes(WORKER_ARGUMENT)) {
     pluginCandidateRoot = await pluginPackagesCandidateForTests(["core", "persona"].map(name => `io.rabiroute.manager.${name}`));
   }, { timeout: 30_000 });
   for (const partial of [false, true]) {
-  test(`Manager emits structured READY before hung plan storage and permits only recovered roles (partial=${partial})`, { timeout: 45_000 }, async t => {
+  test(`Manager emits structured READY before hung plan storage without role-wide mutation gates (partial=${partial})`, { timeout: 45_000 }, async t => {
     const fixtureStartedAt = Date.now();
     const timings: string[] = [];
     const fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-manager-ready-plan-storage-"));
@@ -146,7 +146,7 @@ if (process.argv.includes(WORKER_ARGUMENT)) {
       readyRequires: ["manager.persona@1"],
       instances: pluginNames.map(name => ({
         id: `manager:${name}`, package: `io.rabiroute.manager.${name}`,
-        version: "0.1.1", enabled: true, config: {}, grants: []
+        version: pluginSourceVersionForTests(`io.rabiroute.manager.${name}`), enabled: true, config: {}, grants: []
       }))
     }, null, 2)}\n`, "utf8");
 
@@ -240,15 +240,18 @@ if (process.argv.includes(WORKER_ARGUMENT)) {
     assert.equal(healthPayload.health.businessReady, false);
     assert.equal(healthPayload.backgroundLifecycle.planStorageStartup.state, "running");
 
-    mark("unready-plan-mutation");
+    mark("independent-plan-mutation");
     const planMutation = await fetch(`${ready.baseUrl}/api/roles/YeYu/plans`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
-      body: "{}"
+      headers: { "content-type": "application/json", "Idempotency-Key": randomUUID() },
+      body: JSON.stringify({ title: "Independent plan during hung recovery", focus: "Per-plan isolation", keywords: ["startup"], status: "分析中", currentStepId: "verify", steps: [{ id: "verify", title: "Verify independent storage" }] })
     });
     const planMutationPayload = await planMutation.json() as Record<string, unknown>;
-    assert.equal(planMutation.status, 503, JSON.stringify(planMutationPayload));
-    assert.equal(planMutationPayload.error, "PLAN_STORAGE_STARTUP_UNAVAILABLE");
+    assert.equal(planMutation.status, 201, JSON.stringify(planMutationPayload));
+    const independentPlans = await fetch(`${ready.baseUrl}/api/roles/YeYu/plans`);
+    const independentList = await independentPlans.json() as { data: Array<{ title: string }> };
+    assert.equal(independentPlans.status, 200, JSON.stringify(independentList));
+    assert.ok(independentList.data.some(plan => plan.title === "Independent plan during hung recovery"));
 
     if (partial) {
       mark("ready-plan-create");

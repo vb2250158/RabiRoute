@@ -7,7 +7,7 @@ import path from "node:path";
 import test, { before } from "node:test";
 import { fileURLToPath } from "node:url";
 // Register this owner's cleanup on the test file, rather than inside its before-hook.
-import { pluginPackagesCandidateForTests } from "./diagnosticsCandidate.fixture.js";
+import { pluginPackagesCandidateForTests, pluginSourceVersionForTests } from "./diagnosticsCandidate.fixture.js";
 
 const WORKER_ARGUMENT = "--rabiroute-scan-history-worker";
 const SCAN_READ_MARKER = "RABIROUTE_TEST_MAIN_THREAD_HISTORY_READ";
@@ -135,7 +135,7 @@ if (process.argv.includes(WORKER_ARGUMENT)) {
       readyRequires: ["manager.message-adapter-control@1", "endpoint.webhook@1"],
       instances: SCAN_PLUGIN_IDS.map(pluginId => ({
         id: pluginId.replace(/^io\.rabiroute\.(manager|endpoint)\./, "$1:"), package: pluginId,
-        version: "0.1.1", enabled: true, config: {}, grants: []
+        version: pluginSourceVersionForTests(pluginId), enabled: true, config: {}, grants: []
       }))
     }, null, 2)}\n`, "utf8");
 

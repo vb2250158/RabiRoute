@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
+import { recordDataMutationAudit } from "@rabiroute/host-api/observability/dataMutationAudit";
 import { getTimeoutMs } from "@rabiroute/host-api/shared/timeoutSettings";
 import type { ApiOperationDefinition, ApiUpgradeDefinition, ApiUpgradeInput } from "@rabiroute/plugin-sdk";
 import type { HtmlShareTransports, HtmlShareChannel, HtmlShareRtc, HtmlShareSocketServer } from "./shareTransports.js";
@@ -102,6 +103,7 @@ export class CompletionHtmlShares {
       await fs.writeFile(path.join(folder, "share.json"), JSON.stringify(share));
       // The original delivery id keeps the same UUID/key after a retry or process restart.
       await fs.writeFile(index, JSON.stringify(share), { flag: "wx" });
+      recordDataMutationAudit({ group: "plugin.html-shares", event: "html_share_snapshot_prepared", owner: "CompletionHtmlShares", action: "create", target: { type: "html-share-intent", id: intent }, dataSource: { kind: "file", id: index }, outcome: "committed" });
     }
     const url = relay.url.replace(/\/+$/, "");
     const response = await fetch(url + "/worker/html-shares", {

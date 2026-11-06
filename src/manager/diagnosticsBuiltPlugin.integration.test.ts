@@ -8,8 +8,9 @@ import test, { before } from "node:test";
 import { GenerationRuntime } from "../plugin-kernel/generationRuntime.js";
 import { loadPluginProfile, PluginPackageCatalog } from "../plugin-kernel/profile.js";
 import { ManagerPluginRouteRegistry, createManagerApiOperationsService } from "./managerPluginRouteRegistry.js";
-import { diagnosticsCandidateForTests } from "./diagnosticsCandidate.fixture.js";
+import { diagnosticsCandidateForTests, pluginSourceVersionForTests } from "./diagnosticsCandidate.fixture.js";
 
+const diagnosticsVersion = pluginSourceVersionForTests("io.rabiroute.manager.diagnostics");
 let preparedSource: string;
 before(async () => { preparedSource = await diagnosticsCandidateForTests("io.rabiroute.manager.diagnostics"); }, { timeout: 30_000 });
 
@@ -20,7 +21,7 @@ test("built diagnostics package survives replacement and failed candidate, drain
   await fs.cp(source, root, { recursive: true });
   const packageRoot = path.join(root, "packages");
   const profilePath = path.join(root, "profile.json");
-  const instance = { id: "manager:diagnostics", package: "io.rabiroute.manager.diagnostics", version: "0.1.1", enabled: true, config: {}, grants: [] };
+  const instance = { id: "manager:diagnostics", package: "io.rabiroute.manager.diagnostics", version: diagnosticsVersion, enabled: true, config: {}, grants: [] };
   const profile = (instances: unknown[]) => fs.writeFile(profilePath, JSON.stringify({ schemaVersion: 2, readyRequires: [], instances }));
   const registry = new ManagerPluginRouteRegistry();
   let ownerValue = "first";

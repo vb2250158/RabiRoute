@@ -81,6 +81,8 @@ test("Windows release explicitly includes required discovery and Agent transport
       "scripts/lib/copy-installed-host.ps1",
       "scripts/lib/copy-agent-native-assets.ps1",
       "scripts/rabilink-relay-runtime-files.json",
+      "scripts/lib/rabilink-relay-runtime-paths.ps1",
+      "scripts/lib/rabilink-relay-runtime-paths.json",
       "docs/aiui-agent-profile-http.md",
       "docs/aiui-agent-profile-http_en.md",
       "docs/rabilink-knowledge-operation-receipts.md",
@@ -206,7 +208,7 @@ test("Windows PowerShell 5.1 copies runtime sources with zero, one and multiple 
     const result = spawnSync(shell, ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", probe,
       "-Release", fileURLToPath(new URL("./build-windows-release.ps1", import.meta.url)),
       "-Helper", fileURLToPath(new URL("./lib/release-tracked-manifest.ps1", import.meta.url)), "-Fixture", root, "-Result", resultFile],
-    { encoding: "utf8", windowsHide: true, env: { ...process.env, PATH: path.dirname(process.execPath) + path.delimiter + process.env.PATH } });
+    { encoding: "utf8", windowsHide: true, env: Object.fromEntries(Object.entries({ ...process.env, PATH: path.dirname(process.execPath) + path.delimiter + process.env.PATH }).filter(([key]) => key.toLowerCase() !== "psmodulepath")) });
     assert.equal(result.status, 0, result.stdout + result.stderr);
     assert.deepEqual(JSON.parse(fs.readFileSync(resultFile, "utf8")), [0, 1, 3]);
   } finally { assert.equal(path.dirname(root), path.resolve(os.tmpdir())); fs.rmSync(root, { recursive: true, force: true }); }

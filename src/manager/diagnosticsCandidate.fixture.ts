@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -33,4 +34,12 @@ export function pluginPackagesCandidateForTests(packageIds: readonly string[]): 
     await buildPluginPackages(repository, { packages: JSON.parse(selected), outputDirectory: ownedRoot });
     return ownedRoot;
   })();
+}
+
+/** Bind fixture selections to the exact independently versioned source package. */
+export function pluginSourceVersionForTests(packageId: string): string {
+  if (!/^io\.rabiroute\.[a-z0-9.-]+$/.test(packageId)) throw new Error("Invalid fixture package ID.");
+  const manifest = JSON.parse(readFileSync(new URL(`../plugins/${packageId}/rabi.plugin.json`, import.meta.url), "utf8"));
+  if (manifest.id !== packageId || !/^\d+\.\d+\.\d+$/.test(manifest.version)) throw new Error("Invalid source package identity.");
+  return manifest.version;
 }
