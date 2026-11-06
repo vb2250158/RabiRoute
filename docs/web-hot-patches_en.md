@@ -7,7 +7,7 @@ Status: experimental. Covers WebGUI, static resources, user guides compiled into
 ## Pages and versions
 
 - Each content-addressed candidate contains the Web output, documentation and plugin entry mapping. Root HTML `data-rabi-web-release` and `x-rabiroute-web-revision` identify that candidate.
-- JS, CSS, fonts, images and lazy resources use `/_rabiroute/web/<hash>/web/...`. Module catalog requests carry `webRelease=<hash>`. Missing matching modules fail closed rather than mixing releases.
+- The page and its fixed plugins load JS, CSS, fonts, images and lazy resources from `/_rabiroute/web/<hash>/web/...`. Module catalog requests carry `webRelease=<hash>`. A matching package and version uses that Web revision; other loaded plugins retain their native revision and entry through the existing plugin resource reader. An independently updated plugin does not fail the whole catalog or impersonate another version's page resources.
 - New or deliberately refreshed pages use the current release. Existing pages retain the old release. Publication does not force-refresh Vue instances, resubmit forms or restart business consumers.
 - Root HTML is not cached; versioned assets use immutable caching. Legacy `/assets/...` and unversioned module routes serve the installed baseline solely for pages opened before the upgrade. They are not a publication mechanism. Their retirement condition is closure or refresh of all pre-upgrade pages; new root HTML must reference versioned assets only.
 - Rollback changes subsequent page selection, not committed business data. Backend source compatibility is documented separately in [source hot patches](source-hot-patches_en.md).

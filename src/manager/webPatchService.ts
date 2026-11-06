@@ -288,7 +288,7 @@ export class WebPatchService {
     if (!revision) return modules;
     const manifest = await this.compatible(revision);
     return modules.map(module => {
-      if (!manifest.modules.some(entry => entry.pluginId === module.pluginId && entry.version === module.version)) throw new Error("Web release has no compatible module entry.");
+      if (!manifest.modules.some(entry => entry.pluginId === module.pluginId && entry.version === module.version)) return module;
       return { ...module, rev: revision, entryPath: "web/client.mjs" };
     });
   }

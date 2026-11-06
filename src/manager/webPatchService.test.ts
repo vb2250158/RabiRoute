@@ -15,6 +15,7 @@ import { createWebguiStaticOperations } from "./webguiStaticOperations.js";
 import { createCorePublicOperations, type CorePublicOperationsContext } from "./corePublicOperations.js";
 import { ManagerPluginRouteRegistry } from "./managerPluginRouteRegistry.js";
 import { handleWebPatchApi } from "./webPatchRoutes.js";
+import { pluginCatalogFixture } from "./pluginCatalogOperations.fixture.js";
 
 const identity: WebPatchIdentity = { applicationGenerationId: "application", managerInstanceId: "manager", pluginGenerationId: "plugins" };
 
@@ -434,9 +435,42 @@ test("rename committed before an error still returns the one persisted outcome",
   assert.equal(sample.service.status().revision, 1);
 });
 
-test("missing versioned module never falls back to a different release", async context => {
-  const sample = await fixture(context);
-  await assert.rejects(sample.service.modules([{ id: "other", pluginId: "other", version: "1", rev: "legacy", entryPath: "web/client.mjs", instances: [] }], sample.service.status().active), /no compatible/);
+test("a Web release maps matching modules while independent native modules retain their descriptors and reads", async context => {
+  const sample = await fixture(context), revision = sample.service.status().active!;
+  const matched = { id: "web-example", pluginId: "example", version: "1", rev: "native-example-revision", entryPath: "web/client.mjs", instances: [] };
+  const app = await pluginCatalogFixture(context, { configure(owner) {
+    const native = owner.webModules!;
+    owner.webModules = {
+      list: async (release, invocation) => sample.service.modules([matched, ...await native.list(undefined, invocation)], release),
+      read: async (id, rev, file, invocation) => await sample.service.module([matched, ...await native.list(undefined, invocation)], id, rev, file)
+        ?? await native.read(id, rev, file, invocation)
+    };
+  } });
+  const response = await app.fetch(`/api/plugins/modules?webRelease=${revision}`);
+  assert.equal(response.status, 200);
+  const listed = (await response.json()).data.modules;
+  const native = app.modules.list()[0]!;
+  assert.equal(listed.length, 2);
+  assert.deepEqual(listed[0], { ...matched, rev: revision, entryPath: "web/client.mjs" });
+  assert.deepEqual(listed[1], native);
+  const input = [matched, native];
+  const mapped = await sample.service.modules(input, revision);
+  assert.equal(mapped[1], native);
+  assert.equal(matched.rev, "native-example-revision");
+  assert.deepEqual(await sample.service.modules(input), input);
+
+  const pinned = await app.fetch(`/api/plugins/modules/${matched.id}/${revision}/web/client.mjs`);
+  assert.equal(pinned.status, 200);
+  assert.match(await pinned.text(), new RegExp(`/_rabiroute/web/${revision}/web/assets/module.js`));
+  const prefix = `/api/plugins/modules/${native.id}/${native.rev}/`;
+  const original = await app.fetch(prefix + native.entryPath);
+  assert.equal(original.status, 200);
+  assert.deepEqual(Buffer.from(await original.arrayBuffer()), app.source);
+  assert.equal((await app.fetch(prefix + "web/missing.mjs")).status, 404);
+  assert.equal((await app.fetch(`/api/plugins/modules/${native.id}/invalid-revision/${native.entryPath}`)).status, 404);
+  assert.equal((await app.fetch(`/api/plugins/modules/${native.id}/${"b".repeat(64)}/${native.entryPath}`)).status, 404);
+  assert.equal(await sample.service.module(input, matched.id, "invalid-revision", "web/client.mjs"), undefined);
+  await assert.rejects(sample.service.modules(input, "invalid-revision"));
 });
 
 test("continuous HTTP reads remain available during publication; old assets and HEAD stay valid", async context => {

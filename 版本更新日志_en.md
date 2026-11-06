@@ -6,6 +6,10 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.8.2 - 2026-11-07
+
+- Fix the Web plugin catalog failing the whole page when an independently updated plugin is absent from the selected Web release. Matching plugins retain that release's fixed assets; other loaded plugins retain their native revision and entry, served through the existing plugin resource reader. Package and page revisions own their respective resources, without new APIs or usage restrictions.
+
 ## 0.8.1 - 2026-11-07
 
 ### io.rabiroute.agent.codex 0.1.3
