@@ -327,7 +327,8 @@ test("the actual thread plugin caller API uses the factory read authority and th
   t.after(async () => { server.closeAllConnections(); await Promise.all(disposers.map(dispose => dispose())); await new Promise<void>(resolve => server.close(() => resolve())); });
   const base = `http://127.0.0.1:${(server.address() as { port: number }).port}/api/agent/deliveries/caller/original-plugin-intent`;
   const original = await fetch(base + "?sourceThreadId=source-session&sourceAgentType=agent&agentAdapter=dsh");
-  assert.equal(original.status, 200); assert.equal(((await original.json()) as any).data.state, "committed");
+  assert.equal(original.status, 200); const originalBody = await original.json() as any;
+  assert.equal(originalBody.data.state, "committed"); assert.deepEqual(originalBody.creation, { available: true, state: 'absent' });
   assert.equal(readAuthorityCalls, 1); assert.equal(sent, 1);
   const mismatch = await fetch(base + "?sourceThreadId=wrong-session&sourceAgentType=agent&agentAdapter=dsh");
   assert.equal(mismatch.status, 404); assert.equal(((await mismatch.json()) as any).errorCode, "DELIVERY_NOT_RESERVED");

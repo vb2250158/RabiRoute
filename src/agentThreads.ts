@@ -5,7 +5,7 @@ import { executeEndpointAgentDelivery, type EndpointDeliveryOptions, type Prepar
 import { agentDeliveryPromptHash } from "./agentRequests/store.js";
 export { executeEndpointOnOwner } from "./agentRequests/ownerExecution.js";
 import { AgentReplyStateError } from "./agentRequests/replyError.js";
-import { AgentThreadContractError, callerAgentDeliveryId, normalizeAgentThreadSourceType, type AgentThreadSourceType } from "./agentRequests/requestValidation.js";
+import { AgentThreadContractError, agentThreadAmbiguity, agentThreadUnsupported, callerAgentDeliveryId, normalizeAgentThreadSourceType, type AgentThreadSourceType } from "./agentRequests/requestValidation.js";
 export type { AgentThreadSourceType } from "./agentRequests/requestValidation.js";
 import { promptConfirmsDelivery } from "./shared/deliveryIdentity.js";
 import type { AgentInstanceBinding } from "./shared/agentInstance.js";
@@ -490,7 +490,7 @@ function threadAgentAdapter(request: Pick<AgentThreadRequest, "agentAdapter" | "
     throw new Error(`Invalid agentAdapter: ${rawAdapter}`);
   }
   if (explicit && !isAgentThreadCapableAdapter(explicit)) {
-    throw new Error(`Agent thread operations are not supported for agentAdapter=${explicit}.`);
+    throw agentThreadUnsupported("agentAdapter", `Agent thread operations are not supported for agentAdapter=${explicit}.`);
   }
   const rawThreadId = typeof request.threadId === "string" ? request.threadId.trim() : "";
   const inferred = inferredThreadAdapter(rawThreadId);
@@ -1049,6 +1049,7 @@ async function executeAgentThreadRequest(
             agentAdapter,
             resolution: resolution.kind,
             message: `存在 ${resolution.candidates.length} 个同名 DSH 会话，最后更新时间并列，请选择具体会话。`,
+            errorCode: "AGENT_SESSION_NAME_AMBIGUOUS", field: "title", repair: agentThreadAmbiguity(request, agentAdapter).repair,
             candidates: resolution.candidates
           }
         };
@@ -1119,6 +1120,7 @@ async function executeAgentThreadRequest(
           action,
           resolution: "ambiguous",
           message: `存在 ${resolution.candidates.length} 个同名 Codex Desktop 任务，请按最后会话时间选择。`,
+          errorCode: "AGENT_SESSION_NAME_AMBIGUOUS", field: "title", repair: agentThreadAmbiguity(request, agentAdapter).repair,
           candidates: resolution.candidates
         }
       };
@@ -1181,6 +1183,7 @@ async function executeAgentThreadRequest(
             agentAdapter,
             resolution: resolution.kind,
             message: `存在 ${resolution.candidates.length} 个同名 DSH 会话，最后更新时间并列，请选择具体会话。`,
+            errorCode: "AGENT_SESSION_NAME_AMBIGUOUS", field: "title", repair: agentThreadAmbiguity(request, agentAdapter).repair,
             candidates: resolution.candidates,
             sandbox,
             ...(messageSource ? { messageSource } : {})
@@ -1283,6 +1286,7 @@ async function executeAgentThreadRequest(
           action,
           resolution: "ambiguous",
           message: `存在 ${resolution.candidates.length} 个同名 Codex Desktop 任务，请按最后会话时间选择。`,
+          errorCode: "AGENT_SESSION_NAME_AMBIGUOUS", field: "title", repair: agentThreadAmbiguity(request, agentAdapter).repair,
           candidates: resolution.candidates,
           sandbox,
           ...(messageSource ? { messageSource } : {})
@@ -1329,7 +1333,7 @@ async function executeAgentThreadRequest(
   if (action === "rename") {
     const agentAdapter = threadAgentAdapter(request);
     if (agentAdapter === "workbuddy") {
-      throw new Error("WorkBuddy task titles are owned by the WorkBuddy app; the bridge cannot rename one.");
+      throw agentThreadUnsupported("action", "WorkBuddy task titles are owned by the WorkBuddy app; the bridge cannot rename one.");
     }
     const threadId = normalizeThreadId(request.threadId);
     const rawTitle = requiredText(request.title, "title", maxTitleInputLength);
@@ -1344,7 +1348,7 @@ async function executeAgentThreadRequest(
         })
       : driver.rename
         ? await driver.rename({ threadId, title, cwd })
-        : (() => { throw new Error("Agent thread rename is not supported by this driver."); })();
+        : (() => { throw agentThreadUnsupported("action", "Agent thread rename is not supported by this driver."); })();
     return { statusCode: 200, data: { action, agentAdapter, thread } };
   }
 
@@ -1414,7 +1418,7 @@ async function executeAgentThreadRequest(
         agentPreset: options.dshAgentPreset
       });
       if (resolution.kind === "ambiguous") {
-        throw new Error(`DSH session name is ambiguous: ${title}`);
+        throw agentThreadAmbiguity(request, "dsh");
       }
       if (resolution.kind === "missing") {
         throw new Error(`DSH session could not be resolved: ${title}`);
@@ -1462,7 +1466,7 @@ async function executeAgentThreadRequest(
         )
       });
       if (resolution.kind === "ambiguous") {
-        throw new Error(`Codex Desktop task name is ambiguous: ${title}`);
+        throw agentThreadAmbiguity(request, "codex");
       }
       if (resolution.kind === "archived") {
         throw new Error(`Codex Desktop task is archived: ${title}`);
@@ -1497,7 +1501,7 @@ async function executeAgentThreadRequest(
         throw new Error(`DSH session could not be resolved: ${threadId}`);
       }
       if (resolution.kind === "ambiguous") {
-        throw new Error(`DSH session name is ambiguous: ${threadId}`);
+        throw agentThreadAmbiguity(request, "dsh", "threadId");
       }
       targetResolution = resolution.kind === "workspace-mismatch"
         ? { kind: "id", thread: resolution.thread }
@@ -1810,5 +1814,5 @@ async function executeAgentThreadRequest(
     };
   }
 
-  throw new Error("Unsupported Agent thread action. Expected list, read, reconcile_delivery, open, resolve, create, rename, or send.");
+  throw agentThreadUnsupported("action", "Unsupported Agent thread action. Expected list, read, reconcile_delivery, open, resolve, create, rename, or send.");
 }

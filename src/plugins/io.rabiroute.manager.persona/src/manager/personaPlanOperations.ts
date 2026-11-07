@@ -8,12 +8,12 @@ export type PersonaPlanOperationsContext = PlanAdvanceContext & PlanAgentStatusC
 const ignored = { type: 'object' };
 const none = { kind: 'none' as const, allowIgnoredBody: true };
 const failure: ApiResponseContract = { mediaType: 'application/json; charset=utf-8', schema: {
-  type: 'object', required: ['code', 'message'], properties: { code: { const: -1 }, message: { type: 'string' }, reason: { type: 'string' }, uncertain: { const: true } }
+  type: 'object', required: ['code', 'message'], properties: { code: { const: -1 }, message: { type: 'string' }, reason: { type: 'string' }, errorCode: { type: 'string' }, field: { type: 'string' }, repair: { type: 'string' }, uncertain: { const: true } }
 } };
 const json = (data: unknown): ApiResponseContract => ({ mediaType: 'application/json', schema: {
   type: 'object', required: ['code', 'data'], properties: { code: { const: 0 }, data }
 } });
-const errors = Object.fromEntries([400,403,404,409,413,500].map(status => [String(status), failure]));
+const errors = Object.fromEntries([400,403,404,409,413,500,503].map(status => [String(status), failure]));
 const array = (items: unknown = true) => ({ type: 'array', items });
 const binding = { type: 'object', required: ['role','configured','agentType','threadId','threadTitle','workspace','working','agentStatus','sessionStatus','canOpen','checkedAt'], properties: {
   role: { enum: ['task','secretary'] }, configured: { type: 'boolean' }, agentType: { type: 'string' }, threadId: { type: 'string' }, threadTitle: { type: 'string' }, workspace: { type: 'string' }, working: { type: 'boolean' }, agentStatus: { enum: ['working','idle','unknown'] }, sessionStatus: { type: 'string' }, canOpen: { type: 'boolean' }, checkedAt: { type: 'string' }, message: { type: 'string' },
@@ -31,11 +31,13 @@ const page = { type: 'object', required: ['items','total','nextCursor'], propert
   } }), total: { type: 'number' }, nextCursor: { type: 'string' }
 } };
 
-function failed(error: unknown, attachment: boolean): ApiOperationResult {
+function failed(error: unknown, attachment: boolean, input?: Pick<ApiOperationInput, 'path'>): ApiOperationResult {
   const cause = error as { statusCode?: number; code?: string; uncertain?: boolean };
   const message = error instanceof Error ? error.message : String(error);
   const status = cause?.statusCode ?? (attachment ? cause?.code === 'ENOENT' || /not found|unavailable|managed directories/i.test(message) ? 404 : cause?.code === 'EACCES' || cause?.code === 'EPERM' ? 403 : 500 : 400);
   return { status, headers: attachment ? {} : { 'cache-control': 'no-store' }, body: errorResponsePresentation({ code: -1, message,
+    ...(cause?.code === 'PLAN_WORKFLOW_NOT_READY' ? { errorCode: cause.code, field: 'workflow',
+      repair: `Read GET /api/roles/${encodeURIComponent(input?.path.roleId ?? ':roleId')}/plan-statuses to observe the existing workflow after readiness. This is service availability, not invalid plan parameters. Preserve the original request and receipt; do not create a replacement workflow or replay an unknown dispatch.` } : {}),
     ...(attachment ? { reason: cause?.code || 'attachment_read_failed' } : {}), ...(cause?.uncertain ? { uncertain: true } : {}) }, status) };
 }
 function define<T>(contract: ApiOperationContract, prepare: (input: Omit<ApiOperationInput,'body'>) => T,
@@ -45,9 +47,9 @@ function define<T>(contract: ApiOperationContract, prepare: (input: Omit<ApiOper
       const owner = prepare(input);
       return async (parsed: ApiOperationInput) => {
         try { return await execute(owner, parsed); }
-        catch (error) { parsed.signal?.throwIfAborted(); return failed(error, attachment); }
+        catch (error) { parsed.signal?.throwIfAborted(); return failed(error, attachment, parsed); }
       };
-    } catch (error) { input.signal?.throwIfAborted(); return failed(error, attachment); }
+    } catch (error) { input.signal?.throwIfAborted(); return failed(error, attachment, input); }
   };
   return { contract, prepare: bind, handler: async input => { const bound = bind(input); return typeof bound === 'function' ? bound(input) : bound; } };
 }

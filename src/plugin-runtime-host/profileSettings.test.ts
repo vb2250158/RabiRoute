@@ -75,6 +75,18 @@ test("install preserves a malformed or foreign target file while healthy neighbo
   assert.equal(await fs.readFile(filename, "utf8"), "{broken");
 });
 
+test('membership diagnostics retain native conflict/object codes and original settings', async t => {
+  const f = await fixture(t), before = await f.owner.snapshot();
+  await assert.rejects(f.owner.uninstall('missing-instance', before.revision), error => {
+    assert.equal((error as { status?: number }).status, 404); assert.equal((error as { code?: string }).code, 'PLUGIN_INSTANCE_NOT_FOUND'); return true;
+  });
+  const foreign = parsePluginProfile({ schemaVersion: 2, readyRequires: [], instances: [{ id: 'manager:a', package: 'io.test.other', version: '1.0.0', enabled: true, config: {}, grants: [] }] }).instances[0]!;
+  await assert.rejects(f.owner.install(foreign, before.revision), error => {
+    assert.equal((error as { status?: number }).status, 409); assert.equal((error as { code?: string }).code, 'PLUGIN_INSTANCE_ID_CONFLICT'); return true;
+  });
+  assert.equal((await f.owner.snapshot()).revision, before.revision);
+});
+
 test("plugin enable settings persist without rewriting defaults or a neighboring instance", async t => {
   const f = await fixture(t), original = await fs.readFile(f.profilePath);
   const snapshot = await f.owner.snapshot();

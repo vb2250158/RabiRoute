@@ -11,7 +11,9 @@ export function presentVideoError(cause, access, method = "GET") {
     ...(method !== "GET" ? { mutationOutcome: access?.mutationStarted ? "unknown" : "not_started" } : {}),
     body: { error: "forbidden", message: "视频请求权限已失效。", ...(method !== "GET" ? { mutation: access?.mutationStarted ? "unknown" : "not_started" } : {}) }
   };
-  return { status: cause instanceof VideoError ? cause.status : 503, body: { message: cause instanceof VideoError ? cause.message : "视频服务不可用，请检查运行环境与视频服务日志。" } };
+  const downloadFailure = cause instanceof VideoError && (cause.code === "VIDEO_MODEL_DOWNLOAD_FAILED" || cause.code === "VIDEO_MODEL_DOWNLOAD_INTEGRITY_FAILED");
+  return { status: cause instanceof VideoError ? cause.status : 503, body: { message: cause instanceof VideoError ? cause.message : "视频服务不可用，请检查运行环境与视频服务日志。",
+    ...(downloadFailure ? { errorCode: cause.code, field: cause.field, reason: cause.reason, repair: cause.repair, retryable: false } : {}) } };
 }
 
 /** Original services own all state, queues, files, processes and durable receipts. */

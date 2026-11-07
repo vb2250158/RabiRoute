@@ -1,6 +1,10 @@
 /** Stable exception identities shared by host admission and immutable speech packages. */
 export class SpeechControlError extends Error {
-  constructor(message: string, readonly status: number) { super(message); this.name = "SpeechControlError"; }
+  readonly code?: "SPEECH_PARAMETER_INVALID";
+  constructor(message: string, readonly status: number, readonly parameter?: Readonly<{ field: string; repair: string }>) {
+    super(message); this.name = "SpeechControlError";
+    if (parameter) this.code = "SPEECH_PARAMETER_INVALID";
+  }
 }
 export class SpeechRuntimeControlError extends Error {
   constructor(message: string, readonly status = 502, readonly detail = "", readonly resolution = "") {

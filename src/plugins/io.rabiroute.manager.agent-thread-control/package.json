@@ -1,6 +1,6 @@
 {
   "name": "io.rabiroute.manager.agent-thread-control",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "type": "module",
   "license": "MIT",
   "files": [
@@ -28,7 +28,7 @@
   },
   "devDependencies": {
     "@rabiroute/plugin-sdk": "^1.1.0",
-    "@rabiroute/host-api": "^1.0.0"
+    "@rabiroute/host-api": "^1.4.0"
   },
   "scripts": {
     "build": "rabi-plugin-build"

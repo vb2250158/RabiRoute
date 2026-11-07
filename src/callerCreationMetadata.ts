@@ -1,5 +1,26 @@
 import type { CodexThreadCreateResult } from "./agentAdapters/codexContracts.js";
 import { createCodexThreadWithReservation, readCallerCodexCreation } from "./codexThreadCreationReservations.js";
+import type { CodexThreadCreationState } from "./codexThreadCreationReservations.js";
+import { completeAgentSessionId } from "./agentRequests/requestValidation.js";
+
+export type CallerCreationLookup =
+  | { available: true; state: "absent" }
+  | { available: true; state: Extract<CodexThreadCreationState, "thread_created" | "naming" | "initial_turn" | "completed">; intentHash: string; threadId: string }
+  | { available: true; state: Exclude<CodexThreadCreationState, "thread_created" | "naming" | "initial_turn" | "completed">; intentHash: string; threadId?: string }
+  | { available: false; errorCode: "CREATION_EVIDENCE_UNAVAILABLE" };
+
+/** Safe metadata from the original exact caller key, without paths, prompts or native error text. */
+export function readCallerCreationLookup(rootDir: string, callerKey: string): CallerCreationLookup {
+  const reservation = readCallerCodexCreation(rootDir, callerKey);
+  if (!reservation) return { available: true, state: "absent" };
+  if (!/^[a-f0-9]{64}$/.test(reservation.callerIntentHash!)) throw new Error("Original creation digest is invalid.");
+  if (reservation.state === "thread_created" || reservation.state === "naming" || reservation.state === "initial_turn" || reservation.state === "completed") {
+    const threadId = completeAgentSessionId(reservation.threadId, "threadId");
+    return { available: true, state: reservation.state, intentHash: reservation.callerIntentHash!, threadId };
+  }
+  return { available: true, state: reservation.state, intentHash: reservation.callerIntentHash!,
+    ...(reservation.threadId !== undefined ? { threadId: completeAgentSessionId(reservation.threadId, "threadId") } : {}) };
+}
 
 export type CallerCreationMetadataStatus = {
   protocolVersion: 1;

@@ -52,7 +52,17 @@ test("native module URLs keep nested/encoded tails, exact bytes, MIME, cache, no
   assert.equal((await app.fetch(prefix + "..%2F..%2Foutside")).status, 400);
   assert.equal((await app.fetch(`/api/plugins/modules/${module.id}/${"b".repeat(64)}/web/data.bin`)).status, 404);
   assert.equal((await app.fetch(`/api/plugins/modules/${module.id}/invalid-revision/web/data.bin`)).status, 404);
+  const missing = await app.fetch(`/api/plugins/modules/${module.id}/invalid-revision/web/data.bin`); const missingBody = await missing.json();
+  assert.equal(missingBody.errorCode, 'PLUGIN_WEB_MODULE_NOT_FOUND'); assert.match(missingBody.repair, /GET \/api\/plugins\/modules/);
+  assert.equal(missingBody.field, 'path.rev');
   assert.equal((await app.fetch(prefix + "%ZZ")).status, 400);
+});
+
+test('invalid catalog host names the field and current read without reclassifying source failures', async t => {
+  const app = await pluginCatalogFixture(t); const before = app.count();
+  const response = await app.fetch('/api/plugins/catalog?host=unknown'); assert.equal(response.status, 400);
+  const body = await response.json(); assert.equal(body.errorCode, 'PLUGIN_CATALOG_HOST_INVALID'); assert.equal(body.field, 'query.host');
+  assert.match(body.repair, /host=web or host=desktop/); assert.equal(app.count(), before);
 });
 
 test("reconciliation honors native profile disabled instances and candidate failure diagnostics", async t => {

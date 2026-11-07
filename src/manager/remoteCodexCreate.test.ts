@@ -82,7 +82,11 @@ test("unknown metadata effects retain original immutable intent without a second
   const f = fixture(t); f.metadataError = true;
   await assert.rejects(f.call(), /uncertain/);
   const before = fs.readFileSync(f.file());
-  await assert.rejects(f.call({ ...f.request, prompt: "Replacement initial message" }), /frozen/);
+  await assert.rejects(f.call({ ...f.request, prompt: "Replacement initial message" }), (error: any) => {
+    assert.equal(error.code, 'AGENT_CREATION_INTENT_CONFLICT'); assert.equal(error.field, 'deliveryId');
+    assert.match(error.message, /frozen/); assert.match(error.repair, /\/api\/agent\/deliveries\/caller\//);
+    assert.match(error.repair, /only prompt delivery/); assert.doesNotMatch(error.repair, /Replacement initial message/); return true;
+  });
   assert.deepEqual(fs.readFileSync(f.file()), before); assert.equal(f.nativeCreates, 1); assert.equal(f.sends, 0);
 });
 

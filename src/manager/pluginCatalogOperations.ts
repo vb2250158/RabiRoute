@@ -30,7 +30,8 @@ const json = (data: unknown): ApiResponseContract => ({ mediaType: "application/
   type: "object", required: ["code", "data"], properties: { code: { const: 0 }, data }
 } });
 const failure: ApiResponseContract = { mediaType: "application/json; charset=utf-8", schema: {
-  type: "object", required: ["code", "message"], properties: { code: { const: -1 }, message: text }, additionalProperties: true
+  type: "object", required: ["code", "message"], properties: { code: { const: -1 }, message: text, errorCode: text, field: text, repair: text,
+    retryable: { const: false }, help: { type: "object", required: ["method", "path"], properties: { method: { const: "GET" }, path: text }, additionalProperties: false } }, additionalProperties: true
 } };
 
 /** Five native operations; no boolean dispatcher or second state implementation. */

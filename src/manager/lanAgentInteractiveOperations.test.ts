@@ -103,6 +103,25 @@ test('an unopened terminal read returns exact same-instance discovery without op
   assert.equal(body.retryable, false); assert.equal(f.calls.length, 0); assert.equal(f.sessions.size, 0);
 });
 
+test('terminal cursor and wait errors survive registered HTTP with no extra connector actions', { timeout: 15000 }, async t => {
+  const f = await fixture(t); await f.execute({ action: 'open', shell: 'cmd' });
+  const before = f.calls.length;
+  for (const [operation, query, field, code] of [
+    ['manager.lan-agent.terminals.read', { after: -1 }, 'query.after', 'TERMINAL_OUTPUT_CURSOR_INVALID'],
+    ['manager.lan-agent.terminals.read', { waitMs: -1 }, 'query.waitMs', 'TERMINAL_WAIT_INVALID'],
+    ['manager.lan-agent.terminals.events', { after: -1 }, 'query.after', 'TERMINAL_OUTPUT_CURSOR_INVALID']
+  ] as const) {
+    let output = '';
+    const response = await f.client.invokeOperation(operation, { path: f.target, query,
+      ...(operation.endsWith('.events') ? { onChunk: (bytes: Uint8Array) => { output += Buffer.from(bytes).toString(); } } : {}) });
+    assert.equal(response.statusCode, 400, String(response.body));
+    const body = JSON.parse(response.body === undefined ? output : String(response.body)); assert.equal(body.errorCode, code); assert.equal(body.field, field);
+    assert.ok(body.repair.includes(`/instances/${f.instanceId}/terminals/${f.terminalId}?after=0&waitMs=0`));
+    assert.equal(body.retryable, false); assert.doesNotMatch(JSON.stringify(body), /fixture-private-cwd/);
+  }
+  assert.equal(f.calls.length, before); assert.equal(f.sessions.size, 1);
+});
+
 test("five discovered operations use the original authenticated node, ordered terminal events and computer transport", { timeout: 15000 }, async t => {
   const f = await fixture(t);
   assert.equal(f.api.catalogSnapshot().operations.filter(row => /manager\.lan-agent\.(terminals|computer)\./.test(row.contract.operationId)).length, 5);

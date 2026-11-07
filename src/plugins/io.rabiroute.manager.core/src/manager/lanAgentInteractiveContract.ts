@@ -1,4 +1,4 @@
-import type { ApiOperationContract, ApiOperationDefinition, ApiOperationInput, ApiOperationResult, ApiSchema } from "@rabiroute/host-api/manager/apiOperationContract";
+import { ApiContractError, type ApiOperationContract, type ApiOperationDefinition, type ApiOperationInput, type ApiOperationResult, type ApiSchema } from "@rabiroute/host-api/manager/apiOperationContract";
 import type { LanAgentRoutesContext } from "./lanAgentRoutes.js";
 import { assertTrustedLanAgentPrincipal } from "@rabiroute/host-api/manager/lanAgentRequestAccess";
 import { hasAuthenticatedConnectionRequest } from "@rabiroute/host-api/manager/connectionRequestAccess";
@@ -74,6 +74,7 @@ export function interactiveOperation(route: InteractiveRoute, context: Interacti
             + `Read GET /api/agent/help?operationId=manager.lan-agent.terminals.execute for the open contract. If opening this session is authorized, POST ${path} ${example}; keep the same terminalId and choose shell from data.shells. `
             + 'This error means the output stream is absent on this Manager connection, not that the remote process or file is missing. Discovery does not open a terminal, execute commands or replay prior input. Lookup failures and 401/403 must be resolved as connection/access failures.' } };
       }
+      if (error instanceof ApiContractError) throw error;
       const transport = lanAgentManagementTransportFailure(error, interactiveApiContract(route).operationId, readOnly);
       if (transport) return transport;
       return result(400, error instanceof Error ? error.message : String(error)); }

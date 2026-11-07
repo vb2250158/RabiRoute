@@ -183,6 +183,25 @@ async function post(baseUrl: string, pathname: string, body: unknown): Promise<R
   });
 }
 
+test("registration parameter errors expose exact fields and discovery without changing the original board", async () => {
+  const fixture = createFixture(), app = await startServer(fixture.context);
+  try {
+    for (const [body, field] of [[{ action: 'register_group' }, 'body.requirementId'],
+      [{ action: 'private-invalid-action', requirementId: 'req-outcome' }, 'body.action']] as const) {
+      const response = await post(app.baseUrl, '/api/message-processing/requirements', body);
+      assert.equal(response.status, 400); const failure = await json(response);
+      assert.equal(failure.errorCode, 'MESSAGE_PROCESSING_PARAMETER_INVALID'); assert.equal(failure.field, field);
+      assert.match(failure.repair, /GET \/api\/message-processing\/board/);
+      assert.match(failure.repair, /register_group, dispatch or dispatch_failed/);
+      assert.deepEqual(failure.help, { method: 'GET', path: '/api/agent/help?operationId=manager.message-processing.requirement.record' });
+      assert.equal(failure.retryable, false); assert.doesNotMatch(JSON.stringify(failure), /private-invalid-action/);
+    }
+    assert.equal(fixture.calls.length, 0);
+    const missing = await fetch(app.baseUrl + '/api/message-processing/requirements/missing');
+    assert.equal(missing.status, 404, 'A missing resource stays distinct from the invalid registration parameters.');
+  } finally { await app.close(); }
+});
+
 test("serves board and requirement queries, including requirement 404", async () => {
   const fixture = createFixture();
   const app = await startServer(fixture.context);

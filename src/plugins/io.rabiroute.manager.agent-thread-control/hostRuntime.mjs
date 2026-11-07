@@ -3,6 +3,7 @@ import { createAgentThreadControlOwner } from "./src/manager/agentThreadControlR
 import { createAgentThreadControlOperations } from "./src/manager/agentThreadControlOperations.js";
 import { createPeerAgentOperations } from "./src/manager/peerAgentOperations.js";
 import { createPeerRouteDeliveryOperations } from "./src/manager/peerRouteDeliveryOperations.js";
+import { readCallerCreationLookup } from "@rabiroute/host-api/callerCreationMetadata";
 export function createOwnedRuntime(ports) {
     return Object.freeze({
         agentRequests: ports.agentRequests,
@@ -12,7 +13,8 @@ export function createOwnedRuntime(ports) {
         getTrustedDeviceSource: (request) => ports.rabiLinkAgentTaskSource(request, ports.rabiLinkRelayConfigForMeta(), ports.managerHostIdentity?.applicationGenerationId ?? ports.managerInstanceId),
         applyManagedAgentThreadDefaults: ports.applyManagedAgentThreadDefaults,
         createAgentThreadControlOwner: (context) => createAgentThreadControlOwner({
-            ...context, forwardPeerReply: (request, guard) => ports.peerAgentBridge.forwardReply(request, guard),
+            ...context, readCallerCreation: key => readCallerCreationLookup(ports.rootDir, key),
+            forwardPeerReply: (request, guard) => ports.peerAgentBridge.forwardReply(request, guard),
             forwardPeerCallerLookup: (callerId, source, guard) => ports.peerAgentBridge.forwardCallerLookup(callerId, source, guard)
         }),
         createAgentThreadControlOperations: (owner) => [

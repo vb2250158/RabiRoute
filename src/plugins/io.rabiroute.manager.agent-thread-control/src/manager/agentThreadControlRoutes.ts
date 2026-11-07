@@ -18,9 +18,11 @@ import type { RabiLinkAgentPrincipal } from "@rabiroute/host-api/manager/rabiLin
 import { sourceScopedAgentDeliveryId } from "@rabiroute/host-api/agentRequests/endpointDelivery";
 import { agentDeliverySourceForParty } from "@rabiroute/host-api/agentRequests/endpoint";
 import { callerAgentDeliveryId } from "@rabiroute/host-api/agentRequests/requestValidation";
+import type { CallerCreationLookup } from "@rabiroute/host-api/callerCreationMetadata";
 import type { PeerCallerSource } from "@rabiroute/host-api/manager/peerAgentEndpointBridge";
 
 export type AgentThreadControlRoutesContext = {
+  readCallerCreation?: (callerKey: string) => CallerCreationLookup;
   forwardPeerReply?: (request: AgentThreadRequest, guard: () => void) => Promise<AgentThreadRequestResult | undefined>;
   forwardPeerCallerLookup?: (callerId: string, source: PeerCallerSource, guard: () => void) => Promise<{ status: number; body: Record<string, unknown> } | undefined>;
   getTrustedRemoteSource?: (request: http.IncomingMessage) => AgentThreadRemoteSource | undefined;
@@ -201,29 +203,39 @@ export function createAgentThreadControlOwner(context: AgentThreadControlRoutesC
           fence();
           if (!endpoint) return { status: 400, body: { code: -1, message: "Source connection coordinates are missing from the delivery record." } };
           const deliveryId = sourceScopedAgentDeliveryId(endpoint, id);
+          let creation: CallerCreationLookup;
+          try {
+            fence();
+            creation = context.readCallerCreation?.(deliveryId) ?? { available: false, errorCode: "CREATION_EVIDENCE_UNAVAILABLE" };
+          } catch {
+            creation = { available: false, errorCode: "CREATION_EVIDENCE_UNAVAILABLE" };
+          }
+          fence();
+          const creationRepair = "The creation resource and prompt delivery resource are separate. Inspect creation.state and intentHash; creation.available=false means its evidence could not be read. "
+            + "canSubmitSameIntent describes only the prompt delivery reservation; preserve the same complete frozen create intent and caller ID. Do not change keys, create another task or automatically replay content.";
           let delivery: Awaited<ReturnType<AgentRequestStore["readCallerEndpointDelivery"]>>;
           try { delivery = await context.agentRequests.readCallerEndpointDelivery(endpoint, id); fence(); }
           catch (error) {
             fence();
             if (["AGENT_DELIVERY_RESERVATION_EXISTS", "AGENT_DELIVERY_ID_CONFLICT"].includes(String((error as { code?: unknown })?.code))) return { status: 409, body: {
-              code: -1, errorCode: "DELIVERY_EVIDENCE_UNAVAILABLE", canSubmitSameIntent: false,
+              code: -1, errorCode: "DELIVERY_EVIDENCE_UNAVAILABLE", canSubmitSameIntent: false, creation, repair: creationRepair,
               message: "Original caller delivery evidence is reserved, damaged or ambiguous. Preserve its ID and inspect the original receipts." } };
             if (!["AGENT_REQUEST_STORE_UNAVAILABLE", "AGENT_REQUEST_COMMIT_UNKNOWN"].includes(String((error as { code?: unknown })?.code))) throw error;
-            return { status: 503, body: { code: -1, errorCode: "DELIVERY_EVIDENCE_UNAVAILABLE", canSubmitSameIntent: false,
+            return { status: 503, body: { code: -1, errorCode: "DELIVERY_EVIDENCE_UNAVAILABLE", canSubmitSameIntent: false, creation, repair: creationRepair,
               message: "The original delivery store cannot prove absence. Preserve the original ID until its evidence is restored." } };
           }
           if (!delivery) {
             if (context.agentRequests.hasEndpointDeliveryReservation(deliveryId)) return { status: 409, body: {
-              code: -1, errorCode: "DELIVERY_EVIDENCE_UNAVAILABLE", canSubmitSameIntent: false,
+              code: -1, errorCode: "DELIVERY_EVIDENCE_UNAVAILABLE", canSubmitSameIntent: false, creation, repair: creationRepair,
               message: "The original delivery is reserved but its evidence cannot currently be read. Preserve its ID; do not submit another prompt." } };
             if (!context.agentRequests.getEndpointDeliveryEvidenceStatus().available) return { status: 503, body: {
-              code: -1, errorCode: "DELIVERY_EVIDENCE_UNAVAILABLE", canSubmitSameIntent: false,
+              code: -1, errorCode: "DELIVERY_EVIDENCE_UNAVAILABLE", canSubmitSameIntent: false, creation, repair: creationRepair,
               message: "The original delivery store cannot prove absence. Preserve the original ID until its evidence is restored." } };
-            return { status: 404, body: { code: -1, errorCode: "DELIVERY_NOT_RESERVED", canSubmitSameIntent: true,
-              message: "No reservation exists for this authenticated source and caller ID. The same intent may be submitted." } };
+            return { status: 404, body: { code: -1, errorCode: "DELIVERY_NOT_RESERVED", canSubmitSameIntent: true, creation, repair: creationRepair,
+              message: "No prompt delivery reservation exists for this authenticated source and caller ID. This does not establish whether a creation intent is reserved; inspect creation separately." } };
           }
           fence();
-          return { status: 200, body: { code: 0, data: { deliveryId: delivery.deliveryId, state: delivery.state,
+          return { status: 200, body: { code: 0, creation, repair: creationRepair, data: { deliveryId: delivery.deliveryId, state: delivery.state,
             detailPath: `/api/agent/deliveries/${encodeURIComponent(delivery.deliveryId)}`,
             canSubmitSameIntent: delivery.state === "prepared", ...(delivery.receipt ? { receipt: delivery.receipt } : {}) } } };
         },

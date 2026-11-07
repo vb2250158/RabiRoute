@@ -1,7 +1,17 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { agentThreadRequestFailureData } from "../agentThreads.js";
-import { AgentThreadContractError, callerAgentDeliveryId, completeAgentSessionId, normalizeAgentThreadSourceType } from "./requestValidation.js";
+import { AgentThreadContractError, agentThreadAmbiguity, callerAgentDeliveryId, completeAgentSessionId, normalizeAgentThreadSourceType } from "./requestValidation.js";
+
+test("ambiguity help projects only original routing coordinates and never remote extensions", () => {
+  const error = agentThreadAmbiguity({ instanceBinding: { instanceId: "same-instance", agentId: "same-agent", ownerDeviceId: "same-peer",
+    credential: "do-not-expose", privateDirectory: "do-not-expose" } }, "codex");
+  const match = /POST \/api\/agent\/threads (\{.*?\});/.exec(error.repair)!;
+  const read = JSON.parse(match[1]);
+  assert.deepEqual(read.instanceBinding, { instanceId: "same-instance", agentId: "same-agent", ownerDeviceId: "same-peer" });
+  assert.equal(read.action, "list"); assert.equal(read.prompt, undefined); assert.equal(read.cwd, undefined);
+  assert.doesNotMatch(error.message + error.repair, /do-not-expose/);
+});
 
 test("opaque source and target validation identifies the repair field without guessing ID shapes", () => {
   assert.equal(completeAgentSessionId(`owner:${"x".repeat(700)}`, "sourceThreadId"), `owner:${"x".repeat(700)}`);

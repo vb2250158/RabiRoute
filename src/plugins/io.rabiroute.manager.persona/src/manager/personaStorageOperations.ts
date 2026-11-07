@@ -89,7 +89,7 @@ function singleHeader(request: http.IncomingMessage, name: string): string | und
 const ok = (data: unknown, headers?: Record<string, string>): ApiOperationResult => ({ status: 200, body: { code: 0, data }, ...(headers ? { headers } : {}) });
 const missing = (message: string, roleId?: string): ApiOperationResult => ({ status: 404, body: { code: -1, message,
   ...(roleId ? { nextAction: "仅在当前角色范围未找到该计划。可按名称查询 GET /api/roles/" + encodeURIComponent(roleId) + "/plans?limit=20&query=<URL编码的名称>&sort=updated；或省略 query 列最近更新计划，沿 nextCursor 分页。核对原角色、标题、planId 和 taskBinding；保留原计划与投递编号，不自动新建替代计划或重发消息。" } : {}) } });
-const invalid = (message: string): never => { throw Object.assign(new Error(message), { statusCode: 400 }); };
+const invalid = (message: string, field = "body"): never => { throw Object.assign(new Error(message), { statusCode: 400, field, code: "PERSONA_STORAGE_PARAMETER_INVALID" }); };
 function feedbackPlanId(value: unknown): string {
   try { return canonicalLogicalPlanId(value); }
   catch (error) {
@@ -149,14 +149,49 @@ export class PersonaStorageOwner {
     if (failure?.status === "rejected") throw failure.reason;
   }
 
-  error(spec: Spec, error: unknown): ApiOperationResult {
+  error(spec: Spec, error: unknown, input?: Pick<ApiOperationInput, "path" | "url">): ApiOperationResult {
+    const diagnostic = (body: Record<string, unknown>, status: number) => {
+      // Only native validation, revision and missing-object failures get parameter/resource guidance.
+      // Uncertain/committed outcomes retain their original receipt policy instead of suggesting edits.
+      const native = error as { code?: string; field?: string; message?: string; commitState?: string };
+      if (native.commitState && native.commitState !== "not_started" || ![400, 404, 412].includes(status)) return body;
+      const code = error instanceof RoleStorageApplicationError ? error.code : native.code;
+      if (!['invalid_request', 'not_found', 'revision_conflict', 'PERSONA_STORAGE_PARAMETER_INVALID'].includes(code ?? '')) return body;
+      const operationId = "manager.personas.storage." + spec.id + (input?.url.pathname.startsWith('/roles/') ? '.legacy-path' : '');
+      const role = input?.path.roleId ? encodeURIComponent(input.path.roleId) : ':roleId';
+      const root = `/api/roles/${role}`;
+      const resource = spec.suffix.includes(':planId') && input?.path.planId
+        ? `${root}/plans/${encodeURIComponent(input.path.planId)}`
+        : spec.action.startsWith('workflow-') ? `${root}/plan-statuses`
+          : spec.action.startsWith('plan-') ? `${root}/plans?limit=20&sort=updated`
+            : spec.action.startsWith('consolidation-') || spec.action.startsWith('runs-') ? `${root}/memory/consolidation-runs${input?.path.runId ? '/' + encodeURIComponent(input.path.runId) : ''}`
+              : `${root}/memory?limit=20&kind=${spec.action.startsWith('consolidated-') ? 'consolidated' : 'recent'}`;
+      const recentRevision = status === 412 && spec.action === 'recent-update' && input?.path.memoryId
+        ? ` To obtain the original recent-memory ETag, GET ${root}/memory/recent/${encodeURIComponent(input.path.memoryId)}. That existing detail read updates viewedAt outside read-only acceptance mode; it is not a side-effect-free discovery lookup.` : '';
+      let field = native.field ?? (status === 412 ? 'headers.if-match' : status === 404 ? 'path' : 'body');
+      const message = native.message ?? '';
+      if (code === 'invalid_request') {
+        if (/^Plan (?:taskBinding|secretaryBinding)/.test(message)) field = message.startsWith('Plan taskBinding') ? 'body.taskBinding' : 'body.secretaryBinding';
+        else if (message === 'Plan status key is immutable.') field = 'body.key';
+        else if (/^Plan status key|^Unsupported plan status key/.test(message)) field = spec.action === 'workflow-create' ? 'body.key' : spec.action.startsWith('workflow-') ? 'path.statusKey' : 'body.status';
+        else if (message.startsWith('Idempotency-Key')) field = 'headers.idempotency-key';
+        else if (/^(?:Expected revision|Weak ETags)/.test(message)) field = 'headers.if-match';
+      }
+      const discovery = spec.action.startsWith('plan-') || spec.action.startsWith('workflow-') || spec.action.startsWith('feedback-')
+        ? `Read GET ${root}/plans?limit=20&sort=updated for current plan IDs (use view=archived for archived plans); GET ${root}/plan-statuses returns activationStatuses, markerStatuses, roles and revision. Activation status and workflow marker keys are distinct. `
+          + (field.includes('Binding') ? 'Discover target instances with GET /api/lan-agent/instances and provider wire types with GET /api/agent-adapters/catalog. Use POST /api/agent/threads with action=read, an explicit agentAdapter equal to the original taskBinding.agentType or secretaryBinding.agentType, the complete original sessionId as threadId, and the complete original instanceBinding (instanceId, agentId and ownerDeviceId when present), omitting cwd, to read thread.cwd. Do not omit agentAdapter or infer it from an opaque session ID: workbuddy and antigravity IDs must stay with their original provider. If the original provider is unresolved, inspect the original plan and catalogs rather than guessing. Keep the original binding and frozen execution intent. ' : '')
+        : `Read GET ${root}/memory?limit=20&kind=recent or kind=consolidated for existing memory IDs; do not create replacements for a failed lookup. `;
+      return { ...body, errorCode: code, field, help: { method: 'GET', path: `/api/agent/help?operationId=${encodeURIComponent(operationId)}` },
+        repair: discovery + `Read GET ${resource} for its current value and ETag where available.${recentRevision} Read GET /api/agent/help?operationId=${encodeURIComponent(operationId)} for the exact request contract. `
+          + 'Handle query failures and 401/403 access failures separately. Preserve the original operation ID, payload and receipt; discovery never authorizes rewriting a frozen intent or replaying an unknown write.' };
+    };
     if (error instanceof RoleStorageApplicationError) {
       const mapped = roleStorageHttpError(error);
-      return { status: mapped.statusCode, headers: mapped.headers, body: mapped.body, mutationOutcome: error.commitState === "not_started" ? "not_started" : "unknown" };
+      return { status: mapped.statusCode, headers: mapped.headers, body: diagnostic(mapped.body, mapped.statusCode), mutationOutcome: error.commitState === "not_started" ? "not_started" : "unknown" };
     }
     if (spec.failure === "page" && error instanceof PlanPageCatalogInitializingError) return { status: 503, headers: { "retry-after": "2" }, body: { code: -1, reason: error.reason, message: error.message } };
     const status = (error as { statusCode?: number })?.statusCode ?? (spec.failure ? error instanceof ManagerReadWorkerError && (spec.failure === "page" || error.code === "busy") ? 503 : 500 : 500);
-    return { status, body: { code: -1, message: error instanceof Error ? error.message : String(error) } };
+    return { status, body: diagnostic({ code: -1, message: error instanceof Error ? error.message : String(error) }, status) };
   }
 
   async execute(spec: Spec, input: ApiOperationInput, admission: Admission): Promise<ApiOperationResult> {
@@ -202,8 +237,8 @@ export class PersonaStorageOwner {
       }
       case "plan-list": {
         const view = query.get("view")?.trim() || undefined, sort = query.get("sort")?.trim() || "status";
-        if (view && !["current", "plans", "archived"].includes(view)) invalid("Invalid plan page view.");
-        if (!["status", "updated", "importance", "urgency"].includes(sort)) invalid("Invalid plan page sort.");
+        if (view && !["current", "plans", "archived"].includes(view)) invalid("Invalid plan page view. Use current, plans or archived.", "query.view");
+        if (!["status", "updated", "importance", "urgency"].includes(sort)) invalid("Invalid plan page sort. Use status, updated, importance or urgency.", "query.sort");
         if (query.has("limit")) return ok(await this.pools.knowledge.queryRolePlanPage(roleDir, {
           cursor: query.get("cursor")?.trim() || "", limit: normalizeRolePlanPageLimit(query.get("limit")), view: view as "current" | "plans" | "archived" | undefined,
           query: query.get("query") || "", sort: sort as "status" | "updated" | "importance" | "urgency", statuses: query.getAll("status").map(value => value.trim()).filter(Boolean), tags: query.getAll("tag").map(value => value.trim()).filter(Boolean), includeFacets: query.get("facets") !== "0", summary: query.get("detail") === "summary"
@@ -260,7 +295,7 @@ export class PersonaStorageOwner {
         if (query.get("counts") === "1") return ok(await this.pools.knowledge.queryRoleMemoryCounts(roleDir, readOptions));
         if (query.has("limit")) {
           const kind = query.get("kind")?.trim() || "recent";
-          if (kind !== "recent" && kind !== "consolidated" && kind !== "archived") invalid("Invalid memory page kind.");
+          if (kind !== "recent" && kind !== "consolidated" && kind !== "archived") invalid("Invalid memory page kind. Use recent, consolidated or archived.", "query.kind");
           return ok(await this.pools.knowledge.queryRoleMemoryPage(roleDir, { kind: kind as "recent" | "consolidated" | "archived", cursor: query.get("cursor")?.trim() || "", limit: normalizeRoleMemoryPageLimit(query.get("limit")), query: query.get("query") || "" }, readOptions));
         }
         return ok(await this.pools.knowledge.queryRoleMemoryOverview(roleDir, readOptions));
@@ -310,7 +345,8 @@ function querySchema(spec: Spec): Record<string, unknown> {
   const fields = spec.action === "plan-list" ? ["limit", "cursor", "view", "query", "sort", "status", "tag", "facets", "detail"] : spec.action === "plan-read" ? ["detail"] : spec.action === "memory-overview" ? ["counts", "limit", "kind", "cursor", "query"] : [];
   return { type: "object", properties: Object.fromEntries(fields.map(field => [field, { anyOf: [{ type: "string" }, { type: "array", items: { type: "string" } }], description: field === "status" || field === "tag" ? "Repeatable native filter; preserve all values in order." : "Native query value; preserve first-value, empty-value and coercion behavior." }])) };
 }
-const jsonResponse: ApiResponseContract = { mediaType: "application/json; charset=utf-8", schema: { type: "object", required: ["code"], properties: { code: { enum: [0, -1] }, data: true, message: { type: "string" }, state: { type: "string" }, reason: { type: "string" }, commitState: { enum: ["not_started", "unknown", "committed"] }, nextAction: { type: "string" } } } };
+const jsonResponse: ApiResponseContract = { mediaType: "application/json; charset=utf-8", schema: { type: "object", required: ["code"], properties: { code: { enum: [0, -1] }, data: true, message: { type: "string" }, state: { type: "string" }, reason: { type: "string" }, commitState: { enum: ["not_started", "unknown", "committed"] }, nextAction: { type: "string" },
+  errorCode: { type: "string" }, field: { type: "string" }, repair: { type: "string" }, help: { type: "object", required: ["method", "path"], properties: { method: { const: "GET" }, path: { type: "string" } }, additionalProperties: false } } } };
 
 /** All native API and non-API aliases are exact executable definitions, never prefix handlers. */
 export function createPersonaStorageOperations(owner: PersonaStorageOwner): readonly ApiOperationDefinition[] {
@@ -331,9 +367,9 @@ export function createPersonaStorageOperations(owner: PersonaStorageOwner): read
         const admission = owner.capture(input, spec);
         return async (parsed: ApiOperationInput) => {
           try { return await owner.execute(spec, parsed, admission); }
-          catch (error) { return owner.error(spec.action === "plan-list" && !parsed.url.searchParams.has("limit") ? { ...spec, failure: "worker" } : spec, error); }
+          catch (error) { return owner.error(spec.action === "plan-list" && !parsed.url.searchParams.has("limit") ? { ...spec, failure: "worker" } : spec, error, parsed); }
         };
-      } catch (error) { return owner.error(spec, error); }
+      } catch (error) { return owner.error(spec, error, input); }
     };
     return { contract, prepare: bind, handler: async input => { const bound = bind(input); return typeof bound === "function" ? bound(input) : bound; } };
   }));

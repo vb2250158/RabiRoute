@@ -83,6 +83,41 @@ test("native audio bytes and headers stay exact; ASR consumes original multipart
   assert.deepEqual(f.targets.slice(-2), ["compute-fixture", ""]);
 });
 
+test("local speech parameter failures identify fields and read-only discovery before any provider call", { timeout: 15000 }, async t => {
+  let providerCalls = 0;
+  const native = new ManagerSpeechControl({ localSpeech: { requestJson: async () => { providerCalls++; throw new Error('must not request provider'); },
+    requestBinary: async () => { providerCalls++; throw new Error('must not request provider'); } } } as any);
+  const f = await fixture(t, { control: { setPlaybackVolume: native.setPlaybackVolume.bind(native), selectAudioStream: native.selectAudioStream.bind(native),
+    synthesize: native.synthesize.bind(native), recordAudio: native.recordAudio.bind(native) } });
+  for (const [url, method, input, field, discovery] of [
+    ['/api/speech/playback/volume', 'PUT', { volume: 'private-invalid-value' }, 'volume', '/api/speech/playback/status'],
+    ['/api/speech/audio-streams/selection', 'PUT', { source: 'remote' }, 'clientId', '/api/speech/audio-streams'],
+    ['/api/speech/tts', 'POST', {}, 'input', '/api/speech/models'],
+    ['/api/speech/records/' + 'x'.repeat(201) + '/audio', 'GET', undefined, 'recordId', '/api/speech/records']
+  ] as const) {
+    const response = await f.send(url, method, input); assert.equal(response.status, 400, response.bytes.toString());
+    const body = response.json(); assert.equal(body.errorCode, 'SPEECH_PARAMETER_INVALID'); assert.equal(body.field, field);
+    assert.ok(body.repair.includes(discovery)); assert.match(body.repair, /original/);
+    if (field === 'input') assert.match(body.repair, /computeDeviceId=<URL-encoded-original-value>/);
+    assert.doesNotMatch(JSON.stringify(body), /private-invalid-value/);
+  }
+  assert.equal(providerCalls, 0);
+  const upstream = f.owner.failure(new SpeechControlError('Controlled provider rejection', 503));
+  assert.equal(upstream.status, 503); assert.equal((upstream.body as any).errorCode, undefined);
+  assert.equal((upstream.body as any).repair, undefined, 'Upstream errors cannot be relabelled as local parameters.');
+});
+
+test("speech authority failure takes precedence over local parameter repair", async t => {
+  let revoked = false;
+  const f = await fixture(t, {
+    capture: () => ({ targetLocal: false, run: action => action(), guard: () => { if (revoked) throw new SpeechControlError('Original access revoked', 403); } }),
+    control: { setPlaybackVolume: async () => { revoked = true; throw new SpeechControlError('Local rejected value', 400, { field: 'volume', repair: 'private-native-diagnostic' }); } }
+  });
+  const response = await f.send('/api/speech/playback/volume', 'PUT', { volume: 999 });
+  assert.equal(response.status, 403); assert.equal(response.json().errorCode, undefined);
+  assert.doesNotMatch(response.bytes.toString(), /private-native-diagnostic|Local rejected value/);
+});
+
 test("directory settings retain connection identity, lifecycle headers, read-only gate and original local decoder", async t => {
   const f = await fixture(t);
   assert.equal((await f.send("/api/speech/model-management/settings", "PATCH", "not-json")).status, 400);

@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import { VideoModels, downloadFile, safeTarget } from "./models.mjs";
+import { presentVideoError } from "./apiOwner.mjs";
 
 async function fixture(t, dependencies = {}) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "video-init-"));
@@ -107,4 +108,38 @@ test("model target refuses a junction beneath the selected directory", async t =
   await fs.mkdir(path.join(root, "real"));
   await fs.symlink(path.join(root, "real"), path.join(root, "link"), process.platform === "win32" ? "junction" : "dir");
   await assert.rejects(safeTarget(root, "link/model"), /联接/);
+});
+
+test("model upstream transport and catalog integrity failures stay separate from caller parameters and preserve the original job", async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'video-upstream-error-')); t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const original = Buffer.from('owner-catalog-model'), hash = createHash('sha256').update(original).digest('hex'), signal = new AbortController().signal;
+  const cases = [
+    ['network', async () => { throw new Error('private-token-and-host'); }, original.length, hash, 'VIDEO_MODEL_DOWNLOAD_FAILED'],
+    ['http', async () => new Response('provider error', { status: 503 }), original.length, hash, 'VIDEO_MODEL_DOWNLOAD_FAILED'],
+    ['oversize', async () => new Response(original), original.length - 1, hash, 'VIDEO_MODEL_DOWNLOAD_INTEGRITY_FAILED'],
+    ['short', async () => new Response(original.subarray(1)), original.length, hash, 'VIDEO_MODEL_DOWNLOAD_INTEGRITY_FAILED'],
+    ['hash', async () => new Response(original), original.length, '0'.repeat(64), 'VIDEO_MODEL_DOWNLOAD_INTEGRITY_FAILED']
+  ];
+  let captured;
+  for (const [name, fetcher, length, digest, code] of cases) {
+    const target = path.join(root, name + '.safetensors');
+    await assert.rejects(downloadFile('https://huggingface.co/fixture/model', target, length, digest, signal, () => {}, fetcher), cause => {
+      captured = cause;
+      const response = presentVideoError(cause); assert.equal(response.status, 502); assert.equal(response.body.errorCode, code);
+      assert.equal(response.body.field, 'upstream.model'); assert.equal(response.body.retryable, false);
+      assert.match(response.body.repair, /GET \/api\/video\/models/); assert.match(response.body.repair, /original/);
+      assert.match(response.body.repair, /\?computeDeviceId=<URL-encoded-original-value>/); assert.match(response.body.repair, /originally omitted/);
+      assert.doesNotMatch(JSON.stringify(response), /private-token-and-host/); return true;
+    });
+    await assert.rejects(fs.access(target), 'Failed upstream bytes cannot publish a replacement model.');
+  }
+  const { models } = await fixture(t);
+  const job = models.begin('model', async () => { throw captured; }); await models.flight;
+  assert.equal(job.state, 'failed'); assert.equal(job.errorCode, 'VIDEO_MODEL_DOWNLOAD_INTEGRITY_FAILED');
+  assert.equal((await models.snapshot()).job, job, 'The existing read-only model snapshot carries the same original failed job.');
+  const denied = presentVideoError(captured, { assert() { throw Object.assign(new Error('access revoked'), { code: 'VIDEO_REQUEST_FORBIDDEN' }); } }, 'POST');
+  assert.equal(denied.status, 403); assert.equal(denied.body.errorCode, undefined, 'Authority failure cannot disclose the native download diagnosis.');
+  const controller = new AbortController(), abortReason = new Error('original cancelled operation');
+  await assert.rejects(downloadFile('https://huggingface.co/fixture/model', path.join(root, 'cancelled.safetensors'), original.length, hash,
+    controller.signal, () => {}, async () => { controller.abort(abortReason); throw abortReason; }), error => error === abortReason);
 });

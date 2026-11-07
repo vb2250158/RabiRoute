@@ -1,3 +1,4 @@
+import { ApiContractError } from "./apiOperationContract.js";
 import { getTimeoutMs } from "../shared/timeoutSettings.js";
 import { TERMINAL_LIMITS } from "../shared/agentInteractiveProtocol.js";
 export type RemoteTerminalEvent = { sequence: number; type: string; data?: string; exitCode?: number | null };
@@ -46,13 +47,22 @@ export class LanAgentTerminals {
     }
     const result = await pending; assertAuthorized(); return result;
   }
+  private parameterFailure(instanceId: string, terminalId: string, field: "after" | "waitMs", operationId: string): ApiContractError {
+    const path = `/api/lan-agent/instances/${encodeURIComponent(instanceId)}/terminals/${encodeURIComponent(terminalId)}`;
+    const reason = field === "after"
+      ? "after must be a safe integer from 0 through the current output sequence"
+      : `waitMs must be an integer from 0 through ${getTimeoutMs("agent.terminalWait", TERMINAL_LIMITS.waitMs)}`;
+    return new ApiContractError(400, field === "after" ? "TERMINAL_OUTPUT_CURSOR_INVALID" : "TERMINAL_WAIT_INVALID", `query.${field}`, operationId,
+      false, undefined, `${reason}. Read GET ${path}?after=0&waitMs=0 for data.nextOutputSequence; retain the same instanceId and terminalId. `
+      + "This read may report truncated output; it does not replay input or open a terminal. Lookup failures and 401/403 are connection/access failures, not evidence that a process is missing");
+  }
   async read(instanceId: string, terminalId: string, after = 0, waitMs = 0, assertAuthorized: () => void = () => {}): Promise<unknown> {
     assertAuthorized();
     const key = this.key(instanceId, terminalId);
     const session = this.sessions.get(key);
     if (!session) throw Object.assign(new Error("Terminal stream not found. Open the session on this connection first."), { code: "TERMINAL_STREAM_NOT_FOUND" });
-    if (!Number.isSafeInteger(after) || after < 0 || after > session.sequence) throw new Error("Invalid terminal output cursor.");
-    if (!Number.isInteger(waitMs) || waitMs < 0 || waitMs > getTimeoutMs("agent.terminalWait", TERMINAL_LIMITS.waitMs)) throw new Error(`waitMs must be between 0 and ${getTimeoutMs("agent.terminalWait", TERMINAL_LIMITS.waitMs)}.`);
+    if (!Number.isSafeInteger(after) || after < 0 || after > session.sequence) throw this.parameterFailure(instanceId, terminalId, "after", "manager.lan-agent.terminals.read");
+    if (!Number.isInteger(waitMs) || waitMs < 0 || waitMs > getTimeoutMs("agent.terminalWait", TERMINAL_LIMITS.waitMs)) throw this.parameterFailure(instanceId, terminalId, "waitMs", "manager.lan-agent.terminals.read");
     if (waitMs && after === session.sequence && !session.ended) {
       await new Promise<void>((resolve, reject) => {
         const finish = () => { clearTimeout(deadline); session.listeners.delete(listener); resolve(); };
@@ -87,7 +97,7 @@ export class LanAgentTerminals {
   subscribe(instanceId: string, terminalId: string, after: number, listener: (event: RemoteTerminalEvent) => void): () => void {
     const session = this.sessions.get(this.key(instanceId, terminalId));
     if (!session) throw Object.assign(new Error("Terminal stream not found. Query or open the session first."), { code: "TERMINAL_STREAM_NOT_FOUND" });
-    if (!Number.isSafeInteger(after) || after < 0 || after > session.sequence) throw new Error("Invalid terminal output cursor.");
+    if (!Number.isSafeInteger(after) || after < 0 || after > session.sequence) throw this.parameterFailure(instanceId, terminalId, "after", "manager.lan-agent.terminals.events");
     const oldest = session.events[0]?.sequence ?? 1;
     if (after < oldest - 1) listener({ type: "gap", sequence: oldest - 1, data: "Earlier terminal output was discarded from the bounded buffer." });
     for (const event of session.events) if (event.sequence > after) listener(event);

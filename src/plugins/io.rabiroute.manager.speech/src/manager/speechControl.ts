@@ -1,6 +1,7 @@
 import { stickySpeechAuthority, awaitSpeechAuthority, type SpeechAuthorityGuard } from "@rabiroute/host-api/shared/speechRequestAuthority";
 import { SpeechControlError } from "@rabiroute/host-api/shared/speechErrors";
 export { SpeechControlError } from "@rabiroute/host-api/shared/speechErrors";
+
 import { randomUUID } from "node:crypto";
 import {
   DEFAULT_SPEECH_ROUTE_PROFILE,
@@ -56,6 +57,12 @@ import {
 import { inspectLocalSpeechService } from "./speechServiceStatus.js";
 import { recordPerformanceOperation } from "@rabiroute/host-api/performance/performanceInstrumentation";
 import { PERFORMANCE_OPERATIONS } from "@rabiroute/host-api/shared/performanceOperations";
+
+/** Only local parameter producers supply repair data; upstream failures keep their native status. */
+function speechParameterError(message: string, field: string, discovery: string): SpeechControlError {
+  return new SpeechControlError(message, 400, { field,
+    repair: `${message} ${discovery} Keep the original session, record, Route and selected compute target; discovery does not authorize replaying speech or changing frozen attribution. A failed lookup is not proof of absence; resolve 401/403 as connection access failures.` });
+}
 
 type JsonRequestResult = { status: number; data: Record<string, unknown> };
 
@@ -840,7 +847,7 @@ export class ManagerSpeechControl {
     const source = command?.source === "remote" ? "remote" : "local";
     const clientId = source === "remote" ? stringValue(command?.clientId).trim() : "";
     if (source === "remote" && !clientId) {
-      throw new SpeechControlError("A remote audio client id is required.", 400);
+      throw speechParameterError("A remote audio client id is required.", "clientId", "Read GET /api/speech/audio-streams for the current remote audio client IDs.");
     }
     const raw = assertSuccess(await awaitSpeechAuthority(guard, () => this.localSpeech.requestJson(
       this.dependencies.serviceUrl(),
@@ -860,7 +867,7 @@ export class ManagerSpeechControl {
     guard();
     const volume = command?.volume;
     if (typeof volume !== "number" || !Number.isInteger(volume) || volume < 0 || volume > 100) {
-      throw new SpeechControlError("Playback volume must be an integer between 0 and 100.", 400);
+      throw speechParameterError("Playback volume must be an integer between 0 and 100.", "volume", "Read GET /api/agent/help?operationId=manager.speech.playback.volume for the volume request and GET /api/speech/playback/status for current settings.");
     }
     const raw = assertSuccess(await awaitSpeechAuthority(guard, () => this.localSpeech.requestJson(
       this.dependencies.serviceUrl(),
@@ -910,7 +917,7 @@ export class ManagerSpeechControl {
     guard();
     const normalized = stringValue(recordId).trim();
     if (!normalized || normalized.length > 200) {
-      throw new SpeechControlError("A valid speech record id is required.", 400);
+      throw speechParameterError("A valid speech record id is required.", "recordId", "Read GET /api/speech/records with the original sessionId to obtain record IDs.");
     }
     return awaitSpeechAuthority(guard, () => this.localSpeech.requestBinary(
       this.dependencies.serviceUrl(),
@@ -940,7 +947,7 @@ export class ManagerSpeechControl {
     guard = stickySpeechAuthority(guard);
     guard();
     const displayName = stringValue(command?.displayName).trim();
-    if (!displayName) throw new SpeechControlError("Missing speaker display name.", 400);
+    if (!displayName) throw speechParameterError("Missing speaker display name.", "displayName", "Supply a nonempty displayName; read GET /api/agent/help?operationId=manager.speech.speakers.create and GET /api/speech/speakers for existing profiles.");
     const raw = assertSuccess(await awaitSpeechAuthority(guard, () => this.localSpeech.requestJson(
       this.dependencies.serviceUrl(),
       "/v1/speaker-profiles",
@@ -964,7 +971,7 @@ export class ManagerSpeechControl {
     const payload: Record<string, unknown> = {};
     if (command?.displayName != null) payload.display_name = stringValue(command.displayName).trim();
     if (command?.aliases != null) payload.aliases = stringArray(command.aliases);
-    if (Object.keys(payload).length === 0) throw new SpeechControlError("No speaker profile changes were provided.", 400);
+    if (Object.keys(payload).length === 0) throw speechParameterError("No speaker profile changes were provided.", "body", "Read GET /api/agent/help?operationId=manager.speech.speakers.update for supported changes and GET /api/speech/speakers for the original profile.");
     const raw = assertSuccess(await awaitSpeechAuthority(guard, () => this.localSpeech.requestJson(
       this.dependencies.serviceUrl(),
       `/v1/speaker-profiles/${encodeURIComponent(normalizedId)}`,
@@ -1001,9 +1008,9 @@ export class ManagerSpeechControl {
     const recordId = stringValue(command?.recordId).trim();
     const speakerLabel = stringValue(command?.speakerLabel).trim();
     const speakerId = this.speakerProfileId(command?.speakerId);
-    if (!sessionId) throw new SpeechControlError("Missing speaker session id.", 400);
-    if (!recordId) throw new SpeechControlError("Missing speech record id.", 400);
-    if (!speakerLabel) throw new SpeechControlError("Missing diarization speaker label.", 400);
+    if (!sessionId) throw speechParameterError("Missing speaker session id.", "sessionId", "Read GET /api/speech/records for original session and record IDs; preserve the original session.");
+    if (!recordId) throw speechParameterError("Missing speech record id.", "recordId", "Read GET /api/speech/records?sessionId=<URL-encoded-original-sessionId> and select the original record.");
+    if (!speakerLabel) throw speechParameterError("Missing diarization speaker label.", "speakerLabel", "Read GET /api/speech/records?sessionId=<URL-encoded-original-sessionId> for the original record and its diarization labels.");
     const raw = assertSuccess(await awaitSpeechAuthority(guard, () => this.localSpeech.requestJson(
       this.dependencies.serviceUrl(),
       "/v1/speaker-bindings",
@@ -1030,11 +1037,11 @@ export class ManagerSpeechControl {
     const speakerLabel = stringValue(command?.speakerLabel).trim();
     const displayName = optionalString(command?.displayName)?.trim() || null;
     const speakerId = command?.speakerId == null ? null : this.speakerProfileId(command.speakerId);
-    if (!sessionId) throw new SpeechControlError("Missing speaker session id.", 400);
-    if (!recordId) throw new SpeechControlError("Missing speech record id.", 400);
-    if (!speakerLabel) throw new SpeechControlError("Missing diarization speaker label.", 400);
+    if (!sessionId) throw speechParameterError("Missing speaker session id.", "sessionId", "Read GET /api/speech/records for original session and record IDs; preserve the original session.");
+    if (!recordId) throw speechParameterError("Missing speech record id.", "recordId", "Read GET /api/speech/records?sessionId=<URL-encoded-original-sessionId> and select the original record.");
+    if (!speakerLabel) throw speechParameterError("Missing diarization speaker label.", "speakerLabel", "Read GET /api/speech/records?sessionId=<URL-encoded-original-sessionId> for the original record and its diarization labels.");
     if (!speakerId && !displayName) {
-      throw new SpeechControlError("A display name is required when no speaker profile id is provided.", 400);
+      throw speechParameterError("A display name is required when no speaker profile id is provided.", "displayName", "Read GET /api/speech/speakers?sessionId=<URL-encoded-original-sessionId> to select an existing speakerId, or supply a nonempty displayName for the intended new profile.");
     }
     const raw = assertSuccess(await awaitSpeechAuthority(guard, () => this.localSpeech.requestJson(
       this.dependencies.serviceUrl(),
@@ -1063,7 +1070,7 @@ export class ManagerSpeechControl {
     const normalizedRecordId = stringValue(recordId).trim();
     const normalizedLabel = stringValue(speakerLabel).trim();
     if (!normalizedSessionId || !normalizedRecordId || !normalizedLabel) {
-      throw new SpeechControlError("Speaker session id, speech record id, and diarization label are required.", 400);
+      throw speechParameterError("Speaker session id, speech record id, and diarization label are required.", "sessionId/recordId/speakerLabel", "Read GET /api/speech/records?sessionId=<URL-encoded-original-sessionId> and GET /api/speech/speakers?sessionId=<URL-encoded-original-sessionId>.");
     }
     const search = new URLSearchParams({
       session_id: normalizedSessionId,
@@ -1172,8 +1179,8 @@ export class ManagerSpeechControl {
     guard = stickySpeechAuthority(guard);
     guard();
     const input = stringValue(command?.input).trim();
-    if (!input) throw new SpeechControlError("Missing TTS input.", 400);
-    if (input.length > 10_000) throw new SpeechControlError("TTS input exceeds 10000 characters.", 400);
+    if (!input) throw speechParameterError("Missing TTS input.", "input", "Supply nonempty input; read GET /api/agent/help?operationId=manager.speech.tts for the current request and GET /api/speech/models for model IDs. Preserve the original ?computeDeviceId=<URL-encoded-original-value> query when present; if originally omitted, keep it omitted. Do not switch to the default or local compute target.");
+    if (input.length > 10_000) throw speechParameterError("TTS input exceeds 10000 characters.", "input", "Supply input of at most 10000 characters; read GET /api/agent/help?operationId=manager.speech.tts. Do not automatically split or replay speech.");
     return awaitSpeechAuthority(guard, () => this.localSpeech.requestBinary(
       this.dependencies.serviceUrl(),
       "/v1/audio/speech",
@@ -1208,11 +1215,11 @@ export class ManagerSpeechControl {
     guard = stickySpeechAuthority(guard);
     guard();
     const text = stringValue(command?.text).trim();
-    if (!text) throw new SpeechControlError("Missing speech transcript text.", 400);
+    if (!text) throw speechParameterError("Missing speech transcript text.", "text", "Supply nonempty text; read GET /api/agent/help?operationId=manager.speech.messages.accept for the current ingress contract.");
     const sessionId = (stringValue(command?.sessionId) || `speech-${Date.now()}`).trim().slice(0, 200);
     const mobileEvidence = await awaitSpeechAuthority(guard, () => this.recordBoundMobileEvidence(command, guard));
     if (command.processingPolicy != null && !["agent", "transcribe"].includes(command.processingPolicy)) {
-      throw new SpeechControlError("Unsupported processing policy.", 400);
+      throw speechParameterError("Unsupported processing policy.", "processingPolicy", "Use agent or transcribe only when supported by the original frozen speech-runtime evidence; read GET /api/agent/help?operationId=manager.speech.messages.accept.");
     }
     if (command.processingPolicy != null && (!mobileEvidence
       || (command.processingPolicy === "transcribe" && mobileEvidence.processingPolicy !== "transcribe"))) {
@@ -1402,7 +1409,7 @@ export class ManagerSpeechControl {
   private speakerProfileId(value: unknown): string {
     const normalized = stringValue(value).trim();
     if (!/^speaker-[a-f0-9]{32}$/i.test(normalized)) {
-      throw new SpeechControlError("Invalid speaker profile id.", 400);
+      throw speechParameterError("Invalid speaker profile id.", "speakerId", "Read GET /api/speech/speakers?sessionId=<URL-encoded-original-sessionId> and use a returned complete speaker profile ID.");
     }
     return normalized;
   }

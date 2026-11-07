@@ -63,6 +63,32 @@ async function fixture(t: test.TestContext, customize?: (context: PersonaStorage
     get reschedules() { return reschedules; }, setReadOnly: (value: boolean) => { readOnly = value; }, changeApplication: (value: RoleStorageApplication) => { currentApplication = value; }, changeDirectory: (value: string) => { currentDirectory = value; }, identity };
 }
 
+test('native page parameters identify safe fields and current discovery without a mutation', async t => {
+  const f = await fixture(t);
+  for (const [suffix, field] of [['plans?limit=1&view=wrong', 'query.view'], ['plans?limit=1&sort=wrong', 'query.sort'], ['memory?limit=1&kind=wrong', 'query.kind']]) {
+    const result = await f.send(suffix); assert.equal(result.status, 400, JSON.stringify(result.body));
+    assert.equal(result.body.errorCode, 'PERSONA_STORAGE_PARAMETER_INVALID'); assert.equal(result.body.field, field);
+    assert.match(result.body.repair, /GET \/api\/agent\/help\?operationId=manager.personas.storage/);
+    assert.doesNotMatch(result.body.repair, /GET \/api\/roles\/Fixture\/plans\/query/);
+  }
+  assert.equal((await f.send('plans')).body.data.length, 0);
+});
+
+test('non-Codex binding repair keeps the explicit original adapter and complete peer binding', async t => {
+  const f = await fixture(t); let writes = 0;
+  f.application.commands.createPlan = async () => { writes++; throw new RoleStorageApplicationError('Plan taskBinding.sessionId is required.', 'invalid_request', 400); };
+  for (const agentType of ['workbuddy', 'antigravity']) {
+    const original = { agentType, sessionId: '', instanceBinding: { instanceId: 'original-instance', agentId: 'original-agent', ownerDeviceId: 'original-peer' } };
+    const response = await f.send('plans', 'POST', { id: 'original-plan', title: 'Original plan', taskBinding: original }, { 'idempotency-key': 'original-' + agentType });
+    assert.equal(response.status, 400); assert.equal(response.body.field, 'body.taskBinding');
+    assert.match(response.body.repair, /explicit agentAdapter equal to the original taskBinding.agentType or secretaryBinding.agentType/);
+    assert.match(response.body.repair, /instanceId, agentId and ownerDeviceId/); assert.ok(response.body.repair.includes(agentType));
+    assert.match(response.body.repair, /Do not omit agentAdapter or infer it from an opaque session ID/);
+    assert.deepEqual(original.instanceBinding, { instanceId: 'original-instance', agentId: 'original-agent', ownerDeviceId: 'original-peer' });
+  }
+  assert.equal(writes, 2); assert.equal((await f.send('plans')).body.data.length, 0);
+});
+
 test("58 exact contracts retain both role prefixes, ignored counts IDs and derived manual IDs", async t => {
   const f = await fixture(t);
   assert.equal(f.definitions.length, 58);
@@ -124,6 +150,8 @@ test("original temporary storage keeps plan CAS, idempotency, view ETags and rec
   assert.equal(changed.status, 200, JSON.stringify(changed.body)); assert.equal(changed.body.data.title, "Changed Fixture");
   const stale = await f.send("plans/plan-fixture", "PATCH", { title: "Stale Fixture" }, { "idempotency-key": "fixture-plan-stale", "if-match": read.headers.get("etag")! });
   assert.equal(stale.status, 412); assert.equal(stale.body.commitState, "not_started");
+  assert.equal(stale.body.field, 'headers.if-match'); assert.equal(stale.body.errorCode, 'revision_conflict');
+  assert.match(stale.body.repair, /GET \/api\/roles\/Fixture\/plans\/plan-fixture/); assert.match(stale.body.repair, /plan-statuses/);
   const history = await f.send("plans/plan-fixture/history", "GET", undefined, {}, "/roles/Fixture/");
   assert.equal(history.status, 200); assert.equal(history.body.data.count, 2); assert.equal(history.body.data.records[0].actor.kind, "unknown");
   const after = await f.send("plans/plan-fixture"); assert.equal(after.body.data.title, "Changed Fixture");
@@ -144,6 +172,8 @@ test("native workflow aliases mutate one revisioned catalog and publish native r
   assert.equal(created.status, 201, JSON.stringify(created.body));
   current = await f.send("plan-statuses", "GET", undefined, {}, "/roles/Fixture/");
   assert.ok(current.body.data.statuses.some((status: { key: string }) => status.key === "fixture_status"));
+  const immutable = await f.send('plan-statuses/fixture_status', 'PATCH', { key: 'substituted-key' }, { 'idempotency-key': 'fixture-status-immutable', 'if-match': current.headers.get('etag')! });
+  assert.equal(immutable.status, 400); assert.equal(immutable.body.field, 'body.key'); assert.match(immutable.body.repair, /plan-statuses/);
   const updated = await f.send("plan-statuses/fixture_status", "PATCH", { label: "Renamed Fixture" }, { "idempotency-key": "fixture-status-update", "if-match": current.headers.get("etag")! });
   assert.equal(updated.status, 200, JSON.stringify(updated.body));
   const retired = await f.send("plan-marker-statuses/fixture_status", "DELETE", { replacementKey }, { "idempotency-key": "fixture-status-delete", "if-match": updated.headers.get("etag")! }, "/roles/Fixture/");
@@ -161,6 +191,9 @@ test("native memory creation, touching, read-only reads and overview keep their 
   assert.equal(replay.headers.get("idempotency-key"), first.headers.get("idempotency-key"));
   const updated = await f.send("memory/recent/" + id, "PATCH", { title: "Changed Memory" }, { "idempotency-key": "fixture-memory-update", "x-rabiroute-expected-revision": first.headers.get("etag")! });
   assert.equal(updated.status, 200, JSON.stringify(updated.body)); assert.equal(f.reschedules, 2);
+  const stale = await f.send('memory/recent/' + id, 'PATCH', { title: 'Stale fixture' }, { 'idempotency-key': 'fixture-memory-stale', 'if-match': first.headers.get('etag')! });
+  assert.equal(stale.status, 412); assert.equal(stale.body.field, 'headers.if-match');
+  assert.ok(stale.body.repair.includes('/memory/recent/' + id)); assert.match(stale.body.repair, /updates viewedAt/);
   f.setReadOnly(true); const plain = await f.send("memory/recent/" + id); assert.equal(plain.status, 200); assert.equal(plain.body.data.title, "Changed Memory"); assert.equal(plain.headers.has("idempotency-key"), false);
   for (const suffix of ["memory", "memory?counts=1", "memory?limit=1&kind=recent", "memory/recent", "memory/consolidated", "memory/consolidation-runs"]) assert.equal((await f.send(suffix)).status, 200, suffix);
   assert.equal((await f.send("memory?limit=1&kind=invalid")).status, 400);
@@ -170,6 +203,8 @@ test("native memory creation, touching, read-only reads and overview keep their 
   const requested = await f.send("memory/consolidation-requests", "POST", { force: true, includeOlderThanHours: 0, triggerOlderThanHours: 0 }, { "idempotency-key": "fixture-consolidation-request" });
   assert.equal(requested.status, 201, JSON.stringify(requested.body)); const runId = requested.body.data.run.id;
   const run = await f.send("memory/consolidation-runs/" + runId, "GET", undefined, {}, "/roles/Fixture/"); assert.equal(run.status, 200); assert.equal(run.body.data.status, "requested");
+  const runStale = await f.send('memory/consolidation-runs/' + runId + '/result', 'POST', [], { 'idempotency-key': 'fixture-result-stale', 'if-match': '"' + 'a'.repeat(64) + '"' });
+  assert.equal(runStale.status, 412); assert.ok(runStale.body.repair.includes('GET /api/roles/Fixture/memory/consolidation-runs/' + runId));
   const result = await f.send("memory/consolidation-runs/" + runId + "/result", "POST", [{ id: "consolidated-fixture", title: "Consolidated Fixture", focus: "Controlled", content: "Controlled consolidated content", keywords: ["fixture"] }], { "idempotency-key": "fixture-consolidation-result", "if-match": run.headers.get("etag")! }, "/roles/Fixture/");
   assert.equal(result.status, 200, JSON.stringify(result.body)); assert.equal(result.body.data.run.status, "completed");
   const consolidated = await f.send("memory/consolidated/consolidated-fixture"); assert.equal(consolidated.status, 200); assert.equal(consolidated.body.data.title, "Consolidated Fixture");

@@ -51,7 +51,7 @@ export function createPlanAdvanceOwner(context: PlanAdvanceContext) {
             // through the bounded storage process so slow shared files cannot stop /health.
             const workflowResult = await worker.run<PersonaPlanWorkflowReadResult | null>({ type: "role_plan_workflow", roleDir: dir });
             assertCurrent();
-            if (!workflowResult) throw new Error("Role plan workflow is warming; retry shortly.");
+            if (!workflowResult) throw Object.assign(new Error("Role plan workflow is warming; retry shortly."), { statusCode: 503, code: "PLAN_WORKFLOW_NOT_READY" });
             const store = new PlanAdvanceStore(dir); const workflow = workflowResult.workflow;
             if (action === "settings.read" || action === "settings.save") {
               if (action === "settings.save") {

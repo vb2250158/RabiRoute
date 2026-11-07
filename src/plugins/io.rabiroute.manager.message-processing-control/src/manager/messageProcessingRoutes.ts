@@ -116,6 +116,11 @@ async function verifyOutcomeRecords(
 export function createMessageProcessingOwner(context: MessageProcessingApiContext) {
   const success = (data: unknown): ApiOperationResult => ({ status: 200, body: { code: 0, data } });
   const failed = (error: unknown, status = 400): ApiOperationResult => ({ status, body: { code: -1, message: errorMessage(error) } });
+  const registrationParameterFailure = (field: "requirementId" | "action", message: string): ApiOperationResult => ({ status: 400, body: {
+    code: -1, errorCode: "MESSAGE_PROCESSING_PARAMETER_INVALID", field: `body.${field}`, message, retryable: false,
+    help: { method: "GET", path: "/api/agent/help?operationId=manager.message-processing.requirement.record" },
+    repair: "Read GET /api/message-processing/board to find the original requirementId; GET /api/message-processing/requirements/:requirementId reads that exact requirement. action must be register_group, dispatch or dispatch_failed; read the current operation contract for its body. Preserve the original source, requirement and dispatch state. A failed lookup does not prove absence; resolve 401/403 as access failures. Do not create a replacement requirement or replay a dispatch automatically."
+  } });
   const changed = (id: string, original: MessageProcessingRequirement | undefined) => {
     if (original && context.board.getRequirement(id)?.updatedAt !== original.updatedAt) throw new Error("Message processing requirement changed; retry verification.");
   };
@@ -140,15 +145,15 @@ export function createMessageProcessingOwner(context: MessageProcessingApiContex
     register(body: MessageProcessingRegistrationInput): ApiOperationResult {
       try {
         const requirementId = String(body.requirementId || "").trim();
-        if (!requirementId) throw new Error("Missing requirementId.");
+        if (!requirementId) return registrationParameterFailure("requirementId", "Missing requirementId.");
         if (body.action === "register_group") {
           const registration = context.board.registerMessageGroup({ requirementId, messageGroupId: String(body.messageGroupId || "").trim(), source: body.source as RegisterMessageGroupRequirementInput["source"], knowledgeMatches: context.recallKnowledge(body.source as RegisterMessageGroupRequirementInput["source"]) });
           if (registration.outcome !== "replay_suppressed") { context.scheduleKnowledgeCallbackReminder(registration.requirement); publishBoardChange(context, registration.requirement); }
           return success(registration);
         }
+        if (body.action !== "dispatch" && body.action !== "dispatch_failed") return registrationParameterFailure("action", "Unsupported message-processing action.");
         const item = body.action === "dispatch" ? context.board.recordDispatch(requirementId, body.worker as NonNullable<MessageProcessingRequirement["worker"]>)
-          : body.action === "dispatch_failed" ? context.board.recordDispatchFailure(requirementId, body.error || "Message Agent dispatch failed.")
-          : (() => { throw new Error("Unsupported message-processing action."); })();
+          : context.board.recordDispatchFailure(requirementId, body.error || "Message Agent dispatch failed.");
         context.scheduleKnowledgeCallbackReminder(item); publishBoardChange(context, item); return success(item);
       } catch (error) { return failed(error); }
     },

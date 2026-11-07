@@ -86,6 +86,25 @@ async function fixture(run: (value: {
   }
 }
 
+test('role parameter and object errors point to read-only current IDs and revisions', async () => fixture(async f => {
+  const original = await f.get();
+  const stale = await f.post('configuration', { expectedRevision: 'a'.repeat(64), config: {} });
+  assert.equal(stale.response.status, 412); assert.equal(stale.body.errorCode, 'ROLE_REVISION_CONFLICT');
+  assert.equal(stale.body.field, 'body.expectedRevision'); assert.match(stale.body.repair, /GET \/api\/roles\/Example\/configuration/);
+  const missing = await f.call('/Missing/configuration'); assert.equal(missing.response.status, 404);
+  assert.equal(missing.body.errorCode, 'ROLE_NOT_FOUND'); assert.equal(missing.body.field, 'path.roleId'); assert.match(missing.body.repair, /GET \/api\/roles\?scope=archived/);
+  const badTitle = await f.call('', 'POST', { roleId: 'Another', title: ' ' });
+  assert.equal(badTitle.response.status, 400); assert.equal(badTitle.body.field, 'body.title');
+  assert.equal(badTitle.body.errorCode, 'ROLE_TITLE_REQUIRED'); assert.equal(badTitle.body.mutationOutcome, 'not_started');
+  assert.equal((await f.get()).revision, original.revision);
+  assert.equal((await f.get('')).roles.some((role: { roleId: string }) => role.roleId === 'Another'), false);
+  const archived = await f.post('archive', { expectedRevision: original.revision }); assert.equal(archived.response.status, 200);
+  const createArchived = await f.call('', 'POST', { roleId: 'Example', title: 'Example' });
+  assert.equal(createArchived.body.errorCode, 'ROLE_ARCHIVED'); assert.match(createArchived.body.repair, /GET \/api\/roles\/Example\/configuration/);
+  assert.doesNotMatch(createArchived.body.repair, /undefined|scope=all/);
+  assert.equal((await f.get('?scope=archived')).roles.some((role: { roleId: string }) => role.roleId === 'Example'), true);
+}));
+
 test("unbound roles are listed and save without creating a Route; clearing role fields preserves extensions", async () => fixture(async f => {
   const listed = await f.get("");
   assert.equal(listed.roles[0].roleId, "Example");

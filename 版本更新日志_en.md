@@ -6,6 +6,20 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.10.0 - 2026-11-07
+
+- Add actionable fields and exact same-target discovery for ambiguous/unsupported Agent actions, terminal cursors, roles, plans, memory and plugin settings. Preserve existing HTTP status, CAS/ETag, original target and unknown receipt semantics. Non-Codex binding help explicitly retains the original adapter and full Peer binding.
+- Add a read-only creation-intent projection to the existing caller receipt; absent prompt delivery no longer implies no frozen creation. Host API 1.4.0 exports the shared lookup; SDK 1.1.1 remains unchanged.
+- Extend package import and instance install/remove diagnostics for existing explicit 400/404/409 failures. GET packages supplies versions; GET instances supplies current IDs and settings revision. Keep asynchronous lifecycle, data retention and possible pre-CAS import effects.
+- Distinguish local speech parameter errors, workflow-not-ready 503 and upstream video network/integrity 502. Keep point-read/cache performance and isolate damaged records. Registered-operation inventories do not imply complete deep-semantic coverage; remaining cases are listed in docs/api-error-recovery_en.md.
+- Independently advance the changed plugins:
+  - `io.rabiroute.manager.agent-thread-control` 0.1.3
+  - `io.rabiroute.manager.core` 0.1.3
+  - `io.rabiroute.manager.message-processing-control` 0.1.3
+  - `io.rabiroute.manager.persona` 0.1.5
+  - `io.rabiroute.manager.speech` 0.1.3
+  - `io.rabiroute.manager.video` 0.1.3
+
 ## 0.9.1 - 2026-11-07
 
 - Decouple the first startup-window frame from Host startup. Hidden installer launches now enter the Host without waiting for an invisible paint; foreground animation remains available, and fast completion or early dismissal still releases original resources.

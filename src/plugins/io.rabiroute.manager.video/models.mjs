@@ -45,6 +45,12 @@ async function validSize(file, bytes, access) {
   } catch (error) { if (error.code === "ENOENT") return false; throw error; }
 }
 export async function downloadFile(url, target, bytes, sha256, signal, progress, fetcher = fetch, timeoutMs = 4 * 60 * 60 * 1000) {
+  // bytes/hash are the owner catalog's expected upstream asset, not a caller upload digest.
+  const upstreamFailure = (message, integrity = false) => Object.assign(new VideoError(message, 502), {
+    code: integrity ? "VIDEO_MODEL_DOWNLOAD_INTEGRITY_FAILED" : "VIDEO_MODEL_DOWNLOAD_FAILED",
+    field: "upstream.model", reason: integrity ? "upstream_integrity" : "upstream_transport",
+    repair: "Read GET /api/video/models and GET /api/video/models/initialization to inspect the model and original download state. Preserve the original ?computeDeviceId=<URL-encoded-original-value> query when present; if originally omitted, keep it omitted. The upstream download failed; this is not a caller parameter value. Preserve the selected model, settings revision and existing operation; do not change its digest, automatically replay the download or switch compute targets. Resolve 401/403 separately as connection access failures."
+  });
   const deadline = AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]);
   const partial = `${target}.part`;
   const base = path.dirname(target);
@@ -61,19 +67,20 @@ export async function downloadFile(url, target, bytes, sha256, signal, progress,
       const parsed = new URL(url);
       if (parsed.protocol !== "https:" || parsed.username || parsed.password || parsed.port ||
         !(parsed.hostname === "huggingface.co" || parsed.hostname.endsWith(".hf.co") || parsed.hostname.endsWith(".huggingface.co"))) throw new VideoError("模型下载地址不受信任。");
-      response = await fetcher(url, { redirect: "manual", signal: deadline });
+      try { response = await fetcher(url, { redirect: "manual", signal: deadline }); }
+      catch { deadline.throwIfAborted(); throw upstreamFailure("模型下载连接失败，请检查原模型下载状态。"); }
       if (![301, 302, 303, 307, 308].includes(response.status)) break;
       const next = response.headers.get("location"); await response.body?.cancel();
-      if (!next) throw new VideoError("模型下载重定向无效。");
+      if (!next) throw upstreamFailure("模型下载重定向无效。");
       url = new URL(next, url).href;
     }
-    if (!response?.ok || !response.body) throw new VideoError("模型下载失败，请稍后重试。");
+    if (!response?.ok || !response.body) throw upstreamFailure("模型下载失败，请检查原模型下载状态。");
     for await (const chunk of response.body) {
       signal.throwIfAborted(); count += chunk.length;
-      if (count > bytes) throw new VideoError("模型下载大小超出清单。");
+      if (count > bytes) throw upstreamFailure("模型下载大小超出清单。", true);
       hash.update(chunk); await handle.writeFile(chunk); progress(count);
     }
-    if (count !== bytes || hash.digest("hex") !== sha256) throw new VideoError("模型大小或 SHA-256 校验失败。");
+    if (count !== bytes || hash.digest("hex") !== sha256) throw upstreamFailure("模型大小或 SHA-256 校验失败。", true);
     await handle.sync(); await handle.close();
     await safeTarget(base, path.basename(target));
     // Hard-link publication is atomic and refuses to overwrite an existing model.
@@ -179,7 +186,13 @@ export class VideoModels {
   }
   begin(kind, operation, access) {
     access?.assert(); this.guard(); access?.beforeMutation(); this.job = { kind, state: "running", bytes: 0, total: 0 };
-    this.flight = Promise.resolve().then(operation).then(() => { this.job.state = "completed"; }, error => { this.job.state = "failed"; this.job.message = `${this.job.currentFile ? `${this.job.currentFile}：` : ""}${error instanceof VideoError ? error.message : "安装或下载失败，请检查网络、磁盘权限和运行日志。"} 已有模型和未完成下载均已保留。`; }).finally(() => { this.flight = null; this.publish(); });
+    this.flight = Promise.resolve().then(operation).then(() => { this.job.state = "completed"; }, error => {
+      this.job.state = "failed";
+      this.job.message = `${this.job.currentFile ? `${this.job.currentFile}：` : ""}${error instanceof VideoError ? error.message : "安装或下载失败，请检查网络、磁盘权限和运行日志。"} 已有模型和未完成下载均已保留。`;
+      if (error instanceof VideoError && (error.code === "VIDEO_MODEL_DOWNLOAD_FAILED" || error.code === "VIDEO_MODEL_DOWNLOAD_INTEGRITY_FAILED")) {
+        Object.assign(this.job, { errorCode: error.code, field: error.field, reason: error.reason, repair: error.repair, retryable: false });
+      }
+    }).finally(() => { this.flight = null; this.publish(); });
     this.publish(); return this.job;
   }
   installRuntime(access) { return this.begin("runtime", () => this.runtime.install(), access); }

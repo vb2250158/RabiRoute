@@ -21,7 +21,9 @@ const references = { type: "object", required: ["references", "runningWork"], pr
 } };
 const deleted = { type: "object", required: ["roleId", "deleted"], properties: { roleId, deleted: { const: true } } };
 const failure = { mediaType: "application/json; charset=utf-8", schema: { type: "object", required: ["code", "error", "message"], properties: {
-  code: { const: -1 }, error: string, message: string, uncertain: { const: true }, mutationOutcome: { enum: ["not_started", "unknown"] }
+  code: { const: -1 }, error: string, message: string, errorCode: string, field: string, repair: string, retryable: { const: false },
+  help: { type: "object", required: ["method", "path"], properties: { method: { const: "GET" }, path: string }, additionalProperties: false },
+  uncertain: { const: true }, mutationOutcome: { enum: ["not_started", "unknown"] }
 } } } as const;
 const commands = ["config", "archive", "restore", "delete"] as const;
 type Action = "list" | "create" | "detail" | "references" | typeof commands[number];
@@ -39,10 +41,31 @@ type Bound = ReturnType<ReturnType<typeof createRoleConfigurationOwner>["prepare
 function failed(error: unknown, action: Action, selectedRole: string | undefined, outcome: ReturnType<Bound["mutationOutcome"]>): ApiOperationResult {
   const status = error instanceof RoleLifecycleError ? error.status : (error as { statusCode?: number })?.statusCode ?? 500;
   const uncertain = outcome === "unknown";
+  const operationId = `manager.roles.${action}`, rolePath = selectedRole ? `/api/roles/${encodeURIComponent(selectedRole)}` : undefined;
+  let field: string | undefined, repair: string | undefined;
+  if (error instanceof RoleLifecycleError) {
+    switch (error.code) {
+      case "ROLE_ID_INVALID": field = "body.roleId"; repair = "Read GET /api/roles for active data.roles[].roleId and GET /api/roles?scope=archived for archived roles; follow data.nextCursor separately. A new ID must follow the current create contract; do not substitute an existing role."; break;
+      case "ROLE_TITLE_REQUIRED": field = "body.title"; repair = "Supply a nonempty role title in body.title; read the current create contract for its field shape."; break;
+      case "ROLE_NOT_FOUND": field = "path.roleId"; repair = "Read GET /api/roles for active data.roles[].roleId and GET /api/roles?scope=archived for archived roles; follow data.nextCursor separately. Keep the original role ID while investigating a failed lookup; do not create a replacement."; break;
+      case "ROLE_REVISION_CONFLICT": field = "body.expectedRevision"; repair = `Read GET ${rolePath}/configuration for data.revision and current config. Merge the intended change before submitting the latest revision; keep unknown operations separate.`; break;
+      case "ROLE_CONFIRMATION_REQUIRED": field = "body.confirmationId"; repair = `Read GET ${rolePath}/configuration to confirm the intended role's data.roleId. Use that exact ID only when deletion is already authorized.`; break;
+      case "ROLE_TARGET_REQUIRED": field = "body.config.automationRules"; repair = "Read GET /api/lan-agent/instances for instance/Agent bindings and GET /api/agent-adapters/catalog for published capabilities. Read the selected role configuration before choosing its explicit automation target."; break;
+      case "ROLE_OPERATION_CONFLICT": field = "headers.idempotency-key"; repair = `Keep the original key and payload; read GET ${rolePath}/configuration to observe current state. This key identifies another payload; discovery does not authorize rewriting or replaying the original operation.`; break;
+      case "ROLE_REFERENCED": field = "path.roleId"; repair = `Read GET ${rolePath}/references for data.references and runningWork. Resolve the actual references within the original task's scope before deletion.`; break;
+      case "ROLE_NOT_ARCHIVED": case "ROLE_ARCHIVED": field = action === 'create' ? 'body.roleId' : "path.roleId"; repair = rolePath
+        ? `Read GET ${rolePath}/configuration for data.archivedAt. Inspect the original lifecycle intent; discovery does not archive or restore the role.`
+        : 'Read GET /api/roles and GET /api/roles?scope=archived for current role IDs. Inspect the original lifecycle intent; discovery does not archive or restore a role.'; break;
+    }
+  }
   recordDataMutationAudit({ level: "error", group: "persona", event: "role_operation_unconfirmed", owner: "role-configuration",
     action, target: { type: "role", id: selectedRole || "catalog" }, dataSource: { kind: "file", id: "roles" }, outcome: "failed", error });
   return { status, mutationOutcome: outcome, headers: { "cache-control": "no-store" }, body: {
     code: -1, error: error instanceof RoleLifecycleError ? error.code : "ROLE_OPERATION_FAILED",
+    ...(error instanceof RoleLifecycleError ? { errorCode: error.code } : {}),
+    ...(field && repair ? { field, repair: repair + " Read GET /api/agent/help?operationId=" + encodeURIComponent(operationId)
+      + ". Handle lookup failures and 401/403 access failures separately; preserve the original request, key and receipt and do not automatically replay a write.", retryable: false,
+      help: { method: "GET", path: `/api/agent/help?operationId=${encodeURIComponent(operationId)}` } } : {}),
     message: error instanceof RoleLifecycleError ? error.message : "角色操作未完成，请检查目录状态后重试。",
     mutationOutcome: outcome, ...(uncertain ? { uncertain: true } : {})
   } };
@@ -98,7 +121,9 @@ export function createRoleConfigurationOperations(context: RoleConfigurationCont
             body: { code: 0, data: value, ...(nativeCommand ? { operationId: String(parsed.request.headers["idempotency-key"]), state: "committed" } : {}) } };
         } catch (error) {
           parsed.signal?.throwIfAborted();
-          return failed(error, action, parsed.path.roleId, bound.mutationOutcome());
+          const createdRole = action === 'create' && parsed.body && typeof parsed.body === 'object' && typeof (parsed.body as { roleId?: unknown }).roleId === 'string'
+            ? (parsed.body as { roleId: string }).roleId : undefined;
+          return failed(error, action, parsed.path.roleId ?? createdRole, bound.mutationOutcome());
         }
       };
     };

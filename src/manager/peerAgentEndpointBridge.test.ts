@@ -141,15 +141,20 @@ test("Peer source, reply and original caller lookup use coordinates without read
   const bridge=createPeerAgentEndpointBridge({managerInstanceId:"a",localDeviceId:()=>"pc-a",scope:()=>"scope",store,
     receiptDirectory:path.join(directory,"receipts"),readLocal:async()=>{throw new Error("No local source owner reads");},localOptions:()=>({allowedWorkspaces:[]}),principal:()=>undefined,
     request:async(device,method,path,body)=>{calls.push({device,method,path,body});return {ok:true,status:"delivered"};},
-    requestResult:async(device,method,path,body)=>{calls.push({device,method,path,body});return {status:404,body:{errorCode:"DELIVERY_NOT_RESERVED"}};} });
+    requestResult:async(device,method,path,body)=>{calls.push({device,method,path,body});return {status:404,body:{errorCode:"DELIVERY_NOT_RESERVED", canSubmitSameIntent:true,
+      creation:{available:true,state:'uncertain',intentHash:'a'.repeat(64)},repair:'Original creation is separate from prompt delivery.'}};} });
   const source=await bridge.resolveSource({action:"send",sourceThreadId:"unregistered-session",messageSource:{type:"agent",agentAdapter:"codex",sessionId:"another-declaration",sessionName:"Declared"}},
     {scope:"scope",sourceDeviceId:"pc-b",deviceOwner:true});
   assert.equal(source?.endpoint?.kind,"local"); assert.equal(source?.endpoint?.ownerDeviceId,"pc-b");
   assert.equal(source?.endpoint?.instanceId,undefined); assert.equal(source?.threadId,"unregistered-session"); assert.equal(calls.length,0);
   assert.equal((await bridge.forwardReply({action:"send",ledgerOwnerDeviceId:"pc-b",inReplyToRequestId:"original"},()=>{}))?.data.status,"delivered");
-  assert.equal((await bridge.forwardCallerLookup("original-id",{ledgerOwnerDeviceId:"pc-b"},()=>{}))?.status,404);
+  const receipt = await bridge.forwardCallerLookup("original-id",{ledgerOwnerDeviceId:"pc-b",sourceThreadId:'original-task',sourceAgentType:'agent',
+    messageSource:{type:'agent',agentAdapter:'codex',sessionId:'original-task',sessionName:'Source'}},()=>{});
+  assert.equal(receipt?.status,404);assert.equal((receipt?.body.creation as any).state,'uncertain');assert.equal(receipt?.body.canSubmitSameIntent,true);
   assert.equal(calls.length,2); assert.equal(calls[0]!.device,"pc-b");
   assert.ok(calls[1]!.path.includes("/caller/original-id"));
+  assert.ok(calls[1]!.path.includes('sourceThreadId=original-task'));assert.ok(calls[1]!.path.includes('agentAdapter=codex'));
+  assert.ok(calls[1]!.path.includes('ledgerOwnerDeviceId=pc-b'));
 });
 
 

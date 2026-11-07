@@ -2,6 +2,32 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { LanAgentTerminals, TerminalDispatchNotSentError } from "./lanAgentTerminals.js";
+import { ApiContractError } from "./apiOperationContract.js";
+
+test("invalid output cursors and waits expose same-terminal reads without invoking input", async () => {
+  let calls = 0, events = 0;
+  const hub = new LanAgentTerminals(async () => { calls++; return {}; });
+  const terminalId = randomUUID(); await hub.execute("original-instance", { action: "open", terminalId });
+  hub.receive("original-instance", { terminalId, type: "output", data: "private output" });
+  const before = calls;
+  const check = (field: string, operationId: string) => (error: unknown) => {
+    assert.ok(error instanceof ApiContractError); assert.equal(error.status, 400);
+    assert.equal(error.field, "query." + field); assert.equal(error.operationId, operationId);
+    assert.equal(error.code, field === "after" ? "TERMINAL_OUTPUT_CURSOR_INVALID" : "TERMINAL_WAIT_INVALID");
+    assert.ok(error.reason?.includes(`/original-instance/terminals/${terminalId}?after=0&waitMs=0`));
+    assert.doesNotMatch(error.reason!, /private output/); return true;
+  };
+  for (const after of [-1, 1.5, 2, NaN, Number.MAX_SAFE_INTEGER + 1]) {
+    await assert.rejects(hub.read("original-instance", terminalId, after), check("after", "manager.lan-agent.terminals.read"));
+    assert.throws(() => hub.subscribe("original-instance", terminalId, after, () => { events++; }), check("after", "manager.lan-agent.terminals.events"));
+  }
+  for (const wait of [-1, 1.5, NaN, Number.MAX_SAFE_INTEGER]) {
+    await assert.rejects(hub.read("original-instance", terminalId, 0, wait), check("waitMs", "manager.lan-agent.terminals.read"));
+  }
+  assert.equal(calls, before); assert.equal(events, 0);
+  const observed = await hub.read("original-instance", terminalId, 0, 0) as { nextOutputSequence: number };
+  assert.equal(observed.nextOutputSequence, 1);
+});
 
 test("terminal replay is isolated, bounded and never persists or re-executes input", async () => {
   const calls: unknown[] = [];

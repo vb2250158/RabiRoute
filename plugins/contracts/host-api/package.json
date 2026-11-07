@@ -1,6 +1,6 @@
 {
   "name": "@rabiroute/host-api",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "type": "module",
   "license": "MIT",
   "description": "Public declarations and export signatures for RabiRoute shared host owners.",
@@ -98,6 +98,9 @@
     },
     "./automation/personaAutomationRuntime": {
       "types": "./types/src/automation/personaAutomationRuntime.d.ts"
+    },
+    "./callerCreationMetadata": {
+      "types": "./types/src/callerCreationMetadata.d.ts"
     },
     "./codexTaskIdentity": {
       "types": "./types/src/codexTaskIdentity.d.ts"

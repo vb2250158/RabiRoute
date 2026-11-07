@@ -28,7 +28,9 @@ export function createPluginManagementOperations(context: PluginCatalogApiContex
             } } }
           } }
         } } },
-        default: { mediaType: "application/json; charset=utf-8", schema: { type: "object", required: ["code", "message"], properties: { code: { const: -1 }, message: { type: "string" } }, additionalProperties: true } }
+        default: { mediaType: "application/json; charset=utf-8", schema: { type: "object", required: ["code", "message"], properties: { code: { const: -1 }, message: { type: "string" },
+          errorCode: { type: "string" }, field: { type: "string" }, repair: { type: "string" }, retryable: { const: false },
+          help: { type: "object", required: ["method", "path"], properties: { method: { const: "GET" }, path: { type: "string" } }, additionalProperties: false } }, additionalProperties: true } }
       },
       effects: { mode: update ? "native-plugin-settings" : "read", description: update
         ? "Persist only this instance's override, preserving immutable package defaults and other instance settings; original Kernel ownership tracks initialization and retirement."
@@ -70,7 +72,9 @@ export function createPluginManagementOperations(context: PluginCatalogApiContex
       },
       responses: {
         "200": { mediaType: "application/json; charset=utf-8", schema: { type: "object", required: ["code", "data"], properties: { code: { const: 0 }, data: { type: "object" } } } },
-        default: { mediaType: "application/json; charset=utf-8", schema: { type: "object", required: ["code", "message"], properties: { code: { const: -1 }, message: { type: "string" } }, additionalProperties: true } }
+        default: { mediaType: "application/json; charset=utf-8", schema: { type: "object", required: ["code", "message"], properties: { code: { const: -1 }, message: { type: "string" },
+          errorCode: { type: "string" }, field: { type: "string" }, repair: { type: "string" }, retryable: { const: false },
+          help: { type: "object", required: ["method", "path"], properties: { method: { const: "GET" }, path: { type: "string" } }, additionalProperties: false } }, additionalProperties: true } }
       },
       effects: { mode: mutation ? "native-plugin-settings" : "read", description: item.description },
       recovery: { strategy: mutation ? "native-settings-readback-no-replay" : "repeatable-read", description: "Read package availability and actual instance status after uncertain results; do not infer activation or stopped resources from a saved setting." },

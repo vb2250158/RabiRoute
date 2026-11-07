@@ -72,6 +72,15 @@ async function enable(f: Awaited<ReturnType<typeof fixture>>) {
   assert.equal((await f.call('plan-advance/settings','PUT',body)).status,200);
   assert.equal((await f.call('plan-advance/settings','PUT',body)).status,400);
 }
+
+test('warming workflow remains a service failure with exact read-only discovery and no dispatch', async t => {
+  const f = await fixture(t);
+  f.context.worker!.run = (async () => null) as NonNullable<PersonaPlanOperationsContext['worker']>['run'];
+  const result = await f.call('plan-advance/check', 'POST', { workspace: f.directory });
+  assert.equal(result.status, 503, result.bytes.toString()); const body = result.json();
+  assert.equal(body.errorCode, 'PLAN_WORKFLOW_NOT_READY'); assert.equal(body.field, 'workflow');
+  assert.match(body.repair, /GET \/api\/roles\/Example\/plan-statuses/); assert.equal(f.sent.length, 0);
+});
 const inventory=(f:Awaited<ReturnType<typeof fixture>>)=>({workspace:f.directory,sessionIds:['full-session-id-original'],planIds:[f.plan.id]});
 
 test('eight exact definitions allow an authenticated empty node to inspect and open the original full session identity',async t=>{

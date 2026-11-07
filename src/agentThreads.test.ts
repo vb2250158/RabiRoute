@@ -37,6 +37,71 @@ import {
 function handleAgentThreadRequest(...[request, options, driver]: Parameters<typeof invokeAgentThreadRequest>) {
   return invokeAgentThreadRequest(request, { ...options, invokeAgentOperation: options.invokeAgentOperation ?? invokeCodexFixture }, driver);
 }
+
+test("ambiguous names keep candidates and original intent without creating or sending", async () => {
+  const candidates = ["019f0000-0000-7000-8000-000000000901", "019f0000-0000-7000-8000-000000000902"].map(id =>
+    ({ id, title: "Shared name", cwd: process.cwd(), updatedAt: "2026-11-06T00:00:00Z" }));
+  let writes = 0;
+  const driver: AgentThreadDriver = { list: async () => candidates, read: async () => null,
+    create: async () => { writes++; throw new Error("must not create"); }, send: async () => { writes++; } };
+  for (const action of ["resolve", "create"] as const) {
+    const request = { action, title: "Shared name", cwd: process.cwd(), createIfMissing: false };
+    const before = structuredClone(request);
+    const result = await handleAgentThreadRequest(request, { allowedWorkspaces: [process.cwd()] }, driver);
+    assert.equal(result.statusCode, 409); assert.equal(result.data.resolution, "ambiguous");
+    assert.equal(result.data.errorCode, "AGENT_SESSION_NAME_AMBIGUOUS"); assert.equal(result.data.field, "title");
+    assert.deepEqual(result.data.candidates, candidates);
+    assert.match(String(result.data.repair), /action.*list/); assert.match(String(result.data.repair), /nextOffset/);
+    assert.deepEqual(request, before);
+  }
+  assert.equal(writes, 0);
+});
+
+test("DSH ambiguity results and send rejection retain the same read-only discovery", async () => {
+  const candidates = [{ id: "dsh-owner-a", title: "Shared name", cwd: process.cwd(), updatedAt: "2026-11-06T00:00:00Z" },
+    { id: "dsh-owner-b", title: "Shared name", cwd: process.cwd(), updatedAt: "2026-11-06T00:00:00Z" }];
+  let resolves = 0;
+  const invoke: AgentManagerOperationInvoker = async <T>(type: string, operation: string) => {
+    assert.equal(type, "dsh"); assert.equal(operation, "native.resolveDshSession"); resolves++;
+    return { kind: "ambiguous", candidates } as T;
+  };
+  const options = { allowedWorkspaces: [process.cwd()], dshBaseUrl: "http://fixture.invalid", invokeAgentOperation: invoke };
+  for (const action of ["resolve", "create"] as const) {
+    const result = await handleAgentThreadRequest({ action, agentAdapter: "dsh", title: "Shared name", cwd: process.cwd() }, options);
+    assert.equal(result.statusCode, 409); assert.equal(result.data.resolution, "ambiguous");
+    assert.equal(result.data.errorCode, "AGENT_SESSION_NAME_AMBIGUOUS"); assert.deepEqual(result.data.candidates, candidates);
+  }
+  for (const title of ["Shared name", undefined]) {
+    await assert.rejects(handleAgentThreadRequest({ action: "send", agentAdapter: "dsh", title,
+      threadId: "session-00000000-0000-4000-8000-000000000001", cwd: process.cwd(), prompt: "private initial content", messageSource: defaultSystemMessageSource }, options), error => {
+      const data = agentThreadRequestFailureData(error); assert.equal(data.errorCode, "AGENT_SESSION_NAME_AMBIGUOUS");
+      assert.equal(data.field, title ? 'title' : 'threadId');
+      assert.doesNotMatch(JSON.stringify(data), /private initial content/); return true;
+    });
+  }
+  assert.equal(resolves, 4);
+});
+
+test("unsupported adapter, action and driver rename have current discovery without side effects", async () => {
+  let io = 0;
+  const driver: AgentThreadDriver = { list: async () => { io++; return []; }, read: async () => { io++; return null; },
+    create: async () => { io++; throw new Error("must not create"); }, send: async () => { io++; } };
+  const cases = [
+    { request: { action: "list", agentAdapter: "fixtureNoSessions" }, field: "agentAdapter", code: "AGENT_THREAD_ADAPTER_UNSUPPORTED" },
+    { request: { action: "unknown" }, field: "action", code: "AGENT_THREAD_ACTION_UNSUPPORTED" },
+    { request: { action: "rename", agentAdapter: "codex", threadId: "019f0000-0000-7000-8000-000000000901", title: "Name", cwd: process.cwd() }, field: "action", code: "AGENT_THREAD_ACTION_UNSUPPORTED" },
+    { request: { action: "rename", agentAdapter: "workbuddy" }, field: "action", code: "AGENT_THREAD_ACTION_UNSUPPORTED" }
+  ];
+  for (const item of cases) {
+    await assert.rejects(handleAgentThreadRequest(item.request as Parameters<typeof invokeAgentThreadRequest>[0], { allowedWorkspaces: [process.cwd()] }, driver), error => {
+      const data = agentThreadRequestFailureData(error);
+      assert.equal(data.errorCode, item.code); assert.equal(data.field, item.field);
+      assert.match(String(data.repair), /\/api\/agent-adapters\/catalog/);
+      assert.match(String(data.repair), /manager.agent.threads.action/); return true;
+    });
+  }
+  assert.equal(io, 0);
+});
 import { listCodexDesktopThreadsFromRowsForTest } from "./plugins/io.rabiroute.agent.codex/src/codexDesktopBridge.js";
 import { proactiveCommunicationPolicyLines } from "./shared/agentCommunicationPolicy.js";
 import { errorResponsePresentation } from "./shared/errorPresentation.js";

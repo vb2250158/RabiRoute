@@ -6,6 +6,7 @@ import { canonicalCodexWorkspacePath } from "./codexTaskIdentity.js";
 import { atomicWriteFileSync } from "./shared/filePersistence.js";
 import { projectDirectoryLayout } from "./shared/projectDirectoryLayout.js";
 import { recordDataMutationAudit } from "./observability/dataMutationAudit.js";
+import { AgentThreadContractError } from "./agentRequests/requestValidation.js";
 
 export type CodexThreadCreationState =
   | "reserved"
@@ -45,8 +46,15 @@ export class CodexThreadCreationBlockedError extends Error {
 }
 
 export type CodexCreationCallerIntent = { key: string; hash: string };
-export class CodexCreationIntentConflictError extends Error {
-  constructor() { super("This caller creation ID already owns a different frozen source, target or initial-message intent."); this.name = "CodexCreationIntentConflictError"; }
+export class CodexCreationIntentConflictError extends AgentThreadContractError {
+  constructor() {
+    super("This caller creation ID already owns a different frozen source, target or initial-message intent.", "deliveryId", "validation",
+      "Read GET /api/agent/deliveries/caller/<URL-encoded original callerDeliveryId>?sourceThreadId=<URL-encoded original source session ID>&agentAdapter=<original source adapter>&sourceAgentType=<original source label>; preserve ledgerOwnerDeviceId when present. "
+      + "Inspect creation separately from the prompt delivery data. DELIVERY_NOT_RESERVED and canSubmitSameIntent describe only prompt delivery; they do not authorize changing the frozen create intent. "
+      + "Keep the original ID, source, target, cwd and complete initial message. Do not change keys, create a replacement task or resend automatically. "
+      + "If creation.available=false or lookup fails, retain the original uncertainty; 401/403 is an access failure.", "AGENT_CREATION_INTENT_CONFLICT");
+    this.name = "CodexCreationIntentConflictError";
+  }
 }
 export class CodexMetadataNotStartedError extends Error {}
 

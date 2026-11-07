@@ -9,6 +9,9 @@ import { pluginCatalogFixture } from "./pluginCatalogOperations.fixture.js";
 import { createPluginManagement, readPluginManagementManifest } from "./pluginManagement.js";
 import { createPluginManagementOperations } from "./pluginManagementOperations.js";
 import { PluginPackageStore } from "./pluginPackageStore.js";
+import { createPluginCatalogOwner } from "./pluginCatalogOwner.js";
+import { IncomingMessage } from "node:http";
+import { Socket } from "node:net";
 
 async function fixture(t: test.TestContext, readOnly = false, background = false) {
   const f = await pluginCatalogFixture(t);
@@ -54,6 +57,26 @@ test("actual HTTP package import and available package listing use the original 
   const available = await (await f.fetch("/api/plugins/packages")).json();
   assert.equal(available.data.packages[0]?.pluginId, "io.test.catalog");
   assert.deepEqual(available.data.packages[0]?.instanceIds, ["manager:catalog"]);
+});
+
+test('new package actions provide exact discovery while preserving conflict status and unknown mutation outcomes', async t => {
+  const f = await fixture(t), initial = await f.list();
+  const owner = createPluginCatalogOwner(f.context);
+  const stale = await owner.prepare(new IncomingMessage(new Socket()), 'instances.install').execute({ pluginId: 'io.test.catalog', version: '1.0.0', expectedRevision: 'a'.repeat(64) });
+  assert.equal(stale.status, 409); assert.equal(stale.mutationOutcome, 'unknown');
+  const body = stale.body as any; assert.equal(body.errorCode, 'PLUGIN_SETTINGS_REVISION_CONFLICT'); assert.equal(body.field, 'body.expectedRevision');
+  assert.equal(body.help.path, '/api/agent/help?operationId=manager.plugins.instances.install'); assert.match(body.repair, /GET \/api\/plugins\/instances/);
+  const missing = await f.fetch('/api/plugins/instances/missing-instance', { method: 'DELETE', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ expectedRevision: initial.revision }) });
+  assert.equal(missing.status, 404); const absent = await missing.json(); assert.equal(absent.errorCode, 'PLUGIN_INSTANCE_NOT_FOUND'); assert.equal(absent.field, 'path.id');
+  assert.match(absent.repair, /Fully retired instances may be absent/);
+  const source = path.join(f.root, 'local-source');
+  await fs.cp(path.join(f.root, 'packages', 'io.test.catalog', '1.0.0'), source, { recursive: true });
+  await f.context.management!.importPackage!(source, { assertCurrent() {} });
+  await fs.writeFile(path.join(source, 'manager.mjs'), 'export function activate(){ /* distinct immutable version bytes */ }');
+  const conflict = await f.fetch('/api/plugins/packages', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ sourceDirectory: source }) });
+  assert.equal(conflict.status, 409); const detail = await conflict.json(); assert.equal(detail.errorCode, 'PLUGIN_PACKAGE_VERSION_CONFLICT'); assert.equal(detail.field, 'body.sourceDirectory');
+  assert.equal(detail.help.path, '/api/agent/help?operationId=manager.plugins.packages.import'); assert.match(detail.repair, /GET \/api\/plugins\/packages/);
+  assert.equal((await f.settings.snapshot()).revision, initial.revision);
 });
 
 test("uninstalled HTTP instance remains visibly stopping until its actual asynchronous disposer finishes", async t => {
@@ -114,9 +137,17 @@ test("native management rejects stale revisions and invalid booleans without cha
   const f = await fixture(t), snapshot = await f.list();
   const update = (body: unknown) => f.fetch("/api/plugins/instances/manager%3Acatalog", { method: "PATCH",
     headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
-  assert.equal((await update({ expectedRevision: "a".repeat(64), enabled: false })).status, 409);
+  const stale = await update({ expectedRevision: "a".repeat(64), enabled: false });
+  assert.equal(stale.status, 409); const detail = await stale.json();
+  assert.equal(detail.errorCode, 'PLUGIN_SETTINGS_REVISION_CONFLICT'); assert.equal(detail.field, 'body.expectedRevision');
+  assert.match(detail.repair, /GET \/api\/plugins\/instances/); assert.equal(detail.retryable, false);
   assert.equal((await update({ expectedRevision: snapshot.revision, enabled: "false" })).status, 400);
   assert.equal((await f.list()).instances[0].enabled, true);
+  const missing = await f.fetch('/api/plugins/instances/missing-instance', { method: 'PATCH', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ expectedRevision: snapshot.revision, enabled: false }) });
+  assert.equal(missing.status, 404); const absent = await missing.json(); assert.equal(absent.field, 'path.id');
+  assert.equal(absent.errorCode, 'PLUGIN_INSTANCE_NOT_FOUND'); assert.match(absent.repair, /complete instance ID/);
+  assert.equal((await f.settings.snapshot()).revision, snapshot.revision);
 });
 
 test("inactive plugin metadata stays readable without copying or executing its unavailable entry", async t => {

@@ -17,6 +17,7 @@ export type PluginInstanceSettingsUpdate = Override & { expectedRevision: string
 
 export class PluginSettingsConflict extends Error {
   readonly status = 409;
+  readonly code = "PLUGIN_SETTINGS_REVISION_CONFLICT";
   constructor() { super("Plugin settings changed. Refresh before saving this instance."); }
 }
 
@@ -112,7 +113,7 @@ export class PluginProfileSettings {
     try { return this.decodeSettings(await fs.readFile(this.settingsPath(instanceId), "utf8"), instanceId); }
     catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return {};
-      throw Object.assign(new Error("Repair this plugin instance settings file before changing it.", { cause: error }), { status: 409 });
+      throw Object.assign(new Error("Repair this plugin instance settings file before changing it.", { cause: error }), { status: 409, code: "PLUGIN_INSTANCE_SETTINGS_INVALID" });
     }
   }
 
@@ -135,10 +136,10 @@ export class PluginProfileSettings {
       const current = await this.snapshot();
       assertCurrent();
       if (current.revision !== expectedRevision) throw new PluginSettingsConflict();
-      if (current.diagnostics.some(row => row.instanceId === instanceId)) throw Object.assign(new Error("Repair this plugin instance settings before changing its installation."), { status: 409 });
+      if (current.diagnostics.some(row => row.instanceId === instanceId)) throw Object.assign(new Error("Repair this plugin instance settings before changing its installation."), { status: 409, code: "PLUGIN_INSTANCE_SETTINGS_INVALID" });
       const prior = [...current.profile.instances, ...current.removedInstances].find(row => row.id === instanceId);
-      if (!definition && !prior) throw Object.assign(new Error("Plugin instance was not found."), { status: 404 });
-      if (definition && prior && prior.package !== definition.package) throw Object.assign(new Error("This instance belongs to another plugin. Choose a new instance ID."), { status: 409 });
+      if (!definition && !prior) throw Object.assign(new Error("Plugin instance was not found."), { status: 404, code: "PLUGIN_INSTANCE_NOT_FOUND" });
+      if (definition && prior && prior.package !== definition.package) throw Object.assign(new Error("This instance belongs to another plugin. Choose a new instance ID."), { status: 409, code: "PLUGIN_INSTANCE_ID_CONFLICT" });
       const target = this.settingsPath(instanceId);
       const saved = await this.savedSettings(instanceId);
       const value = { ...saved, schemaVersion: 1, instanceId, definition: definition ?? prior,
@@ -162,8 +163,8 @@ export class PluginProfileSettings {
       const current = await this.snapshot();
       assertCurrent();
       if (current.revision !== input.expectedRevision) throw new PluginSettingsConflict();
-      if (current.diagnostics.some(row => row.instanceId === instanceId)) throw Object.assign(new Error("Repair this plugin instance settings file before changing its enabled state."), { status: 409 });
-      if (!current.profile.instances.some(instance => instance.id === instanceId)) throw Object.assign(new Error("Plugin instance was not found."), { status: 404 });
+      if (current.diagnostics.some(row => row.instanceId === instanceId)) throw Object.assign(new Error("Repair this plugin instance settings file before changing its enabled state."), { status: 409, code: "PLUGIN_INSTANCE_SETTINGS_INVALID" });
+      if (!current.profile.instances.some(instance => instance.id === instanceId)) throw Object.assign(new Error("Plugin instance was not found."), { status: 404, code: "PLUGIN_INSTANCE_NOT_FOUND" });
       const target = this.settingsPath(instanceId);
       const saved = await this.savedSettings(instanceId);
       assertCurrent();

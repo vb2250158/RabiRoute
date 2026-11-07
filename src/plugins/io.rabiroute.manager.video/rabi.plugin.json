@@ -1,7 +1,7 @@
 {
   "schemaVersion": 2,
   "id": "io.rabiroute.manager.video",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "displayName": "视频生成工作台",
   "description": "管理视频生成、模型、媒体项目与任务",
   "icon": "mdi-movie-open",

@@ -15,6 +15,79 @@ import { ManagerPluginRouteRegistry } from "../../../../manager/managerPluginRou
 import { LanAgentAuthority } from "../../../../manager/lanAgentAuthority.js";
 import { evaluateLanAgentRequest } from "../../../../manager/lanAgentRequestAccess.js";
 import { agentWorkspaceMismatch } from "../../../../agentRequests/requestValidation.js";
+import { readCallerCreationLookup } from "../../../../callerCreationMetadata.js";
+import { createRemoteCodexAndDeliver } from "../../../../manager/remoteCodexCreate.js";
+import { sourceScopedAgentDeliveryId, type AgentRequestEndpoint } from "../../../../agentRequests/endpoint.js";
+import { AgentRequestStore as RealAgentRequestStore } from "../../../../agentRequests/store.js";
+
+test('caller HTTP lookup separates a frozen create from absent prompt delivery without changing either', async t => {
+  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), 'caller-creation-read-'));
+  const store = new RealAgentRequestStore({ read: () => undefined, write: () => { assert.fail('lookup must not write delivery state'); } });
+  t.after(async () => { await store.close(); fs.rmSync(rootDir, { recursive: true, force: true }); });
+  const endpoint: AgentRequestEndpoint = { kind: 'local', managerInstanceId: 'manager', agentId: 'local:codex', provider: 'codex', sessionId: 'original-source', authorizationIncarnation: 'original' };
+  let creates = 0, sends = 0;
+  await assert.rejects(createRemoteCodexAndDeliver({ rootDir,
+    request: { action: 'create', agentAdapter: 'codex', title: 'private title', cwd: rootDir, prompt: 'private initial prompt', deliveryId: 'original-caller',
+      sourceThreadId: endpoint.sessionId, sourceAgentType: 'agent', messageSource: { type: 'agent', agentAdapter: 'codex', sessionId: endpoint.sessionId, sessionName: 'Source' }, instanceBinding: { instanceId: 'target', agentId: 'codex' } },
+    endpoint: { resolveSource: () => ({ endpoint, agentAdapter: 'codex', threadId: endpoint.sessionId, agentType: 'agent' }), authorize: () => {} },
+    metadataStatus: async (_binding, callerKey) => ({ protocolVersion: 1, callerKey, state: 'absent' }),
+    createMetadata: async () => { creates++; throw new Error('private remote failure'); },
+    sendPrepared: async () => { sends++; assert.fail('uncertain create cannot send'); }
+  }), /uncertain/);
+  const before = new Map((fs.readdirSync(rootDir, { recursive: true }) as string[]).filter(p => fs.statSync(path.join(rootDir, p)).isFile()).map(p => [p, fs.readFileSync(path.join(rootDir, p))]));
+  const f = await fixture(t, context({ agentRequests: store, readCallerCreation: key => readCallerCreationLookup(rootDir, key),
+    readEndpointDeliveryOptions: () => ({ resolveSource: async (request: import('../../../../agentThreads.js').AgentThreadRequest) => ({ endpoint: { ...endpoint, sessionId: request.sourceThreadId || endpoint.sessionId }, threadId: request.sourceThreadId || endpoint.sessionId, agentType: 'agent' }) } as any)
+  }));
+  const url = f.base + '/api/agent/deliveries/caller/original-caller?agentAdapter=codex&sourceAgentType=agent&sourceThreadId=';
+  const response = await fetch(url + endpoint.sessionId); const body = await response.json() as any;
+  assert.equal(response.status, 404); assert.equal(body.errorCode, 'DELIVERY_NOT_RESERVED'); assert.equal(body.canSubmitSameIntent, true);
+  assert.equal(body.creation.available, true); assert.equal(body.creation.state, 'uncertain'); assert.match(body.creation.intentHash, /^[a-f0-9]{64}$/);
+  assert.match(body.repair, /only the prompt delivery reservation/);
+  assert.doesNotMatch(JSON.stringify(body), /private title|private initial prompt|private remote failure|caller-creation-read-|workspace|authorizationIncarnation/);
+  const other = await (await fetch(url + 'different-source')).json() as any;
+  assert.deepEqual(other.creation, { available: true, state: 'absent' });
+  assert.equal(creates, 1); assert.equal(sends, 0);
+  for (const [file, bytes] of before) assert.deepEqual(fs.readFileSync(path.join(rootDir, file)), bytes);
+  assert.equal(store.listEndpointDeliveryMetadata().length, 0);
+});
+
+test('corrupt creation evidence is isolated from an existing readable delivery and never exposed', async t => {
+  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), 'caller-creation-corrupt-'));
+  t.after(() => fs.rmSync(rootDir, { recursive: true, force: true }));
+  const endpoint: AgentRequestEndpoint = { kind: 'local', managerInstanceId: 'manager', agentId: 'local:codex', provider: 'codex', sessionId: 'original-source', authorizationIncarnation: 'original' };
+  const callerKey = sourceScopedAgentDeliveryId(endpoint, 'same-caller');
+  const { createHash } = await import('node:crypto');
+  const key = JSON.stringify(['codex-desktop-caller', callerKey]);
+  const directory = path.join(rootDir, 'data', '.runtime', 'codex-thread-creations'); fs.mkdirSync(directory, { recursive: true });
+  const file = path.join(directory, createHash('sha256').update(key).digest('hex') + '.json');
+  const bad = JSON.stringify({ version: 1, key, state: 'uncertain', title: 'private title', workspace: '/private/path', callerIntentHash: 'private-corruption' });
+  fs.writeFileSync(file, bad);
+  const owner = createAgentThreadControlOwner(context({ readCallerCreation: value => readCallerCreationLookup(rootDir, value),
+    agentRequests: { readCallerEndpointDelivery: async () => ({ deliveryId: 'original-delivery', state: 'dispatching' }) } as unknown as AgentRequestStore,
+    readEndpointDeliveryOptions: () => ({ resolveSource: async () => ({ endpoint, threadId: endpoint.sessionId, agentType: 'agent' }) } as any) }));
+  const result = await owner.prepare(request()).lookupCallerDelivery('same-caller');
+  assert.equal(result.status, 200); assert.equal((result.body.data as any).state, 'dispatching'); assert.equal((result.body.data as any).canSubmitSameIntent, false);
+  assert.deepEqual(result.body.creation, { available: false, errorCode: 'CREATION_EVIDENCE_UNAVAILABLE' });
+  assert.doesNotMatch(JSON.stringify(result.body), /private-corruption|private title|private\/path/); assert.equal(fs.readFileSync(file, 'utf8'), bad);
+  for (const state of ['thread_created', 'naming', 'initial_turn', 'completed']) {
+    const damaged = JSON.stringify({ version: 1, key, state, title: 'private title', workspace: '/private/path', callerIntentHash: 'a'.repeat(64) });
+    fs.writeFileSync(file, damaged);
+    const read = await owner.prepare(request()).lookupCallerDelivery('same-caller', { sourceThreadId: endpoint.sessionId });
+    assert.equal(read.status, 200); assert.deepEqual(read.body.creation, { available: false, errorCode: 'CREATION_EVIDENCE_UNAVAILABLE' });
+    assert.equal((read.body.data as { state: string }).state, 'dispatching'); assert.equal(fs.readFileSync(file, 'utf8'), damaged);
+  }
+  fs.writeFileSync(file, JSON.stringify({ version: 1, key, state: 'completed', title: 'private title', workspace: '/private/path', callerIntentHash: 'a'.repeat(64), threadId: 'original-completed-task', result: { id: 'original-completed-task' } }));
+  assert.deepEqual(readCallerCreationLookup(rootDir, callerKey), { available: true, state: 'completed', intentHash: 'a'.repeat(64), threadId: 'original-completed-task' });
+});
+
+test('caller creation lookup cannot disclose metadata after the original connection is revoked', async () => {
+  let current = true;
+  const req = request(); markAuthenticatedConnectionRequest(req, () => { if (!current) throw new Error('original access revoked'); });
+  const owner = createAgentThreadControlOwner(context({ readCallerCreation: () => { current = false; return { available: true, state: 'uncertain', intentHash: 'a'.repeat(64) }; },
+    agentRequests: { readCallerEndpointDelivery: async () => assert.fail('revoked lookup cannot read another resource') } as unknown as AgentRequestStore,
+    readEndpointDeliveryOptions: () => ({ resolveSource: async () => ({ connection: { kind: 'connection', managerInstanceId: 'manager', transport: 'local', id: 'original' }, threadId: '', agentType: 'agent' }) } as any) }));
+  await assert.rejects(owner.prepare(req).lookupCallerDelivery('same-caller'), /original access revoked/);
+});
 
 function deferred<T>() { let resolve!: (value:T)=>void; const promise = new Promise<T>(done => { resolve = done; }); return {promise,resolve}; }
 function request() { return new http.IncomingMessage(new Socket()); }
@@ -148,6 +221,7 @@ test('caller receipt lookup keeps application access separate from native task o
   const prepared=owner.prepare(request());
   const result=await prepared.lookupCallerDelivery('original-caller',{sourceThreadId:'source',sourceAgentType:'agent',messageSource:{type:'agent',agentAdapter:'codex',sessionId:'source',sessionName:'Source'}});
   assert.equal(received,undefined);assert.equal(result.status,404);assert.equal(result.body.errorCode,'DELIVERY_NOT_RESERVED');assert.equal(reads,1);
+  assert.deepEqual(result.body.creation,{available:false,errorCode:'CREATION_EVIDENCE_UNAVAILABLE'});
 });
 
 

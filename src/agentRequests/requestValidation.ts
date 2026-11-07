@@ -34,6 +34,32 @@ export function agentThreadContractFailure(error: unknown): { code: string; fiel
   }
 }
 
+/** Read-only examples keep the original execution target and leave resolution to its owner. */
+export function agentThreadAmbiguity(request: { agentAdapter?: string | null; instanceBinding?: unknown }, adapter: string, field: "title" | "threadId" = "title"): AgentThreadContractError {
+  const target = request.instanceBinding as { instanceId?: unknown; agentId?: unknown; ownerDeviceId?: unknown } | undefined;
+  const binding = typeof target?.instanceId === "string" && typeof target.agentId === "string"
+    ? { instanceBinding: { instanceId: target.instanceId, agentId: target.agentId,
+      ...(typeof target.ownerDeviceId === "string" ? { ownerDeviceId: target.ownerDeviceId } : {}) } } : {};
+  const list = { action: "list", agentAdapter: adapter, query: "", limit: 20, offset: 0,
+    ...binding };
+  return new AgentThreadContractError("Agent session name is ambiguous.", field, "validation",
+    `POST /api/agent/threads ${JSON.stringify(list)}; follow nextOffset and compare complete IDs, titles and updatedAt. `
+    + "Read the chosen existing session with action=read, the same agentAdapter/instanceBinding and its full threadId. "
+    + "Read GET /api/agent/help?operationId=manager.agent.threads.action for the current request contract. "
+    + "Preserve the original request, cwd, IDs and receipt; discovery does not create, select or send automatically. "
+    + "401/403 is an access failure; a failed lookup is not evidence that no matching session exists.", "AGENT_SESSION_NAME_AMBIGUOUS");
+}
+
+export function agentThreadUnsupported(field: "action" | "agentAdapter", message: string): AgentThreadContractError {
+  return new AgentThreadContractError(message, field, "validation",
+    "Read GET /api/agent/help?operationId=manager.agent.threads.action for declared actions and parameters. "
+    + "Read GET /api/agent-adapters/catalog for data.adapters[].type and capabilities.managedTasks.agentThreads; "
+    + "GET /api/lan-agent/instances identifies the original instance/Agent binding. These catalogs describe capabilities, not permission. "
+    + "Keep the same target, original IDs, cwd, request and receipt. Unsupported operations do not authorize another adapter, Runtime or replay. "
+    + "401/403 is an access failure; failed discovery does not prove the adapter or action is unsupported.",
+    field === "action" ? "AGENT_THREAD_ACTION_UNSUPPORTED" : "AGENT_THREAD_ADAPTER_UNSUPPORTED");
+}
+
 /** Owner IDs are opaque: preserve their complete bytes instead of guessing a provider from their shape. */
 export function completeAgentSessionId(value: unknown, field: "sourceThreadId" | "threadId"): string {
   if (typeof value !== "string" || !value || value !== value.trim() || value.length > 4096 || /[\0\r\n\u2028\u2029]/.test(value)) {

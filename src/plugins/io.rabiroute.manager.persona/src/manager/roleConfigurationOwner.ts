@@ -281,9 +281,10 @@ export function createRoleConfigurationOwner(source: RoleConfigurationContext) {
         read(() => command(context, roleId, action, body, operationId)),
       create: (body: Command) => read(async () => {
         const roleId = sanitizeRoleId(body.roleId);
-        if (!roleId || roleId !== body.roleId || typeof body.title !== "string" || !body.title.trim()) {
+        if (!roleId || roleId !== body.roleId) {
           throw new RoleLifecycleError("ROLE_ID_INVALID", "请输入有效的角色 ID 和名称。", 400);
         }
+        if (typeof body.title !== "string" || !body.title.trim()) throw new RoleLifecycleError("ROLE_TITLE_REQUIRED", "角色名称不能为空。", 400);
         const directory = roleFolderPath(rolesRoot, roleId);
         await step(() => withRoleLock(directory, async () => {
           await step(() => assertRoleAcceptsWork(directory));

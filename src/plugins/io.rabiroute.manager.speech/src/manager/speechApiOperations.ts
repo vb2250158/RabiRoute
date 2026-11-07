@@ -2,7 +2,7 @@ import { constants as bufferConstants } from "node:buffer";
 import type { ApiOperationDefinition, ApiOperationInput, ApiOperationResult, ApiHttpProxyDefinition, ApiHttpProxyInput, ApiSchema } from "@rabiroute/host-api/manager/apiOperationContract";
 import type { SpeechApiAdmission, SpeechApiContext } from "@rabiroute/host-api/manager/speechApiContext";
 import { SpeechEventStreamOwner } from "./speechEventOperation.js";
-import { speechControlErrorStatus, speechControlErrorMessage } from "./speechControl.js";
+import { SpeechControlError, speechControlErrorStatus, speechControlErrorMessage } from "./speechControl.js";
 import { SpeechRuntimeControlError } from "./speechRuntimeControl.js";
 import { SpeechModelManagerError } from "./speechModelManager.js";
 import { SpeechModelSettingsError } from "./speechModelSettings.js";
@@ -13,7 +13,7 @@ import type { LocalSpeechResponse } from "@rabiroute/host-api/speech/localSpeech
 import type { ManagerSpeechControl } from "./speechControl.js";
 
 const ignored = { type: "object" } as const;
-const jsonError = { type: "object", required: ["code", "message"], additionalProperties: true, properties: { code: { const: -1 }, message: { type: "string" } } } as const;
+const jsonError = { type: "object", required: ["code", "message"], additionalProperties: true, properties: { code: { const: -1 }, message: { type: "string" }, errorCode: { type: "string" }, field: { type: "string" }, repair: { type: "string" } } } as const;
 const jsonSuccess = { type: "object", required: ["code", "data"], additionalProperties: false, properties: { code: { const: 0 }, data: {} } } as const;
 const jsonResponse = { mediaType: "application/json", schema: { anyOf: [jsonSuccess, jsonError] } } as const;
 const binaryResponse = { mediaType: "*/*", binary: { maxBytes: bufferConstants.MAX_LENGTH }, alternatives: [jsonResponse] } as const;
@@ -73,7 +73,8 @@ export class SpeechApiOwner {
   readonly events = new SpeechEventStreamOwner();
   constructor(readonly context: SpeechApiContext) {}
   capture(input: Pick<ApiOperationInput, "request" | "query">, compute: boolean): SpeechApiAdmission { return this.context.capture(input.request, compute && Object.hasOwn(input.query, "computeDeviceId") ? first(input, "computeDeviceId") ?? "" : undefined); }
-  failure(error: unknown, fallback = 502): ApiOperationResult { return { status: speechControlErrorStatus(error, fallback), body: { code: -1, message: speechControlErrorMessage(error) } }; }
+  failure(error: unknown, fallback = 502): ApiOperationResult { return { status: speechControlErrorStatus(error, fallback), body: { code: -1, message: speechControlErrorMessage(error),
+    ...(error instanceof SpeechControlError && error.parameter ? { errorCode: error.code, field: error.parameter.field, repair: error.parameter.repair } : {}) } }; }
   async run(operation: Normal, input: ApiOperationInput, admission: SpeechApiAdmission): Promise<ApiOperationResult> {
     return admission.run(async () => {
       const control = this.context.speechControl, guard = admission.guard;

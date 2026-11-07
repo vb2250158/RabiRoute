@@ -42,20 +42,20 @@ export class PluginPackageStore {
     const source = path.resolve(sourceDirectory);
     const manifest = parsePluginManifest(JSON.parse(await fs.readFile(path.join(source, "rabi.plugin.json"), "utf8")));
     const host = PLUGIN_HOSTS.find(host => manifest.entries[host]);
-    if (!host) throw Object.assign(new Error("Plugin package has no executable or declarative entry."), { status: 400 });
+    if (!host) throw Object.assign(new Error("Plugin package has no executable or declarative entry."), { status: 400, code: "PLUGIN_PACKAGE_ENTRY_MISSING" });
     // The original package loader owns tree validation, entry resolution and the immutable byte snapshot.
     const importRoot = path.resolve(this.options.importRuntimeRoot);
     const operationRoot = path.join(importRoot, randomUUID());
     try {
       const prepared = await loadPluginPackage(source, operationRoot, host);
       if (expected && (prepared.manifest.id !== expected.id || prepared.manifest.version !== expected.version)) {
-        throw Object.assign(new Error("The selected plugin package changed while it was being imported."), { status: 409 });
+        throw Object.assign(new Error("The selected plugin package changed while it was being imported."), { status: 409, code: "PLUGIN_PACKAGE_IDENTITY_CHANGED" });
       }
       const target = path.join(this.options.managedRoot, prepared.manifest.id, prepared.manifest.version);
       for (const root of this.options.roots) {
         const existing = path.join(root, prepared.manifest.id, prepared.manifest.version);
         try {
-          if (await hashPluginPackage(existing) !== prepared.revision) throw Object.assign(new Error("This plugin version already exists with different bytes. Publish a new plugin version."), { status: 409 });
+          if (await hashPluginPackage(existing) !== prepared.revision) throw Object.assign(new Error("This plugin version already exists with different bytes. Publish a new plugin version."), { status: 409, code: "PLUGIN_PACKAGE_VERSION_CONFLICT" });
           if (path.resolve(root) === path.resolve(this.options.managedRoot)) return;
         } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
       }

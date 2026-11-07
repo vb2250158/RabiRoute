@@ -36,6 +36,18 @@ const callerReceiptData = { type: 'object', required: ['deliveryId', 'state', 'c
     receipt: { type: 'object', required: ['deliveryId', 'generation', 'endpoint', 'promptHash', 'executionOptionsHash', 'accepted', 'action', 'transport'], additionalProperties: false,
       properties: { deliveryId: receiptText, generation: receiptText, endpoint: receiptEndpoint, promptHash: receiptText, executionOptionsHash: receiptText,
         accepted: { const: true }, action: receiptText, transport: receiptText } } } };
+const callerCreation = { anyOf: [
+  { type: 'object', required: ['available', 'state'], additionalProperties: false,
+    properties: { available: { const: true }, state: { const: 'absent' } } },
+  { type: 'object', required: ['available', 'state', 'intentHash'], additionalProperties: false,
+    properties: { available: { const: true }, state: { enum: ['reserved', 'creating', 'uncertain', 'failed_before_create'] },
+      intentHash: { type: 'string', pattern: '^[a-f0-9]{64}$' }, threadId: receiptText } },
+  { type: 'object', required: ['available', 'state', 'intentHash', 'threadId'], additionalProperties: false,
+    properties: { available: { const: true }, state: { enum: ['thread_created', 'naming', 'initial_turn', 'completed'] },
+      intentHash: { type: 'string', pattern: '^[a-f0-9]{64}$' }, threadId: receiptText } },
+  { type: 'object', required: ['available', 'errorCode'], additionalProperties: false,
+    properties: { available: { const: false }, errorCode: { const: 'CREATION_EVIDENCE_UNAVAILABLE' } } }
+] };
 
 /** List and action POST are the two actual native HTTP entry points; there is no delete/cancel route. */
 export function createAgentThreadControlOperations(owner: AgentThreadControlOwner): readonly ApiOperationDefinition[] {
@@ -65,15 +77,15 @@ export function createAgentThreadControlOperations(owner: AgentThreadControlOwne
   const lookup: ApiOperationDefinition = {
     contract: { operationId: 'agent.deliveries.caller.read', aliases: ['agent:GET:/api/agent/deliveries/caller/:callerDeliveryId'],
       contractVersion: '1.0.0', method: 'GET', pathTemplate: '/api/agent/deliveries/caller/:callerDeliveryId', exposure: 'public', transport: 'http',
-      description: 'Read the original delivery reservation scoped to the current authenticated source and stable caller ID. Does not dispatch.',
+      description: 'Read original prompt delivery and separate creation metadata scoped to the current authenticated source and stable caller ID. Does not dispatch.',
       request: { path: { type: 'object', required: ['callerDeliveryId'], properties: { callerDeliveryId: { type: 'string', minLength: 1 } }, additionalProperties: false },
         query: { type: 'object', properties: { sourceThreadId: text, sourceAgentType: text, agentAdapter: text, inReplyToRequestId: text, ledgerOwnerDeviceId: text }, additionalProperties: false },
         headers: ignored, body: { kind: 'none' } },
       responses: Object.fromEntries([200, 400, 404, 409, 503].map(status => [String(status), { mediaType: 'application/json', schema: {
         type: 'object', required: ['code'], properties: { code: { type: 'integer' }, data: callerReceiptData, message: { type: 'string' },
-          errorCode: { type: 'string' }, canSubmitSameIntent: { type: 'boolean' } }, additionalProperties: false } }])),
+          errorCode: { type: 'string' }, canSubmitSameIntent: { type: 'boolean' }, creation: callerCreation, repair: receiptText }, additionalProperties: false } }])),
       effects: { mode: 'read', description: 'Only reads source-scoped durable reservation and receipt; never reconciles or sends.' },
-      recovery: { strategy: 'read-original-resource', description: 'Only exact DELIVERY_NOT_RESERVED with canSubmitSameIntent=true proves no reservation. Existing prepared can continue the same frozen intent. Missing evidence, timeout and dispatching do not authorize replay.' },
+      recovery: { strategy: 'read-original-resource', description: 'Only exact DELIVERY_NOT_RESERVED with canSubmitSameIntent=true proves no prompt delivery reservation. Inspect creation separately: creation may already be reserved or uncertain. Preserve the original create intent and caller ID. Existing prepared can continue the same frozen intent. Missing evidence, timeout and dispatching do not authorize replay.' },
       validators: [{ id: 'agent.delivery-caller-source', description: 'Uses original admitted connection attribution and authorization incarnation. Local sources require exact provider/session evidence. Request parameters cannot forge a remote principal. Corrupt or unavailable reserved records remain reserved.' }] },
     handler: async input => {
       try {
