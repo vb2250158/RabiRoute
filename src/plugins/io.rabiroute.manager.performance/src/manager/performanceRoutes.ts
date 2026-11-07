@@ -1,4 +1,5 @@
 import type { IncomingMessage } from "node:http";
+import { Session, type Profiler } from "node:inspector";
 import { normalizePerformanceMonitoringConfig, type PerformanceSample, type PerformanceInitializationStatus } from "@rabiroute/host-api/shared/performanceContract";
 import type { RabiGlobalConfigStore } from "@rabiroute/host-api/manager/globalConfig";
 import { PerformanceMonitoringService } from "@rabiroute/host-api/manager/performanceMonitoring";
@@ -12,6 +13,7 @@ export class PerformanceApi {
   private readonly streams = new Set<() => Promise<void>>();
   private closed = false;
   private closing?: Promise<void>;
+  private cpuCapture?: { result: Promise<Profiler.Profile>; cancelAndJoin(): Promise<void> };
 
   constructor(private readonly context: {
     service: PerformanceMonitoringService;
@@ -62,6 +64,70 @@ export class PerformanceApi {
   }
 
   status() { this.assertActive(); return { code: 0, data: this.context.service.status(), config: this.config() }; }
+
+  /** One requested main-isolate sample; independent of recording config and startup diagnostics. */
+  captureCpuProfile(): Promise<Profiler.Profile> {
+    this.assertActive();
+    if (this.cpuCapture) return this.cpuCapture.result;
+    const session = new Session(), lifetime = new AbortController();
+    const cancellation = new Error("The original performance owner retired during CPU capture.");
+    let timer: NodeJS.Timeout | undefined;
+    const post = <T>(method: string, params: object = {}) => new Promise<T>((resolve, reject) => {
+      lifetime.signal.throwIfAborted();
+      const abort = () => reject(lifetime.signal.reason);
+      lifetime.signal.addEventListener("abort", abort, { once: true });
+      try {
+        session.post(method, params, (error, value) => {
+          lifetime.signal.removeEventListener("abort", abort);
+          if (error) reject(error); else resolve(value as T);
+        });
+      } catch (error) {
+        lifetime.signal.removeEventListener("abort", abort); reject(error);
+      }
+    });
+    const capture = async () => {
+      try {
+        session.connect();
+        await post("Profiler.enable");
+        await post("Profiler.setSamplingInterval", { interval: 10_000 });
+        await post("Profiler.start");
+        await new Promise<void>((resolve, reject) => {
+          lifetime.signal.throwIfAborted();
+          const abort = () => { if (timer) clearTimeout(timer); reject(lifetime.signal.reason); };
+          lifetime.signal.addEventListener("abort", abort, { once: true });
+          timer = setTimeout(() => { lifetime.signal.removeEventListener("abort", abort); resolve(); }, 10_000);
+        });
+        return (await post<{ profile: Profiler.Profile }>("Profiler.stop")).profile;
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
+    };
+    let released = false, releaseFailed = false;
+    const release = () => {
+      if (released) return;
+      try {
+        session.disconnect();
+        released = true; releaseFailed = false;
+        if (this.cpuCapture?.result === result) this.cpuCapture = undefined;
+      } catch (error) { releaseFailed = true; throw error; }
+    };
+    const measurement = capture();
+    // Sampling errors belong to its callers; retirement joins only the actual native release.
+    const settled = measurement.then(() => {}, () => {});
+    const cleanup = settled.then(release);
+    const result = measurement.then(async profile => { await cleanup; return profile; }, async error => {
+      try { await cleanup; }
+      catch (cleanupError) { throw new AggregateError([error, cleanupError], "CPU capture and Session release failed."); }
+      throw error;
+    });
+    this.cpuCapture = { result, cancelAndJoin: () => {
+      // A later explicit close can retry this same native release after a confirmed failure.
+      const retryRelease = releaseFailed;
+      lifetime.abort(cancellation);
+      return retryRelease ? settled.then(release) : cleanup;
+    } };
+    return result;
+  }
 
   events(): ApiOperationStream {
     this.assertActive();
@@ -115,7 +181,13 @@ export class PerformanceApi {
   close(): Promise<void> {
     if (this.closing) return this.closing;
     this.closed = true;
-    this.closing = Promise.all([...this.streams].map(stop => stop())).then(() => {});
+    const pending = [...this.streams].map(stop => stop()), capture = this.cpuCapture;
+    if (capture) pending.push(capture.cancelAndJoin());
+    this.closing = Promise.all(pending).then(() => {}, error => {
+      // Do not discard an unreleased CPU owner or cache its failed close as final completion.
+      if (capture && this.cpuCapture === capture) this.closing = undefined;
+      throw error;
+    });
     return this.closing;
   }
 }

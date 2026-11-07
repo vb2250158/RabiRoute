@@ -55,6 +55,24 @@ function uploadFailure(code: string, detail?: string, field?: string) {
   };
 }
 
+function uploadStoreIssue(error: unknown, receiptPath: string): { field: string; repair: string } | undefined {
+  if (!(error instanceof AgentUploadStoreError)) return undefined;
+  const field = "field" in error ? error.field : undefined;
+  const receipt = `先 GET ${receiptPath} 核对原回执；读取 GET /api/agent/help?operationId=agent.upload.write 核对当前上传合同。保留原 uploadId、请求和已声明的长度/SHA256，不自动重传或换 ID。`;
+  if (error.code === "invalid_input") {
+    switch (field) {
+      case "fileName": return { field: "headers.x-rabiroute-file-name", repair: `使用原文件的 basename 并 encodeURIComponent；解码后 UTF-8 不超过255字节，无目录、控制符、Windows非法字符、首尾空白或结尾点，不用 CON 等设备名。${receipt}` };
+      case "size": return { field: "headers.content-length", repair: `若提供 Content-Length，其 Number 值须为非负安全整数，单位是原始请求体字节；省略时沿原分块上传合同。${receipt}` };
+      case "sha256": return { field: "headers.x-rabiroute-content-sha256", repair: `该头须为64位十六进制 SHA256；从原始未压缩字节计算，已有回执时与原回执 sha256 核对。${receipt}` };
+      case "content": return { field: "body", repair: `请求体须为原始二进制字节，不是 JSON 或 multipart。${receipt}` };
+    }
+  }
+  if ((error.code === "integrity" || error.code === "conflict") && field === "content") {
+    return { field: "body", repair: `收到的原始字节须与原声明 Content-Length（若提供）和 SHA256 相符；同一 uploadId 已有回执时，内容也须与原回执的 size/sha256 相符。此错误不能判断应修改哪一方，不替换冻结内容或摘要。${receipt}` };
+  }
+  return undefined;
+}
+
 class UploadHttpError extends Error {
   constructor(readonly status: number, readonly code: string, readonly field?: string) { super(code); }
 }
@@ -193,6 +211,7 @@ export function createAgentUploadRoutes(context: AgentUploadRoutesContext): {
       const code = error instanceof UploadHttpError ? error.code : (error as { code?: string } | null)?.code;
       const statuses: Record<string, number> = { not_found: 404, invalid_input: 400, conflict: 409, capacity: 507, integrity: 422, unsafe_storage: 500, storage_failure: 500, forbidden: 403, upload_aborted: 400 };
       const status = error instanceof UploadHttpError ? error.status : (code && statuses[code]) || 500;
+      const issue = uploadStoreIssue(error, url.pathname);
       if (!response.destroyed && !response.writableEnded) {
         // Close after the JSON response. Discard without buffering; server requestTimeout
         // remains the outer bound for an uncooperative peer. Never destroy before 413.
@@ -200,8 +219,8 @@ export function createAgentUploadRoutes(context: AgentUploadRoutesContext): {
       }
       return { status, body: uploadFailure(error instanceof UploadHttpError ? error.code : (code && statuses[code]) ? code : "storage_failure",
         code === "capacity" && error instanceof AgentUploadStoreError ? error.message : code === "file_too_large"
-          ? `当前 agentUploads.maxFileMiB=${limit / 1024 ** 2}；在 WebGUI RabiLink 配置或 data/Config.json 调整，重启 Manager 后生效。` : undefined,
-        error instanceof UploadHttpError ? error.field : undefined) };
+          ? `当前 agentUploads.maxFileMiB=${limit / 1024 ** 2}；在 WebGUI RabiLink 配置或 data/Config.json 调整，重启 Manager 后生效。` : issue?.repair,
+        error instanceof UploadHttpError ? error.field : issue?.field) };
     } finally {
       if (ownerKey !== undefined) {
         totalReaders--;

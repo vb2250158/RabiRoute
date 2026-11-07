@@ -109,6 +109,15 @@ export function createPerformanceOperations(owner: PerformanceApi): readonly Api
   };
   const batch = object({ code: { enum: [0, -1] }, accepted: integer, rejected: integer });
   return [
+    define("cpu-profile.capture", "POST", "cpu-profile", "Capture the current Manager main JavaScript isolate for ten seconds and download a raw Chrome/V8 CPU profile. This does not cover child processes, Worker isolates or native/kernel CPU stacks.", {
+      "200": json(object({ nodes: array(object({})), startTime: number, endTime: number, samples: array(integer), timeDeltas: array(number) }, ["nodes", "startTime", "endTime"]))
+    }, async () => {
+      const profile = await owner.captureCpuProfile();
+      return { status: 200, headers: { "cache-control": "no-store", "content-disposition": `attachment; filename="manager-${process.pid}-${Date.now()}.cpuprofile"`,
+        "x-rabiroute-profile-pid": String(process.pid), "x-rabiroute-profile-target": "manager-main-isolate",
+        "x-rabiroute-profile-duration-ms": String((profile.endTime - profile.startTime) / 1000) }, body: profile };
+    }, { effects: "Run one on-demand local Inspector Session without a TCP listener, settings changes or persistent files. Concurrent callers on this owner share its active capture. Recording may stay disabled. The raw profile contains function names and script URLs, which can include private absolute paths.",
+      recovery: "Download the original response. Do not automatically repeat an interrupted capture; it is a new measurement. Client disconnect does not stop a capture shared with another caller. Original owner retirement cancels and joins its Session; ten seconds is the timer target, and event-loop stalls can delay completion. No startup diagnostics Session is stopped or reused." }),
     define("config.read", "GET", "config", "Read the active performance recording configuration.", { "200": json(envelope(config)) }, () => result({ code: 0, data: owner.config() })),
     define("config.save", "PATCH", "config", "Merge supplied values into current performance configuration, normalize, persist and apply to the original collector.", { "200": json(envelope(config)) }, input => result({ code: 0, data: owner.saveConfig(input.body) }), {
       body: { kind: "json", maxBytes: 16 * 1024, allowAnyContentType: true, emptyValue: {}, schema: configInput },

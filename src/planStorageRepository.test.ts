@@ -6,6 +6,7 @@ import path from "node:path";
 import test from "node:test";
 import {
   commitPlanLifecycleTransitionUnderLease,
+  commitPlanStorageTransactionUnderLease,
   assertPlanStorageIdentityAvailable,
   readCanonicalPlanStoragePackageUnderLease,
   readPlanStorageInventoryHash,
@@ -15,6 +16,95 @@ import {
   withPlanStorageLease,
   type PlanStoragePackageFile
 } from "./planStorageRepository.js";
+
+function terminalRecoveryFixture(t: test.TestContext) {
+  const roleDir = fs.mkdtempSync(path.join(os.tmpdir(), "plan-terminal-recovery-")), planId = "terminal-plan";
+  t.after(() => fs.rmSync(roleDir, { recursive: true, force: true }));
+  withPlanStorageLease(roleDir, planId, lease => commitPlanLifecycleTransitionUnderLease(lease, {
+    transactionId: "terminal_create", kind: "plan-create", fromBucket: null, toBucket: "active", files: revision(planId, "执行中", 1)
+  }));
+  const history = revision(planId, "执行中", 1).find(file => file.path === "history.jsonl")!.content;
+  const commit = (id: string, content = history) => withPlanStorageLease(roleDir, planId, lease => commitPlanStorageTransactionUnderLease(lease, {
+    transactionId: id, kind: "plan-feedback", operations: [{ type: "replace-file", relativePath: "history.jsonl", content }]
+  }));
+  const first = commit("terminal_first"), second = commit("terminal_second");
+  return { roleDir, planId, first, second, commit };
+}
+
+function observeTerminalRecoveryLeases(roleDir: string, run: () => void): number {
+  const original = fs.openSync; let entered = 0;
+  fs.openSync = ((...args: Parameters<typeof fs.openSync>) => {
+    if (typeof args[0] === "string" && args[0].startsWith(roleDir + path.sep) && args[0].endsWith(".candidate")) entered++;
+    return Reflect.apply(original, fs, args);
+  }) as typeof fs.openSync;
+  try { run(); } finally { fs.openSync = original; }
+  return entered;
+}
+
+test("terminal recovery reads matching receipts without reacquiring mutation leases or changing original bytes", t => {
+  const f = terminalRecoveryFixture(t), paths = [f.first.receiptPath, f.second.receiptPath,
+    path.join(path.dirname(f.first.receiptPath), "manifest.json"), path.join(f.roleDir, "plans/active", f.planId, "history.jsonl")];
+  const before = paths.map(file => fs.readFileSync(file));
+  const leases = observeTerminalRecoveryLeases(f.roleDir, () => {
+    assert.deepEqual(recoverPlanStorageTransactions(f.roleDir), { committed: 0, alreadyCommitted: 2, failures: [] });
+  });
+  assert.equal(leases, 0, "A matching original terminal receipt needs no writer lease/heartbeat.");
+  paths.forEach((file, index) => assert.deepEqual(fs.readFileSync(file), before[index]));
+  assert.throws(() => f.commit("terminal_first", Buffer.from("changed original frozen intent")), /different semantic content/);
+  assert.deepEqual(fs.readFileSync(f.first.receiptPath), before[0]);
+});
+
+test("terminal recovery retains the original lease for pending transactions and keeps existing terminal rows intact", t => {
+  const f = terminalRecoveryFixture(t), manifest = fs.readFileSync(path.join(path.dirname(f.first.receiptPath), "manifest.json"));
+  const second = fs.readFileSync(f.second.receiptPath);
+  fs.unlinkSync(f.first.receiptPath);
+  const leases = observeTerminalRecoveryLeases(f.roleDir, () => {
+    assert.deepEqual(recoverPlanStorageTransactions(f.roleDir), { committed: 1, alreadyCommitted: 1, failures: [] });
+  });
+  assert.equal(leases, 1);
+  assert.deepEqual(fs.readFileSync(path.join(path.dirname(f.first.receiptPath), "manifest.json")), manifest);
+  assert.deepEqual(fs.readFileSync(f.second.receiptPath), second);
+  assert.equal(JSON.parse(fs.readFileSync(f.first.receiptPath, "utf8")).transactionId, "terminal_first");
+});
+
+test("terminal recovery isolates invalid receipts, scope mismatches and I/O failures without skipping independent rows", t => {
+  const f = terminalRecoveryFixture(t), originalReceipt = fs.readFileSync(f.first.receiptPath);
+  const manifestPath = path.join(path.dirname(f.first.receiptPath), "manifest.json"), originalManifest = fs.readFileSync(manifestPath);
+  const second = fs.readFileSync(f.second.receiptPath);
+  for (const bytes of [Buffer.from("invalid-json"), Buffer.from(JSON.stringify({ specHash: "different-original-intent" }))]) {
+    fs.writeFileSync(f.first.receiptPath, bytes);
+    const result = recoverPlanStorageTransactions(f.roleDir);
+    assert.equal(result.committed, 0); assert.equal(result.alreadyCommitted, 1); assert.equal(result.failures.length, 1);
+    assert.deepEqual(fs.readFileSync(f.first.receiptPath), bytes);
+  }
+  fs.writeFileSync(f.first.receiptPath, originalReceipt);
+  fs.writeFileSync(manifestPath, JSON.stringify({ ...JSON.parse(originalManifest.toString()), roleDir: path.join(f.roleDir, "foreign") }));
+  const foreign = recoverPlanStorageTransactions(f.roleDir);
+  assert.equal(foreign.alreadyCommitted, 1); assert.equal(foreign.failures.length, 1); assert.match(foreign.failures[0]!.error, /role identity mismatch/);
+  fs.writeFileSync(manifestPath, originalManifest);
+  const read = fs.readFileSync;
+  fs.readFileSync = ((...args: Parameters<typeof fs.readFileSync>) => {
+    if (args[0] === f.first.receiptPath) throw Object.assign(new Error("Controlled receipt I/O failure"), { code: "EACCES" });
+    return Reflect.apply(read, fs, args);
+  }) as typeof fs.readFileSync;
+  try {
+    const io = recoverPlanStorageTransactions(f.roleDir);
+    assert.equal(io.alreadyCommitted, 1); assert.equal(io.failures.length, 1); assert.match(io.failures[0]!.error, /Controlled receipt I\/O failure/);
+  } finally { fs.readFileSync = read; }
+  assert.deepEqual(fs.readFileSync(f.first.receiptPath), originalReceipt); assert.deepEqual(fs.readFileSync(f.second.receiptPath), second);
+});
+
+test("terminal recovery checks again under the original lease when a writer publishes after the first receipt lookup", t => {
+  const f = terminalRecoveryFixture(t), receipt = fs.readFileSync(f.first.receiptPath), original = fs.existsSync;
+  let firstLookup = true;
+  fs.existsSync = ((file: fs.PathLike) => {
+    if (file === f.first.receiptPath && firstLookup) { firstLookup = false; return false; }
+    return original(file);
+  }) as typeof fs.existsSync;
+  try { assert.deepEqual(recoverPlanStorageTransactions(f.roleDir), { committed: 0, alreadyCommitted: 2, failures: [] }); }
+  finally { fs.existsSync = original; }
+  assert.equal(firstLookup, false); assert.deepEqual(fs.readFileSync(f.first.receiptPath), receipt);
+});
 
 function packageFile(filePath: string, content: string): PlanStoragePackageFile {
   const bytes = Buffer.from(content, "utf8");

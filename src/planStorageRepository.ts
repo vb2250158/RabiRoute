@@ -1942,6 +1942,18 @@ function readStoredTransaction(
   return { ...value, roleDir, planId, storageId };
 }
 
+/** A matching atomically published receipt is terminal; this lookup never mutates storage. */
+function readCommittedStoredTransaction(
+  manifest: StoredPlanStorageTransaction,
+  transactionRoot: string
+): PlanStorageTransactionCommitResult | undefined {
+  const receiptPath = path.join(transactionRoot, "receipt.json");
+  if (!fs.existsSync(receiptPath)) return undefined;
+  const receipt = JSON.parse(fs.readFileSync(receiptPath, "utf8")) as { specHash?: unknown };
+  if (receipt.specHash !== manifest.specHash) throw new Error(`Plan storage transaction receipt identity mismatch: ${manifest.transactionId}`);
+  return { status: "already_committed", receiptPath };
+}
+
 function applyStoredTransactionUnderLease(
   lease: PlanStorageLease,
   manifest: StoredPlanStorageTransaction,
@@ -1952,12 +1964,9 @@ function applyStoredTransactionUnderLease(
   if (lease.roleDir !== manifest.roleDir || lease.planId !== manifest.planId || lease.storageId !== manifest.storageId) {
     throw new Error(`Plan storage transaction lease identity mismatch: ${manifest.transactionId}`);
   }
+  const completed = readCommittedStoredTransaction(manifest, transactionRoot);
+  if (completed) return completed;
   const receiptPath = path.join(transactionRoot, "receipt.json");
-  if (fs.existsSync(receiptPath)) {
-    const receipt = JSON.parse(fs.readFileSync(receiptPath, "utf8")) as { specHash?: unknown };
-    if (receipt.specHash !== manifest.specHash) throw new Error(`Plan storage transaction receipt identity mismatch: ${manifest.transactionId}`);
-    return { status: "already_committed", receiptPath };
-  }
   const location = resolveCanonicalPlanStorageLocation(manifest.roleDir, manifest.planId);
   if (!location) throw new Error(`Plan storage transaction canonical plan location disappeared: ${manifest.planId}`);
   verifyStagedTransactionPayload(transactionRoot, location.directory, manifest.operations);
@@ -2091,6 +2100,12 @@ export function recoverPlanStorageTransactions(
       }
       if (options.kind && manifest.transactionKind !== options.kind) continue;
       const transactionRoot = path.dirname(manifestPath);
+      // The original writer never rewrites a completed receipt. Pending work
+      // still acquires the original lease and checks the same receipt again.
+      if (readCommittedStoredTransaction(manifest, transactionRoot)) {
+        result.alreadyCommitted += 1;
+        continue;
+      }
       const outcome = withPlanStorageLease(manifest.roleDir, manifest.planId, (lease) =>
         withPackageCommitScope(lease, () => applyStoredTransactionUnderLease(lease, manifest, transactionRoot))
       );

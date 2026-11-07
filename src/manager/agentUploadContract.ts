@@ -110,7 +110,9 @@ export function agentUploadOperationContract(method: "GET" | "PUT", maxBytes: nu
       query: { type: "object", properties: {}, additionalProperties: false },
       headers: method === "PUT" ? { type: "object", required: ["idempotency-key", "content-type", "x-rabiroute-file-name", "x-rabiroute-content-sha256"],
         properties: { "idempotency-key": uuid, "content-type": { type: "string" },
-          "x-rabiroute-file-name": { type: "string", minLength: 1 }, "x-rabiroute-content-sha256": { type: "string", pattern: "^[a-fA-F0-9]{64}$" },
+          "x-rabiroute-file-name": { type: "string", minLength: 1, description: "encodeURIComponent of the original basename; the native store requires at most255 UTF-8 bytes, no directory, control/Windows-invalid characters, leading/trailing whitespace, trailing dot or reserved device name such as CON." },
+          "x-rabiroute-content-sha256": { type: "string", pattern: "^[a-fA-F0-9]{64}$", description: "SHA-256 of the original uncompressed binary bytes; keep the original upload ID, content and digest, then read the same ID receipt before deciding how to resolve a mismatch." },
+          "content-length": { description: "Optional. Native Number(header) must be a nonnegative safe integer equal to received bytes. A received length/digest mismatch identifies body integrity, without deciding which frozen value should change." },
           "content-encoding": false }, additionalProperties: true } : { type: "object", additionalProperties: true },
       body: method === "GET" ? { kind: "none" } : { kind: "binary", mediaType: "application/octet-stream", maxBytes,
         rules: ["agent.upload.integrity", "agent.upload.capacity", "agent.upload.authorization-lease"] }

@@ -78,7 +78,23 @@ test("discovery exposes five native normalization fields, both batch shapes and 
     const parameter = openapi.paths[`/api/performance/${suffix}`].get.parameters.find((entry: any) => entry.name === name);
     assert.ok(parameter); assert.equal(parameter.required, false); assert.equal(parameter.schema.type, undefined);
   }
-  assert.equal(snapshot.operations.length, 7); assert.equal(snapshot.coverage.globalCoverage, "not-proven");
+  assert.equal(snapshot.operations.length, 8); assert.equal(snapshot.coverage.globalCoverage, "not-proven");
+});
+
+test("CPU profile discovery is bodyless and validates raw download metadata without a recording gate", async t => {
+  const f = await fixture(t), operation = f.operations.get("cpu-profile.capture")!;
+  assert.equal(operation.contract.method, "POST"); assert.equal(operation.contract.pathTemplate, "/api/performance/cpu-profile");
+  assert.deepEqual(operation.contract.request.body, { kind: "none" });
+  const profile = { nodes: [], startTime: 1, endTime: 1001, samples: [], timeDeltas: [] };
+  t.mock.method(f.api, "captureCpuProfile", () => Promise.resolve(profile));
+  const result = await f.invoke("cpu-profile.capture");
+  assert.equal(result.status, 200); assert.equal(result.body, profile);
+  assert.match(result.headers!["content-disposition"]!, /attachment; filename="manager-\d+-\d+\.cpuprofile"/);
+  assert.equal(result.headers!["cache-control"], "no-store");
+  assert.equal(result.headers!["x-rabiroute-profile-target"], "manager-main-isolate");
+  assert.equal(result.headers!["x-rabiroute-profile-pid"], String(process.pid));
+  assert.equal(result.headers!["x-rabiroute-profile-duration-ms"], "1");
+  assert.equal(f.api.config().enabled, false);
 });
 
 test("input metadata admits arbitrary JSON and malformed per-item values without substituting structural errors", async t => {

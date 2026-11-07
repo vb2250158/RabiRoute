@@ -15,13 +15,13 @@ export type AgentUploadStoreOptions = {
 };
 export type AgentUploadErrorCode = "invalid_input" | "not_found" | "conflict" | "capacity" | "integrity" | "unsafe_storage" | "storage_failure" | "forbidden" | "upload_aborted";
 export class AgentUploadStoreError extends Error {
-  constructor(readonly code: AgentUploadErrorCode, detail?: string) { super(`Agent upload ${code}${detail ? `: ${detail}` : ""}`); this.name = "AgentUploadStoreError"; }
+  constructor(readonly code: AgentUploadErrorCode, detail?: string, readonly field?: "fileName" | "size" | "sha256" | "content") { super(`Agent upload ${code}${detail ? `: ${detail}` : ""}`); this.name = "AgentUploadStoreError"; }
 }
 type RecordData = AgentUploadDto & { schemaVersion: 1; owner: AgentUploadOwner };
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const SHA256 = /^[0-9a-f]{64}$/;
 const METADATA_BYTES = 8192;
-function fail(code: AgentUploadErrorCode): never { throw new AgentUploadStoreError(code); }
+function fail(code: AgentUploadErrorCode, field?: AgentUploadStoreError["field"]): never { throw new AgentUploadStoreError(code, undefined, field); }
 const hash = (bytes: Buffer) => createHash("sha256").update(bytes).digest("hex");
 function object(value: unknown): value is Record<string, unknown> { return !!value && typeof value === "object" && !Array.isArray(value); }
 function keys(value: Record<string, unknown>, expected: string[]): boolean {
@@ -127,10 +127,12 @@ export class AgentUploadStore {
 
   upload(input: AgentUploadInput): AgentUploadDto {
     return this.operation("upload", () => {
-      if (!input || !validOwner(input.owner) || !UUID.test(input.uploadId) || !validName(input.fileName)
-        || !Buffer.isBuffer(input.content) || !SHA256.test(input.sha256)) fail("invalid_input");
+      if (!input || !validOwner(input.owner) || !UUID.test(input.uploadId)) fail("invalid_input");
+      if (!validName(input.fileName)) fail("invalid_input", "fileName");
+      if (!Buffer.isBuffer(input.content)) fail("invalid_input", "content");
+      if (!SHA256.test(input.sha256)) fail("invalid_input", "sha256");
       if (input.content.length > this.limits.maxFileBytes || input.content.length > this.limits.maxTotalBytes) this.capacity();
-      if (hash(input.content) !== input.sha256) fail("integrity");
+      if (hash(input.content) !== input.sha256) fail("integrity", "content");
       return this.locked(() => {
         const now = this.timestamp();
         const records = this.inventory();
@@ -167,8 +169,10 @@ export class AgentUploadStore {
   }
 
   async uploadStream(input: AgentUploadStreamInput): Promise<AgentUploadDto> {
-    if (!validOwner(input.owner) || !UUID.test(input.uploadId) || !validName(input.fileName) || !SHA256.test(input.sha256)
-      || (input.size !== undefined && (!Number.isSafeInteger(input.size) || input.size < 0))) fail("invalid_input");
+    if (!validOwner(input.owner) || !UUID.test(input.uploadId)) fail("invalid_input");
+    if (!validName(input.fileName)) fail("invalid_input", "fileName");
+    if (!SHA256.test(input.sha256)) fail("invalid_input", "sha256");
+    if (input.size !== undefined && (!Number.isSafeInteger(input.size) || input.size < 0)) fail("invalid_input", "size");
     const reserved = input.size ?? this.limits.maxFileBytes;
     if (reserved > this.limits.maxFileBytes) this.capacity();
     const previous = this.operation("stream-replay", () => this.locked(() => {
@@ -180,8 +184,8 @@ export class AgentUploadStore {
     }));
     if (previous) {
       const digest = createHash("sha256"); let size = 0;
-      for await (const chunk of input.content) { size += chunk.byteLength; if (size > previous.size) fail("conflict"); digest.update(chunk); }
-      if (size !== previous.size || digest.digest("hex") !== previous.sha256) fail("integrity");
+      for await (const chunk of input.content) { size += chunk.byteLength; if (size > previous.size) fail("conflict", "content"); digest.update(chunk); }
+      if (size !== previous.size || digest.digest("hex") !== previous.sha256) fail("integrity", "content");
       await input.beforeCommit?.();
       return this.withFile(input.owner, input.uploadId, file => {
         input.assertCommitAuthorized?.();
@@ -205,14 +209,14 @@ export class AgentUploadStore {
       fd = await fs.promises.open(path.join(stage, "data.bin"), "wx", 0o600);
       const digest = createHash("sha256"); let size = 0;
       for await (const chunk of input.content) {
-        if (!(chunk instanceof Uint8Array)) fail("invalid_input");
+        if (!(chunk instanceof Uint8Array)) fail("invalid_input", "content");
         size += chunk.byteLength;
         if (size > reserved) this.capacity();
         digest.update(chunk);
         let offset = 0;
         while (offset < chunk.byteLength) { const written = await fd.write(chunk, offset, chunk.byteLength - offset); if (!written.bytesWritten) fail("storage_failure"); offset += written.bytesWritten; }
       }
-      if ((input.size !== undefined && size !== input.size) || digest.digest("hex") !== input.sha256) fail("integrity");
+      if ((input.size !== undefined && size !== input.size) || digest.digest("hex") !== input.sha256) fail("integrity", "content");
       await fd.sync(); await fd.close(); fd = undefined;
       await input.beforeCommit?.();
       return this.operation("stream-commit", () => this.locked(() => {

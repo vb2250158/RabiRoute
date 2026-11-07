@@ -1,7 +1,7 @@
 {
   "schemaVersion": 2,
   "id": "io.rabiroute.manager.performance",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "displayName": "性能监测",
   "description": "查看运行耗时、资源采样与性能分析结果",
   "icon": "mdi-chart-line",

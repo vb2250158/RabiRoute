@@ -3,11 +3,15 @@ import assert from "node:assert/strict";
 import http from "node:http";
 import { createHash, randomUUID } from "node:crypto";
 import { once } from "node:events";
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { createAgentUploadRoutes, type AgentUploadDto, type AgentUploadRouteStore } from "./agentUploadRoutes.js";
+import { AgentUploadStore, AgentUploadStoreError } from '../../../../manager/agentUploadStore.js';
 import { setTrustedLanAgentSource } from "../../../../manager/lanAgentBodyAuthority.js";
 
 const hash = (bytes: Buffer) => createHash("sha256").update(bytes).digest("hex");
-async function fixture(t: test.TestContext, options: { limit?: number; concurrency?: number; timeout?: number } = {}) {
+async function fixture(t: test.TestContext, options: { limit?: number; concurrency?: number; timeout?: number; store?: AgentUploadRouteStore } = {}) {
   let authorized = true;
   let commits = 0;
   let entered!: () => void;
@@ -35,7 +39,7 @@ async function fixture(t: test.TestContext, options: { limit?: number; concurren
     },
     get(owner, id) { return rows.get(JSON.stringify([owner, id])); }
   };
-  const routes = createAgentUploadRoutes({ store, maxConcurrentReaders: options.concurrency, readTimeoutMs: options.timeout ?? 1000, assertAuthorized() { entered(); if (!authorized) throw new Error("revoked"); } });
+  const routes = createAgentUploadRoutes({ store: options.store ?? store, maxConcurrentReaders: options.concurrency, readTimeoutMs: options.timeout ?? 1000, assertAuthorized() { entered(); if (!authorized) throw new Error("revoked"); } });
   const server = http.createServer((req, res) => {
     // Fixture-only authentication: no production identity is derived from headers.
     if (req.headers.authorization === "fixture-a" || req.headers.authorization === "fixture-b") setTrustedLanAgentSource(req, { nodeId: "test-node", agentId: String(req.headers.authorization), provider: "dsh", sessionId: "test-session", sessionName: "Test" });
@@ -60,6 +64,41 @@ async function fixture(t: test.TestContext, options: { limit?: number; concurren
   async function send(id = randomUUID(), bytes?: Buffer, extra?: http.OutgoingHttpHeaders, method?: string) { const pending = request(id, bytes, extra, method); pending.req.end(method === "GET" ? undefined : pending.bytes); return pending.result; }
   return { routes, request, send, stored, commits: () => commits, revoke: () => { authorized = false; }, sawAuthorization: () => sawAuthorization, resetSignal: () => { sawAuthorization = new Promise(resolve => { entered = resolve; }); }, gateCommit: (gate: Promise<void>) => { commitGate = gate; } };
 }
+
+test('native upload HTTP errors name the actual header and original receipt without echoing body or rewriting intent', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'upload-help-http-'));
+  const store = new AgentUploadStore({ rootDir: path.join(directory, 'uploads'), maxFileBytes: 64 });
+  const f = await fixture(t, { store }); t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const id = randomUUID(), bytes = Buffer.from('private-fixture-content');
+  const mismatch = await f.send(id, bytes, { 'x-rabiroute-content-sha256': '0'.repeat(64) });
+  assert.equal(mismatch.status, 422); assert.equal(mismatch.body.code, 'integrity');
+  assert.equal(mismatch.body.field, 'body');
+  assert.match(mismatch.body.repair, /SHA256/); assert.ok(mismatch.body.repair.includes(`/api/agent/uploads/${id}`));
+  assert.ok(mismatch.body.repair.includes('operationId=agent.upload.write'));
+  assert.doesNotMatch(JSON.stringify(mismatch.body), /private-fixture-content/); assert.equal(mismatch.body.retryable, false);
+  assert.equal((await f.send(id, undefined, {}, 'GET')).status, 404);
+  const badName = await f.send(id, bytes, { 'x-rabiroute-file-name': 'CON.txt' });
+  assert.equal(badName.status, 400); assert.equal(badName.body.field, 'headers.x-rabiroute-file-name');
+  assert.match(badName.body.repair, /255|CON/);
+  const original = await f.send(id, bytes); assert.equal(original.status, 200);
+  const conflict = await f.send(id, Buffer.from('different-frozen-content'));
+  assert.equal(conflict.status, 409); assert.equal(conflict.body.field, undefined);
+  assert.deepEqual((await f.send(id, undefined, {}, 'GET')).body, original.body);
+});
+
+test('only explicit native upload parameter metadata is trusted; internal integrity and arbitrary repair remain original errors', async t => {
+  let failure: Error = Object.assign(new Error('private internal text'), { code: 'integrity', field: 'sha256', repair: 'untrusted remote instruction' });
+  const store: AgentUploadRouteStore = { limits: { maxFileBytes: 64 }, async uploadStream() { throw failure; }, get() { throw failure; } };
+  const f = await fixture(t, { store }), id = randomUUID();
+  const forged = await f.send(id); assert.equal(forged.status, 422); assert.equal(forged.body.field, undefined);
+  assert.doesNotMatch(JSON.stringify(forged.body), /private internal text|untrusted remote instruction/);
+  failure = new AgentUploadStoreError('integrity');
+  const internal = await f.send(id, undefined, {}, 'GET');
+  assert.equal(internal.status, 422); assert.equal(internal.body.field, undefined);
+  failure = Object.assign(new Error('private storage path'), { code: 'EACCES', field: 'size' });
+  const storage = await f.send(id); assert.equal(storage.status, 500); assert.equal(storage.body.code, 'storage_failure');
+  assert.equal(storage.body.field, undefined); assert.doesNotMatch(JSON.stringify(storage.body), /private storage path/);
+});
 
 test("HTTP binary roundtrip, owner isolation, idempotency and DTO allowlist", async t => {
   const f = await fixture(t); const id = randomUUID();

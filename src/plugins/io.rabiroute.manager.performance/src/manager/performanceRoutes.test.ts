@@ -4,6 +4,8 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { Session, url as inspectorUrl, type Profiler } from "node:inspector";
+import { startManagerStallDiagnostics } from "../../../../managerStallDiagnostics.js";
 import type { AddressInfo } from "node:net";
 import type { PerformanceSample } from "../../../../shared/performanceContract.js";
 import { RabiGlobalConfigStore } from "../../../../manager/globalConfig.js";
@@ -71,7 +73,7 @@ test("an enrolled empty node saves native config, ingests samples, reads all sna
   assert.equal(logs.body.data.some((row: PerformanceSample) => row.sampleId === "forged-manager"), false);
   assert.equal((await f.request("/api/performance/status")).body.config.enabled, true);
   assert.equal((await f.request("/api/performance/summary?rangeMs=60000")).status, 200);
-  assert.equal(f.registry.snapshot()[0]!.routeCount, 7);
+  assert.equal(f.registry.snapshot()[0]!.routeCount, 8);
 });
 
 test("performance summary and logs expose pending samples without flushing or read workers", async t => {
@@ -137,4 +139,121 @@ test("slow notification consumers are bounded and must refresh state after overf
   assert.equal(stream.signal!.aborted, true);
   assert.equal((await stream.frames[Symbol.asyncIterator]().next()).done, true);
   assert.ok(f.api.logs("1").data.length > 0);
+});
+
+test("manual CPU capture shares one real ten-second Session and leaves independent startup sampling intact without TCP", { timeout: 25000 }, async t => {
+  const f = await fixture(t);
+  assert.equal(f.api.config().enabled, false, "manual capture does not require historical recording");
+  assert.equal(inspectorUrl(), undefined);
+  let stopStartup: (() => void) | undefined;
+  const startup = new Promise<void>((resolve, reject) => {
+    stopStartup = startManagerStallDiagnostics(sample => {
+      if (sample.error) reject(new Error(sample.error));
+      else { assert.ok(sample.frames?.length); resolve(); }
+    });
+  });
+  t.after(() => stopStartup?.());
+  const first = f.api.captureCpuProfile(), second = f.api.captureCpuProfile();
+  assert.equal(first, second, "concurrent callers share this owner's current measurement");
+  const download = new Promise<Profiler.Profile>((resolve, reject) => {
+    const request = http.request(f.base + "/api/performance/cpu-profile", { method: "POST", headers: f.headers }, response => {
+      assert.equal(response.statusCode, 200); assert.match(String(response.headers["content-disposition"]), /\.cpuprofile/);
+      let text = ""; response.setEncoding("utf8"); response.on("data", chunk => { text += chunk; });
+      response.on("error", reject); response.on("end", () => { try { resolve(JSON.parse(text) as Profiler.Profile); } catch (error) { reject(error); } });
+    });
+    request.on("error", reject); t.after(() => request.destroy()); request.end();
+  });
+  // An independently owned short Session can stop while both longer samples remain active.
+  const independent = new Session(); independent.connect();
+  const post = <T>(method: string) => new Promise<T>((resolve, reject) => independent.post(method, (error, value) => error ? reject(error) : resolve(value as T)));
+  try {
+    await post("Profiler.enable"); await post("Profiler.start");
+    await new Promise(resolve => setTimeout(resolve, 100));
+    const short = await post<{ profile: Profiler.Profile }>("Profiler.stop");
+    assert.ok(short.profile.nodes.length);
+    const [profile, , downloaded] = await Promise.all([first, startup, download]);
+    assert.ok(profile.nodes.length); assert.ok(profile.samples?.length);
+    assert.deepEqual(downloaded, profile, "actual HTTP downloads the original shared native profile, without a wrapper or new capture");
+    assert.ok(profile.endTime - profile.startTime >= 9_000_000, "actual native duration retains the fixed ten-second task");
+    assert.equal(f.api.config().enabled, false); assert.equal(inspectorUrl(), undefined);
+  } finally { independent.disconnect(); stopStartup?.(); }
+});
+
+test("owner close cancels and joins an active CPU capture without waiting for its timer", async t => {
+  const f = await fixture(t), disconnected = t.mock.method(Session.prototype, "disconnect");
+  const pending = f.api.captureCpuProfile();
+  const rejected = assert.rejects(pending, /retired during CPU capture/);
+  await new Promise<void>(resolve => setImmediate(resolve));
+  const closing = f.api.close(); assert.equal(f.api.close(), closing);
+  await closing; await rejected;
+  assert.equal(disconnected.mock.callCount(), 1);
+  assert.equal(inspectorUrl(), undefined);
+  assert.throws(() => f.api.captureCpuProfile(), /retired/);
+});
+
+test("a CPU protocol failure releases its Session and a later caller can capture again", async t => {
+  const f = await fixture(t), expected = new Error("Controlled CPU protocol failure");
+  const disconnected = t.mock.method(Session.prototype, "disconnect");
+  const post = t.mock.method(Session.prototype, "post", function (this: Session, ...args: unknown[]) {
+    const callback = args.at(-1); assert.equal(typeof callback, "function");
+    (callback as (error: Error) => void)(expected);
+  });
+  await assert.rejects(f.api.captureCpuProfile(), error => error === expected);
+  assert.equal(disconnected.mock.callCount(), 1);
+  post.mock.restore();
+  const next = f.api.captureCpuProfile(), rejected = assert.rejects(next, /retired during CPU capture/);
+  await new Promise<void>(resolve => setImmediate(resolve));
+  await f.api.close(); await rejected;
+  assert.equal(disconnected.mock.callCount(), 2);
+});
+
+test("the actual HTTP CPU operation downloads the raw profile without changing configuration", async t => {
+  const f = await fixture(t), profile: Profiler.Profile = { nodes: [{ id: 1, callFrame: {
+    functionName: "synthetic", scriptId: "1", url: "file:///synthetic/dist/module.js", lineNumber: 0, columnNumber: 0
+  } }], startTime: 100, endTime: 200, samples: [1], timeDeltas: [100] };
+  let calls = 0;
+  t.mock.method(f.api, "captureCpuProfile", () => { calls++; return Promise.resolve(profile); });
+  const response = await f.request("/api/performance/cpu-profile", "POST");
+  assert.equal(response.status, 200); assert.deepEqual(response.body, profile);
+  assert.equal(calls, 1); assert.equal(f.api.config().enabled, false);
+});
+
+test("a synchronous CPU protocol error followed immediately by close is not a retirement failure", async t => {
+  const f = await fixture(t), expected = new Error("Controlled synchronous CPU protocol error");
+  const disconnected = t.mock.method(Session.prototype, "disconnect");
+  t.mock.method(Session.prototype, "post", function (this: Session, ...args: unknown[]) {
+    const callback = args.at(-1); assert.equal(typeof callback, "function");
+    (callback as (error: Error) => void)(expected);
+  });
+  const result = f.api.captureCpuProfile();
+  const rejected = assert.rejects(result, error => error === expected);
+  const closing = f.api.close();
+  await rejected; await closing;
+  assert.equal(disconnected.mock.callCount(), 1);
+});
+
+test("a failed CPU disconnect retains the same Session until an explicit close confirms release", async t => {
+  const f = await fixture(t), releaseError = new Error("Controlled CPU Session disconnect failure");
+  const original = Session.prototype.disconnect, sessions: Session[] = [];
+  let fail = true;
+  t.mock.method(Session.prototype, "disconnect", function (this: Session) {
+    sessions.push(this); if (fail) throw releaseError;
+    return Reflect.apply(original, this, []);
+  });
+  const result = f.api.captureCpuProfile();
+  const rejected = assert.rejects(result, error => error === releaseError || error instanceof AggregateError && error.errors.includes(releaseError));
+  try {
+    await new Promise<void>(resolve => setImmediate(resolve));
+    await assert.rejects(f.api.close(), error => error === releaseError);
+    await rejected;
+    assert.equal(sessions.length, 1, "failed cleanup is not automatically retried");
+    fail = false;
+    await f.api.close();
+    assert.equal(sessions.length, 2);
+    assert.equal(sessions[0], sessions[1], "explicit recovery releases the original native Session, never a replacement");
+    assert.equal(inspectorUrl(), undefined);
+  } finally {
+    // The before implementation loses its owner; the fixture still releases only its own Session.
+    fail = false; for (const session of new Set(sessions)) Reflect.apply(original, session, []);
+  }
 });

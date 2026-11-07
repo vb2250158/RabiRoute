@@ -17,6 +17,30 @@ function fixture(options: Partial<AgentUploadStoreOptions> = {}) {
   const rootDir = path.join(home, "uploads");
   return { home, rootDir, store: new AgentUploadStore({ rootDir, ...options }), close: () => fs.rmSync(home, { recursive: true, force: true }) };
 }
+
+test('native upload parameter diagnostics distinguish declared length, digest, filename and replay body from storage integrity', async () => {
+  const f = fixture({ maxFileBytes: 64 });
+  const check = (code: string, field?: string) => (error: unknown) => error instanceof AgentUploadStoreError
+    && error.code === code && Object.getOwnPropertyDescriptor(error, 'field')?.value === field;
+  try {
+    const request = input('abc');
+    const stream = (bytes = request.content) => (async function* () { yield bytes; })();
+    await assert.rejects(f.store.uploadStream({ ...request, fileName: 'CON.txt', content: stream() }), check('invalid_input', 'fileName'));
+    await assert.rejects(f.store.uploadStream({ ...request, size: NaN, content: stream() }), check('invalid_input', 'size'));
+    await assert.rejects(f.store.uploadStream({ ...request, sha256: 'invalid', content: stream() }), check('invalid_input', 'sha256'));
+    await assert.rejects(f.store.uploadStream({ ...request, size: 4, content: stream() }), check('integrity', 'content'));
+    await assert.rejects(f.store.uploadStream({ ...request, sha256: '0'.repeat(64), content: stream() }), check('integrity', 'content'));
+    const receipt = f.store.upload(request);
+    await assert.rejects(f.store.uploadStream({ ...request, content: stream(Buffer.from('ab')) }), check('integrity', 'content'));
+    await assert.rejects(f.store.uploadStream({ ...request, content: stream(Buffer.from('xyz')) }), check('integrity', 'content'));
+    await assert.rejects(f.store.uploadStream({ ...request, content: stream(Buffer.from('abcd')) }), check('conflict', 'content'));
+    assert.deepEqual(f.store.get(owner, request.uploadId), receipt);
+    const file = f.store.resolve(owner, request.uploadId);
+    fs.writeFileSync(file.path, 'xyz');
+    assert.throws(() => f.store.resolve(owner, request.uploadId), check('integrity'));
+    assert.equal(fs.readdirSync(f.rootDir).some(name => name.startsWith('.stream-') || name.startsWith('.tmp-')), false);
+  } finally { f.close(); }
+});
 test("generated 32 MiB stream uploads and leases without whole-file buffers", async () => {
   const f = fixture();
   try {

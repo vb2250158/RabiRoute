@@ -21,6 +21,20 @@ Performance pages read bounded Manager memory directly: recent raw records are c
 
 File counts and disk bytes use an in-memory index. Startup, configuration updates and hourly retention cleanup scan the directory; regular writes apply the actual appended UTF-8 byte count, and successful deletions remove their entries. A failed write checks only the affected file instead of recounting every shard for each batch. The index is rebuildable from disk. Sampling intervals, record formats and retention settings stay unchanged; external edits are recounted during those scans.
 
+## Capture a CPU profile on demand
+
+Run `node scripts/resolve-manager.mjs` to discover the current Manager and verify the returned instance with `/meta`, then use its existing connection.
+
+`POST /api/performance/cpu-profile` accepts no request body and uses the current Manager's existing authenticated connection. It samples that Manager's main JavaScript isolate for about ten seconds and returns raw downloadable `.cpuprofile` JSON. `Content-Disposition` supplies the filename; `x-rabiroute-profile-pid/target/duration-ms` identify the target and actual recorded duration.
+
+Historical performance recording can remain disabled. This action changes no settings or environment and opens no Inspector TCP listener. Concurrent callers on the same performance owner share its active measurement, independently of startup profiling. One client leaving does not cancel another caller's shared capture; owner retirement cancels and joins its own Session. Do not automatically repeat a failed/interrupted capture: it is a new measurement.
+
+Event-loop stalls can delay completion, so ten seconds is not a hard response deadline. The profile does not fully cover child processes, Worker isolates, or native/kernel CPU stacks. Function names and script URLs can include private absolute paths; keep downloaded profiles private. No profile file, plan, message, credential, or business receipt is written by this endpoint.
+
+## Avoiding repeated startup recovery work
+
+Plan feedback recovery first reads the original transaction manifest and terminal receipt, checking identity and specHash. A confirmed committed transaction returns its receipt without starting a write lease or heartbeat Worker for a read-only check. Pending transactions still acquire the original lease and recheck; malformed manifests, receipts and digest conflicts remain local to the affected transaction. No state, timer or global gate is added. In a synthetic comparison of 32 terminal transactions, leases and heartbeat Workers fell from 32 to zero, with elapsed time about 1.47 seconds versus 29 milliseconds. This verifies reduced repeated work, not a measured reduction in machine CPU or complete startup time.
+
 ## Plugin updates and shutdown
 
 A performance plugin candidate only prepares its operations and resources. A failed candidate or rollback before publication does not replace the HTTP recording hook or start or stop the current collector. The kernel's `context.publication` transaction switches the hook, then starts the shared collector. Successful updates and revision rollbacks retain the same collector and operation sink without reinitialization.

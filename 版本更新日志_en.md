@@ -6,6 +6,13 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.10.2 - 2026-11-07
+
+- Independently advance `io.rabiroute.manager.performance` to 0.1.3 with an on-demand, approximately ten-second Manager CPU profile download. Historical recording and a debug listener are unnecessary; concurrent callers share one capture and retirement cancels and joins only its own Session.
+- Check original identity and receipt digest before recovering committed plan-feedback transactions, avoiding redundant write leases and heartbeat Workers. Pending transactions retain their original lease, recheck and local error handling.
+- Independently advance `io.rabiroute.manager.agent-communication` to 0.1.3 with precise upload-format fields. Received content inconsistent with length or digest points to the body while preserving original receipts, HTTP status and frozen content.
+- Advance Host API to 1.6.0 for the optional public upload-error field. SDK 1.1.1, persona 0.1.6 and other plugins remain unchanged. Other deep API error classification continues in the original task.
+
 ## 0.10.1 - 2026-11-07
 
 - Give explicit knowledge search/reload errors a field, stable code and same-role summary/status/help. Expired cursors retain the original query; warming stays 503 without automatic refresh or request changes.

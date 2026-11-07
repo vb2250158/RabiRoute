@@ -6,9 +6,17 @@
 
 错误响应保留原 HTTP 状态、`errorCode`、`field` 和 `repair`。先读取错误指定的只读接口，再判断原请求如何处理。查询失败不表示目标不存在；401/403 表示当前连接没有访问权限。正文、凭据和远端实际目录不进入参数错误提示。
 
-本页说明源码版本 0.10.1 提供的指引，部署版本可从 GET /meta 核对。接口帮助来自当前已注册 operation 合同；构建、隔离验收和正式安装分别记录。对代理透传、未知 JSON 扩展和宽松 schema，仅能覆盖已声明约束，不能推定所有业务错误已覆盖。
+本页说明源码版本 0.10.2 提供的指引，部署版本可从 GET /meta 核对。接口帮助来自当前已注册 operation 合同；构建、隔离验收和正式安装分别记录。对代理透传、未知 JSON 扩展和宽松 schema，仅能覆盖已声明约束，不能推定所有业务错误已覆盖。
 
 ## 逐接口续查范围
+
+### 上传字段指引
+
+0.10.2 细化上传错误的字段指引。仅本地 store 明确校验输入时附字段：文件名为 `headers.x-rabiroute-file-name`，声明长度的格式为 `headers.content-length`，摘要格式为 `headers.x-rabiroute-content-sha256`，非字节内容为 `body`。合法文件名取原文件 basename 后 encodeURIComponent；解码后须符合原 store 的255字节、Windows名称/字符和空白限制。长度按原始未压缩字节计，摘要由相同原字节计算；当前合同读 `GET /api/agent/help?operationId=agent.upload.write`。
+
+收到字节与已声明长度或摘要不相符时，保留原422/integrity并标 `body`；已有回执时 replay 超长仍409/conflict。此证据只能证明不匹配，不能断定应改正文、长度或 SHA。先 `GET /api/agent/uploads/<原uploadId>` 核对原 `fileName/size/sha256/expiresAt`，保留原 ID、请求和冻结内容，不自动重传、换 ID 或修改摘要。404 回执不授权重传或证明其它操作未发生；存储配额、权限撤销、unknown 和既有回执语义不变。
+
+内部磁盘、record/reservation/lease 或读取期间的完整性失败维持原码和 HTTP，不附猜测的参数字段；任意远端/普通 Error 携带的 field、message 或 repair 不进入这套提示。仅接受原本地错误类与固定 code/field 配对，无新增错误注册表、来源门或拒绝条件。其它接口与普通内部/I/O 分类继续原 pending。
 
 ### 知识检索参数与索引可用性
 

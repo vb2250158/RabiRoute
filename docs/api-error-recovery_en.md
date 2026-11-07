@@ -6,9 +6,17 @@
 
 Preserve the HTTP status, `errorCode`, `field`, `repair`, original request and receipt. Use the indicated read-only discovery operation before deciding what to do with the original request. Failed discovery does not establish absence; 401/403 is an access failure. Errors do not expose credentials, full prompts or the remote session's actual directory.
 
-This page describes the guidance provided by source version 0.10.1. Check the deployed version with GET /meta. Help comes from currently registered operation contracts; build, isolated acceptance and installation remain distinct evidence. Passthrough routes, unknown JSON extensions and permissive schemas retain their original owners; structural coverage does not prove every business error is covered.
+This page describes the guidance provided by source version 0.10.2. Check the deployed version with GET /meta. Help comes from currently registered operation contracts; build, isolated acceptance and installation remain distinct evidence. Passthrough routes, unknown JSON extensions and permissive schemas retain their original owners; structural coverage does not prove every business error is covered.
 
 ## Operation-by-operation follow-up
+
+### Upload field guidance
+
+Version 0.10.2 refines upload error field guidance. Only explicit local-store input checks attach fields: filename maps to `headers.x-rabiroute-file-name`, declared-length format to `headers.content-length`, digest format to `headers.x-rabiroute-content-sha256`, and non-byte content to `body`. Use encodeURIComponent of the original basename, retaining native255-byte, Windows name/character and whitespace rules. Count original uncompressed bytes and compute the digest from those same bytes. Read the current contract with `GET /api/agent/help?operationId=agent.upload.write`.
+
+Received bytes inconsistent with declared length or digest retain422/integrity and identify `body`; replay bytes exceeding an existing receipt retain409/conflict. This proves a mismatch, without deciding whether content, length or SHA should change. First GET `/api/agent/uploads/<originalUploadId>` and check original fileName/size/sha256/expiresAt. Preserve the ID, request and frozen content without automatic retransmission, a new ID or digest changes. A404 receipt does not authorize retransmission or prove other operations never occurred. Capacity, revocation, unknown outcomes and existing receipt semantics remain.
+
+Internal disk, record/reservation/lease and read-time integrity failures retain native code/status without guessed parameter fields. Arbitrary remote/plain Error field, message or repair values do not enter this guidance: only the original local error class and fixed code/field pairs are used. No new error registry, source gate or rejection rule is added. Other interfaces and ordinary internal/I-O classification remain in the original pending matrix.
 
 ### Knowledge search parameters and index availability
 
