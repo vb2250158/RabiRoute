@@ -200,10 +200,16 @@ test("download policy denies encoded paths, queries and other methods without Ro
     assert.equal(allowed.status, 200);
     assert.equal(Buffer.from(await allowed.arrayBuffer()).readUInt32LE(), 0x04034b50);
     const beforeDenied = reads;
-    for (const id of ["..%2fother", "C%3a%5cother", "%2fetc%2fpasswd", "%252e%252e", "bad%00id"]) {
+    for (const [id, error] of [
+      ["..%2fother", "INVALID_SKILL_DOWNLOAD_PATH"],
+      ["C%3a%5cother", "LAN_AGENT_INVALID_REQUEST_TARGET"],
+      ["%2fetc%2fpasswd", "INVALID_SKILL_DOWNLOAD_PATH"],
+      ["%252e%252e", "INVALID_SKILL_DOWNLOAD_PATH"],
+      ["bad%00id", "LAN_AGENT_INVALID_REQUEST_TARGET"]
+    ] as const) {
       const response = await fetch(`${base}${prefix}/example/skills/${id}/download`, { headers });
       assert.equal(response.status, 403, id);
-      assert.equal((await response.json()).error, "LAN_AGENT_INVALID_REQUEST_TARGET");
+      assert.equal((await response.json()).error, error, id);
     }
     for (const method of ["POST", "PUT", "PATCH", "DELETE"]) {
       const response = await fetch(base + resource, { method, headers });

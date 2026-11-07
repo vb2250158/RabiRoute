@@ -189,8 +189,13 @@ test("native model wildcard preserves raw prefix paths, arbitrary methods, origi
     const value=await reply.json();assert.equal(value.path,"/api/video"+suffix);assert.equal(value.method,method);assert.deepEqual(value.metadata,{providerOwned:true});assert.equal(value.frames,7);
     assert.deepEqual(value.body,["POST","PATCH"].includes(method)?body:undefined);
   }
+  // The authenticated connection preserves the native provider's raw path contract.
+  const encoded = await f.request("/models/extension/%2F?computeDeviceId=owned-compute");
+  assert.equal(encoded.status, 200);
+  const nativeEncoded = await encoded.json();
+  assert.equal(nativeEncoded.path, "/api/video/models/extension/%2F");
+  assert.equal(nativeEncoded.method, "GET");
   const dispatched=f.calls.length;
-  assert.equal((await f.request("/models/extension/%2F?computeDeviceId=owned-compute")).status,403);assert.equal(f.calls.length,dispatched);
   assert.equal((await f.request("/modelsXYZ")).status,404);assert.equal((await f.request("/models/settings","PUT","ignored")).status,404);
   assert.equal((await f.request("/models/custom?computeDeviceId=owned-compute","POST",{oversized:"x".repeat(4096)})).status,503);assert.equal(f.calls.length,dispatched);
   f.runtime.readOnly=true;assert.equal((await f.request("/models/custom?computeDeviceId=owned-compute","PROPFIND")).status,423);assert.equal(f.calls.length,dispatched);

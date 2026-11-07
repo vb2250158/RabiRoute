@@ -99,7 +99,7 @@ test("candidate preparation and failed effect preserve the published collector, 
   original("/api/roles", 200, 1); recordPerformanceOperation("controlled", 1);
   assert.equal(f.counts.requests, 1); assert.equal(f.counts.operations, 1);
   assert.equal(f.counts.stops, 0); assert.equal(f.hooks.length, 1);
-  assert.equal(f.routes.snapshot()[0]!.routeCount, 7);
+  assert.equal(f.routes.snapshot()[0]!.routeCount, 8);
 });
 
 test("required-capability rollback after effect commit never takes collector ownership", async t => {
@@ -109,7 +109,7 @@ test("required-capability rollback after effect commit never takes collector own
   await assert.rejects(f.generation.switch([f.candidate("rollback")], { readyRequires: ["missing@1"] }), /required plugin capabilities/i);
   assert.equal(f.host.recordManagerHttpRequest, original);
   assert.equal(f.counts.starts, 1); assert.equal(f.counts.stops, 0); assert.equal(f.hooks.length, 1);
-  assert.equal(f.routes.snapshot()[0]!.routeCount, 7);
+  assert.equal(f.routes.snapshot()[0]!.routeCount, 8);
 });
 
 test("a later synchronous publication failure restores the previous hook and collector lease", async t => {
@@ -121,7 +121,7 @@ test("a later synchronous publication failure restores the previous hook and col
   assert.equal(f.host.recordManagerHttpRequest, hook);
   assert.equal(f.counts.starts, 1); assert.equal(f.counts.stops, 0);
   recordPerformanceOperation("retained-sink", 1); assert.equal(f.counts.operations, 1);
-  assert.equal(f.routes.snapshot()[0]!.routeCount, 7);
+  assert.equal(f.routes.snapshot()[0]!.routeCount, 8);
 });
 
 test("successful publication and revision rollback hand off once without restarting the shared collector", async t => {

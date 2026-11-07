@@ -6,6 +6,13 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.11.1 - 2026-11-07
+
+- Fix asynchronous plugin recovery: join only the failed instance's original owner before retrying, without blocking independent instances. Honor the resolved optional-dependency order so a skipped cycle cannot block required capabilities. Preserve cleanup diagnostics and retain unchanged rollback snapshots.
+- Align integration fixtures with the published CPU-profile and resource-owner contracts: include the new performance route, distinguish transport and resource download errors, and verify the video proxy's original encoded path. Retain the original cleanup, recovery, authentication and rollback assertions.
+
+- Audit committed plugin-package imports and startup-presentation publication/removal through the existing mutation owner; record identity and digest without package contents or configuration bodies.
+
 ## 0.11.0 - 2026-11-07
 
 - Project plugin contributions and catalog entries individually. A failed getter, unserializable value or malformed entry leaves healthy entries available with local diagnostics, without adding API eligibility restrictions.

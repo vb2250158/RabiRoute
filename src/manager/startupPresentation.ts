@@ -1,3 +1,4 @@
+import { recordDataMutationAudit } from "../observability/dataMutationAudit.js";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
@@ -25,7 +26,19 @@ async function publishFile(target: string, bytes: string | Buffer): Promise<void
     const handle = await fs.open(temporary, "wx", 0o600);
     try { await handle.writeFile(bytes); await handle.sync(); } finally { await handle.close(); }
     await renameFileWithRetry(temporary, target);
+    recordDataMutationAudit({ group: "desktop", event: "startup_presentation_published", owner: "startup-presentation",
+      action: "publish", target: { type: "startup-presentation", id: path.basename(target) },
+      dataSource: { kind: "file", id: target }, outcome: "committed",
+      after: { digest: createHash("sha256").update(bytes).digest("hex") } });
   } finally { await fs.rm(temporary, { force: true }); }
+}
+
+async function removePublishedFile(target: string): Promise<void> {
+  try { await fs.unlink(target); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return; throw error; }
+  recordDataMutationAudit({ group: "desktop", event: "startup_presentation_removed", owner: "startup-presentation",
+    action: "remove", target: { type: "startup-presentation", id: path.basename(target) },
+    dataSource: { kind: "file", id: target }, outcome: "committed" });
 }
 
 /** One presentation owner, rebuilt from the effective profile and current desktop setting. No plugin activation. */
@@ -45,7 +58,7 @@ export function createStartupPresentationProjector(options: Readonly<{
         if (!entry.isFile() || !/^[a-f0-9]{64}\.ico$/.test(entry.name)) continue;
         const file = path.join(assetRoot, entry.name);
         if (referenced.has(file)) continue;
-        try { await fs.unlink(file); } catch { complete = false; }
+        try { await removePublishedFile(file); } catch { complete = false; }
       }
       return complete;
     } catch (error) { return (error as NodeJS.ErrnoException).code === "ENOENT"; }
@@ -56,7 +69,7 @@ export function createStartupPresentationProjector(options: Readonly<{
     try {
       const input = await read();
       if (input.webTheme === "system" || input.webTheme === "light" || input.webTheme === "dark") {
-        if (input.webTheme === "system") await fs.rm(target, { force: true });
+        if (input.webTheme === "system") await removePublishedFile(target);
         else await publishFile(target, JSON.stringify(builtinStartupPresentation(input.webTheme)) + "\n");
         const clean = await cleanupAssets(new Set());
         return { state: input.webTheme === "system" ? "default" : "selected", themeId: input.webTheme,
@@ -85,7 +98,7 @@ export function createStartupPresentationProjector(options: Readonly<{
         } catch { diagnostic = "An installed startup theme resource is unavailable; other plugins remain usable."; }
       }
       if (!selected || ambiguous) {
-        await fs.rm(target, { force: true });
+        await removePublishedFile(target);
         if (!await cleanupAssets(new Set())) diagnostic = "Some previous startup images could not be removed; the product appearance remains available.";
         return { state: "default", ...(diagnostic ? { diagnostic } : {}) };
       }
@@ -124,7 +137,7 @@ export function createStartupPresentationProjector(options: Readonly<{
       if (!await cleanupAssets(referenced)) diagnostic = "Some previous startup images could not be removed; the selected appearance remains available.";
       return { state: "selected", themeId: value.themeId, ...(diagnostic ? { diagnostic } : {}) };
     } catch {
-      try { await fs.rm(target, { force: true }); } catch { /* Local presentation diagnostics cannot block Manager startup. */ }
+      try { await removePublishedFile(target); } catch { /* Local presentation diagnostics cannot block Manager startup. */ }
       return { state: "unavailable", diagnostic: "Startup appearance could not be refreshed; Manager features remain available." };
     }
   };

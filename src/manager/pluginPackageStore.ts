@@ -1,3 +1,4 @@
+import { recordDataMutationAudit } from "../observability/dataMutationAudit.js";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
@@ -61,7 +62,12 @@ export class PluginPackageStore {
       }
       await fs.mkdir(path.dirname(target), { recursive: true });
       assertCurrent();
-      try { await fs.rename(prepared.runtimeRoot, target); }
+      try {
+        await fs.rename(prepared.runtimeRoot, target);
+        recordDataMutationAudit({ group: "plugins", event: "plugin_package_imported", owner: "plugin-package-store",
+          action: "import", target: { type: "plugin-package", id: prepared.manifest.id + "@" + prepared.manifest.version },
+          dataSource: { kind: "file", id: target }, outcome: "committed", after: { digest: prepared.revision } });
+      }
       catch (error) {
         // Concurrent imports of the exact same version converge; different bytes never overwrite it.
         try { if (await hashPluginPackage(target) === prepared.revision) return; }

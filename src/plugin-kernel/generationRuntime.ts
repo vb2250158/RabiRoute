@@ -402,6 +402,11 @@ export class GenerationRuntime {
   }
 
   async switch(candidates: readonly PluginCandidate[], options: GenerationSwitchOptions = {}): Promise<GenerationSwitchResult> {
+    // A failed activation may still be retiring after its failure notification.
+    // Join only retrying instance owners, outside the global mutation queue.
+    const retrying = candidates.filter(candidate => this.#current.records.some(record =>
+      record.identity.instanceId === candidate.instanceId && record.status === "failed"));
+    if (retrying.length) await Promise.all(retrying.map(candidate => this.#joinWork(candidate.instanceId)));
     const intent = ++this.#intent;
     const previousGenerationId = this.#current.id;
     await this.#enqueue(async () => {
@@ -712,7 +717,8 @@ export class GenerationRuntime {
       const componentProvides = new Set(component.flatMap(id => [...byId.get(id)!.manifest.provides]));
       const optionalInitializing = component.some(id => byId.get(id)!.manifest.optional.some(capability =>
         !componentProvides.has(capability) && !serviceValues.has(capability)
-        && [...this.#initializations.values()].some(flight => !flight.failure && flight.candidates.some(candidate => candidate.manifest.provides.includes(capability)))));
+        && [...this.#initializations.values()].some(flight => !flight.failure && flight.candidates.some(candidate =>
+          candidate.manifest.provides.includes(capability) && plan.dependents.get(candidate.instanceId)?.includes(id)))));
       if (optionalInitializing) {
         for (const instanceId of component) {
           const old = previousActive.get(instanceId);
@@ -940,7 +946,8 @@ export class GenerationRuntime {
       if (!desiredIds.has(instanceId) || !nextActive.has(instanceId)) scopesToDispose.add(state.scope);
     }
 
-    const initializing = [...this.#initializations.values()].some(flight => !flight.settled);
+    const initializing = records.some(record => record.status === "initializing" || record.initialization?.state === "initializing")
+      || [...this.#initializations.values()].some(flight => !flight.settled);
     const activeChanged = nextActive.size !== previousActive.size
       || [...nextActive].some(([id, state]) => previousActive.get(id) !== state);
     if (initializing && (options.initialization !== "background" || !activeChanged)) {
@@ -974,7 +981,7 @@ export class GenerationRuntime {
     }
     const missingReadyCapabilities = readyRequires.filter(capability => !serviceSnapshot.services.has(capability));
     if (missingReadyCapabilities.length && !reportMissingRequiredCapabilities) {
-      if ([...this.#initializations.values()].some(flight => !flight.settled)) {
+      if (initializing) {
         return Object.freeze({ changed: false, generation: this.#current });
       }
       const error = new RequiredPluginCapabilitiesUnavailableError(Object.freeze(missingReadyCapabilities), Object.freeze([...records]));
@@ -1110,11 +1117,14 @@ export class GenerationRuntime {
         for (const failure of startupFailures) await this.#handleRuntimeFailure(failure!.identity, failure!.error);
         if (diagnostics.length) this.#current = Object.freeze({ ...this.#current,
           cleanupDiagnostics: Object.freeze([...this.#current.cleanupDiagnostics, ...diagnostics]) });
-        this.#current = Object.freeze({ ...this.#current, records: Object.freeze(this.#current.records.map(record => {
+        const readyRecords = this.#current.records.map(record => {
           if (!starting.has(record.identity.activationId) || record.status !== "active" || !record.initialization) return record;
           const { initialization: _initialization, ...ready } = record;
           return Object.freeze(ready);
-        })) });
+        });
+        if (readyRecords.some((record, index) => record !== this.#current.records[index])) {
+          this.#current = Object.freeze({ ...this.#current, records: Object.freeze(readyRecords) });
+        }
       });
     });
     this.#trackWork([...publishing, ...supersededStates].map(state => state.identity.instanceId), finishing);
@@ -1240,7 +1250,7 @@ export class GenerationRuntime {
       records: Object.freeze(records),
       services: serviceSnapshot,
       contributions: contributionRegistry.snapshot(sequence),
-      cleanupDiagnostics: Object.freeze([])
+      cleanupDiagnostics: previous.cleanupDiagnostics
     });
     this.#sequence = sequence;
     this.#current = generation;
@@ -1317,7 +1327,7 @@ export class GenerationRuntime {
     }
     // A later publication can still reject; retain the original scope's proof
     // before pruning its last reference from the retirement gate.
-    if (confirmedIds.size) this.#current = Object.freeze({ ...this.#current,
+    if (this.#current.cleanupDiagnostics.some(diagnostic => confirmedIds.has(diagnostic.activationId) && !diagnostic.lateConfirmed)) this.#current = Object.freeze({ ...this.#current,
       cleanupDiagnostics: Object.freeze(this.#current.cleanupDiagnostics.map(diagnostic =>
         confirmedIds.has(diagnostic.activationId) ? Object.freeze({ ...diagnostic, lateConfirmed: true as const }) : diagnostic
       )) });
