@@ -877,7 +877,14 @@ export class ManagerReadWorkerPool {
     const current = slot.active;
     if (slot.terminating || !current || current.settled || current.requestId !== message.requestId) return;
     if (message.ok) this.finish(slot, undefined, message.value);
-    else this.finish(slot, new ManagerReadWorkerError(message.message, "worker_failed"));
+    else {
+      const error = new ManagerReadWorkerError(message.message, "worker_failed");
+      // Only a reported task exception has this origin; process/queue failures do not.
+      if (current.pending.task.type === "role_plan_workflow") {
+        Object.defineProperty(error, "cause", { value: current.pending.task.type });
+      }
+      this.finish(slot, error);
+    }
   }
 
   private finish(slot: WorkerSlot, error?: Error, value?: unknown): void {

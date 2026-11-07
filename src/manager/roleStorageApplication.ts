@@ -396,7 +396,11 @@ export class RoleStorageQueries {
     this.assertCurrentGeneration();
     const roleDir = this.roleDir(roleId);
     const value = await (read ? read(roleDir) : this.readPool.run<T>(task(roleDir), options)).catch(error => {
-      throw publicReadError(error);
+      const failure = publicReadError(error);
+      if (error instanceof ManagerReadWorkerError && error.cause === "role_plan_workflow") {
+        Object.defineProperty(failure, "cause", { value: error });
+      }
+      throw failure;
     });
     this.assertCurrentGeneration();
     return value;

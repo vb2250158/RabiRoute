@@ -16,6 +16,12 @@ Ordinary plan details can borrow an already ready, idle catalog for the same rol
 
 Unavailable, busy or invalidated indexes use the original asynchronous read without starting a catalog, waiting for page work, introducing errors or adding a timer. Slow target I/O does not occupy page execution. Original ID, archive, duplicate-target and error semantics remain; the cache contains neither plan bodies nor per-ID empty results. Unreported external changes retain the existing authoritative-refresh or restart reconciliation path.
 
+## Workflow reads for plan details
+
+Plan-detail GET obtains both the plan projection and workflow definitions through the existing storage query owner. Workflow uses the existing foreground read worker instead of an additional main-process asynchronous filesystem branch. It still shares execution budgets with other foreground work; this is not a claim of queue-free execution.
+
+The original request signal, actual worker-close tracking, ETag and view revision remain. No cache, retry or timeout is added. Permanent configuration parsing, validation and original file failures retain the original detail GET's 500 and specific reason. Queue pressure, deadlines, cancellation and process failure keep the query owner's original rules. Only workflow task execution errors carry the internal origin; other queries, including the status catalog, retain their public error format without invented defaults or parameter errors. Normal GET, 304, 404 and original plan bytes retain their contracts.
+
 ## Partially readable plan collections
 
 Paged and legacy plan lists report problems per physical record. An unreadable or invalid file does not hide healthy records. When multiple physical files declare the same plan ID, the entire duplicate group is excluded; no member is selected as the valid plan.

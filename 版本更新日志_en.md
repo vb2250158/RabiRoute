@@ -6,6 +6,13 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.11.2 - 2026-11-08
+
+- Independently advance `io.rabiroute.manager.persona` to 0.1.8. Plan-detail GET calls the original asynchronous workflow reader inside the existing read child through its query owner, removing the extra main-process filesystem read without new caches, retries, permissions or timeouts.
+- Permanent configuration parsing, validation and original file failures retain their original 500 and specific reason. Only an actual workflow task exception carries the internal failure origin; other query routes, including the status catalog, keep their public error format. Queue pressure, deadlines, cancellation and process failure retain their respective handling.
+- Normal GET, 304, 404, ETag, view revision and original plan/configuration bytes retain their contracts. Cancellation still joins actual worker close; local failure does not disable unrelated reads.
+- Host 0.11.2 includes the shared read fix. Host API 1.7.0, SDK 1.1.1 and other plugin versions remain unchanged. Adopt the matching plugin and shared code according to the actual runtime support matrix; replacing only the plugin on an older host is not claimed as the complete fix.
+
 ## 0.11.1 - 2026-11-07
 
 - Fix asynchronous plugin recovery: join only the failed instance's original owner before retrying, without blocking independent instances. Honor the resolved optional-dependency order so a skipped cycle cannot block required capabilities. Preserve cleanup diagnostics and retain unchanged rollback snapshots.

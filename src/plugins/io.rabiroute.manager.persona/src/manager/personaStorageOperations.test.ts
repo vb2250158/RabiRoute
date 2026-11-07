@@ -11,13 +11,13 @@ import { EventEmitter } from "node:events";
 import test from "node:test";
 import { PersonaStorageOwner, createPersonaStorageOperations, type PersonaStorageOperationsContext } from "./personaStorageOperations.js";
 import { RoleStorageApplication } from "../../../../manager/roleStorageApplication.js";
-import { ManagerReadWorkerPool, managerCatalogWorkerPool, managerKnowledgePageWorkerPool, type ManagerReadWorkerChild } from "../../../../manager/managerReadWorkerPool.js";
+import { ManagerReadWorkerError, ManagerReadWorkerPool, managerCatalogWorkerPool, managerKnowledgePageWorkerPool, type ManagerReadWorkerChild } from "../../../../manager/managerReadWorkerPool.js";
 import { ManagerPluginRouteRegistry } from "../../../../manager/managerPluginRouteRegistry.js";
 import { LanAgentAuthority } from "../../../../manager/lanAgentAuthority.js";
 import { evaluateLanAgentRequest, assertTrustedLanAgentPrincipal } from "../../../../manager/lanAgentRequestAccess.js";
 import { markAuthenticatedConnectionRequest } from "../../../../manager/connectionRequestAccess.js";
 import { registerLanAgentBodyGuard } from "../../../../manager/lanAgentBodyAuthority.js";
-import { ensurePersonaPlanWorkflow } from "../../../../personaPlanWorkflow.js";
+import { ensurePersonaPlanWorkflow, readPersonaPlanWorkflow, readPersonaPlanWorkflowAsync } from "../../../../personaPlanWorkflow.js";
 import type { ApiOperationInput, ApiOperationResult } from "../../../../manager/apiOperationContract.js";
 import { RoleStorageApplicationError } from "../../../../manager/roleStorageApplication.js";
 
@@ -57,8 +57,8 @@ async function fixture(t: test.TestContext, customize?: (context: PersonaStorage
     assert.equal(path.dirname(path.resolve(root)), path.resolve(os.tmpdir())); fs.rmSync(root, { recursive: true, force: true });
   });
   const baseUrl = `http://127.0.0.1:${(server.address() as import("node:net").AddressInfo).port}`;
-  async function send(suffix: string, method = "GET", body?: unknown, headers: Record<string, string> = {}, prefix = "/api/roles/Fixture/") {
-    const response = await fetch(baseUrl + prefix + suffix, { method, headers: { authorization: "Bearer " + credential.token, "content-type": "application/json", ...headers }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+  async function send(suffix: string, method = "GET", body?: unknown, headers: Record<string, string> = {}, prefix = "/api/roles/Fixture/", signal?: AbortSignal) {
+    const response = await fetch(baseUrl + prefix + suffix, { method, signal, headers: { authorization: "Bearer " + credential.token, "content-type": "application/json", ...headers }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
     const text = await response.text(); return { status: response.status, headers: response.headers, body: text ? JSON.parse(text) : undefined };
   }
   return { root, roleDir, application, context, owner, definitions, registration, reads, send, events, scheduled, actorInputs, authority, credential,
@@ -346,4 +346,144 @@ test("plan availability HTTP: partial diagnostics survive paged and legacy array
   assert.equal(second.status, 200, JSON.stringify(second.body));
   assert.equal(second.body.data.items.length, 1); assert.notEqual(second.body.data.items[0].id, first.body.data.items[0].id);
   assert.equal(second.body.data.nextCursor, ""); assert.equal(fs.readFileSync(path.join(unknown, "manifest.json"), "utf8"), "{broken");
+});
+
+
+test("plan detail reads use the workflow worker while main-process async filesystem work is blocked", { timeout: 30_000 }, async t => {
+  const f = await fixture(t), plan = createPlan(f.roleDir, {
+    title: "Workflow reader fixture", keywords: ["fixture"], status: "分析中", currentStepId: "one", steps: [{ id: "one", title: "One" }]
+  }), revision = "inventory-sha256:original-plan-revision";
+  t.mock.method(f.application.queries, "plan", async (_role: string, id: string) => id === plan.id ? { plan, revision, approval: { count: 0 } } : null);
+  const originalWorkflow = f.application.queries.planWorkflow.bind(f.application.queries), workflowCalls: Array<{ roleId: string; signal?: AbortSignal }> = [];
+  t.mock.method(f.application.queries, "planWorkflow", (roleId: string, options: NonNullable<Parameters<typeof originalWorkflow>[1]> = {}) => {
+    workflowCalls.push({ roleId, signal: options.signal }); return originalWorkflow(roleId, options);
+  });
+  const gate = deferred(), entered = deferred(), target = path.resolve(f.roleDir, "personaConfig.json"), original = fs.promises.readFile;
+  const blocked = t.mock.method(fs.promises, "readFile", (async (...args: Parameters<typeof original>) => {
+    if (typeof args[0] === "string" && path.resolve(args[0]) === target) { entered.resolve(); await gate.promise; }
+    return original(...args);
+  }) as typeof original);
+  const pending = f.send("plans/" + plan.id);
+  try {
+    const first = await Promise.race([pending.then(response => ({ response })), entered.promise.then(() => ({ blocked: true }))]);
+    assert.ok("response" in first, "A ready plan must not wait on an extra main-process workflow filesystem read.");
+    assert.equal(first.response.status, 200); assert.equal(first.response.body.data.id, plan.id);
+    assert.equal(first.response.headers.get("etag"), '"' + revision + '"');
+    assert.equal(workflowCalls.length, 1); assert.equal(workflowCalls[0]!.roleId, "Fixture"); assert.ok(workflowCalls[0]!.signal instanceof AbortSignal);
+    const view = first.response.headers.get("x-plan-view-revision"); assert.ok(view);
+    const unchanged = await f.send("plans/" + plan.id, "GET", undefined, { "if-plan-view-revision": view }, "/roles/Fixture/");
+    assert.equal(unchanged.status, 304); assert.equal(unchanged.headers.get("etag"), first.response.headers.get("etag"));
+    assert.equal(unchanged.headers.get("x-plan-view-revision"), view);
+    assert.equal((await f.send("plans/missing-plan")).status, 404);
+  } finally { gate.resolve(); await pending; blocked.mock.restore(); }
+});
+
+test("plan detail workflow owner failures are local and preserve the original plan bytes", async t => {
+  const f = await fixture(t), plan = createPlan(f.roleDir, { title: "Workflow failure fixture", keywords: ["fixture"], status: "分析中", currentStepId: "one", steps: [{ id: "one", title: "One" }] });
+  const file = path.join(planDirectory(f.roleDir, plan.id, "active"), "plan.json"), before = fs.readFileSync(file);
+  t.mock.method(f.application.queries, "plan", async () => ({ plan, revision: "inventory-sha256:original", approval: { count: 0 } }));
+  t.mock.method(f.application.queries, "planWorkflow", async () => { throw new RoleStorageApplicationError("Fixture workflow unavailable.", "busy", 503); });
+  const response = await f.send("plans/" + plan.id); assert.equal(response.status, 503); assert.ok(fs.readFileSync(file).equals(before));
+  assert.equal((await f.send("counts")).status, 200, "Workflow failure must not disable unrelated reads.");
+});
+
+test("plan detail retains its original generation guard after the workflow owner returns", async t => {
+  const f = await fixture(t), plan = createPlan(f.roleDir, { title: "Workflow generation fixture", keywords: ["fixture"], status: "分析中", currentStepId: "one", steps: [{ id: "one", title: "One" }] });
+  t.mock.method(f.application.queries, "plan", async () => ({ plan, revision: "inventory-sha256:original", approval: { count: 0 } }));
+  t.mock.method(f.application.queries, "planWorkflow", async () => { const result = readPersonaPlanWorkflow(f.roleDir); f.identity.managerInstanceId = "replacement-manager"; return result; });
+  try { assert.equal((await f.send("plans/" + plan.id)).status, 409); }
+  finally { f.identity.managerInstanceId = "fixture-manager"; }
+});
+
+test("plan detail cancellation reaches its workflow worker and retirement joins its actual close", { timeout: 10_000 }, async t => {
+  const entered = deferred(), killRequested = deferred();
+  class Child extends EventEmitter implements ManagerReadWorkerChild {
+    readonly pid = 58_283; exitCode: number | null = null; signalCode: NodeJS.Signals | null = null; connected = true;
+    override on(event: string, listener: (...args: any[]) => void): this { super.on(event, listener); if (event === "message") queueMicrotask(() => this.emit("message", { type: "ready" })); return this; }
+    send(message: any, callback?: (error: Error | null) => void): boolean { callback?.(null); if (message.task?.type === "role_plan_workflow") entered.resolve(); return true; }
+    kill(): boolean { killRequested.resolve(); return true; } disconnect() { this.connected = false; } unref() {}
+    close() { if (this.exitCode !== null) return; this.exitCode = 0; this.emit("close", 0, null); }
+  }
+  const child = new Child(), pool = new ManagerReadWorkerPool({ timeoutMs: 5_000, terminationTimeoutMs: 5, forceTerminationTimeoutMs: 5, workerFactory: () => child, setWorkerPriority: () => {} });
+  t.after(async () => { child.close(); await pool.stop(); });
+  const f = await fixture(t);
+  t.mock.method(f.application.queries, "plan", async () => null);
+  t.mock.method(f.reads, "run", pool.run.bind(pool));
+  const controller = new AbortController(), pending = f.send("plans/missing-plan", "GET", undefined, {}, "/api/roles/Fixture/", controller.signal).catch(error => error);
+  try {
+    await Promise.race([entered.promise, pending.then(() => { throw new Error("The request settled without entering the workflow worker."); })]);
+    controller.abort(); await pending; await killRequested.promise;
+    let stopped = false; const stopping = f.owner.stop().then(() => { stopped = true; }); await turn(); assert.equal(stopped, false);
+    child.close(); await stopping; assert.equal(stopped, true);
+  } finally { controller.abort(); child.close(); await pending; }
+});
+
+
+for (const damage of ["malformed-json", "invalid-workflow"] as const) {
+  test(`plan detail retains original async workflow error for ${damage}`, async t => {
+    const f = await fixture(t), plan = createPlan(f.roleDir, { title: "Permanent workflow error", keywords: ["fixture"], status: "分析中", currentStepId: "one", steps: [{ id: "one", title: "One" }] });
+    const planFile = path.join(planDirectory(f.roleDir, plan.id, "active"), "plan.json"), before = fs.readFileSync(planFile), configFile = path.join(f.roleDir, "personaConfig.json");
+    if (damage === "malformed-json") fs.writeFileSync(configFile, "{broken");
+    else { const config = JSON.parse(fs.readFileSync(configFile, "utf8")); config.planWorkflow = { schemaVersion: 5, statuses: "invalid" }; fs.writeFileSync(configFile, JSON.stringify(config)); }
+    const damagedConfig = fs.readFileSync(configFile); let originalError: unknown;
+    try { await readPersonaPlanWorkflowAsync(f.roleDir); } catch (error) { originalError = error; }
+    assert.ok(originalError instanceof Error, "The original async reader must report the controlled configuration failure.");
+    const response = await f.send("plans/" + plan.id);
+    assert.equal(response.status, 500); assert.equal(response.body.code, -1); assert.equal(response.body.message, originalError.message);
+    assert.equal(response.body.state, undefined); assert.notEqual(response.body.retryable, true);
+    assert.ok(fs.readFileSync(planFile).equals(before)); assert.ok(fs.readFileSync(configFile).equals(damagedConfig));
+    const originalWorkflowRoute = await f.send("plan-statuses"); assert.equal(originalWorkflowRoute.status, 503); assert.equal(originalWorkflowRoute.body.state, "busy");
+    assert.equal((await f.send("counts")).status, 200);
+  });
+}
+
+test("plan detail preserves workflow transport failures without treating them as configuration errors", async t => {
+  const f = await fixture(t), original = f.reads.run.bind(f.reads);
+  t.mock.method(f.application.queries, "plan", async () => null);
+  for (const code of ["busy", "timeout", "aborted", "worker_failed"] as const) {
+    const mocked = t.mock.method(f.reads, "run", ((task: Parameters<typeof f.reads.run>[0], options: Parameters<typeof f.reads.run>[1]) => {
+      if (task.type === "role_plan_workflow") return Promise.reject(new ManagerReadWorkerError("Controlled workflow transport failure.", code));
+      return original(task, options);
+    }) as typeof f.reads.run);
+    try { const response = await f.send("plans/missing-plan"); assert.equal(response.status, code === "timeout" ? 504 : 503); assert.equal(response.body.state, "busy"); assert.doesNotMatch(response.body.message, /Controlled workflow transport/); }
+    finally { mocked.mock.restore(); }
+  }
+});
+
+
+test("workflow default routes retain missing and file-read failure boundaries without materializing config", async t => {
+  const f = await fixture(t), plan = createPlan(f.roleDir, { title: "Workflow missing fixture", keywords: ["fixture"], status: "分析中", currentStepId: "one", steps: [{ id: "one", title: "One" }] });
+  const config = path.join(f.roleDir, "personaConfig.json"), original = fs.readFileSync(config), planFile = path.join(planDirectory(f.roleDir, plan.id, "active"), "plan.json"), beforePlan = fs.readFileSync(planFile);
+  fs.unlinkSync(config);
+  try {
+    assert.equal((await f.send("plan-statuses")).status, 404);
+    const detail = await f.send("plans/" + plan.id); assert.equal(detail.status, 500); assert.equal(detail.body.message, "Persona plan workflow is not initialized.");
+    assert.equal(fs.existsSync(config), false);
+    fs.mkdirSync(config); let originalError: unknown;
+    try { await readPersonaPlanWorkflowAsync(f.roleDir); } catch (error) { originalError = error; }
+    assert.ok(originalError instanceof Error);
+    assert.equal((await f.send("plan-statuses")).status, 503);
+    const unreadable = await f.send("plans/" + plan.id); assert.equal(unreadable.status, 500); assert.equal(unreadable.body.message, originalError.message);
+    assert.ok(fs.statSync(config).isDirectory()); assert.ok(fs.readFileSync(planFile).equals(beforePlan));
+  } finally { if (fs.existsSync(config) && fs.statSync(config).isDirectory()) fs.rmdirSync(config); fs.writeFileSync(config, original); }
+});
+
+test("workflow post-commit projection failure retains the committed receipt and same-key recovery", { timeout: 90_000 }, async t => {
+  const f = await fixture(t), config = path.join(f.roleDir, "personaConfig.json"), first = await f.send("plan-statuses");
+  assert.equal(first.status, 200); const template = first.body.data.statuses.find((item: { state: string }) => item.state === "enabled");
+  const input = { ...template, key: "projection_recovery_fixture", label: "Projection recovery", labelEn: "Projection recovery", legacyAliases: [], order: 910 };
+  const headers = { "idempotency-key": "workflow-projection-recovery", "if-match": first.headers.get("etag")! };
+  const original = f.reads.run.bind(f.reads); let committed: Buffer | undefined;
+  const mocked = t.mock.method(f.reads, "run", ((task: Parameters<typeof f.reads.run>[0], options: Parameters<typeof f.reads.run>[1]) => {
+    if (task.type === "role_plan_workflow" && !committed) { committed = fs.readFileSync(config); fs.writeFileSync(config, "{broken"); }
+    return original(task, options);
+  }) as typeof f.reads.run);
+  try {
+    const response = await f.send("plan-statuses", "POST", input, headers);
+    assert.equal(response.status, 503, JSON.stringify(response.body)); assert.equal(response.body.commitState, "committed");
+    assert.equal(response.body.idempotencyKey, headers["idempotency-key"]); assert.ok(committed);
+    assert.equal(JSON.parse(committed.toString("utf8")).planWorkflow.statuses.filter((item: { key: string }) => item.key === input.key).length, 1);
+  } finally { mocked.mock.restore(); if (committed) fs.writeFileSync(config, committed); }
+  const replay = await f.send("plan-statuses", "POST", input, headers); assert.equal(replay.status, 201, JSON.stringify(replay.body));
+  assert.equal(replay.headers.get("idempotency-key"), headers["idempotency-key"]); assert.ok(committed && fs.readFileSync(config).equals(committed));
 });

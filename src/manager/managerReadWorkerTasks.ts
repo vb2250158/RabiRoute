@@ -8,7 +8,7 @@ import {
   queryPersonaVoiceTranscriptViews,
   type PersonaVoiceTranscriptQuery
 } from "../plugins/io.rabiroute.manager.persona/src/personaVoiceTranscriptView.js";
-import { readPersonaPlanWorkflow } from "../personaPlanWorkflow.js";
+import { readPersonaPlanWorkflow, readPersonaPlanWorkflowAsync } from "../personaPlanWorkflow.js";
 import {
   getPlan,
   getPlanAsync,
@@ -342,7 +342,7 @@ export async function execute(task: Exclude<ManagerReadWorkerTask, { type: "mess
       };
     }
     case "role_plan_workflow":
-      return readPersonaPlanWorkflow(task.roleDir);
+      return readPersonaPlanWorkflowAsync(task.roleDir);
     case "role_plan_page": {
       const workflow = readPersonaPlanWorkflow(task.roleDir)?.workflow;
       if (!workflow) throw new Error(`PLAN_STATUS_CONFIG_MISSING: ${task.roleDir}`);

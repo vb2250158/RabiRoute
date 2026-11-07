@@ -6,7 +6,7 @@ import { PLAN_ACTIVATION_STATUSES } from "@rabiroute/host-api/planState";
 import { PLAN_ATTACHMENT_REQUEST_MAX_BYTES } from "@rabiroute/host-api/shared/planAttachmentContract";
 import { PLAN_FEEDBACK_REQUEST_MAX_BYTES } from "@rabiroute/host-api/shared/planFeedbackContract";
 import { presentPlan, presentPlans } from "@rabiroute/host-api/roleKnowledgePresentation";
-import { ensurePersonaPlanWorkflow, readPersonaPlanWorkflowAsync } from "@rabiroute/host-api/personaPlanWorkflow";
+import { ensurePersonaPlanWorkflow } from "@rabiroute/host-api/personaPlanWorkflow";
 import { normalizeRoleMemoryPageLimit, normalizeRolePlanPageLimit, previewRolePlan } from "@rabiroute/host-api/roleKnowledgePagination";
 import { parseWorkspacePlanQuery } from "@rabiroute/host-api/planWorkspaceQuery";
 import type { PlanItem } from "@rabiroute/host-api/roleKnowledge";
@@ -248,7 +248,14 @@ export class PersonaStorageOwner {
         return data.partial ? { ...result, body: { ...(result.body as Record<string, unknown>), partial: true, diagnostics: data.diagnostics } } : result;
       }
       case "plan-read": {
-        const [projection, workflow] = await Promise.all([application.queries.plan(roleId, planId, { ...readOptions, reusePrepared: true }), readPersonaPlanWorkflowAsync(roleDir)]); a.assertCurrent();
+        const [projection, workflow] = await Promise.all([
+          application.queries.plan(roleId, planId, { ...readOptions, reusePrepared: true }),
+          application.queries.planWorkflow(roleId, readOptions).catch(error => {
+            if (error instanceof RoleStorageApplicationError && error.cause instanceof ManagerReadWorkerError
+              && error.cause.cause === "role_plan_workflow") throw new Error(error.cause.message);
+            throw error;
+          })
+        ]); a.assertCurrent();
         if (!projection) return missing(`Plan not found: ${planId}`, roleId);
         if (!workflow) throw new Error("Persona plan workflow is not initialized.");
         const viewRevision = createHash("sha256").update(JSON.stringify([projection.revision, projection.approval, workflow.workflow])).digest("hex"), headers = { etag: `"${projection.revision}"`, "x-plan-view-revision": viewRevision };
