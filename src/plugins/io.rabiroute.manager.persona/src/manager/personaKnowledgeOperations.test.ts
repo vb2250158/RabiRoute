@@ -55,6 +55,59 @@ test('native reload keeps point/all validation, accepts the original unlimited/u
   assert.equal((await f.call('knowledge/search?query=alpha&mode=invalid')).status,400);
 });
 
+test('query and reload parameter errors identify real fields and same-role summary discovery without reloading', async t => {
+  const f=await fixture(t);await f.service.reload('Example',f.roleDir);
+  let reloads=0;const reload=f.service.reload.bind(f.service);t.mock.method(f.service,'reload',async(...args:Parameters<typeof reload>)=>{reloads++;return reload(...args);});
+  for(const [query,status,field,code] of [
+    ['query=alpha&mode=invalid',400,'query.mode','KNOWLEDGE_PARAMETER_INVALID'],
+    ['query=alpha&kind=invalid',400,'query.kind','KNOWLEDGE_PARAMETER_INVALID'],
+    ['query=%20%20',400,'query.query','KNOWLEDGE_PARAMETER_INVALID'],
+    ['query=alpha&limit=101',400,'query.limit','KNOWLEDGE_PARAMETER_INVALID'],
+    ['query=alpha&cursor=invalid',400,'query.cursor','KNOWLEDGE_CURSOR_INVALID'],
+    ['query=alpha&mode=fulltext&kind=recent&archived=1&limit=10&cursor=999999:0',409,'query.cursor','KNOWLEDGE_CURSOR_EXPIRED']
+  ] as const){
+    const response=await f.call('knowledge/search?'+query);assert.equal(response.status,status,JSON.stringify(response.body));
+    assert.equal(response.body.errorCode,code);assert.equal(response.body.field,field);
+    assert.match(response.body.repair,/GET \/api\/roles\/Example\/knowledge\/cache\/status/);
+    assert.match(response.body.repair,/GET \/api\/roles\/Example\/knowledge\/search\?query=/);
+    assert.match(response.body.repair,/operationId=manager.personas.knowledge.search/);
+    if(status===409){assert.match(response.body.repair,/original role\/query\/mode\/kind\/archived\/limit/);assert.doesNotMatch(response.body.repair,/mode=keywords&limit=10/);}
+    assert.doesNotMatch(JSON.stringify(response.body),/original body|private-native/);
+  }
+  for(const [body,field] of [[{kind:'recent'},'body.id'],[{id:'one'},'body.kind'],[{kind:'other',id:'one'},'body.kind'],[{kind:'recent',id:42},'body.id'],[{all:'yes'},'body.all'],[{all:true,kind:'recent',id:'one'},'body.all']] as const){
+    const response=await f.call('knowledge/cache/reload','POST',body);assert.equal(response.status,400);
+    assert.equal(response.body.field,field);assert.equal(response.body.errorCode,'KNOWLEDGE_PARAMETER_INVALID');
+    assert.match(response.body.repair,/operationId=manager.personas.knowledge.cache.reload/);
+  }
+  assert.equal(reloads,0);
+  const version=f.service.status(f.roleDir);assert.ok('version' in version);
+  for(const query of ['query=alpha&limit=1e1','query=alpha&limit=0x10','query=alpha&kind=&mode=keywords&mode=invalid',`query=alpha&cursor=${version.version}:0:legacy-suffix`])assert.equal((await f.call('knowledge/search?'+query)).status,200);
+  assert.equal((await f.call('knowledge/search?query=alpha&limit=')).status,400);
+  const empty=await f.call('knowledge/search?query=no-match');assert.equal(empty.status,200);assert.deepEqual(empty.body.data.items,[]);
+  assert.deepEqual(empty.body.data.coverage,{scope:'indexed-inventory',state:'complete',errors:0});
+  for(const raw of [[],42,true,'legacy'])assert.ok([200,202].includes((await f.call('knowledge/cache/reload','POST',raw)).status));
+  const missing=await f.call('knowledge/cache/reload','POST',{kind:'recent',id:'unknown-id'});assert.ok([200,202].includes(missing.status));
+});
+
+test('warming and native transport failures retain availability status and do not become parameter labels',async t=>{
+  const f=await fixture(t);f.services.current=undefined;
+  const warming=await f.call('knowledge/search?query=alpha&mode=invalid');assert.equal(warming.status,503);
+  assert.equal(warming.body.errorCode,'KNOWLEDGE_INDEX_WARMING');assert.equal(warming.body.field,undefined);
+  f.services.current=f.service;await f.service.reload('Example',f.roleDir);
+  t.mock.method(f.service,'reload',async()=>{throw Object.assign(new Error('Synthetic upstream unavailable'),{statusCode:503});});
+  const unavailable=await f.call('knowledge/cache/reload','POST',{});assert.equal(unavailable.status,503);
+  assert.equal(unavailable.body.errorCode,undefined);assert.equal(unavailable.body.field,undefined);
+});
+
+test('one bad native row leaves healthy HTTP summaries available with explicit partial coverage and raw preservation',{timeout:15000},async t=>{
+  const f=await fixture(t,true),bad=path.join(f.roleDir,'memory/recent/bad.json');fs.writeFileSync(bad,'{private-bad-row');
+  const before=fs.readFileSync(bad);const refreshed=await f.call('knowledge/cache/reload','POST',{});
+  assert.equal(refreshed.status,202);assert.equal(refreshed.body.data.ready,true);assert.equal(refreshed.body.data.errors,1);
+  const search=await f.call('knowledge/search?query=alpha');assert.equal(search.status,200);assert.equal(search.body.data.items[0].id,'one');
+  assert.deepEqual(search.body.data.coverage,{scope:'indexed-inventory',state:'partial',errors:1});assert.deepEqual(fs.readFileSync(bad),before);
+  assert.doesNotMatch(JSON.stringify(search.body),/private-bad-row/);assert.equal(f.pool!.status().active,0);
+});
+
 test('late reload cannot disclose an index after its original directory or exact Manager service changes',async t=>{
   const f=await fixture(t),wait=gate(),entered=gate();t.after(wait.release);
   const reload=f.service.reload.bind(f.service);

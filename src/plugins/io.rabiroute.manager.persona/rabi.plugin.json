@@ -1,7 +1,7 @@
 {
   "schemaVersion": 2,
   "id": "io.rabiroute.manager.persona",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "displayName": "角色与人格",
   "description": "管理角色配置、对话记录与共享资源",
   "icon": "mdi-account-circle",

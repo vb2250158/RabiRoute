@@ -6,9 +6,19 @@
 
 错误响应保留原 HTTP 状态、`errorCode`、`field` 和 `repair`。先读取错误指定的只读接口，再判断原请求如何处理。查询失败不表示目标不存在；401/403 表示当前连接没有访问权限。正文、凭据和远端实际目录不进入参数错误提示。
 
-本页说明源码版本 0.10.0 提供的指引，部署版本可从 GET /meta 核对。接口帮助来自当前已注册 operation 合同；构建、隔离验收和正式安装分别记录。对代理透传、未知 JSON 扩展和宽松 schema，仅能覆盖已声明约束，不能推定所有业务错误已覆盖。
+本页说明源码版本 0.10.1 提供的指引，部署版本可从 GET /meta 核对。接口帮助来自当前已注册 operation 合同；构建、隔离验收和正式安装分别记录。对代理透传、未知 JSON 扩展和宽松 schema，仅能覆盖已声明约束，不能推定所有业务错误已覆盖。
 
 ## 逐接口续查范围
+
+### 知识检索参数与索引可用性
+
+0.10.1 的知识检索指引与索引更新由原拥有者提供。知识 search 的明确参数错误使用 `KNOWLEDGE_PARAMETER_INVALID` 和 `query.query/mode/kind/limit`；格式不正确的 cursor 为 `KNOWLEDGE_CURSOR_INVALID`、400，索引版本过期为 `KNOWLEDGE_CURSOR_EXPIRED`、409。错误给出同角色 `GET /api/roles/:roleId/knowledge/cache/status` 与 search summary 查询，以及当前 operation help。409 恢复保留原 role/query/mode/kind/archived/limit，只先省略旧 cursor 读取第一页，随后原样使用返回的 nextCursor；不改条件或自动 POST reload。
+
+reload 的 `kind/id` 需成对提供，`all` 若提供必须布尔，`all=true` 不与 point kind/id 混用。省略 kind/id 是原普通刷新，不等于强制 full；原 Number(limit) 后整数 1..100、仅缺省时 10、重复参数首值、空 cursor 忽略和原宽松 JSON/未知字段语义均保留。未知 point ID 仍按原流程刷新，不新增 404 或存在性资格门。reload 是真实派生刷新动作，不是获取合法值的只读接口。
+
+GET search/status 不修改正式计划和记忆，但原 ensure 可以冷建派生索引、注册 watch 或排队刷新，不能称为零 I/O。summary 发现不调用可能 touch viewedAt 的记忆详情。索引或已发布 catalog 未就绪仍 503，与参数 400 分开；普通传输、关闭服务和内部异常不因这批提示变成参数码。
+
+同时修正既有局部数据可用性问题：worker 完成的一批中有坏 JSON 时仍应用健康 changes，坏原文件不改，已有坏行的最后可用 summary 和 inventory 保留；有局部错误的普通或 full 刷新均保留一次干净 membership-prune 的意图，但显式 full 只在 join 原 flight 后失效成功 fingerprint 一次，已有重排继续传成功推进的 inventory，只重读失败或变化行。后续干净读取按 inventory 加同 flight committed refs 清除旧身份（包括同文件 A→B），复用 cached text/terms/summary，并推进 version 令旧 cursor 过期，不为后续重排重复解析健康整集。整体读取拒绝仍保持冷索引未就绪或热索引旧数据，原预算和调度不变。HTTP search 的 `data.coverage` 明确 `scope=indexed-inventory`、`state=partial` 与 errors；total 只描述当前可检索 summary，不证明整个角色数据完整或未匹配对象不存在。重复计划身份按冲突身份局部计入 errors：同一身份的两份或更多文件均不选作本批新摘要，健康邻居继续可用；冷索引不任取一份，热索引保留冲突前最后可用摘要。冲突文件与成功 fingerprint 原样保留，后续未变重排不重复解析；冲突解除时重读唯一剩余文件，全部消失时按原干净清理移除。此处理仅属于派生搜索索引，不改正式计划身份、点读写入校验或原文件，不过滤已确认 committed 变更，也不把局部 errors 表示成完整数据。
 
 本次按同一 Manager 身份、同一 catalogDigest 连续读取三页 `GET /api/agent/help?limit=200`，取得 563 项实际注册操作。563 项均已登记所属 owner、输入合同和主要语义错误边界，0 重复、0 未映射。目录的 `coverage.complete=true` 仅覆盖 `registered-routes`，其 `globalCoverage=not-proven`；这不证明所有深层错误分支均已修复或动态验收。目录、逐操作检查和各 owner 待补项保留在原任务证据中，不作为另一套运行注册表。
 

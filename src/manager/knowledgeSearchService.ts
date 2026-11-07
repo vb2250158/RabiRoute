@@ -109,7 +109,7 @@ export class KnowledgeSearchService {
     state.full = false;
     const committed = new Map<string, KnowledgeChange>();
     state.committedDuringRefresh = committed;
-    state.flight = this.options.readDelta(state.directory, full ? {} : state.inventory, this.controller.signal)
+    state.flight = this.options.readDelta(state.directory, state.inventory, this.controller.signal)
       .then(delta => {
         if (this.closed) return;
         // Storage checks each file before/after reading. Publish its completed
@@ -119,16 +119,22 @@ export class KnowledgeSearchService {
         if (epoch !== state.epoch) state.pending = true;
         state.errors = delta.errors;
         state.filesRead += delta.filesRead;
-        if (delta.errors && (full || !state.index.ready)) { state.full ||= full; state.pending = true; return; }
-        const next = full ? new RoleKnowledgeSearchIndex(state.index.roleId, state.index.status().version + 1) : state.index;
+        // A fulfilled delta can contain valid rows alongside isolated parse failures.
+        // Only a fully read rebuild replaces the old index; partial rebuilds retain
+        // last-known rows and inventory until a later read can verify their deletion.
+        const next = state.index;
         for (const ref of delta.removed) next.remove(ref);
         for (const change of delta.changes) next.upsert(change);
         for (const change of committed.values()) next.upsert(change);
+        if (full && !delta.errors) next.completeRefresh(new Set([...Object.values(delta.inventory).map(stamp => stamp.reference),
+          ...delta.changes.map(change => knowledgeReference(change.kind, change.item.id)), ...committed.keys()]));
         next.ready = true;
         state.index = next;
-        state.inventory = delta.inventory;
+        state.inventory = full && delta.errors ? { ...state.inventory, ...delta.inventory } : delta.inventory;
         state.refreshedAt = new Date().toISOString();
-        if (delta.errors) state.pending = true;
+        // Any incomplete inventory needs a clean membership-prune before its old
+        // references are authoritative again. This does not force another file read.
+        if (delta.errors) { state.full = true; state.pending = true; }
       })
       .catch(error => {
         if (this.closed) return;
@@ -151,8 +157,10 @@ export class KnowledgeSearchService {
     state.epoch += 1;
     state.full ||= full;
     if (state.flight) await state.flight;
-    if (reference) for (const [file, stamp] of Object.entries(state.inventory)) {
-      if (stamp.reference === reference) state.inventory[file] = { ...stamp, fingerprint: "" };
+    if (full || reference) for (const [file, stamp] of Object.entries(state.inventory)) {
+      // Force the explicit full/point request once, then retain successful stamps
+      // across the original retry so only failed/changed rows are reparsed.
+      if (full || stamp.reference === reference) state.inventory[file] = { ...stamp, fingerprint: "" };
     }
     if (state.debounce) clearTimeout(state.debounce);
     state.debounce = undefined;

@@ -8,6 +8,31 @@ function memory(id: string, keywords = ["launch"]): RecentMemoryItem {
     createdAt: "2026-01-01T00:00:00Z", updatedAt: "2026-01-01T00:00:00Z", keywords };
 }
 
+test('native query diagnostics keep original bounds, numeric caller conversion and cursor compatibility', () => {
+  const index = new RoleKnowledgeSearchIndex('Example'); index.upsert({ kind: 'recent', item: memory('one') }); index.ready = true;
+  for (const [options, code, field] of [
+    [{ query: '' }, 'KNOWLEDGE_PARAMETER_INVALID', 'query'],
+    [{ query: 'launch', limit: 101 }, 'KNOWLEDGE_PARAMETER_INVALID', 'limit'],
+    [{ query: 'launch', cursor: 'broken' }, 'KNOWLEDGE_CURSOR_INVALID', 'cursor'],
+    [{ query: 'launch', cursor: '999999:0' }, 'KNOWLEDGE_CURSOR_EXPIRED', 'cursor']
+  ] as const) assert.throws(() => index.search(options), error => {
+    assert.equal((error as { code?: string }).code, code); assert.equal((error as { field?: string }).field, field); return true;
+  });
+  const version = index.status().version;
+  assert.equal(index.search({ query: 'launch', cursor: `${version}:0:legacy-suffix` }).total, 1);
+  assert.equal(index.search({ query: 'launch', cursor: `${version}:1000` }).items.length, 0);
+  assert.equal(index.search({ query: 'launch', limit: Number('1e1') }).total, 1);
+});
+
+test('a verified full inventory retains cached summary/fulltext and removes stale terms while expiring old cursors', () => {
+  const index=new RoleKnowledgeSearchIndex('Example');index.upsert({kind:'recent',item:memory('one')});index.upsert({kind:'recent',item:memory('two',['other'])});index.ready=true;
+  const cursor=`${index.status().version}:0`;index.completeRefresh(new Set([JSON.stringify(['recent','one'])]));
+  assert.equal(index.search({query:'launch'}).items[0].id,'one');assert.equal(index.search({query:'unique phrase',mode:'fulltext'}).total,1);
+  assert.equal(index.search({query:'other'}).total,0);assert.throws(()=>index.search({query:'launch',cursor}),/CURSOR_EXPIRED/);
+  const unchangedCursor=`${index.status().version}:0`;index.completeRefresh(new Set(index.references()));
+  assert.throws(()=>index.search({query:'launch',cursor:unchangedCursor}),/CURSOR_EXPIRED/);
+});
+
 test("keyword search returns summaries; fulltext is explicit and old mappings disappear", () => {
   const index = new RoleKnowledgeSearchIndex("Example");
   const item = memory("one");

@@ -91,6 +91,11 @@ export class RoleKnowledgeSearchIndex {
   }
 
   references(): string[] { return [...this.entries.keys()]; }
+  /** Complete a verified inventory with cached entries and expire even an unchanged full-refresh cursor. */
+  completeRefresh(references: ReadonlySet<string>): void {
+    for (const ref of this.entries.keys()) if (!references.has(ref)) this.remove(ref);
+    this.generation += 1;
+  }
   status() {
     return { ready: this.ready, version: this.generation, entries: this.entries.size,
       keywords: this.keywords.size, indexedUpdates: this.indexedUpdates, queries: this.queries,
@@ -100,16 +105,16 @@ export class RoleKnowledgeSearchIndex {
   search(options: KnowledgeSearchOptions) {
     if (!this.ready) throw new Error("KNOWLEDGE_INDEX_WARMING");
     const query = normalize(options.query);
-    if (!query || query.length > 512) throw new Error("query must contain 1–512 characters");
+    if (!query || query.length > 512) throw Object.assign(new Error("query must contain 1–512 characters"), { code: "KNOWLEDGE_PARAMETER_INVALID", field: "query" });
     const mode = options.mode ?? "keywords";
-    if (mode !== "keywords" && mode !== "fulltext") throw new Error("Invalid search mode");
+    if (mode !== "keywords" && mode !== "fulltext") throw Object.assign(new Error("Invalid search mode"), { code: "KNOWLEDGE_PARAMETER_INVALID", field: "mode" });
     const limit = options.limit ?? 10;
-    if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw new Error("limit must be between 1 and 100");
+    if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw Object.assign(new Error("limit must be between 1 and 100"), { code: "KNOWLEDGE_PARAMETER_INVALID", field: "limit" });
     let offset = 0;
     if (options.cursor) {
       const [version, position] = options.cursor.split(":");
-      if (!/^\d+$/.test(version ?? "") || !/^\d+$/.test(position ?? "")) throw new Error("Invalid cursor");
-      if (Number(version) !== this.generation) throw new Error("KNOWLEDGE_CURSOR_EXPIRED");
+      if (!/^\d+$/.test(version ?? "") || !/^\d+$/.test(position ?? "")) throw Object.assign(new Error("Invalid cursor"), { code: "KNOWLEDGE_CURSOR_INVALID", field: "cursor" });
+      if (Number(version) !== this.generation) throw Object.assign(new Error("KNOWLEDGE_CURSOR_EXPIRED"), { code: "KNOWLEDGE_CURSOR_EXPIRED", field: "cursor" });
       offset = Number(position);
     }
     const terms = [...new Set([query, ...query.split(/\s+/)].filter(Boolean))];

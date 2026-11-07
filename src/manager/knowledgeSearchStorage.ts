@@ -58,20 +58,29 @@ export function readKnowledgeStorageDelta(roleDir: string, previous: KnowledgeIn
   if (errors) for (const [file, entry] of Object.entries(previous)) inventory[file] ??= entry;
   const winners = (entries: KnowledgeInventory) => {
     const selected = new Map<string, string>();
+    const conflicts = new Set<string>();
     // Match the existing memory catalog: Markdown takes precedence over legacy JSON.
     const ordered = Object.keys(entries).sort((a, b) => Number(!a.toLowerCase().endsWith(".md"))
       - Number(!b.toLowerCase().endsWith(".md")) || a.localeCompare(b));
     for (const file of ordered) {
       const ref = entries[file].reference;
-      if (selected.has(ref) && JSON.parse(ref)[0] === "plan") throw new Error("Duplicate plan identity; retaining the previous index");
+      if (conflicts.has(ref)) continue;
+      if (selected.has(ref) && JSON.parse(ref)[0] === "plan") {
+        // Ambiguous plans have no winner. Keep their successful file stamps and
+        // the index's last unambiguous summary while independent rows advance.
+        selected.delete(ref);
+        conflicts.add(ref);
+        continue;
+      }
       if (!selected.has(ref)) selected.set(ref, file);
     }
-    return selected;
+    return { selected, conflicts };
   };
   const current = winners(inventory);
-  const prior = winners(previous);
+  const prior = winners(previous).selected;
+  errors += current.conflicts.size;
   const changes: KnowledgeChange[] = [];
-  for (const [ref, file] of current) {
+  for (const [ref, file] of current.selected) {
     let change = changedFiles.get(file);
     if (!change && prior.get(ref) !== file) {
       try {
@@ -82,7 +91,7 @@ export function readKnowledgeStorageDelta(roleDir: string, previous: KnowledgeIn
     }
     if (change) changes.push(change);
   }
-  const currentRefs = new Set(current.keys());
+  const currentRefs = new Set(current.selected.keys());
   return { inventory, changes, removed: errors ? [] : [...new Set(Object.values(previous).map(entry => entry.reference))]
     .filter(ref => !currentRefs.has(ref)), errors, filesRead };
 }

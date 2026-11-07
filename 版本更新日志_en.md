@@ -6,6 +6,12 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.10.1 - 2026-11-07
+
+- Give explicit knowledge search/reload errors a field, stable code and same-role summary/status/help. Expired cursors retain the original query; warming stays 503 without automatic refresh or request changes.
+- Keep healthy index data available alongside corrupt rows. Isolate conflicting plan identities as a group without choosing a copy. Reuse cached text, terms and summaries; existing rescheduling rereads only failed or changed files. Explicit full refresh invalidates once and a clean read prunes stale references, preserving raw failures, concurrent commits and the old index on whole-read failure.
+- Advance the persona plugin to 0.1.6 and Host API to 1.5.0 for the additive public completeRefresh method. SDK 1.1.1 and other plugins remain unchanged. Remaining deep error classification continues in the original task.
+
 ## 0.10.0 - 2026-11-07
 
 - Add actionable fields and exact same-target discovery for ambiguous/unsupported Agent actions, terminal cursors, roles, plans, memory and plugin settings. Preserve existing HTTP status, CAS/ETag, original target and unknown receipt semantics. Non-Codex binding help explicitly retains the original adapter and full Peer binding.
