@@ -6,6 +6,10 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.9.1 - 2026-11-07
+
+- Decouple the first startup-window frame from Host startup. Hidden installer launches now enter the Host without waiting for an invisible paint; foreground animation remains available, and fast completion or early dismissal still releases original resources.
+
 ## 0.9.0 - 2026-11-07
 
 - Show a native brand window on interactive launch with actual Host stages, background continuation and no artificial display delay. Theme plugins can replace local appearance and frame animation; icons preload asynchronously, reuse memory and retire with the window. No extra Qt/Python or Host process is launched.

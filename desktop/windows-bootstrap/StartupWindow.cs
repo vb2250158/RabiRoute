@@ -90,6 +90,7 @@ internal sealed class StartupWindow : IStartupWindow
     private IconFrames? _frames, _pendingFrames;
     private long _frameVersion, _framesStartedAt;
     private bool _closing, _reducedMotion;
+    private int _closeRequested;
     private readonly Func<string, IntPtr> _decodeFrame;
 
     internal StartupWindow(StartupTheme? theme = null, Func<string, IntPtr>? frameDecoder = null)
@@ -120,6 +121,7 @@ internal sealed class StartupWindow : IStartupWindow
 
     public void Close()
     {
+        Interlocked.Exchange(ref _closeRequested, 1);
         if (_handle != IntPtr.Zero) PostMessage(_handle, 0x0010, UIntPtr.Zero, IntPtr.Zero);
     }
 
@@ -134,6 +136,7 @@ internal sealed class StartupWindow : IStartupWindow
         ushort registered = 0;
         try
         {
+            if (Volatile.Read(ref _closeRequested) != 0) return;
             if (SystemParametersInfo(0x1042, 0, out var animations, 0)) _reducedMotion = animations == 0;
             _scale = checked((int)GetDpiForSystem() * 100 / 96);
             var type = new WindowClass
@@ -146,12 +149,14 @@ internal sealed class StartupWindow : IStartupWindow
             _handle = CreateWindowEx(0, className, "RabiRoute", 0x02c80000,
                 int.MinValue, int.MinValue, S(480), S(235), IntPtr.Zero, IntPtr.Zero, instance, IntPtr.Zero);
             if (_handle == IntPtr.Zero) throw new Win32Exception(Marshal.GetLastWin32Error());
+            if (Volatile.Read(ref _closeRequested) != 0) return;
             _titleFont = CreateFont(-S(22), 0, 0, 0, 600, 0, 0, 0, 1, 0, 0, 5, 0, "Segoe UI");
             _bodyFont = CreateFont(-S(14), 0, 0, 0, 400, 0, 0, 0, 1, 0, 0, 5, 0, "Segoe UI");
             _button = CreateWindowEx(0, "BUTTON", "后台继续", 0x5001000b,
                 S(340), S(150), S(105), S(30), _handle, new IntPtr(1), instance, IntPtr.Zero);
             SendMessage(_button, 0x0030, _bodyFont, new IntPtr(1));
             ApplyNativeTheme();
+            if (Volatile.Read(ref _closeRequested) != 0) return;
             ShowWindow(_handle, 1);
             SetFocus(_button);
             UpdateWindow(_handle);

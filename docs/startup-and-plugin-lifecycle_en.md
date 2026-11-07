@@ -2,7 +2,9 @@
 
 [简体中文](startup-and-plugin-lifecycle.md)
 
-An interactive double-click shows the RabiRoute brand window before installation checks and the original Host startup. It reports real stages without a fixed display duration or invented percentage. It closes when the service is available. Closing the window or choosing “Continue in background” hides the presentation while the original Host continues. Command queries, background autostart and elevated scheduled tasks do not open another startup window.
+An interactive double-click starts the RabiRoute brand window asynchronously alongside installation checks and the original Host startup. It reports real stages without a fixed display duration or invented percentage. It closes when the service is available. Closing the window or choosing “Continue in background” hides the presentation while the original Host continues. Command queries, background autostart and elevated scheduled tasks do not open another startup window.
+
+Window creation and its first paint are presentation work and do not gate Host startup, including launches explicitly hidden by the caller.
 
 ## Core availability and background initialization
 

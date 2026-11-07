@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Runtime.InteropServices;
 
 namespace RabiRoute.WindowsBootstrap;
 
@@ -22,6 +23,7 @@ internal sealed class StartupPresentation : IAsyncDisposable
     private readonly Func<TimeSpan, CancellationToken, Task> _delay;
     private readonly CancellationTokenSource _lifetime = new();
     private Task? _monitor;
+    private readonly Task _windowReady;
 
     internal StartupPresentation(IStartupWindow window,
         Func<CancellationToken, Task<ReadOnlyHostStatusResult>> probe,
@@ -31,25 +33,54 @@ internal sealed class StartupPresentation : IAsyncDisposable
         _probe = probe;
         _delay = delay ?? Task.Delay;
         window.Dismissed += OnDismissed;
+        _windowReady = ObserveWindowReadyAsync();
     }
 
     internal static bool IsForegroundLaunch(string[] args) => args.Length == 0;
 
-    internal static async Task<StartupPresentation?> TryStartAsync(string[] args)
+    internal static Task<StartupPresentation?> TryStartAsync(string[] args)
     {
-        if (!IsForegroundLaunch(args)) return null;
+        if (!IsForegroundLaunch(args)) return Task.FromResult<StartupPresentation?>(null);
+        GetStartupInfo(out var launch);
+        if (IsExplicitlyHiddenLaunch(launch.Flags, launch.ShowWindow))
+            return Task.FromResult<StartupPresentation?>(null);
         StartupWindow? window = null;
         try
         {
             window = new StartupWindow();
-            await window.Ready;
-            return new StartupPresentation(window, ReadOnlyHostStatusProbe.QueryAsync);
+            // First paint is a presentation signal, never a prerequisite for Host startup.
+            // Hidden launchers may receive no WM_PAINT until they are shown or closed.
+            return Task.FromResult<StartupPresentation?>(new StartupPresentation(window, ReadOnlyHostStatusProbe.QueryAsync));
         }
         catch (Exception error) when (error is System.ComponentModel.Win32Exception or InvalidOperationException)
         {
             // A presentation failure must not prevent the original Host startup.
             window?.Dispose();
-            return null;
+            return Task.FromResult<StartupPresentation?>(null);
+        }
+    }
+
+    internal static bool IsExplicitlyHiddenLaunch(uint flags, ushort showWindow) => (flags & 1) != 0 && showWindow == 0;
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    private struct StartupInfo
+    {
+        internal uint Size;
+        internal IntPtr Reserved, Desktop, Title;
+        internal uint X, Y, Width, Height, CharactersX, CharactersY, FillAttribute, Flags;
+        internal ushort ShowWindow, ReservedBytes;
+        internal IntPtr ReservedData, StandardInput, StandardOutput, StandardError;
+    }
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
+    private static extern void GetStartupInfo(out StartupInfo startupInfo);
+
+    private async Task ObserveWindowReadyAsync()
+    {
+        try { await _window.Ready; }
+        catch (Exception error) when (error is System.ComponentModel.Win32Exception or InvalidOperationException)
+        {
+            _window.Close(); // Observe presentation failure without interrupting the Host.
         }
     }
 
@@ -132,6 +163,7 @@ internal sealed class StartupPresentation : IAsyncDisposable
         _window.Dispose();
         if (_monitor is not null) await _monitor;
         await _window.Closed;
+        await _windowReady;
         _lifetime.Dispose();
     }
 }

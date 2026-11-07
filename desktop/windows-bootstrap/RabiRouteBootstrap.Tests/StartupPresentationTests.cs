@@ -12,6 +12,10 @@ internal static class StartupPresentationTests
                      new[] { "--command", "status" }, new[] { "--command", "activate" }, new[] { "--register-elevated-host", "fixture" } })
             check(!StartupPresentation.IsForegroundLaunch(args), "commands and background elevated task never create a startup window");
 
+        check(StartupPresentation.IsExplicitlyHiddenLaunch(1, 0), "explicit STARTUPINFO SW_HIDE does not create a foreground presentation");
+        check(!StartupPresentation.IsExplicitlyHiddenLaunch(0, 0), "default startup info is not mistaken for an explicitly hidden launch");
+        check(!StartupPresentation.IsExplicitlyHiddenLaunch(1, 1), "explicit normal display keeps the foreground presentation");
+
         foreach (var finalState in new[] { "healthy", "degraded" })
         {
             var surface = new Surface(); var probes = 0;
@@ -60,6 +64,29 @@ internal static class StartupPresentationTests
             check(!failure.IsCompleted && surface.Displays.Single().IsError, "actual bootstrap failure remains visible until dismissal");
             surface.Close(); await failure;
             check(probes == 0, "showing a bootstrap failure does not start a Host or query business APIs");
+        }
+
+        {
+            var pending = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var surface = new Surface { ReadyTask = pending.Task };
+            await using var presentation = new StartupPresentation(surface, _ => Task.FromResult(Status("healthy")));
+            check(!surface.Ready.IsCompleted, "an unpainted surface does not block creation of the presentation owner");
+            presentation.Complete();
+            pending.TrySetException(new InvalidOperationException("Closed before first paint."));
+            check(surface.Closed.IsCompleted, "Host completion dismisses a never-painted presentation");
+        }
+        {
+            var surface = new Surface { ReadyTask = Task.FromException(new System.ComponentModel.Win32Exception("Fixture window failure.")) };
+            await using var presentation = new StartupPresentation(surface, _ => Task.FromResult(Status("healthy")));
+            check(surface.Closed.IsCompleted, "native initialization failure is observed and closes only its presentation");
+        }
+        {
+            using var window = new StartupWindow();
+            window.Close();
+            await window.Closed;
+            // Both possible races are valid: WM_PAINT may have completed, or closure may have won.
+            try { await window.Ready; } catch (InvalidOperationException) { }
+            check(window.Closed.IsCompleted, "close requested before HWND creation is retained and releases its owner");
         }
 
         var root = Path.Combine(Path.GetTempPath(), "rabiroute-startup-theme-" + Guid.NewGuid().ToString("N"));
@@ -156,7 +183,8 @@ internal static class StartupPresentationTests
         private readonly TaskCompletionSource _closed = new(TaskCreationOptions.RunContinuationsAsynchronously);
         internal readonly List<StartupDisplay> Displays = new();
         internal bool CloseOnError;
-        public Task Ready => Task.CompletedTask;
+        internal Task ReadyTask = Task.CompletedTask;
+        public Task Ready => ReadyTask;
         public Task Closed => _closed.Task;
         public event Action? Dismissed;
         public void Present(StartupDisplay display)
