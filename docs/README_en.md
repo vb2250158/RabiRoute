@@ -212,3 +212,7 @@ Archived material is under [`archive/`](../archive/README_en.md). Buildable clie
 2. Maintain the English version manually only after behavior is accurate; do not batch-translate stale documents.
 3. Design documents must be labeled Planned or Historical instead of appearing in the current-capability list.
 4. Runtime-semantic Markdown (`AGENTS.md`, `SKILL.md`, roles, prompts, memories, and plans) must not be translated mechanically.
+
+## Startup and plugin management
+
+[Startup window and plugin lifecycle](startup-and-plugin-lifecycle_en.md): required initialization, background plugins, installation and theme animation.

@@ -102,11 +102,12 @@ export type PluginInstancePolicy = Readonly<{
   resources: PluginResourcePolicy;
 }>;
 export type HostService = Readonly<{ capability: string; value: unknown }>;
-export type PluginRuntimeStatus = "active" | "waiting_dependency" | "failed";
+export type PluginRuntimeStatus = "active" | "initializing" | "waiting_dependency" | "failed";
 export type PluginRuntimeRecord = Readonly<{
   identity: PluginIdentity;
   manifest: PluginManifest;
   status: PluginRuntimeStatus;
   missingCapabilities: readonly string[];
+  initialization?: Readonly<{ state: "initializing"; identity: PluginIdentity }>;
   error?: Readonly<{ code: string; message: string }>;
 }>;

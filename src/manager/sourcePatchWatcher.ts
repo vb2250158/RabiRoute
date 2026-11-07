@@ -20,6 +20,8 @@ export class SourcePatchWatcher {
   private readonly pending = new Set<string>();
   private readonly lastOperationHash = new Map<string, string>();
   private closed = false;
+  private stopping?: Promise<void>;
+  private applicationFlight?: Promise<void>;
 
   private constructor(
     private readonly root: string,
@@ -43,9 +45,9 @@ export class SourcePatchWatcher {
     const compiler = new SourcePatchCompiler();
     const watcher = new SourcePatchWatcher(sourceRoot, definitions, options.service, options.runtime, options.outputDirectory, compiler.build.bind(compiler), options.onError ?? (() => undefined), compiler, new Map());
     try { await watcher.refreshWatches(definitions); }
-    catch (error) { watcher.stop(); throw error; }
+    catch (error) { await watcher.stop(); throw error; }
     for (const definition of definitions) if (!options.service.status().modules.some(module => module.id === definition.id)) watcher.pending.add(definition.id);
-    if (watcher.pending.size) watcher.timer = setTimeout(() => { watcher.timer = undefined; void watcher.apply(); }, 200);
+    if (watcher.pending.size) watcher.timer = setTimeout(() => { watcher.timer = undefined; watcher.startApply(); }, 200);
     return watcher;
   }
 
@@ -76,6 +78,9 @@ export class SourcePatchWatcher {
       directories.add(directory);
     }
     if (this.closed) return;
+    // Dependency inspection and filesystem discovery can finish after shutdown.
+    // Do not acquire new watchers after the owner has closed the old set.
+    if (this.closed) return;
     const added = new Map<string, fs.FSWatcher>();
     try {
       for (const directory of directories) {
@@ -92,7 +97,7 @@ export class SourcePatchWatcher {
             for (const watched of this.watchedFiles) if (watched === file || watched.startsWith(file + path.sep)) this.schedule(watched);
           }
         });
-        handle.on("error", error => { this.onError(error); this.stop(); });
+        handle.on("error", error => { this.onError(error); void this.stop().catch(this.onError); });
         added.set(directory, handle);
       }
     } catch (error) { for (const handle of added.values()) handle.close(); throw error; }
@@ -103,14 +108,27 @@ export class SourcePatchWatcher {
     this.definitions = definitions;
   }
 
-  stop(): void {
-    if (this.closed) return;
+  stop(): Promise<void> {
+    if (this.stopping) return this.stopping;
     this.closed = true;
     for (const watcher of this.watchers.values()) watcher.close();
     this.watchers.clear();
     clearTimeout(this.timer);
     this.pending.clear();
-    void this.compiler.close().catch(this.onError);
+    this.stopping = Promise.allSettled([this.compiler.close(), this.applicationFlight]).then(results => {
+      const failures = results.filter(result => result.status === "rejected").map(result => result.reason);
+      if (failures.length) throw new AggregateError(failures, "Source patch watcher shutdown failed.");
+    });
+    // Existing event owners may initiate shutdown without joining; the RuntimeOwner joins this same promise.
+    void this.stopping.catch(() => {});
+    return this.stopping;
+  }
+
+  private startApply(): void {
+    if (this.closed || this.running) return;
+    const flight = this.apply();
+    this.applicationFlight = flight;
+    void flight.then(() => { if (this.applicationFlight === flight) this.applicationFlight = undefined; }, this.onError);
   }
 
   private schedule(changedPath: string): void {
@@ -123,7 +141,7 @@ export class SourcePatchWatcher {
     for (const definition of definitions) this.pending.add(definition.id);
     if (!definitions.length && !this.catalogDirty) return;
     clearTimeout(this.timer);
-    this.timer = setTimeout(() => { this.timer = undefined; void this.apply(); }, 200);
+    this.timer = setTimeout(() => { this.timer = undefined; this.startApply(); }, 200);
   }
 
   private async apply(): Promise<void> {
@@ -153,7 +171,7 @@ export class SourcePatchWatcher {
     }
     finally {
       this.running = false;
-      if ((this.pending.size || this.catalogDirty) && !this.closed && !this.timer) this.timer = setTimeout(() => { this.timer = undefined; void this.apply(); }, 200);
+      if ((this.pending.size || this.catalogDirty) && !this.closed && !this.timer) this.timer = setTimeout(() => { this.timer = undefined; this.startApply(); }, 200);
     }
   }
 

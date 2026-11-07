@@ -33,9 +33,10 @@ internal static class ReadOnlyHostStatusProbe
         return statusSeen;
     }
 
-    internal static async Task<ReadOnlyHostStatusResult> QueryAsync()
+    internal static async Task<ReadOnlyHostStatusResult> QueryAsync(CancellationToken cancellationToken = default)
     {
-        using var timeout = new CancellationTokenSource(RabiRoute.WindowsHost.HostTimeouts.Get("host.status.probe", TimeSpan.FromSeconds(2)));
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeout.CancelAfter(RabiRoute.WindowsHost.HostTimeouts.Get("host.status.probe", TimeSpan.FromSeconds(2)));
         await using var client = new NamedPipeClientStream(".", PipeName(), PipeDirection.InOut, PipeOptions.Asynchronous, TokenImpersonationLevel.Identification);
         try
         {
@@ -43,7 +44,7 @@ internal static class ReadOnlyHostStatusProbe
             await WriteAsync(client, new ReadOnlyHostStatusRequest("status", null), timeout.Token);
             return new ReadOnlyHostStatusResult(true, NormalizeResponseJson(await ReadJsonAsync(client, timeout.Token)));
         }
-        catch (OperationCanceledException) { return Stopped(); }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested) { return Stopped(); }
         catch (IOException) { return Stopped(); }
         catch (UnauthorizedAccessException) { return Stopped(); }
         catch (JsonException) { return Stopped(); }
@@ -51,7 +52,7 @@ internal static class ReadOnlyHostStatusProbe
     }
 
     private static ReadOnlyHostStatusResult Stopped() => new(true,
-        JsonSerializer.Serialize(new { ok = true, state = "stopped", message = "No Host instance is running." }));
+        JsonSerializer.Serialize(new { ok = true, state = "stopped", message = "No Host instance is running." }), ReceivedResponse: false);
 
     private static string PipeName()
     {
@@ -107,7 +108,7 @@ internal static class ReadOnlyHostStatusProbe
     }
 }
 
-internal sealed record ReadOnlyHostStatusResult(bool Ok, string Json)
+internal sealed record ReadOnlyHostStatusResult(bool Ok, string Json, bool ReceivedResponse = true)
 {
     internal bool IsRunning
     {

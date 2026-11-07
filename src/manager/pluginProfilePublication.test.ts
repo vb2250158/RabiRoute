@@ -6,8 +6,40 @@ import test, { type TestContext } from "node:test";
 import { GenerationRuntime, selectReadyPluginCandidates } from "../plugin-kernel/generationRuntime.js";
 import { loadPluginProfile, PluginPackageCatalog, type LoadedPluginProfile } from "../plugin-kernel/profile.js";
 import { readPluginManagementManifest } from "./pluginManagement.js";
-import { PluginProfilePublication } from "./pluginProfilePublication.js";
+import { PluginProfilePublication, createPluginReconciliationPublicationFence } from "./pluginProfilePublication.js";
+import type { PluginCandidate } from "../plugin-kernel/types.js";
 import { WebPluginModuleRegistry } from "./webPluginModules.js";
+
+test("one immutable selection proof spans asynchronous publications while the live owner fence remains current", async t => {
+  let releaseA!: () => void, releaseB!: () => void, publishedA!: () => void;
+  const a = new Promise<void>(resolve => { releaseA = resolve; });
+  const b = new Promise<void>(resolve => { releaseB = resolve; });
+  const firstPublished = new Promise<void>(resolve => { publishedA = resolve; });
+  const runtime = new GenerationRuntime({ host: "manager", executor: { prepare: async candidate => ({ activate: async context => {
+    await (candidate.instanceId === "a" ? a : b);
+    context.services.provide(`fixture.${candidate.instanceId}@1`, true);
+  } }) }, onPublished: generation => {
+    if (generation.records.some(row => row.identity.instanceId === "a" && row.status === "active")) publishedA();
+  } });
+  t.after(async () => { releaseA(); releaseB(); await runtime.dispose(); });
+  const originalGeneration = runtime.current().id;
+  let proofReads = 0, liveReads = 0, revoked = false;
+  const beforePublish = createPluginReconciliationPublicationFence(() => {
+    liveReads++; if (revoked) throw new Error("original request revoked");
+  }, () => { proofReads++; assert.equal(runtime.current().id, originalGeneration); });
+  const candidates: PluginCandidate[] = ["a", "b"].map(id => ({ instanceId: id, revision: id, config: {},
+    manifest: { schemaVersion: 2, id: `io.fixture.${id}`, version: "0.1.1", entries: { manager: { execution: "in_process", module: "./manager.mjs" } },
+      provides: [`fixture.${id}@1`], requires: [], optional: [], permissions: [] }, entry: { execution: "in_process", path: `fixture-${id}` } }));
+  await runtime.switch(candidates, { initialization: "background", beforePublish });
+  releaseA(); await firstPublished;
+  assert.notEqual(runtime.current().id, originalGeneration);
+  releaseB(); await runtime.settle();
+  assert.deepEqual(runtime.current().records.map(row => row.status), ["active", "active"]);
+  assert.equal(proofReads, 1);
+  assert.ok(liveReads >= 2);
+  revoked = true;
+  assert.throws(beforePublish, /original request revoked/);
+});
 
 test("required-first publishes only required owners and prepares optional exactly once after READY", async t => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "plugin-startup-prepared-"));

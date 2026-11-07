@@ -11,7 +11,7 @@ import type { CallerCreationMetadataStatus } from "../callerCreationMetadata.js"
 import { publishStartupPlanConflicts } from "./planStorageStartupPublication.js";
 import { getTimeoutMs } from "../shared/timeoutSettings.js";
 import { ManagerEventHub, createManagerEventsOperation } from "./managerEvents.js";
-import { PluginProfilePublication } from "./pluginProfilePublication.js";
+import { PluginProfilePublication, createPluginReconciliationPublicationFence } from "./pluginProfilePublication.js";
 import { pluginProfilePackageResolution } from "./pluginProfilePackageResolution.js";
 import { preparedApiJson } from "./apiPreparedJson.js";
 import { AgentRequestRouteReconciliation } from "./agentRequestRouteReconciliation.js";
@@ -276,6 +276,8 @@ import { runLocalAgentMessageProcess } from "./localAgentMessageProcess.js";
 import { spawnGatewayCommandProcess } from "./gatewayCommandProcess.js";
 import { createPluginCatalogOperations } from "./pluginCatalogOperations.js";
 import type { PluginCatalogInvocation } from "./pluginCatalogRoutes.js";
+import { PluginPackageStore } from "./pluginPackageStore.js";
+import { createStartupPresentationProjector } from "./startupPresentation.js";
 import { createSourcePatchHostService, ManagerSourcePatchService } from "./sourcePatchService.js";
 import { SourcePatchWatcher } from "./sourcePatchWatcher.js";
 import { AutomaticCodeService } from "./automaticCodeService.js";
@@ -7288,6 +7290,11 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
   managerRuntimeOwner.register("manager_plugin_process_leases", () => managerPluginProcessLeases.disposeAll());
   let loadedManagerPluginProfile: LoadedPluginProfile | undefined;
   let pendingManagerPluginProfile: LoadedPluginProfile | undefined;
+  let refreshStartupPresentation = (): void => {};
+  const publishDesktopSettingsEvent = (eventType: string, data: unknown): void => {
+    publishManagerEvent(eventType, data);
+    if (eventType === "desktop_settings_changed") refreshStartupPresentation();
+  };
   let startupRequiredGenerationId: string | undefined;
   const managerPluginProfilePublication = new PluginProfilePublication();
   let managerPluginDiagnostics: readonly unknown[] = [];
@@ -7957,7 +7964,7 @@ set remoteAgentHub(value) { remoteAgentHub = value; } }) }),
     Object.freeze({ capability: "host.manager.desktop@2", value: Object.freeze({ ...managerFeatureHostPorts, get adapterConfigPath() { return adapterConfigPath; },
 get desktopSettings() { return desktopSettings; },
 get managerReadOnly() { return managerReadOnly; },
-get publishManagerEvent() { return publishManagerEvent; },
+get publishManagerEvent() { return publishDesktopSettingsEvent; },
 get ensureDataDirs() { return ensureDataDirs; },
 get ensurePersonaConfigFile() { return ensurePersonaConfigFile; },
 get ensureRoleFile() { return ensureRoleFile; },
@@ -7991,8 +7998,10 @@ get roleDirForApi() { return roleDirForApi; } }) }),
     .filter(Boolean)
     .map(value => path.resolve(value));
   const builtinPluginPackageRoot = path.join(packageRoot, "dist", "plugins", "packages");
+  const managedPluginPackageRoot = path.join(rootDir, "data", "plugins", "packages");
   const managerPluginPackageRoots = Object.freeze([...new Set([
     builtinPluginPackageRoot,
+    managedPluginPackageRoot,
     ...configuredPackageRoots
   ])]);
   const managerPluginExecutionSettings = resolveInProcessRoots();
@@ -8007,6 +8016,23 @@ get roleDirForApi() { return roleDirForApi; } }) }),
     });
   }
   managerRuntimeOwner.register("plugin_package_catalog", () => managerPluginPackageCatalog.dispose());
+  const startupPresentationProjector = createStartupPresentationProjector({ stateRoot: rootDir,
+    resolvePackage: (pluginId, version) => managerPluginPackageCatalog.resolve(pluginId, version) });
+  managerRuntimeOwner.register("startup_presentation_cache", () => startupPresentationProjector.stop());
+  let startupPresentationRefreshQueued = false;
+  refreshStartupPresentation = (): void => {
+    if (shuttingDown || managerReadOnly || startupPresentationRefreshQueued) return;
+    startupPresentationRefreshQueued = true;
+    setImmediate(() => {
+      startupPresentationRefreshQueued = false;
+      if (shuttingDown) return;
+      void startupPresentationProjector.refresh(async () => ({
+        webTheme: desktopSettings.read().webTheme, profile: (await managerPluginSettings.snapshot()).profile
+      })).then(result => {
+        if (result.diagnostic) managerOperationalLog.record("warn", "startup_appearance_unavailable", { result: result.diagnostic });
+      });
+    });
+  };
   const managerPluginOutcomeArchive = new AsyncPluginOutcomeArchive(path.join(rootDir, "data", ".runtime", "plugin-runtime", "unknown-outcomes"));
   managerRuntimeOwner.register("plugin_async_outcome_archive", () => managerPluginOutcomeArchive.dispose());
   try {
@@ -8022,6 +8048,10 @@ get roleDirForApi() { return roleDirForApi; } }) }),
     onPublished: generation => {
       capturePluginGeneration(generation);
       managerPluginRoutes.refreshPublication();
+      publishManagerEvent("plugin_catalog_changed", {
+        reason: "plugin lifecycle publication", generation: generation.id,
+        revision: { plugins: generation.sequence, contributions: generation.contributions.revision }
+      });
     },
     onRuntimeFailure: event => {
       capturePluginGeneration(event.generation);
@@ -8104,7 +8134,12 @@ get roleDirForApi() { return roleDirForApi; } }) }),
       error => managerOperationalLog.record("error", "web_patch_marker_failed", { result: String(error) }));
     managerRuntimeOwner.register("manager_web_patch_marker", () => webPatchWatcher.stop());
   }
-  try {
+  let sourcePatchWatcherStart: Promise<SourcePatchWatcher | undefined> | undefined;
+  managerRuntimeOwner.register("manager_source_patch_watcher", async () => {
+    const watcher = await sourcePatchWatcherStart;
+    await watcher?.stop();
+  });
+  const startOptionalSourcePatchWatcher = (): Promise<SourcePatchWatcher | undefined> => sourcePatchWatcherStart ??= (async () => { try {
     const sourcePatchWatcher = await SourcePatchWatcher.start({
       root: packageRoot,
       sourceRoot: process.env.RABIROUTE_HOT_PATCH_SOURCE_ROOT || undefined,
@@ -8116,12 +8151,13 @@ get roleDirForApi() { return roleDirForApi; } }) }),
         result: error instanceof Error ? error.message : String(error)
       })
     });
-    if (sourcePatchWatcher) managerRuntimeOwner.register("manager_source_patch_watcher", () => sourcePatchWatcher.stop());
+    return sourcePatchWatcher ?? undefined;
   } catch (error) {
     await managerOperationalLog.record("error", "source_patch_watcher_start_failed", {
       result: error instanceof Error ? error.message : String(error)
     });
-  }
+    return undefined;
+  } })();
   const reconcileManagerPlugins = (
     reason: string,
     options: Readonly<{ readyOnly?: boolean; invocation?: PluginCatalogInvocation; reuseUnchangedPackages?: boolean; startupContinuation?: boolean }> = {}
@@ -8210,11 +8246,15 @@ get roleDirForApi() { return roleDirForApi; } }) }),
           result: failure.retained ? "previous_candidate_retained" : "candidate_not_published",
           error: managerOperationalError(new Error(failure.reason), rootDir)
         });
+        // The immutable candidate proof belongs to this desired reconciliation.
+        // Its first publication consumes the original plugin-generation baseline;
+        // subsequent components keep the live request/application fence below.
         assertReconciliationOpen();
         const result = await managerPluginKernel!.switch(selection.candidates, {
           readyRequires: loaded.profile.readyRequires,
           requiredCapabilityPolicy: "report",
-          beforePublish: () => { assertReconciliationOpen(); selection.assertCurrent(); }
+          initialization: options.readyOnly ? "await" : "background",
+          beforePublish: createPluginReconciliationPublicationFence(assertReconciliationOpen, selection.assertCurrent)
         });
         published = true;
         // Complete committed-generation bookkeeping even if the caller expires after publication.
@@ -8231,6 +8271,24 @@ get roleDirForApi() { return roleDirForApi; } }) }),
           generation: result.generation.id,
           revision: { plugins: result.generation.sequence, contributions: result.generation.contributions.revision }
         });
+        if (!options.readyOnly) {
+          refreshStartupPresentation();
+          // Retain this prepared metadata while its original activation flights finish.
+          // Joining occurs outside the metadata queue, so another plugin can be removed meanwhile.
+          void managerPluginKernel!.settle().then(() => {
+            if (!shuttingDown && managerServicesReady && !managerReadOnly) syncRunningGateways();
+          }).catch(error => managerOperationalLog.record("warn", "plugin_async_initialization_failed", {
+            error: managerOperationalError(error, rootDir)
+          })).finally(() => {
+            if (!shuttingDown) {
+              const current = managerPluginKernel!.current();
+              capturePluginGeneration(current);
+              publishManagerEvent("plugin_catalog_changed", { reason: "plugin initialization settled", generation: current.id,
+                revision: { plugins: current.sequence, contributions: current.contributions.revision } });
+            }
+            if (pendingManagerPluginProfile === loaded) pendingManagerPluginProfile = undefined;
+          });
+        }
         assertReconciliationOpen();
       } catch (error) {
         // Publication can precede post-publication cleanup. Never restore package
@@ -8238,7 +8296,7 @@ get roleDirForApi() { return roleDirForApi; } }) }),
         if (!published && managerPluginKernel!.current().id === previousGenerationId) loadedManagerPluginProfile = previousProfile;
         throw error;
       } finally {
-        if (pendingManagerPluginProfile === loaded) pendingManagerPluginProfile = undefined;
+        if ((!published || options.readyOnly) && pendingManagerPluginProfile === loaded) pendingManagerPluginProfile = undefined;
       }
     });
     managerPluginReconciliationTail = reconciliation.catch(() => {});
@@ -8281,6 +8339,8 @@ createPluginCatalogOperations: () => createPluginCatalogOperations({
             ? managerPluginGenerationStatus.readiness : generation.readiness,
           reconcile: async invocation => {
             await reconcileManagerPlugins("manual API request", { invocation });
+            // Join outside the metadata queue: a slow plugin cannot block another settings intent.
+            await managerPluginKernel!.settle();
             invocation.assertCurrent(); return managerPluginKernel!.current();
           }
         },
@@ -8314,7 +8374,11 @@ createManagerEventOperationDefinition
   const pluginManagement = createPluginManagement({
     runtime: managerPluginKernel!, settings: managerPluginSettings,
     manifest: (packageId, version) => readPluginManagementManifest(managerPluginPackageCatalog, packageId, version),
-    reconcile: () => reconcileManagerPlugins("committed plugin instance settings changed", { reuseUnchangedPackages: true })
+    packageSource: async (packageId, version) => (await managerPluginPackageCatalog.resolve(packageId, version)).sourceRoot,
+    reconcile: () => reconcileManagerPlugins("committed plugin instance settings changed", { reuseUnchangedPackages: true }),
+    packages: new PluginPackageStore({ roots: managerPluginPackageRoots, managedRoot: managedPluginPackageRoot, bundledRoot: builtinPluginPackageRoot,
+      importRuntimeRoot: path.join(rootDir, "data", "plugins", ".runtime", "imports") }),
+    changed: () => refreshStartupPresentation()
   });
   const pluginManagementRegistration = managerApplicationRoutes.run(() => managerPluginRoutes.registerOperations(managerApplicationRoutes.instanceId, createPluginManagementOperations({
     runtime: managerPluginKernel!, root: () => packageRoot,
@@ -8801,6 +8865,8 @@ createManagerEventOperationDefinition
   // Publish the fenced control plane before any NAS recovery worker can start.
   setImmediate(() => {
     if (managerRuntimeOwner.isTearingDown()) return;
+    void startOptionalSourcePatchWatcher();
+    refreshStartupPresentation();
     void startLanDiscovery().catch(error => {
       managerOperationalLog.record("warn", "manager_lan_discovery_failed", {
         error: managerOperationalError(error, rootDir)

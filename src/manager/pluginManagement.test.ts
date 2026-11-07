@@ -8,24 +8,86 @@ import { PluginPackageCatalog, loadPluginProfile } from "../plugin-kernel/profil
 import { pluginCatalogFixture } from "./pluginCatalogOperations.fixture.js";
 import { createPluginManagement, readPluginManagementManifest } from "./pluginManagement.js";
 import { createPluginManagementOperations } from "./pluginManagementOperations.js";
+import { PluginPackageStore } from "./pluginPackageStore.js";
 
-async function fixture(t: test.TestContext, readOnly = false) {
+async function fixture(t: test.TestContext, readOnly = false, background = false) {
   const f = await pluginCatalogFixture(t);
   const settings = new PluginProfileSettings({ profilePath: f.profilePath, settingsRoot: path.join(f.root, "settings") });
   const packageRoot = path.join(f.root, "packages"), runtimeRoot = path.join(f.root, "management-runtime");
   const packages = new PluginPackageCatalog([packageRoot], { trustedInProcessRoots: [packageRoot] });
   f.context.management = createPluginManagement({ runtime: f.runtime, settings,
+    packages: new PluginPackageStore({ roots: [packageRoot], managedRoot: packageRoot, importRuntimeRoot: path.join(f.root, "imports") }),
     manifest: (id, version) => readPluginManagementManifest(packages, id, version),
     reconcile: async () => {
       const loaded = await loadPluginProfile({ profilePath: f.profilePath, profile: (await settings.snapshot()).profile,
         packageCatalog: packages, runtimeRoot, host: "manager" });
-      await f.runtime.switch(loaded.candidates, { readyRequires: loaded.profile.readyRequires });
+      await f.runtime.switch(loaded.candidates, { readyRequires: loaded.profile.readyRequires, initialization: background ? "background" : "await" });
     }
   });
   const registration = f.registry.registerOperations("host:management", createPluginManagementOperations(f.context, readOnly));
   t.after(() => registration.dispose());
   return { ...f, settings, list: async () => (await (await f.fetch("/api/plugins/instances")).json()).data };
 }
+
+test("actual management HTTP uninstalls and reinstalls the original plugin instance with its stored config", async t => {
+  const f = await fixture(t), original = await fs.readFile(f.profilePath);
+  let value = await f.list();
+  let response = await f.fetch("/api/plugins/instances/manager%3Acatalog", { method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify({ expectedRevision: value.revision }) });
+  assert.equal(response.status, 200, await response.clone().text());
+  value = await f.list();
+  assert.equal(value.instances.length, 0);
+  assert.equal(f.runtime.current().records.length, 0);
+  response = await f.fetch("/api/plugins/instances", { method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ expectedRevision: value.revision, pluginId: "io.test.catalog", version: "1.0.0" }) });
+  assert.equal(response.status, 200, await response.clone().text());
+  value = await f.list();
+  assert.equal(value.instances[0]?.instanceId, "manager:catalog");
+  assert.equal(value.instances[0]?.status, "active");
+  assert.deepEqual(await fs.readFile(f.profilePath), original);
+});
+
+test("actual HTTP package import and available package listing use the original immutable package owner", async t => {
+  const f = await fixture(t);
+  const response = await f.fetch("/api/plugins/packages", { method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ sourceDirectory: path.join(f.root, "packages", "io.test.catalog", "1.0.0") }) });
+  assert.equal(response.status, 200, await response.clone().text());
+  const available = await (await f.fetch("/api/plugins/packages")).json();
+  assert.equal(available.data.packages[0]?.pluginId, "io.test.catalog");
+  assert.deepEqual(available.data.packages[0]?.instanceIds, ["manager:catalog"]);
+});
+
+test("uninstalled HTTP instance remains visibly stopping until its actual asynchronous disposer finishes", async t => {
+  const f = await fixture(t, false, true);
+  const key = `__rabi_plugin_stop_${Date.now()}`;
+  let release!: () => void;
+  const stopped = new Promise<void>(resolve => { release = resolve; });
+  (globalThis as unknown as Record<string, unknown>)[key] = stopped;
+  try {
+    const filename = path.join(f.root, "packages", "io.test.catalog", "1.0.0", "manager.mjs");
+    const source = await fs.readFile(filename, "utf8");
+    await fs.writeFile(filename, source.replace('context.services.provide', `context.effects.add(() => async () => { await globalThis[${JSON.stringify(key)}]; });\ncontext.services.provide`));
+    const saved = await f.list();
+    await f.context.management!.update("manager:catalog", { expectedRevision: saved.revision, enabled: true }, { assertCurrent() {} });
+    await f.runtime.settle();
+    const current = await f.list();
+    const response = await f.fetch("/api/plugins/instances/manager%3Acatalog", { method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify({ expectedRevision: current.revision }) });
+    assert.equal(response.status, 200, await response.clone().text());
+    const retiring = await f.list();
+    assert.equal(retiring.instances[0]?.installed, false);
+    assert.equal(retiring.instances[0]?.status, "stopping");
+    assert.equal(retiring.instances[0]?.retiringActivations.length, 1);
+    release();
+    await f.runtime.settle("manager:catalog");
+    assert.equal((await f.list()).instances.length, 0);
+  } finally { release(); delete (globalThis as unknown as Record<string, unknown>)[key]; }
+});
+
+test("new install APIs keep the original read-only and revision contracts", async t => {
+  const f = await fixture(t, true), snapshot = await f.list();
+  const response = await f.fetch("/api/plugins/instances/manager%3Acatalog", { method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify({ expectedRevision: snapshot.revision }) });
+  assert.equal(response.status, 403);
+  assert.equal((await f.list()).revision, snapshot.revision);
+});
 
 test("host management can disable a real package and remains reachable to reenable it", async t => {
   const f = await fixture(t), initial = await f.list();
@@ -116,9 +178,11 @@ test("committed settings reconcile even if the HTTP caller leaves before publica
 
 test("an unconfirmed native retirement is never reported as a stopped plugin", async t => {
   const f = await fixture(t), initial = await f.settings.snapshot();
+  const identity = f.runtime.current().records[0]!.identity;
   await f.context.management!.update("manager:catalog", { expectedRevision: initial.revision, enabled: false }, { assertCurrent() {} });
   const stopped = f.runtime.current();
   f.runtime.current = () => ({ ...stopped, cleanupDiagnostics: [{ instanceId: "manager:catalog", activationId: "prior-owner", phase: "superseded", message: "Controlled owner exit remains unconfirmed." }] });
+  f.runtime.pendingRetirements = () => [{ identity, status: "retirement_unconfirmed" }];
   const result = await f.list();
   assert.equal(result.instances[0].enabled, false);
   assert.equal(result.instances[0].status, "retirement_unconfirmed");

@@ -4,6 +4,9 @@ export type ManagedPlugin = Readonly<{
   instanceId: string;
   pluginId: string;
   enabled: boolean;
+  installed: boolean;
+  initialization?: Readonly<{ state: "initializing"; identity: Readonly<{ version: string; activationId?: string }> }>;
+  retiringActivations?: readonly Readonly<{ identity: Readonly<{ activationId: string; version: string }>; status: string }>[];
   runningVersion?: string;
   status: string;
   manifest: Readonly<{
@@ -46,7 +49,7 @@ export function parsePluginManagementCatalog(value: unknown): PluginManagementCa
       if (!record(item) || typeof item.instanceId !== "string" || !item.instanceId || typeof item.pluginId !== "string"
         || !record(item.manifest) || typeof item.manifest.id !== "string" || typeof item.status !== "string") return [];
       return [{
-        instanceId: item.instanceId, pluginId: item.pluginId, enabled: item.status !== "inactive", status: item.status,
+        instanceId: item.instanceId, pluginId: item.pluginId, enabled: item.status !== "inactive", installed: true, status: item.status,
         ...(item.status === "active" && typeof item.manifest.version === "string" ? { runningVersion: item.manifest.version } : {}),
         manifest: {
           id: item.manifest.id, version: typeof item.manifest.version === "string" ? item.manifest.version : "",
@@ -63,7 +66,7 @@ export function parsePluginManagementCatalog(value: unknown): PluginManagementCa
 }
 
 async function request(path: string, init: RequestInit = {}): Promise<unknown> {
-  const deadline = AbortSignal.timeout(init.method === "PATCH" ? getTimeoutMs("webgui.plugins.update", 45000) : getTimeoutMs("webgui.plugins.read", 15000));
+  const deadline = AbortSignal.timeout(init.method && !["GET", "HEAD"].includes(init.method) ? getTimeoutMs("webgui.plugins.update", 45000) : getTimeoutMs("webgui.plugins.read", 15000));
   const signal = init.signal ? AbortSignal.any([init.signal, deadline]) : deadline;
   const response = await fetch(path, { ...init, signal, headers: { accept: "application/json", ...init.headers } });
   const body: unknown = await response.json();
@@ -83,8 +86,17 @@ export function parsePluginInstances(value: unknown, catalog?: PluginManagementC
       const existing = native.get(item.instanceId);
       const manifest = record(item.manifest) ? item.manifest : {};
       return [{
-        instanceId: item.instanceId, pluginId: item.pluginId, enabled: item.enabled,
+        instanceId: item.instanceId, pluginId: item.pluginId, enabled: item.enabled, installed: item.installed !== false,
         ...(typeof item.runningVersion === "string" ? { runningVersion: item.runningVersion } : {}),
+        ...(record(item.initialization) && item.initialization.state === "initializing" && record(item.initialization.identity)
+          && typeof item.initialization.identity.version === "string" ? { initialization: { state: "initializing" as const, identity: {
+            version: item.initialization.identity.version,
+            ...(typeof item.initialization.identity.activationId === "string" ? { activationId: item.initialization.identity.activationId } : {})
+          } } } : {}),
+        ...(Array.isArray(item.retiringActivations) ? { retiringActivations: item.retiringActivations.flatMap(row => {
+          if (!record(row) || !record(row.identity) || typeof row.identity.activationId !== "string" || typeof row.status !== "string") return [];
+          return [{ identity: { activationId: row.identity.activationId, version: typeof row.identity.version === "string" ? row.identity.version : "" }, status: row.status }];
+        }) } : {}),
         status: typeof item.status === "string" ? item.status : existing?.status || (!item.enabled ? "disabled" : "inactive"),
         manifest: {
           id: item.pluginId, version: typeof item.version === "string" ? item.version : existing?.manifest.version || "",
@@ -124,4 +136,43 @@ export function filterManagedPlugins(plugins: readonly ManagedPlugin[], query: s
   return plugins.filter(plugin => (status === "all" || (status === "disabled" ? !plugin.enabled : plugin.status === status))
     && (!term || [pluginDisplayName(plugin), plugin.pluginId, plugin.instanceId, plugin.manifest.description || "", ...plugin.manifest.capabilities]
       .some(value => value.toLocaleLowerCase().includes(term))));
+}
+
+export type AvailablePluginPackage = Readonly<{
+  pluginId: string; version: string; source: string; instanceIds: readonly string[];
+  manifest: Readonly<{ displayName?: string; description?: string; icon?: string; hosts: readonly string[] }>;
+}>;
+export function parseAvailablePluginPackages(value: unknown): readonly AvailablePluginPackage[] {
+  if (!record(value) || value.code !== 0 || !record(value.data) || !Array.isArray(value.data.packages)) {
+    throw new Error(record(value) && typeof value.message === "string" ? value.message : "Available plugin packages are unavailable.");
+  }
+  return value.data.packages.flatMap((item): AvailablePluginPackage[] => {
+    if (!record(item) || typeof item.pluginId !== "string" || typeof item.version !== "string" || !record(item.manifest)) return [];
+    const manifest = item.manifest;
+    return [{ pluginId: item.pluginId, version: item.version, source: typeof item.source === "string" ? item.source : "local",
+      instanceIds: strings(item.instanceIds), manifest: {
+        ...(typeof manifest.displayName === "string" ? { displayName: manifest.displayName } : {}),
+        ...(typeof manifest.description === "string" ? { description: manifest.description } : {}),
+        ...(typeof manifest.icon === "string" && /^mdi-[a-z0-9-]+$/.test(manifest.icon) ? { icon: manifest.icon } : {}),
+        hosts: Array.isArray(manifest.hosts) ? strings(manifest.hosts) : record(manifest.entries) ? Object.keys(manifest.entries) : []
+      } }];
+  });
+}
+export async function readAvailablePluginPackages(signal?: AbortSignal): Promise<readonly AvailablePluginPackage[]> {
+  return parseAvailablePluginPackages(await request("/api/plugins/packages", { signal }));
+}
+export async function importPluginPackage(sourceDirectory: string): Promise<readonly AvailablePluginPackage[]> {
+  return parseAvailablePluginPackages(await request("/api/plugins/packages", {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ sourceDirectory })
+  }));
+}
+export async function installManagedPlugin(plugin: Pick<AvailablePluginPackage, "pluginId" | "version">,
+  expectedRevision: string, instanceId: string): Promise<PluginManagementCatalog> {
+  return parsePluginInstances(await request("/api/plugins/instances", { method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ expectedRevision, pluginId: plugin.pluginId, version: plugin.version, instanceId }) }));
+}
+export async function uninstallManagedPlugin(instanceId: string, expectedRevision: string): Promise<PluginManagementCatalog> {
+  return parsePluginInstances(await request(`/api/plugins/instances/${encodeURIComponent(instanceId)}`, {
+    method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify({ expectedRevision })
+  }));
 }

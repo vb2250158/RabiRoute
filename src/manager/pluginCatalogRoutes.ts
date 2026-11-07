@@ -19,6 +19,10 @@ export type PluginCatalogApiContext = {
   management?: {
     list(invocation: PluginCatalogInvocation): Promise<unknown>;
     update(instanceId: string, input: { expectedRevision: string; enabled: boolean }, invocation: PluginCatalogInvocation): Promise<unknown>;
+    packages?(invocation: PluginCatalogInvocation): Promise<unknown>;
+    importPackage?(sourceDirectory: string, invocation: PluginCatalogInvocation): Promise<unknown>;
+    install?(input: { expectedRevision: string; pluginId: string; version: string; instanceId?: string }, invocation: PluginCatalogInvocation): Promise<unknown>;
+    uninstall?(instanceId: string, expectedRevision: string, invocation: PluginCatalogInvocation): Promise<unknown>;
   };
   webModules?: {
     list(webRelease?: string | null, invocation?: PluginCatalogInvocation): Promise<readonly WebPluginModule[]> | readonly WebPluginModule[];

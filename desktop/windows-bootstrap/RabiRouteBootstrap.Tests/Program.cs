@@ -6,6 +6,7 @@ var failures = new List<string>();
 var checks = 0;
 void Check(bool condition, string message) { checks++; if (!condition) failures.Add(message); }
 HostElevationTests.Run(Check);
+await StartupPresentationTests.RunAsync(Check);
 Check(ReadOnlyHostStatusProbe.IsStatusInvocation(new[] { "--command", "status", "--json" }), "status remains a read-only Host query");
 Check(!ReadOnlyHostStatusProbe.IsStatusInvocation(new[] { "--command", "restart", "--json" }), "restart uses the selected Core lifecycle owner");
 Check(!ReadOnlyHostStatusProbe.IsStatusInvocation(new[] { "--command", "status", "--allow-unfenced-quit" }), "status does not absorb lifecycle flags");

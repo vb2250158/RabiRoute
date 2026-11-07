@@ -942,3 +942,7 @@ LanAgentRegistry 在既有已鉴权 WebSocket 上转发 terminal 管理命令，
 角色是独立对象：角色配置和计划与记忆按角色 ID 寻址，路由配置仅保存消息端、Agent 与角色引用。独立配置接口和归档命令由 `src/plugins/io.rabiroute.manager.persona/src/manager/roleConfigurationRoutes.ts` 拥有，`src/roleLifecycle.ts` 统一工作准入；客户端的 `roleStore.ts` 与路由草稿分开。详见[角色配置架构](role-centric-architecture.md)。
 
 HTML 分享由 `src/plugins/io.rabiroute.manager.html-shares/` 独立保存快照、登记 API 并管理连接生命周期。宿主通过 `host.peer-transports@1` 提供已有 RTC/channel 实现，业务通过 `manager.html-shares@1` 发布；原 Relay 服务与其能力合同不变。缺少新扩展点仅使 HTML 插件等待依赖，普通消息、图片和原跨设备连接继续使用。正式快照位于插件稳定私有命名空间，原投递回执仍归原 owner。
+
+## 启动表现与异步插件生命周期
+
+启动器拥有原生启动窗口，Host 仍唯一拥有服务生命周期。Kernel 在队列外运行异步初始化与清理，队列内保留发布事务；实例成员设置与不可变包、业务存档分开。详见[启动与插件生命周期](startup-and-plugin-lifecycle.md)。

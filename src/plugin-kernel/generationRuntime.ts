@@ -83,6 +83,8 @@ export type GenerationRuntimeOptions = Readonly<{
 
 export type GenerationSwitchOptions = Readonly<{
   readyRequires?: readonly string[];
+  /** Await remains the default; background returns the committed initialization intent. */
+  initialization?: "await" | "background";
   /** Missing required capabilities are diagnostic data only for explicit reporting hosts; other hosts stay strict. */
   requiredCapabilityPolicy?: "strict" | "report";
   /** Per-invocation synchronous source/identity assertion after preparation, before publication. */
@@ -137,6 +139,21 @@ type ActivePluginState = Readonly<{
   boundServices?: Set<PluginServiceRegistration>;
   contributions: readonly RegisteredPluginContribution[];
 }>;
+
+type InitializationFlight = {
+  key: string;
+  candidates: readonly PluginCandidate[];
+  signatures: readonly string[];
+  identities: readonly PluginIdentity[];
+  externalServices: ReadonlyMap<string, PluginServiceRegistration | undefined>;
+  scopes: Set<EffectScope>;
+  ownedStates: ActivePluginState[];
+  cancelled: boolean;
+  prepared?: readonly ActivePluginState[];
+  failure?: ComponentFailure;
+  settled: boolean;
+};
+type OwnedWork = { instances: ReadonlySet<string>; completion: Promise<unknown> };
 
 type ComponentFailure = Readonly<{ instanceId: string; error: unknown }>;
 
@@ -316,6 +333,7 @@ function buildGenerationSnapshots(
 export class GenerationRuntime {
   readonly #host: PluginHost;
   readonly #hostServices: readonly HostService[];
+  readonly #hostRegistrations: readonly PluginServiceRegistration[];
   readonly #applicationGenerationId: string;
   readonly #managerInstanceId: string;
   readonly #defaultReadyRequires: readonly string[];
@@ -325,6 +343,12 @@ export class GenerationRuntime {
   readonly #onPublished?: (generation: PluginGeneration) => void;
   #mutationTail: Promise<void> = Promise.resolve();
   #disposed = false;
+  #intent = 0;
+  #desired: readonly PluginCandidate[] = [];
+  #desiredOptions: GenerationSwitchOptions = {};
+  readonly #initializations = new Map<string, InitializationFlight>();
+  readonly #ownedWork = new Set<OwnedWork>();
+  #pumpFailure?: unknown;
   #disposal?: Promise<void>;
   #shutdown?: Promise<void>;
   #shutdownStates: readonly ActivePluginState[] = [];
@@ -336,6 +360,9 @@ export class GenerationRuntime {
   constructor(options: GenerationRuntimeOptions) {
     this.#host = options.host;
     this.#hostServices = Object.freeze([...(options.hostServices ?? [])]);
+    this.#hostRegistrations = Object.freeze(this.#hostServices.map(service => Object.freeze({
+      capability: service.capability, providerInstanceId: "host", value: service.value
+    })));
     this.#applicationGenerationId = options.applicationIdentity?.applicationGenerationId.trim() || randomUUID();
     this.#managerInstanceId = options.applicationIdentity?.managerInstanceId.trim() || randomUUID();
     this.#defaultReadyRequires = Object.freeze([...(options.readyRequires ?? [])].sort());
@@ -374,8 +401,101 @@ export class GenerationRuntime {
     });
   }
 
-  switch(candidates: readonly PluginCandidate[], options: GenerationSwitchOptions = {}): Promise<GenerationSwitchResult> {
-    return this.#enqueue(() => this.#switchNow(candidates, options));
+  async switch(candidates: readonly PluginCandidate[], options: GenerationSwitchOptions = {}): Promise<GenerationSwitchResult> {
+    const intent = ++this.#intent;
+    const previousGenerationId = this.#current.id;
+    await this.#enqueue(async () => {
+      if (this.#disposed) throw new Error("Plugin GenerationRuntime is disposed.");
+      this.#desired = Object.freeze([...candidates]);
+      this.#desiredOptions = options;
+      this.#pumpFailure = undefined;
+      const wanted = new Map(candidates.map(candidate => [candidate.instanceId,
+        candidateSignature(candidate, [...candidate.manifest.permissions].sort())]));
+      for (const flight of [...this.#initializations.values()]) {
+        if (flight.failure || flight.candidates.some((candidate, index) => wanted.get(candidate.instanceId) !== flight.signatures[index])) {
+          this.#cancelInitialization(flight);
+        }
+      }
+      await this.#switchNow(this.#desired, options);
+    });
+    if (options.initialization !== "background") {
+      await this.#joinWork();
+      if (this.#pumpFailure !== undefined) throw this.#pumpFailure;
+      if (intent !== this.#intent) throw new Error("Plugin generation switch was superseded during initialization.");
+    }
+    return Object.freeze({ changed: previousGenerationId !== this.#current.id, generation: this.#current, previousGenerationId });
+  }
+
+  /** Physical owner projection only; removing services never means asynchronous stop already finished. */
+  pendingRetirements(): readonly Readonly<{ identity: PluginIdentity; status: "stopping" | "retirement_unconfirmed" }>[] {
+    const states = new Map([...this.#unconfirmedRetirements.values()].flatMap(owners => [...owners])
+      .map(state => [state.scope, state] as const));
+    return Object.freeze([...states.values()].filter(state => !state.scope.retirementConfirmed()).map(state => Object.freeze({
+      identity: state.identity,
+      status: this.#current.cleanupDiagnostics.some(diagnostic => diagnostic.activationId === state.identity.activationId && !diagnostic.lateConfirmed)
+        ? "retirement_unconfirmed" as const : "stopping" as const
+    })));
+  }
+
+  /** Join existing activation/retirement owners only; never starts or admits another plugin. */
+  async #joinWork(instanceId?: string): Promise<void> {
+    for (;;) {
+      await this.#mutationTail;
+      const work = [...this.#ownedWork].filter(item => !instanceId || item.instances.has(instanceId));
+      if (!work.length) break;
+      await Promise.allSettled(work.map(item => item.completion));
+    }
+  }
+
+  async settle(instanceId?: string): Promise<PluginGeneration> {
+    await this.#joinWork(instanceId);
+    if (this.#pumpFailure !== undefined) throw this.#pumpFailure;
+    const unconfirmed = [...this.#unconfirmedRetirements].flatMap(([id, states]) =>
+      !instanceId || id === instanceId ? [...states].filter(state => !state.scope.retirementConfirmed()) : []);
+    if (unconfirmed.length) throw new Error(`Plugin retirement is unconfirmed: ${unconfirmed.map(state => state.identity.instanceId).join(", ")}.`);
+    return this.#current;
+  }
+
+  #trackWork(instances: readonly string[], completion: Promise<unknown>): void {
+    const work = { instances: new Set(instances), completion };
+    this.#ownedWork.add(work);
+    void completion.then(() => this.#ownedWork.delete(work), () => this.#ownedWork.delete(work));
+  }
+
+  #cancelInitialization(flight: InitializationFlight): void {
+    if (this.#initializations.get(flight.key) === flight) this.#initializations.delete(flight.key);
+    flight.cancelled = true;
+    for (const state of flight.ownedStates) {
+      const owned = this.#unconfirmedRetirements.get(state.identity.instanceId) ?? new Set<ActivePluginState>();
+      owned.add(state); this.#unconfirmedRetirements.set(state.identity.instanceId, owned);
+    }
+    for (const scope of flight.scopes) scope.abort(new Error("Plugin initialization was superseded or removed."));
+    if (flight.settled && flight.prepared?.length) {
+      void this.#scheduleRetirement(flight.prepared, "rollback");
+    }
+  }
+
+  #scheduleRetirement(states: readonly ActivePluginState[], phase: PluginCleanupDiagnostic["phase"]): Promise<readonly PluginCleanupDiagnostic[]> {
+    for (const state of states) {
+      state.scope.abort(new Error("Plugin activation is retiring."));
+      const owned = this.#unconfirmedRetirements.get(state.identity.instanceId) ?? new Set<ActivePluginState>();
+      owned.add(state); this.#unconfirmedRetirements.set(state.identity.instanceId, owned);
+    }
+    const completion = this.#retireStates(states, phase).then(diagnostics => this.#enqueue(async () => {
+      if (diagnostics.length) this.#current = Object.freeze({ ...this.#current,
+        cleanupDiagnostics: Object.freeze([...this.#current.cleanupDiagnostics, ...diagnostics]) });
+      return diagnostics;
+    }));
+    this.#trackWork(states.map(state => state.identity.instanceId), completion);
+    return Promise.resolve([]);
+  }
+
+  #continueInitialization(): Promise<void> {
+    return this.#enqueue(async () => {
+      if (this.#disposed) return;
+      try { await this.#switchNow(this.#desired, this.#desiredOptions); }
+      catch (error) { this.#pumpFailure = error; }
+    });
   }
 
   async #switchNow(candidates: readonly PluginCandidate[], options: GenerationSwitchOptions): Promise<GenerationSwitchResult> {
@@ -494,6 +614,9 @@ export class GenerationRuntime {
     const restoreFailedDomain = (failedInstanceId: string, error: unknown, code = "activation_failed") => {
       const ids = new Set<string>();
       addComponent(ids, failedInstanceId);
+      for (const flight of this.#initializations.values()) if (flight.candidates.some(candidate => ids.has(candidate.instanceId))) {
+        flight.failure = { instanceId: failedInstanceId, error };
+      }
       let size = -1;
       while (size !== ids.size) {
         expandRollbackDomain(ids); size = ids.size;
@@ -534,7 +657,7 @@ export class GenerationRuntime {
     };
     const retireRolledBack = async () => {
       const states = [...rollbackStates]; rollbackStates.clear();
-      return this.#retireStates(states, "rollback");
+      return this.#scheduleRetirement(states, "rollback");
     };
 
     const activationPlan = dependencyComponents(effectiveCandidates, plan, previousActive, signatures);
@@ -577,9 +700,7 @@ export class GenerationRuntime {
       }
 
       const serviceValues = new Map<string, PluginServiceRegistration>();
-      for (const service of this.#hostServices) {
-        serviceValues.set(service.capability, Object.freeze({ capability: service.capability, providerInstanceId: "host", value: service.value }));
-      }
+      for (const service of this.#hostRegistrations) serviceValues.set(service.capability, service);
       for (const state of previousActive.values()) {
         if (!byId.has(state.identity.instanceId) || activationPlan.rebuilding.has(state.identity.instanceId)
           || plan.waiting.has(state.identity.instanceId)) continue;
@@ -589,6 +710,18 @@ export class GenerationRuntime {
         for (const service of state.services) serviceValues.set(service.capability, service);
       }
       const componentProvides = new Set(component.flatMap(id => [...byId.get(id)!.manifest.provides]));
+      const optionalInitializing = component.some(id => byId.get(id)!.manifest.optional.some(capability =>
+        !componentProvides.has(capability) && !serviceValues.has(capability)
+        && [...this.#initializations.values()].some(flight => !flight.failure && flight.candidates.some(candidate => candidate.manifest.provides.includes(capability)))));
+      if (optionalInitializing) {
+        for (const instanceId of component) {
+          const old = previousActive.get(instanceId);
+          if (old) { nextActive.set(instanceId, old); records.push(activeRecord(old)); }
+          else records.push(Object.freeze({ identity: identities.get(instanceId)!, manifest: byId.get(instanceId)!.manifest,
+            status: "initializing" as const, missingCapabilities: Object.freeze([]) }));
+        }
+        continue;
+      }
       const unavailable = component.flatMap(id => byId.get(id)!.manifest.requires
         .filter(capability => !componentProvides.has(capability) && !serviceValues.has(capability)));
       if (unavailable.length) {
@@ -599,122 +732,187 @@ export class GenerationRuntime {
         }
         continue;
       }
-      const prepared: ActivePluginState[] = [];
-      let failure: ComponentFailure | undefined;
-
-      try {
-        for (const instanceId of component) {
-          const candidate = byId.get(instanceId)!;
-          const identity = identities.get(instanceId)!;
-          const permissions = new GrantedPermissions(candidate.manifest.permissions, granted.get(instanceId)!);
-          const declaredProvides = new Set(candidate.manifest.provides);
-          const provided = new Set<string>();
-          const pluginServices: PluginServiceRegistration[] = [];
-          const boundServices = new Set<PluginServiceRegistration>();
-          const pluginContributions: RegisteredPluginContribution[] = [];
-          const componentContributionKeys = new Set(prepared.flatMap(state => state.contributions.map(contributionKey)));
-          const scope = new EffectScope({
-            disposalTimeoutMs: getTimeoutMs("plugin.disposal", candidate.policy?.resources.shutdownTimeoutMs ?? 5000),
-            operationTimeoutMs: this.#activationTimeoutMs
-          });
-          const publication = new PublicationScope(scope);
-          const context: PluginContext = Object.freeze({
-            identity,
-            config: candidate.config,
-            services: Object.freeze({
-              require<T>(capability: string): T {
-                scope.signal().throwIfAborted();
-                if (!candidate.manifest.requires.includes(capability) && !candidate.manifest.optional.includes(capability)) {
-                  throw new Error(`Plugin did not declare required capability: ${capability}.`);
-                }
-                const service = serviceValues.get(capability.trim());
-                if (!service) throw new Error(`Required plugin service is unavailable: ${capability.trim()}.`);
-                boundServices.add(service);
-                return service.value as T;
-              },
-              optional<T>(capability: string): T | undefined {
-                scope.signal().throwIfAborted();
-                if (!candidate.manifest.optional.includes(capability) && !candidate.manifest.requires.includes(capability)) {
-                  throw new Error(`Plugin did not declare optional capability: ${capability}.`);
-                }
-                const service = serviceValues.get(capability.trim());
-                if (service) boundServices.add(service);
-                return service?.value as T | undefined;
-              },
-              provide<T>(capability: string, value: T): void {
-                scope.signal().throwIfAborted();
-                if (!declaredProvides.has(capability)) throw new Error(`Plugin did not declare provided capability: ${capability}.`);
-                if (provided.has(capability)) throw new Error(`Plugin provided a capability more than once: ${capability}.`);
-                if (serviceValues.has(capability)) throw new Error(`Plugin service capability is already registered: ${capability}.`);
-                const registration = Object.freeze({ capability, providerInstanceId: instanceId, value });
-                serviceValues.set(capability, registration);
-                pluginServices.push(registration);
-                provided.add(capability);
-              }
-            }),
-            contributions: Object.freeze({
-              register(contribution: PluginContribution): void {
-                scope.signal().throwIfAborted();
-                const kind = contribution.kind.trim();
-                const id = contribution.id.trim();
-                if (!kind || !id) throw new Error("Plugin contribution kind and id are required.");
-                const key = contributionKey({ kind, id });
-                if (claimedContributionKeys.has(key) || componentContributionKeys.has(key)) {
-                  throw new Error(`Plugin contribution is already registered: ${kind}/${id}.`);
-                }
-                componentContributionKeys.add(key);
-                pluginContributions.push(Object.freeze({ instanceId, kind, id, value: contribution.value }));
-              }
-            }),
-            permissions,
-            lifecycle: Object.freeze({
-              signal: scope.signal(),
-              fail: (error: unknown) => {
-                scope.abort(error);
-                void this.#enqueue(() => this.#handleRuntimeFailure(identity, error));
-              }
-            }),
-            publication: Object.freeze({
-              add: publication.add.bind(publication)
-            }),
-            effects: Object.freeze({
-              add: (starter: PluginEffectStarter, label?: string) => scope.add(starter, label),
-              adopt: (disposer: PluginEffectDisposer, label?: string) => scope.adopt(disposer, label)
-            })
-          });
+      const key = [...component].sort().join("\0");
+      const externalServices = new Map(component.flatMap(id => [...byId.get(id)!.manifest.requires, ...byId.get(id)!.manifest.optional])
+        .filter(capability => !componentProvides.has(capability)).map(capability => [capability, serviceValues.get(capability)] as const));
+      let flight = this.#initializations.get(key);
+      if (flight && (flight.candidates.some((candidate, index) => signatures.get(candidate.instanceId) !== flight!.signatures[index])
+        || [...externalServices].some(([capability, service]) => flight!.externalServices.get(capability) !== service))) {
+        this.#cancelInitialization(flight); flight = undefined;
+      }
+      if (!flight) {
+        flight = { key, candidates: component.map(id => byId.get(id)!), signatures: component.map(id => signatures.get(id)!),
+          identities: component.map(id => identities.get(id)!), externalServices, scopes: new Set(), ownedStates: [], cancelled: false, settled: false };
+        this.#initializations.set(key, flight);
+        const owner = flight;
+        const reservedContributionKeys = new Set(claimedContributionKeys);
+        const completion = Promise.resolve().then(async () => {
+          const prepared: ActivePluginState[] = [];
+          let failure: ComponentFailure | undefined;
 
           try {
-            this.#assertRetirementConfirmed(instanceId);
-            const module = await scope.run("preparation", () => this.#executor.prepare(candidate, identity));
-            await scope.run("activation", () => module.activate(context));
-            const missingProvides = [...declaredProvides].filter(capability => !provided.has(capability));
-            if (missingProvides.length) throw new Error(`Plugin did not provide declared capabilities: ${missingProvides.join(", ")}.`);
-            prepared.push(Object.freeze({
-              candidate,
-              identity,
-              manifest: candidate.manifest,
-              signature: signatures.get(instanceId)!,
-              scope,
-              publication,
-              services: Object.freeze(pluginServices),
-              boundServices,
-              contributions: Object.freeze(pluginContributions)
-            }));
+            for (const instanceId of component) {
+              if (owner.cancelled) throw new Error("Plugin initialization was removed.");
+              const candidate = byId.get(instanceId)!;
+              const identity = identities.get(instanceId)!;
+              const permissions = new GrantedPermissions(candidate.manifest.permissions, granted.get(instanceId)!);
+              const declaredProvides = new Set(candidate.manifest.provides);
+              const provided = new Set<string>();
+              const pluginServices: PluginServiceRegistration[] = [];
+              const boundServices = new Set<PluginServiceRegistration>();
+              const pluginContributions: RegisteredPluginContribution[] = [];
+              const componentContributionKeys = new Set(prepared.flatMap(state => state.contributions.map(contributionKey)));
+              const scope = new EffectScope({
+                disposalTimeoutMs: getTimeoutMs("plugin.disposal", candidate.policy?.resources.shutdownTimeoutMs ?? 5000),
+                operationTimeoutMs: this.#activationTimeoutMs
+              });
+              owner.scopes.add(scope);
+              if (owner.cancelled) scope.abort(new Error("Plugin initialization was removed."));
+              const publication = new PublicationScope(scope);
+              owner.ownedStates.push(Object.freeze({ candidate, identity, manifest: candidate.manifest,
+                signature: signatures.get(instanceId)!, scope, publication, services: pluginServices, contributions: pluginContributions }));
+              const context: PluginContext = Object.freeze({
+                identity,
+                config: candidate.config,
+                services: Object.freeze({
+                  require<T>(capability: string): T {
+                    scope.signal().throwIfAborted();
+                    if (!candidate.manifest.requires.includes(capability) && !candidate.manifest.optional.includes(capability)) {
+                      throw new Error(`Plugin did not declare required capability: ${capability}.`);
+                    }
+                    const service = serviceValues.get(capability.trim());
+                    if (!service) throw new Error(`Required plugin service is unavailable: ${capability.trim()}.`);
+                    boundServices.add(service);
+                    return service.value as T;
+                  },
+                  optional<T>(capability: string): T | undefined {
+                    scope.signal().throwIfAborted();
+                    if (!candidate.manifest.optional.includes(capability) && !candidate.manifest.requires.includes(capability)) {
+                      throw new Error(`Plugin did not declare optional capability: ${capability}.`);
+                    }
+                    const service = serviceValues.get(capability.trim());
+                    if (service) boundServices.add(service);
+                    return service?.value as T | undefined;
+                  },
+                  provide<T>(capability: string, value: T): void {
+                    scope.signal().throwIfAborted();
+                    if (!declaredProvides.has(capability)) throw new Error(`Plugin did not declare provided capability: ${capability}.`);
+                    if (provided.has(capability)) throw new Error(`Plugin provided a capability more than once: ${capability}.`);
+                    if (serviceValues.has(capability)) throw new Error(`Plugin service capability is already registered: ${capability}.`);
+                    const registration = Object.freeze({ capability, providerInstanceId: instanceId, value });
+                    serviceValues.set(capability, registration);
+                    pluginServices.push(registration);
+                    provided.add(capability);
+                  }
+                }),
+                contributions: Object.freeze({
+                  register(contribution: PluginContribution): void {
+                    scope.signal().throwIfAborted();
+                    const kind = contribution.kind.trim();
+                    const id = contribution.id.trim();
+                    if (!kind || !id) throw new Error("Plugin contribution kind and id are required.");
+                    const key = contributionKey({ kind, id });
+                    if (reservedContributionKeys.has(key) || componentContributionKeys.has(key)) {
+                      throw new Error(`Plugin contribution is already registered: ${kind}/${id}.`);
+                    }
+                    componentContributionKeys.add(key);
+                    pluginContributions.push(Object.freeze({ instanceId, kind, id, value: contribution.value }));
+                  }
+                }),
+                permissions,
+                lifecycle: Object.freeze({
+                  signal: scope.signal(),
+                  fail: (error: unknown) => {
+                    scope.abort(error);
+                    void this.#enqueue(() => this.#handleRuntimeFailure(identity, error));
+                  }
+                }),
+                publication: Object.freeze({
+                  add: publication.add.bind(publication)
+                }),
+                effects: Object.freeze({
+                  add: (starter: PluginEffectStarter, label?: string) => scope.add(starter, label),
+                  adopt: (disposer: PluginEffectDisposer, label?: string) => scope.adopt(disposer, label)
+                })
+              });
+
+              try {
+                this.#assertRetirementConfirmed(instanceId);
+                const module = await scope.run("preparation", () => this.#executor.prepare(candidate, identity));
+                await scope.run("activation", () => module.activate(context));
+                const missingProvides = [...declaredProvides].filter(capability => !provided.has(capability));
+                if (missingProvides.length) throw new Error(`Plugin did not provide declared capabilities: ${missingProvides.join(", ")}.`);
+                prepared.push(Object.freeze({
+                  candidate,
+                  identity,
+                  manifest: candidate.manifest,
+                  signature: signatures.get(instanceId)!,
+                  scope,
+                  publication,
+                  services: Object.freeze(pluginServices),
+                  boundServices,
+                  contributions: Object.freeze(pluginContributions)
+                }));
+              } catch (error) {
+                cleanupDiagnostics.push(...await this.#retireStates([Object.freeze({ candidate, identity, manifest: candidate.manifest,
+                  signature: signatures.get(instanceId)!, scope, publication,
+                  services: Object.freeze(pluginServices), contributions: Object.freeze(pluginContributions)
+                })], "rollback"));
+                throw Object.freeze({ instanceId, error }) satisfies ComponentFailure;
+              }
+            }
+            for (const state of prepared) await runPluginActivation(state.identity, () => state.scope.commit());
+
           } catch (error) {
-            cleanupDiagnostics.push(...await this.#retireStates([Object.freeze({ candidate, identity, manifest: candidate.manifest,
-              signature: signatures.get(instanceId)!, scope, publication,
-              services: Object.freeze(pluginServices), contributions: Object.freeze(pluginContributions)
-            })], "rollback"));
-            throw Object.freeze({ instanceId, error }) satisfies ComponentFailure;
+            failure = error && typeof error === "object" && "instanceId" in error && "error" in error
+              ? error as ComponentFailure
+              : Object.freeze({ instanceId: component[0]!, error });
           }
-        }
 
-      } catch (error) {
-        failure = error && typeof error === "object" && "instanceId" in error && "error" in error
-          ? error as ComponentFailure
-          : Object.freeze({ instanceId: component[0]!, error });
+
+          owner.prepared = prepared; owner.failure = failure; owner.settled = true;
+          if (owner.cancelled || this.#initializations.get(key) !== owner || this.#disposed) {
+            const diagnostics = await this.#retireStates(prepared, "rollback");
+            if (diagnostics.length) await this.#enqueue(async () => {
+              this.#current = Object.freeze({ ...this.#current, cleanupDiagnostics: Object.freeze([...this.#current.cleanupDiagnostics, ...diagnostics]) });
+            });
+            return;
+          }
+          await this.#continueInitialization();
+        });
+        this.#trackWork(component, completion);
       }
-
+      if (!flight.settled) {
+        for (const instanceId of component) {
+          const old = previousActive.get(instanceId);
+          const initialization = Object.freeze({ state: "initializing" as const, identity: flight.identities[component.indexOf(instanceId)]! });
+          if (old) {
+            nextActive.set(instanceId, old); records.push(Object.freeze({ ...activeRecord(old), initialization }));
+            for (const contribution of old.contributions) claimedContributionKeys.add(contributionKey(contribution));
+          } else records.push(Object.freeze({ identity: initialization.identity, manifest: byId.get(instanceId)!.manifest,
+            status: "initializing" as const, missingCapabilities: Object.freeze([]), initialization }));
+        }
+        continue;
+      }
+      const prepared = [...(flight.prepared ?? [])];
+      let failure = flight.failure;
+      if (!failure) {
+        // Independent initialization can finish after another component published.
+        // Recheck the original unique-contribution contract at consumption, not only its earlier snapshot.
+        const claimed = new Set(claimedContributionKeys);
+        for (const state of prepared) {
+          for (const contribution of state.contributions) {
+            const key = contributionKey(contribution);
+            if (claimed.has(key)) {
+              failure = { instanceId: state.identity.instanceId,
+                error: new Error(`Plugin contribution is already registered: ${contribution.kind}/${contribution.id}.`) };
+              break;
+            }
+            claimed.add(key);
+          }
+          if (failure) break;
+        }
+      }
       preparedToCommit.push(...prepared);
       if (!failure) {
         // The service facade retains this map after activation, including lazy
@@ -742,22 +940,21 @@ export class GenerationRuntime {
       if (!desiredIds.has(instanceId) || !nextActive.has(instanceId)) scopesToDispose.add(state.scope);
     }
 
+    const initializing = [...this.#initializations.values()].some(flight => !flight.settled);
+    const activeChanged = nextActive.size !== previousActive.size
+      || [...nextActive].some(([id, state]) => previousActive.get(id) !== state);
+    if (initializing && (options.initialization !== "background" || !activeChanged)) {
+      // Initialization visibility does not publish native pointers or consume the source fence.
+      if (options.initialization === "background") this.#current = Object.freeze({ ...this.#current,
+        records: Object.freeze([...records].sort((a, b) => a.identity.instanceId.localeCompare(b.identity.instanceId))) });
+      return Object.freeze({ changed: false, generation: this.#current });
+    }
     const sequence = this.#sequence + 1;
     try {
       buildGenerationSnapshots(nextActive.values(), this.#hostServices, sequence);
     } catch (error) {
-      await this.#retireStates(preparedToCommit, "rollback");
+      await this.#scheduleRetirement(preparedToCommit, "rollback");
       throw error;
-    }
-
-    for (const state of preparedToCommit) {
-      if (nextActive.get(state.identity.instanceId)?.scope !== state.scope) continue;
-      try {
-        await runPluginActivation(state.identity, () => state.scope.commit());
-      } catch (error) {
-        restoreFailedDomain(state.identity.instanceId, error);
-        cleanupDiagnostics.push(...await retireRolledBack());
-      }
     }
 
     // Rebuild after any component rollback. Validation and effect commits both
@@ -777,11 +974,15 @@ export class GenerationRuntime {
     }
     const missingReadyCapabilities = readyRequires.filter(capability => !serviceSnapshot.services.has(capability));
     if (missingReadyCapabilities.length && !reportMissingRequiredCapabilities) {
-      await this.#retireStates(preparedToCommit, "rollback");
-      throw new RequiredPluginCapabilitiesUnavailableError(
-        Object.freeze(missingReadyCapabilities),
-        Object.freeze([...records])
-      );
+      if ([...this.#initializations.values()].some(flight => !flight.settled)) {
+        return Object.freeze({ changed: false, generation: this.#current });
+      }
+      const error = new RequiredPluginCapabilitiesUnavailableError(Object.freeze(missingReadyCapabilities), Object.freeze([...records]));
+      for (const flight of this.#initializations.values()) if (flight.prepared?.some(state => preparedToCommit.includes(state))) {
+        flight.failure = { instanceId: flight.candidates[0]!.instanceId, error };
+      }
+      await this.#scheduleRetirement(preparedToCommit, "rollback");
+      throw error;
     }
     const hasDegradedPlugins = missingReadyCapabilities.length > 0 || records.some(record => record.status !== "active" || Boolean(record.error));
     let generation: PluginGeneration = Object.freeze({
@@ -838,6 +1039,9 @@ export class GenerationRuntime {
       // A source/required-capability fence remains global. Restore every other
       // native pointer before the first admission invalidation or cleanup await.
       rollbackAttempted(new Set(preparedToCommit.map(state => state.identity.instanceId)));
+      for (const flight of this.#initializations.values()) if (flight.prepared?.some(state => preparedToCommit.includes(state))) {
+        flight.failure = { instanceId: flight.candidates[0]!.instanceId, error };
+      }
       const failures: unknown[] = [error, ...rollbackFailures];
       const uncertainActive = [...uncertainOld].flatMap(id => {
         const old = previousActive.get(id);
@@ -851,16 +1055,23 @@ export class GenerationRuntime {
         await this.#handleRuntimeFailure(uncertainActive[0]!.identity, invalidation,
           uncertainActive.map(state => state.identity.instanceId));
       }
-      const diagnostics = await this.#retireStates(preparedToCommit, "rollback");
+      const diagnostics = await this.#scheduleRetirement(preparedToCommit, "rollback");
       failures.push(...diagnostics.map(item => new Error(item.message)));
       if (failures.length > 1) throw new AggregateError(failures, "Plugin publication failed; rollback or cleanup also failed.");
       throw error;
     }
     const publishing = preparedToCommit.filter(state => nextActive.get(state.identity.instanceId) === state);
+    const starting = new Map(publishing.map(state => [state.identity.activationId, state.identity]));
+    generation = Object.freeze({ ...generation, records: Object.freeze(generation.records.map(record =>
+      starting.has(record.identity.activationId) ? Object.freeze({ ...record,
+        initialization: Object.freeze({ state: "initializing" as const, identity: record.identity }) }) : record)) });
     for (const state of publishing) finalizers.get(state)!();
     this.#sequence = sequence;
     this.#active = nextActive;
     this.#current = generation;
+    for (const flight of [...this.#initializations.values()]) {
+      if (flight.prepared?.some(state => nextActive.get(state.identity.instanceId) === state)) this.#initializations.delete(flight.key);
+    }
     this.#notifyPublished(generation);
     const rollbackRetirement = retireRolledBack();
     const retainedScopes = new Set([...nextActive.values()].map(state => state.scope));
@@ -892,24 +1103,32 @@ export class GenerationRuntime {
       }
       return undefined;
     });
-    const startupFailures = (await Promise.all(startups)).filter(item => item !== undefined);
-    cleanupDiagnostics.push(...await rollbackRetirement, ...(await Promise.all(retirements.values())).flat());
-    const published = cleanupDiagnostics.length
-      ? Object.freeze({ ...generation, cleanupDiagnostics: Object.freeze([...cleanupDiagnostics]) })
-      : generation;
-    this.#current = published;
-    // Publication has already happened. Retire the failed owner through the
-    // ordinary failure path; do not resurrect the old graph after irreversible I/O.
-    for (const failure of startupFailures) await this.#handleRuntimeFailure(failure.identity, failure.error);
-    if (startupFailures.length && cleanupDiagnostics.length) {
-      this.#current = Object.freeze({ ...this.#current,
-        cleanupDiagnostics: Object.freeze([...cleanupDiagnostics, ...this.#current.cleanupDiagnostics]) });
-    }
+    const finishing = Promise.all(startups).then(async failures => {
+      const startupFailures = failures.filter(item => item !== undefined);
+      const diagnostics = [...await rollbackRetirement, ...(await Promise.all(retirements.values())).flat()];
+      await this.#enqueue(async () => {
+        for (const failure of startupFailures) await this.#handleRuntimeFailure(failure!.identity, failure!.error);
+        if (diagnostics.length) this.#current = Object.freeze({ ...this.#current,
+          cleanupDiagnostics: Object.freeze([...this.#current.cleanupDiagnostics, ...diagnostics]) });
+        this.#current = Object.freeze({ ...this.#current, records: Object.freeze(this.#current.records.map(record => {
+          if (!starting.has(record.identity.activationId) || record.status !== "active" || !record.initialization) return record;
+          const { initialization: _initialization, ...ready } = record;
+          return Object.freeze(ready);
+        })) });
+      });
+    });
+    this.#trackWork([...publishing, ...supersededStates].map(state => state.identity.instanceId), finishing);
     return Object.freeze({ changed: true, generation: this.#current, previousGenerationId: previous.id });
   }
 
   dispose(): Promise<void> {
-    return this.#disposal ??= this.#enqueue(() => this.#disposeNow());
+    if (this.#disposal) return this.#disposal;
+    for (const flight of [...this.#initializations.values()]) this.#cancelInitialization(flight);
+    return this.#disposal = this.#enqueue(() => this.#disposeNow()).then(async () => {
+      await Promise.allSettled([...this.#ownedWork].map(item => item.completion));
+      const unconfirmed = [...this.#unconfirmedRetirements.values()].flatMap(states => [...states].filter(state => !state.scope.retirementConfirmed()));
+      if (unconfirmed.length) throw new Error(`Plugin retirement is unconfirmed: ${unconfirmed.map(state => state.identity.instanceId).join(", ")}.`);
+    });
   }
 
   /** Application teardown only: ordinary publications and disposal never wait for this grace. */
@@ -927,6 +1146,8 @@ export class GenerationRuntime {
       // Keep ordinary bounded disposal and its diagnostics. A timeout alone is
       // recoverable here only when every actual owner later confirms retirement.
       await this.dispose().catch(() => {});
+      this.#shutdownStates = Object.freeze([...new Map([...this.#shutdownStates,
+        ...[...this.#unconfirmedRetirements.values()].flatMap(states => [...states])].map(state => [state.scope, state])).values()]);
       const remaining = deadlineAt - performance.now();
       if (remaining <= 0) throw new Error(`Plugin shutdown retirement confirmation timed out after ${timeoutMs}ms.`);
       const settled = await Promise.allSettled(this.#shutdownStates.map(state =>
@@ -1030,7 +1251,7 @@ export class GenerationRuntime {
     } catch {
       // Health invalidation is observational, but it must be attempted before cleanup can block.
     }
-    const cleanupDiagnostics = await this.#retireStates(removedStates, "runtime_failure");
+    const cleanupDiagnostics = await this.#scheduleRetirement(removedStates, "runtime_failure");
     const published = cleanupDiagnostics.length
       ? Object.freeze({ ...generation, cleanupDiagnostics })
       : generation;
@@ -1040,6 +1261,8 @@ export class GenerationRuntime {
   async #disposeNow(): Promise<void> {
     if (this.#disposed) return;
     this.#disposed = true;
+    // A queued switch can create its flight after dispose() was called but before this turn entered.
+    for (const flight of [...this.#initializations.values()]) this.#cancelInitialization(flight);
     const active = this.#active;
     this.#active = new Map();
     // Removed and failed activations can still own native work after bounded
@@ -1059,10 +1282,23 @@ export class GenerationRuntime {
   }
 
   async #retireStates(states: readonly ActivePluginState[], phase: PluginCleanupDiagnostic["phase"]): Promise<readonly PluginCleanupDiagnostic[]> {
+    for (const state of states) {
+      const owned = this.#unconfirmedRetirements.get(state.identity.instanceId) ?? new Set<ActivePluginState>();
+      owned.add(state); this.#unconfirmedRetirements.set(state.identity.instanceId, owned);
+    }
     const diagnostics = await cleanupStates(states, phase);
     const confirmedIds = new Set<string>();
     for (const state of states) {
-      if (state.scope.retirementConfirmed()) { confirmedIds.add(state.identity.activationId); continue; }
+      if (state.scope.retirementConfirmed()) {
+        confirmedIds.add(state.identity.activationId);
+        const owned = this.#unconfirmedRetirements.get(state.identity.instanceId);
+        // Keep a prior timeout's proof until the original admission fence records late confirmation.
+        if (owned && !this.#current.cleanupDiagnostics.some(diagnostic => diagnostic.activationId === state.identity.activationId && !diagnostic.lateConfirmed)) {
+          for (const previous of owned) if (previous.scope === state.scope) owned.delete(previous);
+          if (!owned.size) this.#unconfirmedRetirements.delete(state.identity.instanceId);
+        }
+        continue;
+      }
       const unconfirmed = this.#unconfirmedRetirements.get(state.identity.instanceId) ?? new Set<ActivePluginState>();
       unconfirmed.add(state);
       this.#unconfirmedRetirements.set(state.identity.instanceId, unconfirmed);

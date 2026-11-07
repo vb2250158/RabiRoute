@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { PluginProfileSettings, PluginSettingsConflict } from "./profileSettings.js";
+import { parsePluginProfile } from "../plugin-kernel/profile.js";
 
 async function fixture(t: test.TestContext) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "plugin-settings-"));
@@ -16,6 +17,63 @@ async function fixture(t: test.TestContext) {
   await fs.writeFile(profilePath, JSON.stringify(profile));
   return { root, profilePath, settingsRoot, profile, owner: new PluginProfileSettings({ profilePath, settingsRoot }) };
 }
+
+test("install and uninstall persist membership without rewriting defaults or losing stored configuration", async t => {
+  const f = await fixture(t), original = await fs.readFile(f.profilePath);
+  let snapshot = await f.owner.snapshot();
+  snapshot = await f.owner.update("manager:a", { expectedRevision: snapshot.revision, config: { retained: "original-value" } });
+  snapshot = await f.owner.uninstall("manager:a", snapshot.revision);
+  const removedSettings = JSON.parse(await fs.readFile(path.join(f.settingsRoot, createHash("sha256").update("manager:a").digest("hex") + ".json"), "utf8"));
+  assert.equal(removedSettings.enabled, false, "older readers of the enabled override retain the user's disabled intent");
+  assert.deepEqual(snapshot.profile.instances.map(row => row.id), ["manager:b"]);
+  assert.deepEqual(snapshot.removedInstances[0]?.config, { retained: "original-value" });
+  const reloaded = new PluginProfileSettings(f.owner.options);
+  snapshot = await reloaded.snapshot();
+  snapshot = await reloaded.install({ ...snapshot.removedInstances[0]!, version: "2.0.0" }, snapshot.revision);
+  assert.equal(snapshot.profile.instances[0]?.version, "2.0.0");
+  assert.deepEqual(snapshot.profile.instances[0]?.config, { retained: "original-value" });
+  assert.deepEqual(await fs.readFile(f.profilePath), original);
+  assert.deepEqual(snapshot.profile.instances[1]?.config, { original: "b" });
+});
+
+test("new plugin membership survives reload and malformed neighbors remain local", async t => {
+  const f = await fixture(t);
+  const definition = parsePluginProfile({ schemaVersion: 2, readyRequires: [], instances: [{
+    id: "plugin:new", package: "io.test.new", version: "0.1.1", enabled: true, config: { custom: 17 }, grants: []
+  }] }).instances[0]!;
+  let snapshot = await f.owner.install(definition, (await f.owner.snapshot()).revision);
+  assert.equal(snapshot.profile.instances.length, 3);
+  const filename = path.join(f.settingsRoot, createHash("sha256").update("plugin:bad").digest("hex") + ".json");
+  await fs.writeFile(filename, "{bad-json");
+  snapshot = await new PluginProfileSettings(f.owner.options).snapshot();
+  assert.equal(snapshot.profile.instances.find(row => row.id === "plugin:new")?.version, "0.1.1");
+  assert.equal(snapshot.diagnostics.length, 1);
+  snapshot = await f.owner.uninstall("plugin:new", snapshot.revision);
+  assert.equal(snapshot.profile.instances.length, 2);
+  assert.equal(await fs.readFile(filename, "utf8"), "{bad-json");
+  assert.equal((await new PluginProfileSettings(f.owner.options).snapshot()).removedInstances[0]?.id, "plugin:new");
+});
+
+test("install preserves a malformed or foreign target file while healthy neighbors remain editable", async t => {
+  const f = await fixture(t);
+  await fs.mkdir(f.settingsRoot, { recursive: true });
+  const filename = path.join(f.settingsRoot, createHash("sha256").update("plugin:target").digest("hex") + ".json");
+  const foreign = JSON.stringify({ schemaVersion: 1, instanceId: "plugin:foreign", config: { privateSentinel: "other-owner" }, definition: {
+    id: "plugin:foreign", package: "io.test.foreign", version: "0.1.1", enabled: true, config: {}, grants: []
+  } });
+  await fs.writeFile(filename, foreign);
+  const definition = parsePluginProfile({ schemaVersion: 2, readyRequires: [], instances: [{
+    id: "plugin:target", package: "io.test.target", version: "0.1.1", enabled: true, config: {}, grants: []
+  }] }).instances[0]!;
+  let snapshot = await f.owner.snapshot();
+  await assert.rejects(f.owner.install(definition, snapshot.revision), (error: unknown) => (error as { status?: number }).status === 409);
+  assert.equal(await fs.readFile(filename, "utf8"), foreign);
+  snapshot = await f.owner.update("manager:b", { expectedRevision: snapshot.revision, enabled: false });
+  assert.equal(snapshot.profile.instances.find(row => row.id === "manager:b")?.enabled, false);
+  await fs.writeFile(filename, "{broken");
+  await assert.rejects(f.owner.install(definition, (await f.owner.snapshot()).revision), /Repair this plugin/);
+  assert.equal(await fs.readFile(filename, "utf8"), "{broken");
+});
 
 test("plugin enable settings persist without rewriting defaults or a neighboring instance", async t => {
   const f = await fixture(t), original = await fs.readFile(f.profilePath);

@@ -2,6 +2,15 @@ import type { PluginGeneration } from "../plugin-kernel/generationRuntime.js";
 import type { LoadedPluginProfile } from "../plugin-kernel/profile.js";
 import type { PluginCandidate, PluginIdentity } from "../plugin-kernel/types.js";
 
+/** Consume the immutable selection proof once; keep the live owner fence on every publication. */
+export function createPluginReconciliationPublicationFence(assertCurrent: () => void, assertSelection: () => void): () => void {
+  let verified = false;
+  return () => {
+    assertCurrent();
+    if (!verified) { assertSelection(); verified = true; }
+  };
+}
+
 type PackageEntry = LoadedPluginProfile["packages"][number];
 type PublishedMetadata = Readonly<{ candidate: PluginCandidate; packageEntry: PackageEntry }>;
 export type PluginProfilePublicationDiagnostic = Readonly<{

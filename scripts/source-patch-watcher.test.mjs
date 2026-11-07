@@ -15,6 +15,48 @@ const { ManagerSourcePatchService, createSourcePatchHostService } = await import
 const { GenerationRuntime } = await import(implementation("plugin-kernel/generationRuntime"));
 const { HotPatchResourceStore } = await import(implementation("plugin-kernel/hotPatchResourceStore"));
 
+test("source watcher shutdown joins the actual compiler and entered publication without reporting an early stop", async () => {
+  let closeCompiler, finishApplication;
+  const compiler = { close: () => new Promise(resolve => { closeCompiler = resolve; }) };
+  const watcher = new SourcePatchWatcher("unused-test-root", [], {}, {}, "unused-output", async () => ({}), () => {}, compiler, new Map());
+  watcher.applicationFlight = new Promise(resolve => { finishApplication = resolve; });
+  let stopped = false;
+  const stopping = watcher.stop().then(() => { stopped = true; });
+  assert.equal(watcher.stop(), watcher.stopping, "all owners join the same shutdown promise");
+  await Promise.resolve();
+  assert.equal(stopped, false);
+  closeCompiler();
+  await Promise.resolve();
+  assert.equal(stopped, false, "compiler exit alone cannot claim publication completion");
+  finishApplication();
+  await stopping;
+  assert.equal(stopped, true);
+});
+
+test("late dependency inspection cannot acquire new filesystem watchers after stop", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "rabi-watcher-late-stop-"));
+  let releaseInspection, enteredInspection;
+  const entered = new Promise(resolve => { enteredInspection = resolve; });
+  const gate = new Promise(resolve => { releaseInspection = resolve; });
+  const compiler = { inspect: async () => { enteredInspection(); await gate; return { modules: [{ files: { "module.ts": "fixture" } }] }; }, close: async () => {} };
+  const watcher = new SourcePatchWatcher(root, [{ id: "a", source: "module.ts" }], {}, {}, "unused-output", async () => ({}), () => {}, compiler, new Map());
+  try {
+    await fs.writeFile(path.join(root, "module.ts"), "export const value = 1;");
+    watcher.pending.add("a");
+    watcher.startApply();
+    await entered;
+    const stopping = watcher.stop();
+    releaseInspection();
+    await stopping;
+    assert.equal(watcher.watchers.size, 0);
+  } finally {
+    releaseInspection();
+    for (const handle of watcher.watchers.values()) handle.close();
+    await watcher.stop();
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
 async function until(predicate, failure) {
   const deadline = Date.now() + 15000;
   while (!predicate()) {

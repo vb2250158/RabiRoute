@@ -6,6 +6,13 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.9.0 - 2026-11-07
+
+- Show a native brand window on interactive launch with actual Host stages, background continuation and no artificial display delay. Theme plugins can replace local appearance and frame animation; icons preload asynchronously, reuse memory and retire with the window. No extra Qt/Python or Host process is launched.
+- Retain the required-capability startup closure while optional plugins initialize through the original Kernel in the background. Initialization and cleanup no longer occupy the global mutation queue; publication, dependencies, rollback and retirement evidence remain owned by the original transaction.
+- Add directory import, package installation, additional instances, disable and uninstall to the Plugins page. Immutable packages, instance settings and business data remain separate; uninstall retains original configuration and identity, and runtime status reports actual initialization and retirement. Explicit versions survive Host updates.
+- Start source watching after READY and join the actual compiler and entered publication on shutdown. Historical diagnostics no longer keep a confirmed stopped instance in an unconfirmed state. Independently advance Host API declarations to 1.3.0; retain SDK and unchanged plugin versions.
+
 ## 0.8.5 - 2026-11-07
 
 - Record native mutation metadata after attachment snapshots and HTML share intents commit, excluding content, share keys and tokens; independently advance HTML sharing to `0.1.2`. Align package/release fixtures with selected versions, required resources and the Windows PowerShell module environment.

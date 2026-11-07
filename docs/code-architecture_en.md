@@ -583,3 +583,7 @@ Roles are independent objects. Configuration and knowledge use role identities; 
 Full plan lists, plan history and memory-consolidation records use the bounded interactive `managerKnowledgePageWorkerPool`. Background diagnostics retain `managerCatalogWorkerPool`; a blocked task or unconfirmed process exit affects that lane. Paginated plans retain their existing resident catalog owner.
 
 The independent `src/plugins/io.rabiroute.manager.html-shares/` plugin owns snapshots, API registration and connection retirement. The host supplies existing RTC/channel implementations through `host.peer-transports@1`; the plugin publishes `manager.html-shares@1`. The existing Relay service and capability contract remain unchanged. A missing new extension point leaves only HTML sharing waiting for its dependency; ordinary messages, images and cross-device connections continue. Snapshots use stable private plugin storage, while original delivery receipts retain their existing owner.
+
+## Startup presentation and asynchronous plugin lifecycle
+
+The launcher owns the native startup window; the Host remains the sole application lifecycle owner. Kernel initialization and cleanup run outside the publication queue. Instance membership, immutable packages and business data retain separate owners. See [startup and plugin lifecycle](startup-and-plugin-lifecycle_en.md).
