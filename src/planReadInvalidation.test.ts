@@ -7,7 +7,7 @@ import path from "node:path";
 import test from "node:test";
 import { ensurePersonaPlanWorkflow, writePersonaPlanWorkflow } from "./personaPlanWorkflow.js";
 import { invalidatePlanReads, planReadFence } from "./planReadInvalidation.js";
-import { readPlanPageCatalogInWorker, publishRolePlanCatalog, publishCommittedRolePlan, readPlansFromStorageInWorker, roleKnowledgeFileCountsInWorker } from "./roleKnowledge.js";
+import { readPlanCatalogDiagnostics, readPlanPageCatalogInWorker, publishRolePlanCatalog, publishCommittedRolePlan, readPlansFromStorageInWorker, roleKnowledgeFileCountsInWorker } from "./roleKnowledge.js";
 import { ManagerReadWorkerPool, type ManagerReadWorkerChild } from "./manager/managerReadWorkerPool.js";
 
 function fixture() {
@@ -289,12 +289,14 @@ test("quarantine lease churn cannot invalidate a cold page, while canonical plan
   assert.equal((await readPlanPageCatalogInWorker(root, planReadFence(root))).length, 0);
 });
 
-test("dirty-read failure is explicit and the next request can rebuild",async t=>{
+test("dirty-row failure is explicit partial evidence and the next request can rebuild",async t=>{
   const {root,file,plan}=fixture(); t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
   await readPlanPageCatalogInWorker(root,planReadFence(root));
   fs.writeFileSync(file,JSON.stringify({...plan,focus:"after transient read failure"})); invalidatePlanReads(root,"sample");
   const read=t.mock.method(fs.promises,"readFile",async()=>{throw Object.assign(new Error("synthetic EACCES"),{code:"EACCES"});});
-  await assert.rejects(readPlanPageCatalogInWorker(root,planReadFence(root)),/PLAN_CATALOG_REFRESH_UNAVAILABLE/);
+  assert.deepEqual(await readPlanPageCatalogInWorker(root,planReadFence(root)), []);
+  assert.equal(readPlanCatalogDiagnostics(root)[0]?.code, "unreadable_plan");
+  assert.equal(readPlanCatalogDiagnostics(root)[0]?.errorCode, "EACCES");
   read.mock.restore();
   assert.equal((await readPlanPageCatalogInWorker(root,planReadFence(root)))[0]!.focus,"after transient read failure");
 });

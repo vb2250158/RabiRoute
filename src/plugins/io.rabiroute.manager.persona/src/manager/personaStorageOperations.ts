@@ -244,7 +244,8 @@ export class PersonaStorageOwner {
           query: query.get("query") || "", sort: sort as "status" | "updated" | "importance" | "urgency", statuses: query.getAll("status").map(value => value.trim()).filter(Boolean), tags: query.getAll("tag").map(value => value.trim()).filter(Boolean), includeFacets: query.get("facets") !== "0", summary: query.get("detail") === "summary"
         }, { ...readOptions, readyOnly: true }));
         const data = await this.pools.catalog.queryRolePlanCatalog(roleDir, readOptions); a.assertCurrent();
-        return ok(presentPlans(data.plans, ensurePersonaPlanWorkflow(roleDir).workflow).map(plan => ({ ...plan, approval: data.approvalByPlanId[plan.id] })));
+        const result = ok(presentPlans(data.plans, ensurePersonaPlanWorkflow(roleDir).workflow).map(plan => ({ ...plan, approval: data.approvalByPlanId[plan.id] })));
+        return data.partial ? { ...result, body: { ...(result.body as Record<string, unknown>), partial: true, diagnostics: data.diagnostics } } : result;
       }
       case "plan-read": {
         const [projection, workflow] = await Promise.all([application.queries.plan(roleId, planId, { ...readOptions, reusePrepared: true }), readPersonaPlanWorkflowAsync(roleDir)]); a.assertCurrent();
@@ -345,7 +346,7 @@ function querySchema(spec: Spec): Record<string, unknown> {
   const fields = spec.action === "plan-list" ? ["limit", "cursor", "view", "query", "sort", "status", "tag", "facets", "detail"] : spec.action === "plan-read" ? ["detail"] : spec.action === "memory-overview" ? ["counts", "limit", "kind", "cursor", "query"] : [];
   return { type: "object", properties: Object.fromEntries(fields.map(field => [field, { anyOf: [{ type: "string" }, { type: "array", items: { type: "string" } }], description: field === "status" || field === "tag" ? "Repeatable native filter; preserve all values in order." : "Native query value; preserve first-value, empty-value and coercion behavior." }])) };
 }
-const jsonResponse: ApiResponseContract = { mediaType: "application/json; charset=utf-8", schema: { type: "object", required: ["code"], properties: { code: { enum: [0, -1] }, data: true, message: { type: "string" }, state: { type: "string" }, reason: { type: "string" }, commitState: { enum: ["not_started", "unknown", "committed"] }, nextAction: { type: "string" },
+const jsonResponse: ApiResponseContract = { mediaType: "application/json; charset=utf-8", schema: { type: "object", required: ["code"], properties: { code: { enum: [0, -1] }, data: true, partial: { const: true }, diagnostics: { type: "array", items: { type: "object", required: ["code", "message"], properties: { code: { type: "string" }, message: { type: "string" }, file: { type: "string" }, files: { type: "array", items: { type: "string" } }, planId: { type: "string" }, errorCode: { type: "string" } }, additionalProperties: false } }, message: { type: "string" }, state: { type: "string" }, reason: { type: "string" }, commitState: { enum: ["not_started", "unknown", "committed"] }, nextAction: { type: "string" },
   errorCode: { type: "string" }, field: { type: "string" }, repair: { type: "string" }, help: { type: "object", required: ["method", "path"], properties: { method: { const: "GET" }, path: { type: "string" } }, additionalProperties: false } } } };
 
 /** All native API and non-API aliases are exact executable definitions, never prefix handlers. */

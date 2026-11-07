@@ -46,7 +46,7 @@ import {
   previousKnowledgeRenderWindow,
   shouldAutoLoadNextKnowledgeBatch
 } from "../../../../../ribiwebgui/src/knowledgePagination";
-import { createRoleKnowledgeClient, ManagerRequestError, type PlanAgentBindingStatus, type PlanAgentRole, type PlanAgentSessionStatus, type PlanAgentStatus, type RoleMemoryKind, type RoleMemoryPageCounts, type RolePlanPageCounts, type RolePlanPageFilter } from "../../../../../ribiwebgui/src/roleKnowledgeClient";
+import { createRoleKnowledgeClient, ManagerRequestError, type PlanAgentBindingStatus, type PlanAgentRole, type PlanAgentSessionStatus, type PlanAgentStatus, type RoleMemoryKind, type RoleMemoryPageCounts, type RolePlanPage, type RolePlanPageCounts, type RolePlanPageFilter } from "../../../../../ribiwebgui/src/roleKnowledgeClient";
 import { approvalPanelExpanded, approvalQuestionSignature, matchingApprovalFeedback, localizedPlanError, planFeedbackSubmissionErrorMessage } from "../../../../../ribiwebgui/src/approvalFeedbackUi";
 import { planFeedbackMutationLedger } from "../../../../../ribiwebgui/src/planFeedbackMutationLedger";
 import { formatPlanDirectorySortLabel, formatPlanDirectorySortLabelTitle, formatPlanVideoDuration, planCardStyle, planDescriptionForDisplay, planDirectorySortPalette, planStatusDescriptionForDisplay, planStatusLabelForDisplay, planStatusStyle, plansForKnowledgeView, planTitleForDirectory } from "../../../../../ribiwebgui/src/planPresentationStyles";
@@ -90,6 +90,22 @@ const loadingMorePlans = ref(false);
 const memoryLoading = ref(false);
 const planError = ref("");
 const planPageError = ref("");
+const planCollectionPartial = ref(false);
+const planCollectionDiagnostics = ref<NonNullable<RolePlanPage["diagnostics"]>>([]);
+function resetPlanCollectionDiagnostics(): void {
+  planCollectionPartial.value = false;
+  planCollectionDiagnostics.value = [];
+}
+function applyPlanCollectionDiagnostics(page: Pick<RolePlanPage, "partial" | "diagnostics">, append = false): void {
+  if (!append) resetPlanCollectionDiagnostics();
+  if (page.partial !== true) return;
+  planCollectionPartial.value = true;
+  const seen = new Set(planCollectionDiagnostics.value.map(issue => JSON.stringify(issue)));
+  for (const issue of page.diagnostics ?? []) {
+    const key = JSON.stringify(issue);
+    if (!seen.has(key)) { seen.add(key); planCollectionDiagnostics.value.push(issue); }
+  }
+}
 const planListReady = ref(false);
 const planCatalogInitializing = ref(false);
 const planEventReset = ref(false);
@@ -331,6 +347,7 @@ const focusedPlanId = computed(() => String((route.params as Record<string, stri
 const embeddedPlanView = computed(() => Boolean(focusedPlanId.value) && window.self !== window.top);
 const planHost = computed(() => embeddedPlanHost(embeddedPlanView.value, route.query.embedAgent, route.query.embedSession));
 watch(() => roleId.value ? `${route.query.source || ""}:${roleId.value}` : "", () => {
+  resetPlanCollectionDiagnostics();
   feedbackRoleEpoch++;
   feedbackFocusOpen.value = false;
   for (const id of Object.keys(approvalDrafts)) delete approvalDrafts[id];
@@ -435,7 +452,7 @@ const totalMemoryForView = computed(() => activeView.value === "consolidated_mem
     : memoryPageCounts.value.recent);
 const knowledgeListLoading = computed(() => loading.value || memoryLoading.value);
 const knowledgeListWarning = computed(() => Boolean(
-  knowledgeCountsError.value || (showsPlanList.value && (planError.value || planPageError.value || !planListReady.value))
+  knowledgeCountsError.value || (showsPlanList.value && (planError.value || planPageError.value || planCollectionPartial.value || !planListReady.value))
   || (showsMemoryList.value && memoryError.value)
 ));
 const knowledgeListStatus = computed(() => {
@@ -457,6 +474,11 @@ const knowledgeListStatus = computed(() => {
   }
   if (showsPlanList.value && planEventReset.value && !loading.value) {
     return isEnglish.value ? "Plans updated; showing the first page. Use Load more to continue." : "计划已更新，当前显示首屏；可点击加载更多继续查看。";
+  }
+  if (showsPlanList.value && !focusedPlanId.value && planCollectionPartial.value) {
+    return isEnglish.value
+      ? `Some plans are unavailable; showing ${visiblePlansForView.value.length} / ${planListResultTotal.value} readable plans.`
+      : `部分计划暂不可读，当前显示 ${visiblePlansForView.value.length} / ${planListResultTotal.value} 项可读计划。`;
   }
   const counts: string[] = [];
   if (showsPlanList.value) counts.push(isEnglish.value
@@ -671,6 +693,7 @@ watch(activeView, () => {
 
 watch([activeView, query, planListSortMode, () => planListHiddenStatuses.value.join("\u001f"), () => planListSelectedTags.value.join("\u001f")], () => {
   cancelPlanListWork();
+  resetPlanCollectionDiagnostics();
   planRenderStart.value = 0;
   planRenderLimit.value = 8;
   memoryRenderLimit.value = 24;
@@ -1153,6 +1176,7 @@ async function loadMorePlans(limit = 50): Promise<void> {
     });
     if (controller.signal.aborted || currentRequest !== requestVersion || selectedRoleId !== roleId.value) return;
     applyPlanSnapshots(page.items, false, currentRequest);
+    applyPlanCollectionDiagnostics(page, true);
     planEventReset.value = false;
     planPageCounts.value = page.counts;
     planListResultTotal.value = page.total;
@@ -1227,6 +1251,7 @@ async function refreshPlanKnowledge(selectedRoleId: string, currentRequest: numb
     });
     if (controller.signal.aborted || currentRequest !== requestVersion || selectedRoleId !== roleId.value) return;
     applyPlanSnapshots(result.items, true, currentRequest);
+    applyPlanCollectionDiagnostics(result);
     planListReady.value = true;
     planPageCounts.value = result.counts;
     planListResultTotal.value = result.total;
@@ -1297,6 +1322,7 @@ async function refreshMemoryKnowledge(selectedRoleId: string, currentRequest: nu
  * user explicitly addressed.
  */
 async function refreshFocusedPlan(selectedRoleId: string, currentRequest: number): Promise<void> {
+  resetPlanCollectionDiagnostics();
   planError.value = "";
   const cached = cachedFocusedRolePlan(selectedRoleId, focusedPlanId.value);
   if (cached) applyFocusedPlan(cached.plan);
@@ -1376,6 +1402,7 @@ async function refreshKnowledge(): Promise<void> {
   knowledgeCountsReady.value = false;
   knowledgeCountsError.value = "";
   if (!selectedRoleId) {
+    resetPlanCollectionDiagnostics();
     resetPlanMarkdownTeasers();
     resetPlanMediaLoadStates();
     resetPlanDetailHydration();
@@ -2525,6 +2552,7 @@ async function refreshPlansFromEvent(signal: AbortSignal): Promise<void> {
   const result = await loadRolePlanPage(selectedRole, "", 8, currentPlanPageFilter(), signal);
   if (!current()) return;
   applyPlanSnapshots(result.items, true, request);
+  applyPlanCollectionDiagnostics(result);
   planEventReset.value = true;
   planRenderStart.value = 0;
   planRenderLimit.value = 8;
@@ -3132,6 +3160,18 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
         <span>{{ isEnglish ? 'Counts are unavailable. List loading is independent.' : '数量暂时不可用，列表独立加载。' }}</span>
         <v-btn size="small" variant="text" :loading="knowledgeCountsLoading" @click="refreshKnowledgeCounts">{{ isEnglish ? 'Retry counts' : '重试数量' }}</v-btn>
         <details class="knowledge-error-details"><summary>{{ isEnglish ? 'Error details' : '错误详情' }}</summary><span data-no-i18n>{{ knowledgeCountsError }}</span></details>
+      </v-alert>
+      <v-alert v-if="roleId && showsPlanList && !focusedPlanId && planCollectionPartial" type="warning" variant="tonal" class="ma-5 knowledge-plan-partial">
+        <span>{{ isEnglish ? 'Some plan files could not be read or have conflicting identities. Available plans remain usable; counts cover readable records only.' : '部分计划文件无法读取或身份冲突，已显示的计划仍可使用；数量仅包含可读记录。' }}</span>
+        <details v-if="planCollectionDiagnostics.length" class="knowledge-error-details">
+          <summary>{{ isEnglish ? 'Problem locations' : '查看问题位置' }}</summary>
+          <ul><li v-for="(issue, index) in planCollectionDiagnostics" :key="index">
+            <code>{{ issue.code }}</code>
+            <span v-if="issue.planId"> · {{ isEnglish ? 'Plan' : '计划' }}: {{ issue.planId }}</span>
+            <code v-if="issue.file"> · {{ issue.file }}</code>
+            <code v-for="file in issue.files || []" :key="file"> · {{ file }}</code>
+          </li></ul>
+        </details>
       </v-alert>
       <v-alert v-if="roleId && showsPlanList && planPageError" type="warning" variant="tonal" class="ma-5">
         {{ t('目录尚未加载完整，已加载内容仍可使用。') }} <span data-no-i18n>{{ planPageError }}</span>
@@ -3948,7 +3988,7 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
           <v-btn v-if="!loadingMorePlans" size="small" variant="text" @click="hasMoreRenderedPlans ? loadMoreRenderedPlans() : retryPlanPages()">{{ t("加载更多") }}</v-btn>
         </div>
 
-        <div v-if="planListReady && !planError && !planPageError && !loading && !loadingMorePlans && !hasMorePlans && !visiblePlansForView.length" class="knowledge-empty">
+        <div v-if="planListReady && !planError && !planPageError && !loading && !loadingMorePlans && !hasMorePlans && !visiblePlansForView.length && !planCollectionPartial" class="knowledge-empty">
           <v-icon size="32">mdi-clipboard-text-off-outline</v-icon>
           <b>没有匹配的计划</b>
           <span>{{ planListHasFilters ? t("可以调整筛选条件，恢复其它计划。") : activeView === "archived" ? t("当前没有匹配的已归档计划。") : t("可以清空搜索，或等待 Agent 通过 Manager 写入计划。") }}</span>

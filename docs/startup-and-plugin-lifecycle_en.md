@@ -47,6 +47,14 @@ Do not register services after cancellation. Late resources still belong to the 
 
 Kernel `.switch()` retains its default completion semantics. Manager uses `initialization: "background"` for optional initialization. `settle(instanceId?)` joins existing work and `pendingRetirements()` reports actual resource owners. Initialization and cleanup run outside the global mutation queue; publication and rollback retain the original transaction.
 
+## Independent Web module initialization and retirement
+
+The Web shell explicitly submits catalog intent with `refreshWebPluginModules({ initialization: "background" })`; the default call still awaits its module work. Each module initializes or retires independently. A pending activation, rejection or slow cleanup does not hold unrelated modules or later catalog reads. Registered healthy pages remain navigable, while a target still missing its renderer shows its actual initialization state.
+
+Revocation immediately withdraws registrations and cancels initialization. Late registrations cannot reappear, while cleanup returned by the original activation must still finish. Replacing the same ID waits for its old owner to exit; unrelated IDs can continue. The Promise returned by `disposeWebPluginModules()` joins only the original owners captured by that call. Modules restored by a later catalog have their own owners. Failures retain local diagnostics and may retry on a later explicit refresh, without an automatic retry timer.
+
+Synchronous infinite loops in the same process are outside these asynchronous lifecycle isolation boundaries.
+
 ## Replacing the startup animation
 
 Startup follows the existing `desktop settings.webTheme` selection. A theme adds `value.startup` to its existing static `theme` contribution:

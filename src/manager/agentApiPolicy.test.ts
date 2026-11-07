@@ -152,7 +152,7 @@ test("authenticated ingress accepts public endpoints independently of the discov
 });
 
 test("ingress retains HTTP target parsing and credential transport checks", () => {
-  for (const target of ["http://localhost/meta", "//localhost/meta", "meta", "/meta#fragment", "/api/../meta", "/api/%2e%2e/meta", "/api/a%2fb", "/meta?query=%ff", "/meta?query=%00"])
+  for (const target of ["http://localhost/meta", "//localhost/meta", "meta", "/meta#fragment", "/api/../meta", "/api/%2e%2e/meta", "/meta?query=%ff", "/meta?query=%00"])
     assert.equal(validateAgentApiRequestTarget("GET", target).allowed, false, target);
   for (const key of ["token", "access_token", "Authorization", "api-key", "cookie", "password"])
     assert.deepEqual(validateAgentApiRequestTarget("GET", `/meta?${key}=fake`), { allowed: false, reason: "query_credentials" });
@@ -161,4 +161,9 @@ test("ingress retains HTTP target parsing and credential transport checks", () =
 test("valid repeated query fields are not rejected by an unrelated field-count quota",()=>{
  const query=Array.from({length:257},(_,i)=>"tag="+i).join("&");const result=validateAgentApiRequestTarget("GET","/api/agent/threads?"+query);assert.equal(result.allowed,true);
  assert.equal(validateAgentApiRequestTarget("GET","/api/agent/threads?token=secret").allowed,false);
+});
+
+test("ingress leaves decoded path separators and percent literals to the executable owner", () => {
+  for (const target of ["/api/extension/a%2Fb", "/api/extension/literal%252Fname", "/api/extension/%252e%252e"])
+    assert.equal(validateAgentApiRequestTarget("GET", target).allowed, true, target);
 });

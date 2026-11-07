@@ -1,6 +1,6 @@
 import { ref } from "vue";
 import type { WebPluginCatalogStatus } from "./pluginContributions";
-import { refreshWebPluginModules } from "./pluginModules";
+import { refreshWebPluginModules, webPluginModulesPending } from "./pluginModules";
 
 type Refresh = () => Promise<void>;
 type ReportFailure = (message: string, error: unknown) => void;
@@ -11,7 +11,7 @@ const initialRefreshSettled = ref(false);
 /** Reading a catalog and registering its module graph are distinct startup phases. */
 export function webPluginPageLoading(status: WebPluginCatalogStatus): boolean {
   return status === "idle" || status === "loading"
-    || (status === "ready" && (!initialRefreshSettled.value || pendingRefreshes.value > 0));
+    || (status === "ready" && (!initialRefreshSettled.value || pendingRefreshes.value > 0 || webPluginModulesPending()));
 }
 
 /**
@@ -19,7 +19,7 @@ export function webPluginPageLoading(status: WebPluginCatalogStatus): boolean {
  * rendering its recovery controls or other active Bundle pages.
  */
 export async function refreshWebPluginModulesSafely(
-  refresh: Refresh = refreshWebPluginModules,
+  refresh: Refresh = () => refreshWebPluginModules({ initialization: "background" }),
   reportFailure: ReportFailure = (message, error) => console.error(message, error)
 ): Promise<boolean> {
   pendingRefreshes.value++;

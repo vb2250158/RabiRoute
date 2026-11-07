@@ -1834,10 +1834,20 @@ function allPlanFiles(roleDir: string): string[] {
   ].sort();
 }
 
+export type PlanCatalogDiagnostic = {
+  code: "duplicate_plan_identity" | "unreadable_plan" | "invalid_plan_record" | "package_recovery_pending" | "package_recovery_unknown";
+  file?: string;
+  files?: string[];
+  planId?: string;
+  errorCode?: string;
+  message: string;
+};
+
 type PlanListCacheEntry = {
   signature: string;
   validUntil: number;
   plans: PlanItem[];
+  diagnostics?: PlanCatalogDiagnostic[];
 };
 
 function deepFreeze<T>(value: T): T {
@@ -1867,6 +1877,7 @@ type PlanFileCacheEntry = {
   ctimeMs?: number;
   ino?: number;
   plan: PlanItem | null;
+  diagnostic?: PlanCatalogDiagnostic;
 };
 
 function samePlanFileMetadata(entry: Pick<PlanFileCacheEntry, "size" | "mtimeMs" | "ctimeMs" | "ino">, stat: fs.Stats): boolean {
@@ -1960,7 +1971,7 @@ function readPlansWithFileCache(roleDir: string, files: string[]): { signature: 
     }
     signatureParts.push(planFileSignature(filePath,stat));
     let cachedFile = cachedFiles.get(filePath);
-    if (!cachedFile || !samePlanFileMetadata(cachedFile,stat)) {
+    if (!cachedFile || cachedFile.diagnostic || !samePlanFileMetadata(cachedFile,stat)) {
       const raw = readJson<Record<string, unknown>>(filePath);
       cachedFile = {
         size: stat.size,
@@ -1987,6 +1998,88 @@ function plansFromFileCache(roleDir: string): { signature: string; items: PlanIt
     signature: entries.map(([filePath, entry]) => planFileSignature(filePath,entry)).join("\u001e"),
     items: entries.flatMap(([, entry]) => entry.plan ? [entry.plan] : [])
   };
+}
+
+/** Diagnostics belong to the existing read projection, never to plan mutation truth. */
+export function readPlanCatalogDiagnostics(roleDir: string): PlanCatalogDiagnostic[] {
+  const diagnostics = [...(planListCache.get(planListCacheKey(roleDir))?.diagnostics ?? [])];
+  const recovery = publishedRolePlanPackageRecoverySnapshot(roleDir);
+  for (const conflict of recovery?.conflicts ?? []) diagnostics.push({
+    code: "package_recovery_pending", planId: conflict.planId,
+    file: path.relative(roleDir, conflict.transactionPath).replaceAll(path.sep, "/"),
+    message: "This plan package has an unresolved transaction; its original files are retained."
+  });
+  for (const conflict of recovery?.unknown ?? []) diagnostics.push({
+    code: "package_recovery_unknown", file: path.relative(roleDir, conflict.transactionPath).replaceAll(path.sep, "/"),
+    message: "A package recovery record has no verified plan identity; collection completeness is unknown."
+  });
+  return structuredClone(diagnostics);
+}
+
+/** Partial list evidence narrows cached routing candidates; it never publishes a complete catalog. */
+export function publishRolePlanCollectionDiagnostics(roleDir: string, diagnostics: readonly PlanCatalogDiagnostic[]): void {
+  const key = planListCacheKey(roleDir), cached = planListCache.get(key);
+  if (cached) planListCache.set(key, { ...cached, diagnostics: structuredClone([...diagnostics]) });
+}
+
+function planDiagnosticAffects(roleDir: string, diagnostic: PlanCatalogDiagnostic, planId: string): boolean {
+  if (diagnostic.planId === planId) return true;
+  const candidates = new Set(planCandidateFiles(roleDir, planId).map(file => path.resolve(file)));
+  return [diagnostic.file, ...(diagnostic.files ?? [])].some(file => file !== undefined && candidates.has(path.resolve(roleDir, file)));
+}
+
+function planCollectionProjection(roleDir: string, files: ReadonlyMap<string, PlanFileCacheEntry>): PlanListCacheEntry {
+  const groups = new Map<string, string[]>(), diagnostics: PlanCatalogDiagnostic[] = [];
+  for (const [file, entry] of files) {
+    if (entry.diagnostic) diagnostics.push(entry.diagnostic);
+    if (entry.plan) {
+      const members = groups.get(entry.plan.id) ?? [];
+      members.push(file); groups.set(entry.plan.id, members);
+    }
+  }
+  const duplicate = new Set<string>();
+  for (const [planId, members] of groups) if (members.length > 1) {
+    duplicate.add(planId);
+    diagnostics.push({ code: "duplicate_plan_identity", planId,
+      files: members.map(file => path.relative(roleDir, file).replaceAll(path.sep, "/")),
+      message: "The plan identity occurs in multiple physical files; none is selected." });
+  }
+  const plans = [...files.values()].flatMap(entry => entry.plan && !entry.diagnostic && !duplicate.has(entry.plan.id) ? [entry.plan] : []);
+  const signature = [...files].map(([file, entry]) => planFileSignature(file, entry)).join("\u001e") + JSON.stringify(diagnostics);
+  const previous = planListCache.get(planListCacheKey(roleDir));
+  return { signature, validUntil: Date.now() + PLAN_LIST_CACHE_TTL_MS,
+    plans: previous?.signature === signature ? previous.plans : immutablePlanCatalog(plans), diagnostics };
+}
+
+async function readPlanCollectionFile(roleDir: string, file: string, previous?: PlanFileCacheEntry, force = false): Promise<PlanFileCacheEntry | undefined> {
+  try {
+    const stat = await fs.promises.stat(file);
+    if (!force && previous && !previous.diagnostic && samePlanFileMetadata(previous, stat)) return previous;
+    const text = await fs.promises.readFile(file, "utf8"), after = await fs.promises.stat(file);
+    if (stat.size !== after.size || stat.mtimeMs !== after.mtimeMs || stat.ctimeMs !== after.ctimeMs || stat.ino !== after.ino) {
+      const refreshed = await readPlanFileForCatalog(file);
+      if (refreshed.missing) return undefined;
+      if (refreshed.entry?.plan) return refreshed.entry;
+      throw Object.assign(new Error("Plan file changed while reading its collection."), { code: "ESTALE" });
+    }
+    let plan: PlanItem | null = null;
+    try {
+      const raw = JSON.parse(text) as Record<string, unknown> | null;
+      plan = raw && typeof raw === "object" && !Array.isArray(raw) ? normalizePlan(raw) : null;
+    } catch (error) { if (!(error instanceof SyntaxError)) throw error; }
+    return { size: after.size, mtimeMs: after.mtimeMs, ctimeMs: after.ctimeMs, ino: after.ino, plan,
+      ...(!plan ? { diagnostic: { code: "invalid_plan_record" as const,
+        file: path.relative(roleDir, file).replaceAll(path.sep, "/"),
+        message: "This plan file cannot be projected; its original bytes are retained." } } : {}) };
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT") return undefined;
+    return { ...(previous ?? { size: -1, mtimeMs: 0, plan: null }), diagnostic: {
+      code: "unreadable_plan", file: path.relative(roleDir, file).replaceAll(path.sep, "/"),
+      ...(previous?.plan ? { planId: previous.plan.id } : {}),
+      ...(typeof code === "string" && /^E[A-Z0-9_]+$/.test(code) ? { errorCode: code } : {}),
+      message: "This plan file is unreadable or changed during projection; its current value is not assumed." } };
+  }
 }
 
 function uniquePlans(items: PlanItem[]): PlanItem[] {
@@ -2180,7 +2273,8 @@ function updatePlanListCacheAfterWrite(
     planListCache.set(cacheKey, {
       signature: JSON.stringify(plans.map((item) => [item.id, item.status, item.updatedAt])),
       validUntil: Date.now() + PLAN_LIST_CACHE_TTL_MS,
-      plans
+      plans,
+      ...(cachedCatalog.diagnostics?.length ? { diagnostics: cachedCatalog.diagnostics.filter(issue => !planDiagnosticAffects(roleDir, issue, plan.id)) } : {})
     });
     planListDirtyAt.delete(cacheKey);
     planListDirtyFiles.delete(cacheKey);
@@ -2202,7 +2296,9 @@ function updatePlanListCacheAfterWrite(
     clearPlanListCache(roleDir);
     return;
   }
-  planListCache.set(cacheKey, {
+  // Updating the derived cache after a successful target write cannot turn an
+  // unrelated read-projection conflict into a post-durable mutation failure.
+  planListCache.set(cacheKey, cachedCatalog.diagnostics?.length ? planCollectionProjection(roleDir, cachedFiles) : {
     signature: refreshed.signature,
     validUntil: Date.now() + PLAN_LIST_CACHE_TTL_MS,
     plans: immutablePlanCatalog(uniquePlans(refreshed.items))
@@ -2323,13 +2419,15 @@ export function publishedRolePlanPackageRecoverySnapshot(roleDir: string): PlanP
   return publishedPlanPackageRecovery.get(planListCacheKey(roleDir));
 }
 
-function readablePlanCatalog(roleDir: string, plans: PlanItem[]): PlanItem[] {
+function readablePlanCatalog(roleDir: string, plans: PlanItem[], collection = false): PlanItem[] {
+  const diagnostics = planListCache.get(planListCacheKey(roleDir))?.diagnostics;
+  const readable = diagnostics?.length ? plans.filter(plan => !diagnostics.some(issue => planDiagnosticAffects(roleDir, issue, plan.id))) : plans;
   const recovery = publishedRolePlanPackageRecoverySnapshot(roleDir);
-  if (!recovery) return plans;
-  if (recovery.unknown.length) assertPlanStoragePackageRecoverySnapshot({ conflicts: [], unknown: recovery.unknown });
-  if (!recovery.conflicts.length) return plans;
+  if (!recovery) return readable;
+  if (!collection && recovery.unknown.length) assertPlanStoragePackageRecoverySnapshot({ conflicts: [], unknown: recovery.unknown });
+  if (!recovery.conflicts.length) return readable;
   const blocked = new Set(recovery.conflicts.map(item => item.planId));
-  return Object.freeze(plans.filter(plan => !blocked.has(plan.id))) as PlanItem[];
+  return Object.freeze(readable.filter(plan => !blocked.has(plan.id))) as PlanItem[];
 }
 
 export function listPlans(roleDir: string): PlanItem[] {
@@ -2379,75 +2477,28 @@ function isPlanCheckpointEntry(value: unknown): value is PlanFileCacheEntry {
 }
 
 const planPageReconcileTimings = new Map<string, Record<string, number>>();
-async function reconcilePlanPageFiles(roleDir: string, forceReadPaths: ReadonlySet<string> = new Set(), restoreCheckpoint = false): Promise<void> {
-  const started = performance.now();
-  let normalizeMs = 0;
-  const key = planListCacheKey(roleDir);
+async function reconcilePlanPageFiles(roleDir: string, forceReadPaths: ReadonlySet<string> = new Set(), restoreCheckpoint = false, forceAll = false): Promise<void> {
+  const started = performance.now(), key = planListCacheKey(roleDir);
+  // Enumerating the namespace is an operation-wide failure, distinct from one unreadable row.
   const files = (await allPlanFilesAsync(roleDir)).map(file => path.resolve(file)).sort();
   const previousFiles = planFileCache.get(key)
     ?? (restoreCheckpoint ? await loadPlanPageCheckpoint(roleDir, isPlanCheckpointEntry) : undefined);
   const nextFiles = new Map<string, PlanFileCacheEntry>();
-  const signatures: string[] = new Array(files.length);
-  const plans: Array<PlanItem | null> = new Array(files.length);
   let cursor = 0;
-  // Bounded concurrency inside the already isolated read worker, not one
-  // Promise per plan. Avoids the old existsSync + statSync double round trip.
   await Promise.all(Array.from({ length: Math.min(16, files.length) }, async () => {
     while (cursor < files.length) {
-      const index = cursor++;
-      const file = files[index]!;
-      let stat: fs.Stats;
-      try {
-        // Use the same bounded I/O concurrency for cold and warm scans.
-        // Synchronous cold reads serialize all sixteen hydration loops.
-        stat = await fs.promises.stat(file);
-      }
-      catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-        signatures[index] = `${file}\u001fmissing`; plans[index] = null; continue;
-      }
-      let entry = previousFiles?.get(file);
-      if (!entry || forceReadPaths.has(file) || !samePlanFileMetadata(entry,stat)) {
-        try {
-          // Keep body reads within the bounded hydration loops and verify the
-          // metadata after reading; concurrent replacements still take the
-          // existing retry path rather than publishing an unverified document.
-          const text = await fs.promises.readFile(file,"utf8");
-          const after = await fs.promises.stat(file);
-          if (stat.size === after.size && stat.mtimeMs === after.mtimeMs && stat.ctimeMs === after.ctimeMs && stat.ino === after.ino) {
-            const normalizeStart = performance.now();
-            const raw = JSON.parse(text) as Record<string,unknown> | null;
-            entry = { size:after.size,mtimeMs:after.mtimeMs,ctimeMs:after.ctimeMs,ino:after.ino,plan:raw ? normalizePlan(raw) : null };
-            normalizeMs += performance.now() - normalizeStart;
-          } else {
-            const result = await readPlanFileForCatalog(file);
-            if (result.retry) throw new Error("PLAN_CATALOG_REFRESH_UNAVAILABLE");
-            entry = result.entry;
-          }
-        } catch (error) {
-          if ((error as NodeJS.ErrnoException).code === "ENOENT") entry = undefined;
-          else if (error instanceof SyntaxError) {
-            const result = await readPlanFileForCatalog(file);
-            if (result.retry) throw new Error("PLAN_CATALOG_REFRESH_UNAVAILABLE");
-            entry = result.entry;
-          } else throw error;
-        }
-      }
-      if (!entry) { signatures[index] = `${file}\u001fmissing`; plans[index] = null; continue; }
-      nextFiles.set(file,entry);
-      signatures[index] = planFileSignature(file,entry);
-      plans[index] = entry.plan;
-      if (!previousFiles && index % 64 === 63) await new Promise<void>(resolve => setImmediate(resolve));
+      const file = files[cursor++]!;
+      const entry = await readPlanCollectionFile(roleDir, file, previousFiles?.get(file), forceAll || forceReadPaths.has(file));
+      if (entry) nextFiles.set(file, entry);
     }
   }));
-  const scanMs = performance.now()-started;
-  const signature = signatures.join("\u001e");
-  const previous = planListCache.get(key);
-  const catalog = previous?.signature === signature ? previous.plans : immutablePlanCatalog(uniquePlans(plans.filter((plan): plan is PlanItem => Boolean(plan))));
-  planFileCache.set(key,nextFiles);
-  planListCache.set(key,{ signature,validUntil:Date.now()+PLAN_LIST_CACHE_TTL_MS,plans:catalog });
-  planPageReconcileTimings.set(key,{scanMs,normalizeMs,freezeMs:performance.now()-started-scanMs});
+  // Hydration completion order is not catalog order.
+  const ordered = new Map(files.flatMap(file => nextFiles.has(file) ? [[file, nextFiles.get(file)!] as const] : []));
+  const catalog = planCollectionProjection(roleDir, ordered);
+  planFileCache.set(key, ordered); planListCache.set(key, catalog);
+  planPageReconcileTimings.set(key, { scanMs: performance.now() - started });
 }
+
 
 const planPageWorkerRoles = new Set<string>();
 const planPageWorkerState = new Map<string, { epoch: string; revision: number; checkedAt: number }>();
@@ -2464,7 +2515,6 @@ export function planPageReadDiagnostics(roleDir: string): { reasons: string[]; r
 /** Resident read-worker only. Managed commit fences are consumed before reply. */
 export async function readPlanPageCatalogInWorker(roleDir: string, fence: PlanReadFence, authoritative = false, attempt = 0): Promise<PlanItem[]> {
   publishRolePlanPackageRecoverySnapshot(roleDir, await capturePlanStoragePackageRecoveryConflictsAsync(roleDir));
-  readablePlanCatalog(roleDir, []);
   const key = planListCacheKey(roleDir);
   planPageWorkerRoles.add(key);
   const watchBacked = ensurePlanListWatchers(roleDir);
@@ -2478,6 +2528,7 @@ export async function readPlanPageCatalogInWorker(roleDir: string, fence: PlanRe
     previous && previous.epoch !== fence.epoch && "epoch-changed",
     previous && previous.revision > fence.revision && "older-fence",
     previous && previous.revision < fence.fullRevision && "fence-gap",
+    cached?.diagnostics?.some(issue => issue.code === "unreadable_plan") && "row-unreadable",
     planListDirtyFiles.get(key) === null && "unknown-watch-change"
   ].filter((reason): reason is string => typeof reason === "string");
   planPageReadReasons.set(key,reasons);
@@ -2488,11 +2539,8 @@ export async function readPlanPageCatalogInWorker(roleDir: string, fence: PlanRe
       // Explicit refresh, strong invalidation or a fence gap rehydrates bodies.
       // Silent external changes without a watcher notification require explicit
       // refresh or restart, matching the watcher-backed incremental contract.
-      if (authoritative || planPageStrongInvalidations.has(key)
-        || (previous && (previous.epoch !== fence.epoch || previous.revision < fence.fullRevision))) {
-        planFileCache.delete(key);
-        planListCache.delete(key);
-      }
+      const forceAll = authoritative || planPageStrongInvalidations.has(key)
+        || Boolean(previous && (previous.epoch !== fence.epoch || previous.revision < fence.fullRevision));
       const forceReadPaths = new Set(planListDirtyFiles.get(key) ?? []);
       for (const change of fence.changes) if (change.revision > (previous?.revision ?? -1)) {
         for (const file of planCandidateFiles(roleDir, change.planId)) forceReadPaths.add(path.resolve(file));
@@ -2501,14 +2549,15 @@ export async function readPlanPageCatalogInWorker(roleDir: string, fence: PlanRe
       planPageStrongInvalidations.delete(key);
       planListDirtyFiles.delete(key);
       planListDirtyAt.delete(key);
-      await reconcilePlanPageFiles(roleDir, forceReadPaths, restoreCheckpoint);
+      await reconcilePlanPageFiles(roleDir, forceReadPaths, restoreCheckpoint, forceAll);
     } else {
       const dirty = new Set(planListDirtyFiles.get(key) ?? []);
       for (const change of fence.changes) if (change.revision > (previous?.revision ?? -1)) {
         for (const file of planCandidateFiles(roleDir, change.planId)) dirty.add(path.resolve(file));
       }
       if (dirty.size) {
-        const files = planFileCache.get(key);
+        const previousFiles = planFileCache.get(key);
+        const files = previousFiles ? new Map(previousFiles) : undefined;
         if (!files) return await readPlanPageCatalogInWorker(roleDir, fence, true);
         // Clear only the batch being read; callbacks arriving during async reads
         // remain queued for the subsequent request rather than being discarded.
@@ -2518,14 +2567,11 @@ export async function readPlanPageCatalogInWorker(roleDir: string, fence: PlanRe
           if (path.basename(filePath) !== "plan.json" && !files.has(filePath)) {
             return await readPlanPageCatalogInWorker(roleDir, fence, true);
           }
-          const result = await readChangedPlanFile(filePath);
-          if (result.retry) throw new Error("PLAN_CATALOG_REFRESH_UNAVAILABLE");
-          if (result.missing) files.delete(filePath);
-          else if (result.entry) files.set(filePath, result.entry);
+          const entry = await readPlanCollectionFile(roleDir, filePath, files.get(filePath), true);
+          if (entry) files.set(filePath, entry); else files.delete(filePath);
         }
-        const refreshed = plansFromFileCache(roleDir);
-        if (!refreshed) throw new Error("PLAN_CATALOG_REFRESH_UNAVAILABLE");
-        planListCache.set(key, { signature: refreshed.signature, validUntil: Date.now() + PLAN_LIST_CACHE_TTL_MS, plans: immutablePlanCatalog(uniquePlans(refreshed.items)) });
+        const catalog = planCollectionProjection(roleDir, files);
+        planFileCache.set(key, files); planListCache.set(key, catalog);
       }
     }
     planPageWorkerState.set(key, { epoch: fence.epoch, revision: fence.revision, checkedAt: full ? Date.now() : previous!.checkedAt });
@@ -2534,7 +2580,7 @@ export async function readPlanPageCatalogInWorker(roleDir: string, fence: PlanRe
       if (attempt >= 2) throw new Error("PLAN_CATALOG_REFRESH_UNAVAILABLE");
       return await readPlanPageCatalogInWorker(roleDir, fence, false, attempt + 1);
     }
-    if (!previous) {
+    if (!previous && !readPlanCatalogDiagnostics(roleDir).length) {
       // Cold preparation owns checkpoint publication. Hot requests never rewrite
       // the entire projection; restart always reconciles source metadata.
       try { await savePlanPageCheckpoint(roleDir, planFileCache.get(key)!); }
@@ -2544,10 +2590,12 @@ export async function readPlanPageCatalogInWorker(roleDir: string, fence: PlanRe
         return await readPlanPageCatalogInWorker(roleDir, fence, false, attempt + 1);
       }
     }
-    return readablePlanCatalog(roleDir, planListCache.get(key)!.plans);
+    return readablePlanCatalog(roleDir, planListCache.get(key)!.plans, true);
   } catch (error) {
     planPageWorkerState.delete(key);
-    clearPlanListCache(roleDir);
+    // A whole query failure keeps the last published view but invalidates hint completeness.
+    if (!cached) clearPlanListCache(roleDir);
+    markPlanListCacheDirty(roleDir);
     throw error;
   }
 }
@@ -2630,8 +2678,8 @@ export function getPlan(roleDir: string, planId: string): PlanItem | null {
   const dirtyFiles = planListDirtyFiles.get(cacheKey);
   if (cached && dirtyFiles !== null) {
     const candidateFiles = planCandidateFiles(roleDir, canonicalPlanId).map((filePath) => path.resolve(filePath));
-    const targetIsDirty = dirtyFiles instanceof Set
-      && candidateFiles.some((filePath) => dirtyFiles.has(filePath));
+    const targetIsDirty = (dirtyFiles instanceof Set && candidateFiles.some((filePath) => dirtyFiles.has(filePath)))
+      || cached.diagnostics?.some(issue => planDiagnosticAffects(roleDir, issue, canonicalPlanId));
     if (!targetIsDirty) {
       const cachedPlan = cached.plans.find((plan) => plan.id === canonicalPlanId);
       if (cachedPlan) return cachedPlan;
@@ -2675,7 +2723,7 @@ export function readPlanPointCandidateHint(roleDir: string, planId: string, fenc
   const key = planListCacheKey(roleDir), state = planPageWorkerState.get(key);
   const catalog = planListCache.get(key), files = planFileCache.get(key);
   if (!state || state.epoch !== fence.epoch || state.revision !== fence.revision
-    || state.revision < fence.fullRevision || !catalog || !files
+    || state.revision < fence.fullRevision || !catalog || !files || readPlanCatalogDiagnostics(roleDir).length > 0
     || !planListWatchers.get(key)?.has(plansDir(roleDir))
     || planListDirtyFiles.has(key) || planListDirtyAt.has(key) || planPageStrongInvalidations.has(key)) return undefined;
   let snapshot = planPointCandidates.get(catalog.plans);
@@ -3358,7 +3406,8 @@ export function publishCommittedRolePlan(roleDir: string, rawPlan: unknown): Rea
   planListCache.set(cacheKey, {
     signature: JSON.stringify(plans.map(item => [item.id, item.status, item.updatedAt])),
     validUntil: Date.now() + PLAN_LIST_CACHE_TTL_MS,
-    plans
+    plans,
+    ...(cached.diagnostics?.length ? { diagnostics: cached.diagnostics.filter(issue => !planDiagnosticAffects(roleDir, issue, plan.id)) } : {})
   });
   // The child commit does not publish parent-process file stat metadata.
   planFileCache.delete(cacheKey);
@@ -3510,7 +3559,9 @@ export function getPublishedPlan(roleDir: string, planId: string): PlanItem | un
   }
   const recovery = publishedRolePlanPackageRecoverySnapshot(roleDir);
   if (recovery) assertPlanStoragePackageRecoverySnapshot(recovery, canonicalPlanId);
-  return planListCache.get(planListCacheKey(roleDir))?.plans.find((plan) => plan.id === canonicalPlanId);
+  const cached = planListCache.get(planListCacheKey(roleDir));
+  if (cached?.diagnostics?.some(issue => planDiagnosticAffects(roleDir, issue, canonicalPlanId))) return undefined;
+  return cached?.plans.find((plan) => plan.id === canonicalPlanId);
 }
 
 /** Memory-only plan catalog lookup; undefined means the cache is not published. */

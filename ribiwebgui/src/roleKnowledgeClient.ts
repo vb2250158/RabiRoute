@@ -25,7 +25,18 @@ export type RolePlanPageCounts = {
   };
 };
 
+export type RolePlanCatalogDiagnostic = {
+  code: string;
+  message: string;
+  file?: string;
+  files?: string[];
+  planId?: string;
+  errorCode?: string;
+};
+
 export type RolePlanPage = {
+  partial?: true;
+  diagnostics?: RolePlanCatalogDiagnostic[];
   items: RolePlan[];
   total: number;
   nextCursor: string;

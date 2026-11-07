@@ -16,13 +16,23 @@ Ordinary plan details can borrow an already ready, idle catalog for the same rol
 
 Unavailable, busy or invalidated indexes use the original asynchronous read without starting a catalog, waiting for page work, introducing errors or adding a timer. Slow target I/O does not occupy page execution. Original ID, archive, duplicate-target and error semantics remain; the cache contains neither plan bodies nor per-ID empty results. Unreported external changes retain the existing authoritative-refresh or restart reconciliation path.
 
+## Partially readable plan collections
+
+Paged and legacy plan lists report problems per physical record. An unreadable or invalid file does not hide healthy records. When multiple physical files declare the same plan ID, the entire duplicate group is excluded; no member is selected as the valid plan.
+
+`partial: true` and `diagnostics` identify an incomplete collection. Paged responses use `data.partial` / `data.diagnostics`. Legacy responses keep the `data` array and place these fields beside `code` / `data`. Diagnostics include a problem code and verified relative file location or plan ID when available. Totals, facets and cursors describe only the records available in that projection.
+
+Original files and identities are retained. Target reads, writes, leases, receipts and complete snapshots keep their original strict contracts. An incomplete collection supplies neither positive nor negative point-read proof; the original file lookup rechecks the target. Healthy neighboring plans remain writable, and unrelated duplicates cannot change a successful write's result during derived-cache maintenance.
+
+Namespace enumeration and other whole-query failures still return their original error. Failure before publication keeps the prior valid projection instead of returning an invented empty list. This adds no transactional cache rollback: existing watch retries that detect continued changes after a newer view was published retain the last published view and mark it for reconciliation.
+
 ## External changes and failures
 
 - Exact file events and plans named by managed invalidations are reread before replying. Dirtiness arriving during a read is consumed again. Repeated changes beyond the bounded retry budget fail explicitly instead of returning a known-stale snapshot.
 - With a working watch, hot requests consume file events and managed invalidation revisions without a five-second full scan. Cold starts, watch failures, unknown directory changes, and explicit refresh still reconcile sources, enumerating only active/archive buckets with at most 16 concurrent metadata operations.
 - Metadata fingerprints compare size, mtime, ctime, and inode. Ordinary events without a filename trigger complete metadata verification, not unconditional body invalidation. Changed fingerprints rehydrate the affected bodies; missing or zero-valued identity fields are not trusted. Watch errors, explicit overflow errors, directory replacements, revision gaps, and explicit `authoritative` reads still force content reconstruction. Cold reads use at most 16 asynchronous hydration loops in the isolated process, retaining before/after metadata verification.
 - Unchanged bodies are not reread. An unchanged signature retains the catalog and presentation. These fingerprint fields are not an absolute guarantee on every filesystem.
-- Unavailable watches use conservative scans. Read errors fail closed, and a later request may rebuild; failures are not represented as successful empty results.
+- Unavailable watches use conservative scans. Row failures produce the explicit partial results above; namespace enumeration and other whole-query failures remain errors, and a later request may rebuild.
 - Arbitrary external writes are not linearizable. External changes not reported by the watch require explicit authoritative refresh or restart reconciliation; this does not extend managed-write visibility windows. Local reconciliation tests detect same-size replacements with restored mtime through ctime/inode; this is not a guarantee for every filesystem.
 - There is no background polling. With a working watch, elapsed time alone does not trigger a full scan.
 

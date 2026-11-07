@@ -197,9 +197,9 @@ function safeSegment(raw: string): string | undefined {
   try {
     const decoded = decodeURIComponent(raw);
     encodeURIComponent(decoded); // Reject unpaired UTF-16 without restricting valid Unicode IDs.
-    // HTTP resource identifiers are not filenames. Path traversal and ambiguous
-    // separators remain ingress errors; individual handlers own filename schemas.
-    if (decoded === "." || decoded === ".." || /[\/\\\x00-\x1f\x7f]/.test(decoded) || /%[0-9a-f]{2}/i.test(decoded)) return undefined;
+    // Validate transport syntax once. Decoded separators and percent literals
+    // belong to the selected operation and its resource owner.
+    if (decoded === "." || decoded === ".." || /[\\\x00-\x1f\x7f]/.test(decoded)) return undefined;
     return decoded;
   } catch { return undefined; }
 }

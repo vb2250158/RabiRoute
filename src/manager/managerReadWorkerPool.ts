@@ -14,6 +14,7 @@ import type {
 import {
   publishRoleKnowledgeCatalogSnapshotAsync,
   publishRolePlanPackageRecoverySnapshot,
+  publishRolePlanCollectionDiagnostics,
   publishRolePlanCatalogAsync,
   type PlanItem,
   type RoleKnowledgeCatalogSnapshot,
@@ -78,6 +79,8 @@ export type ManagerReadWorkerPoolStatus = {
 
 export type RolePlanCatalogRead = {
   plans: PlanItem[];
+  partial?: true;
+  diagnostics?: import("../roleKnowledge.js").PlanCatalogDiagnostic[];
   planRecovery?: import("../planStoragePackageFence.js").PlanPackageRecoverySnapshot;
   approvalByPlanId: Record<string, { count: number; latest?: unknown }>;
 };
@@ -431,16 +434,22 @@ export class ManagerReadWorkerPool {
     options: { signal?: AbortSignal; timeoutMs?: number } = {}
   ): Promise<RolePlanCatalogRead> {
     const fence = planReadFence(roleDir);
-    return this.run<RolePlanCatalogRead>({ type: "role_plan_catalog", roleDir }, options)
+    return this.run<RolePlanCatalogRead>({ type: "role_plan_catalog", roleDir, fence }, options)
       .then(async result => {
         const assertCurrent = () => {
           options.signal?.throwIfAborted();
           const current = planReadFence(roleDir);
           if (current.epoch !== fence.epoch || current.revision !== fence.revision) throw new Error("PLAN_CATALOG_DIRTY");
         };
+        assertCurrent();
+        // A collection subset is not a complete formal catalog publication.
+        if (result.planRecovery) publishRolePlanPackageRecoverySnapshot(roleDir, result.planRecovery);
+        if (result.partial) {
+          publishRolePlanCollectionDiagnostics(roleDir, result.diagnostics ?? []);
+          return result;
+        }
         const plans = [...await publishRolePlanCatalogAsync(roleDir, result.plans, assertCurrent)];
         assertCurrent();
-        if (result.planRecovery) publishRolePlanPackageRecoverySnapshot(roleDir, result.planRecovery);
         return { ...result, plans };
       });
   }

@@ -18,6 +18,8 @@ export type RolePlanPageCounts = {
 
 export type RolePlanPage<T> = {
   items: T[];
+  partial?: true;
+  diagnostics?: import("./roleKnowledge.js").PlanCatalogDiagnostic[];
   total: number;
   nextCursor: string;
   counts: RolePlanPageCounts;

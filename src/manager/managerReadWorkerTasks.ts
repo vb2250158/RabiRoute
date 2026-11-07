@@ -1,3 +1,4 @@
+import { planReadFence } from "../planReadInvalidation.js";
 
 import { buildRoleSkillArchive, RoleSkillArchiveError } from "../plugins/io.rabiroute.manager.persona/src/manager/roleSkillArchive.js";
 import type { KnowledgeInventory } from "./knowledgeSearchStorage.js";
@@ -20,7 +21,7 @@ import {
   listConsolidationRuns,
   listPlanHistory,
   listRoleSkills,
-  readPlansFromStorageInWorker,
+  readPlanCatalogDiagnostics,
   readPlanPageCatalogInWorker,
   readRoleKnowledgeCatalogSnapshot,
   roleKnowledgeFileCountsInWorker,
@@ -105,6 +106,7 @@ export type ManagerReadWorkerTask =
   | {
       type: "role_plan_catalog";
       roleDir: string;
+      fence?: import("../planReadInvalidation.js").PlanReadFence;
     }
   | {
       type: "role_plan_workflow";
@@ -328,9 +330,11 @@ export async function execute(task: Exclude<ManagerReadWorkerTask, { type: "mess
     case "role_knowledge_catalog_snapshot":
       return readRoleKnowledgeCatalogSnapshot(task.roleDir) satisfies RoleKnowledgeCatalogSnapshot;
     case "role_plan_catalog": {
-      const plans = readPlansFromStorageInWorker(task.roleDir);
+      const plans = await readPlanPageCatalogInWorker(task.roleDir, task.fence ?? planReadFence(task.roleDir));
+      const diagnostics = readPlanCatalogDiagnostics(task.roleDir);
       return {
         plans,
+        ...(diagnostics.length ? { partial: true as const, diagnostics } : {}),
         planRecovery: publishedRolePlanPackageRecoverySnapshot(task.roleDir),
         approvalByPlanId: Object.fromEntries(
           plans.map(plan => [plan.id, planFeedbackSummary(task.roleDir, plan.id)])
@@ -365,6 +369,7 @@ export async function execute(task: Exclude<ManagerReadWorkerTask, { type: "mess
       );
       return {
         ...page,
+        ...(readPlanCatalogDiagnostics(task.roleDir).length ? { partial: true as const, diagnostics: readPlanCatalogDiagnostics(task.roleDir) } : {}),
         planRecovery: publishedRolePlanPackageRecoverySnapshot(task.roleDir),
         // The overview asks for summary rows. Do not touch every plan's feedback
         // directory before returning one eight-row page.

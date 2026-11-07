@@ -47,6 +47,14 @@ export async function activate(context) {
 
 Kernel 的 `.switch()` 默认仍等待该次初始化。Manager 对非必要初始化使用 `initialization: "background"`；`settle(instanceId?)` 等待原有工作，`pendingRetirements()` 投影实际资源拥有者。初始化和清理不占全局 mutation 队列，发布与回滚仍走原事务。
 
+## Web 模块的独立初始化与退出
+
+Web 壳层显式使用 `refreshWebPluginModules({ initialization: "background" })` 提交目录意图；默认调用仍等待本次模块工作。每个模块独立初始化或退出，一个模块的异步挂起、拒绝或慢清理不会占住其他模块与后续目录读取。已经注册的健康页面照常导航；尚缺 renderer 的目标按真实待初始化状态显示加载。
+
+撤销模块时立即撤回原注册并取消初始化，迟到的注册不会重新出现；原 activation 返回的真实清理仍必须完成。同 ID 的替换等待旧 owner 退出，无关 ID 可以继续。`disposeWebPluginModules()` 返回的 Promise 只等待调用时捕获的原 owner，后续新目录恢复的模块由自己的 owner 管理。失败保留对应诊断，后续明确刷新可重试，不增加自动重试计时器。
+
+同进程中的同步死循环不在这些异步生命周期边界的隔离范围内。
+
 ## 主题插件替换启动动画
 
 启动窗口跟随现有 `desktop settings.webTheme`，不另建启动主题开关。主题包在原静态 `theme` contribution 的 `value.startup` 声明外观。示例：

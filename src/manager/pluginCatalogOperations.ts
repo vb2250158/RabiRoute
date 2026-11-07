@@ -16,6 +16,9 @@ const status = { type: "object", required: ["schemaVersion", "state", "readiness
 const catalog = { type: "object", required: ["schemaVersion", "generation", "host", "revision", "plugins", "contributions"], properties: {
   schemaVersion: { const: 2 }, generation: text, host: { enum: ["all", "web", "desktop"] },
   revision: { type: "object", required: ["plugins", "contributions"], properties: { plugins: integer, contributions: integer } },
+  partial: { type: "boolean" }, diagnostics: { type: "array", items: { type: "object", required: ["code", "instanceId", "pluginId", "kind", "id", "message"], properties: {
+    code: { const: "PLUGIN_CONTRIBUTION_PRESENTATION_FAILED" }, instanceId: text, pluginId: text, kind: text, id: text, message: text
+  } } },
   plugins: { type: "array", items: { type: "object", required: ["instanceId", "pluginId", "manifest", "host", "scope", "status", "missingCapabilities"], properties: {
     instanceId: text, pluginId: text, manifest: { type: "object", required: ["id", "version", "kind", "hosts", "capabilities"], properties: {
       id: text, version: text, kind: { const: "package" }, hosts: strings, capabilities: strings

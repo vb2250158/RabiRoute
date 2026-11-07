@@ -2,7 +2,7 @@
 
 # 插件目录 API 合同
 
-本分片提供五个可执行操作和原生功能 owner。共享源码现已删除 controller 旧直接分支并从 core 注册这些操作，原队列也已传递 invocation；接线与完整构建仍待统一冻结验收。内核 `beforePublish` 已接入专属 fixture 并通过真实候选等待期间撤权回归。本页不声称安装版已更新或全局覆盖已完成。
+这组合同提供插件目录、协调状态与 Web 模块的五个可执行操作。core 通过原注册批次调用相应 owner；协调保留原 invocation、队列与内核发布事务。安装版状态按对应发布验收记录核对。
 
 | Operation ID | 方法与路径 |
 | --- | --- |
@@ -17,6 +17,14 @@
 已鉴权、没有 Agent/人格绑定的连接可调用这些公共操作。read-only 模式拒绝协调写入。协调等待原生产者的队列、发布和清理完成；成功响应中的 readiness、active/waiting/failed 与 diagnostics 来自实际当前 generation，未变化时不宣称新发布。接口未增加幂等键或自动重放保证。
 
 请求在消费正文前捕获原连接 lease、application/Manager 身份、source root 和 owner 引用，异步完成及披露前复核。协调已交给原 owner 后发生撤权、换代、取消或来源变化时，可信 `mutationOutcome=unknown` 保留，业务数据不披露。超时/断连不会提前释放尚未完成的 producer 租约。
+
+## 目录局部错误与刷新
+
+目录表现按单个 contribution 生成 JSON。某项 getter、循环引用或序列化失败时，响应保留健康贡献，并在 `data.partial: true` / `data.diagnostics` 标明 `PLUGIN_CONTRIBUTION_PRESENTATION_FAILED` 及原实例、插件、kind 和 ID。Web 解析器也逐行隔离无效插件记录，使用 `PLUGIN_CATALOG_ITEM_INVALID` 与行索引定位；整个响应结构不可信时仍按刷新失败处理。
+
+Web 刷新临时失败时继续显示最近有效目录，并单独记录刷新错误。实际 HTTP 401/403 会清除当前目录、立即撤回原模块注册并取消其初始化；迟到工作和释放仍由原模块等待完成。之后明确发起的新目录读取可恢复健康模块，无须等待无关旧模块退出。模块初始化与真实退出边界见[启动与插件生命周期](startup-and-plugin-lifecycle.md#web-模块的独立初始化与退出)。
+
+模块 URL 继续按其原合同解码一次：本组 `pathTails` 在共享参数解析器中解码，资源注册器不再次解码。声明为 `pathRemainder` 的原始资源尾则原样交给对应资源 owner，由该 owner 完成一次解码；不在公共分发层提前解码这类尾路径。
 
 ## 总接线要求
 
@@ -33,6 +41,6 @@
 
 专属测试使用临时插件包/Profile、原 `loadPluginProfile` / `GenerationRuntime` / `WebPluginModuleRegistry`、实际注册快照和 loopback HTTP；覆盖空绑定远端成功、禁用 Profile、readiness/失败候选、原生字节与缓存、撤权/来源更换、候选等待期间撤权及发布后未知结果。真实子进程 stdout 在断连/期限到达后被结束，并在进程 close 与 owner 清理完成前保持请求租约。共享完整构建、最终 controller 路由与安装版由统一验收执行。未操作生产插件、下载安装、真实平台消息或真实 Agent 投递。
 
-远端既有入口会拒绝单段中的编码斜杠；本分片保留该行为，成功远端模块测试采用普通多段 URL。WebGUI 原生入口另测完整编码尾路径。统一 parser 对非法尾路径返回 400；普通缺失文件和不合法 revision 保留 404。
+客户端按操作合同生成多段模块尾路径，保留原入口的编码语义。共享参数解析器对非法编码或非法 `pathTails` 返回 400；普通缺失文件和不合法 revision 保留 404。原始资源 `pathRemainder` 的错误仍由对应资源 owner 处理。
 
 本分片验证：`node --test-concurrency=1 --import ./scripts/test-manager-runtime-env.mjs --import tsx --test src/manager/pluginCatalogOperations.test.ts src/manager/pluginCatalogRoutes.test.ts src/manager/webPluginModules.test.ts`，24 项通过。六个本分片 TS 文件的独立 `tsc --noEmit --strict --target ES2022 --module NodeNext --moduleResolution NodeNext --skipLibCheck --esModuleInterop` 检查通过；该检查不包含共享 controller。

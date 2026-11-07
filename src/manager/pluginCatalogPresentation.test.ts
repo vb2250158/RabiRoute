@@ -35,3 +35,45 @@ test("desktop projection does not receive Web-only renderer contributions", () =
   const result = renderPluginCatalog(fixture(), "desktop");
   assert.deepEqual(result.contributions.map(value => value.id), ["example", "example.desktop"]);
 });
+
+
+test("one broken contribution leaves healthy neighbors and the plugin lifecycle intact", () => {
+  const original = fixture();
+  const broken = { hosts: ["web"], get label(): string { throw new Error("private error detail"); } };
+  const generation: PluginCatalogInput = { ...original, contributions: { ...original.contributions, contributions: [
+    original.contributions.contributions[0]!,
+    { instanceId: "agent:example", kind: "page", id: "broken", value: broken },
+    ...original.contributions.contributions.slice(1)
+  ] } };
+  const result = renderPluginCatalog(generation, "web");
+  assert.deepEqual(result.contributions.map(value => value.id), ["example", "example.web"]);
+  assert.equal(result.partial, true);
+  assert.deepEqual(result.diagnostics?.map(item => [item.code, item.instanceId, item.id]),
+    [["PLUGIN_CONTRIBUTION_PRESENTATION_FAILED", "agent:example", "broken"]]);
+  assert.equal(result.plugins[0]?.status, "active");
+  assert.equal(result.generation, generation.id);
+  assert.deepEqual(result.revision, { plugins: 2, contributions: 2 });
+  assert(!JSON.stringify(result).includes("private error detail"));
+});
+
+test("hosts, nested JSON failures and late getters stay local to their contribution", () => {
+  const generation = fixture();
+  const cycle: { self?: unknown } = {}; cycle.self = cycle;
+  const failures: unknown[] = [
+    { get hosts(): never { throw new Error("hosts failed"); } },
+    { hosts: ["web"], nested: cycle },
+    { hosts: ["web"], nested: 1n },
+    { hosts: ["web"], toJSON(): never { throw new Error("JSON failed"); } }
+  ];
+  const brokenGeneration: PluginCatalogInput = { ...generation, contributions: { ...generation.contributions, contributions: [
+    ...generation.contributions.contributions,
+    ...failures.map((value, index) => ({ instanceId: "agent:example", kind: "page", id: `broken-${index}`, value }))
+  ] } };
+  const result = renderPluginCatalog(brokenGeneration, "web");
+  assert.equal(result.diagnostics?.length, failures.length);
+  assert.deepEqual(result.contributions.map(value => value.id), ["example", "example.web"]);
+  assert.doesNotThrow(() => JSON.stringify(result));
+  const restored = renderPluginCatalog(generation, "web");
+  assert.equal(restored.partial, undefined);
+  assert.equal(restored.diagnostics, undefined);
+});

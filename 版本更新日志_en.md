@@ -6,6 +6,14 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.11.0 - 2026-11-07
+
+- Project plugin contributions and catalog entries individually. A failed getter, unserializable value or malformed entry leaves healthy entries available with local diagnostics, without adding API eligibility restrictions.
+- Initialize and retire Web plugins independently. A pending plugin no longer occupies other plugins' loading queue; replacement of the same ID still joins its original resources. Ready pages remain available. Temporary refresh failures retain the last valid catalog; actual authentication failure clears its registrations.
+- Plan collection reads exclude damaged rows and entire duplicate-identity groups, returning partial results and attributable diagnostics. Original files and strict target reads, mutations and receipts remain intact. Healthy records remain readable and editable; invalid explicit targets never become local targets.
+- Authenticated LAN calls retain the operation and resource owners' path decoding contracts, removing a redundant encoded-tail restriction. Nested paths and literal encoded filenames remain distinct.
+- Host API advances to 1.7.0 and `io.rabiroute.manager.persona` independently advances to 0.1.7. SDK 1.1.1, Codex 0.1.4, Performance 0.1.3, Agent Communication 0.1.3 and other plugin versions remain unchanged. Existing archives require no migration or additional configuration switches.
+
 ## 0.10.2 - 2026-11-07
 
 - Independently advance `io.rabiroute.manager.performance` to 0.1.3 with an on-demand, approximately ten-second Manager CPU profile download. Historical recording and a debug listener are unnecessary; concurrent callers share one capture and retirement cancels and joins only its own Session.

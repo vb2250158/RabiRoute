@@ -10,7 +10,7 @@ export type WebPluginHost = "manager" | "gateway" | "web" | "desktop" | "worker"
 export type WebPluginCatalogPlugin = Readonly<{
   instanceId: string;
   pluginId: string;
-  status: "waiting_dependency" | "activating" | "active" | "failed" | "inactive";
+  status: "waiting_dependency" | "initializing" | "activating" | "active" | "failed" | "inactive";
   manifest: Readonly<{
     id: string;
     hosts: readonly WebPluginHost[];
@@ -25,12 +25,20 @@ export type WebPluginCatalog = Readonly<{
   revision: WebPluginCatalogRevision;
   plugins: readonly WebPluginCatalogPlugin[];
   contributions: readonly unknown[];
+  partial?: boolean;
+  diagnostics?: readonly unknown[];
 }>;
+
+/** Only an actual HTTP authentication response invalidates an existing display snapshot. */
+export class WebPluginCatalogRequestError extends Error {
+  constructor(readonly status: number, message: string) { super(message); this.name = "WebPluginCatalogRequestError"; }
+}
 
 type JsonRecord = Record<string, unknown>;
 
 const pluginStatuses = new Set<WebPluginCatalogPlugin["status"]>([
   "waiting_dependency",
+  "initializing",
   "activating",
   "active",
   "failed",
@@ -130,6 +138,15 @@ export function parseWebPluginCatalogResponse(value: unknown): WebPluginCatalog 
     throw new Error("Plugin catalog payload is incomplete.");
   }
 
+  const plugins: WebPluginCatalogPlugin[] = [];
+  const diagnostics: unknown[] = Array.isArray(data.diagnostics) ? [...data.diagnostics] : [];
+  for (let index = 0; index < data.plugins.length; index++) {
+    try { plugins.push(parsePlugin(data.plugins[index], index)); }
+    catch {
+      diagnostics.push({ code: "PLUGIN_CATALOG_ITEM_INVALID", index,
+        message: "This plugin catalog entry could not be displayed; other entries remain available." });
+    }
+  }
   return {
     schemaVersion: 2,
     generation: data.generation === undefined ? "" : controlledSymbol(data.generation, "generation"),
@@ -138,8 +155,9 @@ export function parseWebPluginCatalogResponse(value: unknown): WebPluginCatalog 
       plugins: nonNegativeInteger(data.revision.plugins, "plugin revision"),
       contributions: nonNegativeInteger(data.revision.contributions, "contribution revision")
     },
-    plugins: data.plugins.map(parsePlugin),
-    contributions: [...data.contributions]
+    plugins,
+    contributions: [...data.contributions],
+    ...(data.partial === true || diagnostics.length ? { partial: true, diagnostics } : {})
   };
 }
 
@@ -153,10 +171,10 @@ async function readWebPluginCatalog(): Promise<WebPluginCatalog> {
   try {
     body = await response.json();
   } catch {
-    throw new Error(`Plugin catalog request failed: HTTP ${response.status}`);
+    throw new WebPluginCatalogRequestError(response.status, `Plugin catalog request failed: HTTP ${response.status}`);
   }
   if (!response.ok) {
-    throw new Error(responseMessage(body) || `Plugin catalog request failed: HTTP ${response.status}`);
+    throw new WebPluginCatalogRequestError(response.status, responseMessage(body) || `Plugin catalog request failed: HTTP ${response.status}`);
   }
   return parseWebPluginCatalogResponse(body);
 }

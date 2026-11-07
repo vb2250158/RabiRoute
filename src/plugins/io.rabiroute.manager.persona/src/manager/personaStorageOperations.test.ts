@@ -1,3 +1,5 @@
+import { createPlan } from "../../../../roleKnowledge.js";
+import { planDirectory } from "../../../../planStorageLayout.js";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
@@ -322,4 +324,26 @@ test("native storage file errors retain the original local HTTP mapping", async 
   t.mock.method(f.context.pools!.knowledge, "queryRoleFileCounts", async () => { throw Object.assign(new Error("Synthetic native EACCES"), { code: "EACCES" }); });
   const result = await f.send("counts");
   assert.equal(result.status, 500); assert.equal(result.body.message, "Synthetic native EACCES");
+});
+
+test("plan availability HTTP: partial diagnostics survive paged and legacy array contracts without hiding healthy neighbors", async t => {
+  const f = await fixture(t);
+  for (const id of ["damaged", "healthy-a", "healthy-b"]) createPlan(f.roleDir, {
+    id, title: id, status: "分析中", currentStepId: "one", steps: [{ id: "one", title: "One", status: "进行中" }], keywords: ["fixture"]
+  });
+  fs.cpSync(planDirectory(f.roleDir, "damaged", "active"), planDirectory(f.roleDir, "damaged", "archive"), { recursive: true });
+  const unknown = path.join(f.roleDir, "plans/quarantine/plan-storage-package-transactions/unattributed/fixture");
+  fs.mkdirSync(unknown, { recursive: true }); fs.writeFileSync(path.join(unknown, "manifest.json"), "{broken");
+  const legacy = await f.send("plans"); assert.equal(legacy.status, 200, JSON.stringify(legacy.body));
+  assert.ok(Array.isArray(legacy.body.data)); assert.equal(legacy.body.partial, true);
+  assert.deepEqual(legacy.body.data.map((plan: { id: string }) => plan.id).sort(), ["healthy-a", "healthy-b"]);
+  assert.ok(legacy.body.diagnostics.some((item: { code: string }) => item.code === "duplicate_plan_identity"));
+  assert.ok(legacy.body.diagnostics.some((item: { code: string }) => item.code === "package_recovery_unknown"));
+  const first = await f.send("plans?limit=1&sort=updated"); assert.equal(first.status, 200, JSON.stringify(first.body));
+  assert.equal(first.body.data.partial, true); assert.equal(first.body.data.total, 2); assert.equal(first.body.data.items.length, 1);
+  assert.ok(first.body.data.nextCursor); assert.ok(first.body.data.diagnostics.length >= 2);
+  const second = await f.send("plans?limit=1&sort=updated&cursor=" + encodeURIComponent(first.body.data.nextCursor));
+  assert.equal(second.status, 200, JSON.stringify(second.body));
+  assert.equal(second.body.data.items.length, 1); assert.notEqual(second.body.data.items[0].id, first.body.data.items[0].id);
+  assert.equal(second.body.data.nextCursor, ""); assert.equal(fs.readFileSync(path.join(unknown, "manifest.json"), "utf8"), "{broken");
 });

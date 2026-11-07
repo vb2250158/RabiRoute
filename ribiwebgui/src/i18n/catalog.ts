@@ -1,6 +1,9 @@
 import { pluginTranslation } from "./translationRegistry";
 
 export const englishCatalog: Record<string, string> = {
+  "插件目录暂时无法刷新，正在显示上次读取的界面。": "The plugin catalog could not be refreshed. The last loaded interface remains visible.",
+  "部分插件目录项暂不可用，其余功能可继续使用。": "Some plugin catalog entries are unavailable. Other functions remain available.",
+
   "初始化中": "Initializing",
   "更新初始化中": "Initializing update",
   "旧运行实例正在停止": "Previous activation is stopping",

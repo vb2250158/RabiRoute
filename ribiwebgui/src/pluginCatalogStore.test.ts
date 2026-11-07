@@ -47,12 +47,12 @@ function catalogResponse(): Response {
   }), { status: 200, headers: { "content-type": "application/json" } });
 }
 
-test("catalog store removes plugin contributions after every catalog failure", async () => {
+test("catalog store retains healthy display on temporary failure and clears it on authentication loss", async () => {
   const originalFetch = globalThis.fetch;
-  let mode: "fail" | "success" = "fail";
+  let mode: "fail" | "success" | "forbidden" = "fail";
   globalThis.fetch = (async () => {
     if (mode === "success") return catalogResponse();
-    return new Response("unavailable", { status: 503 });
+    return new Response("unavailable", { status: mode === "forbidden" ? 403 : 503 });
   }) as typeof fetch;
 
   const disposeCore = activateWebPluginForTest(
@@ -73,6 +73,15 @@ test("catalog store removes plugin contributions after every catalog failure", a
 
     mode = "fail";
     await pluginCatalogStore.refresh();
+    assert.equal(pluginCatalogStore.status.value, "ready");
+    assert.equal(pluginCatalogStore.pages.value.pages[0]?.routeId, "global.settings");
+    assert.deepEqual(pluginCatalogStore.themes.value.options.map(option => option.themeId), ["dark"]);
+    assert.ok(pluginCatalogStore.lastRefreshError.value);
+    mode = "success";
+    await pluginCatalogStore.refresh();
+    assert.equal(pluginCatalogStore.lastRefreshError.value, "");
+    mode = "forbidden";
+    await pluginCatalogStore.refresh();
     assert.equal(pluginCatalogStore.status.value, "unavailable");
     assert.equal(pluginCatalogStore.pages.value.mode, "recovery");
     assert.deepEqual(pluginCatalogStore.commands.value, []);
@@ -81,4 +90,25 @@ test("catalog store removes plugin contributions after every catalog failure", a
     disposeCore();
     globalThis.fetch = originalFetch;
   }
+});
+
+
+test("a late catalog response cannot restore a snapshot after newer authentication loss", async () => {
+  const originalFetch = globalThis.fetch;
+  let finishOld!: (response: Response) => void;
+  let requests = 0;
+  globalThis.fetch = (async () => {
+    requests++;
+    if (requests === 1) return new Promise<Response>(resolve => { finishOld = resolve; });
+    return new Response("unauthorized", { status: 401 });
+  }) as typeof fetch;
+  try {
+    const old = pluginCatalogStore.refresh();
+    await pluginCatalogStore.refresh();
+    assert.equal(pluginCatalogStore.status.value, "unavailable");
+    finishOld(catalogResponse());
+    await old;
+    assert.equal(pluginCatalogStore.status.value, "unavailable");
+    assert.equal(pluginCatalogStore.pages.value.mode, "recovery");
+  } finally { globalThis.fetch = originalFetch; }
 });

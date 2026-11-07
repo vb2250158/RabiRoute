@@ -98,64 +98,38 @@ test("plugin catalog client rejects unsupported or incomplete payloads", () => {
     () => parseWebPluginCatalogResponse({ code: -1, message: "catalog unavailable" }),
     /catalog unavailable/
   );
-  assert.throws(
-    () => parseWebPluginCatalogResponse({
-      ...catalogEnvelope(),
-      data: {
-        ...catalogEnvelope().data,
-        plugins: [{
-          instanceId: "manager:core",
-          pluginId: "io.rabiroute.manager.core",
-          status: "unknown",
-          manifest: { id: "io.rabiroute.manager.core", hosts: ["web"], capabilities: [] }
-        }]
-      }
-    }),
-    /status is invalid/
-  );
-  assert.throws(
-    () => parseWebPluginCatalogResponse({
-      ...catalogEnvelope(),
-      data: {
-        ...catalogEnvelope().data,
-        plugins: [{
-          instanceId: "manager:core",
-          pluginId: "io.rabiroute.manager.core",
-          status: "active",
-          manifest: { id: "io.rabiroute.manager.core", hosts: ["browser"], capabilities: [] }
-        }]
-      }
-    }),
-    /manifest\.hosts is invalid/
-  );
-  assert.throws(
-    () => parseWebPluginCatalogResponse({
-      ...catalogEnvelope(),
-      data: {
-        ...catalogEnvelope().data,
-        plugins: [{
-          instanceId: "manager:core",
-          pluginId: "io.rabiroute.manager.core",
-          status: "active",
-          manifest: { id: "io.rabiroute.manager.core", hosts: ["web"], capabilities: [" duplicated "] }
-        }]
-      }
-    }),
-    /manifest\.capabilities\[0\] is invalid/
-  );
-  assert.throws(
-    () => parseWebPluginCatalogResponse({
-      ...catalogEnvelope(),
-      data: {
-        ...catalogEnvelope().data,
-        plugins: [{
-          instanceId: "manager:core",
-          pluginId: "io.rabiroute.manager.core",
-          status: "active",
-          manifest: { id: "io.rabiroute.manager.core", hosts: ["web"], capabilities: ["manager.core"] }
-        }]
-      }
-    }),
-    /manifest\.capabilities\[0\] is invalid/
-  );
+ });
+
+test("one invalid plugin record does not remove healthy catalog entries", () => {
+  const badPlugins: unknown[] = [null,
+    { instanceId: "manager:bad", pluginId: "io.example.bad", status: "unknown", manifest: { id: "io.example.bad", hosts: ["web"], capabilities: [] } },
+    { instanceId: "manager:bad", pluginId: "io.example.bad", status: "active", manifest: { id: "io.example.bad", hosts: ["browser"], capabilities: [] } },
+    { instanceId: "manager:bad", pluginId: "io.example.bad", status: "active", manifest: { id: "io.example.bad", hosts: ["web"], capabilities: [" duplicated "] } },
+    { instanceId: "manager:bad", pluginId: "io.example.bad", status: "active", manifest: { id: "io.example.bad", hosts: ["web"], capabilities: ["manager.core"] } }
+  ];
+  for (const bad of badPlugins) {
+    const envelope = catalogEnvelope();
+    const result = parseWebPluginCatalogResponse({ ...envelope, data: { ...envelope.data, plugins: [bad, ...envelope.data.plugins] } });
+    assert.equal(result.partial, true);
+    assert.deepEqual(result.plugins.map(value => value.instanceId), ["manager:core"]);
+    assert.deepEqual(result.diagnostics, [{ code: "PLUGIN_CATALOG_ITEM_INVALID", index: 0,
+      message: "This plugin catalog entry could not be displayed; other entries remain available." }]);
+    assert.deepEqual(result.contributions, envelope.data.contributions);
+  }
+});
+
+test("partial contribution diagnostics remain visible with healthy plugins", () => {
+  const envelope = catalogEnvelope();
+  const diagnostics = [{ code: "PLUGIN_CONTRIBUTION_PRESENTATION_FAILED", instanceId: "manager:bad", id: "broken" }];
+  const result = parseWebPluginCatalogResponse({ ...envelope, data: { ...envelope.data, partial: true, diagnostics } });
+  assert.equal(result.partial, true); assert.deepEqual(result.diagnostics, diagnostics); assert.equal(result.plugins.length, 1);
+});
+
+
+test("the Kernel's initializing status is a valid plugin catalog row", () => {
+  const envelope = catalogEnvelope();
+  const pending = { ...envelope.data.plugins[0]!, status: "initializing" };
+  const result = parseWebPluginCatalogResponse({ ...envelope, data: { ...envelope.data, plugins: [pending] } });
+  assert.equal(result.plugins[0]?.status, "initializing");
+  assert.equal(result.partial, undefined);
 });

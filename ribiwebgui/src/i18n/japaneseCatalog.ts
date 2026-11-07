@@ -1,5 +1,8 @@
 // Japanese interface copy. Configured names and runtime data keep their original text.
 export const japaneseCatalog: Record<string, string> = {
+  "插件目录暂时无法刷新，正在显示上次读取的界面。": "プラグイン一覧を更新できませんでした。前回の画面を引き続き表示しています。",
+  "部分插件目录项暂不可用，其余功能可继续使用。": "一部のプラグイン項目を表示できません。他の機能は引き続き利用できます。",
+
   "初始化中": "初期化中",
   "更新初始化中": "更新を初期化中",
   "旧运行实例正在停止": "以前の実行インスタンスを停止しています",

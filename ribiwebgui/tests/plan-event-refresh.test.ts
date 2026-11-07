@@ -8,7 +8,10 @@ const source = fs.readFileSync(new URL("../../src/plugins/io.rabiroute.manager.p
 const start = source.indexOf("async function refreshPlansFromEvent(");
 const end = source.indexOf("function connectManagerEvents", start);
 assert.ok(start >= 0 && end > start, "event refresh implementation must exist");
-const code = ts.transpileModule(source.slice(start, end), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+const diagnosticsStart = source.indexOf("function resetPlanCollectionDiagnostics(");
+const diagnosticsEnd = source.indexOf("const planListReady", diagnosticsStart);
+assert.ok(diagnosticsStart >= 0 && diagnosticsEnd > diagnosticsStart, "actual collection diagnostics helpers must exist");
+const code = ts.transpileModule(source.slice(diagnosticsStart, diagnosticsEnd) + "\n" + source.slice(start, end), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
 function harness(load: (...args: unknown[]) => Promise<unknown>) {
   const ref = (value: unknown) => ({ value });
   const state = {
@@ -16,6 +19,7 @@ function harness(load: (...args: unknown[]) => Promise<unknown>) {
     focusedPlanId: ref(""), currentPlanPageFilter: () => ({}), loadRolePlanPage: load,
     plans: ref([{ id: "old" }]), planPageCounts: ref({}), planListResultTotal: ref(1),
     planListStatusOptions: ref([]), planListTagOptions: ref([]), planNextCursor: ref(""),
+    planCollectionPartial: ref(false), planCollectionDiagnostics: ref([]),
     planListReady: ref(true), planPageError: ref(""), planError: ref(""),
     planEventReset: ref(false), planRenderStart: ref(0), planRenderLimit: ref(8),
     applyPlanSnapshots(items: unknown[]) { state.plans.value = items; },
@@ -30,7 +34,7 @@ test("event refresh reads only the first page and retains its cursor", async () 
   const calls: unknown[][] = [];
   const h = harness(async (...args) => {
     calls.push(args);
-    return { items: [{ id: "first" }], nextCursor: "next", total: 100, counts: {} };
+    return { items: [{ id: "first" }], nextCursor: "next", total: 100, counts: {}, partial: true, diagnostics: [{ code: "unreadable_plan", file: "plans/active/damaged/plan.json" }] };
   });
   await h.refresh();
   assert.equal(calls.length, 1);
@@ -38,6 +42,10 @@ test("event refresh reads only the first page and retains its cursor", async () 
   assert.equal(calls[0][2], 8);
   assert.equal(h.state.planNextCursor.value, "next");
   assert.equal(h.state.planEventReset.value, true);
+  assert.equal(h.state.planCollectionPartial.value, true);
+  assert.equal(h.state.planListReady.value, true);
+  assert.equal(h.state.planPageError.value, "");
+  assert.equal(Array.isArray(h.state.planCollectionDiagnostics.value) && h.state.planCollectionDiagnostics.value.length, 1);
 });
 
 test("failed first page retains previous rows", async () => {

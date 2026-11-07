@@ -2,7 +2,7 @@
 
 # Plugin catalog API contracts
 
-This shard provides five executable operations and a native functional owner. Shared source now removes the old direct controller branch, registers these operations through core, and forwards invocation through the native queue. Wiring and full-build acceptance remain unfrozen. The dedicated fixture now passes the kernel's `beforePublish` assertion and verifies revocation during real candidate preparation. This page does not claim an installed update or complete global coverage.
+These contracts provide five executable operations for the plugin catalog, reconciliation status and Web modules. Core invokes their owners through its existing registration batch. Reconciliation retains the original invocation, queue and kernel publication transaction. Installed status is recorded by the corresponding release acceptance.
 
 | Operation ID | Method and path |
 | --- | --- |
@@ -17,6 +17,14 @@ The catalog uses the existing `GenerationRuntime` and source-patch presentation.
 Authenticated connections without an Agent/persona binding may invoke these public operations. Read-only mode rejects reconciliation. Reconciliation joins its native queue, publication and cleanup. Success reports actual current readiness, active/waiting/failed lists and diagnostics; an unchanged generation is not a new publication. No idempotency key or automatic replay guarantee is introduced.
 
 Before body handling, admission captures the original connection lease, application/Manager identity, source root and owner references. The owner rechecks after asynchronous work and before disclosure. Revocation, identity/source change or cancellation after native dispatch preserves trusted `mutationOutcome=unknown` without disclosing business data. Timeout or disconnect does not release a producer lease before actual completion.
+
+## Local catalog failures and refresh
+
+Catalog presentation materializes each contribution as JSON independently. A failing getter, cycle or serialization error leaves healthy contributions available. `data.partial: true` / `data.diagnostics` report `PLUGIN_CONTRIBUTION_PRESENTATION_FAILED` with the original instance, plugin, kind and ID. The Web parser also isolates invalid plugin rows with `PLUGIN_CATALOG_ITEM_INVALID` and a row index. An untrustworthy response envelope remains a refresh failure.
+
+A temporary Web refresh failure retains the last valid catalog and reports the refresh error separately. Actual HTTP 401/403 clears the current catalog, immediately withdraws original module registrations and cancels initialization. The original module still joins late work and cleanup. A later explicit catalog read can restore healthy modules without waiting for an unrelated old owner to stop. See [startup and plugin lifecycle](startup-and-plugin-lifecycle_en.md#independent-web-module-initialization-and-retirement) for module initialization and actual retirement.
+
+Module URLs retain one decoding step under their original contract. This group's `pathTails` are decoded by the shared parameter parser, with no second decode in the resource registry. A raw resource tail declared as `pathRemainder` passes unchanged to its resource owner, which performs the single decode; public dispatch does not decode that raw tail first.
 
 ## Wiring requirements
 
@@ -33,6 +41,6 @@ The original reconciliation restores its old profile only when switch throws. If
 
 Dedicated tests use temporary packages/profiles, native `loadPluginProfile`, `GenerationRuntime`, `WebPluginModuleRegistry`, the actual registration snapshot and loopback HTTP. They cover authenticated unbound remote success, disabled profiles, readiness/candidate failures, native bytes/cache, revocation/source changes, revocation during candidate preparation and unknown outcomes after publication. A real child stdout producer is stopped on disconnect/deadline; its request lease remains until process close and owner cleanup complete. The unified owner runs the shared build, final controller routing and installed acceptance. No production plugin change, download/install or real platform/Agent delivery is performed.
 
-The existing remote ingress rejects an encoded slash inside one segment. This shard preserves that behavior; successful remote module tests use ordinary multi-segment URLs. Encoded whole tails are tested separately through native WebGUI ingress. The shared parser returns 400 for invalid tails; ordinary missing files and invalid revisions retain 404.
+Clients form multi-segment module tails from the operation contract, retaining the original ingress encoding semantics. The shared parameter parser returns 400 for invalid encoding or invalid `pathTails`; ordinary missing files and invalid revisions retain 404. The corresponding resource owner still handles errors in a raw `pathRemainder`.
 
 Shard validation: `node --test-concurrency=1 --import ./scripts/test-manager-runtime-env.mjs --import tsx --test src/manager/pluginCatalogOperations.test.ts src/manager/pluginCatalogRoutes.test.ts src/manager/webPluginModules.test.ts` passed all 24 tests. A separate `tsc --noEmit --strict --target ES2022 --module NodeNext --moduleResolution NodeNext --skipLibCheck --esModuleInterop` check passed for the six shard TypeScript files; it excludes the shared controller.

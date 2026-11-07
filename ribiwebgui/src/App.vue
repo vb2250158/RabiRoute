@@ -145,6 +145,12 @@ const snackbar = ref("");
 const showRouteSwitcher = computed(() => showsRouteSwitcher(route.path));
 const selectedRouteKey = computed(() => store.requestedRouteKey || (store.selectedGateway ? configNameFor(store.selectedGateway) : ""));
 watch(() => route.fullPath, path => store.syncRouteSelection(`#${path}`), { immediate: true, flush: "sync" });
+const pluginCatalogDiagnosticLabels = computed(() => pluginCatalogStore.diagnostics.value.map((value) => {
+  if (!value || typeof value !== "object") return "";
+  const item = value as Record<string, unknown>;
+  return [item.code, item.instanceId, item.pluginId, item.id, typeof item.index === "number" ? `#${item.index}` : undefined]
+    .filter((entry): entry is string => typeof entry === "string").join(" · ");
+}).filter(Boolean));
 const navigationGroups = computed(() => buildWebNavigation(pluginCatalogStore.contributions.value, selectedRouteKey.value, roles.selectedRoleId));
 const navItems = computed(() => navigationGroups.value.routePrimary.map(item => ({ ...item, title: t(item.title), to: item.to.startsWith("/roles/") ? { path: item.to, query: roleSourceQuery.value } : item.to })));
 const utilityNavItems = computed(() => navigationGroups.value.utility.map(item => ({ ...item, title: t(item.title) })));
@@ -560,6 +566,14 @@ function selectGateway(id: string): void {
     </v-app-bar>
 
     <v-main :class="{ 'navigation-collapsed': !drawer }">
+      <v-alert v-if="pluginCatalogStore.lastRefreshError.value || pluginCatalogStore.partial.value" type="warning" variant="tonal" class="ma-4" role="status">
+        <div v-if="pluginCatalogStore.lastRefreshError.value">{{ t(pluginCatalogStore.lastRefreshError.value) }}</div>
+        <div v-if="pluginCatalogStore.partial.value">{{ t("部分插件目录项暂不可用，其余功能可继续使用。") }}</div>
+        <details v-if="pluginCatalogDiagnosticLabels.length">
+          <summary>{{ t("查看详情") }}</summary>
+          <div v-for="(label, index) in pluginCatalogDiagnosticLabels" :key="index" data-no-i18n>{{ label }}</div>
+        </details>
+      </v-alert>
       <v-alert v-if="store.error && !isPluginManagementPage" type="error" variant="tonal" class="ma-4">{{ store.error }}</v-alert>
       <v-btn v-if="store.saveState === 'conflict'" class="ma-4" @click="store.reloadSelectedGateway().catch(error => { store.error = String(error); })">{{ t("重新加载当前路线") }}</v-btn>
       <v-alert v-else-if="store.saveMessage" :type="store.saveState === 'saved' ? 'success' : 'info'" variant="tonal" class="ma-4" role="status">{{ t(store.saveMessage) }}</v-alert>
