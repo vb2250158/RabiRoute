@@ -55,6 +55,8 @@ Do not proceed with unresolved private/runtime paths, real credentials, private 
 
 The current user-directed plugin architecture supersedes the previous per-commit Host patch rule. Host versions describe framework and extension-point changes; plugin versions describe each plugin's implementation and resources. A plugin-only commit keeps the Host version when its architecture is unchanged.
 
+Changes confined to test/spec files or test directories do not publish a Host or plugin version and need no release metadata. Security and diff checks still run. In mixed changes, only production owners require version changes; another plugin's tests do not release that plugin.
+
 1. Compare `HEAD` and the candidate scope. In `Staged` mode, read the index for every manifest, catalog, migration and changelog; unstaged edits are not commit evidence.
 2. Advance the Host SemVer for framework or extension-point changes. Choose patch, minor or major from the changed contract; this architecture migration uses Host `0.7.0`. Synchronize `package.json`, both root lock versions, and both README version statements when the Host version changes.
 3. For each changed plugin, read its canonical source owner and authoritative `versionFile` from `plugins/source-catalog.json`. Advance that plugin's own version and synchronize its other versioned manifests and lock metadata. Do not infer an external plugin's version from the Host or from a package.json that is not its authority.

@@ -58,7 +58,8 @@ test('native image URLs still reject unsafe schemes/userinfo and surface empty o
 
 test('native images keep header/chunk byte limits and cancel their reader',async t=>{
  const before=process.env.RABIROUTE_QQ_MEDIA_MAX_BYTES;process.env.RABIROUTE_QQ_MEDIA_MAX_BYTES='4';t.after(()=>{if(before===undefined)delete process.env.RABIROUTE_QQ_MEDIA_MAX_BYTES;else process.env.RABIROUTE_QQ_MEDIA_MAX_BYTES=before;});
- for(const headers of [{'content-length':'8'},{}]){let cancelled=false;const body=new ReadableStream({start(controller){controller.enqueue(bytes.subarray(0,3));controller.enqueue(bytes.subarray(3));},cancel(){cancelled=true;}});
+ const headerCases: HeadersInit[]=[{'content-length':'8'},{}];
+ for(const headers of headerCases){let cancelled=false;const body=new ReadableStream({start(controller){controller.enqueue(bytes.subarray(0,3));controller.enqueue(bytes.subarray(3));},cancel(){cancelled=true;}});
   await assert.rejects(readQqMedia(endpoint,{kind:'image',name:'image',url:'https://media.example/image'},new AbortController().signal,async()=>new Response(body,{headers})),/QQ_RESPONSE_TOO_LARGE/);assert.equal(cancelled,true);
  }
 });

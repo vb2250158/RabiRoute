@@ -276,7 +276,19 @@ $remotes = @(
 $versionFindings = [System.Collections.Generic.List[object]]::new()
 $headVersion = $null
 $candidateVersion = $null
-$versionGateApplicable = $changed.Count -gt 0
+function Test-ValidationOnlyPath {
+    param([string]$File)
+    return $File -match '(?:^|/)(?:tests?|__tests__)/|[.](?:test|spec)[.][cm]?[jt]sx?$'
+}
+# Git's name-only rename view omits the removed source. Keep it for version
+# ownership without changing the exact security-review receipt scope.
+$versionChanges = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+Add-UniqueLines -Target $versionChanges -Lines $changed
+if ($Scope -eq "WorkingTree") {
+    Add-UniqueLines -Target $versionChanges -Lines @(Invoke-GitText -Arguments @("-c", "core.quotepath=false", "diff", "--no-renames", "--diff-filter=D", "--name-only"))
+}
+Add-UniqueLines -Target $versionChanges -Lines @(Invoke-GitText -Arguments @("-c", "core.quotepath=false", "diff", "--cached", "--no-renames", "--diff-filter=D", "--name-only"))
+$versionGateApplicable = @($versionChanges | Where-Object { -not (Test-ValidationOnlyPath $_) }).Count -gt 0
 
 function Add-VersionFinding {
     param(
@@ -325,7 +337,7 @@ if ($versionGateApplicable) {
             continue
         }
         $pluginDirectories.Add($directory)
-        if (@($changed | Where-Object { $_ -eq $directory -or $_.StartsWith("$directory/", [StringComparison]::Ordinal) }).Count -eq 0) { continue }
+        if (@($versionChanges | Where-Object { ($_ -eq $directory -or $_.StartsWith("$directory/", [StringComparison]::Ordinal)) -and -not (Test-ValidationOnlyPath $_) }).Count -eq 0) { continue }
         $versionPath = "$directory/$authority"
         $metadata = Read-VersionJson -File $versionPath
         $current = [string]$metadata.version
@@ -369,11 +381,11 @@ if ($versionGateApplicable) {
         elseif ($source.ecosystem -eq "rabiroute" -and $current -ne "0.1.1") { Add-VersionFinding "plugin-initial-version-required" $versionPath "A new native plugin starts at 0.1.1." }
         $pluginVersions.Add([pscustomobject]@{ sourceId = $id; versionFile = $versionPath; headVersion = $previous; candidateVersion = $current; initialSourceMigration = $migrationAccepted })
     }
-    foreach ($file in $changed) {
+    foreach ($file in $versionChanges) {
         $owned = @($pluginDirectories | Where-Object { $file.StartsWith("$_/", [StringComparison]::Ordinal) }).Count -gt 0
         if ($file.StartsWith("src/plugins/", [StringComparison]::Ordinal) -and -not $owned) { Add-VersionFinding "plugin-source-unindexed" $file "Changed plugin source must have a source-catalog owner and authoritative versionFile." }
         # Validation files follow the production owner's version; their location alone is not a Host extension change.
-        $testOnly = $file -match '(?:^|/)(?:tests?|__tests__)/|[.](?:test|spec)[.][cm]?[jt]sx?$'
+        $testOnly = Test-ValidationOnlyPath $file
         if (-not $owned -and -not $testOnly -and $file -match '^(?:src/|scripts/|apps/|packages/|ribiwebgui/|plugins/contracts/)') { $hostVersionRequired = $true }
     }
     $hostAdvanced = $false

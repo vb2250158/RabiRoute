@@ -398,6 +398,51 @@ jobs:
         }
     }
 
+    Invoke-Test "pure validation changes require no Host or plugin release in either scope" {
+        foreach ($scope in @('WorkingTree', 'Staged')) {
+            $repo = New-FixtureRepository ("validation-only-" + $scope)
+            Write-Utf8File (Join-Path $repo 'src/plugins/io.rabiroute.endpoint.fixture/src/image.test.ts') 'export const assertion = true;'
+            Write-Utf8File (Join-Path $repo 'src/query.spec.ts') 'export const assertion = true;'
+            Write-Utf8File (Join-Path $repo 'src/plugins/external-fixture/tests/fixtures/provider.mjs') 'export const fixture = true;'
+            if ($scope -eq 'Staged') { Invoke-Git $repo @('add', '.') | Out-Null }
+            $result = Invoke-Preflight $repo -Scope $scope
+            Assert-True ($result.exitCode -eq 0) "Validation-only changes must not require unrelated release metadata: $($result.text)"
+            Assert-True (-not $result.report.versionGate.applicable) "A validation-only scope does not release product code."
+            Assert-True ($result.report.security.passed) "Security screening still runs for validation-only files."
+        }
+    }
+
+    Invoke-Test "validation files never hide adjacent plugin production changes" {
+        foreach ($scope in @('WorkingTree', 'Staged')) {
+            $repo = New-FixtureRepository ("validation-and-plugin-" + $scope)
+            Write-Utf8File (Join-Path $repo 'src/plugins/io.rabiroute.endpoint.fixture/src/image.test.ts') 'export const assertion = true;'
+            Write-Utf8File (Join-Path $repo 'src/plugins/io.rabiroute.endpoint.fixture/feature.js') 'export const value = 2;'
+            if ($scope -eq 'Staged') { Invoke-Git $repo @('add', '.') | Out-Null }
+            $result = Invoke-Preflight $repo -Scope $scope
+            Assert-True ($result.exitCode -eq 2) "Production implementation still needs its own version."
+            Assert-True (@($result.report.versionGate.findings | Where-Object rule -eq 'plugin-version-increase-required').Count -eq 1) "Keep the exact product-version diagnostic."
+        }
+    }
+
+    Invoke-Test "renaming production code to a test keeps its production version owner" {
+        foreach ($scope in @('WorkingTree', 'Staged')) {
+            $repo = New-FixtureRepository ("production-test-rename-" + $scope)
+            Invoke-Git $repo @('mv', 'src/plugins/io.rabiroute.endpoint.fixture/feature.js', 'src/plugins/io.rabiroute.endpoint.fixture/feature.test.js') | Out-Null
+            $result = Invoke-Preflight $repo -Scope $scope
+            Assert-True ($result.exitCode -eq 2 -and $result.report.versionGate.applicable) "The original production deletion remains a product change."
+            Assert-True (@($result.report.versionGate.findings | Where-Object rule -eq 'plugin-version-increase-required').Count -eq 1) "Both sides of a rename retain the production version requirement."
+        }
+    }
+
+    Invoke-Test "another plugin's tests do not require that plugin to advance" {
+        $repo = New-FixtureRepository 'validation-other-plugin'
+        Set-PluginSubmission $repo
+        Write-Utf8File (Join-Path $repo 'src/plugins/external-fixture/feature.test.ts') 'export const assertion = true;'
+        $result = Invoke-Preflight $repo
+        Assert-True ($result.exitCode -eq 0) "Only the changed production owner advances: $($result.text)"
+        Assert-True (@($result.report.versionGate.plugins).Count -eq 1) "Do not release the external plugin for its test alone."
+    }
+
     Invoke-Test "test-only helpers do not force a Host version for plugin changes" {
         $repo = New-FixtureRepository 'plugin-test-fixture'
         Set-PluginSubmission $repo

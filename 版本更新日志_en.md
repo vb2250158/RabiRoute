@@ -12,8 +12,7 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 - Independently advance `io.rabiroute.endpoint.napcat` to `0.1.4`. Prefer the image URL supplied by the authorized original message or forward node; use `get_image` when absent and retain `get_file` for other media. Prevent a redundant lookup from blocking a readable forward image while preserving scope, cancellation, credential isolation and byte quotas without new retries or longer timeouts.
 - Only NapCat and its profile version selection change. Host `0.11.2`, Host API `1.7.0`, SDK `1.1.1`, Persona `0.1.9`, Diagnostics `0.1.3` and compiled Web resources remain unchanged.
-
-
+- Development checks: correct the image quota fixture's request-header type. Submission tooling bases version changes on product changes; test-only edits require no Host or plugin release, while mixed submissions still validate the production owner's version.
 
 ### Plugin updates - 2026-11-09
 
