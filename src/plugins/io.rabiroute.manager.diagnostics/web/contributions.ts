@@ -11,7 +11,7 @@ export function activateDiagnostics(api: WebContributionApi): readonly (() => vo
   }, {
     routeId: "global.deliveries", rendererId: "builtin.web-page.deliveries.v1",
     loader: () => import("./pages/DeliveryRecordsPage.vue"),
-    paths: [{ path: "/deliveries", title: "投递记录" }],
-    navigation: { resolvePath: () => "/deliveries", allowedSlots: ["utility"], allowedIcons: ["mdi-send-check-outline"] }
+    // Retain direct links and diagnostics without a duplicate sidebar entry.
+    paths: [{ path: "/deliveries", title: "投递记录" }]
   }]);
 }

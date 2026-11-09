@@ -8,6 +8,14 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 ## 0.11.2 - 2026-11-08
 
+### Plugin updates - 2026-11-09
+
+- NapCat `io.rabiroute.endpoint.napcat` `0.1.3`: add original-message-scoped merged-forward pages, nested nodes and attachments, preserving authentication, cancellation and media quotas. Individual unreadable nodes retain page continuation.
+- Persona `io.rabiroute.manager.persona` `0.1.9`: show clickable QQ forward cards with sender avatars, times, text and images, nested navigation and paging. Keep the shared label/storage protocol unchanged.
+- Diagnostics `io.rabiroute.manager.diagnostics` `0.1.3`: remove the duplicate Delivery records sidebar entry; retain message history, delivery data, details and direct diagnostics.
+- Upgrade these three plugins and their profile selections together. Host remains `0.11.2`; Host API, SDK and shared message protocols remain unchanged.
+- Development submission checks follow the actual production owner: test-only files and fixtures no longer imply a Host architecture change, while real Host source changes still require a Host version advance.
+
 - Independently advance `io.rabiroute.manager.persona` to 0.1.8. Plan-detail GET calls the original asynchronous workflow reader inside the existing read child through its query owner, removing the extra main-process filesystem read without new caches, retries, permissions or timeouts.
 - Permanent configuration parsing, validation and original file failures retain their original 500 and specific reason. Only an actual workflow task exception carries the internal failure origin; other query routes, including the status catalog, keep their public error format. Queue pressure, deadlines, cancellation and process failure retain their respective handling.
 - Normal GET, 304, 404, ETag, view revision and original plan/configuration bytes retain their contracts. Cancellation still joins actual worker close; local failure does not disable unrelated reads.

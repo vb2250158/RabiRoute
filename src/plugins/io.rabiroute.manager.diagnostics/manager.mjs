@@ -52,19 +52,6 @@ export const activate = definePlugin({
                     "hosts": ["web"],
                     "order": 71
                 }
-            },
-            {
-                "kind": "navigation",
-                "id": "deliveries",
-                "value": {
-                    "surface": "web.navigation",
-                    "label": { "fallback": "投递记录" },
-                    "routeId": "global.deliveries",
-                    "icon": "mdi-send-check-outline",
-                    "slot": "utility",
-                    "hosts": ["web"],
-                    "order": 71
-                }
             }
         ])
             context.contributions.register(contribution);

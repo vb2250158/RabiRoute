@@ -9,14 +9,24 @@ export const QQ_READ_KINDS = ["group", "private"] as const;
 export const QQ_MESSAGE_ID_PATTERN = /^-?\d{1,20}$/;
 export const QQ_ATTACHMENT_INDEX_PATTERN = /^\d{1,9}$/;
 export const QQ_TARGET_ID_PATTERN = /^[1-9]\d{0,15}$/;
+export const QQ_FORWARD_LIMITS = Object.freeze({ pageDefault: 100, pageMax: 100 });
+export const QQ_FORWARD_PATH_PATTERN = /^(?:0|[1-9]\d*)(?:\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*))*$/;
+export const QQ_FORWARD_NODE_PATTERN = /^(?:0|[1-9]\d*)$/;
 export type QqReadSelection = { routeId: string; kind: typeof QQ_READ_KINDS[number]; target: string };
-export type QqReadTarget = { kind: "history" } | { kind: "message"; messageId: string } | { kind: "attachment"; messageId: string; index: number };
+export type QqReadTarget = { kind: "history" } | { kind: "message"; messageId: string } | { kind: "attachment"; messageId: string; index: number }
+  | { kind: "forward"; messageId: string; forwardPath: string }
+  | { kind: "forward-node"; messageId: string; forwardPath: string; nodeIndex: number }
+  | { kind: "forward-attachment"; messageId: string; forwardPath: string; nodeIndex: number; index: number };
 const sharedQuery = { routeId: { type: "string", minLength: 1, maxLength: QQ_READ_LIMITS.routeIdChars },
   kind: { enum: QQ_READ_KINDS }, target: { type: "string", pattern: QQ_TARGET_ID_PATTERN.source } } as const;
 export const QQ_MESSAGE_QUERY_SCHEMA = freezeApiData({ type: "object", required: Object.keys(sharedQuery), properties: sharedQuery, additionalProperties: false } as const);
 export const QQ_HISTORY_QUERY_SCHEMA = freezeApiData({ ...QQ_MESSAGE_QUERY_SCHEMA, properties: { ...sharedQuery,
   cursor: { type: "string", pattern: QQ_MESSAGE_ID_PATTERN.source },
   limit: { type: "string", minLength: 1, description: `Existing server Number(value) normalization; a finite integer from 1 to ${QQ_READ_LIMITS.historyMax}.` }
+} } as const);
+export const QQ_FORWARD_QUERY_SCHEMA = freezeApiData({ ...QQ_MESSAGE_QUERY_SCHEMA, properties: { ...sharedQuery,
+  offset: { type: "string", pattern: QQ_FORWARD_NODE_PATTERN.source, description: "Nonnegative safe integer raw-node offset; defaults to zero." },
+  limit: { type: "string", minLength: 1, description: `Finite integer from 1 to ${QQ_FORWARD_LIMITS.pageMax}; defaults to ${QQ_FORWARD_LIMITS.pageDefault}.` }
 } } as const);
 const text = { type: "string" } as const;
 const attachment = { type: "object", required: ["index", "kind", "name", "contentUrl"], additionalProperties: false,
@@ -48,6 +58,7 @@ const error = { mediaType: "application/json", schema: { type: "object", require
   properties: { code: { const: -1 }, errorCode: text, message: text } } };
 
 export function qqReadOperationContract(kind: QqReadTarget["kind"]): ApiOperationContract {
+  if (kind === "forward" || kind === "forward-node" || kind === "forward-attachment") return qqForwardOperationContract(kind);
   const pathTemplate = kind === "history" ? "/api/agent/qq/history" : `/api/agent/qq/messages/:messageId${kind === "attachment" ? "/attachments/:attachmentIndex" : ""}`;
   const pathProperties = kind === "history" ? {} : { messageId: { type: "string", pattern: QQ_MESSAGE_ID_PATTERN.source },
     ...(kind === "attachment" ? { attachmentIndex: { type: "string", pattern: QQ_ATTACHMENT_INDEX_PATTERN.source } } : {}) };
@@ -73,5 +84,32 @@ export function qqReadOperationContract(kind: QqReadTarget["kind"]): ApiOperatio
     recovery: { strategy: "repeatable-read", description: "Retain the selected Route, conversation and original message/cursor. Completeness is unknown; missing data does not authorize switching to another account or message." },
     validators: [{ id: "agent.qq.read.current-source", description: "The existing owner revalidates the admitted connection and exact enabled Route/instance across each upstream await. Local, Agent, Relay and Peer callers retain the same shared success path." },
       { id: "agent.qq.read.bounds", description: `History limit is normalized with Number(value), default ${QQ_READ_LIMITS.historyDefault}, range 1..${QQ_READ_LIMITS.historyMax}; concurrency is configured by RABIROUTE_QQ_READ_CONCURRENCY. Exact-message fallback reads ${QQ_READ_LIMITS.fallbackCount} anchored records. Attachment bytes are buffered by the existing provider up to ${QQ_MEDIA_MAX_BYTES} bytes, with selected-message membership and trusted file/URL checks; this contract does not imply upstream streaming.` }]
+  };
+}
+
+function qqForwardOperationContract(kind: "forward" | "forward-node" | "forward-attachment"): ApiOperationContract {
+  const base = qqReadOperationContract(kind === "forward-attachment" ? "attachment" : "message");
+  const pathTemplate = `/api/agent/qq/messages/:messageId/forwards/:forwardPath${kind !== "forward" ? "/nodes/:nodeIndex" : ""}${kind === "forward-attachment" ? "/attachments/:attachmentIndex" : ""}`;
+  const pathProperties = { messageId: { type: "string", pattern: QQ_MESSAGE_ID_PATTERN.source },
+    forwardPath: { type: "string", pattern: QQ_FORWARD_PATH_PATTERN.source },
+    ...(kind !== "forward" ? { nodeIndex: { type: "string", pattern: QQ_FORWARD_NODE_PATTERN.source } } : {}),
+    ...(kind === "forward-attachment" ? { attachmentIndex: { type: "string", pattern: QQ_ATTACHMENT_INDEX_PATTERN.source } } : {}) };
+  const nodeProperties = { ...messageProperties, messageId: text, nodeIndex: { type: "integer", minimum: 0, maximum: Number.MAX_SAFE_INTEGER } };
+  const node = { ...message, required: [...messageRequired, "nodeIndex"], properties: nodeProperties };
+  return { ...base, operationId: `agent.qq.${kind}.read`, aliases: [`agent:GET:${pathTemplate}`], pathTemplate,
+    description: "Read merged-forward content reached from the exact authorized root message. Forward IDs and media URLs are provider-owned, never caller-supplied.",
+    request: { ...base.request, path: { type: "object", properties: pathProperties, required: Object.keys(pathProperties), additionalProperties: false },
+      query: kind === "forward" ? QQ_FORWARD_QUERY_SCHEMA : QQ_MESSAGE_QUERY_SCHEMA },
+    responses: { ...base.responses, ...(kind === "forward-attachment" ? {} : { "200": envelope(kind === "forward" ? {
+      type: "object", required: ["routeId", "instanceId", "messageId", "forwardPath", "entries", "total", "truncated", "offset", "nextOffset"], additionalProperties: false,
+      properties: { routeId: text, instanceId: text, messageId: { type: "string", pattern: QQ_MESSAGE_ID_PATTERN.source },
+        forwardPath: { type: "string", pattern: QQ_FORWARD_PATH_PATTERN.source },
+        entries: { type: "array", maxItems: QQ_FORWARD_LIMITS.pageMax, items: node },
+        offset: { type: "integer", minimum: 0, maximum: Number.MAX_SAFE_INTEGER },
+        nextOffset: { anyOf: [{ type: "null" }, { type: "integer", minimum: 0, maximum: Number.MAX_SAFE_INTEGER }] },
+        total: { type: "integer", minimum: 1 }, truncated: { type: "boolean" },
+        skippedCount: { type: "integer", minimum: 1, description: "Malformed nodes omitted from this raw-node page; original indices and continuation are preserved." } }
+    } : { ...node, required: ["routeId", "instanceId", ...node.required], properties: { routeId: text, instanceId: text, ...nodeProperties } }) }) },
+    validators: [...(base.validators ?? []), { id: "agent.qq.forward.root-scope", description: `Reauthorize the root message on every request and resolve canonical odd-length occurrence paths of nonnegative safe integers through provider-owned nodes. Return one raw-node page of at most ${QQ_FORWARD_LIMITS.pageMax} entries; nextOffset describes remaining pages, while truncated/skippedCount describe only omitted malformed nodes. Preserve original node indices and continuation even for an all-malformed page. Request timeout, cancellation and existing JSON/media budgets bound nested reads. Forward node IDs are original provider values or an empty string, never enclosing-conversation quote authority.` }]
   };
 }

@@ -30,7 +30,7 @@
     {
       "id": "manager:persona",
       "package": "io.rabiroute.manager.persona",
-      "version": "0.1.8",
+      "version": "0.1.9",
       "enabled": true,
       "config": {},
       "grants": []
@@ -186,7 +186,7 @@
     {
       "id": "manager:diagnostics",
       "package": "io.rabiroute.manager.diagnostics",
-      "version": "0.1.2",
+      "version": "0.1.3",
       "enabled": true,
       "config": {},
       "grants": []
@@ -241,7 +241,7 @@
     {
       "id": "endpoint:napcat",
       "package": "io.rabiroute.endpoint.napcat",
-      "version": "0.1.2",
+      "version": "0.1.3",
       "enabled": true,
       "config": {},
       "grants": []

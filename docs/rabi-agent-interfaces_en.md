@@ -386,7 +386,14 @@ GET /api/agent/qq/history?routeId=<routeId>&kind=group&target=<groupId>&limit=50
 GET /api/agent/qq/history?routeId=<routeId>&kind=group&target=<groupId>&cursor=<nextCursor>&limit=50
 GET /api/agent/qq/messages/<messageId>?routeId=<routeId>&kind=group&target=<groupId>
 GET /api/agent/qq/messages/<messageId>/attachments/0?routeId=<routeId>&kind=group&target=<groupId>
+GET /api/agent/qq/messages/<messageId>/forwards/0?routeId=<routeId>&kind=group&target=<groupId>&offset=0&limit=100
+GET /api/agent/qq/messages/<messageId>/forwards/0.104.1?routeId=<routeId>&kind=group&target=<groupId>&offset=0&limit=100
+GET /api/agent/qq/messages/<messageId>/forwards/0/nodes/104?routeId=<routeId>&kind=group&target=<groupId>
+GET /api/agent/qq/messages/<messageId>/forwards/0/nodes/104/attachments/0?routeId=<routeId>&kind=group&target=<groupId>
 ```
+
+Merged-forward reads first verify the original message in the selected conversation. Paths contain forward occurrence indices and alternating node/forward indices, never caller-supplied provider resource IDs or URLs. Only the forward list accepts `offset` (default 0) and `limit` (1–100, default 100). It returns the true `total`, `offset`, `nextOffset`, original `nodeIndex`, and `skippedCount`; an unreadable page retains its continuation. Follow `nextOffset` rather than renumbering filtered nodes. Nested forwards remain reachable on demand without a fixed depth limit, under the existing read timeout and media limits. Forward-node media links are scoped to the original message and path; node reply IDs do not establish membership in the outer conversation. The upstream operation returns a bundle before page projection; this is not provider streaming or upstream pagination. Existing stored labels remain unchanged and the persona plugin projects them into cards.
+
 
 For direct messages, use `kind=private` and the peer account as `target`. Discover the current Manager and validate `/meta` first. Find these operations through `GET /api/agent/help?path=/api/agent/qq/history`. Every request requires an exact Route, conversation kind, and target. `limit` is 1–100, default 50. History returns `data.entries`, `nextCursor`, `cursorStalled`, and `completenessUnknown: true`. Follow the cursor; stop on an empty page or stalled cursor. Pages do not guarantee complete QQ history. A single-message read tries `get_msg` first, then, on upstream cache failure, reads at most ten messages anchored on that same message ID in the same conversation. A missing match returns 404 `QQ_MESSAGE_NOT_IN_PAGE`, without scanning the whole group.
 

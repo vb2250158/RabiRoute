@@ -43,7 +43,7 @@ async function boundedBytes(response: Response, max: number, limitSetting?: stri
 }
 
 /** No arbitrary OneBot action, request URL or error body crosses the public API. */
-export async function qqRead(endpoint: NapCatEndpoint, action: "get_msg" | "get_group_msg_history" | "get_friend_msg_history" | "get_file" | "get_group_list" | "get_friend_list" | "get_group_member_list" | "get_login_info" | "get_recent_contact", payload: unknown,
+export async function qqRead(endpoint: NapCatEndpoint, action: "get_msg" | "get_forward_msg" | "get_group_msg_history" | "get_friend_msg_history" | "get_file" | "get_group_list" | "get_friend_list" | "get_group_member_list" | "get_login_info" | "get_recent_contact", payload: unknown,
   signal: AbortSignal, transport: typeof fetch = fetch): Promise<Record<string, unknown>> {
   const MAX_JSON_BYTES = qqReadSettings.jsonBytes;
   const origin = new URL(endpoint.httpUrl);

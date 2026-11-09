@@ -1,16 +1,26 @@
 <script setup lang="ts">
-import {computed,nextTick,onBeforeUnmount,ref,watch} from 'vue';
+import {defineAsyncComponent,computed,nextTick,onBeforeUnmount,ref,watch} from 'vue';
 import type {MessageContextAttachment} from '../../../../messageContextStore';
 import {qqDisplayParts,qqPartsPreview,qqMessageUrl,qqMediaMime,type QqMessagePart,type QqSelection,type QqHistoryMessage} from '../../../../../ribiwebgui/src/qqMessagePresentation';
+import {qqForwardDisplayParts,qqForwardPath,qqForwardUrl,qqForwardNodeUrl,type QqForwardReference} from '../persona/qqForwardPresentation';
 import {qqPreviewRead} from '../../../../../ribiwebgui/src/qqPreviewQueue';
 import {usePersonaService} from '../persona/personaServiceClient';
 import {useI18n} from '../../../../../ribiwebgui/src/i18n/index';
 import {userFacingError} from '../../../../../ribiwebgui/src/userFacingError';
-const props=defineProps<{text:string;messageId?:string|number;replyToMessageId?:string|number;selection?:QqSelection;names?:Record<string,string>;attachments?:MessageContextAttachment[];active:boolean;readable?:boolean;structuredParts?:QqMessagePart[]}>();
-const emit=defineEmits<{image:[{blob:Blob;name:string}];quote:[QqHistoryMessage]}>();
+const props=defineProps<{text:string;messageId?:string|number;replyToMessageId?:string|number;selection?:QqSelection;names?:Record<string,string>;attachments?:MessageContextAttachment[];active:boolean;readable?:boolean;structuredParts?:QqMessagePart[];forwardReference?:QqForwardReference}>();
+const emit=defineEmits<{image:[{blob:Blob;name:string}];quote:[QqHistoryMessage];forward:[string]}>();
 const {fetch}=usePersonaService(),{t}=useI18n();
+const ForwardMessages=defineAsyncComponent(()=>import('./QqForwardMessages.vue'));
+const forwardOpen=ref<string>();
+const rootMessageId=computed(()=>props.forwardReference?.messageId??props.messageId);
+const forwardUrlFor=(index:number)=>{const path=qqForwardPath(index,props.forwardReference);return props.selection&&rootMessageId.value!==undefined&&path!==undefined?qqForwardUrl(props.selection,rootMessageId.value,path):undefined;};
+function openForward(index:number){
+  const path=qqForwardPath(index,props.forwardReference);
+  if(!props.active||props.readable===false||path===undefined||!forwardUrlFor(index))return;
+  if(props.forwardReference)emit('forward',path);else forwardOpen.value=path;
+}
 const parts=computed(()=>{
-  const parsed=qqDisplayParts(props.text,props.structuredParts,props.attachments);
+  const parsed=qqForwardDisplayParts(props.text,props.structuredParts,props.attachments);
   if(props.replyToMessageId!==undefined&&!parsed.some(p=>p.kind==='reply'))parsed.unshift({kind:'reply',id:String(props.replyToMessageId)});
   return parsed;
 });
@@ -19,9 +29,9 @@ const root=ref<HTMLElement>(),media=ref(new Map<number,Media>()),errors=ref(new 
 const requests=new Map<string,AbortController>();
 let observer:IntersectionObserver|undefined,generation=0,metadata:Promise<{attachments?:{index:number;name:string}[]}>|undefined;
 let requestedQuote:string|undefined;
-const messageUrl=computed(()=>props.selection&&props.messageId!==undefined?qqMessageUrl(props.selection,props.messageId):undefined);
-const identity=computed(()=>JSON.stringify([props.messageId,props.selection,parts.value]));
-function clear(){generation++;requestedQuote=undefined;observer?.disconnect();observer=undefined;for(const r of requests.values())r.abort();requests.clear();pending.value.clear();for(const item of media.value.values())URL.revokeObjectURL(item.url);media.value.clear();errors.value.clear();quotes.value.clear();metadata=undefined;}
+const messageUrl=computed(()=>props.selection?(props.forwardReference?qqForwardNodeUrl(props.selection,props.forwardReference):props.messageId!==undefined?qqMessageUrl(props.selection,props.messageId):undefined):undefined);
+const identity=computed(()=>JSON.stringify([props.messageId,props.selection,props.forwardReference,parts.value]));
+function clear(){forwardOpen.value=undefined;generation++;requestedQuote=undefined;observer?.disconnect();observer=undefined;for(const r of requests.values())r.abort();requests.clear();pending.value.clear();for(const item of media.value.values())URL.revokeObjectURL(item.url);media.value.clear();errors.value.clear();quotes.value.clear();metadata=undefined;}
 async function readMessage(url:string,signal:AbortSignal){
   const response=await fetch(url,{signal}),result=await response.json();
   if(!response.ok||result.code!==0)throw Error(result.message||t('QQ 原消息暂不可用'));
@@ -47,6 +57,7 @@ async function openMedia(index:number){
   finally{if(requests.get(key)===controller){requests.delete(key);pending.value.delete(key);}}
 }
 async function openQuote(id:string,show=true){
+  if(props.forwardReference)return;
   if(show)requestedQuote=undefined;
   const existing=quotes.value.get(id);if(existing){if(show)emit('quote',existing);return;}
   const url=props.selection&&qqMessageUrl(props.selection,id),key=`quote:${id}`;
@@ -62,7 +73,7 @@ async function openQuote(id:string,show=true){
   finally{if(requests.get(key)===controller){requests.delete(key);pending.value.delete(key);}}
 }
 const quoteName=(row:QqHistoryMessage)=>props.names?.[row.sender]||row.senderName||row.sender;
-const canReadQuote=(id:string)=>Boolean(props.selection&&qqMessageUrl(props.selection,id)&&props.readable!==false);
+const canReadQuote=(id:string)=>Boolean(!props.forwardReference&&props.selection&&qqMessageUrl(props.selection,id)&&props.readable!==false);
 const quoteText=(row:QqHistoryMessage)=>qqPartsPreview(qqDisplayParts(row.text,row.parts,row.attachments)).slice(0,160);
 async function observe(){
   observer?.disconnect();if(!props.active||props.readable===false||!root.value)return;
@@ -73,12 +84,12 @@ async function observe(){
     observer?.disconnect();
     for(const part of parts.value){
       if(part.kind==='media'&&part.mediaKind==='image')void openMedia(part.index);
-      if(part.kind==='reply')void openQuote(part.id,false);
+      if(part.kind==='reply'&&!props.forwardReference)void openQuote(part.id,false);
     }
   });observer.observe(root.value);
 }
 watch([root,()=>props.active,identity],()=>{clear();void observe();},{flush:'post'});
-watch(()=>props.readable,readable=>{if(readable===false){generation++;requestedQuote=undefined;observer?.disconnect();for(const r of requests.values())r.abort();requests.clear();pending.value.clear();metadata=undefined;}else{errors.value.clear();void observe();}});
+watch(()=>props.readable,readable=>{if(readable===false){forwardOpen.value=undefined;generation++;requestedQuote=undefined;observer?.disconnect();for(const r of requests.values())r.abort();requests.clear();pending.value.clear();metadata=undefined;}else{errors.value.clear();void observe();}});
 onBeforeUnmount(clear);
 </script>
 <template>
@@ -86,7 +97,12 @@ onBeforeUnmount(clear);
     <template v-for="(part,index) in parts" :key="index">
       <span v-if="part.kind==='text'">{{ part.text }}</span>
       <span v-else-if="part.kind==='mention'" class="qq-mention">@{{ part.target==='all'?t('全体成员'):names?.[part.target]||part.target }}</span>
-      <button v-else-if="part.kind==='reply'" class="qq-quote" :aria-label="t('查看引用消息')" @click="openQuote(part.id)"><strong>{{ quotes.has(part.id)?quoteName(quotes.get(part.id)!):t('引用消息') }}</strong><span>{{ quotes.has(part.id)?quoteText(quotes.get(part.id)!):!canReadQuote(part.id)?t('原消息暂不可用'):errors.get(`quote:${part.id}`)?t('原消息暂不可用，点击重试'):t('正在读取引用消息…') }}</span></button>
+      <button v-else-if="part.kind==='reply'" :disabled="!canReadQuote(part.id)" class="qq-quote" :aria-label="t('查看引用消息')" @click="openQuote(part.id)"><strong>{{ quotes.has(part.id)?quoteName(quotes.get(part.id)!):t('引用消息') }}</strong><span>{{ quotes.has(part.id)?quoteText(quotes.get(part.id)!):!canReadQuote(part.id)?t('原消息暂不可用'):errors.get(`quote:${part.id}`)?t('原消息暂不可用，点击重试'):t('正在读取引用消息…') }}</span></button>
+      <button v-else-if="part.kind==='forward'" class="qq-forward-card" :disabled="!active||readable===false||!forwardUrlFor(part.index)" :aria-label="t('查看合并转发')" @click="openForward(part.index)">
+        <span class="qq-forward-title"><v-icon size="18" aria-hidden="true">mdi-message-text-outline</v-icon>{{ t('合并转发') }}</span>
+        <span class="qq-forward-hint">{{ forwardUrlFor(part.index)?t('点击查看聊天记录'):t('此转发暂时无法展开') }}</span>
+        <span class="qq-forward-footer">{{ t('聊天记录') }}<v-icon size="14" aria-hidden="true">mdi-chevron-right</v-icon></span>
+      </button>
       <span v-else-if="part.kind==='label'" class="qq-message-label">[{{ t(part.text) }}]</span>
       <div v-else-if="part.kind==='media'" class="qq-media">
         <template v-if="media.get(part.index)">
@@ -99,6 +115,7 @@ onBeforeUnmount(clear);
         <div v-if="errors.get(`media:${part.index}`)" class="text-caption text-medium-emphasis" role="status">{{ t('附件暂时无法读取，可点击重试。') }}</div>
       </div>
     </template>
+    <ForwardMessages v-if="forwardOpen&&selection&&rootMessageId!==undefined" :selection="selection" :message-id="rootMessageId" :initial-path="forwardOpen" :active="active" :readable="readable" @close="forwardOpen=undefined" @image="emit('image',$event)" />
   </div>
 </template>
 <style scoped>
@@ -114,5 +131,12 @@ onBeforeUnmount(clear);
 .qq-image-thumb,.qq-image-placeholder {display:block;width:260px!important;max-width:100%;height:180px!important;border-radius:6px;overflow:hidden;background:rgba(var(--v-theme-on-surface),.04);}
 .qq-image-thumb img {display:block;width:100%;height:100%;object-fit:contain;}
 .qq-image-thumb:focus-visible,.qq-quote:focus-visible {outline:2px solid rgb(var(--v-theme-secondary));outline-offset:2px;}
+.qq-forward-card{display:block;width:288px;max-width:100%;padding:10px 12px;text-align:left;white-space:normal;border:1px solid var(--rr-border-faint);border-radius:8px;background:var(--rr-subtle);color:var(--rr-text);}
+.qq-forward-title{display:flex;align-items:center;gap:7px;font-weight:500;}
+.qq-forward-hint{display:block;color:var(--rr-muted);font-size:12px;margin:7px 0 10px;}
+.qq-forward-footer{display:flex;justify-content:space-between;border-top:1px solid var(--rr-border-faint);padding-top:6px;color:var(--rr-muted);font-size:11px;}
+.qq-forward-card:hover:not(:disabled){border-color:var(--rr-accent);}
+.qq-forward-card:disabled{opacity:.65;cursor:default;}
+.qq-forward-card:focus-visible{outline:2px solid var(--rr-accent);outline-offset:2px;}
 .qq-message-label {opacity:.75;}
 </style>

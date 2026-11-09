@@ -1,5 +1,14 @@
 export const pluginTranslations = {
   "en": {
+    "查看合并转发": "Open forwarded messages",
+    "点击查看聊天记录": "Open chat record",
+    "此转发暂时无法展开": "This forward cannot be opened right now",
+    "转发内容暂时无法读取": "Forwarded messages are unavailable",
+    "返回上一层转发": "Back to previous forward",
+    "正在读取转发内容": "Loading forwarded messages",
+    "部分转发内容未能显示，已读取的消息仍可查看。": "Some forwarded items are unavailable. Loaded messages remain readable.",
+    "条消息": "messages",
+
     "投递回复中链接的本地文件；按下方选项处理，同一文件只投递一次。": "Deliver local files linked in the reply using the options below; each file is delivered once.",
     "MD附件自动转换为图片": "Render Markdown attachments as images",
     "图片附件转换为图片": "Send image attachments as images",
@@ -561,6 +570,15 @@ export const pluginTranslations = {
     "等待 QA 验收": "Awaiting QA acceptance"
   },
   "ja": {
+    "查看合并转发": "まとめて転送されたメッセージを表示",
+    "点击查看聊天记录": "チャット履歴を開く",
+    "此转发暂时无法展开": "この転送は現在開けません",
+    "转发内容暂时无法读取": "転送内容を読み取れません",
+    "返回上一层转发": "前の転送に戻る",
+    "正在读取转发内容": "転送内容を読み込み中",
+    "部分转发内容未能显示，已读取的消息仍可查看。": "一部の転送内容を表示できません。読み込み済みのメッセージは引き続き確認できます。",
+    "条消息": "件のメッセージ",
+
     "投递回复中链接的本地文件；按下方选项处理，同一文件只投递一次。": "返信内のローカルリンク先ファイルを下の設定で送信します。同じファイルは一度だけ送信されます。",
     "MD附件自动转换为图片": "Markdown 添付を画像に変換",
     "图片附件转换为图片": "画像添付を画像として送信",

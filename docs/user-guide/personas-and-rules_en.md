@@ -30,6 +30,12 @@ Each channel loads and filters independently using browser-page scrolling. Switc
 
 An unavailable index leaves other tabs usable and displays a warning. Refresh channels discovers channels again. Rebuilding an index, changing archive layout or replacing a source expires its continuation; refresh the channel to start again.
 
+## Open forwarded chat records
+
+Select a merged-forward card in QQ history to view sender avatars, names, times, text and images. Select an image to enlarge it. Nested chat records can be opened in the same viewer; Back returns to the previous record and page. Each page displays up to 100 items, with Previous and Next for the rest. Unreadable individual items preserve other messages and the next-page action.
+
+The sidebar keeps Message history and removes the duplicate Delivery records entry. Existing delivery data, message details and direct diagnostic links remain available.
+
 ## Switch computers and roles
 
 Open the role menu in the top bar, choose Local PC or another computer, then select a role in the second level. The top bar shows “computer → role”. Browsing computers leaves the current role unchanged. Refresh remote PCs from the same menu; the separate source PC panel has been removed.

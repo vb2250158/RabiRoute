@@ -388,7 +388,14 @@ GET /api/agent/qq/history?routeId=<routeId>&kind=group&target=<groupId>&limit=50
 GET /api/agent/qq/history?routeId=<routeId>&kind=group&target=<groupId>&cursor=<nextCursor>&limit=50
 GET /api/agent/qq/messages/<messageId>?routeId=<routeId>&kind=group&target=<groupId>
 GET /api/agent/qq/messages/<messageId>/attachments/0?routeId=<routeId>&kind=group&target=<groupId>
+GET /api/agent/qq/messages/<messageId>/forwards/0?routeId=<routeId>&kind=group&target=<groupId>&offset=0&limit=100
+GET /api/agent/qq/messages/<messageId>/forwards/0.104.1?routeId=<routeId>&kind=group&target=<groupId>&offset=0&limit=100
+GET /api/agent/qq/messages/<messageId>/forwards/0/nodes/104?routeId=<routeId>&kind=group&target=<groupId>
+GET /api/agent/qq/messages/<messageId>/forwards/0/nodes/104/attachments/0?routeId=<routeId>&kind=group&target=<groupId>
 ```
+
+合并转发读取先核对所选会话中的原消息；路径只包含转发出现序号及成对的节点/子转发序号，不接受调用方指定上游资源 ID 或 URL。仅转发列表支持 `offset`（默认 0）及 `limit`（1–100，默认 100），返回真实 `total`、`offset`、`nextOffset`、原 `nodeIndex` 和 `skippedCount`；坏页仍保留续页。沿 `nextOffset` 继续，不将过滤后的节点重新编号。嵌套转发可按需继续读取，不设固定业务层级限制，继续受原读取超时和媒体配额控制。节点媒体链接绑定原消息与路径；节点的引用 ID 不代表外层会话的消息归属。上游返回一组节点后再投影当前页，不冒称上游流式读取或分页。原存档标签不变，由人格插件投影为可点卡片。
+
 
 私聊使用 `kind=private`，`target` 为对方账号。先动态发现 Manager 并核对 `/meta`；接口可从 `GET /api/agent/help?path=/api/agent/qq/history` 发现。每次调用必须给出精确 Route、会话类型和目标；`limit` 为 1–100，默认 50。历史页返回 `data.entries`、`nextCursor`、`cursorStalled`、`completenessUnknown: true`；沿游标逐页读取，游标停滞或空页时停止，分页覆盖不保证 QQ 完整历史。原消息优先调用 `get_msg`；缓存失效时查询同会话、原消息 ID 锚定的最多 10 条历史页，未命中返回 404 `QQ_MESSAGE_NOT_IN_PAGE`，不扩大为全群扫描。
 

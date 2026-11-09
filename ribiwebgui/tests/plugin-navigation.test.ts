@@ -1,12 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { defineComponent } from "vue";
+import fs from "node:fs";
+import { activateDiagnostics } from "../../src/plugins/io.rabiroute.manager.diagnostics/web/contributions";
 import { activateCore } from "../../src/plugins/io.rabiroute.manager.core/web/contributions";
 import { activateMessageAdapterControl } from "../../src/plugins/io.rabiroute.manager.message-adapter-control/web/contributions";
 import { activatePersona } from "../../src/plugins/io.rabiroute.manager.persona/web/contributions";
 import { activateSpeech } from "../../src/plugins/io.rabiroute.manager.speech/web/contributions";
 import { buildWebNavigation } from "../src/pluginNavigation";
-import { registerTrustedWebPage } from "../src/pluginPages";
+import { registeredWebPages, registerTrustedWebPage } from "../src/pluginPages";
 import { activateWebPluginForTest } from "./web-plugin-test-host";
 
 const rendererByRoute: Readonly<Record<string, string>> = {
@@ -201,4 +203,26 @@ test("message history is a role-scoped sidebar entry after knowledge", () => {
   const nav = buildWebNavigation(contributions, "", "demo role");
   assert.deepEqual(nav.routePrimary.map(item => item.to), ["/roles/demo%20role/knowledge", "/roles/demo%20role/message-history"]);
   assert.equal(buildWebNavigation(contributions, "", "").routePrimary[1].to, "/roles/message-history");
+});
+
+
+test("delivery records retain their direct page while the sidebar keeps only message history", () => {
+  const owner = builtinOwner("diagnostics");
+  const dispose = activateWebPluginForTest(owner, activateDiagnostics);
+  try {
+    const manager = fs.readFileSync(new URL("../../src/plugins/io.rabiroute.manager.diagnostics/manager.mjs", import.meta.url), "utf8");
+    const start = manager.indexOf("for (const contribution of [") + "for (const contribution of ".length;
+    const end = manager.indexOf("])", start);
+    const declared = JSON.parse(manager.slice(start, end + 1));
+    assert.ok(declared.some((item: any) => item.kind === "page" && item.value.routeId === "global.deliveries"));
+    assert.ok(!declared.some((item: any) => item.kind === "navigation" && item.value.routeId === "global.deliveries"));
+    const groups = buildWebNavigation([
+      page("global.deliveries", owner, "builtin.web-page.deliveries.v1"),
+      navigation({ id: "deliveries", owner, routeId: "global.deliveries", label: "投递记录", icon: "mdi-send-check-outline", slot: "utility", order: 71 }),
+      ...pair({ id: "history", owner: builtinOwner("persona"), routeId: "role.message-history", label: "消息记录", icon: "mdi-message-text-outline", slot: "route-primary", order: 35 })
+    ], "main", "Example");
+    assert.deepEqual(groups.utility, [], "a previous Manager navigation contribution cannot restore the duplicate entry");
+    assert.deepEqual(groups.routePrimary.map(item => item.title), ["消息记录"]);
+    assert.ok(registeredWebPages().find(page => page.routeId === "global.deliveries")?.paths.some(path => path.path === "/deliveries"));
+  } finally { dispose(); }
 });

@@ -9,13 +9,13 @@ import { translateText } from "../src/i18n/index";
 const disposePluginTranslations = await registerSourcePluginTranslations();
 test.after(disposePluginTranslations);
 
-test("delivery navigation has Chinese, English and Japanese titles", () => {
+test("direct delivery records page retains Chinese, English and Japanese titles", () => {
   assert.equal(translateText("投递记录", "zh-CN"), "投递记录");
   assert.equal(translateText("投递记录", "en"), "Delivery records");
   assert.equal(translateText("投递记录", "ja"), "配信記録");
 });
 
-test("the actual diagnostics plugin exposes delivery records through its owned utility navigation", async () => {
+test("the actual diagnostics plugin keeps diagnostics navigation and omits the duplicate delivery entry", async () => {
   const owner = { instanceId: "manager:diagnostics", pluginId: "io.rabiroute.manager.diagnostics" };
   const contributions: unknown[] = [];
   const { activate } = await import("../../src/plugins/io.rabiroute.manager.diagnostics/manager.mjs");
@@ -30,8 +30,7 @@ test("the actual diagnostics plugin exposes delivery records through its owned u
   try {
     const groups = buildWebNavigation(contributions, "any-route");
     assert.deepEqual(groups.utility.map(item => [item.id, item.to, item.icon]), [
-      ["runtime", "/routes/any-route/runtime", "mdi-console-line"],
-      ["deliveries", "/deliveries", "mdi-send-check-outline"]
+      ["runtime", "/routes/any-route/runtime", "mdi-console-line"]
     ]);
     assert.equal(groups.routePrimary.length, 0);
   } finally { dispose(); }

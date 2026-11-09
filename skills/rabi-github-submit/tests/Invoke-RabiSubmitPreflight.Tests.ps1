@@ -384,6 +384,38 @@ jobs:
         Assert-True ($result.report.versionGate.plugins[0].candidateVersion -eq "0.1.2") "Expected the authoritative plugin version."
     }
 
+    Invoke-Test "test-only paths do not force a Host version for plugin changes in either scope" {
+        foreach ($scope in @('WorkingTree', 'Staged')) {
+            $repo = New-FixtureRepository ("plugin-test-only-" + $scope)
+            Set-PluginSubmission $repo
+            Write-Utf8File (Join-Path $repo 'ribiwebgui/tests/plugin-forward.test.ts') 'export const assertion = true;'
+            Write-Utf8File (Join-Path $repo 'src/query.spec.ts') 'export const assertion = true;'
+            if ($scope -eq 'Staged') { Invoke-Git $repo @('add', '.') | Out-Null }
+            $result = Invoke-Preflight $repo -Scope $scope
+            Assert-True ($result.exitCode -eq 0) "Test coverage must not force an unrelated Host release: $($result.text)"
+            Assert-True (-not $result.report.versionGate.hostVersionRequired) "Only the changed production plugin advances."
+            Assert-True ($result.report.packageVersion -eq '0.2.0') "Host version stays unchanged."
+        }
+    }
+
+    Invoke-Test "test-only helpers do not force a Host version for plugin changes" {
+        $repo = New-FixtureRepository 'plugin-test-fixture'
+        Set-PluginSubmission $repo
+        Write-Utf8File (Join-Path $repo 'ribiwebgui/tests/fixtures/module-loader.mjs') 'export const fixture = true;'
+        $result = Invoke-Preflight $repo
+        Assert-True ($result.exitCode -eq 0 -and -not $result.report.versionGate.hostVersionRequired) "Test fixture helpers are validation, not Host production."
+    }
+
+    Invoke-Test "test-only exemptions never hide accompanying Host production changes" {
+        $repo = New-FixtureRepository 'plugin-test-and-host'
+        Set-PluginSubmission $repo
+        Write-Utf8File (Join-Path $repo 'ribiwebgui/tests/forward.test.ts') 'export const assertion = true;'
+        Write-Utf8File (Join-Path $repo 'src/index.js') 'export const ready = false;'
+        $result = Invoke-Preflight $repo
+        Assert-True ($result.exitCode -eq 2 -and $result.report.versionGate.hostVersionRequired) "Actual Host source changes still require the Host version."
+        Assert-True (@($result.report.versionGate.findings | Where-Object rule -eq 'commit-host-version-required').Count -eq 1) "Retain the original Host version diagnostic."
+    }
+
     Invoke-Test "changed plugin code with no own version increase is rejected" {
         $repo = New-FixtureRepository "plugin-no-bump"
         Set-PluginSubmission $repo -Version "0.1.1"

@@ -372,7 +372,9 @@ if ($versionGateApplicable) {
     foreach ($file in $changed) {
         $owned = @($pluginDirectories | Where-Object { $file.StartsWith("$_/", [StringComparison]::Ordinal) }).Count -gt 0
         if ($file.StartsWith("src/plugins/", [StringComparison]::Ordinal) -and -not $owned) { Add-VersionFinding "plugin-source-unindexed" $file "Changed plugin source must have a source-catalog owner and authoritative versionFile." }
-        if (-not $owned -and $file -match '^(?:src/|scripts/|apps/|packages/|ribiwebgui/|plugins/contracts/)') { $hostVersionRequired = $true }
+        # Validation files follow the production owner's version; their location alone is not a Host extension change.
+        $testOnly = $file -match '(?:^|/)(?:tests?|__tests__)/|[.](?:test|spec)[.][cm]?[jt]sx?$'
+        if (-not $owned -and -not $testOnly -and $file -match '^(?:src/|scripts/|apps/|packages/|ribiwebgui/|plugins/contracts/)') { $hostVersionRequired = $true }
     }
     $hostAdvanced = $false
     if ((Test-StrictVersion $headVersion) -and (Test-StrictVersion $candidateVersion)) {
