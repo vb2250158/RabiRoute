@@ -8,6 +8,12 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 ## 0.11.2 - 2026-11-08
 
+### Plugin package identity compatibility - 2026-11-10
+
+- Report staged paths from the Git index during staged preflight; retain the existing privacy, security, whitespace and independent version gates without scanning unrelated working files.
+- Preserve distinct identities for different published package bytes: advance NapCat to `0.1.5` and Diagnostics to `0.1.4`; adopt Persona `0.1.9` and retain Host `0.11.2`. Update through the native package import and lifecycle owners without overwriting an existing version or user configuration.
+- Retain upstream original-message-scoped merged forwards, image reads and navigation changes. Connection authentication, account, Route and storage identities remain unchanged, with no Host API or SDK interface change.
+
 ### NapCat image reading update - 2026-11-09
 
 - Independently advance `io.rabiroute.endpoint.napcat` to `0.1.4`. Prefer the image URL supplied by the authorized original message or forward node; use `get_image` when absent and retain `get_file` for other media. Prevent a redundant lookup from blocking a readable forward image while preserving scope, cancellation, credential isolation and byte quotas without new retries or longer timeouts.

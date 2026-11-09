@@ -186,7 +186,7 @@
     {
       "id": "manager:diagnostics",
       "package": "io.rabiroute.manager.diagnostics",
-      "version": "0.1.3",
+      "version": "0.1.4",
       "enabled": true,
       "config": {},
       "grants": []
@@ -241,7 +241,7 @@
     {
       "id": "endpoint:napcat",
       "package": "io.rabiroute.endpoint.napcat",
-      "version": "0.1.4",
+      "version": "0.1.5",
       "enabled": true,
       "config": {},
       "grants": []

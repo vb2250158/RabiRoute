@@ -259,7 +259,12 @@ $diffCheckDiagnostics = @(
 )
 
 $changed = @($changedFiles | Sort-Object)
-$status = @(Invoke-GitText -Arguments @("-c", "core.quotepath=false", "status", "--short", "--branch"))
+$status = if ($Scope -eq "Staged") {
+    # Staged decisions use index blobs; reporting must not scan unrelated working files.
+    @(Invoke-GitText -Arguments @("-c", "core.quotepath=false", "diff", "--cached", "--name-status"))
+} else {
+    @(Invoke-GitText -Arguments @("-c", "core.quotepath=false", "status", "--short", "--branch"))
+}
 $branchLines = @(Invoke-GitText -Arguments @("branch", "--show-current"))
 $branch = if ($branchLines.Count -gt 0) { $branchLines[0] } else { "" }
 $remoteNames = @(Invoke-GitText -Arguments @("remote"))
