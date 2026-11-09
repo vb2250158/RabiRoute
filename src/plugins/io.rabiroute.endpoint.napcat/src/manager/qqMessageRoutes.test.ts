@@ -63,7 +63,7 @@ test("executable QQ history/message/download share projection schemas and return
   const app = await serve(async (url, init) => {
     if (String(url).endsWith("get_group_msg_history")) return envelope({ messages: [many] });
     if (String(url).endsWith("get_msg")) return envelope(many);
-    if (String(url).endsWith("get_file")) { assert.equal(JSON.parse(String(init?.body)).file_id, "item-100");
+    if (String(url).endsWith("get_image")) { assert.deepEqual(JSON.parse(String(init?.body)), { file: "item-100" });
       return envelope({ url: "https://media.qq.com/fixture-image.png", file_size: bytes.length }); }
     return new Response(bytes);
   }, { typed: true });

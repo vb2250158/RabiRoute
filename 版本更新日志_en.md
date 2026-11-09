@@ -8,6 +8,13 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 ## 0.11.2 - 2026-11-08
 
+### NapCat image reading update - 2026-11-09
+
+- Independently advance `io.rabiroute.endpoint.napcat` to `0.1.4`. Prefer the image URL supplied by the authorized original message or forward node; use `get_image` when absent and retain `get_file` for other media. Prevent a redundant lookup from blocking a readable forward image while preserving scope, cancellation, credential isolation and byte quotas without new retries or longer timeouts.
+- Only NapCat and its profile version selection change. Host `0.11.2`, Host API `1.7.0`, SDK `1.1.1`, Persona `0.1.9`, Diagnostics `0.1.3` and compiled Web resources remain unchanged.
+
+
+
 ### Plugin updates - 2026-11-09
 
 - NapCat `io.rabiroute.endpoint.napcat` `0.1.3`: add original-message-scoped merged-forward pages, nested nodes and attachments, preserving authentication, cancellation and media quotas. Individual unreadable nodes retain page continuation.

@@ -43,7 +43,7 @@ async function boundedBytes(response: Response, max: number, limitSetting?: stri
 }
 
 /** No arbitrary OneBot action, request URL or error body crosses the public API. */
-export async function qqRead(endpoint: NapCatEndpoint, action: "get_msg" | "get_forward_msg" | "get_group_msg_history" | "get_friend_msg_history" | "get_file" | "get_group_list" | "get_friend_list" | "get_group_member_list" | "get_login_info" | "get_recent_contact", payload: unknown,
+export async function qqRead(endpoint: NapCatEndpoint, action: "get_msg" | "get_forward_msg" | "get_group_msg_history" | "get_friend_msg_history" | "get_file" | "get_image" | "get_group_list" | "get_friend_list" | "get_group_member_list" | "get_login_info" | "get_recent_contact", payload: unknown,
   signal: AbortSignal, transport: typeof fetch = fetch): Promise<Record<string, unknown>> {
   const MAX_JSON_BYTES = qqReadSettings.jsonBytes;
   const origin = new URL(endpoint.httpUrl);
@@ -122,9 +122,17 @@ export function qqMessageText(message: QqMessage): string {
 
 export async function readQqMedia(endpoint: NapCatEndpoint, media: QqMedia, signal: AbortSignal, transport: typeof fetch = fetch): Promise<Buffer> {
   const QQ_MEDIA_MAX_BYTES = qqReadSettings.mediaBytes;
-  // Never pass a URL, path or base64 value from the message to get_file's arbitrary-file mode.
-  if (!media.file || media.file.length > 4096 || /[/\\:]|^base64/i.test(media.file)) throw new QqReadError(422, "QQ_MEDIA_REFERENCE_UNAVAILABLE");
-  const result = await qqRead(endpoint, "get_file", { file_id: media.file }, signal, transport);
+  // A native image URL was already returned inside this authorized message/forward tree.
+  // Resolving it again through get_file/get_image may stall on uncached forwarded images.
+  let result: Record<string, unknown>;
+  if (media.kind === "image" && media.url) result = { url: media.url };
+  else {
+    // Metadata APIs never receive caller URLs, paths or base64 in arbitrary-file mode.
+    if (!media.file || media.file.length > 4096 || /[/\\:]|^base64/i.test(media.file)) throw new QqReadError(422, "QQ_MEDIA_REFERENCE_UNAVAILABLE");
+    result = media.kind === "image"
+      ? await qqRead(endpoint, "get_image", { file: media.file }, signal, transport)
+      : await qqRead(endpoint, "get_file", { file_id: media.file }, signal, transport);
+  }
   const tooLarge = () => new QqReadError(413, "QQ_MEDIA_TOO_LARGE",
     `QQ attachment exceeds RABIROUTE_QQ_MEDIA_MAX_BYTES; effective limit is ${QQ_MEDIA_MAX_BYTES} bytes. Set 0 to remove the application quota (runtime Buffer capacity still applies).`);
   if (Number(result.file_size) > QQ_MEDIA_MAX_BYTES) throw tooLarge();

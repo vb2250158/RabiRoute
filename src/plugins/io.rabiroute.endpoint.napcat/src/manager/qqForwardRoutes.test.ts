@@ -37,7 +37,7 @@ async function fixture(options: FixtureOptions = {}) {
       const payload = JSON.parse(Buffer.concat(chunks).toString("utf8"));
       const action = request.url!.slice(1); calls.push({ action, payload });
       const data = options.upstream ? await options.upstream(action, payload) : action === "get_msg" ? selectedRoot
-        : action === "get_forward_msg" ? bundles[String(payload.message_id)] : action === "get_file" ? { url: providerBase + "/image" } : {};
+        : action === "get_forward_msg" ? bundles[String(payload.message_id)] : (action === "get_file" || action === "get_image") ? { url: providerBase + "/image" } : {};
       response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ status: "ok", retcode: 0, data }));
     } catch { response.writeHead(500).end(); }
   });
@@ -65,7 +65,7 @@ async function fixture(options: FixtureOptions = {}) {
 test("merged forwards use real HTTP provider resolution and original root-scoped media links", async t => {
   const f = await fixture(); t.after(f.close);
   f.setBundles({ "provider-root": { messages: [node("native content", { message_id: "provider-node-id", message: [
-    { type: "text", data: { text: "native content" } }, { type: "image", data: { file: "node-resource", url: "https://private.provider/image" } }, segment("private-nested-id")
+    { type: "text", data: { text: "native content" } }, { type: "image", data: { file: "node-resource", url: f.definition.napcatInstances![0]!.httpUrl + "/image" } }, segment("private-nested-id")
   ] }), node("missing id", { sender: {} })] } });
   const response = await fetchHttp(f.base + prefix + "0" + query); assert.equal(response.status, 200);
   const raw = await response.text(), data = JSON.parse(raw).data;
@@ -79,7 +79,7 @@ test("merged forwards use real HTTP provider resolution and original root-scoped
   assert.equal(media.headers.get("x-rabiroute-content-sha256"), createHash("sha256").update(f.bytes).digest("hex"));
   const detail = await fetchHttp(f.base + prefix + "0/nodes/0" + query); assert.equal(detail.status, 200);
   assert.equal((await detail.json()).data.messageId, "provider-node-id");
-  assert.deepEqual(f.calls.map(call => call.action), ["get_msg", "get_forward_msg", "get_msg", "get_forward_msg", "get_file", "get_msg", "get_forward_msg"]);
+  assert.deepEqual(f.calls.map(call => call.action), ["get_msg", "get_forward_msg", "get_msg", "get_forward_msg", "get_msg", "get_forward_msg"]);
 });
 
 test("nested occurrence paths retain duplicate forwards and original node indices", async t => {
@@ -206,7 +206,7 @@ test("forward media uses the existing byte quota and withholds route changes bef
     const action = new URL(String(url)).pathname;
     if (action === "/get_msg") return Response.json({ status: "ok", retcode: 0, data: root() });
     if (action === "/get_forward_msg") return Response.json({ status: "ok", retcode: 0, data: { messages: [node("image", { message: [{ type: "image", data: { file: "node-image" } }] })] } });
-    if (action === "/get_file") { change(); return Response.json({ status: "ok", retcode: 0, data: { url: "http://localhost/image" } }); }
+    if (action === "/get_image") { change(); return Response.json({ status: "ok", retcode: 0, data: { url: "http://localhost/image" } }); }
     downloads++; return new Response("forbidden bytes");
   } }); t.after(changed.close); change = changed.disable;
   const rejected = await fetchHttp(changed.base + prefix + "0/nodes/0/attachments/0" + query);
@@ -297,4 +297,29 @@ test("provider-owned forward references remain readable without an extra identif
   f.setRoot({ ...root(), message: [segment(providerId)] }); f.setBundles({ [providerId]: { messages: [node("provider reference resolved")] } });
   const response = await fetchHttp(f.base + prefix + "0" + query); assert.equal(response.status, 200);
   const text = await response.text(); assert.equal(JSON.parse(text).data.entries[0].text, "provider reference resolved"); assert.equal(text.includes(providerId), false);
+});
+
+test('native forward image URLs retain root authorization and reject caller URL overrides', async t => {
+  let change=()=>{},downloads=0;
+  const f=await fixture({transport:async (url,init)=>{
+    const action=new URL(String(url)).pathname;
+    if(action==='/get_msg')return Response.json({status:'ok',retcode:0,data:root()});
+    if(action==='/get_forward_msg')return Response.json({status:'ok',retcode:0,data:{messages:[node('image',{message:[{type:'image',data:{url:'http://localhost/selected-image'}}]})]}});
+    assert.equal(action,'/selected-image');assert.equal(new Headers(init?.headers).get('authorization'),null);downloads++;change();return new Response('must not be delivered');
+  }});t.after(f.close);change=f.disable;
+  const override=await fetchHttp(f.base+prefix+'0'+query+'&url=https%3A%2F%2Fcaller.invalid%2Fimage');assert.equal(override.status,400);assert.equal(downloads,0);
+  const rejected=await fetchHttp(f.base+prefix+'0/nodes/0/attachments/0'+query);assert.equal(rejected.status,409);assert.equal(downloads,1);assert.equal((await rejected.json()).errorCode,'QQ_READ_ROUTE_CHANGED');
+});
+
+test('closing a native image download aborts its body and releases the existing shared read slot',async t=>{
+  const before=process.env.RABIROUTE_QQ_READ_CONCURRENCY;process.env.RABIROUTE_QQ_READ_CONCURRENCY='1';t.after(()=>{if(before===undefined)delete process.env.RABIROUTE_QQ_READ_CONCURRENCY;else process.env.RABIROUTE_QQ_READ_CONCURRENCY=before;});
+  let began!:()=>void,cancelled!:()=>void;const started=new Promise<void>(resolve=>began=resolve),aborted=new Promise<void>(resolve=>cancelled=resolve);
+  const f=await fixture({transport:async(url,options)=>{
+    const action=new URL(String(url)).pathname;
+    if(action==='/get_msg')return Response.json({status:'ok',retcode:0,data:root()});
+    if(action==='/get_forward_msg')return Response.json({status:'ok',retcode:0,data:{messages:[node('image',{message:[{type:'image',data:{url:'http://localhost/selected-image'}}]})]}});
+    assert.equal(action,'/selected-image');const body=new ReadableStream({start(controller){options!.signal!.addEventListener('abort',()=>{controller.error(options!.signal!.reason);cancelled();},{once:true});began();}});return new Response(body);
+  }});t.after(f.close);const controller=new AbortController();const pending=fetchHttp(f.base+prefix+'0/nodes/0/attachments/0'+query,{signal:controller.signal});
+  await started;controller.abort();await assert.rejects(pending,/abort/i);await aborted;
+  const next=await fetchHttp(f.base+prefix+'0'+query);assert.equal(next.status,200);assert.equal((await next.json()).data.total,1);
 });
