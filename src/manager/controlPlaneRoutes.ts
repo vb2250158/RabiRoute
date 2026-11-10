@@ -1,3 +1,4 @@
+import { resolvePluginPackageRoots } from "../shared/pluginPackageRoots.js";
 import { WebSocketServer } from "ws";
 import { TunnelRtc } from "../peerTunnel/rtc.js";
 import { websocketChannel, connectWebsocket } from "../peerTunnel/channel.js";
@@ -7992,18 +7993,9 @@ get roleDirForApi() { return roleDirForApi; } }) }),
     settingsRoot: path.join(rootDir, "data", "plugins", "settings"),
     migrationsPath: path.join(packageRoot, "dist", "plugins", "profiles", "package-migrations.json")
   });
-  const configuredPackageRoots = (process.env.RABIROUTE_PLUGIN_PACKAGE_ROOTS ?? "")
-    .split(path.delimiter)
-    .map(value => value.trim())
-    .filter(Boolean)
-    .map(value => path.resolve(value));
   const builtinPluginPackageRoot = path.join(packageRoot, "dist", "plugins", "packages");
   const managedPluginPackageRoot = path.join(rootDir, "data", "plugins", "packages");
-  const managerPluginPackageRoots = Object.freeze([...new Set([
-    builtinPluginPackageRoot,
-    managedPluginPackageRoot,
-    ...configuredPackageRoots
-  ])]);
+  const managerPluginPackageRoots = resolvePluginPackageRoots({ packageRoot, stateRoot: rootDir });
   const managerPluginExecutionSettings = resolveInProcessRoots();
   const managerPluginPackageCatalog = new PluginPackageCatalog(managerPluginPackageRoots, {
     trustedInProcessRoots: managerPluginExecutionSettings.roots,

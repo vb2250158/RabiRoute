@@ -6,6 +6,11 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.11.3 - 2026-11-10
+
+- Use the same built-in, native installed and additional plugin package roots in Manager, Gateway, Agent-command and message-command startup. Newly installed endpoints and Agent adapters remain discoverable after worker restart without changing connection authentication or Route bindings.
+- Add a real Kernel regression that activates a Gateway plugin available only in the native installed package store and preserves built-in/custom package discovery.
+
 ## 0.11.2 - 2026-11-08
 
 ### Plugin package identity compatibility - 2026-11-10

@@ -1,3 +1,4 @@
+import { resolvePluginPackageRoots } from "./shared/pluginPackageRoots.js";
 import { resolvePrimaryAgentTarget } from "./shared/routeAgentTargets.js";
 import { mountGatewayAgentCommandRuntime } from "./runtime/gatewayAgentCommandRuntime.js";
 import { config, runtimeLayout } from "./config.js";
@@ -319,7 +320,7 @@ async function executeGatewayCommand(argv: readonly string[]): Promise<void> {
       const enabled = await messageEndpointCommandEnabled(adapterType, {
         profilePath: process.env.RABIROUTE_PLUGIN_PROFILE?.trim() || path.join(runtimeLayout.packageRoot, "dist/plugins/profiles/desktop.json"),
         settingsRoot: path.join(runtimeLayout.stateRoot, "data/plugins/settings"),
-        packageRoots: process.env.RABIROUTE_PLUGIN_PACKAGE_ROOTS?.split(path.delimiter).filter(Boolean) || [path.join(runtimeLayout.packageRoot, "dist/plugins/packages")],
+        packageRoots: resolvePluginPackageRoots(runtimeLayout),
         instanceId: process.env.RABIROUTE_MESSAGE_ENDPOINT_INSTANCE_ID?.trim() || undefined,
         manager: process.env.GATEWAY_MANAGER_URL?.trim() ? {
           baseUrl: process.env.GATEWAY_MANAGER_URL.trim(),

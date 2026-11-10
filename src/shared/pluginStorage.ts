@@ -1,3 +1,4 @@
+import { resolvePluginPackageRoots } from "./pluginPackageRoots.js";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
@@ -238,8 +239,7 @@ export async function prepareApplicationPluginStorage(options: Readonly<{
     ? path.resolve(environment.RABIROUTE_PLUGIN_PROFILE.trim()) : path.join(layout.packageRoot, "dist", "plugins", "profiles", "desktop.json"));
   const snapshot = await new PluginProfileSettings({ profilePath, settingsRoot: options.settingsRoot ?? path.join(layout.stateRoot, "data", "plugins", "settings"),
     migrationsPath: options.migrationsPath ?? path.join(layout.packageRoot, "dist", "plugins", "profiles", "package-migrations.json") }).snapshot();
-  const catalog = new PluginPackageCatalog(options.packageRoots ?? [path.join(layout.packageRoot, "dist", "plugins", "packages"),
-    ...(environment.RABIROUTE_PLUGIN_PACKAGE_ROOTS ?? "").split(path.delimiter).map(value => value.trim()).filter(Boolean).map(value => path.resolve(value))]);
+  const catalog = new PluginPackageCatalog(options.packageRoots ?? resolvePluginPackageRoots(layout, environment));
   const results: PluginStorageMigrationResult[] = [], packages = new Map<string, typeof snapshot.profile.instances[number][]>();
   for (const instance of snapshot.profile.instances) packages.set(instance.package, [...(packages.get(instance.package) ?? []), instance]);
   try {

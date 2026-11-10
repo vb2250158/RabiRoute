@@ -1,3 +1,4 @@
+import { resolvePluginPackageRoots } from "./shared/pluginPackageRoots.js";
 import { config, runtimeLayout } from "./config.js";
 import { readGatewayRouteBootSnapshot } from "./shared/gatewayRouteSnapshotBoot.js";
 import { mountGatewayRouteSnapshotRuntime } from "./runtime/gatewayRouteSnapshotReceiver.js";
@@ -108,7 +109,7 @@ async function initializeGatewayMain(
         settingsRoot: path.join(runtimeLayout.stateRoot, "data/plugins/settings"),
         stateRoot: runtimeLayout.stateRoot,
         migrationsPath: path.join(runtimeLayout.packageRoot, "dist/plugins/profiles/package-migrations.json"),
-        packageRoots: process.env.RABIROUTE_PLUGIN_PACKAGE_ROOTS?.split(path.delimiter).filter(Boolean) || [path.join(runtimeLayout.packageRoot, "dist/plugins/packages")],
+        packageRoots: resolvePluginPackageRoots(runtimeLayout),
         runtimeRoot: path.join(config.dataDir, ".rabi-runtime", "endpoint-plugins"),
         adapterTypes,
         agentRegistry: agentAdapters.registry,
