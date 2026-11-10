@@ -1,3 +1,4 @@
+import { resolveGatewayPluginRuntimeRoot } from "../shared/gatewayPluginRuntimeRoot.js";
 import { resolvePluginPackageRoots } from "../shared/pluginPackageRoots.js";
 import path from "node:path";
 import { config, runtimeLayout } from "../config.js";
@@ -21,7 +22,7 @@ export async function mountGatewayAgentCommandRuntime(): Promise<{
             settingsRoot: path.join(runtimeLayout.stateRoot, "data/plugins/settings"),
             stateRoot: runtimeLayout.stateRoot,
             migrationsPath: path.join(runtimeLayout.packageRoot, "dist/plugins/profiles/package-migrations.json"),
-            runtimeRoot: path.join(config.dataDir, ".rabi-runtime", "agent-command-plugins"),
+            runtimeRoot: resolveGatewayPluginRuntimeRoot(runtimeLayout, config.dataDir, "agent-command-plugins"),
             adapterTypes: [], agentsOnly: true, agentRegistry: adapters.registry, watch: false,
             ...(initialRouteDefinition ? { initialRouteDefinition, initialRouteRevision: revision } : {})
         }));

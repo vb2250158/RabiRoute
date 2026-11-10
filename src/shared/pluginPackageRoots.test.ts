@@ -1,3 +1,4 @@
+import { resolveGatewayPluginRuntimeRoot } from "./gatewayPluginRuntimeRoot.js";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -74,3 +75,25 @@ test("an empty additional-root setting keeps the original installed package stor
   }));
   assert.equal((await catalog.resolve("io.test.installed", "1.0.0")).sourceRoot, await fs.realpath(directory));
 });
+
+for (const kind of ["endpoint-plugins", "agent-command-plugins"] as const) {
+  test(kind + " activates from local storage when the Route runtime subtree is unwritable", async t => {
+    const f = await fixture(t), routeData = path.join(f.root, "shared-route-user-data"), id = "io.test.local-runtime";
+    await fs.mkdir(routeData, { recursive: true });
+    const sentinel = path.join(routeData, ".rabi-runtime");
+    await fs.writeFile(sentinel, "original user data stays unchanged");
+    await f.writePackage(f.builtin, id, "1.0.0");
+    const profile = parsePluginProfile({ schemaVersion: 2, readyRequires: ["endpoint.fixture@1"],
+      instances: [{ id: "endpoint:fixture", package: id, version: "1.0.0", enabled: true, config: {}, grants: [] }] });
+    const runtimeRoot = resolveGatewayPluginRuntimeRoot(f.layout, routeData, kind);
+    const loaded = await loadPluginProfile({ profilePath: path.join(f.root, "profile.json"), profile,
+      packageCatalog: f.catalog(resolvePluginPackageRoots(f.layout, {})), runtimeRoot, host: "gateway" });
+    assert.deepEqual(loaded.loadFailures, []);
+    const switched = await f.runtime().switch(loaded.candidates, { readyRequires: profile.readyRequires });
+    assert.equal(switched.generation.records[0]?.status, "active");
+    assert.equal(path.relative(f.layout.stateRoot, runtimeRoot).startsWith(".."), false);
+    assert.equal(await fs.readFile(sentinel, "utf8"), "original user data stays unchanged");
+    const other = resolveGatewayPluginRuntimeRoot(f.layout, routeData + "-other", kind);
+    assert.notEqual(runtimeRoot, other);
+  });
+}

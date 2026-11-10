@@ -6,6 +6,11 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.11.4 - 2026-11-10
+
+- Prepare Gateway and Agent-command executable plugin copies under the local Host state root, separated by Route and entrance. Shared Route and role data paths, original accounts, connection authentication and bindings remain unchanged.
+- Cover both entrances with real Kernel activation while the business-data runtime subtree cannot be written.
+
 ## 0.11.3 - 2026-11-10
 
 - Use the same built-in, native installed and additional plugin package roots in Manager, Gateway, Agent-command and message-command startup. Newly installed endpoints and Agent adapters remain discoverable after worker restart without changing connection authentication or Route bindings.
