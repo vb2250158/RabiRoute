@@ -350,7 +350,7 @@ export function findCodexDesktopStateDatabase(): string | null {
   return candidates[0]?.filePath ?? null;
 }
 
-function readDesktopThreadRows(databasePath: string): CodexDesktopThreadRow[] {
+function readDesktopThreadRows(databasePath: string, limit = 10_000, offset = 0): CodexDesktopThreadRow[] {
   const database = new DatabaseSync(databasePath, { readOnly: true });
   try {
     return database.prepare(`
@@ -358,8 +358,8 @@ function readDesktopThreadRows(databasePath: string): CodexDesktopThreadRow[] {
              recency_at, recency_at_ms, archived, first_user_message
       FROM threads
       ORDER BY COALESCE(NULLIF(recency_at_ms, 0), NULLIF(updated_at_ms, 0), recency_at * 1000, updated_at * 1000) DESC
-      LIMIT 10000
-    `).all() as CodexDesktopThreadRow[];
+      LIMIT ? OFFSET ?
+    `).all(limit, offset) as CodexDesktopThreadRow[];
   } finally {
     database.close();
   }
@@ -402,6 +402,40 @@ export function listCodexDesktopThreads(options: {
   ), options.sessionIndexPath)
     .filter((thread) => !query || thread.title.toLocaleLowerCase().includes(query))
     .slice(offset, offset + limit);
+}
+
+/** Native API pages advance the SQLite source offset, including entries beyond legacy scan budgets. */
+export function listCodexNativeSessionPage(options: {
+  query?: string;
+  limit?: number;
+  offset?: number;
+  databasePath?: string;
+  sessionIndexPath?: string;
+} = {}): { items: CodexDesktopThread[]; nextOffset: number | null } {
+  const databasePath = options.databasePath ?? findCodexDesktopStateDatabase();
+  if (!databasePath) return { items: [], nextOffset: null };
+  const limit = options.limit ?? 50;
+  let offset = options.offset ?? 0;
+  if (!Number.isSafeInteger(limit) || limit < 1 || !Number.isSafeInteger(offset) || offset < 0) throw new Error("Native session page requires a positive limit and non-negative offset.");
+  const query = options.query?.trim().toLocaleLowerCase() ?? "";
+  const items: CodexDesktopThread[] = [];
+  const batchSize = Math.min(Math.max(limit, 50), 500);
+  for (;;) {
+    const rows = readDesktopThreadRows(databasePath, batchSize, offset);
+    if (!rows.length) return { items, nextOffset: null };
+    const projected = applyCodexSidebarTaskNames(listCodexDesktopThreadsFromRowsForTest(rows, {
+      limit: rows.length, includeArchived: true
+    }), options.sessionIndexPath);
+    const byId = new Map(projected.map(row => [row.id, row]));
+    for (let index = 0; index < rows.length; index++) {
+      const row = byId.get(nonEmptyString(rows[index]!.id));
+      if (!row || query && !`${row.title}\n${row.id}\n${row.cwd}`.toLocaleLowerCase().includes(query)) continue;
+      if (items.length >= limit) return { items, nextOffset: offset + index };
+      items.push(row);
+    }
+    offset += rows.length;
+    if (rows.length < batchSize) return { items, nextOffset: null };
+  }
 }
 
 export function readCodexDesktopThread(

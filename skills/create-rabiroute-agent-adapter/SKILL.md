@@ -84,8 +84,8 @@ AstrBot 这类服务型 Agent 必须显示服务健康、认证状态和可选�
 Agent 适配器不得把 API、渠道或参数写死为长期真源。每次启动、Manager generation 变化、接口返回未知字段/错误，按以下顺序刷新：
 
 1. 从 Host status 或结构化 READY 取得当前 Manager 地址，并用 `/meta` 核对 generation、instance 和健康边界。
-2. 调用 `GET /api/agent/help`，按 `operationId` 或 `method + pathTemplate` 选择当前接口合同；发送渠道另调用 `GET /api/agent/send/capabilities`。
-3. 只使用 help 返回的 path、query、body、response、errors、nextStep 和 capability；先检查 `contractLevel` 与 `coverage.missing`：`baseline` 不得当作精确 schema，缺失项必须回到 contractResource 或专用 capabilities；合同缺项时读取对应实现或专用合同，修正参数后继续；仅暂停无法确定语义的那项请求，不把目录缺项当作用户未许可。
+2. 使用共享 operation SDK 的分类、短列表与关键词搜索。HTTP 入口为 `GET /api/agent/categories` 和 `GET /api/agent/operations`，按 `category/query/provider/limit/cursor` 缩小当前结果。选定 ID 后读取 `GET /api/agent/operations/:operationId?view=input`，按需读取 result/full。发送渠道另读取 `GET /api/agent/send/capabilities`。完整合同、CLI 与 MCP 同参规则见 [统一接口](../../docs/unified-agent-api.md)。
+3. 按当前 description 的 request、inputSources、relatedOperations 和原业务错误取得参数并执行。旧客户端保留 `/api/agent/help` 精确查询和完整导出兼容。目录缺项只说明发现范围，继续核原业务 owner 和当前合同。接口的 `operation` 与本次 `requestId/idempotencyKey` 分别传递。
 4. 成功与失败都保存 HTTP 状态、JSON `code`、`errorCode`、`help`、`repair` 和 receipt/resource 标识。写请求超时、5xx、412 或 generation 变化时，保留原 body 和 delivery/idempotency key，由原投递拥有者查询原 ID 和执行阶段，再按已有幂等合同恢复；同一 ID 的可靠恢复不是新投递，不因结果未知停止其它独立工作。
 5. 新增接口或渠道时，先更新统一能力目录、help、真实路由声明、契约 fixture 和中英文导航；不得只改长文或 Agent skill。
 

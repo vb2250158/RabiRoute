@@ -1,3 +1,4 @@
+import { createDshNativeOperations } from "../manager/providerNativeOperations.js";
 import { sendDshTask } from "../../apps/rabi-agent/lib/dsh.mjs";
 import * as endpointOwner from "./dshOwnerExecution.js";
 import * as runtime from '../dshSessionBridge.js';
@@ -51,6 +52,6 @@ export function createManager(options: AgentManagerImplementationOptions, descri
     },
     apiOperations: invoke => [...createAgentScanOperations(descriptor.type, {
         dshLimit: 200, dshOffset: 0, dshQuery: null, dshBaseUrl: null
-      }, invoke, ['/api/scan/agents/dsh'], ['agent.adapters.dsh.get']), ...createDshConnectionOperations(invoke)]
+      }, invoke, ['/api/scan/agents/dsh'], ['agent.adapters.dsh.get']), ...createDshConnectionOperations(invoke), ...createDshNativeOperations()]
   };
 }

@@ -1,3 +1,4 @@
+import { createCodexNativeOperations } from "../manager/providerNativeOperations.js";
 import { CodexRemoteTaskOwner } from "./codexRemoteTask.js";
 import * as endpointOwner from "./codexOwnerExecution.js";
 import { createCodexRuntime } from '../codexRuntime.js';
@@ -49,9 +50,9 @@ export function createManager(options: AgentManagerImplementationOptions, descri
       },
       'hooks.update': (_payload, invocation) => updateHooks(options.host.packageRoot)
     },
-    apiOperations: invoke => createAgentScanOperations(descriptor.type, {
+    apiOperations: invoke => [...createAgentScanOperations(descriptor.type, {
       codexLimit: 200, codexOffset: 0, codexQuery: null, codexCatalogTimeoutMs: null
-    }, invoke),
+    }, invoke), ...createCodexNativeOperations()],
     start() {
       unsubscribe ??= subscribeCodexDesktopDelivery(event => {
         options.host.publishManagerEvent('agent.delivery-receipt', { ...event, provider: 'codex' });

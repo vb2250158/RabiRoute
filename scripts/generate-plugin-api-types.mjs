@@ -6,7 +6,7 @@ import ts from "typescript";
 export function generatePluginApiTypes(root, { check = false } = {}) {
   const sourcePath = path.join(root, "src/manager/apiOperationContract.ts");
   const outputPath = path.join(root, "plugins/contracts/plugin-sdk/api-operation-contract.d.ts");
-  const exported = new Set(["ApiMethod", "ApiSchema", "ApiBodyContract", "ApiResponseContract", "ApiOperationContract", "ApiOperationInput", "ApiOperationResult", "ApiOperationStream", "ApiOperationDefinition", "ApiOperationRegistration", "ApiUpgradeSession", "ApiUpgradeInput", "ApiUpgradeDefinition", "ApiUpgradeRegistration", "ApiHttpProxyInput", "ApiHttpProxyDefinition", "ManagerApiOperationsService"]);
+  const exported = new Set(["ApiMethod", "ApiSchema", "ApiBodyContract", "ApiResponseContract", "ApiOperationContract", "ApiOperationInput", "ApiOperationResult", "ApiOperationStream", "ApiDiscoveryCategory", "ApiDiscoveryInputSource", "ApiOperationDiscovery", "ApiOperationDefinition", "ApiOperationRegistration", "ApiUpgradeSession", "ApiUpgradeInput", "ApiUpgradeDefinition", "ApiUpgradeRegistration", "ApiHttpProxyInput", "ApiHttpProxyDefinition", "ManagerApiOperationsService"]);
   const source = ts.createSourceFile(sourcePath, fs.readFileSync(sourcePath, "utf8"), ts.ScriptTarget.Latest, true);
   const definitions = source.statements.filter(statement => ts.isTypeAliasDeclaration(statement) && exported.has(statement.name.text));
   if (definitions.length !== exported.size) throw new Error("Public API operation type definitions are incomplete.");

@@ -97,7 +97,26 @@ export type ApiOperationStream = Readonly<{
   /** Must unblock next(), stop subscriptions and let frames reach EOF after cleanup. Never retries a write. */
   cancel(reason: unknown): void | Promise<void>;
 }>;
+/** Discovery describes navigation and argument sources; it does not change execution validation. */
+export type ApiDiscoveryCategory = Readonly<{
+  id: string; title: string; description?: string; parentId?: string;
+}>;
+export type ApiDiscoveryInputSource = Readonly<{
+  field: string; operationId: string; resultPath: string; valuePath?: string;
+  parameters?: Readonly<Record<string, Readonly<{ from: string }> | Readonly<{ value: unknown }>>>;
+}>;
+export type ApiOperationDiscovery = Readonly<{
+  title?: string; summary?: string; category?: ApiDiscoveryCategory;
+  tags?: readonly string[]; keywords?: readonly string[]; provider?: string;
+  inputSources?: readonly ApiDiscoveryInputSource[]; relatedOperations?: readonly string[];
+  automationTemplates?: readonly Readonly<{
+    id: string; version: string; title: string; description?: string; triggerType?: "message" | "schedule";
+    message?: string; template?: string; [key: string]: unknown;
+  }>[];
+}>;
+
 export type ApiOperationDefinition = Readonly<{
+  discovery?: ApiOperationDiscovery;
   contract: ApiOperationContract;
   handler(input: ApiOperationInput): ApiOperationResult | Promise<ApiOperationResult>;
   /** Capture the original owner admission before body consumption. Preparation performs no business action.
@@ -120,7 +139,7 @@ export type ApiUpgradeInput = Readonly<{
   validateIncoming(value: unknown, sizeBytes: number): void;
   validateOutgoing(value: unknown, sizeBytes: number): void;
 }>;
-export type ApiUpgradeDefinition = Readonly<{ contract: ApiOperationContract; handler(input: ApiUpgradeInput): void | Promise<void> }>;
+export type ApiUpgradeDefinition = Readonly<{ discovery?: ApiOperationDiscovery; contract: ApiOperationContract; handler(input: ApiUpgradeInput): void | Promise<void> }>;
 export type ApiUpgradeRegistration = ApiOperationRegistration & Readonly<{ stopAccepting(): void }>;
 export type ApiHttpProxyInput = Readonly<{
   request: IncomingMessage; response: ServerResponse; url: URL;
@@ -128,7 +147,7 @@ export type ApiHttpProxyInput = Readonly<{
   assertCurrent(): void;
   prepareResponse(status: number, headers: Readonly<Record<string, string | readonly string[]>>): void;
 }>;
-export type ApiHttpProxyDefinition = Readonly<{ contract: ApiOperationContract; handler(input: ApiHttpProxyInput): Promise<void> }>;
+export type ApiHttpProxyDefinition = Readonly<{ discovery?: ApiOperationDiscovery; contract: ApiOperationContract; handler(input: ApiHttpProxyInput): Promise<void> }>;
 export type ManagerApiOperationsService = Readonly<{
   registerExternalListener(definition: ApiExternalListenerDefinition): ApiExternalListenerRegistration;
   registerOperations(definitions: readonly ApiOperationDefinition[]): ApiOperationRegistration;
@@ -261,6 +280,8 @@ function compileApiSchema(schema: ApiSchema): ValidateFunction {
 }
 
 export type CompiledApiContract = Readonly<{
+  discovery?: ApiOperationDiscovery;
+  discoveryIssues?: readonly string[];
   contract: ApiOperationContract;
   digest: string;
   pathPattern: RegExp;
@@ -321,8 +342,20 @@ function captureApiContract(input: ApiOperationContract): ApiOperationContract {
   return freezeApiData(normalized) as ApiOperationContract;
 }
 
-export function compileApiContract(definition: Pick<ApiOperationDefinition, "contract">): CompiledApiContract {
-  return compileCapturedApiContract(captureApiContract(definition.contract));
+/** Invalid navigation metadata stays local to its operation and never rejects its handler. */
+export function captureApiDiscoveryMetadata(value: unknown): Pick<CompiledApiContract, "discovery" | "discoveryIssues"> {
+  if (value === undefined) return {};
+  try {
+    if (!value || typeof value !== "object" || Array.isArray(value)) throw new TypeError("Invalid discovery metadata.");
+    return { discovery: freezeApiData(JSON.parse(JSON.stringify(value))) as ApiOperationDiscovery };
+  } catch {
+    return { discoveryIssues: Object.freeze(["discovery_metadata_invalid"]) };
+  }
+}
+
+export function compileApiContract(definition: Pick<ApiOperationDefinition, "contract" | "discovery">): CompiledApiContract {
+  return Object.freeze({ ...compileCapturedApiContract(captureApiContract(definition.contract)),
+    ...captureApiDiscoveryMetadata(definition.discovery) });
 }
 
 function compileCapturedApiContract(contract: ApiOperationContract): CompiledApiContract {
@@ -428,7 +461,8 @@ export function prepareApiOperation(definition: ApiOperationDefinition): () => C
   const { handler, prepare } = definition;
   if (prepare !== undefined && typeof prepare !== "function") throw new Error("Invalid API request preparation.");
   const contract = captureApiContract(definition.contract);
-  return () => Object.freeze({ ...compileCapturedApiContract(contract), handler, ...(prepare ? { prepare } : {}) });
+  const discovery = captureApiDiscoveryMetadata(definition.discovery);
+  return () => Object.freeze({ ...compileCapturedApiContract(contract), ...discovery, handler, ...(prepare ? { prepare } : {}) });
 }
 
 export function compileApiOperation(definition: ApiOperationDefinition): CompiledApiOperation {

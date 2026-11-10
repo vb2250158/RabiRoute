@@ -98,7 +98,27 @@ export type ApiOperationStream = Readonly<{
   cancel(reason: unknown): void | Promise<void>;
 }>;
 
+export type ApiDiscoveryCategory = Readonly<{
+  id: string; title: string; description?: string; parentId?: string;
+}>;
+
+export type ApiDiscoveryInputSource = Readonly<{
+  field: string; operationId: string; resultPath: string; valuePath?: string;
+  parameters?: Readonly<Record<string, Readonly<{ from: string }> | Readonly<{ value: unknown }>>>;
+}>;
+
+export type ApiOperationDiscovery = Readonly<{
+  title?: string; summary?: string; category?: ApiDiscoveryCategory;
+  tags?: readonly string[]; keywords?: readonly string[]; provider?: string;
+  inputSources?: readonly ApiDiscoveryInputSource[]; relatedOperations?: readonly string[];
+  automationTemplates?: readonly Readonly<{
+    id: string; version: string; title: string; description?: string; triggerType?: "message" | "schedule";
+    message?: string; template?: string; [key: string]: unknown;
+  }>[];
+}>;
+
 export type ApiOperationDefinition = Readonly<{
+  discovery?: ApiOperationDiscovery;
   contract: ApiOperationContract;
   handler(input: ApiOperationInput): ApiOperationResult | Promise<ApiOperationResult>;
   /** Capture the original owner admission before body consumption. Preparation performs no business action.
@@ -125,7 +145,7 @@ export type ApiUpgradeInput = Readonly<{
   validateOutgoing(value: unknown, sizeBytes: number): void;
 }>;
 
-export type ApiUpgradeDefinition = Readonly<{ contract: ApiOperationContract; handler(input: ApiUpgradeInput): void | Promise<void> }>;
+export type ApiUpgradeDefinition = Readonly<{ discovery?: ApiOperationDiscovery; contract: ApiOperationContract; handler(input: ApiUpgradeInput): void | Promise<void> }>;
 
 export type ApiUpgradeRegistration = ApiOperationRegistration & Readonly<{ stopAccepting(): void }>;
 
@@ -136,7 +156,7 @@ export type ApiHttpProxyInput = Readonly<{
   prepareResponse(status: number, headers: Readonly<Record<string, string | readonly string[]>>): void;
 }>;
 
-export type ApiHttpProxyDefinition = Readonly<{ contract: ApiOperationContract; handler(input: ApiHttpProxyInput): Promise<void> }>;
+export type ApiHttpProxyDefinition = Readonly<{ discovery?: ApiOperationDiscovery; contract: ApiOperationContract; handler(input: ApiHttpProxyInput): Promise<void> }>;
 
 export type ManagerApiOperationsService = Readonly<{
   registerExternalListener(definition: ApiExternalListenerDefinition): ApiExternalListenerRegistration;

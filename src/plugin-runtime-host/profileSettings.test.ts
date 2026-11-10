@@ -214,3 +214,25 @@ test("package migration and old version fields preserve stable instance settings
   assert.equal(await fs.readFile(ledgerPath, "utf8"), ledger);
   assert.equal((JSON.parse(await fs.readFile(f.profilePath, "utf8"))).instances[0].version, "1.0.0");
 });
+
+
+test("snapshot diagnostic follows the pending settings readdir without exposing private data", async t => {
+  const f = await fixture(t);
+  const rows: import("../shared/fsAwaitDiagnostics.js").SlowFsDiagnostic[] = [];
+  let release!: (files: string[]) => void, entered!: () => void;
+  const waiting = new Promise<void>(resolve => { entered = resolve; });
+  const read = new Promise<string[]>(resolve => { release = resolve; });
+  const original = fs.readdir.bind(fs);
+  t.mock.method(fs, "readdir", (...args: Parameters<typeof fs.readdir>) => {
+    if (args[0] === f.settingsRoot) { entered(); return read; }
+    return original(...args);
+  });
+  const owner = new PluginProfileSettings({ ...f.owner.options, onSlowFs: row => rows.push(row) });
+  const result = owner.snapshot(); await waiting;
+  await new Promise(resolve => setTimeout(resolve, 2100));
+  assert.equal(rows.length, 1); assert.equal(rows[0]!.phase, "settings.readdir");
+  assert.ok(rows[0]!.operationElapsedMs >= 1900); assert.ok(rows[0]!.phaseElapsedMs >= 1800);
+  assert.equal(JSON.stringify(rows).includes(f.root), false);
+  release([]); const snapshot = await result; assert.equal(snapshot.profile.instances.length, 2);
+  assert.equal(rows.length, 1);
+});

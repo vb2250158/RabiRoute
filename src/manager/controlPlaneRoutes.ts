@@ -73,6 +73,10 @@ import { manageInstanceAgent } from "../agentAdapters/instanceManagement.js";
 import fs from "node:fs";
 import { createVideoRuntime } from "../plugins/io.rabiroute.manager.video/src/manager/videoRuntime.js";
 import { NativeWebguiStaticOwner } from "./nativeWebguiStaticOwner.js";
+import { DataUpgradeService } from "./dataUpgradeService.js";
+import { createDataUpgradeOperations } from "./dataUpgradeOperations.js";
+import { createDataUpgradeHostRestart } from "./dataUpgradeHostRestart.js";
+import { DATA_UPGRADE_STATUS_EVENT } from "../shared/dataUpgradeContract.js";
 import { createWebguiStaticOperations } from "./webguiStaticOperations.js";
 import { createVideoOperations } from "../plugins/io.rabiroute.manager.video/src/manager/videoOperations.js";
 import { createRabiPeerRuntime } from "./rabiPeerRoutes.js";
@@ -7991,7 +7995,17 @@ get roleDirForApi() { return roleDirForApi; } }) }),
   const managerPluginSettings = new PluginProfileSettings({
     profilePath: managerPluginProfilePath,
     settingsRoot: path.join(rootDir, "data", "plugins", "settings"),
-    migrationsPath: path.join(packageRoot, "dist", "plugins", "profiles", "package-migrations.json")
+    migrationsPath: path.join(packageRoot, "dist", "plugins", "profiles", "package-migrations.json"),
+    onSlowFs: detail => {
+      if (!managerOperationalLog.isEnabled("filesystem", "warn")) return;
+      const diagnostic = JSON.stringify(detail);
+      managerOperationalLog.record("warn", "filesystem_await_stalled", {
+        group: "filesystem", owner: detail.owner, requestId: detail.requestId,
+        durationMs: detail.operationElapsedMs, result: diagnostic
+      });
+      try { process.stderr.write("[RabiRoute filesystem await] " + diagnostic + "\n"); }
+      catch { managerOperationalLog.record("warn", "filesystem_diagnostic_stderr_failed", { group: "filesystem", owner: detail.owner }); }
+    }
   });
   const builtinPluginPackageRoot = path.join(packageRoot, "dist", "plugins", "packages");
   const managedPluginPackageRoot = path.join(rootDir, "data", "plugins", "packages");
@@ -8315,7 +8329,17 @@ createWebguiStaticOperations: () => createWebguiStaticOperations(new NativeWebgu
           status: () => managerWebPatches.status(),
           staticManifest: revision => managerWebPatches.staticManifest(revision)
         },
-        isControlPath: isManagerControlRequestPath
+        isControlPath: isManagerControlRequestPath,
+        onSlowFs: detail => {
+          if (!managerOperationalLog.isEnabled("filesystem", "warn")) return;
+          const diagnostic = JSON.stringify(detail);
+          managerOperationalLog.record("warn", "filesystem_await_stalled", {
+            group: "filesystem", owner: detail.owner, requestId: detail.requestId,
+            durationMs: detail.operationElapsedMs, result: diagnostic
+          });
+          try { process.stderr.write("[RabiRoute filesystem await] " + diagnostic + "\n"); }
+          catch { managerOperationalLog.record("warn", "filesystem_diagnostic_stderr_failed", { group: "filesystem", owner: detail.owner }); }
+        }
       })),
 createPluginCatalogOperations: () => createPluginCatalogOperations({
         runtime: managerPluginKernel!,
@@ -8378,6 +8402,27 @@ createManagerEventOperationDefinition
     management: pluginManagement
   }, managerReadOnly)));
   managerRuntimeOwner.register("plugin_management_api", () => pluginManagementRegistration.dispose());
+
+  const restartForDataUpgrade = createDataUpgradeHostRestart({
+    layout: { packageRoot, stateRoot: rootDir },
+    generation: () => managerHostIdentity?.applicationGenerationId ?? "",
+    hosted: Boolean(managerHostIdentity),
+    hostExecutable: process.env.RABIROUTE_HOST_EXECUTABLE
+  });
+  const dataUpgrades = new DataUpgradeService({
+    layout: { packageRoot, stateRoot: rootDir }, rolesRoot, readOnly: managerReadOnly,
+    ...(managerHostIdentity ? { requestRestart: restartForDataUpgrade } : {})
+  });
+  const unsubscribeDataUpgrades = dataUpgrades.subscribe(status => publishManagerEvent(DATA_UPGRADE_STATUS_EVENT, status));
+  const dataUpgradeRegistration = managerApplicationRoutes.run(() => managerPluginRoutes.registerOperations(
+    managerApplicationRoutes.instanceId,
+    createDataUpgradeOperations({ service: dataUpgrades, canManage: () => true })
+  ));
+  managerRuntimeOwner.register("data_upgrades", async () => {
+    unsubscribeDataUpgrades();
+    await dataUpgradeRegistration.dispose();
+    await dataUpgrades.stop();
+  });
 
   const managerPluginStartupStartedAt = Date.now();
   try {
@@ -8875,6 +8920,11 @@ createManagerEventOperationDefinition
   }
   planStorageStartupLifecycle.start();
   routeCatalogStartupLifecycle.start();
+  setImmediate(() => {
+    if (!managerRuntimeOwner.isTearingDown()) void dataUpgrades.start().catch(error => {
+      managerOperationalLog.record("warn", "data_upgrade_check_failed", { error: managerOperationalError(error, rootDir) });
+    });
+  });
   } catch (error) {
     await failManagerStartup("manager_request_startup", error);
   }

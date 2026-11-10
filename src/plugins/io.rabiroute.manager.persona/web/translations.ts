@@ -1,5 +1,25 @@
 export const pluginTranslations = {
   "en": {
+    "更多模板": "More templates",
+
+    "选择投递模板": "Choose a delivery template",
+    "投递模板": "Delivery template",
+    "模板会填入普通规则，执行时间、目标 Agent 和正文可继续编辑。": "The template fills an ordinary rule. You can edit its schedule, target Agent and message.",
+    "添加规则": "Add rule",
+    "自动化模板暂时无法加载": "Automation templates are temporarily unavailable",
+    "记忆整理与 Skill 维护": "Memory consolidation and Skill maintenance",
+    "整理当前角色记忆，对照 Skill，维护可复用经验。": "Organize the current persona memories and maintain reusable knowledge in its Skills.",
+    "阶段复盘与记忆记录": "Work review and memory capture",
+    "将工作结果、决定和用户纠正中的长期事实记入当前角色。": "Capture durable facts from work results, decisions and user corrections for the current persona.",
+    "计划进展核对": "Plan progress review",
+    "核对计划步骤、执行任务与原回执。": "Review plan steps, execution tasks and original receipts.",
+    "消息摘要": "Message summary",
+    "汇总所选渠道和时间范围的消息。": "Summarize messages from the selected channels and time range.",
+    "运行状态巡检": "Runtime status review",
+    "汇总宿主、插件和目标设备的运行状态。": "Summarize runtime status for the Host, plugins and selected devices.",
+    "空白消息投递": "Blank delivery",
+    "填写要投递的内容，并选择触发条件和目标。": "Enter the message and choose its trigger and recipient.",
+
     "查看合并转发": "Open forwarded messages",
     "点击查看聊天记录": "Open chat record",
     "此转发暂时无法展开": "This forward cannot be opened right now",
@@ -570,6 +590,26 @@ export const pluginTranslations = {
     "等待 QA 验收": "Awaiting QA acceptance"
   },
   "ja": {
+    "更多模板": "その他のテンプレート",
+    "选择投递模板": "配信テンプレートを選択",
+    "投递模板": "配信テンプレート",
+    "模板会填入普通规则，执行时间、目标 Agent 和正文可继续编辑。": "テンプレートから通常のルールを作成します。実行日時、対象 Agent、本文を編集できます。",
+    "添加规则": "ルールを追加",
+    "自动化模板暂时无法加载": "自動化テンプレートを一時的に読み込めません",
+    "记忆整理与 Skill 维护": "記憶整理と Skill メンテナンス",
+    "整理当前角色记忆，对照 Skill，维护可复用经验。": "現在の人格の記憶を整理し、Skill と照合して再利用できる知識を保守します。",
+    "阶段复盘与记忆记录": "作業の振り返りと記憶記録",
+    "将工作结果、决定和用户纠正中的长期事实记入当前角色。": "作業結果、決定、ユーザーの訂正から長期的な事実を現在の人格に記録します。",
+    "计划进展核对": "計画進捗の確認",
+    "核对计划步骤、执行任务与原回执。": "計画のステップ、実行タスク、元の受領記録を確認します。",
+    "消息摘要": "メッセージ要約",
+    "汇总所选渠道和时间范围的消息。": "選択したチャンネルと期間のメッセージを要約します。",
+    "运行状态巡检": "稼働状態の確認",
+    "汇总宿主、插件和目标设备的运行状态。": "ホスト、プラグイン、対象デバイスの稼働状態をまとめます。",
+    "空白消息投递": "空のメッセージ配信",
+    "填写要投递的内容，并选择触发条件和目标。": "配信内容を入力し、トリガーと対象を選択します。",
+
+
     "查看合并转发": "まとめて転送されたメッセージを表示",
     "点击查看聊天记录": "チャット履歴を開く",
     "此转发暂时无法展开": "この転送は現在開けません",

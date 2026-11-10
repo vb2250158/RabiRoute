@@ -1706,10 +1706,11 @@ export function parseRoleSkillMarkdown(raw: string, filePath: string, fallbackUp
   // Directory-form skills are indexed by their folder name, not the literal "SKILL".
   const baseName = path.basename(filePath, ".md");
   const fallbackId = baseName.toLowerCase() === "skill" ? path.basename(path.dirname(filePath)) : baseName;
-  const title = String(metadata.title || content.match(/^#\s+(.+)$/m)?.[1] || fallbackId).trim();
-  const summary = String(metadata.summary || content.split(/\r?\n/).map((line) => line.trim()).find((line) => line && !line.startsWith("#")) || "").trim();
+  const title = String(metadata.title || metadata.name || content.match(/^#\s+(.+)$/m)?.[1] || fallbackId).trim();
+  const summary = String(metadata.summary || metadata.description || content.split(/\r?\n/).map((line) => line.trim()).find((line) => line && !line.startsWith("#")) || "").trim();
   const keywords = parseKeywordValue(metadata.keywords);
-  if (!title || !summary || keywords.length === 0) return null;
+  const standardSkill = Boolean(metadata.name?.trim() && metadata.description?.trim());
+  if (!title || !summary || (!standardSkill && keywords.length === 0)) return null;
 
   const statusText = String(metadata.status || "active").trim();
   const status: RoleSkillStatus = statusText === "draft" || statusText === "archived" ? statusText : "active";

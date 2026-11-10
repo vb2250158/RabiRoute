@@ -44,7 +44,7 @@ export const apiToolPageMethods = {
         const target = requestedTarget || targetDeviceId;
         const before = await request({ method: 'GET', path: '/meta' }, target);
         const meta = before?.structuredContent?.data;
-        if (!current() || !meta?.applicationGenerationId || !meta.managerInstanceId || meta.health?.live !== true || meta.health?.requiredReady !== true || !['healthy', 'degraded'].includes(meta.health.state)) throw new Error('API_MANAGER_NOT_READY');
+        if (!current() || !meta?.applicationGenerationId || !meta.managerInstanceId || meta.health?.live !== true || !['healthy', 'degraded'].includes(meta.health.state)) throw new Error('API_MANAGER_NOT_READY');
         const prepared={ ...http, headers: { ...http.headers,
           'x-rabiroute-expected-application-generation-id': meta.applicationGenerationId,
           'x-rabiroute-expected-manager-instance-id': meta.managerInstanceId } };

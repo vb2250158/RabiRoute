@@ -1,5 +1,5 @@
 import { parseApiPathTemplate } from "../../apps/rabi-agent/lib/api-path-template.mjs";
-import { apiDigest, freezeApiData, type ApiOperationContract, type ApiSchema } from "./apiOperationContract.js";
+import { apiDigest, freezeApiData, type ApiOperationContract, type ApiOperationDiscovery, type ApiSchema } from "./apiOperationContract.js";
 import type { ApiExternalListenerBinding } from "./apiExternalListenerBinding.js";
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { runPluginSynchronousWork } from "../plugin-kernel/synchronousExecution.js";
@@ -10,9 +10,11 @@ export type ApiCatalogIdentity = Readonly<{
   pluginGenerationId: string;
 }>;
 export type ApiPublishedOperation = Readonly<{
+  discovery?: ApiOperationDiscovery;
+  discoveryIssues?: readonly string[];
   contract: ApiOperationContract;
   contractDigest: string;
-  owner: Readonly<{ instanceId: string; activationId?: string; revision?: string }>;
+  owner: Readonly<{ instanceId: string; pluginId?: string; activationId?: string; revision?: string }>;
   binding?: ApiExternalListenerBinding;
   access?: Readonly<{ kind: "manager-native-http"; pathPrefix: string; contractHeader: string; contractDigest: string }>;
 }>;
@@ -43,6 +45,8 @@ export function createApiCatalogSnapshot(identity: ApiCatalogIdentity, revision:
   const activeListeners = [...(listeners ?? new Map(operations.flatMap(value => value.binding ? [[value.binding.leaseId, { binding: value.binding, owner: value.owner }] as const] : [])).values())]
     .sort((a, b) => a.binding.listenerId.localeCompare(b.binding.listenerId));
   const catalogDigest = apiDigest({ operations: ordered.map(value => ({ contract: value.contract, contractDigest: value.contractDigest,
+    ...(value.discovery ? { discovery: value.discovery } : {}), ...(value.discoveryIssues ? { discoveryIssues: value.discoveryIssues } : {}),
+    ...(value.discovery ? { discovery: value.discovery } : {}), ...(value.discoveryIssues ? { discoveryIssues: value.discoveryIssues } : {}),
     ...(value.binding ? { binding: value.binding } : {}), ...(value.access ? { access: value.access } : {}) })), listeners: activeListeners, gaps });
   const etag = `"${apiDigest({ ...identity, catalogDigest, catalogRevision: revision }).slice(7)}"`;
   return freezeApiData({ ...identity, schemaVersion: "2", catalogRevision: revision, catalogDigest, etag,

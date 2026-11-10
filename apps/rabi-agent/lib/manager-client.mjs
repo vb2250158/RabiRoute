@@ -5,6 +5,7 @@ import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { businessReady, createEndpointSession, sameIdentity } from "./endpoint-session.mjs";
 import { createApiCatalogClient } from "./api-catalog-client.mjs";
+import { createOperationSdk } from "./operation-sdk.mjs";
 import { validApiHttpMethod } from "./api-path-template.mjs";
 import { openApiWebSocket } from "./api-websocket-client.mjs";
 import { submitDeliveryToOwner, rememberDeliveryDescriptor, readDeliveryDescriptor } from "./delivery-control.mjs";
@@ -680,7 +681,8 @@ function buildManagerClient({ managerUrl, credential, agentType, sessionId, conf
       const normalized = await readAgentJsonBody(options);
       return normalized.request?.action === "send" ? { catalog: snapshot, options: normalized.options } : undefined;
     } });
-  return { request: publicRequest, invoke, upload, download, catalog, invokeOperation: catalog.invokeOperation, openOperation: catalog.openOperation };
+  const operations = createOperationSdk({ request: publicRequest, openWebSocket, requestExternal, openExternalWebSocket });
+  return { request: publicRequest, invoke, upload, download, catalog, operations, invokeOperation: catalog.invokeOperation, openOperation: catalog.openOperation };
 }
 
 export function createManagerClient(options) { return buildManagerClient(options); }

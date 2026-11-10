@@ -49,6 +49,8 @@ Start with the user guide for everyday operation, use the API reference for inte
 
 ## Developer: routing, roles, and Agent interfaces
 
+- [Unified CLI and MCP API](unified-agent-api_en.md) — Categories, keyword discovery, shared input, native Agent capabilities and templates.
+
 - [API errors and parameter recovery](api-error-recovery_en.md): workspace mismatch, valid parameter discovery, error examples and coverage by API family.
 
 - [API reference and discovery](api-reference_en.md): browse running operations in the documentation page, search contracts, inspect parameters and responses, copy request templates, and download OpenAPI.

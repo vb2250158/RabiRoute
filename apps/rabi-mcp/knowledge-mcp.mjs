@@ -1,6 +1,7 @@
 import { createManagerClient } from './lib/manager-client.mjs';
 import { createHostEndpointSession } from './lib/host-endpoint.mjs';
 import { createKnowledgeTools } from './lib/knowledge-tools.mjs';
+import { createOperationTools } from './lib/operation-tools.mjs';
 import { startKnowledgeMcpStdio } from './lib/knowledge-mcp-server.mjs';
 import { startKnowledgeHttpServer } from './lib/knowledge-http-server.mjs';
 
@@ -13,10 +14,19 @@ async function main() {
   const endpointSession = createHostEndpointSession({ hostExecutable: process.env.RABIROUTE_HOST_EXE });
   const endpoint = await endpointSession.ensure({ diagnostic: true });
   const client = createManagerClient({ managerUrl: endpoint.managerUrl, endpointSession, localHost: true, timeoutMs: 12000 });
-  const tools = createKnowledgeTools({ client, allowedRoles, allowWrites: writeSetting === 'true' });
+  const policy = { client, allowedRoles, allowWrites: writeSetting === 'true' };
+  const operations = createOperationTools(policy);
+  const legacyKnowledge = createKnowledgeTools(policy);
+  // Existing knowledge tool names remain callable during client migration.
+  // The visible catalog presents the same six shared actions as CLI.
+  const tools = { list: operations.list, close: operations.close, call(name, args, context) {
+    return name.startsWith('rabi_') ? operations.call(name, args, context) : legacyKnowledge.call(name, args, context);
+  } };
   const transport = process.env.RABI_MCP_TRANSPORT || 'stdio';
   if (transport === 'stdio') {
-    await startKnowledgeMcpStdio({ tools });
+    const server = await startKnowledgeMcpStdio({ tools });
+    const close = () => { tools.close().finally(() => server.close()).catch(() => { process.exitCode = 1; }); };
+    process.once('SIGINT', close); process.once('SIGTERM', close); process.stdin.once('end', close);
   } else if (transport === 'http') {
     const portText = process.env.RABI_MCP_HTTP_PORT || '0';
     if (!/^(0|[1-9][0-9]{0,4})$/.test(portText)) throw new Error('Invalid port.');
@@ -25,7 +35,7 @@ async function main() {
       allowedOrigins: process.env.RABI_MCP_ALLOWED_ORIGINS === undefined ? undefined : JSON.parse(process.env.RABI_MCP_ALLOWED_ORIGINS),
       maxBodyBytes: process.env.RABI_MCP_HTTP_MAX_BODY_BYTES === undefined ? undefined : Number(process.env.RABI_MCP_HTTP_MAX_BODY_BYTES) });
     process.stdout.write(JSON.stringify({ event: 'READY', transport: 'http', address: server.address }) + '\n');
-    const close = () => { server.close().catch(() => { process.exitCode = 1; }); };
+    const close = () => { tools.close().finally(() => server.close()).catch(() => { process.exitCode = 1; }); };
     process.once('SIGINT', close);
     process.once('SIGTERM', close);
   } else throw new Error('Unsupported transport.');

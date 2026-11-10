@@ -6,11 +6,12 @@ import { ManagerConfigRepository } from "./configRepository.js";
 import { recoverRouteCatalogTransactions } from "./routeCatalogDurableTransaction.js";
 import { readRouteCatalogDefinition, readRouteCatalogPersona } from "./routeCatalogTransaction.js";
 import { runPlanStorageStartupGate } from "./planStorageStartupGate.js";
-import { migrateRolePlanLayoutAtStartup } from "./planStorageStartupMigration.js";
+import { migrateRolePlanLayoutAtStartup, recoverPlanLayoutTransactions } from "./planStorageStartupMigration.js";
 import { recoverPlanLifecycleTransitions } from "../planStorageRepository.js";
 import { recoverPlanFeedbackStoreTransactions } from "../planFeedback.js";
 import { recoverStoredPlanPackages } from "../planStoragePackageRecovery.js";
 import type { StorageStartupTask } from "./storageStartupProcess.js";
+import { discoverDataUpgradesInChild } from "./dataUpgradeOperations.js";
 
 async function recordPlanStage(task: Extract<StorageStartupTask, { kind: "plan" }>, action: string, outcome: string, durationMs?: number): Promise<void> {
   try {
@@ -38,6 +39,8 @@ async function planStage<Value>(task: Extract<StorageStartupTask, { kind: "plan"
 
 async function execute(task: StorageStartupTask): Promise<unknown> {
   switch (task.kind) {
+    case "data_upgrade_discovery":
+      return discoverDataUpgradesInChild(task.layout, task.rolesRoot);
     case "directories": {
       try {
         return fs.readdirSync(task.root, { withFileTypes: true })
@@ -64,7 +67,9 @@ async function execute(task: StorageStartupTask): Promise<unknown> {
         roleDirectories: [path.join(task.rolesRoot, roleId)],
         readOnly: false,
         recoverRoleLifecycle: roleDir => planStage(task, "lifecycle", () => recoverPlanLifecycleTransitions(roleDir)),
-        migrateRole: roleDir => planStage(task, "layout", () => migrateRolePlanLayoutAtStartup(roleDir)),
+        migrateRole: roleDir => planStage(task, "layout", () => task.allowMigration
+          ? migrateRolePlanLayoutAtStartup(roleDir)
+          : recoverPlanLayoutTransactions(roleDir)),
         recoverRoleFeedback: roleDir => planStage(task, "feedback", () => recoverPlanFeedbackStoreTransactions(roleDir)),
         recoverRolePackages: roleDir => planStage(task, "packages", () => recoverStoredPlanPackages(roleDir))
       });

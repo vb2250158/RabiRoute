@@ -27,7 +27,7 @@ export type ApiExternalListenerPublication = Readonly<{
   /** False retires this listener even while its owning gateway process remains alive. */
   active: boolean;
   binding: ApiExternalListenerBinding;
-  operations: readonly Pick<ApiPublishedOperation, "contract" | "contractDigest">[];
+  operations: readonly Pick<ApiPublishedOperation, "contract" | "contractDigest" | "discovery" | "discoveryIssues">[];
 }>;
 /** Installed by trusted host code. The host verifies the original process/lease, never an HTTP caller. */
 export type ApiExternalListenerSource = Readonly<{

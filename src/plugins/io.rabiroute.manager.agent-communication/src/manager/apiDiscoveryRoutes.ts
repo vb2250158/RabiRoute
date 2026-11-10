@@ -5,6 +5,7 @@ import { apiContractPrecision } from "@rabiroute/host-api/manager/apiContractPre
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { runPluginSynchronousWork } from "@rabiroute/host-api/plugin-kernel/synchronousExecution";
 import { prepareApiJsonBody } from "@rabiroute/host-api/manager/apiPreparedJson";
+import { apiDiscoveryIndex, prepareApiDiscoveryIndex, apiOperationDescription, apiOperationPage, type ApiOperationFilters } from "./apiDiscoveryIndex.js";
 
 const empty = { type: "object", properties: {}, additionalProperties: false } as const;
 const identityProperties = {
@@ -114,18 +115,61 @@ const querySchema = { type: "object", additionalProperties: false, properties: {
   cursor: { type: "string", minLength: 1, maxLength: 4096 }, limit: { type: "string", pattern: "^(?:[1-9]|[1-9][0-9]|1[0-9]{2}|200)$" }
 } } as const;
 
+const operationListQuerySchema = { type: "object", additionalProperties: false, properties: {
+  category: { type: "string", maxLength: 512 }, query: { type: "string", maxLength: 4096 },
+  provider: { type: "string", maxLength: 512 }, owner: { type: "string", maxLength: 512 },
+  method: querySchema.properties.method, pathPrefix: { type: "string", maxLength: 4096 },
+  cursor: querySchema.properties.cursor, limit: querySchema.properties.limit
+} } as const;
+const describeQuerySchema = { type: "object", additionalProperties: false, properties: {
+  view: { enum: ["input", "result", "full"] }
+} } as const;
+
 export function createApiDiscoveryOperations(registry: ManagerPluginRouteRegistry): readonly ApiOperationDefinition[] {
   const define = (operationId: string, pathTemplate: string, description: string, query: ApiSchema, schema: ApiSchema,
-    handler: ApiOperationDefinition["handler"]): ApiOperationDefinition => ({
+    handler: ApiOperationDefinition["handler"], pathSchema: ApiSchema = empty): ApiOperationDefinition => ({
+    discovery: { title: description, category: { id: "runtime", title: "插件与运行" }, tags: ["discovery", "接口发现"] },
     contract: { operationId, contractVersion: "1.0.0", method: "GET", pathTemplate, description, exposure: "public", transport: "http",
       ...(pathTemplate === "/api/agent/help" ? { aliases: [`agent:GET:${pathTemplate}`] } : {}),
-      request: { path: empty, query, headers: { type: "object", properties: { "if-none-match": { type: "string" } }, additionalProperties: true }, body: { kind: "none" } },
+      request: { path: pathSchema, query, headers: { type: "object", properties: { "if-none-match": { type: "string" } }, additionalProperties: true }, body: { kind: "none" } },
       responses: { "200": { mediaType: "application/json", schema }, "304": { mediaType: "application/json", schema: false } },
       effects: { mode: "read", description: "Reads the active API contract snapshot without executing business operations." },
       recovery: { strategy: "repeatable-read", description: "Refresh the snapshot after generation changes or expired pagination cursors." }, validators: []
     } satisfies ApiOperationContract, handler
   });
   return [
+    define("manager.api.categories.list", "/api/agent/categories", "List API business categories and active operation counts.", empty, successSchema, async input => {
+      const snapshot = await activeSnapshot(registry, input.signal);
+      const conditional = response(input, snapshot, undefined);
+      if (conditional.status === 304) return conditional;
+      await prepareApiDiscoveryIndex(snapshot, input.signal);
+      const categories = runPluginSynchronousWork(() => apiDiscoveryIndex(snapshot).categories, "read API discovery categories");
+      return { ...conditional, body: { code: 0, data: { ...identity(snapshot), categories } } };
+    }),
+    define("manager.api.operations.list", "/api/agent/operations", "Search lightweight API summaries globally or within a business category.", operationListQuerySchema, successSchema, async input => {
+      const snapshot = await activeSnapshot(registry, input.signal);
+      const conditional = response(input, snapshot, undefined);
+      if (conditional.status === 304) return conditional;
+      await prepareApiDiscoveryIndex(snapshot, input.signal);
+      const filters: Record<string, string> = {};
+      for (const key of ["category", "query", "provider", "owner", "method", "pathPrefix"] as const) {
+        const value = queryValue(input, key);
+        if (value) filters[key] = key === "method" ? value.toUpperCase() : value;
+      }
+      const page = runPluginSynchronousWork(() => apiOperationPage(snapshot, filters as ApiOperationFilters,
+        Number(queryValue(input, "limit") ?? 20), queryValue(input, "cursor")), "read API discovery summary page");
+      return { ...conditional, body: { code: 0, data: { ...identity(snapshot), ...page } } };
+    }),
+    define("manager.api.operations.describe", "/api/agent/operations/:operationId", "Describe one API operation's input, result or full executable contract.", describeQuerySchema, successSchema, async input => {
+      const snapshot = await activeSnapshot(registry, input.signal);
+      const conditional = response(input, snapshot, undefined);
+      if (conditional.status === 304) return conditional;
+      await prepareApiDiscoveryIndex(snapshot, input.signal);
+      const operation = runPluginSynchronousWork(() => apiOperationDescription(snapshot, input.path.operationId!,
+        (queryValue(input, "view") ?? "full") as "input" | "result" | "full"), "read one API operation description");
+      const body = await prepareApiJsonBody({ code: 0, data: { ...identity(snapshot), operation } }, operation, input.signal);
+      return { ...conditional, body };
+    }, { type: "object", required: ["operationId"], properties: { operationId: { type: "string", minLength: 1 } }, additionalProperties: false }),
     define("manager.api.help", "/api/agent/help", "Discover operations from the active route and contract snapshot.", querySchema, successSchema, async input => {
       const snapshot = await activeSnapshot(registry, input.signal);
       const page = runPluginSynchronousWork(() => readPage(input, snapshot), "select API help page");

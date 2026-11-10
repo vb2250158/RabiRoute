@@ -4,6 +4,7 @@ import { userFacingError } from "../../../../../ribiwebgui/src/userFacingError";
 import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import SpeechParameterSlider from "../../../../../ribiwebgui/src/components/SpeechParameterSlider.vue";
 import AutomationAgentTarget from "../components/AutomationAgentTarget.vue";
+import { DEFAULT_AUTOMATION_TEMPLATES, BLANK_AUTOMATION_TEMPLATE_ID, automationTemplatePatch, loadAutomationTemplates, loadAutomationTemplate, type AutomationTemplate, type AutomationTemplateChoice } from "../persona/automationTemplateClient";
 import AutomationEndpointNav from "../components/AutomationEndpointNav.vue";
 import { automationEndpoint, automationEndpoints } from "../persona/automationEndpoints";
 import PersonaAgentHooks from "../components/PersonaAgentHooks.vue";
@@ -101,6 +102,16 @@ const speech = useSpeechStore();
 const { t } = useI18n();
 const ruleDialog = ref(false);
 const automationDialog = ref(false);
+const automationTemplateDialog = ref(false);
+const automationTemplates = ref<AutomationTemplateChoice[]>([...DEFAULT_AUTOMATION_TEMPLATES]);
+const automationTemplateCursor = ref<string | null>(null);
+const selectedAutomationTemplateId = ref(BLANK_AUTOMATION_TEMPLATE_ID);
+const automationTemplateLoading = ref(false);
+const automationTemplateError = ref("");
+let automationTemplateRequest: AbortController | undefined;
+const selectedAutomationTemplate = computed(() => automationTemplates.value.find(item => item.id === selectedAutomationTemplateId.value));
+onBeforeUnmount(() => automationTemplateRequest?.abort());
+watch(automationTemplateDialog, open => { if (!open) automationTemplateRequest?.abort(); });
 const automationWorkspaceTab = ref<"messages" | "hooks">("messages");
 const templateVariablesDialog = ref(false);
 type PersonaPageTab = "profile" | "messages" | "expression" | "avatar" | "identity" | "automation" | "all-day-recording";
@@ -154,6 +165,15 @@ let personaMarkdownRequestVersion = 0;
 const PERSONA_SUMMARY_MAX_CHARACTERS = 420;
 
 const gateway = computed(() => store.sourceDeviceId === personaService.deviceId ? store.selectedGateway : null);
+const automationTemplateOwner = computed(() => JSON.stringify([store.selectedRoleId, store.sourceDeviceId,
+  gateway.value?.id || "", gateway.value ? personaReferenceIdentity(gateway.value) : ""]));
+watch(automationTemplateOwner, () => {
+  automationTemplateDialog.value = false;
+  automationTemplateRequest?.abort(); automationTemplateRequest = undefined;
+  automationTemplateLoading.value = false; automationTemplateError.value = "";
+  automationTemplateCursor.value = null; automationTemplates.value = [...DEFAULT_AUTOMATION_TEMPLATES];
+  selectedAutomationTemplateId.value = BLANK_AUTOMATION_TEMPLATE_ID;
+}, { flush: "sync" });
 const isRemotePersona = computed(() => Boolean(gateway.value?.agentRoleDeviceId));
 const personaSecondaryNavItems = computed(() => buildWebNavigation(
   pluginCatalogStore.contributions.value,
@@ -786,12 +806,56 @@ function openAutomation(ruleId: string): void {
   }
 }
 
-function createAutomation(): void {
+async function openAutomationTemplatePicker(): Promise<void> {
+  automationTemplateDialog.value = true;
+  automationTemplateRequest?.abort();
+  const controller = new AbortController(); automationTemplateRequest = controller;
+  const owner = automationTemplateOwner.value;
+  automationTemplateLoading.value = true; automationTemplateError.value = "";
+  try {
+    const page = await loadAutomationTemplates(personaService.fetch, controller.signal);
+    if (!controller.signal.aborted && owner === automationTemplateOwner.value) { automationTemplates.value = page.items; automationTemplateCursor.value = page.nextCursor; }
+  } catch (error) { if (!controller.signal.aborted) automationTemplateError.value = userFacingError(error); }
+  finally { if (automationTemplateRequest === controller) { automationTemplateLoading.value = false; automationTemplateRequest = undefined; } }
+}
+async function loadMoreAutomationTemplates(): Promise<void> {
+  if (!automationTemplateCursor.value || automationTemplateLoading.value) return;
+  const controller = new AbortController(); automationTemplateRequest = controller; automationTemplateLoading.value = true;
+  const owner = automationTemplateOwner.value;
+  try {
+    const page = await loadAutomationTemplates(personaService.fetch, controller.signal, automationTemplateCursor.value);
+    if (!controller.signal.aborted && owner === automationTemplateOwner.value) { automationTemplates.value = [...automationTemplates.value, ...page.items]; automationTemplateCursor.value = page.nextCursor; }
+  } catch (error) { if (!controller.signal.aborted) automationTemplateError.value = userFacingError(error); }
+  finally { if (automationTemplateRequest === controller) { automationTemplateLoading.value = false; automationTemplateRequest = undefined; } }
+}
+async function createAutomation(choice?: AutomationTemplateChoice): Promise<void> {
+  if (choice && !automationTemplateDialog.value) return;
+  const owner = automationTemplateOwner.value;
+  let template = choice as AutomationTemplate | undefined;
+  if (choice && !choice.action) {
+    automationTemplateRequest?.abort();
+    const controller = new AbortController(); automationTemplateRequest = controller; automationTemplateLoading.value = true;
+    try { template = await loadAutomationTemplate(personaService.fetch, controller.signal, choice.id); if (controller.signal.aborted || !automationTemplateDialog.value || owner !== automationTemplateOwner.value) return; }
+    catch (error) { if (!controller.signal.aborted) automationTemplateError.value = userFacingError(error); return; }
+    finally { if (automationTemplateRequest === controller) { automationTemplateLoading.value = false; automationTemplateRequest = undefined; } }
+  }
+  if (owner !== automationTemplateOwner.value) return;
   const endpoint = selectedAutomationEndpoint.value || "napcat";
-  const id = store.addAutomation(endpoint === "schedule" ? "schedule" : "message", "deliver_agent");
-  if (!id) return;
+  const triggerType = template && template.id !== BLANK_AUTOMATION_TEMPLATE_ID && template.triggerType ? template.triggerType : endpoint === "schedule" ? "schedule" : "message";
+  let id: string | undefined;
+  try {
+    const patch = template && template.id !== BLANK_AUTOMATION_TEMPLATE_ID ? automationTemplatePatch(template) : undefined;
+    id = store.addAutomation(triggerType, "deliver_agent");
+    if (!id) return;
+    if (patch) store.updateAutomation(id, patch);
+  } catch (error) {
+    if (id) store.removeAutomation(id);
+    automationTemplateError.value = userFacingError(error);
+    return;
+  }
+  automationTemplateDialog.value = false;
   openAutomation(id);
-  selectedEndpoint.value = endpoint;
+  selectedEndpoint.value = triggerType === "schedule" ? "schedule" : endpoint;
 }
 
 function patchAutomation(patch: Partial<PersonaAutomationRuleDefinition>): void {
@@ -1869,7 +1933,7 @@ onBeforeUnmount(() => {
               <section class="automation-rule-content" :aria-label="selectedAutomationEndpointTitle">
                 <div class="automation-toolbar">
                   <strong>{{ selectedAutomationEndpointTitle }}</strong>
-                  <v-btn color="secondary" variant="tonal" prepend-icon="mdi-plus" @click="createAutomation">{{ selectedAutomationEndpoint === 'schedule' ? '新增定时任务' : '新增消息规则' }}</v-btn>
+                  <v-btn color="secondary" variant="tonal" prepend-icon="mdi-plus" @click="openAutomationTemplatePicker">{{ selectedAutomationEndpoint === 'schedule' ? '新增定时任务' : '新增消息规则' }}</v-btn>
                 </div>
 
                 <div v-if="visibleAutomations.length === 0" class="empty-state">
@@ -1937,6 +2001,27 @@ onBeforeUnmount(() => {
         <v-card-actions>
           <v-spacer />
           <v-btn variant="text" @click="templateVariablesDialog = false">关闭</v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
+
+    <v-dialog v-model="automationTemplateDialog" max-width="720" scrollable aria-label="选择投递模板">
+      <v-card class="app-card">
+        <v-card-title>选择投递模板</v-card-title>
+        <v-card-text>
+          <v-progress-linear v-if="automationTemplateLoading" indeterminate class="mb-3" />
+          <v-alert v-if="automationTemplateError" type="warning" variant="tonal" class="mb-3">{{ automationTemplateError }}</v-alert>
+          <v-select v-model="selectedAutomationTemplateId" :items="automationTemplates" item-title="title" item-value="id" :return-object="false" :disabled="automationTemplateLoading" label="投递模板">
+            <template #item="{ props: itemProps, item }"><v-list-item v-bind="itemProps" :title="t(item.raw.title)" :subtitle="t(item.raw.description)" /></template>
+            <template #selection="{ item }">{{ t(item.raw.title) }}</template>
+          </v-select>
+          <v-btn v-if="automationTemplateCursor" variant="text" :disabled="automationTemplateLoading" @click="loadMoreAutomationTemplates">更多模板</v-btn>
+          <p v-if="selectedAutomationTemplate" class="section-note">{{ t(selectedAutomationTemplate.description) }}</p>
+          <p class="section-note">模板会填入普通规则，执行时间、目标 Agent 和正文可继续编辑。</p>
+        </v-card-text>
+        <v-card-actions>
+          <v-spacer /><v-btn variant="text" @click="automationTemplateDialog = false">取消</v-btn>
+          <v-btn color="primary" :disabled="!selectedAutomationTemplate || automationTemplateLoading" @click="createAutomation(selectedAutomationTemplate)">添加规则</v-btn>
         </v-card-actions>
       </v-card>
     </v-dialog>

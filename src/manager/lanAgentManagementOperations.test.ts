@@ -145,7 +145,7 @@ test('remote lookup transport failure is distinct from invalid adapter parameter
 
 test("management discovery contains all fifteen real routes, optional ignored bodies and no issued secrets", { timeout: 15000 }, async t => {
   const f = await fixture(t);
-  assert.equal(f.api.catalogSnapshot().operations.length, 18);
+  assert.equal(f.api.catalogSnapshot().operations.length, 21);
   const response = await fetch(f.base + "/api/agent/openapi", { headers: f.auth });
   const spec = await response.json() as any;
   assert.equal(spec.paths["/api/lan-agent/enrollments"].post.requestBody.required, false);

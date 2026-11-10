@@ -1,6 +1,6 @@
 {
   "name": "rabiroute",
-  "version": "0.11.4",
+  "version": "0.12.0",
   "license": "MIT",
   "private": true,
   "type": "module",
@@ -63,7 +63,8 @@
     "build:host-api": "node scripts/collect-plugin-host-api.mjs && tsc -p tsconfig.json --declaration --emitDeclarationOnly --outDir dist/host-api-types && node scripts/generate-plugin-host-api.mjs",
     "plugin:build": "node scripts/build-plugin-packages.mjs",
     "plugin:export": "node scripts/export-plugin-source.mjs",
-    "plugin:version": "node scripts/bump-plugin-version.mjs"
+    "plugin:version": "node scripts/bump-plugin-version.mjs",
+    "rabi": "node apps/rabi-agent/rabi-cli.mjs"
   },
   "dependencies": {
     "esbuild": "0.28.1",

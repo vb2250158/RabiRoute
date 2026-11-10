@@ -127,6 +127,22 @@ Provide `RABI_MANAGER_URL`, `RABI_AGENT_BOOTSTRAP_TICKET`, `RABI_NODE_ID`, `RABI
 
 The connector automatically updates from Manager's signed content digest unless explicitly configured with `autoUpdate=false`, including changed content with the same version. One stable launcher supervises one worker. Candidate handoff follows prepared → drain → old connection closed → activate → pointer commit → release execution; failure retains the old release without cancelling or resending business work. Current-user login startup, bounded recovery, legacy migration and real-device acceptance follow the [canonical bootstrap contract](../../docs/lan-rabi-agent-bootstrap_en.md#installation-and-releases). Valid credentials are not redeemed again or rebound; replacing files does not establish host hot loading.
 
+## Category discovery and unified CLI
+
+Terminal Agents and scripts use `node apps/rabi-agent/rabi-cli.mjs`. Local calls discover Manager through the current Host. Enrolled remote calls reuse their existing configuration. CLI and MCP share the operation SDK.
+
+```sh
+node apps/rabi-agent/rabi-cli.mjs categories
+node apps/rabi-agent/rabi-cli.mjs list --category agents --provider codex --limit 20
+node apps/rabi-agent/rabi-cli.mjs search "chat history" --category agents
+node apps/rabi-agent/rabi-cli.mjs describe agent.providers.codex.sessions.history.read --view input
+node apps/rabi-agent/rabi-cli.mjs call agent.providers.codex.sessions.history.read --input-file request.json
+```
+
+For a remote call, append `--config <original-private-config> --agent-type <type> --id <full-session-id>`. `--input-file`, `--input-json` and `--input-stdin` consume the same structure as MCP `input`, retaining `pathParams/query/body/headers`. Supply the original write identity with `--request-id` or `--idempotency-key`, and the original ETag with `--if-match`.
+
+See [Unified CLI and MCP API](../../docs/unified-agent-api_en.md) for categories, custom plugin capabilities, native Codex/DSH histories, files, streams and parameter sources. This section describes source implementation. Installed adoption on each target computer is confirmed by release acceptance.
+
 ## Use Manager from an existing task
 
 **New source capability; installed acceptance pending:** `--operation <operationId>` resolves method/path from schema-v2 `GET /api/agent/help`. `--path-params` and `--query` accept JSON objects; body, output, and idempotency options reuse `--api`. For example, `--operation manager.api.help --agent-type <type> --id <fullSessionId>` reads the new catalog. Each operation reuses verified discovery and refreshes missing or invalidated entries on demand; real connection authentication and server contract checks still run at the request boundary. Catalog changes, event reconnects, and identity changes invalidate it; business calls are never automatically replayed. Older deployments use original `--api` calls with known contracts. A missing discovery entry is not remote disablement. See [target architecture](../../docs/api-contract-discovery-target-architecture_en.md) for full-coverage and migration status.

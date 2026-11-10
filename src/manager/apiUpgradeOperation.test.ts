@@ -67,7 +67,7 @@ async function fixture(t: import("node:test").TestContext, publication?: { read(
 
 test("discovery/OpenAPI and actual upgrade use one executable contract without HTTP-only admission", { timeout: 15000 }, async t => {
   const f = await fixture(t), snapshot = f.api.catalogSnapshot();
-  assert.equal(snapshot.operations.length, 4); assert.equal(snapshot.coverage.globalCoverage, "not-proven");
+  assert.equal(snapshot.operations.length, 7); assert.equal(snapshot.coverage.globalCoverage, "not-proven");
   const spec = (await apiCatalogOpenApi(snapshot)) as any, operation = spec.paths["/api/lan-agent/connect"].get;
   assert.equal(operation["x-rabiroute-transport"], "websocket"); assert.equal(operation.responses["101"].content, undefined);
   const selected = snapshot.operations.find(row => row.contract.operationId === "manager.lan-agent.connect")!;

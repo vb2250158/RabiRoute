@@ -15,7 +15,7 @@ description: 通过 RabiRoute 正式工具发现 Agent 会话、核对绑定、�
 
 1. 先区分用户要“检查为什么失败”还是“发送这段消息”。排障授权不等于发送测试消息、修改绑定、创建会话或重启宿主的授权。
 2. 使用宿主正式工具或已接入的稳定客户端。地址发现、连接鉴权及重连由工具和 SDK 负责；已有连接不要求 Agent 手工反复核对身份、端口或来源会话。排障时按当前正式入口读取健康与错误，不使用历史端口。
-3. 目标与参数明确时直接调用正式投递入口。需要查参数或处理合同错误时，按工具说明读取 `/api/agent/help` 或对应 contractResource；消息端参数不明时再读 `/api/agent/send/capabilities`。目录与会话列表用于发现，不构成每次发送前的许可。
+3. 目标与参数明确时直接调用正式投递入口。参数不明时，先通过共享 SDK 分类或搜索当前短摘要，再按 operation ID 读取单项 input 与参数来源。HTTP 使用 `/api/agent/categories`、`/api/agent/operations` 和 `/api/agent/operations/:operationId?view=input`；CLI / MCP 规则见 [统一接口](../../docs/unified-agent-api.md)。旧 Help 和 contractResource 保留兼容，发送渠道参数由 `/api/agent/send/capabilities` 提供。目录与会话列表用于发现。
 4. 使用完整目标会话 ID 定位；标题、工作目录和时间只能辅助核对。明确区分“直接投递给指定 Agent 会话”和“外部消息按 Route 绑定转发”，不能仅凭 Route 未绑定就断定所有投递方式都失败。
 5. 根据正式返回区分：Manager 不可达、适配器不支持、目标不存在、绑定缺失、会话不可投递、鉴权失败、投递被拒、结果未知。只读查询成功不能证明消息已经送达。
 6. 正式返回仍不能解释问题时，才定位对应实现、配置或日志。先确认实际运行版本和源码位置，只检查与错误相关的路径；本地文件不代替 Manager 权威状态，不直接修改业务 JSON。

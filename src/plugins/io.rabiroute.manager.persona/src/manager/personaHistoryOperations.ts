@@ -43,7 +43,16 @@ function define<T>(contract:ApiOperationContract,prepare:(input:Omit<ApiOperatio
     catch(error){parsed.signal?.throwIfAborted();result=fail(error,kind);}
     return kind==='history'?trace(parsed,result):result;
   };}catch(error){input.signal?.throwIfAborted();return fail(error,kind);}};
-  return {contract,prepare:bind,handler:async input=>{const handler=bind(input);return typeof handler==='function'?handler(input):handler;}};
+  const taskDirectory = contract.pathTemplate.endsWith('/chat-history/tasks');
+  const endpointDirectory = contract.pathTemplate.endsWith('/message-history-conversations');
+  const title = taskDirectory ? '角色 Agent 会话与往来任务' : endpointDirectory ? '消息端会话目录'
+    : kind === 'chat' ? '角色聊天记录与全文' : kind === 'voice' ? '语音记录' : '角色消息历史';
+  return {contract, discovery: { title, summary: title,
+    category: {id:'messages.history',title:'消息与聊天记录',parentId:'messages'},
+    tags:['会话','聊天记录','消息','全文','任务','往来任务'],
+    keywords:['Agent','角色面板','任务回复','系统消息','NapCat','语音'],
+    inputSources: [{field:'path.roleId',operationId:'manager.personas.list',resultPath:'/personas',valuePath:'/personaId'}]
+  },prepare:bind,handler:async input=>{const handler=bind(input);return typeof handler==='function'?handler(input):handler;}};
 }
 
 /** Original ledgers/read workers; exact API and static aliases share the same functional owners. */

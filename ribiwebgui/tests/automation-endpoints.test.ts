@@ -45,17 +45,18 @@ test("speech rules use the speech service category and retain legacy filters", (
   assert.ok(!automationEndpoints.some(endpoint => endpoint.value === "fennenote"));
 });
 
-test("new rules open the editor directly and schedules use the shared workspace", () => {
+test("new rules open the template picker and schedules use the shared workspace", () => {
   const page = fs.readFileSync(new URL("../../src/plugins/io.rabiroute.manager.persona/web/pages/PersonaTemplatePage.vue", import.meta.url), "utf8");
   const start = page.indexOf('class="app-card glass-card section-card automation-workspace"');
   const end = page.indexOf('<v-dialog v-model="templateVariablesDialog"');
   assert.ok(start >= 0 && end > start);
   const workspace = page.slice(start, end);
   assert.doesNotMatch(workspace, /<v-menu|value="schedule"|定制任务/);
-  assert.match(page, /@click="createAutomation">[\s\S]*新增定时任务/);
+  assert.match(page, /@click="openAutomationTemplatePicker">[\s\S]*新增定时任务/);
+  assert.match(page, /@click="createAutomation\(selectedAutomationTemplate\)"/);
   assert.doesNotMatch(page, /timerInputEnabled|enableTimerInput/);
   assert.match(page, /patchAutomationSchedule\(\{ skipWhenAgentBusy:/);
-  assert.match(page, /function createAutomation\(\)[\s\S]*store\.addAutomation\([\s\S]*openAutomation\(id\)/);
+  assert.match(page, /async function createAutomation\(choice\?: AutomationTemplateChoice\)[\s\S]*store\.addAutomation\([\s\S]*openAutomation\(id\)/);
   assert.match(page, /<AutomationEndpointNav v-model="selectedAutomationEndpoint"/);
   assert.match(page, /<AutomationEndpointNav v-model="selectedEndpoint"/);
 });

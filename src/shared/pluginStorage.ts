@@ -36,8 +36,9 @@ export type PluginStorageMigrationDeclaration = Readonly<{ schemaVersion: 1; sco
 export type PluginStorageLegacySource = Readonly<{ pluginId: string; migrationId: string; sourcePath: string }>;
 export type PluginStorageMigrationResult = Readonly<{
   pluginId: string; instanceId?: string; migrationId: string;
-  status: "migrated" | "unchanged" | "custom_path" | "failed";
+  status: "migrated" | "unchanged" | "custom_path" | "pending" | "failed";
   source?: string; target?: string; backupPath?: string; message?: string;
+  inputFingerprint?: string;
 }>;
 
 // Startup diagnostics are derived from the single explicit migration run, never business data or a second ledger.
@@ -97,6 +98,19 @@ function digestTree(root: string): string {
   visit(root, ""); return digest.digest("hex");
 }
 
+/** Metadata only, scoped to the exact declared resource being copied. Discovery runs in a bounded child. */
+function migrationSourceMetadata(source: string, kind: PluginStorageMigration["kind"]): unknown[] {
+  const metadata: unknown[] = [];
+  const visit = (filename: string): void => {
+    const stat = fs.lstatSync(filename);
+    metadata.push([path.relative(source, filename), stat.size, stat.mtimeMs, stat.ctimeMs, stat.dev, stat.ino]);
+    if (kind === "directory" && stat.isDirectory() && !stat.isSymbolicLink()) {
+      for (const name of fs.readdirSync(filename).sort()) visit(path.join(filename, name));
+    }
+  };
+  visit(source); return metadata;
+}
+
 /** Invoke only at full-generation startup after the previous application owners retired. */
 export function applyPluginStorageMigrations(input: Readonly<{
   phase: "owners-retired"; pluginId: string; instanceId?: string; declaration: PluginStorageMigrationDeclaration;
@@ -104,6 +118,8 @@ export function applyPluginStorageMigrations(input: Readonly<{
   localAppDataRoot?: string; legacyStateRoot?: string; legacySources?: readonly PluginStorageLegacySource[]; readOnly?: boolean;
   /** Only constrains adoption of an existing old shared source, never a new namespace. */
   ambiguousLegacyOwner?: boolean;
+  migrationPolicy?: "inspect" | "defer";
+  confirmedMigrationIds?: readonly string[];
 }>): readonly PluginStorageMigrationResult[] {
   if (input.phase !== "owners-retired") throw new Error("Plugin storage migration requires retired application owners.");
   const layout = input.layout ?? applicationRuntimeLayout(), environment = input.environment ?? process.env;
@@ -136,6 +152,29 @@ export function applyPluginStorageMigrations(input: Readonly<{
       backupPath = inside(path.join(layout.stateRoot, "data", ".runtime", "plugin-storage-backups", "0.7", component(input.pluginId),
         input.instanceId ? component(input.instanceId) : "shared"), component(migration.id));
       const receiptPath = path.join(backupPath, "receipt.json");
+      // Metadata discovery never hashes/copies the store or resumes a transaction.
+      // An already prepared transaction belongs to ordinary recovery, not new consent.
+      if (input.migrationPolicy) {
+        const previous = exists(receiptPath) ? JSON.parse(fs.readFileSync(receiptPath, "utf8")) : undefined;
+        const settled = previous?.schemaVersion === 1 && previous.target === target
+          && ["migrated", "fresh", "external_reference"].includes(previous.status)
+          && !(previous.status === "fresh" && previous.source !== source && (exactSource !== undefined || input.legacyStateRoot !== undefined));
+        if (input.migrationPolicy === "inspect") {
+          results.push({ ...identity, source, target, backupPath,
+            inputFingerprint: createHash("sha256").update(JSON.stringify([migration, source, target,
+              exists(source) ? migrationSourceMetadata(source, migration.kind) : null,
+              exists(target) ? fs.lstatSync(target).mtimeMs : null])).digest("hex"),
+            status: !settled && previous?.status !== "prepared" && exists(source) ? "pending" : "unchanged" });
+          continue;
+        }
+        if (!settled && previous?.status !== "prepared" && exists(source)
+          && !input.confirmedMigrationIds?.includes(JSON.stringify([input.pluginId, input.instanceId ?? null, migration.id]))) {
+          const message = "Storage upgrade awaits confirmation in the WebGUI overview and the next application restart.";
+          failuresFor(layout.stateRoot).set(failureOwner(input.pluginId, input.instanceId), new Error(message));
+          results.push({ ...identity, source, target, backupPath, status: "pending", message });
+          continue;
+        }
+      }
       let recoveryDigest: string | undefined;
       let adoptingFreshSource = false;
       if (exists(receiptPath)) {
@@ -230,6 +269,8 @@ export async function prepareApplicationPluginStorage(options: Readonly<{
   phase: "owners-retired"; readOnly?: boolean; layout?: RuntimeLayout; profilePath?: string; settingsRoot?: string;
   packageRoots?: readonly string[]; localAppDataRoot?: string; legacyStateRoot?: string; legacySources?: readonly PluginStorageLegacySource[];
   environment?: NodeJS.ProcessEnv; migrationsPath?: string;
+  migrationPolicy?: "inspect" | "defer";
+  confirmedMigrationIds?: readonly string[];
 }>): Promise<readonly PluginStorageMigrationResult[]> {
   const layout = options.layout ?? applicationRuntimeLayout();
   const environment = options.environment ?? process.env;
@@ -244,7 +285,7 @@ export async function prepareApplicationPluginStorage(options: Readonly<{
   for (const instance of snapshot.profile.instances) packages.set(instance.package, [...(packages.get(instance.package) ?? []), instance]);
   try {
     for (const [pluginId, instances] of packages) {
-      failuresFor(layout.stateRoot).delete(failureOwner(pluginId));
+      if (options.migrationPolicy !== "inspect") failuresFor(layout.stateRoot).delete(failureOwner(pluginId));
       try {
         const declarations = new Map<string, PluginStorageMigrationDeclaration | undefined>();
         const sharedDeclarations = new Set<string>();
@@ -272,13 +313,13 @@ export async function prepareApplicationPluginStorage(options: Readonly<{
             ...(declaration.scope === "instance" ? { instanceId: instance.id, ambiguousLegacyOwner: instances.length > 1 } : {}), declaration,
             config }));
         }
-        for (const failed of ownerResults.filter(result => result.status === "failed")) {
+        for (const failed of ownerResults.filter(result => result.status === "failed" && options.migrationPolicy !== "inspect")) {
           failuresFor(layout.stateRoot).set(failureOwner(pluginId, failed.instanceId), new Error(`Plugin storage migration ${failed.migrationId} failed: ${failed.message}`));
         }
         results.push(...ownerResults);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        failuresFor(layout.stateRoot).set(failureOwner(pluginId), new Error(`Plugin storage migration could not prepare: ${message}`));
+        if (options.migrationPolicy !== "inspect") failuresFor(layout.stateRoot).set(failureOwner(pluginId), new Error(`Plugin storage migration could not prepare: ${message}`));
         results.push({ pluginId, migrationId: "declaration", status: "failed", message });
       }
     }

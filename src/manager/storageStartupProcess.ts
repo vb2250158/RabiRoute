@@ -6,7 +6,8 @@ import type { RouteCatalogTransactionInput } from "./routeCatalogTransaction.js"
 
 export type StorageStartupTask =
   | Readonly<{ kind: "directories"; root: string; catalog?: "routes" }>
-  | Readonly<{ kind: "plan"; rolesRoot: string; roleId: string }>
+  | Readonly<{ kind: "plan"; rolesRoot: string; roleId: string; allowMigration?: boolean }>
+  | Readonly<{ kind: "data_upgrade_discovery"; rolesRoot: string; layout: import("../shared/runtimeLayout.js").RuntimeLayout }>
   | Readonly<{ kind: "catalog_recovery"; input: RouteCatalogTransactionInput }>
   | Readonly<{ kind: "route"; input: RouteCatalogTransactionInput; configName: string }>
   | Readonly<{ kind: "persona"; rolesRoot: string; roleId: string; roleFiles: string[] }>;

@@ -6,6 +6,16 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.12.0 - 2026-11-10
+
+- Share one operation SDK across CLI and MCP for categories, compact lists, keyword search, individual contracts and structured calls. Capability IDs and per-request idempotency identities remain explicit while HTTP, SSE, WebSocket, downloads and receipts reuse their original owners.
+- Publish seven business categories, plugin-defined categories, Chinese keywords, parameter sources and related operations from the active catalog. Discovery revisions and executable contract digests are distinct. Snapshot caches and cooperative preparation reduce context size and CPU work.
+- `io.rabiroute.manager.agent-communication` `0.1.4` adds progressive discovery. `io.rabiroute.agent.codex` `0.1.5` exposes paginated native conversation history. `io.rabiroute.agent.dsh` `0.1.3` bridges native history and plugin listing, installation, update and removal.
+- `io.rabiroute.manager.persona` `0.1.10` adds role Skill creation, update, deletion, complete source reads and original command receipts. Automation creation offers six editable presets, including memory consolidation with Skill maintenance, and plugin-provided templates through the existing scheduler.
+- `io.rabiroute.endpoint.napcat` `0.1.6` and `io.rabiroute.manager.diagnostics` `0.1.5` describe actual message-history, contact and connection-directory parameter sources for Agent discovery.
+- Advance Host API to `1.8.0`, Plugin SDK to `1.2.0`, and standard MCP to `0.2.0`. Update public declarations and CLI/MCP guides, and include the unified command and MCP entry in portable packages.
+- Separate application startup and old-data format upgrades at their owners. After readiness, WebGUI displays a cached upgrade overview. Confirmation uses a durable operation and the formal Host lifecycle. Ordinary transaction recovery remains independent. Add original filesystem-await stage diagnostics.
+
 ## 0.11.4 - 2026-11-10
 
 - Prepare Gateway and Agent-command executable plugin copies under the local Host state root, separated by Route and entrance. Shared Route and role data paths, original accounts, connection authentication and bindings remain unchanged.

@@ -127,6 +127,22 @@ node rabi-agent.mjs --bootstrap
 
 连接器默认根据 Manager 已签名内容摘要自动更新，显式 `autoUpdate=false` 关闭；同版本内容变化也可更新。唯一稳定启动器监管单一 worker；更新候选按 prepared → 排空 → 旧连接关闭 → 激活 → 指针提交 → 释放执行的顺序交接，失败保留旧版，不取消或重发业务。当前用户登录自启、异常保活、旧安装迁移与实机验收边界见[权威接入合同](../../docs/lan-rabi-agent-bootstrap.md)。已有有效凭据不重复兑换、不重绑；覆盖磁盘不等于宿主热更新。
 
+## 分类发现与统一 CLI
+
+终端 Agent 和脚本使用 `node apps/rabi-agent/rabi-cli.mjs`。本机通过当前 Host 发现 Manager，已接入远端通过原配置连接。CLI 与 MCP 共用 operation SDK。
+
+```sh
+node apps/rabi-agent/rabi-cli.mjs categories
+node apps/rabi-agent/rabi-cli.mjs list --category agents --provider codex --limit 20
+node apps/rabi-agent/rabi-cli.mjs search "聊天历史" --category agents
+node apps/rabi-agent/rabi-cli.mjs describe agent.providers.codex.sessions.history.read --view input
+node apps/rabi-agent/rabi-cli.mjs call agent.providers.codex.sessions.history.read --input-file request.json
+```
+
+远端命令追加 `--config <原私有配置> --agent-type <type> --id <完整会话ID>`。`--input-file`、`--input-json`、`--input-stdin` 使用与 MCP `input` 相同的结构，保留 `pathParams/query/body/headers`。本次写请求通过 `--request-id` 或 `--idempotency-key` 传递原身份，`--if-match` 传递原 ETag。
+
+完整分类、自定义插件功能、原生 Codex/DSH 历史、文件与流，以及参数来源见 [CLI 与 MCP 统一接口](../../docs/unified-agent-api.md)。本节对应源码实现，安装版和目标电脑实际采用以发布验收为准。
+
 ## 从现有任务使用 Manager
 
 **源码新增，安装版未验收：** `--operation <operationId>` 从当前 `GET /api/agent/help` 的 schema v2 目录取得 method/path；`--path-params` 和 `--query` 接受 JSON 对象，其余正文、文件输出与幂等选项复用 `--api`。例如 `--operation manager.api.help --agent-type <type> --id <fullSessionId>` 查询新目录。复用已验证的 operation 目录缓存，缺项或失效时再按需刷新；真实连接鉴权和服务端合同校验仍在每次调用边界执行；目录变更、事件重连与身份变化使缓存失效，业务调用不自动重放。旧部署尚无该目录时使用已知合同的原 `--api`，目录缺项不表示远端被禁用。完整覆盖与迁移状态见[目标架构](../../docs/api-contract-discovery-target-architecture.md)。

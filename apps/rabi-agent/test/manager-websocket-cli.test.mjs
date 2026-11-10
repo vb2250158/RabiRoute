@@ -11,6 +11,7 @@ import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { WebSocketServer } from "ws";
 import { runManagerCommand } from "../lib/manager-cli.mjs";
+import { runCli } from "../rabi-cli.mjs";
 
 async function fixture(t, framing = "json") {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "rabi-cli-ws-"));
@@ -25,6 +26,8 @@ async function fixture(t, framing = "json") {
     if (request.url === "/meta") response.end(JSON.stringify(meta));
     else if (request.url === "/api/agent/help") response.end(JSON.stringify({ code: 0, data: { schemaVersion: "2", ...meta,
       pluginGenerationId: "plugins", catalogRevision: 1, catalogDigest: "sha256:" + "a".repeat(64), operations: [{ id: contract.operationId, contractDigest: "sha256:" + "b".repeat(64), contract }] } }));
+    else if (request.url.startsWith("/api/agent/operations/")) response.end(JSON.stringify({code:0,data:{schemaVersion:"2",...meta,
+      pluginGenerationId:"plugins",catalogRevision:1,catalogDigest:"sha256:"+"a".repeat(64),operation:{id:contract.operationId,contractDigest:"sha256:"+"b".repeat(64),contract}}}));
     else response.writeHead(404).end("{}");
   });
   const sockets = new WebSocketServer({ noServer: true, perMessageDeflate: false });
@@ -163,4 +166,18 @@ test("the real CLI entry reads JSONL stdin and prints only its redacted receipt"
   const [code] = await done; assert.equal(code, 0, stderr);
   const result = JSON.parse(stdout); assert.equal(result.ok, true); assert.equal(result.framesReceived, 1); assert.equal(stdout.includes(f.credential), false);
   assert.deepEqual(await f.records(), [{ type: "json", data: { type: "actual-entry" } }]);
+});
+
+
+test('unified call CLI uses the actual WebSocket owner, identity reads and JSONL stdin', { timeout: 10000 }, async t => {
+  const f = await fixture(t);
+  f.onMessage = channel => { channel.send(JSON.stringify({ type: 'done' })); channel.close(1000); };
+  const input = Readable.from([JSON.stringify({ type: 'json', data: { type: 'start' } }) + '\n']);
+  const result = await runCli(['call', 'old.socket', '--config', f.configPath, '--agent-type', 'dsh', '--id', 'full-source-id',
+    '--input-json', JSON.stringify({pathParams:{channel:'unified'}}), '--output', f.outputPath, '--frames-stdin', '--timeout-ms', '5000',
+    '--request-id', 'socket-original-request', '--if-match', '"socket-revision"'], { inputStream: input });
+  assert.equal(result.ok, true, JSON.stringify(result)); assert.equal(result.framesReceived, 1);
+  assert.equal(f.upgrades[0].headers['idempotency-key'], 'socket-original-request');
+  assert.equal(f.upgrades[0].headers['if-match'], '"socket-revision"');
+  assert.deepEqual(await f.records(), [{type:'json',data:{type:'done'}}]);
 });

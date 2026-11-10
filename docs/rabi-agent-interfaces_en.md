@@ -6,6 +6,8 @@ English | <a href="./rabi-agent-interfaces.md">简体中文</a>
 
 # Rabi Interfaces for Handlers
 
+See [Unified CLI and MCP API](unified-agent-api_en.md) for categories, keyword search, shared CLI/MCP input and current native Agent capabilities. Use short summaries and single-operation input descriptions for normal discovery. Complete Help supports compatible clients and exports.
+
 See [API errors and parameter recovery](api-error-recovery_en.md) for read-only discovery, workspace mismatch examples and coverage by API family. Preserve the original intent and receipt; obtain valid parameters from the current operation contract named by the error.
 
 ## Preflight for a new remote conversation

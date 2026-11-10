@@ -476,7 +476,7 @@ function migratePlanStorageNameUnderLock(
 
 export function canonicalizeRolePlanStorageDirectories(
   roleDir: string,
-  options: { now?: () => Date; faultInjection?: { afterRename?: () => void; afterRewrite?: () => void } } = {}
+  options: { now?: () => Date; recoveryOnly?: boolean; faultInjection?: { afterRename?: () => void; afterRewrite?: () => void } } = {}
 ): PlanStorageNameCanonicalizationResult {
   const now = options.now ?? (() => new Date());
   const result: PlanStorageNameCanonicalizationResult = {
@@ -509,6 +509,7 @@ export function canonicalizeRolePlanStorageDirectories(
       result.failures.push({ planId: receipt.planId, error: error instanceof Error ? error.message : String(error) });
     }
   }
+  if (options.recoveryOnly) return result;
   for (const bucket of [ACTIVE_BUCKET, ARCHIVE_BUCKET] as const) {
     const bucketRoot = path.join(plansRoot(roleDir), bucket);
     let entries: fs.Dirent[] = [];

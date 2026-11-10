@@ -6,6 +6,8 @@
 
 # Agent 需要关注的 Rabi 接口
 
+分类、关键词搜索、CLI / MCP 参数和当前原生 Agent 功能统一见 [CLI 与 MCP 统一接口](unified-agent-api.md)。日常先读取短摘要和单项输入合同，完整 Help 用于兼容客户端与导出。
+
 参数错误后的只读发现、工作区不匹配示例与分批覆盖范围见[接口错误与参数恢复](api-error-recovery.md)。保留原意图与回执，按错误提供的当前 operation 合同取得合法参数。
 
 ## 远端新会话的创建预检

@@ -1,5 +1,5 @@
 import { ReadSettingsError } from "@rabiroute/host-api/shared/readSettingsError";
-import type { ApiOperationContract, ApiOperationDefinition, ApiOperationResult } from "@rabiroute/host-api/manager/apiOperationContract";
+import type { ApiOperationContract, ApiOperationDefinition, ApiOperationDiscovery, ApiOperationResult } from "@rabiroute/host-api/manager/apiOperationContract";
 import { QQ_READ_LIMITS, QQ_READ_KINDS, QQ_MESSAGE_ID_PATTERN, QQ_ATTACHMENT_INDEX_PATTERN, QQ_TARGET_ID_PATTERN, QQ_FORWARD_PATH_PATTERN, QQ_FORWARD_NODE_PATTERN,
   QQ_HISTORY_QUERY_SCHEMA, QQ_MESSAGE_QUERY_SCHEMA, QQ_FORWARD_QUERY_SCHEMA, QQ_FORWARD_LIMITS, projectPublicQqMessage, qqReadOperationContract, type QqReadTarget } from "./qqReadContract.js";
 import type http from "node:http";
@@ -253,14 +253,27 @@ async function readQqMessageResult(request: http.IncomingMessage, url: URL,
   finally { activeReads.set(context, (activeReads.get(context) ?? 1) - 1); clearTimeout(timeout); response.off("close", closed); }
 }
 
+function qqDiscovery(kind: string): ApiOperationDiscovery {
+  const titles: Record<string, string> = { history: 'QQ 群聊与私聊历史', message: 'QQ 原消息', attachment: 'QQ 消息附件',
+    forward: 'QQ 合并转发', 'forward-node': 'QQ 转发节点', 'forward-attachment': 'QQ 转发附件', contacts: 'QQ 群与联系人目录', members: 'QQ群成员' };
+  return { title: titles[kind] ?? 'QQ 消息', summary: titles[kind] ?? '读取 QQ 消息',
+    category: { id: 'messages.qq', title: 'QQ 消息', parentId: 'messages' }, provider: 'napcat',
+    tags: ['QQ', '群聊', '私聊', '消息', kind], keywords: ['聊天记录', '历史', '联系人', '转发', '附件'],
+    inputSources: [
+      { field: 'query.routeId', operationId: 'manager.gateways.read', resultPath: '', valuePath: '/id' },
+      ...(kind === 'contacts' ? [] : [{ field: 'query.target', operationId: 'agent.qq.contacts.read', resultPath: '/data/entries', valuePath: '/target',
+        parameters: { 'query.routeId': { from: 'query.routeId' } } }])
+    ], relatedOperations: ['agent.qq.contacts.read', 'agent.qq.history.read', 'agent.qq.message.read'] };
+}
+
 export function createQqMessageOperations(context: QqMessageRoutesContext): readonly ApiOperationDefinition[] {
-  const messages: ApiOperationDefinition[] = (["history", "message", "attachment"] as const).map(kind => ({ contract: qqReadOperationContract(kind), handler: input => {
+  const messages: ApiOperationDefinition[] = (["history", "message", "attachment"] as const).map(kind => ({ contract: qqReadOperationContract(kind), discovery: qqDiscovery(kind), handler: input => {
     const selected: QqReadTarget = kind === "history" ? { kind } : kind === "message" ? { kind, messageId: input.path.messageId! }
       : { kind, messageId: input.path.messageId!, index: Number(input.path.attachmentIndex) };
     return readQqMessageResult(input.request, input.url, input.response, context, selected);
   } }));
   for (const kind of ["forward", "forward-node", "forward-attachment"] as const) {
-    messages.push({ contract: qqReadOperationContract(kind), handler: input => readQqMessageResult(input.request, input.url, input.response, context,
+    messages.push({ contract: qqReadOperationContract(kind), discovery: qqDiscovery(kind), handler: input => readQqMessageResult(input.request, input.url, input.response, context,
       { kind, messageId: input.path.messageId!, forwardPath: input.path.forwardPath!,
         ...(kind !== "forward" ? { nodeIndex: Number(input.path.nodeIndex) } : {}),
         ...(kind === "forward-attachment" ? { index: Number(input.path.attachmentIndex) } : {}) } as QqReadTarget) });
@@ -275,7 +288,7 @@ export function createQqMessageOperations(context: QqMessageRoutesContext): read
         : {...QQ_MESSAGE_QUERY_SCHEMA,properties:{...QQ_MESSAGE_QUERY_SCHEMA.properties,kind:{const:'group'}}}},
       responses:{...base.responses,'200':{mediaType:'application/json',schema:{type:'object',required:['code','data'],properties:{code:{const:0},data:{type:'object',required:['routeId','instanceId','entries'],properties:{routeId:{type:'string'},instanceId:{type:'string'},entries:{type:'array',items:{type:'object'}},warnings:{type:'array',items:{type:'string'}},account:{type:'object',required:['userId','name'],additionalProperties:false,properties:{userId:{type:'string',pattern:QQ_TARGET_ID_PATTERN.source},name:{type:'string'}}}}}}}}}
     };
-    messages.push({contract,handler:input=>readQqMessageResult(input.request,input.url,input.response,context,{kind})});
+    messages.push({contract,discovery:qqDiscovery(kind),handler:input=>readQqMessageResult(input.request,input.url,input.response,context,{kind})});
   }
   return messages;
 }

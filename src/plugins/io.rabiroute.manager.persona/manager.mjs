@@ -229,6 +229,10 @@ export const activate = definePlugin({
             return () => registration.dispose();
         }, "activate Manager persona Skill operations");
         ctx.effect(async () => {
+            const registration = await runtime.managerPluginRoutes.registerOperationsAsync(context.identity.instanceId, runtime.personaAutomationTemplateOperations, context.lifecycle.signal);
+            return () => registration.dispose();
+        }, "activate Manager persona automation template operations");
+        ctx.effect(async () => {
             const registration = await runtime.managerPluginRoutes.registerOperationsAsync(context.identity.instanceId, runtime.personaKnowledgeOperations, context.lifecycle.signal);
             return () => registration.dispose();
         }, "activate Manager persona knowledge operations");

@@ -65,21 +65,23 @@ export function createAgentTurnRuntime({ model, executeTool, tools = [], turnId 
   async function execute(decision) {
     if (!allowed.has(decision.name)) throw failure('TURN_TOOL_NOT_AVAILABLE');
     const mutation = decision.name === 'rabi_api_call' && ((decision.arguments.mode==='websocket' && decision.arguments.messages?.length>0) || !['GET','HEAD','OPTIONS'].includes(String(decision.arguments.method || '').toUpperCase()));
+    const canonicalCall = decision.name === 'rabi_call';
     const fingerprint = canonicalAgentIntent([decision.name, decision.arguments]);
-    if (mutation && writes.has(fingerprint)) return writes.get(fingerprint);
+    if ((mutation || canonicalCall) && writes.has(fingerprint)) return writes.get(fingerprint);
     if (mutation && writesUncertain) return { outcome: { result: { structuredContent: { ok: false, uncertain: true, code: 'WRITE_RECONCILIATION_REQUIRED' } } } };
     if (calls >= maxToolCalls) throw failure('TURN_TOOL_LIMIT');
     if (decision.name === 'close_app' && Object.keys(decision.arguments).length) throw failure('TURN_TOOL_INVALID');
-    const event = { callId: turnId + ':call-' + (++calls), functionName: decision.name, arguments: decision.arguments, isComplete: true };
+    const event = { callId: turnId + ':call-' + (++calls), functionName: decision.name, arguments: decision.arguments, isComplete: true, ...(canonicalCall ? { writeReconciliationRequired: writesUncertain } : {}) };
     publish('executing-tool'); let result;
     try { result = await executeTool(event); }
     catch (error) { result = { uncertain: true, code: typeof error?.code === 'string' ? error.code : 'TOOL_OUTCOME_UNCONFIRMED', callId: event.callId }; }
     if (cancelled) return { cancelled: true };
-    if (!result || result.uncertain || result.cancelled || result.result?.structuredContent?.uncertain || result.duplicate && result.state !== 'completed') { uncertain = true; if (mutation) writesUncertain = true; }
+    const actualMutation = mutation || result?.mutation === true;
+    if (!result || result.uncertain || result.cancelled || result.result?.structuredContent?.uncertain || result.duplicate && result.state !== 'completed') { uncertain = true; if (actualMutation) writesUncertain = true; }
     if (result?.result?.isError || result?.result?.structuredContent?.ok === false) uncertain = true;
     results.push(result);
     const observation = { callId: event.callId, name: event.functionName, outcome: result };
-    if (mutation) writes.set(fingerprint, observation);
+    if (actualMutation) writes.set(fingerprint, observation);
     return observation;
   }
   async function loop(input) {

@@ -20,7 +20,7 @@ const definition = { name: 'example_read', inputSchema: { type: 'object', proper
 test('official SDK initializes, lists annotations and calls structured tools', async t => {
   const receipt = { ok: true, statusCode: 200, uncertain: false, data: { items: [] } };
   const client = await connect(t, { list: () => [definition], call: async () => receipt });
-  assert.equal(client.getServerVersion().name, 'rabi-knowledge');
+  assert.equal(client.getServerVersion().name, 'rabiroute');
   const listed = await client.listTools();
   assert.equal(listed.tools[0].annotations.readOnlyHint, true);
   assert.equal(listed.tools[0].annotations.openWorldHint, true);

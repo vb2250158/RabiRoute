@@ -77,6 +77,7 @@ type NormalizedManagerPluginRoute = {
 
 type ManagerPluginRouteBatch = {
   instanceId: string;
+  pluginId?: string;
   activationId?: string;
   routes: readonly NormalizedManagerPluginRoute[];
   revision?: string;
@@ -266,7 +267,7 @@ export class ManagerPluginRouteRegistry {
         return registry.handleUpgrade(request, url, socket, head);
       },
       stopAccepting,
-      publication: () => ({ active: owner.accepting, binding, operations: owner.accepting ? registry.catalogSnapshot().operations.map(({ contract, contractDigest }) => ({ contract, contractDigest })) : [] }),
+      publication: () => ({ active: owner.accepting, binding, operations: owner.accepting ? registry.catalogSnapshot().operations.map(({ contract, contractDigest, discovery, discoveryIssues }) => ({ contract, contractDigest, ...(discovery ? { discovery } : {}), ...(discoveryIssues ? { discoveryIssues } : {}) })) : [] }),
       activeOperationCount: () => registrations.reduce((total, registration) => total + registration.activeOperationCount(), 0),
       dispose: () => disposing ??= (async () => {
         stopAccepting();
@@ -754,7 +755,8 @@ export class ManagerPluginRouteRegistry {
         );
       }
     }
-    const batch = { instanceId: normalizedInstanceId, activationId, routes, revision: currentPluginActivation()?.revision };
+    const batch = { instanceId: normalizedInstanceId, ...(currentPluginActivation()?.pluginId ? { pluginId: currentPluginActivation()!.pluginId } : {}),
+      activationId, routes, revision: currentPluginActivation()?.revision };
     if (applicationOwned) this.#applicationBatches.add(batch);
     this.batches.push(batch);
     let active = true;
@@ -895,9 +897,11 @@ export class ManagerPluginRouteRegistry {
           if (leases.get(publication.binding.leaseId) !== 1 || listeners.get(publication.binding.listenerId) !== 1) throw new Error("Duplicate external listener publication.");
           const listenerOperations: ApiPublishedOperation[] = [];
           for (const operation of publication.operations) {
-            const compiled = compileApiContract({ contract: operation.contract });
+            const compiled = compileApiContract({ contract: operation.contract, discovery: (operation as ApiPublishedOperation).discovery });
             if (compiled.digest !== operation.contractDigest) throw new Error("External owner contract digest disagrees with its executable contract.");
             if (compiled.contract.exposure === "public") listenerOperations.push({ contract: compiled.contract, contractDigest: compiled.digest,
+              ...(compiled.discovery ? { discovery: compiled.discovery } : {}),
+              ...(compiled.discoveryIssues ? { discoveryIssues: compiled.discoveryIssues } : {}),
               binding: freezeApiData(JSON.parse(JSON.stringify(publication.binding))), owner: { instanceId: source.instanceId, ...(source.activationId ? { activationId: source.activationId } : {}), ...(source.revision ? { revision: source.revision } : {}) } });
           }
           incomingListeners.push({ binding: freezeApiData(JSON.parse(JSON.stringify(publication.binding))),
@@ -923,7 +927,10 @@ export class ManagerPluginRouteRegistry {
     for (const batch of batches) for (const route of batch.routes) {
       if (route.operation) {
         if (route.operation.contract.exposure === "public") operations.push({ contract: route.operation.contract,
-          contractDigest: route.operation.digest, owner: { instanceId: batch.instanceId,
+          contractDigest: route.operation.digest,
+          ...(route.operation.discovery ? { discovery: route.operation.discovery } : {}),
+          ...(route.operation.discoveryIssues ? { discoveryIssues: route.operation.discoveryIssues } : {}),
+          owner: { instanceId: batch.instanceId, ...(batch.pluginId ? { pluginId: batch.pluginId } : {}),
             ...(batch.activationId ? { activationId: batch.activationId } : {}), ...(batch.revision ? { revision: batch.revision } : {}) } });
       } else gaps.push({ instanceId: batch.instanceId, routeId: route.routeId, kind: route.match.kind, methods: [...route.methods],
         ...(route.match.kind === "exact" ? { path: route.match.path } : {}),
@@ -946,7 +953,8 @@ export class ManagerPluginRouteRegistry {
     gaps.push(...sourceGaps);
     const listeners: ApiPublishedListener[] = [...external.map(({ owner }) => ({ binding: owner.binding,
       owner: { instanceId: owner.instanceId, ...(owner.activationId ? { activationId: owner.activationId } : {}), ...(owner.revision ? { revision: owner.revision } : {}) } })), ...sourcedListeners];
-    const nativeKey = apiDigest(operations.map(operation => ({ contract: operation.contractDigest, binding: operation.binding ?? null, owner: operation.owner })));
+    const nativeKey = apiDigest(operations.map(operation => ({ contract: operation.contractDigest, binding: operation.binding ?? null,
+      discovery: operation.discovery ?? null, discoveryIssues: operation.discoveryIssues ?? null, owner: operation.owner })));
     if (!this.nativeHttpDisposal && this.nativeHttpProxy?.key !== nativeKey) {
       if (this.nativeHttpProxy) { this.nativeHttpProxy.proxy.update(operations); this.nativeHttpProxy.key = nativeKey; }
       else this.nativeHttpProxy = { key: nativeKey, proxy: createExternalListenerHttpProxy(operations, (expected, started) => {

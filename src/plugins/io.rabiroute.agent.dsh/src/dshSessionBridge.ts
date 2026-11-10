@@ -144,7 +144,7 @@ export async function ensureDshSessionPreset(baseUrl: string, session: DshSessio
   session.agentPreset = wanted;
 }
 
-async function dshRpc<T>(baseUrl: string, method: string, payload: unknown, assertAuthorized?: () => void | Promise<void>, signal?: AbortSignal): Promise<DshRpcOk<T> | DshRpcError> {
+export async function dshRpc<T>(baseUrl: string, method: string, payload: unknown, assertAuthorized?: () => void | Promise<void>, signal?: AbortSignal): Promise<DshRpcOk<T> | DshRpcError> {
   const rpcId = randomUUID();
   const response = await dshAuthenticatedFetch(baseUrl, method,
     JSON.stringify({ type: "client-request", rpcId, method, payload: { args: payload } }), assertAuthorized, signal);
@@ -583,9 +583,10 @@ export async function resolveDshSession(params: {
 export async function readDshSession(
   sessionId: string,
   baseUrl?: string,
-  assertAuthorized?: () => void | Promise<void>
+  assertAuthorized?: () => void | Promise<void>,
+  signal?: AbortSignal
 ): Promise<DshSessionSummary> {
-  const item = (await readDshSessionRows(normalizedDshBaseUrl(baseUrl), assertAuthorized)).find(candidate => candidate.sessionId === sessionId);
+  const item = (await readDshSessionRows(normalizedDshBaseUrl(baseUrl), assertAuthorized, signal)).find(candidate => candidate.sessionId === sessionId);
   const summary = item ? dshSessionSummary(item) : null;
   if (!summary) throw new Error(`DSH session was not found: ${sessionId}`);
   return { ...summary, cwd: typeof item!.cwd === "string" && item!.cwd.trim() ? item!.cwd : undefined };

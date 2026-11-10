@@ -12,11 +12,23 @@ import { createPersonaHealthOperations } from "./src/manager/personaHealthOperat
 import { createPersonaIdentityOperations } from "./src/manager/personaIdentityOperations.js";
 import { createPersonaKnowledgeOperations } from "./src/manager/personaKnowledgeOperations.js";
 import { createPersonaSkillOperations } from "./src/manager/personaSkillOperations.js";
+import { createAutomationTemplateOperations } from "./src/manager/automationTemplateOperations.js";
 import { createPersonaMessagingOperations } from "./src/manager/personaMessagingRoutes.js";
 import { createPersonaDirectoryOperation } from "./src/manager/personaMessagingRoutes.js";
 import { createLanguageStyleOperations } from "./src/manager/languageStyleRoutes.js";
 import { createRolePanelOperations } from "./src/manager/rolePanelOperations.js";
 export function createOwnedRuntime(ports) {
+    let templateSnapshot;
+    let currentTemplates = [];
+    const readAutomationTemplates = () => {
+        const snapshot = ports.managerPluginRoutes.catalogSnapshot();
+        if (snapshot !== templateSnapshot) {
+            currentTemplates = snapshot.operations.flatMap(operation =>
+                Array.isArray(operation.discovery?.automationTemplates) ? operation.discovery.automationTemplates : []);
+            templateSnapshot = snapshot;
+        }
+        return currentTemplates;
+    };
     return Object.freeze({
         ManagerPluginRequestTracker: ports.ManagerPluginRequestTracker,
         roleConfigurationOperations: createRoleConfigurationOperations({
@@ -125,6 +137,11 @@ export function createOwnedRuntime(ports) {
         }),
         personaSkillOperations: createPersonaSkillOperations({
             roleDirectory: ports.roleDirForApi,
+            isReadOnly: () => ports.managerReadOnly,
+            onSkillsChanged: (roleId, directory) => {
+                ports.requestRoleKnowledgeCatalogRefresh(directory);
+                ports.publishManagerEvent("role_catalog_changed", { roleId });
+            },
             identity: () => ({ applicationGenerationId: ports.managerHostIdentity?.applicationGenerationId ?? ports.managerInstanceId, managerInstanceId: ports.managerInstanceId }),
             querySkills: (directory, skillId, options) => ports.managerKnowledgePageWorkerPool.run({
                 type: "role_skill_catalog", roleDir: directory, ...(skillId ? { skillId } : {})
@@ -134,6 +151,7 @@ export function createOwnedRuntime(ports) {
             }, options),
             reportCleanupError: () => console.error("[role-skill-download] Private archive cleanup failed.")
         }),
+        personaAutomationTemplateOperations: createAutomationTemplateOperations({ readAutomationTemplates }),
         personaMessagingOperations: createPersonaMessagingOperations(() => {
             let appendTimeline;
             try {
