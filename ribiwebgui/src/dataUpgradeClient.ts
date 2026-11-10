@@ -41,6 +41,8 @@ export function createDataUpgradeController(
   let eventVersion = 0;
   let uncertainOperationId = "";
   let hiddenOperationId = "";
+  let streamOpened = false;
+  let readSequence = 0;
   function accept(status: DataUpgradeStatus) {
     if (disposed) return;
     view.status = status;
@@ -56,13 +58,24 @@ export function createDataUpgradeController(
       view.open = true;
     }
   }
+  async function readStatus(): Promise<void> {
+    const version = eventVersion;
+    const sequence = ++readSequence;
+    const current = () => !disposed && sequence === readSequence && version === eventVersion;
+    try { const status = await transport.read(abort.signal); if (current()) accept(status); }
+    catch (error) { if (current()) view.error = error instanceof Error ? error.message : String(error); }
+  }
   return {
     async ready() {
       if (loaded || disposed) return;
       loaded = true;
-      const version = eventVersion;
-      try { const status = await transport.read(abort.signal); if (version === eventVersion) accept(status); }
-      catch (error) { if (!disposed) view.error = error instanceof Error ? error.message : String(error); }
+      await readStatus();
+    },
+    async reconnected() {
+      const reconnect = streamOpened;
+      streamOpened = true;
+      if (disposed || !loaded || !reconnect) return;
+      await readStatus();
     },
     event(status: DataUpgradeStatus) { eventVersion++; accept(status); },
     close() { hiddenOperationId = view.status?.operation?.operationId || ""; view.open = false; },

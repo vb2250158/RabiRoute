@@ -346,7 +346,10 @@ onMounted(() => {
     catch { /* Ignore an incomplete event; the next server status remains authoritative. */ }
   });
   managerEvents.addEventListener("api.catalog.changed", () => { window.dispatchEvent(new Event(API_REFERENCE_CHANGED)); });
-  managerEvents.addEventListener("open", () => { window.dispatchEvent(new Event(API_REFERENCE_CHANGED)); });
+  managerEvents.addEventListener("open", () => {
+    window.dispatchEvent(new Event(API_REFERENCE_CHANGED));
+    void dataUpgradeController.reconnected();
+  });
   managerEvents.addEventListener("plugin_catalog_changed", () => { void handlePluginCatalogChanged(); });
   managerEvents.addEventListener("role_catalog_changed", () => { void roles.loadCatalog(); if (!roles.dirty && showRoleSwitcher.value) void roles.load(); });
   managerEvents.addEventListener("desktop_settings_changed", () => { void loadInterfaceTheme(); });

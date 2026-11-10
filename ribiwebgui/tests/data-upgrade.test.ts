@@ -14,6 +14,29 @@ const operation = (operationId: string): DataUpgradeStatus => ({ ...status(), st
 const awaiting = (): DataUpgradeStatus => ({ ...operation("accepted-original"), state: "awaiting-restart", restartRequired: true,
   items: status().items.map(item => ({ ...item, state: "awaiting-restart" })), operation: { ...operation("accepted-original").operation!, state: "awaiting-restart", requiresRestart: true } });
 
+test("first stream open does not duplicate initial read; reconnect recovers missed completion without writes", async () => {
+  const state = view(); let reads = 0; let writes = 0;
+  const completed: DataUpgradeStatus = { ...awaiting(), revision: 2, state: "succeeded", operation: { ...awaiting().operation!, state: "succeeded" } };
+  const controller = createDataUpgradeController(state, { read: async () => ++reads === 1 ? awaiting() : completed, start: async () => { writes++; return awaiting(); } });
+  await controller.ready(); await controller.reconnected(); assert.equal(reads, 1);
+  await controller.reconnected(); assert.equal(reads, 2); assert.equal(writes, 0); assert.equal(state.status?.state, "succeeded");
+  controller.dispose(); await controller.reconnected(); assert.equal(reads, 2);
+});
+
+test("pre-ready opens stay quiet; each later open reads once and late responses lose to SSE", async () => {
+  const state = view(); let reads = 0; const releases: ((value: DataUpgradeStatus) => void)[] = [];
+  const controller = createDataUpgradeController(state, { read: async () => {
+    reads++; return reads === 1 ? awaiting() : new Promise(done => { releases.push(done); });
+  }, start: async () => awaiting() });
+  await controller.reconnected(); await controller.reconnected(); assert.equal(reads, 0); assert.equal(state.open, false);
+  await controller.ready(); assert.equal(reads, 1);
+  const first = controller.reconnected(); const second = controller.reconnected(); assert.equal(reads, 3);
+  controller.event({ ...awaiting(), revision: 3, state: "succeeded" }); releases.splice(0).forEach(release => release(awaiting())); await Promise.all([first, second]);
+  assert.equal(state.status?.state, "succeeded");
+  const disposed = controller.reconnected(); controller.dispose(); releases[0](awaiting()); await disposed;
+  assert.equal(state.status?.state, "succeeded");
+});
+
 test("reopened awaiting receipt is shown and only an explicit click resumes its original operation", async () => {
   const state = view(); let writes = 0; let newIds = 0;
   const controller = createDataUpgradeController(state, { read: async () => awaiting(), start: async request => {
@@ -24,6 +47,32 @@ test("reopened awaiting receipt is shown and only an explicit click resumes its 
   controller.close(); controller.event({ ...awaiting(), revision: 2 }); assert.equal(state.open, false); assert.equal(writes, 1);
 });
 
+test("an old cached GET error after a newer SSE status does not publish an error", async () => {
+  const state = view(); let reject!: (error: Error) => void;
+  const controller = createDataUpgradeController(state, { read: () => new Promise((_, fail) => { reject = fail; }), start: async () => awaiting() });
+  const initial = controller.ready(); controller.event({ ...awaiting(), revision: 3, state: "succeeded" });
+  reject(new Error("stale GET error")); await initial;
+  assert.equal(state.error, ""); assert.equal(state.status?.state, "succeeded"); controller.dispose();
+});
+
+test("each reconnect can read despite a hanging initial GET and an older response cannot overwrite the new read", async () => {
+  for (const failOld of [false, true]) {
+    const state = view(); let reads = 0; let resolve!: (status: DataUpgradeStatus) => void; let reject!: (error: Error) => void;
+    let resolveNew!: (status: DataUpgradeStatus) => void;
+    const controller = createDataUpgradeController(state, { read: () => {
+      reads++;
+      return reads === 1 ? new Promise((done, fail) => { resolve = done; reject = fail; })
+        : new Promise(done => { resolveNew = done; });
+    }, start: async () => awaiting() });
+    const initial = controller.ready(); await controller.reconnected(); assert.equal(reads, 1);
+    const reconnect = controller.reconnected(); assert.equal(reads, 2);
+    if (failOld) reject(new Error("old connection")); else resolve(awaiting());
+    await initial;
+    resolveNew({ ...awaiting(), revision: 4, state: "succeeded" }); await reconnect;
+    assert.equal(state.status?.state, "succeeded"); assert.equal(state.error, ""); controller.dispose();
+  }
+});
+
 test("lost resume response reconciles original receipt without an automatic second write", async () => {
   const state = view(); let reads = 0; let writes = 0;
   const controller = createDataUpgradeController(state, { read: async () => { reads++; return awaiting(); }, start: async request => {
@@ -32,6 +81,18 @@ test("lost resume response reconciles original receipt without an automatic seco
   await controller.ready(); await controller.confirm(); assert.equal(writes, 1); assert.equal(reads, 2); assert.equal(state.uncertain, false);
   assert.equal(state.status?.operation?.operationId, "accepted-original");
   await controller.confirm(); assert.equal(writes, 2); // A second explicit user action, never a transport retry.
+});
+
+test("reconnect completion survives an older initial GET settling later with data or error", async () => {
+  for (const failOld of [false, true]) {
+    const state = view(); let reads = 0; let resolve!: (status: DataUpgradeStatus) => void; let reject!: (error: Error) => void;
+    const controller = createDataUpgradeController(state, { read: async () => ++reads === 1
+      ? new Promise((done, fail) => { resolve = done; reject = fail; }) : { ...awaiting(), revision: 5, state: "succeeded" }, start: async () => awaiting() });
+    const initial = controller.ready(); await controller.reconnected(); await controller.reconnected();
+    assert.equal(reads, 2); assert.equal(state.status?.state, "succeeded");
+    if (failOld) reject(new Error("obsolete initial request")); else resolve(awaiting());
+    await initial; assert.equal(state.status?.revision, 5); assert.equal(state.error, ""); controller.dispose();
+  }
 });
 
 test("ready reads once; empty/current stays quiet; overview is shown once for a revision", async () => {

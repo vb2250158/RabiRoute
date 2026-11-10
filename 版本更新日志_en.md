@@ -6,6 +6,10 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.12.1 - 2026-11-10
+
+- Read cached data-upgrade status once after the event stream reconnects, recovering completion missed while the page was offline. Initial connection reuses the first read; older responses and errors cannot replace newer state. Preserve the original upgrade request identity and background execution.
+
 ## 0.12.0 - 2026-11-10
 
 - Share one operation SDK across CLI and MCP for categories, compact lists, keyword search, individual contracts and structured calls. Capability IDs and per-request idempotency identities remain explicit while HTTP, SSE, WebSocket, downloads and receipts reuse their original owners.
