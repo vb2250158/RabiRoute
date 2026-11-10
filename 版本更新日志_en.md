@@ -8,6 +8,8 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 ## 0.12.1 - 2026-11-10
 
+- Pin the independent MCP artifact to protocol SDK `1.32.2` and refresh the identified transitive dependency fixes; both production and complete dependency audits report no known vulnerabilities.
+- Independent clients `rabi-agent` `0.3.3` and `rabi-knowledge-mcp` `0.2.1` route local generic Agent sends to the original Manager ledger while enrolled remote clients retain their durable delivery owner. Ship CLI and MCP from the same SDK, include WebSocket/discovery dependencies, and validate independent application versions from existing manifests without a Host bump.
 - Read cached data-upgrade status once after the event stream reconnects, recovering completion missed while the page was offline. Initial connection reuses the first read; older responses and errors cannot replace newer state. Preserve the original upgrade request identity and background execution.
 
 ## 0.12.0 - 2026-11-10

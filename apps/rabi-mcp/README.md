@@ -39,7 +39,9 @@ npm ci
 node scripts/build.mjs --output <新的绝对目录>
 ```
 
-输出目录必须不存在，父目录须已存在；支持可访问的本机、NAS/UNC 与映射盘路径；不覆盖既有产物。Windows 直接通过 Node 运行 npm CLI，不使用会丢失 UNC 工作目录的 cmd。脚本内联相对源码依赖，SDK 保持外部依赖并按独立锁文件执行生产 `npm ci --ignore-scripts`，输出入口、双语说明、依赖及 `artifact-manifest.json` 文件哈希清单。失败保留未完成目录供检查，不自动删除。产物仅支持本机 Host；未执行的 LAN 分支保留动态 `bonjour-service` 引用，不提供远端模式。Windows 正式包源清单包含统一 CLI/MCP 入口与共享运行依赖，实际包字节和安装采用由对应发布验收确认。
+产物同时提供 `knowledge-mcp.mjs` 与 `rabi-cli.mjs`，两者使用本次同一 SDK。CLI 的 `--config` 继续使用原已安装 Agent 的连接及持久投递 owner；MCP 继续通过本机 Host 发现。更新独立客户端无需重启 Manager。
+
+输出目录必须不存在，父目录须已存在；支持可访问的本机、NAS/UNC 与映射盘路径；不覆盖既有产物。Windows 直接通过 Node 运行 npm CLI，不使用会丢失 UNC 工作目录的 cmd。脚本内联相对源码依赖，SDK、WebSocket 与发现依赖按独立锁文件执行生产 `npm ci --ignore-scripts`，输出入口、双语说明、依赖及 `artifact-manifest.json` 文件哈希清单。失败保留未完成目录供检查，不自动删除。产物仅支持本机 Host；MCP 不提供远端启动模式；CLI 可使用现有私有连接配置。Windows 正式包源清单包含统一 CLI/MCP 入口与共享运行依赖，实际包字节和安装采用由对应发布验收确认。
 
 ## 开发和打包边界
 

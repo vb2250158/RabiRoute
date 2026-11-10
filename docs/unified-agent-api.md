@@ -12,7 +12,7 @@ CLI、MCP、DSH 和手机工具共用 operation SDK，通过现有 HTTP、SSE �
 
 ## 先找到功能
 
-从已安装包或完整源码根运行本机 CLI。入口通过 Host 发现当前 Manager，命令结果以 JSON 写入 stdout。
+独立客户端产物目录使用 `node rabi-cli.mjs <命令>`；完整源码根使用下面的路径。入口通过 Host 发现当前 Manager，命令结果以 JSON 写入 stdout。独立 CLI/MCP 客户端更新不需要重启 Manager。
 
 ```sh
 node apps/rabi-agent/rabi-cli.mjs categories

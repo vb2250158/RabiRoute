@@ -105,6 +105,26 @@ function Set-PluginSubmission {
     Write-Utf8File -Path (Join-Path $Repository "版本更新日志_en.md") -Content "# Version history`n`n## 0.2.0 - 2026-11-05`n`n- Update message processing in io.rabiroute.endpoint.fixture $Version.`n"
 }
 
+function New-ApplicationFixtureRepository {
+    param([string]$Name)
+    $repository = New-FixtureRepository $Name
+    Write-Utf8File (Join-Path $repository 'apps/example-client/package.json') '{"name":"example-client","version":"0.3.2"}'
+    Write-Utf8File (Join-Path $repository 'apps/example-client/package-lock.json') '{"name":"example-client","version":"0.3.2","lockfileVersion":3,"packages":{"":{"name":"example-client","version":"0.3.2"}}}'
+    Write-Utf8File (Join-Path $repository 'apps/example-client/client.mjs') 'export const version = 1;'
+    Invoke-Git $repository @('add', '.') | Out-Null
+    Invoke-Git $repository @('commit', '-m', 'Add independently versioned application fixture') | Out-Null
+    return $repository
+}
+
+function Set-ApplicationSubmission {
+    param([string]$Repository, [string]$Version = '0.3.3')
+    Write-Utf8File (Join-Path $Repository 'apps/example-client/package.json') "{`"name`":`"example-client`",`"version`":`"$Version`"}"
+    Write-Utf8File (Join-Path $Repository 'apps/example-client/package-lock.json') "{`"name`":`"example-client`",`"version`":`"$Version`",`"lockfileVersion`":3,`"packages`":{`"`":{`"name`":`"example-client`",`"version`":`"$Version`"}}}"
+    Write-Utf8File (Join-Path $Repository 'apps/example-client/client.mjs') 'export const version = 2;'
+    Write-Utf8File (Join-Path $Repository '版本更新日志.md') "# 版本更新`n`n## 0.2.0 - 2026-11-10`n`n- 更新 example-client $Version。`n"
+    Write-Utf8File (Join-Path $Repository '版本更新日志_en.md') "# Version history`n`n## 0.2.0 - 2026-11-10`n`n- Update example-client $Version.`n"
+}
+
 function Invoke-Preflight {
     param(
         [string]$Repository,
@@ -382,6 +402,80 @@ jobs:
         Assert-True (-not $result.report.versionGate.hostVersionRequired) "Plugin implementation must not force a Host patch."
         Assert-True ($result.report.versionGate.headVersion -eq $result.report.versionGate.candidateVersion) "Host version should remain unchanged."
         Assert-True ($result.report.versionGate.plugins[0].candidateVersion -eq "0.1.2") "Expected the authoritative plugin version."
+    }
+
+    Invoke-Test "application-only changes advance their own version without a Host release in either scope" {
+        foreach ($scope in @('WorkingTree', 'Staged')) {
+            $repo = New-ApplicationFixtureRepository ("application-only-" + $scope)
+            Set-ApplicationSubmission $repo
+            if ($scope -eq 'Staged') { Invoke-Git $repo @('add', '.') | Out-Null }
+            $result = Invoke-Preflight $repo -Scope $scope
+            Assert-True ($result.exitCode -eq 0) "An independently versioned application must not require a Host release: $($result.text)"
+            Assert-True (-not $result.report.versionGate.hostVersionRequired) "The application owns its implementation."
+            Assert-True ($result.report.versionGate.applications.Count -eq 1) "Report the application version authority."
+            Assert-True ($result.report.versionGate.applications[0].versionFile -eq 'apps/example-client/package.json') "Use the tracked root application manifest."
+            Assert-True ($result.report.versionGate.applications[0].headVersion -eq '0.3.2' -and $result.report.versionGate.applications[0].candidateVersion -eq '0.3.3') "Retain the exact application transition."
+            Assert-True ($result.report.versionGate.headVersion -eq $result.report.versionGate.candidateVersion) "Host version stays unchanged."
+        }
+    }
+
+    Invoke-Test "application production changes without an own version increase are rejected" {
+        $repo = New-ApplicationFixtureRepository 'application-no-bump'
+        Set-ApplicationSubmission $repo -Version '0.3.2'
+        $result = Invoke-Preflight $repo
+        Assert-True ($result.exitCode -eq 2) "An existing application cannot reuse its version."
+        Assert-True (@($result.report.versionGate.findings | Where-Object rule -eq 'application-version-increase-required').Count -eq 1) "Report the application's missing version increase."
+        Assert-True (-not $result.report.versionGate.hostVersionRequired) "A rejected application version is not a Host implementation change."
+    }
+
+    Invoke-Test "unmanaged application paths retain the Host version contract" {
+        $repo = New-FixtureRepository 'application-unmanaged'
+        Write-Utf8File (Join-Path $repo 'apps/unmanaged/nested/package.json') '{"name":"nested-fixture","version":"1.0.0"}'
+        Write-Utf8File (Join-Path $repo 'apps/unmanaged/client.mjs') 'export const value = true;'
+        $result = Invoke-Preflight $repo
+        Assert-True ($result.exitCode -eq 2 -and $result.report.versionGate.hostVersionRequired) "A nested or untracked manifest does not invent a root application owner."
+        Assert-True (@($result.report.versionGate.findings | Where-Object rule -eq 'commit-host-version-required').Count -eq 1) "Preserve the unowned Host diagnostic."
+        Assert-True (@($result.report.versionGate.applications).Count -eq 0) "Report no application authority without its tracked root manifest."
+    }
+
+    Invoke-Test "application lock versions and scope remain authoritative" {
+        $repo = New-ApplicationFixtureRepository 'application-lock-version'
+        Set-ApplicationSubmission $repo
+        Write-Utf8File (Join-Path $repo 'apps/example-client/package-lock.json') '{"name":"example-client","version":"0.3.2","lockfileVersion":3,"packages":{"":{"name":"example-client","version":"0.3.2"}}}'
+        $result = Invoke-Preflight $repo
+        Assert-True ($result.exitCode -eq 2) "Application lock metadata must match its own manifest."
+        Assert-True (@($result.report.versionGate.findings | Where-Object rule -eq 'application-lock-version-mismatch').Count -eq 1) "Retain a precise application lock diagnostic."
+    }
+
+    Invoke-Test "staged application authority never borrows unstaged version edits" {
+        $repo = New-ApplicationFixtureRepository 'application-index-invalid'
+        Set-ApplicationSubmission $repo -Version '0.3.2'
+        Invoke-Git $repo @('add', '.') | Out-Null
+        Set-ApplicationSubmission $repo
+        $result = Invoke-Preflight $repo -Scope Staged
+        Assert-True ($result.exitCode -eq 2) "A worktree application bump cannot repair the index."
+        Assert-True ($result.report.versionGate.applications[0].candidateVersion -eq '0.3.2') "Read application versions from the index in staged mode."
+        Assert-True (@($result.report.versionGate.findings | Where-Object rule -eq 'application-version-increase-required').Count -eq 1) "Preserve the staged application version failure."
+
+        $valid = New-ApplicationFixtureRepository 'application-index-valid'
+        Set-ApplicationSubmission $valid
+        Invoke-Git $valid @('add', '.') | Out-Null
+        Write-Utf8File (Join-Path $valid 'apps/example-client/package.json') '{"name":"unstaged-name","version":"0.3.2"}'
+        Write-Utf8File (Join-Path $valid 'apps/example-client/package-lock.json') '{"version":"9.9.9"}'
+        $accepted = Invoke-Preflight $valid -Scope Staged
+        Assert-True ($accepted.exitCode -eq 0) "Unstaged application metadata cannot invalidate a valid index: $($accepted.text)"
+        Assert-True ($accepted.report.versionGate.applications[0].candidateVersion -eq '0.3.3') "Keep the submitted application's actual version."
+    }
+
+    Invoke-Test "application validation alone does not publish another application version" {
+        foreach ($scope in @('WorkingTree', 'Staged')) {
+            $repo = New-ApplicationFixtureRepository ("application-validation-only-" + $scope)
+            Write-Utf8File (Join-Path $repo 'apps/example-client/test/client.test.mjs') 'export const assertion = true;'
+            if ($scope -eq 'Staged') { Invoke-Git $repo @('add', '.') | Out-Null }
+            $result = Invoke-Preflight $repo -Scope $scope
+            Assert-True ($result.exitCode -eq 0 -and -not $result.report.versionGate.applicable) "Validation-only scopes retain the existing exemption."
+            Assert-True (@($result.report.versionGate.applications).Count -eq 0) "No application release for tests alone."
+        }
     }
 
     Invoke-Test "test-only paths do not force a Host version for plugin changes in either scope" {

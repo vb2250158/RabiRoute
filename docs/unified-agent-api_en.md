@@ -12,7 +12,7 @@ This describes the current source implementation. Build, installation and live c
 
 ## Find a capability
 
-Run the local CLI from an installed package or complete source root. The entry discovers the current Manager through Host and writes a JSON result to stdout.
+From the independent client artifact, use `node rabi-cli.mjs <command>`. From the complete source root, use the path below. Updating independent CLI/MCP clients does not restart Manager. The entry discovers the current Manager through Host and writes a JSON result to stdout.
 
 ```sh
 node apps/rabi-agent/rabi-cli.mjs categories

@@ -357,7 +357,7 @@ function buildManagerClient({ managerUrl, credential, agentType, sessionId, conf
    * outputPath saves bytes atomically without overwrite or printing binary. */
   async function publicRequest(method, target, options = {}, transport = verifiedRequest) {
     const verb = String(method).toUpperCase();
-    if (!networkTransport && verb === "POST" && relativeTarget(origin, target).pathname === "/api/agent/threads") {
+    if (!networkTransport && !localHost && verb === "POST" && relativeTarget(origin, target).pathname === "/api/agent/threads") {
       const normalized = await readAgentJsonBody(options);
       options = normalized.options;
       if (normalized.request?.action === "send") {

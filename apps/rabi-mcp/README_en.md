@@ -39,7 +39,9 @@ npm ci
 node scripts/build.mjs --output <new-absolute-directory>
 ```
 
-The output must not exist and its parent must already exist. Accessible local, NAS/UNC and mapped-drive paths are supported; prior output is not overwritten. Windows executes npm CLI through Node, avoiding cmd losing a UNC working directory. The script inlines relative source dependencies, keeps the SDK external and installs production dependencies using the independent lock and `npm ci --ignore-scripts`. It emits the entry, bilingual documentation, dependencies and `artifact-manifest.json` file hashes. Failures retain incomplete output for inspection without automatic deletion. The artifact supports local Host only; an unexecuted LAN branch retains a dynamic `bonjour-service` reference and does not provide remote mode. The Windows runtime source manifest includes the shared CLI/MCP entry and dependencies. The actual packaged bytes and installed adoption are confirmed by release acceptance.
+The artifact includes both `knowledge-mcp.mjs` and `rabi-cli.mjs` from the same SDK. CLI `--config` retains the existing enrolled Agent connection and durable delivery owner. MCP discovers the local Host. Updating these independent clients does not restart Manager.
+
+The output must not exist and its parent must already exist. Accessible local, NAS/UNC and mapped-drive paths are supported; prior output is not overwritten. Windows executes npm CLI through Node, avoiding cmd losing a UNC working directory. The script inlines relative source dependencies, keeps the SDK external and installs production dependencies using the independent lock and `npm ci --ignore-scripts`. It emits the entry, bilingual documentation, dependencies and `artifact-manifest.json` file hashes. Failures retain incomplete output for inspection without automatic deletion. MCP supports local Host startup; CLI also accepts an existing private connection configuration. The Windows runtime source manifest includes the shared CLI/MCP entry and dependencies. The actual packaged bytes and installed adoption are confirmed by release acceptance.
 
 ## Development and packaging boundaries
 
