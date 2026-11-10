@@ -1,3 +1,4 @@
+export * from './computer-control-contract.mjs';
 /** Protocol facts shared by the remote executors, Manager replay owner and API contracts. */
 export const TERMINAL_LIMITS = Object.freeze({ idPattern: "^[a-f0-9-]{36}$", inputBytes: 16384, eventCodeUnits: 16384,
   replayBytes: 262144, replayEvents: 2048, waitMs: 25000, transportSessions: 128,
@@ -26,7 +27,38 @@ export const terminalEventSchema = { type: "object", required: ["sequence", "typ
   type: { enum: ["output", "exit", "gap", "disconnected"] }, data: text, exitCode: { anyOf: [{ type: "integer" }, { type: "null" }] } }, additionalProperties: false };
 export const terminalReadSchema = exact({ terminal: terminalSnapshotSchema, outputEvents: { type: "array", maxItems: TERMINAL_LIMITS.replayEvents, items: terminalEventSchema }, nextOutputSequence: integer, truncated: bool });
 const fileFields = { path: text }, uploadId = terminalIdSchema;
-export const computerRequestSchema = { anyOf: [branch("file.stat", ["path"], fileFields),
+const point = { type: 'object', required: ['x', 'y'], properties: { x: { type: 'number' }, y: { type: 'number' } }, additionalProperties: false };
+export const computerSourceSchema = { type: 'object', required: ['instanceId', 'kind', 'coordinateSpace'], properties: {
+  instanceId: text, kind: { enum: ['desktop', 'window'] }, windowId: text, pid: integer, frameId: text,
+  coordinateSpace: { enum: ['desktop', 'capture'] }, width: { type: 'number', exclusiveMinimum: 0 }, height: { type: 'number', exclusiveMinimum: 0 },
+  bounds: { type: 'object', required: ['x','y','width','height'], properties: { x: {type:'number'}, y: {type:'number'}, width: {type:'number',exclusiveMinimum:0}, height: {type:'number',exclusiveMinimum:0} }, additionalProperties:false }
+}, additionalProperties: true };
+const action = (type, required, properties) => ({ type: 'object', required: ['type', ...required], properties: { type: { const: type }, ...properties }, additionalProperties: false });
+const xy = { x: {type:'number'}, y: {type:'number'} };
+export const computerInputActionSchema = { anyOf: [
+  action('move', ['x','y'], xy), action('click', ['x','y'], { ...xy, button: {enum:['left','right','middle']}, count: {type:'integer',minimum:1,maximum:2} }),
+  action('scroll', [], { deltaX: {type:'number',description:'Wheel ticks; the Windows executor converts one tick to 120 units.'}, deltaY: {type:'number'}, ...xy }),
+  action('drag', ['x','y','toX','toY'], { ...xy, toX:{type:'number'},toY:{type:'number'},button:{enum:['left','right','middle']},durationMs:integer }),
+  action('text', ['text'], {text}), action('key', ['keys'], {keys:{type:'array',minItems:1,items:text}})
+] };
+export const computerAnnotationShapeSchema = { type: 'object', required: ['id','type'], properties: { id:text,
+  type:{enum:['rect','ellipse','arrow','path','text','highlight']}, bounds: computerSourceSchema.properties.bounds,
+  points:{type:'array',items:point}, text, style:{type:'object',properties:{color:text,lineWidth:{type:'number',minimum:0},fontSize:{type:'number',exclusiveMinimum:0},opacity:{type:'number',minimum:0,maximum:1}},additionalProperties:true}
+},additionalProperties:true };
+export const computerTrackingTargetSchema = { type: 'object', required: ['id','bounds'], properties: { id: text, bounds: computerSourceSchema.properties.bounds, description: text, label: text }, additionalProperties: true };
+const requestId = text, controlSessionId = text, layerId = text, trackingId = text;
+const observation = { source: computerSourceSchema, captureAfter: bool };
+export const computerControlRequestBranches = [
+  branch('control.begin',['requestId'],{requestId,...observation}), branch('control.status',[],{controlSessionId}), branch('control.end',['controlSessionId'],{controlSessionId,requestId}),
+  branch('input.execute',['requestId','controlSessionId','actions'],{requestId,controlSessionId,actions:{type:'array',minItems:1,items:computerInputActionSchema},...observation}),
+  branch('input.status',['requestId'],{requestId}), branch('input.cancel',['requestId'],{requestId}),
+  branch('annotation.show',['requestId','source','layerId','objects'],{requestId,layerId,source:computerSourceSchema,objects:{type:'array',items:computerAnnotationShapeSchema},durationMs:{anyOf:[integer,{type:'null'}]},controlSessionId}),
+  branch('annotation.update',['layerId','expectedVersion'],{requestId,layerId,expectedVersion:integer,source:computerSourceSchema,objects:{type:'array',items:computerAnnotationShapeSchema},durationMs:{anyOf:[integer,{type:'null'}]}}),
+  branch('annotation.status',[],{layerId}), branch('annotation.clear',[],{layerId,requestId}),
+  branch('annotation.track.start',['requestId','source','layerId','targets','taskId'],{requestId,layerId,source:computerSourceSchema,targets:{type:'array',minItems:1,items:computerTrackingTargetSchema},backend:{enum:['kcf','template']},rateHz:{type:'number',exclusiveMinimum:0},taskId:text,expiresAt:{anyOf:[{type:'string',format:'date-time'},{type:'null'}]}}),
+  branch('annotation.track.status',['trackingId'],{trackingId}), branch('annotation.track.stop',['trackingId'],{trackingId})
+];
+export const computerRequestSchema = { anyOf: [...computerControlRequestBranches, branch("file.stat", ["path"], fileFields),
   branch("file.read", ["path", "version", "offset"], { ...fileFields, version: text, offset: integer }),
   branch("upload.begin", ["uploadId", "path", "size", "sha256"], { ...fileFields, uploadId, size: { ...integer, maximum: COMPUTER_LIMITS.uploadBytes }, sha256: hash }),
   branch("upload.write", ["uploadId", "offset", "data", "sha256"], { uploadId, offset: integer,
@@ -43,7 +75,9 @@ export const computerResponseSchema = { anyOf: [
   exact({ uploadId, path: text, size: integer, sha256: hash, offset: integer, state: { enum: ["uploading", "committed", "aborted"] } }),
   exact({ uploadId, state: { const: "absent" } }),
   exact({ windows: { type: "array", items: exact({ windowId: text, pid: integer, title: text, minimized: bool, bounds }) }, truncated: bool }),
-  exact({ mimeType: { const: "image/png" }, width: { ...integer, minimum: 1 }, height: { ...integer, minimum: 1 }, bounds, capturedAt: text, data: text })
+  { type: "object", required: ["mimeType", "width", "height", "bounds", "capturedAt", "data"], additionalProperties: true, properties: { frameId: text, source: computerSourceSchema, mimeType: { const: "image/png" }, width: { ...integer, minimum: 1 }, height: { ...integer, minimum: 1 }, bounds, capturedAt: text, data: text } },
+  exact({layers:{type:"array",items:{type:"object",required:["layerId","state"],properties:{layerId,state:text,version:integer},additionalProperties:true}}}),
+  { type: "object", required: ["state"], properties: { status: text, state: text, requestId, controlSessionId, layerId, trackingId }, additionalProperties: true }
 ] };
 function freeze(value) { if (value && typeof value === "object" && !Object.isFrozen(value)) { for (const child of Object.values(value)) freeze(child); Object.freeze(value); } }
 for (const value of [terminalIdSchema, terminalRequestSchema, terminalSnapshotSchema, terminalListSchema, terminalEventSchema, terminalReadSchema, computerRequestSchema, computerResponseSchema]) freeze(value);

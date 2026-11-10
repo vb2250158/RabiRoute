@@ -17,7 +17,7 @@ test("release copies source-matched assemblies and all branded native hosts with
   const temp = await mkdtemp(path.join(os.tmpdir(), "rabi-native-release-"));
   const agent = path.join(temp, "agent"), payload = path.join(temp, "payload");
   try {
-    for (const relative of ["terminal/host.ps1", "desktop/computer.ps1", "desktop/tray.ps1", "desktop/rabi-agent.ico", "package.json"]) {
+    for (const relative of ["terminal/host.ps1", "desktop/computer.ps1", "desktop/computer-native.cs", "desktop/tray.ps1", "desktop/rabi-agent.ico", "package.json", "desktop/tracking/asset-spec.json", "desktop/tracking/RabiAgent.Computer.Tracking.csproj", "desktop/tracking/Engine.cs", "desktop/tracking/packages.lock.json", "desktop/tracking/THIRD-PARTY-NOTICES.txt"]) {
       await mkdir(path.dirname(path.join(agent, relative)), { recursive: true });
       await copyFile(path.join(root, "apps/rabi-agent", relative), path.join(agent, relative));
     }
@@ -27,9 +27,11 @@ test("release copies source-matched assemblies and all branded native hosts with
     assert.equal(result.status, 0, result.stderr || result.stdout);
     const native = path.join(agent, "dist/native");
     const requiredHosts = ["RabiAgent.Computer.exe", "RabiAgent.Terminal.exe", "RabiAgent.Tray.exe"];
-    const built = (await readdir(native)).filter(name => /^(terminal|computer|tray)-[a-f0-9]{64}\.dll$/.test(name) || requiredHosts.includes(name)).sort();
+    const tracking = JSON.parse(await readFile(path.join(native, "computer-tracking-assets.json"), "utf8"));
+    const trackingFiles = ["computer-tracking-assets.json", ...tracking.files.map(file => file.path)];
+    const built = (await readdir(native)).filter(name => /^(terminal|computer|tray)-[a-f0-9]{64}\.dll$/.test(name) || requiredHosts.includes(name) || trackingFiles.includes(name)).sort();
     const copied = (await readdir(path.join(payload, "apps/rabi-agent/dist/native"))).sort();
-    assert.equal(built.length, 6);
+    assert.equal(built.length, 6 + trackingFiles.length);
     assert.deepEqual(copied, built);
     for (const name of built) {
       assert.deepEqual(await readFile(path.join(payload, "apps/rabi-agent/dist/native", name)), await readFile(path.join(native, name)), name);
@@ -50,11 +52,16 @@ test("release copies source-matched assemblies and all branded native hosts with
     assert.notEqual(invalid.status, 0, "an invalid executable must fail the existing assembly contract");
     assert.match(invalid.stderr, /GetAssemblyName|BadImageFormat|assembly manifest/i);
     await writeFile(invalidHost, originalHost);
-    const sourceMatchedDll = built.find(name => name.endsWith(".dll"));
+    const sourceMatchedDll = built.find(name => /^(terminal|computer|tray)-[a-f0-9]{64}\.dll$/.test(name));
     await rm(path.join(native, sourceMatchedDll));
     const failure = powershell(`$ErrorActionPreference='Stop'; . ${quote(helper)}; Copy-AgentNativeAssets -AgentRoot ${quote(agent)} -PayloadRoot ${quote(path.join(temp, "missing-dll"))}`);
     assert.notEqual(failure.status, 0);
     assert.match(failure.stderr, /Native release asset missing/);
+    await copyFile(path.join(payload,"apps/rabi-agent/dist/native",sourceMatchedDll),path.join(native,sourceMatchedDll));
+    await rm(path.join(native,"OpenCvSharp.dll"));
+    const trackingMissing=powershell(`$ErrorActionPreference='Stop'; . ${quote(helper)}; Copy-AgentNativeAssets -AgentRoot ${quote(agent)} -PayloadRoot ${quote(path.join(temp,"missing-tracking"))}`);
+    assert.notEqual(trackingMissing.status,0);assert.match(trackingMissing.stderr,/Computer tracking release asset missing: OpenCvSharp.dll/);
+
   } finally {
     await rm(temp, { recursive: true, force: true });
   }

@@ -1,3 +1,4 @@
+import { operationIsReadOnly } from "../../apps/rabi-agent/lib/api-operation-effects.mjs";
 import { getTimeoutMs, registerTimeoutCatalog } from "../shared/timeoutSettings.js";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
@@ -354,6 +355,7 @@ export class ManagerPluginRouteRegistry {
         // Capture the published contract once. Its async work retains the original activation until completion.
         response.setHeader("x-rabiroute-api-contract", operation.digest);
         let executionStarted = false;
+        let readOnlyEffect = operationIsReadOnly(operation.contract, request.method);
         let mutationOutcome: "not_started" | "unknown" | undefined;
         const captureMutationOutcome = (result: ApiOperationResult) => {
           if (result.mutationOutcome === undefined) return;
@@ -398,7 +400,7 @@ export class ManagerPluginRouteRegistry {
           if (response.writableEnded || response.destroyed) return;
           if (response.headersSent) { response.destroy(); return; }
           const failure = apiContractFailure(operation, executionStarted && !(error instanceof ApiContractError)
-            ? new ApiContractError(500, "API_OPERATION_FAILED", "operation", operation.contract.operationId, true) : error);
+            ? new ApiContractError(500, "API_OPERATION_FAILED", "operation", operation.contract.operationId, true) : error, readOnlyEffect);
           if (!request.complete) {
             response.setHeader("connection", "close");
             request.on("error", () => undefined);
@@ -465,6 +467,7 @@ export class ManagerPluginRouteRegistry {
           let result;
           if (typeof prepared === "function") {
             const input = await readApiOperationInput(operation, request, businessUrl, response, signal);
+            readOnlyEffect = operationIsReadOnly(operation.contract, request.method, input.body);
             assertAuthority();
             if (operation.contract.request.body.kind === "json") {
               try { validateLanAgentRequestBody(request, input.body); }

@@ -125,7 +125,7 @@ test("real HTTP sessionless authenticated Agent reads another owner reservation 
   assert.equal(f.store.get(f.delivery.preparation.requestId!)?.status, 'cancelled');
   assert.deepEqual(f.store.getEndpointDelivery(f.delivery.deliveryId), accepted, 'Cancellation retains the accepted state and original receipt.');
   assert.deepEqual(terminal.source, f.delivery.source); assert.equal(terminal.promptHash, f.delivery.promptHash);
-  authority.setNodeEnabled("reader-node", false);
+  authority.revokeNode("reader-node");
   assert.equal(f.store.getEndpointDelivery(f.delivery.deliveryId)?.state, 'committed');
   assert.equal((await fetch(url, { headers })).status, 403);
 });
@@ -206,7 +206,7 @@ test("target revocation fails closed while source attribution is not a second gr
     { status: 403, body: denied });
 });
 
-for (const change of ["disabled", "node-ABA", "re-enrolled", "global-ABA"] as const) {
+for (const change of ["credential-revoked", "node-ABA", "re-enrolled", "global-ABA"] as const) {
   for (const duringAuthorize of [false, true]) {
     test(`original LAN principal denies ${change}${duringAuthorize ? " during authorization" : " before query"}`, async t => {
       const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabi-authority-query-"));
@@ -221,10 +221,10 @@ for (const change of ["disabled", "node-ABA", "re-enrolled", "global-ABA"] as co
         if (change === "global-ABA") { config.patch({ webguiLan: { enabled: false } }); config.patch({ webguiLan: { enabled: true } }); }
         else if (change === "re-enrolled") { authority.revokeNode("node-b"); authority.enroll(authority.issueBootstrapTicket().ticket, "node-b"); }
         else {
-      authority.setNodeEnabled("node-b", false);
+      authority.revokeNode("node-b");
       if (change === "node-ABA") {
-        authority.setNodeEnabled("node-b", true);
-        assert.ok(authority.authenticate(credential.token), "Restored node accepts fresh authentication while the original request lease remains revoked.");
+        const replacement = authority.enroll(authority.issueBootstrapTicket().ticket,"node-b");
+        assert.ok(authority.authenticate(replacement.token), "Restored node accepts fresh authentication while the original request lease remains revoked.");
       }
     }
       };

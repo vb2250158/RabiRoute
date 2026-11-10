@@ -238,7 +238,8 @@ test("isolated credential rows preserve their identities and bytes while indepen
   assert.deepEqual(written.nodes[0], original); assert.deepEqual(written.nodes[1], damaged);
   assert.deepEqual(written.nodes[3], unknown);
   const next = new LanAgentAuthority({ statePath });
-  assert.ok(next.authenticate(added.token)); assert.equal(next.acquireConnectionLease(good.token), null);
+  assert.ok(next.authenticate(added.token)); assert.equal(next.isNodeEnabled("good-node"), false);
+  assert.equal(next.acquireConnectionLease(good.token)?.nodeId, "good-node", "computer-work switch preserves the authenticated recovery connection");
   assert.equal(next.authenticate(bad.token), null);
   const visible = JSON.stringify(next.getSnapshot());
   assert.equal(visible.includes(original.secretHash), false);

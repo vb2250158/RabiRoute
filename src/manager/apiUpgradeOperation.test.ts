@@ -1,3 +1,4 @@
+import { randomBytes as replacementCredentialBytes } from "node:crypto";
 import assert from "node:assert/strict";
 import http from "node:http";
 import fs from "node:fs/promises";
@@ -161,7 +162,7 @@ test("retirement retains the lease for asynchronous owner cleanup after the sock
 
 test("revocation and re-enable cannot revive the original authenticated native channel", { timeout: 15000 }, async t => {
   const f = await fixture(t), connection = await f.open(); await connection.authenticate();
-  f.authority.setNodeEnabled(f.credential.nodeId, false, true); f.authority.setNodeEnabled(f.credential.nodeId, true, false);
+  f.authority.enroll(f.authority.issueBootstrapTicket().ticket, f.credential.nodeId, replacementCredentialBytes(32).toString("base64url"));
   const closed = once(connection.socket, "close"); connection.socket.send(JSON.stringify({ type: "heartbeat" }));
   assert.equal((await closed)[0], 1008); await f.registration.dispose();
   assert.equal(f.nodes.listNodes()[0]!.connected, false);

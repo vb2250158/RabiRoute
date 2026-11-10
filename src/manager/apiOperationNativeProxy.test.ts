@@ -103,6 +103,6 @@ test("real HTTP generic invocation preserves extension method/body/query and fix
   await assert.rejects(client.invokeOperation("fixture.native.models", { path: { suffix: "XYZ" } }), /explicit valid HTTP method/);
   await assert.rejects(client.invokeOperation("fixture.native.fixed", { method: "DELETE" }), /fixed operation methods/);
   assert.equal(calls, 2);
-  authority.setNodeEnabled(credential.nodeId, false, true);
+  authority.revokeNode(credential.nodeId);
   const denied = await fetch(base + "/api/native/modelsXYZ", { method: "PROPFIND", headers: { authorization: "Bearer " + credential.token } }); assert.equal(denied.status, 403); assert.equal(calls, 2);
 });

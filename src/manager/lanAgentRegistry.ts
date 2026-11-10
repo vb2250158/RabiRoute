@@ -1,3 +1,4 @@
+import { hostname } from "node:os";
 import { getTimeoutMs, registerTimeoutCatalog } from "../shared/timeoutSettings.js";
 import { atomicWriteFileSync } from "../shared/filePersistence.js";
 import fs from "node:fs";
@@ -9,11 +10,12 @@ import { createLanAgentConnectionOperation, LAN_AGENT_WEBSOCKET_LIMITS, type Lan
 import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
-import { normalizeInstanceAgents, type AgentInstance, type InstanceAgent } from "../shared/agentInstance.js";
+import { normalizeComputerCapabilities, normalizeInstanceAgents, type AgentInstance, type InstanceAgent } from "../shared/agentInstance.js";
 import { WebSocket, WebSocketServer } from "ws";
 import { webguiTokenMatches } from "./webguiLanAccess.js";
 import { recordDataMutationAudit } from "../observability/dataMutationAudit.js";
 import { LanAgentTerminals, TerminalDispatchNotSentError } from "./lanAgentTerminals.js";
+import { instanceAgentActionDefinition, terminalActionDefinition, computerActionDefinition, normalizeComputerSettings, assertComputerActionEnabled, assertComputerFeatureEnabled, isComputerReadOnlyAction, type ComputerSettings, type ComputerFeature, type ComputerFeaturePolicy, assertComputerFeaturePolicyEnabled, type ComputerExecutionContext } from "../../apps/rabi-agent/lib/computer-control-contract.mjs";
 import type { ManagerLocalComputer } from "./managerLocalComputer.js";
 
 export type LanAgentNodeHello = {
@@ -98,6 +100,7 @@ function receiptForTask(task: LanAgentTask): LanAgentResultReceipt {
 }
 
 type Connection = {
+  connectionId: string;
   socket: WebSocket;
   nodeId?: string;
   authenticated: boolean;
@@ -165,7 +168,7 @@ function normalizeHello(value: unknown): LanAgentNodeHello {
     agents: raw.agents === undefined ? undefined : normalizeInstanceAgents(raw.agents),
     taskTargeting: raw.taskTargeting === "explicit-session-v1" ? raw.taskTargeting : undefined,
     terminalShells: normalizeTextList(raw.terminalShells, 5, 16).filter(shell => ["cmd", "powershell", "zsh", "bash", "sh"].includes(shell)),
-    computerCapabilities: normalizeTextList(raw.computerCapabilities, 3, 16).filter(capability => ["files", "windows", "screenshots"].includes(capability))
+    computerCapabilities: normalizeComputerCapabilities(raw.computerCapabilities)
   };
 }
 
@@ -322,6 +325,7 @@ export class LanAgentNodeNameConflictError extends Error {
 
 export class LanAgentRegistry {
   readonly terminals = new LanAgentTerminals((instanceId, body, assertAuthorized) => {
+    if (!terminalActionDefinition(String(body.action))?.recovery) this.assertComputerFeature(instanceId, "terminal");
     if (instanceId === this.localInstanceId && this.localComputer) return this.localComputer.execute("terminal", body, assertAuthorized);
     try {
       if (!this.requireNode(instanceId).terminalShells?.length) throw new Error("This connector does not support remote terminals. Update it first.");
@@ -333,6 +337,8 @@ export class LanAgentRegistry {
     }
   });
   private readonly connections = new Map<string, Connection>();
+  private readonly computerSourceCleanups = new Set<Promise<void>>();
+  private retiringComputerSources = false;
   private readonly nodes = new Map<string, LanAgentNodeStatus>();
   private readonly tasks = new Map<string, LanAgentTask>();
   private readonly isolation: RegistryIsolation = { nodes: [], tasks: [], resultReceipts: [], nodeIds: new Set(), taskIds: new Set(),
@@ -364,6 +370,13 @@ export class LanAgentRegistry {
     statePath: string;
     authenticateNode?: (token: string) => { nodeId: string; incarnation?: string } | null;
     nodeEnabled?: (nodeId: string) => boolean;
+    computerFeaturePolicy?: (instanceId:string,feature:ComputerFeature)=>ComputerFeaturePolicy;
+    computerSettings?: (instanceId: string, refresh?: boolean) => { settings: ComputerSettings; revision: string };
+    patchComputerSettings?: (instanceId: string, patch: unknown, expectedRevision: string) => { settings: ComputerSettings; revision: string };
+    onComputerChanged?: (instanceId: string) => void;
+    onComputerSourceCleanupError?: (instanceId:string,error:unknown)=>void;
+    executionSource?: (request: http.IncomingMessage) => Pick<ComputerExecutionContext,"sourceId" | "sourceLabel" | "taskId" | "connectionId">;
+    listPeerComputers?: () => Promise<{ computers: Record<string, unknown>[]; sourceErrors: Array<{ ownerDeviceId: string; message: string }> }>;
     currentRelease?: (nodeId: string) => Readonly<{ version: string; releaseDigest: string }>;
     createLocalComputer?: (instanceId: string, emit: (event: Record<string, unknown>) => void) => ManagerLocalComputer;
   }) {
@@ -388,7 +401,7 @@ export class LanAgentRegistry {
       this.completedIdempotency.set(idempotencyScope(receipt.nodeId, receipt.idempotencyKey), receipt.taskId);
       if (receipt.eventId) this.resultEvents.set(receipt.eventId, receipt.taskId);
     }
-    this.localComputer = options.createLocalComputer?.(this.localInstanceId, event => this.terminals.receive(this.localInstanceId, event));
+    this.localComputer = options.createLocalComputer?.(this.localInstanceId, event => { if (event.type === "computerEvent") options.onComputerChanged?.(this.localInstanceId); else this.terminals.receive(this.localInstanceId, event); });
     this.releaseTimeoutCatalog = registerTimeoutCatalog([
       { key: "agent.remote.lateManagementResultRetention", defaultMs: 300_000, label: "远端管理迟到回执关联保留", scope: "LAN Agent Manager", effect: "保留最近超时写请求的关联信息；不重发命令。" },
       { key: "agent.remote.connectionProbeInterval", defaultMs: 30_000, label: "远端连接活性检查间隔", scope: "LAN Agent Manager", effect: "通过原 WebSocket ping/pong 判断连接是否仍可达。" },
@@ -473,12 +486,17 @@ export class LanAgentRegistry {
       .map(task => ({ ...task }));
   }
 
+  private computerSettingsProjection(instanceId: string): Pick<AgentInstance, "enabled" | "computerSettings" | "computerSettingsIssue"> {
+    try { const settings = this.getComputerSettings(instanceId).settings; return { enabled: settings.enabled, computerSettings: settings }; }
+    catch { return { computerSettingsIssue: "This computer's settings could not be read; other computers remain available." }; }
+  }
+
   listInstances(localAgents: InstanceAgent[] = []): AgentInstance[] {
-    return [{ instanceId: this.localInstanceId, local: true, connected: true, agents: localAgents,
+    return [{ instanceId: this.localInstanceId, local: true, connected: true, agents: localAgents, hostname: hostname(), platform: process.platform, ...this.computerSettingsProjection(this.localInstanceId),
       terminalShells: this.localComputer?.terminalShells, computerCapabilities: this.localComputer?.computerCapabilities }, ...this.listNodes().map(node => ({
-      instanceId: node.nodeId, name: node.name, hostname: node.hostname, local: false, enabled: this.options.nodeEnabled?.(node.nodeId) ?? true, address: node.remoteAddress, connected: node.connected, version: node.version,
+      instanceId: node.nodeId, name: node.name, hostname: node.hostname, local: false, ...this.computerSettingsProjection(node.nodeId), address: node.remoteAddress, connected: node.connected, version: node.version,
       agents: (node.agents ?? []).map(agent => ({ ...agent, enabled: agent.enabled })),
-      terminalShells: node.terminalShells, computerCapabilities: node.computerCapabilities
+      terminalShells: node.terminalShells, computerCapabilities: node.computerCapabilities, platform: node.platform
     }))];
   }
 
@@ -489,6 +507,87 @@ export class LanAgentRegistry {
 
   computerCapabilities(instanceId: string): readonly string[] {
     return instanceId === this.localInstanceId ? this.localComputer?.computerCapabilities ?? [] : this.nodes.get(instanceId)?.computerCapabilities ?? [];
+  }
+
+  getComputerSettings(instanceId: string, refresh = false): { settings: ComputerSettings; revision: string } {
+    if (instanceId !== this.localInstanceId && !this.nodes.has(instanceId)) throw new Error("Computer instance not found.");
+    return this.options.computerSettings?.(instanceId, refresh) ?? { settings: normalizeComputerSettings(undefined, instanceId === this.localInstanceId || this.options.nodeEnabled?.(instanceId) !== false), revision: '"default"' };
+  }
+
+  computerConnectionId(nodeId: string): string | undefined {
+    const connection = this.connections.get(nodeId);
+    if (!connection || connection.socket.readyState !== WebSocket.OPEN) return;
+    try { return this.connectionAuthorityCurrent(connection) ? connection.connectionId : undefined; } catch { return; }
+  }
+
+  private endComputerSource(connection: Connection): void {
+    if (this.retiringComputerSources || !connection.nodeId) return;
+    const targets = this.listInstances().filter(row => (row.local || row.connected) && row.computerCapabilities?.some(value => ["input","annotation","tracking"].includes(value))
+      && !(row.instanceId === connection.nodeId && this.connections.get(row.instanceId) === connection));
+    const work = Promise.all(targets.map(async row => {
+      try {
+        if (row.local && this.localComputer) await this.localComputer.endSource(connection.connectionId);
+        else await this.manageAgent(row.instanceId,"computer.source.end",{connectionId:connection.connectionId});
+      } catch (error) { this.options.onComputerSourceCleanupError?.(row.instanceId,error); }
+    })).then(()=>{});
+    this.computerSourceCleanups.add(work);
+    void work.then(()=>this.computerSourceCleanups.delete(work),()=>this.computerSourceCleanups.delete(work));
+  }
+
+  async stopComputerSourceLifecycle(): Promise<void> {
+    this.retiringComputerSources = true;
+    await Promise.allSettled(this.computerSourceCleanups);
+  }
+
+  computerExecutionSource(request: http.IncomingMessage): Pick<ComputerExecutionContext,"sourceId" | "sourceLabel" | "taskId" | "connectionId"> {
+    return this.options.executionSource?.(request) ?? {sourceId:`manager:${this.localInstanceId}`,sourceLabel:"Rabi PC"};
+  }
+
+  assertComputerFeature(instanceId: string, feature: ComputerFeature): void {
+    if(this.options.computerFeaturePolicy) assertComputerFeaturePolicyEnabled(this.options.computerFeaturePolicy(instanceId,feature),instanceId);
+    else assertComputerFeatureEnabled(this.getComputerSettings(instanceId).settings, feature, instanceId);
+  }
+
+  endComputerTask(instanceId: string, taskId: string, sourceId: string): Promise<unknown> {
+    if (instanceId === this.localInstanceId && this.localComputer) return this.localComputer.endTask(taskId, sourceId);
+    return this.manageAgent(instanceId,"computer.task.end",{taskId,sourceId});
+  }
+
+  setComputerEnabled(instanceId: string, enabled: boolean, expectedEnabled: boolean): Promise<{settings:ComputerSettings;revision:string;execution:string;executionIssue?:string}> {
+    const current = this.getComputerSettings(instanceId, true);
+    if (current.settings.enabled !== enabled && current.settings.enabled !== expectedEnabled) throw Object.assign(new Error("Instance enabled setting conflict."),{code:"COMPUTER_SETTINGS_CONFLICT"});
+    return this.updateComputerSettings(instanceId,{enabled},current.revision);
+  }
+
+  async updateComputerSettings(instanceId: string, patch: unknown, expectedRevision: string): Promise<{ settings: ComputerSettings; revision: string; execution: string; executionIssue?: string }> {
+    if (!this.options.patchComputerSettings) throw new Error("Computer settings owner unavailable.");
+    this.getComputerSettings(instanceId);
+    const result = this.options.patchComputerSettings(instanceId, patch, expectedRevision);
+    if (instanceId === this.localInstanceId) {
+      try { await this.localComputer?.settingsChanged(); return { ...result, execution: "applied" }; }
+      catch { return { ...result, execution: "unconfirmed", executionIssue: "Settings were saved; the target's current input/annotation cleanup has not been confirmed. Read original status or stop the original resource; do not repeat the settings write." }; }
+    }
+    if (!this.nodes.get(instanceId)?.connected) return { ...result, execution: "offline" };
+    try { await this.manageAgent(instanceId, "computer.settings", { settings: result.settings, instanceId }); return { ...result, execution: "applied" }; }
+    catch { return { ...result, execution: "unconfirmed" }; }
+  }
+
+  async listComputers(): Promise<{ computers: Record<string, unknown>[]; sourceErrors: Array<{ ownerDeviceId: string; message: string }> }> {
+    const sourceErrors: Array<{ ownerDeviceId: string; message: string }> = [];
+    const local = this.listInstances().map(instance => ({ ...instance, id: instance.local ? instance.instanceId : `${this.localInstanceId}/${instance.instanceId}`,
+      kind: instance.local ? "host" : "node", status: instance.connected ? "online" : "offline", capabilities: instance.computerCapabilities ?? [] }));
+    let peers: Awaited<ReturnType<NonNullable<typeof this.options.listPeerComputers>>> = { computers: [], sourceErrors: [] };
+    try { peers = await this.options.listPeerComputers?.() ?? peers; }
+    catch { sourceErrors.push({ ownerDeviceId: "peers", message: "Peer computer directory is unavailable; local computers remain readable." }); }
+    const byId = new Map(local.map(row => [row.id, row as Record<string, unknown>]));
+    const hosts = new Set([this.localInstanceId]);
+    for (const row of peers.computers) {
+      if (row.kind === "host" && typeof row.instanceId === "string" && row.instanceId) {
+        if (hosts.has(row.instanceId)) continue; hosts.add(row.instanceId);
+      }
+      if (typeof row.id === "string" && !byId.has(row.id)) byId.set(row.id, row);
+    }
+    return { computers: [...byId.values()], sourceErrors: [...sourceErrors, ...peers.sourceErrors] };
   }
 
   async stopLocalComputer(): Promise<void> {
@@ -515,13 +614,21 @@ export class LanAgentRegistry {
     return structuredClone(next);
   }
 
-  manageAgent(instanceId: string, operation: string, params: unknown, timeoutMs = getTimeoutMs("agent.remote.management", 15000), assertAuthorized?: () => void): Promise<unknown> {
+  manageAgent(instanceId: string, operation: string, params: unknown, timeoutMs = getTimeoutMs("agent.remote.management", 15000), assertAuthorized?: () => void, execution?: Partial<ComputerExecutionContext>): Promise<unknown> {
+    const body = params && typeof params === "object" ? params as Record<string, unknown> : {};
+    if (operation === "computer" && !computerActionDefinition(String(body.action))?.receipt && !computerActionDefinition(String(body.action))?.recovery) assertComputerActionEnabled(this.getComputerSettings(instanceId).settings, String(body.action), instanceId);
+    if (operation === "terminal" && !terminalActionDefinition(String(body.action))?.recovery) this.assertComputerFeature(instanceId, "terminal");
+    if (instanceAgentActionDefinition(operation,body)?.newWork) this.assertComputerFeature(instanceId, "agentTasks");
     if (instanceId === this.localInstanceId && this.localComputer && (operation === "terminal" || operation === "computer")) {
-      return this.localComputer.execute(operation, params as Record<string, unknown>, assertAuthorized);
+      return this.localComputer.execute(operation, params as Record<string, unknown>, assertAuthorized, execution);
     }
     let connection: Connection;
     try {
-      if (this.options.nodeEnabled?.(instanceId) === false) throw new Error("Remote instance is disabled.");
+      // Preserve only original computer receipt/cleanup and settings recovery after its user switch is off.
+      const recovery = operation === "computer" && (computerActionDefinition(String(body.action))?.recovery === true || computerActionDefinition(String(body.action))?.receipt === true)
+        || operation === "terminal" && terminalActionDefinition(String(body.action))?.recovery === true || operation === "computer.settings" || operation === "computer.task.end" || operation === "computer.source.end"
+        || instanceAgentActionDefinition(operation,body)?.recovery === true;
+      if (!recovery && this.options.nodeEnabled?.(instanceId) === false) throw new Error("Remote computer work is disabled. Change RabiLink → 电脑控制.");
       assertAuthorized?.();
       connection = this.requireConnection(instanceId);
     }
@@ -544,14 +651,14 @@ export class LanAgentRegistry {
             expiresAt: Date.now() + getTimeoutMs("agent.remote.lateManagementResultRetention", 300_000) });
         }
         reject(Object.assign(new Error("Instance management timed out; query the original operation before retrying a change."), {
-          code: "LAN_AGENT_MANAGEMENT_TIMEOUT", requestId, instanceId, operation, commitState: "unknown"
+          code: "LAN_AGENT_MANAGEMENT_TIMEOUT", requestId, instanceId, operation, ...(!pending.readOnly ? { commitState: "unknown" } : {})
         }));
       }, timeoutMs);
       const action = params && typeof params === "object" ? (params as Record<string, unknown>).action : undefined;
-      const readOnly = operation === "scan" || operation === "threads" && ["read", "list", "creation_status"].includes(String(action ?? "list"));
+      const readOnly = operation === "terminal" && terminalActionDefinition(String(action))?.readOnly === true || operation === "computer" && isComputerReadOnlyAction(String(action)) || operation === "scan" || instanceAgentActionDefinition(operation,body)?.readOnly === true;
       this.managementRequests.set(requestId, { connection, resolve, reject, timer, operation, readOnly, assertAuthorized });
       let passedRequestGuard = false;
-      try { assertAuthorized?.(); passedRequestGuard = true; this.send(connection.socket, { type: "manageAgent", requestId, operation, params }); }
+      try { assertAuthorized?.(); passedRequestGuard = true; this.send(connection.socket, { type: "manageAgent", requestId, operation, params: operation === "computer" ? { ...body, _computerContext: { sourceId: execution?.sourceId ?? "manager", sourceLabel: execution?.sourceLabel, taskId: execution?.taskId, connectionId:execution?.connectionId, instanceId, ...(!computerActionDefinition(String(body.action))?.recovery ? {settings:this.getComputerSettings(instanceId).settings} : {}) } } : params }); }
       catch (error) {
         clearTimeout(timer); this.managementRequests.delete(requestId);
         const failure = error && typeof error === "object" ? error : new Error(String(error), { cause: error });
@@ -627,6 +734,7 @@ export class LanAgentRegistry {
       return { ...restored };
     }
     if (input.taskId && (this.tasks.has(input.taskId.trim()) || this.resultReceipts.has(input.taskId.trim()))) throw new Error("Remote task ID already belongs to an original assignment.");
+    this.assertComputerFeature(nodeId, "agentTasks");
     if (this.options.nodeEnabled?.(nodeId) === false) throw new Error("Remote instance is disabled.");
     const connection = this.requireConnection(nodeId);
     if (this.requireNode(nodeId).taskTargeting !== "explicit-session-v1") {
@@ -658,6 +766,7 @@ export class LanAgentRegistry {
   }
 
   close(): void {
+    this.retiringComputerSources = true;
     for (const pending of this.managementRequests.values()) { clearTimeout(pending.timer); pending.reject(new Error("Manager is stopping.")); }
     this.managementRequests.clear();
     this.lateManagementRequests.clear();
@@ -681,7 +790,7 @@ export class LanAgentRegistry {
       if (!connection?.authenticated) closeSocket(socket, 1008, "Rabi Agent authentication timed out.");
     }, LAN_AGENT_WEBSOCKET_LIMITS.authenticationMs);
     authenticationTimer.unref?.();
-    connection = { socket, authenticated: false, authenticationTimer };
+    connection = { connectionId:randomUUID(), socket, authenticated: false, authenticationTimer };
     socket.on("message", data => {
       const message = parseMessage(data);
       if (!message) {
@@ -698,6 +807,7 @@ export class LanAgentRegistry {
       }
     });
     socket.on("close", () => {
+      this.endComputerSource(connection!);
       this.stopConnectionLiveness(connection!);
       this.clearLateManagementRequests(connection!);
       for (const [id, pending] of this.managementRequests) {
@@ -788,6 +898,7 @@ export class LanAgentRegistry {
     }
     const node = this.requireNode(connection.nodeId);
     if (this.connections.get(connection.nodeId) !== connection) throw new Error("Instance connection was replaced.");
+    if (type === "computerEvent") { this.options.onComputerChanged?.(connection.nodeId); return; }
     if (type === "terminalEvent") {
       if (message.event && typeof message.event === "object") this.terminals.receive(connection.nodeId, message.event as Record<string, unknown>);
       return;
@@ -817,8 +928,17 @@ export class LanAgentRegistry {
       clearTimeout(pending.timer);
       this.managementRequests.delete(id);
       try { pending.assertAuthorized?.(); } catch (error) { pending.reject(error instanceof Error ? error : new Error(String(error))); return; }
-      if (message.error) pending.reject(Object.assign(new Error(String(message.error).slice(0, 1024)),
-        message.errorCode === "AGENT_WORKSPACE_MISMATCH" ? { code: message.errorCode } : {}));
+      if (message.error) {
+        const computerFault = pending.operation === "computer" && typeof message.errorCode === "string" && /^COMPUTER_[A-Z0-9_]{1,96}$/.test(message.errorCode);
+        pending.reject(Object.assign(new Error(String(message.error).slice(0,1024)),
+          message.errorCode === "AGENT_WORKSPACE_MISMATCH" ? {code:message.errorCode} : computerFault ? {
+            code:message.errorCode,
+            ...(typeof message.uncertain === "boolean" ? {uncertain:message.uncertain} : {}),
+            ...(typeof message.errorField === "string" && message.errorField.length <= 128 ? {field:message.errorField} : {}),
+            ...(message.deliveryFrameSent === false ? {deliveryFrameSent:false} : {}),
+            ...(["not_started","unknown"].includes(String(message.mutationOutcome)) ? {mutationOutcome:message.mutationOutcome} : {})
+          } : {}));
+      }
       else pending.resolve(message.result);
       if (!isNoFrameResult(pending.operation, message.result) && changesDeliveryState(pending.operation, pending.readOnly)) this.deliveryEvents.emit("change");
       return;

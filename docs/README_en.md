@@ -8,6 +8,8 @@ English | <a href="./README.md">简体中文</a> | <a href="./README_ja.md">日�
 
 Start with the user guide for everyday operation, use the API reference for integrations, and find architecture, builds, and migration records in the maintainer section. Experimental and historical material keeps its own status.
 
+- [Computer control](user-guide/computer-control_en.md): flat computer directory, visible feature settings, input, capture and static/dynamic annotations.
+
 ## Start here
 
 - [RibiWebGUI user guide](user-guide/README_en.md): find setup, operation, and troubleshooting instructions by task.

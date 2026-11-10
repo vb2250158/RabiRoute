@@ -4,6 +4,9 @@ import test from "node:test";
 import vm from "node:vm";
 import ts from "typescript";
 import { peerManagerPath } from "../src/peerManagerTarget.js";
+import { ComputerControlClient } from "../../src/plugins/io.rabiroute.manager.core/web/computer/computerControlClient";
+import { createComputerControlState } from "../../src/plugins/io.rabiroute.manager.core/web/computer/computerControlState";
+import { normalizeComputerSettings, computerSettingsSchema } from "../../src/shared/agentInteractiveProtocol";
 import { agentInstanceDisplayName } from "../../src/shared/agentInstance.js";
 
 const settingsSource = fs.readFileSync(new URL("../src/components/InstanceAgentSettings.vue", import.meta.url), "utf8");
@@ -42,7 +45,7 @@ function settings(responses: Reply[], local = false, agentId = "agent-fixture") 
 }
 function page(responses: Reply[], deviceId = "") {
   const transport = requests(responses);
-  const state = evaluate(pageSource, "setInstanceEnabled, instances, error, enablingInstanceId, connectionToken, refresh, connectionAvailable, captureScreen, screenshot, screenshotName", {
+  const state = evaluate(pageSource, "instances, error, connectionToken, refresh, connectionAvailable", {
     ...transport, window: { location: { origin: "https://manager.test", hostname: "manager.test" } }, useGatewayStore: () => ({ gateways: [] }),
     useRoute: () => ({ query: { deviceId } }), useRouter: () => ({ replace: () => {} })
   });
@@ -56,11 +59,12 @@ const instance = (enabled?: boolean) => ({ instanceId: "node:fixture", name: "Di
 const catalog = (enabled: boolean) => json({ code: 0, instances: [instance(enabled)] });
 const payload = (call: { init?: RequestInit }) => JSON.parse(String(call.init?.body));
 
-test("remote instance owns its visible enable switch; local execution settings do not add an API grant", () => {
-  assert.match(pageSource, /:model-value="instance.enabled !== false" label="是否启用Agent"/);
-  assert.match(pageSource, /setInstanceEnabled\(instance, \$event\)/);
-  assert.match(settingsSource, /v-switch v-if="instance.local" v-model="draft.enabled" label="启用此执行程序"/);
-  assert.doesNotMatch(settingsSource, /setAuthorization|authorized|\/authorization/);
+test("computer settings own the visible switches while the Agent page links to that owner", () => {
+  const rowSource=fs.readFileSync(new URL("../../src/plugins/io.rabiroute.manager.core/web/computer/ComputerControlRow.vue",import.meta.url),"utf8");
+  assert.doesNotMatch(pageSource,/setInstanceEnabled|captureScreen|RemoteTerminalDialog/);
+  assert.match(pageSource,/tab:'computer'/);assert.match(rowSource,/edit\(\['enabled'\],\$event\)/);
+  assert.match(settingsSource,/v-switch v-if="instance.local" v-model="draft.enabled" label="启用此执行程序"/);
+  assert.doesNotMatch(settingsSource,/setAuthorization|authorized|\/authorization/);
 });
 
 test("remote save persists execution parameters by stable IDs without changing instance enable or saved session bindings", async () => {
@@ -110,17 +114,7 @@ test("connected host catalog loads through Peer even when local LAN enrollment i
   assert.equal(state.connectionAvailable.value, false, "missing target enrollment metadata does not borrow local readiness");
 });
 
-test("a late screenshot cannot replace the latest requested computer image", async () => {
-  let release!: (response: Response) => void;
-  const earlier = new Promise<Response>(resolve => { release = resolve; });
-  const { state } = page([earlier, json({ code: 0, data: { mimeType: "image/png", data: "new-image", width: 1, height: 1 } })], "pc-b");
-  const pending = state.captureScreen({ ...instance(true), name: "Earlier", instanceId: "earlier", ownerDeviceId: "pc-b" });
-  await state.captureScreen({ ...instance(true), name: "Latest", instanceId: "latest", ownerDeviceId: "pc-b" });
-  release(json({ code: 0, data: { mimeType: "image/png", data: "old-image", width: 1, height: 1 } }));
-  await pending;
-  assert.equal(state.screenshot.value.data, "new-image");
-  assert.equal(state.screenshotName.value, "Latest");
-});
+// Screenshot ordering now runs against the actual Core ComputerControlRow SFC in computer-control-ui.test.ts.
 
 test("failed save retains edited draft and emits no saved result", async () => {
   const { state, events, calls } = settings([access(), json({ code: -1, message: "fixture save rejected" }, 503)]);
@@ -159,63 +153,25 @@ test("remote open uses the explicitly selected full session ID only for that ope
   assert.equal(calls[1].url, "/api/lan-agent/instances/node%3Afixture/agents/agent-fixture/threads");
 });
 
-test("offline instance disable uses its original ID and confirms the owner catalog", async () => {
-  const { state, calls } = page([json({ code: 0 }), access(), catalog(false)]);
-  const target = instance(true);
-  state.instances.value = [target];
-  await state.setInstanceEnabled(target, false);
-  assert.equal(calls[0].url, "/api/lan-agent/instances/node%3Afixture/enabled");
-  assert.equal(calls[0].init?.method, "PUT");
-  assert.deepEqual(payload(calls[0]), { enabled: false, expectedEnabled: true });
-  assert.equal((calls[0].init?.headers as Record<string, string>)["x-rabiroute-webgui-token"], "fixture-admin");
-  assert.equal(state.instances.value[0].enabled, false);
-  assert.equal(state.error.value, "");
-  assert.equal(target.enabled, true, "the old display snapshot is not optimistically rewritten");
+function computerSettingsOwner(responses:Reply[],initialEnabled?:boolean) {
+ const transport=requests(responses),owner=createComputerControlState(),target={...instance(initialEnabled),id:"fixture",kind:"node" as const,status:"offline" as const};
+ owner.acceptSettings(target.id,{settings:normalizeComputerSettings(undefined,initialEnabled ?? true),schema:computerSettingsSchema,etag:'"v1"'});
+ const client=new ComputerControlClient(transport.fetch as typeof fetch,"fixture-admin");
+ async function save(enabled:boolean){const draft=owner.state.drafts.get(target.id)!;draft.value.enabled=enabled;draft.changes.set("enabled",enabled);draft.revision++;await owner.save(target.id,{enabled},(patch,etag)=>client.saveSettings(target,patch,etag));}
+ return {owner,target,draft:owner.state.drafts.get(target.id)!,save,...transport};
+}
+const computerReply=(enabled:boolean,revision='"v2"')=>Response.json({code:0,data:{settings:normalizeComputerSettings(undefined,enabled),schema:computerSettingsSchema,revision,execution:"applied"}},{headers:{etag:revision}});
+test("offline computer disable uses its stable ID, original CAS and authoritative readback",async()=>{
+ const f=computerSettingsOwner([computerReply(false),computerReply(false)],true);await f.save(false);
+ assert.equal(f.calls[0].url,"/api/lan-agent/instances/node%3Afixture/computer-settings");assert.equal(f.calls[0].init?.method,"PATCH");assert.deepEqual(payload(f.calls[0]),{enabled:false});
+ assert.equal(new Headers(f.calls[0].init?.headers).get("if-match"),'"v1"');assert.equal(new Headers(f.calls[0].init?.headers).get("x-rabiroute-webgui-token"),"fixture-admin");
+ assert.equal(f.draft.saved.settings.enabled,false);assert.equal(f.draft.error,"");assert.equal(f.target.enabled,true,"the old directory snapshot is not optimistically rewritten");
 });
-
-test("an older instance without enabled field retains the default-enabled compare value", async () => {
-  const { state, calls } = page([json({ code: 0 }), access(), catalog(false)]);
-  await state.setInstanceEnabled(instance(), false);
-  assert.equal(payload(calls[0]).expectedEnabled, true);
-});
-
-test("rejected instance change keeps the displayed owner state and never retries the write", async () => {
-  const { state, calls } = page([json({ code: -1, message: "instance changed concurrently" }, 409)]);
-  state.instances.value = [instance(true)];
-  await state.setInstanceEnabled(state.instances.value[0], false);
-  assert.equal(state.instances.value[0].enabled, true);
-  assert.match(state.error.value, /instance changed concurrently/);
-  assert.equal(calls.length, 1);
-  assert.equal(state.enablingInstanceId.value, "");
-});
-
-test("successful write with mismatching readback remains explicitly unconfirmed", async () => {
-  const { state, calls } = page([json({ code: 0 }), access(), catalog(true)]);
-  await state.setInstanceEnabled(instance(true), false);
-  assert.match(state.error.value, /保存结果未确认/);
-  assert.equal(state.instances.value[0].enabled, true);
-  assert.equal(calls.filter(call => call.init?.method === "PUT").length, 1);
-});
-
-test("pending instance and executor writes reject duplicate clicks without duplicating requests", async () => {
-  let release!: (response: Response) => void;
-  const held = new Promise<Response>(resolve => { release = resolve; });
-  const fixture = page([held, access(), catalog(false)]);
-  const target = instance(true);
-  const pending = fixture.state.setInstanceEnabled(target, false);
-  await fixture.state.setInstanceEnabled(target, true);
-  await fixture.state.setInstanceEnabled(target, "false");
-  assert.equal(fixture.calls.length, 1);
-  release(json({ code: 0 }));
-  await pending;
-  let releaseAccess!: (response: Response) => void;
-  const heldAccess = new Promise<Response>(resolve => { releaseAccess = resolve; });
-  const execution = settings([heldAccess, saved()]);
-  const saving = execution.state.save();
-  await execution.state.save();
-  assert.equal(execution.calls.length, 1);
-  releaseAccess(access());
-  await saving;
-  assert.deepEqual(execution.events, ["saved"]);
-  assert.equal(execution.calls.length, 2);
+test("an older computer without enabled metadata keeps the owner default-enabled comparison",async()=>{const f=computerSettingsOwner([computerReply(false),computerReply(false)]);assert.equal(f.draft.saved.settings.enabled,true);await f.save(false);assert.equal(new Headers(f.calls[0].init?.headers).get("if-match"),'"v1"');assert.equal(f.draft.saved.settings.enabled,false);});
+test("rejected computer change retains owner state and edited draft without retry",async()=>{const f=computerSettingsOwner([json({code:-1,message:"instance changed concurrently"},409)],true);await f.save(false);assert.equal(f.draft.saved.settings.enabled,true);assert.equal(f.draft.value.enabled,false);assert.match(f.draft.error,/instance changed concurrently/);assert.equal(f.calls.length,1);assert.equal(f.draft.saving,false);});
+test("successful settings write with different readback remains submitted and unconfirmed",async()=>{const f=computerSettingsOwner([computerReply(false),computerReply(true,'"v3"')],true);await f.save(false);assert.equal(f.draft.saved.settings.enabled,true);assert.equal(f.draft.value.enabled,false);assert.equal(f.draft.readbackUnconfirmed,true);assert.match(f.draft.application?.readbackIssue || "",/修改已提交/);assert.equal(f.calls.filter(call=>call.init?.method==="PATCH").length,1);});
+test("pending computer and executor writes do not duplicate original requests",async()=>{
+ let release!:(response:Response)=>void;const held=new Promise<Response>(yes=>release=yes);const f=computerSettingsOwner([held,computerReply(false)],true);const pending=f.save(false);
+ await f.owner.save(f.target.id,{enabled:true},()=>{throw new Error("duplicate write must not dispatch");});await f.owner.save(f.target.id,{enabled:"false"},()=>{throw new Error("duplicate write must not dispatch");});assert.equal(f.calls.length,1);release(computerReply(false));await pending;
+ let releaseAccess!:(response:Response)=>void;const heldAccess=new Promise<Response>(yes=>releaseAccess=yes);const execution=settings([heldAccess,saved()]);const saving=execution.state.save();await execution.state.save();assert.equal(execution.calls.length,1);releaseAccess(access());await saving;assert.deepEqual(execution.events,["saved"]);assert.equal(execution.calls.length,2);
 });

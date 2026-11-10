@@ -4,6 +4,8 @@ import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { atomicWriteFileSync, withFileLockSync } from "../shared/filePersistence.js";
 import { recordDataMutationAudit, type DataMutationAuditRecord } from "../observability/dataMutationAudit.js";
 
+import { projectComputerFeaturePolicy, normalizeComputerSettings, patchComputerSettings, type ComputerSettings, type ComputerFeature, type ComputerFeaturePolicy } from "../../apps/rabi-agent/lib/computer-control-contract.mjs";
+
 export type LanAgentIdentity = { nodeId: string };
 export type LanAgentCredential = LanAgentIdentity & { token: string };
 export type LanAgentCredentialDiagnostic = Readonly<{ index: number; nodeId?: string; reason: "invalid_record" | "duplicate_identity" }>;
@@ -11,7 +13,7 @@ export type LanAgentAuthoritySnapshot = { revision: string; nodes: Array<LanAgen
 export type LanAgentConnectionLease = Readonly<{ nodeId: string; incarnation: string }>;
 export type LanAgentBootstrapTicket = { ticket: string; expiresAt: number };
 export type LanAgentAuthorityOptions = { statePath: string; now?: () => number; bootstrapTtlMs?: number; maxBootstrapTickets?: number };
-type NodeCredential = { nodeId: string; secretHash: string; connectionIncarnation: string; enabled?: boolean };
+type NodeCredential = { nodeId: string; secretHash: string; connectionIncarnation: string; enabled?: boolean; computerSettings?: unknown };
 type AuthorityState = { schemaVersion: 2; nodes: NodeCredential[] };
 type CredentialSource = { nodes: unknown[]; validIds: Set<string>; diagnostics: LanAgentCredentialDiagnostic[] };
 const credentialSources = new WeakMap<AuthorityState, CredentialSource>();
@@ -74,10 +76,10 @@ function loadState(statePath: string, migrate = false): AuthorityState {
     if (!isRecord(value) || !nodeId || !hash(value.secretHash)) { invalid(); continue; }
     const incarnation = value.connectionIncarnation ?? (legacy ? value.authorizationIncarnation ?? hashSecret(value.secretHash) : undefined);
     if (!hash(incarnation) || Object.keys(value).some(key => !(legacy
-      ? ["nodeId", "secretHash", "connectionIncarnation", "authorizationIncarnation", "enabledAgentIds", "disabledAgentIds", "agentBindings", "enabled"]
-      : ["nodeId", "secretHash", "connectionIncarnation", "enabled"]).includes(key))) { invalid(); continue; }
+      ? ["nodeId", "secretHash", "connectionIncarnation", "authorizationIncarnation", "enabledAgentIds", "disabledAgentIds", "agentBindings", "enabled", "computerSettings"]
+      : ["nodeId", "secretHash", "connectionIncarnation", "enabled", "computerSettings"]).includes(key))) { invalid(); continue; }
     if (value.enabled !== undefined && typeof value.enabled !== "boolean") { invalid(); continue; }
-    nodes.push({ nodeId, secretHash: value.secretHash, connectionIncarnation: incarnation, ...(value.enabled === false ? { enabled: false } : {}) });
+    nodes.push({ nodeId, secretHash: value.secretHash, connectionIncarnation: incarnation, ...(value.enabled === false ? { enabled: false } : {}), ...(value.computerSettings !== undefined ? { computerSettings: value.computerSettings } : {}) });
   }
   const state: AuthorityState = { schemaVersion: 2, nodes };
   credentialSources.set(state, { nodes: parsed.nodes, validIds: new Set(nodes.map(node => node.nodeId)), diagnostics });
@@ -106,6 +108,8 @@ export class LanAgentAuthority {
   private readonly bootstrapTtlMs: number;
   private readonly maxBootstrapTickets: number;
   private readonly tickets = new Map<string, number>();
+  private readonly computerFeaturePolicyCache = new Map<string,Map<ComputerFeature,ComputerFeaturePolicy>>();
+  private readonly computerSettingsCache = new Map<string, { settings: ComputerSettings; revision: string }>();
 
   constructor(options: LanAgentAuthorityOptions) {
     this.statePath = path.resolve(options.statePath);
@@ -180,7 +184,7 @@ export class LanAgentAuthority {
   /** Connection authority belongs to the enrolled computer, never a saved Agent/session. */
   acquireConnectionLease(token: string): LanAgentConnectionLease | null {
     const node = this.authenticatedNode(token);
-    return node && node.enabled !== false ? Object.freeze({ nodeId: node.nodeId,
+    return node ? Object.freeze({ nodeId: node.nodeId,
       incarnation: node.connectionIncarnation }) : null;
   }
 
@@ -193,7 +197,7 @@ export class LanAgentAuthority {
 
   getNodeAuthorization(nodeId: string): LanAgentConnectionLease | null {
     const node = this.readState().nodes.find(item => item.nodeId === nodeId);
-    return node && node.enabled !== false ? Object.freeze({ nodeId, incarnation: node.connectionIncarnation }) : null;
+    return node ? Object.freeze({ nodeId, incarnation: node.connectionIncarnation }) : null;
   }
 
   /** Detached, secret-free view for trusted Manager UI/registry projections. */
@@ -208,7 +212,7 @@ export class LanAgentAuthority {
 
   isNodeEnabled(nodeId: string): boolean { return this.readState().nodes.some(node => node.nodeId === nodeId && node.enabled !== false); }
 
-  /** A single instance switch controls the connection, never individual features or sessions. */
+  /** The switch controls computer work; authentication, diagnostics and original cleanup stay available. */
   setNodeEnabled(nodeId: string, enabled: boolean, expectedEnabled?: boolean): void {
     if (!validId(nodeId) || typeof enabled !== "boolean") this.reject("set-node-enabled", "Invalid instance enabled setting.");
     this.mutate("set-node-enabled", state => {
@@ -219,9 +223,43 @@ export class LanAgentAuthority {
       if (current === enabled) return false;
       if (expectedEnabled !== undefined && current !== expectedEnabled) this.reject("set-node-enabled", "Instance enabled setting conflict.");
       if (enabled) delete node.enabled; else node.enabled = false;
-      node.connectionIncarnation = randomBytes(32).toString("hex");
+      if (isRecord(node.computerSettings)) node.computerSettings = { ...node.computerSettings, enabled };
       return true;
     });
+  }
+
+  getComputerFeaturePolicy(nodeId:string,feature:ComputerFeature,refresh=false):ComputerFeaturePolicy {
+    if(refresh)this.computerFeaturePolicyCache.get(nodeId)?.delete(feature);
+    const cached=this.computerFeaturePolicyCache.get(nodeId)?.get(feature);if(cached)return cached;
+    const node=this.readState().nodes.find(item=>item.nodeId===nodeId);if(!node)throw new Error("Computer is not enrolled.");
+    const policy=projectComputerFeaturePolicy(node.computerSettings,feature,node.enabled===false?false:undefined);
+    const policies=this.computerFeaturePolicyCache.get(nodeId)??new Map<ComputerFeature,ComputerFeaturePolicy>();policies.set(feature,policy);this.computerFeaturePolicyCache.set(nodeId,policies);return policy;
+  }
+
+  getComputerSettings(nodeId: string, refresh = false): { settings: ComputerSettings; revision: string } {
+    if (refresh) {this.computerSettingsCache.delete(nodeId);this.computerFeaturePolicyCache.delete(nodeId);}
+    const cached = this.computerSettingsCache.get(nodeId);
+    if (!refresh && cached) return cached;
+    const node = this.readState().nodes.find(item => item.nodeId === nodeId);
+    if (!node) throw new Error("Computer is not enrolled.");
+    const settings = normalizeComputerSettings(node.computerSettings, node.enabled === false ? false : undefined);
+    const value = { settings, revision: `"sha256:${hashSecret(JSON.stringify(settings))}"` };
+    this.computerSettingsCache.set(nodeId, value); return value;
+  }
+
+  patchComputerSettings(nodeId: string, patch: unknown, expectedRevision: string): { settings: ComputerSettings; revision: string } {
+    this.mutate("computer-settings", state => {
+      assertWritableNode(state, nodeId);
+      const node = state.nodes.find(item => item.nodeId === nodeId);
+      if (!node) throw new Error("Computer is not enrolled.");
+      const previous = normalizeComputerSettings(node.computerSettings, node.enabled === false ? false : undefined);
+      if (expectedRevision !== `"sha256:${hashSecret(JSON.stringify(previous))}"`) throw Object.assign(new Error("Computer settings revision conflict. Read the original computer-settings before merging."), { code: "COMPUTER_SETTINGS_CONFLICT" });
+      const next = patchComputerSettings(previous, patch);
+      node.computerSettings = next;
+      if (next.enabled) delete node.enabled; else node.enabled = false;
+      return JSON.stringify(previous) !== JSON.stringify(next);
+    });
+    return this.getComputerSettings(nodeId);
   }
 
   /** Trusted admin only. Idempotently removes the computer credential. */
@@ -252,6 +290,8 @@ export class LanAgentAuthority {
   }
 
   private mutate(action: string, update: (state: AuthorityState) => boolean): void {
+    this.computerSettingsCache.clear();
+    this.computerFeaturePolicyCache.clear();
     this.audit(action, "started");
     try {
       withFileLockSync(`${this.statePath}.lock`, () => {

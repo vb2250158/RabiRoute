@@ -1,4 +1,5 @@
 import type http from "node:http";
+import { instanceAgentActionDefinition, DEFAULT_COMPUTER_SETTINGS, computerSettingsSchema } from "@rabiroute/host-api/shared/agentInteractiveProtocol";
 import { LanAgentNodeNameConflictError, type LanAgentRegistry } from "@rabiroute/host-api/manager/lanAgentRegistry";
 import type { LanAgentReleaseStore } from "@rabiroute/host-api/manager/lanAgentReleaseStore";
 import type { InstanceAgent } from "@rabiroute/host-api/shared/agentInstance";
@@ -27,7 +28,14 @@ export type LanAgentRoutesContext = {
 
 
 export function createLanAgentManagementOperations(context: LanAgentRoutesContext): readonly ApiOperationDefinition[] {
-  return LAN_AGENT_MANAGEMENT_ROUTES.map(route => ({ contract: lanAgentManagementContract(route), handler: input => run(context, route, input) }));
+  return LAN_AGENT_MANAGEMENT_ROUTES.map(route => ({ contract: lanAgentManagementContract(route),
+    ...(route.key === "computers.list" || route.key.startsWith("computer-settings.") ? { discovery: {
+      title: route.key === "computers.list" ? "电脑列表" : route.key.endsWith("patch") ? "修改电脑控制设置" : "读取电脑控制设置",
+      summary: "本机、远端节点和完整主机的电脑功能、真实能力与可见设置。列表非空ownerDeviceId表示所属远端Manager；按目标声明经原Peer manager服务转接同一路径与正文，不把远端instanceId投到本机。",
+      relatedOperations:["manager.rabilink.peer.http.get","manager.rabilink.peer.http.post","manager.rabilink.peer.http.patch"],
+      category: {id:"devices",title:"设备与电脑"}, keywords:["电脑","电脑控制","computer","computer control","settings"],
+      ...(route.key !== "computers.list" ? { inputSources:[{field:"path.instanceId",operationId:"manager.lan-agent.instances.list",resultPath:"instances",valuePath:"instanceId"}] } : {})
+    } } : {}), handler: input => run(context, route, input) }));
 }
 
 async function run(context: LanAgentRoutesContext, route: ManagementRoute, input: ApiOperationInput): Promise<ApiOperationResult> {
@@ -70,15 +78,25 @@ async function run(context: LanAgentRoutesContext, route: ManagementRoute, input
         guard(); return output(201, { code: 0, data });
       }
       case "instances.list": {
-        const instances = context.registry.listInstances(context.localAgents?.()).map(instance => ({ ...instance, enabled: instance.local || (context.authority?.isNodeEnabled(instance.instanceId) ?? true) }));
+        const instances = context.registry.listInstances(context.localAgents?.());
         guard(); return output(200, { code: 0, instances, credentialDiagnostics: context.authority?.getSnapshot().diagnostics ?? [] });
       }
+      case "computers.list": {
+        const data = await context.registry.listComputers(); guard(); return output(200, {code:0,data});
+      }
+      case "computer-settings.read":
+      case "computer-settings.patch": {
+        const instanceId = input.path.instanceId!;
+        const data = route.key === "computer-settings.patch"
+          ? await context.registry.updateComputerSettings(instanceId, body, String(input.request.headers["if-match"] ?? ""))
+          : context.registry.getComputerSettings(instanceId, true);
+        guard(); return { status: 200, headers: { ...headers, etag: data.revision }, body: { code:0, data:{...data, defaults:DEFAULT_COMPUTER_SETTINGS, schema:computerSettingsSchema, capabilities:context.registry.computerCapabilities(instanceId)} } };
+      }
       case "instances.enabled": {
-        if (!context.authority) return output(404, { code: -1, message: "Node enrollment owner is unavailable." });
         const nodeId = input.path.instanceId!;
-        guard(); mutated = true; context.authority.setNodeEnabled(nodeId, body.enabled as boolean, body.expectedEnabled as boolean);
-        // Disabling the caller's own node is an accepted mutation; its revoked lease prevents disclosure.
-        guard(); return output(200, { code: 0, data: { nodeId, enabled: context.authority.isNodeEnabled(nodeId) } });
+        guard(); mutated = true;
+        const applied = await context.registry.setComputerEnabled(nodeId, body.enabled as boolean, body.expectedEnabled as boolean);
+        guard(); return output(200, { code: 0, data: { nodeId, enabled: applied.settings.enabled, execution:applied.execution, ...(applied.executionIssue ? {executionIssue:applied.executionIssue} : {}) } });
       }
       case "instances.name": {
         guard(); mutated = true;
@@ -128,6 +146,7 @@ async function run(context: LanAgentRoutesContext, route: ManagementRoute, input
         guard(); let result: unknown;
         if (instanceId === context.registry.localInstanceId) {
           if (!agentId || !context.manageLocalAgent) throw new Error("Local Agent management is unavailable.");
+          if (instanceAgentActionDefinition(operation,body)?.newWork) context.registry.assertComputerFeature(instanceId,"agentTasks");
           mutated = true; result = await context.manageLocalAgent(agentId, operation, body, guard);
         } else if (operation === "tasks") {
           const provider = typeof body.provider === "string" ? body.provider : "";
@@ -148,11 +167,12 @@ async function run(context: LanAgentRoutesContext, route: ManagementRoute, input
     try { guard(); }
     catch { return output(403, { code: -1, message: "Connection identity changed; node request stopped.", ...(mutated || releaseSelectionCommitted ? { uncertain: true } : {}), ...(taskId ? { taskId } : {}) }); }
     if (exchange) return output(400, { code: -1, message: "Enrollment could not be completed. Keep the local recovery record; if the ticket expired, copy a fresh connection prompt. No separate Agent approval is required." });
-    const readOnly = route.method === "GET" || route.key === "agents.scan" || route.key === "agents.threads" && ["read", "list", "creation_status"].includes(String(body.action ?? "list"));
+    const readOnly = route.method === "GET" || route.key === "agents.scan" || instanceAgentActionDefinition(route.key.slice("agents.".length),body)?.readOnly === true;
     const transport = lanAgentManagementTransportFailure(error, lanAgentManagementContract(route).operationId, readOnly);
     if (transport) return transport;
+    if ((error as {code?:string})?.code === "COMPUTER_FEATURE_DISABLED") return output(403,{code:-1,errorCode:"COMPUTER_FEATURE_DISABLED",field:(error as {field?:string}).field ?? "features.agentTasks",message:(error as Error).message,repair:"Open RabiLink → 电脑控制 and update the target computer settings.",retryable:false});
     const message = error instanceof Error ? error.message : String(error);
-    return output(error instanceof LanAgentNodeNameConflictError || error instanceof LanAgentReleaseSelectionConflictError || route.key === "instances.enabled" && /conflict/.test(message) ? 409 : 400,
+    return output((error as {code?:string})?.code === "COMPUTER_SETTINGS_CONFLICT" || error instanceof LanAgentNodeNameConflictError || error instanceof LanAgentReleaseSelectionConflictError || route.key === "instances.enabled" && /conflict/.test(message) ? 409 : 400,
       { code: -1, message, ...(releaseSelectionCommitted ? { uncertain: true } : {}), ...(taskId ? { uncertain: true, taskId } : {}) });
   }
 }

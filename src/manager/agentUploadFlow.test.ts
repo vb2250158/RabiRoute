@@ -315,11 +315,11 @@ test("734 MiB file streams through real client, managed storage and the group-fi
   t.diagnostic(`Streamed ${size} bytes; SHA-256 ${expectedHash}; sink chunks <= ${chunk.length} bytes.`);
 });
 
-test("disabled Agent and revoked node reject upload and deny a previously approved send source", async t => {
+test("revoked credentials reject upload and deny a previously approved send source", async t => {
   const f = await fixture(t);
   const uploaded = await f.client().upload(f.localFile, randomUUID());
   assert.equal(uploaded.ok, true);
-  f.authority.setNodeEnabled(f.nodeId, false);
+  f.authority.revokeNode(f.nodeId);
   const dto: AgentUploadDto = JSON.parse(uploaded.body).data;
   const disabledId = randomUUID();
   const disabled = await f.client().upload(f.localFile, disabledId);
@@ -335,4 +335,9 @@ test("disabled Agent and revoked node reject upload and deny a previously approv
   assert.throws(() => f.store.get({ nodeId: f.nodeId, agentId: "fixture-a" }, revokedId), /not_found/);
   await assert.rejects(() => f.send(f.request(dto)), /revoked/);
   assert.equal(f.calls.length, 0);
+});
+
+test("source computer-work switch does not revoke independent Manager upload APIs", async t => {
+ const f=await fixture(t);f.authority.setNodeEnabled(f.nodeId,false);
+ const uploaded=await f.client().upload(f.localFile,randomUUID());assert.equal(uploaded.statusCode,200);assert.equal(uploaded.ok,true);assert.equal(f.calls.length,0);
 });

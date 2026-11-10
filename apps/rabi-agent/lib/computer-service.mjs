@@ -3,8 +3,9 @@ import { COMPUTER_LIMITS } from "./interactive-protocol.mjs";
 import fs from "node:fs";
 import path from "node:path";
 import { createHash } from "node:crypto";
-import { spawn } from "node:child_process";
-import { fileURLToPath } from "node:url";
+import { NativeComputerClient } from "./computer-native-client.mjs";
+import { ComputerControlService } from "./computer-control-service.mjs";
+import { assertComputerActionEnabled, computerActionDefinition } from "./computer-control-contract.mjs";
 
 const CHUNK_BYTES = COMPUTER_LIMITS.chunkBytes;
 const digest = bytes => createHash("sha256").update(bytes).digest("hex");
@@ -19,7 +20,7 @@ function capacityError(name, value) { return new Error(`Computer resource limit 
 
 /** Computer I/O only. Personas, memory, skills and workflow remain on the controller. */
 export class ComputerService {
-  constructor({ onChange = () => undefined, uploadHistoryRoot, historyIo, timeout = (_key, fallback) => fallback,
+  constructor({ onChange = () => undefined, onControlChange = () => undefined, uploadHistoryRoot, historyIo, instanceId, getSettings, nativeFactory, qtPresentation, getPresentationTheme, receiptRoot, timeout = (_key, fallback) => fallback,
     maxUploadBytes = configuredLimit("RABI_AGENT_COMPUTER_MAX_UPLOAD_BYTES", Number.MAX_SAFE_INTEGER),
     maxConcurrentIo = configuredLimit("RABI_AGENT_COMPUTER_MAX_CONCURRENT_IO", 0),
     maxActiveUploads = configuredLimit("RABI_AGENT_COMPUTER_MAX_ACTIVE_UPLOADS", 0),
@@ -31,18 +32,32 @@ export class ComputerService {
     this.timeout = timeout;
     this.uploads = new Map(); this.uploadQueues = new Map(); this.history = new UploadHistoryStore({ root: uploadHistoryRoot, io: historyIo });
     this.children = new Set(); this.pending = 0; this.stopped = false; this.onChange = onChange; this.stopOwner = null;
+    this.instanceId = instanceId; this.getSettings = getSettings;
+    this.native = nativeFactory ? nativeFactory({ children: this.children, timeout }) : new NativeComputerClient({ children: this.children, timeout, qtPresentation, getPresentationTheme });
+    this.control = new ComputerControlService({ native: this.native, instanceId, onChange: () => { onChange(); onControlChange(); }, receiptRoot: receiptRoot ?? (uploadHistoryRoot ? path.join(path.dirname(uploadHistoryRoot), "computer-receipts") : undefined) });
   }
-  get activeCount() { return this.pending + this.activeUploads(); }
+  get capabilities() {
+    return ["files", ...(process.platform === "win32" ? ["windows", "screenshots", "input", "annotation", ...(fs.existsSync(new URL("../dist/native/RabiAgent.Computer.Tracking.dll", import.meta.url)) ? ["tracking"] : [])] : [])];
+  }
+  setPresentationTheme(snapshot) { return this.native.setPresentationTheme?.(snapshot) ?? Promise.resolve(); }
+  connectionClosed() { return this.control.connectionClosed(); }
+  endSource(connectionId) { return this.control.endSource(connectionId); }
+  endTask(taskId, sourceId) { return this.control.endTask(taskId, sourceId); }
+  get activeCount() { return this.pending + this.activeUploads() + this.control.activeCount; }
   activeUploads() { return [...this.uploads.values()].filter(item => !this.terminalClosed(item)).length + this.history.openHandleCount; }
   terminalClosed(item) { return ["committed", "aborted"].includes(item.state) && item.fdClosed === true && item.temporaryRemoved === true && Number.isSafeInteger(item.confirmedAt); }
-  async execute(input) {
+  async execute(input, context = {}) {
+    context = { getSettings: this.getSettings, instanceId: typeof this.instanceId === "function" ? this.instanceId() : this.instanceId, ...context };
+    if (/^(?:control\.|input\.|annotation\.)/.test(String(input.action))) return this.control.execute(input, context);
+    context.guard?.();
+    if (!computerActionDefinition(input.action)?.recovery) assertComputerActionEnabled(context.getSettings?.() ?? context.settings, input.action, context.instanceId);
     if (this.stopped) throw new Error("Computer service is stopped.");
     if (this.maxConcurrentIo > 0 && this.pending >= this.maxConcurrentIo) throw capacityError("RABI_AGENT_COMPUTER_MAX_CONCURRENT_IO", this.maxConcurrentIo);
     this.pending++; this.onChange();
     try {
       if (input.action === "file.stat" || input.action === "file.read") return await this.readFile(input);
       if (String(input.action).startsWith("upload.")) return await this.upload(input);
-      if (["windows.list", "screen.capture"].includes(input.action)) return await this.desktop(input);
+      if (["windows.list", "screen.capture"].includes(input.action)) return await this.desktop(input, context);
       throw new Error("Unsupported computer operation.");
     } finally { this.pending--; this.onChange(); }
   }
@@ -173,39 +188,27 @@ export class ComputerService {
     }
     throw new Error("Unsupported upload operation.");
   }
-  desktop(input) {
+  desktop(input, context = {}) {
     if (process.platform !== "win32") throw new Error("Window queries and screenshots require Windows.");
-    return new Promise((resolve, reject) => {
-      const executable = path.join(process.env.SystemRoot || "C:\\Windows", "System32/WindowsPowerShell/v1.0/powershell.exe");
-      const native = fileURLToPath(new URL("../dist/native/RabiAgent.Computer.exe", import.meta.url));
-      const nativeAvailable = fs.existsSync(native);
-      // Retain old signed release support until enrollment requires the native assets.
-      const child = spawn(nativeAvailable ? native : executable, nativeAvailable ? [] : ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", fileURLToPath(new URL("../desktop/computer.ps1", import.meta.url))], {
-        windowsHide: true, stdio: ["pipe", "pipe", "pipe"],
-        env: Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^(RABI_|RABIROUTE_|CODEX_)/i.test(key)))
-      });
-      this.children.add(child); let output = "";
-      const deadline = setTimeout(() => child.kill(), this.timeout("agent.computer.process", 30000));
-      child.stdout.setEncoding("utf8"); child.stdout.on("data", data => { output += data; if (output.length > 12000000) child.kill(); });
-      child.stderr.resume(); child.stdin.on("error", () => undefined);
-      child.once("error", () => reject(new Error("Desktop helper could not start.")));
-      child.once("close", code => {
-        clearTimeout(deadline); this.children.delete(child);
-        try {
-          if (code !== 0) throw new Error("Desktop capture failed or timed out; an interactive Windows desktop is required.");
-          const result = JSON.parse(output);
-          if (result.error) throw new Error(result.error);
-          resolve(result);
-        } catch (error) { reject(error); }
-      });
-      child.stdin.write(`${JSON.stringify(input)}\n`);
-    });
+    if (input.action === "screen.capture") return this.control.capture(input, context);
+    return this.native.request(input.action, { ...input, action: undefined });
   }
+  reconcileSettings(context = {}) { return this.control.reconcile({ getSettings: this.getSettings, ...context }); }
   stop() {
     if (this.stopOwner) return this.stopOwner;
     this.stopped = true;
+    const stoppingControl = this.control.stop();
+    const stoppingResources = this.stopResources();
+    this.stopOwner = Promise.allSettled([stoppingControl, stoppingResources]).then(results => {
+      const failures = results.filter(result => result.status === "rejected").flatMap(result => result.reason instanceof AggregateError ? result.reason.errors : [result.reason]);
+      if (failures.length) throw new AggregateError(failures, "Computer owner cleanup remains unconfirmed.");
+    }); return this.stopOwner;
+  }
+  stopResources() {
+    if (this.resourceStopOwner) return this.resourceStopOwner;
+    this.stopped = true;
     const failures = [];
-    const closingChildren = [...this.children].map(child => new Promise((resolve, reject) => {
+    const closingChildren = [...this.children].filter(child => child !== this.native.child && child !== this.native.qt?.child).map(child => new Promise((resolve, reject) => {
       // Register before signalling: kill() acceptance and process exit alone do
       // not prove that the helper and its redirected handles have closed.
       let killFailure;
@@ -223,7 +226,7 @@ export class ComputerService {
     }
     // The upload cleanup owner retains pending cold I/O; stopping is not proof that any fd closed.
     const uploadOperations = [...this.uploadQueues.values()];
-    this.stopOwner = Promise.allSettled([...uploadOperations, ...closingChildren]).then(async results => {
+    this.resourceStopOwner = Promise.allSettled([...uploadOperations, ...closingChildren]).then(async results => {
       // Upload callers retain their business failures; only unfinished cleanup
       // and helper closure failures affect the stop outcome.
       for (const result of results.slice(uploadOperations.length)) {
@@ -237,6 +240,6 @@ export class ComputerService {
       if (this.history.openHandleCount) failures.push(new Error("Upload history handle close remains unconfirmed."));
       if (failures.length) throw new AggregateError(failures, "Upload cleanup remains unconfirmed; original IDs and owners are retained.");
     });
-    return this.stopOwner;
+    return this.resourceStopOwner;
   }
 }

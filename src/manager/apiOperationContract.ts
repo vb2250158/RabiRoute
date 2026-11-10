@@ -1,3 +1,4 @@
+import { operationIsReadOnly } from "../../apps/rabi-agent/lib/api-operation-effects.mjs";
 import { createHash } from "node:crypto";
 import { parseApiPathTemplate, validApiTail, type ApiPathSegment } from "../../apps/rabi-agent/lib/api-path-template.mjs";
 import { createRequire } from "node:module";
@@ -67,7 +68,9 @@ export type ApiOperationContract = Readonly<{
     /** Total parser/owner budget. Owners observe input.signal; leases still wait for actual cleanup. */
     deadlineMs?: number }>;
   responses: Readonly<Record<string, ApiResponseContract>>;
-  effects: Readonly<{ mode: string; description: string }>;
+  effects: Readonly<{ mode: string; description: string;
+    /** Effect of a mixed operation selected from its validated request; never changes admission or replay. */
+    request?: Readonly<{ bodyPath: readonly string[]; modes: Readonly<Record<string, string>> }> }>;
   recovery: Readonly<{ strategy: string; description: string; receiptPath?: string; idempotencyHeader?: string }>;
   validators: readonly Readonly<{ id: string; description: string }>[];
 }>;
@@ -172,9 +175,9 @@ const frameworkErrorSchema = {
     mutationOutcome: { enum: ["not_started", "unknown"] } }
 } as const;
 
-export function apiContractFailure(operation: CompiledApiContract, error: unknown): ApiOperationResult {
+export function apiContractFailure(operation: CompiledApiContract, error: unknown, readOnly = operationIsReadOnly(operation.contract)): ApiOperationResult {
   const failure = error instanceof ApiContractError ? error : new ApiContractError(500, "API_OPERATION_FAILED", "operation", operation.contract.operationId);
-  const uncertain = failure.uncertain || failure.status >= 500;
+  const uncertain = !readOnly && (failure.uncertain || failure.status >= 500);
   const discovery = `Read GET /api/agent/help?operationId=${encodeURIComponent(operation.contract.operationId)}`;
   const repair = failure.status === 403
     ? "The original connection cannot access this operation. Restore its access without changing the target or request. "
@@ -371,6 +374,13 @@ function compileCapturedApiContract(contract: ApiOperationContract): CompiledApi
   if (!contract.pathTemplate.startsWith("/") || /[?#\\\s]/.test(contract.pathTemplate) || contract.pathTemplate.startsWith("//")) throw new Error("Invalid API path template.");
   if (!contract.description?.trim() || !contract.effects?.mode || !contract.effects.description?.trim()
     || !contract.recovery?.strategy || !contract.recovery.description?.trim()) throw new Error(`Incomplete API behavior contract: ${contract.operationId}`);
+  const effectSelector = contract.effects.request;
+  if (effectSelector && (!Array.isArray(effectSelector.bodyPath) || !effectSelector.bodyPath.length
+    || effectSelector.bodyPath.some(key => typeof key !== "string" || !key)
+    || !effectSelector.modes || typeof effectSelector.modes !== "object" || Array.isArray(effectSelector.modes)
+    || Object.values(effectSelector.modes).some(mode => typeof mode !== "string" || !mode))) {
+    throw new Error("Invalid API request effect selector.");
+  }
   if (!Array.isArray(contract.validators) || contract.validators.some(rule => !rule.id || !rule.description)) throw new Error("Invalid API business validators.");
   const template = parseApiPathTemplate(contract.pathTemplate, contract.request.pathTails, contract.request.pathRemainder, contract.request.pathCaseInsensitiveLiterals);
   // Equivalence historically parses without tail/raw bindings. In particular,

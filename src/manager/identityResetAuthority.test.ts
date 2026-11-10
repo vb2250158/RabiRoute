@@ -99,8 +99,8 @@ async function fixture(t: TestContext) {
   const headers = { authorization: `Bearer ${credential.token}`, "x-rabiroute-agent-id": "agent", "content-type": "application/json" };
   return { root, authority, global, credential, hooks, service, headers, url, statusFile, requestFile, writeStatus,
     hostCalls: () => hostCalls,
-    revoke: () => authority.setNodeEnabled("node", false),
-    restore: () => authority.setNodeEnabled("node", true),
+    revoke: () => authority.revokeNode("node"),
+    restore: () => { Object.assign(credential, authority.enroll(authority.issueBootstrapTicket().ticket,"node")); headers.authorization = `Bearer ${credential.token}`; },
     post: (remote = true, id = operationId, input: unknown = { operationId: id, expectedGuid, confirmed: true }) => fetch(url, {
       method: "POST", headers: remote ? headers : { "content-type": "application/json" }, body: JSON.stringify(input)
     }) };

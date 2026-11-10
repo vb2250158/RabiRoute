@@ -1,3 +1,4 @@
+import packageMetadata from '../package.json' with { type: 'json' };
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { ListToolsRequestSchema, CallToolRequestSchema, McpError, ErrorCode } from '@modelcontextprotocol/sdk/types.js';
@@ -14,7 +15,7 @@ export function createKnowledgeMcpServer({ tools } = {}) {
   if (typeof tools?.list !== 'function' || typeof tools?.call !== 'function') {
     throw new TypeError('A knowledge tools object is required.');
   }
-  const server = new Server({ name: 'rabiroute', version: '0.2.1' }, { capabilities: { tools: {} }, instructions: 'Rabi exposes all public business and management operations. Start with rabi_categories or rabi_search, then rabi_describe for input sources and rabi_call using the same structured input as CLI. Categories are navigation. Keep the original request identity and inspect actual receipts for uncertain results.' });
+  const server = new Server({ name: 'rabiroute', version: packageMetadata.version }, { capabilities: { tools: {} }, instructions: 'Rabi exposes all public business and management operations. Start with rabi_categories or rabi_search, then rabi_describe for input sources and rabi_call using the same structured input as CLI. Categories are navigation. Keep the original request identity and inspect actual receipts for uncertain results.' });
   server.setRequestHandler(ListToolsRequestSchema, async () => {
     try { return { tools: tools.list().map(({ name, description, inputSchema, readOnly }) => ({
       name,

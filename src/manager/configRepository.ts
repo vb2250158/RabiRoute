@@ -1,4 +1,7 @@
 import fs from "node:fs";
+import { createHash } from "node:crypto";
+import { withFileLockSync } from "../shared/filePersistence.js";
+import { projectComputerFeaturePolicy, normalizeComputerSettings, patchComputerSettings, type ComputerSettings, type ComputerFeature, type ComputerFeaturePolicy } from "../../apps/rabi-agent/lib/computer-control-contract.mjs";
 import { migrateAgentDeliveryFiles } from "./agentDeliveryMigrationFiles.js";
 import { normalizeAgentDeliveryTarget, validateAgentDeliveryTarget } from "../shared/agentDeliveryTarget.js";
 import path from "node:path";
@@ -38,6 +41,8 @@ import { recordDataMutationAudit } from "../observability/dataMutationAudit.js";
 import { normalizeRemotePersonaReference, removePersonaOwnedGatewayConfig } from "../shared/remotePersonaReference.js";
 
 export type ManagerConfig = {
+  computerSettings?: ComputerSettings;
+  [key: string]: unknown;
   routeDir?: string;
   rolesDir?: string;
 };
@@ -69,6 +74,8 @@ export function migrateLegacyCopilotThreadName(
 export class ManagerConfigRepository {
   readonly rootDir: string;
   private currentManagerPort: number;
+  private readonly computerFeaturePolicyCache = new Map<ComputerFeature,ComputerFeaturePolicy>();
+  private computerSettingsCache?: { settings: ComputerSettings; revision: string };
   routeRoot: string;
   rolesRoot: string;
 
@@ -84,16 +91,45 @@ export class ManagerConfigRepository {
     return path.join(this.rootDir, "data", "manager.json");
   }
 
-  readManagerConfig(): ManagerConfig {
+  readManagerConfig(strict = false): ManagerConfig {
     if (!fs.existsSync(this.managerConfigPath)) return {};
     try {
-      return JSON.parse(fs.readFileSync(this.managerConfigPath, "utf8")) as ManagerConfig;
-    } catch {
+      const value = JSON.parse(fs.readFileSync(this.managerConfigPath, "utf8"));
+      if (strict && (!value || typeof value !== "object" || Array.isArray(value))) throw new Error("Invalid Manager configuration object.");
+      return value as ManagerConfig;
+    } catch (error) {
+      if (strict) throw Object.assign(new Error("The original data/manager.json configuration is invalid or unavailable; its bytes were not changed."),{code:"COMPUTER_SETTINGS_INVALID",field:"computerSettings"});
       return {};
     }
   }
 
+  readComputerFeaturePolicy(feature:ComputerFeature, refresh=false): ComputerFeaturePolicy {
+    if (refresh) this.computerFeaturePolicyCache.delete(feature);
+    const cached=this.computerFeaturePolicyCache.get(feature);if(cached)return cached;
+    const policy=projectComputerFeaturePolicy(this.readManagerConfig(true).computerSettings,feature);
+    this.computerFeaturePolicyCache.set(feature,policy);return policy;
+  }
+
+  readComputerSettings(refresh = false): { settings: ComputerSettings; revision: string } {
+    if (refresh) {this.computerSettingsCache = undefined;this.computerFeaturePolicyCache.clear();}
+    if (!refresh && this.computerSettingsCache) return this.computerSettingsCache;
+    const settings = normalizeComputerSettings(this.readManagerConfig(true).computerSettings);
+    return this.computerSettingsCache = { settings, revision: `"sha256:${createHash("sha256").update(JSON.stringify(settings)).digest("hex")}"` };
+  }
+
+  patchComputerSettings(patch: unknown, expectedRevision: string): { settings: ComputerSettings; revision: string } {
+    withFileLockSync(`${this.managerConfigPath}.lock`, () => {
+      const current = this.readComputerSettings(true);
+      if (current.revision !== expectedRevision) throw Object.assign(new Error("Computer settings revision conflict. Read the original computer-settings before merging."), { code: "COMPUTER_SETTINGS_CONFLICT" });
+      const config = this.readManagerConfig(true);
+      this.writeManagerConfig({ ...config, computerSettings: patchComputerSettings(current.settings, patch) });
+    });
+    return this.readComputerSettings();
+  }
+
   refreshManagerConfig(): ManagerConfig {
+    this.computerSettingsCache = undefined;
+    this.computerFeaturePolicyCache.clear();
     const cfg = this.readManagerConfig();
     this.routeRoot = path.resolve(this.rootDir, cfg.routeDir ?? process.env.ROUTE_DIR ?? path.join("data", "route"));
     this.rolesRoot = path.resolve(this.rootDir, cfg.rolesDir ?? process.env.ROLES_DIR ?? path.join("data", "roles"));
@@ -101,6 +137,12 @@ export class ManagerConfigRepository {
   }
 
   writeManagerConfig(cfg: ManagerConfig): void {
+    if (!Object.hasOwn(cfg,"computerSettings")) {
+      const saved = this.readManagerConfig().computerSettings;
+      if (saved !== undefined) cfg = {...cfg,computerSettings:saved};
+    }
+    this.computerSettingsCache = undefined;
+    this.computerFeaturePolicyCache.clear();
     const existed = fs.existsSync(this.managerConfigPath);
     try {
       fs.mkdirSync(path.dirname(this.managerConfigPath), { recursive: true });

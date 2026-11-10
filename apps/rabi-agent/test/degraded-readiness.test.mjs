@@ -8,7 +8,7 @@ import {pathToFileURL,fileURLToPath} from 'node:url';
 const root=fileURLToPath(new URL('../',import.meta.url));
 const {businessReady}=await import(pathToFileURL(path.join(root,'lib/endpoint-session.mjs')));
 const {createManagerClient}=await import(pathToFileURL(path.join(root,'lib/manager-client.mjs')));
-const {requestHook}=await import(pathToFileURL(path.resolve(root,'../../plugins/rabi-dsh-context/manager-client.mjs')));
+const {requestHook}=await import(pathToFileURL(path.resolve(root,'../../src/plugins/rabi-dsh-context/manager-client.mjs')));
 const health={live:true,state:'degraded',requiredReady:false};
 const identity={applicationGenerationId:'fixture-generation',managerInstanceId:'fixture-manager'};
 const metadata={...identity,health};

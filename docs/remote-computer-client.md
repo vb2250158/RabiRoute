@@ -4,9 +4,9 @@
 
 # 主机与远端电脑客户端
 
-完整 Rabi 主机通过 RabiLink 连接后直接提供自身电脑能力，无需再安装一个自连接的客户端。RabiLink 主页选择目标电脑后，电脑操作保持在该目标 Manager；轻量客户端只用于未运行完整主机的电脑。当前源码已接入，安装版与真实双机需按实际版本验收，见[架构与验收范围](connected-host-agent-architecture.md)。
+完整 Rabi 主机通过 RabiLink 连接后直接提供自身电脑能力，无需再安装一个自连接的客户端。当前源码在 **RabiLink → 电脑控制** 独立标签页平级列出本机、完整主机与轻量节点，设置和执行保持在各自原 Manager；轻量客户端只用于未运行完整主机的电脑。使用方法见[电脑控制](user-guide/computer-control.md)，安装版与真实双机仍按实际版本和证据验收，见[架构与验收范围](connected-host-agent-architecture.md)。
 
-远端实例只保留一个默认开启的“是否启用Agent”开关。启用后，主机全部公开接口复用电脑接入凭据，不再要求浏览器登录、Agent／会话登记或逐功能授权。每次 Agent 调用显式传入实际类型与完整会话 Id。
+已配置且鉴权的电脑连接默认可调用 Manager 的全部公开接口，无需逐 Agent／会话登记或另加逐接口资格。电脑控制使用一个总开关及终端命令、文件操作、窗口与截图、智能体任务、鼠标与键盘、屏幕标注六项开关；缺省开启，保留已有显式关闭值。这些用户可见设置控制对应电脑的新工作，电脑操作的原结果查询与停止、取消、清理入口保留，配置与其他无依赖服务继续可用。来源任务存在时记录真实来源；没有任务上下文的连接不必虚构 Agent 或会话。
 
 主机电脑上的 Rabi 服务统一保存角色、计划、记忆、Skill、消息记录和调度流程，承担常驻管理职责，不需要另设主控 Agent。完整主机由 Manager 持有本机电脑服务，轻量电脑运行 Rabi Agent 客户端；两者复用该平台支持的执行实现。普通已鉴权 Agent 均可查询计划、记忆和 Skill，也可按接口合同调用电脑能力；是否为主角色不构成额外许可。
 
@@ -29,21 +29,24 @@ flowchart LR
 
 完整主机沿用当前 RabiLink 连接；未运行完整主机的电脑按[远端客户端接入步骤](lan-rabi-agent-bootstrap.md)安装，每台轻量电脑保持一个主程序。连接器、托盘、终端宿主和截图辅助程序均为其子程序。关联 Agent 可以稍后启动；私有配置 `agents: []` 也能建立电脑连接。
 
-接入页面先选择 Windows、Mac（macOS）或 Linux，仅安装电脑客户端；安装关联智能体的勾选已移除。首次不提供 `RABI_AGENT_TYPE` 或会话变量时，`--bootstrap` 保存空 Agent 列表。以后调用无需登记 Agent；每次投递明确指定类型和完整会话 ID。
+接入页面先选择 Windows、Mac（macOS）或 Linux，仅安装电脑客户端；安装关联智能体的勾选已移除。首次不提供 `RABI_AGENT_TYPE` 或会话变量时，`--bootstrap` 保存空 Agent 列表。普通电脑接口不要求来源 Agent／会话登记；向智能体投递工作时，明确指定目标处理端类型和完整会话 ID。
 
 Mac 使用当前用户 LaunchAgent，支持文件互传与连接器 0.2.4 的 Zsh/Bash/sh 终端。终端依赖 node-pty；Mac 原生编译可能需要 Xcode Command Line Tools。窗口查询和截图仍仅支持 Windows。Mac 原生终端与 Desktop IPC 仍待在线真机验收。
 
-主机 WebGUI 的 **RabiLink → 远端智能体 → 在线电脑 → 远端终端** 提供该电脑实际支持的 Shell 的新增、查询、切换、输入和退出。文件与画面通过下列公开接口供 Agent 使用。沿用已鉴权连接，不增加功能白名单或管理密码；执行使用远端客户端的系统用户权限。
+当前源码的主机 WebGUI 在 **RabiLink → 电脑控制 → 展开电脑** 提供终端、文件、窗口与画面入口；终端沿用原面板查询和操作目标实际支持的 Shell。“远端智能体”保留接入电脑、连接器维护和原智能体任务配置，不保留第二套电脑控制。鼠标键盘、静态标注和动态跟踪需目标执行端实际声明支持；旧节点继续使用原有真实能力，在线不代表已经升级。沿用已鉴权连接和用户可见设置，不增加功能白名单或管理密码；执行使用目标系统用户权限。上述新页面与功能的正式安装、真实桌面和双机行为仍需匹配运行版本验收。
 
-调用前从当前 Host 状态取得完整 `managerBaseUrl`，核对 `/meta` 身份和就绪状态，再读取 `/api/lan-agent/instances`，用名称及 `instanceId` 确认目标。调用合同见 `/api/lan-agent/capabilities` 的 `remote-terminal`、`remote-computer` 分组。
+首次连接或 Manager 变化时，从当前 Host 状态取得完整 `managerBaseUrl` 并核对 `/meta`。通过 `GET /api/computers` 读取平级电脑列表，通过目标 Manager 的 `/api/lan-agent/instances` 取得执行实例与能力；已有稳定目标和原连接时直接复用。CLI、MCP 与其他客户端查询同一运行目录：搜索“电脑控制”或读取 `manager.lan-agent.computer.execute` 的当前合同，新增动作通过其 `body.action` 调用，不把动作名当作 operation ID。见[统一接口](unified-agent-api.md)与[电脑控制](user-guide/computer-control.md)。
 
 | 接口 | 用途 |
 | --- | --- |
+| `GET /api/computers` | 本机、完整主机与轻量节点的平级目录；单来源失败局部标记未知 |
+| `GET /api/lan-agent/instances/:instanceId/computer-settings` | 读取原 owner 设置、默认值、schema、能力与强 ETag |
+| `PATCH /api/lan-agent/instances/:instanceId/computer-settings` | 携带原 `If-Match` 局部修改；保存与执行应用分别回报 |
 | `GET /api/lan-agent/instances/:instanceId/terminals` | 查询真实终端列表 |
 | `POST /api/lan-agent/instances/:instanceId/terminals` | `open / list / get / input / resize / close` |
 | `GET /api/lan-agent/instances/:instanceId/terminals/:terminalId?after=0&waitMs=25000` | 返回终端状态和输出；没有新输出时等待事件，最长 25 秒 |
 | `GET /api/lan-agent/instances/:instanceId/terminals/:terminalId/events?after=0` | 实时 SSE 输出 |
-| `POST /api/lan-agent/instances/:instanceId/computer` | 文件互传、窗口查询和截图 |
+| `POST /api/lan-agent/instances/:instanceId/computer` | 通过 `body.action` 调用文件、窗口、截图及目标支持的控制、输入和标注动作；原状态与清理使用原 ID |
 
 终端使用稳定 UUID `terminalId`；Windows 的 `shell` 为 `cmd` 或 `powershell`，Mac/Linux 为电脑实际提供的 `zsh`、`bash` 或 `sh`。输入使用递增 `sequence`，命令以 `\r` 结尾。JSON 输出字段为 `terminal`、`outputEvents`、`nextOutputSequence`、`truncated`；下一次以 `nextOutputSequence` 作为 `after`。关闭网页保留终端，退出终端结束所属子程序；Manager 短暂断连保留原连接器进程内的终端、ID 和输入回执，新连接仍须鉴权；远端主程序退出或连接器停止才结束全部终端。 断连期间新增输出没有 SDK 回放缓存，可能存在缺口。Host 切代后查询同一 terminalId，并使用新 Manager 返回的游标，不重放输入；业务已重定向到文件的输出按原文件读取。超时查询原会话，不自动重建或重发输入。
 
@@ -74,8 +77,8 @@ Windows 构建通过 `scripts/build-agent-native-assets.mjs` 将托盘、终端�
 | 环境变量 | 默认值 | 含义 |
 | --- | --- | --- |
 | `RABI_AGENT_COMPUTER_MAX_UPLOAD_BYTES` | 不另设额度 | 单文件字节数；`0` 仅允许空文件 |
-| `RABI_AGENT_COMPUTER_MAX_CONCURRENT_IO` | `4` | 同时处理的电脑 I/O 操作数；`0` 取消额度 |
-| `RABI_AGENT_COMPUTER_MAX_ACTIVE_UPLOADS` | `4` | 活动上传数；`0` 取消额度 |
+| `RABI_AGENT_COMPUTER_MAX_CONCURRENT_IO` | `0`（不另设额度） | 同时处理的电脑 I/O 操作数；`0` 取消额度 |
+| `RABI_AGENT_COMPUTER_MAX_ACTIVE_UPLOADS` | `0`（不另设额度） | 活动上传数；`0` 取消额度 |
 | `RABI_AGENT_COMPUTER_MAX_UPLOAD_RECORDS` | `64` | 当前进程保留的上传记录数；`0` 取消额度 |
 
 所有值须为可精确表示的非负整数。最近 256 块支持回执核验。正常停止清理未提交文件；进程意外终止可能留下 `.rabi-upload-<UUID>.tmp`，新客户端不会自动续传旧记录。结果不确定时先查原 ID，不自动换 ID 或覆盖目标。

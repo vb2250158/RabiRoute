@@ -154,7 +154,7 @@ test("replaySafe only narrows replay and never enables mutation replay", async (
     const result = await client.invoke(method, "/api/example", options);
     assert.equal(operations, 1);
     assert.equal(discoveries, 1);
-    assert.equal(result.uncertain, true);
+    assert.equal(result.uncertain, method !== "GET", "disabling replay does not turn a buffered read into a mutation");
   }
 });
 

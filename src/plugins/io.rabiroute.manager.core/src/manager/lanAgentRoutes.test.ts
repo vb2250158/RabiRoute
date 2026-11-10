@@ -1,3 +1,4 @@
+import { randomBytes as replacementCredentialBytes } from "node:crypto";
 import assert from "node:assert/strict";
 import http from "node:http";
 import fs from "node:fs";
@@ -219,7 +220,7 @@ test("release endpoints reject bare or forged requests and preserve bootstrap/no
   assert.equal(fixture.reads(), 2);
 });
 
-test("release endpoints admit enabled Agents but reject disabled and revoked leases before reading", async t => {
+test("release endpoints admit authenticated Agents but reject replaced and revoked leases before reading", async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabi-release-access-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const authority = new LanAgentAuthority({ statePath: path.join(root, "authority.json") });
@@ -233,9 +234,8 @@ test("release endpoints admit enabled Agents but reject disabled and revoked lea
   };
   for (const target of releaseTargets) assert.equal((await fixture.handle(admit(target))).status, 200);
   const disabled = releaseTargets.map(admit);
-  authority.setNodeEnabled("node-fixture", false);
-  fixture.allowRelease(); // The node download channel must not override an explicitly disabled Agent identity.
-  authority.setNodeEnabled("node-fixture", true);
+  Object.assign(credential,authority.enroll(authority.issueBootstrapTicket().ticket,"node-fixture",replacementCredentialBytes(32).toString("base64url")));
+  fixture.allowRelease(); // The node download channel must not revive a replaced original credential lease.
   for (const request of disabled) assert.equal((await fixture.handle(request)).status, 403);
   for (const request of disabled) assert.equal((await fixture.handle(request)).status, 403);
   const revoked = releaseTargets.map(admit);

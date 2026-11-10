@@ -1,3 +1,4 @@
+import { computerSettingsValidationSchema } from "../../apps/rabi-agent/lib/interactive-protocol.mjs";
 import type { ApiOperationContract, ApiOperationResult, ApiSchema } from "./apiOperationContract.js";
 
 const text = { type: "string" }, strings = { type: "array", items: text }, flag = { type: "boolean" };
@@ -16,7 +17,7 @@ const taskProperties = { taskId: text, idempotencyKey: text, nodeId: text, targe
 const taskHistory = object(taskProperties, ["taskId", "nodeId", "status"], true);
 const task = object(taskProperties, ["taskId", "idempotencyKey", "nodeId", "targetAgent", "threadId", "message", "status", "createdAt", "updatedAt"], true);
 const instance = object({ instanceId: text, local: flag, connected: flag, agents: { type: "array", items: agent },
-  name: text, hostname: text, enabled: flag, address: text, version: text }, ["instanceId", "local", "connected", "agents", "enabled"], true);
+  name: text, hostname: text, enabled: flag, address: text, version: text }, ["instanceId", "local", "connected", "agents"], true);
 const json = (schema: ApiSchema) => ({ mediaType: "application/json", schema });
 const credentialDiagnostics = { type: "array", items: object({ index: { type: "integer", minimum: 0 }, nodeId: text,
   reason: { enum: ["invalid_record", "duplicate_identity"] } }, ["index", "reason"]) };
@@ -45,6 +46,9 @@ export const LAN_AGENT_MANAGEMENT_ROUTES = Object.freeze([
   { key: "self.read", method: "GET", pathTemplate: "/api/lan-agent/self" },
   { key: "enrollments.create", method: "POST", pathTemplate: "/api/lan-agent/enrollments" },
   { key: "enroll.exchange", method: "POST", pathTemplate: "/api/lan-agent/enroll" },
+  { key: "computers.list", method: "GET", pathTemplate: "/api/computers" },
+  { key: "computer-settings.read", method: "GET", pathTemplate: "/api/lan-agent/instances/:instanceId/computer-settings" },
+  { key: "computer-settings.patch", method: "PATCH", pathTemplate: "/api/lan-agent/instances/:instanceId/computer-settings" },
   { key: "instances.list", method: "GET", pathTemplate: "/api/lan-agent/instances" },
   { key: "instances.enabled", method: "PUT", pathTemplate: "/api/lan-agent/instances/:instanceId/enabled" },
   { key: "instances.name", method: "PUT", pathTemplate: "/api/lan-agent/instances/:instanceId/name" },
@@ -66,9 +70,12 @@ export function lanAgentManagementContract(route: ManagementRoute): ApiOperation
     case "enrollments.create": status = "201"; success = envelope("data", object({ ticket: text, expiresAt: { type: "number" } })); break;
     case "enroll.exchange": status = "201"; request = nativeBody({ ticket: nativeConversion, nodeId: nativeConversion, enrollmentSecret: text });
       success = envelope("data", object({ nodeId: text, token: text })); break;
+    case "computers.list": success = envelope("data", {type:"object",additionalProperties:true}); break;
+    case "computer-settings.read":
+    case "computer-settings.patch": request = computerSettingsValidationSchema; success = envelope("data", object({ settings:computerSettingsValidationSchema, defaults:computerSettingsValidationSchema, schema:{type:"object",additionalProperties:true}, revision:text, capabilities:strings, execution:{enum:["applied","offline","unconfirmed"]} },["settings","defaults","schema","revision","capabilities"],true)); break;
     case "instances.list": success = json(object({ code: { const: 0 }, instances: { type: "array", items: instance }, credentialDiagnostics })); break;
     case "instances.enabled": request = nativeBody({ enabled: flag, expectedEnabled: flag }, ["enabled", "expectedEnabled"]);
-      success = envelope("data", object({ nodeId: text, enabled: flag })); break;
+      success = envelope("data", object({ nodeId: text, enabled: flag, execution:{enum:["applied","offline","unconfirmed"]}, executionIssue:text },["nodeId","enabled"],true)); break;
     case "instances.name": request = nativeBody({ name: nativeConversion, expectedName: text }, ["expectedName"]); success = envelope("result", node); break;
     case "agents.tasks": request = nativeBody({ message: nativeConversion }); break;
     case "agents.threads": request = nativeBody({ agentAdapter: { type: "string", pattern: "\\S" } }, ["agentAdapter"]); break;

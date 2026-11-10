@@ -1,6 +1,6 @@
 {
   "name": "rabiroute",
-  "version": "0.12.1",
+  "version": "0.13.0",
   "license": "MIT",
   "private": true,
   "type": "module",
@@ -104,7 +104,8 @@
     "vue-router": "^4.6.4",
     "vue-tsc": "^2.2.12",
     "vuetify": "^3.12.8",
-    "yauzl": "3.4.0"
+    "yauzl": "3.4.0",
+    "@noble/hashes": "1.8.0"
   },
   "engines": {
     "node": ">=22.13.0"

@@ -1,3 +1,4 @@
+import { copyOperationEffect, selectedOperationReadOnly } from "./api-operation-effects.mjs";
 import { createTimeoutSettings } from "./timeout-settings.mjs";
 import { constants, readFileSync } from "node:fs";
 import fsPromises, { lstat, open } from "node:fs/promises";
@@ -178,7 +179,7 @@ function requestOptions(method, options) {
   if (responseMode === "stream" && typeof options.onChunk !== "function") throw new Error("Stream response requires an explicit onChunk consumer.");
   if (options.onResponse !== undefined && typeof options.onResponse !== "function") throw new Error("onResponse must be a function.");
   if (options.timeoutMs !== undefined && (!Number.isSafeInteger(options.timeoutMs) || options.timeoutMs <= 0 || options.timeoutMs > 0xffffffff)) throw new Error("timeoutMs must be a positive supported millisecond deadline.");
-  return { ...options, headers, responseMode };
+  return copyOperationEffect(options, { ...options, headers, responseMode });
 }
 // Also race injected consumers/readers: cancellation must not wait for a stalled
 // body or callback. The original rejection remains observed by Promise.race.
@@ -270,6 +271,7 @@ function buildManagerClient({ managerUrl, credential, agentType, sessionId, conf
       ? timeouts.get("agent.client.send", uploadTimeoutMs) : timeouts.get("agent.client.request", timeoutMs);
     const deadline = upload?.signal ?? AbortSignal.timeout(options.timeoutMs ?? requestTimeoutMs);
     const signal = AbortSignal.any([deadline, ...(upload?.signal ? [upload.signal] : []), ...(options.signal ? [options.signal] : [])]);
+    const readOnly = selectedOperationReadOnly(options) ?? (["GET", "HEAD", "OPTIONS"].includes(method) && responseMode !== "stream" && options.onResponse === undefined);
     const responseHeaders = () => Object.fromEntries([...response.headers].filter(([name]) => !transportHeader(name) || ["content-length", "transfer-encoding", "connection", "keep-alive", "trailer"].includes(name)));
     try {
       response = await withSignal(() => fetchImpl(url, {
@@ -279,7 +281,7 @@ function buildManagerClient({ managerUrl, credential, agentType, sessionId, conf
       const type = response.headers.get("content-type")?.split(";", 1)[0].trim().toLowerCase();
       const textual = !type || type.startsWith("text/") || /(?:^application\/(?:json|xml|javascript|x-www-form-urlencoded)$|\+(?:json|xml)$)/.test(type);
       if (responseMode === "text" && (!textual || type === "text/event-stream")) {
-        return { statusCode: response.status, ok: false, body: "Binary or event-stream response requires explicit bytes or stream consumption.", headers: responseHeaders(), transportError: "RESPONSE_MODE_REQUIRED", noReplay: true, uncertain: !["GET", "HEAD", "OPTIONS"].includes(method) };
+        return { statusCode: response.status, ok: false, body: "Binary or event-stream response requires explicit bytes or stream consumption.", headers: responseHeaders(), transportError: "RESPONSE_MODE_REQUIRED", noReplay: true, uncertain: !readOnly };
       }
       if (onResponse) await withSignal(() => onResponse({ statusCode: response.status, ok: response.ok, headers: responseHeaders() }), signal);
       reader = response.body?.getReader();
@@ -299,13 +301,13 @@ function buildManagerClient({ managerUrl, credential, agentType, sessionId, conf
       return {
         statusCode: response.status, ok: response.ok, ...(text !== undefined ? { body: text } : bytes ? { bodyBytes: bytes } : {}),
         headers: responseHeaders(), bytesReceived, responseMode, noReplay: responseMode === "stream" || bodyStream !== undefined,
-        uncertain: !["GET", "HEAD", "OPTIONS"].includes(method) && (response.status >= 500 || data?.uncertain === true)
+        uncertain: !readOnly && (response.status >= 500 || data?.uncertain === true)
       };
     } catch {
       // Do not echo transport/consumer errors that may contain private headers.
       return { statusCode: response?.status ?? 0, ok: false, body: "Manager transport or consumer failed; inspect authoritative state before retrying a mutation.", headers: response ? responseHeaders() : {}, bytesReceived,
         transportError: signal.aborted ? "CANCELLED" : "TRANSPORT", noReplay: responseMode === "stream" || bodyStream !== undefined,
-        uncertain: !["GET", "HEAD", "OPTIONS"].includes(method) };
+        uncertain: !readOnly };
     } finally {
       if (reader) { try { reader.cancel().catch(() => {}); reader.releaseLock(); } catch { /* Preserve original receipt. */ } }
       else { try { response?.body?.cancel().catch(() => {}); } catch { /* Preserve original receipt. */ } }
@@ -319,6 +321,7 @@ function buildManagerClient({ managerUrl, credential, agentType, sessionId, conf
     // Some GET operations touch persisted state (for example recent-memory views).
     // Callers may disable replay, but cannot enable replay for a mutation method.
     const touchesRecentMemory = /^\/(?:api\/)?roles\/[^/]+\/memory\/recent\/[^/]+$/.test(new URL(target, origin).pathname);
+    const readOnly = selectedOperationReadOnly(options) ?? (["GET", "HEAD", "OPTIONS"].includes(method) && !touchesRecentMemory && options.responseMode !== "stream" && options.onResponse === undefined);
     const read = ["GET", "HEAD", "OPTIONS"].includes(method) && options.replaySafe !== false && !touchesRecentMemory && options.responseMode !== "stream" && options.bodyStream === undefined && options.onResponse === undefined;
     relativeTarget(origin, target);
     let endpoint;
@@ -347,7 +350,7 @@ function buildManagerClient({ managerUrl, credential, agentType, sessionId, conf
       if (read && !result.noReplay && !options.signal?.aborted && session && attempt === 0 && (identityChanged || result.statusCode === 0 || result.statusCode >= 500 || result.transportError)) {
         try { endpoint = await session.ensure({ diagnostic, forceDiscovery: true }); continue; } catch { /* Return the original failed read; never replay a mutation. */ }
       }
-      return { ...result, uncertain: Boolean(result.uncertain || (!read && (identityChanged || result.statusCode === 0 || result.statusCode >= 500 || result.transportError))), identityChanged,
+      return { ...result, uncertain: Boolean(result.uncertain || (!readOnly && (identityChanged || result.statusCode === 0 || result.statusCode >= 500 || result.transportError))), identityChanged,
         identity: { applicationGenerationId: identity.applicationGenerationId, managerInstanceId: identity.managerInstanceId } };
     }
   }
@@ -389,7 +392,7 @@ function buildManagerClient({ managerUrl, credential, agentType, sessionId, conf
       handle = await open(temporaryPath, "wx", 0o600);
       created = true;
       const hash = createHash("sha256");
-      result = await transport(method, target, { ...options, responseMode: "stream", replaySafe: false, onChunk: async bytes => {
+      result = await transport(method, target, copyOperationEffect(options, { ...options, responseMode: "stream", replaySafe: false, onChunk: async bytes => {
         let offset = 0;
         while (offset < bytes.length) {
           const { bytesWritten } = await handle.write(bytes, offset, bytes.length - offset);
@@ -397,7 +400,7 @@ function buildManagerClient({ managerUrl, credential, agentType, sessionId, conf
           offset += bytesWritten;
         }
         hash.update(bytes);
-      } });
+      } }));
       if (!result.ok || result.identityChanged || result.uncertain) return { ...result, ok: false, outputCommitted: false };
       options.signal?.throwIfAborted();
       await handle.sync();
@@ -622,18 +625,19 @@ function buildManagerClient({ managerUrl, credential, agentType, sessionId, conf
   }
   async function requestExternal(method, target, options, entry, expected) {
     const { nativeHeaders, ...businessOptions } = options;
+    copyOperationEffect(options, businessOptions);
     const nativeCredentials = nativeHeaders === undefined ? undefined : explicitNativeHeaders(nativeHeaders, credential);
     const { listenerOrigin, binding, access } = await externalEndpoint(entry, expected, options.signal);
     if (access && nativeCredentials) throw new Error("Explicit native credentials currently require the direct native connector; this Manager owner mapping does not forward credentials.");
     const resolvedTarget = access ? access.pathPrefix + target : target;
-    const resolvedOptions = access ? { ...businessOptions, headers: { ...options.headers, [access.contractHeader]: access.contractDigest } } : businessOptions;
+    const resolvedOptions = access ? copyOperationEffect(businessOptions, { ...businessOptions, headers: { ...options.headers, [access.contractHeader]: access.contractDigest } }) : businessOptions;
     return publicRequest(method, resolvedTarget, resolvedOptions, async (verb, path, nativeOptions) => {
-      const result = access ? await verifiedRequest(verb, path, { ...nativeOptions, replaySafe: false })
+      const result = access ? await verifiedRequest(verb, path, copyOperationEffect(nativeOptions, { ...nativeOptions, replaySafe: false }))
         : await request(verb, path, requestOptions(verb, nativeOptions), undefined, listenerOrigin, undefined, binding, nativeCredentials);
       let bindingChanged = false;
       try { await externalEndpoint(entry, expected, options.signal); } catch { bindingChanged = true; }
       return { ...result, bindingChanged, identity: { applicationGenerationId: expected.applicationGenerationId, managerInstanceId: expected.managerInstanceId },
-        uncertain: Boolean(result.uncertain || bindingChanged), noReplay: true };
+        uncertain: Boolean(result.uncertain || (selectedOperationReadOnly(options) !== true && bindingChanged)), noReplay: true };
     });
   }
   async function openExternalWebSocket(target, options, contract, expected, entry) {
@@ -671,7 +675,7 @@ function buildManagerClient({ managerUrl, credential, agentType, sessionId, conf
     try { request = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)); }
     catch { throw new Error("Agent action POST requires valid UTF-8 JSON; no direct network fallback was attempted."); }
     const { body, bodyText, bodyBytes, bodyStream, ...rest } = options;
-    return { request, options: { ...rest, bodyBytes: bytes } };
+    return { request, options: copyOperationEffect(options, { ...rest, bodyBytes: bytes }) };
   }
   const catalog = createApiCatalogClient({ request: publicRequest, openWebSocket, requestExternal, openExternalWebSocket,
     onVerifiedCatalog: (snapshot, identity) => rememberDeliveryDescriptor(configPath, snapshot, identity, session?.config?.managerGuid || config?.managerGuid),

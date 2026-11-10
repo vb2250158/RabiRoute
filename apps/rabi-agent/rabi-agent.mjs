@@ -17,6 +17,7 @@ import { createEndpointSession, EndpointAuthenticationError } from "./lib/endpoi
 import { createDesktopPresentation } from "./lib/desktop-presentation.mjs";
 import { TerminalService } from "./lib/terminal-service.mjs";
 import { ComputerService } from "./lib/computer-service.mjs";
+import { normalizeComputerSettings, computerActionDefinition } from "./lib/computer-control-contract.mjs";
 import { uploadHistoryDirectory } from "./lib/upload-history-store.mjs";
 import { instanceAgents, agentCatalog, configureInstanceAgent, resolveInstanceAgent, withoutSessionBindings } from "./lib/instance-agents.mjs";
 import { normalizeAllowedWorkspaces, resolveRealDirectory, resolveTaskWorkspace } from "./lib/cwd-policy.mjs";
@@ -954,7 +955,10 @@ class RabiAgentRuntime {
     this.agentExecutionStatus = new Map();
     const timeout = (key, fallback) => createTimeoutSettings(this.config.timeoutOverridesCache).get(key, fallback);
     this.timeout = timeout;
-    this.computer = new ComputerService({ timeout, uploadHistoryRoot: uploadHistoryDirectory(homeDataDirectory(), configPath), onChange: () => this.publishDesktop() });
+    this.computerSettings = normalizeComputerSettings();
+    this.computer = new ComputerService({ timeout, instanceId: () => this.config.nodeId, getSettings: () => this.computerSettings,
+      uploadHistoryRoot: uploadHistoryDirectory(homeDataDirectory(), configPath), onChange: () => this.publishDesktop(),
+      onControlChange: () => { if (this.connected && !this.stopped) this.send({ type: "computerEvent" }); } });
     this.terminals = new TerminalService({ timeout, defaultCwd: config.defaultWorkspace, historyDirectory: path.join(path.dirname(configPath), "terminal-history"),
       emit: event => {
         if (this.connected && this.socket?.readyState === WebSocket.OPEN && (this.socket.bufferedAmount || 0) > 1048576) {
@@ -1208,7 +1212,8 @@ class RabiAgentRuntime {
           if (this.socket !== socket) return;
           this.connected = false;
           clearInterval(this.heartbeatTimer);
-          // Native terminals belong to this worker; explicit stop joins their cleanup.
+          // A disconnected source loses only its input/annotation resources, not independent tasks or terminals.
+          this.computerCleanup = this.computer.connectionClosed().catch(error => this.publishDesktop("电脑控制清理待确认：" + error.message));
           this.scheduleReconnect();
         }
       });
@@ -1288,18 +1293,32 @@ class RabiAgentRuntime {
       });
       return;
     }
-    if (message.type === "manageAgent" && ["terminal", "computer"].includes(message.operation)) {
+    if (message.type === "manageAgent" && ["terminal", "computer", "computer.settings", "computer.task.end", "computer.source.end"].includes(message.operation)) {
       if (!this.connected || this.stopped) return;
       const socket = this.socket;
-      const params = message.params || {};
-      const createsResource = ["open", "upload.begin", "windows.list", "screen.capture", "file.read", "file.stat"].includes(params.action);
-      const operation = (this.draining || this.candidatePending) && createsResource
-        ? Promise.reject(new Error("Connector update is in progress; no new computer operation was started."))
-        : (message.operation === "terminal" ? this.terminals : this.computer).execute(params);
+      // This frame is authenticated by the original Manager connection; the Manager overwrites its context.
+      const { _computerContext, ...params } = message.params || {};
+      if (_computerContext?.settings) this.computerSettings = normalizeComputerSettings(_computerContext.settings);
+      const context = { ...(_computerContext || {}), sourceId: _computerContext?.sourceId ?? `manager:${this.socketManagerGuid || "connection"}`,
+        getSettings: () => this.computerSettings, guard: () => { if (this.socket !== socket || !this.connected || this.stopped) throw Object.assign(new Error("The original computer connection closed."), { code: "COMPUTER_CONNECTION_CLOSED" }); } };
+      const action = computerActionDefinition(params.action);
+      const createsResource = ["open", "upload.begin", "windows.list", "screen.capture", "file.read", "file.stat"].includes(params.action)
+        || message.operation === "computer" && Boolean(action && !action.readOnly && !action.recovery);
+      const operation = message.operation === "computer.settings"
+        ? Promise.resolve().then(() => { if (!params.settings || typeof params.settings !== "object" || Array.isArray(params.settings)) throw new Error("The authoritative computer settings snapshot is missing; the previous settings remain active."); this.computerSettings = normalizeComputerSettings(params.settings); return this.computer.reconcileSettings(context).then(() => ({ state: "applied" })); })
+        : message.operation === "computer.source.end" ? this.computer.endSource(params.connectionId)
+        : message.operation === "computer.task.end" ? this.computer.endTask(params.taskId, params.sourceId ?? _computerContext?.sourceId)
+        : (this.draining || this.candidatePending) && createsResource
+          ? Promise.reject(new Error("Connector update is in progress; no new computer operation was started."))
+          : message.operation === "terminal" ? this.terminals.execute(params) : this.computer.execute(params, context);
       void operation.then(result => {
         if (this.socket === socket && this.connected) this.send({ type: "managementResult", requestId: message.requestId, result });
       }).catch(error => {
-        if (this.socket === socket && this.connected) this.send({ type: "managementResult", requestId: message.requestId, error: boundedText(error.message, 512), ...(message.operation === "terminal" && error.code === "TERMINAL_OPEN_NOT_STARTED" ? { errorCode: "TERMINAL_OPEN_NOT_STARTED" } : {}) });
+        if (this.socket === socket && this.connected) this.send({ type: "managementResult", requestId: message.requestId, error: boundedText(error.message, 512), ...(error.code ? { errorCode: error.code } : {}),
+          ...(Object.hasOwn(error, "uncertain") && typeof error.uncertain === "boolean" ? { uncertain: error.uncertain } : {}),
+          ...(typeof error.field === "string" || typeof error.errorField === "string" ? { errorField: boundedText(error.field ?? error.errorField, 128) } : {}),
+          ...(error.deliveryFrameSent === false ? { deliveryFrameSent: false } : {}),
+          ...(["not_started", "unknown"].includes(error.mutationOutcome) ? { mutationOutcome: error.mutationOutcome } : {}) });
       });
       return;
     }
@@ -1315,7 +1334,7 @@ class RabiAgentRuntime {
           taskTargeting: "explicit-session-v1",
           agents: agentCatalog(this.config),
           terminalShells: this.terminals.shells,
-          computerCapabilities: ["files", ...(process.platform === "win32" ? ["windows", "screenshots"] : [])],
+          computerCapabilities: this.computer.capabilities,
           allowedWorkspaces: this.config.allowedWorkspaces
         }
       });

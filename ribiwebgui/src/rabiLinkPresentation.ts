@@ -1,8 +1,8 @@
 import type { MetaPayload } from "./types";
 
-export type RabiLinkTab = "home" | "agents" | "config";
+export type RabiLinkTab = "home" | "agents" | "computer" | "config";
 export function rabiLinkTab(value: unknown): RabiLinkTab {
-  return value === "agents" || value === "config" ? value : "home";
+  return value === "agents" || value === "computer" || value === "config" ? value : "home";
 }
 
 /** The Relay management page lives at /manage on the configured server origin.

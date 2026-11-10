@@ -141,8 +141,11 @@ export class LanAgentReleaseStore {
   private readonly agentRoot: string;
   private readonly signingKeyPath: string;
   private readonly pluginSourceRoot?: string;
+  private readonly immutablePackage: boolean;
+  private packagedSnapshot?: { signingStamp: string; manifest: LanAgentReleaseManifest };
 
-  constructor(options: { rootDir: string; agentRoot?: string; signingKeyPath?: string; pluginSourceRoot?: string }) {
+  constructor(options: { rootDir: string; agentRoot?: string; signingKeyPath?: string; pluginSourceRoot?: string; immutablePackage?: boolean }) {
+    this.immutablePackage = options.immutablePackage === true;
     this.rootDir = path.resolve(options.rootDir);
     this.agentRoot = path.resolve(options.agentRoot ?? path.join(this.rootDir, "apps", "rabi-agent"));
     this.pluginSourceRoot = options.pluginSourceRoot ? path.resolve(options.pluginSourceRoot) : undefined;
@@ -155,7 +158,20 @@ export class LanAgentReleaseStore {
     return this.commonRelease()?.manifest ?? this.packagedManifest();
   }
 
+  private packagedSigningStamp(): string {
+    const stat=fs.statSync(this.signingKeyPath,{bigint:true});
+    return [stat.dev,stat.ino,stat.size,stat.mtimeNs,stat.ctimeNs].join(":");
+  }
   private packagedManifest(): LanAgentReleaseManifest {
+    // Host package assets are immutable. Reuse their signed snapshot rather
+    // than re-reading/re-hashing the native runtime on metadata requests.
+    // Source/developer stores keep their existing same-version change behavior.
+    if (this.immutablePackage && this.packagedSnapshot && this.packagedSnapshot.signingStamp===this.packagedSigningStamp()) return this.packagedSnapshot.manifest;
+    // Establish an initial signer through its original owner, then bind both
+    // the signing read and the cached result to the same observed key revision.
+    if (this.immutablePackage && !fs.existsSync(this.signingKeyPath)) readSigningKeys(this.signingKeyPath);
+    const signingStampBefore=this.immutablePackage ? this.packagedSigningStamp() : undefined;
+    const keys = readSigningKeys(this.signingKeyPath);
     const packageJsonPath = path.join(this.agentRoot, "package.json");
     if (!fs.existsSync(packageJsonPath)) {
       throw new Error(`Rabi Agent package metadata is missing: ${packageJsonPath}`);
@@ -176,19 +192,25 @@ export class LanAgentReleaseStore {
     if (!files.some(file => file.path === "rabi-agent.mjs")) {
       throw new Error("Rabi Agent release is missing rabi-agent.mjs.");
     }
-    const keys = readSigningKeys(this.signingKeyPath);
     const unsigned: ReleaseManifestPayload = {
       version,
       platform: "node",
       minNodeVersion: "22.13.0",
       files
     };
-    return {
+    const manifest: LanAgentReleaseManifest = {
       ...unsigned,
       publicKey: keys.publicKey,
       publicKeySha256: lanAgentReleasePublicKeySha256(keys.publicKey),
       signature: sign(null, Buffer.from(manifestPayload(unsigned)), keys.privateKey).toString("base64")
     };
+    if (this.immutablePackage) {
+      for (const file of files) Object.freeze(file);
+      Object.freeze(files); Object.freeze(manifest);
+      const signingStampAfter=this.packagedSigningStamp();
+      if (signingStampBefore===signingStampAfter) this.packagedSnapshot={signingStamp:signingStampAfter,manifest};
+    }
+    return manifest;
   }
 
   publication(nodeId?: string): Readonly<{ version: string; releaseDigest: string }> {

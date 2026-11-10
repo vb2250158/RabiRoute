@@ -1,3 +1,4 @@
+import { markOperationEffect } from './api-operation-effects.mjs';
 import { parseApiPathTemplate, fillApiPathTemplate, validApiHttpMethod } from "./api-path-template.mjs";
 
 const METHODS = new Set(["GET", "HEAD", "OPTIONS", "POST", "PUT", "PATCH", "DELETE", "*"]);
@@ -135,7 +136,7 @@ export function createApiCatalogClient({ request, openWebSocket, requestExternal
     const contractHeader = contract.request?.contractHeader ?? "x-rabiroute-api-contract";
     if (Object.keys(headers).some(name => name.toLowerCase() === contractHeader)) throw new Error("The selected operation owns its API contract header.");
     headers[contractHeader] = entry.contractDigest;
-    return { entry, catalog, method, target: target + (parameters.size ? "?" + parameters : ""), options: { ...httpOptions, headers, replaySafe: false } };
+    return { entry, catalog, method, target: target + (parameters.size ? "?" + parameters : ""), options: markOperationEffect({ ...httpOptions, headers, replaySafe: false }, contract, method) };
   }
 
   async function invokeOperation(operationId, options = {}) {

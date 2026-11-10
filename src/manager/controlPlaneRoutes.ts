@@ -1,3 +1,5 @@
+import type { ComputerPresentationTheme } from "../../apps/rabi-agent/lib/computer-service.mjs";
+import { computerAgentSourceId, endComputerTrackingForPlan } from "./computerTaskLifecycle.js";
 import { resolvePluginPackageRoots } from "../shared/pluginPackageRoots.js";
 import { WebSocketServer } from "ws";
 import { TunnelRtc } from "../peerTunnel/rtc.js";
@@ -7296,9 +7298,29 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
   let loadedManagerPluginProfile: LoadedPluginProfile | undefined;
   let pendingManagerPluginProfile: LoadedPluginProfile | undefined;
   let refreshStartupPresentation = (): void => {};
+  let computerPresentationTheme: ComputerPresentationTheme | undefined;
+  let applyComputerPresentationTheme = async (): Promise<void> => {};
+  const computerThemePending = new Set<Promise<unknown>>();
+  const computerThemeLog = managerOperationalLog.bind("computer.presentation", "warn");
+  const captureComputerPresentationTheme = (): void => {
+    try {
+      const current = desktopSettings.read();
+      computerPresentationTheme = {theme:current.theme,customThemes:current.customThemes};
+    } catch (error) {
+      computerThemeLog.record("computer_theme_read_failed",error,value=>({error:managerOperationalError(value,packageRoot)}));
+    }
+  };
+  captureComputerPresentationTheme();
+
   const publishDesktopSettingsEvent = (eventType: string, data: unknown): void => {
     publishManagerEvent(eventType, data);
-    if (eventType === "desktop_settings_changed") refreshStartupPresentation();
+    if (eventType === "desktop_settings_changed") {
+      refreshStartupPresentation();
+      captureComputerPresentationTheme();
+      const pending = applyComputerPresentationTheme().catch(error=>computerThemeLog.record("computer_theme_apply_failed",error,value=>({error:managerOperationalError(value,packageRoot)})));
+      computerThemePending.add(pending);
+      void pending.then(()=>computerThemePending.delete(pending),()=>computerThemePending.delete(pending));
+    }
   };
   let startupRequiredGenerationId: string | undefined;
   const managerPluginProfilePublication = new PluginProfilePublication();
@@ -7359,12 +7381,66 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
   const assertUploadAuthorized = (source: TrustedLanAgentSource): void => {
     if (!lanAgentAuthority.getNodeAuthorization(source.nodeId)) throw new Error("Remote computer credential was revoked.");
   };
-  const lanAgentReleaseStore = new LanAgentReleaseStore({ rootDir, agentRoot: path.join(packageRoot, "apps", "rabi-agent"), pluginSourceRoot: packageRoot });
-  const lanAgentRegistry = new LanAgentRegistry({
+  const lanAgentReleaseStore = new LanAgentReleaseStore({ immutablePackage:Boolean(managerHostIdentity), rootDir, agentRoot: path.join(packageRoot, "apps", "rabi-agent"), pluginSourceRoot: packageRoot });
+  // Rebuildable per-source display cache; settings and execution stay with each original Manager.
+  const computerPeerRows = new Map<string, Record<string, unknown>[]>();
+  const listPeerComputers = async () => {
+    let directory: Awaited<ReturnType<NonNullable<typeof activePeerTunnel>["directory"]>> | undefined;
+    try { directory = await activePeerTunnel?.directory(); if (!directory) throw new Error("Peer directory is not ready."); }
+    catch {
+      const message = "Peer directory is unavailable; previously discovered computers have unknown status.";
+      return { computers: [...computerPeerRows.values()].flatMap(rows => rows.map(row => ({...row,status:"unknown",issue:message}))), sourceErrors: [{ownerDeviceId:"peers",message}] };
+    }
+    const self = rabiLinkRelayConfigForMeta().deviceId;
+    const peers = directory.peers.filter(peer => peer.deviceId !== self);
+    const currentSources = new Set(peers.map(peer => peer.deviceId));
+    for (const id of computerPeerRows.keys()) if (!currentSources.has(id)) computerPeerRows.delete(id);
+    const settled = await Promise.all(peers.map(async (peer): Promise<{ rows: Record<string, unknown>[]; error?: {ownerDeviceId:string;message:string} }> => {
+      try {
+        if (!peer.online) {
+          const previous = computerPeerRows.get(peer.deviceId);
+          return { rows: previous?.map(row => ({ ...row, status: "offline", connected: false })) ?? [{ id: `peer:${peer.deviceId}`, instanceId: "", ownerDeviceId: peer.deviceId, name: peer.name, kind: "host", local: false, status: "offline" }] };
+        }
+        const response = await requestPeerManagerApi(peer.deviceId, "GET", "/api/lan-agent/instances") as { instances?: import("../shared/agentInstance.js").AgentInstance[] };
+        if (!Array.isArray(response.instances)) throw new Error("Peer instance directory is incomplete.");
+        const host = response.instances.find(instance => instance.local)?.instanceId;
+        const rows = response.instances.map(instance => ({ ...instance, id: instance.local ? `peer:${peer.deviceId}` : `${host ?? peer.deviceId}/${instance.instanceId}`,
+          ownerDeviceId: peer.deviceId, ownerName: peer.name, name: instance.name || instance.hostname || (instance.local ? peer.name : instance.instanceId),
+          kind: instance.local ? "host" : "node", local: false, status: instance.connected ? "online" : "offline", capabilities: instance.computerCapabilities ?? [] }));
+        computerPeerRows.set(peer.deviceId, rows); return { rows };
+      } catch {
+        const message = "This host's computer directory could not be read; its status is unknown.";
+        const rows = computerPeerRows.get(peer.deviceId)?.map(row => ({ ...row, status: "unknown", issue: message }))
+          ?? [{ id: `peer:${peer.deviceId}`, instanceId: "", ownerDeviceId: peer.deviceId, name: peer.name, kind: "host", local: false, status: "unknown", issue: message }];
+        return { rows, error: { ownerDeviceId: peer.deviceId, message } };
+      }
+    }));
+    return { computers: settled.flatMap(item => item.rows), sourceErrors: settled.flatMap(item => item.error ? [item.error] : []) };
+  };
+  const lanAgentRegistry: LanAgentRegistry = new LanAgentRegistry({
+    listPeerComputers,
+    onComputerChanged: instanceId => publishManagerEvent("computer_control_changed",{instanceId}),
+    onComputerSourceCleanupError: (instanceId,error) => managerOperationalLog.record("warn","computer_source_cleanup_unconfirmed",{target:{type:"computer",id:instanceId},error:managerOperationalError(error,packageRoot)}),
+    executionSource: request => {
+      const source = getTrustedLanAgentSource(request);
+      if (source) return {sourceId:computerAgentSourceId(source.nodeId,source.provider,source.sessionId),sourceLabel:source.sessionName || source.provider || source.nodeId,taskId:source.sessionId,connectionId:lanAgentRegistry.computerConnectionId(source.nodeId)};
+      const peer = rabiLinkAgentTaskSource(request,rabiLinkRelayConfigForMeta(),managerHostIdentity?.applicationGenerationId ?? managerInstanceId);
+      return peer ? {sourceId:`peer:${peer.sourceDeviceId}`,sourceLabel:peer.sourceDeviceId} : {sourceId:`manager:${managerInstanceId}`,sourceLabel:"Rabi PC"};
+    },
     statePath: path.join(rootDir, "data", ".runtime", "lan-agent-tasks.json"),
-    createLocalComputer: (_instanceId, emit) => new ManagerLocalComputer({
+    computerFeaturePolicy:(instanceId,feature)=>instanceId===lanAgentRegistry.localInstanceId?configRepository.readComputerFeaturePolicy(feature):lanAgentAuthority.getComputerFeaturePolicy(instanceId,feature),
+    computerSettings: (instanceId, refresh) => instanceId === lanAgentRegistry.localInstanceId ? configRepository.readComputerSettings(refresh) : lanAgentAuthority.getComputerSettings(instanceId, refresh),
+    patchComputerSettings: (instanceId, patch, revision) => instanceId === lanAgentRegistry.localInstanceId ? configRepository.patchComputerSettings(patch, revision) : lanAgentAuthority.patchComputerSettings(instanceId, patch, revision),
+    createLocalComputer: (instanceId, emit) => {
+      const computer = new ManagerLocalComputer({
+      instanceId, getSettings: () => configRepository.readComputerSettings().settings,
+      getPresentationTheme: () => computerPresentationTheme,
+      ...(process.platform === "win32" ? {qtPresentation: {command:path.join(packageRoot,"desktop-runtime","python","python.exe"),args:[path.join(packageRoot,"desktop-runtime","rabiroute_tray","computer_control_overlay.py")]}} : {}),
       stateDirectory: path.join(rootDir, "data", ".runtime", "local-computer"), emit, timeout: getTimeoutMs
-    }),
+      });
+      applyComputerPresentationTheme = () => computer.setPresentationTheme(computerPresentationTheme);
+      return computer;
+    },
     authenticateNode: token => {
       const admission = rabiGlobalConfig.getLanAgentAdmissionPolicy();
       const lease = admission.enabled ? lanAgentAuthority.acquireConnectionLease(token) : null;
@@ -7408,7 +7484,27 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
     lanAgentRegistry.close();
     await recoveryStopped;
   });
-  managerRuntimeOwner.register("local_computer", () => lanAgentRegistry.stopLocalComputer());
+  managerRuntimeOwner.register("local_computer", async () => {
+    applyComputerPresentationTheme = async () => {};
+    await Promise.allSettled([...computerThemePending]);
+    await lanAgentRegistry.stopLocalComputer();
+  });
+  managerRuntimeOwner.register("computer_source_lifecycle",()=>lanAgentRegistry.stopComputerSourceLifecycle());
+  const computerPlanLog = managerOperationalLog.bind("computer.control", "warn");
+  const computerPlanPending = new Set<Promise<unknown>>();
+  const stopComputerPlanLifecycle = subscribeKnowledgeChanges((_roleDir, change) => {
+    if (change.kind !== "plan") return;
+    const pending = endComputerTrackingForPlan(change.item, lanAgentRegistry, rabiLinkRelayConfigForMeta().deviceId,
+      (instanceId, error) => computerPlanLog.record("computer_plan_cleanup_unconfirmed", {instanceId,error}, state => ({target:{type:"computer",id:state.instanceId},error:managerOperationalError(state.error,packageRoot)})))
+      .catch(error => computerPlanLog.record("computer_plan_lifecycle_failed", error, value => ({error:managerOperationalError(value,packageRoot)})));
+    computerPlanPending.add(pending);
+    void pending.then(() => computerPlanPending.delete(pending), () => computerPlanPending.delete(pending));
+  });
+  managerRuntimeOwner.register("computer_plan_lifecycle", async () => {
+    stopComputerPlanLifecycle();
+    await Promise.allSettled([...computerPlanPending]);
+  });
+
   const webPluginModules = new WebPluginModuleRegistry();
   const messageEndpointScanProviders = new MessageAdapterScanProviderRegistry();
   const managerCorePublicOperations = () => createCorePublicOperations({

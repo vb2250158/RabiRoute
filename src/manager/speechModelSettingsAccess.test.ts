@@ -1,3 +1,4 @@
+import { randomBytes as replacementCredentialBytes } from "node:crypto";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
@@ -35,7 +36,7 @@ function fixture(t: TestContext) {
     delete remote.headers.authorization;
     delete remote.headers["x-rabiroute-agent-id"];
   };
-  return { authority, admit, grantFallbacks, replacePolicy: (next: typeof policy) => { policy = next; } };
+  return { authority, admit, grantFallbacks, replaceCredential: () => Object.assign(credential,authority.enroll(authority.issueBootstrapTicket().ticket,credential.nodeId,replacementCredentialBytes(32).toString("base64url"))), replacePolicy: (next: typeof policy) => { policy = next; } };
 }
 
 test("ingress-authenticated enabled Agent needs neither a session source nor a local origin", t => {
@@ -73,12 +74,11 @@ test("node revocation and reenrollment cannot fall back through connection, sour
   assert.equal(localModelSettingsRequestAllowed(remote), false);
 });
 
-test("Agent disable-enable does not revive the original settings request", t => {
+test("credential replacement does not revive the original settings request", t => {
   const f = fixture(t);
   const remote = f.admit();
-  f.authority.setNodeEnabled("fixture-node", false);
+  f.replaceCredential();
   f.grantFallbacks(remote);
-  f.authority.setNodeEnabled("fixture-node", true);
   assert.equal(localModelSettingsRequestAllowed(remote), false);
   assert.equal(localModelSettingsRequestAllowed(remote), false);
   assert.equal(localModelSettingsRequestAllowed(f.admit()), true);

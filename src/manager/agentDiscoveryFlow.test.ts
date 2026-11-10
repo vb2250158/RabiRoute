@@ -99,7 +99,7 @@ test("real Hook discovery GET guidance reaches authorized API and public Skill c
     assert.ok(dispatched.includes("/api/lan-agent/resources/read"));
     for (const old of ["/api/agent/resources", "/api/agent/capabilities"]) {
       assert.ok([403, 404].includes((await fetch(base + old, { headers })).status), old);
-    authority.setNodeEnabled(nodeId, false);
+    authority.revokeNode(nodeId);
     }
     assert.equal((await fetch(`${base}/api/lan-agent/resources`, { headers })).status, 403);
   } finally {

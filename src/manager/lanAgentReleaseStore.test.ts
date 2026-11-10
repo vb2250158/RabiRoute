@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { createHash, sign } from "node:crypto";
+import { createHash, sign, generateKeyPairSync } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -371,4 +371,29 @@ test("importing a materialized legacy package signs its original bytes without s
     assert.deepEqual(store.readAsset(manifest.version, "node", relative, "legacy-materialized-node"), bytes);
     assert.equal(store.manifest("legacy-materialized-node").files.some(file => file.path.includes("plugin-owners")), false);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("immutable Host release metadata reuses the signed package snapshot without rereading assets, while source mode detects changed bytes", t => {
+ const root=temporaryDirectory("rabi-immutable-release-");t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+ const agentRoot=path.join(root,"agent");writeAgent(agentRoot);const immutable=new LanAgentReleaseStore({rootDir:root,agentRoot,immutablePackage:true});const first=immutable.manifest();
+ const read=fs.readFileSync;let assetReads=0;t.mock.method(fs,"readFileSync",((...args:Parameters<typeof fs.readFileSync>)=>{if(String(args[0]).startsWith(agentRoot+path.sep))assetReads++;return (read as (...args:Parameters<typeof fs.readFileSync>)=>ReturnType<typeof fs.readFileSync>)(...args);}) as typeof fs.readFileSync);
+ for(let i=0;i<50;i++)assert.equal(immutable.manifest(),first);assert.equal(assetReads,0);
+ assert.equal(Object.isFrozen(first.files),true);assert.equal(Object.isFrozen(first.files[0]),true);
+ fs.writeFileSync(path.join(agentRoot,"lib/worker.mjs"),"export const changed = true;\n");
+ assert.equal(immutable.manifest(),first,"illegal in-place edits do not silently become another signed package");
+ assert.throws(()=>immutable.readAsset(first.version,"node","lib/worker.mjs"),/integrity mismatch/);
+ const source=new LanAgentReleaseStore({rootDir:root,agentRoot});const changed=source.manifest();assert.notEqual(lanAgentReleaseManifestDigest(changed),lanAgentReleaseManifestDigest(first));
+});
+
+test("a signer change during immutable manifest creation cannot label an old signature with a new key stamp",t=>{
+ const root=temporaryDirectory("rabi-release-signer-race-");t.after(()=>fs.rmSync(root,{recursive:true,force:true}));const agentRoot=path.join(root,"agent");writeAgent(agentRoot);
+ const signingKeyPath=path.join(root,"signer.json");const initial=new LanAgentReleaseStore({rootDir:root,agentRoot,signingKeyPath}).manifest();
+ const pair=generateKeyPairSync("ed25519");const nextKeys={publicKey:pair.publicKey.export({type:"spki",format:"pem"}).toString(),privateKey:pair.privateKey.export({type:"pkcs8",format:"pem"}).toString()};
+ const stat=fs.statSync;let reads=0;t.mock.method(fs,"statSync",((file:fs.PathLike,...args:unknown[])=>{
+  if(String(file)===signingKeyPath && ++reads===2)fs.writeFileSync(signingKeyPath,JSON.stringify(nextKeys));
+  return (stat as (...args:unknown[])=>unknown)(file,...args);
+ }) as typeof fs.statSync);
+ const owner=new LanAgentReleaseStore({rootDir:root,agentRoot,signingKeyPath,immutablePackage:true});const raced=owner.manifest();assert.equal(raced.publicKeySha256,initial.publicKeySha256);
+ const fresh=owner.manifest();assert.equal(fresh.publicKey,nextKeys.publicKey.trim());assert.notEqual(fresh,raced);assert.equal(verifyLanAgentReleaseManifest(fresh,fresh.publicKeySha256),true);
+ assert.equal(owner.manifest(),fresh);
 });

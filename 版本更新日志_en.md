@@ -6,6 +6,14 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.13.0 - 2026-11-11
+
+- `io.rabiroute.manager.core` `0.1.4` adds a separate Computer control tab with local PCs, full hosts and nodes in one flat directory. Target settings retain their original owner, strong ETag and local failure scope. Storage confirmation and unconfirmed executor application remain distinct.
+- Host API `1.9.0` and `rabi-agent` `0.4.0` extend the shared computer protocol with a visible master switch and six features, persistent mouse/keyboard control, ordered Unicode input, original request-status queries and cancellation. Preserve connection authentication, accepted receipts and cleanup/status after disabling new work.
+- Six annotation shapes use the existing Qt engine on a full Host and native drawing on Windows lightweight nodes. Dynamic tracking defaults to off and loads the pinned CPU KCF/template library only when explicitly started. Source frames, lost targets, effective resource budgets and cleanup have separate evidence. Official builds, signed assets and notices include the runtime closure.
+- CLI and independent MCP `0.2.2` share request-effect declarations for reads and mutations within mixed POST operations. No-replay policy remains separate from write uncertainty. The UI uses small state-invalidation events without capture polling; real plan termination cleans tracking for its exact bound source.
+- The shared persona picker displays avatars, source PCs and selection, improves long-name and narrow layouts, and uses the original source for remote avatars and the existing pagination contract.
+
 ## 0.12.1 - 2026-11-10
 
 - `io.rabiroute.manager.agent-communication` `0.1.5` fixes shared capability search: remove category-wide keyword pollution, rank actual titles/keywords/full phrases, supply navigation and parameter sources for existing computer/host/execution-node directories, and map Chinese query terms to their corresponding English capability tokens. Responses distinguish API counts from actual resources. Clients share these results without a Host or execution-owner update.

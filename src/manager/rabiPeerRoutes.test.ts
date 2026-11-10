@@ -1,3 +1,4 @@
+import { randomBytes as replacementCredentialBytes } from "node:crypto";
 import http from "node:http";
 import { once } from "node:events";
 import assert from "node:assert/strict";
@@ -110,7 +111,7 @@ test("executable Peer discovery preserves first-value filters, provider extensio
   assert.equal((await request("?online=1")).status, 400); assert.equal((await request("?deviceKind=PC")).status, 400);
   assert.equal((await request("", "POST")).status, 405); assert.equal(discoveries, before);
   const reached = new Promise<void>(resolve => { entered = resolve; }); gate = new Promise<void>(resolve => { release = resolve; });
-  const pending = request(); await reached; authority.setNodeEnabled(credential.nodeId, false, true); authority.setNodeEnabled(credential.nodeId, true, false); release!();
+  const pending = request(); await reached; authority.enroll(authority.issueBootstrapTicket().ticket, credential.nodeId, replacementCredentialBytes(32).toString("base64url")); release!();
   const revoked = await pending; assert.equal(revoked.status, 403); assert.ok(!(await revoked.text()).includes("preserved"));
 });
 

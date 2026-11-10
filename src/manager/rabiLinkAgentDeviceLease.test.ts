@@ -42,7 +42,7 @@ test('marked ingress cannot save a profile after its Agent lease is revoked duri
     method: 'PUT', headers: { authorization: 'Bearer ' + credential.token, 'x-rabiroute-agent-id': 'worker', 'content-type': 'application/json' },
     body: JSON.stringify({ expectedRevision: 0, idempotencyKey: 'save-once', profile: { revision: 1, id: 'Local', name: 'Local', systemPrompt: '', skills: [], mcp: [], personaRef: { roleId: 'Local', sourceDeviceId: config.deviceId } } })
   });
-  await ready; authority.setNodeEnabled(credential.nodeId, false, true); unblock();
+  await ready; authority.revokeNode(credential.nodeId); unblock();
   const response = await pending; assert.equal(response.status, 403); assert.equal((await response.json()).errorCode, 'API_REQUEST_AUTHORITY_REVOKED');
   assert.equal(fs.existsSync(path.join(directory, 'rabilink-agent-devices')), false);
 });

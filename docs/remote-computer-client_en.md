@@ -4,9 +4,9 @@
 
 # Host and remote computer clients
 
-Full Rabi hosts provide their own computer capabilities over the established RabiLink connection without a self-connected client. Selecting a target PC on the RabiLink home page keeps computer operations on that Manager. Lightweight clients serve computers without a full host. Source wiring is implemented; installed and physical two-computer acceptance depend on actual running versions. See [architecture and evidence limits](connected-host-agent-architecture_en.md).
+Full Rabi hosts provide their own computer capabilities over the established RabiLink connection without a self-connected client. The current source has an independent **RabiLink → Computer control** tab with a flat list of the local PC, full hosts and lightweight nodes. Settings and execution stay with each original Manager. Lightweight clients serve computers without a full host. See [Computer control](user-guide/computer-control_en.md); installed and physical two-computer acceptance remain tied to actual versions and evidence in [architecture and evidence limits](connected-host-agent-architecture_en.md).
 
-An enrolled remote instance has one switch, enabled by default. While enabled, it uses all public host APIs with its existing computer credential, without browser login, saved Agent/session registration or per-feature grants. Every Agent invocation supplies its actual type and complete session ID.
+Configured, authenticated computer connections can use all public Manager APIs by default, without separate Agent/session registration or per-interface eligibility. Computer control has a master switch and six switches: terminal commands, files, windows/capture, Agent tasks, mouse/keyboard and annotations. Missing values default to enabled, while explicit saved disabled values remain. These visible settings control new work through the corresponding computer entry; original result queries, stop, cancel and cleanup remain available, and configuration plus unrelated services continue to work. Record a real source task when present; connections without task context do not need an invented Agent or session.
 
 The host computer's Rabi service owns personas, plans, memory, skills, message history and persistent orchestration without a separate controlling Agent. Manager owns computer services on full hosts; lightweight computers use a Rabi Agent client. Both reuse the same supported platform execution. Ordinary authenticated Agents can query plans, memory and skills and use computer APIs under the same contracts without a primary-persona role.
 
@@ -29,21 +29,24 @@ The client does not run another Manager or replicate persona, memory or skill st
 
 Full hosts use their current RabiLink connection. Computers without a full host follow [remote client enrollment](lan-rabi-agent-bootstrap_en.md), keeping one client main program each. The connector, tray, terminal host and capture helper are child programs. Associated Agents can start later; a private configuration with `agents: []` can also establish a computer connection.
 
-Select Windows, Mac (macOS) or Linux before installing only the computer client. The installation-time Agent association checkbox has been removed. Omitting `RABI_AGENT_TYPE` and session variables on first enrollment makes `--bootstrap` save an empty Agent catalog. Later Agent registration preserves computer identity; each delivery supplies an explicit provider and full session ID.
+Select Windows, Mac (macOS) or Linux before installing only the computer client. The installation-time Agent association checkbox has been removed. Omitting `RABI_AGENT_TYPE` and session variables on first enrollment makes `--bootstrap` save an empty Agent catalog. Ordinary computer APIs do not require source Agent/session registration. Delivery to an Agent specifies the target provider and complete target session ID.
 
 Mac uses a current-user LaunchAgent and supports file transfer plus Zsh/Bash/sh terminals in connector 0.2.4. Terminals require node-pty; native Mac compilation may need Xcode Command Line Tools. Window queries and screenshots remain Windows-only. Native Mac terminals and Desktop IPC still require online-device acceptance.
 
-The host WebGUI provides creation, querying, switching, input and exit for the computer's available shells under **RabiLink → Remote Agents → online computer → remote terminal**. Agents use the public APIs below for files and images. These operations reuse the authenticated connection without additional capability grants or management passwords and run with the remote client's operating-system user permissions.
+In the current source, **RabiLink → Computer control → expand computer** provides terminal, file, window and image controls. Terminals reuse the existing panel and the target's actual shells. Remote Agents retains enrollment, connector maintenance and original Agent task configuration, without a duplicate computer-control panel. Mouse/keyboard, static annotations and tracking require declared executor support; older nodes retain their actual capabilities, and online does not mean updated. These entries use the authenticated connection and visible user settings without new allowlists or management passwords, under the target system user's permissions. Formal installation, physical-desktop behavior and two-computer use still require acceptance against matching running versions.
 
-Discover the complete `managerBaseUrl` from the current Host status, verify `/meta` identity and readiness, then query `/api/lan-agent/instances` and confirm the target name and `instanceId`. Read the `remote-terminal` and `remote-computer` groups in `/api/lan-agent/capabilities` for current contracts.
+On first connection or after a Manager change, obtain the complete `managerBaseUrl` from current Host status and verify `/meta`. Read the flat directory through `GET /api/computers` and the target Manager's `/api/lan-agent/instances` for executor identities and capabilities. Reuse a stable target and original connection when available. CLI, MCP and other clients use the same live catalog: search for computer control or describe `manager.lan-agent.computer.execute`, then submit an action in `body.action`. Action names are not operation IDs. See [Unified interfaces](unified-agent-api_en.md) and [Computer control](user-guide/computer-control_en.md).
 
 | Endpoint | Purpose |
 | --- | --- |
+| `GET /api/computers` | Flat directory of local PCs, full hosts and lightweight nodes; a failed source is marked unknown locally |
+| `GET /api/lan-agent/instances/:instanceId/computer-settings` | Original-owner settings, defaults, schema, capabilities and strong ETag |
+| `PATCH /api/lan-agent/instances/:instanceId/computer-settings` | Partial update with original `If-Match`; storage and executor application are reported separately |
 | `GET /api/lan-agent/instances/:instanceId/terminals` | Query live terminal sessions |
 | `POST /api/lan-agent/instances/:instanceId/terminals` | `open / list / get / input / resize / close` |
 | `GET /api/lan-agent/instances/:instanceId/terminals/:terminalId?after=0&waitMs=25000` | Return session state and output; wait for events up to 25 seconds when no new output exists |
 | `GET /api/lan-agent/instances/:instanceId/terminals/:terminalId/events?after=0` | Live SSE output |
-| `POST /api/lan-agent/instances/:instanceId/computer` | File transfer, window queries and captures |
+| `POST /api/lan-agent/instances/:instanceId/computer` | `body.action` selects files, windows, captures and supported control/input/annotation actions; status and cleanup retain original IDs |
 
 Terminals use a stable UUID `terminalId`. Windows supports `cmd` or `powershell`; Mac/Linux advertise the available `zsh`, `bash` or `sh` shells. Input uses increasing `sequence` numbers; commands end with `\r`. JSON reads return `terminal`, `outputEvents`, `nextOutputSequence` and `truncated`; pass the last `nextOutputSequence` as the next `after` cursor. Closing the view retains the terminal; exiting terminates its children. A temporary Manager disconnect retains terminals, IDs and input receipts in the original connector process, and the new connection still authenticates; exit of the remote main program or connector shutdown closes all terminals. Output produced while disconnected has no SDK replay cache and may be missing. After a Host switch, query the same terminalId and use the cursor returned by the new Manager; never replay input. Read any business output already redirected to a file through its original file path. After a timeout, query the original session instead of recreating it or replaying input.
 
@@ -74,8 +77,8 @@ Uploads have no additional size ceiling by default; byte counts must be non-nega
 | Environment variable | Default | Meaning |
 | --- | --- | --- |
 | `RABI_AGENT_COMPUTER_MAX_UPLOAD_BYTES` | No additional quota | Bytes per file; `0` permits only empty files |
-| `RABI_AGENT_COMPUTER_MAX_CONCURRENT_IO` | `4` | Concurrent computer I/O operations; `0` removes the quota |
-| `RABI_AGENT_COMPUTER_MAX_ACTIVE_UPLOADS` | `4` | Active uploads; `0` removes the quota |
+| `RABI_AGENT_COMPUTER_MAX_CONCURRENT_IO` | `0` (no additional quota) | Concurrent computer I/O operations; `0` removes the quota |
+| `RABI_AGENT_COMPUTER_MAX_ACTIVE_UPLOADS` | `0` (no additional quota) | Active uploads; `0` removes the quota |
 | `RABI_AGENT_COMPUTER_MAX_UPLOAD_RECORDS` | `64` | Upload records retained by this process; `0` removes the quota |
 
 All values must be non-negative safe integers. The latest 256 chunk receipts remain available for verification. Normal shutdown removes unfinished files; abrupt process death may leave `.rabi-upload-<UUID>.tmp`. A new client does not resume old records automatically. Query the original ID after an uncertain result; do not switch IDs or overwrite a destination automatically.

@@ -13,9 +13,4 @@ export const OPERATION_TOOL_DEFINITIONS = Object.freeze([
   { name: 'rabi_session', readOnly: false, description: 'Read, send to, or close the original stream/WebSocket session returned by rabi_call. Reads never replay the original business request.', inputSchema: { ...object({ sessionId: string, action: { enum: ['read', 'send', 'close'] }, text: string, base64: string, json: {} }), required: ['sessionId', 'action'] } }
 ]);
 
-/** Effect metadata is presentation of the executing contract, not a permission grant. */
-export function operationIsReadOnly(contract, method = contract.method) {
-  const mode = contract.effects?.mode ?? '';
-  const declaredRead = /(?:^|-)read$/.test(mode) && !/touch|mutation|write/.test(mode);
-  return declaredRead && (contract.method !== '*' || ['GET', 'HEAD', 'OPTIONS'].includes(method));
-}
+export { operationIsReadOnly } from './api-operation-effects.mjs';

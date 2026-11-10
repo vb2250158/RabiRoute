@@ -4,7 +4,6 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { agentInstanceDisplayName, type AgentInstance } from "@shared/agentInstance";
 import InstanceAgentSettings from "../components/InstanceAgentSettings.vue";
-import RemoteTerminalDialog from "../components/RemoteTerminalDialog.vue";
 import { routeScopedAdaptersPath } from "../routeScopedNavigation";
 import { copyTextToClipboard } from "../clipboard";
 import { managerAccessToken } from "../managerApi";
@@ -73,31 +72,9 @@ const managerUrl = ref(window.location.origin);
 const connectionToken = ref("");
 const connectionAvailable = ref(false);
 const namingInstance = ref<AgentInstance>();
-const terminalInstance = ref<AgentInstance>();
 const nodeName = ref("");
 const savingName = ref(false);
 const nameError = ref("");
-const screenshot = ref<{ mimeType: string; data: string; width: number; height: number }>();
-const screenshotName = ref("");
-const capturingInstanceId = ref("");
-let captureRevision = 0;
-
-async function captureScreen(instance: AgentInstance): Promise<void> {
-  const revision = ++captureRevision;
-  const name = instance.local ? selectedHostName.value : agentInstanceDisplayName(instance);
-  capturingInstanceId.value = instance.instanceId;
-  error.value = "";
-  try {
-    const body = await readJson(await fetch(instancePath(instance, "/computer"), {
-      method: "POST", headers: { "content-type": "application/json", "x-rabiroute-webgui-token": connectionToken.value },
-      body: JSON.stringify({ action: "screen.capture" })
-    }));
-    if (revision !== captureRevision) return;
-    screenshotName.value = name;
-    screenshot.value = body.data as typeof screenshot.value;
-  } catch (reason) { if (revision === captureRevision) error.value = userFacingError(reason); }
-  finally { if (revision === captureRevision) capturingInstanceId.value = ""; }
-}
 
 function editName(instance: AgentInstance): void {
   namingInstance.value = instance;
@@ -129,16 +106,6 @@ async function saveName(): Promise<void> {
   }
 }
 
-const enablingInstanceId = ref("");
-async function setInstanceEnabled(instance: AgentInstance, enabled: unknown): Promise<void> {
-  if (typeof enabled !== "boolean" || enablingInstanceId.value) return;
-  enablingInstanceId.value = instance.instanceId; error.value = "";
-  try {
-    await readJson(await fetch(instancePath(instance, "/enabled"), { method: "PUT", headers: { "content-type": "application/json", "x-rabiroute-webgui-token": connectionToken.value }, body: JSON.stringify({ enabled, expectedEnabled: instance.enabled !== false }) }));
-    await refresh();
-    if (instances.value.find(item => item.instanceId === instance.instanceId)?.enabled !== enabled) throw new Error("实例开关保存结果未确认，请刷新核对。");
-  } catch (reason) { error.value = userFacingError(reason); } finally { enablingInstanceId.value = ""; }
-}
 
 async function copyInstallPrompt(): Promise<void> {
   if (issuingTicket.value) return;
@@ -249,15 +216,14 @@ async function requestUpdate(node: NodeStatus): Promise<void> {
 }
 
 watch(ownerDeviceId, () => {
-  captureRevision++; capturingInstanceId.value = "";
   managerUrl.value = ""; releaseVersion.value = ""; releasePublicKeySha256.value = ""; connectionAvailable.value = false;
   copied.value = false; ticketExpiresAt.value = ""; enrollmentOpen.value = false;
   instances.value = []; nodes.value = []; tasks.value = [];
-  terminalInstance.value = undefined; namingInstance.value = undefined; screenshot.value = undefined; addingInstanceId.value = "";
+  namingInstance.value = undefined; addingInstanceId.value = "";
   void refresh();
 });
 onMounted(() => { void refresh(); });
-onBeforeUnmount(() => { refreshController?.abort(); captureRevision++; });
+onBeforeUnmount(() => { refreshController?.abort(); });
 </script>
 
 <template>
@@ -273,14 +239,10 @@ onBeforeUnmount(() => { refreshController?.abort(); captureRevision++; });
       </div>
     </div>
 
-    <v-select :model-value="ownerDeviceId" :items="hostItems" label="电脑主机" density="compact" :disabled="savingName || !!enablingInstanceId || !!updatingNodeId || issuingTicket" @update:model-value="value => router.replace({ query: { ...route.query, deviceId: value || undefined } })" />
+    <v-select :model-value="ownerDeviceId" :items="hostItems" label="电脑主机" density="compact" :disabled="savingName || !!updatingNodeId || issuingTicket" @update:model-value="value => router.replace({ query: { ...route.query, deviceId: value || undefined } })" />
     <v-alert v-if="hostError" type="info" variant="tonal" class="mb-3">{{ hostError }}</v-alert>
 
     <v-alert v-if="error" type="error" variant="tonal" class="mb-4">{{ error }}</v-alert>
-    <RemoteTerminalDialog v-if="terminalInstance" :key="`${terminalInstance.ownerDeviceId || ''}:${terminalInstance.instanceId}`" :instance-id="terminalInstance.instanceId" :owner-device-id="terminalInstance.ownerDeviceId" :name="terminalInstance.local ? selectedHostName : agentInstanceDisplayName(terminalInstance)" :token="connectionToken" @close="terminalInstance = undefined" />
-    <v-dialog :model-value="!!screenshot" max-width="1200" @update:model-value="value => { if (!value) screenshot = undefined; }">
-      <v-card :title="`${screenshotName} · 当前画面`"><v-card-text><img v-if="screenshot" :src="`data:${screenshot.mimeType};base64,${screenshot.data}`" :alt="`${screenshotName}截图`" style="max-width: 100%; height: auto" /></v-card-text><v-card-actions><v-spacer /><v-btn @click="screenshot = undefined">关闭</v-btn></v-card-actions></v-card>
-    </v-dialog>
     <v-dialog :model-value="!!namingInstance" :persistent="savingName" max-width="480" @update:model-value="value => { if (!value && !savingName) namingInstance = undefined; }">
       <v-card title="修改名称">
         <v-card-text>
@@ -341,10 +303,8 @@ onBeforeUnmount(() => { refreshController?.abort(); captureRevision++; });
             </v-expansion-panel>
           </v-expansion-panels>
           <p v-if="!instance.agents.length" class="text-body-2 my-3">{{ instance.local ? '此实例还没有智能体。' : '按每次请求的 Agent 类型和完整会话 ID 使用执行程序；可按需配置连接参数。' }}</p>
-          <v-btn class="mt-3 mr-2" :disabled="!instance.connected" prepend-icon="mdi-console" @click="terminalInstance = instance">终端</v-btn>
-          <v-btn v-if="instance.computerCapabilities?.includes('screenshots')" class="mt-3 mr-2" :disabled="!instance.connected" :loading="capturingInstanceId === instance.instanceId" prepend-icon="mdi-monitor-screenshot" @click="captureScreen(instance)">查看画面</v-btn>
+          <v-btn class="mt-3 mr-2" variant="tonal" prepend-icon="mdi-monitor" :to="{path:'/rabilink',query:{tab:'computer',deviceId:instance.ownerDeviceId || undefined,instanceId:instance.instanceId}}">前往电脑控制</v-btn>
           <template v-if="!instance.local">
-            <v-switch :model-value="instance.enabled !== false" label="是否启用Agent" hint="控制整个远端实例，默认启用；启用后可直接使用全部公开接口。" persistent-hint :loading="enablingInstanceId === instance.instanceId" :disabled="!!enablingInstanceId" @update:model-value="setInstanceEnabled(instance, $event)" />
             <v-btn class="mt-3 mr-2" :disabled="!instance.connected" @click="addingInstanceId = addingInstanceId === instance.instanceId ? '' : instance.instanceId">配置执行程序</v-btn>
             <InstanceAgentSettings v-if="addingInstanceId === instance.instanceId" class="mt-4" :instance="instance" :agent="{ agentId: '', name: 'Agent', provider: instance.agents[0]?.provider || 'codex-desktop', enabled: true }" @saved="addingInstanceId = ''; refresh()" />
             <v-btn v-for="node in nodes.filter(node => node.nodeId === instance.instanceId)" :key="node.nodeId" class="mt-3" :disabled="!node.connected" :loading="updatingNodeId === node.nodeId" @click="requestUpdate(node)">更新连接程序至 {{ releaseVersion }}</v-btn>

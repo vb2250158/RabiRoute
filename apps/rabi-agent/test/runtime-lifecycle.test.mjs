@@ -11,10 +11,36 @@ import { WebSocketServer } from "ws";
 import { withoutSessionBindings } from "../lib/instance-agents.mjs";
 import { __test } from "../rabi-agent.mjs";
 import { DeliveryOwner } from "../lib/delivery-owner.mjs";
+import { collectReleaseAssetPaths, readReleaseAsset } from "../lib/release-assets.mjs";
 
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 const entrypoint = fileURLToPath(new URL("../rabi-agent.mjs", import.meta.url));
 const connectionPath = "/fixture/discovered-agent-channel";
+function materializeCandidateRelease(releaseRoot) {
+  const agentRoot = path.dirname(entrypoint), options = { pluginSourceRoot: fileURLToPath(new URL("../../../", import.meta.url)) };
+  fs.mkdirSync(releaseRoot, { recursive: true });
+  for (const relative of collectReleaseAssetPaths(agentRoot, "", options)) {
+    const destination = path.join(releaseRoot, ...relative.split("/"));
+    fs.mkdirSync(path.dirname(destination), { recursive: true });
+    fs.writeFileSync(destination, readReleaseAsset(agentRoot, relative, options));
+  }
+  fs.symlinkSync(fileURLToPath(new URL("../../../node_modules", import.meta.url)), path.join(releaseRoot, "node_modules"), "junction");
+}
+function observeCandidate(child) {
+  let failure;
+  // Candidate stdio is ignored/inherited. Its original exit is the owned process proof;
+  // IPC has deliberately disconnected by the successful handoff stage.
+  const exited = new Promise(resolve => { child.once("exit", resolve); child.once("error", () => { if (!child.pid) resolve(); }); });
+  child.on("error", error => { failure = error; });
+  child.once("exit", (code, signal) => { failure = new Error(`Fixture candidate exited before the awaited stage (code=${code}, signal=${signal ?? "none"}).`); });
+  return {
+    wait(check, timeout) { return waitFor(() => { if (check()) return true; if (failure) throw failure; return false; }, timeout); },
+    async stop() {
+      if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+      await exited;
+    }
+  };
+}
 function connectionCatalog(identity) {
   const frame = { type: "object", required: ["type"], properties: { type: { type: "string" } }, additionalProperties: true };
   const contract = { operationId: "manager.lan-agent.connect", method: "GET", contractVersion: "1.0.0", transport: "websocket", pathTemplate: connectionPath,
@@ -319,15 +345,12 @@ test("real CLI stdin above 1 MiB reaches only ephemeral HTTP fixture unchanged",
   } finally { fs.closeSync(stdin); fs.closeSync(stdout); await new Promise(resolve => server.close(resolve)); f.runtime.stop(); fs.rmSync(f.root, { recursive: true, force: true }); }
 });
 
-test("production candidate over ephemeral WebSocket sends updated only after pointer commit", async () => {
+test("production candidate over ephemeral WebSocket sends updated only after pointer commit", { timeout: 90000 }, async () => {
   const f = fixture();
   const releaseRoot = path.join(f.root, "release");
-  fs.mkdirSync(releaseRoot);
-  // Copy production entry/lib bytes; no real host, discovery broadcast or business runtime is started.
-  fs.copyFileSync(entrypoint, path.join(releaseRoot, "rabi-agent.mjs"));
-  fs.copyFileSync(path.join(path.dirname(entrypoint), "package.json"), path.join(releaseRoot, "package.json"));
-  fs.cpSync(path.join(path.dirname(entrypoint), "lib"), path.join(releaseRoot, "lib"), { recursive: true });
-  fs.symlinkSync(fileURLToPath(new URL("../../../node_modules", import.meta.url)), path.join(releaseRoot, "node_modules"), "junction");
+  // Publish the production closure through the same canonical-owner projection as signed releases.
+  // Only an isolated Manager fixture is started; native desktop helpers and business runtimes stay idle.
+  materializeCandidateRelease(releaseRoot);
   const digest = "b".repeat(64);
   fs.writeFileSync(path.join(releaseRoot, "release-identity.json"), JSON.stringify({ digest }));
   const releaseEntry = path.join(releaseRoot, "rabi-agent.mjs");
@@ -352,46 +375,44 @@ test("production candidate over ephemeral WebSocket sends updated only after poi
   const expectedLauncher = fs.readFileSync(launcher, 'utf8');
   fs.writeFileSync(launcher, 'old launcher fixture');
   const child = spawn(process.execPath, [releaseEntry, "--run", "--config", f.configPath], { env: { ...process.env, RABI_AGENT_UPDATE_CANDIDATE: "1" }, stdio: ["ignore", "ignore", "inherit", "ipc"] });
+  const observed = observeCandidate(child);
   const messages = [];
   child.on("message", message => messages.push(message));
   try {
     // Cold production imports use the actual candidate preparation budget.
-    await waitFor(() => messages.some(item => item.type === "candidatePrepared"), f.runtime.timeout("agent.update.candidate", 30000));
+    await observed.wait(() => messages.some(item => item.type === "candidatePrepared"), f.runtime.timeout("agent.update.candidate", 30000));
     assert.equal(events.length, 0);
     // Simulate completed old-queue changes: candidate must reload this binding at ACTIVATE.
     const latest = { ...config, agents: [{ ...config.agents[0], sessionId: "latest-task" }] };
     fs.writeFileSync(f.configPath, JSON.stringify(latest));
     child.send({ type: "activateCandidate" });
-    await waitFor(() => messages.some(item => item.type === "candidateConnected"));
+    await observed.wait(() => messages.some(item => item.type === "candidateConnected"));
     assert.equal(events.some(item => item.status === "updated"), false);
     assert.equal(events.find(item => item.type === "hello").node.agents[0].sessionId, undefined);
     assert.equal(events.find(item => item.type === "hello").node.hostname, os.hostname());
     __test.writeCurrentRelease(f.configPath, releaseEntry, digest);
     child.send({ type: "commitCandidate" });
-    await waitFor(() => messages.some(item => item.type === "candidateCommitted"));
+    await observed.wait(() => messages.some(item => item.type === "candidateCommitted"));
     assert.equal(events.some(item => item.status === "updated"), false);
     assert.equal(fs.readFileSync(launcher, 'utf8'), 'old launcher fixture');
     child.disconnect();
-    await waitFor(() => events.some(item => item.status === "updated"));
+    await observed.wait(() => events.some(item => item.status === "updated"));
     assert.equal(fs.readFileSync(launcher, 'utf8'), expectedLauncher);
     assert.deepEqual(JSON.parse(fs.readFileSync(f.configPath)).agents, withoutSessionBindings(latest).agents);
     assert.equal(JSON.parse(before).nodeCredential, JSON.parse(fs.readFileSync(f.configPath)).nodeCredential);
   } finally {
-    const exited = new Promise(resolve => child.once("exit", resolve)); child.kill("SIGKILL"); await exited;
+    await observed.stop();
     for (const socket of ws.clients) socket.terminate();
-    await new Promise(resolve => ws.close(resolve)); await new Promise(resolve => server.close(resolve));
-    f.runtime.stop(); fs.rmSync(f.root, { recursive: true, force: true });
+    await new Promise(resolve => ws.close(resolve));
+    await new Promise(resolve => server.close(resolve));
+    await f.runtime.stop(); fs.rmSync(f.root, { recursive: true, force: true });
   }
 });
 
 async function productionCandidateFixture() {
   const f = fixture();
   const releaseRoot = path.join(f.root, "candidate-release");
-  fs.mkdirSync(releaseRoot);
-  fs.copyFileSync(entrypoint, path.join(releaseRoot, "rabi-agent.mjs"));
-  fs.copyFileSync(path.join(path.dirname(entrypoint), "package.json"), path.join(releaseRoot, "package.json"));
-  fs.cpSync(path.join(path.dirname(entrypoint), "lib"), path.join(releaseRoot, "lib"), { recursive: true });
-  fs.symlinkSync(fileURLToPath(new URL("../../../node_modules", import.meta.url)), path.join(releaseRoot, "node_modules"), "junction");
+  materializeCandidateRelease(releaseRoot);
   const digest = "b".repeat(64);
   fs.writeFileSync(path.join(releaseRoot, "release-identity.json"), JSON.stringify({ digest }));
   const releaseEntry = path.join(releaseRoot, "rabi-agent.mjs");
@@ -413,7 +434,7 @@ async function productionCandidateFixture() {
   return { ...f, config, releaseEntry, digest, events, requests, ws, async close() {
     for (const socket of ws.clients) socket.terminate();
     await new Promise(resolve => ws.close(resolve)); await new Promise(resolve => server.close(resolve));
-    f.runtime.stop(); fs.rmSync(f.root, { recursive: true, force: true });
+    await f.runtime.stop(); fs.rmSync(f.root, { recursive: true, force: true });
   } };
 }
 
@@ -421,15 +442,16 @@ for (const failure of ["socket", "pointer", "digest", "launcher"]) {
   test(`production candidate exits nonzero and releases IPC when ${failure} fails after commit ACK`, async () => {
     const f = await productionCandidateFixture();
     const child = spawn(process.execPath, [f.releaseEntry, "--run", "--config", f.configPath], { env: { ...process.env, RABI_AGENT_UPDATE_CANDIDATE: "1", RABI_AGENT_SUPERVISED: "1" }, stdio: ["ignore", "ignore", "inherit", "ipc"] });
+    const observed = observeCandidate(child);
     const messages = []; child.on("message", message => messages.push(message));
     let exit; child.once("exit", (code, signal) => { exit = { code, signal }; });
     try {
-      await waitFor(() => messages.some(item => item.type === "candidatePrepared"), f.runtime.timeout("agent.update.candidate", 30000));
+      await observed.wait(() => messages.some(item => item.type === "candidatePrepared"), f.runtime.timeout("agent.update.candidate", 30000));
       child.send({ type: "activateCandidate" });
-      await waitFor(() => messages.some(item => item.type === "candidateConnected"));
+      await observed.wait(() => messages.some(item => item.type === "candidateConnected"));
       __test.writeCurrentRelease(f.configPath, f.releaseEntry, f.digest);
       child.send({ type: "commitCandidate" });
-      await waitFor(() => messages.some(item => item.type === "candidateCommitted"));
+      await observed.wait(() => messages.some(item => item.type === "candidateCommitted"));
       const before = fs.readFileSync(f.configPath);
       if (failure === "socket") {
         await Promise.all([...f.ws.clients].map(socket => new Promise(resolve => { socket.once("close", resolve); socket.close(); })));
@@ -446,7 +468,7 @@ for (const failure of ["socket", "pointer", "digest", "launcher"]) {
       assert.equal(f.events.filter(item => item.type === "hello").length, 1);
       assert.equal(fs.existsSync(path.join(f.root, "state.json")), false);
     } finally {
-      if (!exit) { const exited = new Promise(resolve => child.once("exit", resolve)); child.kill("SIGKILL"); await exited; }
+      await observed.stop();
       await f.close();
     }
   });

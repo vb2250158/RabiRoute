@@ -1,3 +1,4 @@
+import { randomBytes as replacementCredentialBytes } from "node:crypto";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
@@ -26,7 +27,7 @@ async function fixture(t: test.TestContext) {
   const registry = new ManagerPluginRouteRegistry();
   const registration = registry.registerOperations("persona", [createPersonaDirectoryOperation(() => {
     if (state.fail) throw new Error("Original presentation owner unavailable");
-    if (state.revoke) { authority.setNodeEnabled(credential.nodeId, false, true); authority.setNodeEnabled(credential.nodeId, true, false); }
+    if (state.revoke) { authority.enroll(authority.issueBootstrapTicket().ticket, credential.nodeId, replacementCredentialBytes(32).toString("base64url")); }
     return { rolesRoot: root, runtimes: () => runtimes.values(), personaPresentations: () => presentations };
   })]);
   const server = http.createServer((request, response) => {
