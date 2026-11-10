@@ -7,6 +7,7 @@ import { runPluginSynchronousWork } from "@rabiroute/host-api/plugin-kernel/sync
 import { prepareApiJsonBody } from "@rabiroute/host-api/manager/apiPreparedJson";
 import { apiDiscoveryIndex, prepareApiDiscoveryIndex, apiOperationDescription, apiOperationPage, type ApiOperationFilters } from "./apiDiscoveryIndex.js";
 
+const discoveryUsageHint = "This is an API catalog, not a business resource list. Totals count matching APIs. Read the discovered contract and parameter sources, then invoke that business operation to query its actual resources.";
 const empty = { type: "object", properties: {}, additionalProperties: false } as const;
 const identityProperties = {
   applicationGenerationId: { type: "string" }, managerInstanceId: { type: "string" }, pluginGenerationId: { type: "string" },
@@ -144,7 +145,7 @@ export function createApiDiscoveryOperations(registry: ManagerPluginRouteRegistr
       if (conditional.status === 304) return conditional;
       await prepareApiDiscoveryIndex(snapshot, input.signal);
       const categories = runPluginSynchronousWork(() => apiDiscoveryIndex(snapshot).categories, "read API discovery categories");
-      return { ...conditional, body: { code: 0, data: { ...identity(snapshot), categories } } };
+      return { ...conditional, body: { code: 0, data: { ...identity(snapshot), resultScope: "api-categories", usageHint: discoveryUsageHint, categories } } };
     }),
     define("manager.api.operations.list", "/api/agent/operations", "Search lightweight API summaries globally or within a business category.", operationListQuerySchema, successSchema, async input => {
       const snapshot = await activeSnapshot(registry, input.signal);
@@ -158,7 +159,7 @@ export function createApiDiscoveryOperations(registry: ManagerPluginRouteRegistr
       }
       const page = runPluginSynchronousWork(() => apiOperationPage(snapshot, filters as ApiOperationFilters,
         Number(queryValue(input, "limit") ?? 20), queryValue(input, "cursor")), "read API discovery summary page");
-      return { ...conditional, body: { code: 0, data: { ...identity(snapshot), ...page } } };
+      return { ...conditional, body: { code: 0, data: { ...identity(snapshot), resultScope: "api-operations", usageHint: discoveryUsageHint, ...page } } };
     }),
     define("manager.api.operations.describe", "/api/agent/operations/:operationId", "Describe one API operation's input, result or full executable contract.", describeQuerySchema, successSchema, async input => {
       const snapshot = await activeSnapshot(registry, input.signal);
@@ -167,7 +168,7 @@ export function createApiDiscoveryOperations(registry: ManagerPluginRouteRegistr
       await prepareApiDiscoveryIndex(snapshot, input.signal);
       const operation = runPluginSynchronousWork(() => apiOperationDescription(snapshot, input.path.operationId!,
         (queryValue(input, "view") ?? "full") as "input" | "result" | "full"), "read one API operation description");
-      const body = await prepareApiJsonBody({ code: 0, data: { ...identity(snapshot), operation } }, operation, input.signal);
+      const body = await prepareApiJsonBody({ code: 0, data: { ...identity(snapshot), resultScope: "api-operation-description", usageHint: discoveryUsageHint, operation } }, operation, input.signal);
       return { ...conditional, body };
     }, { type: "object", required: ["operationId"], properties: { operationId: { type: "string", minLength: 1 } }, additionalProperties: false }),
     define("manager.api.help", "/api/agent/help", "Discover operations from the active route and contract snapshot.", querySchema, successSchema, async input => {

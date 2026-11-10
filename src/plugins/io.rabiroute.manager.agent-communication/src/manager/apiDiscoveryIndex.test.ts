@@ -1,9 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { compileApiOperation, type ApiOperationDefinition, type ApiOperationDiscovery } from "../../../../manager/apiOperationContract.js";
+import { compileApiContract, compileApiOperation, type ApiOperationDefinition, type ApiOperationDiscovery } from "../../../../manager/apiOperationContract.js";
 import { createApiCatalogSnapshot, type ApiPublishedOperation } from "../../../../manager/apiOperationCatalog.js";
 import { ManagerPluginRouteRegistry } from "../../../../manager/managerPluginRouteRegistry.js";
 import { fixtureApiContract } from "../../../../manager/apiOperationContractFixtures.js";
+import { createPeerControlOperations } from "../../../../peerTunnel/apiControlOperations.js";
+import { createPeerProxyHttpOperations } from "../../../../peerTunnel/apiProxyHttpOperations.js";
+import { createLanAgentManagementOperations } from "../../../io.rabiroute.manager.core/src/manager/lanAgentRoutes.js";
+import { LAN_AGENT_INTERACTIVE_ROUTES, interactiveApiContract } from "../../../io.rabiroute.manager.core/src/manager/lanAgentInteractiveContract.js";
 import { apiDiscoveryIndex, prepareApiDiscoveryIndex, apiOperationDescription, apiOperationPage } from "./apiDiscoveryIndex.js";
 
 function operation(id: string, pathTemplate: string, discovery?: ApiOperationDiscovery): ApiPublishedOperation {
@@ -175,4 +179,136 @@ test("conflicting category labels and malformed argument-source maps stay local 
   const bad = apiOperationDescription(value, "fixture.sources.bad");
   assert.ok(bad.discovery.issues?.includes("discovery_inputSource_invalid"));
   assert.deepEqual(bad.discovery.inputSources, []);
+});
+
+
+test("device search uses operation relevance without inheriting category words", () => {
+  const value = snapshot([
+    operation("manager.desktop-pet.binding.read", "/api/desktop-pet/roles/:roleId/binding", { title: "读取桌宠绑定" }),
+    operation("manager.lan-agent.instances.list", "/api/lan-agent/instances", { title: "查询已接入电脑", keywords: ["电脑", "设备", "computer"], category: { id: "devices", title: "电脑与设备" } }),
+    operation("manager.lan-agent.nodes.list", "/api/lan-agent/nodes", { title: "查询设备节点", keywords: ["电脑", "device"], category: { id: "devices", title: "电脑与设备" } }),
+    operation("manager.lan-agent.terminals.list", "/api/lan-agent/terminals", { title: "列出终端", keywords: ["terminal"] })
+  ]);
+  const computers = apiOperationPage(value, { category: "devices", query: "电脑" }, 1);
+  assert.equal(computers.total, 2);
+  assert.equal(computers.items[0]!.operationId, "manager.lan-agent.instances.list");
+  const next = apiOperationPage(value, { category: "devices", query: "电脑" }, 1, computers.nextCursor);
+  assert.equal(next.items[0]!.operationId, "manager.lan-agent.nodes.list");
+  assert.equal(next.nextCursor, "");
+  assert.equal(apiOperationPage(value, { query: "设备" }).items[0]!.operationId, "manager.lan-agent.nodes.list");
+  assert.deepEqual(apiOperationPage(value, { query: "terminal" }).items.map(item => item.operationId), ["manager.lan-agent.terminals.list"]);
+  assert.equal(apiOperationPage(value, { category: "devices" }).total, 4);
+});
+
+test("explicit keywords outrank incidental summaries and category labels do not create matches", () => {
+  const value = snapshot([
+    operation("fixture.a.incidental", "/api/fixture/a", { title: "节点状态", summary: "可从电脑终端查看", category: { id: "io.fixture.computers", title: "电脑终端", parentId: "devices" } }),
+    operation("fixture.z.explicit", "/api/fixture/z", { title: "原生节点", keywords: ["电脑"], category: { id: "io.fixture.computers", title: "电脑终端", parentId: "devices" } }),
+    operation("fixture.unrelated", "/api/fixture/other", { title: "灯光亮度", category: { id: "io.fixture.computers", title: "电脑终端", parentId: "devices" } }),
+    operation("agent.qq.history.read", "/api/agent/qq/history", { title: "读取QQ群聊记录", keywords: ["群消息", "聊天历史"] }),
+    operation("agent.qq.contacts.read", "/api/agent/qq/contacts", { title: "读取QQ联系人" })
+  ]);
+  assert.deepEqual(apiOperationPage(value, { category: "devices", query: "电脑" }).items.map(item => item.operationId), ["fixture.z.explicit", "fixture.a.incidental"]);
+  assert.equal(apiOperationPage(value, { category: "io.fixture.computers" }).total, 3);
+  assert.equal(apiOperationPage(value, { query: "io.fixture.computers" }).total, 0);
+  assert.deepEqual(apiOperationPage(value, { query: "QQ 群消息" }).items.map(item => item.operationId), ["agent.qq.history.read"]);
+  assert.equal(apiOperationPage(value, { query: "不存在的功能" }).total, 0);
+});
+
+
+test("an exact operation identity ranks ahead of another operation mentioning it", () => {
+  const value = snapshot([
+    operation("fixture.a.reference", "/api/fixture/reference", { title: "fixture.z.target", keywords: ["fixture.z.target"] }),
+    operation("fixture.z.target", "/api/fixture/target", { title: "查询目标记录" })
+  ]);
+  assert.equal(apiOperationPage(value, { query: "fixture.z.target" }).items[0]!.operationId, "fixture.z.target");
+});
+
+
+function nativeComputerOperations(): ApiPublishedOperation[] {
+  // These factories only describe operations; none of their captured runtime owners is called.
+  const definitions = [
+    ...createPeerControlOperations({} as Parameters<typeof createPeerControlOperations>[0]),
+    ...createPeerProxyHttpOperations({} as Parameters<typeof createPeerProxyHttpOperations>[0]),
+    ...createLanAgentManagementOperations({} as Parameters<typeof createLanAgentManagementOperations>[0]),
+    ...LAN_AGENT_INTERACTIVE_ROUTES.map(route => ({ contract: interactiveApiContract(route) }))
+  ];
+  const ids = new Set(["manager.rabilink.peer.servers.read", "manager.rabilink.peer.http.get", "manager.lan-agent.instances.list", "manager.lan-agent.nodes.list", "manager.lan-agent.terminals.list"]);
+  return definitions.filter(definition => ids.has(definition.contract.operationId)).map(definition => {
+    const compiled = compileApiContract(definition);
+    assert.equal(compiled.discovery, undefined);
+    return { contract: compiled.contract, contractDigest: compiled.digest, owner: { instanceId: "manager:native" } };
+  });
+}
+
+test("native computer factories gain precise shared navigation without registering or changing operations", () => {
+  const native = nativeComputerOperations();
+  const value = snapshot([...native, operation("manager.desktop-pet.binding.read", "/api/desktop-pet/roles/:roleId/binding", { title: "桌宠绑定" })]);
+  assert.equal(native.length, 5);
+  for (const query of ["电脑列表", "电脑连接", "远程电脑", "电脑", "computer list", "remote computers"]) {
+    const page = apiOperationPage(value, { query, category: "devices" });
+    assert.equal(page.items[0]?.operationId, "manager.rabilink.peer.servers.read", query);
+    assert.ok(page.items.every(item => !item.operationId.includes("desktop-pet")), query);
+  }
+  assert.deepEqual(apiOperationPage(value, { query: "terminal" }).items.map(item => item.operationId), ["manager.lan-agent.terminals.list"]);
+  const peers = apiOperationDescription(value, "manager.rabilink.peer.servers.read");
+  assert.deepEqual(peers.discovery.relatedOperations, ["manager.rabilink.peer.http.get", "manager.lan-agent.instances.list", "manager.lan-agent.nodes.list"]);
+  const proxy = apiOperationDescription(value, "manager.rabilink.peer.http.get");
+  assert.deepEqual(proxy.discovery.inputSources, [{ field: "path.deviceId", operationId: "manager.rabilink.peer.servers.read", resultPath: "/peers", valuePath: "/deviceId" }]);
+  const terminal = apiOperationDescription(value, "manager.lan-agent.terminals.list");
+  assert.deepEqual(terminal.discovery.inputSources, [{ field: "path.instanceId", operationId: "manager.lan-agent.instances.list", resultPath: "/instances", valuePath: "/instanceId" }]);
+  assert.ok(terminal.discovery.summary!.includes("sessions"));
+  assert.ok(terminal.discovery.summary!.includes("shells"));
+  for (const row of native) {
+    const description = apiOperationDescription(value, row.contract.operationId);
+    assert.ok("contract" in description, "the full description retains the original executable contract");
+    assert.equal(description.contract, row.contract);
+    assert.equal(description.contractDigest, row.contractDigest);
+    assert.equal(description.owner, row.owner);
+  }
+  assert.equal(apiOperationPage(snapshot([]), {}).total, 0);
+  assert.throws(() => apiOperationDescription(snapshot([]), "manager.rabilink.peer.servers.read"), /API_OPERATION_NOT_FOUND/);
+});
+
+test("native navigation defaults yield to explicit plugin discovery and never fill unknown IDs", () => {
+  const original = nativeComputerOperations().find(row => row.contract.operationId === "manager.rabilink.peer.servers.read")!;
+  const explicit: ApiPublishedOperation = { ...original, discovery: { title: "自定义主机目录", category: { id: "io.fixture.custom", title: "自定义" }, keywords: ["自定义关键词"], inputSources: [], relatedOperations: [] } };
+  const value = snapshot([explicit, operation("fixture.unknown", "/api/fixture/unknown")]);
+  const detail = apiOperationDescription(value, explicit.contract.operationId);
+  assert.equal(detail.discovery.title, "自定义主机目录");
+  assert.equal(detail.discovery.category!.id, "io.fixture.custom");
+  assert.deepEqual(detail.discovery.inputSources, []);
+  assert.deepEqual(detail.discovery.relatedOperations, []);
+  assert.deepEqual(detail.discovery.keywords, ["自定义关键词"]);
+  assert.equal(apiOperationPage(value, { query: "电脑连接" }).total, 0);
+  assert.equal(apiOperationPage(value, { query: "自定义关键词" }).items[0]!.operationId, explicit.contract.operationId);
+  assert.equal(apiOperationDescription(value, "fixture.unknown").discovery.title, "fixture.unknown");
+  assert.equal(apiOperationPage(value, {}).total, 2);
+});
+
+
+test("Chinese query synonyms find English-only operation terms without category pollution", () => {
+  const cases: ReadonlyArray<readonly [string, readonly string[]]> = [
+    ["记忆", ["memory", "memories"]], ["计划", ["plan", "plans"]], ["技能", ["skill", "skills"]],
+    ["文件", ["file", "files", "filesystem"]], ["终端", ["terminal", "terminals", "shell"]],
+    ["屏幕", ["screen", "screenshot"]], ["窗口", ["window"]], ["插件", ["plugin", "plugins"]],
+    ["角色", ["role", "persona"]], ["配置", ["config", "settings"]], ["设置", ["config", "settings"]],
+    ["消息", ["message", "chat"]], ["语音", ["speech", "voice"]], ["视频", ["video"]],
+    ["电脑", ["computer", "computers"]], ["设备", ["device", "devices"]]
+  ];
+  const words = [...new Set(cases.flatMap(([, aliases]) => aliases))];
+  const value = snapshot([
+    ...words.map(word => operation(`fixture.${word}.read`, `/api/${word}`)),
+    operation("manager.desktop-pet.binding.read", "/api/desktop-pet/roles/:roleId/binding"),
+    operation("fixture.windows.read", "/api/windows", { title: "Windows runtime status" })
+  ]);
+  for (const [query, aliases] of cases) {
+    const actual = apiOperationPage(value, { query }).items.map(item => item.operationId).sort();
+    assert.deepEqual(actual, aliases.map(word => `fixture.${word}.read`).sort(), query);
+  }
+  const mixed = snapshot([operation("fixture.file.read", "/api/files"), operation("fixture.file.history.read", "/api/files/history"),
+    operation("fixture.memory.history.read", "/api/memory/history"), operation("fixture.literal", "/api/fixture/literal", { title: "文件" })]);
+  assert.equal(apiOperationPage(mixed, { query: "文件" }).items[0]!.operationId, "fixture.literal");
+  assert.deepEqual(apiOperationPage(mixed, { query: "文件 history" }).items.map(item => item.operationId), ["fixture.file.history.read"]);
+  assert.equal(apiOperationPage(value, { query: "unknown-query" }).total, 0);
 });

@@ -71,15 +71,15 @@ test("lightweight discovery HTTP routes expose categories, search and exact desc
   const root = `http://127.0.0.1:${address.port}`;
   t.after(async () => { await operation.dispose(); await discovery.dispose(); server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); });
   const categories = await (await fetch(root + "/api/agent/categories")).json();
-  assert.equal(categories.code, 0); assert.equal(categories.data.categories.find((row: { id: string }) => row.id === "messages").count, 1);
+  assert.equal(categories.code, 0); assert.equal(categories.data.resultScope, "api-categories"); assert.match(categories.data.usageHint, /not a business resource list/); assert.equal(categories.data.categories.find((row: { id: string }) => row.id === "messages").count, 1);
   assert.equal(categories.data.categories.find((row: { id: string }) => row.id === "messages.qq").parentId, "messages");
   const response = await fetch(root + "/api/agent/operations?category=messages&query=" + encodeURIComponent("QQ 群消息") + "&provider=napcat&method=post&owner=example&pathPrefix=%2Fapi%2Fexample");
   assert.equal(response.status, 200);
-  const page = await response.json(); assert.equal(page.data.count, 1); assert.equal(page.data.items[0].operationId, "fixture.group.history");
+  const page = await response.json(); assert.equal(page.data.resultScope, "api-operations"); assert.match(page.data.usageHint, /Totals count matching APIs/); assert.equal(page.data.count, 1); assert.equal(page.data.items[0].operationId, "fixture.group.history");
   assert.equal(page.data.items[0].title, "读取群聊历史"); assert.equal(Object.hasOwn(page.data.items[0], "contract"), false);
   assert.equal((await fetch(response.url, { headers: { "if-none-match": response.headers.get("etag")! } })).status, 304);
   const detail = await (await fetch(root + page.data.items[0].describe.path)).json();
-  assert.equal(detail.data.operation.id, "fixture.group.history"); assert.ok(detail.data.operation.contract.request); assert.equal(Object.hasOwn(detail.data.operation, "help"), false);
+  assert.equal(detail.data.resultScope, "api-operation-description"); assert.equal(detail.data.operation.id, "fixture.group.history"); assert.ok(detail.data.operation.contract.request); assert.equal(Object.hasOwn(detail.data.operation, "help"), false);
   assert.equal(detail.data.operation.discovery.inputSources[0].valuePath, "/id");
   const input = await (await fetch(root + page.data.items[0].describe.path + "?view=input")).json();
   assert.ok(input.data.operation.request); assert.equal(Object.hasOwn(input.data.operation, "contract"), false);

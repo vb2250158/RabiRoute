@@ -6,7 +6,7 @@
 
 # CLI 与 MCP 统一接口
 
-CLI、MCP、DSH 和手机工具共用 operation SDK，通过现有 HTTP、SSE 或 WebSocket 调用 Manager 与业务插件。Agent 可发现并调用当前运行版提供的全部对外业务与管理接口。分类用于查找能力，实际调用仍由原连接和业务 owner 执行。
+CLI 与 MCP 共用 operation SDK，通过现有 HTTP、SSE 或 WebSocket 调用 Manager 与业务插件。DSH、手机和其他宿主通过已有通用 HTTP、CLI 或 MCP 工具转接同一目录、schema 与执行 owner。Agent 可发现并调用当前运行版的全部公共业务与管理接口；已配置且鉴权的连接默认可用，用户显式限制由对应配置解释。
 
 状态为本批源码实现。最终构建、安装和实际运行范围随对应发布验收记录确认。
 
@@ -28,7 +28,7 @@ node apps/rabi-agent/rabi-cli.mjs call agent.qq.history.read --input-file reques
 node apps/rabi-agent/rabi-cli.mjs search "聊天历史" --config /private/rabi-agent.json --agent-type codex --id <完整会话ID>
 ```
 
-MCP 默认目录展示六个工具，参数与 CLI 使用同一模型。
+标准 MCP 默认目录展示六个工具，参数与 CLI 使用同一模型。已有通用 HTTP、CLI 或 MCP 工具的宿主直接转接公共合同，无须另注册这六个原生工具或复刻业务接口；宿主从同源目录取得短提示，负责协议转接与呈现。
 
 | 工具 | 用途 |
 | --- | --- |
@@ -53,7 +53,9 @@ MCP 默认目录展示六个工具，参数与 CLI 使用同一模型。
 | `automation` | 规则、定时事件、Hook 与执行记录 |
 | `runtime` | Rabi 插件安装卸载、版本、启停、状态与诊断 |
 
-插件在 operation definition 的 `discovery` 中登记分类、标题、关键词和 provider。自定义分类保留稳定 ID、可选父类和插件归属，随活动快照更新。缺少分类的公开接口仍能通过全局搜索找到。跨类标签和相关操作引用同一个 operation。
+插件在 operation definition 的 `discovery` 中登记分类、标题、关键词和 provider，显式声明优先。既有 API 缺少中文导航字段时，在公共发现插件的基础导航数据补齐，保留原执行合同、schema、owner 和权限，不为搜索虚构接口。自定义分类保留稳定 ID、可选父类和插件归属，随活动快照更新。缺少分类的公开接口仍能通过全局搜索找到。跨类标签和相关操作引用同一个 operation。
+
+`category` 用于筛选范围，搜索按真实标题、关键词和短语相关性匹配；中英文同义组在 query 侧展开，不把整类词注入该分类的每个 operation。目录 `provider` 表示能力提供方；模型厂商在文档中称为 ModelProvider，原 wire 字段保持不变。
 
 ## HTTP 发现合同
 
@@ -63,9 +65,15 @@ MCP 默认目录展示六个工具，参数与 CLI 使用同一模型。
 | `GET /api/agent/operations` | `data.items` 短摘要、`count`、`total` 和 `nextCursor` |
 | `GET /api/agent/operations/:operationId?view=input` | `data.operation` 的输入合同、参数来源和相关操作 |
 
-列表接受 `category`、`query`、`provider`、`owner`、`method`、`pathPrefix`、`limit` 和 `cursor`。默认每页 20 条，`limit` 支持 1–200。关键词覆盖 ID、alias、标题、摘要、分类、路径及声明的词。游标绑定原快照和筛选条件，409 后重新发现当前页。
+列表接受 `category`、`query`、`provider`、`owner`、`method`、`pathPrefix`、`limit` 和 `cursor`。默认每页 20 条，`limit` 支持 1–200。关键词覆盖 ID、alias、标题、摘要、路径及声明的词，分类字段负责范围筛选。游标绑定原快照和筛选条件，409 后重新发现当前页。
 
 响应携带 `schemaVersion`、Manager 身份、`pluginGenerationId`、`catalogRevision` 与 `catalogDigest`。完整兼容帮助 `/api/agent/help` 和 OpenAPI 导出仍可使用。日常发现使用短摘要和单项 describe。
+
+## 从接口能力读到业务资源
+
+`categories`、`list` 和 `search` 返回接口能力。列表中的 `total` 是匹配接口数，不是电脑数、消息数或计划数。先用“电脑列表”“群历史”等场景词找到真实接口，describe 取得输入与 `inputSources`，再调用业务目录读取设备、在线状态或消息。空搜索和空终端会话列表不能证明没有设备控制能力。
+
+DSH 通用 HTTP 桥同样可执行上述三个发现 GET；已有桥接工具配合同源短提示即可使用公共业务。Rabi 读取 Codex/DSH 原生会话、历史、Codex Desktop owner 或 DSH 原生插件管理，则由对应平台 adapter 接入真实 owner。两条调用方向的职责见 [标准 Agent 端接入需求](agent-adapter-standard-requirements.md)。
 
 ## 同一输入与请求身份
 
@@ -127,7 +135,7 @@ Codex 历史保留原事件、工具 ID、物理序号和返回游标，普通 J
 
 发现元数据随活动 registry snapshot 发布。分类和关键词更新目录 revision，执行合同变化更新 `contractDigest`。SDK 缓存单项合同，并在目录事件、重连或身份变化后刷新。
 
-界面、CLI 和 MCP 使用同源查询验证列表、全文、关联记录、群成员、图片和合并转发的 ID、字段与分页覆盖。单项异常在所属项报告，健康数据继续可查询。实际安装版本与外部宿主工具加载以对应发布和运行验收为准。
+界面、CLI 和 MCP 使用同源查询验证列表、全文、关联记录、群成员、图片和合并转发的 ID、字段与分页覆盖。单项异常在所属项报告，健康数据继续可查询。实际安装版本与外部宿主工具加载以对应发布和运行验收为准。验收同时记录实际宿主 tools、加载提示和 adapter 版本，用“电脑列表”“群历史”等关键词发现真实 API 并读取业务资源；HTTP 200、Host 版本和 source build 分别只证明各自范围。
 
 ## 旧数据升级
 

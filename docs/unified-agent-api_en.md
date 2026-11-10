@@ -6,7 +6,7 @@ English | <a href="./unified-agent-api.md">简体中文</a>
 
 # Unified CLI and MCP API
 
-CLI, MCP, DSH and mobile tools share the operation SDK. It calls Manager and business plugins over the existing HTTP, SSE or WebSocket transports. Agents can discover and invoke every public business and management operation provided by the running version. Categories help locate capabilities. The original connection and business owner execute each call.
+CLI and MCP share the operation SDK, calling Manager and business plugins over existing HTTP, SSE or WebSocket transports. DSH, mobile and other hosts forward the same catalog, schema and execution owner through their generic HTTP, CLI or MCP tools. Agents can discover and invoke every public business and management operation in the running version. Configured, authenticated connections work by default; explicit user restrictions are explained by their configuration.
 
 This describes the current source implementation. Build, installation and live coverage are confirmed by the corresponding release acceptance.
 
@@ -28,7 +28,7 @@ An enrolled remote computer uses the same entry with its original private connec
 node apps/rabi-agent/rabi-cli.mjs search "chat history" --config /private/rabi-agent.json --agent-type codex --id <full-session-id>
 ```
 
-The default MCP catalog presents six tools using the same model as CLI.
+The standard MCP catalog presents six tools using the same model as CLI. Hosts with generic HTTP, CLI or MCP tools forward the public contracts directly without adding these six native tools or rebuilding business interfaces. Hosts obtain short hints from the same catalog and handle protocol adaptation and presentation.
 
 | Tool | Purpose |
 | --- | --- |
@@ -53,7 +53,9 @@ Read a summary, select an operation and inspect `view=input`. `view=result` desc
 | `automation` | Rules, schedules, events, Hooks and execution records |
 | `runtime` | Rabi plugin installation/removal, versions, lifecycle, status and diagnostics |
 
-Plugins declare categories, titles, keywords and providers in an operation definition's `discovery`. Custom categories retain stable IDs, optional parents and plugin ownership. Public operations without category metadata remain globally searchable. Cross-category tags and related-operation links refer to the same operation.
+Plugins declare categories, titles, keywords and providers in an operation definition's `discovery`; explicit declarations take precedence. Missing Chinese navigation fields for existing APIs belong in the public discovery plugin's base navigation data. This preserves executable contracts, schemas, owners and permissions without inventing APIs for search. Custom categories retain stable IDs, optional parents and plugin ownership. Public operations without category metadata remain globally searchable. Cross-category tags and related-operation links refer to the same operation.
+
+`category` filters scope. Search matches actual titles, keywords and relevant phrases; Chinese/English synonym groups expand on the query side rather than adding every category term to each operation. Catalog `provider` identifies a capability provider. Documentation calls a model vendor ModelProvider; wire fields remain unchanged.
 
 ## HTTP discovery contract
 
@@ -63,9 +65,15 @@ Plugins declare categories, titles, keywords and providers in an operation defin
 | `GET /api/agent/operations` | Short `data.items`, `count`, `total` and `nextCursor` |
 | `GET /api/agent/operations/:operationId?view=input` | Input contract, parameter sources and related operations in `data.operation` |
 
-List filters are `category`, `query`, `provider`, `owner`, `method`, `pathPrefix`, `limit` and `cursor`. Pages default to 20 items and support `limit` 1–200. Search covers IDs, aliases, titles, summaries, categories, paths and declared keywords. A cursor binds its original snapshot and filters. After a 409, discover a current page.
+List filters are `category`, `query`, `provider`, `owner`, `method`, `pathPrefix`, `limit` and `cursor`. Pages default to 20 items and support `limit` 1–200. Search covers IDs, aliases, titles, summaries, paths and declared keywords; categories filter scope. A cursor binds its original snapshot and filters. After a 409, discover a current page.
 
 Responses include `schemaVersion`, Manager identity, `pluginGenerationId`, `catalogRevision` and `catalogDigest`. The compatible complete help at `/api/agent/help` and OpenAPI export remain available. Normal discovery uses short summaries and a single-operation description.
+
+## From API capabilities to business resources
+
+`categories`, `list` and `search` return API capabilities. List `total` counts matching operations, not computers, messages or plans. Find a real operation with scenario terms such as “computer list” or “group history”, read its input and `inputSources`, then call its business directory for devices, online status or messages. An empty search or terminal-session list does not establish that device-control capabilities are absent.
+
+The DSH HTTP bridge can make the same three discovery GET requests. An existing bridge plus short hints from the catalog provides public business access. When Rabi reads Codex/DSH native sessions, history, the Codex Desktop owner or DSH-native plugin management, its platform adapter reaches the real owner. See [Standard Agent Adapter Requirements](agent-adapter-standard-requirements_en.md) for both directions.
 
 ## Shared input and request identity
 
@@ -127,7 +135,7 @@ The memory-and-Skill template reads memories, compares existing Skills, updates 
 
 Discovery metadata is published with the active registry snapshot. Category and keyword changes update the catalog revision. Executable contract changes update `contractDigest`. SDK caches single-operation contracts and refreshes after catalog events, reconnects or identity changes.
 
-Verify UI, CLI and MCP against the same sources for lists, full text, related records, members, images and merged forwards. Compare IDs, fields and paging coverage. Report an individual failure in its own scope while healthy data remains queryable. Installed versions and external-host tool loading are confirmed by their release and runtime acceptance.
+Verify UI, CLI and MCP against the same sources for lists, full text, related records, members, images and merged forwards. Compare IDs, fields and paging coverage. Report an individual failure in its own scope while healthy data remains queryable. Installed versions and external-host tool loading are confirmed by their release and runtime acceptance. Record actual host tools, loaded hints and adapter versions. Scenario searches such as “computer list” and “group history” must locate real APIs and read business resources. HTTP 200, a Host version and a source build establish only their respective scopes.
 
 ## Legacy-data upgrades
 

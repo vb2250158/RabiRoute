@@ -162,7 +162,7 @@
     {
       "id": "manager:agent-communication",
       "package": "io.rabiroute.manager.agent-communication",
-      "version": "0.1.4",
+      "version": "0.1.5",
       "enabled": true,
       "config": {},
       "grants": []

@@ -18,7 +18,7 @@ export type ApiOperationFilters = Readonly<{
 }>;
 type IndexedOperation = Readonly<{
   operation: ApiPublishedOperation; summary: ApiOperationSummary; discovery: ApiOperationDiscovery & { issues?: readonly string[] };
-  searchable: string;
+  searchable: string; searchFields: readonly Readonly<{ value: string; weight: number }>[];
 }>;
 export type ApiDiscoveryIndex = Readonly<{
   categories: readonly ApiDiscoveryCategoryView[];
@@ -27,14 +27,58 @@ export type ApiDiscoveryIndex = Readonly<{
 }>;
 
 const categoryDefinitions = [
-  { id: "messages", title: "消息", description: "消息连接、会话、聊天记录、发送与消息附件", keywords: "消息 群聊 私聊 QQ 群消息 群历史 聊天记录 历史消息 chat message" },
-  { id: "agents", title: "Agent 协作", description: "Agent 软件、执行会话、投递、续投和回执", keywords: "Agent 会话 线程 任务投递 回复 回执 软件 登录 agent task thread receipt" },
-  { id: "knowledge", title: "记忆与计划", description: "持久计划、步骤、记忆、知识和计划材料", keywords: "记忆 计划 知识 技能 memory knowledge plan" },
-  { id: "devices", title: "电脑与设备", description: "电脑、终端、文件系统、屏幕和设备能力", keywords: "设备 电脑 屏幕 终端 文件 操作 terminal file computer device" },
-  { id: "settings", title: "角色与 Rabi 配置", description: "人格、全局设置和配置定义", keywords: "配置 设置 人格 角色 settings configuration persona" },
-  { id: "automation", title: "自动化", description: "规则、触发条件、定时事件与调度记录", keywords: "自动化 规则 定时 调度 触发 schedule automation rule" },
-  { id: "runtime", title: "插件与运行", description: "Host、插件生命周期、运行状态、诊断与性能", keywords: "插件 运行 状态 诊断 性能 安装 plugin runtime diagnostics performance" }
+  { id: "messages", title: "消息", description: "消息连接、会话、聊天记录、发送与消息附件" },
+  { id: "agents", title: "Agent 协作", description: "Agent 软件、执行会话、投递、续投和回执" },
+  { id: "knowledge", title: "记忆与计划", description: "持久计划、步骤、记忆、知识和计划材料" },
+  { id: "devices", title: "电脑与设备", description: "电脑、终端、文件系统、屏幕和设备能力" },
+  { id: "settings", title: "角色与 Rabi 配置", description: "人格、全局设置和配置定义" },
+  { id: "automation", title: "自动化", description: "规则、触发条件、定时事件与调度记录" },
+  { id: "runtime", title: "插件与运行", description: "Host、插件生命周期、运行状态、诊断与性能" }
 ] as const;
+
+/** Navigation defaults for existing native operations. The active registry owns execution;
+ * explicit per-operation discovery overrides these defaults. No operation is registered here.
+ */
+const builtinApiNavigation: Readonly<Record<string, ApiOperationDiscovery>> = Object.freeze({
+  "manager.rabilink.peer.servers.read": {
+    title: "电脑列表与远程主机连接",
+    summary: "查询 Rabi 主机目录及连接状态，使用 deviceId 定位主机。一台主机可有多个当前 Manager 执行实例；执行实例和登记 SDK 节点目录分别查询，不合并计作电脑数。",
+    category: { id: "devices", title: "电脑与设备" },
+    keywords: ["电脑列表", "电脑连接", "远程电脑", "computer list", "remote computers"],
+    relatedOperations: ["manager.rabilink.peer.http.get", "manager.lan-agent.instances.list", "manager.lan-agent.nodes.list"]
+  },
+  "manager.lan-agent.instances.list": {
+    title: "当前 Manager 的执行节点列表（本机及已接入）",
+    summary: "查询当前 Manager 的本机与已接入执行实例，使用 instanceId 访问该实例能力。此目录不是 Rabi 主机目录，也不是登记 SDK 节点版本目录。",
+    category: { id: "devices", title: "电脑与设备" },
+    keywords: ["执行节点", "本机电脑", "computer instances"],
+    relatedOperations: ["manager.rabilink.peer.servers.read", "manager.lan-agent.nodes.list", "manager.lan-agent.terminals.list"]
+  },
+  "manager.lan-agent.nodes.list": {
+    title: "查询登记 SDK 节点与版本",
+    summary: "查询登记 SDK 节点、nodeId 与版本状态。主机目录和当前 Manager 执行实例目录分别查询。",
+    category: { id: "devices", title: "电脑与设备" },
+    keywords: ["SDK 节点", "登记节点", "节点版本", "registered SDK nodes"],
+    relatedOperations: ["manager.rabilink.peer.servers.read", "manager.lan-agent.instances.list"]
+  },
+  "manager.rabilink.peer.http.get": {
+    title: "读取远程 Rabi 主机服务接口",
+    summary: "从 Rabi 主机目录取得 deviceId，再按当前执行合同提供 service 和 path，读取对应主机服务。",
+    category: { id: "devices", title: "电脑与设备" },
+    keywords: ["远程主机服务", "peer HTTP", "remote host service"],
+    inputSources: [{ field: "path.deviceId", operationId: "manager.rabilink.peer.servers.read", resultPath: "/peers", valuePath: "/deviceId" }],
+    relatedOperations: ["manager.rabilink.peer.servers.read"]
+  },
+  "manager.lan-agent.terminals.list": {
+    title: "查询执行实例的终端与可用 Shell",
+    summary: "使用执行实例目录的 instanceId 查询终端；sessions 为空表示当前没有终端会话，不表示缺少控制能力，shells 列出可用 Shell。",
+    category: { id: "devices", title: "电脑与设备" },
+    keywords: ["终端", "terminal", "shell", "终端会话"],
+    inputSources: [{ field: "path.instanceId", operationId: "manager.lan-agent.instances.list", resultPath: "/instances", valuePath: "/instanceId" }],
+    relatedOperations: ["manager.lan-agent.instances.list", "manager.lan-agent.terminals.execute"]
+  }
+});
+
 const fallbackCategories = [
   { id: "automation", pattern: /automation|scheduled|heartbeat/i },
   { id: "knowledge", pattern: /\/(?:knowledge|memory|plans|skills|diary)(?:\/|$)|(?:^|\.)knowledge\.|(?:^|\.)memory\.|(?:^|\.)plans\./i },
@@ -43,6 +87,15 @@ const fallbackCategories = [
   { id: "agents", pattern: /\/agent\/(?:threads|requests)|\/remote-agent|\/agent-adapters|\/scan\/agents|\.agent\.|agent-communication|\/lan-agent\/(?:instances|nodes|agents)/i },
   { id: "settings", pattern: /\/roles(?:\/|$)|\/personas(?:\/|$)|\/configuration|\/settings|\/gateways|\/network-options|\/config(?:\/|$)/i }
 ] as const;
+// Expand only the query's exact words; categories never inject terms into operations.
+const querySynonyms: ReadonlyMap<string, readonly string[]> = new Map([
+  ["记忆", ["memory", "memories"]], ["计划", ["plan", "plans"]], ["技能", ["skill", "skills"]],
+  ["文件", ["file", "files", "filesystem"]], ["终端", ["terminal", "terminals", "shell"]],
+  ["屏幕", ["screen", "screenshot"]], ["窗口", ["window"]], ["插件", ["plugin", "plugins"]],
+  ["角色", ["role", "persona"]], ["配置", ["config", "settings"]], ["设置", ["config", "settings"]],
+  ["消息", ["message", "chat"]], ["语音", ["speech", "voice"]], ["视频", ["video"]],
+  ["电脑", ["computer", "computers"]], ["设备", ["device", "devices"]]
+]);
 const snapshotIndexes = new WeakMap<ApiCatalogSnapshot, ApiDiscoveryIndex>();
 const filterResults = new WeakMap<ApiDiscoveryIndex, Map<string, readonly IndexedOperation[]>>();
 const normalize = (value: string) => value.normalize("NFKC").toLowerCase();
@@ -54,7 +107,7 @@ function requiredFields(schema: ApiSchema | undefined): readonly string[] {
 }
 
 function captureNavigation(operation: ApiPublishedOperation) {
-  const metadata = operation.discovery ?? {};
+  const metadata = { ...builtinApiNavigation[operation.contract.operationId], ...operation.discovery };
   const issues = [...(operation.discoveryIssues ?? [])];
   const strings = (key: "tags" | "keywords" | "relatedOperations") => {
     const value = metadata[key];
@@ -169,12 +222,20 @@ function* buildDiscoveryIndex(snapshot: ApiCatalogSnapshot): Generator<void, Api
         headers: requiredFields(contract.request.headers), body: contract.request.body.kind === "json" ? requiredFields(contract.request.body.schema) : [] },
       describe: { method: "GET", path: `/api/agent/operations/${encodeURIComponent(contract.operationId)}` },
       ...(issues.length ? { discoveryIssues: issues } : {}) };
-    const categoryWords = categoryDefinitions.find(category => category.id === navigation.categoryId)?.keywords ?? "";
     freezeApiData(summary);
     freezeApiData(discovery);
-    const indexed = Object.freeze({ operation, summary, discovery,
-      searchable: normalize([contract.operationId, ...(contract.aliases ?? []), navigation.title, navigation.summary,
-        contract.pathTemplate, navigation.categoryId, categoryWords, ...navigation.tags, ...navigation.keywords].join(" ")) });
+    // Categories narrow the catalog; only an operation's own metadata makes it relevant to a query.
+    const searchFields = Object.freeze([
+      { value: contract.operationId, weight: 128 },
+      ...(contract.aliases ?? []).map(value => ({ value, weight: 96 })),
+      { value: navigation.title, weight: 64 },
+      ...navigation.keywords.map(value => ({ value, weight: 24 })),
+      ...navigation.tags.map(value => ({ value, weight: 16 })),
+      { value: contract.pathTemplate, weight: 8 },
+      { value: navigation.summary, weight: 2 }
+    ].map(field => Object.freeze({ ...field, value: normalize(field.value) })));
+    const indexed = Object.freeze({ operation, summary, discovery, searchFields,
+      searchable: searchFields.map(field => field.value).join(" ") });
     byId.set(contract.operationId, indexed);
     for (const alias of contract.aliases ?? []) byId.set(alias, indexed);
     operations.push(indexed);
@@ -235,18 +296,45 @@ function filteredOperations(index: ApiDiscoveryIndex, filters: ApiOperationFilte
   if (!cache) { cache = new Map(); filterResults.set(index, cache); }
   const cached = cache.get(key);
   if (cached) return cached;
-  const terms = normalize(filters.query ?? "").split(/\s+/u).filter(Boolean);
-  const matches = index.operations.filter(item => (!filters.category || belongsToCategory(index, item.summary.categoryId, filters.category))
+  const query = normalize(filters.query ?? "").trim().replace(/\s+/gu, " ");
+  const terms = query.split(" ").filter(Boolean).map(literal => {
+    const aliases = querySynonyms.get(literal);
+    return { literal, alternatives: aliases ? new RegExp(`(?:^|[^a-z0-9])(?:${aliases.join("|")})(?=$|[^a-z0-9])`, "u") : undefined };
+  });
+  let matches = index.operations.filter(item => (!filters.category || belongsToCategory(index, item.summary.categoryId, filters.category))
     && (!filters.provider || item.summary.provider === filters.provider)
     && (!filters.owner || item.operation.owner.instanceId === filters.owner)
     && (!filters.method || item.summary.method === filters.method || item.summary.method === "*")
     && (!filters.pathPrefix || item.summary.pathTemplate.startsWith(filters.pathPrefix))
-    && terms.every(term => item.searchable.includes(term)));
-  if (terms.length) matches.sort((left, right) => {
-    const score = (item: IndexedOperation) => terms.reduce((sum, term) => sum + (normalize(item.summary.operationId) === term ? 4 : 0)
-      + (normalize(item.summary.title).includes(term) ? 2 : 0), 0);
-    return score(right) - score(left) || left.summary.operationId.localeCompare(right.summary.operationId);
-  });
+    && terms.every(term => item.searchable.includes(term.literal) || term.alternatives?.test(item.searchable)));
+  if (terms.length) {
+    const ranked = matches.map(item => {
+      let score = 0, literalMatches = 0;
+      for (const term of terms) {
+        let strongest = 0;
+        for (const field of item.searchFields) {
+          if (field.value.includes(term.literal)) strongest = Math.max(strongest, field.weight * (field.value === term.literal ? 2 : 1));
+        }
+        if (strongest) literalMatches++;
+        else if (term.alternatives) {
+          for (const field of item.searchFields) {
+            if (term.alternatives.test(field.value)) strongest = Math.max(strongest, field.weight);
+          }
+        }
+        score += strongest;
+      }
+      let phraseScore = 0;
+      if (terms.length > 1) {
+        for (const field of item.searchFields) {
+          if (field.value.includes(query)) phraseScore = Math.max(phraseScore, field.weight);
+        }
+      }
+      return { item, score, literalMatches, phraseScore };
+    });
+    ranked.sort((left, right) => right.phraseScore - left.phraseScore || right.literalMatches - left.literalMatches || right.score - left.score
+      || left.item.summary.operationId.localeCompare(right.item.summary.operationId));
+    matches = ranked.map(result => result.item);
+  }
   if (cache.size >= 64) cache.delete(cache.keys().next().value!);
   cache.set(key, matches);
   return matches;
