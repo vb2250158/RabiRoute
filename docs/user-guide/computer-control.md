@@ -49,3 +49,5 @@ node apps/rabi-agent/rabi-cli.mjs describe manager.lan-agent.computer.execute --
 控制、输入和标注沿现有 `POST /api/lan-agent/instances/:instanceId/computer` 的 `body.action` 执行。`control.status` 等动作不是另外的 operation ID；原请求编号用于查询已提交的结果，不自动重放输入。设置通过同目标 `GET/PATCH .../computer-settings` 与原 ETag 保存。
 
 [统一接口](../unified-agent-api.md) · [实现设计](../computer-control-design.md)
+
+动态标注的默认内存预算为 512 MiB，覆盖 KCF 组件加载后的正常运行开销；预算统计整个标注执行进程。已保存的自定义预算保持原值，动态跟踪仍默认关闭。

@@ -49,3 +49,5 @@ A full remote host row includes `ownerDeviceId`. Read that host's own contract a
 Control, input and annotation actions share `POST /api/lan-agent/instances/:instanceId/computer` through `body.action`. Actions such as `control.status` are not additional operation IDs. Preserve the original request ID for result queries; input is never automatically replayed. Settings use the same target's `GET/PATCH .../computer-settings` and original ETag.
 
 [Unified interfaces](../unified-agent-api_en.md) · [Implementation design](../computer-control-design_en.md)
+
+Dynamic annotation has a default memory budget of 512 MiB to cover normal operation after loading KCF; the budget covers the whole annotation executor process. Saved custom budgets retain their values, and dynamic tracking remains off by default.

@@ -6,6 +6,11 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.13.1 - 2026-11-11
+
+- Fix KCF tracking pausing after first enablement because its default memory budget was below the stable executor footprint. Raise the default from 256 MiB to 512 MiB while preserving explicit user budgets and scoped pausing; dynamic tracking remains disabled by default.
+- Align shared settings, Native and KCF defaults; release `io.rabiroute.manager.core` 0.1.5 and Windows lightweight SDK 0.4.1. Host API 1.9 contracts and standalone CLI/MCP behavior remain unchanged.
+
 ## 0.13.0 - 2026-11-11
 
 - `io.rabiroute.manager.core` `0.1.4` adds a separate Computer control tab with local PCs, full hosts and nodes in one flat directory. Target settings retain their original owner, strong ETag and local failure scope. Storage confirmation and unconfirmed executor application remain distinct.

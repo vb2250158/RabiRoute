@@ -33,7 +33,7 @@ export const computerSettingsSchema = freeze({ type: 'object', title: '电脑设
   performance: { type: 'object', title: '性能与资源', additionalProperties: true, properties: {
     mode: { type: 'string', title: '性能模式', enum: ['auto', 'custom'], default: 'auto' },
     maxTargets: { ...number('跟踪目标预算', 8, '个', 1), maximum: 64 }, computeBudgetMs: { ...number('每轮计算预算', 20, '毫秒', 1), maximum: 1000 },
-    memoryBudgetBytes: { ...number('内存预算', 268435456, '字节', 16777216), maximum: 2147483648 }, minRateHz: { ...number('最低频率', 2, '次/秒', 1), maximum: 30 },
+    memoryBudgetBytes: { ...number('内存预算', 536870912, '字节', 16777216), maximum: 2147483648 }, minRateHz: { ...number('最低频率', 2, '次/秒', 1), maximum: 30 },
     minAnalysisWidth: number('最低分析宽度', 320, '像素', 1) } },
   input: { type: 'object', title: '输入与恢复设置', advanced: true, additionalProperties: true, properties: {
     maxActions: { ...number('输入批次上限', 128, '项', 1), maximum: 4096 }, nativeSegmentMs: { ...number('原生输入分段预算', 16, '毫秒', 1), maximum: 100 } } }

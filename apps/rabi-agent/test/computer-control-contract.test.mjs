@@ -30,3 +30,15 @@ test('all thirteen declared desktop actions are discoverable and state reads rem
  for(const name of ['control.status','input.status','annotation.status','annotation.track.status'])assert.equal(isComputerReadOnlyAction(name),true);
  assert.equal(isComputerReadOnlyAction('input.execute'),false); assert.ok(computerResponseSchema.anyOf.length>6);
 });
+
+// The default change must not silently increase a user's saved resource limit.
+test('explicit memory budgets survive unrelated settings changes and discovery defaults', () => {
+ const explicit=256*1024*1024;
+ const saved=normalizeComputerSettings({performance:{memoryBudgetBytes:explicit},annotation:{dynamicEnabled:true}});
+ assert.equal(saved.performance.memoryBudgetBytes,explicit);
+ const changed=patchComputerSettings(saved,{control:{showPointer:false}});
+ assert.equal(changed.performance.memoryBudgetBytes,explicit);
+ assert.equal(changed.annotation.dynamicEnabled,true);
+ assert.equal(normalizeComputerSettings().annotation.dynamicEnabled,false);
+ assert.ok(normalizeComputerSettings().performance.memoryBudgetBytes>explicit);
+});

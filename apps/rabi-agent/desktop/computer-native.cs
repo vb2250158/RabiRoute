@@ -323,7 +323,7 @@ public static class RabiComputer {
         foreach(var item in active){if(total<=maximum)break;item.status["state"]="paused";item.status["effective"]=new{reason="computer-target-budget",maxTargets=maximum,totalTargets=total};StopTracking(item,false,"computer-target-budget");total-=item.targetCount;}
         active.RemoveAll(item=>item.stopped||!item.initialized);if(active.Count==0)return;
         long now=Stopwatch.GetTimestamp();if(memorySampleAt==0||now-memorySampleAt>=Stopwatch.Frequency){using(var process=Process.GetCurrentProcess())sampledNativePrivateBytes=process.PrivateMemorySize64;memorySampleAt=now;memorySampleUtc=DateTime.UtcNow;}
-        bool memory=sampledNativePrivateBytes>Num(performance,"memoryBudgetBytes",268435456),compute=cycleMs>Num(performance,"computeBudgetMs",20);
+        bool memory=sampledNativePrivateBytes>Num(performance,"memoryBudgetBytes",536870912),compute=cycleMs>Num(performance,"computeBudgetMs",20);
         foreach(var item in active)item.status["computerBudget"]=new{scope="native-helper-process",totalTargets=total,cycleMs=cycleMs,nativePrivateBytes=sampledNativePrivateBytes,memorySampledAt=memorySampleUtc.ToString("o")};
         if(!memory&&!compute){budgetOverruns=0;return;}if(++budgetOverruns<3)return;budgetOverruns=0;
         active.Sort((a,b)=>b.lastCostMs.CompareTo(a.lastCostMs));var selected=active[0];

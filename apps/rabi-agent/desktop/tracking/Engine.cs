@@ -35,7 +35,7 @@ namespace RabiComputerTracking {
         static IEnumerable Items(object value){return value as IEnumerable??new object[0];}
         readonly List<Target> targets=new List<Target>();
         string id,layerId,backend,state="initializing";double expansion=2,threshold=.82,ambiguity=.05,rate=10,minRate=2,budget=20;
-        int maximumWidth=1280,minWidth=320,verifyEvery=10,lostAfter=2,steps,overBudget,rawWidth,rawHeight;bool updateTemplate,automatic=true,disposed;double predictionMs,smoothing;long memoryBudget=268435456;
+        int maximumWidth=1280,minWidth=320,verifyEvery=10,lostAfter=2,steps,overBudget,rawWidth,rawHeight;bool updateTemplate,automatic=true,disposed;double predictionMs,smoothing;long memoryBudget=536870912;
         readonly Stopwatch runtime=Stopwatch.StartNew();int measuredFrames,analysisWidth,configuredWidth,maxTargets=8;double configuredRate,requestedRate;string requestedBackend;bool overrideRate,overrideBackend;
         public Dictionary<string,object> Start(Dictionary<string,object> request,byte[] original,int width,int height,Dictionary<string,object> originalSource,byte[] current,int currentWidth,int currentHeight,Dictionary<string,object> currentSource){
             id=Str(request,"trackingId");layerId=Str(request,"layerId");backend=Str(request,"backend","kcf");if(backend!="kcf"&&backend!="template")throw new ArgumentException("Only kcf and template CPU backends are implemented.");
@@ -74,7 +74,7 @@ namespace RabiComputerTracking {
             configuredRate=nextRate;configuredWidth=nextWidth;automatic=nextAutomatic;
             expansion=Num(config,"searchExpansion",2);threshold=Num(config,"matchThreshold",.82);ambiguity=Num(config,"ambiguityMargin",.05);
             verifyEvery=(int)Num(config,"verifyEveryFrames",10);lostAfter=(int)Num(config,"lostAfterFrames",2);updateTemplate=Bool(config,"updateTemplate");
-            predictionMs=Num(config,"predictionMs",0);smoothing=Num(config,"smoothing",0);memoryBudget=(long)Num(performance,"memoryBudgetBytes",268435456);
+            predictionMs=Num(config,"predictionMs",0);smoothing=Num(config,"smoothing",0);memoryBudget=(long)Num(performance,"memoryBudgetBytes",536870912);
             minRate=Math.Min(rate,Num(performance,"minRateHz",2));minWidth=(int)Num(performance,"minAnalysisWidth",320);budget=Num(performance,"computeBudgetMs",20);maxTargets=(int)Num(performance,"maxTargets",8);
         }
         public Dictionary<string,object> ApplyBudget(string reason){
