@@ -317,7 +317,7 @@ export function createWeComAdapter(
         }
         const message = normalizeWeComError(error);
         patchWeComStatus({ status: "error", connected: false, authenticated: false, lastError: message, message }, lifecycle.dataDir(), lifecycle.now());
-        appendWeComRuntimeLog(lifecycle, { level: "error", event: "activation_failed", message });
+        appendWeComRuntimeLog(lifecycle, { level: "error", event: "activation_failed", message, error });
         throw error;
       }
     }

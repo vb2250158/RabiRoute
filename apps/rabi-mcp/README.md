@@ -21,6 +21,8 @@
 - `RABIROUTE_HOST_EXE` 可选。本机 Host 路径未设置时，入口使用标准安装位置和当前运行 Host 发现。
 - `RABI_MCP_ALLOWED_ROLES` 可选 JSON 字符串数组。未设置时支持全部角色，显式名单仅限制该配置范围。
 - `RABI_MCP_ALLOW_WRITES` 默认 `true`。显式 `false` 按当前 operation effects 关闭状态变更调用，并报告具体配置。
+- `RABI_MCP_MAX_SESSIONS` 默认 `16`，控制同时活跃的流和 WebSocket 会话数。
+- `RABI_MCP_MAX_SESSION_BYTES` 默认 `1048576`，控制每个会话的帧队列水位；读取后继续接收，单个合法大帧可进入空队列。未读完结结果达到保留预算时，先读取或关闭结果。两项均在 MCP 启动环境配置正整数。
 
 目录用于发现。操作仍执行当前连接鉴权、资源语义、CAS 和幂等合同。未知写入保留原编号与载荷并查询原回执。
 

@@ -304,8 +304,9 @@ export class ComputerControlService {
         const id = randomUUID(), settings = this.settings(context, input.action); entry.controlSessionId = id;
         const item = { controlSessionId: id, requestId: input.requestId, source: this.source(context), state: "starting", createdAt: new Date().toISOString(), lastActivityAt: new Date().toISOString(), lastActivityMono: this.now(), context, settingsSnapshot: settings };
         this.session = item;
-        try { item.presentation = await this.native.request("control.begin", { controlSessionId: id, source: item.source, settings }, { beforeSend: () => { if (this.session !== item || item.state !== "starting" || entry.cancelled) throw fault("COMPUTER_SOURCE_CLOSED", "The original control intent ended before native admission."); this.check("control.begin", context); } }); }
+        try { item.presentation = await this.native.request("control.begin", { requestId: input.requestId, controlSessionId: id, source: item.source, settings }, { beforeSend: () => { if (this.session !== item || item.state !== "starting" || entry.cancelled) throw fault("COMPUTER_SOURCE_CLOSED", "The original control intent ended before native admission."); this.check("control.begin", context); } }); }
         catch (error) { item.state = error.uncertain ? "uncertain" : "ended"; if (item.state === "ended") this.endedSessions.set(id, { ...item }); throw error; }
+        if (item.state === "ended" || entry.cancelled || this.session !== item) return this.controlStatus(id);
         if (item.presentation?.state === "ended") this.nativeEnded({ controlSessionId: id, reason: item.presentation.reason });
         else { item.state = "active"; this.touch(item); }
         return this.withCapture(this.controlStatus(id), input, context);

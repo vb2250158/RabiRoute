@@ -85,7 +85,7 @@ export type ManagerOperationalLog = {
   status(): ManagerOperationalLogStatus;
 };
 
-function redactProjectRoot(value: unknown, projectRoot: string): string {
+export function redactProjectRoot(value: unknown, projectRoot: string): string {
   let text = String(value ?? "");
   for (const variant of new Set([projectRoot, projectRoot.replace(/\\/g, "/"), projectRoot.replace(/\//g, "\\")])) {
     if (variant) text = text.split(variant).join("<projectRoot>");

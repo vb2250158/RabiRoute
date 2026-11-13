@@ -67,6 +67,9 @@
 
 - [消息投递模板与归属](message-delivery-templates.md)：开发者查看渲染入口、场景差异和历史回执退出条件。
 - [计划与记忆摘要搜索](knowledge-search.md)
+- [Agent 统一搜索](agent-search-architecture.md) — 发现计划、记忆、聊天记录、操作和设备，并核对来源与覆盖。
+- [角色配置与正文接口](role-configuration-api-contracts.md) — 读取、修改与并发恢复。
+- [角色自动化接口](role-automation-api-contracts.md) — 规则管理、时间点和操作回执。
 - [自动化 Agent 投递](automation-agent-delivery.md) — 接收者引用、指定会话、迁移和重试。
 - [路由配置](routing-configuration.md) — **现行指南**。`personaConfig.json`、route kind、regex、schedule、pipeline 和模板变量。
 - [路由与角色](routing-and-personas.md) — **现行指南**。route 与 role 的边界、角色包和消息模板判断框架。

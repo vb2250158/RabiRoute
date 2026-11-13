@@ -27,6 +27,7 @@ export function createXiaomiHomeManagerOperations(context: XiaomiHomeManagerRout
     return { authority, key: options.key ? owner.key(request) : "" };
   };
   const contract = (name: string, method: ApiMethod, suffix: string, pathSchema: ApiSchema, options: Options): ApiOperationContract => ({
+    ...(name === "resources.list" ? { searchable: { scope: "entities", legend: "家庭设备与实体的状态及动作入口 / device entities", kinds: ["*"] } } : {}),
     operationId: "manager.xiaomi-home." + name, aliases: [`home:${method}:${root}${suffix}`], contractVersion: "1.0.0", method, pathTemplate: root + suffix, exposure: "public", transport: "http",
     description: options.effect ?? `Use the original Xiaomi Home ${name} owner.`,
     request: { path: pathSchema, query: { type: "object", additionalProperties: true, ...(options.query ? { properties: Object.fromEntries(options.query.map(name => [name, { anyOf: [{ type: "string" }, { type: "array", items: { type: "string" } }] }])) } : {}) }, headers: { type: "object", additionalProperties: true, properties: {
@@ -120,5 +121,14 @@ export function createXiaomiHomeManagerOperations(context: XiaomiHomeManagerRout
   };
   proxy("artifact.content", "/artifacts/:artifactId/content", path("artifactId"), input => runtime.artifactAccess.open(input.request, input.path.artifactId));
   for (const operation of ["stream", "frame"] as const) proxy("vacuum-cloud.video-" + operation, cloud + "/video/" + operation, empty, input => runtime.vacuumCloud.video.openStream(input.url.searchParams.get("sessionId") || "", operation === "frame", input.signal), cloudOptions(["sessionId"]));
-  return Object.freeze({ operations: definitions, proxies });
+  return Object.freeze({ operations: definitions, proxies,
+    async searchSnapshot(request: ApiOperationInput["request"], signal: AbortSignal) {
+      const authority = owner.prepare(request, new URL(root + "/devices", "http://manager.invalid"));
+      const assert = () => { signal.throwIfAborted(); authority.assert(); context.assertRuntimeAvailable?.(); };
+      assert();
+      const directory = await runtime.client.listDevices({ ...authority, assert, signal });
+      assert();
+      return directory;
+    }
+  });
 }

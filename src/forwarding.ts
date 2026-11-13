@@ -274,6 +274,7 @@ async function referencedAgentSendersForMessageGroup(
       event: "message_processing_reply_sender_lookup_failed",
       level: "warning",
       message: `Could not resolve the Agent sender for referenced message ${group.replyToMessageId}; routing continues without that preference.`,
+      error,
       data: {
         routeId,
         replyToMessageId: group.replyToMessageId,
@@ -457,6 +458,7 @@ async function deliverPacketToMessageAgent(
         event: "message_processing_board_update_failed",
         level: "warning",
         message: `Message group reached the Agent but its board dispatch state could not be updated requirementId=${canonicalRequirementId}`,
+        error,
         data: { requirementId: canonicalRequirementId, error: error instanceof Error ? error.message : String(error) }
       }, config.dataDir);
     }
@@ -593,6 +595,7 @@ async function heartbeatShouldSkipForBusyAgent(routeKind: ForwardRouteKind, skip
       event: "heartbeat_agent_busy_check_failed",
       level: "warning",
       message: `Heartbeat busy check failed; delivery will continue: ${error instanceof Error ? error.message : String(error)}`,
+      error,
       data: { routeKind }
     }, config.dataDir);
     return false;
@@ -897,6 +900,7 @@ function appendRecordToPersonaConversation(route: RouteProfile, routeKind: Forwa
       event: "message_context_append_failed",
       level: "warning",
       message: `Failed to append persona conversation context route=${route.id}: ${error instanceof Error ? error.message : String(error)}`,
+      error,
       data: { routeKind, routeId: route.id, messageId: record.messageId }
     }, config.dataDir);
     return false;
@@ -1051,6 +1055,7 @@ async function forwardMessageToRouteInternal(
       appendAdapterLogToDir("router", {
         event: "remote_persona_resolve_failed", level: "error",
         message: `Remote persona is unavailable; Agent delivery stopped route=${route.id}`,
+        error,
         data: {
           routeId: route.id, deviceId: route.agentRoleDeviceId, roleId: route.agentRoleId,
           routeKind, messageId: recordId(record),
@@ -1137,6 +1142,7 @@ async function forwardMessageToRouteInternal(
           event: "identity_endpoint_observation_failed",
           level: "warning",
           message: `Could not retain the stable sender as a candidate identity for route=${route.id}`,
+          error,
           data: {
             routeId: route.id,
             routeKind,
@@ -1166,6 +1172,7 @@ async function forwardMessageToRouteInternal(
           event: "conversation_situation_record_failed",
           level: "warning",
           message: `Could not retain a conversation situation for route=${route.id}`,
+          error,
           data: { routeId: route.id, routeKind, error: error instanceof Error ? error.message : String(error) }
         }, roleContext.personaDataDir);
       }
@@ -1417,6 +1424,7 @@ export function forwardMessage(
         event: "delivery_error",
         level: "error",
         message: `Failed to deliver routed message routeKind=${routeKind} messageId=${recordId(record)}`,
+        error,
         data: {
           routeKind,
           messageId: recordId(record),

@@ -335,9 +335,9 @@ test("role file publication emits audit evidence without configuration contents"
   } finally { release(); }
 }));
 
-test("all eight registrations serve authenticated empty bindings and the same local role owner", async () => fixture(async f => {
+test("all role and automation registrations serve authenticated empty bindings and the same local role owner", async () => fixture(async f => {
   const definitions = createRoleConfigurationOperations(f.context);
-  assert.equal(definitions.length, 8);
+  assert.equal(definitions.length, 16);
   assert.ok(definitions.every(definition => definition.prepare && definition.contract.exposure === "public"));
   assert.equal((await f.call("/Example/configuration", "GET", undefined, undefined, false)).response.status, 200);
   const created = await f.call("", "POST", { roleId: "新角色", title: "New role\nTitle" });
@@ -441,7 +441,8 @@ test("multi-file role creation with a publication failure remains uncertain", as
   const inspected = await f.call("/Partial/configuration");
   assert.equal(inspected.response.status, 200);
   const repeated = await f.call("", "POST", { roleId: "Partial", title: "Partial fixture" });
-  assert.equal(repeated.response.status, 500);
+  assert.equal(repeated.response.status, 409);
+  assert.equal(repeated.body.error, "ROLE_EXISTS");
 }));
 
 test("a persisted pending receipt followed by generation change stops the configuration write and recovers only with the original payload", async () => fixture(async f => {

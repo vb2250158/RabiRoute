@@ -585,14 +585,14 @@ export function codexDesktopRolloutContainsDeliveryMarker(threadId: string, mark
   return Boolean(thread?.rolloutPath && rolloutTailContainsMarker(thread.rolloutPath, marker));
 }
 
-export async function codexDesktopDeliveryReceiptConfirmed(threadId: string, deliveryId: string): Promise<boolean> {
+export async function codexDesktopDeliveryReceiptConfirmed(threadId: string, deliveryId: string, signal?: AbortSignal): Promise<boolean> {
   const thread = readCodexDesktopThread(threadId);
   if (!thread?.rolloutPath) return false;
-  return findRolloutDeliveryReceipt(thread.rolloutPath, deliveryId);
+  return findRolloutDeliveryReceipt(thread.rolloutPath, deliveryId, thread.id, signal);
 }
 
-function defaultDeliveryReceiptReader(threadId: string, marker: string): boolean {
-  return codexDesktopRolloutContainsDeliveryMarker(threadId, marker);
+function defaultDeliveryReceiptReader(threadId: string, marker: string, signal?: AbortSignal): Promise<boolean> {
+  return codexDesktopDeliveryReceiptConfirmed(threadId, marker, signal);
 }
 
 export class CodexDesktopBridge {

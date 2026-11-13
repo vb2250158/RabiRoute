@@ -30,7 +30,7 @@
     {
       "id": "manager:persona",
       "package": "io.rabiroute.manager.persona",
-      "version": "0.1.13",
+      "version": "0.1.14",
       "enabled": true,
       "config": {},
       "grants": []
@@ -162,7 +162,7 @@
     {
       "id": "manager:agent-communication",
       "package": "io.rabiroute.manager.agent-communication",
-      "version": "0.1.5",
+      "version": "0.1.6",
       "enabled": true,
       "config": {},
       "grants": []
@@ -221,7 +221,7 @@
     {
       "id": "manager:xiaomi-home",
       "package": "io.rabiroute.manager.xiaomi-home",
-      "version": "0.1.3",
+      "version": "0.1.4",
       "enabled": true,
       "config": {
         "baseUrl": "http://127.0.0.1:8123",
@@ -241,7 +241,7 @@
     {
       "id": "endpoint:napcat",
       "package": "io.rabiroute.endpoint.napcat",
-      "version": "0.1.7",
+      "version": "0.1.8",
       "enabled": true,
       "config": {},
       "grants": []
@@ -249,7 +249,7 @@
     {
       "id": "endpoint:heartbeat",
       "package": "io.rabiroute.endpoint.heartbeat",
-      "version": "0.1.4",
+      "version": "0.1.5",
       "enabled": true,
       "config": {},
       "grants": []
@@ -257,7 +257,7 @@
     {
       "id": "endpoint:wecom",
       "package": "io.rabiroute.endpoint.wecom",
-      "version": "0.1.3",
+      "version": "0.1.4",
       "enabled": true,
       "config": {},
       "grants": []
@@ -273,7 +273,7 @@
     {
       "id": "endpoint:feishu",
       "package": "io.rabiroute.endpoint.feishu",
-      "version": "0.1.3",
+      "version": "0.1.4",
       "enabled": true,
       "config": {},
       "grants": []
@@ -297,7 +297,7 @@
     {
       "id": "endpoint:rabilink",
       "package": "io.rabiroute.endpoint.rabilink",
-      "version": "0.1.3",
+      "version": "0.1.4",
       "enabled": true,
       "config": {},
       "grants": []
@@ -305,7 +305,7 @@
     {
       "id": "agent:codex",
       "package": "io.rabiroute.agent.codex",
-      "version": "0.1.6",
+      "version": "0.1.7",
       "enabled": true,
       "config": {},
       "grants": []

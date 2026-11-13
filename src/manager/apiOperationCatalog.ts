@@ -34,6 +34,7 @@ export type ApiCatalogSnapshot = ApiCatalogIdentity & Readonly<{
   catalogDigest: string;
   etag: string;
   operations: readonly ApiPublishedOperation[];
+  searchSources: readonly Readonly<{ scope: string; legend: string; kinds: readonly string[]; operationId: string }>[];
   /** Includes native transport-control listeners with no public business operation. */
   listeners: readonly ApiPublishedListener[];
   coverage: Readonly<{ scope: "registered-routes"; globalCoverage: "not-proven"; complete: boolean; operationCount: number; gaps: readonly ApiCoverageGap[] }>;
@@ -50,7 +51,7 @@ export function createApiCatalogSnapshot(identity: ApiCatalogIdentity, revision:
     ...(value.binding ? { binding: value.binding } : {}), ...(value.access ? { access: value.access } : {}) })), listeners: activeListeners, gaps });
   const etag = `"${apiDigest({ ...identity, catalogDigest, catalogRevision: revision }).slice(7)}"`;
   return freezeApiData({ ...identity, schemaVersion: "2", catalogRevision: revision, catalogDigest, etag,
-    operations: ordered, listeners: activeListeners, coverage: { scope: "registered-routes", globalCoverage: "not-proven",
+    operations: ordered, searchSources: ordered.filter(value => value.contract.searchable).map(({contract}) => ({...contract.searchable!, operationId:contract.operationId})), listeners: activeListeners, coverage: { scope: "registered-routes", globalCoverage: "not-proven",
       complete: gaps.length === 0, operationCount: ordered.length, gaps: [...gaps] } });
 }
 
@@ -136,6 +137,7 @@ function* projectOpenApi(snapshot: ApiCatalogSnapshot): Generator<void, Readonly
   return { openapi: "3.1.0", jsonSchemaDialect: "https://json-schema.org/draft/2020-12/schema",
     info: { title: "RabiRoute public APIs", version: snapshot.catalogDigest }, paths,
     "x-rabiroute-external-listeners": snapshot.listeners.map(listener => ({ ...listener, paths: externalPaths.get(listener.binding.leaseId) ?? {} })),
+    "x-rabiroute-search-sources":snapshot.searchSources,
     "x-rabiroute-snapshot": { applicationGenerationId: snapshot.applicationGenerationId,
       managerInstanceId: snapshot.managerInstanceId, pluginGenerationId: snapshot.pluginGenerationId,
       catalogRevision: snapshot.catalogRevision, catalogDigest: snapshot.catalogDigest }, "x-rabiroute-coverage": snapshot.coverage };

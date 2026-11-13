@@ -60,7 +60,19 @@ export class NativeComputerClient extends EventEmitter {
         const entry = this.pending.get(message.id); if (!entry) continue;
         this.pending.delete(message.id); clearTimeout(entry.timer);
         if (message.error) entry.reject(Object.assign(new Error(message.error.message ?? String(message.error)), { code: message.error.code, uncertain: message.error.uncertain === true }));
-        else if (message.result?.renderRevision && this.qtAvailable && !this.stopping) void this.qt.shown(message.result.renderRevision).then(() => entry.resolve(message.result), entry.reject);
+        else if (message.result?.renderRevision && this.qtAvailable && !this.stopping) {
+          void this.qt.shown(message.result.renderRevision).then(() => entry.resolve(message.result), error => {
+            if (entry.action !== "control.begin" || message.result.state !== "active" || this.stopping || this.child !== child) {
+              entry.reject(error);
+              return;
+            }
+            // Native admission succeeded. An optional drawing acknowledgement cannot undo it.
+            const { visible, ...accepted } = message.result;
+            const presentationWarning = { code: "COMPUTER_QT_UNAVAILABLE", message: error.message };
+            this.emit("diagnostic", presentationWarning);
+            entry.resolve({ ...accepted, presentationWarning });
+          });
+        }
         else entry.resolve(message.result);
       }
     });
@@ -100,7 +112,7 @@ export class NativeComputerClient extends EventEmitter {
         }
         reject(Object.assign(new Error(action === "input.execute" ? "Native computer result remains unconfirmed; cancellation was requested for the original input intent." : "Native computer result remains unconfirmed; query the original request before continuing."), { code: "COMPUTER_RESULT_UNCERTAIN", uncertain: true, requestId: body.requestId, cancellationRequested: action === "input.execute" }));
       }, timeoutMs);
-      this.pending.set(id, { resolve, reject, timer });
+      this.pending.set(id, { action, resolve, reject, timer });
       this.child.stdin.write(JSON.stringify({ ...body, id, action }) + "\n", error => {
         if (!error || !this.pending.delete(id)) return;
         clearTimeout(timer); reject(Object.assign(error, { code: "COMPUTER_RESULT_UNCERTAIN", uncertain: true }));

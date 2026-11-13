@@ -22,7 +22,7 @@ import {
 } from "./runtime/gatewayCordisRoot.js";
 import path from "node:path";
 import { mountGatewayEndpointPlugins, type GatewayEndpointPluginOptions, type GatewayEndpointPluginRuntime } from "./runtime/gatewayEndpointPlugins.js";
-import { createManagerOperationalLog, installOperationalMutationAuditSink } from "./manager/operationalLog.js";
+import { createManagerOperationalLog, installOperationalMutationAuditSink, managerOperationalError } from "./manager/operationalLog.js";
 
 const GATEWAY_CONTRIBUTION_RUNTIME_KEY = "rabi.runtime.contributions.gateway";
 const GATEWAY_MESSAGE_ADAPTER_RUNTIME_KEY = "rabi.runtime.messageAdapters.gateway";
@@ -182,10 +182,79 @@ export function startGatewayMain(
   return starting;
 }
 
+export type GatewayCrashHandlerOptions = {
+  stateRoot: string;
+  record: (event: string, error: ReturnType<typeof managerOperationalError>) => void;
+  flush: () => Promise<void>;
+  exit: (code: number) => void;
+  writeStderr?: (text: string) => void;
+  crashExitDelayMs?: number;
+};
+
+/**
+ * A Gateway crash must leave its stack behind instead of dying with the process.
+ * Recording and the stderr line both run before the flush, so a failing log sink cannot hide the crash.
+ */
+export function installGatewayCrashHandlers(
+  options: GatewayCrashHandlerOptions,
+  processEvents: Pick<NodeJS.Process, "on" | "removeListener"> = process
+): () => void {
+  const writeStderr = options.writeStderr ?? ((text: string): void => {
+    try {
+      process.stderr.write(text);
+    } catch {
+      // stderr can already be closed while the process is dying.
+    }
+  });
+  let handling = false;
+  const handle = (event: string, error: unknown): void => {
+    if (handling) return;
+    handling = true;
+    const detail = managerOperationalError(error, options.stateRoot);
+    try {
+      options.record(event, detail);
+    } catch {
+      // Diagnostics must not block the crash path.
+    }
+    writeStderr(`[RabiRoute Gateway] ${event}: ${detail?.stack || detail?.message || "unknown error"}\n`);
+    let finished = false;
+    const finish = (): void => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timer);
+      options.exit(1);
+    };
+    // Keep the timer referenced so a stalled flush still exits with a failure code.
+    const timer = setTimeout(finish, options.crashExitDelayMs ?? 2_000);
+    try {
+      void options.flush().then(finish, finish);
+    } catch {
+      finish();
+    }
+  };
+  const onException = (error: Error): void => handle("gateway_uncaught_exception", error);
+  const onRejection = (reason: unknown): void => handle("gateway_unhandled_rejection", reason);
+  processEvents.on("uncaughtException", onException);
+  processEvents.on("unhandledRejection", onRejection);
+  return () => {
+    processEvents.removeListener("uncaughtException", onException);
+    processEvents.removeListener("unhandledRejection", onRejection);
+  };
+}
+
 export async function runGatewayMain(): Promise<void> {
   const operationalLog = createManagerOperationalLog({ rootDir: runtimeLayout.stateRoot });
   const uninstallMutationAuditSink = installOperationalMutationAuditSink(operationalLog, runtimeLayout.stateRoot);
+  const uninstallCrashHandlers = installGatewayCrashHandlers({
+    stateRoot: runtimeLayout.stateRoot,
+    record: (event, error) => {
+      operationalLog.record("error", event, { group: "gateway", source: "gateway", result: "crashed", error });
+    },
+    flush: () => operationalLog.flush(),
+    exit: code => process.exit(code)
+  });
   const flushOperationalLog = (): void => {
+    uninstallCrashHandlers();
     uninstallMutationAuditSink();
     void operationalLog.flush().catch(error => {
       process.stderr.write(`[RabiRoute Gateway operations] failed to flush: ${error instanceof Error ? error.message : String(error)}\n`);
@@ -201,6 +270,7 @@ export async function runGatewayMain(): Promise<void> {
     process.removeListener("SIGINT", flushOperationalLog);
     process.removeListener("SIGTERM", flushOperationalLog);
     process.removeListener("beforeExit", flushOperationalLog);
+    uninstallCrashHandlers();
     uninstallMutationAuditSink();
     await operationalLog.flush();
     throw error;

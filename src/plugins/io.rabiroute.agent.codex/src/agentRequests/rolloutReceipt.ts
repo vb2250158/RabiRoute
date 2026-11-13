@@ -7,7 +7,7 @@ export async function* readRolloutUserMessages(filePath: string, threadId = "", 
   // These IDs need no JSON escaping. Any Unicode escape still requires decoding;
   // a matching ID may be encoded even when it is absent from the raw line.
   const literalId = deliveryId && /^[A-Za-z0-9_-]+$/.test(deliveryId) ? deliveryId : undefined;
-  for await (const line of readCodexRolloutLines(filePath, threadId, { signal, requireTerminatedRecords: true })) {
+  for await (const line of readCodexRolloutLines(filePath, threadId, { signal, requireTerminatedRecords: true, verifyIdentity: Boolean(threadId) })) {
     if (literalId && !line.includes(literalId) && !line.includes("\\u")) continue;
     for (const prompt of deliveryUserMessagesFromRollout(line)) yield prompt;
   }

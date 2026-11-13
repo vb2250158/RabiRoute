@@ -2,10 +2,10 @@ import os
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import unittest
-from PySide6.QtCore import QPoint, QPointF, QRect
+from PySide6.QtCore import QPoint, QPointF, QRect, Qt
 from PySide6.QtWidgets import QApplication, QWidget
 from PySide6.QtGui import QPalette, QColor
-from rabiroute_tray.computer_control_overlay import DrawingSurface, Presentation, map_source_point, centered_bar_position
+from rabiroute_tray.computer_control_overlay import ControlBar, DrawingSurface, Presentation, map_source_point, centered_bar_position
 from rabiroute_tray.themes import theme_definition
 
 
@@ -175,7 +175,7 @@ class ComputerControlOverlayTest(unittest.TestCase):
             expected = QColor(theme_definition(theme)["application_palette"][QPalette.ColorRole.Window]).name()
             self.assertEqual(self.app.palette().color(QPalette.ColorRole.Window).name(), expected)
             presentation.update({"phase": "operating", "layers": []})
-            self.assertIn("background: " + expected, presentation.bar.styleSheet())
+            self.assertEqual(presentation.bar.background_color.name(), expected)
         presentation.update({"revision": 2, "layers": [], "presentationTheme": {
             "theme": "custom:control-fixture", "customThemes": [{"id": "custom:control-fixture", "colors": {"canvas": "#112233"}}]}})
         self.assertEqual(presentation.resolved_theme, "custom:control-fixture")
@@ -183,6 +183,28 @@ class ComputerControlOverlayTest(unittest.TestCase):
         for surface in presentation.surfaces:
             surface.close()
         presentation.bar.close()
+
+    def test_compact_pill_has_transparent_corners_and_bounded_width(self):
+        bar = ControlBar(lambda: None)
+        bar.set_content("Rabi 正在操作 · 屏幕 2", "星海 · Ctrl+Alt+Esc 退出", "退出控制")
+        bar.resize(bar.preferred_width(), bar.height())
+        bar.show()
+        self.app.processEvents()
+        self.assertEqual(bar.height(), 46)
+        self.assertLessEqual(bar.width(), 360)
+        self.assertTrue(bar.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground))
+        image = bar.grab().toImage()
+        self.assertEqual(image.pixelColor(0, 0).alpha(), 0)
+        self.assertGreater(image.pixelColor(image.width() // 2, image.height() // 2).alpha(), 240)
+        bar.set_content("操作状态" * 100, "来源" * 100, "停止本次操作")
+        self.assertLessEqual(bar.preferred_width(), 360)
+        self.assertEqual(bar.title_label.text(), "操作状态" * 100)
+        self.assertEqual(bar.button.accessibleName(), "停止本次操作")
+        self.assertIn("来源" * 100, bar.button.toolTip())
+        bar.apply_appearance(True)
+        self.assertEqual(bar.height(), 58)
+        self.assertLessEqual(bar.preferred_width(), 440)
+        bar.close()
 
 
 if __name__ == "__main__":

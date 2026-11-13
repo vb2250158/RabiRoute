@@ -11,5 +11,6 @@ test("project directory layout separates software examples, private data, runtim
   assert.equal(layout.runtimeStateRoot, path.join(root, "data", ".runtime"));
   assert.equal(layout.runtimeImportRoot, path.join(root, "data", ".runtime", "imports"));
   assert.equal(layout.managerLogRoot, path.join(root, "logs", "manager"));
+  assert.equal(layout.gatewayLogRoot, path.join(root, "logs", "gateway"));
   assert.equal(layout.publicExampleDataRoot, path.join(root, "examples", "data"));
 });

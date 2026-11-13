@@ -67,6 +67,9 @@ Start with the user guide for everyday operation, use the API reference for inte
 
 - [Delivery templates and ownership](message-delivery-templates_en.md): renderer ownership, scenario differences and historical receipt retirement for developers.
 - [Plan and memory summary search](knowledge-search_en.md)
+- [Unified agent search](agent-search-architecture_en.md) — Discover plans, memories, messages, operations, and devices with source coverage.
+- [Role configuration and document API](role-configuration-api-contracts_en.md) — Reads, updates and concurrency recovery.
+- [Role automation API](role-automation-api-contracts_en.md) — Rules, schedule times and operation receipts.
 - [Automation Agent delivery](automation-agent-delivery_en.md) — Recipient references, session selection, migration and retries.
 - [Routing configuration](routing-configuration_en.md) — **Current guide** for `personaConfig.json`, route kinds, regex, pipelines, and template variables.
 - [Routing and roles](routing-and-personas_en.md) — **Current guide** for route/role boundaries and role decision templates.

@@ -117,3 +117,6 @@ assets/reference-cache/
 
 # Windows PowerShell may create this local runtime cache during isolated tooling.
 /Microsoft/Windows/PowerShell/ModuleAnalysisCache
+
+# Retired pre-plugin-layout Speech runtime data; keep local state out of the repository.
+/plugin-adapters/rabi-speech/

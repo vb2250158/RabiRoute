@@ -48,7 +48,7 @@ export function createOwnedRuntime(ports) {
         }),
         codexHookContextService: ports.codexHookContextService,
         createAgentCommunicationRoutes,
-        createApiDiscoveryOperations,
+        createApiDiscoveryOperations: registry => [...createApiDiscoveryOperations(registry), ports.createUnifiedSearchOperation(registry)],
         readAgentChatHistory: ports.readAgentChatHistory,
         createAgentUploadRoutes: (context) => createAgentUploadRoutes({
             ...context,

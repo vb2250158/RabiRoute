@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
-import { config } from "./config.js";
+import { config, runtimeLayout } from "./config.js";
+import { redactProjectRoot } from "./manager/operationalLog.js";
 import { measureSyncPerformanceOperation } from "./performance/performanceInstrumentation.js";
 import { withFileLockSync } from "./shared/filePersistence.js";
 import { PERFORMANCE_OPERATIONS } from "./shared/performanceOperations.js";
@@ -227,8 +228,43 @@ export type AdapterLogRecord = {
   level?: "info" | "warning" | "error";
   instanceId?: string;
   message?: string;
+  stack?: string;
   data?: unknown;
 };
+
+export type AdapterLogInput = Omit<AdapterLogRecord, "adapter" | "time"> & Partial<AdapterLogRecord> & {
+  error?: unknown;
+};
+
+function normalizeAdapterLog(adapter: string, record: AdapterLogInput): AdapterLogRecord {
+  const { error, ...fields } = record;
+  let message: string | undefined;
+  let stack: string | undefined;
+  if (error instanceof Error) {
+    message = error.message;
+    stack = error.stack;
+  } else if (error && typeof error === "object" && typeof (error as { message?: unknown }).message === "string") {
+    const shaped = error as { message: string; stack?: unknown };
+    message = shaped.message;
+    stack = typeof shaped.stack === "string" ? shaped.stack : undefined;
+  } else if (error !== undefined) {
+    message = String(error);
+  }
+  const redact = (value: string): string => redactProjectRoot(value, runtimeLayout.stateRoot);
+  const safeData = error !== undefined && fields.data && typeof fields.data === "object" && !Array.isArray(fields.data)
+    && typeof (fields.data as { error?: unknown }).error === "string"
+    ? { ...fields.data, error: redact((fields.data as { error: string }).error) } : fields.data;
+  return {
+    time: Math.floor(Date.now() / 1000),
+    level: "info",
+    ...fields,
+    ...(error !== undefined && fields.message !== undefined ? { message: redact(fields.message) } : {}),
+    ...(safeData !== fields.data ? { data: safeData } : {}),
+    ...(fields.message === undefined && message !== undefined ? { message: redact(message) } : {}),
+    ...(fields.stack === undefined && stack ? { stack: redact(stack).slice(0, 16_000) } : {}),
+    adapter
+  };
+}
 
 function appendHistoryRecord(filePath: string, record: unknown): void {
   const fileName = path.basename(filePath);
@@ -271,24 +307,12 @@ function adapterLogPath(adapter: string, dataDir = config.dataDir): string {
   return path.join(dataDir, `${adapter}-adapter.log.jsonl`);
 }
 
-export function appendAdapterLog(adapter: string, record: Omit<AdapterLogRecord, "adapter" | "time"> & Partial<AdapterLogRecord>): void {
-  const normalized: AdapterLogRecord = {
-    time: Math.floor(Date.now() / 1000),
-    level: "info",
-    ...record,
-    adapter
-  };
-  appendHistoryRecord(adapterLogPath(adapter), normalized);
+export function appendAdapterLog(adapter: string, record: AdapterLogInput): void {
+  appendHistoryRecord(adapterLogPath(adapter), normalizeAdapterLog(adapter, record));
 }
 
-export function appendAdapterLogToDir(adapter: string, record: Omit<AdapterLogRecord, "adapter" | "time"> & Partial<AdapterLogRecord>, dataDir: string): void {
-  const normalized: AdapterLogRecord = {
-    time: Math.floor(Date.now() / 1000),
-    level: "info",
-    ...record,
-    adapter
-  };
-  appendHistoryRecord(adapterLogPath(adapter, dataDir), normalized);
+export function appendAdapterLogToDir(adapter: string, record: AdapterLogInput, dataDir: string): void {
+  appendHistoryRecord(adapterLogPath(adapter, dataDir), normalizeAdapterLog(adapter, record));
 }
 
 function logPath(dataDir = config.memoryDataDir): string {

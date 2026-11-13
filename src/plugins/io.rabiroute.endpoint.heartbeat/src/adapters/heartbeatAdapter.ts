@@ -477,6 +477,7 @@ export function createHeartbeatAdapter(
           event: "activation_failed",
           level: "error",
           message: `Heartbeat activation failed: ${message}`,
+          error,
           data: { scheduleCount: tasks.length, error: message }
         });
         throw error;

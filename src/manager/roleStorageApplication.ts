@@ -588,7 +588,7 @@ export class RoleStorageCommands {
         outcome,
         durationMs: Date.now() - startedAt,
         result: publicError.code,
-        error: publicError
+        error
       });
       throw publicError;
     }
@@ -620,7 +620,7 @@ export class RoleStorageCommands {
         after: afterRevision ? { revision: afterRevision } : undefined,
         durationMs: Date.now() - startedAt,
         result: "mutation_committed",
-        error: publicError
+        error
       });
       throw publicError;
     }
@@ -683,7 +683,7 @@ export class RoleStorageCommands {
         outcome,
         durationMs: Date.now() - startedAt,
         result: publicError.code,
-        error: publicError
+        error
       });
       throw publicError;
     }
@@ -709,7 +709,7 @@ export class RoleStorageCommands {
         after: afterRevision ? { revision: afterRevision } : undefined,
         durationMs: Date.now() - startedAt,
         result: "mutation_committed",
-        error: publicError
+        error
       });
       throw publicError;
     }
@@ -1197,7 +1197,7 @@ export class RoleStorageCommands {
         outcome,
         durationMs: Date.now() - startedAt,
         result: publicError.code,
-        error: publicError
+        error
       });
       throw publicError;
     }
@@ -1221,7 +1221,7 @@ export class RoleStorageCommands {
         after: afterRevision ? { revision: afterRevision } : undefined,
         durationMs: Date.now() - startedAt,
         result: "mutation_committed",
-        error: publicError
+        error
       });
       throw publicError;
     }

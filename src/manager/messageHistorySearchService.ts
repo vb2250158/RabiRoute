@@ -114,6 +114,7 @@ export async function queryMessageHistory(directory: string, query: RecentMessag
   else if (state.indexPath !== options.indexPath) throw new Error("MESSAGE_HISTORY_INDEX_IDENTITY_MISMATCH");
   try {
     const deadlineAt = options.deadlineAt ?? began + getTimeoutMs("history.request", 2500);
+    const explicitDeadline = options.deadlineAt !== undefined;
     let barrierDeadline: number | undefined;
     const initialProof = messageHistoryAppendProof(key);
     const lastCommit = initialProof?.commits.at(-1);
@@ -131,7 +132,8 @@ export async function queryMessageHistory(directory: string, query: RecentMessag
       const probe = await managerMessageSearchWorkerPool.run<MessageHistorySearchProbe>({ type: "message_history_search", roleDir: key, query,
         target, proof: messageHistoryAppendProof(key), ownerTarget, indexPath: state.indexPath,
         visibilityDeadlineAt: target && barrierDeadline !== undefined ? Date.now() + Math.max(0, barrierDeadline - performance.now()) : undefined },
-      { signal: options.signal, queueTimeoutMs: Math.min(getTimeoutMs("history.queue", QUERY_QUEUE_MS), remaining), timeoutMs: Math.min(getTimeoutMs("history.execution", 1800), remaining), onStarted: ms => { timing.queueMs += ms; } });
+      { signal: options.signal, queueTimeoutMs: explicitDeadline ? remaining : Math.min(getTimeoutMs("history.queue", QUERY_QUEUE_MS), remaining),
+        timeoutMs: explicitDeadline ? remaining : Math.min(getTimeoutMs("history.execution", 1800), remaining), onStarted: ms => { timing.queueMs += ms; } });
       timing.workerMs += probe.ready ? probe.result.metrics.elapsedMs : probe.elapsedMs ?? 0;
       timing.snapshotMs += probe.ready ? probe.result.metrics.snapshotMs ?? 0 : probe.elapsedMs ?? 0;
       if (probe.ready) {
@@ -157,7 +159,7 @@ export async function queryMessageHistory(directory: string, query: RecentMessag
       target ??= probe.target;
       // The visibility stage begins after discovery/queueing, not at HTTP entry.
       // Its one deadline is still capped by the unchanged request deadline.
-      barrierDeadline ??= Math.min(deadlineAt, performance.now() + getTimeoutMs("history.visibility", VISIBILITY_WINDOW_MS));
+      barrierDeadline ??= explicitDeadline ? deadlineAt : Math.min(deadlineAt, performance.now() + getTimeoutMs("history.visibility", VISIBILITY_WINDOW_MS));
       visibilityBegan ??= performance.now();
       if (!target || barrierDeadline <= performance.now()) throw new ManagerReadWorkerError(probe.reason, "busy");
       // Only the proof advances. Every retry retains the source target captured

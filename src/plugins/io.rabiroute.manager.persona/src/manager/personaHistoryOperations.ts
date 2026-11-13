@@ -61,6 +61,7 @@ export function createPersonaHistoryOperations(context:PersonaHistoryContext):re
   const messages=createMessageEndpointHistoryOwner({roleDirectory:context.roleDir,identity:context.identity,queryHistory:context.queryHistory});
   const base=(id:string,method:ApiOperationContract['method'],prefix:string,suffix:string,body:ApiOperationContract['request']['body'],response:ApiResponseContract,kind:string):ApiOperationContract=>({
     operationId:'manager.personas.history.'+id+(prefix==='/roles' ? '.alias':''),
+    ...(id === 'messages.timeline' && prefix === '/api/roles' ? { searchable: { scope: 'messages', legend: '所有已保存消息端的原始聊天记录 / saved endpoint messages', kinds: ['group','private','wecom','feishu','voice','heartbeat','manual_trigger','role_panel'] } } : {}),
     ...(kind==='aiui'?{}:{aliases:[(kind==='history'?'persona':prefix==='/roles'?'knowledge-alias':'knowledge')+':'+method+':'+prefix+'/:roleId/'+suffix]}),
     contractVersion:'1.0.0',method,pathTemplate:prefix+'/:roleId/'+suffix,exposure:'public',transport:'http',description:'Read the original selected persona history, transcripts, bounded message excerpt or conversation situation; explicit AIUI ingestion appends only its native stable-turn ledger.',
     request:{path:{type:'object',required:suffix.includes(':situationId')?['roleId','situationId']:['roleId'],additionalProperties:false,properties:{roleId:{type:'string',minLength:1},...(suffix.includes(':situationId')?{situationId:{type:'string',minLength:1}}:{})}},query:object,headers:object,body},

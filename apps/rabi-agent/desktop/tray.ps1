@@ -26,6 +26,7 @@ public sealed class RabiAgentPresentation : ApplicationContext {
     readonly ToolStripMenuItem pause = new ToolStripMenuItem("停止连接器");
     readonly ToolStripMenuItem restart = new ToolStripMenuItem("重启连接器");
     readonly ToolStripMenuItem reconnect = new ToolStripMenuItem("重新连接主机");
+    readonly ToolStripMenuItem checkUpdate = new ToolStripMenuItem("检查/更新 程序");
     readonly ToolStripMenuItem manager = new ToolStripMenuItem("打开主机管理页");
     readonly ToolStripMenuItem startup = new ToolStripMenuItem("开机启动");
     readonly ToolStripMenuItem exit = new ToolStripMenuItem("退出 Rabi Agent");
@@ -49,11 +50,12 @@ public sealed class RabiAgentPresentation : ApplicationContext {
         menu.Items.Add(state);
         menu.Items.Add("状态与日志", null, (s, e) => { window.Show(); window.Activate(); });
         menu.Items.Add(new ToolStripSeparator());
-        foreach (var item in new[] { start, pause, restart, reconnect, manager, startup, exit }) menu.Items.Add(item);
+        foreach (var item in new[] { start, pause, restart, reconnect, checkUpdate, manager, startup, exit }) menu.Items.Add(item);
         start.Click += (s,e) => Send("start");
         pause.Click += (s,e) => Send("pause");
         restart.Click += (s,e) => Send("restart");
         reconnect.Click += (s,e) => Send("reconnect");
+        checkUpdate.Click += (s,e) => Send("check-update");
         manager.Click += (s,e) => Send("open-manager");
         startup.Click += (s,e) => Send("startup", !startup.Checked);
         exit.Click += (s,e) => Send("exit");
@@ -92,10 +94,11 @@ public sealed class RabiAgentPresentation : ApplicationContext {
         pause.Enabled = running && !busy;
         restart.Enabled = running && !busy;
         reconnect.Enabled = running && !busy;
+        checkUpdate.Enabled = running && !busy;
         manager.Enabled = Flag(data, "canOpenManager");
         startup.Checked = Flag(data, "startup");
         details.Text = Text(data, "details").Replace("\n", Environment.NewLine);
-        Emit(new { type = "rendered", summary = state.Text, startup = startup.Checked, running, visible = tray.Visible });
+        Emit(new { type = "rendered", summary = state.Text, startup = startup.Checked, running, visible = tray.Visible, checkUpdate = checkUpdate.Enabled });
     }
     protected override void ExitThreadCore() {
         ownerAlive = false; tray.Visible = false; tray.Dispose(); window.Dispose();

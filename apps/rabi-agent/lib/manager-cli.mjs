@@ -43,7 +43,7 @@ export async function runManagerCommand(args, configPath, { fetchImpl = fetch, d
   if (args.includes("--agent")) throw new Error("--agent registration was removed. Use --agent-type TYPE --id FULL_SESSION_ID.");
   const agentType = option("--agent-type");
   const sessionId = option("--id");
-  if (!agentType || !sessionId) throw new Error("Each call requires --agent-type TYPE and --id FULL_SESSION_ID; no registration or binding is required.");
+
   const client = createManagerClient({ config, configPath, agentType, sessionId, fetchImpl, discover });
   try {
   if (downloading) {

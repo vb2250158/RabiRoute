@@ -5,8 +5,9 @@ import os from "node:os";
 import path from "node:path";
 import type { IncomingMessage } from "node:http";
 import test from "node:test";
+import { isLocalMachineRemoteAddress, isPublicWebguiStaticRequest, isWebguiLanRequestAuthorized } from "./webguiLanAccess.js";
 import { LanAgentAuthority } from "./lanAgentAuthority.js";
-import { evaluateLanAgentRequest, assertTrustedLanAgentPrincipal, hasTrustedLanAgentPrincipal } from "./lanAgentRequestAccess.js";
+import { evaluateLanAgentRequest, assertTrustedLanAgentPrincipal, hasTrustedLanAgentPrincipal, isLanNodeMetadataRequest } from "./lanAgentRequestAccess.js";
 import { compileApiContract, apiPathParameters } from "./apiOperationContract.js";
 import { createLanAgentReadOperations } from "../plugins/io.rabiroute.manager.core/src/manager/lanAgentReadOperations.js";
 import { LanAgentReleaseStore } from "./lanAgentReleaseStore.js";
@@ -63,4 +64,40 @@ test("authenticated encoded asset tails retain one decode and the original signe
   assert.equal((await read("%252e%252e%2Frabi-agent.mjs")).status, 404, "percent literals are not decoded a second time");
   const revoked = { method: "GET", url: "/api/unknown/%252Fvalue", headers: { authorization: `Bearer ${credential.token}` } } as IncomingMessage;
   authority.revokeNode("fixture-computer"); assert.equal(evaluateLanAgentRequest(revoked, authority, true).kind, "denied");
+});
+
+test('caller metadata is optional and accepts new unregistered types under the same authenticated connection',t=>{
+ const root=fs.mkdtempSync(path.join(os.tmpdir(),'access-caller-metadata-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+ const authority=new LanAgentAuthority({statePath:path.join(root,'auth.json')}),credential=authority.enroll(authority.issueBootstrapTicket().ticket,'computer');
+ for(const metadata of [{},{'x-rabiroute-agent-type':'new-type'},{'x-rabiroute-session-id':'new-id'},{'x-rabiroute-agent-type':'new-type','x-rabiroute-session-id':'new-id'},{'x-rabiroute-agent-type':' ','x-rabiroute-session-id':' '}]){
+   const request={method:'GET',url:'/api/search',headers:{authorization:'Bearer '+credential.token,...metadata}} as unknown as IncomingMessage;
+   assert.equal(evaluateLanAgentRequest(request,authority,true).kind,'agent');assert.ok(assertTrustedLanAgentPrincipal(request));
+   assert.equal(evaluateLanAgentRequest(request,authority,true).kind,'agent');
+ }
+});
+
+test('admission rejects changed source headers and revoked credentials on revalidation', t => {
+ const root=fs.mkdtempSync(path.join(os.tmpdir(),'access-header-tamper-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+ const authority=new LanAgentAuthority({statePath:path.join(root,'auth.json')});const credential=authority.enroll(authority.issueBootstrapTicket().ticket,'computer');
+ const request={method:'GET',url:'/api/search',headers:{authorization:`Bearer ${credential.token}`,'x-rabiroute-agent-type':'codex','x-rabiroute-session-id':'original'}} as unknown as IncomingMessage;
+ assert.equal(evaluateLanAgentRequest(request,authority,true).kind,'agent');
+ request.headers['x-rabiroute-session-id']='tampered';
+ assert.equal(evaluateLanAgentRequest(request,authority,true).kind,'denied');
+ const second={method:'GET',url:'/api/search',headers:{authorization:`Bearer ${credential.token}`}} as unknown as IncomingMessage;
+ assert.equal(evaluateLanAgentRequest(second,authority,true).kind,'agent');authority.revokeNode('computer');
+ assert.equal(evaluateLanAgentRequest(second,authority,true).kind,'denied');assert.throws(()=>assertTrustedLanAgentPrincipal(second));
+});
+
+test('remote metadata cannot grant agent or WebGUI authority to the unified search route', t => {
+ const root=fs.mkdtempSync(path.join(os.tmpdir(),'access-search-remote-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+ const authority=new LanAgentAuthority({statePath:path.join(root,'auth.json')});
+ for(const headers of [{},{'x-rabiroute-agent-type':'codex','x-rabiroute-session-id':'forged'}, {'x-rabiroute-agent-type':'codex'}, {'x-rabiroute-session-id':'forged'}]) {
+  const request={method:'GET',url:'/api/search?q=sample',headers,socket:{remoteAddress:'192.0.2.10',localAddress:'192.0.2.20'}} as unknown as IncomingMessage;
+  const url=new URL(request.url!,'http://manager.invalid');
+  assert.equal(evaluateLanAgentRequest(request,authority,true).kind,'unrelated');
+  assert.equal(isLanNodeMetadataRequest(request,authority),false);
+  assert.equal(isLocalMachineRemoteAddress(request.socket.remoteAddress,[request.socket.localAddress!]),false);
+  assert.equal(isPublicWebguiStaticRequest(request.method,url.pathname),false);
+  assert.equal(isWebguiLanRequestAuthorized(request,url,{enabled:true,accessToken:'fixture-webgui-secret'}),false);
+ }
 });

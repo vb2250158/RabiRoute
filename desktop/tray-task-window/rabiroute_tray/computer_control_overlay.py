@@ -12,7 +12,7 @@ from typing import Any
 
 from PySide6.QtCore import QPoint, QPointF, QRect, QRectF, Qt, QObject, Signal, QTimer
 from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPalette, QPen
-from PySide6.QtWidgets import QApplication, QWidget, QHBoxLayout, QVBoxLayout, QLabel, QPushButton
+from PySide6.QtWidgets import QApplication, QWidget, QHBoxLayout, QVBoxLayout, QLabel, QPushButton, QSizePolicy
 
 # The installed standalone entry uses its own packaged parent, never the caller's cwd.
 if __package__ in (None, ""):
@@ -156,71 +156,107 @@ def centered_bar_position(work_area: QRect, width: int, height: int, placement: 
     return QPoint(x, max(work_area.top(), y))
 
 
+class ElidedLabel(QLabel):
+    def paintEvent(self, _event):
+        painter = QPainter(self)
+        painter.setPen(self.palette().color(self.foregroundRole()))
+        text = self.fontMetrics().elidedText(self.text(), Qt.TextElideMode.ElideRight, self.width())
+        painter.drawText(self.rect(), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, text)
+
+
 class ControlBar(QWidget):
     def __init__(self, stop):
         super().__init__(None, Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint |
                          Qt.WindowType.WindowStaysOnTopHint | Qt.WindowType.WindowDoesNotAcceptFocus)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setObjectName("computerControlBar")
-        self.avatar = QLabel("R")
+        self.avatar = QLabel()
         self.avatar.setObjectName("controlAvatar")
         self.avatar.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.avatar.setFixedSize(32, 32)
-        self.title_label = QLabel()
+        self.avatar.setFixedSize(8, 8)
+        self.title_label = ElidedLabel()
         self.title_label.setObjectName("controlTitle")
-        self.subtitle_label = QLabel()
+        self.subtitle_label = ElidedLabel()
         self.subtitle_label.setObjectName("controlSubtitle")
         for label in (self.title_label, self.subtitle_label):
             label.setTextFormat(Qt.TextFormat.PlainText)
             label.setMinimumWidth(0)
-        self.button = QPushButton("退出控制")
+            label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        self.button = QPushButton("■")
         self.button.setObjectName("controlStop")
-        self.button.setMinimumSize(44, 44)
         self.button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.button.clicked.connect(stop)
         text = QVBoxLayout()
-        text.setSpacing(3)
+        text.setSpacing(0)
         text.addWidget(self.title_label)
         text.addWidget(self.subtitle_label)
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(14, 10, 12, 10)
-        layout.setSpacing(12)
+        layout.setContentsMargins(14, 6, 9, 6)
+        layout.setSpacing(9)
         layout.addWidget(self.avatar)
         layout.addLayout(text, 1)
         layout.addWidget(self.button)
-        self.setMinimumHeight(64)
         self.apply_appearance(False)
 
     def apply_appearance(self, large: bool) -> None:
         palette = QApplication.palette()
         color = lambda role: palette.color(role).name()
+        self.background_color = palette.color(QPalette.ColorRole.Window)
+        self.large_text = large
+        foreground = palette.color(QPalette.ColorRole.WindowText)
+        tint = lambda alpha: f"rgba({foreground.red()}, {foreground.green()}, {foreground.blue()}, {alpha})"
         self.setStyleSheet(
-            "QWidget#computerControlBar { background: " + color(QPalette.ColorRole.Window) +
-            "; color: " + color(QPalette.ColorRole.WindowText) +
-            "; border: 1px solid " + color(QPalette.ColorRole.Mid) + "; border-radius: 13px; }"
+            "QWidget#computerControlBar { background: transparent; color: " + color(QPalette.ColorRole.WindowText) + "; }"
             "QLabel { border: none; background: transparent; }"
+            "QLabel#controlSubtitle { color: " + tint(165) + "; }"
             "QLabel#controlAvatar { background: " + color(QPalette.ColorRole.Highlight) +
-            "; color: " + color(QPalette.ColorRole.HighlightedText) +
-            "; border-radius: 16px; font-weight: 700; }"
-            "QPushButton#controlStop { background: " + color(QPalette.ColorRole.Highlight) +
-            "; color: " + color(QPalette.ColorRole.HighlightedText) +
-            "; border: none; border-radius: 8px; padding: 7px 12px; font-weight: 600; }"
+            "; border-radius: 4px; }"
+            "QPushButton#controlStop { background: " + tint(18) +
+            "; color: " + color(QPalette.ColorRole.WindowText) +
+            "; border: none; border-radius: " + str(18 if large else 14) + "px; padding: 0; font-size: 10px; }"
+            "QPushButton#controlStop:hover { background: " + tint(36) + "; }"
+            "QPushButton#controlStop:pressed { background: " + tint(58) + "; }"
         )
         title_font = QFont(self.font())
-        title_font.setPointSizeF(14 if large else 11)
+        title_font.setPixelSize(16 if large else 13)
         title_font.setWeight(QFont.Weight.DemiBold)
         self.title_label.setFont(title_font)
         subtitle_font = QFont(self.font())
-        subtitle_font.setPointSizeF(11 if large else 9)
+        subtitle_font.setPixelSize(13 if large else 11)
         self.subtitle_label.setFont(subtitle_font)
-        self.setMinimumHeight(80 if large else 64)
+        self.button.setFixedSize(36 if large else 28, 36 if large else 28)
+        self.setFixedHeight(58 if large else 46)
+        self.update()
+
+    def preferred_width(self) -> int:
+        text_width = max(label.fontMetrics().horizontalAdvance(label.text())
+                         for label in (self.title_label, self.subtitle_label))
+        return min(440 if self.large_text else 360, max(320 if self.large_text else 280, text_width + 88))
+
+    def paintEvent(self, _event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        body = QRectF(self.rect()).adjusted(2, 2, -2, -3)
+        radius = body.height() / 2
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(0, 0, 0, 24))
+        painter.drawRoundedRect(body.translated(0, 2), radius, radius)
+        border = QApplication.palette().color(QPalette.ColorRole.WindowText)
+        border.setAlpha(24)
+        painter.setPen(QPen(border, 1))
+        painter.setBrush(self.background_color)
+        painter.drawRoundedRect(body, radius, radius)
 
     def set_content(self, title: str, subtitle: str, action: str) -> None:
         if self.title_label.text() != title:
             self.title_label.setText(title)
         if self.subtitle_label.text() != subtitle:
             self.subtitle_label.setText(subtitle)
-        self.button.setText(action)
+        self.button.setText("×" if action == "关闭提示" else "■")
+        self.button.setAccessibleName(action)
+        self.button.setToolTip(f"{action}\n{title}\n{subtitle}")
+        self.setAccessibleName(title)
 
     def nativeEvent(self, event_type, message):
         if os.name == "nt":
@@ -331,9 +367,8 @@ class Presentation:
             return
         area = screen.availableGeometry()
         self.bar.setMaximumWidth(max(1, area.width() - 32))
-        self.bar.adjustSize()
-        preferred_width = min(max(440, self.bar.sizeHint().width()), max(1, area.width() - 32))
-        self.bar.resize(preferred_width, self.bar.sizeHint().height())
+        preferred_width = min(self.bar.preferred_width(), max(1, area.width() - 32))
+        self.bar.resize(preferred_width, self.bar.height())
         placement = (self.state.get("presentationSettings") or {}).get("barPlacement", "top-center")
         self.bar.move(centered_bar_position(area, self.bar.width(), self.bar.height(), placement))
 

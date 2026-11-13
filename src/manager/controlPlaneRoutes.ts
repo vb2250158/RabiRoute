@@ -145,6 +145,7 @@ import { appendMessageContextToDir } from "../messageContextStore.js";
 
 import { managerRuntimeDiagnosticsSummary } from "../managerRuntimeDiagnostics.js";
 import { createManagerOperationalLog, installOperationalMutationAuditSink, managerOperationalError } from "./operationalLog.js";
+import { createLineLog } from "./lineLog.js";
 import { PerformanceMonitoringService } from "./performanceMonitoring.js";
 import { PerformanceApi } from "../plugins/io.rabiroute.manager.performance/src/manager/performanceRoutes.js";
 import { measureSyncPerformanceOperation } from "../performance/performanceInstrumentation.js";
@@ -345,6 +346,7 @@ import { createPeerAgentOperations } from "../plugins/io.rabiroute.manager.agent
 import { createPeerRouteDeliveryOperations } from "../plugins/io.rabiroute.manager.agent-thread-control/src/manager/peerRouteDeliveryOperations.js";
 import { createAgentCommunicationRoutes, type AgentCommunicationHttpResponse } from "../plugins/io.rabiroute.manager.agent-communication/src/manager/agentCommunicationRoutes.js";
 import { createApiDiscoveryOperations } from "../plugins/io.rabiroute.manager.agent-communication/src/manager/apiDiscoveryRoutes.js";
+import { createUnifiedSearchOperation } from "./unifiedSearchOperations.js";
 import { AgentUploadStore } from "./agentUploadStore.js";
 import { createAgentUploadRoutes } from "../plugins/io.rabiroute.manager.agent-communication/src/manager/agentUploadRoutes.js";
 import { guardRequestBodyDeadline } from "./agentUploadDeadline.js";
@@ -1725,7 +1727,12 @@ const conversationContextGuard = new AgentSendConversationContextGuard((dataDir,
   managerReadWorkerPool.run({ type: "conversation_window", dataDir, filter, query }));
 const conversationSendQueue = new AgentSendConversationQueue();
 const webuiDistPath = path.join(packageRoot, "ribiwebgui", "dist");
-const runtimes = new RuntimeRegistry();
+const gatewayLineLog = managerReadOnly
+  ? undefined
+  : createLineLog({ directory: projectDirectoryLayout(rootDir).gatewayLogRoot });
+const runtimes = new RuntimeRegistry({
+  appendLine: gatewayLineLog ? (runtimeId, line) => gatewayLineLog.append(runtimeId, line) : undefined
+});
 const persistedPerformanceConfig = rabiGlobalConfig.read().performance;
 const performanceMonitoring = new PerformanceMonitoringService(rootDir, managerReadOnly
   ? { ...persistedPerformanceConfig, enabled: false }
@@ -7120,6 +7127,16 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
     throw error;
   };
   managerRuntimeOwner.register("operational_log_flush", () => managerOperationalLog.flush());
+  if (gatewayLineLog) managerRuntimeOwner.register("gateway_line_log_flush", async () => {
+    try {
+      await gatewayLineLog.flush();
+    } catch (error) {
+      managerOperationalLog.record("warn", "gateway_log_flush_failed", {
+        group: "gateway",
+        error: managerOperationalError(error, rootDir)
+      });
+    }
+  });
   managerRuntimeOwner.register("agent_request_store", () => agentRequests.close());
   managerRuntimeOwner.register("agent_request_route_reconciliation", () => agentRequestRouteReconciliation.stop());
   const activeGatewayStatuses = activeGatewayStatusSnapshotService();
@@ -8024,7 +8041,20 @@ get rootDir() { return rootDir; },
 get runtimes() { return runtimes; },
 get agentAdapterCatalogService() { return agentAdapterCatalogService; },
 set agentAdapterCatalogService(value) { agentAdapterCatalogService = value; } }) }),
-    Object.freeze({ capability: "host.manager.agent-communication@2", value: Object.freeze({ ...managerFeatureHostPorts, get agentRequests() { return agentRequests; },
+    Object.freeze({ capability: "host.manager.agent-communication@2", value: Object.freeze({ ...managerFeatureHostPorts,
+      createUnifiedSearchOperation: (registry: ManagerPluginRouteRegistry) => createUnifiedSearchOperation(registry, {
+        roles: () => routeCatalogPersonas().filter(role => path.resolve(role.rolesRoot) === path.resolve(managerRolesRoot())),
+        roleDirectory: roleDirForApi,
+        get knowledge() { return knowledgeSearchService; },
+        queryHistory: queryMessageHistory,
+        identity: () => ({ applicationGenerationId: managerHostIdentity?.applicationGenerationId ?? managerInstanceId, managerInstanceId }),
+        entities: async (request, signal) => {
+          const source = resolvePublishedPluginService("manager.xiaomi-home@1") as { readSearchSnapshot?(request: http.IncomingMessage, signal: AbortSignal): Promise<import("../shared/homeDeviceDirectoryContract.js").HomeDeviceDirectory<import("../plugins/io.rabiroute.manager.xiaomi-home/src/integrations/xiaomiHome/managerApi.js").XiaomiHomeResource>> } | undefined;
+          if (!source?.readSearchSnapshot) throw new Error("ENTITY_SOURCE_UNAVAILABLE");
+          return source.readSearchSnapshot(request, signal);
+        }
+      }),
+      get agentRequests() { return agentRequests; },
 get agentEndpointDelivery() { return agentEndpointDelivery; },
 set agentEndpointDelivery(value) { agentEndpointDelivery = value; },
 get lanAgentRegistry() { return lanAgentRegistry; },

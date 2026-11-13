@@ -1,3 +1,4 @@
+import { normalizeSearchEvidence } from './shared/searchEvidence.js';
 import { createPlanUpdatePreparation } from "./plugins/io.rabiroute.manager.persona/worker/plan-update.mjs";
 import type { PlanUpdatePreparation } from "./manager/planUpdateExecutor.js";
 import { normalizePlanHistoryActor, type PlanHistoryActor } from "./shared/planHistoryActor.js";
@@ -193,6 +194,7 @@ export type PlanSecretaryBinding = {
 };
 
 export type PlanItem = {
+  searchEvidence?: import('./shared/searchEvidence.js').SearchEvidence;
   activationStatus?: import("./planState.js").PlanActivationStatus;
   markerStatus?: string;
   /** Optional final-result destinations. Persona event rules still apply when omitted. */
@@ -271,6 +273,7 @@ function notifyPlanUpdated(event: PlanUpdatedEvent): void {
 }
 
 export type RecentMemoryItem = {
+  searchEvidence?: import('./shared/searchEvidence.js').SearchEvidence;
   id: string;
   title: string;
   focus: string;
@@ -288,6 +291,7 @@ export type RecentMemoryItem = {
 };
 
 export type ConsolidatedMemoryItem = {
+  searchEvidence?: import('./shared/searchEvidence.js').SearchEvidence;
   id: string;
   title: string;
   focus: string;
@@ -1632,6 +1636,7 @@ function normalizePlan(raw: Partial<PlanItem> & Record<string, unknown>, fallbac
     storageMutationRequestId: typeof raw.storageMutationRequestId === "string" && raw.storageMutationRequestId
       ? raw.storageMutationRequestId
       : undefined,
+    searchEvidence: normalizeSearchEvidence(raw.searchEvidence),
     keywords: normalizeKeywords(raw.keywords)
   });
 }
@@ -1659,6 +1664,7 @@ function normalizeRecentMemory(raw: Partial<RecentMemoryItem> & Record<string, u
     recalledAt: typeof raw.recalledAt === "string" ? raw.recalledAt : undefined,
     consolidatedAt: typeof raw.consolidatedAt === "string" ? raw.consolidatedAt : undefined,
     consolidationRunId: typeof raw.consolidationRunId === "string" ? raw.consolidationRunId : undefined,
+    searchEvidence: normalizeSearchEvidence(raw.searchEvidence),
     keywords: normalizeKeywords(raw.keywords)
   };
 }
@@ -1686,6 +1692,7 @@ function normalizeConsolidatedMemory(raw: Partial<ConsolidatedMemoryItem> & Reco
     recalledAt: typeof raw.recalledAt === "string" ? raw.recalledAt : undefined,
     inputMemoryIds: Array.isArray(raw.inputMemoryIds) ? raw.inputMemoryIds.map(String) : undefined,
     consolidationRunId: typeof raw.consolidationRunId === "string" ? raw.consolidationRunId : undefined,
+    searchEvidence: normalizeSearchEvidence(raw.searchEvidence),
     keywords: normalizeKeywords(raw.keywords)
   };
 }

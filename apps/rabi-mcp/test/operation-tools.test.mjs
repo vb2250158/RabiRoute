@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createOperationSdk } from '../../rabi-agent/lib/operation-sdk.mjs';
 import { runOperationCommand } from '../../rabi-agent/lib/operation-cli.mjs';
-import { createOperationTools } from '../lib/operation-tools.mjs';
+import { createOperationTools, readOperationSessionSettings } from '../lib/operation-tools.mjs';
 import { createKnowledgeMcpServer } from '../lib/knowledge-mcp-server.mjs';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
@@ -60,4 +60,14 @@ test('canonical tool dispatch reports unknown or missing fields before any busin
   await assert.rejects(f.tools.call('rabi_describe', { view: 'input' }), /requires operation/);
   await assert.rejects(f.tools.call('rabi_categories', { headers: {} }), /Unknown.*headers/);
   assert.equal(f.writes.length, 0); assert.equal(f.reads.length, 0);
+});
+
+
+test('MCP launch session budgets default and validate explicit environment values', () => {
+  assert.deepEqual(readOperationSessionSettings({}), { maxSessions: 16, maxSessionBytes: 1048576 });
+  assert.deepEqual(readOperationSessionSettings({ RABI_MCP_MAX_SESSIONS: '2', RABI_MCP_MAX_SESSION_BYTES: '128' }), { maxSessions: 2, maxSessionBytes: 128 });
+  for (const name of ['RABI_MCP_MAX_SESSIONS', 'RABI_MCP_MAX_SESSION_BYTES']) {
+    for (const bad of ['', '0', '-1', '1.5', 'NaN', '9007199254740992'])
+      assert.throws(() => readOperationSessionSettings({ [name]: bad }), new RegExp(name));
+  }
 });

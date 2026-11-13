@@ -21,6 +21,8 @@ Configure these values in the MCP host's launch environment.
 - `RABIROUTE_HOST_EXE` is optional. Discovery uses the standard installation and current running Host when omitted.
 - `RABI_MCP_ALLOWED_ROLES` is an optional JSON string array. Omission permits every role. An explicit list applies only to that configured scope.
 - `RABI_MCP_ALLOW_WRITES` defaults to `true`. Explicit `false` disables state-changing calls according to current operation effects and reports the setting.
+- `RABI_MCP_MAX_SESSIONS` defaults to `16` and controls concurrent active stream and WebSocket sessions.
+- `RABI_MCP_MAX_SESSION_BYTES` defaults to `1048576` and sets each session frame queue high-water mark; consumption resumes the producer, and an empty queue accepts one larger native-legal frame. Read or close unread terminal results when the retained budget is full. Set both as positive integers in the MCP launch environment.
 
 The catalog provides discovery. Calls retain current connection authentication, resource semantics, CAS and idempotency. Preserve original identifiers and payloads after uncertain writes and inspect their original receipts.
 

@@ -55,6 +55,20 @@ export class SkillDownloadError extends Error {
   }
 }
 
+/** Preserve transport data while exposing finite JSON business outcomes. */
+export function decodeManagerJsonReceipt(receipt) {
+  let value = receipt.bodyJson;
+  if (value === undefined) {
+    const type = receipt.headers?.["content-type"] ?? "";
+    const raw = typeof receipt.body === "string" ? receipt.body
+      : /(?:^application\/json\b|\+json\b)/i.test(type) && receipt.bodyBytes !== undefined ? Buffer.from(receipt.bodyBytes).toString("utf8") : undefined;
+    if (raw !== undefined) { try { value = JSON.parse(raw); } catch { /* Non-JSON content remains opaque. */ } }
+  }
+  if (value === undefined) return receipt;
+  const uncertain = Boolean(receipt.uncertain || value?.uncertain === true || value?.mutationOutcome === "unknown" || value?.commitState === "unknown");
+  return { ...receipt, bodyJson: value, uncertain, ok: receipt.ok === true && value?.code !== -1 && value?.ok !== false && !uncertain };
+}
+
 
 function metadataIdentity(raw) {
   return raw?.data && typeof raw.data === "object" ? raw.data : raw;
@@ -231,7 +245,10 @@ function buildManagerClient({ managerUrl, credential, agentType, sessionId, conf
   if (localHost) {
     if (!endpointSession || credential || agentType || sessionId || config || discover) throw new Error("Local Host transport requires an explicit Host endpoint session without remote credentials.");
   } else if (!credential) throw new Error("An enrolled computer credential is required.");
-  if ((agentType || sessionId) && (!agentType || !sessionId || typeof agentType !== "string" || typeof sessionId !== "string" || /[\x00-\x1f\x7f]/.test(agentType + sessionId))) throw new Error("Provide an explicit Agent type and full session ID together.");
+  const completeIdentity = typeof agentType === "string" && agentType.trim() && typeof sessionId === "string" && sessionId.trim();
+  if (completeIdentity && /[\x00-\x1f\x7f]/.test(agentType + sessionId)) throw new Error("Caller metadata must contain valid HTTP header text.");
+  agentType = completeIdentity ? agentType.trim() : undefined;
+  sessionId = completeIdentity ? sessionId.trim() : undefined;
   const transportCache = session?.transportCache ?? createManagerEndpointCache();
   let metadataRefresh;
   const metadataLifetime = new AbortController();
@@ -348,13 +365,11 @@ function buildManagerClient({ managerUrl, credential, agentType, sessionId, conf
       }
       const bytes = responseMode === "stream" ? undefined : Buffer.concat(chunks);
       const text = responseMode === "text" ? bytes.toString("utf8") : undefined;
-      let data;
-      try { data = JSON.parse(text); } catch { data = undefined; }
-      return {
+      return decodeManagerJsonReceipt({
         statusCode: response.status, ok: response.ok, ...(text !== undefined ? { body: text } : bytes ? { bodyBytes: bytes } : {}),
         headers: responseHeaders(), ...(nativeBinding ? {} : { managerContext: managerContextFromHeaders(response.headers) }), bytesReceived, responseMode, noReplay: responseMode === "stream" || bodyStream !== undefined,
-        uncertain: !readOnly && (response.status >= 500 || data?.uncertain === true)
-      };
+        uncertain: !readOnly && response.status >= 500
+      });
     } catch {
       // Do not echo transport/consumer errors that may contain private headers.
       return { statusCode: response?.status ?? 0, ok: false, body: "Manager transport or consumer failed; inspect authoritative state before retrying a mutation.", headers: response ? responseHeaders() : {}, ...(response && !nativeBinding ? { managerContext: managerContextFromHeaders(response.headers) } : {}), bytesReceived,

@@ -141,6 +141,7 @@ export function createOwnedRuntime(ports) {
         personaKnowledgeOperations: createPersonaKnowledgeOperations({
             get service() { return ports.knowledgeSearchService; },
             roleDirectory: ports.roleDirForApi,
+            roleExists: roleId => ports.routeCatalogPersonas().some(role => role.roleId === roleId && ports.path.resolve(role.rolesRoot) === ports.path.resolve(ports.rolesRoot)),
             identity: () => ({ applicationGenerationId: ports.managerHostIdentity?.applicationGenerationId ?? ports.managerInstanceId, managerInstanceId: ports.managerInstanceId }),
             requestCatalogRefresh: ports.requestRoleKnowledgeCatalogRefresh
         }),

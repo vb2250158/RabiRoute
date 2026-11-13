@@ -1,7 +1,7 @@
 import { createManagerClient } from './lib/manager-client.mjs';
 import { createHostEndpointSession } from './lib/host-endpoint.mjs';
 import { createKnowledgeTools } from './lib/knowledge-tools.mjs';
-import { createOperationTools } from './lib/operation-tools.mjs';
+import { createOperationTools, readOperationSessionSettings } from './lib/operation-tools.mjs';
 import { startKnowledgeMcpStdio } from './lib/knowledge-mcp-server.mjs';
 import { startKnowledgeHttpServer } from './lib/knowledge-http-server.mjs';
 
@@ -15,7 +15,7 @@ async function main() {
   const endpoint = await endpointSession.ensure({ diagnostic: true });
   const client = createManagerClient({ managerUrl: endpoint.managerUrl, endpointSession, localHost: true, timeoutMs: 12000 });
   const policy = { client, allowedRoles, allowWrites: writeSetting === 'true' };
-  const operations = createOperationTools(policy);
+  const operations = createOperationTools({ ...policy, ...readOperationSessionSettings() });
   const legacyKnowledge = createKnowledgeTools(policy);
   // Existing knowledge tool names remain callable during client migration.
   // The visible catalog presents the same six shared actions as CLI.
@@ -41,7 +41,8 @@ async function main() {
     process.once('SIGTERM', close);
   } else throw new Error('Unsupported transport.');
 }
-main().catch(() => {
-  process.stderr.write('Rabi knowledge MCP could not start. Check Host readiness, the configured executable, allowed roles and write setting. No business operation was sent.\n');
+main().catch(error => {
+  const field = error instanceof TypeError && /^(RABI_MCP_MAX_SESSIONS|RABI_MCP_MAX_SESSION_BYTES) must be a positive safe integer in the MCP launch environment\.$/.exec(error.message)?.[1];
+  process.stderr.write(field ? `${field} must be a positive safe integer in the MCP launch environment. No business operation was sent.\n` : 'Rabi knowledge MCP could not start. Check Host readiness, the configured executable, allowed roles and write setting. No business operation was sent.\n');
   process.exitCode = 1;
 });

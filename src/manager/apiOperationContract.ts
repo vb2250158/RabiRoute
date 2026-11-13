@@ -42,6 +42,10 @@ export type ApiOperationContract = Readonly<{
   method: ApiMethod;
   pathTemplate: string;
   description: string;
+  searchKeywords?: readonly string[];
+  discovery?: Readonly<{ title?: string; categoryId?: string; tags?: readonly string[]; provider?: string }>;
+  /** Search-source metadata follows its active operation contract. */
+  searchable?: Readonly<{ scope: string; legend: string; kinds: readonly string[] }>;
   exposure: "public" | "internal";
   transport: "http" | "sse" | "websocket";
   httpProxy?: Readonly<{ wire: Readonly<{ dataFrameBytes: number; streamWindowBytes: number; maxConcurrentStreams: number }>;
@@ -172,7 +176,7 @@ const frameworkErrorSchema = {
   required: ["code", "errorCode", "field", "operationId", "contractDigest", "repair", "retryable"],
   properties: { code: { const: -1 }, errorCode: { type: "string" }, field: { type: "string" }, operationId: { type: "string" },
     contractDigest: { type: "string", pattern: "^sha256:[a-f0-9]{64}$" }, repair: { type: "string" }, retryable: { const: false }, uncertain: { type: "boolean" },
-    mutationOutcome: { enum: ["not_started", "not_committed", "unknown"] } }
+    mutationOutcome: { enum: ["not_started", "not_committed", "unknown"] }, alternatives: { type: "array", items: { type: "object" } } }
 } as const;
 
 export function apiContractFailure(operation: CompiledApiContract, error: unknown, readOnly = operationIsReadOnly(operation.contract)): ApiOperationResult {
@@ -188,6 +192,7 @@ export function apiContractFailure(operation: CompiledApiContract, error: unknow
   return { status: failure.status, body: { code: -1, errorCode: failure.code, field: failure.field,
     operationId: operation.contract.operationId, contractDigest: operation.digest,
     repair, retryable: false,
+    ...(operation.contract.operationId === "manager.api.help" && failure.status === 400 ? { alternatives: [{ method: "GET", path: "/api/agent/operations", query: { query: "<keywords>" }, description: "Search the active operation catalog." }] } : {}),
     ...(failure.mutationOutcome ? { mutationOutcome: failure.mutationOutcome, uncertain } : uncertain ? { uncertain: true } : {}) } };
 }
 

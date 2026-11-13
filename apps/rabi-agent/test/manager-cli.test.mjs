@@ -150,7 +150,13 @@ test("CLI uses explicit source IDs, preserves stdin JSON and never exports crede
     const largeBody = JSON.stringify({ text: "x".repeat(1024 * 1024 + 1) });
     assert.equal((await runManagerCommand(["--api", "POST", "/api/fixture", ...sourceArgs, "--body-stdin"], configPath, { fetchImpl, readInput: async () => largeBody })).ok, true);
     assert.equal(calls.at(-2).body, largeBody);
-    await assert.rejects(runManagerCommand(["--api", "GET", "/meta"], configPath, { fetchImpl }), /--agent-type/);
+    const beforeAnonymousMetadata = calls.length;
+    assert.equal((await runManagerCommand(["--api", "GET", "/meta"], configPath, { fetchImpl })).ok, true);
+    assert.ok(calls.length > beforeAnonymousMetadata);
+    for (const call of calls.slice(beforeAnonymousMetadata)) {
+      assert.equal(call.headers["x-rabiroute-agent-type"], undefined);
+      assert.equal(call.headers["x-rabiroute-session-id"], undefined);
+    }
     config.agents[0].enabled = false;
     fs.writeFileSync(configPath, JSON.stringify(config));
     const beforeLegacyRequest = calls.length;

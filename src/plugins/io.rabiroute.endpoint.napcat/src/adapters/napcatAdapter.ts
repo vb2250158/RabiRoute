@@ -780,6 +780,7 @@ function setupNapCatSession(
         event: "inbound_error",
         instanceId: instance.id,
         message: error instanceof Error ? error.message : String(error),
+        error,
         data: {
           name: instance.name,
           raw: data.toString().slice(0, 4000)
@@ -887,7 +888,8 @@ export function createNapCatAdapter(
               event: "listener_error",
               level: "error",
               instanceId: instance.id,
-              message
+              message,
+              error
             });
           });
           appendNapCatRuntimeLog(lifecycle, {
@@ -948,6 +950,7 @@ export function createNapCatAdapter(
           event: "activation_failed",
           level: "error",
           message,
+          error,
           data: { instanceCount: lifecycle.servers.length }
         });
         if (closeFailures.length) throw new AggregateError([error, ...closeFailures], "NapCat startup and listener cleanup failed.");

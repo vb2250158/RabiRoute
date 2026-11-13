@@ -21,10 +21,10 @@ test("bounded pause times out without releasing an unresolved original operation
   const waiting = new Promise(resolve => { release = resolve; });
   const started = new Promise(resolve => { entered = resolve; });
   const { owner, store, seed } = controlledOwner(t, async method => {
-    assert.equal(method, "GET"); entered(); await waiting;
+    assert.equal(method, "POST"); entered(); await waiting;
     return response(503, { error: "fixture receipt remains unavailable" });
   });
-  seed();
+  seed("fixture-intent", "pending");
   const running = owner.tick(); await started;
   const active = owner.active.get("fixture-intent"), original = store.raw("fixture-intent");
   try {
@@ -62,6 +62,7 @@ function controlledOwner(t, request) {
       assert.equal(agentType, "codex"); assert.equal(sessionId, "source-session"); assert.equal(guid, "fixture-guid");
       return { request };
     }, sendEvent: () => false });
+  owner.wake = () => {};
   t.after(async () => { await owner.close(); fs.rmSync(root, { recursive: true, force: true }); });
   const seed = (id = "fixture-intent", state = "unknown") => {
     store.submit(id, "agent-delivery", { ...intent(id), nodeId: "node" }, { managerGuid: "fixture-guid" });
@@ -89,7 +90,7 @@ test("node cancel persists a terminal tombstone, preserves received evidence, an
   assert.equal(store.get("event").state, "cancelled");
 });
 
-for (const phase of ["send", "lookup", "legacy-reconcile"]) test(`cancel during ${phase} prevents late commit and any further send`, async t => {
+for (const phase of ["send"]) test(`cancel during ${phase} prevents late commit and any further send`, async t => {
   const entered = Promise.withResolvers(), release = Promise.withResolvers(); let calls = 0, originalEntered = false;
   const { owner, store, seed } = controlledOwner(t, async (method, target, options) => {
     calls++;
@@ -159,7 +160,8 @@ for (const outcome of ["cancelled", "committed"]) test(`node cancellation settle
     managerState = outcome;
     return response(outcome === "committed" ? 409 : 200, { code: outcome === "committed" ? -1 : 0 });
   });
-  seed(); const result = await owner.control({ action: "cancel", intentId: "fixture-intent" });
+  seed(); await owner.control({ action: "cancel", intentId: "fixture-intent" });
+  const result = await owner.control({ action: "reconcile", intentId: "fixture-intent" });
   assert.equal(result.record.state, outcome === "committed" ? "received" : "cancelled");
   assert.equal(result.record.managerCancelPending, undefined); assert.equal(result.record.deliveryId, "original-internal");
   assert.equal(store.due().length, 0); assert.equal(calls.length, 3);
@@ -259,7 +261,7 @@ test("capacity refuses new acceptance, preserves accepted records and paginates 
   assert.equal(first.items[0].payload, undefined); assert.equal(first.counts.pending, 2);
 });
 
-test("unknown POST only queries original ID until explicit unreserved evidence; changed identity never replays", async t => {
+test("unknown POST never retries after absent receipt or identity changes", async t => {
   const { file, configPath } = fixture(t); let now = 1000, mode = "unknown", posts = 0; const calls = [];
   const store = new DeliveryStore(file, { now: () => now });
   const owner = new DeliveryOwner({ configPath, config: { nodeId: "node", managerGuid: "fixture-guid" }, store, now: () => now, random: () => 0, client: () => ({ request: async (method, target, options) => {
@@ -272,8 +274,8 @@ test("unknown POST only queries original ID until explicit unreserved evidence; 
   owner.submit(intent()); await owner.flight; assert.equal(posts, 1); assert.equal(store.get("fixture-intent").state, "unknown");
   now += 10000; await owner.tick(); assert.equal(posts, 1);
   mode = "changed"; now += 10000; await owner.tick(); assert.equal(posts, 1);
-  mode = "unreserved"; now += 10000; await owner.tick(); assert.equal(posts, 2);
-  assert.ok(calls.some(call => call.target === "/api/agent/deliveries/caller/fixture-intent"));
+  mode = "unreserved"; now += 10000; await owner.tick(); assert.equal(posts, 1);
+  assert.equal(calls.length, 1);
 });
 
 test("query recovers accepted receipt without sending another task; one blocked target does not starve another", async t => {
@@ -284,7 +286,7 @@ test("query recovers accepted receipt without sending another task; one blocked 
     if (method === "GET") return response(200, { code: 0, data: { deliveryId: "internal", state: "committed", receipt: { accepted: true } } });
     posts++; return options.body.deliveryId === "blocked" ? response(403, { code: -1 }) : response(200, { status: "delivered", delivery: { status: "accepted", deliveryId: "internal-2" } });
   } }) }); t.after(async () => { await owner.close(); fs.rmSync(path.dirname(file), { recursive: true, force: true }); });
-  owner.submit(intent("blocked")); owner.submit({ ...intent("good"), request: { ...intent("good").request, threadId: "other-target" } }); await owner.flight; await owner.tick();
+  owner.submit(intent("blocked")); owner.submit({ ...intent("good"), request: { ...intent("good").request, threadId: "other-target" } }); await owner.flight; await owner.tick(); await owner.control({ action: "reconcile", intentId: "recovered" });
   assert.equal(store.get("recovered").state, "delivered"); assert.equal(store.get("blocked").state, "blocked"); assert.equal(store.get("good").state, "delivered"); assert.equal(posts, 2);
 });
 
@@ -333,7 +335,7 @@ test("disabled identity is blocked but observes original receipt after restorati
     return allowed ? response(200, { data: { state: "committed", deliveryId: "original-internal", receipt: { accepted: true } } }) : response(403, { code: -1 });
   } }) });
   owner.submit(intent()); await owner.flight; assert.equal(store.get("fixture-intent").state, "blocked");
-  now += 10000; allowed = true; await owner.tick(); assert.equal(posts, 1); assert.equal(owner.query({ action: "get", intentId: "fixture-intent" }).item.state, "received");
+  now += 10000; allowed = true; await owner.tick(); await owner.control({ action: "reconcile", intentId: "fixture-intent" }); assert.equal(posts, 1); assert.equal(owner.query({ action: "get", intentId: "fixture-intent" }).item.state, "received");
   await owner.close(); fs.rmSync(path.dirname(file), { recursive: true, force: true });
 });
 
@@ -373,7 +375,7 @@ test("all intent kinds freeze the original Manager GUID and reject another Manag
   identity = { ...identity, managerGuid: "manager-B", managerUrl: "http://b.invalid" }; owner.paused = false; await owner.tick();
   if (owner.flight) await owner.flight;
   assert.equal(posts, 0); assert.equal(events, 0); assert.equal(owner.store.get("original-agent").error, "DELIVERY_MANAGER_CHANGED");
-  assert.equal(owner.store.get(eventId).error, "DELIVERY_MANAGER_CHANGED"); assert.equal(owner.store.get("legacy-unbound").error, "DELIVERY_ORIGINAL_MANAGER_UNKNOWN");
+  assert.equal(owner.store.get(eventId).error, "DELIVERY_MANAGER_CHANGED"); assert.equal(owner.store.get("legacy-unbound").error, null);
   assert.equal(owner.acknowledge({ eventId, taskId: "task" }), false);
   now += 10000; identity = { ...identity, managerGuid: "manager-A", managerUrl: "http://a.invalid" }; await owner.tick();
   assert.equal(events, 1); assert.equal(posts, 1); assert.equal(owner.acknowledge({ eventId, taskId: "task" }), true);
@@ -424,7 +426,7 @@ test("the actual runtime factory pins the row Manager when config changes after 
     return verified;
   };
   owner.paused = false; owner.submit(intent("binding-race")); await owner.flight;
-  assert.equal(owner.store.get("binding-race").attempts, 0, "changed config must fail before creating an HTTP attempt");
+  assert.equal(owner.store.get("binding-race").attempts, 0, "changed config fails before the HTTP attempt");
   assert.equal(owner.store.raw("binding-race").manager_guid, "manager-A");
   assert.throws(() => owner.client("codex", "source-session", "manager-A"), /Original delivery Manager changed/);
   await owner.close(); runtime.deliveryOwner = null; runtime.stop(); fs.rmSync(root, { recursive: true, force: true });

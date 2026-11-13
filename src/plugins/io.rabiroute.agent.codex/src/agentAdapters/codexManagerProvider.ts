@@ -46,7 +46,7 @@ export function createManager(options: AgentManagerImplementationOptions, descri
       },
       readCompletionImages: async (payload, invocation) => {
         const thread = readCodexDesktopThread(payload.sessionId);
-        return thread?.rolloutPath ? readCodexTurnImages(thread.rolloutPath, payload.turnId, invocation?.onError as ((error: Error) => void) | undefined) : [];
+        return thread?.rolloutPath ? readCodexTurnImages(thread.rolloutPath, payload.turnId, invocation?.onError as ((error: Error) => void) | undefined, thread.id) : [];
       },
       'hooks.update': (_payload, invocation) => updateHooks(options.host.packageRoot)
     },

@@ -5,7 +5,7 @@ import type { KnowledgeSearchService } from '@rabiroute/host-api/manager/knowled
 import { preparePersonaResourceAdmission,type PersonaResourceIdentity } from './personaResourceAdmission.js';
 import { ApiContractError } from '@rabiroute/host-api/manager/apiOperationContract';
 
-export type KnowledgeSearchContext={service?:KnowledgeSearchService;roleDirectory(roleId:string):string;identity?():PersonaResourceIdentity};
+export type KnowledgeSearchContext={service?:KnowledgeSearchService;roleDirectory(roleId:string):string;roleExists?(roleId:string):boolean;identity?():PersonaResourceIdentity};
 function kind(value: unknown, invalid: () => Error): KnowledgeKind | undefined {
   if (value === undefined || value === null || value === "") return undefined;
   if (value !== "plan" && value !== "recent" && value !== "consolidated") throw invalid();
@@ -16,7 +16,9 @@ function kind(value: unknown, invalid: () => Error): KnowledgeKind | undefined {
 /** The Manager-owned native service retains index state, storage workers and refresh lifecycle. */
 export function createKnowledgeSearchOwner(context:KnowledgeSearchContext) {
   return {prepare(request:http.IncomingMessage,roleId:string,signal?:AbortSignal) {
-    const admission=preparePersonaResourceAdmission(request,signal,context.identity),directory=context.roleDirectory(roleId),service=context.service;
+    const admission=preparePersonaResourceAdmission(request,signal,context.identity);
+    if (context.roleExists && !context.roleExists(roleId)) throw Object.assign(new Error("Agent role not found. Read GET /api/roles for available roles."), { statusCode: 404, publicCode: "AGENT_NOT_FOUND" });
+    const directory=context.roleDirectory(roleId),service=context.service;
     const assertCurrent=()=>{admission();if(path.resolve(context.roleDirectory(roleId))!==path.resolve(directory)||context.service!==service)throw Object.assign(new Error('Original knowledge index owner changed.'),{statusCode:409});};
     const root='/api/roles/'+encodeURIComponent(roleId)+'/knowledge/';
     const failure=(field:string,reason:string,reload=false,status=400,code='KNOWLEDGE_PARAMETER_INVALID')=>new ApiContractError(status,code,field,

@@ -83,13 +83,13 @@ Mac 原生终端与 Desktop IPC 仍需在线真机验收。`401 LAN_AGENT_CREDEN
 登录启动和手动运行均进入同一个主程序。稳定启动器是唯一生命周期拥有者，连接器和托盘都是其子程序；状态窗口由托盘子程序内部创建。重复启动不创建第二套连接器，主程序退出或意外结束时子程序一并退出。
 
 - 双击托盘图标打开状态与日志：连接状态、版本、绑定任务、最近投递结果，以及最多 120 条当前进程状态记录。Agent 在真实投递前显示“运行未核验”；不定时扫描宿主或会话。
-- 菜单提供启动/停止/重启连接器、重新连接主机、打开主机管理页、开机启动和退出。停止连接器保留托盘，退出结束本应用全部子程序；Codex/DSH 仍由其自身管理。更新或已知任务执行期间，连接器控制暂不可用。
+- 菜单提供启动/停止/重启连接器、重新连接主机、检查/更新程序、打开主机管理页、开机启动和退出。停止连接器保留托盘，退出结束本应用全部子程序；Codex/DSH 仍由其自身管理。更新或已知任务执行期间，连接器控制暂不可用。
 - 开机启动修改由主程序写入并回读；原启动文件留底，其他安装的启动项拒绝覆盖。打开管理页使用不带凭据的当前主机地址，由浏览器完成登录。
 - 托盘仅经父子管道消费脱敏状态和提交操作，不读取私有配置、不连接 Manager、不另起 Agent Runtime。
 
 已完成 Windows 原生托盘、菜单、单实例、进程退出和隔离发布资产测试；真实双机升级及登录启动仍待验收。旧签名版本升级后需正常退出原主程序，再从既有启动器启动一次，才采用新的主程序和托盘；不重新接入或更换任务绑定。
 
-命令行控制也交给同一个主程序：`node rabi-agent-launcher.mjs --config <私有配置> --command status|start|pause|restart|reconnect|enable-startup|disable-startup`；`--stop` 退出整套应用。CLI 控制进程只执行单次请求。
+命令行控制也交给同一个主程序：`node rabi-agent-launcher.mjs --config <私有配置> --command status|start|pause|restart|reconnect|check-update|enable-startup|disable-startup`；`--stop` 退出整套应用。CLI 控制进程只执行单次请求。
 
 > 状态：experimental（实验集成）。接入、授权及上传后群文件发送已通过本机测试、完整构建和 `0.3.4-4b5d30118b40` 部署健康核验。上传集成使用真实 HTTP 与模拟 NapCat，真实双机群文件尚未验收。本轮发现指引与内容摘要更新修复须另核最终运行版本；Windows ZIP 整包尚未验收。
 
@@ -157,7 +157,7 @@ node rabi-agent.mjs --api GET /api/lan-agent/resources --agent-type <type> --id 
 node rabi-agent.mjs --api GET "/api/lan-agent/resources/read?id=docs%2Frabi-agent-interfaces.md" --agent-type <type> --id <fullSessionId>
 ```
 
-可靠 Agent 发送通过原客户端持久受理并后台恢复；本地已受理与目标已送达分开显示。稳定启动器支持 `--delivery-submit`、`--delivery-query`、`--delivery-list`，原 `--api POST /api/agent/threads` 的 send 自动进入同一路径。其他 HTTP 写入仍不自动重放。见[可靠投递与记录](../../docs/reliable-agent-delivery.md)。
+Agent 发送由原客户端持久受理；本地受理与目标已送达分开显示。确认尚未发送的准备失败可在原身份恢复后继续首次发送；发送结果不明或重启后的旧记录仅核对原回执，不重放正文。旧待确认记录不阻塞同目标的新授权发送。稳定启动器支持 `--delivery-submit`、`--delivery-query`、`--delivery-list`，原 `--api POST /api/agent/threads` 的 send 自动进入同一路径。其他 HTTP 写入仍不自动重放。见[可靠投递与记录](../../docs/reliable-agent-delivery.md)。
 
 通用语法：`--api METHOD /path --agent-type TYPE --id FULL_SESSION_ID [--body-stdin] [--if-match ETAG] [--idempotency-key KEY]`。每次调用指定实际 Agent 类型和完整会话 ID，无需预注册或绑定；CLI 自动读取 `nodeCredential`，不接受旧共享凭据。写入先读现行合同，JSON 通过标准输入传入，按要求提供强 ETag 与稳定幂等键。CLI 前后核对 Manager `/meta`；超时、503、`uncertain` 或写后切代先权威读回，不自动重放，412 重新读取并确认原意。
 

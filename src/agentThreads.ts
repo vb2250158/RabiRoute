@@ -45,6 +45,9 @@ import {
   normalizeRabiDeliveryBlock,
   renderRabiDelivery,
   renderRabiDeliveryContent,
+  RABI_MESSAGE_SOURCE_HEADER,
+  RABI_MESSAGE_CONTENT_HEADER,
+  RABI_MESSAGE_UNKNOWN,
   type RabiMessageSource
 } from "./shared/rabiMessage.js";
 import {
@@ -399,9 +402,15 @@ function standaloneWorkspacePolicyPrompt(
   deliveryId?: string
 ): string {
   if (!messageSource) return [
-    ...(deliveryId ? ['[投递编号]\ndeliveryId: ' + deliveryId] : []),
+    RABI_MESSAGE_SOURCE_HEADER,
+    `- 处理端：${RABI_MESSAGE_UNKNOWN}`,
+    `- 会话：${RABI_MESSAGE_UNKNOWN}`,
+    `- 会话 ID：${RABI_MESSAGE_UNKNOWN}`,
+    ...(deliveryId ? [`- 投递 ID：${deliveryId}`] : []),
+    `- 投递时间：${new Date().toLocaleString("zh-CN", { hour12: false })}`,
+    "", RABI_MESSAGE_CONTENT_HEADER,
     renderRabiDeliveryContent({ messageContent: rawPrompt, contextBlocks, controlBlocks })
-  ].join('\n\n');
+  ].join('\n');
   return renderRabiDelivery({
     messageSource,
     messageContent: rawPrompt,
@@ -885,6 +894,17 @@ export async function handleAgentThreadRequest(
   driver: AgentThreadDriver = defaultDriver
 ): Promise<AgentThreadRequestResult> {
   const result = await withAgentManagerInvocation(options, () => executeAgentThreadRequest(request, options, driver));
+  if (request.action === "send" || (request.action === "create" &&
+      typeof request.prompt === "string" && request.prompt.trim())) {
+    const source = describeAgentThreadMessageSource(request.messageSource, options.remoteSource);
+    const warnings = Array.isArray(result.data.warnings) ? result.data.warnings : [];
+    if (!source) {
+      warnings.push(request.messageSource == null
+        ? "未提供 messageSource，本次投递使用「未知」来源"
+        : "messageSource 信息不完整，本次投递使用「未知」来源");
+    }
+    result.data.warnings = warnings;
+  }
   if (request.action === "send" && (request.messageSource?.type === "agent" || request.messageSource?.type === "agent_hook")
     && (!options.remoteSource || Boolean(result.data.source && result.data.messageSource))
     && ["delivered", "delivered_tracking_failed", "delivery_unconfirmed"].includes(String(result.data.status))) {

@@ -6,6 +6,17 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.15.1 - 2026-11-13
+
+- Compact the desktop control indicator into a rounded capsule with transparent window corners, a 46-pixel standard height and bounded long labels. Retain large text, themes, centered placement and stop actions, verified across two displays and 1×/2× hit testing.
+
+- `rabi-agent` SDK/CLI `0.4.4` retains native control admission when Qt confirmation fails, reports the presentation warning separately, preserves an earlier exit across late acknowledgements, and passes the original requestId to native feedback.
+- Merge Agent search, role configuration and automation operations from the earlier workspace while retaining the current plugin architecture, concurrency controls and receipts.
+- Correct message reference and Codex session recovery identity handling, preserving actionable error logs and native control receipts.
+- Update MCP 0.2.5, Host API 1.14.0 and affected plugin versions; Agent SDK/CLI 0.4.4 installation and node updates remain independently managed.
+
+- Affected plugins: `io.rabiroute.agent.codex` 0.1.7; `io.rabiroute.endpoint.feishu` 0.1.4; `io.rabiroute.endpoint.heartbeat` 0.1.5; `io.rabiroute.endpoint.napcat` 0.1.8; `io.rabiroute.endpoint.rabilink` 0.1.4; `io.rabiroute.endpoint.wecom` 0.1.4; `io.rabiroute.manager.agent-communication` 0.1.6; `io.rabiroute.manager.persona` 0.1.14; `io.rabiroute.manager.xiaomi-home` 0.1.4.
+
 ## 0.15.0 - 2026-11-13
 
 - Host API `1.13.0` records the registered-response media extension. The generic Host response owner consumes registered schema media declarations and publishes image metadata. Computer captures and attached result images use the same client contract.

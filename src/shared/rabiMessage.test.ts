@@ -11,6 +11,13 @@ function markdownSource(lines: string[]): string[] {
   return lines.map((line, index) => index === 0 ? "## 消息源" : `- ${line}`);
 }
 
+test("incomplete agent display fields use unknown without weakening normalization", () => {
+  const source = { type: "agent" as const, agentAdapter: "codex" as const, sessionName: "", sessionId: "" };
+  assert.ok(rabiMessageSourceLines(source).includes("- 会话：未知"));
+  assert.ok(rabiMessageSourceLines(source).includes("- 会话 ID：未知"));
+  assert.throws(() => normalizeRabiMessageSource(source), /Missing messageSource/);
+});
+
 test("message adapter source renders the endpoint, conversation, sender, and message ids before content", () => {
   const source = {
     type: "message_adapter" as const,

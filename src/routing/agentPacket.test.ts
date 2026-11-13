@@ -574,6 +574,7 @@ test("AgentPacket excludes every fragment already merged into the current messag
     userId: 10001,
     rawMessage: "这个按钮\n再往下挪一点",
     messageId: 3002,
+    repliedMessageId: "2999",
     senderName: "小明",
     messageGroupId: "message-group-1",
     messageGroupMessageIds: ["3001", "3002"]
@@ -626,6 +627,13 @@ test("AgentPacket excludes every fragment already merged into the current messag
   const replyContext = JSON.parse(String(packet.templateValues.replyContextJson));
   assert.equal(replyContext.messageGroupId, "message-group-1");
   assert.deepEqual(replyContext.messageGroupMessageIds, ["3001", "3002"]);
+  const brief = buildPublishedAgentPacket({
+    route, routeKind: "group_message", record, extraValues: {}, matchedRules: [rule],
+    routeVariables: {}, routeText: record.rawMessage
+  }, rule, { roleId: "", roleDir: "", rolePath: "", dataDir });
+  assert.equal((brief.message.match(/消息 ID：3002/g) ?? []).length, 1);
+  assert.match(brief.message, /引用消息：2999/);
+  assert.match(brief.message, /消息组：3001、3002/);
 });
 
 test("AgentPacket highlights the immediate addressed context before interpreting a short group reply", () => {

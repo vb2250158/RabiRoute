@@ -6,7 +6,7 @@
 
 Use one computer-operation contract for observation, targeting, batch input and result inspection. CLI, MCP and Agent plugins share parameters, target identity and original request receipts.
 
-Host 0.15.0 and Core 0.1.8 jointly provide registered image responses. Agent SDK／CLI 0.4.3 and MCP 0.2.4 provide the corresponding media projection and native batch protocol. Read actual adopted versions from the running plugin, client and desktop executor.
+Host 0.15.0 and Core 0.1.8 jointly provide registered image responses. Agent SDK／CLI 0.4.4 and MCP 0.2.4 provide the corresponding media projection and native batch protocol. Read actual adopted versions from the running plugin, client and desktop executor.
 
 ## Observe the target
 
@@ -51,6 +51,10 @@ Physical mouse movement preserves the user's new position. Receipts distinguish 
 ## Operation feedback
 
 The desktop bar follows the observed display. `presentation.barPlacement` selects top-center or bottom-center placement. Text size and motion follow current settings and theme. The bar presents the observed region, observation／operation／return phase and stop action. WebGUI receives activity updates and can expand the image.
+
+The desktop indicator uses a rounded capsule with transparent window corners. Standard text uses 280–360 logical pixels of width and 46 of height. Large text uses 58 of height. Long labels elide within the bounded width. The stop button tooltip provides the complete status, source and exit shortcut. The body and rounded corners allow click-through while the stop button remains interactive.
+
+After native control admission, a failed Qt confirmation is reported in `presentation.presentationWarning` while the native admission remains queryable. Visibility is unconfirmed in that response. A late presentation acknowledgement preserves an earlier control exit.
 
 ## Updates and local failures
 

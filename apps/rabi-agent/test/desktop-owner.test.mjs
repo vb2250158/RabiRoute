@@ -73,6 +73,7 @@ async function ownerFixture(t) {
   fs.writeFileSync(entry, `
 process.send({type:'desktopSnapshot', summary:'已连接主机',version:'fixture',agents:'codex: bound-task',task:'',busy:false,managerOrigin:'http://manager.invalid',nodeCredential:'private-fixture-value'});
 process.on('message', m=>{if(m.type==='desktopReconnect')process.send({type:'desktopSnapshot',summary:'已重新连接主机',busy:false});});
+process.on('message', m=>{if(m.type==='desktopCheckUpdate')process.send({type:'desktopSnapshot',summary:'正在检查程序更新',busy:true,event:'fixture: 已收到检查/更新程序请求'});});
 process.on('disconnect',()=>process.exit(0));
 setInterval(()=>{},1000);
 `);
@@ -180,7 +181,7 @@ $data.Add('summary','已连接主机'); $data.Add('running',$true); $data.Add('b
 $parameters = New-Object object[] 1
 $parameters.SetValue($data,0)
 $ui.GetType().GetMethod('Render',$flags).Invoke($ui,$parameters) | Out-Null
-foreach($name in @('start','pause','reconnect','startup','exit')){ $ui.GetType().GetField($name,$flags).GetValue($ui).PerformClick() }
+foreach($name in @('start','pause','reconnect','checkUpdate','startup','exit')){ $ui.GetType().GetField($name,$flags).GetValue($ui).PerformClick() }
 $checked = $ui.GetType().GetField('startup',$flags).GetValue($ui).Checked
 [Console]::WriteLine('{"type":"checked-after-click","value":'+$checked.ToString().ToLower()+'}')
 $ui.GetType().GetMethod('ExitThreadCore',$flags).Invoke($ui,@()) | Out-Null
@@ -191,7 +192,37 @@ $ui.GetType().GetMethod('ExitThreadCore',$flags).Invoke($ui,@()) | Out-Null
   assert.equal(await ui.closed, 0, ui.errors());
   const events = ui.output().trim().split("\n").map(JSON.parse);
   assert.deepEqual(events.find(event => event.type === "branded-icons"), { type: "branded-icons", tray: true, window: true });
-  assert.deepEqual(events.filter(event => event.type === "command").map(event => event.action), ["pause", "reconnect", "startup", "exit"]);
+  assert.equal(events.find(event => event.type === "rendered").checkUpdate, true);
+  assert.deepEqual(events.filter(event => event.type === "command").map(event => event.action), ["pause", "reconnect", "check-update", "startup", "exit"]);
   assert.equal(events.find(event => event.action === "startup").enabled, false);
   assert.equal(events.find(event => event.type === "checked-after-click").value, true);
+});
+
+test("check-update reaches the worker and publishes a deterministic desktop state", async t => {
+  const f = await ownerFixture(t);
+  await f.command("check-update");
+  await waitFor(async () => (await f.command("status")).summary === "正在检查程序更新");
+});
+
+test("manual check/update refuses without a Manager connection and reports why", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabi-check-update-"));
+  const runtime = new __test.RabiAgentRuntime({ managerUrl: "http://manager.invalid", nodeCredential: "private-fixture-value", nodeId: "fixture", agents: [] }, path.join(root, "config.json"));
+  try {
+    let starts = 0;
+    runtime.update = async () => { starts++; return { status: "updated", version: "fixture" }; };
+    await runtime.checkAndUpdate();
+    assert.equal(starts, 0);
+    assert.match(runtime.desktopSummary, /无法检查更新/);
+  } finally { runtime.stop(); fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("manual check/update reports an explicit up-to-date result", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabi-check-update-"));
+  const runtime = new __test.RabiAgentRuntime({ managerUrl: "http://manager.invalid", nodeCredential: "private-fixture-value", nodeId: "fixture", agents: [] }, path.join(root, "config.json"));
+  try {
+    runtime.connected = true;
+    runtime.update = async () => ({ status: "up-to-date", version: "0.4.2" });
+    await runtime.checkAndUpdate();
+    assert.match(runtime.desktopSummary, /已是最新版本 0\.4\.2/);
+  } finally { runtime.stop(); fs.rmSync(root, { recursive: true, force: true }); }
 });

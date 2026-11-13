@@ -8,6 +8,18 @@ function argumentError(name, field, properties, message) {
     repair: `Read ${name} input schema. Accepted fields: ${Object.keys(properties ?? {}).join(', ')}.` });
 }
 
+/** Session budgets belong to the MCP host's launch configuration. */
+export function readOperationSessionSettings(env = process.env) {
+  const read = (name, fallback) => {
+    if (env[name] === undefined) return fallback;
+    const value = Number(env[name]);
+    if (!env[name].trim() || !Number.isSafeInteger(value) || value < 1)
+      throw new TypeError(`${name} must be a positive safe integer in the MCP launch environment.`);
+    return value;
+  };
+  return { maxSessions: read('RABI_MCP_MAX_SESSIONS', 16), maxSessionBytes: read('RABI_MCP_MAX_SESSION_BYTES', 1024 * 1024) };
+}
+
 /** MCP owns tool presentation and live stream sessions, while the SDK owns discovery and invocation. */
 export function createOperationTools({ client, ...policy }) {
   const sdk = client?.operations;

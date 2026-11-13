@@ -5,7 +5,7 @@ import { config } from "@rabiroute/host-api/config";
 import {
   appendAdapterLogToDir,
   appendFeishuMessageToDir,
-  type AdapterLogRecord,
+  type AdapterLogInput,
   type FeishuMessageRecord
 } from "@rabiroute/host-api/history";
 import { forwardMessage } from "@rabiroute/host-api/forwarding";
@@ -100,7 +100,7 @@ export type FeishuAdapterDependencies = {
   apiOperations?: Pick<ManagerApiOperationsService, "registerExternalListener"> | ManagerPluginRouteRegistry;
   publishListener?: (publication: ApiExternalListenerPublication | undefined) => void;
   appendLog?: (
-    record: Omit<AdapterLogRecord, "adapter" | "time"> & Partial<AdapterLogRecord>,
+    record: AdapterLogInput,
     dataDir: string
   ) => void;
 };
@@ -141,7 +141,7 @@ export function createFeishuAdapter(
         memoryDataDir: dependencies.memoryDataDir?.() ?? config.memoryDataDir,
         now: dependencies.now ?? (() => new Date())
       };
-      const appendLog = (record: Omit<AdapterLogRecord, "adapter" | "time"> & Partial<AdapterLogRecord>) => {
+      const appendLog = (record: AdapterLogInput) => {
         (dependencies.appendLog ?? ((entry, dataDir) => appendAdapterLogToDir("feishu", entry, dataDir)))(record, lifecycle.dataDir);
       };
       const patchRuntimeStatus = (patch: Record<string, unknown>, now = lifecycle.now()) => {
@@ -151,7 +151,7 @@ export function createFeishuAdapter(
           console.error("Failed to update Feishu runtime status", error);
         }
       };
-      const appendRuntimeLog = (record: Omit<AdapterLogRecord, "adapter" | "time"> & Partial<AdapterLogRecord>) => {
+      const appendRuntimeLog = (record: AdapterLogInput) => {
         try {
           appendLog(record);
         } catch (error) {
@@ -160,7 +160,7 @@ export function createFeishuAdapter(
       };
       const withdrawPublication = () => {
         try { dependencies.publishListener?.(undefined); }
-        catch (error) { appendRuntimeLog({ level: "error", event: "listener_publication_withdraw_failed", message: error instanceof Error ? error.message : String(error) }); }
+        catch (error) { appendRuntimeLog({ level: "error", event: "listener_publication_withdraw_failed", message: error instanceof Error ? error.message : String(error), error }); }
       };
       const missing = [
         !(settings.appId && settings.appSecret) ? "app_credentials" : "",

@@ -210,3 +210,99 @@ test("view metadata that does not change native coordinates needs no imageView c
     await client.close();
   }
 });
+
+
+test("Qt render failure preserves native-active control and reports its presentation warning", async () => {
+  const child = childFixture((line, current) => {
+    const input = JSON.parse(line);
+    const result = input.action === "control.begin"
+      ? { state: "active", visible: true, renderRevision: 7, hotkey: { registered: true } }
+      : { state: "ended" };
+    setImmediate(() => current.stdout.write(JSON.stringify({ id: input.id, result }) + "\n"));
+  });
+  const native = new NativeComputerClient({ launch: () => child });
+  native.qt = { start: async () => {}, shown: async () => { throw new Error("fixture Qt acknowledgement lost"); }, close: async () => {} };
+  const owner = new ComputerControlService({ native, instanceId: "fixture-computer" });
+  const context = { sourceId: "fixture-source" };
+  const input = { action: "control.begin", requestId: "qt-render-original" };
+  try {
+    const result = await owner.execute(input, context);
+    assert.equal(result.state, "active");
+    assert.equal(result.presentation.hotkey.registered, true);
+    assert.equal(Object.hasOwn(result.presentation, "visible"), false);
+    assert.equal(result.presentation.presentationWarning.code, "COMPUTER_QT_UNAVAILABLE");
+    assert.equal((await owner.execute({ action: "input.status", requestId: input.requestId }, context)).state, "active");
+  } finally { await owner.stop(); }
+});
+
+test("control begin forwards its original request ID to the native presentation owner", async () => {
+  let original;
+  const child = childFixture((line, current) => {
+    const input = JSON.parse(line);
+    if (input.action === "control.begin") original = input;
+    setImmediate(() => current.stdout.write(JSON.stringify({ id: input.id, result: { state: input.action === "control.begin" ? "active" : "ended" } }) + "\n"));
+  });
+  const native = new NativeComputerClient({ launch: () => child });
+  const owner = new ComputerControlService({ native, instanceId: "fixture-computer" });
+  try {
+    await owner.execute({ action: "control.begin", requestId: "native-request-original" }, { sourceId: "fixture-source" });
+    assert.equal(original.requestId, "native-request-original");
+  } finally { await owner.stop(); }
+});
+
+test("annotation render failure still reports its own failed drawing confirmation", async () => {
+  const child = childFixture((line, current) => {
+    const input = JSON.parse(line);
+    setImmediate(() => current.stdout.write(JSON.stringify({ id: input.id, result: { state: "shown", renderRevision: 8 } }) + "\n"));
+  });
+  const native = new NativeComputerClient({ launch: () => child });
+  native.qt = { start: async () => {}, shown: async () => { throw new Error("fixture annotation not confirmed"); }, close: async () => {} };
+  try { await assert.rejects(native.request("annotation.show", {}), /annotation not confirmed/); }
+  finally { await native.close(); }
+});
+
+test("closing a native owner during Qt confirmation cannot return an active control result", async () => {
+  let rejectShown, markShown;
+  const entered = new Promise(resolve => { markShown = resolve; });
+  const child = childFixture((line, current) => {
+    const input = JSON.parse(line);
+    setImmediate(() => current.stdout.write(JSON.stringify({ id: input.id, result: { state: "active", renderRevision: 9 } }) + "\n"));
+  });
+  const native = new NativeComputerClient({ launch: () => child });
+  native.qt = { start: async () => {}, shown: () => { markShown(); return new Promise((_resolve, reject) => { rejectShown = reject; }); }, close: async () => { rejectShown?.(new Error("fixture owner closed")); } };
+  const pending = native.request("control.begin", { controlSessionId: "original-control" });
+  const rejected = assert.rejects(pending, /owner closed/);
+  await entered;
+  await native.close();
+  await rejected;
+});
+
+
+for (const acknowledgement of ["success", "failure"]) {
+  test(`control end stays ended after a late Qt ${acknowledgement} acknowledgement`, async () => {
+    let begin, finishShown, markShown;
+    const entered = new Promise(resolve => { markShown = resolve; });
+    const child = childFixture((line, current) => {
+      const input = JSON.parse(line);
+      if (input.action === "control.begin") begin = input;
+      const result = input.action === "control.begin" ? { state: "active", visible: true, renderRevision: 11 } : { state: "ended" };
+      setImmediate(() => current.stdout.write(JSON.stringify({ id: input.id, result }) + "\n"));
+    });
+    const native = new NativeComputerClient({ launch: () => child });
+    native.qt = { start: async () => {}, shown: () => {
+      markShown();
+      return new Promise((resolve, reject) => { finishShown = () => acknowledgement === "success" ? resolve({ revision: 11 }) : reject(new Error("fixture late drawing failure")); });
+    }, close: async () => {} };
+    const owner = new ComputerControlService({ native, instanceId: "fixture-computer" });
+    try {
+      const pending = owner.execute({ action: "control.begin", requestId: "ended-before-qt-" + acknowledgement }, { sourceId: "fixture-source" });
+      await entered;
+      child.stdout.write(JSON.stringify({ event: "control-ended", data: { controlSessionId: begin.controlSessionId, reason: "fixture-user-exit" } }) + "\n");
+      assert.equal(owner.controlStatus(begin.controlSessionId).state, "ended");
+      finishShown();
+      const result = await pending;
+      assert.equal(result.state, "ended");
+      assert.equal(owner.controlStatus(begin.controlSessionId).state, "ended");
+    } finally { await owner.stop(); }
+  });
+}

@@ -319,15 +319,14 @@ export function prepareReplyImageDescriptions(
   if (reviewedSource) {
     located = locateReviewedMessage(reviewedSource, input.routeId, replyToMessageId, groupId, instanceId);
   } else {
-    located = locateLegacyMessage(options, input.routeId, replyToMessageId, groupId, instanceId);
-    if (!located) {
-      const managedOutbound = locateManagedOutboundMessage(options, input.routeId, replyToMessageId, groupId, instanceId);
-      if (managedOutbound) {
-        if (!platformSource) {
-          throw new Error(`Referenced outbound QQ message ${replyToMessageId} requires current platform evidence before it can be quoted.`);
-        }
-        located = locatePlatformMessage(platformSource, options, input.routeId, replyToMessageId, groupId, instanceId);
+    const managedOutbound = locateManagedOutboundMessage(options, input.routeId, replyToMessageId, groupId, instanceId);
+    if (managedOutbound) {
+      if (!platformSource) {
+        throw new Error(`Referenced outbound QQ message ${replyToMessageId} requires current platform evidence before it can be quoted.`);
       }
+      located = locatePlatformMessage(platformSource, options, input.routeId, replyToMessageId, groupId, instanceId);
+    } else {
+      located = locateLegacyMessage(options, input.routeId, replyToMessageId, groupId, instanceId);
     }
   }
   if (!located) {

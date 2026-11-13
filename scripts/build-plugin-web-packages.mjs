@@ -8,6 +8,13 @@ import { finalizeSelectedPluginWebArtifacts } from './build-plugin-packages.mjs'
 
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 
+/** Only source files inside the selected build root belong in its input receipt. */
+export function webInputRelativePath(root, file, pathApi = path) {
+  const relative = pathApi.relative(root, file);
+  if (!relative || pathApi.isAbsolute(relative) || relative === '..' || relative.startsWith('..' + pathApi.sep)) return undefined;
+  return relative.replaceAll('\\', '/');
+}
+
 /** The catalog owns the complete Web source set, including disabled profile instances. */
 export async function allWebPluginPackages(root) {
   const catalog = JSON.parse(await fs.readFile(path.join(root, 'plugins/source-catalog.json'), 'utf8'));
@@ -45,8 +52,8 @@ export async function buildPluginWebPackages(root = process.cwd(), options = {})
       const built = await buildPluginWebPackage({ sourceDirectory: source, outputDirectory: staged, runtimeCatalog: runtime,
         referenceRoot: root, aliases: { '@': path.join(root, 'ribiwebgui/src'), '@shared': path.join(root, 'src/shared'), '@rabiroute/host-api': path.join(root, 'src') } });
       for (const record of built.inputs) {
-        const name = path.relative(root, record.path).replaceAll('\\', '/');
-        if (!name.startsWith('../') && name !== '..') inputPaths.add(name);
+        const name = webInputRelativePath(root, record.path);
+        if (name !== undefined) inputPaths.add(name);
       }
       const webRoot = path.join(packageRoot, 'web');
       if (!webRoot.startsWith(outputRoot + path.sep)) throw new Error('Selected Web output escaped its package root.');

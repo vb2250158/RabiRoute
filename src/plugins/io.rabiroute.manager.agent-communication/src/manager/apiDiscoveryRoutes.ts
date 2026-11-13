@@ -131,6 +131,7 @@ export function createApiDiscoveryOperations(registry: ManagerPluginRouteRegistr
     handler: ApiOperationDefinition["handler"], pathSchema: ApiSchema = empty): ApiOperationDefinition => ({
     discovery: { title: description, category: { id: "runtime", title: "插件与运行" }, tags: ["discovery", "接口发现"] },
     contract: { operationId, contractVersion: "1.0.0", method: "GET", pathTemplate, description, exposure: "public", transport: "http",
+      ...(operationId === "manager.api.operations.list" ? { searchable: { scope: "operations", legend: "活动接口合同与真实调用入口 / registered operation contracts", kinds: ["operation"] } } : {}),
       ...(pathTemplate === "/api/agent/help" ? { aliases: [`agent:GET:${pathTemplate}`] } : {}),
       request: { path: pathSchema, query, headers: { type: "object", properties: { "if-none-match": { type: "string" } }, additionalProperties: true }, body: { kind: "none" } },
       responses: { "200": { mediaType: "application/json", schema }, "304": { mediaType: "application/json", schema: false } },

@@ -329,7 +329,7 @@ async function stableLauncher(defaultConfigPath, policy) {
   const commandIndex = forwarded.indexOf("--command");
   const requestedCommand = commandIndex >= 0 ? forwarded[commandIndex + 1] : undefined;
   if (commandIndex >= 0 && !requestedCommand) throw new Error("Launcher command is required.");
-  if (requestedCommand && !["status", "start", "pause", "restart", "reconnect", "enable-startup", "disable-startup"].includes(requestedCommand)) throw new Error("Unsupported launcher command.");
+  if (requestedCommand && !["status", "start", "pause", "restart", "reconnect", "check-update", "enable-startup", "disable-startup"].includes(requestedCommand)) throw new Error("Unsupported launcher command.");
   if (forwarded.includes("--stop") || requestedCommand) {
     let diagnostic;
     try { diagnostic = JSON.parse(fs.readFileSync(diagnosticPath, "utf8")); } catch { /* Absence is not a lease. */ }
@@ -416,7 +416,7 @@ async function stableLauncher(defaultConfigPath, policy) {
           if (released) socket.end("stopped\n");
           else { stopWaiters.add(socket); stop(); }
           return;
-        } else if (nonce && /^command (status|start|pause|restart|reconnect|enable-startup|disable-startup) [a-f0-9]{64}$/.test(line)) {
+        } else if (nonce && /^command (status|start|pause|restart|reconnect|check-update|enable-startup|disable-startup) [a-f0-9]{64}$/.test(line)) {
           const [, action, signature] = line.split(" ");
           if (signature !== proof(token, action, nonce)) { socket.destroy(); return; }
           nonce = undefined;
@@ -524,6 +524,10 @@ async function stableLauncher(defaultConfigPath, policy) {
           if (["http:", "https:"].includes(origin.protocol) && !origin.username && !origin.password) publicState.managerOrigin = origin.origin;
         } catch { publicState.managerOrigin = ""; }
         publish(publicState.summary);
+        if (typeof message.event === "string" && message.event.trim()) {
+          recentEvents.push(`${new Date().toLocaleTimeString()}  ${message.event.slice(0, 500)}`);
+          if (recentEvents.length > 120) recentEvents.shift();
+        }
       } else if (message?.type === "launcherSpawnCandidate" && !candidate) {
         candidate = { owner: child, requestId: message.requestId, child: null };
         candidate.child = startChild(path.resolve(message.entrypoint), true);
@@ -604,6 +608,16 @@ async function stableLauncher(defaultConfigPath, policy) {
       recentEvents.push(`${new Date().toLocaleTimeString()}  ${enabled ? "已开启开机启动" : "已关闭开机启动"}`);
       if (recentEvents.length > 120) recentEvents.shift();
       publish();
+      return;
+    }
+    // A local, deterministic update request. It intentionally bypasses the
+    // busy guard below: the update itself publishes busy=true and disables the
+    // menu, and RabiAgentRuntime.update() de-duplicates concurrent requests.
+    if (action === "check-update") {
+      if (stopping || transitioning || candidate || !worker?.connected) { publish("无法检查更新：连接器未就绪"); return; }
+      if (publicState.busy) { publish("正在检查/更新程序"); return; }
+      publish("正在检查/更新程序");
+      send(worker, { type: "desktopCheckUpdate" });
       return;
     }
     if (transitioning || candidate || publicState.busy) throw new Error("Connector is busy.");
@@ -1005,7 +1019,7 @@ class RabiAgentRuntime {
     return operation === "submit" ? owner.submit(params) : { ok: true, ...owner.query(params) };
   }
 
-  publishDesktop(summary = this.desktopSummary) {
+  publishDesktop(summary = this.desktopSummary, event = "") {
     this.desktopSummary = summary;
     let managerOrigin = "";
     try { managerOrigin = new URL(this.config.managerUrl).origin; } catch { }
@@ -1013,7 +1027,8 @@ class RabiAgentRuntime {
       type: "desktopSnapshot", summary, version: AGENT_VERSION, managerOrigin,
       agents: instanceAgents(this.config).map(agent => `${agent.provider} · ${this.agentExecutionStatus.get(agent.agentId) || "按请求指定会话"}`).join("\n") || "按请求指定 Agent 类型与完整会话 ID",
       task: `${this.lastDesktopTask}${this.terminals.activeCount ? ` · ${this.terminals.activeCount} 个终端` : ""}`,
-      busy: this.draining || Boolean(this.updatePromise) || this.pendingOperations > 0 || this.taskByThread.size > 0 || this.terminals.activeCount > 0 || this.computer.activeCount > 0
+      busy: this.draining || Boolean(this.updatePromise) || this.pendingOperations > 0 || this.taskByThread.size > 0 || this.terminals.activeCount > 0 || this.computer.activeCount > 0,
+      ...(event ? { event: boundedText(event, 500) } : {})
     };
     if (process.connected) process.send?.(payload, () => undefined);
     return payload;
@@ -1606,6 +1621,25 @@ class RabiAgentRuntime {
     }
   }
 
+  // Local one-shot "check / update program": no Manager push and no external
+  // Agent decision. The whole signed download, drain, handoff and rollback is
+  // the existing deterministic update() chain; this only starts it and reports.
+  async checkAndUpdate() {
+    if (this.updatePromise) return;
+    if (!this.connected || this.stopped) {
+      this.publishDesktop("无法检查更新：连接器未连接主机", "检查/更新程序被跳过：连接器尚未连接主机。");
+      return;
+    }
+    this.publishDesktop("正在检查程序更新", "已触发检查/更新程序：签名清单核对、下载与完整性校验、任务排空、候选交接和失败回滚全部自动完成。");
+    try {
+      const result = await this.update();
+      if (result?.status === "up-to-date") this.publishDesktop(`已是最新版本 ${result.version}`, `检查完成：已是最新版本 ${result.version}，无需更新。`);
+    } catch (error) {
+      const reason = boundedText(error instanceof Error ? error.message : String(error), 500);
+      this.publishDesktop(this.desktopSummary, `更新失败，保留当前版本：${reason}`);
+    }
+  }
+
   update(requestedVersion) {
     if (this.updatePromise) return this.updatePromise;
     this.updatePromise = this.performUpdate(requestedVersion).then(result => {
@@ -1659,11 +1693,12 @@ class RabiAgentRuntime {
     if (requestedVersion && release.version !== requestedVersion) throw new Error(`Manager requested Rabi Agent ${requestedVersion}, but published ${release.version}.`);
     if (readInstalledDigest(fileURLToPath(import.meta.url)) === releaseDigest(release)) {
       this.send({ type: "updateResult", status: "updated" });
-      return;
+      return { status: "up-to-date", version: release.version };
     }
     const entrypoint = await installRelease(this.config, release, this.configPath);
     await installReleaseDependencies(entrypoint, { timeoutOverrides: this.config.timeoutOverridesCache });
     await this.handoffRelease(entrypoint, releaseDigest(release));
+    return { status: "updated", version: release.version };
   }
 
   async handoffRelease(entrypoint, digest) {
@@ -1804,7 +1839,7 @@ async function main() {
       runtime.candidatePending = false;
       runtime.startDeliveryOwner();
       runtime.send({ type: "updateResult", status: "updated" });
-      runtime.publishDesktop("已连接主机");
+      runtime.publishDesktop(`已更新至 ${AGENT_VERSION}`, `程序已自动更新至 ${AGENT_VERSION}，当前版本指针已完成原子切换。`);
     };
     process.on("message", message => {
       if (message?.type === "launcherCommitted" && process.env.RABI_AGENT_SUPERVISED === "1") finishCommit();
@@ -1844,6 +1879,7 @@ async function main() {
     }
     if (message?.type === "desktopRefresh") runtime.publishDesktop();
     if (message?.type === "desktopReconnect") runtime.reconnect();
+    if (message?.type === "desktopCheckUpdate" && !UPDATE_CANDIDATE) void runtime.checkAndUpdate();
   });
   if (process.env.RABI_AGENT_SUPERVISED === "1") process.once("disconnect", () => runtime.stop());
   process.once("SIGINT", stop);
