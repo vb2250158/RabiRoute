@@ -290,6 +290,21 @@ test("query recovers accepted receipt without sending another task; one blocked 
   assert.equal(store.get("recovered").state, "delivered"); assert.equal(store.get("blocked").state, "blocked"); assert.equal(store.get("good").state, "delivered"); assert.equal(posts, 2);
 });
 
+for (const status of ["completed", "failed"]) test(`a ${status} event before acceptance returns cannot be overwritten by progress`, async t => {
+  const { root, configPath } = fixture(t), config = { nodeId: "fixture-node", managerGuid: "fixture-guid", managerUrl: "http://manager.invalid", nodeCredential: "fixture-only", agents: [] };
+  fs.writeFileSync(configPath, JSON.stringify(config));
+  const runtime = new __test.RabiAgentRuntime(config, configPath);
+  try {
+    runtime.publishDesktop = () => {};
+    runtime.stateStore.state.tasks.task = { status: "acknowledged", managerGuid: config.managerGuid };
+    runtime.taskByThread.set("thread", "task");
+    runtime.handleAgentPluginEvent("agent.task-state", { provider: "codex", sessionId: "thread", status });
+    runtime.recordAcceptedCodexTask("thread", "task", "fixture-agent");
+    assert.equal(runtime.stateStore.state.tasks.task.status, status);
+    assert.equal(runtime.taskByThread.size, 0);
+  } finally { await runtime.stop(); fs.rmSync(root, { recursive: true, force: true }); }
+});
+
 test("runtime completion while disconnected persists until matching receiver ACK and survives restart", async t => {
   const { root, configPath } = fixture(t), config = { nodeId: "fixture-node", managerGuid: "fixture-guid", managerUrl: "http://manager.invalid", nodeCredential: "fixture-only", agents: [] };
   fs.writeFileSync(configPath, JSON.stringify(config));

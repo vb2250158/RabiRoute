@@ -6,6 +6,12 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.15.2 - 2026-11-14
+
+- Allow a later call to initialize request persistence again after a confirmed startup-process exit, while preserving the original ledger and uncertain-commit fence.
+- Agent SDK/CLI `0.4.5` preserves terminal session events received before dispatch returns, preventing late progress from replacing completion or failure. Remote node adoption remains independently managed.
+- Correct maintenance ownership discovery. Keep unresolved historical plan pointers and continue through the original maintenance conversation explicitly assigned by the user.
+
 ## 0.15.1 - 2026-11-13
 
 - Compact the desktop control indicator into a rounded capsule with transparent window corners, a 46-pixel standard height and bounded long labels. Retain large text, themes, centered placement and stop actions, verified across two displays and 1×/2× hit testing.

@@ -15,6 +15,17 @@ import { createOperationContext, installDataMutationAuditSink, runWithOperationC
 const preparation = () => ({ source: { threadId: "fixture-source", agentType: "agent" }, target: { threadId: "fixture-target", agentType: "agent" },
   responsePolicy: "required" as const, responseInstruction: "Return the fixture result." });
 
+test("a later request can recover a failed initialization after the original child closes", { timeout: 15000 }, async t => {
+  const f = await fixture(t), worker = path.join(f.root, "recoverable-worker.mjs");
+  const store = f.store(undefined, { workerURL: pathToFileURL(worker), timeoutMs: 3000 });
+  await assert.rejects(store.ready(), AgentRequestStoreUnavailableError);
+  const source = new URL(import.meta.url.endsWith(".ts") ? "./persistenceWorker.ts" : "./persistenceWorker.js", import.meta.url).href;
+  await fs.writeFile(worker, `await import(${JSON.stringify(source)});`);
+  await Promise.all([store.ready(), store.ready(), store.ready()]);
+  const created = await store.prepare(preparation());
+  assert.equal(store.get(created.requestId!)?.status, "pending_delivery");
+});
+
 test("owner accepts the public timeout range and its real worker consumes only the committed timeout snapshot", { timeout: 15000 }, async t => {
   const previous = readTimeoutOverrides(), secret = process.env.RABI_TEST_PRIVATE_WORKER_VALUE;
   t.after(() => { configureTimeouts(previous); if (secret === undefined) delete process.env.RABI_TEST_PRIVATE_WORKER_VALUE; else process.env.RABI_TEST_PRIVATE_WORKER_VALUE = secret; });
@@ -160,6 +171,20 @@ test("failed durable cancellation write discards its draft and a later mutation 
   await fs.rm(path.join(f.root, "fail"));
   const committed = await store.cancel(prepared.requestId!, "Fixture durable cancellation.");
   assert.equal(committed.status, "cancelled");
+});
+
+test("child error during an in-flight write preserves unknown commit state", { timeout: 15_000 }, async t => {
+  const f = await fixture(t), store = f.store(undefined, { workerURL: await controlledWorker(f.root) });
+  t.after(() => store.close().catch(() => {}));
+  const prepared = await store.prepare(preparation()); await store.commit(prepared);
+  await fs.rm(path.join(f.root, "entered"), { force: true }); await fs.writeFile(path.join(f.root, "hold"), "1");
+  const mutation = store.cancel(prepared.requestId!, "Fixture pending write.");
+  await until(() => fs.access(path.join(f.root, "entered")).then(() => true, () => false));
+  (store as any).child.emit("error", new Error("fixture child error"));
+  await assert.rejects(mutation, (error: any) => error.code === "AGENT_REQUEST_COMMIT_UNKNOWN" && error.commitState === "unknown");
+  await assert.rejects(store.ready(), (error: any) => error.commitState === "unknown");
+  await assert.rejects(store.cancel(prepared.requestId!), (error: any) => error.commitState === "unknown");
+  await assert.rejects(store.close(), AgentRequestStoreUnavailableError);
 });
 
 test("worker loss after durable replacement fences the unknown result and close waits real child exit", { timeout: 15_000 }, async t => {

@@ -1589,16 +1589,23 @@ class RabiAgentRuntime {
         model: agent.model,
         reasoningEffort: agent.reasoningEffort
       }, { timeout: this.timeout, assertCurrent: () => { if (!this.connected || this.socketManagerGuid !== managerGuid) throw new Error("Original Manager connection changed before host task execution."); } });
-      this.agentExecutionStatus.set(agent.agentId, "宿主已接收");
-      this.send({ type: "progress", taskId, summary: "Codex Desktop accepted the task. Rabi Agent is waiting for its task state." });
-      rememberTask(this.stateStore, taskId, { status: "progress" });
+      this.recordAcceptedCodexTask(task.threadId, taskId, agent.agentId);
     } catch (error) {
+      const existingStatus = this.stateStore.state.tasks[taskId]?.status;
+      if (existingStatus === "completed" || existingStatus === "failed") return;
       if (activeAgent) this.agentExecutionStatus.set(activeAgent.agentId, "投递失败");
       const message = boundedText(error instanceof Error ? error.message : String(error));
       for (const [threadId, ownerTaskId] of this.taskByThread) if (ownerTaskId === taskId) this.taskByThread.delete(threadId);
       this.send({ type: "taskResult", taskId, status: "failed", error: message });
       rememberTask(this.stateStore, taskId, { status: "failed", error: message });
     }
+  }
+
+  recordAcceptedCodexTask(threadId, taskId, agentId) {
+    if (this.taskByThread.get(threadId) !== taskId) return;
+    this.agentExecutionStatus.set(agentId, "宿主已接收");
+    this.send({ type: "progress", taskId, summary: "Codex Desktop accepted the task. Rabi Agent is waiting for its task state." });
+    rememberTask(this.stateStore, taskId, { status: "progress" });
   }
 
   handleAgentPluginEvent(type, event) {
