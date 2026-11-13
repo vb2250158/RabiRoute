@@ -6,6 +6,14 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.15.0 - 2026-11-13
+
+- Host API `1.13.0` records the registered-response media extension. The generic Host response owner consumes registered schema media declarations and publishes image metadata. Computer captures and attached result images use the same client contract.
+- `io.rabiroute.manager.core` `0.1.8` adds display discovery, display／region capture and layout identity. WebGUI presents actual images and observation, operation and return phases. The desktop bar follows the current display at top-center or bottom-center using the existing theme.
+- Agent SDK／CLI `0.4.3` and MCP `0.2.4` return validated images as media while text retains original request and business receipts. `source.imageView` maps host preview coordinates automatically.
+- Native whole-batch input releases its owned resources and returns the cursor and foreground after the logical batch. Cancellation and physical takeover preserve actual outcomes. Legacy individual actions retain continuous focus, and ordinary legacy capture uses its original protocol.
+- Fixed attached control captures losing region, window, layout revision and output width. Added mixed-native-version and selector regressions.
+
 ## 0.14.2 - 2026-11-12
 
 - Preserve recorded start times when focus moves between plan steps, while honoring explicit clears. Continuing a plan retains its history and leaves unfinished steps without an invented completion time.

@@ -59,3 +59,30 @@ test('DSBot action classification guards only new work and preserves catalog and
  assert.deepEqual(instanceAgentActionDefinition('threads',{action:'ds_bot_deliver'}),{newWork:true,reconcileAction:'ds_bot_reconcile'});
  for(const action of ['ds_bot_catalog','ds_bot_reconcile']) assert.deepEqual(instanceAgentActionDefinition('threads',{action}),{readOnly:true,recovery:true});
 });
+
+test('saved return settings default true and display enumeration stays read only', async () => {
+ const {computerActionDefinition}=await import('../lib/computer-control-contract.mjs');
+ assert.equal(DEFAULT_COMPUTER_SETTINGS.control.returnCursor,true);assert.equal(DEFAULT_COMPUTER_SETTINGS.control.returnForeground,true);
+ assert.equal(DEFAULT_COMPUTER_SETTINGS.presentation.barPlacement,'top-center');assert.equal(DEFAULT_COMPUTER_SETTINGS.presentation.noticeDurationMs,2500);
+ assert.deepEqual(computerActionDefinition('displays.list'),{capability:'screenshots',feature:'observation',readOnly:true});
+ assert.equal(isComputerReadOnlyAction('displays.list'),true);
+});
+
+test('foreground return confirmation has a visible configurable budget and preserves immediate mode', async () => {
+ const {BOOTSTRAP_COMPUTER_SETTINGS_DEFINITION:definition,normalizeComputerSettingsForAction}=await import('../lib/computer-control-contract.mjs');
+ const field=definition.schema.properties.control.properties.returnForegroundTimeoutMs;
+ assert.equal(field.type,'number');assert.equal(field.minimum,0);assert.equal(field.default,120);
+ assert.equal(DEFAULT_COMPUTER_SETTINGS.control.returnForegroundTimeoutMs,120);
+ for(const milliseconds of [0,1,1.5,120,5000]) {
+  const saved=patchComputerSettings(DEFAULT_COMPUTER_SETTINGS,{control:{returnForegroundTimeoutMs:milliseconds}});
+  assert.equal(normalizeComputerSettingsForAction(saved,'input.execute').control.returnForegroundTimeoutMs,milliseconds);
+ }
+ for(const invalid of [-1,'120',NaN])assert.throws(()=>patchComputerSettings(DEFAULT_COMPUTER_SETTINGS,{control:{returnForegroundTimeoutMs:invalid}}));
+});
+test('capture normalization preserves legacy selection and rejects every conflicting selector', async () => {
+ const {normalizeComputerCaptureSpec:normalize}=await import('../lib/interactive-protocol.mjs');
+ assert.deepEqual(normalize({}),{scope:'virtual'});assert.deepEqual(normalize({windowId:'abc',pid:42}),{scope:'window',windowId:'abc',pid:42});
+ const region={x:0,y:4,width:100,height:80};
+ assert.deepEqual(normalize({scope:'region',displayId:'left',region,source:{region:{height:80,width:100,y:4,x:0}}}),{scope:'region',displayId:'left',region});
+ for(const [input,field] of [[{scope:'display'},'displayId'],[{scope:'region',displayId:'left',region:{...region,x:-1}},'region.x'],[{scope:'virtual',displayId:'left'},'displayId'],[{scope:'display',displayId:'a',source:{displayId:'b'}},'displayId'],[{scope:'display',displayId:'left',region},'region'],[{windowId:'abc'},'pid'],[{scope:'window',windowId:'abc',pid:42,captureSpec:{scope:'virtual'}},'scope']]) assert.throws(()=>normalize(input),error=>error.code==='COMPUTER_CAPTURE_INVALID'&&error.field===field);
+});

@@ -68,7 +68,7 @@ export class DesktopNativeSlot extends EventEmitter {
   makeOwner(release) {
     const owner = { release, native: undefined };
     owner.native = this.create(release);
-    owner.listeners = ["closed", "retired", "control-ended", "tracking", "annotation-ended", "annotation-source", "annotation-static", "diagnostic"].map(event => {
+    owner.listeners = ["closed", "retired", "presentation", "control-ended", "tracking", "annotation-ended", "annotation-source", "annotation-static", "diagnostic"].map(event => {
       const listener = (...args) => { if (this.owner === owner) this.emit(event, ...args); };
       owner.native.on?.(event, listener);
       return [event, listener];

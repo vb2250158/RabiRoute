@@ -7,6 +7,7 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { ComputerControlService } from "../lib/computer-control-service.mjs";
 import { DEFAULT_COMPUTER_SETTINGS } from "../lib/computer-control-contract.mjs";
+import { normalizeComputerCaptureSpec } from "../lib/interactive-protocol.mjs";
 
 class NativeFixture extends EventEmitter {
   calls = [];
@@ -14,7 +15,7 @@ class NativeFixture extends EventEmitter {
   async request(action, body) {
     this.calls.push({ action, body });
     if (action === "control.begin") return { visible: true, hotkey: { registered: false, error: "fixture does not register OS shortcuts" } };
-    if (action === "input.execute") return this.inject ? this.inject(body) : { state: "injected", injectedEvents: 2 };
+    if (action === "input.execute") return this.inject ? this.inject(body) : { state: "injected", injectedEvents: body.actions.length * 2, completedActions: body.actions.length, results: body.actions.map((_, index) => ({ index, state: "injected", injectedEvents: 2 })), releaseState: "released", returnState: { state: "restored", keys: "restored", cursor: "restored", foreground: "restored" } };
     if (action === "annotation.track.start") return { trackingId: body.trackingId, state: "tracking", targets: body.targets, objects: [] };
     if (action === "annotation.track.stop") return { trackingId: body.trackingId, state: "stopped" };
     if (action === "screen.capture") return this.capture ? this.capture(body) : { frameId: "fixture-frame", data: "fixture", source: body.source };
@@ -52,18 +53,23 @@ test("native input needs control and same-ID batches inject each accepted action
   const results = await Promise.all([f.owner.execute(batch, f.context), f.owner.execute(batch, f.context)]);
   assert.equal(results[0].state, "injected");
   assert.equal(results[0].completedActions, 3);
-  assert.equal(f.native.calls.filter(call => call.action === "input.execute").length, 3);
+  assert.equal(f.native.calls.filter(call => call.action === "input.execute").length, 1);
+  assert.deepEqual(f.native.calls.find(call => call.action === "input.execute").body.actions, batch.actions);
+  assert.equal(results[0].returnState.state, "restored");
   await f.owner.stop();
 });
 
-test("latest trusted settings and stop guard are checked between input actions", async () => {
+test("trusted live input disable cancels the native batch through its existing control owner", async () => {
   const f = fixture();
   const control = await f.owner.execute(request("control.begin"), f.context);
-  f.native.inject = async () => { f.settings.features.input = false; return { state: "injected", injectedEvents: 1 }; };
-  await assert.rejects(f.owner.execute(request("input.execute", { controlSessionId: control.controlSessionId, actions: [{ type: "move", x: 1, y: 2 }, { type: "move", x: 2, y: 3 }] }), f.context), /disabled/);
+  let release, entered;
+  const waiting = new Promise(resolve => { entered = resolve; });
+  f.native.inject = async () => { entered(); await new Promise(resolve => { release = resolve; }); return { state: "cancelled", completedActions: 1, results: [{ index: 0, state: "injected", injectedEvents: 1 }] }; };
+  const pending = f.owner.execute(request("input.execute", { controlSessionId: control.controlSessionId, actions: [{ type: "move", x: 1, y: 2 }, { type: "move", x: 2, y: 3 }] }), f.context);
+  await waiting; f.settings.features.input = false; await f.owner.reconcile(f.context); release();
+  const result = await pending;
+  assert.equal(result.state, "cancelled"); assert.equal(result.completedActions, 1);
   assert.equal(f.native.calls.filter(call => call.action === "input.execute").length, 1);
-  assert.equal((await f.owner.execute({ action: "control.status" }, f.context)).state, "active");
-  await f.owner.reconcile(f.context);
   assert.equal((await f.owner.execute({ action: "control.status", controlSessionId: control.controlSessionId }, f.context)).state, "ended");
   await f.owner.stop();
 });
@@ -94,7 +100,7 @@ test("cancel preserves the executed prefix and prevents the remainder of a queue
   await new Promise(resolve => setImmediate(resolve));
   assert.equal((await f.owner.execute({ action: "input.status", requestId: batch.requestId }, f.context)).state, "running");
   await f.owner.execute({ action: "input.cancel", requestId: batch.requestId }, f.context);
-  finish({ state: "injected", injectedEvents: 2 });
+  finish({ state: "cancelled", injectedEvents: 2, completedActions: 1, results: [{ index: 0, state: "injected", injectedEvents: 2 }] });
   const result = await running;
   assert.equal(result.state, "cancelled"); assert.equal(result.completedActions, 1);
   assert.equal(f.native.calls.filter(call => call.action === "input.execute").length, 1);
@@ -404,7 +410,7 @@ test("a new definition backend reaches the same target while old WAL retains its
  } finally {await f.owner.stop();}
 });
 
-test("inflight parameters remain A after definition B, while explicit live input off stops the next segment", async () => {
+test("one native batch freezes definition A while live input off uses the existing end owner", async () => {
  const {createComputerSettingsDefinition}=await import("../lib/computer-control-contract.mjs");
  const {COMPUTER_SETTINGS_DEFINITION}=await import("../lib/computer-settings-definition.mjs");
  const data=JSON.parse(JSON.stringify(COMPUTER_SETTINGS_DEFINITION)),a=createComputerSettingsDefinition(data,"input-A");
@@ -417,14 +423,15 @@ test("inflight parameters remain A after definition B, while explicit live input
   const control=await f.owner.execute(request("control.begin"),context);
   const batch=request("input.execute",{controlSessionId:control.controlSessionId,actions:[{type:"text",text:"a"},{type:"text",text:"b"}]});
   const pending=f.owner.execute(batch,context);await firstEntered;selected=createComputerSettingsDefinition(beta,"input-B");release();await pending;
-  assert.deepEqual(observations,[16,16]);
+  assert.deepEqual(observations,[16]);
+  assert.equal(f.native.calls.findLast(row=>row.action==="input.execute").body.actions.length,2);
   await f.owner.execute(request("input.execute",{controlSessionId:control.controlSessionId,actions:[{type:"text",text:"c"}]}),context);
   assert.equal(observations.at(-1),24);
   let enteredOff,releaseOff;const offEntered=new Promise(resolve=>{enteredOff=resolve;});const offGate=new Promise(resolve=>{releaseOff=resolve;});
   let segments=0;
   f.native.inject=async()=>{segments++;enteredOff();await offGate;return {state:"injected",injectedEvents:2};};
   const offBatch=f.owner.execute(request("input.execute",{controlSessionId:control.controlSessionId,actions:[{type:"text",text:"d"},{type:"text",text:"e"}]}),context);
-  await offEntered;raw.features.input=false;releaseOff();
+  await offEntered;raw.features.input=false;await f.owner.reconcile(context);releaseOff();
   await offBatch.catch(error=>{assert.equal(error.code,"COMPUTER_FEATURE_DISABLED");});
   assert.equal(segments,1);
  } finally {await f.owner.stop();}
@@ -462,3 +469,77 @@ test("active control parameter updates contain only schema-defined control field
   assert.equal(Object.hasOwn(applied.body.patch,"annotation"),false);
  } finally {await f.owner.stop();}
 });
+
+test("display enumeration and canonical region requests use the shared native owner", async () => {
+  const f = fixture();
+  await f.owner.execute({ action: "displays.list" }, f.context);
+  assert.equal(f.native.calls.at(-1).action, "displays.list");
+  const region = { x: 7, y: 9, width: 320, height: 200 };
+  await f.owner.capture({ scope: "region", displayId: "fixture-display", region }, f.context);
+  assert.deepEqual(f.native.calls.at(-1).body.captureSpec, { scope: "region", displayId: "fixture-display", region });
+  await assert.rejects(f.owner.capture({ scope: "display", displayId: "A", source: { scope: "display", displayId: "B" } }, f.context), error => error.field === "displayId");
+  await f.owner.stop();
+});
+
+test("native batch capture and return metadata survive receipt persistence without a second capture", async () => {
+  const f = fixture(); const control = await f.owner.execute(request("control.begin"), f.context);
+  const returnState = { state: "partial", keys: "restored", cursor: "restored", foreground: "partial", reason: "foreground-unavailable" };
+  f.native.inject = async body => ({ state: "injected", completedActions: body.actions.length, results: body.actions.map((_,index)=>({index,state:"injected"})), returnState, capture: { state: "unavailable", reason: "encode-budget" } });
+  const batch = request("input.execute", { controlSessionId: control.controlSessionId, actions: [{type:"click",x:1,y:2},{type:"text",text:"A"},{type:"key",keys:["Enter"]}], captureAfter: true });
+  const result = await f.owner.execute(batch, f.context);
+  assert.equal(result.state,"injected");assert.equal(result.completedActions,3);assert.deepEqual(result.returnState,returnState);assert.equal(result.capture.reason,"encode-budget");
+  assert.equal(f.native.calls.some(call=>call.action==="screen.capture"),false);
+  assert.deepEqual((await f.owner.execute({action:"input.status",requestId:batch.requestId},f.context)).returnState,returnState);
+  await f.owner.stop();
+});
+
+test("native activity is readable without control and pointer-only frames do not notify", async () => {
+  let changes = 0;
+  const f = fixture({ onChange: () => changes++ });
+  const event = { phase: "capturing", requestId: "capture-1", sourceDisplay: { displayId: "left" }, observedRegion: { x: -1000, y: 0, width: 500, height: 300 } };
+  f.native.emit("presentation", event);
+  await new Promise(resolve => queueMicrotask(resolve));
+  assert.equal(changes, 1);
+  const status = await f.owner.execute({ action: "control.status" }, f.context);
+  assert.equal(status.state, "absent");
+  assert.deepEqual(status.activity, event);
+  status.activity.sourceDisplay.displayId = "changed";
+  assert.equal(f.owner.controlStatus().activity.sourceDisplay.displayId, "left");
+  f.native.emit("presentation", { ...event, pointer: { x: 20, y: 30 }, revision: 2 });
+  await new Promise(resolve => queueMicrotask(resolve));
+  assert.equal(changes, 1);
+  f.native.emit("presentation", { ...event, phase: "returned", returnState: { state: "yielded" } });
+  await new Promise(resolve => queueMicrotask(resolve));
+  assert.equal(changes, 2);
+  assert.equal(f.owner.controlStatus().activity.returnState.state, "yielded");
+  f.native.emit("closed");
+  assert.equal(f.owner.controlStatus().activity.phase, "failed");
+  assert.equal(f.owner.controlStatus().activity.returnState, undefined);
+  f.native.emit("retired");
+  assert.equal(f.owner.controlStatus().activity, undefined);
+  await f.owner.stop();
+});
+
+
+const captureAfterCases = [
+  { name: "flat region", input: { scope: "region", displayId: "display-two", layoutRevision: "original-layout", region: { x: 3, y: 4, width: 100, height: 80 }, maxWidth: 640 }, expected: { scope: "region", displayId: "display-two", layoutRevision: "original-layout", region: { x: 3, y: 4, width: 100, height: 80 } }, maxWidth: 640 },
+  { name: "captureSpec display", input: { captureSpec: { scope: "display", displayId: "display-two" } }, expected: { scope: "display", displayId: "display-two" } },
+  { name: "flat window", input: { windowId: "a1", pid: 42, maxWidth: 512 }, expected: { scope: "window", windowId: "a1", pid: 42 }, maxWidth: 512 },
+  { name: "legacy source window", input: { source: { kind: "window", windowId: "a1", pid: 42, coordinateSpace: "desktop" } }, expected: { scope: "window", windowId: "a1", pid: 42 }, maxWidth: 1920 },
+];
+for (const scenario of captureAfterCases) {
+  test(`control begin captureAfter preserves ${scenario.name}`, async () => {
+    const f = fixture();
+    try {
+      const result = await f.owner.execute(request("control.begin", { captureAfter: true, ...scenario.input }), f.context);
+      assert.equal(result.capture.frameId, "fixture-frame");
+      const capture = f.native.calls.find(call => call.action === "screen.capture");
+      assert.deepEqual(normalizeComputerCaptureSpec(capture.body), scenario.expected);
+      assert.equal(capture.body.maxWidth, scenario.maxWidth);
+      assert.equal(capture.body.requestId, undefined);
+      assert.equal(capture.body.action, undefined);
+    } finally {
+      await f.owner.stop();
+    }
+  });
+}

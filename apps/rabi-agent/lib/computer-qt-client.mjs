@@ -4,8 +4,8 @@ const SYSTEM_THEME = Object.freeze({ theme: "system" });
 
 /** Full-host Qt presentation only. Native input and its emergency exit remain independent. */
 export class ComputerQtClient {
-  constructor({ command, args, timeout, children, onExit = () => {}, getPresentationTheme, launch = spawn }) {
-    Object.assign(this, { command, args, timeout, children, onExit, launch, getPresentationTheme });
+  constructor({ command, args, timeout, children, onExit = () => {}, onStop = () => {}, getPresentationTheme, launch = spawn }) {
+    Object.assign(this, { command, args, timeout, children, onExit, onStop, launch, getPresentationTheme });
     this.waiters = new Set(); this.revision = 0; this.child = null; this.ready = null;
   }
   start() {
@@ -31,6 +31,7 @@ export class ComputerQtClient {
           let message; try { message = JSON.parse(line); } catch { continue; }
           if (message.event === "ready") { clearTimeout(timer); resolve(); }
           if (message.event === "exit-control") this.onExit(message.controlSessionId);
+          if (message.event === "stop-operation") this.onStop(message);
           if (message.event === "shown") {
             this.revision = message.revision; this.lastShown = message;
             for (const waiter of this.waiters) if (waiter.revision <= this.revision) { clearTimeout(waiter.timer); this.waiters.delete(waiter); waiter.resolve(message); }

@@ -118,6 +118,24 @@
             "type": "boolean",
             "title": "检测到本机主动操作时退出",
             "default": false
+          },
+          "returnCursor": {
+            "type": "boolean",
+            "title": "每批操作后归还光标",
+            "default": true
+          },
+          "returnForeground": {
+            "type": "boolean",
+            "title": "每批操作后归还原前台",
+            "default": true
+          },
+          "returnForegroundTimeoutMs": {
+            "type": "number",
+            "title": "前台归还确认时长",
+            "default": 120,
+            "minimum": 0,
+            "unit": "毫秒",
+            "description": "每批操作后确认原窗口成为前台的最长等待时长。0 表示立即确认。等待期间仍可处理用户输入。"
           }
         }
       },
@@ -340,6 +358,48 @@
             "maximum": 100
           }
         }
+      },
+      "presentation": {
+        "type": "object",
+        "title": "控制提示",
+        "additionalProperties": true,
+        "properties": {
+          "barPlacement": {
+            "type": "string",
+            "title": "提示条位置",
+            "enum": [
+              "top-center",
+              "bottom-center"
+            ],
+            "default": "top-center"
+          },
+          "textSize": {
+            "type": "string",
+            "title": "文字大小",
+            "enum": [
+              "standard",
+              "large"
+            ],
+            "default": "standard"
+          },
+          "reducedMotion": {
+            "type": "string",
+            "title": "减少动态效果",
+            "enum": [
+              "system",
+              "on",
+              "off"
+            ],
+            "default": "system"
+          },
+          "noticeDurationMs": {
+            "type": "number",
+            "title": "结果提示时长",
+            "default": 2500,
+            "minimum": 0,
+            "unit": "毫秒"
+          }
+        }
       }
     }
   },
@@ -389,12 +449,14 @@
       "settingsPaths": [
         "annotation.tracking.frameCacheFrames",
         "annotation.tracking.frameCacheBytes",
-        "annotation.tracking.frameCacheAgeMs"
+        "annotation.tracking.frameCacheAgeMs",
+        "presentation"
       ]
     },
     "control.begin": {
       "settingsPaths": [
-        "control"
+        "control",
+        "presentation"
       ],
       "receipt": true,
       "feature": "input",
@@ -413,7 +475,9 @@
     },
     "input.execute": {
       "settingsPaths": [
-        "input"
+        "input",
+        "control.returnCursor",
+        "control.returnForeground"
       ],
       "receipt": true,
       "feature": "input",
@@ -480,6 +544,11 @@
       "feature": "annotation",
       "capability": "tracking",
       "recovery": true
+    },
+    "displays.list": {
+      "feature": "observation",
+      "capability": "screenshots",
+      "readOnly": true
     }
   }
 }

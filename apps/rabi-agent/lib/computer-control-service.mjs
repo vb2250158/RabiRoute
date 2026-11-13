@@ -1,3 +1,4 @@
+import { normalizeComputerCaptureSpec } from "./interactive-protocol.mjs";
 import {BOOTSTRAP_COMPUTER_SETTINGS_DEFINITION as bootstrapDefinition} from "./computer-control-contract.mjs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -8,6 +9,9 @@ const stable = value => value && typeof value === "object" ? Array.isArray(value
 const hash = value => createHash("sha256").update(JSON.stringify(stable(value))).digest("hex");
 const fault = (code, reason, extra = {}) => Object.assign(new Error(reason), { code, errorCode: code, reason, nextAction: "Query the original computer request or control status.", ...extra });
 const clone = value => structuredClone(value);
+const hasCaptureSelector = input => [input, input.source, input.captureSpec].some(value =>
+  value?.scope !== undefined || value?.displayId !== undefined || value?.region !== undefined);
+const captureMaximumWidth = input => input.maxWidth ?? (hasCaptureSelector(input) ? undefined : 1920);
 const recovery = action => /\.(?:status|end|cancel|clear|stop)$/.test(action);
 
 /** Authoritative ephemeral input/layer ownership; the Manager supplies trusted settings and source. */
@@ -17,6 +21,14 @@ export class ComputerControlService {
     this.session = null; this.endedSessions = new Map(); this.receipts = new Map(); this.layers = new Map(); this.trackers = new Map();
     this.activeLayers = new Map(); this.activeTrackers = new Map(); this.notified = new WeakMap();
     this.inputQueue = Promise.resolve(); this.inflight = new Map(); this.stopped = false;
+    native.on?.("presentation", event => {
+      const value = Object.fromEntries(["phase", "requestId", "controlSessionId", "sourceDisplay", "observedRegion", "returnState"]
+        .filter(key => event[key] !== undefined).map(key => [key, clone(event[key])]));
+      // Pointer rendering can update every frame. Notify business observers only when operation facts change.
+      if (JSON.stringify(value) === JSON.stringify(this.activity)) return;
+      this.activity = value;
+      this.notifyItem(this, [value]);
+    });
     native.on?.("control-ended", event => this.nativeEnded(event));
     native.on?.("tracking", event => { const item = this.trackers.get(event.trackingId); if (item) {
       Object.assign(item, event); const layer = this.layers.get(item.layerId);
@@ -36,10 +48,12 @@ export class ComputerControlService {
       this.notifyLayer(layer);
     });
     native.on?.("retired", () => {
+      this.activity = undefined; this.notifyItem(this, [null]);
       for (const layer of [...this.activeLayers.values()]) { clearTimeout(layer.timer); layer.state = "cleared"; delete layer.objects; this.notifyLayer(layer); }
       for (const item of [...this.activeTrackers.values()]) { item.state = "stopped"; item.stopped = true; this.notifyTracker(item); }
     });
     native.on?.("closed", () => {
+      if (this.activity) { this.activity = { ...this.activity, phase: "failed", returnState: undefined }; this.notifyItem(this, [this.activity]); }
       if (this.session?.state === "active") { this.session.state = "uncertain"; this.session.reason = "native-helper-closed"; }
       for (const requestId of this.inflight.keys()) { const item = this.receipts.get(requestId); if (item && ["running", "submitted"].includes(item.state)) { item.state = "uncertain"; item.uncertain = true; void this.save(item).catch(() => {}); this.notifyItem(item, [item.state, Boolean(item.cancelled)]); } }
       this.notifyControl();
@@ -170,10 +184,11 @@ export class ComputerControlService {
   }
   controlStatus(id) {
     const session = this.session && (!id || this.session.controlSessionId === id) ? this.session : this.endedSessions.get(id);
-    if (!session) return { state: "absent", ...(id ? { controlSessionId: id } : {}) };
+    const activity = this.activity && (!id || this.activity.controlSessionId === id) ? { activity: clone(this.activity) } : {};
+    if (!session) return { state: "absent", ...(id ? { controlSessionId: id } : {}), ...activity };
     const { lastActivityMono, context, settingsSnapshot, ...value } = session;
     const settings = settingsSnapshot;
-    return { ...clone(value), remainingMs: session.state !== "active" || !settings || !settings.control.idleExitEnabled ? null : Math.max(0, settings.control.idleTimeoutSeconds * 1000 - (this.now() - lastActivityMono)) };
+    return { ...clone(value), ...activity, remainingMs: session.state !== "active" || !settings || !settings.control.idleExitEnabled ? null : Math.max(0, settings.control.idleTimeoutSeconds * 1000 - (this.now() - lastActivityMono)) };
   }
   ownedSession(id, context) {
     const item = this.session;
@@ -202,7 +217,9 @@ export class ComputerControlService {
   }
   async capture(input, context = {}) {
     this.check("screen.capture", context);
-    const result = await this.native.request("screen.capture", { ...input, action: undefined, instanceId: this.target(context), settings: this.settings(context, "screen.capture") });
+    const normalized = normalizeComputerCaptureSpec(input);
+    const captureSpec = input.captureSpec !== undefined || hasCaptureSelector(input) || normalized.layoutRevision !== undefined ? normalized : undefined;
+    const result = await this.native.request("screen.capture", { ...input, captureSpec, maxWidth: captureMaximumWidth(input), action: undefined, instanceId: this.target(context), settings: this.settings(context, "screen.capture") });
     context.guard?.();
     if (input.controlSessionId && input.background !== true && this.session?.controlSessionId === input.controlSessionId && this.session.source.id === this.source(context).id) {
       this.touch(this.session); await this.native.request("control.activity", { controlSessionId: input.controlSessionId });
@@ -211,7 +228,11 @@ export class ComputerControlService {
   }
   async withCapture(result, input, context) {
     if (!input.captureAfter) return result;
-    try { return { ...result, capture: await this.capture({ ...(input.source ?? {}), controlSessionId: result.controlSessionId }, context) }; }
+    const captureInput = { ...(input.source ?? {}), source: input.source, controlSessionId: result.controlSessionId };
+    for (const field of ["scope", "displayId", "layoutRevision", "region", "windowId", "pid", "captureSpec", "maxWidth"]) {
+      if (input[field] !== undefined) captureInput[field] = input[field];
+    }
+    try { return { ...result, capture: await this.capture(captureInput, context) }; }
     catch (error) { return { ...result, capture: { state: "unavailable", reason: error.message } }; }
   }
   async clearLayer(id, expected) {
@@ -245,6 +266,7 @@ export class ComputerControlService {
       context.signal?.throwIfAborted(); context.guard?.();
     }
     const initialLayerVersion = this.layers.get(input.layerId)?.version ?? 0;
+    if (input.action === "displays.list") return this.native.request("displays.list", { instanceId: this.target(context) });
     if (input.action === "control.status") return this.controlStatus(input.controlSessionId);
     if (input.action === "control.end") return this.end(input.controlSessionId ?? this.session?.controlSessionId, "requested");
     if (input.action === "input.status") return this.viewReceipt(await this.receipt(input.requestId));
@@ -296,19 +318,26 @@ export class ComputerControlService {
         entry.completedActions = 0; entry.totalActions = input.actions.length; entry.results = []; entry.releaseState = "released";
         const queued = this.inputQueue.then(async () => {
           entry.state = "running";
-          for (let index = 0; index < input.actions.length; index++) {
-            if (entry.cancelled) break;
-            this.check("input.execute", context); this.ownedSession(input.controlSessionId, context);
-            const result = await this.native.request("input.execute", { requestId: input.requestId, controlSessionId: input.controlSessionId, input: input.actions[index], source: input.source, instanceId: this.target(context), settings: this.settings(context, input.action) });
-            if (result.state === "cancelled") { entry.cancelled = true; entry.results.push({ index, state: "cancelled", injectedEvents: result.injectedEvents }); break; }
-            if (result.state !== "injected") {
-              entry.results.push({ index, state: result.state, injectedEvents: result.injectedEvents, reason: result.reason });
-              return { ...this.viewReceipt(entry), state: result.state, releaseState: result.releaseState };
-            }
-            entry.results.push({ index, state: "injected", injectedEvents: result.injectedEvents }); entry.completedActions++; this.touch(session);
+          if (entry.cancelled) return { ...this.viewReceipt(entry), state: "cancelled" };
+          this.check("input.execute", context); this.ownedSession(input.controlSessionId, context);
+          let captureIssue;
+          if (input.captureAfter) {
+            try { this.check("screen.capture", context); }
+            catch (error) { captureIssue = { state: "unavailable", reason: error.message }; }
           }
-          const result = { ...this.viewReceipt(entry), state: entry.cancelled ? "cancelled" : "injected" };
-          return this.withCapture(result, input, context);
+          const result = await this.native.request("input.execute", {
+            requestId: input.requestId, controlSessionId: input.controlSessionId, actions: input.actions,
+            source: input.source, captureSpec: normalizeComputerCaptureSpec(input), maxWidth: captureMaximumWidth(input), captureAfter: input.captureAfter === true && !captureIssue,
+            instanceId: this.target(context), settings: this.settings(context, input.action)
+          });
+          if (captureIssue) result.capture = captureIssue;
+          entry.results = result.results ?? [];
+          entry.completedActions = result.completedActions ?? entry.results.filter(item => item.state === "injected").length;
+          entry.releaseState = result.releaseState;
+          entry.returnState = result.returnState;
+          if (result.state === "cancelled" || result.state === "yielded") entry.cancelled = true;
+          if (entry.completedActions) this.touch(session);
+          return { ...this.viewReceipt(entry), ...result, state: entry.cancelled ? "cancelled" : result.state };
         });
         this.inputQueue = queued.catch(() => {}); return queued;
       }

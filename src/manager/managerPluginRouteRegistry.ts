@@ -496,7 +496,14 @@ export class ManagerPluginRouteRegistry {
             assertDeadline();
             const payload = snapshot.stream || request.method === "HEAD" || snapshot.body === undefined ? undefined
               : descriptor.binary ? snapshot.body : descriptor.mediaType.includes("json") ? preparedApiJson(snapshot.body) ?? JSON.stringify(snapshot.body) : snapshot.body;
-            return { descriptor, stream: snapshot.stream, status: snapshot.status, headers: Object.entries(snapshot.headers ?? {}), payload };
+            const headers = Object.entries(snapshot.headers ?? {}).filter(([name]) => name.toLowerCase() !== "x-rabiroute-media");
+            const responseSchema = descriptor.schema;
+            const declaredMedia = responseSchema && typeof responseSchema === "object" && !Array.isArray(responseSchema)
+              ? responseSchema["x-rabiroute-media"] : undefined;
+            if (!snapshot.stream && request.method !== "HEAD" && snapshot.body !== undefined && Array.isArray(declaredMedia)) {
+              headers.push(["x-rabiroute-media", JSON.stringify(declaredMedia)]);
+            }
+            return { descriptor, stream: snapshot.stream, status: snapshot.status, headers, payload };
           }, `API response ${operation.contract.operationId}`);
           const { descriptor, stream } = output;
           // Validation/serialization can call owner getters. Finish them before

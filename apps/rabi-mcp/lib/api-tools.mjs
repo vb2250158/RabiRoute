@@ -3,7 +3,7 @@ import { decodeOperationBytes } from '../../rabi-agent/lib/operation-sdk.mjs';
 import { operationIsReadOnly } from '../../rabi-agent/lib/operation-tool-definitions.mjs';
 import { KnowledgePolicyError } from './knowledge-tools.mjs';
 import { parseApiPathTemplate } from '../../rabi-agent/lib/api-path-template.mjs';
-import { decodeManagerJsonReceipt } from './manager-client.mjs';
+import { projectManagerReceiptMedia } from '../../rabi-agent/lib/operation-result.mjs';
 
 const object = properties => ({ type: 'object', properties, additionalProperties: false });
 const string = { type: 'string' };
@@ -168,7 +168,7 @@ export function createApiTools({ client, progressive = false, allowedRoles, allo
     if (options.outputPath !== undefined || transport !== 'websocket' && transport !== 'sse' && options.responseMode !== 'stream') {
       const successResponses = Object.entries(entry.contract.responses ?? {}).filter(([status]) => /^2\d\d$/.test(status)).map(([, response]) => response.mediaType);
       const defaultMode = successResponses.length && successResponses.every(type => typeof type === 'string' && /^(?:text\/|application\/(?:json|xml|javascript)|[^;]+\+(?:json|xml))/.test(type)) ? 'text' : 'bytes';
-      const receipt = decodeManagerJsonReceipt(await client.invokeOperation(args.operationId, { ...options, responseMode: options.responseMode ?? defaultMode, signal: context.signal }));
+      const receipt = projectManagerReceiptMedia(await client.invokeOperation(args.operationId, { ...options, responseMode: options.responseMode ?? defaultMode, signal: context.signal }), entry.contract);
       if (receipt.bodyJson !== undefined) receipt.data = receipt.bodyJson;
       if (receipt.bodyBytes !== undefined) {
         const type = receipt.headers?.['content-type'] ?? '';

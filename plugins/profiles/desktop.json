@@ -22,7 +22,7 @@
     {
       "id": "manager:core",
       "package": "io.rabiroute.manager.core",
-      "version": "0.1.7",
+      "version": "0.1.8",
       "enabled": true,
       "config": {},
       "grants": []

@@ -1,3 +1,4 @@
+import { COMPUTER_IMAGE_VIEW_CAPABILITY } from "./computer-image-view.mjs";
 import {BOOTSTRAP_COMPUTER_SETTINGS_DEFINITION as bootstrapDefinition} from "./computer-control-contract.mjs";
 import { UploadHistoryStore } from "./upload-history-store.mjs";
 import { COMPUTER_LIMITS } from "./interactive-protocol.mjs";
@@ -51,7 +52,7 @@ export class ComputerService {
     this.control = new ComputerControlService({ native: this.native, instanceId, onChange: () => { onChange(); onControlChange(); }, receiptRoot: receiptRoot ?? (uploadHistoryRoot ? path.join(path.dirname(uploadHistoryRoot), "computer-receipts") : undefined) });
   }
   get capabilities() {
-    return ["files", ...(process.platform === "win32" ? ["windows", "screenshots", "input", "annotation", ...((this.native.capabilities ? this.native.capabilities.trackingAvailable : this.native.status().release?.version === "builtin" && fs.existsSync(new URL("../dist/native/RabiAgent.Computer.Tracking.dll", import.meta.url))) ? ["tracking"] : [])] : [])];
+    return ["files", ...(process.platform === "win32" ? ["windows", "screenshots", "input", "annotation", COMPUTER_IMAGE_VIEW_CAPABILITY, ...((this.native.capabilities ? this.native.capabilities.trackingAvailable : this.native.status().release?.version === "builtin" && fs.existsSync(new URL("../dist/native/RabiAgent.Computer.Tracking.dll", import.meta.url))) ? ["tracking"] : [])] : [])];
   }
   async desktopReleaseStatus() { try { await this.native.ready(); } catch { /* Status reports the original desktop-local failure. */ } return this.native.status(); }
   prepareDesktopRelease(reference) { return this.native.prepare(reference); }
@@ -75,7 +76,7 @@ export class ComputerService {
     try {
       if (input.action === "file.stat" || input.action === "file.read") return await this.readFile(input);
       if (String(input.action).startsWith("upload.")) return await this.upload(input);
-      if (["windows.list", "screen.capture"].includes(input.action)) return await this.desktop(input, context);
+      if (["windows.list", "displays.list", "screen.capture"].includes(input.action)) return await this.desktop(input, context);
       throw new Error("Unsupported computer operation.");
     } finally { this.pending--; this.onChange(); }
   }

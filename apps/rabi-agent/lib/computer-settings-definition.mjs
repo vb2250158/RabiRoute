@@ -58,7 +58,8 @@ export const COMPUTER_SETTINGS_DEFINITION = freeze({
       "feature": "input",
       "receipt": true,
       "settingsPaths": [
-        "control"
+        "control",
+        "presentation"
       ]
     },
     "control.end": {
@@ -71,6 +72,11 @@ export const COMPUTER_SETTINGS_DEFINITION = freeze({
       "feature": "input",
       "readOnly": true,
       "recovery": true
+    },
+    "displays.list": {
+      "capability": "screenshots",
+      "feature": "observation",
+      "readOnly": true
     },
     "file.read": {
       "capability": "files",
@@ -92,7 +98,9 @@ export const COMPUTER_SETTINGS_DEFINITION = freeze({
       "feature": "input",
       "receipt": true,
       "settingsPaths": [
-        "input"
+        "input",
+        "control.returnCursor",
+        "control.returnForeground"
       ]
     },
     "input.status": {
@@ -108,7 +116,8 @@ export const COMPUTER_SETTINGS_DEFINITION = freeze({
       "settingsPaths": [
         "annotation.tracking.frameCacheFrames",
         "annotation.tracking.frameCacheBytes",
-        "annotation.tracking.frameCacheAgeMs"
+        "annotation.tracking.frameCacheAgeMs",
+        "presentation"
       ]
     },
     "upload.abort": {
@@ -343,6 +352,24 @@ export const COMPUTER_SETTINGS_DEFINITION = freeze({
             "type": "number",
             "unit": "秒"
           },
+          "returnCursor": {
+            "default": true,
+            "title": "每批操作后归还光标",
+            "type": "boolean"
+          },
+          "returnForeground": {
+            "default": true,
+            "title": "每批操作后归还原前台",
+            "type": "boolean"
+          },
+          "returnForegroundTimeoutMs": {
+            "default": 120,
+            "description": "每批操作后确认原窗口成为前台的最长等待时长。0 表示立即确认。等待期间仍可处理用户输入。",
+            "minimum": 0,
+            "title": "前台归还确认时长",
+            "type": "number",
+            "unit": "毫秒"
+          },
           "showPointer": {
             "default": true,
             "title": "控制时显示 Agent 指针",
@@ -478,6 +505,48 @@ export const COMPUTER_SETTINGS_DEFINITION = freeze({
         },
         "title": "性能与资源",
         "type": "object"
+      },
+      "presentation": {
+        "additionalProperties": true,
+        "properties": {
+          "barPlacement": {
+            "default": "top-center",
+            "enum": [
+              "top-center",
+              "bottom-center"
+            ],
+            "title": "提示条位置",
+            "type": "string"
+          },
+          "noticeDurationMs": {
+            "default": 2500,
+            "minimum": 0,
+            "title": "结果提示时长",
+            "type": "number",
+            "unit": "毫秒"
+          },
+          "reducedMotion": {
+            "default": "system",
+            "enum": [
+              "system",
+              "on",
+              "off"
+            ],
+            "title": "减少动态效果",
+            "type": "string"
+          },
+          "textSize": {
+            "default": "standard",
+            "enum": [
+              "standard",
+              "large"
+            ],
+            "title": "文字大小",
+            "type": "string"
+          }
+        },
+        "title": "控制提示",
+        "type": "object"
       }
     },
     "title": "电脑设置",
@@ -485,4 +554,4 @@ export const COMPUTER_SETTINGS_DEFINITION = freeze({
   },
   "schemaVersion": 1
 });
-export const COMPUTER_SETTINGS_DEFINITION_DIGEST = "dec9cf85ee89209ff7c85aed70eaac132b94eed1f553c8d3a41b8f92a0010183";
+export const COMPUTER_SETTINGS_DEFINITION_DIGEST = "0d2a48ca1d9de6d2b78402e4d6c993a505279fa24f269664c94fde488786a3dd";

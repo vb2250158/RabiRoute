@@ -128,3 +128,18 @@ test("restored selection probes actual worker capabilities rather than the packa
   const create=slot.create;slot.create=release=>{const native=create(release);const request=native.request.bind(native);native.request=async action=>action==='capabilities'?{protocolVersion:2,trackingAvailable:false}:request(action);return native;};
   await slot.ready();assert.equal(slot.capabilities.trackingAvailable,false);assert.equal(clients.length,2);await slot.close();
 });
+
+test("presentation events follow only the selected desktop owner", async () => {
+  const { slot, clients } = fixture();
+  const events = [];
+  slot.on("presentation", event => events.push(event));
+  clients[0].emit("presentation", { phase: "capturing" });
+  const candidate = await slot.prepare("new");
+  clients[1].emit("presentation", { phase: "operating" });
+  assert.deepEqual(events, [{ phase: "capturing" }]);
+  await slot.activate(candidate, 0);
+  clients[0].emit("presentation", { phase: "returning" });
+  clients[1].emit("presentation", { phase: "returned" });
+  assert.deepEqual(events, [{ phase: "capturing" }, { phase: "returned" }]);
+  await slot.close();
+});

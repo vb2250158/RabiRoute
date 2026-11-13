@@ -3,6 +3,7 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { ListToolsRequestSchema, CallToolRequestSchema, McpError, ErrorCode } from '@modelcontextprotocol/sdk/types.js';
 import { KnowledgePolicyError } from './knowledge-tools.mjs';
+import { compactManagerReceiptMedia } from '../../rabi-agent/lib/operation-result.mjs';
 import { OperationSdkError } from '../../rabi-agent/lib/operation-sdk.mjs';
 
 const safeFailure = () => ({
@@ -37,10 +38,12 @@ export function createKnowledgeMcpServer({ tools } = {}) {
       // The contract owns operation validation and the user's configured policy.
       const receipt = await tools.call(request.params.name, request.params.arguments ?? {}, { signal: context.signal });
       if (!receipt || typeof receipt !== 'object' || Array.isArray(receipt)) return safeFailure();
+      const publicReceipt = compactManagerReceiptMedia(receipt);
+      const media = publicReceipt === receipt ? [] : receipt.media;
       return {
         isError: receipt.ok !== true || receipt.uncertain === true,
-        content: [{ type: 'text', text: JSON.stringify(receipt) }],
-        structuredContent: receipt
+        content: [{ type: 'text', text: JSON.stringify(publicReceipt) }, ...media.map(({ mimeType, data }) => ({ type: 'image', mimeType, data }))],
+        structuredContent: publicReceipt
       };
     } catch (error) {
       if (error instanceof KnowledgePolicyError) return { isError: true, content: [{ type: 'text', text: error.message }] };

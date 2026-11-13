@@ -29,9 +29,17 @@ export function createLanAgentComputerOperations(context: InteractiveContext & {
   });
     const definition=context.computerSettingsDefinition??context.registry.getComputerSettingsDefinition?.()??BOOTSTRAP_COMPUTER_SETTINGS_DEFINITION;
     const contract=operation.contract;
+    const successResponse=contract.responses["200"]!;
     if (contract.request.body.kind !== "json") throw new TypeError("Computer execution requires its existing JSON request contract.");
     return {...operation,contract:{...contract,
       request:{...contract.request,body:{...contract.request.body,schema:computerRequestSchemaForDefinition(definition)}},
+      responses:{...contract.responses,"200":{...successResponse,schema:{
+        ...(successResponse.schema as Record<string,unknown>),
+        "x-rabiroute-media":[
+          {path:"/data",type:"image",matchMimeType:"image/*"},
+          {path:"/data/capture",type:"image",matchMimeType:"image/*"}
+        ]
+      }}},
       effects:{...contract.effects,request:{bodyPath:["action"],modes:Object.fromEntries(Object.entries(definition.actions).map(([key,value])=>[key,value.readOnly?"read":"write"])) as Record<string,"read"|"write">}}
     }};
   });

@@ -84,7 +84,9 @@ export function interactiveOperation(route: InteractiveRoute, context: Interacti
         const uncertain = !readOnly && resultUnknown;
         const conflict = ["COMPUTER_REQUEST_CONFLICT","COMPUTER_LAYER_CHANGED","COMPUTER_CONTROL_BUSY","COMPUTER_CONTROL_NOT_ACTIVE","COMPUTER_SOURCE_MISMATCH","COMPUTER_LAYER_SOURCE_MISMATCH","COMPUTER_FRAME_EXPIRED"].includes(value.code);
         const unavailable = value.code.includes("UNAVAILABLE") || value.code.startsWith("COMPUTER_NATIVE_");
-        const notStarted = value.deliveryFrameSent === false || value.mutationOutcome === "not_started";
+        // A format check describes this dispatch. The original ID may already have a remote receipt.
+        const notStarted = value.code !== "COMPUTER_IMAGE_VIEW_UNSUPPORTED"
+          && (value.deliveryFrameSent === false || value.mutationOutcome === "not_started");
         const status = settingsDisabled ? 403 : resultUnknown ? 503 : conflict ? 409 : unavailable ? 503 : 400;
         const repair = settingsDisabled ? "Open RabiLink → 电脑控制 and update this target's visible settings."
           : resultUnknown ? readOnly ? "The original status lookup is unavailable. Read the same original resource status; this failed lookup is not evidence of a write or an absent resource." : "Query the original input.status, control.status or annotation status with its original request/resource ID. Do not repeat the input or change its ID."

@@ -1,3 +1,4 @@
+import { COMPUTER_IMAGE_VIEW_CAPABILITY, computerRequestUsesImageView } from "../../apps/rabi-agent/lib/computer-image-view.mjs";
 export { recoverDisabledAgentTask } from "./disabledAgentTaskRecovery.js";
 import { recoverDisabledAgentTask } from "./disabledAgentTaskRecovery.js";
 import { hostname } from "node:os";
@@ -656,6 +657,17 @@ export class LanAgentRegistry {
     catch (cause) {
       throw Object.assign(new Error(cause instanceof Error ? cause.message : String(cause), { cause }), {
         code: "LAN_AGENT_MANAGEMENT_NOT_SENT", deliveryFrameSent: false, instanceId, operation
+      });
+    }
+
+    if (operation === "computer" && computerRequestUsesImageView(String(body.action), body)
+      && !this.nodes.get(instanceId)?.computerCapabilities?.includes(COMPUTER_IMAGE_VIEW_CAPABILITY)) {
+      throw Object.assign(new Error("Scaled image coordinates require imageView-v1 on the selected computer."), {
+        code: "COMPUTER_IMAGE_VIEW_UNSUPPORTED", field: "source.imageView", deliveryFrameSent: false,
+        instanceId, requestId: body.requestId,
+        nextAction: "Read GET /api/lan-agent/instances for this computer's current computerCapabilities. "
+          + "Query input.status with the original requestId when inspecting earlier input. "
+          + "For new coordinate input, capture with maxWidth matching the presented image or update this computer's execution resource."
       });
     }
 

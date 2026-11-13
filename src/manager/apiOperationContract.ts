@@ -231,6 +231,7 @@ export function freezeApiData<T>(value: T): T {
 }
 
 const ajv = new Ajv2020({ strict: true, allErrors: true, validateFormats: true });
+ajv.addKeyword({ keyword: "x-rabiroute-media", schemaType: "array", valid: true });
 const addFormats = createRequire(import.meta.url)("ajv-formats") as FormatsPlugin;
 addFormats(ajv);
 

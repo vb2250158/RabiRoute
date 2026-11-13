@@ -9,6 +9,7 @@
 第一次使用从使用手册开始；接入开发者查看接口参考；架构、构建和迁移资料位于维护开发分组。实验功能与历史资料保留各自状态。
 
 - [电脑控制](user-guide/computer-control.md)：平级电脑目录、可见功能开关、输入、截图和静态/动态标注。
+- [电脑视觉操作](computer-control-visual-workflow.md)：单屏与区域截图、图像送达、整批输入归还和操作提示。
 
 - [宿主与插件边界](host-plugin-boundaries.md)
 
