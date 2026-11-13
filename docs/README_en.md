@@ -10,6 +10,8 @@ Start with the user guide for everyday operation, use the API reference for inte
 
 - [Computer control](user-guide/computer-control_en.md): flat computer directory, visible feature settings, input, capture and static/dynamic annotations.
 
+- [Host and plugin boundaries](host-plugin-boundaries_en.md)
+
 ## Start here
 
 - [RibiWebGUI user guide](user-guide/README_en.md): find setup, operation, and troubleshooting instructions by task.

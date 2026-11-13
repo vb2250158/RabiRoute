@@ -1,5 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import os from 'node:os';
+import { runCli } from '../rabi-cli.mjs';
 import { createManagerClient } from '../lib/manager-client.mjs';
 import { createOperationTools } from '../../rabi-mcp/lib/operation-tools.mjs';
 
@@ -50,11 +54,45 @@ for (const entry of ['request', 'invoke', 'sdk', 'mcp']) {
   });
 }
 
-test('remote SDK sends still require the original installed durable owner configuration', async () => {
-  let networkCalls = 0;
+test('generic remote clients keep explicit source headers without requiring an installed delivery owner', async () => {
+  const posts = [];
   const client = createManagerClient({ managerUrl: 'http://manager.invalid', credential: 'controlled-credential',
-    agentType: 'codex', sessionId: 'original-remote-source', fetchImpl: async () => { networkCalls++; throw new Error('must retain local acceptance boundary'); } });
-  await assert.rejects(client.request('POST', '/api/agent/threads', { body: { action: 'send', threadId: 'original-target', prompt: 'controlled fixture' } }),
-    /Reliable Agent delivery requires the installed owner config and explicit source identity/);
-  assert.equal(networkCalls, 0);
+    agentType: 'codex', sessionId: 'original-remote-source', fetchImpl: async (url, options) => {
+      if (new URL(url).pathname === '/meta') return Response.json(meta);
+      posts.push(options); return Response.json({ code: 0, data: { deliveryId: 'original-generic', accepted: true } });
+    } });
+  const result = await client.request('POST', '/api/agent/threads', { body: { action: 'send', deliveryId: 'original-generic', threadId: 'original-target', prompt: 'controlled fixture' } });
+  assert.equal(result.ok, true); assert.equal(posts.length, 1);
+  assert.equal(posts[0].headers['x-rabiroute-session-id'], 'original-remote-source');
+  assert.equal(JSON.parse(posts[0].body).deliveryId, 'original-generic');
+});
+
+test('actual --config CLI can call send with connection source and retains the original uncertain receipt', async t => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'rabi-sessionless-cli-'));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const configPath = path.join(directory, 'config.json');
+  await fs.writeFile(configPath, JSON.stringify({ managerUrl: 'http://manager.invalid', nodeCredential: 'controlled-credential' }));
+  let status = 200; const posts = [];
+  t.mock.method(globalThis, 'fetch', async (url, options) => {
+    const pathname = new URL(url).pathname;
+    assert.equal(options.headers.authorization, 'Bearer controlled-credential');
+    if (pathname === '/meta') return Response.json(meta);
+    if (pathname.startsWith('/api/agent/operations/')) return Response.json({ code: 0, data: {
+      schemaVersion: '2', ...meta, pluginGenerationId: 'plugins', catalogRevision: 1, catalogDigest: 'sha256:' + 'a'.repeat(64),
+      operation: { id: contract.operationId, contractDigest: 'sha256:' + 'b'.repeat(64), contract }
+    } });
+    assert.equal(pathname, '/api/agent/threads'); posts.push(options);
+    return Response.json({ code: status === 200 ? 0 : -1, data: { deliveryId: JSON.parse(options.body).deliveryId }, uncertain: status !== 200 }, { status });
+  });
+  for (const code of [200, 503]) {
+    status = code;
+    const id = 'original-connection-request-' + code, body = { action: 'send', deliveryId: id, threadId: 'original-target', prompt: 'synthetic' };
+    const result = await runCli(['call', contract.operationId, '--config', configPath, '--input-json', JSON.stringify({ body }), '--request-id', id]);
+    assert.equal(result.statusCode, code); assert.equal(result.uncertain, code === 503);
+    assert.equal(posts.length, code === 200 ? 1 : 2, 'an uncertain send is not automatically submitted again');
+    assert.deepEqual(JSON.parse(posts.at(-1).body), body);
+    assert.equal(posts.at(-1).headers['idempotency-key'], id);
+    assert.equal(posts.at(-1).headers['x-rabiroute-agent-type'], undefined);
+    assert.equal(posts.at(-1).headers['x-rabiroute-session-id'], undefined);
+  }
 });

@@ -17,7 +17,12 @@ import { createPersonaMessagingOperations } from "./src/manager/personaMessaging
 import { createPersonaDirectoryOperation } from "./src/manager/personaMessagingRoutes.js";
 import { createLanguageStyleOperations } from "./src/manager/languageStyleRoutes.js";
 import { createRolePanelOperations } from "./src/manager/rolePanelOperations.js";
+import { createDsBotAutomationRuleOwner, createDsBotAutomationRuleOperations } from "./src/manager/dsBotAutomationRuleOperations.js";
 export function createOwnedRuntime(ports) {
+    const dsBotAutomationRuleOwner = createDsBotAutomationRuleOwner({
+        rolesRoot: () => ports.rolesRoot,
+        identity: () => ({ applicationGenerationId: ports.managerHostIdentity?.applicationGenerationId ?? ports.managerInstanceId, managerInstanceId: ports.managerInstanceId })
+    });
     let templateSnapshot;
     let currentTemplates = [];
     const readAutomationTemplates = () => {
@@ -31,6 +36,9 @@ export function createOwnedRuntime(ports) {
     };
     return Object.freeze({
         ManagerPluginRequestTracker: ports.ManagerPluginRequestTracker,
+        dsBotAutomationRuleOwner,
+        subscribeRoleAutomationCatalog: () => ports.subscribeRoleCatalogChanges(() => dsBotAutomationRuleOwner.invalidate()),
+        dsBotAutomationRuleOperations: createDsBotAutomationRuleOperations(dsBotAutomationRuleOwner),
         roleConfigurationOperations: createRoleConfigurationOperations({
             rolesRoot: () => ports.rolesRoot,
             identity: () => ({ applicationGenerationId: ports.managerHostIdentity?.applicationGenerationId ?? ports.managerInstanceId, managerInstanceId: ports.managerInstanceId }),
@@ -44,6 +52,7 @@ export function createOwnedRuntime(ports) {
             },
             changed: async (roleId, assertCurrent) => {
                 assertCurrent();
+                dsBotAutomationRuleOwner.invalidate();
                 await ports.ensureDataDirs();
                 assertCurrent();
                 ports.publishManagerEvent("role_catalog_changed", { roleId });

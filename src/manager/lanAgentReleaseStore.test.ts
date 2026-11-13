@@ -6,6 +6,75 @@ import path from "node:path";
 import test from "node:test";
 import { LanAgentReleaseStore, LanAgentReleaseSelectionConflictError, lanAgentReleaseManifestDigest, verifyLanAgentReleaseManifest } from "./lanAgentReleaseStore.js";
 
+function desktopFixture(root: string, name: string, version: string) {
+  const agent = path.join(root, name); writeAgent(agent);
+  fs.writeFileSync(path.join(agent, 'package.json'), JSON.stringify({ version }));
+  fs.mkdirSync(path.join(agent, 'dist/native'), { recursive: true });
+  fs.writeFileSync(path.join(agent, 'dist/native/RabiAgent.Computer.exe'), 'synthetic non-executable resource '+version);
+  return agent;
+}
+
+test('Qt-only desktop selections CAS the complete resource pair without importing or selecting an SDK',()=>{
+ const root=temporaryDirectory('rabi-desktop-qt-cas-');
+ try{
+  const store=new LanAgentReleaseStore({rootDir:root}),a={id:'io.test.qt',version:'1',revision:'a'.repeat(64)},b={...a,version:'2',revision:'b'.repeat(64)};
+  const first=store.selectDesktopResourceRelease(null,0,a);assert.equal(first.revision,1);assert.deepEqual(first.qtPackageRef,a);assert.equal(first.digest,null);
+  const second=store.selectDesktopResourceRelease(null,1,b);assert.equal(second.revision,2);assert.deepEqual(second.qtPackageRef,b);
+  assert.deepEqual(store.selectDesktopResourceRelease(null,1,b),second,'readback must match Qt as well as Native');
+  assert.throws(()=>store.selectDesktopResourceRelease(null,1,a),{code:'COMPUTER_DESKTOP_REVISION_CONFLICT'});
+  const reopened=new LanAgentReleaseStore({rootDir:root});assert.deepEqual(reopened.desktopResourceSelection(),second);
+  const reset=reopened.selectDesktopResourceRelease(null,2,null);assert.equal(reset.revision,3);assert.equal(reset.qtPackageRef,undefined);
+  assert.equal(fs.existsSync(path.join(root,'data/lan-agent-release-signing-key.json')),false);assert.equal(fs.existsSync(path.join(root,'data/lan-agent-releases/common.json')),false);assert.equal(fs.existsSync(path.join(root,'data/lan-agent-releases/selections.json')),false);
+ }finally{fs.rmSync(root,{recursive:true,force:true});}
+});
+
+test('desktop resource selection persists across reopen, uses local CAS and reconciles the original committed revision',()=>{
+ const root=temporaryDirectory('rabi-desktop-selection-');
+ try {
+  const a=desktopFixture(root,'a','0.4.1'),b=desktopFixture(root,'b','0.4.2'),store=new LanAgentReleaseStore({rootDir:root,agentRoot:a});
+  assert.deepEqual(store.desktopResourceSelection(),{revision:0,digest:null,version:'builtin'});
+  assert.equal(fs.existsSync(path.join(root,'data/lan-agent-release-signing-key.json')),false);
+  const common=store.publication();store.publishCommonRelease(common.releaseDigest);
+  const first=store.importRelease(a),second=store.importRelease(b);store.assignRelease('untouched-node',first.releaseDigest,common.releaseDigest);
+  const commonPath=path.join(root,'data/lan-agent-releases/common.json'),nodesPath=path.join(root,'data/lan-agent-releases/selections.json');
+  const commonBefore=fs.readFileSync(commonPath),nodesBefore=fs.readFileSync(nodesPath);
+  const selected=store.selectDesktopResourceRelease(second.releaseDigest,0);assert.deepEqual(selected,{revision:1,digest:second.releaseDigest,version:'0.4.2'});
+  const selectionPath=path.join(root,'data/lan-agent-releases/desktop.json'),before=fs.readFileSync(selectionPath),stat=fs.statSync(selectionPath);
+  const reopened=new LanAgentReleaseStore({rootDir:root,agentRoot:a});assert.deepEqual(reopened.desktopResourceSelection(),selected);
+  assert.deepEqual(reopened.selectDesktopResourceRelease(second.releaseDigest,0),selected,'lost acknowledgement reconciles the same expected+1 commit');
+  assert.deepEqual(reopened.selectDesktopResourceRelease(second.releaseDigest,1),selected,'already selected resource is not rewritten');
+  assert.deepEqual(fs.readFileSync(selectionPath),before);assert.equal(fs.statSync(selectionPath).mtimeMs,stat.mtimeMs);
+  assert.throws(()=>reopened.selectDesktopResourceRelease(first.releaseDigest,0),{code:'COMPUTER_DESKTOP_REVISION_CONFLICT'});
+  const next=reopened.selectDesktopResourceRelease(first.releaseDigest,1);assert.equal(next.revision,2);assert.equal(next.digest,first.releaseDigest);
+  assert.deepEqual(fs.readFileSync(commonPath),commonBefore);assert.deepEqual(fs.readFileSync(nodesPath),nodesBefore);
+  assert.equal(reopened.publication('untouched-node').releaseDigest,first.releaseDigest);assert.equal(reopened.publication().releaseDigest,common.releaseDigest);
+ }finally{fs.rmSync(root,{recursive:true,force:true});}
+});
+
+test('damaged desktop selection is local and never replaced by a new selection or SDK publication',()=>{
+ const root=temporaryDirectory('rabi-desktop-selection-invalid-');
+ try{
+  const agent=desktopFixture(root,'package','0.4.1'),store=new LanAgentReleaseStore({rootDir:root,agentRoot:agent}),common=store.publication();store.publishCommonRelease(common.releaseDigest);
+  const imported=store.importRelease(agent);store.assignRelease('healthy-node',imported.releaseDigest,common.releaseDigest);store.selectDesktopResourceRelease(imported.releaseDigest,0);
+  const file=path.join(root,'data/lan-agent-releases/desktop.json'),valid=JSON.parse(fs.readFileSync(file,'utf8'));
+  for(const value of ['{broken',JSON.stringify({...valid,version:'wrong'}),JSON.stringify({...valid,revision:0}),JSON.stringify({...valid,digest:'a'.repeat(64)})]){
+   fs.writeFileSync(file,value);assert.throws(()=>store.desktopResourceSelection(),{code:'COMPUTER_DESKTOP_SELECTION_INVALID'});
+   assert.throws(()=>store.selectDesktopResourceRelease(imported.releaseDigest,0),{code:'COMPUTER_DESKTOP_SELECTION_INVALID'});assert.equal(fs.readFileSync(file,'utf8'),value);
+   assert.equal(store.publication().releaseDigest,common.releaseDigest);assert.equal(store.publication('healthy-node').releaseDigest,imported.releaseDigest);
+  }
+ }finally{fs.rmSync(root,{recursive:true,force:true});}
+});
+
+test('desktop selection verification never creates a missing signing key',()=>{
+ const root=temporaryDirectory('rabi-desktop-selection-key-');
+ try{
+  const agent=desktopFixture(root,'package','0.4.1'),store=new LanAgentReleaseStore({rootDir:root,agentRoot:agent}),imported=store.importRelease(agent);
+  const key=path.join(root,'data/lan-agent-release-signing-key.json'),pointer=path.join(root,'data/lan-agent-releases/desktop.json');fs.unlinkSync(key);
+  assert.deepEqual(store.desktopResourceSelection(),{revision:0,digest:null,version:'builtin'});
+  assert.throws(()=>store.selectDesktopResourceRelease(imported.releaseDigest,0));assert.equal(fs.existsSync(pointer),false);assert.equal(fs.existsSync(key),false);
+ }finally{fs.rmSync(root,{recursive:true,force:true});}
+});
+
 function temporaryDirectory(prefix: string): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
 }
@@ -396,4 +465,29 @@ test("a signer change during immutable manifest creation cannot label an old sig
  const owner=new LanAgentReleaseStore({rootDir:root,agentRoot,signingKeyPath,immutablePackage:true});const raced=owner.manifest();assert.equal(raced.publicKeySha256,initial.publicKeySha256);
  const fresh=owner.manifest();assert.equal(fresh.publicKey,nextKeys.publicKey.trim());assert.notEqual(fresh,raced);assert.equal(verifyLanAgentReleaseManifest(fresh,fresh.publicKeySha256),true);
  assert.equal(owner.manifest(),fresh);
+});
+
+
+test("desktop resource resolution verifies imported worker bytes without changing release selections", () => {
+  const root = temporaryDirectory("rabi-desktop-resource-release-");
+  try {
+    const agentRoot = path.join(root, "agent"); writeAgent(agentRoot);
+    fs.mkdirSync(path.join(agentRoot, "dist/native"), { recursive: true });
+    fs.writeFileSync(path.join(agentRoot, "dist/native/RabiAgent.Computer.exe"), "synthetic worker bytes");
+    const store = new LanAgentReleaseStore({ rootDir: root, agentRoot });
+    const imported = store.importRelease(agentRoot);
+    const before = store.publication();
+    const resolved = store.desktopResourceRelease(imported.releaseDigest);
+    assert.equal(resolved.version, imported.version);
+    assert.equal(resolved.digest, imported.releaseDigest);
+    assert.equal(fs.readFileSync(resolved.nativeOptions.executable, "utf8"), "synthetic worker bytes");
+    assert.deepEqual(store.publication(), before);
+    assert.equal(store.selectedReleaseDigest("synthetic-node"), undefined);
+    fs.writeFileSync(resolved.nativeOptions.executable, "corrupt synthetic worker");
+    assert.throws(() => store.desktopResourceRelease(imported.releaseDigest), /integrity mismatch/);
+    const signingKey = path.join(root, "data/lan-agent-release-signing-key.json");
+    fs.unlinkSync(signingKey);
+    assert.throws(() => store.desktopResourceRelease(imported.releaseDigest), /ENOENT/);
+    assert.equal(fs.existsSync(signingKey), false, "read-only resolution never creates a replacement signing identity");
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });

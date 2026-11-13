@@ -1,7 +1,7 @@
 {
   "schemaVersion": 2,
   "id": "io.rabiroute.manager.route-control",
-  "version": "0.1.2",
+  "version": "0.1.4",
   "displayName": "路由配置",
   "description": "创建、编辑和保存消息路由与发送规则",
   "icon": "mdi-routes",

@@ -1,3 +1,5 @@
+import { createManagerEndpointCache } from './manager-endpoint-cache.mjs';
+import { MANAGER_TRANSPORT_ABI, managerContextFromHeaders } from './manager-transport-contract.mjs';
 import { copyOperationEffect, selectedOperationReadOnly } from "./api-operation-effects.mjs";
 import { createTimeoutSettings } from "./timeout-settings.mjs";
 import { constants, readFileSync } from "node:fs";
@@ -230,6 +232,56 @@ function buildManagerClient({ managerUrl, credential, agentType, sessionId, conf
     if (!endpointSession || credential || agentType || sessionId || config || discover) throw new Error("Local Host transport requires an explicit Host endpoint session without remote credentials.");
   } else if (!credential) throw new Error("An enrolled computer credential is required.");
   if ((agentType || sessionId) && (!agentType || !sessionId || typeof agentType !== "string" || typeof sessionId !== "string" || /[\x00-\x1f\x7f]/.test(agentType + sessionId))) throw new Error("Provide an explicit Agent type and full session ID together.");
+  const transportCache = session?.transportCache ?? createManagerEndpointCache();
+  let metadataRefresh;
+  const metadataLifetime = new AbortController();
+  async function refreshMetadata(endpoint) {
+    if (metadataLifetime.signal.aborted) return endpoint;
+    if (!metadataRefresh) {
+      const token = transportCache.begin(), attemptedRevision = transportCache.metadataRevision();
+      const work = (async () => {
+        const response = await request("GET", "/meta", { signal: metadataLifetime.signal }, undefined, managerOrigin(endpoint.managerUrl), endpoint.meta);
+        let meta; try { meta = metadataIdentity(JSON.parse(response.body)); } catch { /* Metadata failure does not erase a valid connection. */ }
+        if (metadataLifetime.signal.aborted) return endpoint;
+        if (response.ok && meta?.applicationGenerationId && meta.managerInstanceId && sameIdentity(meta, endpoint.meta)) {
+          const next = { ...endpoint, meta, managerContext: response.managerContext };
+          transportCache.remember(next, response.managerContext, token);
+          return next;
+        }
+        const changed = transportCache.observe(response.managerContext, token);
+        if (changed) return undefined;
+        transportCache.deferMetadata(token, attemptedRevision);
+        return endpoint;
+      })();
+      metadataRefresh = work;
+      void work.finally(() => { if (metadataRefresh === work) metadataRefresh = undefined; }).catch(() => {});
+    }
+    return metadataRefresh;
+  }
+  async function requestEndpoint(diagnostic, options) {
+    const cached = transportCache.get();
+    if (cached && (diagnostic || businessReady(cached.meta))) {
+      if (!diagnostic && transportCache.needsMetadata()) {
+        // Configuration refresh is rebuildable metadata, never a global RPC lock.
+        void refreshMetadata(cached).catch(() => {});
+      }
+      return cached;
+    }
+    if (session) {
+      const token = transportCache.begin();
+      const endpoint = await session.ensure({ diagnostic });
+      if (endpoint.managerContext) transportCache.remember(endpoint, endpoint.managerContext, token);
+      return endpoint;
+    }
+    const token = transportCache.begin(), meta = await request("GET", "/meta", { signal: options.signal });
+    if (!meta.ok) return { failure: meta };
+    let identity; try { identity = metadataIdentity(JSON.parse(meta.body)); } catch { throw new Error("Manager metadata is not valid JSON."); }
+    if (!identity.applicationGenerationId || !identity.managerInstanceId) throw new Error("Manager generation is not ready or has no identity.");
+    if (!diagnostic && !businessReady(identity)) throw new Error("Manager generation is not ready or has no identity.");
+    const endpoint = { managerUrl: origin, meta: identity, generation: identity.applicationGenerationId, instance: identity.managerInstanceId };
+    transportCache.remember(endpoint, meta.managerContext, token);
+    return endpoint;
+  }
   async function request(method, target, options = {}, upload, requestOrigin = origin, verifiedIdentity, nativeBinding, nativeCredentials) {
     const { body, bodyText, bodyBytes, bodyStream, headers = {}, responseMode = "text", onChunk, onResponse } = options;
     method = String(method).toUpperCase();
@@ -300,12 +352,12 @@ function buildManagerClient({ managerUrl, credential, agentType, sessionId, conf
       try { data = JSON.parse(text); } catch { data = undefined; }
       return {
         statusCode: response.status, ok: response.ok, ...(text !== undefined ? { body: text } : bytes ? { bodyBytes: bytes } : {}),
-        headers: responseHeaders(), bytesReceived, responseMode, noReplay: responseMode === "stream" || bodyStream !== undefined,
+        headers: responseHeaders(), ...(nativeBinding ? {} : { managerContext: managerContextFromHeaders(response.headers) }), bytesReceived, responseMode, noReplay: responseMode === "stream" || bodyStream !== undefined,
         uncertain: !readOnly && (response.status >= 500 || data?.uncertain === true)
       };
     } catch {
       // Do not echo transport/consumer errors that may contain private headers.
-      return { statusCode: response?.status ?? 0, ok: false, body: "Manager transport or consumer failed; inspect authoritative state before retrying a mutation.", headers: response ? responseHeaders() : {}, bytesReceived,
+      return { statusCode: response?.status ?? 0, ok: false, body: "Manager transport or consumer failed; inspect authoritative state before retrying a mutation.", headers: response ? responseHeaders() : {}, ...(response && !nativeBinding ? { managerContext: managerContextFromHeaders(response.headers) } : {}), bytesReceived,
         transportError: signal.aborted ? "CANCELLED" : "TRANSPORT", noReplay: responseMode === "stream" || bodyStream !== undefined,
         uncertain: !readOnly };
     } finally {
@@ -317,41 +369,55 @@ function buildManagerClient({ managerUrl, credential, agentType, sessionId, conf
     method = String(method).toUpperCase();
     if (!validApiHttpMethod(method)) throw new Error("Invalid Manager HTTP method.");
     options = requestOptions(method, options);
-    const diagnostic = target === "/meta" && method === "GET";
+    const diagnostic = new URL(target, origin).pathname === "/meta" && method === "GET";
     // Some GET operations touch persisted state (for example recent-memory views).
     // Callers may disable replay, but cannot enable replay for a mutation method.
     const touchesRecentMemory = /^\/(?:api\/)?roles\/[^/]+\/memory\/recent\/[^/]+$/.test(new URL(target, origin).pathname);
     const readOnly = selectedOperationReadOnly(options) ?? (["GET", "HEAD", "OPTIONS"].includes(method) && !touchesRecentMemory && options.responseMode !== "stream" && options.onResponse === undefined);
     const read = ["GET", "HEAD", "OPTIONS"].includes(method) && options.replaySafe !== false && !touchesRecentMemory && options.responseMode !== "stream" && options.bodyStream === undefined && options.onResponse === undefined;
     relativeTarget(origin, target);
-    let endpoint;
-    if (session) endpoint = await session.ensure({ diagnostic });
-    else {
-      const meta = await request("GET", "/meta");
-      if (!meta.ok) return meta;
-      let identity; try { identity = metadataIdentity(JSON.parse(meta.body)); } catch { throw new Error("Manager metadata is not valid JSON."); }
-      if (!identity.applicationGenerationId || !identity.managerInstanceId) throw new Error("Manager generation is not ready or has no identity.");
-      if (!diagnostic && !businessReady(identity)) throw new Error("Manager generation is not ready or has no identity.");
-      endpoint = { managerUrl: origin, meta: identity, generation: identity.applicationGenerationId, instance: identity.managerInstanceId };
-    }
+    let endpoint = await requestEndpoint(diagnostic, options);
+    if (endpoint.failure) return endpoint.failure;
     for (let attempt = 0; ; attempt++) {
       const requestOrigin = managerOrigin(endpoint.managerUrl);
       const identity = endpoint.meta || {};
       timeouts.adopt(identity);
-      const configuredUploadMiB = identity.agentUploads?.maxFileMiB;
-      if (upload && Number.isSafeInteger(configuredUploadMiB) && configuredUploadMiB > 0 && Number.isSafeInteger(configuredUploadMiB * 1024 ** 2) && upload.size > configuredUploadMiB * 1024 ** 2) {
-        throw new Error(`Upload exceeds the current Manager agentUploads.maxFileMiB=${configuredUploadMiB}. Adjust WebGUI RabiLink configuration or data/Config.json and restart Manager to apply it.`);
-      }
+      const verifiedModern = Boolean(transportCache.get()) && identity.apiTransport?.abi === MANAGER_TRANSPORT_ABI;
       // Authenticated exact /meta remains an Agent authorization check; public preflight is credential-free.
-      const result = await request(method, target, options, upload, requestOrigin, identity);
+      const token = transportCache.begin();
+      const result = await request(method, target, options, upload, requestOrigin, diagnostic ? undefined : identity);
       let current;
-      try { const response = await request("GET", "/meta", {}, undefined, requestOrigin); current = response.ok ? metadataIdentity(JSON.parse(response.body)) : undefined; } catch { current = undefined; }
-      const identityChanged = !current || !sameIdentity(current, identity);
-      if (read && !result.noReplay && !options.signal?.aborted && session && attempt === 0 && (identityChanged || result.statusCode === 0 || result.statusCode >= 500 || result.transportError)) {
-        try { endpoint = await session.ensure({ diagnostic, forceDiscovery: true }); continue; } catch { /* Return the original failed read; never replay a mutation. */ }
+      const modern = identity.apiTransport?.abi === MANAGER_TRANSPORT_ABI && result.managerContext?.abi === MANAGER_TRANSPORT_ABI;
+      if (modern) {
+        current = result.managerContext;
+        if (!transportCache.get()) transportCache.remember(endpoint, current, token);
+        transportCache.observe(current, token);
+        if (diagnostic && result.ok) {
+          let meta; try { meta = metadataIdentity(JSON.parse(result.body)); } catch { /* Preserve the actual diagnostic response. */ }
+          if (meta?.applicationGenerationId && meta.managerInstanceId && sameIdentity(meta, current)) transportCache.remember({ ...endpoint, meta, managerContext: current }, current, token);
+        }
+      } else {
+        // Old servers and missing-context responses retain the original conservative probe.
+        try { const response = await request("GET", "/meta", {}, undefined, requestOrigin); current = response.ok ? metadataIdentity(JSON.parse(response.body)) : undefined; } catch { current = undefined; }
+        if (diagnostic && result.ok && current) {
+          let meta; try { meta = metadataIdentity(JSON.parse(result.body)); } catch { /* Do not invent diagnostic metadata. */ }
+          if (meta?.applicationGenerationId && meta.managerInstanceId && sameIdentity(meta, current)) transportCache.remember({ ...endpoint, meta }, undefined, token);
+        }
       }
-      return { ...result, uncertain: Boolean(result.uncertain || (!readOnly && (identityChanged || result.statusCode === 0 || result.statusCode >= 500 || result.transportError))), identityChanged,
-        identity: { applicationGenerationId: identity.applicationGenerationId, managerInstanceId: identity.managerInstanceId } };
+      const identityUnconfirmed = !current?.applicationGenerationId || !current?.managerInstanceId;
+      const identityChanged = !identityUnconfirmed && !sameIdentity(current, identity);
+      const connectionFailed = !options.signal?.aborted && (result.statusCode === 0 || result.transportError && !result.managerContext && result.transportError !== "RESPONSE_MODE_REQUIRED");
+      if (identityChanged || connectionFailed) transportCache.invalidate();
+      if (read && !result.noReplay && !options.signal?.aborted && (session || verifiedModern) && attempt === 0 && (identityChanged || connectionFailed || !verifiedModern && !modern && result.statusCode >= 500)) {
+        try { endpoint = session ? await session.ensure({ diagnostic, ...(verifiedModern || modern ? {} : { forceDiscovery: true }) }) : await requestEndpoint(diagnostic, options); if (!endpoint.failure) continue; } catch { /* Return the original failed read; never replay a mutation. */ }
+      }
+      let targetNotStarted = false;
+      if (modern && identityChanged && result.statusCode === 409) {
+        let failure; try { failure = JSON.parse(result.body); } catch { /* No transport rejection proof. */ }
+        targetNotStarted = failure?.errorCode === "MANAGER_IDENTITY_CHANGED" && failure.executionState === "not_started";
+      }
+      return { ...result, ...(targetNotStarted ? { executionState: "not_started" } : {}), uncertain: !targetNotStarted && Boolean(result.uncertain || (!readOnly && (identityChanged || identityUnconfirmed || result.statusCode === 0 || result.statusCode >= 500 || result.transportError))), identityChanged, identityUnconfirmed,
+        identity: { applicationGenerationId: modern ? current.applicationGenerationId : identity.applicationGenerationId, managerInstanceId: modern ? current.managerInstanceId : identity.managerInstanceId } };
     }
   }
   /** Same-origin public HTTP transport. Streams are consumed with backpressure,
@@ -360,12 +426,13 @@ function buildManagerClient({ managerUrl, credential, agentType, sessionId, conf
    * outputPath saves bytes atomically without overwrite or printing binary. */
   async function publicRequest(method, target, options = {}, transport = verifiedRequest) {
     const verb = String(method).toUpperCase();
-    if (!networkTransport && !localHost && verb === "POST" && relativeTarget(origin, target).pathname === "/api/agent/threads") {
+    // Explicit enrolled Agent sources use their durable owner. Generic connected
+    // callers use the public Manager ledger without inventing an Agent session.
+    if (!networkTransport && !localHost && configPath && agentType && sessionId && verb === "POST" && relativeTarget(origin, target).pathname === "/api/agent/threads") {
       const normalized = await readAgentJsonBody(options);
       options = normalized.options;
       if (normalized.request?.action === "send") {
         requestOptions(verb, options); // Preserve transport-header/body validation before local acceptance.
-        if (!configPath || !agentType || !sessionId) throw new Error("Reliable Agent delivery requires the installed owner config and explicit source identity.");
         if (options.outputPath || options.responseMode && options.responseMode !== "text" || options.onChunk || options.onResponse) throw new Error("Reliable Agent delivery returns a JSON local-acceptance receipt; streaming output is unsupported before submission.");
         const receipt = await submitDeliveryToOwner(configPath, { intentId: normalized.request.deliveryId, agentType, sessionId, request: normalized.request });
         const accepted = receipt.accepted === true;
@@ -375,7 +442,7 @@ function buildManagerClient({ managerUrl, credential, agentType, sessionId, conf
             acceptance: receipt.acceptance, intentId: receipt.intentId, delivery: { deliveryId: receipt.deliveryId, status }, error: receipt.error }) };
       }
     }
-    if (isSkillDownloadTarget(target)) throw new Error("Skill download requires the explicit download operation and local output path.");
+    if (transport === verifiedRequest && verb === "GET" && isSkillDownloadTarget(target)) return downloadSkill(target, options);
     if (options.outputPath === undefined) return transport(method, target, options);
     if (typeof options.outputPath !== "string" || !options.outputPath.trim() || options.outputPath.includes("\0")) throw new Error("Output requires an explicit local path.");
     if (options.onChunk !== undefined) throw new Error("Output and onChunk consumers are mutually exclusive.");
@@ -446,13 +513,24 @@ function buildManagerClient({ managerUrl, credential, agentType, sessionId, conf
     if (!result.ok || uncertain) return { ...result, body: publicBody, ok: false, uncertain, query, guidance: `${result.statusCode === 413 ? "The configured Manager upload limit was exceeded; adjust agentUploads.maxFileMiB in WebGUI RabiLink configuration or data/Config.json and restart Manager to apply it. " : ""}Query GET ${target} with the same Agent identity before any retry. Do not change the upload ID, automatically upload again, or send a message.` };
     return { ...result, body: publicBody, query, guidance: "Uploaded only; nothing was sent. To send explicitly, use /api/agent/send with payload: {type:'file',fileId:...,fileSha256:...} and an authorized target; fileSha256 is required to bind the exact uploaded bytes.", payload: { type: "file", fileId: dto.id, fileSha256: dto.sha256 } };
   }
-  async function download(target, outputPath, { signal: callerSignal } = {}) {
-    if (!isSkillDownloadTarget(target)) throw new Error("Download requires an exact role skill download path without a query.");
+  async function download(target, outputPath, options = {}) {
     if (typeof outputPath !== "string" || !outputPath.trim() || outputPath.includes("\0")) throw new Error("Download requires an explicit local output path.");
-    const finalPath = path.resolve(outputPath);
-    const temporaryPath = path.join(path.dirname(finalPath), `.rabi-download-${randomUUID()}.partial`);
-    const signal = callerSignal ? AbortSignal.any([callerSignal, AbortSignal.timeout(timeouts.get("agent.client.download", downloadTimeoutMs))]) : AbortSignal.timeout(timeouts.get("agent.client.download", downloadTimeoutMs));
-    const headers = { authorization: `Bearer ${credential}`, ...(agentType ? { "x-rabiroute-agent-type": agentType, "x-rabiroute-session-id": sessionId } : {}) };
+    const { ok, statusCode, path, sizeBytes, sha256, identity } = await downloadSkill(target, { ...options, outputPath });
+    // Preserve the established dedicated-download receipt.
+    return { ok, statusCode, path, sizeBytes, sha256, identity };
+  }
+  async function downloadSkill(target, options = {}) {
+    if (!isSkillDownloadTarget(target)) throw new Error("Download requires an exact role skill download path without a query.");
+    const { outputPath, signal: callerSignal } = options;
+    if (outputPath !== undefined && (typeof outputPath !== "string" || !outputPath.trim() || outputPath.includes("\0"))) throw new Error("Download requires an explicit local output path.");
+    if (outputPath !== undefined && options.onChunk !== undefined) throw new Error("Output and onChunk consumers are mutually exclusive.");
+    options = requestOptions("GET", { ...options, responseMode: outputPath !== undefined ? "bytes" : options.responseMode ?? "bytes" });
+    const finalPath = outputPath === undefined ? undefined : path.resolve(outputPath);
+    const temporaryPath = finalPath === undefined ? undefined : path.join(path.dirname(finalPath), `.rabi-download-${randomUUID()}.partial`);
+    const deadline = AbortSignal.timeout(options.timeoutMs ?? timeouts.get("agent.client.download", downloadTimeoutMs));
+    const signal = callerSignal ? AbortSignal.any([callerSignal, deadline]) : deadline;
+    const headers = localHost ? {} : { authorization: `Bearer ${credential}`, ...(agentType ? { "x-rabiroute-agent-type": agentType, "x-rabiroute-session-id": sessionId } : {}) };
+    const byteLimit = Math.min(MAX_SKILL_DOWNLOAD_BYTES, options.maxResponseBytes ?? MAX_SKILL_DOWNLOAD_BYTES);
     let downloadOrigin = origin;
     let verifiedEndpoint;
     let handle;
@@ -493,7 +571,7 @@ function buildManagerClient({ managerUrl, credential, agentType, sessionId, conf
       return { applicationGenerationId: value.applicationGenerationId, managerInstanceId: value.managerInstanceId };
     }
     try {
-      try { await lstat(finalPath); throw failure("OUTPUT_EXISTS"); } catch (error) { if (error.code !== "ENOENT") throw error; }
+      if (finalPath !== undefined) { try { await lstat(finalPath); throw failure("OUTPUT_EXISTS"); } catch (error) { if (error.code !== "ENOENT") throw error; } }
       if (session) {
         failureCode = "TRANSPORT";
         verifiedEndpoint = await bounded(() => session.ensure());
@@ -502,17 +580,19 @@ function buildManagerClient({ managerUrl, credential, agentType, sessionId, conf
       const identity = await metadata(true);
       if (verifiedEndpoint && !sameIdentity(identity, verifiedEndpoint.meta)) throw failure("IDENTITY_CHANGED");
       failureCode = "TRANSPORT";
-      const response = await bounded(() => fetchImpl(relativeTarget(downloadOrigin, target), { method: "GET", headers: { ...headers, accept: "application/zip", "accept-encoding": "identity" }, redirect: "error", signal }));
+      const response = await bounded(() => fetchImpl(relativeTarget(downloadOrigin, target), { method: "GET", headers: { ...headers, ...options.headers, accept: "application/zip", "accept-encoding": "identity", "x-rabiroute-expected-application-generation-id": identity.applicationGenerationId, "x-rabiroute-expected-manager-instance-id": identity.managerInstanceId }, redirect: "error", signal }));
       reader = response.body?.getReader();
       checkStatus(response);
       const lengthHeader = response.headers.get("content-length");
       const expectedHash = response.headers.get("x-rabiroute-content-sha256");
       const expectedLength = Number(lengthHeader);
       if (response.headers.get("content-type")?.trim().toLowerCase() !== "application/zip" || !/^[1-9][0-9]*$/.test(lengthHeader ?? "") || !Number.isSafeInteger(expectedLength) || !/^[0-9a-f]{64}$/i.test(expectedHash ?? "") || !reader) throw failure("INVALID_ZIP");
-      if (expectedLength > MAX_SKILL_DOWNLOAD_BYTES) throw failure("TOO_LARGE");
+      if (expectedLength > byteLimit) throw failure("TOO_LARGE");
+      const responseHeaders = Object.fromEntries([...response.headers].filter(([name]) => !transportHeader(name) || name === "content-length"));
+      if (options.onResponse) await bounded(() => options.onResponse({ statusCode, ok: true, headers: responseHeaders }));
       failureCode = "FILESYSTEM";
-      handle = await open(temporaryPath, "wx", 0o600);
-      temporaryCreated = true;
+      if (temporaryPath !== undefined) { handle = await open(temporaryPath, "wx", 0o600); temporaryCreated = true; }
+      const chunks = [];
       const hash = createHash("sha256");
       let sizeBytes = 0;
       let signature = Buffer.alloc(0);
@@ -522,30 +602,34 @@ function buildManagerClient({ managerUrl, credential, agentType, sessionId, conf
         if (chunk.done) break;
         const bytes = Buffer.from(chunk.value);
         sizeBytes += bytes.length;
-        if (sizeBytes > MAX_SKILL_DOWNLOAD_BYTES) throw failure("TOO_LARGE");
+        if (sizeBytes > byteLimit) throw failure("TOO_LARGE");
         if (sizeBytes > expectedLength) throw failure("LENGTH_MISMATCH");
         if (signature.length < 4) signature = Buffer.concat([signature, bytes.subarray(0, 4 - signature.length)]);
         hash.update(bytes);
-        let offset = 0;
-        failureCode = "FILESYSTEM";
-        while (offset < bytes.length) {
-          signal.throwIfAborted();
-          const { bytesWritten } = await handle.write(bytes, offset, bytes.length - offset);
-          if (!bytesWritten) throw new Error("Download write failed.");
-          offset += bytesWritten;
-        }
+        if (handle) {
+          let offset = 0;
+          failureCode = "FILESYSTEM";
+          while (offset < bytes.length) {
+            signal.throwIfAborted();
+            const { bytesWritten } = await handle.write(bytes, offset, bytes.length - offset);
+            if (!bytesWritten) throw new Error("Download write failed.");
+            offset += bytesWritten;
+          }
+        } else if (options.responseMode === "stream") await bounded(() => options.onChunk(bytes));
+        else chunks.push(bytes);
       }
       const sha256 = hash.digest("hex");
       if (sizeBytes !== expectedLength) throw failure("LENGTH_MISMATCH");
       if (sha256 !== expectedHash.toLowerCase()) throw failure("HASH_MISMATCH");
       if (!["504b0304", "504b0506"].includes(signature.toString("hex"))) throw failure("INVALID_ZIP");
       failureCode = "FILESYSTEM";
-      await handle.sync();
-      await handle.close();
-      handle = undefined;
+      if (handle) { await handle.sync(); await handle.close(); handle = undefined; }
       const after = await metadata(false);
       if (after.applicationGenerationId !== identity.applicationGenerationId || after.managerInstanceId !== identity.managerInstanceId) throw failure("IDENTITY_CHANGED");
       signal.throwIfAborted();
+      if (finalPath === undefined) return { ok: true, statusCode, headers: responseHeaders, sizeBytes, bytesReceived: sizeBytes, sha256, identity,
+        uncertain: false, identityChanged: false, noReplay: true, responseMode: options.responseMode === "stream" ? "stream" : "bytes",
+        ...(options.responseMode === "stream" ? {} : { bodyBytes: Buffer.concat(chunks) }) };
       failureCode = "FILESYSTEM";
       // Same-directory hard link is atomic and fails if the destination exists (including Windows).
       // Unlike rename, it never replaces a file created concurrently by another caller.
@@ -559,7 +643,7 @@ function buildManagerClient({ managerUrl, credential, agentType, sessionId, conf
       failureCode = "CLEANUP_FAILED";
       await fsPromises.unlink(temporaryPath);
       temporaryCreated = false;
-      return { ok: true, statusCode: 200, path: finalPath, sizeBytes, sha256, identity };
+      return { ok: true, statusCode: 200, headers: responseHeaders, path: finalPath, sizeBytes, bytesReceived: sizeBytes, sha256, identity, outputCommitted: true, uncertain: false, identityChanged: false, noReplay: true };
     } catch (error) {
       // Return only our closed error vocabulary, never the original exception or server body.
       if (error instanceof SkillDownloadError) throw error;
@@ -605,7 +689,8 @@ function buildManagerClient({ managerUrl, credential, agentType, sessionId, conf
     // Its node credential is used exclusively on the Manager connection.
     const binding = entry.binding;
     if (binding?.kind !== "external-listener" || binding.invocation !== "native") throw new Error("External listener requires its native protocol connector.");
-    const endpoint = session ? await session.ensure() : { managerUrl: origin };
+    const endpoint = transportCache.get() ?? (session ? await session.ensure() : { managerUrl: origin });
+    if (entry.access && transportCache.get() && sameIdentity(endpoint.meta, expected)) return { binding, access: entry.access };
     const receipt = await publicRequest("GET", `/api/agent/help?operationId=${encodeURIComponent(entry.id)}`, { signal, replaySafe: false });
     let data; try { data = JSON.parse(receipt.body)?.data; } catch { }
     const current = data?.operations?.find(value => value.id === entry.id);
@@ -635,7 +720,10 @@ function buildManagerClient({ managerUrl, credential, agentType, sessionId, conf
       const result = access ? await verifiedRequest(verb, path, copyOperationEffect(nativeOptions, { ...nativeOptions, replaySafe: false }))
         : await request(verb, path, requestOptions(verb, nativeOptions), undefined, listenerOrigin, undefined, binding, nativeCredentials);
       let bindingChanged = false;
-      try { await externalEndpoint(entry, expected, options.signal); } catch { bindingChanged = true; }
+      if (access && result.managerContext?.abi === MANAGER_TRANSPORT_ABI) {
+        let body; try { body = JSON.parse(result.body); } catch { /* Keep opaque native bytes. */ }
+        bindingChanged = body?.errorCode === "API_LISTENER_BINDING_CHANGED" || !sameIdentity(result.managerContext, expected);
+      } else { try { await externalEndpoint(entry, expected, options.signal); } catch { bindingChanged = true; } }
       return { ...result, bindingChanged, identity: { applicationGenerationId: expected.applicationGenerationId, managerInstanceId: expected.managerInstanceId },
         uncertain: Boolean(result.uncertain || (selectedOperationReadOnly(options) !== true && bindingChanged)), noReplay: true };
     });
@@ -686,7 +774,10 @@ function buildManagerClient({ managerUrl, credential, agentType, sessionId, conf
       return normalized.request?.action === "send" ? { catalog: snapshot, options: normalized.options } : undefined;
     } });
   const operations = createOperationSdk({ request: publicRequest, openWebSocket, requestExternal, openExternalWebSocket });
-  return { request: publicRequest, invoke, upload, download, catalog, operations, invokeOperation: catalog.invokeOperation, openOperation: catalog.openOperation };
+  // Business requests/streams keep their caller-owned signals. Only the cache's
+  // own background metadata work is joined here (important for short CLI processes).
+  const close = async () => { metadataLifetime.abort(); try { await metadataRefresh; } catch { /* Rebuildable metadata must not replace an original receipt. */ } };
+  return { request: publicRequest, invoke, upload, download, catalog, operations, invokeOperation: catalog.invokeOperation, openOperation: catalog.openOperation, close };
 }
 
 export function createManagerClient(options) { return buildManagerClient(options); }

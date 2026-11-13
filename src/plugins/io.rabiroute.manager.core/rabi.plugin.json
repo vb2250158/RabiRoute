@@ -1,7 +1,7 @@
 {
   "schemaVersion": 2,
   "id": "io.rabiroute.manager.core",
-  "version": "0.1.5",
+  "version": "0.1.7",
   "displayName": "核心管理",
   "description": "管理更新、资源与远程电脑；可在插件页重新启用",
   "icon": "mdi-cog",
@@ -16,10 +16,12 @@
     }
   },
   "provides": [
-    "manager.core@1"
+    "manager.core@1",
+    "manager.computer-settings-definition@1"
   ],
   "requires": [
-    "host.manager.core@2"
+    "host.manager.core@2",
+    "host.manager.computer-settings-definition@1"
   ],
   "optional": [],
   "permissions": []

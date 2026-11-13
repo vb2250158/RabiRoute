@@ -24,8 +24,9 @@ export type AgentInstance = {
   ownerDeviceId?: string;
   terminalShells?: string[];
   computerCapabilities?: string[];
+  computerSettingsDefinitionVersions?: number[];
   computerSettingsIssue?: string;
-  computerSettings?: import("../../apps/rabi-agent/lib/computer-control-contract.mjs").ComputerSettings;
+  computerSettings?: Record<string,unknown>;
   platform?: string;
   /** Manager-owned display alias; empty restores the reported hostname. */
   name?: string;

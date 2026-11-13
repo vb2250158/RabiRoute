@@ -1,0 +1,485 @@
+{
+  "schemaVersion": 1,
+  "features": {
+    "terminal": {
+      "title": "终端命令",
+      "description": "运行命令和读取终端输出"
+    },
+    "files": {
+      "title": "文件操作",
+      "description": "查询文件和上传、下载"
+    },
+    "observation": {
+      "title": "窗口与截图",
+      "description": "查看窗口和电脑画面"
+    },
+    "agentTasks": {
+      "title": "智能体任务",
+      "description": "向这台电脑上的智能体分派工作"
+    },
+    "input": {
+      "title": "鼠标与键盘",
+      "description": "点击、输入文字、滚动、拖拽和快捷键"
+    },
+    "annotation": {
+      "title": "屏幕标注",
+      "description": "显示框、箭头和文字，与鼠标键盘独立"
+    }
+  },
+  "schema": {
+    "type": "object",
+    "title": "电脑设置",
+    "additionalProperties": true,
+    "properties": {
+      "enabled": {
+        "type": "boolean",
+        "title": "启用此电脑",
+        "default": true
+      },
+      "features": {
+        "type": "object",
+        "title": "功能",
+        "additionalProperties": true,
+        "properties": {
+          "terminal": {
+            "type": "boolean",
+            "title": "终端命令",
+            "default": true,
+            "description": "运行命令和读取终端输出"
+          },
+          "files": {
+            "type": "boolean",
+            "title": "文件操作",
+            "default": true,
+            "description": "查询文件和上传、下载"
+          },
+          "observation": {
+            "type": "boolean",
+            "title": "窗口与截图",
+            "default": true,
+            "description": "查看窗口和电脑画面"
+          },
+          "agentTasks": {
+            "type": "boolean",
+            "title": "智能体任务",
+            "default": true,
+            "description": "向这台电脑上的智能体分派工作"
+          },
+          "input": {
+            "type": "boolean",
+            "title": "鼠标与键盘",
+            "default": true,
+            "description": "点击、输入文字、滚动、拖拽和快捷键"
+          },
+          "annotation": {
+            "type": "boolean",
+            "title": "屏幕标注",
+            "default": true,
+            "description": "显示框、箭头和文字，与鼠标键盘独立"
+          }
+        }
+      },
+      "control": {
+        "type": "object",
+        "title": "鼠标与键盘",
+        "additionalProperties": true,
+        "properties": {
+          "showPointer": {
+            "type": "boolean",
+            "title": "控制时显示 Agent 指针",
+            "default": true
+          },
+          "idleExitEnabled": {
+            "type": "boolean",
+            "title": "空闲时自动退出",
+            "default": true
+          },
+          "idleTimeoutSeconds": {
+            "type": "number",
+            "title": "空闲退出时长",
+            "default": 120,
+            "minimum": 5e-324,
+            "unit": "秒"
+          },
+          "countdownSeconds": {
+            "type": "number",
+            "title": "倒计时显示",
+            "default": 10,
+            "minimum": 0,
+            "unit": "秒"
+          },
+          "exitShortcut": {
+            "type": "string",
+            "title": "退出控制快捷键",
+            "default": "Ctrl+Alt+Esc",
+            "minLength": 1
+          },
+          "exitOnLocalInput": {
+            "type": "boolean",
+            "title": "检测到本机主动操作时退出",
+            "default": false
+          }
+        }
+      },
+      "annotation": {
+        "type": "object",
+        "title": "屏幕标注",
+        "additionalProperties": true,
+        "properties": {
+          "staticDurationMs": {
+            "title": "静态标注时长",
+            "unit": "毫秒",
+            "default": 10000,
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "null 表示保留至清除"
+          },
+          "dynamicEnabled": {
+            "type": "boolean",
+            "title": "动态标注（持续跟踪目标）",
+            "default": false,
+            "description": "持续处理会增加 CPU 占用；启用本身不创建跟踪任务"
+          },
+          "backend": {
+            "type": "string",
+            "title": "跟踪方式",
+            "enum": [
+              "kcf",
+              "template"
+            ],
+            "default": "kcf"
+          },
+          "rateHz": {
+            "type": "number",
+            "title": "请求更新频率",
+            "default": 10,
+            "minimum": 5e-324,
+            "unit": "次/秒"
+          },
+          "tracking": {
+            "type": "object",
+            "title": "跟踪高级设置",
+            "advanced": true,
+            "additionalProperties": true,
+            "properties": {
+              "searchExpansion": {
+                "type": "number",
+                "title": "搜索扩展",
+                "default": 2,
+                "minimum": 1,
+                "maximum": 8
+              },
+              "maxAnalysisWidth": {
+                "type": "number",
+                "title": "分析最大宽度",
+                "default": 1280,
+                "minimum": 320,
+                "unit": "像素",
+                "maximum": 3840
+              },
+              "matchThreshold": {
+                "type": "number",
+                "title": "模板匹配阈值",
+                "default": 0.82,
+                "minimum": 0,
+                "maximum": 1
+              },
+              "ambiguityMargin": {
+                "type": "number",
+                "title": "相似目标差值",
+                "default": 0.05,
+                "minimum": 0,
+                "maximum": 1
+              },
+              "verifyEveryFrames": {
+                "type": "number",
+                "title": "模板核验间隔",
+                "default": 10,
+                "minimum": 1,
+                "unit": "帧",
+                "maximum": 1000
+              },
+              "lostAfterFrames": {
+                "type": "number",
+                "title": "丢失判定",
+                "default": 2,
+                "minimum": 1,
+                "unit": "帧",
+                "maximum": 100
+              },
+              "updateTemplate": {
+                "type": "boolean",
+                "title": "可靠时更新模板",
+                "default": false
+              },
+              "predictionMs": {
+                "type": "number",
+                "title": "预测范围",
+                "default": 0,
+                "minimum": 0,
+                "unit": "毫秒",
+                "maximum": 1000
+              },
+              "smoothing": {
+                "type": "number",
+                "title": "平滑",
+                "default": 0,
+                "minimum": 0,
+                "maximum": 1
+              },
+              "frameCacheFrames": {
+                "type": "number",
+                "title": "来源帧缓存",
+                "default": 6,
+                "minimum": 1,
+                "unit": "帧",
+                "maximum": 60
+              },
+              "frameCacheBytes": {
+                "type": "number",
+                "title": "来源帧缓存大小",
+                "default": 134217728,
+                "minimum": 1048576,
+                "unit": "字节",
+                "maximum": 1073741824
+              },
+              "frameCacheAgeMs": {
+                "type": "number",
+                "title": "来源帧缓存时长",
+                "default": 30000,
+                "minimum": 1000,
+                "unit": "毫秒",
+                "maximum": 300000
+              }
+            }
+          }
+        }
+      },
+      "performance": {
+        "type": "object",
+        "title": "性能与资源",
+        "additionalProperties": true,
+        "properties": {
+          "mode": {
+            "type": "string",
+            "title": "性能模式",
+            "enum": [
+              "auto",
+              "custom"
+            ],
+            "default": "auto"
+          },
+          "maxTargets": {
+            "type": "number",
+            "title": "跟踪目标预算",
+            "default": 8,
+            "minimum": 1,
+            "unit": "个",
+            "maximum": 64
+          },
+          "computeBudgetMs": {
+            "type": "number",
+            "title": "每轮计算预算",
+            "default": 20,
+            "minimum": 1,
+            "unit": "毫秒",
+            "maximum": 1000
+          },
+          "memoryBudgetBytes": {
+            "type": "number",
+            "title": "内存预算",
+            "default": 536870912,
+            "minimum": 16777216,
+            "unit": "字节",
+            "maximum": 2147483648
+          },
+          "minRateHz": {
+            "type": "number",
+            "title": "最低频率",
+            "default": 2,
+            "minimum": 1,
+            "unit": "次/秒",
+            "maximum": 30
+          },
+          "minAnalysisWidth": {
+            "type": "number",
+            "title": "最低分析宽度",
+            "default": 320,
+            "minimum": 1,
+            "unit": "像素"
+          }
+        }
+      },
+      "input": {
+        "type": "object",
+        "title": "输入与恢复设置",
+        "advanced": true,
+        "additionalProperties": true,
+        "properties": {
+          "maxActions": {
+            "type": "number",
+            "title": "输入批次上限",
+            "default": 128,
+            "minimum": 1,
+            "unit": "项",
+            "maximum": 4096
+          },
+          "nativeSegmentMs": {
+            "type": "number",
+            "title": "原生输入分段预算",
+            "default": 16,
+            "minimum": 1,
+            "unit": "毫秒",
+            "maximum": 100
+          }
+        }
+      }
+    }
+  },
+  "actions": {
+    "file.stat": {
+      "feature": "files",
+      "capability": "files",
+      "readOnly": true
+    },
+    "file.read": {
+      "feature": "files",
+      "capability": "files",
+      "readOnly": true
+    },
+    "upload.begin": {
+      "feature": "files",
+      "capability": "files"
+    },
+    "upload.write": {
+      "feature": "files",
+      "capability": "files"
+    },
+    "upload.commit": {
+      "feature": "files",
+      "capability": "files"
+    },
+    "upload.status": {
+      "feature": "files",
+      "capability": "files",
+      "readOnly": true,
+      "recovery": true
+    },
+    "upload.abort": {
+      "feature": "files",
+      "capability": "files",
+      "recovery": true
+    },
+    "windows.list": {
+      "feature": "observation",
+      "capability": "windows",
+      "readOnly": true
+    },
+    "screen.capture": {
+      "feature": "observation",
+      "capability": "screenshots",
+      "readOnly": true,
+      "settingsPaths": [
+        "annotation.tracking.frameCacheFrames",
+        "annotation.tracking.frameCacheBytes",
+        "annotation.tracking.frameCacheAgeMs"
+      ]
+    },
+    "control.begin": {
+      "settingsPaths": [
+        "control"
+      ],
+      "receipt": true,
+      "feature": "input",
+      "capability": "input"
+    },
+    "control.status": {
+      "feature": "input",
+      "capability": "input",
+      "readOnly": true,
+      "recovery": true
+    },
+    "control.end": {
+      "feature": "input",
+      "capability": "input",
+      "recovery": true
+    },
+    "input.execute": {
+      "settingsPaths": [
+        "input"
+      ],
+      "receipt": true,
+      "feature": "input",
+      "capability": "input"
+    },
+    "input.status": {
+      "feature": "input",
+      "capability": "input",
+      "readOnly": true,
+      "recovery": true
+    },
+    "input.cancel": {
+      "feature": "input",
+      "capability": "input",
+      "recovery": true
+    },
+    "annotation.show": {
+      "settingsPaths": [
+        "annotation.staticDurationMs"
+      ],
+      "receipt": true,
+      "feature": "annotation",
+      "capability": "annotation"
+    },
+    "annotation.update": {
+      "feature": "annotation",
+      "capability": "annotation"
+    },
+    "annotation.status": {
+      "feature": "annotation",
+      "capability": "annotation",
+      "readOnly": true,
+      "recovery": true
+    },
+    "annotation.clear": {
+      "feature": "annotation",
+      "capability": "annotation",
+      "recovery": true
+    },
+    "annotation.track.start": {
+      "settingsPaths": [
+        "annotation.dynamicEnabled",
+        "annotation.backend",
+        "annotation.rateHz",
+        "annotation.tracking",
+        "performance"
+      ],
+      "receipt": true,
+      "feature": "annotation",
+      "capability": "tracking",
+      "dynamic": true,
+      "inputSettings": {
+        "backend": "annotation.backend",
+        "rateHz": "annotation.rateHz"
+      }
+    },
+    "annotation.track.status": {
+      "feature": "annotation",
+      "capability": "tracking",
+      "readOnly": true,
+      "recovery": true
+    },
+    "annotation.track.stop": {
+      "feature": "annotation",
+      "capability": "tracking",
+      "recovery": true
+    }
+  }
+}

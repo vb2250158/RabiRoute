@@ -99,14 +99,14 @@ export function createPluginManagement(options: {
     list,
     async packages(invocation) {
       invocation.assertCurrent();
-      const [available, snapshot] = await Promise.all([options.packages?.list() ?? [], options.settings.snapshot()]);
+      const [available, snapshot] = await Promise.all([options.packages?.listResult() ?? { packages: [], diagnostics: [], partial: false }, options.settings.snapshot()]);
       invocation.assertCurrent();
-      return { packages: available.map(item => ({ ...item, instanceIds: snapshot.profile.instances.filter(instance => instance.package === item.pluginId && instance.version === item.version).map(instance => instance.id) })) };
+      return { packages: available.packages.map(item => ({ ...item, instanceIds: snapshot.profile.instances.filter(instance => instance.package === item.pluginId && instance.version === item.version).map(instance => instance.id) })), partial: available.partial, diagnostics: available.diagnostics };
     },
     async importPackage(sourceDirectory, invocation) {
       if (!options.packages) throw new Error("Local plugin package imports are unavailable.");
-      await options.packages.importDirectory(sourceDirectory, invocation.assertCurrent);
-      return this.packages!(invocation);
+      const importedPackage = await options.packages.importDirectory(sourceDirectory, invocation.assertCurrent);
+      return { ...await this.packages!(invocation) as Record<string, unknown>, importedPackage };
     },
     async install(input, invocation) {
       invocation.assertCurrent();

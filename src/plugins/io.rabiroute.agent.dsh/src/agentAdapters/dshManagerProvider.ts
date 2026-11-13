@@ -1,3 +1,4 @@
+import { DshConnectionStore } from "../dshConnectionStore.js";
 import { createDshNativeOperations } from "../manager/providerNativeOperations.js";
 import { sendDshTask } from "../../apps/rabi-agent/lib/dsh.mjs";
 import * as endpointOwner from "./dshOwnerExecution.js";
@@ -14,6 +15,12 @@ export function createManager(options: AgentManagerImplementationOptions, descri
   const recovery = new DshOwnerRecovery();
   return {
     operations: {
+      "ds-bot.request": (payload, invocation) => {
+        const guard = Array.isArray(invocation?.nativeArgs) ? invocation.nativeArgs[0] : undefined;
+        if (guard !== undefined && typeof guard !== "function") throw new Error("Original new-task admission callback is invalid.");
+        return endpointOwner.executeDsBotRequestOnOwner(payload.request, { baseUrl: payload.baseUrl, assertAuthorized: invocation?.assertCurrent,
+          assertNewAgentTask: typeof guard === "function" ? () => guard() : undefined, signal: invocation?.signal });
+      },
       "remote.task": (payload, invocation) => {
         invocation?.assertCurrent?.();
         return sendDshTask({ baseUrl: payload.baseUrl, sessionId: payload.threadId }, payload.prompt);
@@ -52,6 +59,12 @@ export function createManager(options: AgentManagerImplementationOptions, descri
     },
     apiOperations: invoke => [...createAgentScanOperations(descriptor.type, {
         dshLimit: 200, dshOffset: 0, dshQuery: null, dshBaseUrl: null
-      }, invoke, ['/api/scan/agents/dsh'], ['agent.adapters.dsh.get']), ...createDshConnectionOperations(invoke), ...createDshNativeOperations()]
+      }, invoke, ['/api/scan/agents/dsh'], ['agent.adapters.dsh.get']), ...createDshConnectionOperations(invoke), ...createDshNativeOperations({ configuredTargets: () => {
+        const definitions = [...options.host.getRuntimes()].map(runtime => runtime.definition);
+        return {
+          localBaseUrls: [...definitions.filter(definition => definition.agentAdapters?.includes("dsh") && definition.dshBaseUrl).map(definition => definition.dshBaseUrl!), ...new DshConnectionStore().readMetadata().connections.filter(connection => connection.state !== "disconnected").map(connection => connection.baseUrl)],
+          remoteTargetIds: [...new Set(definitions.flatMap(definition => (definition.remoteAgentTargets ?? []).filter(target => target.provider === "dsh").map(target => target.id)))]
+        };
+      } })]
   };
 }

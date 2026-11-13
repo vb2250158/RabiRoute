@@ -1,4 +1,4 @@
-import type { AgentSessionDestination } from "../shared/agentDeliveryTarget.js";
+import { validateAgentDeliveryTarget, type AgentSessionDestination, type AgentDsBotDestination } from "../shared/agentDeliveryTarget.js";
 import type { RabiDeliveryEnvelope } from "../shared/rabiMessage.js";
 import fs from "node:fs";
 import path from "node:path";
@@ -8,17 +8,18 @@ import { recordDataMutationAudit } from "../observability/dataMutationAudit.js";
 const inFlight = new Map<string, { target: string; promise: Promise<void> }>();
 
 export function deliverSessionOnce(
-  statePath: string, target: AgentSessionDestination, envelope: RabiDeliveryEnvelope, deliveryId: string,
+  statePath: string, target: AgentSessionDestination | AgentDsBotDestination, envelope: RabiDeliveryEnvelope, deliveryId: string,
   request: (payload: Record<string, unknown>) => Promise<Record<string, any>>,
   options: { remote?: boolean; imagePaths?: string[]; model?: string } = {}
 ): Promise<void> {
   const running = inFlight.get(statePath);
-  const targetKey = JSON.stringify([deliveryId, target]);
+  const messageHash = target.kind === "ds_bot" ? createHash("sha256").update(envelope.messageContent).digest("hex") : undefined;
+  const targetKey = JSON.stringify([deliveryId, target, ...(messageHash ? [messageHash] : [])]);
   if (running) return running.target === targetKey ? running.promise : Promise.reject(new Error("Concurrent delivery target mismatch."));
   const run = async () => {
     fs.mkdirSync(path.dirname(statePath), { recursive: true });
     const existing = fs.existsSync(statePath) ? JSON.parse(fs.readFileSync(statePath, "utf8")) : undefined;
-    if (existing && (existing.deliveryId !== deliveryId || JSON.stringify(existing.target) !== JSON.stringify(target))) {
+    if (existing && (existing.deliveryId !== deliveryId || JSON.stringify(existing.target) !== JSON.stringify(target) || messageHash !== undefined && existing.messageHash !== messageHash)) {
       throw new Error("Original delivery target does not match; refusing to redirect the message.");
     }
     if (existing?.status === "delivered") return;
@@ -31,7 +32,7 @@ export function deliverSessionOnce(
       audit("started");
       const temporary = `${statePath}.${randomUUID()}.tmp`;
       try {
-        fs.writeFileSync(temporary, JSON.stringify({ deliveryId, target, status }), { flag: "wx" });
+        fs.writeFileSync(temporary, JSON.stringify({ deliveryId, target, status, ...(messageHash ? { messageHash } : {}) }), { flag: "wx" });
         fs.renameSync(temporary, statePath);
         audit("committed");
       } catch (error) {
@@ -40,6 +41,11 @@ export function deliverSessionOnce(
       }
     };
     if (existing?.status === "pending") {
+      if (target.kind === "ds_bot") {
+        const readback = await request(dsBotRequest(target, envelope, deliveryId, "ds_bot_reconcile", options.remote));
+        if (acceptedDsBot(readback, target, deliveryId)) { save("delivered"); return; }
+        throw new Error("Original DSBot delivery remains unconfirmed; no duplicate message was sent.");
+      }
       const readback = await request({ action: target.deliveryType ? "reconcile_delivery" : "read", agentAdapter: target.agentAdapter, threadId: target.sessionId,
         ...(target.deliveryType ? { grokBotDelivery: { deliveryType: target.deliveryType, sendMode: target.sendMode,
           ...(target.sendMode === "identity" ? { senderAgentId: target.senderAgentId } : {}) } } : {}),
@@ -80,12 +86,27 @@ export function deliverSessionOnce(
 
 /** Both transports return the public Agent thread receipt, never mere HTTP acceptance. */
 export async function sendAutomationSession(
-  target: AgentSessionDestination,
+  target: AgentSessionDestination | AgentDsBotDestination,
   envelope: RabiDeliveryEnvelope,
   deliveryId: string,
   request: (payload: Record<string, unknown>) => Promise<Record<string, any>>,
   options: { remote?: boolean; imagePaths?: string[]; model?: string } = {}
 ): Promise<void> {
+  if (target.kind === "ds_bot") {
+    validateAgentDeliveryTarget(target);
+    if (options.imagePaths?.length || options.model) throw new Error("DSBot automation cannot apply ordinary Session attachment paths or model options.");
+    try {
+      const result = await request(dsBotRequest(target, envelope, deliveryId, "ds_bot_deliver", options.remote));
+      if (!acceptedDsBot(result, target, deliveryId)) throw new Error("DSBot delivery has no confirmed native admission receipt.");
+    } catch (error) {
+      try {
+        const readback = await request(dsBotRequest(target, envelope, deliveryId, "ds_bot_reconcile", options.remote));
+        if (acceptedDsBot(readback, target, deliveryId)) return;
+      } catch { /* Preserve the original unknown result; no send replay occurs. */ }
+      throw error;
+    }
+    return;
+  }
   const identity = { agentAdapter: target.agentAdapter, threadId: target.sessionId,
     ...(options.remote ? {} : { agentTargetId: target.agentTargetId }), deliveryId,
     ...(target.agentAdapter === "grokBot" && target.deliveryType ? { grokBotDelivery: {
@@ -110,4 +131,16 @@ export async function sendAutomationSession(
     } catch { /* Preserve the original error, including owner/transport failures. */ }
     throw error;
   }
+}
+
+function dsBotRequest(target: AgentDsBotDestination, envelope: RabiDeliveryEnvelope, deliveryId: string,
+  action: "ds_bot_deliver" | "ds_bot_reconcile", remote = false): Record<string, unknown> {
+  return { action, agentAdapter: "dsh", ...(remote ? {} : { agentTargetId: target.agentTargetId }),
+    dsBot: { botScopeId: target.botScopeId, botId: target.botId }, ...(remote ? {} : { dshBaseUrl: target.dshBaseUrl }), deliveryId, prompt: envelope.messageContent };
+}
+function acceptedDsBot(result: Record<string, any>, target: AgentDsBotDestination, deliveryId: string): boolean {
+  const receipt = result.dsBot;
+  return receipt?.schemaVersion === 1 && receipt.state === "accepted" && receipt.botScopeId === target.botScopeId
+    && receipt.botId === target.botId && receipt.deliveryId === deliveryId && receipt.requestId === deliveryId
+    && typeof receipt.sessionId === "string" && Boolean(receipt.sessionId);
 }

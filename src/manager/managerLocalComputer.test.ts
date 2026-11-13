@@ -87,3 +87,22 @@ test("disabled terminal feature retains metadata and close but rejects new input
  await assert.rejects(owner.execute("terminal",{action:"input",terminalId,sequence:1,data:"must not run"}),{code:"COMPUTER_FEATURE_DISABLED"});
  assert.equal((await owner.execute("terminal",{action:"close",terminalId}) as {state:string}).state,"exited");
 });
+
+test("bad tracking parameters do not block local files, terminal admission or Agent policy", async t => {
+ const {ManagerConfigRepository}=await import("./configRepository.js");
+ const directory=await fs.mkdtemp(path.join(os.tmpdir(),"local-settings-isolation-"));
+ await fs.mkdir(path.join(directory,"data"));
+ const managerFile=path.join(directory,"data","manager.json");
+ const raw=JSON.stringify({computerSettings:{enabled:true,features:{files:true,terminal:true,agentTasks:true},annotation:{tracking:{matchThreshold:"broken"}},performance:{memoryBudgetBytes:"broken"}}});
+ await fs.writeFile(managerFile,raw);
+ const repository=new ManagerConfigRepository({rootDir:directory,managerPort:31337});
+ const owner=new ManagerLocalComputer({stateDirectory:path.join(directory,"computer"),getSettings:()=>repository.readComputerSettingsRaw(),emit:()=>{}});
+ t.after(async()=>{await owner.stop();await fs.rm(directory,{recursive:true,force:true});});
+ const target=path.join(directory,"sample.txt");await fs.writeFile(target,"sample");
+ const stat=await owner.execute("computer",{action:"file.stat",path:target}) as {size:number};
+ assert.equal(stat.size,6);
+ assert.equal(repository.readComputerFeaturePolicy("agentTasks").allowed,true);
+ await assert.rejects(owner.execute("terminal",{action:"open",terminalId:randomUUID(),shell:"fixture-unavailable-shell",cwd:directory,cols:80,rows:24}),/shell/i);
+ assert.equal(repository.readComputerSettings().diagnostics.length,2);
+ assert.equal(await fs.readFile(managerFile,"utf8"),raw);
+});

@@ -91,7 +91,7 @@ export function createRabiControlOperations(context: RabiApiContext, managerConf
   ];
   if (managerConfig) {
     const configuration = createManagerConfigurationOwner(managerConfig);
-    const schema = { type: "object", required: ["code", "routeDir", "rolesDir"], additionalProperties: false, properties: { code: { const: 0 }, routeDir: { type: "string" }, rolesDir: { type: "string" } } };
+    const schema = { type: "object", required: ["code"], additionalProperties: false, properties: { code: { const: 0 }, routeDir: { type: "string" }, rolesDir: { type: "string" }, directoryDiagnostics: { type: "array", items: { type: "object", required: ["field", "code", "message"], additionalProperties: false, properties: { field: {type:"string"}, code: {type:"string"}, message: {type:"string"} } } }, rawDirectoryConfig: { type:"object", additionalProperties:false, properties: {routeDir:{},rolesDir:{}} } } };
     definitions.push(
       define("manager-config.read", "GET", "/manager-config", empty, ignoredBody, () => ({ status: 200, body: configuration.read() }), { response: schema, lifecycle: false }),
       define("manager-config.update", "POST", "/manager-config", empty, nativeBody({ routeDir: {}, rolesDir: {} }), async (input, _, guard) => {

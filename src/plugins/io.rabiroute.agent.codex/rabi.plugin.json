@@ -1,7 +1,7 @@
 {
   "schemaVersion": 2,
   "id": "io.rabiroute.agent.codex",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "displayName": "Codex（ChatGPT 中的编码 Agent）",
   "description": "把消息交给 Codex / ChatGPT Desktop 中绑定的任务，沿用原任务的工具和权限。",
   "icon": "mdi-robot-outline",

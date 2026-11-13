@@ -43,3 +43,22 @@ for(const action of ['status','execute'])test(`mixed POST ${action} file output 
  assert.equal(sends,1);assert.equal(result.uncertain,action==='execute');assert.equal(result.outputCommitted,false);
  }finally{await rm(temp,{recursive:true,force:true});}
 });
+
+
+for (const action of ['status', 'execute']) for (const encoding of ['bytes', 'array-buffer']) test(`selected ${action} keeps its actual effect for ${encoding} and one failed dispatch`, async () => {
+  const body = new TextEncoder().encode(JSON.stringify({ action }));
+  const input = { bodyBytes: encoding === 'bytes' ? body : body.buffer };
+  const prepared = markOperationEffect(input, contract, 'POST');
+  assert.equal(selectedOperationReadOnly(prepared), action === 'status');
+  body.fill(0); // The prepared action fact and its wire bytes remain the same snapshot.
+  assert.equal(operationIsReadOnly(contract, 'POST', prepared.bodyBytes), action === 'status');
+  let sends = 0;
+  const client = createManagerClient({ managerUrl: 'http://fixture.invalid', credential: 'fixture-only', fetchImpl: async url => {
+    const pathname = new URL(url).pathname;
+    if (pathname === '/meta') return Response.json(meta);
+    if (pathname === '/api/agent/help') return Response.json({ code: 0, data: catalog });
+    sends++; throw new Error('fixture interrupted');
+  } });
+  const receipt = await client.catalog.invokeOperation(contract.operationId, { bodyBytes: prepared.bodyBytes });
+  assert.equal(receipt.ok, false); assert.equal(receipt.uncertain, action === 'execute'); assert.equal(sends, 1);
+});

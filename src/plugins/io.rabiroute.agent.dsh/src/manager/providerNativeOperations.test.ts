@@ -174,3 +174,50 @@ test("DSH malformed history pages fail locally without executing plugin mutation
   assert.equal((result.body as any).errorCode, "DSH_HISTORY_RESPONSE_INVALID");
   assert.deepEqual(calls, ["session/events"]);
 });
+
+test("native DSBot catalog is independently discoverable without primary session fields", async () => {
+  const calls: unknown[] = [], catalog = { schemaVersion: 1 as const, botScopeId: "scope", runtimeId: "runtime", bots: [{ botId: "bot", botName: "Bot" }] };
+  const operations = createDshNativeOperations({ baseUrl: "http://127.0.0.1:1234", botRequest: async (endpoint, payload, options) => { calls.push({ endpoint, payload, baseUrl: options?.baseUrl }); return catalog; } });
+  const selected = operation(operations, "ds-bots.list");
+  assert.equal(selected.contract.pathTemplate, "/api/agent/providers/dsh/ds-bots");
+  const result = await selected.handler(input("/"));
+  assert.equal(result.status, 200); assert.deepEqual((result.body as { data: unknown }).data, catalog);
+  assert.deepEqual(calls, [{ endpoint: "rabi-automation-catalog", payload: { schemaVersion: 1 }, baseUrl: "http://127.0.0.1:1234" }]);
+});
+
+test("self destination resolves exact local scope, Bot and live runtime without persisting runtime", async () => {
+  const catalog = { schemaVersion: 1 as const, botScopeId: "scope", runtimeId: "runtime", bots: [{ botId: "bot", botName: "Bot", roleId: "unrelated-persona" }] };
+  const operations = createDshNativeOperations({ baseUrl: "http://127.0.0.1:1234", botRequest: async () => catalog });
+  const selected = operation(operations, "ds-bot-destination.read");
+  const result = await selected.handler(input("/?botScopeId=scope&botId=bot&runtimeId=runtime"));
+  assert.equal(result.status, 200);
+  assert.deepEqual(result.body, { code: 0, data: { target: { kind: "ds_bot", agentAdapter: "dsh", agentTargetId: "local:dsh", dshBaseUrl: "http://127.0.0.1:1234", botScopeId: "scope", botId: "bot", botName: "Bot" } } });
+  for (const query of ["botScopeId=other&botId=bot&runtimeId=runtime", "botScopeId=scope&botId=bot&runtimeId=copied-runtime", "botScopeId=scope&botId=missing&runtimeId=runtime"]) assert.equal((await selected.handler(input("/?" + query))).status, 404);
+});
+
+test("self destination refuses incomplete remote discovery or ambiguous local configuration", async () => {
+  let calls = 0;
+  const catalog = { schemaVersion: 1 as const, botScopeId: "scope", runtimeId: "runtime", bots: [{ botId: "bot", botName: "Bot" }] };
+  const query = "/?botScopeId=scope&botId=bot&runtimeId=runtime";
+  const operations = createDshNativeOperations({ configuredTargets: () => ({ localBaseUrls: [], remoteTargetIds: ["remote:configured:dsh"] }), botRequest: async () => { calls++; return catalog; } });
+  const selected = operation(operations, "ds-bot-destination.read");
+  assert.equal((await selected.handler(input(query))).status, 200); assert.equal(calls, 1);
+  assert.equal((await selected.handler(input(query.replace("runtimeId=runtime", "runtimeId=another-runtime")))).status, 503); assert.equal(calls, 2);
+  assert.equal((await selected.handler(input(query + "&agentTargetId=remote:unknown:dsh"))).status, 404);
+  assert.equal((await selected.handler(input(query + "&agentTargetId=remote:configured:dsh"))).status, 503); assert.equal(calls, 2);
+  assert.equal((await selected.handler(input(query + "&agentTargetId=local:dsh"))).status, 200); assert.equal(calls, 3);
+  const ambiguous = createDshNativeOperations({ configuredTargets: () => ({ localBaseUrls: ["http://one.invalid", "http://two.invalid"], remoteTargetIds: [] }), botRequest: async () => catalog });
+  assert.equal((await operation(ambiguous, "ds-bot-destination.read").handler(input(query))).status, 409);
+});
+
+test("self discovery checks formal origins with bounded parallelism and isolates failed profiles", async () => {
+  const origins = ["http://127.0.0.1:1234", "http://127.0.0.1:1235", "http://127.0.0.1:1236", "http://127.0.0.1:1237", "http://127.0.0.1:1238"];
+  let running = 0, peak = 0;
+  const operations = createDshNativeOperations({ baseUrl: origins[0], configuredTargets: () => ({ localBaseUrls: origins, remoteTargetIds: [] }), botRequest: async (_endpoint, _payload, options) => {
+    running++; peak = Math.max(peak, running); await Promise.resolve(); running--;
+    if (options?.baseUrl !== origins[3]) throw new Error("other profile unavailable");
+    return { schemaVersion: 1, botScopeId: "scope", runtimeId: "runtime", bots: [{ botId: "bot", botName: "Bot" }] };
+  } });
+  const result = await operation(operations, "ds-bot-destination.read").handler(input("/?botScopeId=scope&botId=bot&runtimeId=runtime"));
+  assert.equal(result.status, 200); assert.equal((result.body as any).data.target.dshBaseUrl, origins[3]); assert.ok(peak <= 4);
+});

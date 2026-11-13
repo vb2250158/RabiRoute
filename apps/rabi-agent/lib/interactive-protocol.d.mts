@@ -18,3 +18,5 @@ export const computerAnnotationShapeSchema: Readonly<Record<string, unknown>>;
 export const computerControlRequestBranches: readonly Readonly<Record<string, unknown>>[];
 
 export const computerTrackingTargetSchema: Readonly<Record<string, unknown>>;
+
+export function computerRequestSchemaForDefinition(definition:import("./computer-control-contract.mjs").ComputerSettingsDefinition):Readonly<Record<string,unknown>>;

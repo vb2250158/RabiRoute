@@ -22,10 +22,11 @@ async function main() {
   const tools = { list: operations.list, close: operations.close, call(name, args, context) {
     return name.startsWith('rabi_') ? operations.call(name, args, context) : legacyKnowledge.call(name, args, context);
   } };
+  const closeTools = async () => { try { await tools.close(); } finally { await client.close(); } };
   const transport = process.env.RABI_MCP_TRANSPORT || 'stdio';
   if (transport === 'stdio') {
     const server = await startKnowledgeMcpStdio({ tools });
-    const close = () => { tools.close().finally(() => server.close()).catch(() => { process.exitCode = 1; }); };
+    const close = () => { closeTools().finally(() => server.close()).catch(() => { process.exitCode = 1; }); };
     process.once('SIGINT', close); process.once('SIGTERM', close); process.stdin.once('end', close);
   } else if (transport === 'http') {
     const portText = process.env.RABI_MCP_HTTP_PORT || '0';
@@ -35,7 +36,7 @@ async function main() {
       allowedOrigins: process.env.RABI_MCP_ALLOWED_ORIGINS === undefined ? undefined : JSON.parse(process.env.RABI_MCP_ALLOWED_ORIGINS),
       maxBodyBytes: process.env.RABI_MCP_HTTP_MAX_BODY_BYTES === undefined ? undefined : Number(process.env.RABI_MCP_HTTP_MAX_BODY_BYTES) });
     process.stdout.write(JSON.stringify({ event: 'READY', transport: 'http', address: server.address }) + '\n');
-    const close = () => { tools.close().finally(() => server.close()).catch(() => { process.exitCode = 1; }); };
+    const close = () => { closeTools().finally(() => server.close()).catch(() => { process.exitCode = 1; }); };
     process.once('SIGINT', close);
     process.once('SIGTERM', close);
   } else throw new Error('Unsupported transport.');

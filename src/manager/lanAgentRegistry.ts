@@ -1,3 +1,5 @@
+export { recoverDisabledAgentTask } from "./disabledAgentTaskRecovery.js";
+import { recoverDisabledAgentTask } from "./disabledAgentTaskRecovery.js";
 import { hostname } from "node:os";
 import { getTimeoutMs, registerTimeoutCatalog } from "../shared/timeoutSettings.js";
 import { atomicWriteFileSync } from "../shared/filePersistence.js";
@@ -15,7 +17,7 @@ import { WebSocket, WebSocketServer } from "ws";
 import { webguiTokenMatches } from "./webguiLanAccess.js";
 import { recordDataMutationAudit } from "../observability/dataMutationAudit.js";
 import { LanAgentTerminals, TerminalDispatchNotSentError } from "./lanAgentTerminals.js";
-import { instanceAgentActionDefinition, terminalActionDefinition, computerActionDefinition, normalizeComputerSettings, assertComputerActionEnabled, assertComputerFeatureEnabled, isComputerReadOnlyAction, type ComputerSettings, type ComputerFeature, type ComputerFeaturePolicy, assertComputerFeaturePolicyEnabled, type ComputerExecutionContext } from "../../apps/rabi-agent/lib/computer-control-contract.mjs";
+import { instanceAgentActionDefinition, terminalActionDefinition, computerActionDefinition, normalizeComputerSettings, assertComputerActionEnabled, assertComputerFeatureEnabled, isComputerReadOnlyAction, type ComputerSettings, type ComputerSettingsRead, type ComputerSettingsDefinition, BOOTSTRAP_COMPUTER_SETTINGS_DEFINITION, type ComputerFeature, type ComputerFeaturePolicy, assertComputerFeaturePolicyEnabled, type ComputerExecutionContext } from "../../apps/rabi-agent/lib/computer-control-contract.mjs";
 import type { ManagerLocalComputer } from "./managerLocalComputer.js";
 
 export type LanAgentNodeHello = {
@@ -28,6 +30,7 @@ export type LanAgentNodeHello = {
   agents?: InstanceAgent[];
   terminalShells?: string[];
   computerCapabilities?: string[];
+  computerSettingsDefinitionVersions?: number[];
   taskTargeting?: "explicit-session-v1";
 };
 
@@ -110,10 +113,11 @@ type Connection = {
   authenticationTimer: NodeJS.Timeout;
   livenessTimer?: NodeJS.Timeout;
   awaitingPong?: string;
+  computerSettingsDefinitionDigest?: string;
 };
 
 type ManagementRequest = { connection: Connection; resolve: (value: unknown) => void; reject: (error: Error) => void;
-  timer: NodeJS.Timeout; operation: string; readOnly: boolean; assertAuthorized?: () => void };
+  timer: NodeJS.Timeout; operation: string; readOnly: boolean; definitionDigest?: string; assertAuthorized?: () => void };
 type LateManagementRequest = { connection: Connection; operation: string; expiresAt: number };
 const lateManagementCapacity = 256;
 function changesDeliveryState(operation: string, readOnly: boolean): boolean {
@@ -168,6 +172,7 @@ function normalizeHello(value: unknown): LanAgentNodeHello {
     agents: raw.agents === undefined ? undefined : normalizeInstanceAgents(raw.agents),
     taskTargeting: raw.taskTargeting === "explicit-session-v1" ? raw.taskTargeting : undefined,
     terminalShells: normalizeTextList(raw.terminalShells, 5, 16).filter(shell => ["cmd", "powershell", "zsh", "bash", "sh"].includes(shell)),
+    computerSettingsDefinitionVersions: Array.isArray(raw.computerSettingsDefinitionVersions) ? [...new Set(raw.computerSettingsDefinitionVersions.filter(version => Number.isSafeInteger(version) && version > 0))] : undefined,
     computerCapabilities: normalizeComputerCapabilities(raw.computerCapabilities)
   };
 }
@@ -371,8 +376,11 @@ export class LanAgentRegistry {
     authenticateNode?: (token: string) => { nodeId: string; incarnation?: string } | null;
     nodeEnabled?: (nodeId: string) => boolean;
     computerFeaturePolicy?: (instanceId:string,feature:ComputerFeature)=>ComputerFeaturePolicy;
-    computerSettings?: (instanceId: string, refresh?: boolean) => { settings: ComputerSettings; revision: string };
-    patchComputerSettings?: (instanceId: string, patch: unknown, expectedRevision: string) => { settings: ComputerSettings; revision: string };
+    computerSettingsRaw?: (instanceId: string) => unknown;
+    computerExecutionSettings?: (instanceId: string) => unknown;
+    computerSettingsDefinition?:()=>ComputerSettingsDefinition;
+    computerSettings?: (instanceId: string, refresh?: boolean) => Pick<ComputerSettingsRead,"settings"|"revision"> & Partial<ComputerSettingsRead>;
+    patchComputerSettings?: (instanceId: string, patch: unknown, expectedRevision: string, restorePaths?:readonly string[]) => ComputerSettingsRead;
     onComputerChanged?: (instanceId: string) => void;
     onComputerSourceCleanupError?: (instanceId:string,error:unknown)=>void;
     executionSource?: (request: http.IncomingMessage) => Pick<ComputerExecutionContext,"sourceId" | "sourceLabel" | "taskId" | "connectionId">;
@@ -487,16 +495,18 @@ export class LanAgentRegistry {
   }
 
   private computerSettingsProjection(instanceId: string): Pick<AgentInstance, "enabled" | "computerSettings" | "computerSettingsIssue"> {
-    try { const settings = this.getComputerSettings(instanceId).settings; return { enabled: settings.enabled, computerSettings: settings }; }
+    try { const read=this.getComputerSettings(instanceId),settings=read.settings;
+      if(!settings||typeof settings!=="object"||Array.isArray(settings))throw new Error("Computer settings record is malformed.");
+      return {enabled:(settings as Record<string,unknown>).enabled===true,computerSettings:settings as Record<string,unknown>,...(read.diagnostics.length?{computerSettingsIssue:"Computer settings: "+read.diagnostics.map(item=>item.message).join("; ")}:{})}; }
     catch { return { computerSettingsIssue: "This computer's settings could not be read; other computers remain available." }; }
   }
 
   listInstances(localAgents: InstanceAgent[] = []): AgentInstance[] {
     return [{ instanceId: this.localInstanceId, local: true, connected: true, agents: localAgents, hostname: hostname(), platform: process.platform, ...this.computerSettingsProjection(this.localInstanceId),
-      terminalShells: this.localComputer?.terminalShells, computerCapabilities: this.localComputer?.computerCapabilities }, ...this.listNodes().map(node => ({
+      terminalShells: this.localComputer?.terminalShells, computerCapabilities: this.localComputer?.computerCapabilities, computerSettingsDefinitionVersions: [1] }, ...this.listNodes().map(node => ({
       instanceId: node.nodeId, name: node.name, hostname: node.hostname, local: false, ...this.computerSettingsProjection(node.nodeId), address: node.remoteAddress, connected: node.connected, version: node.version,
       agents: (node.agents ?? []).map(agent => ({ ...agent, enabled: agent.enabled })),
-      terminalShells: node.terminalShells, computerCapabilities: node.computerCapabilities, platform: node.platform
+      terminalShells: node.terminalShells, computerCapabilities: node.computerCapabilities, computerSettingsDefinitionVersions: node.computerSettingsDefinitionVersions, platform: node.platform
     }))];
   }
 
@@ -509,9 +519,16 @@ export class LanAgentRegistry {
     return instanceId === this.localInstanceId ? this.localComputer?.computerCapabilities ?? [] : this.nodes.get(instanceId)?.computerCapabilities ?? [];
   }
 
-  getComputerSettings(instanceId: string, refresh = false): { settings: ComputerSettings; revision: string } {
-    if (instanceId !== this.localInstanceId && !this.nodes.has(instanceId)) throw new Error("Computer instance not found.");
-    return this.options.computerSettings?.(instanceId, refresh) ?? { settings: normalizeComputerSettings(undefined, instanceId === this.localInstanceId || this.options.nodeEnabled?.(instanceId) !== false), revision: '"default"' };
+  getComputerSettingsRaw(instanceId: string): unknown {
+    return this.options.computerSettingsRaw ? this.options.computerSettingsRaw(instanceId) : this.getComputerSettings(instanceId).settings;
+  }
+
+    getComputerSettingsDefinition():ComputerSettingsDefinition {return this.options.computerSettingsDefinition?.()??BOOTSTRAP_COMPUTER_SETTINGS_DEFINITION;}
+  getComputerSettings(instanceId:string,refresh=false):ComputerSettingsRead {
+    const definition=this.getComputerSettingsDefinition(),value=this.options.computerSettings?.(instanceId,refresh);
+    if(value&&value.definitionDigest&&value.schema&&value.defaults&&value.diagnostics)return value as ComputerSettingsRead;
+    const settings=value?.settings??definition.materialize(undefined,instanceId===this.localInstanceId||this.options.nodeEnabled?.(instanceId)!==false);
+    return {settings,rawSettings:value?.rawSettings??value?.settings,revision:value?.revision??'"default:'+definition.digest+'"',schema:definition.schema,defaults:definition.defaults,definitionDigest:definition.digest,diagnostics:definition.diagnose(settings)};
   }
 
   computerConnectionId(nodeId: string): string | undefined {
@@ -553,16 +570,16 @@ export class LanAgentRegistry {
     return this.manageAgent(instanceId,"computer.task.end",{taskId,sourceId});
   }
 
-  setComputerEnabled(instanceId: string, enabled: boolean, expectedEnabled: boolean): Promise<{settings:ComputerSettings;revision:string;execution:string;executionIssue?:string}> {
+  setComputerEnabled(instanceId: string, enabled: boolean, expectedEnabled: boolean): Promise<ComputerSettingsRead & {execution:string;executionIssue?:string}> {
     const current = this.getComputerSettings(instanceId, true);
-    if (current.settings.enabled !== enabled && current.settings.enabled !== expectedEnabled) throw Object.assign(new Error("Instance enabled setting conflict."),{code:"COMPUTER_SETTINGS_CONFLICT"});
+    if ((current.settings as Record<string,unknown>)?.enabled !== enabled && (current.settings as Record<string,unknown>)?.enabled !== expectedEnabled) throw Object.assign(new Error("Instance enabled setting conflict."),{code:"COMPUTER_SETTINGS_CONFLICT"});
     return this.updateComputerSettings(instanceId,{enabled},current.revision);
   }
 
-  async updateComputerSettings(instanceId: string, patch: unknown, expectedRevision: string): Promise<{ settings: ComputerSettings; revision: string; execution: string; executionIssue?: string }> {
+  async updateComputerSettings(instanceId: string, patch: unknown, expectedRevision: string, restorePaths:readonly string[]=[]): Promise<ComputerSettingsRead & {execution:string;executionIssue?:string}> {
     if (!this.options.patchComputerSettings) throw new Error("Computer settings owner unavailable.");
     this.getComputerSettings(instanceId);
-    const result = this.options.patchComputerSettings(instanceId, patch, expectedRevision);
+    const result = this.options.patchComputerSettings(instanceId, patch, expectedRevision, restorePaths);
     if (instanceId === this.localInstanceId) {
       try { await this.localComputer?.settingsChanged(); return { ...result, execution: "applied" }; }
       catch { return { ...result, execution: "unconfirmed", executionIssue: "Settings were saved; the target's current input/annotation cleanup has not been confirmed. Read original status or stop the original resource; do not repeat the settings write." }; }
@@ -616,9 +633,13 @@ export class LanAgentRegistry {
 
   manageAgent(instanceId: string, operation: string, params: unknown, timeoutMs = getTimeoutMs("agent.remote.management", 15000), assertAuthorized?: () => void, execution?: Partial<ComputerExecutionContext>): Promise<unknown> {
     const body = params && typeof params === "object" ? params as Record<string, unknown> : {};
-    if (operation === "computer" && !computerActionDefinition(String(body.action))?.receipt && !computerActionDefinition(String(body.action))?.recovery) assertComputerActionEnabled(this.getComputerSettings(instanceId).settings, String(body.action), instanceId);
+    if (operation === "computer" && !computerActionDefinition(String(body.action))?.receipt && !computerActionDefinition(String(body.action))?.recovery) assertComputerActionEnabled(this.getComputerSettingsRaw(instanceId), String(body.action), instanceId);
     if (operation === "terminal" && !terminalActionDefinition(String(body.action))?.recovery) this.assertComputerFeature(instanceId, "terminal");
-    if (instanceAgentActionDefinition(operation,body)?.newWork) this.assertComputerFeature(instanceId, "agentTasks");
+    const taskDefinition = instanceAgentActionDefinition(operation,body);
+    if (taskDefinition?.newWork) {
+      try { this.assertComputerFeature(instanceId, "agentTasks"); }
+      catch (error) { return recoverDisabledAgentTask(taskDefinition, body, error, original => this.manageAgent(instanceId, operation, original, timeoutMs, assertAuthorized, execution)); }
+    }
     if (instanceId === this.localInstanceId && this.localComputer && (operation === "terminal" || operation === "computer")) {
       return this.localComputer.execute(operation, params as Record<string, unknown>, assertAuthorized, execution);
     }
@@ -656,9 +677,32 @@ export class LanAgentRegistry {
       }, timeoutMs);
       const action = params && typeof params === "object" ? (params as Record<string, unknown>).action : undefined;
       const readOnly = operation === "terminal" && terminalActionDefinition(String(action))?.readOnly === true || operation === "computer" && isComputerReadOnlyAction(String(action)) || operation === "scan" || instanceAgentActionDefinition(operation,body)?.readOnly === true;
-      this.managementRequests.set(requestId, { connection, resolve, reject, timer, operation, readOnly, assertAuthorized });
+      const pending: ManagementRequest = { connection, resolve, reject, timer, operation, readOnly, assertAuthorized };
+      this.managementRequests.set(requestId, pending);
       let passedRequestGuard = false;
-      try { assertAuthorized?.(); passedRequestGuard = true; this.send(connection.socket, { type: "manageAgent", requestId, operation, params: operation === "computer" ? { ...body, _computerContext: { sourceId: execution?.sourceId ?? "manager", sourceLabel: execution?.sourceLabel, taskId: execution?.taskId, connectionId:execution?.connectionId, instanceId, ...(!computerActionDefinition(String(body.action))?.recovery ? {settings:this.getComputerSettings(instanceId).settings} : {}) } } : params }); }
+      try {
+        assertAuthorized?.();
+        const sendsSettingsContext = operation === "computer" || operation === "computer.settings";
+        const supportsDefinition = sendsSettingsContext && this.nodes.get(instanceId)?.computerSettingsDefinitionVersions?.includes(1) === true;
+        const definition = supportsDefinition ? this.options.computerSettingsDefinition?.() ?? BOOTSTRAP_COMPUTER_SETTINGS_DEFINITION : undefined;
+        const settingsDefinition = definition && connection.computerSettingsDefinitionDigest !== definition.digest ? { data: definition.data, digest: definition.digest } : undefined;
+        if (settingsDefinition) pending.definitionDigest = settingsDefinition.digest;
+        const actionDefinition = definition?.actionDefinition(String(body.action)) ?? computerActionDefinition(String(body.action));
+        const readWireSettings = () => {
+          const raw = supportsDefinition ? this.getComputerSettingsRaw(instanceId) : this.options.computerExecutionSettings?.(instanceId) ?? this.getComputerSettingsRaw(instanceId);
+          return raw === undefined ? {} : raw;
+        };
+        const wireBody = operation === "computer.settings" ? { ...body, settings: readWireSettings() } : body;
+        const paramsForWire = sendsSettingsContext ? { ...wireBody, _computerContext: {
+          sourceId: execution?.sourceId ?? "manager", sourceLabel: execution?.sourceLabel, taskId: execution?.taskId,
+          connectionId: execution?.connectionId, instanceId, ...(settingsDefinition ? { settingsDefinition } : {}),
+          ...(operation === "computer" && !actionDefinition?.recovery ? {
+            settings: readWireSettings()
+          } : {})
+        } } : params;
+        passedRequestGuard = true;
+        this.send(connection.socket, { type: "manageAgent", requestId, operation, params: paramsForWire });
+      }
       catch (error) {
         clearTimeout(timer); this.managementRequests.delete(requestId);
         const failure = error && typeof error === "object" ? error : new Error(String(error), { cause: error });
@@ -928,6 +972,7 @@ export class LanAgentRegistry {
       clearTimeout(pending.timer);
       this.managementRequests.delete(id);
       try { pending.assertAuthorized?.(); } catch (error) { pending.reject(error instanceof Error ? error : new Error(String(error))); return; }
+      if (pending.definitionDigest && message.computerSettingsDefinitionDigest === pending.definitionDigest) connection.computerSettingsDefinitionDigest = pending.definitionDigest;
       if (message.error) {
         const computerFault = pending.operation === "computer" && typeof message.errorCode === "string" && /^COMPUTER_[A-Z0-9_]{1,96}$/.test(message.errorCode);
         pending.reject(Object.assign(new Error(String(message.error).slice(0,1024)),

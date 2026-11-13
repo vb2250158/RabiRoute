@@ -65,3 +65,21 @@ Run `npm run test:web-patches`, Host contract tests, `node --test scripts/dynami
 - Automatic activation followed by formal Host rollback without changing Manager identity or backend processes.
 - Build, integrity and persistence failures retain the old service; timeouts and disconnected clients do not duplicate business effects, and original operations remain queryable.
 - Served root HTML and downloaded bytes match the candidate. Source tests, one health check and development servers do not replace installed-runtime evidence.
+
+
+## Independent plugin Web resource packages
+
+When a new shared Web runtime is needed, update the WebGUI through the unified publication flow first. The base loads one Vue, Pinia, Vue Router, Vuetify and existing UI state; plugins use those actual instances. A Web-runtime-only change does not itself require switching Manager. Existing global Web patches remain supported for legacy packages.
+
+From one frozen source input, build the selected native package, then complete its Web resources through the official selected-package entry:
+
+```powershell
+node scripts/build-plugin-packages.mjs --package <pluginId> --output-directory <candidateRoot>
+node scripts/build-plugin-web-packages.mjs --package <pluginId> --output-directory <candidateRoot> --runtime-manifest <shellWebRoot>/assets/web-runtime.json
+```
+
+The second step consumes the original native receipt and completes selected-package evidence through its original finalizer, without repackaging the entire Host. `web/module.json` records plugin/backend pairing, the shared exports actually used, entry/static CSS and the complete resource file tree. JS, lazy chunks, images, fonts, Workers and WASM belong to that plugin version. Dynamic-page CSS remains demand-loaded, and resource MIME types are package-owned data; adding a format does not require editing the Host dispatcher. Resource URLs keep the original plugin ID, revision and relative path; the plugin no longer relies on absolute Host-root `/assets/...` URLs.
+
+A candidate checks its required shared exports once before activation. A missing export reports that candidate's compatibility issue while retaining a still-valid previous page and unrelated plugins. It does not introduce per-API version eligibility checks or force every page to refresh merely because a plugin version changed. The original Manager/plugin owner still executes backend capabilities and request contracts. Self-contained packages use their own revision; existing pages can keep reading retained revisions. Unloading releases that module's styles and registrations.
+
+A build receipt establishes candidate inputs and resource closure only. Formal activation still uses the original import, same-instance version selection and readback flow, checking running versions, resources, previous-page/rollback behavior and the target operation. A successful candidate build is not installation or visual acceptance.

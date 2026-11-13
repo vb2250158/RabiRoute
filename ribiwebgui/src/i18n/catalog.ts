@@ -1,6 +1,7 @@
 import { pluginTranslation } from "./translationRegistry";
 
 export const englishCatalog: Record<string, string> = {
+  "角色目录暂未完整更新，已有角色仍可选择。": "The role catalog is only partially refreshed. Previously loaded roles remain available.",
   "插件目录暂时无法刷新，正在显示上次读取的界面。": "The plugin catalog could not be refreshed. The last loaded interface remains visible.",
   "部分插件目录项暂不可用，其余功能可继续使用。": "Some plugin catalog entries are unavailable. Other functions remain available.",
 

@@ -9,25 +9,10 @@ export type HeartbeatScheduleTask = {
   schedule: NotificationScheduleDefinition;
 };
 
-type TimeOfDay = {
-  hours: number;
-  minutes: number;
-  seconds: number;
-};
+export { parseTimeOfDay } from "../shared/dailyScheduleTimes.js";
+import { normalizeDailyScheduleTimes, parseTimeOfDay, type TimeOfDay } from "../shared/dailyScheduleTimes.js";
 
 const secondMs = 1000;
-
-export function parseTimeOfDay(value: string | undefined): TimeOfDay | null {
-  const match = /^(\d{1,2}):(\d{2})(?::(\d{2}))?$/.exec(String(value || "").trim());
-  if (!match) return null;
-  const hours = Number(match[1]);
-  const minutes = Number(match[2]);
-  const seconds = Number(match[3] ?? "0");
-  if (hours < 0 || hours > 23 || minutes < 0 || minutes > 59 || seconds < 0 || seconds > 59) {
-    return null;
-  }
-  return { hours, minutes, seconds };
-}
 
 function atLocalTime(day: Date, time: TimeOfDay): Date {
   return new Date(
@@ -53,12 +38,13 @@ function addDays(date: Date, days: number): Date {
   );
 }
 
-function nextDailyAt(time: TimeOfDay, now: Date, lastScheduledAt?: Date): Date {
-  let candidate = atLocalTime(lastScheduledAt ? addDays(lastScheduledAt, 1) : now, time);
-  while (candidate.getTime() <= now.getTime()) {
-    candidate = addDays(candidate, 1);
-  }
-  return candidate;
+function nextDailyAt(times: TimeOfDay[], now: Date, lastScheduledAt?: Date): Date {
+  const cursor = new Date(Math.max(now.getTime(), lastScheduledAt?.getTime() ?? now.getTime()));
+  const candidates = times.map(time => {
+    const today = atLocalTime(cursor, time);
+    return today.getTime() > cursor.getTime() ? today : atLocalTime(addDays(cursor, 1), time);
+  });
+  return candidates.reduce((earliest, candidate) => candidate.getTime() < earliest.getTime() ? candidate : earliest);
 }
 
 function parseLocalDateTime(value: string | undefined): Date | null {
@@ -147,8 +133,9 @@ export function nextHeartbeatScheduleTime(
   if (schedule.enabled === false) return null;
 
   if (schedule.type === "daily_time") {
-    const time = parseTimeOfDay(schedule.timeOfDay);
-    return time ? nextDailyAt(time, now, options.lastScheduledAt) : null;
+    const values = normalizeDailyScheduleTimes(schedule);
+    const times = values?.map(value => parseTimeOfDay(value)!);
+    return times?.length ? nextDailyAt(times, now, options.lastScheduledAt) : null;
   }
 
   if (schedule.type === "once_at") {

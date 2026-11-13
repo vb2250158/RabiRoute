@@ -88,13 +88,60 @@ public static class RabiComputer {
     static void Redraw(){if(ui!=null)ui.Post(_=>{overlay.Invalidate();PublishPresentation();},null);}
     static void PublishPresentation(){if(externalQt)Event("presentation",new{revision=++presentationRevision,controlSessionId=session,source=bar.Source,remainingMs=Remaining(),pointer=pointerVisible?new{x=pointer.X,y=pointer.Y}:null,exitShortcut=Str(Obj(Get(settings,"control")),"exitShortcut","Ctrl+Alt+Esc"),countdownSeconds=countdown,layers=layers.Values});}
     static double? Remaining(){return session==null||!idleEnabled?(double?)null:Math.Max(0,idleSeconds*1000-lastActivity.Elapsed.TotalMilliseconds);}
-    static void ApplySettings(Dictionary<string,object> value){
-        settings=value;var control=Obj(Get(value,"control"));idleEnabled=Bool(control,"idleExitEnabled",true);idleSeconds=Num(control,"idleTimeoutSeconds",120);countdown=Num(control,"countdownSeconds",10);exitOnLocal=Bool(control,"exitOnLocalInput",false);showPointer=Bool(control,"showPointer",true);
-        if(session!=null){RegisterExit(Str(control,"exitShortcut","Ctrl+Alt+Esc"));if(!Bool(value,"enabled",true)||!Bool(Obj(Get(value,"features")),"input",true))EndControl(session,"settings-disabled");}
+    static Dictionary<string,object> MergeSettings(Dictionary<string,object> original,Dictionary<string,object> patch){
+        var result=new Dictionary<string,object>(original);
+        foreach(var pair in patch){
+            var nested=pair.Value as Dictionary<string,object>;
+            result[pair.Key]=nested==null?pair.Value:MergeSettings(Obj(Get(original,pair.Key)),nested);
+        }
+        return result;
+    }
+    static Dictionary<string,object> RequestSettings(Dictionary<string,object> request){
+        var supplied=Get(request,"settings");
+        return supplied==null?settings:Obj(supplied);
+    }
+    static Dictionary<string,object> SelectSettingsDomains(Dictionary<string,object> value,params string[] domains){
+        var selected=new Dictionary<string,object>();
+        foreach(string domain in domains)if(value.ContainsKey(domain))selected[domain]=value[domain];
+        return selected;
+    }
+    static void ApplyControlSettings(Dictionary<string,object> value){
+        var control=Obj(Get(value,"control"));
+        idleEnabled=Bool(control,"idleExitEnabled",true);idleSeconds=Num(control,"idleTimeoutSeconds",120);
+        countdown=Num(control,"countdownSeconds",10);exitOnLocal=Bool(control,"exitOnLocalInput",false);showPointer=Bool(control,"showPointer",true);
+        if(session!=null)RegisterExit(Str(control,"exitShortcut","Ctrl+Alt+Esc"));
+    }
+    static void ApplyControlRequestSettings(Dictionary<string,object> request){
+        var value=RequestSettings(request);
+        var patch=SelectSettingsDomains(value,"control","enabled");
+        var features=Obj(Get(value,"features"));
+        if(features.ContainsKey("input"))patch["features"]=new Dictionary<string,object>{{"input",features["input"]}};
+        settings=MergeSettings(settings,patch);
+        ApplyControlSettings(settings);
+    }
+    static void ApplyTrackingBudget(Dictionary<string,object> value){
+        // Aggregate native-process budgets have one owner. New tracker admission
+        // updates that budget without reconfiguring existing tracker engines.
+        if(value.ContainsKey("performance"))settings=MergeSettings(settings,SelectSettingsDomains(value,"performance"));
+    }
+    static void ApplySettingsPatch(Dictionary<string,object> patch){ApplySettings(MergeSettings(settings,patch),patch);}
+    static void ApplySettings(Dictionary<string,object> value){ApplySettings(value,null);}
+    static void ApplySettings(Dictionary<string,object> value,Dictionary<string,object> patch){
+        settings=value;
+        if(patch==null||patch.ContainsKey("control"))ApplyControlSettings(value);
+        bool policyChanged=patch==null||patch.ContainsKey("enabled")||patch.ContainsKey("features")||patch.ContainsKey("annotation");
+        if(policyChanged&&session!=null&&(!Bool(value,"enabled",true)||!Bool(Obj(Get(value,"features")),"input",true)))EndControl(session,"settings-disabled");
         bool annotations=Bool(value,"enabled",true)&&Bool(Obj(Get(value,"features")),"annotation",true);
         List<Tracking> jobs;lock(tracking)jobs=new List<Tracking>(tracking.Values);
-        foreach(var item in jobs){if(!annotations)StopTracking(item,true,"settings-disabled");else if(!Bool(Obj(Get(value,"features")),"observation",true)||!Bool(Obj(Get(value,"annotation")),"dynamicEnabled"))StopTracking(item,false,"dynamic-disabled");else item.pendingSettings=value;}
-        if(!annotations)foreach(string id in new List<string>(layers.Keys))Annotation(new Dictionary<string,object>{{"action","annotation.clear"},{"layerId",id},{"version",Num(layers[id],"version",1)}});
+        foreach(var item in jobs){
+            if(policyChanged&&!annotations)StopTracking(item,true,"settings-disabled");
+            else if(policyChanged&&(!Bool(Obj(Get(value,"features")),"observation",true)||!Bool(Obj(Get(value,"annotation")),"dynamicEnabled")))StopTracking(item,false,"dynamic-disabled");
+            else {
+                var selected=patch==null?value:MergeSettings(RequestSettings(item.request),patch);
+                item.request["settings"]=selected;item.pendingSettings=selected;
+            }
+        }
+        if(policyChanged&&!annotations)foreach(string id in new List<string>(layers.Keys))Annotation(new Dictionary<string,object>{{"action","annotation.clear"},{"layerId",id},{"version",Num(layers[id],"version",1)}});
         trackingWake.Set();
     }
     static uint KeyCode(string key){
@@ -141,7 +188,7 @@ public static class RabiComputer {
     }
     static uint Move(Point point){lock(stateLock){var screen=SystemInformation.VirtualScreen;uint inserted=Mouse((int)Math.Round((point.X-screen.Left)*65535.0/Math.Max(1,screen.Width-1)),(int)Math.Round((point.Y-screen.Top)*65535.0/Math.Max(1,screen.Height-1)),0x0001|0x8000|0x4000);pointer=point;pointerVisible=showPointer;Redraw();return inserted;}}
     static object ExecuteInput(Dictionary<string,object> request){
-        string id=Str(request,"controlSessionId"),requestId=Str(request,"requestId");var action=Obj(Get(request,"input"));var source=Obj(Get(request,"source"));uint inserted=0;int segment=Math.Max(1,(int)Num(Obj(Get(settings,"input")),"nativeSegmentMs",16));
+        string id=Str(request,"controlSessionId"),requestId=Str(request,"requestId");var action=Obj(Get(request,"input"));var source=Obj(Get(request,"source"));uint inserted=0;int segment=Math.Max(1,(int)Num(Obj(Get(RequestSettings(request),"input")),"nativeSegmentMs",16));
         lock(inputGate){try{
             lock(stateLock){inputWindow=IntPtr.Zero;CheckInput(id,requestId);activeInputRequest=requestId;activeInputSession=id;}
             source=ValidateSource(request,source);
@@ -196,11 +243,11 @@ public static class RabiComputer {
         using(var output=new Bitmap(frame.bitmap,new Size(width,height)))using(var bytes=new MemoryStream()){
             output.Save(bytes,ImageFormat.Png);if(bytes.Length>8388608){frame.Dispose();throw new InvalidOperationException("Screenshot exceeds 8 MiB; reduce maxWidth.");}
             frame.source["width"]=width;frame.source["height"]=height;frame.source["frameId"]=frame.id;frame.source["capturedAt"]=frame.created.ToString("o");frame.source["instanceId"]=Get(request,"instanceId");
-            lock(frameLock){frames.Add(frame.id,frame);frameOrder.Add(frame.id);EvictFrames();}
+            lock(frameLock){frames.Add(frame.id,frame);frameOrder.Add(frame.id);EvictFrames(RequestSettings(request));}
             return new{mimeType="image/png",width=width,height=height,bounds=Bounds(frame.bounds),capturedAt=frame.created.ToString("o"),frameId=frame.id,source=frame.source,data=Convert.ToBase64String(bytes.ToArray())};
         }
     }
-    static void EvictFrames(){var config=Obj(Get(Obj(Get(settings,"annotation")),"tracking"));int count=(int)Num(config,"frameCacheFrames",6);double bytes=Num(config,"frameCacheBytes",134217728),age=Num(config,"frameCacheAgeMs",30000);long total=0;foreach(var item in frames.Values)total+=(long)item.bitmap.Width*item.bitmap.Height*4;while(frameOrder.Count>0){var frame=frames[frameOrder[0]];if(frameOrder.Count<=count&&total<=bytes&&(DateTime.UtcNow-frame.created).TotalMilliseconds<=age)break;total-=(long)frame.bitmap.Width*frame.bitmap.Height*4;frames.Remove(frame.id);frameOrder.RemoveAt(0);frame.Dispose();}}
+    static void EvictFrames(Dictionary<string,object> snapshot=null){var config=Obj(Get(Obj(Get(snapshot??settings,"annotation")),"tracking"));int count=(int)Num(config,"frameCacheFrames",6);double bytes=Num(config,"frameCacheBytes",134217728),age=Num(config,"frameCacheAgeMs",30000);long total=0;foreach(var item in frames.Values)total+=(long)item.bitmap.Width*item.bitmap.Height*4;while(frameOrder.Count>0){var frame=frames[frameOrder[0]];if(frameOrder.Count<=count&&total<=bytes&&(DateTime.UtcNow-frame.created).TotalMilliseconds<=age)break;total-=(long)frame.bitmap.Width*frame.bitmap.Height*4;frames.Remove(frame.id);frameOrder.RemoveAt(0);frame.Dispose();}}
     class CaptureBuffer:IDisposable {
         public Frame frame;public byte[] pixels;public object prepared;public double captureMs,preprocessMs;
         public void Read(Dictionary<string,object> request,Type engineType){
@@ -231,6 +278,7 @@ public static class RabiComputer {
         layers[id]=request;overlay.Invalidate();PublishPresentation();return new{state=externalQt||IsWindowVisible(overlay.Handle)?"visible":"unavailable",layerId=id,version=version,renderRevision=presentationRevision};
     }
     static object StartTracking(Dictionary<string,object> request){
+        var selectedSettings=RequestSettings(request);
         string id=Str(request,"trackingId"),layerId=Str(request,"layerId");var source=ValidateSource(request,Obj(Get(request,"source")));
         string frameId=Str(source,"frameId");int proposed=Items(Get(request,"targets")).Count;
         var item=new Tracking{id=id,layerId=layerId,version=(int)Num(request,"version",1),targetCount=proposed,sourceKey=Str(source,"kind")+":"+Str(source,"windowId")+":"+Str(source,"pid"),request=request,
@@ -239,9 +287,9 @@ public static class RabiComputer {
         bool admitted=false,paused=false;
         UI(()=>{
             int retired;retiredLayers.TryGetValue(layerId,out retired);
-            if(retired>=item.version||!Bool(settings,"enabled",true)||!Bool(Obj(Get(settings,"features")),"annotation",true)||!Bool(Obj(Get(settings,"features")),"observation",true)||!Bool(Obj(Get(settings,"annotation")),"dynamicEnabled"))return;
+            if(retired>=item.version||!Bool(selectedSettings,"enabled",true)||!Bool(Obj(Get(selectedSettings,"features")),"annotation",true)||!Bool(Obj(Get(selectedSettings,"features")),"observation",true)||!Bool(Obj(Get(selectedSettings,"annotation")),"dynamicEnabled"))return;
             lock(tracking){int active=0;foreach(var job in tracking.Values)if(!job.stopped)active+=job.targetCount;
-                int maximum=(int)Num(Obj(Get(settings,"performance")),"maxTargets",8);paused=active+proposed>maximum;
+                int maximum=(int)Num(Obj(Get(selectedSettings,"performance")),"maxTargets",8);paused=active+proposed>maximum;
                 if(paused){var kept=new List<object>();foreach(var target in Items(Get(request,"targets"))){var value=new Dictionary<string,object>(Obj(target));value["state"]="paused";kept.Add(value);}
                     item.stopped=true;item.finalized=true;item.status=new Dictionary<string,object>{{"trackingId",id},{"layerId",layerId},{"state","paused"},{"stopped",true},{"targets",kept},{"objects",new object[0]},{"source",source},{"effective",new{reason="computer-target-budget",maxTargets=maximum,totalTargets=active+proposed}}};
                 }else item.inFlight=true;
@@ -253,7 +301,7 @@ public static class RabiComputer {
         if(!admitted)return new{trackingId=id,layerId=layerId,state="stopped"};if(paused)return item.status;
         try{
             byte[] oldPixels;Dictionary<string,object> oldSource;int width,height;
-            lock(frameLock){EvictFrames();Frame original;if(!frames.TryGetValue(frameId,out original))throw new InvalidOperationException("Source frame expired; obtain a fresh screen.capture before tracking.");oldPixels=Pixels(original.bitmap);oldSource=original.source;width=original.bitmap.Width;height=original.bitmap.Height;}
+            lock(frameLock){EvictFrames(selectedSettings);Frame original;if(!frames.TryGetValue(frameId,out original))throw new InvalidOperationException("Source frame expired; obtain a fresh screen.capture before tracking.");oldPixels=Pixels(original.bitmap);oldSource=original.source;width=original.bitmap.Width;height=original.bitmap.Height;}
             if(item.stopped)throw new OperationCanceledException("The original tracking source ended before initialization.");
             string assemblyPath=Path.Combine(NativeDirectory,"RabiAgent.Computer.Tracking.dll");if(!File.Exists(assemblyPath))throw new InvalidOperationException("The CPU KCF/template tracking component is missing from this package.");
             var type=Assembly.LoadFrom(assemblyPath).GetType("RabiComputerTracking.Engine",true);item.engine=Activator.CreateInstance(type);item.step=type.GetMethod("Step");
@@ -263,6 +311,7 @@ public static class RabiComputer {
             item.inFlight=false;
             UI(()=>{
                 int retired;retiredLayers.TryGetValue(layerId,out retired);if(item.stopped||retired>=item.version){item.stopped=true;item.stopReason="layer-cleared";return;}
+                ApplyTrackingBudget(selectedSettings);
                 item.initialized=true;
                 layers[layerId]=new Dictionary<string,object>{{"layerId",layerId},{"version",item.version},{"trackingId",id},{"source",Get(item.status,"source",source)},{"objects",Get(item.status,"objects",new object[0])}};
                 lock(tracking){if(trackingWorker==null||!trackingWorker.IsAlive){trackingWorker=new Thread(TrackLoop);trackingWorker.IsBackground=true;trackingWorker.Start();}}
@@ -282,7 +331,7 @@ public static class RabiComputer {
     static void FreezeLayer(Tracking item){
         Dictionary<string,object> layer;int retired;retiredLayers.TryGetValue(item.layerId,out retired);
         if(retired>=item.version||!layers.TryGetValue(item.layerId,out layer)||(int)Num(layer,"version",1)!=item.version)return;
-        object duration=Get(Obj(Get(settings,"annotation")),"staticDurationMs",10000);
+        object duration=Get(Obj(Get(RequestSettings(item.request),"annotation")),"staticDurationMs",10000);
         string expires=duration==null?null:DateTime.UtcNow.AddMilliseconds(Convert.ToDouble(duration)).ToString("o");
         if(duration!=null)layer["expiresMono"]=Stopwatch.GetTimestamp()+Convert.ToDouble(duration)*Stopwatch.Frequency/1000;
         layer["expiresAt"]=expires;layer["trackingState"]="stopped";
@@ -358,7 +407,7 @@ public static class RabiComputer {
     }
     static object Dispatch(Dictionary<string,object> request){
         string action=Str(request,"action");if(Str(request,"renderer")=="qt")externalQt=true;
-        if(Get(request,"settings")!=null)UI(()=>{if(settings.Count==0)ApplySettings(Obj(Get(request,"settings")));});
+
         if(action=="windows.list")return Windows(request);
         if(action=="screen.capture")return Screen(request);
         if(action=="input.execute")return ExecuteInput(request);
@@ -367,15 +416,17 @@ public static class RabiComputer {
         if(action=="control.end"){EndControl(Str(request,"controlSessionId"),Str(request,"reason","requested"));return new{state="ended",releaseState="released"};}
         if(action=="control.begin"){
             object result=null;UI(()=>{lock(stateLock){if(endingControlSessions.Contains(Str(request,"controlSessionId"))){result=new{state="ended",visible=false,reason="ended-before-native-enter"};return;}}
+                ApplyControlRequestSettings(request);
                 if(!Bool(settings,"enabled",true)||!Bool(Obj(Get(settings,"features")),"input",true))throw new InvalidOperationException("Native input was disabled before control began.");session=Str(request,"controlSessionId");initialPhysicalKeys.Clear();for(uint key=1;key<256;key++)if(GetAsyncKeyState((int)key)<0)initialPhysicalKeys.Add(key);lastActivity.Restart();bar.Source=Obj(Get(request,"source"));externalQt=Str(request,"renderer")=="qt";RegisterExit(Str(Obj(Get(settings,"control")),"exitShortcut","Ctrl+Alt+Esc"));if(Str(request,"controlRenderer")!="qt"){bar.Show();ShowWindow(bar.Handle,4);}PublishPresentation();result=new{state="active",visible=Str(request,"controlRenderer")=="qt"||IsWindowVisible(bar.Handle),pointer=showPointer,hotkey=new{registered=hotkeyRegistered,error=hotkeyError},renderRevision=externalQt?presentationRevision:0};});return result;
         }
+        if(action=="settings.patch"){UI(()=>ApplySettingsPatch(Obj(Get(request,"patch"))));return new{state="applied"};}
         if(action=="settings.update"){UI(()=>ApplySettings(Obj(Get(request,"settings"))));return new{state="applied"};}
         if(action=="annotation.track.start")return StartTracking(request);
         if(action=="annotation.track.status"){lock(tracking){Tracking item;return tracking.TryGetValue(Str(request,"trackingId"),out item)?item.status:new Dictionary<string,object>{{"state","absent"}};}}
         if(action=="annotation.track.stop"){Tracking item;lock(tracking)tracking.TryGetValue(Str(request,"trackingId"),out item);return item==null?(object)new{state="absent"}:StopTracking(item,Bool(request,"clear"),"requested");}
         if(action.StartsWith("annotation.")){object result=null;UI(()=>result=Annotation(request));return result;}
         if(Str(request,"renderer")=="qt")externalQt=true;
-        if(action=="capabilities"){bool inJob;IsProcessInJob(GetCurrentProcess(),IntPtr.Zero,out inJob);return new{protocolVersion=2,inheritedJob=inJob,features=new[]{"input","annotation","tracking"},trackingAvailable=File.Exists(Path.Combine(NativeDirectory,"RabiAgent.Computer.Tracking.dll"))};}
+        if(action=="capabilities"){bool inJob;IsProcessInJob(GetCurrentProcess(),IntPtr.Zero,out inJob);return new{protocolVersion=2,settingsPatchVersion=1,inheritedJob=inJob,features=new[]{"input","annotation","tracking"},trackingAvailable=File.Exists(Path.Combine(NativeDirectory,"RabiAgent.Computer.Tracking.dll"))};}
         throw new ArgumentException("Unsupported desktop operation.");
     }
     static void Handle(Dictionary<string,object> request){try{Emit(new{id=Get(request,"id"),result=Dispatch(request)});}catch(Exception error){var cause=error.GetBaseException();bool uncertain=false;lock(stateLock)uncertain=Str(request,"action")=="input.execute"&&(ownedKeys.Count>0||ownedButtons.Count>0||ownedUnicode.Count>0);Emit(new{id=Get(request,"id"),error=new{code="COMPUTER_NATIVE_FAILED",message=cause.Message,uncertain=uncertain}});}finally{if(Str(request,"action")=="input.execute")lock(stateLock){string id=Str(request,"requestId");int count;if(pendingInputCounts.TryGetValue(id,out count)){if(count<=1){pendingInputCounts.Remove(id);pendingInputSessions.Remove(id);cancelledRequests.Remove(id);}else pendingInputCounts[id]=count-1;}}if(Str(request,"action")=="control.begin")lock(stateLock){string id=Str(request,"controlSessionId");int count;if(pendingControlBegins.TryGetValue(id,out count)){if(count<=1){pendingControlBegins.Remove(id);endingControlSessions.Remove(id);}else pendingControlBegins[id]=count-1;}}}}

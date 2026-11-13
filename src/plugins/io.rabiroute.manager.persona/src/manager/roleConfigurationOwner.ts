@@ -7,7 +7,7 @@ import { personaMarkdownTitle } from "./personaCatalog.js";
 import { sanitizeRoleId } from "@rabiroute/host-api/shared/routeIdentity";
 import { roleFolderPath } from "@rabiroute/host-api/shared/routePaths";
 import { ROLE_CONFIGURATION_KEYS, roleConfigurationOf, type RoleConfiguration } from "@rabiroute/host-api/shared/roleConfiguration";
-import { ensureDefaultPersonaAutomations, type GatewayDefinition } from "@rabiroute/host-api/shared/gatewayConfigModel";
+import { ensureDefaultPersonaAutomations, normalizeDailyScheduleTimes, type GatewayDefinition } from "@rabiroute/host-api/shared/gatewayConfigModel";
 import { normalizeAgentDeliveryTarget, validateAgentDeliveryTarget } from "@rabiroute/host-api/shared/agentDeliveryTarget";
 import { recordDataMutationAudit } from "@rabiroute/host-api/observability/dataMutationAudit";
 import {
@@ -201,6 +201,13 @@ async function command(context: Context, roleId: string, action: string, body: C
         await context.step(() => assertRoleAcceptsWork(directory));
         const fragment = roleConfigurationOf(body.config || {});
         if (fragment.automationRules) {
+          for (const [index, rule] of fragment.automationRules.entries()) {
+            if (rule.trigger?.type === "schedule" && rule.trigger.schedule?.type === "daily_time"
+              && Object.hasOwn(rule.trigger.schedule, "timeOfDays")
+              && normalizeDailyScheduleTimes(rule.trigger.schedule) === null) {
+              throw new RoleLifecycleError("ROLE_DAILY_TIMES_INVALID", `第 ${index + 1} 条自动化的每日时间需要至少一个有效时间点（HH:mm 或 HH:mm:ss）。`, 400);
+            }
+          }
           for (const rule of fragment.automationRules) if (rule.action.type === "deliver_agent") {
             if (!rule.action.target) throw new RoleLifecycleError("ROLE_TARGET_REQUIRED", "消息动作需要明确的 Agent 目标。", 400);
             validateAgentDeliveryTarget(normalizeAgentDeliveryTarget(rule.action.target));

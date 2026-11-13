@@ -1,8 +1,8 @@
 import { fileURLToPath, URL } from "node:url";
 import vue from "@vitejs/plugin-vue";
-import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { defineConfig } from "vite";
+import { webRuntimeVitePlugin } from "../scripts/lib/plugin-web-runtime.mjs";
 import { discoverManagerBaseUrl } from "../scripts/lib/discover-manager-url.mjs";
 
 const root = fileURLToPath(new URL(".", import.meta.url));
@@ -27,7 +27,7 @@ export default defineConfig(({ command }) => {
 
   return {
     root,
-    plugins: [vue()],
+    plugins: [vue(), webRuntimeVitePlugin(path.resolve(root, ".."))],
     resolve: {
       alias: {
         "@": fileURLToPath(new URL("./src", import.meta.url)),
@@ -44,18 +44,8 @@ export default defineConfig(({ command }) => {
       manifest: true,
       rollupOptions: {
         preserveEntrySignatures: "exports-only",
-        input: {
-          app: fileURLToPath(new URL("./index.html", import.meta.url)),
-          ...Object.fromEntries(readdirSync(path.resolve(root, "../src/plugins"), { withFileTypes: true })
-            .filter(entry => entry.isDirectory())
-            .flatMap(entry => {
-              const directory = path.resolve(root, "../src/plugins", entry.name);
-              let metadata;
-              try { metadata = JSON.parse(readFileSync(path.join(directory, "package.json"), "utf8")); }
-              catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return []; throw error; }
-              return metadata.rabi?.webSource ? [[entry.name, path.join(directory, metadata.rabi.webSource)]] : [];
-            }))
-        }
+        // Business Web entries are built once by the official package producer.
+        input: { app: fileURLToPath(new URL("./index.html", import.meta.url)) }
       }
     },
     server: {

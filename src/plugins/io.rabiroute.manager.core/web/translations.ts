@@ -1,5 +1,9 @@
 export const pluginTranslations = {
   "en": {
+    "恢复默认设置": "Restore default settings",
+    "部分设置需要修复；其他功能可继续使用。": "Some settings need repair; other functions remain available.",
+    "恢复默认已提交；回读仍有选中覆盖值，请核对最新状态，不要重复提交。": "Default restoration was submitted, but selected overrides remain in readback. Check the current state before submitting again.",
+    "恢复默认已提交；后续读取暂未确认。请刷新读取，不要重复提交。": "Default restoration was submitted; readback is not confirmed. Refresh without resubmitting.",
     "返回设置": "Back to settings",
     "搜索角色名称或 ID": "Search role name or ID",
     "暂无已归档角色": "No archived roles",
@@ -313,6 +317,10 @@ export const pluginTranslations = {
     "修改已提交，回读待确认": "Changes submitted; readback unconfirmed"
   },
   "ja": {
+    "恢复默认设置": "設定を既定値に戻す",
+    "部分设置需要修复；其他功能可继续使用。": "一部の設定の修復が必要です。他の機能は引き続き利用できます。",
+    "恢复默认已提交；回读仍有选中覆盖值，请核对最新状态，不要重复提交。": "既定値への復元を送信しましたが、取得結果に選択した上書き値が残っています。再送せず現在の状態を確認してください。",
+    "恢复默认已提交；后续读取暂未确认。请刷新读取，不要重复提交。": "既定値への復元を送信しました。取得結果は未確認です。再送せず更新してください。",
     "返回设置": "設定に戻る",
     "搜索角色名称或 ID": "ペルソナ名または ID を検索",
     "暂无已归档角色": "アーカイブされたペルソナがありません",

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { DEFAULT_COMPUTER_SETTINGS, COMPUTER_FEATURES, normalizeComputerSettings, patchComputerSettings, assertComputerActionEnabled, isComputerReadOnlyAction } from '../lib/computer-control-contract.mjs';
+import { instanceAgentActionDefinition, DEFAULT_COMPUTER_SETTINGS, COMPUTER_FEATURES, normalizeComputerSettings, patchComputerSettings, assertComputerActionEnabled, isComputerReadOnlyAction } from '../lib/computer-control-contract.mjs';
 import { computerRequestSchema, computerResponseSchema } from '../lib/interactive-protocol.mjs';
 
 test('computer defaults keep six public features enabled and dynamic annotation off', () => {
@@ -41,4 +41,21 @@ test('explicit memory budgets survive unrelated settings changes and discovery d
  assert.equal(changed.annotation.dynamicEnabled,true);
  assert.equal(normalizeComputerSettings().annotation.dynamicEnabled,false);
  assert.ok(normalizeComputerSettings().performance.memoryBudgetBytes>explicit);
+});
+
+test('action settings preserve unrelated bad data while validating only actual dependencies', async () => {
+ const {normalizeComputerSettingsForAction}=await import('../lib/computer-control-contract.mjs');
+ const raw={enabled:true,features:{files:true,input:true},annotation:{tracking:{matchThreshold:'broken'}},performance:{memoryBudgetBytes:'broken'},customExtension:{keep:1}};
+ assert.throws(()=>normalizeComputerSettings(raw),/matchThreshold|memoryBudgetBytes/);
+ const file=normalizeComputerSettingsForAction(raw,'file.stat');
+ assert.equal(file.enabled,true); assert.equal(file.customExtension.keep,1);
+ assert.equal(file.annotation.tracking.matchThreshold,'broken');
+ assert.doesNotThrow(()=>normalizeComputerSettingsForAction(raw,'control.begin'));
+ assert.throws(()=>normalizeComputerSettingsForAction(raw,'annotation.track.start'),/matchThreshold|memoryBudgetBytes/);
+ assert.throws(()=>assertComputerActionEnabled({...raw,enabled:false},'file.stat'),error=>error.code==='COMPUTER_FEATURE_DISABLED');
+});
+
+test('DSBot action classification guards only new work and preserves catalog and original receipt recovery', () => {
+ assert.deepEqual(instanceAgentActionDefinition('threads',{action:'ds_bot_deliver'}),{newWork:true,reconcileAction:'ds_bot_reconcile'});
+ for(const action of ['ds_bot_catalog','ds_bot_reconcile']) assert.deepEqual(instanceAgentActionDefinition('threads',{action}),{readOnly:true,recovery:true});
 });

@@ -1026,7 +1026,20 @@ export type ManagerConfigurationContext = Readonly<{
 
 /** The existing Manager configuration store remains the only path-setting owner. */
 export function createManagerConfigurationOwner(ctx: ManagerConfigurationContext) {
-  const read = () => ({ code: 0, routeDir: path.relative(ctx.rootDir, ctx.routeRoot).replace(/\\/g, "/"), rolesDir: path.relative(ctx.rootDir, ctx.rolesRoot).replace(/\\/g, "/") });
+  const read = () => {
+    const result: { code: number; routeDir?: string; rolesDir?: string; directoryDiagnostics?: Array<{field:string;code:string;message:string}>; rawDirectoryConfig?: Record<string,unknown> } = { code: 0 };
+    const diagnostics: Array<{field:string;code:string;message:string}> = [];
+    for (const field of ["routeDir", "rolesDir"] as const) {
+      try { result[field] = path.relative(ctx.rootDir, field === "routeDir" ? ctx.routeRoot : ctx.rolesRoot).replace(/\\/g, "/"); }
+      catch (error) { diagnostics.push({ field, code: error && typeof error === "object" && "code" in error ? String(error.code) : "MANAGER_DIRECTORY_UNAVAILABLE", message: error instanceof Error ? error.message : String(error) }); }
+    }
+    if (diagnostics.length) {
+      const config = ctx.readManagerConfig();
+      result.directoryDiagnostics = diagnostics;
+      result.rawDirectoryConfig = { ...(config.routeDir !== undefined ? {routeDir:config.routeDir} : {}), ...(config.rolesDir !== undefined ? {rolesDir:config.rolesDir} : {}) };
+    }
+    return result;
+  };
   return Object.freeze({ read, async update(body: Record<string, unknown>, assertCurrent: () => void) {
     assertCurrent();
     const config = ctx.readManagerConfig();

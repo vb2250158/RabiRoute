@@ -17,6 +17,7 @@ import {
 } from "@rabiroute/host-api/automation/personaAutomationRuntime";
 import type { MessageAdapter, MessageAdapterDispose } from "@rabiroute/host-api/adapters/messageAdapter";
 import { recordDataMutationAudit } from "@rabiroute/host-api/observability/dataMutationAudit";
+import { armScheduleTask, clearScheduleTasks } from "./scheduleTaskTimer.js";
 
 type GatewayStatus = {
   messageAdapters?: Record<string, {
@@ -92,7 +93,6 @@ type HeartbeatLifecycle = {
   runTask(task: RunningHeartbeatTask, scheduledAt: Date): void;
 };
 
-const maxTimeoutMs = 2_147_483_647;
 
 function gatewayStatusPath(dataDir: string): string {
   return path.join(dataDir, "gateway-status.json");
@@ -374,38 +374,16 @@ function armTask(
   lifecycle: HeartbeatLifecycle,
   lastScheduledAt?: Date
 ): void {
-  if (!lifecycle.active) return;
-  const now = lifecycle.now();
-  const nextAt = lifecycle.nextScheduleTime(task.rule.trigger.schedule, now, { lastScheduledAt });
-  task.nextAt = nextAt ?? undefined;
-  if (!nextAt) {
-    patchScheduleSummary(lifecycle);
-    return;
-  }
-
-  const delay = Math.max(0, Math.min(maxTimeoutMs, nextAt.getTime() - now.getTime()));
-  task.timer = lifecycle.setTimer(() => {
-    task.timer = undefined;
-    if (!lifecycle.active) return;
-    if (lifecycle.now().getTime() + 1000 < nextAt.getTime()) {
-      armTask(task, lifecycle, lastScheduledAt);
-      return;
-    }
-    lifecycle.runTask(task, nextAt);
-    if (!lifecycle.active) return;
-    armTask(task, lifecycle, nextAt);
-  }, delay);
-  patchScheduleSummary(lifecycle);
+  armScheduleTask(task, {
+    get active() { return lifecycle.active; },
+    now: lifecycle.now, nextScheduleTime: lifecycle.nextScheduleTime,
+    setTimer: lifecycle.setTimer, clearTimer: lifecycle.clearTimer, runTask: lifecycle.runTask,
+    changed: () => patchScheduleSummary(lifecycle)
+  }, lastScheduledAt);
 }
 
 function clearHeartbeatTimers(lifecycle: HeartbeatLifecycle): void {
-  for (const task of lifecycle.tasks) {
-    if (task.timer) {
-      lifecycle.clearTimer(task.timer);
-      task.timer = undefined;
-    }
-    task.nextAt = undefined;
-  }
+  clearScheduleTasks(lifecycle.tasks, lifecycle);
 }
 
 export function createHeartbeatAdapter(
@@ -474,6 +452,7 @@ export function createHeartbeatAdapter(
             windowStartTime: task.rule.trigger.schedule.windowStartTime,
             windowEndTime: task.rule.trigger.schedule.windowEndTime,
             timeOfDay: task.rule.trigger.schedule.timeOfDay,
+            ...(Object.hasOwn(task.rule.trigger.schedule, "timeOfDays") ? { timeOfDays: task.rule.trigger.schedule.timeOfDays } : {}),
             onceAt: task.rule.trigger.schedule.onceAt
           }))
         }

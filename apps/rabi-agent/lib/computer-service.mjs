@@ -1,8 +1,10 @@
+import {BOOTSTRAP_COMPUTER_SETTINGS_DEFINITION as bootstrapDefinition} from "./computer-control-contract.mjs";
 import { UploadHistoryStore } from "./upload-history-store.mjs";
 import { COMPUTER_LIMITS } from "./interactive-protocol.mjs";
 import fs from "node:fs";
 import path from "node:path";
 import { createHash } from "node:crypto";
+import { DesktopNativeSlot } from "./desktop-native-slot.mjs";
 import { NativeComputerClient } from "./computer-native-client.mjs";
 import { ComputerControlService } from "./computer-control-service.mjs";
 import { assertComputerActionEnabled, computerActionDefinition } from "./computer-control-contract.mjs";
@@ -20,7 +22,7 @@ function capacityError(name, value) { return new Error(`Computer resource limit 
 
 /** Computer I/O only. Personas, memory, skills and workflow remain on the controller. */
 export class ComputerService {
-  constructor({ onChange = () => undefined, onControlChange = () => undefined, uploadHistoryRoot, historyIo, instanceId, getSettings, nativeFactory, qtPresentation, getPresentationTheme, receiptRoot, timeout = (_key, fallback) => fallback,
+  constructor({getDefinition,  onChange = () => undefined, onControlChange = () => undefined, uploadHistoryRoot, historyIo, instanceId, getSettings, nativeFactory, resolveDesktopRelease, restoreDesktopRelease, commitDesktopRelease, qtPresentation, getPresentationTheme, receiptRoot, timeout = (_key, fallback) => fallback,
     maxUploadBytes = configuredLimit("RABI_AGENT_COMPUTER_MAX_UPLOAD_BYTES", Number.MAX_SAFE_INTEGER),
     maxConcurrentIo = configuredLimit("RABI_AGENT_COMPUTER_MAX_CONCURRENT_IO", 0),
     maxActiveUploads = configuredLimit("RABI_AGENT_COMPUTER_MAX_ACTIVE_UPLOADS", 0),
@@ -32,13 +34,29 @@ export class ComputerService {
     this.timeout = timeout;
     this.uploads = new Map(); this.uploadQueues = new Map(); this.history = new UploadHistoryStore({ root: uploadHistoryRoot, io: historyIo });
     this.children = new Set(); this.pending = 0; this.stopped = false; this.onChange = onChange; this.stopOwner = null;
-    this.instanceId = instanceId; this.getSettings = getSettings;
-    this.native = nativeFactory ? nativeFactory({ children: this.children, timeout }) : new NativeComputerClient({ children: this.children, timeout, qtPresentation, getPresentationTheme });
+    this.instanceId = instanceId; this.getSettings = getSettings; this.getDefinition=getDefinition;
+    this.native = new DesktopNativeSlot({
+      initial: Object.freeze({ version: "builtin" }),
+      restore: restoreDesktopRelease, commit: commitDesktopRelease,
+      create: release => nativeFactory
+        ? nativeFactory({ children: this.children, timeout, release })
+        : new NativeComputerClient({ children: this.children, timeout, qtPresentation, getPresentationTheme, ...release.nativeOptions }),
+      resolve: (reference, previous, context) => {
+        if (!resolveDesktopRelease) throw Object.assign(new Error("The desktop release owner is unavailable; the current desktop worker remains selected."), { code: "COMPUTER_DESKTOP_RELEASE_UNAVAILABLE" });
+        return resolveDesktopRelease(reference, previous, context);
+      },
+      retire: native => this.control.retireNativeGeneration(native),
+      resume: () => this.control.resumeNativeGeneration()
+    });
     this.control = new ComputerControlService({ native: this.native, instanceId, onChange: () => { onChange(); onControlChange(); }, receiptRoot: receiptRoot ?? (uploadHistoryRoot ? path.join(path.dirname(uploadHistoryRoot), "computer-receipts") : undefined) });
   }
   get capabilities() {
-    return ["files", ...(process.platform === "win32" ? ["windows", "screenshots", "input", "annotation", ...(fs.existsSync(new URL("../dist/native/RabiAgent.Computer.Tracking.dll", import.meta.url)) ? ["tracking"] : [])] : [])];
+    return ["files", ...(process.platform === "win32" ? ["windows", "screenshots", "input", "annotation", ...((this.native.capabilities ? this.native.capabilities.trackingAvailable : this.native.status().release?.version === "builtin" && fs.existsSync(new URL("../dist/native/RabiAgent.Computer.Tracking.dll", import.meta.url))) ? ["tracking"] : [])] : [])];
   }
+  async desktopReleaseStatus() { try { await this.native.ready(); } catch { /* Status reports the original desktop-local failure. */ } return this.native.status(); }
+  prepareDesktopRelease(reference) { return this.native.prepare(reference); }
+  activateDesktopRelease(prepared, expectedRevision) { return this.native.activate(prepared, expectedRevision); }
+  discardDesktopRelease(prepared) { return this.native.discard(prepared); }
   setPresentationTheme(snapshot) { return this.native.setPresentationTheme?.(snapshot) ?? Promise.resolve(); }
   connectionClosed() { return this.control.connectionClosed(); }
   endSource(connectionId) { return this.control.endSource(connectionId); }
@@ -47,10 +65,10 @@ export class ComputerService {
   activeUploads() { return [...this.uploads.values()].filter(item => !this.terminalClosed(item)).length + this.history.openHandleCount; }
   terminalClosed(item) { return ["committed", "aborted"].includes(item.state) && item.fdClosed === true && item.temporaryRemoved === true && Number.isSafeInteger(item.confirmedAt); }
   async execute(input, context = {}) {
-    context = { getSettings: this.getSettings, instanceId: typeof this.instanceId === "function" ? this.instanceId() : this.instanceId, ...context };
+    context = { getDefinition:this.getDefinition, getSettings: this.getSettings, instanceId: typeof this.instanceId === "function" ? this.instanceId() : this.instanceId, ...context };
     if (/^(?:control\.|input\.|annotation\.)/.test(String(input.action))) return this.control.execute(input, context);
     context.guard?.();
-    if (!computerActionDefinition(input.action)?.recovery) assertComputerActionEnabled(context.getSettings?.() ?? context.settings, input.action, context.instanceId);
+    if (!computerActionDefinition(input.action)?.recovery) (context.getDefinition?.()??bootstrapDefinition).assertAction(context.getSettings?.() ?? context.settings, input.action, context.instanceId);
     if (this.stopped) throw new Error("Computer service is stopped.");
     if (this.maxConcurrentIo > 0 && this.pending >= this.maxConcurrentIo) throw capacityError("RABI_AGENT_COMPUTER_MAX_CONCURRENT_IO", this.maxConcurrentIo);
     this.pending++; this.onChange();
@@ -193,7 +211,7 @@ export class ComputerService {
     if (input.action === "screen.capture") return this.control.capture(input, context);
     return this.native.request(input.action, { ...input, action: undefined });
   }
-  reconcileSettings(context = {}) { return this.control.reconcile({ getSettings: this.getSettings, ...context }); }
+  reconcileSettings(context = {}) { return this.control.reconcile({ getDefinition:this.getDefinition, getSettings: this.getSettings, ...context }); }
   stop() {
     if (this.stopOwner) return this.stopOwner;
     this.stopped = true;
@@ -208,7 +226,7 @@ export class ComputerService {
     if (this.resourceStopOwner) return this.resourceStopOwner;
     this.stopped = true;
     const failures = [];
-    const closingChildren = [...this.children].filter(child => child !== this.native.child && child !== this.native.qt?.child).map(child => new Promise((resolve, reject) => {
+    const closingChildren = [...this.children].filter(child => !this.native.ownsChild(child)).map(child => new Promise((resolve, reject) => {
       // Register before signalling: kill() acceptance and process exit alone do
       // not prove that the helper and its redirected handles have closed.
       let killFailure;

@@ -4,7 +4,7 @@ import path from "node:path";
 import { atomicWriteFileSync } from "./shared/filePersistence.js";
 import { orderedPlanHistoryPaths, PLAN_HISTORY_FILE } from "./planHistoryShards.js";
 import { decodePlanIdentity } from "./planIdentityReadCache.js";
-import { assertPlanStoragePackageRecoveryReady, capturePlanStoragePackageRecoveryConflicts, readPlanPackageRecoveryIdentity, PlanStoragePackageRecoveryPendingError } from "./planStoragePackageFence.js";
+import { assertPlanStoragePackageRecoveryReady, capturePlanStoragePackageRecoveryConflicts, readPlanPackageRecoveryIdentity, validatePlanPackageRecoveryIdentity, PlanStoragePackageRecoveryPendingError } from "./planStoragePackageFence.js";
 import {
   canonicalHistoricalPlanStorageCollisionKey,
   canonicalLogicalPlanId,
@@ -1154,6 +1154,124 @@ export function readCanonicalPlanStoragePackageUnderLease(
   validatePackageIdentity(location.planId, location.bucket, physical.files);
   assertPlanStorageLeaseOwner(lease);
   return { ...location, inventoryHash: physical.hash, files: physical.files };
+}
+
+export type PlanStorageMutationReceiptInspection =
+  | { state: "committed"; value: Record<string, unknown> }
+  | { state: "not_committed"; stage: "precommit_staging"; inventoryHash: string }
+  | { state: "unknown"; reason: string };
+
+/** Inspect one admitted plan without running recovery or publishing any staged bytes. */
+export function inspectPlanStorageMutationReceiptUnderLease(
+  lease: PlanStorageLease,
+  input: Readonly<{ requestId: string; expectedInventoryHash: string }>
+): PlanStorageMutationReceiptInspection {
+  assertPlanStorageLeaseOwner(lease);
+  if (!input.requestId) {
+    return { state: "unknown", reason: "The original request identity is unavailable." };
+  }
+  const readText = (file: string): string | undefined => {
+    let before: fs.Stats;
+    try { before = fs.lstatSync(file); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined; throw error; }
+    if (before.isSymbolicLink() || !before.isFile()) throw new Error(`Receipt inspection requires a plain metadata file: ${file}`);
+    const text = fs.readFileSync(file, "utf8"), after = fs.lstatSync(file);
+    if (after.isSymbolicLink() || before.dev !== after.dev || before.ino !== after.ino || before.size !== after.size
+      || before.mtimeMs !== after.mtimeMs || before.ctimeMs !== after.ctimeMs) throw new Error(`Receipt metadata changed during inspection: ${file}`);
+    return text;
+  };
+  const transactionDirectories = (root: string): string[] => {
+    let stat: fs.Stats;
+    try { stat = fs.lstatSync(root); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return []; throw error; }
+    if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error(`Receipt transaction root is not a plain directory: ${root}`);
+    return fs.readdirSync(root, { withFileTypes: true }).flatMap(entry => {
+      if (entry.isSymbolicLink() || !entry.isDirectory()) throw new Error(`Receipt transaction entry is not a plain directory: ${path.join(root, entry.name)}`);
+      return [path.join(root, entry.name)];
+    });
+  };
+  try {
+    // The inspector must read a pending package itself. This synchronous scope
+    // suppresses only the recovery fence while reusing the canonical reader.
+    const current = withPackageCommitScope(lease, () => readCanonicalPlanStoragePackageUnderLease(lease));
+    const byPath = new Map(current.files.map(file => [file.path, file.content]));
+    const history = orderedPlanHistoryPaths(byPath.keys()).flatMap(file => byPath.get(file)!.toString("utf8").trimEnd().split(/\r?\n/)
+      .map(line => JSON.parse(line) as { after?: unknown }));
+    for (const record of history.reverse()) {
+      const after = record.after;
+      if (after && typeof after === "object" && !Array.isArray(after)
+        && (after as Record<string, unknown>).storageMutationRequestId === input.requestId) {
+        if (canonicalLogicalPlanId((after as Record<string, unknown>).id) !== lease.planId) throw new Error("The original history result has a different plan identity.");
+        assertPlanStorageLeaseOwner(lease);
+        return { state: "committed", value: structuredClone(after as Record<string, unknown>) };
+      }
+    }
+    const quarantine = path.join(plansRoot(lease.roleDir), "quarantine");
+    const lifecycle = transactionDirectories(path.join(quarantine, "plan-storage-lifecycle-transactions", lease.storageId));
+    const packages = transactionDirectories(path.join(quarantine, "plan-storage-package-transactions", lease.storageId));
+    const repositoryRoot = path.join(quarantine, "plan-storage-transactions", lease.storageId);
+    const repositories = transactionDirectories(repositoryRoot).flatMap(transactionDirectories);
+    let committedCurrent = false;
+    for (const root of lifecycle) {
+      const manifestPath = path.join(root, "manifest.json"), manifestText = readText(manifestPath), terminalText = readText(path.join(root, "receipt.json"));
+      if (manifestText === undefined) { if (terminalText !== undefined) throw new Error(`A lifecycle receipt is missing its original manifest: ${root}`); continue; }
+      const manifest = readLifecycleManifest(manifestPath, lease.roleDir);
+      if (manifest.planId !== lease.planId || manifest.storageId !== lease.storageId || root !== lifecycleTransactionRoot(lease, manifest.transactionId)) throw new Error("Lifecycle receipt inspection scope mismatch.");
+      const { transactionKind, transactionId, planId, fromBucket, toBucket, expectedSourceInventoryHash, finalInventoryHash } = manifest;
+      if (manifest.specHash !== lifecycleSpecHash({ transactionKind, transactionId, planId, fromBucket, toBucket, expectedSourceInventoryHash, finalInventoryHash })) throw new Error("Lifecycle receipt inspection specification mismatch.");
+      if (terminalText === undefined) return { state: "unknown", reason: `Prepared lifecycle transaction remains unresolved: ${path.relative(lease.roleDir, root)}` };
+      const receipt = JSON.parse(terminalText);
+      if (receipt?.schemaVersion !== 1 || receipt.kind !== "plan_storage_lifecycle_transition_receipt"
+        || !["committed", "abandoned"].includes(receipt.status) || receipt.transactionKind !== transactionKind || receipt.transactionId !== transactionId
+        || receipt.planId !== planId || receipt.storageId !== lease.storageId || receipt.fromBucket !== fromBucket || receipt.toBucket !== toBucket
+        || receipt.expectedSourceInventoryHash !== expectedSourceInventoryHash || receipt.finalInventoryHash !== finalInventoryHash) throw new Error("Lifecycle terminal receipt identity mismatch.");
+      if (receipt.status === "committed" && current.bucket === toBucket && current.inventoryHash === finalInventoryHash) committedCurrent = true;
+      if (receipt.status === "abandoned" && !/^[a-f0-9]{64}$/.test(receipt.observedInventoryHash ?? "")) throw new Error("Lifecycle abandonment receipt is incomplete.");
+    }
+    for (const root of packages) {
+      const manifestPath = path.join(root, "manifest.json"), manifestText = readText(manifestPath);
+      if (manifestText === undefined) continue;
+      const terminalText = readText(packageReceiptPath({ roleDir: lease.roleDir, storageId: lease.storageId, transactionId: path.basename(root) }));
+      const identity = validatePlanPackageRecoveryIdentity(lease.roleDir, manifestPath, manifestText, terminalText);
+      if (identity.planId !== lease.planId || identity.storageId !== lease.storageId) throw new Error("Package receipt inspection scope mismatch.");
+      if (!identity.applied && terminalText === undefined) return { state: "unknown", reason: `Prepared package transaction remains unresolved: ${path.relative(lease.roleDir, root)}` };
+      if (identity.applied && current.bucket === identity.bucket && current.inventoryHash === identity.inventoryHash) committedCurrent = true;
+    }
+    const packageReceipts = path.join(quarantine, "plan-storage-package-receipts", lease.storageId);
+    let receiptEntries: fs.Dirent[] = [];
+    try { receiptEntries = fs.readdirSync(packageReceipts, { withFileTypes: true }); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+    for (const entry of receiptEntries) {
+      if (!entry.name.endsWith(".json") || entry.isSymbolicLink() || !entry.isFile()) throw new Error("An original package receipt is not one plain transaction file.");
+      const manifest = path.join(quarantine, "plan-storage-package-transactions", lease.storageId, entry.name.slice(0, -5), "manifest.json");
+      if (readText(manifest) === undefined) throw new Error("An original package receipt is missing its transaction manifest.");
+    }
+    for (const root of repositories) {
+      const manifestPath = path.join(root, "manifest.json"), manifestText = readText(manifestPath), terminalText = readText(path.join(root, "receipt.json"));
+      if (manifestText === undefined) { if (terminalText !== undefined) throw new Error(`A repository receipt is missing its original manifest: ${root}`); continue; }
+      const manifest = readStoredTransaction(manifestPath, lease.roleDir);
+      if (manifest.planId !== lease.planId || manifest.storageId !== lease.storageId || root !== repositoryTransactionRoot(lease.roleDir, lease.storageId, manifest.transactionKind, manifest.transactionId)
+        || manifest.specHash !== transactionSpecHash(manifest.transactionKind, manifest.operations)) throw new Error("Repository receipt inspection scope/specification mismatch.");
+      if (!readCommittedStoredTransaction(manifest, root)) return { state: "unknown", reason: `Prepared repository transaction remains unresolved: ${path.relative(lease.roleDir, root)}` };
+      const receipt = JSON.parse(terminalText!);
+      if (receipt.schemaVersion !== 1 || receipt.kind !== "plan_storage_repository_transaction_receipt" || receipt.status !== "committed"
+        || receipt.transactionId !== manifest.transactionId || receipt.transactionKind !== manifest.transactionKind || receipt.planId !== lease.planId || receipt.storageId !== lease.storageId || receipt.bucket !== manifest.bucket) throw new Error("Repository terminal receipt identity mismatch.");
+    }
+    const plan = JSON.parse(byPath.get("plan.json")!.toString("utf8")) as Record<string, unknown>;
+    if (committedCurrent && plan.storageMutationRequestId === input.requestId) {
+      assertPlanStorageLeaseOwner(lease);
+      return { state: "committed", value: structuredClone(plan) };
+    }
+    if (plan.storageMutationRequestId === input.requestId) return { state: "unknown", reason: "The current plan names the original request but its committed history or matching terminal transaction cannot be verified." };
+    assertPlanStorageLeaseOwner(lease);
+    if (!/^[a-f0-9]{64}$/.test(input.expectedInventoryHash)) return { state: "unknown", reason: "The original expected package inventory is unavailable; absence of a commit cannot be proved." };
+    return current.inventoryHash === input.expectedInventoryHash
+      ? { state: "not_committed", stage: "precommit_staging", inventoryHash: current.inventoryHash }
+      : { state: "unknown", reason: "The canonical plan inventory differs from the original expected revision and no matching committed history was found." };
+  } catch (error) {
+    assertPlanStorageLeaseOwner(lease);
+    return { state: "unknown", reason: error instanceof Error ? error.message : String(error) };
+  }
 }
 
 type StoredPlanStorageLifecycleTransition = {

@@ -7,6 +7,8 @@ import { createHash } from "node:crypto";
 import http from "node:http";
 import { createManagerClient, MAX_SKILL_DOWNLOAD_BYTES, isSkillDownloadTarget, SkillDownloadError } from "../lib/manager-client.mjs";
 import { runManagerCommand } from "../lib/manager-cli.mjs";
+import { runOperationCommand } from "../lib/operation-cli.mjs";
+import { createOperationTools } from "../../rabi-mcp/lib/operation-tools.mjs";
 
 const target = "/api/roles/example/skills/sample/download";
 const meta = { health: { live: true, requiredReady: true, state: "healthy" }, applicationGenerationId: "fixture-generation", managerInstanceId: "fixture-instance" };
@@ -285,7 +287,6 @@ test("parse guards reject unsafe combinations before credentials, stdin or netwo
   ]) await assert.rejects(runManagerCommand([...args, "--agent-type", "dsh", "--id", "fixture-session"], f.config, options));
   for (const segment of ["..", "%2e%2e", "%2f", "%5c", "%00", "%3a", "NUL", "sample."]) assert.equal(isSkillDownloadTarget(`/roles/example/skills/${segment}/download`), false, segment);
   assert.equal(isSkillDownloadTarget("/roles/example/skills/%E6%B5%8B%E8%AF%95/download"), true);
-  await assert.rejects(createManagerClient({ ...settings, fetchImpl: options.fetchImpl }).invoke("GET", target), /explicit download/);
   await noPartial(f);
 });
 
@@ -302,4 +303,60 @@ test("alias succeeds, missing parent is not created and generic JSON API will no
   const result = await createManagerClient({ ...settings, fetchImpl: transport.fetchImpl }).invoke("GET", "/api/unexpected-binary");
   assert.equal(result.ok, false);
   assert.equal(result.body.includes("PK"), false);
+});
+
+
+for (const entry of ['request', 'sdk', 'cli-output', 'mcp-bytes', 'mcp-output']) test(`generic ${entry} reuses the skill archive owner with original bytes and receipt`, async t => {
+  const f = await fixture(t); let downloads = 0; const downloadHeaders = [];
+  const operation = { id: 'fixture.skill.download', contractDigest: 'sha256:' + 'd'.repeat(64), contract: {
+    operationId: 'fixture.skill.download', contractVersion: '1.0.0', method: 'GET', pathTemplate: target,
+    effects: { mode: 'read' }, responses: { '200': { mediaType: 'application/zip' } }
+  } };
+  const client = createManagerClient({ ...settings, fetchImpl: async (url, options) => {
+    const pathname = new URL(url).pathname;
+    if (pathname === '/meta') { assert.equal(options.headers['x-rabiroute-api-contract'], undefined); return Response.json(meta); }
+    if (pathname.startsWith('/api/agent/operations/')) return Response.json({ code: 0, data: { schemaVersion: '2', ...meta,
+      pluginGenerationId: 'plugins', catalogRevision: 1, catalogDigest: 'sha256:' + 'c'.repeat(64), operation } });
+    assert.equal(pathname, target); downloads++; downloadHeaders.push(options.headers);
+    return new Response(bytes, { headers });
+  } });
+  let result;
+  if (entry === 'request') result = await client.request('GET', target, { responseMode: 'bytes' });
+  else if (entry === 'sdk') result = await client.operations.call(operation.id);
+  else if (entry === 'cli-output') result = await runOperationCommand(['call', operation.id, '--output', f.output], client.operations);
+  else {
+    const tools = createOperationTools({ client }); t.after(() => tools.close());
+    result = await tools.call('rabi_call', { operation: operation.id, input: entry === 'mcp-output' ? { outputPath: f.output } : { responseMode: 'bytes' } });
+  }
+  assert.equal(result.ok, true); assert.equal(result.statusCode, 200); assert.equal(downloads, 1);
+  assert.equal(result.sha256, digest); assert.equal(result.sizeBytes, bytes.length);
+  assert.equal(downloadHeaders[0].authorization, `Bearer ${settings.credential}`);
+  assert.equal(downloadHeaders[0]['x-rabiroute-expected-manager-instance-id'], meta.managerInstanceId);
+  if (entry !== 'request') assert.equal(downloadHeaders[0]['x-rabiroute-api-contract'], operation.contractDigest);
+  if (entry.endsWith('output')) {
+    assert.equal(result.outputCommitted, true); assert.equal(result.path, f.output); assert.deepEqual(await fs.readFile(f.output), bytes);
+    await assert.rejects(client.request('GET', target, { outputPath: f.output }), error => error.code === 'OUTPUT_EXISTS');
+    assert.equal(downloads, 1); await noPartial(f, ['config.json', 'chosen.zip']);
+  } else {
+    assert.deepEqual(result.bodyBytes ?? Buffer.from(result.bodyBase64, 'base64'), bytes); await noPartial(f);
+  }
+});
+
+test('local skill downloads preserve header ownership, byte budgets, integrity and cancellation', async () => {
+  const endpointSession = { ensure: async () => ({ managerUrl: 'http://127.0.0.1:1', meta }) };
+  const observed = [];
+  const create = response => createManagerClient({ managerUrl: 'http://127.0.0.1:1', localHost: true, endpointSession, fetchImpl: async (url, options) => {
+    assert.equal(options.headers.authorization, undefined);
+    if (new URL(url).pathname === '/meta') return Response.json(meta);
+    observed.push(options.headers); return response();
+  } });
+  const valid = create(() => new Response(bytes, { headers }));
+  assert.deepEqual((await valid.request('GET', target, { responseMode: 'bytes', headers: { 'x-plugin-view': 'original' } })).bodyBytes, bytes);
+  assert.equal(observed[0]['x-plugin-view'], 'original');
+  await assert.rejects(valid.request('GET', target, { responseMode: 'bytes', maxResponseBytes: bytes.length - 1 }), error => error.code === 'TOO_LARGE');
+  const corrupt = create(() => new Response(bytes, { headers: { ...headers, 'x-rabiroute-content-sha256': '0'.repeat(64) } }));
+  await assert.rejects(corrupt.request('GET', target, { responseMode: 'bytes' }), error => error.code === 'HASH_MISMATCH');
+  const controller = new AbortController();
+  const stalled = create(() => new Response(new ReadableStream({ start() { controller.abort(); } }), { headers }));
+  await assert.rejects(stalled.request('GET', target, { responseMode: 'bytes', signal: controller.signal }), error => error.code === 'CANCELLED');
 });

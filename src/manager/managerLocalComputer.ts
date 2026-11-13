@@ -1,7 +1,7 @@
 import path from "node:path";
 import os from "node:os";
 import { TerminalService } from "../../apps/rabi-agent/lib/terminal-service.mjs";
-import { computerActionDefinition, terminalActionDefinition, normalizeComputerSettings, assertComputerActionEnabled, assertComputerFeatureEnabled, type ComputerSettings, type ComputerExecutionContext } from "../../apps/rabi-agent/lib/computer-control-contract.mjs";
+import { computerActionDefinition, terminalActionDefinition, normalizeComputerSettings, assertComputerActionEnabled, assertComputerFeatureEnabled, type ComputerSettings, type ComputerSettingsDefinition, BOOTSTRAP_COMPUTER_SETTINGS_DEFINITION, type ComputerExecutionContext } from "../../apps/rabi-agent/lib/computer-control-contract.mjs";
 import { ComputerService, type ComputerPresentationTheme } from "../../apps/rabi-agent/lib/computer-service.mjs";
 
 /** Local execution only. The Registry retains output replay; business and delivery owners are unchanged. */
@@ -11,24 +11,35 @@ export class ManagerLocalComputer {
   private readonly pending = new Set<Promise<unknown>>();
   private stopping = false;
   private retirement?: Promise<void>;
-  private readonly settings: () => ComputerSettings;
+  private readonly settings: () => unknown;
+  private readonly definition:()=>ComputerSettingsDefinition;
 
   constructor(options: {
     stateDirectory: string;
     instanceId?: string;
     qtPresentation?: { command: string; args: string[] };
-    getSettings?: () => ComputerSettings;
+    getSettings?: () => unknown;
+    getDefinition?:()=>ComputerSettingsDefinition;
     getPresentationTheme?: () => ComputerPresentationTheme | undefined;
+    restoreDesktopRelease?: NonNullable<ConstructorParameters<typeof ComputerService>[0]>["restoreDesktopRelease"];
+    commitDesktopRelease?: NonNullable<ConstructorParameters<typeof ComputerService>[0]>["commitDesktopRelease"];
+    resolveDesktopRelease?: NonNullable<ConstructorParameters<typeof ComputerService>[0]>["resolveDesktopRelease"];
     computerServiceOptions?: Pick<NonNullable<ConstructorParameters<typeof ComputerService>[0]>,"nativeFactory"|"receiptRoot">;
     emit(event: Record<string, unknown>): void;
     defaultCwd?: string;
     timeout?: (key: string, fallback: number) => number;
   }) {
     this.settings = options.getSettings ?? (() => normalizeComputerSettings());
+    this.definition=options.getDefinition??(()=>BOOTSTRAP_COMPUTER_SETTINGS_DEFINITION);
     this.terminal = new TerminalService({ emit: options.emit, defaultCwd: options.defaultCwd ?? os.homedir(),
       historyDirectory: path.join(options.stateDirectory, "terminal-history"), timeout: options.timeout });
-    this.computer = new ComputerService({ ...options.computerServiceOptions, getPresentationTheme:options.getPresentationTheme, onControlChange: () => options.emit({type:"computerEvent"}), instanceId: options.instanceId, qtPresentation: options.qtPresentation, getSettings: this.settings, uploadHistoryRoot: path.join(options.stateDirectory, "upload-history"), timeout: options.timeout });
+    this.computer = new ComputerService({ ...options.computerServiceOptions, resolveDesktopRelease: options.resolveDesktopRelease, restoreDesktopRelease: options.restoreDesktopRelease, commitDesktopRelease: options.commitDesktopRelease, getPresentationTheme:options.getPresentationTheme, onControlChange: () => options.emit({type:"computerEvent"}), instanceId: options.instanceId, qtPresentation: options.qtPresentation, getDefinition:this.definition, getSettings: this.settings, uploadHistoryRoot: path.join(options.stateDirectory, "upload-history"), timeout: options.timeout });
   }
+
+  desktopReleaseStatus() { return this.computer.desktopReleaseStatus(); }
+  prepareDesktopRelease(reference: unknown) { return this.computer.prepareDesktopRelease(reference); }
+  activateDesktopRelease(prepared: unknown, expectedRevision: number) { return this.computer.activateDesktopRelease(prepared, expectedRevision); }
+  discardDesktopRelease(prepared: unknown) { return this.computer.discardDesktopRelease(prepared); }
 
   get terminalShells(): string[] { return [...this.terminal.shells]; }
   get computerCapabilities(): string[] { return [...this.computer.capabilities]; }
@@ -38,8 +49,8 @@ export class ManagerLocalComputer {
     const pending = Promise.resolve().then(() => {
       if (this.stopping) throw new Error("The host computer is stopping.");
       guard();
-      if (operation === "computer" && !computerActionDefinition(String(input.action))?.receipt && !computerActionDefinition(String(input.action))?.recovery) assertComputerActionEnabled(this.settings(),String(input.action));
-      if (operation === "terminal" && !terminalActionDefinition(String(input.action))?.recovery) assertComputerFeatureEnabled(this.settings(),"terminal");
+      if (operation === "computer" && !computerActionDefinition(String(input.action))?.receipt && !computerActionDefinition(String(input.action))?.recovery) this.definition().assertAction(this.settings(),String(input.action));
+      if (operation === "terminal" && !terminalActionDefinition(String(input.action))?.recovery) this.definition().assertFeature(this.settings(),"terminal");
       return operation === "terminal" ? this.terminal.execute(input) : this.computer.execute(input, { ...execution, sourceId: execution.sourceId ?? "manager", getSettings: this.settings, guard });
     }).then(result => { guard(); return result; });
     this.pending.add(pending);

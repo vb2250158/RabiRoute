@@ -4,6 +4,7 @@ export function operationEffectMode(contract, input) {
   const selector = effects?.request;
   let value = input;
   if (selector && Array.isArray(selector.bodyPath)) {
+    if (value instanceof ArrayBuffer || ArrayBuffer.isView(value)) value = new TextDecoder().decode(value);
     if (typeof value === 'string') { try { value = JSON.parse(value); } catch { value = undefined; } }
     for (const key of selector.bodyPath) {
       value = value && typeof value === 'object' && Object.hasOwn(value, key) ? value[key] : undefined;
@@ -24,7 +25,10 @@ export function markOperationEffect(options, contract, method) {
   if (contract?.effects?.request && options.body && typeof options.body === 'object') {
     options = { ...options, body: JSON.stringify(options.body) };
   }
-  selectedEffects.set(options, operationIsReadOnly(contract, method, options.body ?? options.bodyText));
+  if (contract?.effects?.request && options.bodyBytes !== undefined) {
+    options = { ...options, bodyBytes: options.bodyBytes instanceof ArrayBuffer ? options.bodyBytes.slice(0) : Uint8Array.from(options.bodyBytes) };
+  }
+  selectedEffects.set(options, operationIsReadOnly(contract, method, options.body ?? options.bodyText ?? options.bodyBytes));
   return options;
 }
 export function selectedOperationReadOnly(options) { return selectedEffects.get(options); }

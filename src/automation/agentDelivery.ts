@@ -1,10 +1,11 @@
-import { normalizeAgentDeliveryTarget, resolveAgentDeliveryExecutor, validateAgentDeliveryTarget, type AgentDeliveryTarget, type AgentRecipientDefinition, type AgentSessionDestination } from "../shared/agentDeliveryTarget.js";
+import { normalizeAgentDeliveryTarget, resolveAgentDeliveryExecutor, validateAgentDeliveryTarget, type AgentDeliveryTarget, type AgentRecipientDefinition, type AgentSessionDestination, type AgentDsBotDestination } from "../shared/agentDeliveryTarget.js";
 
 export type AgentDeliveryHandlers<T> = {
   primary: () => Promise<T>;
   plan_secretary: () => Promise<T>;
   message_pool: () => Promise<T>;
   memory_consolidation: () => Promise<T>;
+  ds_bot?: (target: AgentDsBotDestination) => Promise<T>;
   session: (target: AgentSessionDestination) => Promise<T>;
 };
 
@@ -18,7 +19,11 @@ export async function executeAgentDelivery<T>(
   const target = normalizeAgentDeliveryTarget(value);
   validateAgentDeliveryTarget(target);
   const executor = resolveAgentDeliveryExecutor(target, recipients);
+  if (target.kind === "ds_bot") {
+    if (!handlers.ds_bot) throw new Error("DSBot delivery is unavailable; the selected target was not replaced.");
+    return handlers.ds_bot(structuredClone(target));
+  }
   if (target.kind === "session") return handlers.session(structuredClone(target));
-  if (executor === "session") throw new Error("Recipient does not resolve to a managed Agent.");
+  if (executor === "session" || executor === "ds_bot") throw new Error("Recipient does not resolve to a managed Agent.");
   return handlers[executor]();
 }

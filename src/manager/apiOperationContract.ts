@@ -88,7 +88,7 @@ export type ApiOperationResult = Readonly<{
   status: number;
   /** Trusted owner evidence about its native mutation dispatch, never copied from request data.
    * Used only to preserve failure metadata across an authority fence; it cannot disclose business data. */
-  mutationOutcome?: "not_started" | "unknown";
+  mutationOutcome?: "not_started" | "not_committed" | "unknown";
   body?: unknown;
   headers?: Readonly<Record<string, string>>;
   stream?: ApiOperationStream;
@@ -161,7 +161,7 @@ export type ManagerApiOperationsService = Readonly<{
 
 export class ApiContractError extends Error {
   constructor(readonly status: number, readonly code: string, readonly field: string, readonly operationId: string, readonly uncertain = false,
-    readonly mutationOutcome?: "not_started" | "unknown", readonly reason?: string) {
+    readonly mutationOutcome?: "not_started" | "not_committed" | "unknown", readonly reason?: string) {
     super(`${code}: ${field}`);
   }
 }
@@ -172,12 +172,12 @@ const frameworkErrorSchema = {
   required: ["code", "errorCode", "field", "operationId", "contractDigest", "repair", "retryable"],
   properties: { code: { const: -1 }, errorCode: { type: "string" }, field: { type: "string" }, operationId: { type: "string" },
     contractDigest: { type: "string", pattern: "^sha256:[a-f0-9]{64}$" }, repair: { type: "string" }, retryable: { const: false }, uncertain: { type: "boolean" },
-    mutationOutcome: { enum: ["not_started", "unknown"] } }
+    mutationOutcome: { enum: ["not_started", "not_committed", "unknown"] } }
 } as const;
 
 export function apiContractFailure(operation: CompiledApiContract, error: unknown, readOnly = operationIsReadOnly(operation.contract)): ApiOperationResult {
   const failure = error instanceof ApiContractError ? error : new ApiContractError(500, "API_OPERATION_FAILED", "operation", operation.contract.operationId);
-  const uncertain = !readOnly && (failure.uncertain || failure.status >= 500);
+  const uncertain = failure.mutationOutcome === "not_committed" ? false : !readOnly && (failure.uncertain || failure.status >= 500);
   const discovery = `Read GET /api/agent/help?operationId=${encodeURIComponent(operation.contract.operationId)}`;
   const repair = failure.status === 403
     ? "The original connection cannot access this operation. Restore its access without changing the target or request. "

@@ -116,6 +116,8 @@ export function collectScheduledAutomationTasks(routes: RouteProfile[]): Schedul
   for (const route of routes) {
     if (route.enabled === false || route.agentRoleDeviceId) continue;
     for (const rule of route.automationRules ?? []) {
+      // Explicit DSBot destinations belong to the Manager's independent role scheduler.
+      if (rule.action.type === "deliver_agent" && rule.action.target?.kind === "ds_bot") continue;
       if (rule.sourceRouteIds?.length && !rule.sourceRouteIds.includes(process.env.GATEWAY_ID || route.id)) continue;
       if (rule.enabled === false || rule.trigger.type !== "schedule" || rule.trigger.schedule.enabled === false) continue;
       tasks.push({ route, rule: rule as ScheduledAutomationTask["rule"] });

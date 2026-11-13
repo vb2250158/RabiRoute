@@ -73,3 +73,16 @@ test("chunked screenshot frames and a following control reply keep their origina
   assert.equal(result.frameId, "fixture-frame"); assert.equal(result.data.length, data.length);
   await client.close();
 });
+
+
+test("late presentation cannot start Qt after native retirement and final Qt close is joined", async()=>{
+  let sent;const child=childFixture(line=>{sent=JSON.parse(line);setImmediate(()=>child.stdout.write(JSON.stringify({id:sent.id,result:{protocolVersion:2}})+'\n'));});
+  child.stdin.removeAllListeners('finish');
+  const client=new NativeComputerClient({launch:()=>child});let updates=0,closeCalls=0,release;
+  const finalQtClose=new Promise(resolve=>{release=resolve;});
+  client.qt={update:async()=>{updates++;},close:async()=>{closeCalls++;if(closeCalls>1)await finalQtClose;}};client.qtAvailable=true;
+  await client.request('capabilities');let ended=false;const closing=client.close().then(()=>{ended=true;});
+  child.stdout.write(JSON.stringify({event:'presentation',data:{revision:1}})+'\n');
+  child.emit('close',0);await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(updates,0);assert.equal(ended,false);release();await closing;assert.equal(ended,true);
+});

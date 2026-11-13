@@ -288,7 +288,7 @@ export class WebPatchService {
     if (!revision) return modules;
     const manifest = await this.compatible(revision);
     return modules.map(module => {
-      if (!manifest.modules.some(entry => entry.pluginId === module.pluginId && entry.version === module.version)) return module;
+      if (module.resourceMode === "package" || !manifest.modules.some(entry => entry.pluginId === module.pluginId && entry.version === module.version)) return module;
       return { ...module, rev: revision, entryPath: "web/client.mjs" };
     });
   }
@@ -296,7 +296,7 @@ export class WebPatchService {
   async module(modules: readonly WebPluginModule[], id: string, revision: string, filename: string) {
     if (filename !== "web/client.mjs") return undefined;
     const module = modules.find(entry => entry.id === id);
-    if (!module) return undefined;
+    if (!module || module.resourceMode === "package") return undefined;
     let manifest: WebPatchManifest;
     try { manifest = await this.compatible(revision); }
     catch { return undefined; }

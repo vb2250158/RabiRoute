@@ -6,6 +6,16 @@ export type { ApiMethod, ApiSchema, ApiBodyContract, ApiResponseContract, ApiOpe
 export type PluginIdentity = Readonly<{ applicationGenerationId: string; managerInstanceId: string; activationId: string; instanceId: string; pluginId: string; version: string; revision: string; host: PluginHost }>;
 export type PluginContribution = Readonly<{ kind: string; id: string; value: unknown }>;
 export type PluginDisposer = () => void | Promise<void>;
+/** Internal resource upgrade service. The original release store owns import verification and selection CAS. */
+export type DesktopNativePrepared = unknown;
+export type DesktopNativeStatus = Readonly<{ revision: number; release: unknown; state: string }>;
+export type DesktopNativeService = Readonly<{
+  status(): Promise<DesktopNativeStatus>;
+  prepare(releaseDigest: string): Promise<DesktopNativePrepared>;
+  activate(prepared: DesktopNativePrepared, expectedRevision: number): Promise<unknown>;
+  discard(prepared: DesktopNativePrepared): Promise<void>;
+}>;
+
 export type PluginContext = Readonly<{
   identity: PluginIdentity;
   config: unknown;

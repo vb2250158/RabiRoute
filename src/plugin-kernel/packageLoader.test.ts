@@ -21,6 +21,15 @@ async function packageFixture(): Promise<{ root: string; runtime: string }> {
   return { root: source, runtime };
 }
 
+test('revision-only resource cache preserves full identity, rebuilds missing cache, and rejects corruption',async t=>{
+ const fixture=await packageFixture();t.after(()=>fs.rm(path.dirname(fixture.root),{recursive:true,force:true}));
+ const first=await loadPluginPackage(fixture.root,fixture.runtime,'manager',{layout:'revision'});
+ assert.equal(path.relative(fixture.runtime,first.runtimeRoot),first.revision);assert.match(first.revision,/^[a-f0-9]{64}$/);
+ assert.equal(path.dirname(first.runtimeRoot),path.resolve(fixture.runtime));
+ await fs.rm(first.runtimeRoot,{recursive:true,force:true});const rebuilt=await loadPluginPackage(fixture.root,fixture.runtime,'manager',{layout:'revision'});assert.equal(rebuilt.revision,first.revision);
+ await fs.writeFile(path.join(rebuilt.runtimeRoot,'manager.mjs'),'corrupt cached resource');await assert.rejects(loadPluginPackage(fixture.root,fixture.runtime,'manager',{layout:'revision'}),/integrity/);
+});
+
 test("loadPluginPackage resolves an immutable revision copy without importing plugin code", async t => {
   const fixture = await packageFixture();
   t.after(() => fs.rm(path.dirname(fixture.root), { recursive: true, force: true }));

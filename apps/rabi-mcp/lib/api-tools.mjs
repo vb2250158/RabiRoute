@@ -76,7 +76,8 @@ export function createApiTools({ client, progressive = false, allowedRoles, allo
   let closed = false;
   const policy = (entry, options) => {
     const contract = entry.contract, method = options.method ?? contract.method;
-    if (!allowWrites && !operationIsReadOnly(contract, method)) throw new KnowledgePolicyError('Call disabled by RABI_MCP_ALLOW_WRITES=false in the MCP launch environment; edit that setting to allow state-changing operations.');
+    const effectBody = options.body ?? options.bodyText ?? options.bodyBytes;
+    if (!allowWrites && !operationIsReadOnly(contract, method, effectBody)) throw new KnowledgePolicyError('Call disabled by RABI_MCP_ALLOW_WRITES=false in the MCP launch environment; edit that setting to allow state-changing operations.');
     if (roles) {
       const names = parseApiPathTemplate(contract.pathTemplate, contract.request?.pathTails, contract.request?.pathRemainder).names;
       const targets = roleTargets(options.path, { properties: Object.fromEntries(names.map(name => [name, true])) });

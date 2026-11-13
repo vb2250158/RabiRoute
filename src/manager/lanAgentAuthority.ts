@@ -4,7 +4,7 @@ import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { atomicWriteFileSync, withFileLockSync } from "../shared/filePersistence.js";
 import { recordDataMutationAudit, type DataMutationAuditRecord } from "../observability/dataMutationAudit.js";
 
-import { projectComputerFeaturePolicy, normalizeComputerSettings, patchComputerSettings, type ComputerSettings, type ComputerFeature, type ComputerFeaturePolicy } from "../../apps/rabi-agent/lib/computer-control-contract.mjs";
+import {BOOTSTRAP_COMPUTER_SETTINGS_DEFINITION, type ComputerSettingsDefinition, type ComputerSettingsRead, type ComputerFeature, type ComputerFeaturePolicy} from "../../apps/rabi-agent/lib/computer-control-contract.mjs";
 
 export type LanAgentIdentity = { nodeId: string };
 export type LanAgentCredential = LanAgentIdentity & { token: string };
@@ -12,7 +12,7 @@ export type LanAgentCredentialDiagnostic = Readonly<{ index: number; nodeId?: st
 export type LanAgentAuthoritySnapshot = { revision: string; nodes: Array<LanAgentIdentity & { enabled: boolean }>; diagnostics: readonly LanAgentCredentialDiagnostic[] };
 export type LanAgentConnectionLease = Readonly<{ nodeId: string; incarnation: string }>;
 export type LanAgentBootstrapTicket = { ticket: string; expiresAt: number };
-export type LanAgentAuthorityOptions = { statePath: string; now?: () => number; bootstrapTtlMs?: number; maxBootstrapTickets?: number };
+export type LanAgentAuthorityOptions = { statePath: string; now?: () => number; bootstrapTtlMs?: number; maxBootstrapTickets?: number; resolveComputerDefinition?:()=>ComputerSettingsDefinition|undefined };
 type NodeCredential = { nodeId: string; secretHash: string; connectionIncarnation: string; enabled?: boolean; computerSettings?: unknown };
 type AuthorityState = { schemaVersion: 2; nodes: NodeCredential[] };
 type CredentialSource = { nodes: unknown[]; validIds: Set<string>; diagnostics: LanAgentCredentialDiagnostic[] };
@@ -109,9 +109,13 @@ export class LanAgentAuthority {
   private readonly maxBootstrapTickets: number;
   private readonly tickets = new Map<string, number>();
   private readonly computerFeaturePolicyCache = new Map<string,Map<ComputerFeature,ComputerFeaturePolicy>>();
-  private readonly computerSettingsCache = new Map<string, { settings: ComputerSettings; revision: string }>();
+  private readonly computerSettingsCache = new Map<string, ComputerSettingsRead>();
+  private readonly computerExecutionSettingsCache=new Map<string,{value:unknown}>();
+  private currentComputerDefinition=BOOTSTRAP_COMPUTER_SETTINGS_DEFINITION;
+  private readonly resolveComputerDefinition?:()=>ComputerSettingsDefinition|undefined;
 
   constructor(options: LanAgentAuthorityOptions) {
+    this.resolveComputerDefinition=options.resolveComputerDefinition;
     this.statePath = path.resolve(options.statePath);
     this.now = options.now ?? Date.now;
     this.bootstrapTtlMs = options.bootstrapTtlMs ?? 30 * 60_000;
@@ -228,36 +232,56 @@ export class LanAgentAuthority {
     });
   }
 
-  getComputerFeaturePolicy(nodeId:string,feature:ComputerFeature,refresh=false):ComputerFeaturePolicy {
-    if(refresh)this.computerFeaturePolicyCache.get(nodeId)?.delete(feature);
+    getComputerFeaturePolicy(nodeId:string,feature:ComputerFeature,refresh=false):ComputerFeaturePolicy {
+    const definition=this.getComputerSettingsDefinition();
+    if(refresh)this.computerFeaturePolicyCache.delete(nodeId);
     const cached=this.computerFeaturePolicyCache.get(nodeId)?.get(feature);if(cached)return cached;
     const node=this.readState().nodes.find(item=>item.nodeId===nodeId);if(!node)throw new Error("Computer is not enrolled.");
-    const policy=projectComputerFeaturePolicy(node.computerSettings,feature,node.enabled===false?false:undefined);
+    const policy=definition.projectFeaturePolicy(node.computerSettings,feature,node.enabled===false?false:undefined);
     const policies=this.computerFeaturePolicyCache.get(nodeId)??new Map<ComputerFeature,ComputerFeaturePolicy>();policies.set(feature,policy);this.computerFeaturePolicyCache.set(nodeId,policies);return policy;
   }
 
-  getComputerSettings(nodeId: string, refresh = false): { settings: ComputerSettings; revision: string } {
-    if (refresh) {this.computerSettingsCache.delete(nodeId);this.computerFeaturePolicyCache.delete(nodeId);}
-    const cached = this.computerSettingsCache.get(nodeId);
-    if (!refresh && cached) return cached;
+  getComputerSettingsDefinition():ComputerSettingsDefinition {
+    const value=this.resolveComputerDefinition?.()??this.currentComputerDefinition;
+    if(value!==this.currentComputerDefinition){this.currentComputerDefinition=value;this.computerSettingsCache.clear();this.computerExecutionSettingsCache.clear();this.computerFeaturePolicyCache.clear();}
+    return value;
+  }
+  private computerSettingsSnapshot(node:NodeCredential,definition:ComputerSettingsDefinition):ComputerSettingsRead {
+    const rawSettings=node.computerSettings,settings=definition.materialize(rawSettings,node.enabled===false?false:undefined);
+    const revision='"sha256:'+hashSecret(JSON.stringify([definition.digest,node.enabled===false,rawSettings===undefined?{absent:true}:{present:true,value:rawSettings}]))+'"';
+    return {settings,rawSettings,revision,schema:definition.schema,defaults:definition.defaults,definitionDigest:definition.digest,diagnostics:definition.diagnose(settings)};
+  }
+  getComputerExecutionSettings(nodeId:string):unknown {
+    const definition=this.getComputerSettingsDefinition(),cached=this.computerExecutionSettingsCache.get(nodeId);if(cached)return cached.value;
+    const value=definition.materialize(this.getComputerSettingsRaw(nodeId));this.computerExecutionSettingsCache.set(nodeId,{value});return value;
+  }
+  getComputerSettingsRaw(nodeId: string): unknown {
     const node = this.readState().nodes.find(item => item.nodeId === nodeId);
     if (!node) throw new Error("Computer is not enrolled.");
-    const settings = normalizeComputerSettings(node.computerSettings, node.enabled === false ? false : undefined);
-    const value = { settings, revision: `"sha256:${hashSecret(JSON.stringify(settings))}"` };
-    this.computerSettingsCache.set(nodeId, value); return value;
+    const value = node.computerSettings;
+    return node.enabled === false && (value === undefined || isRecord(value)) ? { ...(value ?? {}), enabled: false } : value;
   }
 
-  patchComputerSettings(nodeId: string, patch: unknown, expectedRevision: string): { settings: ComputerSettings; revision: string } {
-    this.mutate("computer-settings", state => {
-      assertWritableNode(state, nodeId);
-      const node = state.nodes.find(item => item.nodeId === nodeId);
-      if (!node) throw new Error("Computer is not enrolled.");
-      const previous = normalizeComputerSettings(node.computerSettings, node.enabled === false ? false : undefined);
-      if (expectedRevision !== `"sha256:${hashSecret(JSON.stringify(previous))}"`) throw Object.assign(new Error("Computer settings revision conflict. Read the original computer-settings before merging."), { code: "COMPUTER_SETTINGS_CONFLICT" });
-      const next = patchComputerSettings(previous, patch);
-      node.computerSettings = next;
-      if (next.enabled) delete node.enabled; else node.enabled = false;
-      return JSON.stringify(previous) !== JSON.stringify(next);
+    getComputerSettings(nodeId: string, refresh = false): ComputerSettingsRead {
+    const definition=this.getComputerSettingsDefinition();
+    if(refresh){this.computerSettingsCache.delete(nodeId);this.computerExecutionSettingsCache.delete(nodeId);this.computerFeaturePolicyCache.delete(nodeId);}
+    const cached=this.computerSettingsCache.get(nodeId);if(cached)return cached;
+    const node=this.readState().nodes.find(item=>item.nodeId===nodeId);if(!node)throw new Error("Computer is not enrolled.");
+    const value=this.computerSettingsSnapshot(node,definition);this.computerSettingsCache.set(nodeId,value);return value;
+  }
+
+    patchComputerSettings(nodeId: string, patch: unknown, expectedRevision: string, restorePaths:readonly string[]=[]): ComputerSettingsRead {
+    this.mutate("computer-settings",state=>{
+      assertWritableNode(state,nodeId);
+      const node=state.nodes.find(item=>item.nodeId===nodeId);if(!node)throw new Error("Computer is not enrolled.");
+      const definition=this.getComputerSettingsDefinition(),previous=this.computerSettingsSnapshot(node,definition);
+      if(expectedRevision!==previous.revision)throw Object.assign(new Error("Computer settings revision conflict. Read the original computer-settings before merging."),{code:"COMPUTER_SETTINGS_CONFLICT"});
+      const next=definition.patchRaw(node.computerSettings,patch,restorePaths);
+      const changed=JSON.stringify(next)!==JSON.stringify(node.computerSettings);
+      node.computerSettings=next;
+      if(patch&&typeof patch==="object"&&Object.hasOwn(patch,"enabled")){if((patch as Record<string,unknown>).enabled===false)node.enabled=false;else delete node.enabled;}
+      if(restorePaths.includes("enabled"))delete node.enabled;
+      return changed||restorePaths.includes("enabled");
     });
     return this.getComputerSettings(nodeId);
   }
@@ -291,6 +315,7 @@ export class LanAgentAuthority {
 
   private mutate(action: string, update: (state: AuthorityState) => boolean): void {
     this.computerSettingsCache.clear();
+    this.computerExecutionSettingsCache.clear();
     this.computerFeaturePolicyCache.clear();
     this.audit(action, "started");
     try {

@@ -7,6 +7,24 @@ import type { ApiOperationContract, ApiOperationDefinition, ApiOperationInput, A
 const string = { type: "string" };
 const roleId = { type: "string", minLength: 1, pattern: "^[\\p{L}\\p{N}_-]+$" };
 const configuration = { type: "object", properties: Object.fromEntries(ROLE_CONFIGURATION_KEYS.map(key => [key, true])) };
+const configurationInput = { type: "object", properties: {
+  ...configuration.properties,
+  automationRules: { if: { type: "array" }, then: { type: "array", items: {
+    if: { type: "object" }, then: { type: "object", properties: {
+      trigger: {
+        if: { type: "object", required: ["type"], properties: { type: { const: "schedule" } } },
+        then: { type: "object", properties: {
+          schedule: {
+            if: { type: "object", required: ["type"], properties: { type: { const: "daily_time" } } },
+            then: { type: "object", properties: {
+              timeOfDays: { type: "array", minItems: 1, items: string, description: "Daily local times, for example [10:00, 14:00, 18:00], on one rule; takes precedence over legacy timeOfDay." }
+            } }
+          }
+        } }
+      }
+    } }
+  } } }
+}, additionalProperties: true };
 const roleDetail = { type: "object", required: ["roleId", "schemaVersion", "revision", "archivedAt", "config", "runningWork", "rolePath", "roleDir", "routes"],
   properties: { roleId, schemaVersion: { const: 1 }, revision: { type: "string", pattern: "^[a-f0-9]{64}$" }, archivedAt: { type: ["string", "null"] },
     config: configuration, runningWork: { type: "integer", minimum: 0 }, rolePath: string, roleDir: string,
@@ -85,7 +103,7 @@ export function createRoleConfigurationOperations(context: RoleConfigurationCont
         headers: nativeCommand ? { type: "object", required: ["idempotency-key"], properties: { "idempotency-key": { type: "string", pattern: "^[A-Za-z0-9:._-]{1,128}$" } } } : { type: "object" },
         body: !mutation ? { kind: "none", allowIgnoredBody: true } : { kind: "json", maxBytes: action === "create" ? 64 * 1024 : 2 * 1024 * 1024,
           allowAnyContentType: true, schema: { type: "object", required: action === "create" ? ["roleId", "title"] : ["expectedRevision"], properties: {
-            expectedRevision: string, roleId: string, title: string, confirmationId: string, config: configuration
+            expectedRevision: string, roleId: string, title: string, confirmationId: string, config: action === "config" ? configurationInput : configuration
           } } }
       },
       responses: { [action === "create" ? "201" : "200"]: { mediaType: "application/json; charset=utf-8", schema: {

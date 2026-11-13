@@ -1,3 +1,7 @@
+import type { PlanUpdateExecutorDescriptor, PlanUpdatePreparation } from "./planUpdateExecutor.js";
+import { loadPlanUpdatePreparation } from "./planUpdateExecutorRuntime.js";
+import { parsePlanUpdateExecutorPin } from "./planUpdateExecutor.js";
+import { resolveStorageMutationExecutor } from "./managerStorageMutationExecutor.js";
 import { getTimeoutMs } from "../shared/timeoutSettings.js";
 import {
   listPlanFeedback,
@@ -24,6 +28,7 @@ import {
   markMemoryConsolidationRunDelivered,
   touchRecentMemory,
   updatePlan,
+  updatePlanPrepared,
   updateRecentMemory
 } from "../roleKnowledge.js";
 import path from "node:path";
@@ -57,6 +62,7 @@ import {
   storageMutationRevision,
   type StorageMutationStamp
 } from "../shared/storageRevision.js";
+import { reconcileManagerStorageMutationReceipt } from "./managerStorageMutationReceipt.js";
 import { executeDurableDelivery, readDurableDeliveryReceipt } from "./durableDeliveryIdempotency.js";
 import {
   MANAGER_STORAGE_MUTATION_PROTOCOL_VERSION,
@@ -279,7 +285,8 @@ function deterministicDomainRejection(error: unknown): string | undefined {
 async function executeDomainMutation(
   validated: ManagerStorageMutationRequest,
   roleDir: string,
-  markBatchWriteStarted: () => void
+  markBatchWriteStarted: () => void,
+  preparation?: PlanUpdatePreparation
 ): Promise<unknown> {
   const planId = validated.fence.planId;
   const mutation: StorageMutationStamp = Object.freeze({
@@ -295,7 +302,9 @@ async function executeDomainMutation(
     case "plan_create":
       return createPlan(roleDir, { ...validated.task.input, id: planId }, mutation);
     case "plan_update":
-      return updatePlan(roleDir, planId!, validated.task.patch, validated.expectedRevision ?? undefined, mutation);
+      return preparation
+        ? updatePlanPrepared(roleDir, planId!, validated.task.patch, preparation, validated.expectedRevision ?? undefined, mutation)
+        : updatePlan(roleDir, planId!, validated.task.patch, validated.expectedRevision ?? undefined, mutation);
     case "plan_secretary_binding_update":
       return updatePlan(
         roleDir,
@@ -547,17 +556,42 @@ async function recoverDomainMutation(
   };
 }
 
-async function execute(request: ManagerStorageMutationRequest, identity: ManagerStorageMutationChildIdentity): Promise<unknown> {
+async function execute(
+  request: ManagerStorageMutationRequest,
+  identity: ManagerStorageMutationChildIdentity,
+  selectExecutorPin: (pin: unknown) => void
+): Promise<unknown> {
   const validated = validateManagerStorageMutationRequest(request, identity);
   await acquireStorageMutationCommitAdmission(validated, process);
   const roleDir = storageMutationRoleDirectory(identity.rolesRoot, validated.fence.roleId);
+  if (validated.mode === "receipt_only") return reconcileManagerStorageMutationReceipt(validated,roleDir);
   const receiptRoot = path.join(roleDir, "runtime");
   const receiptNamespace = MANAGER_STORAGE_MUTATION_RECEIPT_NAMESPACE;
   // A stale caller is rejected before reserving an idempotency receipt. Once a
   // receipt enters sending, every failure is conservatively non-retryable until
   // the domain WAL/startup recovery proves the commit state.
-  if (!readDurableDeliveryReceipt(receiptRoot, receiptNamespace, validated.requestId)) {
+  const originalReceipt = readDurableDeliveryReceipt(receiptRoot, receiptNamespace, validated.requestId);
+  const originalAudit = originalReceipt?.audit as Record<string, unknown> | undefined;
+  const hasOriginalPin = Boolean(originalAudit && Object.hasOwn(originalAudit, "planUpdateExecutor"));
+  const executorPin = originalReceipt
+    ? (hasOriginalPin ? originalAudit!.planUpdateExecutor : undefined)
+    : validated.planUpdateExecutor?.pin;
+  if (validated.task.type === "plan_update") selectExecutorPin(executorPin);
+  let preparation: Promise<PlanUpdatePreparation> | undefined;
+  const getPreparation = (): Promise<PlanUpdatePreparation> => preparation ??= (async () => {
+    if (validated.task.type !== "plan_update") return loadPlanUpdatePreparation();
+    let executor: PlanUpdateExecutorDescriptor | undefined;
+    if (hasOriginalPin) {
+      executor = await resolveStorageMutationExecutor(validated, parsePlanUpdateExecutorPin(executorPin));
+    } else if (!originalReceipt) executor = validated.planUpdateExecutor;
+    return loadPlanUpdatePreparation(executor);
+  })();
+  if (!originalReceipt) {
     assertExpectedRevision(validated, roleDir);
+    // A current-provider admission failure has not reserved a receipt or started domain work.
+    if (validated.task.type === "plan_update" && validated.planUpdateExecutorUnavailable) {
+      throw new Error("STORAGE_MUTATION_EXECUTOR_UNAVAILABLE: The selected Persona plan executor is temporarily unavailable.");
+    }
   }
   const outcome = await executeDurableDelivery({
     rootDir: receiptRoot,
@@ -570,12 +604,15 @@ async function execute(request: ManagerStorageMutationRequest, identity: Manager
       ...(validated.actor ? { actor: validated.actor } : {})
     },
     audit: {
-      expectedRevision: validated.expectedRevision
+      expectedRevision: validated.expectedRevision,
+      ...(validated.task.type === "plan_update" && executorPin !== undefined
+        ? { planUpdateExecutor: executorPin } : {})
     },
     deliver: async (): Promise<DomainDeliveryResult> => {
       let batchWriteStarted = false;
       try {
-        return committedEnvelope(await executeDomainMutation(validated, roleDir, () => { batchWriteStarted = true; }));
+        const selected = validated.task.type === "plan_update" ? await getPreparation() : undefined;
+        return committedEnvelope(await executeDomainMutation(validated, roleDir, () => { batchWriteStarted = true; }, selected));
       } catch (error) {
         if (batchWriteStarted) throw error;
         const rejection = deterministicDomainRejection(error);
@@ -583,6 +620,7 @@ async function execute(request: ManagerStorageMutationRequest, identity: Manager
         throw error;
       }
     },
+    // Prepared WAL already freezes its payload. Only a proven retry calls the original package's preparation.
     recover: () => recoverDomainMutation(validated, roleDir),
     recoverExistingUncertain: true,
     retryableRejection: result => result.domain === "rejected"
@@ -632,13 +670,16 @@ process.on("message", (raw: unknown) => {
     return;
   }
   running = true;
-  void execute(request, identity).then(value => {
+  let selectedExecutorPin: unknown;
+  void execute(request, identity, pin => { selectedExecutorPin = pin; }).then(value => {
     send({
       protocolVersion: MANAGER_STORAGE_MUTATION_PROTOCOL_VERSION,
       requestId: request.requestId,
       fence: request.fence,
       admissionNonce: request.admissionNonce,
       ok: true,
+      ...(request.task?.type === "plan_update" && request.mode !== "receipt_only"
+        ? { planUpdateExecutorPin: selectedExecutorPin } : {}),
       value: serializable(value)
     });
   }, error => {

@@ -1,5 +1,8 @@
 import { h, ref, type Component } from "vue";
 import { webReleaseQuery } from "./webRelease";
+import { checkWebRuntime } from "./webRuntime";
+import { managerResourceUrl } from "./managerApi";
+import type { WebRuntimeImports } from "../../plugins/contracts/plugin-sdk/web-runtime.mjs";
 import {
   beginTrustedWebPageReplacement,
   activeTrustedWebPage,
@@ -31,6 +34,7 @@ type WebPluginModuleDescriptor = Readonly<{
   version: string;
   rev: string;
   entryPath: string;
+  resourceMode?: "package";
   instances: readonly WebPluginModuleInstanceDescriptor[];
 }>;
 
@@ -80,6 +84,7 @@ type ModuleSlot = {
   processed: number;
   work?: Promise<void>;
   failure?: Readonly<{ error: unknown }>;
+  retiringPeers?: readonly { id: string; slot: ModuleSlot; owner?: ModuleOwner }[];
 };
 const modules = new Map<string, ModuleSlot>();
 const moduleActivity = ref(0);
@@ -204,8 +209,45 @@ function registrationApi(descriptor: WebPluginModuleDescriptor, track: (start: (
   });
 }
 
+type PackageWebManifest = Readonly<{ schemaVersion: 1; pluginId: string; version: string; entry: string;
+  runtime: WebRuntimeImports; backend: { pluginId: string; version: string }; styles: readonly string[] }>;
+function moduleResourceUrl(descriptor: WebPluginModuleDescriptor, filename: string): string {
+  const pathname = `/api/plugins/modules/${encodeURIComponent(descriptor.id)}/${descriptor.rev}/${filename.split("/").map(encodeURIComponent).join("/")}`;
+  return typeof window === "undefined" ? pathname : managerResourceUrl(pathname);
+}
+async function preparePackageWeb(descriptor: WebPluginModuleDescriptor): Promise<PackageWebManifest | undefined> {
+  if (descriptor.resourceMode !== "package") return undefined;
+  const response = await fetch(moduleResourceUrl(descriptor, "web/module.json"), { cache: "force-cache" });
+  if (!response.ok) throw new Error(`Web plugin resource manifest is unavailable: ${descriptor.id}.`);
+  const manifest = await response.json() as PackageWebManifest;
+  if (manifest.schemaVersion !== 1 || manifest.pluginId !== descriptor.pluginId || manifest.version !== descriptor.version
+    || `web/${manifest.entry}` !== descriptor.entryPath || manifest.backend?.pluginId !== descriptor.pluginId || manifest.backend.version !== descriptor.version
+    || !Array.isArray(manifest.styles)) throw new Error(`Web plugin resource manifest does not describe this candidate: ${descriptor.id}.`);
+  checkWebRuntime(manifest.runtime);
+  return manifest;
+}
+async function installPackageStyles(owner: ModuleOwner, manifest: PackageWebManifest): Promise<void> {
+  await Promise.all(manifest.styles.map(filename => new Promise<void>((resolve, reject) => {
+    const link = document.createElement("link");
+    link.rel = "stylesheet"; link.href = moduleResourceUrl(owner.descriptor, "web/" + filename);
+    let settled = false;
+    const finish = (error?: unknown) => {
+      if (settled) return;
+      settled = true; owner.lifetime.signal.removeEventListener("abort", aborted);
+      link.onload = null; link.onerror = null;
+      if (error) reject(error); else resolve();
+    };
+    const release = () => { link.remove(); owner.registrations.delete(release); finish(owner.lifetime.signal.reason ?? new Error("Web plugin stylesheet retired.")); };
+    const aborted = () => release();
+    owner.registrations.add(release);
+    owner.lifetime.signal.addEventListener("abort", aborted, { once: true });
+    link.onload = () => finish(); link.onerror = () => finish(new Error(`Web plugin stylesheet failed: ${owner.descriptor.id}.`));
+    document.head.appendChild(link);
+  })));
+}
+
 async function importModule(descriptor: WebPluginModuleDescriptor): Promise<WebPluginModule> {
-  const url = `/api/plugins/modules/${encodeURIComponent(descriptor.id)}/${descriptor.rev}/${descriptor.entryPath.split("/").map(encodeURIComponent).join("/")}`;
+  const url = moduleResourceUrl(descriptor, descriptor.entryPath);
   return await import(/* @vite-ignore */ url) as WebPluginModule;
 }
 
@@ -229,7 +271,7 @@ function cancelOwner(owner: ModuleOwner): void {
   moduleActivity.value++;
 }
 
-function createOwner(descriptor: WebPluginModuleDescriptor): ModuleOwner {
+function createOwner(descriptor: WebPluginModuleDescriptor, prepared?: PackageWebManifest): ModuleOwner {
   const owner: ModuleOwner = { descriptor, lifetime: new AbortController(), registrations: new Set(),
     startup: Promise.resolve(), ready: false, cleanupDone: false };
   const track = (start: () => () => void) => {
@@ -244,6 +286,10 @@ function createOwner(descriptor: WebPluginModuleDescriptor): ModuleOwner {
     owner.registrations.add(release); return release;
   };
   owner.startup = (async () => {
+    const manifest = prepared ?? await preparePackageWeb(descriptor);
+    owner.lifetime.signal.throwIfAborted();
+    if (manifest) await installPackageStyles(owner, manifest);
+    owner.lifetime.signal.throwIfAborted();
     const module = await importModule(descriptor);
     owner.lifetime.signal.throwIfAborted();
     if (typeof module.activate !== "function") throw new Error(`Web plugin module does not export activate(): ${descriptor.id}.`);
@@ -286,6 +332,26 @@ async function driveModule(slot: ModuleSlot): Promise<void> {
     const intent = slot.intent, target = slot.desired;
     try {
       let owner = slot.owner;
+      // Check only this replacement before retiring its still-working owner.
+      const prepared = target && (!owner || !sameDescriptor(owner.descriptor, target)) ? await preparePackageWeb(target) : undefined;
+      if (intent !== slot.intent) continue;
+      const held = [owner, ...(slot.retiringPeers ?? []).map(peer => peer.owner)].some(current => current?.ready && !current.lifetime.signal.aborted
+        && target && !sameDescriptor(current.descriptor, target) && retainActiveWebPluginModule(current.descriptor, target));
+      if (held) { deferredReplacement = true; slot.processed = intent; return; }
+      const peers = slot.retiringPeers; slot.retiringPeers = undefined;
+      if (peers?.length) {
+        const closing: Promise<void>[] = [];
+        for (const peer of peers) {
+          if (peer.slot.owner !== peer.owner) continue;
+          peer.slot.desired = undefined; peer.slot.intent++; peer.slot.failure = undefined;
+          if (peer.owner) { cancelOwner(peer.owner); closing.push(stopOwner(peer.owner).then(() => { if (peer.slot.owner === peer.owner) peer.slot.owner = undefined; })); }
+          void startModuleWork(peer.id, peer.slot);
+        }
+        const settled = await Promise.allSettled(closing);
+        const failed = settled.flatMap(result => result.status === 'rejected' ? [result.reason] : []);
+        if (failed.length) throw new AggregateError(failed, 'Previous Web package owners have not retired.');
+        if (intent !== slot.intent) continue;
+      }
       if (owner && (!target || !sameDescriptor(owner.descriptor, target) || owner.lifetime.signal.aborted)) {
         await stopOwner(owner);
         if (slot.owner === owner) slot.owner = undefined;
@@ -293,7 +359,7 @@ async function driveModule(slot: ModuleSlot): Promise<void> {
       }
       if (intent !== slot.intent) continue;
       if (!target) { slot.processed = intent; return; }
-      if (!owner) { owner = createOwner(target); slot.owner = owner; moduleActivity.value++; }
+      if (!owner) { owner = createOwner(target, prepared); slot.owner = owner; moduleActivity.value++; }
       try {
         await owner.startup;
         if (intent !== slot.intent || owner.lifetime.signal.aborted) continue;
@@ -341,6 +407,11 @@ function startModuleWork(id: string, slot: ModuleSlot): Promise<void> {
     moduleActivity.value++;
     if (slot.intent !== slot.processed) { slot.failure = undefined; void startModuleWork(id, slot); return; }
     if (!slot.desired && !slot.owner && modules.get(id) === slot) modules.delete(id);
+    const nextId = slot.owner?.ready && slot.desired?.id === slot.owner.descriptor.id ? slot.desired.id : undefined;
+    const existing = nextId ? modules.get(nextId) : undefined;
+    if (nextId && nextId !== id && modules.get(id) === slot && (!existing || !existing.owner && !existing.desired)) {
+      modules.delete(id); modules.set(nextId, slot);
+    }
   };
   void work.then(() => finished(false), error => finished(true, error));
   return work;
@@ -356,15 +427,42 @@ async function syncIntent(epoch: number): Promise<{ work: Promise<void>[]; failu
   const desired = new Map(catalog.modules.map(item => [item.id, item]));
   const work: Promise<void>[] = [];
   deferredReplacement = false;
+  const groups = new Map<string, { target: WebPluginModuleDescriptor; previous: { id: string; slot: ModuleSlot }[] }>();
   for (const [id, slot] of modules) {
-    const target = desired.get(id);
+    const loaded = slot.owner?.descriptor ?? slot.confirmed ?? slot.desired;
+    const target = desired.get(id) ?? (loaded ? catalog.modules.find(candidate => candidate.pluginId === loaded.pluginId
+      && loaded.instances.every(instance => candidate.instances.some(next => next.instanceId === instance.instanceId))) : undefined);
     if (catalog.invalidIds.has(id) || (!target && catalog.unidentified)) continue;
-    if (slot.owner?.ready && !slot.owner.lifetime.signal.aborted && target && !sameDescriptor(slot.owner.descriptor, target)
-      && retainActiveWebPluginModule(slot.owner.descriptor, target)) { deferredReplacement = true; desired.delete(id); continue; }
+    if (target) {
+      const group = groups.get(target.id) ?? { target, previous: [] };
+      group.previous.push({ id, slot }); groups.set(target.id, group); continue;
+    }
+    slot.desired = undefined; slot.intent++; slot.failure = undefined; slot.confirmed = undefined;
+    if (slot.owner) cancelOwner(slot.owner);
+    work.push(startModuleWork(id, slot));
+  }
+  for (const { target, previous } of groups.values()) {
+    desired.delete(target.id);
+    if (previous.some(({ slot }) => slot.owner?.ready && !slot.owner.lifetime.signal.aborted
+      && !sameDescriptor(slot.owner.descriptor, target) && retainActiveWebPluginModule(slot.owner.descriptor, target))) {
+      deferredReplacement = true;
+      for (const { slot } of previous) {
+        // Revoke an older in-flight replacement intent while preserving these
+        // still-mounted physical owners; do not start duplicate successors.
+        slot.desired = slot.owner?.descriptor; slot.retiringPeers = undefined; slot.intent++; slot.failure = undefined;
+        if (!slot.work) slot.processed = slot.intent;
+      }
+      continue;
+    }
+    const primary = previous.find(entry => entry.id === target.id) ?? previous[0]!;
+    const { id, slot } = primary;
     slot.desired = target; slot.intent++; slot.failure = undefined;
-    if (!target) slot.confirmed = undefined;
-    if (slot.owner && (!target || !sameDescriptor(slot.owner.descriptor, target))) cancelOwner(slot.owner);
-    work.push(startModuleWork(id, slot)); desired.delete(id);
+    slot.retiringPeers = previous.filter(entry => entry !== primary).map(entry => ({ ...entry, owner: entry.slot.owner }));
+    if (slot.owner) {
+      const revoked = slot.owner.descriptor.instances.some(instance => !target.instances.some(next => next.instanceId === instance.instanceId));
+      if (revoked || target.resourceMode !== 'package' && !sameDescriptor(slot.owner.descriptor, target)) cancelOwner(slot.owner);
+    }
+    work.push(startModuleWork(id, slot));
   }
   for (const [id, descriptor] of desired) {
     const slot: ModuleSlot = { desired: descriptor, intent: 1, processed: 0 };

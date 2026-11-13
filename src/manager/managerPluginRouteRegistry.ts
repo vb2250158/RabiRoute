@@ -356,10 +356,10 @@ export class ManagerPluginRouteRegistry {
         response.setHeader("x-rabiroute-api-contract", operation.digest);
         let executionStarted = false;
         let readOnlyEffect = operationIsReadOnly(operation.contract, request.method);
-        let mutationOutcome: "not_started" | "unknown" | undefined;
+        let mutationOutcome: ApiOperationResult["mutationOutcome"];
         const captureMutationOutcome = (result: ApiOperationResult) => {
           if (result.mutationOutcome === undefined) return;
-          if (result.mutationOutcome !== "not_started" && result.mutationOutcome !== "unknown") throw new ApiContractError(500, "API_OPERATION_OUTCOME_INVALID", "mutationOutcome", operation.contract.operationId, true);
+          if (result.mutationOutcome !== "not_started" && result.mutationOutcome !== "not_committed" && result.mutationOutcome !== "unknown") throw new ApiContractError(500, "API_OPERATION_OUTCOME_INVALID", "mutationOutcome", operation.contract.operationId, true);
           mutationOutcome = result.mutationOutcome;
         };
         let pendingStream: ApiOperationStream | undefined;
@@ -384,7 +384,7 @@ export class ManagerPluginRouteRegistry {
         const deadline = configuredDeadlineMs === undefined ? undefined : new AbortController();
         const deadlineAt = deadline ? performance.now() + configuredDeadlineMs! : undefined;
         const deadlineError = () => new ApiContractError(408, "API_REQUEST_DEADLINE_EXCEEDED", "deadlineMs", operation.contract.operationId,
-          mutationOutcome === "not_started" ? false : mutationOutcome === "unknown" || executionStarted, mutationOutcome);
+          mutationOutcome === "not_started" || mutationOutcome === "not_committed" ? false : mutationOutcome === "unknown" || executionStarted, mutationOutcome);
         const deadlineTimer = deadline && setTimeout(() => deadline.abort(deadlineError()), configuredDeadlineMs);
         const lifetime = new AbortController();
         const disconnected = () => lifetime.abort(new ApiContractError(499, "API_RESPONSE_CONNECTION_CLOSED", "connection", operation.contract.operationId, executionStarted));
@@ -394,7 +394,7 @@ export class ManagerPluginRouteRegistry {
         const assertAuthority = () => {
           try { hasAuthenticatedConnectionRequest(request); }
           catch { throw new ApiContractError(403, "API_REQUEST_AUTHORITY_REVOKED", "authorization", operation.contract.operationId,
-            mutationOutcome === "not_started" ? false : mutationOutcome === "unknown" || executionStarted, mutationOutcome); }
+            mutationOutcome === "not_started" || mutationOutcome === "not_committed" ? false : mutationOutcome === "unknown" || executionStarted, mutationOutcome); }
         };
         const failResponse = (error: unknown) => {
           if (response.writableEnded || response.destroyed) return;

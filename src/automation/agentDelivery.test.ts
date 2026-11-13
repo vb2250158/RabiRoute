@@ -66,3 +66,20 @@ test("Grok delivery choices round-trip and reject incomplete or stale sender ide
   assert.throws(() => normalizeAgentDeliveryTarget({ ...group, sendMode: "direct" }), /retain a sender/);
   assert.throws(() => normalizeAgentDeliveryTarget({ ...group, agentAdapter: "codex" }), /Invalid Grok/);
 });
+
+test("DSBot targets preserve exact scope and never default to primary or a Session", async () => {
+  const target = normalizeAgentDeliveryTarget({ kind: "ds_bot", agentAdapter: "dsh", agentTargetId: "local:dsh", botScopeId: "scope", botId: "bot", botName: "Bot", dshBaseUrl: "http://127.0.0.1:1234" });
+  const unexpected = async () => { throw new Error("fallback forbidden"); };
+  const result = await executeAgentDelivery(target, [], { primary: unexpected, plan_secretary: unexpected, message_pool: unexpected, memory_consolidation: unexpected, session: unexpected, ds_bot: async value => value.botId });
+  assert.equal(result, "bot");
+  assert.throws(() => normalizeAgentDeliveryTarget({ ...target, agentAdapter: "codex" }), /exact DSH/);
+  assert.throws(() => normalizeAgentDeliveryTarget({ ...target, botScopeId: "" }), /exact DSH/);
+});
+
+test("DSBot owner references round-trip without primary or Route and reject mixed or missing owners", () => {
+  const local = { kind: "ds_bot", agentAdapter: "dsh", agentTargetId: "local:dsh", botScopeId: "scope", botId: "bot", botName: "Bot", dshBaseUrl: "http://127.0.0.1:1234" };
+  const remote = { ...local, agentTargetId: "peer:device:instance:dsh", dshBaseUrl: undefined, instanceBinding: { ownerDeviceId: "device", instanceId: "instance", agentId: "dsh" } };
+  assert.deepEqual(normalizeAgentDeliveryTarget(JSON.parse(JSON.stringify(local))), local);
+  assert.deepEqual(normalizeAgentDeliveryTarget(JSON.parse(JSON.stringify(remote))), { kind: "ds_bot", agentAdapter: "dsh", agentTargetId: remote.agentTargetId, botScopeId: "scope", botId: "bot", botName: "Bot", instanceBinding: remote.instanceBinding });
+  for (const invalid of [{ ...local, dshBaseUrl: undefined }, { ...local, instanceBinding: remote.instanceBinding }, { ...remote, dshBaseUrl: local.dshBaseUrl }, { ...remote, instanceBinding: undefined }, { ...remote, agentTargetId: "peer:another:instance:dsh" }, { ...local, dshBaseUrl: "http://127.0.0.1:1234/?token=private" }]) assert.throws(() => normalizeAgentDeliveryTarget(invalid));
+});

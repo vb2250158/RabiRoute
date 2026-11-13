@@ -1,3 +1,4 @@
+import { normalizeAgentDeliveryTarget, type AgentDeliveryTarget, type AgentDsBotDestination } from "@shared/agentDeliveryTarget";
 import type { AgentAdapterType, GatewayDefinition, MessageAdapterPolicy, MessageAdapterType, MessageEndpointType, NotificationRule, NotificationScheduleDefinition, PersonaAutomationRuleDefinition, RuntimeStatus } from "../types";
 import {
   defaultRolePanelNotificationRule,
@@ -413,8 +414,39 @@ export function migrateLegacyHeartbeatSchedules(gateway: GatewayDefinition): voi
   automationRulesForGateway(gateway);
 }
 
+function incompleteDsBotTarget(target: AgentDeliveryTarget | undefined): target is AgentDsBotDestination {
+  if (target?.kind !== "ds_bot") return false;
+  try { normalizeAgentDeliveryTarget(target); return false; }
+  catch { return true; }
+}
+
+/** Client-only edits retain an unfinished target; the persistent and runtime parsers stay strict. */
+export function normalizeAutomationDraftRules(rules: PersonaAutomationRuleDefinition[] | undefined): PersonaAutomationRuleDefinition[] {
+  const pending = new Map<number, AgentDsBotDestination>();
+  const input = Array.isArray(rules) ? rules.map((rule, index) => {
+    if (rule?.action?.type !== "deliver_agent" || !incompleteDsBotTarget(rule.action.target)) return rule;
+    pending.set(index, rule.action.target);
+    return { ...rule, action: { ...rule.action, target: undefined } };
+  }) : rules;
+  const normalized = normalizePersonaAutomationRules(input);
+  for (const [index, target] of pending) {
+    const rule = normalized[index];
+    if (rule?.action.type === "deliver_agent") rule.action.target = target;
+  }
+  return normalized;
+}
+
+/** Save readiness checks every draft rule, including a partially edited rule outside the active dialog. */
+export function hasIncompleteDsBotTargetDraft(gateway: Pick<GatewayDefinition, "automationRules"> | null | undefined): boolean {
+  return gateway?.automationRules?.some(rule => rule?.action?.type === "deliver_agent" && incompleteDsBotTarget(rule.action.target)) ?? false;
+}
+
+function completedDraftProjection(rules: PersonaAutomationRuleDefinition[]): PersonaAutomationRuleDefinition[] {
+  return rules.filter(rule => rule.action.type !== "deliver_agent" || !incompleteDsBotTarget(rule.action.target));
+}
+
 export function automationRulesForGateway(gateway: GatewayDefinition): PersonaAutomationRuleDefinition[] {
-  const configured = normalizePersonaAutomationRules(gateway.automationRules);
+  const configured = normalizeAutomationDraftRules(gateway.automationRules);
   const migrated = Array.isArray(gateway.automationRules)
     ? configured
     : personaAutomationRulesFromNotificationRules(
@@ -424,14 +456,14 @@ export function automationRulesForGateway(gateway: GatewayDefinition): PersonaAu
   gateway.automationRules = Array.isArray(gateway.automationRules) ? migrated : ensureMessageAdapterAutomationRules(migrated, gatewayAdapterTypes(gateway), {
     includeRolePanel: Boolean(gateway.agentRoleId)
   });
-  gateway.notificationRules = notificationRulesFromPersonaAutomations(gateway.automationRules)
+  gateway.notificationRules = notificationRulesFromPersonaAutomations(completedDraftProjection(gateway.automationRules))
     .map((rule, index) => normalizeRule(rule, index));
   return gateway.automationRules;
 }
 
 export function syncAutomationRuleProjection(gateway: GatewayDefinition): void {
-  gateway.automationRules = normalizePersonaAutomationRules(gateway.automationRules);
-  gateway.notificationRules = notificationRulesFromPersonaAutomations(gateway.automationRules)
+  gateway.automationRules = normalizeAutomationDraftRules(gateway.automationRules);
+  gateway.notificationRules = notificationRulesFromPersonaAutomations(completedDraftProjection(gateway.automationRules))
     .map((rule, index) => normalizeRule(rule, index));
 }
 

@@ -73,3 +73,20 @@ export const activate = definePlugin({ async activate(context) {
 在宿主工作区先运行 `npm run build`，再运行 `npm run test:plugins`，收集原生插件和既有集成的 MJS 测试；根 `npm test` 也包含此入口，TypeScript 测试保留在主测试阶段。
 
 独立插件的合同测试使用 `createPluginTestHarness()`。视频等验证真实宿主拥有者的集成 fixture 需要当前宿主工作区、构建产物及其开发依赖，按集成测试运行；它们不代表一个独立插件仓库已经安装或运行了宿主。
+
+
+## 独立 Web 构建入口
+
+Web 插件可直接从 SDK 使用 `@rabiroute/plugin-sdk/web-builder`，无需 RabiRoute 的 `src/plugins` 或 profile 源码树。插件仓库提供 `package.json`、`rabi.plugin.json` 和 `rabi.webSource`（或显式 `entry`）。构建工具从该插件自己的 `devDependencies` 加载 `vite`、`@vitejs/plugin-vue`；也可显式传入同一工具链。仅使用原生 SDK 的消费者不需要额外加载这些 Web 工具。
+
+```js
+import { buildPluginWebPackage } from '@rabiroute/plugin-sdk/web-builder';
+
+const result = await buildPluginWebPackage({
+  sourceDirectory: process.cwd(),
+  outputDirectory: './candidate/web',
+  runtimeCatalog: './target-web-runtime.json'
+});
+```
+
+`runtimeCatalog` 来自目标 WebGUI 的 `assets/web-runtime.json`，也可传已解析对象。自定义资源格式在 `rabi.webContentTypes` 或 `contentTypes` 按扩展名声明 MIME，随包生效。产物自带入口、按需资源与 `module.json`；已有同插件构建目录通过暂存/替换更新，构建失败保留原目录。输入源目录、其父目录和包含输入文件的路径不能被当作输出清空。返回的 `inputs` 是供私有构建核验使用的绝对路径，不写入公共资源清单。Web 依赖在候选激活时核对实际共享导出，正常 API 调用不经过该检查。

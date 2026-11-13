@@ -990,6 +990,10 @@ export function normalizeNotificationSchedule(schedule, index = 0) {
     if (typeof raw.windowEndTime === "string" && raw.windowEndTime.trim()) result.windowEndTime = raw.windowEndTime.trim();
   } else if (type === "daily_time") {
     if (typeof raw.timeOfDay === "string" && raw.timeOfDay.trim()) result.timeOfDay = raw.timeOfDay.trim();
+    // Retain the complete list when editing another field through the legacy client.
+    if (Object.prototype.hasOwnProperty.call(raw, "timeOfDays")) {
+      result.timeOfDays = Array.isArray(raw.timeOfDays) ? [...raw.timeOfDays] : raw.timeOfDays;
+    }
   } else if (type === "once_at") {
     if (typeof raw.onceAt === "string" && raw.onceAt.trim()) result.onceAt = raw.onceAt.trim();
   }

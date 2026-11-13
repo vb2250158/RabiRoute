@@ -1,11 +1,12 @@
+import { recoverDisabledAgentTask } from "@rabiroute/host-api/manager/lanAgentRegistry";
 import type http from "node:http";
-import { instanceAgentActionDefinition, DEFAULT_COMPUTER_SETTINGS, computerSettingsSchema } from "@rabiroute/host-api/shared/agentInteractiveProtocol";
+import { instanceAgentActionDefinition, BOOTSTRAP_COMPUTER_SETTINGS_DEFINITION, type ComputerSettingsDefinition } from "@rabiroute/host-api/shared/agentInteractiveProtocol";
 import { LanAgentNodeNameConflictError, type LanAgentRegistry } from "@rabiroute/host-api/manager/lanAgentRegistry";
 import type { LanAgentReleaseStore } from "@rabiroute/host-api/manager/lanAgentReleaseStore";
 import type { InstanceAgent } from "@rabiroute/host-api/shared/agentInstance";
 import type { LanAgentAuthority } from "@rabiroute/host-api/manager/lanAgentAuthority";
 import type { AgentResourceCatalog } from "./agentResourceCatalog.js";
-import type { ApiOperationDefinition, ApiOperationInput, ApiOperationResult } from "@rabiroute/host-api/manager/apiOperationContract";
+import type { ApiOperationContract, ApiOperationDefinition, ApiOperationInput, ApiOperationResult } from "@rabiroute/host-api/manager/apiOperationContract";
 import { assertTrustedLanAgentPrincipal } from "@rabiroute/host-api/manager/lanAgentRequestAccess";
 import { hasAuthenticatedConnectionRequest } from "@rabiroute/host-api/manager/connectionRequestAccess";
 import { LanAgentReleaseSelectionConflictError } from "@rabiroute/host-api/manager/lanAgentReleaseStore";
@@ -17,6 +18,7 @@ export type LanAgentRoutesContext = {
   isReleaseRequestAuthorized: (request: http.IncomingMessage) => boolean;
   isManagementRequestAuthorized: (request: http.IncomingMessage, requestUrl: URL) => boolean;
   registry: LanAgentRegistry;
+  computerSettingsDefinition?:ComputerSettingsDefinition;
   authority?: LanAgentAuthority;
   resources?: AgentResourceCatalog;
   enabled?: () => boolean;
@@ -27,8 +29,38 @@ export type LanAgentRoutesContext = {
 };
 
 
+function computerSettingsContract(context:LanAgentRoutesContext,route:ManagementRoute):ApiOperationContract {
+  const base=lanAgentManagementContract(route);
+  if(!route.key.startsWith("computer-settings."))return base;
+  const definition=context.computerSettingsDefinition??context.registry.getComputerSettingsDefinition?.()??BOOTSTRAP_COMPUTER_SETTINGS_DEFINITION;
+  const dataSchema = {
+    type:"object",additionalProperties:true,
+    required:["settings","defaults","schema","revision","definitionDigest","diagnostics","capabilities"],
+    properties:{
+      settings:{description:"Effective values. Diagnostics identify invalid explicit fields; this view does not replace them with defaults."},
+      rawSettings:{description:"Original persisted overrides; omitted when no overrides exist."},
+      defaults:{},schema:{type:"object",additionalProperties:true},
+      revision:{type:"string"},definitionDigest:{type:"string"},
+      diagnostics:{type:"array",items:{type:"object",required:["field","message"],properties:{field:{type:"string"},message:{type:"string"}}}},
+      capabilities:{type:"array",items:{type:"string"}}
+    }
+  };
+  const request = route.key.endsWith("patch") ? {
+    ...base.request,
+    headers:{type:"object",additionalProperties:true,properties:{"if-match":{type:"string",description:"Copy the complete ETag returned by GET computer-settings for this target."}},required:["if-match"]},
+    body:{kind:"json" as const,allowAnyContentType:true,maxBytes:Number.MAX_SAFE_INTEGER,schema:definition.validationSchema}
+  } : base.request;
+  return {
+    ...base,request,
+    responses:{...base.responses,"200":{mediaType:"application/json",schema:{
+      type:"object",required:["code","data"],properties:{code:{const:0},data:dataSchema}
+    }}}
+  };
+}
+type ComputerSettingsResetRoute = Readonly<{key:"computer-settings.reset";method:"POST";pathTemplate:string}>;
+
 export function createLanAgentManagementOperations(context: LanAgentRoutesContext): readonly ApiOperationDefinition[] {
-  return LAN_AGENT_MANAGEMENT_ROUTES.map(route => ({ contract: lanAgentManagementContract(route),
+  const operations:ApiOperationDefinition[] = LAN_AGENT_MANAGEMENT_ROUTES.map(route => ({ contract: computerSettingsContract(context,route),
     ...(route.key === "computers.list" || route.key.startsWith("computer-settings.") ? { discovery: {
       title: route.key === "computers.list" ? "电脑列表" : route.key.endsWith("patch") ? "修改电脑控制设置" : "读取电脑控制设置",
       summary: "本机、远端节点和完整主机的电脑功能、真实能力与可见设置。列表非空ownerDeviceId表示所属远端Manager；按目标声明经原Peer manager服务转接同一路径与正文，不把远端instanceId投到本机。",
@@ -36,9 +68,20 @@ export function createLanAgentManagementOperations(context: LanAgentRoutesContex
       category: {id:"devices",title:"设备与电脑"}, keywords:["电脑","电脑控制","computer","computer control","settings"],
       ...(route.key !== "computers.list" ? { inputSources:[{field:"path.instanceId",operationId:"manager.lan-agent.instances.list",resultPath:"instances",valuePath:"instanceId"}] } : {})
     } } : {}), handler: input => run(context, route, input) }));
+  const readRoute=LAN_AGENT_MANAGEMENT_ROUTES.find(route=>route.key==="computer-settings.read")!;
+  const resetRoute:ComputerSettingsResetRoute={key:"computer-settings.reset",method:"POST",pathTemplate:readRoute.pathTemplate+"/reset"};
+  const readContract=computerSettingsContract(context,readRoute);
+  operations.push({contract:{...readContract,operationId:"manager.lan-agent.computer-settings.reset",method:"POST",pathTemplate:resetRoute.pathTemplate,
+    description:"Explicitly restore selected schema-defined settings to their current plugin defaults. Other raw overrides remain unchanged.",
+    request:{...readContract.request,headers:{type:"object",additionalProperties:true,required:["if-match"],properties:{"if-match":{type:"string",description:"Use the exact ETag from GET computer-settings for this instance."}}},body:{kind:"json",maxBytes:Number.MAX_SAFE_INTEGER,schema:{type:"object",additionalProperties:false,required:["paths"],properties:{paths:{type:"array",items:{type:"string",minLength:1},minItems:1}}}}},
+    effects:{mode:"existing-owner-mutation",description:"One original settings-owner CAS deletes only the explicitly selected override paths. No task/input is replayed."}},
+    discovery:{title:"恢复电脑设置默认值",summary:"先读同目标computer-settings的schema；paths使用属性的点分路径。仅移除明确选中的覆盖值，保留其他原值及自定义扩展。",category:{id:"devices",title:"设备与电脑"},keywords:["恢复默认","电脑设置","restore defaults","computer settings"],
+      inputSources:[{field:"path.instanceId",operationId:"manager.lan-agent.instances.list",resultPath:"instances",valuePath:"instanceId"}]},
+    handler:input=>run(context,resetRoute,input)});
+  return operations;
 }
 
-async function run(context: LanAgentRoutesContext, route: ManagementRoute, input: ApiOperationInput): Promise<ApiOperationResult> {
+async function run(context: LanAgentRoutesContext, route: ManagementRoute | ComputerSettingsResetRoute, input: ApiOperationInput): Promise<ApiOperationResult> {
   const headers = { "cache-control": "no-store" };
   const output = (status: number, body: unknown): ApiOperationResult => ({ status, headers, body });
   const unauthorized = (management = false): ApiOperationResult => ({ ...output(401, { code: -1,
@@ -85,18 +128,21 @@ async function run(context: LanAgentRoutesContext, route: ManagementRoute, input
         const data = await context.registry.listComputers(); guard(); return output(200, {code:0,data});
       }
       case "computer-settings.read":
+      case "computer-settings.reset":
       case "computer-settings.patch": {
         const instanceId = input.path.instanceId!;
-        const data = route.key === "computer-settings.patch"
-          ? await context.registry.updateComputerSettings(instanceId, body, String(input.request.headers["if-match"] ?? ""))
-          : context.registry.getComputerSettings(instanceId, true);
-        guard(); return { status: 200, headers: { ...headers, etag: data.revision }, body: { code:0, data:{...data, defaults:DEFAULT_COMPUTER_SETTINGS, schema:computerSettingsSchema, capabilities:context.registry.computerCapabilities(instanceId)} } };
+        const data = route.key === "computer-settings.reset"
+          ? await context.registry.updateComputerSettings(instanceId,{},String(input.request.headers["if-match"]??""),body.paths as string[])
+          : route.key === "computer-settings.patch"
+            ? await context.registry.updateComputerSettings(instanceId, body, String(input.request.headers["if-match"] ?? ""))
+            : context.registry.getComputerSettings(instanceId, true);
+        guard(); return { status: 200, headers: { ...headers, etag: data.revision }, body: { code:0, data:{...data, capabilities:context.registry.computerCapabilities(instanceId)} } };
       }
       case "instances.enabled": {
         const nodeId = input.path.instanceId!;
         guard(); mutated = true;
         const applied = await context.registry.setComputerEnabled(nodeId, body.enabled as boolean, body.expectedEnabled as boolean);
-        guard(); return output(200, { code: 0, data: { nodeId, enabled: applied.settings.enabled, execution:applied.execution, ...(applied.executionIssue ? {executionIssue:applied.executionIssue} : {}) } });
+        guard(); return output(200, { code: 0, data: { nodeId, enabled: (applied.settings as Record<string,unknown>).enabled, execution:applied.execution, ...(applied.executionIssue ? {executionIssue:applied.executionIssue} : {}) } });
       }
       case "instances.name": {
         guard(); mutated = true;
@@ -146,7 +192,14 @@ async function run(context: LanAgentRoutesContext, route: ManagementRoute, input
         guard(); let result: unknown;
         if (instanceId === context.registry.localInstanceId) {
           if (!agentId || !context.manageLocalAgent) throw new Error("Local Agent management is unavailable.");
-          if (instanceAgentActionDefinition(operation,body)?.newWork) context.registry.assertComputerFeature(instanceId,"agentTasks");
+          const taskDefinition = instanceAgentActionDefinition(operation,body);
+          if (taskDefinition?.newWork) {
+            try { context.registry.assertComputerFeature(instanceId,"agentTasks"); }
+            catch (error) {
+              const recovered = await recoverDisabledAgentTask(taskDefinition, body, error, original => context.manageLocalAgent!(agentId, operation, original, guard));
+              guard(); return output(200,{code:0,result:recovered});
+            }
+          }
           mutated = true; result = await context.manageLocalAgent(agentId, operation, body, guard);
         } else if (operation === "tasks") {
           const provider = typeof body.provider === "string" ? body.provider : "";
@@ -168,7 +221,7 @@ async function run(context: LanAgentRoutesContext, route: ManagementRoute, input
     catch { return output(403, { code: -1, message: "Connection identity changed; node request stopped.", ...(mutated || releaseSelectionCommitted ? { uncertain: true } : {}), ...(taskId ? { taskId } : {}) }); }
     if (exchange) return output(400, { code: -1, message: "Enrollment could not be completed. Keep the local recovery record; if the ticket expired, copy a fresh connection prompt. No separate Agent approval is required." });
     const readOnly = route.method === "GET" || route.key === "agents.scan" || instanceAgentActionDefinition(route.key.slice("agents.".length),body)?.readOnly === true;
-    const transport = lanAgentManagementTransportFailure(error, lanAgentManagementContract(route).operationId, readOnly);
+    const transport = lanAgentManagementTransportFailure(error, "manager.lan-agent."+route.key, readOnly);
     if (transport) return transport;
     if ((error as {code?:string})?.code === "COMPUTER_FEATURE_DISABLED") return output(403,{code:-1,errorCode:"COMPUTER_FEATURE_DISABLED",field:(error as {field?:string}).field ?? "features.agentTasks",message:(error as Error).message,repair:"Open RabiLink → 电脑控制 and update the target computer settings.",retryable:false});
     const message = error instanceof Error ? error.message : String(error);

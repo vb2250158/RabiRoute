@@ -1,3 +1,4 @@
+import { normalizeDsBotConnectionOrigin } from "@rabiroute/host-api/shared/agentDeliveryTarget";
 import {isDshSessionId} from "@rabiroute/host-api/shared/dshSessionIdentity";
 export {isDshSessionId} from "@rabiroute/host-api/shared/dshSessionIdentity";
 /**
@@ -756,4 +757,41 @@ export async function notifyDshSession(message: string, imagePaths: string[] = [
     modelSelection: binding.modelSelection
   });
   return { sessionId: binding.sessionId };
+}
+
+export type DshBotCatalog = { dshBaseUrl?: string; schemaVersion: 1; botScopeId: string; runtimeId: string; bots: Array<{ botId: string; botName: string; roleId?: string; workspace?: string }> };
+export type DshBotReceipt = { schemaVersion: 1; state: "accepted" | "not_found" | "uncertain" | "conflict"; botScopeId: string; botId: string; deliveryId: string; sessionId?: string; requestId?: string };
+
+/** DSBot owns its stable identity and current conversation; this transport never prompts an ordinary Session. */
+export async function requestDshBotAutomation(
+  endpoint: "rabi-automation-catalog" | "rabi-automation-deliver" | "rabi-automation-reconcile",
+  payload: { schemaVersion: 1; botScopeId?: string; botId?: string; deliveryId?: string; message?: string; scheduledAt?: string },
+  options: { baseUrl?: string; assertAuthorized?: () => void | Promise<void>; signal?: AbortSignal; fetch?: typeof dshAuthenticatedFetch } = {}
+): Promise<DshBotCatalog | DshBotReceipt> {
+  try {
+    const assert = options.assertAuthorized;
+    await assert?.();
+    const dshBaseUrl = normalizeDsBotConnectionOrigin(resolveDshBaseUrl(options.baseUrl));
+    const response = await (options.fetch ?? dshAuthenticatedFetch)(dshBaseUrl, "bot", JSON.stringify({ endpoint, payload }), assert, options.signal);
+    await assert?.();
+    if (response.status === 404) throw Object.assign(new Error("The selected DSH does not expose DSBot automation. Update its DSBot plugin."), { code: "DS_BOT_UNSUPPORTED" });
+    if (!response.ok) throw new Error(`DSBot native transport returned HTTP ${response.status}; reconcile the original delivery before retrying.`);
+    const raw = await response.json() as { ok?: boolean; value?: unknown; error?: { code?: string; message?: string } };
+    await assert?.();
+    if (raw.ok !== true) throw Object.assign(new Error(raw.error?.message || "DSBot native operation was not confirmed."), { code: raw.error?.code || "DS_BOT_UNCONFIRMED" });
+    const value = raw.value as DshBotCatalog & DshBotReceipt;
+    const text = (value: unknown): value is string => typeof value === "string" && Boolean(value.trim()) && value.length <= 4096 && !/[\0\r\n]/.test(value);
+    if (!value || value.schemaVersion !== 1 || !text(value.botScopeId)) throw new Error("DSBot returned an invalid owner identity.");
+    if (endpoint === "rabi-automation-catalog") {
+      if (!text(value.runtimeId) || !Array.isArray(value.bots) || value.bots.some(bot => !text(bot?.botId) || !text(bot?.botName)) || new Set(value.bots.map(bot => bot.botId)).size !== value.bots.length) throw new Error("DSBot returned an invalid catalog.");
+      return { ...value, dshBaseUrl };
+    }
+    if (value.botScopeId !== payload.botScopeId || value.botId !== payload.botId || value.deliveryId !== payload.deliveryId
+      || !["accepted", "not_found", "uncertain", "conflict"].includes(value.state)) throw new Error("DSBot receipt does not match the original destination and delivery.");
+    if (value.state === "accepted" && (!text(value.sessionId) || value.requestId !== payload.deliveryId)) throw new Error("DSBot returned no native admission receipt.");
+    return value;
+  } catch (error) {
+    if (endpoint !== "rabi-automation-catalog" && error && typeof error === "object") Object.assign(error, { uncertain: true });
+    throw error;
+  }
 }

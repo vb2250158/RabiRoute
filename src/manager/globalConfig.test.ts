@@ -208,3 +208,66 @@ test("request-time reads use the published memory snapshot until an explicit rel
   assert.equal(store.read().rabiName, "External PC");
   assert.equal(fs.existsSync(store.configPath), false);
 });
+
+test("unrelated configuration persistence failure preserves current LAN admission and delivery", t => {
+  const root = tempRoot(); t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const store = new RabiGlobalConfigStore(root);
+  store.patch({ webguiLan: { enabled: true } });
+  const before = store.read(), admission = store.getLanAgentAdmissionPolicy(), delivery = store.getLanAgentDeliveryPolicy();
+  const raw = fs.readFileSync(store.configPath, "utf8");
+  Object.defineProperty(store, "persist", { value() { throw new Error("fixture persist failure"); } });
+  assert.throws(() => store.patch({ rabiName: "Rejected rename" }), /fixture persist failure/);
+  assert.deepEqual(store.read(), before);
+  assert.equal(fs.readFileSync(store.configPath, "utf8"), raw);
+  assert.deepEqual(store.getLanAgentAdmissionPolicy(), admission);
+  assert.deepEqual(store.getLanAgentDeliveryPolicy(), delivery);
+});
+test("unrelated writes do not use a connection publication marker", t => {
+  const root = tempRoot(); t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const store = new RabiGlobalConfigStore(root);
+  store.patch({ webguiLan: { enabled: true } });
+  const admission = store.getLanAgentAdmissionPolicy();
+  let calls = 0;
+  Object.defineProperty(store, "markDeliveryPublicationPending", { value() { calls++; throw new Error("fixture intent failure"); } });
+  assert.equal(store.patch({ rabiName: "Renamed without connection change" }).rabiName, "Renamed without connection change");
+  assert.equal(calls, 0);
+  assert.deepEqual(store.getLanAgentAdmissionPolicy(), admission);
+});
+test("a failed explicit connection disable still publishes its revocation fence", t => {
+  const root = tempRoot(); t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const store = new RabiGlobalConfigStore(root);
+  store.patch({ webguiLan: { enabled: true } });
+  const before = store.read(), admission = store.getLanAgentAdmissionPolicy();
+  Object.defineProperty(store, "persist", { value() { throw new Error("fixture security persist failure"); } });
+  assert.throws(() => store.patch({ webguiLan: { enabled: false } }), /fixture security persist failure/);
+  assert.deepEqual(store.read(), before);
+  assert.equal(store.getLanAgentAdmissionPolicy().enabled, false);
+  assert.notEqual(store.getLanAgentAdmissionPolicy().incarnation, admission.incarnation);
+  const fence = JSON.parse(fs.readFileSync(path.join(root, "data", ".runtime", "lan-agent-delivery-policy.json"), "utf8"));
+  assert.equal(fence.enabled, false);
+});
+
+test("a browser-token save failure does not revoke independent LAN Agent credentials", t => {
+ const root=tempRoot();t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+ const store=new RabiGlobalConfigStore(root);
+ store.patch({webguiLan:{enabled:true,accessToken:randomUUID()}});
+ const before=store.read(),admission=store.getLanAgentAdmissionPolicy(),delivery=store.getLanAgentDeliveryPolicy();
+ Object.defineProperty(store,"persist",{value(){throw Error("fixture token save failure");}});
+ assert.throws(()=>store.patch({webguiLan:{accessToken:randomUUID()}}),/fixture token save failure/);
+ assert.deepEqual(store.read(),before);assert.deepEqual(store.getLanAgentAdmissionPolicy(),admission);assert.deepEqual(store.getLanAgentDeliveryPolicy(),delivery);
+});
+test("a later unrelated patch preserves a disable that committed before publication failed", t => {
+ const root=tempRoot();t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+ const store=new RabiGlobalConfigStore(root);store.patch({webguiLan:{enabled:true}});
+ const admission=store.getLanAgentAdmissionPolicy(),persist=Reflect.get(store,"persist");let failOnce=true;
+ Object.defineProperty(store,"persist",{value(...args:unknown[]){Reflect.apply(persist,store,args);if(failOnce){failOnce=false;throw Error("fixture after atomic write");}}});
+ assert.throws(()=>store.patch({webguiLan:{enabled:false}}),/fixture after atomic write/);
+ assert.equal(store.read().webguiLan.enabled,true);
+ assert.equal(JSON.parse(fs.readFileSync(store.configPath,"utf8")).webguiLan.enabled,false);
+ assert.equal(store.getLanAgentAdmissionPolicy().enabled,false);
+ const updated=store.patch({rabiName:"Fixture rename after committed disable"});
+ assert.equal(updated.webguiLan.enabled,false);
+ assert.equal(JSON.parse(fs.readFileSync(store.configPath,"utf8")).webguiLan.enabled,false);
+ assert.equal(store.getLanAgentAdmissionPolicy().enabled,false);
+ assert.notEqual(store.getLanAgentAdmissionPolicy().incarnation,admission.incarnation);
+});

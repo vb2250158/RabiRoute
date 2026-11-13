@@ -53,6 +53,27 @@ function available(feature: string) { if(!located.value)return false;if(feature 
 
 const settingSchema = computed(() => draft.value?.saved.schema as ComputerFieldSchema | undefined);
 const labels = [ { id:"terminal", title:"终端命令", icon:"mdi-console" }, {id:"files",title:"文件操作",icon:"mdi-folder-outline"}, {id:"observation",title:"窗口与截图",icon:"mdi-monitor-screenshot"}, {id:"agentTasks",title:"智能体任务",icon:"mdi-robot-outline"}, {id:"input",title:"鼠标与键盘",icon:"mdi-mouse"}, {id:"annotation",title:"屏幕标注",icon:"mdi-vector-square"} ];
+
+const settingsDiagnostics = computed(() => {
+  const values=draft.value?.saved.diagnostics;
+  return Array.isArray(values)?values.map(value=>String(value?.field||"")+" · "+String(value?.message||"")).join("\n"):"";
+});
+const defaultPaths = computed(() => {
+  const paths:string[]=[];
+  const visit=(schema:ComputerFieldSchema,prefix:string)=>{
+    if(schema.type==="object"&&schema.properties)for(const [key,value]of Object.entries(schema.properties))visit(value as ComputerFieldSchema,prefix?prefix+"."+key:key);
+    else if(prefix)paths.push(prefix);
+  };
+  if(settingSchema.value)visit(settingSchema.value,"");
+  return paths;
+});
+async function restoreDefaults() {
+  const current=draft.value;
+  if(!current||current.saving||!defaultPaths.value.length)return;
+  await editor.save(props.target.id,{},(_body,etag)=>props.client.resetSettings(props.target,defaultPaths.value,etag));
+  if(current.conflict)await loadSettings();
+}
+
 async function loadSettings() {
   if (!located.value) return;
   const revision = ++readRevision; readController?.abort(); readController = new AbortController(); loading.value = true; settingsError.value="";
@@ -138,6 +159,7 @@ onBeforeUnmount(() => { disposed = true; ++readRevision; ++actionRevision; readC
       <v-alert v-if="target.issue" type="warning" variant="tonal">{{ target.issue }}{{ t(' · 最近信息保留，未将读取失败标记为离线。') }}</v-alert>
       <v-alert v-if="error" type="error" variant="tonal">{{ error }}</v-alert>
       <v-alert v-if="settingsError" type="warning" variant="tonal">{{ t('此电脑的设置暂不可用，已提供的操作仍可使用。') }} {{ settingsError }}</v-alert>
+      <v-alert v-if="settingsDiagnostics" type="warning" variant="tonal">{{ t('部分设置需要修复；其他功能可继续使用。') }}<pre>{{ settingsDiagnostics }}</pre></v-alert>
       <p v-if="loading" role="status">{{ t('正在读取此电脑设置…') }}</p>
       <p v-if="hasControlSession && (!enabled || features.input === false)" role="status" class="computer-note">{{ t('关闭设置与执行停止分别确认；当前退出状态待回读，请刷新工作状态。') }}</p>
       <p v-if="workResult" class="computer-note" role="status">{{ workResult }}</p>
@@ -163,7 +185,7 @@ onBeforeUnmount(() => { disposed = true; ++readRevision; ++actionRevision; readC
         <v-alert v-if="draft.application?.state === 'unconfirmed'" type="warning" variant="tonal">{{ t('设置已保存；执行应用或停止仍待确认。') }} {{ draft.application.issue ? t(draft.application.issue) : '' }}</v-alert>
         <p v-else-if="draft.application?.state === 'offline'" class="computer-note">{{ t('设置已保存；目标离线，执行应用尚未确认。') }}</p>
         <p v-if="draft.application?.readbackIssue" class="computer-note">{{ t(draft.application.readbackIssue) }}</p>
-        <div class="computer-save"><v-btn color="primary" :loading="draft.saving" :disabled="!draft.changes.size" @click="save(true)">{{ t(draft.readbackUnconfirmed ? '按最新版本重新应用编辑值' : '保存设置') }}</v-btn><span role="status">{{ draft.readbackUnconfirmed ? t('修改已提交，回读待确认') : draft.error ? `未保存：${draft.error}` : draft.saving ? t('保存中…') : draft.changes.size ? t('有未保存的修改') : t('设置已回读') }}</span><v-btn v-if="draft.conflict" variant="text" @click="save(true)">{{ t('按新版本保存保留的修改') }}</v-btn></div>
+        <div class="computer-save"><v-btn variant="tonal" :loading="draft.saving" :disabled="draft.saving || !defaultPaths.length" @click="restoreDefaults">{{ t('恢复默认设置') }}</v-btn><v-btn color="primary" :loading="draft.saving" :disabled="!draft.changes.size" @click="save(true)">{{ t(draft.readbackUnconfirmed ? '按最新版本重新应用编辑值' : '保存设置') }}</v-btn><span role="status">{{ draft.readbackUnconfirmed ? t('修改已提交，回读待确认') : draft.error ? `未保存：${draft.error}` : draft.saving ? t('保存中…') : draft.changes.size ? t('有未保存的修改') : t('设置已回读') }}</span><v-btn v-if="draft.conflict" variant="text" @click="save(true)">{{ t('按新版本保存保留的修改') }}</v-btn></div>
       </template>
       <section v-if="trackingRows.length" class="computer-tracking"><h3>{{ t('当前跟踪') }}</h3><div v-for="record in trackingRows" :key="String(record.trackingId)"><p class="computer-note">{{ record.state }}{{ t(' · 实际频率 ') }}{{ (record.metrics as any)?.rateHz ?? t('未测量') }}{{ t(' 次/秒 · 分析宽度 ') }}{{ (record.effective as any)?.maxAnalysisWidth ?? t('未测量') }}{{ t(' · 处理 ') }}{{ (record.metrics as any)?.processingMs ?? t('未测量') }} ms</p><p v-if="(record.effective as any)?.reason" class="computer-note">{{ (record.effective as any).reason }}</p><ul><li v-for="target in (record.targets as any[] || [])" :key="target.id">{{ target.description || target.id }} · {{ target.state }}<span v-if="target.similarity !== undefined">{{ t(' · 模板相似值 ') }}{{ target.similarity }}</span></li></ul></div></section>
       <figure v-if="screenshotUrl && active && image" class="computer-preview"><ComputerControlCanvas :image="image" :disabled="!enabled || features.annotation === false || !available('annotation')" :tracking-supported="target.capabilities?.includes('tracking') === true" :busy="!!busy" :dynamic-enabled="(settings.annotation as Record<string,unknown>)?.dynamicEnabled === true" :duration-ms="(settings.annotation as Record<string,unknown>)?.staticDurationMs" :backend="(settings.annotation as Record<string,unknown>)?.backend" :rate-hz="(settings.annotation as Record<string,unknown>)?.rateHz" @show="run" @track="run" /><div class="work-buttons"><v-btn :href="screenshotUrl" target="_blank" rel="noopener noreferrer" variant="text">{{ t('查看原图') }}</v-btn><v-btn :href="screenshotUrl" :download="`${target.name}-screen.png`" variant="text">{{ t('保存截图') }}</v-btn></div><figcaption>{{ image?.capturedAt || t('时间未提供') }}{{ t(' · 当前图像仅为观察；指针或预览不代表输入成功。') }}</figcaption></figure>

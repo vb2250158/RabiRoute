@@ -1,3 +1,5 @@
+import { createManagerEndpointCache } from './manager-endpoint-cache.mjs';
+import { managerContextFromHeaders } from './manager-transport-contract.mjs';
 import { createTimeoutSettings } from "./timeout-settings.mjs";
 import fs from "node:fs";
 import net from "node:net";
@@ -56,6 +58,7 @@ async function persistEndpoint(configPath, original, next) {
 /** Existing trusted-LAN contract: public GUID avoids mistakes, not malicious peer impersonation. */
 export function createEndpointSession({ config, configPath, fetchImpl = fetch, discover = discoverManager, timeoutMs = 5000, cooldownMs = 10_000, timeoutSettings = createTimeoutSettings(config?.timeoutOverridesCache ?? config?.timeoutOverrides) } = {}) {
   let current = { ...config }; let inFlight;
+  const transportCache = createManagerEndpointCache();
   const rediscover = createDiscoveryCooldown(cooldownMs);
   async function verify(origin, expected = {}) {
     const signal = AbortSignal.timeout(timeoutSettings.get("agent.client.discovery", timeoutMs));
@@ -92,7 +95,7 @@ export function createEndpointSession({ config, configPath, fetchImpl = fetch, d
     const next = { ...current, managerUrl: candidate.managerUrl, managerGuid: candidate.guid, applicationGenerationId: candidate.generation, managerInstanceId: candidate.instance, ...(meta.timeoutOverrides !== undefined || current.timeoutOverridesCache !== undefined ? { timeoutOverridesCache: timeoutSettings.snapshot() } : {}) };
     if (endpointKeys.some(key => next[key] !== current[key]) || JSON.stringify(next.timeoutOverridesCache) !== JSON.stringify(current.timeoutOverridesCache)) await persistEndpoint(configPath, current, next);
     current = next;
-    return { ...after, meta, config: { ...current } };
+    return { ...after, meta, config: { ...current }, managerContext: managerContextFromHeaders(metaResponse.headers) };
   }
   async function resolve({ diagnostic = false, forceDiscovery = false } = {}) {
     let endpoint;
@@ -121,9 +124,19 @@ export function createEndpointSession({ config, configPath, fetchImpl = fetch, d
     return endpoint;
   }
   return {
+    transportCache,
     get config() { return { ...current }; },
     async ensure(options = {}) {
-      if (!inFlight) inFlight = resolve(options).finally(() => { inFlight = undefined; });
+      if (options.forceDiscovery) {
+        transportCache.invalidate();
+        if (inFlight) { try { await inFlight; } catch { /* Keep the original discovery failure local. */ } }
+      }
+      const cached = transportCache.get();
+      if (cached && !options.forceDiscovery && (options.diagnostic || businessReady(cached.meta))) return cached;
+      if (!inFlight) {
+        const token = transportCache.begin();
+        inFlight = resolve(options).then(result => { transportCache.remember(result, result.managerContext, token); return result; }).finally(() => { inFlight = undefined; });
+      }
       const result = await inFlight;
       if (!options.diagnostic && !businessReady(result.meta)) throw new Error("Manager generation is not ready for business requests.");
       return result;

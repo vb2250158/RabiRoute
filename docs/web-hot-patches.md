@@ -65,3 +65,21 @@
 - 一次修改自动进入新版，再用正式 Host 命令回滚；Manager 身份与后台进程保持不变。
 - 编译/完整性/持久化失败继续旧服务，超时或客户端断开不产生重复业务效果；原操作仍可查。
 - 新根 HTML 和实际下载字节匹配候选 hash；不得用源码测试、单次健康检查或开发服务器代替安装版证据。
+
+
+## 独立插件 Web 资源包
+
+需要新的 Web 共享运行时基础版时，先由统一发布流程更新 WebGUI。基础版只加载一份 Vue、Pinia、Vue Router、Vuetify 和现有界面状态；插件使用这些实际实例。此步骤不要求只因 Web runtime 改动就切换 Manager。已有全局 Web 补丁继续支持旧包。
+
+针对单个插件，从同一冻结源码生成原生插件产物，再使用官方选包入口补齐 Web 资源：
+
+```powershell
+node scripts/build-plugin-packages.mjs --package <pluginId> --output-directory <candidateRoot>
+node scripts/build-plugin-web-packages.mjs --package <pluginId> --output-directory <candidateRoot> --runtime-manifest <shellWebRoot>/assets/web-runtime.json
+```
+
+第二步使用原生构建回执并由原 finalizer 完成所选插件的证据，不重新打包整个宿主。产物 `web/module.json` 记录插件与后端配对、实际使用的共享导出、入口与静态 CSS、完整资源文件；JS、懒加载、图片、字体、Worker 和 WASM 随该插件版本保存在自身资源树。动态页 CSS 保持按需加载，文件 MIME 由资源包自身声明；新增资源格式无需修改宿主分发表。资源 URL 继续使用原插件 ID、revision 和相对路径，插件不再依赖宿主根目录的绝对 `/assets/...`。
+
+新候选仅在激活前检查所需共享导出。缺少导出时显示该候选的兼容问题，保留仍有效的旧页面和其他插件；不会新增每次 API 调用的版本资格检查，也不因插件版本变化强制刷新所有页面。实际后端能力与请求合同仍由原 Manager / 插件 owner 执行。新资源包优先使用自身 revision，旧页面可继续读取原保留 revision；卸载时释放本模块的样式和注册。
+
+构建回执只证明候选来源与资源闭包。正式启用仍使用插件原导入、同实例选版和回读流程，核对运行版本、资源、旧页/回退与目标行为；不能把候选构建当作已安装或视觉验收。

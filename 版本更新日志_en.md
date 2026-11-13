@@ -6,6 +6,60 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.14.2 - 2026-11-12
+
+- Preserve recorded start times when focus moves between plan steps, while honoring explicit clears. Continuing a plan retains its history and leaves unfinished steps without an invented completion time.
+- Host API 1.12 defines plan-update executor package references and version leases. Persona 0.1.13 supplies independently versioned plan preparation and history projection, while the original storage service owns queues, CAS, WAL and shared publication.
+- Carry the original schedule occurrence through Heartbeat, Agent requests and the native DSH channel. `io.rabiroute.endpoint.heartbeat` 0.1.4 and `io.rabiroute.manager.agent-thread-control` 0.1.5 support optional original UTC scheduledAt.
+- Migrate the remaining 25 cataloged Web plugins to complete independent resource packages. The shared shell owns the existing Vue, state and UI-registration services. Selected and full builds use one producer, retiring global multi-entry wrapper generation.
+- Repair task-title search interruption from a damaged projection and false empty results after synchronous memory-directory read failures. Preserve raw ledgers and memory files, using the original query cursor and same-source snapshots for local failures.
+- Compare execution dependencies against pinned automatic-update inputs, allowing equivalent root versions, descriptions and configuration formatting. Actual module compatibility remains decisive. Remove the unused inner computer-settings patch implementation.
+- The Manager payload is 0.14.2. Host API 1.12 and plugin SDK 1.3.1 preserves the contracts and fixes shared-instance identity for Windows absolute imports. Migrated plugin versions follow.
+
+- `io.rabiroute.agent.antigravity` 0.1.3.
+- `io.rabiroute.agent.astrbot` 0.1.3.
+- `io.rabiroute.agent.codex` 0.1.6.
+- `io.rabiroute.agent.copilot-cli` 0.1.3.
+- `io.rabiroute.agent.device-agent` 0.1.3.
+- `io.rabiroute.agent.dsh` 0.1.5.
+- `io.rabiroute.agent.grok-bot` 0.1.3.
+- `io.rabiroute.agent.marvis` 0.1.3.
+- `io.rabiroute.agent.workbuddy` 0.1.3.
+- `io.rabiroute.endpoint.feishu` 0.1.3.
+- `io.rabiroute.endpoint.napcat` 0.1.7.
+- `io.rabiroute.endpoint.rabilink` 0.1.3.
+- `io.rabiroute.endpoint.speech` 0.1.3.
+- `io.rabiroute.endpoint.webhook` 0.1.3.
+- `io.rabiroute.endpoint.wecom` 0.1.3.
+- `io.rabiroute.endpoint.weixin` 0.1.3.
+- `io.rabiroute.manager.core` 0.1.7.
+- `io.rabiroute.manager.desktop` 0.1.3.
+- `io.rabiroute.manager.message-adapter-control` 0.1.3.
+- `io.rabiroute.manager.performance` 0.1.4.
+- `io.rabiroute.manager.persona` 0.1.13.
+- `io.rabiroute.manager.route-control` 0.1.4.
+- `io.rabiroute.manager.speech` 0.1.4.
+- `io.rabiroute.manager.video` 0.1.4.
+- `io.rabiroute.manager.xiaomi-home` 0.1.3.
+
+## 0.14.1 - 2026-11-12
+
+- Add independent reconciliation for existing plan-mutation receipts. Verify commit evidence under the original requestId, payload digest, plan lease and receipt CAS, then record the proven committed or not-committed outcome.
+- Keep prepared WAL and insufficient evidence pending for that request. Preserve the original plan, attachments, history and staged candidates. Receipt reconciliation updates only its receipt while other plans and requests continue.
+- Storage-child protocol 3 explicitly separates ordinary execution from receipt-only work. Older protocols reject the new command. Proven precommit failures return typed `aborted_before_commit` / `not_committed` results and same-key reads retain the terminal outcome.
+- `io.rabiroute.manager.persona` 0.1.12 registers the public operation for category discovery, search and describe. Host API 1.11 supplies the result types. Remote SDK, CLI/MCP and native Host programs reuse their existing implementations.
+
+## 0.14.0 - 2026-11-11
+
+- Add stable boundaries for independent plugin definitions, complete Web resources and desktop execution resources. Host API 1.10, plugin SDK 1.3 and lightweight Windows SDK 0.4.2 supply the corresponding extensions. Existing connectors retain their supported execution paths.
+- Fix connection revocation after unrelated configuration save failures, advanced settings blocking files/terminals/original receipts, and failures spreading from a single directory, package root, memory record or derived history descriptor. Failed pagination retains loaded same-source roles and reports the affected items.
+- Derive Core computer schemas, action metadata and defaults from one plugin-owned definition. Separate raw overrides from effective settings, add explicit per-field default restoration, dynamic providers, request snapshots and live feature disabling. Native execution consumes actual request snapshots and supports scoped settings updates.
+- Official selected-plugin Web builds include complete resources, lazy chunks, CSS and MIME metadata while sharing the page runtime. Preserve mounted pages across versions, restore retained resources and expose the SDK Web builder.
+- Desktop Native/Qt resources use imported package Pins, scoped selection CAS, persistent restoration and rollback. Replacement retires the target desktop worker while files, terminals, uploads and original receipts retain their owners. Fix late Qt startup and duplicate candidate cleanup.
+- CLI/MCP share actual operation effects and data contracts. Fix read-only POST classification, skill downloads and generic sessionless calls. Modern Manager response identity facts and metadata revisions allow clients to reuse endpoint discovery results.
+- Automation supports multiple daily times and explicit DSH DSBot targets. Roles without Routes use the existing scheduler, request deduplication and exact target references. Invalid rules report local diagnostics and incomplete target drafts remain editable until corrected for saving.
+- Release `io.rabiroute.agent.dsh` 0.1.4, `io.rabiroute.endpoint.heartbeat` 0.1.3, `io.rabiroute.manager.agent-thread-control` 0.1.4, `io.rabiroute.manager.core` 0.1.6, `io.rabiroute.manager.persona` 0.1.11 `io.rabiroute.manager.route-control` 0.1.3 and `io.rabiroute.manager.diagnostics` 0.1.6. Standalone MCP 0.2.3 shares the CLI client contract.
+
 ## 0.13.1 - 2026-11-11
 
 - Fix KCF tracking pausing after first enablement because its default memory budget was below the stable executor footprint. Raise the default from 256 MiB to 512 MiB while preserving explicit user budgets and scoped pausing; dynamic tracking remains disabled by default.

@@ -3,7 +3,7 @@ import { beginRoleWork, RoleLifecycleError } from "./roleLifecycle.js";
 import { getTimeoutMs } from "./shared/timeoutSettings.js";
 import { executeAgentDelivery } from "./automation/agentDelivery.js";
 import { deliverSessionOnce } from "./automation/sessionDelivery.js";
-import { resolveAgentDeliveryExecutor, type AgentSessionDestination } from "./shared/agentDeliveryTarget.js";
+import { resolveAgentDeliveryExecutor, type AgentSessionDestination, type AgentDsBotDestination } from "./shared/agentDeliveryTarget.js";
 import { getPlan } from "./roleKnowledge.js";
 import { createAgentAdapter } from "./agentAdapters/agentAdapter.js";
 import { requestInstanceThread, instanceWorkerStateDirectory } from "./agentAdapters/instanceClient.js";
@@ -686,18 +686,19 @@ export async function deliverPacketToPrimaryAgentAdapter(
 }
 
 async function deliverPacketToSession(
-  routeId: string, ruleId: string, target: AgentSessionDestination,
+  routeId: string, ruleId: string, target: AgentSessionDestination | AgentDsBotDestination,
   envelope: RabiDeliveryEnvelope, messageId: string, imagePaths: string[], model?: string
 ): Promise<ForwardAdapterOutcome[]> {
-  const remote = config.remoteAgentTargets.find(item => item.id === target.agentTargetId);
-  if (remote ? remote.provider !== target.agentAdapter : target.agentTargetId !== `local:${target.agentAdapter}`
-    || !config.agentAdapters.includes(target.agentAdapter)) throw new Error("The selected Agent instance is unavailable or mismatched.");
+  const configuredRemote = config.remoteAgentTargets.find(item => item.id === target.agentTargetId);
+  if (target.kind !== "ds_bot" && (configuredRemote ? configuredRemote.provider !== target.agentAdapter : target.agentTargetId !== `local:${target.agentAdapter}`
+    || !config.agentAdapters.includes(target.agentAdapter))) throw new Error("The selected Agent instance is unavailable or mismatched.");
+  const remote = target.kind === "ds_bot" ? target.instanceBinding : configuredRemote;
   const deliveryId = `automation-${createHash("sha256").update(JSON.stringify([routeId, ruleId, envelope.deliveryId ?? messageId, target])).digest("hex")}`;
   await deliverSessionOnce(path.join(config.dataDir, "automation-deliveries", `${deliveryId}.json`), target, envelope, deliveryId,
     payload => remote ? requestInstanceThread(remote, payload) : requestMessageAgentManager(managerBaseUrl(), payload),
     { remote: Boolean(remote), imagePaths, model });
-  appendAdapterLogToDir("router", { event: "automation_agent_delivered", message: `Automation delivered to ${target.sessionId}`,
-    data: { routeId, ruleId, deliveryId, agentTargetId: target.agentTargetId, sessionId: target.sessionId } }, config.dataDir);
+  appendAdapterLogToDir("router", { event: "automation_agent_delivered", message: `Automation delivered to ${target.kind === "ds_bot" ? target.botId : target.sessionId}`,
+    data: { routeId, ruleId, deliveryId, agentTargetId: target.agentTargetId, ...(target.kind === "ds_bot" ? { botScopeId: target.botScopeId, botId: target.botId } : { sessionId: target.sessionId }) } }, config.dataDir);
   return [{ routeId, ruleId, adapter: target.agentAdapter, status: "delivered" }];
 }
 
@@ -1224,12 +1225,13 @@ async function forwardMessageToRouteInternal(
         message_pool: () => deliverPacketToMessageAgent(route.id, rule.id, packet.content, packet.messageSource,
           String(packet.templateValues.replyContextJson || "{}"), roleContext.roleId,
           options.messageGroup ?? immediateMessageAgentGroup(routeKind, record, extraValues)),
+        ds_bot: target => deliverPacketToSession(route.id, rule.id, target, packet.delivery, recordId(record), imagePaths),
         session: target => deliverPacketToSession(route.id, rule.id, target, packet.delivery, recordId(record), imagePaths,
           replayPacket.model),
         plan_secretary: async () => { throw new Error("The original secretary target was not resolved; replay cannot choose a different secretary."); }
       }));
     } catch (error) {
-      adapterOutcomes.push({ routeId: route.id, ruleId: rule.id, adapter: rule.agentTarget?.kind === "session" ? rule.agentTarget.agentAdapter : configuredPrimaryAgentAdapter() || "codex",
+      adapterOutcomes.push({ routeId: route.id, ruleId: rule.id, adapter: (rule.agentTarget?.kind === "session" || rule.agentTarget?.kind === "ds_bot") ? rule.agentTarget.agentAdapter : configuredPrimaryAgentAdapter() || "codex",
         status: "failed", error: error instanceof Error ? error.message : String(error) });
     }
   }

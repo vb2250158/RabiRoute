@@ -1,4 +1,4 @@
-import path from "node:path";
+import { webPluginModuleContentType } from "./webPluginModules.js";
 import type { IncomingMessage } from "node:http";
 import { ApiContractError, type ApiOperationResult } from "./apiOperationContract.js";
 import { hasAuthenticatedConnectionRequest } from "./connectionRequestAccess.js";
@@ -130,9 +130,7 @@ export function createPluginCatalogOwner(context: PluginCatalogApiContext, readO
               assertCurrent();
               const result = await read.call(modules, input.id!, input.rev!, input.relativePath!, invocation);
               assertCurrent();
-              const extension = path.extname(result.path).toLowerCase();
-              const contentType = extension === ".css" ? "text/css; charset=utf-8"
-                : extension === ".js" || extension === ".mjs" ? "text/javascript; charset=utf-8" : "application/octet-stream";
+              const contentType = result.contentType ?? webPluginModuleContentType(result.path);
               return { status: 200, body: result.source, headers: { "content-type": contentType,
                 "cache-control": "public, max-age=31536000, immutable", "x-content-type-options": "nosniff" } };
             }

@@ -199,7 +199,8 @@ function currentTimeValues(now = new Date()): ForwardTemplateValues {
     currentSecond: second
   };
 }
-function renderTemplate(template: string, values: ForwardTemplateValues): string {
+/** Replaces available message variables while preserving unknown placeholders. */
+export function renderTemplate(template: string, values: ForwardTemplateValues): string {
   return template.replace(/\{([a-zA-Z0-9_]+)\}/g, (match, key: string) => {
     const value = values[key];
     return value == null ? match : String(value);

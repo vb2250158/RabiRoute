@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -321,4 +322,27 @@ test("reconciliation refuses a callback's stale generation instead of returning 
   const result = await app.fetch("/api/plugins/reconciliation", { method: "POST" });
   assert.equal(result.status, 500); const body = await result.json();
   assert.equal(body.errorCode, "API_PLUGIN_RECONCILIATION_UNCONFIRMED"); assert.equal(body.mutationOutcome, "unknown"); assert.equal(body.data, undefined);
+});
+
+
+test("revision-qualified plugin assets use actual image/font/WASM/JSON MIME with original bytes", async t => {
+  const app = await pluginCatalogFixture(t, { ingress: 'webgui' });
+  const assets = [
+    ['picture.svg', 'image/svg+xml', Buffer.from('<svg/>')], ['font.woff2', 'font/woff2', Buffer.from([0, 255, 1])],
+    ['custom.fixture', 'application/vnd.fixture+binary', Buffer.from([8, 9])],
+    ['worker.wasm', 'application/wasm', Buffer.from([0, 97, 115, 109])], ['data.json', 'application/json; charset=utf-8', Buffer.from('{"fixture":true}')]
+  ] as const;
+  for (const [name, , bytes] of assets) await fs.writeFile(path.join(app.packageDirectory, 'web', name), bytes);
+  const resource = (name: string, bytes: Buffer, contentType: string) => ({ path: name, size: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex'), contentType });
+  await fs.writeFile(path.join(app.packageDirectory, 'web/module.json'), JSON.stringify({ schemaVersion: 1, kind: 'rabi-plugin-web', pluginId: 'io.test.catalog', version: '1.0.0', entry: 'nested/client.mjs',
+    backend: { pluginId: 'io.test.catalog', version: '1.0.0' }, runtime: { abi: 'rabi-web-runtime/1', imports: [] }, styles: [],
+    files: [resource('nested/client.mjs', app.source, 'text/javascript; charset=utf-8'), ...assets.map(([name, mime, bytes]) => resource(name, bytes, mime))] }));
+  assert.equal((await app.fetch('/api/plugins/reconciliation', { method: 'POST' })).status, 200);
+  const module = (await (await app.fetch('/api/plugins/modules')).json()).data.modules[0];
+  for (const [name, mime, bytes] of assets) {
+    const response = await app.fetch(`/api/plugins/modules/${module.id}/${module.rev}/web/${name}`);
+    assert.equal(response.status, 200); assert.equal(response.headers.get('content-type'), mime);
+    assert.equal(response.headers.get('x-content-type-options'), 'nosniff');
+    assert.deepEqual(Buffer.from(await response.arrayBuffer()), bytes);
+  }
 });

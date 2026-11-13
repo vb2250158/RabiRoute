@@ -87,9 +87,10 @@
       "packageId": "io.rabiroute.endpoint.heartbeat",
       "fromVersions": [
         "1.0.0",
-        "0.1.1"
+        "0.1.1",
+        "0.1.2"
       ],
-      "toVersion": "0.1.2"
+      "toVersion": "0.1.3"
     },
     {
       "packageId": "io.rabiroute.endpoint.napcat",
@@ -301,9 +302,10 @@
       "packageId": "io.rabiroute.manager.route-control",
       "fromVersions": [
         "1.0.0",
-        "0.1.1"
+        "0.1.1",
+        "0.1.2"
       ],
-      "toVersion": "0.1.2"
+      "toVersion": "0.1.3"
     },
     {
       "packageId": "io.rabiroute.manager.speech",

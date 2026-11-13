@@ -1,3 +1,5 @@
+import type { PlanUpdateExecutorCallbacks, PlanUpdateExecutorSelection, PlanUpdateExecutorLease, PlanUpdateExecutorPin } from "./planUpdateExecutor.js";
+import { parsePlanUpdateExecutorPin, samePlanUpdateExecutorPin } from "./planUpdateExecutor.js";
 import { getTimeoutMs } from "../shared/timeoutSettings.js";
 import { beginNativeStorageWork } from "./nativeStorageWork.js";
 import { fork } from "node:child_process";
@@ -28,10 +30,12 @@ import {
   sameManagerStorageMutationFence,
   storageMutationRoleDirectory,
   type ManagerStorageMutationAdmission,
+  type ManagerStorageMutationExecutorResolution,
   type ManagerStorageMutationChildIdentity,
   type ManagerStorageMutationFence,
   type ManagerStorageMutationRequest,
   type ManagerStorageMutationResponse,
+  type ManagerStorageMutationReceiptResult,
   type ManagerStorageMutationTask
 } from "./managerStorageMutationProtocol.js";
 
@@ -58,8 +62,8 @@ export type ManagerStorageMutationChild = {
   unref(): void;
 };
 
-export type ManagerStorageMutationPoolOptions = Readonly<{
-  rolesRoot: string;
+export type ManagerStorageMutationPoolOptions = PlanUpdateExecutorCallbacks & Readonly<{
+  rolesRoot: string | (() => string);
   applicationGenerationId: string;
   managerInstanceId: string;
   timeoutMs?: number;
@@ -86,6 +90,8 @@ export type ManagerStorageMutationPoolStatus = Readonly<{
 }>;
 
 export type ManagerStorageMutationOptions = Readonly<{
+  /** Captures immutable projection metadata without delaying the mutation queue. */
+  onPlanUpdateExecutorSelected?: (selection: PlanUpdateExecutorSelection) => void;
   /** Parent-only original-request authority; never serialized to the worker or receipt. */
   authorize?: () => void;
   actor?: import("../shared/planHistoryActor.js").PlanHistoryActor;
@@ -96,6 +102,11 @@ export type ManagerStorageMutationOptions = Readonly<{
 }>;
 
 type PendingMutation<T = unknown> = {
+  mode?: "receipt_only";
+  planUpdateExecutor?: PlanUpdateExecutorLease;
+  planUpdateExecutorUnavailable?: true;
+  executorLeases: Set<PlanUpdateExecutorLease>;
+  onPlanUpdateExecutorSelected?: ManagerStorageMutationOptions["onPlanUpdateExecutorSelected"];
   releaseNativeWork(): void;
   authorize?: () => void;
   actor?: import("../shared/planHistoryActor.js").PlanHistoryActor;
@@ -128,6 +139,7 @@ type ActiveMutation = {
   timer: NodeJS.Timeout;
   abortListener?: () => void;
   admission?: "allowed" | "denied";
+  executorResolutionRequested?: boolean;
   terminating: boolean;
 };
 
@@ -135,8 +147,8 @@ export class ManagerStorageMutationError extends Error {
   constructor(
     message: string,
     readonly code: "busy" | "timeout" | "aborted" | "worker_failed" | "mutation_failed" | "revision_conflict"
-      | "idempotency_conflict" | "indeterminate" | "fence_mismatch" | "termination_unconfirmed" | "stopped" | "validation_rejected" | "authorization_revoked",
-    readonly commitState?: "not_started" | "unknown"
+      | "idempotency_conflict" | "indeterminate" | "fence_mismatch" | "termination_unconfirmed" | "stopped" | "validation_rejected" | "authorization_revoked" | "aborted_before_commit",
+    readonly commitState?: "not_started" | "not_committed" | "unknown"
   ) {
     super(message);
     this.name = "ManagerStorageMutationError";
@@ -207,6 +219,10 @@ function cloneSerializable<T>(value: T): T {
 }
 
 function mutationResponseError(message: string): ManagerStorageMutationError {
+  if (message.startsWith("STORAGE_MUTATION_EXECUTOR_UNAVAILABLE:")) {
+    return new ManagerStorageMutationError(message, "busy", "not_started");
+  }
+  if (message.startsWith("STORAGE_MUTATION_ABORTED_BEFORE_COMMIT:")) return new ManagerStorageMutationError(message, "aborted_before_commit", "not_committed");
   if (message.startsWith("STORAGE_MUTATION_VALIDATION_REJECTED:")) {
     return new ManagerStorageMutationError(message.slice("STORAGE_MUTATION_VALIDATION_REJECTED:".length).trim(), "validation_rejected");
   }
@@ -230,6 +246,7 @@ export class ManagerStorageMutationPool {
   private readonly forceTerminationTimeoutMs: number;
   private readonly maxQueue: number;
   private readonly childFactory: (identity: ManagerStorageMutationChildIdentity) => ManagerStorageMutationChild;
+  private readonly executorCallbacks: PlanUpdateExecutorCallbacks;
   private readonly queue: PendingMutation[] = [];
   private childSlot?: ChildSlot;
   private blockedSlot?: ChildSlot;
@@ -241,7 +258,8 @@ export class ManagerStorageMutationPool {
   private stopFlight?: Promise<void>;
 
   constructor(options: ManagerStorageMutationPoolOptions) {
-    const rolesRoot = path.resolve(requiredIdentityText(options.rolesRoot, "rolesRoot"));
+    let resolvedRolesRoot = typeof options.rolesRoot === "string" ? path.resolve(requiredIdentityText(options.rolesRoot, "rolesRoot")) : undefined;
+    const rolesRoot = (): string => resolvedRolesRoot ??= path.resolve(requiredIdentityText(typeof options.rolesRoot === "function" ? options.rolesRoot() : options.rolesRoot, "rolesRoot"));
     const applicationGenerationId = requiredIdentityText(
       options.applicationGenerationId,
       "applicationGenerationId"
@@ -254,12 +272,13 @@ export class ManagerStorageMutationPool {
         .digest("hex")}`))(identityTuple),
       "storageGenerationLease"
     );
-    this.identity = Object.freeze({ rolesRoot, applicationGenerationId, managerInstanceId, storageGenerationLease });
+    this.identity = Object.freeze({ get rolesRoot() { return rolesRoot(); }, applicationGenerationId, managerInstanceId, storageGenerationLease });
     this.timeoutMs = positiveInteger(options.timeoutMs, getTimeoutMs("storage.mutation", 30_000));
     this.terminationTimeoutMs = positiveInteger(options.terminationTimeoutMs, getTimeoutMs("storage.mutationTerminate", 1_000));
     this.forceTerminationTimeoutMs = positiveInteger(options.forceTerminationTimeoutMs, getTimeoutMs("storage.mutationForceTerminate", 5_000));
     this.maxQueue = Math.max(0, Math.floor(options.maxQueue ?? 32));
     this.childFactory = options.childFactory ?? spawnStorageMutationChild;
+    this.executorCallbacks = options;
   }
 
   status(): ManagerStorageMutationPoolStatus {
@@ -280,7 +299,8 @@ export class ManagerStorageMutationPool {
     roleIdValue: string,
     planIdValue: string | undefined,
     task: ManagerStorageMutationTask,
-    options: ManagerStorageMutationOptions
+    options: ManagerStorageMutationOptions,
+    mode?: "receipt_only"
   ): Promise<T> {
     if (!this.accepting || this.stateValue === "stopping" || this.stateValue === "stopped") {
       return Promise.reject(new ManagerStorageMutationError("Storage mutation pool is stopped.", "stopped"));
@@ -318,10 +338,31 @@ export class ManagerStorageMutationPool {
     if ((this.activeMutation || this.queue.length > 0) && this.queue.length >= this.maxQueue) {
       return Promise.reject(new ManagerStorageMutationError("Storage mutation queue is full.", "busy"));
     }
+    let executor: PlanUpdateExecutorLease | undefined;
+    let executorUnavailable: true | undefined;
+    try {
+      if (mode !== "receipt_only" && task.type === "plan_update") {
+        executor = this.executorCallbacks.acquirePlanUpdateExecutor?.();
+        if (this.executorCallbacks.acquirePlanUpdateExecutor && !executor) executorUnavailable = true;
+      }
+    } catch { executorUnavailable = true; }
+    const executorLeases = new Set<PlanUpdateExecutorLease>(executor ? [executor] : []);
     const nativeWork = beginNativeStorageWork();
+    let released = false;
+    const releaseNativeWork = () => {
+      if (released) return;
+      released = true;
+      nativeWork.release();
+      for (const lease of executorLeases) lease.release();
+    };
     return new Promise<T>((resolve, reject) => {
       const pending: PendingMutation<T> = {
-        releaseNativeWork: nativeWork.release,
+        releaseNativeWork,
+        planUpdateExecutor: executor,
+        planUpdateExecutorUnavailable: executorUnavailable,
+        executorLeases,
+        onPlanUpdateExecutorSelected: mode !== "receipt_only" && task.type === "plan_update" ? options.onPlanUpdateExecutorSelected : undefined,
+        mode,
         roleId,
         planId,
         idempotencyKey: options.idempotencyKey,
@@ -386,6 +427,10 @@ export class ManagerStorageMutationPool {
     options: ManagerStorageMutationOptions
   ): Promise<unknown> {
     return this.execute(roleId, undefined, { type: "plan_status_delete", statusKey, replacementKey }, options);
+  }
+
+  reconcilePlanUpdateReceipt(roleId:string,planId:string,patch:Record<string,unknown>,options:ManagerStorageMutationOptions):Promise<ManagerStorageMutationReceiptResult> {
+    return this.execute(roleId,planId,{type:"plan_update",patch},options,"receipt_only");
   }
 
   updatePlan(
@@ -625,9 +670,14 @@ export class ManagerStorageMutationPool {
     const request: ManagerStorageMutationRequest = Object.freeze({
       protocolVersion: MANAGER_STORAGE_MUTATION_PROTOCOL_VERSION,
       requestId: pending.idempotencyKey,
+      ...(pending.mode ? {mode:pending.mode} : {}),
       fence,
       expectedRevision: pending.expectedRevision,
       task: pending.task,
+      ...(pending.planUpdateExecutor ? { planUpdateExecutor: {
+        pin: pending.planUpdateExecutor.pin, entryUrl: pending.planUpdateExecutor.entryUrl
+      } } : {}),
+      ...(pending.planUpdateExecutorUnavailable ? { planUpdateExecutorUnavailable: true } : {}),
       actor: pending.actor,
       ...(pending.authorize ? { admissionNonce: randomBytes(32).toString("hex") } : {})
     });
@@ -696,7 +746,7 @@ export class ManagerStorageMutationPool {
     return slot;
   }
 
-  private handleMessage(slot: ChildSlot, response: ManagerStorageMutationResponse | ManagerStorageMutationAdmission): void {
+  private handleMessage(slot: ChildSlot, response: ManagerStorageMutationResponse | ManagerStorageMutationAdmission | ManagerStorageMutationExecutorResolution): void {
     const active = this.activeMutation;
     if (!active || active.slot !== slot || active.terminating) return;
     const rejectProtocol = () => {
@@ -711,6 +761,16 @@ export class ManagerStorageMutationPool {
       || !sameManagerStorageMutationFence(response.fence, active.request.fence)
       || response.admissionNonce !== active.request.admissionNonce) {
       rejectProtocol();
+      return;
+    }
+    if ("kind" in response && response.kind === "executor_resolution_request") {
+      if (active.pending.mode === "receipt_only" || active.pending.task.type !== "plan_update"
+        || response.stage !== "executor_resolution" || response.sequence !== 1 || active.executorResolutionRequested) {
+        rejectProtocol();
+        return;
+      }
+      active.executorResolutionRequested = true;
+      void this.answerExecutorResolution(active, response);
       return;
     }
     if ("kind" in response) {
@@ -758,10 +818,75 @@ export class ManagerStorageMutationPool {
       } else rejectProtocol();
       return;
     }
-    if (response.ok === true) this.settleActive(active, undefined, cloneSerializable(response.value));
+    if (response.ok === true) {
+      this.selectProjectionExecutor(active, response);
+      this.settleActive(active, undefined, cloneSerializable(response.value));
+    }
     else if (response.ok === false && typeof response.message === "string" && !response.code) {
       this.settleActive(active, mutationResponseError(response.message));
     } else rejectProtocol();
+  }
+
+  private async restoreExecutor(active: ActiveMutation, pin: PlanUpdateExecutorPin): Promise<PlanUpdateExecutorLease> {
+    const existing = [...active.pending.executorLeases].find(lease => samePlanUpdateExecutorPin(lease.pin, pin));
+    if (existing) return existing;
+    const restore = this.executorCallbacks.restorePlanUpdateExecutor;
+    if (!restore) throw new Error("The original plan executor package resolver is unavailable.");
+    const lease = await restore(pin);
+    if (this.activeMutation !== active || active.terminating || active.slot.closed) {
+      lease.release();
+      throw new Error("The original storage mutation ended while its executor was being restored.");
+    }
+    if (!samePlanUpdateExecutorPin(lease.pin, pin)) {
+      lease.release();
+      throw new Error("The restored plan executor identity does not match the original receipt.");
+    }
+    active.pending.executorLeases.add(lease);
+    return lease;
+  }
+
+  private async answerExecutorResolution(
+    active: ActiveMutation,
+    query: Extract<ManagerStorageMutationExecutorResolution, { kind: "executor_resolution_request" }>
+  ): Promise<void> {
+    let decision: ManagerStorageMutationExecutorResolution;
+    try {
+      const lease = await this.restoreExecutor(active, parsePlanUpdateExecutorPin(query.pin));
+      decision = { ...query, kind: "executor_resolution_decision", allowed: true,
+        executor: { pin: lease.pin, entryUrl: lease.entryUrl } };
+    } catch {
+      decision = { ...query, kind: "executor_resolution_decision", allowed: false };
+    }
+    if (this.activeMutation !== active || active.terminating || active.slot.closed) return;
+    try {
+      active.slot.child.send(decision, error => {
+        if (error && this.activeMutation === active && !active.terminating) {
+          void this.terminateActive(active, new ManagerStorageMutationError("Plan executor resolution could not be sent.", "worker_failed", "unknown"));
+        }
+      });
+    } catch {
+      void this.terminateActive(active, new ManagerStorageMutationError("Plan executor resolution could not be sent.", "worker_failed", "unknown"));
+    }
+  }
+
+  private selectProjectionExecutor(
+    active: ActiveMutation,
+    response: Extract<ManagerStorageMutationResponse, { ok: true }>
+  ): void {
+    const selected = active.pending.onPlanUpdateExecutorSelected;
+    if (!selected) return;
+    let selection: PlanUpdateExecutorSelection = {};
+    try {
+      if (Object.hasOwn(response, "planUpdateExecutorPin")) {
+        const pin = parsePlanUpdateExecutorPin(response.planUpdateExecutorPin);
+        const lease = [...active.pending.executorLeases].find(item => samePlanUpdateExecutorPin(item.pin, pin));
+        selection = { pin, ...(lease ? { descriptor: { pin, entryUrl: lease.entryUrl } } : {}) };
+      }
+    } catch (error) { selection = { error }; }
+    try { selected(selection); }
+    catch {
+      // Projection bookkeeping cannot undo a committed result or hold unrelated writes.
+    }
   }
 
   private handleChildError(slot: ChildSlot, _error: Error): void {

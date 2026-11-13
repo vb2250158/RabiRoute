@@ -33,7 +33,7 @@ class PlanStorageStartupAttemptError extends Error {
 }
 
 export type PlanStorageStartupLifecycleOptions = Readonly<{
-  rolesRoot: string;
+  rolesRoot: string | (() => string);
   readOnly: boolean;
   attemptTimeoutMs?: number;
   retryBaseMs?: number;

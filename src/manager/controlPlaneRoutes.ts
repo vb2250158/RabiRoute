@@ -1,3 +1,6 @@
+import { createManagerTransportIdentity } from "./managerTransportIdentity.js";
+import { assertComputerFeaturePolicyEnabled } from "../shared/agentInteractiveProtocol.js";
+import {createComputerSettingsDefinition, type ComputerSettingsDefinition} from "../../apps/rabi-agent/lib/computer-control-contract.mjs";
 import type { ComputerPresentationTheme } from "../../apps/rabi-agent/lib/computer-service.mjs";
 import { computerAgentSourceId, endComputerTrackingForPlan } from "./computerTaskLifecycle.js";
 import { resolvePluginPackageRoots } from "../shared/pluginPackageRoots.js";
@@ -284,6 +287,7 @@ import { spawnGatewayCommandProcess } from "./gatewayCommandProcess.js";
 import { createPluginCatalogOperations } from "./pluginCatalogOperations.js";
 import type { PluginCatalogInvocation } from "./pluginCatalogRoutes.js";
 import { PluginPackageStore } from "./pluginPackageStore.js";
+import { createDesktopResourceResolver } from "./desktopQtResourceResolver.js";
 import { createStartupPresentationProjector } from "./startupPresentation.js";
 import { createSourcePatchHostService, ManagerSourcePatchService } from "./sourcePatchService.js";
 import { SourcePatchWatcher } from "./sourcePatchWatcher.js";
@@ -312,7 +316,7 @@ import { registerManagerBootstrap, splitManagerBootstrapPublicOperations } from 
 import { AsyncPluginOutcomeArchive } from "../plugin-runtime-host/asyncOutcomeArchive.js";
 import type { RuntimeObservation } from "../plugin-runtime-host/bridge/executor.mjs";
 import { ProcessLeaseRegistry } from "../runtime/processLeaseRegistry.js";
-import { WebPluginModuleRegistry } from "./webPluginModules.js";
+import { WebPluginModuleRegistry, retainedWebPackageCatalog } from "./webPluginModules.js";
 import {
   ManagerPluginRouteRegistry,
   createManagerApiOperationsService,
@@ -497,6 +501,8 @@ import {
 } from "./managerReadWorkerPool.js";
 
 import { RoleStorageApplication, RoleStorageApplicationError, roleStorageOperationKey, type RoleStorageCommandContext, type RoleStoragePlanFeedbackProjection } from "./roleStorageApplication.js";
+import { createPlanUpdateExecutorRestorer } from "./planUpdateExecutorPackages.js";
+import type { PlanUpdateExecutorService } from "./planUpdateExecutor.js";
 import {
   ensurePlanSecretaryBindingForEvent,
   replacePlanSecretaryBindingForEvent,
@@ -772,6 +778,7 @@ type NotificationScheduleDefinition = {
   windowStartTime?: string;
   windowEndTime?: string;
   timeOfDay?: string;
+  timeOfDays?: string[];
   onceAt?: string;
 };
 
@@ -1003,6 +1010,7 @@ function agentThreadRequestOptions(
   return {
     invokeAgentOperation: invokePublishedAgentOperation,
     getProviders: () => resolvePublishedAgentManagerProviders(publishedPluginGeneration()),
+    assertNewAgentTask: () => assertComputerFeaturePolicyEnabled(configRepository.readComputerFeaturePolicy("agentTasks")),
     allowedWorkspaces: agentThreadAllowedWorkspaces(),
     defaultWorkspace: rootDir,
     // Defaults belong to the target Route, never to an unrelated sending persona.
@@ -1418,7 +1426,7 @@ const managerHostOverride = process.env.GATEWAY_MANAGER_HOST?.trim() || "";
 const managerHost = managerHostOverride || (!managerReadOnly && rabiGlobalConfig.read().webguiLan.enabled ? "0.0.0.0" : "127.0.0.1");
 const managerShouldAutostart = !managerReadOnly && managerAutostartEnabled();
 const remoteAgentPublicHost = process.env.REMOTE_AGENT_PUBLIC_HOST || process.env.GATEWAY_MANAGER_PUBLIC_HOST || "";
-const configRepository = new ManagerConfigRepository({ rootDir, managerPort });
+const configRepository = new ManagerConfigRepository({ rootDir, managerPort, resolveComputerDefinition: () => resolvePublishedPluginService("manager.computer-settings-definition@1") as ComputerSettingsDefinition | undefined });
 const messageEndpointManagers = new MessageEndpointManagers();
 
 const managerEventHub = new ManagerEventHub({
@@ -1558,12 +1566,10 @@ function readManagerConfig(): ManagerConfig {
 
 function writeManagerConfig(cfg: ManagerConfig): void {
   configRepository.writeManagerConfig(cfg);
-  routeRoot = configRepository.routeRoot;
-  rolesRoot = configRepository.rolesRoot;
 }
 
-let rolesRoot = configRepository.rolesRoot;
-let routeRoot = configRepository.routeRoot;
+function managerRolesRoot(): string { return configRepository.requireDomainRoot("roles"); }
+function managerRouteRoot(): string { return configRepository.requireDomainRoot("route"); }
 let routeCatalogConfig: GatewayConfigFile = { gateways: [] };
 let routeCatalogPersonaPresentations: readonly RouteCatalogPersonaPresentation[] = Object.freeze([]);
 let roleKnowledgeCatalogsReady = false;
@@ -1668,7 +1674,7 @@ const agentCompletionDelivery = new AgentCompletionDeliveryService({
         if (!shares) throw new Error("HTML share plugin is unavailable; enable its dependencies or disable HTML-to-link conversion to send the original file.");
         return shares.publish(file, id);
       },
-      rootDir, routeRoot, rolesRoot, publishEvent: publishManagerEvent, speechServiceUrl: speechServiceUrl(),
+      rootDir, routeRoot: managerRouteRoot(), rolesRoot: managerRolesRoot(), publishEvent: publishManagerEvent, speechServiceUrl: speechServiceUrl(),
       runtimes: [{ ...runtime.definition, napcatInstances: instances.map(item => ({ ...item, accessToken: item.accessToken ?? "" })) }]
     };
     await deliverCompletionToEndpoint(rule, hook, deliveryId,
@@ -1693,7 +1699,7 @@ const codexHookContextService = new CodexHookContextService({
     }
     return results;
   },
-  rolesRoot: () => rolesRoot,
+  rolesRoot: () => managerRolesRoot(),
   storePath: path.join(rootDir, "data", "codex-hook", "sessions.json"),
   deliverPlanTaskCompletion,
   hookEnabled: codexHookEnabled,
@@ -2006,11 +2012,11 @@ async function withRoleBindings<T>(definitions: readonly GatewayDefinition[], ac
   async function lockAt(index: number): Promise<T> {
     if (index === bindings.length) return action();
     const roleId = bindings[index];
-    const directory = roleFolderPath(rolesRoot, roleId);
+    const directory = roleFolderPath(managerRolesRoot(), roleId);
     return withRoleLock(directory, async () => {
       const createsReference = definitions.some(item => item.agentRoleId === roleId && !item.agentRoleDeviceId
         && !previous.some(old => old.id === item.id && old.agentRoleId === roleId && !old.agentRoleDeviceId));
-      if (createsReference) { await checkedRoleDirectory(rolesRoot, roleId); await assertRoleAcceptsWork(directory); }
+      if (createsReference) { await checkedRoleDirectory(managerRolesRoot(), roleId); await assertRoleAcceptsWork(directory); }
       return lockAt(index + 1);
     });
   }
@@ -2047,8 +2053,8 @@ async function resolveRouteMutation(operationId: string): Promise<{ state: "comm
 function normalizeDefinition(definition: GatewayDefinition): GatewayDefinition {
   return sharedNormalizeGatewayDefinition(definition, {
     managerPort,
-    routeDataDir: (configName) => path.relative(rootDir, routeFolderPath(routeRoot, configName)).replace(/\\/g, "/"),
-    rolesDir: path.relative(rootDir, rolesRoot).replace(/\\/g, "/"),
+    routeDataDir: (configName) => path.relative(rootDir, routeFolderPath(managerRouteRoot(), configName)).replace(/\\/g, "/"),
+    rolesDir: path.relative(rootDir, managerRolesRoot()).replace(/\\/g, "/"),
     normalizeAgentAdapters: (adapters) => normalizeAgentAdapters(adapters),
     normalizePipeline: (pipeline) => normalizePipelineDefinition(pipeline) as GatewayDefinition["pipeline"]
   }) as GatewayDefinition;
@@ -2081,11 +2087,11 @@ function normalizeIgnoredNapcatInstanceIds(raw: unknown): string[] {
 }
 
 function personaConfigPath(roleId: string): string {
-  return resolvePersonaConfigPath(rolesRoot, roleId);
+  return resolvePersonaConfigPath(managerRolesRoot(), roleId);
 }
 
 function adapterConfigPath(configName: string): string {
-  return resolveAdapterConfigPath(routeRoot, configName);
+  return resolveAdapterConfigPath(managerRouteRoot(), configName);
 }
 
 function configPathValue(value: unknown): string | undefined {
@@ -2435,7 +2441,7 @@ async function ensurePersonaConfigFile(roleId: string): Promise<string> {
 }
 
 async function ensureRoleFile(roleId: string, roleFile: string): Promise<string> {
-  const target = roleFilePath(rolesRoot, roleId, roleFile);
+  const target = roleFilePath(managerRolesRoot(), roleId, roleFile);
   try {
     await requireRouteCatalogLifecycle().ensureRoleFile(roleId, roleFile);
   } catch (error) {
@@ -2445,7 +2451,7 @@ async function ensureRoleFile(roleId: string, roleFile: string): Promise<string>
 }
 
 async function ensureRoleFolder(roleId: string, subfolder?: string): Promise<string> {
-  const target = roleFolderPath(rolesRoot, roleId, subfolder);
+  const target = roleFolderPath(managerRolesRoot(), roleId, subfolder);
   try {
     await requireRouteCatalogLifecycle().ensureRoleFolder(roleId, subfolder);
   } catch (error) {
@@ -2591,8 +2597,8 @@ async function loadRuntimes(): Promise<void> {
 
 async function applyRouteCatalogSnapshot(snapshot: RouteCatalogSnapshot, application: RouteCatalogApplicationContext): Promise<void> {
   if (
-    normalizePathForComparison(snapshot.routeRoot) !== normalizePathForComparison(routeRoot)
-    || normalizePathForComparison(snapshot.rolesRoot) !== normalizePathForComparison(rolesRoot)
+    normalizePathForComparison(snapshot.routeRoot) !== normalizePathForComparison(managerRouteRoot())
+    || normalizePathForComparison(snapshot.rolesRoot) !== normalizePathForComparison(managerRolesRoot())
   ) {
     throw new Error("Route catalog snapshot roots no longer match the active Manager configuration.");
   }
@@ -2633,8 +2639,6 @@ async function reloadChangedConfig(
 ): Promise<void> {
   try {
     configRepository.refreshManagerConfig();
-    routeRoot = configRepository.routeRoot;
-    rolesRoot = configRepository.rolesRoot;
     const routeCatalogLifecycle = activeStorageLifecycleGeneration?.routeCatalog;
     if (!routeCatalogLifecycle) throw new Error("Route catalog lifecycle is unavailable.");
     await routeCatalogLifecycle.recapture();
@@ -2719,8 +2723,8 @@ function startConfigWatcher(
   const broker = new ManagerWatchBroker({
     request: () => ({
       kind: "config",
-      routeRoot,
-      rolesRoot,
+      routeRoot: managerRouteRoot(),
+      rolesRoot: managerRolesRoot(),
       operationTimeoutMs: getTimeoutMs("backend.manager.controlPlaneRoutes.request.operationTimeoutMs", 1_500),
       explicitFiles: [configRepository.managerConfigPath]
     }),
@@ -2783,8 +2787,8 @@ function envFor(
 ): NodeJS.ProcessEnv {
   const parts = routeRuntimeParts(definition.id);
   const configName = sanitizeConfigName(definition.configName) || parts.configName;
-  const routeDataDir = path.relative(rootDir, routeFolderPath(routeRoot, configName)).replace(/\\/g, "/");
-  const routeRolesDir = path.relative(rootDir, rolesRoot).replace(/\\/g, "/");
+  const routeDataDir = path.relative(rootDir, routeFolderPath(managerRouteRoot(), configName)).replace(/\\/g, "/");
+  const routeRolesDir = path.relative(rootDir, managerRolesRoot()).replace(/\\/g, "/");
   const rabiLinkRelay = rabiLinkRelayConfigFor(definition);
   const globalConfig = rabiGlobalConfig.read();
   const {
@@ -3165,7 +3169,7 @@ async function stopAllGatewaysAndWait(): Promise<void> {
 function dataDirFor(definition: GatewayDefinition): string {
   const parts = routeRuntimeParts(definition.id);
   const configName = sanitizeConfigName(definition.configName) || parts.configName;
-  return routeFolderPath(routeRoot, configName);
+  return routeFolderPath(managerRouteRoot(), configName);
 }
 
 function roleInfoFor(
@@ -4372,7 +4376,7 @@ function normalizeManualRouteKind(value: unknown): ForwardRouteKind {
 
 function routeDataDirForDefinition(definition: GatewayDefinition): string {
   const configName = routeRuntimeParts(definition.id).configName || sanitizeConfigName(definition.name ?? definition.id);
-  return routeFolderPath(routeRoot, configName);
+  return routeFolderPath(managerRouteRoot(), configName);
 }
 
 function listGatewayDeliveryReplayAttempts(id: string, limit: number, status: string | null): Record<string, unknown> {
@@ -4719,7 +4723,7 @@ async function maintainAgentSendReceipt(
 ): Promise<AgentCommunicationHttpResponse> {
   const replyOptions = () => ({
     endpointEgress: (capability: string) => resolvePublishedPluginService(capability) as import("@rabiroute/plugin-sdk").MessageEndpointEgressProvider | undefined,
-    rootDir, routeRoot, rolesRoot,
+    rootDir, routeRoot: managerRouteRoot(), rolesRoot: managerRolesRoot(),
     runtimes: [...runtimes.values()].map(runtime => ({
       ...runtime.definition,
       napcatInstances: (runtime.definition.napcatInstances ?? sharedNormalizeNapCatInstances(runtime.definition))
@@ -4763,7 +4767,7 @@ async function maintainAgentSendReceipt(
 
 async function readAgentChatHistory(requestUrl: URL) {
         const { send, query } = parseAgentChatHistoryQuery(requestUrl);
-        const readOptions = { rootDir, routeRoot, rolesRoot, runtimes: [...runtimes.values()].map(runtime => ({ ...runtime.definition,
+        const readOptions = { rootDir, routeRoot: managerRouteRoot(), rolesRoot: managerRolesRoot(), runtimes: [...runtimes.values()].map(runtime => ({ ...runtime.definition,
           napcatInstances: (runtime.definition.napcatInstances ?? sharedNormalizeNapCatInstances(runtime.definition))
             .map(instance => ({ ...instance, accessToken: instance.accessToken ?? "" })) })) };
         const history = await conversationContextGuard.searchHistory(send, readOptions, query);
@@ -4774,7 +4778,7 @@ async function performAgentSend(
   request: AgentSendRequest,
   options: { remoteSource?: TrustedLanAgentSource; requestAuthority?: () => void; withManagedGroupFile?: import("../outbox.js").AgentReplyOptions["withManagedGroupFile"] } = {}
 ): Promise<AgentCommunicationHttpResponse> {
-  const snapshot = { rootDir, routeRoot, rolesRoot,
+  const snapshot = { rootDir, routeRoot: managerRouteRoot(), rolesRoot: managerRolesRoot(),
     runtimes: [...runtimes.values()].map(runtime => ({ ...runtime.definition,
       napcatInstances: (runtime.definition.napcatInstances ?? sharedNormalizeNapCatInstances(runtime.definition))
         .map(instance => ({ ...instance, accessToken: instance.accessToken ?? "" })) })) };
@@ -4788,7 +4792,7 @@ async function performConversationAgentSend(
   // Conversation review precedes optional content review and all new send reservations.
   // Durable receipts bypass it: retries inspect/reconcile the original delivery rather than resend.
   const initialPrepared = prepareAgentSendRequest(request);
-  const conversationOptions = { rootDir, routeRoot, rolesRoot,
+  const conversationOptions = { rootDir, routeRoot: managerRouteRoot(), rolesRoot: managerRolesRoot(),
     runtimes: [...runtimes.values()].map(runtime => ({ ...runtime.definition,
       napcatInstances: (runtime.definition.napcatInstances ?? sharedNormalizeNapCatInstances(runtime.definition))
         .map(instance => ({ ...instance, accessToken: instance.accessToken ?? "" })) })) };
@@ -4845,8 +4849,8 @@ async function performConversationAgentSend(
   const replyOptions = {
     endpointEgress: (capability: string) => resolvePublishedPluginService(capability) as import("@rabiroute/plugin-sdk").MessageEndpointEgressProvider | undefined,
     rootDir,
-    routeRoot,
-    rolesRoot,
+    routeRoot: managerRouteRoot(),
+    rolesRoot: managerRolesRoot(),
     withManagedGroupFile: options.withManagedGroupFile,
     withManagedPlanAttachment: resolveSendManagedPlanAttachment,
     speechServiceUrl: speechServiceUrl(),
@@ -6638,7 +6642,7 @@ function roleDirForApi(roleId: string): string {
   if (!safeRoleId) {
     throw new Error("Missing role id.");
   }
-  return roleFolderPath(rolesRoot, safeRoleId);
+  return roleFolderPath(managerRolesRoot(), safeRoleId);
 }
 
 /**
@@ -6765,8 +6769,10 @@ function standaloneGatewayPayload(
             runtime,
             cachedById.get(runtime.definition.id)
           ),
-          routeDir: path.relative(rootDir, routeRoot).replace(/\\/g, "/"),
-          rolesDir: path.relative(rootDir, rolesRoot).replace(/\\/g, "/")
+          routeDir: configRepository.domainRoot("route").value ? path.relative(rootDir, configRepository.requireDomainRoot("route")).replace(/\\/g, "/") : undefined,
+          rolesDir: configRepository.domainRoot("roles").value ? path.relative(rootDir, configRepository.requireDomainRoot("roles")).replace(/\\/g, "/") : undefined,
+          directoryDiagnostics: [configRepository.domainRoot("route").error, configRepository.domainRoot("roles").error].filter(Boolean),
+          rawDirectoryConfig: { routeDir: configRepository.domainRoot("route").rawValue, rolesDir: configRepository.domainRoot("roles").rawValue }
         },
         { includeConfigDefinitions }
       );
@@ -6857,6 +6863,12 @@ function publicWebguiLanAccessPayload(request: http.IncomingMessage): Record<str
   };
 }
 
+const managerClientTransportIdentity = createManagerTransportIdentity(() => ({
+  applicationGenerationId: managerHostIdentity?.applicationGenerationId ?? managerInstanceId,
+  managerInstanceId,
+  metadataRevision: `${rabiGlobalConfig.getClientMetadataRevision()}:${managerPluginGenerationStatus?.id ?? "bootstrap"}`
+}));
+
 function managerHealthPayload(): Record<string, unknown> {
   const sourcePatches = managerSourcePatchStatus?.();
   const pluginGeneration = managerPluginGenerationStatus;
@@ -6937,6 +6949,7 @@ function metaPayload(): Record<string, unknown> {
     version,
     health: healthPayload.health,
     githubUrl: "https://github.com/vb2250158/RabiRoute",
+    apiTransport: managerClientTransportIdentity.protocolInfo(),
     applicationGenerationId: managerHostIdentity?.applicationGenerationId ?? managerInstanceId,
     managerInstanceId: managerInstanceId || undefined,
     managerBaseUrl: managerBaseUrl || undefined,
@@ -6999,7 +7012,7 @@ async function prewarmRolePlanCatalogs(): Promise<boolean> {
   try {
     roleDirectories = await managerCatalogWorkerPool.run<string[]>({
       type: "role_directories",
-      rolesRoot
+      rolesRoot: managerRolesRoot()
     }, { timeoutMs: getTimeoutMs("backend.manager.controlPlaneRoutes.prewarmRolePlanCatalogs.managerCatalogWorkerPool.run.timeoutMs", 30_000) });
     let fulfilled = 0;
     for (const roleDir of roleDirectories) {
@@ -7197,10 +7210,11 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
   } catch (error) {
     await failManagerStartup("manager_endpoint_acquisition", error);
   }
+  const restorePlanUpdateExecutor = createPlanUpdateExecutorRestorer(path.join(rootDir, "data", "plugins", ".runtime"));
   const roleStorageApplication = await (async (): Promise<RoleStorageApplication> => {
     try {
       const application = new RoleStorageApplication({
-        rolesRoot,
+        rolesRoot: managerRolesRoot,
         applicationGenerationId: managerHostIdentity?.applicationGenerationId ?? managerInstanceId,
         managerInstanceId,
         currentIdentity: () => managerInstanceId
@@ -7208,7 +7222,12 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
               applicationGenerationId: managerHostIdentity?.applicationGenerationId ?? managerInstanceId,
               managerInstanceId
             })
-          : null
+          : null,
+        acquirePlanUpdateExecutor: () => {
+          const service = resolvePublishedPluginService("manager.persona.plan-update@1") as PlanUpdateExecutorService | undefined;
+          return service?.acquirePlanUpdateExecutor();
+        },
+        restorePlanUpdateExecutor
       });
       managerRuntimeOwner.register("role_storage", () => application.stop());
       return application;
@@ -7225,7 +7244,7 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
   }> => {
     try {
       const planLifecycle = options.planStorageStartupLifecycle ?? new PlanStorageStartupLifecycle({
-      rolesRoot,
+      rolesRoot: managerRolesRoot,
       readOnly: managerReadOnly,
       attemptTimeoutMs: getTimeoutMs("startup.planStorage", Number(process.env.RABIROUTE_PLAN_STORAGE_STARTUP_TIMEOUT_MS) || 180_000),
       retryBaseMs: Number(process.env.RABIROUTE_PLAN_STORAGE_STARTUP_RETRY_BASE_MS) || undefined,
@@ -7238,7 +7257,8 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
           ? { batchTimeoutMs: getTimeoutMs("backend.manager.progressivePlanStorageStartup.attempt.batchTimeoutMs", Number(process.env.RABIROUTE_PLAN_STORAGE_STARTUP_BATCH_TIMEOUT_MS)) } : {})
       },
       onStatus: snapshot => {
-        publishStartupPlanConflicts(rolesRoot, snapshot.summary);
+        const rolesRoot = configRepository.domainRoot("roles").value;
+        if (rolesRoot) publishStartupPlanConflicts(rolesRoot, snapshot.summary);
         publishManagerEvent("plan_storage_startup_changed", publicPlanStorageStartupSnapshot(snapshot));
         const level = snapshot.state === "degraded" ? "error" : snapshot.state === "partial" ? "warn" : "info";
         managerOperationalLog.record(level, `plan_storage_startup_${snapshot.state}`, {
@@ -7258,8 +7278,8 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
       attemptFactory: options.routeCatalogStartupAttemptFactory,
       input: () => ({
         rootDir,
-        routeRoot,
-        rolesRoot,
+        routeRoot: managerRouteRoot(),
+        rolesRoot: managerRolesRoot(),
         managerPort,
         readOnly: managerReadOnly
       }),
@@ -7376,7 +7396,7 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
     listenerPublicationHost.dispose();
     if (gatewayListenerPublicationHost === listenerPublicationHost) gatewayListenerPublicationHost = undefined;
   });
-  const lanAgentAuthority = new LanAgentAuthority({ statePath: path.join(rootDir, "data", ".runtime", "lan-agent-authority.json") });
+  const lanAgentAuthority = new LanAgentAuthority({ resolveComputerDefinition: () => resolvePublishedPluginService("manager.computer-settings-definition@1") as ComputerSettingsDefinition | undefined, statePath: path.join(rootDir, "data", ".runtime", "lan-agent-authority.json") });
   const agentUploadStore = new AgentUploadStore({ rootDir: path.join(rootDir, "data", ".runtime", "agent-uploads"), maxFileBytes: rabiGlobalConfig.read().agentUploads.maxFileMiB * 1024 * 1024 });
   const assertUploadAuthorized = (source: TrustedLanAgentSource): void => {
     if (!lanAgentAuthority.getNodeAuthorization(source.nodeId)) throw new Error("Remote computer credential was revoked.");
@@ -7430,10 +7450,22 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
     statePath: path.join(rootDir, "data", ".runtime", "lan-agent-tasks.json"),
     computerFeaturePolicy:(instanceId,feature)=>instanceId===lanAgentRegistry.localInstanceId?configRepository.readComputerFeaturePolicy(feature):lanAgentAuthority.getComputerFeaturePolicy(instanceId,feature),
     computerSettings: (instanceId, refresh) => instanceId === lanAgentRegistry.localInstanceId ? configRepository.readComputerSettings(refresh) : lanAgentAuthority.getComputerSettings(instanceId, refresh),
-    patchComputerSettings: (instanceId, patch, revision) => instanceId === lanAgentRegistry.localInstanceId ? configRepository.patchComputerSettings(patch, revision) : lanAgentAuthority.patchComputerSettings(instanceId, patch, revision),
+    computerSettingsRaw: instanceId => instanceId === lanAgentRegistry.localInstanceId ? configRepository.readComputerSettingsRaw() : lanAgentAuthority.getComputerSettingsRaw(instanceId),
+    computerExecutionSettings: instanceId => instanceId === lanAgentRegistry.localInstanceId ? configRepository.readComputerExecutionSettings() : lanAgentAuthority.getComputerExecutionSettings(instanceId),
+    computerSettingsDefinition: () => configRepository.getComputerSettingsDefinition(),
+    patchComputerSettings: (instanceId, patch, revision, restorePaths) => instanceId === lanAgentRegistry.localInstanceId ? configRepository.patchComputerSettings(patch, revision, restorePaths) : lanAgentAuthority.patchComputerSettings(instanceId, patch, revision, restorePaths),
     createLocalComputer: (instanceId, emit) => {
       const computer = new ManagerLocalComputer({
-      instanceId, getSettings: () => configRepository.readComputerSettings().settings,
+      instanceId, getSettings: () => configRepository.readComputerSettingsRaw(),
+      getDefinition:()=>configRepository.getComputerSettingsDefinition(),
+      restoreDesktopRelease: async () => {
+        const selected = lanAgentReleaseStore.desktopResourceSelection();
+        return { revision: selected.revision, version: selected.version, ...(selected.digest ? { reference: selected.digest } : {}), ...(selected.qtPackageRef ? { qtPackageRef: selected.qtPackageRef } : {}) };
+      },
+      commitDesktopRelease: async (release, expectedRevision) => {
+        return lanAgentReleaseStore.selectDesktopResourceRelease(release.digest ?? null, expectedRevision, release.qtPackageRef ?? null);
+      },
+      resolveDesktopRelease: createDesktopResourceResolver({ native: lanAgentReleaseStore, packages: () => managerPluginPackageCatalog }),
       getPresentationTheme: () => computerPresentationTheme,
       ...(process.platform === "win32" ? {qtPresentation: {command:path.join(packageRoot,"desktop-runtime","python","python.exe"),args:[path.join(packageRoot,"desktop-runtime","rabiroute_tray","computer_control_overlay.py")]}} : {}),
       stateDirectory: path.join(rootDir, "data", ".runtime", "local-computer"), emit, timeout: getTimeoutMs
@@ -7672,7 +7704,8 @@ set activePeerTunnel(value) { activePeerTunnel = value; } }) }),
       }
     }) }),
     createSourcePatchHostService(() => managerSourcePatches),
-    Object.freeze({ capability: "host.manager.core@2", value: Object.freeze({ ...managerFeatureHostPorts, get managerCorePublicOperations() { return managerCorePublicOperations; }, get ManagerPluginRequestTracker() { return ManagerPluginRequestTracker; },
+    Object.freeze({ capability: "host.manager.computer-settings-definition@1", value: Object.freeze({createComputerSettingsDefinition}) }),
+    Object.freeze({ capability: "host.manager.core@2", value: Object.freeze({ createComputerSettingsDefinition, ...managerFeatureHostPorts, get managerCorePublicOperations() { return managerCorePublicOperations; }, get ManagerPluginRequestTracker() { return ManagerPluginRequestTracker; },
 get lanAgentRegistry() { return lanAgentRegistry; },
 get rabiGlobalConfig() { return rabiGlobalConfig; },
 get lanAgentAuthority() { return lanAgentAuthority; },
@@ -7731,9 +7764,15 @@ get agentRequests() { return agentRequests; },
 get agentEndpointDelivery() { return agentEndpointDelivery; },
 set agentEndpointDelivery(value) { agentEndpointDelivery = value; },
 get instanceIdentityReset() { return instanceIdentityReset; } }) }),
+    Object.freeze({ capability: "host.manager.desktop-native@1", value: Object.freeze({
+      status: () => lanAgentRegistry.localComputer!.desktopReleaseStatus(),
+      prepare: (releaseDigest: string) => lanAgentRegistry.localComputer!.prepareDesktopRelease(releaseDigest),
+      activate: (prepared: unknown, expectedRevision: number) => lanAgentRegistry.localComputer!.activateDesktopRelease(prepared, expectedRevision),
+      discard: (prepared: unknown) => lanAgentRegistry.localComputer!.discardDesktopRelease(prepared)
+    }) }),
     Object.freeze({ capability: "host.manager.persona@2", value: Object.freeze({ ...managerFeatureHostPorts, get ManagerPluginRequestTracker() { return ManagerPluginRequestTracker; },
-get rolesRoot() { return rolesRoot; },
-set rolesRoot(value) { rolesRoot = value; },
+get rolesRoot() { return managerRolesRoot(); },
+set rolesRoot(value) { configRepository.rolesRoot = value; },
 get managerHostIdentity() { return managerHostIdentity; },
 get managerInstanceId() { return managerInstanceId; },
 set managerInstanceId(value) { managerInstanceId = value; },
@@ -7749,6 +7788,7 @@ get roleDirForApi() { return roleDirForApi; },
 get languageStyleValidator() { return languageStyleValidator; },
 get handleAgentThreadRequest() { return handleAgentThreadRequest; },
 get agentThreadRequestOptions() { return agentThreadRequestOptions; },
+get subscribeRoleCatalogChanges() { return (listener: () => void) => requireRouteCatalogLifecycle().onReady(() => listener()); },
 get routeCatalogConfig() { return routeCatalogConfig; },
 set routeCatalogConfig(value) { routeCatalogConfig = value; },
 get sharedGatewayAdapterTypes() { return sharedGatewayAdapterTypes; },
@@ -7793,8 +7833,8 @@ get path() { return path; },
 get rootDir() { return rootDir; } }) }),
     Object.freeze({ capability: "host.manager.route-control@2", value: Object.freeze({ ...managerFeatureHostPorts, get managerPluginRoutes() { return managerPluginRoutes; },
 get rootDir() { return rootDir; },
-get routeRoot() { return routeRoot; },
-set routeRoot(value) { routeRoot = value; },
+get routeRoot() { return managerRouteRoot(); },
+set routeRoot(value) { configRepository.routeRoot = value; },
 get managerPort() { return managerPort; },
 set managerPort(value) { managerPort = value; },
 get managerHost() { return managerHost; },
@@ -7816,8 +7856,8 @@ set syncActiveRabiLinkRelay(value) { syncActiveRabiLinkRelay = value; },
 get dataDirFor() { return dataDirFor; },
 get agentAdapterCatalogService() { return agentAdapterCatalogService; },
 set agentAdapterCatalogService(value) { agentAdapterCatalogService = value; },
-get rolesRoot() { return rolesRoot; },
-set rolesRoot(value) { rolesRoot = value; },
+get rolesRoot() { return managerRolesRoot(); },
+set rolesRoot(value) { configRepository.rolesRoot = value; },
 get readManagerConfig() { return readManagerConfig; },
 get writeManagerConfig() { return writeManagerConfig; },
 get ensureDataDirs() { return ensureDataDirs; } }) }),
@@ -7961,8 +8001,8 @@ get planFeedbackDeliveryActive() { return planFeedbackDeliveryActive; },
 set planFeedbackDeliveryActive(value) { planFeedbackDeliveryActive = value; },
 get planFeedbackRecoveryService() { return planFeedbackRecoveryService; },
 set planFeedbackRecoveryService(value) { planFeedbackRecoveryService = value; },
-get rolesRoot() { return rolesRoot; },
-set rolesRoot(value) { rolesRoot = value; },
+get rolesRoot() { return managerRolesRoot(); },
+set rolesRoot(value) { configRepository.rolesRoot = value; },
 get startActivePlanFeedbackRecovery() { return startActivePlanFeedbackRecovery; },
 set startActivePlanFeedbackRecovery(value) { startActivePlanFeedbackRecovery = value; } }) }),
     Object.freeze({ capability: "host.manager.message-adapter-control@2", value: Object.freeze({ ...managerFeatureHostPorts, get messageEndpointScanProviders() { return messageEndpointScanProviders; },
@@ -8074,10 +8114,10 @@ get managerPluginRoutes() { return managerPluginRoutes; },
 get rootDir() { return rootDir; },
 get runtimes() { return runtimes; },
 get writeAdapterConfigFile() { return writeAdapterConfigFile; },
-get rolesRoot() { return rolesRoot; },
-set rolesRoot(value) { rolesRoot = value; },
-get routeRoot() { return routeRoot; },
-set routeRoot(value) { routeRoot = value; } }) }),
+get rolesRoot() { return managerRolesRoot(); },
+set rolesRoot(value) { configRepository.rolesRoot = value; },
+get routeRoot() { return managerRouteRoot(); },
+set routeRoot(value) { configRepository.routeRoot = value; } }) }),
     Object.freeze({ capability: "host.manager.desktop-pet@2", value: Object.freeze({ ...managerFeatureHostPorts, get desktopSettings() { return desktopSettings; },
 get managerPluginRoutes() { return managerPluginRoutes; },
 get publishManagerEvent() { return publishManagerEvent; },
@@ -8483,14 +8523,17 @@ createManagerEventOperationDefinition
   }, managerBootstrapAbort.signal);
   managerRuntimeOwner.register("manager_bootstrap", () => { managerBootstrapAbort.abort(); return managerBootstrap.dispose(); });
 
+  const managerPluginPackageStore = new PluginPackageStore({ roots: managerPluginPackageRoots, managedRoot: managedPluginPackageRoot, bundledRoot: builtinPluginPackageRoot,
+    importRuntimeRoot: path.join(rootDir, "data", "plugins", ".runtime", "imports") });
+  webPluginModules.setPackageCatalog(retainedWebPackageCatalog({ packages: managerPluginPackageStore,
+    catalog: managerPluginPackageCatalog, runtimeRoot: path.join(rootDir, "data", "plugins", ".runtime") }));
   const pluginManagement = createPluginManagement({
     runtime: managerPluginKernel!, settings: managerPluginSettings,
     manifest: (packageId, version) => readPluginManagementManifest(managerPluginPackageCatalog, packageId, version),
     packageSource: async (packageId, version) => (await managerPluginPackageCatalog.resolve(packageId, version)).sourceRoot,
     reconcile: () => reconcileManagerPlugins("committed plugin instance settings changed", { reuseUnchangedPackages: true }),
-    packages: new PluginPackageStore({ roots: managerPluginPackageRoots, managedRoot: managedPluginPackageRoot, bundledRoot: builtinPluginPackageRoot,
-      importRuntimeRoot: path.join(rootDir, "data", "plugins", ".runtime", "imports") }),
-    changed: () => refreshStartupPresentation()
+    packages: managerPluginPackageStore,
+    changed: () => { webPluginModules.invalidatePackageCatalog(); refreshStartupPresentation(); }
   });
   const pluginManagementRegistration = managerApplicationRoutes.run(() => managerPluginRoutes.registerOperations(managerApplicationRoutes.instanceId, createPluginManagementOperations({
     runtime: managerPluginKernel!, root: () => packageRoot,
@@ -8506,7 +8549,7 @@ createManagerEventOperationDefinition
     hostExecutable: process.env.RABIROUTE_HOST_EXECUTABLE
   });
   const dataUpgrades = new DataUpgradeService({
-    layout: { packageRoot, stateRoot: rootDir }, rolesRoot, readOnly: managerReadOnly,
+    layout: { packageRoot, stateRoot: rootDir }, rolesRoot: managerRolesRoot, readOnly: managerReadOnly,
     ...(managerHostIdentity ? { requestRestart: restartForDataUpgrade } : {})
   });
   const unsubscribeDataUpgrades = dataUpgrades.subscribe(status => publishManagerEvent(DATA_UPGRADE_STATUS_EVENT, status));
@@ -8599,6 +8642,7 @@ createManagerEventOperationDefinition
       peerPort: request.socket.remotePort
     });
     response.setHeader("x-rabiroute-request-id", requestId);
+    const transportContext = managerClientTransportIdentity.capture(response);
     observeManagerHttpAbort(response, () => managerOperationalLog.record("warn", "http_request_aborted", {
       requestId, method, pathname, durationMs: Math.max(0, Date.now() - requestStartedAt), result: "aborted"
     }));
@@ -8655,6 +8699,7 @@ createManagerEventOperationDefinition
         }
         captureTrustedLanAgentSource(request, rabiGlobalConfig.getLanAgentDeliveryPolicy().incarnation);
       }
+      if (managerClientTransportIdentity.rejectChanged(request, response, transportContext)) return;
       guardRequestBodyDeadline(request, response, {
         normalMs: managerHttpLimits.requestTimeoutMs,
         uploadMs: 30 * 60 * 1000,
@@ -8972,8 +9017,8 @@ createManagerEventOperationDefinition
     requestHandler: withAutomaticCodeRequest(handleManagerRequest)
   }));
   console.log(`gateway-manager listening on http://${managerHost}:${managerPort}`);
-  console.log(`roles: ${rolesRoot}`);
-  console.log(`route: ${routeRoot}`);
+  console.log(`roles: ${configRepository.domainRoot("roles").value ?? "unavailable: repair rolesDir"}`);
+  console.log(`route: ${configRepository.domainRoot("route").value ?? "unavailable: repair routeDir"}`);
   managerOperationalLog.record("info", "manager_listening", {
     result: `host=${managerHost}; port=${managerPort}; readOnly=${managerReadOnly}`
   });

@@ -39,6 +39,25 @@ export class ComputerControlClient {
     try { const current=await this.settings(target);return {...current,...application,...(!settingsPatchMatches(patch,current.settings)?{readbackMismatch:true,readbackIssue:"修改已提交；回读值与本次修改不一致，请核对最新状态后再决定是否重新应用。"}:{})}; }
     catch { return {...applied,...application,etag:committed.response.headers.get("etag") || String(applied.revision || ""),readbackIssue:"设置已保存；后续读取暂未确认。请刷新读取，不要重复提交。"}; }
   }
+
+  async resetSettings(target: ComputerTarget, paths: readonly string[], etag: string): Promise<ComputerSettingsSnapshot> {
+    const committed = await this.json(this.path(target,"/computer-settings/reset"), {
+      method:"POST",headers:{"content-type":"application/json","if-match":etag},body:JSON.stringify({paths})
+    });
+    const applied=committed.body.data as ComputerSettingsSnapshot;
+    const application={execution:applied.execution,executionIssue:applied.executionIssue,executionRevision:applied.revision};
+    try {
+      const current=await this.settings(target);
+      const raw=current.rawSettings;
+      const remains=paths.some(pathname=>{
+        let item:unknown=raw;
+        for(const key of pathname.split(".")){if(!item||typeof item!=="object"||!Object.hasOwn(item,key))return false;item=(item as Record<string,unknown>)[key];}
+        return true;
+      });
+      return {...current,...application,...(remains?{readbackMismatch:true,readbackIssue:"恢复默认已提交；回读仍有选中覆盖值，请核对最新状态，不要重复提交。"}:{})};
+    } catch {return {...applied,...application,etag:committed.response.headers.get("etag")||String(applied.revision||""),readbackIssue:"恢复默认已提交；后续读取暂未确认。请刷新读取，不要重复提交。"};}
+  }
+
   async action(target: ComputerTarget, body: Record<string, unknown>, signal?: AbortSignal): Promise<Record<string, unknown>> {
     const result = await this.json(this.path(target, "/computer"), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body), signal });
     return result.body.data;

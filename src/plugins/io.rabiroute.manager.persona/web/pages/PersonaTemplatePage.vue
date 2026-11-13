@@ -2,6 +2,7 @@
 import { translateText } from "../../../../../ribiwebgui/src/i18n/index";
 import { userFacingError } from "../../../../../ribiwebgui/src/userFacingError";
 import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { normalizeDailyScheduleTimes } from "@shared/dailyScheduleTimes";
 import SpeechParameterSlider from "../../../../../ribiwebgui/src/components/SpeechParameterSlider.vue";
 import AutomationAgentTarget from "../components/AutomationAgentTarget.vue";
 import { DEFAULT_AUTOMATION_TEMPLATES, BLANK_AUTOMATION_TEMPLATE_ID, automationTemplatePatch, loadAutomationTemplates, loadAutomationTemplate, type AutomationTemplate, type AutomationTemplateChoice } from "../persona/automationTemplateClient";
@@ -64,6 +65,7 @@ import { openXiaomiHomeRecordings, xiaomiHomeSettingsClient, type XiaomiHomeReso
 import {
   adapterLabel,
   automationRulesForGateway,
+  hasIncompleteDsBotTargetDraft,
   configNameFor,
   defaultHeartbeatSchedule,
   gatewayAdapterTypes,
@@ -87,15 +89,22 @@ const personaAvatarClient = createPersonaAvatarClient(personaService.fetch);
 const personaVoiceIdentityClient = createPersonaVoiceIdentityClient(personaService.fetch);
 const personaSpeech = createSpeechControlClient(personaService.fetch);
 const remoteVoiceProfiles = ref<SpeechPersona[]>([]);
+const dailyTimeDrafts = ref<Record<string, string[]>>({});
+const invalidDsBotTarget = computed(() => hasIncompleteDsBotTargetDraft(store.selectedGateway));
+const invalidDailyTimes = computed(() => Object.values(dailyTimeDrafts.value).some(timeOfDays => normalizeDailyScheduleTimes({ timeOfDays }) === null));
+watch(() => [store.selectedRoleId, store.sourceDeviceId, store.draft], () => { dailyTimeDrafts.value = {}; }, { flush: "sync" });
 const PersonaMessages = defineAsyncComponent(() => import("../components/PersonaMessages.vue"));
 const releaseRoleSave = registerPageSaveAction({
-  dirty: computed(() => store.dirty || routeStore.dirty),
-  ready: computed(() => store.ready && !routeStore.loading),
+  dirty: computed(() => store.dirty || routeStore.dirty || Object.keys(dailyTimeDrafts.value).length > 0),
+  ready: computed(() => store.ready && !routeStore.loading && !invalidDailyTimes.value && !invalidDsBotTarget.value),
   saving: computed(() => store.saving || routeStore.saving),
   save: async () => {
+    if (invalidDailyTimes.value) throw new Error(translateText("请先补全有效的每日时间点。"));
+    if (invalidDsBotTarget.value) throw new Error(translateText("请先完成 DSBot 目标选择。"));
     // Role saves refresh Route data, so commit Route drafts first.
     if (routeStore.dirty) await routeStore.saveChangedRoutes();
     if (store.dirty) await store.save();
+    dailyTimeDrafts.value = {};
   }
 });
 const speech = useSpeechStore();
@@ -863,8 +872,17 @@ function patchAutomation(patch: Partial<PersonaAutomationRuleDefinition>): void 
   store.updateAutomation(activeAutomation.value.id, patch);
 }
 
+function removeActiveAutomation(): void {
+  const rule = activeAutomation.value;
+  if (!rule) return;
+  delete dailyTimeDrafts.value[rule.id];
+  store.removeAutomation(rule.id);
+  automationDialog.value = false;
+}
+
 function setAutomationTriggerType(type: "message" | "schedule"): void {
   if (!activeAutomation.value || !gateway.value || activeAutomation.value.trigger.type === type) return;
+  delete dailyTimeDrafts.value[activeAutomation.value.id];
   patchAutomation({
     trigger: type === "schedule"
       ? { type: "schedule", schedule: defaultHeartbeatSchedule(gateway.value, "触发时间") }
@@ -918,8 +936,44 @@ function patchAutomationSchedule(patch: Partial<NotificationScheduleDefinition>)
   });
 }
 
+function dailyAutomationTimes(): string[] {
+  const rule = activeAutomation.value;
+  if (!rule || rule.trigger.type !== "schedule") return [];
+  if (dailyTimeDrafts.value[rule.id]) return dailyTimeDrafts.value[rule.id];
+  const schedule = rule.trigger.schedule;
+  const canonical = normalizeDailyScheduleTimes(schedule);
+  if (canonical) return canonical;
+  return Array.isArray(schedule.timeOfDays) && schedule.timeOfDays.length
+    ? schedule.timeOfDays.map(value => String(value ?? "")) : [schedule.timeOfDay ?? ""];
+}
+
+function updateDailyAutomationTimes(values: string[]): void {
+  const rule = activeAutomation.value;
+  if (!rule || rule.trigger.type !== "schedule") return;
+  // Keep incomplete text outside the normalizer so typing does not erase a draft.
+  dailyTimeDrafts.value[rule.id] = values;
+  const timeOfDays = normalizeDailyScheduleTimes({ timeOfDays: values });
+  if (timeOfDays) patchAutomationSchedule({ timeOfDays, timeOfDay: undefined });
+}
+
+function updateDailyAutomationTime(index: number, value: unknown): void {
+  const times = [...dailyAutomationTimes()];
+  times[index] = String(value ?? "");
+  updateDailyAutomationTimes(times);
+}
+
+function removeDailyAutomationTime(index: number): void {
+  updateDailyAutomationTimes(dailyAutomationTimes().filter((_, current) => current !== index));
+}
+
 function setAutomationScheduleType(type: string): void {
   if (type !== "interval" && type !== "daily_time" && type !== "once_at") return;
+  const rule = activeAutomation.value;
+  if (rule) delete dailyTimeDrafts.value[rule.id];
+  if (type === "daily_time" && rule?.trigger.type === "schedule" && !normalizeDailyScheduleTimes(rule.trigger.schedule)) {
+    patchAutomationSchedule({ type, timeOfDays: ["09:00"], timeOfDay: undefined });
+    return;
+  }
   patchAutomationSchedule({ type });
 }
 
@@ -931,7 +985,7 @@ function patchAutomationAction(patch: Record<string, unknown>): void {
 function automationSourceSummary(rule: PersonaAutomationRuleDefinition): string {
   if (rule.trigger.type === "schedule") {
     const schedule = rule.trigger.schedule;
-    if (schedule.type === "daily_time") return `每天 ${schedule.timeOfDay || "未设置时间"}`;
+    if (schedule.type === "daily_time") return `每天 ${normalizeDailyScheduleTimes(schedule)?.join("、") || "未设置时间"}`;
     if (schedule.type === "once_at") return schedule.onceAt ? `一次：${schedule.onceAt.replace("T", " ")}` : "一次性时间未设置";
     const window = schedule.windowStartTime && schedule.windowEndTime
       ? `，${schedule.windowStartTime}–${schedule.windowEndTime}`
@@ -959,7 +1013,7 @@ function automationDiagnostics(rule: PersonaAutomationRuleDefinition): string[] 
   if (rule.trigger.type === "schedule") {
     const schedule = rule.trigger.schedule;
     if (schedule.type === "interval" && Number(schedule.intervalSeconds || 0) <= 0) issues.push("间隔必须大于 0 秒。");
-    if (schedule.type === "daily_time" && !schedule.timeOfDay) issues.push("还没有设置每天执行时间。");
+    if (schedule.type === "daily_time" && !normalizeDailyScheduleTimes(schedule)) issues.push("请先补全有效的每日时间点。");
     if (schedule.type === "once_at" && !schedule.onceAt) issues.push("还没有设置执行日期和时间。");
   }
   if (rule.action.type === "run_script") {
@@ -2417,15 +2471,23 @@ onBeforeUnmount(() => {
                           @update:model-value="value => patchAutomationSchedule({ windowEndTime: String(value || '') })"
                         />
                       </template>
-                      <v-text-field
-                        v-else-if="activeScheduleTrigger?.schedule?.type === 'daily_time'"
-                        :model-value="activeScheduleTrigger?.schedule?.timeOfDay || ''"
-                        type="time"
-                        label="每天执行时间"
-                        density="compact"
-                        variant="outlined"
-                        @update:model-value="value => patchAutomationSchedule({ timeOfDay: String(value || '') })"
-                      />
+                      <div v-else-if="activeScheduleTrigger?.schedule?.type === 'daily_time'" class="persona-daily-times">
+                        <p class="text-caption text-medium-emphasis">同一条规则会在每天的这些时间运行，共用启停开关。</p>
+                        <div v-for="(time, index) in dailyAutomationTimes()" :key="index" class="persona-daily-time">
+                          <v-text-field
+                            :model-value="time"
+                            :label="`${translateText('执行时间点')} ${index + 1}`"
+                            placeholder="10:00"
+                            density="compact"
+                            variant="outlined"
+                            :disabled="store.saving"
+                            :error-messages="normalizeDailyScheduleTimes({ timeOfDay: time }) ? [] : [translateText('请输入有效时间（HH:mm 或 HH:mm:ss）。')]"
+                            @update:model-value="value => updateDailyAutomationTime(index, value)"
+                          />
+                          <v-btn variant="text" size="small" :disabled="store.saving || dailyAutomationTimes().length <= 1" @click="removeDailyAutomationTime(index)">移除时间点</v-btn>
+                        </div>
+                        <v-btn variant="text" size="small" :disabled="store.saving" @click="updateDailyAutomationTimes([...dailyAutomationTimes(), ''])">添加时间点</v-btn>
+                      </div>
                       <v-text-field
                         v-else
                         :model-value="activeScheduleTrigger?.schedule?.onceAt || ''"
@@ -2487,6 +2549,7 @@ onBeforeUnmount(() => {
                   <template v-if="activeAutomation.action.type === 'deliver_agent'">
                     <AutomationAgentTarget v-if="gateway" :gateway="gateway" :model-value="activeAutomation.action.target"
                       @update:model-value="target => patchAutomationAction({ target })" />
+                    <p v-if="invalidDsBotTarget" class="text-error text-caption mt-2">{{ t('请先完成 DSBot 目标选择。') }}</p>
                     <div v-if="activeAutomation.trigger.type === 'message'" class="mt-4">
                       <v-switch
                         :model-value="automationRecentMessageLimit > 0"
@@ -2581,7 +2644,7 @@ onBeforeUnmount(() => {
             v-if="activeAutomation.id !== 'role-panel-message'"
             color="error"
             variant="text"
-            @click="store.removeAutomation(activeAutomation.id); automationDialog = false"
+            @click="removeActiveAutomation()"
           >删除规则</v-btn>
           <v-spacer />
           <span v-if="automationDeliveryIncomplete" class="text-caption mr-2">请选择 Agent 和会话</span>
@@ -2593,6 +2656,9 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
+.persona-daily-times { display: grid; gap: 8px; min-width: 0; }
+.persona-daily-time { display: flex; align-items: flex-start; gap: 8px; min-width: 0; }
+.persona-daily-time > .v-input { flex: 1; min-width: 0; }
 .automation-card-source { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .automation-card-conversation-label { display: grid; gap: 2px; min-width: 0; }
 .automation-card-conversation-label > * { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

@@ -1,7 +1,7 @@
 {
   "schemaVersion": 2,
   "id": "io.rabiroute.agent.workbuddy",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "displayName": "WorkBuddy（腾讯 AI 办公工作台）",
   "description": "将消息交给绑定的 WorkBuddy 任务，保留原会话和工作目录。",
   "icon": "mdi-robot-outline",

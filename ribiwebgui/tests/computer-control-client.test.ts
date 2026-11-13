@@ -32,3 +32,30 @@ test("actual client error handler preserves contract field and recovery guidance
 
 test("PATCH application receipt survives the stored-settings GET without replay",async()=>{let calls=0;const client=new ComputerControlClient(async(_url,init)=>{calls++;return Response.json({code:0,data:{settings:{enabled:false},schema:{},revision:'"v2"',...(init?.method==="PATCH"?{execution:"unconfirmed",executionIssue:"Local execution is not confirmed."}:{})}},{headers:{etag:'"v2"'}});});const result=await client.saveSettings(target,{enabled:false},'"v1"');assert.equal(result.execution,"unconfirmed");assert.equal(result.executionIssue,"Local execution is not confirmed.");assert.equal(result.etag,'"v2"');assert.equal(calls,2);});
 test("confirmed PATCH with failed readback remains saved and does not send another write",async()=>{let writes=0;const client=new ComputerControlClient(async(_url,init)=>{if(init?.method==="PATCH"){writes++;return Response.json({code:0,data:{settings:{enabled:false},schema:{},revision:'"v2"',execution:"unconfirmed"}},{headers:{etag:'"v2"'}});}throw new Error("readback unavailable");});const result=await client.saveSettings(target,{enabled:false},'"v1"');assert.equal(result.settings.enabled,false);assert.equal(result.execution,"unconfirmed");assert.ok(result.readbackIssue);assert.equal(writes,1);});
+
+test("explicit default restoration uses selected schema paths and original CAS then independent readback",async()=>{
+ const calls:Array<{url:string,init?:RequestInit}>=[];
+ const client=new ComputerControlClient(async(url,init)=>{
+  calls.push({url:String(url),init});
+  return Response.json({code:0,data:{settings:{enabled:true,features:{input:true}},rawSettings:{privateExtension:{keep:1}},defaults:{enabled:true},schema:{},revision:'"restored"',execution:"applied"}},{headers:{etag:'"restored"'}});
+ });
+ const result=await client.resetSettings(target,["features.input"],'"original"');
+ assert.equal(calls.length,2);
+ assert.match(calls[0]!.url,/computer-settings\/reset$/);
+ assert.deepEqual(JSON.parse(String(calls[0]!.init?.body)),{paths:["features.input"]});
+ assert.equal(new Headers(calls[0]!.init?.headers).get("if-match"),'"original"');
+ assert.equal(calls[1]!.init?.method,undefined);
+ assert.equal(result.readbackMismatch,undefined);
+ assert.equal(result.etag,'"restored"');
+});
+test("default restore retains submitted state and requests only one read when confirmation fails",async()=>{
+ let count=0;
+ const client=new ComputerControlClient(async()=>{
+  count++;
+  if(count===2)throw Error("fixture readback unavailable");
+  return Response.json({code:0,data:{settings:{enabled:true},rawSettings:{},schema:{},revision:'"committed"',execution:"unconfirmed"}},{headers:{etag:'"committed"'}});
+ });
+ const result=await client.resetSettings(target,["enabled"],'"before"');
+ assert.equal(count,2);assert.equal(result.etag,'"committed"');assert.equal(result.execution,"unconfirmed");
+ assert.match(String(result.readbackIssue),/读取暂未确认/);
+});

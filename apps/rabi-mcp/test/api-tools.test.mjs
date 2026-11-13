@@ -241,3 +241,18 @@ test('a rejected native stream reports its original identity and releases after 
   assert.equal((await tools.call('rabi_api_session', {sessionId:opened.sessionId,action:'close'})).state, 'not_present');
   await tools.close();
 });
+
+
+test('explicit readonly mode uses the real action for every supported JSON body encoding', async t => {
+  const entry = operation('computer.execute', 'POST', 'http', '/api/fixture/computer');
+  entry.contract.request = { body: { kind: 'json', schema: { type: 'object' } } };
+  entry.contract.effects.request = { bodyPath: ['action'], modes: { 'control.status': 'read', 'input.execute': 'mutation' } };
+  const { tools, calls } = fixture([entry], { allowWrites: false }); t.after(() => tools.close());
+  const encodings = body => [{ body }, { body: JSON.stringify(body) }, { bodyText: JSON.stringify(body) }, { bodyBase64: Buffer.from(JSON.stringify(body)).toString('base64') }];
+  for (const options of encodings({ action: 'control.status' })) assert.equal((await tools.call('rabi_api_call', { operationId: entry.id, options })).ok, true);
+  assert.equal(calls.length, 4);
+  for (const action of ['input.execute', 'unknown', undefined]) for (const options of encodings({ action, readOnly: true, effects: { mode: 'read' } })) {
+    await assert.rejects(tools.call('rabi_api_call', { operationId: entry.id, options }), /RABI_MCP_ALLOW_WRITES/);
+  }
+  assert.equal(calls.length, 4, 'caller-supplied effect claims never turn a mutation into a read');
+});

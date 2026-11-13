@@ -179,3 +179,30 @@ test("a stored peer return address resolves its actual target cwd and rejects an
   assert.equal(reconnected.workspace,directory);
   returnedId="another-task";await assert.rejects(bridge.resolveStoredTarget(address!),/Exact peer task owner/);
 });
+
+test("Peer DSBot delivery preserves original receipts after target tasks close and rejects only new IDs", async t => {
+ const directory=fs.mkdtempSync(path.join(os.tmpdir(),"peer-ds-bot-policy-")),store=new AgentRequestStore(path.join(directory,"requests.json"));
+ t.after(async()=>{await store.close();fs.rmSync(directory,{recursive:true,force:true});});
+ const {handleAgentThreadRequest}=await import("../agentThreads.js");
+ const {executeDsBotRequestOnOwner}=await import("../plugins/io.rabiroute.agent.dsh/src/agentAdapters/dshOwnerExecution.js");
+ const {assertComputerFeaturePolicyEnabled}=await import("../shared/agentInteractiveProtocol.js");
+ let state:"accepted"|"uncertain"|"conflict"|"not_found"="accepted";const nativeCalls:string[]=[];
+ const bridge=createPeerAgentEndpointBridge({managerInstanceId:"source",localDeviceId:()=>"source-device",scope:()=>"source-scope",store,receiptDirectory:path.join(directory,"receipts"),readLocal:async()=>{throw Error("ordinary Session reads forbidden");},localOptions:()=>({allowedWorkspaces:[]}),principal:()=>undefined,
+  request:async(device,method,pathname,body)=>{
+   assert.equal(device,"target-device");
+   if(method==="GET") return {code:0,instances:[{local:true,instanceId:"target-instance"}]};
+   assert.equal(pathname,"/api/agent/threads");const request=body as AgentThreadRequest;
+   const guard=()=>assertComputerFeaturePolicyEnabled({enabled:true,feature:"agentTasks",allowed:false});
+   const result=await handleAgentThreadRequest(request,{allowedWorkspaces:[],assertNewAgentTask:guard,invokeAgentOperation:async<T>(_provider:string,operation:string,payload:any,invocation?:import("@rabiroute/plugin-sdk").AgentAdapterInvocation)=>{
+    assert.equal(operation,"ds-bot.request");
+    const policyGuard=Array.isArray(invocation?.nativeArgs)?invocation.nativeArgs[0]:undefined;
+    return await executeDsBotRequestOnOwner(payload.request,{assertNewAgentTask:typeof policyGuard==="function"?()=>policyGuard():undefined,request:async(endpoint,original)=>{nativeCalls.push(endpoint);return {schemaVersion:1,state,botScopeId:"scope",botId:"bot",deliveryId:original.deliveryId!,sessionId:"original-part",requestId:original.deliveryId!};}}) as T;
+   }});
+   return {code:0,...result.data};
+  }});
+ const binding={ownerDeviceId:"target-device",instanceId:"target-instance",agentId:"dsh"};
+ const request={action:"ds_bot_deliver" as const,agentAdapter:"dsh" as const,instanceBinding:binding,dsBot:{botScopeId:"scope",botId:"bot"},deliveryId:"original",prompt:"original message"};
+ for(const originalState of ["accepted","uncertain","conflict"] as const){state=originalState;const result=await bridge.routeThread(binding,request);assert.equal((result.data.dsBot as any).state,originalState);}
+ state="not_found";await assert.rejects(bridge.routeThread(binding,{...request,deliveryId:"new-id"}),error=>(error as {code:string}).code==="COMPUTER_FEATURE_DISABLED");
+ assert.deepEqual(nativeCalls,["rabi-automation-reconcile","rabi-automation-reconcile","rabi-automation-reconcile","rabi-automation-reconcile"]);
+});

@@ -10,8 +10,9 @@ const source = { type: 'object', required: ['type'], properties: { type: { enum:
 const strings = { anyOf: [{ type: 'array', items: { type: 'string' } }, { type: 'null' }] };
 /** Structure only: adapter-owned semantic validation remains in the original driver and ledger. */
 const threadRequest = { type: 'object', properties: {
-  action: { enum: ['list', 'read', 'reconcile_delivery', 'open', 'resolve', 'create', 'rename', 'send'] },
+  action: { enum: ['list', 'read', 'reconcile_delivery', 'open', 'resolve', 'create', 'rename', 'send', 'ds_bot_catalog', 'ds_bot_deliver', 'ds_bot_reconcile'] },
   agentAdapter: { enum: [...agentAdapterTypes, '', null] }, agentTargetId: text, ledgerOwnerDeviceId: text, instanceBinding: { anyOf: [{ type: 'object', required: ['instanceId', 'agentId'], properties: { instanceId: text, agentId: text, ownerDeviceId: text } }, { type: 'null' }] },
+  dsBot: { type: 'object', required: ['botScopeId', 'botId'], additionalProperties: false, properties: { botScopeId: text, botId: text, scheduledAt: { type: "string", pattern: "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\\.[0-9]{3})?Z$" } } },
   query: text, limit: true, offset: true, threadId: text, deliveryId: text, title: text, prompt: text, cwd: text,
   createIfMissing: true, lookupMode: true, sandbox: true, model: text, reasoningEffort: true, imagePaths: strings,
   dshBaseUrl: text, dshAgentPreset: text, dshDeliveryMode: true, grokBotDelivery: { anyOf: [{ type: 'object', properties: { deliveryType: text, sendMode: text, senderAgentId: text } }, { type: 'null' }] },
@@ -21,7 +22,7 @@ const threadRequest = { type: 'object', properties: {
 const response = { mediaType: 'application/json', schema: { type: 'object', required: ['code'], properties: { code: { type: 'integer' }, action: { anyOf: [text, { type: 'null' }] },
   agentAdapter: text, threadId: text, query: text, errorCode: { type: 'string' }, field: { type: 'string' }, repair: { type: 'string' }, offset: { type: 'number' }, nextOffset: { anyOf: [{ type: 'number' }, { type: 'null' }] },
   threads: { type: 'array', items: { type: 'object', required: ['id', 'title', 'updatedAt'], properties: { id: text, title: text, updatedAt: text, cwd: text, archived: { type: 'boolean' } } } },
-  thread: true, resolution: text, ok: { type: 'boolean' }, status: text, message: text, warning: text, communication: { type: 'object' }, delivery: { type: 'object' },
+  dsBot: true, thread: true, resolution: text, ok: { type: 'boolean' }, status: text, message: text, warning: text, communication: { type: 'object' }, delivery: { type: 'object' },
   source: { type: 'object' }, messageSource: source, error: true, handoffReturn: { type: 'object' }, uncertain: { type: 'boolean' } } } };
 const headers = { 'cache-control': 'no-store' };
 const toResult = (result: { status: number; body: Record<string, unknown> }): ApiOperationResult => ({ ...result, headers });

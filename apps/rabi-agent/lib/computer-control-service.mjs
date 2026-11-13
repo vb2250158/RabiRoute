@@ -1,7 +1,8 @@
+import {BOOTSTRAP_COMPUTER_SETTINGS_DEFINITION as bootstrapDefinition} from "./computer-control-contract.mjs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
-import { DEFAULT_COMPUTER_SETTINGS, normalizeComputerSettings, assertComputerActionEnabled, computerActionDefinition } from "./computer-control-contract.mjs";
+import { DEFAULT_COMPUTER_SETTINGS, normalizeComputerSettingsForAction, assertComputerActionEnabled, computerActionDefinition } from "./computer-control-contract.mjs";
 
 const stable = value => value && typeof value === "object" ? Array.isArray(value) ? value.map(stable) : Object.fromEntries(Object.keys(value).sort().map(key => [key, stable(value[key])])) : value;
 const hash = value => createHash("sha256").update(JSON.stringify(stable(value))).digest("hex");
@@ -70,14 +71,24 @@ export class ComputerControlService {
     const tracker = this.trackers.get(entry.result?.trackingId); if (tracker) this.notifyTracker(tracker);
   }
   get activeCount() { return Number(Boolean(this.session && this.session.state !== "ended")) + this.inflight.size + this.activeLayers.size + this.activeTrackers.size; }
-  settings(context) { return normalizeComputerSettings(context.getSettings?.() ?? context.settings ?? DEFAULT_COMPUTER_SETTINGS); }
+    definition(context) { return context.definitionSnapshot ?? context.getDefinition?.() ?? bootstrapDefinition; }
+  settings(context, action) {
+    if(!context.definitionSnapshot){
+      context.definitionSnapshot=context.getDefinition?.()??bootstrapDefinition;
+      context.settingsSnapshot=context.definitionSnapshot.materialize(context.getSettings?.()??context.settings??DEFAULT_COMPUTER_SETTINGS);
+      context.settingsProjections=new Map();
+    }
+    if(context.settingsProjections.has(action))return context.settingsProjections.get(action);
+    const value=context.definitionSnapshot.normalizeForAction(context.settingsSnapshot,action,undefined,context.operationInput??{});
+    context.settingsProjections.set(action,value);return value;
+  }
   source(context) { return { id: context.sourceId ?? "local-service", ...(context.sourceLabel ? { label: context.sourceLabel } : {}), ...(context.taskId ? { taskId: context.taskId } : {}), ...(context.connectionId ? { connectionId: context.connectionId } : {}) }; }
   target(context) { return (typeof this.instanceId === "function" ? this.instanceId() : this.instanceId) ?? context.instanceId; }
-  check(action, context) {
+    check(action, context) {
     if (this.stopped && !recovery(action)) throw fault("COMPUTER_STOPPED", "Computer owner is stopping.");
     context.signal?.throwIfAborted(); context.guard?.();
     if (computerActionDefinition(action)?.recovery) return;
-    assertComputerActionEnabled(this.settings(context), action, this.target(context));
+    this.definition(context).assertAction(context.getSettings?.()??context.settings??DEFAULT_COMPUTER_SETTINGS,action,this.target(context));
   }
   async save(item) {
     if (!this.receiptRoot) return;
@@ -127,6 +138,9 @@ export class ComputerControlService {
       return old.result ? clone(old.result) : this.viewReceipt(old);
     }
     if (claim.cancelled) throw fault("COMPUTER_SOURCE_CLOSED", "The original source connection ended before this work was admitted.");
+    context.definitionSnapshot=context.getDefinition?.()??bootstrapDefinition;
+    context.settingsSnapshot=context.definitionSnapshot.materialize(context.getSettings?.()??context.settings??DEFAULT_COMPUTER_SETTINGS);
+    context.settingsProjections=new Map();
     const entry = { requestId: input.requestId, action: input.action, bodyHash, sourceId, connectionId: context.connectionId, state: "submitted", createdAt: new Date().toISOString() };
     // Reserve synchronously before the first persistence await: concurrent same-ID calls join this owner.
     this.receipts.set(input.requestId, entry);
@@ -188,7 +202,7 @@ export class ComputerControlService {
   }
   async capture(input, context = {}) {
     this.check("screen.capture", context);
-    const result = await this.native.request("screen.capture", { ...input, action: undefined, instanceId: this.target(context), settings: this.settings(context) });
+    const result = await this.native.request("screen.capture", { ...input, action: undefined, instanceId: this.target(context), settings: this.settings(context, "screen.capture") });
     context.guard?.();
     if (input.controlSessionId && input.background !== true && this.session?.controlSessionId === input.controlSessionId && this.session.source.id === this.source(context).id) {
       this.touch(this.session); await this.native.request("control.activity", { controlSessionId: input.controlSessionId });
@@ -205,6 +219,7 @@ export class ComputerControlService {
     if (expected && (layer !== expected.layer || layer?.version !== expected.version)) return { layerId: id, state: "superseded" };
     if (layer?.state === "cleared") return { layerId: id, version: layer.version, state: "cleared" };
     if (!layer) { layer = { layerId: id, version: 1, state: "cleared" }; this.layers.set(id, layer); return { layerId: id, version: 1, state: "cleared" }; }
+    if (layer.state === "cleared") return { layerId: id, version: layer.version, state: "cleared" };
     const trackingId = layer.trackingId;
     layer.version++; layer.state = "clearing"; clearTimeout(layer.timer);
     const version = layer.version;
@@ -217,16 +232,27 @@ export class ComputerControlService {
     } catch (error) { if (this.layers.get(id) === layer && layer.version === version) { layer.state = "uncertain"; this.notifyLayer(layer); } throw error; }
   }
   async execute(input, context = {}) {
+    context = {...context};
+    context.operationInput=input;
+
     const acceptedIntent = computerActionDefinition(input.action)?.receipt === true;
     if (acceptedIntent) { context.signal?.throwIfAborted(); context.guard?.(); }
     else this.check(input.action, context);
+    if (this.desktopChanging && this.desktopRetirement && recovery(input.action) && !input.action.endsWith(".status")) {
+      // This owner already sent EOF to the old worker; join that cleanup rather
+      // than starting the replacement worker to cancel an old request.
+      await this.desktopRetirement;
+      context.signal?.throwIfAborted(); context.guard?.();
+    }
     const initialLayerVersion = this.layers.get(input.layerId)?.version ?? 0;
     if (input.action === "control.status") return this.controlStatus(input.controlSessionId);
     if (input.action === "control.end") return this.end(input.controlSessionId ?? this.session?.controlSessionId, "requested");
     if (input.action === "input.status") return this.viewReceipt(await this.receipt(input.requestId));
     if (input.action === "input.cancel") {
       const entry = await this.receipt(input.requestId); if (!entry) return { requestId: input.requestId, state: "absent" };
-      entry.cancelled = true; this.notifyItem(entry, [entry.state, true]); await this.native.request("input.cancel", { requestId: input.requestId, controlSessionId: entry.controlSessionId });
+      entry.cancelled = true; this.notifyItem(entry, [entry.state, true]);
+      if (entry.controlSessionId && this.endedSessions.has(entry.controlSessionId)) { await this.save(entry); return this.viewReceipt(entry); }
+      await this.native.request("input.cancel", { requestId: input.requestId, controlSessionId: entry.controlSessionId });
       return this.viewReceipt(entry);
     }
     if (input.action === "annotation.status") {
@@ -237,6 +263,7 @@ export class ComputerControlService {
     if (input.action === "annotation.track.status") return clone(this.trackers.get(input.trackingId) ?? { trackingId: input.trackingId, state: "absent" });
     if (input.action === "annotation.track.stop") {
       const item = this.trackers.get(input.trackingId); if (!item) return { trackingId: input.trackingId, state: "absent" };
+      if (item.stopped || item.state === "stopped") return clone(item);
       const result = await this.native.request(input.action, { trackingId: input.trackingId }); Object.assign(item, result); this.notifyTracker(item); return clone(item);
     }
     if (input.action === "annotation.update") {
@@ -252,7 +279,7 @@ export class ComputerControlService {
     return this.once(input, context, async entry => {
       if (input.action === "control.begin") {
         if (this.session && this.session.state !== "ended") throw fault("COMPUTER_CONTROL_BUSY", "This target already has a control source.", { current: this.controlStatus() });
-        const id = randomUUID(), settings = this.settings(context); entry.controlSessionId = id;
+        const id = randomUUID(), settings = this.settings(context, input.action); entry.controlSessionId = id;
         const item = { controlSessionId: id, requestId: input.requestId, source: this.source(context), state: "starting", createdAt: new Date().toISOString(), lastActivityAt: new Date().toISOString(), lastActivityMono: this.now(), context, settingsSnapshot: settings };
         this.session = item;
         try { item.presentation = await this.native.request("control.begin", { controlSessionId: id, source: item.source, settings }, { beforeSend: () => { if (this.session !== item || item.state !== "starting" || entry.cancelled) throw fault("COMPUTER_SOURCE_CLOSED", "The original control intent ended before native admission."); this.check("control.begin", context); } }); }
@@ -264,7 +291,7 @@ export class ComputerControlService {
       if (input.action === "input.execute") {
         const session = this.ownedSession(input.controlSessionId, context); entry.controlSessionId = session.controlSessionId;
         if (input.source?.instanceId && this.target(context) && input.source.instanceId !== this.target(context)) throw fault("COMPUTER_SOURCE_MISMATCH", "The coordinate source belongs to another computer instance.");
-        const maximum = this.settings(context).input?.maxActions ?? 128;
+        const maximum = this.settings(context, input.action).input?.maxActions ?? 128;
         if (!Array.isArray(input.actions) || !input.actions.length || input.actions.length > maximum) throw fault("COMPUTER_INPUT_BATCH_INVALID", `Input actions must contain 1..${maximum} entries.`);
         entry.completedActions = 0; entry.totalActions = input.actions.length; entry.results = []; entry.releaseState = "released";
         const queued = this.inputQueue.then(async () => {
@@ -272,7 +299,7 @@ export class ComputerControlService {
           for (let index = 0; index < input.actions.length; index++) {
             if (entry.cancelled) break;
             this.check("input.execute", context); this.ownedSession(input.controlSessionId, context);
-            const result = await this.native.request("input.execute", { requestId: input.requestId, controlSessionId: input.controlSessionId, input: input.actions[index], source: input.source, instanceId: this.target(context), settings: this.settings(context) });
+            const result = await this.native.request("input.execute", { requestId: input.requestId, controlSessionId: input.controlSessionId, input: input.actions[index], source: input.source, instanceId: this.target(context), settings: this.settings(context, input.action) });
             if (result.state === "cancelled") { entry.cancelled = true; entry.results.push({ index, state: "cancelled", injectedEvents: result.injectedEvents }); break; }
             if (result.state !== "injected") {
               entry.results.push({ index, state: result.state, injectedEvents: result.injectedEvents, reason: result.reason });
@@ -289,7 +316,7 @@ export class ComputerControlService {
         const previous = this.layers.get(input.layerId);
         if ((previous?.version ?? 0) !== initialLayerVersion) return { layerId: input.layerId, version: previous?.version, state: "cleared" };
         if (previous && previous.state !== "cleared") throw fault("COMPUTER_LAYER_EXISTS", "Update the existing layer with its version.");
-        const duration = input.durationMs === undefined ? this.settings(context).annotation.staticDurationMs : input.durationMs;
+        const duration = input.durationMs === undefined ? this.settings(context, input.action).annotation.staticDurationMs : input.durationMs;
         const layer = { layerId: input.layerId, requestId: input.requestId, version: initialLayerVersion + 1, state: "submitted", connectionId: context.connectionId, taskId: context.taskId, sourceId: this.source(context).id, source: clone(input.source), objects: clone(input.objects), controlSessionId: input.controlSessionId,
           expiresAt: duration === null ? null : new Date(Date.now() + duration).toISOString() };
         this.layers.set(input.layerId, layer); this.activeLayers.set(input.layerId, layer);
@@ -304,7 +331,7 @@ export class ComputerControlService {
         return this.execute({ action: "annotation.status", layerId: layer.layerId }, context);
       }
       if (input.action === "annotation.track.start") {
-        const settings = this.settings(context), trackingId = randomUUID();
+        const settings = this.settings(context, input.action), trackingId = randomUUID();
         const previous = this.layers.get(input.layerId);
         if ((previous?.version ?? 0) !== initialLayerVersion) return { trackingId, layerId: input.layerId, state: "stopped" };
         if (previous && previous.state !== "cleared") throw fault("COMPUTER_LAYER_EXISTS", "Clear or stop the original tracking layer before replacing it.");
@@ -324,14 +351,44 @@ export class ComputerControlService {
     });
   }
   async reconcile(context = {}) {
-    const settings = this.settings(context);
-    if (!this.native.child && this.activeCount === 0) return;
-    await this.native.request("settings.update", { settings });
-    if (this.session) this.session.settingsSnapshot = settings;
-    if (!settings.enabled || !settings.features.input) await this.end(this.session?.controlSessionId, "settings-disabled");
-    if (!settings.enabled || !settings.features.annotation) await Promise.all([...this.activeLayers.keys()].map(id => this.clearLayer(id)));
-    else if (!settings.features.observation || !settings.annotation.dynamicEnabled) {
-      for (const item of [...this.activeTrackers.values()]) if (item.state !== "stopped") await this.execute({ action: "annotation.track.stop", trackingId: item.trackingId }, context);
+    const definition = context.getDefinition?.() ?? bootstrapDefinition;
+    const raw = context.getSettings?.() ?? context.settings;
+    const failures = [];
+    const readPolicy = feature => {
+      try { return definition.projectFeaturePolicy(raw, feature); }
+      catch (error) { failures.push(error); return undefined; }
+    };
+    const input = readPolicy("input");
+    const annotation = readPolicy("annotation");
+    if (input && (!input.enabled || !input.allowed)) {
+      await this.end(this.session?.controlSessionId, "settings-disabled");
+    }
+    if (annotation && (!annotation.enabled || !annotation.allowed)) {
+      await Promise.all([...this.activeLayers.keys()].map(id => this.clearLayer(id)));
+    } else if (this.activeTrackers.size) {
+      const observation = readPolicy("observation");
+      let dynamicEnabled;
+      try { dynamicEnabled = definition.selectPatch(raw, ["annotation.dynamicEnabled"]).annotation.dynamicEnabled; }
+      catch (error) { failures.push(error); }
+      if (observation && (!observation.enabled || !observation.allowed) || dynamicEnabled === false) {
+        for (const item of [...this.activeTrackers.values()]) {
+          if (item.state !== "stopped") await this.execute({ action: "annotation.track.stop", trackingId: item.trackingId }, context);
+        }
+      }
+    }
+    const actions = [];
+    if (this.session?.state === "active") actions.push("control.begin");
+    if (this.activeTrackers.size) actions.push("annotation.track.start");
+    if (actions.length) {
+      try {
+        const paths = [...new Set(actions.flatMap(action => definition.actionDefinition(action)?.settingsPaths ?? []))];
+        const patch = definition.selectPatch(raw, paths);
+        await this.native.request("settings.patch", { patch });
+        if (this.session?.state === "active") this.session.settingsSnapshot = definition.normalizeForAction(raw, "control.begin");
+      } catch (error) { failures.push(error); }
+    }
+    if (failures.length) {
+      throw new AggregateError(failures, "Settings were saved and explicitly disabled resources were closed. Some active parameters could not be applied.");
     }
   }
   async endTask(taskId, sourceId) {
@@ -366,6 +423,36 @@ export class ComputerControlService {
     const claims = [...this.inflight.values()].filter(claim => claim.connectionId === connectionId);
     return this.retireScope(session, layers, claims, "source-connection-closed");
   }
+  async retireNativeGeneration(native) {
+    if (this.desktopRetirement) return this.desktopRetirement;
+    this.desktopChanging = true;
+    const claims = [...this.inflight.values()];
+    for (const claim of claims) claim.cancelled = true;
+    const retirement = (async () => {
+      // EOF/native close releases physical input and joins its Qt owner first.
+      await native.close();
+      await Promise.allSettled([this.inputQueue, ...claims.map(claim => claim.promise)]);
+      if (this.session) {
+        this.session.state = "ended"; this.session.reason = "native-release-updated";
+        this.endedSessions.set(this.session.controlSessionId, { ...this.session });
+        this.notifyControl(); this.session = null;
+      }
+      for (const layer of this.layers.values()) {
+        clearTimeout(layer.timer); delete layer.timer;
+        layer.state = "cleared"; delete layer.objects; this.notifyLayer(layer);
+      }
+      for (const tracker of this.trackers.values()) {
+        tracker.state = "stopped"; tracker.stopped = true; this.notifyTracker(tracker);
+      }
+      this.activeLayers.clear(); this.activeTrackers.clear();
+      // Original receipts/body hashes and ended-session observations stay on this owner.
+      this.inputQueue = Promise.resolve();
+    })();
+    this.desktopRetirement = retirement;
+    try { await retirement; }
+    finally { if (this.desktopRetirement === retirement) this.desktopRetirement = undefined; }
+  }
+  resumeNativeGeneration() { this.desktopChanging = false; }
   async stop() {
     if (this.stopPromise) return this.stopPromise;
     this.stopped = true;

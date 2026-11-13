@@ -26,6 +26,6 @@ export type PluginCatalogApiContext = {
   };
   webModules?: {
     list(webRelease?: string | null, invocation?: PluginCatalogInvocation): Promise<readonly WebPluginModule[]> | readonly WebPluginModule[];
-    read(id: string, rev: string, relativePath: string, invocation?: PluginCatalogInvocation): Promise<Readonly<{ module: WebPluginModule; source: Buffer; path: string }>>;
+    read(id: string, rev: string, relativePath: string, invocation?: PluginCatalogInvocation): Promise<Readonly<{ module: WebPluginModule; source: Buffer; path: string; contentType?: string }>>;
   };
 };

@@ -10,6 +10,8 @@
 
 - [电脑控制](user-guide/computer-control.md)：平级电脑目录、可见功能开关、输入、截图和静态/动态标注。
 
+- [宿主与插件边界](host-plugin-boundaries.md)
+
 ## 先看这里
 
 - [RibiWebGUI 使用手册](user-guide/README.md)：按任务找到配置、操作和排障步骤。

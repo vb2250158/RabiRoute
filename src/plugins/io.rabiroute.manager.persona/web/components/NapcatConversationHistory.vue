@@ -68,6 +68,7 @@ async function loadContacts() {
   const controller=new AbortController();directoryRequest=controller;
   const collected=new Map(contacts.value);let failed=false;const warnings=new Set<string>(),failures:string[]=[];
   const accounts=new Map(accountIds.value),available=new Set<string>();
+  try {
   // Keep account reads bounded while allowing an unavailable account to fail locally.
   for(let start=0;start<props.routes.length;start+=2) {
     const batch=props.routes.slice(start,start+2);
@@ -75,11 +76,17 @@ async function loadContacts() {
     if(controller.signal.aborted)return;
     for(const [index,result] of results.entries()) {
       if(result.status==='rejected'){failed=true;failures.push(userFacingError(result.reason));continue;}
+      try {
       // Refresh successful directories while retaining already-read names for an offline directory.
       const route=batch[index]!,instance=result.value.instanceId;
       const accountKey=JSON.stringify([route.routeId,instance]);
+      const id=result.value.account?.userId;
+      if(!id){failed=true;failures.push(t('QQ 账号状态暂时无法更新。'));continue;}
+      // Prepare this route before replacing its old directory. A presentation
+      // failure cannot erase the other routes or the last readable names.
+      const incoming=(result.value.entries as QqDirectoryContact[]).map(contact=>[contactKey(route.routeId,instance,contact.kind,contact.target),contact] as const);
+      const routeWarnings:string[]=[...(result.value.warnings??[])];
       if(result.value.account?.userId){
-        const id=result.value.account.userId;
         if(accounts.has(accountKey)&&accounts.get(accountKey)!==id){
           const prefix=JSON.stringify([route.routeId,instance]).slice(0,-1)+',';
           for(const key of collected.keys())if(key.startsWith(prefix))collected.delete(key);
@@ -87,18 +94,18 @@ async function loadContacts() {
         }
         accounts.set(accountKey,id);available.add(accountKey);
       }else{failed=true;failures.push(t('QQ 账号状态暂时无法更新。'));continue;}
-      const routeWarnings:string[]=result.value.warnings??[];
       for(const warning of routeWarnings)warnings.add(warning);
       for(const kind of ['group','private']) {
         if(routeWarnings.includes(kind==='group'?'QQ_GROUP_LIST_UNAVAILABLE':'QQ_FRIEND_LIST_UNAVAILABLE'))continue;
         const prefix=JSON.stringify([route.routeId,instance??'',kind]).slice(0,-1)+',';
         for(const key of collected.keys())if(key.startsWith(prefix))collected.delete(key);
       }
-      for(const contact of result.value.entries as QqDirectoryContact[]) collected.set(contactKey(batch[index]!.routeId,result.value.instanceId,contact.kind,contact.target),contact);
+      for(const [key,contact] of incoming) collected.set(key,contact);
       if(result.value.warnings?.length)failed=true;
+      } catch(cause) { failed=true;failures.push(userFacingError(cause)); }
     }
   }
-  if(!controller.signal.aborted){
+  if(!controller.signal.aborted&&directoryRequest===controller){
     contacts.value=collected;accountIds.value=accounts;availableAccounts.value=available;
     directoryWarning.value=!failed?'':failures.length?t('部分 QQ 连接暂时无法更新，已有会话仍可查看。')
       :[...warnings].every(warning=>warning==='QQ_RECENT_CONTACT_UNAVAILABLE')?t('近期会话摘要暂未更新，群与好友仍可浏览。'):t('部分 QQ 资料暂未更新，已有会话仍可查看。');
@@ -114,7 +121,9 @@ async function loadContacts() {
     if(same)selectedKey.value=same.conversationKey;
     else if(!selected.value&&firstConversation())selectedKey.value=firstConversation()!.conversationKey;
   }
-  if(directoryRequest===controller)directoryRequest=undefined;
+  } catch(cause) {
+    if(!controller.signal.aborted&&directoryRequest===controller){directoryWarning.value=t('部分 QQ 连接暂时无法更新，已有会话仍可查看。');directoryDetail.value=userFacingError(cause);}
+  } finally { if(directoryRequest===controller)directoryRequest=undefined; }
 }
 async function load(older=false) {
   if(request){if(!older)pendingRefresh=true;return;}

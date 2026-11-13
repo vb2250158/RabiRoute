@@ -1,4 +1,4 @@
-import {agentNativeFunction,withAgentManagerInvocation,type AgentManagerOperationInvoker} from './agentAdapters/managerInvocation.js';
+import {agentNativeFunction,invokeScopedAgentManagerOperation,withAgentManagerInvocation,type AgentManagerOperationInvoker} from './agentAdapters/managerInvocation.js';
 import {isDshSessionId} from './shared/dshSessionIdentity.js';
 import { renderAgentReplyParameters } from "./agentRequests/replyParameters.js";
 import { executeEndpointAgentDelivery, type EndpointDeliveryOptions, type PreparedEndpointDelivery, type EndpointDeliveryReceipt } from "./agentRequests/endpointDelivery.js";
@@ -86,7 +86,7 @@ export type AgentThreadRequest = {
   instanceBinding?: AgentInstanceBinding;
   /** Original business ledger location for a formal cross-PC reply; never grants source authority. */
   ledgerOwnerDeviceId?: string;
-  action?: "list" | "read" | "reconcile_delivery" | "open" | "resolve" | "create" | "rename" | "send";
+  action?: "ds_bot_catalog" | "ds_bot_deliver" | "ds_bot_reconcile" | "list" | "read" | "reconcile_delivery" | "open" | "resolve" | "create" | "rename" | "send";
   agentAdapter?: AgentAdapterType;
   query?: string;
   limit?: number;
@@ -95,6 +95,7 @@ export type AgentThreadRequest = {
   deliveryId?: string;
   title?: string;
   prompt?: string;
+  dsBot?: { botScopeId: string; botId: string; scheduledAt?: string };
   grokBotDelivery?: { deliveryType: "private" | "group"; sendMode: "direct" | "identity"; senderAgentId?: string };
   cwd?: string;
   createIfMissing?: boolean;
@@ -195,6 +196,8 @@ export type AgentThreadRequestOptions = {
   callerExecutionOptions?: EndpointDeliveryOptions["callerExecutionOptions"];
   /** Original HTTP admission fence, captured by the Manager route, never by request JSON. */
   requestAuthority?: () => void;
+  /** Target-local new-work admission only; original DSBot receipt reads do not call this guard. */
+  assertNewAgentTask?: () => void;
   remoteSource?: AgentThreadRemoteSource;
   /** Build an already-addressed return endpoint from ingress metadata, without source qualification. */
   remoteEndpoint?: (nodeId: string, agentId: string, sessionId: string, provider?: string, authorizationIncarnation?: string) => AgentRequestEndpoint;
@@ -907,6 +910,11 @@ async function executeAgentThreadRequest(
   driver: AgentThreadDriver = defaultDriver
 ): Promise<AgentThreadRequestResult> {
   const action = request.action;
+  if (action === "ds_bot_catalog" || action === "ds_bot_deliver" || action === "ds_bot_reconcile") {
+    if (request.agentAdapter !== "dsh") throw new Error("DSBot operations require the selected DSH provider.");
+    if (request.imagePaths?.length || request.threadId || request.createIfMissing || request.grokBotDelivery) throw new Error("DSBot operations cannot use ordinary session or group delivery options.");
+    return invokeScopedAgentManagerOperation<AgentThreadRequestResult>("dsh", "ds-bot.request", { request, baseUrl: options.dshBaseUrl }, { assertCurrent: options.requestAuthority, nativeArgs: [options.assertNewAgentTask] });
+  }
   if (options.endpointDelivery && (action === "send" || action === "reconcile_delivery")) {
     return executeEndpointAgentDelivery(request, options.endpointDelivery);
   }

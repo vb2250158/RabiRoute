@@ -1,0 +1,5 @@
+{
+  "exports": [{ "source": "src/plugins/io.rabiroute.endpoint.heartbeat/hostRuntime.mjs", "name": "createOwnedRuntime" }],
+  "ownedPrefixes": ["src/plugins/io.rabiroute.endpoint.heartbeat/"],
+  "ownedSources": ["src/plugins/io.rabiroute.endpoint.heartbeat/src/manager/roleAutomationScheduler.ts"]
+}

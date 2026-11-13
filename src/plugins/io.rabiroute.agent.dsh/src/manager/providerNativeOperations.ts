@@ -1,9 +1,10 @@
+import { normalizeDsBotConnectionOrigin } from "@rabiroute/host-api/shared/agentDeliveryTarget";
 import type { ApiOperationDefinition, ApiOperationInput } from "@rabiroute/host-api/manager/apiOperationContract";
-import { dshRpc, listDshSessions, readDshSession } from "../dshSessionBridge.js";
+import { dshRpc, listDshSessions, readDshSession, requestDshBotAutomation } from "../dshSessionBridge.js";
 import { resolveDshBaseUrl } from "../dshDiscovery.js";
 
 type NativeRpc = (method: string, args: Record<string, unknown>, signal?: AbortSignal) => Promise<unknown>;
-export type DshNativeOperationDependencies = { baseUrl?: string; rpc?: NativeRpc };
+export type DshNativeOperationDependencies = { baseUrl?: string; rpc?: NativeRpc; botRequest?: typeof requestDshBotAutomation; configuredTargets?: () => { localBaseUrls: string[]; remoteTargetIds: string[] } };
 class DshNativeError extends Error {
   constructor(readonly status: number, readonly code: string, message: string) { super(message); }
 }
@@ -24,8 +25,49 @@ export function createDshNativeOperations(dependencies: DshNativeOperationDepend
     if (!result.ok) throw new DshNativeError(400, result.error.code ?? "DSH_NATIVE_REJECTED", result.error.message ?? "The DSH owner rejected this operation.");
     return result.value;
   });
+  const selfDestination = async (input: ApiOperationInput) => {
+    const required = (key: string) => {
+      const value = input.url.searchParams.get(key);
+      if (!value?.trim() || value !== value.trim() || value.length > 4096 || /[\0\r\n]/.test(value)) throw new DshNativeError(400, "DS_BOT_DESTINATION_PARAMETER_INVALID", `query.${key} requires the exact native identity.`);
+      return value;
+    };
+    const botScopeId = required("botScopeId"), botId = required("botId"), runtimeId = required("runtimeId");
+    const configured = dependencies.configuredTargets?.() ?? { localBaseUrls: [], remoteTargetIds: [] };
+    const selected = input.url.searchParams.get("agentTargetId");
+    if (selected && selected !== "local:dsh") {
+      if (!configured.remoteTargetIds.includes(selected)) throw new DshNativeError(404, "DS_BOT_TARGET_NOT_CONFIGURED", "The selected DSH reference is not configured.");
+      throw new DshNativeError(503, "DS_BOT_REMOTE_DISCOVERY_UNAVAILABLE", "This resolver currently supports local:dsh only. Use the selected remote owner's DSBot catalog; no local destination was substituted.");
+    }
+    const urls = [...new Set([baseUrl(), ...configured.localBaseUrls].map(value => normalizeDsBotConnectionOrigin(value)))];
+    const selectedOrigin = input.url.searchParams.get("dshBaseUrl");
+    if (selectedOrigin && !urls.includes(normalizeDsBotConnectionOrigin(selectedOrigin))) throw new DshNativeError(404, "DS_BOT_TARGET_NOT_CONFIGURED", "The DSH connection origin is not in the actual configured or discovered catalog.");
+    const candidates = selectedOrigin ? [normalizeDsBotConnectionOrigin(selectedOrigin)] : urls;
+    const matches: Array<{ origin: string; botName: string }> = [];
+    let failures = 0;
+    for (let start = 0; start < candidates.length; start += 4) {
+      input.signal?.throwIfAborted();
+      const results = await Promise.allSettled(candidates.slice(start, start + 4).map(async origin => {
+        const catalog = await (dependencies.botRequest ?? requestDshBotAutomation)("rabi-automation-catalog", { schemaVersion: 1 }, { baseUrl: origin, signal: input.signal });
+        if (!("bots" in catalog) || catalog.botScopeId !== botScopeId || catalog.runtimeId !== runtimeId) return;
+        const bots = catalog.bots.filter(bot => bot.botId === botId);
+        if (bots.length > 1) throw new DshNativeError(409, "DS_BOT_DESTINATION_AMBIGUOUS", "The native Bot catalog contains duplicate identities.");
+        if (bots.length) matches.push({ origin, botName: bots[0].botName });
+      }));
+      input.signal?.throwIfAborted();
+      failures += results.filter(result => result.status === "rejected").length;
+    }
+    if (matches.length > 1) throw new DshNativeError(409, "DS_BOT_DESTINATION_AMBIGUOUS", "Multiple DSH connection origins match this live Bot. Select its exact configured connection origin.");
+    if (!matches.length) {
+      if (!selected && configured.remoteTargetIds.length) throw new DshNativeError(503, "DS_BOT_REMOTE_DISCOVERY_UNAVAILABLE", "No exact local DSBot destination was confirmed. Query the selected remote owner; no local destination was substituted.");
+      throw new DshNativeError(failures ? 503 : 404, failures ? "DS_BOT_CATALOG_UNAVAILABLE" : "DS_BOT_SELF_NOT_FOUND", "The exact live DSBot was not found in the selected DSH connection catalog. Refresh its connection and preserve the original destination.");
+    }
+    return { target: { kind: "ds_bot" as const, agentAdapter: "dsh" as const, agentTargetId: "local:dsh", dshBaseUrl: matches[0].origin, botScopeId, botId, botName: matches[0].botName } };
+  };
   const integer = { type: "string", pattern: "^[0-9]+$" }, text = { type: "string", minLength: 1 }, object = { type: "object", additionalProperties: true };
   const specs = [
+    { id: "ds-bot-destination.read", path: "/ds-bot-destination", method: "GET", title: "Resolve this DSBot on the local DSH target", query: { botScopeId: text, botId: text, runtimeId: text, agentTargetId: text, dshBaseUrl: text }, run: selfDestination },
+    { id: "ds-bots.list", path: "/ds-bots", method: "GET", title: "List native DSBot destinations", query: {},
+      run: (input: ApiOperationInput) => (dependencies.botRequest ?? requestDshBotAutomation)("rabi-automation-catalog", { schemaVersion: 1 }, { baseUrl: baseUrl(), signal: input.signal }) },
     {
       id: "sessions.list",
       path: "/sessions",

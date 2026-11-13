@@ -4,6 +4,7 @@ import path from "node:path";
 import { recordDataMutationAudit } from "../observability/dataMutationAudit.js";
 import { atomicWriteFileSync, withFileLockSync } from "../shared/filePersistence.js";
 import { collectReleaseAssetPaths, readReleaseAsset, normalizeReleaseAssetPath as normalizeAssetPath } from "../../apps/rabi-agent/lib/release-assets.mjs";
+import { desktopQtPackageRef, sameDesktopResourceReference, type DesktopQtPackageRef } from "../../apps/rabi-agent/lib/desktop-resource-reference.mjs";
 
 export type LanAgentReleaseFile = {
   path: string;
@@ -34,6 +35,7 @@ type CommonReleaseSelection = {
   agentRoot: string;
   manifest: LanAgentReleaseManifest;
 };
+export type DesktopResourceSelection = Readonly<{ revision: number; digest: string | null; version: string; qtPackageRef?: DesktopQtPackageRef }>;
 export class LanAgentReleaseSelectionConflictError extends Error {
   constructor() { super("Node release selection conflict; read the current publication before retrying."); }
 }
@@ -156,6 +158,66 @@ export class LanAgentReleaseStore {
     const selected = nodeId ? this.selectedReleaseDigest(nodeId) : undefined;
     if (selected) return this.archivedRelease(selected).manifest;
     return this.commonRelease()?.manifest ?? this.packagedManifest();
+  }
+
+  /** Resolve only imported, signed desktop resources. Does not change common or node selections. */
+  desktopResourceRelease(releaseDigest: string): Readonly<{
+    version: string; digest: string; nativeOptions: Readonly<{ executable: string; args: string[] }>;
+  }> {
+    const archived = this.archivedRelease(releaseDigest);
+    const files = archived.manifest.files.filter(file => file.path.startsWith("dist/native/"));
+    if (!files.some(file => file.path === "dist/native/RabiAgent.Computer.exe")) {
+      throw new Error("The imported release has no native desktop worker.");
+    }
+    // Reuse the original signature and asset-read owner once during preparation,
+    // never from the input/capture RPC path. Qt stays on its current verified Host resource.
+    for (const file of files) this.readAsset(archived.manifest.version, archived.manifest.platform,
+      file.path, undefined, path.basename(archived.root));
+    return Object.freeze({ version: archived.manifest.version, digest: releaseDigest,
+      nativeOptions: Object.freeze({ executable: path.join(archived.root, "assets", "dist", "native", "RabiAgent.Computer.exe"), args: [] }) });
+  }
+
+  /** Desktop-only selection; absent selection retains the packaged worker without creating keys. */
+  desktopResourceSelection(): DesktopResourceSelection {
+    const file = path.join(this.archiveRoot(), "desktop.json");
+    let raw: Record<string, unknown>;
+    try { raw = readJson(file); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return Object.freeze({ revision: 0, digest: null, version: "builtin" });
+      throw Object.assign(new Error("The original desktop resource selection cannot be read.", { cause: error }), { code: "COMPUTER_DESKTOP_SELECTION_INVALID" });
+    }
+    try {
+      if (raw.schemaVersion !== 1 || !Number.isSafeInteger(raw.revision) || (raw.revision as number) < 1 || raw.digest !== null && !releaseHash(raw.digest) || typeof raw.version !== "string") throw new Error("Invalid desktop selection fields.");
+      if (raw.digest !== null) {
+        const archived = this.archivedRelease(raw.digest as string);
+        if (archived.manifest.version !== raw.version || !archived.manifest.files.some(file => file.path === "dist/native/RabiAgent.Computer.exe")) throw new Error("The selected desktop version does not match its imported resource package.");
+      } else if (raw.version !== "builtin") throw new Error("The builtin native selection has an invalid version.");
+      const qtPackageRef = desktopQtPackageRef(raw.qtPackageRef);
+      return Object.freeze({ revision: raw.revision as number, digest: raw.digest as string | null, version: raw.version, ...(qtPackageRef ? { qtPackageRef } : {}) });
+    } catch (error) { throw Object.assign(new Error("The original desktop resource selection is invalid; other release selections remain unchanged.", { cause: error }), { code: "COMPUTER_DESKTOP_SELECTION_INVALID" }); }
+  }
+
+  /** Called by the desktop adoption owner after verification; never selects a common or node SDK release. */
+  selectDesktopResourceRelease(digest: string | null, expectedRevision: number, qtReference?: DesktopQtPackageRef | null): DesktopResourceSelection {
+    if (digest !== null && !releaseHash(digest) || !Number.isSafeInteger(expectedRevision) || expectedRevision < 0 || expectedRevision >= Number.MAX_SAFE_INTEGER) throw new Error("A desktop release digest and exact expected revision are required.");
+    return withFileLockSync(path.join(this.archiveRoot(), "desktop.lock"), () => {
+      const current = this.desktopResourceSelection();
+      const qtPackageRef = desktopQtPackageRef(qtReference === undefined ? current.qtPackageRef : qtReference);
+      const requested = { digest, qtPackageRef };
+      // A caller that lost the original acknowledgement reads the same commit;
+      // it does not mint another revision or replace a different later choice.
+      if (current.revision === expectedRevision + 1 && sameDesktopResourceReference(current, requested)) return current;
+      if (current.revision !== expectedRevision) throw Object.assign(new Error("Desktop resource selection conflict; read the current desktop selection."), { code: "COMPUTER_DESKTOP_REVISION_CONFLICT" });
+      if (sameDesktopResourceReference(current, requested)) return current;
+      const archived = digest ? this.archivedRelease(digest) : undefined;
+      if (archived && !archived.manifest.files.some(file => file.path === "dist/native/RabiAgent.Computer.exe")) throw new Error("The imported release has no native desktop worker.");
+      const next = Object.freeze({ revision: current.revision + 1, digest, version: archived?.manifest.version ?? 'builtin', ...(qtPackageRef ? { qtPackageRef } : {}) });
+      atomicWriteFileSync(path.join(this.archiveRoot(), "desktop.json"), JSON.stringify({ schemaVersion: 1, ...next }));
+      recordDataMutationAudit({ group: "lan-agent", event: "desktop_resource_release_selected", owner: "lan-agent-release", action: "select-desktop-resource",
+        target: { type: "desktop-resource", id: "local" }, dataSource: { kind: "file", id: "desktop.json" }, outcome: "committed",
+        before: { digest: current.digest ?? undefined, revision: String(current.revision) }, after: { digest: next.digest ?? undefined, revision: String(next.revision) } });
+      return next;
+    });
   }
 
   private packagedSigningStamp(): string {
@@ -375,8 +437,8 @@ export class LanAgentReleaseStore {
     if (!releaseHash(snapshot)) throw new Error("Invalid release snapshot.");
     const root = path.join(this.archiveRoot(), "snapshots", snapshot);
     const manifest = readJson(path.join(root, "manifest.json")) as unknown as LanAgentReleaseManifest;
-    const keys = readSigningKeys(this.signingKeyPath);
-    if (!verifyLanAgentReleaseManifest(manifest, lanAgentReleasePublicKeySha256(keys.publicKey))) throw new Error("LAN Agent archived release signature mismatch.");
+    const publicKey = requiredString(readJson(this.signingKeyPath).publicKey, "LAN Agent release publicKey");
+    if (!verifyLanAgentReleaseManifest(manifest, lanAgentReleasePublicKeySha256(publicKey))) throw new Error("LAN Agent archived release signature mismatch.");
     if (manifest.files.some(file => normalizeAssetPath(file.path) !== file.path || file.downloadUrl !== `/api/lan-agent/releases/${encodeURIComponent(manifest.version)}/node/${file.path.split("/").map(encodeURIComponent).join("/")}?release=${snapshot}`)) throw new Error("Invalid archived release asset URL.");
     return { manifest, root };
   }

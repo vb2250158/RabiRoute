@@ -47,6 +47,14 @@ test("scheduled automation collection keeps Agent and script actions under one t
   assert.deepEqual(collectScheduledAutomationTasks([profile]).map(task => task.rule.id), ["agent-task", "script-task"]);
 });
 
+test("gateway scheduling excludes explicit DSBot rules before execution claims", () => {
+  const profile = route("C:\\roles", { automationRules: [{
+    id: "dsbot-task", trigger: { type: "schedule", schedule: { id: "daily", type: "daily_time", timeOfDay: "09:00" } },
+    action: { type: "deliver_agent", message: "native", target: { kind: "ds_bot", agentAdapter: "dsh", agentTargetId: "local:dsh", botScopeId: "scope", botId: "bot", botName: "Bot" } }
+  }] });
+  assert.deepEqual(collectScheduledAutomationTasks([profile]), []);
+});
+
 test("message script automation reuses Route matching rules", () => {
   const profile = route("C:\\roles", {
     automationRules: [{
@@ -128,4 +136,12 @@ test("private sender filtering also governs message-triggered scripts without ru
   const record = { time: 1, userId: 20001, rawMessage: "hello", senderName: "Changed nickname", adapterType: "napcat" };
   assert.equal(matchingMessageScriptAutomations(selected, "private", record, {}).length, 1);
   assert.equal(matchingMessageScriptAutomations(selected, "private", { ...record, userId: 20002 }, {}).length, 0);
+});
+
+test("daily multiple times remain one scheduled automation task", () => {
+  const profile = route("C:/fixture/roles", { automationRules: [{ id: "one-rule", trigger: { type: "schedule", schedule: { id: "one-schedule", type: "daily_time", timeOfDays: ["10:00", "14:00", "18:00"] } }, action: { type: "deliver_agent", message: "review" } }] });
+  const tasks = collectScheduledAutomationTasks([profile]);
+  assert.equal(tasks.length, 1);
+  assert.equal(tasks[0].rule.id, "one-rule");
+  assert.deepEqual(tasks[0].rule.trigger.schedule.timeOfDays, ["10:00", "14:00", "18:00"]);
 });

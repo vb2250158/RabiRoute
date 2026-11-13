@@ -39,7 +39,8 @@ export async function runCli(args, dependencies = {}) {
     if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([key, item]) => [redact(key), redact(item)]));
     return value;
   };
-  return redact(await runOperationCommand(args, client.operations, { ...dependencies, protectedCredential, redact }));
+  try { return redact(await runOperationCommand(args, client.operations, { ...dependencies, protectedCredential, redact })); }
+  finally { if (!dependencies.client) await client.close?.(); }
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

@@ -4,6 +4,7 @@ import { register } from 'node:module';
 import { setImmediate as turn } from 'node:timers/promises';
 import { registeredWebCommands } from '../src/pluginCommands';
 import { retainMountedTrustedWebPage } from '../src/pluginPages';
+import { installWebRuntime } from '../src/webRuntime';
 register(new URL('./fixtures/web-module-lifecycle-loader.mjs', import.meta.url));
 const {refreshWebPluginModules: refresh, disposeWebPluginModules: dispose, webPluginModulesPending: pending} = await import('../src/pluginModules');
 type Api = {instanceIds: readonly string[];forInstance(id:string):{registerCommand(input:unknown):()=>void;registerPage(input:unknown):()=>void}};
@@ -102,4 +103,67 @@ test('a mounted page cannot retain an already revoked owner across a later catal
   f.catalog=[descriptor('a')];await refresh();releaseMount=retainMountedTrustedWebPage('lifecycle.page');const old=dispose();
   try {f.catalog=[descriptor('a','b')];await refresh({initialization:'background'});assert.equal(pending(),true);cleanup.release();await old;await until(()=>replacements===1);assert.deepEqual(keys(),['lifecycle.a']);}
   finally {cleanup.release();releaseMount();await old;}
+}));
+
+
+test('a replacement requiring a missing shared export retains the original owner and unrelated pages', async()=>fixture(async f=>{
+  f.activate=(id,_rev,api)=>command(api,id); f.catalog=[descriptor('a'),descriptor('b')]; await refresh();
+  installWebRuntime({vue:{ref:()=>1}});
+  const originalFetch=globalThis.fetch;
+  globalThis.fetch=async(input,options)=>String(input).endsWith('/web/module.json')?Response.json({schemaVersion:1,pluginId:'fixture.a',version:'1',entry:'client.mjs',backend:{pluginId:'fixture.a',version:'1'},styles:[],runtime:{abi:'rabi-web-runtime/1',imports:[{id:'vue',exports:['missingNewExport']}]}}):originalFetch(input,options);
+  f.catalog=[Object.assign(descriptor('a','b'),{resourceMode:'package' as const,entryPath:'web/client.mjs'}),descriptor('b'),descriptor('c')];
+  await assert.rejects(refresh(),AggregateError);
+  assert.deepEqual(keys(),['lifecycle.a','lifecycle.b','lifecycle.c']); assert.equal(pending(),false);
+}));
+
+test('retiring a package during CSS loading releases its pending stylesheet without activation', async()=>fixture(async f=>{
+  let activated=0;f.activate=()=>{activated++;}; installWebRuntime({vue:{ref:()=>1}});
+  const originalFetch=globalThis.fetch, originalDocument=globalThis.document;
+  const links:Array<{remove():void;removed:boolean;onload:unknown;onerror:unknown}>=[];
+  const head={appendChild(link:typeof links[number]){links.push(link);}};
+  globalThis.document={head,createElement:()=>({removed:false,onload:null,onerror:null,remove(){this.removed=true;}})} as unknown as Document;
+  globalThis.fetch=async(input,options)=>String(input).endsWith('/web/module.json')?Response.json({schemaVersion:1,pluginId:'fixture.a',version:'1',entry:'client.mjs',backend:{pluginId:'fixture.a',version:'1'},styles:['assets/style.css'],runtime:{abi:'rabi-web-runtime/1',imports:[]}}):originalFetch(input,options);
+  f.catalog=[Object.assign(descriptor('a'),{resourceMode:'package' as const,entryPath:'web/client.mjs'})];
+  try {await refresh({initialization:'background'});await until(()=>links.length===1);await dispose();assert.equal(activated,0);assert.equal(links[0]!.removed,true);assert.equal(pending(),false);}
+  finally {globalThis.document=originalDocument;}
+}));
+
+
+test('a semantic-version successor keeps the mounted original page/draft until its lease exits', async()=>fixture(async f=>{
+  const draft={text:'unsaved original'};let oldDisposals=0,newActivations=0,release=()=>{};
+  f.activate=(id,_rev,api)=>{
+    command(api,id);
+    api.forInstance(api.instanceIds[0]!).registerPage({routeId:'lifecycle.version-page',rendererId:'lifecycle.version-renderer',paths:[{path:'/lifecycle-version',title:'Fixture'}],loader:async()=>({draft})});
+    if(id==='old')return ()=>{oldDisposals++;};newActivations++;return ()=>{};
+  };
+  const old=Object.assign(descriptor('old'),{pluginId:'fixture.versioned',version:'1.0.0',instances:[{instanceId:'instance'}]});
+  const next=Object.assign(descriptor('next','b'),{pluginId:'fixture.versioned',version:'2.0.0',instances:[{instanceId:'instance'}]});
+  f.catalog=[old];await refresh();release=retainMountedTrustedWebPage('lifecycle.version-page');
+  try{
+    f.catalog=[next];await refresh();assert.equal(oldDisposals,0);assert.equal(newActivations,0);assert.equal(draft.text,'unsaved original');
+    assert.deepEqual(keys(),['lifecycle.old']);assert.equal(pending(),false);
+    release();await until(()=>newActivations===1);assert.equal(oldDisposals,1);assert.deepEqual(keys(),['lifecycle.next']);
+    assert.equal(next.rev,'b'.repeat(64));assert.equal(old.rev,'a'.repeat(64),'old retained resource descriptor was not rebound to the successor');
+  }finally{release();}
+}));
+
+test('merging two previous versions starts one successor after their captured owners retire', async()=>fixture(async f=>{
+  let merged=0,old=0;
+  f.activate=(id,_rev,api)=>{command(api,id);if(id==='merged')merged++;return ()=>{if(id!=='merged')old++;};};
+  f.catalog=[Object.assign(descriptor('one'),{pluginId:'fixture.merge',version:'1.0.0',instances:[{instanceId:'one'}]}),Object.assign(descriptor('two'),{pluginId:'fixture.merge',version:'2.0.0',instances:[{instanceId:'two'}]})];
+  await refresh();
+  f.catalog=[Object.assign(descriptor('merged','b'),{pluginId:'fixture.merge',version:'3.0.0',instances:[{instanceId:'one'},{instanceId:'two'}]})];
+  await refresh();assert.equal(old,2);assert.equal(merged,1);assert.deepEqual(keys(),['lifecycle.merged']);
+}));
+
+
+test('a page mounted while successor metadata is pending still owns its original draft lease', async()=>fixture(async f=>{
+  const metadata=gate();let asked=false,started=0,stopped=0,release=()=>{};
+  const old=Object.assign(descriptor('late-old'),{pluginId:'fixture.late-version',version:'1.0.0',instances:[{instanceId:'same'}]});
+  const next=Object.assign(descriptor('late-next','b'),{pluginId:'fixture.late-version',version:'2.0.0',instances:[{instanceId:'same'}],entryPath:'web/client.mjs',resourceMode:'package' as const});
+  f.activate=(id,_rev,api)=>{command(api,id);api.forInstance('same').registerPage({routeId:'lifecycle.late-page',rendererId:'lifecycle.late-renderer',paths:[{path:'/late-page',title:'Fixture'}],loader:async()=>({})});if(id==='late-next')started++;return ()=>{if(id==='late-old')stopped++;};};
+  f.catalog=[old];await refresh();installWebRuntime({});const originalFetch=globalThis.fetch;
+  globalThis.fetch=async(input,options)=>{if(!String(input).endsWith('/web/module.json'))return originalFetch(input,options);asked=true;await metadata.promise;return Response.json({schemaVersion:1,pluginId:next.pluginId,version:next.version,entry:'client.mjs',backend:{pluginId:next.pluginId,version:next.version},styles:[],runtime:{abi:'rabi-web-runtime/1',imports:[]}});};
+  try {f.catalog=[next];await refresh({initialization:'background'});await until(()=>asked);release=retainMountedTrustedWebPage('lifecycle.late-page');metadata.release();await until(()=>!pending());assert.equal(started,0);assert.equal(stopped,0);release();await until(()=>started===1);assert.equal(stopped,1);}
+  finally{metadata.release();release();}
 }));

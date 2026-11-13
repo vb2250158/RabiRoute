@@ -17,7 +17,8 @@ import { createEndpointSession, EndpointAuthenticationError } from "./lib/endpoi
 import { createDesktopPresentation } from "./lib/desktop-presentation.mjs";
 import { TerminalService } from "./lib/terminal-service.mjs";
 import { ComputerService } from "./lib/computer-service.mjs";
-import { normalizeComputerSettings, computerActionDefinition } from "./lib/computer-control-contract.mjs";
+import { ComputerSettingsReplica } from "./lib/computer-settings-replica.mjs";
+
 import { uploadHistoryDirectory } from "./lib/upload-history-store.mjs";
 import { instanceAgents, agentCatalog, configureInstanceAgent, resolveInstanceAgent, withoutSessionBindings } from "./lib/instance-agents.mjs";
 import { normalizeAllowedWorkspaces, resolveRealDirectory, resolveTaskWorkspace } from "./lib/cwd-policy.mjs";
@@ -955,8 +956,8 @@ class RabiAgentRuntime {
     this.agentExecutionStatus = new Map();
     const timeout = (key, fallback) => createTimeoutSettings(this.config.timeoutOverridesCache).get(key, fallback);
     this.timeout = timeout;
-    this.computerSettings = normalizeComputerSettings();
-    this.computer = new ComputerService({ timeout, instanceId: () => this.config.nodeId, getSettings: () => this.computerSettings,
+    this.computerSettingsReplica = new ComputerSettingsReplica();
+    this.computer = new ComputerService({ timeout, instanceId: () => this.config.nodeId, getSettings: () => this.computerSettingsReplica.readRaw(), getDefinition: () => this.computerSettingsReplica.definition(),
       uploadHistoryRoot: uploadHistoryDirectory(homeDataDirectory(), configPath), onChange: () => this.publishDesktop(),
       onControlChange: () => { if (this.connected && !this.stopped) this.send({ type: "computerEvent" }); } });
     this.terminals = new TerminalService({ timeout, defaultCwd: config.defaultWorkspace, historyDirectory: path.join(path.dirname(configPath), "terminal-history"),
@@ -1298,23 +1299,24 @@ class RabiAgentRuntime {
       const socket = this.socket;
       // This frame is authenticated by the original Manager connection; the Manager overwrites its context.
       const { _computerContext, ...params } = message.params || {};
-      if (_computerContext?.settings) this.computerSettings = normalizeComputerSettings(_computerContext.settings);
+      const definitionAck = ["computer", "computer.settings"].includes(message.operation)
+        ? this.computerSettingsReplica.apply(_computerContext || {}) : { digest: this.computerSettingsReplica.definition().digest };
       const context = { ...(_computerContext || {}), sourceId: _computerContext?.sourceId ?? `manager:${this.socketManagerGuid || "connection"}`,
-        getSettings: () => this.computerSettings, guard: () => { if (this.socket !== socket || !this.connected || this.stopped) throw Object.assign(new Error("The original computer connection closed."), { code: "COMPUTER_CONNECTION_CLOSED" }); } };
-      const action = computerActionDefinition(params.action);
+        getSettings: () => this.computerSettingsReplica.readRaw(), getDefinition: () => this.computerSettingsReplica.definition(), guard: () => { if (this.socket !== socket || !this.connected || this.stopped) throw Object.assign(new Error("The original computer connection closed."), { code: "COMPUTER_CONNECTION_CLOSED" }); } };
+      const action = this.computerSettingsReplica.definition().actionDefinition(params.action);
       const createsResource = ["open", "upload.begin", "windows.list", "screen.capture", "file.read", "file.stat"].includes(params.action)
         || message.operation === "computer" && Boolean(action && !action.readOnly && !action.recovery);
       const operation = message.operation === "computer.settings"
-        ? Promise.resolve().then(() => { if (!params.settings || typeof params.settings !== "object" || Array.isArray(params.settings)) throw new Error("The authoritative computer settings snapshot is missing; the previous settings remain active."); this.computerSettings = normalizeComputerSettings(params.settings); return this.computer.reconcileSettings(context).then(() => ({ state: "applied" })); })
+        ? Promise.resolve().then(() => { if (!params.settings || typeof params.settings !== "object" || Array.isArray(params.settings)) throw new Error("The authoritative computer settings snapshot is missing; the previous settings remain active."); this.computerSettingsReplica.apply({ settings: params.settings }); return this.computer.reconcileSettings(context).then(() => ({ state: "applied" })); })
         : message.operation === "computer.source.end" ? this.computer.endSource(params.connectionId)
         : message.operation === "computer.task.end" ? this.computer.endTask(params.taskId, params.sourceId ?? _computerContext?.sourceId)
         : (this.draining || this.candidatePending) && createsResource
           ? Promise.reject(new Error("Connector update is in progress; no new computer operation was started."))
           : message.operation === "terminal" ? this.terminals.execute(params) : this.computer.execute(params, context);
       void operation.then(result => {
-        if (this.socket === socket && this.connected) this.send({ type: "managementResult", requestId: message.requestId, result });
+        if (this.socket === socket && this.connected) this.send({ type: "managementResult", requestId: message.requestId, result, computerSettingsDefinitionDigest: definitionAck.digest, ...(definitionAck.issue ? { computerSettingsDefinitionIssue: boundedText(definitionAck.issue,512) } : {}) });
       }).catch(error => {
-        if (this.socket === socket && this.connected) this.send({ type: "managementResult", requestId: message.requestId, error: boundedText(error.message, 512), ...(error.code ? { errorCode: error.code } : {}),
+        if (this.socket === socket && this.connected) this.send({ type: "managementResult", requestId: message.requestId, computerSettingsDefinitionDigest: definitionAck.digest, ...(definitionAck.issue ? { computerSettingsDefinitionIssue: boundedText(definitionAck.issue,512) } : {}), error: boundedText(error.message, 512), ...(error.code ? { errorCode: error.code } : {}),
           ...(Object.hasOwn(error, "uncertain") && typeof error.uncertain === "boolean" ? { uncertain: error.uncertain } : {}),
           ...(typeof error.field === "string" || typeof error.errorField === "string" ? { errorField: boundedText(error.field ?? error.errorField, 128) } : {}),
           ...(error.deliveryFrameSent === false ? { deliveryFrameSent: false } : {}),
@@ -1335,6 +1337,7 @@ class RabiAgentRuntime {
           agents: agentCatalog(this.config),
           terminalShells: this.terminals.shells,
           computerCapabilities: this.computer.capabilities,
+          computerSettingsDefinitionVersions: [1],
           allowedWorkspaces: this.config.allowedWorkspaces
         }
       });

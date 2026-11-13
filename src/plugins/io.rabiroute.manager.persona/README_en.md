@@ -2,6 +2,10 @@
 
 # io.rabiroute.manager.persona
 
+Daily schedules support adding or removing several times while keeping one rule, action and enable switch. Incomplete times stay in the draft and prevent saving; valid times are deduplicated and sorted. The [configuration API](../../../docs/role-configuration-api-contracts_en.md) uses the same daily list.
+
+Personal Bot destinations select DSH, then DS Bot and a real Bot without requiring a primary-role session. Only explicitly addressed rules appear in that Bot's schedule list; their storage role can differ from its bound persona. Existing primary-role rules retain their destinations. See [DS Bot automation destinations](../../../docs/role-configuration-api-contracts_en.md#ds-bot-automation-destinations) for catalog reads, source-configuration revisions and native delivery receipts.
+
 Built-in Manager plugin. Instance `manager:persona` provides `manager.persona@1`. Its implementation accesses host resources only through `@rabiroute/plugin-sdk` and versioned capabilities declared by the manifest.
 
 ## Persona Skills

@@ -30,7 +30,7 @@ test("the real route-control package exposes its create command with no routes a
     const create = webCommandsInSlot(commands, "topbar-primary").find(command => command.handlerId === "web.add-route");
     assert.ok(create, "Create must remain in the topbar when the route list is empty");
     assert.equal(create.label, "新增路由");
-    Object.assign(globalThis, { window: { location: { pathname: "/", hash: "" } } });
+    Object.assign(globalThis, { window: Object.assign(new EventTarget(), { location: { pathname: "/", hash: "" }, navigator: { language: "zh-CN" } }) });
     const { useGatewayStore } = await import("../src/stores/gatewayStore");
     setActivePinia(createPinia());
     const store = useGatewayStore();
@@ -61,10 +61,13 @@ test("route-control is built and synchronized as an independent Web entry", () =
   const vite = fs.readFileSync(new URL("../vite.config.ts", import.meta.url), "utf8");
   const sync = fs.readFileSync(new URL("../../scripts/sync-plugin-web-bundles.mjs", import.meta.url), "utf8");
   const app = fs.readFileSync(new URL("../src/App.vue", import.meta.url), "utf8");
-  assert.match(vite, /metadata\.rabi\?\.webSource/);
+  assert.doesNotMatch(vite, /readdirSync/);
+  assert.match(vite, /input: \{ app:/);
   const pkg = JSON.parse(fs.readFileSync(new URL("../../src/plugins/io.rabiroute.manager.route-control/package.json", import.meta.url), "utf8"));
   assert.equal(pkg.rabi.webSource, "web/entry.ts");
-  assert.match(sync, /metadata\.rabi\?\.webSource/);
+  assert.match(sync, /buildPluginWebPackages/);
+  assert.match(sync, /allWeb: true/);
+  assert.doesNotMatch(sync, /export \{ activate \} from/);
   assert.match(app, /topbarCommands = computed\(\(\) => webCommandsInSlot\(pluginCatalogStore.commands.value, "topbar-primary"\)\.filter/);
   assert.match(app, /command.handlerId !== "web.add-route" \|\| route.path.startsWith\("\/routes"\)/);
   assert.match(app, /v-for="command in topbarCommands"/);

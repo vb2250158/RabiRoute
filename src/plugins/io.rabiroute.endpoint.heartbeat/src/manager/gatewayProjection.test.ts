@@ -1,0 +1,50 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { ManagerConfigRepository } from "../../../../manager/configRepository.js";
+import { readRouteCatalogDefinition } from "../../../../manager/routeCatalogTransaction.js";
+import { createDsBotAutomationRuleOwner } from "../../../io.rabiroute.manager.persona/src/manager/dsBotAutomationRuleOperations.js";
+import { collectScheduledAutomationTasks } from "../../../../automation/personaAutomationRuntime.js";
+import { migrateLegacyConfigs } from "../../../../manager/configMigration.js";
+
+test("disk role projects healthy gateway rules before parsing malformed Manager DSBot targets", async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "rabi-role-gateway-projection-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const repository = new ManagerConfigRepository({ rootDir: root, managerPort: 31337 });
+  const target = { kind: "ds_bot", agentAdapter: "dsh", agentTargetId: "local:dsh", botScopeId: "scope", botId: "bot", botName: "Bot", dshBaseUrl: "http://localhost:3000" };
+  const scheduled = (id: string, destination: unknown) => ({ id, enabled: true, trigger: { type: "schedule", schedule: { id, type: "interval", intervalSeconds: 60 } }, action: { type: "deliver_agent", message: "Task", target: destination } });
+  const file = repository.personaConfigPath("Mixed");
+  await fs.mkdir(path.dirname(file), { recursive: true });
+  await fs.writeFile(path.join(path.dirname(file), "persona.md"), "# Mixed\n");
+  await fs.writeFile(file, JSON.stringify({ automationScheduleSchemaVersion: 1, automationRules: [
+    scheduled("bad-manager", { ...target, dshBaseUrl: undefined }), scheduled("healthy-route", { kind: "recipient", recipientId: "primary" }), scheduled("healthy-manager", target)
+  ] }));
+  const before = await fs.readFile(file);
+  const routeFile = repository.adapterConfigPath("main");
+  await fs.mkdir(path.dirname(routeFile), { recursive: true });
+  await fs.writeFile(routeFile, JSON.stringify({ gatewayPort: 23001, agentRoleId: "Mixed", agentAdapters: ["dsh"], messageAdapters: [] }));
+  const definition = readRouteCatalogDefinition(repository, "main")!;
+  assert.ok(definition.automationRules?.some(rule => rule.id === "healthy-route"));
+  assert.equal(definition.automationRules?.some(rule => ["healthy-manager", "bad-manager"].includes(rule.id)), false);
+  assert.ok(definition.routeProfiles?.[0]?.automationRules?.some(rule => rule.id === "healthy-route"));
+  const tasks = collectScheduledAutomationTasks(definition.routeProfiles as Parameters<typeof collectScheduledAutomationTasks>[0]);
+  assert.ok(tasks.some(task => task.rule.id === "healthy-route"));
+  const source = createDsBotAutomationRuleOwner({ rolesRoot: () => repository.rolesRoot, identity: () => ({ applicationGenerationId: "fixture", managerInstanceId: "fixture" }) });
+  t.after(() => source.dispose());
+  const snapshot = await source.readScheduleSnapshot();
+  assert.deepEqual(snapshot.tasks.map(task => task.rawRuleId), ["healthy-manager"]);
+  assert.ok(snapshot.warnings.some(warning => warning.code === "AUTOMATION_SCHEDULE_INVALID"));
+  assert.deepEqual(await fs.readFile(file), before);
+  const validRaw = JSON.parse(before.toString("utf8"));
+  validRaw.automationRules = validRaw.automationRules.filter((rule: { id: string }) => rule.id !== "bad-manager");
+  await fs.writeFile(file, JSON.stringify(validRaw));
+  migrateLegacyConfigs({ rolesRoot: repository.rolesRoot, routeRoot: repository.routeRoot });
+  const migrated = JSON.parse(await fs.readFile(file, "utf8"));
+  const retained = migrated.automationRules.find((rule: { id: string }) => rule.id === "healthy-manager");
+  assert.deepEqual(retained.action.target, target);
+  assert.equal(retained.action.message, "Task");
+  assert.equal(retained.sourceRouteIds, undefined);
+  assert.equal(readRouteCatalogDefinition(repository, "main")!.automationRules?.some(rule => rule.id === "healthy-manager"), false);
+});

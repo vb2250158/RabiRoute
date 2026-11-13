@@ -41,7 +41,7 @@ export type PersonaStorageOperationsContext = Readonly<{
 
 type Admission = {
   roleId: string; roleDir: string; application: RoleStorageApplication;
-  command: RoleStorageCommandContext; assertCurrent(): void; committedId?: string;
+  command: RoleStorageCommandContext; assertCurrent(): void; committedId?: string; commitState?: "committed" | "not_committed";
 };
 type Spec = Readonly<{ id: string; method: ApiMethod; suffix: string; action: string; fields?: readonly string[]; maxBytes?: number; failure?: "worker" | "page"; mutates?: boolean }>;
 const planFields = ["id", "title", "focus", "status", "activationStatus", "markerStatus", "archiveStatus", "importance", "urgency", "priority", "kind", "currentStep", "currentStepId", "nextAction", "waitingFor", "isBlocked", "blockedBy", "attachments", "steps", "project", "source", "secretaryBinding", "taskBinding", "dueAt", "completedAt", "archivedAt", "createdAt", "updatedAt", "messageChannels", "keywords", "messageSource", "actor"];
@@ -56,6 +56,7 @@ const specs: readonly Spec[] = [
   { id: "plans.read", method: "GET", suffix: "plans/:planId", action: "plan-read" },
   { id: "plans.create", method: "POST", suffix: "plans", action: "plan-create", fields: planFields, maxBytes: PLAN_ATTACHMENT_REQUEST_MAX_BYTES, mutates: true },
   { id: "plans.update", method: "PATCH", suffix: "plans/:planId", action: "plan-update", fields: planFields, maxBytes: PLAN_ATTACHMENT_REQUEST_MAX_BYTES, mutates: true },
+  { id: "plans.mutations.reconcile", method: "POST", suffix: "plans/:planId/mutations/:requestId/reconcile", action: "plan-receipt-reconcile", fields: ["patch", "expectedRevision", "actor"], maxBytes: PLAN_ATTACHMENT_REQUEST_MAX_BYTES, mutates: true },
   { id: "plans.history", method: "GET", suffix: "plans/:planId/history", action: "plan-history", failure: "worker" },
   { id: "feedback.read", method: "GET", suffix: "plans/:planId/feedback", action: "feedback-read" },
   { id: "feedback.submit", method: "POST", suffix: "plans/:planId/feedback", action: "feedback-submit", fields: feedbackFields, maxBytes: PLAN_FEEDBACK_REQUEST_MAX_BYTES, mutates: true },
@@ -124,7 +125,7 @@ export class PersonaStorageOwner {
         }
       } catch (error) {
         if (admission.committedId) {
-          throw new RoleStorageApplicationError("The write committed but its original owner can no longer disclose the result. Read the original operation receipt.", (error as { statusCode?: number }).statusCode === 403 ? "authorization_revoked" : "generation_mismatch", (error as { statusCode?: number }).statusCode === 403 ? 403 : 409, admission.committedId, "committed");
+          throw new RoleStorageApplicationError(admission.commitState === "not_committed" ? "The original operation has a terminal failure receipt. Read that receipt through the current owner." : "The write committed but its original owner can no longer disclose the result. Read the original operation receipt.", (error as { statusCode?: number }).statusCode === 403 ? "authorization_revoked" : "generation_mismatch", (error as { statusCode?: number }).statusCode === 403 ? 403 : 409, admission.committedId, admission.commitState ?? "committed");
         }
         throw error;
       }
@@ -187,7 +188,13 @@ export class PersonaStorageOwner {
     };
     if (error instanceof RoleStorageApplicationError) {
       const mapped = roleStorageHttpError(error);
-      return { status: mapped.statusCode, headers: mapped.headers, body: diagnostic(mapped.body, mapped.statusCode), mutationOutcome: error.commitState === "not_started" ? "not_started" : "unknown" };
+      const body = spec.action === "plan-receipt-reconcile" ? {
+        ...diagnostic(mapped.body, mapped.statusCode),
+        retryable: false,
+        retry: "same_original_request_only",
+        nextAction: "Use the original requestId, storage patch, actor and expectedRevision to inspect this existing receipt. Preserve the frozen write intent; this operation never executes the plan update."
+      } : diagnostic(mapped.body, mapped.statusCode);
+      return { status: mapped.statusCode, headers: mapped.headers, body, mutationOutcome: error.commitState === "not_committed" ? "not_committed" : error.commitState === "not_started" ? "not_started" : "unknown" };
     }
     if (spec.failure === "page" && error instanceof PlanPageCatalogInitializingError) return { status: 503, headers: { "retry-after": "2" }, body: { code: -1, reason: error.reason, message: error.message } };
     const status = (error as { statusCode?: number })?.statusCode ?? (spec.failure ? error instanceof ManagerReadWorkerError && (spec.failure === "page" || error.code === "busy") ? 503 : 500 : 500);
@@ -263,6 +270,35 @@ export class PersonaStorageOwner {
         const presented = presentPlan(projection.plan, workflow.workflow);
         return ok({ ...(query.get("detail")?.trim() === "preview" ? previewRolePlan(presented) : presented), approval: projection.approval }, headers);
       }
+      case "plan-receipt-reconcile": {
+        const requestId = input.path.requestId!;
+        if (command.idempotencyKey && command.idempotencyKey !== requestId) {
+          throw new RoleStorageApplicationError("Idempotency-Key must identify the original requestId in this path.", "invalid_request", 400);
+        }
+        if (typeof application.commands.reconcilePlanUpdateReceipt !== "function") {
+          throw new RoleStorageApplicationError("The current storage owner does not provide receipt-only reconciliation. Update that owner before using this operation.", "busy", 503);
+        }
+        const result = await application.commands.reconcilePlanUpdateReceipt(roleId, planId, body.patch as Record<string, unknown>, {
+          ...command,
+          idempotencyKey: requestId,
+          expectedRevision: (body.expectedRevision as string | undefined) ?? command.expectedRevision,
+          actor: body.actor as RoleStorageCommandContext["actor"],
+          authorize: a.assertCurrent
+        });
+        if (result.state === "completed") {
+          a.committedId = requestId;
+          a.commitState = result.commitState;
+        }
+        a.assertCurrent();
+        let response = result;
+        if (result.state === "completed" && result.operationState === "succeeded") {
+          const originalPlan = result.value as Partial<PlanItem> | null;
+          if (Array.isArray(originalPlan?.attachments)) {
+            response = { ...result, value: { ...originalPlan, attachments: originalPlan.attachments.map(({ path: _path, ...attachment }) => attachment) } };
+          }
+        }
+        return { ...ok(response, { "idempotency-key": requestId }), ...(result.commitState === "not_committed" ? { mutationOutcome: "not_committed" as const } : {}) };
+      }
       case "plan-create":
       case "plan-update": {
         const actor = await this.context.planHistoryContext(input.request, body, command); a.assertCurrent();
@@ -306,7 +342,9 @@ export class PersonaStorageOwner {
           if (kind !== "recent" && kind !== "consolidated" && kind !== "archived") invalid("Invalid memory page kind. Use recent, consolidated or archived.", "query.kind");
           return ok(await this.pools.knowledge.queryRoleMemoryPage(roleDir, { kind: kind as "recent" | "consolidated" | "archived", cursor: query.get("cursor")?.trim() || "", limit: normalizeRoleMemoryPageLimit(query.get("limit")), query: query.get("query") || "" }, readOptions));
         }
-        return ok(await this.pools.knowledge.queryRoleMemoryOverview(roleDir, readOptions));
+        const data = await this.pools.knowledge.queryRoleMemoryOverview(roleDir, readOptions);
+        const issues = (data as { issues?: Array<{ kind: string; file: string; message: string }> }).issues ?? [];
+        return { ...ok(data), body: { code: 0, data, ...(issues.length ? { partial: true, diagnostics: issues.map(issue => ({ code: "MEMORY_CATALOG_ENTRY_UNREADABLE", file: `memory/${issue.kind}/${issue.file}`, message: issue.message })) } : {}) } };
       }
       case "recent-list": return ok(await this.pools.read.queryRoleMemoryCatalog(roleDir, "recent", "", readOptions));
       case "consolidated-list": return ok(await this.pools.read.queryRoleMemoryCatalog(roleDir, "consolidated", "", readOptions));
@@ -353,7 +391,7 @@ function querySchema(spec: Spec): Record<string, unknown> {
   const fields = spec.action === "plan-list" ? ["limit", "cursor", "view", "query", "sort", "status", "tag", "facets", "detail"] : spec.action === "plan-read" ? ["detail"] : spec.action === "memory-overview" ? ["counts", "limit", "kind", "cursor", "query"] : [];
   return { type: "object", properties: Object.fromEntries(fields.map(field => [field, { anyOf: [{ type: "string" }, { type: "array", items: { type: "string" } }], description: field === "status" || field === "tag" ? "Repeatable native filter; preserve all values in order." : "Native query value; preserve first-value, empty-value and coercion behavior." }])) };
 }
-const jsonResponse: ApiResponseContract = { mediaType: "application/json; charset=utf-8", schema: { type: "object", required: ["code"], properties: { code: { enum: [0, -1] }, data: true, partial: { const: true }, diagnostics: { type: "array", items: { type: "object", required: ["code", "message"], properties: { code: { type: "string" }, message: { type: "string" }, file: { type: "string" }, files: { type: "array", items: { type: "string" } }, planId: { type: "string" }, errorCode: { type: "string" } }, additionalProperties: false } }, message: { type: "string" }, state: { type: "string" }, reason: { type: "string" }, commitState: { enum: ["not_started", "unknown", "committed"] }, nextAction: { type: "string" },
+const jsonResponse: ApiResponseContract = { mediaType: "application/json; charset=utf-8", schema: { type: "object", required: ["code"], properties: { code: { enum: [0, -1] }, data: true, partial: { const: true }, diagnostics: { type: "array", items: { type: "object", required: ["code", "message"], properties: { code: { type: "string" }, message: { type: "string" }, file: { type: "string" }, files: { type: "array", items: { type: "string" } }, planId: { type: "string" }, errorCode: { type: "string" } }, additionalProperties: false } }, message: { type: "string" }, state: { type: "string" }, reason: { type: "string" }, commitState: { enum: ["not_started", "not_committed", "unknown", "committed"] }, nextAction: { type: "string" },
   errorCode: { type: "string" }, field: { type: "string" }, repair: { type: "string" }, help: { type: "object", required: ["method", "path"], properties: { method: { const: "GET" }, path: { type: "string" } }, additionalProperties: false } } } };
 
 /** All native API and non-API aliases are exact executable definitions, never prefix handlers. */
@@ -362,12 +400,12 @@ export function createPersonaStorageOperations(owner: PersonaStorageOwner): read
     const pathTemplate = prefix + "/:roleId/" + spec.suffix, keys = [...pathTemplate.matchAll(/:([A-Za-z][A-Za-z0-9_]*)/g)].map(match => match[1]!);
     const contract: ApiOperationContract = {
       operationId: "manager.personas.storage." + spec.id + (prefix === "/roles" ? ".legacy-path" : ""), aliases: ["persona:" + spec.method + ":" + pathTemplate], contractVersion: "1.0.0", method: spec.method, pathTemplate, exposure: "public", transport: "http",
-      description: "Invoke the original persona storage owner for " + spec.id + ". Native application, role directory, projections and worker lifecycle stay bound to the admitting request.",
+      description: spec.action === "plan-receipt-reconcile" ? "Reconcile one existing plan-update receipt without executing the original write. Supply the original storage patch and exact actor. The receipt supplies its original expected revision, which callers may optionally cross-check. The original requestId remains unchanged. Receipt completion may report a failed, not_committed operation." : "Invoke the original persona storage owner for " + spec.id + ". Native application, role directory, projections and worker lifecycle stay bound to the admitting request.",
       request: { path: { type: "object", required: keys, additionalProperties: false, properties: Object.fromEntries(keys.map(key => [key, { type: "string", minLength: 1 }])) }, query: querySchema(spec), headers: { ...ignored, properties: { "idempotency-key": true, "if-match": true, "x-rabiroute-expected-revision": true, ...(spec.action === "plan-read" ? { "if-plan-view-revision": true } : {}) } },
-        body: spec.fields ? { kind: "json", schema: spec.action === "consolidation-result" ? { anyOf: [{ type: "object", properties: Object.fromEntries(spec.fields.map(field => [field, true])) }, { type: "array", items: true }] } : { type: "object", properties: Object.fromEntries(spec.fields.map(field => [field, true])) }, maxBytes: spec.maxBytes ?? 0, emptyValue: {}, allowAnyContentType: true } : { kind: "none", allowIgnoredBody: true } },
+        body: spec.fields ? { kind: "json", schema: spec.action === "plan-receipt-reconcile" ? { type: "object", required: ["patch"], additionalProperties: false, properties: { patch: { type: "object", description: "Exact original storage patch, excluding transport messageSource and actor metadata." }, expectedRevision: { type: "string", minLength: 1, description: "Optional cross-check of the original expectedRevision or strong If-Match. The stored receipt audit supplies the authoritative version anchor." }, actor: { type: "object", description: "Exact original history actor included in the stored request payload, when present." } } } : spec.action === "consolidation-result" ? { anyOf: [{ type: "object", properties: Object.fromEntries(spec.fields.map(field => [field, true])) }, { type: "array", items: true }] } : { type: "object", properties: Object.fromEntries(spec.fields.map(field => [field, true])) }, maxBytes: spec.maxBytes ?? 0, ...(spec.action === "plan-receipt-reconcile" ? {} : { emptyValue: {} }), allowAnyContentType: true } : { kind: "none", allowIgnoredBody: true } },
       responses: { "200": jsonResponse, default: jsonResponse },
       effects: { mode: spec.mutates ? spec.action === "recent-read" ? "native-recent-memory-touch-unless-read-only" : "native-role-storage-command" : "native-role-storage-read", description: "RoleStorageApplication retains operation IDs, strong ETag CAS, idempotency ledger, mutation queue, audits and projection publication. Feedback post-commit work and consolidation scheduling remain with their original owners; acceptance does not prove delivery or Agent execution. Recent memory detail GET touches viewedAt unless Manager is read-only." },
-      recovery: { strategy: spec.mutates ? "native-receipt-and-readback" : "repeat-native-read", idempotencyHeader: "Idempotency-Key", description: "Capture current application, role directory, original connection and Manager generation before body decoding; recheck after awaited work, before writes and disclosure. Preserve If-Match or x-rabiroute-expected-revision and original native status/receipt headers. On uncertainty inspect the original resource and receipt; only replay the identical payload with the same key. HTTP timeout is not worker release." },
+      recovery: { strategy: spec.mutates ? "native-receipt-and-readback" : "repeat-native-read", idempotencyHeader: "Idempotency-Key", description: spec.action === "plan-receipt-reconcile" ? "Repeat this receipt-only operation with the same original requestId, patch, expectedRevision and actor after an uncertain response. The storage owner only reconciles the existing receipt and never replays the plan write." : "Capture current application, role directory, original connection and Manager generation before body decoding; recheck after awaited work, before writes and disclosure. Preserve If-Match or x-rabiroute-expected-revision and original native status/receipt headers. On uncertainty inspect the original resource and receipt; only replay the identical payload with the same key. HTTP timeout is not worker release." },
       validators: [{ id: "native-storage-business-owner", description: "Normal JSON is decoded once by the registry; native commands retain plan/workflow/memory/feedback schemas, actor resolution, source checks, immutable keys and CAS. Authenticated remote connections require no per-role or per-feature grant. Both /api/roles and /roles aliases retain their original behavior, including ignored counts item IDs." }, { id: "native-storage-resource-lifetime", description: "Join original worker release and quarantine cleanup independently of HTTP result/deadline; never replace the storage application, worker pool or feedback queue. New requests capture the current owner; in-flight requests never switch owners." }]
     };
     const bind = (input: Omit<ApiOperationInput, "body">) => {

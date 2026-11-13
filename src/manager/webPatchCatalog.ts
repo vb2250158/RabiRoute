@@ -2,6 +2,8 @@ import { createHash, randomUUID } from "node:crypto";
 import { createReadStream } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { readPackagedWebResources } from "./webPluginModules.js";
+import { resolvePluginPackageFile } from "../plugin-kernel/packageLoader.js";
 
 export type WebPatchFile = { path: string; sha256: string; size: number };
 export type WebPatchManifest = {
@@ -9,6 +11,7 @@ export type WebPatchManifest = {
   backend: string;
   files: WebPatchFile[];
   modules: { pluginId: string; version: string; entry: string }[];
+  moduleDiagnostics?: { pluginId: string; version: string; code: "PLUGIN_WEB_RESOURCE_INVALID"; message: string }[];
 };
 export const WEB_PATCH_HASH = /^[a-f0-9]{64}$/;
 export const WEB_PATCH_PREFIX = "/_rabiroute/web/";
@@ -260,21 +263,63 @@ export async function buildWebPatch(packageRoot: string, outputRoot: string, sig
     signal?.throwIfAborted();
     manifest.files = inputs.map(input => input.record);
     const packages = path.join(packageRoot, "dist/plugins/packages");
-    for (const name of await walk(packages, "", [], signal)) {
+    const manifests: { filename: string; pluginId: string; version: string }[] = [];
+    const diagnostic = (pluginId: string, version: string, error: unknown) => {
+      (manifest.moduleDiagnostics ??= []).push({ pluginId, version, code: "PLUGIN_WEB_RESOURCE_INVALID",
+        message: error instanceof Error ? error.message : "Package Web resources are unavailable." });
+    };
+    for (const identity of (await fs.readdir(packages, { withFileTypes: true })).sort((a, b) => a.name.localeCompare(b.name))) {
       signal?.throwIfAborted();
-      if (!name.endsWith("/rabi.plugin.json")) continue;
-      const pluginRoot = path.dirname(path.join(packages, name));
-      const plugin = JSON.parse(await fs.readFile(path.join(packages, name), { encoding: "utf8", signal }));
-      const entry = plugin.entries?.web?.module;
-      if (!entry) continue;
-      const entryPath = path.join(pluginRoot, entry);
-      const source = await fs.readFile(entryPath, { encoding: "utf8", signal }).catch(error => {
-        if (error.code === "ENOENT") throw new Error(`Web Bundle entry is missing: ${plugin.id}. Run the complete Web build before publishing.`);
-        throw error;
-      });
-      const match = source.match(/^export \{ activate \} from "\/(assets\/[A-Za-z0-9._/-]+)";\s*$/);
-      if (!match) throw new Error(`Web Bundle wrapper is not supported: ${plugin.id}`);
-      manifest.modules.push({ pluginId: plugin.id, version: plugin.version, entry: `web/${match[1]}` });
+      if (!identity.isDirectory() || identity.name.startsWith(".")) continue;
+      const identityRoot = path.join(packages, identity.name);
+      try {
+        const entries = await fs.readdir(identityRoot, { withFileTypes: true });
+        if (entries.some(entry => entry.isFile() && entry.name === "rabi.plugin.json")) {
+          // Exact legacy direct-package layout remains readable for retained old bundles.
+          manifests.push({ filename: path.join(identityRoot, "rabi.plugin.json"), pluginId: identity.name, version: "legacy" });
+        } else for (const version of entries.filter(entry => entry.isDirectory() && !entry.name.startsWith(".")).sort((a, b) => a.name.localeCompare(b.name))) {
+          manifests.push({ filename: path.join(identityRoot, version.name, "rabi.plugin.json"), pluginId: identity.name, version: version.name });
+        }
+      } catch (error) { signal?.throwIfAborted(); diagnostic(identity.name, "unknown", error); }
+    }
+    for (const item of manifests) {
+      signal?.throwIfAborted();
+      let plugin: { id: string; version: string; entries?: { web?: { module?: string } } } | undefined;
+      try {
+        const pluginRoot = path.dirname(item.filename);
+        const manifestFile = await resolvePluginPackageFile(pluginRoot, "rabi.plugin.json");
+        plugin = JSON.parse(await fs.readFile(manifestFile, { encoding: "utf8", signal }));
+        if (item.version !== "legacy" && (encodeURIComponent(plugin!.id) !== item.pluginId || plugin!.version !== item.version)) {
+          throw new Error("Plugin manifest identity differs from its package directory.");
+        }
+        const entry = plugin!.entries?.web?.module;
+        if (!entry) continue;
+        // Package snapshots were already verified at publication. This collector may
+        // also read an unpacked build root, so apply the original plain-file and
+        // realpath boundary to its Web-only declaration before reading bytes.
+        try { await resolvePluginPackageFile(pluginRoot, "web/module.json"); }
+        catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+        const expected = { id: plugin!.id, version: plugin!.version, entry };
+        const declaration = readPackagedWebResources(pluginRoot, expected, { verifyFiles: false });
+        if (declaration?.issue) { diagnostic(plugin!.id, plugin!.version, declaration.issue); continue; }
+        if (declaration) {
+          for (const relative of declaration.contentTypes.keys()) await resolvePluginPackageFile(pluginRoot, relative);
+          const resources = readPackagedWebResources(pluginRoot, expected);
+          // Immutable package preparation owns the full backend tree. This owner
+          // verifies only its Web declaration once and never copies/hashes that tree again.
+          if (resources?.issue) diagnostic(plugin!.id, plugin!.version, resources.issue);
+          continue;
+        }
+        const entryPath = path.resolve(pluginRoot, entry), relative = path.relative(pluginRoot, entryPath);
+        if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) throw new Error(`Invalid Web Bundle entry: ${plugin!.id}`);
+        const source = await fs.readFile(await resolvePluginPackageFile(pluginRoot, relative), { encoding: "utf8", signal }).catch(error => {
+          if (error.code === "ENOENT") throw new Error(`Web Bundle entry is missing: ${plugin!.id}. Run the complete Web build before publishing.`);
+          throw error;
+        });
+        const match = source.match(/^export \{ activate \} from "\/(assets\/[A-Za-z0-9._/-]+)";\s*$/);
+        if (!match || !names.has(`web/${match[1]}`)) throw new Error(`Web Bundle wrapper or resource is not supported: ${plugin!.id}`);
+        manifest.modules.push({ pluginId: plugin!.id, version: plugin!.version, entry: `web/${match[1]}` });
+      } catch (error) { signal?.throwIfAborted(); diagnostic(plugin?.id ?? item.pluginId, plugin?.version ?? item.version, error); }
     }
     manifest.files.sort((left, right) => left.path.localeCompare(right.path));
     manifest.modules.sort((left, right) => left.pluginId.localeCompare(right.pluginId));

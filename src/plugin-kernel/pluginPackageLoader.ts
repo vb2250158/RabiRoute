@@ -8,7 +8,7 @@ import type { PluginHost } from "./types.js";
 
 export type PackageCatalogRoot = Readonly<{ path: string; inProcessTrusted: boolean }>;
 export type PluginPackageLoadTask =
-  | Readonly<{ kind: "package"; packageId: string; version: string; runtimeRoot: string; host: PluginHost; roots: readonly PackageCatalogRoot[] }>
+  | Readonly<{ kind: "package"; packageId: string; version: string; runtimeRoot: string; host: PluginHost; roots: readonly PackageCatalogRoot[]; layout?: "revision" }>
   | Readonly<{ kind: "profile"; profilePath: string }>
   | Readonly<{ kind: "cleanup"; runtimeRoot: string; stagingId: string }>;
 export type PluginPackageLoadRequest = Readonly<{ id: string; task: PluginPackageLoadTask }>;

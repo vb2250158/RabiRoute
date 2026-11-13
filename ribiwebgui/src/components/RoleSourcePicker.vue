@@ -16,6 +16,7 @@ const source = ref("");
 const items = ref<RoleSummary[]>([]);
 const loading = ref(false);
 const error = ref("");
+const partial = ref(false);
 let epoch = 0;
 const sources = computed(() => buildPersonaSourceOptions(store.meta, remotePersona.devices, store.sourceDeviceId, t));
 const selectedSource = computed(() => personaSourceKey(store.meta, store.sourceDeviceId));
@@ -31,25 +32,36 @@ const label = computed(() => `${selectedPc.value} → ${selectedTitle.value}`);
 async function browse(value: string): Promise<void> {
   value = personaSourceKey(store.meta, value);
   const current = ++epoch;
+  const previous = value === source.value && items.value.length ? [...items.value] : value === selectedSource.value ? [...store.catalog] : [];
   source.value = value;
-  items.value = [];
+  items.value = previous;
   error.value = "";
+  partial.value = false;
   loading.value = true;
   try {
     if (value) await bootstrapRemotePersonaService(value);
     let cursor = "";
+    const collected: RoleSummary[] = [];
     do {
       const path = `/api/roles?limit=25${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`;
       const page = await roleRequest<{ roles: RoleSummary[]; nextCursor: string | null }>(value ? remotePersonaServicePath(value, path) : path);
       if (current !== epoch) return;
-      items.value.push(...page.roles.map(role => ({
+      collected.push(...page.roles.map(role => ({
         ...role,
         avatarUrl: value && role.avatarUrl?.startsWith("/api/") ? remotePersonaServicePath(value, role.avatarUrl) : role.avatarUrl
       })));
       cursor = page.nextCursor || "";
+      const received = new Set(collected.map(role => role.roleId));
+      items.value = cursor ? [...collected, ...previous.filter(role => !received.has(role.roleId))] : [...collected];
+      partial.value = Boolean(cursor);
     } while (cursor);
   } catch (failure) {
-    if (current === epoch) error.value = userFacingError(failure);
+    if (current === epoch) {
+      const status = (failure as { status?: number }).status;
+      if (status === 401 || status === 403) { items.value = []; partial.value = false; }
+      else partial.value = items.value.length > 0;
+      error.value = userFacingError(failure);
+    }
   } finally {
     if (current === epoch) loading.value = false;
   }
@@ -100,7 +112,7 @@ onBeforeUnmount(() => { ++epoch; remotePersona.invalidate(); });
           </div>
           <v-progress-linear v-if="loading" indeterminate color="secondary" :aria-label="t('加载中')" />
           <v-list class="role-source-level" :aria-label="t('选择角色')" bg-color="transparent">
-            <v-alert v-if="error" type="error" variant="tonal" density="compact">{{ error }}<v-btn variant="text" @click="browse(source)">{{ t('重试') }}</v-btn></v-alert>
+            <v-alert v-if="error" :type="partial?'warning':'error'" variant="tonal" density="compact"><span v-if="partial">{{ t('角色目录暂未完整更新，已有角色仍可选择。') }} </span>{{ error }}<v-btn variant="text" @click="browse(source)">{{ t('重试') }}</v-btn></v-alert>
             <v-list-item v-for="role in items" :key="role.roleId" class="role-source-role" :title="role.title || role.roleId" :subtitle="role.error || (role.title !== role.roleId ? role.roleId : undefined)" :disabled="!!role.error" :active="source === selectedSource && role.roleId === store.selectedRoleId" color="secondary" rounded="lg" @click="choose(role.roleId)">
               <template #prepend><PersonaAvatar :role-id="role.roleId" :avatar-url="role.avatarUrl" :size="38" /></template>
               <template #append><v-icon v-if="source === selectedSource && role.roleId === store.selectedRoleId" icon="mdi-check" size="20" color="secondary" /></template>

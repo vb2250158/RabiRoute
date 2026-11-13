@@ -1,6 +1,6 @@
 {
   "name": "@rabiroute/plugin-sdk",
-  "version": "1.2.0",
+  "version": "1.3.1",
   "type": "module",
   "license": "MIT",
   "types": "./index.d.ts",
@@ -19,6 +19,11 @@
       "import": "./builder.mjs",
       "types": "./builder.d.ts",
       "default": "./builder.mjs"
+    },
+    "./web-builder": {
+      "types": "./web-builder.d.mts",
+      "import": "./web-builder.mjs",
+      "default": "./web-builder.mjs"
     }
   },
   "files": [
@@ -32,7 +37,11 @@
     "builder.mjs",
     "builder.d.ts",
     "builder.test.mjs",
-    "public-source.mjs"
+    "public-source.mjs",
+    "web-builder.mjs",
+    "web-builder.d.mts",
+    "web-runtime.mjs",
+    "web-runtime.d.mts"
   ],
   "bin": {
     "rabi-plugin-build": "./builder.mjs"

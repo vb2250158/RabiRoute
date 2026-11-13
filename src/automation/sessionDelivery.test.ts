@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { deliverSessionOnce, sendAutomationSession } from "./sessionDelivery.js";
-import type { AgentSessionDestination } from "../shared/agentDeliveryTarget.js";
+import type { AgentSessionDestination, AgentDsBotDestination } from "../shared/agentDeliveryTarget.js";
 const target: AgentSessionDestination = { kind: "session", agentAdapter: "codex", agentTargetId: "local:codex", sessionId: "task-one", sessionName: "Same name", workspace: "/workspace" };
 const envelope = { messageSource: { type: "system" as const, eventType: "test", eventName: "Test", eventId: "event" }, messageContent: "message" };
 const receipt = (id: string) => ({ delivery: { status: "delivered", deliveryId: id, targetThreadId: target.sessionId } });
@@ -49,4 +49,40 @@ test("Grok direct delivery freezes the group and identity without PC execution o
     assert.deepEqual(payload.grokBotDelivery, { deliveryType: "group", sendMode: "identity", senderAgentId: "example-bot" });
     return receipt("group-delivery");
   }, { model: "local-only" });
+});
+
+const botTarget: AgentDsBotDestination = { kind: "ds_bot", agentAdapter: "dsh", agentTargetId: "local:dsh", botScopeId: "scope-one", botId: "bot-one", botName: "Bot", dshBaseUrl: "http://127.0.0.1:1234" };
+const botReceipt = (deliveryId: string, sessionId = "current-part") => ({ dsBot: { schemaVersion: 1, state: "accepted", botScopeId: "scope-one", botId: "bot-one", deliveryId, sessionId, requestId: deliveryId } });
+
+test("DSBot delivery uses stable native destination with no ordinary Session prompt", async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "ds-bot-delivery-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const state = path.join(root, "original.json"), calls: Record<string, unknown>[] = [];
+  const request = async (payload: Record<string, unknown>) => {
+    calls.push(payload); assert.equal(payload.action, "ds_bot_deliver"); assert.equal(payload.threadId, undefined); assert.equal(payload.dshBaseUrl, "http://127.0.0.1:1234");
+    assert.deepEqual(payload.dsBot, { botScopeId: "scope-one", botId: "bot-one" });
+    return botReceipt("stable-tick");
+  };
+  await deliverSessionOnce(state, botTarget, envelope, "stable-tick", request);
+  await deliverSessionOnce(state, botTarget, envelope, "stable-tick", request);
+  assert.equal(calls.length, 1);
+  await assert.rejects(deliverSessionOnce(state, botTarget, { ...envelope, messageContent: "changed task" }, "stable-tick", request), /refusing to redirect/);
+  await assert.rejects(deliverSessionOnce(state, { ...botTarget, botScopeId: "copied-profile" }, envelope, "stable-tick", request), /refusing to redirect/);
+});
+
+test("DSBot unknown receipt never resends and reconciliation retains original message", async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "ds-bot-unknown-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const state = path.join(root, "original.json"), actions: unknown[] = [];
+  const request = async (payload: Record<string, unknown>) => { actions.push(payload.action); throw new Error("uncertain transport"); };
+  await assert.rejects(deliverSessionOnce(state, botTarget, envelope, "unknown", request), /uncertain/);
+  await assert.rejects(deliverSessionOnce(state, botTarget, envelope, "unknown", request), /uncertain/);
+  assert.deepEqual(actions, ["ds_bot_deliver", "ds_bot_reconcile", "ds_bot_reconcile"]);
+  await deliverSessionOnce(state, botTarget, envelope, "unknown", async payload => { assert.equal(payload.action, "ds_bot_reconcile"); assert.equal(payload.prompt, envelope.messageContent); return botReceipt("unknown", "rebuilt-part"); });
+});
+
+test("remote DSBot transport never supplies a local target and wrong native receipts fail", async () => {
+  const remoteTarget = { ...botTarget, agentTargetId: "peer:device:instance:dsh", dshBaseUrl: undefined, instanceBinding: { ownerDeviceId: "device", instanceId: "instance", agentId: "dsh" } };
+  await sendAutomationSession(remoteTarget, envelope, "remote", async payload => { assert.equal(payload.agentTargetId, undefined); assert.equal(payload.dshBaseUrl, undefined); return botReceipt("remote"); }, { remote: true });
+  await assert.rejects(sendAutomationSession(botTarget, envelope, "wrong", async () => ({ dsBot: { ...botReceipt("wrong").dsBot, botId: "another" } })), /no confirmed/);
 });

@@ -1,7 +1,7 @@
 {
   "schemaVersion": 2,
   "id": "io.rabiroute.agent.dsh",
-  "version": "0.1.3",
+  "version": "0.1.5",
   "displayName": "DSH（DeepSeek Harness）",
   "description": "将消息交给绑定的 DSH 会话，沿用原任务继续处理。",
   "icon": "mdi-robot-outline",

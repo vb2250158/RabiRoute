@@ -363,3 +363,102 @@ test("begin remains starting until native acknowledgment and a failed old reques
   assert.equal(replay.state, "failed"); assert.notEqual(replay.controlSessionId, current.controlSessionId);
   await f.owner.stop();
 });
+
+test("bad tracking settings do not block input and old receipts still precede disabled settings", async () => {
+ const f=fixture();
+ f.settings.annotation.tracking.matchThreshold="broken";
+ f.settings.performance.memoryBudgetBytes="broken";
+ const original=request("control.begin");
+ try {
+   const control=await f.owner.execute(original,f.context);
+   assert.equal(control.state,"active");
+   f.settings.enabled=false;
+   const duplicate=await f.owner.execute(original,f.context);
+   assert.equal(duplicate.controlSessionId,control.controlSessionId);
+   const count=f.native.calls.filter(call=>call.action==="control.begin").length;
+   await assert.rejects(f.owner.execute(request("control.begin"),f.context),error=>error.code==="COMPUTER_FEATURE_DISABLED");
+   assert.equal(f.native.calls.filter(call=>call.action==="control.begin").length,count);
+ } finally { await f.owner.stop(); }
+});
+
+test("a new definition backend reaches the same target while old WAL retains its original result", async () => {
+ const {createComputerSettingsDefinition}=await import("../lib/computer-control-contract.mjs");
+ const {COMPUTER_SETTINGS_DEFINITION}=await import("../lib/computer-settings-definition.mjs");
+ const source=JSON.parse(JSON.stringify(COMPUTER_SETTINGS_DEFINITION));
+ const a=createComputerSettingsDefinition(source,"target-A");
+ const bData=structuredClone(source);bData.schema.properties.annotation.properties.backend.enum.push("fixture-backend");bData.schema.properties.annotation.properties.backend.default="fixture-backend";
+ const b=createComputerSettingsDefinition(bData,"target-B");
+ let selected=a;const raw={annotation:{dynamicEnabled:true}};
+ const f=fixture(),context={...f.context,getDefinition:()=>selected,getSettings:()=>raw};
+ const original=request("annotation.track.start",{layerId:"definition-A",source:{frameId:"fixture-frame"},targets:[{id:"moving",bounds:{x:1,y:1,width:20,height:20}}]});
+ try {
+  const first=await f.owner.execute(original,context);
+  assert.equal(f.native.calls.find(call=>call.action==="annotation.track.start").body.backend,"kcf");
+  selected=b;
+  await f.owner.execute({...original,requestId:randomUUID(),layerId:"definition-B"},context);
+  assert.equal(f.native.calls.filter(call=>call.action==="annotation.track.start").at(-1).body.backend,"fixture-backend");
+  const again=await f.owner.execute(original,context);
+  assert.equal(again.trackingId,first.trackingId);
+  assert.equal(f.native.calls.filter(call=>call.action==="annotation.track.start").length,2);
+  assert.equal(COMPUTER_SETTINGS_DEFINITION.schema.properties.annotation.properties.backend.enum.includes("fixture-backend"),false);
+ } finally {await f.owner.stop();}
+});
+
+test("inflight parameters remain A after definition B, while explicit live input off stops the next segment", async () => {
+ const {createComputerSettingsDefinition}=await import("../lib/computer-control-contract.mjs");
+ const {COMPUTER_SETTINGS_DEFINITION}=await import("../lib/computer-settings-definition.mjs");
+ const data=JSON.parse(JSON.stringify(COMPUTER_SETTINGS_DEFINITION)),a=createComputerSettingsDefinition(data,"input-A");
+ const beta=structuredClone(data);beta.schema.properties.input.properties.nativeSegmentMs.default=24;
+ let selected=a;const raw={features:{input:true}},f=fixture(),context={...f.context,getDefinition:()=>selected,getSettings:()=>raw};
+ let entered,release;const firstEntered=new Promise(resolve=>{entered=resolve;});const gate=new Promise(resolve=>{release=resolve;});
+ const observations=[];
+ f.native.inject=async body=>{observations.push(body.settings.input.nativeSegmentMs);if(observations.length===1){entered();await gate;}return {state:"injected",injectedEvents:2};};
+ try {
+  const control=await f.owner.execute(request("control.begin"),context);
+  const batch=request("input.execute",{controlSessionId:control.controlSessionId,actions:[{type:"text",text:"a"},{type:"text",text:"b"}]});
+  const pending=f.owner.execute(batch,context);await firstEntered;selected=createComputerSettingsDefinition(beta,"input-B");release();await pending;
+  assert.deepEqual(observations,[16,16]);
+  await f.owner.execute(request("input.execute",{controlSessionId:control.controlSessionId,actions:[{type:"text",text:"c"}]}),context);
+  assert.equal(observations.at(-1),24);
+  let enteredOff,releaseOff;const offEntered=new Promise(resolve=>{enteredOff=resolve;});const offGate=new Promise(resolve=>{releaseOff=resolve;});
+  let segments=0;
+  f.native.inject=async()=>{segments++;enteredOff();await offGate;return {state:"injected",injectedEvents:2};};
+  const offBatch=f.owner.execute(request("input.execute",{controlSessionId:control.controlSessionId,actions:[{type:"text",text:"d"},{type:"text",text:"e"}]}),context);
+  await offEntered;raw.features.input=false;releaseOff();
+  await offBatch.catch(error=>{assert.equal(error.code,"COMPUTER_FEATURE_DISABLED");});
+  assert.equal(segments,1);
+ } finally {await f.owner.stop();}
+});
+
+test("explicit input off closes active control despite unrelated invalid control and tracking parameters", async () => {
+ const f=fixture();
+ const original=request("control.begin");
+ try {
+  const started=await f.owner.execute(original,f.context);
+  f.settings.features.input=false;
+  f.settings.control.idleTimeoutSeconds="broken";
+  f.settings.annotation.tracking.matchThreshold="broken";
+  await f.owner.reconcile(f.context);
+  assert.equal((await f.owner.execute({action:"control.status",controlSessionId:started.controlSessionId},f.context)).state,"ended");
+  const duplicate=await f.owner.execute(original,f.context);
+  assert.equal(duplicate.controlSessionId,started.controlSessionId);
+  assert.equal(f.native.calls.filter(row=>row.action==="control.begin").length,1);
+  assert.equal(f.native.calls.some(row=>row.action==="settings.patch"&&row.body.patch?.annotation?.tracking?.matchThreshold==="broken"),false);
+  assert.equal(f.settings.annotation.tracking.matchThreshold,"broken");
+ } finally {await f.owner.stop();}
+});
+test("active control parameter updates contain only schema-defined control fields", async () => {
+ const f=fixture();
+ try {
+  await f.owner.execute(request("control.begin"),f.context);
+  f.settings.control.idleTimeoutSeconds=37;
+  f.settings.performance.memoryBudgetBytes="broken";
+  f.settings.annotation.tracking.matchThreshold="broken";
+  await f.owner.reconcile(f.context);
+  const applied=f.native.calls.findLast(row=>row.action==="settings.patch");
+  assert.ok(applied);
+  assert.equal(applied.body.patch.control.idleTimeoutSeconds,37);
+  assert.equal(Object.hasOwn(applied.body.patch,"performance"),false);
+  assert.equal(Object.hasOwn(applied.body.patch,"annotation"),false);
+ } finally {await f.owner.stop();}
+});

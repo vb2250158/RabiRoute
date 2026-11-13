@@ -81,3 +81,20 @@ export const computerResponseSchema = { anyOf: [
 ] };
 function freeze(value) { if (value && typeof value === "object" && !Object.isFrozen(value)) { for (const child of Object.values(value)) freeze(child); Object.freeze(value); } }
 for (const value of [terminalIdSchema, terminalRequestSchema, terminalSnapshotSchema, terminalListSchema, terminalEventSchema, terminalReadSchema, computerRequestSchema, computerResponseSchema]) freeze(value);
+
+function computerRequestSchemaForDefinitionImpl(definition) {
+  const schema=structuredClone(computerRequestSchema);
+  const visit=node=>{
+    if(!node||typeof node!=="object")return;
+    const action=node.properties?.action?.const??(node.properties?.action?.enum?.length===1?node.properties.action.enum[0]:undefined);
+    if(action)for(const [name,path]of Object.entries(definition.actions[action]?.inputSettings??{})){
+      let selected=definition.validationSchema;
+      for(const key of String(path).split("."))selected=selected?.properties?.[key];
+      if(!selected)throw new TypeError("Invalid input settings binding: "+action+"."+name);
+      node.properties[name]=structuredClone(selected);
+    }
+    for(const value of Object.values(node))if(value&&typeof value==="object")if(Array.isArray(value))value.forEach(visit);else visit(value);
+  };
+  visit(schema);return schema;
+}
+export const computerRequestSchemaForDefinition = computerRequestSchemaForDefinitionImpl;

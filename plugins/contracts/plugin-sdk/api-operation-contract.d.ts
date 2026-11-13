@@ -64,7 +64,9 @@ export type ApiOperationContract = Readonly<{
     /** Total parser/owner budget. Owners observe input.signal; leases still wait for actual cleanup. */
     deadlineMs?: number }>;
   responses: Readonly<Record<string, ApiResponseContract>>;
-  effects: Readonly<{ mode: string; description: string }>;
+  effects: Readonly<{ mode: string; description: string;
+    /** Effect of a mixed operation selected from its validated request; never changes admission or replay. */
+    request?: Readonly<{ bodyPath: readonly string[]; modes: Readonly<Record<string, string>> }> }>;
   recovery: Readonly<{ strategy: string; description: string; receiptPath?: string; idempotencyHeader?: string }>;
   validators: readonly Readonly<{ id: string; description: string }>[];
 }>;
@@ -84,7 +86,7 @@ export type ApiOperationResult = Readonly<{
   status: number;
   /** Trusted owner evidence about its native mutation dispatch, never copied from request data.
    * Used only to preserve failure metadata across an authority fence; it cannot disclose business data. */
-  mutationOutcome?: "not_started" | "unknown";
+  mutationOutcome?: "not_started" | "not_committed" | "unknown";
   body?: unknown;
   headers?: Readonly<Record<string, string>>;
   stream?: ApiOperationStream;

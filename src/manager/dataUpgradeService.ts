@@ -15,7 +15,7 @@ export class DataUpgradeService {
   private initialization?: Promise<void>;
   private stopped = false;
   constructor(private readonly options: Readonly<{
-    layout: RuntimeLayout; rolesRoot: string; readOnly?: boolean;
+    layout: RuntimeLayout; rolesRoot: string | (() => string); readOnly?: boolean;
     requestRestart?: (operationId: string) => Promise<void>;
     discover?: () => Promise<DataUpgradeStatus["items"]>;
   }>) {}
@@ -44,7 +44,7 @@ export class DataUpgradeService {
         this.publish(this.receipt.status);
         if (this.receipt.status.state === "awaiting-restart") return;
       }
-      const items = await (this.options.discover?.() ?? discoverDataUpgrades(this.options.layout, this.options.rolesRoot, this.scope));
+      const items = await (this.options.discover?.() ?? discoverDataUpgrades(this.options.layout, typeof this.options.rolesRoot === "function" ? this.options.rolesRoot() : this.options.rolesRoot, this.scope));
       if (this.stopped) return;
       // A completed receipt stays reviewable; new real metadata supersedes it only when another upgrade exists.
       if (!items.length && this.receipt?.status.state === "succeeded") return;

@@ -71,3 +71,20 @@ Scanner workers declare `mode: "host-factory"` in their descriptor and export `h
 In the Host workspace, run `npm run build` followed by `npm run test:plugins` to collect native-plugin and existing-integration MJS suites. The root `npm test` includes this entry; TypeScript suites remain in its main source phase.
 
 Use `createPluginTestHarness()` for independent plugin contract tests. Integration fixtures that verify actual Host owners, including video fixtures, require the current Host workspace, built output and development dependencies. They do not claim that an independent plugin repository installs or runs the Host.
+
+
+## Standalone Web builder
+
+A Web plugin can import `@rabiroute/plugin-sdk/web-builder` directly without a RabiRoute `src/plugins` or profile source tree. Provide `package.json`, `rabi.plugin.json` and `rabi.webSource` (or an explicit `entry`). The builder loads `vite` and `@vitejs/plugin-vue` from that plugin repository's own development dependencies, or accepts an explicitly supplied toolchain. Native-only SDK consumers do not load these Web tools.
+
+```js
+import { buildPluginWebPackage } from '@rabiroute/plugin-sdk/web-builder';
+
+const result = await buildPluginWebPackage({
+  sourceDirectory: process.cwd(),
+  outputDirectory: './candidate/web',
+  runtimeCatalog: './target-web-runtime.json'
+});
+```
+
+Read `runtimeCatalog` from the target WebGUI's `assets/web-runtime.json`, or pass the parsed object. Declare custom resource MIME by extension in `rabi.webContentTypes` or `contentTypes`; it travels with the package. The output contains its entry, demand-loaded resources and `module.json`. Rebuilding an existing directory owned by the same plugin stages a replacement; a failed build retains the original directory. Source directories, their parents and paths containing input files cannot be cleared as output. Returned `inputs` contain absolute paths for private build verification, not fields in the public resource manifest. Candidate activation checks the shared exports actually required; ordinary API calls do not go through that check.

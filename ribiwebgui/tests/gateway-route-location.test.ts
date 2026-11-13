@@ -5,7 +5,7 @@ import { createPinia, setActivePinia } from "pinia";
 import { routeKeyFromWebguiHash } from "../src/routeScopedNavigation";
 
 const location = { pathname: "/", hash: "", href: "http://localhost/" };
-Object.defineProperty(globalThis, "window", { configurable: true, value: { location } });
+Object.defineProperty(globalThis, "window", { configurable: true, value: Object.assign(new EventTarget(), { location, navigator: { language: "zh-CN" } }) });
 const { useGatewayStore } = await import("../src/stores/gatewayStore");
 const { createDefaultGateway } = await import("../src/utils/gatewayHelpers");
 

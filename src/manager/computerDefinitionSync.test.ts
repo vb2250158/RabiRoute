@@ -1,0 +1,41 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import http from "node:http";
+import { once } from "node:events";
+import { WebSocket } from "ws";
+import { LanAgentRegistry } from "./lanAgentRegistry.js";
+import { LanAgentAuthority } from "./lanAgentAuthority.js";
+import { ComputerService } from "../../apps/rabi-agent/lib/computer-service.mjs";
+import { BOOTSTRAP_COMPUTER_SETTINGS_DEFINITION as bootstrap, createComputerSettingsDefinition } from "../../apps/rabi-agent/lib/computer-control-contract.mjs";
+
+test("one authenticated connection synchronizes definition data only until ACK and on actual definition change",async t=>{
+ const root=fs.mkdtempSync(path.join(os.tmpdir(),"rabi-definition-wire-"));const configPath=path.join(root,"sdk.json");
+ const authority=new LanAgentAuthority({statePath:path.join(root,"authority.json")});const credential=authority.enroll(authority.issueBootstrapTicket().ticket,"sdk-node");
+ let definition=bootstrap,rawReads=0;const frames:Record<string,any>[]=[];
+ const registry=new LanAgentRegistry({statePath:path.join(root,"registry.json"),authenticateNode:token=>authority.acquireConnectionLease(token),nodeEnabled:id=>authority.isNodeEnabled(id),
+  computerSettingsDefinition:()=>definition,computerSettingsRaw:()=>{rawReads++;return {control:{countdownSeconds:"broken"}};}});
+ const server=http.createServer((_request,response)=>response.writeHead(404).end());const detach=registry.attach(server,{getToken:()=>"fixture",enabled:()=>true});
+ server.listen(0,"127.0.0.1");await once(server,"listening");const address=server.address();assert.ok(address&&typeof address!=="string");
+ const config={schemaVersion:1,managerUrl:`http://127.0.0.1:${address.port}`,managerGuid:"fixture",applicationGenerationId:"fixture-app",managerInstanceId:"fixture-manager",releasePublicKeySha256:"a".repeat(64),nodeId:credential.nodeId,nodeCredential:credential.token,defaultWorkspace:root,allowedWorkspaces:[root],agents:[],autoUpdate:false};fs.writeFileSync(configPath,JSON.stringify(config));
+ const {__test}=await import(new URL("../../apps/rabi-agent/rabi-agent.mjs",import.meta.url).href);
+ const runtime=new __test.RabiAgentRuntime(config,configPath);await runtime.computer.stop();t.mock.method(runtime,"publishDesktop",()=>{});
+ runtime.computer=new ComputerService({receiptRoot:path.join(root,"receipts"),uploadHistoryRoot:path.join(root,"uploads"),getSettings:()=>runtime.computerSettingsReplica.readRaw(),getDefinition:()=>runtime.computerSettingsReplica.definition()});
+ const socket=new WebSocket(`ws://127.0.0.1:${address.port}/api/lan-agent/connect`);runtime.socket=socket;runtime.connected=true;runtime.socketManagerGuid="fixture";
+ runtime.send=(message:unknown)=>{socket.send(JSON.stringify(message));return true;};runtime.sendRaw=runtime.send;
+ const waiting=new Map<string,()=>void>();const next=(type:string)=>new Promise<void>(resolve=>waiting.set(type,resolve));
+ socket.on("message",bytes=>{const message=JSON.parse(String(bytes));if(message.type==="manageAgent"){frames.push(message);runtime.handleManagerMessage(String(bytes));}const resolve=waiting.get(message.type);if(resolve){waiting.delete(message.type);resolve();}});
+ t.after(async()=>{await runtime.stop();detach();registry.close();if(socket.readyState!==WebSocket.CLOSED)await once(socket,"close");await new Promise<void>(resolve=>server.close(()=>resolve()));fs.rmSync(root,{recursive:true,force:true});});
+ await once(socket,"open");let ready=next("authenticated");socket.send(JSON.stringify({type:"authenticate",token:credential.token}));await ready;
+ ready=next("connected");socket.send(JSON.stringify({type:"hello",node:{nodeId:credential.nodeId,version:"0.4.2",platform:"win32-x64",computerCapabilities:["files"],computerSettingsDefinitionVersions:[1]}}));await ready;
+ const stat=()=>registry.manageAgent(credential.nodeId,"computer",{action:"file.stat",path:configPath});
+ assert.equal((await stat() as {path:string}).path,configPath);await stat();
+ assert.ok(frames[0]!.params._computerContext.settingsDefinition);assert.equal(frames[1]!.params._computerContext.settingsDefinition,undefined);
+ const data=JSON.parse(JSON.stringify(bootstrap.data));data.schema.properties.control.properties.idleTimeoutSeconds.default=321;definition=createComputerSettingsDefinition(data,"controlled-B");
+ await stat();assert.equal(frames[2]!.params._computerContext.settingsDefinition.digest,"controlled-B");assert.equal(runtime.computerSettingsReplica.definition().digest,"controlled-B");
+ const before=rawReads;await registry.manageAgent(credential.nodeId,"computer",{action:"input.status",requestId:"original-absent"});assert.equal(rawReads,before);assert.equal(frames[3]!.params._computerContext.settings,undefined);
+ await registry.manageAgent(credential.nodeId,"computer",{action:"file.stat",path:configPath,_computerContext:{settingsDefinition:{digest:"forged",data:null}}});
+ assert.equal(runtime.computerSettingsReplica.definition().digest,"controlled-B");assert.equal(frames[4]!.params._computerContext.settingsDefinition,undefined);
+});

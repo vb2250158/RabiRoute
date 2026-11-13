@@ -26,7 +26,7 @@ const catalog = { type: "object", required: ["schemaVersion", "generation", "hos
   } } }, contributions: { type: "array", items: { type: "object" } }
 } };
 const module = { type: "object", required: ["id", "pluginId", "version", "rev", "entryPath", "instances"], properties: {
-  id: text, pluginId: text, version: text, rev: { ...text, pattern: "^[a-f0-9]{64}$" }, entryPath: text,
+  id: text, pluginId: text, version: text, rev: { ...text, pattern: "^[a-f0-9]{64}$" }, entryPath: text, resourceMode: { const: "package" },
   instances: { type: "array", items: { type: "object", required: ["instanceId"], properties: { instanceId: text } } }
 } };
 const json = (data: unknown): ApiResponseContract => ({ mediaType: "application/json; charset=utf-8", schema: {
@@ -51,7 +51,7 @@ export function createPluginCatalogOperations(context: PluginCatalogApiContext, 
         headers: ignored, body: { kind: "none", allowIgnoredBody: true } },
       responses: { "200": bytes ? { mediaType: "*/*", binary: { maxBytes: Number.MAX_SAFE_INTEGER }, headers: {
         type: "object", required: ["content-type", "cache-control", "x-content-type-options"], properties: {
-          "content-type": { enum: ["text/css; charset=utf-8", "text/javascript; charset=utf-8", "application/octet-stream"] },
+          "content-type": { type: "string", description: "Actual MIME of the immutable package resource, including JS/CSS/JSON/images/fonts/WASM." },
           "cache-control": { const: "public, max-age=31536000, immutable" }, "x-content-type-options": { const: "nosniff" }
         }, additionalProperties: true
       } } : json(data), default: failure },
