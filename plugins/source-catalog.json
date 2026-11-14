@@ -283,6 +283,13 @@
       "versionFile": "rabi.plugin.json"
     },
     {
+      "sourceId": "io.rabiroute.manager.voice-assistant",
+      "directory": "src/plugins/io.rabiroute.manager.voice-assistant",
+      "ecosystem": "rabiroute",
+      "publicationName": "io.rabiroute.manager.voice-assistant",
+      "versionFile": "rabi.plugin.json"
+    },
+    {
       "sourceId": "io.rabiroute.manager.wearable-companion",
       "directory": "src/plugins/io.rabiroute.manager.wearable-companion",
       "ecosystem": "rabiroute",
