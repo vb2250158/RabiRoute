@@ -19,6 +19,17 @@ void Check(bool condition, string message)
     if (!condition) failures.Add(message);
 }
 
+if (args.Length > 0 && args[0] == "--exit-boundary-tests")
+{
+    await GenerationExitTests.RunAsync(Check);
+    await GenerationLifecycleTests.RunAsync(Check);
+    foreach (var failure in failures) Console.Error.WriteLine(failure);
+    Console.WriteLine($"Exit boundary: {assertionCount - failures.Count}/{assertionCount} assertions passed.");
+    return failures.Count == 0 ? 0 : 1;
+}
+
+await GenerationExitTests.RunAsync(Check);
+await GenerationLifecycleTests.RunAsync(Check);
 await SourcePatchTests.RunAsync(Check);
 await ShortcutRecoveryTests.RunAsync(Check);
 await IdentityResetTests.RunAsync(Check);

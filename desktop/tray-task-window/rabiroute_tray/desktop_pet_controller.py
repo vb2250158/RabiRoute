@@ -67,6 +67,7 @@ class DesktopPetController(QObject):
         persona_id: str,
         open_persona: Callable[[str], None],
         *,
+        open_voice: Callable[[str], None] | None = None,
         persona_name: str | None = None,
         initial_binding: DesktopPetBinding | None = None,
         event_stream: DesktopPetEventStream | None = None,
@@ -91,6 +92,7 @@ class DesktopPetController(QObject):
         if self._application is not None:
             self._application.screenRemoved.connect(self._screen_removed)
         self._open_persona = open_persona
+        self._open_voice = open_voice
         self._client = DesktopPetClient(manager_url, persona_id)
         self._dialogue = DesktopPetDialogue()
         self._dialogue_task: QtAsyncTask | None = None
@@ -934,6 +936,8 @@ class DesktopPetController(QObject):
                          "other": "安静陪着"}.get(session.get("activityKind"), "正在识别当前画面")
             menu.addAction(label).setEnabled(False)
         menu.addAction(f"打开 {self.persona_name} 角色面板", self._open_current_persona)
+        if self._open_voice is not None:
+            menu.addAction(f"与 {self.persona_name} 语音对话", lambda: self._open_voice(self.persona_id))
         menu.addAction("安静一小时", self._mute_for_one_hour)
         menu.addSeparator()
         click_through = menu.addAction("鼠标点透")

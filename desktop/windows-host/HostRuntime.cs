@@ -222,7 +222,20 @@ internal sealed class HostLog : IAsyncDisposable
     }
 }
 
-internal sealed class ApplicationGeneration : IAsyncDisposable
+internal interface IApplicationGeneration : IAsyncDisposable
+{
+    string Id { get; }
+    ManagerReady Ready { get; }
+    Task<string> Failure { get; }
+    string HealthState { get; }
+    uint TrayPid { get; }
+    string TrayBoundManagerInstanceId { get; }
+    IReadOnlyList<uint> JobMemberPids { get; }
+    Task<HostResponse> ForwardSourcePatchAsync(JsonElement payload, bool reconcile, CancellationToken cancellationToken, bool webPatch = false);
+    Task StopAndVerifyEmptyAsync(string reason, CancellationToken cancellationToken);
+}
+
+internal sealed class ApplicationGeneration : IApplicationGeneration
 {
     internal static TimeSpan ManagerReadyTimeout => HostTimeouts.Get("host.manager.ready", TimeSpan.FromMinutes(3));
     internal static TimeSpan TrayReadyTimeout => HostTimeouts.Get("host.tray.ready", TimeSpan.FromMinutes(2));
@@ -277,19 +290,19 @@ internal sealed class ApplicationGeneration : IAsyncDisposable
         Failure = ObserveFailureSafelyAsync();
     }
 
-    internal string Id { get; }
-    internal ManagerReady Ready { get; }
-    internal Task<string> Failure { get; }
-    internal string HealthState => _healthState;
-    internal Task<HostResponse> ForwardSourcePatchAsync(JsonElement payload, bool reconcile, CancellationToken cancellationToken, bool webPatch = false)
+    public string Id { get; }
+    public ManagerReady Ready { get; }
+    public Task<string> Failure { get; }
+    public string HealthState => _healthState;
+    public Task<HostResponse> ForwardSourcePatchAsync(JsonElement payload, bool reconcile, CancellationToken cancellationToken, bool webPatch = false)
     {
         if (Volatile.Read(ref _stopping) != 0)
             return Task.FromResult(new HostResponse(false, "source_patch_unconfirmed", "The source patch generation is stopping; query the original operation."));
         return SourcePatchTransport.SendAsync(Ready, _controlToken, payload, reconcile, cancellationToken, webPatch);
     }
-    internal uint TrayPid => _tray.ProcessId;
-    internal string TrayBoundManagerInstanceId => _trayReady.ManagerInstanceId;
-    internal IReadOnlyList<uint> JobMemberPids
+    public uint TrayPid => _tray.ProcessId;
+    public string TrayBoundManagerInstanceId => _trayReady.ManagerInstanceId;
+    public IReadOnlyList<uint> JobMemberPids
     {
         get
         {
@@ -500,11 +513,22 @@ internal sealed class ApplicationGeneration : IAsyncDisposable
         }
         catch (Exception exception)
         {
-            try { job.Terminate(); } catch (Exception cleanupError) { log.Write($"generation={generationId} startup Job cleanup failed: {cleanupError.Message}"); }
-            try { tray?.Dispose(); } catch (Exception cleanupError) { log.Write($"generation={generationId} startup Tray cleanup failed: {cleanupError.Message}"); }
-            try { manager?.Dispose(); } catch (Exception cleanupError) { log.Write($"generation={generationId} startup Manager cleanup failed: {cleanupError.Message}"); }
-            try { if (trayLifecycle is not null) await trayLifecycle.DisposeAsync(); } catch (Exception cleanupError) { log.Write($"generation={generationId} startup Tray channel cleanup failed: {cleanupError.Message}"); }
-            try { job.Dispose(); } catch (Exception cleanupError) { log.Write($"generation={generationId} startup Job dispose failed: {cleanupError.Message}"); }
+            async Task RetireFailedStartupAsync()
+            {
+                job.Terminate();
+                var roots = new[] { manager, tray }.OfType<NativeChildProcess>().ToArray();
+                await job.WaitForEmptyAsync(roots, CancellationToken.None);
+                tray?.Dispose();
+                manager?.Dispose();
+                if (trayLifecycle is not null) await trayLifecycle.DisposeAsync();
+                job.Dispose();
+            }
+            try { await RetireFailedStartupAsync(); }
+            catch (Exception cleanupError)
+            {
+                log.Write($"generation={generationId} startup cleanup unconfirmed: {cleanupError}");
+                throw new GenerationExitUnconfirmedException(generationId, RetireFailedStartupAsync, cleanupError);
+            }
             if (cancellationToken.IsCancellationRequested)
             {
                 throw new OperationCanceledException("Application generation startup was canceled.", exception, cancellationToken);
@@ -561,16 +585,11 @@ internal sealed class ApplicationGeneration : IAsyncDisposable
         catch (Exception exception) { _log.Write($"generation={Id} job termination failed: {exception.Message}"); }
     }
 
-    internal async Task StopAndVerifyEmptyAsync(string reason, CancellationToken cancellationToken)
+    public async Task StopAndVerifyEmptyAsync(string reason, CancellationToken cancellationToken)
     {
         await StopAsync(reason);
         if (_job.MemberProcessIds().Count != 0) _job.Terminate(1);
-        var deadline = DateTimeOffset.UtcNow + HostTimeouts.Get("host.process.exit", TimeSpan.FromSeconds(10));
-        while (_job.MemberProcessIds().Count != 0 || !_manager.HasExited || !_tray.HasExited)
-        {
-            if (DateTimeOffset.UtcNow >= deadline) throw new InvalidOperationException("The identity reset generation did not become empty.");
-            await Task.Delay(TimeSpan.FromMilliseconds(100), cancellationToken);
-        }
+        await _job.WaitForEmptyAsync(new[] { _manager, _tray }, cancellationToken);
     }
 
     private async Task<string> ObserveFailureAsync()
@@ -732,7 +751,8 @@ internal sealed class HostRuntime
     private readonly string _stateRoot;
     private readonly HostLog _log;
     private readonly IHostLifecycleAudit _audit;
-    private readonly Channel<QueuedCommand> _commands = Channel.CreateUnbounded<QueuedCommand>();
+    private readonly Channel<QueuedCommand> _commands;
+    private readonly Func<string, Action<string>, Action<string>, CancellationToken, Task<IApplicationGeneration>> _startGeneration;
     private readonly ConcurrentDictionary<string, QueuedCommand> _acceptedMutations = new(StringComparer.Ordinal);
     private readonly object _mutationAcceptanceGate = new();
     private readonly RestartFailureWindow _failureWindow = new(RestartBackoff.Length, RestartFailureWindow.DefaultWindow);
@@ -740,7 +760,8 @@ internal sealed class HostRuntime
     private readonly ManagerEndpointCache _endpointCache;
     private readonly ConditionalWeakTable<HostOperationContext, TerminalAuditMarker> _terminalAuditOperations = new();
     private string _state = "starting";
-    private ApplicationGeneration? _generation;
+    private IApplicationGeneration? _generation;
+    private GenerationExitUnconfirmedException? _unconfirmedExit;
     private PendingTransition? _pendingTransition;
     private string? _fenceGenerationId;
     private volatile LifecyclePublication _publication = new("starting", null, null);
@@ -751,8 +772,13 @@ internal sealed class HostRuntime
     private bool _identityRecoveryRequired = true;
     private bool _identityOfflineVerified = true;
 
-    internal HostRuntime(string packageRoot, string stateRoot, HostLog log, IHostLifecycleAudit? audit = null)
+    internal HostRuntime(string packageRoot, string stateRoot, HostLog log, IHostLifecycleAudit? audit = null,
+        Channel<QueuedCommand>? commands = null,
+        Func<string, Action<string>, Action<string>, CancellationToken, Task<IApplicationGeneration>>? startGeneration = null)
     {
+        _commands = commands ?? Channel.CreateUnbounded<QueuedCommand>();
+        _startGeneration = startGeneration ?? (async (id, health, failed, token) =>
+            await ApplicationGeneration.StartAsync(packageRoot, stateRoot, id, log, health, failed, token));
         _packageRoot = packageRoot;
         _stateRoot = stateRoot;
         _endpointCache = new ManagerEndpointCache(Path.Combine(stateRoot, "manager-endpoint.json"));
@@ -768,7 +794,31 @@ internal sealed class HostRuntime
         var controlServer = RunControlServerAsync(controlAcceptCancellation.Token, controlHandlerCancellation.Token);
         try
         {
-            while (!cancellationToken.IsCancellationRequested)
+            return await RunLifecycleLoopAsync(cancellationToken);
+        }
+        finally
+        {
+            controlAcceptCancellation.Cancel();
+            if (_pendingIdentityReset is { } stoppedIdentityReset)
+            {
+                _identityReset.WriteStatus(stoppedIdentityReset.Request, "failed", stoppedIdentityReset.Receipt, "host_stopped_before_replacement_ready");
+                AppendTerminalAudit(stoppedIdentityReset.Operation, IdentityResetLifecycle.Command, "host_stopped_before_replacement_ready",
+                    stoppedIdentityReset.RequestedGenerationId, "cancelled", "stopped");
+            }
+            lock (_mutationAcceptanceGate) _acceptingMutations = false;
+            await CompletePendingForHostShutdownAsync("host_shutdown");
+            await CompleteAcceptedMutationsForHostShutdownAsync("host_shutdown");
+            if (await Task.WhenAny(controlServer, Task.Delay(HostTimeouts.Get("host.control.exit", TimeSpan.FromSeconds(7)))) != controlServer)
+            {
+                controlHandlerCancellation.Cancel();
+            }
+            try { await controlServer; } catch (OperationCanceledException) { }
+        }
+    }
+
+    internal async Task<int> RunLifecycleLoopAsync(CancellationToken cancellationToken)
+    {
+            while (!cancellationToken.IsCancellationRequested || _unconfirmedExit is not null)
             {
                 try
                 {
@@ -777,6 +827,13 @@ internal sealed class HostRuntime
                         PublishState("faulted");
                         if (await WaitInFaultedStateAsync(cancellationToken) == "quit") return 0;
                         continue;
+                    }
+                    if (_unconfirmedExit is not null)
+                    {
+                        if (await WaitInFaultedStateAsync(CancellationToken.None) == "quit") return 0;
+                        await RetryRetainedExitAsync();
+                        _failureWindow.Clear();
+                        if (cancellationToken.IsCancellationRequested) return 0;
                     }
                     PublishState("starting");
                     var startup = await StartGenerationOrCommandAsync(cancellationToken);
@@ -857,12 +914,18 @@ internal sealed class HostRuntime
                 }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                 {
-                    await CompletePendingForHostShutdownAsync("host_cancellation");
                     if (_generation is not null)
                     {
-                        await StopAndDisposeGenerationAsync(_generation, "host-cancellation");
+                        try { await StopAndDisposeGenerationAsync(_generation, "host-cancellation"); }
+                        catch (GenerationExitUnconfirmedException exception) { RetainUnconfirmedExit(exception); }
                     }
+                    if (_unconfirmedExit is not null) continue;
+                    await CompletePendingForHostShutdownAsync("host_cancellation");
                     return 0;
+                }
+                catch (GenerationExitUnconfirmedException exception)
+                {
+                    RetainUnconfirmedExit(exception);
                 }
                 catch (Exception exception)
                 {
@@ -875,7 +938,12 @@ internal sealed class HostRuntime
                     }
                     if (_generation is not null)
                     {
-                        await StopAndDisposeGenerationAsync(_generation, "generation-admission-failed");
+                        try { await StopAndDisposeGenerationAsync(_generation, "generation-admission-failed"); }
+                        catch (GenerationExitUnconfirmedException exitFailure)
+                        {
+                            RetainUnconfirmedExit(exitFailure);
+                            continue;
+                        }
                     }
                     if (_pendingTransition is not null)
                     {
@@ -909,46 +977,24 @@ internal sealed class HostRuntime
                 }
                 finally
                 {
-                    if (_generation is not null)
+                    if (_generation is not null && _unconfirmedExit is null)
                     {
-                        await StopAndDisposeGenerationAsync(_generation, "host-loop-finally");
+                        await RetireIterationAsync(_generation);
                     }
                 }
             }
             return 0;
-        }
-        finally
-        {
-            controlAcceptCancellation.Cancel();
-            if (_pendingIdentityReset is { } stoppedIdentityReset)
-            {
-                _identityReset.WriteStatus(stoppedIdentityReset.Request, "failed", stoppedIdentityReset.Receipt, "host_stopped_before_replacement_ready");
-                AppendTerminalAudit(stoppedIdentityReset.Operation, IdentityResetLifecycle.Command, "host_stopped_before_replacement_ready",
-                    stoppedIdentityReset.RequestedGenerationId, "cancelled", "stopped");
-            }
-            lock (_mutationAcceptanceGate) _acceptingMutations = false;
-            await CompletePendingForHostShutdownAsync("host_shutdown");
-            await CompleteAcceptedMutationsForHostShutdownAsync("host_shutdown");
-            if (await Task.WhenAny(controlServer, Task.Delay(HostTimeouts.Get("host.control.exit", TimeSpan.FromSeconds(7)))) != controlServer)
-            {
-                controlHandlerCancellation.Cancel();
-            }
-            try { await controlServer; } catch (OperationCanceledException) { }
-        }
     }
 
-    private async Task<(ApplicationGeneration? Generation, string? Command)> StartGenerationOrCommandAsync(
+    private async Task<(IApplicationGeneration? Generation, string? Command)> StartGenerationOrCommandAsync(
         CancellationToken cancellationToken)
     {
         using var startupCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         var startupGenerationId = Guid.NewGuid().ToString("N");
         _fenceGenerationId = startupGenerationId;
         RefreshPublication();
-        var startup = ApplicationGeneration.StartAsync(
-            _packageRoot,
-            _stateRoot,
+        var startup = _startGeneration(
             startupGenerationId,
-            _log,
             health => PublishGenerationHealth(startupGenerationId, health),
             reason => PublishGenerationFailure(startupGenerationId, reason),
             startupCancellation.Token);
@@ -969,7 +1015,8 @@ internal sealed class HostRuntime
                     continue;
                 }
                 await CancelPendingTransitionAsync("fenced_quit_during_startup");
-                await CancelAndDisposeStartupAsync(startup, startupCancellation, "explicit-quit");
+                try { await CancelAndDisposeStartupAsync(startup, startupCancellation, "explicit-quit"); }
+                catch (GenerationExitUnconfirmedException) { RejectUnconfirmedCommand(command); throw; }
                 PublishState("stopped");
                 command.Completion.TrySetResult(Response(true, _state));
                 await WaitForResponseSentAsync(command);
@@ -983,7 +1030,8 @@ internal sealed class HostRuntime
                     continue;
                 }
                 BeginClientRecovery(command);
-                await CancelAndDisposeStartupAsync(startup, startupCancellation, "explicit-restart");
+                try { await CancelAndDisposeStartupAsync(startup, startupCancellation, "explicit-restart"); }
+                catch (GenerationExitUnconfirmedException) { RejectUnconfirmedCommand(command); throw; }
                 return (null, "restart");
             }
             command.Completion.TrySetResult(Response(false, _state, "The application is starting; no surface is available to activate."));
@@ -1025,7 +1073,7 @@ internal sealed class HostRuntime
     }
 
     private static async Task CancelAndDisposeStartupAsync(
-        Task<ApplicationGeneration> startup,
+        Task<IApplicationGeneration> startup,
         CancellationTokenSource startupCancellation,
         string reason)
     {
@@ -1034,20 +1082,32 @@ internal sealed class HostRuntime
         try
         {
             var completedGeneration = await startup;
-            await completedGeneration.StopAsync(reason);
+            try
+            {
+                await completedGeneration.StopAndVerifyEmptyAsync(reason, CancellationToken.None);
+            }
+            catch (Exception exception)
+            {
+                async Task RetireCanceledStartupAsync()
+                {
+                    await completedGeneration.StopAndVerifyEmptyAsync(reason, CancellationToken.None);
+                    await completedGeneration.DisposeAsync();
+                }
+                throw new GenerationExitUnconfirmedException(completedGeneration.Id, RetireCanceledStartupAsync, exception);
+            }
             await completedGeneration.DisposeAsync();
         }
         catch (OperationCanceledException) when (canceledActiveStartup && startupCancellation.IsCancellationRequested)
         {
         }
-        catch when (string.Equals(reason, "explicit-quit", StringComparison.Ordinal))
+        catch (Exception exception) when (exception is not GenerationExitUnconfirmedException && string.Equals(reason, "explicit-quit", StringComparison.Ordinal))
         {
             // Exact fenced quit remains terminal when the racing startup had
             // already failed; StartAsync owns partial-generation cleanup.
         }
     }
 
-    private async Task<string> WaitForCommandOrFailureAsync(ApplicationGeneration generation, CancellationToken cancellationToken)
+    private async Task<string> WaitForCommandOrFailureAsync(IApplicationGeneration generation, CancellationToken cancellationToken)
     {
         while (true)
         {
@@ -1103,8 +1163,9 @@ internal sealed class HostRuntime
                         command.Completion.TrySetResult(Response(false, "stale_generation", "The restart request does not match the active application generation."));
                         break;
                     }
-                    await StopAndDisposeGenerationAsync(generation, "explicit-restart");
                     _pendingTransition = new PendingTransition(command.Operation, command, command.ApplicationGenerationId, true);
+                    try { await StopAndDisposeGenerationAsync(generation, "explicit-restart"); }
+                    catch (GenerationExitUnconfirmedException) { RejectUnconfirmedCommand(command); throw; }
                     return "restart";
                 case IdentityResetLifecycle.Command:
                     var resetOutcome = await ExecuteIdentityResetAsync(command, generation, cancellationToken);
@@ -1118,7 +1179,8 @@ internal sealed class HostRuntime
                         break;
                     }
                     await CancelPendingTransitionAsync("fenced_quit_active_generation");
-                    await StopAndDisposeGenerationAsync(generation, "explicit-quit");
+                    try { await StopAndDisposeGenerationAsync(generation, "explicit-quit"); }
+                    catch (GenerationExitUnconfirmedException) { RejectUnconfirmedCommand(command); throw; }
                     PublishState("stopped");
                     command.Completion.TrySetResult(Response(true, _state));
                     await WaitForResponseSentAsync(command);
@@ -1152,7 +1214,7 @@ internal sealed class HostRuntime
         }
     }
 
-    private async Task ForwardSourcePatchCommandAsync(ApplicationGeneration generation, QueuedCommand command, JsonElement payload, CancellationToken cancellationToken)
+    private async Task ForwardSourcePatchCommandAsync(IApplicationGeneration generation, QueuedCommand command, JsonElement payload, CancellationToken cancellationToken)
     {
         try
         {
@@ -1225,6 +1287,17 @@ internal sealed class HostRuntime
                 if (!CanQuit(command))
                 {
                     command.Completion.TrySetResult(Response(false, "stale_generation", "There is no matching active application generation."));
+                    continue;
+                }
+                try
+                {
+                    await RetryRetainedExitAsync();
+                    if (_generation is not null) await StopAndDisposeGenerationAsync(_generation, "explicit-quit");
+                }
+                catch (GenerationExitUnconfirmedException exception)
+                {
+                    RetainUnconfirmedExit(exception);
+                    RejectUnconfirmedCommand(command);
                     continue;
                 }
                 await CancelPendingTransitionAsync("fenced_quit_faulted_host");
@@ -1358,7 +1431,7 @@ internal sealed class HostRuntime
         }
     }
 
-    private bool AdoptGeneration(ApplicationGeneration generation)
+    private bool AdoptGeneration(IApplicationGeneration generation)
     {
         lock (_publicationGate)
         {
@@ -1418,25 +1491,73 @@ internal sealed class HostRuntime
         _log.Write($"generation={generationId} revoked published endpoint before failure completion reason={reason}");
     }
 
-    private async Task StopAndDisposeGenerationAsync(ApplicationGeneration generation, string reason)
+    private void RetainUnconfirmedExit(GenerationExitUnconfirmedException exception)
+    {
+        _unconfirmedExit = exception;
+        _log.Write($"generation={exception.GenerationId} retained exit owner: {exception}");
+        PublishState("faulted");
+        if (_pendingTransition?.ClientCommand is { } command) RejectUnconfirmedCommand(command);
+        else FailPendingTransition("generation_exit_unconfirmed");
+    }
+
+    private async Task RetryRetainedExitAsync()
+    {
+        if (_unconfirmedExit is not { } retained) return;
+        try { await retained.RetryAsync(); }
+        catch (Exception exception)
+        {
+            throw new GenerationExitUnconfirmedException(retained.GenerationId, retained.RetryAsync, exception);
+        }
+        _unconfirmedExit = null;
+    }
+
+    internal async Task RetireIterationAsync(IApplicationGeneration generation)
+    {
+        try { await StopAndDisposeGenerationAsync(generation, "host-loop-finally"); }
+        catch (GenerationExitUnconfirmedException exception) { RetainUnconfirmedExit(exception); }
+    }
+
+    private void RejectUnconfirmedCommand(QueuedCommand command)
+    {
+        var persisted = AppendTerminalAudit(command.Operation, command.Command, "generation_exit_unconfirmed",
+            command.ApplicationGenerationId, "failed", "faulted");
+        if (_pendingTransition?.ClientCommand == command) _pendingTransition = null;
+        command.Completion.TrySetResult(Response(false, "generation_exit_unconfirmed",
+            "The original generation has not confirmed exit; its cleanup owner is retained.") with
+            { OperationId = command.Operation.OperationId, AuditPersisted = persisted });
+    }
+
+    private async Task StopAndDisposeGenerationAsync(IApplicationGeneration generation, string reason)
     {
         PublishState("stopping");
+        try
+        {
+            await generation.StopAndVerifyEmptyAsync(reason, CancellationToken.None);
+        }
+        catch (Exception exception)
+        {
+            throw new GenerationExitUnconfirmedException(generation.Id,
+                () => StopAndDisposeGenerationAsync(generation, reason), exception);
+        }
+        await generation.DisposeAsync();
         lock (_publicationGate)
         {
             if (ReferenceEquals(_generation, generation)) _generation = null;
             RefreshPublicationLocked();
         }
-        try { await generation.StopAsync(reason); }
-        catch (Exception exception) { _log.Write($"generation={generation.Id} stop failed during teardown: {exception.Message}"); }
-        try { await generation.DisposeAsync(); }
-        catch (Exception exception) { _log.Write($"generation={generation.Id} dispose failed during teardown: {exception.Message}"); }
     }
 
-    private async Task<string?> ExecuteIdentityResetAsync(QueuedCommand command, ApplicationGeneration? generation, CancellationToken cancellationToken)
+    private async Task<string?> ExecuteIdentityResetAsync(QueuedCommand command, IApplicationGeneration? generation, CancellationToken cancellationToken)
     {
         if (!CanQuit(command) || command.IdentityReset is not { } request)
         {
             command.Completion.TrySetResult(Response(false, "stale_generation", "Identity reset requires the exact current Host generation fence."));
+            return null;
+        }
+        if (_unconfirmedExit is not null)
+        {
+            command.Completion.TrySetResult(Response(false, "generation_exit_unconfirmed",
+                "Confirm the retained generation exit through fenced recovery before resetting identity."));
             return null;
         }
         try

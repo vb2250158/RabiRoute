@@ -23,8 +23,9 @@ Rabi 语音客户端把会议室电脑变成 RabiSpeech 的局域网远程麦克
   "remote_audio": {
     "enabled": true,
     "host": "0.0.0.0",
-    "port": 8782,
+    "port": 0,
     "discovery_port": 8783,
+    "discovery_port_end": 8803,
     "token_env": "RABISPEECH_AUDIO_STREAM_TOKEN",
     "token_path": "output/audio-stream-token.txt",
     "settings_path": "output/audio-stream-settings.json"
@@ -36,16 +37,16 @@ Rabi 语音客户端把会议室电脑变成 RabiSpeech 的局域网远程麦克
 
 Windows 防火墙只需在“专用网络”允许：
 
-- TCP `8782`：鉴权后的音频 WebSocket；
-- UDP `8783`：只返回主机名和端口的局域网发现，不返回密钥。
+- 为 RabiSpeech 进程允许 TCP 音频连接；端口自动分配，以音频流状态中的实际端口为准；
+- UDP `8783-8803`：有限扫描发现窗口，只返回主机名、实际端口及请求 nonce，不返回密钥。客户端可用 `RABI_VOICE_DISCOVERY_PORT_START` / `RABI_VOICE_DISCOVERY_PORT_END` 配置同一窗口。
 
-不要把这两个端口映射到公网。
+不要把音频服务或发现窗口映射到公网。
 
 ## 会议室电脑
 
 从发布包解压并运行 `RabiVoiceClient.exe`。客户端现在默认打开与 RabiRoute 本体统一视觉语言的桌面控制台，不需要先手工创建配置文件：
 
-- 在“主机地址”保留 `auto`，或填写 `ws://<公司电脑局域网 IP>:8782`；
+- 在“主机地址”保留 `auto`，或填写 `ws://<公司电脑局域网 IP>:<音频流状态中的实际端口>`；
 - 粘贴 RibiWebGUI“语音服务 → 音频流”显示的客户端连接密钥；
 - 选择会议室电脑真实使用的麦克风和扬声器；
 - 点击“连接主机”。

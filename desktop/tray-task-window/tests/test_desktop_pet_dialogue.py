@@ -3,7 +3,8 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import unittest
 from unittest.mock import patch, MagicMock, PropertyMock
 
-from PySide6.QtWidgets import QApplication
+from PySide6.QtCore import QPoint
+from PySide6.QtWidgets import QApplication, QMenu
 from rabiroute_tray.desktop_pet_dialogue import DesktopPetDialogue, parse_desktop_pet_dialogue
 from rabiroute_tray.desktop_pet_client import DesktopPetBinding, DesktopPetClient
 from rabiroute_tray.desktop_pet_controller import DesktopPetController
@@ -26,9 +27,31 @@ class PetDialogueTest(unittest.TestCase):
             mocked.start()
             self.addCleanup(mocked.stop)
 
-    def controller(self, persona):
+    def test_voice_menu_dispatches_selected_persona_without_starting_second_player(self):
+        voice_calls = []
+        controller = self.controller("voice-persona", open_voice=voice_calls.append)
+        speech_owner = controller._speech
+        with patch.object(QMenu, "popup"):
+            controller._show_context_menu(QPoint(0, 0))
+        menu = controller._context_menu
+        actions = [action for action in menu.actions() if action.text().endswith("语音对话")]
+        self.assertEqual(len(actions), 1)
+        actions[0].trigger()
+        self.assertEqual(voice_calls, ["voice-persona"])
+        self.assertIs(controller._speech, speech_owner)
+        menu.close()
+
+    def test_voice_menu_is_absent_without_host_callback(self):
+        controller = self.controller("voice-persona")
+        with patch.object(QMenu, "popup"):
+            controller._show_context_menu(QPoint(0, 0))
+        menu = controller._context_menu
+        self.assertFalse(any(action.text().endswith("语音对话") for action in menu.actions()))
+        menu.close()
+
+    def controller(self, persona, open_voice=None):
         controller = DesktopPetController("http://127.0.0.1:1", persona, lambda _: None,
-            initial_binding=DesktopPetBinding(), event_stream=DesktopPetEventStream("http://127.0.0.1:1"))
+            open_voice=open_voice, initial_binding=DesktopPetBinding(), event_stream=DesktopPetEventStream("http://127.0.0.1:1"))
         self.addCleanup(controller.close)
         controller._hidden = False
         controller.window.show()

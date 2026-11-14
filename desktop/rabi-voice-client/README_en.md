@@ -23,8 +23,9 @@ On the PC running RabiSpeech, update the speech-plugin dependencies first, then 
   "remote_audio": {
     "enabled": true,
     "host": "0.0.0.0",
-    "port": 8782,
+    "port": 0,
     "discovery_port": 8783,
+    "discovery_port_end": 8803,
     "token_env": "RABISPEECH_AUDIO_STREAM_TOKEN",
     "token_path": "output/audio-stream-token.txt",
     "settings_path": "output/audio-stream-settings.json"
@@ -36,16 +37,16 @@ Restart RabiSpeech. If `RABISPEECH_AUDIO_STREAM_TOKEN` is unset, the service gen
 
 Allow only on the Windows Private network:
 
-- TCP `8782` for the authenticated audio WebSocket;
-- UDP `8783` for LAN discovery, which exposes only the host name and port, never the token.
+- Allow TCP audio connections for the RabiSpeech process; use the actual automatically assigned port shown in audio-stream status.
+- UDP `8783-8803` for bounded LAN discovery, which returns the host name, actual port and request nonce, never the token. Set `RABI_VOICE_DISCOVERY_PORT_START` / `RABI_VOICE_DISCOVERY_PORT_END` to configure the same window.
 
-Do not forward these ports to the public Internet.
+Do not forward the audio service or discovery window to the public Internet.
 
 ## Meeting-room PC
 
 Extract and run `RabiVoiceClient.exe`. The client now opens a desktop control console that shares RabiRoute's visual language, so a configuration file no longer needs to be created by hand first:
 
-- keep `auto` as the server address, or enter `ws://<office-PC-LAN-IP>:8782`;
+- keep `auto` as the server address, or enter `ws://<office-PC-LAN-IP>:<actual-port-from-audio-stream-status>`;
 - paste the client connection key shown under **Speech Service → Audio stream** in RibiWebGUI;
 - select the microphone and speaker actually used by the room PC;
 - select **Connect host**.

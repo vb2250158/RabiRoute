@@ -19,11 +19,14 @@ class DesktopPetManager(QObject):
         manager_url: str,
         menu: QMenu,
         open_persona: Callable[[str], None],
+        *,
+        open_voice: Callable[[str], None] | None = None,
     ) -> None:
         super().__init__()
         self._manager_url = manager_url
         self._menu = menu
         self._open_persona = open_persona
+        self._open_voice = open_voice
         self._client = DesktopPetRosterClient(manager_url)
         self._events = DesktopPetEventStream(manager_url)
         self._speech_events = DesktopPetEventStream(manager_url, path="/api/speech/events")
@@ -125,6 +128,7 @@ class DesktopPetManager(QObject):
                     self._manager_url,
                     item.persona_id,
                     self._open_persona,
+                    open_voice=self._open_voice,
                     persona_name=item.name,
                     initial_binding=item.binding,
                     event_stream=self._events,

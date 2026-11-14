@@ -42,7 +42,7 @@ internal static class ProcessTreeTests
         }));
         await Console.In.ReadLineAsync();
         job.Terminate(0);
-        await WaitUntilAsync(() => job.MemberProcessIds().Count == 0);
+        await job.WaitForEmptyAsync(new[] { parent }, CancellationToken.None);
         await parent.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
         return 0;
     }

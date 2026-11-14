@@ -97,6 +97,11 @@ internal sealed class WindowsJob : IDisposable
         }
     }
 
+    internal Task WaitForEmptyAsync(IReadOnlyList<NativeChildProcess> roots, CancellationToken cancellationToken) =>
+        GenerationExitBoundary.WaitAsync(
+            () => MemberProcessIds().Count == 0 && roots.All(process => process.HasExited),
+            HostTimeouts.Get("host.process.exit", TimeSpan.FromSeconds(10)), cancellationToken);
+
     public void Dispose() => _handle.Dispose();
 }
 

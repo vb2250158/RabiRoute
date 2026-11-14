@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import io
+import ipaddress
 import json
 import logging
+import os
+import secrets
 import socket
 import threading
 import time
@@ -239,20 +242,44 @@ def list_audio_devices() -> str:
     return str(sd.query_devices())
 
 
-def discover_server(*, port: int = 8783, timeout_seconds: float = 2.0) -> str:
-    request = b"RABI_VOICE_DISCOVER_V1"
+def discover_server(*, port: int | None = None, port_end: int | None = None,
+                    timeout_seconds: float = 2.0, broadcast_address: str = "255.255.255.255") -> str:
+    explicit_port = port is not None
+    start = int(os.environ.get("RABI_VOICE_DISCOVERY_PORT_START", "8783")) if port is None else port
+    end = (start if explicit_port else int(os.environ.get("RABI_VOICE_DISCOVERY_PORT_END", str(min(65535, start + 20))))) if port_end is None else port_end
+    if type(start) is not int or type(end) is not int or not 1 <= start <= end <= 65535 or end - start > 255:
+        raise ValueError("Voice discovery requires a valid bounded UDP port window.")
+    nonce = secrets.token_hex(16)
+    request = json.dumps({"type": "RABI_VOICE_DISCOVER_V1", "nonce": nonce}).encode("utf-8")
+    deadline = time.monotonic() + get_timeout_seconds("desktop.voice.discovery", timeout_seconds)
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-        sock.settimeout(get_timeout_seconds("desktop.voice.discovery", timeout_seconds))
         sock.bind(("", 0))
-        sock.sendto(request, ("255.255.255.255", port))
+        for target in range(start, end + 1):
+            sock.sendto(request, (broadcast_address, target))
         while True:
-            payload, address = sock.recvfrom(4096)
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError("No current Rabi voice listener answered discovery.")
+            sock.settimeout(remaining)
+            try:
+                payload, address = sock.recvfrom(4096)
+            except (ConnectionResetError, ConnectionRefusedError):
+                # A closed candidate may return ICMP while another port is answering.
+                continue
+            try:
+                source = ipaddress.ip_address(address[0])
+            except ValueError:
+                continue
+            if not (source.is_private or source.is_loopback) or source.is_unspecified or source.is_multicast or not start <= address[1] <= end:
+                continue
             try:
                 response = json.loads(payload.decode("utf-8"))
             except (UnicodeDecodeError, json.JSONDecodeError):
                 continue
-            if not isinstance(response, dict) or response.get("service") != "rabi-voice-stream":
+            if not isinstance(response, dict) or response.get("service") != "rabi-voice-stream" or response.get("nonce") != nonce:
                 continue
-            stream_port = int(response.get("port") or 8782)
+            stream_port = response.get("port")
+            if type(stream_port) is not int or not 1 <= stream_port <= 65535 or response.get("transport") != "ws" or response.get("authentication") != "bearer":
+                continue
             return f"ws://{address[0]}:{stream_port}"

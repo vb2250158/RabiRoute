@@ -1,6 +1,7 @@
 import os
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import unittest
+from unittest.mock import patch
 from PySide6.QtCore import QObject, QPoint, QRect, QSize, Qt
 from PySide6.QtGui import QPixmap
 from PySide6.QtTest import QSignalSpy, QTest
@@ -9,6 +10,8 @@ from rabiroute_tray.desktop_pet_bubble import nine_slice_rects, place_dialogue_b
 from rabiroute_tray.desktop_pet_bubble_settings import DesktopPetBubbleSettings
 from rabiroute_tray.desktop_pet_events import DesktopPetEventStream
 from rabiroute_tray.desktop_pet_speech import DesktopPetSpeech
+from rabiroute_tray.desktop_pet_client import DesktopPetClient
+from rabiroute_tray.qt_async import wait_for_qt_tasks
 from rabiroute_tray.desktop_pet_window import DesktopPetWindow
 
 
@@ -16,6 +19,17 @@ class PetSpeechTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.app = QApplication.instance() or QApplication([])
+
+    def setUp(self):
+        # These are presentation tests; do not send transcript persistence to a real endpoint.
+        recorder = patch.object(DesktopPetClient, "record_speech", return_value={})
+        recorder.start()
+        self.addCleanup(recorder.stop)
+
+    def tearDown(self):
+        # Match the Qt host's shutdown ownership before QApplication is destroyed.
+        self.assertTrue(wait_for_qt_tasks(5000))
+        self.app.processEvents()
 
     def test_voice_isolation_completion_and_stale_snapshot(self):
         parent = QObject()

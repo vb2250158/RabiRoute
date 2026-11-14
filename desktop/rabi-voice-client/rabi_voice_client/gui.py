@@ -201,7 +201,7 @@ class VoiceClientWindow(QMainWindow):
         form.setHorizontalSpacing(12)
         form.setVerticalSpacing(10)
         self.server_input = QLineEdit()
-        self.server_input.setPlaceholderText("auto 或 ws://192.168.1.10:8782")
+        self.server_input.setPlaceholderText("auto 或 ws://主机地址:实际端口")
         self.token_input = QLineEdit()
         self.token_input.setEchoMode(QLineEdit.Password)
         self.token_input.setPlaceholderText("连接密钥或由环境变量提供")

@@ -449,12 +449,18 @@ def run(
             return
         open_persona(gateway)
 
+    def open_desktop_pet_voice(persona_id: str) -> None:
+        if state["manager"].connected:
+            desktop.open_url(state["manager"].manager_url.rstrip("/")
+                             + "/#/voice-assistant?roleId=" + quote(persona_id, safe=""))
+
     if desktop_pet_menu is not None:
         feature_context = DesktopFeatureContext(
             manager_url=manager.manager_url,
             application=app,
             desktop_pet_menu=desktop_pet_menu,
             open_desktop_pet_persona=open_desktop_pet_persona,
+            open_desktop_pet_voice=open_desktop_pet_voice,
         )
         for dispose in activate_builtin_features(enabled_features, feature_context):
             app.aboutToQuit.connect(dispose)
